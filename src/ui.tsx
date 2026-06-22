@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
@@ -17,13 +18,25 @@ interface ConfirmReq {
   resolve: (ok: boolean) => void;
 }
 
+interface PromptReq {
+  message: string;
+  title?: string;
+  defaultValue?: string;
+  placeholder?: string;
+  confirmText?: string;
+  resolve: (value: string | null) => void;
+}
+
 interface UiStore {
   toasts: Toast[];
   confirmReq: ConfirmReq | null;
+  promptReq: PromptReq | null;
   pushToast: (kind: Toast["kind"], text: string) => void;
   dismissToast: (id: number) => void;
   requestConfirm: (req: ConfirmReq) => void;
   resolveConfirm: (ok: boolean) => void;
+  requestPrompt: (req: PromptReq) => void;
+  resolvePrompt: (value: string | null) => void;
 }
 
 let toastSeq = 1;
@@ -31,6 +44,7 @@ let toastSeq = 1;
 export const useUi = create<UiStore>((set, get) => ({
   toasts: [],
   confirmReq: null,
+  promptReq: null,
   pushToast: (kind, text) => {
     const id = toastSeq++;
     set((s) => ({ toasts: [...s.toasts, { id, kind, text }] }));
@@ -38,11 +52,26 @@ export const useUi = create<UiStore>((set, get) => ({
     setTimeout(() => get().dismissToast(id), ttl);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
-  requestConfirm: (req) => set({ confirmReq: req }),
+  // 若已有待回應的請求，先以「取消」結束它（resolve），避免其 Promise 永遠懸而不決。
+  requestConfirm: (req) => {
+    const prev = get().confirmReq;
+    if (prev) prev.resolve(false);
+    set({ confirmReq: req });
+  },
   resolveConfirm: (ok) => {
     const req = get().confirmReq;
     set({ confirmReq: null });
     req?.resolve(ok);
+  },
+  requestPrompt: (req) => {
+    const prev = get().promptReq;
+    if (prev) prev.resolve(null);
+    set({ promptReq: req });
+  },
+  resolvePrompt: (value) => {
+    const req = get().promptReq;
+    set({ promptReq: null });
+    req?.resolve(value);
   },
 }));
 
@@ -60,6 +89,52 @@ export function uiConfirm(
   return new Promise((resolve) => {
     useUi.getState().requestConfirm({ message, resolve, ...opts });
   });
+}
+
+/** 以 Promise 取代瀏覽器 prompt()。取消回傳 null、確定回傳輸入字串。 */
+export function uiPrompt(
+  message: string,
+  opts?: { title?: string; defaultValue?: string; placeholder?: string; confirmText?: string }
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    useUi.getState().requestPrompt({ message, resolve, ...opts });
+  });
+}
+
+// ---- 剪貼簿 ----
+
+/**
+ * 複製文字到系統剪貼簿。優先用 navigator.clipboard（Tauri webview 在安全環境支援），
+ * 失敗則退回隱藏 textarea + execCommand。成功 / 失敗都跳 toast 回饋。
+ */
+export async function copyToClipboard(text: string, label = "已複製"): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      toast.success(label);
+      return true;
+    }
+  } catch {
+    /* 落到下方 fallback */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (ok) {
+      toast.success(label);
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  toast.error("複製失敗");
+  return false;
 }
 
 // ---- 原生檔案選擇器（Tauri dialog plugin）----
@@ -84,7 +159,7 @@ export async function pickSaveFile(defaultPath?: string, filters?: Filter[]): Pr
 // ---- 掛在 App 根的通知 / 確認渲染層 ----
 
 export function UiHost() {
-  const { toasts, dismissToast, confirmReq, resolveConfirm } = useUi();
+  const { toasts, dismissToast, confirmReq, resolveConfirm, promptReq } = useUi();
 
   const kindStyle = (k: Toast["kind"]) =>
     k === "success"
@@ -143,6 +218,64 @@ export function UiHost() {
           </div>
         </div>
       )}
+
+      {promptReq && <PromptDialog key={promptReq.message + (promptReq.title ?? "")} />}
     </>
+  );
+}
+
+// 文字輸入對話框（uiPrompt）。Enter 送出、Esc 取消。
+function PromptDialog() {
+  const { promptReq, resolvePrompt } = useUi();
+  const [text, setText] = useState(promptReq?.defaultValue ?? "");
+  // 新請求（即使 message+title 相同）也要重設輸入內容，避免沿用上一個的殘留文字。
+  useEffect(() => { setText(promptReq?.defaultValue ?? ""); }, [promptReq]);
+  if (!promptReq) return null;
+  return (
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[110]"
+      onClick={() => resolvePrompt(null)}
+    >
+      <div
+        className="bg-[#1a212b] w-[380px] max-w-[92vw] rounded-lg border border-white/10 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-3 border-b border-white/10 font-medium text-sm">
+          {promptReq.title ?? "輸入"}
+        </div>
+        <div className="p-5 space-y-3">
+          <div className="text-sm text-white/80 whitespace-pre-wrap break-words">
+            {promptReq.message}
+          </div>
+          <input
+            autoFocus
+            value={text}
+            placeholder={promptReq.placeholder}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") resolvePrompt(text);
+              else if (e.key === "Escape") resolvePrompt(null);
+            }}
+            className="w-full bg-black/40 border border-white/10 rounded px-2 py-1.5 text-sm mono outline-none focus:border-blue-500"
+          />
+        </div>
+        <div className="px-5 py-3 border-t border-white/10 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => resolvePrompt(null)}
+            className="px-3 py-1.5 text-sm rounded border border-white/15 hover:bg-white/5"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => resolvePrompt(text)}
+            className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-500"
+          >
+            {promptReq.confirmText ?? "確定"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

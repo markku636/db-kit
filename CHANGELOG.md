@@ -1,5 +1,139 @@
 # Changelog
 
+## 跨五大資料庫功能強化 + 正確性修正 + 資料格 / 查詢編輯器 / UI/UX 打磨（本次）
+
+致敬 DBeaver / TablePlus / DataGrip / Navicat 的日常手感與功能廣度：補強資料呈現正確性、跨資料庫功能對齊與操作效率。
+本批重點包含 **PostgreSQL 嚴格型別寫入修正**（整數 / 複合主鍵的列終於可編輯 / 刪除）、**MongoDB 完整查詢 + CRUD-via-JSON**（find / 聚合 / insert / update / delete）+ 索引管理、**CSV 匯入**、**整庫結構轉儲**、**欄位資料剖析**、**Ping 連線延遲**、`RETURNING` 顯示，以及多項由對抗式自我審查找出的細節修正（Excel BOM、多欄排序鍵序、空 filter 批次操作防護等）。
+
+> 驗證：前端 `tsc` + `vite build` 綠燈、`cargo clippy` 新增程式碼零警告；後端 `cargo test --lib --include-ignored` **49/49 通過**（45 純函式 / SQLite 端到端 + 4 Docker 真實資料庫 MySQL 8 / PostgreSQL 16 / MongoDB 7 / Redis 7）。前端 **vitest 26 項全通過**（純函式邏輯抽至 `src/sql.ts`：SQL 多語句切分含 PG dollar-quoting / MySQL 雙反引號、CSV 跳脫、查詢歷史 / 收藏持久化守衛、跨資料庫識別字與字面值跳脫含 MySQL 反斜線方言）。後端測試涵蓋五大資料庫的連線 / `ping` / CRUD（含整數·複合主鍵 / set-NULL）/ 全 9 種篩選運算子 + AND·OR / DDL 欄位編輯 / 索引建刪 / EXPLAIN / RETURNING / ER 外鍵探索 / Mongo 聚合·CRUD-via-JSON / 匯出·匯入往返 / 欄位剖析 / 結構轉儲 / 備份還原（含非法檔被拒）/ 無主鍵編輯防護 / 注入安全 / `<unrenderable>` 型別呈現（含 BOOLEAN·UUID·NUMERIC·DECIMAL）等所有路徑。
+
+### 修正：儲存格 `<unrenderable>`
+- **日期時間欄位顯示 `<unrenderable>` 的 bug**：`string_fallback` 只試了 `NaiveDateTime` / `NaiveDate`，漏了帶時區的時間戳——MySQL `TIMESTAMP`、PostgreSQL `TIMESTAMPTZ`（sqlx 解碼為 `DateTime<Utc>`）與 `TIME`（`NaiveTime`），使 `created_at` 這類欄位整格顯示 `<unrenderable>`。三個 SQL driver 一併補齊，並統一格式化為 `YYYY-MM-DD HH:MM:SS`。
+- **JSON / JSONB 欄位**：開啟 sqlx `json` 特性，MySQL JSON 與 PostgreSQL JSON/JSONB 改以 `serde_json::Value` 呈現（先前同樣 `<unrenderable>`）。
+- **二進位欄位（BLOB / BYTEA）**：非合法 UTF-8 時改以 `0x…` 十六進位預覽（上限 64 bytes 並標總長度），取代 `from_utf8_lossy` 一堆替換字元的雜訊（共用 `db::bytes_to_display`）。
+- MySQL unsigned 大整數溢位 `i64` 時退回 `u64`。
+- **MongoDB `Decimal128`**（金融資料常見）直接顯示十進位字串（如 `9.99`），取代 fallback 的 `{"$numberDecimal":"9.99"}` extended JSON 雜訊。
+
+### 資料表：儲存格右鍵選單 + 內容檢視器 + 鍵盤導覽
+- **右鍵選單**（SQL 表）：檢視內容、複製值、複製整列（JSON / TSV）、**複製為 INSERT**、編輯儲存格、設為 NULL、**以此列為範本新增**、刪除此列。
+- **儲存格內容檢視器**：檢視 / 編輯長文字、JSON、二進位；可一鍵格式化 JSON、複製，可編輯表直接套用變更或設 NULL。
+- **鍵盤導覽**：方向鍵 / Tab 移動選取格、Enter / F2 進入編輯、Ctrl+C 複製、Esc 取消；單擊選取並高亮（藍框）。
+- 共用剪貼簿 helper `copyToClipboard`（`navigator.clipboard` + textarea fallback）。
+- **多欄排序**：Shift+點擊欄標題附加 / 切換排序欄，徽章顯示排序次序（單擊仍為單欄循環）。
+- **重新整理**鈕（重讀目前頁）；**雙擊欄分隔線自動符合內容寬度**（canvas 量測，致敬 Navicat / TablePlus）。
+- **每頁列數選擇器**（100 / 200 / 500 / 1000）；底部顯示「顯示 X–Y · 共 N 列」的範圍資訊。
+
+- **依儲存格值篩選**：右鍵選單新增「篩選此值 / 排除此值」（NULL 自動轉 is null / is not null），即時帶入篩選列（致敬 TablePlus / DBeaver「Filter by value」）。
+- **欄位標題右鍵選單**：升冪 / 降冪 / 清除排序、自動符合寬度、複製欄名、**複製整欄值（本頁）**、**隱藏此欄 / 顯示所有欄**（隱藏狀態 per-table 持久化，至少保留一欄）。
+- 底部顯示**選取儲存格資訊**（欄名＝值，Excel 名稱框手感）。
+- **即時尋找**（Ctrl+F 或「🔍 尋找」）：在目前頁就地標示符合片段並顯示符合格數（client-side，與伺服器端篩選互補）。
+- **未套用變更保護**：有待套用編輯時，重新整理 / 切換頁面前先確認，避免靜默丟失。
+- **整列表單檢視**：點列號開啟，逐欄檢視 / 編輯一列（寬表友善），可上下切換列（致敬 DBeaver 記錄檢視）。
+
+### 查詢編輯器（補強）
+- 編輯器內 **Tab 鍵插入兩個空格**（不再跳離）、**Ctrl+/ 切換行註解**，符合 SQL 編寫習慣。
+- **查詢內容 per-連線 持久化**：切換連線 / 重開後沿用該連線上次的 SQL（localStorage）。
+- **多語句執行**：SQL 以分號切分依序執行（略過字串 / 註解內的分號），最後一個結果集呈現，純寫入語句累計影響列數（sqlx 不允許單次多語句，故前端拆分）；多語句失敗會標示第幾條出錯。
+- **收藏查詢**：具名收藏常用 SQL（localStorage），一鍵載回 / 刪除，與「歷史」並列。
+- **查詢結果格複製**：點選儲存格高亮、Ctrl+C 複製、右鍵選單（複製值 / 整列 TSV / 整列 JSON / 整欄）。
+- **匯出查詢結果到檔案**：原生另存對話框，依副檔名輸出 CSV（RFC4180 跳脫）/ JSON / TSV（後端 `save_text_file`）。
+
+### 結構：複製建表 SQL（致敬 Navicat「Copy CREATE statement」）
+- 後端新增 `table_ddl` command + driver 方法：MySQL `SHOW CREATE TABLE`、SQLite 取 `sqlite_master.sql`、PostgreSQL 以 information_schema 欄位 + 主鍵重建（盡力而為）。
+- 結構分頁新增「📋 建表 SQL」，於唯讀檢視器顯示完整 CREATE 語句，可一鍵複製。
+
+### 結構：索引檢視 + 刪除（四種資料庫一致）
+- 後端新增 `table_indexes` command + driver 方法：MySQL（information_schema.STATISTICS）、PostgreSQL（pg_index）、SQLite（PRAGMA index_list / index_info）、MongoDB（listIndexes）。
+- 結構分頁於欄位下方新增「索引」區，顯示名稱 / 欄位 / UNIQUE / PK 標記。
+- **新增 / 刪除索引**（`create_index` / `drop_index`，關聯式）：索引區「＋ 新增索引」表單（名稱、欄位多選依點選順序組複合索引、唯一）；索引列尾「−」刪除非主鍵索引（含確認）。MySQL / PostgreSQL / SQLite 各以自身語法組 `CREATE [UNIQUE] INDEX` / `DROP INDEX`，皆以真實資料庫測試驗證（建立後讀回、刪除後確認消失）。
+
+### ER 圖（致敬 Navicat / DBeaver 的 ER 工具）
+- **縮放控制**（－ / ＋ / 百分比 / 適配視窗 / 重置）；表卡拖曳位移依縮放校正。
+- **佈局持久化**：拖曳後的表卡位置存 localStorage（per 連線 / DB），重開沿用。
+- **關聯高亮**：hover 表卡時，相關外鍵連線加亮、其餘淡出。
+
+### 導覽 / 分頁
+- **側欄搜尋過濾**：頂部搜尋框即時過濾連線與表名稱；搜尋表名也會讓其所屬連線浮現。
+- **分頁管理**：中鍵關閉分頁、右鍵選單（關閉 / 關閉其他 / 全部關閉）、Ctrl+W 關閉作用中表分頁；分頁 tooltip 顯示 DB·表。
+- **側欄表右鍵「產生 SQL」**（SQL 連線）：查詢前 100 筆、SELECT COUNT(*)、INSERT 範本、複製建表 SQL、複製表名；查詢類項目會載入查詢編輯器並切到查詢分頁（識別字依資料庫種類正確跳脫）。
+- **複製連線**：連線右鍵新增「複製連線…」，以新 id 帶入既有設定開啟對話框，調整後另存為新連線。
+
+### 連線
+- **狀態列連線池監控**：已連線時每 4 秒輪詢 `pool_status`，顯示「使用中 / 總數 · 閒置」與類型色標連線點（呼應規劃 3.5）。
+- **Ping 既有連線**：點擊狀態列連線池徽章即送出一次輕量往返（`ping_connection` → 各 driver `SELECT 1` / `PING`），回報「連線正常 · 延遲 N ms」，可確認長閒置連線（含 SSH 通道）是否仍有效——致敬 DBeaver / TablePlus 的 Ping。Mongo / Redis 未公開連線池統計，徽章顯示「⚡ Ping」而非誤導的「池 0/0」。
+- 連線對話框：**測試連線顯示延遲（ms）**、Esc 關閉。
+
+### 查詢編輯器（致敬商用 SQL 工具）
+- **執行時間** 與 **回傳 / 影響列數** 狀態列；**查詢歷史**（localStorage，最近在前、去重、上限 50，可載回 / 清除）。
+- **只執行反白選取段**（無選取則跑全部）；新增 **Ctrl+Enter** 與既有 F6 皆可執行。
+- 結果可一鍵 **複製為 TSV / JSON**；結果表加列號與滿格 tooltip。
+
+### 前端元件稽核修正（第四輪多代理稽核）
+針對 ER 圖、對話框、共用 UI helper、Redis 編輯路徑稽核並修正：
+- **修正 ER 圖切換 DB 的競態（bug）**：快速切換資料庫時較早的回應若晚到會覆蓋目前的圖；加 cancelled 守衛 + effect 清理。拖曳期間卸載對話框時的監聽洩漏亦修正。
+- **修正並發對話框的 Promise 洩漏（bug）**：`uiConfirm`/`uiPrompt` 在前一個尚未回應時被再次呼叫，舊 Promise 會永遠懸而不決；改為先以「取消」結束舊請求；PromptDialog 相同 message+title 重用時不再殘留上次輸入。
+- **修正 Redis RENAME 靜默覆蓋目的鍵（data-loss）**：改用 `RENAMENX`，目的鍵已存在則拒絕改名而非摧毀。
+- 匯出 / 備份還原 / 清空歷史 加防重入守衛（避免另存對話框開啟期間重複觸發 / 重複還原）。
+- 其餘 Redis 觀察（LREM 重複值刪首個、set 改名非原子）為既知設計取捨，已記錄。
+
+### SSH / 機密 / 連線生命週期稽核修正（第三輪多代理稽核）
+針對 SSH tunnel、OS keychain 機密儲存、連線生命週期與排程進行稽核並修正：
+- **修正 SSH host-key 驗證的 fail-open 漏洞（security）**：`known_hosts` 損毀 / 無法寫入時，原本 `unwrap_or_default()` 會悄悄退回空表 → 對任何主機都走 TOFU「信任任意金鑰」，等同失去中間人防護。改為區分「檔案不存在」與「讀取 / 解析錯誤」，後者一律 **fail-closed 拒絕連線**；指紋無法持久化（含原子寫入 temp+rename）時亦拒絕，並修正過時的安全註解。
+- **SSH 撥號 / 認證逾時**：`connect` 與 `authenticate_*` 加 20 秒逾時，黑洞 bastion 不再無限阻塞連線命令。
+- **SSH accept 迴圈強健性**：單次 `accept()` 失敗不再終結整條 tunnel（記錄後略過續聽）。
+- **修正並發 connect 同 id 的 tunnel 洩漏（robustness）**：被覆蓋的舊連線改在 insert 後收掉其 tunnel 背景任務 + driver。
+- **修正排程保留份數跨排程誤刪（correctness）**：備份檔名以排程 id 命名空間化，「同 DB 同目錄」的不同排程不再互相刪除 / 同秒覆蓋。
+
+### 深度安全 / 強健性稽核修正（第二輪多代理稽核）
+針對「注入面 / 崩潰強健性 / Redis 驅動 / 匯出備份」四維稽核找出並修正：
+- **DDL 注入強化**：`ALTER TABLE ADD COLUMN` 的 `data_type` / `default` 原為原樣字串插值；新增共用 `validate_column_spec` 阻擋 `;`、`--`、`/* */`、換行（保留 ENUM / DECIMAL 括號逗號等合法型別），三個 SQL driver 套用，並加單元測試。
+- **CSV 公式注入防護**：匯出 CSV/TSV 時，以 `= + - @ tab CR` 開頭的值前置單引號，避免試算表把資料當公式執行。
+- **SQL 匯出反斜線跳脫**：SQL INSERT 匯出（MySQL 方言）同時跳脫 `\`，避免含反斜線的值產生錯誤 / 不安全結果；空分隔符退回格式預設。
+- **備份 / 還原強健性**：MongoDB 連線字串的帳密改為 percent-encode（含 `@ : /` 的密碼不再破壞備份）；Redis 備份密碼改走 `REDISCLI_AUTH` 環境變數（不再出現在行程列表）；SQLite 還原前先驗證來源為 SQLite 檔（標頭）並備份現有 DB 為 `.bak`；修正 MySQL 還原原本的空死分支為實際的客戶端偵測。
+- **Redis 資料遺失防護**：唯讀 `type` 欄誤觸格內編輯會以 `SET` 把 list/set/zset/hash 覆蓋成 string；改為明確拒絕編輯 `type`。
+- **Redis SCAN 去重 + 分頁 saturating**：SCAN 可能回傳重複 key，排序後去重避免重複列 / 灌水總數；分頁位移改用 saturating，與 SQL driver 一致。其餘觀察（二進位鍵、TTL 0 語意、db 數量、query 參數切分）已記錄供後續處理。
+
+### 多代理對抗式審查修正（第一輪自我審查找出並修正）
+經多代理對抗式程式碼審查（4 維度 + 逐項獨立驗證）找出並修正：
+- **修正 PostgreSQL 非文字欄位篩選失效（bug）**：`build_where` 將值以 text 綁定但無轉型，PG 嚴格型別不隱式轉換，導致 `int = text` 報錯、資料分頁篩選對非文字欄位完全不可用。改為 `欄位::text op $n`，並加 int 欄位篩選的真實資料庫回歸測試。
+- **修正中斷連線把使用者踢離查詢分頁（bug）**：`markDisconnected` 未把 `__query__` 哨兵視為有效作用鍵，中斷任一連線都會跳離查詢編輯器。改為保留 `__query__`。
+- **修正多語句切分漏處理 PostgreSQL dollar-quoting（$$ … $$ / $tag$）**：函式 / DO 區塊本體的分號不再被誤切；加單元測試（含 `$1` 參數不誤判）。
+- 小修：MongoDB `limit:0` 不再被當「不限」（夾為預設 200）、SQLite 運算式索引欄位不再因 NULL 而錯位、即時尋找計數略過隱藏欄、重載清除選取格、隱藏選取欄時清除選取避免鍵盤導覽卡住、變更每頁列數套用未套用變更確認、多語句改為呈現「最後一個結果集」。
+
+### PostgreSQL 嚴格型別 — 寫入路徑與數值篩選修正（擴充測試覆蓋後找出，皆以真實 PG 回歸驗證）
+舊測試僅用 **TEXT 主鍵 / 文字欄位**，掩蓋了以下嚴重問題。新增 **整數主鍵 + JSONB 欄位** 的 CRUD 測試後揭露並修正：
+- **修正整數 / UUID 等主鍵的列無法更新 / 刪除（嚴重 bug）**：`update_cell` / `delete_row` 的 WHERE 以 `主鍵 = $n`（text 綁定），PG 嚴格型別下 `integer = text` 直接報錯，導致**絕大多數真實表（自增整數主鍵）的列完全無法編輯或刪除**。改為 `主鍵::text = $n`（等值比較正確、且免逐型別轉換）。
+- **修正非文字欄位無法新增 / 更新（嚴重 bug）**：`insert_row` 的 `VALUES ($n)` 與 `update_cell` 的 `SET 欄 = $1` 以 text 綁定，插入 / 更新 int / numeric / bool / uuid / jsonb / 時間等欄位時報 `column is of type … but expression is of type text`。改為依 `information_schema.udt_name` 把參數轉成欄位實際型別（`$n::int4` / `::jsonb` / `::timestamptz`…，型別名僅允許識別字字元，仍走參數化綁定、無注入）。
+- **修正數值 / 時間欄位的範圍篩選變字典序（bug）**：先前 `>,>=,<,<=` 一律以 `欄位::text` 比較，使 `id >= 3` 在 `{1,2,10,30}` 誤得 `{30}`（字典序 `'10' < '2'`）而非 `{10,30}`。改為排序運算子遇已知數值 / 時間型別時，把參數轉成該型別做原生比較（`欄位 op $n::型別`）；型別不明或文字欄位沿用 `::text`（等值 / LIKE / 文字排序皆正確）。型別查詢僅在篩選含排序運算子時觸發，不影響一般翻頁。
+- 跨資料庫一致性已以真實資料庫驗證：**整數主鍵 CRUD** 於 SQLite（INTEGER affinity）、MySQL（寬鬆 coerce）、PostgreSQL（上述轉型修正）三者皆通過。
+
+### 跨資料庫一致性（MySQL / PostgreSQL / MongoDB / SQLite）
+- 通用資料格能力（多欄排序、依值篩選、每頁列數、隱藏欄、右鍵複製、內容檢視器、鍵盤導覽）對所有資料庫一致生效（Mongo 的 filter / sort 由 driver 對應到 `$or` / `$gt` / `$regex` 等）。
+- **修正 MongoDB `LIKE` 語意（bug）**：原本僅把 `%` 換成 `.*` 且未錨定，導致 `LIKE 'abc'`（應為精確相等）與 `LIKE 'abc%'`（應為開頭符合）都退化成「子字串包含」；且未跳脫 regex 特殊字元，使 `LIKE '%@gmail.com'` 的 `.` 被當任意字元誤配。改為 `like_to_regex`：`%`→`.*`、`_`→`.`、跳脫 regex 特殊字元並以 `^…$` 錨定，加純函式單元測試 + 真實 Mongo 回歸測試。
+- **修正 MongoDB `guess_bson` 型別推斷失真（bug）**：寫入 / 篩選時把字串推斷成數字，但 `"01234"`（ZIP / 代碼）會被轉成 `1234`（前導零消失）、超出 i64 範圍的長數字 ID 會被當 f64 而掉精度。改為僅在「數字正規表示與原字串完全一致」時才當整數、浮點僅接受含 `.`/`e`/`E` 的字串，其餘保留原字串。加單元測試。
+- **複製為 INSERT** 依資料庫種類正確跳脫識別字（PostgreSQL 雙引號、MySQL/SQLite 反引號）；字串字面值依方言跳脫（**MySQL 額外加倍反斜線**，否則 `\b` 等會被當轉義；PostgreSQL / SQLite 視 `\` 為字面，不加倍）；Mongo 不顯示此項（改用複製 JSON）。加單元測試覆蓋各方言。
+- **側欄「產生查詢」** 對 Mongo 集合產生 `{ db, collection, filter }` JSON 範本；對 SQL 表產生 SELECT/COUNT/INSERT。
+- **ER 圖** 工具列鈕僅對關聯式資料庫啟用（Mongo / Redis 無外鍵概念，不再誤觸發 Unsupported 錯誤）。
+- 鍵盤左右移動會略過隱藏欄。
+- **MongoDB 查詢增強**：JSON 查詢支援 `sort` / `projection` / `limit`（未指定 limit 時預設 200，避免誤拉整個集合）。
+- **修正多欄排序鍵序被字母重排（bug）**：`serde_json` 預設以 BTreeMap 解析物件、把鍵按字母排序，導致 `sort: {"name":1,"age":-1}` 被重排成依 age 為主——多欄排序優先序錯誤。改開 `serde_json` 的 `preserve_order` 特性（IndexMap 保留鍵序）；連帶讓 JSON 匯出欄序符合來源欄序。加多欄排序真實 Mongo 回歸測試。
+- **MongoDB 聚合管線（aggregate）**：查詢 JSON 提供 `"pipeline": [ {…stage…}, … ]` 時改走 `aggregate`，支援 `$match` / `$group` / `$sum` / `$project` 等全部聚合階段（Mongo 旗艦功能）；查詢編輯器 placeholder 同時提示 find 與 aggregate 兩種格式。結果收集設 5000 筆安全上限（呼應 find 路徑，避免未收斂管線把整個集合拉進記憶體；要完整結果請在管線尾自加 `$limit`）。加真實 Mongo 回歸測試（`$match`+`$group`+`$sum`）。
+- **MongoDB 索引管理**：補上 `create_index` / `drop_index`（先前僅有列出），與關聯式 driver 對齊；結構分頁的「＋ 新增索引 / − 刪除」對 Mongo 一併啟用（依點選順序組複合索引、可設唯一；預設 `_id_` 索引受保護不可刪）。欄位 / DDL 編輯仍僅限 SQL。加真實 Mongo 回歸測試（建立後讀回、刪除後消失）。
+- **MongoDB 批次寫入（CRUD-via-JSON）**：查詢 JSON 除 find / aggregate 外，新增 `insert`（`insert_many`，貼上文件陣列即可匯入 JSON）、`update`（`{filter,set}` → `update_many` `$set`）、`delete`（`delete_many`，回報筆數）。**`update` 與 `delete` 的 filter 皆不可為空**——一致的安全防護，避免一個遺漏 filter 就誤改 / 誤刪整個集合（真要全集合操作請用明確條件如 `{"_id":{"$exists":true}}`）。讓 Mongo 查詢編輯器具備完整 CRUD 能力（致敬商用 Mongo 工具的 shell）。加真實 Mongo 回歸測試（insert 2 / update 2 / delete 2 / 空 filter 刪除被拒）。
+- **查詢編輯器顯示 `RETURNING` 結果**（PostgreSQL / SQLite 3.35+）：`INSERT/UPDATE/DELETE … RETURNING …` 原本被當寫入語句、只回影響筆數而吞掉回傳列；改為偵測到 `RETURNING` 時走 `fetch_all` 取回並顯示回傳列（致敬 DataGrip / DBeaver）。加真實資料庫回歸測試。
+- **欄位資料剖析**（致敬 Navicat / DataGrip）：資料格欄位標題右鍵「欄位統計」→ 後端 `column_stats`（`COUNT(*)` / `COUNT(欄)` / `COUNT(DISTINCT 欄)` + best-effort `MIN`/`MAX`）→ toast 顯示「總列數 · 非空 · 相異值 · 範圍 [min, max]」。MIN/MAX 重用各 driver 的儲存格渲染（型別正確），不支援的型別（如 JSON）自動略過範圍。關聯式三庫適用；加 SQLite（含 NULL / 重複值 / 範圍）與真實 MySQL 回歸測試。
+- **轉儲整庫結構 SQL**（致敬 Navicat / DBeaver 的「轉儲結構」）：側欄資料庫節點右鍵「匯出結構 SQL…」→ 串接該庫所有表的建表 SQL（重用 `table_ddl`）→ 另存 `.sql`。關聯式資料庫適用（Mongo 集合無建表 SQL 會略過）；資料庫右鍵選單改為依連線種類顯示對應項目（Redis 維持新增鍵 / FLUSHDB，SQL 顯示轉儲結構）。加端到端測試（SQLite：含每表建表語句）。
+- **CSV 資料匯入**（致敬 Navicat / DBeaver 匯入精靈，匯出的對稱功能）：資料格工具列「⬆ 匯入」開啟對話框 → 選 CSV/TSV 檔 → 逐列寫入目標表。RFC4180 解析器（引號欄位可含分隔符 / 換行 / `""` 轉義，**去除開頭 UTF-8 BOM**——Excel 匯出的 CSV 常帶 BOM，否則第一欄欄名被前置 `﻿` 對不上欄位、整批失敗；11 個純函式單元測試）；後端讀檔避免大檔過 JS bridge（含 100 MB 上限防 OOM；非 UTF-8 檔給明確指引而非難懂錯誤）；逐列走 driver 的 `insert_row`（沿用 PostgreSQL 嚴格型別的參數轉型修正，整數 / 時間欄位也能匯入）；選項：分隔字元（, / Tab / ;）、第一列為欄名（或自填欄名）、空欄位視為 NULL、遇錯即停 / 盡量匯入；回報成功 / 失敗列數與前 20 筆錯誤（含列號）。加端到端測試（SQLite，免 Docker：引號含逗號、空欄→NULL、整數欄匯入）。
+
+### 全域 UI/UX 打磨（`styles.css`）
+- 細捲軸融入深色主題、藍調文字選取色、鍵盤焦點環（focus-visible）、互動微過渡。
+- UI chrome 預設不可選取（原生 App 手感），資料 / 輸入框 / `.mono` 仍可選取；移除 number input 微調鈕、修正深色底下拉選單可讀性。
+- 資料格 / 查詢結果列**斑馬條紋**提升可讀性；重新整理時表格淡化提示載入中；SQL 編輯器可**垂直拖曳調整高度**。
+- **快捷鍵說明**（工具列「⌨ 快捷鍵」或 F1）：彙整查詢、表格、分頁/全域三區的所有鍵盤操作，提升新增功能的可發現性。
+- **全域錯誤邊界**：渲染錯誤時顯示友善訊息與「嘗試繼續 / 重新載入」，取代整頁白屏。
+
+---
+
 ## EXPLAIN · SSH host key TOFU · DDL · ER 圖（本次）
 
 一次補完 roadmap 剩餘四項。後端在 `DatabaseDriver` trait 加 `explain` / `alter_table` / `er_model` 三個預設方法（非關聯式回 Unsupported），三個 SQL driver 實作。
@@ -39,7 +173,8 @@
 - **修正 MySQL `list_databases` 回空清單的 bug**：原本用 `SHOW DATABASES` + `try_get::<String>().ok()`，但 sqlx-mysql 對該欄位常回 binary 型別導致解碼失敗、被 `.ok()` 默默丟棄，**整個資料庫清單變空（連線樹展不開）**。改用 `information_schema.SCHEMATA` 並加 bytes 解碼後備（`str_col`），`list_tables` / `table_columns` / `primary_key` 一併套用。
 - **russh 改用 `ring` crypto backend**（`default-features=false, features=["ring","flate2","rsa"]`），避免預設的 aws-lc-sys 在 Windows 需要 NASM 才能編譯（減少建置前置需求）。
 - 補上 `src-tauri/icons/icon.ico`（tauri-build 在 Windows 產生資源檔必需；原本只有 icon.png 會導致建置失敗）。
-- 整合測試 `src-tauri/src/it_tests.rs`（`cargo test --lib it_tests -- --include-ignored`）：覆蓋五大資料庫的連線 / CRUD / 多欄 AND 篩選、Redis 五型結構編輯、SQLite 備份還原、排程 next_run、連線持久化序列化（確認 secret 不落地）。
+- 整合測試 `src-tauri/src/it_tests.rs`（`cargo test --lib it_tests -- --include-ignored`）：覆蓋五大資料庫的連線 / `ping` / CRUD / 多欄 AND 篩選、Redis 五型結構編輯 + 改名（RENAMENX 不覆蓋）/ 刪除 / TTL、SQLite 備份還原（含還原非法檔被拒、原庫不被覆蓋）、排程 next_run、連線持久化序列化（確認 secret 不落地）。並針對寫入路徑強化：**整數主鍵 CRUD**（SQLite / MySQL / PostgreSQL 三者）、**DDL 欄位編輯**（alter_table 新增 / 改名 / 刪除欄位，三者；含 SQLite 受限的 ALTER）、**ER 圖外鍵探索**（er_model：PG / MySQL 建父子表 + FK → 探索出關係、FK 欄標記）、**RETURNING 回傳列**（PG / SQLite）、**PostgreSQL 複合主鍵更新 / 刪除 + 複合主鍵偵測**、**整數欄位更新為 NULL**、**數值欄位範圍篩選原生比較**（PG / MySQL）、**OR 篩選模式**（match_any，PG / MySQL / Mongo `$or`）、**寫入值注入安全**（SQL 中繼字元字面儲存）、**EXPLAIN 查詢計畫**（MySQL / PostgreSQL / SQLite）、Mongo query JSON 介面（filter / sort / projection / limit）、Mongo `LIKE` 錨定 / `guess_bson` 型別推斷 / `Decimal128` 顯示。
+- 測試（無需 Docker，`cargo test --lib` 直接跑，41 例）：`filter_op_sql` / `op_needs_value`（篩選運算子→SQL 對應，所有 driver 共用的單一真相來源）、`export()` 匯出管線端到端（分頁→render→寫檔）、`export::schema_dump`（整庫建表 SQL）、`backup::pct_encode`（Mongo URI userinfo percent-encoding，特殊字元密碼不破壞 URI）、`bytes_to_display`、`validate_column_spec`（注入阻擋）、`collect_relations`（FK 組裝）、`export::csv_field`（CSV 公式注入防護）、`export::sql_quote`（反斜線 / 單引號跳脫）、`export::render`（CSV/TSV/JSON/SQL/Markdown 五格式端到端輸出）、`import::parse_csv`（RFC4180 解析 10 例：引號含分隔符 / 換行、`""` 轉義、CRLF、自訂分隔符、空欄）、`import_csv` 端到端（SQLite：匯入 / 空欄→NULL / 整數欄 / 欄數不符回報 / stop_on_error）、`scheduler_next_run`、`scheduler::backups_to_prune`（備份保留清理——資料風險邏輯）、`persisted_connection_drops_secrets`、Mongo `like_to_regex` / `guess_bson` / `bson_to_string(Decimal128)`、PostgreSQL `pg_cast_suffix`（型別名注入防護）/ `pg_native_cast` / `bind_placeholder` / `is_ordering_op`。前端另有 `vitest` 26 例覆蓋 SQL 切分（含 PG dollar-quoting、MySQL 雙反引號識別字）/ 匯出格式 / 識別字與字面值跳脫（含 MySQL 反斜線方言）/ localStorage 持久化守衛（收藏查詢與歷史的損壞資料過濾）等純邏輯。
 
 ### 連線設定持久化 + OS keychain（`store.rs`）
 - 連線設定寫入 `<app_config_dir>/connections.json`（原子寫入 temp + rename），**密碼 / SSH secret 一律存 OS keychain（`keyring`）**，磁碟不含任何密碼、也不回傳前端。

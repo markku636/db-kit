@@ -17,9 +17,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order：保留 JSON 物件鍵序（IndexMap）。否則 serde_json 預設 BTreeMap 會把鍵按字母排序，
+# 導致 MongoDB 多欄 sort（如 {"name":1,"age":-1}）被重排、排序優先序錯誤；JSON 匯出欄序也會亂。
+serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "postgres", "sqlite", "chrono", "uuid", "bigdecimal"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "postgres", "sqlite", "chrono", "uuid", "bigdecimal", "json"] }
 mongodb = "3"
 futures = "0.3"
 redis = { version = "0.27", features = ["tokio-comp"] }

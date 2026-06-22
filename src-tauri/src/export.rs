@@ -106,6 +106,33 @@ pub async fn export(
     })
 }
 
+/// 匯出整個資料庫的結構（所有表的建表 SQL，依 `table_ddl` 串接）。致敬 Navicat / DBeaver 的
+/// 「轉儲結構」。不支援 `table_ddl` 的表（如 Mongo 集合）會被略過。
+pub async fn schema_dump(
+    manager: &ConnectionManager,
+    id: &str,
+    database: &str,
+) -> AppResult<String> {
+    let tables = manager.list_tables(id, database).await?;
+    let mut out = String::new();
+    for t in &tables {
+        if let Ok(ddl) = manager.table_ddl(id, database, &t.name).await {
+            let ddl = ddl.trim().trim_end_matches(';');
+            if ddl.is_empty() {
+                continue;
+            }
+            out.push_str(ddl);
+            out.push_str(";\n\n");
+        }
+    }
+    if out.is_empty() {
+        return Err(AppError::Query(
+            "沒有可匯出的結構（此資料庫無資料表或不支援建表 SQL）".to_string(),
+        ));
+    }
+    Ok(out)
+}
+
 fn render(
     columns: &[String],
     rows: &[Vec<Option<String>>],
@@ -114,9 +141,11 @@ fn render(
 ) -> AppResult<Vec<u8>> {
     match opts.format.as_str() {
         "csv" | "tsv" => {
+            // 空字串分隔符會產生無法解析的輸出，視為未指定並退回格式預設。
             let delim = opts
                 .delimiter
                 .clone()
+                .filter(|d| !d.is_empty())
                 .unwrap_or_else(|| if opts.format == "tsv" { "\t".into() } else { ",".into() });
             let nullt = opts.null_text.clone().unwrap_or_default();
             let mut out = String::new();
@@ -209,17 +238,171 @@ fn render(
 }
 
 fn csv_field(s: &str, delim: &str) -> String {
-    if s.contains(delim) || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        format!("\"{}\"", s.replace('"', "\"\""))
+    // 公式注入（CSV injection / DDE）防護：以 = + - @ 或 tab/CR 開頭的值，
+    // 前置單引號，避免試算表（Excel / Sheets）把它當公式執行。
+    let guarded = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{s}")
     } else {
         s.to_string()
+    };
+    if guarded.contains(delim) || guarded.contains('"') || guarded.contains('\n') || guarded.contains('\r') {
+        format!("\"{}\"", guarded.replace('"', "\"\""))
+    } else {
+        guarded
     }
 }
 
+// SQL 字串字面值跳脫。此匯出走 MySQL 方言（反引號識別字），故同時跳脫反斜線
+// （MySQL 預設把 \ 視為字串轉義字元；只 double 單引號會在含 \ 的值產生錯誤 / 不安全結果）。
 fn sql_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
 }
 
 fn md_cell(s: &str) -> String {
     s.replace('|', "\\|").replace('\r', "").replace('\n', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn csv_field_guards_formula_injection() {
+        // 以 = + - @ 開頭 → 前置單引號，避免試算表當公式執行。
+        assert_eq!(csv_field("=cmd()", ","), "'=cmd()");
+        assert_eq!(csv_field("+1", ","), "'+1");
+        assert_eq!(csv_field("-1", ","), "'-1");
+        assert_eq!(csv_field("@x", ","), "'@x");
+        // 一般值不變。
+        assert_eq!(csv_field("hello", ","), "hello");
+        // 含分隔符 / 引號 → 以雙引號包裹並把內部引號加倍。
+        assert_eq!(csv_field("a,b", ","), "\"a,b\"");
+        assert_eq!(csv_field("a\"b", ","), "\"a\"\"b\"");
+        // 公式開頭 + 含逗號 → 先前置單引號，再整體包引號。
+        assert_eq!(csv_field("=a,b", ","), "\"'=a,b\"");
+    }
+
+    #[test]
+    fn sql_quote_escapes_backslash_and_quote() {
+        assert_eq!(sql_quote("plain"), "'plain'");
+        assert_eq!(sql_quote("O'Brien"), "'O''Brien'");
+        // MySQL 方言：反斜線需加倍，否則含 \ 的值會被誤當轉義。
+        assert_eq!(sql_quote("a\\b"), "'a\\\\b'");
+        assert_eq!(sql_quote("\\'"), "'\\\\'''");
+    }
+
+    // ---- render() 端到端輸出（驗證整個匯出管線，不只 helper）----
+
+    fn opts(format: &str) -> ExportOptions {
+        ExportOptions {
+            format: format.to_string(),
+            include_header: true,
+            delimiter: None,
+            null_text: None,
+            sql_table: None,
+            all_rows: true,
+            bom: false,
+        }
+    }
+
+    fn cols(cs: &[&str]) -> Vec<String> {
+        cs.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn row(vs: &[Option<&str>]) -> Vec<Option<String>> {
+        vs.iter().map(|v| v.map(|s| s.to_string())).collect()
+    }
+
+    fn render_str(columns: &[String], rows: &[Vec<Option<String>>], o: &ExportOptions) -> String {
+        String::from_utf8(render(columns, rows, o, "t").unwrap()).unwrap()
+    }
+
+    #[test]
+    fn render_csv_quoting_null_and_formula_guard() {
+        let columns = cols(&["id", "name"]);
+        let rows = vec![
+            row(&[Some("1"), Some("a,b")]), // 含逗號 → 包雙引號
+            row(&[Some("2"), None]),        // NULL → 預設空字串
+            row(&[Some("3"), Some("=cmd")]), // 公式開頭 → 前置單引號
+        ];
+        let out = render_str(&columns, &rows, &opts("csv"));
+        assert_eq!(out, "id,name\r\n1,\"a,b\"\r\n2,\r\n3,'=cmd\r\n");
+    }
+
+    #[test]
+    fn render_csv_respects_custom_null_text_and_no_header() {
+        let columns = cols(&["a"]);
+        let rows = vec![row(&[None])];
+        let mut o = opts("csv");
+        o.include_header = false;
+        o.null_text = Some("\\N".into());
+        assert_eq!(render_str(&columns, &rows, &o), "\\N\r\n");
+    }
+
+    #[test]
+    fn render_csv_bom_prefix() {
+        let columns = cols(&["a"]);
+        let rows = vec![row(&[Some("x")])];
+        let mut o = opts("csv");
+        o.bom = true;
+        let bytes = render(&columns, &rows, &o, "t").unwrap();
+        assert_eq!(&bytes[..3], &[0xEF, 0xBB, 0xBF], "應以 UTF-8 BOM 開頭");
+    }
+
+    #[test]
+    fn render_tsv_uses_tab_delimiter() {
+        let columns = cols(&["a", "b"]);
+        let rows = vec![row(&[Some("1"), Some("2")])];
+        assert_eq!(render_str(&columns, &rows, &opts("tsv")), "a\tb\r\n1\t2\r\n");
+    }
+
+    #[test]
+    fn render_sql_quotes_idents_and_values() {
+        let columns = cols(&["id", "name"]);
+        let rows = vec![row(&[Some("1"), Some("O'Brien")]), row(&[Some("2"), None])];
+        let out = render_str(&columns, &rows, &opts("sql"));
+        assert_eq!(
+            out,
+            "INSERT INTO `t` (`id`, `name`) VALUES ('1', 'O''Brien');\n\
+             INSERT INTO `t` (`id`, `name`) VALUES ('2', NULL);\n"
+        );
+    }
+
+    #[test]
+    fn render_json_maps_null_and_strings() {
+        let columns = cols(&["id", "name"]);
+        let rows = vec![row(&[Some("1"), None])];
+        let out = render_str(&columns, &rows, &opts("json"));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v[0]["id"], serde_json::json!("1"));
+        assert_eq!(v[0]["name"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn render_json_preserves_source_column_order() {
+        // 來源欄序 name 在前（字母序則 id 在前）；preserve_order 應讓輸出保留來源欄序。
+        let columns = cols(&["name", "id"]);
+        let rows = vec![row(&[Some("a"), Some("1")])];
+        let out = render_str(&columns, &rows, &opts("json"));
+        assert!(
+            out.find("\"name\"").unwrap() < out.find("\"id\"").unwrap(),
+            "JSON 匯出欄序應保留來源欄序（非字母重排）：{out}"
+        );
+    }
+
+    #[test]
+    fn render_markdown_escapes_pipes() {
+        let columns = cols(&["a"]);
+        let rows = vec![row(&[Some("x|y")])];
+        let out = render_str(&columns, &rows, &opts("markdown"));
+        assert!(out.contains("x\\|y"), "markdown 應跳脫 |：{out}");
+        assert!(out.contains("| a |"));
+    }
+
+    #[test]
+    fn render_rejects_unknown_format() {
+        let columns = cols(&["a"]);
+        let rows = vec![row(&[Some("x")])];
+        assert!(render(&columns, &rows, &opts("xml"), "t").is_err());
+    }
 }

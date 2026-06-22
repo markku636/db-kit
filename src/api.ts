@@ -51,6 +51,13 @@ export interface ColumnInfo {
   extra: string;
 }
 
+export interface IndexInfo {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  primary: boolean;
+}
+
 export interface PagedData {
   columns: string[];
   rows: (string | null)[][];
@@ -107,6 +114,28 @@ export interface ExportResult {
   format: string;
 }
 
+export interface ImportOptions {
+  delimiter?: string | null;
+  has_header?: boolean;
+  empty_as_null?: boolean;
+  columns?: string[] | null;
+  stop_on_error?: boolean;
+}
+
+export interface ImportResult {
+  imported: number;
+  failed: number;
+  errors: string[];
+}
+
+export interface ColumnStats {
+  total: number;
+  non_null: number;
+  distinct: number;
+  min: string | null;
+  max: string | null;
+}
+
 // DDL 結構編輯（與後端 serde tag="op" 對齊）
 export type AlterOp =
   | { op: "add_column"; name: string; data_type: string; nullable: boolean; default?: string | null }
@@ -148,7 +177,14 @@ export type KeyEdit =
   | { action: "zset_add"; member: string; score: number }
   | { action: "zset_remove"; member: string }
   | { action: "hash_set"; field: string; value: string }
-  | { action: "hash_remove"; field: string };
+  | { action: "hash_remove"; field: string }
+  | { action: "rename"; new_key: string };
+
+// Redis 伺服器狀態（INFO 解析後的分區）；items 為 [欄位, 值] 二元陣列。
+export interface ServerInfoSection {
+  name: string;
+  items: [string, string][];
+}
 
 export interface BackupResult {
   path: string;
@@ -228,6 +264,8 @@ export const api = {
     invoke<PagedData>("table_data", { id, database, table, query }),
   runQuery: (id: string, sql: string) =>
     invoke<QueryResult>("run_query", { id, sql }),
+  saveTextFile: (path: string, content: string) =>
+    invoke<void>("save_text_file", { path, content }),
   updateCell: (id: string, database: string, table: string, edit: CellEdit) =>
     invoke<number>("update_cell", { id, database, table, edit }),
   insertRow: (id: string, database: string, table: string, row: RowInsert) =>
@@ -235,18 +273,34 @@ export const api = {
   deleteRow: (id: string, database: string, table: string, del: RowDelete) =>
     invoke<number>("delete_row", { id, database, table, del }),
   poolStatus: (id: string) => invoke<PoolStatus>("pool_status", { id }),
+  pingConnection: (id: string) => invoke<number>("ping_connection", { id }),
+  columnStats: (id: string, database: string, table: string, column: string) =>
+    invoke<ColumnStats>("column_stats", { id, database, table, column }),
   keyDetail: (id: string, database: string, key: string) =>
     invoke<KeyDetail | null>("key_detail", { id, database, key }),
   keyEdit: (id: string, database: string, key: string, edit: KeyEdit) =>
     invoke<number>("key_edit", { id, database, key, edit }),
   exportTable: (id: string, database: string, table: string, query: DataQuery, options: ExportOptions, outPath: string) =>
     invoke<ExportResult>("export_table", { id, database, table, query, options, outPath }),
+  importCsv: (id: string, database: string, table: string, path: string, options: ImportOptions) =>
+    invoke<ImportResult>("import_csv", { id, database, table, path, options }),
+  schemaDump: (id: string, database: string) => invoke<string>("schema_dump", { id, database }),
   explainQuery: (id: string, sql: string) =>
     invoke<QueryResult>("explain_query", { id, sql }),
   alterTable: (id: string, database: string, table: string, op: AlterOp) =>
     invoke<void>("alter_table", { id, database, table, op }),
   erModel: (id: string, database: string) =>
     invoke<ErModel>("er_model", { id, database }),
+  tableDdl: (id: string, database: string, table: string) =>
+    invoke<string>("table_ddl", { id, database, table }),
+  tableIndexes: (id: string, database: string, table: string) =>
+    invoke<IndexInfo[]>("table_indexes", { id, database, table }),
+  dropIndex: (id: string, database: string, table: string, index: string) =>
+    invoke<void>("drop_index", { id, database, table, index }),
+  createIndex: (id: string, database: string, table: string, name: string, columns: string[], unique: boolean) =>
+    invoke<void>("create_index", { id, database, table, name, columns, unique }),
+  serverInfo: (id: string) =>
+    invoke<ServerInfoSection[]>("server_info", { id }),
   backupDetectCli: (kind: DbKind) =>
     invoke<boolean>("backup_detect_cli", { kind }),
   backupRun: (config: ConnectionConfig, database: string, outPath: string) =>

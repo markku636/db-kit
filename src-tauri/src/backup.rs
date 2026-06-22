@@ -121,14 +121,21 @@ pub async fn restore(
                 .clone()
                 .filter(|p| !p.is_empty())
                 .ok_or_else(|| AppError::Query("SQLite 連線未指定檔案路徑".to_string()))?;
+            // 先驗證來源確為 SQLite 檔，避免以非 DB 檔覆蓋使用者資料庫。
+            validate_sqlite_file(in_path).await?;
+            // 覆蓋前備份現有檔（.bak），讓還原失敗可復原。
+            if Path::new(&dst).exists() {
+                let _ = tokio::fs::copy(&dst, format!("{dst}.bak")).await;
+            }
             tokio::fs::copy(in_path, &dst)
                 .await
                 .map_err(|e| AppError::Query(format!("還原 SQLite 檔失敗：{e}")))?;
             Ok(())
         }
         DbKind::Mysql => {
-            if !detect_cli(DbKind::Mysql).await {
-                // 還原用 mysql client（非 mysqldump）
+            // 還原用 mysql client（非 mysqldump）；缺工具時明確報錯（原為空的死分支）。
+            if !detect_cli_named("mysql").await {
+                return Err(AppError::Query("找不到 mysql 客戶端，請先安裝".to_string()));
             }
             let ok = run_mysql_restore(config, database, in_path).await?;
             if ok { Ok(()) } else { Err(AppError::Query("MySQL 還原失敗".to_string())) }
@@ -222,12 +229,25 @@ async fn run_psql_restore(c: &ConnectionConfig, db: &str, inp: &str) -> AppResul
     Ok(status.success())
 }
 
+/// 將 mongodb URI 的 userinfo（帳號 / 密碼）做 percent-encoding，
+/// 避免密碼含 @ : / % 等字元破壞 URI（否則備份會直接失敗或連到錯誤位置）。
+fn pct_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
 async fn run_mongodump(c: &ConnectionConfig, db: &str, out: &str) -> AppResult<bool> {
     // mongodump 以 --archive 輸出單一檔。
     let auth = if c.username.is_empty() {
         String::new()
     } else {
-        format!("{}:{}@", c.username, c.password)
+        format!("{}:{}@", pct_encode(&c.username), pct_encode(&c.password))
     };
     let uri = format!("mongodb://{auth}{}:{}", c.host, c.port);
     let status = Command::new("mongodump")
@@ -245,7 +265,7 @@ async fn run_mongorestore(c: &ConnectionConfig, db: &str, inp: &str) -> AppResul
     let auth = if c.username.is_empty() {
         String::new()
     } else {
-        format!("{}:{}@", c.username, c.password)
+        format!("{}:{}@", pct_encode(&c.username), pct_encode(&c.password))
     };
     let uri = format!("mongodb://{auth}{}:{}", c.host, c.port);
     let status = Command::new("mongorestore")
@@ -264,7 +284,8 @@ async fn run_redis_dump(c: &ConnectionConfig, out: &str) -> AppResult<bool> {
     let mut cmd = Command::new("redis-cli");
     cmd.arg("-h").arg(&c.host).arg("-p").arg(c.port.to_string());
     if !c.password.is_empty() {
-        cmd.arg("-a").arg(&c.password);
+        // 以 REDISCLI_AUTH 環境變數傳遞密碼，避免出現在行程列表（取代 -a）。
+        cmd.env("REDISCLI_AUTH", &c.password);
     }
     cmd.arg("--rdb").arg(out);
     let status = cmd
@@ -288,4 +309,38 @@ async fn detect_cli_named(tool: &str) -> bool {
 
 async fn file_size(path: &str) -> u64 {
     tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0)
+}
+
+/// 驗證檔案開頭為 SQLite 標頭（"SQLite format 3\0"，16 bytes），避免還原時以非資料庫檔覆蓋。
+async fn validate_sqlite_file(path: &str) -> AppResult<()> {
+    use tokio::io::AsyncReadExt;
+    let mut f = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| AppError::Query(format!("開啟備份檔失敗：{e}")))?;
+    let mut hdr = [0u8; 16];
+    f.read_exact(&mut hdr)
+        .await
+        .map_err(|_| AppError::Query("備份檔過小或無法讀取".to_string()))?;
+    if &hdr != b"SQLite format 3\0" {
+        return Err(AppError::Query("備份檔不是有效的 SQLite 資料庫檔".to_string()));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pct_encode;
+
+    #[test]
+    fn pct_encode_escapes_uri_special_chars() {
+        // unreserved（A-Z a-z 0-9 - _ . ~）原樣保留。
+        assert_eq!(pct_encode("abcXYZ09-_.~"), "abcXYZ09-_.~");
+        // URI userinfo 的危險字元需編碼，否則破壞 mongodb URI。
+        assert_eq!(pct_encode("p@ss"), "p%40ss"); // @ = 0x40
+        assert_eq!(pct_encode("a:b/c"), "a%3Ab%2Fc"); // : = 0x3A, / = 0x2F
+        assert_eq!(pct_encode("50%"), "50%25"); // % = 0x25
+        assert_eq!(pct_encode("a b"), "a%20b"); // 空白 = 0x20
+        // 多位元組（UTF-8）逐位元組編碼。
+        assert_eq!(pct_encode("é"), "%C3%A9");
+    }
 }

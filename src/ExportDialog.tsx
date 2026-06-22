@@ -29,6 +29,7 @@ export default function ExportDialog({ connId, database, table, query, onClose }
   const isCsv = format === "csv" || format === "tsv";
 
   const run = async () => {
+    if (busy) return; // 防重入：另存對話框開啟期間 busy 仍為 false，避免重複觸發
     const out = await pickSaveFile(`${table}.${meta.ext}`, [{ name: meta.label, extensions: [meta.ext] }]);
     if (!out) return;
     setBusy(true);

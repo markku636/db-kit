@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ConnectionConfig, DbKind, KIND_META, SshAuthMethod } from "./api";
 import { pickOpenFile } from "./ui";
 
@@ -28,6 +28,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [sshPassword, setSshPassword] = useState("");
   const [sshKeyPath, setSshKeyPath] = useState(initial?.ssh_private_key_path ?? "");
   const [sshPassphrase, setSshPassphrase] = useState("");
+
+  // Esc 關閉對話框。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const build = (): ConnectionConfig => ({
     id: initial?.id ?? crypto.randomUUID(),
@@ -61,9 +68,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const handleTest = async () => {
     setTesting(true);
     setMsg(null);
+    const t0 = performance.now();
     try {
       await api.testConnection(build());
-      setMsg({ ok: true, text: "連線成功" });
+      setMsg({ ok: true, text: `連線成功（${Math.round(performance.now() - t0)} ms）` });
     } catch (e: any) {
       setMsg({ ok: false, text: e?.message ?? "連線失敗" });
     } finally {

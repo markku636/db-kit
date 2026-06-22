@@ -20,6 +20,8 @@ interface AppStore {
   // 已開啟的表分頁
   tabs: OpenTab[];
   activeTabKey: string | null;
+  // 由側欄「產生 SQL」送往查詢編輯器的待載入語句（消費後清空）。
+  pendingSql: string | null;
 
   setConnections: (cs: ConnectionConfig[]) => void;
   addConnection: (c: ConnectionConfig) => void;
@@ -30,8 +32,13 @@ interface AppStore {
 
   openTable: (connId: string, database: string, table: string) => void;
   closeTab: (key: string) => void;
+  closeOtherTabs: (key: string) => void;
+  closeAllTabs: () => void;
   setActiveTab: (key: string) => void;
   setTabView: (key: string, view: "data" | "structure") => void;
+  // 將一段 SQL 載入查詢編輯器並切到查詢分頁。
+  requestQuery: (sql: string) => void;
+  clearPendingSql: () => void;
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -40,6 +47,7 @@ export const useStore = create<AppStore>((set) => ({
   activeId: null,
   tabs: [],
   activeTabKey: null,
+  pendingSql: null,
 
   setConnections: (cs) => set({ connections: cs }),
   addConnection: (c) =>
@@ -61,9 +69,12 @@ export const useStore = create<AppStore>((set) => ({
       return {
         connectedIds: next,
         tabs,
-        activeTabKey: tabs.some((t) => t.key === s.activeTabKey)
-          ? s.activeTabKey
-          : tabs.length ? tabs[tabs.length - 1].key : null,
+        // "__query__" 是查詢分頁的哨兵鍵，從不在 tabs 內；它屬於仍連線的連線，
+        // 中斷其他連線時應保留，不該把使用者踢離查詢編輯器。
+        activeTabKey:
+          s.activeTabKey === "__query__" || tabs.some((t) => t.key === s.activeTabKey)
+            ? s.activeTabKey
+            : tabs.length ? tabs[tabs.length - 1].key : null,
       };
     }),
 
@@ -85,6 +96,16 @@ export const useStore = create<AppStore>((set) => ({
           s.activeTabKey === key ? tabs.length ? tabs[tabs.length - 1].key : null : s.activeTabKey,
       };
     }),
+  // 關閉除 key 以外的所有表分頁；保留 key 並設為作用中。
+  closeOtherTabs: (key) =>
+    set((s) => {
+      const tabs = s.tabs.filter((t) => t.key === key);
+      return { tabs, activeTabKey: tabs.length ? key : null };
+    }),
+  closeAllTabs: () => set({ tabs: [], activeTabKey: null }),
+  // 設定待載入 SQL 並切到查詢分頁（QueryPane 掛載後消費）。
+  requestQuery: (sql) => set({ pendingSql: sql, activeTabKey: "__query__" }),
+  clearPendingSql: () => set({ pendingSql: null }),
   setActiveTab: (key) => set({ activeTabKey: key }),
   setTabView: (key, view) =>
     set((s) => ({

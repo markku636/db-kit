@@ -107,10 +107,11 @@ fn sanitize(s: &str) -> String {
         .collect()
 }
 
-/// 此排程的檔名基底（無時間戳、無副檔名）。
-fn name_base(database: &str, fallback: &str) -> String {
+/// 此排程的檔名基底（無時間戳、無副檔名），以排程 id 命名空間化，
+/// 避免「同 DB、同目錄」的不同排程互相誤刪（保留份數隔離）或同秒覆蓋。
+fn name_base(database: &str, fallback: &str, sched_id: &str) -> String {
     let base = if database.trim().is_empty() { fallback } else { database };
-    sanitize(base)
+    sanitize(&format!("{base}__{sched_id}"))
 }
 
 /// 產生備份檔名：`<base>_<YYYYMMDD-HHMMSS><ext>`。
@@ -145,7 +146,7 @@ pub async fn fire_one(app: &AppHandle, sched: &BackupSchedule) -> BackupHistoryE
     let started = Local::now();
     let mut conn_name = sched.connection_id.clone();
     let mut kind = DbKind::Mysql; // 找不到連線時的佔位（該筆必為 Failed，無法還原）。
-    let mut base = name_base(&sched.database, "backup");
+    let mut base = name_base(&sched.database, "backup", &sched.id);
 
     let result: Result<crate::backup::BackupResult, String> =
         match crate::store::load_connection(app, &sched.connection_id).await {
@@ -153,7 +154,7 @@ pub async fn fire_one(app: &AppHandle, sched: &BackupSchedule) -> BackupHistoryE
             Ok(cfg) => {
                 conn_name = cfg.name.clone();
                 kind = cfg.kind;
-                base = name_base(&sched.database, &cfg.name);
+                base = name_base(&sched.database, &cfg.name, &sched.id);
                 let filename = make_filename(&base, cfg.kind, started);
                 let out_path = Path::new(&sched.target_dir).join(&filename);
                 let out_str = out_path.to_string_lossy().to_string();
@@ -268,10 +269,55 @@ async fn prune_old_backups(target_dir: &str, base: &str, kind: DbKind, keep: usi
             }
         }
     }
-    // 檔名含 YYYYMMDD-HHMMSS，字典序遞減即時間遞減。
-    matches.sort();
-    matches.reverse();
-    for stale in matches.into_iter().skip(keep) {
+    for stale in backups_to_prune(matches, keep) {
         let _ = tokio::fs::remove_file(Path::new(target_dir).join(stale)).await;
+    }
+}
+
+/// 從符合的備份檔名中挑出「應刪除」者：保留最新 `keep` 個、其餘回傳待刪。
+/// 檔名含 `YYYYMMDD-HHMMSS`，字典序遞減即時間遞減，故排序後保留前 keep 個。
+/// `keep == 0` 代表「不啟用保留上限」→ 不刪任何檔（與 prune_old_backups 的提前返回一致）。
+/// 抽成純函式以便對「會刪檔」的資料風險邏輯做單元測試。
+fn backups_to_prune(mut names: Vec<String>, keep: usize) -> Vec<String> {
+    if keep == 0 {
+        return Vec::new();
+    }
+    names.sort();
+    names.reverse();
+    names.into_iter().skip(keep).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::backups_to_prune;
+
+    fn names() -> Vec<String> {
+        // 故意亂序，驗證函式自行排序。
+        vec![
+            "db_20260102-000000.sql".to_string(),
+            "db_20260101-000000.sql".to_string(),
+            "db_20260103-000000.sql".to_string(),
+        ]
+    }
+
+    #[test]
+    fn keeps_newest_deletes_rest() {
+        // keep 2 → 只刪最舊的 1 個（20260101）。
+        assert_eq!(backups_to_prune(names(), 2), vec!["db_20260101-000000.sql".to_string()]);
+        // keep 1 → 刪最舊 2 個。
+        let d = backups_to_prune(names(), 1);
+        assert_eq!(d.len(), 2);
+        assert!(d.contains(&"db_20260101-000000.sql".to_string()));
+        assert!(d.contains(&"db_20260102-000000.sql".to_string()));
+        assert!(!d.contains(&"db_20260103-000000.sql".to_string()), "最新檔不應被刪");
+    }
+
+    #[test]
+    fn keep_zero_or_excess_deletes_nothing() {
+        // keep 0 = 不啟用保留上限 → 不刪。
+        assert!(backups_to_prune(names(), 0).is_empty());
+        // keep >= 檔數 → 不刪。
+        assert!(backups_to_prune(names(), 3).is_empty());
+        assert!(backups_to_prune(names(), 99).is_empty());
     }
 }

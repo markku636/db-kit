@@ -119,6 +119,15 @@ pub struct TableInfo {
     pub kind: String,
 }
 
+/// 索引定義（「結構」分頁的索引區用）。
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    pub primary: bool,
+}
+
 /// 欄位定義（「結構」分頁用）。
 #[derive(Debug, Clone, Serialize)]
 pub struct ColumnInfo {
@@ -220,6 +229,27 @@ pub enum KeyEdit {
     HashSet { field: String, value: String },
     /// HDEL：移除 hash 欄位。
     HashRemove { field: String },
+    /// RENAME：將鍵改名（key 識別變更，非元素編輯）。
+    Rename { new_key: String },
+}
+
+/// 伺服器狀態：Redis `INFO` 解析後的一個分區（如 Server / Memory / Clients）。
+/// items 為該區段的 (欄位, 值) 清單，序列化為 JSON 的二元陣列。
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerInfoSection {
+    pub name: String,
+    pub items: Vec<(String, String)>,
+}
+
+/// 欄位資料剖析（致敬 Navicat / DataGrip）：總列數 / 非空 / 相異值數 + 最小 / 最大（範圍）。
+/// min / max 為 best-effort：某些型別（如 JSON）不支援 MIN/MAX 時為 None。
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ColumnStats {
+    pub total: u64,
+    pub non_null: u64,
+    pub distinct: u64,
+    pub min: Option<String>,
+    pub max: Option<String>,
 }
 
 fn one_i64() -> i64 {
@@ -420,6 +450,16 @@ pub trait DatabaseDriver: Send + Sync {
         Err(AppError::Unsupported("此資料庫不支援查詢計畫分析".into()))
     }
 
+    /// 欄位資料剖析（總數 / 非空 / 相異）。非關聯式預設 Unsupported。
+    async fn column_stats(
+        &self,
+        _database: &str,
+        _table: &str,
+        _column: &str,
+    ) -> AppResult<ColumnStats> {
+        Err(AppError::Unsupported("此資料庫不支援欄位統計".into()))
+    }
+
     /// 結構編輯（DDL：ALTER TABLE）。非關聯式預設 Unsupported。
     async fn alter_table(&self, _database: &str, _table: &str, _op: &AlterOp) -> AppResult<()> {
         Err(AppError::Unsupported("此資料庫不支援結構編輯".into()))
@@ -428,6 +468,39 @@ pub trait DatabaseDriver: Send + Sync {
     /// ER 圖模型（表 + 外鍵關係）。非關聯式預設 Unsupported。
     async fn er_model(&self, _database: &str) -> AppResult<ErModel> {
         Err(AppError::Unsupported("此資料庫不支援 ER 圖".into()))
+    }
+
+    /// 取得建表 DDL（MySQL `SHOW CREATE TABLE`、SQLite sqlite_master、PG 以欄位重建）。
+    /// 非關聯式預設 Unsupported。
+    async fn table_ddl(&self, _database: &str, _table: &str) -> AppResult<String> {
+        Err(AppError::Unsupported("此資料庫不支援建表 DDL".into()))
+    }
+
+    /// 取得表 / 集合的索引清單。預設回空（不支援的資料庫即顯示「無索引」）。
+    async fn table_indexes(&self, _database: &str, _table: &str) -> AppResult<Vec<IndexInfo>> {
+        Ok(vec![])
+    }
+
+    /// 刪除索引。預設 Unsupported（前端僅對關聯式顯示此操作）。
+    async fn drop_index(&self, _database: &str, _table: &str, _index: &str) -> AppResult<()> {
+        Err(AppError::Unsupported("此資料庫不支援刪除索引".into()))
+    }
+
+    /// 建立索引。預設 Unsupported。
+    async fn create_index(
+        &self,
+        _database: &str,
+        _table: &str,
+        _name: &str,
+        _columns: &[String],
+        _unique: bool,
+    ) -> AppResult<()> {
+        Err(AppError::Unsupported("此資料庫不支援建立索引".into()))
+    }
+
+    /// 伺服器狀態（Redis INFO 等）。非鍵值型預設 Unsupported。
+    async fn server_info(&self) -> AppResult<Vec<ServerInfoSection>> {
+        Err(AppError::Unsupported("此資料庫不支援伺服器狀態".into()))
     }
 
     /// 優雅關閉：drain 連線池。
@@ -454,4 +527,56 @@ pub fn filter_op_sql(op: &str) -> Option<&'static str> {
 /// 運算子是否需要綁定值（is_null / is_not_null 不需要）。
 pub fn op_needs_value(op: &str) -> bool {
     !matches!(op, "is_null" | "is_not_null")
+}
+
+/// 驗證 ADD COLUMN 的型別與預設值。型別 / 預設值在 DDL 中無法參數綁定（只能字串插值），
+/// 故阻擋語句終止符與註解以防 DDL 注入（堆疊語句 / 註解），其餘（含 ENUM/DECIMAL 的括號與逗號、
+/// 字串字面值、CURRENT_TIMESTAMP 等關鍵字、函式預設值）放行。
+/// 註：在「操作者已持有資料庫憑證」的桌面工具模型下，這是縱深防禦兼防止誤植造成的損壞。
+pub(crate) fn validate_column_spec(data_type: &str, default: Option<&str>) -> AppResult<()> {
+    let dt = data_type.trim();
+    if dt.is_empty() {
+        return Err(AppError::Query("請指定欄位型別".into()));
+    }
+    let bad = |s: &str| {
+        s.contains(';')
+            || s.contains("--")
+            || s.contains("/*")
+            || s.contains("*/")
+            || s.chars().any(|c| c == '\0' || c == '\n' || c == '\r')
+    };
+    if bad(dt) {
+        return Err(AppError::Query(
+            "欄位型別含不允許的字元（; -- /* 或換行）".into(),
+        ));
+    }
+    if let Some(d) = default {
+        if bad(d) {
+            return Err(AppError::Query(
+                "預設值含不允許的字元（; -- /* 或換行）".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 將二進位欄位（BLOB / BYTEA / BINARY）轉成可顯示字串。
+/// 若整段為合法 UTF-8 則原樣呈現；否則以 `0x…` 十六進位預覽（上限 64 bytes，
+/// 並標註總長度），避免 `from_utf8_lossy` 產生一堆替換字元的雜訊。
+pub(crate) fn bytes_to_display(b: &[u8]) -> String {
+    match std::str::from_utf8(b) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            const CAP: usize = 64;
+            let mut hex = String::with_capacity(2 + CAP * 2 + 16);
+            hex.push_str("0x");
+            for byte in b.iter().take(CAP) {
+                hex.push_str(&format!("{:02x}", byte));
+            }
+            if b.len() > CAP {
+                hex.push_str(&format!("… ({} bytes)", b.len()));
+            }
+            hex
+        }
+    }
 }

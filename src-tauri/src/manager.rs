@@ -9,8 +9,9 @@ use crate::db::postgres::PostgresDriver;
 use crate::db::redis::RedisDriver;
 use crate::db::sqlite::SqliteDriver;
 use crate::db::{
-    AlterOp, CellEdit, ColumnInfo, ConnectionConfig, DataQuery, DatabaseDriver, DbKind, ErModel,
-    KeyDetail, KeyEdit, PagedData, PoolStatus, QueryResult, RowDelete, RowInsert, TableInfo,
+    AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, DbKind,
+    ErModel, IndexInfo, KeyDetail, KeyEdit, PagedData, PoolStatus, QueryResult, RowDelete, RowInsert,
+    ServerInfoSection, TableInfo,
 };
 use crate::error::{AppError, AppResult};
 use crate::ssh::TunnelGuard;
@@ -162,6 +163,15 @@ impl Active {
             Active::Redis(d) => d.explain(sql).await,
         }
     }
+    async fn column_stats(&self, database: &str, table: &str, column: &str) -> AppResult<ColumnStats> {
+        match self {
+            Active::Mysql(d) => d.column_stats(database, table, column).await,
+            Active::Postgres(d) => d.column_stats(database, table, column).await,
+            Active::Sqlite(d) => d.column_stats(database, table, column).await,
+            Active::Mongo(d) => d.column_stats(database, table, column).await,
+            Active::Redis(d) => d.column_stats(database, table, column).await,
+        }
+    }
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
         match self {
             Active::Mysql(d) => d.alter_table(database, table, op).await,
@@ -178,6 +188,51 @@ impl Active {
             Active::Sqlite(d) => d.er_model(database).await,
             Active::Mongo(d) => d.er_model(database).await,
             Active::Redis(d) => d.er_model(database).await,
+        }
+    }
+    async fn table_ddl(&self, database: &str, table: &str) -> AppResult<String> {
+        match self {
+            Active::Mysql(d) => d.table_ddl(database, table).await,
+            Active::Postgres(d) => d.table_ddl(database, table).await,
+            Active::Sqlite(d) => d.table_ddl(database, table).await,
+            Active::Mongo(d) => d.table_ddl(database, table).await,
+            Active::Redis(d) => d.table_ddl(database, table).await,
+        }
+    }
+    async fn table_indexes(&self, database: &str, table: &str) -> AppResult<Vec<IndexInfo>> {
+        match self {
+            Active::Mysql(d) => d.table_indexes(database, table).await,
+            Active::Postgres(d) => d.table_indexes(database, table).await,
+            Active::Sqlite(d) => d.table_indexes(database, table).await,
+            Active::Mongo(d) => d.table_indexes(database, table).await,
+            Active::Redis(d) => d.table_indexes(database, table).await,
+        }
+    }
+    async fn drop_index(&self, database: &str, table: &str, index: &str) -> AppResult<()> {
+        match self {
+            Active::Mysql(d) => d.drop_index(database, table, index).await,
+            Active::Postgres(d) => d.drop_index(database, table, index).await,
+            Active::Sqlite(d) => d.drop_index(database, table, index).await,
+            Active::Mongo(d) => d.drop_index(database, table, index).await,
+            Active::Redis(d) => d.drop_index(database, table, index).await,
+        }
+    }
+    async fn create_index(&self, database: &str, table: &str, name: &str, columns: &[String], unique: bool) -> AppResult<()> {
+        match self {
+            Active::Mysql(d) => d.create_index(database, table, name, columns, unique).await,
+            Active::Postgres(d) => d.create_index(database, table, name, columns, unique).await,
+            Active::Sqlite(d) => d.create_index(database, table, name, columns, unique).await,
+            Active::Mongo(d) => d.create_index(database, table, name, columns, unique).await,
+            Active::Redis(d) => d.create_index(database, table, name, columns, unique).await,
+        }
+    }
+    async fn server_info(&self) -> AppResult<Vec<ServerInfoSection>> {
+        match self {
+            Active::Mysql(d) => d.server_info().await,
+            Active::Postgres(d) => d.server_info().await,
+            Active::Sqlite(d) => d.server_info().await,
+            Active::Mongo(d) => d.server_info().await,
+            Active::Redis(d) => d.server_info().await,
         }
     }
     async fn close(&self) {
@@ -257,7 +312,16 @@ impl ConnectionManager {
             active,
             tunnel: Mutex::new(tunnel),
         });
-        self.active.lock().insert(cfg.id.clone(), live);
+        // 並發 connect 同一 id 的競態：insert 回傳被覆蓋的舊連線時，收掉其 tunnel + driver，
+        // 避免背景任務 / session 洩漏（起始的 disconnect 只處理「先前已存在」的常見情形）。
+        let displaced = self.active.lock().insert(cfg.id.clone(), live);
+        if let Some(old) = displaced {
+            old.active.close().await;
+            let tunnel = old.tunnel.lock().take();
+            if let Some(g) = tunnel {
+                g.shutdown().await;
+            }
+        }
         Ok(())
     }
 
@@ -414,6 +478,10 @@ impl ConnectionManager {
         self.get(id)?.active.explain(sql).await
     }
 
+    pub async fn column_stats(&self, id: &str, database: &str, table: &str, column: &str) -> AppResult<ColumnStats> {
+        self.get(id)?.active.column_stats(database, table, column).await
+    }
+
     pub async fn alter_table(
         &self,
         id: &str,
@@ -426,6 +494,26 @@ impl ConnectionManager {
 
     pub async fn er_model(&self, id: &str, database: &str) -> AppResult<ErModel> {
         self.get(id)?.active.er_model(database).await
+    }
+
+    pub async fn table_ddl(&self, id: &str, database: &str, table: &str) -> AppResult<String> {
+        self.get(id)?.active.table_ddl(database, table).await
+    }
+
+    pub async fn table_indexes(&self, id: &str, database: &str, table: &str) -> AppResult<Vec<IndexInfo>> {
+        self.get(id)?.active.table_indexes(database, table).await
+    }
+
+    pub async fn drop_index(&self, id: &str, database: &str, table: &str, index: &str) -> AppResult<()> {
+        self.get(id)?.active.drop_index(database, table, index).await
+    }
+
+    pub async fn create_index(&self, id: &str, database: &str, table: &str, name: &str, columns: &[String], unique: bool) -> AppResult<()> {
+        self.get(id)?.active.create_index(database, table, name, columns, unique).await
+    }
+
+    pub async fn server_info(&self, id: &str) -> AppResult<Vec<ServerInfoSection>> {
+        self.get(id)?.active.server_info().await
     }
 
     /// 主動關閉並移除單一連線（含其 tunnel）。

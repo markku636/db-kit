@@ -20,4 +20,86 @@ body {
 /* 等寬字型用於資料/SQL */
 .mono {
   font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 全域 UI/UX 打磨：致敬商用工具的精緻手感 ---- */
+
+/* 細捲軸，融入深色主題（取代系統粗捲軸的突兀感）。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 文字選取色：藍調，與品牌色一致。 */
+::selection {
+  background: rgba(59, 130, 246, 0.35);
+}
+
+/* 可聚焦元素的清晰焦點環（鍵盤導覽友善，滑鼠點擊不顯示）。 */
+:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.6);
+  outline-offset: -1px;
+}
+button:focus:not(:focus-visible),
+input:focus:not(:focus-visible),
+select:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* 互動元素的微過渡，讓 hover / 狀態切換不突兀。 */
+button,
+a,
+[role="button"] {
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease,
+    opacity 0.12s ease;
+}
+
+/* 全域不可選取 UI 文字（資料表 / 編輯器內仍可選取，由元件自行覆寫）。 */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+input,
+textarea,
+.mono,
+[data-selectable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 移除 number input 的上下微調鈕（資料編輯時更乾淨）。 */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* 下拉選單在深色底的可讀性（部分平台 option 會吃系統色）。 */
+option {
+  background: #1a212b;
+  color: #e6e6e6;
 }

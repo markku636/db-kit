@@ -6,7 +6,7 @@ use tauri::{AppHandle, State};
 use crate::backup::{self, BackupResult};
 use crate::db::{
     AlterOp, CellEdit, ColumnInfo, ConnectionConfig, DataQuery, ErModel, KeyDetail, KeyEdit,
-    PagedData, PoolStatus, QueryResult, RowDelete, RowInsert, TableInfo,
+    PagedData, PoolStatus, QueryResult, RowDelete, RowInsert, ServerInfoSection, TableInfo,
 };
 use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
@@ -152,6 +152,12 @@ pub async fn run_query(
     state.manager.query(&id, &sql).await
 }
 
+/// 將文字內容寫入使用者（透過原生另存對話框）選定的路徑。供匯出查詢結果用。
+#[tauri::command]
+pub async fn save_text_file(path: String, content: String) -> AppResult<()> {
+    std::fs::write(&path, content).map_err(|e| AppError::Query(format!("寫入失敗：{e}")))
+}
+
 #[tauri::command]
 pub async fn update_cell(
     state: State<'_, AppState>,
@@ -188,6 +194,15 @@ pub async fn delete_row(
 #[tauri::command]
 pub async fn pool_status(state: State<'_, AppState>, id: String) -> AppResult<PoolStatus> {
     state.manager.pool_status(&id)
+}
+
+/// 對既有的活躍連線送出一次輕量往返（SELECT 1 / PING / ping），回傳延遲毫秒。
+/// 用途：像 DBeaver / TablePlus 的「Ping」，確認連線（含 SSH 通道）仍然有效並量測 RTT。
+#[tauri::command]
+pub async fn ping_connection(state: State<'_, AppState>, id: String) -> AppResult<u64> {
+    let start = std::time::Instant::now();
+    state.manager.ping(&id).await?;
+    Ok(start.elapsed().as_millis() as u64)
 }
 
 #[tauri::command]
@@ -238,6 +253,18 @@ pub async fn explain_query(
     state.manager.explain(&id, &sql).await
 }
 
+/// 欄位資料剖析（總數 / 非空 / 相異）。致敬 Navicat / DataGrip 的欄位統計。
+#[tauri::command]
+pub async fn column_stats(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    table: String,
+    column: String,
+) -> AppResult<crate::db::ColumnStats> {
+    state.manager.column_stats(&id, &database, &table, &column).await
+}
+
 #[tauri::command]
 pub async fn alter_table(
     state: State<'_, AppState>,
@@ -258,6 +285,58 @@ pub async fn er_model(
     state.manager.er_model(&id, &database).await
 }
 
+#[tauri::command]
+pub async fn table_ddl(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    table: String,
+) -> AppResult<String> {
+    state.manager.table_ddl(&id, &database, &table).await
+}
+
+#[tauri::command]
+pub async fn table_indexes(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    table: String,
+) -> AppResult<Vec<crate::db::IndexInfo>> {
+    state.manager.table_indexes(&id, &database, &table).await
+}
+
+#[tauri::command]
+pub async fn drop_index(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    table: String,
+    index: String,
+) -> AppResult<()> {
+    state.manager.drop_index(&id, &database, &table, &index).await
+}
+
+#[tauri::command]
+pub async fn create_index(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    table: String,
+    name: String,
+    columns: Vec<String>,
+    unique: bool,
+) -> AppResult<()> {
+    state.manager.create_index(&id, &database, &table, &name, &columns, unique).await
+}
+
+#[tauri::command]
+pub async fn server_info(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<Vec<ServerInfoSection>> {
+    state.manager.server_info(&id).await
+}
+
 // ---- 資料匯出 ----
 
 #[tauri::command]
@@ -271,6 +350,51 @@ pub async fn export_table(
     out_path: String,
 ) -> AppResult<crate::export::ExportResult> {
     crate::export::export(&state.manager, &id, &database, &table, &query, &options, &out_path).await
+}
+
+/// CSV 匯入到資料表（致敬 Navicat / DBeaver 匯入精靈）。逐列以 insert_row 寫入，
+/// 沿用各 driver 的型別轉型（PG 等嚴格型別欄位也能匯入），回報成功 / 失敗列數與前幾筆錯誤。
+#[tauri::command]
+pub async fn import_csv(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    table: String,
+    path: String,
+    options: crate::import::ImportOptions,
+) -> AppResult<crate::import::ImportResult> {
+    // 後端讀檔（避免大檔經 JS bridge）；解析 + 寫入由 import::import_csv 處理。
+    // 安全上限：避免誤選超大檔（整檔讀進記憶體 + 全列解析）導致 OOM；逐列匯入本就不適合超大檔。
+    const MAX_IMPORT_BYTES: u64 = 100 * 1024 * 1024;
+    if let Ok(meta) = tokio::fs::metadata(&path).await {
+        if meta.len() > MAX_IMPORT_BYTES {
+            return Err(AppError::Query(format!(
+                "檔案過大（約 {} MB），CSV 匯入上限 100 MB；請先分割檔案",
+                meta.len() / 1024 / 1024
+            )));
+        }
+    }
+    let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
+        // 非 UTF-8（常見於舊版 Excel / ANSI 匯出）給明確指引，而非難懂的原始錯誤。
+        if e.kind() == std::io::ErrorKind::InvalidData {
+            AppError::Query(
+                "檔案非 UTF-8 編碼；請在試算表以「另存新檔 → CSV UTF-8」重新匯出後再試".to_string(),
+            )
+        } else {
+            AppError::Query(format!("讀取檔案失敗：{e}"))
+        }
+    })?;
+    crate::import::import_csv(&state.manager, &id, &database, &table, &content, &options).await
+}
+
+/// 匯出整個資料庫的結構 SQL（所有表的建表語句）。致敬 Navicat / DBeaver 的「轉儲結構」。
+#[tauri::command]
+pub async fn schema_dump(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+) -> AppResult<String> {
+    crate::export::schema_dump(&state.manager, &id, &database).await
 }
 
 // ---- Redis 鍵結構編輯 ----

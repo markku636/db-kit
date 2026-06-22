@@ -3,9 +3,9 @@ use sqlx::{Column, MySqlPool, Row, TypeInfo, ValueRef};
 use std::time::Duration;
 
 use crate::db::{
-    collect_relations, filter_op_sql, op_needs_value, AlterOp, CellEdit, ColumnInfo,
-    ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErTable, Filter, PagedData,
-    PoolStatus, QueryResult, RowDelete, RowInsert, Sort, SortDir, TableInfo,
+    collect_relations, filter_op_sql, op_needs_value, AlterOp, CellEdit, ColumnInfo, ColumnStats,
+    ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErTable, Filter, IndexInfo,
+    PagedData, PoolStatus, QueryResult, RowDelete, RowInsert, Sort, SortDir, TableInfo,
 };
 use crate::error::{AppError, AppResult};
 
@@ -337,13 +337,35 @@ impl DatabaseDriver for MysqlDriver {
         Ok(rows_to_result(&rows))
     }
 
+    async fn column_stats(&self, database: &str, table: &str, column: &str) -> AppResult<ColumnStats> {
+        let qt = format!("{}.{}", quote_ident(database), quote_ident(table));
+        let qc = quote_ident(column);
+        let sql = format!("SELECT COUNT(*), COUNT({qc}), COUNT(DISTINCT {qc}) FROM {qt}");
+        let row = sqlx::query(&sql)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let (min, max) = match sqlx::query(&format!("SELECT MIN({qc}), MAX({qc}) FROM {qt}"))
+            .fetch_one(&self.pool)
+            .await
+        {
+            Ok(r) => (cell_to_string(&r, 0), cell_to_string(&r, 1)),
+            Err(_) => (None, None),
+        };
+        Ok(ColumnStats {
+            total: row.try_get::<i64, _>(0).unwrap_or(0) as u64,
+            non_null: row.try_get::<i64, _>(1).unwrap_or(0) as u64,
+            distinct: row.try_get::<i64, _>(2).unwrap_or(0) as u64,
+            min,
+            max,
+        })
+    }
+
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
         let q_tbl = format!("{}.{}", quote_ident(database), quote_ident(table));
         let ddl = match op {
             AlterOp::AddColumn { name, data_type, nullable, default } => {
-                if data_type.trim().is_empty() {
-                    return Err(AppError::Query("請指定欄位型別".into()));
-                }
+                crate::db::validate_column_spec(data_type, default.as_deref())?;
                 let nn = if *nullable { "" } else { " NOT NULL" };
                 let def = default.as_ref().map(|d| format!(" DEFAULT {d}")).unwrap_or_default();
                 format!("ALTER TABLE {q_tbl} ADD COLUMN {} {data_type}{nn}{def}", quote_ident(name))
@@ -390,6 +412,93 @@ impl DatabaseDriver for MysqlDriver {
             tables.push(ErTable { name: t.name, columns: er_cols });
         }
         Ok(ErModel { tables, relations })
+    }
+
+    async fn table_ddl(&self, database: &str, table: &str) -> AppResult<String> {
+        // SHOW CREATE TABLE 回兩欄：Table 名、Create Table 語句（取第 2 欄）。
+        let sql = format!("SHOW CREATE TABLE {}.{}", quote_ident(database), quote_ident(table));
+        let row = sqlx::query(&sql)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        str_col(&row, 1)
+            .map(|ddl| format!("{ddl};"))
+            .ok_or_else(|| AppError::Query("無法取得建表語句".into()))
+    }
+
+    async fn table_indexes(&self, database: &str, table: &str) -> AppResult<Vec<IndexInfo>> {
+        // information_schema.STATISTICS 的型別比 SHOW INDEX 穩定（varchar / bigint）。
+        let rows = sqlx::query(
+            "SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE \
+             FROM information_schema.STATISTICS \
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
+             ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+        )
+        .bind(database)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?;
+        let mut out: Vec<IndexInfo> = Vec::new();
+        for r in &rows {
+            let name = str_col(r, 0).unwrap_or_default();
+            let col = str_col(r, 1).unwrap_or_default();
+            let non_unique = r
+                .try_get::<i64, _>(2)
+                .or_else(|_| r.try_get::<i32, _>(2).map(|v| v as i64))
+                .unwrap_or(1);
+            if let Some(ix) = out.iter_mut().find(|x| x.name == name) {
+                ix.columns.push(col);
+            } else {
+                out.push(IndexInfo {
+                    unique: non_unique == 0,
+                    primary: name == "PRIMARY",
+                    columns: vec![col],
+                    name,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    async fn drop_index(&self, database: &str, table: &str, index: &str) -> AppResult<()> {
+        let sql = format!(
+            "DROP INDEX {} ON {}.{}",
+            quote_ident(index),
+            quote_ident(database),
+            quote_ident(table)
+        );
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    async fn create_index(
+        &self,
+        database: &str,
+        table: &str,
+        name: &str,
+        columns: &[String],
+        unique: bool,
+    ) -> AppResult<()> {
+        if columns.is_empty() {
+            return Err(AppError::Query("請至少選擇一個欄位".into()));
+        }
+        let cols = columns.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+        let uniq = if unique { "UNIQUE " } else { "" };
+        let sql = format!(
+            "CREATE {uniq}INDEX {} ON {}.{} ({cols})",
+            quote_ident(name),
+            quote_ident(database),
+            quote_ident(table)
+        );
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Query(e.to_string()))
     }
 
     async fn close(&self) {
@@ -514,12 +623,20 @@ fn cell_to_string(row: &MySqlRow, idx: usize) -> Option<String> {
         .unwrap_or_default();
 
     // 依宣告型別嘗試對應 Rust 型別，失敗則退回字串。
-    match type_name.as_str() {
-        "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => row
-            .try_get::<i64, _>(idx)
-            .ok()
-            .map(|v| v.to_string())
-            .or_else(|| string_fallback(row, idx)),
+    // 註：unsigned 整數的 type_info 名稱帶 " UNSIGNED" 後綴，故以 starts_with 比對。
+    let base = type_name
+        .split_whitespace()
+        .next()
+        .unwrap_or(type_name.as_str());
+    match base {
+        "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => {
+            // 先試 i64，溢位（unsigned bigint）再試 u64。
+            row.try_get::<i64, _>(idx)
+                .ok()
+                .map(|v| v.to_string())
+                .or_else(|| row.try_get::<u64, _>(idx).ok().map(|v| v.to_string()))
+                .or_else(|| string_fallback(row, idx))
+        }
         "FLOAT" | "DOUBLE" => row
             .try_get::<f64, _>(idx)
             .ok()
@@ -543,6 +660,9 @@ fn string_fallback(row: &MySqlRow, idx: usize) -> Option<String> {
     if let Ok(v) = row.try_get::<i64, _>(idx) {
         return Some(v.to_string());
     }
+    if let Ok(v) = row.try_get::<u64, _>(idx) {
+        return Some(v.to_string());
+    }
     if let Ok(v) = row.try_get::<f64, _>(idx) {
         return Some(v.to_string());
     }
@@ -552,14 +672,26 @@ fn string_fallback(row: &MySqlRow, idx: usize) -> Option<String> {
     if let Ok(v) = row.try_get::<bigdecimal::BigDecimal, _>(idx) {
         return Some(v.to_string());
     }
+    // DATETIME → NaiveDateTime；TIMESTAMP → DateTime<Utc>（過去版本漏了 TIMESTAMP，
+    // 導致 created_at 之類欄位顯示 <unrenderable>）。
     if let Ok(v) = row.try_get::<chrono::NaiveDateTime, _>(idx) {
-        return Some(v.to_string());
+        return Some(v.format("%Y-%m-%d %H:%M:%S%.f").to_string());
+    }
+    if let Ok(v) = row.try_get::<chrono::DateTime<chrono::Utc>, _>(idx) {
+        return Some(v.format("%Y-%m-%d %H:%M:%S%.f UTC").to_string());
     }
     if let Ok(v) = row.try_get::<chrono::NaiveDate, _>(idx) {
         return Some(v.to_string());
     }
+    if let Ok(v) = row.try_get::<chrono::NaiveTime, _>(idx) {
+        return Some(v.to_string());
+    }
+    // JSON 欄位（sqlx json 特性）。
+    if let Ok(v) = row.try_get::<serde_json::Value, _>(idx) {
+        return Some(v.to_string());
+    }
     if let Ok(v) = row.try_get::<Vec<u8>, _>(idx) {
-        return Some(String::from_utf8_lossy(&v).into_owned());
+        return Some(crate::db::bytes_to_display(&v));
     }
     Some("<unrenderable>".to_string())
 }

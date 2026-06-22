@@ -1,15 +1,35 @@
 import { useEffect, useState } from "react";
 import {
-  api, ColumnInfo, Filter, KeyDetail, KeyEdit, PagedData, RowInsert, Sort, SortDir,
+  api, ColumnInfo, Filter, IndexInfo, KeyDetail, KeyEdit, PagedData, RowInsert, Sort, SortDir,
 } from "./api";
 import { OpenTab, useStore } from "./store";
-import { toast, uiConfirm } from "./ui";
+import { toast, uiConfirm, uiPrompt, copyToClipboard } from "./ui";
+import { quoteIdent, sqlLiteral } from "./sql";
 import ExportDialog from "./ExportDialog";
+import ImportDialog from "./ImportDialog";
 import { AlterOp } from "./api";
 
 const PAGE_SIZE = 100;
 const DEFAULT_COL_W = 160;
 const MIN_COL_W = 60;
+
+// 將 text 中符合 q（已轉小寫）的片段以 <mark> 標示，供即時尋找用。q 為空則原樣回傳。
+function highlight(text: string, q: string): React.ReactNode {
+  if (!q) return text;
+  const lower = text.toLowerCase();
+  if (!lower.includes(q)) return text;
+  const parts: React.ReactNode[] = [];
+  let i = 0;
+  let idx = lower.indexOf(q, i);
+  while (idx !== -1) {
+    if (idx > i) parts.push(text.slice(i, idx));
+    parts.push(<mark key={idx} className="bg-yellow-400/70 text-black rounded-sm">{text.slice(idx, idx + q.length)}</mark>);
+    i = idx + q.length;
+    idx = lower.indexOf(q, i);
+  }
+  if (i < text.length) parts.push(text.slice(i));
+  return parts;
+}
 
 // 由 connId 查出該連線是否為 Redis（決定雙擊列開「鍵詳情」而非編輯）
 function useIsRedis(connId: string): boolean {
@@ -44,6 +64,7 @@ export default function TableView({ tab }: { tab: OpenTab }) {
 // ---- 資料分頁：表格 + 底部導覽列 ----
 function DataPane({ tab }: { tab: OpenTab }) {
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const [data, setData] = useState<PagedData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -58,14 +79,29 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [filters, setFilters] = useState<Filter[]>([]);
   const [matchAny, setMatchAny] = useState(false); // 多欄篩選：false=AND、true=OR
   const [showFilter, setShowFilter] = useState(false);
+  // 即時尋找（client-side，標示目前頁符合的儲存格）
+  const [find, setFind] = useState("");
+  const [showFind, setShowFind] = useState(false);
 
-  // 新增列 / 匯出對話框
+  // 新增列 / 匯出 / 匯入對話框
   const [inserting, setInserting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
 
-  // Redis：雙擊 key 列顯示鍵詳情
+  // Redis：雙擊 key 列顯示鍵詳情；右鍵叫出操作選單
   const isRedis = useIsRedis(tab.connId);
+  const connKind = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.kind);
+  const isSqlKind = connKind === "mysql" || connKind === "postgres" || connKind === "sqlite";
   const [detailKey, setDetailKey] = useState<string | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ r: number; key: string; ttl: string | null; x: number; y: number } | null>(null);
+
+  // SQL 表的儲存格右鍵選單 / 內容檢視器 / 選取（鍵盤導覽）/「以此列為範本」預填值
+  const [cellMenu, setCellMenu] = useState<{ r: number; c: number; x: number; y: number } | null>(null);
+  const [inspect, setInspect] = useState<{ r: number; c: number } | null>(null);
+  const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
+  const [insertInitial, setInsertInitial] = useState<Record<string, string | null> | undefined>(undefined);
+  // 整列表單檢視（點列號開啟，寬表友善）
+  const [rowDetail, setRowDetail] = useState<number | null>(null);
 
   // 欄寬（以欄名為鍵），per-table 持久化於 localStorage。
   const widthsKey = `colw:${tab.connId}:${tab.database}:${tab.table}`;
@@ -79,6 +115,42 @@ function DataPane({ tab }: { tab: OpenTab }) {
     }
   }, [widthsKey]);
   const colWidth = (c: string) => widths[c] ?? DEFAULT_COL_W;
+
+  // 隱藏欄位（欄名集合），per-table 持久化於 localStorage。
+  const hiddenKey = `colhide:${tab.connId}:${tab.database}:${tab.table}`;
+  const [hidden, setHidden] = useState<string[]>([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(hiddenKey);
+      const arr = raw ? JSON.parse(raw) : [];
+      setHidden(Array.isArray(arr) ? arr : []);
+    } catch {
+      setHidden([]);
+    }
+  }, [hiddenKey]);
+  const isHidden = (c: string) => hidden.includes(c);
+  const setHiddenPersist = (next: string[]) => {
+    setHidden(next);
+    try {
+      localStorage.setItem(hiddenKey, JSON.stringify(next));
+    } catch {
+      /* 忽略寫入失敗 */
+    }
+  };
+  const hideColumn = (c: string) => {
+    const next = [...hidden.filter((x) => x !== c), c];
+    if (data && next.length >= data.columns.length) {
+      toast.info("至少需保留一欄");
+      return;
+    }
+    // 若隱藏的正是目前選取欄，清除選取，避免鍵盤導覽卡在不可見欄。
+    if (data && selected && data.columns[selected.c] === c) setSelected(null);
+    setHiddenPersist(next);
+  };
+  const showAllColumns = () => setHiddenPersist([]);
+
+  // 欄位標題右鍵選單
+  const [colMenu, setColMenu] = useState<{ col: string; ci: number; x: number; y: number } | null>(null);
 
   // 拖曳表頭右緣調整欄寬（在 window 上掛 move/up，拖出表頭也能追蹤）。
   const startResize = (col: string, e: React.PointerEvent) => {
@@ -110,6 +182,33 @@ function DataPane({ tab }: { tab: OpenTab }) {
     window.addEventListener("pointerup", onUp);
   };
 
+  // 雙擊欄分隔線：依內容自動調整欄寬（致敬 Navicat / TablePlus 的 auto-fit）。
+  // 以 canvas 量測表頭與目前頁各儲存格文字寬度，取最大值（含內距，夾在 [MIN, 600]）。
+  const autoFitColumn = (col: string, colIndex: number) => {
+    if (!data) return;
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (!ctx) return;
+    ctx.font = '13px "JetBrains Mono", "Cascadia Code", Consolas, monospace';
+    let max = ctx.measureText(col).width + 28; // 表頭 + PK/排序徽章預留
+    for (const row of data.rows) {
+      const v = row[colIndex];
+      if (v == null) continue;
+      const s = v.length > 200 ? v.slice(0, 200) : v;
+      const w = ctx.measureText(s).width;
+      if (w > max) max = w;
+    }
+    const next = Math.min(600, Math.max(MIN_COL_W, Math.ceil(max) + 24));
+    setWidths((w) => {
+      const nw = { ...w, [col]: next };
+      try {
+        localStorage.setItem(widthsKey, JSON.stringify(nw));
+      } catch {
+        /* 忽略寫入失敗 */
+      }
+      return nw;
+    });
+  };
+
   const load = () => {
     let cancelled = false;
     setLoading(true);
@@ -117,7 +216,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     api
       .tableData(tab.connId, tab.database, tab.table, {
         page,
-        page_size: PAGE_SIZE,
+        page_size: pageSize,
         filters,
         sorts,
         match_any: matchAny,
@@ -127,6 +226,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           setData(d);
           setEdits({});
           setEditing(null);
+          setSelected(null); // 重載後清除選取，避免指向已不存在的列
         }
       })
       .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"))
@@ -136,12 +236,15 @@ function DataPane({ tab }: { tab: OpenTab }) {
     };
   };
 
-  useEffect(load, [tab.connId, tab.database, tab.table, page, sorts, filters, matchAny]);
+  useEffect(load, [tab.connId, tab.database, tab.table, page, pageSize, sorts, filters, matchAny]);
 
-  const totalPages = data ? Math.max(1, Math.ceil(data.total_rows / PAGE_SIZE)) : 1;
-  const startRow = data ? page * PAGE_SIZE : 0;
+  const totalPages = data ? Math.max(1, Math.ceil(data.total_rows / pageSize)) : 1;
+  const startRow = data ? page * pageSize : 0;
   const editable = !!data && data.primary_key.length > 0;
   const dirtyCount = Object.keys(edits).length;
+  // Redis 鍵列右鍵需定位 key / ttl 欄。
+  const keyIdx = data ? data.columns.indexOf("key") : -1;
+  const ttlIdx = data ? data.columns.indexOf("ttl") : -1;
 
   const cellValue = (r: number, c: number): string | null => {
     const key = `${r}:${c}`;
@@ -189,18 +292,31 @@ function DataPane({ tab }: { tab: OpenTab }) {
     }
   };
 
-  // 點欄位標題循環切換排序：無 → asc → desc → 無
-  const toggleSort = (col: string) => {
+  // 點欄位標題循環切換排序：無 → asc → desc → 無。
+  // Shift+點擊：多欄排序——在既有排序上附加 / 切換 / 移除此欄（致敬 DataGrip / DBeaver）。
+  const toggleSort = (col: string, additive: boolean) => {
     setPage(0);
     setSorts((prev) => {
       const existing = prev.find((s) => s.column === col);
-      if (!existing) return [{ column: col, dir: "asc" }];
-      if (existing.dir === "asc") return [{ column: col, dir: "desc" }];
-      return [];
+      if (!additive) {
+        if (!existing) return [{ column: col, dir: "asc" }];
+        if (existing.dir === "asc") return [{ column: col, dir: "desc" }];
+        return [];
+      }
+      const others = prev.filter((s) => s.column !== col);
+      if (!existing) return [...others, { column: col, dir: "asc" }];
+      if (existing.dir === "asc") return [...others, { column: col, dir: "desc" }];
+      return others; // desc → 移除此欄
     });
   };
   const sortDirOf = (col: string): SortDir | null =>
     sorts.find((s) => s.column === col)?.dir ?? null;
+  // 多欄排序時，此欄在排序序列中的次序（1-based）；單欄回 0（不顯示徽章）。
+  const sortOrderOf = (col: string): number => {
+    if (sorts.length < 2) return 0;
+    const idx = sorts.findIndex((s) => s.column === col);
+    return idx < 0 ? 0 : idx + 1;
+  };
 
   const deleteRow = async (r: number) => {
     if (!data || !editable) return;
@@ -229,6 +345,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     try {
       await api.insertRow(tab.connId, tab.database, tab.table, row);
       setInserting(false);
+      setInsertInitial(undefined);
       load();
     } catch (e: any) {
       setErr(e?.message ?? "新增失敗");
@@ -237,10 +354,212 @@ function DataPane({ tab }: { tab: OpenTab }) {
     }
   };
 
+  // ---- SQL 表儲存格：複製 / 重製 / 鍵盤導覽（致敬 DBeaver / TablePlus）----
+  // 取某列目前各欄值（含尚未套用的編輯）。
+  const rowValues = (r: number): (string | null)[] =>
+    data ? data.columns.map((_, j) => cellValue(r, j)) : [];
+
+  const copyCell = (r: number, c: number) =>
+    copyToClipboard(cellValue(r, c) ?? "", "已複製儲存格");
+  const copyRowTsv = (r: number) =>
+    copyToClipboard(rowValues(r).map((v) => v ?? "").join("\t"), "已複製整列 (TSV)");
+  const copyRowJson = (r: number) => {
+    if (!data) return;
+    const vals = rowValues(r);
+    const obj = Object.fromEntries(data.columns.map((c, j) => [c, vals[j] ?? null]));
+    copyToClipboard(JSON.stringify(obj, null, 2), "已複製整列 (JSON)");
+  };
+  const copyRowInsert = (r: number) => {
+    if (!data) return;
+    // 共用 sql.ts 的跨資料庫跳脫（PostgreSQL 雙引號、其餘反引號；字面值單引號轉義）。
+    const k = connKind ?? "mysql";
+    const cols = data.columns.map((c) => quoteIdent(k, c)).join(", ");
+    const lits = rowValues(r).map((v) => sqlLiteral(k, v)).join(", ");
+    copyToClipboard(`INSERT INTO ${quoteIdent(k, tab.table)} (${cols}) VALUES (${lits});`, "已複製為 INSERT");
+  };
+  const duplicateRow = (r: number) => {
+    if (!data) return;
+    const vals = rowValues(r);
+    const init: Record<string, string | null> = {};
+    data.columns.forEach((c, j) => (init[c] = vals[j]));
+    setInsertInitial(init);
+    setInserting(true);
+  };
+  // 欄位資料剖析（致敬 Navicat / DataGrip）：總數 / 非空 / 相異。
+  const colStats = async (col: string) => {
+    try {
+      const s = await api.columnStats(tab.connId, tab.database, tab.table, col);
+      const range = s.min !== null || s.max !== null ? ` · 範圍 [${s.min ?? "?"}, ${s.max ?? "?"}]` : "";
+      toast.info(`欄位「${col}」：${s.total} 列 · ${s.non_null} 非空 · ${s.distinct} 相異值${range}`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "取得欄位統計失敗");
+    }
+  };
+
+  // 以某儲存格的值設定篩選（致敬 TablePlus / DBeaver 的「Filter by this value」）。
+  const filterByCell = (r: number, c: number, exclude: boolean) => {
+    if (!data) return;
+    const col = data.columns[c];
+    const v = cellValue(r, c);
+    const f: Filter =
+      v === null
+        ? { column: col, op: exclude ? "is_not_null" : "is_null", value: null }
+        : { column: col, op: exclude ? "!=" : "=", value: v };
+    setPage(0);
+    setMatchAny(false);
+    setFilters([f]);
+    setShowFilter(true);
+  };
+
+  // 儲存格選單項目（依是否可編輯增列）。"sep" 為分隔線。
+  const cellMenuItems = (r: number, c: number): ([string, () => void, boolean] | "sep")[] => {
+    const items: ([string, () => void, boolean] | "sep")[] = [
+      ["檢視內容…", () => setInspect({ r, c }), false],
+      ["複製值", () => copyCell(r, c), false],
+      ["複製整列 (JSON)", () => copyRowJson(r), false],
+      ["複製整列 (TSV)", () => copyRowTsv(r), false],
+      // INSERT 範本僅對 SQL 資料庫有意義（Mongo 用 JSON）。
+      ...(isSqlKind ? [["複製為 INSERT", () => copyRowInsert(r), false] as [string, () => void, boolean]] : []),
+      "sep",
+      ["篩選此值", () => filterByCell(r, c, false), false],
+      ["排除此值", () => filterByCell(r, c, true), false],
+    ];
+    if (editable) {
+      items.push(
+        "sep",
+        ["編輯儲存格", () => setEditing({ r, c }), false],
+        ["設為 NULL", () => commitEdit(r, c, "", true), false],
+        ["以此列為範本新增…", () => duplicateRow(r), false],
+        ["刪除此列", () => deleteRow(r), true]
+      );
+    }
+    return items;
+  };
+
+  // 鍵盤導覽：方向鍵 / Tab 移動選取，Enter / F2 編輯，Ctrl+C 複製，Esc 取消選取，F5 重新整理。
+  const onGridKey = (e: React.KeyboardEvent) => {
+    if (!data || editing) return;
+    if (e.key === "F5") { e.preventDefault(); load(); return; }
+    if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) { e.preventDefault(); setShowFind(true); return; }
+    if (!selected) return;
+    const maxR = data.rows.length - 1;
+    if (maxR < 0) return;
+    let { r, c } = selected;
+    const k = e.key;
+    // 左右移動時跳過隱藏欄（只在可見欄之間移動）。
+    const visIdx = data.columns.map((_, j) => j).filter((j) => !isHidden(data.columns[j]));
+    const pos = visIdx.indexOf(c);
+    if (k === "ArrowDown") r = Math.min(maxR, r + 1);
+    else if (k === "ArrowUp") r = Math.max(0, r - 1);
+    else if (k === "ArrowRight" || (k === "Tab" && !e.shiftKey)) {
+      if (pos >= 0 && pos < visIdx.length - 1) c = visIdx[pos + 1];
+    } else if (k === "ArrowLeft" || (k === "Tab" && e.shiftKey)) {
+      if (pos > 0) c = visIdx[pos - 1];
+    }
+    else if (k === "Enter" || k === "F2") {
+      if (editable) { setEditing({ r, c }); e.preventDefault(); }
+      return;
+    } else if (k === "Escape") { setSelected(null); return; }
+    else if ((e.ctrlKey || e.metaKey) && (k === "c" || k === "C")) {
+      copyCell(r, c); e.preventDefault(); return;
+    } else return;
+    e.preventDefault();
+    setSelected({ r, c });
+  };
+
+  // ---- Redis 鍵列右鍵操作 ----
+  const renameKey = async (key: string) => {
+    const nv = await uiPrompt("輸入新的鍵名：", {
+      title: "重新命名鍵", defaultValue: key, confirmText: "重新命名",
+    });
+    if (nv === null || nv.trim() === "" || nv === key) return;
+    setApplying(true);
+    setErr(null);
+    try {
+      await api.keyEdit(tab.connId, tab.database, key, { action: "rename", new_key: nv });
+      toast.success("已重新命名");
+      load();
+    } catch (e: any) {
+      setErr(e?.message ?? "重新命名失敗");
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const setKeyTtl = async (key: string, current: string | null) => {
+    const v = await uiPrompt("TTL 秒數（-1 表示永不過期）：", {
+      title: "設定 TTL", defaultValue: current ?? "-1", confirmText: "套用",
+    });
+    if (v === null) return;
+    setApplying(true);
+    setErr(null);
+    try {
+      await api.updateCell(tab.connId, tab.database, tab.table, {
+        column: "ttl",
+        new_value: v,
+        pk_columns: ["key"],
+        pk_values: [key],
+      });
+      toast.success("已設定 TTL");
+      load();
+    } catch (e: any) {
+      setErr(e?.message ?? "設定 TTL 失敗");
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  // 切換頁面前，若有未套用的變更先確認（避免靜默丟失編輯）。
+  const navPage = async (target: number) => {
+    if (dirtyCount > 0 && !(await uiConfirm("有未套用的變更，切換頁面將放棄。確定？", { title: "放棄變更", danger: true, confirmText: "放棄並切換" }))) return;
+    setPage(target);
+  };
+  // 變更每頁列數同樣會重載並丟棄編輯，故套用相同的未套用變更確認。
+  const changePageSize = async (n: number) => {
+    if (dirtyCount > 0 && !(await uiConfirm("有未套用的變更，變更每頁列數將放棄。確定？", { title: "放棄變更", danger: true, confirmText: "放棄並變更" }))) return;
+    setPage(0);
+    setPageSize(n);
+  };
+
+  // 即時尋找：目前頁符合的儲存格數（僅在尋找時計算）。
+  const findLower = find.trim().toLowerCase();
+  const matchCount =
+    findLower && data
+      ? data.rows.reduce(
+          (acc, row, ri) =>
+            acc +
+            row.reduce((a, _c, ci) => {
+              // 與渲染一致：跳過隱藏欄（否則計數會多於可見高亮數）。
+              if (isHidden(data.columns[ci])) return a;
+              const v = cellValue(ri, ci);
+              return a + (v != null && v.toLowerCase().includes(findLower) ? 1 : 0);
+            }, 0),
+          0
+        )
+      : 0;
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {/* 動作列：篩選切換 + 新增列 */}
+      {/* 動作列：重新整理 + 篩選切換 + 新增列 */}
       <div className="flex items-center gap-1 px-2 py-1 bg-[#10161e] border-b border-white/10 text-xs">
+        <button
+          onClick={async () => {
+            if (dirtyCount > 0 && !(await uiConfirm("有未套用的變更，重新整理將放棄。確定？", { title: "放棄變更", danger: true, confirmText: "放棄並重整" }))) return;
+            load();
+          }}
+          disabled={loading}
+          title="重新整理（重新讀取目前頁）"
+          className="px-2 py-1 rounded hover:bg-white/10 text-white/50 disabled:opacity-40 disabled:hover:bg-transparent"
+        >
+          {loading ? "↻ 讀取中…" : "↻ 重新整理"}
+        </button>
+        <button
+          onClick={() => setShowFind((s) => !s)}
+          title="在目前頁即時尋找（Ctrl+F）"
+          className={`px-2 py-1 rounded hover:bg-white/10 ${find ? "text-yellow-300" : "text-white/50"}`}
+        >
+          🔍 尋找
+        </button>
         <button
           onClick={() => setShowFilter((s) => !s)}
           className={`px-2 py-1 rounded hover:bg-white/10 ${
@@ -273,7 +592,29 @@ function DataPane({ tab }: { tab: OpenTab }) {
         >
           ⬇ 匯出
         </button>
+        {isSqlKind && (
+          <button
+            type="button"
+            onClick={() => setImporting(true)}
+            title="從 CSV 匯入資料到此表"
+            className="px-2 py-1 rounded hover:bg-white/10 text-white/50"
+          >
+            ⬆ 匯入
+          </button>
+        )}
       </div>
+
+      {showFind && data && (
+        <div className="flex items-center gap-2 px-2 py-1.5 bg-[#0d131a] border-b border-white/10 text-xs">
+          <input autoFocus value={find} onChange={(e) => setFind(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") { setShowFind(false); setFind(""); } }}
+            placeholder="在目前頁即時尋找…"
+            className="bg-black/30 border border-white/10 rounded px-2 py-1 outline-none focus:border-blue-500 min-w-[220px]" />
+          <span className="text-white/40">{findLower ? `${matchCount} 格符合` : ""}</span>
+          <button type="button" onClick={() => { setShowFind(false); setFind(""); }}
+            className="ml-auto px-1.5 py-1 rounded hover:bg-white/10 text-white/40">✕</button>
+        </div>
+      )}
 
       {showFilter && data && (
         <FilterBar
@@ -284,26 +625,29 @@ function DataPane({ tab }: { tab: OpenTab }) {
         />
       )}
 
-      <div className="flex-1 overflow-auto">
+      <div className="at-grid flex-1 overflow-auto outline-none" tabIndex={0} onKeyDown={onGridKey}>
         {err && <div className="p-3 text-red-400 text-sm mono">{err}</div>}
         {data && data.columns.length > 0 && (
           <table
-            className="text-sm border-collapse"
+            className={`text-sm border-collapse transition-opacity ${loading ? "opacity-50" : ""}`}
             style={{
               tableLayout: "fixed",
-              width: 48 + data.columns.reduce((a, c) => a + colWidth(c), 0) + (editable ? 32 : 0),
+              width: 48 + data.columns.filter((c) => !isHidden(c)).reduce((a, c) => a + colWidth(c), 0) + (editable ? 32 : 0),
             }}
           >
             <thead className="sticky top-0 bg-[#1a212b]">
               <tr>
                 <th className="text-left px-3 py-1.5 border-b border-white/10 text-white/30 w-12">#</th>
-                {data.columns.map((c) => {
+                {data.columns.map((c, ci) => {
+                  if (isHidden(c)) return null;
                   const dir = sortDirOf(c);
+                  const order = sortOrderOf(c);
                   return (
                     <th
                       key={c}
-                      onClick={() => toggleSort(c)}
-                      title="點擊排序"
+                      onClick={(e) => toggleSort(c, e.shiftKey)}
+                      onContextMenu={(e) => { e.preventDefault(); setColMenu({ col: c, ci, x: e.clientX, y: e.clientY }); }}
+                      title="點擊排序；Shift+點擊可多欄排序；右鍵更多"
                       style={{ width: colWidth(c) }}
                       className="relative text-left px-3 py-1.5 border-b border-white/10 font-medium whitespace-nowrap overflow-hidden text-ellipsis cursor-pointer select-none hover:bg-white/5"
                     >
@@ -314,12 +658,14 @@ function DataPane({ tab }: { tab: OpenTab }) {
                       {dir && (
                         <span className="ml-1 text-[10px] text-amber-300">
                           {dir === "asc" ? "▲" : "▼"}
+                          {order > 0 && <span className="ml-0.5 text-white/40">{order}</span>}
                         </span>
                       )}
                       <span
                         onPointerDown={(e) => startResize(c, e)}
                         onClick={(e) => e.stopPropagation()}
-                        title="拖曳調整欄寬"
+                        onDoubleClick={(e) => { e.stopPropagation(); autoFitColumn(c, ci); }}
+                        title="拖曳調整欄寬；雙擊自動符合內容"
                         className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-blue-500/50"
                       />
                     </th>
@@ -330,26 +676,63 @@ function DataPane({ tab }: { tab: OpenTab }) {
             </thead>
             <tbody className="mono">
               {data.rows.map((row, i) => (
-                <tr key={i} className="hover:bg-white/5 group">
-                  <td className="px-3 py-1 border-b border-white/5 text-white/30">{startRow + i + 1}</td>
+                <tr
+                  key={i}
+                  className="odd:bg-white/[0.025] hover:bg-white/5 group"
+                  onContextMenu={isRedis && keyIdx >= 0 ? (e) => {
+                    const key = row[keyIdx];
+                    if (key == null) return;
+                    e.preventDefault();
+                    setRowMenu({
+                      r: i,
+                      key,
+                      ttl: ttlIdx >= 0 ? row[ttlIdx] : null,
+                      x: e.clientX,
+                      y: e.clientY,
+                    });
+                  } : undefined}
+                >
+                  <td
+                    onClick={() => setRowDetail(i)}
+                    title="檢視整列"
+                    className="px-3 py-1 border-b border-white/5 text-white/30 cursor-pointer hover:bg-white/5 hover:text-white/60"
+                  >
+                    {startRow + i + 1}
+                  </td>
                   {row.map((_, j) => {
+                    const colName = data.columns[j];
+                    if (isHidden(colName)) return null;
                     const key = `${i}:${j}`;
                     const isEditing = editing?.r === i && editing?.c === j;
                     const val = cellValue(i, j);
                     const dirty = key in edits;
-                    const colName = data.columns[j];
                     // Redis 的 key 欄：雙擊開鍵詳情；其餘照常（ttl 可編輯）
                     const redisKeyCol = isRedis && colName === "key";
                     return (
                       <td
                         key={j}
+                        onClick={(e) => {
+                          setSelected({ r: i, c: j });
+                          (e.currentTarget.closest(".at-grid") as HTMLElement | null)?.focus();
+                        }}
                         onDoubleClick={() => {
                           if (redisKeyCol) setDetailKey(val);
                           else if (editable) setEditing({ r: i, c: j });
                         }}
+                        onContextMenu={
+                          isRedis
+                            ? undefined
+                            : (e) => {
+                                e.preventDefault();
+                                setSelected({ r: i, c: j });
+                                setCellMenu({ r: i, c: j, x: e.clientX, y: e.clientY });
+                              }
+                        }
                         title={redisKeyCol ? "雙擊檢視鍵內容" : val ?? "NULL"}
                         className={`px-3 py-1 border-b border-white/5 whitespace-nowrap overflow-hidden text-ellipsis ${
                           dirty ? "bg-amber-500/15" : ""
+                        } ${
+                          selected?.r === i && selected?.c === j ? "ring-1 ring-inset ring-blue-500 bg-blue-500/10" : ""
                         } ${redisKeyCol ? "cursor-pointer text-blue-300" : editable ? "cursor-cell" : ""}`}
                       >
                         {isEditing ? (
@@ -360,6 +743,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
                           />
                         ) : val === null ? (
                           <span className="text-white/30 italic">NULL</span>
+                        ) : findLower ? (
+                          highlight(val, findLower)
                         ) : (
                           val
                         )}
@@ -389,13 +774,23 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
       {/* 底部導覽列（Navicat 手感） */}
       <div className="h-9 bg-[#11161d] border-t border-white/10 flex items-center px-3 gap-1 text-sm">
-        <NavBtn label="⏮" disabled={page === 0 || loading} onClick={() => setPage(0)} title="第一頁" />
-        <NavBtn label="◀" disabled={page === 0 || loading} onClick={() => setPage((p) => p - 1)} title="上一頁" />
+        <NavBtn label="⏮" disabled={page === 0 || loading} onClick={() => navPage(0)} title="第一頁" />
+        <NavBtn label="◀" disabled={page === 0 || loading} onClick={() => navPage(page - 1)} title="上一頁" />
         <span className="px-2 text-white/60 mono text-xs">
           {page + 1} / {totalPages}
         </span>
-        <NavBtn label="▶" disabled={page + 1 >= totalPages || loading} onClick={() => setPage((p) => p + 1)} title="下一頁" />
-        <NavBtn label="⏭" disabled={page + 1 >= totalPages || loading} onClick={() => setPage(totalPages - 1)} title="最後一頁" />
+        <NavBtn label="▶" disabled={page + 1 >= totalPages || loading} onClick={() => navPage(page + 1)} title="下一頁" />
+        <NavBtn label="⏭" disabled={page + 1 >= totalPages || loading} onClick={() => navPage(totalPages - 1)} title="最後一頁" />
+        <select
+          value={pageSize}
+          onChange={(e) => changePageSize(Number(e.target.value))}
+          title="每頁列數"
+          className="ml-2 bg-black/30 border border-white/10 rounded px-1.5 py-0.5 text-xs outline-none focus:border-blue-500 text-white/60"
+        >
+          {[100, 200, 500, 1000].map((n) => (
+            <option key={n} value={n}>{n} / 頁</option>
+          ))}
+        </select>
 
         <div className="w-px h-4 bg-white/10 mx-2" />
         <button
@@ -415,11 +810,21 @@ function DataPane({ tab }: { tab: OpenTab }) {
           ✗ 捨棄
         </button>
 
-        <span className="ml-auto text-white/40 text-xs">
+        {/* 選取儲存格資訊（Excel 名稱框手感） */}
+        {selected && data && data.rows[selected.r] && (
+          <span className="ml-auto mr-3 text-white/45 text-xs truncate max-w-[40%]" title={cellValue(selected.r, selected.c) ?? "NULL"}>
+            <span className="text-white/30">{data.columns[selected.c]}</span>
+            {" = "}
+            {cellValue(selected.r, selected.c) === null
+              ? <span className="italic text-white/30">NULL</span>
+              : cellValue(selected.r, selected.c)}
+          </span>
+        )}
+        <span className={`${selected && data && data.rows[selected.r] ? "" : "ml-auto"} text-white/40 text-xs`}>
           {applying
             ? "處理中…"
             : data
-            ? `共 ${data.total_rows} 列${editable ? "" : " · 無主鍵唯讀"}`
+            ? `顯示 ${data.rows.length ? startRow + 1 : 0}–${startRow + data.rows.length} · 共 ${data.total_rows} 列${editable ? "" : " · 無主鍵唯讀"}`
             : loading
             ? "讀取中…"
             : ""}
@@ -429,7 +834,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
       {inserting && data && (
         <InsertDialog
           columns={data.columns}
-          onCancel={() => setInserting(false)}
+          initial={insertInitial}
+          onCancel={() => { setInserting(false); setInsertInitial(undefined); }}
           onSubmit={submitInsert}
           busy={applying}
         />
@@ -440,8 +846,18 @@ function DataPane({ tab }: { tab: OpenTab }) {
           connId={tab.connId}
           database={tab.database}
           table={tab.table}
-          query={{ page: 0, page_size: PAGE_SIZE, filters, sorts, match_any: matchAny }}
+          query={{ page: 0, page_size: pageSize, filters, sorts, match_any: matchAny }}
           onClose={() => setExporting(false)}
+        />
+      )}
+
+      {importing && (
+        <ImportDialog
+          connId={tab.connId}
+          database={tab.database}
+          table={tab.table}
+          onDone={() => load()}
+          onClose={() => setImporting(false)}
         />
       )}
 
@@ -454,6 +870,242 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onClose={() => { setDetailKey(null); load(); }}
         />
       )}
+
+      {rowMenu && (
+        <>
+          <div className="fixed inset-0 z-[89]"
+            onClick={() => setRowMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setRowMenu(null); }} />
+          <div className="fixed z-[90] min-w-[150px] bg-[#1a212b] border border-white/10 rounded shadow-2xl py-1 text-sm"
+            style={{ left: rowMenu.x, top: rowMenu.y }}>
+            {(
+              [
+                ["檢視內容", () => setDetailKey(rowMenu.key), false],
+                ["複製鍵名", () => copyToClipboard(rowMenu.key, "已複製鍵名"), false],
+                ["重新命名…", () => renameKey(rowMenu.key), false],
+                ["設定 TTL…", () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
+                ["刪除", () => deleteRow(rowMenu.r), true],
+              ] as [string, () => void, boolean][]
+            ).map(([label, fn, danger]) => (
+              <button key={label} type="button"
+                onClick={() => { setRowMenu(null); fn(); }}
+                className={`block w-full text-left px-3 py-1.5 hover:bg-white/10 ${danger ? "text-red-300" : "text-white/80"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* SQL 表儲存格右鍵選單 */}
+      {cellMenu && data && (
+        <>
+          <div className="fixed inset-0 z-[89]"
+            onClick={() => setCellMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setCellMenu(null); }} />
+          <div className="fixed z-[90] min-w-[180px] bg-[#1a212b] border border-white/10 rounded shadow-2xl py-1 text-sm"
+            style={{ left: cellMenu.x, top: cellMenu.y }}>
+            {cellMenuItems(cellMenu.r, cellMenu.c).map((it, idx) => {
+              if (it === "sep") return <div key={`sep-${idx}`} className="my-1 border-t border-white/10" />;
+              const [label, fn, danger] = it;
+              return (
+                <button key={label} type="button"
+                  onClick={() => { setCellMenu(null); fn(); }}
+                  className={`block w-full text-left px-3 py-1.5 hover:bg-white/10 ${danger ? "text-red-300" : "text-white/80"}`}>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {/* 欄位標題右鍵選單 */}
+      {colMenu && data && (
+        <>
+          <div className="fixed inset-0 z-[89]"
+            onClick={() => setColMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setColMenu(null); }} />
+          <div className="fixed z-[90] min-w-[170px] bg-[#1a212b] border border-white/10 rounded shadow-2xl py-1 text-sm"
+            style={{ left: colMenu.x, top: colMenu.y }}>
+            {(
+              [
+                ["升冪排序 ▲", () => { setPage(0); setSorts([{ column: colMenu.col, dir: "asc" }]); }],
+                ["降冪排序 ▼", () => { setPage(0); setSorts([{ column: colMenu.col, dir: "desc" }]); }],
+                ...(sorts.length ? [["清除排序", () => setSorts([])] as [string, () => void]] : []),
+                ["自動符合寬度", () => autoFitColumn(colMenu.col, colMenu.ci)],
+                ["複製欄名", () => copyToClipboard(colMenu.col, "已複製欄名")],
+                ["複製整欄（本頁）", () => copyToClipboard(data.rows.map((_, ri) => cellValue(ri, colMenu.ci) ?? "").join("\n"), "已複製整欄")],
+                ...(isSqlKind ? [["欄位統計（總數/非空/相異）", () => colStats(colMenu.col)] as [string, () => void]] : []),
+                ["隱藏此欄", () => hideColumn(colMenu.col)],
+                ...(hidden.length ? [["顯示所有欄", () => showAllColumns()] as [string, () => void]] : []),
+              ] as [string, () => void][]
+            ).map(([label, fn]) => (
+              <button key={label} type="button"
+                onClick={() => { setColMenu(null); fn(); }}
+                className="block w-full text-left px-3 py-1.5 hover:bg-white/10 text-white/80">
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* 儲存格內容檢視器（長文字 / JSON / 二進位） */}
+      {inspect && data && (
+        <CellInspector
+          column={data.columns[inspect.c]}
+          value={cellValue(inspect.r, inspect.c)}
+          editable={editable}
+          onSave={(raw, setNull) => commitEdit(inspect.r, inspect.c, raw, setNull)}
+          onClose={() => setInspect(null)}
+        />
+      )}
+
+      {rowDetail !== null && data && data.rows[rowDetail] && (
+        <RowDetailModal
+          rowNo={startRow + rowDetail + 1}
+          columns={data.columns}
+          values={data.columns.map((_, j) => cellValue(rowDetail, j))}
+          editable={editable}
+          hasPrev={rowDetail > 0}
+          hasNext={rowDetail < data.rows.length - 1}
+          onPrev={() => setRowDetail((r) => (r !== null && r > 0 ? r - 1 : r))}
+          onNext={() => setRowDetail((r) => (r !== null && r < data.rows.length - 1 ? r + 1 : r))}
+          onEdit={(ci, raw, setNull) => commitEdit(rowDetail, ci, raw, setNull)}
+          onClose={() => setRowDetail(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// 整列表單檢視：寬表時逐欄檢視 / 編輯一列，可上下切換列（致敬 DBeaver 的「記錄檢視」）。
+function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, onPrev, onNext, onEdit, onClose }: {
+  rowNo: number;
+  columns: string[];
+  values: (string | null)[];
+  editable: boolean;
+  hasPrev: boolean;
+  hasNext: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+  onEdit: (colIndex: number, raw: string, setNull: boolean) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[95]" onClick={onClose}>
+      <div className="bg-[#1a212b] w-[560px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-white/10 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-white/10 flex items-center gap-2 text-sm">
+          <span className="font-medium">第 {rowNo} 列</span>
+          <span className="text-white/30 text-xs">{columns.length} 欄{editable ? "（可編輯）" : "（唯讀）"}</span>
+          <div className="ml-auto flex items-center gap-1">
+            <button type="button" disabled={!hasPrev} onClick={onPrev} title="上一列"
+              className="w-6 h-6 rounded hover:bg-white/10 disabled:opacity-30">↑</button>
+            <button type="button" disabled={!hasNext} onClick={onNext} title="下一列"
+              className="w-6 h-6 rounded hover:bg-white/10 disabled:opacity-30">↓</button>
+            <button type="button" onClick={onClose} className="ml-1 text-white/40 hover:text-white">✕</button>
+          </div>
+        </div>
+        <div className="p-4 overflow-auto space-y-1.5">
+          {columns.map((c, ci) => (
+            <div key={c} className="flex items-start gap-2">
+              <span className="text-xs text-white/50 w-32 shrink-0 truncate text-right pt-1.5 mono" title={c}>{c}</span>
+              {editable ? (
+                <RowField value={values[ci]} onSave={(raw, setNull) => onEdit(ci, raw, setNull)} />
+              ) : (
+                <span className="flex-1 mono text-sm break-all py-1" data-selectable>
+                  {values[ci] === null ? <span className="text-white/30 italic">NULL</span> : values[ci]}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 列表單內的單欄輸入：blur / Enter 套用變更；按鈕設 NULL。
+function RowField({ value, onSave }: { value: string | null; onSave: (raw: string, setNull: boolean) => void }) {
+  const [text, setText] = useState(value ?? "");
+  useEffect(() => setText(value ?? ""), [value]);
+  const commit = () => { if (text !== (value ?? "")) onSave(text, false); };
+  return (
+    <span className="flex-1 flex items-center gap-1">
+      <input value={text} onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
+        className={`flex-1 bg-black/30 border rounded px-2 py-1 text-sm mono outline-none focus:border-blue-500 ${
+          value === null ? "border-white/10 text-white/40 italic" : "border-white/10"
+        }`}
+        placeholder={value === null ? "NULL" : ""} />
+      <button type="button" onMouseDown={(e) => { e.preventDefault(); onSave("", true); }}
+        title="設為 NULL" className="text-[10px] text-white/40 hover:text-white/70 shrink-0">NULL</button>
+    </span>
+  );
+}
+
+// 儲存格內容檢視器：檢視 / 編輯長文字、JSON、二進位預覽。可一鍵格式化 JSON、複製。
+function CellInspector({ column, value, editable, onSave, onClose, showFormat = true }: {
+  column: string;
+  value: string | null;
+  editable: boolean;
+  onSave: (raw: string, setNull: boolean) => void;
+  onClose: () => void;
+  // 是否顯示「格式化 JSON」（DDL 檢視等情境關閉）。
+  showFormat?: boolean;
+}) {
+  const [text, setText] = useState(value ?? "");
+  const dirty = editable && text !== (value ?? "");
+  const formatJson = () => {
+    try {
+      setText(JSON.stringify(JSON.parse(text), null, 2));
+    } catch {
+      toast.error("不是有效的 JSON");
+    }
+  };
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[95]" onClick={onClose}>
+      <div className="bg-[#1a212b] w-[660px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-white/10 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-white/10 flex items-center gap-2">
+          <span className="font-medium text-sm mono truncate">{column}</span>
+          {value === null && <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/50">NULL</span>}
+          <span className="ml-auto text-[11px] text-white/40 tabular-nums"
+            title="字元數 / UTF-8 位元組數（位元組數對應多數資料庫的 VARCHAR 長度上限）">
+            {text.length} 字元 · {new TextEncoder().encode(text).length} bytes
+          </span>
+          <button type="button" onClick={onClose} className="text-white/40 hover:text-white">✕</button>
+        </div>
+        <div className="p-4 flex-1 overflow-auto">
+          <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)}
+            readOnly={!editable} title="儲存格內容"
+            onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+            className="w-full h-72 bg-black/30 border border-white/10 rounded p-3 mono text-sm outline-none focus:border-blue-500 resize-none break-all" />
+        </div>
+        <div className="px-5 py-3 border-t border-white/10 flex items-center gap-2">
+          {showFormat && (
+            <button type="button" onClick={formatJson}
+              className="px-3 py-1.5 text-sm rounded border border-white/15 hover:bg-white/5">格式化 JSON</button>
+          )}
+          <button type="button" onClick={() => copyToClipboard(text, "已複製")}
+            className="px-3 py-1.5 text-sm rounded border border-white/15 hover:bg-white/5">複製</button>
+          <div className="ml-auto flex gap-2">
+            {editable && (
+              <button type="button" onClick={() => { onSave("", true); onClose(); }}
+                className="px-3 py-1.5 text-sm rounded border border-white/15 hover:bg-white/5 text-white/70">設為 NULL</button>
+            )}
+            {editable && (
+              <button type="button" disabled={!dirty} onClick={() => { onSave(text, false); onClose(); }}
+                className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40">套用變更</button>
+            )}
+            <button type="button" onClick={onClose}
+              className="px-3 py-1.5 text-sm rounded border border-white/15 hover:bg-white/5">關閉</button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -810,11 +1462,11 @@ function FilterBar({ columns, filters, matchAny, onApply }: {
       )}
       {rows.map((r, i) => (
         <div key={i} className="flex items-center gap-2">
-          <select value={r.column} onChange={(e) => update(i, { column: e.target.value })}
+          <select value={r.column} title="篩選欄位" onChange={(e) => update(i, { column: e.target.value })}
             className="bg-black/30 border border-white/10 rounded px-1.5 py-1 outline-none">
             {columns.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
-          <select value={r.op} onChange={(e) => update(i, { op: e.target.value })}
+          <select value={r.op} title="運算子" onChange={(e) => update(i, { op: e.target.value })}
             className="bg-black/30 border border-white/10 rounded px-1.5 py-1 outline-none">
             {FILTER_OPS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
           </select>
@@ -844,15 +1496,25 @@ function FilterBar({ columns, filters, matchAny, onApply }: {
 }
 
 // 新增列對話框
-function InsertDialog({ columns, onSubmit, onCancel, busy }: {
+function InsertDialog({ columns, onSubmit, onCancel, busy, initial }: {
   columns: string[];
   onSubmit: (row: RowInsert) => void;
   onCancel: () => void;
   busy: boolean;
+  // 「以此列為範本新增」的預填值：非 null → 帶入輸入框；null → 勾選 NULL。
+  initial?: Record<string, string | null>;
 }) {
   // 每欄一個值；nulls 標記哪些欄留 NULL（不送出 → 走 DB 預設）
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [nulls, setNulls] = useState<Record<string, boolean>>({});
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    const v: Record<string, string> = {};
+    if (initial) for (const [k, val] of Object.entries(initial)) if (val !== null) v[k] = val;
+    return v;
+  });
+  const [nulls, setNulls] = useState<Record<string, boolean>>(() => {
+    const n: Record<string, boolean> = {};
+    if (initial) for (const [k, val] of Object.entries(initial)) if (val === null) n[k] = true;
+    return n;
+  });
 
   const submit = () => {
     const cols: string[] = [];
@@ -952,12 +1614,25 @@ function NavBtn({ label, onClick, disabled, title }: {
 function StructurePane({ tab }: { tab: OpenTab }) {
   const kind = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.kind);
   const isSql = kind === "mysql" || kind === "postgres" || kind === "sqlite";
+  // 索引管理（建立 / 刪除）關聯式與 MongoDB 皆支援；欄位 / DDL 編輯仍僅限 SQL。
+  const canIndex = isSql || kind === "mongo";
   const [cols, setCols] = useState<ColumnInfo[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   const [rename, setRename] = useState<{ col: string; to: string } | null>(null);
+  const [ddl, setDdl] = useState<string | null>(null);
+  const [indexes, setIndexes] = useState<IndexInfo[] | null>(null);
+  const [addingIndex, setAddingIndex] = useState(false);
+
+  const viewDdl = async () => {
+    try {
+      setDdl(await api.tableDdl(tab.connId, tab.database, tab.table));
+    } catch (e: any) {
+      toast.error(e?.message ?? "取得建表 SQL 失敗");
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -966,6 +1641,11 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       .tableColumns(tab.connId, tab.database, tab.table)
       .then((c) => !cancelled && setCols(c))
       .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"));
+    // 索引：失敗或不支援則視為無索引（不擋欄位顯示）。
+    api
+      .tableIndexes(tab.connId, tab.database, tab.table)
+      .then((ix) => !cancelled && setIndexes(ix))
+      .catch(() => !cancelled && setIndexes([]));
     return () => {
       cancelled = true;
     };
@@ -991,6 +1671,35 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     doAlter({ op: "drop_column", name }, "欄位已刪除");
   };
 
+  const dropIndexByName = async (name: string) => {
+    if (!(await uiConfirm(`刪除索引「${name}」？`, { title: "刪除索引", danger: true, confirmText: "刪除" }))) return;
+    setBusy(true);
+    try {
+      await api.dropIndex(tab.connId, tab.database, tab.table, name);
+      toast.success("索引已刪除");
+      setNonce((n) => n + 1);
+    } catch (e: any) {
+      toast.error(e?.message ?? "刪除索引失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createIndexFn = async (name: string, columns: string[], unique: boolean) => {
+    if (!name.trim() || columns.length === 0) { toast.error("請填索引名稱並至少選一欄"); return; }
+    setBusy(true);
+    try {
+      await api.createIndex(tab.connId, tab.database, tab.table, name.trim(), columns, unique);
+      toast.success("索引已建立");
+      setAddingIndex(false);
+      setNonce((n) => n + 1);
+    } catch (e: any) {
+      toast.error(e?.message ?? "建立索引失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (err) return <div className="p-3 text-red-400 text-sm mono">{err}</div>;
   if (!cols) return <div className="p-3 text-white/40 text-sm">讀取中…</div>;
 
@@ -1001,6 +1710,11 @@ function StructurePane({ tab }: { tab: OpenTab }) {
           <button type="button" onClick={() => setAdding((s) => !s)} disabled={busy}
             className="px-2 py-1 rounded hover:bg-white/10 text-white/60 disabled:opacity-40">
             ＋ 新增欄位
+          </button>
+          <button type="button" onClick={viewDdl}
+            title="檢視 / 複製建表 SQL（CREATE 語句）"
+            className="px-2 py-1 rounded hover:bg-white/10 text-white/60">
+            📋 建表 SQL
           </button>
           {busy && <span className="text-white/40">處理中…</span>}
         </div>
@@ -1061,6 +1775,64 @@ function StructurePane({ tab }: { tab: OpenTab }) {
           ))}
         </tbody>
       </table>
+
+      {/* 索引區（致敬商用工具的結構檢視） */}
+      {indexes && (indexes.length > 0 || canIndex) && (
+        <div className="mt-2">
+          <div className="px-3 py-1.5 text-xs text-white/40 bg-[#10161e] border-y border-white/10 flex items-center gap-2">
+            <span>索引（{indexes.length}）</span>
+            {canIndex && (
+              <button type="button" onClick={() => setAddingIndex((s) => !s)} disabled={busy}
+                className="px-1.5 py-0.5 rounded hover:bg-white/10 text-white/60 disabled:opacity-40">＋ 新增索引</button>
+            )}
+          </div>
+          {addingIndex && canIndex && cols && (
+            <AddIndexForm columns={cols.map((c) => c.name)} busy={busy}
+              onCancel={() => setAddingIndex(false)} onSubmit={createIndexFn} />
+          )}
+          {indexes.length === 0 && <div className="px-3 py-2 text-white/30 text-xs">尚無索引。</div>}
+          {indexes.length > 0 && (
+          <table className="text-sm border-collapse w-full">
+            <thead className="bg-[#1a212b]">
+              <tr>
+                {["名稱", "欄位", "唯一", "主鍵"].map((h) => (
+                  <th key={h} className="text-left px-3 py-1.5 border-b border-white/10 font-medium">{h}</th>
+                ))}
+                {canIndex && <th className="w-12 border-b border-white/10" />}
+              </tr>
+            </thead>
+            <tbody>
+              {indexes.map((ix) => (
+                <tr key={ix.name} className="hover:bg-white/5 group">
+                  <td className="px-3 py-1 border-b border-white/5 mono">{ix.name}</td>
+                  <td className="px-3 py-1 border-b border-white/5 mono text-white/70">{ix.columns.join(", ")}</td>
+                  <td className="px-3 py-1 border-b border-white/5">
+                    {ix.unique && <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">UNIQUE</span>}
+                  </td>
+                  <td className="px-3 py-1 border-b border-white/5">
+                    {ix.primary && <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">PK</span>}
+                  </td>
+                  {canIndex && (
+                    <td className="px-2 py-1 border-b border-white/5 text-right">
+                      {!ix.primary && (
+                        <button type="button" title="刪除索引" disabled={busy}
+                          onClick={() => dropIndexByName(ix.name)}
+                          className="px-1 text-white/20 group-hover:text-red-400 hover:bg-red-500/20 rounded disabled:opacity-40">−</button>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          )}
+        </div>
+      )}
+
+      {ddl !== null && (
+        <CellInspector column={`${tab.table} · 建表 SQL`} value={ddl} editable={false}
+          showFormat={false} onSave={() => {}} onClose={() => setDdl(null)} />
+      )}
     </div>
   );
 }
@@ -1094,6 +1866,51 @@ function AddColumnForm({ onSubmit, onCancel, busy }: {
         className="px-3 py-1.5 rounded bg-green-600 hover:bg-green-500 disabled:opacity-50">新增</button>
       <button type="button" onClick={onCancel}
         className="px-3 py-1.5 rounded border border-white/15 hover:bg-white/5">取消</button>
+    </div>
+  );
+}
+
+// 新增索引表單：名稱 + 欄位多選（依點選順序組複合索引）+ 唯一。
+function AddIndexForm({ columns, busy, onSubmit, onCancel }: {
+  columns: string[];
+  busy: boolean;
+  onSubmit: (name: string, columns: string[], unique: boolean) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [sel, setSel] = useState<string[]>([]);
+  const [unique, setUnique] = useState(false);
+  const toggle = (c: string) => setSel((s) => (s.includes(c) ? s.filter((x) => x !== c) : [...s, c]));
+  const ic = "bg-black/30 border border-white/10 rounded px-2 py-1 text-sm outline-none focus:border-blue-500";
+  return (
+    <div className="px-3 py-2 bg-[#0d131a] border-b border-white/10 text-xs space-y-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="block"><span className="text-white/50 block mb-0.5">索引名稱</span>
+          <input className={ic} value={name} onChange={(e) => setName(e.target.value)} placeholder="如 idx_email" /></label>
+        <label className="flex items-center gap-1 pb-1.5 select-none">
+          <input type="checkbox" checked={unique} onChange={(e) => setUnique(e.target.checked)} /> 唯一
+        </label>
+      </div>
+      <div>
+        <span className="text-white/50 block mb-1">欄位（可多選，依點選順序組複合索引）</span>
+        <div className="flex flex-wrap gap-1.5">
+          {columns.map((c) => {
+            const i = sel.indexOf(c);
+            return (
+              <button key={c} type="button" onClick={() => toggle(c)}
+                className={`px-2 py-0.5 rounded border ${i >= 0 ? "border-blue-500 bg-blue-500/15 text-blue-300" : "border-white/10 text-white/50"}`}>
+                {c}{i >= 0 ? `（${i + 1}）` : ""}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <button type="button" onClick={() => onSubmit(name, sel, unique)} disabled={busy}
+          className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 disabled:opacity-50">建立</button>
+        <button type="button" onClick={onCancel}
+          className="px-3 py-1 rounded border border-white/15 hover:bg-white/5">取消</button>
+      </div>
     </div>
   );
 }

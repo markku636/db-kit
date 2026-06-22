@@ -3,9 +3,9 @@ use sqlx::{Column, Row, SqlitePool, TypeInfo, ValueRef};
 use std::time::Duration;
 
 use crate::db::{
-    filter_op_sql, op_needs_value, AlterOp, CellEdit, ColumnInfo, ConnectionConfig, DataQuery,
-    DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable, Filter, PagedData, PoolStatus,
-    QueryResult, RowDelete, RowInsert, Sort, SortDir, TableInfo,
+    filter_op_sql, op_needs_value, AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery,
+    DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable, Filter, IndexInfo, PagedData,
+    PoolStatus, QueryResult, RowDelete, RowInsert, Sort, SortDir, TableInfo,
 };
 use crate::error::{AppError, AppResult};
 
@@ -160,7 +160,8 @@ impl DatabaseDriver for SqliteDriver {
             || trimmed.starts_with("pragma")
             || trimmed.starts_with("explain");
 
-        if is_read {
+        // 寫入語句若帶 RETURNING（SQLite 3.35+ 支援），改走 fetch_all 取回回傳列。
+        if is_read || trimmed.contains("returning") {
             let rows = sqlx::query(sql)
                 .fetch_all(&self.pool)
                 .await
@@ -300,13 +301,36 @@ impl DatabaseDriver for SqliteDriver {
         Ok(rows_to_result(&rows))
     }
 
+    async fn column_stats(&self, _database: &str, table: &str, column: &str) -> AppResult<ColumnStats> {
+        // SQLite 不加 db 前綴。
+        let qt = quote_ident(table);
+        let qc = quote_ident(column);
+        let sql = format!("SELECT COUNT(*), COUNT({qc}), COUNT(DISTINCT {qc}) FROM {qt}");
+        let row = sqlx::query(&sql)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let (min, max) = match sqlx::query(&format!("SELECT MIN({qc}), MAX({qc}) FROM {qt}"))
+            .fetch_one(&self.pool)
+            .await
+        {
+            Ok(r) => (cell_to_string(&r, 0), cell_to_string(&r, 1)),
+            Err(_) => (None, None),
+        };
+        Ok(ColumnStats {
+            total: row.try_get::<i64, _>(0).unwrap_or(0) as u64,
+            non_null: row.try_get::<i64, _>(1).unwrap_or(0) as u64,
+            distinct: row.try_get::<i64, _>(2).unwrap_or(0) as u64,
+            min,
+            max,
+        })
+    }
+
     async fn alter_table(&self, _database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
         let q_tbl = quote_ident(table);
         let ddl = match op {
             AlterOp::AddColumn { name, data_type, nullable, default } => {
-                if data_type.trim().is_empty() {
-                    return Err(AppError::Query("請指定欄位型別".into()));
-                }
+                crate::db::validate_column_spec(data_type, default.as_deref())?;
                 let nn = if *nullable { "" } else { " NOT NULL" };
                 let def = default.as_ref().map(|d| format!(" DEFAULT {d}")).unwrap_or_default();
                 format!("ALTER TABLE {q_tbl} ADD COLUMN {} {data_type}{nn}{def}", quote_ident(name))
@@ -367,6 +391,80 @@ impl DatabaseDriver for SqliteDriver {
             tables.push(ErTable { name: t.name.clone(), columns: er_cols });
         }
         Ok(ErModel { tables, relations })
+    }
+
+    async fn table_indexes(&self, _database: &str, table: &str) -> AppResult<Vec<IndexInfo>> {
+        let list = sqlx::query(&format!("PRAGMA index_list({})", quote_ident(table)))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let mut out = Vec::new();
+        for r in &list {
+            let name: String = r.try_get(1).unwrap_or_default();
+            let unique = r.try_get::<i64, _>(2).unwrap_or(0) == 1;
+            let origin: String = r.try_get(3).unwrap_or_default(); // pk / u / c
+            let info = sqlx::query(&format!("PRAGMA index_info({})", quote_ident(&name)))
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?;
+            // 用 unwrap_or_default 而非 filter_map：運算式索引欄位的 name 為 NULL，
+            // 若丟棄會使多欄索引的欄位數對不上（以空字串占位保留位置）。
+            let columns: Vec<String> =
+                info.iter().map(|ir| ir.try_get::<String, _>(2).unwrap_or_default()).collect();
+            out.push(IndexInfo { primary: origin == "pk", unique, columns, name });
+        }
+        Ok(out)
+    }
+
+    async fn drop_index(&self, _database: &str, _table: &str, index: &str) -> AppResult<()> {
+        // SQLite 索引名為資料庫全域，不需表限定。
+        let sql = format!("DROP INDEX {}", quote_ident(index));
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    async fn create_index(
+        &self,
+        _database: &str,
+        table: &str,
+        name: &str,
+        columns: &[String],
+        unique: bool,
+    ) -> AppResult<()> {
+        if columns.is_empty() {
+            return Err(AppError::Query("請至少選擇一個欄位".into()));
+        }
+        let cols = columns.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+        let uniq = if unique { "UNIQUE " } else { "" };
+        let sql = format!(
+            "CREATE {uniq}INDEX {} ON {} ({cols})",
+            quote_ident(name),
+            quote_ident(table)
+        );
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    async fn table_ddl(&self, _database: &str, table: &str) -> AppResult<String> {
+        // sqlite_master 直接存放原始建表 / 視圖語句。
+        let row = sqlx::query("SELECT sql FROM sqlite_master WHERE name = ? AND sql IS NOT NULL")
+            .bind(table)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        match row {
+            Some(r) => r
+                .try_get::<String, _>(0)
+                .map(|ddl| format!("{ddl};"))
+                .map_err(|e| AppError::Query(e.to_string())),
+            None => Err(AppError::Query("找不到該表的建表語句".into())),
+        }
     }
 
     async fn close(&self) {
@@ -510,7 +608,7 @@ fn string_fallback(row: &SqliteRow, idx: usize) -> Option<String> {
         return Some(v.to_string());
     }
     if let Ok(v) = row.try_get::<Vec<u8>, _>(idx) {
-        return Some(String::from_utf8_lossy(&v).into_owned());
+        return Some(crate::db::bytes_to_display(&v));
     }
     Some("<unrenderable>".to_string())
 }

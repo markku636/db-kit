@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod error;
 mod export;
+mod import;
 mod manager;
 mod scheduler;
 mod ssh;
@@ -56,16 +57,26 @@ pub fn run() {
             commands::table_columns,
             commands::table_data,
             commands::run_query,
+            commands::save_text_file,
             commands::update_cell,
             commands::insert_row,
             commands::delete_row,
             commands::pool_status,
+            commands::ping_connection,
             commands::key_detail,
             commands::key_edit,
             commands::export_table,
+            commands::import_csv,
+            commands::schema_dump,
             commands::explain_query,
+            commands::column_stats,
             commands::alter_table,
             commands::er_model,
+            commands::table_ddl,
+            commands::table_indexes,
+            commands::drop_index,
+            commands::create_index,
+            commands::server_info,
             commands::backup_detect_cli,
             commands::backup_run,
             commands::backup_restore,

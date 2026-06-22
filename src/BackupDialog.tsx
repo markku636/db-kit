@@ -340,6 +340,7 @@ function SchedulesTab({ conn }: { conn: ConnectionConfig }) {
 function HistoryTab({ conn }: { conn: ConnectionConfig }) {
   const [list, setList] = useState<BackupHistoryEntry[]>([]);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const reload = () =>
     api.listBackupHistory()
@@ -349,25 +350,32 @@ function HistoryTab({ conn }: { conn: ConnectionConfig }) {
   useEffect(() => { reload(); }, [conn.id]);
 
   const restore = async (entry: BackupHistoryEntry) => {
+    if (busy) return;
     const ok = await uiConfirm(`從此備份還原到「${entry.database || conn.name}」？此動作會覆寫現有資料。`, {
       title: "還原備份", danger: true, confirmText: "還原",
     });
     if (!ok) return;
+    setBusy(true);
     try {
       await api.restoreFromHistory(entry.id);
       setMsg({ ok: true, text: "還原完成" });
     } catch (e: any) {
       setMsg({ ok: false, text: e?.message ?? "還原失敗" });
+    } finally {
+      setBusy(false);
     }
   };
 
   const clear = async () => {
+    if (busy) return;
     const ok = await uiConfirm("清空備份歷史紀錄？（不會刪除實際備份檔）", {
       title: "清空歷史", danger: true, confirmText: "清空",
     });
     if (!ok) return;
+    setBusy(true);
     try { await api.clearHistory(); reload(); }
     catch (e: any) { setMsg({ ok: false, text: e?.message ?? "清空失敗" }); }
+    finally { setBusy(false); }
   };
 
   return (

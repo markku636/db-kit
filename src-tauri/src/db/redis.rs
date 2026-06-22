@@ -2,7 +2,7 @@ use redis::AsyncCommands;
 
 use crate::db::{
     CellEdit, ColumnInfo, ConnectionConfig, DataQuery, DatabaseDriver, KeyDetail, KeyEdit,
-    PagedData, PoolStatus, QueryResult, RowDelete, RowInsert, TableInfo,
+    PagedData, PoolStatus, QueryResult, RowDelete, RowInsert, ServerInfoSection, TableInfo,
 };
 use crate::error::{AppError, AppResult};
 
@@ -167,12 +167,14 @@ impl DatabaseDriver for RedisDriver {
             }
         }
 
+        // SCAN 可能回傳重複的 key（游標式不保證唯一），排序後去重避免重複列與灌水的總數。
         all_keys.sort();
+        all_keys.dedup();
         let total = all_keys.len() as u64;
 
-        // 分頁切片
-        let start = (query.page as usize) * (query.page_size as usize);
-        let end = (start + query.page_size as usize).min(all_keys.len());
+        // 分頁切片（saturating 避免極端 page * page_size 溢位，與 SQL driver 一致）。
+        let start = (query.page as usize).saturating_mul(query.page_size as usize);
+        let end = start.saturating_add(query.page_size as usize).min(all_keys.len());
         let page_keys = if start < all_keys.len() {
             &all_keys[start..end]
         } else {
@@ -270,7 +272,10 @@ impl DatabaseDriver for RedisDriver {
                 Ok(1)
             }
             "key" => Err(AppError::Query("不支援直接改 key 名稱，請用 RENAME".to_string())),
-            // 其餘（含 string value 編輯）：對 string 型別做 SET
+            // type 為唯讀的型別中介資料；若以 SET 寫入會把 list/set/zset/hash 覆蓋成 string、
+            // 造成資料遺失，故明確拒絕（避免誤觸格內編輯）。
+            "type" => Err(AppError::Query("type 欄為唯讀，無法編輯".to_string())),
+            // 其餘（string value 編輯）：對 string 型別做 SET
             _ => {
                 let v = edit.new_value.clone().unwrap_or_default();
                 let _: () = conn
@@ -478,8 +483,37 @@ impl DatabaseDriver for RedisDriver {
                 .query_async(&mut conn)
                 .await
                 .map_err(to_err)?,
+            KeyEdit::Rename { new_key } => {
+                // 用 RENAMENX：目的鍵已存在則回 0、不覆蓋，避免靜默摧毀既有鍵；
+                // 來源不存在仍會報錯。回 1 表示成功改名。
+                let renamed: i64 = redis::cmd("RENAMENX")
+                    .arg(key)
+                    .arg(new_key)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(to_err)?;
+                if renamed == 0 {
+                    return Err(AppError::Query(format!(
+                        "目標鍵「{new_key}」已存在，為避免覆蓋而取消改名"
+                    )));
+                }
+                1
+            }
         };
         Ok(affected.max(0) as u64)
+    }
+
+    async fn server_info(&self) -> AppResult<Vec<ServerInfoSection>> {
+        let mut conn = self
+            .client
+            .get_multiplexed_tokio_connection()
+            .await
+            .map_err(|e| AppError::Connect(e.to_string()))?;
+        let raw: String = redis::cmd("INFO")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(parse_info(&raw))
     }
 
     async fn close(&self) {
@@ -496,6 +530,38 @@ fn pk_key(cols: &[String], vals: &[Option<String>]) -> AppResult<String> {
     vals.get(idx)
         .and_then(|v| v.clone())
         .ok_or_else(|| AppError::Query("key 為空".to_string()))
+}
+
+/// 解析 Redis `INFO` 純文字為分區結構。
+/// 區段以 "# Name" 起始，內容為 "key:value"；註解／空行略過。
+fn parse_info(raw: &str) -> Vec<ServerInfoSection> {
+    let mut sections: Vec<ServerInfoSection> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix("# ") {
+            sections.push(ServerInfoSection {
+                name: name.trim().to_string(),
+                items: Vec::new(),
+            });
+        } else if let Some((k, v)) = line.split_once(':') {
+            // 萬一第一筆在任何區段標頭之前出現，補一個 General 區段承接。
+            if sections.last().is_none() {
+                sections.push(ServerInfoSection {
+                    name: "General".to_string(),
+                    items: Vec::new(),
+                });
+            }
+            sections
+                .last_mut()
+                .unwrap()
+                .items
+                .push((k.to_string(), v.to_string()));
+        }
+    }
+    sections
 }
 
 /// 將 redis::Value 攤平成單欄字串列。

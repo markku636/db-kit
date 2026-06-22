@@ -26,6 +26,14 @@
 | — | 查詢效能分析（EXPLAIN） | ✅ 完成 |
 | — | 結構編輯（DDL：新增/刪除/改名欄位） | ✅ 完成 |
 | — | ER 圖（表 + 外鍵關係） | ✅ 完成 |
+| — | Redis 強化（仿 Another Redis）：鍵列右鍵選單（檢視/複製鍵名/改名/設 TTL/刪除）、DB 節點右鍵（新增鍵/清空 DB/伺服器狀態）、伺服器狀態面板（INFO 重點指標 + 全分區，可自動刷新） | ✅ 完成 |
+| — | 索引管理（新增 / 刪除，MySQL / PostgreSQL / SQLite / MongoDB） | ✅ 完成 |
+| — | Ping 既有連線（量測往返延遲，含 SSH 通道） | ✅ 完成 |
+| — | MongoDB 查詢增強：sort / projection / limit、**聚合管線**、批次 insert / update / delete（CRUD-via-JSON） | ✅ 完成 |
+| — | 查詢編輯器顯示 `RETURNING` 結果（PostgreSQL / SQLite） | ✅ 完成 |
+| — | **CSV 資料匯入**（RFC4180 解析、空欄→NULL、逐列回報） | ✅ 完成 |
+| — | 轉儲整庫結構 SQL（所有表建表語句） | ✅ 完成 |
+| — | PostgreSQL 嚴格型別寫入修正（整數 / 複合主鍵 CRUD、數值範圍篩選原生比較） | ✅ 完成 |
 
 ## 各資料庫備份機制（規劃）
 
