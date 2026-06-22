@@ -26,7 +26,7 @@
   "bundle": {
     "active": true,
     "targets": ["msi", "nsis"],
-    "icon": ["icons/icon.png"],
+    "icon": ["icons/icon.png", "icons/icon.ico"],
     "windows": {
       "nsis": {
         "installMode": "currentUser"
