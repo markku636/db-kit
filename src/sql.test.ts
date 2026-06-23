@@ -29,6 +29,12 @@ import {
   resultToMarkdown,
   isSystemDatabase,
   isDangerousStatement,
+  mysqlAccount,
+  buildCreateUser,
+  buildDropUser,
+  buildAlterUserPassword,
+  buildSetUserLock,
+  showGrantsSql,
   type NewColumn,
 } from "./sql";
 
@@ -362,5 +368,30 @@ describe("isSystemDatabase", () => {
     expect(isSystemDatabase("mongo", "config")).toBe(true);
     expect(isSystemDatabase("mongo", "local")).toBe(true);
     expect(isSystemDatabase("mongo", "shop")).toBe(false);
+  });
+});
+
+describe("MySQL user management DDL", () => {
+  it("mysqlAccount quotes user and host as string literals, not identifiers", () => {
+    expect(mysqlAccount("app", "%")).toBe("'app'@'%'");
+    expect(mysqlAccount("localhost", "localhost")).toBe("'localhost'@'localhost'");
+    // 單引號 / 反斜線需跳脫（防注入）。
+    expect(mysqlAccount("o'brien", "10.0.0.1")).toBe("'o''brien'@'10.0.0.1'");
+    expect(mysqlAccount("a\\b", "%")).toBe("'a\\\\b'@'%'");
+  });
+  it("buildCreateUser: with password emits IDENTIFIED BY; empty password omits it", () => {
+    expect(buildCreateUser("app", "%", "p@ss")).toBe("CREATE USER 'app'@'%' IDENTIFIED BY 'p@ss'");
+    expect(buildCreateUser("app", "localhost", "")).toBe("CREATE USER 'app'@'localhost'");
+    // 密碼含單引號須跳脫。
+    expect(buildCreateUser("u", "%", "a'b")).toBe("CREATE USER 'u'@'%' IDENTIFIED BY 'a''b'");
+  });
+  it("buildDropUser / buildAlterUserPassword / buildSetUserLock", () => {
+    expect(buildDropUser("app", "%")).toBe("DROP USER 'app'@'%'");
+    expect(buildAlterUserPassword("app", "%", "new")).toBe("ALTER USER 'app'@'%' IDENTIFIED BY 'new'");
+    expect(buildSetUserLock("app", "%", true)).toBe("ALTER USER 'app'@'%' ACCOUNT LOCK");
+    expect(buildSetUserLock("app", "%", false)).toBe("ALTER USER 'app'@'%' ACCOUNT UNLOCK");
+  });
+  it("showGrantsSql targets the account", () => {
+    expect(showGrantsSql("app", "%")).toBe("SHOW GRANTS FOR 'app'@'%'");
   });
 });

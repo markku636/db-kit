@@ -15,6 +15,7 @@ import RoutinesDialog from "./RoutinesDialog";
 import CreateViewDialog from "./CreateViewDialog";
 import ProcessListDialog from "./ProcessListDialog";
 import ServerQueryDialog from "./ServerQueryDialog";
+import UserManager from "./UserManager";
 import SearchObjectsDialog from "./SearchObjectsDialog";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile } from "./ui";
 import {
@@ -339,6 +340,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   const [procList, setProcList] = useState<{ connId: string; kind: DbKind } | null>(null);
   // 通用伺服器查詢檢視（使用者 / 角色等）。
   const [serverQuery, setServerQuery] = useState<{ connId: string; title: string; sql: string } | null>(null);
+  const [userMgr, setUserMgr] = useState<{ connId: string } | null>(null);
   // 物件搜尋（資料表 / 欄位）。
   const [searchObjs, setSearchObjs] = useState<{ connId: string; kind: DbKind } | null>(null);
   // 連線 / 表 搜尋過濾字串
@@ -805,13 +807,13 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                   ? [
                       ["搜尋物件…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
                       ["處理程序…", () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
-                      ["使用者 / 角色…", () => setServerQuery({
-                        connId: menuConn.id,
-                        title: "使用者 / 角色",
-                        sql: menuConn.kind === "postgres"
-                          ? "SELECT rolname AS role, rolsuper AS superuser, rolcreatedb AS createdb, rolcanlogin AS login, rolreplication AS replication FROM pg_roles ORDER BY rolname"
-                          : "SELECT User, Host FROM mysql.user ORDER BY User, Host",
-                      }), false] as [string, () => void, boolean],
+                      menuConn.kind === "mysql"
+                        ? ["使用者管理…", () => setUserMgr({ connId: menuConn.id }), false] as [string, () => void, boolean]
+                        : ["使用者 / 角色…", () => setServerQuery({
+                            connId: menuConn.id,
+                            title: "使用者 / 角色",
+                            sql: "SELECT rolname AS role, rolsuper AS superuser, rolcreatedb AS createdb, rolcanlogin AS login, rolreplication AS replication FROM pg_roles ORDER BY rolname",
+                          }), false] as [string, () => void, boolean],
                       ["伺服器變數…", () => setServerQuery({
                         connId: menuConn.id,
                         title: "伺服器變數 / 設定",
@@ -1035,6 +1037,10 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
       {serverQuery && (
         <ServerQueryDialog connId={serverQuery.connId} title={serverQuery.title} sql={serverQuery.sql}
           onClose={() => setServerQuery(null)} />
+      )}
+
+      {userMgr && (
+        <UserManager connId={userMgr.connId} onClose={() => setUserMgr(null)} />
       )}
 
       {searchObjs && (

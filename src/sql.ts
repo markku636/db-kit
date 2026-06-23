@@ -158,6 +158,43 @@ export function buildRowDelete(
   return `DELETE FROM ${qi(table)} WHERE ${where};`;
 }
 
+// ---- MySQL 使用者管理：'user'@'host' 為兩段字串字面值（非反引號識別字）----
+// 帳號規格 'user'@'host'：MySQL 以字串字面值表示帳號與來源主機，皆需單引號跳脫（防注入）。
+export function mysqlAccount(name: string, host: string): string {
+  return `${sqlLiteral("mysql", name)}@${sqlLiteral("mysql", host)}`;
+}
+// 建立使用者；password 為空字串時不設密碼（CREATE USER 不接 IDENTIFIED BY ''，故省略子句）。
+export function buildCreateUser(name: string, host: string, password: string): string {
+  const base = `CREATE USER ${mysqlAccount(name, host)}`;
+  return password ? `${base} IDENTIFIED BY ${sqlLiteral("mysql", password)}` : base;
+}
+// 刪除使用者。
+export function buildDropUser(name: string, host: string): string {
+  return `DROP USER ${mysqlAccount(name, host)}`;
+}
+// 修改密碼（ALTER USER ... IDENTIFIED BY）。
+export function buildAlterUserPassword(name: string, host: string, password: string): string {
+  return `ALTER USER ${mysqlAccount(name, host)} IDENTIFIED BY ${sqlLiteral("mysql", password)}`;
+}
+// 鎖定 / 解鎖帳號（MySQL 5.7.6+）。
+export function buildSetUserLock(name: string, host: string, locked: boolean): string {
+  return `ALTER USER ${mysqlAccount(name, host)} ACCOUNT ${locked ? "LOCK" : "UNLOCK"}`;
+}
+// 查詢帳號清單（含資源限制 / SSL / 超級權限）；對標 Navicat 使用者檢視欄位。
+export function userListSql(): string {
+  return (
+    "SELECT User, Host, " +
+    "IF(ssl_type='', '無', ssl_type) AS ssl_type, " +
+    "max_questions, max_updates, max_connections, max_user_connections, " +
+    "Super_priv, account_locked " +
+    "FROM mysql.user ORDER BY User, Host"
+  );
+}
+// 查詢單一帳號的授權（SHOW GRANTS）。
+export function showGrantsSql(name: string, host: string): string {
+  return `SHOW GRANTS FOR ${mysqlAccount(name, host)}`;
+}
+
 // 保守 SQL 格式化：把語句切成「程式碼」與「逐字保留片段」（字串 '...'、識別字 "..."/`...`、
 // 行 / 區塊註解、PG $$），只對程式碼片段重排空白並於主要子句前換行。因僅變動字面值外的空白，
 // 不改變語意（SQL 對字面值外的空白不敏感），最差只是排版不美而非破壞查詢。不改關鍵字大小寫。
