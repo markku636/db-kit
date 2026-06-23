@@ -103,6 +103,11 @@ export function buildDuplicateTable(kind: DbKind, db: string, src: string, dst: 
   return `CREATE TABLE ${to} AS SELECT * FROM ${from} WHERE 0;`;
 }
 
+// 將來源表全部資料插入目標表（複製含資料時，接在 buildDuplicateTable 之後）。
+export function buildInsertAllRows(kind: DbKind, db: string, src: string, dst: string): string {
+  return `INSERT INTO ${qualifiedName(kind, db, dst)} SELECT * FROM ${qualifiedName(kind, db, src)};`;
+}
+
 // 建立視圖：CREATE VIEW <qualified> AS <select>（三種 SQL 同語法）。
 export function buildCreateView(kind: DbKind, db: string, name: string, select: string): string {
   return `CREATE VIEW ${qualifiedName(kind, db, name.trim())} AS\n${select.trim()};`;

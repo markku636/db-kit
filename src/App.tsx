@@ -26,7 +26,7 @@ import {
   resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, splitSqlStatements, isDangerousStatement,
   quoteIdent, qualifiedName,
   buildDropTable, buildDropView, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
-  buildTableMaintenance,
+  buildTableMaintenance, buildInsertAllRows,
   formatSql,
 } from "./sql";
 import type { SavedQuery } from "./sql";
@@ -647,12 +647,15 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
     }
   };
   // 複製資料表結構：產生 CREATE TABLE 語句送往查詢編輯器，供使用者檢視後執行（不直接執行 DDL）。
-  const duplicateTable = async (m: TblRef) => {
-    const name = await uiPrompt("複製為新資料表名稱", {
-      title: "複製資料表", defaultValue: `${m.table}_copy`, placeholder: "新表名",
+  const duplicateTable = async (m: TblRef, withData = false) => {
+    const name = await uiPrompt(withData ? "複製為新資料表名稱（含資料）" : "複製為新資料表名稱", {
+      title: withData ? "複製資料表（含資料）" : "複製資料表", defaultValue: `${m.table}_copy`, placeholder: "新表名",
     });
     if (!name?.trim()) return;
-    sendQuery(m.connId, buildDuplicateTable(m.kind, m.db, m.table, name.trim()));
+    const dst = name.trim();
+    let sql = buildDuplicateTable(m.kind, m.db, m.table, dst);
+    if (withData) sql += "\n" + buildInsertAllRows(m.kind, m.db, m.table, dst);
+    sendQuery(m.connId, sql);
   };
 
   const menuConn = menu ? connections.find((x) => x.id === menu.id) ?? null : null;
@@ -964,7 +967,8 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                     // 視圖改名：PG 容許 ALTER … RENAME；MySQL/SQLite 不支援 view 改名，隱藏以免必定失敗。
                     if (!isView || tableMenu.kind === "postgres") arr.push(["重新命名…", () => renameTable(tableMenu)]);
                     // 複製資料表結構（產生 SQL 到編輯器）；視圖無法以 CREATE TABLE LIKE 複製，略過。
-                    if (!isView) arr.push(["複製資料表…", () => duplicateTable(tableMenu)]);
+                    if (!isView) arr.push(["複製資料表（結構）…", () => duplicateTable(tableMenu)]);
+                    if (!isView) arr.push(["複製資料表（含資料）…", () => duplicateTable(tableMenu, true)]);
                     // TRUNCATE 對視圖無效，僅資料表顯示「清空」。
                     if (!isView) arr.push(["清空資料表", () => truncateTable(tableMenu), true]);
                     arr.push([isView ? "刪除視圖" : "刪除資料表", () => dropTable(tableMenu), true]);

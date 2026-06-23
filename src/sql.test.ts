@@ -20,6 +20,7 @@ import {
   buildTruncateTable,
   buildRenameTable,
   buildDuplicateTable,
+  buildInsertAllRows,
   buildCreateView,
   viewDefinitionSql,
   buildReplaceView,
@@ -280,6 +281,11 @@ describe("table/database lifecycle DDL", () => {
     expect(buildDuplicateTable("sqlite", "main", "t", "t_copy")).toBe(
       "CREATE TABLE `t_copy` AS SELECT * FROM `t` WHERE 0;",
     );
+  });
+
+  it("buildInsertAllRows: INSERT INTO dst SELECT * FROM src", () => {
+    expect(buildInsertAllRows("mysql", "db", "t", "t_copy")).toBe("INSERT INTO `db`.`t_copy` SELECT * FROM `db`.`t`;");
+    expect(buildInsertAllRows("postgres", "public", "t", "t_copy")).toBe('INSERT INTO "public"."t_copy" SELECT * FROM "public"."t";');
   });
 
   it("buildCreateView qualifies the name and trims the SELECT", () => {
