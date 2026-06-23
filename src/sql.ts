@@ -168,6 +168,12 @@ export interface ColumnDiff {
   removed: string[];
   changed: { name: string; source: string; target: string }[];
 }
+// 產生「目標補欄位」的 ALTER ADD COLUMN（同步用；僅型別 + 可空，不含預設 / 註解，由使用者檢視後補上）。
+export function buildAddColumnsDdl(kind: DbKind, db: string, table: string, cols: SchemaColumn[]): string {
+  return cols
+    .map((c) => `ALTER TABLE ${qualifiedName(kind, db, table)} ADD COLUMN ${quoteIdent(kind, c.name)} ${c.data_type}${c.nullable ? "" : " NOT NULL"};`)
+    .join("\n");
+}
 export function diffColumns(source: SchemaColumn[], target: SchemaColumn[]): ColumnDiff {
   const tByName = new Map(target.map((c) => [c.name, c]));
   const sByName = new Map(source.map((c) => [c.name, c]));

@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
-import { api, ColumnInfo } from "./api";
+import { api, ColumnInfo, DbKind } from "./api";
 import { useEscToClose, toast, copyToClipboard } from "./ui";
-import { diffNameLists, diffColumns, NameDiff, ColumnDiff } from "./sql";
+import { diffNameLists, diffColumns, buildAddColumnsDdl, NameDiff, ColumnDiff, SchemaColumn } from "./sql";
 
 // 結構比對（對標 Navicat Premium 的結構同步）：比對同一連線下兩個資料庫的資料表與欄位差異。
 // 全部以既有唯讀 API（listDatabases / listTables / tableColumns）達成，獨立對話框、不動既有畫面。
-export default function SchemaCompare({ connId, sourceDb, onClose }: {
+export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
   connId: string;
+  kind: DbKind;
   sourceDb: string;
   onClose: () => void;
 }) {
@@ -15,7 +16,7 @@ export default function SchemaCompare({ connId, sourceDb, onClose }: {
   const [target, setTarget] = useState("");
   const [diff, setDiff] = useState<NameDiff | null>(null);
   const [busy, setBusy] = useState(false);
-  const [colDiffs, setColDiffs] = useState<Record<string, ColumnDiff | "loading">>({});
+  const [colDiffs, setColDiffs] = useState<Record<string, { diff: ColumnDiff; addCols: SchemaColumn[] } | "loading">>({});
   const [syncSql, setSyncSql] = useState<string | null>(null);
   const [genBusy, setGenBusy] = useState(false);
 
@@ -64,8 +65,11 @@ export default function SchemaCompare({ connId, sourceDb, onClose }: {
         api.tableColumns(connId, sourceDb, table),
         api.tableColumns(connId, target, table),
       ]);
-      const toSc = (c: ColumnInfo) => ({ name: c.name, data_type: c.data_type, nullable: c.nullable });
-      setColDiffs((m) => ({ ...m, [table]: diffColumns(sc.map(toSc), tc.map(toSc)) }));
+      const toSc = (c: ColumnInfo): SchemaColumn => ({ name: c.name, data_type: c.data_type, nullable: c.nullable });
+      const srcCols = sc.map(toSc);
+      const diffRes = diffColumns(srcCols, tc.map(toSc));
+      const addCols = srcCols.filter((c) => diffRes.added.includes(c.name));
+      setColDiffs((m) => ({ ...m, [table]: { diff: diffRes, addCols } }));
     } catch (e: any) {
       toast.error(e?.message ?? "欄位比對失敗");
       setColDiffs((m) => { const n = { ...m }; delete n[table]; return n; });
@@ -130,26 +134,32 @@ export default function SchemaCompare({ connId, sourceDb, onClose }: {
                 <div className="space-y-1.5">
                   {diff.common.map((t) => {
                     const cd = colDiffs[t];
-                    const hasDiff = cd && cd !== "loading" && (cd.added.length || cd.removed.length || cd.changed.length);
+                    const d = cd && cd !== "loading" ? cd.diff : null;
+                    const hasDiff = d && (d.added.length || d.removed.length || d.changed.length);
                     return (
                       <div key={t} className="rounded border border-white/10">
                         <button type="button" onClick={() => compareCols(t)}
                           className="w-full text-left px-3 py-1.5 mono text-xs hover:bg-white/5 flex items-center gap-2">
                           <span className="text-white/80">{t}</span>
                           {cd === "loading" && <span className="text-white/40">比對中…</span>}
-                          {cd && cd !== "loading" && (hasDiff
+                          {d && (hasDiff
                             ? <span className="text-amber-300">有差異</span>
                             : <span className="text-white/30">結構相同</span>)}
                         </button>
-                        {cd && cd !== "loading" && hasDiff && (
+                        {d && hasDiff && (
                           <div className="px-3 py-2 border-t border-white/5 text-xs space-y-1">
-                            {cd.added.length > 0 && <div><span className="text-green-300">＋ 目標需新增：</span><span className="mono text-white/70">{cd.added.join(", ")}</span></div>}
-                            {cd.removed.length > 0 && <div><span className="text-red-300">－ 目標多出：</span><span className="mono text-white/70">{cd.removed.join(", ")}</span></div>}
-                            {cd.changed.map((c) => (
+                            {d.added.length > 0 && <div><span className="text-green-300">＋ 目標需新增：</span><span className="mono text-white/70">{d.added.join(", ")}</span></div>}
+                            {d.removed.length > 0 && <div><span className="text-red-300">－ 目標多出：</span><span className="mono text-white/70">{d.removed.join(", ")}</span></div>}
+                            {d.changed.map((c) => (
                               <div key={c.name}><span className="text-amber-300 mono">{c.name}</span>
                                 <span className="text-white/50">：來源 </span><span className="mono text-white/80">{c.source}</span>
                                 <span className="text-white/50"> · 目標 </span><span className="mono text-white/80">{c.target}</span></div>
                             ))}
+                            {cd !== "loading" && cd.addCols.length > 0 && (
+                              <button type="button"
+                                onClick={() => copyToClipboard(buildAddColumnsDdl(kind, target, t, cd.addCols), "已複製 ADD COLUMN SQL")}
+                                className="mt-1 text-blue-400 hover:text-blue-300">複製補欄位 SQL（ADD COLUMN）</button>
+                            )}
                           </div>
                         )}
                       </div>

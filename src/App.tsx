@@ -392,7 +392,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   const [userMgr, setUserMgr] = useState<{ connId: string } | null>(null);
   const [viewDesign, setViewDesign] = useState<{ connId: string; db: string; view: string; kind: DbKind } | null>(null);
   const [dbProps, setDbProps] = useState<{ connId: string; db: string } | null>(null);
-  const [schemaCompare, setSchemaCompare] = useState<{ connId: string; db: string } | null>(null);
+  const [schemaCompare, setSchemaCompare] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
   // 物件搜尋（資料表 / 欄位）。
   const [searchObjs, setSearchObjs] = useState<{ connId: string; kind: DbKind } | null>(null);
   // 連線 / 表 搜尋過濾字串
@@ -950,7 +950,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                       if (k === "mysql") arr.push(["資料表大小報表…", () => setServerQuery({
                         connId: dbMenu.connId, title: `資料表大小：${dbMenu.db}`, sql: tableSizesSql(dbMenu.db),
                       }), false]);
-                      if (k === "mysql" || k === "postgres") arr.push(["結構比對…", () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db }), false]);
+                      if ((k === "mysql" || k === "postgres") && dbConn) arr.push(["結構比對…", () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
                       if (k === "mysql") arr.push(["資料庫屬性…", () => setDbProps({ connId: dbMenu.connId, db: dbMenu.db }), false]);
                       arr.push(["編輯屬性…", editConn, false]);
                       // 系統 schema / 庫，以及 MySQL 使用中的預設庫，不顯示刪除（後端亦硬擋）。
@@ -1136,7 +1136,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
       )}
 
       {schemaCompare && (
-        <SchemaCompare connId={schemaCompare.connId} sourceDb={schemaCompare.db} onClose={() => setSchemaCompare(null)} />
+        <SchemaCompare connId={schemaCompare.connId} kind={schemaCompare.kind} sourceDb={schemaCompare.db} onClose={() => setSchemaCompare(null)} />
       )}
 
       {viewDesign && (

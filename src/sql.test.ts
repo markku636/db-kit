@@ -34,6 +34,7 @@ import {
   tableSizesSql,
   diffNameLists,
   diffColumns,
+  buildAddColumnsDdl,
   buildAddForeignKey,
   buildRenameIndex,
   buildCreateFulltextIndex,
@@ -355,6 +356,15 @@ describe("table/database lifecycle DDL", () => {
       removed: ["old"],
       changed: [{ name: "name", source: "varchar(50) NULL", target: "varchar(100) NOT NULL" }],
     });
+  });
+
+  it("buildAddColumnsDdl: ALTER ADD COLUMN per column (type + nullability)", () => {
+    expect(buildAddColumnsDdl("mysql", "db", "t", [
+      { name: "a", data_type: "int", nullable: false },
+      { name: "b", data_type: "varchar(50)", nullable: true },
+    ])).toBe(
+      "ALTER TABLE `db`.`t` ADD COLUMN `a` int NOT NULL;\nALTER TABLE `db`.`t` ADD COLUMN `b` varchar(50);",
+    );
   });
 
   it("tableSizesSql: escapes schema, base tables only, ordered by size", () => {
