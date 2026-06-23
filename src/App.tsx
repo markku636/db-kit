@@ -551,6 +551,17 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   };
   const genSelect = (m: TblRef) =>
     sendQuery(m.connId, `SELECT *\nFROM ${qualified(m.kind, m.db, m.table)}\nLIMIT 100;`);
+  // 明列欄位的 SELECT（避免 SELECT *，便於刪減欄位；致敬 DataGrip / Navicat 的展開 *）。
+  const genSelectColumns = async (m: TblRef) => {
+    try {
+      const cols = await api.tableColumns(m.connId, m.db, m.table);
+      if (cols.length === 0) { genSelect(m); return; }
+      const names = cols.map((c) => quoteId(m.kind, c.name)).join(", ");
+      sendQuery(m.connId, `SELECT ${names}\nFROM ${qualified(m.kind, m.db, m.table)}\nLIMIT 100;`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "產生 SELECT 失敗");
+    }
+  };
   const genMongoFind = (m: TblRef) =>
     sendQuery(m.connId, JSON.stringify({ db: m.db, collection: m.table, filter: {} }, null, 2));
   const genMongoAggregate = (m: TblRef) =>
@@ -947,6 +958,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                       arr.push(["設計檢視…", () => setViewDesign({ connId: tableMenu.connId, db: tableMenu.db, view: tableMenu.table, kind: tableMenu.kind })]);
                     arr.push(
                       ["查詢前 100 筆", () => genSelect(tableMenu)],
+                      ["查詢前 100 筆（明列欄位）", () => genSelectColumns(tableMenu)],
                       ["SELECT COUNT(*)", () => genCount(tableMenu)],
                       ["產生 INSERT 範本", () => genInsert(tableMenu)],
                       ["複製建表 SQL", () => copyDdl(tableMenu)],
