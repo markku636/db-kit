@@ -276,6 +276,9 @@ export const api = {
   pingConnection: (id: string) => invoke<number>("ping_connection", { id }),
   columnStats: (id: string, database: string, table: string, column: string) =>
     invoke<ColumnStats>("column_stats", { id, database, table, column }),
+  createCollection: (id: string, database: string, name: string) =>
+    invoke<void>("create_collection", { id, database, name }),
+  createDatabase: (id: string, name: string) => invoke<void>("create_database", { id, name }),
   keyDetail: (id: string, database: string, key: string) =>
     invoke<KeyDetail | null>("key_detail", { id, database, key }),
   keyEdit: (id: string, database: string, key: string, edit: KeyEdit) =>

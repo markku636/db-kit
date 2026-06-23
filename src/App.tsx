@@ -404,6 +404,34 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
     }
   };
 
+  // 新增集合（MongoDB，schemaless）：提示名稱 → createCollection → 刷新樹狀。
+  const createCollection = async (connId: string, db: string) => {
+    const name = await uiPrompt("集合名稱", { title: "新增集合", placeholder: "例：users" });
+    if (!name?.trim()) return;
+    try {
+      await api.createCollection(connId, db, name.trim());
+      toast.success(`集合「${name.trim()}」已建立`);
+      refreshTables(connId, db);
+    } catch (e: any) {
+      toast.error(e?.message ?? "建立集合失敗");
+    }
+  };
+
+  // 新增資料庫 / schema：MySQL CREATE DATABASE、PostgreSQL CREATE SCHEMA、MongoDB 具現化。
+  const createDatabase = async (connId: string, kind: DbKind) => {
+    const isPg = kind === "postgres";
+    const label = isPg ? "Schema 名稱" : "資料庫名稱";
+    const name = await uiPrompt(label, { title: isPg ? "新增 Schema" : "新增資料庫", placeholder: "例：app" });
+    if (!name?.trim()) return;
+    try {
+      await api.createDatabase(connId, name.trim());
+      toast.success(`${isPg ? "Schema" : "資料庫"}「${name.trim()}」已建立`);
+      refreshDbs(connId);
+    } catch (e: any) {
+      toast.error(e?.message ?? "新增失敗");
+    }
+  };
+
   // ---- 產生 SQL（致敬 Navicat / DBeaver 的 SQL 範本）----
   const quoteId = quoteIdent;
   const qualified = qualifiedName;
@@ -527,7 +555,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                   <div key={db}>
                     <div
                       onClick={() => toggleDb(c.id, db)}
-                      onContextMenu={(isRedis || isSqlKind) ? (e) => {
+                      onContextMenu={(isRedis || isSqlKind || c.kind === "mongo") ? (e) => {
                         e.preventDefault();
                         setActive(c.id);
                         setDbMenu({ connId: c.id, db, x: e.clientX, y: e.clientY });
@@ -610,16 +638,26 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
             style={{ left: dbMenu.x, top: dbMenu.y }}>
             {(() => {
               const dbConn = connections.find((x) => x.id === dbMenu.connId);
+              const editConn = () => { if (dbConn) onEdit(dbConn); };
               const items: [string, () => void, boolean][] =
                 dbConn?.kind === "redis"
                   ? [
                       ["新增鍵…", () => setNewKey({ connId: dbMenu.connId, db: dbMenu.db }), false],
                       ["伺服器狀態", () => { if (dbConn) setStatus({ id: dbConn.id, name: dbConn.name }); }, false],
+                      ["編輯屬性…", editConn, false],
                       ["清空 DB（FLUSHDB）", () => flushDb(dbMenu.connId, dbMenu.db), true],
+                    ]
+                  : dbConn?.kind === "mongo"
+                  ? [
+                      ["新增集合…", () => createCollection(dbMenu.connId, dbMenu.db), false],
+                      ["新增資料庫…", () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
+                      ["編輯屬性…", editConn, false],
                     ]
                   : [
                       ["設計表結構…", () => { if (dbConn) setDesignTable({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false],
+                      ["新增資料庫…", () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
                       ["匯出結構 SQL…", () => dumpSchema(dbMenu.connId, dbMenu.db), false],
+                      ["編輯屬性…", editConn, false],
                     ];
               return items.map(([label, fn, danger]) => (
                 <button key={label} type="button"

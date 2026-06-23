@@ -540,6 +540,23 @@ impl DatabaseDriver for MongoDriver {
             .map_err(|e| AppError::Query(e.to_string()))
     }
 
+    async fn create_collection(&self, database: &str, name: &str) -> AppResult<()> {
+        self.db_handle(database)
+            .create_collection(name)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    /// MongoDB「新增資料庫」：以建立首個集合具現化（Mongo 無空資料庫）。
+    async fn create_database(&self, name: &str) -> AppResult<()> {
+        // 在新資料庫建立一個預設集合，使其在清單中可見。
+        self.client
+            .database(name)
+            .create_collection("data")
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
     fn pool_status(&self) -> PoolStatus {
         // mongodb crate 未公開即時池統計，回傳 0（介面相容用）。
         PoolStatus { size: 0, idle: 0, in_use: 0 }

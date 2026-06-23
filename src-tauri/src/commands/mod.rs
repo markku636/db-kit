@@ -265,6 +265,23 @@ pub async fn column_stats(
     state.manager.column_stats(&id, &database, &table, &column).await
 }
 
+/// 建立集合（MongoDB）。
+#[tauri::command]
+pub async fn create_collection(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    name: String,
+) -> AppResult<()> {
+    state.manager.create_collection(&id, &database, &name).await
+}
+
+/// 新增資料庫 / schema（MySQL CREATE DATABASE、PostgreSQL CREATE SCHEMA、MongoDB 具現化）。
+#[tauri::command]
+pub async fn create_database(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    state.manager.create_database(&id, &name).await
+}
+
 #[tauri::command]
 pub async fn alter_table(
     state: State<'_, AppState>,

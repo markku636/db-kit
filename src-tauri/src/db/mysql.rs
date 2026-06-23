@@ -361,6 +361,16 @@ impl DatabaseDriver for MysqlDriver {
         })
     }
 
+    async fn create_database(&self, name: &str) -> AppResult<()> {
+        // 識別字無法參數化；以反引號跳脫防注入。
+        let sql = format!("CREATE DATABASE {}", quote_ident(name));
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
         let q_tbl = format!("{}.{}", quote_ident(database), quote_ident(table));
         let ddl = match op {

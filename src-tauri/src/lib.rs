@@ -70,6 +70,8 @@ pub fn run() {
             commands::schema_dump,
             commands::explain_query,
             commands::column_stats,
+            commands::create_collection,
+            commands::create_database,
             commands::alter_table,
             commands::er_model,
             commands::table_ddl,

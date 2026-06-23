@@ -172,6 +172,24 @@ impl Active {
             Active::Redis(d) => d.column_stats(database, table, column).await,
         }
     }
+    async fn create_collection(&self, database: &str, name: &str) -> AppResult<()> {
+        match self {
+            Active::Mysql(d) => d.create_collection(database, name).await,
+            Active::Postgres(d) => d.create_collection(database, name).await,
+            Active::Sqlite(d) => d.create_collection(database, name).await,
+            Active::Mongo(d) => d.create_collection(database, name).await,
+            Active::Redis(d) => d.create_collection(database, name).await,
+        }
+    }
+    async fn create_database(&self, name: &str) -> AppResult<()> {
+        match self {
+            Active::Mysql(d) => d.create_database(name).await,
+            Active::Postgres(d) => d.create_database(name).await,
+            Active::Sqlite(d) => d.create_database(name).await,
+            Active::Mongo(d) => d.create_database(name).await,
+            Active::Redis(d) => d.create_database(name).await,
+        }
+    }
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
         match self {
             Active::Mysql(d) => d.alter_table(database, table, op).await,
@@ -480,6 +498,14 @@ impl ConnectionManager {
 
     pub async fn column_stats(&self, id: &str, database: &str, table: &str, column: &str) -> AppResult<ColumnStats> {
         self.get(id)?.active.column_stats(database, table, column).await
+    }
+
+    pub async fn create_collection(&self, id: &str, database: &str, name: &str) -> AppResult<()> {
+        self.get(id)?.active.create_collection(database, name).await
+    }
+
+    pub async fn create_database(&self, id: &str, name: &str) -> AppResult<()> {
+        self.get(id)?.active.create_database(name).await
     }
 
     pub async fn alter_table(

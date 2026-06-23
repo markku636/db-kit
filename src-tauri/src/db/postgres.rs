@@ -386,6 +386,16 @@ impl DatabaseDriver for PostgresDriver {
         })
     }
 
+    async fn create_database(&self, name: &str) -> AppResult<()> {
+        // PG 連線樹列出 schema；「新增資料庫」對應 CREATE SCHEMA（在目前連線的資料庫內）。
+        let sql = format!("CREATE SCHEMA {}", quote_ident(name));
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
         let q_tbl = format!("{}.{}", quote_ident(database), quote_ident(table));
         let ddl = match op {

@@ -460,6 +460,17 @@ pub trait DatabaseDriver: Send + Sync {
         Err(AppError::Unsupported("此資料庫不支援欄位統計".into()))
     }
 
+    /// 建立集合（MongoDB）。關聯式 / 其他預設 Unsupported（請改用 CREATE TABLE）。
+    async fn create_collection(&self, _database: &str, _name: &str) -> AppResult<()> {
+        Err(AppError::Unsupported("此資料庫不支援建立集合（請用設計表結構建表）".into()))
+    }
+
+    /// 建立資料庫 / schema。MySQL → CREATE DATABASE、PostgreSQL → CREATE SCHEMA、
+    /// MongoDB → 以建立首個集合具現化。預設 Unsupported（如 SQLite 為單檔）。
+    async fn create_database(&self, _name: &str) -> AppResult<()> {
+        Err(AppError::Unsupported("此資料庫不支援新增資料庫".into()))
+    }
+
     /// 結構編輯（DDL：ALTER TABLE）。非關聯式預設 Unsupported。
     async fn alter_table(&self, _database: &str, _table: &str, _op: &AlterOp) -> AppResult<()> {
         Err(AppError::Unsupported("此資料庫不支援結構編輯".into()))
