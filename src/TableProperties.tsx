@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ColumnInfo, DbKind, IndexInfo } from "./api";
-import { useEscToClose } from "./ui";
+import { useEscToClose, toast } from "./ui";
+import { tableOptionsSql, buildAlterTableOptions } from "./sql";
+
+const TABLE_ENGINES = ["InnoDB", "MyISAM", "MEMORY", "ARCHIVE", "CSV"];
 
 // 資料表 / 視圖 / 集合屬性：唯讀彙整欄位、索引與列數（沿用既有 API，免後端改動）。
 export default function TableProperties({ connId, db, table, kind, objKind, onClose }: {
@@ -21,14 +24,56 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
 
   const isMongo = kind === "mongo";
   const objLabel = isMongo ? "集合" : objKind === "view" ? "視圖" : "資料表";
+  // 可編輯選項（僅 MySQL 資料表）：引擎 / 註解 / AUTO_INCREMENT。
+  const optionsEditable = kind === "mysql" && objKind !== "view";
+  const [engine, setEngine] = useState("");
+  const [comment, setComment] = useState("");
+  const [autoInc, setAutoInc] = useState("");
+  const [orig, setOrig] = useState<{ engine: string; comment: string; autoInc: string } | null>(null);
+  const [savingOpts, setSavingOpts] = useState(false);
+
+  const loadStats = () => {
+    api.tableInfo(connId, db, table).then((s) => aliveRef.current && setStats(s)).catch(() => aliveRef.current && setStats([]));
+  };
+  const loadOptions = () => {
+    if (!optionsEditable) return;
+    api.runQuery(connId, tableOptionsSql(db, table)).then((r) => {
+      if (!aliveRef.current || r.rows.length === 0) return;
+      const [e, c, ai] = r.rows[0];
+      setEngine(e ?? ""); setComment(c ?? ""); setAutoInc(ai ?? "");
+      setOrig({ engine: e ?? "", comment: c ?? "", autoInc: ai ?? "" });
+    }).catch(() => {});
+  };
 
   useEffect(() => {
     aliveRef.current = true;
     api.tableColumns(connId, db, table).then((c) => aliveRef.current && setCols(c)).catch(() => aliveRef.current && setCols([]));
     api.tableIndexes(connId, db, table).then((i) => aliveRef.current && setIdx(i)).catch(() => aliveRef.current && setIdx([]));
-    api.tableInfo(connId, db, table).then((s) => aliveRef.current && setStats(s)).catch(() => aliveRef.current && setStats([]));
+    loadStats();
+    loadOptions();
     return () => { aliveRef.current = false; };
-  }, [connId, db, table]);
+  }, [connId, db, table]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const applyOptions = async () => {
+    if (!orig) return;
+    const opts: { engine?: string; comment?: string; autoIncrement?: number } = {};
+    if (engine && engine !== orig.engine) opts.engine = engine;
+    if (comment !== orig.comment) opts.comment = comment;
+    if (autoInc !== orig.autoInc && autoInc.trim() !== "" && Number.isFinite(Number(autoInc)))
+      opts.autoIncrement = Number(autoInc);
+    const sql = buildAlterTableOptions(db, table, opts);
+    if (!sql) { toast.info("沒有變更"); return; }
+    setSavingOpts(true);
+    try {
+      await api.execDdl(connId, sql);
+      toast.success("資料表選項已更新");
+      loadStats(); loadOptions();
+    } catch (e: any) {
+      toast.error(e?.message ?? "更新失敗");
+    } finally {
+      setSavingOpts(false);
+    }
+  };
 
   const countRows = () => {
     setRows("loading");
@@ -73,6 +118,36 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
                   <span className="text-white/85 mono break-all">{v}</span>
                 </div>
               ))}
+            </Section>
+          )}
+
+          {optionsEditable && (
+            <Section title="選項（可編輯）">
+              <div className="px-3 py-2.5 space-y-2.5">
+                <div className="flex items-center gap-3">
+                  <span className="text-white/45 w-20 shrink-0 text-xs">引擎</span>
+                  <select value={engine} onChange={(e) => setEngine(e.target.value)} title="儲存引擎"
+                    className="bg-[#0c1118] border border-white/15 rounded px-2 py-1 text-xs min-w-[140px]">
+                    {engine && !TABLE_ENGINES.includes(engine) && <option value={engine}>{engine}</option>}
+                    {TABLE_ENGINES.map((en) => <option key={en} value={en}>{en}</option>)}
+                  </select>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-white/45 w-20 shrink-0 text-xs">AUTO_INCREMENT</span>
+                  <input value={autoInc} onChange={(e) => setAutoInc(e.target.value.replace(/[^0-9]/g, ""))}
+                    className="bg-[#0c1118] border border-white/15 rounded px-2 py-1 text-xs w-32 mono" placeholder="—" />
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="text-white/45 w-20 shrink-0 text-xs mt-1">註解</span>
+                  <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2}
+                    className="bg-[#0c1118] border border-white/15 rounded px-2 py-1 text-xs flex-1 resize-none" placeholder="（無）" />
+                </div>
+                <div className="flex justify-end">
+                  <button type="button" onClick={applyOptions} disabled={savingOpts || !orig}
+                    className="px-3 py-1.5 text-xs rounded bg-blue-600/80 hover:bg-blue-600 disabled:opacity-40">
+                    {savingOpts ? "套用中…" : "套用"}</button>
+                </div>
+              </div>
             </Section>
           )}
 

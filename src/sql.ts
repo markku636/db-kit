@@ -124,6 +124,27 @@ export function buildReplaceView(kind: DbKind, db: string, name: string, select:
   return `CREATE OR REPLACE VIEW ${qualifiedName(kind, db, name.trim())} AS\n${select.trim()};`;
 }
 
+// 取得資料表選項（MySQL）：引擎 / 註解 / AUTO_INCREMENT，供 TableProperties 編輯前回填。
+export function tableOptionsSql(db: string, table: string): string {
+  return "SELECT ENGINE, TABLE_COMMENT, AUTO_INCREMENT FROM information_schema.TABLES " +
+    `WHERE TABLE_SCHEMA = ${sqlLiteral("mysql", db)} AND TABLE_NAME = ${sqlLiteral("mysql", table)}`;
+}
+// 變更資料表選項（MySQL）：依有變動的欄位組合單一 ALTER TABLE。engine 為關鍵字（呼叫端以白名單下拉確保安全）；
+// comment 為字面值跳脫；autoIncrement 取整數插值。無任何變動回 null。
+export function buildAlterTableOptions(
+  db: string,
+  table: string,
+  opts: { engine?: string; comment?: string; autoIncrement?: number },
+): string | null {
+  const parts: string[] = [];
+  if (opts.engine) parts.push(`ENGINE = ${opts.engine}`);
+  if (opts.comment !== undefined) parts.push(`COMMENT = ${sqlLiteral("mysql", opts.comment)}`);
+  if (opts.autoIncrement !== undefined && Number.isFinite(opts.autoIncrement))
+    parts.push(`AUTO_INCREMENT = ${Math.floor(opts.autoIncrement)}`);
+  if (parts.length === 0) return null;
+  return `ALTER TABLE ${qualifiedName("mysql", db, table)} ${parts.join(", ")}`;
+}
+
 // 資料表維護（MySQL）：ANALYZE / CHECK / OPTIMIZE / REPAIR TABLE，皆回傳狀態結果集。
 export type TableMaintenanceOp = "ANALYZE" | "CHECK" | "OPTIMIZE" | "REPAIR";
 export function buildTableMaintenance(op: TableMaintenanceOp, db: string, table: string): string {

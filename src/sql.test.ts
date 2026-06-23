@@ -25,6 +25,8 @@ import {
   buildReplaceView,
   buildRoutineCall,
   buildTableMaintenance,
+  tableOptionsSql,
+  buildAlterTableOptions,
   buildAddForeignKey,
   buildDropForeignKey,
   buildRowUpdate,
@@ -293,6 +295,24 @@ describe("table/database lifecycle DDL", () => {
   it("buildReplaceView uses CREATE OR REPLACE VIEW and qualifies", () => {
     expect(buildReplaceView("mysql", "db", "v", "SELECT 1")).toBe("CREATE OR REPLACE VIEW `db`.`v` AS\nSELECT 1;");
     expect(buildReplaceView("postgres", "public", "v ", " SELECT 2 ")).toBe('CREATE OR REPLACE VIEW "public"."v" AS\nSELECT 2;');
+  });
+
+  it("tableOptionsSql: information_schema.TABLES for engine/comment/auto_increment", () => {
+    expect(tableOptionsSql("db", "t")).toBe(
+      "SELECT ENGINE, TABLE_COMMENT, AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'db' AND TABLE_NAME = 't'",
+    );
+  });
+  it("buildAlterTableOptions: combines changed parts; null when none", () => {
+    expect(buildAlterTableOptions("db", "t", { engine: "InnoDB" })).toBe("ALTER TABLE `db`.`t` ENGINE = InnoDB");
+    expect(buildAlterTableOptions("db", "t", { comment: "hi" })).toBe("ALTER TABLE `db`.`t` COMMENT = 'hi'");
+    expect(buildAlterTableOptions("db", "t", { autoIncrement: 100 })).toBe("ALTER TABLE `db`.`t` AUTO_INCREMENT = 100");
+    expect(buildAlterTableOptions("db", "t", { engine: "MyISAM", comment: "x", autoIncrement: 5 })).toBe(
+      "ALTER TABLE `db`.`t` ENGINE = MyISAM, COMMENT = 'x', AUTO_INCREMENT = 5",
+    );
+    // 空註解（清除）仍會輸出 COMMENT = ''；註解含單引號跳脫；無變動回 null。
+    expect(buildAlterTableOptions("db", "t", { comment: "" })).toBe("ALTER TABLE `db`.`t` COMMENT = ''");
+    expect(buildAlterTableOptions("db", "t", { comment: "a'b" })).toBe("ALTER TABLE `db`.`t` COMMENT = 'a''b'");
+    expect(buildAlterTableOptions("db", "t", {})).toBeNull();
   });
 
   it("buildTableMaintenance: <OP> TABLE `db`.`t`", () => {
