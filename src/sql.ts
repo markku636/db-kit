@@ -124,6 +124,17 @@ export function buildReplaceView(kind: DbKind, db: string, name: string, select:
   return `CREATE OR REPLACE VIEW ${qualifiedName(kind, db, name.trim())} AS\n${select.trim()};`;
 }
 
+// 呼叫 routine（執行函式 / 預存程序）：函式以 SELECT、程序以 CALL。
+// 引數為使用者輸入的原樣字串（自行加引號 / 型別，如 42, 'abc'），不再跳脫（呼叫端負責），與 DDL 一致。
+export function buildRoutineCall(kind: DbKind, db: string, name: string, routineType: string, args: string): string {
+  const q = qualifiedName(kind, db, name);
+  const a = args.trim();
+  if (routineType === "function") {
+    return kind === "postgres" ? `SELECT * FROM ${q}(${a})` : `SELECT ${q}(${a}) AS result`;
+  }
+  return `CALL ${q}(${a})`;
+}
+
 // 刪除外鍵：MySQL → DROP FOREIGN KEY；PostgreSQL → DROP CONSTRAINT。
 export function buildDropForeignKey(kind: DbKind, db: string, table: string, name: string): string {
   const clause = kind === "mysql" ? "DROP FOREIGN KEY" : "DROP CONSTRAINT";

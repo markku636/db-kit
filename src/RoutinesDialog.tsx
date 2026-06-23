@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, DbKind, RoutineInfo } from "./api";
-import { quoteIdent, qualifiedName } from "./sql";
-import { toast, uiConfirm, useEscToClose } from "./ui";
+import { api, DbKind, RoutineInfo, QueryResult } from "./api";
+import { quoteIdent, qualifiedName, buildRoutineCall } from "./sql";
+import { toast, uiConfirm, uiPrompt, useEscToClose } from "./ui";
 
 const TYPE_LABEL: Record<string, string> = { procedure: "預存程序", function: "函式", trigger: "觸發器" };
 
@@ -56,6 +56,7 @@ export default function RoutinesDialog({ connId, db, kind, onClose }: {
   const [editingRoutine, setEditingRoutine] = useState<RoutineInfo | null>(null);
   const [replace, setReplace] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [execResult, setExecResult] = useState<{ title: string; result: QueryResult } | null>(null);
 
   const refresh = useCallback(async () => {
     setList(null);
@@ -91,6 +92,24 @@ export default function RoutinesDialog({ connId, db, kind, onClose }: {
     try { await api.execDdl(connId, buildDropRoutine(kind, db, r)); toast.success(`已刪除「${r.name}」`); refresh(); }
     catch (e: any) { toast.error(e?.message ?? "刪除失敗"); }
   };
+  // 執行函式 / 預存程序（對標 Navicat「執行函式」）：詢問引數後以 SELECT / CALL 執行並顯示結果。
+  const execute = async (r: RoutineInfo) => {
+    const hint = r.signature ? `引數：${r.signature}` : "無引數";
+    const args = await uiPrompt(`執行${TYPE_LABEL[r.routine_type] ?? ""}「${r.name}」\n${hint}\n請輸入引數（以逗號分隔，自行加引號，如 42, 'abc'）：`, {
+      title: "執行", placeholder: "（無引數可留空）",
+    });
+    if (args === null) return;
+    setBusy(true);
+    try {
+      const res = await api.runQuery(connId, buildRoutineCall(kind, db, r.name, r.routine_type, args));
+      setExecResult({ title: `${r.name}(${args.trim()})`, result: res });
+    } catch (e: any) {
+      toast.error(e?.message ?? "執行失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const run = async () => {
     if (busy || !sqlText.trim()) return;
     setBusy(true);
@@ -147,6 +166,10 @@ export default function RoutinesDialog({ connId, db, kind, onClose }: {
                         <td className="px-3 py-1.5 text-white/60">{TYPE_LABEL[r.routine_type] ?? r.routine_type}</td>
                         <td className="px-3 py-1.5 text-white/40 mono">{r.parent ?? "—"}</td>
                         <td className="px-3 py-1.5 text-right whitespace-nowrap">
+                          {(r.routine_type === "function" || r.routine_type === "procedure") && (
+                            <button type="button" onClick={() => execute(r)} disabled={busy}
+                              className="text-xs text-green-400 hover:text-green-300 disabled:opacity-40 px-1">執行</button>
+                          )}
                           <button type="button" onClick={() => openEdit(r)} className="text-xs text-blue-400 hover:text-blue-300 px-1">編輯</button>
                           <button type="button" onClick={() => drop(r)} className="text-xs text-red-400 hover:text-red-300 px-1">刪除</button>
                         </td>
@@ -185,6 +208,41 @@ export default function RoutinesDialog({ connId, db, kind, onClose }: {
           </>
         )}
       </div>
+
+      {execResult && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[97]" onClick={() => setExecResult(null)}>
+          <div className="bg-[#1a212b] w-[720px] max-w-[94vw] max-h-[78vh] flex flex-col rounded-lg border border-white/10 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-white/10 flex items-center gap-2">
+              <span className="font-medium text-sm">執行結果：{execResult.title}</span>
+              <span className="ml-auto text-xs text-white/40">{execResult.result.rows.length} 筆 · 影響 {execResult.result.rows_affected}</span>
+              <button type="button" onClick={() => setExecResult(null)} className="text-white/40 hover:text-white">✕</button>
+            </div>
+            <div className="flex-1 overflow-auto">
+              {execResult.result.columns.length === 0 ? (
+                <div className="text-white/50 text-sm p-5">已執行（無結果集）。</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-[#10161e] text-white/45">
+                    <tr>{execResult.result.columns.map((c) => <th key={c} className="text-left px-3 py-1.5 font-normal whitespace-nowrap">{c}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {execResult.result.rows.map((row, i) => (
+                      <tr key={i} className="border-t border-white/5 hover:bg-white/5">
+                        {row.map((v, j) => (
+                          <td key={j} className="px-3 py-1 mono text-white/80 max-w-[360px] truncate" title={v ?? "NULL"}>
+                            {v ?? <span className="text-white/30">NULL</span>}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

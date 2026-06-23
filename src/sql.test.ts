@@ -23,6 +23,7 @@ import {
   buildCreateView,
   viewDefinitionSql,
   buildReplaceView,
+  buildRoutineCall,
   buildAddForeignKey,
   buildDropForeignKey,
   buildRowUpdate,
@@ -291,6 +292,13 @@ describe("table/database lifecycle DDL", () => {
   it("buildReplaceView uses CREATE OR REPLACE VIEW and qualifies", () => {
     expect(buildReplaceView("mysql", "db", "v", "SELECT 1")).toBe("CREATE OR REPLACE VIEW `db`.`v` AS\nSELECT 1;");
     expect(buildReplaceView("postgres", "public", "v ", " SELECT 2 ")).toBe('CREATE OR REPLACE VIEW "public"."v" AS\nSELECT 2;');
+  });
+
+  it("buildRoutineCall: function via SELECT, procedure via CALL, per-kind", () => {
+    expect(buildRoutineCall("mysql", "db", "fn", "function", "1, 2")).toBe("SELECT `db`.`fn`(1, 2) AS result");
+    expect(buildRoutineCall("mysql", "db", "p", "procedure", "'x'")).toBe("CALL `db`.`p`('x')");
+    expect(buildRoutineCall("postgres", "public", "fn", "function", "")).toBe('SELECT * FROM "public"."fn"()');
+    expect(buildRoutineCall("postgres", "public", "p", "procedure", "3")).toBe('CALL "public"."p"(3)');
   });
 
   it("buildAddForeignKey: ALTER ADD CONSTRAINT … FOREIGN KEY … REFERENCES", () => {
