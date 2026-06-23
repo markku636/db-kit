@@ -16,8 +16,10 @@ import {
   QUERY_HISTORY_KEY,
   buildCreateTable,
   buildDropTable,
+  buildDropView,
   buildTruncateTable,
   buildRenameTable,
+  isSystemDatabase,
   type NewColumn,
 } from "./sql";
 
@@ -235,5 +237,32 @@ describe("table/database lifecycle DDL", () => {
     expect(buildRenameTable("mysql", "db", "old", "new")).toBe("RENAME TABLE `db`.`old` TO `db`.`new`;");
     expect(buildRenameTable("postgres", "public", "old", "new")).toBe('ALTER TABLE "public"."old" RENAME TO "new";');
     expect(buildRenameTable("sqlite", "main", "old", "new")).toBe("ALTER TABLE `old` RENAME TO `new`;");
+  });
+
+  it("buildDropView uses DROP VIEW (not DROP TABLE) and qualifies", () => {
+    expect(buildDropView("postgres", "public", "v")).toBe('DROP VIEW "public"."v";');
+    expect(buildDropView("mysql", "db", "v")).toBe("DROP VIEW `db`.`v`;");
+  });
+});
+
+describe("isSystemDatabase", () => {
+  it("PostgreSQL: pg_* and information_schema are system; public/user are not", () => {
+    expect(isSystemDatabase("postgres", "pg_catalog")).toBe(true);
+    expect(isSystemDatabase("postgres", "pg_toast")).toBe(true);
+    expect(isSystemDatabase("postgres", "information_schema")).toBe(true);
+    expect(isSystemDatabase("postgres", "public")).toBe(false);
+    expect(isSystemDatabase("postgres", "app")).toBe(false);
+  });
+  it("MySQL: mysql/sys/performance_schema/information_schema are system (case-insensitive)", () => {
+    expect(isSystemDatabase("mysql", "mysql")).toBe(true);
+    expect(isSystemDatabase("mysql", "SYS")).toBe(true);
+    expect(isSystemDatabase("mysql", "performance_schema")).toBe(true);
+    expect(isSystemDatabase("mysql", "testdb")).toBe(false);
+  });
+  it("MongoDB: admin/config/local are system", () => {
+    expect(isSystemDatabase("mongo", "admin")).toBe(true);
+    expect(isSystemDatabase("mongo", "config")).toBe(true);
+    expect(isSystemDatabase("mongo", "local")).toBe(true);
+    expect(isSystemDatabase("mongo", "shop")).toBe(false);
   });
 });

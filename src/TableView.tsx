@@ -209,6 +209,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
     });
   };
 
+  // 外部資料重載信號（如 TRUNCATE 後）：nonce 變動即觸發重新查詢，保留分頁 / 篩選狀態。
+  const reloadNonce = useStore((s) => s.dataReload[tab.key] ?? 0);
+
   const load = () => {
     let cancelled = false;
     setLoading(true);
@@ -236,7 +239,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     };
   };
 
-  useEffect(load, [tab.connId, tab.database, tab.table, page, pageSize, sorts, filters, matchAny]);
+  useEffect(load, [tab.connId, tab.database, tab.table, page, pageSize, sorts, filters, matchAny, reloadNonce]);
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total_rows / pageSize)) : 1;
   const startRow = data ? page * pageSize : 0;

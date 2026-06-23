@@ -14,7 +14,7 @@ import {
   loadSavedQueries, persistSavedQueries,
   resultToTsv, resultToJson, resultToCsv, fmtElapsed, splitSqlStatements,
   quoteIdent, qualifiedName,
-  buildDropTable, buildTruncateTable, buildRenameTable,
+  buildDropTable, buildDropView, buildTruncateTable, buildRenameTable, isSystemDatabase,
 } from "./sql";
 import type { SavedQuery } from "./sql";
 
@@ -275,9 +275,9 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   const [designTable, setDesignTable] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
   // 連線 / 表 搜尋過濾字串
   const [filter, setFilter] = useState("");
-  // 右鍵選單（SQL 表節點：產生 SQL）
+  // 右鍵選單（SQL 表節點：產生 SQL）。objKind 為物件種類（"table" | "view"），決定生命週期 DDL。
   const [tableMenu, setTableMenu] = useState<
-    { connId: string; db: string; table: string; kind: DbKind; x: number; y: number } | null
+    { connId: string; db: string; table: string; kind: DbKind; objKind: string; x: number; y: number } | null
   >(null);
 
   const setBusy = (id: string, on: boolean) =>
@@ -366,13 +366,16 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
     }
   };
 
-  // 強制重載某資料庫的表 / 集合清單（新增表 / 集合後刷新樹狀）。
+  // 強制重載某資料庫的表 / 集合清單（新增 / 刪除表 / 集合後刷新樹狀）。
+  // 註：折疊中的節點會被展開以呈現剛建立的項目（刻意，符合「建立後即見」預期）。
   const refreshTables = async (connId: string, db: string) => {
     try {
       const tables = await api.listTables(connId, db);
       setExpandedDbs((e) => ({ ...e, [`${connId}:${db}`]: tables }));
-    } catch {
-      /* 略過刷新失敗 */
+    } catch (e: any) {
+      // 與同檔 toggleDb 的錯誤處理一致：DDL 已成功，僅清單刷新失敗時告知使用者手動重整。
+      console.warn("refreshTables failed", e);
+      toast.error("清單刷新失敗，請手動重新整理該資料庫");
     }
   };
 
@@ -433,17 +436,25 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
     }
   };
 
-  // 刪除資料庫 / schema（DROP DATABASE / DROP SCHEMA CASCADE / Mongo drop）。高破壞性，需確認。
+  // 刪除資料庫 / schema（DROP DATABASE / DROP SCHEMA CASCADE / Mongo drop）。
+  // 高破壞且 CASCADE 不可逆，採 type-to-confirm（須輸入正確名稱）取代單鍵確認。後端另有系統庫硬擋。
   const dropDatabase = async (connId: string, db: string, kind: DbKind) => {
     const noun = kind === "postgres" ? "Schema" : "資料庫";
-    const ok = await uiConfirm(`刪除${noun}「${db}」？其下所有資料表 / 物件將一併刪除，無法復原。`, {
-      title: `刪除${noun}`,
-      danger: true,
-      confirmText: "刪除",
-    });
-    if (!ok) return;
+    const cascade = kind === "postgres" ? "DROP SCHEMA … CASCADE" : kind === "mysql" ? "DROP DATABASE" : "dropDatabase";
+    const isDefault = kind === "postgres" && db === "public";
+    const warn = isDefault ? `\n注意：「${db}」是此連線的預設工作 schema。` : "";
+    const typed = await uiPrompt(
+      `此操作將執行 ${cascade}，連帶刪除「${db}」下所有資料表 / 視圖 / 物件，無法復原。${warn}\n請輸入「${db}」以確認：`,
+      { title: `刪除${noun}`, confirmText: "刪除", placeholder: db },
+    );
+    if (typed == null) return; // 取消
+    if (typed.trim() !== db) {
+      toast.error("名稱不符，已取消刪除");
+      return;
+    }
     try {
       await api.dropDatabase(connId, db);
+      useStore.getState().closeTablesUnder(connId, db);
       toast.success(`已刪除${noun}「${db}」`);
       refreshDbs(connId);
     } catch (e: any) {
@@ -454,7 +465,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   // ---- 產生 SQL（致敬 Navicat / DBeaver 的 SQL 範本）----
   const quoteId = quoteIdent;
   const qualified = qualifiedName;
-  type TblRef = { connId: string; db: string; table: string; kind: DbKind };
+  type TblRef = { connId: string; db: string; table: string; kind: DbKind; objKind?: string };
   const sendQuery = (connId: string, sql: string) => {
     useStore.getState().setActive(connId);
     useStore.getState().requestQuery(sql);
@@ -489,6 +500,11 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
     if (!name?.trim() || name.trim() === m.table) return;
     try {
       await api.runQuery(m.connId, buildRenameTable(m.kind, m.db, m.table, name.trim()));
+      // 舊分頁鍵已失效：關閉並以新名重開（保留使用者上下文）。
+      const oldKey = `${m.connId}:${m.db}:${m.table}`;
+      const wasOpen = useStore.getState().tabs.some((t) => t.key === oldKey);
+      useStore.getState().closeTableTab(m.connId, m.db, m.table);
+      if (wasOpen) useStore.getState().openTable(m.connId, m.db, name.trim());
       toast.success(`已重新命名為「${name.trim()}」`);
       refreshTables(m.connId, m.db);
     } catch (e: any) {
@@ -502,19 +518,25 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
     if (!ok) return;
     try {
       await api.runQuery(m.connId, buildTruncateTable(m.kind, m.db, m.table));
+      // 資料表仍存在（不關分頁）；若該表資料頁開著，強制重載以反映清空。
+      useStore.getState().bumpDataReload(m.connId, m.db, m.table);
       toast.success(`已清空「${m.table}」`);
     } catch (e: any) {
       toast.error(e?.message ?? "清空失敗");
     }
   };
   const dropTable = async (m: TblRef) => {
-    const ok = await uiConfirm(`刪除資料表「${m.table}」？此動作無法復原。`, {
-      title: "刪除資料表", danger: true, confirmText: "刪除",
+    const isView = m.objKind === "view";
+    const noun = isView ? "視圖" : "資料表";
+    const ok = await uiConfirm(`刪除${noun}「${m.table}」？此動作無法復原。`, {
+      title: `刪除${noun}`, danger: true, confirmText: "刪除",
     });
     if (!ok) return;
     try {
-      await api.runQuery(m.connId, buildDropTable(m.kind, m.db, m.table));
-      toast.success(`已刪除資料表「${m.table}」`);
+      const sql = isView ? buildDropView(m.kind, m.db, m.table) : buildDropTable(m.kind, m.db, m.table);
+      await api.runQuery(m.connId, sql);
+      useStore.getState().closeTableTab(m.connId, m.db, m.table); // 物件消失，連帶關分頁
+      toast.success(`已刪除${noun}「${m.table}」`);
       refreshTables(m.connId, m.db);
     } catch (e: any) {
       toast.error(e?.message ?? "刪除失敗");
@@ -527,6 +549,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
     if (!ok) return;
     try {
       await api.dropCollection(m.connId, m.db, m.table);
+      useStore.getState().closeTableTab(m.connId, m.db, m.table); // 物件消失，連帶關分頁
       toast.success(`已刪除集合「${m.table}」`);
       refreshTables(m.connId, m.db);
     } catch (e: any) {
@@ -647,7 +670,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                               ? (e) => {
                                   e.preventDefault();
                                   setActive(c.id);
-                                  setTableMenu({ connId: c.id, db, table: t.name, kind: c.kind, x: e.clientX, y: e.clientY });
+                                  setTableMenu({ connId: c.id, db, table: t.name, kind: c.kind, objKind: t.kind, x: e.clientX, y: e.clientY });
                                 }
                               : undefined
                           }
@@ -718,12 +741,17 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                       ["清空 DB（FLUSHDB）", () => flushDb(dbMenu.connId, dbMenu.db), true],
                     ]
                   : dbConn?.kind === "mongo"
-                  ? [
-                      ["新增集合…", () => createCollection(dbMenu.connId, dbMenu.db), false],
-                      ["新增資料庫…", () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
-                      ["編輯屬性…", editConn, false],
-                      ["刪除資料庫…", () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true],
-                    ]
+                  ? ((): [string, () => void, boolean][] => {
+                      const arr: [string, () => void, boolean][] = [
+                        ["新增集合…", () => createCollection(dbMenu.connId, dbMenu.db), false],
+                        ["新增資料庫…", () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
+                        ["編輯屬性…", editConn, false],
+                      ];
+                      // 系統庫（admin/config/local）不顯示刪除（後端亦硬擋）。
+                      if (!isSystemDatabase("mongo", dbMenu.db))
+                        arr.push(["刪除資料庫…", () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
+                      return arr;
+                    })()
                   : ((): [string, () => void, boolean][] => {
                       const k = dbConn?.kind;
                       const noun = k === "postgres" ? "Schema" : "資料庫";
@@ -734,7 +762,10 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                       if (k !== "sqlite") arr.push([`新增${noun}…`, () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false]);
                       arr.push(["匯出結構 SQL…", () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
                       arr.push(["編輯屬性…", editConn, false]);
-                      if (k !== "sqlite") arr.push([`刪除${noun}…`, () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
+                      // 系統 schema / 庫，以及 MySQL 使用中的預設庫，不顯示刪除（後端亦硬擋）。
+                      const isDefault = k === "mysql" && dbConn?.database === dbMenu.db;
+                      if (k !== "sqlite" && k && !isSystemDatabase(k, dbMenu.db) && !isDefault)
+                        arr.push([`刪除${noun}…`, () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
                       return arr;
                     })();
               return items.map(([label, fn, danger]) => (
@@ -764,17 +795,26 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                     ["複製集合名", () => copyToClipboard(tableMenu.table, "已複製集合名")],
                     ["刪除集合", () => dropCollection(tableMenu), true],
                   ] as [string, () => void, boolean?][])
-                : ([
-                    ["開啟資料表", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table)],
-                    ["查詢前 100 筆", () => genSelect(tableMenu)],
-                    ["SELECT COUNT(*)", () => genCount(tableMenu)],
-                    ["產生 INSERT 範本", () => genInsert(tableMenu)],
-                    ["複製建表 SQL", () => copyDdl(tableMenu)],
-                    ["複製表名", () => copyToClipboard(tableMenu.table, "已複製表名")],
-                    ["重新命名…", () => renameTable(tableMenu)],
-                    ["清空資料表", () => truncateTable(tableMenu), true],
-                    ["刪除資料表", () => dropTable(tableMenu), true],
-                  ] as [string, () => void, boolean?][])
+                : ((): [string, () => void, boolean?][] => {
+                    const isView = tableMenu.objKind === "view";
+                    const arr: [string, () => void, boolean?][] = [
+                      ["開啟資料表", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table)],
+                    ];
+                    // 設計表結構：直接開啟結構分頁（欄位增刪改名 + 索引管理）。視圖無可設計結構，略過。
+                    if (!isView) arr.push(["設計表結構…", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table, "structure")]);
+                    arr.push(
+                      ["查詢前 100 筆", () => genSelect(tableMenu)],
+                      ["SELECT COUNT(*)", () => genCount(tableMenu)],
+                      ["產生 INSERT 範本", () => genInsert(tableMenu)],
+                      ["複製建表 SQL", () => copyDdl(tableMenu)],
+                      ["複製表名", () => copyToClipboard(tableMenu.table, "已複製表名")],
+                      ["重新命名…", () => renameTable(tableMenu)],
+                    );
+                    // TRUNCATE 對視圖無效，僅資料表顯示「清空」。
+                    if (!isView) arr.push(["清空資料表", () => truncateTable(tableMenu), true]);
+                    arr.push([isView ? "刪除視圖" : "刪除資料表", () => dropTable(tableMenu), true]);
+                    return arr;
+                  })()
             ).map(([label, fn, danger]) => (
               <button key={label} type="button"
                 onClick={() => { setTableMenu(null); fn(); }}

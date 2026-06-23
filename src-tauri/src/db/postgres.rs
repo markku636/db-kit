@@ -397,6 +397,11 @@ impl DatabaseDriver for PostgresDriver {
     }
 
     async fn drop_database(&self, name: &str) -> AppResult<()> {
+        // 後端硬性護欄：系統 schema 一律拒絕（pg_* 與 information_schema）。
+        // public 為使用者預設工作 schema，前端以 type-to-confirm 加強確認，此處不硬擋（容許刻意刪除重建）。
+        if name.starts_with("pg_") || name.eq_ignore_ascii_case("information_schema") {
+            return Err(AppError::Query(format!("拒絕刪除 PostgreSQL 系統 schema「{name}」")));
+        }
         // PG「刪除資料庫」對應 DROP SCHEMA … CASCADE（連帶其表 / 物件）。
         let sql = format!("DROP SCHEMA {} CASCADE", quote_ident(name));
         sqlx::query(&sql)

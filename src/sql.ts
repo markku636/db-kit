@@ -61,6 +61,20 @@ export function buildDropTable(kind: DbKind, db: string, table: string): string 
   return `DROP TABLE ${qualifiedName(kind, db, table)};`;
 }
 
+// 視圖以 DROP VIEW 刪除（DROP TABLE 對 view 在三種 SQL 皆報錯）。
+export function buildDropView(kind: DbKind, db: string, table: string): string {
+  return `DROP VIEW ${qualifiedName(kind, db, table)};`;
+}
+
+// 系統資料庫 / schema：前端據此隱藏刪除項，後端亦硬性拒絕（雙重防護）。public 不算系統（可刻意刪重建）。
+export function isSystemDatabase(kind: DbKind, name: string): boolean {
+  const n = name.toLowerCase();
+  if (kind === "postgres") return n.startsWith("pg_") || n === "information_schema";
+  if (kind === "mysql") return ["information_schema", "mysql", "performance_schema", "sys"].includes(n);
+  if (kind === "mongo") return ["admin", "config", "local"].includes(n);
+  return false;
+}
+
 // 清空：SQLite 無 TRUNCATE，改用 DELETE FROM（仍清空全表）。
 export function buildTruncateTable(kind: DbKind, db: string, table: string): string {
   const q = qualifiedName(kind, db, table);

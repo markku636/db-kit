@@ -22,6 +22,8 @@ interface AppStore {
   activeTabKey: string | null;
   // 由側欄「產生 SQL」送往查詢編輯器的待載入語句（消費後清空）。
   pendingSql: string | null;
+  // 資料重載信號：key（connId:db:table）→ nonce，外部操作（如 TRUNCATE）後遞增以強制開啟中的資料頁重載。
+  dataReload: Record<string, number>;
 
   setConnections: (cs: ConnectionConfig[]) => void;
   addConnection: (c: ConnectionConfig) => void;
@@ -30,15 +32,20 @@ interface AppStore {
   markConnected: (id: string) => void;
   markDisconnected: (id: string) => void;
 
-  openTable: (connId: string, database: string, table: string) => void;
+  openTable: (connId: string, database: string, table: string, view?: "data" | "structure") => void;
   closeTab: (key: string) => void;
   closeOtherTabs: (key: string) => void;
   closeAllTabs: () => void;
   setActiveTab: (key: string) => void;
   setTabView: (key: string, view: "data" | "structure") => void;
+  // 物件被刪除時連帶關閉其分頁（沿用 markDisconnected 的清理慣例）。
+  closeTableTab: (connId: string, database: string, table: string) => void;
+  closeTablesUnder: (connId: string, database: string) => void;
   // 將一段 SQL 載入查詢編輯器並切到查詢分頁。
   requestQuery: (sql: string) => void;
   clearPendingSql: () => void;
+  // 遞增某表的資料重載 nonce（TRUNCATE 後呼叫，使開啟中的資料頁重新查詢）。
+  bumpDataReload: (connId: string, database: string, table: string) => void;
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -48,6 +55,7 @@ export const useStore = create<AppStore>((set) => ({
   tabs: [],
   activeTabKey: null,
   pendingSql: null,
+  dataReload: {},
 
   setConnections: (cs) => set({ connections: cs }),
   addConnection: (c) =>
@@ -78,13 +86,14 @@ export const useStore = create<AppStore>((set) => ({
       };
     }),
 
-  openTable: (connId, database, table) =>
+  openTable: (connId, database, table, view = "data") =>
     set((s) => {
       const key = `${connId}:${database}:${table}`;
       if (s.tabs.some((t) => t.key === key)) {
-        return { activeTabKey: key };
+        // 已開啟：切到該分頁，並套用指定檢視（如從右鍵「設計表結構」直接進結構頁）。
+        return { activeTabKey: key, tabs: s.tabs.map((t) => (t.key === key ? { ...t, view } : t)) };
       }
-      const tab: OpenTab = { key, connId, database, table, view: "data" };
+      const tab: OpenTab = { key, connId, database, table, view };
       return { tabs: [...s.tabs, tab], activeTabKey: key };
     }),
   closeTab: (key) =>
@@ -111,4 +120,29 @@ export const useStore = create<AppStore>((set) => ({
     set((s) => ({
       tabs: s.tabs.map((t) => (t.key === key ? { ...t, view } : t)),
     })),
+  closeTableTab: (connId, database, table) =>
+    set((s) => {
+      const key = `${connId}:${database}:${table}`;
+      const tabs = s.tabs.filter((t) => t.key !== key);
+      return {
+        tabs,
+        activeTabKey:
+          s.activeTabKey === key ? (tabs.length ? tabs[tabs.length - 1].key : null) : s.activeTabKey,
+      };
+    }),
+  closeTablesUnder: (connId, database) =>
+    set((s) => {
+      const tabs = s.tabs.filter((t) => !(t.connId === connId && t.database === database));
+      // 保留查詢編輯器哨兵鍵；作用中分頁若被關閉則退回最後一個。
+      const stillActive = s.activeTabKey === "__query__" || tabs.some((t) => t.key === s.activeTabKey);
+      return {
+        tabs,
+        activeTabKey: stillActive ? s.activeTabKey : tabs.length ? tabs[tabs.length - 1].key : null,
+      };
+    }),
+  bumpDataReload: (connId, database, table) =>
+    set((s) => {
+      const key = `${connId}:${database}:${table}`;
+      return { dataReload: { ...s.dataReload, [key]: (s.dataReload[key] ?? 0) + 1 } };
+    }),
 }));

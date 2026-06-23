@@ -566,6 +566,11 @@ impl DatabaseDriver for MongoDriver {
     }
 
     async fn drop_database(&self, name: &str) -> AppResult<()> {
+        // 後端硬性護欄：MongoDB 系統庫一律拒絕（drop config 會毀分片中繼資料、drop admin 會清使用者/角色）。
+        const SYS: [&str; 3] = ["admin", "config", "local"];
+        if SYS.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+            return Err(AppError::Query(format!("拒絕刪除 MongoDB 系統資料庫「{name}」")));
+        }
         self.client
             .database(name)
             .drop()

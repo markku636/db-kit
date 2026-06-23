@@ -668,6 +668,10 @@ async fn mysql_full() {
     assert!(d.list_databases().await.unwrap().contains(&"atkit_newdb".to_string()), "新增資料庫應出現於清單");
     d.drop_database("atkit_newdb").await.unwrap();
     assert!(!d.list_databases().await.unwrap().contains(&"atkit_newdb".to_string()), "刪除後資料庫應消失");
+    // 安全護欄：系統庫與使用中的預設庫（testdb）皆不可刪除。
+    assert!(d.drop_database("mysql").await.is_err(), "系統庫 mysql 不可刪除");
+    assert!(d.drop_database("information_schema").await.is_err(), "系統庫 information_schema 不可刪除");
+    assert!(d.drop_database("testdb").await.is_err(), "使用中的預設庫不可刪除");
 
     // 建表 DDL + 索引（驗證本次新增的 table_ddl / table_indexes）
     let ddl = d.table_ddl("testdb", "t").await.unwrap();
@@ -890,6 +894,9 @@ async fn postgres_full() {
     assert!(d.list_databases().await.unwrap().contains(&"atkit_newschema".to_string()), "新增 schema 應出現");
     d.drop_database("atkit_newschema").await.unwrap();
     assert!(!d.list_databases().await.unwrap().contains(&"atkit_newschema".to_string()), "刪除後 schema 應消失");
+    // 安全護欄：系統 schema（pg_*、information_schema）不可刪除。
+    assert!(d.drop_database("pg_catalog").await.is_err(), "系統 schema pg_catalog 不可刪除");
+    assert!(d.drop_database("information_schema").await.is_err(), "系統 schema information_schema 不可刪除");
 
     // 建表 DDL（欄位重建）+ 索引（pg_index）
     let ddl = d.table_ddl("public", "t").await.unwrap();
@@ -1304,6 +1311,9 @@ async fn mongo_full() {
         !d.list_tables("testdb").await.unwrap().iter().any(|t| t.name == nc),
         "刪除後集合 {nc} 應消失"
     );
+    // 安全護欄：MongoDB 系統庫不可刪除。
+    assert!(d.drop_database("admin").await.is_err(), "Mongo 系統庫 admin 不可刪除");
+    assert!(d.drop_database("config").await.is_err(), "Mongo 系統庫 config 不可刪除");
 
     // query() JSON 介面 + limit（驗證 sort/projection/limit 擴充）：2 筆中 limit 1 → 回 1 筆
     let q = format!("{{\"db\":\"testdb\",\"collection\":\"{coll}\",\"filter\":{{}},\"limit\":1}}");

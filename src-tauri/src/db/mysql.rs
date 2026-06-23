@@ -17,7 +17,12 @@ use crate::error::{AppError, AppResult};
 /// - Drop / close 時 drain pool
 pub struct MysqlDriver {
     pool: MySqlPool,
+    /// 連線時的預設資料庫；drop_database 用以阻擋刪除「使用中的預設庫」（會使連線後續查詢失效）。
+    default_db: Option<String>,
 }
+
+/// MySQL 系統資料庫（不可刪除）。
+const MYSQL_SYSTEM_DBS: [&str; 4] = ["information_schema", "mysql", "performance_schema", "sys"];
 
 #[async_trait::async_trait]
 impl DatabaseDriver for MysqlDriver {
@@ -43,7 +48,8 @@ impl DatabaseDriver for MysqlDriver {
             .await
             .map_err(|e| AppError::Connect(e.to_string()))?;
 
-        let driver = Self { pool };
+        let default_db = config.database.clone().filter(|s| !s.is_empty());
+        let driver = Self { pool, default_db };
         driver.ping().await?;
         Ok(driver)
     }
@@ -372,6 +378,15 @@ impl DatabaseDriver for MysqlDriver {
     }
 
     async fn drop_database(&self, name: &str) -> AppResult<()> {
+        // 後端硬性護欄：系統庫一律拒絕；使用中的預設庫亦拒絕（drop 後連線預設 schema 失效）。
+        if MYSQL_SYSTEM_DBS.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+            return Err(AppError::Query(format!("拒絕刪除 MySQL 系統資料庫「{name}」")));
+        }
+        if self.default_db.as_deref() == Some(name) {
+            return Err(AppError::Query(format!(
+                "「{name}」是此連線使用中的預設資料庫，無法刪除；請改用其他連線或先變更連線預設庫"
+            )));
+        }
         let sql = format!("DROP DATABASE {}", quote_ident(name));
         sqlx::query(&sql)
             .execute(&self.pool)
