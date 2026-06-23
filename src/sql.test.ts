@@ -32,6 +32,8 @@ import {
   databaseOptionsSql,
   buildAlterDatabaseCharset,
   tableSizesSql,
+  diffNameLists,
+  diffColumns,
   buildAddForeignKey,
   buildRenameIndex,
   buildCreateFulltextIndex,
@@ -331,6 +333,30 @@ describe("table/database lifecycle DDL", () => {
       "ALTER DATABASE `shop` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci",
     );
   });
+  it("diffNameLists: only-in-source / only-in-target / common (sorted, deduped)", () => {
+    expect(diffNameLists(["a", "b", "c"], ["b", "c", "d"])).toEqual({
+      onlyInSource: ["a"], onlyInTarget: ["d"], common: ["b", "c"],
+    });
+    expect(diffNameLists(["x", "x"], [])).toEqual({ onlyInSource: ["x"], onlyInTarget: [], common: [] });
+  });
+  it("diffColumns: added / removed / changed (type or nullability)", () => {
+    const src = [
+      { name: "id", data_type: "int", nullable: false },
+      { name: "name", data_type: "varchar(50)", nullable: true },
+      { name: "extra", data_type: "text", nullable: true },
+    ];
+    const tgt = [
+      { name: "id", data_type: "int", nullable: false },
+      { name: "name", data_type: "varchar(100)", nullable: false },
+      { name: "old", data_type: "int", nullable: true },
+    ];
+    expect(diffColumns(src, tgt)).toEqual({
+      added: ["extra"],
+      removed: ["old"],
+      changed: [{ name: "name", source: "varchar(50) NULL", target: "varchar(100) NOT NULL" }],
+    });
+  });
+
   it("tableSizesSql: escapes schema, base tables only, ordered by size", () => {
     const s = tableSizesSql("shop");
     expect(s).toContain("FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'shop' AND TABLE_TYPE = 'BASE TABLE'");

@@ -150,6 +150,39 @@ export function buildAlterDatabaseCharset(db: string, charset: string, collation
   const coll = collation.trim() ? ` COLLATE ${collation.trim()}` : "";
   return `ALTER DATABASE ${quoteIdent("mysql", db)} CHARACTER SET ${charset}${coll}`;
 }
+// ---- 結構比對（schema compare）：純函式 diff，供單元測試 ----
+// 以「來源」為基準比對名稱清單：onlyInSource = 來源有目標無（需在目標建立）；onlyInTarget 反之；common = 兩邊皆有。
+export interface NameDiff { onlyInSource: string[]; onlyInTarget: string[]; common: string[] }
+export function diffNameLists(source: string[], target: string[]): NameDiff {
+  const s = new Set(source), t = new Set(target);
+  return {
+    onlyInSource: [...new Set(source)].filter((n) => !t.has(n)).sort(),
+    onlyInTarget: [...new Set(target)].filter((n) => !s.has(n)).sort(),
+    common: [...new Set(source)].filter((n) => t.has(n)).sort(),
+  };
+}
+// 欄位比對：以來源為基準。added = 來源有目標無；removed = 目標有來源無；changed = 兩邊同名但型別 / 可空不同。
+export interface SchemaColumn { name: string; data_type: string; nullable: boolean }
+export interface ColumnDiff {
+  added: string[];
+  removed: string[];
+  changed: { name: string; source: string; target: string }[];
+}
+export function diffColumns(source: SchemaColumn[], target: SchemaColumn[]): ColumnDiff {
+  const tByName = new Map(target.map((c) => [c.name, c]));
+  const sByName = new Map(source.map((c) => [c.name, c]));
+  const fmt = (c: SchemaColumn) => `${c.data_type}${c.nullable ? " NULL" : " NOT NULL"}`;
+  const added = source.filter((c) => !tByName.has(c.name)).map((c) => c.name).sort();
+  const removed = target.filter((c) => !sByName.has(c.name)).map((c) => c.name).sort();
+  const changed: ColumnDiff["changed"] = [];
+  for (const c of source) {
+    const o = tByName.get(c.name);
+    if (o && fmt(c) !== fmt(o)) changed.push({ name: c.name, source: fmt(c), target: fmt(o) });
+  }
+  changed.sort((a, b) => a.name.localeCompare(b.name));
+  return { added, removed, changed };
+}
+
 // 資料庫內各表大小報表（MySQL）：依資料 + 索引大小由大到小，協助找出佔空間的表。
 export function tableSizesSql(db: string): string {
   return (
