@@ -270,6 +270,21 @@ export function buildAlterUserPassword(name: string, host: string, password: str
 export function buildSetUserLock(name: string, host: string, locked: boolean): string {
   return `ALTER USER ${mysqlAccount(name, host)} ACCOUNT ${locked ? "LOCK" : "UNLOCK"}`;
 }
+// 設定帳號資源限制（ALTER USER … WITH …，對標 Navicat 使用者每小時限制 / 最大連線；0 = 無限制）。
+// 各值為非負整數（呼叫端以數字輸入確保安全），原樣插值。無任何項目回 null。
+export function buildAlterUserLimits(
+  name: string,
+  host: string,
+  limits: { queries?: number; updates?: number; connections?: number; userConnections?: number },
+): string | null {
+  const parts: string[] = [];
+  if (limits.queries !== undefined) parts.push(`MAX_QUERIES_PER_HOUR ${Math.max(0, Math.floor(limits.queries))}`);
+  if (limits.updates !== undefined) parts.push(`MAX_UPDATES_PER_HOUR ${Math.max(0, Math.floor(limits.updates))}`);
+  if (limits.connections !== undefined) parts.push(`MAX_CONNECTIONS_PER_HOUR ${Math.max(0, Math.floor(limits.connections))}`);
+  if (limits.userConnections !== undefined) parts.push(`MAX_USER_CONNECTIONS ${Math.max(0, Math.floor(limits.userConnections))}`);
+  if (parts.length === 0) return null;
+  return `ALTER USER ${mysqlAccount(name, host)} WITH ${parts.join(" ")}`;
+}
 // 查詢帳號清單（含資源限制 / SSL / 超級權限）；對標 Navicat 使用者檢視欄位。
 export function userListSql(): string {
   return (

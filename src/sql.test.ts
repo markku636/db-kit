@@ -45,6 +45,7 @@ import {
   buildDropUser,
   buildAlterUserPassword,
   buildSetUserLock,
+  buildAlterUserLimits,
   showGrantsSql,
   grantScope,
   buildGrant,
@@ -489,6 +490,16 @@ describe("MySQL user management DDL", () => {
   });
   it("showGrantsSql targets the account", () => {
     expect(showGrantsSql("app", "%")).toBe("SHOW GRANTS FOR 'app'@'%'");
+  });
+  it("buildAlterUserLimits: WITH MAX_… clauses; floors/clamps; null when empty", () => {
+    expect(buildAlterUserLimits("app", "%", { queries: 100, userConnections: 5 })).toBe(
+      "ALTER USER 'app'@'%' WITH MAX_QUERIES_PER_HOUR 100 MAX_USER_CONNECTIONS 5",
+    );
+    expect(buildAlterUserLimits("app", "%", { queries: 0, updates: 0, connections: 0, userConnections: 0 })).toBe(
+      "ALTER USER 'app'@'%' WITH MAX_QUERIES_PER_HOUR 0 MAX_UPDATES_PER_HOUR 0 MAX_CONNECTIONS_PER_HOUR 0 MAX_USER_CONNECTIONS 0",
+    );
+    expect(buildAlterUserLimits("app", "%", { queries: -5.7 })).toBe("ALTER USER 'app'@'%' WITH MAX_QUERIES_PER_HOUR 0");
+    expect(buildAlterUserLimits("app", "%", {})).toBeNull();
   });
   it("grantScope: global / db-level / table-level (backtick-quoted idents)", () => {
     expect(grantScope(null, null)).toBe("*.*");

@@ -7,6 +7,7 @@ import {
   buildDropUser,
   buildAlterUserPassword,
   buildSetUserLock,
+  buildAlterUserLimits,
   showGrantsSql,
   grantScope,
   buildGrant,
@@ -53,6 +54,8 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
   const [nHost, setNHost] = useState("%");
   const [nPass, setNPass] = useState("");
   const [grants, setGrants] = useState<{ user: UserRow; lines: string[] } | null>(null);
+  const [limitsFor, setLimitsFor] = useState<UserRow | null>(null);
+  const [lim, setLim] = useState({ queries: "", updates: "", connections: "", userConnections: "" });
   const [gPrivs, setGPrivs] = useState<string[]>([]);
   const [gDb, setGDb] = useState("");
   const [gTable, setGTable] = useState("");
@@ -127,6 +130,37 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
 
   const doLock = async (u: UserRow) =>
     run(buildSetUserLock(u.name, u.host, !u.locked), u.locked ? "已解鎖" : "已鎖定");
+
+  const openLimits = (u: UserRow) => {
+    setLim({
+      queries: u.meta.max_questions ?? "0",
+      updates: u.meta.max_updates ?? "0",
+      connections: u.meta.max_connections ?? "0",
+      userConnections: u.meta.max_user_connections ?? "0",
+    });
+    setLimitsFor(u);
+  };
+  const applyLimits = async () => {
+    if (!limitsFor) return;
+    const sql = buildAlterUserLimits(limitsFor.name, limitsFor.host, {
+      queries: Number(lim.queries) || 0,
+      updates: Number(lim.updates) || 0,
+      connections: Number(lim.connections) || 0,
+      userConnections: Number(lim.userConnections) || 0,
+    });
+    if (!sql) { setLimitsFor(null); return; }
+    setBusy(true);
+    try {
+      await api.execDdl(connId, sql);
+      toast.success("資源限制已更新");
+      setLimitsFor(null);
+      await refresh();
+    } catch (e: any) {
+      toast.error(e?.message ?? "更新失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const fetchGrants = async (u: UserRow): Promise<string[]> => {
     const g = await api.runQuery(connId, showGrantsSql(u.name, u.host));
@@ -236,6 +270,8 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
                       <button type="button" onClick={() => showGrants(u)} disabled={busy}
                         className="text-blue-400 hover:text-blue-300 disabled:opacity-40 px-1">授權</button>
                       {!isInternalAccount(u.name) && <>
+                        <button type="button" onClick={() => openLimits(u)} disabled={busy}
+                          className="text-white/60 hover:text-white disabled:opacity-40 px-1">限制</button>
                         <button type="button" onClick={() => doPassword(u)} disabled={busy}
                           className="text-white/60 hover:text-white disabled:opacity-40 px-1">密碼</button>
                         <button type="button" onClick={() => doLock(u)} disabled={busy}
@@ -251,6 +287,37 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
           )}
         </div>
       </div>
+
+      {limitsFor && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[97]" onClick={() => setLimitsFor(null)}>
+          <div className="bg-[#1a212b] w-[420px] max-w-[94vw] rounded-lg border border-white/10 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-white/10 flex items-center gap-2">
+              <span className="font-medium text-sm">資源限制：{limitsFor.name}@{limitsFor.host}</span>
+              <button type="button" onClick={() => setLimitsFor(null)} className="ml-auto text-white/40 hover:text-white">✕</button>
+            </div>
+            <div className="p-5 space-y-2.5 text-xs">
+              <div className="text-white/40">0 = 無限制</div>
+              {([
+                ["每小時查詢數", "queries"], ["每小時更新數", "updates"],
+                ["每小時連線數", "connections"], ["最大同時連線", "userConnections"],
+              ] as const).map(([label, key]) => (
+                <label key={key} className="flex items-center gap-3">
+                  <span className="text-white/55 w-28 shrink-0">{label}</span>
+                  <input value={(lim as any)[key]} onChange={(e) => setLim((s) => ({ ...s, [key]: e.target.value.replace(/[^0-9]/g, "") }))}
+                    className="bg-[#0c1118] border border-white/15 rounded px-2 py-1 w-28 mono" placeholder="0" />
+                </label>
+              ))}
+            </div>
+            <div className="px-5 py-3 border-t border-white/10 flex justify-end gap-2">
+              <button type="button" onClick={() => setLimitsFor(null)}
+                className="px-3 py-1.5 text-sm rounded border border-white/15 hover:bg-white/5">取消</button>
+              <button type="button" onClick={applyLimits} disabled={busy}
+                className="px-3 py-1.5 text-sm rounded bg-blue-600/80 hover:bg-blue-600 disabled:opacity-40">套用</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {grants && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[97]" onClick={() => setGrants(null)}>
