@@ -62,6 +62,7 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
   const [gPrivs, setGPrivs] = useState<string[]>([]);
   const [gDb, setGDb] = useState("");
   const [gTable, setGTable] = useState("");
+  const [gGrantOption, setGGrantOption] = useState(false);
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -198,7 +199,7 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
     if (gPrivs.length === 0) { toast.error("請選擇至少一項權限"); return; }
     const u = grants.user;
     const scope = grantScope(gDb.trim() || null, gTable.trim() || null);
-    const sql = revoke ? buildRevoke(gPrivs, scope, u.name, u.host) : buildGrant(gPrivs, scope, u.name, u.host);
+    const sql = revoke ? buildRevoke(gPrivs, scope, u.name, u.host) : buildGrant(gPrivs, scope, u.name, u.host, gGrantOption);
     setBusy(true);
     try {
       await api.execDdl(connId, sql);
@@ -376,6 +377,10 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
                   <button type="button" onClick={() => applyGrant(true)} disabled={busy}
                     className="px-3 py-1.5 rounded border border-red-400/40 text-red-300 hover:bg-red-500/10 disabled:opacity-40">撤銷</button>
                 </div>
+                <label className="flex items-center gap-1.5 text-white/55">
+                  <input type="checkbox" checked={gGrantOption} onChange={(e) => setGGrantOption(e.target.checked)} />
+                  WITH GRANT OPTION（允許此帳號轉授上述權限）
+                </label>
               </div>
             )}
           </div>

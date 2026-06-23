@@ -521,6 +521,9 @@ describe("MySQL user management DDL", () => {
     expect(buildGrant(["ALL PRIVILEGES"], "*.*", "admin", "localhost")).toBe(
       "GRANT ALL PRIVILEGES ON *.* TO 'admin'@'localhost'",
     );
+    expect(buildGrant(["SELECT"], "`shop`.*", "app", "%", true)).toBe(
+      "GRANT SELECT ON `shop`.* TO 'app'@'%' WITH GRANT OPTION",
+    );
     expect(buildRevoke(["DELETE"], "`shop`.`orders`", "app", "%")).toBe(
       "REVOKE DELETE ON `shop`.`orders` FROM 'app'@'%'",
     );

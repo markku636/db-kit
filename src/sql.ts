@@ -310,9 +310,10 @@ export function grantScope(db: string | null, table: string | null): string {
   const dbq = quoteIdent("mysql", db);
   return table ? `${dbq}.${quoteIdent("mysql", table)}` : `${dbq}.*`;
 }
-// 授予權限：GRANT priv[, priv] ON scope TO 'user'@'host'。
-export function buildGrant(privs: string[], scope: string, name: string, host: string): string {
-  return `GRANT ${privs.join(", ")} ON ${scope} TO ${mysqlAccount(name, host)}`;
+// 授予權限：GRANT priv[, priv] ON scope TO 'user'@'host'（可選 WITH GRANT OPTION 轉授）。
+export function buildGrant(privs: string[], scope: string, name: string, host: string, withGrantOption = false): string {
+  const base = `GRANT ${privs.join(", ")} ON ${scope} TO ${mysqlAccount(name, host)}`;
+  return withGrantOption ? `${base} WITH GRANT OPTION` : base;
 }
 // 撤銷權限：REVOKE priv[, priv] ON scope FROM 'user'@'host'。
 export function buildRevoke(privs: string[], scope: string, name: string, host: string): string {
