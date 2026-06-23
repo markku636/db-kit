@@ -1424,6 +1424,8 @@ function QueryPane() {
           {rowsInfo && <span>{rowsInfo}</span>}
           {result && result.columns.length > 0 && (
             <div className="ml-auto flex gap-2">
+              <button type="button" onClick={() => copyToClipboard(resultToCsv(result), "已複製結果 (CSV)")}
+                className="hover:text-white/80">複製 CSV</button>
               <button type="button" onClick={() => copyToClipboard(resultToTsv(result), "已複製結果 (TSV)")}
                 className="hover:text-white/80">複製 TSV</button>
               <button type="button" onClick={() => copyToClipboard(resultToJson(result), "已複製結果 (JSON)")}
