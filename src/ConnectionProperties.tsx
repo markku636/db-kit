@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ConnectionConfig, KIND_META, PoolStatus } from "./api";
 
 // 連線（伺服器）屬性：唯讀檢視連線設定 + 即時連線池狀態 / 延遲。
@@ -11,6 +11,7 @@ export default function ConnectionProperties({ conn, connected, onClose }: {
   const [pool, setPool] = useState<PoolStatus | null>(null);
   const [ping, setPing] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const aliveRef = useRef(true);
 
   const refresh = useCallback(async () => {
     if (!connected) return;
@@ -19,12 +20,17 @@ export default function ConnectionProperties({ conn, connected, onClose }: {
       api.poolStatus(conn.id).catch(() => null),
       api.pingConnection(conn.id).catch(() => null),
     ]);
+    if (!aliveRef.current) return; // 對話框已關閉 / 卸載，避免 setState
     setPool(p);
     setPing(pg);
     setBusy(false);
   }, [conn.id, connected]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    aliveRef.current = true;
+    void refresh();
+    return () => { aliveRef.current = false; };
+  }, [refresh]);
 
   const connRows: [string, string][] = meta?.fileBased
     ? [["檔案路徑", conn.host || "—"]]

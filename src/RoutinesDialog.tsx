@@ -36,7 +36,9 @@ function buildDropRoutine(kind: DbKind, db: string, r: RoutineInfo): string {
   }
   if (kind === "postgres") {
     if (t === "trigger") return `DROP TRIGGER IF EXISTS ${quoteIdent(kind, r.name)} ON ${qualifiedName(kind, db, r.parent ?? "")}`;
-    return `DROP ${t === "procedure" ? "PROCEDURE" : "FUNCTION"} IF EXISTS ${qualifiedName(kind, db, r.name)}`;
+    // 帶引數簽章以消除重載歧義（PG 對重載函式無簽章的 DROP 會報 "is not unique"）。
+    const sig = r.signature ?? "";
+    return `DROP ${t === "procedure" ? "PROCEDURE" : "FUNCTION"} IF EXISTS ${qualifiedName(kind, db, r.name)}(${sig})`;
   }
   return `DROP TRIGGER IF EXISTS ${quoteIdent(kind, r.name)}`;
 }
@@ -73,7 +75,8 @@ export default function RoutinesDialog({ connId, db, kind, onClose }: {
       const def = await api.routineDefinition(connId, db, r.name, r.routine_type);
       setSqlText(def);
       setEditingRoutine(r);
-      setReplace(kind !== "postgres"); // PG 定義含 OR REPLACE；MySQL/SQLite 需先刪後建
+      // PG 函式 / 程序定義含 OR REPLACE（不需先刪）；但 PG 觸發器無 OR REPLACE，與 MySQL/SQLite 一樣需先刪後建。
+      setReplace(kind !== "postgres" || r.routine_type === "trigger");
       setMode("editor");
     } catch (e: any) {
       toast.error(e?.message ?? "讀取定義失敗");
@@ -138,8 +141,8 @@ export default function RoutinesDialog({ connId, db, kind, onClose }: {
                   </thead>
                   <tbody>
                     {list.map((r) => (
-                      <tr key={`${r.routine_type}:${r.name}`} className="border-t border-white/5 hover:bg-white/5">
-                        <td className="px-3 py-1.5 mono">{r.name}</td>
+                      <tr key={`${r.routine_type}:${r.name}:${r.signature ?? ""}`} className="border-t border-white/5 hover:bg-white/5">
+                        <td className="px-3 py-1.5 mono">{r.name}{r.signature != null ? `(${r.signature})` : ""}</td>
                         <td className="px-3 py-1.5 text-white/60">{TYPE_LABEL[r.routine_type] ?? r.routine_type}</td>
                         <td className="px-3 py-1.5 text-white/40 mono">{r.parent ?? "—"}</td>
                         <td className="px-3 py-1.5 text-right whitespace-nowrap">

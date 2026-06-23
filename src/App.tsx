@@ -682,7 +682,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                         <div
                           key={t.name}
                           onDoubleClick={() =>
-                            useStore.getState().openTable(c.id, db, t.name)
+                            useStore.getState().openTable(c.id, db, t.name, "data", t.kind)
                           }
                           onContextMenu={
                             c.kind !== "redis"
@@ -822,7 +822,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                 : ((): [string, () => void, boolean?][] => {
                     const isView = tableMenu.objKind === "view";
                     const arr: [string, () => void, boolean?][] = [
-                      ["開啟資料表", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table)],
+                      ["開啟資料表", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table, "data", tableMenu.objKind)],
                       ["屬性…", () => setTableProps({ connId: tableMenu.connId, db: tableMenu.db, table: tableMenu.table, kind: tableMenu.kind, objKind: tableMenu.objKind })],
                     ];
                     // 新增資料列：開啟資料分頁並自動彈出新增列對話框（INSERT 不需主鍵）。視圖通常不可插入，略過。

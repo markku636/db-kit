@@ -940,16 +940,23 @@ async fn postgres_full() {
     assert!(d.drop_database("pg_catalog").await.is_err(), "系統 schema pg_catalog 不可刪除");
     assert!(d.drop_database("information_schema").await.is_err(), "系統 schema information_schema 不可刪除");
 
-    // 函式（exec_ddl 簡單協定處理 $$ dollar-quoting）+ list / definition。
+    // 函式（exec_ddl 簡單協定處理 $$ dollar-quoting）+ list / definition + 重載簽章。
     d.exec_ddl("DROP FUNCTION IF EXISTS atkit_fn(int)").await.unwrap();
+    d.exec_ddl("DROP FUNCTION IF EXISTS atkit_fn(text)").await.unwrap();
     d.exec_ddl("CREATE OR REPLACE FUNCTION atkit_fn(p int) RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN p + 1; END; $$").await.unwrap();
-    assert!(
-        d.list_routines("public").await.unwrap().iter().any(|r| r.name == "atkit_fn" && r.routine_type == "function"),
-        "PG 函式應出現於清單"
-    );
+    // 重載：同名不同簽章。
+    d.exec_ddl("CREATE OR REPLACE FUNCTION atkit_fn(p text) RETURNS text LANGUAGE plpgsql AS $$ BEGIN RETURN p; END; $$").await.unwrap();
+    let rl = d.list_routines("public").await.unwrap();
+    let fns: Vec<_> = rl.iter().filter(|r| r.name == "atkit_fn" && r.routine_type == "function").collect();
+    assert_eq!(fns.len(), 2, "兩個重載皆應列出，實得：{fns:?}");
+    // pg_get_function_identity_arguments 含參數名（如 "p integer"），即 DROP / ALTER 可直接採用的形式。
+    assert!(fns.iter().any(|r| r.signature.as_deref() == Some("p integer")), "應有 p integer 簽章，實得：{fns:?}");
+    assert!(fns.iter().any(|r| r.signature.as_deref() == Some("p text")), "應有 p text 簽章");
     let fdef = d.routine_definition("public", "atkit_fn", "function").await.unwrap();
     assert!(fdef.contains("atkit_fn"), "PG 函式定義應含函式名");
-    d.exec_ddl("DROP FUNCTION atkit_fn(int)").await.unwrap();
+    // 以 buildDropRoutine 產出的簽章形式刪除指定重載（無簽章的 DROP 對重載會報 not unique）。
+    d.exec_ddl("DROP FUNCTION IF EXISTS atkit_fn(p integer)").await.unwrap();
+    d.exec_ddl("DROP FUNCTION IF EXISTS atkit_fn(p text)").await.unwrap();
     assert!(
         !d.list_routines("public").await.unwrap().iter().any(|r| r.name == "atkit_fn"),
         "刪除後 PG 函式應消失"

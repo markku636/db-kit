@@ -408,7 +408,7 @@ impl DatabaseDriver for MysqlDriver {
         for r in &rows {
             if let Some(name) = str_col(r, 0) {
                 let rt = str_col(r, 1).unwrap_or_default().to_lowercase(); // procedure | function
-                out.push(RoutineInfo { name, routine_type: rt, parent: None });
+                out.push(RoutineInfo { name, routine_type: rt, parent: None, signature: None });
             }
         }
         let trows = sqlx::query(
@@ -421,7 +421,7 @@ impl DatabaseDriver for MysqlDriver {
         .map_err(|e| AppError::Query(e.to_string()))?;
         for r in &trows {
             if let Some(name) = str_col(r, 0) {
-                out.push(RoutineInfo { name, routine_type: "trigger".into(), parent: str_col(r, 1) });
+                out.push(RoutineInfo { name, routine_type: "trigger".into(), parent: str_col(r, 1), signature: None });
             }
         }
         Ok(out)

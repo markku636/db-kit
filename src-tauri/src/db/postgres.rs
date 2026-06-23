@@ -414,8 +414,10 @@ impl DatabaseDriver for PostgresDriver {
     async fn list_routines(&self, database: &str) -> AppResult<Vec<RoutineInfo>> {
         let mut out = Vec::new();
         // 函式 / 程序（pg_proc.prokind：f=function、p=procedure；需 PG 11+）。
+        // 取 identity arguments 以消除重載歧義（刪除指定重載需完整簽章）。
         let rows = sqlx::query(
-            "SELECT p.proname, CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END \
+            "SELECT p.proname, CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END, \
+             pg_get_function_identity_arguments(p.oid) \
              FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid \
              WHERE n.nspname = $1 AND p.prokind IN ('f','p') ORDER BY p.proname",
         )
@@ -425,7 +427,8 @@ impl DatabaseDriver for PostgresDriver {
         .map_err(|e| AppError::Query(e.to_string()))?;
         for r in &rows {
             if let (Ok(name), Ok(rt)) = (r.try_get::<String, _>(0), r.try_get::<String, _>(1)) {
-                out.push(RoutineInfo { name, routine_type: rt, parent: None });
+                let sig = r.try_get::<String, _>(2).ok();
+                out.push(RoutineInfo { name, routine_type: rt, parent: None, signature: sig });
             }
         }
         // 觸發器（排除內部 tgisinternal）；附所屬資料表（刪除觸發器需要）。
@@ -440,7 +443,7 @@ impl DatabaseDriver for PostgresDriver {
         .map_err(|e| AppError::Query(e.to_string()))?;
         for r in &trows {
             if let Ok(name) = r.try_get::<String, _>(0) {
-                out.push(RoutineInfo { name, routine_type: "trigger".into(), parent: r.try_get::<String, _>(1).ok() });
+                out.push(RoutineInfo { name, routine_type: "trigger".into(), parent: r.try_get::<String, _>(1).ok(), signature: None });
             }
         }
         Ok(out)

@@ -135,6 +135,8 @@ pub struct RoutineInfo {
     pub routine_type: String, // "procedure" | "function" | "trigger"
     /// 觸發器所屬資料表（procedure / function 為 None）。PG 刪除觸發器需此資訊。
     pub parent: Option<String>,
+    /// PG 函式 / 程序的引數型別簽章（如 "integer, text"），用於消除重載歧義刪除。其餘為 None。
+    pub signature: Option<String>,
 }
 
 /// 欄位定義（「結構」分頁用）。

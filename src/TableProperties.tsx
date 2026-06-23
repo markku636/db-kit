@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ColumnInfo, DbKind, IndexInfo } from "./api";
 
 // 資料表 / 視圖 / 集合屬性：唯讀彙整欄位、索引與列數（沿用既有 API，免後端改動）。
@@ -12,22 +12,27 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
 }) {
   const [cols, setCols] = useState<ColumnInfo[] | null>(null);
   const [idx, setIdx] = useState<IndexInfo[] | null>(null);
-  const [rows, setRows] = useState<number | null | "loading" | "error">("loading");
+  // 列數採點擊才計算（大表 COUNT(*) 可能較慢且佔用連線，不在開啟時自動跑）。
+  const [rows, setRows] = useState<number | "idle" | "loading" | "error">("idle");
+  const aliveRef = useRef(true);
 
   const isMongo = kind === "mongo";
   const objLabel = isMongo ? "集合" : objKind === "view" ? "視圖" : "資料表";
 
   useEffect(() => {
-    let alive = true;
-    api.tableColumns(connId, db, table).then((c) => alive && setCols(c)).catch(() => alive && setCols([]));
-    api.tableIndexes(connId, db, table).then((i) => alive && setIdx(i)).catch(() => alive && setIdx([]));
-    // 列數：以分頁查詢的 total_rows 取得（後端原已為分頁計算）。大表 COUNT 可能較慢，獨立載入。
+    aliveRef.current = true;
+    api.tableColumns(connId, db, table).then((c) => aliveRef.current && setCols(c)).catch(() => aliveRef.current && setCols([]));
+    api.tableIndexes(connId, db, table).then((i) => aliveRef.current && setIdx(i)).catch(() => aliveRef.current && setIdx([]));
+    return () => { aliveRef.current = false; };
+  }, [connId, db, table]);
+
+  const countRows = () => {
+    setRows("loading");
     api
       .tableData(connId, db, table, { page: 1, page_size: 1, filters: [], sorts: [] })
-      .then((d) => alive && setRows(d.total_rows))
-      .catch(() => alive && setRows("error"));
-    return () => { alive = false; };
-  }, [connId, db, table]);
+      .then((d) => aliveRef.current && setRows(d.total_rows))
+      .catch(() => aliveRef.current && setRows("error"));
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[95]" onClick={onClose}>
@@ -42,7 +47,16 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
 
         <div className="p-5 space-y-4 overflow-auto text-sm">
           <div className="grid grid-cols-3 gap-2">
-            <Stat label="列數" value={rows === "loading" ? "計算中…" : rows === "error" ? "—" : rows == null ? "—" : rows.toLocaleString()} />
+            <div className="rounded border border-white/10 px-3 py-2">
+              <div className="text-xs text-white/40">列數</div>
+              {rows === "idle" ? (
+                <button type="button" onClick={countRows} className="text-sm text-blue-400 hover:text-blue-300 mt-0.5">點此計算</button>
+              ) : (
+                <div className="text-base mono text-white/90 mt-0.5">
+                  {rows === "loading" ? "計算中…" : rows === "error" ? "—" : rows.toLocaleString()}
+                </div>
+              )}
+            </div>
             <Stat label={isMongo ? "欄位（取樣）" : "欄位數"} value={cols == null ? "…" : String(cols.length)} />
             <Stat label="索引數" value={idx == null ? "…" : String(idx.length)} />
           </div>

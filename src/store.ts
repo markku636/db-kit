@@ -8,6 +8,7 @@ export interface OpenTab {
   database: string;
   table: string;
   view: "data" | "structure"; // 結構 / 資料 分頁
+  objKind: string;    // "table" | "view"（視圖不可新增資料列）
 }
 
 interface AppStore {
@@ -34,7 +35,7 @@ interface AppStore {
   markConnected: (id: string) => void;
   markDisconnected: (id: string) => void;
 
-  openTable: (connId: string, database: string, table: string, view?: "data" | "structure") => void;
+  openTable: (connId: string, database: string, table: string, view?: "data" | "structure", objKind?: string) => void;
   closeTab: (key: string) => void;
   closeOtherTabs: (key: string) => void;
   closeAllTabs: () => void;
@@ -92,14 +93,14 @@ export const useStore = create<AppStore>((set) => ({
       };
     }),
 
-  openTable: (connId, database, table, view = "data") =>
+  openTable: (connId, database, table, view = "data", objKind = "table") =>
     set((s) => {
       const key = `${connId}:${database}:${table}`;
       if (s.tabs.some((t) => t.key === key)) {
         // 已開啟：切到該分頁，並套用指定檢視（如從右鍵「設計表結構」直接進結構頁）。
         return { activeTabKey: key, tabs: s.tabs.map((t) => (t.key === key ? { ...t, view } : t)) };
       }
-      const tab: OpenTab = { key, connId, database, table, view };
+      const tab: OpenTab = { key, connId, database, table, view, objKind };
       return { tabs: [...s.tabs, tab], activeTabKey: key };
     }),
   closeTab: (key) =>

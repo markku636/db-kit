@@ -62,6 +62,7 @@ export interface RoutineInfo {
   name: string;
   routine_type: string; // "procedure" | "function" | "trigger"
   parent: string | null; // 觸發器所屬資料表
+  signature: string | null; // PG 函式 / 程序引數型別簽章（重載消歧用）
 }
 
 export interface PagedData {

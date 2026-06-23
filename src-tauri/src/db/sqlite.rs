@@ -91,7 +91,7 @@ impl DatabaseDriver for SqliteDriver {
             .iter()
             .filter_map(|r| {
                 let name: String = r.try_get(0).ok()?;
-                Some(RoutineInfo { name, routine_type: "trigger".into(), parent: r.try_get::<String, _>(1).ok() })
+                Some(RoutineInfo { name, routine_type: "trigger".into(), parent: r.try_get::<String, _>(1).ok(), signature: None })
             })
             .collect())
     }
