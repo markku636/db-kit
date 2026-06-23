@@ -265,6 +265,17 @@ pub async fn column_stats(
     state.manager.column_stats(&id, &database, &table, &column).await
 }
 
+/// 資料表統計（引擎 / 列數估計 / 大小 / 排序規則 / 註解）。
+#[tauri::command]
+pub async fn table_info(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    table: String,
+) -> AppResult<Vec<(String, String)>> {
+    state.manager.table_info(&id, &database, &table).await
+}
+
 /// 建立集合（MongoDB）。
 #[tauri::command]
 pub async fn create_collection(

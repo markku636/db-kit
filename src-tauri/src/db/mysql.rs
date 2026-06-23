@@ -3,7 +3,7 @@ use sqlx::{Column, MySqlPool, Row, TypeInfo, ValueRef};
 use std::time::Duration;
 
 use crate::db::{
-    collect_relations, filter_op_sql, op_needs_value, AlterOp, CellEdit, ColumnInfo, ColumnStats,
+    collect_relations, filter_op_sql, fmt_bytes, op_needs_value, AlterOp, CellEdit, ColumnInfo, ColumnStats,
     ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErTable, Filter, IndexInfo,
     PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, Sort, SortDir, TableInfo,
 };
@@ -451,6 +451,42 @@ impl DatabaseDriver for MysqlDriver {
             .await
             .map(|_| ())
             .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    async fn table_info(&self, database: &str, table: &str) -> AppResult<Vec<(String, String)>> {
+        // 數值欄 CAST 成 CHAR 以統一用 str_col 解碼（避免 unsigned bigint 型別不符）。
+        let row = sqlx::query(
+            "SELECT ENGINE, CAST(TABLE_ROWS AS CHAR), CAST(DATA_LENGTH AS CHAR), \
+             CAST(INDEX_LENGTH AS CHAR), TABLE_COLLATION, CAST(CREATE_TIME AS CHAR), TABLE_COMMENT \
+             FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+        )
+        .bind(database)
+        .bind(table)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?;
+        let mut out = Vec::new();
+        if let Some(r) = row {
+            let push_str = |out: &mut Vec<(String, String)>, label: &str, idx: usize| {
+                if let Some(v) = str_col(&r, idx) {
+                    if !v.is_empty() {
+                        out.push((label.to_string(), v));
+                    }
+                }
+            };
+            push_str(&mut out, "引擎", 0);
+            push_str(&mut out, "列數（估計）", 1);
+            if let Some(b) = str_col(&r, 2).and_then(|s| s.parse::<i64>().ok()) {
+                out.push(("資料大小".into(), fmt_bytes(b)));
+            }
+            if let Some(b) = str_col(&r, 3).and_then(|s| s.parse::<i64>().ok()) {
+                out.push(("索引大小".into(), fmt_bytes(b)));
+            }
+            push_str(&mut out, "排序規則", 4);
+            push_str(&mut out, "建立時間", 5);
+            push_str(&mut out, "註解", 6);
+        }
+        Ok(out)
     }
 
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {

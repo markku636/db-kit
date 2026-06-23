@@ -16,6 +16,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
   const [idx, setIdx] = useState<IndexInfo[] | null>(null);
   // 列數採點擊才計算（大表 COUNT(*) 可能較慢且佔用連線，不在開啟時自動跑）。
   const [rows, setRows] = useState<number | "idle" | "loading" | "error">("idle");
+  const [stats, setStats] = useState<[string, string][] | null>(null); // 引擎 / 大小 / 列數估計…
   const aliveRef = useRef(true);
 
   const isMongo = kind === "mongo";
@@ -25,6 +26,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
     aliveRef.current = true;
     api.tableColumns(connId, db, table).then((c) => aliveRef.current && setCols(c)).catch(() => aliveRef.current && setCols([]));
     api.tableIndexes(connId, db, table).then((i) => aliveRef.current && setIdx(i)).catch(() => aliveRef.current && setIdx([]));
+    api.tableInfo(connId, db, table).then((s) => aliveRef.current && setStats(s)).catch(() => aliveRef.current && setStats([]));
     return () => { aliveRef.current = false; };
   }, [connId, db, table]);
 
@@ -62,6 +64,17 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
             <Stat label={isMongo ? "欄位（取樣）" : "欄位數"} value={cols == null ? "…" : String(cols.length)} />
             <Stat label="索引數" value={idx == null ? "…" : String(idx.length)} />
           </div>
+
+          {stats && stats.length > 0 && (
+            <Section title="統計">
+              {stats.map(([k, v]) => (
+                <div key={k} className="flex px-3 py-1.5 gap-3">
+                  <span className="text-white/45 w-28 shrink-0">{k}</span>
+                  <span className="text-white/85 mono break-all">{v}</span>
+                </div>
+              ))}
+            </Section>
+          )}
 
           <Section title={`欄位（${cols?.length ?? 0}）`}>
             {cols == null ? <Empty text="載入中…" /> : cols.length === 0 ? <Empty text="（無）" /> : (

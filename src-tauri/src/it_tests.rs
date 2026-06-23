@@ -677,6 +677,9 @@ async fn mysql_full() {
     assert!(dbs.contains(&"testdb".to_string()), "list_databases 未含 testdb，實得：{dbs:?}");
     assert!(d.list_tables("testdb").await.unwrap().iter().any(|t| t.name == "t"));
     assert!(d.table_columns("testdb", "t").await.unwrap().iter().any(|c| c.name == "a"));
+    // table_info：MySQL 應含「引擎」與「資料大小」等統計。
+    let tinfo = d.table_info("testdb", "t").await.unwrap();
+    assert!(tinfo.iter().any(|(k, _)| k == "引擎"), "MySQL table_info 應含引擎，實得：{tinfo:?}");
 
     // 新增 / 刪除資料庫（CREATE / DROP DATABASE）→ 出現後消失。
     d.query("DROP DATABASE IF EXISTS atkit_newdb").await.unwrap();
@@ -929,6 +932,9 @@ async fn postgres_full() {
 
     assert!(d.list_databases().await.unwrap().contains(&"public".to_string()));
     assert!(d.list_tables("public").await.unwrap().iter().any(|t| t.name == "t"));
+    // table_info：PG 應含「總大小」統計。
+    let tinfo = d.table_info("public", "t").await.unwrap();
+    assert!(tinfo.iter().any(|(k, _)| k == "總大小"), "PG table_info 應含總大小，實得：{tinfo:?}");
 
     // 新增 / 刪除資料庫（PG → CREATE / DROP SCHEMA CASCADE）→ 出現後消失。
     d.query("DROP SCHEMA IF EXISTS atkit_newschema CASCADE").await.unwrap();

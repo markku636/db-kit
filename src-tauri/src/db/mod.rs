@@ -319,6 +319,20 @@ pub struct ErModel {
     pub relations: Vec<ErRelation>,
 }
 
+/// 位元組數轉人類可讀（table_info 大小欄共用）。
+pub(crate) fn fmt_bytes(b: i64) -> String {
+    let f = b as f64;
+    if f >= 1_073_741_824.0 {
+        format!("{:.2} GB", f / 1_073_741_824.0)
+    } else if f >= 1_048_576.0 {
+        format!("{:.2} MB", f / 1_048_576.0)
+    } else if f >= 1024.0 {
+        format!("{:.1} KB", f / 1024.0)
+    } else {
+        format!("{b} B")
+    }
+}
+
 /// 由 [from_table, from_col, to_table, to_col] 四欄的列建出關係清單與 FK 欄集合（各 SQL driver 共用）。
 pub(crate) fn collect_relations<R>(
     rows: &[R],
@@ -459,6 +473,12 @@ pub trait DatabaseDriver: Send + Sync {
     /// 查詢計畫分析（EXPLAIN）。非關聯式預設 Unsupported。
     async fn explain(&self, _sql: &str) -> AppResult<QueryResult> {
         Err(AppError::Unsupported("此資料庫不支援查詢計畫分析".into()))
+    }
+
+    /// 資料表統計（引擎 / 列數估計 / 大小 / 排序規則 / 註解…）。回傳 (標籤, 值) 清單，
+    /// 各資料庫種類自填可得項目；預設回空（不擋屬性其他區塊）。
+    async fn table_info(&self, _database: &str, _table: &str) -> AppResult<Vec<(String, String)>> {
+        Ok(vec![])
     }
 
     /// 欄位資料剖析（總數 / 非空 / 相異）。非關聯式預設 Unsupported。

@@ -172,6 +172,15 @@ impl Active {
             Active::Redis(d) => d.column_stats(database, table, column).await,
         }
     }
+    async fn table_info(&self, database: &str, table: &str) -> AppResult<Vec<(String, String)>> {
+        match self {
+            Active::Mysql(d) => d.table_info(database, table).await,
+            Active::Postgres(d) => d.table_info(database, table).await,
+            Active::Sqlite(d) => d.table_info(database, table).await,
+            Active::Mongo(d) => d.table_info(database, table).await,
+            Active::Redis(d) => d.table_info(database, table).await,
+        }
+    }
     async fn create_collection(&self, database: &str, name: &str) -> AppResult<()> {
         match self {
             Active::Mysql(d) => d.create_collection(database, name).await,
@@ -543,6 +552,10 @@ impl ConnectionManager {
 
     pub async fn column_stats(&self, id: &str, database: &str, table: &str, column: &str) -> AppResult<ColumnStats> {
         self.get(id)?.active.column_stats(database, table, column).await
+    }
+
+    pub async fn table_info(&self, id: &str, database: &str, table: &str) -> AppResult<Vec<(String, String)>> {
+        self.get(id)?.active.table_info(database, table).await
     }
 
     pub async fn create_collection(&self, id: &str, database: &str, name: &str) -> AppResult<()> {

@@ -70,6 +70,7 @@ pub fn run() {
             commands::schema_dump,
             commands::explain_query,
             commands::column_stats,
+            commands::table_info,
             commands::create_collection,
             commands::create_database,
             commands::drop_collection,

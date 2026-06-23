@@ -3,7 +3,7 @@ use sqlx::{Column, PgPool, Row, TypeInfo, ValueRef};
 use std::time::Duration;
 
 use crate::db::{
-    collect_relations, filter_op_sql, op_needs_value, AlterOp, CellEdit, ColumnInfo, ColumnStats,
+    collect_relations, filter_op_sql, fmt_bytes, op_needs_value, AlterOp, CellEdit, ColumnInfo, ColumnStats,
     ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErTable, Filter, IndexInfo,
     PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, Sort, SortDir, TableInfo,
 };
@@ -480,6 +480,43 @@ impl DatabaseDriver for PostgresDriver {
             .await
             .map(|_| ())
             .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    async fn table_info(&self, database: &str, table: &str) -> AppResult<Vec<(String, String)>> {
+        let row = sqlx::query(
+            "SELECT c.reltuples::bigint, pg_total_relation_size(c.oid), pg_relation_size(c.oid), \
+             pg_indexes_size(c.oid), obj_description(c.oid) \
+             FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid \
+             WHERE n.nspname = $1 AND c.relname = $2",
+        )
+        .bind(database)
+        .bind(table)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?;
+        let mut out = Vec::new();
+        if let Some(r) = row {
+            if let Ok(rows) = r.try_get::<i64, _>(0) {
+                if rows >= 0 {
+                    out.push(("列數（估計）".into(), rows.to_string()));
+                }
+            }
+            if let Ok(sz) = r.try_get::<i64, _>(1) {
+                out.push(("總大小".into(), fmt_bytes(sz)));
+            }
+            if let Ok(sz) = r.try_get::<i64, _>(2) {
+                out.push(("資料大小".into(), fmt_bytes(sz)));
+            }
+            if let Ok(sz) = r.try_get::<i64, _>(3) {
+                out.push(("索引大小".into(), fmt_bytes(sz)));
+            }
+            if let Ok(Some(c)) = r.try_get::<Option<String>, _>(4) {
+                if !c.is_empty() {
+                    out.push(("註解".into(), c));
+                }
+            }
+        }
+        Ok(out)
     }
 
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
