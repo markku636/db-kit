@@ -12,6 +12,7 @@ import ConnectionProperties from "./ConnectionProperties";
 import TableProperties from "./TableProperties";
 import RoutinesDialog from "./RoutinesDialog";
 import CreateViewDialog from "./CreateViewDialog";
+import ProcessListDialog from "./ProcessListDialog";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile } from "./ui";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
@@ -283,6 +284,8 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   const [routines, setRoutines] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
   // 新增視圖對話框。
   const [createView, setCreateView] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
+  // 處理程序 / 工作階段檢視。
+  const [procList, setProcList] = useState<{ connId: string; kind: DbKind } | null>(null);
   // 連線 / 表 搜尋過濾字串
   const [filter, setFilter] = useState("");
   // 右鍵選單（SQL 表節點：產生 SQL）。objKind 為物件種類（"table" | "view"），決定生命週期 DDL。
@@ -729,6 +732,9 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                 ...(connectedIds.has(menu.id) && menuConn.kind === "redis"
                   ? [["伺服器狀態", () => setStatus({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
                   : []),
+                ...(connectedIds.has(menu.id) && (menuConn.kind === "mysql" || menuConn.kind === "postgres")
+                  ? [["處理程序…", () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
+                  : []),
                 ["屬性…", () => setConnProps(menuConn), false],
                 ["編輯…", () => onEdit(menuConn), false],
                 ["複製連線…", () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: `${menuConn.name} 複本`, password: "" }), false],
@@ -922,6 +928,10 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
           onClose={() => setCreateView(null)}
           onCreated={() => refreshTables(createView.connId, createView.db)}
         />
+      )}
+
+      {procList && (
+        <ProcessListDialog connId={procList.connId} kind={procList.kind} onClose={() => setProcList(null)} />
       )}
     </div>
   );
