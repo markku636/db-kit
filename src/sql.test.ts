@@ -35,6 +35,7 @@ import {
   diffNameLists,
   diffColumns,
   buildAddColumnsDdl,
+  buildModifyColumnsDdl,
   buildAddForeignKey,
   buildRenameIndex,
   buildCreateFulltextIndex,
@@ -364,6 +365,15 @@ describe("table/database lifecycle DDL", () => {
       { name: "b", data_type: "varchar(50)", nullable: true },
     ])).toBe(
       "ALTER TABLE `db`.`t` ADD COLUMN `a` int NOT NULL;\nALTER TABLE `db`.`t` ADD COLUMN `b` varchar(50);",
+    );
+  });
+
+  it("buildModifyColumnsDdl: MySQL MODIFY COLUMN, PG ALTER COLUMN TYPE + nullability", () => {
+    expect(buildModifyColumnsDdl("mysql", "db", "t", [{ name: "a", data_type: "bigint", nullable: false }])).toBe(
+      "ALTER TABLE `db`.`t` MODIFY COLUMN `a` bigint NOT NULL;",
+    );
+    expect(buildModifyColumnsDdl("postgres", "public", "t", [{ name: "a", data_type: "bigint", nullable: true }])).toBe(
+      'ALTER TABLE "public"."t" ALTER COLUMN "a" TYPE bigint USING "a"::bigint, ALTER COLUMN "a" DROP NOT NULL;',
     );
   });
 

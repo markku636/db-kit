@@ -174,6 +174,19 @@ export function buildAddColumnsDdl(kind: DbKind, db: string, table: string, cols
     .map((c) => `ALTER TABLE ${qualifiedName(kind, db, table)} ADD COLUMN ${quoteIdent(kind, c.name)} ${c.data_type}${c.nullable ? "" : " NOT NULL"};`)
     .join("\n");
 }
+// 產生型別 / 可空變更的同步 DDL（依來源欄位）。MySQL：MODIFY COLUMN；PostgreSQL：ALTER COLUMN TYPE + SET/DROP NOT NULL。
+// 不保留預設 / 註解（MySQL MODIFY 特性），由使用者檢視後補上。
+export function buildModifyColumnsDdl(kind: DbKind, db: string, table: string, cols: SchemaColumn[]): string {
+  const q = qualifiedName(kind, db, table);
+  return cols.map((c) => {
+    const id = quoteIdent(kind, c.name);
+    if (kind === "postgres") {
+      const nn = c.nullable ? "DROP NOT NULL" : "SET NOT NULL";
+      return `ALTER TABLE ${q} ALTER COLUMN ${id} TYPE ${c.data_type} USING ${id}::${c.data_type}, ALTER COLUMN ${id} ${nn};`;
+    }
+    return `ALTER TABLE ${q} MODIFY COLUMN ${id} ${c.data_type}${c.nullable ? "" : " NOT NULL"};`;
+  }).join("\n");
+}
 export function diffColumns(source: SchemaColumn[], target: SchemaColumn[]): ColumnDiff {
   const tByName = new Map(target.map((c) => [c.name, c]));
   const sByName = new Map(source.map((c) => [c.name, c]));
