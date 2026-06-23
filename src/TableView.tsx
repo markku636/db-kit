@@ -813,8 +813,19 @@ function DataPane({ tab }: { tab: OpenTab }) {
       <div className="h-9 bg-[#11161d] border-t border-white/10 flex items-center px-3 gap-1 text-sm">
         <NavBtn label="⏮" disabled={page === 0 || loading} onClick={() => navPage(0)} title="第一頁" />
         <NavBtn label="◀" disabled={page === 0 || loading} onClick={() => navPage(page - 1)} title="上一頁" />
-        <span className="px-2 text-white/60 mono text-xs">
-          {page + 1} / {totalPages}
+        <span className="px-1 text-white/60 mono text-xs flex items-center gap-1">
+          <input
+            key={page}
+            defaultValue={page + 1}
+            title="輸入頁碼後按 Enter 跳頁"
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              const n = parseInt((e.target as HTMLInputElement).value, 10);
+              if (Number.isFinite(n) && n >= 1 && n <= totalPages && n - 1 !== page) navPage(n - 1);
+            }}
+            className="w-10 bg-black/30 border border-white/10 rounded px-1 py-0.5 text-xs text-center outline-none focus:border-blue-500"
+          />
+          / {totalPages}
         </span>
         <NavBtn label="▶" disabled={page + 1 >= totalPages || loading} onClick={() => navPage(page + 1)} title="下一頁" />
         <NavBtn label="⏭" disabled={page + 1 >= totalPages || loading} onClick={() => navPage(totalPages - 1)} title="最後一頁" />
