@@ -33,6 +33,7 @@ import {
   buildAlterDatabaseCharset,
   buildAddForeignKey,
   buildRenameIndex,
+  buildCreateFulltextIndex,
   buildDropForeignKey,
   buildRowUpdate,
   buildRowDelete,
@@ -369,6 +370,12 @@ describe("table/database lifecycle DDL", () => {
     );
     expect(buildAddForeignKey("mysql", "db", "orders", "fk_o_u", "user_id", "users", "id", "", "CASCADE")).toBe(
       "ALTER TABLE `db`.`orders` ADD CONSTRAINT `fk_o_u` FOREIGN KEY (`user_id`) REFERENCES `db`.`users` (`id`) ON UPDATE CASCADE;",
+    );
+  });
+
+  it("buildCreateFulltextIndex: CREATE FULLTEXT INDEX with composite columns", () => {
+    expect(buildCreateFulltextIndex("db", "articles", "ft_body", ["title", "body"])).toBe(
+      "CREATE FULLTEXT INDEX `ft_body` ON `db`.`articles` (`title`, `body`)",
     );
   });
 

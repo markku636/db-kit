@@ -4,7 +4,7 @@ import {
 } from "./api";
 import { OpenTab, useStore } from "./store";
 import { toast, uiConfirm, uiPrompt, copyToClipboard } from "./ui";
-import { quoteIdent, sqlLiteral, buildRowUpdate, buildRowDelete, buildAddForeignKey, buildDropForeignKey, buildRenameIndex } from "./sql";
+import { quoteIdent, sqlLiteral, buildRowUpdate, buildRowDelete, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex } from "./sql";
 import ExportDialog from "./ExportDialog";
 import ImportDialog from "./ImportDialog";
 import RedisKeyTree from "./RedisKeyTree";
@@ -1931,11 +1931,15 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     }
   };
 
-  const createIndexFn = async (name: string, columns: string[], unique: boolean) => {
+  const createIndexFn = async (name: string, columns: string[], type: "normal" | "unique" | "fulltext") => {
     if (!name.trim() || columns.length === 0) { toast.error("請填索引名稱並至少選一欄"); return; }
     setBusy(true);
     try {
-      await api.createIndex(tab.connId, tab.database, tab.table, name.trim(), columns, unique);
+      if (type === "fulltext") {
+        await api.execDdl(tab.connId, buildCreateFulltextIndex(tab.database, tab.table, name.trim(), columns));
+      } else {
+        await api.createIndex(tab.connId, tab.database, tab.table, name.trim(), columns, type === "unique");
+      }
       toast.success("索引已建立");
       setAddingIndex(false);
       setNonce((n) => n + 1);
@@ -2059,7 +2063,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
             )}
           </div>
           {addingIndex && canIndex && cols && (
-            <AddIndexForm columns={cols.map((c) => c.name)} busy={busy}
+            <AddIndexForm columns={cols.map((c) => c.name)} busy={busy} allowFulltext={kind === "mysql"}
               onCancel={() => setAddingIndex(false)} onSubmit={createIndexFn} />
           )}
           {indexes.length === 0 && <div className="px-3 py-2 text-white/30 text-xs">尚無索引。</div>}
@@ -2262,15 +2266,16 @@ function AddForeignKeyForm({ table, columns, busy, onSubmit, onCancel }: {
   );
 }
 
-function AddIndexForm({ columns, busy, onSubmit, onCancel }: {
+function AddIndexForm({ columns, busy, allowFulltext, onSubmit, onCancel }: {
   columns: string[];
   busy: boolean;
-  onSubmit: (name: string, columns: string[], unique: boolean) => void;
+  allowFulltext?: boolean;
+  onSubmit: (name: string, columns: string[], type: "normal" | "unique" | "fulltext") => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState("");
   const [sel, setSel] = useState<string[]>([]);
-  const [unique, setUnique] = useState(false);
+  const [type, setType] = useState<"normal" | "unique" | "fulltext">("normal");
   const toggle = (c: string) => setSel((s) => (s.includes(c) ? s.filter((x) => x !== c) : [...s, c]));
   const ic = "bg-black/30 border border-white/10 rounded px-2 py-1 text-sm outline-none focus:border-blue-500";
   return (
@@ -2278,9 +2283,12 @@ function AddIndexForm({ columns, busy, onSubmit, onCancel }: {
       <div className="flex flex-wrap items-end gap-2">
         <label className="block"><span className="text-white/50 block mb-0.5">索引名稱</span>
           <input className={ic} value={name} onChange={(e) => setName(e.target.value)} placeholder="如 idx_email" /></label>
-        <label className="flex items-center gap-1 pb-1.5 select-none">
-          <input type="checkbox" checked={unique} onChange={(e) => setUnique(e.target.checked)} /> 唯一
-        </label>
+        <label className="block"><span className="text-white/50 block mb-0.5">類型</span>
+          <select className={ic} value={type} onChange={(e) => setType(e.target.value as typeof type)} title="索引類型">
+            <option value="normal">普通</option>
+            <option value="unique">唯一</option>
+            {allowFulltext && <option value="fulltext">全文 (FULLTEXT)</option>}
+          </select></label>
       </div>
       <div>
         <span className="text-white/50 block mb-1">欄位（可多選，依點選順序組複合索引）</span>
@@ -2297,7 +2305,7 @@ function AddIndexForm({ columns, busy, onSubmit, onCancel }: {
         </div>
       </div>
       <div className="flex gap-2">
-        <button type="button" onClick={() => onSubmit(name, sel, unique)} disabled={busy}
+        <button type="button" onClick={() => onSubmit(name, sel, type)} disabled={busy}
           className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 disabled:opacity-50">建立</button>
         <button type="button" onClick={onCancel}
           className="px-3 py-1 rounded border border-white/15 hover:bg-white/5">取消</button>

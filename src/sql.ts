@@ -192,6 +192,12 @@ export function buildRenameIndex(kind: DbKind, db: string, table: string, oldNam
   return `ALTER TABLE ${qualifiedName(kind, db, table)} RENAME INDEX ${quoteIdent(kind, oldName)} TO ${quoteIdent(kind, newName.trim())};`;
 }
 
+// 建立全文索引（MySQL；用於 MATCH … AGAINST 文字搜尋）。一般 / 唯一索引仍走後端 create_index。
+export function buildCreateFulltextIndex(db: string, table: string, name: string, columns: string[]): string {
+  const cols = columns.map((c) => quoteIdent("mysql", c)).join(", ");
+  return `CREATE FULLTEXT INDEX ${quoteIdent("mysql", name.trim())} ON ${qualifiedName("mysql", db, table)} (${cols})`;
+}
+
 // 刪除外鍵：MySQL → DROP FOREIGN KEY；PostgreSQL → DROP CONSTRAINT。
 export function buildDropForeignKey(kind: DbKind, db: string, table: string, name: string): string {
   const clause = kind === "mysql" ? "DROP FOREIGN KEY" : "DROP CONSTRAINT";
