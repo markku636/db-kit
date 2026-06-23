@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  api, ColumnInfo, Filter, IndexInfo, KeyDetail, KeyEdit, PagedData, RowInsert, Sort, SortDir,
+  api, ColumnInfo, ErRelation, Filter, IndexInfo, KeyDetail, KeyEdit, PagedData, RowInsert, Sort, SortDir,
 } from "./api";
 import { OpenTab, useStore } from "./store";
 import { toast, uiConfirm, uiPrompt, copyToClipboard } from "./ui";
@@ -1673,6 +1673,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   const [ddl, setDdl] = useState<string | null>(null);
   const [indexes, setIndexes] = useState<IndexInfo[] | null>(null);
   const [addingIndex, setAddingIndex] = useState(false);
+  const [fks, setFks] = useState<ErRelation[] | null>(null); // 此表的外鍵（取自 ER 模型並過濾）
 
   const viewDdl = async () => {
     try {
@@ -1694,6 +1695,15 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       .tableIndexes(tab.connId, tab.database, tab.table)
       .then((ix) => !cancelled && setIndexes(ix))
       .catch(() => !cancelled && setIndexes([]));
+    // 外鍵：取 ER 模型並過濾出本表為來源者（僅 SQL；失敗視為無）。
+    if (isSql) {
+      api
+        .erModel(tab.connId, tab.database)
+        .then((m) => !cancelled && setFks(m.relations.filter((r) => r.from_table === tab.table)))
+        .catch(() => !cancelled && setFks([]));
+    } else {
+      setFks([]);
+    }
     return () => {
       cancelled = true;
     };
@@ -1874,6 +1884,33 @@ function StructurePane({ tab }: { tab: OpenTab }) {
             </tbody>
           </table>
           )}
+        </div>
+      )}
+
+      {/* 外鍵區（取自 ER 模型；致敬商用工具的結構檢視） */}
+      {isSql && fks && fks.length > 0 && (
+        <div className="mt-2">
+          <div className="px-3 py-1.5 text-xs text-white/40 bg-[#10161e] border-y border-white/10">
+            外鍵（{fks.length}）
+          </div>
+          <table className="text-sm border-collapse w-full">
+            <thead className="bg-[#1a212b]">
+              <tr>
+                {["欄位", "參照", "參照欄位"].map((h) => (
+                  <th key={h} className="text-left px-3 py-1.5 border-b border-white/10 font-medium">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {fks.map((fk, i) => (
+                <tr key={`${fk.from_column}-${i}`} className="hover:bg-white/5">
+                  <td className="px-3 py-1 border-b border-white/5 mono">{fk.from_column}</td>
+                  <td className="px-3 py-1 border-b border-white/5 mono text-white/50">→ {fk.to_table}</td>
+                  <td className="px-3 py-1 border-b border-white/5 mono">{fk.to_column}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
