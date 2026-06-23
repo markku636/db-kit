@@ -19,6 +19,7 @@ import {
   buildDropView,
   buildTruncateTable,
   buildRenameTable,
+  buildDuplicateTable,
   isSystemDatabase,
   type NewColumn,
 } from "./sql";
@@ -242,6 +243,16 @@ describe("table/database lifecycle DDL", () => {
   it("buildDropView uses DROP VIEW (not DROP TABLE) and qualifies", () => {
     expect(buildDropView("postgres", "public", "v")).toBe('DROP VIEW "public"."v";');
     expect(buildDropView("mysql", "db", "v")).toBe("DROP VIEW `db`.`v`;");
+  });
+
+  it("buildDuplicateTable: per-kind LIKE / INCLUDING ALL / AS SELECT", () => {
+    expect(buildDuplicateTable("mysql", "db", "t", "t_copy")).toBe("CREATE TABLE `db`.`t_copy` LIKE `db`.`t`;");
+    expect(buildDuplicateTable("postgres", "public", "t", "t_copy")).toBe(
+      'CREATE TABLE "public"."t_copy" (LIKE "public"."t" INCLUDING ALL);',
+    );
+    expect(buildDuplicateTable("sqlite", "main", "t", "t_copy")).toBe(
+      "CREATE TABLE `t_copy` AS SELECT * FROM `t` WHERE 0;",
+    );
   });
 });
 

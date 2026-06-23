@@ -90,6 +90,17 @@ export function buildRenameTable(kind: DbKind, db: string, oldName: string, newN
   return `ALTER TABLE ${qualifiedName(kind, db, oldName)} RENAME TO ${quoteIdent(kind, newName)};`;
 }
 
+// 複製資料表結構（送往查詢編輯器供檢視後執行）。MySQL：CREATE TABLE … LIKE；PG：LIKE … INCLUDING ALL；
+// SQLite 無 LIKE，退化為 CREATE TABLE … AS SELECT … WHERE 0（僅複製欄位，不含 PK / 約束 / 索引）。
+export function buildDuplicateTable(kind: DbKind, db: string, src: string, dst: string): string {
+  const from = qualifiedName(kind, db, src);
+  const to = qualifiedName(kind, db, dst);
+  if (kind === "mysql") return `CREATE TABLE ${to} LIKE ${from};`;
+  if (kind === "postgres") return `CREATE TABLE ${to} (LIKE ${from} INCLUDING ALL);`;
+  // SQLite：AS SELECT 僅複製欄位定義（不含主鍵 / 約束 / 索引），請依需要自行補上。
+  return `CREATE TABLE ${to} AS SELECT * FROM ${from} WHERE 0;`;
+}
+
 // ---- 查詢歷史（localStorage，最近在前，去重，上限 50）----
 export const QUERY_HISTORY_KEY = "at-kit:queryHistory";
 const QUERY_HISTORY_CAP = 50;

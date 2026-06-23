@@ -14,7 +14,7 @@ import {
   loadSavedQueries, persistSavedQueries,
   resultToTsv, resultToJson, resultToCsv, fmtElapsed, splitSqlStatements,
   quoteIdent, qualifiedName,
-  buildDropTable, buildDropView, buildTruncateTable, buildRenameTable, isSystemDatabase,
+  buildDropTable, buildDropView, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
 } from "./sql";
 import type { SavedQuery } from "./sql";
 
@@ -556,6 +556,14 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
       toast.error(e?.message ?? "刪除失敗");
     }
   };
+  // 複製資料表結構：產生 CREATE TABLE 語句送往查詢編輯器，供使用者檢視後執行（不直接執行 DDL）。
+  const duplicateTable = async (m: TblRef) => {
+    const name = await uiPrompt("複製為新資料表名稱", {
+      title: "複製資料表", defaultValue: `${m.table}_copy`, placeholder: "新表名",
+    });
+    if (!name?.trim()) return;
+    sendQuery(m.connId, buildDuplicateTable(m.kind, m.db, m.table, name.trim()));
+  };
 
   const menuConn = menu ? connections.find((x) => x.id === menu.id) ?? null : null;
 
@@ -768,6 +776,8 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                         arr.push([`刪除${noun}…`, () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
                       return arr;
                     })();
+              // 重新整理：重載此資料庫節點的表 / 集合 / 鍵清單（適用所有種類）。
+              items.unshift(["重新整理", () => refreshTables(dbMenu.connId, dbMenu.db), false]);
               return items.map(([label, fn, danger]) => (
                 <button key={label} type="button"
                   onClick={() => { setDbMenu(null); fn(); }}
@@ -810,6 +820,8 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                       ["複製表名", () => copyToClipboard(tableMenu.table, "已複製表名")],
                       ["重新命名…", () => renameTable(tableMenu)],
                     );
+                    // 複製資料表結構（產生 SQL 到編輯器）；視圖無法以 CREATE TABLE LIKE 複製，略過。
+                    if (!isView) arr.push(["複製資料表…", () => duplicateTable(tableMenu)]);
                     // TRUNCATE 對視圖無效，僅資料表顯示「清空」。
                     if (!isView) arr.push(["清空資料表", () => truncateTable(tableMenu), true]);
                     arr.push([isView ? "刪除視圖" : "刪除資料表", () => dropTable(tableMenu), true]);
