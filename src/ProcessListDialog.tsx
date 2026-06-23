@@ -20,22 +20,30 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
   const [res, setRes] = useState<QueryResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [auto, setAuto] = useState(false);
   const sql = LIST_SQL[kind];
 
-  const refresh = useCallback(async () => {
+  // silent：自動更新時不切換 busy（避免按鈕文字每 3 秒閃動）。
+  const refresh = useCallback(async (silent = false) => {
     if (!sql) return;
-    setBusy(true);
+    if (!silent) setBusy(true);
     setErr(null);
     try {
       setRes(await api.runQuery(connId, sql));
     } catch (e: any) {
       setErr(e?.message ?? "讀取失敗");
     } finally {
-      setBusy(false);
+      if (!silent) setBusy(false);
     }
   }, [connId, sql]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  // 自動更新：每 3 秒靜默重載；關閉 / 卸載時清除計時器。
+  useEffect(() => {
+    if (!auto || !sql) return;
+    const t = setInterval(() => { void refresh(true); }, 3000);
+    return () => clearInterval(t);
+  }, [auto, sql, refresh]);
 
   // 終止：以每列第一欄為工作階段 ID（MySQL Id / PG pid）。ID 僅接受純數字（防注入）。
   const kill = async (row: (string | null)[]) => {
@@ -59,8 +67,12 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
         <div className="px-5 py-3 border-b border-white/10 flex items-center gap-2">
           <span className="font-medium text-sm">處理程序 / 工作階段</span>
           {res && <span className="text-xs text-white/40">{res.rows.length} 筆</span>}
+          <label className="ml-auto flex items-center gap-1.5 text-xs text-white/55">
+            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+            自動更新（3 秒）
+          </label>
           <button type="button" onClick={() => refresh()} disabled={busy}
-            className="ml-auto text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40">{busy ? "讀取中…" : "重新整理"}</button>
+            className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40">{busy ? "讀取中…" : "重新整理"}</button>
           <button type="button" onClick={onClose} className="text-white/40 hover:text-white">✕</button>
         </div>
 
