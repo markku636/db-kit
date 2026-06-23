@@ -8,6 +8,8 @@ import ErDiagram from "./ErDiagram";
 import RedisStatus from "./RedisStatus";
 import NewKeyDialog from "./NewKeyDialog";
 import CreateTableDialog from "./CreateTableDialog";
+import ConnectionProperties from "./ConnectionProperties";
+import TableProperties from "./TableProperties";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile } from "./ui";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
@@ -273,11 +275,17 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   const [newKey, setNewKey] = useState<{ connId: string; db: string } | null>(null);
   // 設計表結構（CREATE TABLE）對話框：帶連線 / 資料庫 / 種類。
   const [designTable, setDesignTable] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
+  // 連線屬性檢視（唯讀 + 即時狀態）。
+  const [connProps, setConnProps] = useState<ConnectionConfig | null>(null);
   // 連線 / 表 搜尋過濾字串
   const [filter, setFilter] = useState("");
   // 右鍵選單（SQL 表節點：產生 SQL）。objKind 為物件種類（"table" | "view"），決定生命週期 DDL。
   const [tableMenu, setTableMenu] = useState<
     { connId: string; db: string; table: string; kind: DbKind; objKind: string; x: number; y: number } | null
+  >(null);
+  // 資料表 / 集合屬性檢視。
+  const [tableProps, setTableProps] = useState<
+    { connId: string; db: string; table: string; kind: DbKind; objKind: string } | null
   >(null);
 
   const setBusy = (id: string, on: boolean) =>
@@ -500,11 +508,11 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
     if (!name?.trim() || name.trim() === m.table) return;
     try {
       await api.runQuery(m.connId, buildRenameTable(m.kind, m.db, m.table, name.trim()));
-      // 舊分頁鍵已失效：關閉並以新名重開（保留使用者上下文）。
+      // 舊分頁鍵已失效：關閉並以新名重開，保留原檢視（data / structure）。
       const oldKey = `${m.connId}:${m.db}:${m.table}`;
-      const wasOpen = useStore.getState().tabs.some((t) => t.key === oldKey);
+      const oldTab = useStore.getState().tabs.find((t) => t.key === oldKey);
       useStore.getState().closeTableTab(m.connId, m.db, m.table);
-      if (wasOpen) useStore.getState().openTable(m.connId, m.db, name.trim());
+      if (oldTab) useStore.getState().openTable(m.connId, m.db, name.trim(), oldTab.view);
       toast.success(`已重新命名為「${name.trim()}」`);
       refreshTables(m.connId, m.db);
     } catch (e: any) {
@@ -715,6 +723,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                 ...(connectedIds.has(menu.id) && menuConn.kind === "redis"
                   ? [["伺服器狀態", () => setStatus({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
                   : []),
+                ["屬性…", () => setConnProps(menuConn), false],
                 ["編輯…", () => onEdit(menuConn), false],
                 ["複製連線…", () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: `${menuConn.name} 複本`, password: "" }), false],
                 ["刪除", () => deleteConn(menuConn.id, menuConn.name), true],
@@ -801,6 +810,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
               tableMenu.kind === "mongo"
                 ? ([
                     ["開啟集合", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table)],
+                    ["屬性…", () => setTableProps({ connId: tableMenu.connId, db: tableMenu.db, table: tableMenu.table, kind: tableMenu.kind, objKind: tableMenu.objKind })],
                     ["查詢此集合", () => genMongoFind(tableMenu)],
                     ["複製集合名", () => copyToClipboard(tableMenu.table, "已複製集合名")],
                     ["刪除集合", () => dropCollection(tableMenu), true],
@@ -809,6 +819,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                     const isView = tableMenu.objKind === "view";
                     const arr: [string, () => void, boolean?][] = [
                       ["開啟資料表", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table)],
+                      ["屬性…", () => setTableProps({ connId: tableMenu.connId, db: tableMenu.db, table: tableMenu.table, kind: tableMenu.kind, objKind: tableMenu.objKind })],
                     ];
                     // 設計表結構：直接開啟結構分頁（欄位增刪改名 + 索引管理）。視圖無可設計結構，略過。
                     if (!isView) arr.push(["設計表結構…", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table, "structure")]);
@@ -818,8 +829,9 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                       ["產生 INSERT 範本", () => genInsert(tableMenu)],
                       ["複製建表 SQL", () => copyDdl(tableMenu)],
                       ["複製表名", () => copyToClipboard(tableMenu.table, "已複製表名")],
-                      ["重新命名…", () => renameTable(tableMenu)],
                     );
+                    // 視圖改名：PG 容許 ALTER … RENAME；MySQL/SQLite 不支援 view 改名，隱藏以免必定失敗。
+                    if (!isView || tableMenu.kind === "postgres") arr.push(["重新命名…", () => renameTable(tableMenu)]);
                     // 複製資料表結構（產生 SQL 到編輯器）；視圖無法以 CREATE TABLE LIKE 複製，略過。
                     if (!isView) arr.push(["複製資料表…", () => duplicateTable(tableMenu)]);
                     // TRUNCATE 對視圖無效，僅資料表顯示「清空」。
@@ -858,6 +870,25 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
           kind={designTable.kind}
           onClose={() => setDesignTable(null)}
           onCreated={() => refreshTables(designTable.connId, designTable.db)}
+        />
+      )}
+
+      {connProps && (
+        <ConnectionProperties
+          conn={connProps}
+          connected={connectedIds.has(connProps.id)}
+          onClose={() => setConnProps(null)}
+        />
+      )}
+
+      {tableProps && (
+        <TableProperties
+          connId={tableProps.connId}
+          db={tableProps.db}
+          table={tableProps.table}
+          kind={tableProps.kind}
+          objKind={tableProps.objKind}
+          onClose={() => setTableProps(null)}
         />
       )}
     </div>

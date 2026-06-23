@@ -67,9 +67,11 @@ export function buildDropView(kind: DbKind, db: string, table: string): string {
 }
 
 // 系統資料庫 / schema：前端據此隱藏刪除項，後端亦硬性拒絕（雙重防護）。public 不算系統（可刻意刪重建）。
+// PG 的 pg_ 前綴比對須大小寫敏感，與後端 starts_with("pg_") 一致；否則引號保留大小寫的使用者 schema
+// （如 "PG_data"）會被前端誤判為系統而隱藏刪除（後端其實允許）→ 過度封鎖。
 export function isSystemDatabase(kind: DbKind, name: string): boolean {
+  if (kind === "postgres") return name.startsWith("pg_") || name.toLowerCase() === "information_schema";
   const n = name.toLowerCase();
-  if (kind === "postgres") return n.startsWith("pg_") || n === "information_schema";
   if (kind === "mysql") return ["information_schema", "mysql", "performance_schema", "sys"].includes(n);
   if (kind === "mongo") return ["admin", "config", "local"].includes(n);
   return false;

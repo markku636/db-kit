@@ -263,6 +263,8 @@ describe("isSystemDatabase", () => {
     expect(isSystemDatabase("postgres", "information_schema")).toBe(true);
     expect(isSystemDatabase("postgres", "public")).toBe(false);
     expect(isSystemDatabase("postgres", "app")).toBe(false);
+    // pg_ 前綴比對大小寫敏感（與後端一致）：引號保留大小寫的使用者 schema 不算系統。
+    expect(isSystemDatabase("postgres", "PG_data")).toBe(false);
   });
   it("MySQL: mysql/sys/performance_schema/information_schema are system (case-insensitive)", () => {
     expect(isSystemDatabase("mysql", "mysql")).toBe(true);
