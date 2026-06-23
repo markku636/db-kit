@@ -141,6 +141,7 @@ impl DatabaseDriver for SqliteDriver {
                     key: if pk > 0 { "PRI".to_string() } else { String::new() },
                     default: r.try_get(4).ok(),
                     extra: String::new(),
+                    comment: String::new(),
                 }
             })
             .collect())

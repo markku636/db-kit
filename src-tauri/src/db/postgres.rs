@@ -131,6 +131,7 @@ impl DatabaseDriver for PostgresDriver {
                     key: key.to_string(),
                     default: r.try_get(3).ok(),
                     extra: String::new(),
+                    comment: String::new(),
                 }
             })
             .collect())

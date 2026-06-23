@@ -49,6 +49,7 @@ export interface ColumnInfo {
   key: string;
   default: string | null;
   extra: string;
+  comment?: string;
 }
 
 export interface IndexInfo {

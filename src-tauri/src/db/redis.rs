@@ -102,6 +102,7 @@ impl DatabaseDriver for RedisDriver {
                 key: "PRI".to_string(),
                 default: None,
                 extra: String::new(),
+                comment: String::new(),
             },
             ColumnInfo {
                 name: "type".to_string(),
@@ -110,6 +111,7 @@ impl DatabaseDriver for RedisDriver {
                 key: String::new(),
                 default: None,
                 extra: String::new(),
+                comment: String::new(),
             },
             ColumnInfo {
                 name: "ttl".to_string(),
@@ -118,6 +120,7 @@ impl DatabaseDriver for RedisDriver {
                 key: String::new(),
                 default: None,
                 extra: "秒；-1 表示無到期".to_string(),
+                comment: String::new(),
             },
         ])
     }

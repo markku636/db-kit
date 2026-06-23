@@ -197,7 +197,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
             {cols == null ? <Empty text="載入中…" /> : cols.length === 0 ? <Empty text="（無）" /> : (
               <table className="w-full text-xs">
                 <thead className="text-white/40">
-                  <tr><Th>欄名</Th><Th>型別</Th><Th>NULL</Th><Th>鍵</Th><Th>預設</Th></tr>
+                  <tr><Th>欄名</Th><Th>型別</Th><Th>NULL</Th><Th>鍵</Th><Th>預設</Th><Th>註解</Th></tr>
                 </thead>
                 <tbody>
                   {cols.map((c) => (
@@ -207,6 +207,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
                       <Td>{c.nullable ? "是" : "否"}</Td>
                       <Td>{c.key || "—"}</Td>
                       <Td mono>{c.default ?? "—"}</Td>
+                      <Td>{c.comment || "—"}</Td>
                     </tr>
                   ))}
                 </tbody>

@@ -106,7 +106,7 @@ impl DatabaseDriver for MysqlDriver {
         table: &str,
     ) -> AppResult<Vec<ColumnInfo>> {
         let sql = "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, \
-                   COLUMN_DEFAULT, EXTRA \
+                   COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT \
                    FROM information_schema.COLUMNS \
                    WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
                    ORDER BY ORDINAL_POSITION";
@@ -127,6 +127,7 @@ impl DatabaseDriver for MysqlDriver {
                 key: str_col(r, 3).unwrap_or_default(),
                 default: str_col(r, 4),
                 extra: str_col(r, 5).unwrap_or_default(),
+                comment: str_col(r, 6).unwrap_or_default(),
             })
             .collect())
     }

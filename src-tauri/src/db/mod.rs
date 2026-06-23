@@ -166,6 +166,8 @@ pub struct ColumnInfo {
     pub key: String,    // PRI / UNI / MUL / 空
     pub default: Option<String>,
     pub extra: String,  // auto_increment 等
+    #[serde(default)]
+    pub comment: String, // 欄位註解（MySQL COLUMN_COMMENT；其餘暫為空）
 }
 
 /// 分頁資料結果（「資料」分頁用）。含總列數以渲染分頁器。

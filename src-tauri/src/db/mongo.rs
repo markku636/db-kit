@@ -148,6 +148,7 @@ impl DatabaseDriver for MongoDriver {
                     nullable: !is_id,
                     default: None,
                     extra: String::new(),
+                    comment: String::new(),
                     name,
                 }
             })
