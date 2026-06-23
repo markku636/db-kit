@@ -1449,6 +1449,7 @@ function QueryPane() {
 function ResultTable({ result }: { result: QueryResult }) {
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
   const [menu, setMenu] = useState<{ r: number; c: number; x: number; y: number } | null>(null);
+  const [colMenu, setColMenu] = useState<{ c: number; x: number; y: number } | null>(null);
   const [inspect, setInspect] = useState<{ r: number; c: number } | null>(null);
 
   if (result.columns.length === 0) {
@@ -1530,7 +1531,9 @@ function ResultTable({ result }: { result: QueryResult }) {
           <tr>
             <th className="text-left px-3 py-1.5 border-b border-white/10 text-white/30 w-12">#</th>
             {result.columns.map((c, ci) => (
-              <th key={c} onClick={() => toggleSort(ci)} title="點擊排序（再點切換 / 取消）"
+              <th key={c} onClick={() => toggleSort(ci)}
+                onContextMenu={(e) => { e.preventDefault(); setColMenu({ c: ci, x: e.clientX, y: e.clientY }); }}
+                title="點擊排序（再點切換 / 取消）；右鍵更多"
                 className="text-left px-3 py-1.5 border-b border-white/10 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-white/5">
                 {c}
                 {sort?.c === ci && <span className="ml-1 text-amber-300 text-[10px]">{sort.dir === "asc" ? "▲" : "▼"}</span>}
@@ -1562,6 +1565,32 @@ function ResultTable({ result }: { result: QueryResult }) {
         <div className="px-3 py-2 text-xs text-amber-300/80 bg-amber-500/5 border-t border-white/10">
           僅顯示前 {MAX_RENDER.toLocaleString()} / 共 {viewRows.length.toLocaleString()} 列（避免卡頓）；請用「複製 / 匯出」取得全部。
         </div>
+      )}
+
+      {colMenu && (
+        <>
+          <div className="fixed inset-0 z-[89]"
+            onClick={() => setColMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setColMenu(null); }} />
+          <div className="fixed z-[90] min-w-[150px] bg-[#1a212b] border border-white/10 rounded shadow-2xl py-1 text-sm"
+            style={{ left: colMenu.x, top: colMenu.y }}>
+            {(
+              [
+                ["升冪排序 ▲", () => setSort({ c: colMenu.c, dir: "asc" })],
+                ["降冪排序 ▼", () => setSort({ c: colMenu.c, dir: "desc" })],
+                ...(sort ? [["清除排序", () => setSort(null)] as [string, () => void]] : []),
+                ["複製欄名", () => copyToClipboard(result.columns[colMenu.c], "已複製欄名")],
+                ["複製整欄", () => copyCol(colMenu.c)],
+              ] as [string, () => void][]
+            ).map(([label, fn]) => (
+              <button key={label} type="button"
+                onClick={() => { setColMenu(null); fn(); }}
+                className="block w-full text-left px-3 py-1.5 hover:bg-white/10 text-white/80">
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
       )}
 
       {inspect && (
