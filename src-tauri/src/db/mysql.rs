@@ -448,6 +448,28 @@ impl DatabaseDriver for MysqlDriver {
                 });
             }
         }
+        // 事件（MySQL 事件排程器）。
+        let erows = sqlx::query(
+            "SELECT EVENT_NAME, DATE_FORMAT(LAST_ALTERED, '%Y-%m-%d %H:%i:%s'), EVENT_COMMENT \
+             FROM information_schema.EVENTS WHERE EVENT_SCHEMA = ? ORDER BY EVENT_NAME",
+        )
+        .bind(database)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?;
+        for r in &erows {
+            if let Some(name) = str_col(r, 0) {
+                out.push(RoutineInfo {
+                    name,
+                    routine_type: "event".into(),
+                    parent: None,
+                    signature: None,
+                    modified: str_col(r, 1),
+                    deterministic: None,
+                    comment: str_col(r, 2).filter(|s| !s.is_empty()),
+                });
+            }
+        }
         Ok(out)
     }
 
@@ -457,14 +479,16 @@ impl DatabaseDriver for MysqlDriver {
             "procedure" => format!("SHOW CREATE PROCEDURE {qn}"),
             "function" => format!("SHOW CREATE FUNCTION {qn}"),
             "trigger" => format!("SHOW CREATE TRIGGER {qn}"),
+            "event" => format!("SHOW CREATE EVENT {qn}"),
             _ => return Err(AppError::Query(format!("未知的程序類型「{routine_type}」"))),
         };
+        // SHOW CREATE EVENT 的定義在第 4 欄（index 3）；其餘在第 3 欄（index 2）。
+        let def_idx = if routine_type == "event" { 3 } else { 2 };
         let row = sqlx::query(&stmt)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
-        // SHOW CREATE {PROCEDURE|FUNCTION|TRIGGER} 的定義都在第 3 欄（index 2）。
-        str_col(&row, 2).ok_or_else(|| AppError::Query("無法取得定義（可能權限不足）".into()))
+        str_col(&row, def_idx).ok_or_else(|| AppError::Query("無法取得定義（可能權限不足）".into()))
     }
 
     async fn exec_ddl(&self, sql: &str) -> AppResult<()> {

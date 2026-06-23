@@ -749,6 +749,20 @@ async fn mysql_full() {
     );
     d.exec_ddl("DROP TRIGGER atkit_trg").await.unwrap();
     d.query("DROP TABLE atkit_trg_t").await.unwrap();
+    // 事件（MySQL 事件排程器）：建立 / 列出 / 取定義 / 刪除。
+    d.exec_ddl("DROP EVENT IF EXISTS atkit_evt").await.unwrap();
+    d.exec_ddl("CREATE EVENT atkit_evt ON SCHEDULE EVERY 1 DAY DO SELECT 1").await.unwrap();
+    assert!(
+        d.list_routines("testdb").await.unwrap().iter().any(|r| r.name == "atkit_evt" && r.routine_type == "event"),
+        "事件應出現於 list_routines"
+    );
+    let edef = d.routine_definition("testdb", "atkit_evt", "event").await.unwrap();
+    assert!(edef.to_uppercase().contains("EVENT"), "事件定義應含 EVENT：{edef}");
+    d.exec_ddl("DROP EVENT atkit_evt").await.unwrap();
+    assert!(
+        !d.list_routines("testdb").await.unwrap().iter().any(|r| r.name == "atkit_evt"),
+        "刪除後事件應消失"
+    );
 
     // 建表 DDL + 索引（驗證本次新增的 table_ddl / table_indexes）
     let ddl = d.table_ddl("testdb", "t").await.unwrap();

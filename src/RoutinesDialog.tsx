@@ -3,11 +3,11 @@ import { api, DbKind, RoutineInfo, QueryResult } from "./api";
 import { quoteIdent, qualifiedName, buildRoutineCall } from "./sql";
 import { toast, uiConfirm, uiPrompt, useEscToClose } from "./ui";
 
-const TYPE_LABEL: Record<string, string> = { procedure: "預存程序", function: "函式", trigger: "觸發器" };
+const TYPE_LABEL: Record<string, string> = { procedure: "預存程序", function: "函式", trigger: "觸發器", event: "事件" };
 
 // 各資料庫可新增的 routine 種類。
 const NEW_TYPES: Record<string, string[]> = {
-  mysql: ["procedure", "function", "trigger"],
+  mysql: ["procedure", "function", "trigger", "event"],
   postgres: ["function", "procedure", "trigger"],
   sqlite: ["trigger"],
 };
@@ -17,6 +17,7 @@ function template(kind: DbKind, type: string): string {
   if (kind === "mysql") {
     if (type === "procedure") return "CREATE PROCEDURE proc_name(IN p1 INT)\nBEGIN\n  SELECT p1;\nEND";
     if (type === "function") return "CREATE FUNCTION fn_name(p1 INT) RETURNS INT DETERMINISTIC\nBEGIN\n  RETURN p1 + 1;\nEND";
+    if (type === "event") return "CREATE EVENT evt_name\nON SCHEDULE EVERY 1 DAY\nCOMMENT ''\nDO\nBEGIN\n  -- 你的排程 SQL，例如清理舊資料；\n  -- DELETE FROM logs WHERE created < NOW() - INTERVAL 30 DAY;\nEND";
     return "CREATE TRIGGER trg_name BEFORE INSERT ON table_name\nFOR EACH ROW\nBEGIN\n  -- SET NEW.col = ...;\nEND";
   }
   if (kind === "postgres") {
@@ -31,7 +32,7 @@ function template(kind: DbKind, type: string): string {
 function buildDropRoutine(kind: DbKind, db: string, r: RoutineInfo): string {
   const t = r.routine_type;
   if (kind === "mysql") {
-    const kw = t === "procedure" ? "PROCEDURE" : t === "function" ? "FUNCTION" : "TRIGGER";
+    const kw = t === "procedure" ? "PROCEDURE" : t === "function" ? "FUNCTION" : t === "event" ? "EVENT" : "TRIGGER";
     return `DROP ${kw} IF EXISTS ${qualifiedName(kind, db, r.name)}`;
   }
   if (kind === "postgres") {
