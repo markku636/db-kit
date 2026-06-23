@@ -4,7 +4,7 @@ import {
 } from "./api";
 import { OpenTab, useStore } from "./store";
 import { toast, uiConfirm, uiPrompt, copyToClipboard } from "./ui";
-import { quoteIdent, sqlLiteral, buildRowUpdate, buildRowDelete } from "./sql";
+import { quoteIdent, sqlLiteral, buildRowUpdate, buildRowDelete, buildAddForeignKey } from "./sql";
 import ExportDialog from "./ExportDialog";
 import ImportDialog from "./ImportDialog";
 import { AlterOp } from "./api";
@@ -1675,6 +1675,8 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   const [addingIndex, setAddingIndex] = useState(false);
   const [fks, setFks] = useState<ErRelation[] | null>(null); // 此表的外鍵（from_table = 本表）
   const [incomingFks, setIncomingFks] = useState<ErRelation[] | null>(null); // 被哪些表參照（to_table = 本表）
+  const [addingFk, setAddingFk] = useState(false);
+  const isView = tab.objKind === "view";
 
   const viewDdl = async () => {
     try {
@@ -1739,6 +1741,21 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     const t = await uiPrompt("新型別", { title: `修改欄位「${name}」型別`, defaultValue: currentType, placeholder: "如 VARCHAR(100) / int / text" });
     if (!t?.trim() || t.trim() === currentType) return;
     doAlter({ op: "modify_column", name, data_type: t.trim(), nullable }, "欄位型別已修改");
+  };
+  // 新增外鍵（MySQL / PostgreSQL；走 exec_ddl）。
+  const addFk = async (name: string, column: string, refTable: string, refColumn: string) => {
+    if (!kind) return;
+    setBusy(true);
+    try {
+      await api.execDdl(tab.connId, buildAddForeignKey(kind, tab.database, tab.table, name, column, refTable, refColumn));
+      toast.success("外鍵已新增");
+      setAddingFk(false);
+      setNonce((n) => n + 1);
+    } catch (e: any) {
+      toast.error(e?.message ?? "新增外鍵失敗");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const dropIndexByName = async (name: string) => {
@@ -1905,29 +1922,41 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       )}
 
       {/* 外鍵區（取自 ER 模型；致敬商用工具的結構檢視） */}
-      {isSql && fks && fks.length > 0 && (
+      {isSql && !isView && fks && (fks.length > 0 || kind !== "sqlite") && (
         <div className="mt-2">
-          <div className="px-3 py-1.5 text-xs text-white/40 bg-[#10161e] border-y border-white/10">
-            外鍵（{fks.length}）
+          <div className="px-3 py-1.5 text-xs text-white/40 bg-[#10161e] border-y border-white/10 flex items-center gap-2">
+            <span>外鍵（{fks.length}）</span>
+            {kind !== "sqlite" && (
+              <button type="button" onClick={() => setAddingFk((s) => !s)} disabled={busy}
+                className="px-1.5 py-0.5 rounded hover:bg-white/10 text-white/60 disabled:opacity-40">＋ 新增外鍵</button>
+            )}
           </div>
-          <table className="text-sm border-collapse w-full">
-            <thead className="bg-[#1a212b]">
-              <tr>
-                {["欄位", "參照", "參照欄位"].map((h) => (
-                  <th key={h} className="text-left px-3 py-1.5 border-b border-white/10 font-medium">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {fks.map((fk, i) => (
-                <tr key={`${fk.from_column}-${i}`} className="hover:bg-white/5">
-                  <td className="px-3 py-1 border-b border-white/5 mono">{fk.from_column}</td>
-                  <td className="px-3 py-1 border-b border-white/5 mono text-white/50">→ {fk.to_table}</td>
-                  <td className="px-3 py-1 border-b border-white/5 mono">{fk.to_column}</td>
+          {addingFk && kind !== "sqlite" && cols && (
+            <AddForeignKeyForm table={tab.table} columns={cols.map((c) => c.name)} busy={busy}
+              onCancel={() => setAddingFk(false)} onSubmit={addFk} />
+          )}
+          {fks.length === 0 ? (
+            <div className="px-3 py-2 text-white/30 text-xs">尚無外鍵。</div>
+          ) : (
+            <table className="text-sm border-collapse w-full">
+              <thead className="bg-[#1a212b]">
+                <tr>
+                  {["欄位", "參照", "參照欄位"].map((h) => (
+                    <th key={h} className="text-left px-3 py-1.5 border-b border-white/10 font-medium">{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {fks.map((fk, i) => (
+                  <tr key={`${fk.from_column}-${i}`} className="hover:bg-white/5">
+                    <td className="px-3 py-1 border-b border-white/5 mono">{fk.from_column}</td>
+                    <td className="px-3 py-1 border-b border-white/5 mono text-white/50">→ {fk.to_table}</td>
+                    <td className="px-3 py-1 border-b border-white/5 mono">{fk.to_column}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 
@@ -2000,6 +2029,36 @@ function AddColumnForm({ onSubmit, onCancel, busy }: {
 }
 
 // 新增索引表單：名稱 + 欄位多選（依點選順序組複合索引）+ 唯一。
+function AddForeignKeyForm({ table, columns, busy, onSubmit, onCancel }: {
+  table: string;
+  columns: string[];
+  busy: boolean;
+  onSubmit: (name: string, column: string, refTable: string, refColumn: string) => void;
+  onCancel: () => void;
+}) {
+  const [column, setColumn] = useState(columns[0] ?? "");
+  const [refTable, setRefTable] = useState("");
+  const [refColumn, setRefColumn] = useState("");
+  const [name, setName] = useState("");
+  const ic = "bg-black/30 border border-white/10 rounded px-2 py-1 text-xs outline-none focus:border-blue-500";
+  const effName = name.trim() || `fk_${table}_${column}`;
+  const valid = !!column && !!refTable.trim() && !!refColumn.trim();
+  return (
+    <div className="px-3 py-2 bg-black/20 border-b border-white/10 flex flex-wrap items-center gap-2">
+      <select value={column} onChange={(e) => setColumn(e.target.value)} title="本表欄位" className={ic}>
+        {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <span className="text-white/40 text-xs">→</span>
+      <input value={refTable} onChange={(e) => setRefTable(e.target.value)} placeholder="參照表" className={`${ic} w-28`} />
+      <input value={refColumn} onChange={(e) => setRefColumn(e.target.value)} placeholder="參照欄位" className={`${ic} w-28`} />
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder={effName} title="約束名稱（留空自動產生）" className={`${ic} w-40`} />
+      <button type="button" disabled={busy || !valid} onClick={() => onSubmit(effName, column, refTable, refColumn)}
+        className="px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40">建立</button>
+      <button type="button" onClick={onCancel} className="px-2 py-1 text-xs rounded border border-white/15 hover:bg-white/5">取消</button>
+    </div>
+  );
+}
+
 function AddIndexForm({ columns, busy, onSubmit, onCancel }: {
   columns: string[];
   busy: boolean;

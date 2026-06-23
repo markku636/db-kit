@@ -108,6 +108,23 @@ export function buildCreateView(kind: DbKind, db: string, name: string, select: 
   return `CREATE VIEW ${qualifiedName(kind, db, name.trim())} AS\n${select.trim()};`;
 }
 
+// 新增外鍵：ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY(col) REFERENCES refTable(refCol)（MySQL / PG 同語法）。
+export function buildAddForeignKey(
+  kind: DbKind,
+  db: string,
+  table: string,
+  name: string,
+  column: string,
+  refTable: string,
+  refColumn: string,
+): string {
+  const qi = (id: string) => quoteIdent(kind, id);
+  return (
+    `ALTER TABLE ${qualifiedName(kind, db, table)} ADD CONSTRAINT ${qi(name.trim())} ` +
+    `FOREIGN KEY (${qi(column.trim())}) REFERENCES ${qualifiedName(kind, db, refTable.trim())} (${qi(refColumn.trim())});`
+  );
+}
+
 // 由某列產生 UPDATE / DELETE 範本（送往編輯器供檢視）。表名以 quoteIdent（與 copyRowInsert 一致，不限定 db），
 // 值以 sqlLiteral 跨方言跳脫。WHERE 用主鍵定位（呼叫端確保有主鍵）。
 export function buildRowUpdate(

@@ -21,6 +21,7 @@ import {
   buildRenameTable,
   buildDuplicateTable,
   buildCreateView,
+  buildAddForeignKey,
   buildRowUpdate,
   buildRowDelete,
   formatSql,
@@ -264,6 +265,15 @@ describe("table/database lifecycle DDL", () => {
   it("buildCreateView qualifies the name and trims the SELECT", () => {
     expect(buildCreateView("postgres", "public", "v ", " SELECT 1 ")).toBe('CREATE VIEW "public"."v" AS\nSELECT 1;');
     expect(buildCreateView("mysql", "db", "v", "SELECT * FROM t")).toBe("CREATE VIEW `db`.`v` AS\nSELECT * FROM t;");
+  });
+
+  it("buildAddForeignKey: ALTER ADD CONSTRAINT … FOREIGN KEY … REFERENCES", () => {
+    expect(buildAddForeignKey("mysql", "db", "orders", "fk_o_u", "user_id", "users", "id")).toBe(
+      "ALTER TABLE `db`.`orders` ADD CONSTRAINT `fk_o_u` FOREIGN KEY (`user_id`) REFERENCES `db`.`users` (`id`);",
+    );
+    expect(buildAddForeignKey("postgres", "public", "orders", "fk_o_u", "user_id", "users", "id")).toBe(
+      'ALTER TABLE "public"."orders" ADD CONSTRAINT "fk_o_u" FOREIGN KEY ("user_id") REFERENCES "public"."users" ("id");',
+    );
   });
 
   it("buildRowUpdate / buildRowDelete: quoted idents, escaped values, PK WHERE", () => {
