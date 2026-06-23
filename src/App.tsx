@@ -1477,21 +1477,29 @@ function ResultTable({ result }: { result: QueryResult }) {
     });
   }, [result.rows, sort]);
 
+  // client-side 篩選：任一儲存格含關鍵字（不分大小寫）。在排序後套用。
+  const [rfilter, setRfilter] = useState("");
+  const viewRows = useMemo(() => {
+    const q = rfilter.trim().toLowerCase();
+    if (!q) return sortedRows;
+    return sortedRows.filter((row) => row.some((v) => (v ?? "").toLowerCase().includes(q)));
+  }, [sortedRows, rfilter]);
+
   // 大結果集只渲染前 N 列，避免數萬列 DOM 卡死 UI；複製 / 匯出仍取全部。
   const MAX_RENDER = 2000;
-  const rendered = sortedRows.length > MAX_RENDER ? sortedRows.slice(0, MAX_RENDER) : sortedRows;
+  const rendered = viewRows.length > MAX_RENDER ? viewRows.slice(0, MAX_RENDER) : viewRows;
 
-  const cell = (r: number, c: number) => sortedRows[r]?.[c] ?? null;
+  const cell = (r: number, c: number) => viewRows[r]?.[c] ?? null;
   const copyCell = (r: number, c: number) => copyToClipboard(cell(r, c) ?? "", "已複製儲存格");
   const copyRowTsv = (r: number) =>
-    copyToClipboard(sortedRows[r].map((v) => v ?? "").join("\t"), "已複製整列 (TSV)");
+    copyToClipboard(viewRows[r].map((v) => v ?? "").join("\t"), "已複製整列 (TSV)");
   const copyRowJson = (r: number) =>
     copyToClipboard(
-      JSON.stringify(Object.fromEntries(result.columns.map((c, j) => [c, sortedRows[r][j] ?? null])), null, 2),
+      JSON.stringify(Object.fromEntries(result.columns.map((c, j) => [c, viewRows[r][j] ?? null])), null, 2),
       "已複製整列 (JSON)"
     );
   const copyCol = (c: number) =>
-    copyToClipboard(sortedRows.map((row) => row[c] ?? "").join("\n"), "已複製整欄");
+    copyToClipboard(viewRows.map((row) => row[c] ?? "").join("\n"), "已複製整欄");
   const toggleSort = (ci: number) =>
     setSort((s) => (s?.c === ci ? (s.dir === "asc" ? { c: ci, dir: "desc" } : null) : { c: ci, dir: "asc" }));
 
@@ -1505,8 +1513,19 @@ function ResultTable({ result }: { result: QueryResult }) {
 
   return (
     <div className="outline-none" tabIndex={0} onKeyDown={onKey}>
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/10 bg-[#11161d] sticky top-0 z-10">
+        <input
+          value={rfilter}
+          onChange={(e) => setRfilter(e.target.value)}
+          placeholder="篩選結果（任一欄含關鍵字）…"
+          className="w-64 bg-black/30 border border-white/10 rounded px-2 py-1 text-xs outline-none focus:border-blue-500"
+        />
+        <span className="text-xs text-white/40">
+          {rfilter.trim() ? `${viewRows.length} / ${result.rows.length} 列` : `${result.rows.length} 列`}
+        </span>
+      </div>
       <table className="text-sm border-collapse w-full">
-        <thead className="sticky top-0 bg-[#1a212b]">
+        <thead className="sticky top-[34px] bg-[#1a212b]">
           <tr>
             <th className="text-left px-3 py-1.5 border-b border-white/10 text-white/30 w-12">#</th>
             {result.columns.map((c, ci) => (
@@ -1538,9 +1557,9 @@ function ResultTable({ result }: { result: QueryResult }) {
         </tbody>
       </table>
 
-      {result.rows.length > MAX_RENDER && (
+      {viewRows.length > MAX_RENDER && (
         <div className="px-3 py-2 text-xs text-amber-300/80 bg-amber-500/5 border-t border-white/10">
-          僅顯示前 {MAX_RENDER.toLocaleString()} / 共 {result.rows.length.toLocaleString()} 列（避免卡頓）；請用「複製 / 匯出」取得全部。
+          僅顯示前 {MAX_RENDER.toLocaleString()} / 共 {viewRows.length.toLocaleString()} 列（避免卡頓）；請用「複製 / 匯出」取得全部。
         </div>
       )}
 
