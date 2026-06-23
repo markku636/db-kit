@@ -471,6 +471,17 @@ pub trait DatabaseDriver: Send + Sync {
         Err(AppError::Unsupported("此資料庫不支援新增資料庫".into()))
     }
 
+    /// 刪除集合（MongoDB）。關聯式請改用 DROP TABLE。預設 Unsupported。
+    async fn drop_collection(&self, _database: &str, _name: &str) -> AppResult<()> {
+        Err(AppError::Unsupported("此資料庫不支援刪除集合".into()))
+    }
+
+    /// 刪除資料庫 / schema。MySQL → DROP DATABASE、PostgreSQL → DROP SCHEMA CASCADE、
+    /// MongoDB → Database::drop。SQLite 單檔不支援。
+    async fn drop_database(&self, _name: &str) -> AppResult<()> {
+        Err(AppError::Unsupported("此資料庫不支援刪除資料庫".into()))
+    }
+
     /// 結構編輯（DDL：ALTER TABLE）。非關聯式預設 Unsupported。
     async fn alter_table(&self, _database: &str, _table: &str, _op: &AlterOp) -> AppResult<()> {
         Err(AppError::Unsupported("此資料庫不支援結構編輯".into()))

@@ -190,6 +190,24 @@ impl Active {
             Active::Redis(d) => d.create_database(name).await,
         }
     }
+    async fn drop_collection(&self, database: &str, name: &str) -> AppResult<()> {
+        match self {
+            Active::Mysql(d) => d.drop_collection(database, name).await,
+            Active::Postgres(d) => d.drop_collection(database, name).await,
+            Active::Sqlite(d) => d.drop_collection(database, name).await,
+            Active::Mongo(d) => d.drop_collection(database, name).await,
+            Active::Redis(d) => d.drop_collection(database, name).await,
+        }
+    }
+    async fn drop_database(&self, name: &str) -> AppResult<()> {
+        match self {
+            Active::Mysql(d) => d.drop_database(name).await,
+            Active::Postgres(d) => d.drop_database(name).await,
+            Active::Sqlite(d) => d.drop_database(name).await,
+            Active::Mongo(d) => d.drop_database(name).await,
+            Active::Redis(d) => d.drop_database(name).await,
+        }
+    }
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
         match self {
             Active::Mysql(d) => d.alter_table(database, table, op).await,
@@ -506,6 +524,14 @@ impl ConnectionManager {
 
     pub async fn create_database(&self, id: &str, name: &str) -> AppResult<()> {
         self.get(id)?.active.create_database(name).await
+    }
+
+    pub async fn drop_collection(&self, id: &str, database: &str, name: &str) -> AppResult<()> {
+        self.get(id)?.active.drop_collection(database, name).await
+    }
+
+    pub async fn drop_database(&self, id: &str, name: &str) -> AppResult<()> {
+        self.get(id)?.active.drop_database(name).await
     }
 
     pub async fn alter_table(

@@ -396,6 +396,16 @@ impl DatabaseDriver for PostgresDriver {
             .map_err(|e| AppError::Query(e.to_string()))
     }
 
+    async fn drop_database(&self, name: &str) -> AppResult<()> {
+        // PG「刪除資料庫」對應 DROP SCHEMA … CASCADE（連帶其表 / 物件）。
+        let sql = format!("DROP SCHEMA {} CASCADE", quote_ident(name));
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
         let q_tbl = format!("{}.{}", quote_ident(database), quote_ident(table));
         let ddl = match op {

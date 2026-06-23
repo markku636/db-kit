@@ -14,6 +14,7 @@ import {
   loadSavedQueries, persistSavedQueries,
   resultToTsv, resultToJson, resultToCsv, fmtElapsed, splitSqlStatements,
   quoteIdent, qualifiedName,
+  buildDropTable, buildTruncateTable, buildRenameTable,
 } from "./sql";
 import type { SavedQuery } from "./sql";
 
@@ -432,6 +433,24 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
     }
   };
 
+  // 刪除資料庫 / schema（DROP DATABASE / DROP SCHEMA CASCADE / Mongo drop）。高破壞性，需確認。
+  const dropDatabase = async (connId: string, db: string, kind: DbKind) => {
+    const noun = kind === "postgres" ? "Schema" : "資料庫";
+    const ok = await uiConfirm(`刪除${noun}「${db}」？其下所有資料表 / 物件將一併刪除，無法復原。`, {
+      title: `刪除${noun}`,
+      danger: true,
+      confirmText: "刪除",
+    });
+    if (!ok) return;
+    try {
+      await api.dropDatabase(connId, db);
+      toast.success(`已刪除${noun}「${db}」`);
+      refreshDbs(connId);
+    } catch (e: any) {
+      toast.error(e?.message ?? "刪除失敗");
+    }
+  };
+
   // ---- 產生 SQL（致敬 Navicat / DBeaver 的 SQL 範本）----
   const quoteId = quoteIdent;
   const qualified = qualifiedName;
@@ -461,6 +480,57 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
       await copyToClipboard(await api.tableDdl(m.connId, m.db, m.table), "已複製建表 SQL");
     } catch (e: any) {
       toast.error(e?.message ?? "取得建表 SQL 失敗");
+    }
+  };
+
+  // ---- 資料表 / 集合生命週期（rename / truncate / drop）----
+  const renameTable = async (m: TblRef) => {
+    const name = await uiPrompt("新名稱", { title: "重新命名資料表", defaultValue: m.table });
+    if (!name?.trim() || name.trim() === m.table) return;
+    try {
+      await api.runQuery(m.connId, buildRenameTable(m.kind, m.db, m.table, name.trim()));
+      toast.success(`已重新命名為「${name.trim()}」`);
+      refreshTables(m.connId, m.db);
+    } catch (e: any) {
+      toast.error(e?.message ?? "重新命名失敗");
+    }
+  };
+  const truncateTable = async (m: TblRef) => {
+    const ok = await uiConfirm(`清空資料表「${m.table}」的所有資料？此動作無法復原。`, {
+      title: "清空資料表", danger: true, confirmText: "清空",
+    });
+    if (!ok) return;
+    try {
+      await api.runQuery(m.connId, buildTruncateTable(m.kind, m.db, m.table));
+      toast.success(`已清空「${m.table}」`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "清空失敗");
+    }
+  };
+  const dropTable = async (m: TblRef) => {
+    const ok = await uiConfirm(`刪除資料表「${m.table}」？此動作無法復原。`, {
+      title: "刪除資料表", danger: true, confirmText: "刪除",
+    });
+    if (!ok) return;
+    try {
+      await api.runQuery(m.connId, buildDropTable(m.kind, m.db, m.table));
+      toast.success(`已刪除資料表「${m.table}」`);
+      refreshTables(m.connId, m.db);
+    } catch (e: any) {
+      toast.error(e?.message ?? "刪除失敗");
+    }
+  };
+  const dropCollection = async (m: TblRef) => {
+    const ok = await uiConfirm(`刪除集合「${m.table}」？此動作無法復原。`, {
+      title: "刪除集合", danger: true, confirmText: "刪除",
+    });
+    if (!ok) return;
+    try {
+      await api.dropCollection(m.connId, m.db, m.table);
+      toast.success(`已刪除集合「${m.table}」`);
+      refreshTables(m.connId, m.db);
+    } catch (e: any) {
+      toast.error(e?.message ?? "刪除失敗");
     }
   };
 
@@ -652,13 +722,21 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                       ["新增集合…", () => createCollection(dbMenu.connId, dbMenu.db), false],
                       ["新增資料庫…", () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
                       ["編輯屬性…", editConn, false],
+                      ["刪除資料庫…", () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true],
                     ]
-                  : [
-                      ["設計表結構…", () => { if (dbConn) setDesignTable({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false],
-                      ["新增資料庫…", () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
-                      ["匯出結構 SQL…", () => dumpSchema(dbMenu.connId, dbMenu.db), false],
-                      ["編輯屬性…", editConn, false],
-                    ];
+                  : ((): [string, () => void, boolean][] => {
+                      const k = dbConn?.kind;
+                      const noun = k === "postgres" ? "Schema" : "資料庫";
+                      const arr: [string, () => void, boolean][] = [
+                        ["設計表結構…", () => { if (dbConn) setDesignTable({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false],
+                      ];
+                      // SQLite 為單檔，無多資料庫概念，故不顯示新增 / 刪除資料庫。
+                      if (k !== "sqlite") arr.push([`新增${noun}…`, () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false]);
+                      arr.push(["匯出結構 SQL…", () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
+                      arr.push(["編輯屬性…", editConn, false]);
+                      if (k !== "sqlite") arr.push([`刪除${noun}…`, () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
+                      return arr;
+                    })();
               return items.map(([label, fn, danger]) => (
                 <button key={label} type="button"
                   onClick={() => { setDbMenu(null); fn(); }}
@@ -684,7 +762,8 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                     ["開啟集合", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table)],
                     ["查詢此集合", () => genMongoFind(tableMenu)],
                     ["複製集合名", () => copyToClipboard(tableMenu.table, "已複製集合名")],
-                  ] as [string, () => void][])
+                    ["刪除集合", () => dropCollection(tableMenu), true],
+                  ] as [string, () => void, boolean?][])
                 : ([
                     ["開啟資料表", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table)],
                     ["查詢前 100 筆", () => genSelect(tableMenu)],
@@ -692,11 +771,14 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                     ["產生 INSERT 範本", () => genInsert(tableMenu)],
                     ["複製建表 SQL", () => copyDdl(tableMenu)],
                     ["複製表名", () => copyToClipboard(tableMenu.table, "已複製表名")],
-                  ] as [string, () => void][])
-            ).map(([label, fn]) => (
+                    ["重新命名…", () => renameTable(tableMenu)],
+                    ["清空資料表", () => truncateTable(tableMenu), true],
+                    ["刪除資料表", () => dropTable(tableMenu), true],
+                  ] as [string, () => void, boolean?][])
+            ).map(([label, fn, danger]) => (
               <button key={label} type="button"
                 onClick={() => { setTableMenu(null); fn(); }}
-                className="block w-full text-left px-3 py-1.5 hover:bg-white/10 text-white/80">
+                className={`block w-full text-left px-3 py-1.5 hover:bg-white/10 ${danger ? "text-red-300" : "text-white/80"}`}>
                 {label}
               </button>
             ))}

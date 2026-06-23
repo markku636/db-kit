@@ -662,11 +662,12 @@ async fn mysql_full() {
     assert!(d.list_tables("testdb").await.unwrap().iter().any(|t| t.name == "t"));
     assert!(d.table_columns("testdb", "t").await.unwrap().iter().any(|c| c.name == "a"));
 
-    // 新增資料庫（CREATE DATABASE）→ 出現於清單 → 清理。
+    // 新增 / 刪除資料庫（CREATE / DROP DATABASE）→ 出現後消失。
     d.query("DROP DATABASE IF EXISTS atkit_newdb").await.unwrap();
     d.create_database("atkit_newdb").await.unwrap();
     assert!(d.list_databases().await.unwrap().contains(&"atkit_newdb".to_string()), "新增資料庫應出現於清單");
-    d.query("DROP DATABASE atkit_newdb").await.unwrap();
+    d.drop_database("atkit_newdb").await.unwrap();
+    assert!(!d.list_databases().await.unwrap().contains(&"atkit_newdb".to_string()), "刪除後資料庫應消失");
 
     // 建表 DDL + 索引（驗證本次新增的 table_ddl / table_indexes）
     let ddl = d.table_ddl("testdb", "t").await.unwrap();
@@ -883,11 +884,12 @@ async fn postgres_full() {
     assert!(d.list_databases().await.unwrap().contains(&"public".to_string()));
     assert!(d.list_tables("public").await.unwrap().iter().any(|t| t.name == "t"));
 
-    // 新增資料庫（PG → CREATE SCHEMA）→ 出現於 schema 清單 → 清理。
+    // 新增 / 刪除資料庫（PG → CREATE / DROP SCHEMA CASCADE）→ 出現後消失。
     d.query("DROP SCHEMA IF EXISTS atkit_newschema CASCADE").await.unwrap();
     d.create_database("atkit_newschema").await.unwrap();
     assert!(d.list_databases().await.unwrap().contains(&"atkit_newschema".to_string()), "新增 schema 應出現");
-    d.query("DROP SCHEMA atkit_newschema CASCADE").await.unwrap();
+    d.drop_database("atkit_newschema").await.unwrap();
+    assert!(!d.list_databases().await.unwrap().contains(&"atkit_newschema".to_string()), "刪除後 schema 應消失");
 
     // 建表 DDL（欄位重建）+ 索引（pg_index）
     let ddl = d.table_ddl("public", "t").await.unwrap();
@@ -1295,6 +1297,12 @@ async fn mongo_full() {
     assert!(
         d.list_tables("testdb").await.unwrap().iter().any(|t| t.name == nc),
         "新增的集合 {nc} 應出現於清單"
+    );
+    // 刪除集合（drop_collection）→ 從清單消失（兼作清理）。
+    d.drop_collection("testdb", &nc).await.unwrap();
+    assert!(
+        !d.list_tables("testdb").await.unwrap().iter().any(|t| t.name == nc),
+        "刪除後集合 {nc} 應消失"
     );
 
     // query() JSON 介面 + limit（驗證 sort/projection/limit 擴充）：2 筆中 limit 1 → 回 1 筆

@@ -55,6 +55,27 @@ export function buildCreateTable(
   return `CREATE TABLE ${qualifiedName(kind, db, table.trim())} (\n  ${lines.join(",\n  ")}\n);`;
 }
 
+// ---- 資料表生命週期 DDL（drop / truncate / rename / drop database）----
+
+export function buildDropTable(kind: DbKind, db: string, table: string): string {
+  return `DROP TABLE ${qualifiedName(kind, db, table)};`;
+}
+
+// 清空：SQLite 無 TRUNCATE，改用 DELETE FROM（仍清空全表）。
+export function buildTruncateTable(kind: DbKind, db: string, table: string): string {
+  const q = qualifiedName(kind, db, table);
+  return kind === "sqlite" ? `DELETE FROM ${q};` : `TRUNCATE TABLE ${q};`;
+}
+
+// 重新命名：MySQL 用 RENAME TABLE（新名同 schema 限定）；PG / SQLite 用 ALTER TABLE … RENAME TO。
+// （刪除資料庫 / schema 走後端 drop_database，與 create_database 對稱，故此處不再組 SQL。）
+export function buildRenameTable(kind: DbKind, db: string, oldName: string, newName: string): string {
+  if (kind === "mysql") {
+    return `RENAME TABLE ${qualifiedName(kind, db, oldName)} TO ${qualifiedName(kind, db, newName)};`;
+  }
+  return `ALTER TABLE ${qualifiedName(kind, db, oldName)} RENAME TO ${quoteIdent(kind, newName)};`;
+}
+
 // ---- 查詢歷史（localStorage，最近在前，去重，上限 50）----
 export const QUERY_HISTORY_KEY = "at-kit:queryHistory";
 const QUERY_HISTORY_CAP = 50;

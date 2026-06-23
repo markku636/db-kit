@@ -282,6 +282,23 @@ pub async fn create_database(state: State<'_, AppState>, id: String, name: Strin
     state.manager.create_database(&id, &name).await
 }
 
+/// 刪除集合（MongoDB）。
+#[tauri::command]
+pub async fn drop_collection(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    name: String,
+) -> AppResult<()> {
+    state.manager.drop_collection(&id, &database, &name).await
+}
+
+/// 刪除資料庫 / schema（MySQL DROP DATABASE、PostgreSQL DROP SCHEMA CASCADE、MongoDB Database::drop）。
+#[tauri::command]
+pub async fn drop_database(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    state.manager.drop_database(&id, &name).await
+}
+
 #[tauri::command]
 pub async fn alter_table(
     state: State<'_, AppState>,

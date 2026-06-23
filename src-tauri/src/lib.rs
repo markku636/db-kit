@@ -72,6 +72,8 @@ pub fn run() {
             commands::column_stats,
             commands::create_collection,
             commands::create_database,
+            commands::drop_collection,
+            commands::drop_database,
             commands::alter_table,
             commands::er_model,
             commands::table_ddl,

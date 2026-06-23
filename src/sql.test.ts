@@ -15,6 +15,9 @@ import {
   SAVED_QUERIES_KEY,
   QUERY_HISTORY_KEY,
   buildCreateTable,
+  buildDropTable,
+  buildTruncateTable,
+  buildRenameTable,
   type NewColumn,
 } from "./sql";
 
@@ -212,5 +215,25 @@ describe("buildCreateTable", () => {
       { name: "id", type: "INT", pk: true, unique: true },
     ]));
     expect(sql).not.toContain("UNIQUE");
+  });
+});
+
+describe("table/database lifecycle DDL", () => {
+  it("buildDropTable qualifies per kind", () => {
+    expect(buildDropTable("postgres", "public", "t")).toBe('DROP TABLE "public"."t";');
+    expect(buildDropTable("mysql", "db", "t")).toBe("DROP TABLE `db`.`t`;");
+    expect(buildDropTable("sqlite", "main", "t")).toBe("DROP TABLE `t`;");
+  });
+
+  it("buildTruncateTable: SQLite falls back to DELETE FROM", () => {
+    expect(buildTruncateTable("postgres", "public", "t")).toBe('TRUNCATE TABLE "public"."t";');
+    expect(buildTruncateTable("mysql", "db", "t")).toBe("TRUNCATE TABLE `db`.`t`;");
+    expect(buildTruncateTable("sqlite", "main", "t")).toBe("DELETE FROM `t`;");
+  });
+
+  it("buildRenameTable: MySQL RENAME TABLE, others ALTER … RENAME TO", () => {
+    expect(buildRenameTable("mysql", "db", "old", "new")).toBe("RENAME TABLE `db`.`old` TO `db`.`new`;");
+    expect(buildRenameTable("postgres", "public", "old", "new")).toBe('ALTER TABLE "public"."old" RENAME TO "new";');
+    expect(buildRenameTable("sqlite", "main", "old", "new")).toBe("ALTER TABLE `old` RENAME TO `new`;");
   });
 });

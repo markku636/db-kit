@@ -557,6 +557,22 @@ impl DatabaseDriver for MongoDriver {
             .map_err(|e| AppError::Query(e.to_string()))
     }
 
+    async fn drop_collection(&self, database: &str, name: &str) -> AppResult<()> {
+        self.db_handle(database)
+            .collection::<Document>(name)
+            .drop()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    async fn drop_database(&self, name: &str) -> AppResult<()> {
+        self.client
+            .database(name)
+            .drop()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
     fn pool_status(&self) -> PoolStatus {
         // mongodb crate 未公開即時池統計，回傳 0（介面相容用）。
         PoolStatus { size: 0, idle: 0, in_use: 0 }
