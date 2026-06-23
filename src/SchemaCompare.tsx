@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ColumnInfo } from "./api";
-import { useEscToClose, toast } from "./ui";
+import { useEscToClose, toast, copyToClipboard } from "./ui";
 import { diffNameLists, diffColumns, NameDiff, ColumnDiff } from "./sql";
 
 // 結構比對（對標 Navicat Premium 的結構同步）：比對同一連線下兩個資料庫的資料表與欄位差異。
@@ -16,6 +16,8 @@ export default function SchemaCompare({ connId, sourceDb, onClose }: {
   const [diff, setDiff] = useState<NameDiff | null>(null);
   const [busy, setBusy] = useState(false);
   const [colDiffs, setColDiffs] = useState<Record<string, ColumnDiff | "loading">>({});
+  const [syncSql, setSyncSql] = useState<string | null>(null);
+  const [genBusy, setGenBusy] = useState(false);
 
   useEffect(() => {
     api.listDatabases(connId).then((list) => {
@@ -25,9 +27,25 @@ export default function SchemaCompare({ connId, sourceDb, onClose }: {
     }).catch(() => {});
   }, [connId, sourceDb]);
 
+  // 產生「缺少資料表」的 CREATE 語句（取來源端 DDL，於目標執行即補齊）。供使用者檢視 / 複製後執行。
+  const genSyncSql = async (tables: string[]) => {
+    setGenBusy(true);
+    try {
+      const ddls = await Promise.all(tables.map((t) => api.tableDdl(connId, sourceDb, t).catch(() => `-- 取得 ${t} 的 DDL 失敗`)));
+      setSyncSql(
+        `-- 於目標資料庫「${target}」執行以補齊來源「${sourceDb}」有而目標缺少的資料表\n\n` +
+        ddls.map((d) => d.trim().replace(/;?\s*$/, ";")).join("\n\n"),
+      );
+    } catch (e: any) {
+      toast.error(e?.message ?? "產生失敗");
+    } finally {
+      setGenBusy(false);
+    }
+  };
+
   const compare = async () => {
     if (!target) return;
-    setBusy(true); setDiff(null); setColDiffs({});
+    setBusy(true); setDiff(null); setColDiffs({}); setSyncSql(null);
     try {
       const [s, t] = await Promise.all([api.listTables(connId, sourceDb), api.listTables(connId, target)]);
       setDiff(diffNameLists(s.map((x) => x.name), t.map((x) => x.name)));
@@ -89,6 +107,23 @@ export default function SchemaCompare({ connId, sourceDb, onClose }: {
           ) : (
             <>
               <Section title="僅來源有（目標缺少）" names={diff.onlyInSource} color="border-green-500/40 text-green-300" />
+              {diff.onlyInSource.length > 0 && (
+                <button type="button" onClick={() => genSyncSql(diff.onlyInSource)} disabled={genBusy}
+                  className="text-xs px-2.5 py-1 rounded bg-green-600/80 hover:bg-green-600 disabled:opacity-40">
+                  {genBusy ? "產生中…" : `產生缺少 ${diff.onlyInSource.length} 表的 CREATE SQL`}</button>
+              )}
+              {syncSql && (
+                <div className="rounded border border-white/10">
+                  <div className="px-3 py-1.5 border-b border-white/10 flex items-center gap-2 text-xs">
+                    <span className="text-white/60">同步 SQL（檢視後於目標執行）</span>
+                    <button type="button" onClick={() => copyToClipboard(syncSql)}
+                      className="ml-auto text-blue-400 hover:text-blue-300">複製</button>
+                    <button type="button" onClick={() => setSyncSql(null)} className="text-white/40 hover:text-white">✕</button>
+                  </div>
+                  <textarea readOnly value={syncSql} title="同步 SQL"
+                    className="w-full h-40 bg-[#0c1118] p-3 mono text-xs text-white/80 resize-y outline-none" />
+                </div>
+              )}
               <Section title="僅目標有（來源缺少）" names={diff.onlyInTarget} color="border-red-500/40 text-red-300" />
               <div>
                 <div className="text-xs text-white/45 mb-1">兩邊皆有（{diff.common.length}）— 點選比對欄位</div>
