@@ -14,6 +14,7 @@ import RoutinesDialog from "./RoutinesDialog";
 import CreateViewDialog from "./CreateViewDialog";
 import ProcessListDialog from "./ProcessListDialog";
 import ServerQueryDialog from "./ServerQueryDialog";
+import SearchObjectsDialog from "./SearchObjectsDialog";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile } from "./ui";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
@@ -290,6 +291,8 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   const [procList, setProcList] = useState<{ connId: string; kind: DbKind } | null>(null);
   // 通用伺服器查詢檢視（使用者 / 角色等）。
   const [serverQuery, setServerQuery] = useState<{ connId: string; title: string; sql: string } | null>(null);
+  // 物件搜尋（資料表 / 欄位）。
+  const [searchObjs, setSearchObjs] = useState<{ connId: string; kind: DbKind } | null>(null);
   // 連線 / 表 搜尋過濾字串
   const [filter, setFilter] = useState("");
   // 右鍵選單（SQL 表節點：產生 SQL）。objKind 為物件種類（"table" | "view"），決定生命週期 DDL。
@@ -738,6 +741,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                   : []),
                 ...(connectedIds.has(menu.id) && (menuConn.kind === "mysql" || menuConn.kind === "postgres")
                   ? [
+                      ["搜尋物件…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
                       ["處理程序…", () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
                       ["使用者 / 角色…", () => setServerQuery({
                         connId: menuConn.id,
@@ -957,6 +961,10 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
       {serverQuery && (
         <ServerQueryDialog connId={serverQuery.connId} title={serverQuery.title} sql={serverQuery.sql}
           onClose={() => setServerQuery(null)} />
+      )}
+
+      {searchObjs && (
+        <SearchObjectsDialog connId={searchObjs.connId} kind={searchObjs.kind} onClose={() => setSearchObjs(null)} />
       )}
     </div>
   );
