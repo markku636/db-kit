@@ -46,17 +46,22 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
   }, [auto, sql, refresh]);
 
   // 終止：以每列第一欄為工作階段 ID（MySQL Id / PG pid）。ID 僅接受純數字（防注入）。
-  const kill = async (row: (string | null)[]) => {
+  // queryOnly=true 僅取消目前查詢（保留連線）：MySQL KILL QUERY / PG pg_cancel_backend。
+  const kill = async (row: (string | null)[], queryOnly: boolean) => {
     const id = (row[0] ?? "").trim();
     if (!/^\d+$/.test(id)) { toast.error("無法辨識工作階段 ID"); return; }
-    const ok = await uiConfirm(`終止工作階段 ${id}？`, { title: "終止連線", danger: true, confirmText: "終止" });
+    const verb = queryOnly ? "取消查詢" : "終止連線";
+    const ok = await uiConfirm(`${verb}（工作階段 ${id}）？`, { title: verb, danger: true, confirmText: verb });
     if (!ok) return;
+    const sql = kind === "postgres"
+      ? `SELECT pg_${queryOnly ? "cancel" : "terminate"}_backend(${id})`
+      : `KILL ${queryOnly ? "QUERY " : ""}${id}`;
     try {
-      await api.execDdl(connId, kind === "postgres" ? `SELECT pg_terminate_backend(${id})` : `KILL ${id}`);
-      toast.success(`已送出終止 ${id}`);
+      await api.execDdl(connId, sql);
+      toast.success(`已送出${verb} ${id}`);
       refresh();
     } catch (e: any) {
-      toast.error(e?.message ?? "終止失敗");
+      toast.error(e?.message ?? `${verb}失敗`);
     }
   };
 
@@ -87,15 +92,17 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-[#10161e] text-white/45">
                 <tr>
-                  <th className="w-16 px-2 py-1.5" aria-label="操作" />
+                  <th className="w-24 px-2 py-1.5" aria-label="操作" />
                   {res.columns.map((c) => <th key={c} className="text-left px-2 py-1.5 font-normal whitespace-nowrap">{c}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {res.rows.map((row, i) => (
                   <tr key={i} className="border-t border-white/5 hover:bg-white/5">
-                    <td className="px-2 py-1 text-center">
-                      <button type="button" onClick={() => kill(row)}
+                    <td className="px-2 py-1 text-center whitespace-nowrap">
+                      <button type="button" onClick={() => kill(row, true)} title="取消目前查詢（保留連線）"
+                        className="text-[11px] px-1.5 py-0.5 rounded text-amber-300 hover:bg-amber-500/15">取消</button>
+                      <button type="button" onClick={() => kill(row, false)} title="終止整個連線"
                         className="text-[11px] px-1.5 py-0.5 rounded text-red-400 hover:bg-red-500/15">終止</button>
                     </td>
                     {row.map((v, j) => (
