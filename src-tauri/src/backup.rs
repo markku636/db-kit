@@ -6,7 +6,9 @@ use crate::db::{ConnectionConfig, DbKind};
 use crate::error::{AppError, AppResult};
 
 /// 備份格式 / 方式。對應到各資料庫的官方工具或內建匯出。
+/// 保留設計型別：目前備份流程直接依 CLI 偵測分支，尚未以此列舉串接。
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum BackupMethod {
     /// 使用官方 CLI（mysqldump / pg_dump / mongodump / redis-cli --rdb）
     Cli,

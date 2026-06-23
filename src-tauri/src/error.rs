@@ -17,6 +17,7 @@ pub enum AppError {
     Unsupported(String),
 
     #[error("pool exhausted or closed")]
+    #[allow(dead_code)] // 保留：連線池耗盡 / 關閉時的錯誤類型（與 Unsupported 同為預留變體）
     PoolUnavailable,
 
     #[error("storage error: {0}")]

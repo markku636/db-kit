@@ -20,6 +20,7 @@ pub enum DbKind {
 }
 
 impl DbKind {
+    #[allow(dead_code)] // 保留工具方法：kind → 小寫字串（與 serde 序列化一致），供日後記錄 / 診斷用
     pub fn as_str(&self) -> &'static str {
         match self {
             DbKind::Mysql => "mysql",
