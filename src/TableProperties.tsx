@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ColumnInfo, DbKind, IndexInfo } from "./api";
+import { useEscToClose } from "./ui";
 
 // 資料表 / 視圖 / 集合屬性：唯讀彙整欄位、索引與列數（沿用既有 API，免後端改動）。
 export default function TableProperties({ connId, db, table, kind, objKind, onClose }: {
@@ -10,6 +11,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
   objKind: string; // "table" | "view"（Mongo 為集合）
   onClose: () => void;
 }) {
+  useEscToClose(onClose);
   const [cols, setCols] = useState<ColumnInfo[] | null>(null);
   const [idx, setIdx] = useState<IndexInfo[] | null>(null);
   // 列數採點擊才計算（大表 COUNT(*) 可能較慢且佔用連線，不在開啟時自動跑）。

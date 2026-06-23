@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, QueryResult } from "./api";
+import { useEscToClose } from "./ui";
 
 // 通用唯讀結果檢視器：執行一段 SQL（如使用者 / 角色、伺服器變數）並以表格呈現，可重新整理。
 export default function ServerQueryDialog({ connId, title, sql, onClose }: {
@@ -8,6 +9,7 @@ export default function ServerQueryDialog({ connId, title, sql, onClose }: {
   sql: string;
   onClose: () => void;
 }) {
+  useEscToClose(onClose);
   const [res, setRes] = useState<QueryResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

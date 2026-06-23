@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { api, DbKind } from "./api";
 import { buildCreateTable, NewColumn } from "./sql";
-import { toast } from "./ui";
+import { toast, useEscToClose } from "./ui";
 
 const emptyCol = (): NewColumn => ({
   name: "",
@@ -27,6 +27,7 @@ export default function CreateTableDialog({ connId, database, kind, onClose, onC
   onClose: () => void;
   onCreated?: () => void;
 }) {
+  useEscToClose(onClose);
   const defaultIdType =
     kind === "postgres" ? "SERIAL" : kind === "mysql" ? "INT AUTO_INCREMENT" : "INTEGER";
   const [table, setTable] = useState("");

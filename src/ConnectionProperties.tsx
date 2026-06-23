@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ConnectionConfig, KIND_META, PoolStatus } from "./api";
+import { useEscToClose } from "./ui";
 
 // 連線（伺服器）屬性：唯讀檢視連線設定 + 即時連線池狀態 / 延遲。
 export default function ConnectionProperties({ conn, connected, onClose }: {
@@ -7,6 +8,7 @@ export default function ConnectionProperties({ conn, connected, onClose }: {
   connected: boolean;
   onClose: () => void;
 }) {
+  useEscToClose(onClose);
   const meta = KIND_META[conn.kind];
   const [pool, setPool] = useState<PoolStatus | null>(null);
   const [ping, setPing] = useState<number | null>(null);

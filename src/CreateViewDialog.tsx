@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { api, DbKind } from "./api";
 import { buildCreateView } from "./sql";
-import { toast } from "./ui";
+import { toast, useEscToClose } from "./ui";
 
 // 新增視圖：輸入名稱 + SELECT → CREATE VIEW（走 exec_ddl 簡單協定，與其他 DDL 一致）。
 export default function CreateViewDialog({ connId, database, kind, onClose, onCreated }: {
@@ -11,6 +11,7 @@ export default function CreateViewDialog({ connId, database, kind, onClose, onCr
   onClose: () => void;
   onCreated?: () => void;
 }) {
+  useEscToClose(onClose);
   const [name, setName] = useState("");
   const [select, setSelect] = useState("SELECT * FROM ");
   const [busy, setBusy] = useState(false);

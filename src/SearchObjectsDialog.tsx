@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, DbKind, QueryResult } from "./api";
 import { sqlLiteral } from "./sql";
 import { useStore } from "./store";
+import { useEscToClose } from "./ui";
 
 // 跨資料庫 / schema 搜尋資料表與欄位（致敬 Navicat / DataGrip 的物件搜尋）。
 // 以 information_schema + runQuery 實作；LIKE 樣式經 sqlLiteral 跳脫（防注入）。
@@ -32,6 +33,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
   kind: DbKind;
   onClose: () => void;
 }) {
+  useEscToClose(onClose);
   const [pattern, setPattern] = useState("");
   const [res, setRes] = useState<QueryResult | null>(null);
   const [err, setErr] = useState<string | null>(null);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, DbKind, QueryResult } from "./api";
-import { toast, uiConfirm } from "./ui";
+import { toast, uiConfirm, useEscToClose } from "./ui";
 
 // 列出目前連線 / 工作階段（致敬 Navicat 的伺服器監控）。沿用既有 runQuery（清單）+ execDdl（終止），免後端改動。
 const LIST_SQL: Partial<Record<DbKind, string>> = {
@@ -16,6 +16,7 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
   kind: DbKind;
   onClose: () => void;
 }) {
+  useEscToClose(onClose);
   const [res, setRes] = useState<QueryResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

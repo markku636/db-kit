@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, DbKind, RoutineInfo } from "./api";
 import { quoteIdent, qualifiedName } from "./sql";
-import { toast, uiConfirm } from "./ui";
+import { toast, uiConfirm, useEscToClose } from "./ui";
 
 const TYPE_LABEL: Record<string, string> = { procedure: "預存程序", function: "函式", trigger: "觸發器" };
 
@@ -49,6 +49,7 @@ export default function RoutinesDialog({ connId, db, kind, onClose }: {
   kind: DbKind;
   onClose: () => void;
 }) {
+  useEscToClose(onClose);
   const [list, setList] = useState<RoutineInfo[] | null>(null);
   const [mode, setMode] = useState<"list" | "editor">("list");
   const [sqlText, setSqlText] = useState("");

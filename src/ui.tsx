@@ -1,6 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
 import { open, save } from "@tauri-apps/plugin-dialog";
+
+// 對話框共用：按 Esc 關閉（onClose 以 ref 保持穩定，listener 只掛一次）。
+export function useEscToClose(onClose: () => void) {
+  const ref = useRef(onClose);
+  ref.current = onClose;
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") ref.current(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+}
 
 // ---- Toast 通知 + 確認對話框 共用狀態 ----
 
