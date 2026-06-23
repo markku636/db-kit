@@ -18,7 +18,7 @@ import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile } fro
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
   loadSavedQueries, persistSavedQueries,
-  resultToTsv, resultToJson, resultToCsv, fmtElapsed, splitSqlStatements,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, splitSqlStatements,
   quoteIdent, qualifiedName,
   buildDropTable, buildDropView, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
   formatSql,
@@ -1408,6 +1408,8 @@ function QueryPane() {
                 className="hover:text-white/80">複製 TSV</button>
               <button type="button" onClick={() => copyToClipboard(resultToJson(result), "已複製結果 (JSON)")}
                 className="hover:text-white/80">複製 JSON</button>
+              <button type="button" onClick={() => copyToClipboard(resultToMarkdown(result), "已複製結果 (Markdown)")}
+                className="hover:text-white/80">複製 MD</button>
               <button type="button" onClick={exportResult}
                 className="hover:text-white/80">⬇ 匯出</button>
             </div>

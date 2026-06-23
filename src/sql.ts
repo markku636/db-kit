@@ -226,6 +226,15 @@ export function resultToCsv(r: QueryResult): string {
   const body = r.rows.map((row) => row.map(esc).join(",")).join("\n");
   return body ? `${head}\n${body}` : head;
 }
+// Markdown 表格（貼到 GitHub / 文件 / 聊天友善）：| 分隔，跳脫內含 | 與換行。
+export function resultToMarkdown(r: QueryResult): string {
+  if (r.columns.length === 0) return "";
+  const esc = (v: string | null) => (v ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  const header = `| ${r.columns.map(esc).join(" | ")} |`;
+  const sep = `| ${r.columns.map(() => "---").join(" | ")} |`;
+  const rows = r.rows.map((row) => `| ${row.map(esc).join(" | ")} |`);
+  return [header, sep, ...rows].join("\n");
+}
 export function fmtElapsed(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 }

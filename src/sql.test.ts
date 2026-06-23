@@ -22,6 +22,7 @@ import {
   buildDuplicateTable,
   buildCreateView,
   formatSql,
+  resultToMarkdown,
   isSystemDatabase,
   type NewColumn,
 } from "./sql";
@@ -281,6 +282,16 @@ describe("formatSql", () => {
   });
   it("does not match keywords embedded in identifiers (from_date)", () => {
     expect(formatSql("select from_date from t")).toBe("select from_date\nfrom t");
+  });
+});
+
+describe("resultToMarkdown", () => {
+  it("renders a markdown table, escaping pipes and newlines", () => {
+    const r = { columns: ["id", "name"], rows: [["1", "a|b"], ["2", "x\ny"]], rows_affected: 0 };
+    expect(resultToMarkdown(r)).toBe("| id | name |\n| --- | --- |\n| 1 | a\\|b |\n| 2 | x y |");
+  });
+  it("empty columns → empty string", () => {
+    expect(resultToMarkdown({ columns: [], rows: [], rows_affected: 0 })).toBe("");
   });
 });
 
