@@ -13,6 +13,7 @@ import TableProperties from "./TableProperties";
 import RoutinesDialog from "./RoutinesDialog";
 import CreateViewDialog from "./CreateViewDialog";
 import ProcessListDialog from "./ProcessListDialog";
+import ServerQueryDialog from "./ServerQueryDialog";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile } from "./ui";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
@@ -287,6 +288,8 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   const [createView, setCreateView] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
   // 處理程序 / 工作階段檢視。
   const [procList, setProcList] = useState<{ connId: string; kind: DbKind } | null>(null);
+  // 通用伺服器查詢檢視（使用者 / 角色等）。
+  const [serverQuery, setServerQuery] = useState<{ connId: string; title: string; sql: string } | null>(null);
   // 連線 / 表 搜尋過濾字串
   const [filter, setFilter] = useState("");
   // 右鍵選單（SQL 表節點：產生 SQL）。objKind 為物件種類（"table" | "view"），決定生命週期 DDL。
@@ -734,7 +737,16 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                   ? [["伺服器狀態", () => setStatus({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
                   : []),
                 ...(connectedIds.has(menu.id) && (menuConn.kind === "mysql" || menuConn.kind === "postgres")
-                  ? [["處理程序…", () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
+                  ? [
+                      ["處理程序…", () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
+                      ["使用者 / 角色…", () => setServerQuery({
+                        connId: menuConn.id,
+                        title: "使用者 / 角色",
+                        sql: menuConn.kind === "postgres"
+                          ? "SELECT rolname AS role, rolsuper AS superuser, rolcreatedb AS createdb, rolcanlogin AS login, rolreplication AS replication FROM pg_roles ORDER BY rolname"
+                          : "SELECT User, Host FROM mysql.user ORDER BY User, Host",
+                      }), false] as [string, () => void, boolean],
+                    ]
                   : []),
                 ["屬性…", () => setConnProps(menuConn), false],
                 ["編輯…", () => onEdit(menuConn), false],
@@ -933,6 +945,11 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
 
       {procList && (
         <ProcessListDialog connId={procList.connId} kind={procList.kind} onClose={() => setProcList(null)} />
+      )}
+
+      {serverQuery && (
+        <ServerQueryDialog connId={serverQuery.connId} title={serverQuery.title} sql={serverQuery.sql}
+          onClose={() => setServerQuery(null)} />
       )}
     </div>
   );
