@@ -1673,7 +1673,8 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   const [ddl, setDdl] = useState<string | null>(null);
   const [indexes, setIndexes] = useState<IndexInfo[] | null>(null);
   const [addingIndex, setAddingIndex] = useState(false);
-  const [fks, setFks] = useState<ErRelation[] | null>(null); // 此表的外鍵（取自 ER 模型並過濾）
+  const [fks, setFks] = useState<ErRelation[] | null>(null); // 此表的外鍵（from_table = 本表）
+  const [incomingFks, setIncomingFks] = useState<ErRelation[] | null>(null); // 被哪些表參照（to_table = 本表）
 
   const viewDdl = async () => {
     try {
@@ -1699,10 +1700,15 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     if (isSql) {
       api
         .erModel(tab.connId, tab.database)
-        .then((m) => !cancelled && setFks(m.relations.filter((r) => r.from_table === tab.table)))
-        .catch(() => !cancelled && setFks([]));
+        .then((m) => {
+          if (cancelled) return;
+          setFks(m.relations.filter((r) => r.from_table === tab.table));
+          setIncomingFks(m.relations.filter((r) => r.to_table === tab.table));
+        })
+        .catch(() => { if (!cancelled) { setFks([]); setIncomingFks([]); } });
     } else {
       setFks([]);
+      setIncomingFks([]);
     }
     return () => {
       cancelled = true;
@@ -1907,6 +1913,33 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                   <td className="px-3 py-1 border-b border-white/5 mono">{fk.from_column}</td>
                   <td className="px-3 py-1 border-b border-white/5 mono text-white/50">→ {fk.to_table}</td>
                   <td className="px-3 py-1 border-b border-white/5 mono">{fk.to_column}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 被參照區：哪些表的外鍵指向本表（影響分析：刪除 / 改結構前先看） */}
+      {isSql && incomingFks && incomingFks.length > 0 && (
+        <div className="mt-2">
+          <div className="px-3 py-1.5 text-xs text-white/40 bg-[#10161e] border-y border-white/10">
+            被參照（{incomingFks.length}）
+          </div>
+          <table className="text-sm border-collapse w-full">
+            <thead className="bg-[#1a212b]">
+              <tr>
+                {["來源表", "來源欄位", "參照本表欄位"].map((h) => (
+                  <th key={h} className="text-left px-3 py-1.5 border-b border-white/10 font-medium">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {incomingFks.map((fk, i) => (
+                <tr key={`${fk.from_table}-${fk.from_column}-${i}`} className="hover:bg-white/5">
+                  <td className="px-3 py-1 border-b border-white/5 mono">{fk.from_table}</td>
+                  <td className="px-3 py-1 border-b border-white/5 mono">{fk.from_column}</td>
+                  <td className="px-3 py-1 border-b border-white/5 mono text-white/50">→ {fk.to_column}</td>
                 </tr>
               ))}
             </tbody>
