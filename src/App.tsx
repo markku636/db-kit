@@ -13,6 +13,7 @@ import ConnectionProperties from "./ConnectionProperties";
 import TableProperties from "./TableProperties";
 import RoutinesDialog from "./RoutinesDialog";
 import CreateViewDialog from "./CreateViewDialog";
+import ViewDesigner from "./ViewDesigner";
 import ProcessListDialog from "./ProcessListDialog";
 import ServerQueryDialog from "./ServerQueryDialog";
 import UserManager from "./UserManager";
@@ -341,6 +342,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   // 通用伺服器查詢檢視（使用者 / 角色等）。
   const [serverQuery, setServerQuery] = useState<{ connId: string; title: string; sql: string } | null>(null);
   const [userMgr, setUserMgr] = useState<{ connId: string } | null>(null);
+  const [viewDesign, setViewDesign] = useState<{ connId: string; db: string; view: string; kind: DbKind } | null>(null);
   // 物件搜尋（資料表 / 欄位）。
   const [searchObjs, setSearchObjs] = useState<{ connId: string; kind: DbKind } | null>(null);
   // 連線 / 表 搜尋過濾字串
@@ -933,6 +935,9 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                     }]);
                     // 設計表結構：直接開啟結構分頁（欄位增刪改名 + 索引管理）。視圖無可設計結構，略過。
                     if (!isView) arr.push(["設計表結構…", () => useStore.getState().openTable(tableMenu.connId, tableMenu.db, tableMenu.table, "structure")]);
+                    // 設計檢視：載入 SELECT 定義編輯後 CREATE OR REPLACE。僅 MySQL / PG（定義可乾淨取得）。
+                    if (isView && (tableMenu.kind === "mysql" || tableMenu.kind === "postgres"))
+                      arr.push(["設計檢視…", () => setViewDesign({ connId: tableMenu.connId, db: tableMenu.db, view: tableMenu.table, kind: tableMenu.kind })]);
                     arr.push(
                       ["查詢前 100 筆", () => genSelect(tableMenu)],
                       ["SELECT COUNT(*)", () => genCount(tableMenu)],
@@ -1041,6 +1046,11 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
 
       {userMgr && (
         <UserManager connId={userMgr.connId} onClose={() => setUserMgr(null)} />
+      )}
+
+      {viewDesign && (
+        <ViewDesigner connId={viewDesign.connId} db={viewDesign.db} view={viewDesign.view} kind={viewDesign.kind}
+          onClose={() => setViewDesign(null)} />
       )}
 
       {searchObjs && (

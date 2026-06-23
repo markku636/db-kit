@@ -21,6 +21,8 @@ import {
   buildRenameTable,
   buildDuplicateTable,
   buildCreateView,
+  viewDefinitionSql,
+  buildReplaceView,
   buildAddForeignKey,
   buildDropForeignKey,
   buildRowUpdate,
@@ -275,6 +277,20 @@ describe("table/database lifecycle DDL", () => {
   it("buildCreateView qualifies the name and trims the SELECT", () => {
     expect(buildCreateView("postgres", "public", "v ", " SELECT 1 ")).toBe('CREATE VIEW "public"."v" AS\nSELECT 1;');
     expect(buildCreateView("mysql", "db", "v", "SELECT * FROM t")).toBe("CREATE VIEW `db`.`v` AS\nSELECT * FROM t;");
+  });
+
+  it("viewDefinitionSql: MySQL information_schema, PG pg_get_viewdef (escaped)", () => {
+    expect(viewDefinitionSql("mysql", "db", "v")).toBe(
+      "SELECT VIEW_DEFINITION AS def FROM information_schema.VIEWS WHERE TABLE_SCHEMA = 'db' AND TABLE_NAME = 'v'",
+    );
+    expect(viewDefinitionSql("postgres", "public", "v")).toBe(
+      `SELECT pg_get_viewdef('"public"."v"'::regclass, true) AS def`,
+    );
+  });
+
+  it("buildReplaceView uses CREATE OR REPLACE VIEW and qualifies", () => {
+    expect(buildReplaceView("mysql", "db", "v", "SELECT 1")).toBe("CREATE OR REPLACE VIEW `db`.`v` AS\nSELECT 1;");
+    expect(buildReplaceView("postgres", "public", "v ", " SELECT 2 ")).toBe('CREATE OR REPLACE VIEW "public"."v" AS\nSELECT 2;');
   });
 
   it("buildAddForeignKey: ALTER ADD CONSTRAINT … FOREIGN KEY … REFERENCES", () => {

@@ -108,6 +108,22 @@ export function buildCreateView(kind: DbKind, db: string, name: string, select: 
   return `CREATE VIEW ${qualifiedName(kind, db, name.trim())} AS\n${select.trim()};`;
 }
 
+// 取得既有視圖的 SELECT 定義（供「設計檢視」載入）。MySQL 走 information_schema.VIEWS（僅含 SELECT，
+// 無 CREATE 前綴，免解析）；PostgreSQL 走 pg_get_viewdef。db / 名稱以字面值跳脫（防注入）。
+export function viewDefinitionSql(kind: DbKind, db: string, view: string): string {
+  if (kind === "postgres") {
+    const ref = `${quoteIdent("postgres", db)}.${quoteIdent("postgres", view)}`;
+    return `SELECT pg_get_viewdef(${sqlLiteral("postgres", ref)}::regclass, true) AS def`;
+  }
+  return `SELECT VIEW_DEFINITION AS def FROM information_schema.VIEWS ` +
+    `WHERE TABLE_SCHEMA = ${sqlLiteral("mysql", db)} AND TABLE_NAME = ${sqlLiteral("mysql", view)}`;
+}
+
+// 以 CREATE OR REPLACE VIEW 改寫視圖定義（MySQL / PostgreSQL 皆支援）。
+export function buildReplaceView(kind: DbKind, db: string, name: string, select: string): string {
+  return `CREATE OR REPLACE VIEW ${qualifiedName(kind, db, name.trim())} AS\n${select.trim()};`;
+}
+
 // 刪除外鍵：MySQL → DROP FOREIGN KEY；PostgreSQL → DROP CONSTRAINT。
 export function buildDropForeignKey(kind: DbKind, db: string, table: string, name: string): string {
   const clause = kind === "mysql" ? "DROP FOREIGN KEY" : "DROP CONSTRAINT";
