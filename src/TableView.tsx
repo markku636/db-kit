@@ -646,6 +646,20 @@ function DataPane({ tab }: { tab: OpenTab }) {
     // 左右移動時跳過隱藏欄（只在可見欄之間移動）。
     const visIdx = data.columns.map((_, j) => j).filter((j) => !isHidden(data.columns[j]));
     const pos = visIdx.indexOf(c);
+    // Shift+方向鍵：以選取格為錨點延伸 / 收縮矩形範圍（移動範圍的遠端角，不動錨點）。放在一般方向鍵前處理。
+    if (e.shiftKey && (k === "ArrowDown" || k === "ArrowUp" || k === "ArrowRight" || k === "ArrowLeft")) {
+      e.preventDefault();
+      const far = rangeEnd ?? selected;
+      const fpos = visIdx.indexOf(far.c);
+      let nr = far.r;
+      let nc = far.c;
+      if (k === "ArrowDown") nr = Math.min(maxR, far.r + 1);
+      else if (k === "ArrowUp") nr = Math.max(0, far.r - 1);
+      else if (k === "ArrowRight") { if (fpos >= 0 && fpos < visIdx.length - 1) nc = visIdx[fpos + 1]; }
+      else if (fpos > 0) nc = visIdx[fpos - 1];
+      setRangeEnd({ r: nr, c: nc });
+      return;
+    }
     if (k === "ArrowDown") r = Math.min(maxR, r + 1);
     else if (k === "ArrowUp") r = Math.max(0, r - 1);
     else if (k === "ArrowRight" || (k === "Tab" && !e.shiftKey)) {

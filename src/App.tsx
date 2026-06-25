@@ -391,7 +391,7 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
       ["Enter / F2", "編輯選取格（Enter 送出後下移）"],
       ["直接打字", "覆寫式編輯該格"],
       ["Delete", "將選取格設為 NULL"],
-      ["Shift+點選格", "框選矩形範圍（Ctrl+C 複製整塊 TSV）"],
+      ["Shift+點選 / Shift+方向鍵", "框選矩形範圍（Ctrl+C 複製整塊 TSV）"],
       ["Ctrl+C / Ctrl+V", "複製 / 貼上（支援區塊 TSV）"],
       ["Ctrl+S", "套用待套用的儲存格編輯"],
       ["F5", "重新整理目前頁"],
