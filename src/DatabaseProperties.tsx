@@ -61,7 +61,7 @@ export default function DatabaseProperties({ connId, db, onClose }: {
       <div className="flex items-center gap-3">
         <span className="text-fg/45 w-20 shrink-0 text-xs">字元集</span>
         <select value={charset} onChange={(e) => setCharset(e.target.value)} title="字元集" aria-label="字元集"
-          className="bg-well border border-fg/15 rounded px-2 py-1 text-xs min-w-[140px]">
+          className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent min-w-[140px]">
           {charset && !CHARSETS.includes(charset) && <option value={charset}>{charset}</option>}
           {CHARSETS.map((cs) => (<option key={cs} value={cs}>{cs}</option>))}
         </select>
@@ -70,7 +70,7 @@ export default function DatabaseProperties({ connId, db, onClose }: {
         <span className="text-fg/45 w-20 shrink-0 text-xs">定序</span>
         <input value={collation} onChange={(e) => setCollation(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
           title="定序（可留空用預設）"
-          className="bg-well border border-fg/15 rounded px-2 py-1 text-xs w-52 mono" placeholder="定序（預設）" />
+          className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent w-52 mono" placeholder="定序（預設）" />
       </div>
     </Modal>
   );

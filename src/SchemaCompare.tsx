@@ -98,7 +98,7 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
         <span className="mono text-xs px-2 py-0.5 rounded bg-blue-500/15 text-blue-300">來源：{sourceDb}</span>
         <span className="text-fg/40 text-xs">→ 目標</span>
         <select value={target} onChange={(e) => setTarget(e.target.value)} title="目標資料庫"
-          className="bg-well border border-fg/15 rounded px-2 py-1 text-xs">
+          className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent">
           {dbs.length === 0 && <option value="">（無其他資料庫）</option>}
           {dbs.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>

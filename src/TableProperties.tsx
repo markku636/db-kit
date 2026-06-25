@@ -156,7 +156,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
                 <div className="flex items-center gap-3">
                   <span className="text-fg/45 w-20 shrink-0 text-xs">引擎</span>
                   <select value={engine} onChange={(e) => setEngine(e.target.value)} title="儲存引擎"
-                    className="bg-well border border-fg/15 rounded px-2 py-1 text-xs min-w-[140px]">
+                    className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent min-w-[140px]">
                     {engine && !TABLE_ENGINES.includes(engine) && <option value={engine}>{engine}</option>}
                     {TABLE_ENGINES.map((en) => <option key={en} value={en}>{en}</option>)}
                   </select>
@@ -164,12 +164,12 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
                 <div className="flex items-center gap-3">
                   <span className="text-fg/45 w-20 shrink-0 text-xs">AUTO_INCREMENT</span>
                   <input value={autoInc} onChange={(e) => setAutoInc(e.target.value.replace(/[^0-9]/g, ""))}
-                    className="bg-well border border-fg/15 rounded px-2 py-1 text-xs w-32 mono" placeholder="—" />
+                    className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent w-32 mono" placeholder="—" />
                 </div>
                 <div className="flex items-start gap-3">
                   <span className="text-fg/45 w-20 shrink-0 text-xs mt-1">註解</span>
                   <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2}
-                    className="bg-well border border-fg/15 rounded px-2 py-1 text-xs flex-1 resize-none" placeholder="（無）" />
+                    className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent flex-1 resize-none" placeholder="（無）" />
                 </div>
                 <div className="flex justify-end">
                   <button type="button" onClick={applyOptions} disabled={savingOpts || !orig}
@@ -183,12 +183,12 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <select value={charset} onChange={(e) => setCharset(e.target.value)} title="字元集"
-                      className="bg-well border border-fg/15 rounded px-2 py-1 text-xs">
+                      className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent">
                       {CHARSETS.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
                     </select>
                     <input value={collation} onChange={(e) => setCollation(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
                       title="定序（可留空用預設）"
-                      className="bg-well border border-fg/15 rounded px-2 py-1 text-xs w-48 mono" placeholder="定序（預設）" />
+                      className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent w-48 mono" placeholder="定序（預設）" />
                     <button type="button" onClick={convertCharset} disabled={converting}
                       className="px-3 py-1.5 text-xs rounded border border-amber-400/40 text-amber-300 hover:bg-amber-500/10 disabled:opacity-40">
                       {converting ? "轉換中…" : "轉換字元集"}</button>
