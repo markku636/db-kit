@@ -2503,14 +2503,22 @@ function ResultTable({ result }: { result: QueryResult }) {
       e.preventDefault();
       return;
     }
-    // 鍵盤導覽：方向鍵移動選取、Home/End 跳列首尾欄、Ctrl+Home/End 跳整頁角落；Shift+方向鍵延伸框選。
-    const navKeys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"];
+    // 鍵盤導覽：方向鍵移動選取、Home/End 跳列首尾欄、Ctrl+Home/End 跳整頁角落；
+    // Shift+方向鍵延伸框選；Tab / Shift+Tab 逐格移動（列尾 / 列首換行）。
+    const navKeys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Tab"];
     if (!navKeys.includes(e.key)) return;
     const maxR = rendered.length - 1;
     const maxC = result.columns.length - 1;
     if (maxR < 0 || maxC < 0) return;
     e.preventDefault();
     if (!selected) { setSelected({ r: 0, c: 0 }); setRangeEnd(null); return; }
+    if (e.key === "Tab") {
+      let tr = selected.r, tc = selected.c;
+      if (e.shiftKey) { if (tc > 0) tc--; else if (tr > 0) { tr--; tc = maxC; } }
+      else { if (tc < maxC) tc++; else if (tr < maxR) { tr++; tc = 0; } }
+      setSelected({ r: tr, c: tc }); setRangeEnd(null);
+      return;
+    }
     const base = e.shiftKey ? (rangeEnd ?? selected) : selected;
     let nr = base.r;
     let nc = base.c;
