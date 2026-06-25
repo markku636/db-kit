@@ -1,6 +1,6 @@
 {
   "name": "db-kit",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "Unified database management tool — MySQL, PostgreSQL, MongoDB, Redis",
   "license": "MIT",
   "type": "module",
@@ -11,7 +11,10 @@
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "tauri",
-    "make:favicon": "node scripts/make-favicon.mjs"
+    "make:favicon": "node scripts/make-favicon.mjs",
+    "make:hero": "node scripts/make-hero.mjs",
+    "make:splash": "node scripts/make-splash.mjs",
+    "make:screenshots": "node scripts/make-screenshots.mjs"
   },
   "dependencies": {
     "@codemirror/lang-sql": "^6.10.0",

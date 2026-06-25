@@ -43,7 +43,7 @@ import {
   formatSql,
 } from "./sql";
 import type { SavedQuery } from "./sql";
-import logoMark from "./assets/logo-mark.png";
+import logoMark from "./assets/dhero.png";
 import Icon from "./ui/Icon";
 import { Button, EmptyState, Modal } from "./ui/index";
 import {

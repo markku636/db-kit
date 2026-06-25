@@ -12,7 +12,29 @@
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\build-installer.ps1
+    # 預設：每次打包前自動把 patch 版本號 +1（0.1.0 → 0.1.1），三個檔同步。
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File .\build-installer.ps1 -Bump minor
+    # 進 minor（0.1.5 → 0.2.0）；major 同理（0.2.0 → 1.0.0）。
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File .\build-installer.ps1 -Bump none
+    # 不動版本號，照目前版本打包。
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File .\build-installer.ps1 -SetVersion 1.2.3
+    # 直接指定版本號。
 #>
+
+param(
+    # 版本號遞增方式：patch（預設）/ minor / major / none（不遞增）。
+    [ValidateSet("patch", "minor", "major", "none")]
+    [string]$Bump = "patch",
+
+    # 直接指定版本號（major.minor.patch），優先於 -Bump。
+    [string]$SetVersion
+)
 
 # 注意：native 指令（cargo / tauri / npm）會把進度、Info、warning 寫到 stderr。
 # 在 Windows PowerShell 5.1 下，$ErrorActionPreference='Stop' 會把 native stderr
@@ -38,6 +60,52 @@ function Test-MsvcLinker {
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
         -property installationPath 2>$null
     return [bool]$path
+}
+
+# --- 版本號工具 ---------------------------------------------------------------
+# 版本號散落三個檔，以 tauri.conf.json（實際決定安裝檔版本者）為單一事實來源，
+# 打包前同步更新另外兩個，三者永遠一致。
+# 用 $PSScriptRoot 取絕對路徑：.NET File API 用的是 process 工作目錄、未必等於腳本所在處。
+$VersionFiles = @{
+    TauriConf = Join-Path $PSScriptRoot "src-tauri\tauri.conf.json"
+    PkgJson   = Join-Path $PSScriptRoot "package.json"
+    CargoToml = Join-Path $PSScriptRoot "src-tauri\Cargo.toml"
+}
+
+# 一律用 UTF-8 讀寫（檔內含中文註解）。PS 5.1 的 Get-Content/Set-Content 預設走系統 ANSI，
+# 會把中文讀壞；.NET ReadAllText 預設 UTF-8（自動辨識 BOM），WriteAllText 指定不帶 BOM。
+function Read-TextFile([string]$path) { [System.IO.File]::ReadAllText($path) }
+function Write-Utf8NoBom([string]$path, [string]$content) {
+    [System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding $false))
+}
+
+function Get-CurrentVersion {
+    $m = [regex]::Match((Read-TextFile $VersionFiles.TauriConf), '"version"\s*:\s*"([^"]+)"')
+    if (-not $m.Success) { throw "在 tauri.conf.json 找不到 version 欄位。" }
+    return $m.Groups[1].Value
+}
+
+function Step-Version([string]$v, [string]$kind) {
+    if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "目前版本 '$v' 非 major.minor.patch 格式，無法自動遞增。" }
+    $p = $v -split '\.'
+    [int]$maj = $p[0]; [int]$min = $p[1]; [int]$pat = $p[2]
+    switch ($kind) {
+        "major" { $maj++; $min = 0; $pat = 0 }
+        "minor" { $min++; $pat = 0 }
+        "patch" { $pat++ }
+    }
+    return "$maj.$min.$pat"
+}
+
+function Set-AllVersions([string]$newVersion) {
+    # JSON：唯一的 "version": "..." 就是頂層版本（依賴項不含此鍵），取第一個即可。
+    foreach ($f in @($VersionFiles.TauriConf, $VersionFiles.PkgJson)) {
+        $re = [regex]'("version"\s*:\s*")[^"]+(")'
+        Write-Utf8NoBom $f ($re.Replace((Read-TextFile $f), ('${1}' + $newVersion + '${2}'), 1))
+    }
+    # Cargo.toml：只改 [package] 區的 version（行首），依賴用的是行內 `{ version = "2" }` 不會被動到。
+    $reCargo = [regex]::new('(?m)^(version\s*=\s*")[^"]+(")')
+    Write-Utf8NoBom $VersionFiles.CargoToml ($reCargo.Replace((Read-TextFile $VersionFiles.CargoToml), ('${1}' + $newVersion + '${2}'), 1))
 }
 
 Write-Step "db-kit 打包開始"
@@ -106,6 +174,25 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "安裝 @tauri-apps/cli（dev 依賴）"
     npm install -D "@tauri-apps/cli@^2"
     Assert-LastExit "安裝 @tauri-apps/cli"
+}
+
+# --- 4.5 版本號遞增（打包前，讓本次安裝檔帶新版本號）---
+if ($SetVersion) {
+    if ($SetVersion -notmatch '^\d+\.\d+\.\d+$') {
+        throw "-SetVersion 需為 major.minor.patch（例：1.2.3），收到 '$SetVersion'。"
+    }
+    Write-Step "設定版本號"
+    $old = Get-CurrentVersion
+    Set-AllVersions $SetVersion
+    Write-Host "版本號：$old -> $SetVersion（tauri.conf.json / package.json / Cargo.toml 已同步）" -ForegroundColor Green
+} elseif ($Bump -ne "none") {
+    Write-Step "遞增版本號（-Bump $Bump）"
+    $old = Get-CurrentVersion
+    $new = Step-Version $old $Bump
+    Set-AllVersions $new
+    Write-Host "版本號：$old -> $new（tauri.conf.json / package.json / Cargo.toml 已同步）" -ForegroundColor Green
+} else {
+    Write-Host "略過版本號遞增（-Bump none），照目前版本打包：$(Get-CurrentVersion)" -ForegroundColor DarkYellow
 }
 
 # --- 5. 打包 ---

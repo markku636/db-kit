@@ -1,18 +1,81 @@
-# db-kit
+<p align="center">
+  <img src="docs/hero.png" alt="db-kit — MAGIDB CONNECT：一站式跨平台資料庫管理工具" width="860">
+</p>
 
-一個跨平台的統一資料庫管理工具，以單一 Navicat 風格介面管理 **MySQL · PostgreSQL · MongoDB · Redis**。
+<h1 align="center">db-kit</h1>
 
-採用 **Tauri (Rust) + React + TypeScript**，輕量、高效、安全。
+<p align="center"><strong>MAGIDB CONNECT — Making Data Connections Magical</strong></p>
+
+<p align="center">
+一站式跨平台桌面資料庫工具，以單一 Navicat 風格介面管理<br>
+<strong>MySQL · PostgreSQL · SQLite · MongoDB · Redis</strong>。
+</p>
+
+<p align="center">
+  <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=white">
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-000000?logo=rust&logoColor=white">
+  <img alt="React 18" src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white">
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-22c55e">
+</p>
+
+<p align="center">
+  <strong>💚 100% 開源免費</strong>　·　MIT 授權　·　無付費牆　·　無功能鎖　·　無遙測　·　可自由 fork / 自託管
+</p>
+
+---
+
+## 這是什麼
+
+工程師與 DBA 的日常往往要在 MySQL、PostgreSQL、MongoDB、Redis… 之間來回切換，桌面上散落著好幾個各有脾氣的管理工具。**db-kit** 把它們收進同一套介面、同一套連線管理、同一套主題——關聯式、文件型、鍵值型三種資料範式都有貼合各自手感的瀏覽與編輯體驗，且日常操作（資料格、查詢、ER 圖、匯入匯出、備份）跨資料庫對齊。
+
+採用 **Tauri 2（Rust 後端 + Web 前端）**，安裝檔小、記憶體佔用約為 Electron 同類產品的十分之一；資料庫連線一律收在 Rust 後端、前端透過 Tauri command 呼叫，不直連、兼顧安全與效能。
+
+## 畫面預覽
+
+> 下圖為依 App 實際深色主題繪製的介面預覽示意。
+
+| 資料表檢視 — 連線樹 · 分頁 · 可編輯資料格 | 查詢編輯器 — 語法高亮 · 結果格 · 歷史 / 收藏 |
+|:---:|:---:|
+| ![資料表檢視](docs/screenshots/01-data-grid.png) | ![查詢編輯器](docs/screenshots/02-query-editor.png) |
+| **ER 圖** — 外鍵關係 · 可拖曳表卡 · 佈局記憶 | **Redis** — 命名空間鍵樹 · 結構編輯 · INFO 狀態 |
+| ![ER 圖](docs/screenshots/03-er-diagram.png) | ![Redis 檢視](docs/screenshots/04-redis.png) |
+
+## ✨ 亮點
+
+- **一站式五大資料庫** — MySQL · PostgreSQL · SQLite · MongoDB · Redis，全部可實際連線，共用同一套連線樹、資料格與快捷鍵。
+- **輕量高效** — Tauri 2 架構，比 Electron 輕約 10×；深色為預設、可切亮色，依資料庫類型色標區分。
+- **安全可靠** — 連線密碼存於 OS keychain（磁碟不落地）、SSH Tunnel（密碼／私鑰）+ host key TOFU 驗證、所有寫入以主鍵定位 + 全參數化綁定防注入。
+- **Navicat 級手感** — 儲存格直接編輯、右鍵選單、鍵盤導覽、多欄排序、欄寬拖曳、依值篩選、內容檢視器、即時尋找。
+- **內建 AI 助手** — 右側面板串接本機 Claude CLI（用你的 Claude 訂閱登入），串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。
+- **完整工程實踐** — 後端以 Docker 真實五大資料庫做整合測試、前端純函式 vitest 覆蓋，經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
+
+## 功能特色
+
+| 範疇 | 重點功能 |
+|------|----------|
+| 關聯式（MySQL / PostgreSQL / SQLite） | 完整 CRUD、DDL 欄位編輯、索引管理、EXPLAIN 效能分析、RETURNING 顯示、ER 圖 |
+| 文件型（MongoDB） | 文件攤平成表格、find / 聚合管線、CRUD-via-JSON、索引管理 |
+| 鍵值型（Redis） | 五種結構檢視＋編輯、命名空間鍵樹、值格式化、Pub/Sub、維運面板、命令列 Console |
+| 通用資料格 | 多欄複合篩選（9 運算子 + AND·OR）、多欄排序、依值篩選、CSV 匯入、多格式匯出、欄位剖析 |
+| 查詢編輯器 | 語法高亮、查詢歷史 / 收藏、只執行反白段、結果一鍵複製 / 匯出 |
+| 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入 |
+| AI 助手 | 右側面板串接本機 Claude CLI：串流問答、撰寫 / 優化 SQL，可附帶目前 schema |
+| 運維 | 連線設定持久化、排程備份 + 備份歷史、連線池監控 + Ping、跨平台桌面 App |
 
 > 目前進度：**五大資料庫全部可連線**；關聯式完整 CRUD / DDL 欄位編輯 / 索引管理 / EXPLAIN / RETURNING 顯示、多欄複合篩選（9 種運算子 + AND·OR）排序、**CSV 匯入** + 多格式匯出 + **轉儲整庫結構 SQL**
 > MongoDB 文件攤平 + 查詢編輯器完整 **CRUD-via-JSON**（find / 聚合 aggregate / insert / update / delete）+ 索引管理
-> Redis 仿 **Another Redis Desktop Manager**：五種結構檢視＋編輯、**命名空間鍵樹**（依 `:` 分組資料夾）、鍵列右鍵（檢視 / 複製鍵名 / 改名 / 設 TTL / 刪除）、DB 右鍵（新增鍵 / 清空 DB / 伺服器狀態 / 命令列）、**伺服器狀態面板**（INFO 重點指標 + 全分區，可自動刷新）、**命令列 Console**（指令歷史、DB 切換）
-> 連線設定持久化（密碼存 OS keychain）、SSH Tunnel、排程備份 + 備份歷史、Ping 連線延遲、ER 圖、欄寬可拖曳
-> 可實際連線：**MySQL · PostgreSQL · SQLite · MongoDB · Redis**
+> Redis 仿 **Another Redis Desktop Manager**：五種結構檢視＋編輯、**命名空間鍵樹**（依 `:` 分組資料夾）、值格式化（原始 / JSON / Hex）、**Pub/Sub** 訂閱發佈、**維運面板**（慢查詢 / 用戶端 / 大鍵）、**伺服器狀態面板**（INFO 重點指標 + 全分區，可自動刷新）、**命令列 Console**（指令歷史、DB 切換）
+> 連線設定持久化（密碼存 OS keychain）、SSH Tunnel、排程備份 + 備份歷史、Ping 連線延遲、ER 圖、欄寬可拖曳、AI 助手
 
 完整規劃文件見 [`docs/`](./docs/)：[規劃](./docs/planning.md) · [架構](./docs/architecture.md) · [連線生命週期](./docs/connection-lifecycle.md) · [Navicat 操作習慣](./docs/navicat-ux.md) · [路線圖](./docs/roadmap.md)。變更紀錄見 [CHANGELOG](./CHANGELOG.md)。
 
 ## 功能藍圖
+
+核心功能皆已完成（40+ 項），點開檢視完整清單：
+
+<details>
+<summary><strong>展開完整功能清單</strong></summary>
 
 - [x] P0 骨架：佈局、大圖示工具列、連線池與釋放層、MySQL 連線
 - [x] P1/P2 雙擊開表 → 表格檢視 + 底部分頁導覽 + 結構/資料分頁切換
@@ -46,7 +109,11 @@
 - [x] MongoDB 查詢增強：sort / projection / limit + **聚合管線**（aggregate：`$match` / `$group` / `$sum`…）
 - [x] 側欄：搜尋過濾、表右鍵產生查詢（SQL SELECT/COUNT/INSERT、Mongo find 範本）、複製連線
 - [x] 分頁管理（中鍵 / 關閉其他 / 全部 / Ctrl+W）、連線池即時監控 + **Ping**（量測既有連線往返延遲，含 SSH 通道）、全域 UI/UX 打磨
+- [x] Redis 進階：值格式化（原始 / JSON / Hex）+ 大集合游標式分頁、**Pub/Sub** 訂閱發佈、**維運面板**（慢查詢 / 用戶端 / 大鍵）
+- [x] AI 助手（右側面板，串接本機 Claude CLI）：串流問答、撰寫 / 優化 SQL，可附帶目前連線 schema 作上下文
 - [x] 跨資料庫一致：上述能力於 MySQL / PostgreSQL / SQLite / MongoDB 對齊（識別字 / 篩選 / 索引依各庫對應）
+
+</details>
 
 ## 技術棧
 
@@ -57,6 +124,8 @@
 | UI | Tailwind CSS（shadcn/ui 風格） |
 | 狀態 | Zustand |
 | 後端 | Rust：sqlx (MySQL / PostgreSQL / SQLite)、mongodb、redis |
+| 安全 | OS keychain（keyring）、SSH Tunnel（russh）+ host key TOFU |
+| AI 助手 | 本機 Claude CLI（Claude 訂閱登入，串流） |
 
 ## 連線生命週期設計
 
