@@ -173,7 +173,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
                 </div>
                 <div className="flex justify-end">
                   <button type="button" onClick={applyOptions} disabled={savingOpts || !orig}
-                    className="px-3 py-1.5 text-xs rounded bg-blue-600/80 hover:bg-blue-600 disabled:opacity-40">
+                    className="px-3 py-1.5 text-xs rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">
                     {savingOpts ? "套用中…" : "套用"}</button>
                 </div>
 

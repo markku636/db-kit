@@ -156,7 +156,7 @@ function ManualTab({ conn, database }: { conn: ConnectionConfig; database: strin
       <div className="flex justify-end">
         <button type="button" onClick={run} disabled={busy || (!fileBased && cliOk === false)}
           title={!fileBased && cliOk === false ? `找不到 ${hint.tool}，請先安裝再使用` : undefined}
-          className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50">
+          className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-50">
           {busy ? "執行中…" : mode === "backup" ? "開始備份" : "開始還原"}
         </button>
       </div>
@@ -323,7 +323,7 @@ function SchedulesTab({ conn }: { conn: ConnectionConfig }) {
               onChange={(e) => setRetention(e.target.value)} placeholder="全部保留" />
           </Field>
           <button type="button" onClick={add}
-            className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-500 mb-px">
+            className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent/90 mb-px">
             新增
           </button>
         </div>

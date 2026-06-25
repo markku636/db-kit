@@ -138,7 +138,7 @@ export default function PubSubPanel({ connId, connName, onClose }: {
               className="px-3 py-1 rounded bg-amber-600/80 hover:bg-amber-600 text-fg disabled:opacity-40">取消訂閱</button>
           ) : (
             <button type="button" onClick={subscribe} disabled={busy}
-              className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-fg disabled:opacity-40">訂閱</button>
+              className="px-3 py-1 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">訂閱</button>
           )}
           <button type="button" onClick={() => setPaused((p) => !p)} title="暫停 / 繼續接收"
             className={`px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 inline-flex items-center gap-1 ${paused ? "text-amber-300" : "text-fg/60"}`}>

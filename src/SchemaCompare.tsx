@@ -103,7 +103,7 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
           {dbs.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
         <button type="button" onClick={compare} disabled={busy || !target}
-          className="text-xs px-2.5 py-1 rounded bg-blue-600/80 hover:bg-blue-600 disabled:opacity-40">{busy ? "比對中…" : "比對"}</button>
+          className="text-xs px-2.5 py-1 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">{busy ? "比對中…" : "比對"}</button>
       </div>
 
       {!diff ? (

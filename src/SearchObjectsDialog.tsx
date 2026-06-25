@@ -356,7 +356,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
             type="button"
             onClick={() => void search()}
             disabled={!term.trim()}
-            className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40"
+            className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40"
           >
             搜尋
           </button>

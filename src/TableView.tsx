@@ -1935,7 +1935,7 @@ function StringEditor({ value, onSave, busy }: {
       <div className="flex justify-end">
         <button type="button" disabled={busy || text === value || view !== "raw"} onClick={() => onSave(text)}
           title={view !== "raw" ? "切到「原始」模式才能儲存" : "儲存"}
-          className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40">
+          className="px-3 py-1 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">
           {busy ? "儲存中…" : "儲存"}
         </button>
       </div>
@@ -2090,7 +2090,7 @@ function FilterBar({ columns, filters, matchAny, onApply }: {
         <button onClick={addRow}
           className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> 新增條件</button>
         <button onClick={apply}
-          className="px-2 py-1 rounded bg-blue-600/80 hover:bg-blue-600">套用</button>
+          className="px-2 py-1 rounded bg-accent text-white hover:bg-accent/90">套用</button>
         <button onClick={clear}
           className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50">清除</button>
       </div>
@@ -2735,7 +2735,7 @@ function AddForeignKeyForm({ table, columns, busy, onSubmit, onCancel }: {
         {FK_ACTIONS.map((a) => <option key={a} value={a}>{a ? `ON UPDATE ${a}` : "ON UPDATE（預設）"}</option>)}
       </select>
       <button type="button" disabled={busy || !valid} onClick={() => onSubmit(effName, column, refTable, refColumn, onDelete, onUpdate)}
-        className="px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40">建立</button>
+        className="px-2 py-1 text-xs rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">建立</button>
       <button type="button" onClick={onCancel} className="px-2 py-1 text-xs rounded border border-fg/15 hover:bg-fg/5">取消</button>
     </div>
   );

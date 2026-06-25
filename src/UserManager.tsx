@@ -232,7 +232,7 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
           <span>使用者管理</span>
           {res && <span className="text-xs text-fg/40 font-normal">{rows.length} 個帳號</span>}
           <button type="button" onClick={() => setAdding((s) => !s)} disabled={busy}
-            className="ml-2 inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-blue-600/80 hover:bg-blue-600 disabled:opacity-40"><Icon icon={Plus} size={14} /> 新增使用者</button>
+            className="ml-2 inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40"><Icon icon={Plus} size={14} /> 新增使用者</button>
           <button type="button" onClick={() => refresh()} disabled={busy}
             className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40">{busy ? "處理中…" : "重新整理"}</button>
         </span>
@@ -251,7 +251,7 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
                 onKeyDown={(e) => e.key === "Enter" && doCreate()}
                 className="bg-well border border-fg/15 rounded px-2 py-1 focus:border-accent w-44" placeholder="（可留空）" /></label>
             <button type="button" onClick={doCreate} disabled={busy}
-              className="px-3 py-1.5 rounded bg-blue-600/80 hover:bg-blue-600 disabled:opacity-40">建立</button>
+              className="px-3 py-1.5 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">建立</button>
             <button type="button" onClick={() => setAdding(false)}
               className="px-3 py-1.5 rounded border border-fg/15 hover:bg-fg/5">取消</button>
           </div>
@@ -373,7 +373,7 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
                   {PRIVS.map((p) => (
                     <button key={p} type="button" onClick={() => togglePriv(p)}
                       className={`text-xs px-2 py-1 rounded border ${gPrivs.includes(p)
-                        ? "bg-blue-600/80 border-blue-500 text-fg"
+                        ? "bg-accent border-accent text-white"
                         : "border-fg/15 text-fg/60 hover:bg-fg/5"}`}>{p}</button>
                   ))}
                 </div>
@@ -385,7 +385,7 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
                     <input value={gTable} onChange={(e) => setGTable(e.target.value)}
                       className="bg-well border border-fg/15 rounded px-2 py-1 focus:border-accent w-44" placeholder="（全部）" /></label>
                   <button type="button" onClick={() => applyGrant(false)} disabled={busy}
-                    className="px-3 py-1.5 rounded bg-blue-600/80 hover:bg-blue-600 disabled:opacity-40">授予</button>
+                    className="px-3 py-1.5 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">授予</button>
                   <button type="button" onClick={() => applyGrant(true)} disabled={busy}
                     className="px-3 py-1.5 rounded border border-red-400/40 text-red-300 hover:bg-red-500/10 disabled:opacity-40">撤銷</button>
                 </div>

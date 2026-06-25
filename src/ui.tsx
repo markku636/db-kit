@@ -269,8 +269,8 @@ export function UiHost() {
               <button
                 type="button"
                 onClick={() => resolveConfirm(true)}
-                className={`px-3 py-1.5 text-sm rounded ${
-                  confirmReq.danger ? "bg-red-600 hover:bg-red-500" : "bg-blue-600 hover:bg-blue-500"
+                className={`px-3 py-1.5 text-sm rounded text-white ${
+                  confirmReq.danger ? "bg-danger hover:bg-danger/90" : "bg-accent hover:bg-accent/90"
                 }`}
               >
                 {confirmReq.confirmText ?? "確定"}
@@ -331,7 +331,7 @@ function PromptDialog() {
           <button
             type="button"
             onClick={() => resolvePrompt(text)}
-            className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-500"
+            className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent/90"
           >
             {promptReq.confirmText ?? "確定"}
           </button>

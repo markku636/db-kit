@@ -206,7 +206,7 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
         <input value={top} onChange={(e) => setTop(e.target.value.replace(/[^\d]/g, ""))}
           className="w-16 bg-inset border border-fg/10 rounded px-2 py-1 mono text-center outline-none focus:border-accent" />
         <button type="button" onClick={scan} disabled={scanning}
-          className="ml-auto px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-fg disabled:opacity-40">
+          className="ml-auto px-3 py-1 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">
           {scanning ? "掃描中…" : "掃描"}
         </button>
       </div>
