@@ -31,6 +31,7 @@ const DIALECT: Record<DbKind, SQLDialect> = {
   sqlite: SQLite,
   mongo: StandardSQL,
   redis: StandardSQL,
+  external: MySQL, // 外部 gateway（qland）講 MySQL
 };
 
 // 1-based 行號 → 整行的字元位移範圍。

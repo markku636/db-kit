@@ -65,6 +65,9 @@ pub struct PersistedConnection {
     pub ssh_auth_method: SshAuthMethod,
     #[serde(default)]
     pub ssh_private_key_path: String,
+    /// 外部 gateway 驅動的非機密設定（driver / base_url / env …）。
+    #[serde(default)]
+    pub options: std::collections::BTreeMap<String, String>,
 }
 
 fn default_max_conns_pub() -> u32 {
@@ -88,6 +91,7 @@ impl From<&ConnectionConfig> for PersistedConnection {
             ssh_username: c.ssh_username.clone(),
             ssh_auth_method: c.ssh_auth_method,
             ssh_private_key_path: c.ssh_private_key_path.clone(),
+            options: c.options.clone(),
         }
     }
 }
@@ -113,6 +117,8 @@ impl PersistedConnection {
             ssh_password: String::new(),
             ssh_private_key_path: self.ssh_private_key_path.clone(),
             ssh_passphrase: String::new(),
+            options: self.options.clone(),
+            otp_secret: String::new(),
         }
     }
 }
@@ -233,6 +239,7 @@ pub async fn load_connection(app: &AppHandle, id: &str) -> AppResult<ConnectionC
         .ok_or_else(|| AppError::NotFound(id.to_string()))?;
     let mut cfg = p.to_config();
     cfg.password = kc_get(id).unwrap_or_default();
+    cfg.otp_secret = kc_get(&otp_account(id)).unwrap_or_default();
     if cfg.ssh_enabled {
         cfg.ssh_password = kc_get(&ssh_account(id)).unwrap_or_default();
         cfg.ssh_passphrase = kc_get(&ssh_passphrase_account(id)).unwrap_or_default();
@@ -248,6 +255,11 @@ pub fn ssh_account(id: &str) -> String {
 
 pub fn ssh_passphrase_account(id: &str) -> String {
     format!("{id}.ssh-passphrase")
+}
+
+/// 外部 gateway 驅動的 OTP secret keychain account。
+pub fn otp_account(id: &str) -> String {
+    format!("{id}.otp")
 }
 
 /// 寫入 keychain。secret 為空字串時視為「刪除該項」。

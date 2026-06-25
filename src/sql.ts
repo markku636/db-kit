@@ -40,6 +40,7 @@ export const TYPE_PRESETS: Record<DbKind, string[]> = {
   // 非 SQL（mongo / redis）不會用到型別下拉，但需滿足 Record<DbKind> 完整性。
   mongo: [],
   redis: [],
+  external: [], // 外部 gateway 唯讀，不建表
 };
 
 // 組 CREATE TABLE。識別字以 quoteIdent 跳脫（防注入）；型別 / 預設值為原樣插值（DDL 無法參數化，

@@ -35,6 +35,9 @@ fn hydrate_secrets(config: &mut ConnectionConfig) {
     if config.password.is_empty() {
         config.password = store::kc_get(&config.id).unwrap_or_default();
     }
+    if config.otp_secret.is_empty() {
+        config.otp_secret = store::kc_get(&store::otp_account(&config.id)).unwrap_or_default();
+    }
     if config.ssh_enabled {
         if config.ssh_password.is_empty() {
             config.ssh_password = store::kc_get(&store::ssh_account(&config.id)).unwrap_or_default();
@@ -79,6 +82,9 @@ pub async fn save_connection(app: AppHandle, config: ConnectionConfig) -> AppRes
     if !config.password.is_empty() {
         store::kc_set(&config.id, &config.password)?;
     }
+    if !config.otp_secret.is_empty() {
+        store::kc_set(&store::otp_account(&config.id), &config.otp_secret)?;
+    }
     if config.ssh_enabled {
         if !config.ssh_password.is_empty() {
             store::kc_set(&store::ssh_account(&config.id), &config.ssh_password)?;
@@ -105,6 +111,7 @@ pub async fn remove_saved_connection(
     state.manager.disconnect(&id).await;
     store::remove(&app, &id).await?;
     store::kc_delete(&id);
+    store::kc_delete(&store::otp_account(&id));
     store::kc_delete(&store::ssh_account(&id));
     store::kc_delete(&store::ssh_passphrase_account(&id));
     Ok(())
@@ -117,6 +124,96 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> AppResult<()>
     }
     state.manager.disconnect(&id).await;
     Ok(())
+}
+
+/// 清除指定連線驅動的查詢快取（外部 gateway 等），供前端「重新整理」強制重抓。
+#[tauri::command]
+pub async fn clear_cache(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.manager.clear_cache(&id).await
+}
+
+/// 加密匯出時的單筆連線（PersistedConnection + 從 keychain 取出的機密）。
+/// 只用於加密檔內部，不會以明文落地。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ExportedConn {
+    #[serde(flatten)]
+    base: PersistedConnection,
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
+    ssh_password: String,
+    #[serde(default)]
+    ssh_passphrase: String,
+    #[serde(default)]
+    otp_secret: String,
+}
+
+/// 加密匯出所有連線（**含**密碼 / SSH 機密 / OTP secret，從 keychain 取出），
+/// 以 passphrase 派生金鑰用 AES-256-GCM 加密整包寫入 path。回傳匯出筆數。
+#[tauri::command]
+pub async fn export_connections_encrypted(
+    app: AppHandle,
+    path: String,
+    passphrase: String,
+) -> AppResult<usize> {
+    if passphrase.is_empty() {
+        return Err(AppError::Storage("請提供 passphrase".into()));
+    }
+    let conns = store::load_all(&app).await?;
+    let exported: Vec<ExportedConn> = conns
+        .into_iter()
+        .map(|c| {
+            let id = c.id.clone();
+            ExportedConn {
+                password: store::kc_get(&id).unwrap_or_default(),
+                ssh_password: store::kc_get(&store::ssh_account(&id)).unwrap_or_default(),
+                ssh_passphrase: store::kc_get(&store::ssh_passphrase_account(&id)).unwrap_or_default(),
+                otp_secret: store::kc_get(&store::otp_account(&id)).unwrap_or_default(),
+                base: c,
+            }
+        })
+        .collect();
+    let count = exported.len();
+    let plain = serde_json::to_vec(&exported)
+        .map_err(|e| AppError::Storage(format!("序列化失敗：{e}")))?;
+    let blob = crate::conn_crypto::encrypt(&plain, &passphrase)?;
+    tokio::fs::write(&path, blob)
+        .await
+        .map_err(|e| AppError::Storage(format!("寫入失敗：{e}")))?;
+    Ok(count)
+}
+
+/// 從加密檔匯入連線：以 passphrase 解密後，機密寫回 keychain、設定 upsert。回傳匯入筆數。
+#[tauri::command]
+pub async fn import_connections_encrypted(
+    app: AppHandle,
+    path: String,
+    passphrase: String,
+) -> AppResult<usize> {
+    let blob = tokio::fs::read(&path)
+        .await
+        .map_err(|e| AppError::Storage(format!("讀取失敗：{e}")))?;
+    let plain = crate::conn_crypto::decrypt(&blob, &passphrase)?;
+    let exported: Vec<ExportedConn> = serde_json::from_slice(&plain)
+        .map_err(|_| AppError::Storage("解密成功但內容格式不符（檔案可能來自不同版本）".into()))?;
+    let count = exported.len();
+    for e in exported {
+        let id = e.base.id.clone();
+        if !e.password.is_empty() {
+            store::kc_set(&id, &e.password)?;
+        }
+        if !e.ssh_password.is_empty() {
+            store::kc_set(&store::ssh_account(&id), &e.ssh_password)?;
+        }
+        if !e.ssh_passphrase.is_empty() {
+            store::kc_set(&store::ssh_passphrase_account(&id), &e.ssh_passphrase)?;
+        }
+        if !e.otp_secret.is_empty() {
+            store::kc_set(&store::otp_account(&id), &e.otp_secret)?;
+        }
+        store::upsert(&app, e.base).await?;
+    }
+    Ok(count)
 }
 
 #[tauri::command]

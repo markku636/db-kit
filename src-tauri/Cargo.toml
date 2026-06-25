@@ -36,6 +36,10 @@ bigdecimal = "0.4"
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
 # 取 OS 設定目錄（SSH known-hosts 指紋存放位置）。
 dirs = "6"
+# 連線設定加密匯出 / 匯入（含密碼；passphrase 經 Argon2 派生金鑰 + AES-256-GCM）。
+aes-gcm = "0.10"
+argon2 = "0.5"
+rand = "0.8"
 
 # OS keychain：依平台選用原生後端，避免在 Windows 上編譯 secret-service。
 [target.'cfg(windows)'.dependencies]

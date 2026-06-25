@@ -1,6 +1,7 @@
 mod agent;
 mod backup;
 mod commands;
+mod conn_crypto;
 mod db;
 mod error;
 mod export;
@@ -55,6 +56,9 @@ pub fn run() {
             commands::test_connection,
             commands::connect,
             commands::disconnect,
+            commands::clear_cache,
+            commands::export_connections_encrypted,
+            commands::import_connections_encrypted,
             commands::list_databases,
             commands::list_tables,
             commands::table_columns,

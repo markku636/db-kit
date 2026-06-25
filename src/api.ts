@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type DbKind = "mysql" | "postgres" | "mongo" | "redis" | "sqlite";
+export type DbKind = "mysql" | "postgres" | "mongo" | "redis" | "sqlite" | "external";
 
 export type SshAuthMethod = "password" | "key";
 
@@ -24,6 +24,9 @@ export interface ConnectionConfig {
   ssh_password?: string;
   ssh_private_key_path?: string;
   ssh_passphrase?: string;
+  // 外部 gateway 驅動（kind === "external"）
+  options?: Record<string, string>;
+  otp_secret?: string;
 }
 
 export interface QueryResult {
@@ -391,12 +394,13 @@ export interface SearchOptions {
 }
 
 // 連線類型的顯示資料（色標呼應規劃文件）
-export const KIND_META: Record<DbKind, { label: string; color: string; defaultPort: number; fileBased?: boolean }> = {
+export const KIND_META: Record<DbKind, { label: string; color: string; defaultPort: number; fileBased?: boolean; external?: boolean }> = {
   mysql: { label: "MySQL", color: "#3b82f6", defaultPort: 3306 },
   postgres: { label: "PostgreSQL", color: "#6366f1", defaultPort: 5432 },
   mongo: { label: "MongoDB", color: "#22c55e", defaultPort: 27017 },
   redis: { label: "Redis", color: "#ef4444", defaultPort: 6379 },
   sqlite: { label: "SQLite", color: "#f59e0b", defaultPort: 0, fileBased: true },
+  external: { label: "QLand", color: "#8b5cf6", defaultPort: 0, external: true },
 };
 
 // 後端 command 包裝
@@ -405,6 +409,13 @@ export const api = {
     invoke<void>("test_connection", { config }),
   connect: (config: ConnectionConfig) => invoke<void>("connect", { config }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
+  // 清除外部 gateway 等驅動的查詢快取（供「重新整理」強制重抓）。
+  clearCache: (id: string) => invoke<void>("clear_cache", { id }),
+  // 加密匯出 / 匯入連線（含密碼；passphrase 派生金鑰 + AES-256-GCM）。回傳筆數。
+  exportConnectionsEncrypted: (path: string, passphrase: string) =>
+    invoke<number>("export_connections_encrypted", { path, passphrase }),
+  importConnectionsEncrypted: (path: string, passphrase: string) =>
+    invoke<number>("import_connections_encrypted", { path, passphrase }),
   // 連線設定持久化（密碼存 keychain，磁碟不含密碼）
   listSavedConnections: () =>
     invoke<ConnectionConfig[]>("list_saved_connections"),

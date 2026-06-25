@@ -104,42 +104,37 @@ export default function App() {
     return () => clearTimeout(t);
   }, [splash]);
 
-  // 匯出連線設定到 JSON（不含密碼 / SSH 機密，存於 keychain）。對標 Navicat 連線匯出（備份 / 遷移）。
+  // 加密匯出所有連線（**含**密碼 / SSH 機密 / OTP，從 keychain 取出，用 passphrase 派生金鑰 AES-256-GCM 加密）。
   const exportConnections = async () => {
     const conns = useStore.getState().connections;
     if (conns.length === 0) { toast.info("沒有可匯出的連線"); return; }
-    const safe = conns.map(({ password, ssh_password, ssh_passphrase, ...rest }) => rest);
-    const path = await pickSaveFile("db-kit-connections.json", [{ name: "JSON", extensions: ["json"] }]);
+    const passphrase = await uiPrompt("設定匯出檔的加密密碼（passphrase）", {
+      title: "加密匯出連線", placeholder: "至少 8 碼，匯入時需輸入相同密碼", confirmText: "匯出",
+    });
+    if (!passphrase) return;
+    if (passphrase.length < 8) { toast.error("passphrase 至少 8 碼"); return; }
+    const path = await pickSaveFile("db-kit-connections.dbkitenc", [{ name: "db-kit 加密連線", extensions: ["dbkitenc"] }]);
     if (!path) return;
     try {
-      await api.saveTextFile(path, JSON.stringify({ version: 1, connections: safe }, null, 2));
-      toast.success(`已匯出 ${safe.length} 個連線（不含密碼）`);
+      const n = await api.exportConnectionsEncrypted(path, passphrase);
+      toast.success(`已加密匯出 ${n} 個連線（含密碼）`);
     } catch (e: any) {
       toast.error(e?.message ?? "匯出失敗");
     }
   };
-  // 從 JSON 匯入連線：重新產生 ID（不覆蓋既有）、清空機密（需重新輸入密碼）、基本欄位驗證。
+  // 從加密檔匯入連線：輸入 passphrase 解密，機密寫回 keychain、設定 upsert，再重載連線清單。
   const importConnections = async () => {
-    const path = await pickOpenFile([{ name: "JSON", extensions: ["json"] }]);
+    const path = await pickOpenFile([{ name: "db-kit 加密連線", extensions: ["dbkitenc"] }]);
     if (!path) return;
+    const passphrase = await uiPrompt("輸入匯入檔的加密密碼（passphrase）", { title: "解密匯入連線", confirmText: "匯入" });
+    if (!passphrase) return;
     try {
-      const parsed = JSON.parse(await api.readTextFile(path));
-      const arr: any[] = Array.isArray(parsed) ? parsed : parsed?.connections;
-      if (!Array.isArray(arr)) { toast.error("檔案格式不符（需連線陣列）"); return; }
-      let n = 0;
-      for (const raw of arr) {
-        if (!raw || typeof raw.name !== "string" || typeof raw.kind !== "string" || typeof raw.host !== "string") continue;
-        const c: ConnectionConfig = {
-          ...raw, id: crypto.randomUUID(),
-          port: Number(raw.port) || 0,
-          username: typeof raw.username === "string" ? raw.username : "",
-          password: "", ssh_password: "", ssh_passphrase: "",
-        };
-        try { await api.saveConnection(c); useStore.getState().addConnection(c); n++; } catch { /* 跳過無效項 */ }
-      }
-      toast.success(n > 0 ? `已匯入 ${n} 個連線（請重新輸入密碼）` : "沒有可匯入的連線");
+      const n = await api.importConnectionsEncrypted(path, passphrase);
+      const saved = await api.listSavedConnections();
+      useStore.getState().setConnections(saved.map((c) => ({ ...c, password: c.password ?? "" } as ConnectionConfig)));
+      toast.success(n > 0 ? `已匯入 ${n} 個連線（含密碼）` : "檔案內沒有連線");
     } catch (e: any) {
-      toast.error(`匯入失敗：${e?.message ?? "JSON 解析錯誤"}`);
+      toast.error(`匯入失敗：${e?.message ?? "passphrase 錯誤或檔案損毀"}`);
     }
   };
 
@@ -567,6 +562,8 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   // 連線 / 表 搜尋過濾字串
   const [filter, setFilter] = useState("");
   const filterRef = useRef<HTMLInputElement>(null);
+  // 每個資料庫節點獨立的表名過濾（key = `${connId}:${db}`）。大型 schema（如 1700+ 張表）好找。
+  const [dbFilter, setDbFilter] = useState<Record<string, string>>({});
   // 右鍵選單（SQL 表節點：產生 SQL）。objKind 為物件種類（"table" | "view"），決定生命週期 DDL。
   const [tableMenu, setTableMenu] = useState<
     { connId: string; db: string; table: string; kind: DbKind; objKind: string; x: number; y: number } | null
@@ -662,6 +659,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   const refreshDbs = async (id: string) => {
     if (!connectedIds.has(id)) return;
     try {
+      await api.clearCache(id).catch(() => {}); // 外部 gateway：清快取以強制重抓（其餘驅動 no-op）
       const dbs = await api.listDatabases(id);
       setDatabases((d) => ({ ...d, [id]: dbs }));
       toast.success("已重新整理");
@@ -742,6 +740,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
     const key = `${connId}:${db}`;
     setDbLoading(key, true);
     try {
+      await api.clearCache(connId).catch(() => {}); // 外部 gateway：清快取以強制重抓（其餘驅動 no-op）
       const objs = await fetchDbObjects(connId, cfg.kind, db);
       setExpandedDbs((e) => ({ ...e, [key]: objs }));
     } catch (e: any) {
@@ -848,7 +847,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   // SQLite 為單檔無多庫概念，僅切到查詢分頁（不覆寫既有內容）。
   const newQueryForDb = (connId: string, db: string, kind: DbKind) => {
     const starter =
-      db && kind === "mysql" ? `USE \`${db.replace(/`/g, "``")}\`;\n\n`
+      db && (kind === "mysql" || kind === "external") ? `USE \`${db.replace(/`/g, "``")}\`;\n\n`
       : db && kind === "postgres" ? `SET search_path TO "${db.replace(/"/g, '""')}";\n\n`
       : null;
     if (starter) sendQuery(connId, starter);
@@ -1335,7 +1334,8 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                 const objs = expandedDbs[dbKey];
                 const loading = loadingDbs.has(dbKey);
                 const isRedis = c.kind === "redis";
-                const isSqlKind = c.kind === "mysql" || c.kind === "postgres" || c.kind === "sqlite";
+                // external（qland gateway）走 SQL 分支：用資料夾 + 每庫篩選框（適合 1700+ 張表），右鍵亦可新增查詢。
+                const isSqlKind = c.kind === "mysql" || c.kind === "postgres" || c.kind === "sqlite" || c.kind === "external";
                 const supportsRoutines = c.kind === "mysql" || c.kind === "postgres";
 
                 // 樹中的單一資料表 / 視圖節點（沿用選取 / 雙擊開啟 / 右鍵產生 SQL）。indent 控制縮排深度。
@@ -1453,13 +1453,29 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
                     </div>
 
                     {objs && isSqlKind && (() => {
-                      // 套用搜尋過濾後再算數量，使資料夾徽章與實際顯示的列數一致（無過濾時等同全部）。
-                      const vTables = objs.tables.filter((t) => tableVisible(c.name, t.name));
-                      const vViews = objs.views.filter((t) => tableVisible(c.name, t.name));
-                      const vRoutines = objs.routines.filter((r) => tableVisible(c.name, r.name));
-                      const vQueries = savedQueries.filter((sq) => tableVisible(c.name, sq.name));
+                      // 每庫獨立篩選（與全域搜尋 AND）；套用後再算數量，使資料夾徽章與顯示列數一致。
+                      const dq = (dbFilter[dbKey] ?? "").trim().toLowerCase();
+                      const dbMatch = (name: string) => !dq || name.toLowerCase().includes(dq);
+                      const vTables = objs.tables.filter((t) => tableVisible(c.name, t.name) && dbMatch(t.name));
+                      const vViews = objs.views.filter((t) => tableVisible(c.name, t.name) && dbMatch(t.name));
+                      const vRoutines = objs.routines.filter((r) => tableVisible(c.name, r.name) && dbMatch(r.name));
+                      const vQueries = savedQueries.filter((sq) => tableVisible(c.name, sq.name) && dbMatch(sq.name));
                       return (
                         <>
+                          <div className="pl-11 pr-3 py-1">
+                            <div className="relative">
+                              <Icon icon={Search} size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-fg/30" />
+                              <input
+                                value={dbFilter[dbKey] ?? ""}
+                                onChange={(e) => setDbFilter((m) => ({ ...m, [dbKey]: e.target.value }))}
+                                onClick={(e) => e.stopPropagation()}
+                                onKeyDown={(e) => { if (e.key === "Escape" && (dbFilter[dbKey] ?? "")) { e.stopPropagation(); setDbFilter((m) => ({ ...m, [dbKey]: "" })); } }}
+                                placeholder={`篩選 ${db} 表名…`}
+                                title="只篩選此資料庫的表 / 檢視 / 函式名稱"
+                                className="w-full bg-inset border border-fg/10 rounded pl-6 pr-2 py-0.5 text-[11px] outline-none focus:border-accent"
+                              />
+                            </div>
+                          </div>
                           {folderNode("tables", Table2, "text-sky-300/80", "資料表", vTables.length,
                             <>{vTables.map((t) => objNode(t, "pl-16"))}</>)}
                           {folderNode("views", Eye, "text-purple-300/80", "檢視", vViews.length,
@@ -1938,6 +1954,7 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
   sqlite: "SELECT 1",
   mongo: '{ "db": "", "collection": "", "filter": {} }',
   redis: "PING",
+  external: "SELECT 1",
 };
 // 僅關聯式資料庫支援 EXPLAIN 查詢計畫分析。
 const EXPLAIN_KINDS: DbKind[] = ["mysql", "postgres", "sqlite"];

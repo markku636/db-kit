@@ -36,6 +36,8 @@ fn cfg(kind: DbKind, host: &str, port: u16, user: &str, pass: &str, db: Option<&
         ssh_password: String::new(),
         ssh_private_key_path: String::new(),
         ssh_passphrase: String::new(),
+        options: Default::default(),
+        otp_secret: String::new(),
     }
 }
 

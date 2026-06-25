@@ -23,6 +23,8 @@ enum Active {
     Sqlite(Arc<SqliteDriver>),
     Mongo(Arc<MongoDriver>),
     Redis(Arc<RedisDriver>),
+    /// 外部 gateway 驅動（trait object，見 db::external）。
+    Dyn(Arc<dyn DatabaseDriver>),
 }
 
 impl Active {
@@ -33,6 +35,7 @@ impl Active {
             Active::Sqlite(d) => d.ping().await,
             Active::Mongo(d) => d.ping().await,
             Active::Redis(d) => d.ping().await,
+            Active::Dyn(d) => d.ping().await,
         }
     }
     async fn list_databases(&self) -> AppResult<Vec<String>> {
@@ -42,6 +45,7 @@ impl Active {
             Active::Sqlite(d) => d.list_databases().await,
             Active::Mongo(d) => d.list_databases().await,
             Active::Redis(d) => d.list_databases().await,
+            Active::Dyn(d) => d.list_databases().await,
         }
     }
     async fn list_tables(&self, database: &str) -> AppResult<Vec<TableInfo>> {
@@ -51,6 +55,7 @@ impl Active {
             Active::Sqlite(d) => d.list_tables(database).await,
             Active::Mongo(d) => d.list_tables(database).await,
             Active::Redis(d) => d.list_tables(database).await,
+            Active::Dyn(d) => d.list_tables(database).await,
         }
     }
     async fn table_columns(&self, database: &str, table: &str) -> AppResult<Vec<ColumnInfo>> {
@@ -60,6 +65,7 @@ impl Active {
             Active::Sqlite(d) => d.table_columns(database, table).await,
             Active::Mongo(d) => d.table_columns(database, table).await,
             Active::Redis(d) => d.table_columns(database, table).await,
+            Active::Dyn(d) => d.table_columns(database, table).await,
         }
     }
     async fn table_data(
@@ -74,6 +80,7 @@ impl Active {
             Active::Sqlite(d) => d.table_data(database, table, query).await,
             Active::Mongo(d) => d.table_data(database, table, query).await,
             Active::Redis(d) => d.table_data(database, table, query).await,
+            Active::Dyn(d) => d.table_data(database, table, query).await,
         }
     }
     async fn query(&self, sql: &str) -> AppResult<QueryResult> {
@@ -83,6 +90,7 @@ impl Active {
             Active::Sqlite(d) => d.query(sql).await,
             Active::Mongo(d) => d.query(sql).await,
             Active::Redis(d) => d.query(sql).await,
+            Active::Dyn(d) => d.query(sql).await,
         }
     }
     async fn update_cell(
@@ -97,6 +105,7 @@ impl Active {
             Active::Sqlite(d) => d.update_cell(database, table, edit).await,
             Active::Mongo(d) => d.update_cell(database, table, edit).await,
             Active::Redis(d) => d.update_cell(database, table, edit).await,
+            Active::Dyn(d) => d.update_cell(database, table, edit).await,
         }
     }
     async fn insert_row(
@@ -111,6 +120,7 @@ impl Active {
             Active::Sqlite(d) => d.insert_row(database, table, row).await,
             Active::Mongo(d) => d.insert_row(database, table, row).await,
             Active::Redis(d) => d.insert_row(database, table, row).await,
+            Active::Dyn(d) => d.insert_row(database, table, row).await,
         }
     }
     async fn delete_row(
@@ -125,6 +135,7 @@ impl Active {
             Active::Sqlite(d) => d.delete_row(database, table, del).await,
             Active::Mongo(d) => d.delete_row(database, table, del).await,
             Active::Redis(d) => d.delete_row(database, table, del).await,
+            Active::Dyn(d) => d.delete_row(database, table, del).await,
         }
     }
     fn pool_status(&self) -> PoolStatus {
@@ -134,6 +145,7 @@ impl Active {
             Active::Sqlite(d) => d.pool_status(),
             Active::Mongo(d) => d.pool_status(),
             Active::Redis(d) => d.pool_status(),
+            Active::Dyn(d) => d.pool_status(),
         }
     }
     async fn key_detail(&self, database: &str, key: &str) -> AppResult<Option<KeyDetail>> {
@@ -143,6 +155,7 @@ impl Active {
             Active::Sqlite(d) => d.key_detail(database, key).await,
             Active::Mongo(d) => d.key_detail(database, key).await,
             Active::Redis(d) => d.key_detail(database, key).await,
+            Active::Dyn(d) => d.key_detail(database, key).await,
         }
     }
     async fn key_edit(&self, database: &str, key: &str, edit: &KeyEdit) -> AppResult<u64> {
@@ -152,6 +165,7 @@ impl Active {
             Active::Sqlite(d) => d.key_edit(database, key, edit).await,
             Active::Mongo(d) => d.key_edit(database, key, edit).await,
             Active::Redis(d) => d.key_edit(database, key, edit).await,
+            Active::Dyn(d) => d.key_edit(database, key, edit).await,
         }
     }
     async fn explain(&self, sql: &str) -> AppResult<QueryResult> {
@@ -161,6 +175,7 @@ impl Active {
             Active::Sqlite(d) => d.explain(sql).await,
             Active::Mongo(d) => d.explain(sql).await,
             Active::Redis(d) => d.explain(sql).await,
+            Active::Dyn(d) => d.explain(sql).await,
         }
     }
     async fn column_stats(&self, database: &str, table: &str, column: &str) -> AppResult<ColumnStats> {
@@ -170,6 +185,7 @@ impl Active {
             Active::Sqlite(d) => d.column_stats(database, table, column).await,
             Active::Mongo(d) => d.column_stats(database, table, column).await,
             Active::Redis(d) => d.column_stats(database, table, column).await,
+            Active::Dyn(d) => d.column_stats(database, table, column).await,
         }
     }
     async fn table_info(&self, database: &str, table: &str) -> AppResult<Vec<(String, String)>> {
@@ -179,6 +195,7 @@ impl Active {
             Active::Sqlite(d) => d.table_info(database, table).await,
             Active::Mongo(d) => d.table_info(database, table).await,
             Active::Redis(d) => d.table_info(database, table).await,
+            Active::Dyn(d) => d.table_info(database, table).await,
         }
     }
     async fn list_foreign_keys(&self, database: &str, table: &str) -> AppResult<Vec<ForeignKeyInfo>> {
@@ -188,6 +205,7 @@ impl Active {
             Active::Sqlite(d) => d.list_foreign_keys(database, table).await,
             Active::Mongo(d) => d.list_foreign_keys(database, table).await,
             Active::Redis(d) => d.list_foreign_keys(database, table).await,
+            Active::Dyn(d) => d.list_foreign_keys(database, table).await,
         }
     }
     async fn create_collection(&self, database: &str, name: &str) -> AppResult<()> {
@@ -197,6 +215,7 @@ impl Active {
             Active::Sqlite(d) => d.create_collection(database, name).await,
             Active::Mongo(d) => d.create_collection(database, name).await,
             Active::Redis(d) => d.create_collection(database, name).await,
+            Active::Dyn(d) => d.create_collection(database, name).await,
         }
     }
     async fn create_database(&self, name: &str) -> AppResult<()> {
@@ -206,6 +225,7 @@ impl Active {
             Active::Sqlite(d) => d.create_database(name).await,
             Active::Mongo(d) => d.create_database(name).await,
             Active::Redis(d) => d.create_database(name).await,
+            Active::Dyn(d) => d.create_database(name).await,
         }
     }
     async fn drop_collection(&self, database: &str, name: &str) -> AppResult<()> {
@@ -215,6 +235,7 @@ impl Active {
             Active::Sqlite(d) => d.drop_collection(database, name).await,
             Active::Mongo(d) => d.drop_collection(database, name).await,
             Active::Redis(d) => d.drop_collection(database, name).await,
+            Active::Dyn(d) => d.drop_collection(database, name).await,
         }
     }
     async fn drop_database(&self, name: &str) -> AppResult<()> {
@@ -224,6 +245,7 @@ impl Active {
             Active::Sqlite(d) => d.drop_database(name).await,
             Active::Mongo(d) => d.drop_database(name).await,
             Active::Redis(d) => d.drop_database(name).await,
+            Active::Dyn(d) => d.drop_database(name).await,
         }
     }
     async fn list_routines(&self, database: &str) -> AppResult<Vec<RoutineInfo>> {
@@ -233,6 +255,7 @@ impl Active {
             Active::Sqlite(d) => d.list_routines(database).await,
             Active::Mongo(d) => d.list_routines(database).await,
             Active::Redis(d) => d.list_routines(database).await,
+            Active::Dyn(d) => d.list_routines(database).await,
         }
     }
     async fn routine_definition(&self, database: &str, name: &str, routine_type: &str) -> AppResult<String> {
@@ -242,6 +265,7 @@ impl Active {
             Active::Sqlite(d) => d.routine_definition(database, name, routine_type).await,
             Active::Mongo(d) => d.routine_definition(database, name, routine_type).await,
             Active::Redis(d) => d.routine_definition(database, name, routine_type).await,
+            Active::Dyn(d) => d.routine_definition(database, name, routine_type).await,
         }
     }
     async fn search_objects(&self, opts: &SearchOptions) -> AppResult<Vec<SearchHit>> {
@@ -251,6 +275,7 @@ impl Active {
             Active::Sqlite(d) => d.search_objects(opts).await,
             Active::Mongo(d) => d.search_objects(opts).await,
             Active::Redis(d) => d.search_objects(opts).await,
+            Active::Dyn(d) => d.search_objects(opts).await,
         }
     }
     async fn exec_ddl(&self, sql: &str) -> AppResult<()> {
@@ -260,6 +285,7 @@ impl Active {
             Active::Sqlite(d) => d.exec_ddl(sql).await,
             Active::Mongo(d) => d.exec_ddl(sql).await,
             Active::Redis(d) => d.exec_ddl(sql).await,
+            Active::Dyn(d) => d.exec_ddl(sql).await,
         }
     }
     async fn validate_ddl(&self, database: &str, sql: &str) -> AppResult<ValidationReport> {
@@ -269,6 +295,7 @@ impl Active {
             Active::Sqlite(d) => d.validate_ddl(database, sql).await,
             Active::Mongo(d) => d.validate_ddl(database, sql).await,
             Active::Redis(d) => d.validate_ddl(database, sql).await,
+            Active::Dyn(d) => d.validate_ddl(database, sql).await,
         }
     }
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
@@ -278,6 +305,7 @@ impl Active {
             Active::Sqlite(d) => d.alter_table(database, table, op).await,
             Active::Mongo(d) => d.alter_table(database, table, op).await,
             Active::Redis(d) => d.alter_table(database, table, op).await,
+            Active::Dyn(d) => d.alter_table(database, table, op).await,
         }
     }
     async fn er_model(&self, database: &str) -> AppResult<ErModel> {
@@ -287,6 +315,7 @@ impl Active {
             Active::Sqlite(d) => d.er_model(database).await,
             Active::Mongo(d) => d.er_model(database).await,
             Active::Redis(d) => d.er_model(database).await,
+            Active::Dyn(d) => d.er_model(database).await,
         }
     }
     async fn table_ddl(&self, database: &str, table: &str) -> AppResult<String> {
@@ -296,6 +325,7 @@ impl Active {
             Active::Sqlite(d) => d.table_ddl(database, table).await,
             Active::Mongo(d) => d.table_ddl(database, table).await,
             Active::Redis(d) => d.table_ddl(database, table).await,
+            Active::Dyn(d) => d.table_ddl(database, table).await,
         }
     }
     async fn table_indexes(&self, database: &str, table: &str) -> AppResult<Vec<IndexInfo>> {
@@ -305,6 +335,7 @@ impl Active {
             Active::Sqlite(d) => d.table_indexes(database, table).await,
             Active::Mongo(d) => d.table_indexes(database, table).await,
             Active::Redis(d) => d.table_indexes(database, table).await,
+            Active::Dyn(d) => d.table_indexes(database, table).await,
         }
     }
     async fn drop_index(&self, database: &str, table: &str, index: &str) -> AppResult<()> {
@@ -314,6 +345,7 @@ impl Active {
             Active::Sqlite(d) => d.drop_index(database, table, index).await,
             Active::Mongo(d) => d.drop_index(database, table, index).await,
             Active::Redis(d) => d.drop_index(database, table, index).await,
+            Active::Dyn(d) => d.drop_index(database, table, index).await,
         }
     }
     async fn create_index(&self, database: &str, table: &str, name: &str, columns: &[String], unique: bool) -> AppResult<()> {
@@ -323,6 +355,7 @@ impl Active {
             Active::Sqlite(d) => d.create_index(database, table, name, columns, unique).await,
             Active::Mongo(d) => d.create_index(database, table, name, columns, unique).await,
             Active::Redis(d) => d.create_index(database, table, name, columns, unique).await,
+            Active::Dyn(d) => d.create_index(database, table, name, columns, unique).await,
         }
     }
     async fn server_info(&self) -> AppResult<Vec<ServerInfoSection>> {
@@ -332,6 +365,7 @@ impl Active {
             Active::Sqlite(d) => d.server_info().await,
             Active::Mongo(d) => d.server_info().await,
             Active::Redis(d) => d.server_info().await,
+            Active::Dyn(d) => d.server_info().await,
         }
     }
     async fn scan_keys(&self, database: &str, pattern: &str, limit: usize) -> AppResult<RedisKeys> {
@@ -341,6 +375,17 @@ impl Active {
             Active::Sqlite(d) => d.scan_keys(database, pattern, limit).await,
             Active::Mongo(d) => d.scan_keys(database, pattern, limit).await,
             Active::Redis(d) => d.scan_keys(database, pattern, limit).await,
+            Active::Dyn(d) => d.scan_keys(database, pattern, limit).await,
+        }
+    }
+    async fn clear_cache(&self) {
+        match self {
+            Active::Mysql(d) => d.clear_cache().await,
+            Active::Postgres(d) => d.clear_cache().await,
+            Active::Sqlite(d) => d.clear_cache().await,
+            Active::Mongo(d) => d.clear_cache().await,
+            Active::Redis(d) => d.clear_cache().await,
+            Active::Dyn(d) => d.clear_cache().await,
         }
     }
     async fn close(&self) {
@@ -350,6 +395,7 @@ impl Active {
             Active::Sqlite(d) => d.close().await,
             Active::Mongo(d) => d.close().await,
             Active::Redis(d) => d.close().await,
+            Active::Dyn(d) => d.close().await,
         }
     }
 }
@@ -386,7 +432,7 @@ impl ConnectionManager {
 
         // SSH tunnel（SQLite 不適用）。
         let mut tunnel: Option<TunnelGuard> = None;
-        if cfg.ssh_enabled && !matches!(cfg.kind, DbKind::Sqlite) {
+        if cfg.ssh_enabled && !matches!(cfg.kind, DbKind::Sqlite | DbKind::External) {
             let guard = crate::ssh::open_tunnel(&cfg).await?;
             cfg.host = "127.0.0.1".to_string();
             cfg.port = guard.local_port();
@@ -403,6 +449,7 @@ impl ConnectionManager {
             }
             DbKind::Mongo => MongoDriver::connect(&cfg).await.map(|d| Active::Mongo(Arc::new(d))),
             DbKind::Redis => RedisDriver::connect(&cfg).await.map(|d| Active::Redis(Arc::new(d))),
+            DbKind::External => crate::db::external::connect_external(&cfg).await.map(Active::Dyn),
         };
 
         // driver 建立失敗：手動收掉 tunnel，避免背景任務洩漏（不可用裸 `?`）。
@@ -437,7 +484,7 @@ impl ConnectionManager {
     pub async fn test(&self, config: &ConnectionConfig) -> AppResult<()> {
         let mut cfg = config.clone();
         let mut tunnel: Option<TunnelGuard> = None;
-        if cfg.ssh_enabled && !matches!(cfg.kind, DbKind::Sqlite) {
+        if cfg.ssh_enabled && !matches!(cfg.kind, DbKind::Sqlite | DbKind::External) {
             let guard = crate::ssh::open_tunnel(&cfg).await?;
             cfg.host = "127.0.0.1".to_string();
             cfg.port = guard.local_port();
@@ -481,6 +528,12 @@ impl ConnectionManager {
                 let driver = RedisDriver::connect(config).await?;
                 driver.ping().await?;
                 driver.close().await;
+                Ok(())
+            }
+            DbKind::External => {
+                let d = crate::db::external::connect_external(config).await?;
+                d.ping().await?;
+                d.close().await;
                 Ok(())
             }
         }
@@ -686,6 +739,15 @@ impl ConnectionManager {
             Active::Redis(d) => Ok(d.clone()),
             _ => Err(AppError::Unsupported("此連線不是 Redis".into())),
         }
+    }
+
+    /// 清除指定連線驅動的查詢快取（供前端「重新整理」強制重抓，而非吃快取）。
+    /// 找不到連線時靜默忽略（未連線本就無快取）。
+    pub async fn clear_cache(&self, id: &str) -> AppResult<()> {
+        if let Ok(live) = self.get(id) {
+            live.active.clear_cache().await;
+        }
+        Ok(())
     }
 
     /// 主動關閉並移除單一連線（含其 tunnel）。

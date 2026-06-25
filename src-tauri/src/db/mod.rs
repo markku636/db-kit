@@ -8,6 +8,10 @@ pub mod postgres;
 pub mod redis;
 pub mod sqlite;
 
+/// 外部 gateway 驅動分派層（泛用擴充點）。實際的外部驅動（如私有 qland）以 trait object 接入；
+/// 未編入任何外部驅動時 `connect_external` 回 Unsupported。
+pub mod external;
+
 /// 資料庫範式。UI 與操作邏輯依此分流。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -17,6 +21,8 @@ pub enum DbKind {
     Mongo,
     Redis,
     Sqlite,
+    /// 外部 web gateway（非真實連線；透過 HTTP 下 SQL）。實作見 `db::external`。
+    External,
 }
 
 impl DbKind {
@@ -28,6 +34,7 @@ impl DbKind {
             DbKind::Mongo => "mongo",
             DbKind::Redis => "redis",
             DbKind::Sqlite => "sqlite",
+            DbKind::External => "external",
         }
     }
 
@@ -38,6 +45,7 @@ impl DbKind {
             DbKind::Mongo => ".archive",
             DbKind::Redis => ".rdb",
             DbKind::Sqlite => ".db",
+            DbKind::External => "",
         }
     }
 }
@@ -90,6 +98,14 @@ pub struct ConnectionConfig {
     /// keychain only，不寫入磁碟。
     #[serde(default)]
     pub ssh_passphrase: String,
+
+    // ---- 外部 gateway 驅動（DbKind::External）----
+    /// driver-specific 非機密設定（如外部驅動的 driver / base_url / env / insecure）。
+    #[serde(default)]
+    pub options: std::collections::BTreeMap<String, String>,
+    /// TOTP secret（如 2FA gateway）；存 OS keychain，不落地磁碟。
+    #[serde(default)]
+    pub otp_secret: String,
 }
 
 fn default_max_conns() -> u32 {
@@ -964,6 +980,10 @@ pub trait DatabaseDriver: Send + Sync {
     ) -> AppResult<RedisKeys> {
         Err(AppError::Unsupported("此資料庫不支援鍵掃描".into()))
     }
+
+    /// 清除此驅動的查詢快取（若有）。預設 no-op；有快取的驅動（如外部 gateway）覆寫，
+    /// 供前端「重新整理」強制重抓而非吃快取。
+    async fn clear_cache(&self) {}
 
     /// 優雅關閉：drain 連線池。
     async fn close(&self);

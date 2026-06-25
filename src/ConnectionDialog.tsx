@@ -30,6 +30,12 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [sshPassword, setSshPassword] = useState("");
   const [sshKeyPath, setSshKeyPath] = useState(initial?.ssh_private_key_path ?? "");
   const [sshPassphrase, setSshPassphrase] = useState("");
+  // 外部 gateway（kind === "external"，例：QLand）
+  const [driver, setDriver] = useState(initial?.options?.driver ?? "qland");
+  const [baseUrl, setBaseUrl] = useState(initial?.options?.base_url ?? "");
+  const [env, setEnv] = useState(initial?.options?.env ?? "");
+  const [insecure, setInsecure] = useState(initial?.options?.insecure === "1");
+  const [otpSecret, setOtpSecret] = useState("");
 
   // 任一連線欄位變動就清掉上次測試結果，避免「連線成功」殘留成誤導的假成功訊號（改了 host 卻仍顯示舊成功）。
   useEffect(() => {
@@ -58,6 +64,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     ssh_password: sshPassword,
     ssh_private_key_path: sshKeyPath,
     ssh_passphrase: sshPassphrase,
+    options:
+      kind === "external"
+        ? { driver, base_url: baseUrl, env, ...(insecure ? { insecure: "1" } : {}) }
+        : undefined,
+    otp_secret: otpSecret,
   });
 
   const onKindChange = (k: DbKind) => {
@@ -81,8 +92,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   };
 
   const fileBased = KIND_META[kind].fileBased;
-  // 檔案型（SQLite）路徑可留空（用記憶體庫）；伺服器型至少需要主機，否則會存下無法連線的連線並立即設為作用中。
-  const valid = fileBased || host.trim() !== "";
+  const external = KIND_META[kind].external;
+  // 檔案型路徑可留空；外部 gateway 需 base URL；伺服器型至少需要主機。
+  const valid = external ? baseUrl.trim() !== "" : fileBased || host.trim() !== "";
   const handleSave = () => { if (valid) onSaved(build()); };
   // 文字輸入按 Enter 直接儲存（與其他對話框一致）。
   const submitOnEnter = (e: React.KeyboardEvent) => {
@@ -129,7 +141,34 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={submitOnEnter} placeholder="選填" />
       </Field>
 
-      {fileBased ? (
+      {external ? (
+        <>
+          <Field label="驅動">
+            <Input value={driver} onChange={(e) => setDriver(e.target.value)} onKeyDown={submitOnEnter} placeholder="qland" />
+          </Field>
+          <Field label="Gateway 網址（base URL）">
+            <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} onKeyDown={submitOnEnter} placeholder="https://qland.internal" />
+          </Field>
+          <Field label="環境（env，選填）">
+            <Input value={env} onChange={(e) => setEnv(e.target.value)} onKeyDown={submitOnEnter} placeholder="例如 n8xuat / otprod" />
+          </Field>
+          <div className="flex gap-3">
+            <Field label="使用者" className="flex-1">
+              <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
+            </Field>
+            <Field label="密碼" className="flex-1">
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? "留空＝不變更" : ""} />
+            </Field>
+          </div>
+          <Field label="OTP secret（2FA，選填）">
+            <Input type="password" value={otpSecret} onChange={(e) => setOtpSecret(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? "留空＝不變更" : "base32 或 otpauth:// URI"} />
+          </Field>
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <input type="checkbox" checked={insecure} onChange={(e) => setInsecure(e.target.checked)} />
+            <span>略過 TLS 憑證驗證（內部自簽憑證用）</span>
+          </label>
+        </>
+      ) : fileBased ? (
         <Field label="資料庫檔案路徑">
           <div className="flex gap-2">
             <Input
@@ -176,7 +215,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         </>
       )}
 
-      {!fileBased && (
+      {!fileBased && !external && (
         <div className="border-t border-fg/10 pt-3 space-y-3">
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={sshEnabled} onChange={(e) => setSshEnabled(e.target.checked)} />

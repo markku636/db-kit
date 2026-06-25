@@ -40,6 +40,7 @@ fn cli_tool_name(kind: DbKind) -> &'static str {
         DbKind::Mongo => "mongodump",
         DbKind::Redis => "redis-cli",
         DbKind::Sqlite => "", // SQLite 用檔案複製，無需 CLI
+        DbKind::External => "", // 外部 gateway 不支援備份
     }
 }
 
@@ -60,6 +61,9 @@ pub async fn backup(
     database: &str,
     out_path: &str,
 ) -> AppResult<BackupResult> {
+    if matches!(config.kind, DbKind::External) {
+        return Err(AppError::Query("外部 gateway 連線不支援備份".into()));
+    }
     // SQLite：直接複製資料庫檔案。
     if let DbKind::Sqlite = config.kind {
         let src = config
@@ -92,6 +96,7 @@ pub async fn backup(
         DbKind::Mongo => run_mongodump(config, database, out_path).await?,
         DbKind::Redis => run_redis_dump(config, out_path).await?,
         DbKind::Sqlite => unreachable!(),
+        DbKind::External => unreachable!(), // 上方已 early-return
     };
 
     if !status {
@@ -156,6 +161,7 @@ pub async fn restore(
         DbKind::Redis => Err(AppError::Query(
             "Redis 自動還原暫未支援；請以 redis-cli 手動匯入 RDB".to_string(),
         )),
+        DbKind::External => Err(AppError::Query("外部 gateway 連線不支援還原".to_string())),
     }
 }
 
