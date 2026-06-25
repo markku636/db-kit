@@ -242,14 +242,14 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
           <div className="px-5 py-3 border-b border-fg/10 bg-inset flex items-end gap-2 text-xs">
             <label className="flex flex-col gap-1">使用者
               <input value={nName} onChange={(e) => setNName(e.target.value)} autoFocus
-                className="bg-well border border-fg/15 rounded px-2 py-1 w-40" placeholder="例：app_user" /></label>
+                className="bg-well border border-fg/15 rounded px-2 py-1 focus:border-accent w-40" placeholder="例：app_user" /></label>
             <label className="flex flex-col gap-1">主機
               <input value={nHost} onChange={(e) => setNHost(e.target.value)}
-                className="bg-well border border-fg/15 rounded px-2 py-1 w-32" placeholder="%" /></label>
+                className="bg-well border border-fg/15 rounded px-2 py-1 focus:border-accent w-32" placeholder="%" /></label>
             <label className="flex flex-col gap-1">密碼
               <input value={nPass} onChange={(e) => setNPass(e.target.value)} type="password"
                 onKeyDown={(e) => e.key === "Enter" && doCreate()}
-                className="bg-well border border-fg/15 rounded px-2 py-1 w-44" placeholder="（可留空）" /></label>
+                className="bg-well border border-fg/15 rounded px-2 py-1 focus:border-accent w-44" placeholder="（可留空）" /></label>
             <button type="button" onClick={doCreate} disabled={busy}
               className="px-3 py-1.5 rounded bg-blue-600/80 hover:bg-blue-600 disabled:opacity-40">建立</button>
             <button type="button" onClick={() => setAdding(false)}
@@ -323,7 +323,7 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
               <label className="flex items-center gap-3">
                 <span className="text-fg/55 w-28 shrink-0">SSL 需求</span>
                 <select value={ssl} onChange={(e) => setSsl(e.target.value)} title="SSL 需求"
-                  className="bg-well border border-fg/15 rounded px-2 py-1">
+                  className="bg-well border border-fg/15 rounded px-2 py-1 focus:border-accent">
                   <option value="NONE">NONE（不要求）</option>
                   <option value="SSL">SSL</option>
                   <option value="X509">X509</option>
@@ -337,7 +337,7 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
                 <label key={key} className="flex items-center gap-3">
                   <span className="text-fg/55 w-28 shrink-0">{label}</span>
                   <input value={(lim as any)[key]} onChange={(e) => setLim((s) => ({ ...s, [key]: e.target.value.replace(/[^0-9]/g, "") }))}
-                    className="bg-well border border-fg/15 rounded px-2 py-1 w-28 mono" placeholder="0" />
+                    className="bg-well border border-fg/15 rounded px-2 py-1 focus:border-accent w-28 mono" placeholder="0" />
                 </label>
               ))}
         </Modal>
@@ -380,10 +380,10 @@ export default function UserManager({ connId, onClose }: { connId: string; onClo
                 <div className="flex items-end gap-2 text-xs">
                   <label className="flex flex-col gap-1">資料庫（留空=全域 *.*）
                     <input value={gDb} onChange={(e) => setGDb(e.target.value)}
-                      className="bg-well border border-fg/15 rounded px-2 py-1 w-44" placeholder="*.*" /></label>
+                      className="bg-well border border-fg/15 rounded px-2 py-1 focus:border-accent w-44" placeholder="*.*" /></label>
                   <label className="flex flex-col gap-1">資料表（留空=整個 db）
                     <input value={gTable} onChange={(e) => setGTable(e.target.value)}
-                      className="bg-well border border-fg/15 rounded px-2 py-1 w-44" placeholder="（全部）" /></label>
+                      className="bg-well border border-fg/15 rounded px-2 py-1 focus:border-accent w-44" placeholder="（全部）" /></label>
                   <button type="button" onClick={() => applyGrant(false)} disabled={busy}
                     className="px-3 py-1.5 rounded bg-blue-600/80 hover:bg-blue-600 disabled:opacity-40">授予</button>
                   <button type="button" onClick={() => applyGrant(true)} disabled={busy}
