@@ -86,12 +86,15 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
   };
 
   const drop = async (r: RoutineInfo) => {
+    if (busy) return; // 避免與執行中的 exec / 其他刪除並行送出 DDL
     const ok = await uiConfirm(`刪除${TYPE_LABEL[r.routine_type] ?? r.routine_type}「${r.name}」？此動作無法復原。`, {
       title: "刪除", danger: true, confirmText: "刪除",
     });
     if (!ok) return;
+    setBusy(true);
     try { await api.execDdl(connId, buildDropRoutine(kind, db, r)); toast.success(`已刪除「${r.name}」`); refresh(); }
     catch (e: any) { toast.error(e?.message ?? "刪除失敗"); }
+    finally { setBusy(false); }
   };
   // 執行函式 / 預存程序（對標 Navicat「執行函式」）：詢問引數後以 SELECT / CALL 執行並顯示結果。
   const execute = async (r: RoutineInfo) => {
@@ -231,8 +234,8 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
                             <button type="button" onClick={() => execute(r)} disabled={busy}
                               className="text-xs text-green-400 hover:text-green-300 disabled:opacity-40 px-1">執行</button>
                           )}
-                          <button type="button" onClick={() => openEdit(r)} className="text-xs text-blue-400 hover:text-blue-300 px-1">編輯</button>
-                          <button type="button" onClick={() => drop(r)} className="text-xs text-red-400 hover:text-red-300 px-1">刪除</button>
+                          <button type="button" onClick={() => openEdit(r)} disabled={busy} className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40 px-1">編輯</button>
+                          <button type="button" onClick={() => drop(r)} disabled={busy} className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40 px-1">刪除</button>
                         </td>
                       </tr>
                     ))}

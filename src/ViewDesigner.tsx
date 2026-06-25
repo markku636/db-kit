@@ -42,6 +42,7 @@ export default function ViewDesigner({ connId, db, view, kind, onClose, onSaved 
   }, [connId, db, view, kind]);
 
   const save = async () => {
+    if (busy) return; // 與 CreateView/CreateTable 一致的再進入守衛
     if (!select.trim()) { toast.error("SELECT 定義不可為空"); return; }
     setBusy(true);
     try {
