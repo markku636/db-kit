@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 // AI 助手面板的開關狀態（工具列按鈕切換；對話內容留在面板元件內）。
 // 與 InfoPanel 一致用 localStorage 記住偏好；助手為選用功能，預設關閉。
-const OPEN_KEY = "at-kit:assistantOpen";
+const OPEN_KEY = "db-kit:assistantOpen";
 
 function readOpen(): boolean {
   try {

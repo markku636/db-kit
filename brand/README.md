@@ -5,7 +5,6 @@
 | 檔案 | 用途 |
 | --- | --- |
 | `logo.png` | 原始標誌（海豹吉祥物 + 字標），含近白底 |
-| `connect.png` | 原始「連線資料庫」圖示，含近白底 |
 | `remove-bg.py` | 去背腳本：邊緣 flood-fill 移除近白底、羽化抗鋸齒邊、自動裁切、縮放 |
 
 ## 產生的素材（已被 App 使用，請勿手改）
@@ -13,7 +12,6 @@
 `remove-bg.py` 會輸出到 [`../src/assets/`](../src/assets/)：
 
 - `logo-mark.png` — 透明背景標誌（開場動畫 `SplashScreen` 使用）
-- `connect-icon.png` — 透明背景圖示（工具列「連線」按鈕使用）
 
 ## 重新匯出
 

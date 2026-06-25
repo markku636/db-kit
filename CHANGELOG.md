@@ -164,7 +164,7 @@
 一次補完 roadmap 剩餘四項。後端在 `DatabaseDriver` trait 加 `explain` / `alter_table` / `er_model` 三個預設方法（非關聯式回 Unsupported），三個 SQL driver 實作。
 
 - **查詢效能分析（EXPLAIN）**：`explain_query` command；MySQL/PG 跑 `EXPLAIN <sql>`、SQLite 跑 `EXPLAIN QUERY PLAN <sql>`，結果用既有結果表呈現。查詢面板新增「🔬 分析」鈕。
-- **SSH host key 驗證（TOFU）**：`ssh.rs` 的 handler 改為——計算 server key 指紋，與 `<config_dir>/dev.atkit.app/ssh_known_hosts.json` 比對；首次連線記住（trust on first use），之後不符則拒絕（防 MITM）。先前是無條件接受。
+- **SSH host key 驗證（TOFU）**：`ssh.rs` 的 handler 改為——計算 server key 指紋，與 `<config_dir>/dev.dbkit.app/ssh_known_hosts.json` 比對；首次連線記住（trust on first use），之後不符則拒絕（防 MITM）。先前是無條件接受。
 - **結構編輯（DDL）**：`alter_table` command + `AlterOp`（add_column / drop_column / rename_column），各 SQL driver 以自身識別字跳脫組 `ALTER TABLE`。結構分頁新增「＋ 新增欄位」表單與每欄改名(✎)/刪除(−)。
 - **ER 圖**：`er_model` command 回傳表 + 欄位（標 PK/FK）+ 外鍵關係（MySQL/PG 走 information_schema、SQLite 走 `PRAGMA foreign_key_list`）。工具列「🗺 ER 圖」開啟可拖曳表卡、SVG 連線的圖；可切換資料庫/schema。
 

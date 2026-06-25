@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 use crate::db::{ConnectionConfig, DbKind, SshAuthMethod};
 use crate::error::{AppError, AppResult};
 
-const KEYCHAIN_SERVICE: &str = "at-kit";
+const KEYCHAIN_SERVICE: &str = "db-kit";
 const CONNECTIONS_FILE: &str = "connections.json";
 
 /// 連線設定檔（磁碟格式）。

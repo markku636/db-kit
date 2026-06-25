@@ -91,5 +91,3 @@ if __name__ == "__main__":
     assets = os.path.join(os.path.dirname(here), "src", "assets")
     remove_bg(os.path.join(here, "logo.png"),
               os.path.join(assets, "logo-mark.png"),    max_dim=1000, pad=6)
-    remove_bg(os.path.join(here, "connect.png"),
-              os.path.join(assets, "connect-icon.png"), max_dim=256,  pad=4)

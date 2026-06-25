@@ -44,11 +44,10 @@ import {
 } from "./sql";
 import type { SavedQuery } from "./sql";
 import logoMark from "./assets/logo-mark.png";
-import connectIcon from "./assets/connect-icon.png";
 import Icon from "./ui/Icon";
 import { Button, EmptyState, Modal } from "./ui/index";
 import {
-  Network, DatabaseBackup, Upload, Download, Sparkles, Keyboard, Moon, Sun,
+  Plug, Network, DatabaseBackup, Upload, Download, Sparkles, Keyboard, Moon, Sun,
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
@@ -63,7 +62,7 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   // 開場動畫狀態：show → leaving（淡出）→ done（卸載）。每次啟動只播一次。
   const [splash, setSplash] = useState<"show" | "leaving" | "done">(() => {
-    try { return sessionStorage.getItem("atkit:splashed") ? "done" : "show"; }
+    try { return sessionStorage.getItem("dbkit:splashed") ? "done" : "show"; }
     catch { return "show"; }
   });
   const { connections, connectedIds, activeId } = useStore();
@@ -110,7 +109,7 @@ export default function App() {
     const conns = useStore.getState().connections;
     if (conns.length === 0) { toast.info("沒有可匯出的連線"); return; }
     const safe = conns.map(({ password, ssh_password, ssh_passphrase, ...rest }) => rest);
-    const path = await pickSaveFile("at-kit-connections.json", [{ name: "JSON", extensions: ["json"] }]);
+    const path = await pickSaveFile("db-kit-connections.json", [{ name: "JSON", extensions: ["json"] }]);
     if (!path) return;
     try {
       await api.saveTextFile(path, JSON.stringify({ version: 1, connections: safe }, null, 2));
@@ -150,7 +149,7 @@ export default function App() {
         <SplashScreen
           leaving={splash === "leaving"}
           onDone={() => {
-            try { sessionStorage.setItem("atkit:splashed", "1"); } catch {}
+            try { sessionStorage.setItem("dbkit:splashed", "1"); } catch {}
             setSplash("done");
           }}
         />
@@ -209,7 +208,7 @@ export default function App() {
     const isConnected = !!active && connectedIds.has(active.id);
     return (
       <div className="h-7 bg-panel border-t border-fg/10 px-3 flex items-center text-xs text-fg/40 gap-4 min-w-0">
-        <span className="shrink-0">at-kit</span>
+        <span className="shrink-0">db-kit</span>
         {active && (
           <span
             className="flex items-center gap-1.5 min-w-0"
@@ -312,10 +311,7 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, on
 }) {
   const assistantOpen = useAssistant((s) => s.open);
   const tools: { icon: ReactNode; label: string; onClick: () => void; disabled: boolean; active?: boolean; hint?: string }[] = [
-    {
-      icon: <img src={connectIcon} alt="" draggable={false} className="w-7 h-7 object-contain -my-1 drop-shadow" />,
-      label: "連線", onClick: onNewConnection, disabled: false,
-    },
+    { icon: <Icon icon={Plug} size={20} />, label: "連線", onClick: onNewConnection, disabled: false },
     { icon: <Icon icon={Network} size={20} />, label: "ER 圖", onClick: onEr, disabled: !canEr, hint: "需先連線到 MySQL / PostgreSQL / SQLite" },
     { icon: <Icon icon={DatabaseBackup} size={20} />, label: "備份", onClick: onBackup, disabled: !canBackup, hint: "需先選取並連線一個連線" },
     { icon: <Icon icon={Upload} size={20} />, label: "匯出連線", onClick: onExportConns, disabled: false },
@@ -325,7 +321,7 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, on
   ];
   return (
     <div className="h-16 bg-bar border-b border-fg/10 flex items-center px-3 gap-1">
-      <div className="font-semibold text-fg/90 mr-4 pl-1">at-kit</div>
+      <div className="font-semibold text-fg/90 mr-4 pl-1">db-kit</div>
       {tools.map((t) => (
         <button
           type="button"
@@ -1947,7 +1943,7 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
 const EXPLAIN_KINDS: DbKind[] = ["mysql", "postgres", "sqlite"];
 
 // 查詢編輯器內容 per-連線 持久化（重開 / 切換連線後沿用上次的查詢）。
-const sqlStoreKey = (id: string) => `at-kit:querySql:${id}`;
+const sqlStoreKey = (id: string) => `db-kit:querySql:${id}`;
 function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefined): string {
   if (id) {
     try {
@@ -2211,7 +2207,7 @@ function QueryPane() {
     const limited: QueryResult = { ...exportRes, rows: exportRes.rows.slice(0, MAX) };
     const note = exportRes.rows.length > MAX ? `\n（僅附前 ${MAX} 列，共 ${exportRes.rows.length} 列）` : "";
     const prompt =
-      `以下是我在 at-kit 執行的查詢與結果，請幫我分析（資料意義、可能的異常或趨勢、可優化的查詢寫法，並可建議下一步查詢）：\n\n` +
+      `以下是我在 db-kit 執行的查詢與結果，請幫我分析（資料意義、可能的異常或趨勢、可優化的查詢寫法，並可建議下一步查詢）：\n\n` +
       `查詢：\n\`\`\`sql\n${queryToRun()}\n\`\`\`\n\n結果：\n${resultToMarkdown(limited)}${note}`;
     useAssistant.getState().ask(prompt);
   };

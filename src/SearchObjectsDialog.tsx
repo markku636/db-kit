@@ -48,7 +48,7 @@ function typesForKind(kind: DbKind): string[] {
 const canViewDef = (t: string) => ["view", "procedure", "function", "trigger"].includes(t);
 
 // 篩選偏好持久化（跨開啟記住比對範圍與型別；資料庫選擇因連線而異，不持久化）。
-const PREFS_KEY = "atkit:sqlsearch:prefs";
+const PREFS_KEY = "dbkit:sqlsearch:prefs";
 type Prefs = {
   types?: string[];
   matchNames?: boolean;

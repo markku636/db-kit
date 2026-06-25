@@ -508,7 +508,7 @@ export function formatSql(sql: string): string {
 }
 
 // ---- 查詢歷史（localStorage，最近在前，去重，上限 50）----
-export const QUERY_HISTORY_KEY = "at-kit:queryHistory";
+export const QUERY_HISTORY_KEY = "db-kit:queryHistory";
 const QUERY_HISTORY_CAP = 50;
 
 export function loadQueryHistory(): string[] {
@@ -534,7 +534,7 @@ export function pushQueryHistory(prev: string[], q: string): string[] {
 }
 
 // ---- 收藏查詢（具名，localStorage）----
-export const SAVED_QUERIES_KEY = "at-kit:savedQueries";
+export const SAVED_QUERIES_KEY = "db-kit:savedQueries";
 export interface SavedQuery {
   name: string;
   sql: string;

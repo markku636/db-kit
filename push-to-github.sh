@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # 用法：先在 GitHub 建一個空 repo，然後：
-#   ./push-to-github.sh git@github.com:你的帳號/at-kit.git
+#   ./push-to-github.sh git@github.com:你的帳號/db-kit.git
 set -e
 if [ -z "$1" ]; then
   echo "用法: ./push-to-github.sh <repo-url>"
-  echo "例如: ./push-to-github.sh git@github.com:youruser/at-kit.git"
+  echo "例如: ./push-to-github.sh git@github.com:youruser/db-kit.git"
   exit 1
 fi
 git init

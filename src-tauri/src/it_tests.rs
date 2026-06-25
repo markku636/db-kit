@@ -218,9 +218,9 @@ fn persisted_connection_drops_secrets() {
 
 #[tokio::test]
 async fn sqlite_crud_and_backup() {
-    let dbfile = format!("atkit_it_test_{}.db", std::process::id());
+    let dbfile = format!("dbkit_it_test_{}.db", std::process::id());
     let dbfile = dbfile.as_str();
-    let bakfile = format!("atkit_it_test_{}.bak", std::process::id());
+    let bakfile = format!("dbkit_it_test_{}.bak", std::process::id());
     let bakfile = bakfile.as_str();
     let _ = std::fs::remove_file(dbfile);
     let _ = std::fs::remove_file(bakfile);
@@ -321,7 +321,7 @@ async fn sqlite_crud_and_backup() {
 /// 驗證引號含逗號的欄位、空欄位→NULL、整數欄位匯入、匯入列數統計。
 #[tokio::test]
 async fn import_csv_into_sqlite() {
-    let dbfile = format!("atkit_import_test_{}.db", std::process::id());
+    let dbfile = format!("dbkit_import_test_{}.db", std::process::id());
     let dbfile = dbfile.as_str();
     let _ = std::fs::remove_file(dbfile);
     let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile));
@@ -370,7 +370,7 @@ async fn import_csv_into_sqlite() {
 /// CSV 匯入錯誤處理：欄數不符回報失敗（含列號）、stop_on_error 遇錯即中止回 Err。
 #[tokio::test]
 async fn import_csv_reports_errors() {
-    let dbfile = format!("atkit_import_err_test_{}.db", std::process::id());
+    let dbfile = format!("dbkit_import_err_test_{}.db", std::process::id());
     let dbfile = dbfile.as_str();
     let _ = std::fs::remove_file(dbfile);
     let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile));
@@ -417,7 +417,7 @@ async fn import_csv_reports_errors() {
 /// 結構轉儲（schema_dump）：應含資料庫中每個表的建表 SQL。
 #[tokio::test]
 async fn schema_dump_lists_all_tables() {
-    let dbfile = format!("atkit_dump_test_{}.db", std::process::id());
+    let dbfile = format!("dbkit_dump_test_{}.db", std::process::id());
     let dbfile = dbfile.as_str();
     let _ = std::fs::remove_file(dbfile);
     let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile));
@@ -439,9 +439,9 @@ async fn schema_dump_lists_all_tables() {
 /// 匯出管線端到端（export()：分頁取資料 → render → 寫檔）。先前僅 render() 被單元測試。
 #[tokio::test]
 async fn export_table_to_csv_file() {
-    let dbfile = format!("atkit_export_test_{}.db", std::process::id());
+    let dbfile = format!("dbkit_export_test_{}.db", std::process::id());
     let dbfile = dbfile.as_str();
-    let outfile = format!("atkit_export_out_{}.csv", std::process::id());
+    let outfile = format!("dbkit_export_out_{}.csv", std::process::id());
     let outfile = outfile.as_str();
     let _ = std::fs::remove_file(dbfile);
     let _ = std::fs::remove_file(outfile);
@@ -482,9 +482,9 @@ async fn export_table_to_csv_file() {
 /// 匯出 → 重新匯入往返：驗證 export 的引號跳脫與 import 的解析對稱（含逗號 / 引號 / 換行的值）。
 #[tokio::test]
 async fn export_import_round_trip() {
-    let dbfile = format!("atkit_rt_test_{}.db", std::process::id());
+    let dbfile = format!("dbkit_rt_test_{}.db", std::process::id());
     let dbfile = dbfile.as_str();
-    let csvfile = format!("atkit_rt_{}.csv", std::process::id());
+    let csvfile = format!("dbkit_rt_{}.csv", std::process::id());
     let csvfile = csvfile.as_str();
     let _ = std::fs::remove_file(dbfile);
     let _ = std::fs::remove_file(csvfile);
@@ -544,7 +544,7 @@ async fn export_import_round_trip() {
 /// 欄位資料剖析（column_stats）：總數 / 非空 / 相異（含 NULL 與重複值）。
 #[tokio::test]
 async fn column_stats_counts() {
-    let dbfile = format!("atkit_stats_test_{}.db", std::process::id());
+    let dbfile = format!("dbkit_stats_test_{}.db", std::process::id());
     let dbfile = dbfile.as_str();
     let _ = std::fs::remove_file(dbfile);
     let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile));
@@ -585,7 +585,7 @@ async fn column_stats_counts() {
 /// 此測試同時涵蓋 db/mod.rs 的共用邏輯（like_contains 跳脫、make_snippet、finalize_hits、classify）。
 #[tokio::test]
 async fn sqlite_search_objects() {
-    let dbfile = format!("atkit_search_test_{}.db", std::process::id());
+    let dbfile = format!("dbkit_search_test_{}.db", std::process::id());
     let dbfile = dbfile.as_str();
     let _ = std::fs::remove_file(dbfile);
     let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile));
@@ -813,53 +813,53 @@ async fn mysql_full() {
     d.query("DROP TABLE fk_parent").await.unwrap();
 
     // 新增 / 刪除資料庫（CREATE / DROP DATABASE）→ 出現後消失。
-    d.query("DROP DATABASE IF EXISTS atkit_newdb").await.unwrap();
-    d.create_database("atkit_newdb").await.unwrap();
-    assert!(d.list_databases().await.unwrap().contains(&"atkit_newdb".to_string()), "新增資料庫應出現於清單");
-    d.drop_database("atkit_newdb").await.unwrap();
-    assert!(!d.list_databases().await.unwrap().contains(&"atkit_newdb".to_string()), "刪除後資料庫應消失");
+    d.query("DROP DATABASE IF EXISTS dbkit_newdb").await.unwrap();
+    d.create_database("dbkit_newdb").await.unwrap();
+    assert!(d.list_databases().await.unwrap().contains(&"dbkit_newdb".to_string()), "新增資料庫應出現於清單");
+    d.drop_database("dbkit_newdb").await.unwrap();
+    assert!(!d.list_databases().await.unwrap().contains(&"dbkit_newdb".to_string()), "刪除後資料庫應消失");
     // 安全護欄：系統庫與使用中的預設庫（testdb）皆不可刪除。
     assert!(d.drop_database("mysql").await.is_err(), "系統庫 mysql 不可刪除");
     assert!(d.drop_database("information_schema").await.is_err(), "系統庫 information_schema 不可刪除");
     assert!(d.drop_database("testdb").await.is_err(), "使用中的預設庫不可刪除");
 
     // 預存程序（exec_ddl 走簡單查詢協定，驗證 prepared 不支援的 CREATE PROCEDURE 可建立）。
-    d.exec_ddl("DROP PROCEDURE IF EXISTS atkit_p1").await.unwrap();
-    d.exec_ddl("CREATE PROCEDURE atkit_p1() BEGIN SELECT 1; END").await.unwrap();
+    d.exec_ddl("DROP PROCEDURE IF EXISTS dbkit_p1").await.unwrap();
+    d.exec_ddl("CREATE PROCEDURE dbkit_p1() BEGIN SELECT 1; END").await.unwrap();
     let routines = d.list_routines("testdb").await.unwrap();
     assert!(
-        routines.iter().any(|r| r.name == "atkit_p1" && r.routine_type == "procedure"),
+        routines.iter().any(|r| r.name == "dbkit_p1" && r.routine_type == "procedure"),
         "新增的預存程序應出現，實得：{routines:?}"
     );
-    let pdef = d.routine_definition("testdb", "atkit_p1", "procedure").await.unwrap();
+    let pdef = d.routine_definition("testdb", "dbkit_p1", "procedure").await.unwrap();
     assert!(pdef.to_uppercase().contains("PROCEDURE"), "程序定義應含 PROCEDURE");
-    d.exec_ddl("DROP PROCEDURE atkit_p1").await.unwrap();
+    d.exec_ddl("DROP PROCEDURE dbkit_p1").await.unwrap();
     assert!(
-        !d.list_routines("testdb").await.unwrap().iter().any(|r| r.name == "atkit_p1"),
+        !d.list_routines("testdb").await.unwrap().iter().any(|r| r.name == "dbkit_p1"),
         "刪除後程序應消失"
     );
     // 觸發器（附所屬資料表）。
-    d.query("DROP TABLE IF EXISTS atkit_trg_t").await.unwrap();
-    d.query("CREATE TABLE atkit_trg_t (id INT)").await.unwrap();
-    d.exec_ddl("CREATE TRIGGER atkit_trg BEFORE INSERT ON atkit_trg_t FOR EACH ROW SET NEW.id = NEW.id + 1").await.unwrap();
+    d.query("DROP TABLE IF EXISTS dbkit_trg_t").await.unwrap();
+    d.query("CREATE TABLE dbkit_trg_t (id INT)").await.unwrap();
+    d.exec_ddl("CREATE TRIGGER dbkit_trg BEFORE INSERT ON dbkit_trg_t FOR EACH ROW SET NEW.id = NEW.id + 1").await.unwrap();
     assert!(
-        d.list_routines("testdb").await.unwrap().iter().any(|r| r.name == "atkit_trg" && r.parent.as_deref() == Some("atkit_trg_t")),
+        d.list_routines("testdb").await.unwrap().iter().any(|r| r.name == "dbkit_trg" && r.parent.as_deref() == Some("dbkit_trg_t")),
         "觸發器應出現且帶所屬表"
     );
-    d.exec_ddl("DROP TRIGGER atkit_trg").await.unwrap();
-    d.query("DROP TABLE atkit_trg_t").await.unwrap();
+    d.exec_ddl("DROP TRIGGER dbkit_trg").await.unwrap();
+    d.query("DROP TABLE dbkit_trg_t").await.unwrap();
     // 事件（MySQL 事件排程器）：建立 / 列出 / 取定義 / 刪除。
-    d.exec_ddl("DROP EVENT IF EXISTS atkit_evt").await.unwrap();
-    d.exec_ddl("CREATE EVENT atkit_evt ON SCHEDULE EVERY 1 DAY DO SELECT 1").await.unwrap();
+    d.exec_ddl("DROP EVENT IF EXISTS dbkit_evt").await.unwrap();
+    d.exec_ddl("CREATE EVENT dbkit_evt ON SCHEDULE EVERY 1 DAY DO SELECT 1").await.unwrap();
     assert!(
-        d.list_routines("testdb").await.unwrap().iter().any(|r| r.name == "atkit_evt" && r.routine_type == "event"),
+        d.list_routines("testdb").await.unwrap().iter().any(|r| r.name == "dbkit_evt" && r.routine_type == "event"),
         "事件應出現於 list_routines"
     );
-    let edef = d.routine_definition("testdb", "atkit_evt", "event").await.unwrap();
+    let edef = d.routine_definition("testdb", "dbkit_evt", "event").await.unwrap();
     assert!(edef.to_uppercase().contains("EVENT"), "事件定義應含 EVENT：{edef}");
-    d.exec_ddl("DROP EVENT atkit_evt").await.unwrap();
+    d.exec_ddl("DROP EVENT dbkit_evt").await.unwrap();
     assert!(
-        !d.list_routines("testdb").await.unwrap().iter().any(|r| r.name == "atkit_evt"),
+        !d.list_routines("testdb").await.unwrap().iter().any(|r| r.name == "dbkit_evt"),
         "刪除後事件應消失"
     );
 
@@ -983,12 +983,12 @@ async fn mysql_full() {
     // SQL Search（全資料庫物件搜尋）：名稱 / 定義內文 / 註解 / 型別篩選。
     // 程序名刻意不含搜尋詞，確保命中來自「定義內文」而非名稱。
     {
-        d.exec_ddl("DROP PROCEDURE IF EXISTS atkit_def_probe").await.unwrap();
-        d.query("DROP TABLE IF EXISTS atkit_search_t").await.unwrap();
-        d.query("CREATE TABLE atkit_search_t (id INT PRIMARY KEY, atkit_search_col VARCHAR(20) COMMENT 'atkit_search_note')").await.unwrap();
-        d.exec_ddl("CREATE PROCEDURE atkit_def_probe() BEGIN SELECT atkit_search_col FROM atkit_search_t; END").await.unwrap();
+        d.exec_ddl("DROP PROCEDURE IF EXISTS dbkit_def_probe").await.unwrap();
+        d.query("DROP TABLE IF EXISTS dbkit_search_t").await.unwrap();
+        d.query("CREATE TABLE dbkit_search_t (id INT PRIMARY KEY, dbkit_search_col VARCHAR(20) COMMENT 'dbkit_search_note')").await.unwrap();
+        d.exec_ddl("CREATE PROCEDURE dbkit_def_probe() BEGIN SELECT dbkit_search_col FROM dbkit_search_t; END").await.unwrap();
         let base = SearchOptions {
-            term: "atkit_search".into(),
+            term: "dbkit_search".into(),
             databases: None,
             types: None,
             match_names: true,
@@ -998,22 +998,22 @@ async fn mysql_full() {
             limit: Some(500),
         };
         let hits = d.search_objects(&base).await.unwrap();
-        assert!(hits.iter().any(|h| h.object_type == "table" && h.object_name == "atkit_search_t"), "MySQL 搜尋應找到資料表：{hits:?}");
+        assert!(hits.iter().any(|h| h.object_type == "table" && h.object_name == "dbkit_search_t"), "MySQL 搜尋應找到資料表：{hits:?}");
         assert!(
-            hits.iter().any(|h| h.object_type == "column" && h.object_name == "atkit_search_col" && h.parent.as_deref() == Some("atkit_search_t")),
-            "MySQL 搜尋應找到欄位 atkit_search_col"
+            hits.iter().any(|h| h.object_type == "column" && h.object_name == "dbkit_search_col" && h.parent.as_deref() == Some("dbkit_search_t")),
+            "MySQL 搜尋應找到欄位 dbkit_search_col"
         );
-        let sp = hits.iter().find(|h| h.object_type == "procedure" && h.object_name == "atkit_def_probe").expect("MySQL 搜尋應找到預存程序（定義內文命中）");
+        let sp = hits.iter().find(|h| h.object_type == "procedure" && h.object_name == "dbkit_def_probe").expect("MySQL 搜尋應找到預存程序（定義內文命中）");
         assert_eq!(sp.matched_in, "definition", "MySQL 程序應為定義內文命中");
-        assert!(sp.snippet.as_deref().is_some_and(|s| s.to_lowercase().contains("atkit_search")), "MySQL 定義命中應帶 snippet：{:?}", sp.snippet);
+        assert!(sp.snippet.as_deref().is_some_and(|s| s.to_lowercase().contains("dbkit_search")), "MySQL 定義命中應帶 snippet：{:?}", sp.snippet);
         // 註解命中（COLUMN_COMMENT）：關閉名稱 / 定義，只比對註解。
-        let cmt = d.search_objects(&SearchOptions { term: "atkit_search_note".into(), match_names: false, match_definitions: false, ..base.clone() }).await.unwrap();
+        let cmt = d.search_objects(&SearchOptions { term: "dbkit_search_note".into(), match_names: false, match_definitions: false, ..base.clone() }).await.unwrap();
         assert!(cmt.iter().any(|h| h.object_type == "column" && h.matched_in == "comment"), "MySQL 應以註解命中欄位：{cmt:?}");
         // 型別篩選：只要 procedure。
         let only = d.search_objects(&SearchOptions { types: Some(vec!["procedure".into()]), ..base.clone() }).await.unwrap();
         assert!(!only.is_empty() && only.iter().all(|h| h.object_type == "procedure"), "MySQL 型別篩選後應只有 procedure：{only:?}");
-        d.exec_ddl("DROP PROCEDURE IF EXISTS atkit_def_probe").await.unwrap();
-        d.query("DROP TABLE IF EXISTS atkit_search_t").await.unwrap();
+        d.exec_ddl("DROP PROCEDURE IF EXISTS dbkit_def_probe").await.unwrap();
+        d.query("DROP TABLE IF EXISTS dbkit_search_t").await.unwrap();
     }
 
     d.close().await;
@@ -1150,34 +1150,34 @@ async fn postgres_full() {
     d.query("DROP TABLE fk_parent").await.unwrap();
 
     // 新增 / 刪除資料庫（PG → CREATE / DROP SCHEMA CASCADE）→ 出現後消失。
-    d.query("DROP SCHEMA IF EXISTS atkit_newschema CASCADE").await.unwrap();
-    d.create_database("atkit_newschema").await.unwrap();
-    assert!(d.list_databases().await.unwrap().contains(&"atkit_newschema".to_string()), "新增 schema 應出現");
-    d.drop_database("atkit_newschema").await.unwrap();
-    assert!(!d.list_databases().await.unwrap().contains(&"atkit_newschema".to_string()), "刪除後 schema 應消失");
+    d.query("DROP SCHEMA IF EXISTS dbkit_newschema CASCADE").await.unwrap();
+    d.create_database("dbkit_newschema").await.unwrap();
+    assert!(d.list_databases().await.unwrap().contains(&"dbkit_newschema".to_string()), "新增 schema 應出現");
+    d.drop_database("dbkit_newschema").await.unwrap();
+    assert!(!d.list_databases().await.unwrap().contains(&"dbkit_newschema".to_string()), "刪除後 schema 應消失");
     // 安全護欄：系統 schema（pg_*、information_schema）不可刪除。
     assert!(d.drop_database("pg_catalog").await.is_err(), "系統 schema pg_catalog 不可刪除");
     assert!(d.drop_database("information_schema").await.is_err(), "系統 schema information_schema 不可刪除");
 
     // 函式（exec_ddl 簡單協定處理 $$ dollar-quoting）+ list / definition + 重載簽章。
-    d.exec_ddl("DROP FUNCTION IF EXISTS atkit_fn(int)").await.unwrap();
-    d.exec_ddl("DROP FUNCTION IF EXISTS atkit_fn(text)").await.unwrap();
-    d.exec_ddl("CREATE OR REPLACE FUNCTION atkit_fn(p int) RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN p + 1; END; $$").await.unwrap();
+    d.exec_ddl("DROP FUNCTION IF EXISTS dbkit_fn(int)").await.unwrap();
+    d.exec_ddl("DROP FUNCTION IF EXISTS dbkit_fn(text)").await.unwrap();
+    d.exec_ddl("CREATE OR REPLACE FUNCTION dbkit_fn(p int) RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN p + 1; END; $$").await.unwrap();
     // 重載：同名不同簽章。
-    d.exec_ddl("CREATE OR REPLACE FUNCTION atkit_fn(p text) RETURNS text LANGUAGE plpgsql AS $$ BEGIN RETURN p; END; $$").await.unwrap();
+    d.exec_ddl("CREATE OR REPLACE FUNCTION dbkit_fn(p text) RETURNS text LANGUAGE plpgsql AS $$ BEGIN RETURN p; END; $$").await.unwrap();
     let rl = d.list_routines("public").await.unwrap();
-    let fns: Vec<_> = rl.iter().filter(|r| r.name == "atkit_fn" && r.routine_type == "function").collect();
+    let fns: Vec<_> = rl.iter().filter(|r| r.name == "dbkit_fn" && r.routine_type == "function").collect();
     assert_eq!(fns.len(), 2, "兩個重載皆應列出，實得：{fns:?}");
     // pg_get_function_identity_arguments 含參數名（如 "p integer"），即 DROP / ALTER 可直接採用的形式。
     assert!(fns.iter().any(|r| r.signature.as_deref() == Some("p integer")), "應有 p integer 簽章，實得：{fns:?}");
     assert!(fns.iter().any(|r| r.signature.as_deref() == Some("p text")), "應有 p text 簽章");
-    let fdef = d.routine_definition("public", "atkit_fn", "function").await.unwrap();
-    assert!(fdef.contains("atkit_fn"), "PG 函式定義應含函式名");
+    let fdef = d.routine_definition("public", "dbkit_fn", "function").await.unwrap();
+    assert!(fdef.contains("dbkit_fn"), "PG 函式定義應含函式名");
     // 以 buildDropRoutine 產出的簽章形式刪除指定重載（無簽章的 DROP 對重載會報 not unique）。
-    d.exec_ddl("DROP FUNCTION IF EXISTS atkit_fn(p integer)").await.unwrap();
-    d.exec_ddl("DROP FUNCTION IF EXISTS atkit_fn(p text)").await.unwrap();
+    d.exec_ddl("DROP FUNCTION IF EXISTS dbkit_fn(p integer)").await.unwrap();
+    d.exec_ddl("DROP FUNCTION IF EXISTS dbkit_fn(p text)").await.unwrap();
     assert!(
-        !d.list_routines("public").await.unwrap().iter().any(|r| r.name == "atkit_fn"),
+        !d.list_routines("public").await.unwrap().iter().any(|r| r.name == "dbkit_fn"),
         "刪除後 PG 函式應消失"
     );
 
@@ -1371,13 +1371,13 @@ async fn postgres_full() {
     // SQL Search：名稱 / 定義內文（pg_get_functiondef）/ 註解（col_description）/ 型別篩選。
     // 函式名刻意不含搜尋詞，確保命中來自「定義內文」而非名稱。
     {
-        d.query("DROP FUNCTION IF EXISTS atkit_def_probe()").await.unwrap();
-        d.query("DROP TABLE IF EXISTS atkit_search_t").await.unwrap();
-        d.query("CREATE TABLE atkit_search_t (id INT PRIMARY KEY, atkit_search_col TEXT)").await.unwrap();
-        d.query("COMMENT ON COLUMN atkit_search_t.atkit_search_col IS 'atkit_search_note'").await.unwrap();
-        d.exec_ddl("CREATE OR REPLACE FUNCTION atkit_def_probe() RETURNS bigint LANGUAGE sql AS $$ SELECT count(*) FROM atkit_search_t $$").await.unwrap();
+        d.query("DROP FUNCTION IF EXISTS dbkit_def_probe()").await.unwrap();
+        d.query("DROP TABLE IF EXISTS dbkit_search_t").await.unwrap();
+        d.query("CREATE TABLE dbkit_search_t (id INT PRIMARY KEY, dbkit_search_col TEXT)").await.unwrap();
+        d.query("COMMENT ON COLUMN dbkit_search_t.dbkit_search_col IS 'dbkit_search_note'").await.unwrap();
+        d.exec_ddl("CREATE OR REPLACE FUNCTION dbkit_def_probe() RETURNS bigint LANGUAGE sql AS $$ SELECT count(*) FROM dbkit_search_t $$").await.unwrap();
         let base = SearchOptions {
-            term: "atkit_search".into(),
+            term: "dbkit_search".into(),
             databases: None,
             types: None,
             match_names: true,
@@ -1387,19 +1387,19 @@ async fn postgres_full() {
             limit: Some(500),
         };
         let hits = d.search_objects(&base).await.unwrap();
-        assert!(hits.iter().any(|h| h.object_type == "table" && h.object_name == "atkit_search_t"), "PG 搜尋應找到資料表：{hits:?}");
-        assert!(hits.iter().any(|h| h.object_type == "column" && h.object_name == "atkit_search_col"), "PG 搜尋應找到欄位 atkit_search_col");
-        let fnh = hits.iter().find(|h| h.object_type == "function" && h.object_name == "atkit_def_probe").expect("PG 搜尋應找到函式（定義內文命中）");
+        assert!(hits.iter().any(|h| h.object_type == "table" && h.object_name == "dbkit_search_t"), "PG 搜尋應找到資料表：{hits:?}");
+        assert!(hits.iter().any(|h| h.object_type == "column" && h.object_name == "dbkit_search_col"), "PG 搜尋應找到欄位 dbkit_search_col");
+        let fnh = hits.iter().find(|h| h.object_type == "function" && h.object_name == "dbkit_def_probe").expect("PG 搜尋應找到函式（定義內文命中）");
         assert_eq!(fnh.matched_in, "definition", "PG 函式應為定義內文命中");
-        assert!(fnh.snippet.as_deref().is_some_and(|s| s.to_lowercase().contains("atkit_search")), "PG 定義命中應帶 snippet：{:?}", fnh.snippet);
+        assert!(fnh.snippet.as_deref().is_some_and(|s| s.to_lowercase().contains("dbkit_search")), "PG 定義命中應帶 snippet：{:?}", fnh.snippet);
         // 註解命中（col_description）：關閉名稱 / 定義，只比對註解。
-        let cmt = d.search_objects(&SearchOptions { term: "atkit_search_note".into(), match_names: false, match_definitions: false, ..base.clone() }).await.unwrap();
+        let cmt = d.search_objects(&SearchOptions { term: "dbkit_search_note".into(), match_names: false, match_definitions: false, ..base.clone() }).await.unwrap();
         assert!(cmt.iter().any(|h| h.object_type == "column" && h.matched_in == "comment"), "PG 應以註解命中欄位：{cmt:?}");
         // 型別篩選：只要 function。
         let only = d.search_objects(&SearchOptions { types: Some(vec!["function".into()]), ..base.clone() }).await.unwrap();
         assert!(!only.is_empty() && only.iter().all(|h| h.object_type == "function"), "PG 型別篩選後應只有 function：{only:?}");
-        d.query("DROP FUNCTION IF EXISTS atkit_def_probe()").await.unwrap();
-        d.query("DROP TABLE IF EXISTS atkit_search_t").await.unwrap();
+        d.query("DROP FUNCTION IF EXISTS dbkit_def_probe()").await.unwrap();
+        d.query("DROP TABLE IF EXISTS dbkit_search_t").await.unwrap();
     }
 
     d.close().await;

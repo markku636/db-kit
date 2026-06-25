@@ -130,7 +130,7 @@ async fn which_claude() -> Option<String> {
 
 /// 解析 claude 執行檔：env 覆寫 → PATH 查找 → 預設安裝路徑。
 async fn resolve_claude_bin() -> Option<ClaudeBin> {
-    if let Ok(p) = std::env::var("AT_KIT_CLAUDE_BIN") {
+    if let Ok(p) = std::env::var("DB_KIT_CLAUDE_BIN") {
         if !p.trim().is_empty() {
             return Some(classify(p));
         }

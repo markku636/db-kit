@@ -114,13 +114,13 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [rowMenu, setRowMenu] = useState<{ key: string; ttl: string | null; x: number; y: number } | null>(null);
   // Redis 鍵檢視模式：樹狀（命名空間資料夾）/ 網格（key 列表）。記憶於 localStorage。
   const [redisView, setRedisView] = useState<"tree" | "grid">(() => {
-    try { return localStorage.getItem("at-kit:redisKeyView") === "grid" ? "grid" : "tree"; }
+    try { return localStorage.getItem("db-kit:redisKeyView") === "grid" ? "grid" : "tree"; }
     catch { return "tree"; }
   });
   const treeMode = isRedis && redisView === "tree";
   const setRedisViewPersist = (v: "tree" | "grid") => {
     setRedisView(v);
-    try { localStorage.setItem("at-kit:redisKeyView", v); } catch { /* 忽略 */ }
+    try { localStorage.setItem("db-kit:redisKeyView", v); } catch { /* 忽略 */ }
   };
   // Redis 動作列：把原本藏在右鍵的功能變成一眼可見的工具列按鈕。
   const connName = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.name ?? "Redis");

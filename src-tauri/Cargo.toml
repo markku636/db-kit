@@ -1,5 +1,5 @@
 [package]
-name = "at-kit"
+name = "db-kit"
 version = "0.1.0"
 description = "Unified database management tool"
 license = "MIT"
@@ -7,7 +7,7 @@ edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "at_kit_lib"
+name = "db_kit_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

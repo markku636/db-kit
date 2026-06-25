@@ -89,7 +89,7 @@ export default function CreateTableDialog({ connId, database, kind, onClose, onC
               placeholder="例：users" />
           </label>
 
-          <datalist id="atkit-type-presets">
+          <datalist id="dbkit-type-presets">
             {presets.map((t) => <option key={t} value={t} />)}
           </datalist>
 
@@ -114,7 +114,7 @@ export default function CreateTableDialog({ connId, database, kind, onClose, onC
                         onChange={(e) => setCol(i, { name: e.target.value })} />
                     </td>
                     <td className="px-2 py-1">
-                      <input className={cellCls} list="atkit-type-presets" value={c.type} placeholder="型別"
+                      <input className={cellCls} list="dbkit-type-presets" value={c.type} placeholder="型別"
                         onChange={(e) => setCol(i, { type: e.target.value })} />
                     </td>
                     <td className="text-center"><input type="checkbox" aria-label="Not Null（不可為空）" checked={c.notNull}

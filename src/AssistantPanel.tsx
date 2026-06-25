@@ -38,8 +38,8 @@ const MODELS: { value: string; label: string }[] = [
   { value: "haiku", label: "Haiku" },
 ];
 
-// ---- 對話 / 偏好持久化（localStorage；重開 at-kit 後保留）----
-const CHAT_KEY = "at-kit:assistantChat";
+// ---- 對話 / 偏好持久化（localStorage；重開 db-kit 後保留）----
+const CHAT_KEY = "db-kit:assistantChat";
 
 interface Persisted {
   messages: ChatMsg[];
@@ -72,7 +72,7 @@ export default function AssistantPanel() {
   const [mode, setMode] = useState<AgentMode>(persisted.mode || "advise");
   const [model, setModel] = useState(persisted.model || "");
   const [width, setWidth] = useState<number>(() => {
-    const v = Number(localStorage.getItem("at-kit:assistantWidth"));
+    const v = Number(localStorage.getItem("db-kit:assistantWidth"));
     return v >= 300 && v <= 900 ? v : 384;
   });
   const seed = useAssistant((s) => s.seed);
@@ -139,7 +139,7 @@ export default function AssistantPanel() {
 
   // 持久化面板寬度。
   useEffect(() => {
-    try { localStorage.setItem("at-kit:assistantWidth", String(width)); } catch { /* 忽略 */ }
+    try { localStorage.setItem("db-kit:assistantWidth", String(width)); } catch { /* 忽略 */ }
   }, [width]);
 
   // 消費外部丟進來的問題（側欄右鍵「問 AI」）：填進輸入框、聚焦，由使用者送出。
@@ -172,7 +172,7 @@ export default function AssistantPanel() {
   const exportChat = async () => {
     if (!messages.length) { toast.info("沒有可匯出的對話"); return; }
     const md = messages.map((m) => `## ${m.role === "user" ? "我" : "助手"}\n\n${m.text}`).join("\n\n---\n\n");
-    const path = await pickSaveFile("at-kit-chat.md", [{ name: "Markdown", extensions: ["md"] }]);
+    const path = await pickSaveFile("db-kit-chat.md", [{ name: "Markdown", extensions: ["md"] }]);
     if (!path) return;
     try { await api.saveTextFile(path, md); toast.success("已匯出對話"); }
     catch (e: any) { toast.error(e?.message ?? "匯出失敗"); }
@@ -210,7 +210,7 @@ export default function AssistantPanel() {
     const update = (fn: (msg: ChatMsg) => ChatMsg) =>
       setMessages((m) => m.map((x) => (x.id === aId ? fn(x) : x)));
 
-    // 組裝提示：可選擇附帶目前 at-kit 的連線 / 選取資料表 schema。
+    // 組裝提示：可選擇附帶目前 db-kit 的連線 / 選取資料表 schema。
     let prompt = text;
     if (ctxOn) {
       try {
@@ -749,5 +749,5 @@ async function buildContext(): Promise<string> {
       } catch { /* schema 為加值，失敗略過 */ }
     }
   }
-  return `【目前資料庫環境】\n${lines.join("\n")}\n（以上為使用者在 at-kit 的目前環境；若回答涉及 SQL，請貼合此資料庫類型與結構）`;
+  return `【目前資料庫環境】\n${lines.join("\n")}\n（以上為使用者在 db-kit 的目前環境；若回答涉及 SQL，請貼合此資料庫類型與結構）`;
 }

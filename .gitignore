@@ -18,10 +18,10 @@ src-tauri/target/
 *.log
 npm-debug.log*
 # SQLite 整合測試產物（it_tests.rs，per-process 唯一檔名；Windows 鎖檔偶爾殘留）
-src-tauri/atkit_*.db
-src-tauri/atkit_*.db-*
-src-tauri/atkit_*.bak
-src-tauri/atkit_*.csv
+src-tauri/dbkit_*.db
+src-tauri/dbkit_*.db-*
+src-tauri/dbkit_*.bak
+src-tauri/dbkit_*.csv
 # Playwright MCP / UI 測試暫存產物
 .playwright-mcp/
 p3-connection-modal.png

@@ -136,32 +136,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "at-kit"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bigdecimal",
- "chrono",
- "dirs",
- "futures",
- "keyring",
- "mongodb",
- "once_cell",
- "parking_lot",
- "redis",
- "russh",
- "serde",
- "serde_json",
- "sqlx",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "thiserror 1.0.69",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "atk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -990,6 +964,32 @@ name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
+
+[[package]]
+name = "db-kit"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bigdecimal",
+ "chrono",
+ "dirs",
+ "futures",
+ "keyring",
+ "mongodb",
+ "once_cell",
+ "parking_lot",
+ "redis",
+ "russh",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "dbus"

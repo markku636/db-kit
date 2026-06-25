@@ -2,9 +2,9 @@ import { create } from "zustand";
 
 export type Theme = "dark" | "light";
 
-const STORAGE_KEY = "atkit:theme";
+const STORAGE_KEY = "dbkit:theme";
 
-// 讀取偏好：localStorage 優先。首次啟動預設深色（維持 at-kit 既有深色品牌與開場動畫一致性）。
+// 讀取偏好：localStorage 優先。首次啟動預設深色（維持 db-kit 既有深色品牌與開場動畫一致性）。
 export function readStoredTheme(): Theme {
   try {
     const v = localStorage.getItem(STORAGE_KEY);

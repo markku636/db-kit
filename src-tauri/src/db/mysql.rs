@@ -978,7 +978,7 @@ impl DatabaseDriver for MysqlDriver {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let temp_ref = format!("`{}`.`__atkit_validate_{suffix}`", schema.replace('`', "``"));
+        let temp_ref = format!("`{}`.`__dbkit_validate_{suffix}`", schema.replace('`', "``"));
         let temp_sql = format!("{}{}{}", &sql[..ns], temp_ref, &sql[ne..]);
 
         // 專屬連線執行，避免 session 狀態外洩到 pool 其他使用者。

@@ -8,9 +8,9 @@ import { databaseOptionsSql } from "./sql";
 
 // 右側「詳細資料」面板：單擊左側樹節點（連線 / 資料庫 / 資料表）即時顯示其唯讀摘要。
 // 對標 Navicat 物件資訊面板；編輯仍走右鍵「屬性…」對話框，本面板僅檢視，避免誤改。
-const PANEL_KEY = "at-kit:infoPanelOpen";
+const PANEL_KEY = "db-kit:infoPanelOpen";
 // 面板寬度持久化（px）；可拖曳左緣調整，夾在合理範圍內。
-const WIDTH_KEY = "at-kit:infoPanelWidth";
+const WIDTH_KEY = "db-kit:infoPanelWidth";
 const WIDTH_MIN = 240;
 const WIDTH_MAX = 560;
 const WIDTH_DEFAULT = 288; // 對應原本的 w-72

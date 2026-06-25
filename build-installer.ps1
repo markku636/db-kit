@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    at-kit Windows 打包腳本。自動檢查並安裝 Rust 與 Node.js，然後產出 .msi / .exe 安裝檔。
+    db-kit Windows 打包腳本。自動檢查並安裝 Rust 與 Node.js，然後產出 .msi / .exe 安裝檔。
 
 .DESCRIPTION
     流程：
@@ -40,7 +40,7 @@ function Test-MsvcLinker {
     return [bool]$path
 }
 
-Write-Step "at-kit 打包開始"
+Write-Step "db-kit 打包開始"
 
 # --- 1. Node.js ---
 if (Test-Cmd node) {

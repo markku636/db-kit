@@ -221,7 +221,7 @@ function SchedulesTab({ conn }: { conn: ConnectionConfig }) {
   return (
     <div className="space-y-4">
       <div className="text-xs text-fg/40">
-        排程僅在 at-kit 開啟時執行；關閉期間到期者不會補跑。
+        排程僅在 db-kit 開啟時執行；關閉期間到期者不會補跑。
       </div>
 
       {/* 既有排程 */}

@@ -70,7 +70,7 @@ impl client::Handler for TunnelHandler {
 }
 
 fn known_hosts_path() -> Option<std::path::PathBuf> {
-    dirs::config_dir().map(|d| d.join("dev.atkit.app").join("ssh_known_hosts.json"))
+    dirs::config_dir().map(|d| d.join("dev.dbkit.app").join("ssh_known_hosts.json"))
 }
 
 // 區分「檔案不存在」（→ 空表，正常首次使用）與「讀取 / 解析失敗」（→ Err，呼叫端 fail-closed）。

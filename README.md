@@ -1,4 +1,4 @@
-# at-kit
+# db-kit
 
 一個跨平台的統一資料庫管理工具，以單一 Navicat 風格介面管理 **MySQL · PostgreSQL · MongoDB · Redis**。
 
