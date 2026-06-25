@@ -74,7 +74,7 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") { e.preventDefault(); run(); return; }
+    if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); run(); return; }
     if ((e.ctrlKey || e.metaKey) && (e.key === "l" || e.key === "L")) { e.preventDefault(); setEntries([]); return; }
     if (e.key === "ArrowUp") {
       e.preventDefault();

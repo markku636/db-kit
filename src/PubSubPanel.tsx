@@ -102,13 +102,17 @@ export default function PubSubPanel({ connId, connName, onClose }: {
   };
 
   const publish = async () => {
+    if (busy) return; // 防連點 / 連按 Enter 造成重複 PUBLISH
     if (!pubChannel.trim()) { setErr("請輸入發佈頻道"); return; }
+    setBusy(true);
     try {
       const n = await api.redisPublish(connId, pubChannel.trim(), pubMessage);
       toast.success(`已發佈到 ${pubChannel.trim()}（${n} 個訂閱者）`);
       setPubMessage("");
     } catch (e: any) {
       setErr(e?.message ?? "發佈失敗");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -173,10 +177,10 @@ export default function PubSubPanel({ connId, connName, onClose }: {
           <input value={pubChannel} onChange={(e) => setPubChannel(e.target.value)} placeholder="頻道"
             className="w-32 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
           <input value={pubMessage} onChange={(e) => setPubMessage(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") publish(); }} placeholder="訊息內容…"
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) publish(); }} placeholder="訊息內容…"
             className="flex-1 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
-          <button type="button" onClick={publish}
-            className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-fg">送出</button>
+          <button type="button" onClick={publish} disabled={busy}
+            className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-fg disabled:opacity-50">送出</button>
         </div>
       </div>
     </div>

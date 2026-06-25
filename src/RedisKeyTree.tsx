@@ -140,7 +140,7 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
         <input
           value={patternInput}
           onChange={(e) => setPatternInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") apply(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) apply(); }}
           placeholder="MATCH 樣式，如 user:*"
           className="w-48 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent"
         />
