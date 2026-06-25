@@ -27,7 +27,7 @@ export default function DatabaseProperties({ connId, db, onClose }: {
       setCollation(coll ?? "");
     }).catch((e) => toast.error(e?.message ?? "讀取資料庫屬性失敗"));
   };
-  useEffect(load, [connId, db]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [connId, db]);
 
   const apply = async () => {
     setBusy(true);
