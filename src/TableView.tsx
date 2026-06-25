@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ListTree, Table2, Plus, Minus, BarChart3, Network, Settings, Terminal,
   RefreshCw, Search, Filter, Trash2, ArrowUpDown, Download, Upload, X, Check,
@@ -12,7 +12,7 @@ import {
 } from "./api";
 import { OpenTab, useStore } from "./store";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, useModalCount, useModalOverlay } from "./ui";
-import { quoteIdent, sqlLiteral, buildRowUpdate, buildRowDelete, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, TYPE_PRESETS } from "./sql";
+import { quoteIdent, sqlLiteral, buildRowUpdate, buildRowDelete, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rangeStats, TYPE_PRESETS } from "./sql";
 import ExportDialog from "./ExportDialog";
 import ImportDialog from "./ImportDialog";
 import RedisKeyTree from "./RedisKeyTree";
@@ -654,6 +654,19 @@ function DataPane({ tab }: { tab: OpenTab }) {
     if (!b) return;
     for (let rr = b.r1; rr <= b.r2; rr++) for (const cc of b.cols) commitEdit(rr, cc, "", true);
   };
+  // 框選範圍統計（Excel 狀態列手感）：總格數 / 數值格數 / 加總 / 平均。含待套用編輯值；以 edits 為相依重算。
+  const selectionStats = useMemo(() => {
+    const b = rangeBounds();
+    if (!b) return null;
+    const vals: (string | null)[] = [];
+    for (let rr = b.r1; rr <= b.r2; rr++) for (const cc of b.cols) vals.push(cellValue(rr, cc));
+    return { rows: b.r2 - b.r1 + 1, colsN: b.cols.length, ...rangeStats(vals) };
+    // rangeBounds / cellValue 為每次 render 重建的閉包，以其讀取的狀態為相依。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, rangeEnd, edits, data]);
+  // 統計數字顯示：整數加千分位，含小數則限 2 位。
+  const fmtNum = (n: number) =>
+    Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
   // 鍵盤導覽：方向鍵 / Tab 移動選取，Enter / F2 編輯，Ctrl+C 複製，Esc 取消選取，F5 重新整理。
   const onGridKey = (e: React.KeyboardEvent) => {
@@ -1283,8 +1296,14 @@ function DataPane({ tab }: { tab: OpenTab }) {
           <Icon icon={X} size={14} /> 捨棄
         </button>
 
-        {/* 選取儲存格資訊（Excel 名稱框手感） */}
-        {selected && data && data.rows[selected.r] && (
+        {/* 框選範圍統計 / 單一選取格資訊（Excel 狀態列手感） */}
+        {selectionStats ? (
+          <span className="ml-auto mr-3 text-fg/45 text-xs mono whitespace-nowrap" title="框選範圍統計（含待套用編輯值）">
+            已選 {selectionStats.rows}×{selectionStats.colsN}（{selectionStats.count} 格）
+            {selectionStats.numCount > 0 &&
+              ` · 數值 ${selectionStats.numCount} · Σ ${fmtNum(selectionStats.sum)} · 平均 ${fmtNum(selectionStats.avg)}`}
+          </span>
+        ) : selected && data && data.rows[selected.r] ? (
           <span className="ml-auto mr-3 text-fg/45 text-xs truncate max-w-[40%]" title={cellValue(selected.r, selected.c) ?? "NULL"}>
             <span className="text-fg/30">{data.columns[selected.c]}</span>
             {" = "}
@@ -1292,8 +1311,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
               ? <span className="italic text-fg/30">NULL</span>
               : cellValue(selected.r, selected.c)}
           </span>
-        )}
-        <span className={`${selected && data && data.rows[selected.r] ? "" : "ml-auto"} text-fg/40 text-xs`}>
+        ) : null}
+        <span className={`${selectionStats || (selected && data && data.rows[selected.r]) ? "" : "ml-auto"} text-fg/40 text-xs`}>
           {applying
             ? "處理中…"
             : data

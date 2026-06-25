@@ -5,6 +5,7 @@ import {
   statementAtOffset,
   parseClipboardGrid,
   rectToTsv,
+  rangeStats,
   resultToCsv,
   resultToTsv,
   resultToJson,
@@ -181,6 +182,28 @@ describe("userListSql", () => {
     expect(s).toContain("account_locked");
     expect(s).toContain("max_user_connections");
     expect(s).toContain("ORDER BY User, Host");
+  });
+});
+
+describe("rangeStats", () => {
+  it("counts total cells, numeric cells, and sums/averages numbers", () => {
+    const s = rangeStats(["10", "20", "30", "x", null, ""]);
+    expect(s.count).toBe(6);
+    expect(s.numCount).toBe(3);
+    expect(s.sum).toBe(60);
+    expect(s.avg).toBe(20);
+    expect(s.min).toBe(10);
+    expect(s.max).toBe(30);
+  });
+  it("strips thousands separators and handles decimals/negatives", () => {
+    const s = rangeStats(["1,000", "-2.5", "3.5"]);
+    expect(s.sum).toBe(1001);
+    expect(s.min).toBe(-2.5);
+    expect(s.max).toBe(1000);
+  });
+  it("no numeric cells → zeros (no Infinity leakage)", () => {
+    const s = rangeStats(["a", null, "  "]);
+    expect(s).toEqual({ count: 3, numCount: 0, sum: 0, avg: 0, min: 0, max: 0 });
   });
 });
 

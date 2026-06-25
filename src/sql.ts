@@ -811,6 +811,39 @@ export function splitSqlStatementsWithRanges(sql: string): SqlStatementSpan[] {
   return out;
 }
 
+// 計算框選範圍的統計（Excel 狀態列手感）：總格數、數值格數、加總 / 平均 / 最小 / 最大。
+// 僅將可解析為有限數字的值納入數值統計（先移除千分位逗號）；空字串 / NULL 不計入數值。
+export function rangeStats(values: (string | null)[]): {
+  count: number;
+  numCount: number;
+  sum: number;
+  avg: number;
+  min: number;
+  max: number;
+} {
+  let numCount = 0;
+  let sum = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of values) {
+    if (v === null || v.trim() === "") continue;
+    const n = Number(v.replace(/,/g, ""));
+    if (!Number.isFinite(n)) continue;
+    numCount++;
+    sum += n;
+    if (n < min) min = n;
+    if (n > max) max = n;
+  }
+  return {
+    count: values.length,
+    numCount,
+    sum,
+    avg: numCount ? sum / numCount : 0,
+    min: numCount ? min : 0,
+    max: numCount ? max : 0,
+  };
+}
+
 // 將矩形範圍的儲存格擷取為 TSV（供資料表「區塊複製」）。getCell 取值（含待套用編輯），
 // rows / cols 為要納入的列索引 / 欄索引清單（已依可見欄序排好）。純函式，便於單元測試。
 export function rectToTsv(
