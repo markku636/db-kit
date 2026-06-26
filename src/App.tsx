@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
 import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo } from "./api";
 import { useStore } from "./store";
 import { useTheme } from "./theme";
@@ -43,7 +43,7 @@ import {
   formatSql,
 } from "./sql";
 import type { SavedQuery } from "./sql";
-import logoMark from "./assets/dhero.png";
+import logoMark from "./assets/db-kit-hero.png";
 import Icon from "./ui/Icon";
 import { Button, EmptyState, Modal } from "./ui/index";
 import {
@@ -53,6 +53,75 @@ import {
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   type LucideIcon,
 } from "lucide-react";
+
+// ---- 可拖曳分隔線：記憶尺寸（localStorage）+ 指標拖曳調整 ----
+function clampSize(v: number, min: number, max: number) {
+  return Math.max(min, Math.min(v, max));
+}
+
+// axis "x" 調寬度、"y" 調高度；max 可為函式（依視窗大小動態算上限）。
+// 回傳目前尺寸與要綁在分隔線上的 onPointerDown；拖曳結束才寫回 localStorage。
+function useResizable(opts: {
+  storageKey: string;
+  initial: number;
+  min: number;
+  max: number | (() => number);
+  axis: "x" | "y";
+}) {
+  const maxOf = () => (typeof opts.max === "function" ? opts.max() : opts.max);
+  const [size, setSize] = useState<number>(() => {
+    try {
+      const v = localStorage.getItem(opts.storageKey);
+      if (v != null) {
+        const n = parseFloat(v);
+        if (Number.isFinite(n)) return clampSize(n, opts.min, maxOf());
+      }
+    } catch {
+      /* 忽略讀取失敗 */
+    }
+    return opts.initial;
+  });
+
+  const onPointerDown = (e: ReactPointerEvent) => {
+    e.preventDefault();
+    const start = opts.axis === "x" ? e.clientX : e.clientY;
+    const startSize = size;
+    let latest = startSize;
+    const move = (ev: PointerEvent) => {
+      const cur = opts.axis === "x" ? ev.clientX : ev.clientY;
+      latest = clampSize(startSize + (cur - start), opts.min, maxOf());
+      setSize(latest);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      try { localStorage.setItem(opts.storageKey, String(latest)); } catch { /* 忽略寫入失敗 */ }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    document.body.style.cursor = opts.axis === "x" ? "col-resize" : "row-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  return { size, onPointerDown };
+}
+
+// 拖曳把手：axis "x" → 直立細條（調左右）、"y" → 水平細條（調上下）。
+function Splitter({ axis, onPointerDown }: { axis: "x" | "y"; onPointerDown: (e: ReactPointerEvent) => void }) {
+  return (
+    <div
+      onPointerDown={onPointerDown}
+      role="separator"
+      aria-orientation={axis === "x" ? "vertical" : "horizontal"}
+      className={
+        "shrink-0 bg-fg/10 hover:bg-accent/60 active:bg-accent transition-colors " +
+        (axis === "x" ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize")
+      }
+    />
+  );
+}
 
 export default function App() {
   // null = 關閉；{ initial } = 開啟（initial 為 null 表新增、為連線表示編輯）
@@ -67,6 +136,14 @@ export default function App() {
   });
   const { connections, connectedIds, activeId } = useStore();
   const activeConn = connections.find((c) => c.id === activeId) ?? null;
+  // 左側連線樹寬度：可拖曳分隔線調整，記憶於 localStorage。
+  const sidebar = useResizable({
+    storageKey: "dbkit:sidebarWidth",
+    initial: 256, // 對應原本 w-64
+    min: 180,
+    max: () => Math.min(640, window.innerWidth * 0.6),
+    axis: "x",
+  });
   // ER 圖僅關聯式（MySQL / PostgreSQL / SQLite）支援外鍵關係；Mongo / Redis 不適用。
   const canEr =
     !!activeConn &&
@@ -160,7 +237,8 @@ export default function App() {
         onImportConns={importConnections}
       />
       <div className="flex-1 flex min-h-0">
-        <Sidebar onEdit={(c) => setDialog({ initial: c })} />
+        <Sidebar width={sidebar.size} onEdit={(c) => setDialog({ initial: c })} />
+        <Splitter axis="x" onPointerDown={sidebar.onPointerDown} />
         <MainArea onNewConnection={() => setDialog({ initial: null })} />
         <InfoPanel />
         <AssistantPanel />
@@ -518,7 +596,7 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 }
 
 // ---- 左側連線/物件樹 ----
-function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
+function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; width: number }) {
   const { connections, connectedIds, activeId, setActive, selectedNode, selectNode } = useStore();
   const [databases, setDatabases] = useState<Record<string, string[]>>({});
   // 已展開的資料庫: 鍵為 connId:db，值為樹狀分組（資料表 / 檢視 / 函式）
@@ -1238,7 +1316,7 @@ function Sidebar({ onEdit }: { onEdit: (c: ConnectionConfig) => void }) {
   const visibleConns = connections.filter(connVisible);
 
   return (
-    <div className="w-64 bg-panel border-r border-fg/10 overflow-y-auto text-sm flex flex-col">
+    <div style={{ width }} className="shrink-0 bg-panel overflow-y-auto text-sm flex flex-col">
       {connections.length > 0 && (
         <div className="sticky top-0 z-10 bg-panel p-2 border-b border-fg/10">
           <div className="relative">
@@ -1993,6 +2071,14 @@ function QueryPane() {
   const [saved, setSaved] = useState<SavedQuery[]>(loadSavedQueries);
   const [showSaved, setShowSaved] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // 編輯器高度：可拖曳分隔線調整（編輯器 ↔ 結果），記憶於 localStorage。
+  const editor = useResizable({
+    storageKey: "dbkit:editorHeight",
+    initial: 176, // 對應原本 h-44
+    min: 100,
+    max: () => Math.max(160, window.innerHeight * 0.7),
+    axis: "y",
+  });
 
   // Esc 關閉歷史 / 收藏下拉（與選單 / 對話框一致）。
   useEffect(() => {
@@ -2245,7 +2331,7 @@ function QueryPane() {
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
-      <div className="border-b border-fg/10">
+      <div className="shrink-0">
         <div className="flex items-center justify-between px-3 py-1.5 bg-bar">
           <span className="text-xs text-fg/40">查詢</span>
           <div className="flex gap-2 items-center">
@@ -2336,7 +2422,7 @@ function QueryPane() {
         {supportsExplain ? (
           // SQL（mysql/postgres/sqlite）：CodeMirror 編輯器 — 語法高亮 + 行號 + 即時檢查 +
           // 表/欄自動完成；F6 整段、Ctrl+Enter 游標所在語句或選取段、Ctrl+/ 註解、Tab 縮排。
-          <div className="h-44 min-h-[100px] max-h-[60vh] resize-y overflow-hidden bg-app border-y border-fg/10">
+          <div style={{ height: editor.size }} className="overflow-hidden bg-app border-t border-fg/10">
             <SqlEditor
               value={sql}
               onChange={persistSql}
@@ -2351,7 +2437,8 @@ function QueryPane() {
         ) : (
           <textarea
             ref={taRef}
-            className="w-full h-40 min-h-[80px] bg-app p-3 outline-none mono text-sm resize-y focus:bg-well"
+            style={{ height: editor.size }}
+            className="block w-full bg-app p-3 outline-none mono text-sm border-t border-fg/10 focus:bg-well"
             value={sql}
             onChange={(e) => persistSql(e.target.value)}
             spellCheck={false}
@@ -2399,7 +2486,8 @@ function QueryPane() {
           )}
         </div>
       </div>
-      <div className="flex-1 overflow-auto">
+      <Splitter axis="y" onPointerDown={editor.onPointerDown} />
+      <div className="flex-1 overflow-auto min-h-0">
         {err && <div className="p-3 text-red-400 text-sm mono whitespace-pre-wrap break-words">{err}</div>}
         {result && <ResultTable result={result} onViewChange={setResultView} />}
         {!result && !err && (

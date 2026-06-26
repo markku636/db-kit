@@ -305,8 +305,9 @@ option {
 /* 標誌進場：淡入 + 帶回彈的縮放，落定後輕微浮動。 */
 .splash__logo {
   position: relative;
-  width: min(46vw, 440px);
-  max-width: 80vw;
+  width: min(82vw, 940px);
+  max-width: 92vw;
+  border-radius: 16px;
   filter: drop-shadow(0 18px 40px rgba(0, 0, 0, 0.55));
   opacity: 0;
   transform: scale(0.8) translateY(12px);
