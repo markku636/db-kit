@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.7
+
+- 啟用時的 splash logo 放大（`min(46vw, 440px)` → `min(62vw, 620px)`），開場品牌標誌更醒目。
+
 ## Redis 功能對齊 Another Redis Desktop Manager（本次）
 
 把原本藏在右鍵選單的 Redis 操作搬上一眼可見的工具列，並補齊「另一款 Redis 工具」常用而本工具缺少的面板。
