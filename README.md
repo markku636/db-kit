@@ -31,9 +31,21 @@
 
 採用 **Tauri 2（Rust 後端 + Web 前端）**，安裝檔小、記憶體佔用約為 Electron 同類產品的十分之一；資料庫連線一律收在 Rust 後端、前端透過 Tauri command 呼叫，不直連、兼顧安全與效能。
 
+## 跨平台
+
+一套程式碼、一致體驗，產出 **Windows / macOS / Linux 三平台原生桌面 App**：
+
+- **同一份程式碼，三平台原生輸出** — 基於 Tauri 2，`npm run tauri build` 在各平台直接產出對應的原生安裝檔：Windows `.msi` / `.exe`（NSIS）、macOS `.dmg`、Linux `.AppImage` / `.deb`，皆為原生視窗而非瀏覽器分頁。
+- **介面與操作手感跨平台一致** — 連線樹、可編輯資料格、查詢編輯器、ER 圖、鍵盤快捷鍵、深 / 亮色主題在三個平台完全相同，換機器不必重新熟悉。
+- **密碼存各 OS 原生 keychain** — 透過 `keyring` 對應到 Windows 認證管理員、macOS Keychain、Linux Secret Service（libsecret），密碼不落地到磁碟。
+- **`dbk` CLI 同樣跨平台** — 可在 Linux 伺服器上以 `--no-default-features` 編出不連 Tauri 的精簡 binary，SSH 進機器即可查詢 / 匯出 / 備份。
+- **輕量** — Tauri 直接用系統內建 WebView（Windows 為 WebView2、macOS 為 WKWebView、Linux 為 WebKitGTK），不內嵌 Chromium，安裝檔小、記憶體佔用約為 Electron 同類產品的十分之一。
+
+> 目前 GitHub Releases 提供預編譯的 **Windows** 安裝檔；**macOS / Linux** 請依 [從原始碼建置](#從原始碼建置) 自行 `npm run tauri build`（同一指令，產物為各平台對應格式）。
+
 ## 畫面預覽
 
-> 下圖為依 App 實際深色主題繪製的介面預覽示意。
+> 下圖為 App 實際畫面截圖（深色主題）。
 
 | 資料表檢視 — 連線樹 · 分頁 · 可編輯資料格 | 查詢編輯器 — 語法高亮 · 結果格 · 歷史 / 收藏 |
 |:---:|:---:|
@@ -98,7 +110,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 ## ✨ 亮點
 
 - **一站式五大資料庫** — MySQL · PostgreSQL · SQLite · MongoDB · Redis，全部可實際連線，共用同一套連線樹、資料格與快捷鍵。
-- **輕量高效** — Tauri 2 架構，比 Electron 輕約 10×；深色為預設、可切亮色，依資料庫類型色標區分。
+- **跨平台桌面 App** — 同一份程式碼產出 Windows / macOS / Linux 三平台原生安裝檔，介面、快捷鍵、連線管理與 keychain 完全一致；`dbk` CLI 亦跨平台（見 [跨平台](#跨平台)）。
+- **輕量高效** — Tauri 2 架構，用系統內建 WebView、比 Electron 輕約 10×；深色為預設、可切亮色，依資料庫類型色標區分。
 - **安全可靠** — 連線密碼存於 OS keychain（磁碟不落地）、SSH Tunnel（密碼／私鑰）+ host key TOFU 驗證、所有寫入以主鍵定位 + 全參數化綁定防注入。
 - **桌面級操作手感** — 儲存格直接編輯、右鍵選單、鍵盤導覽、多欄排序、欄寬拖曳、依值篩選、內容檢視器、即時尋找。
 - **內建 AI 助手** — 右側面板串接本機 Claude CLI（用你的 Claude 訂閱登入），串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。
