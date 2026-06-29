@@ -606,9 +606,18 @@ export function buildSelectQuery(kind: DbKind, spec: QbSpec): string {
     return t?.alias?.trim() ? `${base} AS ${qi(t.alias.trim())}` : base;
   };
   let body = `FROM ${fromOf(spec.baseTable)}`;
+  const inFrom = new Set<string>([spec.baseTable]);
   for (const j of spec.joins) {
     if (!j.leftTable || !j.leftCol || !j.rightTable || !j.rightCol) continue;
     body += ` ${j.type} JOIN ${fromOf(j.rightTable)} ON ${qcol(j.leftTable, j.leftCol)} = ${qcol(j.rightTable, j.rightCol)}`;
+    inFrom.add(j.rightTable);
+  }
+  // 已選但未被 JOIN 連上的表，以 CROSS JOIN 併入 FROM——否則其欄位會引用未在 FROM 的表而產生無效 SQL。
+  for (const t of spec.tables) {
+    if (!inFrom.has(t.name)) {
+      body += ` CROSS JOIN ${fromOf(t.name)}`;
+      inFrom.add(t.name);
+    }
   }
 
   // WHERE

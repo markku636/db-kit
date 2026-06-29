@@ -920,6 +920,15 @@ describe("buildSelectQuery（視覺化查詢建構器）", () => {
     );
   });
 
+  it("已選但未 JOIN 連上的表以 CROSS JOIN 併入（不產生引用未在 FROM 的表）", () => {
+    const sql = buildSelectQuery("mysql", base({
+      tables: [{ name: "orders" }, { name: "tags" }],
+      columns: [{ table: "orders", column: "id" }, { table: "tags", column: "label" }],
+      joins: [], // 無 JOIN
+    }));
+    expect(sql).toBe("SELECT `orders`.`id`, `tags`.`label` FROM `shop`.`orders` CROSS JOIN `shop`.`tags`;");
+  });
+
   it("WHERE：數字原樣、字串加引號、IS NULL 無值、IN 拆逗號、AND/OR 串接", () => {
     const sql = buildSelectQuery("mysql", base({
       conds: [
