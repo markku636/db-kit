@@ -35,6 +35,7 @@ import TransferDialog from "./TransferDialog";
 import DbTransferDialog from "./DbTransferDialog";
 import CommandPalette, { type PaletteItem } from "./CommandPalette";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
+import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile, useEscToClose } from "./ui";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
@@ -641,6 +642,10 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
+  // 釘選 / 常用資料表（致敬 Navicat Favorites）：localStorage 持久化。
+  const [pins, setPins] = useState<PinnedTable[]>(loadPins);
+  const togglePinned = (p: PinnedTable) =>
+    setPins((list) => { const next = togglePin(list, p); persistPins(next); return next; });
   // 連線色標（致敬 Navicat connection color）：per-連線 顏色，localStorage 持久化。
   const [connColors, setConnColors] = useState(loadConnColors);
   const applyConnColor = (id: string, color: string) =>
@@ -830,6 +835,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
     }
     useStore.getState().markDisconnected(id);
     useStore.getState().removeConnection(id);
+    setPins((list) => { const next = removePinsForConn(list, id); persistPins(next); return next; });
     toast.success("連線已刪除");
   };
 
@@ -1244,6 +1250,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
     const nodes: MenuNode[] = [];
     // 開啟 / 設計
     nodes.push(it(isView ? "開啟視圖" : "開啟資料表", () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind)));
+    nodes.push(it(isPinned(pins, m) ? "取消釘選" : "釘選到常用", () => togglePinned({ connId: m.connId, db: m.db, table: m.table, kind: m.objKind ?? "table" })));
     nodes.push(it("屬性…", () => setTableProps({ connId: m.connId, db: m.db, table: m.table, kind: m.kind, objKind: m.objKind })));
     if (!isView) {
       nodes.push(it("設計資料表", () => useStore.getState().openTable(m.connId, m.db, m.table, "structure")));
@@ -1412,6 +1419,37 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
           </div>
         </div>
       )}
+      {(() => {
+        // ★ 常用：釘選的資料表（跨連線）。依搜尋字過濾、只顯示連線仍存在者。
+        const visiblePins = pins.filter((p) =>
+          connections.some((c) => c.id === p.connId) && (!q || p.table.toLowerCase().includes(q) || p.db.toLowerCase().includes(q)),
+        );
+        if (visiblePins.length === 0) return null;
+        return (
+          <div className="border-b border-fg/10 py-1">
+            <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-fg/35 flex items-center gap-1">
+              <Icon icon={Star} size={11} className="text-amber-300" />常用
+            </div>
+            {visiblePins.map((p) => {
+              const cn = connections.find((c) => c.id === p.connId)?.name ?? "";
+              return (
+                <div key={`${p.connId} ${p.db} ${p.table}`}
+                  className="group flex items-center gap-1.5 px-3 py-1 cursor-pointer hover:bg-fg/5"
+                  onClick={() => { setActive(p.connId); useStore.getState().openTable(p.connId, p.db, p.table, "data", p.kind); }}
+                  title={`${cn} · ${p.db} · ${p.table}`}>
+                  <Icon icon={p.kind === "view" ? Eye : Table2} size={12} className="text-fg/30 shrink-0" />
+                  <span className="truncate flex-1">{p.table}</span>
+                  <span className="text-[10px] text-fg/30 truncate max-w-[90px]">{p.db}</span>
+                  <button type="button" onClick={(e) => { e.stopPropagation(); togglePinned(p); }} title="取消釘選" aria-label="取消釘選"
+                    className="w-4 h-4 shrink-0 items-center justify-center rounded text-fg/30 hover:text-amber-300 hidden group-hover:flex">
+                    <Icon icon={X} size={12} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
       {connections.length === 0 && (
         <div className="p-4 text-fg/30 text-xs leading-relaxed">
           尚無連線。點上方「連線」新增一個，雙擊以建立連線（右鍵有更多選項）。
