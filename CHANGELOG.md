@@ -1,5 +1,15 @@
 # Changelog
 
+## 整庫資料庫文件（致敬 Navicat HTML 文件 / 模型報表）
+
+資料庫節點右鍵新增「**資料庫文件…**」：一次彙整整個資料庫所有資料表的欄位 / 索引 / 外鍵成一份**含目錄**的文件，可複製或另存 **Markdown / HTML**（HTML 帶錨點目錄，適合放 wiki / 交付）。
+
+> 驗證：文件產生抽為 `dataDict.ts` 純函式（`buildDbDictMarkdown` / `buildDbDictHtml`）+ 3 項 vitest（共 159 項全通過）；前端 `tsc` + `eslint` + `vite build` 綠燈。
+
+- **逐表並行載入**（限併發 6，個別失敗以空白代之），即時顯示進度；上限 200 張表（超出標示）。
+- Markdown / HTML 兩種格式即時切換預覽；表名 / 內容皆做跳脫（`|`、`<`、`&`）。
+- 沿用既有 `table_columns` / `table_indexes` / `list_foreign_keys`，無需新增後端。
+
 ## SQL 關鍵字大小寫轉換（致敬 Navicat 編輯器）
 
 查詢工具列新增 **ABC / abc** 兩鈕：把 SQL 關鍵字一鍵統一轉大寫 / 小寫，符合團隊風格。

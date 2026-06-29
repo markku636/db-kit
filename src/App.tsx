@@ -34,6 +34,7 @@ import QueryBuilder from "./QueryBuilder";
 import TransferDialog from "./TransferDialog";
 import DbTransferDialog from "./DbTransferDialog";
 import CommandPalette, { type PaletteItem } from "./CommandPalette";
+import DbDataDictionary from "./DbDataDictionary";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile, useEscToClose } from "./ui";
@@ -697,6 +698,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   const [transferTbl, setTransferTbl] = useState<{ connId: string; db: string; table: string } | null>(null);
   const [builderTbl, setBuilderTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [dbTransfer, setDbTransfer] = useState<{ connId: string; db: string } | null>(null);
+  const [dbDict, setDbDict] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
   const [dataDict, setDataDict] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [dataGen, setDataGen] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [erTable, setErTable] = useState<{ connId: string; db: string; table: string } | null>(null);
@@ -1816,6 +1818,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                       }), false]);
                       if ((k === "mysql" || k === "postgres") && dbConn) arr.push(["結構比對…", () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
                       if (k === "mysql" || k === "postgres" || k === "sqlite") arr.push(["資料傳輸（整庫）…", () => setDbTransfer({ connId: dbMenu.connId, db: dbMenu.db }), false]);
+                      if ((k === "mysql" || k === "postgres" || k === "sqlite") && dbConn) arr.push(["資料庫文件…", () => setDbDict({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
                       if (k === "mysql") arr.push(["資料庫屬性…", () => setDbProps({ connId: dbMenu.connId, db: dbMenu.db }), false]);
                       arr.push(["編輯屬性…", editConn, false]);
                       // 系統 schema / 庫，以及 MySQL 使用中的預設庫，不顯示刪除（後端亦硬擋）。
@@ -1981,6 +1984,10 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
 
       {dbTransfer && (
         <DbTransferDialog connId={dbTransfer.connId} database={dbTransfer.db} onClose={() => setDbTransfer(null)} />
+      )}
+
+      {dbDict && (
+        <DbDataDictionary connId={dbDict.connId} db={dbDict.db} onClose={() => setDbDict(null)} />
       )}
 
       {palette && <CommandPalette items={paletteItems} onClose={() => setPalette(false)} />}
