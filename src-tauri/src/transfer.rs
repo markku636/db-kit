@@ -142,7 +142,7 @@ pub async fn transfer_table(
         ));
     }
 
-    // 2. 探主鍵以穩定分頁順序（無主鍵則無排序）。
+    // 2. 探主鍵以穩定分頁順序；無主鍵則以全部（交集）欄位排序，讓分頁順序確定，避免跨頁重複 / 漏列。
     let probe = manager
         .table_data(
             src_id,
@@ -151,8 +151,8 @@ pub async fn transfer_table(
             &DataQuery { page: 0, page_size: 1, filters: vec![], sorts: vec![], match_any: false },
         )
         .await?;
-    let sorts: Vec<Sort> = probe
-        .primary_key
+    let sort_cols = if probe.primary_key.is_empty() { &columns } else { &probe.primary_key };
+    let sorts: Vec<Sort> = sort_cols
         .iter()
         .map(|c| Sort { column: c.clone(), dir: SortDir::Asc })
         .collect();
