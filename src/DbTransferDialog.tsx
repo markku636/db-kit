@@ -5,6 +5,7 @@ import { useStore } from "./store";
 import { toast } from "./ui";
 import { Modal, Button, Select, Icon } from "./ui/index";
 import { isSystemDatabase } from "./sql";
+import { topoSortByFk } from "./fkorder";
 
 // 整庫資料傳輸（致敬 Navicat Data Transfer 的多表 / 整庫模式）：把來源庫的多張表
 // 一次傳到另一連線 / 資料庫（目標同名表）。逐表複用已測試的 transfer_table。
@@ -84,9 +85,17 @@ export default function DbTransferDialog({ connId, database, onClose }: {
     setBusy(true);
     setOutcomes(null);
     setProgress({ done: 0, total: tables.length });
+    // 自動建表時：依外鍵相依排序（被參照的表先建），避免 CREATE 因外鍵指向尚未建立的表而失敗。
+    let ordered = tables;
+    if (createTable) {
+      try {
+        const model = await api.erModel(connId, database);
+        ordered = topoSortByFk(tables, model.relations.map((r) => ({ from_table: r.from_table, to_table: r.to_table })));
+      } catch { /* 取不到關係 → 沿用原順序 */ }
+    }
     const results: Outcome[] = [];
-    for (let i = 0; i < tables.length; i++) {
-      const t = tables[i];
+    for (let i = 0; i < ordered.length; i++) {
+      const t = ordered[i];
       try {
         const res = await api.transferTable(connId, database, t, dstId, dstDb, t, { create_table: createTable, stop_on_error: false });
         results.push({ table: t, transferred: res.transferred, failed: res.failed, created: res.created });
