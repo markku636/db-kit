@@ -561,7 +561,10 @@ function qbAggExpr(agg: QbAgg | undefined, ref: string): string {
 
 // 是否為純數字字面值（整數 / 小數 / 負號）——是則 WHERE / IN 不加引號（當數值比較）。
 function isNumericLiteral(v: string): boolean {
-  return /^-?\d+(\.\d+)?$/.test(v.trim());
+  const t = v.trim();
+  // 嚴格十進位，且以 Number 最短往返一致才當數字——排除前導零（007）、尾隨零小數（1.50）、
+  // 超精度大整數等「看似數字實為字串」者，避免 zero-padded 代碼被當數值而比錯 / PG 型別錯。
+  return /^-?\d+(\.\d+)?$/.test(t) && String(Number(t)) === t;
 }
 
 // 單一條件值 → SQL 片段（數字原樣、其餘字串字面值）。
@@ -740,7 +743,7 @@ export function buildInClause(kind: DbKind, column: string, values: (string | nu
     if (v === null) { hasNull = true; continue; }
     if (seen.has(v)) continue;
     seen.add(v);
-    items.push(/^-?\d+(\.\d+)?$/.test(v.trim()) ? v.trim() : sqlLiteral(kind, v));
+    items.push(isNumericLiteral(v) ? v.trim() : sqlLiteral(kind, v));
   }
   const inPart = items.length ? `${col} IN (${items.join(", ")})` : "";
   if (hasNull) return inPart ? `(${inPart} OR ${col} IS NULL)` : `${col} IS NULL`;
@@ -793,7 +796,7 @@ export function substituteNamedParams(kind: DbKind, sql: string, values: Record<
       return seg.v.replace(PARAM_RE, (full, name: string) => {
         if (full.startsWith("::") || !(name in values)) return full;
         const v = values[name];
-        return /^-?\d+(\.\d+)?$/.test(v.trim()) ? v.trim() : sqlLiteral(kind, v);
+        return isNumericLiteral(v) ? v.trim() : sqlLiteral(kind, v);
       });
     })
     .join("");

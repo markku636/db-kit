@@ -1111,6 +1111,8 @@ describe("具名參數（extractNamedParams / substituteNamedParams）", () => {
     expect(substituteNamedParams("postgres", "SELECT id::int WHERE x=:x", { x: "2" })).toBe("SELECT id::int WHERE x=2");
     // 字串內的 :id 不被代入。
     expect(substituteNamedParams("mysql", "SELECT ':id' WHERE id=:id", { id: "7" })).toBe("SELECT ':id' WHERE id=7");
+    // zero-padded 代碼當字串（避免比錯）。
+    expect(substituteNamedParams("mysql", "WHERE code = :c", { c: "007" })).toBe("WHERE code = '007'");
   });
 });
 
@@ -1156,6 +1158,12 @@ describe("buildInClause（Copy as IN）", () => {
   });
   it("無任何值 → 合法但無相符（IN (NULL)）", () => {
     expect(buildInClause("mysql", "x", [])).toBe("`x` IN (NULL)");
+  });
+  it("zero-padded / 失真數字當字串（避免 01→1 比錯、PG 型別錯）", () => {
+    // 007 / 01（前導零）、1.50（尾隨零）、超精度大整數 → 視為字串；乾淨數字仍原樣。
+    expect(buildInClause("mysql", "code", ["01", "007", "5"])).toBe("`code` IN ('01', '007', 5)");
+    expect(buildInClause("mysql", "p", ["1.50", "1.5"])).toBe("`p` IN ('1.50', 1.5)");
+    expect(buildInClause("mysql", "big", ["123456789012345678"])).toBe("`big` IN ('123456789012345678')");
   });
 });
 
