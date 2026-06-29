@@ -1160,24 +1160,22 @@ describe("isWriteStatement（唯讀攔截）", () => {
 });
 
 describe("buildInClause（Copy as IN）", () => {
-  it("去重 + 數字原樣 + 方言識別字跳脫", () => {
-    expect(buildInClause("mysql", "id", ["1", "2", "2", "3"])).toBe("`id` IN (1, 2, 3)");
-    expect(buildInClause("postgres", "id", ["1"])).toBe('"id" IN (1)');
+  it("去重 + 一律字串字面值 + 方言識別字跳脫（型別未知，數值欄隱式轉型）", () => {
+    expect(buildInClause("mysql", "id", ["1", "2", "2", "3"])).toBe("`id` IN ('1', '2', '3')");
+    expect(buildInClause("postgres", "id", ["1"])).toBe('"id" IN (\'1\')');
   });
   it("字串以字面值跳脫（含單引號加倍）", () => {
     expect(buildInClause("mysql", "name", ["a", "b'c"])).toBe("`name` IN ('a', 'b''c')");
   });
   it("NULL 以 OR col IS NULL 並聯；全為 NULL → 僅 IS NULL", () => {
-    expect(buildInClause("mysql", "x", ["1", null])).toBe("(`x` IN (1) OR `x` IS NULL)");
+    expect(buildInClause("mysql", "x", ["1", null])).toBe("(`x` IN ('1') OR `x` IS NULL)");
     expect(buildInClause("mysql", "x", [null, null])).toBe("`x` IS NULL");
   });
   it("無任何值 → 合法但無相符（IN (NULL)）", () => {
     expect(buildInClause("mysql", "x", [])).toBe("`x` IN (NULL)");
   });
-  it("zero-padded / 失真數字當字串（避免 01→1 比錯、PG 型別錯）", () => {
-    // 007 / 01（前導零）、1.50（尾隨零）、超精度大整數 → 視為字串；乾淨數字仍原樣。
-    expect(buildInClause("mysql", "code", ["01", "007", "5"])).toBe("`code` IN ('01', '007', 5)");
-    expect(buildInClause("mysql", "p", ["1.50", "1.5"])).toBe("`p` IN ('1.50', 1.5)");
+  it("值一律加引號（含 zero-padded 與大整數，跨型別安全）", () => {
+    expect(buildInClause("mysql", "code", ["01", "007", "5"])).toBe("`code` IN ('01', '007', '5')");
     expect(buildInClause("mysql", "big", ["123456789012345678"])).toBe("`big` IN ('123456789012345678')");
   });
 });

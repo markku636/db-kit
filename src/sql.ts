@@ -741,7 +741,9 @@ export function transformKeywordCase(sql: string, upper: boolean): string {
 }
 
 // 由欄名 + 一組值組出 `col IN ('a', 'b', …)`（致敬 Navicat「Copy as IN」），供貼進 WHERE 過濾。
-// 去重、方言感知跳脫；純數字原樣（數值比較）；NULL 以 `col IS NULL` 並聯（IN 不含 NULL）。
+// 去重、方言感知跳脫；**一律字串字面值**——值來自欄位實際資料、型別未知，數值欄會把 '1' 隱式
+// 轉型比較（MySQL / PostgreSQL / SQLite 皆然），文字欄則精確相符，避免 `text IN (1)` 在 PG 型別錯。
+// NULL 以 `col IS NULL` 並聯（IN 不含 NULL）。
 export function buildInClause(kind: DbKind, column: string, values: (string | null)[]): string {
   const col = quoteIdent(kind, column);
   const seen = new Set<string>();
@@ -751,7 +753,7 @@ export function buildInClause(kind: DbKind, column: string, values: (string | nu
     if (v === null) { hasNull = true; continue; }
     if (seen.has(v)) continue;
     seen.add(v);
-    items.push(isNumericLiteral(v) ? v.trim() : sqlLiteral(kind, v));
+    items.push(sqlLiteral(kind, v));
   }
   const inPart = items.length ? `${col} IN (${items.join(", ")})` : "";
   if (hasNull) return inPart ? `(${inPart} OR ${col} IS NULL)` : `${col} IS NULL`;
