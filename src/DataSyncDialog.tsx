@@ -85,9 +85,11 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
     }
   };
 
+  // 比對被截斷（資料超過上限、僅比對部分列）時，DELETE 不安全（可能刪到上限外實際存在的列）→ 強制關閉。
+  const allowDeletes = includeDeletes && !res?.capped;
   const dml = useMemo(
-    () => (res && dstKind ? buildSyncDml(dstKind, dstDb, dstTable, res.src, res.diff, includeDeletes, res.dstCols) : ""),
-    [res, dstKind, dstDb, dstTable, includeDeletes],
+    () => (res && dstKind ? buildSyncDml(dstKind, dstDb, dstTable, res.src, res.diff, allowDeletes, res.dstCols) : ""),
+    [res, dstKind, dstDb, dstTable, allowDeletes],
   );
 
   const dbList = dstKind ? dbs.filter((d) => !isSystemDatabase(dstKind, d)) : dbs;
@@ -143,8 +145,8 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
 
       <div className="flex items-center gap-3">
         <Button onClick={compare} loading={busy} disabled={busy || !dstTable || sameTable} icon={GitCompare}>比對</Button>
-        <label className="inline-flex items-center gap-1.5 text-sm cursor-pointer select-none">
-          <input type="checkbox" checked={includeDeletes} onChange={(e) => setIncludeDeletes(e.target.checked)} />
+        <label className={`inline-flex items-center gap-1.5 text-sm cursor-pointer select-none ${res?.capped ? "opacity-40" : ""}`}>
+          <input type="checkbox" checked={allowDeletes} disabled={!!res?.capped} onChange={(e) => setIncludeDeletes(e.target.checked)} />
           <span className="inline-flex items-center gap-1">含 DELETE（刪除目標多出的列）<Icon icon={AlertTriangle} size={12} className="text-amber-400" /></span>
         </label>
       </div>
@@ -162,9 +164,9 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
           <div className="flex gap-4">
             <span>新增 <span className="text-emerald-400">{counts.i}</span></span>
             <span>更新 <span className="text-amber-300">{counts.u}</span></span>
-            <span>刪除 <span className="text-red-400">{counts.d}</span>{!includeDeletes && counts.d > 0 ? "（未含）" : ""}</span>
+            <span>刪除 <span className="text-red-400">{counts.d}</span>{!allowDeletes && counts.d > 0 ? "（未含）" : ""}</span>
           </div>
-          {res?.capped && <div className="text-[11px] text-amber-300/80 inline-flex items-center gap-1"><Icon icon={AlertTriangle} size={11} />資料量超過 {CAP.toLocaleString()} 列上限，比對僅涵蓋前 {CAP.toLocaleString()} 列。</div>}
+          {res?.capped && <div className="text-[11px] text-amber-300/80 inline-flex items-center gap-1"><Icon icon={AlertTriangle} size={11} />資料量超過 {CAP.toLocaleString()} 列上限，比對僅涵蓋部分列；為安全已停用 DELETE（避免刪到未載入的列）。</div>}
           {colMismatch && (colMismatch.srcOnly.length > 0 || colMismatch.dstOnly.length > 0) && (
             <div className="text-[11px] text-amber-300/80">
               欄位不完全相同，僅同步共同欄位。
