@@ -811,6 +811,10 @@ export const BUILTIN_SNIPPETS: SqlSnippet[] = [
   { name: "del", body: "DELETE FROM table_name\nWHERE id = 0;", desc: "刪除列" },
   { name: "join", body: "SELECT a.*, b.*\nFROM table_a AS a\nJOIN table_b AS b ON a.id = b.a_id;", desc: "內連接" },
   { name: "leftjoin", body: "SELECT a.*, b.*\nFROM table_a AS a\nLEFT JOIN table_b AS b ON a.id = b.a_id;", desc: "左連接" },
+  { name: "antijoin", body: "SELECT a.*\nFROM table_a AS a\nLEFT JOIN table_b AS b ON a.id = b.a_id\nWHERE b.a_id IS NULL;", desc: "反連接（找 a 中無對應 b 者）" },
+  { name: "exists", body: "SELECT *\nFROM table_a AS a\nWHERE EXISTS (\n  SELECT 1 FROM table_b AS b WHERE b.a_id = a.id\n);", desc: "存在子查詢" },
+  { name: "case", body: "SELECT\n  CASE\n    WHEN condition1 THEN 'A'\n    WHEN condition2 THEN 'B'\n    ELSE 'C'\n  END AS label\nFROM table_name;", desc: "CASE WHEN 條件分類" },
+  { name: "paginate", body: "SELECT *\nFROM table_name\nORDER BY id\nLIMIT 50 OFFSET 0;", desc: "分頁（LIMIT/OFFSET）" },
 ];
 
 // 純函式：合併使用者片段與內建（同名以使用者為準），依名稱排序。供單元測試。

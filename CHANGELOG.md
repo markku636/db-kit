@@ -1,5 +1,11 @@
 # Changelog
 
+## SQL 片段庫擴充：反連接 / EXISTS / CASE / 分頁
+
+內建片段再加 4 個常用骨架：**反連接（找無對應的列）、EXISTS 子查詢、CASE WHEN 條件分類、LIMIT/OFFSET 分頁**——在編輯器輸入 `antijoin` / `exists` / `case` / `paginate` 即可展開。
+
+> 驗證：vitest 全通過（片段測試以 `BUILTIN_SNIPPETS.length` 動態比對，新增不破壞）；前端 `tsc` + `vite build` 綠燈。
+
 ## 視覺化查詢建構器：OFFSET（分頁）
 
 查詢建構器選項列補上 **OFFSET**，與 LIMIT 一起組出 `LIMIT n OFFSET m` 分頁查詢。
