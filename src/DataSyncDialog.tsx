@@ -34,7 +34,7 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
   const [includeDeletes, setIncludeDeletes] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [res, setRes] = useState<{ diff: RowDiff; src: RowSet; capped: boolean } | null>(null);
+  const [res, setRes] = useState<{ diff: RowDiff; src: RowSet; dstCols: string[]; capped: boolean } | null>(null);
 
   const dstKind = connections.find((c) => c.id === dstId)?.kind;
 
@@ -77,7 +77,7 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
       const src: RowSet = { columns: sp.columns, pk: sp.primary_key, rows: sp.rows };
       const dst: RowSet = { columns: dp.columns, pk: dp.primary_key, rows: dp.rows };
       const diff = diffRowsByPk(src, dst);
-      setRes({ diff, src, capped: sp.total_rows > CAP || dp.total_rows > CAP });
+      setRes({ diff, src, dstCols: dp.columns, capped: sp.total_rows > CAP || dp.total_rows > CAP });
     } catch (e: any) {
       setErr(e?.message ?? "比對失敗");
     } finally {
@@ -86,7 +86,7 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
   };
 
   const dml = useMemo(
-    () => (res && dstKind ? buildSyncDml(dstKind, dstDb, dstTable, res.src, res.diff, includeDeletes) : ""),
+    () => (res && dstKind ? buildSyncDml(dstKind, dstDb, dstTable, res.src, res.diff, includeDeletes, res.dstCols) : ""),
     [res, dstKind, dstDb, dstTable, includeDeletes],
   );
 

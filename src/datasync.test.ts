@@ -53,4 +53,12 @@ describe("buildSyncDml", () => {
     const sql = buildSyncDml("mysql", "shop", "fruit", src, d, false);
     expect(sql).not.toContain("DELETE");
   });
+  it("targetColumns 限定：只同步交集欄位（目標缺 qty → INSERT/UPDATE 不含 qty）", () => {
+    const d = diffRowsByPk(src, dst);
+    // 目標只有 id, name（無 qty）。
+    const sql = buildSyncDml("mysql", "shop", "fruit", src, d, true, ["id", "name"]);
+    expect(sql).toContain("INSERT INTO `shop`.`fruit` (`id`, `name`) VALUES ('3', 'cherry');");
+    expect(sql).toContain("UPDATE `shop`.`fruit` SET `name` = 'banana' WHERE `id` = '2';");
+    expect(sql).not.toContain("qty");
+  });
 });

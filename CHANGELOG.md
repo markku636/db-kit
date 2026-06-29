@@ -1,5 +1,11 @@
 # Changelog
 
+## 資料同步強化：只同步來源 ∩ 目標的共同欄位
+
+`buildSyncDml` 加 `targetColumns`：當兩表欄位不完全相同時，**只對共同欄位產生 INSERT / UPDATE**，避免引用目標沒有的欄位導致 DML 執行失敗。
+
+> 驗證：新增 1 項 vitest（目標缺 `qty` → 產出的 INSERT/UPDATE 不含 `qty`）；共 datasync 6 項全通過；前端 `tsc` + `eslint` + `vite build` 綠燈。
+
 ## 欄位相異值分布（資料剖析）
 
 資料表欄位標題右鍵新增「**相異值分布（Top 50）**」：一鍵產生 `GROUP BY 該欄 ORDER BY 筆數` 的查詢並帶入編輯器，快速看「這欄各值各有幾筆」——找熱門值 / 髒資料 / 列舉值很實用。
