@@ -810,9 +810,18 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
     }
     items.push({ id: "act:query", label: "開啟查詢編輯器", group: "動作", icon: FileCode2, run: () => useStore.getState().setActiveTab("__query__") });
     items.push({ id: "act:theme", label: "切換深淺色主題", group: "動作", icon: Moon, run: () => useTheme.getState().toggle() });
+    // 釘選的常用表（含未展開資料庫者）也納入索引，確保最愛永遠可搜尋。
+    for (const p of pins) {
+      if (!connections.some((c) => c.id === p.connId)) continue;
+      const cn = connections.find((c) => c.id === p.connId)?.name ?? "";
+      items.push({
+        id: `pin:${p.connId}:${p.db}:${p.table}`, label: p.table, hint: `★ ${cn} · ${p.db}`, group: "常用", icon: Star,
+        run: () => { setActive(p.connId); useStore.getState().openTable(p.connId, p.db, p.table, "data", p.kind); },
+      });
+    }
     return items;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections, connectedIds, databases, expandedDbs]);
+  }, [connections, connectedIds, databases, expandedDbs, pins]);
 
   const refreshDbs = async (id: string) => {
     if (!connectedIds.has(id)) return;
