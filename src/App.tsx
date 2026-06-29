@@ -1433,6 +1433,15 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
               </button>
             )}
           </div>
+          {connectedIds.size > 1 && (
+            <div className="flex justify-end mt-1">
+              <button type="button" onClick={() => { connections.filter((c) => connectedIds.has(c.id)).forEach((c) => doDisconnect(c.id)); }}
+                title="中斷所有已連線的連線"
+                className="text-[11px] text-fg/40 hover:text-fg/70 inline-flex items-center gap-1">
+                <Icon icon={Plug} size={11} />全部中斷（{connectedIds.size}）
+              </button>
+            </div>
+          )}
         </div>
       )}
       {(() => {
