@@ -25,7 +25,15 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
   // 選定的檔案 + 預覽（檔案的自然欄名 / 前幾列）。
   const [filePath, setFilePath] = useState<string | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [targetCols, setTargetCols] = useState<string[]>([]);
   const isExcel = !!filePath && /\.(xlsx|xls)$/i.test(filePath);
+
+  // 載入目標表欄位，供對照（避免欄位不符這個最常見的匯入錯誤）。
+  useEffect(() => {
+    api.tableColumns(connId, database, table)
+      .then((cs) => setTargetCols(cs.map((c) => c.name)))
+      .catch(() => setTargetCols([]));
+  }, [connId, database, table]);
 
   const pickFile = async () => {
     const path = await pickOpenFile([
@@ -86,10 +94,16 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
         <Button variant="primary" loading={busy} onClick={doImport} disabled={busy || !filePath}>匯入</Button>
       </>}
     >
+      {targetCols.length > 0 && (
+        <div className="text-[11px] text-fg/45">目標欄位（{targetCols.length}）：<span className="mono">{targetCols.join(", ")}</span></div>
+      )}
       {filePath && (
         <div className="text-xs text-fg/55 truncate" title={filePath}>
           檔案：<span className="mono">{filePath.split(/[\\/]/).pop()}</span>
-          {preview && <span className="text-fg/40"> · 約 {preview.total_rows} 列資料</span>}
+          {preview && <span className="text-fg/40"> · 約 {preview.total_rows} 列資料 · {preview.columns.length} 欄</span>}
+          {preview && !overrideNames && targetCols.length > 0 && preview.columns.length !== targetCols.length && (
+            <span className="text-amber-400"> · 欄數與目標（{targetCols.length}）不同，可能需「重新指定欄名」</span>
+          )}
         </div>
       )}
       {preview && preview.columns.length > 0 && (
