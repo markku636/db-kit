@@ -734,6 +734,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         ["設為 NULL", () => commitEdit(r, c, "", true), false]
       );
       // 框選範圍內：整塊設 NULL（滑鼠路徑，與 Delete 一致）。
+      if (rangeEnd && inRange(r, c)) items.push(["範圍填入值…", () => fillRange(), false]);
       if (rangeEnd && inRange(r, c)) items.push(["範圍設為 NULL", () => nullRange(), false]);
       // 此格有待套用編輯時，提供單格還原（不影響其他待套用編輯）。
       if (`${r}:${c}` in edits) items.push(["還原此格", () => revertCell(r, c), false]);
@@ -766,6 +767,14 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const b = rangeBounds();
     if (!b) return;
     for (let rr = b.r1; rr <= b.r2; rr++) for (const cc of b.cols) commitEdit(rr, cc, "", true);
+  };
+  // 範圍填值（Navicat 風「填滿」）：以同一值填入框選矩形的每一格（設 NULL 請用「範圍設為 NULL」）。
+  const fillRange = async () => {
+    const b = rangeBounds();
+    if (!b) return;
+    const v = await uiPrompt("填入框選範圍的值：", { title: "範圍填值", placeholder: "值（留空＝空字串）", confirmText: "填入" });
+    if (v === null) return;
+    for (let rr = b.r1; rr <= b.r2; rr++) for (const cc of b.cols) commitEdit(rr, cc, v, false);
   };
   // 框選範圍統計（Excel 狀態列手感）：總格數 / 數值格數 / 加總 / 平均。含待套用編輯值；以 edits 為相依重算。
   const selectionStats = useMemo(() => {
