@@ -35,6 +35,7 @@ import TransferDialog from "./TransferDialog";
 import DbTransferDialog from "./DbTransferDialog";
 import CommandPalette, { type PaletteItem } from "./CommandPalette";
 import DbDataDictionary from "./DbDataDictionary";
+import DataSyncDialog from "./DataSyncDialog";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile, useEscToClose } from "./ui";
@@ -698,6 +699,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   const [exportTbl, setExportTbl] = useState<{ connId: string; db: string; table: string } | null>(null);
   const [transferTbl, setTransferTbl] = useState<{ connId: string; db: string; table: string } | null>(null);
   const [builderTbl, setBuilderTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
+  const [syncTbl, setSyncTbl] = useState<{ connId: string; db: string; table: string } | null>(null);
   const [dbTransfer, setDbTransfer] = useState<{ connId: string; db: string } | null>(null);
   const [dbDict, setDbDict] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
   const [dataDict, setDataDict] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
@@ -1292,6 +1294,8 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
       nodes.push(it("查詢建構器…", () => setBuilderTbl({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
     if (!isView && (m.kind === "mysql" || m.kind === "postgres" || m.kind === "sqlite"))
       nodes.push(it("資料傳輸…", () => setTransferTbl({ connId: m.connId, db: m.db, table: m.table })));
+    if (!isView && (m.kind === "mysql" || m.kind === "postgres" || m.kind === "sqlite"))
+      nodes.push(it("資料比對 / 同步…", () => setSyncTbl({ connId: m.connId, db: m.db, table: m.table })));
     nodes.push({
       kind: "sub", label: "傾印 SQL 檔案", children: [
         it("結構", () => dumpTableSql(m, false)),
@@ -1987,6 +1991,12 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
         <QueryBuilder connId={builderTbl.connId} kind={builderTbl.kind} initialDb={builderTbl.db} initialTable={builderTbl.table}
           onClose={() => setBuilderTbl(null)}
           onUse={(sql) => { sendQuery(builderTbl.connId, sql); setBuilderTbl(null); }} />
+      )}
+
+      {syncTbl && (
+        <DataSyncDialog connId={syncTbl.connId} database={syncTbl.db} table={syncTbl.table}
+          onClose={() => setSyncTbl(null)}
+          onUse={(sql, targetConnId) => { sendQuery(targetConnId, sql); setSyncTbl(null); }} />
       )}
 
       {dbTransfer && (
