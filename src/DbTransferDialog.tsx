@@ -41,6 +41,7 @@ export default function DbTransferDialog({ connId, database, onClose }: {
   const dstKind = connections.find((c) => c.id === dstId)?.kind;
   const srcKind = connections.find((c) => c.id === connId)?.kind;
   const sameKind = srcKind === dstKind;
+  const targetReadonly = useStore((s) => s.readonlyConns[dstId] === true);
 
   // 載入來源表（僅表）。
   useEffect(() => {
@@ -81,6 +82,7 @@ export default function DbTransferDialog({ connId, database, onClose }: {
     const tables = srcTables.filter((t) => picked.has(t));
     if (tables.length === 0) { toast.error("請至少選一張資料表"); return; }
     if (sameDb) { toast.error("目標與來源是同一個資料庫"); return; }
+    if (targetReadonly) { toast.error("目標連線為唯讀，無法寫入"); return; }
     if (createTable && !sameKind) { toast.error("自動建表僅支援相同資料庫種類"); return; }
     setBusy(true);
     setOutcomes(null);
@@ -124,7 +126,7 @@ export default function DbTransferDialog({ connId, database, onClose }: {
       bodyClassName="p-5 space-y-4 overflow-auto"
       footer={<>
         <Button variant="secondary" onClick={onClose}>{outcomes ? "關閉" : "取消"}</Button>
-        <Button variant="primary" loading={busy} onClick={run} disabled={busy || picked.size === 0 || sameDb}>
+        <Button variant="primary" loading={busy} onClick={run} disabled={busy || picked.size === 0 || sameDb || targetReadonly}>
           {busy && progress ? `傳輸中 ${progress.done}/${progress.total}…` : `傳輸選取的 ${picked.size} 表`}
         </Button>
       </>}
@@ -187,6 +189,7 @@ export default function DbTransferDialog({ connId, database, onClose }: {
       </div>
 
       {sameDb && <div className="text-xs text-red-400">目標與來源是同一個資料庫，請改選其他目標。</div>}
+      {targetReadonly && <div className="text-xs text-amber-400">目標連線為唯讀模式，無法寫入。</div>}
 
       {outcomes && (
         <div className="text-xs text-fg/60">

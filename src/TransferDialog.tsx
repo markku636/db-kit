@@ -40,6 +40,8 @@ export default function TransferDialog({ connId, database, table, onClose }: {
   const dstKind = connections.find((c) => c.id === dstId)?.kind;
   const srcKind = connections.find((c) => c.id === connId)?.kind;
   const sameKind = srcKind === dstKind;
+  // 目標連線唯讀時不可寫入（與查詢編輯器 / 資料格唯讀守門一致）。
+  const targetReadonly = useStore((s) => s.readonlyConns[dstId] === true);
   // 實際目標表名：自動建表時用新表名，否則用下拉選的既有表。
   const effectiveTable = createTable ? newTable.trim() : dstTable;
 
@@ -85,6 +87,7 @@ export default function TransferDialog({ connId, database, table, onClose }: {
   const run = async () => {
     if (busy || !effectiveTable) return;
     if (isSameTable) { toast.error("來源與目標是同一張表"); return; }
+    if (targetReadonly) { toast.error("目標連線為唯讀，無法寫入"); return; }
     if (createTable && !sameKind) { toast.error("自動建表僅支援相同資料庫種類"); return; }
     setBusy(true);
     setResult(null);
@@ -119,7 +122,7 @@ export default function TransferDialog({ connId, database, table, onClose }: {
       bodyClassName="p-5 space-y-4 overflow-auto"
       footer={<>
         <Button variant="secondary" onClick={onClose}>{result ? "關閉" : "取消"}</Button>
-        <Button variant="primary" loading={busy} onClick={run} disabled={busy || !effectiveTable || isSameTable}>開始傳輸</Button>
+        <Button variant="primary" loading={busy} onClick={run} disabled={busy || !effectiveTable || isSameTable || targetReadonly}>開始傳輸</Button>
       </>}
     >
       {/* 來源（唯讀） */}
@@ -181,6 +184,7 @@ export default function TransferDialog({ connId, database, table, onClose }: {
       )}
 
       {isSameTable && <div className="text-xs text-red-400">來源與目標是同一張表，請改選其他目標。</div>}
+      {targetReadonly && <div className="text-xs text-amber-400">目標連線為唯讀模式，無法寫入；請於連線右鍵關閉唯讀。</div>}
 
       {result && (
         <div className="mt-1 text-sm rounded border border-fg/10 bg-inset p-3 space-y-1">
