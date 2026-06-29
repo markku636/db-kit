@@ -3,7 +3,7 @@ import { ArrowRight, Database, Table2, AlertTriangle } from "lucide-react";
 import { api, DbKind, TransferResult } from "./api";
 import { useStore } from "./store";
 import { toast } from "./ui";
-import { Modal, Button, Select, Icon } from "./ui/index";
+import { Modal, Button, Select, Input, Icon } from "./ui/index";
 import { buildDeleteAllRows, isSystemDatabase } from "./sql";
 
 // 資料傳輸（致敬 Navicat Data Transfer）：把來源表資料複製到另一連線 / 資料庫 / 表。
@@ -31,10 +31,17 @@ export default function TransferDialog({ connId, database, table, onClose }: {
   const [dbs, setDbs] = useState<string[]>([]);
   const [tables, setTables] = useState<string[]>([]);
   const [truncateFirst, setTruncateFirst] = useState(false);
+  // 自動建表：目標表不存在時沿用來源 DDL 建立（限同種類）；勾選後改用「新表名」輸入。
+  const [createTable, setCreateTable] = useState(false);
+  const [newTable, setNewTable] = useState(`${table}_copy`);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<TransferResult | null>(null);
 
   const dstKind = connections.find((c) => c.id === dstId)?.kind;
+  const srcKind = connections.find((c) => c.id === connId)?.kind;
+  const sameKind = srcKind === dstKind;
+  // 實際目標表名：自動建表時用新表名，否則用下拉選的既有表。
+  const effectiveTable = createTable ? newTable.trim() : dstTable;
 
   // 載入目標連線的資料庫清單。
   useEffect(() => {
@@ -73,21 +80,25 @@ export default function TransferDialog({ connId, database, table, onClose }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dstId, dstDb]);
 
-  const isSameTable = dstId === connId && dstDb === database && dstTable === table;
+  const isSameTable = dstId === connId && dstDb === database && effectiveTable === table;
 
   const run = async () => {
-    if (busy || !dstTable) return;
+    if (busy || !effectiveTable) return;
     if (isSameTable) { toast.error("來源與目標是同一張表"); return; }
+    if (createTable && !sameKind) { toast.error("自動建表僅支援相同資料庫種類"); return; }
     setBusy(true);
     setResult(null);
     try {
-      // 可選：傳輸前清空目標表（DELETE 全表）。
-      if (truncateFirst && dstKind) {
-        await api.runQuery(dstId, buildDeleteAllRows(dstKind, dstDb, dstTable));
+      // 可選：傳輸前清空目標表（DELETE 全表）；自動建表時通常為新表，清空無妨。
+      if (truncateFirst && dstKind && !createTable) {
+        await api.runQuery(dstId, buildDeleteAllRows(dstKind, dstDb, effectiveTable));
       }
-      const res = await api.transferTable(connId, database, table, dstId, dstDb, dstTable, { stop_on_error: false });
+      const res = await api.transferTable(connId, database, table, dstId, dstDb, effectiveTable, {
+        stop_on_error: false,
+        create_table: createTable,
+      });
       setResult(res);
-      if (res.failed === 0) toast.success(`已傳輸 ${res.transferred} 列`);
+      if (res.failed === 0) toast.success(`已傳輸 ${res.transferred} 列${res.created ? "（已建表）" : ""}`);
       else toast.error(`傳輸 ${res.transferred} 列、失敗 ${res.failed} 列`);
     } catch (e: any) {
       toast.error(e?.message ?? "傳輸失敗");
@@ -108,7 +119,7 @@ export default function TransferDialog({ connId, database, table, onClose }: {
       bodyClassName="p-5 space-y-4 overflow-auto"
       footer={<>
         <Button variant="secondary" onClick={onClose}>{result ? "關閉" : "取消"}</Button>
-        <Button variant="primary" loading={busy} onClick={run} disabled={busy || !dstTable || isSameTable}>開始傳輸</Button>
+        <Button variant="primary" loading={busy} onClick={run} disabled={busy || !effectiveTable || isSameTable}>開始傳輸</Button>
       </>}
     >
       {/* 來源（唯讀） */}
@@ -140,22 +151,34 @@ export default function TransferDialog({ connId, database, table, onClose }: {
             </Select>
           )}
           <span className="text-xs text-fg/40">資料表</span>
-          <Select selectSize="sm" value={dstTable} onChange={(e) => setDstTable(e.target.value)}>
-            {tables.length === 0 && <option value="">（此庫無資料表）</option>}
-            {tables.map((t) => <option key={t} value={t}>{t}</option>)}
-          </Select>
+          {createTable ? (
+            <Input inputSize="sm" value={newTable} onChange={(e) => setNewTable(e.target.value)} placeholder="新表名（將自動建立）" />
+          ) : (
+            <Select selectSize="sm" value={dstTable} onChange={(e) => setDstTable(e.target.value)}>
+              {tables.length === 0 && <option value="">（此庫無資料表）</option>}
+              {tables.map((t) => <option key={t} value={t}>{t}</option>)}
+            </Select>
+          )}
         </div>
       </div>
 
       <div className="flex items-start gap-1.5 text-[11px] text-fg/45">
         <Icon icon={Database} size={12} className="mt-0.5 shrink-0" />
-        <span>以「來源 ∩ 目標」的同名欄位傳輸；目標表需先存在。主鍵衝突的列會計為失敗並回報。</span>
+        <span>以「來源 ∩ 目標」的同名欄位傳輸；目標表需先存在或勾選自動建立。主鍵衝突的列會計為失敗並回報。</span>
       </div>
 
-      <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-        <input type="checkbox" checked={truncateFirst} onChange={(e) => setTruncateFirst(e.target.checked)} />
-        <span className="inline-flex items-center gap-1">傳輸前清空目標表 <Icon icon={AlertTriangle} size={12} className="text-amber-400" /></span>
+      <label className={`flex items-center gap-2 text-sm cursor-pointer select-none ${sameKind ? "" : "opacity-40"}`}>
+        <input type="checkbox" checked={createTable} disabled={!sameKind}
+          onChange={(e) => setCreateTable(e.target.checked)} />
+        <span>目標表不存在時自動建立（沿用來源結構{sameKind ? "" : "；限相同資料庫種類"}）</span>
       </label>
+
+      {!createTable && (
+        <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+          <input type="checkbox" checked={truncateFirst} onChange={(e) => setTruncateFirst(e.target.checked)} />
+          <span className="inline-flex items-center gap-1">傳輸前清空目標表 <Icon icon={AlertTriangle} size={12} className="text-amber-400" /></span>
+        </label>
+      )}
 
       {isSameTable && <div className="text-xs text-red-400">來源與目標是同一張表，請改選其他目標。</div>}
 
@@ -164,6 +187,7 @@ export default function TransferDialog({ connId, database, table, onClose }: {
           <div>
             傳輸 <span className="text-emerald-400">{result.transferred}</span> 列
             {result.failed > 0 && <> · 失敗 <span className="text-red-400">{result.failed}</span> 列</>}
+            {result.created && <span className="ml-2 text-[11px] text-sky-300">（已自動建立目標表）</span>}
           </div>
           <div className="text-xs text-fg/50">欄位：<span className="mono">{result.columns.join(", ") || "—"}</span></div>
           {result.skipped_columns.length > 0 && (

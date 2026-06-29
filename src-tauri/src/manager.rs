@@ -28,6 +28,19 @@ enum Active {
 }
 
 impl Active {
+    /// 此連線的資料庫種類（供資料傳輸判斷同類型以決定能否沿用來源 DDL 建表）。
+    /// 外部 gateway（Dyn）一律視為 External。
+    fn kind(&self) -> DbKind {
+        match self {
+            Active::Mysql(_) => DbKind::Mysql,
+            Active::Postgres(_) => DbKind::Postgres,
+            Active::Sqlite(_) => DbKind::Sqlite,
+            Active::Mongo(_) => DbKind::Mongo,
+            Active::Redis(_) => DbKind::Redis,
+            Active::Dyn(_) => DbKind::External,
+        }
+    }
+
     async fn ping(&self) -> AppResult<()> {
         match self {
             Active::Mysql(d) => d.ping().await,
@@ -557,6 +570,11 @@ impl ConnectionManager {
 
     pub async fn list_tables(&self, id: &str, database: &str) -> AppResult<Vec<TableInfo>> {
         self.get(id)?.active.list_tables(database).await
+    }
+
+    /// 連線的資料庫種類（供資料傳輸判斷同類型）。
+    pub fn kind(&self, id: &str) -> AppResult<DbKind> {
+        Ok(self.get(id)?.active.kind())
     }
 
     pub async fn table_columns(

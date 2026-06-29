@@ -153,12 +153,14 @@ export interface ImportResult {
 // 資料傳輸（Data Transfer）：把來源表資料複製到目標表（可跨連線 / 跨庫）。
 export interface TransferOptions {
   stop_on_error?: boolean;
+  create_table?: boolean; // 目標表不存在時沿用來源 DDL 自動建立（限同種類）
 }
 export interface TransferResult {
   transferred: number;
   failed: number;
   columns: string[];          // 實際傳輸的欄位（來源 ∩ 目標）
   skipped_columns: string[];  // 來源有、目標無 → 略過
+  created: boolean;           // 本次是否自動建立了目標表
   errors: string[];
 }
 

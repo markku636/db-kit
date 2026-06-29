@@ -1767,11 +1767,12 @@ async fn transfer_table_copies_intersection_rows() {
     mgr.query(id, "INSERT INTO src (id, name, extra) VALUES (1,'a','x'),(2,'b',NULL),(3,'c','z')").await.unwrap();
     mgr.query(id, "CREATE TABLE dst (id INTEGER PRIMARY KEY, name TEXT)").await.unwrap();
 
-    let opts = crate::transfer::TransferOptions { stop_on_error: false };
+    let opts = crate::transfer::TransferOptions { stop_on_error: false, create_table: false };
     let res = crate::transfer::transfer_table(&mgr, id, "main", "src", id, "main", "dst", &opts)
         .await
         .unwrap();
     assert_eq!(res.transferred, 3, "應傳輸 3 列，錯誤：{:?}", res.errors);
+    assert!(!res.created, "目標已存在，不應自動建表");
     assert_eq!(res.failed, 0);
     assert_eq!(res.columns, vec!["id".to_string(), "name".to_string()]);
     assert_eq!(res.skipped_columns, vec!["extra".to_string()], "來源獨有欄位應被略過");
@@ -1803,6 +1804,40 @@ async fn transfer_rejects_same_table() {
         crate::transfer::transfer_table(&mgr, id, "main", "t", id, "main", "t", &opts).await.is_err(),
         "傳輸到同一張表應被拒絕"
     );
+    mgr.disconnect(id).await;
+    let _ = std::fs::remove_file(dbfile);
+}
+
+/// 資料傳輸 create_table：目標表不存在時，沿用來源 DDL 自動建立並傳資料。
+#[tokio::test]
+async fn transfer_auto_creates_target_table() {
+    let dbfile = format!("dbkit_transfer_create_{}.db", std::process::id());
+    let dbfile = dbfile.as_str();
+    let _ = std::fs::remove_file(dbfile);
+    let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile));
+    let mgr = crate::manager::ConnectionManager::new();
+    mgr.connect(c.clone()).await.unwrap();
+    let id = c.id.as_str();
+    mgr.query(id, "CREATE TABLE src (id INTEGER PRIMARY KEY, name TEXT)").await.unwrap();
+    mgr.query(id, "INSERT INTO src (id, name) VALUES (1,'a'),(2,'b')").await.unwrap();
+
+    let opts = crate::transfer::TransferOptions { stop_on_error: false, create_table: true };
+    let res = crate::transfer::transfer_table(&mgr, id, "main", "src", id, "main", "fresh", &opts)
+        .await
+        .unwrap();
+    assert!(res.created, "目標不存在 → 應自動建表");
+    assert_eq!(res.transferred, 2, "錯誤：{:?}", res.errors);
+
+    // 目標表確實建立且有資料。
+    let tables = mgr.list_tables(id, "main").await.unwrap();
+    assert!(tables.iter().any(|t| t.name == "fresh"), "應建立 fresh 表");
+    let pd = mgr
+        .table_data(id, "main", "fresh", &dq(vec![], vec![Sort { column: "id".into(), dir: SortDir::Asc }]))
+        .await
+        .unwrap();
+    assert_eq!(pd.total_rows, 2);
+    assert_eq!(pd.rows[0][col_at(&pd.columns, "name")].as_deref(), Some("a"));
+
     mgr.disconnect(id).await;
     let _ = std::fs::remove_file(dbfile);
 }

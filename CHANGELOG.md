@@ -1,5 +1,15 @@
 # Changelog
 
+## 資料傳輸：自動建立目標表（傳到全新資料庫）
+
+延伸上一版的資料傳輸——目標表不存在時，**沿用來源結構自動建表**再灌資料，於是可一鍵把表複製到全新的資料庫（限相同資料庫種類）。
+
+> 驗證：`rewrite_create_table_name`（改寫來源 DDL 的表名為目標限定名）抽為純函式 + 5 項單元測試（MySQL / PostgreSQL / SQLite / 大小寫 / 非法輸入）；新增 1 項 SQLite 端到端整合測試（自動建表 + 傳資料）；共 8 項 transfer 測試通過、新程式碼 `cargo clippy` 零警告；前端 `tsc` + `eslint` + `vite build` 綠燈。
+
+- **傳輸對話框新增「目標表不存在時自動建立」**：勾選後改以「新表名」輸入（預設 `<來源表>_copy`），目標若已存在則沿用、不覆蓋。
+- **DDL 改寫**：定位 `CREATE TABLE … (` 把舊表名（含 schema / 各式引號寫法）整段換成目標限定名（`db.table`，SQLite 不加 schema），保留 `IF NOT EXISTS` 與欄位定義原樣——對 MySQL `SHOW CREATE TABLE`、PostgreSQL 重建式、SQLite 原始 DDL 皆穩健。
+- **同種類守衛**：跨資料庫種類（如 MySQL → PostgreSQL）不沿用 DDL，明確要求先手動建表；後端 `ConnectionManager::kind` 提供連線種類判斷。
+
 ## 資料傳輸（Data Transfer，致敬 Navicat）
 
 把一張表的資料複製到**另一個連線 / 資料庫 / 表**——跨連線搬資料、把正式環境的表灌進測試庫、同庫複製到另一張表，都不必再手動匯出再匯入。資料表右鍵新增「資料傳輸…」（關聯式：MySQL / PostgreSQL / SQLite）。
