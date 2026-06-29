@@ -30,6 +30,7 @@ import ExportDialog from "./ExportDialog";
 import ImportDialog from "./ImportDialog";
 import DataDictionary from "./DataDictionary";
 import DataGenerator from "./DataGenerator";
+import QueryBuilder from "./QueryBuilder";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile, useEscToClose } from "./ui";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
@@ -54,7 +55,7 @@ import {
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
-  GitBranch, FileText,
+  GitBranch, FileText, Blocks,
   type LucideIcon,
 } from "lucide-react";
 
@@ -2159,6 +2160,8 @@ function QueryPane() {
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [plan, setPlan] = useState<PlanNode | null>(null);
   const [planErr, setPlanErr] = useState<string | null>(null);
+  // 視覺化查詢建構器（致敬 Navicat SQL Builder）：僅關聯式（mysql/postgres/sqlite）。
+  const [builderOpen, setBuilderOpen] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   // 編輯器高度：可拖曳分隔線調整（編輯器 ↔ 結果），記憶於 localStorage。
   const editor = useResizable({
@@ -2667,6 +2670,13 @@ function QueryPane() {
               )}
             </div>
             {supportsExplain && (
+              <button type="button" onClick={() => setBuilderOpen(true)} disabled={running}
+                title="視覺化查詢建構器：勾選表 / 欄、視覺化 JOIN、條件 / 排序 / 聚合，產生 SELECT 並帶入編輯器"
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
+                <Icon icon={Blocks} size={13} />建構器
+              </button>
+            )}
+            {supportsExplain && (
               <button type="button" onClick={() => persistSql(formatSql(sql))} disabled={running || !sql.trim()}
                 title="格式化 SQL：主要子句換行（僅調整字面值外空白，不改語意）(Ctrl+Shift+F)"
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
@@ -2811,6 +2821,15 @@ function QueryPane() {
           )}
         </div>
       </div>
+      {builderOpen && activeId && kind && (
+        <QueryBuilder
+          connId={activeId}
+          kind={kind}
+          initialDb={queryDb}
+          onClose={() => setBuilderOpen(false)}
+          onUse={(generated) => { persistSql(generated); setBuilderOpen(false); }}
+        />
+      )}
     </div>
   );
 }

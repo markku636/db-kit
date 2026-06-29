@@ -71,7 +71,9 @@ import {
   userListSql,
   isDangerousRedisCommand,
   lintSqlStructure,
+  buildSelectQuery,
   type NewColumn,
+  type QbSpec,
 } from "./sql";
 
 describe("splitSqlStatements", () => {
@@ -861,5 +863,88 @@ describe("MySQL user management DDL", () => {
     expect(buildRevoke(["DELETE"], "`shop`.`orders`", "app", "%")).toBe(
       "REVOKE DELETE ON `shop`.`orders` FROM 'app'@'%'",
     );
+  });
+});
+
+describe("buildSelectQuery（視覺化查詢建構器）", () => {
+  const base = (over: Partial<QbSpec>): QbSpec => ({
+    db: "shop",
+    baseTable: "orders",
+    tables: [{ name: "orders" }],
+    columns: [],
+    joins: [],
+    conds: [],
+    orders: [],
+    ...over,
+  });
+
+  it("無基底表回傳空字串", () => {
+    expect(buildSelectQuery("mysql", base({ baseTable: "" }))).toBe("");
+  });
+
+  it("單表無選欄 → SELECT *（識別字以方言跳脫）", () => {
+    expect(buildSelectQuery("mysql", base({}))).toBe("SELECT * FROM `shop`.`orders`;");
+    expect(buildSelectQuery("postgres", base({}))).toBe('SELECT * FROM "shop"."orders";');
+    expect(buildSelectQuery("sqlite", base({}))).toBe("SELECT * FROM `orders`;");
+  });
+
+  it("單表選欄不加表前綴（無歧義）", () => {
+    expect(
+      buildSelectQuery("mysql", base({ columns: [{ table: "orders", column: "id" }, { table: "orders", column: "total" }] })),
+    ).toBe("SELECT `id`, `total` FROM `shop`.`orders`;");
+  });
+
+  it("多表選欄加表前綴 + JOIN ON 條件", () => {
+    const sql = buildSelectQuery("mysql", base({
+      tables: [{ name: "orders" }, { name: "users" }],
+      columns: [{ table: "orders", column: "id" }, { table: "users", column: "name" }],
+      joins: [{ type: "LEFT", leftTable: "orders", leftCol: "user_id", rightTable: "users", rightCol: "id" }],
+    }));
+    expect(sql).toBe(
+      "SELECT `orders`.`id`, `users`.`name` FROM `shop`.`orders` LEFT JOIN `shop`.`users` ON `orders`.`user_id` = `users`.`id`;",
+    );
+  });
+
+  it("WHERE：數字原樣、字串加引號、IS NULL 無值、IN 拆逗號、AND/OR 串接", () => {
+    const sql = buildSelectQuery("mysql", base({
+      conds: [
+        { table: "orders", column: "total", op: ">", value: "100" },
+        { table: "orders", column: "status", op: "=", value: "paid", conj: "AND" },
+        { table: "orders", column: "note", op: "IS NULL", conj: "OR" },
+        { table: "orders", column: "id", op: "IN", value: "1, 2, 3", conj: "OR" },
+      ],
+    }));
+    expect(sql).toBe(
+      "SELECT * FROM `shop`.`orders` WHERE `total` > 100 AND `status` = 'paid' OR `note` IS NULL OR `id` IN (1, 2, 3);",
+    );
+  });
+
+  it("聚合自動 GROUP BY 其餘欄位；別名 AS 跳脫", () => {
+    const sql = buildSelectQuery("mysql", base({
+      columns: [
+        { table: "orders", column: "status" },
+        { table: "orders", column: "id", agg: "COUNT", alias: "cnt" },
+      ],
+    }));
+    expect(sql).toBe("SELECT `status`, COUNT(`id`) AS `cnt` FROM `shop`.`orders` GROUP BY `status`;");
+  });
+
+  it("COUNT DISTINCT / DISTINCT / ORDER BY / LIMIT 組合", () => {
+    const sql = buildSelectQuery("postgres", base({
+      distinct: true,
+      columns: [{ table: "orders", column: "user_id", agg: "COUNT_DISTINCT", alias: "buyers" }],
+      orders: [{ table: "orders", column: "user_id", dir: "DESC" }],
+      limit: 50,
+    }));
+    expect(sql).toBe(
+      'SELECT DISTINCT COUNT(DISTINCT "user_id") AS "buyers" FROM "shop"."orders" ORDER BY "user_id" DESC LIMIT 50;',
+    );
+  });
+
+  it("MySQL 反斜線字串值加倍跳脫（沿用 sqlLiteral 方言）", () => {
+    const sql = buildSelectQuery("mysql", base({
+      conds: [{ table: "orders", column: "path", op: "=", value: "a\\b" }],
+    }));
+    expect(sql).toBe("SELECT * FROM `shop`.`orders` WHERE `path` = 'a\\\\b';");
   });
 });

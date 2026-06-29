@@ -518,6 +518,136 @@ export function formatSql(sql: string): string {
   return out.replace(/[ \t]+\n/g, "\n").replace(/^\s+/, "").trim();
 }
 
+// ---- 視覺化查詢建構器（Visual Query Builder，致敬 Navicat 的 SQL Builder）----
+// 由 QueryBuilder.tsx 的視覺狀態組出 SELECT 語句。純函式、跨方言（MySQL / PostgreSQL / SQLite），
+// 識別字以 quoteIdent 跳脫、值以 sqlLiteral 跳脫（數字字面值原樣），可單元測試。
+export type QbAgg = "" | "COUNT" | "COUNT_DISTINCT" | "SUM" | "AVG" | "MIN" | "MAX";
+export type QbJoinType = "INNER" | "LEFT" | "RIGHT" | "FULL";
+export type QbConj = "AND" | "OR";
+
+export interface QbTable { name: string; alias?: string }
+export interface QbColumn { table: string; column: string; agg?: QbAgg; alias?: string }
+export interface QbJoin { type: QbJoinType; leftTable: string; leftCol: string; rightTable: string; rightCol: string }
+export interface QbCond { table: string; column: string; op: string; value?: string; conj?: QbConj }
+export interface QbOrder { table: string; column: string; dir: "ASC" | "DESC" }
+export interface QbSpec {
+  db: string;
+  baseTable: string;
+  tables: QbTable[];
+  columns: QbColumn[];
+  joins: QbJoin[];
+  conds: QbCond[];
+  orders: QbOrder[];
+  distinct?: boolean;
+  limit?: number | null;
+}
+
+// 是否為純數字字面值（整數 / 小數 / 負號）——是則 WHERE / IN 不加引號（當數值比較）。
+function isNumericLiteral(v: string): boolean {
+  return /^-?\d+(\.\d+)?$/.test(v.trim());
+}
+
+// 單一條件值 → SQL 片段（數字原樣、其餘字串字面值）。
+function qbValueSql(kind: DbKind, v: string): string {
+  const t = v.trim();
+  return isNumericLiteral(t) ? t : sqlLiteral(kind, t);
+}
+
+/**
+ * 由視覺建構規格組出 SELECT 語句（單行，呼叫端可再以 formatSql 美化）。
+ * - 多表時欄位以「表別名/表名.欄名」限定，避免歧義。
+ * - 有聚合欄位時，自動以其餘未聚合的顯示欄位 GROUP BY（Navicat 風）。
+ * - WHERE 由左至右以各條件自身的 AND/OR 串接（首條的連接詞忽略）。
+ * 回傳空字串表規格不完整（無基底表）。
+ */
+export function buildSelectQuery(kind: DbKind, spec: QbSpec): string {
+  if (!spec.baseTable) return "";
+  const qi = (id: string) => quoteIdent(kind, id);
+  // 表名 → 參照（有別名用別名，否則用表名本身）。
+  const refOf = (table: string) => {
+    const t = spec.tables.find((x) => x.name === table);
+    return t?.alias?.trim() ? t.alias.trim() : table;
+  };
+  const qcol = (table: string, column: string) => `${qi(refOf(table))}.${qi(column)}`;
+  const multi = spec.tables.length > 1;
+  // 欄位參照：單表時可省略表前綴，多表時必加（避免歧義）。
+  const colRef = (table: string, column: string) => (multi ? qcol(table, column) : qi(column));
+
+  // SELECT 清單
+  const selectExprs: string[] = [];
+  for (const c of spec.columns) {
+    const ref = colRef(c.table, c.column);
+    let expr: string;
+    switch (c.agg) {
+      case "COUNT": expr = `COUNT(${ref})`; break;
+      case "COUNT_DISTINCT": expr = `COUNT(DISTINCT ${ref})`; break;
+      case "SUM": expr = `SUM(${ref})`; break;
+      case "AVG": expr = `AVG(${ref})`; break;
+      case "MIN": expr = `MIN(${ref})`; break;
+      case "MAX": expr = `MAX(${ref})`; break;
+      default: expr = ref;
+    }
+    if (c.alias?.trim()) expr += ` AS ${qi(c.alias.trim())}`;
+    selectExprs.push(expr);
+  }
+  const selectList = selectExprs.length ? selectExprs.join(", ") : "*";
+
+  // FROM（基底表）+ JOIN
+  const fromOf = (table: string) => {
+    const t = spec.tables.find((x) => x.name === table);
+    const base = qualifiedName(kind, spec.db, table);
+    return t?.alias?.trim() ? `${base} AS ${qi(t.alias.trim())}` : base;
+  };
+  let body = `FROM ${fromOf(spec.baseTable)}`;
+  for (const j of spec.joins) {
+    if (!j.leftTable || !j.leftCol || !j.rightTable || !j.rightCol) continue;
+    body += ` ${j.type} JOIN ${fromOf(j.rightTable)} ON ${qcol(j.leftTable, j.leftCol)} = ${qcol(j.rightTable, j.rightCol)}`;
+  }
+
+  // WHERE
+  const valid = spec.conds.filter((c) => c.table && c.column && c.op);
+  if (valid.length) {
+    const parts: string[] = [];
+    valid.forEach((c, i) => {
+      const ref = colRef(c.table, c.column);
+      const op = c.op.toUpperCase();
+      let frag: string;
+      if (op === "IS NULL" || op === "IS NOT NULL") {
+        frag = `${ref} ${op}`;
+      } else if (op === "IN" || op === "NOT IN") {
+        const items = (c.value ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+          .map((s) => qbValueSql(kind, s));
+        frag = `${ref} ${op} (${items.join(", ")})`;
+      } else {
+        frag = `${ref} ${op} ${qbValueSql(kind, c.value ?? "")}`;
+      }
+      parts.push(i === 0 ? frag : `${c.conj ?? "AND"} ${frag}`);
+    });
+    body += ` WHERE ${parts.join(" ")}`;
+  }
+
+  // GROUP BY（有聚合時，以未聚合的顯示欄位分組）
+  const hasAgg = spec.columns.some((c) => c.agg);
+  if (hasAgg) {
+    const grp = spec.columns.filter((c) => !c.agg).map((c) => colRef(c.table, c.column));
+    if (grp.length) body += ` GROUP BY ${grp.join(", ")}`;
+  }
+
+  // ORDER BY
+  const orders = spec.orders.filter((o) => o.table && o.column);
+  if (orders.length) {
+    body += ` ORDER BY ${orders.map((o) => `${colRef(o.table, o.column)} ${o.dir}`).join(", ")}`;
+  }
+
+  // LIMIT（三大關聯式方言皆支援）
+  if (spec.limit != null && spec.limit > 0) body += ` LIMIT ${Math.floor(spec.limit)}`;
+
+  return `SELECT ${spec.distinct ? "DISTINCT " : ""}${selectList} ${body};`;
+}
+
 // ---- 查詢歷史（localStorage，最近在前，去重，上限 50）----
 export const QUERY_HISTORY_KEY = "db-kit:queryHistory";
 const QUERY_HISTORY_CAP = 50;

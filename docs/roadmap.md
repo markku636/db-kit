@@ -34,6 +34,7 @@
 | — | **CSV 資料匯入**（RFC4180 解析、空欄→NULL、逐列回報） | ✅ 完成 |
 | — | 轉儲整庫結構 SQL（所有表建表語句） | ✅ 完成 |
 | — | PostgreSQL 嚴格型別寫入修正（整數 / 複合主鍵 CRUD、數值範圍篩選原生比較） | ✅ 完成 |
+| — | **視覺化查詢建構器**（Visual Query Builder，致敬 Navicat）：勾選表 / 欄、外鍵自動 JOIN、WHERE / GROUP BY 聚合 / ORDER BY / DISTINCT / LIMIT，即時產生 SELECT 帶入編輯器 | ✅ 完成 |
 
 ## 各資料庫備份機制（規劃）
 

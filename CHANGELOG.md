@@ -1,5 +1,25 @@
 # Changelog
 
+## 視覺化查詢建構器（Visual Query Builder，致敬 Navicat SQL Builder）
+
+對標 Navicat 旗艦的 SQL Builder：不寫 SQL，靠勾選與下拉即可組出 SELECT 查詢，再一鍵帶入查詢編輯器執行 / 微調。僅關聯式（MySQL / PostgreSQL / SQLite）。
+
+> 驗證：前端 `tsc --noEmit` + `eslint` + `vite build` 綠燈；新增 `buildSelectQuery` 純函式與 8 項 vitest（共 119 項全通過）。
+
+### 功能
+- **查詢面板工具列新增「建構器」**（Blocks 圖示，緊鄰格式化 / 分析）；開啟全幅對話框。
+- **左欄挑表**：列出目前資料庫所有表（可搜尋過濾），點選加入 / 移除；加入時自動帶入該表全部欄位到 SELECT。
+- **表卡欄位勾選**：每張已選表一張卡，逐欄勾選是否顯示（不勾＝`SELECT *`），標示 PK（琥珀）/ FK（連結圖示）/ 資料型別；首張為「基底表」。
+- **視覺化 JOIN**：選 2 張以上表時，**由外鍵自動推斷 JOIN**（加入新表即試建、或按「由外鍵自動連接」整批補齊）；可手動改 JOIN 型別（INNER / LEFT / RIGHT / FULL，MySQL 隱藏 FULL）與左右連接欄位。
+- **WHERE 條件**：表.欄 + 運算子（`= <> > >= < <= LIKE NOT LIKE IN NOT IN IS NULL IS NOT NULL`）+ 值；多條以各自 AND / OR 串接；數字值原樣比較、字串自動加引號（方言感知，MySQL 反斜線加倍）、`IN` 拆逗號、`IS NULL` 免值。
+- **聚合 / 分組**：每個顯示欄位可設 `COUNT / COUNT DISTINCT / SUM / AVG / MIN / MAX` 與別名；**有聚合時自動以其餘欄位 GROUP BY**（Navicat 風）。
+- **ORDER BY**（多欄 ASC / DESC）、**DISTINCT**、**LIMIT**。
+- **右欄即時 SQL 預覽**（經 `formatSql` 美化），可**複製 SQL**或**帶入查詢編輯器**（沿用 per-連線 持久化）。
+
+### 工程
+- SQL 產生抽為 `src/sql.ts` 的純函式 `buildSelectQuery(kind, spec)`：跨方言識別字 / 字面值跳脫，單表省前綴、多表加前綴，聚合自動分組，可單元測試（零 React / Tauri 依賴）。
+- 結構來源沿用既有 `er_model` command（一次取得表 + 欄 + 外鍵關係），無需新增後端。
+
 ## v0.1.7
 
 - 啟用時的 splash logo 放大（`min(46vw, 440px)` → `min(62vw, 620px)`），開場品牌標誌更醒目。
