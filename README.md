@@ -138,12 +138,13 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 
 | 範疇 | 重點功能 |
 |------|----------|
-| 關聯式（MySQL / PostgreSQL / SQLite） | 完整 CRUD、DDL 欄位編輯、索引管理、EXPLAIN 效能分析、RETURNING 顯示、ER 圖 |
+| 關聯式（MySQL / PostgreSQL / SQLite） | 完整 CRUD、DDL 欄位編輯、索引 / 外鍵管理、EXPLAIN + 視覺化執行計畫、RETURNING 顯示、ER 圖、結構比對 |
 | 文件型（MongoDB） | 文件攤平成表格、find / 聚合管線、CRUD-via-JSON、索引管理 |
 | 鍵值型（Redis） | 五種結構檢視＋編輯、命名空間鍵樹、值格式化、Pub/Sub、維運面板、命令列 Console |
-| 通用資料格 | 多欄複合篩選（9 運算子 + AND·OR）、多欄排序、依值篩選、CSV 匯入、多格式匯出、欄位剖析 |
-| 查詢編輯器 | 語法高亮、查詢歷史 / 收藏、只執行反白段、結果一鍵複製 / 匯出 |
-| 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入 |
+| 通用資料格 | 多欄複合篩選（9 運算子 + AND·OR）、多欄排序、依值篩選、**外鍵雙向導覽**（跳至參照 / 找參照此列者）、**Excel + CSV 匯入**、多格式 + **Excel 匯出**、複製為 INSERT/UPDATE/DELETE/IN、欄位剖析 + 相異值分布 |
+| 查詢工作區 | 語法高亮 + 表/欄自動完成、**視覺化查詢建構器**（JOIN / 聚合 / HAVING / 分頁 / 即時預覽）、**SQL 片段庫**、**參數化查詢 `:name`**、格式化 / 壓縮 / 關鍵字大小寫、查詢歷史 / 收藏、只執行反白段、結果一鍵複製 / 匯出 |
+| 跨庫 / 跨連線 | **資料傳輸**（單表 / 整庫 / 不存在時自動建表）、**資料比對 / 同步**（產生 INSERT/UPDATE/DELETE）、**整庫文件**（HTML / Markdown）、**命令面板 Ctrl+K** 快速跳轉 |
+| 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、釘選常用表 |
 | AI 助手 | 右側面板串接本機 Claude CLI：串流問答、撰寫 / 優化 SQL，可附帶目前 schema |
 | 運維 | 連線設定持久化、排程備份 + 備份歷史、連線池監控 + Ping、跨平台桌面 App |
 
