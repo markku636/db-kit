@@ -44,7 +44,7 @@ import {
   loadSavedQueries, persistSavedQueries,
   loadSnippets, persistSnippets, upsertSnippet, removeSnippet, type SqlSnippet,
   resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, splitSqlStatements, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand,
-  rectToTsv, rangeStats,
+  rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
@@ -3213,11 +3213,21 @@ function ResultTable({ result, onViewChange }: { result: QueryResult; onViewChan
     : null;
   const inRange = (r: number, c: number) =>
     !!rangeBox && r >= rangeBox.r1 && r <= rangeBox.r2 && c >= rangeBox.c1 && c <= rangeBox.c2;
-  const copyRange = () => {
-    if (!rangeBox) return;
+  const rangeRC = () => {
+    if (!rangeBox) return null;
     const rows = Array.from({ length: rangeBox.r2 - rangeBox.r1 + 1 }, (_, k) => rangeBox.r1 + k);
     const cols = Array.from({ length: rangeBox.c2 - rangeBox.c1 + 1 }, (_, k) => rangeBox.c1 + k);
-    copyToClipboard(rectToTsv((r, c) => cell(r, c), rows, cols), `已複製 ${rows.length}×${cols.length} 區塊 (TSV)`);
+    return { rows, cols };
+  };
+  const copyRange = () => {
+    const rc = rangeRC();
+    if (!rc) return;
+    copyToClipboard(rectToTsv((r, c) => cell(r, c), rc.rows, rc.cols), `已複製 ${rc.rows.length}×${rc.cols.length} 區塊 (TSV)`);
+  };
+  const copyRangeMarkdown = () => {
+    const rc = rangeRC();
+    if (!rc) return;
+    copyToClipboard(rectToMarkdown((r, c) => cell(r, c), rc.rows, rc.cols, (c) => result.columns[c]), `已複製 ${rc.rows.length}×${rc.cols.length} 區塊 (Markdown)`);
   };
   // 框選範圍統計（Excel 狀態列手感）。以 selected/rangeEnd/viewRows 為相依重算。
   const selStats = useMemo(() => {
@@ -3478,7 +3488,10 @@ function ResultTable({ result, onViewChange }: { result: QueryResult; onViewChan
                 ["檢視此列（表單）…", () => setRowDetail(menu.r)],
                 ["複製值", () => copyCell(menu.r, menu.c)],
                 ...(rangeEnd && inRange(menu.r, menu.c)
-                  ? [["複製範圍 (TSV)", () => copyRange()] as [string, () => void]]
+                  ? [
+                      ["複製範圍 (TSV)", () => copyRange()] as [string, () => void],
+                      ["複製範圍 (Markdown)", () => copyRangeMarkdown()] as [string, () => void],
+                    ]
                   : []),
                 ["複製整列 (TSV)", () => copyRowTsv(menu.r)],
                 ["複製整列 (JSON)", () => copyRowJson(menu.r)],
