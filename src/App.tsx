@@ -42,7 +42,7 @@ import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
   loadSavedQueries, persistSavedQueries,
   loadSnippets, persistSnippets, upsertSnippet, removeSnippet, type SqlSnippet,
-  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, splitSqlStatements, statementAtOffset, isDangerousStatement, isDangerousRedisCommand,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, splitSqlStatements, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand,
   rectToTsv, rangeStats,
   quoteIdent, qualifiedName,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
@@ -618,7 +618,7 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 
 // ---- 左側連線/物件樹 ----
 function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; width: number }) {
-  const { connections, connectedIds, activeId, setActive, selectedNode, selectNode } = useStore();
+  const { connections, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
   const [databases, setDatabases] = useState<Record<string, string[]>>({});
   // 已展開的資料庫: 鍵為 connId:db，值為樹狀分組（資料表 / 檢視 / 函式）
   const [expandedDbs, setExpandedDbs] = useState<Record<string, DbObjects>>({});
@@ -1504,6 +1504,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                 />
               )}
               <span className="truncate flex-1" title={`${c.name} · ${KIND_META[c.kind].label} · ${c.host}:${c.port}`}>{c.name}</span>
+              {readonlyConns[c.id] && <span className="shrink-0 text-[9px] px-1 rounded bg-amber-400/20 text-amber-300/90" title="唯讀模式：擋寫入 / DDL 與資料格編輯">唯讀</span>}
               <button type="button" title="編輯連線"
                 onClick={(e) => { e.stopPropagation(); onEdit(c); }}
                 className="w-5 h-5 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-fg/80 hidden group-hover:flex">
@@ -1737,6 +1738,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                       }), false] as [string, () => void, boolean],
                     ]
                   : []),
+                [readonlyConns[menu.id] ? "關閉唯讀模式" : "設為唯讀模式（擋寫入 / DDL）", () => useStore.getState().setConnReadonly(menu.id, !readonlyConns[menu.id]), false],
                 ["屬性…", () => setConnProps(menuConn), false],
                 ["編輯…", () => onEdit(menuConn), false],
                 ["複製連線…", () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: `${menuConn.name} 複本`, password: "" }), false],
@@ -2448,6 +2450,12 @@ function QueryPane() {
         // isSql 經切分後可能為空；external 未切分，逐條檢查是否全為註解。
         if (isSqlLike && userStatements.every((s) => !hasExecutableSql(s))) {
           toast.info("僅含註解，無可執行語句");
+          return;
+        }
+        // 唯讀連線：擋下任何寫入 / DDL 語句（INSERT/UPDATE/DELETE/CREATE/ALTER/DROP… 與交易控制）。
+        const roState = useStore.getState();
+        if (isSqlLike && roState.activeId && roState.readonlyConns[roState.activeId] === true && userStatements.some((s) => isWriteStatement(s))) {
+          toast.error("此連線為唯讀，已擋下寫入 / DDL 語句。可在連線右鍵關閉「唯讀模式」。");
           return;
         }
         // 「目前資料庫」選擇器：把所選庫以 USE / search_path 前綴併入「每一條」語句一起送出。

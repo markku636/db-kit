@@ -1,5 +1,16 @@
 # Changelog
 
+## 連線唯讀模式（致敬 Navicat / DataGrip read-only connection）
+
+把連線標為**唯讀**，擋掉誤改正式環境資料的兩大途徑——搭配連線色標（紅＝正式）更安全。
+
+> 驗證：`connReadonly.ts`（純函式存取）+ `isWriteStatement`（sql.ts）各附 vitest（共 166 項全通過）；前端 `tsc` + `eslint` + `vite build` 綠燈。
+
+- **連線右鍵切換「設為唯讀模式」**；側欄連線列顯示「唯讀」徽章；狀態 per-連線 localStorage 持久化（透過 store 反應式套用）。
+- **查詢編輯器**：執行前若任一語句為寫入 / DDL（`INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/TRUNCATE…` 含交易控制）即擋下並提示；`SELECT/SHOW/EXPLAIN/WITH…SELECT` 照常。
+- **資料格**：唯讀時不可編輯儲存格 / 新增 / 刪除列（`editable` 連動）。
+- 為前端層防護（連線本身仍可寫），目的在防手滑；關閉唯讀即恢復。
+
 ## 視覺化查詢建構器：計數（總列數）
 
 建構器右側面板新增「**計數**」鈕：把目前查詢包成 `COUNT(*)` 子查詢，立刻得知這查詢會回多少列（不必先「帶入編輯器」再手動改寫）。

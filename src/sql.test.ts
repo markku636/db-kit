@@ -73,6 +73,7 @@ import {
   lintSqlStructure,
   buildSelectQuery,
   buildCountQuery,
+  isWriteStatement,
   buildInClause,
   transformKeywordCase,
   mergeSnippets,
@@ -1026,6 +1027,29 @@ describe("transformKeywordCase（關鍵字大小寫）", () => {
     // date / text 不在關鍵字集合 → 保持原樣，避免誤改欄名。
     expect(transformKeywordCase("select date, text from t", true))
       .toBe("SELECT date, text FROM t");
+  });
+});
+
+describe("isWriteStatement（唯讀攔截）", () => {
+  it("讀取語句為 false", () => {
+    expect(isWriteStatement("SELECT * FROM t")).toBe(false);
+    expect(isWriteStatement("  select 1")).toBe(false);
+    expect(isWriteStatement("SHOW TABLES")).toBe(false);
+    expect(isWriteStatement("EXPLAIN SELECT 1")).toBe(false);
+    expect(isWriteStatement("WITH x AS (SELECT 1) SELECT * FROM x")).toBe(false);
+  });
+  it("寫入 / DDL 語句為 true", () => {
+    expect(isWriteStatement("INSERT INTO t VALUES (1)")).toBe(true);
+    expect(isWriteStatement("update t set a=1")).toBe(true);
+    expect(isWriteStatement("DELETE FROM t")).toBe(true);
+    expect(isWriteStatement("DROP TABLE t")).toBe(true);
+    expect(isWriteStatement("TRUNCATE t")).toBe(true);
+    expect(isWriteStatement("ALTER TABLE t ADD c int")).toBe(true);
+    expect(isWriteStatement("CREATE TABLE t (id int)")).toBe(true);
+  });
+  it("略過開頭註解後判斷", () => {
+    expect(isWriteStatement("-- comment\nDELETE FROM t")).toBe(true);
+    expect(isWriteStatement("/* x */ SELECT 1")).toBe(false);
   });
 });
 

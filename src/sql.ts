@@ -738,6 +738,21 @@ export function buildInClause(kind: DbKind, column: string, values: (string | nu
   return inPart || `${col} IN (NULL)`; // 無值（理論上不會發生）→ 給合法但無相符的條件
 }
 
+// 是否為「寫入 / DDL」語句（供唯讀連線攔截）。略過開頭的空白 / 行 / 區塊註解後，
+// 檢查第一個關鍵字是否為會改動資料 / 結構者。SELECT / SHOW / EXPLAIN / WITH(…SELECT) 等視為唯讀。
+export function isWriteStatement(sql: string): boolean {
+  // 去掉開頭的空白與註解。
+  let s = sql;
+  for (;;) {
+    const t = s.replace(/^\s+/, "");
+    if (t.startsWith("--")) { const nl = t.indexOf("\n"); s = nl === -1 ? "" : t.slice(nl + 1); continue; }
+    if (t.startsWith("/*")) { const e = t.indexOf("*/"); s = e === -1 ? "" : t.slice(e + 2); continue; }
+    s = t;
+    break;
+  }
+  return /^(insert|update|delete|replace|merge|upsert|create|alter|drop|truncate|rename|grant|revoke|comment|call|do|set|lock|begin|start|commit|rollback|savepoint|vacuum|reindex|cluster|copy|load|import)\b/i.test(s);
+}
+
 // 把建構的查詢包成 `SELECT COUNT(*) … FROM (<查詢>) _sub`，用以得知「這查詢會回多少列」。
 // 計數時略去 LIMIT / OFFSET / ORDER BY（不影響列數、且部分方言子查詢不允許 ORDER 無 LIMIT）。
 export function buildCountQuery(kind: DbKind, spec: QbSpec): string {

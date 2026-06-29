@@ -360,7 +360,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total_rows / pageSize)) : 1;
   const startRow = data ? page * pageSize : 0;
-  const editable = !!data && data.primary_key.length > 0;
+  // 唯讀連線：資料格不可編輯（與寫入 / DDL 攔截一致），避免正式環境誤改。
+  const readonly = useStore((s) => s.readonlyConns[tab.connId] === true);
+  const editable = !!data && data.primary_key.length > 0 && !readonly;
   // 新增列不需主鍵（INSERT 不依賴 PK）；只有更新 / 刪除個別列才需 PK 來定位。視圖不可插入。
   const insertable = !!data && data.columns.length > 0 && tab.objKind !== "view";
   const dirtyCount = Object.keys(edits).length;

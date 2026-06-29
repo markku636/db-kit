@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { ConnectionConfig, DbKind } from "./api";
+import { loadReadonly, persistReadonly, setReadonlyFlag, type ReadonlyMap } from "./connReadonly";
 
 // 一個開啟的表分頁
 export interface OpenTab {
@@ -22,6 +23,8 @@ interface AppStore {
   connections: ConnectionConfig[];
   // 目前已開啟連線的 id 集合
   connectedIds: Set<string>;
+  // 唯讀連線（connId → true）：擋查詢編輯器寫入 / DDL 與資料格編輯，避免正式環境誤改。
+  readonlyConns: ReadonlyMap;
   // 當前選取的連線
   activeId: string | null;
   // 已開啟的表分頁
@@ -44,6 +47,8 @@ interface AppStore {
   setActive: (id: string | null) => void;
   markConnected: (id: string) => void;
   markDisconnected: (id: string) => void;
+  // 切換連線唯讀（持久化）。
+  setConnReadonly: (id: string, ro: boolean) => void;
 
   openTable: (connId: string, database: string, table: string, view?: "data" | "structure", objKind?: string) => void;
   closeTab: (key: string) => void;
@@ -72,6 +77,7 @@ interface AppStore {
 export const useStore = create<AppStore>((set) => ({
   connections: [],
   connectedIds: new Set(),
+  readonlyConns: loadReadonly(),
   activeId: null,
   tabs: [],
   activeTabKey: null,
@@ -81,6 +87,12 @@ export const useStore = create<AppStore>((set) => ({
   dataReload: {},
   selectedNode: null,
 
+  setConnReadonly: (id, ro) =>
+    set((s) => {
+      const next = setReadonlyFlag(s.readonlyConns, id, ro);
+      persistReadonly(next);
+      return { readonlyConns: next };
+    }),
   setConnections: (cs) => set({ connections: cs }),
   addConnection: (c) =>
     set((s) => ({ connections: [...s.connections.filter((x) => x.id !== c.id), c] })),
