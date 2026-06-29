@@ -990,6 +990,32 @@ describe("buildSelectQuery（視覺化查詢建構器）", () => {
     expect(buildCountQuery("mysql", base({ baseTable: "" }))).toBe("");
   });
 
+  it("綜合：DISTINCT + JOIN + 聚合別名 + WHERE + GROUP BY + HAVING + ORDER BY + LIMIT + OFFSET 子句順序正確", () => {
+    const sql = buildSelectQuery("postgres", {
+      db: "shop",
+      baseTable: "orders",
+      tables: [{ name: "orders" }, { name: "users" }],
+      columns: [
+        { table: "users", column: "name" },
+        { table: "orders", column: "id", agg: "COUNT", alias: "cnt" },
+      ],
+      joins: [{ type: "LEFT", leftTable: "orders", leftCol: "user_id", rightTable: "users", rightCol: "id" }],
+      conds: [{ table: "orders", column: "status", op: "=", value: "paid" }],
+      havings: [{ agg: "COUNT", table: "orders", column: "id", op: ">", value: "1" }],
+      orders: [{ table: "users", column: "name", dir: "ASC" }],
+      distinct: true,
+      limit: 20,
+      offset: 40,
+    });
+    expect(sql).toBe(
+      'SELECT DISTINCT "users"."name", COUNT("orders"."id") AS "cnt" ' +
+      'FROM "shop"."orders" LEFT JOIN "shop"."users" ON "orders"."user_id" = "users"."id" ' +
+      'WHERE "orders"."status" = \'paid\' ' +
+      'GROUP BY "users"."name" HAVING COUNT("orders"."id") > 1 ' +
+      'ORDER BY "users"."name" ASC LIMIT 20 OFFSET 40;',
+    );
+  });
+
   it("OFFSET 接在 LIMIT 之後", () => {
     const sql = buildSelectQuery("mysql", base({ limit: 50, offset: 100 }));
     expect(sql).toBe("SELECT * FROM `shop`.`orders` LIMIT 50 OFFSET 100;");
