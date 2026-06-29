@@ -40,9 +40,12 @@ import {
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
-  formatSql,
+  formatSql, buildUseDatabase, hasExecutableSql,
 } from "./sql";
 import type { SavedQuery } from "./sql";
+import Select from "./ui/Select";
+import ExplainPlan from "./ExplainPlan";
+import { buildExplainJsonSql, parseExplainPlan, type PlanNode } from "./explain";
 import logoMark from "./assets/db-kit-hero.png";
 import Icon from "./ui/Icon";
 import { Button, EmptyState, Modal } from "./ui/index";
@@ -51,6 +54,7 @@ import {
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
+  GitBranch, FileText,
   type LucideIcon,
 } from "lucide-react";
 
@@ -451,11 +455,14 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
     ["查詢編輯器", [
       ["F6", "執行整段查詢"],
       ["Ctrl+Enter", "執行游標所在語句或選取段"],
+      ["Ctrl+N", "開新查詢（清空編輯器）"],
+      ["Ctrl+Shift+N", "新增連線"],
       ["Ctrl+Space", "自動完成（表名 / 欄名 / 關鍵字）"],
       ["Tab", "縮排"],
       ["Ctrl+/", "切換 SQL 行註解"],
       ["Ctrl+Shift+F", "格式化 SQL"],
       ["Ctrl+S / Ctrl+O", "另存 / 開啟 .sql 檔"],
+      ["工具列下拉", "切換目前連線 / 資料庫；「視覺化解釋」看執行計畫"],
     ]],
     ["資料表格", [
       ["方向鍵 / Tab", "移動選取儲存格（Tab 於列尾換行）"],
@@ -927,11 +934,8 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   // 對資料庫節點「新增查詢」：切到該連線的查詢編輯器，並以 USE / search_path 把後續查詢限定到此資料庫 / schema。
   // SQLite 為單檔無多庫概念，僅切到查詢分頁（不覆寫既有內容）。
   const newQueryForDb = (connId: string, db: string, kind: DbKind) => {
-    const starter =
-      db && (kind === "mysql" || kind === "external") ? `USE \`${db.replace(/`/g, "``")}\`;\n\n`
-      : db && kind === "postgres" ? `SET search_path TO "${db.replace(/"/g, '""')}";\n\n`
-      : null;
-    if (starter) sendQuery(connId, starter);
+    const stmt = buildUseDatabase(kind, db);
+    if (stmt) sendQuery(connId, `${stmt};\n\n`);
     else { useStore.getState().setActive(connId); useStore.getState().setActiveTab("__query__"); }
   };
   const genSelect = (m: TblRef) =>
@@ -1873,11 +1877,22 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
   const canUse = activeId && connectedIds.has(activeId);
   const activeTab = tabs.find((t) => t.key === activeTabKey) ?? null;
 
-  // 分頁鍵盤操作：Ctrl/Cmd+W 關閉、Ctrl+Tab / Ctrl+Shift+Tab 循環、Ctrl+1..9 跳轉（9=最後一個，含查詢分頁）。
+  // 分頁鍵盤操作：Ctrl/Cmd+N 開新查詢、Ctrl/Cmd+Shift+N 新增連線、Ctrl/Cmd+W 關閉、
+  // Ctrl+Tab / Ctrl+Shift+Tab 循環、Ctrl+1..9 跳轉（9=最後一個，含查詢分頁）。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       if (document.body.dataset.modalCount) return; // 有對話框開啟時不要在背後切換 / 關閉分頁
+      if (e.key === "n" || e.key === "N") {
+        // Ctrl+N 開新查詢（切到查詢分頁並清空編輯器，清空前草稿會存進歷史）；Ctrl+Shift+N 新增連線。
+        // 焦點在一般輸入框（側欄搜尋 / 對話框欄位 / 下拉）時不攔截，避免誤觸；查詢編輯器仍可用。
+        const el = document.activeElement as HTMLElement | null;
+        if (el && (el.tagName === "INPUT" || el.tagName === "SELECT")) return;
+        e.preventDefault();
+        if (e.shiftKey) onNewConnection();
+        else useStore.getState().requestQuery("");
+        return;
+      }
       if ((e.key === "w" || e.key === "W") && activeTabKey && activeTabKey !== "__query__") {
         e.preventDefault();
         closeTab(activeTabKey);
@@ -1902,7 +1917,7 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tabs, activeTabKey, setActiveTab, closeTab]);
+  }, [tabs, activeTabKey, setActiveTab, closeTab, onNewConnection]);
 
   // 作用中分頁捲入可視範圍（Ctrl+W / Ctrl+Tab 切換後不會被擠到畫面外；含查詢分頁）。
   useEffect(() => {
@@ -2040,8 +2055,15 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
 // 僅關聯式資料庫支援 EXPLAIN 查詢計畫分析。
 const EXPLAIN_KINDS: DbKind[] = ["mysql", "postgres", "sqlite"];
 
+// 支援查詢面板「目前資料庫」選擇器（以 USE / search_path 把查詢限定到所選庫）的連線類型：
+// 關聯式多庫（MySQL / PostgreSQL）＋ 外部 gateway（qland，driver 以 strip_leading_use 切站）。
+// SQLite 為單檔無多庫；Mongo / Redis 的資料庫切換走各自指令，不在此列。
+const DB_SELECT_KINDS: DbKind[] = ["mysql", "postgres", "external"];
+
 // 查詢編輯器內容 per-連線 持久化（重開 / 切換連線後沿用上次的查詢）。
 const sqlStoreKey = (id: string) => `db-kit:querySql:${id}`;
+// 「目前資料庫」選擇 per-連線 持久化（切換連線 / 重開後沿用上次選的庫）。
+const queryDbStoreKey = (id: string) => `db-kit:queryDb:${id}`;
 function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefined): string {
   if (id) {
     try {
@@ -2054,11 +2076,66 @@ function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefine
   return kind ? QUERY_DEFAULTS[kind] : "SELECT 1";
 }
 
+// 一次執行的每條語句結果（供「摘要」面板逐條列出，致敬 Navicat 摘要分頁）。
+interface StmtRun { sql: string; ok: boolean; message: string; ms: number; }
+interface RunSummary { startedAt: number; finishedAt: number; total: number; processed: number; success: number; errors: number; statements: StmtRun[]; }
+
+// 毫秒時間戳 → 本地「YYYY-MM-DD HH:mm:ss」（摘要面板的開始 / 結束時間）。
+function fmtClock(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+// 「摘要」面板：執行統計（處理數 / 成功 / 錯誤 / 起訖時間 / 總耗時）＋逐條語句結果表。
+function RunSummaryView({ summary }: { summary: RunSummary }) {
+  const total = summary.finishedAt - summary.startedAt;
+  return (
+    <div className="p-3 text-xs">
+      <div className="grid grid-cols-2 gap-x-8 gap-y-1 max-w-2xl mb-3">
+        <div className="flex justify-between"><span className="text-fg/50">已處理的查詢</span><span className="text-fg/80">{summary.processed < summary.total ? `${summary.processed} / ${summary.total}（其餘已略過）` : summary.processed}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">開始時間</span><span className="text-fg/80">{fmtClock(summary.startedAt)}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">成功</span><span className="text-emerald-400">{summary.success}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">結束時間</span><span className="text-fg/80">{fmtClock(summary.finishedAt)}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">錯誤</span><span className={summary.errors ? "text-red-400" : "text-fg/80"}>{summary.errors}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">運行時間</span><span className="text-fg/80">{fmtElapsed(total)}</span></div>
+      </div>
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="text-left text-fg/40 border-b border-fg/10">
+            <th className="py-1 pr-3 font-medium">查詢</th>
+            <th className="py-1 pr-3 font-medium">訊息</th>
+            <th className="py-1 pr-3 font-medium w-24">查詢時間</th>
+          </tr>
+        </thead>
+        <tbody>
+          {summary.statements.map((s, i) => (
+            <tr key={i} className="border-b border-fg/5 align-top">
+              <td className="py-1 pr-3 mono text-fg/70 max-w-[40ch] truncate" title={s.sql}>{s.sql}</td>
+              <td className={`py-1 pr-3 whitespace-pre-wrap break-words ${s.ok ? "text-emerald-400" : "text-red-400"}`}>{s.message}</td>
+              <td className="py-1 pr-3 text-fg/60">{fmtElapsed(s.ms)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ---- 查詢面板：上 SQL、下結果（F6 執行） ----
 function QueryPane() {
   const { activeId } = useStore();
   const kind = useStore((s) => s.connections.find((c) => c.id === activeId)?.kind);
+  // 連線選擇器：列出已連線的連線供查詢面板直接切換目標（致敬 Navicat 連線下拉）。
+  const connections = useStore((s) => s.connections);
+  const connectedIds = useStore((s) => s.connectedIds);
   const supportsExplain = !!kind && EXPLAIN_KINDS.includes(kind);
+  // 視覺化解釋（解釋分頁）支援的類型：能取得 JSON 執行計畫者（MySQL / PostgreSQL / 外部 gateway；SQLite 無）。
+  const supportsVisualExplain = !!kind && (kind === "mysql" || kind === "postgres" || kind === "external");
+  // 「目前資料庫」選擇器：把查詢以 USE / search_path 限定到所選庫（MySQL / PostgreSQL / 外部 gateway）。
+  const supportsDbSelect = !!kind && DB_SELECT_KINDS.includes(kind);
+  const [dbList, setDbList] = useState<string[]>([]);
+  const [queryDb, setQueryDb] = useState<string>("");
   // 自動完成 schema（僅關聯式）；SQL 編輯器目前選取段（供「執行選取」鈕與標籤）。
   const schema = useSqlSchema(activeId, kind);
   const [editorSel, setEditorSel] = useState<string | null>(null);
@@ -2067,12 +2144,21 @@ function QueryPane() {
   // 結果表格目前的可視列（排序 + 篩選後）；複製 / 匯出依此而非原始 result，使輸出與所見一致。
   const [resultView, setResultView] = useState<(string | null)[][] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // 發生錯誤時實際送出的語句（供「AI 分析修正」帶進助手；queryToRun() 之後可能因選取改變而不同）。
+  const [errSql, setErrSql] = useState<string | null>(null);
+  // 多語句批次中實際出錯的那一條（單句時為 null）；供 AI prompt 與「第 N 條」錯誤訊息對位。
+  const [errStmt, setErrStmt] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [history, setHistory] = useState<string[]>(loadQueryHistory);
   const [showHistory, setShowHistory] = useState(false);
   const [saved, setSaved] = useState<SavedQuery[]>(loadSavedQueries);
   const [showSaved, setShowSaved] = useState(false);
+  // 下方分頁（致敬 Navicat 結果 / 摘要 / 解釋）：result=結果表格、summary=執行摘要、explain=視覺化執行計畫。
+  const [bottomTab, setBottomTab] = useState<"result" | "summary" | "explain">("result");
+  const [summary, setSummary] = useState<RunSummary | null>(null);
+  const [plan, setPlan] = useState<PlanNode | null>(null);
+  const [planErr, setPlanErr] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   // 編輯器高度：可拖曳分隔線調整（編輯器 ↔ 結果），記憶於 localStorage。
   const editor = useResizable({
@@ -2094,10 +2180,15 @@ function QueryPane() {
   }, [showHistory, showSaved]);
 
   // 更新並持久化目前連線的查詢內容（使用者輸入 / 載入歷史 / Tab 縮排都走這裡）。
+  // 空字串改用 removeItem（而非存 ""）：否則 loadPersistedSql 會把 "" 當「上次內容」回傳，
+  // 使該連線永遠開成空白（吃不到預設起手式）。
   const persistSql = (v: string) => {
     setSql(v);
     if (activeId) {
-      try { localStorage.setItem(sqlStoreKey(activeId), v); } catch { /* 忽略 */ }
+      try {
+        if (v) localStorage.setItem(sqlStoreKey(activeId), v);
+        else localStorage.removeItem(sqlStoreKey(activeId));
+      } catch { /* 忽略 */ }
     }
   };
 
@@ -2107,15 +2198,47 @@ function QueryPane() {
     setSql(loadPersistedSql(activeId, kind));
     setResult(null);
     setErr(null);
+    setErrSql(null);
+    setErrStmt(null);
     setElapsed(null);
     setEditorSel(null); // 清掉前一個連線殘留的選取，避免「執行選取」誤跑舊片段
+    // 清掉前一個連線殘留的摘要 / 執行計畫，並退回「結果」分頁（新連線可能不支援解釋分頁）。
+    setSummary(null);
+    setPlan(null);
+    setPlanErr(null);
+    setBottomTab("result");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
 
+  // 切換連線：載入「目前資料庫」清單供選擇器使用，並還原上次的選擇（無則用連線設定的預設 database）。
+  useEffect(() => {
+    if (!activeId || !supportsDbSelect) { setDbList([]); setQueryDb(""); return; }
+    let alive = true;
+    const conn = useStore.getState().connections.find((c) => c.id === activeId);
+    let restored = "";
+    try { restored = localStorage.getItem(queryDbStoreKey(activeId)) || ""; } catch { /* 忽略 */ }
+    // PostgreSQL 的選擇器是 schema（list_databases 回 schema 名），conn.database 卻是「資料庫」名，
+    // 不可拿來當 search_path 預設（會選到不存在的 schema）→ PG 預設留空（伺服器預設 search_path）。
+    const fallback = kind === "postgres" ? "" : (conn?.database || "");
+    setQueryDb(restored || fallback);
+    api.listDatabases(activeId)
+      .then((dbs) => { if (alive) setDbList(dbs); })
+      .catch(() => { if (alive) setDbList([]); });
+    return () => { alive = false; };
+  }, [activeId, supportsDbSelect, kind]);
+
+  // 變更「目前資料庫」並持久化（per 連線）。
+  const changeQueryDb = (db: string) => {
+    setQueryDb(db);
+    if (activeId) { try { localStorage.setItem(queryDbStoreKey(activeId), db); } catch { /* 忽略 */ } }
+  };
+
   // 消費側欄「產生 SQL」送來的待載入語句（在 activeId 載入之後執行，故會覆蓋之）。
+  // 空字串 = Ctrl+N 開新查詢：清空前先把目前草稿存進歷史（可從「歷史」救回），避免誤觸永久遺失。
   const pendingSql = useStore((s) => s.pendingSql);
   useEffect(() => {
     if (pendingSql != null) {
+      if (pendingSql === "" && sql.trim()) setHistory((h) => pushQueryHistory(h, sql));
       persistSql(pendingSql);
       useStore.getState().clearPendingSql();
     }
@@ -2153,6 +2276,12 @@ function QueryPane() {
     const q = overrideQuery && overrideQuery.trim() ? overrideQuery : queryToRun();
     if (!q.trim()) return;
     setErr(null);
+    setErrSql(null);
+    setErrStmt(null);
+    setPlan(null); // 新查詢使先前的視覺化執行計畫失效
+    setPlanErr(null);
+    setSummary(null); // 清掉前一次的摘要（避免早退路徑殘留舊統計 / 紅色錯誤數）
+    setBottomTab("result");
     setRunning(true);
     const t0 = performance.now();
     try {
@@ -2160,11 +2289,27 @@ function QueryPane() {
         setResult(await api.explainQuery(activeId, q));
       } else {
         // SQL：拆成多條語句依序執行（sqlx 不允許單次多語句）。
-        // 非 SQL（Mongo / Redis）維持單一指令。
+        // 非 SQL（Mongo / Redis）維持單一指令。純註解 / 空白片段已於切分時濾除。
         const isSql = !!kind && EXPLAIN_KINDS.includes(kind);
-        const statements = isSql ? splitSqlStatements(q) : [q];
-        // 防手滑：無 WHERE 的 UPDATE/DELETE 或 TRUNCATE 會影響整張表，先確認。
-        const dangerCount = isSql ? statements.filter((s) => isDangerousStatement(s)).length : 0;
+        const isSqlLike = isSql || kind === "external"; // external（gateway）也講 SQL，但不走前端切分
+        const userStatements = isSql ? splitSqlStatements(q) : [q];
+        // 純註解 / 空白（如尾端 `-- 註記`）不是可執行語句 → 不送 DB，避免「Query was empty」類錯誤。
+        // isSql 經切分後可能為空；external 未切分，逐條檢查是否全為註解。
+        if (isSqlLike && userStatements.every((s) => !hasExecutableSql(s))) {
+          toast.info("僅含註解，無可執行語句");
+          return;
+        }
+        // 「目前資料庫」選擇器：把所選庫以 USE / search_path 前綴併入「每一條」語句一起送出。
+        // mysql/postgres driver 會偵測開頭 USE / SET search_path，在「同一條」連線先切庫再執行
+        // （避免 USE 與查詢落在 pool 不同連線而失效）；external 由 gateway strip_leading_use 處理。
+        // 使用者查詢若已自帶開頭 USE / SET search_path（側欄「新增查詢」）則不重複加。
+        const usePrefix =
+          supportsDbSelect && queryDb && !/^\s*(use\s|set\s+search_path)/i.test(q)
+            ? buildUseDatabase(kind!, queryDb)
+            : null;
+        const sentStatements = usePrefix ? userStatements.map((s) => `${usePrefix};\n${s}`) : userStatements;
+        // 防手滑：無 WHERE 的 UPDATE/DELETE 或 TRUNCATE 會影響整張表，先確認（external 亦講 MySQL，需納入）。
+        const dangerCount = isSqlLike ? userStatements.filter((s) => isDangerousStatement(s)).length : 0;
         if (dangerCount > 0) {
           const ok = await uiConfirm(
             `偵測到 ${dangerCount} 條無 WHERE 的 UPDATE / DELETE 或 TRUNCATE，將影響整張表的所有資料列。確定執行？`,
@@ -2182,27 +2327,93 @@ function QueryPane() {
         }
         let lastResultSet: QueryResult | null = null; // 最後一個有結果集（columns>0）的語句
         let affected = 0;
-        for (let si = 0; si < statements.length; si++) {
+        const runs: StmtRun[] = []; // 逐條語句結果（供「摘要」面板；記錄使用者原語句，不含注入的 USE 前綴）
+        const startedAt = Date.now();
+        const snapshot = (): RunSummary => ({
+          startedAt,
+          finishedAt: Date.now(),
+          total: userStatements.length,
+          processed: runs.length,
+          success: runs.filter((r) => r.ok).length,
+          errors: runs.filter((r) => !r.ok).length,
+          statements: runs.slice(),
+        });
+        for (let si = 0; si < sentStatements.length; si++) {
+          const tStmt = performance.now();
           let res: QueryResult;
           try {
-            res = await api.runQuery(activeId, statements[si]);
+            res = await api.runQuery(activeId, sentStatements[si]);
           } catch (e: any) {
             const msg = e?.message ?? String(e);
-            throw new Error(statements.length > 1 ? `第 ${si + 1} 條語句失敗：${msg}` : msg);
+            runs.push({ sql: userStatements[si], ok: false, message: msg, ms: performance.now() - tStmt });
+            setSummary(snapshot());
+            const wrapped = new Error(
+              userStatements.length > 1 ? `第 ${si + 1} 條語句失敗：${msg}` : msg,
+            );
+            // 多語句批次：記住「出錯的那一條」，供 AI 分析修正對位（整批仍存在 errSql）。
+            (wrapped as any).failedSql = userStatements[si];
+            throw wrapped;
           }
+          const ms = performance.now() - tStmt;
           if (res.columns.length > 0) lastResultSet = res;
           else affected += res.rows_affected;
+          runs.push({
+            sql: userStatements[si],
+            ok: true,
+            message: res.columns.length > 0 ? `${res.rows.length} 列` : `OK（影響 ${res.rows_affected} 列）`,
+            ms,
+          });
         }
         // 有任何結果集 → 顯示最後一個結果集；否則顯示累計影響列數。
         setResult(lastResultSet ?? { columns: [], rows: [], rows_affected: affected });
-        if (statements.length > 1) toast.success(`已執行 ${statements.length} 條語句`);
+        setSummary(snapshot());
+        if (userStatements.length > 1) toast.success(`已執行 ${userStatements.length} 條語句`);
       }
       setElapsed(performance.now() - t0);
       setHistory((h) => pushQueryHistory(h, q));
     } catch (e: any) {
       setElapsed(performance.now() - t0);
       setErr(e?.message ?? (mode === "analyze" ? "分析失敗" : "查詢失敗"));
+      setErrSql(q); // 整批（完整編輯器內容）—供安全一鍵貼回
+      setErrStmt((e?.failedSql as string | undefined) ?? null); // 多語句時的失敗單句
       setResult(null);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  // 視覺化解釋：跑 EXPLAIN FORMAT=JSON（PG：(FORMAT JSON)），解析成計畫樹後切到「解釋」分頁。
+  // 一次只解析「單一語句」：有反白用反白、否則用編輯器內容；多於一條則請使用者反白要解釋的語句。
+  const runVisualExplain = async () => {
+    if (!activeId || running || !supportsVisualExplain) return;
+    const stmts = splitSqlStatements(editorSel?.trim() ? editorSel : sql);
+    if (stmts.length > 1) { toast.info("視覺化解釋一次只能解析一條語句，請反白要解釋的語句"); return; }
+    const base = (stmts[0] ?? "").trim();
+    if (!base) { toast.info("沒有可解釋的語句"); return; }
+    const explainSql = kind ? buildExplainJsonSql(kind, base) : null;
+    if (!explainSql) { toast.info("此查詢無法產生執行計畫"); return; }
+    setRunning(true);
+    setPlan(null); // 清掉舊計畫，讓「解釋中…」狀態顯示，避免誤讀前一次的計畫
+    setPlanErr(null);
+    setErr(null); setErrSql(null); setErrStmt(null); // 清掉前一次查詢的錯誤橫幅，保持分頁一致
+    setBottomTab("explain");
+    const t0 = performance.now();
+    try {
+      // 「目前資料庫」前綴併入同段送出（mysql/postgres driver 同連線切庫；external 由 gateway 處理）。
+      const usePrefix =
+        supportsDbSelect && queryDb && !/^\s*(use\s|set\s+search_path)/i.test(base)
+          ? buildUseDatabase(kind!, queryDb)
+          : null;
+      const res = await api.runQuery(activeId, usePrefix ? `${usePrefix};\n${explainSql}` : explainSql);
+      const cell = res.rows?.[0]?.[0] ?? null;
+      const node = cell ? parseExplainPlan(kind!, cell) : null;
+      if (node) { setPlan(node); setPlanErr(null); }
+      else { setPlan(null); setPlanErr("無法解析執行計畫 JSON（原始輸出見「結果」分頁）"); setResult(res); setBottomTab("result"); }
+      setElapsed(performance.now() - t0);
+    } catch (e: any) {
+      setElapsed(performance.now() - t0);
+      setPlan(null);
+      setPlanErr(e?.message ?? "視覺化解釋失敗");
     } finally {
       setRunning(false);
     }
@@ -2318,6 +2529,27 @@ function QueryPane() {
     useAssistant.getState().ask(prompt);
   };
 
+  // 把出錯的 SQL + 錯誤訊息帶進 AI 助手，請它分析原因並給出修正後的 SQL（一鍵自動送出）。
+  const askAiFixError = () => {
+    if (!err) return;
+    const dialect = kind === "external" ? "MySQL（透過 QLand gateway）" : (kind ?? "SQL");
+    const full = errSql ?? queryToRun();
+    // 多語句批次：errStmt 為失敗的那一條，與整批不同 → 同時給「失敗單句」與「完整批次」，
+    // 讓 AI 不必自己數第幾條，並要求回傳完整批次以利一鍵貼回（不丟失其他正確語句）。
+    const multi = !!errStmt && errStmt.trim() !== "" && errStmt.trim() !== full.trim();
+    const sqlSection = multi
+      ? `這是多語句批次，失敗的是其中這一條（請回傳修正後的【完整批次】，保留其他正確語句）：\n` +
+        `\`\`\`sql\n${errStmt}\n\`\`\`\n\n完整批次：\n\`\`\`sql\n${full}\n\`\`\`\n\n`
+      : `SQL：\n\`\`\`sql\n${full}\n\`\`\`\n\n`;
+    const prompt =
+      `以下 SQL 在 db-kit 執行時發生錯誤。請幫我：①用中文簡述錯誤原因；` +
+      `②給出修正後、可直接執行的 SQL（放進 \`\`\`sql 程式碼區塊，方便我一鍵貼回編輯器）。\n\n` +
+      `資料庫類型：${dialect}\n\n` +
+      sqlSection +
+      `錯誤訊息：\n\`\`\`\n${err}\n\`\`\``;
+    useAssistant.getState().ask(prompt, { send: true });
+  };
+
   if (!activeId) {
     return (
       <div className="flex-1 flex items-center justify-center text-fg/25 text-sm">
@@ -2332,11 +2564,45 @@ function QueryPane() {
       ? `${result.rows.length} 列`
       : `影響 ${result.rows_affected} 列`);
 
+  // 連線選擇器清單：已連線的連線（含目前 activeId，即使尚未在 connectedIds 也保留，避免下拉空白）。
+  const runnableConns = connections.filter((c) => connectedIds.has(c.id) || c.id === activeId);
+
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <div className="shrink-0">
         <div className="flex items-center justify-between px-3 py-1.5 bg-bar">
-          <span className="text-xs text-fg/40">查詢</span>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-xs text-fg/40 shrink-0">查詢</span>
+            {runnableConns.length > 0 && (
+              <Select
+                selectSize="sm"
+                value={activeId ?? ""}
+                onChange={(e) => useStore.getState().setActive(e.target.value)}
+                title="目前連線：查詢執行的目標連線（Ctrl+Shift+N 新增連線）"
+                className="max-w-[180px] text-xs"
+              >
+                {runnableConns.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </Select>
+            )}
+            {supportsDbSelect && (
+              <Select
+                selectSize="sm"
+                value={queryDb}
+                onChange={(e) => changeQueryDb(e.target.value)}
+                title="目前資料庫：查詢會以 USE / search_path 限定到所選資料庫"
+                className="max-w-[180px] text-xs"
+              >
+                <option value="">{kind === "postgres" ? "（預設 schema）" : "（預設資料庫）"}</option>
+                {/* 確保目前選取值即使尚未載入清單 / 已不在清單也仍顯示 */}
+                {queryDb && !dbList.includes(queryDb) && <option value={queryDb}>{queryDb}</option>}
+                {dbList.map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </Select>
+            )}
+          </div>
           <div className="flex gap-2 items-center">
             <div className="relative">
               <button type="button" onClick={() => setShowHistory((s) => !s)}
@@ -2409,9 +2675,16 @@ function QueryPane() {
             )}
             {supportsExplain && (
               <button type="button" onClick={() => execute("analyze")} disabled={running}
-                title="EXPLAIN：查看查詢執行計畫"
+                title="EXPLAIN：以表格查看查詢執行計畫"
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
                 <Icon icon={FlaskConical} size={13} />分析
+              </button>
+            )}
+            {supportsVisualExplain && (
+              <button type="button" onClick={runVisualExplain} disabled={running}
+                title="視覺化解釋：以執行計畫樹呈現（EXPLAIN FORMAT=JSON），標出成本熱點"
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
+                <Icon icon={GitBranch} size={13} />視覺化解釋
               </button>
             )}
             <button type="button" onClick={() => execute("run")} disabled={running}
@@ -2467,41 +2740,76 @@ function QueryPane() {
             }}
           />
         )}
-        {/* 狀態列：執行時間 + 列數 / 錯誤（致敬商用工具的執行回饋） */}
-        <div className="flex items-center gap-3 px-3 py-1 bg-panel text-[11px] text-fg/45 min-h-[22px]">
-          {elapsed !== null && <span className="inline-flex items-center gap-1" title="執行時間"><Icon icon={Clock} size={12} />{fmtElapsed(elapsed)}</span>}
-          {rowsInfo && <span>{rowsInfo}</span>}
-          {result && result.columns.length > 0 && (
-            <div className="ml-auto flex gap-2">
-              <button type="button" onClick={() => exportRes && copyToClipboard(resultToCsv(exportRes), "已複製結果 (CSV)")}
-                title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 CSV</button>
-              <button type="button" onClick={() => exportRes && copyToClipboard(resultToTsv(exportRes), "已複製結果 (TSV)")}
-                title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 TSV</button>
-              <button type="button" onClick={() => exportRes && copyToClipboard(resultToJson(exportRes), "已複製結果 (JSON)")}
-                title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 JSON</button>
-              <button type="button" onClick={() => exportRes && copyToClipboard(resultToMarkdown(exportRes), "已複製結果 (Markdown)")}
-                title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 MD</button>
-              <button type="button" onClick={exportResult}
-                className="inline-flex items-center gap-1 hover:text-fg/80"><Icon icon={Download} size={12} />匯出</button>
-              <button type="button" onClick={askAiResult} title="把這份結果帶進 AI 助手分析"
-                className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"><Icon icon={Sparkles} size={12} />問 AI</button>
-            </div>
-          )}
-        </div>
+        {/* 狀態列已併入下方分頁列右側 */}
       </div>
       <Splitter axis="y" onPointerDown={editor.onPointerDown} />
-      <div className="flex-1 overflow-auto min-h-0">
-        {err && <div className="p-3 text-red-400 text-sm mono whitespace-pre-wrap break-words">{err}</div>}
-        {result && <ResultTable result={result} onViewChange={setResultView} />}
-        {!result && !err && (
-          <EmptyState
-            compact
-            icon={running ? Loader2 : Play}
-            title={running ? "執行中…" : "尚無查詢結果"}
-            hint={running ? undefined : "按 F6 執行整段，或 Ctrl+Enter 執行游標所在語句／選取段。"}
-            className={running ? "[&_svg]:animate-spin" : ""}
-          />
-        )}
+      <div className="flex-1 flex flex-col min-h-0">
+        {/* 下方分頁列：結果 / 摘要 / 解釋（致敬 Navicat）；右側為執行回饋與複製 / 匯出 */}
+        <div className="shrink-0 flex items-center gap-1 px-2 bg-panel border-t border-fg/10 text-[11px]">
+          {((["result", "summary", ...(supportsVisualExplain ? (["explain"] as const) : [])]) as ("result" | "summary" | "explain")[]).map((key) => {
+            const label = key === "result" ? "結果" : key === "summary" ? "摘要" : "解釋";
+            return (
+              <button key={key} type="button" onClick={() => setBottomTab(key)}
+                className={`px-2.5 py-1.5 border-b-2 -mb-px transition-colors ${bottomTab === key ? "border-accent text-fg/90" : "border-transparent text-fg/45 hover:text-fg/70"}`}>
+                {label}
+                {key === "summary" && summary && summary.errors > 0 && <span className="ml-1 text-red-400">{summary.errors}</span>}
+                {key === "explain" && plan && <span className="ml-1 text-emerald-400">●</span>}
+              </button>
+            );
+          })}
+          <div className="ml-auto flex items-center gap-3 text-fg/45 pr-1">
+            {elapsed !== null && <span className="inline-flex items-center gap-1" title="執行時間"><Icon icon={Clock} size={12} />{fmtElapsed(elapsed)}</span>}
+            {bottomTab === "result" && rowsInfo && <span>{rowsInfo}</span>}
+            {bottomTab === "result" && result && result.columns.length > 0 && (
+              <div className="flex gap-2">
+                <button type="button" onClick={() => exportRes && copyToClipboard(resultToCsv(exportRes), "已複製結果 (CSV)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 CSV</button>
+                <button type="button" onClick={() => exportRes && copyToClipboard(resultToTsv(exportRes), "已複製結果 (TSV)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 TSV</button>
+                <button type="button" onClick={() => exportRes && copyToClipboard(resultToJson(exportRes), "已複製結果 (JSON)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 JSON</button>
+                <button type="button" onClick={() => exportRes && copyToClipboard(resultToMarkdown(exportRes), "已複製結果 (Markdown)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 MD</button>
+                <button type="button" onClick={exportResult} className="inline-flex items-center gap-1 hover:text-fg/80"><Icon icon={Download} size={12} />匯出</button>
+                <button type="button" onClick={askAiResult} title="把這份結果帶進 AI 助手分析" className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"><Icon icon={Sparkles} size={12} />問 AI</button>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex-1 overflow-auto min-h-0">
+          {bottomTab === "result" && (
+            <>
+              {err && (
+                <div className="p-3 space-y-2">
+                  <div className="text-red-400 text-sm mono whitespace-pre-wrap break-words">{err}</div>
+                  <button type="button" onClick={askAiFixError}
+                    title="把這段 SQL 與錯誤訊息帶進 AI 助手，分析原因並給出修正後的 SQL"
+                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-blue-400/40 text-blue-300 hover:bg-blue-400/10">
+                    <Icon icon={Sparkles} size={13} />AI 分析修正
+                  </button>
+                </div>
+              )}
+              {result && <ResultTable result={result} onViewChange={setResultView} />}
+              {!result && !err && (
+                <EmptyState compact icon={running ? Loader2 : Play}
+                  title={running ? "執行中…" : "尚無查詢結果"}
+                  hint={running ? undefined : "按 F6 執行整段，或 Ctrl+Enter 執行游標所在語句／選取段。"}
+                  className={running ? "[&_svg]:animate-spin" : ""} />
+              )}
+            </>
+          )}
+          {bottomTab === "summary" && (
+            summary
+              ? <RunSummaryView summary={summary} />
+              : <EmptyState compact icon={FileText} title="尚無執行摘要" hint="執行查詢後，這裡會列出每條語句的結果與耗時。" />
+          )}
+          {bottomTab === "explain" && (
+            plan
+              ? <ExplainPlan node={plan} />
+              : planErr
+                ? <div className="p-3 text-amber-300 text-sm whitespace-pre-wrap break-words">{planErr}</div>
+                : <EmptyState compact icon={running ? Loader2 : GitBranch}
+                    title={running ? "解釋中…" : "尚無執行計畫"}
+                    hint={running ? undefined : "按「視覺化解釋」以執行計畫樹呈現查詢。"}
+                    className={running ? "[&_svg]:animate-spin" : ""} />
+          )}
+        </div>
       </div>
     </div>
   );

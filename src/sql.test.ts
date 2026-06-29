@@ -3,6 +3,8 @@ import {
   splitSqlStatements,
   splitSqlStatementsWithRanges,
   statementAtOffset,
+  hasExecutableSql,
+  buildUseDatabase,
   parseClipboardGrid,
   rectToTsv,
   rangeStats,
@@ -102,6 +104,15 @@ describe("splitSqlStatements", () => {
   it("skips empty statements", () => {
     expect(splitSqlStatements("  ; ; SELECT 1 ;")).toEqual(["SELECT 1"]);
   });
+  it("drops comment-only fragments (trailing / standalone comments)", () => {
+    // 尾端的 `-- 11` 不是可執行語句，過去會被當成一條空查詢送 DB 而報錯。
+    expect(splitSqlStatements("SELECT 1;\n-- 11")).toEqual(["SELECT 1"]);
+    expect(splitSqlStatements("SELECT 1; /* note */")).toEqual(["SELECT 1"]);
+    expect(splitSqlStatements("-- only a comment")).toEqual([]);
+    expect(splitSqlStatements("/* block only */\n\n")).toEqual([]);
+    // 但語句內含的尾端註解要保留（仍是可執行語句的一部分）。
+    expect(splitSqlStatements("SELECT 1 -- c\n;")).toEqual(["SELECT 1 -- c"]);
+  });
   it("ignores semicolons inside PostgreSQL dollar-quoted bodies ($$ and $tag$)", () => {
     const fn =
       "CREATE FUNCTION f() RETURNS void AS $$ BEGIN UPDATE t SET x=1; DELETE FROM u; END; $$ LANGUAGE plpgsql; SELECT 1";
@@ -150,6 +161,41 @@ describe("splitSqlStatementsWithRanges / statementAtOffset", () => {
   });
   it("returns null for empty / whitespace-only input", () => {
     expect(statementAtOffset("   \n  ", 2)).toBeNull();
+  });
+  it("skips comment-only spans so the cursor lands on a real statement", () => {
+    const sql = "SELECT 1;\nSELECT 2;\n-- trailing note";
+    // 尾端的純註解片段被濾掉，不成為一條語句。
+    expect(splitSqlStatementsWithRanges(sql).map((s) => s.text)).toEqual(["SELECT 1", "SELECT 2"]);
+    // 游標停在尾端註解 → 落到最後一條真正可執行的語句。
+    expect(statementAtOffset(sql, sql.length - 1)).toBe("SELECT 2");
+    // 整段只有註解 → 無可執行語句。
+    expect(statementAtOffset("-- nothing to run", 3)).toBeNull();
+  });
+});
+
+describe("hasExecutableSql", () => {
+  it("is true when non-comment SQL remains, false for blank / comment-only", () => {
+    expect(hasExecutableSql("SELECT 1")).toBe(true);
+    expect(hasExecutableSql("SELECT 1 -- trailing")).toBe(true);
+    expect(hasExecutableSql("-- 11")).toBe(false);
+    expect(hasExecutableSql("/* block */")).toBe(false);
+    expect(hasExecutableSql("   \n  ")).toBe(false);
+    // 字串內的 -- 不算註解，仍是可執行內容。
+    expect(hasExecutableSql("SELECT '-- not a comment'")).toBe(true);
+  });
+});
+
+describe("buildUseDatabase", () => {
+  it("builds USE for mysql / external and SET search_path for postgres", () => {
+    expect(buildUseDatabase("mysql", "Siebog")).toBe("USE `Siebog`");
+    expect(buildUseDatabase("external", "Siebog")).toBe("USE `Siebog`");
+    expect(buildUseDatabase("postgres", "public")).toBe('SET search_path TO "public"');
+  });
+  it("escapes identifiers and returns null when not applicable", () => {
+    expect(buildUseDatabase("mysql", "we`ird")).toBe("USE `we``ird`");
+    expect(buildUseDatabase("mysql", "")).toBeNull();
+    expect(buildUseDatabase("sqlite", "x")).toBeNull();
+    expect(buildUseDatabase("mongo", "x")).toBeNull();
   });
 });
 

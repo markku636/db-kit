@@ -334,6 +334,41 @@ impl DatabaseDriver for MysqlDriver {
     }
 
     async fn query(&self, sql: &str) -> AppResult<QueryResult> {
+        // 「目前資料庫」選擇器會在語句前帶入 `USE `db`;`。USE 是 session（連線）層級狀態，若與
+        // 後續查詢落在 pool 的不同連線上會失效（甚至打到錯的庫）。偵測到開頭 USE 時，取「同一條」
+        // 連線先 USE 再執行剩餘語句；該連線切過庫後不放回 pool（detach 後 drop 關閉），避免污染其他查詢。
+        if let Some((use_stmt, rest)) = split_leading_use(sql) {
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?;
+            sqlx::query(&use_stmt)
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?;
+            let t = rest.trim_start().to_ascii_lowercase();
+            let is_read = t.starts_with("select")
+                || t.starts_with("show")
+                || t.starts_with("describe")
+                || t.starts_with("explain");
+            let out = if is_read {
+                sqlx::query(&rest)
+                    .fetch_all(&mut *conn)
+                    .await
+                    .map(|rows| rows_to_result(&rows))
+                    .map_err(|e| AppError::Query(e.to_string()))
+            } else {
+                sqlx::query(&rest)
+                    .execute(&mut *conn)
+                    .await
+                    .map(|res| QueryResult { columns: vec![], rows: vec![], rows_affected: res.rows_affected() })
+                    .map_err(|e| AppError::Query(e.to_string()))
+            };
+            let _ = conn.detach(); // 切過庫的連線不回收進 pool
+            return out;
+        }
+
         let trimmed = sql.trim_start().to_ascii_lowercase();
         let is_read = trimmed.starts_with("select")
             || trimmed.starts_with("show")
@@ -1353,6 +1388,22 @@ fn build_order(sorts: &[Sort]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(" ORDER BY {parts}")
+}
+
+/// 偵測並切出開頭的 `USE `db`;`（「目前資料庫」選擇器帶入）。回傳 (USE 語句, 剩餘語句)；
+/// 無開頭 USE、或 USE 後沒有可執行語句時回 None（讓呼叫端走一般 pool 路徑）。
+fn split_leading_use(sql: &str) -> Option<(String, String)> {
+    let t = sql.trim_start();
+    if !t.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("use ")) {
+        return None;
+    }
+    let semi = t.find(';')?;
+    let use_stmt = t[..semi].trim().to_string();
+    let rest = t[semi + 1..].trim().to_string();
+    if rest.is_empty() {
+        return None;
+    }
+    Some((use_stmt, rest))
 }
 
 /// 將 MySQL 列轉成字串格. 盡量以文字呈現，型別細節留待後續加強。

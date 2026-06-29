@@ -208,6 +208,43 @@ impl DatabaseDriver for PostgresDriver {
     }
 
     async fn query(&self, sql: &str) -> AppResult<QueryResult> {
+        // 「目前資料庫」選擇器會在語句前帶入 `SET search_path TO "x";`。search_path 是 session 層級
+        // 狀態，若與後續查詢落在 pool 的不同連線上會失效。偵測到開頭 SET search_path 時，取「同一條」
+        // 連線先 SET 再執行剩餘語句；該連線改過 search_path 後不放回 pool（detach 後 drop），避免污染其他查詢。
+        if let Some((set_stmt, rest)) = split_leading_set_search_path(sql) {
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?;
+            sqlx::query(&set_stmt)
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?;
+            let t = rest.trim_start().to_ascii_lowercase();
+            let is_read = t.starts_with("select")
+                || t.starts_with("show")
+                || t.starts_with("explain")
+                || t.starts_with("table")
+                || t.starts_with("with")
+                || t.contains("returning");
+            let out = if is_read {
+                sqlx::query(&rest)
+                    .fetch_all(&mut *conn)
+                    .await
+                    .map(|rows| rows_to_result(&rows))
+                    .map_err(|e| AppError::Query(e.to_string()))
+            } else {
+                sqlx::query(&rest)
+                    .execute(&mut *conn)
+                    .await
+                    .map(|res| QueryResult { columns: vec![], rows: vec![], rows_affected: res.rows_affected() })
+                    .map_err(|e| AppError::Query(e.to_string()))
+            };
+            let _ = conn.detach(); // 改過 search_path 的連線不回收進 pool
+            return out;
+        }
+
         let trimmed = sql.trim_start().to_ascii_lowercase();
         let is_read = trimmed.starts_with("select")
             || trimmed.starts_with("show")
@@ -1303,6 +1340,22 @@ fn build_order(sorts: &[Sort]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(" ORDER BY {parts}")
+}
+
+/// 偵測並切出開頭的 `SET search_path TO ...;`（「目前資料庫」選擇器帶入）。回傳 (SET 語句, 剩餘語句)；
+/// 無開頭 SET search_path、或其後沒有可執行語句時回 None。
+fn split_leading_set_search_path(sql: &str) -> Option<(String, String)> {
+    let t = sql.trim_start();
+    if !t.to_ascii_lowercase().starts_with("set search_path") {
+        return None;
+    }
+    let semi = t.find(';')?;
+    let set_stmt = t[..semi].trim().to_string();
+    let rest = t[semi + 1..].trim().to_string();
+    if rest.is_empty() {
+        return None;
+    }
+    Some((set_stmt, rest))
 }
 
 fn rows_to_result(rows: &[PgRow]) -> QueryResult {

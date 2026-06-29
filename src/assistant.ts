@@ -18,8 +18,10 @@ interface AssistantStore {
   toggle: () => void;
   // 由外部（如側欄右鍵「問 AI」）丟進來的待填問題；面板消費後清空。
   seed: string | null;
-  // 開面板並把 prompt 帶進輸入框（由使用者檢視後再送出）。
-  ask: (prompt: string) => void;
+  // 是否在帶入 seed 後自動送出（如「AI 分析修正」一鍵修錯）；預設 false = 僅填入待使用者送出。
+  seedSend: boolean;
+  // 開面板並把 prompt 帶進輸入框。預設由使用者檢視後再送出；opts.send=true 則自動送出。
+  ask: (prompt: string, opts?: { send?: boolean }) => void;
   clearSeed: () => void;
 }
 
@@ -31,9 +33,10 @@ export const useAssistant = create<AssistantStore>((set, get) => ({
   },
   toggle: () => get().setOpen(!get().open),
   seed: null,
-  ask: (prompt) => {
+  seedSend: false,
+  ask: (prompt, opts) => {
     get().setOpen(true);
-    set({ seed: prompt });
+    set({ seed: prompt, seedSend: !!opts?.send });
   },
-  clearSeed: () => set({ seed: null }),
+  clearSeed: () => set({ seed: null, seedSend: false }),
 }));

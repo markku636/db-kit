@@ -89,6 +89,16 @@ export function isSystemDatabase(kind: DbKind, name: string): boolean {
   return false;
 }
 
+// 「切換目前資料庫 / schema」語句：MySQL / 外部 gateway（qland）用 USE；PostgreSQL 用 SET search_path；
+// SQLite（單檔）/ Mongo / Redis 無此概念回 null。供查詢面板的「目前資料庫」選擇器與側欄「新增查詢」共用，
+// 確保兩處「把後續查詢限定到某資料庫」的語法一致。識別字以 quoteIdent 跳脫（防注入）。
+export function buildUseDatabase(kind: DbKind, db: string): string | null {
+  if (!db) return null;
+  if (kind === "mysql" || kind === "external") return `USE ${quoteIdent("mysql", db)}`;
+  if (kind === "postgres") return `SET search_path TO ${quoteIdent("postgres", db)}`;
+  return null;
+}
+
 // 清空：SQLite 無 TRUNCATE，改用 DELETE FROM（仍清空全表）。
 export function buildTruncateTable(kind: DbKind, db: string, table: string): string {
   const q = qualifiedName(kind, db, table);
@@ -721,8 +731,36 @@ export function lintSqlStructure(sql: string): SqlLintMark[] {
   return marks;
 }
 
+// 移除 SQL 註解（-- 行註解 / /* */ 區塊註解），但保留字串與識別字內容
+//（其內部出現的 -- 與 /* 不是註解）。供 hasExecutableSql 判斷一段去掉註解後是否還剩內容。
+function stripSqlComments(sql: string): string {
+  let out = "";
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const ch = sql[i];
+    const two = sql.slice(i, i + 2);
+    if (ch === "'" || ch === '"' || ch === "`") {
+      let j = i + 1;
+      while (j < n) { if (sql[j] === ch) { if (sql[j + 1] === ch) { j += 2; continue; } j++; break; } j++; }
+      out += sql.slice(i, j); i = j; continue;
+    }
+    if (two === "--") { let j = i; while (j < n && sql[j] !== "\n") j++; i = j; continue; }
+    if (two === "/*") { let j = i + 2; while (j < n && sql.slice(j, j + 2) !== "*/") j++; i = Math.min(n, j + 2); continue; }
+    out += ch; i++;
+  }
+  return out;
+}
+
+// 一段 SQL 去掉註解 / 空白後是否仍有可執行內容。純註解 / 空白（如尾端的 `-- 註記`）若送往資料庫
+// 會得到「Query was empty」之類語法錯誤，故多語句切分與「執行游標所在語句」皆據此略過這類片段。
+export function hasExecutableSql(sql: string): boolean {
+  return stripSqlComments(sql).trim().length > 0;
+}
+
 // 以分號切分多條 SQL，但略過字串字面量（' " `）、註解（-- 行、/* */ 區塊）
 // 與 PostgreSQL dollar-quoting（$$ … $$ / $tag$ … $tag$，函式 / DO 區塊本體常含分號）內的分號。
+// 純註解 / 空白片段（如尾端的 `-- 註記`）會被濾除——它們不是可執行語句，送 DB 會報空查詢錯誤。
 export function splitSqlStatements(sql: string): string[] {
   const out: string[] = [];
   let cur = "";
@@ -761,7 +799,7 @@ export function splitSqlStatements(sql: string): string[] {
     cur += ch;
   }
   if (cur.trim()) out.push(cur.trim());
-  return out;
+  return out.filter(hasExecutableSql);
 }
 
 // 一條語句在原字串中的位移範圍（text 已去除前後空白）。
@@ -809,7 +847,8 @@ export function splitSqlStatementsWithRanges(sql: string): SqlStatementSpan[] {
     if (ch === ";") { push(i); segStart = i + 1; continue; }
   }
   push(sql.length);
-  return out;
+  // 略過純註解 / 空白片段（與 splitSqlStatements 一致），使「執行游標所在語句」落在真正可執行的語句上。
+  return out.filter((s) => hasExecutableSql(s.text));
 }
 
 // 計算框選範圍的統計（Excel 狀態列手感）：總格數、數值格數、加總 / 平均 / 最小 / 最大。

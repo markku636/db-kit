@@ -142,13 +142,25 @@ export default function AssistantPanel() {
     try { localStorage.setItem("db-kit:assistantWidth", String(width)); } catch { /* 忽略 */ }
   }, [width]);
 
-  // 消費外部丟進來的問題（側欄右鍵「問 AI」）：填進輸入框、聚焦，由使用者送出。
+  // 消費外部丟進來的問題（側欄右鍵「問 AI」、查詢錯誤「AI 分析修正」）：
+  // 預設填進輸入框、聚焦，由使用者送出；seedSend=true（如修錯）則直接自動送出。
   useEffect(() => {
-    if (seed != null) {
+    if (seed == null) return;
+    const autoSend = useAssistant.getState().seedSend;
+    useAssistant.getState().clearSeed();
+    // 自動送出只在「助手就緒（claude 已安裝且登入）且未在串流中」時直接送出；
+    // 否則（串流中 / 未就緒 / 非自動送出）一律保底把問題填回輸入框並聚焦——絕不靜默遺失。
+    const ready = !!status && status.installed && status.logged_in;
+    if (autoSend && ready && !streaming) {
+      send(seed);
+    } else {
       setInput(seed);
-      useAssistant.getState().clearSeed();
       setTimeout(() => textareaRef.current?.focus(), 0);
+      // 串流中沒有就緒提示列可看，額外提示問題已填入、稍後可送出。
+      if (autoSend && streaming) toast.info("助手回應中，已將問題填入輸入框，結束後按送出即可");
     }
+    // 僅需在 seed 變動時觸發；send / streaming / status 取當下 render 的值即可。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed]);
 
   // 拖曳左緣調整寬度（面板在右側，往左拖變寬）。
