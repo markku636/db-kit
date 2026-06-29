@@ -6,7 +6,8 @@ import type { DbKind } from "./api";
 export interface PlanNode {
   label: string; // 節點主標題（操作 / 表名）
   kind: "query_block" | "join" | "op" | "table"; // 概略分類，供配色 / 圖示
-  cost: number | null; // 累積成本（MySQL query_cost / prefix_cost；PG Total Cost）
+  cost: number | null; // 顯示成本（MySQL 單表步驟成本；PG Total Cost＝子樹累積，供顯示）
+  selfCost?: number | null; // 「自身/獨佔」成本，排除子節點累積，供熱點判斷（PG＝Total − Σ子Total）
   rows: number | null; // 估計列數
   detail?: string; // 次要資訊（access type / key / relation…）
   children: PlanNode[];
@@ -116,13 +117,21 @@ function pgNode(p: any): PlanNode {
     p["Index Name"] && `index: ${p["Index Name"]}`,
     p["Join Type"] && `${p["Join Type"]} join`,
   ].filter(Boolean).join("　");
+  const children: PlanNode[] = Array.isArray(p.Plans) ? p.Plans.map(pgNode) : [];
+  // PG 的 Total Cost 是「含子樹」的累積值，根節點永遠最大、無法當熱點。改用獨佔成本＝
+  // 本節點 Total 減去各直接子節點 Total（pgAdmin / explain.depesz 的標準算法），凸顯真正最耗
+  // 工的節點；浮點誤差夾到 0。MySQL 路徑的 cost 已是步驟成本，不另設 selfCost（退回用 cost）。
+  const total = num(p["Total Cost"]);
+  const childSum = children.reduce((a, c) => a + (c.cost ?? 0), 0);
+  const selfCost = total == null ? null : Math.max(0, Number((total - childSum).toFixed(4)));
   return {
     label: p["Node Type"] ?? "Plan",
     kind: p["Relation Name"] ? "table" : "op",
-    cost: num(p["Total Cost"]),
+    cost: total,
+    selfCost,
     rows: num(p["Plan Rows"]),
     detail: detail || undefined,
-    children: Array.isArray(p.Plans) ? p.Plans.map(pgNode) : [],
+    children,
   };
 }
 
@@ -156,7 +165,9 @@ export function planSummary(node: PlanNode | null): { nodes: number; tables: num
   const walk = (n: PlanNode) => {
     nodes++;
     if (n.kind === "table") tables++;
-    if (n.kind !== "query_block" && n.cost != null && (maxCost == null || n.cost > maxCost)) maxCost = n.cost;
+    // 熱點以「獨佔成本」比較（PG 用 selfCost 排除子樹累積；MySQL 無 selfCost → 退回步驟 cost）。
+    const c = n.selfCost ?? n.cost;
+    if (n.kind !== "query_block" && c != null && (maxCost == null || c > maxCost)) maxCost = c;
     n.children.forEach(walk);
   };
   if (node) walk(node);

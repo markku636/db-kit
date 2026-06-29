@@ -18,8 +18,11 @@ function fmtNum(n: number | null): string {
 
 function PlanNodeView({ node, maxCost }: { node: PlanNode; maxCost: number | null }) {
   const st = KIND_STYLE[node.kind];
-  // 成本熱點：接近最大單點成本者標紅，快速指出瓶頸。
-  const hot = node.cost != null && maxCost != null && maxCost > 0 && node.cost >= maxCost * 0.66;
+  // 成本熱點：以「獨佔成本」（PG 排除子樹累積）接近最大者標紅，快速指出真正瓶頸節點。
+  const eff = node.selfCost ?? node.cost;
+  const hot = eff != null && maxCost != null && maxCost > 0 && eff >= maxCost * 0.66;
+  // PG 顯示的是子樹累積 cost；當獨佔成本與之不同時一併標出，解釋為何此節點為熱點。
+  const showSelf = node.selfCost != null && node.cost != null && node.selfCost !== node.cost;
   return (
     <div className="relative">
       <div className="flex items-start gap-2 py-1">
@@ -33,6 +36,12 @@ function PlanNodeView({ node, maxCost }: { node: PlanNode; maxCost: number | nul
                 title="成本估計（cost；MySQL 為單表步驟成本，PostgreSQL 為子樹總成本）"
               >
                 cost {fmtNum(node.cost)}
+              </span>
+            )}
+            {showSelf && (
+              <span className={`text-[11px] px-1.5 py-0.5 rounded ${hot ? "bg-red-500/15 text-red-300" : "bg-fg/10 text-fg/55"}`}
+                title="獨佔成本（self；本節點 Total 減去子節點累積）——熱點判斷依此值">
+                self {fmtNum(node.selfCost!)}
               </span>
             )}
             {node.rows != null && (

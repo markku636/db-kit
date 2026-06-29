@@ -109,16 +109,19 @@ describe("parseExplainPlan — robustness", () => {
 });
 
 describe("planSummary", () => {
-  it("counts nodes / tables and finds max cost", () => {
+  it("counts nodes / tables; hotspot uses exclusive (self) cost, not the cumulative root", () => {
     const plan = parseExplainPlan("postgres", JSON.stringify([
       { Plan: { "Node Type": "Hash Join", "Total Cost": 100, Plans: [
         { "Node Type": "Seq Scan", "Relation Name": "a", "Total Cost": 40 },
         { "Node Type": "Seq Scan", "Relation Name": "b", "Total Cost": 30 },
       ] } },
     ]))!;
+    // PG Total Cost 含子樹：Hash Join 自身＝100−40−30＝30；真正熱點是 Seq Scan a（self 40），非根（cum 100）。
+    expect(plan.selfCost).toBe(30);
+    expect(plan.children[0].selfCost).toBe(40);
     const s = planSummary(plan);
     expect(s.nodes).toBe(3);
     expect(s.tables).toBe(2);
-    expect(s.maxCost).toBe(100);
+    expect(s.maxCost).toBe(40); // 不再被累積根（100）灌爆
   });
 });

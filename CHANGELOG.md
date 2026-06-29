@@ -1,3 +1,7 @@
+## 執行計畫熱點：PostgreSQL 改用獨佔成本
+
+- 視覺化 EXPLAIN 的熱點判斷修正：PG 的 Total Cost 是含子樹的累積值，根節點永遠最大，原本一律把根標為瓶頸。改用獨佔成本（self＝本節點 Total 減各直接子節點 Total，pgAdmin / explain.depesz 的標準算法），凸顯真正最耗工的節點；節點額外顯示 self 徽章解釋熱點來源。MySQL 既有步驟成本邏輯不變。
+
 # Changelog
 
 ## 匯入預覽（致敬 Navicat 匯入精靈）
