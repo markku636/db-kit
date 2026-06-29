@@ -313,6 +313,11 @@ fn render_xlsx(
         }
         r += 1;
     }
+    // 凍結表頭列（捲動時標題常駐）+ 自動欄寬（依內容量測），輸出更接近 Navicat 的 Excel 品質。
+    if opts.include_header {
+        let _ = ws.set_freeze_panes(1, 0);
+    }
+    ws.autofit();
     wb.save_to_buffer()
         .map_err(|e| AppError::Query(format!("產生 Excel 失敗：{e}")))
 }

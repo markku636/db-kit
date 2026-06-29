@@ -1,5 +1,11 @@
 # Changelog
 
+## Excel 匯出品質提升：凍結表頭 + 自動欄寬
+
+匯出的 .xlsx 現在**凍結首列表頭**（捲動時標題常駐）並**自動依內容調整欄寬**，開檔即一目了然，更貼近 Navicat 的 Excel 輸出品質。
+
+> 驗證：`render_xlsx` 加 `set_freeze_panes` / `autofit`（rust_xlsxwriter）；`cargo test export::` 13 項全通過、`cargo clippy` 零警告。
+
 ## 整庫資料庫文件（致敬 Navicat HTML 文件 / 模型報表）
 
 資料庫節點右鍵新增「**資料庫文件…**」：一次彙整整個資料庫所有資料表的欄位 / 索引 / 外鍵成一份**含目錄**的文件，可複製或另存 **Markdown / HTML**（HTML 帶錨點目錄，適合放 wiki / 交付）。
