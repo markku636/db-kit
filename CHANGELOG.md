@@ -1,5 +1,11 @@
 # Changelog
 
+## 匯入：去除每格前後空白（資料清理）
+
+匯入 CSV / Excel 時可勾選「去除每格前後空白」，把「 alice 」清成「alice」，並在 empty→NULL 判定前套用（全空白 → NULL）。
+
+> 驗證：後端 `ImportOptions.trim` + import_rows 套用（向後相容）+ 1 項 SQLite 端到端測試；import 測試 18 項全通過、`cargo clippy` 零警告；前端 `tsc` + `eslint` + `vite build` 綠燈。
+
 ## 整庫傳輸自動建表依外鍵相依排序
 
 整庫傳輸勾選「自動建表」時，**先建被外鍵參照的表**——拓樸排序避免 `CREATE TABLE` 因外鍵指向尚未建立的表而失敗（如先建 users 再建 orders）。

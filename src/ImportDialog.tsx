@@ -16,6 +16,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
   const [hasHeader, setHasHeader] = useState(true);
   const [emptyAsNull, setEmptyAsNull] = useState(true);
   const [stopOnError, setStopOnError] = useState(false);
+  const [trim, setTrim] = useState(false);
   // 重新指定欄名（覆蓋檔案表頭）：把不一致的檔案欄名對齊到目標表欄位（致敬 Navicat 匯入欄位對應）。
   const [overrideNames, setOverrideNames] = useState(false);
   const [columns, setColumns] = useState("");
@@ -46,6 +47,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
         empty_as_null: emptyAsNull,
         columns: cols,
         stop_on_error: stopOnError,
+        trim,
       };
       const res = isExcel
         ? await api.importExcel(connId, database, table, path, opts)
@@ -110,6 +112,10 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
                 placeholder="id, name, qty" />
             </label>
           )}
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <input type="checkbox" checked={trim} onChange={(e) => setTrim(e.target.checked)} />
+            去除每格前後空白（資料清理）
+          </label>
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={emptyAsNull} onChange={(e) => setEmptyAsNull(e.target.checked)} />
             空欄位視為 NULL（建議開：避免空字串塞進數值 / 日期欄而失敗）

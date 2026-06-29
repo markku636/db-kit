@@ -27,6 +27,9 @@ pub struct ImportOptions {
     /// 任一列失敗即中止（預設關：盡量匯入，回報失敗列數與前幾筆錯誤）。
     #[serde(default)]
     pub stop_on_error: bool,
+    /// 去除每格前後空白（資料清理；於 empty→NULL 判定前套用）。預設關。
+    #[serde(default)]
+    pub trim: bool,
 }
 
 fn yes() -> bool {
@@ -239,10 +242,11 @@ async fn import_rows(
         let values: Vec<Option<String>> = row
             .iter()
             .map(|v| {
-                if opts.empty_as_null && v.is_empty() {
+                let s = if opts.trim { v.trim() } else { v.as_str() };
+                if opts.empty_as_null && s.is_empty() {
                     None
                 } else {
-                    Some(v.clone())
+                    Some(s.to_string())
                 }
             })
             .collect();

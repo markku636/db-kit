@@ -142,6 +142,7 @@ export interface ImportOptions {
   empty_as_null?: boolean;
   columns?: string[] | null;
   stop_on_error?: boolean;
+  trim?: boolean; // 去除每格前後空白
 }
 
 export interface ImportResult {

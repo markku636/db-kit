@@ -342,6 +342,7 @@ async fn import_csv_into_sqlite() {
         empty_as_null: true,
         columns: None,
         stop_on_error: false,
+        trim: false,
     };
     let res = crate::import::import_csv(&mgr, id, "main", "imp", csv, &opts).await.unwrap();
     assert_eq!(res.imported, 3, "應匯入 3 列，錯誤：{:?}", res.errors);
@@ -389,6 +390,7 @@ async fn import_csv_reports_errors() {
         empty_as_null: true,
         columns: None,
         stop_on_error: false,
+        trim: false,
     };
     let res = crate::import::import_csv(&mgr, id, "main", "imp", csv, &opts).await.unwrap();
     assert_eq!(res.imported, 2, "應匯入 id 1、3 兩列");
@@ -406,6 +408,7 @@ async fn import_csv_reports_errors() {
         empty_as_null: true,
         columns: None,
         stop_on_error: true,
+        trim: false,
     };
     assert!(
         crate::import::import_csv(&mgr, id, "main", "imp", "id,name\n1,dup", &opts_stop).await.is_err(),
@@ -526,6 +529,7 @@ async fn export_import_round_trip() {
         empty_as_null: false, // 真往返：不把空字串轉 NULL
         columns: None,
         stop_on_error: true,
+        trim: false,
     };
     assert_eq!(
         crate::import::import_csv(&mgr, id, "main", "dst", &content, &iopts).await.unwrap().imported,
@@ -1863,6 +1867,7 @@ async fn import_csv_column_override() {
         empty_as_null: true,
         columns: Some(vec!["id".into(), "name".into()]),
         stop_on_error: false,
+        trim: false,
     };
     let res = crate::import::import_csv(&mgr, id, "main", "imp", csv, &opts).await.unwrap();
     assert_eq!(res.imported, 2, "應匯入 2 列（表頭被跳過），錯誤：{:?}", res.errors);
@@ -1874,6 +1879,40 @@ async fn import_csv_column_override() {
         .unwrap();
     assert_eq!(pd.total_rows, 2);
     assert_eq!(pd.rows[0][col_at(&pd.columns, "name")].as_deref(), Some("a"));
+
+    mgr.disconnect(id).await;
+    let _ = std::fs::remove_file(dbfile);
+}
+
+/// CSV 匯入 trim：去除每格前後空白（清理「 a 」→「a」），且於 empty→NULL 判定前套用（「  」→ NULL）。
+#[tokio::test]
+async fn import_csv_trim_cells() {
+    let dbfile = format!("dbkit_import_trim_{}.db", std::process::id());
+    let dbfile = dbfile.as_str();
+    let _ = std::fs::remove_file(dbfile);
+    let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile));
+    let mgr = crate::manager::ConnectionManager::new();
+    mgr.connect(c.clone()).await.unwrap();
+    let id = c.id.as_str();
+    mgr.query(id, "CREATE TABLE imp (id INTEGER PRIMARY KEY, name TEXT)").await.unwrap();
+
+    let csv = "id,name\n1,  alice  \n2,\"  \"";
+    let opts = crate::import::ImportOptions {
+        delimiter: None,
+        has_header: true,
+        empty_as_null: true,
+        columns: None,
+        stop_on_error: false,
+        trim: true,
+    };
+    let res = crate::import::import_csv(&mgr, id, "main", "imp", csv, &opts).await.unwrap();
+    assert_eq!(res.imported, 2, "錯誤：{:?}", res.errors);
+    let pd = mgr
+        .table_data(id, "main", "imp", &dq(vec![], vec![Sort { column: "id".into(), dir: SortDir::Asc }]))
+        .await
+        .unwrap();
+    assert_eq!(pd.rows[0][col_at(&pd.columns, "name")].as_deref(), Some("alice"), "前後空白應去除");
+    assert_eq!(pd.rows[1][col_at(&pd.columns, "name")], None, "全空白 trim 後 → NULL");
 
     mgr.disconnect(id).await;
     let _ = std::fs::remove_file(dbfile);
