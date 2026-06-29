@@ -157,7 +157,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 
 ## 功能藍圖
 
-核心功能皆已完成（40+ 項），點開檢視完整清單：
+核心功能皆已完成（50+ 項），點開檢視完整清單：
 
 <details>
 <summary><strong>展開完整功能清單</strong></summary>
@@ -197,6 +197,17 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] Redis 進階：值格式化（原始 / JSON / Hex）+ 大集合游標式分頁、**Pub/Sub** 訂閱發佈、**維運面板**（慢查詢 / 用戶端 / 大鍵）
 - [x] AI 助手（右側面板，串接本機 Claude CLI）：串流問答、撰寫 / 優化 SQL，可附帶目前連線 schema 作上下文
 - [x] 跨資料庫一致：上述能力於 MySQL / PostgreSQL / SQLite / MongoDB 對齊（識別字 / 篩選 / 索引依各庫對應）
+- [x] **視覺化查詢建構器**：勾選表 / 欄、外鍵自動 JOIN、WHERE / 聚合 / HAVING / ORDER BY / DISTINCT / LIMIT / OFFSET、即時預覽 + 計數，帶入編輯器；可從資料表右鍵開啟
+- [x] **Excel（.xlsx）匯出 / 匯入**：純 Rust（rust_xlsxwriter / calamine），數字保真、凍結表頭 + 自動欄寬
+- [x] **查詢結果匯出**走後端統一管線（CSV / TSV / Excel / JSON / SQL / Markdown）
+- [x] **SQL 片段庫**（編輯器自動完成 + 工具列管理）、**參數化查詢 `:name`**、SQL **格式化 / 壓縮 / 關鍵字大小寫**
+- [x] **資料傳輸**（跨連線 / 跨庫；單表 / 整庫；目標不存在時自動建表）
+- [x] **資料比對 / 同步**（以主鍵比對兩表，產生 INSERT / UPDATE / DELETE 同步 DML）
+- [x] **整庫資料庫文件**（HTML / Markdown 報表，含目錄）
+- [x] **外鍵雙向導覽**（跳至參照的列 / 找參照此列的列）、**Copy as IN**、**相異值分布**
+- [x] **命令面板**（Ctrl/Cmd+K）：模糊搜尋跳轉連線 / 資料庫 / 資料表 / 動作
+- [x] **連線唯讀模式**（擋寫入 / DDL 與資料格 / 側欄寫入）、**連線色標**（區分環境）、**釘選常用表**
+- [x] 結構比對（同連線兩資料庫的表 / 欄差異 + 同步 SQL）
 
 </details>
 
