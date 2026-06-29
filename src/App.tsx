@@ -2318,6 +2318,8 @@ function QueryPane() {
   const schema = useSqlSchema(activeId, kind);
   const [editorSel, setEditorSel] = useState<string | null>(null);
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind));
+  // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
+  const paramCount = useMemo(() => (supportsExplain ? extractNamedParams(sql).length : 0), [supportsExplain, sql]);
   const [result, setResult] = useState<QueryResult | null>(null);
   // 結果表格目前的可視列（排序 + 篩選後）；複製 / 匯出依此而非原始 result，使輸出與所見一致。
   const [resultView, setResultView] = useState<(string | null)[][] | null>(null);
@@ -2998,9 +3000,9 @@ function QueryPane() {
                 <Icon icon={GitBranch} size={13} />視覺化解釋
               </button>
             )}
-            {supportsExplain && extractNamedParams(sql).length > 0 && (
+            {paramCount > 0 && (
               <span className="text-[11px] text-sky-300/80 px-1" title="偵測到具名參數 :name；執行時會逐一提示輸入並安全代入">
-                ⟨{extractNamedParams(sql).length} 參數⟩
+                ⟨{paramCount} 參數⟩
               </span>
             )}
             <button type="button" onClick={() => execute("run")} disabled={running}
