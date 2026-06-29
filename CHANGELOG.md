@@ -1,5 +1,15 @@
 # Changelog
 
+## 查詢結果可匯出 Excel / SQL（統一走後端匯出管線）
+
+查詢結果的「匯出」原本只能存 CSV / JSON / TSV / Markdown（前端純文字）。現改走後端 `export_rows`，與資料表匯出共用同一套 `render`，**新增 Excel (.xlsx) 與 SQL (INSERT)**，且文字格式也享有 CSV 注入防護 / BOM 等一致行為。
+
+> 驗證：後端新增 `export_rows` command（重用 `render`，欄 + 列由前端帶回）；`cargo check` 綠燈、touched 檔 `cargo clippy` 零警告；前端 `tsc` + `eslint` + `vite build` 綠燈。
+
+- 另存對話框格式：**CSV / Excel (.xlsx) / JSON / TSV / SQL (INSERT) / Markdown**，依副檔名自動選格式。
+- 匯出來源沿用目前所見（含前端排序 / 篩選後的可視列）。
+- 「複製 CSV / TSV / JSON / MD」剪貼簿按鈕維持前端即時序列化不變。
+
 ## Excel（.xlsx）匯出（致敬 Navicat「匯出至 Excel」）
 
 匯出資料對話框新增 **Excel (.xlsx)** 格式，直接產生原生 Excel 活頁簿，不再只能用 CSV 繞道。

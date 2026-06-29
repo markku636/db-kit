@@ -471,6 +471,9 @@ export const api = {
     invoke<number>("key_edit", { id, database, key, edit }),
   exportTable: (id: string, database: string, table: string, query: DataQuery, options: ExportOptions, outPath: string) =>
     invoke<ExportResult>("export_table", { id, database, table, query, options, outPath }),
+  // 匯出已備妥的查詢結果（欄 + 列）到檔案；走後端同一套 render，支援 xlsx 等二進位格式。
+  exportRows: (columns: string[], rows: (string | null)[][], options: ExportOptions, outPath: string) =>
+    invoke<ExportResult>("export_rows", { columns, rows, options, outPath }),
   importCsv: (id: string, database: string, table: string, path: string, options: ImportOptions) =>
     invoke<ImportResult>("import_csv", { id, database, table, path, options }),
   schemaDump: (id: string, database: string) => invoke<string>("schema_dump", { id, database }),

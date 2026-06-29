@@ -94,6 +94,7 @@ pub fn run() {
             commands::key_detail,
             commands::key_edit,
             commands::export_table,
+            commands::export_rows,
             commands::import_csv,
             commands::schema_dump,
             commands::explain_query,

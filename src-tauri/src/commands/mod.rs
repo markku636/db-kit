@@ -586,6 +586,18 @@ pub async fn export_table(
     crate::export::export(&state.manager, &id, &database, &table, &query, &options, &out_path).await
 }
 
+/// 匯出「已備妥的查詢結果」到檔案（CSV / TSV / Excel / JSON / SQL / Markdown）。
+/// 資料已在前端（查詢結果格），故直接帶欄 + 列回後端走同一套 render 管線，xlsx 等二進位格式亦可用。
+#[tauri::command]
+pub async fn export_rows(
+    columns: Vec<String>,
+    rows: Vec<Vec<Option<String>>>,
+    options: crate::export::ExportOptions,
+    out_path: String,
+) -> AppResult<crate::export::ExportResult> {
+    crate::export::export_rows(columns, rows, &options, &out_path).await
+}
+
 /// CSV 匯入到資料表（致敬 Navicat / DBeaver 匯入精靈）。逐列以 insert_row 寫入，
 /// 沿用各 driver 的型別轉型（PG 等嚴格型別欄位也能匯入），回報成功 / 失敗列數與前幾筆錯誤。
 #[tauri::command]

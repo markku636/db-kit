@@ -106,6 +106,31 @@ pub async fn export(
     })
 }
 
+/// 直接以「已備妥的欄 + 列」匯出（供查詢結果另存：資料已在前端，毋須再向 driver 取）。
+/// 重用 render() 的同一套輸出管線（CSV 注入防護 / BOM / xlsx 數字保真等），與表格匯出一致。
+pub async fn export_rows(
+    columns: Vec<String>,
+    rows: Vec<Vec<Option<String>>>,
+    opts: &ExportOptions,
+    out_path: &str,
+) -> AppResult<ExportResult> {
+    let table = opts
+        .sql_table
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "result".to_string());
+    let bytes = render(&columns, &rows, opts, &table)?;
+    tokio::fs::write(out_path, &bytes)
+        .await
+        .map_err(|e| AppError::Query(format!("寫入檔案失敗：{e}")))?;
+    Ok(ExportResult {
+        path: out_path.to_string(),
+        rows: rows.len() as u64,
+        bytes: bytes.len() as u64,
+        format: opts.format.clone(),
+    })
+}
+
 /// 匯出整個資料庫的結構（所有表的建表 SQL，依 `table_ddl` 串接）。致敬 Navicat / DBeaver 的
 /// 「轉儲結構」。不支援 `table_ddl` 的表（如 Mongo 集合）會被略過。
 pub async fn schema_dump(

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
-import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo } from "./api";
+import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat } from "./api";
 import { useStore } from "./store";
 import { useTheme } from "./theme";
 import ConnectionDialog from "./ConnectionDialog";
@@ -2499,22 +2499,35 @@ function QueryPane() {
     if (!result || result.columns.length === 0 || !exportRes) return;
     const path = await pickSaveFile("query-result.csv", [
       { name: "CSV", extensions: ["csv"] },
+      { name: "Excel (.xlsx)", extensions: ["xlsx"] },
       { name: "JSON", extensions: ["json"] },
       { name: "TSV", extensions: ["tsv", "txt"] },
+      { name: "SQL (INSERT)", extensions: ["sql"] },
       { name: "Markdown", extensions: ["md"] },
     ]);
     if (!path) return;
+    // 依副檔名選格式；統一走後端 export_rows（與表格匯出同一套 render，xlsx 等二進位亦可）。
     const lower = path.toLowerCase();
-    const content = lower.endsWith(".json")
-      ? resultToJson(exportRes)
+    const fmt: ExportFormat = lower.endsWith(".xlsx")
+      ? "xlsx"
+      : lower.endsWith(".json")
+      ? "json"
       : lower.endsWith(".md")
-      ? resultToMarkdown(exportRes)
+      ? "markdown"
+      : lower.endsWith(".sql")
+      ? "sql"
       : lower.endsWith(".tsv") || lower.endsWith(".txt")
-      ? resultToTsv(exportRes)
-      : resultToCsv(exportRes);
+      ? "tsv"
+      : "csv";
     try {
-      await api.saveTextFile(path, content);
-      toast.success(`已匯出 ${exportRes.rows.length} 列`);
+      const res = await api.exportRows(exportRes.columns, exportRes.rows, {
+        format: fmt,
+        include_header: true,
+        all_rows: true,
+        bom: fmt === "csv" || fmt === "tsv",
+        sql_table: fmt === "sql" ? "result" : null,
+      }, path);
+      toast.success(`已匯出 ${res.rows} 列 · ${fmt.toUpperCase()}`);
     } catch (e: any) {
       toast.error(e?.message ?? "匯出失敗");
     }
