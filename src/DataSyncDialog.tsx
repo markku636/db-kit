@@ -68,7 +68,11 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
     if (sameTable) { toast.error("來源與目標是同一張表"); return; }
     setBusy(true); setErr(null); setRes(null);
     try {
-      const q = { page: 0, page_size: CAP, filters: [], sorts: [] };
+      // 先探來源主鍵，並以主鍵排序兩側查詢——資料超過上限時，兩側才會載入「同一段主鍵範圍」，比對才有意義。
+      const probe = await api.tableData(connId, database, table, { page: 0, page_size: 1, filters: [], sorts: [] });
+      if (probe.primary_key.length === 0) { setErr("來源資料表沒有主鍵，無法以主鍵比對。"); return; }
+      const sorts = probe.primary_key.map((c) => ({ column: c, dir: "asc" as const }));
+      const q = { page: 0, page_size: CAP, filters: [], sorts };
       const [sp, dp] = await Promise.all([
         api.tableData(connId, database, table, q),
         api.tableData(dstId, dstDb, dstTable, q),
