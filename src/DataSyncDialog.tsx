@@ -34,7 +34,7 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
   const [includeDeletes, setIncludeDeletes] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [res, setRes] = useState<{ diff: RowDiff; src: RowSet; dstCols: string[]; capped: boolean } | null>(null);
+  const [res, setRes] = useState<{ diff: RowDiff; src: RowSet; dstCols: string[]; capped: boolean; srcTotal: number; dstTotal: number } | null>(null);
 
   const dstKind = connections.find((c) => c.id === dstId)?.kind;
 
@@ -81,7 +81,7 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
       const src: RowSet = { columns: sp.columns, pk: sp.primary_key, rows: sp.rows };
       const dst: RowSet = { columns: dp.columns, pk: dp.primary_key, rows: dp.rows };
       const diff = diffRowsByPk(src, dst);
-      setRes({ diff, src, dstCols: dp.columns, capped: sp.total_rows > CAP || dp.total_rows > CAP });
+      setRes({ diff, src, dstCols: dp.columns, capped: sp.total_rows > CAP || dp.total_rows > CAP, srcTotal: sp.total_rows, dstTotal: dp.total_rows });
     } catch (e: any) {
       setErr(e?.message ?? "比對失敗");
     } finally {
@@ -165,10 +165,11 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
 
       {counts && (
         <div className="text-sm rounded border border-fg/10 bg-inset p-3 space-y-2">
-          <div className="flex gap-4">
+          <div className="flex gap-4 items-center">
             <span>新增 <span className="text-emerald-400">{counts.i}</span></span>
             <span>更新 <span className="text-amber-300">{counts.u}</span></span>
             <span>刪除 <span className="text-red-400">{counts.d}</span>{!allowDeletes && counts.d > 0 ? "（未含）" : ""}</span>
+            <span className="ml-auto text-[11px] text-fg/40">來源 {res?.srcTotal ?? 0} 列 · 目標 {res?.dstTotal ?? 0} 列</span>
           </div>
           {res?.capped && <div className="text-[11px] text-amber-300/80 inline-flex items-center gap-1"><Icon icon={AlertTriangle} size={11} />資料量超過 {CAP.toLocaleString()} 列上限，比對僅涵蓋部分列；為安全已停用 DELETE（避免刪到未載入的列）。</div>}
           {colMismatch && (colMismatch.srcOnly.length > 0 || colMismatch.dstOnly.length > 0) && (
