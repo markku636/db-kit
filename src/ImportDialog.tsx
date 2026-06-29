@@ -100,7 +100,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
       {filePath && (
         <div className="text-xs text-fg/55 truncate" title={filePath}>
           檔案：<span className="mono">{filePath.split(/[\\/]/).pop()}</span>
-          {preview && <span className="text-fg/40"> · 約 {preview.total_rows} 列資料 · {preview.columns.length} 欄</span>}
+          {preview && <span className="text-fg/40"> · {preview.total_rows} 列資料 · {preview.columns.length} 欄</span>}
           {preview && !overrideNames && targetCols.length > 0 && preview.columns.length !== targetCols.length && (
             <span className="text-amber-400"> · 欄數與目標（{targetCols.length}）不同，可能需「重新指定欄名」</span>
           )}
