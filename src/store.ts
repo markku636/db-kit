@@ -31,6 +31,8 @@ interface AppStore {
   pendingSql: string | null;
   // 待開啟新增列對話框的分頁鍵（右鍵「新增資料列」→ 開表後由該分頁消費）。
   pendingInsert: string | null;
+  // 外鍵導覽：開啟被參照表並套用 col=value 篩選（開表後由該分頁消費）。
+  pendingFilter: { key: string; column: string; value: string } | null;
   // 資料重載信號：key（connId:db:table）→ nonce，外部操作（如 TRUNCATE）後遞增以強制開啟中的資料頁重載。
   dataReload: Record<string, number>;
   // 右側詳細資料面板目前選取的節點（單擊樹節點即更新）。
@@ -58,6 +60,9 @@ interface AppStore {
   // 要求某分頁開啟新增列對話框（右鍵新增資料列）。
   requestInsert: (key: string) => void;
   clearPendingInsert: () => void;
+  // 外鍵導覽：開啟被參照的資料表並套用 col=value 篩選。
+  openTableFiltered: (connId: string, database: string, table: string, column: string, value: string) => void;
+  clearPendingFilter: () => void;
   // 遞增某表的資料重載 nonce（TRUNCATE 後呼叫，使開啟中的資料頁重新查詢）。
   bumpDataReload: (connId: string, database: string, table: string) => void;
   // 設定詳細資料面板選取的節點（null 清空）。
@@ -72,6 +77,7 @@ export const useStore = create<AppStore>((set) => ({
   activeTabKey: null,
   pendingSql: null,
   pendingInsert: null,
+  pendingFilter: null,
   dataReload: {},
   selectedNode: null,
 
@@ -139,6 +145,16 @@ export const useStore = create<AppStore>((set) => ({
   clearPendingSql: () => set({ pendingSql: null }),
   requestInsert: (key) => set({ pendingInsert: key }),
   clearPendingInsert: () => set({ pendingInsert: null }),
+  // 開啟（或切到）被參照表，並排入 col=value 篩選；TableView 掛載 / pendingFilter 變動時消費。
+  openTableFiltered: (connId, database, table, column, value) =>
+    set((s) => {
+      const key = `${connId}:${database}:${table}`;
+      const tabs = s.tabs.some((t) => t.key === key)
+        ? s.tabs.map((t) => (t.key === key ? { ...t, view: "data" as const } : t))
+        : [...s.tabs, { key, connId, database, table, view: "data" as const, objKind: "table" }];
+      return { tabs, activeTabKey: key, pendingFilter: { key, column, value } };
+    }),
+  clearPendingFilter: () => set({ pendingFilter: null }),
   setActiveTab: (key) => set({ activeTabKey: key }),
   setTabView: (key, view) =>
     set((s) => ({

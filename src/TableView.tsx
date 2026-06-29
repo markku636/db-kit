@@ -192,6 +192,33 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // 欄位標題右鍵選單
   const [colMenu, setColMenu] = useState<{ col: string; ci: number; x: number; y: number } | null>(null);
 
+  // 外鍵：欄名 → 參照表 / 欄（供儲存格右鍵「跳至參照的列」導覽，致敬 Navicat / TablePlus）。僅 SQL 資料表。
+  const [fkMap, setFkMap] = useState<Record<string, { ref_table: string; ref_column: string }>>({});
+  useEffect(() => {
+    if (!isSqlKind || tab.view !== "data") { setFkMap({}); return; }
+    let alive = true;
+    api.listForeignKeys(tab.connId, tab.database, tab.table)
+      .then((fks) => {
+        if (!alive) return;
+        const m: Record<string, { ref_table: string; ref_column: string }> = {};
+        for (const f of fks) m[f.column] = { ref_table: f.ref_table, ref_column: f.ref_column };
+        setFkMap(m);
+      })
+      .catch(() => { if (alive) setFkMap({}); });
+    return () => { alive = false; };
+  }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
+
+  // 外鍵導覽消費：pendingFilter 指向本分頁時，套用 col=value 篩選（被參照表開啟後即過濾出該列）。
+  const pendingFilter = useStore((s) => s.pendingFilter);
+  useEffect(() => {
+    if (!pendingFilter || pendingFilter.key !== tab.key) return;
+    setPage(0);
+    setMatchAny(false);
+    setFilters([{ column: pendingFilter.column, op: "=", value: pendingFilter.value }]);
+    setShowFilter(true);
+    useStore.getState().clearPendingFilter();
+  }, [pendingFilter, tab.key]);
+
   // Esc 關閉儲存格 / 欄位右鍵選單（與對話框、側欄選單一致）。
   useEffect(() => {
     if (!cellMenu && !colMenu) return;
@@ -614,6 +641,17 @@ function DataPane({ tab }: { tab: OpenTab }) {
       ["篩選此值", () => filterByCell(r, c, false), false],
       ["排除此值", () => filterByCell(r, c, true), false],
     ];
+    // 外鍵導覽：此欄是外鍵且值非 NULL → 開被參照表並過濾到該列（致敬 Navicat / TablePlus）。
+    const fkCol = data?.columns[c];
+    const fk = fkCol ? fkMap[fkCol] : undefined;
+    const fkVal = cellValue(r, c);
+    if (fk && fkVal !== null) {
+      items.push([
+        `跳至 ${fk.ref_table}（${fk.ref_column} = ${fkVal.length > 18 ? fkVal.slice(0, 18) + "…" : fkVal}）`,
+        () => useStore.getState().openTableFiltered(tab.connId, tab.database, fk.ref_table, fk.ref_column, fkVal),
+        false,
+      ]);
+    }
     if (editable) {
       items.push(
         "sep",
