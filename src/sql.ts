@@ -543,6 +543,7 @@ export interface QbSpec {
   orders: QbOrder[];
   distinct?: boolean;
   limit?: number | null;
+  offset?: number | null;
 }
 
 // 聚合表達式：agg 空白回傳欄位參照本身，否則包上聚合函式。
@@ -664,8 +665,9 @@ export function buildSelectQuery(kind: DbKind, spec: QbSpec): string {
     body += ` ORDER BY ${orders.map((o) => `${colRef(o.table, o.column)} ${o.dir}`).join(", ")}`;
   }
 
-  // LIMIT（三大關聯式方言皆支援）
+  // LIMIT / OFFSET（三大關聯式方言皆支援 `LIMIT n OFFSET m`）
   if (spec.limit != null && spec.limit > 0) body += ` LIMIT ${Math.floor(spec.limit)}`;
+  if (spec.offset != null && spec.offset > 0) body += ` OFFSET ${Math.floor(spec.offset)}`;
 
   return `SELECT ${spec.distinct ? "DISTINCT " : ""}${selectList} ${body};`;
 }

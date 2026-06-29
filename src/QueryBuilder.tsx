@@ -64,6 +64,7 @@ export default function QueryBuilder({
   const [orders, setOrders] = useState<SelOrder[]>([]);
   const [distinct, setDistinct] = useState(false);
   const [limit, setLimit] = useState<string>("100");
+  const [offset, setOffset] = useState<string>("");
   const [copied, setCopied] = useState(false);
   // 結果預覽：在建構器內直接執行產生的查詢（套上預覽上限）看結果，免切到編輯器。
   const [preview, setPreview] = useState<QueryResult | null>(null);
@@ -203,7 +204,8 @@ export default function QueryBuilder({
     orders: orders.map(({ table, column, dir }) => ({ table, column, dir })),
     distinct,
     limit: limit.trim() === "" ? null : Number(limit),
-  }), [db, picked, cols, joins, conds, havings, orders, distinct, limit]);
+    offset: offset.trim() === "" ? null : Number(offset),
+  }), [db, picked, cols, joins, conds, havings, orders, distinct, limit, offset]);
 
   const generated = useMemo(() => {
     const raw = buildSelectQuery(kind, spec);
@@ -472,6 +474,10 @@ export default function QueryBuilder({
                 <label className="inline-flex items-center gap-1.5">
                   LIMIT
                   <Input inputSize="sm" value={limit} onChange={(e) => setLimit(e.target.value.replace(/[^\d]/g, ""))} className="text-xs w-20" placeholder="無" />
+                </label>
+                <label className="inline-flex items-center gap-1.5">
+                  OFFSET
+                  <Input inputSize="sm" value={offset} onChange={(e) => setOffset(e.target.value.replace(/[^\d]/g, ""))} className="text-xs w-20" placeholder="0" />
                 </label>
                 {allColRefs.length === 0 && null}
               </section>

@@ -951,6 +951,13 @@ describe("buildSelectQuery（視覺化查詢建構器）", () => {
     );
   });
 
+  it("OFFSET 接在 LIMIT 之後", () => {
+    const sql = buildSelectQuery("mysql", base({ limit: 50, offset: 100 }));
+    expect(sql).toBe("SELECT * FROM `shop`.`orders` LIMIT 50 OFFSET 100;");
+    // OFFSET 0 / 負值不輸出。
+    expect(buildSelectQuery("mysql", base({ limit: 10, offset: 0 }))).toBe("SELECT * FROM `shop`.`orders` LIMIT 10;");
+  });
+
   it("MySQL 反斜線字串值加倍跳脫（沿用 sqlLiteral 方言）", () => {
     const sql = buildSelectQuery("mysql", base({
       conds: [{ table: "orders", column: "path", op: "=", value: "a\\b" }],

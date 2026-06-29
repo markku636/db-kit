@@ -1,5 +1,11 @@
 # Changelog
 
+## 視覺化查詢建構器：OFFSET（分頁）
+
+查詢建構器選項列補上 **OFFSET**，與 LIMIT 一起組出 `LIMIT n OFFSET m` 分頁查詢。
+
+> 驗證：`buildSelectQuery` 加 offset（接於 LIMIT 後，0 / 負值不輸出）+ 1 項 vitest（共 160 項全通過）；前端 `tsc` + `eslint` + `vite build` 綠燈。
+
 ## Excel 匯出品質提升：凍結表頭 + 自動欄寬
 
 匯出的 .xlsx 現在**凍結首列表頭**（捲動時標題常駐）並**自動依內容調整欄寬**，開檔即一目了然，更貼近 Navicat 的 Excel 輸出品質。
