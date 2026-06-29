@@ -34,7 +34,18 @@
 | — | **CSV 資料匯入**（RFC4180 解析、空欄→NULL、逐列回報） | ✅ 完成 |
 | — | 轉儲整庫結構 SQL（所有表建表語句） | ✅ 完成 |
 | — | PostgreSQL 嚴格型別寫入修正（整數 / 複合主鍵 CRUD、數值範圍篩選原生比較） | ✅ 完成 |
-| — | **視覺化查詢建構器**（Visual Query Builder，致敬 Navicat）：勾選表 / 欄、外鍵自動 JOIN、WHERE / GROUP BY 聚合 / ORDER BY / DISTINCT / LIMIT，即時產生 SELECT 帶入編輯器 | ✅ 完成 |
+| — | **視覺化查詢建構器**（Visual Query Builder，致敬 Navicat）：勾選表 / 欄、外鍵自動 JOIN、WHERE / GROUP BY 聚合 / HAVING / ORDER BY / DISTINCT / LIMIT / OFFSET、即時預覽 + 計數，帶入編輯器；可從資料表右鍵開啟 | ✅ 完成 |
+| — | **Excel（.xlsx）匯出 / 匯入**（rust_xlsxwriter / calamine，純 Rust）：數字保真、凍結表頭 + 自動欄寬、第一張工作表匯入 | ✅ 完成 |
+| — | **查詢結果匯出**統一走後端管線（CSV / TSV / Excel / JSON / SQL / Markdown） | ✅ 完成 |
+| — | **SQL 片段庫**（Snippets）：編輯器自動完成 + 工具列管理，11+ 內建骨架 | ✅ 完成 |
+| — | **資料傳輸**（Data Transfer）：跨連線 / 跨庫複製表資料、同名欄位交集、目標不存在時自動建表（同種類）、整庫多表一次傳 | ✅ 完成 |
+| — | **資料比對 / 同步**（Data Synchronization）：以主鍵比對兩表，產生 INSERT / UPDATE / DELETE 同步 DML（共同欄位） | ✅ 完成 |
+| — | **外鍵雙向導覽**：儲存格跳至參照的列；主鍵儲存格找參照此列的列 | ✅ 完成 |
+| — | **命令面板**（Ctrl/Cmd+K）：模糊搜尋跳轉連線 / 資料庫 / 資料表 / 動作 | ✅ 完成 |
+| — | **連線唯讀模式**：擋查詢寫入 / DDL 與資料格 / 側欄寫入動作；**連線色標**區分環境；**釘選常用表** | ✅ 完成 |
+| — | **參數化查詢** `:name`：執行前提示輸入並安全代入（方言跳脫、`::type` 不誤判） | ✅ 完成 |
+| — | **SQL 編輯器**：格式化 / 壓縮單行 / 關鍵字大小寫、Copy as IN、相異值分布 | ✅ 完成 |
+| — | **整庫資料庫文件**（HTML / Markdown 報表，含目錄） | ✅ 完成 |
 
 ## 各資料庫備份機制（規劃）
 
