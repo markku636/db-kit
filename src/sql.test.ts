@@ -73,6 +73,7 @@ import {
   lintSqlStructure,
   buildSelectQuery,
   buildCountQuery,
+  minifySql,
   extractNamedParams,
   substituteNamedParams,
   isWriteStatement,
@@ -1029,6 +1030,20 @@ describe("transformKeywordCase（關鍵字大小寫）", () => {
     // date / text 不在關鍵字集合 → 保持原樣，避免誤改欄名。
     expect(transformKeywordCase("select date, text from t", true))
       .toBe("SELECT date, text FROM t");
+  });
+});
+
+describe("minifySql", () => {
+  it("多行收斂為單行；分號保留", () => {
+    expect(minifySql("SELECT *\nFROM t\nWHERE x = 1;")).toBe("SELECT * FROM t WHERE x = 1;");
+  });
+  it("字串內空白保留、行註解移除", () => {
+    expect(minifySql("SELECT '  a  b  '\nFROM t")).toBe("SELECT '  a  b  ' FROM t");
+    expect(minifySql("-- hi\nSELECT 1")).toBe("SELECT 1");
+    expect(minifySql("SELECT 1 -- trailing\nFROM t")).toBe("SELECT 1 FROM t");
+  });
+  it("區塊註解保留", () => {
+    expect(minifySql("SELECT /* keep */ 1\nFROM t")).toBe("SELECT /* keep */ 1 FROM t");
   });
 });
 

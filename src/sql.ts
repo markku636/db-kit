@@ -738,6 +738,24 @@ export function buildInClause(kind: DbKind, column: string, values: (string | nu
   return inPart || `${col} IN (NULL)`; // 無值（理論上不會發生）→ 給合法但無相符的條件
 }
 
+// 壓縮 SQL 成單行：程式碼段內多重空白 / 換行收斂為單一空白；行註解移除（單行化會吃掉後續），
+// 字串 / 區塊註解 / $$ 內容原樣保留。與 formatSql（展開換行）互補。
+export function minifySql(sql: string): string {
+  let out = "";
+  for (const seg of sqlCodeSegments(sql)) {
+    if (!seg.code) {
+      // 行註解 → 收成單一空白（且不與既有結尾空白重複）；字串 / 區塊註解 / $$ 原樣保留。
+      if (seg.v.startsWith("--")) { if (!out.endsWith(" ")) out += " "; }
+      else out += seg.v;
+      continue;
+    }
+    let v = seg.v.replace(/\s+/g, " ");
+    if (out.endsWith(" ")) v = v.replace(/^ +/, ""); // 邊界去重（只動程式碼段，不碰字串內容）
+    out += v;
+  }
+  return out.trim();
+}
+
 // 具名參數（`:name`）萃取 / 代入（致敬 Navicat 的參數化查詢）。在「程式碼」段才認，
 // 字串 / 註解內的 `:name` 不算；PostgreSQL 型別轉換 `::type` 不誤判為參數。
 const PARAM_RE = /:{1,2}([a-zA-Z_]\w*)/g;

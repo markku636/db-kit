@@ -48,7 +48,7 @@ import {
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
-  formatSql, transformKeywordCase, buildUseDatabase, hasExecutableSql,
+  formatSql, minifySql, transformKeywordCase, buildUseDatabase, hasExecutableSql,
   extractNamedParams, substituteNamedParams,
 } from "./sql";
 import type { SavedQuery } from "./sql";
@@ -2939,6 +2939,11 @@ function QueryPane() {
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
                 <Icon icon={Wand2} size={13} />格式化
               </button>
+            )}
+            {supportsExplain && (
+              <button type="button" onClick={() => persistSql(minifySql(sql))} disabled={running || !sql.trim()}
+                title="壓縮 SQL 成單行（保留字串 / 區塊註解，移除行註解）"
+                className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">壓縮</button>
             )}
             {supportsExplain && (
               <div className="inline-flex rounded border border-fg/15 overflow-hidden">
