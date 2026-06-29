@@ -30,6 +30,16 @@ describe("diffRowsByPk", () => {
   it("無主鍵 → 丟錯", () => {
     expect(() => diffRowsByPk({ ...src, pk: [] }, dst)).toThrow();
   });
+  it("複合主鍵不串接碰撞（[1,2] 與 [12,''] 視為不同列）", () => {
+    const cols = ["a", "b", "v"];
+    const s = { columns: cols, pk: ["a", "b"], rows: [["1", "2", "x"], ["12", "", "y"]] };
+    const t = { columns: cols, pk: ["a", "b"], rows: [["1", "2", "x"], ["12", "", "y"]] };
+    const d = diffRowsByPk(s, t);
+    // 兩列在兩邊都精確配對 → 無新增 / 更新 / 刪除（若鍵碰撞會誤判）。
+    expect(d.inserts).toEqual([]);
+    expect(d.updates).toEqual([]);
+    expect(d.deletes).toEqual([]);
+  });
   it("NULL 主鍵值正確配對（不誤判為新增）", () => {
     const s: RowSet = { columns: ["k", "v"], pk: ["k"], rows: [[null, "a"]] };
     const t: RowSet = { columns: ["k", "v"], pk: ["k"], rows: [[null, "a"]] };
