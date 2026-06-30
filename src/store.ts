@@ -59,6 +59,9 @@ interface AppStore {
   setActiveTab: (key: string) => void;
   // 多查詢分頁：新增一個查詢分頁並切過去 / 關閉某查詢分頁（預設 __query__ 不可關）。
   addQueryTab: () => void;
+  // 開「新查詢分頁」並可帶入起始 SQL（由新分頁的 QueryPane 掛載後消費）與切換連線。
+  // 供側欄節點 / Ctrl+N / 工具列「新查詢」共用：永遠開新分頁、不覆蓋現有編輯器內容。
+  newQueryTab: (sql?: string, connId?: string) => void;
   closeQueryTab: (id: string) => void;
   setTabView: (key: string, view: "data" | "structure") => void;
   // 物件被刪除時連帶關閉其分頁（沿用 markDisconnected 的清理慣例）。
@@ -165,6 +168,20 @@ export const useStore = create<AppStore>((set) => ({
       while (s.queryTabs.includes(`__query__:${n}`)) n++;
       const id = `__query__:${n}`;
       return { queryTabs: [...s.queryTabs, id], activeTabKey: id };
+    }),
+  // 開新查詢分頁並（可選）帶入起始 SQL / 切換連線：新分頁掛載後由其 QueryPane 消費 pendingSql 載入。
+  // sql 為 undefined → 開乾淨空白分頁（pendingSql 設 null，不觸發清空/存歷史路徑）。
+  newQueryTab: (sql, connId) =>
+    set((s) => {
+      let n = 2;
+      while (s.queryTabs.includes(`__query__:${n}`)) n++;
+      const id = `__query__:${n}`;
+      return {
+        queryTabs: [...s.queryTabs, id],
+        activeTabKey: id,
+        pendingSql: sql ?? null,
+        activeId: connId ?? s.activeId,
+      };
     }),
   // 關閉查詢分頁：預設 home「__query__」不可關；關掉作用中者則切到相鄰查詢分頁。
   closeQueryTab: (id) =>

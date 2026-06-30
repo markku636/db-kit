@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
 import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat } from "./api";
-import { useStore } from "./store";
+import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
 import ConnectionDialog from "./ConnectionDialog";
 import TableView, { CellInspector } from "./TableView";
@@ -67,6 +67,31 @@ import {
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal,
   type LucideIcon,
 } from "lucide-react";
+
+// ---- 依選取的樹節點，組「新查詢分頁」的起始 SQL（對標 DataGrip / Navicat：在物件上開查詢即帶範圍）----
+//  - 資料表 / 檢視：USE db;（mysql / external）或 SET search_path（postgres）＋ 一條可執行的 SELECT … LIMIT 100；
+//    sqlite 無多庫概念 → 僅 SELECT；mongo → find JSON；redis → 無此語意（回 undefined，開空白分頁）。
+//  - 資料庫：僅 USE / search_path 前綴，游標留在空白處等使用者輸入。
+//  - 連線 / 未選取：回 undefined（開乾淨空白分頁，僅切到該連線）。
+function buildScopedSql(node: SelectedNode | null): string | undefined {
+  if (!node || node.type === "connection") return undefined;
+  const use = buildUseDatabase(node.kind, node.db); // sqlite / mongo / redis → null
+  if (node.type === "database") return use ? `${use};\n\n` : undefined;
+  // 資料表 / 檢視節點：
+  if (node.kind === "mongo") {
+    return JSON.stringify({ db: node.db, collection: node.table, filter: {} }, null, 2);
+  }
+  if (node.kind === "redis") return undefined;
+  const select = `SELECT *\nFROM ${qualifiedName(node.kind, node.db, node.table)}\nLIMIT 100;`;
+  return use ? `${use};\n\n${select}` : select;
+}
+
+// 依目前選取的樹節點開「新查詢分頁」：永遠開新分頁（不覆蓋現有編輯器內容），並切到該節點的連線。
+// 工具列「新查詢」鈕與 Ctrl+N 共用此入口。
+function openNodeScopedQueryTab() {
+  const node = useStore.getState().selectedNode;
+  useStore.getState().newQueryTab(buildScopedSql(node), node?.connId);
+}
 
 // ---- 可拖曳分隔線：記憶尺寸（localStorage）+ 指標拖曳調整 ----
 function clampSize(v: number, min: number, max: number) {
@@ -468,7 +493,7 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
     ["查詢編輯器", [
       ["F6", "執行整段查詢"],
       ["Ctrl+Enter", "執行游標所在語句或選取段"],
-      ["Ctrl+N", "開新查詢（清空編輯器）"],
+      ["Ctrl+N", "開新查詢分頁（依選取的連線 / 資料庫 / 資料表帶入範圍）"],
       ["Ctrl+Shift+N", "新增連線"],
       ["Ctrl+Space", "自動完成（表名 / 欄名 / 關鍵字）"],
       ["Tab", "縮排"],
@@ -2063,13 +2088,14 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
       if (!(e.ctrlKey || e.metaKey)) return;
       if (document.body.dataset.modalCount) return; // 有對話框開啟時不要在背後切換 / 關閉分頁
       if (e.key === "n" || e.key === "N") {
-        // Ctrl+N 開新查詢（切到查詢分頁並清空編輯器，清空前草稿會存進歷史）；Ctrl+Shift+N 新增連線。
+        // Ctrl+N 開「新查詢分頁」：依目前選取的樹節點帶入範圍（USE + SELECT / USE / 空白）；Ctrl+Shift+N 新增連線。
+        // 永遠開新分頁、不覆蓋現有編輯器內容（對標 DataGrip New Query Console）。
         // 焦點在一般輸入框（側欄搜尋 / 對話框欄位 / 下拉）時不攔截，避免誤觸；查詢編輯器仍可用。
         const el = document.activeElement as HTMLElement | null;
         if (el && (el.tagName === "INPUT" || el.tagName === "SELECT")) return;
         e.preventDefault();
         if (e.shiftKey) onNewConnection();
-        else useStore.getState().requestQuery("");
+        else openNodeScopedQueryTab();
         return;
       }
       if (e.key === "w" || e.key === "W") {
@@ -2917,9 +2943,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               </Select>
             )}
           </div>
-          <div className="flex gap-1.5 items-center">
-            <button type="button" onClick={() => useStore.getState().requestQuery("")}
-              title="開新查詢：清空編輯器，原內容會存進歷史（Ctrl+N）"
+          <div className="flex flex-wrap justify-end items-center gap-x-1.5 gap-y-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap">
+            <button type="button" onClick={openNodeScopedQueryTab}
+              title="開新查詢分頁：依目前選取的連線 / 資料庫 / 資料表帶入範圍（Ctrl+N）"
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
               <Icon icon={FilePlus2} size={13} />新查詢
             </button>
