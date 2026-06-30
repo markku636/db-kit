@@ -30,6 +30,8 @@ interface AppStore {
   // 已開啟的表分頁
   tabs: OpenTab[];
   activeTabKey: string | null;
+  // 查詢分頁（多開）：id 清單，永遠含預設「__query__」（home，不可關）；額外分頁為 __query__:2、:3…
+  queryTabs: string[];
   // 由側欄「產生 SQL」送往查詢編輯器的待載入語句（消費後清空）。
   pendingSql: string | null;
   // 待開啟新增列對話框的分頁鍵（右鍵「新增資料列」→ 開表後由該分頁消費）。
@@ -55,6 +57,9 @@ interface AppStore {
   closeOtherTabs: (key: string) => void;
   closeAllTabs: () => void;
   setActiveTab: (key: string) => void;
+  // 多查詢分頁：新增一個查詢分頁並切過去 / 關閉某查詢分頁（預設 __query__ 不可關）。
+  addQueryTab: () => void;
+  closeQueryTab: (id: string) => void;
   setTabView: (key: string, view: "data" | "structure") => void;
   // 物件被刪除時連帶關閉其分頁（沿用 markDisconnected 的清理慣例）。
   closeTableTab: (connId: string, database: string, table: string) => void;
@@ -81,6 +86,7 @@ export const useStore = create<AppStore>((set) => ({
   activeId: null,
   tabs: [],
   activeTabKey: null,
+  queryTabs: ["__query__"],
   pendingSql: null,
   pendingInsert: null,
   pendingFilter: null,
@@ -152,8 +158,30 @@ export const useStore = create<AppStore>((set) => ({
       return { tabs, activeTabKey: tabs.length ? key : "__query__" };
     }),
   closeAllTabs: () => set({ tabs: [], activeTabKey: "__query__" }),
-  // 設定待載入 SQL 並切到查詢分頁（QueryPane 掛載後消費）。
-  requestQuery: (sql) => set({ pendingSql: sql, activeTabKey: "__query__" }),
+  // 新增查詢分頁：產生不重複 id（__query__:N）並切過去。
+  addQueryTab: () =>
+    set((s) => {
+      let n = 2;
+      while (s.queryTabs.includes(`__query__:${n}`)) n++;
+      const id = `__query__:${n}`;
+      return { queryTabs: [...s.queryTabs, id], activeTabKey: id };
+    }),
+  // 關閉查詢分頁：預設 home「__query__」不可關；關掉作用中者則切到相鄰查詢分頁。
+  closeQueryTab: (id) =>
+    set((s) => {
+      if (id === "__query__" || s.queryTabs.length <= 1) return {};
+      const queryTabs = s.queryTabs.filter((t) => t !== id);
+      const activeTabKey =
+        s.activeTabKey === id ? queryTabs[queryTabs.length - 1] : s.activeTabKey;
+      return { queryTabs, activeTabKey };
+    }),
+  // 設定待載入 SQL 並切到查詢分頁（QueryPane 掛載後消費）。作用中已是某查詢分頁則留在原分頁，
+  // 否則（在表分頁）切到 home 查詢分頁。
+  requestQuery: (sql) =>
+    set((s) => ({
+      pendingSql: sql,
+      activeTabKey: s.queryTabs.includes(s.activeTabKey ?? "") ? s.activeTabKey : s.queryTabs[0],
+    })),
   clearPendingSql: () => set({ pendingSql: null }),
   requestInsert: (key) => set({ pendingInsert: key }),
   clearPendingInsert: () => set({ pendingInsert: null }),

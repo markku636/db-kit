@@ -2045,14 +2045,16 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
 
 // ---- 中央主工作區：分頁式（表分頁 + 查詢） ----
 function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
-  const { connections, activeId, connectedIds, tabs, activeTabKey, setActiveTab, closeTab, closeOtherTabs, closeAllTabs } =
-    useStore();
+  const { connections, activeId, connectedIds, tabs, activeTabKey, setActiveTab, closeTab, closeOtherTabs, closeAllTabs,
+    queryTabs, addQueryTab, closeQueryTab } = useStore();
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   const activeTabRef = useRef<HTMLDivElement>(null);
   const queryTabRef = useRef<HTMLButtonElement>(null);
 
   const canUse = activeId && connectedIds.has(activeId);
   const activeTab = tabs.find((t) => t.key === activeTabKey) ?? null;
+  // 作用中的查詢分頁 id（非表分頁時）：解析未知 / null → home「__query__」。
+  const activeQueryId = activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : "__query__";
 
   // 分頁鍵盤操作：Ctrl/Cmd+N 開新查詢、Ctrl/Cmd+Shift+N 新增連線、Ctrl/Cmd+W 關閉、
   // Ctrl+Tab / Ctrl+Shift+Tab 循環、Ctrl+1..9 跳轉（9=最後一個，含查詢分頁）。
@@ -2070,13 +2072,15 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
         else useStore.getState().requestQuery("");
         return;
       }
-      if ((e.key === "w" || e.key === "W") && activeTabKey && activeTabKey !== "__query__") {
-        e.preventDefault();
-        closeTab(activeTabKey);
+      if (e.key === "w" || e.key === "W") {
+        // 表分頁 → 關表；額外查詢分頁 → 關該查詢分頁（home __query__ 不可關）。
+        if (activeTabKey && tabs.some((t) => t.key === activeTabKey)) { e.preventDefault(); closeTab(activeTabKey); return; }
+        if (activeTabKey && activeTabKey !== "__query__" && queryTabs.includes(activeTabKey)) { e.preventDefault(); closeQueryTab(activeTabKey); return; }
         return;
       }
-      // 所有表分頁後接查詢分頁，組成可循環 / 跳轉的鍵序列。
-      const keys = [...tabs.map((t) => t.key), "__query__"];
+      if (e.key === "t" || e.key === "T") { e.preventDefault(); addQueryTab(); return; } // Ctrl+T 新增查詢分頁
+      // 所有表分頁後接所有查詢分頁，組成可循環 / 跳轉的鍵序列。
+      const keys = [...tabs.map((t) => t.key), ...queryTabs];
       if (e.key === "Tab") {
         e.preventDefault();
         const cur = keys.indexOf(activeTabKey ?? "");
@@ -2094,13 +2098,14 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tabs, activeTabKey, setActiveTab, closeTab, onNewConnection]);
+  }, [tabs, activeTabKey, setActiveTab, closeTab, onNewConnection, queryTabs, addQueryTab, closeQueryTab]);
 
   // 作用中分頁捲入可視範圍（Ctrl+W / Ctrl+Tab 切換後不會被擠到畫面外；含查詢分頁）。
   useEffect(() => {
-    const el = activeTabKey === "__query__" ? queryTabRef.current : activeTabRef.current;
+    const onQuery = activeTabKey == null || queryTabs.includes(activeTabKey);
+    const el = onQuery ? queryTabRef.current : activeTabRef.current;
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activeTabKey]);
+  }, [activeTabKey, queryTabs]);
 
   if (!canUse && tabs.length === 0) {
     const noConns = connections.length === 0;
@@ -2166,14 +2171,32 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
             </button>
           </div>
         ))}
-        <QueryTabButton btnRef={queryTabRef} />
+        {queryTabs.map((qid, i) => {
+          const isActive = !activeTab && activeQueryId === qid;
+          return (
+            <QueryTabButton
+              key={qid}
+              label={i === 0 ? "查詢" : `查詢 ${i + 1}`}
+              active={isActive}
+              closable={qid !== "__query__"}
+              btnRef={isActive ? queryTabRef : undefined}
+              onActivate={() => setActiveTab(qid)}
+              onClose={() => closeQueryTab(qid)}
+            />
+          );
+        })}
+        <button type="button" onClick={addQueryTab} title="新增查詢分頁（Ctrl+T）"
+          aria-label="新增查詢分頁"
+          className="px-2 py-1.5 text-fg/40 hover:text-fg/80 hover:bg-fg/5 border-r border-fg/10 shrink-0">
+          <Icon icon={Plus} size={14} />
+        </button>
       </div>
 
-      {/* 內容 */}
+      {/* 內容：表分頁 → 資料格；否則 → 對應查詢分頁的編輯器（key 隨分頁 → 各自獨立狀態與草稿）。 */}
       {activeTab ? (
         <TableView tab={activeTab} />
       ) : (
-        <QueryPane />
+        <QueryPane key={activeQueryId} tabId={activeQueryId} />
       )}
 
       {tabMenu && (
@@ -2203,19 +2226,43 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
   );
 }
 
-function QueryTabButton({ btnRef }: { btnRef?: React.Ref<HTMLButtonElement> }) {
-  const { activeTabKey, setActiveTab } = useStore();
+// 單一查詢分頁鈕（受控）：可關閉者（額外分頁）顯示關閉鈕，中鍵亦可關。home「查詢」不可關。
+function QueryTabButton({ label, active, closable, onActivate, onClose, btnRef }: {
+  label: string;
+  active: boolean;
+  closable: boolean;
+  onActivate: () => void;
+  onClose: () => void;
+  btnRef?: React.Ref<HTMLButtonElement>;
+}) {
   return (
-    <button
-      ref={btnRef}
-      type="button"
-      onClick={() => setActiveTab("__query__" as any)}
-      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs border-r border-fg/10 ${
-        activeTabKey === "__query__" ? "bg-app text-fg shadow-[inset_0_-2px_0_rgb(var(--c-accent))]" : "text-fg/50 hover:bg-fg/5"
+    <div
+      className={`group flex items-center border-r border-fg/10 shrink-0 ${
+        active ? "bg-app text-fg shadow-[inset_0_-2px_0_rgb(var(--c-accent))]" : "text-fg/50 hover:bg-fg/5"
       }`}
     >
-      <Icon icon={FileCode2} size={14} className="text-blue-300/80" />查詢
-    </button>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={onActivate}
+        onAuxClick={(e) => { if (e.button === 1 && closable) { e.preventDefault(); onClose(); } }}
+        title={closable ? `${label}（中鍵關閉）` : label}
+        className={`flex items-center gap-1.5 ${closable ? "pl-3 pr-1.5" : "px-3"} py-1.5 text-xs`}
+      >
+        <Icon icon={FileCode2} size={14} className="text-blue-300/80" />{label}
+      </button>
+      {closable && (
+        <button
+          type="button"
+          aria-label={`關閉 ${label}`}
+          title="關閉查詢分頁"
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+          className="mr-1 w-5 h-5 flex items-center justify-center rounded hover:bg-fg/15 text-fg/40 hover:text-fg/80"
+        >
+          <Icon icon={X} size={12} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -2238,13 +2285,15 @@ const EXPLAIN_KINDS: DbKind[] = ["mysql", "postgres", "sqlite"];
 const DB_SELECT_KINDS: DbKind[] = ["mysql", "postgres", "external"];
 
 // 查詢編輯器內容 per-連線 持久化（重開 / 切換連線後沿用上次的查詢）。
-const sqlStoreKey = (id: string) => `db-kit:querySql:${id}`;
+// 查詢內容持久化鍵：每連線 × 每查詢分頁。預設 home 分頁沿用舊鍵（向後相容，既有草稿不遺失）。
+const sqlStoreKey = (id: string, tabId = "__query__") =>
+  tabId === "__query__" ? `db-kit:querySql:${id}` : `db-kit:querySql:${id}:${tabId}`;
 // 「目前資料庫」選擇 per-連線 持久化（切換連線 / 重開後沿用上次選的庫）。
 const queryDbStoreKey = (id: string) => `db-kit:queryDb:${id}`;
-function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefined): string {
+function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefined, tabId = "__query__"): string {
   if (id) {
     try {
-      const s = localStorage.getItem(sqlStoreKey(id));
+      const s = localStorage.getItem(sqlStoreKey(id, tabId));
       if (s != null) return s;
     } catch {
       /* 忽略讀取失敗 */
@@ -2300,7 +2349,7 @@ function RunSummaryView({ summary }: { summary: RunSummary }) {
 }
 
 // ---- 查詢面板：上 SQL、下結果（F6 執行） ----
-function QueryPane() {
+function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const { activeId } = useStore();
   // 目前連線是否唯讀（反應式）：供工具列徽章與寫入提示。
   const activeReadonly = useStore((s) => !!s.activeId && s.readonlyConns[s.activeId] === true);
@@ -2318,7 +2367,7 @@ function QueryPane() {
   // 自動完成 schema（僅關聯式）；SQL 編輯器目前選取段（供「執行選取」鈕與標籤）。
   const schema = useSqlSchema(activeId, kind);
   const [editorSel, setEditorSel] = useState<string | null>(null);
-  const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind));
+  const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
   const paramCount = useMemo(() => (supportsExplain ? extractNamedParams(sql).length : 0), [supportsExplain, sql]);
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -2375,8 +2424,8 @@ function QueryPane() {
     setSql(v);
     if (activeId) {
       try {
-        if (v) localStorage.setItem(sqlStoreKey(activeId), v);
-        else localStorage.removeItem(sqlStoreKey(activeId));
+        if (v) localStorage.setItem(sqlStoreKey(activeId, tabId), v);
+        else localStorage.removeItem(sqlStoreKey(activeId, tabId));
       } catch { /* 忽略 */ }
     }
   };
@@ -2384,7 +2433,7 @@ function QueryPane() {
   // 切換連線：載入該連線上次的查詢內容（或該類型預設），並清掉殘留結果。
   // 用 raw setSql（非 persistSql），避免把載入動作又寫回 localStorage。
   useEffect(() => {
-    setSql(loadPersistedSql(activeId, kind));
+    setSql(loadPersistedSql(activeId, kind, tabId));
     setResult(null);
     setErr(null);
     setErrSql(null);
