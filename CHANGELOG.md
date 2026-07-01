@@ -1,3 +1,7 @@
+## v0.2.2
+
+- 版本號 0.2.1 → 0.2.2（package.json / tauri.conf.json / Cargo.toml / lockfiles 同步）；重打 Windows / macOS / Linux 安裝檔。整理版本標籤（移除誤植的大寫殘留 tag）。
+
 ## 多查詢分頁（Tab）
 
 - 仿 Navicat：可同時開多個查詢分頁，各自獨立的編輯器內容與草稿（每連線 × 每分頁分開持久化）。分頁列上的「＋」新增、額外分頁可關閉（中鍵或關閉鈕）；預設「查詢」home 分頁不可關。Ctrl+T 新增、Ctrl+W 關閉、Ctrl+Tab / Ctrl+1..9 在所有表分頁與查詢分頁間循環/跳轉。
