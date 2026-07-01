@@ -134,6 +134,14 @@ export default function AssistantPanel() {
     if (nearBottom || justSentUser) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  // 面板每次開啟即定位到底部：載入既有對話時應顯示最新訊息，而非停在最頂端往下捲。
+  useEffect(() => {
+    if (!open) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [open]);
+
   // 輸入框高度：手動拖曳過（inputH > 0）就固定；否則依內容自動長高（上限約 10 行）。
   useEffect(() => {
     const ta = textareaRef.current;

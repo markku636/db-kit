@@ -13,7 +13,13 @@ import { lintSqlStructure } from "./sql";
 // SQL 片段（供編輯器自動完成展開：輸入名稱 → 補入 body）。
 export interface EditorSnippet { name: string; body: string; desc?: string }
 // 外部可命令式呼叫的方法（供「片段」工具列在游標處插入）。
-export interface SqlEditorHandle { insertText: (text: string) => void; focus: () => void }
+export interface SqlEditorHandle {
+  insertText: (text: string) => void;
+  focus: () => void;
+  // 由編輯器外的「執行」鈕觸發，走與鍵盤 F6 / Ctrl+Enter 同一套 selection / cursor 邏輯：
+  // runAll=false → 執行游標所在語句 / 選取段（DataGrip / DBeaver 主執行鍵行為）；runAll=true → 整段。
+  submit: (runAll: boolean) => void;
+}
 
 // 送出（執行）時的上下文：選取文字、游標位移、是否整段執行（F6）。
 export interface SqlSubmit {
@@ -109,6 +115,13 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       view.focus();
     },
     focus: () => cmRef.current?.view?.focus(),
+    submit: (runAll: boolean) => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const sel = view.state.selection.main;
+      const selection = sel.empty ? null : view.state.sliceDoc(sel.from, sel.to);
+      submitRef.current?.({ selection, cursorOffset: sel.head, runAll });
+    },
   }), []);
   // onSubmit 以 ref 持有，避免每次 render 重建 extensions（CodeMirror 會重新配置）。
   const submitRef = useRef(onSubmit);

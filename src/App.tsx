@@ -715,6 +715,10 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   const [tableMenu, setTableMenu] = useState<
     { connId: string; db: string; table: string; kind: DbKind; objKind: string; x: number; y: number } | null
   >(null);
+  // 右鍵選單（物件分組資料夾：資料表 / 檢視 / 函式 / 查詢）。type 決定附加動作，一律含「新增查詢」。
+  const [folderMenu, setFolderMenu] = useState<
+    { connId: string; db: string; kind: DbKind; type: string; x: number; y: number } | null
+  >(null);
   // 資料表 / 集合屬性檢視。
   const [tableProps, setTableProps] = useState<
     { connId: string; db: string; table: string; kind: DbKind; objKind: string } | null
@@ -763,6 +767,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
       setDbMenu(null);
       setRoutineMenu(null);
       setTableMenu(null);
+      setFolderMenu(null);
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
@@ -1261,6 +1266,24 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   };
 
   // 依物件種類組出資料表右鍵選單樹（item / 分隔線 / 子選單）；交由 <MenuItems> 遞迴渲染。
+  // 物件資料夾（資料表 / 檢視 / 函式 / 查詢）右鍵選單：一律提供「新增查詢」（開該資料庫的空白查詢），
+  // 並依資料夾種類附上對應的新增動作，末端加「重新整理」重載清單。
+  const folderMenuNodes = (m: NonNullable<typeof folderMenu>): MenuNode[] => {
+    const it = (label: string, onClick: () => void, danger?: boolean): MenuNode => ({ kind: "item", label, onClick, danger });
+    const sep: MenuNode = { kind: "sep" };
+    const ro = readonlyConns[m.connId] === true;
+    const nodes: MenuNode[] = [it("新增查詢", () => newQueryForDb(m.connId, m.db, m.kind))];
+    if (m.type === "tables" && !ro)
+      nodes.push(it("新增資料表…", () => setDesignTable({ connId: m.connId, db: m.db, kind: m.kind })));
+    if (m.type === "views")
+      nodes.push(it("新增視圖…", () => setCreateView({ connId: m.connId, db: m.db, kind: m.kind })));
+    if (m.type === "functions" && (m.kind === "mysql" || m.kind === "postgres"))
+      nodes.push(it("預存程序 / 觸發器…", () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind })));
+    nodes.push(sep);
+    nodes.push(it("重新整理", () => refreshTables(m.connId, m.db)));
+    return nodes;
+  };
+
   const tableMenuNodes = (m: NonNullable<typeof tableMenu>): MenuNode[] => {
     const it = (label: string, onClick: () => void, danger?: boolean): MenuNode => ({ kind: "item", label, onClick, danger });
     const sep: MenuNode = { kind: "sep" };
@@ -1652,6 +1675,11 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                     <div key={type}>
                       <div
                         onClick={() => toggleFolder(dbKey, type)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setActive(c.id);
+                          setFolderMenu({ connId: c.id, db, kind: c.kind, type, x: e.clientX, y: e.clientY });
+                        }}
                         className="pl-11 pr-3 py-1.5 hover:bg-fg/5 cursor-pointer flex items-center gap-1.5 select-none"
                       >
                         <Icon icon={ChevronRight} size={13} className={`shrink-0 text-fg/35 transition-transform ${open ? "rotate-90" : ""}`} />
@@ -1890,6 +1918,12 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
             })()}
           </div>
         </>
+      )}
+
+      {folderMenu && (
+        <MenuPanel x={folderMenu.x} y={folderMenu.y} onClose={() => setFolderMenu(null)}>
+          <MenuItems nodes={folderMenuNodes(folderMenu)} onClose={() => setFolderMenu(null)} />
+        </MenuPanel>
       )}
 
       {tableMenu && (
@@ -3123,11 +3157,16 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 ⟨{paramCount} 參數⟩
               </span>
             )}
-            <button type="button" onClick={() => execute("run")} disabled={running}
-              title="執行 (F6 / Ctrl+Enter)；若有反白選取，只執行選取段"
+            <button type="button"
+              // SQL 編輯器：綠鈕比照 DataGrip / DBeaver 主執行鍵——預設只跑「游標所在語句／選取段」，
+              // 不會被同段其他行的殘句（如尾端多出的裸 LIMIT）拖垮整批；整段全跑仍走 F6。
+              // 非 SQL（mongo / redis textarea）維持單一指令直接執行。
+              onClick={() => supportsExplain ? editorRef.current?.submit(false) : execute("run")}
+              disabled={running}
+              title="執行游標所在語句 / 選取段（Ctrl+Enter）；整段全跑請按 F6"
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-600/80 hover:bg-green-600 disabled:opacity-50">
               <Icon icon={running ? Loader2 : Play} size={13} className={running ? "animate-spin" : ""} />
-              {running ? "執行中…" : hasSelection() ? "執行選取" : "執行 (F6)"}
+              {running ? "執行中…" : hasSelection() ? "執行選取" : "執行"}
             </button>
           </div>
         </div>
