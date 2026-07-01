@@ -343,8 +343,10 @@ impl DatabaseDriver for MysqlDriver {
                 .acquire()
                 .await
                 .map_err(|e| AppError::Query(e.to_string()))?;
-            sqlx::query(&use_stmt)
-                .execute(&mut *conn)
+            // USE 不能走 prepared statement 協定（MySQL 回 1295）。直接把 &str 交給 Executor::execute
+            // 走簡單查詢協定（COM_QUERY），與 exec_ddl 同理。
+            use sqlx::Executor;
+            conn.execute(use_stmt.as_str())
                 .await
                 .map_err(|e| AppError::Query(e.to_string()))?;
             let t = rest.trim_start().to_ascii_lowercase();

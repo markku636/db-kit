@@ -75,6 +75,11 @@ export default function AssistantPanel() {
     const v = Number(localStorage.getItem("db-kit:assistantWidth"));
     return v >= 300 && v <= 900 ? v : 384;
   });
+  // 輸入區高度：0 = 隨內容自動長高；> 0 = 使用者手動拖曳的固定高度。
+  const [inputH, setInputH] = useState<number>(() => {
+    const v = Number(localStorage.getItem("db-kit:assistantInputH"));
+    return v >= 40 && v <= 400 ? v : 0;
+  });
   const seed = useAssistant((s) => s.seed);
 
   const sessionIdRef = useRef<string | null>(persisted.sessionId ?? null);
@@ -129,18 +134,24 @@ export default function AssistantPanel() {
     if (nearBottom || justSentUser) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  // 輸入框依內容自動長高（上限約 10 行）。
+  // 輸入框高度：手動拖曳過（inputH > 0）就固定；否則依內容自動長高（上限約 10 行）。
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
+    if (inputH) { ta.style.height = `${inputH}px`; return; }
     ta.style.height = "auto";
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
-  }, [input]);
+  }, [input, inputH]);
 
   // 持久化面板寬度。
   useEffect(() => {
     try { localStorage.setItem("db-kit:assistantWidth", String(width)); } catch { /* 忽略 */ }
   }, [width]);
+
+  // 持久化輸入區高度。
+  useEffect(() => {
+    try { localStorage.setItem("db-kit:assistantInputH", String(inputH)); } catch { /* 忽略 */ }
+  }, [inputH]);
 
   // 消費外部丟進來的問題（側欄右鍵「問 AI」、查詢錯誤「AI 分析修正」）：
   // 預設填進輸入框、聚焦，由使用者送出；seedSend=true（如修錯）則直接自動送出。
@@ -179,6 +190,24 @@ export default function AssistantPanel() {
     window.addEventListener("mouseup", onUp);
     document.body.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
+  };
+
+  // 拖曳輸入區上緣調整高度（往上拖變高）。
+  const startInputResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = textareaRef.current?.getBoundingClientRect().height ?? (inputH || 56);
+    const onMove = (ev: MouseEvent) => setInputH(Math.max(40, Math.min(400, startH + (startY - ev.clientY))));
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "row-resize";
   };
 
   const exportChat = async () => {
@@ -372,7 +401,10 @@ export default function AssistantPanel() {
         )}
       </div>
 
-      <div className="shrink-0 border-t border-fg/10 p-2 space-y-2">
+      <div className="relative shrink-0 border-t border-fg/10 p-2 space-y-2">
+        <div onMouseDown={startInputResize} onDoubleClick={() => setInputH(0)}
+          title="拖曳調整輸入區高度（雙擊還原自動高度）"
+          className="absolute left-0 -top-0.5 w-full h-1.5 cursor-row-resize hover:bg-accent/40 z-10" />
         <div className="flex items-center gap-2 text-[11px] text-fg/50">
           <label className="flex items-center gap-1 cursor-pointer select-none" title="送出時附帶目前連線 / 選取資料表的結構">
             <input type="checkbox" checked={ctxOn} onChange={(e) => setCtxOn(e.target.checked)} className="accent-blue-500" />
