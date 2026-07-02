@@ -2939,7 +2939,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const runnableConns = connections.filter((c) => connectedIds.has(c.id) || c.id === activeId);
 
   return (
-    <div className="flex-1 flex flex-col min-w-0">
+    // min-h-0：column flex item 預設 min-height:auto 不會小於內容高，結果列一多整個面板
+    // 會撐破視窗（畫過狀態列）；鎖住後高度交給內層「結果」容器的 overflow-auto 捲動。
+    <div className="flex-1 flex flex-col min-w-0 min-h-0">
       <div className="shrink-0">
         <div className="flex items-center justify-between px-3 py-1.5 bg-bar">
           <div className="flex items-center gap-2 min-w-0">
