@@ -1,3 +1,7 @@
+## v0.2.3
+
+- 版本號 0.2.2 → 0.2.3（package.json / tauri.conf.json / Cargo.toml / Cargo.lock 同步）；重打 Windows / macOS / Linux 安裝檔。修正 release 佈版：v0.2.2 標籤指向的是尚未同步 package-lock.json 的舊 commit，`npm ci` 在裝相依這步就失敗，故改以含 lockfile 修正的 commit 重切乾淨標籤發佈。
+
 ## v0.2.2
 
 - 版本號 0.2.1 → 0.2.2（package.json / tauri.conf.json / Cargo.toml / lockfiles 同步）；重打 Windows / macOS / Linux 安裝檔。整理版本標籤（移除誤植的大寫殘留 tag）。
