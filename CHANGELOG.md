@@ -1,3 +1,8 @@
+## v0.2.5
+
+- 新增：**啟動時檢查 GitHub 有無新版本並提示昇級**。App 啟動時查 `releases/latest`，若線上 Release 版本較新，即在標題列版本號旁顯示「有新版 vX.Y.Z」小標記，點擊以系統瀏覽器開啟該 Release 下載頁自行安裝。純前端實作（fetch GitHub API、`isNewer` 數值版本比較、localStorage 快取每天最多檢查一次、任何失敗安靜略過），沿用既有 `open_external` 開連結，未新增任何後端依賴；新增 7 項 vitest（共 202 項全通過）。
+- 版本號 0.2.4 → 0.2.5（package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock 同步）；重打 Windows / macOS / Linux 安裝檔。
+
 ## v0.2.4
 
 - 版本號 0.2.3 → 0.2.4（package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock 同步）；重打 Windows / macOS / Linux 安裝檔。

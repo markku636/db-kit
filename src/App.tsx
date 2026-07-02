@@ -37,6 +37,7 @@ import CommandPalette, { type PaletteItem } from "./CommandPalette";
 import DbDataDictionary from "./DbDataDictionary";
 import DataSyncDialog from "./DataSyncDialog";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
+import { checkForUpdate, isNewer, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile, useEscToClose } from "./ui";
 import {
@@ -422,6 +423,13 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, on
   onImportConns: () => void;
 }) {
   const assistantOpen = useAssistant((s) => s.open);
+  // 啟動時到 GitHub 查最新 Release（每天最多一次，失敗安靜略過）；比目前版本新才顯示標記。
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  useEffect(() => {
+    checkForUpdate()
+      .then((r) => { if (r && isNewer(r.version, __APP_VERSION__)) setUpdate(r); })
+      .catch(() => {});
+  }, []);
   const tools: { icon: ReactNode; label: string; onClick: () => void; disabled: boolean; active?: boolean; hint?: string }[] = [
     { icon: <Icon icon={Plug} size={20} />, label: "連線", onClick: onNewConnection, disabled: false },
     { icon: <Icon icon={Network} size={20} />, label: "ER 圖", onClick: onEr, disabled: !canEr, hint: "需先連線到 MySQL / PostgreSQL / SQLite" },
@@ -436,6 +444,17 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, on
       <div className="font-semibold text-fg/90 mr-4 pl-1 flex items-baseline gap-1.5">
         <span>DB Kit</span>
         <span className="text-[11px] font-normal text-fg/40 tabular-nums" title={`版本 ${__APP_VERSION__}`}>v{__APP_VERSION__}</span>
+        {update && (
+          <button
+            type="button"
+            onClick={() => api.openExternal(update.url).catch(() => {})}
+            title={`點擊前往下載 v${update.version}`}
+            className="self-center text-[11px] font-medium text-accent hover:underline inline-flex items-center gap-1 focus-visible:outline-2 focus-visible:outline-accent/60 rounded"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-accent" aria-hidden />
+            有新版 v{update.version}
+          </button>
+        )}
       </div>
       {tools.map((t) => (
         <button
