@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
 import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
@@ -34,6 +34,7 @@ import QueryBuilder from "./QueryBuilder";
 import TransferDialog from "./TransferDialog";
 import DbTransferDialog from "./DbTransferDialog";
 import CommandPalette, { type PaletteItem } from "./CommandPalette";
+import AboutDialog from "./AboutDialog";
 import DbDataDictionary from "./DbDataDictionary";
 import DataSyncDialog from "./DataSyncDialog";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
@@ -65,7 +66,7 @@ import {
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
-  GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal,
+  GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info,
   type LucideIcon,
 } from "lucide-react";
 
@@ -169,6 +170,7 @@ export default function App() {
   const [backupOpen, setBackupOpen] = useState(false);
   const [erOpen, setErOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   // 開場動畫狀態：show → leaving（淡出）→ done（卸載）。每次啟動只播一次。
   const [splash, setSplash] = useState<"show" | "leaving" | "done">(() => {
     try { return sessionStorage.getItem("dbkit:splashed") ? "done" : "show"; }
@@ -273,6 +275,7 @@ export default function App() {
         onEr={() => canEr && setErOpen(true)}
         canEr={canEr}
         onHelp={() => setHelpOpen(true)}
+        onAbout={() => setAboutOpen(true)}
         onExportConns={exportConnections}
         onImportConns={importConnections}
       />
@@ -312,6 +315,7 @@ export default function App() {
         <ErDiagram connId={activeConn.id} onClose={() => setErOpen(false)} />
       )}
       {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
+      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
       <UiHost />
     </div>
   );
@@ -412,13 +416,14 @@ function PoolStatusBadge({ connId }: { connId: string }) {
 }
 
 // ---- 上方大圖示工具列（Navicat 風格識別特徵）----
-function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, onExportConns, onImportConns }: {
+function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, onAbout, onExportConns, onImportConns }: {
   onNewConnection: () => void;
   onBackup: () => void;
   canBackup: boolean;
   onEr: () => void;
   canEr: boolean;
   onHelp: () => void;
+  onAbout: () => void;
   onExportConns: () => void;
   onImportConns: () => void;
 }) {
@@ -438,12 +443,18 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, on
     { icon: <Icon icon={Download} size={20} />, label: "匯入連線", onClick: onImportConns, disabled: false },
     { icon: <Icon icon={Sparkles} size={20} />, label: "AI 助手", onClick: () => useAssistant.getState().toggle(), disabled: false, active: assistantOpen },
     { icon: <Icon icon={Keyboard} size={20} />, label: "快捷鍵 (F1)", onClick: onHelp, disabled: false },
+    { icon: <Icon icon={Info} size={20} />, label: "關於", onClick: onAbout, disabled: false },
   ];
   return (
     <div className="h-16 bg-bar border-b border-fg/10 flex items-center px-3 gap-1">
       <div className="font-semibold text-fg/90 mr-4 pl-1 flex items-baseline gap-1.5">
         <span>DB Kit</span>
-        <span className="text-[11px] font-normal text-fg/40 tabular-nums" title={`版本 ${__APP_VERSION__}`}>v{__APP_VERSION__}</span>
+        <button
+          type="button"
+          onClick={onAbout}
+          title={`版本 ${__APP_VERSION__} · 點擊開啟「關於 DB Kit」`}
+          className="text-[11px] font-normal text-fg/40 tabular-nums hover:text-fg/70 hover:underline focus-visible:outline-2 focus-visible:outline-accent/60 rounded"
+        >v{__APP_VERSION__}</button>
         {update && (
           <button
             type="button"
@@ -2384,6 +2395,8 @@ function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefine
 // 一次執行的每條語句結果（供「摘要」面板逐條列出，致敬 Navicat 摘要分頁）。
 interface StmtRun { sql: string; ok: boolean; message: string; ms: number; }
 interface RunSummary { startedAt: number; finishedAt: number; total: number; processed: number; success: number; errors: number; statements: StmtRun[]; }
+// 單一結果集（SSMS 風格）：多語句批次中每條有回傳結果集的語句各佔一格；sql=產生它的原語句（不含注入的 USE 前綴）、ms=該語句耗時。
+interface ResultSetEntry { res: QueryResult; sql: string; ms: number; }
 
 // 毫秒時間戳 → 本地「YYYY-MM-DD HH:mm:ss」（摘要面板的開始 / 結束時間）。
 function fmtClock(ms: number): string {
@@ -2443,14 +2456,37 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const supportsDbSelect = !!kind && DB_SELECT_KINDS.includes(kind);
   const [dbList, setDbList] = useState<string[]>([]);
   const [queryDb, setQueryDb] = useState<string>("");
-  // 自動完成 schema（僅關聯式）；SQL 編輯器目前選取段（供「執行選取」鈕與標籤）。
+  // 自動完成 schema（僅關聯式）；SQL 編輯器目前選取段（供 queryToRun 只跑選取段）。
   const schema = useSqlSchema(activeId, kind);
   const [editorSel, setEditorSel] = useState<string | null>(null);
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
   const paramCount = useMemo(() => (supportsExplain ? extractNamedParams(sql).length : 0), [supportsExplain, sql]);
-  const [result, setResult] = useState<QueryResult | null>(null);
+  // 結果集清單（SSMS 風格）：多語句批次中每條有回傳結果集的語句各佔一格、堆疊「同時」顯示；
+  // 單語句 / 純 DML / 分析模式只有一筆。activeResult 標記工具列（複製 / 匯出 / 問 AI）作用的結果集。
+  const [resultSets, setResultSets] = useState<ResultSetEntry[]>([]);
+  const [activeResult, setActiveResult] = useState(0);
+  const activeIdx = resultSets.length > 0 ? Math.min(activeResult, resultSets.length - 1) : 0;
+  const result = resultSets[activeIdx]?.res ?? null;
+  // 以單一結果覆蓋結果區（分析模式 / 視覺化解釋回退 / 清空等單結果路徑）；null = 清空。
+  const setResult = useCallback((res: QueryResult | null, sql = "") => {
+    setResultSets(res ? [{ res, sql, ms: 0 }] : []);
+    setActiveResult(0);
+  }, []);
+  // 執行序號：每次成功寫入新結果集時遞增。多結果格以「序號-索引」為 key，
+  // 重跑同形狀批次時整格重掛（重置各格的捲動位置 / 排序 / 篩選，避免新結果停在舊捲動深處像缺列）。
+  const [runSeq, setRunSeq] = useState(0);
+  // 各結果格摺疊狀態（多結果集時）：摺疊只藏內容不卸載，保留該格排序 / 篩選；新批次到達時重置。
+  const [collapsedSets, setCollapsedSets] = useState<Record<number, boolean>>({});
+  // 寫入一批新結果集（執行成功、或中途失敗但已有部分結果）：作用中重設為第一格、重置摺疊、遞增序號。
+  const applyResultSets = useCallback((sets: ResultSetEntry[]) => {
+    setResultSets(sets);
+    setActiveResult(0);
+    setCollapsedSets({});
+    setRunSeq((n) => n + 1);
+  }, []);
   // 結果表格目前的可視列（排序 + 篩選後）；複製 / 匯出依此而非原始 result，使輸出與所見一致。
+  // 多結果集時只綁「作用中」那格的表格回報。
   const [resultView, setResultView] = useState<(string | null)[][] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   // 發生錯誤時實際送出的語句（供「AI 分析修正」帶進助手；queryToRun() 之後可能因選取改變而不同）。
@@ -2518,7 +2554,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     setErrSql(null);
     setErrStmt(null);
     setElapsed(null);
-    setEditorSel(null); // 清掉前一個連線殘留的選取，避免「執行選取」誤跑舊片段
+    setEditorSel(null); // 清掉前一個連線殘留的選取，避免執行時誤跑舊片段
     // 清掉前一個連線殘留的摘要 / 執行計畫，並退回「結果」分頁（新連線可能不支援解釋分頁）。
     setSummary(null);
     setPlan(null);
@@ -2574,10 +2610,6 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
 
   // 取得要執行的語句：若編輯器有反白選取，只跑選取段（致敬 DataGrip / DBeaver）。
   // SQL 編輯器（CodeMirror）的選取走 editorSel；mongo/redis textarea 走 taRef。
-  const hasSelection = () =>
-    supportsExplain
-      ? !!editorSel?.trim()
-      : !!taRef.current && taRef.current.selectionStart !== taRef.current.selectionEnd;
   const queryToRun = () => {
     if (supportsExplain) {
       if (editorSel?.trim()) return editorSel;
@@ -2671,7 +2703,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           );
           if (!ok) return;
         }
-        let lastResultSet: QueryResult | null = null; // 最後一個有結果集（columns>0）的語句
+        const sets: ResultSetEntry[] = []; // 每條有結果集（columns>0）的語句各收一格（SSMS 風格堆疊顯示）
         let affected = 0;
         const runs: StmtRun[] = []; // 逐條語句結果（供「摘要」面板；記錄使用者原語句，不含注入的 USE 前綴）
         const startedAt = Date.now();
@@ -2693,15 +2725,19 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             const msg = e?.message ?? String(e);
             runs.push({ sql: userStatements[si], ok: false, message: msg, ms: performance.now() - tStmt });
             setSummary(snapshot());
+            // SSMS 行為：失敗前已取回的結果集照樣顯示（錯誤橫幅在上、部分結果在下），不必重跑前面的 SELECT。
+            if (sets.length > 0) applyResultSets(sets);
             const wrapped = new Error(
               userStatements.length > 1 ? `第 ${si + 1} 條語句失敗：${msg}` : msg,
             );
             // 多語句批次：記住「出錯的那一條」，供 AI 分析修正對位（整批仍存在 errSql）。
             (wrapped as any).failedSql = userStatements[si];
+            // 告知外層 catch 已寫入部分結果，別再清空。
+            (wrapped as any).keepResults = sets.length > 0;
             throw wrapped;
           }
           const ms = performance.now() - tStmt;
-          if (res.columns.length > 0) lastResultSet = res;
+          if (res.columns.length > 0) sets.push({ res, sql: userStatements[si], ms });
           else affected += res.rows_affected;
           runs.push({
             sql: userStatements[si],
@@ -2710,8 +2746,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             ms,
           });
         }
-        // 有任何結果集 → 顯示最後一個結果集；否則顯示累計影響列數。
-        setResult(lastResultSet ?? { columns: [], rows: [], rows_affected: affected });
+        // 有任何結果集 → 全部「同時」顯示（SSMS 風格，多個時堆疊）；否則顯示累計影響列數。
+        if (sets.length > 0) applyResultSets(sets);
+        else setResult({ columns: [], rows: [], rows_affected: affected }, q);
         setSummary(snapshot());
         if (userStatements.length > 1) toast.success(`已執行 ${userStatements.length} 條語句`);
       }
@@ -2722,7 +2759,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       setErr(e?.message ?? (mode === "analyze" ? "分析失敗" : "查詢失敗"));
       setErrSql(q); // 整批（完整編輯器內容）—供安全一鍵貼回
       setErrStmt((e?.failedSql as string | undefined) ?? null); // 多語句時的失敗單句
-      setResult(null);
+      // 中途失敗但已寫入部分結果集（keepResults）→ 保留顯示；其餘照舊清空。
+      if (!e?.keepResults) setResult(null);
     } finally {
       setRunning(false);
     }
@@ -2913,9 +2951,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     const MAX = 30;
     const limited: QueryResult = { ...exportRes, rows: exportRes.rows.slice(0, MAX) };
     const note = exportRes.rows.length > MAX ? `\n（僅附前 ${MAX} 列，共 ${exportRes.rows.length} 列）` : "";
+    // 多結果集：帶「作用中」那格對應的單條語句，讓 AI 拿到的查詢與結果一一對應。
+    const srcSql = resultSets.length > 1 && resultSets[activeIdx]?.sql ? resultSets[activeIdx].sql : queryToRun();
     const prompt =
       `以下是我在 db-kit 執行的查詢與結果，請幫我分析（資料意義、可能的異常或趨勢、可優化的查詢寫法，並可建議下一步查詢）：\n\n` +
-      `查詢：\n\`\`\`sql\n${queryToRun()}\n\`\`\`\n\n結果：\n${resultToMarkdown(limited)}${note}`;
+      `查詢：\n\`\`\`sql\n${srcSql}\n\`\`\`\n\n結果：\n${resultToMarkdown(limited)}${note}`;
     useAssistant.getState().ask(prompt);
   };
 
@@ -2949,10 +2989,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   }
 
   const rowsInfo =
-    result &&
-    (result.columns.length > 0
-      ? `${result.rows.length} 列`
-      : `影響 ${result.rows_affected} 列`);
+    resultSets.length > 1
+      ? `${resultSets.length} 個結果集 · 共 ${resultSets.reduce((n, s) => n + s.res.rows.length, 0).toLocaleString()} 列`
+      : result &&
+        (result.columns.length > 0
+          ? `${result.rows.length} 列`
+          : `影響 ${result.rows_affected} 列`);
 
   // 連線選擇器清單：已連線的連線（含目前 activeId，即使尚未在 connectedIds 也保留，避免下拉空白）。
   const runnableConns = connections.filter((c) => connectedIds.has(c.id) || c.id === activeId);
@@ -3179,15 +3221,15 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               </span>
             )}
             <button type="button"
-              // SQL 編輯器：綠鈕比照 DataGrip / DBeaver 主執行鍵——預設只跑「游標所在語句／選取段」，
-              // 不會被同段其他行的殘句（如尾端多出的裸 LIMIT）拖垮整批；整段全跑仍走 F6。
+              // SQL 編輯器：綠鈕對齊 F6——有選取只跑選取段，否則整段全跑；
+              // 只跑「游標所在語句」請按 Ctrl+Enter。
               // 非 SQL（mongo / redis textarea）維持單一指令直接執行。
-              onClick={() => supportsExplain ? editorRef.current?.submit(false) : execute("run")}
+              onClick={() => supportsExplain ? editorRef.current?.submit(true) : execute("run")}
               disabled={running}
-              title="執行游標所在語句 / 選取段（Ctrl+Enter）；整段全跑請按 F6"
+              title="執行整段（F6）；有選取時只跑選取段；游標所在語句請按 Ctrl+Enter"
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-600/80 hover:bg-green-600 disabled:opacity-50">
               <Icon icon={running ? Loader2 : Play} size={13} className={running ? "animate-spin" : ""} />
-              {running ? "執行中…" : hasSelection() ? "執行選取" : "執行"}
+              {running ? "執行中…" : "執行 (F6)"}
             </button>
           </div>
         </div>
@@ -3260,6 +3302,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             {bottomTab === "result" && rowsInfo && <span>{rowsInfo}</span>}
             {bottomTab === "result" && result && result.columns.length > 0 && (
               <div className="flex gap-2">
+                {resultSets.length > 1 && (
+                  <button type="button"
+                    onClick={() => document.querySelector(`[data-result-section="${activeIdx}"]`)?.scrollIntoView({ block: "nearest" })}
+                    className="text-accent/80 hover:text-accent"
+                    title="複製 / 匯出 / 問 AI 作用於此結果集（點任一結果格可切換）；點此捲至該格">
+                    結果 {activeIdx + 1}
+                  </button>
+                )}
                 <button type="button" onClick={() => exportRes && copyToClipboard(resultToCsv(exportRes), "已複製結果 (CSV)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 CSV</button>
                 <button type="button" onClick={() => exportRes && copyToClipboard(resultToTsv(exportRes), "已複製結果 (TSV)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 TSV</button>
                 <button type="button" onClick={() => exportRes && copyToClipboard(resultToJson(exportRes), "已複製結果 (JSON)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 JSON</button>
@@ -3283,7 +3333,43 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                   </button>
                 </div>
               )}
-              {result && <ResultTable result={result} onViewChange={setResultView} />}
+              {resultSets.length > 1 ? (
+                // 多結果集（SSMS 風格）：逐格堆疊、同時可見、各自捲動（sticky 表頭相對各格生效）。
+                // 點 / 聚焦任一格（含表格內部）把它設為「作用中」→ 右上複製 / 匯出 / 問 AI 對其生效。
+                // content-visibility:auto：畫面外的格跳過 layout / paint，大批次不卡；
+                // 每格渲染列數上限按格數均分（總 DOM 列數有預算），複製 / 匯出仍取全部列。
+                <div className="p-2 space-y-2">
+                  {resultSets.map((s, i) => {
+                    const collapsed = !!collapsedSets[i];
+                    return (
+                      <section key={`${runSeq}-${i}`} data-result-section={i}
+                        onMouseDownCapture={() => setActiveResult(i)}
+                        onFocusCapture={() => setActiveResult(i)}
+                        className={`rounded-md border overflow-hidden [content-visibility:auto] [contain-intrinsic-size:auto_300px] ${i === activeIdx ? "border-accent/50" : "border-fg/10"}`}>
+                        <header onClick={() => setActiveResult(i)} title={s.sql}
+                          className="flex items-center gap-2 px-2.5 py-1 bg-bar text-[11px] cursor-pointer select-none border-b border-fg/10">
+                          <button type="button" aria-label={collapsed ? "展開結果" : "摺疊結果"} title={collapsed ? "展開" : "摺疊"}
+                            onClick={(e) => { e.stopPropagation(); setCollapsedSets((m) => ({ ...m, [i]: !m[i] })); }}
+                            className="shrink-0 text-fg/40 hover:text-fg/80">
+                            <Icon icon={ChevronRight} size={12} className={`transition-transform ${collapsed ? "" : "rotate-90"}`} />
+                          </button>
+                          <span className={`shrink-0 font-medium ${i === activeIdx ? "text-accent" : "text-fg/60"}`}>結果 {i + 1}</span>
+                          <span className="mono text-fg/35 truncate flex-1">{s.sql.replace(/\s+/g, " ").trim().slice(0, 200)}</span>
+                          <span className="text-fg/45 shrink-0">{s.res.rows.length} 列 · {fmtElapsed(s.ms)}</span>
+                        </header>
+                        {/* 摺疊用 display:none 而非卸載：保留該格排序 / 篩選 / 選取狀態 */}
+                        <div style={collapsed ? { display: "none" } : undefined} className="max-h-[45vh] overflow-auto">
+                          <ResultTable result={s.res}
+                            maxRender={Math.max(100, Math.floor(2000 / resultSets.length))}
+                            onViewChange={i === activeIdx ? setResultView : undefined} />
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+              ) : (
+                result && <ResultTable result={result} onViewChange={setResultView} />
+              )}
               {!result && !err && (
                 <EmptyState compact icon={running ? Loader2 : Play}
                   title={running ? "執行中…" : "尚無查詢結果"}
@@ -3322,7 +3408,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   );
 }
 
-function ResultTable({ result, onViewChange }: { result: QueryResult; onViewChange?: (rows: (string | null)[][]) => void }) {
+// memo：多結果集堆疊時，父層（QueryPane）因作用中表格回報 resultView 而頻繁重渲染（每個篩選鍵擊 / 排序點擊），
+// 不 memo 會讓其餘 N-1 個大表格跟著全數 reconcile；props（result / onViewChange / maxRender）皆為穩定 identity。
+const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender = 2000 }: { result: QueryResult; onViewChange?: (rows: (string | null)[][]) => void; maxRender?: number }) {
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
   // 範圍選取（Shift+點選第二角）：null = 單格。Ctrl+C 複製整個矩形為 TSV，狀態列顯示統計。
   const [rangeEnd, setRangeEnd] = useState<{ r: number; c: number } | null>(null);
@@ -3380,7 +3468,8 @@ function ResultTable({ result, onViewChange }: { result: QueryResult; onViewChan
   useEffect(() => { setSort(null); setRfilter(""); setSelected(null); setRangeEnd(null); }, [result]);
 
   // 大結果集只渲染前 N 列，避免數萬列 DOM 卡死 UI；複製 / 匯出仍取全部。
-  const MAX_RENDER = 2000;
+  // 多結果集堆疊時由父層按格數縮小上限（總 DOM 列數有預算）。
+  const MAX_RENDER = maxRender;
   const rendered = viewRows.length > MAX_RENDER ? viewRows.slice(0, MAX_RENDER) : viewRows;
 
   const cell = (r: number, c: number) => viewRows[r]?.[c] ?? null;
@@ -3700,4 +3789,4 @@ function ResultTable({ result, onViewChange }: { result: QueryResult; onViewChan
       )}
     </div>
   );
-}
+});

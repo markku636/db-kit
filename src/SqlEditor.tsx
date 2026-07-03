@@ -77,7 +77,7 @@ interface SqlEditorProps {
   snippets?: EditorSnippet[];
   diagnostics?: SqlDiagnostic[];
   onSubmit?: (s: SqlSubmit) => void; // F6 / Ctrl+Enter 觸發（如「執行」）
-  /** 選取文字變動時回呼（供呼叫端讓「執行」鈕在有選取時顯示「執行選取」）。 */
+  /** 選取文字變動時回呼（供呼叫端追蹤選取段，執行時只跑選取）。 */
   onSelectionChange?: (selection: string | null) => void;
   placeholder?: string;
   className?: string;

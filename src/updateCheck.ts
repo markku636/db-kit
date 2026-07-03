@@ -2,7 +2,7 @@
 // 純前端：直打 GitHub API（其回應帶 Access-Control-Allow-Origin: *，且 tauri.conf.json 的
 // security.csp = null，故 packaged webview 的跨網域 fetch 可通過）。任何失敗一律安靜略過，不擋啟動。
 
-const REPO = "markku636/db-kit";
+export const REPO = "markku636/db-kit";
 const CACHE_KEY = "db-kit:update"; // 沿用 db-kit:* localStorage 慣例
 const TTL_MS = 24 * 60 * 60 * 1000; // 每天最多打一次 API（避開 GitHub 匿名 60 次/小時限制）
 
@@ -54,11 +54,12 @@ function readCache(): Cache | null {
  * 回傳 { version, url }：version 已去掉 v 前綴，url 為該 Release 的 GitHub 頁面。
  * 離線 / rate-limit / 尚無 release 等任何失敗都回傳既有快取或 null，不丟例外。
  * 注意：本函式只負責「查最新版」，是否比目前版本新由呼叫端用 isNewer 判斷。
+ * force：略過 TTL 直打 API（供「關於」對話框手動檢查用）；失敗時仍回退既有快取。
  */
-export async function checkForUpdate(): Promise<UpdateInfo | null> {
+export async function checkForUpdate(opts?: { force?: boolean }): Promise<UpdateInfo | null> {
   const cached = readCache();
   const fallback = (): UpdateInfo | null => (cached ? { version: cached.version, url: cached.url } : null);
-  if (cached && Date.now() - cached.checkedAt < TTL_MS) return fallback();
+  if (!opts?.force && cached && Date.now() - cached.checkedAt < TTL_MS) return fallback();
   try {
     const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
       headers: { Accept: "application/vnd.github+json" },
