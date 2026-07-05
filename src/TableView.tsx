@@ -110,6 +110,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const isRedis = useIsRedis(tab.connId);
   const connKind = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.kind);
   const isSqlKind = connKind === "mysql" || connKind === "postgres" || connKind === "sqlite";
+  const isMongo = connKind === "mongo";
+  // Mongo：整份文件 JSON 編輯器（開啟時記錄列索引，用 row_ids 定位）。
+  const [docEdit, setDocEdit] = useState<number | null>(null);
   const [detailKey, setDetailKey] = useState<string | null>(null);
   const [rowMenu, setRowMenu] = useState<{ key: string; ttl: string | null; x: number; y: number } | null>(null);
   // Redis 鍵檢視模式：樹狀（命名空間資料夾）/ 網格（key 列表）。記憶於 localStorage。
@@ -454,6 +457,16 @@ function DataPane({ tab }: { tab: OpenTab }) {
     requestAnimationFrame(() => gridRef.current?.focus());
   };
 
+  // 主鍵定位值：Mongo 的 _id 用 row_ids（canonical extended JSON）以精確定位任意型別 _id
+  // （ObjectId / Int64 / Date 等）；其他 driver 用原始格值。與 rows 對齊。
+  const pkLocate = (r: number): (string | null)[] => {
+    if (!data) return [];
+    if (data.primary_key.length === 1 && data.primary_key[0] === "_id" && data.row_ids?.[r] != null) {
+      return [data.row_ids[r]];
+    }
+    return data.primary_key.map((pkCol) => data.rows[r][data.columns.indexOf(pkCol)]);
+  };
+
   const applyEdits = async () => {
     if (!data || dirtyCount === 0) return;
     setApplying(true);
@@ -465,9 +478,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         const [rStr, cStr] = key.split(":");
         const r = Number(rStr);
         const c = Number(cStr);
-        const pkValues = data.primary_key.map(
-          (pkCol) => data.rows[r][data.columns.indexOf(pkCol)]
-        );
+        const pkValues = pkLocate(r);
         await api.updateCell(tab.connId, tab.database, tab.table, {
           column: data.columns[c],
           new_value: newVal,
@@ -520,9 +531,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   const deleteRow = async (r: number) => {
     if (!data || !editable) return;
-    const pkValues = data.primary_key.map(
-      (pkCol) => data.rows[r][data.columns.indexOf(pkCol)]
-    );
+    const pkValues = pkLocate(r);
     const editsNote = dirtyCount > 0 ? `\n（將同時放棄 ${dirtyCount} 筆未套用的編輯）` : "";
     if (!(await uiConfirm("確定刪除此列？此動作無法復原。" + editsNote, { title: "刪除列", danger: true, confirmText: "刪除" }))) return;
     setApplying(true);
@@ -550,7 +559,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const bulkEditsNote = dirtyCount > 0 ? `\n（將同時放棄 ${dirtyCount} 筆未套用的編輯）` : "";
     if (!(await uiConfirm(`確定刪除選取的 ${idxs.length} 列？此動作無法復原。` + bulkEditsNote,
       { title: "刪除選取列", danger: true, confirmText: `刪除 ${idxs.length} 列` }))) return;
-    const pkSets = idxs.map((r) => data.primary_key.map((pk) => data.rows[r][data.columns.indexOf(pk)]));
+    const pkSets = idxs.map((r) => pkLocate(r));
     setApplying(true);
     setErr(null);
     try {
@@ -727,6 +736,10 @@ function DataPane({ tab }: { tab: OpenTab }) {
             ["複製為 UPDATE", () => copyRowUpdate(r), false] as [string, () => void, boolean],
             ["複製為 DELETE", () => copyRowDelete(r), false] as [string, () => void, boolean],
           ]
+        : []),
+      // Mongo：整份文件 JSON 編輯（正確處理巢狀 / ObjectId / Date，避免表格逐格編輯破壞結構）。
+      ...(isMongo && editable
+        ? [["編輯文件（JSON）…", () => setDocEdit(r), false] as [string, () => void, boolean]]
         : []),
       "sep",
       ["篩選此值", () => filterByCell(r, c, false), false],
@@ -1711,6 +1724,85 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onClose={() => setRowDetail(null)}
         />
       )}
+
+      {docEdit !== null && data && data.row_ids?.[docEdit] != null && (
+        <DocumentEditorModal
+          connId={tab.connId}
+          database={tab.database}
+          table={tab.table}
+          docId={data.row_ids[docEdit]}
+          onClose={() => setDocEdit(null)}
+          onSaved={() => { setDocEdit(null); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Mongo 整份文件 JSON 編輯器：取回 canonical extended JSON → 編輯 → 驗證 → 取代整份文件。
+// 正確處理巢狀物件 / 陣列 / ObjectId / Date，避免表格逐格編輯把巢狀結構存成字串而破壞文件。
+function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved }: {
+  connId: string; database: string; table: string; docId: string;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const [text, setText] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api
+      .documentGet(connId, database, table, docId)
+      .then((s) => { if (!cancelled) setText(s); })
+      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"))
+      .finally(() => !cancelled && setLoading(false));
+    return () => { cancelled = true; };
+  }, [connId, database, table, docId]);
+
+  const save = async () => {
+    // 前端先驗 JSON，錯誤即時回饋，不必往返後端。
+    try { JSON.parse(text); } catch (e: any) { setErr(`JSON 格式錯誤：${e?.message ?? e}`); return; }
+    setSaving(true);
+    setErr(null);
+    try {
+      await api.documentReplace(connId, database, table, docId, text);
+      onSaved();
+    } catch (e: any) {
+      setErr(e?.message ?? "儲存失敗");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-elevated w-[640px] max-h-[85vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
+          <span className="font-medium text-sm">編輯文件（JSON）</span>
+          <span className="text-xs text-fg/40 mono truncate">{table}</span>
+          <button type="button" onClick={onClose} aria-label="關閉" title="關閉" className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+        </div>
+        <div className="p-4 overflow-auto flex-1">
+          {err && <div className="text-danger text-sm mono mb-2 break-all">{err}</div>}
+          {loading ? (
+            <div className="text-fg/40 text-sm">讀取中…</div>
+          ) : (
+            <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
+              className="w-full h-96 bg-inset border border-fg/10 rounded p-3 mono text-sm outline-none focus:border-accent resize-none" />
+          )}
+        </div>
+        <div className="px-5 py-3 border-t border-fg/10 flex items-center gap-2">
+          <span className="text-xs text-fg/35">以 canonical extended JSON 呈現；_id 不可變更。</span>
+          <button type="button" onClick={onClose} className="ml-auto px-3 py-1 text-sm rounded border border-fg/15 hover:bg-fg/10">取消</button>
+          <button type="button" onClick={save} disabled={saving || loading}
+            className="px-3 py-1 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">
+            {saving ? "儲存中…" : "儲存"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

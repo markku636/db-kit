@@ -537,6 +537,11 @@ export const api = {
   // 大型集合鍵成員分頁（cursor 起點、count 每頁筆數、filter 成員/欄位過濾）。
   redisKeyPage: (id: string, database: string, key: string, cursor: number, count: number, filter: string, full = false) =>
     invoke<KeyPage>("redis_key_page", { id, database, key, cursor, count, filter, full }),
+  // 文件型（Mongo）：整份文件 JSON 檢視 / 取代。docId 為該列 _id 的 canonical extended JSON。
+  documentGet: (id: string, database: string, table: string, docId: string) =>
+    invoke<string>("document_get", { id, database, table, docId }),
+  documentReplace: (id: string, database: string, table: string, docId: string, docJson: string) =>
+    invoke<number>("document_replace", { id, database, table, docId, docJson }),
   redisSlowlog: (id: string, count: number) =>
     invoke<SlowLogEntry[]>("redis_slowlog", { id, count }),
   redisClients: (id: string) => invoke<ClientInfo[]>("redis_clients", { id }),

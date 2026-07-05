@@ -430,8 +430,27 @@ impl DatabaseDriver for MongoDriver {
         let coll = self.db_handle(database).collection::<Document>(table);
         // 新值：null 代表設為 BSON null（Mongo 沒有「移除欄位」與「設 null」之別，這裡採設 null）
         let new_bson = match &edit.new_value {
-            Some(s) => guess_bson(s),
             None => Bson::Null,
+            Some(s) => {
+                // 取原文件判斷該欄原型別：若原為 Document/Array，新值需為合法 JSON 並以 extended JSON
+                // 還原成 BSON，避免把巢狀結構存成純字串而破壞文件；純量欄位沿用 guess_bson。
+                let orig = coll
+                    .find_one(id_value.clone())
+                    .await
+                    .map_err(|e| AppError::Query(e.to_string()))?;
+                let composite = orig.as_ref().is_some_and(|d| {
+                    matches!(d.get(&edit.column), Some(Bson::Document(_)) | Some(Bson::Array(_)))
+                });
+                if composite {
+                    let v: serde_json::Value = serde_json::from_str(s.trim()).map_err(|e| {
+                        AppError::Query(format!("此欄為巢狀結構，需輸入合法 JSON：{e}"))
+                    })?;
+                    Bson::try_from(v)
+                        .map_err(|e| AppError::Query(format!("JSON 轉 BSON 失敗：{e}")))?
+                } else {
+                    guess_bson(s)
+                }
+            }
         };
         let mut set_doc = Document::new();
         set_doc.insert(edit.column.clone(), new_bson);
@@ -666,6 +685,44 @@ impl DatabaseDriver for MongoDriver {
         Ok(finalize_hits(hits, opts))
     }
 
+    async fn document_get(&self, database: &str, table: &str, id: &str) -> AppResult<String> {
+        let coll = self.db_handle(database).collection::<Document>(table);
+        let doc = coll
+            .find_one(doc! { "_id": id_bson(id) })
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+            .ok_or_else(|| AppError::Query("找不到文件".to_string()))?;
+        // canonical extended JSON（保真 ObjectId/Int64/Date/Decimal128），美化輸出供編輯。
+        let ext = Bson::Document(doc).into_canonical_extjson();
+        serde_json::to_string_pretty(&ext).map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    async fn document_replace(
+        &self,
+        database: &str,
+        table: &str,
+        id: &str,
+        doc_json: &str,
+    ) -> AppResult<u64> {
+        let coll = self.db_handle(database).collection::<Document>(table);
+        let v: serde_json::Value = serde_json::from_str(doc_json)
+            .map_err(|e| AppError::Query(format!("文件需為合法 JSON：{e}")))?;
+        let bson = Bson::try_from(v)
+            .map_err(|e| AppError::Query(format!("JSON 轉 BSON 失敗：{e}")))?;
+        let mut new_doc = match bson {
+            Bson::Document(d) => d,
+            _ => return Err(AppError::Query("文件必須是 JSON 物件".to_string())),
+        };
+        // _id 不可變更：強制與定位鍵一致，避免改動 _id 造成新增而非取代。
+        let id_val = id_bson(id);
+        new_doc.insert("_id", id_val.clone());
+        let res = coll
+            .replace_one(doc! { "_id": id_val }, new_doc)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(res.modified_count)
+    }
+
     fn pool_status(&self) -> PoolStatus {
         // mongodb crate 未公開即時池統計，回傳 0（介面相容用）。
         PoolStatus { size: 0, idle: 0, in_use: 0 }
@@ -745,8 +802,21 @@ pub(crate) fn pct_encode(s: &str) -> String {
     out
 }
 
-/// 將字串 _id 還原成 BSON。ObjectId 字串（24 hex）轉 ObjectId，否則當字串。
+/// 將前端傳來的 _id 定位值還原成 BSON。
+/// 新前端傳 canonical extended JSON（`{"$oid":…}` / `{"$numberLong":…}` / `"str"` 等），
+/// 可正確還原 ObjectId / Int64 / Date / Decimal128 / String 等任意型別；
+/// 舊前端傳純顯示字串（24 hex → ObjectId，否則字串），維持向後相容。
 fn id_bson(raw: &str) -> Bson {
+    let t = raw.trim();
+    // extended JSON：物件（{…}）或 JSON 字串（"…"）。bare 數字 / bool 不當 JSON，避免
+    // 數字外觀的字串 _id（如 "123"）被舊前端誤轉成數字。
+    if t.starts_with('{') || t.starts_with('"') {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
+            if let Ok(b) = Bson::try_from(v) {
+                return b;
+            }
+        }
+    }
     if raw.len() == 24 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
         if let Ok(oid) = mongodb::bson::oid::ObjectId::parse_str(raw) {
             return Bson::ObjectId(oid);

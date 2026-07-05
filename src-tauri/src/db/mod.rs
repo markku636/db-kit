@@ -1005,6 +1005,22 @@ pub trait DatabaseDriver: Send + Sync {
         Err(AppError::Unsupported("此資料庫不支援鍵掃描".into()))
     }
 
+    /// 文件型：以主鍵取回整份文件的 canonical extended JSON（美化）。非文件型預設 Unsupported。
+    async fn document_get(&self, _database: &str, _table: &str, _id: &str) -> AppResult<String> {
+        Err(AppError::Unsupported("此資料庫不支援文件檢視".into()))
+    }
+
+    /// 文件型：以主鍵用整份 extended JSON 文件取代（保真巢狀 / ObjectId / Date 等）。回傳受影響文件數。
+    async fn document_replace(
+        &self,
+        _database: &str,
+        _table: &str,
+        _id: &str,
+        _doc_json: &str,
+    ) -> AppResult<u64> {
+        Err(AppError::Unsupported("此資料庫不支援文件取代".into()))
+    }
+
     /// 清除此驅動的查詢快取（若有）。預設 no-op；有快取的驅動（如外部 gateway）覆寫，
     /// 供前端「重新整理」強制重抓而非吃快取。
     async fn clear_cache(&self) {}

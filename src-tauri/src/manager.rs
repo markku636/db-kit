@@ -391,6 +391,26 @@ impl Active {
             Active::Dyn(d) => d.scan_keys(database, pattern, limit).await,
         }
     }
+    async fn document_get(&self, database: &str, table: &str, id: &str) -> AppResult<String> {
+        match self {
+            Active::Mysql(d) => d.document_get(database, table, id).await,
+            Active::Postgres(d) => d.document_get(database, table, id).await,
+            Active::Sqlite(d) => d.document_get(database, table, id).await,
+            Active::Mongo(d) => d.document_get(database, table, id).await,
+            Active::Redis(d) => d.document_get(database, table, id).await,
+            Active::Dyn(d) => d.document_get(database, table, id).await,
+        }
+    }
+    async fn document_replace(&self, database: &str, table: &str, id: &str, doc_json: &str) -> AppResult<u64> {
+        match self {
+            Active::Mysql(d) => d.document_replace(database, table, id, doc_json).await,
+            Active::Postgres(d) => d.document_replace(database, table, id, doc_json).await,
+            Active::Sqlite(d) => d.document_replace(database, table, id, doc_json).await,
+            Active::Mongo(d) => d.document_replace(database, table, id, doc_json).await,
+            Active::Redis(d) => d.document_replace(database, table, id, doc_json).await,
+            Active::Dyn(d) => d.document_replace(database, table, id, doc_json).await,
+        }
+    }
     async fn clear_cache(&self) {
         match self {
             Active::Mysql(d) => d.clear_cache().await,
@@ -747,6 +767,21 @@ impl ConnectionManager {
         limit: usize,
     ) -> AppResult<RedisKeys> {
         self.get(id)?.active.scan_keys(database, pattern, limit).await
+    }
+
+    pub async fn document_get(&self, id: &str, database: &str, table: &str, doc_id: &str) -> AppResult<String> {
+        self.get(id)?.active.document_get(database, table, doc_id).await
+    }
+
+    pub async fn document_replace(
+        &self,
+        id: &str,
+        database: &str,
+        table: &str,
+        doc_id: &str,
+        doc_json: &str,
+    ) -> AppResult<u64> {
+        self.get(id)?.active.document_replace(database, table, doc_id, doc_json).await
     }
 
     /// 取得 Redis driver 本體，供 Redis 專屬命令直接呼叫其 inherent 方法

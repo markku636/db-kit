@@ -571,6 +571,31 @@ pub async fn redis_keys(
     state.manager.scan_keys(&id, &database, &pattern, limit).await
 }
 
+/// 文件型：取回整份文件的 canonical extended JSON（供 JSON 編輯器）。
+#[tauri::command]
+pub async fn document_get(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    table: String,
+    doc_id: String,
+) -> AppResult<String> {
+    state.manager.document_get(&id, &database, &table, &doc_id).await
+}
+
+/// 文件型：以整份 extended JSON 文件取代（保真巢狀 / ObjectId / Date）。
+#[tauri::command]
+pub async fn document_replace(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    table: String,
+    doc_id: String,
+    doc_json: String,
+) -> AppResult<u64> {
+    state.manager.document_replace(&id, &database, &table, &doc_id, &doc_json).await
+}
+
 // ---- 資料匯出 ----
 
 #[tauri::command]

@@ -122,6 +122,8 @@ pub fn run() {
             commands::create_index,
             commands::server_info,
             commands::redis_keys,
+            commands::document_get,
+            commands::document_replace,
             commands::redis_key_page,
             commands::redis_slowlog,
             commands::redis_clients,
