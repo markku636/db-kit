@@ -25,7 +25,7 @@ export default function AboutDialog({ onClose }: { onClose: () => void }) {
     else if (isNewer(r.version, __APP_VERSION__)) setCheck({ phase: "update", info: r });
     else setCheck({ phase: "latest" });
   };
-  // 支援的資料庫清單直接從 KIND_META 導出（排除 QLand 這類外掛入口），新增 kind 時自動跟上。
+  // 支援的資料庫清單直接從 KIND_META 導出（排除 external 這類外掛入口），新增 kind 時自動跟上。
   const dbs = Object.values(KIND_META)
     .filter((m) => !m.external)
     .map((m) => m.label)

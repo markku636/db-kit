@@ -15,5 +15,8 @@ export default defineConfig({
   server: { port: 1420, strictPort: true },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    // 外部 gateway（External）連線類型的顯示開關。開源版預設不顯示（無內建驅動，選了也僅回 Unsupported）；
+    // 提供私有 gateway 驅動的下游打包可設 DBKIT_EXTERNAL=1 於建置期開啟。
+    __EXTERNAL__: JSON.stringify(process.env.DBKIT_EXTERNAL === "1"),
   },
 });

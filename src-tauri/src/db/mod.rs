@@ -3,12 +3,13 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 pub mod mongo;
+pub mod mssql;
 pub mod mysql;
 pub mod postgres;
 pub mod redis;
 pub mod sqlite;
 
-/// 外部 gateway 驅動分派層（泛用擴充點）。實際的外部驅動（如私有 qland）以 trait object 接入；
+/// 外部 gateway 驅動分派層（泛用擴充點）。實際的外部驅動（可能為私有外掛）以 trait object 接入；
 /// 未編入任何外部驅動時 `connect_external` 回 Unsupported。
 pub mod external;
 
@@ -21,6 +22,7 @@ pub enum DbKind {
     Mongo,
     Redis,
     Sqlite,
+    Mssql,
     /// 外部 web gateway（非真實連線；透過 HTTP 下 SQL）。實作見 `db::external`。
     External,
 }
@@ -34,6 +36,7 @@ impl DbKind {
             DbKind::Mongo => "mongo",
             DbKind::Redis => "redis",
             DbKind::Sqlite => "sqlite",
+            DbKind::Mssql => "mssql",
             DbKind::External => "external",
         }
     }
@@ -45,6 +48,7 @@ impl DbKind {
             DbKind::Mongo => ".archive",
             DbKind::Redis => ".rdb",
             DbKind::Sqlite => ".db",
+            DbKind::Mssql => ".bacpac",
             DbKind::External => "",
         }
     }

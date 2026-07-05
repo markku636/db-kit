@@ -4,6 +4,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::db::mongo::MongoDriver;
+use crate::db::mssql::MssqlDriver;
 use crate::db::mysql::MysqlDriver;
 use crate::db::postgres::PostgresDriver;
 use crate::db::redis::RedisDriver;
@@ -23,6 +24,7 @@ enum Active {
     Sqlite(Arc<SqliteDriver>),
     Mongo(Arc<MongoDriver>),
     Redis(Arc<RedisDriver>),
+    Mssql(Arc<MssqlDriver>),
     /// 外部 gateway 驅動（trait object，見 db::external）。
     Dyn(Arc<dyn DatabaseDriver>),
 }
@@ -37,6 +39,7 @@ impl Active {
             Active::Sqlite(_) => DbKind::Sqlite,
             Active::Mongo(_) => DbKind::Mongo,
             Active::Redis(_) => DbKind::Redis,
+            Active::Mssql(_) => DbKind::Mssql,
             Active::Dyn(_) => DbKind::External,
         }
     }
@@ -48,6 +51,7 @@ impl Active {
             Active::Sqlite(d) => d.ping().await,
             Active::Mongo(d) => d.ping().await,
             Active::Redis(d) => d.ping().await,
+            Active::Mssql(d) => d.ping().await,
             Active::Dyn(d) => d.ping().await,
         }
     }
@@ -58,6 +62,7 @@ impl Active {
             Active::Sqlite(d) => d.list_databases().await,
             Active::Mongo(d) => d.list_databases().await,
             Active::Redis(d) => d.list_databases().await,
+            Active::Mssql(d) => d.list_databases().await,
             Active::Dyn(d) => d.list_databases().await,
         }
     }
@@ -68,6 +73,7 @@ impl Active {
             Active::Sqlite(d) => d.list_tables(database).await,
             Active::Mongo(d) => d.list_tables(database).await,
             Active::Redis(d) => d.list_tables(database).await,
+            Active::Mssql(d) => d.list_tables(database).await,
             Active::Dyn(d) => d.list_tables(database).await,
         }
     }
@@ -78,6 +84,7 @@ impl Active {
             Active::Sqlite(d) => d.table_columns(database, table).await,
             Active::Mongo(d) => d.table_columns(database, table).await,
             Active::Redis(d) => d.table_columns(database, table).await,
+            Active::Mssql(d) => d.table_columns(database, table).await,
             Active::Dyn(d) => d.table_columns(database, table).await,
         }
     }
@@ -93,6 +100,7 @@ impl Active {
             Active::Sqlite(d) => d.table_data(database, table, query).await,
             Active::Mongo(d) => d.table_data(database, table, query).await,
             Active::Redis(d) => d.table_data(database, table, query).await,
+            Active::Mssql(d) => d.table_data(database, table, query).await,
             Active::Dyn(d) => d.table_data(database, table, query).await,
         }
     }
@@ -103,6 +111,7 @@ impl Active {
             Active::Sqlite(d) => d.query(sql).await,
             Active::Mongo(d) => d.query(sql).await,
             Active::Redis(d) => d.query(sql).await,
+            Active::Mssql(d) => d.query(sql).await,
             Active::Dyn(d) => d.query(sql).await,
         }
     }
@@ -118,6 +127,7 @@ impl Active {
             Active::Sqlite(d) => d.update_cell(database, table, edit).await,
             Active::Mongo(d) => d.update_cell(database, table, edit).await,
             Active::Redis(d) => d.update_cell(database, table, edit).await,
+            Active::Mssql(d) => d.update_cell(database, table, edit).await,
             Active::Dyn(d) => d.update_cell(database, table, edit).await,
         }
     }
@@ -133,6 +143,7 @@ impl Active {
             Active::Sqlite(d) => d.insert_row(database, table, row).await,
             Active::Mongo(d) => d.insert_row(database, table, row).await,
             Active::Redis(d) => d.insert_row(database, table, row).await,
+            Active::Mssql(d) => d.insert_row(database, table, row).await,
             Active::Dyn(d) => d.insert_row(database, table, row).await,
         }
     }
@@ -148,6 +159,7 @@ impl Active {
             Active::Sqlite(d) => d.delete_row(database, table, del).await,
             Active::Mongo(d) => d.delete_row(database, table, del).await,
             Active::Redis(d) => d.delete_row(database, table, del).await,
+            Active::Mssql(d) => d.delete_row(database, table, del).await,
             Active::Dyn(d) => d.delete_row(database, table, del).await,
         }
     }
@@ -158,6 +170,7 @@ impl Active {
             Active::Sqlite(d) => d.pool_status(),
             Active::Mongo(d) => d.pool_status(),
             Active::Redis(d) => d.pool_status(),
+            Active::Mssql(d) => d.pool_status(),
             Active::Dyn(d) => d.pool_status(),
         }
     }
@@ -168,6 +181,7 @@ impl Active {
             Active::Sqlite(d) => d.key_detail(database, key).await,
             Active::Mongo(d) => d.key_detail(database, key).await,
             Active::Redis(d) => d.key_detail(database, key).await,
+            Active::Mssql(d) => d.key_detail(database, key).await,
             Active::Dyn(d) => d.key_detail(database, key).await,
         }
     }
@@ -178,6 +192,7 @@ impl Active {
             Active::Sqlite(d) => d.key_edit(database, key, edit).await,
             Active::Mongo(d) => d.key_edit(database, key, edit).await,
             Active::Redis(d) => d.key_edit(database, key, edit).await,
+            Active::Mssql(d) => d.key_edit(database, key, edit).await,
             Active::Dyn(d) => d.key_edit(database, key, edit).await,
         }
     }
@@ -188,6 +203,7 @@ impl Active {
             Active::Sqlite(d) => d.explain(sql).await,
             Active::Mongo(d) => d.explain(sql).await,
             Active::Redis(d) => d.explain(sql).await,
+            Active::Mssql(d) => d.explain(sql).await,
             Active::Dyn(d) => d.explain(sql).await,
         }
     }
@@ -198,6 +214,7 @@ impl Active {
             Active::Sqlite(d) => d.column_stats(database, table, column).await,
             Active::Mongo(d) => d.column_stats(database, table, column).await,
             Active::Redis(d) => d.column_stats(database, table, column).await,
+            Active::Mssql(d) => d.column_stats(database, table, column).await,
             Active::Dyn(d) => d.column_stats(database, table, column).await,
         }
     }
@@ -208,6 +225,7 @@ impl Active {
             Active::Sqlite(d) => d.table_info(database, table).await,
             Active::Mongo(d) => d.table_info(database, table).await,
             Active::Redis(d) => d.table_info(database, table).await,
+            Active::Mssql(d) => d.table_info(database, table).await,
             Active::Dyn(d) => d.table_info(database, table).await,
         }
     }
@@ -218,6 +236,7 @@ impl Active {
             Active::Sqlite(d) => d.list_foreign_keys(database, table).await,
             Active::Mongo(d) => d.list_foreign_keys(database, table).await,
             Active::Redis(d) => d.list_foreign_keys(database, table).await,
+            Active::Mssql(d) => d.list_foreign_keys(database, table).await,
             Active::Dyn(d) => d.list_foreign_keys(database, table).await,
         }
     }
@@ -228,6 +247,7 @@ impl Active {
             Active::Sqlite(d) => d.create_collection(database, name).await,
             Active::Mongo(d) => d.create_collection(database, name).await,
             Active::Redis(d) => d.create_collection(database, name).await,
+            Active::Mssql(d) => d.create_collection(database, name).await,
             Active::Dyn(d) => d.create_collection(database, name).await,
         }
     }
@@ -238,6 +258,7 @@ impl Active {
             Active::Sqlite(d) => d.create_database(name).await,
             Active::Mongo(d) => d.create_database(name).await,
             Active::Redis(d) => d.create_database(name).await,
+            Active::Mssql(d) => d.create_database(name).await,
             Active::Dyn(d) => d.create_database(name).await,
         }
     }
@@ -248,6 +269,7 @@ impl Active {
             Active::Sqlite(d) => d.drop_collection(database, name).await,
             Active::Mongo(d) => d.drop_collection(database, name).await,
             Active::Redis(d) => d.drop_collection(database, name).await,
+            Active::Mssql(d) => d.drop_collection(database, name).await,
             Active::Dyn(d) => d.drop_collection(database, name).await,
         }
     }
@@ -258,6 +280,7 @@ impl Active {
             Active::Sqlite(d) => d.drop_database(name).await,
             Active::Mongo(d) => d.drop_database(name).await,
             Active::Redis(d) => d.drop_database(name).await,
+            Active::Mssql(d) => d.drop_database(name).await,
             Active::Dyn(d) => d.drop_database(name).await,
         }
     }
@@ -268,6 +291,7 @@ impl Active {
             Active::Sqlite(d) => d.list_routines(database).await,
             Active::Mongo(d) => d.list_routines(database).await,
             Active::Redis(d) => d.list_routines(database).await,
+            Active::Mssql(d) => d.list_routines(database).await,
             Active::Dyn(d) => d.list_routines(database).await,
         }
     }
@@ -278,6 +302,7 @@ impl Active {
             Active::Sqlite(d) => d.routine_definition(database, name, routine_type).await,
             Active::Mongo(d) => d.routine_definition(database, name, routine_type).await,
             Active::Redis(d) => d.routine_definition(database, name, routine_type).await,
+            Active::Mssql(d) => d.routine_definition(database, name, routine_type).await,
             Active::Dyn(d) => d.routine_definition(database, name, routine_type).await,
         }
     }
@@ -288,6 +313,7 @@ impl Active {
             Active::Sqlite(d) => d.search_objects(opts).await,
             Active::Mongo(d) => d.search_objects(opts).await,
             Active::Redis(d) => d.search_objects(opts).await,
+            Active::Mssql(d) => d.search_objects(opts).await,
             Active::Dyn(d) => d.search_objects(opts).await,
         }
     }
@@ -298,6 +324,7 @@ impl Active {
             Active::Sqlite(d) => d.exec_ddl(sql).await,
             Active::Mongo(d) => d.exec_ddl(sql).await,
             Active::Redis(d) => d.exec_ddl(sql).await,
+            Active::Mssql(d) => d.exec_ddl(sql).await,
             Active::Dyn(d) => d.exec_ddl(sql).await,
         }
     }
@@ -308,6 +335,7 @@ impl Active {
             Active::Sqlite(d) => d.validate_ddl(database, sql).await,
             Active::Mongo(d) => d.validate_ddl(database, sql).await,
             Active::Redis(d) => d.validate_ddl(database, sql).await,
+            Active::Mssql(d) => d.validate_ddl(database, sql).await,
             Active::Dyn(d) => d.validate_ddl(database, sql).await,
         }
     }
@@ -318,6 +346,7 @@ impl Active {
             Active::Sqlite(d) => d.alter_table(database, table, op).await,
             Active::Mongo(d) => d.alter_table(database, table, op).await,
             Active::Redis(d) => d.alter_table(database, table, op).await,
+            Active::Mssql(d) => d.alter_table(database, table, op).await,
             Active::Dyn(d) => d.alter_table(database, table, op).await,
         }
     }
@@ -328,6 +357,7 @@ impl Active {
             Active::Sqlite(d) => d.er_model(database).await,
             Active::Mongo(d) => d.er_model(database).await,
             Active::Redis(d) => d.er_model(database).await,
+            Active::Mssql(d) => d.er_model(database).await,
             Active::Dyn(d) => d.er_model(database).await,
         }
     }
@@ -338,6 +368,7 @@ impl Active {
             Active::Sqlite(d) => d.table_ddl(database, table).await,
             Active::Mongo(d) => d.table_ddl(database, table).await,
             Active::Redis(d) => d.table_ddl(database, table).await,
+            Active::Mssql(d) => d.table_ddl(database, table).await,
             Active::Dyn(d) => d.table_ddl(database, table).await,
         }
     }
@@ -348,6 +379,7 @@ impl Active {
             Active::Sqlite(d) => d.table_indexes(database, table).await,
             Active::Mongo(d) => d.table_indexes(database, table).await,
             Active::Redis(d) => d.table_indexes(database, table).await,
+            Active::Mssql(d) => d.table_indexes(database, table).await,
             Active::Dyn(d) => d.table_indexes(database, table).await,
         }
     }
@@ -358,6 +390,7 @@ impl Active {
             Active::Sqlite(d) => d.drop_index(database, table, index).await,
             Active::Mongo(d) => d.drop_index(database, table, index).await,
             Active::Redis(d) => d.drop_index(database, table, index).await,
+            Active::Mssql(d) => d.drop_index(database, table, index).await,
             Active::Dyn(d) => d.drop_index(database, table, index).await,
         }
     }
@@ -368,6 +401,7 @@ impl Active {
             Active::Sqlite(d) => d.create_index(database, table, name, columns, unique).await,
             Active::Mongo(d) => d.create_index(database, table, name, columns, unique).await,
             Active::Redis(d) => d.create_index(database, table, name, columns, unique).await,
+            Active::Mssql(d) => d.create_index(database, table, name, columns, unique).await,
             Active::Dyn(d) => d.create_index(database, table, name, columns, unique).await,
         }
     }
@@ -378,6 +412,7 @@ impl Active {
             Active::Sqlite(d) => d.server_info().await,
             Active::Mongo(d) => d.server_info().await,
             Active::Redis(d) => d.server_info().await,
+            Active::Mssql(d) => d.server_info().await,
             Active::Dyn(d) => d.server_info().await,
         }
     }
@@ -388,6 +423,7 @@ impl Active {
             Active::Sqlite(d) => d.scan_keys(database, pattern, limit).await,
             Active::Mongo(d) => d.scan_keys(database, pattern, limit).await,
             Active::Redis(d) => d.scan_keys(database, pattern, limit).await,
+            Active::Mssql(d) => d.scan_keys(database, pattern, limit).await,
             Active::Dyn(d) => d.scan_keys(database, pattern, limit).await,
         }
     }
@@ -398,6 +434,7 @@ impl Active {
             Active::Sqlite(d) => d.document_get(database, table, id).await,
             Active::Mongo(d) => d.document_get(database, table, id).await,
             Active::Redis(d) => d.document_get(database, table, id).await,
+            Active::Mssql(d) => d.document_get(database, table, id).await,
             Active::Dyn(d) => d.document_get(database, table, id).await,
         }
     }
@@ -408,6 +445,7 @@ impl Active {
             Active::Sqlite(d) => d.document_replace(database, table, id, doc_json).await,
             Active::Mongo(d) => d.document_replace(database, table, id, doc_json).await,
             Active::Redis(d) => d.document_replace(database, table, id, doc_json).await,
+            Active::Mssql(d) => d.document_replace(database, table, id, doc_json).await,
             Active::Dyn(d) => d.document_replace(database, table, id, doc_json).await,
         }
     }
@@ -418,6 +456,7 @@ impl Active {
             Active::Sqlite(d) => d.clear_cache().await,
             Active::Mongo(d) => d.clear_cache().await,
             Active::Redis(d) => d.clear_cache().await,
+            Active::Mssql(d) => d.clear_cache().await,
             Active::Dyn(d) => d.clear_cache().await,
         }
     }
@@ -428,6 +467,7 @@ impl Active {
             Active::Sqlite(d) => d.close().await,
             Active::Mongo(d) => d.close().await,
             Active::Redis(d) => d.close().await,
+            Active::Mssql(d) => d.close().await,
             Active::Dyn(d) => d.close().await,
         }
     }
@@ -482,6 +522,7 @@ impl ConnectionManager {
             }
             DbKind::Mongo => MongoDriver::connect(&cfg).await.map(|d| Active::Mongo(Arc::new(d))),
             DbKind::Redis => RedisDriver::connect(&cfg).await.map(|d| Active::Redis(Arc::new(d))),
+            DbKind::Mssql => MssqlDriver::connect(&cfg).await.map(|d| Active::Mssql(Arc::new(d))),
             DbKind::External => crate::db::external::connect_external(&cfg).await.map(Active::Dyn),
         };
 
@@ -559,6 +600,12 @@ impl ConnectionManager {
             }
             DbKind::Redis => {
                 let driver = RedisDriver::connect(config).await?;
+                driver.ping().await?;
+                driver.close().await;
+                Ok(())
+            }
+            DbKind::Mssql => {
+                let driver = MssqlDriver::connect(config).await?;
                 driver.ping().await?;
                 driver.close().await;
                 Ok(())

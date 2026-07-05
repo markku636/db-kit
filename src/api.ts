@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type DbKind = "mysql" | "postgres" | "mongo" | "redis" | "sqlite" | "external";
+export type DbKind = "mysql" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "external";
 
 export type SshAuthMethod = "password" | "key";
 
@@ -427,7 +427,8 @@ export const KIND_META: Record<DbKind, { label: string; color: string; defaultPo
   mongo: { label: "MongoDB", color: "#22c55e", defaultPort: 27017 },
   redis: { label: "Redis", color: "#ef4444", defaultPort: 6379 },
   sqlite: { label: "SQLite", color: "#f59e0b", defaultPort: 0, fileBased: true },
-  external: { label: "QLand", color: "#8b5cf6", defaultPort: 0, external: true },
+  mssql: { label: "SQL Server", color: "#0ea5e9", defaultPort: 1433 },
+  external: { label: "External", color: "#8b5cf6", defaultPort: 0, external: true },
 };
 
 // 後端 command 包裝

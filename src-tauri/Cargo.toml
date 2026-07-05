@@ -38,6 +38,13 @@ serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "postgres", "sqlite", "chrono", "uuid", "bigdecimal", "json"] }
 mongodb = "3"
+# MSSQL：sqlx 0.8 已移除 MSSQL 支援，改用純 Rust TDS 驅動 tiberius + bb8 連線池。
+# rustls 而非 native-tls：延續 russh 的 ring 決定，避開 OpenSSL 系統相依（Windows 免 NASM）。
+tiberius = { version = "0.12", default-features = false, features = ["tds73", "rustls", "chrono"] }
+bb8 = "0.8"
+bb8-tiberius = "0.15"
+# tiberius 走 futures-io，需 tokio-util 的 compat 轉接到 tokio。
+tokio-util = { version = "0.7", features = ["compat"] }
 futures = "0.3"
 # connection-manager：多工單連線 + 斷線自動重連，供 per-db-index 連線快取（避免每次操作新建 TCP）。
 # tokio-rustls-comp：rediss:// TLS（用 rustls/ring，延續 russh 決定，避開 OpenSSL 系統相依）。

@@ -1626,8 +1626,8 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                 const objs = expandedDbs[dbKey];
                 const loading = loadingDbs.has(dbKey);
                 const isRedis = c.kind === "redis";
-                // external（qland gateway）走 SQL 分支：用資料夾 + 每庫篩選框（適合 1700+ 張表），右鍵亦可新增查詢。
-                const isSqlKind = c.kind === "mysql" || c.kind === "postgres" || c.kind === "sqlite" || c.kind === "external";
+                // external（gateway）走 SQL 分支：用資料夾 + 每庫篩選框（適合大量表），右鍵亦可新增查詢。
+                const isSqlKind = c.kind === "mysql" || c.kind === "postgres" || c.kind === "sqlite" || c.kind === "external" || c.kind === "mssql";
                 const supportsRoutines = c.kind === "mysql" || c.kind === "postgres";
 
                 // 樹中的單一資料表 / 視圖節點（沿用選取 / 雙擊開啟 / 右鍵產生 SQL）。indent 控制縮排深度。
@@ -2362,6 +2362,7 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
   mysql: "SELECT 1",
   postgres: "SELECT 1",
   sqlite: "SELECT 1",
+  mssql: "SELECT 1",
   mongo: '{ "db": "", "collection": "", "filter": {} }',
   redis: "PING",
   external: "SELECT 1",
@@ -2370,7 +2371,7 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
 const EXPLAIN_KINDS: DbKind[] = ["mysql", "postgres", "sqlite"];
 
 // 支援查詢面板「目前資料庫」選擇器（以 USE / search_path 把查詢限定到所選庫）的連線類型：
-// 關聯式多庫（MySQL / PostgreSQL）＋ 外部 gateway（qland，driver 以 strip_leading_use 切站）。
+// 關聯式多庫（MySQL / PostgreSQL）＋ 外部 gateway（driver 以 strip_leading_use 切站）。
 // SQLite 為單檔無多庫；Mongo / Redis 的資料庫切換走各自指令，不在此列。
 const DB_SELECT_KINDS: DbKind[] = ["mysql", "postgres", "external"];
 
@@ -2635,7 +2636,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     let q = overrideQuery && overrideQuery.trim() ? overrideQuery : queryToRun();
     if (!q.trim()) return;
     // 參數化查詢（致敬 Navicat）：偵測 `:name` 參數，逐一提示輸入後代入（SQL-like 連線）。
-    if (kind && (EXPLAIN_KINDS.includes(kind) || kind === "external")) {
+    if (kind && (EXPLAIN_KINDS.includes(kind) || kind === "external" || kind === "mssql")) {
       const params = extractNamedParams(q);
       if (params.length) {
         const values: Record<string, string> = {};
@@ -2662,7 +2663,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       } else {
         // SQL：拆成多條語句依序執行（sqlx 不允許單次多語句）。
         // 非 SQL（Mongo / Redis）維持單一指令。純註解 / 空白片段已於切分時濾除。
-        const isSql = !!kind && EXPLAIN_KINDS.includes(kind);
+        const isSql = !!kind && (EXPLAIN_KINDS.includes(kind) || kind === "mssql");
         const isSqlLike = isSql || kind === "external"; // external（gateway）也講 SQL，但不走前端切分
         const userStatements = isSql ? splitSqlStatements(q) : [q];
         // 純註解 / 空白（如尾端 `-- 註記`）不是可執行語句 → 不送 DB，避免「Query was empty」類錯誤。
@@ -2962,7 +2963,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 把出錯的 SQL + 錯誤訊息帶進 AI 助手，請它分析原因並給出修正後的 SQL（一鍵自動送出）。
   const askAiFixError = () => {
     if (!err) return;
-    const dialect = kind === "external" ? "MySQL（透過 QLand gateway）" : (kind ?? "SQL");
+    const dialect = kind === "external" ? "MySQL（透過 External gateway）" : (kind ?? "SQL");
     const full = errSql ?? queryToRun();
     // 多語句批次：errStmt 為失敗的那一條，與整批不同 → 同時給「失敗單句」與「完整批次」，
     // 讓 AI 不必自己數第幾條，並要求回傳完整批次以利一鍵貼回（不丟失其他正確語句）。

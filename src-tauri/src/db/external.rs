@@ -5,7 +5,7 @@
 //!
 //! 此檔（db-kit 本體）**不內建任何具體外部驅動**，故一律回 Unsupported——這是「開源空間」：
 //! 泛用的 External 機制留在這裡，具體（可能私有）的驅動由外掛 / overlay 覆寫本檔接入
-//! （例如新增 `"qland" => super::qland::QlandDriver::connect(...)` 一條 arm）。
+//! （例如新增 `"mydriver" => super::mydriver::MyDriver::connect(...)` 一條 arm）。
 
 use std::sync::Arc;
 

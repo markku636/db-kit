@@ -3,13 +3,23 @@
 import type { DbKind, QueryResult, RoutineInfo } from "./api";
 
 // ---- 跨資料庫識別字 / 字面值跳脫（MySQL / PostgreSQL / SQLite 一致性關鍵）----
-// 識別字：PostgreSQL 用雙引號，其餘（MySQL / SQLite）用反引號；內部引號加倍轉義。
+// 識別字：PostgreSQL 用雙引號，SQL Server 用 [方括號]（] 加倍），其餘（MySQL / SQLite）用反引號；內部引號加倍轉義。
 export function quoteIdent(kind: DbKind, id: string): string {
-  return kind === "postgres" ? `"${id.replace(/"/g, '""')}"` : `\`${id.replace(/`/g, "``")}\``;
+  if (kind === "postgres") return `"${id.replace(/"/g, '""')}"`;
+  if (kind === "mssql") return `[${id.replace(/]/g, "]]")}]`;
+  return `\`${id.replace(/`/g, "``")}\``;
 }
-// 限定名：SQLite 不加 schema / db 前綴；MySQL / PostgreSQL 為 db.table（PG 之 db 即 schema）。
+// 限定名：SQLite 不加 schema / db 前綴；SQL Server 為三部式 [db].[schema].[table]（table 可能內嵌 schema.）；
+// MySQL / PostgreSQL 為 db.table（PG 之 db 即 schema）。
 export function qualifiedName(kind: DbKind, db: string, table: string): string {
-  return kind === "sqlite" ? quoteIdent(kind, table) : `${quoteIdent(kind, db)}.${quoteIdent(kind, table)}`;
+  if (kind === "sqlite") return quoteIdent(kind, table);
+  if (kind === "mssql") {
+    const dot = table.indexOf(".");
+    const schema = dot >= 0 ? table.slice(0, dot) : "dbo";
+    const tbl = dot >= 0 ? table.slice(dot + 1) : table;
+    return `${quoteIdent(kind, db)}.${quoteIdent(kind, schema)}.${quoteIdent(kind, tbl)}`;
+  }
+  return `${quoteIdent(kind, db)}.${quoteIdent(kind, table)}`;
 }
 // SQL 字串字面值：NULL → NULL，其餘以單引號包裹並轉義內部單引號。
 // MySQL（與 external gateway，講 MySQL 方言）預設把反斜線當字串轉義字元，故需加倍——否則像 `a\`
@@ -17,6 +27,8 @@ export function qualifiedName(kind: DbKind, db: string, table: string): string {
 // PostgreSQL（standard_conforming_strings）與 SQLite 視 \ 為字面字元，不可加倍（否則多出反斜線）。
 export function sqlLiteral(kind: DbKind, v: string | null): string {
   if (v === null) return "NULL";
+  // SQL Server：Unicode 字面值加 N 前綴、只加倍單引號（反斜線非 T-SQL 轉義字元）。
+  if (kind === "mssql") return `N'${v.replace(/'/g, "''")}'`;
   const mysqlLike = kind === "mysql" || kind === "external";
   const escaped = mysqlLike ? v.replace(/\\/g, "\\\\").replace(/'/g, "''") : v.replace(/'/g, "''");
   return `'${escaped}'`;
@@ -38,6 +50,7 @@ export const TYPE_PRESETS: Record<DbKind, string[]> = {
   postgres: ["SERIAL", "BIGSERIAL", "INT", "BIGINT", "NUMERIC(10,2)", "TEXT", "VARCHAR(255)", "BOOLEAN", "DATE", "TIMESTAMPTZ", "UUID", "JSONB"],
   mysql: ["INT AUTO_INCREMENT", "INT", "BIGINT", "DECIMAL(10,2)", "TEXT", "VARCHAR(255)", "TINYINT(1)", "DATE", "DATETIME", "TIMESTAMP", "JSON"],
   sqlite: ["INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC"],
+  mssql: ["INT IDENTITY(1,1)", "INT", "BIGINT", "DECIMAL(18,2)", "NVARCHAR(255)", "NVARCHAR(MAX)", "VARCHAR(255)", "BIT", "DATE", "DATETIME2", "DATETIMEOFFSET", "UNIQUEIDENTIFIER", "MONEY"],
   // 非 SQL（mongo / redis）不會用到型別下拉，但需滿足 Record<DbKind> 完整性。
   mongo: [],
   redis: [],
@@ -87,15 +100,17 @@ export function isSystemDatabase(kind: DbKind, name: string): boolean {
   const n = name.toLowerCase();
   if (kind === "mysql") return ["information_schema", "mysql", "performance_schema", "sys"].includes(n);
   if (kind === "mongo") return ["admin", "config", "local"].includes(n);
+  if (kind === "mssql") return ["master", "model", "msdb", "tempdb"].includes(n);
   return false;
 }
 
-// 「切換目前資料庫 / schema」語句：MySQL / 外部 gateway（qland）用 USE；PostgreSQL 用 SET search_path；
+// 「切換目前資料庫 / schema」語句：MySQL / 外部 gateway 用 USE；PostgreSQL 用 SET search_path；
 // SQLite（單檔）/ Mongo / Redis 無此概念回 null。供查詢面板的「目前資料庫」選擇器與側欄「新增查詢」共用，
 // 確保兩處「把後續查詢限定到某資料庫」的語法一致。識別字以 quoteIdent 跳脫（防注入）。
 export function buildUseDatabase(kind: DbKind, db: string): string | null {
   if (!db) return null;
   if (kind === "mysql" || kind === "external") return `USE ${quoteIdent("mysql", db)}`;
+  if (kind === "mssql") return `USE ${quoteIdent("mssql", db)}`;
   if (kind === "postgres") return `SET search_path TO ${quoteIdent("postgres", db)}`;
   return null;
 }

@@ -45,6 +45,7 @@ fn kind_of(k: KindArg) -> DbKind {
         KindArg::Sqlite => DbKind::Sqlite,
         KindArg::Mongo => DbKind::Mongo,
         KindArg::Redis => DbKind::Redis,
+        KindArg::Mssql => DbKind::Mssql,
     }
 }
 
@@ -54,6 +55,7 @@ fn default_port(kind: DbKind) -> u16 {
         DbKind::Postgres => 5432,
         DbKind::Mongo => 27017,
         DbKind::Redis => 6379,
+        DbKind::Mssql => 1433,
         DbKind::Sqlite | DbKind::External => 0,
     }
 }
@@ -135,6 +137,8 @@ fn split_scheme(url: &str) -> (Option<String>, String) {
         "mongodb",
         "mongo",
         "redis",
+        "mssql",
+        "sqlserver",
     ];
     if let Some((s, r)) = url.split_once(':') {
         if SCHEMES.contains(&s.to_ascii_lowercase().as_str()) {
@@ -154,6 +158,7 @@ fn parse_url(url: &str, kind_hint: Option<DbKind>) -> AppResult<Parsed> {
         Some("postgres") | Some("postgresql") => Some(DbKind::Postgres),
         Some("mongodb") | Some("mongo") => Some(DbKind::Mongo),
         Some("redis") => Some(DbKind::Redis),
+        Some("mssql") | Some("sqlserver") => Some(DbKind::Mssql),
         Some("sqlite") => Some(DbKind::Sqlite),
         _ => kind_hint,
     };

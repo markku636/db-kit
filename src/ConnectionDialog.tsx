@@ -30,8 +30,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [sshPassword, setSshPassword] = useState("");
   const [sshKeyPath, setSshKeyPath] = useState(initial?.ssh_private_key_path ?? "");
   const [sshPassphrase, setSshPassphrase] = useState("");
-  // 外部 gateway（kind === "external"，例：QLand）
-  const [driver, setDriver] = useState(initial?.options?.driver ?? "qland");
+  // 外部 gateway（kind === "external"）：driver / base_url / env 等存於 options map。
+  const [driver, setDriver] = useState(initial?.options?.driver ?? "");
   const [baseUrl, setBaseUrl] = useState(initial?.options?.base_url ?? "");
   const [env, setEnv] = useState(initial?.options?.env ?? "");
   const [insecure, setInsecure] = useState(initial?.options?.insecure === "1");
@@ -151,7 +151,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       }
     >
       <div className="flex gap-2">
-        {(Object.keys(KIND_META) as DbKind[]).map((k) => (
+        {/* 外部 gateway（external）連線類型：開源版無內建驅動，預設隱藏（__EXTERNAL__ 建置期開關）。 */}
+        {(Object.keys(KIND_META) as DbKind[])
+          .filter((k) => __EXTERNAL__ || k !== "external")
+          .map((k) => (
           <button
             key={k}
             type="button"
@@ -175,10 +178,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       {external ? (
         <>
           <Field label="驅動">
-            <Input value={driver} onChange={(e) => setDriver(e.target.value)} onKeyDown={submitOnEnter} placeholder="qland" />
+            <Input value={driver} onChange={(e) => setDriver(e.target.value)} onKeyDown={submitOnEnter} placeholder="driver 名稱" />
           </Field>
           <Field label="Gateway 網址（base URL）">
-            <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} onKeyDown={submitOnEnter} placeholder="https://qland.internal" />
+            <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} onKeyDown={submitOnEnter} placeholder="https://gateway.internal" />
           </Field>
           <Field label="環境（env，選填）">
             <Input value={env} onChange={(e) => setEnv(e.target.value)} onKeyDown={submitOnEnter} placeholder="例如 n8xuat / otprod" />

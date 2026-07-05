@@ -3,7 +3,7 @@ import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
 import { indentWithTab } from "@codemirror/commands";
-import { sql, MySQL, PostgreSQL, SQLite, StandardSQL, type SQLDialect, type SQLNamespace } from "@codemirror/lang-sql";
+import { sql, MySQL, PostgreSQL, SQLite, MSSQL, StandardSQL, type SQLDialect, type SQLNamespace } from "@codemirror/lang-sql";
 import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { snippetCompletion, type Completion, type CompletionSource } from "@codemirror/autocomplete";
 import { DbKind } from "./api";
@@ -41,9 +41,10 @@ const DIALECT: Record<DbKind, SQLDialect> = {
   mysql: MySQL,
   postgres: PostgreSQL,
   sqlite: SQLite,
+  mssql: MSSQL,
   mongo: StandardSQL,
   redis: StandardSQL,
-  external: MySQL, // 外部 gateway（qland）講 MySQL
+  external: MySQL, // 外部 gateway 講 MySQL
 };
 
 // 1-based 行號 → 整行的字元位移範圍。

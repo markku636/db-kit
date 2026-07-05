@@ -109,7 +109,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // Redis：雙擊 key 列顯示鍵詳情；右鍵叫出操作選單
   const isRedis = useIsRedis(tab.connId);
   const connKind = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.kind);
-  const isSqlKind = connKind === "mysql" || connKind === "postgres" || connKind === "sqlite";
+  const isSqlKind = connKind === "mysql" || connKind === "postgres" || connKind === "sqlite" || connKind === "mssql";
   const isMongo = connKind === "mongo";
   // Mongo：整份文件 JSON 編輯器（開啟時記錄列索引，用 row_ids 定位）。
   const [docEdit, setDocEdit] = useState<number | null>(null);

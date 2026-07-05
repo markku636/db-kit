@@ -63,6 +63,7 @@ pub enum KindArg {
     Sqlite,
     Mongo,
     Redis,
+    Mssql,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
