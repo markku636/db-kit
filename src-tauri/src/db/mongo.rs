@@ -37,17 +37,8 @@ impl MongoDriver {
 #[async_trait::async_trait]
 impl DatabaseDriver for MongoDriver {
     async fn connect(config: &ConnectionConfig) -> AppResult<Self> {
-        // 組 mongodb URI。有帳密則帶上。
-        let auth = if config.username.is_empty() {
-            String::new()
-        } else {
-            format!("{}:{}@", config.username, config.password)
-        };
-        let uri = format!(
-            "mongodb://{auth}{host}:{port}",
-            host = config.host,
-            port = config.port,
-        );
+        // 組 mongodb URI（支援 SRV / authSource / TLS / replicaSet / directConnection，見 build_mongo_uri）。
+        let uri = build_mongo_uri(config);
 
         let mut opts = ClientOptions::parse(&uri)
             .await
@@ -167,16 +158,27 @@ impl DatabaseDriver for MongoDriver {
         let filter = build_filter(&query.filters, query.match_any);
         let sort = build_sort(&query.sorts);
 
-        // 總數（套用相同 filter）
-        let total = coll
-            .count_documents(filter.clone())
-            .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+        // 總數：純翻頁時前端傳 count=false 直接略過（沿用前次快取）；
+        // 空 filter 用 estimated_document_count（O(1) 讀 metadata，不全掃）；
+        // 有 filter 才 count_documents，並加 max_time 上限避免大表全掃卡死。
+        let total = if !query.count {
+            0
+        } else if filter.is_empty() {
+            coll.estimated_document_count()
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?
+        } else {
+            coll.count_documents(filter.clone())
+                .max_time(Duration::from_secs(5))
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?
+        };
 
         let skip = (query.page as u64) * (query.page_size as u64);
         let mut find_opts = FindOptions::builder()
             .skip(skip)
             .limit(query.page_size as i64)
+            .max_time(Duration::from_secs(20))
             .build();
         if let Some(s) = sort {
             find_opts.sort = Some(s);
@@ -213,8 +215,18 @@ impl DatabaseDriver for MongoDriver {
             .map(|d| {
                 columns
                     .iter()
-                    .map(|col| d.get(col).map(bson_to_string))
+                    .map(|col| d.get(col).map(cell_display))
                     .collect()
+            })
+            .collect();
+
+        // 每列 _id 的 canonical extended JSON，供前端精確定位（非 ObjectId/String 型別也不失真）。
+        let row_ids: Vec<String> = docs
+            .iter()
+            .map(|d| {
+                d.get("_id")
+                    .map(|id| id.clone().into_canonical_extjson().to_string())
+                    .unwrap_or_default()
             })
             .collect();
 
@@ -225,6 +237,7 @@ impl DatabaseDriver for MongoDriver {
             page: query.page,
             page_size: query.page_size,
             primary_key: vec!["_id".to_string()],
+            row_ids,
         })
     }
 
@@ -675,6 +688,63 @@ fn id_filter(edit: &CellEdit) -> AppResult<Document> {
     Ok(doc! { "_id": id_bson(&raw) })
 }
 
+/// 依連線設定組 mongodb 連線字串。連線選項存於 options map：
+/// - mongo_srv=1        → mongodb+srv://（DNS SRV，不帶 port）
+/// - mongo_auth_source  → authSource（非 admin 認證庫）
+/// - mongo_tls=1        → tls=true
+/// - mongo_replica_set  → replicaSet
+/// - mongo_direct=1     → directConnection=true
+/// userinfo（帳號 / 密碼）做 percent-encoding，避免特殊字元破壞 URI。
+pub(crate) fn build_mongo_uri(config: &ConnectionConfig) -> String {
+    let auth = if config.username.is_empty() {
+        String::new()
+    } else {
+        format!("{}:{}@", pct_encode(&config.username), pct_encode(&config.password))
+    };
+    let opt = |k: &str| config.options.get(k).map(String::as_str).unwrap_or("");
+    let srv = opt("mongo_srv") == "1";
+    let host_part = if srv {
+        // SRV：host 為 DNS 域名、不帶 port（由 SRV 記錄決定）。
+        format!("mongodb+srv://{auth}{}", config.host)
+    } else {
+        format!("mongodb://{auth}{}:{}", config.host, config.port)
+    };
+
+    let mut params: Vec<String> = Vec::new();
+    let auth_source = opt("mongo_auth_source");
+    if !auth_source.is_empty() {
+        params.push(format!("authSource={}", pct_encode(auth_source)));
+    }
+    if opt("mongo_tls") == "1" {
+        params.push("tls=true".to_string());
+    }
+    let replica_set = opt("mongo_replica_set");
+    if !replica_set.is_empty() {
+        params.push(format!("replicaSet={}", pct_encode(replica_set)));
+    }
+    if opt("mongo_direct") == "1" {
+        params.push("directConnection=true".to_string());
+    }
+
+    if params.is_empty() {
+        host_part
+    } else {
+        format!("{host_part}/?{}", params.join("&"))
+    }
+}
+
+/// URI userinfo / 參數值的 percent-encoding，避免特殊字元破壞 mongodb 連線字串。
+pub(crate) fn pct_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 /// 將字串 _id 還原成 BSON。ObjectId 字串（24 hex）轉 ObjectId，否則當字串。
 fn id_bson(raw: &str) -> Bson {
     if raw.len() == 24 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -707,6 +777,24 @@ fn guess_bson(s: &str) -> Bson {
         _ => {}
     }
     Bson::String(s.to_string())
+}
+
+/// 表格單格顯示上限（位元組）。超過則截斷並標記，避免巨型欄位（大陣列 / base64）整包渲染卡 UI。
+const CELL_CAP: usize = 4096;
+
+/// 表格單格顯示：以 bson_to_string 呈現，超過 CELL_CAP 於 UTF-8 邊界截斷並加標記後綴。
+/// 前端據標記後綴判定「已截斷」→ 停用行內編輯、導向整份文件 JSON 編輯器。
+fn cell_display(b: &Bson) -> String {
+    let s = bson_to_string(b);
+    if s.len() <= CELL_CAP {
+        return s;
+    }
+    let mut end = CELL_CAP;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let extra = s.len() - end;
+    format!("{}…⟪+{extra} bytes⟫", &s[..end])
 }
 
 /// BSON 值轉成表格顯示字串。巢狀物件/陣列以精簡 JSON 呈現。

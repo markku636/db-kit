@@ -325,7 +325,14 @@ function DataPane({ tab }: { tab: OpenTab }) {
     }
   }, [pendingInsert, tab.key]);
 
+  // 記住上次「影響總數的輸入」簽章；相同表示只是翻頁 / 排序，可略過 count。
+  const countSigRef = useRef<string>("");
   const load = () => {
+    // 只有「影響總數的輸入」（表/篩選/reload）變動時才重算 count；純翻頁 / 排序沿用前次總數，
+    // 避免大表 / Mongo 每翻一頁都重算 count（頁碼也不會因每次重算而跳動）。
+    const countSig = JSON.stringify([tab.connId, tab.database, tab.table, filters, matchAny, reloadNonce]);
+    const needCount = countSig !== countSigRef.current;
+    countSigRef.current = countSig;
     let cancelled = false;
     setLoading(true);
     setErr(null);
@@ -336,10 +343,12 @@ function DataPane({ tab }: { tab: OpenTab }) {
         filters,
         sorts,
         match_any: matchAny,
+        count: needCount,
       })
       .then((d) => {
         if (!cancelled) {
-          setData(d);
+          // count=false 時後端回 total_rows=0，沿用前次總數避免頁碼歸零。
+          setData((prev) => (!needCount && prev ? { ...d, total_rows: prev.total_rows } : d));
           setEdits({});
           setEditing(null);
           setSelected(null); // 重載後清除選取，避免指向已不存在的列

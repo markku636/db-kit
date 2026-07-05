@@ -71,7 +71,7 @@ pub async fn export(
                 id,
                 database,
                 table,
-                &DataQuery { page: 0, page_size: 1, filters: query.filters.clone(), sorts: vec![], match_any: query.match_any },
+                &DataQuery { page: 0, page_size: 1, filters: query.filters.clone(), sorts: vec![], match_any: query.match_any, count: true },
             )
             .await?;
         let cols = if probe.primary_key.is_empty() { probe.columns } else { probe.primary_key };
@@ -87,6 +87,7 @@ pub async fn export(
             filters: query.filters.clone(),
             sorts: sorts.clone(),
             match_any: query.match_any,
+            count: false, // 匯出逐頁抓完即止，不需要總數；避免每頁重算 count。
         };
         let pd = manager.table_data(id, database, table, &q).await?;
         if page == 0 {

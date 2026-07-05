@@ -148,7 +148,7 @@ pub async fn transfer_table(
             src_id,
             src_db,
             src_table,
-            &DataQuery { page: 0, page_size: 1, filters: vec![], sorts: vec![], match_any: false },
+            &DataQuery { page: 0, page_size: 1, filters: vec![], sorts: vec![], match_any: false, count: true },
         )
         .await?;
     let sort_cols = if probe.primary_key.is_empty() { &columns } else { &probe.primary_key };
@@ -172,6 +172,7 @@ pub async fn transfer_table(
             filters: vec![],
             sorts: sorts.clone(),
             match_any: false,
+            count: false, // 資料傳輸逐頁抓完即止，不需要總數。
         };
         let pd = manager.table_data(src_id, src_db, src_table, &q).await?;
         // 交集欄位 → 來源結果欄索引（依 columns 順序取值）。

@@ -320,6 +320,7 @@ impl DatabaseDriver for SqliteDriver {
             page: query.page,
             page_size,
             primary_key: self.primary_key(table).await?,
+            row_ids: Vec::new(),
         })
     }
 

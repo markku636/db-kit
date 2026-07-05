@@ -45,11 +45,11 @@ fn filt(col: &str, op: &str, val: Option<&str>) -> Filter {
     Filter { column: col.into(), op: op.into(), value: val.map(|s| s.to_string()) }
 }
 fn dq(filters: Vec<Filter>, sorts: Vec<Sort>) -> DataQuery {
-    DataQuery { page: 0, page_size: 100, filters, sorts, match_any: false }
+    DataQuery { page: 0, page_size: 100, filters, sorts, match_any: false, count: true }
 }
 /// 同 dq 但 match_any=true（OR 模式），用於驗證 OR 篩選路徑。
 fn dq_or(filters: Vec<Filter>, sorts: Vec<Sort>) -> DataQuery {
-    DataQuery { page: 0, page_size: 100, filters, sorts, match_any: true }
+    DataQuery { page: 0, page_size: 100, filters, sorts, match_any: true, count: true }
 }
 fn ins(cols: &[&str], vals: &[&str]) -> RowInsert {
     RowInsert {
@@ -463,6 +463,7 @@ async fn export_table_to_csv_file() {
         filters: vec![],
         sorts: vec![Sort { column: "id".into(), dir: SortDir::Asc }],
         match_any: false,
+        count: true,
     };
     let opts = crate::export::ExportOptions {
         format: "csv".into(),
@@ -509,6 +510,7 @@ async fn export_import_round_trip() {
         filters: vec![],
         sorts: vec![Sort { column: "id".into(), dir: SortDir::Asc }],
         match_any: false,
+        count: true,
     };
     let eopts = crate::export::ExportOptions {
         format: "csv".into(),

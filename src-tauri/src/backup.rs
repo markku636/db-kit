@@ -237,27 +237,9 @@ async fn run_psql_restore(c: &ConnectionConfig, db: &str, inp: &str) -> AppResul
     Ok(status.success())
 }
 
-/// 將 mongodb URI 的 userinfo（帳號 / 密碼）做 percent-encoding，
-/// 避免密碼含 @ : / % 等字元破壞 URI（否則備份會直接失敗或連到錯誤位置）。
-fn pct_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            _ => out.push_str(&format!("%{:02X}", b)),
-        }
-    }
-    out
-}
-
 async fn run_mongodump(c: &ConnectionConfig, db: &str, out: &str) -> AppResult<bool> {
-    // mongodump 以 --archive 輸出單一檔。
-    let auth = if c.username.is_empty() {
-        String::new()
-    } else {
-        format!("{}:{}@", pct_encode(&c.username), pct_encode(&c.password))
-    };
-    let uri = format!("mongodb://{auth}{}:{}", c.host, c.port);
+    // mongodump 以 --archive 輸出單一檔。URI 與連線邏輯共用 build_mongo_uri（含 SRV / TLS / authSource / replicaSet）。
+    let uri = crate::db::mongo::build_mongo_uri(c);
     let status = Command::new("mongodump")
         .arg("--uri").arg(uri)
         .arg("--db").arg(db)
@@ -270,12 +252,7 @@ async fn run_mongodump(c: &ConnectionConfig, db: &str, out: &str) -> AppResult<b
 }
 
 async fn run_mongorestore(c: &ConnectionConfig, db: &str, inp: &str) -> AppResult<bool> {
-    let auth = if c.username.is_empty() {
-        String::new()
-    } else {
-        format!("{}:{}@", pct_encode(&c.username), pct_encode(&c.password))
-    };
-    let uri = format!("mongodb://{auth}{}:{}", c.host, c.port);
+    let uri = crate::db::mongo::build_mongo_uri(c);
     let status = Command::new("mongorestore")
         .arg("--uri").arg(uri)
         .arg("--nsInclude").arg(format!("{db}.*"))
@@ -337,7 +314,7 @@ async fn validate_sqlite_file(path: &str) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::pct_encode;
+    use crate::db::mongo::pct_encode;
 
     #[test]
     fn pct_encode_escapes_uri_special_chars() {

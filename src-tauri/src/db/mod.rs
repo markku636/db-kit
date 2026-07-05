@@ -226,6 +226,10 @@ pub struct PagedData {
     /// 此表的主鍵欄位名（供前端判斷是否可編輯、組 WHERE 條件用）。
     #[serde(default)]
     pub primary_key: Vec<String>,
+    /// 每列主鍵的精確定位值（目前 Mongo 用：_id 的 canonical extended JSON，
+    /// 供非 ObjectId/String 型別 _id 正確定位）。與 rows 對齊；其他 driver 為空。
+    #[serde(default)]
+    pub row_ids: Vec<String>,
 }
 
 /// 單一儲存格的更新請求。
@@ -537,7 +541,7 @@ pub struct Sort {
 }
 
 /// table_data 的查詢選項（分頁 + 篩選 + 排序）。
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct DataQuery {
     pub page: u32,
     pub page_size: u32,
@@ -548,6 +552,20 @@ pub struct DataQuery {
     /// 多個篩選條件的連接方式：false = AND（預設）、true = OR。
     #[serde(default)]
     pub match_any: bool,
+    /// 是否計算總列數。純翻頁時前端可設 false 沿用前次快取總數，
+    /// 避免大表 / Mongo 每翻一頁都重算 count（缺省 true，向後相容舊前端）。
+    #[serde(default = "default_true")]
+    pub count: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for DataQuery {
+    fn default() -> Self {
+        Self { page: 0, page_size: 0, filters: Vec::new(), sorts: Vec::new(), match_any: false, count: true }
+    }
 }
 
 /// SQL Search（全資料庫物件搜尋，致敬 Red Gate SQL Search）的單筆命中結果。

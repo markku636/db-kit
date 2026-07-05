@@ -219,12 +219,16 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       ) : (
         <>
           <div className="flex gap-3">
-            <Field label="主機" className="flex-1">
-              <Input value={host} onChange={(e) => setHost(e.target.value)} onKeyDown={submitOnEnter} />
+            <Field label={kind === "mongo" && mongoSrv ? "主機（SRV 域名）" : "主機"} className="flex-1">
+              <Input value={host} onChange={(e) => setHost(e.target.value)} onKeyDown={submitOnEnter}
+                placeholder={kind === "mongo" && mongoSrv ? "例如 cluster0.abcd.mongodb.net" : ""} />
             </Field>
-            <Field label="埠" className="w-24">
-              <Input type="number" value={port} onChange={(e) => setPort(Number(e.target.value))} onKeyDown={submitOnEnter} />
-            </Field>
+            {/* SRV 連線由 DNS 記錄決定 port，故不顯示埠欄位。 */}
+            {!(kind === "mongo" && mongoSrv) && (
+              <Field label="埠" className="w-24">
+                <Input type="number" value={port} onChange={(e) => setPort(Number(e.target.value))} onKeyDown={submitOnEnter} />
+              </Field>
+            )}
           </div>
           <div className="flex gap-3">
             <Field label="使用者" className="flex-1">
@@ -261,6 +265,31 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                   透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，通常需勾「略過憑證驗證」。
                 </div>
               )}
+            </div>
+          )}
+
+          {kind === "mongo" && (
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={mongoSrv} onChange={(e) => setMongoSrv(e.target.checked)} />
+                <span>SRV 連線（mongodb+srv://，Atlas 等）</span>
+              </label>
+              <div className="flex gap-3">
+                <Field label="authSource（選填）" className="flex-1">
+                  <Input value={mongoAuthSource} onChange={(e) => setMongoAuthSource(e.target.value)} onKeyDown={submitOnEnter} placeholder="例如 admin" />
+                </Field>
+                <Field label="replicaSet（選填）" className="flex-1">
+                  <Input value={mongoReplicaSet} onChange={(e) => setMongoReplicaSet(e.target.value)} onKeyDown={submitOnEnter} placeholder="例如 rs0" />
+                </Field>
+              </div>
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={mongoTls} onChange={(e) => setMongoTls(e.target.checked)} />
+                <span>使用 TLS</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={mongoDirect} onChange={(e) => setMongoDirect(e.target.checked)} />
+                <span>直連（directConnection，繞過拓撲探索）</span>
+              </label>
             </div>
           )}
 

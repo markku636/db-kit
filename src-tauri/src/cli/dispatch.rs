@@ -190,6 +190,7 @@ async fn exec_table(
                 filters: parse_filters(&filter)?,
                 sorts: parse_sorts(&sort)?,
                 match_any,
+                count: true,
             };
             let pd = mgr.table_data(id, db, &table, &query).await?;
             render::emit(fmt, &pd.columns, &pd.rows);
@@ -232,6 +233,7 @@ async fn exec_export(
         filters: parse_filters(&e.filter)?,
         sorts: parse_sorts(&e.sort)?,
         match_any: e.match_any,
+        count: true,
     };
     let opts = crate::export::ExportOptions {
         format: e.data_format.clone(),

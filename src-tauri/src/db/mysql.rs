@@ -330,6 +330,7 @@ impl DatabaseDriver for MysqlDriver {
             page: query.page,
             page_size,
             primary_key,
+            row_ids: Vec::new(),
         })
     }
 

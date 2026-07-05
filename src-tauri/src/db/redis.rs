@@ -565,6 +565,7 @@ impl DatabaseDriver for RedisDriver {
             page: query.page,
             page_size: query.page_size,
             primary_key: vec!["key".to_string()],
+            row_ids: Vec::new(),
         })
     }
 

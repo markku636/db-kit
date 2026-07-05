@@ -87,6 +87,8 @@ export interface PagedData {
   page: number;
   page_size: number;
   primary_key: string[];
+  // 每列主鍵的精確定位值（Mongo：_id 的 canonical extended JSON）；其他 driver 為空。
+  row_ids?: string[];
 }
 
 export interface CellEdit {
@@ -115,6 +117,7 @@ export interface DataQuery {
   filters: Filter[];
   sorts: Sort[];
   match_any?: boolean; // false = AND（預設）、true = OR
+  count?: boolean;     // 是否計算總列數；純翻頁時可設 false 沿用前次快取（缺省 true）
 }
 
 export type ExportFormat = "csv" | "tsv" | "json" | "sql" | "markdown" | "xlsx";

@@ -204,6 +204,7 @@ impl DatabaseDriver for PostgresDriver {
             page: query.page,
             page_size,
             primary_key: self.primary_key(database, table).await?,
+            row_ids: Vec::new(),
         })
     }
 
