@@ -248,6 +248,8 @@ export interface KeyPage {
   fields: string[];
   members: string[];
   scores: number[];
+  value_bytes: number; // string：值總位元組數（STRLEN）；非 string 為 -1
+  truncated: boolean;  // string：members[0] 僅為前段預覽（值過大且未要求完整載入）
 }
 
 // SLOWLOG 單筆。
@@ -530,8 +532,8 @@ export const api = {
   redisKeys: (id: string, database: string, pattern: string, limit: number) =>
     invoke<RedisKeys>("redis_keys", { id, database, pattern, limit }),
   // 大型集合鍵成員分頁（cursor 起點、count 每頁筆數、filter 成員/欄位過濾）。
-  redisKeyPage: (id: string, database: string, key: string, cursor: number, count: number, filter: string) =>
-    invoke<KeyPage>("redis_key_page", { id, database, key, cursor, count, filter }),
+  redisKeyPage: (id: string, database: string, key: string, cursor: number, count: number, filter: string, full = false) =>
+    invoke<KeyPage>("redis_key_page", { id, database, key, cursor, count, filter, full }),
   redisSlowlog: (id: string, count: number) =>
     invoke<SlowLogEntry[]>("redis_slowlog", { id, count }),
   redisClients: (id: string) => invoke<ClientInfo[]>("redis_clients", { id }),

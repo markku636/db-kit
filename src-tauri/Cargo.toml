@@ -39,7 +39,10 @@ tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "postgres", "sqlite", "chrono", "uuid", "bigdecimal", "json"] }
 mongodb = "3"
 futures = "0.3"
-redis = { version = "0.27", features = ["tokio-comp"] }
+# connection-manager：多工單連線 + 斷線自動重連，供 per-db-index 連線快取（避免每次操作新建 TCP）。
+# tokio-rustls-comp：rediss:// TLS（用 rustls/ring，延續 russh 決定，避開 OpenSSL 系統相依）。
+# tls-rustls-insecure：讓 rediss://host:port/db#insecure fragment 生效（自簽憑證 / 內網）。
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp", "tls-rustls-insecure"] }
 thiserror = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 once_cell = "1"

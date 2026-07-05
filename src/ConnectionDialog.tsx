@@ -36,11 +36,24 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [env, setEnv] = useState(initial?.options?.env ?? "");
   const [insecure, setInsecure] = useState(initial?.options?.insecure === "1");
   const [otpSecret, setOtpSecret] = useState("");
+  // Redis 連線選項（存於 options map）
+  const [redisTls, setRedisTls] = useState(initial?.options?.redis_tls === "true");
+  const [redisTlsInsecure, setRedisTlsInsecure] = useState(initial?.options?.redis_tls_insecure === "true");
+  // Mongo 連線選項（存於 options map）
+  const [mongoSrv, setMongoSrv] = useState(initial?.options?.mongo_srv === "1");
+  const [mongoAuthSource, setMongoAuthSource] = useState(initial?.options?.mongo_auth_source ?? "");
+  const [mongoTls, setMongoTls] = useState(initial?.options?.mongo_tls === "1");
+  const [mongoReplicaSet, setMongoReplicaSet] = useState(initial?.options?.mongo_replica_set ?? "");
+  const [mongoDirect, setMongoDirect] = useState(initial?.options?.mongo_direct === "1");
+  // MSSQL 連線選項（存於 options map）；加密預設開啟。
+  const [mssqlEncrypt, setMssqlEncrypt] = useState(initial?.options?.encrypt !== "false");
+  const [mssqlTrust, setMssqlTrust] = useState(initial?.options?.trust_server_certificate === "true");
 
   // 任一連線欄位變動就清掉上次測試結果，避免「連線成功」殘留成誤導的假成功訊號（改了 host 卻仍顯示舊成功）。
   useEffect(() => {
     setMsg(null);
-  }, [kind, host, port, username, password, database, sshEnabled, sshHost, sshPort, sshUsername, sshAuthMethod, sshPassword, sshKeyPath, sshPassphrase]);
+  }, [kind, host, port, username, password, database, sshEnabled, sshHost, sshPort, sshUsername, sshAuthMethod, sshPassword, sshKeyPath, sshPassphrase,
+      redisTls, redisTlsInsecure, mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mssqlEncrypt, mssqlTrust]);
 
   const build = (): ConnectionConfig => ({
     id: initial?.id ?? crypto.randomUUID(),
@@ -64,12 +77,30 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     ssh_password: sshPassword,
     ssh_private_key_path: sshKeyPath,
     ssh_passphrase: sshPassphrase,
-    options:
-      kind === "external"
-        ? { driver, base_url: baseUrl, env, ...(insecure ? { insecure: "1" } : {}) }
-        : undefined,
+    options: buildOptions(),
     otp_secret: otpSecret,
   });
+
+  // 依 kind 組 options map（連線層非機密設定）。回 undefined 表示無額外選項。
+  const buildOptions = (): Record<string, string> | undefined => {
+    if (kind === "external")
+      return { driver, base_url: baseUrl, env, ...(insecure ? { insecure: "1" } : {}) };
+    const o: Record<string, string> = {};
+    if (kind === "redis") {
+      if (redisTls) o.redis_tls = "true";
+      if (redisTls && redisTlsInsecure) o.redis_tls_insecure = "true";
+    } else if (kind === "mongo") {
+      if (mongoSrv) o.mongo_srv = "1";
+      if (mongoAuthSource.trim()) o.mongo_auth_source = mongoAuthSource.trim();
+      if (mongoTls) o.mongo_tls = "1";
+      if (mongoReplicaSet.trim()) o.mongo_replica_set = mongoReplicaSet.trim();
+      if (mongoDirect) o.mongo_direct = "1";
+    } else if (kind === "mssql") {
+      o.encrypt = mssqlEncrypt ? "true" : "false";
+      if (mssqlTrust) o.trust_server_certificate = "true";
+    }
+    return Object.keys(o).length ? o : undefined;
+  };
 
   const onKindChange = (k: DbKind) => {
     // 僅在使用者尚未自訂埠（仍等於前一個 kind 的預設埠）時，才覆寫為新 kind 的預設埠
@@ -212,6 +243,39 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
           <Field label="資料庫（選填）">
             <Input value={database} onChange={(e) => setDatabase(e.target.value)} onKeyDown={submitOnEnter} />
           </Field>
+
+          {kind === "redis" && (
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={redisTls} onChange={(e) => setRedisTls(e.target.checked)} />
+                <span>使用 TLS（rediss://）</span>
+              </label>
+              {redisTls && (
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none pl-6">
+                  <input type="checkbox" checked={redisTlsInsecure} onChange={(e) => setRedisTlsInsecure(e.target.checked)} />
+                  <span>略過憑證驗證（自簽憑證用）</span>
+                </label>
+              )}
+              {redisTls && sshEnabled && (
+                <div className="text-xs text-warning pl-6">
+                  透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，通常需勾「略過憑證驗證」。
+                </div>
+              )}
+            </div>
+          )}
+
+          {kind === "mssql" && (
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={mssqlEncrypt} onChange={(e) => setMssqlEncrypt(e.target.checked)} />
+                <span>加密連線（encrypt）</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={mssqlTrust} onChange={(e) => setMssqlTrust(e.target.checked)} />
+                <span>信任伺服器憑證（自簽 / 開發用）</span>
+              </label>
+            </div>
+          )}
         </>
       )}
 

@@ -742,11 +742,12 @@ pub async fn redis_key_page(
     cursor: u64,
     count: usize,
     filter: String,
+    full: Option<bool>,
 ) -> AppResult<KeyPage> {
     state
         .manager
         .redis_driver(&id)?
-        .key_page(&database, &key, cursor, count, &filter)
+        .key_page(&database, &key, cursor, count, &filter, full.unwrap_or(false))
         .await
 }
 

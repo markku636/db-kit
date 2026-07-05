@@ -1096,6 +1096,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
         <button
           onClick={async () => {
             if (dirtyCount > 0 && !(await uiConfirm("有未套用的變更，重新整理將放棄。確定？", { title: "放棄變更", danger: true, confirmText: "放棄並重整" }))) return;
+            // Redis 網格：明確「重新整理」= 強制重掃 keyspace（清鍵快照）；一般翻頁則吃快照。
+            if (isRedis && redisView === "grid") await api.clearCache(tab.connId).catch(() => {});
             load();
           }}
           disabled={loading}
@@ -1929,6 +1931,16 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   const reload = () => loadFirst(filter);
   const applyFilter = () => setFilter(filterInput.trim());
 
+  // 大 string 值：強制載入完整值（full=true），供編輯前取回被截斷的完整內容。
+  const loadFull = () => {
+    setLoading(true);
+    api
+      .redisKeyPage(connId, database, rkey, 0, KEY_PAGE, filter, true)
+      .then((p) => { setPage(p); setMembers(p.members); setFields(p.fields); setScores(p.scores); setCursor(p.cursor); })
+      .catch((e) => setErr(e?.message ?? "讀取失敗"))
+      .finally(() => setLoading(false));
+  };
+
   // 以累積成員合成 KeyDetail 形狀，沿用既有 KeyDetailBody 渲染（entries = members）。
   const detail: KeyDetail | null = page
     ? { key: rkey, type_: page.type_, ttl: page.ttl, entries: members, fields, scores }
@@ -1983,6 +1995,9 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
               rkey={rkey}
               reload={reload}
               onError={setErr}
+              truncated={page?.truncated}
+              valueBytes={page?.value_bytes}
+              onLoadFull={loadFull}
             />
           )}
           {isCollection && (
@@ -2003,11 +2018,14 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   );
 }
 
-function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError }: {
+function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError, truncated, valueBytes, onLoadFull }: {
   detail: KeyDetail;
   connId: string; database: string; table: string; rkey: string;
   reload: () => void;
   onError: (msg: string | null) => void;
+  truncated?: boolean;
+  valueBytes?: number;
+  onLoadFull?: () => void;
 }) {
   const { type_, entries, fields, scores } = detail;
   const [busy, setBusy] = useState(false);
@@ -2041,6 +2059,9 @@ function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError 
       <StringEditor
         value={entries[0] ?? ""}
         busy={busy}
+        truncated={truncated}
+        valueBytes={valueBytes}
+        onLoadFull={onLoadFull}
         onSave={(v) =>
           run(() =>
             api.updateCell(connId, database, table, {
@@ -2202,8 +2223,9 @@ function InlineEdit({ value, onSave, type = "text" }: {
 
 type ValueView = "raw" | "json" | "hex";
 
-function StringEditor({ value, onSave, busy }: {
+function StringEditor({ value, onSave, busy, truncated, valueBytes, onLoadFull }: {
   value: string; onSave: (v: string) => void; busy: boolean;
+  truncated?: boolean; valueBytes?: number; onLoadFull?: () => void;
 }) {
   const [text, setText] = useState(value);
   const [view, setView] = useState<ValueView>("raw");
@@ -2214,6 +2236,19 @@ function StringEditor({ value, onSave, busy }: {
 
   return (
     <div className="space-y-2">
+      {truncated && (
+        <div className="flex items-center gap-2 text-xs bg-warning/10 border border-warning/30 rounded px-3 py-2">
+          <span className="text-warning">
+            值大小 {fmtBytes(valueBytes ?? 0)}，僅載入前 64 KB 預覽。編輯前請先載入完整值，以免覆蓋時截斷資料。
+          </span>
+          {onLoadFull && (
+            <button type="button" onClick={onLoadFull} disabled={busy}
+              className="ml-auto shrink-0 px-2 py-1 rounded border border-warning/40 hover:bg-warning/15 text-warning disabled:opacity-40">
+              載入完整值
+            </button>
+          )}
+        </div>
+      )}
       {/* 檢視模式：原始（可編輯）/ JSON 美化 / Hex。 */}
       <div className="flex items-center gap-1 text-xs">
         {(["raw", "json", "hex"] as ValueView[]).map((v) => (
@@ -2246,8 +2281,8 @@ function StringEditor({ value, onSave, busy }: {
       )}
 
       <div className="flex justify-end">
-        <button type="button" disabled={busy || text === value || view !== "raw"} onClick={() => onSave(text)}
-          title={view !== "raw" ? "切到「原始」模式才能儲存" : "儲存"}
+        <button type="button" disabled={busy || text === value || view !== "raw" || truncated} onClick={() => onSave(text)}
+          title={truncated ? "值已截斷，請先「載入完整值」再儲存" : view !== "raw" ? "切到「原始」模式才能儲存" : "儲存"}
           className="px-3 py-1 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">
           {busy ? "儲存中…" : "儲存"}
         </button>
@@ -2266,6 +2301,17 @@ function tryPrettyJson(s: string): string | null {
 // UTF-8 位元組長度。
 function byteLen(s: string): number {
   try { return new TextEncoder().encode(s).length; } catch { return s.length; }
+}
+
+// 人類可讀的位元組數（B / KB / MB / GB）。
+function fmtBytes(n: number): string {
+  if (n < 0) return "未知";
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(2)} ${units[i]}`;
 }
 
 // 經典 hex dump：每列 16 位元組，左偏移、中段 hex、右側可列印字元。

@@ -18,28 +18,99 @@ use crate::error::{AppError, AppResult};
 pub struct RedisDriver {
     client: redis::Client,
     base_url: String,
+    /// URL 尾綴：TLS 略過憑證驗證時為 "#insecure"，否則空字串。附加在 base_url/<db> 之後。
+    url_suffix: String,
     db_count: i64,
+    /// per-db-index 連線快取。Redis 連線綁定單一 DB，故依 db index 快取各自的
+    /// ConnectionManager（多工、Clone 共享、斷線自動重連），避免每次操作新建 TCP + 握手。
+    conns: tokio::sync::RwLock<std::collections::HashMap<i64, redis::aio::ConnectionManager>>,
+    /// 網格模式 table_data 翻頁用的鍵快照，避免每次翻頁重掃整個 keyspace。
+    snapshot: tokio::sync::Mutex<Option<KeysSnapshot>>,
 }
 
+/// 網格模式 table_data 的鍵快照：同 db + pattern 下翻頁直接切片，不重掃 keyspace。
+/// page==0、過期、或 db/pattern 不符時重建；寫入操作與 clear_cache 會使其失效。
+struct KeysSnapshot {
+    db: String,
+    pattern: String,
+    keys: Vec<String>,
+    created: std::time::Instant,
+}
+
+/// 鍵快照有效期。逾時翻頁會重掃，確保不長時間顯示過期鍵集。
+const SNAPSHOT_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// string value 大小保護：超過 1 MiB 且未要求完整載入時，只取前段預覽。
+const STRING_PREVIEW_THRESHOLD: i64 = 1 << 20; // 1 MiB
+/// 預覽取回的位元組數（64 KiB 對 UI 顯示綽綽有餘）。
+const STRING_PREVIEW_BYTES: isize = 64 * 1024;
+
 impl RedisDriver {
-    /// 取得指定 DB 的非同步連線（Redis 連線綁定單一 DB，故每次依 db 重連）。
-    async fn conn(&self, database: &str) -> AppResult<redis::aio::MultiplexedConnection> {
+    /// 取得指定 DB 的非同步連線（快取命中即回 clone；未命中才建 ConnectionManager）。
+    async fn conn(&self, database: &str) -> AppResult<redis::aio::ConnectionManager> {
         let db_idx: i64 = database.parse().unwrap_or(0);
-        // 以 base_url/<db> 形式選 DB。
-        let url = format!("{}/{}", self.base_url, db_idx);
+        if let Some(c) = self.conns.read().await.get(&db_idx) {
+            return Ok(c.clone());
+        }
+        let mut w = self.conns.write().await;
+        // double-check：等寫鎖期間可能已被其他呼叫建好。
+        if let Some(c) = w.get(&db_idx) {
+            return Ok(c.clone());
+        }
+        // 以 base_url/<db> 形式選 DB；TLS insecure 時附加 #insecure fragment。
+        let url = format!("{}/{}{}", self.base_url, db_idx, self.url_suffix);
         let client = redis::Client::open(url).map_err(|e| AppError::Connect(e.to_string()))?;
-        client
-            .get_multiplexed_tokio_connection()
+        let cm = client
+            .get_connection_manager()
             .await
-            .map_err(|e| AppError::Connect(e.to_string()))
+            .map_err(|e| AppError::Connect(e.to_string()))?;
+        w.insert(db_idx, cm.clone());
+        Ok(cm)
     }
 
     /// 預設（DB 0）的伺服器層連線，供不綁特定 DB 的維運指令（SLOWLOG / CLIENT 等）使用。
-    async fn admin_conn(&self) -> AppResult<redis::aio::MultiplexedConnection> {
-        self.client
-            .get_multiplexed_tokio_connection()
-            .await
-            .map_err(|e| AppError::Connect(e.to_string()))
+    async fn admin_conn(&self) -> AppResult<redis::aio::ConnectionManager> {
+        self.conn("0").await
+    }
+
+    /// 使鍵快照失效（寫入操作後呼叫，避免翻頁看到殭屍鍵或漏掉新鍵）。
+    async fn invalidate_snapshot(&self) {
+        *self.snapshot.lock().await = None;
+    }
+
+    /// 確保鍵快照對應 (db, pattern) 且未過期，回傳 (總鍵數, 該頁鍵)。
+    /// page==0 一律重掃並更新快照（換 filter/排序時前端會 setPage(0)，語意自然）。
+    async fn paged_keys(
+        &self,
+        conn: &mut redis::aio::ConnectionManager,
+        database: &str,
+        pattern: &str,
+        page: u32,
+        page_size: u32,
+    ) -> AppResult<(u64, Vec<String>)> {
+        let mut guard = self.snapshot.lock().await;
+        let fresh = guard.as_ref().is_some_and(|s| {
+            s.db == database && s.pattern == pattern && s.created.elapsed() < SNAPSHOT_TTL
+        });
+        if page == 0 || !fresh {
+            let keys = scan_all_keys(conn, pattern).await?;
+            *guard = Some(KeysSnapshot {
+                db: database.to_string(),
+                pattern: pattern.to_string(),
+                keys,
+                created: std::time::Instant::now(),
+            });
+        }
+        let snap = guard.as_ref().unwrap();
+        let total = snap.keys.len() as u64;
+        let start = (page as usize).saturating_mul(page_size as usize);
+        let end = start.saturating_add(page_size as usize).min(snap.keys.len());
+        let page_keys = if start < snap.keys.len() {
+            snap.keys[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        Ok((total, page_keys))
     }
 
     // ===== 以下為 Redis 專屬「另一款 Redis 工具」對齊功能（inherent 方法，
@@ -61,6 +132,7 @@ impl RedisDriver {
         cursor: u64,
         count: usize,
         filter: &str,
+        full: bool,
     ) -> AppResult<KeyPage> {
         let mut conn = self.conn(database).await?;
         let to_err = |e: redis::RedisError| AppError::Query(e.to_string());
@@ -88,13 +160,32 @@ impl RedisDriver {
             fields: Vec::new(),
             members: Vec::new(),
             scores: Vec::new(),
+            value_bytes: -1,
+            truncated: false,
         };
 
         match ktype.as_str() {
             "string" => {
-                let v: Option<String> = conn.get(key).await.map_err(to_err)?;
-                page.members = vec![v.unwrap_or_default()];
+                // 先量長度：超過閾值且未要求完整載入 → 只取前段預覽，避免一次拉回數十 MB 卡 UI。
+                let len: i64 =
+                    redis::cmd("STRLEN").arg(key).query_async(&mut conn).await.unwrap_or(-1);
+                page.value_bytes = len;
                 page.total = 1;
+                if !full && len > STRING_PREVIEW_THRESHOLD {
+                    let bytes: Vec<u8> = redis::cmd("GETRANGE")
+                        .arg(key)
+                        .arg(0)
+                        .arg(STRING_PREVIEW_BYTES - 1)
+                        .query_async(&mut conn)
+                        .await
+                        .map_err(to_err)?;
+                    // from_utf8_lossy 容忍在 UTF-8 邊界截斷。
+                    page.members = vec![String::from_utf8_lossy(&bytes).into_owned()];
+                    page.truncated = true;
+                } else {
+                    let v: Option<String> = conn.get(key).await.map_err(to_err)?;
+                    page.members = vec![v.unwrap_or_default()];
+                }
             }
             "list" => {
                 let total: i64 =
@@ -279,25 +370,28 @@ impl RedisDriver {
                 .query_async(&mut conn)
                 .await
                 .map_err(to_err)?;
-            for k in batch {
-                if scanned >= sample {
-                    break;
+            // 只取樣到 sample 上限。
+            let take: Vec<String> = batch.into_iter().take(sample.saturating_sub(scanned)).collect();
+            if !take.is_empty() {
+                // pipeline：每 key MEMORY USAGE + TYPE + TTL（三命令）一次送回，避免 N×3 序列往返。
+                let mut pipe = redis::pipe();
+                for k in &take {
+                    pipe.cmd("MEMORY").arg("USAGE").arg(k);
+                    pipe.cmd("TYPE").arg(k);
+                    pipe.cmd("TTL").arg(k);
                 }
-                scanned += 1;
-                let bytes: i64 = redis::cmd("MEMORY")
-                    .arg("USAGE")
-                    .arg(&k)
-                    .query_async(&mut conn)
-                    .await
-                    .unwrap_or(-1);
-                let ktype: String = redis::cmd("TYPE")
-                    .arg(&k)
-                    .query_async(&mut conn)
-                    .await
-                    .unwrap_or_else(|_| "unknown".to_string());
-                let ttl: i64 =
-                    redis::cmd("TTL").arg(&k).query_async(&mut conn).await.unwrap_or(-1);
-                all.push(BigKey { key: k, type_: ktype, bytes, ttl });
+                let vals: Vec<redis::Value> = pipe.query_async(&mut conn).await.map_err(to_err)?;
+                for (k, tri) in take.iter().zip(vals.chunks(3)) {
+                    // MEMORY USAGE 對不存在鍵回 Nil → 維持 -1 語意。
+                    let bytes = match tri.first() {
+                        Some(redis::Value::Nil) | None => -1,
+                        Some(v) => rv_as_i64(Some(v)),
+                    };
+                    let ktype = tri.get(1).map(rv_to_string).unwrap_or_else(|| "unknown".to_string());
+                    let ttl = rv_as_i64(tri.get(2));
+                    all.push(BigKey { key: k.clone(), type_: ktype, bytes, ttl });
+                }
+                scanned += take.len();
             }
             cursor = next;
             if cursor == 0 || scanned >= sample {
@@ -331,26 +425,49 @@ impl DatabaseDriver for RedisDriver {
         } else {
             format!("{}:{}@", config.username, config.password)
         };
-        let base_url = format!("redis://{auth}{}:{}", config.host, config.port);
+        // TLS：options["redis_tls"]=="true" → rediss://；redis_tls_insecure → #insecure 略過憑證驗證。
+        let use_tls = config.options.get("redis_tls").is_some_and(|v| v == "true");
+        let tls_insecure = config.options.get("redis_tls_insecure").is_some_and(|v| v == "true");
+        let scheme = if use_tls { "rediss" } else { "redis" };
+        let url_suffix = if use_tls && tls_insecure { "#insecure".to_string() } else { String::new() };
+        let base_url = format!("{scheme}://{auth}{}:{}", config.host, config.port);
 
-        let client =
-            redis::Client::open(base_url.clone()).map_err(|e| AppError::Connect(e.to_string()))?;
+        // 基礎 client 供 pub/sub 用（含 TLS suffix，確保加密連線的訂閱也走 TLS）。
+        let client = redis::Client::open(format!("{base_url}{url_suffix}"))
+            .map_err(|e| AppError::Connect(e.to_string()))?;
 
         let driver = Self {
             client,
             base_url,
-            db_count: 16, // 預設；下方 connect 後嘗試讀 CONFIG databases
+            url_suffix,
+            db_count: 16, // 下方讀 CONFIG GET databases 覆寫；讀不到（如託管 Redis 禁 CONFIG）維持 16。
+            conns: Default::default(),
+            snapshot: Default::default(),
         };
-        driver.ping().await?;
-        Ok(driver)
+
+        // PING 驗證連線，並順帶讀取實際 DB 數（CONFIG GET databases 回 ["databases", "16"]）。
+        let mut conn = driver.admin_conn().await?;
+        let pong: String = redis::cmd("PING")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| AppError::Connect(e.to_string()))?;
+        if !pong.eq_ignore_ascii_case("pong") {
+            return Err(AppError::Connect(format!("非預期的 PING 回應：{pong}")));
+        }
+        let db_count = redis::cmd("CONFIG")
+            .arg("GET")
+            .arg("databases")
+            .query_async::<Vec<String>>(&mut conn)
+            .await
+            .ok()
+            .and_then(|v| v.get(1).and_then(|s| s.parse::<i64>().ok()))
+            .unwrap_or(16);
+
+        Ok(Self { db_count, ..driver })
     }
 
     async fn ping(&self) -> AppResult<()> {
-        let mut conn = self
-            .client
-            .get_multiplexed_tokio_connection()
-            .await
-            .map_err(|e| AppError::Connect(e.to_string()))?;
+        let mut conn = self.admin_conn().await?;
         let pong: String = redis::cmd("PING")
             .query_async(&mut conn)
             .await
@@ -433,63 +550,13 @@ impl DatabaseDriver for RedisDriver {
             }
         }
 
-        // 用 SCAN 全掃（游標式，安全），收集所有符合 pattern 的 key。
-        let mut all_keys: Vec<String> = Vec::new();
-        let mut cursor: u64 = 0;
-        loop {
-            let (next, batch): (u64, Vec<String>) = redis::cmd("SCAN")
-                .arg(cursor)
-                .arg("MATCH")
-                .arg(&pattern)
-                .arg("COUNT")
-                .arg(500)
-                .query_async(&mut conn)
-                .await
-                .map_err(|e| AppError::Query(e.to_string()))?;
-            all_keys.extend(batch);
-            cursor = next;
-            if cursor == 0 {
-                break;
-            }
-            // 安全上限，避免極端情況無限掃
-            if all_keys.len() > 100_000 {
-                break;
-            }
-        }
+        // 取（或重建）鍵快照後切出該頁；翻頁不重掃整個 keyspace（見 paged_keys）。
+        let (total, page_keys) = self
+            .paged_keys(&mut conn, database, &pattern, query.page, query.page_size)
+            .await?;
 
-        // SCAN 可能回傳重複的 key（游標式不保證唯一），排序後去重避免重複列與灌水的總數。
-        all_keys.sort();
-        all_keys.dedup();
-        let total = all_keys.len() as u64;
-
-        // 分頁切片（saturating 避免極端 page * page_size 溢位，與 SQL driver 一致）。
-        let start = (query.page as usize).saturating_mul(query.page_size as usize);
-        let end = start.saturating_add(query.page_size as usize).min(all_keys.len());
-        let page_keys = if start < all_keys.len() {
-            &all_keys[start..end]
-        } else {
-            &[]
-        };
-
-        // 對該頁 key 取 type 與 ttl
-        let mut rows: Vec<Vec<Option<String>>> = Vec::with_capacity(page_keys.len());
-        for k in page_keys {
-            let ktype: String = redis::cmd("TYPE")
-                .arg(k)
-                .query_async(&mut conn)
-                .await
-                .unwrap_or_else(|_| "unknown".to_string());
-            let ttl: i64 = redis::cmd("TTL")
-                .arg(k)
-                .query_async(&mut conn)
-                .await
-                .unwrap_or(-1);
-            rows.push(vec![
-                Some(k.clone()),
-                Some(ktype),
-                Some(ttl.to_string()),
-            ]);
-        }
+        // 對該頁 key 以 pipeline 一次取回 type + ttl（100 keys 從 200 次往返降到 1 次）。
+        let rows = fetch_key_meta(&mut conn, &page_keys).await?;
 
         Ok(PagedData {
             columns: vec!["key".to_string(), "type".to_string(), "ttl".to_string()],
@@ -606,6 +673,7 @@ impl DatabaseDriver for RedisDriver {
             .set(&key, value)
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
+        self.invalidate_snapshot().await; // 新增鍵後翻頁需看到它
         Ok(1)
     }
 
@@ -621,11 +689,14 @@ impl DatabaseDriver for RedisDriver {
             .del(&key)
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
+        self.invalidate_snapshot().await; // 刪鍵後翻頁不應再看到殭屍鍵
         Ok(n as u64)
     }
 
     fn pool_status(&self) -> PoolStatus {
-        PoolStatus { size: 0, idle: 0, in_use: 0 }
+        // 回報目前快取的 per-db 連線數（try_read 避免在同步方法阻塞；取不到鎖回 0）。
+        let size = self.conns.try_read().map(|m| m.len() as u32).unwrap_or(0);
+        PoolStatus { size, idle: size, in_use: 0 }
     }
 
     async fn search_objects(&self, opts: &SearchOptions) -> AppResult<Vec<SearchHit>> {
@@ -692,11 +763,25 @@ impl DatabaseDriver for RedisDriver {
 
         match ktype.as_str() {
             "string" => {
-                let v: Option<String> = conn
-                    .get(key)
-                    .await
-                    .map_err(|e| AppError::Query(e.to_string()))?;
-                detail.entries = vec![v.unwrap_or_default()];
+                // 大 value 保護：超過閾值只取前段預覽（此路徑非樹狀 UI 使用，仍防呆避免 OOM）。
+                let len: i64 =
+                    redis::cmd("STRLEN").arg(key).query_async(&mut conn).await.unwrap_or(-1);
+                if len > STRING_PREVIEW_THRESHOLD {
+                    let bytes: Vec<u8> = redis::cmd("GETRANGE")
+                        .arg(key)
+                        .arg(0)
+                        .arg(STRING_PREVIEW_BYTES - 1)
+                        .query_async(&mut conn)
+                        .await
+                        .map_err(|e| AppError::Query(e.to_string()))?;
+                    detail.entries = vec![String::from_utf8_lossy(&bytes).into_owned()];
+                } else {
+                    let v: Option<String> = conn
+                        .get(key)
+                        .await
+                        .map_err(|e| AppError::Query(e.to_string()))?;
+                    detail.entries = vec![v.unwrap_or_default()];
+                }
             }
             "list" => {
                 let items: Vec<String> = conn
@@ -832,15 +917,13 @@ impl DatabaseDriver for RedisDriver {
                 1
             }
         };
+        // 改名 / 移除最後一個元素會改變鍵集合，使快照失效以免翻頁看到殭屍鍵。
+        self.invalidate_snapshot().await;
         Ok(affected.max(0) as u64)
     }
 
     async fn server_info(&self) -> AppResult<Vec<ServerInfoSection>> {
-        let mut conn = self
-            .client
-            .get_multiplexed_tokio_connection()
-            .await
-            .map_err(|e| AppError::Connect(e.to_string()))?;
+        let mut conn = self.admin_conn().await?;
         let raw: String = redis::cmd("INFO")
             .query_async(&mut conn)
             .await
@@ -895,9 +978,71 @@ impl DatabaseDriver for RedisDriver {
         Ok(RedisKeys { keys, truncated })
     }
 
-    async fn close(&self) {
-        // redis Client 無顯式 close；連線於 drop 時釋放。
+    async fn clear_cache(&self) {
+        // 前端刷新連線樹 / 網格「重新整理」時呼叫：使鍵快照失效，下次翻頁強制重掃。
+        self.invalidate_snapshot().await;
     }
+
+    async fn close(&self) {
+        // 清空快取的連線（ConnectionManager 於 drop 時釋放底層 TCP）。
+        self.conns.write().await.clear();
+    }
+}
+
+/// SCAN 全掃收集符合 pattern 的鍵（游標式、安全上限 100k、排序去重）。
+/// SCAN 在 rehash 期間可能重複回傳同一 key，故排序後 dedup 避免重複列與灌水總數。
+async fn scan_all_keys(
+    conn: &mut redis::aio::ConnectionManager,
+    pattern: &str,
+) -> AppResult<Vec<String>> {
+    let mut all: Vec<String> = Vec::new();
+    let mut cursor: u64 = 0;
+    loop {
+        let (next, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(pattern)
+            .arg("COUNT")
+            .arg(500)
+            .query_async(conn)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        all.extend(batch);
+        cursor = next;
+        // 掃完（cursor 歸零）或達安全上限即停。
+        if cursor == 0 || all.len() > 100_000 {
+            break;
+        }
+    }
+    all.sort();
+    all.dedup();
+    Ok(all)
+}
+
+/// 以 pipeline 一次取回多個 key 的 TYPE + TTL，組成 [key, type, ttl] 列。
+async fn fetch_key_meta(
+    conn: &mut redis::aio::ConnectionManager,
+    keys: &[String],
+) -> AppResult<Vec<Vec<Option<String>>>> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut pipe = redis::pipe();
+    for k in keys {
+        pipe.cmd("TYPE").arg(k);
+        pipe.cmd("TTL").arg(k);
+    }
+    let vals: Vec<redis::Value> = pipe
+        .query_async(conn)
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?;
+    let mut rows = Vec::with_capacity(keys.len());
+    for (k, pair) in keys.iter().zip(vals.chunks(2)) {
+        let ktype = pair.first().map(rv_to_string).unwrap_or_else(|| "unknown".to_string());
+        let ttl = rv_as_i64(pair.get(1));
+        rows.push(vec![Some(k.clone()), Some(ktype), Some(ttl.to_string())]);
+    }
+    Ok(rows)
 }
 
 /// 從主鍵欄位列取出 "key" 的值。

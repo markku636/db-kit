@@ -340,6 +340,12 @@ pub struct KeyPage {
     pub members: Vec<String>,
     /// zset 用：分數（與 members 對齊）。
     pub scores: Vec<f64>,
+    /// string 用：值的總位元組數（STRLEN）；非 string 為 -1。
+    #[serde(default)]
+    pub value_bytes: i64,
+    /// string 用：members[0] 僅為前段預覽（值超過閾值且未要求完整載入）。
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// SLOWLOG GET 單筆（慢查詢日誌）。
