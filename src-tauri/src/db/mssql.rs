@@ -5,8 +5,9 @@ use bb8_tiberius::ConnectionManager;
 use tiberius::{AuthMethod, ColumnType, Config, EncryptionLevel};
 
 use crate::db::{
-    filter_op_sql, ColumnInfo, ConnectionConfig, DataQuery, DatabaseDriver, Filter, PagedData,
-    PoolStatus, QueryResult, RowDelete, RowInsert, CellEdit, Sort, SortDir, TableInfo,
+    filter_op_sql, fmt_bytes, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery,
+    DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable, Filter, ForeignKeyInfo, IndexInfo,
+    PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, Sort, SortDir, TableInfo,
 };
 use crate::error::{AppError, AppResult};
 
@@ -272,6 +273,341 @@ impl DatabaseDriver for MssqlDriver {
         self.exec(&sql).await
     }
 
+    async fn table_indexes(&self, database: &str, table: &str) -> AppResult<Vec<IndexInfo>> {
+        let (schema, tbl) = split_schema_table(table);
+        let db = esc(database);
+        let obj = object_literal(database, &schema, &tbl);
+        let sql = format!(
+            "SELECT i.name, c.name, i.is_unique, i.is_primary_key \
+             FROM [{db}].sys.indexes i \
+             JOIN [{db}].sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id \
+             JOIN [{db}].sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id \
+             WHERE i.object_id = OBJECT_ID({obj}) AND i.type > 0 \
+             ORDER BY i.name, ic.key_ordinal"
+        );
+        let rows = self.query_rows(&sql).await?;
+        // 依索引名聚合欄位（保持順序）。
+        let mut out: Vec<IndexInfo> = Vec::new();
+        for r in &rows {
+            let name = match get_str(r, 0) {
+                Some(n) => n,
+                None => continue,
+            };
+            let col = get_str(r, 1).unwrap_or_default();
+            let unique = r.try_get::<bool, _>(2).ok().flatten().unwrap_or(false);
+            let primary = r.try_get::<bool, _>(3).ok().flatten().unwrap_or(false);
+            if let Some(existing) = out.iter_mut().find(|i| i.name == name) {
+                existing.columns.push(col);
+            } else {
+                out.push(IndexInfo { name, columns: vec![col], unique, primary });
+            }
+        }
+        Ok(out)
+    }
+
+    async fn list_foreign_keys(&self, database: &str, table: &str) -> AppResult<Vec<ForeignKeyInfo>> {
+        let (schema, tbl) = split_schema_table(table);
+        let db = esc(database);
+        let obj = object_literal(database, &schema, &tbl);
+        let sql = format!(
+            "SELECT fk.name, pc.name, rs.name, rt.name, rc.name \
+             FROM [{db}].sys.foreign_keys fk \
+             JOIN [{db}].sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id \
+             JOIN [{db}].sys.columns pc ON fkc.parent_object_id = pc.object_id AND fkc.parent_column_id = pc.column_id \
+             JOIN [{db}].sys.tables rt ON fkc.referenced_object_id = rt.object_id \
+             JOIN [{db}].sys.schemas rs ON rt.schema_id = rs.schema_id \
+             JOIN [{db}].sys.columns rc ON fkc.referenced_object_id = rc.object_id AND fkc.referenced_column_id = rc.column_id \
+             WHERE fk.parent_object_id = OBJECT_ID({obj}) \
+             ORDER BY fk.name, fkc.constraint_column_id"
+        );
+        let rows = self.query_rows(&sql).await?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| {
+                let name = get_str(r, 0)?;
+                let column = get_str(r, 1)?;
+                let ref_schema = get_str(r, 2).unwrap_or_else(|| "dbo".to_string());
+                let ref_tbl = get_str(r, 3)?;
+                let ref_column = get_str(r, 4)?;
+                let ref_table = if ref_schema == "dbo" { ref_tbl } else { format!("{ref_schema}.{ref_tbl}") };
+                Some(ForeignKeyInfo { name, column, ref_table, ref_column })
+            })
+            .collect())
+    }
+
+    async fn list_routines(&self, database: &str) -> AppResult<Vec<RoutineInfo>> {
+        let db = esc(database);
+        // 預存程序 / 函式。
+        let sql = format!(
+            "SELECT s.name, o.name, o.type, CONVERT(NVARCHAR(30), o.modify_date, 120) \
+             FROM [{db}].sys.objects o JOIN [{db}].sys.schemas s ON o.schema_id = s.schema_id \
+             WHERE o.type IN ('P','FN','IF','TF','AF') AND o.is_ms_shipped = 0 \
+             ORDER BY o.type, o.name"
+        );
+        let mut out = Vec::new();
+        for r in &self.query_rows(&sql).await? {
+            let sch = get_str(r, 0).unwrap_or_else(|| "dbo".to_string());
+            let nm = match get_str(r, 1) {
+                Some(n) => n,
+                None => continue,
+            };
+            let ty = get_str(r, 2).unwrap_or_default();
+            let routine_type = if ty.trim() == "P" { "procedure" } else { "function" };
+            let name = if sch == "dbo" { nm } else { format!("{sch}.{nm}") };
+            out.push(RoutineInfo {
+                name,
+                routine_type: routine_type.to_string(),
+                parent: None,
+                signature: None,
+                modified: get_str(r, 3),
+                deterministic: None,
+                comment: None,
+            });
+        }
+        // 觸發器（掛在資料表上）。
+        let tsql = format!(
+            "SELECT t.name, OBJECT_NAME(t.parent_id, DB_ID(N'{db_raw}')), CONVERT(NVARCHAR(30), t.modify_date, 120) \
+             FROM [{db}].sys.triggers t WHERE t.is_ms_shipped = 0 AND t.parent_class = 1 ORDER BY t.name",
+            db_raw = database.replace('\'', "''")
+        );
+        if let Ok(trows) = self.query_rows(&tsql).await {
+            for r in &trows {
+                if let Some(nm) = get_str(r, 0) {
+                    out.push(RoutineInfo {
+                        name: nm,
+                        routine_type: "trigger".to_string(),
+                        parent: get_str(r, 1),
+                        signature: None,
+                        modified: get_str(r, 2),
+                        deterministic: None,
+                        comment: None,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    async fn routine_definition(&self, database: &str, name: &str, _routine_type: &str) -> AppResult<String> {
+        let (schema, obj_name) = split_schema_table(name);
+        let obj = object_literal(database, &schema, &obj_name);
+        let rows = self.query_rows(&format!("SELECT OBJECT_DEFINITION(OBJECT_ID({obj}))")).await?;
+        rows.first()
+            .and_then(|r| get_str(r, 0))
+            .ok_or_else(|| AppError::Query("取不到定義（可能無權限或物件不存在）".to_string()))
+    }
+
+    async fn table_ddl(&self, database: &str, table: &str) -> AppResult<String> {
+        let (schema, tbl) = split_schema_table(table);
+        let obj = object_literal(database, &schema, &tbl);
+        // 檢視 / 程序 / 函式：直接回其定義。
+        if let Some(def) = self
+            .query_rows(&format!("SELECT OBJECT_DEFINITION(OBJECT_ID({obj}))"))
+            .await?
+            .first()
+            .and_then(|r| get_str(r, 0))
+        {
+            return Ok(def);
+        }
+        // 資料表：從 sys.columns 重建 CREATE TABLE（欄位 + PK）。
+        let db = esc(database);
+        let sql = format!(
+            "SELECT c.name, ty.name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, dc.definition \
+             FROM [{db}].sys.columns c \
+             JOIN [{db}].sys.types ty ON c.user_type_id = ty.user_type_id \
+             LEFT JOIN [{db}].sys.default_constraints dc ON c.default_object_id = dc.object_id \
+             WHERE c.object_id = OBJECT_ID({obj}) ORDER BY c.column_id"
+        );
+        let rows = self.query_rows(&sql).await?;
+        if rows.is_empty() {
+            return Err(AppError::Query("找不到資料表欄位".to_string()));
+        }
+        let mut lines: Vec<String> = Vec::new();
+        for r in &rows {
+            let name = get_str(r, 0).unwrap_or_default();
+            let ty = get_str(r, 1).unwrap_or_default();
+            let max_len = r.try_get::<i16, _>(2).ok().flatten().unwrap_or(0);
+            let precision = r.try_get::<u8, _>(3).ok().flatten().unwrap_or(0);
+            let scale = r.try_get::<u8, _>(4).ok().flatten().unwrap_or(0);
+            let nullable = r.try_get::<bool, _>(5).ok().flatten().unwrap_or(true);
+            let identity = r.try_get::<bool, _>(6).ok().flatten().unwrap_or(false);
+            let default = get_str(r, 7);
+            let type_str = mssql_type_str(&ty, max_len, precision, scale);
+            let mut def = format!("  [{}] {type_str}", esc(&name));
+            if identity {
+                def.push_str(" IDENTITY(1,1)");
+            }
+            def.push_str(if nullable { " NULL" } else { " NOT NULL" });
+            if let Some(d) = default {
+                def.push_str(&format!(" DEFAULT {d}"));
+            }
+            lines.push(def);
+        }
+        let pk = self.primary_key(database, &schema, &tbl).await.unwrap_or_default();
+        if !pk.is_empty() {
+            let cols = pk.iter().map(|c| format!("[{}]", esc(c))).collect::<Vec<_>>().join(", ");
+            lines.push(format!("  PRIMARY KEY ({cols})"));
+        }
+        Ok(format!(
+            "CREATE TABLE {} (\n{}\n);",
+            qualified_name(database, &schema, &tbl),
+            lines.join(",\n")
+        ))
+    }
+
+    async fn er_model(&self, database: &str) -> AppResult<ErModel> {
+        let tables = self.list_tables(database).await?;
+        let mut er_tables = Vec::new();
+        let mut relations = Vec::new();
+        for t in &tables {
+            if t.kind != "table" {
+                continue;
+            }
+            let cols = self.table_columns(database, &t.name).await.unwrap_or_default();
+            let fks = self.list_foreign_keys(database, &t.name).await.unwrap_or_default();
+            let fk_cols: std::collections::HashSet<&str> = fks.iter().map(|f| f.column.as_str()).collect();
+            er_tables.push(ErTable {
+                name: t.name.clone(),
+                columns: cols
+                    .iter()
+                    .map(|c| ErColumn {
+                        name: c.name.clone(),
+                        data_type: c.data_type.clone(),
+                        pk: c.key == "PRI",
+                        fk: fk_cols.contains(c.name.as_str()),
+                    })
+                    .collect(),
+            });
+            for f in fks {
+                relations.push(ErRelation {
+                    from_table: t.name.clone(),
+                    from_column: f.column,
+                    to_table: f.ref_table,
+                    to_column: f.ref_column,
+                });
+            }
+        }
+        Ok(ErModel { tables: er_tables, relations })
+    }
+
+    async fn column_stats(&self, database: &str, table: &str, column: &str) -> AppResult<ColumnStats> {
+        let (schema, tbl) = split_schema_table(table);
+        let q = qualified_name(database, &schema, &tbl);
+        let col = format!("[{}]", esc(column));
+        let rows = self
+            .query_rows(&format!("SELECT COUNT_BIG(*), COUNT_BIG({col}), COUNT_BIG(DISTINCT {col}) FROM {q}"))
+            .await?;
+        let r = rows.first().ok_or_else(|| AppError::Query("欄位統計無結果".to_string()))?;
+        let total = r.try_get::<i64, _>(0).ok().flatten().unwrap_or(0) as u64;
+        let non_null = r.try_get::<i64, _>(1).ok().flatten().unwrap_or(0) as u64;
+        let distinct = r.try_get::<i64, _>(2).ok().flatten().unwrap_or(0) as u64;
+        // MIN / MAX best-effort（text / image / xml 等型別不支援聚合）。
+        let (min, max) = match self
+            .query_rows(&format!(
+                "SELECT CAST(MIN({col}) AS NVARCHAR(4000)), CAST(MAX({col}) AS NVARCHAR(4000)) FROM {q}"
+            ))
+            .await
+        {
+            Ok(mr) => {
+                let m = mr.first();
+                (m.and_then(|r| get_str(r, 0)), m.and_then(|r| get_str(r, 1)))
+            }
+            Err(_) => (None, None),
+        };
+        Ok(ColumnStats { total, non_null, distinct, min, max })
+    }
+
+    async fn table_info(&self, database: &str, table: &str) -> AppResult<Vec<(String, String)>> {
+        let (schema, tbl) = split_schema_table(table);
+        let db = esc(database);
+        let obj = object_literal(database, &schema, &tbl);
+        let sql = format!(
+            "SELECT SUM(p.rows), SUM(a.total_pages) * 8 * 1024 \
+             FROM [{db}].sys.partitions p \
+             JOIN [{db}].sys.allocation_units a ON p.partition_id = a.container_id \
+             WHERE p.object_id = OBJECT_ID({obj}) AND p.index_id IN (0, 1)"
+        );
+        let mut out = Vec::new();
+        if let Ok(rows) = self.query_rows(&sql).await {
+            if let Some(r) = rows.first() {
+                if let Some(n) = r.try_get::<i64, _>(0).ok().flatten() {
+                    out.push(("列數（估計）".to_string(), n.to_string()));
+                }
+                if let Some(b) = r.try_get::<i64, _>(1).ok().flatten() {
+                    out.push(("資料大小".to_string(), fmt_bytes(b)));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    async fn explain(&self, sql: &str) -> AppResult<QueryResult> {
+        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        // SET SHOWPLAN_XML ON：回傳估計執行計畫 XML（不真的執行查詢）；須為獨立批次並 consume 結果。
+        conn.simple_query("SET SHOWPLAN_XML ON")
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+            .into_results()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let plan = {
+            let stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
+            let rows = stream.into_first_result().await.map_err(|e| AppError::Query(e.to_string()))?;
+            rows.first().and_then(|r| get_str(r, 0)).unwrap_or_default()
+        };
+        // 關閉，避免污染回收到 pool 的連線（consume 結果；失敗時 pool 的 is_valid 檢查會汰換）。
+        let _ = conn.simple_query("SET SHOWPLAN_XML OFF").await;
+        Ok(QueryResult {
+            columns: vec!["ShowPlanXML".to_string()],
+            rows: vec![vec![Some(plan)]],
+            rows_affected: 0,
+        })
+    }
+
+    async fn exec_ddl(&self, sql: &str) -> AppResult<()> {
+        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        conn.simple_query(sql)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+            .into_results()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn create_database(&self, name: &str) -> AppResult<()> {
+        self.exec(&format!("CREATE DATABASE [{}]", esc(name))).await.map(|_| ())
+    }
+
+    async fn drop_database(&self, name: &str) -> AppResult<()> {
+        if MSSQL_SYSTEM_DBS.contains(&name.to_lowercase().as_str()) {
+            return Err(AppError::Query(format!("系統資料庫「{name}」不可刪除")));
+        }
+        self.exec(&format!("DROP DATABASE [{}]", esc(name))).await.map(|_| ())
+    }
+
+    async fn create_index(
+        &self,
+        database: &str,
+        table: &str,
+        name: &str,
+        columns: &[String],
+        unique: bool,
+    ) -> AppResult<()> {
+        let (schema, tbl) = split_schema_table(table);
+        let q = qualified_name(database, &schema, &tbl);
+        let cols = columns.iter().map(|c| format!("[{}]", esc(c))).collect::<Vec<_>>().join(", ");
+        let uniq = if unique { "UNIQUE " } else { "" };
+        self.exec(&format!("CREATE {uniq}INDEX [{}] ON {q} ({cols})", esc(name))).await.map(|_| ())
+    }
+
+    async fn drop_index(&self, database: &str, table: &str, index: &str) -> AppResult<()> {
+        let (schema, tbl) = split_schema_table(table);
+        let q = qualified_name(database, &schema, &tbl);
+        // MSSQL 的 DROP INDEX 需帶表名。
+        self.exec(&format!("DROP INDEX [{}] ON {q}", esc(index))).await.map(|_| ())
+    }
+
     fn pool_status(&self) -> PoolStatus {
         let st = self.pool.state();
         PoolStatus {
@@ -312,6 +648,25 @@ fn qualified_name(db: &str, schema: &str, table: &str) -> String {
 /// 供 OBJECT_ID() 用的字串字面值 `N'[db].[schema].[table]'`。
 fn object_literal(db: &str, schema: &str, table: &str) -> String {
     lit(&format!("[{}].[{}].[{}]", esc(db), esc(schema), esc(table)))
+}
+
+/// 系統資料庫（drop 護欄）。
+const MSSQL_SYSTEM_DBS: &[&str] = &["master", "model", "msdb", "tempdb"];
+
+/// 依 sys.columns 的 max_length / precision / scale 組型別字串（含長度 / 精度），供 table_ddl 重建。
+fn mssql_type_str(ty: &str, max_length: i16, precision: u8, scale: u8) -> String {
+    match ty.to_lowercase().as_str() {
+        // nchar / nvarchar 的 max_length 以位元組計（每字元 2 bytes）；-1 = MAX。
+        "nvarchar" | "nchar" => {
+            if max_length == -1 { format!("{ty}(MAX)") } else { format!("{ty}({})", max_length / 2) }
+        }
+        "varchar" | "char" | "binary" | "varbinary" => {
+            if max_length == -1 { format!("{ty}(MAX)") } else { format!("{ty}({max_length})") }
+        }
+        "decimal" | "numeric" => format!("{ty}({precision},{scale})"),
+        "datetime2" | "time" | "datetimeoffset" if scale > 0 => format!("{ty}({scale})"),
+        _ => ty.to_string(),
+    }
 }
 
 fn starts_ci(s: &str, prefix: &str) -> bool {

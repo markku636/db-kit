@@ -190,7 +190,7 @@ export default function App() {
   const canEr =
     !!activeConn &&
     connectedIds.has(activeConn.id) &&
-    (activeConn.kind === "mysql" || activeConn.kind === "postgres" || activeConn.kind === "sqlite");
+    (activeConn.kind === "mysql" || activeConn.kind === "postgres" || activeConn.kind === "sqlite" || activeConn.kind === "mssql");
 
   // 啟動時載入已存連線清單（僅清單，不自動連線；密碼留在 keychain）。
   useEffect(() => {
@@ -1628,7 +1628,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                 const isRedis = c.kind === "redis";
                 // external（gateway）走 SQL 分支：用資料夾 + 每庫篩選框（適合大量表），右鍵亦可新增查詢。
                 const isSqlKind = c.kind === "mysql" || c.kind === "postgres" || c.kind === "sqlite" || c.kind === "external" || c.kind === "mssql";
-                const supportsRoutines = c.kind === "mysql" || c.kind === "postgres";
+                const supportsRoutines = c.kind === "mysql" || c.kind === "postgres" || c.kind === "mssql";
 
                 // 樹中的單一資料表 / 視圖節點（沿用選取 / 雙擊開啟 / 右鍵產生 SQL）。indent 控制縮排深度。
                 const objNode = (t: TableInfo, indent: string) => (
@@ -2367,8 +2367,8 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
   redis: "PING",
   external: "SELECT 1",
 };
-// 僅關聯式資料庫支援 EXPLAIN 查詢計畫分析。
-const EXPLAIN_KINDS: DbKind[] = ["mysql", "postgres", "sqlite"];
+// 僅關聯式資料庫支援 EXPLAIN 查詢計畫分析（MSSQL 回 SHOWPLAN XML，於結果格顯示、不走 JSON 視覺樹）。
+const EXPLAIN_KINDS: DbKind[] = ["mysql", "postgres", "sqlite", "mssql"];
 
 // 支援查詢面板「目前資料庫」選擇器（以 USE / search_path 把查詢限定到所選庫）的連線類型：
 // 關聯式多庫（MySQL / PostgreSQL）＋ 外部 gateway（driver 以 strip_leading_use 切站）。
