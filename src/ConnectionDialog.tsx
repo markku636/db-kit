@@ -150,7 +150,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         </>
       }
     >
-      <div className="flex gap-2">
+      {/* 連線類型 tab：欄數固定 4，超過就換到下一排（避免長標籤如「SQL Server」在單排等寬時被壓到換行而跑版）。 */}
+      <div className="grid grid-cols-4 gap-2">
         {/* 外部 gateway（external）連線類型：開源版無內建驅動，預設隱藏（__EXTERNAL__ 建置期開關）。 */}
         {(Object.keys(KIND_META) as DbKind[])
           .filter((k) => __EXTERNAL__ || k !== "external")
@@ -159,7 +160,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
             key={k}
             type="button"
             onClick={() => onKindChange(k)}
-            className="flex-1 h-8 rounded text-sm border transition-colors"
+            className="h-8 rounded text-sm border transition-colors whitespace-nowrap"
             style={{
               borderColor: kind === k ? KIND_META[k].color : "rgb(var(--c-fg) / 0.12)",
               background: kind === k ? KIND_META[k].color + "22" : "transparent",
