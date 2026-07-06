@@ -18,8 +18,11 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
   const connections = useStore((s) => s.connections);
   const connectedIds = useStore((s) => s.connectedIds);
   // 目標連線：同種類（DDL 相容）且已連線者，含來源連線本身。
+  // MySQL 與 MariaDB 方言 / DDL 相容，視為同族可互比。
+  const fam = (k: DbKind) => (k === "mariadb" ? "mysql" : k);
   const targetConns = useMemo(
-    () => connections.filter((c) => c.kind === kind && (connectedIds.has(c.id) || c.id === connId)),
+    () => connections.filter((c) => fam(c.kind) === fam(kind) && (connectedIds.has(c.id) || c.id === connId)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [connections, connectedIds, connId, kind],
   );
   const [targetConnId, setTargetConnId] = useState(connId);

@@ -1,4 +1,35 @@
-## v0.2.6
+## v0.4.0
+
+- 版本號 0.3.2 → 0.4.0（package.json / tauri.conf.json / Cargo.toml 同步）。本版四大主題：**MariaDB**、**Oracle**、**MongoDB 強化**、**PostgreSQL / MySQL 連線補強**。
+
+### MariaDB 支援（一等連線類型）
+
+- 新增 `mariadb` 連線類型：與 MySQL 線協定相容，後端直接共用 `MysqlDriver`（`DbKind::Mariadb` 薄別名，零重複驅動程式碼），前端獨立類型（teal 色標、MariaSQL 編輯器方言、全部 MySQL 功能對齊：維護 / 使用者管理 / 處理程序 / ER 圖 / routines / 全文索引）。
+- `INSERT / REPLACE / DELETE … RETURNING`（MariaDB 10.5+）結果集正確顯示（比照 PostgreSQL 的偵測）。
+- 結構比對允許 MySQL ↔ MariaDB 互比（方言 / DDL 相容視為同族）；備份 / 還原沿用 mysqldump / mysql。
+
+### Oracle 支援（rust-oracle / ODPI-C）
+
+- 新增 `oracle` 連線類型：CRUD、分頁（OFFSET/FETCH，**最低伺服器版本 12c**）、結構分頁（索引 / 外鍵 / DDL via DBMS_METADATA）、routines（all_source）、執行計畫（EXPLAIN PLAN + DBMS_XPLAN 文字 grid）、ER 圖、欄位統計、物件搜尋、識別字 exact-case 全程雙引號策略。
+- **需自行安裝 64 位元 Oracle Instant Client**（本工具不隨附 DLL）：執行期偵測「連線設定 client 目錄 > ORACLE_HOME > PATH」，未安裝時給明確繁中指引 + 下載連結；不裝 client 完全不影響其他資料庫類型。
+- 連線方式支援 服務名稱（EZConnect）/ SID（完整 descriptor）/ TNS 別名 三種；同步 API 以 `spawn_blocking` 包裝不阻塞 UI；ODPI-C session pool + 池狀態監控。
+- CLI 支援 `oracle://user:pass@host:1521/SERVICE` URL。
+
+### MongoDB 強化（四大方向）
+
+- **執行計畫**：查詢 DSL 直接 explain（find / aggregate；verbosity 可選 queryPlanner / executionStats / allPlansExecution），視覺化 stage 樹（COLLSCAN 紅色警示、IXSCAN 索引名、記憶體 SORT 琥珀、sharded 分片子樹、SBE 相容）+ 摘要條（回傳 / 鍵掃描 / 文件掃描 / 掃描比 >10× 高亮）。
+- **JSON 查詢編輯器**：textarea 升級 CodeMirror——語法高亮、即時 JSON lint、DSL 鍵 / `$` 運算子 / 目標集合欄位名三路自動補全（取樣 schema）。
+- **索引與 Schema**：$indexStats 使用次數欄（0 次標「未使用」）、進階索引建立（方向 / text / 2dsphere / hashed + unique / sparse / hidden / TTL / partialFilterExpression）、集合**驗證規則**檢視與編輯（$jsonSchema + validationLevel / validationAction via collMod，strict+error 危險確認、系統集合硬擋）。
+- **監控面板**：serverStatus 分區指標（連線 / 操作計數 / 記憶體 / WT 快取 / 複寫）、dbStats、currentOp 進行中操作（可 killOp）、Profiler（level 0-2 + slowms + system.profile 慢查詢表，level 2 危險確認）；各分頁獨立載入，受限帳號（Atlas）單項失敗不拖垮整個面板。
+- **欄位統計**：BSON 型別分布橫條（混型欄位）、Top-10 值、缺欄 / null 區分、相異值估計；大集合自動 $sample 抽樣（20k）+ 15s 逾時保護。
+
+### PostgreSQL / MySQL 連線補強
+
+- sqlx 開啟 `tls-rustls-ring-native-roots`：新增 **SSL 模式**選項（PG：disable/prefer/require/verify-ca/verify-full；MySQL 系：disabled/preferred/required/verify_ca/verify_identity），維持 rustls+ring 免系統相依。
+- 連線改用 typed `ConnectOptions` builder（不再字串內插 URL）：**密碼含 `@ / ? # %` 等特殊字元不再壞掉**。
+- PG 結構分頁補欄位註解（col_description，以 attname join 避開 DROP COLUMN 後的編號錯位）。
+
+
 
 - 版本號 0.2.5 → 0.2.6（package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock 同步）；重打安裝檔。本版內容見下方「『關於 DB Kit』對話框」與「多結果集同時顯示（SSMS 風格）」。
 

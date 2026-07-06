@@ -8,7 +8,7 @@
 
 <p align="center">
 一站式跨平台桌面資料庫工具，以單一一致的介面管理<br>
-<strong>MySQL · PostgreSQL · SQLite · MongoDB · Redis</strong>。
+<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis</strong>。
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 
 ## 這是什麼
 
-工程師與 DBA 的日常往往要在 MySQL、PostgreSQL、MongoDB、Redis… 之間來回切換，桌面上散落著好幾個各有脾氣的管理工具。**db-kit** 把它們收進同一套介面、同一套連線管理、同一套主題——關聯式、文件型、鍵值型三種資料範式都有貼合各自手感的瀏覽與編輯體驗，且日常操作（資料格、查詢、ER 圖、匯入匯出、備份）跨資料庫對齊。
+工程師與 DBA 的日常往往要在 MySQL、PostgreSQL、SQL Server、MongoDB、Redis… 之間來回切換，桌面上散落著好幾個各有脾氣的管理工具。**db-kit** 把它們收進同一套介面、同一套連線管理、同一套主題——關聯式、文件型、鍵值型三種資料範式都有貼合各自手感的瀏覽與編輯體驗，且日常操作（資料格、查詢、ER 圖、匯入匯出、備份）跨資料庫對齊。
 
 採用 **Tauri 2（Rust 後端 + Web 前端）**，安裝檔小、記憶體佔用約為 Electron 同類產品的十分之一；資料庫連線一律收在 Rust 後端、前端透過 Tauri command 呼叫，不直連、兼顧安全與效能。
 
@@ -99,7 +99,7 @@
 
 安裝後第一次使用，三步驟即可連上資料庫：
 
-1. **新增連線** — 左上角點 **「＋ 新增連線」**，選擇資料庫類型（MySQL / PostgreSQL / SQLite / MongoDB / Redis）。
+1. **新增連線** — 左上角點 **「＋ 新增連線」**，選擇資料庫類型（MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis）。
 2. **填入連線資訊** — 輸入主機、連接埠、帳號、密碼（或選 SQLite 檔案）。需要時可在 **SSH Tunnel** 分頁設定跳板。先按 **「測試連線」** 確認可連，再 **儲存**。
 3. **開始操作** — 連線會出現在左側樹狀清單，展開資料庫 → 雙擊資料表即可瀏覽 / 編輯資料；上方分頁可開查詢編輯器、ER 圖等。
 
@@ -125,21 +125,21 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 
 ## ✨ 亮點
 
-- **一站式五大資料庫** — MySQL · PostgreSQL · SQLite · MongoDB · Redis，全部可實際連線，共用同一套連線樹、資料格與快捷鍵。
+- **一站式八大資料庫** — MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis，全部可實際連線，共用同一套連線樹、資料格與快捷鍵。
 - **跨平台桌面 App** — 同一份程式碼產出 Windows / macOS / Linux 三平台原生安裝檔，介面、快捷鍵、連線管理與 keychain 完全一致；`dbk` CLI 亦跨平台（見 [跨平台](#跨平台)）。
 - **輕量高效** — Tauri 2 架構，用系統內建 WebView、比 Electron 輕約 10×；深色為預設、可切亮色，依資料庫類型色標區分。
 - **安全可靠** — 連線密碼存於 OS keychain（磁碟不落地）、SSH Tunnel（密碼／私鑰）+ host key TOFU 驗證、所有寫入以主鍵定位 + 全參數化綁定防注入。
 - **桌面級操作手感** — 儲存格直接編輯、右鍵選單、鍵盤導覽、多欄排序、欄寬拖曳、依值篩選、內容檢視器、即時尋找。
 - **內建 AI 助手** — 右側面板串接本機 Claude CLI（用你的 Claude 訂閱登入），串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。
 - **附命令列工具 `dbk`** — 唯讀查詢 / 瀏覽 / 匯出 / 備份的 CLI，重用同一套連線與 keychain，可 `--no-default-features` 編成不連 Tauri 的精簡 binary，適合伺服器與 script 場景（見 [命令列工具](#命令列工具dbk-cli)）。
-- **完整工程實踐** — 後端以 Docker 真實五大資料庫做整合測試、前端純函式 vitest 覆蓋，經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
+- **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、前端純函式 vitest 覆蓋，經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
 
 ## 功能特色
 
 | 範疇 | 重點功能 |
 |------|----------|
-| 關聯式（MySQL / PostgreSQL / SQLite） | 完整 CRUD、DDL 欄位編輯、索引 / 外鍵管理、EXPLAIN + 視覺化執行計畫、RETURNING 顯示、ER 圖、結構比對 |
-| 文件型（MongoDB） | 文件攤平成表格、find / 聚合管線、CRUD-via-JSON、索引管理 |
+| 關聯式（MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite） | 完整 CRUD、DDL 欄位編輯、索引 / 外鍵管理、EXPLAIN + 視覺化執行計畫（SQL Server 走 SHOWPLAN XML、Oracle 走 DBMS_XPLAN）、routines（預存程序 / 函式）、RETURNING 顯示、ER 圖、結構比對、SSL 模式（MySQL 系 / PG） |
+| 文件型（MongoDB） | 文件攤平成表格、find / 聚合管線、CRUD-via-JSON、**explain 執行計畫視覺化**、JSON 查詢編輯器（語法高亮 + 欄位補全）、進階索引（TTL / partial / text / $indexStats 使用率）、**驗證規則（JSON Schema）**、欄位統計（型別分布 / Top 值）、**監控面板**（serverStatus / dbStats / currentOp / Profiler） |
 | 鍵值型（Redis） | 五種結構檢視＋編輯、命名空間鍵樹、值格式化、Pub/Sub、維運面板、命令列 Console |
 | 通用資料格 | 多欄複合篩選（9 運算子 + AND·OR）、多欄排序、依值篩選、**外鍵雙向導覽**（跳至參照 / 找參照此列者）、**Excel + CSV 匯入**、多格式 + **Excel 匯出**、複製為 INSERT/UPDATE/DELETE/IN、欄位剖析 + 相異值分布 |
 | 查詢工作區 | 語法高亮 + 表/欄自動完成、**視覺化查詢建構器**（JOIN / 聚合 / HAVING / 分頁 / 即時預覽）、**SQL 片段庫**、**參數化查詢 `:name`**、格式化 / 壓縮 / 關鍵字大小寫、查詢歷史 / 收藏、只執行反白段、結果一鍵複製 / 匯出 |
@@ -148,8 +148,11 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | AI 助手 | 右側面板串接本機 Claude CLI：串流問答、撰寫 / 優化 SQL，可附帶目前 schema |
 | 運維 | 連線設定持久化、排程備份 + 備份歷史、連線池監控 + Ping、跨平台桌面 App |
 
-> 目前進度：**五大資料庫全部可連線**；關聯式完整 CRUD / DDL 欄位編輯 / 索引管理 / EXPLAIN / RETURNING 顯示、多欄複合篩選（9 種運算子 + AND·OR）排序、**CSV 匯入** + 多格式匯出 + **轉儲整庫結構 SQL**
-> MongoDB 文件攤平 + 查詢編輯器完整 **CRUD-via-JSON**（find / 聚合 aggregate / insert / update / delete）+ 索引管理
+> 目前進度：**八大資料庫全部可連線**；關聯式完整 CRUD / DDL 欄位編輯 / 索引管理 / EXPLAIN / RETURNING 顯示、多欄複合篩選（9 種運算子 + AND·OR）排序、**CSV 匯入** + 多格式匯出 + **轉儲整庫結構 SQL**
+> SQL Server（tiberius + bb8 連線池）：CRUD、結構分頁（索引 / 外鍵 / DDL）、routines（預存程序 / 函式）、執行計畫（SET SHOWPLAN_XML）、ER 圖、欄位統計；備份 / 還原規劃以 sqlpackage 匯出 `.bacpac`（尚未接上）
+> MariaDB 與 MySQL 共用驅動（線協定相容）：MySQL 全功能對齊 + `INSERT/DELETE … RETURNING` 結果集顯示
+> Oracle（rust-oracle / ODPI-C）：CRUD、結構分頁（索引 / 外鍵 / DDL via DBMS_METADATA）、routines、執行計畫（EXPLAIN PLAN + DBMS_XPLAN）、ER 圖、欄位統計；**需自行安裝 64 位元 Oracle Instant Client**（執行期偵測 PATH / ORACLE_HOME / 自訂目錄，未安裝時給下載指引；伺服器需 12c+）
+> MongoDB 文件攤平 + 查詢編輯器完整 **CRUD-via-JSON**（find / 聚合 aggregate / insert / update / delete）+ **explain 執行計畫**（stage 樹、COLLSCAN 警示、掃描比）+ 進階索引（TTL / partial / text / 2dsphere / hidden + $indexStats 使用率）+ **驗證規則**（$jsonSchema via collMod）+ 欄位統計（BSON 型別分布 / Top-10 / 抽樣）+ **監控面板**（serverStatus / dbStats / currentOp+kill / Profiler 慢查詢）
 > Redis 仿 **Another Redis Desktop Manager**：五種結構檢視＋編輯、**命名空間鍵樹**（依 `:` 分組資料夾）、值格式化（原始 / JSON / Hex）、**Pub/Sub** 訂閱發佈、**維運面板**（慢查詢 / 用戶端 / 大鍵）、**伺服器狀態面板**（INFO 重點指標 + 全分區，可自動刷新）、**命令列 Console**（指令歷史、DB 切換）
 > 連線設定持久化（密碼存 OS keychain）、SSH Tunnel、排程備份 + 備份歷史、Ping 連線延遲、ER 圖、欄寬可拖曳、AI 助手
 
@@ -166,6 +169,11 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] P1/P2 雙擊開表 → 表格檢視 + 底部分頁導覽 + 結構/資料分頁切換
 - [x] SQLite 支援（檔案型，與 MySQL 共用 trait）
 - [x] PostgreSQL 支援
+- [x] Microsoft SQL Server 支援（tiberius + bb8 連線池；結構分頁 / routines / 執行計畫 SHOWPLAN XML / ER 圖 / 欄位統計；備份規劃以 sqlpackage 匯出 `.bacpac`，尚未接上）
+- [x] MariaDB 支援（與 MySQL 共用 sqlx 驅動；獨立連線類型 + MariaSQL 編輯器方言 + RETURNING 結果集）
+- [x] Oracle 支援（rust-oracle / ODPI-C；Instant Client 執行期偵測、EZConnect / SID / TNS 三種連線方式、結構分頁 / routines / DBMS_XPLAN 執行計畫 / ER 圖；伺服器需 12c+）
+- [x] MongoDB 強化：explain 視覺化、JSON 查詢編輯器（補全）、進階索引 + $indexStats、驗證規則、欄位統計、監控面板（currentOp / Profiler）
+- [x] MySQL / PostgreSQL SSL 模式（sqlx rustls；typed 連線參數，密碼特殊字元不再需編碼）
 - [x] 儲存格直接編輯 + ✓ 套用（以主鍵定位，寫回 DB）
 - [x] 新增列 / 刪除列（完整 CRUD）
 - [x] 篩選（單欄條件）、排序（點欄位標題）
@@ -190,13 +198,13 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] 資料格手感：儲存格右鍵選單（複製值 / 整列 JSON·TSV / INSERT、設 NULL、依值篩選）、內容檢視器、鍵盤導覽、選取資訊
 - [x] 多欄排序（Shift+點擊）、每頁列數、欄位隱藏 / 自動符合寬度、重新整理
 - [x] 查詢編輯器：執行時間 / 列數、查詢歷史、只執行反白段、Ctrl+Enter、per-連線記憶、結果複製 / 匯出（CSV·JSON·TSV）
-- [x] 結構：複製建表 SQL（SHOW CREATE TABLE 等）、索引檢視 + 新增 / 刪除（MySQL / PostgreSQL / SQLite / MongoDB）
+- [x] 結構：複製建表 SQL（SHOW CREATE TABLE 等）、索引檢視 + 新增 / 刪除（MySQL / PostgreSQL / SQL Server / SQLite / MongoDB）
 - [x] MongoDB 查詢增強：sort / projection / limit + **聚合管線**（aggregate：`$match` / `$group` / `$sum`…）
 - [x] 側欄：搜尋過濾、表右鍵產生查詢（SQL SELECT/COUNT/INSERT、Mongo find 範本）、複製連線
 - [x] 分頁管理（中鍵 / 關閉其他 / 全部 / Ctrl+W）、連線池即時監控 + **Ping**（量測既有連線往返延遲，含 SSH 通道）、全域 UI/UX 打磨
 - [x] Redis 進階：值格式化（原始 / JSON / Hex）+ 大集合游標式分頁、**Pub/Sub** 訂閱發佈、**維運面板**（慢查詢 / 用戶端 / 大鍵）
 - [x] AI 助手（右側面板，串接本機 Claude CLI）：串流問答、撰寫 / 優化 SQL，可附帶目前連線 schema 作上下文
-- [x] 跨資料庫一致：上述能力於 MySQL / PostgreSQL / SQLite / MongoDB 對齊（識別字 / 篩選 / 索引依各庫對應）
+- [x] 跨資料庫一致：上述能力於 MySQL / PostgreSQL / SQL Server / SQLite / MongoDB 對齊（識別字 / 篩選 / 索引依各庫對應）
 - [x] **視覺化查詢建構器**：勾選表 / 欄、外鍵自動 JOIN、WHERE / 聚合 / HAVING / ORDER BY / DISTINCT / LIMIT / OFFSET、即時預覽 + 計數，帶入編輯器；可從資料表右鍵開啟
 - [x] **Excel（.xlsx）匯出 / 匯入**：純 Rust（rust_xlsxwriter / calamine），數字保真、凍結表頭 + 自動欄寬
 - [x] **查詢結果匯出**走後端統一管線（CSV / TSV / Excel / JSON / SQL / Markdown）
@@ -219,7 +227,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 前端 | React 18 + TypeScript + Vite |
 | UI | Tailwind CSS（shadcn/ui 風格） |
 | 狀態 | Zustand |
-| 後端 | Rust：sqlx (MySQL / PostgreSQL / SQLite)、mongodb、redis |
+| 後端 | Rust：sqlx (MySQL / MariaDB / PostgreSQL / SQLite)、tiberius + bb8 (SQL Server)、rust-oracle / ODPI-C (Oracle，需 Instant Client)、mongodb、redis |
 | 安全 | OS keychain（keyring）、SSH Tunnel（russh）+ host key TOFU |
 | AI 助手 | 本機 Claude CLI（Claude 訂閱登入，串流） |
 

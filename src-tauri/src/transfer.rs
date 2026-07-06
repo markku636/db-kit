@@ -44,7 +44,7 @@ pub struct TransferResult {
 /// 識別字跳脫（PostgreSQL 雙引號、其餘反引號；內部引號加倍）。
 fn quote_ident(kind: DbKind, id: &str) -> String {
     match kind {
-        DbKind::Postgres => format!("\"{}\"", id.replace('"', "\"\"")),
+        DbKind::Postgres | DbKind::Oracle => format!("\"{}\"", id.replace('"', "\"\"")),
         DbKind::Mssql => format!("[{}]", id.replace(']', "]]")),
         _ => format!("`{}`", id.replace('`', "``")),
     }

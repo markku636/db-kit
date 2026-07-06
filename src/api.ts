@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type DbKind = "mysql" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "external";
+export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "external";
 
 export type SshAuthMethod = "password" | "key";
 
@@ -181,6 +181,34 @@ export interface ColumnStats {
   distinct: number;
   min: string | null;
   max: string | null;
+  // ---- Mongo 專用（SQL 種類為 0 / 空陣列；前端以 types.length 判斷是否為 Mongo 統計）----
+  missing: number;
+  null_count: number;
+  types: [string, number][];
+  top_values: [string, number][];
+  distinct_capped: boolean;
+  sampled: number;
+}
+
+// ---- MongoDB 專屬 DTO（監控 / 進階索引 / validation）----
+export interface MongoIndexStat { name: string; ops: number; since: string; host: string }
+export interface MongoIndexOptions {
+  unique?: boolean;
+  sparse?: boolean;
+  hidden?: boolean;
+  expire_after_secs?: number | null;
+  partial_filter_json?: string | null;
+}
+export interface MongoValidation { validator_json: string; level: string; action: string }
+export interface MongoOp {
+  opid: string; op: string; ns: string; secs_running: number;
+  client: string; desc: string; command_json: string;
+  active: boolean; waiting_for_lock: boolean;
+}
+export interface MongoProfile { level: number; slow_ms: number }
+export interface MongoSlowQuery {
+  ts: string; op: string; ns: string; millis: number; plan_summary: string;
+  keys_examined: number; docs_examined: number; nreturned: number; command_json: string;
 }
 
 // DDL 結構編輯（與後端 serde tag="op" 對齊）
@@ -423,11 +451,15 @@ export interface SearchOptions {
 // 連線類型的顯示資料（色標呼應規劃文件）
 export const KIND_META: Record<DbKind, { label: string; color: string; defaultPort: number; fileBased?: boolean; external?: boolean }> = {
   mysql: { label: "MySQL", color: "#3b82f6", defaultPort: 3306 },
+  // MariaDB：後端共用 MySQL driver（線協定相容），前端獨立類型（teal 不與 mysql 藍撞色）。
+  mariadb: { label: "MariaDB", color: "#14b8a6", defaultPort: 3306 },
   postgres: { label: "PostgreSQL", color: "#6366f1", defaultPort: 5432 },
   mongo: { label: "MongoDB", color: "#22c55e", defaultPort: 27017 },
   redis: { label: "Redis", color: "#ef4444", defaultPort: 6379 },
   sqlite: { label: "SQLite", color: "#f59e0b", defaultPort: 0, fileBased: true },
   mssql: { label: "SQL Server", color: "#0ea5e9", defaultPort: 1433 },
+  // Oracle：orange-500（品牌紅 #f80000 與 Redis 紅撞色，取最近的空缺色相）。
+  oracle: { label: "Oracle", color: "#f97316", defaultPort: 1521 },
   external: { label: "External", color: "#8b5cf6", defaultPort: 0, external: true },
 };
 
@@ -439,6 +471,15 @@ export const api = {
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   // 清除外部 gateway 等驅動的查詢快取（供「重新整理」強制重抓）。
   clearCache: (id: string) => invoke<void>("clear_cache", { id }),
+  // 啟動密碼（app-lock 閘門）：Argon2 雜湊存後端 app_settings.json，明文不落地、不入 keychain。
+  hasStartupPassword: () => invoke<boolean>("has_startup_password"),
+  verifyStartupPassword: (password: string) =>
+    invoke<boolean>("verify_startup_password", { password }),
+  // current 為 null 表首次設定；已有密碼時須傳目前密碼驗證。
+  setStartupPassword: (current: string | null, next: string) =>
+    invoke<void>("set_startup_password", { current, next }),
+  clearStartupPassword: (current: string) =>
+    invoke<void>("clear_startup_password", { current }),
   // 加密匯出 / 匯入連線（含密碼；passphrase 派生金鑰 + AES-256-GCM）。回傳筆數。
   exportConnectionsEncrypted: (path: string, passphrase: string) =>
     invoke<number>("export_connections_encrypted", { path, passphrase }),
@@ -543,6 +584,25 @@ export const api = {
     invoke<string>("document_get", { id, database, table, docId }),
   documentReplace: (id: string, database: string, table: string, docId: string, docJson: string) =>
     invoke<number>("document_replace", { id, database, table, docId, docJson }),
+  // ---- MongoDB 專屬：監控 / 進階索引 / validation ----
+  mongoIndexStats: (id: string, database: string, collection: string) =>
+    invoke<MongoIndexStat[]>("mongo_index_stats", { id, database, collection }),
+  mongoCreateIndex: (id: string, database: string, collection: string, name: string, keys: [string, string][], options: MongoIndexOptions) =>
+    invoke<void>("mongo_create_index", { id, database, collection, name, keys, options }),
+  mongoGetValidation: (id: string, database: string, collection: string) =>
+    invoke<MongoValidation>("mongo_get_validation", { id, database, collection }),
+  mongoSetValidation: (id: string, database: string, collection: string, validatorJson: string, level: string, action: string) =>
+    invoke<void>("mongo_set_validation", { id, database, collection, validatorJson, level, action }),
+  mongoDbStats: (id: string, database: string) =>
+    invoke<[string, string][]>("mongo_db_stats", { id, database }),
+  mongoCurrentOps: (id: string) => invoke<MongoOp[]>("mongo_current_ops", { id }),
+  mongoKillOp: (id: string, opid: string) => invoke<void>("mongo_kill_op", { id, opid }),
+  mongoProfileGet: (id: string, database: string) =>
+    invoke<MongoProfile>("mongo_profile_get", { id, database }),
+  mongoProfileSet: (id: string, database: string, level: number, slowMs: number) =>
+    invoke<MongoProfile>("mongo_profile_set", { id, database, level, slowMs }),
+  mongoSlowQueries: (id: string, database: string, limit: number) =>
+    invoke<MongoSlowQuery[]>("mongo_slow_queries", { id, database, limit }),
   redisSlowlog: (id: string, count: number) =>
     invoke<SlowLogEntry[]>("redis_slowlog", { id, count }),
   redisClients: (id: string) => invoke<ClientInfo[]>("redis_clients", { id }),

@@ -85,8 +85,8 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
   onClose: () => void;
 }) {
   const allTypes = useMemo(() => typesForKind(kind), [kind]);
-  const supportsDefs = kind === "mysql" || kind === "postgres" || kind === "sqlite";
-  const supportsComments = kind === "mysql" || kind === "postgres";
+  const supportsDefs = kind === "mysql" || kind === "mariadb" || kind === "postgres" || kind === "sqlite";
+  const supportsComments = kind === "mysql" || kind === "mariadb" || kind === "postgres" || kind === "oracle";
   const prefs = useMemo(loadPrefs, []);
 
   const [term, setTerm] = useState("");

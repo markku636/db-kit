@@ -514,7 +514,7 @@ impl DatabaseDriver for MssqlDriver {
             }
             Err(_) => (None, None),
         };
-        Ok(ColumnStats { total, non_null, distinct, min, max })
+        Ok(ColumnStats { total, non_null, distinct, min, max, ..Default::default() })
     }
 
     async fn table_info(&self, database: &str, table: &str) -> AppResult<Vec<(String, String)>> {

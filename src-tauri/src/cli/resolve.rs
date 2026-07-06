@@ -41,21 +41,24 @@ async fn resolve_saved(needle: &str, args: &ConnArgs) -> AppResult<ConnectionCon
 fn kind_of(k: KindArg) -> DbKind {
     match k {
         KindArg::Mysql => DbKind::Mysql,
+        KindArg::Mariadb => DbKind::Mariadb,
         KindArg::Postgres => DbKind::Postgres,
         KindArg::Sqlite => DbKind::Sqlite,
         KindArg::Mongo => DbKind::Mongo,
         KindArg::Redis => DbKind::Redis,
         KindArg::Mssql => DbKind::Mssql,
+        KindArg::Oracle => DbKind::Oracle,
     }
 }
 
 fn default_port(kind: DbKind) -> u16 {
     match kind {
-        DbKind::Mysql => 3306,
+        DbKind::Mysql | DbKind::Mariadb => 3306,
         DbKind::Postgres => 5432,
         DbKind::Mongo => 27017,
         DbKind::Redis => 6379,
         DbKind::Mssql => 1433,
+        DbKind::Oracle => 1521,
         DbKind::Sqlite | DbKind::External => 0,
     }
 }
@@ -132,6 +135,7 @@ fn split_scheme(url: &str) -> (Option<String>, String) {
     const SCHEMES: &[&str] = &[
         "sqlite",
         "mysql",
+        "mariadb",
         "postgres",
         "postgresql",
         "mongodb",
@@ -139,6 +143,7 @@ fn split_scheme(url: &str) -> (Option<String>, String) {
         "redis",
         "mssql",
         "sqlserver",
+        "oracle",
     ];
     if let Some((s, r)) = url.split_once(':') {
         if SCHEMES.contains(&s.to_ascii_lowercase().as_str()) {
@@ -155,10 +160,12 @@ fn parse_url(url: &str, kind_hint: Option<DbKind>) -> AppResult<Parsed> {
 
     let kind = match scheme.as_deref() {
         Some("mysql") => Some(DbKind::Mysql),
+        Some("mariadb") => Some(DbKind::Mariadb),
         Some("postgres") | Some("postgresql") => Some(DbKind::Postgres),
         Some("mongodb") | Some("mongo") => Some(DbKind::Mongo),
         Some("redis") => Some(DbKind::Redis),
         Some("mssql") | Some("sqlserver") => Some(DbKind::Mssql),
+        Some("oracle") => Some(DbKind::Oracle),
         Some("sqlite") => Some(DbKind::Sqlite),
         _ => kind_hint,
     };

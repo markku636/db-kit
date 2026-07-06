@@ -1,13 +1,13 @@
 use futures::stream::TryStreamExt;
 use mongodb::bson::{doc, Bson, Document};
-use mongodb::options::{ClientOptions, FindOptions, IndexOptions};
+use mongodb::options::{AggregateOptions, ClientOptions, FindOptions, IndexOptions};
 use mongodb::{Client, IndexModel};
 use std::time::Duration;
 
 use crate::db::{
-    finalize_hits, fmt_bytes, CellEdit, ColumnInfo, ConnectionConfig, DataQuery, DatabaseDriver, Filter,
-    IndexInfo, PagedData, PoolStatus, QueryResult, RowDelete, RowInsert, SearchHit, SearchOptions, Sort,
-    SortDir, TableInfo,
+    finalize_hits, fmt_bytes, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, Filter,
+    IndexInfo, PagedData, PoolStatus, QueryResult, RowDelete, RowInsert, SearchHit, SearchOptions,
+    ServerInfoSection, Sort, SortDir, TableInfo,
 };
 use crate::error::{AppError, AppResult};
 
@@ -723,13 +723,491 @@ impl DatabaseDriver for MongoDriver {
         Ok(res.modified_count)
     }
 
+    /// 執行計畫：輸入與 query() 相同的 JSON DSL（find 或 pipeline），包成 explain 指令送出。
+    /// 回傳 relaxed extended JSON 單格（前端 mongoExplain.ts 解析成 stage 樹；解析失敗可原樣顯示）。
+    /// 注意：verbosity=executionStats / allPlansExecution 會「實際執行」查詢，昂貴管線請用 queryPlanner。
+    async fn explain(&self, sql: &str) -> AppResult<QueryResult> {
+        let parsed: serde_json::Value = serde_json::from_str(sql).map_err(|_| {
+            AppError::Query(
+                "MongoDB 執行計畫請提供與查詢相同的 JSON：{\"db\":\"..\",\"collection\":\"..\",\"filter\":{}}（可加 \"verbosity\"）".to_string(),
+            )
+        })?;
+        let (db, cmd) = build_explain_command(&parsed)?;
+        let reply = self
+            .db_handle(&db)
+            .run_command(cmd)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        // relaxed（而非 canonical）extJSON：數字維持 JSON number，前端解析 / 人眼閱讀都直觀。
+        let ext = Bson::Document(reply).into_relaxed_extjson();
+        let json = serde_json::to_string(&ext).map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(QueryResult {
+            columns: vec!["explain".to_string()],
+            rows: vec![vec![Some(json)]],
+            rows_affected: 0,
+        })
+    }
+
+    /// 欄位統計（Mongo 版）：單趟 $facet 聚合算 缺欄 / null / 型別分布 / Top-10 / 相異值估計 / 範圍。
+    /// 大集合（估計 > 20k 文件）先 $sample 抽樣，避免全掃卡住；sampled 欄位回報抽樣數供 UI 標註。
+    /// 欄名含 `.` 會被聚合視為巢狀路徑（Mongo 語意即如此），屬預期行為。
+    async fn column_stats(
+        &self,
+        database: &str,
+        table: &str,
+        column: &str,
+    ) -> AppResult<ColumnStats> {
+        const SAMPLE_CAP: u64 = 20_000;
+        const DISTINCT_CAP: i64 = 1001; // 相異值計數上限：達 1001 表示「≥ 1001」（distinct_capped）
+        let coll = self.db_handle(database).collection::<Document>(table);
+        let est = coll.estimated_document_count().await.unwrap_or(0);
+        let use_sample = est > SAMPLE_CAP;
+
+        let field = column.to_string();
+        let fref = format!("${field}");
+        let exists = doc! { &field: { "$exists": true } };
+        let non_null = doc! { "$and": [ { &field: { "$exists": true } }, { &field: { "$not": { "$type": "null" } } } ] };
+
+        let mut pipeline: Vec<Document> = Vec::new();
+        if use_sample {
+            pipeline.push(doc! { "$sample": { "size": SAMPLE_CAP as i64 } });
+        }
+        pipeline.push(doc! { "$facet": {
+            "total":    [ { "$count": "n" } ],
+            "missing":  [ { "$match": { &field: { "$exists": false } } }, { "$count": "n" } ],
+            "nulls":    [ { "$match": { &field: { "$type": "null" } } }, { "$count": "n" } ],
+            "types":    [ { "$match": &exists },
+                          { "$group": { "_id": { "$type": &fref }, "n": { "$sum": 1 } } },
+                          { "$sort": { "n": -1 } } ],
+            "top":      [ { "$match": &non_null },
+                          { "$group": { "_id": &fref, "n": { "$sum": 1 } } },
+                          { "$sort": { "n": -1 } }, { "$limit": 10 } ],
+            "distinct": [ { "$match": &exists },
+                          { "$group": { "_id": &fref } }, { "$limit": DISTINCT_CAP }, { "$count": "n" } ],
+            "range":    [ { "$match": &non_null },
+                          { "$group": { "_id": Bson::Null, "min": { "$min": &fref }, "max": { "$max": &fref } } } ],
+        }});
+
+        let opts = AggregateOptions::builder()
+            .allow_disk_use(true)
+            .max_time(Duration::from_secs(15))
+            .build();
+        let mut cursor = coll
+            .aggregate(pipeline)
+            .with_options(opts)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let facets = cursor
+            .try_next()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+            .ok_or_else(|| AppError::Query("欄位統計無結果".to_string()))?;
+
+        // $facet 各結果為文件陣列；count 型 facet 取首件的 n。
+        let facet_count = |name: &str| -> u64 {
+            facets
+                .get_array(name)
+                .ok()
+                .and_then(|a| a.first())
+                .and_then(|b| b.as_document())
+                .and_then(|d| doc_num(d, "n"))
+                .unwrap_or(0) as u64
+        };
+        let scanned = facet_count("total");
+        let missing = facet_count("missing");
+        let null_count = facet_count("nulls");
+        let distinct_raw = facet_count("distinct");
+        let distinct_capped = distinct_raw >= DISTINCT_CAP as u64;
+
+        // (值, 次數) 清單型 facet（types / top）：_id 為分組鍵。
+        let pairs = |name: &str| -> Vec<(String, u64)> {
+            facets
+                .get_array(name)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|b| b.as_document())
+                        .map(|d| {
+                            let key = d.get("_id").map(cell_display).unwrap_or_default();
+                            let n = doc_num(d, "n").unwrap_or(0) as u64;
+                            (key, n)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let types = pairs("types");
+        let top_values = pairs("top");
+
+        // 範圍（min/max 依 BSON 型別排序；混型欄位跨型別比較可能看似奇怪，UI 有註記）。
+        let (min, max) = facets
+            .get_array("range")
+            .ok()
+            .and_then(|a| a.first())
+            .and_then(|b| b.as_document())
+            .map(|d| (d.get("min").map(cell_display), d.get("max").map(cell_display)))
+            .unwrap_or((None, None));
+
+        Ok(ColumnStats {
+            // 抽樣時 total 回集合估計數（統計本身基於抽樣）；全量時即掃描數。
+            total: if use_sample { est } else { scanned },
+            non_null: scanned.saturating_sub(missing).saturating_sub(null_count),
+            distinct: distinct_raw,
+            min,
+            max,
+            missing,
+            null_count,
+            types,
+            top_values,
+            distinct_capped,
+            sampled: if use_sample { scanned } else { 0 },
+        })
+    }
+
+    /// 伺服器狀態：serverStatus + buildInfo → 分區 (標籤, 值) 清單（比照 Redis INFO 的呈現）。
+    /// 需要 serverStatus 權限；受限帳號（部分 Atlas 角色）會收到權限錯誤原樣呈現。
+    async fn server_info(&self) -> AppResult<Vec<ServerInfoSection>> {
+        let admin = self.client.database("admin");
+        let status = admin
+            .run_command(doc! { "serverStatus": 1 })
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        // buildInfo 失敗不阻斷（版本欄留空即可）。
+        let build = admin
+            .run_command(doc! { "buildInfo": 1 })
+            .await
+            .unwrap_or_default();
+        Ok(server_status_sections(&status, &build))
+    }
+
     fn pool_status(&self) -> PoolStatus {
-        // mongodb crate 未公開即時池統計，回傳 0（介面相容用）。
+        // mongodb crate 未公開即時池統計，回傳 0（介面相容用）；
+        // 實際連線壓力見 server_info 的「連線」區（serverStatus.connections）。
         PoolStatus { size: 0, idle: 0, in_use: 0 }
     }
 
     async fn close(&self) {
         // mongodb Client 於 drop 時自行清理連線；無顯式 close。
+    }
+}
+
+// ---- Mongo 專屬操作（監控 / 進階索引 / validation）----
+// 經 manager.mongo_driver() 由 mongo_* 專屬命令直接呼叫（Redis 模式），不擴充 DatabaseDriver trait。
+impl MongoDriver {
+    /// $indexStats：各索引自統計起（mongod 重啟即重置）的存取次數。
+    /// view 上會失敗、需 indexStats 權限——錯誤原樣回傳，前端降級顯示。
+    pub async fn index_stats(&self, database: &str, collection: &str) -> AppResult<Vec<crate::db::MongoIndexStat>> {
+        let coll = self.db_handle(database).collection::<Document>(collection);
+        let mut cursor = coll
+            .aggregate(vec![doc! { "$indexStats": {} }])
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let mut out = Vec::new();
+        while let Some(d) = cursor
+            .try_next()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+        {
+            let accesses = d.get_document("accesses").ok();
+            out.push(crate::db::MongoIndexStat {
+                name: d.get_str("name").unwrap_or_default().to_string(),
+                ops: accesses.and_then(|a| doc_num(a, "ops")).unwrap_or(0).max(0) as u64,
+                since: accesses
+                    .and_then(|a| a.get_datetime("since").ok())
+                    .and_then(|dt| dt.try_to_rfc3339_string().ok())
+                    .unwrap_or_default(),
+                host: d.get_str("host").unwrap_or_default().to_string(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// 進階索引建立：keys 為 (欄位, 規格) 有序清單（"1"/"-1"/"text"/"2dsphere"/"hashed"），
+    /// options 含 unique / sparse / hidden / TTL / partialFilterExpression。
+    pub async fn create_index_advanced(
+        &self,
+        database: &str,
+        collection: &str,
+        name: &str,
+        keys: &[(String, String)],
+        options: &crate::db::MongoIndexOptions,
+    ) -> AppResult<()> {
+        if keys.is_empty() {
+            return Err(AppError::Query("索引至少需一個欄位".to_string()));
+        }
+        let mut key_doc = Document::new();
+        for (field, spec) in keys {
+            let v: Bson = match spec.trim() {
+                "1" | "" => Bson::Int32(1),
+                "-1" => Bson::Int32(-1),
+                other @ ("text" | "2dsphere" | "hashed") => Bson::String(other.to_string()),
+                other => return Err(AppError::Query(format!("索引規格無效：{other}（可用 1 / -1 / text / 2dsphere / hashed）"))),
+            };
+            key_doc.insert(field.clone(), v);
+        }
+        let mut opts = IndexOptions::builder()
+            .unique(options.unique)
+            .sparse(options.sparse)
+            .build();
+        if options.hidden {
+            opts.hidden = Some(true); // 4.4+；舊版由伺服器回錯
+        }
+        if !name.trim().is_empty() {
+            opts.name = Some(name.trim().to_string());
+        }
+        if let Some(secs) = options.expire_after_secs {
+            opts.expire_after = Some(Duration::from_secs(secs));
+        }
+        if let Some(pf) = options.partial_filter_json.as_deref().filter(|s| !s.trim().is_empty()) {
+            let v: serde_json::Value = serde_json::from_str(pf)
+                .map_err(|e| AppError::Query(format!("partialFilterExpression 需為合法 JSON：{e}")))?;
+            match bson_from_json(&v) {
+                Bson::Document(d) if !d.is_empty() => opts.partial_filter_expression = Some(d),
+                _ => return Err(AppError::Query("partialFilterExpression 必須是非空 JSON 物件".to_string())),
+            }
+        }
+        let model = IndexModel::builder().keys(key_doc).options(opts).build();
+        self.db_handle(database)
+            .collection::<Document>(collection)
+            .create_index(model)
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    /// 讀取集合驗證規則（listCollections options 的 validator / validationLevel / validationAction）。
+    pub async fn get_validation(&self, database: &str, collection: &str) -> AppResult<crate::db::MongoValidation> {
+        let reply = self
+            .db_handle(database)
+            .run_command(doc! { "listCollections": 1, "filter": { "name": collection } })
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let options = doc_path(&reply, &["cursor"])
+            .and_then(|b| b.as_document())
+            .and_then(|c| c.get_array("firstBatch").ok())
+            .and_then(|a| a.first())
+            .and_then(|b| b.as_document())
+            .and_then(|d| d.get_document("options").ok());
+        let validator_json = options
+            .and_then(|o| o.get_document("validator").ok())
+            .filter(|v| !v.is_empty())
+            .map(|v| {
+                let ext = Bson::Document(v.clone()).into_canonical_extjson();
+                serde_json::to_string_pretty(&ext).unwrap_or_default()
+            })
+            .unwrap_or_default();
+        Ok(crate::db::MongoValidation {
+            validator_json,
+            level: options
+                .and_then(|o| o.get_str("validationLevel").ok())
+                .unwrap_or("strict")
+                .to_string(),
+            action: options
+                .and_then(|o| o.get_str("validationAction").ok())
+                .unwrap_or("error")
+                .to_string(),
+        })
+    }
+
+    /// 設定集合驗證規則（collMod）。validator_json 空字串＝清除規則（設為空物件）。
+    pub async fn set_validation(
+        &self,
+        database: &str,
+        collection: &str,
+        validator_json: &str,
+        level: &str,
+        action: &str,
+    ) -> AppResult<()> {
+        // 系統集合硬擋（比照 drop_database 的 SYS 護欄精神）。
+        if collection.starts_with("system.") {
+            return Err(AppError::Query("拒絕修改系統集合的驗證規則".to_string()));
+        }
+        if !matches!(level, "off" | "moderate" | "strict") {
+            return Err(AppError::Query(format!("validationLevel 無效：{level}")));
+        }
+        if !matches!(action, "warn" | "error") {
+            return Err(AppError::Query(format!("validationAction 無效：{action}")));
+        }
+        let validator: Document = if validator_json.trim().is_empty() {
+            Document::new()
+        } else {
+            let v: serde_json::Value = serde_json::from_str(validator_json)
+                .map_err(|e| AppError::Query(format!("validator 需為合法 JSON：{e}")))?;
+            match bson_from_json(&v) {
+                Bson::Document(d) => d,
+                _ => return Err(AppError::Query("validator 必須是 JSON 物件".to_string())),
+            }
+        };
+        self.db_handle(database)
+            .run_command(doc! {
+                "collMod": collection,
+                "validator": validator,
+                "validationLevel": level,
+                "validationAction": action,
+            })
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    /// dbStats：資料庫層級統計（與 table_info 的 collStats 對稱）。
+    pub async fn db_stats(&self, database: &str) -> AppResult<Vec<(String, String)>> {
+        let stats = self
+            .db_handle(database)
+            .run_command(doc! { "dbStats": 1 })
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let num = |k: &str| doc_num(&stats, k);
+        let mut out: Vec<(String, String)> = Vec::new();
+        if let Some(v) = num("collections") {
+            out.push(("集合數".into(), v.to_string()));
+        }
+        if let Some(v) = num("objects") {
+            out.push(("文件數".into(), v.to_string()));
+        }
+        if let Some(v) = num("avgObjSize") {
+            out.push(("平均文件大小".into(), fmt_bytes(v)));
+        }
+        if let Some(v) = num("dataSize") {
+            out.push(("資料大小".into(), fmt_bytes(v)));
+        }
+        if let Some(v) = num("storageSize") {
+            out.push(("儲存大小".into(), fmt_bytes(v)));
+        }
+        if let Some(v) = num("indexes") {
+            out.push(("索引數".into(), v.to_string()));
+        }
+        if let Some(v) = num("indexSize") {
+            out.push(("索引大小".into(), fmt_bytes(v)));
+        }
+        Ok(out)
+    }
+
+    /// 進行中操作：admin 上跑 $currentOp（排除閒置連線）。
+    /// allUsers:true 需 inprog 權限；被拒時降級為「僅自己的操作」再試一次。
+    pub async fn current_ops(&self) -> AppResult<Vec<crate::db::MongoOp>> {
+        let admin = self.client.database("admin");
+        let run = |all_users: bool| {
+            let admin = admin.clone();
+            async move {
+                admin
+                    .aggregate(vec![doc! { "$currentOp": { "allUsers": all_users, "idleConnections": false } }])
+                    .await
+            }
+        };
+        let mut cursor = match run(true).await {
+            Ok(c) => c,
+            Err(_) => run(false)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?,
+        };
+        let mut out = Vec::new();
+        while let Some(d) = cursor
+            .try_next()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+        {
+            // opid：單機為數字、sharded 為 "shard:123" 字串 → 統一字串。
+            let opid = match d.get("opid") {
+                Some(Bson::Int32(n)) => n.to_string(),
+                Some(Bson::Int64(n)) => n.to_string(),
+                Some(Bson::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            out.push(crate::db::MongoOp {
+                opid,
+                op: d.get_str("op").unwrap_or_default().to_string(),
+                ns: d.get_str("ns").unwrap_or_default().to_string(),
+                secs_running: doc_num(&d, "secs_running").unwrap_or(0),
+                client: d.get_str("client").unwrap_or_default().to_string(),
+                desc: d.get_str("desc").unwrap_or_default().to_string(),
+                command_json: d
+                    .get_document("command")
+                    .map(|c| cell_display(&Bson::Document(c.clone())))
+                    .unwrap_or_default(),
+                active: d.get_bool("active").unwrap_or(false),
+                waiting_for_lock: d.get_bool("waitingForLock").unwrap_or(false),
+            });
+        }
+        Ok(out)
+    }
+
+    /// 終止操作（killOp）。opid 可為數字或 sharded 字串。
+    pub async fn kill_op(&self, opid: &str) -> AppResult<()> {
+        let op: Bson = match opid.parse::<i64>() {
+            Ok(n) if i32::try_from(n).is_ok() => Bson::Int32(n as i32),
+            Ok(n) => Bson::Int64(n),
+            Err(_) => Bson::String(opid.to_string()),
+        };
+        self.client
+            .database("admin")
+            .run_command(doc! { "killOp": 1, "op": op })
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    /// 讀取 Profiler 設定（profile: -1）。
+    pub async fn profile_get(&self, database: &str) -> AppResult<crate::db::MongoProfile> {
+        let d = self
+            .db_handle(database)
+            .run_command(doc! { "profile": -1 })
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(crate::db::MongoProfile {
+            level: doc_num(&d, "was").unwrap_or(0) as i32,
+            slow_ms: doc_num(&d, "slowms").unwrap_or(100),
+        })
+    }
+
+    /// 設定 Profiler（level 0-2 + slowms），回傳設定後的實際值。
+    /// mongos 不支援 per-database profiling —— 錯誤原樣呈現。
+    pub async fn profile_set(&self, database: &str, level: i32, slow_ms: i64) -> AppResult<crate::db::MongoProfile> {
+        if !(0..=2).contains(&level) {
+            return Err(AppError::Query("profiler level 需為 0 / 1 / 2".to_string()));
+        }
+        self.db_handle(database)
+            .run_command(doc! { "profile": level, "slowms": slow_ms })
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        self.profile_get(database).await
+    }
+
+    /// 讀 system.profile 慢查詢（新到舊）。集合不存在（未開過 profiler）時 find 自然回空。
+    pub async fn slow_queries(&self, database: &str, limit: u32) -> AppResult<Vec<crate::db::MongoSlowQuery>> {
+        let limit = limit.clamp(1, 500) as i64;
+        let coll = self.db_handle(database).collection::<Document>("system.profile");
+        let opts = FindOptions::builder().sort(doc! { "ts": -1 }).limit(limit).build();
+        let mut cursor = coll
+            .find(doc! {})
+            .with_options(opts)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let mut out = Vec::new();
+        while let Some(d) = cursor
+            .try_next()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+        {
+            out.push(crate::db::MongoSlowQuery {
+                ts: d
+                    .get_datetime("ts")
+                    .ok()
+                    .and_then(|dt| dt.try_to_rfc3339_string().ok())
+                    .unwrap_or_default(),
+                op: d.get_str("op").unwrap_or_default().to_string(),
+                ns: d.get_str("ns").unwrap_or_default().to_string(),
+                millis: doc_num(&d, "millis").unwrap_or(0),
+                plan_summary: d.get_str("planSummary").unwrap_or_default().to_string(),
+                keys_examined: doc_num(&d, "keysExamined").unwrap_or(0),
+                docs_examined: doc_num(&d, "docsExamined").unwrap_or(0),
+                nreturned: doc_num(&d, "nreturned").unwrap_or(0),
+                command_json: d
+                    .get_document("command")
+                    .map(|c| cell_display(&Bson::Document(c.clone())))
+                    .unwrap_or_default(),
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -998,10 +1476,281 @@ fn bson_from_json(v: &serde_json::Value) -> Bson {
     }
 }
 
+/// 文件數值欄位（i32 / i64 / f64 依版本不定）統一取成 i64。
+fn doc_num(d: &Document, key: &str) -> Option<i64> {
+    d.get_i64(key)
+        .ok()
+        .or_else(|| d.get_i32(key).ok().map(|v| v as i64))
+        .or_else(|| d.get_f64(key).ok().map(|v| v as i64))
+}
+
+/// 由查詢 DSL 組出 explain 指令（純函式，供單元測試）。
+/// find 形：{"explain":{"find":coll,filter,sort,projection,limit},"verbosity":v}；
+/// pipeline 形：{"explain":{"aggregate":coll,"pipeline":[…],"cursor":{}},"verbosity":v}
+/// （用頂層 explain 指令而非 aggregate 的 explain:true——後者不接受 verbosity）。
+fn build_explain_command(parsed: &serde_json::Value) -> AppResult<(String, Document)> {
+    let db = parsed
+        .get("db")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Query("缺少 db".to_string()))?;
+    let coll = parsed
+        .get("collection")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Query("缺少 collection".to_string()))?;
+    let verbosity = match parsed.get("verbosity").and_then(|v| v.as_str()) {
+        None => "executionStats",
+        Some(v @ ("queryPlanner" | "executionStats" | "allPlansExecution")) => v,
+        Some(other) => {
+            return Err(AppError::Query(format!(
+                "verbosity 無效：{other}（可用 queryPlanner / executionStats / allPlansExecution）"
+            )))
+        }
+    };
+    if parsed.get("insert").is_some() || parsed.get("update").is_some() || parsed.get("delete").is_some() {
+        return Err(AppError::Query("執行計畫僅支援 find / aggregate（pipeline）".to_string()));
+    }
+
+    let inner = if let Some(pv) = parsed.get("pipeline") {
+        let arr = pv
+            .as_array()
+            .ok_or_else(|| AppError::Query("pipeline 必須是陣列".to_string()))?;
+        let mut stages: Vec<Bson> = Vec::with_capacity(arr.len());
+        for v in arr {
+            match bson_from_json(v) {
+                Bson::Document(d) => stages.push(Bson::Document(d)),
+                _ => return Err(AppError::Query("pipeline 每個階段必須是物件".to_string())),
+            }
+        }
+        doc! { "aggregate": coll, "pipeline": stages, "cursor": {} }
+    } else {
+        let mut find = doc! { "find": coll };
+        let as_doc = |key: &str| -> Option<Document> {
+            parsed.get(key).map(bson_from_json).and_then(|b| match b {
+                Bson::Document(d) => Some(d),
+                _ => None,
+            })
+        };
+        if let Some(f) = as_doc("filter") {
+            find.insert("filter", f);
+        }
+        if let Some(s) = as_doc("sort") {
+            find.insert("sort", s);
+        }
+        if let Some(p) = as_doc("projection") {
+            find.insert("projection", p);
+        }
+        // 與 query() 相同的預設 limit 200：讓 explain 反映實際會執行的查詢形狀。
+        let limit = parsed
+            .get("limit")
+            .and_then(|v| v.as_i64())
+            .filter(|n| *n > 0)
+            .unwrap_or(200);
+        find.insert("limit", limit);
+        find
+    };
+    Ok((db.to_string(), doc! { "explain": inner, "verbosity": verbosity }))
+}
+
+/// 沿巢狀路徑取子文件欄位。
+fn doc_path<'a>(d: &'a Document, path: &[&str]) -> Option<&'a Bson> {
+    let (first, rest) = path.split_first()?;
+    let b = d.get(*first)?;
+    if rest.is_empty() {
+        Some(b)
+    } else {
+        doc_path(b.as_document()?, rest)
+    }
+}
+
+/// 秒數 → 「N 天 HH:MM:SS」。
+fn fmt_uptime(secs: i64) -> String {
+    let d = secs / 86_400;
+    let h = (secs % 86_400) / 3_600;
+    let m = (secs % 3_600) / 60;
+    let s = secs % 60;
+    if d > 0 {
+        format!("{d} 天 {h:02}:{m:02}:{s:02}")
+    } else {
+        format!("{h:02}:{m:02}:{s:02}")
+    }
+}
+
+/// serverStatus + buildInfo → 分區顯示清單（純函式，供單元測試）。
+/// 各區皆 best-effort：欄位缺漏（版本 / 權限差異）就略過該列，不整段失敗。
+fn server_status_sections(status: &Document, build: &Document) -> Vec<ServerInfoSection> {
+    let mut sections: Vec<ServerInfoSection> = Vec::new();
+    let path_num = |path: &[&str]| -> Option<i64> {
+        let (last, init) = path.split_last()?;
+        let d = if init.is_empty() {
+            status
+        } else {
+            doc_path(status, init)?.as_document()?
+        };
+        doc_num(d, last)
+    };
+    let path_str = |d: &Document, path: &[&str]| -> Option<String> {
+        doc_path(d, path).and_then(|b| b.as_str().map(|s| s.to_string()))
+    };
+
+    // 伺服器
+    let mut server: Vec<(String, String)> = Vec::new();
+    if let Some(v) = path_str(build, &["version"]).or_else(|| path_str(status, &["version"])) {
+        server.push(("版本".into(), v));
+    }
+    if let Some(h) = path_str(status, &["host"]) {
+        server.push(("主機".into(), h));
+    }
+    if let Some(p) = path_str(status, &["process"]) {
+        server.push(("程序".into(), p)); // mongod / mongos
+    }
+    if let Some(u) = path_num(&["uptime"]) {
+        server.push(("運行時間".into(), fmt_uptime(u)));
+    }
+    if !server.is_empty() {
+        sections.push(ServerInfoSection { name: "伺服器".into(), items: server });
+    }
+
+    // 連線
+    let mut conns: Vec<(String, String)> = Vec::new();
+    for (label, key) in [("目前", "current"), ("可用", "available"), ("活躍", "active"), ("累計建立", "totalCreated")] {
+        if let Some(v) = path_num(&["connections", key]) {
+            conns.push((label.into(), v.to_string()));
+        }
+    }
+    if !conns.is_empty() {
+        sections.push(ServerInfoSection { name: "連線".into(), items: conns });
+    }
+
+    // 操作計數（自啟動累計）
+    let mut ops: Vec<(String, String)> = Vec::new();
+    for key in ["insert", "query", "update", "delete", "getmore", "command"] {
+        if let Some(v) = path_num(&["opcounters", key]) {
+            ops.push((key.into(), v.to_string()));
+        }
+    }
+    if !ops.is_empty() {
+        sections.push(ServerInfoSection { name: "操作計數".into(), items: ops });
+    }
+
+    // 記憶體（mem.* 單位為 MB；WiredTiger cache 為 bytes）
+    let mut mem: Vec<(String, String)> = Vec::new();
+    if let Some(v) = path_num(&["mem", "resident"]) {
+        mem.push(("常駐記憶體".into(), fmt_bytes(v.saturating_mul(1024 * 1024))));
+    }
+    if let Some(v) = path_num(&["mem", "virtual"]) {
+        mem.push(("虛擬記憶體".into(), fmt_bytes(v.saturating_mul(1024 * 1024))));
+    }
+    if let Some(v) = path_num(&["wiredTiger", "cache", "bytes currently in the cache"]) {
+        mem.push(("WT 快取使用".into(), fmt_bytes(v)));
+    }
+    if let Some(v) = path_num(&["wiredTiger", "cache", "maximum bytes configured"]) {
+        mem.push(("WT 快取上限".into(), fmt_bytes(v)));
+    }
+    if !mem.is_empty() {
+        sections.push(ServerInfoSection { name: "記憶體".into(), items: mem });
+    }
+
+    // 網路
+    let mut net: Vec<(String, String)> = Vec::new();
+    if let Some(v) = path_num(&["network", "bytesIn"]) {
+        net.push(("流入".into(), fmt_bytes(v)));
+    }
+    if let Some(v) = path_num(&["network", "bytesOut"]) {
+        net.push(("流出".into(), fmt_bytes(v)));
+    }
+    if let Some(v) = path_num(&["network", "numRequests"]) {
+        net.push(("請求數".into(), v.to_string()));
+    }
+    if !net.is_empty() {
+        sections.push(ServerInfoSection { name: "網路".into(), items: net });
+    }
+
+    // 複寫（單機無 repl 區塊 → 整段略過）
+    if let Some(repl) = doc_path(status, &["repl"]).and_then(|b| b.as_document()) {
+        let mut r: Vec<(String, String)> = Vec::new();
+        if let Some(v) = repl.get_str("setName").ok() {
+            r.push(("Replica Set".into(), v.to_string()));
+        }
+        if let Ok(primary) = repl.get_bool("isWritablePrimary") {
+            r.push(("角色".into(), if primary { "Primary".into() } else { "Secondary".into() }));
+        }
+        if let Ok(hosts) = repl.get_array("hosts") {
+            let list: Vec<String> = hosts.iter().filter_map(|b| b.as_str().map(String::from)).collect();
+            if !list.is_empty() {
+                r.push(("成員".into(), list.join(", ")));
+            }
+        }
+        if !r.is_empty() {
+            sections.push(ServerInfoSection { name: "複寫".into(), items: r });
+        }
+    }
+
+    sections
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{guess_bson, like_to_regex};
-    use mongodb::bson::Bson;
+    use super::{build_explain_command, guess_bson, like_to_regex, server_status_sections};
+    use mongodb::bson::{doc, Bson};
+
+    #[test]
+    fn explain_command_find_defaults() {
+        let dsl: serde_json::Value =
+            serde_json::from_str(r#"{"db":"shop","collection":"orders","filter":{"status":"paid"},"sort":{"created":-1}}"#)
+                .unwrap();
+        let (db, cmd) = build_explain_command(&dsl).unwrap();
+        assert_eq!(db, "shop");
+        assert_eq!(cmd.get_str("verbosity").unwrap(), "executionStats"); // 預設
+        let inner = cmd.get_document("explain").unwrap();
+        assert_eq!(inner.get_str("find").unwrap(), "orders");
+        assert_eq!(inner.get_document("filter").unwrap().get_str("status").unwrap(), "paid");
+        assert_eq!(inner.get_i64("limit").unwrap(), 200); // 與 query() 相同的預設 limit
+    }
+
+    #[test]
+    fn explain_command_pipeline_uses_top_level_form() {
+        let dsl: serde_json::Value = serde_json::from_str(
+            r#"{"db":"d","collection":"c","pipeline":[{"$match":{}}],"verbosity":"queryPlanner"}"#,
+        )
+        .unwrap();
+        let (_, cmd) = build_explain_command(&dsl).unwrap();
+        assert_eq!(cmd.get_str("verbosity").unwrap(), "queryPlanner");
+        let inner = cmd.get_document("explain").unwrap();
+        assert_eq!(inner.get_str("aggregate").unwrap(), "c");
+        assert!(inner.get_array("pipeline").is_ok());
+        assert!(inner.get_document("cursor").is_ok()); // aggregate 指令必帶 cursor
+    }
+
+    #[test]
+    fn explain_command_rejects_writes_and_bad_verbosity() {
+        let w: serde_json::Value =
+            serde_json::from_str(r#"{"db":"d","collection":"c","insert":[{}]}"#).unwrap();
+        assert!(build_explain_command(&w).is_err());
+        let v: serde_json::Value =
+            serde_json::from_str(r#"{"db":"d","collection":"c","verbosity":"nope"}"#).unwrap();
+        assert!(build_explain_command(&v).is_err());
+    }
+
+    #[test]
+    fn server_status_sections_extracts_core_metrics() {
+        let status = doc! {
+            "host": "db1", "process": "mongod", "uptime": 90_061i64, // 1 天 01:01:01
+            "connections": { "current": 5i32, "available": 995i32 },
+            "opcounters": { "insert": 10i64, "query": 20i64 },
+            "mem": { "resident": 256i32 },
+            "repl": { "setName": "rs0", "isWritablePrimary": true, "hosts": ["a:27017", "b:27017"] },
+        };
+        let build = doc! { "version": "7.0.5" };
+        let secs = server_status_sections(&status, &build);
+        let find = |name: &str| secs.iter().find(|s| s.name == name).unwrap();
+        assert!(find("伺服器").items.iter().any(|(k, v)| k == "版本" && v == "7.0.5"));
+        assert!(find("伺服器").items.iter().any(|(k, v)| k == "運行時間" && v.contains("1 天")));
+        assert!(find("連線").items.iter().any(|(k, v)| k == "目前" && v == "5"));
+        assert!(find("操作計數").items.iter().any(|(k, v)| k == "insert" && v == "10"));
+        assert!(find("複寫").items.iter().any(|(k, v)| k == "角色" && v == "Primary"));
+        // 無 network 區塊 → 該 section 不出現。
+        assert!(secs.iter().all(|s| s.name != "網路"));
+    }
 
     #[test]
     fn guess_bson_preserves_non_canonical_numbers() {

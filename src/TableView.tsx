@@ -8,7 +8,8 @@ import {
 import Icon from "./ui/Icon";
 import { Button, EmptyState } from "./ui/index";
 import {
-  api, ColumnInfo, DbKind, ErRelation, Filter as FilterCond, ForeignKeyInfo, IndexInfo, KeyDetail, KeyEdit, KeyPage, PagedData, RowInsert, Sort, SortDir,
+  api, ColumnInfo, ColumnStats, DbKind, ErRelation, Filter as FilterCond, ForeignKeyInfo, IndexInfo, KeyDetail, KeyEdit, KeyPage,
+  MongoIndexOptions, MongoIndexStat, MongoValidation, PagedData, RowInsert, Sort, SortDir,
 } from "./api";
 import { OpenTab, useStore } from "./store";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
@@ -109,10 +110,12 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // Redis：雙擊 key 列顯示鍵詳情；右鍵叫出操作選單
   const isRedis = useIsRedis(tab.connId);
   const connKind = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.kind);
-  const isSqlKind = connKind === "mysql" || connKind === "postgres" || connKind === "sqlite" || connKind === "mssql";
+  const isSqlKind = connKind === "mysql" || connKind === "mariadb" || connKind === "postgres" || connKind === "sqlite" || connKind === "mssql" || connKind === "oracle";
   const isMongo = connKind === "mongo";
   // Mongo：整份文件 JSON 編輯器（開啟時記錄列索引，用 row_ids 定位）。
   const [docEdit, setDocEdit] = useState<number | null>(null);
+  // Mongo 欄位統計視窗（型別分布 / Top 值；SQL 種類走 toast 不開窗）。
+  const [fieldStats, setFieldStats] = useState<{ col: string; stats: ColumnStats } | null>(null);
   const [detailKey, setDetailKey] = useState<string | null>(null);
   const [rowMenu, setRowMenu] = useState<{ key: string; ttl: string | null; x: number; y: number } | null>(null);
   // Redis 鍵檢視模式：樹狀（命名空間資料夾）/ 網格（key 列表）。記憶於 localStorage。
@@ -684,9 +687,14 @@ function DataPane({ tab }: { tab: OpenTab }) {
     setInserting(true);
   };
   // 欄位資料剖析（致敬 Navicat / DataGrip）：總數 / 非空 / 相異。
+  // Mongo 回傳含型別分布 / Top 值等豐富統計（types 非空）→ 開統計視窗；SQL 維持輕量 toast。
   const colStats = async (col: string) => {
     try {
       const s = await api.columnStats(tab.connId, tab.database, tab.table, col);
+      if (s.types && s.types.length > 0) {
+        setFieldStats({ col, stats: s });
+        return;
+      }
       const range = s.min !== null || s.max !== null ? ` · 範圍 [${s.min ?? "?"}, ${s.max ?? "?"}]` : "";
       toast.info(`欄位「${col}」：${s.total} 列 · ${s.non_null} 非空 · ${s.distinct} 相異值${range}`);
     } catch (e: any) {
@@ -1658,12 +1666,24 @@ function DataPane({ tab }: { tab: OpenTab }) {
                 ["複製所有欄名（逗號分隔）", () => copyToClipboard(data.columns.join(", "), "已複製所有欄名")],
                 ["複製整欄（本頁）", () => copyToClipboard(data.rows.map((_, ri) => cellValue(ri, colMenu.ci) ?? "").join("\n"), "已複製整欄")],
                 ...(isSqlKind && connKind ? [["複製整欄為 IN(...)（本頁）", () => copyToClipboard(buildInClause(connKind, colMenu.col, data.rows.map((_, ri) => cellValue(ri, colMenu.ci))), "已複製 IN 子句")] as [string, () => void]] : []),
-                ...(isSqlKind ? [["欄位統計（總數/非空/相異）", () => colStats(colMenu.col)] as [string, () => void]] : []),
+                ...(isSqlKind || isMongo ? [["欄位統計（總數/非空/相異）", () => colStats(colMenu.col)] as [string, () => void]] : []),
                 ...(isSqlKind && connKind ? [["相異值分布（Top 50）", () => {
                   const qc = quoteIdent(connKind, colMenu.col);
                   const sql = `SELECT ${qc}, COUNT(*) AS n\nFROM ${qualifiedName(connKind, tab.database, tab.table)}\nGROUP BY ${qc}\nORDER BY n DESC\nLIMIT 50;`;
                   useStore.getState().setActive(tab.connId);
                   useStore.getState().requestQuery(sql);
+                }] as [string, () => void]] : []),
+                ...(isMongo ? [["相異值分布（Top 50）", () => {
+                  // 生成 $group 聚合 DSL 到查詢編輯器（與 SQL 版對稱）。
+                  const dsl = JSON.stringify({
+                    db: tab.database, collection: tab.table,
+                    pipeline: [
+                      { $group: { _id: `$${colMenu.col}`, n: { $sum: 1 } } },
+                      { $sort: { n: -1 } }, { $limit: 50 },
+                    ],
+                  }, null, 2);
+                  useStore.getState().setActive(tab.connId);
+                  useStore.getState().requestQuery(dsl);
                 }] as [string, () => void]] : []),
                 ["隱藏此欄", () => hideColumn(colMenu.col)],
                 ...(hidden.length ? [["顯示所有欄", () => showAllColumns()] as [string, () => void]] : []),
@@ -1735,6 +1755,80 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onSaved={() => { setDocEdit(null); load(); }}
         />
       )}
+
+      {fieldStats && (
+        <FieldStatsModal col={fieldStats.col} stats={fieldStats.stats} onClose={() => setFieldStats(null)} />
+      )}
+    </div>
+  );
+}
+
+// Mongo 欄位統計視窗：型別分布橫條（混型欄位核心資訊）+ Top-10 值 + 缺欄 / null / 相異值 / 抽樣註記。
+function FieldStatsModal({ col, stats, onClose }: { col: string; stats: ColumnStats; onClose: () => void }) {
+  useModalOverlay(onClose);
+  const typeTotal = stats.types.reduce((a, [, n]) => a + n, 0) || 1;
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[80vh] overflow-auto rounded-lg border border-fg/10 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
+          <Icon icon={BarChart3} size={14} className="text-green-400" />
+          <span className="font-medium text-sm">欄位統計 · <span className="mono">{col}</span></span>
+          <button type="button" onClick={onClose} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+        </div>
+        <div className="p-4 space-y-4 text-sm">
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="rounded bg-well border border-fg/10 px-2 py-1">文件數 <span className="mono font-semibold">{stats.total}</span></span>
+            <span className="rounded bg-well border border-fg/10 px-2 py-1">缺欄位 <span className="mono font-semibold">{stats.missing}</span></span>
+            <span className="rounded bg-well border border-fg/10 px-2 py-1">null <span className="mono font-semibold">{stats.null_count}</span></span>
+            <span className="rounded bg-well border border-fg/10 px-2 py-1">
+              相異值 <span className="mono font-semibold">{stats.distinct_capped ? `≥ ${stats.distinct}` : stats.distinct}</span>
+            </span>
+            {stats.sampled > 0 && (
+              <span className="rounded border border-amber-300/40 bg-amber-500/10 px-2 py-1 text-amber-300"
+                title="集合過大時基於隨機抽樣計算（total 為集合估計數，其餘統計基於樣本）">
+                抽樣 {stats.sampled} 筆
+              </span>
+            )}
+          </div>
+          {stats.types.length > 0 && (
+            <div>
+              <div className="text-xs text-fg/50 mb-1.5">BSON 型別分布</div>
+              <div className="space-y-1">
+                {stats.types.map(([t, n]) => (
+                  <div key={t} className="flex items-center gap-2 text-xs">
+                    <span className="mono w-20 shrink-0 text-fg/70">{t}</span>
+                    <div className="flex-1 h-3 rounded bg-fg/10 overflow-hidden">
+                      <div className="h-full bg-accent/60" style={{ width: `${Math.max(2, (n / typeTotal) * 100)}%` }} />
+                    </div>
+                    <span className="mono w-24 shrink-0 text-right text-fg/60">{n}（{((n / typeTotal) * 100).toFixed(1)}%）</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {stats.top_values.length > 0 && (
+            <div>
+              <div className="text-xs text-fg/50 mb-1.5">Top {stats.top_values.length} 值</div>
+              <table className="w-full text-xs border-collapse">
+                <tbody>
+                  {stats.top_values.map(([v, n], i) => (
+                    <tr key={i} className="hover:bg-fg/5">
+                      <td className="px-2 py-1 border-b border-fg/5 mono break-all">{v}</td>
+                      <td className="px-2 py-1 border-b border-fg/5 mono text-right text-fg/60 whitespace-nowrap w-20">{n}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {(stats.min !== null || stats.max !== null) && (
+            <div className="text-xs text-fg/50" title="min / max 依 BSON 型別排序；混型欄位跨型別比較可能看似奇怪">
+              範圍 <span className="mono text-fg/70">[{stats.min ?? "?"}, {stats.max ?? "?"}]</span>（依 BSON 型別排序）
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2703,7 +2797,7 @@ function NavBtn({ label, onClick, disabled, title }: {
 // ---- 結構分頁：欄位定義 ----
 function StructurePane({ tab }: { tab: OpenTab }) {
   const kind = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.kind);
-  const isSql = kind === "mysql" || kind === "postgres" || kind === "sqlite";
+  const isSql = kind === "mysql" || kind === "mariadb" || kind === "postgres" || kind === "sqlite" || kind === "oracle";
   // 索引管理（建立 / 刪除）關聯式與 MongoDB 皆支援；欄位 / DDL 編輯仍僅限 SQL。
   const canIndex = isSql || kind === "mongo";
   const [cols, setCols] = useState<ColumnInfo[] | null>(null);
@@ -2719,6 +2813,14 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   const [incomingFks, setIncomingFks] = useState<ErRelation[] | null>(null); // 被哪些表參照（to_table = 本表）
   const [addingFk, setAddingFk] = useState(false);
   const isView = tab.objKind === "view";
+  const roConn = useStore((s) => s.readonlyConns[tab.connId] === true);
+  // Mongo：$indexStats（失敗 = null，索引表降級顯示 "—"）+ 集合驗證規則。
+  const [ixStats, setIxStats] = useState<MongoIndexStat[] | null>(null);
+  const [validation, setValidation] = useState<MongoValidation | null>(null);
+  const [valText, setValText] = useState("");
+  const [valLevel, setValLevel] = useState("strict");
+  const [valAction, setValAction] = useState("error");
+  const [valSaving, setValSaving] = useState(false);
 
   const viewDdl = async () => {
     try {
@@ -2753,10 +2855,66 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       setFks([]);
       setIncomingFks([]);
     }
+    // Mongo 專屬：索引使用統計（權限 / view 上失敗 → null 降級）+ 驗證規則。
+    if (kind === "mongo") {
+      api.mongoIndexStats(tab.connId, tab.database, tab.table)
+        .then((s) => !cancelled && setIxStats(s))
+        .catch(() => !cancelled && setIxStats(null));
+      api.mongoGetValidation(tab.connId, tab.database, tab.table)
+        .then((v) => {
+          if (cancelled) return;
+          setValidation(v);
+          setValText(v.validator_json);
+          setValLevel(v.level);
+          setValAction(v.action);
+        })
+        .catch(() => !cancelled && setValidation(null));
+    }
     return () => {
       cancelled = true;
     };
-  }, [tab.connId, tab.database, tab.table, nonce]);
+  }, [tab.connId, tab.database, tab.table, nonce, kind]);
+
+  // Mongo 進階索引建立（方向 / 型別 + unique / sparse / hidden / TTL / partial）。
+  const createMongoIndex = async (name: string, keys: [string, string][], options: MongoIndexOptions) => {
+    setBusy(true);
+    try {
+      await api.mongoCreateIndex(tab.connId, tab.database, tab.table, name, keys, options);
+      toast.success("索引已建立");
+      setAddingIndex(false);
+      setNonce((n) => n + 1);
+    } catch (e: any) {
+      toast.error(e?.message ?? "建立索引失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 儲存 / 清除集合驗證規則（collMod）。strict+error 會立即擋下不符寫入，需明確確認。
+  const saveValidation = async (clear: boolean) => {
+    const text = clear ? "" : valText.trim();
+    if (text) {
+      try { JSON.parse(text); } catch { toast.error("驗證規則需為合法 JSON（$jsonSchema）"); return; }
+    }
+    const danger = !clear && valLevel === "strict" && valAction === "error";
+    const ok = await uiConfirm(
+      clear
+        ? "清除此集合的驗證規則？"
+        : `套用驗證規則（level=${valLevel} / action=${valAction}）？${danger ? "\nstrict + error 會立即阻擋不符合的寫入（含既有應用程式），請確認影響。" : ""}`,
+      { title: clear ? "清除驗證規則" : "套用驗證規則", danger, confirmText: clear ? "清除" : "套用" },
+    );
+    if (!ok) return;
+    setValSaving(true);
+    try {
+      await api.mongoSetValidation(tab.connId, tab.database, tab.table, text, valLevel, valAction);
+      toast.success(clear ? "已清除驗證規則" : "驗證規則已套用");
+      setNonce((n) => n + 1);
+    } catch (e: any) {
+      toast.error(e?.message ?? "設定驗證規則失敗");
+    } finally {
+      setValSaving(false);
+    }
+  };
 
   const doAlter = async (op: AlterOp, okMsg: string) => {
     setBusy(true);
@@ -2987,22 +3145,30 @@ function StructurePane({ tab }: { tab: OpenTab }) {
             )}
           </div>
           {addingIndex && canIndex && cols && (
-            <AddIndexForm columns={cols.map((c) => c.name)} busy={busy} allowFulltext={kind === "mysql"}
-              onCancel={() => setAddingIndex(false)} onSubmit={createIndexFn} />
+            kind === "mongo" ? (
+              <MongoAddIndexForm columns={cols.map((c) => c.name)} busy={busy}
+                onCancel={() => setAddingIndex(false)} onSubmit={createMongoIndex} />
+            ) : (
+              <AddIndexForm columns={cols.map((c) => c.name)} busy={busy} allowFulltext={kind === "mysql" || kind === "mariadb"}
+                onCancel={() => setAddingIndex(false)} onSubmit={createIndexFn} />
+            )
           )}
           {indexes.length === 0 && <div className="px-3 py-2 text-fg/30 text-xs">尚無索引。</div>}
           {indexes.length > 0 && (
           <table className="text-sm border-collapse w-full">
             <thead className="bg-elevated">
               <tr>
-                {["名稱", "欄位", "唯一", "主鍵"].map((h) => (
+                {["名稱", "欄位", "唯一", "主鍵", ...(kind === "mongo" ? ["使用次數", "統計起始"] : [])].map((h) => (
                   <th key={h} className="text-left px-3 py-1.5 border-b border-fg/10 font-medium">{h}</th>
                 ))}
                 {canIndex && <th className="w-12 border-b border-fg/10" />}
               </tr>
             </thead>
             <tbody>
-              {indexes.map((ix) => (
+              {indexes.map((ix) => {
+                // $indexStats 以名稱 join；整體失敗（權限 / view）→ null → 各列顯示 "—"。
+                const st = ixStats?.find((s) => s.name === ix.name);
+                return (
                 <tr key={ix.name} className="hover:bg-fg/5 group">
                   <td className="px-3 py-1 border-b border-fg/5 mono">{ix.name}</td>
                   <td className="px-3 py-1 border-b border-fg/5 mono text-fg/70">{ix.columns.join(", ")}</td>
@@ -3012,9 +3178,23 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                   <td className="px-3 py-1 border-b border-fg/5">
                     {ix.primary && <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">PK</span>}
                   </td>
+                  {kind === "mongo" && (
+                    <>
+                      <td className="px-3 py-1 border-b border-fg/5 mono text-fg/70">
+                        {st ? st.ops : <span title="無法取得 $indexStats（權限不足或不支援）">—</span>}
+                        {st && st.ops === 0 && !ix.primary && (
+                          <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300"
+                            title={`自 ${st.since || "統計起始"} 起未被任何查詢使用（mongod 重啟會重置統計）`}>未使用</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-1 border-b border-fg/5 mono text-fg/50 whitespace-nowrap">
+                        {st?.since ? st.since.replace("T", " ").slice(0, 19) : "—"}
+                      </td>
+                    </>
+                  )}
                   {canIndex && (
                     <td className="px-2 py-1 border-b border-fg/5 text-right whitespace-nowrap">
-                      {!ix.primary && (kind === "mysql" || kind === "postgres") && (
+                      {!ix.primary && (kind === "mysql" || kind === "mariadb" || kind === "postgres") && (
                         <button type="button" title="重新命名索引" disabled={busy}
                           onClick={() => renameIndexByName(ix.name)}
                           className="px-1 inline-flex items-center text-fg/20 group-hover:text-blue-400 hover:bg-blue-500/20 rounded disabled:opacity-40"><Icon icon={Pencil} size={14} /></button>
@@ -3027,9 +3207,57 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                     </td>
                   )}
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
+          )}
+        </div>
+      )}
+
+      {/* 驗證規則（Mongo）：JSON Schema validator + level / action（collMod）。 */}
+      {kind === "mongo" && !isView && (
+        <div className="mt-2">
+          <div className="px-3 py-1.5 text-xs text-fg/40 bg-inset border-y border-fg/10 flex items-center gap-2">
+            <span>驗證規則{validation && validation.validator_json ? "（已設定）" : "（未設定）"}</span>
+            {validation === null && <span className="text-fg/30">— 無法讀取（權限不足或不支援）</span>}
+          </div>
+          {validation !== null && (
+            <div className="p-3 space-y-2">
+              <textarea
+                value={valText}
+                onChange={(e) => setValText(e.target.value)}
+                spellCheck={false}
+                readOnly={roConn}
+                placeholder={'{ "$jsonSchema": { "bsonType": "object", "required": ["name"], "properties": { "name": { "bsonType": "string" } } } }'}
+                className="w-full h-40 rounded bg-well border border-fg/10 p-2 mono text-xs outline-none focus:border-accent/60"
+              />
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-fg/50">level</span>
+                <select value={valLevel} onChange={(e) => setValLevel(e.target.value)} disabled={roConn}
+                  className="bg-inset border border-fg/10 rounded px-1.5 py-1 outline-none cursor-pointer"
+                  title="off=不驗證；moderate=僅驗證新文件與原本合規的文件；strict=全部驗證">
+                  <option value="off">off</option>
+                  <option value="moderate">moderate</option>
+                  <option value="strict">strict</option>
+                </select>
+                <span className="text-fg/50">action</span>
+                <select value={valAction} onChange={(e) => setValAction(e.target.value)} disabled={roConn}
+                  className="bg-inset border border-fg/10 rounded px-1.5 py-1 outline-none cursor-pointer"
+                  title="warn=僅記錄警告；error=拒絕不符合的寫入">
+                  <option value="warn">warn</option>
+                  <option value="error">error</option>
+                </select>
+                {!roConn && (
+                  <>
+                    <Button variant="primary" size="sm" loading={valSaving} onClick={() => saveValidation(false)}>套用</Button>
+                    {validation.validator_json && (
+                      <Button variant="secondary" size="sm" disabled={valSaving} onClick={() => saveValidation(true)}>清除規則</Button>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -3197,6 +3425,100 @@ function AddForeignKeyForm({ table, columns, busy, onSubmit, onCancel }: {
       <button type="button" disabled={busy || !valid} onClick={() => onSubmit(effName, column, refTable, refColumn, onDelete, onUpdate)}
         className="px-2 py-1 text-xs rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">建立</button>
       <button type="button" onClick={onCancel} className="px-2 py-1 text-xs rounded border border-fg/15 hover:bg-fg/5">取消</button>
+    </div>
+  );
+}
+
+// Mongo 進階索引表單：欄位 + 規格（1/-1/text/2dsphere/hashed）多列、unique / sparse / hidden、
+// TTL 秒數（限單鍵、需日期欄位）、partialFilterExpression（JSON）。
+function MongoAddIndexForm({ columns, busy, onSubmit, onCancel }: {
+  columns: string[];
+  busy: boolean;
+  onSubmit: (name: string, keys: [string, string][], options: MongoIndexOptions) => void;
+  onCancel: () => void;
+}) {
+  const [rows, setRows] = useState<{ field: string; spec: string }[]>([{ field: "", spec: "1" }]);
+  const [name, setName] = useState("");
+  const [unique, setUnique] = useState(false);
+  const [sparse, setSparse] = useState(false);
+  const [hidden, setHidden] = useState(false);
+  const [ttl, setTtl] = useState("");
+  const [partial, setPartial] = useState("");
+
+  const valid = rows.filter((r) => r.field.trim());
+  // Mongo 慣例名：field_spec 串接（如 status_1_created_-1）。
+  const autoName = valid.map((r) => `${r.field.trim()}_${r.spec}`).join("_");
+  const setRow = (i: number, patch: Partial<{ field: string; spec: string }>) =>
+    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  const submit = () => {
+    if (valid.length === 0) { toast.error("索引至少需一個欄位"); return; }
+    if (ttl.trim() && valid.length > 1) { toast.error("TTL 索引僅支援單一欄位（且需為日期欄位）"); return; }
+    if (partial.trim()) {
+      try { JSON.parse(partial); } catch { toast.error("partialFilterExpression 需為合法 JSON"); return; }
+    }
+    onSubmit(
+      (name.trim() || autoName),
+      valid.map((r) => [r.field.trim(), r.spec] as [string, string]),
+      {
+        unique, sparse, hidden,
+        expire_after_secs: ttl.trim() ? Math.max(0, Math.floor(Number(ttl))) : null,
+        partial_filter_json: partial.trim() || null,
+      },
+    );
+  };
+
+  return (
+    <div className="px-3 py-2 space-y-2 border-b border-fg/10 bg-well/50 text-xs">
+      {rows.map((r, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <input list="mongo-index-fields" value={r.field} onChange={(e) => setRow(i, { field: e.target.value })}
+            placeholder="欄位（可含 . 巢狀路徑）"
+            className="flex-1 h-7 rounded bg-inset border border-fg/10 px-2 outline-none focus:border-accent/60 mono" />
+          <select value={r.spec} onChange={(e) => setRow(i, { spec: e.target.value })}
+            className="h-7 bg-inset border border-fg/10 rounded px-1.5 outline-none cursor-pointer">
+            <option value="1">1（升冪）</option>
+            <option value="-1">-1（降冪）</option>
+            <option value="text">text</option>
+            <option value="2dsphere">2dsphere</option>
+            <option value="hashed">hashed</option>
+          </select>
+          {rows.length > 1 && (
+            <button type="button" onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+              className="text-fg/30 hover:text-red-400"><Icon icon={Minus} size={14} /></button>
+          )}
+        </div>
+      ))}
+      <datalist id="mongo-index-fields">
+        {columns.map((c) => <option key={c} value={c} />)}
+      </datalist>
+      <button type="button" onClick={() => setRows((rs) => [...rs, { field: "", spec: "1" }])}
+        className="inline-flex items-center gap-1 text-fg/50 hover:text-fg/80"><Icon icon={Plus} size={13} />加欄位</button>
+      <div className="flex flex-wrap items-center gap-3">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder={autoName || "索引名稱（留空自動）"}
+          className="w-56 h-7 rounded bg-inset border border-fg/10 px-2 outline-none focus:border-accent/60 mono" />
+        <label className="flex items-center gap-1 cursor-pointer select-none">
+          <input type="checkbox" checked={unique} onChange={(e) => setUnique(e.target.checked)} />唯一（unique）
+        </label>
+        <label className="flex items-center gap-1 cursor-pointer select-none" title="缺此欄位的文件不納入索引">
+          <input type="checkbox" checked={sparse} onChange={(e) => setSparse(e.target.checked)} />稀疏（sparse）
+        </label>
+        <label className="flex items-center gap-1 cursor-pointer select-none" title="查詢計畫不使用、仍持續維護（4.4+）">
+          <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} />隱藏（hidden）
+        </label>
+        <label className="flex items-center gap-1" title="到期自動刪除文件；僅單一日期欄位索引有效">
+          TTL 秒數
+          <input type="number" value={ttl} onChange={(e) => setTtl(e.target.value)} placeholder="—"
+            className="w-24 h-7 rounded bg-inset border border-fg/10 px-2 outline-none focus:border-accent/60" />
+        </label>
+      </div>
+      <input value={partial} onChange={(e) => setPartial(e.target.value)}
+        placeholder='部分索引條件 partialFilterExpression（選填 JSON，如 {"status":{"$eq":"active"}}）'
+        className="w-full h-7 rounded bg-inset border border-fg/10 px-2 outline-none focus:border-accent/60 mono" />
+      <div className="flex gap-2">
+        <Button variant="primary" size="sm" loading={busy} onClick={submit}>建立索引</Button>
+        <Button variant="secondary" size="sm" disabled={busy} onClick={onCancel}>取消</Button>
+      </div>
     </div>
   );
 }

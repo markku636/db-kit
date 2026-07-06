@@ -22,6 +22,20 @@ use crate::error::{AppError, AppResult};
 const KEYCHAIN_SERVICE: &str = "db-kit";
 const CONNECTIONS_FILE: &str = "connections.json";
 
+/// App 層級設定檔名（非連線設定）。目前僅存啟動密碼的 Argon2 雜湊，未來可擴充其他全域偏好。
+pub const APP_SETTINGS_FILE: &str = "app_settings.json";
+
+/// App 全域設定（磁碟格式，`read_json` / `write_json` 讀寫）。
+///
+/// `startup_password_hash` 存的是 **Argon2id PHC 字串**（含參數 + salt），不是明文密碼——
+/// 單向雜湊，磁碟外洩也無法還原密碼。用途是「啟動閘門」：擋別人打開 GUI，
+/// **不加密連線機密**（機密仍在 OS keychain，`dbk` CLI 不受影響）。
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct AppSettings {
+    #[serde(default)]
+    pub startup_password_hash: Option<String>,
+}
+
 /// 連線設定檔（磁碟格式）。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectionsFile {

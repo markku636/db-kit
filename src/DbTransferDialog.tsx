@@ -9,7 +9,7 @@ import { topoSortByFk } from "./fkorder";
 
 // 整庫資料傳輸（致敬 Navicat Data Transfer 的多表 / 整庫模式）：把來源庫的多張表
 // 一次傳到另一連線 / 資料庫（目標同名表）。逐表複用已測試的 transfer_table。
-const RELATIONAL: DbKind[] = ["mysql", "postgres", "sqlite"];
+const RELATIONAL: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite"];
 
 interface Outcome { table: string; transferred: number; failed: number; created: boolean; error?: string }
 

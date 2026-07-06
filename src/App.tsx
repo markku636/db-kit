@@ -8,6 +8,7 @@ import BackupDialog from "./BackupDialog";
 import ErDiagram from "./ErDiagram";
 import RedisStatus from "./RedisStatus";
 import RedisConsole from "./RedisConsole";
+import MongoOpsPanel from "./MongoOpsPanel";
 import NewKeyDialog from "./NewKeyDialog";
 import CreateTableDialog from "./CreateTableDialog";
 import ConnectionProperties from "./ConnectionProperties";
@@ -47,7 +48,7 @@ import {
   loadSnippets, persistSnippets, upsertSnippet, removeSnippet, type SqlSnippet,
   resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, splitSqlStatements, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
-  quoteIdent, qualifiedName,
+  quoteIdent, qualifiedName, isMysqlFamily,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
@@ -58,15 +59,18 @@ import type { SavedQuery } from "./sql";
 import Select from "./ui/Select";
 import ExplainPlan from "./ExplainPlan";
 import { buildExplainJsonSql, parseExplainPlan, type PlanNode } from "./explain";
+import MongoQueryEditor, { type MongoQueryEditorHandle } from "./MongoQueryEditor";
+import MongoExplainPlan from "./MongoExplainPlan";
+import { parseMongoExplain, withVerbosity, type MongoExplainModel } from "./mongoExplain";
 import logoMark from "./assets/db-kit-hero.png";
 import Icon from "./ui/Icon";
-import { Button, EmptyState, Modal } from "./ui/index";
+import { Button, EmptyState, Modal, Input, Field } from "./ui/index";
 import {
   Plug, Network, DatabaseBackup, Upload, Download, Sparkles, Keyboard, Moon, Sun,
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
-  GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info,
+  GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock,
   type LucideIcon,
 } from "lucide-react";
 
@@ -171,11 +175,18 @@ export default function App() {
   const [erOpen, setErOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // 啟動密碼閘門：checking（查詢中）→ locked（需輸入密碼）/ open（已解鎖或未設密碼）。
+  const [lockState, setLockState] = useState<"checking" | "locked" | "open">("checking");
   // 開場動畫狀態：show → leaving（淡出）→ done（卸載）。每次啟動只播一次。
   const [splash, setSplash] = useState<"show" | "leaving" | "done">(() => {
     try { return sessionStorage.getItem("dbkit:splashed") ? "done" : "show"; }
     catch { return "show"; }
   });
+  const onSplashDone = () => {
+    try { sessionStorage.setItem("dbkit:splashed", "1"); } catch {}
+    setSplash("done");
+  };
   const { connections, connectedIds, activeId } = useStore();
   const activeConn = connections.find((c) => c.id === activeId) ?? null;
   // 左側連線樹寬度：可拖曳分隔線調整，記憶於 localStorage。
@@ -186,14 +197,23 @@ export default function App() {
     max: () => Math.min(640, window.innerWidth * 0.6),
     axis: "x",
   });
-  // ER 圖僅關聯式（MySQL / PostgreSQL / SQLite）支援外鍵關係；Mongo / Redis 不適用。
+  // ER 圖僅關聯式（MySQL 系 / PostgreSQL / SQLite / MSSQL / Oracle）支援外鍵關係；Mongo / Redis 不適用。
   const canEr =
     !!activeConn &&
     connectedIds.has(activeConn.id) &&
-    (activeConn.kind === "mysql" || activeConn.kind === "postgres" || activeConn.kind === "sqlite" || activeConn.kind === "mssql");
+    (isMysqlFamily(activeConn.kind) || activeConn.kind === "postgres" || activeConn.kind === "sqlite" || activeConn.kind === "mssql" || activeConn.kind === "oracle");
 
-  // 啟動時載入已存連線清單（僅清單，不自動連線；密碼留在 keychain）。
+  // 啟動時查詢是否已設定啟動密碼：有 → 顯示鎖定畫面；無或查詢失敗 → 直接進入。
   useEffect(() => {
+    api
+      .hasStartupPassword()
+      .then((has) => setLockState(has ? "locked" : "open"))
+      .catch(() => setLockState("open"));
+  }, []);
+
+  // 解鎖後才載入已存連線清單（僅清單，不自動連線；密碼留在 keychain）。
+  useEffect(() => {
+    if (lockState !== "open") return;
     api
       .listSavedConnections()
       .then((saved) =>
@@ -202,7 +222,7 @@ export default function App() {
           .setConnections(saved.map((c) => ({ ...c, password: c.password ?? "" })))
       )
       .catch(() => {});
-  }, []);
+  }, [lockState]);
 
   // 啟動時套用主題類別（與 index.html 的防閃爍腳本一致，確保 React 狀態與 DOM 同步）。
   useEffect(() => {
@@ -257,16 +277,22 @@ export default function App() {
     }
   };
 
+  // 啟動密碼閘門：未解鎖前只顯示開場動畫 + 鎖定畫面，不掛載主介面（避免鎖定時仍抓連線資料）。
+  if (lockState !== "open") {
+    return (
+      <div className="h-full bg-app">
+        {splash !== "done" && (
+          <SplashScreen leaving={splash === "leaving"} onDone={onSplashDone} />
+        )}
+        {lockState === "locked" && <LockScreen onUnlock={() => setLockState("open")} />}
+      </div>
+    );
+  }
+
   return (
     <div className="h-full flex flex-col">
       {splash !== "done" && (
-        <SplashScreen
-          leaving={splash === "leaving"}
-          onDone={() => {
-            try { sessionStorage.setItem("dbkit:splashed", "1"); } catch {}
-            setSplash("done");
-          }}
-        />
+        <SplashScreen leaving={splash === "leaving"} onDone={onSplashDone} />
       )}
       <Toolbar
         onNewConnection={() => setDialog({ initial: null })}
@@ -276,6 +302,7 @@ export default function App() {
         canEr={canEr}
         onHelp={() => setHelpOpen(true)}
         onAbout={() => setAboutOpen(true)}
+        onSettings={() => setSettingsOpen(true)}
         onExportConns={exportConnections}
         onImportConns={importConnections}
       />
@@ -316,6 +343,7 @@ export default function App() {
       )}
       {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <UiHost />
     </div>
   );
@@ -369,6 +397,172 @@ function SplashScreen({ leaving, onDone }: { leaving: boolean; onDone: () => voi
   );
 }
 
+// 啟動密碼鎖定畫面：全螢幕不透明覆蓋（疊在開場動畫之上），驗證通過才 onUnlock 進入主介面。
+function LockScreen({ onUnlock }: { onUnlock: () => void }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    if (busy || !pw) return;
+    setBusy(true);
+    try {
+      const ok = await api.verifyStartupPassword(pw);
+      if (ok) { onUnlock(); return; }
+      setErr(true);
+      setPw("");
+    } catch {
+      setErr(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-[300] grid place-items-center bg-app">
+      <div className="w-[320px] max-w-[88vw] flex flex-col items-center gap-6">
+        <img src={logoMark} alt="DB Kit" className="w-16 h-16 rounded-2xl shadow-e4" draggable={false} />
+        <div className="text-center space-y-1">
+          <div className="text-base font-semibold text-fg/90">DB Kit 已鎖定</div>
+          <div className="text-xs text-fg/50">輸入啟動密碼以繼續</div>
+        </div>
+        <div className="w-full space-y-2.5">
+          <Input
+            type="password"
+            inputSize="md"
+            autoFocus
+            value={pw}
+            invalid={err}
+            placeholder="啟動密碼"
+            aria-label="啟動密碼"
+            onChange={(e) => { setPw(e.target.value); setErr(false); }}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+          />
+          {err && <div className="text-[11px] text-danger text-center">密碼不正確，請再試一次</div>}
+          <Button variant="primary" full icon={Lock} loading={busy} disabled={!pw} onClick={submit}>
+            解鎖
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 設定對話框：目前僅「啟動密碼」（啟用 / 變更 / 移除）。屬 app-lock 閘門，不加密連線資料。
+function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [hasPw, setHasPw] = useState<boolean | null>(null);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // 開啟時重置欄位並查詢目前是否已設定啟動密碼。
+  useEffect(() => {
+    if (!open) return;
+    setCurrent(""); setNext(""); setConfirm(""); setHasPw(null);
+    api.hasStartupPassword().then(setHasPw).catch(() => setHasPw(false));
+  }, [open]);
+
+  const save = async () => {
+    if (busy) return;
+    if (next.length < 4) { toast.error("密碼至少 4 碼"); return; }
+    if (next !== confirm) { toast.error("兩次輸入的密碼不一致"); return; }
+    setBusy(true);
+    try {
+      await api.setStartupPassword(hasPw ? current : null, next);
+      toast.success(hasPw ? "已更新啟動密碼" : "已啟用啟動密碼");
+      onClose();
+    } catch (e: any) {
+      toast.error(e?.message ?? "設定失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (busy || !current) return;
+    const ok = await uiConfirm("移除後，下次開啟 DB Kit 將不再需要輸入密碼。確定移除啟動密碼？", {
+      title: "移除啟動密碼", danger: true, confirmText: "移除",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await api.clearStartupPassword(current);
+      toast.success("已移除啟動密碼");
+      onClose();
+    } catch (e: any) {
+      toast.error(e?.message ?? "移除失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="設定"
+      icon={Cog}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>關閉</Button>
+          <Button
+            variant="primary"
+            loading={busy}
+            disabled={!next || !confirm || (!!hasPw && !current)}
+            onClick={save}
+          >
+            {hasPw ? "更新密碼" : "啟用"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+            <Icon icon={Lock} size={15} /> 啟動密碼
+            {hasPw === true && (
+              <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-emerald-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> 已啟用
+              </span>
+            )}
+            {hasPw === false && (
+              <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-fg/40">
+                <span className="w-1.5 h-1.5 rounded-full bg-fg/30" /> 未啟用
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-fg/50 mt-1.5 leading-relaxed">
+            啟用後，每次開啟 DB Kit 需先輸入此密碼才能進入。此密碼僅作為開啟 App 的閘門，
+            <span className="text-fg/70">不會加密你的連線資料</span>（連線機密仍存於作業系統 keychain，
+            <span className="mono"> dbk </span>CLI 不受影響）。
+          </p>
+        </div>
+        {hasPw ? (
+          <Field label="目前密碼">
+            <Input type="password" inputSize="md" value={current} placeholder="輸入目前的啟動密碼"
+              onChange={(e) => setCurrent(e.target.value)} />
+          </Field>
+        ) : null}
+        <Field label={hasPw ? "新密碼" : "設定密碼"} hint="至少 4 碼">
+          <Input type="password" inputSize="md" value={next} placeholder="輸入密碼"
+            onChange={(e) => setNext(e.target.value)} />
+        </Field>
+        <Field label="確認密碼">
+          <Input type="password" inputSize="md" value={confirm} placeholder="再次輸入密碼"
+            onChange={(e) => setConfirm(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") save(); }} />
+        </Field>
+        {hasPw ? (
+          <div className="pt-3 border-t border-fg/10 flex items-center gap-2">
+            <Button variant="danger" disabled={busy || !current} onClick={remove}>移除啟動密碼</Button>
+            {!current && <span className="text-[11px] text-fg/40">需先輸入目前密碼</span>}
+          </div>
+        ) : null}
+      </div>
+    </Modal>
+  );
+}
+
 // 連線池即時狀態徽章（每 4 秒輪詢 `pool_status`，呼應規劃 3.5 的連線生命週期監控）。
 function PoolStatusBadge({ connId }: { connId: string }) {
   const [pool, setPool] = useState<PoolStatus | null>(null);
@@ -416,7 +610,7 @@ function PoolStatusBadge({ connId }: { connId: string }) {
 }
 
 // ---- 上方大圖示工具列（Navicat 風格識別特徵）----
-function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, onAbout, onExportConns, onImportConns }: {
+function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, onAbout, onSettings, onExportConns, onImportConns }: {
   onNewConnection: () => void;
   onBackup: () => void;
   canBackup: boolean;
@@ -424,6 +618,7 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, on
   canEr: boolean;
   onHelp: () => void;
   onAbout: () => void;
+  onSettings: () => void;
   onExportConns: () => void;
   onImportConns: () => void;
 }) {
@@ -443,6 +638,7 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, on
     { icon: <Icon icon={Download} size={20} />, label: "匯入連線", onClick: onImportConns, disabled: false },
     { icon: <Icon icon={Sparkles} size={20} />, label: "AI 助手", onClick: () => useAssistant.getState().toggle(), disabled: false, active: assistantOpen },
     { icon: <Icon icon={Keyboard} size={20} />, label: "快捷鍵 (F1)", onClick: onHelp, disabled: false },
+    { icon: <Icon icon={Cog} size={20} />, label: "設定", onClick: onSettings, disabled: false },
     { icon: <Icon icon={Info} size={20} />, label: "關於", onClick: onAbout, disabled: false },
   ];
   return (
@@ -714,6 +910,8 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   const [status, setStatus] = useState<{ id: string; name: string } | null>(null);
   // Redis 命令列
   const [console_, setConsole] = useState<{ id: string; name: string; db: string } | null>(null);
+  // Mongo 監控面板（serverStatus / dbStats / currentOp / Profiler）。
+  const [mongoOps, setMongoOps] = useState<{ id: string; name: string; db: string } | null>(null);
   // 新增 Redis 鍵對話框
   const [newKey, setNewKey] = useState<{ connId: string; db: string } | null>(null);
   // 設計表結構（CREATE TABLE）對話框：帶連線 / 資料庫 / 種類。
@@ -929,7 +1127,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
 
   // 讀取某資料庫的物件（表 + 視圖 + 程序 / 函式）。程序清單失敗不阻斷表載入。
   const fetchDbObjects = async (connId: string, kind: DbKind, db: string): Promise<DbObjects> => {
-    const supportsRoutines = kind === "mysql" || kind === "postgres";
+    const supportsRoutines = isMysqlFamily(kind) || kind === "postgres" || kind === "oracle";
     const [tables, routines] = await Promise.all([
       api.listTables(connId, db),
       supportsRoutines ? api.listRoutines(connId, db).catch(() => [] as RoutineInfo[]) : Promise.resolve([] as RoutineInfo[]),
@@ -1041,7 +1239,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   // 高破壞且 CASCADE 不可逆，採 type-to-confirm（須輸入正確名稱）取代單鍵確認。後端另有系統庫硬擋。
   const dropDatabase = async (connId: string, db: string, kind: DbKind) => {
     const noun = kind === "postgres" ? "Schema" : "資料庫";
-    const cascade = kind === "postgres" ? "DROP SCHEMA … CASCADE" : kind === "mysql" ? "DROP DATABASE" : "dropDatabase";
+    const cascade = kind === "postgres" ? "DROP SCHEMA … CASCADE" : isMysqlFamily(kind) ? "DROP DATABASE" : "dropDatabase";
     const isDefault = kind === "postgres" && db === "public";
     const warn = isDefault ? `\n注意：「${db}」是此連線的預設工作 schema。` : "";
     const typed = await uiPrompt(
@@ -1282,7 +1480,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
 
   // 設定權限：產生 GRANT / REVOKE 範本到查詢編輯器（MySQL / PostgreSQL）。
   const genGrant = (m: TblRef) => {
-    if (m.kind !== "mysql" && m.kind !== "postgres") return;
+    if (!isMysqlFamily(m.kind) && m.kind !== "postgres") return;
     sendQuery(m.connId, buildGrantTemplate(m.kind, m.db, m.table));
   };
 
@@ -1307,7 +1505,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
       nodes.push(it("新增資料表…", () => setDesignTable({ connId: m.connId, db: m.db, kind: m.kind })));
     if (m.type === "views")
       nodes.push(it("新增視圖…", () => setCreateView({ connId: m.connId, db: m.db, kind: m.kind })));
-    if (m.type === "functions" && (m.kind === "mysql" || m.kind === "postgres"))
+    if (m.type === "functions" && (isMysqlFamily(m.kind) || m.kind === "postgres"))
       nodes.push(it("預存程序 / 觸發器…", () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind })));
     nodes.push(sep);
     nodes.push(it("重新整理", () => refreshTables(m.connId, m.db)));
@@ -1334,7 +1532,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
       ];
     }
     const isView = m.objKind === "view";
-    const isMyPg = m.kind === "mysql" || m.kind === "postgres";
+    const isMyPg = isMysqlFamily(m.kind) || m.kind === "postgres";
     // 唯讀連線：隱藏會寫入 / 破壞資料的動作（新增列 / 匯入 / 產生資料 / 改名 / 複製含資料 / 清空 / 截斷 / 刪除）。
     const ro = readonlyConns[m.connId] === true;
     const nodes: MenuNode[] = [];
@@ -1373,11 +1571,11 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
     nodes.push(sep);
     if (!isView && !ro) nodes.push(it("匯入精靈…", () => setImportTbl({ connId: m.connId, db: m.db, table: m.table })));
     nodes.push(it("匯出精靈…", () => setExportTbl({ connId: m.connId, db: m.db, table: m.table })));
-    if (m.kind === "mysql" || m.kind === "postgres" || m.kind === "sqlite")
+    if (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "sqlite")
       nodes.push(it("查詢建構器…", () => setBuilderTbl({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
-    if (!isView && (m.kind === "mysql" || m.kind === "postgres" || m.kind === "sqlite"))
+    if (!isView && (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "sqlite"))
       nodes.push(it("資料傳輸…", () => setTransferTbl({ connId: m.connId, db: m.db, table: m.table })));
-    if (!isView && (m.kind === "mysql" || m.kind === "postgres" || m.kind === "sqlite"))
+    if (!isView && (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "sqlite"))
       nodes.push(it("資料比對 / 同步…", () => setSyncTbl({ connId: m.connId, db: m.db, table: m.table })));
     nodes.push({
       kind: "sub", label: "傾印 SQL 檔案", children: [
@@ -1389,7 +1587,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
     if (!isView && !ro) nodes.push(it("資料產生…", () => setDataGen({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
     // 維護 / 權限 / 模型
     const tail: MenuNode[] = [];
-    if (!isView && m.kind === "mysql") {
+    if (!isView && isMysqlFamily(m.kind)) {
       tail.push({
         kind: "sub", label: "維護", children: [
           it("分析資料表 (ANALYZE)", () => maint(m, "ANALYZE")),
@@ -1400,8 +1598,8 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
       });
     }
     if (isMyPg) tail.push(it("設定權限…", () => genGrant(m)));
-    // 逆向至模型：關聯式（MySQL / PG / SQLite）皆有外鍵關係可視化。
-    if (m.kind === "mysql" || m.kind === "postgres" || m.kind === "sqlite")
+    // 逆向至模型：關聯式（MySQL 系 / PG / SQLite）皆有外鍵關係可視化。
+    if (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "sqlite")
       tail.push(it("逆向至模型…", () => setErTable({ connId: m.connId, db: m.db, table: m.table })));
     if (tail.length) { nodes.push(sep); nodes.push(...tail); }
     // 生命週期（唯讀連線全部隱藏，避免破壞資料 / 結構）
@@ -1627,8 +1825,8 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                 const loading = loadingDbs.has(dbKey);
                 const isRedis = c.kind === "redis";
                 // external（gateway）走 SQL 分支：用資料夾 + 每庫篩選框（適合大量表），右鍵亦可新增查詢。
-                const isSqlKind = c.kind === "mysql" || c.kind === "postgres" || c.kind === "sqlite" || c.kind === "external" || c.kind === "mssql";
-                const supportsRoutines = c.kind === "mysql" || c.kind === "postgres" || c.kind === "mssql";
+                const isSqlKind = isMysqlFamily(c.kind) || c.kind === "postgres" || c.kind === "sqlite" || c.kind === "external" || c.kind === "mssql" || c.kind === "oracle";
+                const supportsRoutines = isMysqlFamily(c.kind) || c.kind === "postgres" || c.kind === "mssql" || c.kind === "oracle";
 
                 // 樹中的單一資料表 / 視圖節點（沿用選取 / 雙擊開啟 / 右鍵產生 SQL）。indent 控制縮排深度。
                 const objNode = (t: TableInfo, indent: string) => (
@@ -1814,7 +2012,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                 ...(connectedIds.has(menu.id)
                   ? [["重新整理資料庫", () => refreshDbs(menu.id), false] as [string, () => void, boolean]]
                   : []),
-                ...(connectedIds.has(menu.id) && (menuConn.kind === "mysql" || menuConn.kind === "postgres" || menuConn.kind === "sqlite")
+                ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres" || menuConn.kind === "sqlite")
                   ? [["新增查詢", () => newQueryForDb(menuConn.id, menuConn.database ?? "", menuConn.kind), false] as [string, () => void, boolean]]
                   : []),
                 ...(connectedIds.has(menu.id) && menuConn.kind === "redis"
@@ -1823,13 +2021,16 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                       ["命令列", () => setConsole({ id: menuConn.id, name: menuConn.name, db: "0" }), false] as [string, () => void, boolean],
                     ]
                   : []),
+                ...(connectedIds.has(menu.id) && menuConn.kind === "mongo"
+                  ? [["監控面板", () => setMongoOps({ id: menuConn.id, name: menuConn.name, db: menuConn.database ?? "" }), false] as [string, () => void, boolean]]
+                  : []),
                 ...(connectedIds.has(menu.id)
                   ? [["SQL Search…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
                   : []),
-                ...(connectedIds.has(menu.id) && (menuConn.kind === "mysql" || menuConn.kind === "postgres")
+                ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres")
                   ? [
                       ["處理程序…", () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
-                      menuConn.kind === "mysql"
+                      isMysqlFamily(menuConn.kind)
                         ? ["使用者管理…", () => setUserMgr({ connId: menuConn.id }), false] as [string, () => void, boolean]
                         : ["使用者 / 角色…", () => setServerQuery({
                             connId: menuConn.id,
@@ -1903,6 +2104,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                       const arr: [string, () => void, boolean][] = [
                         ["新增集合…", () => createCollection(dbMenu.connId, dbMenu.db), false],
                         ["新增資料庫…", () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
+                        ["監控面板", () => { if (dbConn) setMongoOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
                         ["編輯屬性…", editConn, false],
                       ];
                       // 系統庫（admin/config/local）不顯示刪除（後端亦硬擋）。
@@ -1922,16 +2124,16 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                       arr.push(["新增視圖…", () => { if (dbConn) setCreateView({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
                       arr.push(["預存程序 / 觸發器…", () => { if (dbConn) setRoutines({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
                       arr.push(["匯出結構 SQL…", () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
-                      if (k === "mysql") arr.push(["資料表大小報表…", () => setServerQuery({
+                      if (isMysqlFamily(k)) arr.push(["資料表大小報表…", () => setServerQuery({
                         connId: dbMenu.connId, title: `資料表大小：${dbMenu.db}`, sql: tableSizesSql(dbMenu.db),
                       }), false]);
-                      if ((k === "mysql" || k === "postgres") && dbConn) arr.push(["結構比對…", () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
-                      if (k === "mysql" || k === "postgres" || k === "sqlite") arr.push(["資料傳輸（整庫）…", () => setDbTransfer({ connId: dbMenu.connId, db: dbMenu.db }), false]);
-                      if ((k === "mysql" || k === "postgres" || k === "sqlite") && dbConn) arr.push(["資料庫文件…", () => setDbDict({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
-                      if (k === "mysql") arr.push(["資料庫屬性…", () => setDbProps({ connId: dbMenu.connId, db: dbMenu.db }), false]);
+                      if ((isMysqlFamily(k) || k === "postgres") && dbConn) arr.push(["結構比對…", () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
+                      if (isMysqlFamily(k) || k === "postgres" || k === "sqlite") arr.push(["資料傳輸（整庫）…", () => setDbTransfer({ connId: dbMenu.connId, db: dbMenu.db }), false]);
+                      if ((isMysqlFamily(k) || k === "postgres" || k === "sqlite") && dbConn) arr.push(["資料庫文件…", () => setDbDict({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
+                      if (isMysqlFamily(k)) arr.push(["資料庫屬性…", () => setDbProps({ connId: dbMenu.connId, db: dbMenu.db }), false]);
                       arr.push(["編輯屬性…", editConn, false]);
-                      // 系統 schema / 庫，以及 MySQL 使用中的預設庫，不顯示刪除（後端亦硬擋）。
-                      const isDefault = k === "mysql" && dbConn?.database === dbMenu.db;
+                      // 系統 schema / 庫，以及 MySQL 系使用中的預設庫，不顯示刪除（後端亦硬擋）。
+                      const isDefault = isMysqlFamily(k) && dbConn?.database === dbMenu.db;
                       if (k !== "sqlite" && k && !isSystemDatabase(k, dbMenu.db) && !isDefault)
                         arr.push([`刪除${noun}…`, () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
                       return arr;
@@ -1978,6 +2180,16 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
           connName={console_.name}
           initialDb={console_.db}
           onClose={() => setConsole(null)}
+        />
+      )}
+
+      {mongoOps && (
+        <MongoOpsPanel
+          connId={mongoOps.id}
+          connName={mongoOps.name}
+          database={mongoOps.db}
+          readonly={readonlyConns[mongoOps.id] === true}
+          onClose={() => setMongoOps(null)}
         />
       )}
 
@@ -2360,20 +2572,24 @@ function QueryTabButton({ label, active, closable, onActivate, onClose, btnRef }
 // 註：對 Redis 而言 "SELECT 1" 是「切換到 DB 1」的真實指令，不可拿來當通用預設。
 const QUERY_DEFAULTS: Record<DbKind, string> = {
   mysql: "SELECT 1",
+  mariadb: "SELECT 1",
   postgres: "SELECT 1",
   sqlite: "SELECT 1",
   mssql: "SELECT 1",
+  oracle: "SELECT 1 FROM DUAL",
   mongo: '{ "db": "", "collection": "", "filter": {} }',
   redis: "PING",
   external: "SELECT 1",
 };
 // 僅關聯式資料庫支援 EXPLAIN 查詢計畫分析（MSSQL 回 SHOWPLAN XML，於結果格顯示、不走 JSON 視覺樹）。
-const EXPLAIN_KINDS: DbKind[] = ["mysql", "postgres", "sqlite", "mssql"];
+// oracle 一併納入：除了 explain 表格（EXPLAIN PLAN + DBMS_XPLAN 文字 grid），也讓 Oracle
+// 走 SQL 編輯器與 `;` 多語句切割（Oracle 單次 execute 不接受多語句）。
+const EXPLAIN_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "mssql", "oracle"];
 
 // 支援查詢面板「目前資料庫」選擇器（以 USE / search_path 把查詢限定到所選庫）的連線類型：
 // 關聯式多庫（MySQL / PostgreSQL）＋ 外部 gateway（driver 以 strip_leading_use 切站）。
 // SQLite 為單檔無多庫；Mongo / Redis 的資料庫切換走各自指令，不在此列。
-const DB_SELECT_KINDS: DbKind[] = ["mysql", "postgres", "external"];
+const DB_SELECT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "external"];
 
 // 查詢編輯器內容 per-連線 持久化（重開 / 切換連線後沿用上次的查詢）。
 // 查詢內容持久化鍵：每連線 × 每查詢分頁。預設 home 分頁沿用舊鍵（向後相容，既有草稿不遺失）。
@@ -2452,7 +2668,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const connectedIds = useStore((s) => s.connectedIds);
   const supportsExplain = !!kind && EXPLAIN_KINDS.includes(kind);
   // 視覺化解釋（解釋分頁）支援的類型：能取得 JSON 執行計畫者（MySQL / PostgreSQL / 外部 gateway；SQLite 無）。
-  const supportsVisualExplain = !!kind && (kind === "mysql" || kind === "postgres" || kind === "external");
+  const supportsVisualExplain = !!kind && (isMysqlFamily(kind) || kind === "postgres" || kind === "external");
+  // Mongo explain：獨立 gate —— 不可把 mongo 加進 EXPLAIN_KINDS（那同時 gate SQL 切割 / 參數 / 編輯器選擇）。
+  const supportsMongoExplain = kind === "mongo";
   // 「目前資料庫」選擇器：把查詢以 USE / search_path 限定到所選庫（MySQL / PostgreSQL / 外部 gateway）。
   const supportsDbSelect = !!kind && DB_SELECT_KINDS.includes(kind);
   const [dbList, setDbList] = useState<string[]>([]);
@@ -2511,6 +2729,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [plan, setPlan] = useState<PlanNode | null>(null);
   const [planErr, setPlanErr] = useState<string | null>(null);
+  // Mongo 執行計畫（與 SQL 的 plan 分開：階段指標與成本模型不同，各自渲染器）。
+  const [mongoPlan, setMongoPlan] = useState<{ model: MongoExplainModel; raw: string } | null>(null);
+  // executionStats 會「實際執行」查詢；queryPlanner 只做計畫（便宜），供昂貴管線選用。
+  const [mongoVerbosity, setMongoVerbosity] = useState<"queryPlanner" | "executionStats" | "allPlansExecution">("executionStats");
+  const mongoEditorRef = useRef<MongoQueryEditorHandle>(null);
   // 視覺化查詢建構器（致敬 Navicat SQL Builder）：僅關聯式（mysql/postgres/sqlite）。
   const [builderOpen, setBuilderOpen] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -2799,6 +3022,39 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       setElapsed(performance.now() - t0);
       setPlan(null);
       setPlanErr(e?.message ?? "視覺化解釋失敗");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  // Mongo 執行計畫：把查詢 DSL（注入 verbosity）原樣送給後端 explain，解析成 stage 樹切到「解釋」分頁。
+  // 解析失敗時原始 JSON 落到「結果」分頁（與 SQL 視覺化解釋相同的 fallback 模式）。
+  const runMongoExplain = async () => {
+    if (!activeId || running || !supportsMongoExplain) return;
+    const dsl = sql.trim();
+    if (!dsl) { toast.info("沒有可解釋的查詢"); return; }
+    setRunning(true);
+    setMongoPlan(null);
+    setPlanErr(null);
+    setErr(null); setErrSql(null); setErrStmt(null);
+    setBottomTab("explain");
+    const t0 = performance.now();
+    try {
+      const res = await api.explainQuery(activeId, withVerbosity(dsl, mongoVerbosity));
+      const raw = res.rows?.[0]?.[0] ?? "";
+      const model = raw ? parseMongoExplain(raw) : null;
+      if (model) { setMongoPlan({ model, raw }); setPlanErr(null); }
+      else {
+        setMongoPlan(null);
+        setPlanErr("無法解析執行計畫 JSON（原始輸出見「結果」分頁）");
+        setResult(res);
+        setBottomTab("result");
+      }
+      setElapsed(performance.now() - t0);
+    } catch (e: any) {
+      setElapsed(performance.now() - t0);
+      setMongoPlan(null);
+      setPlanErr(e?.message ?? "執行計畫失敗");
     } finally {
       setRunning(false);
     }
@@ -3197,7 +3453,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                         </button>
                       </>
                     )}
-                    {(supportsExplain || supportsVisualExplain) && (
+                    {(supportsExplain || supportsVisualExplain || supportsMongoExplain) && (
                       <div className="px-3 py-1 mt-1 text-[11px] text-fg/40 border-t border-fg/10">執行計畫</div>
                     )}
                     {supportsExplain && (
@@ -3211,6 +3467,26 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                         className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
                         <Icon icon={GitBranch} size={13} className="text-fg/45" />視覺化解釋
                       </button>
+                    )}
+                    {supportsMongoExplain && (
+                      <>
+                        {/* 詳細度：executionStats 會「實際執行」查詢（昂貴管線改選 queryPlanner）。 */}
+                        <div className="flex items-center gap-2 px-3 py-1.5 text-xs" onClick={(e) => e.stopPropagation()}>
+                          <span className="text-fg/45 shrink-0">詳細度</span>
+                          <select value={mongoVerbosity}
+                            onChange={(e) => setMongoVerbosity(e.target.value as typeof mongoVerbosity)}
+                            title="executionStats / allPlansExecution 會實際執行查詢；queryPlanner 只做計畫（便宜）"
+                            className="flex-1 min-w-0 bg-inset border border-fg/10 rounded px-1 py-0.5 text-xs outline-none cursor-pointer">
+                            <option value="executionStats">executionStats（實際執行）</option>
+                            <option value="queryPlanner">queryPlanner（僅計畫）</option>
+                            <option value="allPlansExecution">allPlansExecution（所有候選）</option>
+                          </select>
+                        </div>
+                        <button type="button" onClick={() => { setShowMore(false); runMongoExplain(); }} disabled={running}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
+                          <Icon icon={GitBranch} size={13} className="text-fg/45" />執行計畫（explain）
+                        </button>
+                      </>
                     )}
                   </div>
                 </>
@@ -3251,6 +3527,19 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               placeholder="SQL 查詢（F6 整段、Ctrl+Enter 執行游標所在語句／選取段；Ctrl+/ 註解、Tab 縮排）"
             />
           </div>
+        ) : kind === "mongo" ? (
+          // Mongo：CodeMirror JSON 編輯器 — 語法高亮 + 即時 JSON lint + DSL 鍵 / $運算子 / 欄位名補全。
+          <div style={{ height: editor.size }} className="overflow-hidden bg-app border-t border-fg/10">
+            <MongoQueryEditor
+              ref={mongoEditorRef}
+              value={sql}
+              onChange={persistSql}
+              connId={activeId}
+              onSubmit={() => execute("run")}
+              autoFocus
+              placeholder={'find：{ "db":"..", "collection":"..", "filter":{}, "sort":{}, "limit":200 }　|　聚合：{ …, "pipeline":[ { "$match":{} } ] }　|　插入：{ …, "insert":[ { "k":"v" } ] }（F6 / Ctrl+Enter 執行）'}
+            />
+          </div>
         ) : (
           <textarea
             ref={taRef}
@@ -3259,11 +3548,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             value={sql}
             onChange={(e) => persistSql(e.target.value)}
             spellCheck={false}
-            placeholder={
-              kind === "redis"
-                ? "Redis 指令，如 GET key、HGETALL key、SCAN 0（前綴 1: 可指定 DB）"
-                : 'find：{ "db":"..", "collection":"..", "filter":{}, "sort":{}, "projection":{}, "limit":200 }　|　聚合：{ …, "pipeline":[ { "$match":{} }, { "$group":{} } ] }　|　插入：{ …, "insert":[ { "k":"v" } ] }'
-            }
+            placeholder="Redis 指令，如 GET key、HGETALL key、SCAN 0（前綴 1: 可指定 DB）"
             onKeyDown={(e) => {
               if (e.key === "F6" || ((e.ctrlKey || e.metaKey) && e.key === "Enter")) {
                 e.preventDefault();
@@ -3287,14 +3572,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       <div className="flex-1 flex flex-col min-h-0">
         {/* 下方分頁列：結果 / 摘要 / 解釋（致敬 Navicat）；右側為執行回饋與複製 / 匯出 */}
         <div className="shrink-0 flex items-center gap-1 px-2 bg-panel border-t border-fg/10 text-[11px]">
-          {((["result", "summary", ...(supportsVisualExplain ? (["explain"] as const) : [])]) as ("result" | "summary" | "explain")[]).map((key) => {
+          {((["result", "summary", ...(supportsVisualExplain || supportsMongoExplain ? (["explain"] as const) : [])]) as ("result" | "summary" | "explain")[]).map((key) => {
             const label = key === "result" ? "結果" : key === "summary" ? "摘要" : "解釋";
             return (
               <button key={key} type="button" onClick={() => setBottomTab(key)}
                 className={`px-2.5 py-1.5 border-b-2 -mb-px transition-colors ${bottomTab === key ? "border-accent text-fg/90" : "border-transparent text-fg/45 hover:text-fg/70"}`}>
                 {label}
                 {key === "summary" && summary && summary.errors > 0 && <span className="ml-1 text-red-400">{summary.errors}</span>}
-                {key === "explain" && plan && <span className="ml-1 text-emerald-400">●</span>}
+                {key === "explain" && (plan || mongoPlan) && <span className="ml-1 text-emerald-400">●</span>}
               </button>
             );
           })}
@@ -3385,7 +3670,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               : <EmptyState compact icon={FileText} title="尚無執行摘要" hint="執行查詢後，這裡會列出每條語句的結果與耗時。" />
           )}
           {bottomTab === "explain" && (
-            plan
+            mongoPlan
+              ? <MongoExplainPlan model={mongoPlan.model} raw={mongoPlan.raw} />
+              : plan
               ? <ExplainPlan node={plan} />
               : planErr
                 ? <div className="p-3 text-amber-300 text-sm whitespace-pre-wrap break-words">{planErr}</div>

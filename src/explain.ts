@@ -18,7 +18,8 @@ export interface PlanNode {
 export function buildExplainJsonSql(kind: DbKind, query: string): string | null {
   const q = query.trim().replace(/;\s*$/, "").trim();
   if (!q) return null;
-  if (kind === "mysql" || kind === "external") return `EXPLAIN FORMAT=JSON ${q}`;
+  // MariaDB 亦支援 EXPLAIN FORMAT=JSON（欄位較 MySQL 精簡，如缺 cost_info——解析端容忍 null 成本）。
+  if (kind === "mysql" || kind === "mariadb" || kind === "external") return `EXPLAIN FORMAT=JSON ${q}`;
   if (kind === "postgres") return `EXPLAIN (FORMAT JSON) ${q}`;
   return null; // sqlite / mongo / redis 無 JSON 計畫
 }

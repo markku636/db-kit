@@ -424,6 +424,27 @@ describe("cross-DB quoting", () => {
     expect(sqlLiteral("external", "a\\b")).toBe("'a\\\\b'");
     expect(sqlLiteral("external", "O'Brien")).toBe("'O''Brien'");
   });
+  it("MariaDB 走 MySQL 方言：反引號 + 反斜線加倍", () => {
+    expect(quoteIdent("mariadb", "t`x")).toBe("`t``x`");
+    expect(qualifiedName("mariadb", "db", "t")).toBe("`db`.`t`");
+    // 關鍵資料安全點：MariaDB 同 MySQL 把 \ 當轉義字元，漏加倍會衝出字串字面值。
+    expect(sqlLiteral("mariadb", "a\\b")).toBe("'a\\\\b'");
+    expect(buildUseDatabase("mariadb", "shop")).toBe("USE `shop`");
+    expect(isSystemDatabase("mariadb", "performance_schema")).toBe(true);
+    expect(buildDuplicateTable("mariadb", "d", "a", "b")).toBe("CREATE TABLE `d`.`b` LIKE `d`.`a`;");
+  });
+  it("Oracle：雙引號識別字、無反斜線轉義、WHERE 1 = 0 複製、FROM DUAL 呼叫", () => {
+    expect(quoteIdent("oracle", 'a"b')).toBe('"a""b"');
+    expect(qualifiedName("oracle", "SCOTT", "EMP")).toBe('"SCOTT"."EMP"');
+    // Oracle 視 \ 為字面字元，不可加倍。
+    expect(sqlLiteral("oracle", "a\\b")).toBe("'a\\b'");
+    expect(buildDuplicateTable("oracle", "S", "A", "B")).toBe('CREATE TABLE "S"."B" AS SELECT * FROM "S"."A" WHERE 1 = 0;');
+    expect(buildRoutineCall("oracle", "S", "FN", "function", "1")).toBe('SELECT "S"."FN"(1) AS result FROM DUAL');
+    expect(isSystemDatabase("oracle", "SYS")).toBe(true);
+    expect(isSystemDatabase("oracle", "SCOTT")).toBe(false);
+    // Oracle 無「目前資料庫」語句（DB_SELECT_KINDS 未含 oracle）。
+    expect(buildUseDatabase("oracle", "SCOTT")).toBeNull();
+  });
 });
 
 // node 測試環境無 localStorage，提供最小記憶體實作供持久化守衛測試。

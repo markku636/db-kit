@@ -1,4 +1,4 @@
-use sqlx::postgres::{PgPoolOptions, PgRow};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgRow, PgSslMode};
 use sqlx::{Column, PgPool, Row, TypeInfo, ValueRef};
 use std::time::Duration;
 
@@ -22,14 +22,23 @@ pub struct PostgresDriver {
 impl DatabaseDriver for PostgresDriver {
     async fn connect(config: &ConnectionConfig) -> AppResult<Self> {
         let db = config.database.clone().unwrap_or_else(|| "postgres".to_string());
-        let url = format!(
-            "postgres://{user}:{pass}@{host}:{port}/{db}",
-            user = config.username,
-            pass = config.password,
-            host = config.host,
-            port = config.port,
-            db = db,
-        );
+        // typed builder 而非字串內插 URL：密碼含 @ / ? # % 等符號不需 percent-encode。
+        // ssl_mode 由 options 帶入（Cargo 已開 sqlx tls-rustls-ring-native-roots）；
+        // require 只加密不驗證憑證鏈，verify-ca / verify-full 才驗證（UI 標籤同此語意）。
+        let ssl_mode = match config.options.get("ssl_mode").map(String::as_str) {
+            Some("disable") => PgSslMode::Disable,
+            Some("require") => PgSslMode::Require,
+            Some("verify-ca") => PgSslMode::VerifyCa,
+            Some("verify-full") => PgSslMode::VerifyFull,
+            _ => PgSslMode::Prefer,
+        };
+        let opts = PgConnectOptions::new()
+            .host(&config.host)
+            .port(config.port)
+            .username(&config.username)
+            .password(&config.password)
+            .database(&db)
+            .ssl_mode(ssl_mode);
 
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
@@ -38,7 +47,7 @@ impl DatabaseDriver for PostgresDriver {
             .max_lifetime(Duration::from_secs(1800))
             .acquire_timeout(Duration::from_secs(10))
             .test_before_acquire(true)
-            .connect(&url)
+            .connect_with(opts)
             .await
             .map_err(|e| AppError::Connect(e.to_string()))?;
 
@@ -103,12 +112,18 @@ impl DatabaseDriver for PostgresDriver {
     ) -> AppResult<Vec<ColumnInfo>> {
         // 欄位定義。一併取 is_generated / is_identity / identity_generation，以標示產生欄與
         // GENERATED ALWAYS AS IDENTITY 欄（兩者皆不可由使用者明確賦值；資料產生會據此預設排除）。
+        // 註解經 col_description 取得；以 attname 對 join（而非 ordinal_position 對 attnum），
+        // 避免表曾 DROP COLUMN 後兩者編號錯位。
         let col_rows = sqlx::query(
-            "SELECT column_name, data_type, is_nullable, column_default, \
-                    is_generated, is_identity, identity_generation \
-             FROM information_schema.columns \
-             WHERE table_schema = $1 AND table_name = $2 \
-             ORDER BY ordinal_position",
+            "SELECT c.column_name, c.data_type, c.is_nullable, c.column_default, \
+                    c.is_generated, c.is_identity, c.identity_generation, \
+                    col_description(pgc.oid, pga.attnum) \
+             FROM information_schema.columns c \
+             LEFT JOIN pg_catalog.pg_namespace pgn ON pgn.nspname = c.table_schema \
+             LEFT JOIN pg_catalog.pg_class pgc ON pgc.relnamespace = pgn.oid AND pgc.relname = c.table_name \
+             LEFT JOIN pg_catalog.pg_attribute pga ON pga.attrelid = pgc.oid AND pga.attname = c.column_name \
+             WHERE c.table_schema = $1 AND c.table_name = $2 \
+             ORDER BY c.ordinal_position",
         )
         .bind(database)
         .bind(table)
@@ -146,7 +161,7 @@ impl DatabaseDriver for PostgresDriver {
                     key: key.to_string(),
                     default: r.try_get(3).ok(),
                     extra,
-                    comment: String::new(),
+                    comment: r.try_get::<Option<String>, _>(7).ok().flatten().unwrap_or_default(),
                 }
             })
             .collect())
@@ -437,6 +452,7 @@ impl DatabaseDriver for PostgresDriver {
             distinct: row.try_get::<i64, _>(2).unwrap_or(0) as u64,
             min,
             max,
+            ..Default::default()
         })
     }
 

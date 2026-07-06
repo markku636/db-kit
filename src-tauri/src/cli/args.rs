@@ -59,11 +59,13 @@ pub struct ConnArgs {
 #[derive(ValueEnum, Clone, Copy, Debug)]
 pub enum KindArg {
     Mysql,
+    Mariadb,
     Postgres,
     Sqlite,
     Mongo,
     Redis,
     Mssql,
+    Oracle,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]

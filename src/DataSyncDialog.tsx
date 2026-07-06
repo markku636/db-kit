@@ -9,7 +9,7 @@ import { diffRowsByPk, buildSyncDml, type RowSet, type RowDiff } from "./datasyn
 
 // 資料比對 / 同步（致敬 Navicat Data Synchronization）：以主鍵比對來源 / 目標兩表的列，
 // 算出 INSERT / UPDATE / DELETE 同步 DML（套用於目標）。產生的 DML 供檢視後執行，不自動套用。
-const RELATIONAL: DbKind[] = ["mysql", "postgres", "sqlite"];
+const RELATIONAL: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite"];
 const CAP = 20000; // 每側比對列數上限（記憶體內比對）
 
 export default function DataSyncDialog({ connId, database, table, onClose, onUse }: {

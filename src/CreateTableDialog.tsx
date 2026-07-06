@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Minus, Plus, Table2 } from "lucide-react";
 import { api, DbKind } from "./api";
-import { buildCreateTable, NewColumn, TYPE_PRESETS } from "./sql";
+import { buildCreateTable, isMysqlFamily, NewColumn, TYPE_PRESETS } from "./sql";
 import { toast } from "./ui";
 import { Modal, Button } from "./ui/index";
 import Icon from "./ui/Icon";
@@ -24,7 +24,10 @@ export default function CreateTableDialog({ connId, database, kind, onClose, onC
   onCreated?: () => void;
 }) {
   const defaultIdType =
-    kind === "postgres" ? "SERIAL" : kind === "mysql" ? "INT AUTO_INCREMENT" : "INTEGER";
+    kind === "postgres" ? "SERIAL"
+      : isMysqlFamily(kind) ? "INT AUTO_INCREMENT"
+      : kind === "oracle" ? "NUMBER GENERATED AS IDENTITY" // 12c+
+      : "INTEGER";
   const [table, setTable] = useState("");
   const [columns, setColumns] = useState<NewColumn[]>([
     { ...emptyCol(), name: "id", type: defaultIdType, pk: true, notNull: true },

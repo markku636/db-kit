@@ -35,12 +35,14 @@ pub async fn detect_cli(kind: DbKind) -> bool {
 
 fn cli_tool_name(kind: DbKind) -> &'static str {
     match kind {
-        DbKind::Mysql => "mysqldump",
+        // MariaDB 亦隨附 mysqldump 相容名（新版為 mariadb-dump 的別名），共用即可。
+        DbKind::Mysql | DbKind::Mariadb => "mysqldump",
         DbKind::Postgres => "pg_dump",
         DbKind::Mongo => "mongodump",
         DbKind::Redis => "redis-cli",
         DbKind::Sqlite => "", // SQLite 用檔案複製，無需 CLI
         DbKind::Mssql => "sqlpackage", // 規劃以 sqlpackage 匯出 .bacpac（尚未接上）
+        DbKind::Oracle => "expdp", // 規劃以 Data Pump 匯出 .dmp（尚未接上）
         DbKind::External => "", // 外部 gateway 不支援備份
     }
 }
@@ -69,6 +71,10 @@ pub async fn backup(
     if matches!(config.kind, DbKind::Mssql) {
         return Err(AppError::Query("SQL Server 備份尚未支援（規劃以 sqlpackage 匯出 .bacpac）".into()));
     }
+    // Oracle 備份規劃以 Data Pump（expdp）匯出 .dmp，尚未接上。
+    if matches!(config.kind, DbKind::Oracle) {
+        return Err(AppError::Query("Oracle 備份尚未支援（規劃以 Data Pump expdp 匯出 .dmp）".into()));
+    }
     // SQLite：直接複製資料庫檔案。
     if let DbKind::Sqlite = config.kind {
         let src = config
@@ -96,12 +102,13 @@ pub async fn backup(
     }
 
     let status = match config.kind {
-        DbKind::Mysql => run_mysqldump(config, database, out_path).await?,
+        DbKind::Mysql | DbKind::Mariadb => run_mysqldump(config, database, out_path).await?,
         DbKind::Postgres => run_pg_dump(config, database, out_path).await?,
         DbKind::Mongo => run_mongodump(config, database, out_path).await?,
         DbKind::Redis => run_redis_dump(config, out_path).await?,
         DbKind::Sqlite => unreachable!(),
         DbKind::Mssql => unreachable!(), // 上方已 early-return
+        DbKind::Oracle => unreachable!(), // 上方已 early-return
         DbKind::External => unreachable!(), // 上方已 early-return
     };
 
@@ -145,7 +152,7 @@ pub async fn restore(
                 .map_err(|e| AppError::Query(format!("還原 SQLite 檔失敗：{e}")))?;
             Ok(())
         }
-        DbKind::Mysql => {
+        DbKind::Mysql | DbKind::Mariadb => {
             // 還原用 mysql client（非 mysqldump）；缺工具時明確報錯（原為空的死分支）。
             if !detect_cli_named("mysql").await {
                 return Err(AppError::Query("找不到 mysql 客戶端，請先安裝".to_string()));
@@ -169,6 +176,9 @@ pub async fn restore(
         )),
         DbKind::Mssql => Err(AppError::Query(
             "SQL Server 還原尚未支援（規劃以 sqlpackage 匯入 .bacpac）".to_string(),
+        )),
+        DbKind::Oracle => Err(AppError::Query(
+            "Oracle 還原尚未支援（規劃以 Data Pump impdp 匯入 .dmp）".to_string(),
         )),
         DbKind::External => Err(AppError::Query("外部 gateway 連線不支援還原".to_string())),
     }

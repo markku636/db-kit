@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::Argon2;
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -8,7 +10,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::backup::{self, BackupResult};
 use crate::db::{
     AlterOp, BigKey, CellEdit, ClientInfo, ColumnInfo, ConnectionConfig, DataQuery, ErModel,
-    ForeignKeyInfo, KeyDetail, KeyEdit, KeyPage, PagedData, PoolStatus, QueryResult, RedisKeys,
+    ForeignKeyInfo, KeyDetail, KeyEdit, KeyPage, MongoIndexOptions, MongoIndexStat, MongoOp,
+    MongoProfile, MongoSlowQuery, MongoValidation, PagedData, PoolStatus, QueryResult, RedisKeys,
     RoutineInfo, RowDelete, RowInsert, SearchHit, SearchOptions, ServerInfoSection, SlowLogEntry, TableInfo,
     ValidationReport,
 };
@@ -130,6 +133,87 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> AppResult<()>
 #[tauri::command]
 pub async fn clear_cache(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.manager.clear_cache(&id).await
+}
+
+// ---- 啟動密碼（app-lock 閘門）----
+//
+// GUI 啟動時擋一道：Argon2id PHC 雜湊存 app_settings.json（非機密、可落地）。驗證在後端做，
+// 明文密碼不落地、不入 keychain。刻意不加密連線機密——機密仍走 OS keychain，dbk CLI 不受影響
+//（見 store::AppSettings）。
+
+/// 以隨機 salt 產生 Argon2id PHC 雜湊字串。
+fn hash_startup_password(password: &str) -> AppResult<String> {
+    let salt_bytes: [u8; 16] = rand::random();
+    let salt = SaltString::encode_b64(&salt_bytes)
+        .map_err(|e| AppError::Storage(format!("salt 產生失敗：{e}")))?;
+    let phc = Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| AppError::Storage(format!("密碼雜湊失敗：{e}")))?;
+    Ok(phc.to_string())
+}
+
+/// 常數時間比對（由 argon2 `verify_password` 保證）。雜湊字串無法解析時回 false。
+fn verify_startup_hash(password: &str, phc: &str) -> bool {
+    match PasswordHash::new(phc) {
+        Ok(parsed) => Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// 是否已設定啟動密碼（前端據此決定啟動時要不要顯示鎖定畫面）。
+#[tauri::command]
+pub async fn has_startup_password(app: AppHandle) -> AppResult<bool> {
+    let s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
+    Ok(s.startup_password_hash.is_some())
+}
+
+/// 驗證啟動密碼。未設定時一律視為通過（回 true）。
+#[tauri::command]
+pub async fn verify_startup_password(app: AppHandle, password: String) -> AppResult<bool> {
+    let s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
+    Ok(match s.startup_password_hash {
+        Some(h) => verify_startup_hash(&password, &h),
+        None => true,
+    })
+}
+
+/// 設定 / 變更啟動密碼。已有密碼時必須先以 `current` 驗證通過才可變更。
+#[tauri::command]
+pub async fn set_startup_password(
+    app: AppHandle,
+    current: Option<String>,
+    next: String,
+) -> AppResult<()> {
+    if next.is_empty() {
+        return Err(AppError::Storage("密碼不可為空".into()));
+    }
+    let mut s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
+    if let Some(existing) = &s.startup_password_hash {
+        let ok = current
+            .as_deref()
+            .map(|c| verify_startup_hash(c, existing))
+            .unwrap_or(false);
+        if !ok {
+            return Err(AppError::Storage("目前密碼不正確".into()));
+        }
+    }
+    s.startup_password_hash = Some(hash_startup_password(&next)?);
+    store::write_json(&app, store::APP_SETTINGS_FILE, &s).await
+}
+
+/// 移除啟動密碼。必須先以 `current` 驗證通過。
+#[tauri::command]
+pub async fn clear_startup_password(app: AppHandle, current: String) -> AppResult<()> {
+    let mut s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
+    if let Some(existing) = &s.startup_password_hash {
+        if !verify_startup_hash(&current, existing) {
+            return Err(AppError::Storage("目前密碼不正確".into()));
+        }
+    }
+    s.startup_password_hash = None;
+    store::write_json(&app, store::APP_SETTINGS_FILE, &s).await
 }
 
 /// 加密匯出時的單筆連線（PersistedConnection + 從 keychain 取出的機密）。
@@ -812,6 +896,124 @@ pub async fn redis_big_keys(
     top: usize,
 ) -> AppResult<Vec<BigKey>> {
     state.manager.redis_driver(&id)?.big_keys(&database, sample, top).await
+}
+
+// ---- MongoDB 專屬（監控 / 進階索引 / validation；Redis 模式：直呼 driver inherent 方法）----
+
+/// $indexStats 索引使用統計（前端與 table_indexes 以名稱 join；失敗降級顯示 "—"）。
+#[tauri::command]
+pub async fn mongo_index_stats(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    collection: String,
+) -> AppResult<Vec<MongoIndexStat>> {
+    state.manager.mongo_driver(&id)?.index_stats(&database, &collection).await
+}
+
+/// 進階索引建立（方向 / text / 2dsphere / hashed + unique / sparse / hidden / TTL / partial）。
+#[tauri::command]
+pub async fn mongo_create_index(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    collection: String,
+    name: String,
+    keys: Vec<(String, String)>,
+    options: MongoIndexOptions,
+) -> AppResult<()> {
+    state
+        .manager
+        .mongo_driver(&id)?
+        .create_index_advanced(&database, &collection, &name, &keys, &options)
+        .await
+}
+
+#[tauri::command]
+pub async fn mongo_get_validation(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    collection: String,
+) -> AppResult<MongoValidation> {
+    state.manager.mongo_driver(&id)?.get_validation(&database, &collection).await
+}
+
+#[tauri::command]
+pub async fn mongo_set_validation(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    collection: String,
+    validator_json: String,
+    level: String,
+    action: String,
+) -> AppResult<()> {
+    state
+        .manager
+        .mongo_driver(&id)?
+        .set_validation(&database, &collection, &validator_json, &level, &action)
+        .await
+}
+
+/// dbStats 資料庫層級統計。
+#[tauri::command]
+pub async fn mongo_db_stats(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+) -> AppResult<Vec<(String, String)>> {
+    state.manager.mongo_driver(&id)?.db_stats(&database).await
+}
+
+/// 進行中操作（$currentOp）。
+#[tauri::command]
+pub async fn mongo_current_ops(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<Vec<MongoOp>> {
+    state.manager.mongo_driver(&id)?.current_ops().await
+}
+
+/// 終止操作（killOp）。
+#[tauri::command]
+pub async fn mongo_kill_op(
+    state: State<'_, AppState>,
+    id: String,
+    opid: String,
+) -> AppResult<()> {
+    state.manager.mongo_driver(&id)?.kill_op(&opid).await
+}
+
+#[tauri::command]
+pub async fn mongo_profile_get(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+) -> AppResult<MongoProfile> {
+    state.manager.mongo_driver(&id)?.profile_get(&database).await
+}
+
+#[tauri::command]
+pub async fn mongo_profile_set(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    level: i32,
+    slow_ms: i64,
+) -> AppResult<MongoProfile> {
+    state.manager.mongo_driver(&id)?.profile_set(&database, level, slow_ms).await
+}
+
+/// system.profile 慢查詢清單。
+#[tauri::command]
+pub async fn mongo_slow_queries(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    limit: u32,
+) -> AppResult<Vec<MongoSlowQuery>> {
+    state.manager.mongo_driver(&id)?.slow_queries(&database, limit).await
 }
 
 /// 發佈訊息（PUBLISH），回傳收到訊息的訂閱者數。

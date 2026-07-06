@@ -1,4 +1,4 @@
-use sqlx::mysql::{MySqlPoolOptions, MySqlRow};
+use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlRow, MySqlSslMode};
 use sqlx::{Column, MySqlPool, Row, TypeInfo, ValueRef};
 use std::time::Duration;
 
@@ -177,14 +177,25 @@ fn parse_mysql_line(msg: &str) -> Option<u32> {
 impl DatabaseDriver for MysqlDriver {
     async fn connect(config: &ConnectionConfig) -> AppResult<Self> {
         let db = config.database.clone().unwrap_or_default();
-        let url = format!(
-            "mysql://{user}:{pass}@{host}:{port}/{db}",
-            user = config.username,
-            pass = config.password,
-            host = config.host,
-            port = config.port,
-            db = db,
-        );
+        // typed builder 而非字串內插 URL：密碼含 @ / ? # % 等符號不需 percent-encode。
+        // ssl_mode 由 options 帶入（MySQL 與 MariaDB 通用；required 只加密不驗證憑證鏈，
+        // verify_ca / verify_identity 才驗證）。
+        let ssl_mode = match config.options.get("ssl_mode").map(String::as_str) {
+            Some("disabled") => MySqlSslMode::Disabled,
+            Some("required") => MySqlSslMode::Required,
+            Some("verify_ca") => MySqlSslMode::VerifyCa,
+            Some("verify_identity") => MySqlSslMode::VerifyIdentity,
+            _ => MySqlSslMode::Preferred,
+        };
+        let mut opts = MySqlConnectOptions::new()
+            .host(&config.host)
+            .port(config.port)
+            .username(&config.username)
+            .password(&config.password)
+            .ssl_mode(ssl_mode);
+        if !db.is_empty() {
+            opts = opts.database(&db);
+        }
 
         let pool = MySqlPoolOptions::new()
             .max_connections(config.max_connections)
@@ -193,7 +204,7 @@ impl DatabaseDriver for MysqlDriver {
             .max_lifetime(Duration::from_secs(1800)) // 連線最長存活 30 分鐘
             .acquire_timeout(Duration::from_secs(10))
             .test_before_acquire(true) // 取得前健康檢查
-            .connect(&url)
+            .connect_with(opts)
             .await
             .map_err(|e| AppError::Connect(e.to_string()))?;
 
@@ -351,10 +362,13 @@ impl DatabaseDriver for MysqlDriver {
                 .await
                 .map_err(|e| AppError::Query(e.to_string()))?;
             let t = rest.trim_start().to_ascii_lowercase();
+            // contains("returning")：MariaDB 10.5+ 的 INSERT/REPLACE/DELETE … RETURNING 會回結果集，
+            // 需走 fetch 路徑才看得到（比照 postgres.rs 的字串偵測取捨）。
             let is_read = t.starts_with("select")
                 || t.starts_with("show")
                 || t.starts_with("describe")
-                || t.starts_with("explain");
+                || t.starts_with("explain")
+                || t.contains("returning");
             let out = if is_read {
                 sqlx::query(&rest)
                     .fetch_all(&mut *conn)
@@ -373,10 +387,12 @@ impl DatabaseDriver for MysqlDriver {
         }
 
         let trimmed = sql.trim_start().to_ascii_lowercase();
+        // contains("returning")：見上（MariaDB RETURNING 結果集）。
         let is_read = trimmed.starts_with("select")
             || trimmed.starts_with("show")
             || trimmed.starts_with("describe")
-            || trimmed.starts_with("explain");
+            || trimmed.starts_with("explain")
+            || trimmed.contains("returning");
 
         if is_read {
             let rows = sqlx::query(sql)
@@ -552,6 +568,7 @@ impl DatabaseDriver for MysqlDriver {
             distinct: row.try_get::<i64, _>(2).unwrap_or(0) as u64,
             min,
             max,
+            ..Default::default()
         })
     }
 

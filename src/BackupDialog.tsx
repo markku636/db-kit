@@ -423,6 +423,7 @@ function HistoryTab({ conn }: { conn: ConnectionConfig }) {
 
 const TOOL_HINT: Record<string, { tool: string; ext: string }> = {
   mysql: { tool: "mysqldump / mysql", ext: ".sql" },
+  mariadb: { tool: "mysqldump / mysql（MariaDB 相容）", ext: ".sql" },
   postgres: { tool: "pg_dump / psql", ext: ".sql" },
   mongo: { tool: "mongodump / mongorestore", ext: ".archive" },
   redis: { tool: "redis-cli", ext: ".rdb" },

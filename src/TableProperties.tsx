@@ -26,8 +26,8 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
 
   const isMongo = kind === "mongo";
   const objLabel = isMongo ? "集合" : objKind === "view" ? "視圖" : "資料表";
-  // 可編輯選項（僅 MySQL 資料表）：引擎 / 註解 / AUTO_INCREMENT。
-  const optionsEditable = kind === "mysql" && objKind !== "view";
+  // 可編輯選項（僅 MySQL 系資料表）：引擎 / 註解 / AUTO_INCREMENT。
+  const optionsEditable = (kind === "mysql" || kind === "mariadb") && objKind !== "view";
   const [engine, setEngine] = useState("");
   const [comment, setComment] = useState("");
   const [autoInc, setAutoInc] = useState("");

@@ -7,6 +7,7 @@ import { Modal, Button } from "./ui/index";
 // 列出目前連線 / 工作階段（致敬 Navicat 的伺服器監控）。沿用既有 runQuery（清單）+ execDdl（終止），免後端改動。
 const LIST_SQL: Partial<Record<DbKind, string>> = {
   mysql: "SHOW FULL PROCESSLIST",
+  mariadb: "SHOW FULL PROCESSLIST",
   postgres:
     "SELECT pid, usename, client_addr::text, datname, state, " +
     "EXTRACT(EPOCH FROM (now() - query_start))::int AS sec, query " +

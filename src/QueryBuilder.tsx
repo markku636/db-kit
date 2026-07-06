@@ -28,9 +28,9 @@ const AGGS: { v: QbAgg; label: string }[] = [
   { v: "MIN", label: "MIN" },
   { v: "MAX", label: "MAX" },
 ];
-// FULL JOIN 在 MySQL 不支援；下拉依方言過濾。
+// FULL JOIN 在 MySQL / MariaDB 不支援；下拉依方言過濾。
 const joinTypesFor = (kind: DbKind): QbJoinType[] =>
-  kind === "mysql" ? JOIN_TYPES.filter((t) => t !== "FULL") : JOIN_TYPES;
+  kind === "mysql" || kind === "mariadb" ? JOIN_TYPES.filter((t) => t !== "FULL") : JOIN_TYPES;
 
 interface SelCol extends QbColumn { id: string }
 interface SelJoin extends QbJoin { id: string }

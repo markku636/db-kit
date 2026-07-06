@@ -493,6 +493,7 @@ impl DatabaseDriver for SqliteDriver {
             distinct: row.try_get::<i64, _>(2).unwrap_or(0) as u64,
             min,
             max,
+            ..Default::default()
         })
     }
 

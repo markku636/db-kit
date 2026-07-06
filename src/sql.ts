@@ -2,10 +2,15 @@
 // 抽離自 App.tsx / TableView.tsx 以便單元測試（見 sql.test.ts）且不依賴 React / Tauri。
 import type { DbKind, QueryResult, RoutineInfo } from "./api";
 
+// MariaDB 為 MySQL fork，SQL 方言一致：所有 SQL 生成共用 mysql 分支。
+// 集中成一個 predicate，避免每個 builder 各自比對兩個字串（漏改即產出錯誤方言）。
+export const isMysqlFamily = (kind: DbKind | null | undefined): boolean =>
+  kind === "mysql" || kind === "mariadb";
+
 // ---- 跨資料庫識別字 / 字面值跳脫（MySQL / PostgreSQL / SQLite 一致性關鍵）----
-// 識別字：PostgreSQL 用雙引號，SQL Server 用 [方括號]（] 加倍），其餘（MySQL / SQLite）用反引號；內部引號加倍轉義。
+// 識別字：PostgreSQL 用雙引號，SQL Server 用 [方括號]（] 加倍），其餘（MySQL / MariaDB / SQLite）用反引號；內部引號加倍轉義。
 export function quoteIdent(kind: DbKind, id: string): string {
-  if (kind === "postgres") return `"${id.replace(/"/g, '""')}"`;
+  if (kind === "postgres" || kind === "oracle") return `"${id.replace(/"/g, '""')}"`;
   if (kind === "mssql") return `[${id.replace(/]/g, "]]")}]`;
   return `\`${id.replace(/`/g, "``")}\``;
 }
@@ -29,7 +34,7 @@ export function sqlLiteral(kind: DbKind, v: string | null): string {
   if (v === null) return "NULL";
   // SQL Server：Unicode 字面值加 N 前綴、只加倍單引號（反斜線非 T-SQL 轉義字元）。
   if (kind === "mssql") return `N'${v.replace(/'/g, "''")}'`;
-  const mysqlLike = kind === "mysql" || kind === "external";
+  const mysqlLike = isMysqlFamily(kind) || kind === "external";
   const escaped = mysqlLike ? v.replace(/\\/g, "\\\\").replace(/'/g, "''") : v.replace(/'/g, "''");
   return `'${escaped}'`;
 }
@@ -49,8 +54,11 @@ export interface NewColumn {
 export const TYPE_PRESETS: Record<DbKind, string[]> = {
   postgres: ["SERIAL", "BIGSERIAL", "INT", "BIGINT", "NUMERIC(10,2)", "TEXT", "VARCHAR(255)", "BOOLEAN", "DATE", "TIMESTAMPTZ", "UUID", "JSONB"],
   mysql: ["INT AUTO_INCREMENT", "INT", "BIGINT", "DECIMAL(10,2)", "TEXT", "VARCHAR(255)", "TINYINT(1)", "DATE", "DATETIME", "TIMESTAMP", "JSON"],
+  // MariaDB 與 MySQL 同組（JSON 在 MariaDB 為 LONGTEXT 別名，語法仍可用）。
+  mariadb: ["INT AUTO_INCREMENT", "INT", "BIGINT", "DECIMAL(10,2)", "TEXT", "VARCHAR(255)", "TINYINT(1)", "DATE", "DATETIME", "TIMESTAMP", "JSON"],
   sqlite: ["INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC"],
   mssql: ["INT IDENTITY(1,1)", "INT", "BIGINT", "DECIMAL(18,2)", "NVARCHAR(255)", "NVARCHAR(MAX)", "VARCHAR(255)", "BIT", "DATE", "DATETIME2", "DATETIMEOFFSET", "UNIQUEIDENTIFIER", "MONEY"],
+  oracle: ["NUMBER GENERATED AS IDENTITY", "NUMBER", "NUMBER(10)", "NUMBER(10,2)", "VARCHAR2(255)", "NVARCHAR2(255)", "CLOB", "CHAR(1)", "DATE", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "RAW(16)", "BLOB"],
   // 非 SQL（mongo / redis）不會用到型別下拉，但需滿足 Record<DbKind> 完整性。
   mongo: [],
   redis: [],
@@ -98,9 +106,18 @@ export function buildDropView(kind: DbKind, db: string, table: string): string {
 export function isSystemDatabase(kind: DbKind, name: string): boolean {
   if (kind === "postgres") return name.startsWith("pg_") || name.toLowerCase() === "information_schema";
   const n = name.toLowerCase();
-  if (kind === "mysql") return ["information_schema", "mysql", "performance_schema", "sys"].includes(n);
+  if (isMysqlFamily(kind)) return ["information_schema", "mysql", "performance_schema", "sys"].includes(n);
   if (kind === "mongo") return ["admin", "config", "local"].includes(n);
   if (kind === "mssql") return ["master", "model", "msdb", "tempdb"].includes(n);
+  if (kind === "oracle") {
+    // Oracle 維護的系統 schema（12c+ 後端已用 oracle_maintained 排除；此為 11g 降級時的前端保險）。
+    return [
+      "sys", "system", "outln", "xdb", "ctxsys", "mdsys", "ordsys", "orddata", "ordplugins",
+      "olapsys", "dbsnmp", "appqossys", "wmsys", "lbacsys", "dvsys", "dvf", "gsmadmin_internal",
+      "audsys", "ojvmsys", "anonymous", "ggsys", "dbsfwuser", "remote_scheduler_agent",
+      "si_informtn_schema", "mddata", "dip", "xs$null", "sys$umf",
+    ].includes(n);
+  }
   return false;
 }
 
@@ -109,7 +126,7 @@ export function isSystemDatabase(kind: DbKind, name: string): boolean {
 // 確保兩處「把後續查詢限定到某資料庫」的語法一致。識別字以 quoteIdent 跳脫（防注入）。
 export function buildUseDatabase(kind: DbKind, db: string): string | null {
   if (!db) return null;
-  if (kind === "mysql" || kind === "external") return `USE ${quoteIdent("mysql", db)}`;
+  if (isMysqlFamily(kind) || kind === "external") return `USE ${quoteIdent("mysql", db)}`;
   if (kind === "mssql") return `USE ${quoteIdent("mssql", db)}`;
   if (kind === "postgres") return `SET search_path TO ${quoteIdent("postgres", db)}`;
   return null;
@@ -171,7 +188,7 @@ export function buildGrantTemplate(kind: DbKind, db: string, table: string): str
 // 重新命名：MySQL 用 RENAME TABLE（新名同 schema 限定）；PG / SQLite 用 ALTER TABLE … RENAME TO。
 // （刪除資料庫 / schema 走後端 drop_database，與 create_database 對稱，故此處不再組 SQL。）
 export function buildRenameTable(kind: DbKind, db: string, oldName: string, newName: string): string {
-  if (kind === "mysql") {
+  if (isMysqlFamily(kind)) {
     return `RENAME TABLE ${qualifiedName(kind, db, oldName)} TO ${qualifiedName(kind, db, newName)};`;
   }
   return `ALTER TABLE ${qualifiedName(kind, db, oldName)} RENAME TO ${quoteIdent(kind, newName)};`;
@@ -182,8 +199,10 @@ export function buildRenameTable(kind: DbKind, db: string, oldName: string, newN
 export function buildDuplicateTable(kind: DbKind, db: string, src: string, dst: string): string {
   const from = qualifiedName(kind, db, src);
   const to = qualifiedName(kind, db, dst);
-  if (kind === "mysql") return `CREATE TABLE ${to} LIKE ${from};`;
+  if (isMysqlFamily(kind)) return `CREATE TABLE ${to} LIKE ${from};`;
   if (kind === "postgres") return `CREATE TABLE ${to} (LIKE ${from} INCLUDING ALL);`;
+  // Oracle 無布林字面值，WHERE 0 非法 → 用 1 = 0。
+  if (kind === "oracle") return `CREATE TABLE ${to} AS SELECT * FROM ${from} WHERE 1 = 0;`;
   // SQLite：AS SELECT 僅複製欄位定義（不含主鍵 / 約束 / 索引），請依需要自行補上。
   return `CREATE TABLE ${to} AS SELECT * FROM ${from} WHERE 0;`;
 }
@@ -325,7 +344,10 @@ export function buildRoutineCall(kind: DbKind, db: string, name: string, routine
   const q = qualifiedName(kind, db, name);
   const a = args.trim();
   if (routineType === "function") {
-    return kind === "postgres" ? `SELECT * FROM ${q}(${a})` : `SELECT ${q}(${a}) AS result`;
+    if (kind === "postgres") return `SELECT * FROM ${q}(${a})`;
+    // Oracle 23c 前 SELECT 必須有 FROM 子句。
+    if (kind === "oracle") return `SELECT ${q}(${a}) AS result FROM DUAL`;
+    return `SELECT ${q}(${a}) AS result`;
   }
   return `CALL ${q}(${a})`;
 }
@@ -334,7 +356,7 @@ export function buildRoutineCall(kind: DbKind, db: string, name: string, routine
 // PG 函式 / 程序帶引數簽章以消除重載歧義（PG 對重載函式無簽章的 DROP 會報 "is not unique"）。
 export function buildDropRoutine(kind: DbKind, db: string, r: RoutineInfo): string {
   const t = r.routine_type;
-  if (kind === "mysql") {
+  if (isMysqlFamily(kind)) {
     const kw = t === "procedure" ? "PROCEDURE" : t === "function" ? "FUNCTION" : t === "event" ? "EVENT" : "TRIGGER";
     return `DROP ${kw} IF EXISTS ${qualifiedName(kind, db, r.name)}`;
   }
@@ -342,6 +364,11 @@ export function buildDropRoutine(kind: DbKind, db: string, r: RoutineInfo): stri
     if (t === "trigger") return `DROP TRIGGER IF EXISTS ${quoteIdent(kind, r.name)} ON ${qualifiedName(kind, db, r.parent ?? "")}`;
     const sig = r.signature ?? "";
     return `DROP ${t === "procedure" ? "PROCEDURE" : "FUNCTION"} IF EXISTS ${qualifiedName(kind, db, r.name)}(${sig})`;
+  }
+  if (kind === "oracle") {
+    // Oracle 無 IF EXISTS（23c 前）；觸發器不帶 schema 前綴表。
+    const kw = t === "procedure" ? "PROCEDURE" : t === "function" ? "FUNCTION" : "TRIGGER";
+    return `DROP ${kw} ${qualifiedName(kind, db, r.name)}`;
   }
   return `DROP TRIGGER IF EXISTS ${quoteIdent(kind, r.name)}`;
 }
@@ -363,7 +390,7 @@ export function buildCreateFulltextIndex(db: string, table: string, name: string
 
 // 刪除外鍵：MySQL → DROP FOREIGN KEY；PostgreSQL → DROP CONSTRAINT。
 export function buildDropForeignKey(kind: DbKind, db: string, table: string, name: string): string {
-  const clause = kind === "mysql" ? "DROP FOREIGN KEY" : "DROP CONSTRAINT";
+  const clause = isMysqlFamily(kind) ? "DROP FOREIGN KEY" : "DROP CONSTRAINT";
   return `ALTER TABLE ${qualifiedName(kind, db, table)} ${clause} ${quoteIdent(kind, name)};`;
 }
 

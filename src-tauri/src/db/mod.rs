@@ -5,6 +5,7 @@ use crate::error::{AppError, AppResult};
 pub mod mongo;
 pub mod mssql;
 pub mod mysql;
+pub mod oracle;
 pub mod postgres;
 pub mod redis;
 pub mod sqlite;
@@ -18,11 +19,16 @@ pub mod external;
 #[serde(rename_all = "lowercase")]
 pub enum DbKind {
     Mysql,
+    /// MariaDB：與 MySQL 線協定相容，後端完全共用 `MysqlDriver`（薄別名）；
+    /// 前端另立類型以利標示（版本徽章、預設值、色標）。
+    Mariadb,
     Postgres,
     Mongo,
     Redis,
     Sqlite,
     Mssql,
+    /// Oracle：唯一需要原生 DLL（Instant Client，執行期載入）的類型。實作見 `db::oracle`。
+    Oracle,
     /// 外部 web gateway（非真實連線；透過 HTTP 下 SQL）。實作見 `db::external`。
     External,
 }
@@ -32,11 +38,13 @@ impl DbKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             DbKind::Mysql => "mysql",
+            DbKind::Mariadb => "mariadb",
             DbKind::Postgres => "postgres",
             DbKind::Mongo => "mongo",
             DbKind::Redis => "redis",
             DbKind::Sqlite => "sqlite",
             DbKind::Mssql => "mssql",
+            DbKind::Oracle => "oracle",
             DbKind::External => "external",
         }
     }
@@ -44,11 +52,12 @@ impl DbKind {
     /// 備份檔副檔名（與前端 BackupDialog 的 toolHint 對齊）。
     pub fn backup_ext(&self) -> &'static str {
         match self {
-            DbKind::Mysql | DbKind::Postgres => ".sql",
+            DbKind::Mysql | DbKind::Mariadb | DbKind::Postgres => ".sql",
             DbKind::Mongo => ".archive",
             DbKind::Redis => ".rdb",
             DbKind::Sqlite => ".db",
             DbKind::Mssql => ".bacpac",
+            DbKind::Oracle => ".dmp",
             DbKind::External => "",
         }
     }
@@ -325,6 +334,85 @@ pub struct ServerInfoSection {
     pub items: Vec<(String, String)>,
 }
 
+// ---- MongoDB 專屬 DTO（監控 / 進階索引 / validation；經 mongo_* 專屬命令使用）----
+
+/// $indexStats 單筆：索引名 + 自統計起（重啟即重置）的存取次數。
+#[derive(Debug, Clone, Serialize)]
+pub struct MongoIndexStat {
+    pub name: String,
+    pub ops: u64,
+    /// 統計起始時間（RFC3339）。
+    pub since: String,
+    pub host: String,
+}
+
+/// 進階索引選項（mongo_create_index 輸入；trait 的 create_index 仍為簡單路徑）。
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct MongoIndexOptions {
+    #[serde(default)]
+    pub unique: bool,
+    #[serde(default)]
+    pub sparse: bool,
+    /// 隱藏索引（查詢計畫不用、仍維護；MongoDB 4.4+）。
+    #[serde(default)]
+    pub hidden: bool,
+    /// TTL 秒數（僅單一日期欄位索引有意義；由伺服器驗證）。
+    #[serde(default)]
+    pub expire_after_secs: Option<u64>,
+    /// 部分索引條件（partialFilterExpression，JSON 字串）。
+    #[serde(default)]
+    pub partial_filter_json: Option<String>,
+}
+
+/// 集合驗證規則（validator JSON Schema + level / action）。
+#[derive(Debug, Clone, Serialize)]
+pub struct MongoValidation {
+    /// canonical extended JSON（美化）；空字串＝未設定。
+    pub validator_json: String,
+    /// off | moderate | strict
+    pub level: String,
+    /// warn | error
+    pub action: String,
+}
+
+/// 進行中操作（$currentOp）。opid 用字串以相容 sharded（"shard01:123"）。
+#[derive(Debug, Clone, Serialize)]
+pub struct MongoOp {
+    pub opid: String,
+    pub op: String,
+    pub ns: String,
+    pub secs_running: i64,
+    pub client: String,
+    pub desc: String,
+    /// 指令內容（relaxed extJSON，4KB 截斷）。
+    pub command_json: String,
+    pub active: bool,
+    pub waiting_for_lock: bool,
+}
+
+/// Profiler 設定（per-database）。
+#[derive(Debug, Clone, Serialize)]
+pub struct MongoProfile {
+    /// 0=關、1=僅慢查詢、2=全部操作（正式環境慎用）。
+    pub level: i32,
+    pub slow_ms: i64,
+}
+
+/// system.profile 慢查詢摘要。
+#[derive(Debug, Clone, Serialize)]
+pub struct MongoSlowQuery {
+    pub ts: String,
+    pub op: String,
+    pub ns: String,
+    pub millis: i64,
+    pub plan_summary: String,
+    pub keys_examined: i64,
+    pub docs_examined: i64,
+    pub nreturned: i64,
+    /// 指令內容（relaxed extJSON，4KB 截斷）。
+    pub command_json: String,
+}
+
 /// 鍵名清單（供鍵樹建構）。純 SCAN 取名，不含 type/ttl。
 /// truncated 表示達到 limit 上限、可能仍有更多鍵未回。
 #[derive(Debug, Clone, Serialize)]
@@ -401,6 +489,19 @@ pub struct ColumnStats {
     pub distinct: u64,
     pub min: Option<String>,
     pub max: Option<String>,
+    // ---- 以下為 Mongo（無固定 schema）專用；SQL 驅動留 Default（前端以 types 是否為空分流顯示）----
+    /// 欄位「不存在」的文件數（與 null 區分：Mongo 文件可整個缺欄位）。
+    pub missing: u64,
+    /// 值為 BSON null 的文件數。
+    pub null_count: u64,
+    /// BSON 型別分布（型別名, 文件數），依數量降冪——混型欄位的核心資訊。
+    pub types: Vec<(String, u64)>,
+    /// Top-10 值與出現次數（值以顯示字串呈現）。
+    pub top_values: Vec<(String, u64)>,
+    /// distinct 達估算上限（1000），實際相異值數 ≥ 回報值。
+    pub distinct_capped: bool,
+    /// >0 表示統計基於 $sample 抽樣的文件數（大集合防慢查詢）；0 = 全量統計。
+    pub sampled: u64,
 }
 
 fn one_i64() -> i64 {

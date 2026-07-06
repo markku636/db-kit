@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, ConnectionConfig, DbKind, KIND_META, SshAuthMethod } from "./api";
 import { pickOpenFile } from "./ui";
-import { Modal, Field, Input, Button, Segmented } from "./ui/index";
+import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
 import { Plug, FolderOpen } from "lucide-react";
 
 interface Props {
@@ -9,6 +9,27 @@ interface Props {
   onSaved: (c: ConnectionConfig) => void;
   initial?: ConnectionConfig | null;
 }
+
+// 支援 ssl_mode 選項的類型（sqlx driver；MariaDB 與 MySQL 共用詞彙）。
+const sslKinds: DbKind[] = ["mysql", "mariadb", "postgres"];
+
+// ssl_mode 下拉選項（值即後端 options.ssl_mode；require/required 只加密不驗證憑證鏈）。
+const SSL_MODE_OPTIONS: Record<string, { value: string; label: string }[]> = {
+  postgres: [
+    { value: "", label: "prefer（預設：可用則加密）" },
+    { value: "disable", label: "disable（不加密）" },
+    { value: "require", label: "require（強制加密，不驗證憑證）" },
+    { value: "verify-ca", label: "verify-ca（加密 + 驗證 CA）" },
+    { value: "verify-full", label: "verify-full（加密 + 驗證 CA 與主機名）" },
+  ],
+  mysql: [
+    { value: "", label: "preferred（預設：可用則加密）" },
+    { value: "disabled", label: "disabled（不加密）" },
+    { value: "required", label: "required（強制加密，不驗證憑證）" },
+    { value: "verify_ca", label: "verify_ca（加密 + 驗證 CA）" },
+    { value: "verify_identity", label: "verify_identity（加密 + 驗證 CA 與主機名）" },
+  ],
+};
 
 export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const editing = !!initial;
@@ -48,12 +69,18 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   // MSSQL 連線選項（存於 options map）；加密預設開啟。
   const [mssqlEncrypt, setMssqlEncrypt] = useState(initial?.options?.encrypt !== "false");
   const [mssqlTrust, setMssqlTrust] = useState(initial?.options?.trust_server_certificate === "true");
+  // MySQL / PostgreSQL SSL 模式（存於 options map；空值＝沿用 driver 預設 prefer/preferred）。
+  const [sslMode, setSslMode] = useState(initial?.options?.ssl_mode ?? "");
+  // Oracle 連線選項（存於 options map）：database 欄的解讀方式 + Instant Client 目錄。
+  const [oracleConnectType, setOracleConnectType] = useState(initial?.options?.connect_type ?? "service");
+  const [oracleClientDir, setOracleClientDir] = useState(initial?.options?.client_dir ?? "");
 
   // 任一連線欄位變動就清掉上次測試結果，避免「連線成功」殘留成誤導的假成功訊號（改了 host 卻仍顯示舊成功）。
   useEffect(() => {
     setMsg(null);
   }, [kind, host, port, username, password, database, sshEnabled, sshHost, sshPort, sshUsername, sshAuthMethod, sshPassword, sshKeyPath, sshPassphrase,
-      redisTls, redisTlsInsecure, mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mssqlEncrypt, mssqlTrust]);
+      redisTls, redisTlsInsecure, mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mssqlEncrypt, mssqlTrust, sslMode,
+      oracleConnectType, oracleClientDir]);
 
   const build = (): ConnectionConfig => ({
     id: initial?.id ?? crypto.randomUUID(),
@@ -98,6 +125,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     } else if (kind === "mssql") {
       o.encrypt = mssqlEncrypt ? "true" : "false";
       if (mssqlTrust) o.trust_server_certificate = "true";
+    } else if (kind === "oracle") {
+      if (oracleConnectType !== "service") o.connect_type = oracleConnectType;
+      if (oracleClientDir.trim()) o.client_dir = oracleClientDir.trim();
+    } else if (sslKinds.includes(kind)) {
+      if (sslMode) o.ssl_mode = sslMode;
     }
     return Object.keys(o).length ? o : undefined;
   };
@@ -105,6 +137,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const onKindChange = (k: DbKind) => {
     // 僅在使用者尚未自訂埠（仍等於前一個 kind 的預設埠）時，才覆寫為新 kind 的預設埠
     setPort((prev) => (prev === KIND_META[kind].defaultPort ? KIND_META[k].defaultPort : prev));
+    // ssl_mode 詞彙 PG（require）與 MySQL 系（required）不同，跨 kind 不可沿用。
+    if (k !== kind) setSslMode("");
     setKind(k);
   };
 
@@ -248,8 +282,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
               />
             </Field>
           </div>
-          <Field label="資料庫（選填）">
-            <Input value={database} onChange={(e) => setDatabase(e.target.value)} onKeyDown={submitOnEnter} />
+          <Field label={
+            kind === "oracle"
+              ? (oracleConnectType === "sid" ? "SID" : oracleConnectType === "tns" ? "TNS 別名" : "服務名稱（Service Name）")
+              : "資料庫（選填）"
+          }>
+            <Input value={database} onChange={(e) => setDatabase(e.target.value)} onKeyDown={submitOnEnter}
+              placeholder={kind === "oracle" ? "例如 ORCLPDB1 / FREEPDB1" : ""} />
           </Field>
 
           {kind === "redis" && (
@@ -294,6 +333,46 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                 <input type="checkbox" checked={mongoDirect} onChange={(e) => setMongoDirect(e.target.checked)} />
                 <span>直連（directConnection，繞過拓撲探索）</span>
               </label>
+            </div>
+          )}
+
+          {sslKinds.includes(kind) && (
+            <div className="space-y-2">
+              <Field label="SSL 模式">
+                <Select selectSize="md" value={sslMode} onChange={(e) => setSslMode(e.target.value)}>
+                  {(SSL_MODE_OPTIONS[kind === "postgres" ? "postgres" : "mysql"] ?? []).map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </Select>
+              </Field>
+              {sshEnabled && (sslMode === "verify-full" || sslMode === "verify_identity") && (
+                <div className="text-xs text-warning">
+                  透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，建議改用 verify-ca 或 require。
+                </div>
+              )}
+            </div>
+          )}
+
+          {kind === "oracle" && (
+            <div className="space-y-2">
+              <Segmented
+                full
+                ariaLabel="Oracle 連線方式"
+                value={oracleConnectType}
+                onChange={setOracleConnectType}
+                options={[
+                  { value: "service", label: "服務名稱" },
+                  { value: "sid", label: "SID" },
+                  { value: "tns", label: "TNS 別名" },
+                ]}
+              />
+              <Field label="Instant Client 目錄（選填）">
+                <Input value={oracleClientDir} onChange={(e) => setOracleClientDir(e.target.value)} onKeyDown={submitOnEnter}
+                  placeholder="留空則用 ORACLE_HOME / PATH 偵測" />
+              </Field>
+              <div className="text-xs text-fg/40">
+                需安裝 64 位元 Oracle Instant Client（Basic / Basic Light）。client 目錄於首個 Oracle 連線生效，之後變更需重啟應用程式。
+              </div>
             </div>
           )}
 

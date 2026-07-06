@@ -133,7 +133,8 @@ function ConnectionInfo({ conn, connected }: { conn: ConnectionConfig; connected
       let ver: string | null = null;
       let cs: string | null = null;
       try {
-        if (conn.kind === "mysql") {
+        if (conn.kind === "mysql" || conn.kind === "mariadb") {
+          // MariaDB 的 VERSION() 自然帶 -MariaDB 後綴，無需特別處理。
           const r = await q1("SELECT VERSION(), @@character_set_server, @@collation_server");
           if (r) { ver = r[0]; cs = [r[1], r[2]].filter(Boolean).join(" / ") || null; }
         } else if (conn.kind === "postgres") {
@@ -141,10 +142,23 @@ function ConnectionInfo({ conn, connected }: { conn: ConnectionConfig; connected
           cs = (await q1("SHOW server_encoding"))?.[0] ?? null;
         } else if (conn.kind === "sqlite") {
           ver = (await q1("SELECT sqlite_version()"))?.[0] ?? null;
+        } else if (conn.kind === "oracle") {
+          // v$version 需權限，失敗退 product_component_version；字元集自 NLS 參數。
+          ver = (await q1("SELECT banner FROM v$version WHERE ROWNUM = 1"))?.[0]
+            ?? (await q1("SELECT version FROM product_component_version WHERE product LIKE 'Oracle%'"))?.[0]
+            ?? null;
+          cs = (await q1("SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_CHARACTERSET'"))?.[0] ?? null;
         } else if (conn.kind === "redis") {
           const secs = await api.serverInfo(conn.id).catch(() => []);
           for (const s of secs) {
             const hit = s.items.find(([k]) => k === "redis_version");
+            if (hit) { ver = hit[1]; break; }
+          }
+        } else if (conn.kind === "mongo") {
+          // serverStatus + buildInfo（伺服器區的「版本」列）。
+          const secs = await api.serverInfo(conn.id).catch(() => []);
+          for (const s of secs) {
+            const hit = s.items.find(([k]) => k === "版本");
             if (hit) { ver = hit[1]; break; }
           }
         }
@@ -241,7 +255,7 @@ function DatabaseInfo({ connId, db, kind, connected }: {
         setTables(ts.filter((t) => t.kind !== "view").length);
         setViews(ts.filter((t) => t.kind === "view").length);
       } catch { if (alive) { setTables(null); setViews(null); } }
-      if (kind === "mysql") {
+      if (kind === "mysql" || kind === "mariadb") {
         try {
           const r = await api.runQuery(connId, databaseOptionsSql(db));
           const row = r.rows[0];

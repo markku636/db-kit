@@ -5,7 +5,7 @@ import { isSystemDatabase } from "./sql";
 import type { SQLNamespace } from "@codemirror/lang-sql";
 
 // 僅關聯式資料庫提供結構自動完成。
-const SCHEMA_KINDS: DbKind[] = ["mysql", "postgres", "sqlite"];
+const SCHEMA_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "oracle"];
 
 // 自動完成用的 schema 快取（key = 連線:資料庫）。背景載入，載好後編輯器即時套用，不阻塞輸入。
 const schemaCache = new Map<string, SQLNamespace>();

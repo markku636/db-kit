@@ -8,7 +8,7 @@ import { buildDeleteAllRows, isSystemDatabase } from "./sql";
 
 // 資料傳輸（致敬 Navicat Data Transfer）：把來源表資料複製到另一連線 / 資料庫 / 表。
 // 資料層級（目標表需先存在）：以同名欄位交集傳輸。可選傳輸前清空目標表。
-const RELATIONAL: DbKind[] = ["mysql", "postgres", "sqlite"];
+const RELATIONAL: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite"];
 
 export default function TransferDialog({ connId, database, table, onClose }: {
   connId: string;

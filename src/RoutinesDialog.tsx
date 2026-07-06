@@ -13,13 +13,14 @@ const TYPE_LABEL: Record<string, string> = { procedure: "預存程序", function
 // 各資料庫可新增的 routine 種類。
 const NEW_TYPES: Record<string, string[]> = {
   mysql: ["procedure", "function", "trigger", "event"],
+  mariadb: ["procedure", "function", "trigger", "event"],
   postgres: ["function", "procedure", "trigger"],
   sqlite: ["trigger"],
 };
 
 // 單一 CREATE 語句範本（執行時整段以一次 runQuery 送出，不前端切句，避免內部 ; 破壞）。
 function template(kind: DbKind, type: string): string {
-  if (kind === "mysql") {
+  if (kind === "mysql" || kind === "mariadb") {
     if (type === "procedure") return "CREATE PROCEDURE proc_name(IN p1 INT)\nBEGIN\n  SELECT p1;\nEND";
     if (type === "function") return "CREATE FUNCTION fn_name(p1 INT) RETURNS INT DETERMINISTIC\nBEGIN\n  RETURN p1 + 1;\nEND";
     if (type === "event") return "CREATE EVENT evt_name\nON SCHEDULE EVERY 1 DAY\nCOMMENT ''\nDO\nBEGIN\n  -- 你的排程 SQL，例如清理舊資料；\n  -- DELETE FROM logs WHERE created < NOW() - INTERVAL 30 DAY;\nEND";
