@@ -27,7 +27,7 @@
 
 ## 這是什麼
 
-工程師與 DBA 的日常往往要在 MySQL、PostgreSQL、SQL Server、MongoDB、Redis… 之間來回切換，桌面上散落著好幾個各有脾氣的管理工具。**db-kit** 把它們收進同一套介面、同一套連線管理、同一套主題——關聯式、文件型、鍵值型三種資料範式都有貼合各自手感的瀏覽與編輯體驗，且日常操作（資料格、查詢、ER 圖、匯入匯出、備份）跨資料庫對齊。
+工程師與 DBA 的日常往往要在 MySQL、MariaDB、PostgreSQL、SQL Server、Oracle、MongoDB、Redis… 之間來回切換，桌面上散落著好幾個各有脾氣的管理工具。**db-kit** 把它們收進同一套介面、同一套連線管理、同一套主題——關聯式、文件型、鍵值型三種資料範式都有貼合各自手感的瀏覽與編輯體驗，且日常操作（資料格、查詢、ER 圖、匯入匯出、備份）跨資料庫對齊。
 
 採用 **Tauri 2（Rust 後端 + Web 前端）**，安裝檔小、記憶體佔用約為 Electron 同類產品的十分之一；資料庫連線一律收在 Rust 後端、前端透過 Tauri command 呼叫，不直連、兼顧安全與效能。
 
@@ -105,6 +105,8 @@
 
 > 密碼會存進作業系統的 keychain（不落地到磁碟）。連線設定可隨時在連線上按右鍵「編輯 / 複製 / 刪除」。
 
+> **Oracle 前置需求**：連 Oracle 需先安裝 **64 位元 [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html)**（Basic 或 Basic Light）並加入 PATH（或在連線設定填入 client 目錄）——這是 Oracle 官方驅動的原生相依，db-kit 不隨附；未安裝時只有 Oracle 連線會提示，其他資料庫完全不受影響。伺服器需 Oracle 12c 以上。
+
 **沒有現成資料庫可連？** 用 Docker 起一個測試用 MySQL：
 
 ```bash
@@ -132,7 +134,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - **桌面級操作手感** — 儲存格直接編輯、右鍵選單、鍵盤導覽、多欄排序、欄寬拖曳、依值篩選、內容檢視器、即時尋找。
 - **內建 AI 助手** — 右側面板串接本機 Claude CLI（用你的 Claude 訂閱登入），串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。
 - **附命令列工具 `dbk`** — 唯讀查詢 / 瀏覽 / 匯出 / 備份的 CLI，重用同一套連線與 keychain，可 `--no-default-features` 編成不連 Tauri 的精簡 binary，適合伺服器與 script 場景（見 [命令列工具](#命令列工具dbk-cli)）。
-- **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、前端純函式 vitest 覆蓋，經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
+- **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、Rust 單元測試覆蓋各方言 SQL 生成（含 MariaDB / Oracle）、前端純函式 vitest 覆蓋（212 項），經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
 
 ## 功能特色
 
@@ -275,7 +277,7 @@ cargo build --release --no-default-features --bin dbk
 # 產物：target/release/dbk(.exe)
 ```
 
-**連線兩種來源**：沿用 GUI 已存的連線（`--conn <名稱或 id>`，讀同一份 connections.json + OS keychain），或用旗標臨時連線（`--kind mysql --host … --user …`，密碼可走環境變數 `DBKIT_PASSWORD` 避免出現在 argv）。輸出格式 `--format table|csv|json`。
+**連線兩種來源**：沿用 GUI 已存的連線（`--conn <名稱或 id>`，讀同一份 connections.json + OS keychain），或用旗標臨時連線（`--kind mysql --host … --user …`，密碼可走環境變數 `DBKIT_PASSWORD` 避免出現在 argv；`--kind` 支援 `mysql / mariadb / postgres / sqlite / mongo / redis / mssql / oracle`，也可用 `--url` 一段式連線字串如 `oracle://user:pass@host:1521/SERVICE`）。輸出格式 `--format table|csv|json`。
 
 ```bash
 # 用 GUI 已存的連線，跑一段唯讀查詢，輸出 CSV

@@ -29,6 +29,12 @@
 - 連線改用 typed `ConnectOptions` builder（不再字串內插 URL）：**密碼含 `@ / ? # %` 等特殊字元不再壞掉**。
 - PG 結構分頁補欄位註解（col_description，以 attname join 避開 DROP COLUMN 後的編號錯位）。
 
+### 啟動密碼（app-lock 閘門）
+
+- 新增可選的**啟動密碼**：啟用後每次開啟 App 需先輸入密碼才能進入（僅冷啟動時要求一次）。工具列「設定」可啟用 / 變更 / 移除。
+- 只儲存密碼的 **Argon2id 雜湊**（含 salt，存 `app_settings.json`），明文不落地、驗證在 Rust 後端做。屬「開啟 App 的閘門」，**不加密連線資料**——連線機密仍存於 OS keychain，`dbk` CLI 完全不受影響。
+- 忘記密碼可刪除設定目錄的 `app_settings.json` 解除（不影響已存連線）。
+
 
 
 - 版本號 0.2.5 → 0.2.6（package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock 同步）；重打安裝檔。本版內容見下方「『關於 DB Kit』對話框」與「多結果集同時顯示（SSMS 風格）」。
