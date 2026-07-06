@@ -20,6 +20,17 @@ pub struct MysqlDriver {
     pool: MySqlPool,
     /// 連線時的預設資料庫；drop_database 用以阻擋刪除「使用中的預設庫」（會使連線後續查詢失效）。
     default_db: Option<String>,
+    /// 帶 USE 前綴查詢的 session 連線快取（MRU 一條）：切過庫的連線不得回池（會污染其他查詢），
+    /// 但也不必每次丟棄重建 — 同 USE 語句且 60 秒內用過即重用（免 acquire + USE + 重建連線）。
+    /// 異庫 / 閒置過久 / 查詢出錯 → drop 關閉。close() 時一併清空。
+    switched: tokio::sync::Mutex<Option<SwitchedConn>>,
+}
+
+/// 已切庫（detach 出池）的連線 + 其 USE 語句與最後使用時刻。
+struct SwitchedConn {
+    use_stmt: String,
+    conn: sqlx::MySqlConnection,
+    last_used: std::time::Instant,
 }
 
 /// MySQL 系統資料庫（不可刪除）。
@@ -203,13 +214,48 @@ impl DatabaseDriver for MysqlDriver {
             .idle_timeout(Duration::from_secs(300)) // 閒置 5 分鐘回收
             .max_lifetime(Duration::from_secs(1800)) // 連線最長存活 30 分鐘
             .acquire_timeout(Duration::from_secs(10))
-            .test_before_acquire(true) // 取得前健康檢查
+            // 取得前健康檢查：查詢逾時啟用時一律 ping（逾時取消後的髒連線靠此淘汰）；
+            // 未啟用時僅「閒置 ≥60 秒」的連線才 ping — 省掉高頻小查詢每次取用的 round-trip
+            //（原 test_before_acquire(true) 對每次取用都多一趟 SELECT 1）。
+            .test_before_acquire(false)
+            .before_acquire(|conn, meta| {
+                Box::pin(async move {
+                    if crate::db::limits::timeout_ms() > 0 || meta.idle_for.as_secs() >= 60 {
+                        use sqlx::Connection;
+                        return Ok(conn.ping().await.is_ok());
+                    }
+                    Ok(true)
+                })
+            })
+            // DB 端第一層查詢逾時（0 = 不設）：MySQL 用 max_execution_time（僅 SELECT，5.7.8+），
+            // MariaDB 用 max_statement_time（秒，全語句）— 以 VERSION() 分流。舊版不支援該變數時
+            // 靜默略過（fail-open，外層 tokio 逾時仍兜底）。設定變更只影響之後新建的連線。
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    let ms = crate::db::limits::timeout_ms();
+                    if ms > 0 {
+                        use sqlx::Row;
+                        let ver: String = sqlx::query("SELECT VERSION()")
+                            .fetch_one(&mut *conn)
+                            .await
+                            .and_then(|r| r.try_get::<String, _>(0))
+                            .unwrap_or_default();
+                        let stmt = if ver.to_ascii_lowercase().contains("mariadb") {
+                            format!("SET SESSION max_statement_time = {}", (ms as f64) / 1000.0)
+                        } else {
+                            format!("SET SESSION max_execution_time = {ms}")
+                        };
+                        let _ = sqlx::query(&stmt).execute(&mut *conn).await;
+                    }
+                    Ok(())
+                })
+            })
             .connect_with(opts)
             .await
             .map_err(|e| AppError::Connect(e.to_string()))?;
 
         let default_db = config.database.clone().filter(|s| !s.is_empty());
-        let driver = Self { pool, default_db };
+        let driver = Self { pool, default_db, switched: tokio::sync::Mutex::new(None) };
         driver.ping().await?;
         Ok(driver)
     }
@@ -308,16 +354,20 @@ impl DatabaseDriver for MysqlDriver {
         // 組 ORDER BY（只允許識別字，方向限定）
         let order_sql = build_order(&query.sorts);
 
-        // 總列數（套用相同篩選）
-        let count_sql = format!("SELECT COUNT(*) FROM {q_db}.{q_tbl}{where_sql}");
-        let mut cq = sqlx::query_scalar::<_, i64>(&count_sql);
-        for v in &bind_values {
-            cq = cq.bind(v.clone());
-        }
-        let total: i64 = cq
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+        // 總列數（套用相同篩選）。純翻頁時前端傳 count=false 直接略過（沿用前次快取），
+        // 大表每頁重跑 COUNT(*) 是主要延遲來源（比照 mssql / mongo 的既有處理）。
+        let total: i64 = if query.count {
+            let count_sql = format!("SELECT COUNT(*) FROM {q_db}.{q_tbl}{where_sql}");
+            let mut cq = sqlx::query_scalar::<_, i64>(&count_sql);
+            for v in &bind_values {
+                cq = cq.bind(v.clone());
+            }
+            cq.fetch_one(&self.pool)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?
+        } else {
+            0
+        };
 
         let data_sql = format!(
             "SELECT * FROM {q_db}.{q_tbl}{where_sql}{order_sql} LIMIT {page_size} OFFSET {offset}"
@@ -346,21 +396,48 @@ impl DatabaseDriver for MysqlDriver {
     }
 
     async fn query(&self, sql: &str) -> AppResult<QueryResult> {
+        self.query_capped(sql, 0).await
+    }
+
+    async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
         // 「目前資料庫」選擇器會在語句前帶入 `USE `db`;`。USE 是 session（連線）層級狀態，若與
         // 後續查詢落在 pool 的不同連線上會失效（甚至打到錯的庫）。偵測到開頭 USE 時，取「同一條」
         // 連線先 USE 再執行剩餘語句；該連線切過庫後不放回 pool（detach 後 drop 關閉），避免污染其他查詢。
         if let Some((use_stmt, rest)) = split_leading_use(sql) {
-            let mut conn = self
-                .pool
-                .acquire()
-                .await
-                .map_err(|e| AppError::Query(e.to_string()))?;
-            // USE 不能走 prepared statement 協定（MySQL 回 1295）。直接把 &str 交給 Executor::execute
-            // 走簡單查詢協定（COM_QUERY），與 exec_ddl 同理。
-            use sqlx::Executor;
-            conn.execute(use_stmt.as_str())
-                .await
-                .map_err(|e| AppError::Query(e.to_string()))?;
+            // 先嘗試重用快取的已切庫連線（同 USE 語句、60 秒內用過）；否則棄舊建新。
+            // take 出來後立刻釋放鎖：長查詢期間不阻塞其他 USE 查詢（它們各自 acquire 新連線）。
+            let cached = {
+                let mut cache = self.switched.lock().await;
+                match cache.take() {
+                    Some(sc)
+                        if sc.use_stmt == use_stmt
+                            && sc.last_used.elapsed() < std::time::Duration::from_secs(60) =>
+                    {
+                        Some(sc.conn)
+                    }
+                    _ => None, // 異庫 / 過期的快取連線在此 drop 關閉
+                }
+            };
+            let mut conn: sqlx::MySqlConnection = match cached {
+                Some(c) => c,
+                None => {
+                    let pooled = self
+                        .pool
+                        .acquire()
+                        .await
+                        .map_err(|e| AppError::Query(e.to_string()))?;
+                    // 立刻 detach 出池：切庫後的連線不得回池（會污染其他查詢）。
+                    let mut owned = pooled.detach();
+                    // USE 不能走 prepared statement 協定（MySQL 回 1295）。直接把 &str 交給
+                    // Executor::execute 走簡單查詢協定（COM_QUERY），與 exec_ddl 同理。
+                    use sqlx::Executor;
+                    owned
+                        .execute(use_stmt.as_str())
+                        .await
+                        .map_err(|e| AppError::Query(e.to_string()))?;
+                    owned
+                }
+            };
             let t = rest.trim_start().to_ascii_lowercase();
             // contains("returning")：MariaDB 10.5+ 的 INSERT/REPLACE/DELETE … RETURNING 會回結果集，
             // 需走 fetch 路徑才看得到（比照 postgres.rs 的字串偵測取捨）。
@@ -370,19 +447,28 @@ impl DatabaseDriver for MysqlDriver {
                 || t.starts_with("explain")
                 || t.contains("returning");
             let out = if is_read {
-                sqlx::query(&rest)
-                    .fetch_all(&mut *conn)
+                fetch_rows_capped(&mut conn, &rest, cap)
                     .await
-                    .map(|rows| rows_to_result(&rows))
-                    .map_err(|e| AppError::Query(e.to_string()))
+                    .map(|(rows, truncated)| {
+                        let mut r = rows_to_result(&rows);
+                        r.truncated = truncated;
+                        r
+                    })
             } else {
                 sqlx::query(&rest)
-                    .execute(&mut *conn)
+                    .execute(&mut conn)
                     .await
-                    .map(|res| QueryResult { columns: vec![], rows: vec![], rows_affected: res.rows_affected() })
+                    .map(|res| QueryResult { columns: vec![], rows: vec![], rows_affected: res.rows_affected(), truncated: false })
                     .map_err(|e| AppError::Query(e.to_string()))
             };
-            let _ = conn.detach(); // 切過庫的連線不回收進 pool
+            if out.is_ok() {
+                // 成功 → 放回快取供同庫下一查詢重用；若期間已有別條進駐則覆蓋（舊的 drop）。
+                *self.switched.lock().await = Some(SwitchedConn {
+                    use_stmt,
+                    conn,
+                    last_used: std::time::Instant::now(),
+                });
+            } // 失敗 → conn 在此 drop（協定狀態不明，不快取）
             return out;
         }
 
@@ -395,11 +481,10 @@ impl DatabaseDriver for MysqlDriver {
             || trimmed.contains("returning");
 
         if is_read {
-            let rows = sqlx::query(sql)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| AppError::Query(e.to_string()))?;
-            Ok(rows_to_result(&rows))
+            let (rows, truncated) = fetch_rows_capped(&self.pool, sql, cap).await?;
+            let mut result = rows_to_result(&rows);
+            result.truncated = truncated;
+            Ok(result)
         } else {
             let res = sqlx::query(sql)
                 .execute(&self.pool)
@@ -409,6 +494,7 @@ impl DatabaseDriver for MysqlDriver {
                 columns: vec![],
                 rows: vec![],
                 rows_affected: res.rows_affected(),
+                truncated: false,
             })
         }
     }
@@ -1288,6 +1374,8 @@ impl DatabaseDriver for MysqlDriver {
     }
 
     async fn close(&self) {
+        // 先丟棄快取的切庫連線（detach 出池的連線不歸 pool 管，需自行釋放）。
+        *self.switched.lock().await = None;
         self.pool.close().await;
     }
 }
@@ -1457,6 +1545,31 @@ fn first_top_level_semicolon(s: &str) -> Option<usize> {
     None
 }
 
+/// 以 stream 逐列收集查詢結果，達 cap 即停（cap=0 不限），回傳 (rows, 是否截斷)。
+/// 截斷探測用 cap+1 的第 1 列判定，不多存。注意：MySQL 線協定無法中途叫停結果集，
+/// sqlx 於 stream drop 時丟棄剩餘封包 / 回收連線 — 守住的是本端記憶體、IPC 與前端渲染量。
+async fn fetch_rows_capped<'e, E>(executor: E, sql: &str, cap: usize) -> AppResult<(Vec<MySqlRow>, bool)>
+where
+    E: sqlx::Executor<'e, Database = sqlx::MySql>,
+{
+    use futures::TryStreamExt;
+    let mut stream = sqlx::query(sql).fetch(executor);
+    let mut rows: Vec<MySqlRow> = Vec::new();
+    let mut truncated = false;
+    while let Some(row) = stream
+        .try_next()
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?
+    {
+        if cap > 0 && rows.len() >= cap {
+            truncated = true;
+            break;
+        }
+        rows.push(row);
+    }
+    Ok((rows, truncated))
+}
+
 /// 將 MySQL 列轉成字串格. 盡量以文字呈現，型別細節留待後續加強。
 fn rows_to_result(rows: &[MySqlRow]) -> QueryResult {
     if rows.is_empty() {
@@ -1481,6 +1594,7 @@ fn rows_to_result(rows: &[MySqlRow]) -> QueryResult {
         columns,
         rows: out_rows,
         rows_affected: 0,
+        truncated: false,
     }
 }
 

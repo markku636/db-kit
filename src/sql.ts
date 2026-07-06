@@ -908,30 +908,66 @@ export function buildCountQuery(kind: DbKind, spec: QbSpec): string {
   return `SELECT COUNT(*) AS total FROM (${inner}) AS _sub;`;
 }
 
-// ---- 查詢歷史（localStorage，最近在前，去重，上限 50）----
+// ---- 查詢歷史（localStorage，最近在前，去重，上限 200）----
+// v2：條目帶執行時間與連線名（顯示相對時間 / 標記來源）。舊格式（string[]）讀取時自動升級，
+// at=0 於 UI 顯示為「較早」。
 export const QUERY_HISTORY_KEY = "db-kit:queryHistory";
-const QUERY_HISTORY_CAP = 50;
+const QUERY_HISTORY_CAP = 200;
 
-export function loadQueryHistory(): string[] {
+export interface QueryHistoryEntry {
+  sql: string;
+  /** epoch ms；0 = 舊格式遷移（時間不明） */
+  at: number;
+  /** 執行當下的連線名稱（顯示用；可能已改名 / 刪除） */
+  connName?: string;
+}
+
+export function loadQueryHistory(): QueryHistoryEntry[] {
   try {
     const raw = localStorage.getItem(QUERY_HISTORY_KEY);
     const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr.filter((x) => typeof x === "string") : [];
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .map((x): QueryHistoryEntry | null => {
+        if (typeof x === "string") return { sql: x, at: 0 }; // 舊格式（string[]）遷移
+        if (x && typeof x.sql === "string") {
+          return {
+            sql: x.sql,
+            at: typeof x.at === "number" ? x.at : 0,
+            connName: typeof x.connName === "string" ? x.connName : undefined,
+          };
+        }
+        return null;
+      })
+      .filter((x): x is QueryHistoryEntry => x !== null);
   } catch {
     return [];
   }
 }
 
-export function pushQueryHistory(prev: string[], q: string): string[] {
+export function pushQueryHistory(prev: QueryHistoryEntry[], q: string, connName?: string): QueryHistoryEntry[] {
   const trimmed = q.trim();
   if (!trimmed) return prev;
-  const next = [trimmed, ...prev.filter((x) => x !== trimmed)].slice(0, QUERY_HISTORY_CAP);
+  const entry: QueryHistoryEntry = { sql: trimmed, at: Date.now(), connName };
+  const next = [entry, ...prev.filter((x) => x.sql !== trimmed)].slice(0, QUERY_HISTORY_CAP);
   try {
     localStorage.setItem(QUERY_HISTORY_KEY, JSON.stringify(next));
   } catch {
     /* 忽略寫入失敗 */
   }
   return next;
+}
+
+/** 相對時間（歷史下拉顯示）：剛剛 / N 分鐘前 / N 小時前 / N 天前；at=0 顯示「較早」。 */
+export function fmtRelativeTime(at: number, now = Date.now()): string {
+  if (!at) return "較早";
+  const s = Math.max(0, Math.floor((now - at) / 1000));
+  if (s < 60) return "剛剛";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分鐘前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小時前`;
+  return `${Math.floor(h / 24)} 天前`;
 }
 
 // ---- 收藏查詢（具名，localStorage）----

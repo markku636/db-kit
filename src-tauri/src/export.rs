@@ -124,6 +124,35 @@ pub async fn export(
     })
 }
 
+/// 以「重新執行查詢」匯出完整結果：後端以 MAX_ROWS 上限重跑 SQL 直接寫檔，
+/// rows 不經前端 / IPC 往返 — 供「查詢結果已被互動 row cap 截斷、但要匯出全部」的場景。
+/// 注意：非確定性查詢（NOW()、無 ORDER BY 的 LIMIT）重跑結果可能與畫面不同，
+/// 呼叫端（前端）已把「非唯讀語句 / 有 client-side 排序篩選」分流回 export_rows。
+pub async fn export_query(
+    manager: &ConnectionManager,
+    id: &str,
+    sql: &str,
+    opts: &ExportOptions,
+    out_path: &str,
+) -> AppResult<ExportResult> {
+    let res = manager.query_capped(id, sql, MAX_ROWS).await?;
+    let table = opts
+        .sql_table
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "result".to_string());
+    let bytes = render(&res.columns, &res.rows, opts, &table)?;
+    tokio::fs::write(out_path, &bytes)
+        .await
+        .map_err(|e| AppError::Query(format!("寫入檔案失敗：{e}")))?;
+    Ok(ExportResult {
+        path: out_path.to_string(),
+        rows: res.rows.len() as u64,
+        bytes: bytes.len() as u64,
+        format: opts.format.clone(),
+    })
+}
+
 /// 直接以「已備妥的欄 + 列」匯出（供查詢結果另存：資料已在前端，毋須再向 driver 取）。
 /// 重用 render() 的同一套輸出管線（CSV 注入防護 / BOM / xlsx 數字保真等），與表格匯出一致。
 pub async fn export_rows(

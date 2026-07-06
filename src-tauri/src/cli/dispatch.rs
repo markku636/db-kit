@@ -75,13 +75,17 @@ async fn exec(
 
         Command::Table(tc) => exec_table(mgr, id, db, fmt, tc).await?,
 
-        Command::Query { sql } => {
+        Command::Query { sql, max_rows } => {
             guard::ensure_read_only(&sql)?;
-            let q = mgr.query(id, &sql).await?;
+            let cap = max_rows.unwrap_or_else(crate::db::limits::row_cap);
+            let q = mgr.query_capped(id, &sql, cap).await?;
             if q.columns.is_empty() {
                 println!("(無欄位；{} 列受影響)", q.rows_affected);
             } else {
                 render::emit(fmt, &q.columns, &q.rows);
+            }
+            if q.truncated {
+                eprintln!("(結果已截斷於 {cap} 列；用 --max-rows 0 取完整結果)");
             }
         }
         Command::Explain { sql } => {

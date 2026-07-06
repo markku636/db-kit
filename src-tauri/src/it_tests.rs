@@ -171,6 +171,8 @@ fn collect_relations_builds_fk() {
     assert!(fk_cols.contains(&("orders".to_string(), "customer_id".to_string())));
 }
 
+// scheduler 模組在 gui feature 之後；slim（--no-default-features）測試建置需一併排除。
+#[cfg(feature = "gui")]
 #[test]
 fn scheduler_next_run() {
     use crate::scheduler::{compute_next_run, Cadence};

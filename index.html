@@ -18,6 +18,37 @@
     </script>
   </head>
   <body>
+    <!-- 靜態骨架屏：在 JS bundle 下載/解析期間先給品牌深色畫面（與 .splash 同一漸層，React 接手時零跳變）。
+         視窗以 visible:false 啟動，骨架屏首次繪製後才呼叫 show_main_window，徹底消除白屏。 -->
+    <div id="boot-splash">
+      <style>
+        #boot-splash {
+          position: fixed; inset: 0; z-index: 300;
+          display: flex; align-items: center; justify-content: center;
+          background: radial-gradient(120% 90% at 50% 38%, #1f2837 0%, #121721 58%, #0a0e15 100%);
+        }
+        #boot-splash .dot {
+          width: 40px; height: 40px; border-radius: 50%;
+          border: 3px solid rgba(59, 130, 246, 0.22); border-top-color: #3b82f6;
+          animation: boot-spin 0.9s linear infinite;
+        }
+        @keyframes boot-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) { #boot-splash .dot { animation: none; } }
+      </style>
+      <div class="dot"></div>
+    </div>
+    <script>
+      // 骨架屏完成首次繪製（雙 rAF）後才顯示視窗；非 Tauri 環境（瀏覽器/vite preview）靜默略過。
+      window.addEventListener("DOMContentLoaded", function () {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            try {
+              window.__TAURI__ && window.__TAURI__.core.invoke("show_main_window");
+            } catch (e) {}
+          });
+        });
+      });
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

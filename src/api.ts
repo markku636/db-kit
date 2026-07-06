@@ -33,6 +33,8 @@ export interface QueryResult {
   columns: string[];
   rows: (string | null)[][];
   rows_affected: number;
+  /// 後端已達 row cap 截斷：實際符合列數 ≥ rows.length（顯示「已截斷」而非誤報總數）。
+  truncated?: boolean;
 }
 
 export interface PoolStatus {
@@ -499,8 +501,14 @@ export const api = {
     invoke<ColumnInfo[]>("table_columns", { id, database, table }),
   tableData: (id: string, database: string, table: string, query: DataQuery) =>
     invoke<PagedData>("table_data", { id, database, table, query }),
-  runQuery: (id: string, sql: string) =>
-    invoke<QueryResult>("run_query", { id, sql }),
+  runQuery: (id: string, sql: string, maxRows?: number) =>
+    invoke<QueryResult>("run_query", { id, sql, maxRows: maxRows ?? null }),
+  // 後端重新執行查詢直接寫檔（不受互動 row cap 限制、rows 不經 IPC）：截斷結果的完整匯出用。
+  exportQuery: (id: string, sql: string, options: ExportOptions, outPath: string) =>
+    invoke<ExportResult>("export_query", { id, sql, options, outPath }),
+  // 查詢防護（row cap / 逾時）全域設定；啟動與設定變更時呼叫，持久化在 localStorage。
+  setQueryGuard: (maxRows: number, timeoutMs: number) =>
+    invoke<void>("set_query_guard", { maxRows, timeoutMs }),
   saveTextFile: (path: string, content: string) =>
     invoke<void>("save_text_file", { path, content }),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),

@@ -5,6 +5,16 @@
 export const REPO = "markku636/db-kit";
 const CACHE_KEY = "db-kit:update"; // 沿用 db-kit:* localStorage 慣例
 const TTL_MS = 24 * 60 * 60 * 1000; // 每天最多打一次 API（避開 GitHub 匿名 60 次/小時限制）
+const AUTO_KEY = "db-kit:updateCheck"; // 「啟動時自動檢查更新」開關（"0" = 關閉；預設開）
+
+/** 啟動時是否自動檢查更新（設定頁開關；離線 / 內網環境可關閉）。 */
+export function autoCheckEnabled(): boolean {
+  try { return localStorage.getItem(AUTO_KEY) !== "0"; } catch { return true; }
+}
+
+export function setAutoCheckEnabled(on: boolean) {
+  try { localStorage.setItem(AUTO_KEY, on ? "1" : "0"); } catch { /* 忽略寫入失敗 */ }
+}
 
 type Cache = { checkedAt: number; version: string; url: string };
 export type UpdateInfo = { version: string; url: string };

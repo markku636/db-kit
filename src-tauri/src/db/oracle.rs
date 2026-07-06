@@ -235,6 +235,16 @@ fn cell_to_string(v: &oracle::SqlValue, otype: &OracleType) -> Option<String> {
 
 /// 執行 SELECT 並收集為 QueryResult（欄名 + 型別感知的字串格）。
 fn rows_to_result_conn(conn: &oracle::Connection, sql: &str) -> AppResult<QueryResult> {
+    rows_to_result_conn_capped(conn, sql, 0)
+}
+
+/// 同上，但截斷於 cap（0 = 不限）。rows iterator 為 lazy（ODPI-C 批次 prefetch），
+/// 早停即不再向伺服器抓後續批次 — Oracle 是唯一「截斷真省網路」的關聯式驅動。
+fn rows_to_result_conn_capped(
+    conn: &oracle::Connection,
+    sql: &str,
+    cap: usize,
+) -> AppResult<QueryResult> {
     let rows = conn.query(sql, &[]).map_err(|e| AppError::Query(e.to_string()))?;
     let infos: Vec<(String, OracleType)> = rows
         .column_info()
@@ -242,8 +252,13 @@ fn rows_to_result_conn(conn: &oracle::Connection, sql: &str) -> AppResult<QueryR
         .map(|c| (c.name().to_string(), c.oracle_type().clone()))
         .collect();
     let mut out_rows: Vec<Vec<Option<String>>> = Vec::new();
+    let mut truncated = false;
     for r in rows {
         let row = r.map_err(|e| AppError::Query(e.to_string()))?;
+        if cap > 0 && out_rows.len() >= cap {
+            truncated = true;
+            break;
+        }
         let vals = row.sql_values();
         out_rows.push(
             infos
@@ -257,6 +272,7 @@ fn rows_to_result_conn(conn: &oracle::Connection, sql: &str) -> AppResult<QueryR
         columns: infos.into_iter().map(|(n, _)| n).collect(),
         rows: out_rows,
         rows_affected: 0,
+        truncated,
     })
 }
 
@@ -306,6 +322,14 @@ impl OracleDriver {
             let mut conn = pool.get().map_err(|e| AppError::Query(friendly_ora_error(&e)))?;
             // autocommit：單語句工具語意（DML 立即生效；DDL 本就隱式 commit）。
             conn.set_autocommit(true);
+            // DB 端查詢逾時（OCI_ATTR_CALL_TIMEOUT，需 Instant Client 18c+；舊 client 靜默無效）。
+            // Oracle 走 blocking thread，外層 tokio 逾時無法中止實際執行，此設定才是真正的保護。
+            let tms = crate::db::limits::timeout_ms();
+            let _ = conn.set_call_timeout(if tms > 0 {
+                Some(std::time::Duration::from_millis(tms))
+            } else {
+                None
+            });
             f(&conn)
         })
         .await
@@ -520,17 +544,22 @@ impl DatabaseDriver for OracleDriver {
     }
 
     async fn query(&self, sql: &str) -> AppResult<QueryResult> {
+        self.query_capped(sql, 0).await
+    }
+
+    async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
         // Oracle 對一般 SQL 不接受尾端分號（PL/SQL 區塊除外——那類請走 exec_ddl / RoutinesDialog）。
         let sql = sql.trim().trim_end_matches(';').trim().to_string();
         self.with_conn(move |conn| {
             if starts_ci(&sql, "select") || starts_ci(&sql, "with") {
-                rows_to_result_conn(conn, &sql)
+                rows_to_result_conn_capped(conn, &sql, cap)
             } else {
                 let stmt = conn.execute(&sql, &[]).map_err(ora_q)?;
                 Ok(QueryResult {
                     columns: vec![],
                     rows: vec![],
                     rows_affected: stmt.row_count().unwrap_or(0),
+                    truncated: false,
                 })
             }
         })

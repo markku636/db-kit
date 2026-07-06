@@ -90,7 +90,12 @@ pub enum Command {
     Table(TableCmd),
 
     /// 執行查詢（唯讀；非查詢語句會被擋下）
-    Query { sql: String },
+    Query {
+        sql: String,
+        /// 結果列數上限（0 = 不限；預設沿用全域 1000）。截斷時於 stderr 提示。
+        #[arg(long)]
+        max_rows: Option<usize>,
+    },
 
     /// 查詢計畫（EXPLAIN）
     Explain { sql: String },

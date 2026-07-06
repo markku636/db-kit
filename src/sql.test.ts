@@ -13,6 +13,7 @@ import {
   resultToTsv,
   resultToJson,
   fmtElapsed,
+  fmtRelativeTime,
   pushQueryHistory,
   quoteIdent,
   qualifiedName,
@@ -381,13 +382,32 @@ describe("fmtElapsed", () => {
 });
 
 describe("pushQueryHistory", () => {
-  it("dedupes to front", () => expect(pushQueryHistory(["b", "a"], "a")).toEqual(["a", "b"]));
+  const e = (sql: string) => ({ sql, at: 0 });
+  const sqls = (h: { sql: string }[]) => h.map((x) => x.sql);
+  it("dedupes to front", () => expect(sqls(pushQueryHistory([e("b"), e("a")], "a"))).toEqual(["a", "b"]));
   it("trims and skips empty", () => {
-    expect(pushQueryHistory(["a"], "  ")).toEqual(["a"]);
-    expect(pushQueryHistory([], "  x  ")).toEqual(["x"]);
+    expect(sqls(pushQueryHistory([e("a")], "  "))).toEqual(["a"]);
+    expect(sqls(pushQueryHistory([], "  x  "))).toEqual(["x"]);
   });
-  it("caps at 50", () =>
-    expect(pushQueryHistory(Array.from({ length: 50 }, (_, i) => "q" + i), "new").length).toBe(50));
+  it("caps at 200", () =>
+    expect(pushQueryHistory(Array.from({ length: 200 }, (_, i) => e("q" + i)), "new").length).toBe(200));
+  it("records timestamp and connection name", () => {
+    const [top] = pushQueryHistory([], "SELECT 1", "本機 MySQL");
+    expect(top.sql).toBe("SELECT 1");
+    expect(top.connName).toBe("本機 MySQL");
+    expect(top.at).toBeGreaterThan(0);
+  });
+});
+
+describe("fmtRelativeTime", () => {
+  const now = 1_000_000_000_000;
+  it("at=0（舊格式遷移）顯示「較早」", () => expect(fmtRelativeTime(0, now)).toBe("較早"));
+  it("剛剛 / 分 / 時 / 天", () => {
+    expect(fmtRelativeTime(now - 30_000, now)).toBe("剛剛");
+    expect(fmtRelativeTime(now - 5 * 60_000, now)).toBe("5 分鐘前");
+    expect(fmtRelativeTime(now - 3 * 3_600_000, now)).toBe("3 小時前");
+    expect(fmtRelativeTime(now - 2 * 86_400_000, now)).toBe("2 天前");
+  });
 });
 
 describe("cross-DB quoting", () => {
@@ -474,9 +494,13 @@ describe("localStorage persistence guards", () => {
     expect(loadSavedQueries()).toEqual([]);
   });
 
-  it("query history: keeps only strings, tolerates corrupt storage", () => {
+  it("query history: 舊 string[] 自動遷移為條目、損壞項過濾、容忍壞儲存", () => {
+    // 舊格式（string[]）→ 升級為 { sql, at:0 }；非字串 / 缺 sql 的損壞項被過濾。
     localStorage.setItem(QUERY_HISTORY_KEY, JSON.stringify(["a", 1, "b", null, { x: 1 }]));
-    expect(loadQueryHistory()).toEqual(["a", "b"]);
+    expect(loadQueryHistory()).toEqual([{ sql: "a", at: 0 }, { sql: "b", at: 0 }]);
+    // v2 格式 round-trip（含 connName）。
+    localStorage.setItem(QUERY_HISTORY_KEY, JSON.stringify([{ sql: "s", at: 123, connName: "c" }]));
+    expect(loadQueryHistory()).toEqual([{ sql: "s", at: 123, connName: "c" }]);
     localStorage.setItem(QUERY_HISTORY_KEY, "not json");
     expect(loadQueryHistory()).toEqual([]);
   });

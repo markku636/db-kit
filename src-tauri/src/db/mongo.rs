@@ -242,10 +242,15 @@ impl DatabaseDriver for MongoDriver {
     }
 
     async fn query(&self, sql: &str) -> AppResult<QueryResult> {
+        self.query_capped(sql, 0).await
+    }
+
+    async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
         // MongoDB 無 SQL。接受 JSON：
         //   find：{"db","collection","filter","sort","projection","limit"}
         //   聚合：{"db","collection","pipeline":[ {..stage..}, … ]}（提供 pipeline 時改走 aggregate）
         // 回傳每列一個 JSON 字串。未指定 limit 時 find 預設 200，避免誤拉整個集合。
+        // cap（0 = 不限）為全域 row cap：cursor 分批拉取，達 cap 即停 — 截斷真省網路。
         let parsed: serde_json::Value = serde_json::from_str(sql)
             .map_err(|_| AppError::Query(
                 "MongoDB 查詢請提供 JSON：{\"db\":\"..\",\"collection\":\"..\",\"filter\":{}}".to_string(),
@@ -268,27 +273,36 @@ impl DatabaseDriver for MongoDriver {
                 }
             }
             let coll = self.db_handle(db).collection::<Document>(coll_name);
-            let mut cursor = coll
-                .aggregate(stages)
+            let mut agg = coll.aggregate(stages);
+            // DB 端第一層查詢逾時（maxTimeMS；0 = 不設）。外層另有 tokio 兜底。
+            let tms = crate::db::limits::timeout_ms();
+            if tms > 0 {
+                agg = agg.max_time(Duration::from_millis(tms));
+            }
+            let mut cursor = agg
                 .await
                 .map_err(|e| AppError::Query(e.to_string()))?;
+            // 安全上限：避免使用者誤下未收斂的管線（如 [{"$match":{}}]）把整個集合拉進記憶體。
+            // 全域 row cap 與固定 AGG 上限取小者；要全部結果請在管線尾端自行加 $limit（並調高 cap）。
+            let eff_cap = if cap > 0 { cap.min(AGG_RESULT_CAP) } else { AGG_RESULT_CAP };
             let mut rows = Vec::new();
+            let mut truncated = false;
             while let Some(d) = cursor
                 .try_next()
                 .await
                 .map_err(|e| AppError::Query(e.to_string()))?
             {
-                rows.push(vec![Some(serde_json::to_string(&d).unwrap_or_default())]);
-                // 安全上限：避免使用者誤下未收斂的管線（如 [{"$match":{}}]）把整個集合拉進記憶體。
-                // 與 find 路徑的預設上限呼應；要全部結果請在管線尾端自行加 $limit。
-                if rows.len() >= AGG_RESULT_CAP {
+                if rows.len() >= eff_cap {
+                    truncated = true;
                     break;
                 }
+                rows.push(vec![Some(serde_json::to_string(&d).unwrap_or_default())]);
             }
             return Ok(QueryResult {
                 columns: vec!["document".to_string()],
                 rows,
                 rows_affected: 0,
+                truncated,
             });
         }
 
@@ -306,7 +320,7 @@ impl DatabaseDriver for MongoDriver {
                 }
             }
             if docs.is_empty() {
-                return Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 0 });
+                return Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false });
             }
             let coll = self.db_handle(db).collection::<Document>(coll_name);
             let res = coll
@@ -317,6 +331,7 @@ impl DatabaseDriver for MongoDriver {
                 columns: vec![],
                 rows: vec![],
                 rows_affected: res.inserted_ids.len() as u64,
+                truncated: false,
             });
         }
 
@@ -348,7 +363,7 @@ impl DatabaseDriver for MongoDriver {
                 .update_many(filter, doc! { "$set": set })
                 .await
                 .map_err(|e| AppError::Query(e.to_string()))?;
-            return Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: res.modified_count });
+            return Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: res.modified_count, truncated: false });
         }
 
         // 批次刪除：{ …, "delete": {…filter…} } → delete_many，回傳刪除筆數。
@@ -368,7 +383,7 @@ impl DatabaseDriver for MongoDriver {
                 .delete_many(filter)
                 .await
                 .map_err(|e| AppError::Query(e.to_string()))?;
-            return Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: res.deleted_count });
+            return Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: res.deleted_count, truncated: false });
         }
 
         let filter_doc = match parsed.get("filter") {
@@ -393,9 +408,16 @@ impl DatabaseDriver for MongoDriver {
             .and_then(|v| v.as_i64())
             .filter(|n| *n > 0)
             .unwrap_or(200);
-        let mut find_opts = FindOptions::builder().limit(limit).build();
+        // 全域 row cap（0 = 不限）：伺服器端 limit 收斂到 cap+1（多取 1 列以探測截斷）。
+        let eff_limit = if cap > 0 && limit > cap as i64 { cap as i64 + 1 } else { limit };
+        let mut find_opts = FindOptions::builder().limit(eff_limit).build();
         find_opts.sort = as_doc("sort");
         find_opts.projection = as_doc("projection");
+        // DB 端第一層查詢逾時（maxTimeMS；0 = 不設）。外層另有 tokio 兜底。
+        let tms = crate::db::limits::timeout_ms();
+        if tms > 0 {
+            find_opts.max_time = Some(Duration::from_millis(tms));
+        }
 
         let coll = self.db_handle(db).collection::<Document>(coll_name);
         let mut cursor = coll
@@ -404,11 +426,16 @@ impl DatabaseDriver for MongoDriver {
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
         let mut rows = Vec::new();
+        let mut truncated = false;
         while let Some(d) = cursor
             .try_next()
             .await
             .map_err(|e| AppError::Query(e.to_string()))?
         {
+            if cap > 0 && rows.len() >= cap {
+                truncated = true;
+                break;
+            }
             let json = serde_json::to_string(&d).unwrap_or_default();
             rows.push(vec![Some(json)]);
         }
@@ -416,6 +443,7 @@ impl DatabaseDriver for MongoDriver {
             columns: vec!["document".to_string()],
             rows,
             rows_affected: 0,
+            truncated,
         })
     }
 
@@ -745,6 +773,7 @@ impl DatabaseDriver for MongoDriver {
             columns: vec!["explain".to_string()],
             rows: vec![vec![Some(json)]],
             rows_affected: 0,
+            truncated: false,
         })
     }
 

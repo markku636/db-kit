@@ -256,11 +256,33 @@ async fn run_psql_restore(c: &ConnectionConfig, db: &str, inp: &str) -> AppResul
     Ok(status.success())
 }
 
+/// mongodump / mongorestore 的含密碼 URI 走 --config 暫存檔傳遞（database-tools 100.3+），
+/// 避免出現在行程列表（與 mysqldump 的 MYSQL_PWD、pg_dump 的 PGPASSWORD 同一原則）。
+/// Drop 時自動刪檔（含指令失敗的提早 return 路徑）。
+struct MongoToolConfig(std::path::PathBuf);
+
+impl MongoToolConfig {
+    fn new(c: &ConnectionConfig) -> AppResult<Self> {
+        // build_mongo_uri 的 userinfo / 參數值已 percent-encoding，無空白與引號，可安全放 YAML 純量。
+        let uri = crate::db::mongo::build_mongo_uri(c);
+        let path = std::env::temp_dir().join(format!("dbkit-mongo-{}.yaml", uuid::Uuid::new_v4()));
+        std::fs::write(&path, format!("uri: {uri}\n"))
+            .map_err(|e| AppError::Query(format!("建立 mongo 工具設定暫存檔失敗：{e}")))?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for MongoToolConfig {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 async fn run_mongodump(c: &ConnectionConfig, db: &str, out: &str) -> AppResult<bool> {
     // mongodump 以 --archive 輸出單一檔。URI 與連線邏輯共用 build_mongo_uri（含 SRV / TLS / authSource / replicaSet）。
-    let uri = crate::db::mongo::build_mongo_uri(c);
+    let cfg = MongoToolConfig::new(c)?;
     let status = Command::new("mongodump")
-        .arg("--uri").arg(uri)
+        .arg("--config").arg(&cfg.0)
         .arg("--db").arg(db)
         .arg(format!("--archive={out}"))
         .stderr(Stdio::null())
@@ -271,9 +293,9 @@ async fn run_mongodump(c: &ConnectionConfig, db: &str, out: &str) -> AppResult<b
 }
 
 async fn run_mongorestore(c: &ConnectionConfig, db: &str, inp: &str) -> AppResult<bool> {
-    let uri = crate::db::mongo::build_mongo_uri(c);
+    let cfg = MongoToolConfig::new(c)?;
     let status = Command::new("mongorestore")
-        .arg("--uri").arg(uri)
+        .arg("--config").arg(&cfg.0)
         .arg("--nsInclude").arg(format!("{db}.*"))
         .arg(format!("--archive={inp}"))
         .stderr(Stdio::null())

@@ -25,6 +25,11 @@ pub enum AppError {
 
     #[error("ssh tunnel error: {0}")]
     Ssh(String),
+
+    /// 查詢超過全域逾時（毫秒）。注意：伺服器端查詢可能仍在執行，
+    /// 前端錯誤文案應引導使用者以行程清單（ProcessList）手動 KILL。
+    #[error("query timed out after {0} ms（伺服器端查詢可能仍在執行，可從行程清單手動終止）")]
+    Timeout(u64),
 }
 
 impl Serialize for AppError {
@@ -41,6 +46,7 @@ impl Serialize for AppError {
             AppError::PoolUnavailable => "pool_unavailable",
             AppError::Storage(_) => "storage",
             AppError::Ssh(_) => "ssh",
+            AppError::Timeout(_) => "timeout",
         };
         let mut s = serializer.serialize_struct("AppError", 2)?;
         s.serialize_field("kind", kind)?;

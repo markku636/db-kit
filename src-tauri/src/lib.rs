@@ -71,9 +71,21 @@ pub fn run() {
             });
             // 背景排程迴圈。
             tauri::async_runtime::spawn(scheduler::run_loop(handle));
+            // 保險絲：視窗以 visible:false 啟動，正常由前端骨架屏呼叫 show_main_window 顯示；
+            // 若前端 4 秒內沒呼叫（bundle 載入失敗 / JS 錯誤），強制顯示視窗以免看起來像沒啟動。
+            if let Some(w) = app.get_webview_window("main") {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    if !w.is_visible().unwrap_or(true) {
+                        let _ = w.show();
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::show_main_window,
+            commands::set_query_guard,
             commands::test_connection,
             commands::connect,
             commands::disconnect,
@@ -100,6 +112,7 @@ pub fn run() {
             commands::key_edit,
             commands::export_table,
             commands::export_rows,
+            commands::export_query,
             commands::import_csv,
             commands::import_excel,
             commands::import_preview,

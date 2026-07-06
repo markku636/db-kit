@@ -28,6 +28,31 @@ impl MssqlDriver {
         stream.into_first_result().await.map_err(|e| AppError::Query(e.to_string()))
     }
 
+    /// 取回第一個結果集的列，截斷於 cap（0 = 不限），回傳 (rows, 是否截斷)。
+    /// 達 cap 後「繼續 drain 剩餘封包但不儲存」— tiberius stream 提早 drop 會讓連線的
+    /// TDS 協定狀態殘留，回 bb8 池後污染後續查詢；drain 完才能安全還池。
+    async fn query_rows_capped(&self, sql: &str, cap: usize) -> AppResult<(Vec<tiberius::Row>, bool)> {
+        use futures::TryStreamExt;
+        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut rows: Vec<tiberius::Row> = Vec::new();
+        let mut truncated = false;
+        while let Some(item) = stream.try_next().await.map_err(|e| AppError::Query(e.to_string()))? {
+            if let tiberius::QueryItem::Row(row) = item {
+                // 與 into_first_result 對齊：只取第一個結果集，其餘 drain 不儲存。
+                if row.result_index() != 0 {
+                    continue;
+                }
+                if cap > 0 && rows.len() >= cap {
+                    truncated = true;
+                    continue;
+                }
+                rows.push(row);
+            }
+        }
+        Ok((rows, truncated))
+    }
+
     /// 執行寫入語句，回傳受影響列數。
     async fn exec(&self, sql: &str) -> AppResult<u64> {
         let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
@@ -211,10 +236,14 @@ impl DatabaseDriver for MssqlDriver {
     }
 
     async fn query(&self, sql: &str) -> AppResult<QueryResult> {
+        self.query_capped(sql, 0).await
+    }
+
+    async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
         let head = sql.trim_start();
         let is_read = starts_ci(head, "select") || starts_ci(head, "with") || starts_ci(head, "exec") || starts_ci(head, "show");
         if is_read {
-            let rows = self.query_rows(sql).await?;
+            let (rows, truncated) = self.query_rows_capped(sql, cap).await?;
             let columns: Vec<String> = rows
                 .first()
                 .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
@@ -223,10 +252,10 @@ impl DatabaseDriver for MssqlDriver {
                 .iter()
                 .map(|r| (0..columns.len()).map(|i| cell_to_string(r, i)).collect())
                 .collect();
-            Ok(QueryResult { columns, rows: data, rows_affected: 0 })
+            Ok(QueryResult { columns, rows: data, rows_affected: 0, truncated })
         } else {
             let n = self.exec(sql).await?;
-            Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: n })
+            Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: n, truncated: false })
         }
     }
 
@@ -561,6 +590,7 @@ impl DatabaseDriver for MssqlDriver {
             columns: vec!["ShowPlanXML".to_string()],
             rows: vec![vec![Some(plan)]],
             rows_affected: 0,
+            truncated: false,
         })
     }
 

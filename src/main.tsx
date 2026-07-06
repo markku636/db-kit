@@ -2,8 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 // 自我托管字體（離線內嵌，不連 CDN）：Inter 作介面字、JetBrains Mono 作資料 / SQL 等寬字。
-import "@fontsource-variable/inter";
-import "@fontsource-variable/jetbrains-mono";
+// 只內嵌 latin / latin-ext 子集（fonts.css），取代裸 import 的全語系 14 檔。
+import "./fonts.css";
 import "./styles.css";
 
 // 全域錯誤邊界：任一渲染錯誤時顯示友善訊息與重載鈕，避免整頁白屏。

@@ -1,3 +1,44 @@
+## v0.5.0
+
+- 版本號 0.4.0 → 0.5.0（package.json / tauri.conf.json / Cargo.toml 同步）。本版四大主題：**啟動速度**、**查詢安全網（row cap / 逾時）**、**大表操作效能**、**安全性收尾**。
+
+### 啟動速度（白屏消除 + 首包瘦身）
+
+- **白屏徹底消除**：視窗改 `visible:false` 啟動，`index.html` 內建純 HTML/CSS 深色骨架屏（與開場動畫同一漸層，零跳變），骨架屏首次繪製後才呼叫 `show_main_window` 顯示視窗；Rust 端 4 秒保險絲兜底（前端載入失敗仍會顯示視窗）。
+- **前端 code splitting**：全部條件掛載的對話框 / 工具面板（~40 個）與 SQL / Mongo 編輯器改 `React.lazy`（共用 `lazyOverlay` helper，自帶 Suspense 邊界），CodeMirror 全家桶（~460 KB）獨立 chunk 延後到首次開查詢分頁才載——**首包 JS 1,139 KB → ~470 KB**（index 325 KB + react-vendor 142 KB）。
+- **資產瘦身**：splash hero 圖 5,140 KB → **218 KB**（縮至顯示尺寸 2x + palette 量化，視覺無損；`scripts/optimize-hero.mjs`）；字型只內嵌 latin / latin-ext 子集（14 → 4 個 woff2，`src/fonts.css`）。
+- **Rust release 瘦身**：新增 `[profile.release]`（`lto="thin"` + `strip="symbols"`），縮 exe 體積。
+- **開場動畫不再強制等待**：2.2s → 首次啟動 1.2s、之後 0.6s，並扣除 bundle 載入已流逝時間；點擊 / 按任意鍵可跳過；`prefers-reduced-motion` 直接跳過；設有啟動密碼時不再白播（鎖屏蓋住看不到）。
+- 啟動 IPC 並行化（鎖定狀態查詢與連線清單同時發）；更新檢查延後至啟動 10 秒後、可於設定關閉。
+
+### 查詢安全網（row cap / 逾時）
+
+- **結果列數上限（預設 1,000，設定可調 / 0=不限）**：`run_query` 於各 driver 的 fetch 端截斷（stream 逐列取到上限即停，支援任意語句），誤跑 `SELECT *` 大表不再記憶體爆量 / UI 凍結。截斷時結果列顯示琥珀「已截斷」徽章 +「載入更多」（2× 上限重跑該語句）；匯出改走後端 `export_query` 重新執行取完整結果（上限 100 萬列，rows 不經 IPC）。
+- **查詢逾時（預設關閉，30s/60s/5m 可選）**：DB 端第一層（PG `statement_timeout`、MySQL `max_execution_time` / MariaDB `max_statement_time` 自動分流、Oracle `OCI_ATTR_CALL_TIMEOUT`、Mongo `maxTimeMS`）+ tokio 兜底；逾時錯誤引導以行程清單手動 KILL（MSSQL 第一版僅本端逾時）。
+- CLI `dbk query` 新增 `--max-rows`（預設沿用全域 1,000；截斷時 stderr 提示，`--max-rows 0` 取完整結果）。
+
+### 大表操作效能
+
+- **資料格列級 memo 化**（`DataRow`）：選取移動 / 框選 / 編輯只重繪受影響的列（原本 1000 列 × N 欄整表 reconcile）；事件處理器經穩定 ref 委派，欄寬拖曳不再整格重排。
+- **COUNT(*) 不再白跑**：MySQL / PostgreSQL / SQLite 補齊 `count:false` 旗標支援（前端翻頁本來就有送，先前被忽略）；資料請求與 count 拆成**並行**（資料先回、總數以「…」佔位補上），大表首屏不再被 COUNT 卡住。
+- **切庫連線快取**：帶 `USE` / `SET search_path` 前綴的查詢，同庫 60 秒內重用同一條已切庫連線（原本每次丟棄池連線再重建）。
+- 池健檢改條件式：閒置 ≥60s（或逾時功能啟用時）才 ping，省掉高頻小查詢每次取用的 round-trip。
+- 表格重載頂部顯示 2px 進度條（舊資料保持可見，不閃白）。
+
+### 體驗打磨
+
+- **查詢執行回饋**：執行中顯示即時經過時間與多語句進度「第 N/M 條」；執行鈕變紅色「停止」（Esc 同效）——多語句批次於語句邊界中止、已完成結果保留。
+- **錯誤訊息品質**：常見錯誤（MySQL 1045/1146、PG 42P01/28P01、Oracle ORA-01017 / 缺 Instant Client…約 25 條）附繁中友善提示與建議動作（原文保留）；新增「複製錯誤」與「定位失敗語句」（在編輯器反白多語句批次中出錯的那條）；連線失敗改對話框（可讀完 / 可複製 / 可重試）。
+- **查詢歷史升級**：上限 50 → 200，條目帶執行時間與連線名（下拉顯示相對時間），新增即時過濾框；舊格式自動遷移。
+- 鎖定畫面新增「忘記密碼？」自救指引（刪 `app_settings.json` 即可解除，不影響 keychain 中的連線機密）。
+
+### 安全性
+
+- **mongodump / mongorestore 不再把含密碼 URI 放上命令列**（行程列表可見）：改走 `--config` 暫存檔傳遞、用後即刪——對齊 mysqldump（`MYSQL_PWD`）/ pg_dump（`PGPASSWORD`）既有慣例。
+- **加密匯出檔格式升級 v2**（`DBKITEC2`）：Argon2id 參數顯式提高（64 MiB / t=3，原 library 預設 19 MiB / t=2）並與檔頭版本綁定（升級 argon2 crate 不影響解密）；舊 v1 檔案仍可匯入；後端強制 passphrase ≥ 8 碼。
+- `ConnectionConfig.options` 明確標註「嚴禁放機密」（此 map 明文落地 connections.json）。
+- 已知取捨：密碼在記憶體以一般 `String` 持有（未 zeroize）——縱深防禦項，列入後續評估。
+
 ## v0.4.0
 
 - 版本號 0.3.2 → 0.4.0（package.json / tauri.conf.json / Cargo.toml 同步）。本版四大主題：**MariaDB**、**Oracle**、**MongoDB 強化**、**PostgreSQL / MySQL 連線補強**。

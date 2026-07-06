@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 
+pub mod limits;
 pub mod mongo;
 pub mod mssql;
 pub mod mysql;
@@ -114,6 +115,8 @@ pub struct ConnectionConfig {
 
     // ---- 外部 gateway 驅動（DbKind::External）----
     /// driver-specific 非機密設定（如外部驅動的 driver / base_url / env / insecure）。
+    /// ⚠️ 此 map 以「明文」寫入 connections.json — 嚴禁放 API key / token / 密碼等機密；
+    /// 機密一律走專屬欄位（password / ssh_* / otp_secret，存 OS keychain）。
     #[serde(default)]
     pub options: std::collections::BTreeMap<String, String>,
     /// TOTP secret（如 2FA gateway）；存 OS keychain，不落地磁碟。
@@ -139,6 +142,8 @@ pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
     pub rows_affected: u64,
+    /// 已達 row cap 截斷：實際符合列數 ≥ rows.len()（前端據此顯示「已截斷」而非誤報總數）。
+    pub truncated: bool,
 }
 
 /// 表 / 視圖的基本資訊（連線樹展開用）。
@@ -934,6 +939,13 @@ pub trait DatabaseDriver: Send + Sync {
 
     /// 執行查詢。
     async fn query(&self, sql: &str) -> AppResult<QueryResult>;
+
+    /// 執行查詢並將結果列數截斷於 cap（0 = 不限）。預設實作退回 query()（不截斷），
+    /// 各 driver 漸進覆寫以真正在 fetch 端截斷（守住記憶體 / IPC / 前端渲染量）。
+    /// 截斷時設 QueryResult::truncated = true。
+    async fn query_capped(&self, sql: &str, _cap: usize) -> AppResult<QueryResult> {
+        self.query(sql).await
+    }
 
     /// 更新單一儲存格（寫回 DB）。以主鍵定位列。
     async fn update_cell(

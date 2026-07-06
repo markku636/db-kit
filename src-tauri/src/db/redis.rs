@@ -598,7 +598,18 @@ impl DatabaseDriver for RedisDriver {
             columns: vec!["result".to_string()],
             rows,
             rows_affected: 0,
+            truncated: false,
         })
+    }
+
+    async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
+        // Redis 回覆整包已在記憶體（RESP 一次回完），截斷只省 IPC 與前端渲染量。
+        let mut r = self.query(sql).await?;
+        if cap > 0 && r.rows.len() > cap {
+            r.rows.truncate(cap);
+            r.truncated = true;
+        }
+        Ok(r)
     }
 
     async fn update_cell(

@@ -328,7 +328,7 @@ option {
   -webkit-mask: var(--logo-src) center / contain no-repeat;
           mask: var(--logo-src) center / contain no-repeat;
   opacity: 0;
-  animation: splash-shine 1.6s ease 0.7s 1 forwards;
+  animation: splash-shine 0.9s ease 0.4s 1 forwards;
   pointer-events: none;
 }
 
@@ -352,6 +352,26 @@ option {
 }
 @keyframes splash-fade-out {
   to { opacity: 0; visibility: hidden; }
+}
+
+/* ---- 不確定進度條（2px）：資料表重載 / 面板長時載入回饋 ---- */
+.progress-track {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  background: rgb(var(--c-accent) / 0.15);
+}
+.progress-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: rgb(var(--c-accent) / 0.9);
+  animation: progress-slide 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes progress-slide {
+  0% { left: -40%; }
+  100% { left: 100%; }
 }
 
 /* ---- Toast 進場：自右側輕滑入 + 淡入（主要回饋通道，不突兀）---- */

@@ -52,6 +52,22 @@ fn hydrate_secrets(config: &mut ConnectionConfig) {
     }
 }
 
+/// 前端骨架屏完成首次繪製後呼叫：顯示主視窗。
+/// 配合 tauri.conf.json 的 visible:false，消除 WebView2 初始化期間的白屏。
+#[tauri::command]
+pub fn show_main_window(window: tauri::WebviewWindow) {
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// 查詢防護設定（互動查詢 row cap / 逾時），全域生效。
+/// 前端於啟動與設定變更時呼叫；持久化在前端 localStorage（非機密、UI 偏好層級）。
+#[tauri::command]
+pub fn set_query_guard(max_rows: usize, timeout_ms: u64) {
+    crate::db::limits::set_row_cap(max_rows);
+    crate::db::limits::set_timeout_ms(timeout_ms);
+}
+
 #[tauri::command]
 pub async fn test_connection(
     state: State<'_, AppState>,
@@ -343,8 +359,13 @@ pub async fn run_query(
     state: State<'_, AppState>,
     id: String,
     sql: String,
+    max_rows: Option<usize>,
 ) -> AppResult<QueryResult> {
-    state.manager.query(&id, &sql).await
+    // max_rows：單次覆寫（「載入更多」以 2× cap 重跑）；未提供則走全域 row cap。
+    match max_rows {
+        Some(cap) => state.manager.query_capped(&id, &sql, cap).await,
+        None => state.manager.query(&id, &sql).await,
+    }
 }
 
 /// 將文字內容寫入使用者（透過原生另存對話框）選定的路徑。供匯出查詢結果用。
@@ -693,6 +714,19 @@ pub async fn export_table(
     out_path: String,
 ) -> AppResult<crate::export::ExportResult> {
     crate::export::export(&state.manager, &id, &database, &table, &query, &options, &out_path).await
+}
+
+/// 以「重新執行查詢」匯出完整結果（不受互動 row cap 限制、rows 不經 IPC 往返）。
+/// 供查詢結果已被截斷但要匯出全部的場景；上限沿用匯出管線的 1,000,000 列保護。
+#[tauri::command]
+pub async fn export_query(
+    state: State<'_, AppState>,
+    id: String,
+    sql: String,
+    options: crate::export::ExportOptions,
+    out_path: String,
+) -> AppResult<crate::export::ExportResult> {
+    crate::export::export_query(&state.manager, &id, &sql, &options, &out_path).await
 }
 
 /// 匯出「已備妥的查詢結果」到檔案（CSV / TSV / Excel / JSON / SQL / Markdown）。

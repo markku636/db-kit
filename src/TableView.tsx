@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ListTree, Table2, Plus, Minus, BarChart3, Network, Settings, Terminal,
   RefreshCw, Search, Filter, Trash2, ArrowUpDown, Download, Upload, X, Check,
@@ -14,15 +14,19 @@ import {
 import { OpenTab, useStore } from "./store";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, TYPE_PRESETS } from "./sql";
-import ExportDialog from "./ExportDialog";
-import ImportDialog from "./ImportDialog";
 import RedisKeyTree from "./RedisKeyTree";
-import NewKeyDialog from "./NewKeyDialog";
-import RedisStatus from "./RedisStatus";
-import RedisConsole from "./RedisConsole";
-import PubSubPanel from "./PubSubPanel";
-import RedisOpsPanel from "./RedisOpsPanel";
+import lazyOverlay from "./ui/lazyOverlay";
+import ProgressBar from "./ui/ProgressBar";
 import { AlterOp } from "./api";
+
+// 條件掛載的對話框 / 面板改 lazy（code splitting）：開啟時才抓 chunk，首包不含其程式碼。
+const ExportDialog = lazyOverlay(() => import("./ExportDialog"));
+const ImportDialog = lazyOverlay(() => import("./ImportDialog"));
+const NewKeyDialog = lazyOverlay(() => import("./NewKeyDialog"));
+const RedisStatus = lazyOverlay(() => import("./RedisStatus"));
+const RedisConsole = lazyOverlay(() => import("./RedisConsole"));
+const PubSubPanel = lazyOverlay(() => import("./PubSubPanel"));
+const RedisOpsPanel = lazyOverlay(() => import("./RedisOpsPanel"));
 
 const PAGE_SIZE = 100;
 const DEFAULT_COL_W = 160;
@@ -333,6 +337,10 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   // 記住上次「影響總數的輸入」簽章；相同表示只是翻頁 / 排序，可略過 count。
   const countSigRef = useRef<string>("");
+  // 目前已知總列數（跨資料回應保序：count 回應先到時不被資料回應覆蓋）。
+  const totalRef = useRef<number>(0);
+  // count 請求進行中：分頁器總數顯示「…」。
+  const [countPending, setCountPending] = useState(false);
   const load = () => {
     // 只有「影響總數的輸入」（表/篩選/reload）變動時才重算 count；純翻頁 / 排序沿用前次總數，
     // 避免大表 / Mongo 每翻一頁都重算 count（頁碼也不會因每次重算而跳動）。
@@ -342,6 +350,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
     let cancelled = false;
     setLoading(true);
     setErr(null);
+    // 資料請求恆 count:false（首屏不被大表 COUNT(*) 卡住）；需要重算總數時另發
+    // page_size:1 的並行 count 請求補總數，期間分頁器顯示「…」。
     api
       .tableData(tab.connId, tab.database, tab.table, {
         page,
@@ -349,12 +359,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
         filters,
         sorts,
         match_any: matchAny,
-        count: needCount,
+        count: false,
       })
       .then((d) => {
         if (!cancelled) {
-          // count=false 時後端回 total_rows=0，沿用前次總數避免頁碼歸零。
-          setData((prev) => (!needCount && prev ? { ...d, total_rows: prev.total_rows } : d));
+          setData({ ...d, total_rows: totalRef.current });
           setEdits({});
           setEditing(null);
           setSelected(null); // 重載後清除選取，避免指向已不存在的列
@@ -363,6 +372,26 @@ function DataPane({ tab }: { tab: OpenTab }) {
       })
       .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"))
       .finally(() => !cancelled && setLoading(false));
+    if (needCount) {
+      setCountPending(true);
+      api
+        .tableData(tab.connId, tab.database, tab.table, {
+          page: 0,
+          page_size: 1,
+          filters,
+          sorts: [],
+          match_any: matchAny,
+          count: true,
+        })
+        .then((c) => {
+          if (!cancelled) {
+            totalRef.current = c.total_rows;
+            setData((prev) => (prev ? { ...prev, total_rows: c.total_rows } : prev));
+          }
+        })
+        .catch(() => {}) // count 失敗不影響資料呈現（總數維持前值）
+        .finally(() => !cancelled && setCountPending(false));
+    }
     return () => {
       cancelled = true;
     };
@@ -386,16 +415,23 @@ function DataPane({ tab }: { tab: OpenTab }) {
     dirtyCount === 0 ||
     (await uiConfirm("有未套用的變更，排序 / 篩選將重新載入並放棄。確定？", { title: "放棄變更", danger: true, confirmText: "放棄並繼續" }));
   // 範圍選取矩形邊界（以可見欄序位計）：供儲存格判斷是否被框選、Ctrl+C 區塊複製定位。
-  const rangeVisIdx = data ? data.columns.map((_, j) => j).filter((j) => !isHidden(data.columns[j])) : [];
-  const rangeRect =
-    selected && rangeEnd
-      ? {
-          r1: Math.min(selected.r, rangeEnd.r),
-          r2: Math.max(selected.r, rangeEnd.r),
-          pmin: Math.min(rangeVisIdx.indexOf(selected.c), rangeVisIdx.indexOf(rangeEnd.c)),
-          pmax: Math.max(rangeVisIdx.indexOf(selected.c), rangeVisIdx.indexOf(rangeEnd.c)),
-        }
-      : null;
+  // useMemo：識別穩定 → DataRow 的 memo 比較才能在選取不變時略過重繪。
+  const rangeVisIdx = useMemo(
+    () => (data ? data.columns.map((_, j) => j).filter((j) => !hidden.includes(data.columns[j])) : []),
+    [data, hidden],
+  );
+  const rangeRect = useMemo(
+    () =>
+      selected && rangeEnd
+        ? {
+            r1: Math.min(selected.r, rangeEnd.r),
+            r2: Math.max(selected.r, rangeEnd.r),
+            pmin: Math.min(rangeVisIdx.indexOf(selected.c), rangeVisIdx.indexOf(rangeEnd.c)),
+            pmax: Math.max(rangeVisIdx.indexOf(selected.c), rangeVisIdx.indexOf(rangeEnd.c)),
+          }
+        : null,
+    [selected, rangeEnd, rangeVisIdx],
+  );
   const inRange = (i: number, j: number): boolean => {
     if (!rangeRect || i < rangeRect.r1 || i > rangeRect.r2) return false;
     const p = rangeVisIdx.indexOf(j);
@@ -404,6 +440,77 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // Redis 鍵列右鍵需定位 key / ttl 欄。
   const keyIdx = data ? data.columns.indexOf("key") : -1;
   const ttlIdx = data ? data.columns.indexOf("ttl") : -1;
+
+  // ---- DataRow（memo）的行級派生 props：選取移動 / 編輯 / 框選只重繪受影響的列 ----
+  // 可見欄清單（含欄索引 j 與可見序位 pos）；columns / hidden 變動才重建。
+  const visibleCols = useMemo<VisibleCol[]>(() => {
+    if (!data) return [];
+    let pos = 0;
+    return data.columns
+      .map((name, j) => ({ name, j }))
+      .filter(({ name }) => !hidden.includes(name))
+      .map(({ name, j }) => ({ name, j, pos: pos++ }));
+  }, [data, hidden]);
+  // 待套用編輯按列分組：無編輯的列拿到 undefined（識別穩定，不觸發重繪）。
+  const editsByRow = useMemo(() => {
+    const m: Record<number, Record<number, string | null>> = {};
+    for (const k of Object.keys(edits)) {
+      const idx = k.indexOf(":");
+      const r = Number(k.slice(0, idx));
+      const c = Number(k.slice(idx + 1));
+      (m[r] ??= {})[c] = edits[k];
+    }
+    return m;
+  }, [edits]);
+  // 穩定的列事件處理器：DataRow 的 memo 不被 handler 識別變動打破。
+  // 內部一律經 latestRef 讀「最新」state 與函式（updateLatest() 於下方各函式定義後呼叫），
+  // 避免 stale closure（對齊 App.tsx fileShortcutRef 的既有慣例）。
+  const latestRef = useRef<any>(null);
+  const rowHandlers = useMemo<RowHandlers>(() => ({
+    rowContext(e, i) {
+      const L = latestRef.current;
+      const row = L.data?.rows[i];
+      if (!row || L.keyIdx < 0) return;
+      const key = row[L.keyIdx];
+      if (key == null) return;
+      e.preventDefault();
+      L.setRowMenu({ key, ttl: L.ttlIdx >= 0 ? row[L.ttlIdx] : null, x: e.clientX, y: e.clientY });
+    },
+    rowNumClick(e, i) {
+      const L = latestRef.current;
+      // 點列號看整列表單；Shift+點選整列（沿可見欄全寬，接著 Ctrl+C 複製整列 / 看統計）。
+      if (e.shiftKey && L.rangeVisIdx.length > 0) {
+        const anchorR = L.selected ? L.selected.r : i;
+        L.setSelected({ r: anchorR, c: L.rangeVisIdx[0] });
+        L.setRangeEnd({ r: i, c: L.rangeVisIdx[L.rangeVisIdx.length - 1] });
+        gridRef.current?.focus();
+      } else L.setRowDetail(i);
+    },
+    toggleMark: (i) => latestRef.current.toggleMark(i),
+    cellClick(e, i, j) {
+      const L = latestRef.current;
+      // Shift+點選：以目前選取格為錨點框選矩形範圍（Ctrl+C 整塊複製）；一般點選則重置為單格。
+      if (e.shiftKey && L.selected) L.setRangeEnd({ r: i, c: j });
+      else { L.setSelected({ r: i, c: j }); L.setRangeEnd(null); }
+      (e.currentTarget.closest(".at-grid") as HTMLElement | null)?.focus();
+    },
+    cellDoubleClick(i, j, redisKeyCol, val) {
+      const L = latestRef.current;
+      if (redisKeyCol) L.setDetailKey(val);
+      else if (L.editable) L.openEditor(i, j);
+    },
+    cellContext(e, i, j) {
+      const L = latestRef.current;
+      e.preventDefault();
+      // 右鍵落在框選範圍內時保留範圍（供「複製範圍 / 範圍設為 NULL」）；否則重置為單格。
+      if (!(L.rangeEnd && L.inRange(i, j))) { L.setSelected({ r: i, c: j }); L.setRangeEnd(null); }
+      L.setCellMenu({ r: i, c: j, x: e.clientX, y: e.clientY });
+    },
+    commitEdit: (r, c, raw, setNull) => latestRef.current.commitEdit(r, c, raw, setNull),
+    cancelEdit: () => latestRef.current.setEditing(null),
+    advanceCell: (r, c, dir) => latestRef.current.advanceCell(r, c, dir),
+    deleteRow: (i) => latestRef.current.deleteRow(i),
+  }), []);
 
   const cellValue = (r: number, c: number): string | null => {
     const key = `${r}:${c}`;
@@ -554,6 +661,13 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   const toggleMark = (r: number) =>
     setMarked((m) => { const n = new Set(m); if (n.has(r)) n.delete(r); else n.add(r); return n; });
+
+  // 每次 render 更新 rowHandlers 讀取的「最新」state / 函式（放在所有相依函式定義之後）。
+  latestRef.current = {
+    data, selected, rangeEnd, rangeVisIdx, editable, keyIdx, ttlIdx, inRange,
+    toggleMark, setRowDetail, openEditor, commitEdit, advanceCell, deleteRow,
+    setDetailKey, setCellMenu, setRowMenu, setSelected, setRangeEnd, setEditing,
+  };
 
   // 批次刪除已標記列：先擷取各列主鍵值（避免逐筆刪除後索引位移），再逐筆依主鍵刪除，最後重載。
   const bulkDelete = async () => {
@@ -1259,6 +1373,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
         />
       ) : (
       <>
+      {/* 重載期間頂部細進度條：舊資料保持可見不閃白，仍有「正在載入」的視覺回饋 */}
+      <ProgressBar active={loading && !!data} />
       <div ref={gridRef} className="at-grid flex-1 overflow-auto outline-none" tabIndex={0} onKeyDown={onGridKey}>
         {err && <div className="p-3 text-red-400 text-sm mono">{err}</div>}
         {!data && loading && !err && (
@@ -1327,113 +1443,25 @@ function DataPane({ tab }: { tab: OpenTab }) {
             </thead>
             <tbody className="mono">
               {data.rows.map((row, i) => (
-                <tr
+                <DataRow
                   key={i}
-                  className={`${selected?.r === i ? "bg-accent/[0.06]" : "hover:bg-fg/5"} group`}
-                  onContextMenu={isRedis && keyIdx >= 0 ? (e) => {
-                    const key = row[keyIdx];
-                    if (key == null) return;
-                    e.preventDefault();
-                    setRowMenu({
-                      key,
-                      ttl: ttlIdx >= 0 ? row[ttlIdx] : null,
-                      x: e.clientX,
-                      y: e.clientY,
-                    });
-                  } : undefined}
-                >
-                  {editable && (
-                    <td className="px-1 py-1 border-b border-fg/5 text-center">
-                      <input type="checkbox" title="勾選以批次刪除"
-                        checked={marked.has(i)} onChange={() => toggleMark(i)} />
-                    </td>
-                  )}
-                  <td
-                    onClick={(e) => {
-                      // 點列號看整列表單；Shift+點選整列（沿可見欄全寬，接著 Ctrl+C 複製整列 / 看統計）。
-                      if (e.shiftKey && rangeVisIdx.length > 0) {
-                        const anchorR = selected ? selected.r : i;
-                        setSelected({ r: anchorR, c: rangeVisIdx[0] });
-                        setRangeEnd({ r: i, c: rangeVisIdx[rangeVisIdx.length - 1] });
-                        gridRef.current?.focus();
-                      } else setRowDetail(i);
-                    }}
-                    title="點看整列表單、Shift+點選整列"
-                    className={`px-3 py-1 border-b border-fg/5 cursor-pointer hover:bg-fg/5 hover:text-fg/60 tabular-nums ${
-                      marked.has(i) ? "text-red-300 bg-red-500/10" : selected?.r === i ? "text-accent/90" : "text-fg/30"
-                    }`}
-                  >
-                    {startRow + i + 1}
-                  </td>
-                  {row.map((_, j) => {
-                    const colName = data.columns[j];
-                    if (isHidden(colName)) return null;
-                    const key = `${i}:${j}`;
-                    const isEditing = editing?.r === i && editing?.c === j;
-                    const val = cellValue(i, j);
-                    const dirty = key in edits;
-                    // Redis 的 key 欄：雙擊開鍵詳情；其餘照常（ttl 可編輯）
-                    const redisKeyCol = isRedis && colName === "key";
-                    return (
-                      <td
-                        key={j}
-                        onClick={(e) => {
-                          // Shift+點選：以目前選取格為錨點框選矩形範圍（Ctrl+C 整塊複製）；一般點選則重置為單格。
-                          if (e.shiftKey && selected) setRangeEnd({ r: i, c: j });
-                          else { setSelected({ r: i, c: j }); setRangeEnd(null); }
-                          (e.currentTarget.closest(".at-grid") as HTMLElement | null)?.focus();
-                        }}
-                        onDoubleClick={() => {
-                          if (redisKeyCol) setDetailKey(val);
-                          else if (editable) openEditor(i, j);
-                        }}
-                        onContextMenu={
-                          isRedis
-                            ? undefined
-                            : (e) => {
-                                e.preventDefault();
-                                // 右鍵落在框選範圍內時保留範圍（供「複製範圍 / 範圍設為 NULL」）；否則重置為單格。
-                                if (!(rangeEnd && inRange(i, j))) { setSelected({ r: i, c: j }); setRangeEnd(null); }
-                                setCellMenu({ r: i, c: j, x: e.clientX, y: e.clientY });
-                              }
-                        }
-                        title={redisKeyCol ? "雙擊檢視鍵內容" : val ?? "NULL"}
-                        className={`px-3 py-1 border-b border-fg/5 whitespace-nowrap overflow-hidden text-ellipsis ${
-                          selected?.r === i && selected?.c === j ? "ring-1 ring-inset ring-accent " : ""
-                        }${
-                          dirty ? "bg-amber-500/15" : selected?.r === i && selected?.c === j ? "bg-accent/15" : inRange(i, j) ? "bg-accent/10" : ""
-                        } ${redisKeyCol ? "cursor-pointer text-blue-300" : editable ? "cursor-cell" : ""}`}
-                      >
-                        {isEditing ? (
-                          <CellEditor
-                            initial={val}
-                            seed={editSeed}
-                            onCommit={(raw, setNull) => commitEdit(i, j, raw, setNull)}
-                            onCancel={() => setEditing(null)}
-                            onAdvance={(dir) => advanceCell(i, j, dir)}
-                          />
-                        ) : val === null ? (
-                          <span className="text-fg/30 italic">NULL</span>
-                        ) : findLower ? (
-                          highlight(val, findLower)
-                        ) : (
-                          val
-                        )}
-                      </td>
-                    );
-                  })}
-                  {editable && (
-                    <td className="px-1 py-1 border-b border-fg/5 text-center">
-                      <button
-                        onClick={() => deleteRow(i)}
-                        title="刪除此列"
-                        className="w-5 h-5 inline-flex items-center justify-center rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20"
-                      >
-                        <Icon icon={Minus} size={14} />
-                      </button>
-                    </td>
-                  )}
-                </tr>
+                  row={row}
+                  i={i}
+                  startRow={startRow}
+                  visibleCols={visibleCols}
+                  editable={editable}
+                  isRedis={isRedis}
+                  hasKeyMenu={isRedis && keyIdx >= 0}
+                  isMarked={marked.has(i)}
+                  selRow={selected?.r === i}
+                  selCol={selected?.r === i ? selected.c : null}
+                  editingCol={editing?.r === i ? editing.c : null}
+                  editSeed={editing?.r === i ? editSeed : null}
+                  rowEdits={editsByRow[i]}
+                  rangeCols={rangeRect && i >= rangeRect.r1 && i <= rangeRect.r2 ? rangeRect : null}
+                  findLower={findLower}
+                  h={rowHandlers}
+                />
               ))}
             </tbody>
           </table>
@@ -1529,7 +1557,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           {applying
             ? "處理中…"
             : data
-            ? `顯示 ${data.rows.length ? startRow + 1 : 0}–${startRow + data.rows.length} · 共 ${data.total_rows} 列${editable ? "" : readonly ? " · 連線唯讀" : " · 無主鍵唯讀"}`
+            ? `顯示 ${data.rows.length ? startRow + 1 : 0}–${startRow + data.rows.length} · 共 ${countPending ? "…" : data.total_rows} 列${editable ? "" : readonly ? " · 連線唯讀" : " · 無主鍵唯讀"}`
             : loading
             ? "讀取中…"
             : ""}
@@ -2724,6 +2752,121 @@ function InsertDialog({ columns, onSubmit, onCancel, busy, initial }: {
     </div>
   );
 }
+
+// ---- 資料列（memo）：props 收斂為行級派生值，選取移動 / 框選 / 編輯只重繪受影響的列，
+//      1000 列頁的互動從整表 reconcile 降為 O(變動列數)。handlers 為穩定物件（見 rowHandlers）。----
+interface VisibleCol { j: number; name: string; pos: number; }
+interface RowHandlers {
+  rowContext: (e: React.MouseEvent, i: number) => void;
+  rowNumClick: (e: React.MouseEvent, i: number) => void;
+  toggleMark: (i: number) => void;
+  cellClick: (e: React.MouseEvent<HTMLTableCellElement>, i: number, j: number) => void;
+  cellDoubleClick: (i: number, j: number, redisKeyCol: boolean, val: string | null) => void;
+  cellContext: (e: React.MouseEvent, i: number, j: number) => void;
+  commitEdit: (r: number, c: number, raw: string, setNull: boolean) => void;
+  cancelEdit: () => void;
+  advanceCell: (r: number, c: number, dir: "down" | "up" | "right" | "left") => void;
+  deleteRow: (i: number) => void;
+}
+
+const DataRow = memo(function DataRow({
+  row, i, startRow, visibleCols, editable, isRedis, hasKeyMenu,
+  isMarked, selRow, selCol, editingCol, editSeed, rowEdits, rangeCols, findLower, h,
+}: {
+  row: (string | null)[];
+  i: number;
+  startRow: number;
+  visibleCols: VisibleCol[];
+  editable: boolean;
+  isRedis: boolean;
+  /** Redis 鍵列右鍵選單可用（isRedis 且 key 欄存在） */
+  hasKeyMenu: boolean;
+  isMarked: boolean;
+  selRow: boolean;
+  /** 選取格落在本列時的欄索引；否則 null */
+  selCol: number | null;
+  /** 就地編輯格落在本列時的欄索引；否則 null */
+  editingCol: number | null;
+  editSeed: string | null;
+  /** 本列的待套用編輯（欄索引 → 新值）；無編輯時 undefined（識別穩定） */
+  rowEdits: Record<number, string | null> | undefined;
+  /** 框選範圍與本列有交集時的可見欄序位界線；否則 null */
+  rangeCols: { pmin: number; pmax: number } | null;
+  findLower: string;
+  h: RowHandlers;
+}) {
+  return (
+    <tr
+      className={`${selRow ? "bg-accent/[0.06]" : "hover:bg-fg/5"} group`}
+      onContextMenu={hasKeyMenu ? (e) => h.rowContext(e, i) : undefined}
+    >
+      {editable && (
+        <td className="px-1 py-1 border-b border-fg/5 text-center">
+          <input type="checkbox" title="勾選以批次刪除" checked={isMarked} onChange={() => h.toggleMark(i)} />
+        </td>
+      )}
+      <td
+        onClick={(e) => h.rowNumClick(e, i)}
+        title="點看整列表單、Shift+點選整列"
+        className={`px-3 py-1 border-b border-fg/5 cursor-pointer hover:bg-fg/5 hover:text-fg/60 tabular-nums ${
+          isMarked ? "text-red-300 bg-red-500/10" : selRow ? "text-accent/90" : "text-fg/30"
+        }`}
+      >
+        {startRow + i + 1}
+      </td>
+      {visibleCols.map(({ j, name, pos }) => {
+        const isEditing = editingCol === j;
+        const dirty = !!rowEdits && j in rowEdits;
+        const val = dirty ? rowEdits[j] : row[j];
+        const isSel = selCol === j;
+        const inR = !!rangeCols && pos >= rangeCols.pmin && pos <= rangeCols.pmax;
+        // Redis 的 key 欄：雙擊開鍵詳情；其餘照常（ttl 可編輯）
+        const redisKeyCol = isRedis && name === "key";
+        return (
+          <td
+            key={j}
+            onClick={(e) => h.cellClick(e, i, j)}
+            onDoubleClick={() => h.cellDoubleClick(i, j, redisKeyCol, val)}
+            onContextMenu={isRedis ? undefined : (e) => h.cellContext(e, i, j)}
+            title={redisKeyCol ? "雙擊檢視鍵內容" : val ?? "NULL"}
+            className={`px-3 py-1 border-b border-fg/5 whitespace-nowrap overflow-hidden text-ellipsis ${
+              isSel ? "ring-1 ring-inset ring-accent " : ""
+            }${
+              dirty ? "bg-amber-500/15" : isSel ? "bg-accent/15" : inR ? "bg-accent/10" : ""
+            } ${redisKeyCol ? "cursor-pointer text-blue-300" : editable ? "cursor-cell" : ""}`}
+          >
+            {isEditing ? (
+              <CellEditor
+                initial={val}
+                seed={editSeed}
+                onCommit={(raw, setNull) => h.commitEdit(i, j, raw, setNull)}
+                onCancel={h.cancelEdit}
+                onAdvance={(dir) => h.advanceCell(i, j, dir)}
+              />
+            ) : val === null ? (
+              <span className="text-fg/30 italic">NULL</span>
+            ) : findLower ? (
+              highlight(val, findLower)
+            ) : (
+              val
+            )}
+          </td>
+        );
+      })}
+      {editable && (
+        <td className="px-1 py-1 border-b border-fg/5 text-center">
+          <button
+            onClick={() => h.deleteRow(i)}
+            title="刪除此列"
+            className="w-5 h-5 inline-flex items-center justify-center rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20"
+          >
+            <Icon icon={Minus} size={14} />
+          </button>
+        </td>
+      )}
+    </tr>
+  );
+});
 
 // 儲存格編輯器：Enter 套用、Esc 取消、按鈕設為 NULL
 function CellEditor({ initial, seed, onCommit, onCancel, onAdvance }: {

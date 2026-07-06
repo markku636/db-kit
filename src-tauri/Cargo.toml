@@ -1,6 +1,6 @@
 [package]
 name = "db-kit"
-version = "0.4.0"
+version = "0.5.0"
 description = "Unified database management tool"
 license = "MIT"
 edition = "2021"
@@ -93,3 +93,12 @@ default = ["gui"]
 # gui：啟用 Tauri 桌面程式（commands / agent / scheduler / run()）。預設開啟。
 gui = ["dep:tauri", "dep:tauri-plugin-dialog"]
 custom-protocol = ["gui", "tauri/custom-protocol"]
+
+# Release 瘦身（保守版）：
+# - lto="thin"：跨 codegen unit 最佳化但平行執行，連結期記憶體峰值遠低於 fat LTO
+#   （本機 rustc/LLVM 有 OOM 前科，不用 lto=true；OOM 時退回移除此行）。
+# - strip="symbols"：去 symbol table；MSVC 的 debug info 本在 .pdb，對其他平台亦通用。
+# - codegen-units 維持預設 16（=1 收益再 +2~4% 但單 module 記憶體最高，不冒險）。
+[profile.release]
+lto = "thin"
+strip = "symbols"

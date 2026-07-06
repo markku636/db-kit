@@ -112,16 +112,17 @@ impl Active {
             Active::Dyn(d) => d.table_data(database, table, query).await,
         }
     }
-    async fn query(&self, sql: &str) -> AppResult<QueryResult> {
+    /// 查詢並截斷於 cap（0 = 不限）。Dyn（外部 gateway）走 trait 預設實作（不截斷）。
+    async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
         match self {
-            Active::Mysql(d) => d.query(sql).await,
-            Active::Postgres(d) => d.query(sql).await,
-            Active::Sqlite(d) => d.query(sql).await,
-            Active::Mongo(d) => d.query(sql).await,
-            Active::Redis(d) => d.query(sql).await,
-            Active::Mssql(d) => d.query(sql).await,
-            Active::Oracle(d) => d.query(sql).await,
-            Active::Dyn(d) => d.query(sql).await,
+            Active::Mysql(d) => d.query_capped(sql, cap).await,
+            Active::Postgres(d) => d.query_capped(sql, cap).await,
+            Active::Sqlite(d) => d.query_capped(sql, cap).await,
+            Active::Mongo(d) => d.query_capped(sql, cap).await,
+            Active::Redis(d) => d.query_capped(sql, cap).await,
+            Active::Mssql(d) => d.query_capped(sql, cap).await,
+            Active::Oracle(d) => d.query_capped(sql, cap).await,
+            Active::Dyn(d) => d.query_capped(sql, cap).await,
         }
     }
     async fn update_cell(
@@ -712,8 +713,25 @@ impl ConnectionManager {
         self.get(id)?.active.table_data(database, table, query).await
     }
 
+    /// 互動查詢入口（run_query）：套用全域 row cap，外層以 tokio timeout 兜底（0 = 關閉）。
+    /// 逾時語意：本端 future 被放棄，sqlx 於連線回池時偵測髒狀態並汰換（before_acquire 健檢
+    /// 為雙保險）；**伺服器端查詢可能仍在執行**，錯誤訊息引導使用者以行程清單手動 KILL。
     pub async fn query(&self, id: &str, sql: &str) -> AppResult<QueryResult> {
-        self.get(id)?.active.query(sql).await
+        let ms = crate::db::limits::timeout_ms();
+        let fut = self.query_capped(id, sql, crate::db::limits::row_cap());
+        if ms == 0 {
+            return fut.await;
+        }
+        match tokio::time::timeout(std::time::Duration::from_millis(ms), fut).await {
+            Ok(r) => r,
+            Err(_) => Err(AppError::Timeout(ms)),
+        }
+    }
+
+    /// 查詢並截斷於 cap（0 = 不限）。批次路徑（匯出 / CLI）用：不套互動逾時
+    ///（DB 端 session timeout 若已啟用仍會生效，屬使用者的全域選擇）。
+    pub async fn query_capped(&self, id: &str, sql: &str, cap: usize) -> AppResult<QueryResult> {
+        self.get(id)?.active.query_capped(sql, cap).await
     }
 
     pub async fn update_cell(

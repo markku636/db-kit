@@ -1,52 +1,25 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
 import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
-import ConnectionDialog from "./ConnectionDialog";
 import TableView, { CellInspector } from "./TableView";
-import BackupDialog from "./BackupDialog";
-import ErDiagram from "./ErDiagram";
-import RedisStatus from "./RedisStatus";
-import RedisConsole from "./RedisConsole";
-import MongoOpsPanel from "./MongoOpsPanel";
-import NewKeyDialog from "./NewKeyDialog";
-import CreateTableDialog from "./CreateTableDialog";
-import ConnectionProperties from "./ConnectionProperties";
-import TableProperties from "./TableProperties";
-import RoutinesDialog from "./RoutinesDialog";
-import CreateViewDialog from "./CreateViewDialog";
-import ViewDesigner from "./ViewDesigner";
-import ProcessListDialog from "./ProcessListDialog";
-import ServerQueryDialog from "./ServerQueryDialog";
-import UserManager from "./UserManager";
-import DatabaseProperties from "./DatabaseProperties";
-import SchemaCompare from "./SchemaCompare";
-import SearchObjectsDialog from "./SearchObjectsDialog";
 import InfoPanel from "./InfoPanel";
 import AssistantPanel from "./AssistantPanel";
-import SqlEditor, { type SqlSubmit, type SqlEditorHandle } from "./SqlEditor";
+import type { SqlSubmit, SqlEditorHandle } from "./SqlEditor";
 import { useSqlSchema } from "./useSqlSchema";
 import { useAssistant } from "./assistant";
-import ExportDialog from "./ExportDialog";
-import ImportDialog from "./ImportDialog";
-import DataDictionary from "./DataDictionary";
-import DataGenerator from "./DataGenerator";
-import QueryBuilder from "./QueryBuilder";
-import TransferDialog from "./TransferDialog";
-import DbTransferDialog from "./DbTransferDialog";
-import CommandPalette, { type PaletteItem } from "./CommandPalette";
-import AboutDialog from "./AboutDialog";
-import DbDataDictionary from "./DbDataDictionary";
-import DataSyncDialog from "./DataSyncDialog";
+import type { PaletteItem } from "./CommandPalette";
+import lazyOverlay from "./ui/lazyOverlay";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
-import { checkForUpdate, isNewer, type UpdateInfo } from "./updateCheck";
+import { friendlyDbError } from "./dbErrors";
+import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile, useEscToClose } from "./ui";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
   loadSavedQueries, persistSavedQueries,
   loadSnippets, persistSnippets, upsertSnippet, removeSnippet, type SqlSnippet,
-  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, splitSqlStatements, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName, isMysqlFamily,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
@@ -57,10 +30,8 @@ import {
 } from "./sql";
 import type { SavedQuery } from "./sql";
 import Select from "./ui/Select";
-import ExplainPlan from "./ExplainPlan";
 import { buildExplainJsonSql, parseExplainPlan, type PlanNode } from "./explain";
-import MongoQueryEditor, { type MongoQueryEditorHandle } from "./MongoQueryEditor";
-import MongoExplainPlan from "./MongoExplainPlan";
+import type { MongoQueryEditorHandle } from "./MongoQueryEditor";
 import { parseMongoExplain, withVerbosity, type MongoExplainModel } from "./mongoExplain";
 import logoMark from "./assets/db-kit-hero.png";
 import Icon from "./ui/Icon";
@@ -70,9 +41,48 @@ import {
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
-  GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock,
+  GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square,
   type LucideIcon,
 } from "lucide-react";
+
+// ---- Lazy 載入（code splitting）：對話框 / 工具面板全部條件掛載，開啟時才抓 chunk，
+//      首包只留 App shell + TableView + InfoPanel/AssistantPanel。CodeMirror 全家桶
+//      隨 SqlEditor / MongoQueryEditor 的 chunk 延後載入（manualChunks 見 vite.config.ts）。----
+const ConnectionDialog = lazyOverlay(() => import("./ConnectionDialog"));
+const BackupDialog = lazyOverlay(() => import("./BackupDialog"));
+const ErDiagram = lazyOverlay(() => import("./ErDiagram"));
+const RedisStatus = lazyOverlay(() => import("./RedisStatus"));
+const RedisConsole = lazyOverlay(() => import("./RedisConsole"));
+const MongoOpsPanel = lazyOverlay(() => import("./MongoOpsPanel"));
+const NewKeyDialog = lazyOverlay(() => import("./NewKeyDialog"));
+const CreateTableDialog = lazyOverlay(() => import("./CreateTableDialog"));
+const ConnectionProperties = lazyOverlay(() => import("./ConnectionProperties"));
+const TableProperties = lazyOverlay(() => import("./TableProperties"));
+const RoutinesDialog = lazyOverlay(() => import("./RoutinesDialog"));
+const CreateViewDialog = lazyOverlay(() => import("./CreateViewDialog"));
+const ViewDesigner = lazyOverlay(() => import("./ViewDesigner"));
+const ProcessListDialog = lazyOverlay(() => import("./ProcessListDialog"));
+const ServerQueryDialog = lazyOverlay(() => import("./ServerQueryDialog"));
+const UserManager = lazyOverlay(() => import("./UserManager"));
+const DatabaseProperties = lazyOverlay(() => import("./DatabaseProperties"));
+const SchemaCompare = lazyOverlay(() => import("./SchemaCompare"));
+const SearchObjectsDialog = lazyOverlay(() => import("./SearchObjectsDialog"));
+const ExportDialog = lazyOverlay(() => import("./ExportDialog"));
+const ImportDialog = lazyOverlay(() => import("./ImportDialog"));
+const DataDictionary = lazyOverlay(() => import("./DataDictionary"));
+const DataGenerator = lazyOverlay(() => import("./DataGenerator"));
+const QueryBuilder = lazyOverlay(() => import("./QueryBuilder"));
+const TransferDialog = lazyOverlay(() => import("./TransferDialog"));
+const DbTransferDialog = lazyOverlay(() => import("./DbTransferDialog"));
+const CommandPalette = lazyOverlay(() => import("./CommandPalette"));
+const AboutDialog = lazyOverlay(() => import("./AboutDialog"));
+const DbDataDictionary = lazyOverlay(() => import("./DbDataDictionary"));
+const DataSyncDialog = lazyOverlay(() => import("./DataSyncDialog"));
+const ExplainPlan = lazyOverlay(() => import("./ExplainPlan"));
+const MongoExplainPlan = lazyOverlay(() => import("./MongoExplainPlan"));
+// 需要 ref 轉發的編輯器：直接 React.lazy（lazy 對 forwardRef 透明），使用處手動包 Suspense。
+const SqlEditor = lazy(() => import("./SqlEditor"));
+const MongoQueryEditor = lazy(() => import("./MongoQueryEditor"));
 
 // ---- 依選取的樹節點，組「新查詢分頁」的起始 SQL（對標 DataGrip / Navicat：在物件上開查詢即帶範圍）----
 //  - 資料表 / 檢視：USE db;（mysql / external）或 SET search_path（postgres）＋ 一條可執行的 SELECT … LIMIT 100；
@@ -178,10 +188,14 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 啟動密碼閘門：checking（查詢中）→ locked（需輸入密碼）/ open（已解鎖或未設密碼）。
   const [lockState, setLockState] = useState<"checking" | "locked" | "open">("checking");
-  // 開場動畫狀態：show → leaving（淡出）→ done（卸載）。每次啟動只播一次。
+  // 開場動畫狀態：show → leaving（淡出）→ done（卸載）。每次啟動只播一次；
+  // prefers-reduced-motion 使用者直接跳過（原本只停動畫仍要乾等計時，形同懲罰）。
   const [splash, setSplash] = useState<"show" | "leaving" | "done">(() => {
-    try { return sessionStorage.getItem("dbkit:splashed") ? "done" : "show"; }
-    catch { return "show"; }
+    try {
+      if (sessionStorage.getItem("dbkit:splashed")) return "done";
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return "done";
+      return "show";
+    } catch { return "show"; }
   });
   const onSplashDone = () => {
     try { sessionStorage.setItem("dbkit:splashed", "1"); } catch {}
@@ -203,19 +217,33 @@ export default function App() {
     connectedIds.has(activeConn.id) &&
     (isMysqlFamily(activeConn.kind) || activeConn.kind === "postgres" || activeConn.kind === "sqlite" || activeConn.kind === "mssql" || activeConn.kind === "oracle");
 
-  // 啟動時查詢是否已設定啟動密碼：有 → 顯示鎖定畫面；無或查詢失敗 → 直接進入。
+  // React 首屏（開場動畫或主介面）接手後，移除 index.html 的靜態骨架屏。
   useEffect(() => {
+    const el = document.getElementById("boot-splash");
+    if (el) requestAnimationFrame(() => el.remove());
+  }, []);
+
+  // 查詢防護（row cap / 逾時）：啟動時把 localStorage 設定同步到後端（後端內建預設 1000 / 關閉）。
+  useEffect(() => {
+    const g = loadQueryGuard();
+    api.setQueryGuard(g.maxRows, g.timeoutMs).catch(() => {});
+  }, []);
+
+  // 啟動時並行發出鎖定狀態查詢與連線清單載入（清單本就不含密碼，僅暫存 promise；
+  // 解鎖後才寫入 store，鎖定語意不變，省掉一段串行 IPC）。
+  const savedConnsRef = useRef<Promise<ConnectionConfig[]> | null>(null);
+  useEffect(() => {
+    savedConnsRef.current = api.listSavedConnections().catch(() => [] as ConnectionConfig[]);
     api
       .hasStartupPassword()
       .then((has) => setLockState(has ? "locked" : "open"))
       .catch(() => setLockState("open"));
   }, []);
 
-  // 解鎖後才載入已存連線清單（僅清單，不自動連線；密碼留在 keychain）。
+  // 解鎖後才把連線清單寫入 store（僅清單，不自動連線；密碼留在 keychain）。
   useEffect(() => {
     if (lockState !== "open") return;
-    api
-      .listSavedConnections()
+    (savedConnsRef.current ?? api.listSavedConnections())
       .then((saved) =>
         useStore
           .getState()
@@ -236,12 +264,29 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // 開場動畫顯示約 2.2s 後開始淡出（淡出結束由 SplashScreen 回呼卸載）。
+  // 開場動畫：首次啟動播完整版 1.2s、之後精簡 0.6s，並扣掉 bundle 載入已流逝的時間
+  //（骨架屏 + splash 的總感知時間不疊加）；按任意鍵可直接跳過（點擊由 SplashScreen onSkip 處理）。
   useEffect(() => {
     if (splash !== "show") return;
-    const t = setTimeout(() => setSplash("leaving"), 2200);
-    return () => clearTimeout(t);
+    let full = 600;
+    try {
+      if (!localStorage.getItem("dbkit:launched")) {
+        full = 1200;
+        localStorage.setItem("dbkit:launched", "1");
+      }
+    } catch {}
+    const t = setTimeout(() => setSplash("leaving"), Math.max(300, full - performance.now()));
+    const skip = () => setSplash("leaving");
+    window.addEventListener("keydown", skip);
+    return () => { clearTimeout(t); window.removeEventListener("keydown", skip); };
   }, [splash]);
+
+  // 鎖定畫面（z-300）會直接蓋住開場動畫（z-200），播了也看不到 → 直接標記完成，
+  // 解鎖後也不再補播。
+  useEffect(() => {
+    if (lockState === "locked" && splash !== "done") onSplashDone();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lockState]);
 
   // 加密匯出所有連線（**含**密碼 / SSH 機密 / OTP，從 keychain 取出，用 passphrase 派生金鑰 AES-256-GCM 加密）。
   const exportConnections = async () => {
@@ -282,7 +327,7 @@ export default function App() {
     return (
       <div className="h-full bg-app">
         {splash !== "done" && (
-          <SplashScreen leaving={splash === "leaving"} onDone={onSplashDone} />
+          <SplashScreen leaving={splash === "leaving"} onDone={onSplashDone} onSkip={() => setSplash("leaving")} />
         )}
         {lockState === "locked" && <LockScreen onUnlock={() => setLockState("open")} />}
       </div>
@@ -292,7 +337,7 @@ export default function App() {
   return (
     <div className="h-full flex flex-col">
       {splash !== "done" && (
-        <SplashScreen leaving={splash === "leaving"} onDone={onSplashDone} />
+        <SplashScreen leaving={splash === "leaving"} onDone={onSplashDone} onSkip={() => setSplash("leaving")} />
       )}
       <Toolbar
         onNewConnection={() => setDialog({ initial: null })}
@@ -378,13 +423,14 @@ export default function App() {
   }
 }
 
-// ---- 開場動畫：去背標誌進場 + 柔光暈 + 輪廓高光掃過，隨後淡出 ----
-function SplashScreen({ leaving, onDone }: { leaving: boolean; onDone: () => void }) {
+// ---- 開場動畫：去背標誌進場 + 柔光暈 + 輪廓高光掃過，隨後淡出；點擊可跳過 ----
+function SplashScreen({ leaving, onDone, onSkip }: { leaving: boolean; onDone: () => void; onSkip?: () => void }) {
   return (
     <div
       className={`splash${leaving ? " splash--leaving" : ""}`}
       onAnimationEnd={(e) => { if (e.animationName === "splash-fade-out") onDone(); }}
-      aria-hidden
+      onClick={onSkip}
+      role="presentation"
     >
       <div className="splash__stage">
         <div className="splash__glow" />
@@ -402,6 +448,7 @@ function LockScreen({ onUnlock }: { onUnlock: () => void }) {
   const [pw, setPw] = useState("");
   const [err, setErr] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
   const submit = async () => {
     if (busy || !pw) return;
     setBusy(true);
@@ -441,18 +488,68 @@ function LockScreen({ onUnlock }: { onUnlock: () => void }) {
             解鎖
           </Button>
         </div>
+        {/* 忘記密碼的自救指引：解法只寫在 CHANGELOG 對被鎖在外面的人毫無幫助（死路型 UX）。 */}
+        <div className="text-center">
+          {!showForgot ? (
+            <button type="button" onClick={() => setShowForgot(true)}
+              className="text-[11px] text-fg/35 hover:text-fg/60 underline decoration-dotted">
+              忘記密碼？
+            </button>
+          ) : (
+            <div className="text-[11px] text-fg/50 leading-relaxed max-w-[300px] text-left space-y-1.5">
+              <p>
+                啟動密碼只是開啟 App 的閘門。刪除設定目錄中的
+                <span className="mono"> app_settings.json </span>即可解除，
+                <span className="text-fg/70">不影響已儲存的連線</span>（連線機密存於系統 keychain）。
+              </p>
+              <p className="mono break-all text-fg/40">%APPDATA%\dev.dbkit.app\app_settings.json</p>
+              <button type="button"
+                onClick={() => copyToClipboard("%APPDATA%\\dev.dbkit.app\\app_settings.json", "已複製路徑")}
+                className="underline decoration-dotted hover:text-fg/70">複製路徑</button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-// 設定對話框：目前僅「啟動密碼」（啟用 / 變更 / 移除）。屬 app-lock 閘門，不加密連線資料。
+// ---- 查詢防護設定（row cap / 逾時）：UI 偏好層級，持久化於 localStorage，啟動與變更時同步後端 ----
+const QUERY_GUARD_KEY = "dbkit:queryGuard";
+interface QueryGuard { maxRows: number; timeoutMs: number; }
+const DEFAULT_QUERY_GUARD: QueryGuard = { maxRows: 1000, timeoutMs: 0 };
+function loadQueryGuard(): QueryGuard {
+  try {
+    const raw = localStorage.getItem(QUERY_GUARD_KEY);
+    if (!raw) return DEFAULT_QUERY_GUARD;
+    const p = JSON.parse(raw) as Partial<QueryGuard>;
+    return {
+      maxRows: Number.isFinite(p.maxRows) && (p.maxRows as number) >= 0 ? (p.maxRows as number) : DEFAULT_QUERY_GUARD.maxRows,
+      timeoutMs: Number.isFinite(p.timeoutMs) && (p.timeoutMs as number) >= 0 ? (p.timeoutMs as number) : DEFAULT_QUERY_GUARD.timeoutMs,
+    };
+  } catch { return DEFAULT_QUERY_GUARD; }
+}
+function persistQueryGuard(g: QueryGuard) {
+  try { localStorage.setItem(QUERY_GUARD_KEY, JSON.stringify(g)); } catch {}
+  api.setQueryGuard(g.maxRows, g.timeoutMs).catch(() => {});
+}
+
+// 設定對話框：「啟動密碼」（app-lock 閘門，不加密連線資料）與「查詢防護」（row cap / 逾時）。
 function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [hasPw, setHasPw] = useState<boolean | null>(null);
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const [guard, setGuard] = useState<QueryGuard>(loadQueryGuard);
+  const [autoUpdate, setAutoUpdate] = useState<boolean>(autoCheckEnabled);
+  const updateGuard = (patch: Partial<QueryGuard>) => {
+    setGuard((g) => {
+      const merged = { ...g, ...patch };
+      persistQueryGuard(merged);
+      return merged;
+    });
+  };
 
   // 開啟時重置欄位並查詢目前是否已設定啟動密碼。
   useEffect(() => {
@@ -558,6 +655,45 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
             {!current && <span className="text-[11px] text-fg/40">需先輸入目前密碼</span>}
           </div>
         ) : null}
+        <div className="pt-4 border-t border-fg/10 space-y-3">
+          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+            <Icon icon={Zap} size={15} /> 查詢防護
+          </div>
+          <p className="text-xs text-fg/50 leading-relaxed">
+            防止誤跑 <span className="mono">SELECT *</span> 大表把記憶體塞爆：查詢結果超過上限即截斷並顯示提示
+            （可點「載入更多」或改用匯出取完整結果）。變更立即生效。
+          </p>
+          <Field label="結果列數上限">
+            <Select selectSize="md" value={String(guard.maxRows)}
+              onChange={(e) => updateGuard({ maxRows: Number(e.target.value) })}>
+              <option value="100">100 列</option>
+              <option value="1000">1,000 列（預設）</option>
+              <option value="10000">10,000 列</option>
+              <option value="100000">100,000 列</option>
+              <option value="0">不限（不建議）</option>
+            </Select>
+          </Field>
+          <Field label="查詢逾時" hint="逾時後伺服器端查詢可能仍在執行，可從行程清單手動終止；MSSQL 僅支援本端逾時">
+            <Select selectSize="md" value={String(guard.timeoutMs)}
+              onChange={(e) => updateGuard({ timeoutMs: Number(e.target.value) })}>
+              <option value="0">關閉（預設）</option>
+              <option value="30000">30 秒</option>
+              <option value="60000">60 秒</option>
+              <option value="300000">5 分鐘</option>
+            </Select>
+          </Field>
+        </div>
+        <div className="pt-4 border-t border-fg/10 space-y-2">
+          <label className="flex items-center gap-2 text-sm text-fg/80 cursor-pointer select-none">
+            <input type="checkbox" checked={autoUpdate}
+              onChange={(e) => { setAutoUpdate(e.target.checked); setAutoCheckEnabled(e.target.checked); }} />
+            啟動時自動檢查更新
+          </label>
+          <p className="text-xs text-fg/50 leading-relaxed">
+            每天最多向 GitHub 查一次最新版本（延後於啟動 10 秒後進行）；離線 / 內網環境可關閉。
+            「關於」對話框的手動檢查不受影響。
+          </p>
+        </div>
       </div>
     </Modal>
   );
@@ -623,12 +759,17 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, on
   onImportConns: () => void;
 }) {
   const assistantOpen = useAssistant((s) => s.open);
-  // 啟動時到 GitHub 查最新 Release（每天最多一次，失敗安靜略過）；比目前版本新才顯示標記。
+  // 到 GitHub 查最新 Release（每天最多一次，失敗安靜略過）；比目前版本新才顯示標記。
+  // 延後 10 秒發出：啟動最忙的時間窗（載入連線 / 首屏渲染）完全讓路；可於設定關閉自動檢查。
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   useEffect(() => {
-    checkForUpdate()
-      .then((r) => { if (r && isNewer(r.version, __APP_VERSION__)) setUpdate(r); })
-      .catch(() => {});
+    if (!autoCheckEnabled()) return;
+    const t = window.setTimeout(() => {
+      checkForUpdate()
+        .then((r) => { if (r && isNewer(r.version, __APP_VERSION__)) setUpdate(r); })
+        .catch(() => {});
+    }, 10_000);
+    return () => window.clearTimeout(t);
   }, []);
   const tools: { icon: ReactNode; label: string; onClick: () => void; disabled: boolean; active?: boolean; hint?: string }[] = [
     { icon: <Icon icon={Plug} size={20} />, label: "連線", onClick: onNewConnection, disabled: false },
@@ -1019,7 +1160,16 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
       const dbs = await api.listDatabases(id);
       setDatabases((d) => ({ ...d, [id]: dbs }));
     } catch (e: any) {
-      toast.error(e?.message ?? "連線失敗");
+      // 連線失敗改用對話框（取代 6 秒 toast）：訊息可讀完、可全選複製，附友善提示與重試。
+      const raw = e?.message ?? "連線失敗";
+      const hint = friendlyDbError(cfg.kind, raw);
+      setBusy(id, false); // 先解除 connecting 狀態，避免重試被防重入擋下
+      const retry = await uiConfirm(hint ? `${hint}\n\n${raw}` : raw, {
+        title: `連線失敗：${cfg.name}`,
+        confirmText: "重試",
+      });
+      if (retry) void doConnect(id);
+      return;
     } finally {
       setBusy(id, false);
     }
@@ -2613,7 +2763,9 @@ function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefine
 interface StmtRun { sql: string; ok: boolean; message: string; ms: number; }
 interface RunSummary { startedAt: number; finishedAt: number; total: number; processed: number; success: number; errors: number; statements: StmtRun[]; }
 // 單一結果集（SSMS 風格）：多語句批次中每條有回傳結果集的語句各佔一格；sql=產生它的原語句（不含注入的 USE 前綴）、ms=該語句耗時。
-interface ResultSetEntry { res: QueryResult; sql: string; ms: number; }
+// sent：實際送到後端的語句（含 USE / search_path 前綴），供「載入更多」原樣重跑；
+// sql 為使用者原語句（顯示 / 摘要用，不含注入前綴）。
+interface ResultSetEntry { res: QueryResult; sql: string; ms: number; sent?: string; }
 
 // 毫秒時間戳 → 本地「YYYY-MM-DD HH:mm:ss」（摘要面板的開始 / 結束時間）。
 function fmtClock(ms: number): string {
@@ -2697,6 +2849,20 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [runSeq, setRunSeq] = useState(0);
   // 各結果格摺疊狀態（多結果集時）：摺疊只藏內容不卸載，保留該格排序 / 篩選；新批次到達時重置。
   const [collapsedSets, setCollapsedSets] = useState<Record<number, boolean>>({});
+  // 「載入更多」：後端截斷（truncated）的結果集以 2× 目前列數為新上限重跑該條語句
+  // （原樣重送含 USE 前綴的 sent），僅覆蓋該格。非確定性查詢（NOW() 等）重跑結果可能不同。
+  const loadMoreRows = useCallback(async (i: number) => {
+    const s = resultSets[i];
+    if (!s || !activeId) return;
+    const newCap = Math.max(s.res.rows.length * 2, 100);
+    const t0 = performance.now();
+    try {
+      const res = await api.runQuery(activeId, s.sent ?? s.sql, newCap);
+      setResultSets((prev) => prev.map((p, j) => (j === i ? { ...p, res, ms: performance.now() - t0 } : p)));
+    } catch (e: any) {
+      toast.error(e?.message ?? "重新執行失敗");
+    }
+  }, [resultSets, activeId]);
   // 寫入一批新結果集（執行成功、或中途失敗但已有部分結果）：作用中重設為第一格、重置摺疊、遞增序號。
   const applyResultSets = useCallback((sets: ResultSetEntry[]) => {
     setResultSets(sets);
@@ -2714,8 +2880,25 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [errStmt, setErrStmt] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState<number | null>(null);
-  const [history, setHistory] = useState<string[]>(loadQueryHistory);
+  // 執行中的即時回饋：經過時間（250ms 更新）與多語句進度「第 N/M 條」。
+  const [liveMs, setLiveMs] = useState<number | null>(null);
+  const [runProgress, setRunProgress] = useState<{ done: number; total: number } | null>(null);
+  // 軟取消：使用者按「停止」後，多語句批次在語句邊界中止（已完成的結果保留）。
+  // 單條長查詢無法中斷本端等待（後端取消為 deferred），由查詢逾時設定兜底。
+  const cancelRef = useRef(false);
+  useEffect(() => {
+    if (!running) { setLiveMs(null); return; }
+    const t0 = performance.now();
+    setLiveMs(0);
+    const timer = window.setInterval(() => setLiveMs(performance.now() - t0), 250);
+    // 編輯器聚焦時 Esc 也會冒泡到 window：執行中按 Esc = 停止。
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancelRef.current = true; };
+    window.addEventListener("keydown", onKey);
+    return () => { window.clearInterval(timer); window.removeEventListener("keydown", onKey); };
+  }, [running]);
+  const [history, setHistory] = useState<QueryHistoryEntry[]>(loadQueryHistory);
   const [showHistory, setShowHistory] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState("");
   const [saved, setSaved] = useState<SavedQuery[]>(loadSavedQueries);
   const [showSaved, setShowSaved] = useState(false);
   // SQL 片段庫（Navicat 風）：編輯器自動完成 + 工具列插入 / 管理。
@@ -2878,6 +3061,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     setPlanErr(null);
     setSummary(null); // 清掉前一次的摘要（避免早退路徑殘留舊統計 / 紅色錯誤數）
     setBottomTab("result");
+    cancelRef.current = false;
+    setRunProgress(null);
     setRunning(true);
     const t0 = performance.now();
     try {
@@ -2941,6 +3126,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           statements: runs.slice(),
         });
         for (let si = 0; si < sentStatements.length; si++) {
+          // 軟取消：語句邊界檢查（已完成的結果集保留顯示；停在正在跑的那條之前）。
+          if (cancelRef.current) {
+            toast.info(`已在第 ${si} 條語句後停止（先前結果已保留）`);
+            break;
+          }
+          if (sentStatements.length > 1) setRunProgress({ done: si, total: sentStatements.length });
           const tStmt = performance.now();
           let res: QueryResult;
           try {
@@ -2961,7 +3152,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             throw wrapped;
           }
           const ms = performance.now() - tStmt;
-          if (res.columns.length > 0) sets.push({ res, sql: userStatements[si], ms });
+          if (res.columns.length > 0) sets.push({ res, sql: userStatements[si], ms, sent: sentStatements[si] });
           else affected += res.rows_affected;
           runs.push({
             sql: userStatements[si],
@@ -2977,7 +3168,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         if (userStatements.length > 1) toast.success(`已執行 ${userStatements.length} 條語句`);
       }
       setElapsed(performance.now() - t0);
-      setHistory((h) => pushQueryHistory(h, q));
+      setHistory((h) => pushQueryHistory(h, q, connections.find((c) => c.id === activeId)?.name));
     } catch (e: any) {
       setElapsed(performance.now() - t0);
       setErr(e?.message ?? (mode === "analyze" ? "分析失敗" : "查詢失敗"));
@@ -2987,6 +3178,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       if (!e?.keepResults) setResult(null);
     } finally {
       setRunning(false);
+      setRunProgress(null);
     }
   };
 
@@ -3188,15 +3380,29 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       : lower.endsWith(".tsv") || lower.endsWith(".txt")
       ? "tsv"
       : "csv";
+    const opts = {
+      format: fmt,
+      include_header: true,
+      all_rows: true,
+      bom: fmt === "csv" || fmt === "tsv",
+      sql_table: fmt === "sql" ? "result" : null,
+    };
     try {
-      const res = await api.exportRows(exportRes.columns, exportRes.rows, {
-        format: fmt,
-        include_header: true,
-        all_rows: true,
-        bom: fmt === "csv" || fmt === "tsv",
-        sql_table: fmt === "sql" ? "result" : null,
-      }, path);
-      toast.success(`已匯出 ${res.rows} 列 · ${fmt.toUpperCase()}`);
+      // 結果被後端 row cap 截斷、且畫面未做 client-side 排序 / 篩選、語句為唯讀時 →
+      // 走 export_query 由後端重新執行取「完整」結果寫檔（上限 100 萬列，不經 IPC 往返）。
+      // 有排序 / 篩選（所見即所得契約）或寫入語句（避免重執行副作用）→ 照舊匯出畫面資料。
+      const entry = resultSets[activeIdx];
+      const viewFiltered = !!resultView && resultView.length !== result.rows.length;
+      const canRerun =
+        !!activeId && !!entry?.res.truncated && !!(entry.sent ?? entry.sql) &&
+        !viewFiltered && !isWriteStatement(entry.sql);
+      if (canRerun) {
+        const res = await api.exportQuery(activeId, entry.sent ?? entry.sql, opts, path);
+        toast.success(`已重新執行查詢並匯出完整結果 ${res.rows} 列 · ${fmt.toUpperCase()}`);
+      } else {
+        const res = await api.exportRows(exportRes.columns, exportRes.rows, opts, path);
+        toast.success(`已匯出 ${res.rows} 列 · ${fmt.toUpperCase()}`);
+      }
     } catch (e: any) {
       toast.error(e?.message ?? "匯出失敗");
     }
@@ -3314,21 +3520,32 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               {showHistory && history.length > 0 && (
                 <>
                   <div className="fixed inset-0 z-[89]" onClick={() => setShowHistory(false)} />
-                  <div className="absolute right-0 mt-1 z-[90] w-[420px] max-h-[320px] overflow-auto bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1">
-                    <div className="flex items-center justify-between px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">
-                      <span>最近查詢</span>
+                  <div className="absolute right-0 mt-1 z-[90] w-[460px] max-h-[360px] overflow-auto bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1">
+                    <div className="flex items-center justify-between gap-2 px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">
+                      <span className="shrink-0">最近查詢</span>
+                      <input
+                        autoFocus
+                        value={historyFilter}
+                        onChange={(e) => setHistoryFilter(e.target.value)}
+                        placeholder="輸入以過濾…"
+                        className="flex-1 min-w-0 bg-inset border border-fg/10 rounded px-2 py-0.5 text-xs text-fg/80 outline-none focus:border-accent/60"
+                      />
                       <button type="button"
                         onClick={() => { setHistory([]); try { localStorage.removeItem(QUERY_HISTORY_KEY); } catch {} setShowHistory(false); }}
-                        className="hover:text-fg/80">清除</button>
+                        className="hover:text-fg/80 shrink-0">清除</button>
                     </div>
-                    {history.map((h, i) => (
-                      <button key={i} type="button"
-                        onClick={() => { persistSql(h); setShowHistory(false); }}
-                        title="載入到編輯器"
-                        className="block w-full text-left px-3 py-1.5 text-xs mono text-fg/70 hover:bg-fg/10 truncate">
-                        {h}
-                      </button>
-                    ))}
+                    {history
+                      .filter((h) => !historyFilter.trim() || h.sql.toLowerCase().includes(historyFilter.trim().toLowerCase()))
+                      .map((h, i) => (
+                        <button key={i} type="button"
+                          onClick={() => { persistSql(h.sql); setShowHistory(false); }}
+                          title={h.sql}
+                          className="flex w-full items-baseline gap-2 text-left px-3 py-1.5 text-xs hover:bg-fg/10">
+                          <span className="mono text-fg/70 truncate flex-1">{h.sql}</span>
+                          {h.connName && <span className="text-fg/35 shrink-0 max-w-[90px] truncate">{h.connName}</span>}
+                          <span className="text-fg/30 shrink-0 tabular-nums">{fmtRelativeTime(h.at)}</span>
+                        </button>
+                      ))}
                   </div>
                 </>
               )}
@@ -3497,48 +3714,63 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 ⟨{paramCount} 參數⟩
               </span>
             )}
-            <button type="button"
-              // SQL 編輯器：綠鈕對齊 F6——有選取只跑選取段，否則整段全跑；
-              // 只跑「游標所在語句」請按 Ctrl+Enter。
-              // 非 SQL（mongo / redis textarea）維持單一指令直接執行。
-              onClick={() => supportsExplain ? editorRef.current?.submit(true) : execute("run")}
-              disabled={running}
-              title="執行整段（F6）；有選取時只跑選取段；游標所在語句請按 Ctrl+Enter"
-              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-600/80 hover:bg-green-600 disabled:opacity-50">
-              <Icon icon={running ? Loader2 : Play} size={13} className={running ? "animate-spin" : ""} />
-              {running ? "執行中…" : "執行 (F6)"}
-            </button>
+            {running ? (
+              <button type="button"
+                // 執行中變紅色「停止」（軟取消）：多語句批次於語句邊界中止、保留已完成結果；
+                // 單條長查詢無法中斷（由查詢逾時兜底）。Esc 同效。
+                onClick={() => { cancelRef.current = true; }}
+                title="停止（Esc）：於下一條語句前中止，已完成的結果保留"
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-600/80 hover:bg-red-600">
+                <Icon icon={Square} size={13} />
+                停止{runProgress ? `（第 ${runProgress.done + 1}/${runProgress.total} 條）` : ""}
+              </button>
+            ) : (
+              <button type="button"
+                // SQL 編輯器：綠鈕對齊 F6——有選取只跑選取段，否則整段全跑；
+                // 只跑「游標所在語句」請按 Ctrl+Enter。
+                // 非 SQL（mongo / redis textarea）維持單一指令直接執行。
+                onClick={() => supportsExplain ? editorRef.current?.submit(true) : execute("run")}
+                title="執行整段（F6）；有選取時只跑選取段；游標所在語句請按 Ctrl+Enter"
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-600/80 hover:bg-green-600 disabled:opacity-50">
+                <Icon icon={Play} size={13} />
+                執行 (F6)
+              </button>
+            )}
           </div>
         </div>
         {supportsExplain ? (
           // SQL（mysql/postgres/sqlite）：CodeMirror 編輯器 — 語法高亮 + 行號 + 即時檢查 +
           // 表/欄自動完成；F6 整段、Ctrl+Enter 游標所在語句或選取段、Ctrl+/ 註解、Tab 縮排。
           <div style={{ height: editor.size }} className="overflow-hidden bg-app border-t border-fg/10">
-            <SqlEditor
-              ref={editorRef}
-              value={sql}
-              onChange={persistSql}
-              kind={kind!}
-              schema={schema}
-              snippets={editorSnippets}
-              onSubmit={onEditorSubmit}
-              onSelectionChange={setEditorSel}
-              autoFocus
-              placeholder="SQL 查詢（F6 整段、Ctrl+Enter 執行游標所在語句／選取段；Ctrl+/ 註解、Tab 縮排）"
-            />
+            <Suspense fallback={<div className="h-full w-full bg-well/50 animate-pulse" />}>
+              <SqlEditor
+                ref={editorRef}
+                value={sql}
+                onChange={persistSql}
+                kind={kind!}
+                schema={schema}
+                snippets={editorSnippets}
+                onSubmit={onEditorSubmit}
+                onSelectionChange={setEditorSel}
+                autoFocus
+                placeholder="SQL 查詢（F6 整段、Ctrl+Enter 執行游標所在語句／選取段；Ctrl+/ 註解、Tab 縮排）"
+              />
+            </Suspense>
           </div>
         ) : kind === "mongo" ? (
           // Mongo：CodeMirror JSON 編輯器 — 語法高亮 + 即時 JSON lint + DSL 鍵 / $運算子 / 欄位名補全。
           <div style={{ height: editor.size }} className="overflow-hidden bg-app border-t border-fg/10">
-            <MongoQueryEditor
-              ref={mongoEditorRef}
-              value={sql}
-              onChange={persistSql}
-              connId={activeId}
-              onSubmit={() => execute("run")}
-              autoFocus
-              placeholder={'find：{ "db":"..", "collection":"..", "filter":{}, "sort":{}, "limit":200 }　|　聚合：{ …, "pipeline":[ { "$match":{} } ] }　|　插入：{ …, "insert":[ { "k":"v" } ] }（F6 / Ctrl+Enter 執行）'}
-            />
+            <Suspense fallback={<div className="h-full w-full bg-well/50 animate-pulse" />}>
+              <MongoQueryEditor
+                ref={mongoEditorRef}
+                value={sql}
+                onChange={persistSql}
+                connId={activeId}
+                onSubmit={() => execute("run")}
+                autoFocus
+                placeholder={'find：{ "db":"..", "collection":"..", "filter":{}, "sort":{}, "limit":200 }　|　聚合：{ …, "pipeline":[ { "$match":{} } ] }　|　插入：{ …, "insert":[ { "k":"v" } ] }（F6 / Ctrl+Enter 執行）'}
+              />
+            </Suspense>
           </div>
         ) : (
           <textarea
@@ -3584,7 +3816,20 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             );
           })}
           <div className="ml-auto flex items-center gap-3 text-fg/45 pr-1">
-            {elapsed !== null && <span className="inline-flex items-center gap-1" title="執行時間"><Icon icon={Clock} size={12} />{fmtElapsed(elapsed)}</span>}
+            {running && liveMs !== null ? (
+              <span className="inline-flex items-center gap-1 text-fg/70" title="執行中經過時間">
+                <Icon icon={Loader2} size={12} className="animate-spin" />
+                {runProgress ? `第 ${runProgress.done + 1}/${runProgress.total} 條 · ` : ""}{fmtElapsed(liveMs)}
+              </span>
+            ) : elapsed !== null && <span className="inline-flex items-center gap-1" title="執行時間"><Icon icon={Clock} size={12} />{fmtElapsed(elapsed)}</span>}
+            {bottomTab === "result" && result?.truncated && (
+              <span className="inline-flex items-center gap-1.5 text-amber-400/90"
+                title="後端已於列數上限截斷（防止大結果集塞爆記憶體；上限可於設定調整）">
+                已截斷於 {result.rows.length.toLocaleString()} 列
+                <button type="button" onClick={() => loadMoreRows(activeIdx)}
+                  className="underline decoration-dotted hover:text-amber-300">載入更多</button>
+              </span>
+            )}
             {bottomTab === "result" && rowsInfo && <span>{rowsInfo}</span>}
             {bottomTab === "result" && result && result.columns.length > 0 && (
               <div className="flex gap-2">
@@ -3611,12 +3856,38 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             <>
               {err && (
                 <div className="p-3 space-y-2">
+                  {(() => {
+                    const hint = friendlyDbError(kind, err);
+                    return hint ? (
+                      <div className="text-amber-300/90 text-sm flex items-start gap-1.5">
+                        <Icon icon={Info} size={14} className="mt-0.5 shrink-0" />
+                        <span>{hint}</span>
+                      </div>
+                    ) : null;
+                  })()}
                   <div className="text-red-400 text-sm mono whitespace-pre-wrap break-words">{err}</div>
-                  <button type="button" onClick={askAiFixError}
-                    title="把這段 SQL 與錯誤訊息帶進 AI 助手，分析原因並給出修正後的 SQL"
-                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-blue-400/40 text-blue-300 hover:bg-blue-400/10">
-                    <Icon icon={Sparkles} size={13} />AI 分析修正
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={askAiFixError}
+                      title="把這段 SQL 與錯誤訊息帶進 AI 助手，分析原因並給出修正後的 SQL"
+                      className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-blue-400/40 text-blue-300 hover:bg-blue-400/10">
+                      <Icon icon={Sparkles} size={13} />AI 分析修正
+                    </button>
+                    <button type="button" onClick={() => copyToClipboard(err, "已複製錯誤訊息")}
+                      className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 text-fg/60 hover:bg-fg/5">
+                      複製錯誤
+                    </button>
+                    {errStmt && supportsExplain && sql.indexOf(errStmt) >= 0 && (
+                      <button type="button"
+                        onClick={() => {
+                          const off = sql.indexOf(errStmt);
+                          editorRef.current?.selectRange(off, off + errStmt.length);
+                        }}
+                        title="在編輯器中反白失敗的那條語句"
+                        className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 text-fg/60 hover:bg-fg/5">
+                        定位失敗語句
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
               {resultSets.length > 1 ? (
@@ -3641,6 +3912,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                           </button>
                           <span className={`shrink-0 font-medium ${i === activeIdx ? "text-accent" : "text-fg/60"}`}>結果 {i + 1}</span>
                           <span className="mono text-fg/35 truncate flex-1">{s.sql.replace(/\s+/g, " ").trim().slice(0, 200)}</span>
+                          {s.res.truncated && (
+                            <button type="button" onClick={(e) => { e.stopPropagation(); loadMoreRows(i); }}
+                              className="shrink-0 text-amber-400/90 hover:text-amber-300"
+                              title="後端已於列數上限截斷；點擊以 2 倍上限重跑此語句">
+                              已截斷 · 載入更多
+                            </button>
+                          )}
                           <span className="text-fg/45 shrink-0">{s.res.rows.length} 列 · {fmtElapsed(s.ms)}</span>
                         </header>
                         {/* 摺疊用 display:none 而非卸載：保留該格排序 / 篩選 / 選取狀態 */}
@@ -3975,7 +4253,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
 
       {viewRows.length > MAX_RENDER && (
         <div className="px-3 py-2 text-xs text-amber-300/80 bg-amber-500/5 border-t border-fg/10">
-          僅顯示前 {MAX_RENDER.toLocaleString()} / 共 {viewRows.length.toLocaleString()} 列（避免卡頓）；請用「複製 / 匯出」取得全部。
+          僅渲染前 {MAX_RENDER.toLocaleString()} / 已取回 {viewRows.length.toLocaleString()} 列（避免卡頓）；「複製 / 匯出」仍取全部已取回列。
         </div>
       )}
 

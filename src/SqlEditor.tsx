@@ -19,6 +19,8 @@ export interface SqlEditorHandle {
   // 由編輯器外的「執行」鈕觸發，走與鍵盤 F6 / Ctrl+Enter 同一套 selection / cursor 邏輯：
   // runAll=false → 執行游標所在語句 / 選取段（DataGrip / DBeaver 主執行鍵行為）；runAll=true → 整段。
   submit: (runAll: boolean) => void;
+  // 反白指定字元範圍並捲至可見（錯誤橫幅「定位失敗語句」用）。
+  selectRange: (from: number, to: number) => void;
 }
 
 // 送出（執行）時的上下文：選取文字、游標位移、是否整段執行（F6）。
@@ -118,6 +120,13 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       view.focus();
     },
     focus: () => cmRef.current?.view?.focus(),
+    selectRange: (from: number, to: number) => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const end = Math.min(to, view.state.doc.length);
+      view.dispatch({ selection: { anchor: Math.min(from, end), head: end }, scrollIntoView: true });
+      view.focus();
+    },
     submit: (runAll: boolean) => {
       const view = cmRef.current?.view;
       if (!view) return;

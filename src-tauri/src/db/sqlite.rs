@@ -290,15 +290,19 @@ impl DatabaseDriver for SqliteDriver {
         let (where_sql, bind_values) = build_where(&query.filters, query.match_any)?;
         let order_sql = build_order(&query.sorts);
 
-        let count_sql = format!("SELECT COUNT(*) FROM {q_tbl}{where_sql}");
-        let mut cq = sqlx::query_scalar::<_, i64>(&count_sql);
-        for v in &bind_values {
-            cq = cq.bind(v.clone());
-        }
-        let total: i64 = cq
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+        // 純翻頁時前端傳 count=false 直接略過 COUNT（沿用前次快取），比照 mssql / mongo。
+        let total: i64 = if query.count {
+            let count_sql = format!("SELECT COUNT(*) FROM {q_tbl}{where_sql}");
+            let mut cq = sqlx::query_scalar::<_, i64>(&count_sql);
+            for v in &bind_values {
+                cq = cq.bind(v.clone());
+            }
+            cq.fetch_one(&self.pool)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?
+        } else {
+            0
+        };
 
         let data_sql = format!(
             "SELECT * FROM {q_tbl}{where_sql}{order_sql} LIMIT {page_size} OFFSET {offset}"
@@ -325,18 +329,36 @@ impl DatabaseDriver for SqliteDriver {
     }
 
     async fn query(&self, sql: &str) -> AppResult<QueryResult> {
+        self.query_capped(sql, 0).await
+    }
+
+    async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
         let trimmed = sql.trim_start().to_ascii_lowercase();
         let is_read = trimmed.starts_with("select")
             || trimmed.starts_with("pragma")
             || trimmed.starts_with("explain");
 
-        // 寫入語句若帶 RETURNING（SQLite 3.35+ 支援），改走 fetch_all 取回回傳列。
+        // 寫入語句若帶 RETURNING（SQLite 3.35+ 支援），改走 fetch 取回回傳列。
         if is_read || trimmed.contains("returning") {
-            let rows = sqlx::query(sql)
-                .fetch_all(&self.pool)
+            use futures::TryStreamExt;
+            let mut stream = sqlx::query(sql).fetch(&self.pool);
+            let mut rows: Vec<SqliteRow> = Vec::new();
+            let mut truncated = false;
+            // 逐列取到 cap 即停（cap=0 不限）；SQLite 為本地檔，早停真的省 I/O。
+            while let Some(row) = stream
+                .try_next()
                 .await
-                .map_err(|e| AppError::Query(e.to_string()))?;
-            Ok(rows_to_result(&rows))
+                .map_err(|e| AppError::Query(e.to_string()))?
+            {
+                if cap > 0 && rows.len() >= cap {
+                    truncated = true;
+                    break;
+                }
+                rows.push(row);
+            }
+            let mut result = rows_to_result(&rows);
+            result.truncated = truncated;
+            Ok(result)
         } else {
             let res = sqlx::query(sql)
                 .execute(&self.pool)
@@ -346,6 +368,7 @@ impl DatabaseDriver for SqliteDriver {
                 columns: vec![],
                 rows: vec![],
                 rows_affected: res.rows_affected(),
+                truncated: false,
             })
         }
     }
@@ -748,6 +771,7 @@ fn rows_to_result(rows: &[SqliteRow]) -> QueryResult {
         columns,
         rows: out_rows,
         rows_affected: 0,
+        truncated: false,
     }
 }
 
