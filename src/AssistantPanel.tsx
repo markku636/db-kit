@@ -9,6 +9,8 @@ import {
   onClaudeStream,
 } from "./api";
 import { useStore } from "./store";
+import { useTheme } from "./theme";
+import { resolveHighlightColors, type ThemeColors } from "./editorThemes";
 import { useAssistant } from "./assistant";
 import { toast, copyToClipboard, pickSaveFile, uiConfirm } from "./ui";
 import Icon from "./ui/Icon";
@@ -733,8 +735,124 @@ function extFor(lang: string): string {
   }
 }
 
+// SQL 關鍵字 / 型別（比照 editorThemes 的 HighlightStyle：型別併入 keyword 色）。大小寫不敏感。
+const SQL_KW = new Set([
+  "select", "from", "where", "and", "or", "not", "in", "is", "null", "like", "between", "exists",
+  "group", "by", "having", "order", "asc", "desc", "limit", "offset", "distinct", "as", "on", "using",
+  "join", "inner", "left", "right", "full", "outer", "cross", "natural", "union", "all", "intersect", "except",
+  "insert", "into", "values", "value", "update", "set", "delete", "truncate", "merge", "replace",
+  "create", "alter", "drop", "table", "view", "index", "sequence", "unique", "primary", "key", "foreign", "references",
+  "constraint", "default", "check", "cascade", "restrict", "add", "column", "modify", "change", "rename", "to",
+  "database", "schema", "temporary", "if", "case", "when", "then", "else", "end", "elseif", "while", "loop",
+  "begin", "commit", "rollback", "transaction", "start", "savepoint", "lock", "unlock",
+  "grant", "revoke", "with", "recursive", "over", "partition", "window", "returning", "for", "each", "row",
+  "use", "show", "describe", "desc", "explain", "analyze", "call", "declare", "procedure", "function",
+  "trigger", "returns", "return", "language", "definer", "before", "after", "of", "asc",
+  "like", "ilike", "rlike", "regexp", "match", "against", "collate", "cast", "convert", "interval",
+  "true", "false", "unknown", "current_timestamp", "current_date", "current_time",
+  // 型別
+  "int", "integer", "bigint", "smallint", "tinyint", "mediumint", "decimal", "numeric", "float", "double",
+  "real", "bit", "boolean", "bool", "char", "varchar", "text", "tinytext", "mediumtext", "longtext",
+  "nchar", "nvarchar", "ntext", "blob", "tinyblob", "mediumblob", "longblob", "binary", "varbinary",
+  "date", "datetime", "timestamp", "time", "year", "json", "jsonb", "uuid", "serial", "bigserial",
+  "money", "enum", "unsigned", "zerofill", "auto_increment", "identity",
+]);
+
+const SQL_OP = "=<>!+-*/%|&^~";
+
+// 近似 SQL tokenizer：單次線性掃描切出 token 並套主題色（比照 SqlEditor 的 HighlightStyle 對應）。
+// 非 CodeMirror lexer，少數邊界會與編輯器略有出入（僅視覺；複製取用的仍是原文 code）。
+function highlightSql(code: string, c: ThemeColors): ReactNode[] {
+  const out: ReactNode[] = [];
+  const n = code.length;
+  let i = 0;
+  let k = 0;
+  const push = (text: string, color?: string) => {
+    if (!text) return;
+    out.push(color ? <span key={k++} style={{ color }}>{text}</span> : text);
+  };
+  const isWord = (ch: string) => /[A-Za-z0-9_]/.test(ch);
+  while (i < n) {
+    const ch = code[i];
+    // 空白 / 換行：原樣保留排版。
+    if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+      let j = i + 1;
+      while (j < n && /\s/.test(code[j])) j++;
+      push(code.slice(i, j));
+      i = j;
+      continue;
+    }
+    // 行註解：-- …  或  # …（MySQL）。
+    if ((ch === "-" && code[i + 1] === "-") || ch === "#") {
+      let j = i;
+      while (j < n && code[j] !== "\n") j++;
+      push(code.slice(i, j), c.comment);
+      i = j;
+      continue;
+    }
+    // 區塊註解：/* … */（串流未閉合就吃到結尾）。
+    if (ch === "/" && code[i + 1] === "*") {
+      let j = i + 2;
+      while (j < n && !(code[j] === "*" && code[j + 1] === "/")) j++;
+      j = Math.min(j + 2, n);
+      push(code.slice(i, j), c.comment);
+      i = j;
+      continue;
+    }
+    // 字串：'…' / "…"（含 '' 與 \ 跳脫；未閉合吃到結尾）。
+    if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      while (j < n) {
+        if (code[j] === "\\") { j += 2; continue; }
+        if (code[j] === ch) {
+          if (code[j + 1] === ch) { j += 2; continue; } // 加倍跳脫
+          j++;
+          break;
+        }
+        j++;
+      }
+      push(code.slice(i, j), c.string);
+      i = j;
+      continue;
+    }
+    // 數字。
+    if (ch >= "0" && ch <= "9") {
+      let j = i + 1;
+      while (j < n && /[0-9.]/.test(code[j])) j++;
+      push(code.slice(i, j), c.number);
+      i = j;
+      continue;
+    }
+    // 識別字 / 關鍵字。
+    if (/[A-Za-z_]/.test(ch)) {
+      let j = i + 1;
+      while (j < n && isWord(code[j])) j++;
+      const word = code.slice(i, j);
+      push(word, SQL_KW.has(word.toLowerCase()) ? c.keyword : undefined);
+      i = j;
+      continue;
+    }
+    // 運算子。
+    if (SQL_OP.includes(ch)) {
+      let j = i + 1;
+      while (j < n && SQL_OP.includes(code[j])) j++;
+      push(code.slice(i, j), c.operator);
+      i = j;
+      continue;
+    }
+    // 其餘標點（括號、逗號、分號、點…）：前景色。
+    push(ch);
+    i++;
+  }
+  return out;
+}
+
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
+  const editorTheme = useTheme((s) => s.editorTheme);
+  const appTheme = useTheme((s) => s.theme);
   const isSql = lang === "sql" || (!lang && looksLikeSql(code));
+  // 套用使用者所選的編輯器主題：指定主題吃主題背景 / auto 維持面板底色。
+  const { colors, useBg } = resolveHighlightColors(editorTheme, appTheme);
 
   const save = async () => {
     const ext = extFor(lang || (isSql ? "sql" : "txt"));
@@ -768,7 +886,10 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
             onClick={() => { copyToClipboard(code); toast.success("已複製"); }}>複製</button>
         </div>
       </div>
-      <pre className="p-2 overflow-auto text-[12px] mono leading-relaxed"><code>{code}</code></pre>
+      <pre className="p-2 overflow-auto text-[12px] mono leading-relaxed"
+        style={{ backgroundColor: useBg ? colors.bg : undefined, color: colors.fg }}>
+        <code>{isSql ? highlightSql(code, colors) : code}</code>
+      </pre>
     </div>
   );
 }
