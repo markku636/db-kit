@@ -17,7 +17,7 @@ export type EditorThemeId =
 // "auto" = 跟隨 App 深淺色（沿用 @uiw 內建 light/dark 主題，維持原視覺）。
 export type EditorThemeChoice = "auto" | EditorThemeId;
 
-interface ThemeColors {
+export interface ThemeColors {
   bg: string;
   fg: string;
   keyword: string;
@@ -113,6 +113,27 @@ export const EDITOR_THEMES: EditorThemeDef[] = [
 
 export function getEditorThemeDef(id: string): EditorThemeDef | undefined {
   return EDITOR_THEMES.find((d) => d.id === id);
+}
+
+// 非 CodeMirror 場景（如 AI 助手程式碼區塊）要用的高亮色盤。
+// - useBg=true：套用主題自身背景，完整重現編輯器程式碼區外觀（指定主題時）。
+// - useBg=false：不覆蓋背景（維持面板底色，比照編輯器 auto 模式的 transparentBg），
+//   token 色回退到符合深淺色的預設寶石盤（淺=Moonstone / 深=Amethyst）。
+export interface HighlightPalette {
+  colors: ThemeColors;
+  useBg: boolean;
+}
+
+export function resolveHighlightColors(
+  choice: EditorThemeChoice,
+  appTheme: "dark" | "light",
+): HighlightPalette {
+  if (choice !== "auto") {
+    const def = getEditorThemeDef(choice);
+    if (def) return { colors: def.colors, useBg: true };
+  }
+  const fallback = getEditorThemeDef(appTheme === "light" ? "moonstone" : "amethyst")!;
+  return { colors: fallback.colors, useBg: false };
 }
 
 export function isEditorThemeChoice(v: unknown): v is EditorThemeChoice {
