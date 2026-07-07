@@ -157,7 +157,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
     }
   }, []);
   // 新掛載的編輯器必無選取；主動回報 null，校正父層可能殘留的舊選取
-  //（切換連線時 SqlEditor 可能因 supportsExplain 翻轉而重新掛載，lastSelRef 重置為 null 會吞掉校正回呼）。
+  //（切換連線時 SqlEditor 可能因 supportsSqlEditor 翻轉而重新掛載，lastSelRef 重置為 null 會吞掉校正回呼）。
   useEffect(() => {
     selChangeRef.current?.(null);
     lastSelRef.current = null;

@@ -3821,7 +3821,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 // SQL 編輯器：綠鈕對齊 F6——有選取只跑選取段，否則整段全跑；
                 // 只跑「游標所在語句」請按 Ctrl+Enter。
                 // 非 SQL（mongo / redis textarea）維持單一指令直接執行。
-                onClick={() => supportsSqlEditor ? editorRef.current?.submit(true) : execute("run")}
+                // 編輯器 lazy chunk 尚未掛載（editorRef 為 null）時退回 execute("run") 整段執行，避免點擊靜默無效。
+                onClick={() => supportsSqlEditor && editorRef.current ? editorRef.current.submit(true) : execute("run")}
                 title="執行整段（F6）；有選取時只跑選取段；游標所在語句請按 Ctrl+Enter"
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-600/80 hover:bg-green-600 disabled:opacity-50">
                 <Icon icon={Play} size={13} />
@@ -3968,7 +3969,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                       className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 text-fg/60 hover:bg-fg/5">
                       複製錯誤
                     </button>
-                    {errStmt && supportsSqlEditor && sql.indexOf(errStmt) >= 0 && (
+                    {/* errStmt === 整份內容時不顯示（反白全部沒有定位價值；external 整批送出失敗時 errStmt 恆為整批）。 */}
+                    {errStmt && supportsSqlEditor && errStmt.trim() !== sql.trim() && sql.indexOf(errStmt) >= 0 && (
                       <button type="button"
                         onClick={() => {
                           const off = sql.indexOf(errStmt);
