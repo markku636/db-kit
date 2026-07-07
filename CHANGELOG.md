@@ -1,4 +1,7 @@
-## v0.7.2
+## v0.7.3
+
+- **External（gateway）查詢分頁改用 CodeMirror SQL 編輯器**：external kind 原本 fallback 到 Redis 用的純 `<textarea>`，導致「設定 → 編輯器主題」不生效、無語法高亮 / 行號 / 自動完成。新增 `supportsSqlEditor` flag（`supportsExplain || external`）把「編輯器選擇」與「EXPLAIN 能力」兩個關注點分離——external 分頁現與其他 SQL 連線一致：主題即時生效、行號、片段、格式化、SQL 轉換、`:name` 參數 badge、Ctrl+Enter 游標語句、反白選取段執行、失敗語句定位。前端多語句切分維持不動（external 仍整段送 gateway、多結果集不受影響）；建構器與「分析（EXPLAIN 表格）」維持原 gate（external 無 schema 自動完成 / EXPLAIN 表格）。
+- package-lock.json 版號補同步（0.7.1 → 0.7.3；v0.7.2 bump 時漏掉，避免 CI `npm ci` 再踩 lockfile 驗證）。
 
 - **右鍵「產生 SQL」一律向右開新查詢分頁（對標 SSMS）**：側欄「新增查詢」（含 USE / search_path 起手；SQLite 開空白分頁）、「查詢前 100 筆（含明列欄位）」、SELECT COUNT(*)、INSERT / GRANT 範本、複製資料表、Mongo 範本，與查詢建構器 / 結構同步 / 資料產生對話框的「送到編輯器」——原本會覆蓋目前查詢分頁的草稿，現改為向右開新分頁並自動切換，原分頁內容不動。AI 助手「貼到查詢編輯器」與常用查詢雙擊維持「貼進目前分頁」語意。
 - 版本號同步 0.7.2（v0.6.0 / v0.7.0 釋出時 package.json / tauri.conf.json / Cargo.toml 未跟上、App 內顯示 0.5.0，本次補齊；v0.7.1 因 CI 未修復完成未發佈）。

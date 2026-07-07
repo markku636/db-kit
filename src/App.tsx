@@ -2861,6 +2861,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const connections = useStore((s) => s.connections);
   const connectedIds = useStore((s) => s.connectedIds);
   const supportsExplain = !!kind && EXPLAIN_KINDS.includes(kind);
+  // 編輯器選擇與選取追蹤：SQL-like 連線（含 external gateway，講 MySQL 方言）用 CodeMirror SqlEditor。
+  // 與 supportsExplain（EXPLAIN 查詢計畫能力）是兩個關注點——external 走 gateway、
+  // 不進 EXPLAIN_KINDS（那會誤開前端多語句切分），視覺化解釋另有 supportsVisualExplain gate。
+  const supportsSqlEditor = supportsExplain || kind === "external";
   // 視覺化解釋（解釋分頁）支援的類型：能取得 JSON 執行計畫者（MySQL / PostgreSQL / 外部 gateway；SQLite 無）。
   const supportsVisualExplain = !!kind && (isMysqlFamily(kind) || kind === "postgres" || kind === "external");
   // Mongo explain：獨立 gate —— 不可把 mongo 加進 EXPLAIN_KINDS（那同時 gate SQL 切割 / 參數 / 編輯器選擇）。
@@ -2874,7 +2878,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [editorSel, setEditorSel] = useState<string | null>(null);
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
-  const paramCount = useMemo(() => (supportsExplain ? extractNamedParams(sql).length : 0), [supportsExplain, sql]);
+  const paramCount = useMemo(() => (supportsSqlEditor ? extractNamedParams(sql).length : 0), [supportsSqlEditor, sql]);
   // 結果集清單（SSMS 風格）：多語句批次中每條有回傳結果集的語句各佔一格、堆疊「同時」顯示；
   // 單語句 / 純 DML / 分析模式只有一筆。activeResult 標記工具列（複製 / 匯出 / 問 AI）作用的結果集。
   const [resultSets, setResultSets] = useState<ResultSetEntry[]>([]);
@@ -3066,7 +3070,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 取得要執行的語句：若編輯器有反白選取，只跑選取段（致敬 DataGrip / DBeaver）。
   // SQL 編輯器（CodeMirror）的選取走 editorSel；mongo/redis textarea 走 taRef。
   const queryToRun = () => {
-    if (supportsExplain) {
+    if (supportsSqlEditor) {
       if (editorSel?.trim()) return editorSel;
       return sql;
     }
@@ -3418,7 +3422,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
 
   // 查詢面板快捷鍵：Ctrl/Cmd+S 另存 .sql、Ctrl/Cmd+O 開啟 .sql、Ctrl/Cmd+Shift+F 格式化 SQL
   //（以 ref 取最新函式，listener 只掛一次）。僅在查詢分頁掛載時存在；有對話框開啟時讓路。
-  const formatCurrent = () => { if (supportsExplain && sql.trim()) persistSql(formatSql(sql)); };
+  const formatCurrent = () => { if (supportsSqlEditor && sql.trim()) persistSql(formatSql(sql)); };
   const fileShortcutRef = useRef({ saveSqlFile, openSqlFile, formatCurrent });
   fileShortcutRef.current = { saveSqlFile, openSqlFile, formatCurrent };
   useEffect(() => {
@@ -3665,7 +3669,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 </>
               )}
             </div>
-            {supportsExplain && (
+            {supportsSqlEditor && (
               <div className="relative">
                 <button type="button" onClick={() => setShowSnippets((s) => !s)}
                   title="SQL 片段：插入常用骨架（編輯器內輸入片段名亦可自動完成展開）"
@@ -3711,7 +3715,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 <Icon icon={Blocks} size={13} />建構器
               </button>
             )}
-            {supportsExplain && (
+            {supportsSqlEditor && (
               <button type="button" onClick={() => persistSql(formatSql(sql))} disabled={running || !sql.trim()}
                 title="格式化 SQL：主要子句換行（僅調整字面值外空白，不改語意）(Ctrl+Shift+F)"
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
@@ -3741,7 +3745,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
                       <Icon icon={Star} size={13} className="text-fg/45" />收藏目前查詢…
                     </button>
-                    {supportsExplain && (
+                    {supportsSqlEditor && (
                       <>
                         <div className="px-3 py-1 mt-1 text-[11px] text-fg/40 border-t border-fg/10">SQL 轉換</div>
                         <button type="button" onClick={() => { setShowMore(false); persistSql(minifySql(sql)); }} disabled={!sql.trim()}
@@ -3817,7 +3821,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 // SQL 編輯器：綠鈕對齊 F6——有選取只跑選取段，否則整段全跑；
                 // 只跑「游標所在語句」請按 Ctrl+Enter。
                 // 非 SQL（mongo / redis textarea）維持單一指令直接執行。
-                onClick={() => supportsExplain ? editorRef.current?.submit(true) : execute("run")}
+                onClick={() => supportsSqlEditor ? editorRef.current?.submit(true) : execute("run")}
                 title="執行整段（F6）；有選取時只跑選取段；游標所在語句請按 Ctrl+Enter"
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-600/80 hover:bg-green-600 disabled:opacity-50">
                 <Icon icon={Play} size={13} />
@@ -3826,9 +3830,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             )}
           </div>
         </div>
-        {supportsExplain ? (
-          // SQL（mysql/postgres/sqlite）：CodeMirror 編輯器 — 語法高亮 + 行號 + 即時檢查 +
-          // 表/欄自動完成；F6 整段、Ctrl+Enter 游標所在語句或選取段、Ctrl+/ 註解、Tab 縮排。
+        {supportsSqlEditor ? (
+          // SQL（mysql/postgres/sqlite/mssql/oracle/external gateway）：CodeMirror 編輯器 — 語法高亮 +
+          // 行號 + 即時檢查 + 表/欄自動完成；F6 整段、Ctrl+Enter 游標所在語句或選取段、Ctrl+/ 註解、Tab 縮排。
           <div style={{ height: editor.size }} className="overflow-hidden bg-app border-t border-fg/10">
             <Suspense fallback={<div className="h-full w-full bg-well/50 animate-pulse" />}>
               <SqlEditor
@@ -3964,7 +3968,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                       className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 text-fg/60 hover:bg-fg/5">
                       複製錯誤
                     </button>
-                    {errStmt && supportsExplain && sql.indexOf(errStmt) >= 0 && (
+                    {errStmt && supportsSqlEditor && sql.indexOf(errStmt) >= 0 && (
                       <button type="button"
                         onClick={() => {
                           const off = sql.indexOf(errStmt);
