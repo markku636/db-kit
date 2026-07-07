@@ -265,17 +265,11 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // 開場動畫：首次啟動播完整版 1.2s、之後精簡 0.6s，並扣掉 bundle 載入已流逝的時間
+  // 開場動畫：每次啟動固定 1.5s（不分首次），並扣掉 bundle 載入已流逝的時間
   //（骨架屏 + splash 的總感知時間不疊加）；按任意鍵可直接跳過（點擊由 SplashScreen onSkip 處理）。
   useEffect(() => {
     if (splash !== "show") return;
-    let full = 600;
-    try {
-      if (!localStorage.getItem("dbkit:launched")) {
-        full = 1200;
-        localStorage.setItem("dbkit:launched", "1");
-      }
-    } catch {}
+    const full = 1500;
     const t = setTimeout(() => setSplash("leaving"), Math.max(300, full - performance.now()));
     const skip = () => setSplash("leaving");
     window.addEventListener("keydown", skip);

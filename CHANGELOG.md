@@ -1,3 +1,7 @@
+## v0.7.4
+
+- **開場動畫改為每次啟動固定 1.5 秒**：原本首次啟動 1.2s、之後精簡 0.6s（靠 `localStorage` 的 `dbkit:launched` 旗標區分），現統一為每次 1.5s；一併移除已無用的 `dbkit:launched` 旗標。其餘行為不變——仍扣除 bundle 載入已流逝時間（保底 300ms）、點擊 / 按任意鍵可跳過、`prefers-reduced-motion` 與啟動密碼鎖屏情境維持原邏輯、淡出動畫 0.55s。
+
 ## v0.7.3
 
 - **External（gateway）查詢分頁改用 CodeMirror SQL 編輯器**：external kind 原本 fallback 到 Redis 用的純 `<textarea>`，導致「設定 → 編輯器主題」不生效、無語法高亮 / 行號 / 自動完成。新增 `supportsSqlEditor` flag（`supportsExplain || external`）把「編輯器選擇」與「EXPLAIN 能力」兩個關注點分離——external 分頁現與其他 SQL 連線一致：主題即時生效、行號、片段、格式化、SQL 轉換、`:name` 參數 badge、Ctrl+Enter 游標語句、反白選取段執行、失敗語句定位。前端多語句切分維持不動（external 仍整段送 gateway、多結果集不受影響）；建構器與「分析（EXPLAIN 表格）」維持原 gate（external 無 schema 自動完成 / EXPLAIN 表格）。

@@ -1262,7 +1262,7 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
 name = "db-kit"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "aes-gcm 0.10.3",
  "argon2 0.5.3",
