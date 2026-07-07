@@ -8,11 +8,18 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>DB Kit</title>
     <script>
-      // 在 React 掛載前先套用主題類別，避免切換主題時的閃爍（FOUC）。
+      // 在 React 掛載前先套用深/淺類別，避免主題閃爍（FOUC）。表面色由 :root 預設（Amethyst）接手，
+      // JS 掛載時再依所選變體 setProperty 覆寫。判準與 theme.ts 的 readStoredThemeId 一致。
       (function () {
         try {
-          var t = localStorage.getItem("dbkit:theme");
-          if (t === "light") document.documentElement.classList.add("light");
+          var ids = ["amethyst", "moonstone", "jade", "garnet", "amber", "ruby", "obsidian"];
+          var id = localStorage.getItem("dbkit:themeId");
+          if (ids.indexOf(id) < 0) {
+            var oe = localStorage.getItem("dbkit:editorTheme");
+            id = ids.indexOf(oe) >= 0 ? oe
+              : (localStorage.getItem("dbkit:theme") === "light" ? "moonstone" : "amethyst");
+          }
+          if (id === "moonstone") document.documentElement.classList.add("light");
         } catch (e) {}
       })();
     </script>

@@ -8,7 +8,7 @@ import { linter, lintGutter } from "@codemirror/lint";
 import { autocompletion, type Completion, type CompletionSource } from "@codemirror/autocomplete";
 import { api } from "./api";
 import { useTheme } from "./theme";
-import { resolveEditorTheme, transparentBg } from "./editorThemes";
+import { resolveEditorTheme } from "./editorThemes";
 
 // Mongo 查詢編輯器（取代原本的 <textarea>）：JSON 語法高亮 + 即時 JSON lint +
 // 三路自動完成 —— DSL 鍵、$ 聚合階段 / 查詢運算子、目標集合的欄位名（取樣 schema）。
@@ -65,7 +65,7 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
   ref,
 ) {
   const theme = useTheme((s) => s.theme);
-  const editorTheme = useTheme((s) => s.editorTheme);
+  const themeId = useTheme((s) => s.themeId);
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   useImperativeHandle(ref, () => ({
     insertText: (text: string) => {
@@ -136,8 +136,6 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
       linter(jsonParseLinter(), { delay: 250 }),
       lintGutter(),
       baseTheme,
-      // 跟隨 App 模式：背景透明透出面板底色；自訂主題則由主題自身背景接手。
-      ...(editorTheme === "auto" ? [transparentBg] : []),
       EditorView.lineWrapping,
       autocompletion({ override: [source] }),
       Prec.high(
@@ -148,7 +146,7 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
         ]),
       ),
     ];
-  }, [editorTheme]);
+  }, []);
 
   return (
     <CodeMirror
@@ -156,7 +154,7 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
       className={className}
       value={value}
       onChange={onChange}
-      theme={resolveEditorTheme(editorTheme, theme)}
+      theme={resolveEditorTheme(themeId, theme)}
       extensions={extensions}
       autoFocus={autoFocus}
       placeholder={placeholder}

@@ -8,7 +8,7 @@ import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { snippetCompletion, type Completion, type CompletionSource } from "@codemirror/autocomplete";
 import { DbKind } from "./api";
 import { useTheme } from "./theme";
-import { resolveEditorTheme, transparentBg } from "./editorThemes";
+import { resolveEditorTheme } from "./editorThemes";
 import { lintSqlStructure } from "./sql";
 
 // SQL 片段（供編輯器自動完成展開：輸入名稱 → 補入 body）。
@@ -107,7 +107,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
   readOnly,
 }, ref) {
   const theme = useTheme((s) => s.theme);
-  const editorTheme = useTheme((s) => s.editorTheme);
+  const themeId = useTheme((s) => s.themeId);
   // CodeMirror 實例 ref：供 insertText 於游標處插入（片段工具列用）。
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   useImperativeHandle(ref, () => ({
@@ -170,8 +170,6 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       lang,
       lintGutter(),
       baseTheme,
-      // 跟隨 App 模式：背景透明透出面板底色；自訂主題則由主題自身背景接手。
-      ...(editorTheme === "auto" ? [transparentBg] : []),
       EditorView.lineWrapping,
       // 即時結構檢查（前端，零誤報）+ 後端語法診斷（驗證後）合併為 lint 來源。
       linter(
@@ -239,7 +237,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       ),
     );
     return ext;
-  }, [kind, diagnostics, schema, snippets, editorTheme]);
+  }, [kind, diagnostics, schema, snippets]);
 
   return (
     <CodeMirror
@@ -248,7 +246,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       value={value}
       onChange={onChange}
       onUpdate={handleUpdate}
-      theme={resolveEditorTheme(editorTheme, theme)}
+      theme={resolveEditorTheme(themeId, theme)}
       extensions={extensions}
       readOnly={readOnly}
       autoFocus={autoFocus}

@@ -848,11 +848,11 @@ function highlightSql(code: string, c: ThemeColors): ReactNode[] {
 }
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
-  const editorTheme = useTheme((s) => s.editorTheme);
+  const themeId = useTheme((s) => s.themeId);
   const appTheme = useTheme((s) => s.theme);
   const isSql = lang === "sql" || (!lang && looksLikeSql(code));
-  // 套用使用者所選的編輯器主題：指定主題吃主題背景 / auto 維持面板底色。
-  const { colors, useBg } = resolveHighlightColors(editorTheme, appTheme);
+  // 套用目前整體主題的色盤（統一後恆為指定變體 → 吃該變體背景，與編輯器一致）。
+  const { colors, useBg } = resolveHighlightColors(themeId, appTheme);
 
   const save = async () => {
     const ext = extFor(lang || (isSql ? "sql" : "txt"));

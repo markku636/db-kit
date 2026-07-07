@@ -2,7 +2,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo,
 import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
-import { EDITOR_THEMES, getEditorThemeDef, type EditorThemeChoice } from "./editorThemes";
+import { EDITOR_THEMES, getEditorThemeDef, type EditorThemeId } from "./editorThemes";
 import TableView, { CellInspector } from "./TableView";
 import InfoPanel from "./InfoPanel";
 import AssistantPanel from "./AssistantPanel";
@@ -253,9 +253,9 @@ export default function App() {
       .catch(() => {});
   }, [lockState]);
 
-  // 啟動時套用主題類別（與 index.html 的防閃爍腳本一致，確保 React 狀態與 DOM 同步）。
+  // 啟動時套用目前變體的整套 --c-* CSS 變數（與 index.html 防閃爍腳本的 .light 類別互補）。
   useEffect(() => {
-    useTheme.getState().setTheme(useTheme.getState().theme);
+    useTheme.getState().setThemeId(useTheme.getState().themeId);
   }, []);
 
   // F1 切換快捷鍵說明。
@@ -538,10 +538,10 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
   const [busy, setBusy] = useState(false);
   const [guard, setGuard] = useState<QueryGuard>(loadQueryGuard);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(autoCheckEnabled);
-  const editorTheme = useTheme((s) => s.editorTheme);
-  const setEditorTheme = useTheme((s) => s.setEditorTheme);
-  // 迷你預覽用的主題定義（跟隨 App 時無預覽）。
-  const previewDef = editorTheme === "auto" ? undefined : getEditorThemeDef(editorTheme);
+  const themeId = useTheme((s) => s.themeId);
+  const setThemeId = useTheme((s) => s.setThemeId);
+  // 迷你預覽用的主題定義（統一後恆有值）。
+  const previewDef = getEditorThemeDef(themeId);
   const updateGuard = (patch: Partial<QueryGuard>) => {
     setGuard((g) => {
       const merged = { ...g, ...patch };
@@ -684,16 +684,15 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
         <div className="pt-4 border-t border-fg/10 space-y-3">
           <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Palette} size={15} /> 編輯器主題
+            <Icon icon={Palette} size={15} /> 主題（Dracula PRO）
           </div>
           <p className="text-xs text-fg/50 leading-relaxed">
-            SQL / Mongo 查詢編輯器的語法高亮配色，變更立即生效。
-            「跟隨 App」隨右上角深淺色模式切換。
+            整個 app 的配色（側欄 / 工具列 / 表格 / 對話框 / 編輯器 / AI 助手），變更立即生效。
+            右上角深淺切換＝在所選深色變體與 Alucard（淺）之間翻轉。
           </p>
           <Field label="配色主題">
-            <Select selectSize="md" value={editorTheme}
-              onChange={(e) => setEditorTheme(e.target.value as EditorThemeChoice)}>
-              <option value="auto">跟隨 App（預設）</option>
+            <Select selectSize="md" value={themeId}
+              onChange={(e) => setThemeId(e.target.value as EditorThemeId)}>
               {EDITOR_THEMES.map((t) => (
                 <option key={t.id} value={t.id}>{t.label}</option>
               ))}
