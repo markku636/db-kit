@@ -8,6 +8,7 @@ import { linter, lintGutter } from "@codemirror/lint";
 import { autocompletion, type Completion, type CompletionSource } from "@codemirror/autocomplete";
 import { api } from "./api";
 import { useTheme } from "./theme";
+import { resolveEditorTheme, transparentBg } from "./editorThemes";
 
 // Mongo 查詢編輯器（取代原本的 <textarea>）：JSON 語法高亮 + 即時 JSON lint +
 // 三路自動完成 —— DSL 鍵、$ 聚合階段 / 查詢運算子、目標集合的欄位名（取樣 schema）。
@@ -33,10 +34,11 @@ const DOLLAR_OPS = [
   "$sum", "$avg", "$min", "$max", "$first", "$last", "$push", "$addToSet",
 ];
 
+// 背景透明改由 transparentBg 承擔，只在「跟隨 App」模式附加（自訂主題需保留自身背景色）。
 const baseTheme = EditorView.theme({
-  "&": { fontSize: "13px", height: "100%", backgroundColor: "transparent" },
+  "&": { fontSize: "13px", height: "100%" },
   ".cm-content": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
-  ".cm-gutters": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", backgroundColor: "transparent" },
+  ".cm-gutters": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
   "&.cm-focused": { outline: "none" },
 });
 
@@ -63,6 +65,7 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
   ref,
 ) {
   const theme = useTheme((s) => s.theme);
+  const editorTheme = useTheme((s) => s.editorTheme);
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   useImperativeHandle(ref, () => ({
     insertText: (text: string) => {
@@ -133,6 +136,8 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
       linter(jsonParseLinter(), { delay: 250 }),
       lintGutter(),
       baseTheme,
+      // 跟隨 App 模式：背景透明透出面板底色；自訂主題則由主題自身背景接手。
+      ...(editorTheme === "auto" ? [transparentBg] : []),
       EditorView.lineWrapping,
       autocompletion({ override: [source] }),
       Prec.high(
@@ -143,7 +148,7 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
         ]),
       ),
     ];
-  }, []);
+  }, [editorTheme]);
 
   return (
     <CodeMirror
@@ -151,7 +156,7 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
       className={className}
       value={value}
       onChange={onChange}
-      theme={theme === "light" ? "light" : "dark"}
+      theme={resolveEditorTheme(editorTheme, theme)}
       extensions={extensions}
       autoFocus={autoFocus}
       placeholder={placeholder}

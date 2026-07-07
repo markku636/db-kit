@@ -8,6 +8,7 @@ import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { snippetCompletion, type Completion, type CompletionSource } from "@codemirror/autocomplete";
 import { DbKind } from "./api";
 import { useTheme } from "./theme";
+import { resolveEditorTheme, transparentBg } from "./editorThemes";
 import { lintSqlStructure } from "./sql";
 
 // SQL 片段（供編輯器自動完成展開：輸入名稱 → 補入 body）。
@@ -60,11 +61,12 @@ function lineToRange(doc: string, line: number): { from: number; to: number } {
   return { from, to: from + lines[idx].length };
 }
 
-// 字型 / 尺寸微調（與 app 既有 mono / text-sm 視覺一致；token 配色沿用 theme prop 的 dark/light）。
+// 字型 / 尺寸微調（與 app 既有 mono / text-sm 視覺一致）。
+// 背景透明改由 transparentBg 承擔，只在「跟隨 App」模式附加（自訂主題需保留自身背景色）。
 const baseTheme = EditorView.theme({
-  "&": { fontSize: "13px", height: "100%", backgroundColor: "transparent" },
+  "&": { fontSize: "13px", height: "100%" },
   ".cm-content": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
-  ".cm-gutters": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", backgroundColor: "transparent" },
+  ".cm-gutters": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
   "&.cm-focused": { outline: "none" },
 });
 
@@ -105,6 +107,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
   readOnly,
 }, ref) {
   const theme = useTheme((s) => s.theme);
+  const editorTheme = useTheme((s) => s.editorTheme);
   // CodeMirror 實例 ref：供 insertText 於游標處插入（片段工具列用）。
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   useImperativeHandle(ref, () => ({
@@ -167,6 +170,8 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       lang,
       lintGutter(),
       baseTheme,
+      // 跟隨 App 模式：背景透明透出面板底色；自訂主題則由主題自身背景接手。
+      ...(editorTheme === "auto" ? [transparentBg] : []),
       EditorView.lineWrapping,
       // 即時結構檢查（前端，零誤報）+ 後端語法診斷（驗證後）合併為 lint 來源。
       linter(
@@ -234,7 +239,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       ),
     );
     return ext;
-  }, [kind, diagnostics, schema, snippets]);
+  }, [kind, diagnostics, schema, snippets, editorTheme]);
 
   return (
     <CodeMirror
@@ -243,7 +248,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       value={value}
       onChange={onChange}
       onUpdate={handleUpdate}
-      theme={theme === "light" ? "light" : "dark"}
+      theme={resolveEditorTheme(editorTheme, theme)}
       extensions={extensions}
       readOnly={readOnly}
       autoFocus={autoFocus}

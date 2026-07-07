@@ -2,6 +2,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo,
 import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
+import { EDITOR_THEMES, getEditorThemeDef, type EditorThemeChoice } from "./editorThemes";
 import TableView, { CellInspector } from "./TableView";
 import InfoPanel from "./InfoPanel";
 import AssistantPanel from "./AssistantPanel";
@@ -41,7 +42,7 @@ import {
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
-  GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square,
+  GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
   type LucideIcon,
 } from "lucide-react";
 
@@ -543,6 +544,10 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
   const [busy, setBusy] = useState(false);
   const [guard, setGuard] = useState<QueryGuard>(loadQueryGuard);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(autoCheckEnabled);
+  const editorTheme = useTheme((s) => s.editorTheme);
+  const setEditorTheme = useTheme((s) => s.setEditorTheme);
+  // 迷你預覽用的主題定義（跟隨 App 時無預覽）。
+  const previewDef = editorTheme === "auto" ? undefined : getEditorThemeDef(editorTheme);
   const updateGuard = (patch: Partial<QueryGuard>) => {
     setGuard((g) => {
       const merged = { ...g, ...patch };
@@ -682,6 +687,40 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
               <option value="300000">5 分鐘</option>
             </Select>
           </Field>
+        </div>
+        <div className="pt-4 border-t border-fg/10 space-y-3">
+          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+            <Icon icon={Palette} size={15} /> 編輯器主題
+          </div>
+          <p className="text-xs text-fg/50 leading-relaxed">
+            SQL / Mongo 查詢編輯器的語法高亮配色，變更立即生效。
+            「跟隨 App」隨右上角深淺色模式切換。
+          </p>
+          <Field label="配色主題">
+            <Select selectSize="md" value={editorTheme}
+              onChange={(e) => setEditorTheme(e.target.value as EditorThemeChoice)}>
+              <option value="auto">跟隨 App（預設）</option>
+              {EDITOR_THEMES.map((t) => (
+                <option key={t.id} value={t.id}>{t.label}</option>
+              ))}
+            </Select>
+          </Field>
+          {previewDef && (
+            <div
+              className="rounded-md px-3 py-2 mono text-xs leading-relaxed border border-fg/10"
+              style={{ backgroundColor: previewDef.colors.bg, color: previewDef.colors.fg }}
+            >
+              <span style={{ color: previewDef.colors.keyword }}>SELECT</span> *{" "}
+              <span style={{ color: previewDef.colors.keyword }}>FROM</span> users{" "}
+              <span style={{ color: previewDef.colors.keyword }}>WHERE</span> name{" "}
+              <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
+              <span style={{ color: previewDef.colors.string }}>'mark'</span>{" "}
+              <span style={{ color: previewDef.colors.keyword }}>AND</span> id{" "}
+              <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
+              <span style={{ color: previewDef.colors.number }}>1</span>;{" "}
+              <span style={{ color: previewDef.colors.comment }}>-- 註解</span>
+            </div>
+          )}
         </div>
         <div className="pt-4 border-t border-fg/10 space-y-2">
           <label className="flex items-center gap-2 text-sm text-fg/80 cursor-pointer select-none">
