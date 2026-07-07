@@ -25,8 +25,10 @@ jobs:
             label: macos-arm
             target: aarch64-apple-darwin
             args: "--target aarch64-apple-darwin"
-          # macOS Intel：產出 x86_64 的 .dmg / .app（未簽章；macos-13 為 Intel runner）
-          - platform: macos-13
+          # macOS Intel：產出 x86_64 的 .dmg / .app（未簽章）。
+          # macos-13（最後一代 Intel runner image）已退役，job 會永遠排不到機器（整條 run 卡 queued）；
+          # 改在 Apple Silicon runner 上 rustup 加 x86_64 target 交叉編譯。
+          - platform: macos-latest
             label: macos-intel
             target: x86_64-apple-darwin
             args: "--target x86_64-apple-darwin"
