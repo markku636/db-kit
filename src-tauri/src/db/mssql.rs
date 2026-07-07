@@ -53,6 +53,45 @@ impl MssqlDriver {
         Ok((rows, truncated))
     }
 
+    /// 取回「所有」結果集，每集各自截斷於 cap（0 = 不限）。達 cap 後續封包照樣 drain 但不儲存
+    /// —— 與 query_rows_capped 相同的 TDS 紀律：stream 未讀完就還池會污染後續查詢。
+    /// 以 Metadata item 開格，空結果集也保有欄位頭；result_index 防禦性補格。
+    async fn query_sets_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
+        use futures::TryStreamExt;
+        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut sets: Vec<QueryResult> = Vec::new();
+        while let Some(item) = stream.try_next().await.map_err(|e| AppError::Query(e.to_string()))? {
+            match item {
+                tiberius::QueryItem::Metadata(meta) => sets.push(QueryResult {
+                    columns: meta.columns().iter().map(|c| c.name().to_string()).collect(),
+                    rows: vec![],
+                    rows_affected: 0,
+                    truncated: false,
+                }),
+                tiberius::QueryItem::Row(row) => {
+                    let idx = row.result_index() as usize;
+                    while sets.len() <= idx {
+                        sets.push(QueryResult {
+                            columns: row.columns().iter().map(|c| c.name().to_string()).collect(),
+                            rows: vec![],
+                            rows_affected: 0,
+                            truncated: false,
+                        });
+                    }
+                    let set = &mut sets[idx];
+                    if cap > 0 && set.rows.len() >= cap {
+                        set.truncated = true;
+                        continue;
+                    }
+                    let cells = (0..set.columns.len()).map(|i| cell_to_string(&row, i)).collect();
+                    set.rows.push(cells);
+                }
+            }
+        }
+        Ok(sets)
+    }
+
     /// 執行寫入語句，回傳受影響列數。
     async fn exec(&self, sql: &str) -> AppResult<u64> {
         let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
@@ -257,6 +296,21 @@ impl DatabaseDriver for MssqlDriver {
             let n = self.exec(sql).await?;
             Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: n, truncated: false })
         }
+    }
+
+    async fn query_multi_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
+        let head = sql.trim_start();
+        let is_read = starts_ci(head, "select") || starts_ci(head, "with") || starts_ci(head, "exec") || starts_ci(head, "show");
+        if !is_read {
+            let n = self.exec(sql).await?;
+            return Ok(vec![QueryResult { columns: vec![], rows: vec![], rows_affected: n, truncated: false }]);
+        }
+        let sets = self.query_sets_capped(sql, cap).await?;
+        if sets.is_empty() {
+            // 至少一筆不變量（無任何 Metadata/Row 的極端情況）。
+            return Ok(vec![QueryResult::default()]);
+        }
+        Ok(sets)
     }
 
     async fn update_cell(&self, database: &str, table: &str, edit: &CellEdit) -> AppResult<u64> {

@@ -503,6 +503,10 @@ export const api = {
     invoke<PagedData>("table_data", { id, database, table, query }),
   runQuery: (id: string, sql: string, maxRows?: number) =>
     invoke<QueryResult>("run_query", { id, sql, maxRows: maxRows ?? null }),
+  // 多結果集查詢：單語句 EXEC/CALL 多結果集、或 external gateway 整批多 SELECT。
+  // 後端保證至少 1 元素；未覆寫的驅動回單元素陣列，與 runQuery 等價。
+  runQueryMulti: (id: string, sql: string, maxRows?: number) =>
+    invoke<QueryResult[]>("run_query_multi", { id, sql, maxRows: maxRows ?? null }),
   // 後端重新執行查詢直接寫檔（不受互動 row cap 限制、rows 不經 IPC）：截斷結果的完整匯出用。
   exportQuery: (id: string, sql: string, options: ExportOptions, outPath: string) =>
     invoke<ExportResult>("export_query", { id, sql, options, outPath }),

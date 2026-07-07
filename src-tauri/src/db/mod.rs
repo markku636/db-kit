@@ -947,6 +947,13 @@ pub trait DatabaseDriver: Send + Sync {
         self.query(sql).await
     }
 
+    /// 執行查詢並回傳「所有」結果集（多語句批次 / 預存程序多結果集）。
+    /// 預設實作包一層 query_capped —— 單結果集驅動與外部 Dyn 驅動不覆寫即編譯通過。
+    /// 不變量：至少回 1 個元素。cap 對每個結果集「各自」截斷（0 = 不限），截斷者設 truncated。
+    async fn query_multi_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
+        Ok(vec![self.query_capped(sql, cap).await?])
+    }
+
     /// 更新單一儲存格（寫回 DB）。以主鍵定位列。
     async fn update_cell(
         &self,

@@ -125,6 +125,19 @@ impl Active {
             Active::Dyn(d) => d.query_capped(sql, cap).await,
         }
     }
+    /// 多結果集查詢（每集各自截斷於 cap）。未覆寫的驅動走 trait 預設（單集包 Vec）。
+    async fn query_multi_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
+        match self {
+            Active::Mysql(d) => d.query_multi_capped(sql, cap).await,
+            Active::Postgres(d) => d.query_multi_capped(sql, cap).await,
+            Active::Sqlite(d) => d.query_multi_capped(sql, cap).await,
+            Active::Mongo(d) => d.query_multi_capped(sql, cap).await,
+            Active::Redis(d) => d.query_multi_capped(sql, cap).await,
+            Active::Mssql(d) => d.query_multi_capped(sql, cap).await,
+            Active::Oracle(d) => d.query_multi_capped(sql, cap).await,
+            Active::Dyn(d) => d.query_multi_capped(sql, cap).await,
+        }
+    }
     async fn update_cell(
         &self,
         database: &str,
@@ -732,6 +745,30 @@ impl ConnectionManager {
     ///（DB 端 session timeout 若已啟用仍會生效，屬使用者的全域選擇）。
     pub async fn query_capped(&self, id: &str, sql: &str, cap: usize) -> AppResult<QueryResult> {
         self.get(id)?.active.query_capped(sql, cap).await
+    }
+
+    /// 互動多結果集查詢（run_query_multi）：全域 row cap（每集各自截斷）+ tokio timeout 兜底，
+    /// 逾時語意同 query()。未覆寫 query_multi_capped 的驅動回單元素 Vec，行為與 query() 等價。
+    pub async fn query_multi(&self, id: &str, sql: &str) -> AppResult<Vec<QueryResult>> {
+        let ms = crate::db::limits::timeout_ms();
+        let fut = self.query_multi_capped(id, sql, crate::db::limits::row_cap());
+        if ms == 0 {
+            return fut.await;
+        }
+        match tokio::time::timeout(std::time::Duration::from_millis(ms), fut).await {
+            Ok(r) => r,
+            Err(_) => Err(AppError::Timeout(ms)),
+        }
+    }
+
+    /// 多結果集查詢並將每集各自截斷於 cap（0 = 不限）。
+    pub async fn query_multi_capped(
+        &self,
+        id: &str,
+        sql: &str,
+        cap: usize,
+    ) -> AppResult<Vec<QueryResult>> {
+        self.get(id)?.active.query_multi_capped(sql, cap).await
     }
 
     pub async fn update_cell(

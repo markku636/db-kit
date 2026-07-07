@@ -101,6 +101,7 @@ pub fn run() {
             commands::table_columns,
             commands::table_data,
             commands::run_query,
+            commands::run_query_multi,
             commands::save_text_file,
             commands::read_text_file,
             commands::update_cell,

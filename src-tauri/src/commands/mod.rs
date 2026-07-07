@@ -368,6 +368,22 @@ pub async fn run_query(
     }
 }
 
+/// 多結果集版 run_query：批次 / 預存程序的每個結果集各一筆（至少 1 筆）。
+/// 未覆寫 query_multi_capped 的驅動回單元素陣列，與 run_query 行為等價。
+/// max_rows 語意同 run_query（每集各自截斷）。
+#[tauri::command]
+pub async fn run_query_multi(
+    state: State<'_, AppState>,
+    id: String,
+    sql: String,
+    max_rows: Option<usize>,
+) -> AppResult<Vec<QueryResult>> {
+    match max_rows {
+        Some(cap) => state.manager.query_multi_capped(&id, &sql, cap).await,
+        None => state.manager.query_multi(&id, &sql).await,
+    }
+}
+
 /// 將文字內容寫入使用者（透過原生另存對話框）選定的路徑。供匯出查詢結果用。
 #[tauri::command]
 pub async fn save_text_file(path: String, content: String) -> AppResult<()> {

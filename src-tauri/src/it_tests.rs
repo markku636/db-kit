@@ -590,6 +590,36 @@ async fn column_stats_counts() {
     let _ = std::fs::remove_file(dbfile);
 }
 
+/// 多結果集查詢（SQLite，免 Docker）：驗證 trait 預設實作 + manager 扇出 —
+/// 未覆寫 query_multi_capped 的驅動回單元素 Vec，內容與 query_capped 等價（含每集截斷）。
+#[tokio::test]
+async fn sqlite_query_multi_default_single_set() {
+    let dbfile = format!("dbkit_multi_test_{}.db", std::process::id());
+    let dbfile = dbfile.as_str();
+    let _ = std::fs::remove_file(dbfile);
+    let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile));
+    let mgr = crate::manager::ConnectionManager::new();
+    mgr.connect(c.clone()).await.unwrap();
+    let id = c.id.as_str();
+    mgr.query(id, "CREATE TABLE m (id INTEGER PRIMARY KEY, v TEXT)").await.unwrap();
+    mgr.query(id, "INSERT INTO m (id, v) VALUES (1,'a'),(2,'b'),(3,'c')").await.unwrap();
+
+    let sets = mgr.query_multi_capped(id, "SELECT id, v FROM m ORDER BY id", 0).await.unwrap();
+    assert_eq!(sets.len(), 1, "預設實作應回單元素 Vec");
+    assert_eq!(sets[0].columns, vec!["id", "v"]);
+    assert_eq!(sets[0].rows.len(), 3);
+    assert!(!sets[0].truncated);
+
+    // 每集各自截斷於 cap。
+    let capped = mgr.query_multi_capped(id, "SELECT id FROM m ORDER BY id", 2).await.unwrap();
+    assert_eq!(capped.len(), 1);
+    assert_eq!(capped[0].rows.len(), 2);
+    assert!(capped[0].truncated, "達 cap 應設 truncated");
+
+    mgr.disconnect(id).await;
+    let _ = std::fs::remove_file(dbfile);
+}
+
 /// SQL Search 端到端（SQLite，免 Docker）：驗證跨型別搜尋（表 / 視圖 / 欄位 / 索引 / 觸發器）、
 /// 名稱 vs 定義內文比對、型別篩選、大小寫、資料庫範圍與 snippet 產生。
 /// 此測試同時涵蓋 db/mod.rs 的共用邏輯（like_contains 跳脫、make_snippet、finalize_hits、classify）。

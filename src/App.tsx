@@ -20,7 +20,7 @@ import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
   loadSavedQueries, persistSavedQueries,
   loadSnippets, persistSnippets, upsertSnippet, removeSnippet, type SqlSnippet,
-  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName, isMysqlFamily,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
@@ -931,7 +931,7 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
       ["Shift+點選 / Shift+方向鍵", "框選矩形範圍"],
       ["Ctrl+A / Shift+點列號", "框選整頁 / 選取整列"],
       ["Ctrl+C", "複製選取格或整塊 (TSV)；工具列顯示範圍統計"],
-      ["雙擊 / 右鍵", "檢視內容 / 整列；複製值 / 列 / 欄 / 範圍"],
+      ["雙擊 / 右鍵", "檢視內容 / 整列；複製值 / 標題 / 列 / 欄 / 範圍"],
     ]],
     ["分頁與導覽", [
       ["Ctrl+Tab / Ctrl+Shift+Tab", "切換下一 / 上一個分頁"],
@@ -2804,7 +2804,9 @@ interface RunSummary { startedAt: number; finishedAt: number; total: number; pro
 // 單一結果集（SSMS 風格）：多語句批次中每條有回傳結果集的語句各佔一格；sql=產生它的原語句（不含注入的 USE 前綴）、ms=該語句耗時。
 // sent：實際送到後端的語句（含 USE / search_path 前綴），供「載入更多」原樣重跑；
 // sql 為使用者原語句（顯示 / 摘要用，不含注入前綴）。
-interface ResultSetEntry { res: QueryResult; sql: string; ms: number; sent?: string; }
+// setIdx：本格在該次 run_query_multi 回傳陣列中的索引（含無欄位的 DML 結果）；
+// 「載入更多」重跑後取同位結果集。單結果集呼叫恆為 0。
+interface ResultSetEntry { res: QueryResult; sql: string; ms: number; sent?: string; setIdx?: number; }
 
 // 毫秒時間戳 → 本地「YYYY-MM-DD HH:mm:ss」（摘要面板的開始 / 結束時間）。
 function fmtClock(ms: number): string {
@@ -2896,7 +2898,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     const newCap = Math.max(s.res.rows.length * 2, 100);
     const t0 = performance.now();
     try {
-      const res = await api.runQuery(activeId, s.sent ?? s.sql, newCap);
+      // 走 multi 版重跑：external 整批一次呼叫可能回多個結果集，以 setIdx 取「同一格」的新結果。
+      const arr = await api.runQueryMulti(activeId, s.sent ?? s.sql, newCap);
+      const res = arr[s.setIdx ?? 0];
+      if (!res) {
+        toast.error("重跑後結果集數量改變，無法載入更多");
+        return;
+      }
       setResultSets((prev) => prev.map((p, j) => (j === i ? { ...p, res, ms: performance.now() - t0 } : p)));
     } catch (e: any) {
       toast.error(e?.message ?? "重新執行失敗");
@@ -3158,7 +3166,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         const snapshot = (): RunSummary => ({
           startedAt,
           finishedAt: Date.now(),
-          total: userStatements.length,
+          // external 整批多結果集對位展開後，摘要列數可能多於語句數（一句 CALL 展成 K 列）。
+          total: Math.max(userStatements.length, runs.length),
           processed: runs.length,
           success: runs.filter((r) => r.ok).length,
           errors: runs.filter((r) => !r.ok).length,
@@ -3172,9 +3181,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           }
           if (sentStatements.length > 1) setRunProgress({ done: si, total: sentStatements.length });
           const tStmt = performance.now();
-          let res: QueryResult;
+          let resArr: QueryResult[];
           try {
-            res = await api.runQuery(activeId, sentStatements[si]);
+            // 多結果集入口：單結果集驅動回單元素陣列（行為同 runQuery）；
+            // external（gateway）整批一次呼叫、MSSQL 的 EXEC 多結果集則回多元素。
+            resArr = await api.runQueryMulti(activeId, sentStatements[si]);
           } catch (e: any) {
             const msg = e?.message ?? String(e);
             runs.push({ sql: userStatements[si], ok: false, message: msg, ms: performance.now() - tStmt });
@@ -3191,14 +3202,51 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             throw wrapped;
           }
           const ms = performance.now() - tStmt;
-          if (res.columns.length > 0) sets.push({ res, sql: userStatements[si], ms, sent: sentStatements[si] });
-          else affected += res.rows_affected;
-          runs.push({
-            sql: userStatements[si],
-            ok: true,
-            message: res.columns.length > 0 ? `${res.rows.length} 列` : `OK（影響 ${res.rows_affected} 列）`,
-            ms,
+          // 逐集開格：有欄位的結果集各佔一格；無欄位者（DML）累計影響列數。
+          // setIdx 記回傳陣列原始索引（含 DML 元素），「載入更多」重跑後取同位。
+          const grids: { res: QueryResult; setIdx: number }[] = [];
+          let stmtAffected = 0;
+          resArr.forEach((r, k) => {
+            if (r.columns.length > 0) grids.push({ res: r, setIdx: k });
+            else stmtAffected += r.rows_affected;
           });
+          affected += stmtAffected;
+          // external 整批送出：嘗試以 client 端切分對位各格標籤（僅當語句數 === 結果集數）；
+          // 不符（批內含 DML / 一句 CALL 展多集）則各格標整批原文，靠「結果 N」序號區分。
+          const stmtLabels =
+            kind === "external" && grids.length > 1
+              ? (() => {
+                  const spans = splitSqlStatementsWithRanges(userStatements[si]);
+                  return spans.length === grids.length ? spans.map((x) => x.text) : null;
+                })()
+              : null;
+          // gateway 整批為單一呼叫，無逐句耗時 → 各格（與摘要各列）標整批耗時。
+          for (let gi = 0; gi < grids.length; gi++) {
+            sets.push({
+              res: grids[gi].res,
+              sql: stmtLabels ? stmtLabels[gi] : userStatements[si],
+              ms,
+              sent: sentStatements[si],
+              setIdx: grids[gi].setIdx,
+            });
+          }
+          if (stmtLabels) {
+            for (let gi = 0; gi < grids.length; gi++) {
+              runs.push({ sql: stmtLabels[gi], ok: true, message: `${grids[gi].res.rows.length} 列`, ms });
+            }
+          } else {
+            runs.push({
+              sql: userStatements[si],
+              ok: true,
+              message:
+                grids.length > 1
+                  ? `${grids.length} 個結果集`
+                  : grids.length === 1
+                    ? `${grids[0].res.rows.length} 列`
+                    : `OK（影響 ${stmtAffected} 列）`,
+              ms,
+            });
+          }
         }
         // 有任何結果集 → 全部「同時」顯示（SSMS 風格，多個時堆疊）；否則顯示累計影響列數。
         if (sets.length > 0) applyResultSets(sets);
@@ -4088,6 +4136,16 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
     );
   const copyCol = (c: number) =>
     copyToClipboard(viewRows.map((row) => row[c] ?? "").join("\n"), "已複製整欄");
+  const copyHeader = (c: number) => copyToClipboard(result.columns[c] ?? "", "已複製標題");
+  // 標題+值：單行「欄名: 值」（貼聊天 / 文件用；機器格式已有整列 TSV/JSON）。NULL → 空字串同「複製值」。
+  const copyHeaderValue = (r: number, c: number) =>
+    copyToClipboard(`${result.columns[c] ?? ""}: ${cell(r, c) ?? ""}`, "已複製標題+值");
+  // 整列含標題列：兩行 TSV（標題列 + 資料列），可直接貼 Excel 對欄（SSMS Copy with Headers）。
+  const copyRowTsvWithHeader = (r: number) =>
+    copyToClipboard(
+      `${result.columns.join("\t")}\n${viewRows[r].map((v) => v ?? "").join("\t")}`,
+      "已複製整列（含標題列）"
+    );
   const toggleSort = (ci: number) =>
     setSort((s) => (s?.c === ci ? (s.dir === "asc" ? { c: ci, dir: "desc" } : null) : { c: ci, dir: "asc" }));
 
@@ -4372,6 +4430,8 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                 ["檢視內容…", () => setInspect({ r: menu.r, c: menu.c })],
                 ["檢視此列（表單）…", () => setRowDetail(menu.r)],
                 ["複製值", () => copyCell(menu.r, menu.c)],
+                ["複製標題", () => copyHeader(menu.c)],
+                ["複製標題+值", () => copyHeaderValue(menu.r, menu.c)],
                 ...(rangeEnd && inRange(menu.r, menu.c)
                   ? [
                       ["複製範圍 (TSV)", () => copyRange()] as [string, () => void],
@@ -4379,6 +4439,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                     ]
                   : []),
                 ["複製整列 (TSV)", () => copyRowTsv(menu.r)],
+                ["複製整列（含標題列）", () => copyRowTsvWithHeader(menu.r)],
                 ["複製整列 (JSON)", () => copyRowJson(menu.r)],
                 ["複製整欄", () => copyCol(menu.c)],
               ] as [string, () => void][]
