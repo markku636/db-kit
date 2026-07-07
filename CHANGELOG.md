@@ -1,7 +1,8 @@
-## v0.7.1
+## v0.7.2
 
 - **右鍵「產生 SQL」一律向右開新查詢分頁（對標 SSMS）**：側欄「新增查詢」（含 USE / search_path 起手；SQLite 開空白分頁）、「查詢前 100 筆（含明列欄位）」、SELECT COUNT(*)、INSERT / GRANT 範本、複製資料表、Mongo 範本，與查詢建構器 / 結構同步 / 資料產生對話框的「送到編輯器」——原本會覆蓋目前查詢分頁的草稿，現改為向右開新分頁並自動切換，原分頁內容不動。AI 助手「貼到查詢編輯器」與常用查詢雙擊維持「貼進目前分頁」語意。
-- 版本號同步 0.7.1（v0.6.0 / v0.7.0 釋出時 package.json / tauri.conf.json / Cargo.toml 未跟上、App 內顯示 0.5.0，本次補齊）。
+- 版本號同步 0.7.2（v0.6.0 / v0.7.0 釋出時 package.json / tauri.conf.json / Cargo.toml 未跟上、App 內顯示 0.5.0，本次補齊；v0.7.1 因 CI 未修復完成未發佈）。
+- **CI（release workflow）修復**：v0.6.0 起歷次 release 全平台掛在 `npm ci`——lockfile 由 npm 11 產生、CI Node 20 內建 npm 10 驗證 optional peerDependencies 不相容（Missing: esbuild from lock file），setup-node 升 Node 24（npm 11）；macOS Intel 的 macos-13 runner 已退役（job 永遠 queued 卡住整條 run），改在 macos-latest（Apple Silicon）交叉編譯 x86_64。
 
 ## v0.5.0
 

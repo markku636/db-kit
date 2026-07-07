@@ -63,10 +63,13 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev
 
+      # Node 24（內建 npm 11）：package-lock.json 由本機 npm 11 產生，npm 10（Node 20 內建）
+      # 對 optional peerDependencies 的 `npm ci` 驗證不相容（Missing: esbuild@0.28.x from lock file，
+      # 來自 vitest → vite 7 的 optional peer），Node 20 時全平台在 Install frontend deps 掛掉。
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Setup Rust
