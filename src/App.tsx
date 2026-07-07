@@ -1454,16 +1454,17 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   const quoteId = quoteIdent;
   const qualified = qualifiedName;
   type TblRef = { connId: string; db: string; table: string; kind: DbKind; objKind?: string };
+  // 產生的 SQL 一律「向右開新查詢分頁」並切過去（對標 SSMS 的 Select Top N / New Query）：
+  // 不覆蓋使用者目前編輯器裡的草稿。newQueryTab 會一併切換連線並帶入 pendingSql 給新分頁消費。
   const sendQuery = (connId: string, sql: string) => {
-    useStore.getState().setActive(connId);
-    useStore.getState().requestQuery(sql);
+    useStore.getState().newQueryTab(sql, connId);
   };
-  // 對資料庫節點「新增查詢」：切到該連線的查詢編輯器，並以 USE / search_path 把後續查詢限定到此資料庫 / schema。
-  // SQLite 為單檔無多庫概念，僅切到查詢分頁（不覆寫既有內容）。
+  // 對資料庫節點「新增查詢」：開新查詢分頁，並以 USE / search_path 把後續查詢限定到此資料庫 / schema。
+  // SQLite 為單檔無多庫概念，開空白新分頁即可。
   const newQueryForDb = (connId: string, db: string, kind: DbKind) => {
     const stmt = buildUseDatabase(kind, db);
     if (stmt) sendQuery(connId, `${stmt};\n\n`);
-    else { useStore.getState().setActive(connId); useStore.getState().setActiveTab("__query__"); }
+    else useStore.getState().newQueryTab(undefined, connId);
   };
   const genSelect = (m: TblRef) =>
     sendQuery(m.connId, `SELECT *\nFROM ${qualified(m.kind, m.db, m.table)}\nLIMIT 100;`);
