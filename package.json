@@ -1,6 +1,6 @@
 {
   "name": "db-kit",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Unified database management tool — MySQL, PostgreSQL, SQL Server, SQLite, MongoDB, Redis",
   "license": "MIT",
   "type": "module",

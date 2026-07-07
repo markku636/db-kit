@@ -38,7 +38,7 @@ import logoMark from "./assets/db-kit-hero.png";
 import Icon from "./ui/Icon";
 import { Button, EmptyState, Modal, Input, Field } from "./ui/index";
 import {
-  Plug, Network, DatabaseBackup, Upload, Download, Sparkles, Keyboard, Moon, Sun,
+  Plug, Network, DatabaseBackup, Upload, Download, Sparkles, Keyboard, Moon,
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
@@ -613,7 +613,44 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
       }
     >
       <div className="space-y-4">
-        <div>
+        <div className="space-y-3">
+          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+            <Icon icon={Palette} size={15} /> 主題（Dracula PRO）
+          </div>
+          <p className="text-xs text-fg/50 leading-relaxed">
+            整個 app 的配色與深淺（側欄 / 工具列 / 表格 / 對話框 / 編輯器 / AI 助手），變更立即生效。
+            「光亮」為 Alucard 淺色，其餘為 Dracula 深色變體；上方工具列亦可快速切換。
+          </p>
+          <Field label="配色主題">
+            <Select selectSize="md" value={themeId}
+              onChange={(e) => setThemeId(e.target.value as EditorThemeId)}>
+              <option value="moonstone">光亮</option>
+              <option value="amethyst">暗黑</option>
+              <optgroup label="配色變體">
+                {EDITOR_THEMES.filter((t) => t.id !== "moonstone" && t.id !== "amethyst").map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </optgroup>
+            </Select>
+          </Field>
+          {previewDef && (
+            <div
+              className="rounded-md px-3 py-2 mono text-xs leading-relaxed border border-fg/10"
+              style={{ backgroundColor: previewDef.colors.bg, color: previewDef.colors.fg }}
+            >
+              <span style={{ color: previewDef.colors.keyword }}>SELECT</span> *{" "}
+              <span style={{ color: previewDef.colors.keyword }}>FROM</span> users{" "}
+              <span style={{ color: previewDef.colors.keyword }}>WHERE</span> name{" "}
+              <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
+              <span style={{ color: previewDef.colors.string }}>'mark'</span>{" "}
+              <span style={{ color: previewDef.colors.keyword }}>AND</span> id{" "}
+              <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
+              <span style={{ color: previewDef.colors.number }}>1</span>;{" "}
+              <span style={{ color: previewDef.colors.comment }}>-- 註解</span>
+            </div>
+          )}
+        </div>
+        <div className="pt-4 border-t border-fg/10">
           <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
             <Icon icon={Lock} size={15} /> 啟動密碼
             {hasPw === true && (
@@ -681,39 +718,6 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
               <option value="300000">5 分鐘</option>
             </Select>
           </Field>
-        </div>
-        <div className="pt-4 border-t border-fg/10 space-y-3">
-          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Palette} size={15} /> 主題（Dracula PRO）
-          </div>
-          <p className="text-xs text-fg/50 leading-relaxed">
-            整個 app 的配色（側欄 / 工具列 / 表格 / 對話框 / 編輯器 / AI 助手），變更立即生效。
-            右上角深淺切換＝在所選深色變體與 Alucard（淺）之間翻轉。
-          </p>
-          <Field label="配色主題">
-            <Select selectSize="md" value={themeId}
-              onChange={(e) => setThemeId(e.target.value as EditorThemeId)}>
-              {EDITOR_THEMES.map((t) => (
-                <option key={t.id} value={t.id}>{t.label}</option>
-              ))}
-            </Select>
-          </Field>
-          {previewDef && (
-            <div
-              className="rounded-md px-3 py-2 mono text-xs leading-relaxed border border-fg/10"
-              style={{ backgroundColor: previewDef.colors.bg, color: previewDef.colors.fg }}
-            >
-              <span style={{ color: previewDef.colors.keyword }}>SELECT</span> *{" "}
-              <span style={{ color: previewDef.colors.keyword }}>FROM</span> users{" "}
-              <span style={{ color: previewDef.colors.keyword }}>WHERE</span> name{" "}
-              <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
-              <span style={{ color: previewDef.colors.string }}>'mark'</span>{" "}
-              <span style={{ color: previewDef.colors.keyword }}>AND</span> id{" "}
-              <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
-              <span style={{ color: previewDef.colors.number }}>1</span>;{" "}
-              <span style={{ color: previewDef.colors.comment }}>-- 註解</span>
-            </div>
-          )}
         </div>
         <div className="pt-4 border-t border-fg/10 space-y-2">
           <label className="flex items-center gap-2 text-sm text-fg/80 cursor-pointer select-none">
@@ -852,34 +856,29 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, on
           <span className="text-[11px] text-fg/60 mt-1">{t.label}</span>
         </button>
       ))}
-      <ThemeToggle />
+      <ThemeMenu />
     </div>
   );
 }
 
-// ---- 主題切換（深色 / 亮色）：靠右，平滑滑桿樣式 ----
-function ThemeToggle() {
-  const { theme, toggle } = useTheme();
-  const isLight = theme === "light";
+// ---- 主題選擇（配色 + 深淺整併）：工具列右側；光亮 / 暗黑 / 配色變體，取代原深淺滑桿 ----
+function ThemeMenu() {
+  const themeId = useTheme((s) => s.themeId);
+  const setThemeId = useTheme((s) => s.setThemeId);
   return (
-    <button
-      type="button"
-      onClick={toggle}
-      title={isLight ? "切換到深色模式" : "切換到亮色模式"}
-      aria-label="切換主題"
-      className="ml-auto group relative h-8 w-[58px] shrink-0 rounded-full border border-fg/15 bg-fg/5 transition-colors hover:bg-fg/10"
-    >
-      {/* 兩側情境圖示 */}
-      <span className="pointer-events-none absolute inset-0 flex items-center justify-between px-2 leading-none">
-        <Icon icon={Moon} size={13} className={isLight ? "opacity-35" : "opacity-90"} />
-        <Icon icon={Sun} size={14} className={isLight ? "opacity-90" : "opacity-35"} />
-      </span>
-      {/* 滑塊 */}
-      <span
-        className="absolute top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-elevated shadow-md ring-1 ring-fg/10 transition-all duration-200"
-        style={{ left: isLight ? "calc(100% - 1.625rem)" : "0.125rem" }}
-      />
-    </button>
+    <div className="ml-auto shrink-0 flex items-center gap-1.5 w-44" title="主題（配色 + 深淺）">
+      <Icon icon={Palette} size={16} className="text-fg/55 shrink-0" />
+      <Select selectSize="sm" value={themeId}
+        onChange={(e) => setThemeId(e.target.value as EditorThemeId)}>
+        <option value="moonstone">光亮</option>
+        <option value="amethyst">暗黑</option>
+        <optgroup label="配色變體">
+          {EDITOR_THEMES.filter((t) => t.id !== "moonstone" && t.id !== "amethyst").map((t) => (
+            <option key={t.id} value={t.id}>{t.label}</option>
+          ))}
+        </optgroup>
+      </Select>
+    </div>
   );
 }
 
