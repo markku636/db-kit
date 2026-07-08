@@ -1,6 +1,21 @@
 import { create } from "zustand";
 import { ConnectionConfig, DbKind } from "./api";
 import { loadReadonly, persistReadonly, setReadonlyFlag, type ReadonlyMap } from "./connReadonly";
+import {
+  loadSavedQueries,
+  persistSavedQueries,
+  upsertSavedQuery,
+  updateSavedQuery as applySavedQueryUpdate,
+  removeSavedQuery as dropSavedQuery,
+  reorderSavedQueries as moveSavedQuery,
+  loadSnippets,
+  persistSnippets,
+  upsertSnippet,
+  removeSnippet as dropSnippet,
+  mergeSnippets,
+  type SavedQuery,
+  type SqlSnippet,
+} from "./sql";
 
 // 一個開啟的表分頁
 export interface OpenTab {
@@ -42,6 +57,13 @@ interface AppStore {
   dataReload: Record<string, number>;
   // 右側詳細資料面板目前選取的節點（單擊樹節點即更新）。
   selectedNode: SelectedNode | null;
+  // 收藏查詢（全域，localStorage）：反應式 slice，側欄與各查詢分頁編輯器共用單一來源。
+  savedQueries: SavedQuery[];
+  // SQL 片段庫（含 builtin，反應式）：編輯器自動完成 + 管理 + 匯入後即時更新。
+  snippets: SqlSnippet[];
+  // 收藏查詢管理視窗開啟狀態（跨 Sidebar / QueryPane 觸發；null = 關閉）。
+  // seedSql 非 null → 直接開「新增」編輯模式並預填 SQL；editName 非 null → 開該筆「編輯」模式。
+  savedMgr: { seedSql: string | null; editName: string | null } | null;
 
   setConnections: (cs: ConnectionConfig[]) => void;
   addConnection: (c: ConnectionConfig) => void;
@@ -80,6 +102,20 @@ interface AppStore {
   bumpDataReload: (connId: string, database: string, table: string) => void;
   // 設定詳細資料面板選取的節點（null 清空）。
   selectNode: (node: SelectedNode | null) => void;
+
+  // 收藏查詢 mutation（純轉換 → persist → set；對標 setConnReadonly）。
+  addSavedQuery: (sq: SavedQuery) => void;             // 新增 / 同名覆蓋；蓋時間戳
+  updateSavedQuery: (oldName: string, sq: SavedQuery) => void; // 編輯（可改名）
+  removeSavedQuery: (name: string) => void;
+  reorderSavedQueries: (from: number, to: number) => void;
+  replaceSavedQueries: (list: SavedQuery[]) => void;   // 匯入用（整批取代）
+  // 片段 mutation。
+  addSnippet: (snip: SqlSnippet) => void;
+  removeSnippet: (name: string) => void;
+  replaceSnippets: (userList: SqlSnippet[]) => void;   // 匯入用；傳入使用者片段，內部 merge builtin
+  // 開 / 關收藏查詢管理視窗。
+  openSavedManager: (opts?: { seedSql?: string | null; editName?: string | null }) => void;
+  closeSavedManager: () => void;
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -95,6 +131,9 @@ export const useStore = create<AppStore>((set) => ({
   pendingFilter: null,
   dataReload: {},
   selectedNode: null,
+  savedQueries: loadSavedQueries(),
+  snippets: loadSnippets(),
+  savedMgr: null,
 
   setConnReadonly: (id, ro) =>
     set((s) => {
@@ -243,4 +282,63 @@ export const useStore = create<AppStore>((set) => ({
       return { dataReload: { ...s.dataReload, [key]: (s.dataReload[key] ?? 0) + 1 } };
     }),
   selectNode: (node) => set({ selectedNode: node }),
+
+  // ---- 收藏查詢 ----
+  addSavedQuery: (sq) =>
+    set((s) => {
+      const now = Date.now();
+      const stamped: SavedQuery = { ...sq, createdAt: sq.createdAt ?? now, updatedAt: now };
+      const next = upsertSavedQuery(s.savedQueries, stamped);
+      persistSavedQueries(next);
+      return { savedQueries: next };
+    }),
+  updateSavedQuery: (oldName, sq) =>
+    set((s) => {
+      const stamped: SavedQuery = { ...sq, updatedAt: Date.now() };
+      const next = applySavedQueryUpdate(s.savedQueries, oldName, stamped);
+      persistSavedQueries(next);
+      return { savedQueries: next };
+    }),
+  removeSavedQuery: (name) =>
+    set((s) => {
+      const next = dropSavedQuery(s.savedQueries, name);
+      persistSavedQueries(next);
+      return { savedQueries: next };
+    }),
+  reorderSavedQueries: (from, to) =>
+    set((s) => {
+      const next = moveSavedQuery(s.savedQueries, from, to);
+      persistSavedQueries(next);
+      return { savedQueries: next };
+    }),
+  replaceSavedQueries: (list) =>
+    set(() => {
+      persistSavedQueries(list);
+      return { savedQueries: list };
+    }),
+
+  // ---- SQL 片段 ----
+  addSnippet: (snip) =>
+    set((s) => {
+      const next = upsertSnippet(s.snippets, snip);
+      persistSnippets(next);
+      return { snippets: next };
+    }),
+  removeSnippet: (name) =>
+    set((s) => {
+      const next = dropSnippet(s.snippets, name);
+      persistSnippets(next);
+      return { snippets: next };
+    }),
+  replaceSnippets: (userList) =>
+    set(() => {
+      // userList 為使用者片段（不含 builtin）；mergeSnippets 疊回 builtin 並標記，persistSnippets 只存 diff。
+      const next = mergeSnippets(userList);
+      persistSnippets(next);
+      return { snippets: next };
+    }),
+
+  openSavedManager: (opts) =>
+    set({ savedMgr: { seedSql: opts?.seedSql ?? null, editName: opts?.editName ?? null } }),
+  closeSavedManager: () => set({ savedMgr: null }),
 }));

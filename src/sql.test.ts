@@ -20,6 +20,17 @@ import {
   sqlLiteral,
   loadSavedQueries,
   persistSavedQueries,
+  upsertSavedQuery,
+  updateSavedQuery,
+  removeSavedQuery,
+  reorderSavedQueries,
+  savedQueryGroups,
+  buildSqlLibraryBundle,
+  parseSqlLibraryBundle,
+  mergeSavedQueries,
+  countSavedQueryConflicts,
+  SQL_LIBRARY_KIND,
+  type SavedQuery,
   loadQueryHistory,
   SAVED_QUERIES_KEY,
   QUERY_HISTORY_KEY,
@@ -1306,5 +1317,118 @@ describe("SQL 片段庫（Snippets）", () => {
     persistSnippets(list);
     const raw = JSON.parse(localStorage.getItem(SNIPPETS_KEY) || "[]");
     expect(raw).toEqual([{ name: "count", body: "OVERRIDDEN", desc: undefined }]);
+  });
+});
+
+describe("收藏查詢 — 純函式 mutation", () => {
+  it("loadSavedQueries：保留選填欄位、丟棄型別錯的欄位（不丟整筆）", () => {
+    localStorage.setItem(
+      SAVED_QUERIES_KEY,
+      JSON.stringify([
+        { name: "a", sql: "1", desc: "d", group: "G", createdAt: 10, updatedAt: 20 },
+        { name: "b", sql: "2", desc: 5, group: "  ", createdAt: "x" }, // 壞欄位應被丟棄
+      ]),
+    );
+    expect(loadSavedQueries()).toEqual([
+      { name: "a", sql: "1", desc: "d", group: "G", createdAt: 10, updatedAt: 20 },
+      { name: "b", sql: "2" }, // desc/group/createdAt 型別錯或空白 → 丟棄該欄
+    ]);
+  });
+
+  it("upsertSavedQuery：新名 prepend、同名原位覆蓋並保留 createdAt", () => {
+    const list: SavedQuery[] = [{ name: "a", sql: "1", createdAt: 100 }];
+    // 同名 → 原位覆蓋、createdAt 保留原值（忽略傳入的 createdAt）。
+    const over = upsertSavedQuery(list, { name: "a", sql: "2", createdAt: 999 });
+    expect(over).toEqual([{ name: "a", sql: "2", createdAt: 100 }]);
+    // 新名 → prepend。
+    const added = upsertSavedQuery(list, { name: "b", sql: "9" });
+    expect(added.map((x) => x.name)).toEqual(["b", "a"]);
+  });
+
+  it("updateSavedQuery：同名原位編輯保序、改名保留 createdAt、撞名沿用目標 createdAt", () => {
+    const list: SavedQuery[] = [{ name: "x", sql: "1", createdAt: 5 }, { name: "y", sql: "2", createdAt: 9 }];
+    // 同名編輯：原位、保留 createdAt。
+    const edited = updateSavedQuery(list, "x", { name: "x", sql: "1b", desc: "d" });
+    expect(edited[0]).toEqual({ name: "x", sql: "1b", desc: "d", createdAt: 5 });
+    expect(edited.map((q) => q.name)).toEqual(["x", "y"]);
+    // 改名為新名：移除舊名、以新名 prepend、保留原 createdAt。
+    const renamed = updateSavedQuery(list, "x", { name: "z", sql: "1" });
+    expect(renamed.map((q) => q.name)).toEqual(["z", "y"]);
+    expect(renamed.find((q) => q.name === "z")).toEqual({ name: "z", sql: "1", createdAt: 5 });
+    // 改名撞到既有：覆蓋目標、沿用目標的 createdAt(9)。
+    const collide = updateSavedQuery(list, "x", { name: "y", sql: "1new" });
+    expect(collide.map((q) => q.name)).toEqual(["y"]);
+    expect(collide[0]).toEqual({ name: "y", sql: "1new", createdAt: 9 });
+  });
+
+  it("removeSavedQuery / reorderSavedQueries", () => {
+    const list: SavedQuery[] = [{ name: "a", sql: "1" }, { name: "b", sql: "2" }, { name: "c", sql: "3" }];
+    expect(removeSavedQuery(list, "b").map((x) => x.name)).toEqual(["a", "c"]);
+    expect(reorderSavedQueries(list, 0, 2).map((x) => x.name)).toEqual(["b", "c", "a"]);
+    // 越界 / 相同索引 → 原樣（回傳同參考）。
+    expect(reorderSavedQueries(list, 5, 0)).toBe(list);
+    expect(reorderSavedQueries(list, 1, 1)).toBe(list);
+  });
+
+  it("savedQueryGroups：去重、排序、忽略空白 / 未分組", () => {
+    const list: SavedQuery[] = [
+      { name: "a", sql: "", group: "G2" },
+      { name: "b", sql: "", group: "G1" },
+      { name: "c", sql: "" },
+      { name: "d", sql: "", group: "G1" },
+      { name: "e", sql: "", group: "  " },
+    ];
+    expect(savedQueryGroups(list)).toEqual(["G1", "G2"]);
+  });
+});
+
+describe("收藏查詢 — 匯出 / 匯入 bundle", () => {
+  const sq: SavedQuery[] = [{ name: "q1", sql: "SELECT 1", group: "g" }];
+  const snips = mergeSnippets([{ name: "mine", body: "MB", desc: "d" }, { name: "count", body: "OVERRIDE" }]);
+
+  it("buildSqlLibraryBundle：信封欄位、收藏原樣、片段只含非內建 diff", () => {
+    const bundle = buildSqlLibraryBundle(sq, snips, 12345);
+    expect(bundle.version).toBe(1);
+    expect(bundle.kind).toBe(SQL_LIBRARY_KIND);
+    expect(bundle.exportedAt).toBe(12345);
+    expect(bundle.savedQueries).toEqual(sq);
+    // 只留使用者片段（含被覆蓋的內建）；未改的內建不匯出。
+    expect(bundle.snippets).toHaveLength(2);
+    expect(bundle.snippets).toContainEqual({ name: "mine", body: "MB", desc: "d" });
+    expect(bundle.snippets).toContainEqual({ name: "count", body: "OVERRIDE" });
+    expect(bundle.snippets.some((s) => s.name === "sel100")).toBe(false);
+  });
+
+  it("parseSqlLibraryBundle：round-trip、純陣列相容、容錯", () => {
+    const bundle = buildSqlLibraryBundle(sq, snips, 1);
+    const parsed = parseSqlLibraryBundle(JSON.stringify(bundle));
+    expect(parsed.savedQueries).toEqual(sq);
+    expect(parsed.snippets).toHaveLength(2);
+    expect(parsed.snippets).toContainEqual({ name: "mine", body: "MB", desc: "d" });
+    // 純 SavedQuery[] 陣列 → 視為 savedQueries，snippets 空。
+    const arr = parseSqlLibraryBundle(JSON.stringify([{ name: "a", sql: "1" }, { name: 2 }, null]));
+    expect(arr.savedQueries).toEqual([{ name: "a", sql: "1" }]);
+    expect(arr.snippets).toEqual([]);
+    // 物件信封內的損壞項被過濾。
+    const p2 = parseSqlLibraryBundle(JSON.stringify({ version: 1, savedQueries: [{ name: "a", sql: "1" }, { name: 2 }], snippets: [{ name: "s", body: "b" }, { name: "x" }] }));
+    expect(p2.savedQueries).toEqual([{ name: "a", sql: "1" }]);
+    expect(p2.snippets).toEqual([{ name: "s", body: "b" }]);
+    // 非 JSON / 結構全錯 → 丟例外。
+    expect(() => parseSqlLibraryBundle("{not json")).toThrow();
+    expect(() => parseSqlLibraryBundle(JSON.stringify({ foo: 1 }))).toThrow();
+  });
+
+  it("mergeSavedQueries / countSavedQueryConflicts：覆蓋 vs 略過、保留原 createdAt", () => {
+    const existing: SavedQuery[] = [{ name: "a", sql: "1", createdAt: 5 }, { name: "b", sql: "2" }];
+    const incoming: SavedQuery[] = [{ name: "a", sql: "A2", createdAt: 99 }, { name: "c", sql: "3" }];
+    expect(countSavedQueryConflicts(existing, incoming)).toBe(1);
+    // 略過同名：a 不變、c 追加。
+    const skip = mergeSavedQueries(existing, incoming, false);
+    expect(skip.map((x) => x.name)).toEqual(["a", "b", "c"]);
+    expect(skip.find((x) => x.name === "a")).toEqual({ name: "a", sql: "1", createdAt: 5 });
+    // 覆蓋同名：a 原位換內容、保留原 createdAt(5)。
+    const over = mergeSavedQueries(existing, incoming, true);
+    expect(over.find((x) => x.name === "a")).toEqual({ name: "a", sql: "A2", createdAt: 5 });
+    expect(over.map((x) => x.name)).toEqual(["a", "b", "c"]);
   });
 });

@@ -973,18 +973,33 @@ export function fmtRelativeTime(at: number, now = Date.now()): string {
 // ---- 收藏查詢（具名，localStorage）----
 export const SAVED_QUERIES_KEY = "db-kit:savedQueries";
 export interface SavedQuery {
-  name: string;
+  name: string;        // 全域唯一鍵（沿用既有語意；重新命名時檢查衝突）
   sql: string;
+  desc?: string;       // 說明 / 備註
+  group?: string;      // 分組標籤；空 / undefined = 「未分組」
+  createdAt?: number;  // 建立 epoch ms
+  updatedAt?: number;  // 更新 epoch ms
 }
+// 讀取時過濾損壞項（name/sql 必為字串），並保留合法的選填欄位（型別不符則丟棄該欄，不丟整筆）。
 export function loadSavedQueries(): SavedQuery[] {
   try {
     const arr = JSON.parse(localStorage.getItem(SAVED_QUERIES_KEY) || "[]");
-    return Array.isArray(arr)
-      ? arr.filter((x) => x && typeof x.name === "string" && typeof x.sql === "string")
-      : [];
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((x) => x && typeof x.name === "string" && typeof x.sql === "string")
+      .map(sanitizeSavedQuery);
   } catch {
     return [];
   }
+}
+// 只保留合法欄位：desc/group 需為（非空）字串、createdAt/updatedAt 需為數字。
+function sanitizeSavedQuery(x: { name: string; sql: string; desc?: unknown; group?: unknown; createdAt?: unknown; updatedAt?: unknown }): SavedQuery {
+  const sq: SavedQuery = { name: x.name, sql: x.sql };
+  if (typeof x.desc === "string") sq.desc = x.desc;
+  if (typeof x.group === "string" && x.group.trim()) sq.group = x.group;
+  if (typeof x.createdAt === "number") sq.createdAt = x.createdAt;
+  if (typeof x.updatedAt === "number") sq.updatedAt = x.updatedAt;
+  return sq;
 }
 export function persistSavedQueries(list: SavedQuery[]) {
   try {
@@ -992,6 +1007,43 @@ export function persistSavedQueries(list: SavedQuery[]) {
   } catch {
     /* 忽略寫入失敗 */
   }
+}
+
+// 純函式（對標 upsertSnippet / removeSnippet，可單測、不依賴 React / Tauri）：
+// upsert：同名 → 原位覆蓋（保留原 createdAt）；新名 → prepend（維持 recency-first）。
+export function upsertSavedQuery(list: SavedQuery[], sq: SavedQuery): SavedQuery[] {
+  const idx = list.findIndex((x) => x.name === sq.name);
+  if (idx >= 0) {
+    const next = list.slice();
+    next[idx] = { ...sq, createdAt: list[idx].createdAt ?? sq.createdAt };
+    return next;
+  }
+  return [sq, ...list];
+}
+// 編輯（可含重新命名）：同名 → 原位覆蓋；改名 → 移除舊名後以新名 upsert（保留原 createdAt）。
+// 若新名撞到另一筆既有收藏，upsert 會原位覆蓋該筆（呼叫端應先以 uiConfirm 取得同意）。
+export function updateSavedQuery(list: SavedQuery[], oldName: string, sq: SavedQuery): SavedQuery[] {
+  if (oldName === sq.name) return upsertSavedQuery(list, sq);
+  const old = list.find((x) => x.name === oldName);
+  const merged: SavedQuery = { ...sq, createdAt: old?.createdAt ?? sq.createdAt };
+  return upsertSavedQuery(list.filter((x) => x.name !== oldName), merged);
+}
+export function removeSavedQuery(list: SavedQuery[], name: string): SavedQuery[] {
+  return list.filter((x) => x.name !== name);
+}
+// 陣列搬移（同清單內 from → to；越界或相同則原樣回傳）。管理視窗上 / 下移用。
+export function reorderSavedQueries(list: SavedQuery[], from: number, to: number): SavedQuery[] {
+  if (from < 0 || from >= list.length || to < 0 || to >= list.length || from === to) return list;
+  const next = list.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+// 導出去重、排序後的分組名清單（未分組不列入）。供 datalist 與側欄 / 管理視窗分組。
+export function savedQueryGroups(list: SavedQuery[]): string[] {
+  const set = new Set<string>();
+  for (const q of list) if (q.group && q.group.trim()) set.add(q.group.trim());
+  return [...set].sort((a, b) => a.localeCompare(b));
 }
 
 // ---- SQL 片段庫（Snippets，致敬 Navicat 的程式碼片段）----
@@ -1069,6 +1121,73 @@ export function upsertSnippet(list: SqlSnippet[], snip: SqlSnippet): SqlSnippet[
 // 純函式：移除一個片段（依名稱）。
 export function removeSnippet(list: SqlSnippet[], name: string): SqlSnippet[] {
   return list.filter((s) => s.name !== name);
+}
+
+// ---- SQL 資料庫（收藏查詢 + 片段）匯出 / 匯入 ----
+// 純 JSON 信封（無機密，不加密，異於連線匯出的 AES 流程）；savedQueries 與 snippets 在檔內各自分開。
+export const SQL_LIBRARY_KIND = "db-kit-sql-library";
+export interface SqlLibraryBundle {
+  version: number;    // 目前為 1
+  kind: string;       // 固定 SQL_LIBRARY_KIND，匯入時辨識
+  exportedAt: number; // epoch ms（由呼叫端帶入，保持純函式可測）
+  savedQueries: SavedQuery[];
+  snippets: { name: string; body: string; desc?: string }[]; // 僅使用者片段（不含 builtin）
+}
+
+// 建立匯出信封。snippets 傳入合併後清單，內部只挑「與 builtin 不同」者（同 persistSnippets 邏輯）。
+export function buildSqlLibraryBundle(savedQueries: SavedQuery[], snippets: SqlSnippet[], exportedAt: number): SqlLibraryBundle {
+  const builtin = new Map(BUILTIN_SNIPPETS.map((s) => [s.name, s.body]));
+  const userSnippets = snippets
+    .filter((s) => builtin.get(s.name) !== s.body)
+    .map((s) => (s.desc ? { name: s.name, body: s.body, desc: s.desc } : { name: s.name, body: s.body }));
+  return { version: 1, kind: SQL_LIBRARY_KIND, exportedAt, savedQueries, snippets: userSnippets };
+}
+
+// 解析匯入檔（容錯）：非 JSON / 結構全錯 → 丟出 Error（呼叫端顯示 toast）。
+// 相容：亦接受「純 SavedQuery[] 陣列」（極早期或手工檔）。
+export function parseSqlLibraryBundle(text: string): { savedQueries: SavedQuery[]; snippets: SqlSnippet[] } {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("檔案不是合法的 JSON");
+  }
+  const rawQueries = Array.isArray(data) ? data : data?.savedQueries;
+  const rawSnippets = Array.isArray(data) ? [] : data?.snippets;
+  if (!Array.isArray(rawQueries) && !Array.isArray(rawSnippets)) {
+    throw new Error("檔案內容不是 db-kit SQL 庫格式");
+  }
+  const savedQueries: SavedQuery[] = Array.isArray(rawQueries)
+    ? rawQueries.filter((x) => x && typeof x.name === "string" && typeof x.sql === "string").map(sanitizeSavedQuery)
+    : [];
+  const snippets: SqlSnippet[] = Array.isArray(rawSnippets)
+    ? rawSnippets
+        .filter((x) => x && typeof x.name === "string" && typeof x.body === "string")
+        .map((x) => (typeof x.desc === "string" ? { name: x.name, body: x.body, desc: x.desc } : { name: x.name, body: x.body }))
+    : [];
+  return { savedQueries, snippets };
+}
+
+// 合併匯入的收藏查詢到既有清單。overwrite=true → 同名以匯入者覆蓋（保留原 createdAt）；false → 略過同名。
+export function mergeSavedQueries(existing: SavedQuery[], incoming: SavedQuery[], overwrite: boolean): SavedQuery[] {
+  const result = existing.slice();
+  const indexByName = new Map(result.map((q, i) => [q.name, i]));
+  for (const q of incoming) {
+    const idx = indexByName.get(q.name);
+    if (idx === undefined) {
+      indexByName.set(q.name, result.length);
+      result.push(q);
+    } else if (overwrite) {
+      result[idx] = { ...q, createdAt: result[idx].createdAt ?? q.createdAt };
+    }
+  }
+  return result;
+}
+
+// 計算匯入時的同名衝突數（供 UI 提示「M 筆同名，是否覆蓋」）。
+export function countSavedQueryConflicts(existing: SavedQuery[], incoming: SavedQuery[]): number {
+  const names = new Set(existing.map((q) => q.name));
+  return incoming.reduce((n, q) => (names.has(q.name) ? n + 1 : n), 0);
 }
 
 // ---- 結果序列化（複製 / 匯出）----

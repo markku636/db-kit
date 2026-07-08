@@ -18,8 +18,6 @@ import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type Pin
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile, useEscToClose } from "./ui";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
-  loadSavedQueries, persistSavedQueries,
-  loadSnippets, persistSnippets, upsertSnippet, removeSnippet, type SqlSnippet,
   resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName, isMysqlFamily,
@@ -60,6 +58,7 @@ const CreateTableDialog = lazyOverlay(() => import("./CreateTableDialog"));
 const ConnectionProperties = lazyOverlay(() => import("./ConnectionProperties"));
 const TableProperties = lazyOverlay(() => import("./TableProperties"));
 const RoutinesDialog = lazyOverlay(() => import("./RoutinesDialog"));
+const SavedQueriesDialog = lazyOverlay(() => import("./SavedQueriesDialog"));
 const CreateViewDialog = lazyOverlay(() => import("./CreateViewDialog"));
 const ViewDesigner = lazyOverlay(() => import("./ViewDesigner"));
 const ProcessListDialog = lazyOverlay(() => import("./ProcessListDialog"));
@@ -203,6 +202,7 @@ export default function App() {
     setSplash("done");
   };
   const { connections, connectedIds, activeId } = useStore();
+  const savedMgr = useStore((s) => s.savedMgr);
   const activeConn = connections.find((c) => c.id === activeId) ?? null;
   // 左側連線樹寬度：可拖曳分隔線調整，記憶於 localStorage。
   const sidebar = useResizable({
@@ -384,6 +384,13 @@ export default function App() {
       {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {savedMgr && (
+        <SavedQueriesDialog
+          seedSql={savedMgr.seedSql}
+          editName={savedMgr.editName}
+          onClose={() => useStore.getState().closeSavedManager()}
+        />
+      )}
       <UiHost />
     </div>
   );
@@ -1043,7 +1050,7 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 
 // ---- 左側連線/物件樹 ----
 function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; width: number }) {
-  const { connections, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
+  const { connections, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns, savedQueries } = useStore();
   const [databases, setDatabases] = useState<Record<string, string[]>>({});
   // 已展開的資料庫: 鍵為 connId:db，值為樹狀分組（資料表 / 檢視 / 函式）
   const [expandedDbs, setExpandedDbs] = useState<Record<string, DbObjects>>({});
@@ -1072,6 +1079,8 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   const [pins, setPins] = useState<PinnedTable[]>(loadPins);
   const togglePinned = (p: PinnedTable) =>
     setPins((list) => { const next = togglePin(list, p); persistPins(next); return next; });
+  // 頂層「收藏查詢」區展開 / 收合。
+  const [savedOpen, setSavedOpen] = useState(true);
   // 連線色標（致敬 Navicat connection color）：per-連線 顏色，localStorage 持久化。
   const [connColors, setConnColors] = useState(loadConnColors);
   const applyConnColor = (id: string, color: string) =>
@@ -1908,9 +1917,6 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
 
   const menuConn = menu ? connections.find((x) => x.id === menu.id) ?? null : null;
 
-  // 收藏查詢（全域，非依資料庫；用於樹狀「查詢」資料夾）。
-  const savedQueries = loadSavedQueries();
-
   // 搜尋過濾：連線依名稱、物件依名稱；搜尋物件名也會讓其所屬連線浮現。
   const q = filter.trim().toLowerCase();
   const objNames = (o: DbObjects) =>
@@ -2043,6 +2049,71 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
           </div>
         );
       })()}
+      {savedQueries.length > 0 && (() => {
+        // 頂層「收藏查詢」區（全域、只顯示一次；取代原每個資料庫底下的「查詢」資料夾）。
+        // 依搜尋字過濾，再依 group 分組（未分組置底）。
+        const vSaved = savedQueries.filter(
+          (sq) => !q || sq.name.toLowerCase().includes(q) || (sq.desc ?? "").toLowerCase().includes(q) || sq.sql.toLowerCase().includes(q),
+        );
+        if (vSaved.length === 0) return null;
+        const map = new Map<string, SavedQuery[]>();
+        for (const sq of vSaved) {
+          const g = sq.group?.trim() || "";
+          if (!map.has(g)) map.set(g, []);
+          map.get(g)!.push(sq);
+        }
+        const named = [...map.keys()].filter((g) => g).sort((a, b) => a.localeCompare(b));
+        const order = map.has("") ? [...named, ""] : named;
+        const showHeaders = named.length > 0;
+        const openMgr = (opts?: { seedSql?: string | null; editName?: string | null }) =>
+          useStore.getState().openSavedManager(opts);
+        const row = (sq: SavedQuery, padCls: string) => (
+          <div key={sq.name}
+            className={`group flex items-center gap-1.5 ${padCls} pr-2 py-1 cursor-pointer hover:bg-fg/5`}
+            onDoubleClick={() => useStore.getState().requestQuery(sq.sql)}
+            title={`${sq.name}${sq.desc ? `｜${sq.desc}` : ""}（雙擊載入到編輯器）`}>
+            <Icon icon={FileCode2} size={13} className="shrink-0 text-blue-300/80" />
+            <span className="truncate flex-1 text-fg/70">{sq.name}</span>
+            <button type="button" onClick={(e) => { e.stopPropagation(); openMgr({ editName: sq.name }); }}
+              title="編輯" aria-label="編輯"
+              className="w-4 h-4 shrink-0 items-center justify-center rounded text-fg/30 hover:text-fg/80 hidden group-hover:flex">
+              <Icon icon={Pencil} size={12} />
+            </button>
+            <button type="button" onClick={async (e) => {
+                e.stopPropagation();
+                if (await uiConfirm(`刪除收藏「${sq.name}」？此動作無法復原。`, { title: "刪除收藏", danger: true, confirmText: "刪除" }))
+                  useStore.getState().removeSavedQuery(sq.name);
+              }}
+              title="刪除" aria-label="刪除"
+              className="w-4 h-4 shrink-0 items-center justify-center rounded text-fg/30 hover:text-red-400 hidden group-hover:flex">
+              <Icon icon={X} size={12} />
+            </button>
+          </div>
+        );
+        return (
+          <div className="border-b border-fg/10 py-1">
+            <div className="px-3 py-1 flex items-center gap-1 cursor-pointer select-none hover:bg-fg/5"
+              onClick={() => setSavedOpen((o) => !o)}>
+              <Icon icon={ChevronRight} size={12} className={`shrink-0 text-fg/35 transition-transform ${savedOpen ? "rotate-90" : ""}`} />
+              <Icon icon={Star} size={11} className="text-amber-300 shrink-0" />
+              <span className="text-[10px] uppercase tracking-wide text-fg/35 flex-1">收藏查詢（{savedQueries.length}）</span>
+              <button type="button" onClick={(e) => { e.stopPropagation(); openMgr(); }}
+                title="管理收藏查詢（新增 / 編輯 / 匯入 / 匯出）" aria-label="管理收藏"
+                className="w-5 h-5 shrink-0 flex items-center justify-center rounded text-fg/30 hover:text-fg/80 hover:bg-fg/10">
+                <Icon icon={Cog} size={12} />
+              </button>
+            </div>
+            {savedOpen && order.map((g) => (
+              <div key={g || "__ungrouped__"}>
+                {showHeaders && (
+                  <div className="pl-6 pr-3 py-0.5 text-[10px] text-fg/40 truncate">{g || "（未分組）"}</div>
+                )}
+                {map.get(g)!.slice().sort((a, b) => a.name.localeCompare(b.name)).map((sq) => row(sq, showHeaders ? "pl-8" : "pl-6"))}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
       {connections.length === 0 && (
         <div className="p-4 text-fg/30 text-xs leading-relaxed">
           尚無連線。點上方「連線」新增一個，雙擊以建立連線（右鍵有更多選項）。
@@ -2170,20 +2241,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                   );
                 };
 
-                // 樹中的單一收藏查詢節點（雙擊載入查詢編輯器）。
-                const queryNode = (sq: SavedQuery) => (
-                  <div
-                    key={sq.name}
-                    onDoubleClick={() => useStore.getState().requestQuery(sq.sql)}
-                    className="pl-16 pr-3 py-1 text-fg/55 hover:bg-fg/5 cursor-pointer truncate flex items-center gap-1.5"
-                    title={`載入收藏查詢：${sq.name}`}
-                  >
-                    <Icon icon={FileCode2} size={14} className="shrink-0 text-blue-300/80" />
-                    <span className="truncate">{sq.name}</span>
-                  </div>
-                );
-
-                // 物件分組資料夾（資料表 / 檢視 / 函式 / 查詢）。
+                // 物件分組資料夾（資料表 / 檢視 / 函式）。收藏查詢已移至側欄頂層「收藏查詢」區。
                 const folderNode = (type: string, glyphIcon: LucideIcon, color: string, label: string, count: number, body: ReactNode) => {
                   // 搜尋/篩選命中時自動展開：使用者手動/預設展開，或（全域搜尋或本庫篩選中且此資料夾有命中）。
                   // 清除搜尋後 filtering=false，open 回落到手動/預設狀態，不寫入 folderOpen、不殘留。
@@ -2245,7 +2303,6 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                       const vTables = objs.tables.filter((t) => tableVisible(c.name, t.name) && dbMatch(t.name));
                       const vViews = objs.views.filter((t) => tableVisible(c.name, t.name) && dbMatch(t.name));
                       const vRoutines = objs.routines.filter((r) => tableVisible(c.name, r.name) && dbMatch(r.name));
-                      const vQueries = savedQueries.filter((sq) => tableVisible(c.name, sq.name) && dbMatch(sq.name));
                       return (
                         <>
                           <div className="pl-11 pr-3 py-1">
@@ -2268,8 +2325,6 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                             <>{vViews.map((t) => objNode(t, "pl-16"))}</>)}
                           {supportsRoutines && folderNode("functions", FunctionSquare, "text-amber-300/90", "函式", vRoutines.length,
                             <>{vRoutines.map(routineNode)}</>)}
-                          {folderNode("queries", FileCode2, "text-blue-300/80", "查詢", vQueries.length,
-                            <>{vQueries.map(queryNode)}</>)}
                         </>
                       );
                     })()}
@@ -3055,10 +3110,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [history, setHistory] = useState<QueryHistoryEntry[]>(loadQueryHistory);
   const [showHistory, setShowHistory] = useState(false);
   const [historyFilter, setHistoryFilter] = useState("");
-  const [saved, setSaved] = useState<SavedQuery[]>(loadSavedQueries);
+  // 收藏查詢 / SQL 片段：反應式 store slice（側欄、各查詢分頁、匯入後皆即時同步）。
+  const saved = useStore((s) => s.savedQueries);
   const [showSaved, setShowSaved] = useState(false);
-  // SQL 片段庫（Navicat 風）：編輯器自動完成 + 工具列插入 / 管理。
-  const [snippets, setSnippets] = useState<SqlSnippet[]>(loadSnippets);
+  const snippets = useStore((s) => s.snippets);
   const [showSnippets, setShowSnippets] = useState(false);
   // 工具列「更多」溢位選單：收納次要動作（開啟 / 另存 / 收藏 / 壓縮 / 大小寫 / 分析 / 視覺化解釋），讓主列不擁擠。
   const [showMore, setShowMore] = useState(false);
@@ -3448,26 +3503,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     }
   };
 
-  // 收藏目前查詢（具名）。
-  const saveCurrentQuery = async () => {
+  // 收藏目前查詢：開收藏管理視窗的「新增」模式並預填目前 SQL（可一併填名稱 / 分組 / 說明）。
+  const saveCurrentQuery = () => {
     const q = sql.trim();
     if (!q) return;
-    const name = await uiPrompt("收藏名稱：", { title: "收藏查詢", placeholder: "例如：每日活躍用戶", confirmText: "收藏" });
-    if (name === null || !name.trim()) return;
-    const nm = name.trim();
-    setSaved((s) => {
-      const next = [{ name: nm, sql: q }, ...s.filter((x) => x.name !== nm)];
-      persistSavedQueries(next);
-      return next;
-    });
-    toast.success("已收藏");
+    useStore.getState().openSavedManager({ seedSql: q });
   };
-  const deleteSaved = (name: string) =>
-    setSaved((s) => {
-      const next = s.filter((x) => x.name !== name);
-      persistSavedQueries(next);
-      return next;
-    });
+  const deleteSaved = (name: string) => useStore.getState().removeSavedQuery(name);
 
   // 片段：傳給編輯器的精簡形（穩定 identity，避免每次 render 重建編輯器 extensions）。
   const editorSnippets = useMemo(
@@ -3486,19 +3528,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     if (!body) { toast.info("沒有可儲存的 SQL"); return; }
     const name = await uiPrompt("片段名稱（輸入此名即可自動完成展開）：", { title: "新增 SQL 片段", placeholder: "例如：active_users", confirmText: "儲存" });
     if (name === null || !name.trim()) return;
-    setSnippets((list) => {
-      const next = upsertSnippet(list, { name: name.trim(), body });
-      persistSnippets(next);
-      return next;
-    });
+    useStore.getState().addSnippet({ name: name.trim(), body });
     toast.success("已新增片段");
   };
-  const deleteSnippet = (name: string) =>
-    setSnippets((list) => {
-      const next = removeSnippet(list, name);
-      persistSnippets(next);
-      return next;
-    });
+  const deleteSnippet = (name: string) => useStore.getState().removeSnippet(name);
 
   // 開啟 .sql 檔到編輯器（致敬 Navicat 查詢檔案）。
   const openSqlFile = async () => {
@@ -3806,17 +3839,25 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               )}
             </div>
             <div className="relative">
-              <button type="button" onClick={() => setShowSaved((s) => !s)} disabled={saved.length === 0}
+              <button type="button" onClick={() => setShowSaved((s) => !s)}
                 title="收藏的查詢"
-                className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-30">
+                className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
                 收藏{saved.length ? `（${saved.length}）` : ""}
               </button>
-              {showSaved && saved.length > 0 && (
+              {showSaved && (
                 <>
                   <div className="fixed inset-0 z-[89]" onClick={() => setShowSaved(false)} />
                   <div className="absolute right-0 mt-1 z-[90] w-[420px] max-h-[320px] overflow-auto bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1">
-                    <div className="px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">收藏的查詢</div>
-                    {saved.map((q) => (
+                    <div className="flex items-center justify-between px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">
+                      <span>收藏的查詢</span>
+                      <button type="button" onClick={() => { setShowSaved(false); useStore.getState().openSavedManager(); }}
+                        className="inline-flex items-center gap-1 text-accent hover:underline">
+                        <Icon icon={Cog} size={11} />管理 / 匯入匯出
+                      </button>
+                    </div>
+                    {saved.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-fg/40">尚無收藏。用「更多 → 收藏目前查詢」新增，或按上方「管理」匯入。</div>
+                    ) : saved.map((q) => (
                       <div key={q.name} className="group flex items-center hover:bg-fg/10">
                         <button type="button"
                           onClick={() => { persistSql(q.sql); setShowSaved(false); }}
@@ -3824,6 +3865,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                           className="flex-1 inline-flex items-center gap-1.5 text-left px-3 py-1.5 text-xs truncate">
                           <Icon icon={Star} size={12} className="text-amber-300 shrink-0" /><span className="truncate">{q.name}</span>
                         </button>
+                        <button type="button" onClick={() => { setShowSaved(false); useStore.getState().openSavedManager({ editName: q.name }); }} title="編輯" aria-label="編輯"
+                          className="px-1.5 text-fg/30 hover:text-fg/80"><Icon icon={Pencil} size={13} /></button>
                         <button type="button" onClick={() => deleteSaved(q.name)} title="刪除收藏" aria-label="刪除收藏"
                           className="px-2 text-fg/30 hover:text-red-400"><Icon icon={X} size={13} /></button>
                       </div>
@@ -3907,6 +3950,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                     <button type="button" onClick={() => { setShowMore(false); saveCurrentQuery(); }} disabled={!sql.trim()}
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
                       <Icon icon={Star} size={13} className="text-fg/45" />收藏目前查詢…
+                    </button>
+                    <button type="button" onClick={() => { setShowMore(false); useStore.getState().openSavedManager(); }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10">
+                      <Icon icon={Cog} size={13} className="text-fg/45" />管理收藏 / 匯入匯出…
                     </button>
                     {supportsSqlEditor && (
                       <>
@@ -4059,7 +4106,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       <Splitter axis="y" onPointerDown={editor.onPointerDown} />
       <div className="flex-1 flex flex-col min-h-0">
         {/* 下方分頁列：結果 / 摘要 / 解釋（致敬 Navicat）；右側為執行回饋與複製 / 匯出 */}
-        <div className="shrink-0 flex items-center gap-1 px-2 bg-panel border-t border-fg/10 text-[11px]">
+        <div className="shrink-0 flex flex-wrap items-center gap-x-1 gap-y-1 px-2 py-0.5 bg-panel border-t border-fg/10 text-[11px]">
           {((["result", "summary", ...(supportsVisualExplain || supportsMongoExplain ? (["explain"] as const) : [])]) as ("result" | "summary" | "explain")[]).map((key) => {
             const label = key === "result" ? "結果" : key === "summary" ? "摘要" : "解釋";
             return (
@@ -4071,7 +4118,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               </button>
             );
           })}
-          <div className="ml-auto flex items-center gap-3 text-fg/45 pr-1">
+          <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-fg/45 pr-1">
             {running && liveMs !== null ? (
               <span className="inline-flex items-center gap-1 text-fg/70" title="執行中經過時間">
                 <Icon icon={Loader2} size={12} className="animate-spin" />
@@ -4088,7 +4135,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             )}
             {bottomTab === "result" && rowsInfo && <span>{rowsInfo}</span>}
             {bottomTab === "result" && result && result.columns.length > 0 && (
-              <div className="flex gap-2">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 {resultSets.length > 1 && (
                   <button type="button"
                     onClick={() => document.querySelector(`[data-result-section="${activeIdx}"]`)?.scrollIntoView({ block: "nearest" })}
