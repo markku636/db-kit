@@ -2974,7 +2974,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [dbList, setDbList] = useState<string[]>([]);
   const [queryDb, setQueryDb] = useState<string>("");
   // 自動完成 schema（僅關聯式）；SQL 編輯器目前選取段（供 queryToRun 只跑選取段）。
-  const schema = useSqlSchema(activeId, kind);
+  // 對「queryDb 即資料庫名」的 kind（mysql 家族 + external/qland gateway），把工具列選的資料庫
+  // 帶進去當 databaseOverride，讓自動完成對準目前選的庫（如 Siebog），與實際 USE queryDb 執行一致；
+  // 未選（空字串）→ undefined → useSqlSchema 回退連線預設庫。postgres 的 queryDb 是 schema 非 DB，維持原行為。
+  const schemaDb = kind && (isMysqlFamily(kind) || kind === "external") ? (queryDb || undefined) : undefined;
+  const schema = useSqlSchema(activeId, kind, schemaDb);
   const [editorSel, setEditorSel] = useState<string | null>(null);
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。

@@ -99,6 +99,7 @@ pub fn run() {
             commands::list_databases,
             commands::list_tables,
             commands::table_columns,
+            commands::schema_columns,
             commands::table_data,
             commands::run_query,
             commands::run_query_multi,

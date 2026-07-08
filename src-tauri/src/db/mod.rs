@@ -233,6 +233,13 @@ pub struct ColumnInfo {
     pub comment: String, // 欄位註解（MySQL COLUMN_COMMENT；其餘暫為空）
 }
 
+/// 整個資料庫「每張表的欄名」批次結果（供 SQL 自動完成一次載入整庫欄位，減少往返）。
+#[derive(Debug, Clone, Serialize)]
+pub struct TableColumns {
+    pub table: String,
+    pub columns: Vec<String>,
+}
+
 /// 分頁資料結果（「資料」分頁用）。含總列數以渲染分頁器。
 #[derive(Debug, Default, Serialize)]
 pub struct PagedData {
@@ -928,6 +935,24 @@ pub trait DatabaseDriver: Send + Sync {
     /// 取得表的欄位定義（「結構」分頁用）。
     async fn table_columns(&self, database: &str, table: &str)
         -> AppResult<Vec<ColumnInfo>>;
+
+    /// 一次載入整個資料庫「所有表的欄名」，供 SQL 自動完成批次補全。
+    /// 預設實作：逐表呼叫 table_columns（sequential，個別表失敗略過）。
+    /// gateway 型 driver（qland）覆寫為單一分頁 information_schema 查詢，
+    /// 大幅減少往返並尊重同帳號查詢併發上限。
+    async fn schema_columns(&self, database: &str) -> AppResult<Vec<TableColumns>> {
+        let tables = self.list_tables(database).await?;
+        let mut out = Vec::with_capacity(tables.len());
+        for t in tables {
+            let columns = self
+                .table_columns(database, &t.name)
+                .await
+                .map(|cols| cols.into_iter().map(|c| c.name).collect())
+                .unwrap_or_default();
+            out.push(TableColumns { table: t.name, columns });
+        }
+        Ok(out)
+    }
 
     /// 分頁讀取表資料（「資料」分頁用），支援篩選與排序。
     async fn table_data(

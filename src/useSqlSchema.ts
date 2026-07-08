@@ -4,8 +4,8 @@ import { api, DbKind } from "./api";
 import { isSystemDatabase } from "./sql";
 import type { SQLNamespace } from "@codemirror/lang-sql";
 
-// 僅關聯式資料庫提供結構自動完成。
-const SCHEMA_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "oracle"];
+// 僅關聯式資料庫提供結構自動完成（external = qland gateway，講 MySQL 方言）。
+const SCHEMA_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "oracle", "external"];
 
 // 自動完成用的 schema 快取（key = 連線:資料庫）。背景載入，載好後編輯器即時套用，不阻塞輸入。
 const schemaCache = new Map<string, SQLNamespace>();
@@ -48,21 +48,34 @@ export function useSqlSchema(
         const ns: Record<string, string[]> = {};
         for (const t of tables) ns[t.name] = []; // 先放表名，FROM/JOIN 後可立即補全
         setSchema({ ...ns } as SQLNamespace);
-        // 背景補欄名：限量 80 張、併發 6，個別失敗略過，不影響整體。
-        const targets = tables.slice(0, 80);
-        let idx = 0;
-        const worker = async () => {
-          while (idx < targets.length && !cancelled) {
-            const t = targets[idx++];
-            try {
-              const cols = await api.tableColumns(connId, primary, t.name);
-              ns[t.name] = cols.map((c) => c.name);
-            } catch {
-              /* 略過個別表的欄位載入失敗 */
-            }
+        if (kind === "external") {
+          // external（qland gateway）：以單一後端命令一次分頁載回整庫所有表的欄名。
+          // 一個邏輯查詢即完成（避免逐表 N 次往返、順序分頁尊重 gateway 同帳號查詢併發上限），
+          // 且不受 80 張上限——寫查詢時整庫所有表的欄位都能自動提示。失敗則保留表名補全。
+          try {
+            const all = await api.schemaColumns(connId, primary);
+            if (cancelled) return;
+            for (const tc of all) if (tc.table in ns) ns[tc.table] = tc.columns;
+          } catch {
+            /* 批次補欄失敗：保留表名補全（不致命） */
           }
-        };
-        await Promise.all(Array.from({ length: 6 }, worker));
+        } else {
+          // 其餘 driver：背景逐表併發（6）補欄名，限量 80 張，個別失敗略過，不影響整體。
+          const targets = tables.slice(0, 80);
+          let idx = 0;
+          const worker = async () => {
+            while (idx < targets.length && !cancelled) {
+              const t = targets[idx++];
+              try {
+                const cols = await api.tableColumns(connId, primary, t.name);
+                ns[t.name] = cols.map((c) => c.name);
+              } catch {
+                /* 略過個別表的欄位載入失敗 */
+              }
+            }
+          };
+          await Promise.all(Array.from({ length: 6 }, worker));
+        }
         if (cancelled) return;
         const finalNs = { ...ns } as SQLNamespace;
         schemaCache.set(cacheKey, finalNs);

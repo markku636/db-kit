@@ -13,7 +13,7 @@ use crate::db::sqlite::SqliteDriver;
 use crate::db::{
     AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, DbKind,
     ErModel, ForeignKeyInfo, IndexInfo, KeyDetail, KeyEdit, PagedData, PoolStatus, QueryResult, RedisKeys,
-    RoutineInfo, RowDelete, RowInsert, SearchHit, SearchOptions, ServerInfoSection, TableInfo, ValidationReport,
+    RoutineInfo, RowDelete, RowInsert, SearchHit, SearchOptions, ServerInfoSection, TableColumns, TableInfo, ValidationReport,
 };
 use crate::error::{AppError, AppResult};
 use crate::ssh::TunnelGuard;
@@ -93,6 +93,18 @@ impl Active {
             Active::Mssql(d) => d.table_columns(database, table).await,
             Active::Oracle(d) => d.table_columns(database, table).await,
             Active::Dyn(d) => d.table_columns(database, table).await,
+        }
+    }
+    async fn schema_columns(&self, database: &str) -> AppResult<Vec<TableColumns>> {
+        match self {
+            Active::Mysql(d) => d.schema_columns(database).await,
+            Active::Postgres(d) => d.schema_columns(database).await,
+            Active::Sqlite(d) => d.schema_columns(database).await,
+            Active::Mongo(d) => d.schema_columns(database).await,
+            Active::Redis(d) => d.schema_columns(database).await,
+            Active::Mssql(d) => d.schema_columns(database).await,
+            Active::Oracle(d) => d.schema_columns(database).await,
+            Active::Dyn(d) => d.schema_columns(database).await,
         }
     }
     async fn table_data(
@@ -714,6 +726,10 @@ impl ConnectionManager {
         table: &str,
     ) -> AppResult<Vec<ColumnInfo>> {
         self.get(id)?.active.table_columns(database, table).await
+    }
+
+    pub async fn schema_columns(&self, id: &str, database: &str) -> AppResult<Vec<TableColumns>> {
+        self.get(id)?.active.schema_columns(database).await
     }
 
     pub async fn table_data(

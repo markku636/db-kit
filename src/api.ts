@@ -228,6 +228,9 @@ export type AlterOp =
   | { op: "modify_column"; name: string; data_type: string; nullable: boolean }
   | { op: "set_default"; name: string; default?: string | null };
 
+// SQL 自動完成：整庫每張表的欄名（schema_columns 一次載回，供批次補全）。
+export interface TableColumns { table: string; columns: string[] }
+
 // ER 圖模型
 export interface ErColumn { name: string; data_type: string; pk: boolean; fk: boolean }
 export interface ErTable { name: string; columns: ErColumn[] }
@@ -506,6 +509,8 @@ export const api = {
     invoke<TableInfo[]>("list_tables", { id, database }),
   tableColumns: (id: string, database: string, table: string) =>
     invoke<ColumnInfo[]>("table_columns", { id, database, table }),
+  schemaColumns: (id: string, database: string) =>
+    invoke<TableColumns[]>("schema_columns", { id, database }),
   tableData: (id: string, database: string, table: string, query: DataQuery) =>
     invoke<PagedData>("table_data", { id, database, table, query }),
   runQuery: (id: string, sql: string, maxRows?: number) =>

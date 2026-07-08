@@ -12,8 +12,8 @@ use crate::db::{
     AlterOp, BigKey, CellEdit, ClientInfo, ColumnInfo, ConnectionConfig, DataQuery, ErModel,
     ForeignKeyInfo, KeyDetail, KeyEdit, KeyPage, MongoIndexOptions, MongoIndexStat, MongoOp,
     MongoProfile, MongoSlowQuery, MongoValidation, PagedData, PoolStatus, QueryResult, RedisKeys,
-    RoutineInfo, RowDelete, RowInsert, SearchHit, SearchOptions, ServerInfoSection, SlowLogEntry, TableInfo,
-    ValidationReport,
+    RoutineInfo, RowDelete, RowInsert, SearchHit, SearchOptions, ServerInfoSection, SlowLogEntry, TableColumns,
+    TableInfo, ValidationReport,
 };
 use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
@@ -341,6 +341,16 @@ pub async fn table_columns(
     table: String,
 ) -> AppResult<Vec<ColumnInfo>> {
     state.manager.table_columns(&id, &database, &table).await
+}
+
+/// 一次載回整個資料庫所有表的欄名（供 SQL 自動完成批次補全；qland 走單一分頁 information_schema 查詢）。
+#[tauri::command]
+pub async fn schema_columns(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+) -> AppResult<Vec<TableColumns>> {
+    state.manager.schema_columns(&id, &database).await
 }
 
 #[tauri::command]
