@@ -2080,7 +2080,10 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
 
                 // 物件分組資料夾（資料表 / 檢視 / 函式 / 查詢）。
                 const folderNode = (type: string, glyphIcon: LucideIcon, color: string, label: string, count: number, body: ReactNode) => {
-                  const open = isFolderOpen(dbKey, type);
+                  // 搜尋/篩選命中時自動展開：使用者手動/預設展開，或（全域搜尋或本庫篩選中且此資料夾有命中）。
+                  // 清除搜尋後 filtering=false，open 回落到手動/預設狀態，不寫入 folderOpen、不殘留。
+                  const filtering = !!q || !!(dbFilter[dbKey] ?? "").trim();
+                  const open = isFolderOpen(dbKey, type) || (filtering && count > 0);
                   return (
                     <div key={type}>
                       <div
