@@ -3636,7 +3636,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     try {
       const sets = resultSets.map((s) => ({ sql: s.sql, columns: s.res.columns, rows: s.res.rows }));
       const res = await api.exportRowsMulti(sets, opts, path);
-      const files = fmt === "csv" || fmt === "tsv" ? ` · ${resultSets.length} 個編號檔案` : "";
+      // csv/tsv 拆成編號多檔（使用者選的 base 檔名本身不會產生）→ 明示實際檔名樣式，免得找不到檔案。
+      const firstName = res.path.replace(/^.*[\\/]/, "");
+      const files =
+        fmt === "csv" || fmt === "tsv"
+          ? ` · 已拆成 ${resultSets.length} 個檔案（${firstName} … -${resultSets.length}）`
+          : "";
       const truncNote = resultSets.some((s) => s.res.truncated) ? "；內含已截斷結果集（僅匯出畫面資料）" : "";
       toast.success(`已匯出 ${resultSets.length} 個結果集 · 共 ${res.rows.toLocaleString()} 列 · ${fmt.toUpperCase()}${files}${truncNote}`);
     } catch (e: any) {
