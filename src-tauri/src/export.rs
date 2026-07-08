@@ -10,7 +10,7 @@ use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
 
 /// 匯出選項。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ExportOptions {
     /// csv | tsv | json | sql | markdown
     pub format: String,
@@ -178,6 +178,151 @@ pub async fn export_rows(
     })
 }
 
+/// 多結果集匯出的單組 payload（查詢結果「全部匯出」用）：
+/// sql 為產生此結果集的原語句，供分節標題 / JSON 附帶；資料同 export_rows 已備妥於前端。
+#[derive(Debug, Deserialize)]
+pub struct ResultSetPayload {
+    #[serde(default)]
+    pub sql: Option<String>,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Option<String>>>,
+}
+
+/// 一次匯出多個結果集（SSMS 風格多語句批次的「全部匯出」）。各格式策略：
+/// - xlsx：單檔多工作表（結果1..結果N）— Excel 是多表容器的天然歸宿；
+/// - markdown / json / sql：單檔分節（md 分節標題、json 陣列、sql 帶序號表名的 INSERT）；
+/// - csv / tsv：無法在單檔內表達多張異構表 → 寫成 `{base}-1.csv` .. `{base}-N.csv` 編號多檔。
+/// 回傳 rows = 總列數、path = 第一個（或唯一）輸出檔。
+pub async fn export_rows_multi(
+    sets: Vec<ResultSetPayload>,
+    opts: &ExportOptions,
+    out_path: &str,
+) -> AppResult<ExportResult> {
+    if sets.is_empty() {
+        return Err(AppError::Query("沒有可匯出的結果集".to_string()));
+    }
+    let total_rows: u64 = sets.iter().map(|s| s.rows.len() as u64).sum();
+    let single = render_multi(&sets, opts)?;
+
+    if let Some(bytes) = single {
+        tokio::fs::write(out_path, &bytes)
+            .await
+            .map_err(|e| AppError::Query(format!("寫入檔案失敗：{e}")))?;
+        return Ok(ExportResult {
+            path: out_path.to_string(),
+            rows: total_rows,
+            bytes: bytes.len() as u64,
+            format: opts.format.clone(),
+        });
+    }
+
+    // csv / tsv：逐集寫編號檔（每檔各自表頭 / BOM，Excel 與 parser 皆可直接開）。
+    let mut total_bytes: u64 = 0;
+    let mut first_path = String::new();
+    for (i, s) in sets.iter().enumerate() {
+        let path = numbered_path(out_path, i);
+        let bytes = render(&s.columns, &s.rows, opts, "result")?;
+        tokio::fs::write(&path, &bytes)
+            .await
+            .map_err(|e| AppError::Query(format!("寫入檔案失敗：{e}")))?;
+        total_bytes += bytes.len() as u64;
+        if i == 0 {
+            first_path = path;
+        }
+    }
+    Ok(ExportResult {
+        path: first_path,
+        rows: total_rows,
+        bytes: total_bytes,
+        format: opts.format.clone(),
+    })
+}
+
+/// 多結果集的「單一輸出檔」組裝：xlsx / markdown / json / sql 回 Some(bytes)；
+/// csv / tsv 天生要拆編號多檔 → 回 None 交由呼叫端逐集寫檔。
+fn render_multi(sets: &[ResultSetPayload], opts: &ExportOptions) -> AppResult<Option<Vec<u8>>> {
+    let single = match opts.format.as_str() {
+        "xlsx" => Some(render_xlsx_multi(sets, opts)?),
+        "markdown" => {
+            let mut out = String::new();
+            for (i, s) in sets.iter().enumerate() {
+                out.push_str(&format!("## 結果 {}\n\n", i + 1));
+                if let Some(sql) = s.sql.as_deref().filter(|q| !q.trim().is_empty()) {
+                    out.push_str(&format!("```sql\n{}\n```\n\n", sql.trim()));
+                }
+                out.push_str(&render_utf8(&s.columns, &s.rows, opts)?);
+                out.push('\n');
+            }
+            Some(out.into_bytes())
+        }
+        "json" => {
+            let arr: Vec<serde_json::Value> = sets
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let rows: Vec<serde_json::Map<String, serde_json::Value>> = s
+                        .rows
+                        .iter()
+                        .map(|row| {
+                            let mut m = serde_json::Map::new();
+                            for (ci, c) in s.columns.iter().enumerate() {
+                                let v = row.get(ci).and_then(|x| x.clone());
+                                m.insert(c.clone(), v.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null));
+                            }
+                            m
+                        })
+                        .collect();
+                    serde_json::json!({
+                        "index": i + 1,
+                        "sql": s.sql,
+                        "columns": s.columns,
+                        "rows": rows,
+                    })
+                })
+                .collect();
+            Some(serde_json::to_vec_pretty(&arr).map_err(|e| AppError::Query(e.to_string()))?)
+        }
+        "sql" => {
+            // INSERT 可自然串接；表名帶序號（result_1..）避免異構結果集混進同一張表。
+            let base = opts.sql_table.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "result".to_string());
+            let mut out = String::new();
+            for (i, s) in sets.iter().enumerate() {
+                let one_line = s.sql.as_deref().unwrap_or("").replace(['\r', '\n'], " ");
+                out.push_str(&format!("-- 結果 {}: {}\n", i + 1, one_line.trim()));
+                let per = ExportOptions { sql_table: Some(format!("{}_{}", base, i + 1)), ..opts.clone() };
+                out.push_str(&render_utf8(&s.columns, &s.rows, &per)?);
+                out.push('\n');
+            }
+            Some(out.into_bytes())
+        }
+        "csv" | "tsv" => None,
+        other => return Err(AppError::Query(format!("不支援的匯出格式：{other}"))),
+    };
+    Ok(single)
+}
+
+/// render() 的文字格式輸出轉 String（僅供 markdown / sql 等純文字格式的分節串接）。
+fn render_utf8(
+    columns: &[String],
+    rows: &[Vec<Option<String>>],
+    opts: &ExportOptions,
+) -> AppResult<String> {
+    String::from_utf8(render(columns, rows, opts, "result")?)
+        .map_err(|e| AppError::Query(e.to_string()))
+}
+
+/// 在副檔名前插入 `-{i+1}` 序號（`a/b.csv` → `a/b-1.csv`；無副檔名則直接後綴）。
+fn numbered_path(out_path: &str, i: usize) -> String {
+    let sep = out_path.rfind(['/', '\\']).map(|p| p + 1).unwrap_or(0);
+    match out_path[sep..].rfind('.') {
+        Some(d) if d > 0 => {
+            let dot = sep + d;
+            format!("{}-{}{}", &out_path[..dot], i + 1, &out_path[dot..])
+        }
+        _ => format!("{}-{}", out_path, i + 1),
+    }
+}
+
 /// 匯出整個資料庫的結構（所有表的建表 SQL，依 `table_ddl` 串接）。致敬 Navicat / DBeaver 的
 /// 「轉儲結構」。不支援 `table_ddl` 的表（如 Mongo 集合）會被略過。
 pub async fn schema_dump(
@@ -318,7 +463,40 @@ fn render_xlsx(
     rows: &[Vec<Option<String>>],
     opts: &ExportOptions,
 ) -> AppResult<Vec<u8>> {
-    use rust_xlsxwriter::{Format, Workbook};
+    use rust_xlsxwriter::Workbook;
+
+    let mut wb = Workbook::new();
+    let ws = wb.add_worksheet();
+    write_xlsx_sheet(ws, columns, rows, opts)?;
+    wb.save_to_buffer()
+        .map_err(|e| AppError::Query(format!("產生 Excel 失敗：{e}")))
+}
+
+/// 多結果集 → 單一活頁簿多工作表（結果1..結果N），每張表沿用單表的寫入管線。
+fn render_xlsx_multi(sets: &[ResultSetPayload], opts: &ExportOptions) -> AppResult<Vec<u8>> {
+    use rust_xlsxwriter::Workbook;
+
+    let mut wb = Workbook::new();
+    for (i, s) in sets.iter().enumerate() {
+        let ws = wb.add_worksheet();
+        // 固定命名「結果N」：無 Excel 禁字元（[]:*?/\）、必唯一、遠低於 31 字上限。
+        ws.set_name(format!("結果{}", i + 1))
+            .map_err(|e| AppError::Query(format!("寫入 Excel 失敗：{e}")))?;
+        write_xlsx_sheet(ws, &s.columns, &s.rows, opts)
+            .map_err(|e| AppError::Query(format!("結果 {}：{}", i + 1, e)))?;
+    }
+    wb.save_to_buffer()
+        .map_err(|e| AppError::Query(format!("產生 Excel 失敗：{e}")))
+}
+
+/// 把單一結果集寫進一張工作表：上限檢查、（可選）粗體表頭、數字保真、凍結表頭、自動欄寬。
+fn write_xlsx_sheet(
+    ws: &mut rust_xlsxwriter::Worksheet,
+    columns: &[String],
+    rows: &[Vec<Option<String>>],
+    opts: &ExportOptions,
+) -> AppResult<()> {
+    use rust_xlsxwriter::Format;
 
     // xlsx 上限：1,048,576 列 × 16,384 欄。超出直接回報，不靜默截斷。
     if columns.len() > 16_384 {
@@ -335,8 +513,6 @@ fn render_xlsx(
         )));
     }
 
-    let mut wb = Workbook::new();
-    let ws = wb.add_worksheet();
     let mut r: u32 = 0;
     if opts.include_header {
         let bold = Format::new().set_bold();
@@ -365,8 +541,7 @@ fn render_xlsx(
         let _ = ws.set_freeze_panes(1, 0);
     }
     ws.autofit();
-    wb.save_to_buffer()
-        .map_err(|e| AppError::Query(format!("產生 Excel 失敗：{e}")))
+    Ok(())
 }
 
 /// 僅在「乾淨數字且 f64 往返一致」時回傳數值，否則 None（保留為文字）。
@@ -590,5 +765,71 @@ mod tests {
         assert_eq!(as_excel_number(""), None);
         assert_eq!(as_excel_number("1.2.3"), None);
         assert_eq!(as_excel_number("."), None);
+    }
+
+    // ---- 多結果集匯出（render_multi / numbered_path）----
+
+    fn two_sets() -> Vec<ResultSetPayload> {
+        vec![
+            ResultSetPayload {
+                sql: Some("SELECT 1".into()),
+                columns: cols(&["id"]),
+                rows: vec![row(&[Some("1")])],
+            },
+            ResultSetPayload {
+                sql: Some("SELECT 2".into()),
+                columns: cols(&["a", "b"]),
+                rows: vec![row(&[Some("x"), None])],
+            },
+        ]
+    }
+
+    #[test]
+    fn multi_markdown_has_sections_and_sql_fences() {
+        let out =
+            String::from_utf8(render_multi(&two_sets(), &opts("markdown")).unwrap().unwrap()).unwrap();
+        assert!(out.contains("## 結果 1"), "{out}");
+        assert!(out.contains("## 結果 2"), "{out}");
+        assert!(out.contains("```sql\nSELECT 1\n```"), "{out}");
+        assert!(out.contains("| id |"), "{out}");
+        assert!(out.contains("| a | b |"), "{out}");
+    }
+
+    #[test]
+    fn multi_json_keeps_index_sql_and_null() {
+        let out = render_multi(&two_sets(), &opts("json")).unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v.as_array().unwrap().len(), 2);
+        assert_eq!(v[0]["index"], 1);
+        assert_eq!(v[0]["sql"], "SELECT 1");
+        assert_eq!(v[0]["rows"][0]["id"], "1");
+        assert_eq!(v[1]["rows"][0]["b"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn multi_sql_uses_numbered_table_names() {
+        let mut o = opts("sql");
+        o.sql_table = Some("result".into());
+        let out = String::from_utf8(render_multi(&two_sets(), &o).unwrap().unwrap()).unwrap();
+        assert!(out.contains("-- 結果 1: SELECT 1"), "{out}");
+        assert!(out.contains("INSERT INTO `result_1` (`id`) VALUES ('1');"), "{out}");
+        assert!(out.contains("INSERT INTO `result_2` (`a`, `b`) VALUES ('x', NULL);"), "{out}");
+    }
+
+    #[test]
+    fn multi_xlsx_single_workbook_and_csv_defers_to_files() {
+        // xlsx → 單一活頁簿（ZIP 容器）；csv → None（呼叫端逐集寫編號檔）。
+        let bytes = render_multi(&two_sets(), &opts("xlsx")).unwrap().unwrap();
+        assert_eq!(&bytes[..4], b"PK\x03\x04", "xlsx 應為 ZIP（PK 魔數）開頭");
+        assert!(render_multi(&two_sets(), &opts("csv")).unwrap().is_none());
+        assert!(render_multi(&two_sets(), &opts("tsv")).unwrap().is_none());
+    }
+
+    #[test]
+    fn numbered_path_inserts_before_extension() {
+        assert_eq!(numbered_path("C:\\out\\r.csv", 0), "C:\\out\\r-1.csv");
+        assert_eq!(numbered_path("/a/b.tar.gz", 1), "/a/b.tar-2.gz");
+        assert_eq!(numbered_path("plain", 2), "plain-3");
+        assert_eq!(numbered_path("/a.b/noext", 0), "/a.b/noext-1");
     }
 }

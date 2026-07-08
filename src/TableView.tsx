@@ -220,6 +220,22 @@ function DataPane({ tab }: { tab: OpenTab }) {
     return () => { alive = false; };
   }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
 
+  // 欄位 comment：欄名 → COLUMN_COMMENT（供表頭 hover 顯示欄位說明，致敬 Navicat）。僅 SQL 資料表 + 資料分頁時載入。
+  const [commentMap, setCommentMap] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!isSqlKind || tab.view !== "data") { setCommentMap({}); return; }
+    let alive = true;
+    api.tableColumns(tab.connId, tab.database, tab.table)
+      .then((cols) => {
+        if (!alive) return;
+        const m: Record<string, string> = {};
+        for (const col of cols) if (col.comment) m[col.name] = col.comment;
+        setCommentMap(m);
+      })
+      .catch(() => { if (alive) setCommentMap({}); });
+    return () => { alive = false; };
+  }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
+
   // 外鍵導覽消費：pendingFilter 指向本分頁時，套用 col=value 篩選（被參照表開啟後即過濾出該列）。
   const pendingFilter = useStore((s) => s.pendingFilter);
   useEffect(() => {
@@ -1405,6 +1421,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
                   if (isHidden(c)) return null;
                   const dir = sortDirOf(c);
                   const order = sortOrderOf(c);
+                  const cmt = commentMap[c];
                   return (
                     <th
                       key={c}
@@ -1414,11 +1431,12 @@ function DataPane({ tab }: { tab: OpenTab }) {
                       onClick={(e) => toggleSort(c, e.shiftKey)}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSort(c, e.shiftKey); } }}
                       onContextMenu={(e) => { e.preventDefault(); setColMenu({ col: c, ci, x: e.clientX, y: e.clientY }); }}
-                      title="點擊排序；Shift+點擊可多欄排序；右鍵更多"
+                      title={cmt ? `${cmt}\n\n點擊排序；Shift+點擊可多欄排序；右鍵更多` : "點擊排序；Shift+點擊可多欄排序；右鍵更多"}
                       style={{ width: colWidth(c) }}
                       className="relative text-left px-3 py-1.5 border-b border-fg/10 font-medium whitespace-nowrap overflow-hidden text-ellipsis cursor-pointer select-none hover:bg-fg/5 focus-visible:outline-2 focus-visible:outline-accent/60 focus-visible:-outline-offset-2"
                     >
-                      {c}
+                      {/* 有 comment 的欄名加虛線底線，提示可 hover 看欄位說明 */}
+                      <span className={cmt ? "border-b border-dotted border-fg/40" : undefined}>{c}</span>
                       {data.primary_key.includes(c) && (
                         <span className="ml-1 text-[10px] font-semibold text-amber-400">PK</span>
                       )}

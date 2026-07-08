@@ -141,6 +141,13 @@ export interface ExportResult {
   format: string;
 }
 
+// 多結果集匯出（「全部匯出」）的單組 payload：sql 為產生該結果集的原語句（分節標題 / JSON 附帶）。
+export interface ResultSetPayload {
+  sql?: string | null;
+  columns: string[];
+  rows: (string | null)[][];
+}
+
 export interface ImportOptions {
   delimiter?: string | null;
   has_header?: boolean;
@@ -555,6 +562,10 @@ export const api = {
   // 匯出已備妥的查詢結果（欄 + 列）到檔案；走後端同一套 render，支援 xlsx 等二進位格式。
   exportRows: (columns: string[], rows: (string | null)[][], options: ExportOptions, outPath: string) =>
     invoke<ExportResult>("export_rows", { columns, rows, options, outPath }),
+  // 一次匯出多個結果集（多語句批次的「全部匯出」）：xlsx 單檔多工作表、
+  // markdown / json / sql 單檔分節、csv / tsv 編號多檔（{base}-1..-N）。
+  exportRowsMulti: (sets: ResultSetPayload[], options: ExportOptions, outPath: string) =>
+    invoke<ExportResult>("export_rows_multi", { sets, options, outPath }),
   importCsv: (id: string, database: string, table: string, path: string, options: ImportOptions) =>
     invoke<ImportResult>("import_csv", { id, database, table, path, options }),
   // 匯入預覽（讀檔解析欄名 + 前幾列，不寫入）。

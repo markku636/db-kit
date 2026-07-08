@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
-import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat } from "./api";
+import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
 import { EDITOR_THEMES, getEditorThemeDef, type EditorThemeId } from "./editorThemes";
@@ -1111,6 +1111,10 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   const filterRef = useRef<HTMLInputElement>(null);
   // 每個資料庫節點獨立的表名過濾（key = `${connId}:${db}`）。大型 schema（如 1700+ 張表）好找。
   const [dbFilter, setDbFilter] = useState<Record<string, string>>({});
+  // 頂部框「跨資料庫表名搜尋」（涵蓋尚未展開的庫）：命中以內嵌結果列呈現，點擊開表 + 樹中定位。
+  const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const searchSeqRef = useRef(0);
   // 右鍵選單（SQL 表節點：產生 SQL）。objKind 為物件種類（"table" | "view"），決定生命週期 DDL。
   const [tableMenu, setTableMenu] = useState<
     { connId: string; db: string; table: string; kind: DbKind; objKind: string; x: number; y: number } | null
@@ -1158,6 +1162,43 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
+
+  // 頂部框：term ≥ 2 時 debounce 300ms 跨資料庫搜尋表名（含未展開的庫）。目標＝目前 active 且已連線者，
+  // 否則第一個已連線者。驅動不支援搜尋（如 redis）→ 靜默不顯示內嵌結果，不影響既有樹搜尋。
+  useEffect(() => {
+    const term = filter.trim();
+    if (term.length < 2) { setSearchHits(null); setSearchBusy(false); return; }
+    const target =
+      connections.find((c) => c.id === activeId && connectedIds.has(c.id)) ??
+      connections.find((c) => connectedIds.has(c.id));
+    if (!target) { setSearchHits(null); setSearchBusy(false); return; }
+    const seq = ++searchSeqRef.current;
+    setSearchBusy(true);
+    const h = setTimeout(() => {
+      api
+        .searchObjects(target.id, {
+          term,
+          databases: null,
+          types: ["table", "view"],
+          match_names: true,
+          match_definitions: false,
+          match_comments: false,
+          case_sensitive: false,
+          limit: 200,
+        })
+        .then((hits) => {
+          if (searchSeqRef.current !== seq) return;
+          setSearchHits(hits);
+          setSearchBusy(false);
+        })
+        .catch(() => {
+          if (searchSeqRef.current !== seq) return;
+          setSearchHits(null); // Unsupported / 錯誤：靜默，維持既有已展開庫的樹搜尋
+          setSearchBusy(false);
+        });
+    }, 300);
+    return () => clearTimeout(h);
+  }, [filter, activeId, connectedIds, connections]);
 
   // Esc 關閉側欄右鍵選單（連線 / 資料庫 / 程序 / 表），與對話框一致。
   useEffect(() => {
@@ -1326,6 +1367,23 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
       });
       return;
     }
+    const cfg = connections.find((c) => c.id === connId);
+    if (!cfg) return;
+    setDbLoading(key, true);
+    try {
+      const objs = await fetchDbObjects(connId, cfg.kind, db);
+      setExpandedDbs((e) => ({ ...e, [key]: objs }));
+    } catch (e: any) {
+      toast.error(e?.message ?? "讀取表失敗");
+    } finally {
+      setDbLoading(key, false);
+    }
+  };
+
+  // 確保某資料庫已展開（載入 objects）；已展開則 no-op。供內嵌跨庫搜尋結果「點擊定位」用。
+  const ensureDbExpanded = async (connId: string, db: string) => {
+    const key = `${connId}:${db}`;
+    if (expandedDbs[key]) return;
     const cfg = connections.find((c) => c.id === connId);
     if (!cfg) return;
     setDbLoading(key, true);
@@ -1866,6 +1924,10 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
   const tableVisible = (connName: string, tName: string) =>
     !q || connName.toLowerCase().includes(q) || tName.toLowerCase().includes(q);
   const visibleConns = connections.filter(connVisible);
+  // 跨庫搜尋 / 全資料庫搜尋的目標連線：目前 active 且已連線者，否則第一個已連線者。
+  const searchTarget =
+    connections.find((c) => c.id === activeId && connectedIds.has(c.id)) ??
+    connections.find((c) => connectedIds.has(c.id)) ?? null;
 
   return (
     <div style={{ width }} className="shrink-0 bg-panel overflow-y-auto text-sm flex flex-col">
@@ -1902,6 +1964,54 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
           )}
         </div>
       )}
+      {q.length >= 2 && searchTarget && (searchBusy || searchHits !== null) && (() => {
+        // 跨資料庫表名搜尋結果（含尚未展開的庫），依資料庫分組。點擊 → 開表 + 樹中展開定位。
+        const hits = searchHits ?? [];
+        const groups: [string, SearchHit[]][] = [];
+        const idx = new Map<string, SearchHit[]>();
+        for (const h of hits) {
+          let arr = idx.get(h.database);
+          if (!arr) { arr = []; idx.set(h.database, arr); groups.push([h.database, arr]); }
+          arr.push(h);
+        }
+        const capped = hits.length >= 200;
+        return (
+          <div className="border-b border-fg/10 py-1">
+            <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-fg/35 flex items-center gap-1">
+              <Icon icon={Search} size={11} className="text-sky-300/80" />
+              <span>跨庫表名{hits.length > 0 ? `（${hits.length}${capped ? "+" : ""}）` : ""}</span>
+              {searchBusy && <Icon icon={Loader2} size={11} className="animate-spin ml-auto text-fg/40" />}
+            </div>
+            {!searchBusy && hits.length === 0 && (
+              <div className="px-3 py-1 text-[11px] text-fg/30">查無符合的表</div>
+            )}
+            {groups.map(([db, ghits]) => (
+              <div key={db}>
+                <div className="px-3 py-0.5 text-[10px] text-fg/40 flex items-center gap-1">
+                  <Icon icon={Database} size={10} className="shrink-0" />
+                  <span className="truncate flex-1">{db}</span>
+                  <span className="text-fg/25 tabular-nums">{ghits.length}</span>
+                </div>
+                {ghits.map((h) => (
+                  <div key={`${db}:${h.object_type}:${h.object_name}`}
+                    className="flex items-center gap-1.5 pl-6 pr-3 py-1 cursor-pointer hover:bg-fg/5"
+                    onClick={() => {
+                      setActive(searchTarget.id);
+                      selectNode({ type: "table", connId: searchTarget.id, db, table: h.object_name, kind: searchTarget.kind, objKind: h.object_type });
+                      useStore.getState().openTable(searchTarget.id, db, h.object_name, "data", h.object_type as TableInfo["kind"]);
+                      void ensureDbExpanded(searchTarget.id, db);
+                    }}
+                    title={`${searchTarget.name} · ${db} · ${h.object_name}（點擊開啟並在樹中定位）`}>
+                    <Icon icon={h.object_type === "view" ? Eye : Table2} size={12}
+                      className={`shrink-0 ${h.object_type === "view" ? "text-purple-300/80" : "text-sky-300/70"}`} />
+                    <span className="truncate">{h.object_name}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
       {(() => {
         // ★ 常用：釘選的資料表（跨連線）。依搜尋字過濾、只顯示連線仍存在者。
         const visiblePins = pins.filter((p) =>
@@ -1938,24 +2048,19 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
           尚無連線。點上方「連線」新增一個，雙擊以建立連線（右鍵有更多選項）。
         </div>
       )}
-      {q && visibleConns.length === 0 && (() => {
-        // 樹狀搜尋僅涵蓋「已展開」的資料庫；提供全資料庫搜尋作為出口（需有已連線的連線）。
-        const target =
-          connections.find((c) => c.id === activeId && connectedIds.has(c.id)) ??
-          connections.find((c) => connectedIds.has(c.id));
-        return (
-          <div className="p-4 text-xs text-fg/40 space-y-2">
-            <div>查無符合「{filter}」的連線或表。</div>
-            <div className="text-fg/30">搜尋僅涵蓋已展開的資料庫。</div>
-            {target && (
-              <Button variant="secondary" size="sm" icon={Search}
-                onClick={() => setSearchObjs({ connId: target.id, kind: target.kind })}>
-                全資料庫搜尋…
-              </Button>
-            )}
-          </div>
-        );
-      })()}
+      {q && visibleConns.length === 0 && !searchBusy && !(searchHits && searchHits.length > 0) && (
+        <div className="p-4 text-xs text-fg/40 space-y-2">
+          <div>查無符合「{filter}」的連線或表。</div>
+          {searchTarget ? (
+            <Button variant="secondary" size="sm" icon={Search}
+              onClick={() => setSearchObjs({ connId: searchTarget.id, kind: searchTarget.kind })}>
+              全資料庫搜尋（含定義 / 註解）…
+            </Button>
+          ) : (
+            <div className="text-fg/30">連線後即可搜尋全部資料庫的表名。</div>
+          )}
+        </div>
+      )}
       {visibleConns.map((c) => {
         const meta = KIND_META[c.kind];
         const connected = connectedIds.has(c.id);
@@ -3495,6 +3600,60 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     }
   };
 
+  // 全部匯出：多語句批次的所有結果集一次寫檔。xlsx 單檔多工作表（結果1..N）、
+  // markdown / json / sql 單檔分節、csv / tsv 拆編號多檔（{base}-1..-N，單檔無法表達多張異構表）。
+  // 各格用原始結果（client 端排序 / 篩選僅綁作用中格，單格匯出才吃）；截斷的格照畫面資料匯出並提示。
+  const exportAllResults = async () => {
+    if (resultSets.length < 2) return;
+    const path = await pickSaveFile("query-results.xlsx", [
+      { name: "Excel (.xlsx)", extensions: ["xlsx"] },
+      { name: "CSV", extensions: ["csv"] },
+      { name: "JSON", extensions: ["json"] },
+      { name: "TSV", extensions: ["tsv", "txt"] },
+      { name: "SQL (INSERT)", extensions: ["sql"] },
+      { name: "Markdown", extensions: ["md"] },
+    ]);
+    if (!path) return;
+    const lower = path.toLowerCase();
+    const fmt: ExportFormat = lower.endsWith(".xlsx")
+      ? "xlsx"
+      : lower.endsWith(".json")
+      ? "json"
+      : lower.endsWith(".md")
+      ? "markdown"
+      : lower.endsWith(".sql")
+      ? "sql"
+      : lower.endsWith(".tsv") || lower.endsWith(".txt")
+      ? "tsv"
+      : "csv";
+    const opts = {
+      format: fmt,
+      include_header: true,
+      all_rows: true,
+      bom: fmt === "csv" || fmt === "tsv",
+      sql_table: fmt === "sql" ? "result" : null,
+    };
+    try {
+      const sets = resultSets.map((s) => ({ sql: s.sql, columns: s.res.columns, rows: s.res.rows }));
+      const res = await api.exportRowsMulti(sets, opts, path);
+      const files = fmt === "csv" || fmt === "tsv" ? ` · ${resultSets.length} 個編號檔案` : "";
+      const truncNote = resultSets.some((s) => s.res.truncated) ? "；內含已截斷結果集（僅匯出畫面資料）" : "";
+      toast.success(`已匯出 ${resultSets.length} 個結果集 · 共 ${res.rows.toLocaleString()} 列 · ${fmt.toUpperCase()}${files}${truncNote}`);
+    } catch (e: any) {
+      toast.error(e?.message ?? "匯出失敗");
+    }
+  };
+
+  // 複製全部：所有結果集串成 Markdown 分節（## 結果 N + 原 SQL + 表格）進剪貼簿 —
+  // 貼文件 / Jira / AI 都可直接讀（CSV/TSV 混多表頭貼上會壞，故剪貼簿統一用 MD）。
+  const copyAllResults = () => {
+    if (resultSets.length < 2) return;
+    const md = resultSets
+      .map((s, i) => `## 結果 ${i + 1}\n\n\`\`\`sql\n${s.sql.trim()}\n\`\`\`\n\n${resultToMarkdown(s.res)}`)
+      .join("\n\n");
+    copyToClipboard(md, `已複製 ${resultSets.length} 個結果集 (Markdown)`);
+  };
+
   // 把目前查詢與結果（限前 30 列）帶進 AI 助手分析。
   const askAiResult = () => {
     if (!result || result.columns.length === 0 || !exportRes) return;
@@ -3933,7 +4092,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 <button type="button" onClick={() => exportRes && copyToClipboard(resultToTsv(exportRes), "已複製結果 (TSV)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 TSV</button>
                 <button type="button" onClick={() => exportRes && copyToClipboard(resultToJson(exportRes), "已複製結果 (JSON)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 JSON</button>
                 <button type="button" onClick={() => exportRes && copyToClipboard(resultToMarkdown(exportRes), "已複製結果 (Markdown)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 MD</button>
+                {resultSets.length > 1 && (
+                  <button type="button" onClick={copyAllResults}
+                    title="把全部結果集串成 Markdown 分節複製（## 結果 N + 原 SQL + 表格）"
+                    className="text-accent/80 hover:text-accent">複製全部</button>
+                )}
                 <button type="button" onClick={exportResult} className="inline-flex items-center gap-1 hover:text-fg/80"><Icon icon={Download} size={12} />匯出</button>
+                {resultSets.length > 1 && (
+                  <button type="button" onClick={exportAllResults}
+                    title="全部結果集一次匯出：Excel 一格一工作表；CSV/TSV 拆編號多檔；JSON/MD/SQL 單檔分節"
+                    className="inline-flex items-center gap-1 text-accent/80 hover:text-accent"><Icon icon={Download} size={12} />全部匯出</button>
+                )}
                 <button type="button" onClick={askAiResult} title="把這份結果帶進 AI 助手分析" className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"><Icon icon={Sparkles} size={12} />問 AI</button>
               </div>
             )}

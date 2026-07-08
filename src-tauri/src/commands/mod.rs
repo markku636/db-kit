@@ -757,6 +757,17 @@ pub async fn export_rows(
     crate::export::export_rows(columns, rows, &options, &out_path).await
 }
 
+/// 一次匯出多個結果集（多語句批次的「全部匯出」）：xlsx 單檔多工作表、
+/// markdown / json / sql 單檔分節、csv / tsv 編號多檔。資料同 export_rows 已備妥於前端。
+#[tauri::command]
+pub async fn export_rows_multi(
+    sets: Vec<crate::export::ResultSetPayload>,
+    options: crate::export::ExportOptions,
+    out_path: String,
+) -> AppResult<crate::export::ExportResult> {
+    crate::export::export_rows_multi(sets, &options, &out_path).await
+}
+
 /// CSV 匯入到資料表（致敬 Navicat / DBeaver 匯入精靈）。逐列以 insert_row 寫入，
 /// 沿用各 driver 的型別轉型（PG 等嚴格型別欄位也能匯入），回報成功 / 失敗列數與前幾筆錯誤。
 #[tauri::command]

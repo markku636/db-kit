@@ -113,6 +113,7 @@ pub fn run() {
             commands::key_edit,
             commands::export_table,
             commands::export_rows,
+            commands::export_rows_multi,
             commands::export_query,
             commands::import_csv,
             commands::import_excel,
