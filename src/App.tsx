@@ -704,7 +704,7 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
           </div>
           <p className="text-xs text-fg/50 leading-relaxed">
             防止誤跑 <span className="mono">SELECT *</span> 大表把記憶體塞爆：查詢結果超過上限即截斷並顯示提示
-            （可點「載入更多」或改用匯出取完整結果）。變更立即生效。
+            （取完整結果請改用匯出）。變更立即生效。
           </p>
           <Field label="結果列數上限">
             <Select selectSize="md" value={String(guard.maxRows)}
@@ -2892,10 +2892,10 @@ function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefine
 interface StmtRun { sql: string; ok: boolean; message: string; ms: number; }
 interface RunSummary { startedAt: number; finishedAt: number; total: number; processed: number; success: number; errors: number; statements: StmtRun[]; }
 // 單一結果集（SSMS 風格）：多語句批次中每條有回傳結果集的語句各佔一格；sql=產生它的原語句（不含注入的 USE 前綴）、ms=該語句耗時。
-// sent：實際送到後端的語句（含 USE / search_path 前綴），供「載入更多」原樣重跑；
+// sent：實際送到後端的語句（含 USE / search_path 前綴），供匯出完整結果時原樣重跑；
 // sql 為使用者原語句（顯示 / 摘要用，不含注入前綴）。
 // setIdx：本格在該次 run_query_multi 回傳陣列中的索引（含無欄位的 DML 結果）；
-// 「載入更多」重跑後取同位結果集。單結果集呼叫恆為 0。
+// 匯出重跑後取同位結果集。單結果集呼叫恆為 0。
 interface ResultSetEntry { res: QueryResult; sql: string; ms: number; sent?: string; setIdx?: number; }
 
 // 毫秒時間戳 → 本地「YYYY-MM-DD HH:mm:ss」（摘要面板的開始 / 結束時間）。
@@ -2988,26 +2988,6 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [runSeq, setRunSeq] = useState(0);
   // 各結果格摺疊狀態（多結果集時）：摺疊只藏內容不卸載，保留該格排序 / 篩選；新批次到達時重置。
   const [collapsedSets, setCollapsedSets] = useState<Record<number, boolean>>({});
-  // 「載入更多」：後端截斷（truncated）的結果集以 2× 目前列數為新上限重跑該條語句
-  // （原樣重送含 USE 前綴的 sent），僅覆蓋該格。非確定性查詢（NOW() 等）重跑結果可能不同。
-  const loadMoreRows = useCallback(async (i: number) => {
-    const s = resultSets[i];
-    if (!s || !activeId) return;
-    const newCap = Math.max(s.res.rows.length * 2, 100);
-    const t0 = performance.now();
-    try {
-      // 走 multi 版重跑：external 整批一次呼叫可能回多個結果集，以 setIdx 取「同一格」的新結果。
-      const arr = await api.runQueryMulti(activeId, s.sent ?? s.sql, newCap);
-      const res = arr[s.setIdx ?? 0];
-      if (!res) {
-        toast.error("重跑後結果集數量改變，無法載入更多");
-        return;
-      }
-      setResultSets((prev) => prev.map((p, j) => (j === i ? { ...p, res, ms: performance.now() - t0 } : p)));
-    } catch (e: any) {
-      toast.error(e?.message ?? "重新執行失敗");
-    }
-  }, [resultSets, activeId]);
   // 寫入一批新結果集（執行成功、或中途失敗但已有部分結果）：作用中重設為第一格、重置摺疊、遞增序號。
   const applyResultSets = useCallback((sets: ResultSetEntry[]) => {
     setResultSets(sets);
@@ -3301,7 +3281,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           }
           const ms = performance.now() - tStmt;
           // 逐集開格：有欄位的結果集各佔一格；無欄位者（DML）累計影響列數。
-          // setIdx 記回傳陣列原始索引（含 DML 元素），「載入更多」重跑後取同位。
+          // setIdx 記回傳陣列原始索引（含 DML 元素），匯出重跑後取同位。
           const grids: { res: QueryResult; setIdx: number }[] = [];
           let stmtAffected = 0;
           resArr.forEach((r, k) => {
@@ -4081,10 +4061,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             ) : elapsed !== null && <span className="inline-flex items-center gap-1" title="執行時間"><Icon icon={Clock} size={12} />{fmtElapsed(elapsed)}</span>}
             {bottomTab === "result" && result?.truncated && (
               <span className="inline-flex items-center gap-1.5 text-amber-400/90"
-                title="後端已於列數上限截斷（防止大結果集塞爆記憶體；上限可於設定調整）">
+                title="後端已於列數上限截斷（防止大結果集塞爆記憶體；上限可於設定調整；取完整結果請用匯出）">
                 已截斷於 {result.rows.length.toLocaleString()} 列
-                <button type="button" onClick={() => loadMoreRows(activeIdx)}
-                  className="underline decoration-dotted hover:text-amber-300">載入更多</button>
               </span>
             )}
             {bottomTab === "result" && rowsInfo && <span>{rowsInfo}</span>}
@@ -4181,11 +4159,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                           <span className={`shrink-0 font-medium ${i === activeIdx ? "text-accent" : "text-fg/60"}`}>結果 {i + 1}</span>
                           <span className="mono text-fg/35 truncate flex-1">{s.sql.replace(/\s+/g, " ").trim().slice(0, 200)}</span>
                           {s.res.truncated && (
-                            <button type="button" onClick={(e) => { e.stopPropagation(); loadMoreRows(i); }}
-                              className="shrink-0 text-amber-400/90 hover:text-amber-300"
-                              title="後端已於列數上限截斷；點擊以 2 倍上限重跑此語句">
-                              已截斷 · 載入更多
-                            </button>
+                            <span className="shrink-0 text-amber-400/90"
+                              title="後端已於列數上限截斷（取完整結果請用匯出）">
+                              已截斷
+                            </span>
                           )}
                           <span className="text-fg/45 shrink-0">{s.res.rows.length} 列 · {fmtElapsed(s.ms)}</span>
                         </header>
