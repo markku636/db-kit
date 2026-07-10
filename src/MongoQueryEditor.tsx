@@ -94,13 +94,13 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
     const target = extractTarget(value);
     if (!target || fieldsRef.current.has(`${target.db}.${target.coll}`)) return;
     const key = `${target.db}.${target.coll}`;
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       api
         .tableColumns(connId, target.db, target.coll)
         .then((cols) => fieldsRef.current.set(key, cols.map((c) => c.name)))
         .catch(() => fieldsRef.current.set(key, []));
     }, 400); // debounce：打字中不狂打後端
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [value, connId]);
 
   const extensions = useMemo<Extension[]>(() => {

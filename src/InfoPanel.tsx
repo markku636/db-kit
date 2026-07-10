@@ -252,8 +252,8 @@ function DatabaseInfo({ connId, db, kind, connected }: {
       try {
         const ts = await api.listTables(connId, db);
         if (!alive) return;
-        setTables(ts.filter((t) => t.kind !== "view").length);
-        setViews(ts.filter((t) => t.kind === "view").length);
+        setTables(ts.filter((item) => item.kind !== "view").length);
+        setViews(ts.filter((item) => item.kind === "view").length);
       } catch { if (alive) { setTables(null); setViews(null); } }
       if (kind === "mysql" || kind === "mariadb") {
         try {

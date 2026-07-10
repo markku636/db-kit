@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import Icon from "./Icon";
+import { useT } from "../i18n";
 
 export type ModalSize = "sm" | "md" | "lg" | "xl" | "full";
 
@@ -54,6 +55,7 @@ export default function Modal({
   className = "",
   children,
 }: ModalProps) {
+  const t = useT();
   const shellRef = useRef<HTMLDivElement>(null);
   const idRef = useRef<symbol | null>(null);
   if (idRef.current === null) idRef.current = Symbol("modal");
@@ -148,7 +150,7 @@ export default function Modal({
             <button
               type="button"
               onClick={onClose}
-              aria-label="關閉"
+              aria-label={t("關閉")}
               className="ml-auto w-7 h-7 grid place-items-center rounded text-fg/40 hover:text-fg hover:bg-fg/10 active:bg-fg/[0.14] shrink-0"
             >
               <Icon icon={X} size={16} />

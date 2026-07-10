@@ -73,8 +73,8 @@ function StatusTab({ connId }: { connId: string }) {
   }, [connId, nonce]);
   useEffect(() => {
     if (!auto) return;
-    const t = setInterval(() => setNonce((n) => n + 1), 2000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNonce((n) => n + 1), 2000);
+    return () => clearInterval(timer);
   }, [auto]);
 
   return (
@@ -181,8 +181,8 @@ function OpsTab({ connId, readonly }: { connId: string; readonly: boolean }) {
   }, [connId, nonce]);
   useEffect(() => {
     if (!auto) return;
-    const t = setInterval(() => setNonce((n) => n + 1), 2000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNonce((n) => n + 1), 2000);
+    return () => clearInterval(timer);
   }, [auto]);
 
   const kill = async (op: MongoOp) => {

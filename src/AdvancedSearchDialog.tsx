@@ -166,7 +166,7 @@ export default function AdvancedSearchDialog({ connId, kind, onClose }: {
 
   // 篩選狀態（從上次偏好還原）
   const [enabledTypes, setEnabledTypes] = useState<Set<string>>(() => {
-    const saved = prefs.types?.filter((t) => allTypes.includes(t));
+    const saved = prefs.types?.filter((opt) => allTypes.includes(opt));
     return saved && saved.length ? new Set(saved) : new Set(allTypes);
   });
   const [matchNames, setMatchNames] = useState(prefs.matchNames ?? true);
@@ -241,11 +241,11 @@ export default function AdvancedSearchDialog({ connId, kind, onClose }: {
   const allTypesOn = enabledTypes.size === allTypes.length;
   const allDbsOn = dbs.length > 0 && selectedDbs.size === dbs.length;
 
-  const toggleType = (t: string) => {
+  const toggleType = (kind: string) => {
     setEnabledTypes((prev) => {
       const next = new Set(prev);
-      if (next.has(t)) next.delete(t);
-      else next.add(t);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
       return next;
     });
   };
@@ -361,12 +361,12 @@ export default function AdvancedSearchDialog({ connId, kind, onClose }: {
     return null;
   };
   const revealInTree = (h: SearchHit) => {
-    const t = revealTarget(h);
-    if (!t) {
+    const val = revealTarget(h);
+    if (!val) {
       toast.info("此結果無對應資料表可定位");
       return;
     }
-    useStore.getState().revealInTree(connId, h.database, t.table, t.objKind);
+    useStore.getState().revealInTree(connId, h.database, val.table, val.objKind);
     onClose(); // 關閉全螢幕對話框，露出側欄
   };
 
@@ -618,20 +618,20 @@ export default function AdvancedSearchDialog({ connId, kind, onClose }: {
               >
                 {allTypesOn ? "全不選" : "全選"}
               </button>
-              {allTypes.map((t) => {
-                const on = enabledTypes.has(t);
-                const meta = TYPE_META[t];
+              {allTypes.map((opt) => {
+                const on = enabledTypes.has(opt);
+                const meta = TYPE_META[opt];
                 return (
                   <button
-                    key={t}
+                    key={opt}
                     type="button"
-                    onClick={() => toggleType(t)}
+                    onClick={() => toggleType(opt)}
                     className={`px-2 py-0.5 rounded border flex items-center gap-1.5 ${
                       on ? "border-fg/20 bg-fg/5" : "border-fg/10 opacity-45"
                     }`}
                   >
                     <span className="w-2 h-2 rounded-full" style={{ background: meta?.color ?? "#888" }} />
-                    {meta?.label ?? t}
+                    {meta?.label ?? opt}
                   </button>
                 );
               })}

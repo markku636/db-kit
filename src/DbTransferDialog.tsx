@@ -47,7 +47,7 @@ export default function DbTransferDialog({ connId, database, onClose }: {
   useEffect(() => {
     api.listTables(connId, database)
       .then((ts) => {
-        const names = ts.filter((t) => t.kind === "table").map((t) => t.name);
+        const names = ts.filter((item) => item.kind === "table").map((item) => item.name);
         setSrcTables(names);
         setPicked(new Set(names)); // 預設全選
       })
@@ -72,14 +72,14 @@ export default function DbTransferDialog({ connId, database, onClose }: {
   const sameDb = dstId === connId && dstDb === database;
   const visible = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    return f ? srcTables.filter((t) => t.toLowerCase().includes(f)) : srcTables;
+    return f ? srcTables.filter((tbl) => tbl.toLowerCase().includes(f)) : srcTables;
   }, [srcTables, filter]);
 
-  const toggle = (t: string) => setPicked((p) => { const n = new Set(p); n.has(t) ? n.delete(t) : n.add(t); return n; });
+  const toggle = (kind: string) => setPicked((p) => { const n = new Set(p); n.has(kind) ? n.delete(kind) : n.add(kind); return n; });
 
   const run = async () => {
     if (busy) return;
-    const tables = srcTables.filter((t) => picked.has(t));
+    const tables = srcTables.filter((tbl) => picked.has(tbl));
     if (tables.length === 0) { toast.error("請至少選一張資料表"); return; }
     if (sameDb) { toast.error("目標與來源是同一個資料庫"); return; }
     if (targetReadonly) { toast.error("目標連線為唯讀，無法寫入"); return; }
@@ -97,12 +97,12 @@ export default function DbTransferDialog({ connId, database, onClose }: {
     }
     const results: Outcome[] = [];
     for (let i = 0; i < ordered.length; i++) {
-      const t = ordered[i];
+      const val = ordered[i];
       try {
-        const res = await api.transferTable(connId, database, t, dstId, dstDb, t, { create_table: createTable, stop_on_error: false });
-        results.push({ table: t, transferred: res.transferred, failed: res.failed, created: res.created });
+        const res = await api.transferTable(connId, database, val, dstId, dstDb, val, { create_table: createTable, stop_on_error: false });
+        results.push({ table: val, transferred: res.transferred, failed: res.failed, created: res.created });
       } catch (e: any) {
-        results.push({ table: t, transferred: 0, failed: 0, created: false, error: e?.message ?? "傳輸失敗" });
+        results.push({ table: val, transferred: 0, failed: 0, created: false, error: e?.message ?? "傳輸失敗" });
       }
       setProgress({ done: i + 1, total: tables.length });
     }
@@ -170,14 +170,14 @@ export default function DbTransferDialog({ connId, database, onClose }: {
         <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="搜尋資料表…"
           className="w-full mb-1 text-xs px-2 py-1 rounded border border-fg/15 bg-app outline-none" />
         <div className="max-h-52 overflow-auto rounded border border-fg/10 bg-app/40 p-1">
-          {visible.map((t) => {
-            const o = outcomes?.find((x) => x.table === t);
+          {visible.map((item) => {
+            const o = outcomes?.find((x) => x.table === item);
             return (
-              <label key={t} className="flex items-center gap-2 px-2 py-0.5 text-xs hover:bg-fg/5 cursor-pointer">
-                <input type="checkbox" checked={picked.has(t)} onChange={() => toggle(t)} />
+              <label key={item} className="flex items-center gap-2 px-2 py-0.5 text-xs hover:bg-fg/5 cursor-pointer">
+                <input type="checkbox" checked={picked.has(item)} onChange={() => toggle(item)} />
                 <Icon icon={Table2} size={12} className="text-fg/30" />
-                <span className="truncate flex-1 mono">{t}</span>
-                {busy && progress && !o && picked.has(t) && <Icon icon={Loader2} size={11} className="animate-spin text-fg/30" />}
+                <span className="truncate flex-1 mono">{item}</span>
+                {busy && progress && !o && picked.has(item) && <Icon icon={Loader2} size={11} className="animate-spin text-fg/30" />}
                 {o && (o.error || o.failed > 0
                   ? <span className="text-red-400 text-[10px]">{o.error ? "失敗" : `${o.transferred}／失敗 ${o.failed}`}</span>
                   : <span className="text-emerald-400 text-[10px]">{o.transferred} 列{o.created ? " · 已建表" : ""}</span>)}

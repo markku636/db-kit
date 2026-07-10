@@ -45,16 +45,16 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
 
   // 「逆向至模型」聚焦：模型載入後若含目標表則持久高亮它（及其關聯線），不受滑鼠移動影響。
   useEffect(() => {
-    if (focusTable && model?.tables.some((t) => t.name === focusTable)) setFocused(focusTable);
+    if (focusTable && model?.tables.some((tbl) => tbl.name === focusTable)) setFocused(focusTable);
   }, [model, focusTable]);
 
   // 預設網格佈局；若 localStorage 有此 DB 的存檔位置則覆蓋（拖曳後的佈局可保留）。
   const gridLayout = (m: ErModel): Record<string, { x: number; y: number }> => {
     const p: Record<string, { x: number; y: number }> = {};
-    m.tables.forEach((t, i) => {
+    m.tables.forEach((tbl, i) => {
       const col = i % 4;
       const row = Math.floor(i / 4);
-      p[t.name] = { x: 24 + col * (CARD_W + 60), y: 24 + row * 250 };
+      p[tbl.name] = { x: 24 + col * (CARD_W + 60), y: 24 + row * 250 };
     });
     return p;
   };
@@ -73,8 +73,8 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
         const base = gridLayout(m);
         try {
           const saved = JSON.parse(localStorage.getItem(layoutKey) || "{}");
-          for (const t of m.tables) {
-            if (saved[t.name] && typeof saved[t.name].x === "number") base[t.name] = saved[t.name];
+          for (const val of m.tables) {
+            if (saved[val.name] && typeof saved[val.name].x === "number") base[val.name] = saved[val.name];
           }
         } catch {
           /* 忽略損毀的存檔 */
@@ -87,13 +87,13 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connId, db]);
 
-  const tableByName = (n: string) => model?.tables.find((t) => t.name === n);
-  const cardH = (t: ErTable) => 26 + t.columns.length * 20 + 4;
+  const tableByName = (n: string) => model?.tables.find((tbl) => tbl.name === n);
+  const cardH = (item: ErTable) => 26 + item.columns.length * 20 + 4;
   const center = (name: string) => {
-    const t = tableByName(name);
+    const tbl = tableByName(name);
     const p = pos[name];
-    if (!t || !p) return null;
-    return { x: p.x + CARD_W / 2, y: p.y + cardH(t) / 2 };
+    if (!tbl || !p) return null;
+    return { x: p.x + CARD_W / 2, y: p.y + cardH(tbl) / 2 };
   };
 
   const savePos = (p: Record<string, { x: number; y: number }>) => {
@@ -143,11 +143,11 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
     if (!model || !viewRef.current) return;
     let maxX = 1;
     let maxY = 1;
-    for (const t of model.tables) {
-      const p = pos[t.name];
+    for (const val of model.tables) {
+      const p = pos[val.name];
       if (!p) continue;
       maxX = Math.max(maxX, p.x + CARD_W);
-      maxY = Math.max(maxY, p.y + cardH(t));
+      maxY = Math.max(maxY, p.y + cardH(val));
     }
     const vw = viewRef.current.clientWidth - 48;
     const vh = viewRef.current.clientHeight - 48;
@@ -212,22 +212,22 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
                     );
                   })}
                 </svg>
-                {model.tables.map((t) => {
-                  const p = pos[t.name];
+                {model.tables.map((tbl) => {
+                  const p = pos[tbl.name];
                   if (!p) return null;
-                  const hot = active === t.name;
+                  const hot = active === tbl.name;
                   return (
-                    <div key={t.name}
-                      onMouseEnter={() => setHovered(t.name)}
-                      onMouseLeave={() => setHovered((h) => (h === t.name ? null : h))}
+                    <div key={tbl.name}
+                      onMouseEnter={() => setHovered(tbl.name)}
+                      onMouseLeave={() => setHovered((h) => (h === tbl.name ? null : h))}
                       className={`absolute bg-elevated rounded shadow-lg text-xs border ${hot ? "border-accent/80" : "border-fg/15"}`}
                       style={{ left: p.x, top: p.y, width: CARD_W }}>
                       <div className="px-2 py-1 bg-blue-500/25 rounded-t font-medium cursor-move select-none truncate"
-                        onPointerDown={(e) => startDrag(t.name, e)} title={t.name}>
-                        {t.name}
+                        onPointerDown={(e) => startDrag(tbl.name, e)} title={tbl.name}>
+                        {tbl.name}
                       </div>
                       <div>
-                        {t.columns.map((c) => (
+                        {tbl.columns.map((c) => (
                           <div key={c.name} className="flex items-center gap-1 px-2 py-0.5 border-t border-fg/5">
                             <span className="w-3 shrink-0 flex items-center">{c.pk ? <Icon icon={KeyRound} size={12} className="text-amber-400" /> : c.fk ? <Icon icon={Link2} size={12} className="text-blue-300" /> : null}</span>
                             <span className={`truncate flex-1 ${c.fk ? "text-blue-300" : ""}`}>{c.name}</span>

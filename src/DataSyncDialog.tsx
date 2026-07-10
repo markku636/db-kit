@@ -56,7 +56,7 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
     if (!dstDb) { setTables([]); return; }
     let alive = true;
     api.listTables(dstId, dstDb)
-      .then((ts) => { if (alive) setTables(ts.filter((t) => t.kind === "table").map((t) => t.name)); })
+      .then((ts) => { if (alive) setTables(ts.filter((item) => item.kind === "table").map((item) => item.name)); })
       .catch(() => { if (alive) setTables([]); });
     return () => { alive = false; };
   }, [dstId, dstDb]);
@@ -143,7 +143,7 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
         <span className="text-xs text-fg/40">資料表</span>
         <Select selectSize="sm" value={dstTable} onChange={(e) => { setDstTable(e.target.value); setRes(null); }}>
           {tables.length === 0 && <option value="">（此庫無資料表）</option>}
-          {tables.map((t) => <option key={t} value={t}>{t}</option>)}
+          {tables.map((tbl) => <option key={tbl} value={tbl}>{tbl}</option>)}
         </Select>
       </div>
 

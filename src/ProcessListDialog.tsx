@@ -43,8 +43,8 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
   // 自動更新：每 3 秒靜默重載；關閉 / 卸載時清除計時器。
   useEffect(() => {
     if (!auto || !sql) return;
-    const t = setInterval(() => { void refresh(true); }, 3000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => { void refresh(true); }, 3000);
+    return () => clearInterval(timer);
   }, [auto, sql, refresh]);
 
   // 終止：以每列第一欄為工作階段 ID（MySQL Id / PG pid）。ID 僅接受純數字（防注入）。

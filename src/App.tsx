@@ -2,6 +2,8 @@ import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo,
 import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
+import { LANGUAGES, useLang, useT, type Lang } from "./i18n";
+import { APP_NAME } from "./brand";
 import { EDITOR_THEMES, getEditorThemeDef, type EditorThemeId } from "./editorThemes";
 import TableView, { CellInspector } from "./TableView";
 import InfoPanel from "./InfoPanel";
@@ -41,7 +43,7 @@ import {
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
-  ScanSearch,
+  ScanSearch, Copy, ChevronDown, Globe,
   type LucideIcon,
 } from "lucide-react";
 
@@ -290,10 +292,10 @@ export default function App() {
   useEffect(() => {
     if (splash !== "show") return;
     const full = 1500;
-    const t = setTimeout(() => setSplash("leaving"), Math.max(300, full - performance.now()));
+    const timer = setTimeout(() => setSplash("leaving"), Math.max(300, full - performance.now()));
     const skip = () => setSplash("leaving");
     window.addEventListener("keydown", skip);
-    return () => { clearTimeout(t); window.removeEventListener("keydown", skip); };
+    return () => { clearTimeout(timer); window.removeEventListener("keydown", skip); };
   }, [splash]);
 
   // 鎖定畫面（z-300）會直接蓋住開場動畫（z-200），播了也看不到 → 直接標記完成，
@@ -429,7 +431,7 @@ export default function App() {
     const isConnected = !!active && connectedIds.has(active.id);
     return (
       <div className="h-7 bg-panel border-t border-fg/10 px-3 flex items-center text-xs text-fg/40 gap-4 min-w-0">
-        <span className="shrink-0">DB Kit</span>
+        <span className="shrink-0">{APP_NAME}</span>
         {active && (
           <span
             className="flex items-center gap-1.5 min-w-0"
@@ -567,6 +569,9 @@ function persistQueryGuard(g: QueryGuard) {
 
 // 設定對話框：「啟動密碼」（app-lock 閘門，不加密連線資料）與「查詢防護」（row cap / 逾時）。
 function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const t = useT();
+  const lang = useLang((s) => s.lang);
+  const setLang = useLang((s) => s.setLang);
   const [hasPw, setHasPw] = useState<boolean | null>(null);
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
@@ -631,19 +636,19 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
     <Modal
       open={open}
       onClose={onClose}
-      title="設定"
+      title={t("設定")}
       icon={Cog}
       size="sm"
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>關閉</Button>
+          <Button variant="ghost" onClick={onClose}>{t("關閉")}</Button>
           <Button
             variant="primary"
             loading={busy}
             disabled={!next || !confirm || (!!hasPw && !current)}
             onClick={save}
           >
-            {hasPw ? "更新密碼" : "啟用"}
+            {hasPw ? t("更新密碼") : t("啟用")}
           </Button>
         </>
       }
@@ -651,22 +656,36 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
       <div className="space-y-4">
         <div className="space-y-3">
           <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Palette} size={15} /> 主題（Dracula PRO）
+            <Icon icon={Globe} size={15} /> {t("語言")}
           </div>
           <p className="text-xs text-fg/50 leading-relaxed">
-            整個 app 的配色與深淺（側欄 / 工具列 / 表格 / 對話框 / 編輯器 / AI 助手），變更立即生效。
-            「光亮」為 Alucard 淺色，其餘為 Dracula 深色變體；上方工具列亦可快速切換。
+            {t("介面語言，變更立即生效、不需重啟；後端錯誤訊息與 dbk 命令列輸出也會跟著切換。上方工具列亦可快速切換。")}
           </p>
-          <Field label="配色主題">
+          <Field label={t("介面語言")}>
+            <Select selectSize="md" value={lang}
+              onChange={(e) => { void setLang(e.target.value as Lang); }}>
+              {LANGUAGES.map((l) => (
+                <option key={l.id} value={l.id}>{l.label}</option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+
+        <div className="space-y-3">
+          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+            <Icon icon={Palette} size={15} /> {t("主題")}
+          </div>
+          <p className="text-xs text-fg/50 leading-relaxed">
+            {t("整個 app 的配色與深淺（側欄 / 工具列 / 表格 / 對話框 / 編輯器 / AI 助手），變更立即生效。「光亮」為唯一的淺色配色，其餘皆為深色；上方工具列亦可快速切換。")}
+          </p>
+          <Field label={t("配色主題")}>
             <Select selectSize="md" value={themeId}
               onChange={(e) => setThemeId(e.target.value as EditorThemeId)}>
-              <option value="moonstone">光亮</option>
-              <option value="amethyst">暗黑</option>
-              <optgroup label="配色變體">
-                {EDITOR_THEMES.filter((t) => t.id !== "moonstone" && t.id !== "amethyst").map((t) => (
-                  <option key={t.id} value={t.id}>{t.label}</option>
-                ))}
-              </optgroup>
+              <option value="moonstone">{t("光亮")}</option>
+              <option value="amethyst">{t("暗黑")}</option>
+              {EDITOR_THEMES.filter((d) => d.id !== "moonstone" && d.id !== "amethyst").map((d) => (
+                <option key={d.id} value={d.id}>{t(d.label)}</option>
+              ))}
             </Select>
           </Field>
           {previewDef && (
@@ -832,91 +851,155 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
   onExportConns: () => void;
   onImportConns: () => void;
 }) {
+  const t = useT();
   const assistantOpen = useAssistant((s) => s.open);
   // 到 GitHub 查最新 Release（每天最多一次，失敗安靜略過）；比目前版本新才顯示標記。
   // 延後 10 秒發出：啟動最忙的時間窗（載入連線 / 首屏渲染）完全讓路；可於設定關閉自動檢查。
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   useEffect(() => {
     if (!autoCheckEnabled()) return;
-    const t = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       checkForUpdate()
         .then((r) => { if (r && isNewer(r.version, __APP_VERSION__)) setUpdate(r); })
         .catch(() => {});
     }, 10_000);
-    return () => window.clearTimeout(t);
+    return () => window.clearTimeout(timer);
   }, []);
   const tools: { icon: ReactNode; label: string; onClick: () => void; disabled: boolean; active?: boolean; hint?: string }[] = [
-    { icon: <Icon icon={Plug} size={20} />, label: "連線", onClick: onNewConnection, disabled: false },
-    { icon: <Icon icon={Network} size={20} />, label: "ER 圖", onClick: onEr, disabled: !canEr, hint: "需先連線到 MySQL / PostgreSQL / SQLite" },
-    { icon: <Icon icon={ScanSearch} size={20} />, label: "進階搜尋", onClick: onAdvSearch, disabled: !canAdvSearch, hint: "需先選取並連線一個連線（Ctrl+Shift+G）" },
-    { icon: <Icon icon={DatabaseBackup} size={20} />, label: "備份", onClick: onBackup, disabled: !canBackup, hint: "需先選取並連線一個連線" },
-    { icon: <Icon icon={Star} size={20} />, label: "收藏查詢", onClick: () => useStore.getState().openSavedManager(), disabled: false },
-    { icon: <Icon icon={Upload} size={20} />, label: "匯出連線", onClick: onExportConns, disabled: false },
-    { icon: <Icon icon={Download} size={20} />, label: "匯入連線", onClick: onImportConns, disabled: false },
-    { icon: <Icon icon={Sparkles} size={20} />, label: "AI 助手", onClick: () => useAssistant.getState().toggle(), disabled: false, active: assistantOpen },
-    { icon: <Icon icon={Keyboard} size={20} />, label: "快捷鍵 (F1)", onClick: onHelp, disabled: false },
-    { icon: <Icon icon={Cog} size={20} />, label: "設定", onClick: onSettings, disabled: false },
-    { icon: <Icon icon={Info} size={20} />, label: "關於", onClick: onAbout, disabled: false },
+    { icon: <Icon icon={Plug} size={20} />, label: t("連線"), onClick: onNewConnection, disabled: false },
+    { icon: <Icon icon={Network} size={20} />, label: t("ER 圖"), onClick: onEr, disabled: !canEr, hint: t("需先連線到 MySQL / PostgreSQL / SQLite") },
+    { icon: <Icon icon={ScanSearch} size={20} />, label: t("進階搜尋"), onClick: onAdvSearch, disabled: !canAdvSearch, hint: t("需先選取並連線一個連線（Ctrl+Shift+G）") },
+    { icon: <Icon icon={DatabaseBackup} size={20} />, label: t("備份"), onClick: onBackup, disabled: !canBackup, hint: t("需先選取並連線一個連線") },
+    { icon: <Icon icon={Star} size={20} />, label: t("收藏查詢"), onClick: () => useStore.getState().openSavedManager(), disabled: false },
+    { icon: <Icon icon={Upload} size={20} />, label: t("匯出連線"), onClick: onExportConns, disabled: false },
+    { icon: <Icon icon={Download} size={20} />, label: t("匯入連線"), onClick: onImportConns, disabled: false },
+    { icon: <Icon icon={Sparkles} size={20} />, label: t("AI 助手"), onClick: () => useAssistant.getState().toggle(), disabled: false, active: assistantOpen },
+    { icon: <Icon icon={Keyboard} size={20} />, label: t("快捷鍵 (F1)"), onClick: onHelp, disabled: false },
+    { icon: <Icon icon={Cog} size={20} />, label: t("設定"), onClick: onSettings, disabled: false },
+    { icon: <Icon icon={Info} size={20} />, label: t("關於"), onClick: onAbout, disabled: false },
   ];
+
+  // 工具列放不下時收成純圖示（標籤退到 title tooltip）。
+  //
+  // 為何需要量測而非寫死斷點：標籤寬度取決於語言（"Import connections" ≈「匯入連線」的 2.4 倍），
+  // 一個固定的 px 斷點對兩種語言都不會剛好。且視窗最小寬 900px 時，連中文都塞不下 —— 這是本次
+  // 之前就存在、只是被英文放大的問題。
+  //
+  // 遲滯（hysteresis）：收合後 scrollWidth 會縮小，若直接拿它判斷就會來回震盪。故在「展開狀態下」
+  // 記住所需的完整寬度 neededRef，只有可用寬度重新超過它才展開回去。
+  const barRef = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(false);
+  const neededRef = useRef(0);
+  // 換語言 → 標籤長度變了，先前記住的 neededRef 失效，重新從展開狀態量一次。
+  useLayoutEffect(() => { neededRef.current = 0; setCompact(false); }, [t]);
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const measure = () => {
+      if (!compact) {
+        if (bar.scrollWidth > bar.clientWidth) {
+          neededRef.current = bar.scrollWidth;
+          setCompact(true);
+        }
+      } else if (neededRef.current && bar.clientWidth >= neededRef.current) {
+        setCompact(false);
+      }
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, [compact, t]);
+
   return (
-    <div className="h-16 bg-bar border-b border-fg/10 flex items-center px-3 gap-1">
-      <div className="font-semibold text-fg/90 mr-4 pl-1 flex items-baseline gap-1.5">
-        <span>DB Kit</span>
+    <div ref={barRef} className="h-16 bg-bar border-b border-fg/10 flex items-center px-3 gap-1">
+      <div className="font-semibold text-fg/90 mr-4 pl-1 flex items-baseline gap-1.5 shrink-0">
+        <span>{APP_NAME}</span>
         <button
           type="button"
           onClick={onAbout}
-          title={`版本 ${__APP_VERSION__} · 點擊開啟「關於 DB Kit」`}
+          title={t("版本 {version} · 點擊開啟「關於 {app}」", { version: __APP_VERSION__, app: APP_NAME })}
           className="text-[11px] font-normal text-fg/40 tabular-nums hover:text-fg/70 hover:underline focus-visible:outline-2 focus-visible:outline-accent/60 rounded"
         >v{__APP_VERSION__}</button>
         {update && (
           <button
             type="button"
             onClick={() => api.openExternal(update.url).catch(() => {})}
-            title={`點擊前往下載 v${update.version}`}
+            title={t("點擊前往下載 v{version}", { version: update.version })}
             className="self-center text-[11px] font-medium text-accent hover:underline inline-flex items-center gap-1 focus-visible:outline-2 focus-visible:outline-accent/60 rounded"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-accent" aria-hidden />
-            有新版 v{update.version}
+            {t("有新版 v{version}", { version: update.version })}
           </button>
         )}
       </div>
-      {tools.map((t) => (
+      {/* 英文標籤約為中文的 1.6 倍寬（「匯入連線」4 字 vs "Import connections" 18 字），
+          原本的 w-16 固定寬會把字裁掉，故改為 min-w-16 + 內距撐開、不換行。
+          放不下時整列改為純圖示（compact），文字退到 title —— 見 useLayoutEffect 的量測。 */}
+      {tools.map((tool) => (
         <button
           type="button"
-          key={t.label}
-          onClick={t.onClick}
-          disabled={t.disabled}
-          title={t.disabled && t.hint ? t.hint : t.label}
-          {...(t.active !== undefined ? { "aria-pressed": t.active } : {})}
-          className={`w-16 h-12 flex flex-col items-center justify-center rounded hover:bg-fg/5 disabled:opacity-40 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-accent/60 ${
-            t.active ? "bg-accent/12 text-accent" : ""
+          key={tool.label}
+          onClick={tool.onClick}
+          disabled={tool.disabled}
+          title={tool.disabled && tool.hint ? tool.hint : tool.label}
+          {...(tool.active !== undefined ? { "aria-pressed": tool.active } : {})}
+          className={`${compact ? "w-11" : "min-w-16 px-2"} shrink-0 h-12 flex flex-col items-center justify-center rounded hover:bg-fg/5 disabled:opacity-40 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-accent/60 ${
+            tool.active ? "bg-accent/12 text-accent" : ""
           }`}
         >
-          <span className="text-lg leading-none">{t.icon}</span>
-          <span className="text-[11px] text-fg/60 mt-1">{t.label}</span>
+          <span className="text-lg leading-none">{tool.icon}</span>
+          {!compact && <span className="text-[11px] text-fg/60 mt-1 whitespace-nowrap">{tool.label}</span>}
         </button>
       ))}
-      <ThemeMenu />
+      {/* 主題 + 語言靠右成組；compact 時一併收窄並收起圖示，否則 900px（視窗最小寬）仍塞不下。 */}
+      <div className="ml-auto shrink-0 flex items-center gap-3 pl-3">
+        <LanguageMenu compact={compact} />
+        <ThemeMenu compact={compact} />
+      </div>
     </div>
   );
 }
 
-// ---- 主題選擇（配色 + 深淺整併）：工具列右側；光亮 / 暗黑 / 配色變體，取代原深淺滑桿 ----
-function ThemeMenu() {
+// 工具列右側的兩個下拉共用外框：compact 時收起圖示並收窄，讓 900px 的最小視窗仍放得下。
+const MENU_BOX = (compact: boolean) =>
+  `shrink-0 flex items-center gap-1.5 ${compact ? "w-24" : "w-32"}`;
+
+// ---- 主題選擇（配色 + 深淺整併）：工具列右側；所有配色平鋪為單層清單，取代原深淺滑桿 ----
+function ThemeMenu({ compact = false }: { compact?: boolean }) {
+  const t = useT();
   const themeId = useTheme((s) => s.themeId);
   const setThemeId = useTheme((s) => s.setThemeId);
   return (
-    <div className="ml-auto shrink-0 flex items-center gap-1.5 w-44" title="主題（配色 + 深淺）">
-      <Icon icon={Palette} size={16} className="text-fg/55 shrink-0" />
+    <div className={MENU_BOX(compact)} title={t("主題（配色 + 深淺）")}>
+      {!compact && <Icon icon={Palette} size={16} className="text-fg/55 shrink-0" />}
       <Select selectSize="sm" value={themeId}
         onChange={(e) => setThemeId(e.target.value as EditorThemeId)}>
-        <option value="moonstone">光亮</option>
-        <option value="amethyst">暗黑</option>
-        <optgroup label="配色變體">
-          {EDITOR_THEMES.filter((t) => t.id !== "moonstone" && t.id !== "amethyst").map((t) => (
-            <option key={t.id} value={t.id}>{t.label}</option>
-          ))}
-        </optgroup>
+        <option value="moonstone">{t("光亮")}</option>
+        <option value="amethyst">{t("暗黑")}</option>
+        {EDITOR_THEMES.filter((d) => d.id !== "moonstone" && d.id !== "amethyst").map((d) => (
+          <option key={d.id} value={d.id}>{t(d.label)}</option>
+        ))}
+      </Select>
+    </div>
+  );
+}
+
+// ---- 介面語言：與 ThemeMenu 同規格，選項來自 i18n 的 LANGUAGES 單一真相。
+// 語言名一律以該語言自己的寫法呈現（繁體中文 / English），不隨當前介面語言翻譯 —— 這樣
+// 誤切到看不懂的語言時，使用者仍找得回自己的母語。
+function LanguageMenu({ compact = false }: { compact?: boolean }) {
+  const t = useT();
+  const lang = useLang((s) => s.lang);
+  const setLang = useLang((s) => s.setLang);
+  return (
+    <div className={MENU_BOX(compact)} title={t("語言")}>
+      {!compact && <Icon icon={Globe} size={16} className="text-fg/55 shrink-0" />}
+      <Select selectSize="sm" value={lang}
+        onChange={(e) => { void setLang(e.target.value as Lang); }}>
+        {LANGUAGES.map((l) => (
+          <option key={l.id} value={l.id}>{l.label}</option>
+        ))}
       </Select>
     </div>
   );
@@ -1004,8 +1087,8 @@ interface DbObjects {
 }
 // 把 list_tables（含表 + 視圖）與 list_routines（含程序 / 函式 / 觸發器）拆成樹狀分組。
 const splitDbObjects = (tables: TableInfo[], routines: RoutineInfo[]): DbObjects => ({
-  tables: tables.filter((t) => t.kind !== "view"),
-  views: tables.filter((t) => t.kind === "view"),
+  tables: tables.filter((tbl) => tbl.kind !== "view"),
+  views: tables.filter((tbl) => tbl.kind === "view"),
   routines: routines.filter((r) => r.routine_type === "procedure" || r.routine_type === "function"),
 });
 // 物件分組資料夾預設展開狀態：全部預設收合（展開資料庫時不自動攤開資料表，避免大量物件一次塞滿）。
@@ -1084,6 +1167,7 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 
 // ---- 左側連線/物件樹 ----
 function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig) => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void }) {
+  const t = useT();
   const { connections, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
   const [databases, setDatabases] = useState<Record<string, string[]>>({});
   // 已展開的資料庫: 鍵為 connId:db，值為樹狀分組（資料表 / 檢視 / 函式）
@@ -1309,48 +1393,50 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     const items: PaletteItem[] = [];
     for (const c of connections) {
       items.push({
-        id: `conn:${c.id}`, label: c.name, hint: KIND_META[c.kind].label, group: "連線", icon: Database,
+        id: `conn:${c.id}`, label: c.name, hint: KIND_META[c.kind].label, group: "conn", icon: Database,
         run: () => { setActive(c.id); selectNode({ type: "connection", connId: c.id }); if (!connectedIds.has(c.id)) toggleConnect(c.id); },
       });
     }
     for (const [connId, dbs] of Object.entries(databases)) {
       const cn = connections.find((c) => c.id === connId)?.name ?? "";
-      for (const db of dbs) items.push({ id: `db:${connId}:${db}`, label: db, hint: cn, group: "資料庫", icon: Database, run: () => setActive(connId) });
+      for (const db of dbs) items.push({ id: `db:${connId}:${db}`, label: db, hint: cn, group: "db", icon: Database, run: () => setActive(connId) });
     }
     for (const [key, objs] of Object.entries(expandedDbs)) {
       const ci = key.indexOf(":");
       const connId = key.slice(0, ci);
       const db = key.slice(ci + 1);
       const cn = connections.find((c) => c.id === connId)?.name ?? "";
-      for (const t of [...objs.tables, ...objs.views]) {
+      for (const obj of [...objs.tables, ...objs.views]) {
         items.push({
-          id: `tbl:${key}:${t.name}`, label: t.name, hint: `${cn} · ${db}`, group: t.kind === "view" ? "視圖" : "資料表", icon: Table2,
-          run: () => { setActive(connId); useStore.getState().openTable(connId, db, t.name, "data", t.kind); },
+          id: `tbl:${key}:${obj.name}`, label: obj.name, hint: `${cn} · ${db}`, group: obj.kind === "view" ? "view" : "table", icon: Table2,
+          run: () => { setActive(connId); useStore.getState().openTable(connId, db, obj.name, "data", obj.kind); },
         });
       }
     }
-    items.push({ id: "act:query", label: "開啟查詢編輯器", group: "動作", icon: FileCode2, run: () => useStore.getState().setActiveTab("__query__") });
+    // 切到第一個查詢分頁（不寫死 __query__：第一個「查詢」分頁可被關掉）。
+    items.push({ id: "act:query", label: t("開啟查詢編輯器"), group: "action", icon: FileCode2, run: () => { const s = useStore.getState(); s.setActiveTab(s.queryTabs[0]); } });
     items.push({
-      id: "act:advsearch", label: "進階物件搜尋…", group: "動作", icon: Search,
+      id: "act:advsearch", label: t("進階物件搜尋…"), group: "action", icon: Search,
       run: () => {
         const c = connections.find((x) => x.id === activeId);
         if (c && connectedIds.has(c.id)) onAdvSearch(c.id, c.kind);
-        else toast.info("請先選取並連線一個連線");
+        else toast.info(t("請先選取並連線一個連線"));
       },
     });
-    items.push({ id: "act:theme", label: "切換深淺色主題", group: "動作", icon: Moon, run: () => useTheme.getState().toggle() });
+    items.push({ id: "act:theme", label: t("切換深淺色主題"), group: "action", icon: Moon, run: () => useTheme.getState().toggle() });
     // 釘選的常用表（含未展開資料庫者）也納入索引，確保最愛永遠可搜尋。
     for (const p of pins) {
       if (!connections.some((c) => c.id === p.connId)) continue;
       const cn = connections.find((c) => c.id === p.connId)?.name ?? "";
       items.push({
-        id: `pin:${p.connId}:${p.db}:${p.table}`, label: p.table, hint: `★ ${cn} · ${p.db}`, group: "常用", icon: Star,
+        id: `pin:${p.connId}:${p.db}:${p.table}`, label: p.table, hint: `★ ${cn} · ${p.db}`, group: "pinned", icon: Star,
         run: () => { setActive(p.connId); useStore.getState().openTable(p.connId, p.db, p.table, "data", p.kind); },
       });
     }
     return items;
+    // t 必須在依賴內：切換語言時 useT() 會換一個新的函式參考，此 memo 才會重算出新語言的標籤。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections, connectedIds, databases, expandedDbs, pins, activeId, onAdvSearch]);
+  }, [connections, connectedIds, databases, expandedDbs, pins, activeId, onAdvSearch, t]);
 
   const refreshDbs = async (id: string) => {
     if (!connectedIds.has(id)) return;
@@ -1656,7 +1742,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       await api.runQuery(m.connId, buildRenameTable(m.kind, m.db, m.table, name.trim()));
       // 舊分頁鍵已失效：關閉並以新名重開，保留原檢視（data / structure）。
       const oldKey = `${m.connId}:${m.db}:${m.table}`;
-      const oldTab = useStore.getState().tabs.find((t) => t.key === oldKey);
+      const oldTab = useStore.getState().tabs.find((tab) => tab.key === oldKey);
       useStore.getState().closeTableTab(m.connId, m.db, m.table);
       if (oldTab) useStore.getState().openTable(m.connId, m.db, name.trim(), oldTab.view);
       toast.success(`已重新命名為「${name.trim()}」`);
@@ -2003,7 +2089,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   // 搜尋過濾：連線依名稱、物件依名稱；搜尋物件名也會讓其所屬連線浮現。
   const q = filter.trim().toLowerCase();
   const objNames = (o: DbObjects) =>
-    [...o.tables, ...o.views].map((t) => t.name).concat(o.routines.map((r) => r.name));
+    [...o.tables, ...o.views].map((x) => x.name).concat(o.routines.map((r) => r.name));
   const connTableMatches = (connId: string) =>
     Object.entries(expandedDbs).some(
       ([k, o]) => k.startsWith(`${connId}:`) && objNames(o).some((n) => n.toLowerCase().includes(q))
@@ -2205,38 +2291,38 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                 const canRoutines = supportsRoutines(c.kind);
 
                 // 樹中的單一資料表 / 視圖節點（沿用選取 / 雙擊開啟 / 右鍵產生 SQL）。indent 控制縮排深度。
-                const objNode = (t: TableInfo, indent: string) => (
+                const objNode = (obj: TableInfo, indent: string) => (
                   <div
-                    key={`${t.kind}:${t.name}`}
+                    key={`${obj.kind}:${obj.name}`}
                     data-tree-conn={c.id}
                     data-tree-db={db}
-                    data-tree-table={t.name}
+                    data-tree-table={obj.name}
                     onClick={() => {
                       setActive(c.id);
-                      selectNode({ type: "table", connId: c.id, db, table: t.name, kind: c.kind, objKind: t.kind });
+                      selectNode({ type: "table", connId: c.id, db, table: obj.name, kind: c.kind, objKind: obj.kind });
                       // 單擊即開啟資料分頁（openTable 會去重：已開的表只切換、不重複開）。
-                      useStore.getState().openTable(c.id, db, t.name, "data", t.kind);
+                      useStore.getState().openTable(c.id, db, obj.name, "data", obj.kind);
                     }}
                     onContextMenu={
                       c.kind !== "redis"
                         ? (e) => {
                             e.preventDefault();
                             setActive(c.id);
-                            selectNode({ type: "table", connId: c.id, db, table: t.name, kind: c.kind, objKind: t.kind });
-                            setTableMenu({ connId: c.id, db, table: t.name, kind: c.kind, objKind: t.kind, x: e.clientX, y: e.clientY });
+                            selectNode({ type: "table", connId: c.id, db, table: obj.name, kind: c.kind, objKind: obj.kind });
+                            setTableMenu({ connId: c.id, db, table: obj.name, kind: c.kind, objKind: obj.kind, x: e.clientX, y: e.clientY });
                           }
                         : undefined
                     }
                     className={`${indent} pr-3 py-1.5 text-fg/55 cursor-pointer truncate flex items-center gap-1.5 ${
                       selectedNode?.type === "table" && selectedNode.connId === c.id &&
-                      selectedNode.db === db && selectedNode.table === t.name
+                      selectedNode.db === db && selectedNode.table === obj.name
                         ? "relative bg-accent/12 before:content-[''] before:absolute before:left-0 before:inset-y-0 before:w-[2px] before:bg-accent" : "hover:bg-fg/5"
                     }`}
                     title="單擊開啟資料；右鍵可產生 SELECT / 更多動作"
                   >
-                    <Icon icon={t.kind === "view" ? Eye : Table2} size={14}
-                      className={`shrink-0 ${t.kind === "view" ? "text-purple-300/80" : "text-sky-300/70"}`} />
-                    <span className="truncate">{t.name}</span>
+                    <Icon icon={obj.kind === "view" ? Eye : Table2} size={14}
+                      className={`shrink-0 ${obj.kind === "view" ? "text-purple-300/80" : "text-sky-300/70"}`} />
+                    <span className="truncate">{obj.name}</span>
                   </div>
                 );
 
@@ -2321,8 +2407,8 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                       // 每庫獨立篩選（與全域搜尋 AND）；套用後再算數量，使資料夾徽章與顯示列數一致。
                       const dq = (dbFilter[dbKey] ?? "").trim().toLowerCase();
                       const dbMatch = (name: string) => !dq || name.toLowerCase().includes(dq);
-                      const vTables = objs.tables.filter((t) => tableVisible(c.name, t.name) && dbMatch(t.name));
-                      const vViews = objs.views.filter((t) => tableVisible(c.name, t.name) && dbMatch(t.name));
+                      const vTables = objs.tables.filter((o) => tableVisible(c.name, o.name) && dbMatch(o.name));
+                      const vViews = objs.views.filter((o) => tableVisible(c.name, o.name) && dbMatch(o.name));
                       const vRoutines = objs.routines.filter((r) => tableVisible(c.name, r.name) && dbMatch(r.name));
                       return (
                         <>
@@ -2341,9 +2427,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                             </div>
                           </div>
                           {folderNode("tables", Table2, "text-sky-300/80", "資料表", vTables.length,
-                            <>{vTables.map((t) => objNode(t, "pl-16"))}</>)}
+                            <>{vTables.map((o) => objNode(o, "pl-16"))}</>)}
                           {folderNode("views", Eye, "text-purple-300/80", "檢視", vViews.length,
-                            <>{vViews.map((t) => objNode(t, "pl-16"))}</>)}
+                            <>{vViews.map((o) => objNode(o, "pl-16"))}</>)}
                           {canRoutines && folderNode("functions", FunctionSquare, "text-amber-300/90", "函式", vRoutines.length,
                             <>{vRoutines.map(routineNode)}</>)}
                         </>
@@ -2352,7 +2438,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
 
                     {objs && !isSqlKind && (
                       <>
-                        {objs.tables.filter((t) => tableVisible(c.name, t.name)).map((t) => objNode(t, "pl-12"))}
+                        {objs.tables.filter((o) => tableVisible(c.name, o.name)).map((o) => objNode(o, "pl-12"))}
                         {objs.tables.length === 0 && (
                           <div className="pl-12 pr-3 py-1 text-fg/25 text-xs">無表</div>
                         )}
@@ -2716,16 +2802,16 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
 // ---- 中央主工作區：分頁式（表分頁 + 查詢） ----
 function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
   const { connections, activeId, connectedIds, tabs, activeTabKey, setActiveTab, closeTab, closeOtherTabs, closeAllTabs,
-    queryTabs, addQueryTab, closeQueryTab, closeOtherQueryTabs } = useStore();
+    queryTabs, addQueryTab, closeQueryTab, closeOtherQueryTabs, closeAllQueryTabs } = useStore();
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   const [queryTabMenu, setQueryTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const activeTabRef = useRef<HTMLDivElement>(null);
   const queryTabRef = useRef<HTMLButtonElement>(null);
 
   const canUse = activeId && connectedIds.has(activeId);
-  const activeTab = tabs.find((t) => t.key === activeTabKey) ?? null;
-  // 作用中的查詢分頁 id（非表分頁時）：解析未知 / null → home「__query__」。
-  const activeQueryId = activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : "__query__";
+  const activeTab = tabs.find((tab) => tab.key === activeTabKey) ?? null;
+  // 作用中的查詢分頁 id（非表分頁時）：解析未知 / null → 第一個查詢分頁（home 可被關掉，不能寫死 __query__）。
+  const activeQueryId = activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : queryTabs[0];
 
   // 分頁鍵盤操作：Ctrl/Cmd+N 開新查詢、Ctrl/Cmd+Shift+N 新增連線、Ctrl/Cmd+W 關閉、
   // Ctrl+Tab / Ctrl+Shift+Tab 循環、Ctrl+1..9 跳轉（9=最後一個，含查詢分頁）。
@@ -2745,14 +2831,14 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
         return;
       }
       if (e.key === "w" || e.key === "W") {
-        // 表分頁 → 關表；額外查詢分頁 → 關該查詢分頁（home __query__ 不可關）。
-        if (activeTabKey && tabs.some((t) => t.key === activeTabKey)) { e.preventDefault(); closeTab(activeTabKey); return; }
-        if (activeTabKey && activeTabKey !== "__query__" && queryTabs.includes(activeTabKey)) { e.preventDefault(); closeQueryTab(activeTabKey); return; }
+        // 表分頁 → 關表；查詢分頁 → 關該查詢分頁（僅剩一個時 closeQueryTab 會自行忽略）。
+        if (activeTabKey && tabs.some((tab) => tab.key === activeTabKey)) { e.preventDefault(); closeTab(activeTabKey); return; }
+        if (activeTabKey && queryTabs.length > 1 && queryTabs.includes(activeTabKey)) { e.preventDefault(); closeQueryTab(activeTabKey); return; }
         return;
       }
       if (e.key === "t" || e.key === "T") { e.preventDefault(); addQueryTab(); return; } // Ctrl+T 新增查詢分頁
       // 所有表分頁後接所有查詢分頁，組成可循環 / 跳轉的鍵序列。
-      const keys = [...tabs.map((t) => t.key), ...queryTabs];
+      const keys = [...tabs.map((tab) => tab.key), ...queryTabs];
       if (e.key === "Tab") {
         e.preventDefault();
         const cur = keys.indexOf(activeTabKey ?? "");
@@ -2807,35 +2893,35 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
     <div className="flex-1 flex flex-col min-w-0">
       {/* 分頁列（中鍵關閉、右鍵選單） */}
       <div className="flex items-stretch bg-panel border-b border-fg/10 overflow-x-auto">
-        {tabs.map((t) => (
+        {tabs.map((tab) => (
           <div
-            key={t.key}
-            ref={t.key === activeTabKey ? activeTabRef : undefined}
-            onClick={() => setActiveTab(t.key)}
-            onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.key); } }}
+            key={tab.key}
+            ref={tab.key === activeTabKey ? activeTabRef : undefined}
+            onClick={() => setActiveTab(tab.key)}
+            onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(tab.key); } }}
             onContextMenu={(e) => {
               e.preventDefault();
-              setActiveTab(t.key);
-              setTabMenu({ key: t.key, x: e.clientX, y: e.clientY });
+              setActiveTab(tab.key);
+              setTabMenu({ key: tab.key, x: e.clientX, y: e.clientY });
             }}
-            title={`${t.database} · ${t.table}（中鍵關閉）`}
+            title={`${tab.database} · ${tab.table}（中鍵關閉）`}
             className={`flex items-center gap-2 pl-3 pr-2 py-1.5 text-xs border-r border-fg/10 cursor-pointer whitespace-nowrap ${
-              t.key === activeTabKey ? "bg-app text-fg shadow-[inset_0_-2px_0_rgb(var(--c-accent))]" : "text-fg/50 hover:bg-fg/5"
+              tab.key === activeTabKey ? "bg-app text-fg shadow-[inset_0_-2px_0_rgb(var(--c-accent))]" : "text-fg/50 hover:bg-fg/5"
             }`}
           >
             <Icon
-              icon={t.objKind === "view" ? Eye : Table2}
+              icon={tab.objKind === "view" ? Eye : Table2}
               size={13}
-              className={`shrink-0 ${t.objKind === "view" ? "text-purple-300/70" : "text-sky-300/70"}`}
+              className={`shrink-0 ${tab.objKind === "view" ? "text-purple-300/70" : "text-sky-300/70"}`}
             />
-            <span className="mono">{t.table}</span>
+            <span className="mono">{tab.table}</span>
             <button
               type="button"
-              aria-label={`關閉分頁 ${t.table}`}
+              aria-label={`關閉分頁 ${tab.table}`}
               title="關閉分頁"
               onClick={(e) => {
                 e.stopPropagation();
-                closeTab(t.key);
+                closeTab(tab.key);
               }}
               className="w-5 h-5 flex items-center justify-center rounded hover:bg-fg/15 text-fg/40 hover:text-fg/80"
             >
@@ -2850,15 +2936,15 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
               key={qid}
               label={i === 0 ? "查詢" : `查詢 ${i + 1}`}
               active={isActive}
-              closable={qid !== "__query__"}
+              closable={queryTabs.length > 1}
               btnRef={isActive ? queryTabRef : undefined}
               onActivate={() => setActiveTab(qid)}
               onClose={() => closeQueryTab(qid)}
               onContextMenu={(e) => {
                 e.preventDefault(); // 攔掉 WebView 預設右鍵選單
                 setActiveTab(qid);
-                // 只有 home 一個分頁時無任何可執行動作 → 不開空選單。
-                if (qid === "__query__" && queryTabs.length <= 1) return;
+                // 只剩一個查詢分頁時無任何可執行動作 → 不開空選單。
+                if (queryTabs.length <= 1) return;
                 setQueryTabMenu({ id: qid, x: e.clientX, y: e.clientY });
               }}
             />
@@ -2911,15 +2997,13 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
             style={{ left: queryTabMenu.x, top: queryTabMenu.y }}>
             {(() => {
               const qid = queryTabMenu.id;
-              const isHome = qid === "__query__"; // home「查詢」不可關
-              // 其他「可關」的查詢分頁（非自己、非 home）；全部關閉 = 只留 home。
-              const hasOtherClosable = queryTabs.some((t) => t !== qid && t !== "__query__");
-              const items: [string, () => void][] = [];
-              if (!isHome) items.push(["關閉查詢", () => closeQueryTab(qid)]);
-              if (hasOtherClosable || (isHome && queryTabs.length > 1))
-                items.push(["關閉其他查詢", () => closeOtherQueryTabs(qid)]);
-              if (!isHome && queryTabs.length > 1)
-                items.push(["全部關閉查詢", () => closeOtherQueryTabs("__query__")]);
+              // 任一查詢分頁（含第一個「查詢」）皆可關，前提是關完仍留得下至少一個。
+              // 只剩一個時 onContextMenu 已擋掉，不會走到這裡。
+              const items: [string, () => void][] = [
+                ["關閉查詢", () => closeQueryTab(qid)],
+                ["關閉其他查詢", () => closeOtherQueryTabs(qid)],
+                ["全部關閉查詢", () => closeAllQueryTabs()],
+              ];
               return items.map(([label, fn]) => (
                 <button key={label} type="button"
                   onClick={() => { setQueryTabMenu(null); fn(); }}
@@ -3162,6 +3246,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [showSnippets, setShowSnippets] = useState(false);
   // 工具列「更多」溢位選單：收納次要動作（開啟 / 另存 / 收藏 / 壓縮 / 大小寫 / 分析 / 視覺化解釋），讓主列不擁擠。
   const [showMore, setShowMore] = useState(false);
+  // 結果列的「複製 ▾」「匯出 ▾」溢位選單：四種複製格式 + 全部結果集動作都收進下拉，主列只留三顆。
+  const [showCopyMenu, setShowCopyMenu] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const editorRef = useRef<SqlEditorHandle>(null);
   // 下方分頁（致敬 Navicat 結果 / 摘要 / 解釋）：result=結果表格、summary=執行摘要、explain=視覺化執行計畫。
   const [bottomTab, setBottomTab] = useState<"result" | "summary" | "explain">("result");
@@ -3185,15 +3272,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     axis: "y",
   });
 
-  // Esc 關閉歷史 / 收藏 / 更多下拉（與選單 / 對話框一致）。
+  // Esc 關閉歷史 / 收藏 / 更多 / 複製 / 匯出下拉（與選單 / 對話框一致）。
   useEffect(() => {
-    if (!showHistory && !showSaved && !showSnippets && !showMore) return;
+    if (!showHistory && !showSaved && !showSnippets && !showMore && !showCopyMenu && !showExportMenu) return;
     const h = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setShowHistory(false); setShowSaved(false); setShowSnippets(false); setShowMore(false); }
+      if (e.key !== "Escape") return;
+      setShowHistory(false); setShowSaved(false); setShowSnippets(false);
+      setShowMore(false); setShowCopyMenu(false); setShowExportMenu(false);
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [showHistory, showSaved, showSnippets, showMore]);
+  }, [showHistory, showSaved, showSnippets, showMore, showCopyMenu, showExportMenu]);
 
   // 更新並持久化目前連線的查詢內容（使用者輸入 / 載入歷史 / Tab 縮排都走這裡）。
   // 空字串改用 removeItem（而非存 ""）：否則 loadPersistedSql 會把 "" 當「上次內容」回傳，
@@ -4207,21 +4296,65 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                     結果 {activeIdx + 1}
                   </button>
                 )}
-                <button type="button" onClick={() => exportRes && copyToClipboard(resultToCsv(exportRes), "已複製結果 (CSV)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 CSV</button>
-                <button type="button" onClick={() => exportRes && copyToClipboard(resultToTsv(exportRes), "已複製結果 (TSV)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 TSV</button>
-                <button type="button" onClick={() => exportRes && copyToClipboard(resultToJson(exportRes), "已複製結果 (JSON)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 JSON</button>
-                <button type="button" onClick={() => exportRes && copyToClipboard(resultToMarkdown(exportRes), "已複製結果 (Markdown)")} title="複製目前所見（含排序 / 篩選）" className="hover:text-fg/80">複製 MD</button>
-                {resultSets.length > 1 && (
-                  <button type="button" onClick={copyAllResults}
-                    title="把全部結果集串成 Markdown 分節複製（## 結果 N + 原 SQL + 表格）"
-                    className="text-accent/80 hover:text-accent">複製全部</button>
-                )}
-                <button type="button" onClick={exportResult} className="inline-flex items-center gap-1 hover:text-fg/80"><Icon icon={Download} size={12} />匯出</button>
-                {resultSets.length > 1 && (
-                  <button type="button" onClick={exportAllResults}
-                    title="全部結果集一次匯出：Excel 一格一工作表；CSV/TSV 拆編號多檔；JSON/MD/SQL 單檔分節"
-                    className="inline-flex items-center gap-1 text-accent/80 hover:text-accent"><Icon icon={Download} size={12} />全部匯出</button>
-                )}
+                {/* 複製 ▾：主鍵直接複製 CSV（最常用），四種格式與「全部結果集」收進下拉，主列不再平鋪四顆。 */}
+                <div className="relative">
+                  <button type="button" onClick={() => setShowCopyMenu((s) => !s)}
+                    title="複製目前所見（含排序 / 篩選）"
+                    className="inline-flex items-center gap-1 hover:text-fg/80">
+                    <Icon icon={Copy} size={12} />複製<Icon icon={ChevronDown} size={11} className="text-fg/40" />
+                  </button>
+                  {showCopyMenu && (
+                    <>
+                      <div className="fixed inset-0 z-[89]" onClick={() => setShowCopyMenu(false)} />
+                      <div className="absolute right-0 bottom-full mb-1 z-[90] w-52 bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1 text-xs">
+                        {([
+                          ["CSV", resultToCsv, "已複製結果 (CSV)"],
+                          ["TSV", resultToTsv, "已複製結果 (TSV)"],
+                          ["JSON", resultToJson, "已複製結果 (JSON)"],
+                          ["Markdown", resultToMarkdown, "已複製結果 (Markdown)"],
+                        ] as [string, (r: QueryResult) => string, string][]).map(([label, fn, msg]) => (
+                          <button key={label} type="button"
+                            onClick={() => { setShowCopyMenu(false); if (exportRes) copyToClipboard(fn(exportRes), msg); }}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-fg/75 hover:bg-fg/10">
+                            <Icon icon={Copy} size={12} className="text-fg/45" />複製為 {label}
+                          </button>
+                        ))}
+                        {resultSets.length > 1 && (
+                          <button type="button" onClick={() => { setShowCopyMenu(false); copyAllResults(); }}
+                            title="把全部結果集串成 Markdown 分節複製（## 結果 N + 原 SQL + 表格）"
+                            className="flex w-full items-center gap-2 px-3 py-1.5 mt-1 text-left text-accent/90 hover:bg-fg/10 border-t border-fg/10">
+                            <Icon icon={Copy} size={12} className="text-accent/60" />複製全部結果集
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+                {/* 匯出 ▾：單一結果集時只有一項（點主鍵即開匯出對話框）；多結果集才多一項「全部結果集匯出」。 */}
+                <div className="relative">
+                  <button type="button"
+                    onClick={() => (resultSets.length > 1 ? setShowExportMenu((s) => !s) : exportResult())}
+                    title="匯出結果" className="inline-flex items-center gap-1 hover:text-fg/80">
+                    <Icon icon={Download} size={12} />匯出
+                    {resultSets.length > 1 && <Icon icon={ChevronDown} size={11} className="text-fg/40" />}
+                  </button>
+                  {showExportMenu && (
+                    <>
+                      <div className="fixed inset-0 z-[89]" onClick={() => setShowExportMenu(false)} />
+                      <div className="absolute right-0 bottom-full mb-1 z-[90] w-56 bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1 text-xs">
+                        <button type="button" onClick={() => { setShowExportMenu(false); exportResult(); }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-fg/75 hover:bg-fg/10">
+                          <Icon icon={Download} size={12} className="text-fg/45" />匯出目前結果…
+                        </button>
+                        <button type="button" onClick={() => { setShowExportMenu(false); exportAllResults(); }}
+                          title="全部結果集一次匯出：Excel 一格一工作表；CSV/TSV 拆編號多檔；JSON/MD/SQL 單檔分節"
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-accent/90 hover:bg-fg/10">
+                          <Icon icon={Download} size={12} className="text-accent/60" />全部結果集匯出…
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
                 <button type="button" onClick={askAiResult} title="把這份結果帶進 AI 助手分析" className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"><Icon icon={Sparkles} size={12} />問 AI</button>
               </div>
             )}
@@ -4397,6 +4530,15 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
 
   // client-side 篩選：任一儲存格含關鍵字（不分大小寫）。在排序後套用。
   const [rfilter, setRfilter] = useState("");
+  // 篩選框預設收合成一顆放大鏡（w-64 的輸入框恆常展開會把結果格標頭擠滿）。
+  // 展開來源：點 icon 或格內 Ctrl+F；收合條件：Esc / blur 且字串為空（有篩選字時恆保持展開，
+  // 否則使用者看不出結果已被篩過）。
+  const [filterOpen, setFilterOpen] = useState(false);
+  const filterRef = useRef<HTMLInputElement>(null);
+  const openFilter = useCallback(() => {
+    setFilterOpen(true);
+    requestAnimationFrame(() => filterRef.current?.focus());
+  }, []);
   const viewRows = useMemo(() => {
     const q = rfilter.trim().toLowerCase();
     if (!q) return sortedRows;
@@ -4485,6 +4627,12 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
       else { setSelected(null); setRangeEnd(null); }
       return;
     }
+    // Ctrl+F：展開篩選框並聚焦（收合狀態下唯一的鍵盤入口）。
+    if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+      e.preventDefault();
+      openFilter();
+      return;
+    }
     // Ctrl+A：框選整頁所有儲存格（接著 Ctrl+C 複製、或工具列看統計）。
     if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
       e.preventDefault();
@@ -4544,21 +4692,38 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   return (
     <div className="outline-none" tabIndex={0} onKeyDown={onKey}>
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-fg/10 bg-panel sticky top-0 z-10">
-        <div className="relative">
-          <input
-            value={rfilter}
-            onChange={(e) => setRfilter(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Escape" && rfilter) { e.stopPropagation(); setRfilter(""); } }}
-            placeholder="篩選結果（任一欄含關鍵字）…"
-            className="w-64 bg-inset border border-fg/10 rounded px-2 py-1 pr-6 text-xs outline-none focus:border-accent"
-          />
-          {rfilter && (
-            <button type="button" onClick={() => setRfilter("")} title="清除篩選" aria-label="清除篩選"
-              className="absolute right-1 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded text-fg/30 hover:text-fg/70 hover:bg-fg/10">
-              <Icon icon={X} size={12} />
-            </button>
-          )}
-        </div>
+        {filterOpen || rfilter ? (
+          <div className="relative">
+            <Icon icon={Search} size={12}
+              className="absolute left-2 top-1/2 -translate-y-1/2 text-fg/35 pointer-events-none" />
+            <input
+              ref={filterRef}
+              value={rfilter}
+              onChange={(e) => setRfilter(e.target.value)}
+              // Esc：先清空，再收合（兩段式，與側欄搜尋一致）。stopPropagation 免得順帶取消儲存格選取。
+              onKeyDown={(e) => {
+                if (e.key !== "Escape") return;
+                e.stopPropagation();
+                if (rfilter) setRfilter("");
+                else setFilterOpen(false);
+              }}
+              onBlur={() => { if (!rfilter) setFilterOpen(false); }}
+              placeholder="篩選結果（任一欄含關鍵字）…"
+              className="w-64 bg-inset border border-fg/10 rounded pl-7 pr-6 py-1 text-xs outline-none focus:border-accent"
+            />
+            {rfilter && (
+              <button type="button" onClick={() => { setRfilter(""); setFilterOpen(false); }} title="清除篩選" aria-label="清除篩選"
+                className="absolute right-1 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded text-fg/30 hover:text-fg/70 hover:bg-fg/10">
+                <Icon icon={X} size={12} />
+              </button>
+            )}
+          </div>
+        ) : (
+          <button type="button" onClick={openFilter} title="篩選結果（Ctrl+F）" aria-label="篩選結果"
+            className="w-7 h-7 flex items-center justify-center rounded text-fg/40 hover:text-fg/80 hover:bg-fg/10">
+            <Icon icon={Search} size={14} />
+          </button>
+        )}
         <span className="text-xs text-fg/40">
           {rfilter.trim() ? `${viewRows.length} / ${result.rows.length} 列` : `${result.rows.length} 列`}
         </span>

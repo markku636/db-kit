@@ -518,8 +518,8 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
       <div className="group max-w-full w-full rounded-lg px-3 py-2 bg-fg/5 text-fg/90">
         {msg.tools.length > 0 && (
           <div className="mb-1.5 flex flex-wrap gap-1">
-            {msg.tools.map((t) => (
-              <span key={t} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-fg/10 text-fg/50"><Icon icon={Settings} size={13} /> {t}</span>
+            {msg.tools.map((item) => (
+              <span key={item} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-fg/10 text-fg/50"><Icon icon={Settings} size={13} /> {item}</span>
             ))}
           </div>
         )}
@@ -559,15 +559,15 @@ function parseBlocks(text: string): Block[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     if (m.index > last) {
-      const t = text.slice(last, m.index).replace(/^\n+|\n+$/g, "");
-      if (t) out.push({ type: "text", text: t });
+      const val = text.slice(last, m.index).replace(/^\n+|\n+$/g, "");
+      if (val) out.push({ type: "text", text: val });
     }
     out.push({ type: "code", lang: (m[1] || "").toLowerCase(), code: m[2].replace(/\n$/, "") });
     last = re.lastIndex;
   }
   if (last < text.length) {
-    const t = text.slice(last).replace(/^\n+|\n+$/g, "");
-    if (t) out.push({ type: "text", text: t });
+    const val = text.slice(last).replace(/^\n+|\n+$/g, "");
+    if (val) out.push({ type: "text", text: val });
   }
   if (out.length === 0) out.push({ type: "text", text });
   return out;

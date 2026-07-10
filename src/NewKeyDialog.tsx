@@ -89,10 +89,10 @@ export default function NewKeyDialog({ connId, database, onClose, onCreated }: {
           <div className="space-y-1">
             <label className="text-xs text-fg/50">型別</label>
             <div className="flex gap-1">
-              {TYPES.map((t) => (
-                <button key={t.v} type="button" onClick={() => setType(t.v)}
-                  className={`px-2.5 py-1 text-xs rounded ${type === t.v ? "bg-accent text-white" : "bg-fg/5 text-fg/60 hover:bg-fg/10"}`}>
-                  {t.label}
+              {TYPES.map((opt) => (
+                <button key={opt.v} type="button" onClick={() => setType(opt.v)}
+                  className={`px-2.5 py-1 text-xs rounded ${type === opt.v ? "bg-accent text-white" : "bg-fg/5 text-fg/60 hover:bg-fg/10"}`}>
+                  {opt.label}
                 </button>
               ))}
             </div>

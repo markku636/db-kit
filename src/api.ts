@@ -485,6 +485,9 @@ export const api = {
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   // 清除外部 gateway 等驅動的查詢快取（供「重新整理」強制重抓）。
   clearCache: (id: string) => invoke<void>("clear_cache", { id }),
+  // 介面語言同步給後端：Rust 錯誤訊息與 dbk CLI 共用 app_settings.json 的 lang。
+  // 後端 command 尚未上線時會 reject —— 呼叫端（i18n.setLang）已 catch，不擋 UI 切換。
+  setLang: (lang: string) => invoke<void>("set_lang", { lang }),
   // 啟動密碼（app-lock 閘門）：Argon2 雜湊存後端 app_settings.json，明文不落地、不入 keychain。
   hasStartupPassword: () => invoke<boolean>("has_startup_password"),
   verifyStartupPassword: (password: string) =>

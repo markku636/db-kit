@@ -52,7 +52,7 @@ export default function PubSubPanel({ connId, connName, onClose }: {
   }, [lines, paused]);
 
   const splitTokens = (s: string) =>
-    s.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean);
+    s.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
 
   const subscribe = async () => {
     const channels = splitTokens(channelsInput);

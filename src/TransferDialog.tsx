@@ -68,7 +68,7 @@ export default function TransferDialog({ connId, database, table, onClose }: {
     api.listTables(dstId, dstDb)
       .then((ts) => {
         if (!alive) return;
-        const names = ts.filter((t) => t.kind === "table").map((t) => t.name);
+        const names = ts.filter((item) => item.kind === "table").map((item) => item.name);
         setTables(names);
         // 預設不選中與來源同庫同名的表（避免自我傳輸）；否則選第一個。
         setDstTable((cur) => {
@@ -159,7 +159,7 @@ export default function TransferDialog({ connId, database, table, onClose }: {
           ) : (
             <Select selectSize="sm" value={dstTable} onChange={(e) => setDstTable(e.target.value)}>
               {tables.length === 0 && <option value="">（此庫無資料表）</option>}
-              {tables.map((t) => <option key={t} value={t}>{t}</option>)}
+              {tables.map((tbl) => <option key={tbl} value={tbl}>{tbl}</option>)}
             </Select>
           )}
         </div>

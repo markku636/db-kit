@@ -24,7 +24,7 @@ export default function DbDataDictionary({ connId, db, onClose }: {
     let cancelled = false;
     (async () => {
       try {
-        const ts = (await api.listTables(connId, db)).filter((t) => t.kind === "table");
+        const ts = (await api.listTables(connId, db)).filter((item) => item.kind === "table");
         if (cancelled) return;
         const target = ts.slice(0, MAX_TABLES);
         setTruncated(ts.length > MAX_TABLES);
@@ -36,13 +36,13 @@ export default function DbDataDictionary({ connId, db, onClose }: {
         const worker = async () => {
           while (idx < target.length && !cancelled) {
             const myi = idx++;
-            const t = target[myi];
+            const val = target[myi];
             const [cols, ix, fks] = await Promise.all([
-              api.tableColumns(connId, db, t.name).catch(() => [] as ColumnInfo[]),
-              api.tableIndexes(connId, db, t.name).catch(() => [] as IndexInfo[]),
-              api.listForeignKeys(connId, db, t.name).catch(() => [] as ForeignKeyInfo[]),
+              api.tableColumns(connId, db, val.name).catch(() => [] as ColumnInfo[]),
+              api.tableIndexes(connId, db, val.name).catch(() => [] as IndexInfo[]),
+              api.listForeignKeys(connId, db, val.name).catch(() => [] as ForeignKeyInfo[]),
             ]);
-            results[myi] = { name: t.name, cols, idx: ix, fks };
+            results[myi] = { name: val.name, cols, idx: ix, fks };
             done++;
             if (!cancelled) setProgress({ done, total: target.length });
           }

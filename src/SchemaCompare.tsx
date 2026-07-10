@@ -48,7 +48,7 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
   const genSyncSql = async (tables: string[]) => {
     setGenBusy(true);
     try {
-      const ddls = await Promise.all(tables.map((t) => api.tableDdl(connId, sourceDb, t).catch(() => `-- 取得 ${t} 的 DDL 失敗`)));
+      const ddls = await Promise.all(tables.map((tbl) => api.tableDdl(connId, sourceDb, tbl).catch(() => `-- 取得 ${tbl} 的 DDL 失敗`)));
       const tgtConnName = connections.find((c) => c.id === targetConnId)?.name ?? "";
       setSyncSql(
         `-- 於目標「${tgtConnName} · ${target}」執行以補齊來源「${sourceDb}」有而目標缺少的資料表\n\n` +
@@ -154,15 +154,15 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
               <div>
                 <div className="text-xs text-fg/45 mb-1">兩邊皆有（{diff.common.length}）— 點選比對欄位</div>
                 <div className="space-y-1.5">
-                  {diff.common.map((t) => {
-                    const cd = colDiffs[t];
+                  {diff.common.map((item) => {
+                    const cd = colDiffs[item];
                     const d = cd && cd !== "loading" ? cd.diff : null;
                     const hasDiff = d && (d.added.length || d.removed.length || d.changed.length);
                     return (
-                      <div key={t} className="rounded border border-fg/10">
-                        <button type="button" onClick={() => compareCols(t)}
+                      <div key={item} className="rounded border border-fg/10">
+                        <button type="button" onClick={() => compareCols(item)}
                           className="w-full text-left px-3 py-1.5 mono text-xs hover:bg-fg/5 flex items-center gap-2">
-                          <span className="text-fg/80">{t}</span>
+                          <span className="text-fg/80">{item}</span>
                           {cd === "loading" && <span className="text-fg/40">比對中…</span>}
                           {d && (hasDiff
                             ? <span className="text-amber-300">有差異</span>
@@ -180,12 +180,12 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
                             <div className="flex gap-3 mt-1">
                               {cd !== "loading" && cd.addCols.length > 0 && (
                                 <button type="button"
-                                  onClick={() => copyToClipboard(buildAddColumnsDdl(kind, target, t, cd.addCols), "已複製 ADD COLUMN SQL")}
+                                  onClick={() => copyToClipboard(buildAddColumnsDdl(kind, target, item, cd.addCols), "已複製 ADD COLUMN SQL")}
                                   className="text-blue-400 hover:text-blue-300">複製補欄位 SQL</button>
                               )}
                               {cd !== "loading" && cd.changedCols.length > 0 && (
                                 <button type="button"
-                                  onClick={() => copyToClipboard(buildModifyColumnsDdl(kind, target, t, cd.changedCols), "已複製 MODIFY SQL")}
+                                  onClick={() => copyToClipboard(buildModifyColumnsDdl(kind, target, item, cd.changedCols), "已複製 MODIFY SQL")}
                                   className="text-amber-400 hover:text-amber-300">複製改型別 SQL</button>
                               )}
                             </div>

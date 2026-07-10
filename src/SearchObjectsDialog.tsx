@@ -45,7 +45,7 @@ function typesForKind(kind: DbKind): string[] {
 }
 
 // 可檢視完整定義（DDL）的型別。
-const canViewDef = (t: string) => ["view", "procedure", "function", "trigger"].includes(t);
+const canViewDef = (kind: string) => ["view", "procedure", "function", "trigger"].includes(kind);
 
 // 篩選偏好持久化（跨開啟記住比對範圍與型別；資料庫選擇因連線而異，不持久化）。
 const PREFS_KEY = "dbkit:sqlsearch:prefs";
@@ -98,7 +98,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
 
   // 篩選狀態（從上次偏好還原）
   const [enabledTypes, setEnabledTypes] = useState<Set<string>>(() => {
-    const saved = prefs.types?.filter((t) => allTypes.includes(t));
+    const saved = prefs.types?.filter((opt) => allTypes.includes(opt));
     return saved && saved.length ? new Set(saved) : new Set(allTypes);
   });
   const [matchNames, setMatchNames] = useState(prefs.matchNames ?? true);
@@ -157,11 +157,11 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
   const allTypesOn = enabledTypes.size === allTypes.length;
   const allDbsOn = dbs.length > 0 && selectedDbs.size === dbs.length;
 
-  const toggleType = (t: string) => {
+  const toggleType = (kind: string) => {
     setEnabledTypes((prev) => {
       const next = new Set(prev);
-      if (next.has(t)) next.delete(t);
-      else next.add(t);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
       return next;
     });
   };
@@ -274,8 +274,8 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
       arr.push(h);
       byType.set(h.object_type, arr);
     }
-    const order = [...allTypes, ...Array.from(byType.keys()).filter((t) => !allTypes.includes(t))];
-    return order.filter((t) => byType.has(t)).map((t) => ({ type: t, hits: byType.get(t)! }));
+    const order = [...allTypes, ...Array.from(byType.keys()).filter((item) => !allTypes.includes(item))];
+    return order.filter((item) => byType.has(item)).map((item) => ({ type: item, hits: byType.get(item)! }));
   }, [results, allTypes]);
 
   // 扁平化（鍵盤導覽用），與顯示順序一致；各分組的起始扁平索引。
@@ -438,20 +438,20 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
               >
                 {allTypesOn ? "全不選" : "全選"}
               </button>
-              {allTypes.map((t) => {
-                const on = enabledTypes.has(t);
-                const meta = TYPE_META[t];
+              {allTypes.map((opt) => {
+                const on = enabledTypes.has(opt);
+                const meta = TYPE_META[opt];
                 return (
                   <button
-                    key={t}
+                    key={opt}
                     type="button"
-                    onClick={() => toggleType(t)}
+                    onClick={() => toggleType(opt)}
                     className={`px-2 py-0.5 rounded border flex items-center gap-1.5 ${
                       on ? "border-fg/20 bg-fg/5" : "border-fg/10 opacity-45"
                     }`}
                   >
                     <span className="w-2 h-2 rounded-full" style={{ background: meta?.color ?? "#888" }} />
-                    {meta?.label ?? t}
+                    {meta?.label ?? opt}
                   </button>
                 );
               })}

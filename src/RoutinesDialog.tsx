@@ -205,9 +205,9 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
           <>
             <div className="px-5 py-2 border-b border-fg/10 flex items-center gap-2">
               <span className="text-xs text-fg/45">新增：</span>
-              {(NEW_TYPES[kind] ?? []).map((t) => (
-                <button key={t} type="button" onClick={() => openNew(t)}
-                  className="text-xs px-2 py-1 rounded bg-fg/5 hover:bg-fg/10 inline-flex items-center gap-1"><Icon icon={Plus} size={13} /> {TYPE_LABEL[t]}</button>
+              {(NEW_TYPES[kind] ?? []).map((item) => (
+                <button key={item} type="button" onClick={() => openNew(item)}
+                  className="text-xs px-2 py-1 rounded bg-fg/5 hover:bg-fg/10 inline-flex items-center gap-1"><Icon icon={Plus} size={13} /> {TYPE_LABEL[item]}</button>
               ))}
               <button type="button" onClick={() => refresh()} className="ml-auto text-xs text-fg/40 hover:text-fg/70">重新整理</button>
             </div>

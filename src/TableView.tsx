@@ -1965,8 +1965,8 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
-      const t = e.target as HTMLElement | null;
-      const inField = t?.tagName === "INPUT" || t?.tagName === "TEXTAREA" || !!t?.isContentEditable;
+      const target = e.target as HTMLElement | null;
+      const inField = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || !!target?.isContentEditable;
       if (inField) return;
       if ((e.key === "ArrowUp" || e.key === "PageUp") && hasPrev) { e.preventDefault(); onPrev(); }
       else if ((e.key === "ArrowDown" || e.key === "PageDown") && hasNext) { e.preventDefault(); onNext(); }
@@ -2534,9 +2534,9 @@ function StringEditor({ value, onSave, busy, truncated, valueBytes, onLoadFull }
 
 // JSON 美化：可解析則回傳縮排字串，否則 null。
 function tryPrettyJson(s: string): string | null {
-  const t = s.trim();
-  if (!t || (t[0] !== "{" && t[0] !== "[")) return null;
-  try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return null; }
+  const trimmed = s.trim();
+  if (!trimmed || (trimmed[0] !== "{" && trimmed[0] !== "[")) return null;
+  try { return JSON.stringify(JSON.parse(trimmed), null, 2); } catch { return null; }
 }
 
 // UTF-8 位元組長度。
@@ -3098,9 +3098,9 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   };
   // 修改欄位型別（MySQL / PostgreSQL；SQLite 不支援）。保留目前可空性。
   const modifyType = async (name: string, currentType: string, nullable: boolean) => {
-    const t = await uiPrompt("新型別", { title: `修改欄位「${name}」型別`, defaultValue: currentType, placeholder: "如 VARCHAR(100) / int / text" });
-    if (!t?.trim() || t.trim() === currentType) return;
-    doAlter({ op: "modify_column", name, data_type: t.trim(), nullable }, "欄位型別已修改");
+    const input = await uiPrompt("新型別", { title: `修改欄位「${name}」型別`, defaultValue: currentType, placeholder: "如 VARCHAR(100) / int / text" });
+    if (!input?.trim() || input.trim() === currentType) return;
+    doAlter({ op: "modify_column", name, data_type: input.trim(), nullable }, "欄位型別已修改");
   };
   // 切換欄位可空（保留型別）；改 NOT NULL 若有 NULL 值會由 DB 報錯並以 toast 呈現。
   const toggleNull = (name: string, dataType: string, nullable: boolean) =>
@@ -3109,8 +3109,8 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   const setColDefault = async (name: string, current: string | null) => {
     const v = await uiPrompt("預設值（清空=移除預設）", { title: `欄位「${name}」預設值`, defaultValue: current ?? "", placeholder: "如 0 / 'x' / CURRENT_TIMESTAMP" });
     if (v === null) return;
-    const t = v.trim();
-    doAlter({ op: "set_default", name, default: t === "" ? null : t }, t === "" ? "已移除預設值" : "預設值已設定");
+    const trimmed = v.trim();
+    doAlter({ op: "set_default", name, default: trimmed === "" ? null : trimmed }, trimmed === "" ? "已移除預設值" : "預設值已設定");
   };
   // 新增外鍵（MySQL / PostgreSQL；走 exec_ddl）。
   const addFk = async (name: string, column: string, refTable: string, refColumn: string, onDelete: string, onUpdate: string) => {
@@ -3532,7 +3532,7 @@ function AddColumnForm({ kind, onSubmit, onCancel, busy }: {
             value={presets.includes(dataType) ? dataType : ""}
             onChange={(e) => { if (e.target.value) setDataType(e.target.value); }}>
             <option value="">選擇…</option>
-            {presets.map((t) => <option key={t} value={t}>{t}</option>)}
+            {presets.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
           </select>
           <input className={`${ic} w-40`} value={dataType} onChange={(e) => setDataType(e.target.value)} placeholder="如 VARCHAR(50) / INT" />
         </div></label>

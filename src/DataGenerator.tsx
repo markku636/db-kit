@@ -21,16 +21,16 @@ const DEC_TYPES = new Set(["decimal", "numeric", "float", "double", "real", "mon
 const INT_BOUND: Record<string, [number, number]> = {
   tinyint: [100, 200], smallint: [30000, 60000], smallserial: [30000, 60000], mediumint: [8000000, 8000000],
 };
-const synthInt = (t: string, unsigned: boolean) => {
-  const b = INT_BOUND[t];
+const synthInt = (kind: string, unsigned: boolean) => {
+  const b = INT_BOUND[kind];
   if (!b) return String(rint(1, 100000));
   return String(rint(1, b[unsigned ? 1 : 0]));
 };
 // 小數：MySQL 的 decimal(p,s) 精度寫進 data_type，依精度 / 小數位產生避免溢位；
 // PG 的 numeric 精度不在 data_type，退回保守小值（≤ 99.99）以容納窄精度欄位。
-const synthDecimal = (dataType: string, t: string) => {
+const synthDecimal = (dataType: string, kind: string) => {
   const m = /\(\s*(\d+)\s*(?:,\s*(\d+))?\s*\)/.exec(dataType);
-  if ((t === "decimal" || t === "numeric") && m) {
+  if ((kind === "decimal" || kind === "numeric") && m) {
     const precision = Number.parseInt(m[1], 10);
     const scale = m[2] == null ? 0 : Number.parseInt(m[2], 10);
     const intPart = rint(0, Math.pow(10, Math.min(Math.max(1, precision - scale), 12)) - 1);
@@ -89,13 +89,13 @@ export default function DataGenerator({ connId, db, table, kind, onClose, onGene
   // 由 data_type 推得基礎型別：去括號、去 MySQL 的 unsigned/zerofill 後綴，並把 PostgreSQL
   // information_schema 的 SQL 標準長名（無括號）正規化為通用短名，否則 PG 型別永遠落到字串預設分支。
   const baseType = (dt: string) => {
-    const t = dt.toLowerCase().replace(/\(.*$/, "").replace(/\s+(unsigned|zerofill)\b/g, "").trim();
-    if (t.startsWith("timestamp")) return "timestamp";       // timestamp without/with time zone
-    if (t === "time" || t.startsWith("time ")) return "time"; // time without/with time zone
-    if (t === "double precision") return "double";
-    if (t === "character varying") return "varchar";
-    if (t === "character") return "char";
-    return t;
+    const trimmed = dt.toLowerCase().replace(/\(.*$/, "").replace(/\s+(unsigned|zerofill)\b/g, "").trim();
+    if (trimmed.startsWith("timestamp")) return "timestamp";       // timestamp without/with time zone
+    if (trimmed === "time" || trimmed.startsWith("time ")) return "time"; // time without/with time zone
+    if (trimmed === "double precision") return "double";
+    if (trimmed === "character varying") return "varchar";
+    if (trimmed === "character") return "char";
+    return trimmed;
   };
   // MySQL / SQLite 會把長度寫進 data_type（如 varchar(50)）；PostgreSQL 不會（長度在 information_schema
   // 的 character_maximum_length，後端未帶出），故 PG 字串以保守預設長度裁切。
@@ -104,17 +104,17 @@ export default function DataGenerator({ connId, db, table, kind, onClose, onGene
     return m ? parseInt(m[1], 10) : 0;
   };
   const strategyLabel = (c: ColumnInfo): string => {
-    const t = baseType(c.data_type);
+    const val = baseType(c.data_type);
     const dt = c.data_type.toLowerCase();
-    if (dt.startsWith("tinyint(1)") || t === "bool" || t === "boolean") return "布林 0/1";
-    if (INT_TYPES.has(t)) return "整數";
-    if (DEC_TYPES.has(t)) return "小數";
-    if (t === "date") return "日期";
-    if (t === "datetime" || t === "timestamp" || t === "timestamptz") return "日期時間";
-    if (t === "time") return "時間";
-    if (t === "year") return "年份";
-    if (t === "uuid") return "UUID";
-    if (t === "json" || t === "jsonb") return "JSON {}";
+    if (dt.startsWith("tinyint(1)") || val === "bool" || val === "boolean") return "布林 0/1";
+    if (INT_TYPES.has(val)) return "整數";
+    if (DEC_TYPES.has(val)) return "小數";
+    if (val === "date") return "日期";
+    if (val === "datetime" || val === "timestamp" || val === "timestamptz") return "日期時間";
+    if (val === "time") return "時間";
+    if (val === "year") return "年份";
+    if (val === "uuid") return "UUID";
+    if (val === "json" || val === "jsonb") return "JSON {}";
     if (/email/i.test(c.name)) return "Email";
     if (/(^|_)(name|fullname)/i.test(c.name)) return "姓名";
     if (/(phone|tel|mobile)/i.test(c.name)) return "電話";
@@ -123,20 +123,20 @@ export default function DataGenerator({ connId, db, table, kind, onClose, onGene
 
   // 合成單一值（回傳字串；NULL 不在此處理）。i 為列序，供部分策略產生較分散的值。
   const synth = (c: ColumnInfo, i: number): string => {
-    const t = baseType(c.data_type);
+    const val = baseType(c.data_type);
     const dt = c.data_type.toLowerCase();
     // 未知長度（PG varchar）保守截到 20，避免超出 varchar(n)；已知長度則依宣告裁切。
     const cap = (s: string) => s.slice(0, lenOf(c.data_type) || 20);
-    if (dt.startsWith("tinyint(1)") || t === "bool" || t === "boolean") return Math.random() < 0.5 ? "1" : "0";
-    if (INT_TYPES.has(t)) return synthInt(t, dt.includes("unsigned"));
-    if (DEC_TYPES.has(t)) return synthDecimal(c.data_type, t);
-    if (t === "date") return `${rint(2000, 2024)}-${pad2(rint(1, 12))}-${pad2(rint(1, 28))}`;
-    if (t === "datetime" || t === "timestamp" || t === "timestamptz")
+    if (dt.startsWith("tinyint(1)") || val === "bool" || val === "boolean") return Math.random() < 0.5 ? "1" : "0";
+    if (INT_TYPES.has(val)) return synthInt(val, dt.includes("unsigned"));
+    if (DEC_TYPES.has(val)) return synthDecimal(c.data_type, val);
+    if (val === "date") return `${rint(2000, 2024)}-${pad2(rint(1, 12))}-${pad2(rint(1, 28))}`;
+    if (val === "datetime" || val === "timestamp" || val === "timestamptz")
       return `${rint(2000, 2024)}-${pad2(rint(1, 12))}-${pad2(rint(1, 28))} ${pad2(rint(0, 23))}:${pad2(rint(0, 59))}:${pad2(rint(0, 59))}`;
-    if (t === "time") return `${pad2(rint(0, 23))}:${pad2(rint(0, 59))}:${pad2(rint(0, 59))}`;
-    if (t === "year") return String(rint(1980, 2024));
-    if (t === "uuid") return crypto.randomUUID();
-    if (t === "json" || t === "jsonb") return "{}";
+    if (val === "time") return `${pad2(rint(0, 23))}:${pad2(rint(0, 59))}:${pad2(rint(0, 59))}`;
+    if (val === "year") return String(rint(1980, 2024));
+    if (val === "uuid") return crypto.randomUUID();
+    if (val === "json" || val === "jsonb") return "{}";
     if (/email/i.test(c.name)) return cap(`user${i}_${randStr(4).toLowerCase()}@example.com`);
     if (/(^|_)(name|fullname)/i.test(c.name)) return cap(`Name ${randStr(5)}`);
     if (/(phone|tel|mobile)/i.test(c.name)) return `09${String(rint(0, 99999999)).padStart(8, "0")}`;

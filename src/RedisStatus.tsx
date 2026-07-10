@@ -32,8 +32,8 @@ export default function RedisStatus({ connId, connName, onClose }: {
   // 自動刷新。
   useEffect(() => {
     if (!auto) return;
-    const t = setInterval(() => setNonce((n) => n + 1), 2000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNonce((n) => n + 1), 2000);
+    return () => clearInterval(timer);
   }, [auto]);
 
   // 攤平成 key→value 方便查指標。

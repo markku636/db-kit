@@ -264,11 +264,11 @@ export function buildAlterDatabaseCharset(db: string, charset: string, collation
 // 以「來源」為基準比對名稱清單：onlyInSource = 來源有目標無（需在目標建立）；onlyInTarget 反之；common = 兩邊皆有。
 export interface NameDiff { onlyInSource: string[]; onlyInTarget: string[]; common: string[] }
 export function diffNameLists(source: string[], target: string[]): NameDiff {
-  const s = new Set(source), t = new Set(target);
+  const s = new Set(source), seen = new Set(target);
   return {
-    onlyInSource: [...new Set(source)].filter((n) => !t.has(n)).sort(),
+    onlyInSource: [...new Set(source)].filter((n) => !seen.has(n)).sort(),
     onlyInTarget: [...new Set(target)].filter((n) => !s.has(n)).sort(),
-    common: [...new Set(source)].filter((n) => t.has(n)).sort(),
+    common: [...new Set(source)].filter((n) => seen.has(n)).sort(),
   };
 }
 // 欄位比對：以來源為基準。added = 來源有目標無；removed = 目標有來源無；changed = 兩邊同名但型別 / 可空不同。
@@ -361,20 +361,20 @@ export function buildRoutineCall(kind: DbKind, db: string, name: string, routine
 // 組 routine 的 DROP 語句（刪除 / 先刪後建用）。
 // PG 函式 / 程序帶引數簽章以消除重載歧義（PG 對重載函式無簽章的 DROP 會報 "is not unique"）。
 export function buildDropRoutine(kind: DbKind, db: string, r: RoutineInfo): string {
-  const t = r.routine_type;
+  const routineType = r.routine_type;
   // external gateway 講 MySQL 方言（同 sqlLiteral / genUseDb）；漏掉會落到結尾的 trigger fallback。
   if (isMysqlFamily(kind) || kind === "external") {
-    const kw = t === "procedure" ? "PROCEDURE" : t === "function" ? "FUNCTION" : t === "event" ? "EVENT" : "TRIGGER";
+    const kw = routineType === "procedure" ? "PROCEDURE" : routineType === "function" ? "FUNCTION" : routineType === "event" ? "EVENT" : "TRIGGER";
     return `DROP ${kw} IF EXISTS ${qualifiedName(kind, db, r.name)}`;
   }
   if (kind === "postgres") {
-    if (t === "trigger") return `DROP TRIGGER IF EXISTS ${quoteIdent(kind, r.name)} ON ${qualifiedName(kind, db, r.parent ?? "")}`;
+    if (routineType === "trigger") return `DROP TRIGGER IF EXISTS ${quoteIdent(kind, r.name)} ON ${qualifiedName(kind, db, r.parent ?? "")}`;
     const sig = r.signature ?? "";
-    return `DROP ${t === "procedure" ? "PROCEDURE" : "FUNCTION"} IF EXISTS ${qualifiedName(kind, db, r.name)}(${sig})`;
+    return `DROP ${routineType === "procedure" ? "PROCEDURE" : "FUNCTION"} IF EXISTS ${qualifiedName(kind, db, r.name)}(${sig})`;
   }
   if (kind === "oracle") {
     // Oracle 無 IF EXISTS（23c 前）；觸發器不帶 schema 前綴表。
-    const kw = t === "procedure" ? "PROCEDURE" : t === "function" ? "FUNCTION" : "TRIGGER";
+    const kw = routineType === "procedure" ? "PROCEDURE" : routineType === "function" ? "FUNCTION" : "TRIGGER";
     return `DROP ${kw} ${qualifiedName(kind, db, r.name)}`;
   }
   return `DROP TRIGGER IF EXISTS ${quoteIdent(kind, r.name)}`;
@@ -637,16 +637,16 @@ function qbAggExpr(agg: QbAgg | undefined, ref: string): string {
 
 // 是否為純數字字面值（整數 / 小數 / 負號）——是則 WHERE / IN 不加引號（當數值比較）。
 function isNumericLiteral(v: string): boolean {
-  const t = v.trim();
+  const trimmed = v.trim();
   // 嚴格十進位，且以 Number 最短往返一致才當數字——排除前導零（007）、尾隨零小數（1.50）、
   // 超精度大整數等「看似數字實為字串」者，避免 zero-padded 代碼被當數值而比錯 / PG 型別錯。
-  return /^-?\d+(\.\d+)?$/.test(t) && String(Number(t)) === t;
+  return /^-?\d+(\.\d+)?$/.test(trimmed) && String(Number(trimmed)) === trimmed;
 }
 
 // 單一條件值 → SQL 片段（數字原樣、其餘字串字面值）。
 function qbValueSql(kind: DbKind, v: string): string {
-  const t = v.trim();
-  return isNumericLiteral(t) ? t : sqlLiteral(kind, t);
+  const trimmed = v.trim();
+  return isNumericLiteral(trimmed) ? trimmed : sqlLiteral(kind, trimmed);
 }
 
 // 依運算子決定條件值寫法：LIKE 系列恆為字串字面值（即使值看似數字——LIKE 需字串樣式，
@@ -669,8 +669,8 @@ export function buildSelectQuery(kind: DbKind, spec: QbSpec): string {
   const qi = (id: string) => quoteIdent(kind, id);
   // 表名 → 參照（有別名用別名，否則用表名本身）。
   const refOf = (table: string) => {
-    const t = spec.tables.find((x) => x.name === table);
-    return t?.alias?.trim() ? t.alias.trim() : table;
+    const tbl = spec.tables.find((x) => x.name === table);
+    return tbl?.alias?.trim() ? tbl.alias.trim() : table;
   };
   const qcol = (table: string, column: string) => `${qi(refOf(table))}.${qi(column)}`;
   const multi = spec.tables.length > 1;
@@ -688,9 +688,9 @@ export function buildSelectQuery(kind: DbKind, spec: QbSpec): string {
 
   // FROM（基底表）+ JOIN
   const fromOf = (table: string) => {
-    const t = spec.tables.find((x) => x.name === table);
+    const tbl = spec.tables.find((x) => x.name === table);
     const base = qualifiedName(kind, spec.db, table);
-    return t?.alias?.trim() ? `${base} AS ${qi(t.alias.trim())}` : base;
+    return tbl?.alias?.trim() ? `${base} AS ${qi(tbl.alias.trim())}` : base;
   };
   let body = `FROM ${fromOf(spec.baseTable)}`;
   const inFrom = new Set<string>([spec.baseTable]);
@@ -700,10 +700,10 @@ export function buildSelectQuery(kind: DbKind, spec: QbSpec): string {
     inFrom.add(j.rightTable);
   }
   // 已選但未被 JOIN 連上的表，以 CROSS JOIN 併入 FROM——否則其欄位會引用未在 FROM 的表而產生無效 SQL。
-  for (const t of spec.tables) {
-    if (!inFrom.has(t.name)) {
-      body += ` CROSS JOIN ${fromOf(t.name)}`;
-      inFrom.add(t.name);
+  for (const val of spec.tables) {
+    if (!inFrom.has(val.name)) {
+      body += ` CROSS JOIN ${fromOf(val.name)}`;
+      inFrom.add(val.name);
     }
   }
 
@@ -895,10 +895,10 @@ export function isWriteStatement(sql: string): boolean {
   // 去掉開頭的空白與註解。
   let s = sql;
   for (;;) {
-    const t = s.replace(/^\s+/, "");
-    if (t.startsWith("--")) { const nl = t.indexOf("\n"); s = nl === -1 ? "" : t.slice(nl + 1); continue; }
-    if (t.startsWith("/*")) { const e = t.indexOf("*/"); s = e === -1 ? "" : t.slice(e + 2); continue; }
-    s = t;
+    const val = s.replace(/^\s+/, "");
+    if (val.startsWith("--")) { const nl = val.indexOf("\n"); s = nl === -1 ? "" : val.slice(nl + 1); continue; }
+    if (val.startsWith("/*")) { const e = val.indexOf("*/"); s = e === -1 ? "" : val.slice(e + 2); continue; }
+    s = val;
     break;
   }
   // PostgreSQL 可寫 CTE：`WITH x AS (DELETE/UPDATE/INSERT …) …` 起始為 WITH，第一關鍵字看不出寫入。
@@ -1540,8 +1540,8 @@ export function rectToMarkdown(
 // 解析剪貼簿的表格文字（TSV / 多行）為二維字串陣列，供資料表「區塊貼上」。
 // 去除尾端單一換行（避免多出一列空白）；單一純文字回傳 1×1。
 export function parseClipboardGrid(text: string): string[][] {
-  const t = text.replace(/\r\n/g, "\n").replace(/\n$/, "");
-  return t.split("\n").map((line) => line.split("\t"));
+  const val = text.replace(/\r\n/g, "\n").replace(/\n$/, "");
+  return val.split("\n").map((line) => line.split("\t"));
 }
 
 // 回傳游標位移所在的語句文字；游標落在語句之間的空白時取後一條。無可辨識語句回 null。

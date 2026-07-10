@@ -17,24 +17,24 @@ export function buildDbDictMarkdown(dbName: string, tables: TableDoc[]): string 
   const out: string[] = [];
   out.push(`# 資料庫文件：${dbName}`, "", `共 ${tables.length} 張資料表。`, "");
   out.push("## 目錄", "");
-  for (const t of tables) out.push(`- [${t.name}](#${anchor(t.name)})（${t.cols.length} 欄）`);
+  for (const val of tables) out.push(`- [${val.name}](#${anchor(val.name)})（${val.cols.length} 欄）`);
   out.push("");
-  for (const t of tables) {
-    out.push(`## ${t.name}`, "");
+  for (const val of tables) {
+    out.push(`## ${val.name}`, "");
     out.push("| 欄位 | 型別 | 可空 | 鍵 | 預設 | 額外 | 註解 |");
     out.push("| --- | --- | --- | --- | --- | --- | --- |");
-    for (const c of t.cols) {
+    for (const c of val.cols) {
       out.push(`| ${mdCell(c.name)} | ${mdCell(c.data_type)} | ${yn(c.nullable)} | ${mdCell(c.key)} | ${mdCell(c.default)} | ${mdCell(c.extra)} | ${mdCell(c.comment)} |`);
     }
-    if (t.idx.length) {
+    if (val.idx.length) {
       out.push("", "**索引**", "");
       out.push("| 名稱 | 欄位 | 唯一 | 主鍵 |", "| --- | --- | --- | --- |");
-      for (const i of t.idx) out.push(`| ${mdCell(i.name)} | ${i.columns.join(", ")} | ${yn(i.unique)} | ${yn(i.primary)} |`);
+      for (const i of val.idx) out.push(`| ${mdCell(i.name)} | ${i.columns.join(", ")} | ${yn(i.unique)} | ${yn(i.primary)} |`);
     }
-    if (t.fks.length) {
+    if (val.fks.length) {
       out.push("", "**外鍵**", "");
       out.push("| 名稱 | 欄位 | 參照表 | 參照欄位 |", "| --- | --- | --- | --- |");
-      for (const f of t.fks) out.push(`| ${mdCell(f.name)} | ${mdCell(f.column)} | ${mdCell(f.ref_table)} | ${mdCell(f.ref_column)} |`);
+      for (const f of val.fks) out.push(`| ${mdCell(f.name)} | ${mdCell(f.column)} | ${mdCell(f.ref_table)} | ${mdCell(f.ref_column)} |`);
     }
     out.push("");
   }
@@ -47,16 +47,16 @@ const esc = (s: string | null | undefined) =>
 export function buildDbDictHtml(dbName: string, tables: TableDoc[]): string {
   const th = (xs: string[]) => `<tr>${xs.map((x) => `<th>${x}</th>`).join("")}</tr>`;
   const tr = (xs: (string | null | undefined)[]) => `<tr>${xs.map((x) => `<td>${esc(x)}</td>`).join("")}</tr>`;
-  const toc = tables.map((t) => `<li><a href="#${anchor(t.name)}">${esc(t.name)}</a>（${t.cols.length} 欄）</li>`).join("");
-  const sections = tables.map((t) => {
-    const colRows = t.cols.map((c) => tr([c.name, c.data_type, yn(c.nullable), c.key, c.default, c.extra, c.comment])).join("");
-    const idxBlock = t.idx.length
-      ? `<h3>索引</h3><table>${th(["名稱", "欄位", "唯一", "主鍵"])}${t.idx.map((i) => tr([i.name, i.columns.join(", "), yn(i.unique), yn(i.primary)])).join("")}</table>`
+  const toc = tables.map((tbl) => `<li><a href="#${anchor(tbl.name)}">${esc(tbl.name)}</a>（${tbl.cols.length} 欄）</li>`).join("");
+  const sections = tables.map((tbl) => {
+    const colRows = tbl.cols.map((c) => tr([c.name, c.data_type, yn(c.nullable), c.key, c.default, c.extra, c.comment])).join("");
+    const idxBlock = tbl.idx.length
+      ? `<h3>索引</h3><table>${th(["名稱", "欄位", "唯一", "主鍵"])}${tbl.idx.map((i) => tr([i.name, i.columns.join(", "), yn(i.unique), yn(i.primary)])).join("")}</table>`
       : "";
-    const fkBlock = t.fks.length
-      ? `<h3>外鍵</h3><table>${th(["名稱", "欄位", "參照表", "參照欄位"])}${t.fks.map((f) => tr([f.name, f.column, f.ref_table, f.ref_column])).join("")}</table>`
+    const fkBlock = tbl.fks.length
+      ? `<h3>外鍵</h3><table>${th(["名稱", "欄位", "參照表", "參照欄位"])}${tbl.fks.map((f) => tr([f.name, f.column, f.ref_table, f.ref_column])).join("")}</table>`
       : "";
-    return `<section><h2 id="${anchor(t.name)}">${esc(t.name)}</h2>` +
+    return `<section><h2 id="${anchor(tbl.name)}">${esc(tbl.name)}</h2>` +
       `<table>${th(["欄位", "型別", "可空", "鍵", "預設", "額外", "註解"])}${colRows}</table>${idxBlock}${fkBlock}</section>`;
   }).join("\n");
   return `<!DOCTYPE html>

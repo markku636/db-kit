@@ -204,10 +204,10 @@ function hexToTriple(hex: string): string {
 }
 
 // 兩 hex 依比例 t(0..1) 線性內插，回傳 hex（用於生成表面景深階梯）。
-function mixHex(a: string, b: string, t: number): string {
+function mixHex(a: string, b: string, item: number): string {
   const [ar, ag, ab] = hexToRgb(a);
   const [br, bg, bb] = hexToRgb(b);
-  const ch = (x: number, y: number) => Math.round(x + (y - x) * t).toString(16).padStart(2, "0");
+  const ch = (x: number, y: number) => Math.round(x + (y - x) * item).toString(16).padStart(2, "0");
   return `#${ch(ar, br)}${ch(ag, bg)}${ch(ab, bb)}`;
 }
 
@@ -225,7 +225,7 @@ function relLuminance(hex: string): number {
 // on-accent 依 accent 亮度自動取對比（修「亮 accent + 白字」問題）。
 export function buildAppVars(def: EditorThemeDef): Record<string, string> {
   const { colors, app } = def;
-  const steps = [0, 0.22, 0.42, 0.6, 0.8, 1].map((t) => mixHex(colors.bg, app.top, t));
+  const steps = [0, 0.22, 0.42, 0.6, 0.8, 1].map((item) => mixHex(colors.bg, app.top, item));
   const [well, inset, appc, panel, bar, elevated] = steps;
   // 實心 accent 上的文字：選與 accent 對比較高者（避免亮 accent 配白字看不清，如紫 #9580FF）。
   const contrast = (bg: string, fg: string) => {

@@ -30,7 +30,7 @@ const AGGS: { v: QbAgg; label: string }[] = [
 ];
 // FULL JOIN 在 MySQL / MariaDB 不支援；下拉依方言過濾。
 const joinTypesFor = (kind: DbKind): QbJoinType[] =>
-  kind === "mysql" || kind === "mariadb" ? JOIN_TYPES.filter((t) => t !== "FULL") : JOIN_TYPES;
+  kind === "mysql" || kind === "mariadb" ? JOIN_TYPES.filter((opt) => opt !== "FULL") : JOIN_TYPES;
 
 interface SelCol extends QbColumn { id: string }
 interface SelJoin extends QbJoin { id: string }
@@ -99,14 +99,14 @@ export default function QueryBuilder({
   const seeded = useRef(false);
   useEffect(() => {
     if (!model || seeded.current || !initialTable) return;
-    if (model.tables.some((t) => t.name === initialTable)) {
+    if (model.tables.some((tbl) => tbl.name === initialTable)) {
       seeded.current = true;
       addTable(initialTable);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, initialTable]);
 
-  const tableByName = (n: string): ErTable | undefined => model?.tables.find((t) => t.name === n);
+  const tableByName = (n: string): ErTable | undefined => model?.tables.find((tbl) => tbl.name === n);
   const colsOf = (n: string): string[] => tableByName(n)?.columns.map((c) => c.name) ?? [];
   // 此欄是否為非數值型別（字串 / 日期…）→ 條件值需加引號，避免 `text = 5` 在 PostgreSQL 型別錯。
   const colIsString = (table: string, column: string): boolean => {
@@ -145,7 +145,7 @@ export default function QueryBuilder({
 
   // 移除一張表：連帶清掉其欄位 / JOIN / 條件 / 排序。
   function removeTable(name: string) {
-    setPicked((p) => p.filter((t) => t !== name));
+    setPicked((p) => p.filter((item) => item !== name));
     setCols((c) => c.filter((x) => x.table !== name));
     setJoins((j) => j.filter((x) => x.leftTable !== name && x.rightTable !== name));
     setConds((c) => c.filter((x) => x.table !== name));
@@ -220,14 +220,14 @@ export default function QueryBuilder({
   }, [kind, spec]);
 
   const availTables = useMemo(() => {
-    const list = model?.tables.map((t) => t.name) ?? [];
+    const list = model?.tables.map((tbl) => tbl.name) ?? [];
     const f = tableFilter.trim().toLowerCase();
     return f ? list.filter((n) => n.toLowerCase().includes(f)) : list;
   }, [model, tableFilter]);
 
   // 所有已選表的「表.欄」候選（供條件 / 排序 / JOIN 欄位下拉）。
   const allColRefs = useMemo(
-    () => picked.flatMap((t) => colsOf(t).map((c) => ({ table: t, column: c }))),
+    () => picked.flatMap((item) => colsOf(item).map((c) => ({ table: item, column: c }))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [picked, model],
   );
@@ -341,20 +341,20 @@ export default function QueryBuilder({
               <section>
                 <SectionTitle icon={Table2} text="資料表與欄位" hint="勾選要查詢的欄位（不選＝全部 *）" />
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-                  {picked.map((t, i) => (
-                    <div key={t} className="rounded border border-fg/10 bg-app/40">
+                  {picked.map((item, i) => (
+                    <div key={item} className="rounded border border-fg/10 bg-app/40">
                       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-fg/10">
                         <Icon icon={Table2} size={12} className="text-accent" />
-                        <span className="text-xs font-medium truncate flex-1">{t}</span>
+                        <span className="text-xs font-medium truncate flex-1">{item}</span>
                         {i === 0 && <span className="text-[10px] text-fg/40 px-1 rounded bg-fg/10">基底</span>}
-                        <button type="button" onClick={() => selectAllCols(t)} title="全選此表欄位" className="text-[10px] text-fg/40 hover:text-accent">全選</button>
-                        <button type="button" onClick={() => clearCols(t)} title="清空此表欄位" className="text-[10px] text-fg/40 hover:text-accent">清空</button>
-                        <button type="button" onClick={() => removeTable(t)} className="text-fg/30 hover:text-red-400" title="移除此表"><Icon icon={X} size={13} /></button>
+                        <button type="button" onClick={() => selectAllCols(item)} title="全選此表欄位" className="text-[10px] text-fg/40 hover:text-accent">全選</button>
+                        <button type="button" onClick={() => clearCols(item)} title="清空此表欄位" className="text-[10px] text-fg/40 hover:text-accent">清空</button>
+                        <button type="button" onClick={() => removeTable(item)} className="text-fg/30 hover:text-red-400" title="移除此表"><Icon icon={X} size={13} /></button>
                       </div>
                       <div className="max-h-44 overflow-auto py-1">
-                        {tableByName(t)?.columns.map((c) => (
+                        {tableByName(item)?.columns.map((c) => (
                           <label key={c.name} className="flex items-center gap-1.5 px-2 py-0.5 text-xs hover:bg-fg/5 cursor-pointer">
-                            <input type="checkbox" checked={colShown(t, c.name)} onChange={() => toggleCol(t, c.name)} className="accent-[rgb(var(--c-accent))]" />
+                            <input type="checkbox" checked={colShown(item, c.name)} onChange={() => toggleCol(item, c.name)} className="accent-[rgb(var(--c-accent))]" />
                             <span className={`truncate flex-1 ${c.pk ? "text-amber-300" : ""}`}>{c.name}</span>
                             {c.pk && <span className="text-[9px] text-amber-300/70">PK</span>}
                             {c.fk && <Icon icon={Link2} size={10} className="text-sky-400/70" />}
@@ -376,7 +376,7 @@ export default function QueryBuilder({
                     {joins.map((j) => (
                       <div key={j.id} className="flex items-center gap-1.5 text-xs flex-wrap">
                         <Select selectSize="sm" value={j.type} onChange={(e) => setJoins((js) => js.map((x) => x.id === j.id ? { ...x, type: e.target.value as QbJoinType } : x))} className="text-xs w-20">
-                          {joinTypesFor(kind).map((t) => <option key={t} value={t}>{t}</option>)}
+                          {joinTypesFor(kind).map((item) => <option key={item} value={item}>{item}</option>)}
                         </Select>
                         <ColPicker tables={picked} colsOf={colsOf} table={j.leftTable} column={j.leftCol}
                           onChange={(table, column) => setJoins((js) => js.map((x) => x.id === j.id ? { ...x, leftTable: table, leftCol: column } : x))} />
@@ -579,15 +579,15 @@ function SectionTitle({ icon, text, hint, action }: { icon: typeof Table2; text:
 // 「表.欄」二段下拉：先選表（限已選表），再選該表欄位。
 function ColPicker({ tables, colsOf, table, column, onChange }: {
   tables: string[];
-  colsOf: (t: string) => string[];
+  colsOf: (kind: string) => string[];
   table: string;
   column: string;
   onChange: (table: string, column: string) => void;
 }) {
   return (
     <>
-      <Select selectSize="sm" value={table} onChange={(e) => { const t = e.target.value; onChange(t, colsOf(t)[0] ?? ""); }} className="text-xs w-28">
-        {tables.map((t) => <option key={t} value={t}>{t}</option>)}
+      <Select selectSize="sm" value={table} onChange={(e) => { const target = e.target.value; onChange(target, colsOf(target)[0] ?? ""); }} className="text-xs w-28">
+        {tables.map((tbl) => <option key={tbl} value={tbl}>{tbl}</option>)}
       </Select>
       <span className="text-fg/30">.</span>
       <Select selectSize="sm" value={column} onChange={(e) => onChange(table, e.target.value)} className="text-xs w-32">

@@ -3,6 +3,7 @@ import { Upload } from "lucide-react";
 import { api, DataQuery, ExportFormat } from "./api";
 import { pickSaveFile, toast } from "./ui";
 import { Modal, Button, Input } from "./ui/index";
+import { useT } from "./i18n";
 
 const FORMATS: { v: ExportFormat; label: string; ext: string }[] = [
   { v: "csv", label: "CSV", ext: "csv" },
@@ -20,6 +21,7 @@ export default function ExportDialog({ connId, database, table, query, onClose }
   query: DataQuery;
   onClose: () => void;
 }) {
+  const t = useT();
   const [format, setFormat] = useState<ExportFormat>("csv");
   const [includeHeader, setIncludeHeader] = useState(true);
   const [allRows, setAllRows] = useState(true);
@@ -48,10 +50,10 @@ export default function ExportDialog({ connId, database, table, query, onClose }
         null_text: isCsv ? nullText : null,
         sql_table: format === "sql" ? sqlTable : null,
       }, out);
-      toast.success(`已匯出 ${res.rows} 列（${formatBytes(res.bytes)}）→ ${res.path}`);
+      toast.success(t("已匯出 {rows} 列（{bytes}）→ {path}", { rows: res.rows, bytes: formatBytes(res.bytes), path: res.path }));
       onClose();
     } catch (e: any) {
-      toast.error(e?.message ?? "匯出失敗");
+      toast.error(e?.message ?? t("匯出失敗"));
     } finally {
       setBusy(false);
     }
@@ -66,12 +68,12 @@ export default function ExportDialog({ connId, database, table, query, onClose }
       zClass="z-50"
       bodyClassName="p-5 space-y-3 overflow-auto"
       footer={<>
-        <Button variant="secondary" onClick={onClose}>取消</Button>
-        <Button variant="primary" loading={busy} onClick={run} disabled={busy}>選擇位置並匯出</Button>
+        <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
+        <Button variant="primary" loading={busy} onClick={run} disabled={busy}>{t("選擇位置並匯出")}</Button>
       </>}
     >
       <div>
-            <span className="text-xs text-fg/50 mb-1 block">格式</span>
+            <span className="text-xs text-fg/50 mb-1 block">{t("格式")}</span>
             <div className="flex gap-2 flex-wrap">
               {FORMATS.map((f) => (
                 <button key={f.v} type="button" onClick={() => setFormat(f.v)}
@@ -86,13 +88,13 @@ export default function ExportDialog({ connId, database, table, query, onClose }
 
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={allRows} onChange={(e) => setAllRows(e.target.checked)} />
-            匯出全部符合的列（取消＝只匯出目前頁；含目前的篩選與排序）
+            {t("匯出全部符合的列（取消＝只匯出目前頁；含目前的篩選與排序）")}
           </label>
 
           {showHeader && (
             <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
               <input type="checkbox" checked={includeHeader} onChange={(e) => setIncludeHeader(e.target.checked)} />
-              含欄位標題{isXlsx ? "（首列粗體）" : ""}
+              {t("含欄位標題")}{isXlsx ? t("（首列粗體）") : ""}
             </label>
           )}
 
@@ -100,19 +102,19 @@ export default function ExportDialog({ connId, database, table, query, onClose }
             <>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={bom} onChange={(e) => setBom(e.target.checked)} />
-                加 UTF-8 BOM（方便 Excel 開啟）
+                {t("加 UTF-8 BOM（方便 Excel 開啟）")}
               </label>
               <label className="block">
-                <span className="text-xs text-fg/50 mb-1 block">NULL 顯示為</span>
+                <span className="text-xs text-fg/50 mb-1 block">{t("NULL 顯示為")}</span>
                 <Input inputSize="md" value={nullText} onChange={(e) => setNullText(e.target.value)}
-                  placeholder="（空白）" />
+                  placeholder={t("（空白）")} />
               </label>
             </>
           )}
 
           {format === "sql" && (
             <label className="block">
-              <span className="text-xs text-fg/50 mb-1 block">INSERT 目標表名</span>
+              <span className="text-xs text-fg/50 mb-1 block">{t("INSERT 目標表名")}</span>
               <Input inputSize="md" value={sqlTable} onChange={(e) => setSqlTable(e.target.value)} />
             </label>
           )}

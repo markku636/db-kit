@@ -48,13 +48,13 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
 
   // 過濾 + 依 group 分組（未分組置底、組內依名稱排序）。
   const grouped = useMemo(() => {
-    const t = search.trim().toLowerCase();
-    const list = t
+    const val = search.trim().toLowerCase();
+    const list = val
       ? savedQueries.filter(
           (q) =>
-            q.name.toLowerCase().includes(t) ||
-            (q.desc ?? "").toLowerCase().includes(t) ||
-            q.sql.toLowerCase().includes(t),
+            q.name.toLowerCase().includes(val) ||
+            (q.desc ?? "").toLowerCase().includes(val) ||
+            q.sql.toLowerCase().includes(val),
         )
       : savedQueries;
     const map = new Map<string, SavedQuery[]>();

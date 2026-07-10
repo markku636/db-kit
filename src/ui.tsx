@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { t, useT } from "./i18n";
 
 // 對話框共用：按 Esc 關閉（onClose 以 ref 保持穩定，listener 只掛一次）。
 export function useEscToClose(onClose: () => void) {
@@ -90,7 +91,7 @@ export const useUi = create<UiStore>((set, get) => ({
     const ttl = kind === "error" ? 6000 : 3200;
     setTimeout(() => get().dismissToast(id), ttl);
   },
-  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((n) => n.id !== id) })),
   // 若已有待回應的請求，先以「取消」結束它（resolve），避免其 Promise 永遠懸而不決。
   requestConfirm: (req) => {
     const prev = get().confirmReq;
@@ -115,9 +116,9 @@ export const useUi = create<UiStore>((set, get) => ({
 }));
 
 export const toast = {
-  success: (t: string) => useUi.getState().pushToast("success", t),
-  error: (t: string) => useUi.getState().pushToast("error", t),
-  info: (t: string) => useUi.getState().pushToast("info", t),
+  success: (text: string) => useUi.getState().pushToast("success", text),
+  error: (text: string) => useUi.getState().pushToast("error", text),
+  info: (text: string) => useUi.getState().pushToast("info", text),
 };
 
 /** 以 Promise 取代瀏覽器 confirm()，配合 <UiHost /> 的樣式化對話框。 */
@@ -146,7 +147,7 @@ export function uiPrompt(
  * 複製文字到系統剪貼簿。優先用 navigator.clipboard（Tauri webview 在安全環境支援），
  * 失敗則退回隱藏 textarea + execCommand。成功 / 失敗都跳 toast 回饋。
  */
-export async function copyToClipboard(text: string, label = "已複製"): Promise<boolean> {
+export async function copyToClipboard(text: string, label = t("已複製")): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
@@ -172,7 +173,7 @@ export async function copyToClipboard(text: string, label = "已複製"): Promis
   } catch {
     /* ignore */
   }
-  toast.error("複製失敗");
+  toast.error(t("複製失敗"));
   return false;
 }
 
@@ -198,6 +199,7 @@ export async function pickSaveFile(defaultPath?: string, filters?: Filter[]): Pr
 // ---- 掛在 App 根的通知 / 確認渲染層 ----
 
 export function UiHost() {
+  const t = useT();
   const { toasts, dismissToast, confirmReq, resolveConfirm, promptReq, resolvePrompt } = useUi();
 
   // Esc 取消最上層的 confirm / prompt：用 capture 階段，先於 Modal 的 bubble 監聽並 stopPropagation，
@@ -226,18 +228,18 @@ export function UiHost() {
       <div
         className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 w-80 max-w-[90vw]"
         role="region"
-        aria-label="通知"
+        aria-label={t("通知")}
       >
-        {toasts.map((t) => {
-          const cls = `toast-in px-3 py-2 rounded-md shadow-lg text-sm border cursor-pointer break-words ${kindStyle(t.kind)}`;
+        {toasts.map((n) => {
+          const cls = `toast-in px-3 py-2 rounded-md shadow-lg text-sm border cursor-pointer break-words ${kindStyle(n.kind)}`;
           // 錯誤用 alert/assertive（立即播報），其餘用 status/polite。以字面值滿足 a11y lint。
-          return t.kind === "error" ? (
-            <div key={t.id} role="alert" aria-live="assertive" onClick={() => dismissToast(t.id)} className={cls}>
-              {t.text}
+          return n.kind === "error" ? (
+            <div key={n.id} role="alert" aria-live="assertive" onClick={() => dismissToast(n.id)} className={cls}>
+              {n.text}
             </div>
           ) : (
-            <div key={t.id} role="status" aria-live="polite" onClick={() => dismissToast(t.id)} className={cls}>
-              {t.text}
+            <div key={n.id} role="status" aria-live="polite" onClick={() => dismissToast(n.id)} className={cls}>
+              {n.text}
             </div>
           );
         })}
@@ -253,7 +255,7 @@ export function UiHost() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-5 py-3 border-b border-fg/10 font-medium text-sm">
-              {confirmReq.title ?? "確認"}
+              {confirmReq.title ?? t("確認")}
             </div>
             <div className="p-5 text-sm text-fg/80 whitespace-pre-wrap break-words">
               {confirmReq.message}
@@ -264,7 +266,7 @@ export function UiHost() {
                 onClick={() => resolveConfirm(false)}
                 className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5"
               >
-                取消
+                {t("取消")}
               </button>
               <button
                 type="button"
@@ -273,7 +275,7 @@ export function UiHost() {
                   confirmReq.danger ? "bg-danger hover:bg-danger/90" : "bg-accent hover:bg-accent/90"
                 }`}
               >
-                {confirmReq.confirmText ?? "確定"}
+                {confirmReq.confirmText ?? t("確定")}
               </button>
             </div>
           </div>
@@ -287,6 +289,7 @@ export function UiHost() {
 
 // 文字輸入對話框（uiPrompt）。Enter 送出、Esc 取消。
 function PromptDialog() {
+  const t = useT();
   const { promptReq, resolvePrompt } = useUi();
   const [text, setText] = useState(promptReq?.defaultValue ?? "");
   // 新請求（即使 message+title 相同）也要重設輸入內容，避免沿用上一個的殘留文字。
@@ -302,7 +305,7 @@ function PromptDialog() {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-3 border-b border-fg/10 font-medium text-sm">
-          {promptReq.title ?? "輸入"}
+          {promptReq.title ?? t("輸入")}
         </div>
         <div className="p-5 space-y-3">
           <div className="text-sm text-fg/80 whitespace-pre-wrap break-words">
@@ -326,14 +329,14 @@ function PromptDialog() {
             onClick={() => resolvePrompt(null)}
             className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5"
           >
-            取消
+            {t("取消")}
           </button>
           <button
             type="button"
             onClick={() => resolvePrompt(text)}
             className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent/90"
           >
-            {promptReq.confirmText ?? "確定"}
+            {promptReq.confirmText ?? t("確定")}
           </button>
         </div>
       </div>

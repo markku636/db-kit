@@ -93,7 +93,7 @@ export default function CreateTableDialog({ connId, database, kind, onClose, onC
           </label>
 
           <datalist id="dbkit-type-presets">
-            {presets.map((t) => <option key={t} value={t} />)}
+            {presets.map((opt) => <option key={opt} value={opt} />)}
           </datalist>
 
           <div className="border border-fg/10 rounded overflow-hidden">
