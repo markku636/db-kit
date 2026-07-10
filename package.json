@@ -1,6 +1,6 @@
 {
   "name": "db-kit",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Unified database management tool — MySQL, PostgreSQL, SQL Server, SQLite, MongoDB, Redis",
   "license": "MIT",
   "type": "module",
@@ -14,7 +14,7 @@
     "make:favicon": "node scripts/make-favicon.mjs",
     "make:hero": "node scripts/make-hero.mjs",
     "make:splash": "node scripts/make-splash.mjs",
-    "make:screenshots": "node scripts/make-screenshots.mjs"
+    "make:screenshots": "node scripts/capture-screenshots.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.0",

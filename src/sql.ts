@@ -7,6 +7,12 @@ import type { DbKind, QueryResult, RoutineInfo } from "./api";
 export const isMysqlFamily = (kind: DbKind | null | undefined): boolean =>
   kind === "mysql" || kind === "mariadb";
 
+// 支援 routine（程序 / 函式 / 觸發器）瀏覽的 kind。與後端 Driver::list_routines 有實作的 kind 對齊。
+// 集中成一個 predicate：抓取端與渲染端曾各自寫死白名單而不一致（mssql 只在渲染端 → 資料夾恆為 0；
+// external 兩端皆缺 → qland 版完全看不到預存程序）。
+export const supportsRoutines = (kind: DbKind | null | undefined): boolean =>
+  isMysqlFamily(kind) || kind === "postgres" || kind === "mssql" || kind === "oracle" || kind === "external";
+
 // ---- 跨資料庫識別字 / 字面值跳脫（MySQL / PostgreSQL / SQLite 一致性關鍵）----
 // 識別字：PostgreSQL 用雙引號，SQL Server 用 [方括號]（] 加倍），其餘（MySQL / MariaDB / SQLite）用反引號；內部引號加倍轉義。
 export function quoteIdent(kind: DbKind, id: string): string {
@@ -356,7 +362,8 @@ export function buildRoutineCall(kind: DbKind, db: string, name: string, routine
 // PG 函式 / 程序帶引數簽章以消除重載歧義（PG 對重載函式無簽章的 DROP 會報 "is not unique"）。
 export function buildDropRoutine(kind: DbKind, db: string, r: RoutineInfo): string {
   const t = r.routine_type;
-  if (isMysqlFamily(kind)) {
+  // external gateway 講 MySQL 方言（同 sqlLiteral / genUseDb）；漏掉會落到結尾的 trigger fallback。
+  if (isMysqlFamily(kind) || kind === "external") {
     const kw = t === "procedure" ? "PROCEDURE" : t === "function" ? "FUNCTION" : t === "event" ? "EVENT" : "TRIGGER";
     return `DROP ${kw} IF EXISTS ${qualifiedName(kind, db, r.name)}`;
   }

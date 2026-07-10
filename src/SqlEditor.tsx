@@ -52,6 +52,24 @@ const DIALECT: Record<DbKind, SQLDialect> = {
   external: MySQL, // 外部 gateway 講 MySQL
 };
 
+// `@var` 為使用者變數前綴的方言（external = qland gateway，講 MySQL）。
+// postgres 的 `@` 是運算子、oracle 用 `:bind`，不啟用以免噪音。
+const AT_VAR_KINDS: DbKind[] = ["mysql", "mariadb", "external", "mssql"];
+
+// 掃描文件中出現過的 `@var` / `@@sysvar` token，供輸入 `@` 時自動提示。
+// 純文件掃描、不打後端（不占 qland gateway 併發名額）。
+const AT_VAR_TOKEN = /@@?[A-Za-z_$][\w$]*/g;
+function collectAtVars(doc: string, cursorTokenFrom: number | null): Completion[] {
+  const seen = new Map<string, string>(); // 小寫 key → 首見原樣（MySQL 使用者變數不分大小寫）
+  for (let m = AT_VAR_TOKEN.exec(doc); m; m = AT_VAR_TOKEN.exec(doc)) {
+    // 排除游標正在輸入中的那一個 token，避免以半成品自我提示。
+    if (cursorTokenFrom != null && m.index === cursorTokenFrom) continue;
+    const key = m[0].toLowerCase();
+    if (!seen.has(key)) seen.set(key, m[0]);
+  }
+  return Array.from(seen.values()).map((label) => ({ label, type: "variable", boost: 3 }));
+}
+
 // 1-based 行號 → 整行的字元位移範圍。
 function lineToRange(doc: string, line: number): { from: number; to: number } {
   const lines = doc.split("\n");
@@ -218,6 +236,20 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
         return { from: word ? word.from : ctx.pos, options, validFor: /^\w*$/ };
       };
       ext.push(lang.language.data.of({ autocomplete: snippetSource }));
+    }
+    // @ 變數自動完成（MySQL 系 / mssql）：輸入 `@` 時提示文件中出現過的使用者變數。
+    // 純文件掃描，與關鍵字 / 表欄 / 片段來源併存。
+    if (AT_VAR_KINDS.includes(kind)) {
+      const varSource: CompletionSource = (ctx) => {
+        const word = ctx.matchBefore(/@@?[\w$]*/);
+        const atWord = word && word.text[0] === "@" ? word : null;
+        // 游標前不是 `@...` → 不主動提示（除非使用者明確觸發自動完成）。
+        if (!atWord && !ctx.explicit) return null;
+        const options = collectAtVars(ctx.state.doc.toString(), atWord ? atWord.from : null);
+        if (!options.length) return null;
+        return { from: atWord ? atWord.from : ctx.pos, options, validFor: /^@@?[\w$]*$/ };
+      };
+      ext.push(lang.language.data.of({ autocomplete: varSource }));
     }
     // 送出鍵（高優先，蓋過預設按鍵）：
     //  Mod-Enter = 執行選取或游標所在語句；F6 = 整段執行；Tab = 縮排（程式碼編輯慣例）。

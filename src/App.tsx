@@ -20,7 +20,7 @@ import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
   resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
-  quoteIdent, qualifiedName, isMysqlFamily,
+  quoteIdent, qualifiedName, isMysqlFamily, supportsRoutines,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
@@ -41,6 +41,7 @@ import {
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
+  ScanSearch,
   type LucideIcon,
 } from "lucide-react";
 
@@ -67,6 +68,7 @@ const UserManager = lazyOverlay(() => import("./UserManager"));
 const DatabaseProperties = lazyOverlay(() => import("./DatabaseProperties"));
 const SchemaCompare = lazyOverlay(() => import("./SchemaCompare"));
 const SearchObjectsDialog = lazyOverlay(() => import("./SearchObjectsDialog"));
+const AdvancedSearchDialog = lazyOverlay(() => import("./AdvancedSearchDialog"));
 const ExportDialog = lazyOverlay(() => import("./ExportDialog"));
 const ImportDialog = lazyOverlay(() => import("./ImportDialog"));
 const DataDictionary = lazyOverlay(() => import("./DataDictionary"));
@@ -183,6 +185,8 @@ export default function App() {
   const [dialog, setDialog] = useState<{ initial: ConnectionConfig | null } | null>(null);
   const [backupOpen, setBackupOpen] = useState(false);
   const [erOpen, setErOpen] = useState(false);
+  // 進階物件搜尋（全螢幕 Modal）：null = 關閉。放 App 級以便工具列 / 側欄 / 快捷鍵共用。
+  const [advSearch, setAdvSearch] = useState<{ connId: string; kind: DbKind } | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -217,6 +221,8 @@ export default function App() {
     !!activeConn &&
     connectedIds.has(activeConn.id) &&
     (isMysqlFamily(activeConn.kind) || activeConn.kind === "postgres" || activeConn.kind === "sqlite" || activeConn.kind === "mssql" || activeConn.kind === "oracle");
+  // 進階搜尋：連線已連上即可用（外部 / MSSQL 等由對話框內部依 kind gate 選項）。
+  const canAdvSearch = !!activeConn && connectedIds.has(activeConn.id);
 
   // React 首屏（開場動畫或主介面）接手後，移除 index.html 的靜態骨架屏。
   useEffect(() => {
@@ -229,6 +235,20 @@ export default function App() {
     const g = loadQueryGuard();
     api.setQueryGuard(g.maxRows, g.timeoutMs).catch(() => {});
   }, []);
+
+  // 全域快捷鍵 Ctrl/Cmd+Shift+G：開啟進階物件搜尋（有 modal 開啟時讓路；需已選取並連線）。
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "g" || e.key === "G")) {
+        if (document.body.dataset.modalCount) return;
+        if (!activeConn || !connectedIds.has(activeConn.id)) return;
+        e.preventDefault();
+        setAdvSearch({ connId: activeConn.id, kind: activeConn.kind });
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [activeConn, connectedIds]);
 
   // 啟動時並行發出鎖定狀態查詢與連線清單載入（清單本就不含密碼，僅暫存 promise；
   // 解鎖後才寫入 store，鎖定語意不變，省掉一段串行 IPC）。
@@ -340,6 +360,8 @@ export default function App() {
         canBackup={!!activeConn}
         onEr={() => canEr && setErOpen(true)}
         canEr={canEr}
+        onAdvSearch={() => activeConn && canAdvSearch && setAdvSearch({ connId: activeConn.id, kind: activeConn.kind })}
+        canAdvSearch={canAdvSearch}
         onHelp={() => setHelpOpen(true)}
         onAbout={() => setAboutOpen(true)}
         onSettings={() => setSettingsOpen(true)}
@@ -347,7 +369,11 @@ export default function App() {
         onImportConns={importConnections}
       />
       <div className="flex-1 flex min-h-0">
-        <Sidebar width={sidebar.size} onEdit={(c) => setDialog({ initial: c })} />
+        <Sidebar
+          width={sidebar.size}
+          onEdit={(c) => setDialog({ initial: c })}
+          onAdvSearch={(id, k) => setAdvSearch({ connId: id, kind: k })}
+        />
         <Splitter axis="x" onPointerDown={sidebar.onPointerDown} />
         <MainArea onNewConnection={() => setDialog({ initial: null })} />
         <InfoPanel />
@@ -380,6 +406,9 @@ export default function App() {
       )}
       {erOpen && activeConn && canEr && (
         <ErDiagram connId={activeConn.id} onClose={() => setErOpen(false)} />
+      )}
+      {advSearch && (
+        <AdvancedSearchDialog connId={advSearch.connId} kind={advSearch.kind} onClose={() => setAdvSearch(null)} />
       )}
       {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
@@ -789,12 +818,14 @@ function PoolStatusBadge({ connId }: { connId: string }) {
 }
 
 // ---- 上方大圖示工具列（Navicat 風格識別特徵）----
-function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, onAbout, onSettings, onExportConns, onImportConns }: {
+function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearch, canAdvSearch, onHelp, onAbout, onSettings, onExportConns, onImportConns }: {
   onNewConnection: () => void;
   onBackup: () => void;
   canBackup: boolean;
   onEr: () => void;
   canEr: boolean;
+  onAdvSearch: () => void;
+  canAdvSearch: boolean;
   onHelp: () => void;
   onAbout: () => void;
   onSettings: () => void;
@@ -817,6 +848,7 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onHelp, on
   const tools: { icon: ReactNode; label: string; onClick: () => void; disabled: boolean; active?: boolean; hint?: string }[] = [
     { icon: <Icon icon={Plug} size={20} />, label: "連線", onClick: onNewConnection, disabled: false },
     { icon: <Icon icon={Network} size={20} />, label: "ER 圖", onClick: onEr, disabled: !canEr, hint: "需先連線到 MySQL / PostgreSQL / SQLite" },
+    { icon: <Icon icon={ScanSearch} size={20} />, label: "進階搜尋", onClick: onAdvSearch, disabled: !canAdvSearch, hint: "需先選取並連線一個連線（Ctrl+Shift+G）" },
     { icon: <Icon icon={DatabaseBackup} size={20} />, label: "備份", onClick: onBackup, disabled: !canBackup, hint: "需先選取並連線一個連線" },
     { icon: <Icon icon={Star} size={20} />, label: "收藏查詢", onClick: () => useStore.getState().openSavedManager(), disabled: false },
     { icon: <Icon icon={Upload} size={20} />, label: "匯出連線", onClick: onExportConns, disabled: false },
@@ -895,6 +927,7 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   const groups: [string, [string, string][]][] = [
     ["全域", [
       ["Ctrl+K", "命令面板：跳到連線 / 資料庫 / 資料表，或執行動作"],
+      ["Ctrl+Shift+G", "進階物件搜尋（名稱 / 定義 / 註解 / 萬用字元 / 整字）"],
     ]],
     ["查詢編輯器", [
       ["F6", "執行整段查詢"],
@@ -1050,7 +1083,7 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 }
 
 // ---- 左側連線/物件樹 ----
-function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; width: number }) {
+function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig) => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void }) {
   const { connections, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
   const [databases, setDatabases] = useState<Record<string, string[]>>({});
   // 已展開的資料庫: 鍵為 connId:db，值為樹狀分組（資料表 / 檢視 / 函式）
@@ -1297,6 +1330,14 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
       }
     }
     items.push({ id: "act:query", label: "開啟查詢編輯器", group: "動作", icon: FileCode2, run: () => useStore.getState().setActiveTab("__query__") });
+    items.push({
+      id: "act:advsearch", label: "進階物件搜尋…", group: "動作", icon: Search,
+      run: () => {
+        const c = connections.find((x) => x.id === activeId);
+        if (c && connectedIds.has(c.id)) onAdvSearch(c.id, c.kind);
+        else toast.info("請先選取並連線一個連線");
+      },
+    });
     items.push({ id: "act:theme", label: "切換深淺色主題", group: "動作", icon: Moon, run: () => useTheme.getState().toggle() });
     // 釘選的常用表（含未展開資料庫者）也納入索引，確保最愛永遠可搜尋。
     for (const p of pins) {
@@ -1309,7 +1350,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
     }
     return items;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections, connectedIds, databases, expandedDbs, pins]);
+  }, [connections, connectedIds, databases, expandedDbs, pins, activeId, onAdvSearch]);
 
   const refreshDbs = async (id: string) => {
     if (!connectedIds.has(id)) return;
@@ -1357,10 +1398,9 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
 
   // 讀取某資料庫的物件（表 + 視圖 + 程序 / 函式）。程序清單失敗不阻斷表載入。
   const fetchDbObjects = async (connId: string, kind: DbKind, db: string): Promise<DbObjects> => {
-    const supportsRoutines = isMysqlFamily(kind) || kind === "postgres" || kind === "oracle";
     const [tables, routines] = await Promise.all([
       api.listTables(connId, db),
-      supportsRoutines ? api.listRoutines(connId, db).catch(() => [] as RoutineInfo[]) : Promise.resolve([] as RoutineInfo[]),
+      supportsRoutines(kind) ? api.listRoutines(connId, db).catch(() => [] as RoutineInfo[]) : Promise.resolve([] as RoutineInfo[]),
     ]);
     return splitDbObjects(tables, routines);
   };
@@ -1404,6 +1444,44 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
       setDbLoading(key, false);
     }
   };
+
+  // 「在物件總管中選取」：消費進階搜尋發出的 revealRequest（展開資料庫 → 展開資料夾 →
+  // 選取節點 → 捲入可視範圍）。以 nonce 觸發，即使目標相同也重跑。
+  const revealRequest = useStore((s) => s.revealRequest);
+  useEffect(() => {
+    if (!revealRequest) return;
+    const { connId, db, table, objKind } = revealRequest;
+    const cfg = connections.find((c) => c.id === connId);
+    if (!cfg || !connectedIds.has(connId)) return;
+    let cancelled = false;
+    (async () => {
+      setActive(connId);
+      await ensureDbExpanded(connId, db); // async：載入該庫物件（若尚未展開）
+      if (cancelled) return;
+      const dbKey = `${connId}:${db}`;
+      const folder = objKind === "view" ? "views" : "tables";
+      setFolderOpen((o) => ({ ...o, [`${dbKey}:${folder}`]: true })); // 展開對應資料夾
+      selectNode({ type: "table", connId, db, table, kind: cfg.kind, objKind });
+      // async 展開 + 資料夾展開後，節點需數個 frame 才進 DOM → rAF 重試（上限 ~20 frame）。
+      let tries = 0;
+      const tick = () => {
+        if (cancelled) return;
+        const el = Array.from(document.querySelectorAll<HTMLElement>("[data-tree-table]")).find(
+          (n) => n.dataset.treeConn === connId && n.dataset.treeDb === db && n.dataset.treeTable === table
+        );
+        if (el) {
+          el.scrollIntoView({ block: "nearest" });
+          return;
+        }
+        if (tries++ < 20) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealRequest?.nonce]);
 
   // 強制重載某資料庫的表 / 集合清單（新增 / 刪除表 / 集合後刷新樹狀）。
   // 註：折疊中的節點會被展開以呈現剛建立的項目（刻意，符合「建立後即見」預期）。
@@ -1753,7 +1831,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
       nodes.push(it("新增資料表…", () => setDesignTable({ connId: m.connId, db: m.db, kind: m.kind })));
     if (m.type === "views")
       nodes.push(it("新增視圖…", () => setCreateView({ connId: m.connId, db: m.db, kind: m.kind })));
-    if (m.type === "functions" && (isMysqlFamily(m.kind) || m.kind === "postgres"))
+    if (m.type === "functions" && (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "external"))
       nodes.push(it("預存程序 / 觸發器…", () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind })));
     nodes.push(sep);
     nodes.push(it("重新整理", () => refreshTables(m.connId, m.db)));
@@ -1898,17 +1976,23 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
     const sep: MenuNode = { kind: "sep" };
     const r = m.routine;
     const label = r.routine_type === "procedure" ? "程序" : "函式";
+    // external（gateway）連線為唯讀：不提供新增 / 刪除（按了必被後端擋下）。
+    const ro = m.kind === "external" || readonlyConns[m.connId] === true;
     return [
       it(`設計${label}`, () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, initial: r })),
       it(`執行${label}…`, () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, initial: r, initialAction: "exec" })),
-      sep,
-      it("新增函式…", () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, newType: "function" })),
-      it("新增程序…", () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, newType: "procedure" })),
+      ...(ro ? [] : [
+        sep,
+        it("新增函式…", () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, newType: "function" })),
+        it("新增程序…", () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, newType: "procedure" })),
+      ]),
       sep,
       it("複製名稱", () => copyToClipboard(r.name, "已複製名稱")),
       it("複製建立 SQL", () => copyRoutineDdl(m.connId, m.db, r)),
-      sep,
-      it(`刪除${label}…`, () => dropRoutine(m.connId, m.db, m.kind, r), true),
+      ...(ro ? [] : [
+        sep,
+        it(`刪除${label}…`, () => dropRoutine(m.connId, m.db, m.kind, r), true),
+      ]),
       sep,
       it("重新整理", () => refreshTables(m.connId, m.db)),
     ];
@@ -2118,12 +2202,15 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                 const isRedis = c.kind === "redis";
                 // external（gateway）走 SQL 分支：用資料夾 + 每庫篩選框（適合大量表），右鍵亦可新增查詢。
                 const isSqlKind = isMysqlFamily(c.kind) || c.kind === "postgres" || c.kind === "sqlite" || c.kind === "external" || c.kind === "mssql" || c.kind === "oracle";
-                const supportsRoutines = isMysqlFamily(c.kind) || c.kind === "postgres" || c.kind === "mssql" || c.kind === "oracle";
+                const canRoutines = supportsRoutines(c.kind);
 
                 // 樹中的單一資料表 / 視圖節點（沿用選取 / 雙擊開啟 / 右鍵產生 SQL）。indent 控制縮排深度。
                 const objNode = (t: TableInfo, indent: string) => (
                   <div
                     key={`${t.kind}:${t.name}`}
+                    data-tree-conn={c.id}
+                    data-tree-db={db}
+                    data-tree-table={t.name}
                     onClick={() => {
                       setActive(c.id);
                       selectNode({ type: "table", connId: c.id, db, table: t.name, kind: c.kind, objKind: t.kind });
@@ -2257,7 +2344,7 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                             <>{vTables.map((t) => objNode(t, "pl-16"))}</>)}
                           {folderNode("views", Eye, "text-purple-300/80", "檢視", vViews.length,
                             <>{vViews.map((t) => objNode(t, "pl-16"))}</>)}
-                          {supportsRoutines && folderNode("functions", FunctionSquare, "text-amber-300/90", "函式", vRoutines.length,
+                          {canRoutines && folderNode("functions", FunctionSquare, "text-amber-300/90", "函式", vRoutines.length,
                             <>{vRoutines.map(routineNode)}</>)}
                         </>
                       );
@@ -2305,6 +2392,9 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
                   : []),
                 ...(connectedIds.has(menu.id)
                   ? [["SQL Search…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
+                  : []),
+                ...(connectedIds.has(menu.id)
+                  ? [["進階搜尋…", () => onAdvSearch(menuConn.id, menuConn.kind), false] as [string, () => void, boolean]]
                   : []),
                 ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres")
                   ? [
@@ -2626,8 +2716,9 @@ function Sidebar({ onEdit, width }: { onEdit: (c: ConnectionConfig) => void; wid
 // ---- 中央主工作區：分頁式（表分頁 + 查詢） ----
 function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
   const { connections, activeId, connectedIds, tabs, activeTabKey, setActiveTab, closeTab, closeOtherTabs, closeAllTabs,
-    queryTabs, addQueryTab, closeQueryTab } = useStore();
+    queryTabs, addQueryTab, closeQueryTab, closeOtherQueryTabs } = useStore();
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
+  const [queryTabMenu, setQueryTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const activeTabRef = useRef<HTMLDivElement>(null);
   const queryTabRef = useRef<HTMLButtonElement>(null);
 
@@ -2763,6 +2854,13 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
               btnRef={isActive ? queryTabRef : undefined}
               onActivate={() => setActiveTab(qid)}
               onClose={() => closeQueryTab(qid)}
+              onContextMenu={(e) => {
+                e.preventDefault(); // 攔掉 WebView 預設右鍵選單
+                setActiveTab(qid);
+                // 只有 home 一個分頁時無任何可執行動作 → 不開空選單。
+                if (qid === "__query__" && queryTabs.length <= 1) return;
+                setQueryTabMenu({ id: qid, x: e.clientX, y: e.clientY });
+              }}
             />
           );
         })}
@@ -2803,21 +2901,54 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
           </div>
         </>
       )}
+
+      {queryTabMenu && (
+        <>
+          <div className="fixed inset-0 z-[89]"
+            onClick={() => setQueryTabMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setQueryTabMenu(null); }} />
+          <div className="fixed z-[90] min-w-[140px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
+            style={{ left: queryTabMenu.x, top: queryTabMenu.y }}>
+            {(() => {
+              const qid = queryTabMenu.id;
+              const isHome = qid === "__query__"; // home「查詢」不可關
+              // 其他「可關」的查詢分頁（非自己、非 home）；全部關閉 = 只留 home。
+              const hasOtherClosable = queryTabs.some((t) => t !== qid && t !== "__query__");
+              const items: [string, () => void][] = [];
+              if (!isHome) items.push(["關閉查詢", () => closeQueryTab(qid)]);
+              if (hasOtherClosable || (isHome && queryTabs.length > 1))
+                items.push(["關閉其他查詢", () => closeOtherQueryTabs(qid)]);
+              if (!isHome && queryTabs.length > 1)
+                items.push(["全部關閉查詢", () => closeOtherQueryTabs("__query__")]);
+              return items.map(([label, fn]) => (
+                <button key={label} type="button"
+                  onClick={() => { setQueryTabMenu(null); fn(); }}
+                  className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+                  {label}
+                </button>
+              ));
+            })()}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
 // 單一查詢分頁鈕（受控）：可關閉者（額外分頁）顯示關閉鈕，中鍵亦可關。home「查詢」不可關。
-function QueryTabButton({ label, active, closable, onActivate, onClose, btnRef }: {
+// 右鍵選單由呼叫端提供（onContextMenu 掛在外框，含關閉鈕區域）。
+function QueryTabButton({ label, active, closable, onActivate, onClose, onContextMenu, btnRef }: {
   label: string;
   active: boolean;
   closable: boolean;
   onActivate: () => void;
   onClose: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
   btnRef?: React.Ref<HTMLButtonElement>;
 }) {
   return (
     <div
+      onContextMenu={onContextMenu}
       className={`group flex items-center border-r border-fg/10 shrink-0 ${
         active ? "bg-app text-fg shadow-[inset_0_-2px_0_rgb(var(--c-accent))]" : "text-fg/50 hover:bg-fg/5"
       }`}

@@ -1,3 +1,16 @@
+## v0.8.6
+
+- **進階物件搜尋（`Ctrl+Shift+G`）**：跨資料庫搜尋表 / 視圖 / 欄位 / 索引 / 預存程序 / 函式 / 觸發器 / 外鍵，結果以**表格**呈現（物件名稱 / 資料庫(Schema) / 型別 / 命中於 / 詳細，欄位可排序），底部可調高度的**定義預覽**並高亮命中處，並可「**在物件總管中選取**」把該物件在側欄樹展開 + 捲動 + 選取。與既有的快速物件搜尋並存、共用後端 `search_objects`。
+  - **整字比對（whole word）**：needle 左右須為非單字字元或字串邊界（`_` / 數字算單字字元）。
+  - **萬用字元（wildcards）**：`*` 任意長度（含空）、`?` 單一字元，後端轉錨定比對；Redis 走原生 glob。
+  - 兩個開關皆關時，比對行為與舊版 `contains` 逐位元相同；SQL 粗篩改由 `SearchOptions::like_pattern()` 統一產生（含萬用字元時放寬 LIKE，再由 Rust 端精確過濾）。
+  - CLI 同步支援：`dbk search <term> --whole-word --wildcards`。
+- **SQL 編輯器：`@` 使用者變數自動完成**（MySQL 系 / MariaDB / SQL Server / external gateway）——輸入 `@` 時提示目前文件中出現過的使用者變數（不分大小寫去重，保留首見的原樣拼寫）。
+- **查詢分頁右鍵選單**：「關閉查詢」/「關閉其他查詢」（home 分頁 `__query__` 不可關）。
+- **修正：qland / external 連線在側欄看不到預存程序與函式**——「支援 routines 的 kind」白名單原本在抓取端與渲染端各寫一份且不一致（`mssql` 只在渲染端 → 資料夾恆顯示 0；`external` 兩端皆缺 → 完全不顯示）。集中成單一 `supportsRoutines()` predicate；`genUseDb` / `sqlLiteral` 的 MySQL 方言分支補上 `external`（原本落到結尾的 trigger fallback）。
+- **修正：編輯 external 連線會清掉沒有 UI 的進階選項**——`ConnectionDialog` 存檔時以物件字面值重建 `options`，把 `cache_ttl_secs` / `max_concurrency` 等未列舉的鍵一併清空；改為在既有 `options` 上覆寫，且「略過 TLS」取消勾選時真正移除該鍵。
+- **README 與介面預覽圖全面更新**：4 張 SVG mockup（配色停在已移除的 slate 主題）換成 **5 張 Playwright 實拍**（`npm run make:screenshots` → `scripts/capture-screenshots.mjs`：`vite preview` 起 production build + 注入 Tauri invoke shim 餵示範資料，不需後端也不需真實資料庫）。原 `scripts/make-screenshots.mjs` 移除。
+
 ## v0.7.4
 
 - **開場動畫改為每次啟動固定 1.5 秒**：原本首次啟動 1.2s、之後精簡 0.6s（靠 `localStorage` 的 `dbkit:launched` 旗標區分），現統一為每次 1.5s；一併移除已無用的 `dbkit:launched` 旗標。其餘行為不變——仍扣除 bundle 載入已流逝時間（保底 300ms）、點擊 / 按任意鍵可跳過、`prefers-reduced-motion` 與啟動密碼鎖屏情境維持原邏輯、淡出動畫 0.55s。

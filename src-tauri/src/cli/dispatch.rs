@@ -400,6 +400,8 @@ fn build_search(s: SearchArgs) -> SearchOptions {
         match_comments,
         case_sensitive: s.case_sensitive,
         limit: s.limit,
+        whole_word: s.whole_word,
+        wildcards: s.wildcards,
     }
 }
 

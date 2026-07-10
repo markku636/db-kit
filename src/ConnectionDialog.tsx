@@ -110,8 +110,17 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
 
   // 依 kind 組 options map（連線層非機密設定）。回 undefined 表示無額外選項。
   const buildOptions = (): Record<string, string> | undefined => {
-    if (kind === "external")
-      return { driver, base_url: baseUrl, env, ...(insecure ? { insecure: "1" } : {}) };
+    if (kind === "external") {
+      // 保留 cache_ttl_secs / max_concurrency 等「無 UI」的進階選項：回物件字面值會把未列舉的
+      // 鍵一併清掉（使用者只是開對話框按存檔，進階設定就沒了）。
+      const ext: Record<string, string> = { ...(initial?.options ?? {}) };
+      ext.driver = driver;
+      ext.base_url = baseUrl;
+      ext.env = env;
+      if (insecure) ext.insecure = "1";
+      else delete ext.insecure; // 取消勾選要真的移除，不能靠 spread 蓋掉舊值
+      return ext;
+    }
     const o: Record<string, string> = {};
     if (kind === "redis") {
       if (redisTls) o.redis_tls = "true";

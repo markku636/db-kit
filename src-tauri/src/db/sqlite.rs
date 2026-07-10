@@ -3,7 +3,7 @@ use sqlx::{Column, Row, SqlitePool, TypeInfo, ValueRef};
 use std::time::Duration;
 
 use crate::db::{
-    filter_op_sql, finalize_hits, like_contains, make_snippet, op_needs_value, sqlx_db_message, AlterOp, CellEdit,
+    filter_op_sql, finalize_hits, make_snippet, op_needs_value, sqlx_db_message, AlterOp, CellEdit,
     ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable,
     Filter, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, SearchHit,
     SearchOptions, Sort, SortDir, TableInfo, ValidationReport,
@@ -119,7 +119,7 @@ impl DatabaseDriver for SqliteDriver {
                 return Ok(vec![]);
             }
         }
-        let pattern = like_contains(&opts.term);
+        let pattern = opts.like_pattern();
         let mut hits: Vec<SearchHit> = Vec::new();
 
         let classify = |name: &str, def: Option<&str>| -> Option<(&'static str, Option<String>)> {

@@ -82,6 +82,7 @@ import {
   buildGrant,
   buildRevoke,
   buildDropRoutine,
+  supportsRoutines,
   userListSql,
   isDangerousRedisCommand,
   lintSqlStructure,
@@ -250,6 +251,22 @@ describe("buildDropRoutine", () => {
   it("SQLite: only triggers exist; no schema qualifier", () => {
     expect(buildDropRoutine("sqlite", "main", { name: "trg", routine_type: "trigger", parent: null, signature: null }))
       .toBe("DROP TRIGGER IF EXISTS `trg`");
+  });
+  it("external gateway speaks MySQL dialect (not the trigger fallback)", () => {
+    expect(buildDropRoutine("external", "app", { ...base, routine_type: "procedure" })).toBe("DROP PROCEDURE IF EXISTS `app`.`do_thing`");
+    expect(buildDropRoutine("external", "app", { ...base, routine_type: "function" })).toBe("DROP FUNCTION IF EXISTS `app`.`do_thing`");
+  });
+});
+
+describe("supportsRoutines", () => {
+  it("covers every kind whose backend driver implements list_routines", () => {
+    for (const k of ["mysql", "mariadb", "postgres", "mssql", "oracle", "external"] as const)
+      expect(supportsRoutines(k)).toBe(true);
+  });
+  it("excludes kinds without routines (sqlite / mongo / redis) and nullish", () => {
+    for (const k of ["sqlite", "mongo", "redis"] as const) expect(supportsRoutines(k)).toBe(false);
+    expect(supportsRoutines(null)).toBe(false);
+    expect(supportsRoutines(undefined)).toBe(false);
   });
 });
 

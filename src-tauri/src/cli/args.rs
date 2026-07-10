@@ -219,6 +219,12 @@ pub struct SearchArgs {
     /// 區分大小寫
     #[arg(long)]
     pub case_sensitive: bool,
+    /// 僅比對整個單字
+    #[arg(long = "whole-word")]
+    pub whole_word: bool,
+    /// 啟用萬用字元 * 與 ?
+    #[arg(long)]
+    pub wildcards: bool,
     /// 結果上限
     #[arg(long)]
     pub limit: Option<usize>,

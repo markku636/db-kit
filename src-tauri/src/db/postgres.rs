@@ -3,7 +3,7 @@ use sqlx::{Column, PgPool, Row, TypeInfo, ValueRef};
 use std::time::Duration;
 
 use crate::db::{
-    classify_match, collect_relations, filter_op_sql, finalize_hits, fmt_bytes, like_contains, make_snippet,
+    classify_match, collect_relations, filter_op_sql, finalize_hits, fmt_bytes, make_snippet,
     op_needs_value, sqlx_db_message, AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver,
     ErColumn, ErModel, ErTable, Filter, ForeignKeyInfo, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo,
     RowDelete, RowInsert, SearchHit, SearchOptions, Sort, SortDir, TableInfo, ValidationReport,
@@ -620,7 +620,7 @@ impl DatabaseDriver for PostgresDriver {
         if opts.term.is_empty() || opts.no_scope() {
             return Ok(vec![]);
         }
-        let pattern = like_contains(&opts.term);
+        let pattern = opts.like_pattern();
         let limit = format!(" LIMIT {}", opts.cap());
 
         // 各物件型別查詢彼此獨立，改以 tokio::join! 並行送出（共用連線池，最多 max_connections 條同時），

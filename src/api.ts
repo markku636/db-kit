@@ -457,6 +457,8 @@ export interface SearchOptions {
   match_definitions?: boolean;
   match_comments?: boolean;
   case_sensitive?: boolean;
+  whole_word?: boolean;  // 詞界比對（後端以單字邊界實作；qland 忽略、mssql 未支援）
+  wildcards?: boolean;   // 萬用字元（* → 任意長度、? → 單一字元；後端轉錨定 LIKE，redis 原生 glob）
   limit?: number | null;
 }
 

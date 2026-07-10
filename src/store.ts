@@ -33,6 +33,16 @@ export type SelectedNode =
   | { type: "database"; connId: string; db: string; kind: DbKind }
   | { type: "table"; connId: string; db: string; table: string; kind: DbKind; objKind: string };
 
+// 「在物件總管中選取」的一次性請求（進階搜尋 → 側欄展開 + 捲動 + 選取）。
+// nonce 每次遞增，讓側欄 effect 即使目標相同也重新觸發。
+export interface RevealRequest {
+  connId: string;
+  db: string;
+  table: string;
+  objKind: string;
+  nonce: number;
+}
+
 interface AppStore {
   // 已儲存的連線設定（持久化於磁碟，密碼存 OS keychain；啟動時載入清單）
   connections: ConnectionConfig[];
@@ -85,6 +95,8 @@ interface AppStore {
   // 供側欄節點 / Ctrl+N / 工具列「新查詢」共用：永遠開新分頁、不覆蓋現有編輯器內容。
   newQueryTab: (sql?: string, connId?: string) => void;
   closeQueryTab: (id: string) => void;
+  // 關閉「其他」查詢分頁：保留 home「__query__」與指定 id，其餘全關。
+  closeOtherQueryTabs: (id: string) => void;
   setTabView: (key: string, view: "data" | "structure") => void;
   // 物件被刪除時連帶關閉其分頁（沿用 markDisconnected 的清理慣例）。
   closeTableTab: (connId: string, database: string, table: string) => void;
@@ -102,6 +114,9 @@ interface AppStore {
   bumpDataReload: (connId: string, database: string, table: string) => void;
   // 設定詳細資料面板選取的節點（null 清空）。
   selectNode: (node: SelectedNode | null) => void;
+  // 「在物件總管中選取」：發出一次性 reveal 請求（側欄 effect 消費）。
+  revealRequest: RevealRequest | null;
+  revealInTree: (connId: string, db: string, table: string, objKind?: string) => void;
 
   // 收藏查詢 mutation（純轉換 → persist → set；對標 setConnReadonly）。
   addSavedQuery: (sq: SavedQuery) => void;             // 新增 / 同名覆蓋；蓋時間戳
@@ -131,6 +146,7 @@ export const useStore = create<AppStore>((set) => ({
   pendingFilter: null,
   dataReload: {},
   selectedNode: null,
+  revealRequest: null,
   savedQueries: loadSavedQueries(),
   snippets: loadSnippets(),
   savedMgr: null,
@@ -231,6 +247,15 @@ export const useStore = create<AppStore>((set) => ({
         s.activeTabKey === id ? queryTabs[queryTabs.length - 1] : s.activeTabKey;
       return { queryTabs, activeTabKey };
     }),
+  // 關閉「其他」查詢分頁：保留 home「__query__」與指定 id，其餘查詢分頁全關。
+  closeOtherQueryTabs: (id) =>
+    set((s) => {
+      const queryTabs = s.queryTabs.filter((t) => t === "__query__" || t === id);
+      // 作用中分頁若為被關掉的查詢分頁 → 切到保留的 id；表分頁 / 仍存在者不動。
+      const stillValid =
+        s.tabs.some((t) => t.key === s.activeTabKey) || queryTabs.includes(s.activeTabKey ?? "");
+      return { queryTabs, activeTabKey: stillValid ? s.activeTabKey : id };
+    }),
   // 設定待載入 SQL 並切到查詢分頁（QueryPane 掛載後消費）。作用中已是某查詢分頁則留在原分頁，
   // 否則（在表分頁）切到 home 查詢分頁。
   requestQuery: (sql) =>
@@ -282,6 +307,11 @@ export const useStore = create<AppStore>((set) => ({
       return { dataReload: { ...s.dataReload, [key]: (s.dataReload[key] ?? 0) + 1 } };
     }),
   selectNode: (node) => set({ selectedNode: node }),
+  revealInTree: (connId, db, table, objKind = "table") =>
+    set((s) => ({
+      revealRequest: { connId, db, table, objKind, nonce: (s.revealRequest?.nonce ?? 0) + 1 },
+      activeId: connId, // 順帶選取該連線（selectedNode 由側欄 effect 補，需 kind）
+    })),
 
   // ---- 收藏查詢 ----
   addSavedQuery: (sq) =>

@@ -645,6 +645,8 @@ async fn sqlite_search_objects() {
         match_comments: true,
         case_sensitive: false,
         limit: Some(500),
+        whole_word: false,
+        wildcards: false,
     };
 
     // 1. "email"：欄位名（customers.email）、索引名（ix_email）、視圖定義內文（active_customers）。
@@ -704,6 +706,43 @@ async fn sqlite_search_objects() {
     let mut o = base("customers");
     o.databases = Some(vec!["main".into()]);
     assert!(!d.search_objects(&o).await.unwrap().is_empty(), "指定 main 應有結果");
+
+    // 6. 整字比對：names-only，"customer" 開整字時不應命中 customers 表 / customer_id 欄位。
+    let mut o = base("customer");
+    o.match_definitions = false;
+    o.match_comments = false;
+    o.whole_word = true;
+    let hits = d.search_objects(&o).await.unwrap();
+    assert!(
+        !hits.iter().any(|h| h.object_name == "customers"),
+        "整字比對 customer 不應命中 customers（右界為單字字元）：{hits:?}"
+    );
+    assert!(
+        !hits.iter().any(|h| h.object_name == "customer_id"),
+        "整字比對 customer 不應命中 customer_id（`_` 為單字字元）：{hits:?}"
+    );
+
+    // 7. 萬用字元：names-only，"custom*" 前綴應命中 customers 資料表。
+    let mut o = base("custom*");
+    o.match_definitions = false;
+    o.match_comments = false;
+    o.wildcards = true;
+    let hits = d.search_objects(&o).await.unwrap();
+    assert!(
+        hits.iter().any(|h| h.object_type == "table" && h.object_name == "customers"),
+        "萬用字元 custom* 應命中 customers 資料表：{hits:?}"
+    );
+
+    // 8. 萬用字元 `?`：欄位 "customer?id" 應命中 customers.customer_id（? 比中底線）。
+    let mut o = base("customer?id");
+    o.match_definitions = false;
+    o.match_comments = false;
+    o.wildcards = true;
+    let hits = d.search_objects(&o).await.unwrap();
+    assert!(
+        hits.iter().any(|h| h.object_type == "column" && h.object_name == "customer_id"),
+        "萬用字元 customer?id 應命中欄位 customer_id：{hits:?}"
+    );
 
     d.close().await;
     let _ = std::fs::remove_file(dbfile);
@@ -1036,6 +1075,8 @@ async fn mysql_full() {
             match_comments: true,
             case_sensitive: false,
             limit: Some(500),
+            whole_word: false,
+            wildcards: false,
         };
         let hits = d.search_objects(&base).await.unwrap();
         assert!(hits.iter().any(|h| h.object_type == "table" && h.object_name == "dbkit_search_t"), "MySQL 搜尋應找到資料表：{hits:?}");
@@ -1425,6 +1466,8 @@ async fn postgres_full() {
             match_comments: true,
             case_sensitive: false,
             limit: Some(500),
+            whole_word: false,
+            wildcards: false,
         };
         let hits = d.search_objects(&base).await.unwrap();
         assert!(hits.iter().any(|h| h.object_type == "table" && h.object_name == "dbkit_search_t"), "PG 搜尋應找到資料表：{hits:?}");
@@ -1547,6 +1590,8 @@ async fn redis_full() {
             match_comments: false,
             case_sensitive: false,
             limit: Some(500),
+            whole_word: false,
+            wildcards: false,
         };
         let hits = d.search_objects(&opts).await.unwrap();
         assert!(
@@ -1779,6 +1824,8 @@ async fn mongo_full() {
             match_comments: false,
             case_sensitive: false,
             limit: Some(500),
+            whole_word: false,
+            wildcards: false,
         };
         let hits = d.search_objects(&opts).await.unwrap();
         assert!(

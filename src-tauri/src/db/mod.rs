@@ -731,6 +731,12 @@ pub struct SearchOptions {
     /// 結果上限（每段查詢與整體共用）；None → 預設 500。
     #[serde(default)]
     pub limit: Option<usize>,
+    /// 僅比對整個單字（word-boundary；`_` / 數字視為單字字元的一部分）。
+    #[serde(default)]
+    pub whole_word: bool,
+    /// 啟用萬用字元 `*`（任意長度，含空）與 `?`（單一字元）。
+    #[serde(default)]
+    pub wildcards: bool,
 }
 
 impl SearchOptions {
@@ -748,14 +754,46 @@ impl SearchOptions {
     }
 
     /// 文字是否含搜尋詞（依 case_sensitive；以原始 term 比對，不含 LIKE 跳脫）。
+    /// 委派 `matches()`；whole_word / wildcards 皆關時等同舊版 `contains` 行為。
     pub fn hit(&self, text: &str) -> bool {
+        self.matches(text)
+    }
+
+    /// 權威比對器：依 wildcards / whole_word 分派。
+    /// - `wildcards && 有 * 或 ?` → 錨定 glob 比對（`*`任意長度、`?`單一字元）
+    /// - 否則 `whole_word` → 詞界比對（needle 左右須為非單字字元或字串邊界）
+    /// - 否則 → 子字串包含（與舊版 `hit` byte-identical）
+    /// 大小寫：!case_sensitive 時兩邊皆轉小寫（與舊版一致；轉小寫不改變字元的單字類別，
+    /// 故詞界與 glob 語意不受影響）。
+    fn matches(&self, text: &str) -> bool {
         if self.term.is_empty() {
             return false;
         }
-        if self.case_sensitive {
-            text.contains(self.term.as_str())
+        use std::borrow::Cow;
+        let (hay, needle) = if self.case_sensitive {
+            (Cow::Borrowed(text), Cow::Borrowed(self.term.as_str()))
         } else {
-            text.to_lowercase().contains(&self.term.to_lowercase())
+            (Cow::Owned(text.to_lowercase()), Cow::Owned(self.term.to_lowercase()))
+        };
+        if self.wildcards && has_glob_meta(&self.term) {
+            let pattern: Vec<char> = needle.chars().collect();
+            let subject: Vec<char> = hay.chars().collect();
+            glob_match_anchored(&pattern, &subject)
+        } else if self.whole_word {
+            whole_word_contains(&hay, &needle)
+        } else {
+            hay.contains(needle.as_ref())
+        }
+    }
+
+    /// SQL 粗篩樣式（各 driver 的 LIKE / ILIKE 綁定值）。
+    /// - `wildcards && 有 * 或 ?` → 錨定 `glob_to_like`（不加前後 `%`）
+    /// - 否則 → `like_contains`（`%…%`，整字模式亦同——仍為 Rust 比對的超集）
+    pub(crate) fn like_pattern(&self) -> String {
+        if self.wildcards && has_glob_meta(&self.term) {
+            glob_to_like(&self.term)
+        } else {
+            like_contains(&self.term)
         }
     }
 
@@ -778,6 +816,79 @@ pub(crate) fn like_contains(term: &str) -> String {
         s.push(c);
     }
     s.push('%');
+    s
+}
+
+/// 單字字元判定：英數（Unicode）或底線。用於詞界比對（`_` / 數字視為單字的一部分，
+/// 對齊 Redgate SQL Search「非英數為邊界、`_` 為單字字元」的語意）。
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// term 是否含 glob 中介字元（`*` / `?`）。以原始 term 判斷（大小寫不影響）。
+fn has_glob_meta(term: &str) -> bool {
+    term.contains('*') || term.contains('?')
+}
+
+/// 整字比對：needle 必須以「非單字字元 / 字串邊界」為左右界出現於 hay。
+/// 空 needle 一律不命中。呼叫端已負責大小寫正規化（兩者皆已轉小寫或皆原樣）。
+fn whole_word_contains(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    for (idx, _) in hay.match_indices(needle) {
+        let left_ok = hay[..idx].chars().next_back().map_or(true, |c| !is_word_char(c));
+        let right_ok = hay[idx + needle.len()..].chars().next().map_or(true, |c| !is_word_char(c));
+        if left_ok && right_ok {
+            return true;
+        }
+    }
+    false
+}
+
+/// 錨定 glob 比對（整個字串須符合）：`*` = 任意長度（含空）、`?` = 剛好一個字元。
+/// 以 char slice 運作以支援 Unicode。經典線性回溯法（star / mark 記錄回溯點）。
+fn glob_match_anchored(pattern: &[char], text: &[char]) -> bool {
+    let (mut p, mut t) = (0usize, 0usize);
+    let (mut star, mut mark) = (None, 0usize);
+    while t < text.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
+            p += 1;
+            t += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some(p);
+            mark = t;
+            p += 1;
+        } else if let Some(sp) = star {
+            p = sp + 1;
+            mark += 1;
+            t = mark;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == '*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
+/// 把使用者 glob 轉成錨定 LIKE 樣式（不加前後 `%`）：`*`→`%`、`?`→`_`，
+/// 字面 `% _ \` 以單一反斜線跳脫（與 `like_contains` 的 escape 字元一致，
+/// 沿用各 driver 既有的 `ESCAPE '\'` / `ESCAPE '\\'` 子句）。
+fn glob_to_like(term: &str) -> String {
+    let mut s = String::with_capacity(term.len() + 2);
+    for c in term.chars() {
+        match c {
+            '*' => s.push('%'),
+            '?' => s.push('_'),
+            '\\' | '%' | '_' => {
+                s.push('\\');
+                s.push(c);
+            }
+            _ => s.push(c),
+        }
+    }
     s
 }
 
@@ -1249,5 +1360,131 @@ pub(crate) fn bytes_to_display(b: &[u8]) -> String {
             }
             hex
         }
+    }
+}
+
+#[cfg(test)]
+mod search_match_tests {
+    use super::*;
+
+    /// 建一個只設 term / 旗標的 SearchOptions（其餘 Default）。
+    fn opts(term: &str, whole_word: bool, wildcards: bool, case_sensitive: bool) -> SearchOptions {
+        SearchOptions {
+            term: term.into(),
+            whole_word,
+            wildcards,
+            case_sensitive,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn plain_contains_is_default_behavior() {
+        // 兩旗標關 = 舊 contains 行為（大小寫不敏感）。
+        let o = opts("cust", false, false, false);
+        assert!(o.hit("customers"));
+        assert!(o.hit("cust_id"));
+        assert!(o.hit("ACCT_CUST"));
+        assert!(!o.hit("client"));
+    }
+
+    #[test]
+    fn case_sensitive_contains() {
+        let o = opts("Cust", false, false, true);
+        assert!(o.hit("Customers"));
+        assert!(!o.hit("customers"));
+    }
+
+    #[test]
+    fn whole_word_respects_boundaries() {
+        let o = opts("cust", true, false, false);
+        assert!(!o.hit("customers")); // 右界為單字字元 → 不命中
+        assert!(!o.hit("cust_id")); // `_` 為單字字元 → 不命中
+        assert!(!o.hit("mycust")); // 左界為單字字元 → 不命中
+        assert!(o.hit("cust")); // 完整字
+        assert!(o.hit("cust id")); // 空白為邊界
+        assert!(o.hit("cust-id")); // `-` 為邊界
+        assert!(o.hit("[cust]")); // 標點為邊界
+    }
+
+    #[test]
+    fn whole_word_case_insensitive() {
+        let o = opts("cust", true, false, false);
+        assert!(o.hit("CUST")); // 轉小寫後為完整字
+        assert!(!o.hit("CUSTOMERS"));
+    }
+
+    #[test]
+    fn wildcards_anchored_glob() {
+        let star = opts("cust*", false, true, false);
+        assert!(star.hit("customers")); // 前綴
+        assert!(star.hit("cust")); // `*` 可為空
+        assert!(!star.hit("mycust")); // 錨定：非前綴不命中
+
+        let contains = opts("*tomer*", false, true, false);
+        assert!(contains.hit("customers"));
+        assert!(!contains.hit("client"));
+
+        let q = opts("customer?id", false, true, false);
+        assert!(q.hit("customer_id")); // `?` 比中底線
+        assert!(q.hit("customerXid"));
+        assert!(!q.hit("customerid")); // `?` 須剛好一字元
+
+        let wp = opts("wp_?sers", false, true, false);
+        assert!(wp.hit("wp_users"));
+        assert!(!wp.hit("wp_sers"));
+    }
+
+    #[test]
+    fn wildcards_off_treats_meta_literally() {
+        // wildcards 關時，`*` / `?` 視為字面字元（走 contains）。
+        let o = opts("a*b", false, false, false);
+        assert!(o.hit("xa*by"));
+        assert!(!o.hit("axxb"));
+    }
+
+    #[test]
+    fn bare_star_matches_any_nonempty() {
+        let o = opts("*", false, true, false);
+        assert!(o.hit("anything"));
+        assert!(o.hit(""));
+    }
+
+    #[test]
+    fn wildcards_take_precedence_over_whole_word() {
+        // 兩旗標都開：有 meta → glob 勝。
+        let glob = opts("cust*", true, true, false);
+        assert!(glob.hit("customers"));
+        // 無 meta → whole_word 生效。
+        let ww = opts("cust", true, true, false);
+        assert!(!ww.hit("customers"));
+        assert!(ww.hit("cust"));
+    }
+
+    #[test]
+    fn like_pattern_backward_compatible() {
+        // 兩旗標關 → 與 like_contains 完全相同。
+        let o = opts("a%b_c", false, false, false);
+        assert_eq!(o.like_pattern(), like_contains("a%b_c"));
+        // wildcards 開且有 meta → glob_to_like（錨定、不加 %）。
+        let g = opts("cust*", false, true, false);
+        assert_eq!(g.like_pattern(), "cust%");
+        let q = opts("wp_?x", false, true, false);
+        assert_eq!(q.like_pattern(), r"wp\__x"); // `_` 跳脫、`?`→`_`
+    }
+
+    #[test]
+    fn empty_term_never_hits() {
+        assert!(!opts("", false, false, false).hit("anything"));
+        assert!(!opts("", true, true, false).hit("anything"));
+    }
+
+    #[test]
+    fn unicode_word_boundary() {
+        // 中日文等英數字元不應被錯誤切界。
+        let o = opts("金流", true, false, false);
+        assert!(o.hit("金流")); // 完整
+        assert!(o.hit("[金流]"));
+        assert!(!o.hit("金流服務")); // 右界為單字字元
     }
 }
