@@ -3,6 +3,7 @@ import { api, ImportResult, ImportPreview } from "./api";
 import { pickOpenFile, toast } from "./ui";
 import { Modal, Button, Segmented, Input } from "./ui/index";
 import { Download } from "lucide-react";
+import { useT } from "./i18n";
 
 // CSV / Excel 匯入對話框（致敬 Navicat / DBeaver 匯入精靈）：選檔 → 預覽欄位 / 前幾列 → 逐列寫入。
 export default function ImportDialog({ connId, database, table, onDone, onClose }: {
@@ -12,6 +13,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
   onDone?: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [delimiter, setDelimiter] = useState(",");
   const [hasHeader, setHasHeader] = useState(true);
   const [emptyAsNull, setEmptyAsNull] = useState(true);
@@ -50,7 +52,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
     let alive = true;
     api.importPreview(filePath, { delimiter, has_header: hasHeader, columns: null })
       .then((pv) => { if (alive) setPreview(pv); })
-      .catch((e: any) => { if (alive) { setPreview(null); toast.error(e?.message ?? "預覽失敗"); } });
+      .catch((e: any) => { if (alive) { setPreview(null); toast.error(e?.message ?? t("預覽失敗")); } });
     return () => { alive = false; };
   }, [filePath, delimiter, hasHeader]);
 
@@ -59,7 +61,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
     const useCols = !hasHeader || overrideNames;
     const cols = useCols ? columns.split(",").map((c) => c.trim()).filter(Boolean) : null;
     if (useCols && (!cols || cols.length === 0)) {
-      toast.error(overrideNames ? "請先填要套用的欄名（逗號分隔）" : "無表頭時請先填欄名（逗號分隔）");
+      toast.error(overrideNames ? t("請先填要套用的欄名（逗號分隔）") : t("無表頭時請先填欄名（逗號分隔）"));
       return;
     }
     setBusy(true);
@@ -71,10 +73,10 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
         : await api.importCsv(connId, database, table, filePath, opts);
       setResult(res);
       if (res.failed === 0) toast.success(`已匯入 ${res.imported} 列${isExcel ? "（Excel）" : ""}`);
-      else toast.error(`匯入 ${res.imported} 列、失敗 ${res.failed} 列`);
+      else toast.error(t("匯入 {imported} 列、失敗 {failed} 列", { imported: res.imported, failed: res.failed }));
       onDone?.(); // 重新整理資料格以顯示已匯入的列
     } catch (e: any) {
-      toast.error(e?.message ?? "匯入失敗");
+      toast.error(e?.message ?? t("匯入失敗"));
     } finally {
       setBusy(false);
     }
@@ -83,23 +85,23 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
   return (
     <Modal
       onClose={onClose}
-      title={<>匯入 CSV / Excel · <span className="mono text-fg/60">{table}</span></>}
+      title={<>{t("匯入 CSV / Excel ·")} <span className="mono text-fg/60">{table}</span></>}
       icon={Download}
       size="md"
       zClass="z-50"
       bodyClassName="p-5 space-y-3 overflow-auto"
       footer={<>
-        <Button variant="secondary" onClick={onClose}>{result ? "關閉" : "取消"}</Button>
-        <Button variant="secondary" onClick={pickFile}>{filePath ? "重新選檔" : "選擇檔案…"}</Button>
-        <Button variant="primary" loading={busy} onClick={doImport} disabled={busy || !filePath}>匯入</Button>
+        <Button variant="secondary" onClick={onClose}>{result ? t("關閉") : t("取消")}</Button>
+        <Button variant="secondary" onClick={pickFile}>{filePath ? t("重新選檔") : t("選擇檔案…")}</Button>
+        <Button variant="primary" loading={busy} onClick={doImport} disabled={busy || !filePath}>{t("匯入")}</Button>
       </>}
     >
       {targetCols.length > 0 && (
-        <div className="text-[11px] text-fg/45">目標欄位（{targetCols.length}）：<span className="mono">{targetCols.join(", ")}</span></div>
+        <div className="text-[11px] text-fg/45">{t("目標欄位（")}{targetCols.length}）：<span className="mono">{targetCols.join(", ")}</span></div>
       )}
       {filePath && (
         <div className="text-xs text-fg/55 truncate" title={filePath}>
-          檔案：<span className="mono">{filePath.split(/[\\/]/).pop()}</span>
+          {t("檔案：")}<span className="mono">{filePath.split(/[\\/]/).pop()}</span>
           {preview && <span className="text-fg/40"> · {preview.total_rows} 列資料 · {preview.columns.length} 欄</span>}
           {preview && !overrideNames && targetCols.length > 0 && preview.columns.length !== targetCols.length && (
             <span className="text-amber-400"> · 欄數與目標（{targetCols.length}）不同，可能需「重新指定欄名」</span>
@@ -126,23 +128,23 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
       )}
 
       <div className="flex items-center gap-3">
-            <span className="text-xs text-fg/50">分隔字元</span>
+            <span className="text-xs text-fg/50">{t("分隔字元")}</span>
             <Segmented
-              ariaLabel="分隔字元"
+              ariaLabel={t("分隔字元")}
               value={delimiter}
               onChange={setDelimiter}
               options={[
-                { value: ",", label: "逗號 ," },
+                { value: ",", label: t("逗號 ,") },
                 { value: "\t", label: "Tab" },
-                { value: ";", label: "分號 ;" },
+                { value: ";", label: t("分號 ;") },
               ]}
             />
-            <span className="text-[11px] text-fg/35">Excel 忽略此項</span>
+            <span className="text-[11px] text-fg/35">{t("Excel 忽略此項")}</span>
           </div>
 
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={hasHeader} onChange={(e) => setHasHeader(e.target.checked)} />
-            第一列為欄名
+            {t("第一列為欄名")}
           </label>
           {hasHeader && (
             <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
@@ -152,27 +154,27 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
                   // 啟用時若欄名空白，先帶入目標表欄位作為對應起點（使用者再依檔案欄序調整）。
                   if (e.target.checked && !columns.trim() && targetCols.length) setColumns(targetCols.join(", "));
                 }} />
-              重新指定欄名（覆蓋檔案表頭，對齊到目標欄位）
+              {t("重新指定欄名（覆蓋檔案表頭，對齊到目標欄位）")}
             </label>
           )}
           {(!hasHeader || overrideNames) && (
             <label className="block">
-              <span className="text-xs text-fg/50 mb-1 block">欄名（逗號分隔，依檔案欄序對應目標欄位）</span>
+              <span className="text-xs text-fg/50 mb-1 block">{t("欄名（逗號分隔，依檔案欄序對應目標欄位）")}</span>
               <Input inputSize="md" value={columns} onChange={(e) => setColumns(e.target.value)}
                 placeholder="id, name, qty" />
             </label>
           )}
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={trim} onChange={(e) => setTrim(e.target.checked)} />
-            去除每格前後空白（資料清理）
+            {t("去除每格前後空白（資料清理）")}
           </label>
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={emptyAsNull} onChange={(e) => setEmptyAsNull(e.target.checked)} />
-            空欄位視為 NULL（建議開：避免空字串塞進數值 / 日期欄而失敗）
+            {t("空欄位視為 NULL（建議開：避免空字串塞進數值 / 日期欄而失敗）")}
           </label>
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={stopOnError} onChange={(e) => setStopOnError(e.target.checked)} />
-            遇錯即停（取消＝盡量匯入，回報失敗列與錯誤）
+            {t("遇錯即停（取消＝盡量匯入，回報失敗列與錯誤）")}
           </label>
 
           {result && (

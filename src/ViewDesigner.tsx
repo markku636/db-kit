@@ -6,6 +6,7 @@ import { Modal, Button } from "./ui/index";
 import { viewDefinitionSql, buildReplaceView, formatSql } from "./sql";
 import SqlEditor from "./SqlEditor";
 import { useSqlSchema } from "./useSqlSchema";
+import { useT } from "./i18n";
 
 // 設計檢視（對標 Navicat「設計檢視」）：載入既有視圖的 SELECT 定義，編輯後以 CREATE OR REPLACE VIEW 套用。
 // MySQL 透過 information_schema.VIEWS（僅 SELECT，免解析）；PostgreSQL 透過 pg_get_viewdef。
@@ -17,6 +18,7 @@ export default function ViewDesigner({ connId, db, view, kind, onClose, onSaved 
   onClose: () => void;
   onSaved?: () => void;
 }) {
+  const t = useT();
   const [select, setSelect] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -33,7 +35,7 @@ export default function ViewDesigner({ connId, db, view, kind, onClose, onSaved 
         const def = r.rows[0]?.[0] ?? "";
         if (alive) setSelect(def);
       } catch (e: any) {
-        if (alive) setErr(e?.message ?? "載入視圖定義失敗");
+        if (alive) setErr(e?.message ?? t("載入視圖定義失敗"));
       } finally {
         if (alive) setLoading(false);
       }
@@ -43,15 +45,15 @@ export default function ViewDesigner({ connId, db, view, kind, onClose, onSaved 
 
   const save = async () => {
     if (busy) return; // 與 CreateView/CreateTable 一致的再進入守衛
-    if (!select.trim()) { toast.error("SELECT 定義不可為空"); return; }
+    if (!select.trim()) { toast.error(t("SELECT 定義不可為空")); return; }
     setBusy(true);
     try {
       await api.execDdl(connId, buildReplaceView(kind, db, view, select));
-      toast.success(`視圖 ${view} 已更新`);
+      toast.success(t("視圖 {view} 已更新", { view }));
       onSaved?.();
       onClose();
     } catch (e: any) {
-      toast.error(e?.message ?? "更新視圖失敗");
+      toast.error(e?.message ?? t("更新視圖失敗"));
     } finally {
       setBusy(false);
     }
@@ -63,9 +65,9 @@ export default function ViewDesigner({ connId, db, view, kind, onClose, onSaved 
       icon={Eye}
       title={(
         <span className="flex items-center gap-2">
-          <span>設計檢視：{db}.{view}</span>
+          <span>{t("設計檢視：")}{db}.{view}</span>
           <button type="button" onClick={() => setSelect((s) => formatSql(s))} disabled={loading || busy}
-            className="text-xs text-fg/60 hover:text-fg disabled:opacity-40">格式化</button>
+            className="text-xs text-fg/60 hover:text-fg disabled:opacity-40">{t("格式化")}</button>
         </span>
       )}
       size="lg"
@@ -74,17 +76,17 @@ export default function ViewDesigner({ connId, db, view, kind, onClose, onSaved 
       bodyClassName="p-0 flex flex-col min-h-0 overflow-hidden"
       footer={(
         <>
-          <Button variant="secondary" onClick={onClose}>取消</Button>
-          <Button variant="primary" loading={busy} disabled={loading || busy} onClick={save}>儲存</Button>
+          <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
+          <Button variant="primary" loading={busy} disabled={loading || busy} onClick={save}>{t("儲存")}</Button>
         </>
       )}
     >
       <div className="px-5 py-2 text-xs text-fg/40 border-b border-fg/10">
-        編輯下方 SELECT 後按「儲存」，將以 CREATE OR REPLACE VIEW 套用。
+        {t("編輯下方 SELECT 後按「儲存」，將以 CREATE OR REPLACE VIEW 套用。")}
       </div>
       <div className="flex-1 overflow-hidden p-3">
         {loading ? (
-          <div className="text-fg/40 text-sm p-2">載入中…</div>
+          <div className="text-fg/40 text-sm p-2">{t("載入中…")}</div>
         ) : err ? (
           <div className="text-red-300 text-sm p-2 mono whitespace-pre-wrap">{err}</div>
         ) : (

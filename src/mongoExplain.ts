@@ -1,4 +1,5 @@
-// MongoDB explain 輸出解析：把 find / aggregate 的 explain JSON（relaxed extJSON）正規化成
+
+import { t } from "./i18n";// MongoDB explain 輸出解析：把 find / aggregate 的 explain JSON（relaxed extJSON）正規化成
 // stage 樹 + 摘要，供 MongoExplain 元件視覺化。純函式、無 React / Tauri 相依（見 mongoExplain.test.ts）。
 //
 // 需容忍的形狀差異：
@@ -69,7 +70,7 @@ function nodeToStage(p: any): MongoPlanStage {
     }
   }
   const details: string[] = [];
-  if (typeof n.indexName === "string") details.push(`索引 ${n.indexName}`);
+  if (typeof n.indexName === "string") details.push(t("索引 {indexName}", { indexName: n.indexName }));
   if (typeof n.direction === "string") details.push(n.direction);
   const fs = filterSummary(n.filter);
   if (fs) details.push(fs);

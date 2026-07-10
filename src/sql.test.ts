@@ -278,6 +278,15 @@ describe("userListSql", () => {
     expect(s).toContain("max_user_connections");
     expect(s).toContain("ORDER BY User, Host");
   });
+
+  // 曾經寫成 IF(ssl_type='', '無', ssl_type)：使用者可見的文案被塞進送往 MySQL 的 SQL，
+  // 既翻譯不到、也把顯示邏輯藏進查詢。空值的呈現改由 UserManager 負責。
+  it("returns ssl_type verbatim and puts no user-facing copy in the SQL", () => {
+    const s = userListSql();
+    expect(s).toContain("ssl_type");
+    expect(s).not.toContain("IF(ssl_type");
+    expect(s).not.toMatch(/[一-鿿]/);
+  });
 });
 
 describe("rangeStats", () => {

@@ -3,6 +3,7 @@ import { Activity } from "lucide-react";
 import { api, DbKind, QueryResult } from "./api";
 import { toast, uiConfirm } from "./ui";
 import { Modal, Button } from "./ui/index";
+import { useT } from "./i18n";
 
 // 列出目前連線 / 工作階段（致敬 Navicat 的伺服器監控）。沿用既有 runQuery（清單）+ execDdl（終止），免後端改動。
 const LIST_SQL: Partial<Record<DbKind, string>> = {
@@ -19,6 +20,7 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
   kind: DbKind;
   onClose: () => void;
 }) {
+  const t = useT();
   const [res, setRes] = useState<QueryResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -33,7 +35,7 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
     try {
       setRes(await api.runQuery(connId, sql));
     } catch (e: any) {
-      setErr(e?.message ?? "讀取失敗");
+      setErr(e?.message ?? t("讀取失敗"));
     } finally {
       if (!silent) setBusy(false);
     }
@@ -51,19 +53,19 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
   // queryOnly=true 僅取消目前查詢（保留連線）：MySQL KILL QUERY / PG pg_cancel_backend。
   const kill = async (row: (string | null)[], queryOnly: boolean) => {
     const id = (row[0] ?? "").trim();
-    if (!/^\d+$/.test(id)) { toast.error("無法辨識工作階段 ID"); return; }
-    const verb = queryOnly ? "取消查詢" : "終止連線";
-    const ok = await uiConfirm(`${verb}（工作階段 ${id}）？`, { title: verb, danger: true, confirmText: verb });
+    if (!/^\d+$/.test(id)) { toast.error(t("無法辨識工作階段 ID")); return; }
+    const verb = queryOnly ? t("取消查詢") : t("終止連線");
+    const ok = await uiConfirm(t("{verb}（工作階段 {id}）？", { verb, id }), { title: verb, danger: true, confirmText: verb });
     if (!ok) return;
     const sql = kind === "postgres"
       ? `SELECT pg_${queryOnly ? "cancel" : "terminate"}_backend(${id})`
       : `KILL ${queryOnly ? "QUERY " : ""}${id}`;
     try {
       await api.execDdl(connId, sql);
-      toast.success(`已送出${verb} ${id}`);
+      toast.success(t("已送出{verb} {id}", { verb, id }));
       refresh();
     } catch (e: any) {
-      toast.error(e?.message ?? `${verb}失敗`);
+      toast.error(e?.message ?? t("{verb}失敗", { verb }));
     }
   };
 
@@ -77,29 +79,29 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
       icon={Activity}
       title={
         <div className="flex items-center gap-2 w-full">
-          <span className="font-medium text-sm">處理程序 / 工作階段</span>
-          {res && <span className="text-xs text-fg/40">{res.rows.length} 筆</span>}
+          <span className="font-medium text-sm">{t("處理程序 / 工作階段")}</span>
+          {res && <span className="text-xs text-fg/40">{res.rows.length} {t("筆")}</span>}
           <label className="ml-auto flex items-center gap-1.5 text-xs text-fg/55">
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-            自動更新（3 秒）
+            {t("自動更新（3 秒）")}
           </label>
           <button type="button" onClick={() => refresh()} disabled={busy}
-            className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40">{busy ? "讀取中…" : "重新整理"}</button>
+            className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40">{busy ? t("讀取中…") : t("重新整理")}</button>
         </div>
       }
-      footer={<Button variant="secondary" onClick={onClose}>關閉</Button>}
+      footer={<Button variant="secondary" onClick={onClose}>{t("關閉")}</Button>}
     >
       {!sql ? (
-            <div className="text-fg/40 text-sm p-5">此資料庫種類不支援工作階段檢視。</div>
+            <div className="text-fg/40 text-sm p-5">{t("此資料庫種類不支援工作階段檢視。")}</div>
           ) : err ? (
             <div className="text-red-300 text-sm p-5 mono whitespace-pre-wrap">{err}</div>
           ) : !res ? (
-            <div className="text-fg/40 text-sm p-5">讀取中…</div>
+            <div className="text-fg/40 text-sm p-5">{t("讀取中…")}</div>
           ) : (
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-inset text-fg/45">
                 <tr>
-                  <th className="w-24 px-2 py-1.5" aria-label="操作" />
+                  <th className="w-24 px-2 py-1.5" aria-label={t("操作")} />
                   {res.columns.map((c) => <th key={c} className="text-left px-2 py-1.5 font-normal whitespace-nowrap">{c}</th>)}
                 </tr>
               </thead>
@@ -107,10 +109,10 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
                 {res.rows.map((row, i) => (
                   <tr key={i} className="border-t border-fg/5 hover:bg-fg/5">
                     <td className="px-2 py-1 text-center whitespace-nowrap">
-                      <button type="button" onClick={() => kill(row, true)} title="取消目前查詢（保留連線）"
-                        className="text-[11px] px-1.5 py-0.5 rounded text-amber-300 hover:bg-amber-500/15">取消</button>
-                      <button type="button" onClick={() => kill(row, false)} title="終止整個連線"
-                        className="text-[11px] px-1.5 py-0.5 rounded text-red-400 hover:bg-red-500/15">終止</button>
+                      <button type="button" onClick={() => kill(row, true)} title={t("取消目前查詢（保留連線）")}
+                        className="text-[11px] px-1.5 py-0.5 rounded text-amber-300 hover:bg-amber-500/15">{t("取消")}</button>
+                      <button type="button" onClick={() => kill(row, false)} title={t("終止整個連線")}
+                        className="text-[11px] px-1.5 py-0.5 rounded text-red-400 hover:bg-red-500/15">{t("終止")}</button>
                     </td>
                     {row.map((v, j) => (
                       <td key={j} className="px-2 py-1 mono text-fg/80 max-w-[340px] truncate" title={v ?? "NULL"}>

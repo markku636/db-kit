@@ -33,11 +33,25 @@ const SKIP_FILES = new Set([
 // 這些 JSX 屬性的字串不是給人看的。
 const SKIP_ATTRS = new Set(["lang", "className", "key", "id", "type", "role", "name", "src", "href", "data-testid"]);
 
-// 這些宣告底下的字串會被序列化進 localStorage / SQL，翻譯即污染資料。
-const SKIP_DECLS = new Set(["DEFAULT_SNIPPETS"]);
+// 這些宣告底下的字串不可包：
+//   DEFAULT_SNIPPETS      會被序列化進 localStorage，翻譯即污染使用者資料
+//   PALETTE_GROUP_LABEL   這張表的值「就是」t() 的 key，包了會變成 t(t("連線"))
+const SKIP_DECLS = new Set(["DEFAULT_SNIPPETS", "PALETTE_GROUP_LABEL"]);
 
 const isCjk = (s) => CJK.test(s);
 const q = (s) => JSON.stringify(s);
+
+/**
+ * 這個樣板是「產生 HTML / 多行文件」的骨架，不是一句文案。
+ * 整段當成翻譯 key 會得到一個 800 字元、含標籤與插值的怪物；譯者無從下手，
+ * 而且它內部的 ["欄位","型別",…] 本來就會被逐一包起來 —— 兩者的編輯區間會重疊。
+ * 一律不動骨架，只包裡面的字串，骨架裡的文字（<h3>索引</h3>）列入 TODO 交人工。
+ *
+ * 注意 `-- 唯讀：GRANT SELECT ON ${q} TO <role>;` 這種要放行：它有 `<role>` 但沒有結束標籤。
+ */
+function isMarkupSkeleton(raw) {
+  return raw.includes("\n") || /<\/[a-zA-Z]|<!DOCTYPE|<(table|html|head|body|div|span|li|ul|ol|h[1-6]|a\s|thead|tbody|tr|td|th)\b/i.test(raw);
+}
 
 /** 由檔案位置推出 import 路徑（src/ui/Modal.tsx → ../i18n）。 */
 function i18nSpecifier(file) {
@@ -150,8 +164,8 @@ function processFile(file, { dry }) {
   };
 
   const visit = (node) => {
-    // ---- JSX 文字 ----
-    if (ts.isJsxElement(node)) {
+    // ---- JSX 文字（含 <>…</> 片段）----
+    if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
       const texts = node.children.filter((c) => ts.isJsxText(c) && c.text.trim() !== "");
       const cjkTexts = texts.filter((c) => isCjk(c.text));
       if (cjkTexts.length > 1) {
@@ -187,20 +201,31 @@ function processFile(file, { dry }) {
     if (!skip) {
       const inJsxAttr = node.parent && ts.isJsxAttribute(node.parent);
       const isKey = node.parent && (ts.isPropertyAssignment(node.parent) || ts.isPropertySignature(node.parent)) && node.parent.name === node;
-      const inJsxText = node.parent && ts.isJsxElement(node.parent);
+      const inJsxText = node.parent && (ts.isJsxElement(node.parent) || ts.isJsxFragment(node.parent));
+
+      const at = () => src.getLineAndCharacterOfPosition(node.getStart(src)).line + 1;
+      const snip = () => node.getText(src).slice(0, 90).replace(/\s+/g, " ");
 
       if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && isCjk(node.text) && !isKey && !inJsxAttr && !inJsxText) {
-        edits.push({ start: node.getStart(src), end: node.getEnd(), text: `t(${q(node.text)})` });
-        noteScope(node);
+        if (isMarkupSkeleton(node.text)) todos.push({ line: at(), why: "多行 / HTML 字串", snippet: snip() });
+        else {
+          edits.push({ start: node.getStart(src), end: node.getEnd(), text: `t(${q(node.text)})` });
+          noteScope(node);
+        }
       } else if (ts.isTemplateExpression(node) && isCjk(node.getText(src))) {
+        if (isMarkupSkeleton(node.getText(src))) {
+          // 骨架不動，但要繼續往下走，讓裡面的 ["欄位","型別"] 之類的字串各自被包。
+          todos.push({ line: at(), why: "HTML / 多行樣板骨架（只包內部字串，骨架文字交人工）", snippet: snip() });
+          ts.forEachChild(node, visit);
+          return;
+        }
         const r = templateToKey(node, src);
         if (r) {
           edits.push({ start: node.getStart(src), end: node.getEnd(), text: `t(${q(r.key)}, { ${r.args} })` });
           noteScope(node);
-        } else {
-          todos.push({ line: src.getLineAndCharacterOfPosition(node.getStart(src)).line + 1,
-                       why: "插值樣板含複雜表達式", snippet: node.getText(src).slice(0, 90).replace(/\s+/g, " ") });
+          return; // 整個樣板已被取代 —— 不可再往下包 span 內的字串，否則編輯區間重疊、輸出必壞
         }
+        todos.push({ line: at(), why: "插值樣板含複雜表達式", snippet: snip() });
       }
     }
 
@@ -208,12 +233,32 @@ function processFile(file, { dry }) {
   };
   visit(src);
 
+  // 防呆：任何重疊的編輯都會在套用時把彼此的內容切碎。寧可整檔中止，也不要靜默產生壞碼。
+  const sorted = [...edits].sort((a, b) => a.start - b.start);
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i].start < sorted[i - 1].end) {
+      const line = src.getLineAndCharacterOfPosition(sorted[i].start).line + 1;
+      return { file, skipped: `編輯區間重疊（行 ${line} 附近）—— codemod 有 bug，未寫檔`, todos };
+    }
+  }
+
   if (edits.length === 0) return { file, skipped: "nothing-to-wrap", todos };
 
+  // 頂層已經有別的 t（如 editorThemes.ts 的 `import { tags as t }`）→ 加了 import 會 duplicate identifier。
+  for (const st of src.statements) {
+    if (!ts.isImportDeclaration(st) || !st.importClause?.namedBindings) continue;
+    const nb = st.importClause.namedBindings;
+    if (ts.isNamedImports(nb) && nb.elements.some((el) => el.name.text === "t" && st.moduleSpecifier.getText(src) !== `"${i18nSpecifier(file)}"`)) {
+      return { file, skipped: "頂層已 import 名為 t 的符號 —— 請先改別名", todos };
+    }
+  }
+
   // 區域變數 t 會遮蔽 import 進來的 t —— 先改名再跑 codemod，否則靜默壞掉。
+  // 含解構（`({ t }: {t: string})`、`const [s, t] = …`）—— 這類 BindingElement 最容易漏。
   const shadow = [];
   const findShadow = (node) => {
-    if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && ts.isIdentifier(node.name) && node.name.text === "t") {
+    if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node)) &&
+        ts.isIdentifier(node.name) && node.name.text === "t") {
       shadow.push(src.getLineAndCharacterOfPosition(node.getStart(src)).line + 1);
     }
     ts.forEachChild(node, findShadow);
@@ -225,12 +270,6 @@ function processFile(file, { dry }) {
   });
   if (realShadow.length) return { file, skipped: `區域變數 t 遮蔽（行 ${realShadow.join(", ")}）—— 請先改名`, todos };
 
-  // ---- 產生新內容 ----
-  let out = text;
-  for (const e of [...edits].sort((a, b) => b.start - a.start)) {
-    out = out.slice(0, e.start) + e.text + out.slice(e.end);
-  }
-
   // 每個需要 t 的元件插入 const t = useT();（已有則跳過）
   const compEdits = [];
   for (const comp of componentsNeedingT) {
@@ -238,21 +277,41 @@ function processFile(file, { dry }) {
     const already = body.statements.some((s) =>
       ts.isVariableStatement(s) && s.getText(src).includes("useT()"));
     if (already) continue;
-    const pos = body.getStart(src) + 1;
+    const pos = body.getStart(src) + 1; // 緊接在 `{` 之後
     compEdits.push({ start: pos, end: pos, text: `${EOL}  const t = useT();` });
   }
-  for (const e of compEdits.sort((a, b) => b.start - a.start)) {
+
+  // ---- 產生新內容 ----
+  // 兩批編輯的偏移量都是相對於「原始」source，所以必須**合併後一起**由後往前套用。
+  // 分兩趟做會讓第二趟踩在第一趟改過的字串上，插入點全部位移（實測：const t = useT()
+  // 會插到 interface 主體、JSX 屬性中間、甚至字串字面值裡）。
+  const all = [...edits, ...compEdits].sort((a, b) => b.start - a.start || b.end - a.end);
+  let out = text;
+  for (const e of all) {
     out = out.slice(0, e.start) + e.text + out.slice(e.end);
   }
 
-  // import：module scope 的字串用 t，元件內用 useT（它會訂閱語言、讓切換時重繪）
+  // import：module scope 的字串用 t，元件內用 useT（它會訂閱語言、讓切換時重繪）。
+  // 檔案已經 import 過 ./i18n（例如 Phase 0 手工加的 useT）時要**併進去**，不是跳過 ——
+  // 否則新增的 module-level t() 會找不到符號。
   const names = [];
   if (needsModuleT) names.push("t");
   if (componentsNeedingT.size) names.push("useT");
   if (names.length) {
     const spec = i18nSpecifier(file);
-    const escaped = spec.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
-    if (!new RegExp(`from ["']${escaped}["']`).test(out)) {
+    const existing = src.statements.find(
+      (s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && s.moduleSpecifier.text === spec,
+    );
+    if (existing) {
+      const nb = existing.importClause?.namedBindings;
+      const have = nb && ts.isNamedImports(nb) ? nb.elements.map((el) => el.name.text) : [];
+      const add = names.filter((n) => !have.includes(n));
+      if (add.length && nb) {
+        const merged = [...have, ...add].join(", ");
+        // 這個位置在檔頭、在所有 wrap 之前，`out` 的前綴與原檔相同，直接用原始偏移量安全。
+        out = out.slice(0, nb.getStart(src)) + `{ ${merged} }` + out.slice(nb.getEnd());
+      }
+    } else {
       const lastImport = src.statements.findLast(ts.isImportDeclaration);
       const at = lastImport ? lastImport.getEnd() : 0;
       out = out.slice(0, at) + `${EOL}import { ${names.join(", ")} } from "${spec}";` + out.slice(at);

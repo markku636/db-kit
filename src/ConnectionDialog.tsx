@@ -3,6 +3,7 @@ import { api, ConnectionConfig, DbKind, KIND_META, SshAuthMethod } from "./api";
 import { pickOpenFile } from "./ui";
 import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
 import { Plug, FolderOpen } from "lucide-react";
+import { useT } from "./i18n";
 
 interface Props {
   onClose: () => void;
@@ -32,6 +33,7 @@ const SSL_MODE_OPTIONS: Record<string, { value: string; label: string }[]> = {
 };
 
 export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
+  const t = useT();
   const editing = !!initial;
   const [kind, setKind] = useState<DbKind>(initial?.kind ?? "mysql");
   const [name, setName] = useState(initial?.name ?? "");
@@ -157,9 +159,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     const t0 = performance.now();
     try {
       await api.testConnection(build());
-      setMsg({ ok: true, text: `連線成功（${Math.round(performance.now() - t0)} ms）` });
+      setMsg({ ok: true, text: t("連線成功（{round} ms）", { round: Math.round(performance.now() - t0) }) });
     } catch (e: any) {
-      setMsg({ ok: false, text: e?.message ?? "連線失敗" });
+      setMsg({ ok: false, text: e?.message ?? t("連線失敗") });
     } finally {
       setTesting(false);
     }
@@ -178,7 +180,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   return (
     <Modal
       onClose={onClose}
-      title={editing ? "編輯連線" : "新增連線"}
+      title={editing ? t("編輯連線") : t("新增連線")}
       icon={Plug}
       size="md"
       zClass="z-50"
@@ -186,10 +188,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       footer={
         <>
           <Button variant="secondary" className="mr-auto" loading={testing} onClick={handleTest}>
-            測試連線
+            {t("測試連線")}
           </Button>
-          <Button variant="secondary" onClick={onClose}>取消</Button>
-          <Button variant="primary" onClick={handleSave} disabled={!valid}>儲存</Button>
+          <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
+          <Button variant="primary" onClick={handleSave} disabled={!valid}>{t("儲存")}</Button>
         </>
       }
     >
@@ -215,45 +217,45 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         ))}
       </div>
 
-      <Field label="名稱">
-        <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={submitOnEnter} placeholder="選填" />
+      <Field label={t("名稱")}>
+        <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("選填")} />
       </Field>
 
       {external ? (
         <>
-          <Field label="驅動">
-            <Input value={driver} onChange={(e) => setDriver(e.target.value)} onKeyDown={submitOnEnter} placeholder="driver 名稱" />
+          <Field label={t("驅動")}>
+            <Input value={driver} onChange={(e) => setDriver(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("driver 名稱")} />
           </Field>
-          <Field label="Gateway 網址（base URL）">
+          <Field label={t("Gateway 網址（base URL）")}>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} onKeyDown={submitOnEnter} placeholder="https://gateway.internal" />
           </Field>
-          <Field label="環境（env，選填）">
-            <Input value={env} onChange={(e) => setEnv(e.target.value)} onKeyDown={submitOnEnter} placeholder="例如 n8xuat / otprod" />
+          <Field label={t("環境（env，選填）")}>
+            <Input value={env} onChange={(e) => setEnv(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("例如 n8xuat / otprod")} />
           </Field>
           <div className="flex gap-3">
-            <Field label="使用者" className="flex-1">
+            <Field label={t("使用者")} className="flex-1">
               <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
             </Field>
-            <Field label="密碼" className="flex-1">
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? "留空＝不變更" : ""} />
+            <Field label={t("密碼")} className="flex-1">
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? t("留空＝不變更") : ""} />
             </Field>
           </div>
-          <Field label="OTP secret（2FA，選填）">
-            <Input type="password" value={otpSecret} onChange={(e) => setOtpSecret(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? "留空＝不變更" : "base32 或 otpauth:// URI"} />
+          <Field label={t("OTP secret（2FA，選填）")}>
+            <Input type="password" value={otpSecret} onChange={(e) => setOtpSecret(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? t("留空＝不變更") : t("base32 或 otpauth:// URI")} />
           </Field>
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={insecure} onChange={(e) => setInsecure(e.target.checked)} />
-            <span>略過 TLS 憑證驗證（內部自簽憑證用）</span>
+            <span>{t("略過 TLS 憑證驗證（內部自簽憑證用）")}</span>
           </label>
         </>
       ) : fileBased ? (
-        <Field label="資料庫檔案路徑">
+        <Field label={t("資料庫檔案路徑")}>
           <div className="flex gap-2">
             <Input
               value={database}
               onChange={(e) => setDatabase(e.target.value)}
               onKeyDown={submitOnEnter}
-              placeholder="例如 C:\\data\\app.db（留空則用記憶體資料庫）"
+              placeholder={t("例如 C:\\\\data\\\\app.db（留空則用記憶體資料庫）")}
             />
             <BrowseButton
               onPick={async () => {
@@ -266,55 +268,55 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       ) : (
         <>
           <div className="flex gap-3">
-            <Field label={kind === "mongo" && mongoSrv ? "主機（SRV 域名）" : "主機"} className="flex-1">
+            <Field label={kind === "mongo" && mongoSrv ? t("主機（SRV 域名）") : t("主機")} className="flex-1">
               <Input value={host} onChange={(e) => setHost(e.target.value)} onKeyDown={submitOnEnter}
-                placeholder={kind === "mongo" && mongoSrv ? "例如 cluster0.abcd.mongodb.net" : ""} />
+                placeholder={kind === "mongo" && mongoSrv ? t("例如 cluster0.abcd.mongodb.net") : ""} />
             </Field>
             {/* SRV 連線由 DNS 記錄決定 port，故不顯示埠欄位。 */}
             {!(kind === "mongo" && mongoSrv) && (
-              <Field label="埠" className="w-24">
+              <Field label={t("埠")} className="w-24">
                 <Input type="number" value={port} onChange={(e) => setPort(Number(e.target.value))} onKeyDown={submitOnEnter} />
               </Field>
             )}
           </div>
           <div className="flex gap-3">
-            <Field label="使用者" className="flex-1">
+            <Field label={t("使用者")} className="flex-1">
               <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
             </Field>
-            <Field label="密碼" className="flex-1">
+            <Field label={t("密碼")} className="flex-1">
               <Input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={submitOnEnter}
-                placeholder={editing ? "留空＝不變更" : ""}
+                placeholder={editing ? t("留空＝不變更") : ""}
               />
             </Field>
           </div>
           <Field label={
             kind === "oracle"
-              ? (oracleConnectType === "sid" ? "SID" : oracleConnectType === "tns" ? "TNS 別名" : "服務名稱（Service Name）")
-              : "資料庫（選填）"
+              ? (oracleConnectType === "sid" ? "SID" : oracleConnectType === "tns" ? t("TNS 別名") : t("服務名稱（Service Name）"))
+              : t("資料庫（選填）")
           }>
             <Input value={database} onChange={(e) => setDatabase(e.target.value)} onKeyDown={submitOnEnter}
-              placeholder={kind === "oracle" ? "例如 ORCLPDB1 / FREEPDB1" : ""} />
+              placeholder={kind === "oracle" ? t("例如 ORCLPDB1 / FREEPDB1") : ""} />
           </Field>
 
           {kind === "redis" && (
             <div className="space-y-2">
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={redisTls} onChange={(e) => setRedisTls(e.target.checked)} />
-                <span>使用 TLS（rediss://）</span>
+                <span>{t("使用 TLS（rediss://）")}</span>
               </label>
               {redisTls && (
                 <label className="flex items-center gap-2 text-sm cursor-pointer select-none pl-6">
                   <input type="checkbox" checked={redisTlsInsecure} onChange={(e) => setRedisTlsInsecure(e.target.checked)} />
-                  <span>略過憑證驗證（自簽憑證用）</span>
+                  <span>{t("略過憑證驗證（自簽憑證用）")}</span>
                 </label>
               )}
               {redisTls && sshEnabled && (
                 <div className="text-xs text-warning pl-6">
-                  透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，通常需勾「略過憑證驗證」。
+                  {t("透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，通常需勾「略過憑證驗證」。")}
                 </div>
               )}
             </div>
@@ -324,39 +326,39 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
             <div className="space-y-2">
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={mongoSrv} onChange={(e) => setMongoSrv(e.target.checked)} />
-                <span>SRV 連線（mongodb+srv://，Atlas 等）</span>
+                <span>{t("SRV 連線（mongodb+srv://，Atlas 等）")}</span>
               </label>
               <div className="flex gap-3">
-                <Field label="authSource（選填）" className="flex-1">
-                  <Input value={mongoAuthSource} onChange={(e) => setMongoAuthSource(e.target.value)} onKeyDown={submitOnEnter} placeholder="例如 admin" />
+                <Field label={t("authSource（選填）")} className="flex-1">
+                  <Input value={mongoAuthSource} onChange={(e) => setMongoAuthSource(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("例如 admin")} />
                 </Field>
-                <Field label="replicaSet（選填）" className="flex-1">
-                  <Input value={mongoReplicaSet} onChange={(e) => setMongoReplicaSet(e.target.value)} onKeyDown={submitOnEnter} placeholder="例如 rs0" />
+                <Field label={t("replicaSet（選填）")} className="flex-1">
+                  <Input value={mongoReplicaSet} onChange={(e) => setMongoReplicaSet(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("例如 rs0")} />
                 </Field>
               </div>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={mongoTls} onChange={(e) => setMongoTls(e.target.checked)} />
-                <span>使用 TLS</span>
+                <span>{t("使用 TLS")}</span>
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={mongoDirect} onChange={(e) => setMongoDirect(e.target.checked)} />
-                <span>直連（directConnection，繞過拓撲探索）</span>
+                <span>{t("直連（directConnection，繞過拓撲探索）")}</span>
               </label>
             </div>
           )}
 
           {sslKinds.includes(kind) && (
             <div className="space-y-2">
-              <Field label="SSL 模式">
+              <Field label={t("SSL 模式")}>
                 <Select selectSize="md" value={sslMode} onChange={(e) => setSslMode(e.target.value)}>
                   {(SSL_MODE_OPTIONS[kind === "postgres" ? "postgres" : "mysql"] ?? []).map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
+                    <option key={o.value} value={o.value}>{t(o.label)}</option>
                   ))}
                 </Select>
               </Field>
               {sshEnabled && (sslMode === "verify-full" || sslMode === "verify_identity") && (
                 <div className="text-xs text-warning">
-                  透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，建議改用 verify-ca 或 require。
+                  {t("透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，建議改用 verify-ca 或 require。")}
                 </div>
               )}
             </div>
@@ -366,21 +368,21 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
             <div className="space-y-2">
               <Segmented
                 full
-                ariaLabel="Oracle 連線方式"
+                ariaLabel={t("Oracle 連線方式")}
                 value={oracleConnectType}
                 onChange={setOracleConnectType}
                 options={[
-                  { value: "service", label: "服務名稱" },
+                  { value: "service", label: t("服務名稱") },
                   { value: "sid", label: "SID" },
-                  { value: "tns", label: "TNS 別名" },
+                  { value: "tns", label: t("TNS 別名") },
                 ]}
               />
-              <Field label="Instant Client 目錄（選填）">
+              <Field label={t("Instant Client 目錄（選填）")}>
                 <Input value={oracleClientDir} onChange={(e) => setOracleClientDir(e.target.value)} onKeyDown={submitOnEnter}
-                  placeholder="留空則用 ORACLE_HOME / PATH 偵測" />
+                  placeholder={t("留空則用 ORACLE_HOME / PATH 偵測")} />
               </Field>
               <div className="text-xs text-fg/40">
-                需安裝 64 位元 Oracle Instant Client（Basic / Basic Light）。client 目錄於首個 Oracle 連線生效，之後變更需重啟應用程式。
+                {t("需安裝 64 位元 Oracle Instant Client（Basic / Basic Light）。client 目錄於首個 Oracle 連線生效，之後變更需重啟應用程式。")}
               </div>
             </div>
           )}
@@ -389,11 +391,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
             <div className="space-y-2">
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={mssqlEncrypt} onChange={(e) => setMssqlEncrypt(e.target.checked)} />
-                <span>加密連線（encrypt）</span>
+                <span>{t("加密連線（encrypt）")}</span>
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={mssqlTrust} onChange={(e) => setMssqlTrust(e.target.checked)} />
-                <span>信任伺服器憑證（自簽 / 開發用）</span>
+                <span>{t("信任伺服器憑證（自簽 / 開發用）")}</span>
               </label>
             </div>
           )}
@@ -404,48 +406,48 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         <div className="border-t border-fg/10 pt-3 space-y-3">
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={sshEnabled} onChange={(e) => setSshEnabled(e.target.checked)} />
-            <span>透過 SSH Tunnel 連線</span>
+            <span>{t("透過 SSH Tunnel 連線")}</span>
           </label>
           {sshEnabled && (
             <>
               <div className="flex gap-3">
-                <Field label="SSH 主機" className="flex-1">
+                <Field label={t("SSH 主機")} className="flex-1">
                   <Input value={sshHost} onChange={(e) => setSshHost(e.target.value)} />
                 </Field>
-                <Field label="SSH 埠" className="w-24">
+                <Field label={t("SSH 埠")} className="w-24">
                   <Input type="number" value={sshPort} onChange={(e) => setSshPort(Number(e.target.value))} />
                 </Field>
               </div>
-              <Field label="SSH 使用者">
+              <Field label={t("SSH 使用者")}>
                 <Input value={sshUsername} onChange={(e) => setSshUsername(e.target.value)} />
               </Field>
               <Segmented
                 full
-                ariaLabel="SSH 認證方式"
+                ariaLabel={t("SSH 認證方式")}
                 value={sshAuthMethod}
                 onChange={setSshAuthMethod}
                 options={[
-                  { value: "password", label: "密碼認證" },
-                  { value: "key", label: "私鑰認證" },
+                  { value: "password", label: t("密碼認證") },
+                  { value: "key", label: t("私鑰認證") },
                 ]}
               />
               {sshAuthMethod === "password" ? (
-                <Field label="SSH 密碼">
+                <Field label={t("SSH 密碼")}>
                   <Input
                     type="password"
                     value={sshPassword}
                     onChange={(e) => setSshPassword(e.target.value)}
-                    placeholder={editing ? "留空＝不變更" : ""}
+                    placeholder={editing ? t("留空＝不變更") : ""}
                   />
                 </Field>
               ) : (
                 <>
-                  <Field label="私鑰檔路徑">
+                  <Field label={t("私鑰檔路徑")}>
                     <div className="flex gap-2">
                       <Input
                         value={sshKeyPath}
                         onChange={(e) => setSshKeyPath(e.target.value)}
-                        placeholder="例如 C:\\Users\\me\\.ssh\\id_ed25519"
+                        placeholder={t("例如 C:\\\\Users\\\\me\\\\.ssh\\\\id_ed25519")}
                       />
                       <BrowseButton
                         onPick={async () => {
@@ -455,12 +457,12 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                       />
                     </div>
                   </Field>
-                  <Field label="私鑰密語（選填）">
+                  <Field label={t("私鑰密語（選填）")}>
                     <Input
                       type="password"
                       value={sshPassphrase}
                       onChange={(e) => setSshPassphrase(e.target.value)}
-                      placeholder={editing ? "留空＝不變更" : ""}
+                      placeholder={editing ? t("留空＝不變更") : ""}
                     />
                   </Field>
                 </>
@@ -476,9 +478,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
 }
 
 function BrowseButton({ onPick }: { onPick: () => void }) {
+  const t = useT();
   return (
-    <Button variant="secondary" icon={FolderOpen} onClick={onPick} title="瀏覽…" className="shrink-0">
-      瀏覽
+    <Button variant="secondary" icon={FolderOpen} onClick={onPick} title={t("瀏覽…")} className="shrink-0">
+      {t("瀏覽")}
     </Button>
   );
 }

@@ -5,6 +5,7 @@ import { useStore } from "./store";
 import { toast } from "./ui";
 import { Modal, Button } from "./ui/index";
 import Icon from "./ui/Icon";
+import { useT } from "./i18n";
 
 // 全資料庫物件搜尋（致敬 Red Gate SQL Search）。
 // 不只比對名稱，也比對 view / procedure / function / trigger 的「定義內文」與註解，
@@ -84,6 +85,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
   kind: DbKind;
   onClose: () => void;
 }) {
+  const t = useT();
   const allTypes = useMemo(() => typesForKind(kind), [kind]);
   const supportsDefs = kind === "mysql" || kind === "mariadb" || kind === "postgres" || kind === "sqlite";
   const supportsComments = kind === "mysql" || kind === "mariadb" || kind === "postgres" || kind === "oracle";
@@ -183,12 +185,12 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
       return;
     }
     if (!hasScope) {
-      setErr("請至少勾選一個比對範圍（名稱 / 定義 / 註解）。");
+      setErr(t("請至少勾選一個比對範圍（名稱 / 定義 / 註解）。"));
       setResults(null);
       return;
     }
     if (enabledTypes.size === 0) {
-      setErr("請至少勾選一個物件型別。");
+      setErr(t("請至少勾選一個物件型別。"));
       setResults(null);
       return;
     }
@@ -213,7 +215,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
       setActiveIdx(0);
     } catch (e: any) {
       if (!aliveRef.current || seqRef.current !== seq) return;
-      setErr(e?.message ?? "搜尋失敗");
+      setErr(e?.message ?? t("搜尋失敗"));
       setResults(null);
     } finally {
       if (aliveRef.current && seqRef.current === seq) setBusy(false);
@@ -246,7 +248,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
       useStore.getState().openTable(connId, h.database, table);
       onClose();
     } else {
-      toast.info("此結果無法直接開啟資料表");
+      toast.info(t("此結果無法直接開啟資料表"));
     }
   };
 
@@ -261,7 +263,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
       setPreview({ hit: h, ddl, loading: false, err: null });
     } catch (e: any) {
       if (!aliveRef.current) return;
-      setPreview({ hit: h, ddl: null, loading: false, err: e?.message ?? "讀取定義失敗" });
+      setPreview({ hit: h, ddl: null, loading: false, err: e?.message ?? t("讀取定義失敗") });
     }
   };
 
@@ -321,8 +323,8 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
       onClose={onClose}
       title={
         <span className="flex items-center gap-2">
-          SQL Search · 全資料庫物件搜尋
-          <span className="text-xs text-fg/40 font-normal">名稱 · 定義內文 · 註解</span>
+          {t("SQL Search · 全資料庫物件搜尋")}
+          <span className="text-xs text-fg/40 font-normal">{t("名稱 · 定義內文 · 註解")}</span>
         </span>
       }
       icon={Search}
@@ -334,10 +336,10 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
         <>
           {results && (
             <span className="mr-auto text-xs text-fg/40">
-              {results.length} 筆{truncated ? `（已達上限 ${LIMIT}）` : ""}　·　↑↓ 選擇、Enter / 雙擊開啟
+              {results.length} 筆{truncated ? t("（已達上限 {LIMIT}）", { LIMIT }) : ""}　·　↑↓ 選擇、Enter / 雙擊開啟
             </span>
           )}
-          <Button variant="secondary" onClick={onClose}>關閉</Button>
+          <Button variant="secondary" onClick={onClose}>{t("關閉")}</Button>
         </>
       }
     >
@@ -349,16 +351,16 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
             className="flex-1 bg-inset border border-fg/10 rounded px-2 py-1.5 text-sm outline-none focus:border-accent"
             value={term}
             onChange={(e) => setTerm(e.target.value)}
-            placeholder="即時搜尋名稱與定義內文…（↑↓ 選擇、Enter 開啟）"
+            placeholder={t("即時搜尋名稱與定義內文…（↑↓ 選擇、Enter 開啟）")}
           />
-          {busy && <span className="text-xs text-fg/40 shrink-0">搜尋中…</span>}
+          {busy && <span className="text-xs text-fg/40 shrink-0">{t("搜尋中…")}</span>}
           <button
             type="button"
             onClick={() => void search()}
             disabled={!term.trim()}
             className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40"
           >
-            搜尋
+            {t("搜尋")}
           </button>
         </div>
 
@@ -366,10 +368,10 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
         <div className="px-5 py-2.5 border-b border-fg/10 flex flex-col gap-2 text-xs">
           {/* 比對範圍 + 大小寫 + 資料庫 */}
           <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-fg/40">比對範圍：</span>
+            <span className="text-fg/40">{t("比對範圍：")}</span>
             <label className="flex items-center gap-1 cursor-pointer">
               <input type="checkbox" checked={matchNames} onChange={(e) => setMatchNames(e.target.checked)} />
-              名稱
+              {t("名稱")}
             </label>
             <label className={`flex items-center gap-1 ${supportsDefs ? "cursor-pointer" : "opacity-40"}`}>
               <input
@@ -378,7 +380,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
                 checked={supportsDefs && matchDefs}
                 onChange={(e) => setMatchDefs(e.target.checked)}
               />
-              定義內文
+              {t("定義內文")}
             </label>
             <label className={`flex items-center gap-1 ${supportsComments ? "cursor-pointer" : "opacity-40"}`}>
               <input
@@ -387,12 +389,12 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
                 checked={supportsComments && matchComments}
                 onChange={(e) => setMatchComments(e.target.checked)}
               />
-              註解
+              {t("註解")}
             </label>
             <span className="w-px h-4 bg-fg/10" />
             <label className="flex items-center gap-1 cursor-pointer">
               <input type="checkbox" checked={caseSensitive} onChange={(e) => setCaseSensitive(e.target.checked)} />
-              區分大小寫
+              {t("區分大小寫")}
             </label>
 
             {/* 資料庫多選 */}
@@ -403,7 +405,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
                   onClick={() => setDbPanel((v) => !v)}
                   className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/5 inline-flex items-center gap-1"
                 >
-                  資料庫：{allDbsOn ? `全部（${dbs.length}）` : `${selectedDbs.size}/${dbs.length}`}
+                  {t("資料庫：")}{allDbsOn ? t("全部（{length}）", { length: dbs.length }) : `${selectedDbs.size}/${dbs.length}`}
                   <Icon icon={ChevronDown} size={13} />
                 </button>
                 {dbPanel && (
@@ -411,8 +413,8 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
                     <div className="fixed inset-0 z-[96]" onClick={() => setDbPanel(false)} />
                     <div className="absolute right-0 mt-1 z-[97] w-56 max-h-72 overflow-auto bg-elevated border border-fg/15 rounded-lg shadow-2xl p-1.5">
                       <div className="flex gap-2 px-1.5 py-1 border-b border-fg/10 mb-1">
-                        <button type="button" className="text-blue-400 hover:underline" onClick={() => setSelectedDbs(new Set(dbs))}>全選</button>
-                        <button type="button" className="text-fg/50 hover:underline" onClick={() => setSelectedDbs(new Set())}>清除</button>
+                        <button type="button" className="text-blue-400 hover:underline" onClick={() => setSelectedDbs(new Set(dbs))}>{t("全選")}</button>
+                        <button type="button" className="text-fg/50 hover:underline" onClick={() => setSelectedDbs(new Set())}>{t("清除")}</button>
                       </div>
                       {dbs.map((d) => (
                         <label key={d} className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-fg/5 cursor-pointer">
@@ -430,13 +432,13 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
           {/* 物件型別 chips */}
           {allTypes.length > 1 && (
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-fg/40">物件型別：</span>
+              <span className="text-fg/40">{t("物件型別：")}</span>
               <button
                 type="button"
                 onClick={() => setEnabledTypes(allTypesOn ? new Set() : new Set(allTypes))}
                 className="px-2 py-0.5 rounded border border-fg/15 hover:bg-fg/5 text-fg/60"
               >
-                {allTypesOn ? "全不選" : "全選"}
+                {allTypesOn ? t("全不選") : t("全選")}
               </button>
               {allTypes.map((opt) => {
                 const on = enabledTypes.has(opt);
@@ -451,7 +453,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
                     }`}
                   >
                     <span className="w-2 h-2 rounded-full" style={{ background: meta?.color ?? "#888" }} />
-                    {meta?.label ?? opt}
+                    {t(meta?.label ?? opt)}
                   </button>
                 );
               })}
@@ -469,7 +471,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
                 開始輸入即可即時搜尋連線上所有資料庫的物件（最多 {LIMIT} 筆）。
               </div>
             ) : results.length === 0 ? (
-              <div className="text-fg/40 text-sm p-5">查無符合的物件。</div>
+              <div className="text-fg/40 text-sm p-5">{t("查無符合的物件。")}</div>
             ) : (
               grouped.map((g, gi) => {
                 const meta = TYPE_META[g.type];
@@ -477,7 +479,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
                   <div key={g.type}>
                     <div className="sticky top-0 bg-inset/95 backdrop-blur px-4 py-1.5 flex items-center gap-2 text-xs text-fg/55 border-b border-fg/5">
                       <span className="w-2 h-2 rounded-full" style={{ background: meta?.color ?? "#888" }} />
-                      <span className="font-medium">{meta?.label ?? g.type}</span>
+                      <span className="font-medium">{t(meta?.label ?? g.type)}</span>
                       <span className="text-fg/35">{g.hits.length}</span>
                     </div>
                     {g.hits.map((h, i) => {
@@ -494,14 +496,14 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
                           className={`px-4 py-1.5 border-b border-fg/5 cursor-pointer group ${
                             active ? "bg-blue-500/15" : "hover:bg-fg/5"
                           }`}
-                          title="雙擊或 Enter 開啟對應資料表 / 集合"
+                          title={t("雙擊或 Enter 開啟對應資料表 / 集合")}
                         >
                           <div className="flex items-center gap-2 text-xs">
                             <span className="text-fg/85 mono truncate">
                               {highlight(h.object_name, term, caseSensitive)}
                             </span>
                             <span className="text-[10px] px-1 rounded bg-fg/10 text-fg/50 shrink-0">
-                              {MATCH_LABEL[h.matched_in] ?? h.matched_in}
+                              {t(MATCH_LABEL[h.matched_in] ?? h.matched_in)}
                             </span>
                             {h.extra && <span className="text-fg/35 mono truncate">{h.extra}</span>}
                             <span className="ml-auto text-fg/35 shrink-0 truncate" title={`${h.database}${h.parent ? " · " + h.parent : ""}`}>
@@ -517,7 +519,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
                                 }}
                                 className="shrink-0 text-blue-400 hover:underline opacity-0 group-hover:opacity-100"
                               >
-                                定義
+                                {t("定義")}
                               </button>
                             )}
                           </div>
@@ -541,11 +543,11 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
               <div className="px-3 py-2 border-b border-fg/10 flex items-center gap-2 text-xs">
                 <span className="w-2 h-2 rounded-full" style={{ background: TYPE_META[preview.hit.object_type]?.color ?? "#888" }} />
                 <span className="mono truncate" title={preview.hit.object_name}>{preview.hit.object_name}</span>
-                <button type="button" aria-label="關閉預覽" title="關閉預覽" onClick={() => setPreview(null)} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+                <button type="button" aria-label={t("關閉預覽")} title={t("關閉預覽")} onClick={() => setPreview(null)} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
               </div>
               <div className="flex-1 overflow-auto p-3 text-[11px] mono whitespace-pre-wrap leading-relaxed">
                 {preview.loading ? (
-                  <span className="text-fg/40">讀取中…</span>
+                  <span className="text-fg/40">{t("讀取中…")}</span>
                 ) : preview.err ? (
                   <span className="text-red-300">{preview.err}</span>
                 ) : (

@@ -10,6 +10,7 @@ import {
 } from "./sql";
 import { Modal, Button, Select, Input, Icon, EmptyState } from "./ui/index";
 import { copyToClipboard } from "./ui";
+import { useT } from "./i18n";
 
 // 視覺化查詢建構器（致敬 Navicat 的 SQL Builder）：勾選表 / 欄、視覺化 JOIN（可由外鍵自動推斷）、
 // WHERE / ORDER BY / GROUP BY（聚合自動分組）、DISTINCT / LIMIT，即時產生 SELECT 並可帶入查詢編輯器。
@@ -48,6 +49,7 @@ export default function QueryBuilder({
   onClose: () => void;
   onUse: (sql: string) => void;
 }) {
+  const t = useT();
   const [dbs, setDbs] = useState<string[]>([]);
   const [db, setDb] = useState(initialDb);
   const [model, setModel] = useState<ErModel | null>(null);
@@ -75,7 +77,7 @@ export default function QueryBuilder({
   useEffect(() => {
     api.listDatabases(connId)
       .then((d) => { setDbs(d); setDb((cur) => cur || d.find((x) => !isSystemDatabase(kind, x)) || d[0] || ""); })
-      .catch((e) => setErr(e?.message ?? "讀取資料庫失敗"));
+      .catch((e) => setErr(e?.message ?? t("讀取資料庫失敗")));
   }, [connId, kind]);
 
   // 載入結構（表 + 欄 + 外鍵關係）。切換 DB 會重置已選狀態。
@@ -90,7 +92,7 @@ export default function QueryBuilder({
         setPicked([]); setCols([]); setJoins([]); setConds([]); setHavings([]); setOrders([]);
         setPreview(null); setPreviewErr(null);
       })
-      .catch((e) => { if (!cancelled) { setErr(e?.message ?? "讀取結構失敗"); setModel(null); } })
+      .catch((e) => { if (!cancelled) { setErr(e?.message ?? t("讀取結構失敗")); setModel(null); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [connId, db]);
@@ -245,7 +247,7 @@ export default function QueryBuilder({
       setPreview(await api.runQuery(connId, sql));
     } catch (e: any) {
       setPreview(null);
-      setPreviewErr(e?.message ?? "預覽失敗");
+      setPreviewErr(e?.message ?? t("預覽失敗"));
     } finally {
       setPreviewing(false);
     }
@@ -261,7 +263,7 @@ export default function QueryBuilder({
       setPreview(await api.runQuery(connId, sql));
     } catch (e: any) {
       setPreview(null);
-      setPreviewErr(e?.message ?? "計數失敗");
+      setPreviewErr(e?.message ?? t("計數失敗"));
     } finally {
       setPreviewing(false);
     }
@@ -273,7 +275,7 @@ export default function QueryBuilder({
     <Modal
       open
       onClose={onClose}
-      title="視覺化查詢建構器"
+      title={t("視覺化查詢建構器")}
       icon={Blocks}
       size="full"
       className="h-[88vh]"
@@ -281,14 +283,14 @@ export default function QueryBuilder({
       footer={
         <>
           <span className="mr-auto text-[11px] text-fg/40">
-            {picked.length ? `${picked.length} 表 · ${cols.length} 欄` : "從左側挑選資料表開始"}
+            {picked.length ? t("{length} 表 · {v2} 欄", { length: picked.length, v2: cols.length }) : t("從左側挑選資料表開始")}
           </span>
-          <Button variant="ghost" onClick={onClose}>關閉</Button>
+          <Button variant="ghost" onClick={onClose}>{t("關閉")}</Button>
           <Button icon={copied ? Check : Copy} disabled={!generated} onClick={doCopy}>
-            {copied ? "已複製" : "複製 SQL"}
+            {copied ? t("已複製") : t("複製 SQL")}
           </Button>
           <Button variant="primary" icon={Play} disabled={!generated} onClick={() => { onUse(generated); onClose(); }}>
-            帶入查詢編輯器
+            {t("帶入查詢編輯器")}
           </Button>
         </>
       }
@@ -296,14 +298,14 @@ export default function QueryBuilder({
       <div className="flex items-center gap-2 px-4 py-2 border-b border-fg/10 shrink-0">
         <Icon icon={Database} size={14} className="text-fg/40" />
         {kind === "sqlite" ? (
-          <span className="text-xs text-fg/60">{db || "（檔案資料庫）"}</span>
+          <span className="text-xs text-fg/60">{db || t("（檔案資料庫）")}</span>
         ) : (
           <Select selectSize="sm" value={db} onChange={(e) => setDb(e.target.value)} className="max-w-[220px] text-xs">
             {!dbList.includes(db) && db && <option value={db}>{db}</option>}
             {dbList.map((d) => <option key={d} value={d}>{d}</option>)}
           </Select>
         )}
-        {loading && <span className="text-xs text-fg/40">載入結構中…</span>}
+        {loading && <span className="text-xs text-fg/40">{t("載入結構中…")}</span>}
         {err && <span className="text-xs text-red-400">{err}</span>}
       </div>
 
@@ -311,7 +313,7 @@ export default function QueryBuilder({
         {/* 左：可選表清單 */}
         <div className="w-56 shrink-0 border-r border-fg/10 flex flex-col min-h-0">
           <div className="p-2 border-b border-fg/10">
-            <Input inputSize="sm" placeholder="搜尋資料表…" value={tableFilter} onChange={(e) => setTableFilter(e.target.value)} className="text-xs" />
+            <Input inputSize="sm" placeholder={t("搜尋資料表…")} value={tableFilter} onChange={(e) => setTableFilter(e.target.value)} className="text-xs" />
           </div>
           <div className="flex-1 overflow-auto py-1">
             {availTables.map((n) => {
@@ -326,7 +328,7 @@ export default function QueryBuilder({
               );
             })}
             {!availTables.length && !loading && (
-              <div className="px-3 py-4 text-xs text-fg/40">{model ? "無相符資料表" : "—"}</div>
+              <div className="px-3 py-4 text-xs text-fg/40">{model ? t("無相符資料表") : "—"}</div>
             )}
           </div>
         </div>
@@ -334,22 +336,22 @@ export default function QueryBuilder({
         {/* 中：建構面板 */}
         <div className="flex-1 min-w-0 overflow-auto p-4 space-y-4">
           {!picked.length ? (
-            <EmptyState icon={Blocks} title="開始建構查詢" hint="從左側挑選一或多張資料表，勾選要顯示的欄位，加入 JOIN / 條件 / 排序，即時產生 SQL。" />
+            <EmptyState icon={Blocks} title={t("開始建構查詢")} hint={t("從左側挑選一或多張資料表，勾選要顯示的欄位，加入 JOIN / 條件 / 排序，即時產生 SQL。")} />
           ) : (
             <>
               {/* 已選表 + 欄位勾選 */}
               <section>
-                <SectionTitle icon={Table2} text="資料表與欄位" hint="勾選要查詢的欄位（不選＝全部 *）" />
+                <SectionTitle icon={Table2} text={t("資料表與欄位")} hint={t("勾選要查詢的欄位（不選＝全部 *）")} />
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
                   {picked.map((item, i) => (
                     <div key={item} className="rounded border border-fg/10 bg-app/40">
                       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-fg/10">
                         <Icon icon={Table2} size={12} className="text-accent" />
                         <span className="text-xs font-medium truncate flex-1">{item}</span>
-                        {i === 0 && <span className="text-[10px] text-fg/40 px-1 rounded bg-fg/10">基底</span>}
-                        <button type="button" onClick={() => selectAllCols(item)} title="全選此表欄位" className="text-[10px] text-fg/40 hover:text-accent">全選</button>
-                        <button type="button" onClick={() => clearCols(item)} title="清空此表欄位" className="text-[10px] text-fg/40 hover:text-accent">清空</button>
-                        <button type="button" onClick={() => removeTable(item)} className="text-fg/30 hover:text-red-400" title="移除此表"><Icon icon={X} size={13} /></button>
+                        {i === 0 && <span className="text-[10px] text-fg/40 px-1 rounded bg-fg/10">{t("基底")}</span>}
+                        <button type="button" onClick={() => selectAllCols(item)} title={t("全選此表欄位")} className="text-[10px] text-fg/40 hover:text-accent">{t("全選")}</button>
+                        <button type="button" onClick={() => clearCols(item)} title={t("清空此表欄位")} className="text-[10px] text-fg/40 hover:text-accent">{t("清空")}</button>
+                        <button type="button" onClick={() => removeTable(item)} className="text-fg/30 hover:text-red-400" title={t("移除此表")}><Icon icon={X} size={13} /></button>
                       </div>
                       <div className="max-h-44 overflow-auto py-1">
                         {tableByName(item)?.columns.map((c) => (
@@ -370,8 +372,8 @@ export default function QueryBuilder({
               {/* JOIN */}
               {picked.length > 1 && (
                 <section>
-                  <SectionTitle icon={Link2} text="連接（JOIN）"
-                    action={<button type="button" onClick={autoJoin} className="text-[11px] text-accent hover:underline inline-flex items-center gap-1"><Icon icon={Wand2} size={11} />由外鍵自動連接</button>} />
+                  <SectionTitle icon={Link2} text={t("連接（JOIN）")}
+                    action={<button type="button" onClick={autoJoin} className="text-[11px] text-accent hover:underline inline-flex items-center gap-1"><Icon icon={Wand2} size={11} />{t("由外鍵自動連接")}</button>} />
                   <div className="space-y-1.5">
                     {joins.map((j) => (
                       <div key={j.id} className="flex items-center gap-1.5 text-xs flex-wrap">
@@ -387,14 +389,14 @@ export default function QueryBuilder({
                       </div>
                     ))}
                     <button type="button" onClick={() => setJoins((js) => [...js, { id: uid(), type: "INNER", leftTable: picked[0], leftCol: "", rightTable: picked[1] ?? picked[0], rightCol: "" }])}
-                      className="text-[11px] text-fg/50 hover:text-fg inline-flex items-center gap-1"><Icon icon={Plus} size={11} />新增連接</button>
+                      className="text-[11px] text-fg/50 hover:text-fg inline-flex items-center gap-1"><Icon icon={Plus} size={11} />{t("新增連接")}</button>
                   </div>
                 </section>
               )}
 
               {/* WHERE */}
               <section>
-                <SectionTitle icon={Filter} text="篩選條件（WHERE）" />
+                <SectionTitle icon={Filter} text={t("篩選條件（WHERE）")} />
                 <div className="space-y-1.5">
                   {conds.map((c, i) => (
                     <div key={c.id} className="flex items-center gap-1.5 text-xs flex-wrap">
@@ -409,29 +411,29 @@ export default function QueryBuilder({
                         {OPS.map((o) => <option key={o} value={o}>{o}</option>)}
                       </Select>
                       {c.op !== "IS NULL" && c.op !== "IS NOT NULL" && (
-                        <Input inputSize="sm" value={c.value ?? ""} placeholder={c.op === "IN" || c.op === "NOT IN" ? "值,值,值" : "值"}
+                        <Input inputSize="sm" value={c.value ?? ""} placeholder={c.op === "IN" || c.op === "NOT IN" ? t("值,值,值") : t("值")}
                           onChange={(e) => setConds((cs) => cs.map((x) => x.id === c.id ? { ...x, value: e.target.value } : x))} className="text-xs w-40" />
                       )}
                       <button type="button" onClick={() => setConds((cs) => cs.filter((x) => x.id !== c.id))} className="text-fg/30 hover:text-red-400"><Icon icon={Trash2} size={13} /></button>
                     </div>
                   ))}
                   <button type="button" onClick={() => setConds((cs) => [...cs, { id: uid(), table: picked[0], column: colsOf(picked[0])[0] ?? "", op: "=", value: "", conj: "AND" }])}
-                    className="text-[11px] text-fg/50 hover:text-fg inline-flex items-center gap-1"><Icon icon={Plus} size={11} />新增條件</button>
+                    className="text-[11px] text-fg/50 hover:text-fg inline-flex items-center gap-1"><Icon icon={Plus} size={11} />{t("新增條件")}</button>
                 </div>
               </section>
 
               {/* GROUP BY 提示（自動）+ 聚合 */}
               <section>
-                <SectionTitle icon={Sigma} text="聚合 / 分組（GROUP BY）" hint="把欄位設成聚合函式即自動以其餘欄位分組" />
+                <SectionTitle icon={Sigma} text={t("聚合 / 分組（GROUP BY）")} hint={t("把欄位設成聚合函式即自動以其餘欄位分組")} />
                 <div className="space-y-1">
-                  {cols.length === 0 && <div className="text-[11px] text-fg/40">未選欄位，無法設定聚合。</div>}
+                  {cols.length === 0 && <div className="text-[11px] text-fg/40">{t("未選欄位，無法設定聚合。")}</div>}
                   {cols.map((c) => (
                     <div key={c.id} className="flex items-center gap-1.5 text-xs">
                       <span className="mono text-fg/60 truncate w-48">{c.table}.{c.column}</span>
                       <Select selectSize="sm" value={c.agg ?? ""} onChange={(e) => setCols((cs) => cs.map((x) => x.id === c.id ? { ...x, agg: e.target.value as QbAgg } : x))} className="text-xs w-36">
-                        {AGGS.map((a) => <option key={a.v} value={a.v}>{a.label}</option>)}
+                        {AGGS.map((a) => <option key={a.v} value={a.v}>{t(a.label)}</option>)}
                       </Select>
-                      <Input inputSize="sm" value={c.alias ?? ""} placeholder="別名（可空）"
+                      <Input inputSize="sm" value={c.alias ?? ""} placeholder={t("別名（可空）")}
                         onChange={(e) => setCols((cs) => cs.map((x) => x.id === c.id ? { ...x, alias: e.target.value } : x))} className="text-xs w-32" />
                     </div>
                   ))}
@@ -440,7 +442,7 @@ export default function QueryBuilder({
 
               {/* HAVING（群組後篩選） */}
               <section>
-                <SectionTitle icon={Filter} text="群組後篩選（HAVING）" hint="以聚合結果篩選分組，如 COUNT(id) > 1" />
+                <SectionTitle icon={Filter} text={t("群組後篩選（HAVING）")} hint={t("以聚合結果篩選分組，如 COUNT(id) > 1")} />
                 <div className="space-y-1.5">
                   {havings.map((h, i) => (
                     <div key={h.id} className="flex items-center gap-1.5 text-xs flex-wrap">
@@ -450,7 +452,7 @@ export default function QueryBuilder({
                         </Select>
                       )}
                       <Select selectSize="sm" value={h.agg ?? ""} onChange={(e) => setHavings((hs) => hs.map((x) => x.id === h.id ? { ...x, agg: e.target.value as QbAgg } : x))} className="text-xs w-32">
-                        {AGGS.map((a) => <option key={a.v} value={a.v}>{a.label}</option>)}
+                        {AGGS.map((a) => <option key={a.v} value={a.v}>{t(a.label)}</option>)}
                       </Select>
                       <ColPicker tables={picked} colsOf={colsOf} table={h.table} column={h.column}
                         onChange={(table, column) => setHavings((hs) => hs.map((x) => x.id === h.id ? { ...x, table, column } : x))} />
@@ -458,20 +460,20 @@ export default function QueryBuilder({
                         {OPS.map((o) => <option key={o} value={o}>{o}</option>)}
                       </Select>
                       {h.op !== "IS NULL" && h.op !== "IS NOT NULL" && (
-                        <Input inputSize="sm" value={h.value ?? ""} placeholder="值"
+                        <Input inputSize="sm" value={h.value ?? ""} placeholder={t("值")}
                           onChange={(e) => setHavings((hs) => hs.map((x) => x.id === h.id ? { ...x, value: e.target.value } : x))} className="text-xs w-32" />
                       )}
                       <button type="button" onClick={() => setHavings((hs) => hs.filter((x) => x.id !== h.id))} className="text-fg/30 hover:text-red-400"><Icon icon={Trash2} size={13} /></button>
                     </div>
                   ))}
                   <button type="button" onClick={() => setHavings((hs) => [...hs, { id: uid(), agg: "COUNT", table: picked[0], column: colsOf(picked[0])[0] ?? "", op: ">", value: "", conj: "AND" }])}
-                    className="text-[11px] text-fg/50 hover:text-fg inline-flex items-center gap-1"><Icon icon={Plus} size={11} />新增 HAVING 條件</button>
+                    className="text-[11px] text-fg/50 hover:text-fg inline-flex items-center gap-1"><Icon icon={Plus} size={11} />{t("新增 HAVING 條件")}</button>
                 </div>
               </section>
 
               {/* ORDER BY */}
               <section>
-                <SectionTitle icon={ArrowUpDown} text="排序（ORDER BY）" />
+                <SectionTitle icon={ArrowUpDown} text={t("排序（ORDER BY）")} />
                 <div className="space-y-1.5">
                   {orders.map((o) => (
                     <div key={o.id} className="flex items-center gap-1.5 text-xs">
@@ -484,7 +486,7 @@ export default function QueryBuilder({
                     </div>
                   ))}
                   <button type="button" onClick={() => setOrders((os) => [...os, { id: uid(), table: picked[0], column: colsOf(picked[0])[0] ?? "", dir: "ASC" }])}
-                    className="text-[11px] text-fg/50 hover:text-fg inline-flex items-center gap-1"><Icon icon={Plus} size={11} />新增排序</button>
+                    className="text-[11px] text-fg/50 hover:text-fg inline-flex items-center gap-1"><Icon icon={Plus} size={11} />{t("新增排序")}</button>
                 </div>
               </section>
 
@@ -492,11 +494,11 @@ export default function QueryBuilder({
               <section className="flex items-center gap-4 text-xs">
                 <label className="inline-flex items-center gap-1.5 cursor-pointer">
                   <input type="checkbox" checked={distinct} onChange={(e) => setDistinct(e.target.checked)} className="accent-[rgb(var(--c-accent))]" />
-                  DISTINCT（去重）
+                  {t("DISTINCT（去重）")}
                 </label>
                 <label className="inline-flex items-center gap-1.5">
                   LIMIT
-                  <Input inputSize="sm" value={limit} onChange={(e) => setLimit(e.target.value.replace(/[^\d]/g, ""))} className="text-xs w-20" placeholder="無" />
+                  <Input inputSize="sm" value={limit} onChange={(e) => setLimit(e.target.value.replace(/[^\d]/g, ""))} className="text-xs w-20" placeholder={t("無")} />
                 </label>
                 <label className="inline-flex items-center gap-1.5">
                   OFFSET
@@ -511,16 +513,16 @@ export default function QueryBuilder({
         {/* 右：SQL 預覽 + 執行結果預覽 */}
         <div className="w-80 shrink-0 border-l border-fg/10 flex flex-col min-h-0">
           <div className="px-3 py-1.5 border-b border-fg/10 text-[11px] text-fg/40 flex items-center gap-1.5">
-            <Icon icon={Wand2} size={12} />產生的 SQL
+            <Icon icon={Wand2} size={12} />{t("產生的 SQL")}
             <button type="button" onClick={runCount} disabled={!generated || previewing}
-              title="計數：得知這查詢會回多少列（COUNT(*)，略去 LIMIT/OFFSET/ORDER）"
+              title={t("計數：得知這查詢會回多少列（COUNT(*)，略去 LIMIT/OFFSET/ORDER）")}
               className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
-              <Icon icon={Sigma} size={11} />計數
+              <Icon icon={Sigma} size={11} />{t("計數")}
             </button>
             <button type="button" onClick={runPreview} disabled={!generated || previewing}
-              title="在建構器內執行查詢看結果（套上預覽上限）"
+              title={t("在建構器內執行查詢看結果（套上預覽上限）")}
               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
-              <Icon icon={Play} size={11} />{previewing ? "預覽中…" : "預覽"}
+              <Icon icon={Play} size={11} />{previewing ? t("預覽中…") : t("預覽")}
             </button>
           </div>
           <pre className="flex-1 overflow-auto p-3 text-xs mono text-fg/80 whitespace-pre-wrap break-words min-h-[80px]">
@@ -529,7 +531,7 @@ export default function QueryBuilder({
           {(preview || previewErr) && (
             <div className="border-t border-fg/10 flex flex-col min-h-0 max-h-[45%]">
               <div className="px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10 shrink-0">
-                {previewErr ? <span className="text-red-400">預覽錯誤</span> : `預覽結果 · ${preview?.rows.length ?? 0} 列`}
+                {previewErr ? <span className="text-red-400">{t("預覽錯誤")}</span> : `預覽結果 · ${preview?.rows.length ?? 0} 列`}
               </div>
               <div className="overflow-auto">
                 {previewErr ? (
@@ -554,7 +556,7 @@ export default function QueryBuilder({
                     </tbody>
                   </table>
                 ) : (
-                  <div className="p-2 text-xs text-fg/40">（無結果）</div>
+                  <div className="p-2 text-xs text-fg/40">{t("（無結果）")}</div>
                 )}
               </div>
             </div>

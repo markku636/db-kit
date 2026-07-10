@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Server } from "lucide-react";
 import { api, QueryResult } from "./api";
 import { Modal, Button } from "./ui/index";
+import { useT } from "./i18n";
 
 // 通用唯讀結果檢視器：執行一段 SQL（如使用者 / 角色、伺服器變數）並以表格呈現，可重新整理。
 export default function ServerQueryDialog({ connId, title, sql, onClose }: {
@@ -10,6 +11,7 @@ export default function ServerQueryDialog({ connId, title, sql, onClose }: {
   sql: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const [res, setRes] = useState<QueryResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -20,7 +22,7 @@ export default function ServerQueryDialog({ connId, title, sql, onClose }: {
     try {
       setRes(await api.runQuery(connId, sql));
     } catch (e: any) {
-      setErr(e?.message ?? "讀取失敗");
+      setErr(e?.message ?? t("讀取失敗"));
     } finally {
       setBusy(false);
     }
@@ -39,19 +41,19 @@ export default function ServerQueryDialog({ connId, title, sql, onClose }: {
       title={
         <>
           <span className="font-medium text-sm">{title}</span>
-          {res && <span className="text-xs text-fg/40 ml-2">{res.rows.length} 筆</span>}
+          {res && <span className="text-xs text-fg/40 ml-2">{res.rows.length} {t("筆")}</span>}
           <button type="button" onClick={() => refresh()} disabled={busy}
-            className="ml-auto text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40">{busy ? "讀取中…" : "重新整理"}</button>
+            className="ml-auto text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40">{busy ? t("讀取中…") : t("重新整理")}</button>
         </>
       }
-      footer={<Button variant="secondary" onClick={onClose}>關閉</Button>}
+      footer={<Button variant="secondary" onClick={onClose}>{t("關閉")}</Button>}
     >
       {err ? (
         <div className="text-red-300 text-sm p-5 mono whitespace-pre-wrap">{err}</div>
       ) : !res ? (
-        <div className="text-fg/40 text-sm p-5">讀取中…</div>
+        <div className="text-fg/40 text-sm p-5">{t("讀取中…")}</div>
       ) : res.rows.length === 0 ? (
-        <div className="text-fg/40 text-sm p-5">（無資料）</div>
+        <div className="text-fg/40 text-sm p-5">{t("（無資料）")}</div>
       ) : (
         <table className="w-full text-xs">
           <thead className="sticky top-0 bg-inset text-fg/45">

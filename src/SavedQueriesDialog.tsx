@@ -14,6 +14,7 @@ import {
   fmtRelativeTime,
   type SavedQuery,
 } from "./sql";
+import { useT } from "./i18n";
 
 // 收藏查詢管理視窗（清單 ↔ 編輯兩模式，對標 RoutinesDialog）：
 // 分組清單 + 搜尋 + 新增 / 編輯 / 重新命名 / 刪除 + 捲軸 SQL 區 + 匯出 / 匯入（含 SQL 片段）。
@@ -31,6 +32,7 @@ export interface SavedQueriesDialogProps {
 }
 
 export default function SavedQueriesDialog({ onClose, seedSql, editName }: SavedQueriesDialogProps) {
+  const t = useT();
   const savedQueries = useStore((s) => s.savedQueries);
   const snippets = useStore((s) => s.snippets);
 
@@ -67,7 +69,7 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
     const order = map.has("") ? [...named, ""] : named;
     return order.map((g) => ({
       group: g,
-      label: g || UNGROUPED,
+      label: g || t(UNGROUPED),
       items: map.get(g)!.slice().sort((a, b) => a.name.localeCompare(b.name)),
     }));
   }, [savedQueries, search]);
@@ -93,11 +95,11 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
     const name = fName.trim();
     const sql = fSql.trim();
     if (!name) {
-      toast.info("請輸入名稱");
+      toast.info(t("請輸入名稱"));
       return;
     }
     if (!sql) {
-      toast.info("SQL 不可為空");
+      toast.info(t("SQL 不可為空"));
       return;
     }
     const payload: SavedQuery = {
@@ -109,28 +111,28 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
     // 名稱撞到「另一筆」既有收藏 → 先確認覆蓋。
     const collides = editingName !== name && savedQueries.some((q) => q.name === name);
     if (collides) {
-      const ok = await uiConfirm(`已有名為「${name}」的收藏，要覆蓋它嗎？`, {
-        title: "名稱重複",
+      const ok = await uiConfirm(t("已有名為「{name}」的收藏，要覆蓋它嗎？", { name }), {
+        title: t("名稱重複"),
         danger: true,
-        confirmText: "覆蓋",
+        confirmText: t("覆蓋"),
       });
       if (!ok) return;
     }
     if (editingName === null) useStore.getState().addSavedQuery(payload);
     else useStore.getState().updateSavedQuery(editingName, payload);
-    toast.success(editingName === null ? "已收藏" : "已更新");
+    toast.success(editingName === null ? t("已收藏") : t("已更新"));
     setMode("list");
   };
 
   const del = async (q: SavedQuery) => {
-    const ok = await uiConfirm(`刪除收藏「${q.name}」？此動作無法復原。`, {
-      title: "刪除收藏",
+    const ok = await uiConfirm(t("刪除收藏「{name}」？此動作無法復原。", { name: q.name }), {
+      title: t("刪除收藏"),
       danger: true,
-      confirmText: "刪除",
+      confirmText: t("刪除"),
     });
     if (!ok) return;
     useStore.getState().removeSavedQuery(q.name);
-    toast.success("已刪除");
+    toast.success(t("已刪除"));
   };
 
   const loadToEditor = (q: SavedQuery) => {
@@ -141,33 +143,33 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
   const exportLibrary = async () => {
     const bundle = buildSqlLibraryBundle(savedQueries, snippets, Date.now());
     if (bundle.savedQueries.length === 0 && bundle.snippets.length === 0) {
-      toast.info("沒有可匯出的收藏或片段");
+      toast.info(t("沒有可匯出的收藏或片段"));
       return;
     }
-    const path = await pickSaveFile("db-kit-sql-library.json", [{ name: "db-kit SQL 庫", extensions: ["json"] }]);
+    const path = await pickSaveFile("db-kit-sql-library.json", [{ name: t("db-kit SQL 庫"), extensions: ["json"] }]);
     if (!path) return;
     try {
       await api.saveTextFile(path, JSON.stringify(bundle, null, 2));
-      toast.success(`已匯出 ${bundle.savedQueries.length} 收藏、${bundle.snippets.length} 片段`);
+      toast.success(t("已匯出 {length} 收藏、{v2} 片段", { length: bundle.savedQueries.length, v2: bundle.snippets.length }));
     } catch (e: any) {
-      toast.error(e?.message ?? "匯出失敗");
+      toast.error(e?.message ?? t("匯出失敗"));
     }
   };
 
   const importLibrary = async () => {
-    const path = await pickOpenFile([{ name: "db-kit SQL 庫", extensions: ["json"] }]);
+    const path = await pickOpenFile([{ name: t("db-kit SQL 庫"), extensions: ["json"] }]);
     if (!path) return;
     let parsed: ReturnType<typeof parseSqlLibraryBundle>;
     try {
       parsed = parseSqlLibraryBundle(await api.readTextFile(path));
     } catch (e: any) {
-      toast.error(e?.message ?? "匯入失敗：檔案無法解析");
+      toast.error(e?.message ?? t("匯入失敗：檔案無法解析"));
       return;
     }
     const incQ = parsed.savedQueries;
     const incS = parsed.snippets;
     if (incQ.length === 0 && incS.length === 0) {
-      toast.info("檔案內沒有收藏或片段");
+      toast.info(t("檔案內沒有收藏或片段"));
       return;
     }
     // 既有使用者片段（不含 builtin）與名稱集，用於片段衝突偵測。
@@ -180,8 +182,8 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
     let overwrite = true;
     if (conflicts > 0) {
       overwrite = await uiConfirm(
-        `匯入含 ${conflicts} 筆同名項目（收藏 ${qConflicts}、片段 ${sConflicts}）。要覆蓋既有嗎？（確定＝覆蓋、取消＝略過同名）`,
-        { title: "匯入 SQL 庫", confirmText: "覆蓋" },
+        t("匯入含 {conflicts} 筆同名項目（收藏 {qConflicts}、片段 {sConflicts}）。要覆蓋既有嗎？（確定＝覆蓋、取消＝略過同名）", { conflicts, qConflicts, sConflicts }),
+        { title: t("匯入 SQL 庫"), confirmText: t("覆蓋") },
       );
     }
     if (incQ.length > 0) {
@@ -196,7 +198,7 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
     const appliedQ = overwrite ? incQ.length : incQ.length - qConflicts;
     const appliedS = overwrite ? incS.length : incS.length - sConflicts;
     const skipped = overwrite ? 0 : conflicts;
-    toast.success(`已匯入 ${appliedQ} 收藏、${appliedS} 片段${skipped ? `（略過 ${skipped} 筆同名）` : ""}`);
+    toast.success(`已匯入 ${appliedQ} 收藏、${appliedS} 片段${skipped ? t("（略過 {skipped} 筆同名）", { skipped }) : ""}`);
   };
 
   // ---- 編輯模式 ----
@@ -215,20 +217,20 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
               type="button"
               onClick={() => setMode("list")}
               className="inline-flex items-center gap-1 text-xs text-fg/50 hover:text-fg/80"
-              title="返回清單"
+              title={t("返回清單")}
             >
               <Icon icon={ArrowLeft} size={14} />
             </button>
-            <span>{isNew ? "新增收藏查詢" : `編輯收藏：${editingName}`}</span>
+            <span>{isNew ? t("新增收藏查詢") : t("編輯收藏：{editingName}", { editingName })}</span>
           </span>
         }
         footer={
           <>
             <Button variant="secondary" onClick={() => setMode("list")}>
-              取消
+              {t("取消")}
             </Button>
             <Button variant="primary" onClick={save}>
-              儲存
+              {t("儲存")}
             </Button>
           </>
         }
@@ -241,25 +243,25 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
         <div className="flex flex-col min-h-0 flex-1 p-4 gap-3">
           <div className="grid grid-cols-[1fr_1fr] gap-3 shrink-0">
             <label className="grid gap-1">
-              <span className="text-xs text-fg/60">名稱</span>
-              <Input value={fName} onChange={(e) => setFName(e.target.value)} placeholder="例如：每日活躍用戶" autoFocus />
+              <span className="text-xs text-fg/60">{t("名稱")}</span>
+              <Input value={fName} onChange={(e) => setFName(e.target.value)} placeholder={t("例如：每日活躍用戶")} autoFocus />
             </label>
             <label className="grid gap-1">
-              <span className="text-xs text-fg/60">分組（可留空）</span>
+              <span className="text-xs text-fg/60">{t("分組（可留空）")}</span>
               <Input
                 value={fGroup}
                 onChange={(e) => setFGroup(e.target.value)}
                 list={GROUPS_LIST_ID}
-                placeholder="例如：金流串接"
+                placeholder={t("例如：金流串接")}
               />
             </label>
           </div>
           <label className="grid gap-1 shrink-0">
-            <span className="text-xs text-fg/60">說明（可留空）</span>
-            <Input value={fDesc} onChange={(e) => setFDesc(e.target.value)} placeholder="這段查詢的用途" />
+            <span className="text-xs text-fg/60">{t("說明（可留空）")}</span>
+            <Input value={fDesc} onChange={(e) => setFDesc(e.target.value)} placeholder={t("這段查詢的用途")} />
           </label>
           <label className="flex flex-col gap-1 flex-1 min-h-0">
-            <span className="text-xs text-fg/60">SQL（可捲動；長查詢也能完整檢視）</span>
+            <span className="text-xs text-fg/60">{t("SQL（可捲動；長查詢也能完整檢視）")}</span>
             <Textarea
               value={fSql}
               onChange={(e) => setFSql(e.target.value)}
@@ -285,8 +287,8 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
       bodyClassName="p-0 flex flex-col min-h-0"
       title={
         <span className="flex items-center gap-2">
-          <span>收藏查詢</span>
-          <span className="text-xs text-fg/40 font-normal">{total} 筆</span>
+          <span>{t("收藏查詢")}</span>
+          <span className="text-xs text-fg/40 font-normal">{total} {t("筆")}</span>
         </span>
       }
     >
@@ -297,18 +299,18 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜尋名稱 / 說明 / SQL…"
+            placeholder={t("搜尋名稱 / 說明 / SQL…")}
             className="pl-8"
           />
         </div>
         <Button variant="primary" icon={Plus} onClick={() => openNew()}>
-          新增
+          {t("新增")}
         </Button>
-        <Button variant="secondary" icon={Upload} onClick={importLibrary} title="從檔案匯入收藏與片段">
-          匯入
+        <Button variant="secondary" icon={Upload} onClick={importLibrary} title={t("從檔案匯入收藏與片段")}>
+          {t("匯入")}
         </Button>
-        <Button variant="secondary" icon={Download} onClick={exportLibrary} title="匯出收藏與片段為 JSON 檔">
-          匯出
+        <Button variant="secondary" icon={Download} onClick={exportLibrary} title={t("匯出收藏與片段為 JSON 檔")}>
+          {t("匯出")}
         </Button>
       </div>
 
@@ -318,8 +320,8 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
           <div className="h-full grid place-items-center text-center text-fg/40 text-sm px-6">
             <div>
               <Icon icon={Star} size={28} className="mx-auto mb-2 text-fg/25" />
-              尚無收藏查詢。
-              <div className="mt-1 text-xs text-fg/35">在查詢編輯器按「收藏目前查詢…」，或點上方「新增」、「匯入」。</div>
+              {t("尚無收藏查詢。")}
+              <div className="mt-1 text-xs text-fg/35">{t("在查詢編輯器按「收藏目前查詢…」，或點上方「新增」、「匯入」。")}</div>
             </div>
           </div>
         ) : grouped.length === 0 ? (
@@ -339,7 +341,7 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
                     onDoubleClick={() => loadToEditor(q)}
                     onClick={() => openEdit(q)}
                     className="flex-1 min-w-0 text-left"
-                    title="點一下編輯、雙擊載入到編輯器"
+                    title={t("點一下編輯、雙擊載入到編輯器")}
                   >
                     <div className="flex items-center gap-1.5 text-sm">
                       <Icon icon={Star} size={12} className="text-amber-300 shrink-0" />
@@ -355,7 +357,7 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
                     <button
                       type="button"
                       onClick={() => loadToEditor(q)}
-                      title="載入到編輯器"
+                      title={t("載入到編輯器")}
                       className="w-7 h-7 grid place-items-center rounded text-fg/45 hover:text-accent hover:bg-fg/10"
                     >
                       <Icon icon={FileCode2} size={14} />
@@ -363,7 +365,7 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
                     <button
                       type="button"
                       onClick={() => openEdit(q)}
-                      title="編輯"
+                      title={t("編輯")}
                       className="w-7 h-7 grid place-items-center rounded text-fg/45 hover:text-fg hover:bg-fg/10"
                     >
                       <Icon icon={Pencil} size={14} />
@@ -371,7 +373,7 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
                     <button
                       type="button"
                       onClick={() => del(q)}
-                      title="刪除"
+                      title={t("刪除")}
                       className="w-7 h-7 grid place-items-center rounded text-fg/45 hover:text-red-400 hover:bg-fg/10"
                     >
                       <Icon icon={Trash2} size={14} />

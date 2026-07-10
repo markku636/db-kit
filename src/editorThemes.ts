@@ -1,7 +1,8 @@
 import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { tags as t } from "@lezer/highlight";
+// 別名為 tg 而非 t：i18n 的翻譯函式叫 t()，同名會在頂層互相遮蔽。
+import { tags as tg } from "@lezer/highlight";
 
 // 編輯器語法高亮主題。配色由本機 Notepad++ theme XML
 // （GlobalStyles + SQL lexer 色值，規劃期一次抽取定稿）取樣，名稱一律採寶石系。
@@ -293,14 +294,14 @@ export function buildEditorTheme(def: EditorThemeDef): Extension {
   );
   const highlight = HighlightStyle.define([
     // SQL：型別（INT 等）在 Notepad++ SQL lexer 併入 KEYWORD 色，這裡比照。
-    { tag: [t.keyword, t.typeName, t.operatorKeyword, t.modifier], color: c.keyword },
-    { tag: t.operator, color: c.operator },
-    { tag: t.punctuation, color: c.fg },
-    { tag: [t.number, t.bool, t.null], color: c.number },
-    { tag: [t.string, t.special(t.string)], color: c.string },
-    { tag: t.comment, color: c.comment }, // lineComment / blockComment 為子 tag，自動涵蓋
-    { tag: t.propertyName, color: c.keyword }, // Mongo/JSON 的 key
-    { tag: [t.name, t.variableName], color: c.fg },
+    { tag: [tg.keyword, tg.typeName, tg.operatorKeyword, tg.modifier], color: c.keyword },
+    { tag: tg.operator, color: c.operator },
+    { tag: tg.punctuation, color: c.fg },
+    { tag: [tg.number, tg.bool, tg.null], color: c.number },
+    { tag: [tg.string, tg.special(tg.string)], color: c.string },
+    { tag: tg.comment, color: c.comment }, // lineComment / blockComment 為子 tag，自動涵蓋
+    { tag: tg.propertyName, color: c.keyword }, // Mongo/JSON 的 key
+    { tag: [tg.name, tg.variableName], color: c.fg },
   ]);
   const ext: Extension = [view, syntaxHighlighting(highlight)];
   cache.set(def.id, ext);

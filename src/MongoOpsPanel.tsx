@@ -4,6 +4,7 @@ import { api, MongoOp, MongoProfile, MongoSlowQuery, ServerInfoSection } from ".
 import { toast, uiConfirm, useModalOverlay } from "./ui";
 import { IconButton, Select } from "./ui/index";
 import Icon from "./ui/Icon";
+import { useT } from "./i18n";
 
 type Tab = "status" | "dbstats" | "ops" | "profiler";
 
@@ -12,6 +13,7 @@ type Tab = "status" | "dbstats" | "ops" | "profiler";
 export default function MongoOpsPanel({ connId, connName, database, readonly, onClose }: {
   connId: string; connName: string; database: string; readonly: boolean; onClose: () => void;
 }) {
+  const t = useT();
   useModalOverlay(onClose);
   const [tab, setTab] = useState<Tab>("status");
 
@@ -21,16 +23,16 @@ export default function MongoOpsPanel({ connId, connName, database, readonly, on
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3">
           <Icon icon={Activity} size={14} className="text-green-400" />
-          <span className="font-medium text-sm">監控 · {connName}</span>
+          <span className="font-medium text-sm">{t("監控 ·")} {connName}</span>
           <div className="flex items-center rounded border border-fg/10 overflow-hidden ml-2 text-xs">
-            {([["status", "伺服器狀態"], ["dbstats", "資料庫統計"], ["ops", "進行中操作"], ["profiler", "Profiler"]] as [Tab, string][]).map(([v, label]) => (
+            {([["status", t("伺服器狀態")], ["dbstats", t("資料庫統計")], ["ops", t("進行中操作")], ["profiler", "Profiler"]] as [Tab, string][]).map(([v, label]) => (
               <button key={v} type="button" onClick={() => setTab(v)}
                 className={`px-3 py-1 ${tab === v ? "bg-fg/15 text-fg" : "text-fg/50 hover:bg-fg/5"}`}>
                 {label}
               </button>
             ))}
           </div>
-          <IconButton icon={X} label="關閉" iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
+          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
         </div>
         <div className="flex-1 overflow-auto p-4">
           {tab === "status" && <StatusTab connId={connId} />}
@@ -49,16 +51,18 @@ function ErrBar({ err }: { err: string | null }) {
 }
 
 function RefreshBtn({ onClick }: { onClick: () => void }) {
+  const t = useT();
   return (
     <button type="button" onClick={onClick}
       className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
-      <Icon icon={RefreshCw} size={13} /> 刷新
+      <Icon icon={RefreshCw} size={13} /> {t("刷新")}
     </button>
   );
 }
 
 // ---- 伺服器狀態（serverStatus 分區 + 自動更新）----
 function StatusTab({ connId }: { connId: string }) {
+  const t = useT();
   const [secs, setSecs] = useState<ServerInfoSection[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [auto, setAuto] = useState(false);
@@ -68,7 +72,7 @@ function StatusTab({ connId }: { connId: string }) {
     let cancelled = false;
     api.serverInfo(connId)
       .then((r) => !cancelled && (setSecs(r), setErr(null)))
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"));
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     return () => { cancelled = true; };
   }, [connId, nonce]);
   useEffect(() => {
@@ -81,12 +85,12 @@ function StatusTab({ connId }: { connId: string }) {
     <>
       <div className="flex items-center gap-2 mb-3 text-xs">
         <label className="flex items-center gap-1.5 cursor-pointer select-none text-fg/60">
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />每 2 秒自動更新
+          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />{t("每 2 秒自動更新")}
         </label>
         <RefreshBtn onClick={() => setNonce((n) => n + 1)} />
       </div>
       <ErrBar err={err} />
-      {!secs && !err && <div className="text-fg/40 text-sm">讀取中…</div>}
+      {!secs && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
       {secs && (
         <div className="grid grid-cols-2 gap-3">
           {secs.map((s) => (
@@ -112,6 +116,7 @@ function StatusTab({ connId }: { connId: string }) {
 
 // ---- 資料庫統計（dbStats，可切換 db）----
 function DbStatsTab({ connId, initialDb }: { connId: string; initialDb: string }) {
+  const t = useT();
   const [dbs, setDbs] = useState<string[]>([]);
   const [db, setDb] = useState(initialDb);
   const [rows, setRows] = useState<[string, string][] | null>(null);
@@ -131,14 +136,14 @@ function DbStatsTab({ connId, initialDb }: { connId: string; initialDb: string }
     setRows(null);
     api.mongoDbStats(connId, db)
       .then((r) => !cancelled && (setRows(r), setErr(null)))
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"));
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     return () => { cancelled = true; };
   }, [connId, db, nonce]);
 
   return (
     <>
       <div className="flex items-center gap-2 mb-3 text-xs">
-        <span className="text-fg/50">資料庫</span>
+        <span className="text-fg/50">{t("資料庫")}</span>
         <div className="w-52">
           <Select value={db} onChange={(e) => setDb(e.target.value)}>
             {dbs.map((d) => <option key={d} value={d}>{d}</option>)}
@@ -147,7 +152,7 @@ function DbStatsTab({ connId, initialDb }: { connId: string; initialDb: string }
         <RefreshBtn onClick={() => setNonce((n) => n + 1)} />
       </div>
       <ErrBar err={err} />
-      {!rows && !err && <div className="text-fg/40 text-sm">讀取中…</div>}
+      {!rows && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
       {rows && (
         <table className="text-sm w-full max-w-md border-collapse">
           <tbody>
@@ -166,6 +171,7 @@ function DbStatsTab({ connId, initialDb }: { connId: string; initialDb: string }
 
 // ---- 進行中操作（currentOp + kill）----
 function OpsTab({ connId, readonly }: { connId: string; readonly: boolean }) {
+  const t = useT();
   const [rows, setRows] = useState<MongoOp[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [auto, setAuto] = useState(false);
@@ -176,7 +182,7 @@ function OpsTab({ connId, readonly }: { connId: string; readonly: boolean }) {
     let cancelled = false;
     api.mongoCurrentOps(connId)
       .then((r) => !cancelled && (setRows(r), setErr(null)))
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"));
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     return () => { cancelled = true; };
   }, [connId, nonce]);
   useEffect(() => {
@@ -187,40 +193,40 @@ function OpsTab({ connId, readonly }: { connId: string; readonly: boolean }) {
 
   const kill = async (op: MongoOp) => {
     const ok = await uiConfirm(
-      `終止操作 ${op.opid}？\n${op.op} ${op.ns}（已執行 ${op.secs_running}s）\n終止內部 / 複寫操作可能造成不可預期後果。`,
-      { title: "終止操作", danger: true, confirmText: "終止" },
+      t("終止操作 {opid}？\n{op} {ns}（已執行 {secs_running}s）\n終止內部 / 複寫操作可能造成不可預期後果。", { opid: op.opid, op: op.op, ns: op.ns, secs_running: op.secs_running }),
+      { title: t("終止操作"), danger: true, confirmText: t("終止") },
     );
     if (!ok) return;
     try {
       await api.mongoKillOp(connId, op.opid);
-      toast.success(`已送出 killOp ${op.opid}`);
+      toast.success(t("已送出 killOp {opid}", { opid: op.opid }));
       setNonce((n) => n + 1);
     } catch (e: any) {
-      toast.error(e?.message ?? "終止失敗");
+      toast.error(e?.message ?? t("終止失敗"));
     }
   };
 
   return (
     <>
       <div className="flex items-center gap-2 mb-2 text-xs">
-        <span className="text-fg/40">{rows?.length ?? 0} 個進行中操作（不含閒置連線）</span>
+        <span className="text-fg/40">{rows?.length ?? 0} {t("個進行中操作（不含閒置連線）")}</span>
         <label className="flex items-center gap-1.5 cursor-pointer select-none text-fg/60 ml-2">
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />自動更新
+          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />{t("自動更新")}
         </label>
         <RefreshBtn onClick={() => setNonce((n) => n + 1)} />
       </div>
       <ErrBar err={err} />
-      {!rows && !err && <div className="text-fg/40 text-sm">讀取中…</div>}
-      {rows && rows.length === 0 && <div className="text-fg/40 text-sm">（目前沒有進行中的操作）</div>}
+      {!rows && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
+      {rows && rows.length === 0 && <div className="text-fg/40 text-sm">{t("（目前沒有進行中的操作）")}</div>}
       {rows && rows.length > 0 && (
         <table className="text-xs mono w-full border-collapse">
           <thead><tr className="text-fg/45">
             <th className="text-left px-2 py-1 border-b border-fg/10">opid</th>
             <th className="text-left px-2 py-1 border-b border-fg/10">op</th>
             <th className="text-left px-2 py-1 border-b border-fg/10">ns</th>
-            <th className="text-right px-2 py-1 border-b border-fg/10">秒數</th>
-            <th className="text-left px-2 py-1 border-b border-fg/10">用戶端</th>
-            <th className="text-left px-2 py-1 border-b border-fg/10">說明</th>
+            <th className="text-right px-2 py-1 border-b border-fg/10">{t("秒數")}</th>
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("用戶端")}</th>
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("說明")}</th>
             {!readonly && <th className="w-12 border-b border-fg/10" />}
           </tr></thead>
           <tbody>
@@ -233,11 +239,11 @@ function OpsTab({ connId, readonly }: { connId: string; readonly: boolean }) {
                   <td className="px-2 py-1 border-b border-fg/5 text-fg/70 break-all">{r.ns}</td>
                   <td className={`px-2 py-1 border-b border-fg/5 text-right ${r.secs_running > 10 ? "text-amber-300" : "text-fg/60"}`}>{r.secs_running}</td>
                   <td className="px-2 py-1 border-b border-fg/5 text-fg/50">{r.client}</td>
-                  <td className="px-2 py-1 border-b border-fg/5 text-fg/50 break-all">{r.desc}{r.waiting_for_lock ? "（等鎖）" : ""}</td>
+                  <td className="px-2 py-1 border-b border-fg/5 text-fg/50 break-all">{r.desc}{r.waiting_for_lock ? t("（等鎖）") : ""}</td>
                   {!readonly && (
                     <td className="px-2 py-1 border-b border-fg/5 text-right">
                       <button type="button" onClick={(e) => { e.stopPropagation(); void kill(r); }}
-                        className="px-1.5 py-0.5 rounded text-red-300 hover:bg-red-500/20">終止</button>
+                        className="px-1.5 py-0.5 rounded text-red-300 hover:bg-red-500/20">{t("終止")}</button>
                     </td>
                   )}
                 </tr>
@@ -259,6 +265,7 @@ function OpsTab({ connId, readonly }: { connId: string; readonly: boolean }) {
 
 // ---- Profiler（level / slowms 設定 + system.profile 慢查詢表）----
 function ProfilerTab({ connId, initialDb, readonly }: { connId: string; initialDb: string; readonly: boolean }) {
+  const t = useT();
   const [dbs, setDbs] = useState<string[]>([]);
   const [db, setDb] = useState(initialDb);
   const [profile, setProfile] = useState<MongoProfile | null>(null);
@@ -280,48 +287,48 @@ function ProfilerTab({ connId, initialDb, readonly }: { connId: string; initialD
     let cancelled = false;
     api.mongoProfileGet(connId, db)
       .then((p) => { if (cancelled) return; setProfile(p); setLevel(p.level); setSlowMs(p.slow_ms); })
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取 Profiler 設定失敗"));
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取 Profiler 設定失敗")));
     setRows(null);
     api.mongoSlowQueries(connId, db, 100)
       .then((r) => !cancelled && (setRows(r), setErr(null)))
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"));
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     return () => { cancelled = true; };
   }, [connId, db, nonce]);
 
   const apply = async () => {
     if (level === 2) {
       const ok = await uiConfirm(
-        "Level 2 會記錄「所有」操作，額外寫入負擔明顯，正式環境慎用。確定套用？",
-        { title: "Profiler Level 2", danger: true, confirmText: "套用" },
+        t("Level 2 會記錄「所有」操作，額外寫入負擔明顯，正式環境慎用。確定套用？"),
+        { title: "Profiler Level 2", danger: true, confirmText: t("套用") },
       );
       if (!ok) return;
     }
     try {
       const p = await api.mongoProfileSet(connId, db, level, slowMs);
       setProfile(p);
-      toast.success(`Profiler 已設為 level ${p.level}（slowms ${p.slow_ms}）`);
+      toast.success(t("Profiler 已設為 level {level}（slowms {slow_ms}）", { level: p.level, slow_ms: p.slow_ms }));
       setNonce((n) => n + 1);
     } catch (e: any) {
-      toast.error(e?.message ?? "設定失敗（mongos / 受限帳號不支援）");
+      toast.error(e?.message ?? t("設定失敗（mongos / 受限帳號不支援）"));
     }
   };
 
   return (
     <>
       <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
-        <span className="text-fg/50">資料庫</span>
+        <span className="text-fg/50">{t("資料庫")}</span>
         <div className="w-44">
           <Select value={db} onChange={(e) => setDb(e.target.value)}>
             {dbs.map((d) => <option key={d} value={d}>{d}</option>)}
           </Select>
         </div>
-        <span className="text-fg/50 ml-2">目前 level：<span className="mono text-fg/80">{profile?.level ?? "—"}</span></span>
+        <span className="text-fg/50 ml-2">{t("目前 level：")}<span className="mono text-fg/80">{profile?.level ?? "—"}</span></span>
         {!readonly && (
           <>
             <div className="flex items-center rounded border border-fg/10 overflow-hidden ml-2">
               {[0, 1, 2].map((l) => (
                 <button key={l} type="button" onClick={() => setLevel(l)}
-                  title={l === 0 ? "關閉" : l === 1 ? "僅記錄慢查詢（≥ slowms）" : "記錄所有操作（慎用）"}
+                  title={l === 0 ? t("關閉") : l === 1 ? t("僅記錄慢查詢（≥ slowms）") : t("記錄所有操作（慎用）")}
                   className={`px-2.5 py-1 ${level === l ? "bg-fg/15 text-fg" : "text-fg/50 hover:bg-fg/5"}`}>
                   {l}
                 </button>
@@ -331,28 +338,28 @@ function ProfilerTab({ connId, initialDb, readonly }: { connId: string; initialD
             <input type="number" value={slowMs} onChange={(e) => setSlowMs(Number(e.target.value) || 0)}
               className="w-20 h-6 rounded bg-inset border border-fg/10 px-2 text-xs outline-none focus:border-accent/60" />
             <button type="button" onClick={apply}
-              className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/80">套用</button>
+              className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/80">{t("套用")}</button>
           </>
         )}
         <RefreshBtn onClick={() => setNonce((n) => n + 1)} />
       </div>
       <ErrBar err={err} />
-      {!rows && !err && <div className="text-fg/40 text-sm">讀取中…</div>}
+      {!rows && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
       {rows && rows.length === 0 && (
         <div className="text-fg/40 text-sm">
-          system.profile 尚無紀錄 —— 需先將 Profiler 設為 level 1（慢查詢）或 2（全部），且 profiling 為單一資料庫層級、mongos 上不可用。
+          {t("system.profile 尚無紀錄 —— 需先將 Profiler 設為 level 1（慢查詢）或 2（全部），且 profiling 為單一資料庫層級、mongos 上不可用。")}
         </div>
       )}
       {rows && rows.length > 0 && (
         <table className="text-xs mono w-full border-collapse">
           <thead><tr className="text-fg/45">
-            <th className="text-left px-2 py-1 border-b border-fg/10">時間</th>
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("時間")}</th>
             <th className="text-left px-2 py-1 border-b border-fg/10">op</th>
             <th className="text-left px-2 py-1 border-b border-fg/10">ns</th>
-            <th className="text-right px-2 py-1 border-b border-fg/10">毫秒</th>
-            <th className="text-left px-2 py-1 border-b border-fg/10">計畫</th>
-            <th className="text-right px-2 py-1 border-b border-fg/10">鍵/文件掃描</th>
-            <th className="text-right px-2 py-1 border-b border-fg/10">回傳</th>
+            <th className="text-right px-2 py-1 border-b border-fg/10">{t("毫秒")}</th>
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("計畫")}</th>
+            <th className="text-right px-2 py-1 border-b border-fg/10">{t("鍵/文件掃描")}</th>
+            <th className="text-right px-2 py-1 border-b border-fg/10">{t("回傳")}</th>
           </tr></thead>
           <tbody>
             {rows.map((r, i) => (

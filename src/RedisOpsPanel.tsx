@@ -4,6 +4,7 @@ import { api, BigKey, ClientInfo, SlowLogEntry } from "./api";
 import { toast, uiConfirm, useModalOverlay } from "./ui";
 import { IconButton } from "./ui/index";
 import Icon from "./ui/Icon";
+import { useT } from "./i18n";
 
 type Tab = "slowlog" | "clients" | "bigkeys";
 
@@ -11,6 +12,7 @@ type Tab = "slowlog" | "clients" | "bigkeys";
 export default function RedisOpsPanel({ connId, connName, database, onClose }: {
   connId: string; connName: string; database: string; onClose: () => void;
 }) {
+  const t = useT();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount（避免全域快捷鍵在面板背後動作）
   const [tab, setTab] = useState<Tab>("slowlog");
 
@@ -20,16 +22,16 @@ export default function RedisOpsPanel({ connId, connName, database, onClose }: {
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3">
           <Icon icon={CircleDot} size={14} className="text-red-400" />
-          <span className="font-medium text-sm">維運 · {connName}</span>
+          <span className="font-medium text-sm">{t("維運 ·")} {connName}</span>
           <div className="flex items-center rounded border border-fg/10 overflow-hidden ml-2 text-xs">
-            {([["slowlog", "慢查詢"], ["clients", "用戶端"], ["bigkeys", "大鍵"]] as [Tab, string][]).map(([v, label]) => (
+            {([["slowlog", t("慢查詢")], ["clients", t("用戶端")], ["bigkeys", t("大鍵")]] as [Tab, string][]).map(([v, label]) => (
               <button key={v} type="button" onClick={() => setTab(v)}
                 className={`px-3 py-1 ${tab === v ? "bg-fg/15 text-fg" : "text-fg/50 hover:bg-fg/5"}`}>
                 {label}
               </button>
             ))}
           </div>
-          <IconButton icon={X} label="關閉" iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
+          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
         </div>
         <div className="flex-1 overflow-auto p-4">
           {tab === "slowlog" && <SlowLogTab connId={connId} />}
@@ -47,6 +49,7 @@ function ErrBar({ err }: { err: string | null }) {
 }
 
 function SlowLogTab({ connId }: { connId: string }) {
+  const t = useT();
   const [rows, setRows] = useState<SlowLogEntry[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -55,18 +58,18 @@ function SlowLogTab({ connId }: { connId: string }) {
     let cancelled = false;
     api.redisSlowlog(connId, 128)
       .then((r) => !cancelled && (setRows(r), setErr(null)))
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"));
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     return () => { cancelled = true; };
   }, [connId, nonce]);
 
   const reset = async () => {
-    if (!(await uiConfirm("清空慢查詢日誌（SLOWLOG RESET）？", { title: "清空慢查詢", confirmText: "清空" }))) return;
+    if (!(await uiConfirm(t("清空慢查詢日誌（SLOWLOG RESET）？"), { title: t("清空慢查詢"), confirmText: t("清空") }))) return;
     try {
       await api.runQuery(connId, "SLOWLOG RESET");
-      toast.success("已清空");
+      toast.success(t("已清空"));
       setNonce((n) => n + 1);
     } catch (e: any) {
-      setErr(e?.message ?? "清空失敗");
+      setErr(e?.message ?? t("清空失敗"));
     }
   };
 
@@ -75,21 +78,21 @@ function SlowLogTab({ connId }: { connId: string }) {
       <div className="flex items-center gap-2 mb-2 text-xs">
         <span className="text-fg/40">最近 {rows?.length ?? 0} 筆慢查詢</span>
         <button type="button" onClick={() => setNonce((n) => n + 1)}
-          className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70"><Icon icon={RefreshCw} size={13} /> 刷新</button>
+          className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70"><Icon icon={RefreshCw} size={13} /> {t("刷新")}</button>
         <button type="button" onClick={reset}
-          className="px-2 py-1 rounded border border-fg/15 hover:bg-red-500/20 text-red-300">清空</button>
+          className="px-2 py-1 rounded border border-fg/15 hover:bg-red-500/20 text-red-300">{t("清空")}</button>
       </div>
       <ErrBar err={err} />
-      {!rows && !err && <div className="text-fg/40 text-sm">讀取中…</div>}
-      {rows && rows.length === 0 && <div className="text-fg/40 text-sm">（無慢查詢紀錄）</div>}
+      {!rows && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
+      {rows && rows.length === 0 && <div className="text-fg/40 text-sm">{t("（無慢查詢紀錄）")}</div>}
       {rows && rows.length > 0 && (
         <table className="text-xs mono w-full border-collapse">
           <thead><tr className="text-fg/45">
             <th className="text-left px-2 py-1 border-b border-fg/10">#</th>
-            <th className="text-left px-2 py-1 border-b border-fg/10">時間</th>
-            <th className="text-right px-2 py-1 border-b border-fg/10">耗時</th>
-            <th className="text-left px-2 py-1 border-b border-fg/10">命令</th>
-            <th className="text-left px-2 py-1 border-b border-fg/10">用戶端</th>
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("時間")}</th>
+            <th className="text-right px-2 py-1 border-b border-fg/10">{t("耗時")}</th>
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("命令")}</th>
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("用戶端")}</th>
           </tr></thead>
           <tbody>
             {rows.map((r) => (
@@ -109,6 +112,7 @@ function SlowLogTab({ connId }: { connId: string }) {
 }
 
 function ClientsTab({ connId }: { connId: string }) {
+  const t = useT();
   const [rows, setRows] = useState<ClientInfo[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -117,30 +121,30 @@ function ClientsTab({ connId }: { connId: string }) {
     let cancelled = false;
     api.redisClients(connId)
       .then((r) => !cancelled && (setRows(r), setErr(null)))
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"));
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     return () => { cancelled = true; };
   }, [connId, nonce]);
 
   const kill = async (c: ClientInfo) => {
-    if (!(await uiConfirm(`中斷用戶端 ${c.addr}（id=${c.id}）？`, { title: "中斷用戶端", danger: true, confirmText: "中斷" }))) return;
+    if (!(await uiConfirm(t("中斷用戶端 {addr}（id={id}）？", { addr: c.addr, id: c.id }), { title: t("中斷用戶端"), danger: true, confirmText: t("中斷") }))) return;
     try {
       await api.redisClientKill(connId, c.id);
-      toast.success("已中斷");
+      toast.success(t("已中斷"));
       setNonce((n) => n + 1);
     } catch (e: any) {
-      setErr(e?.message ?? "中斷失敗");
+      setErr(e?.message ?? t("中斷失敗"));
     }
   };
 
   return (
     <>
       <div className="flex items-center gap-2 mb-2 text-xs">
-        <span className="text-fg/40">{rows?.length ?? 0} 個用戶端連線</span>
+        <span className="text-fg/40">{rows?.length ?? 0} {t("個用戶端連線")}</span>
         <button type="button" onClick={() => setNonce((n) => n + 1)}
-          className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70"><Icon icon={RefreshCw} size={13} /> 刷新</button>
+          className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70"><Icon icon={RefreshCw} size={13} /> {t("刷新")}</button>
       </div>
       <ErrBar err={err} />
-      {!rows && !err && <div className="text-fg/40 text-sm">讀取中…</div>}
+      {!rows && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
       {rows && rows.length > 0 && (
         <table className="text-xs mono w-full border-collapse">
           <thead><tr className="text-fg/45">
@@ -164,8 +168,8 @@ function ClientsTab({ connId }: { connId: string }) {
                 <td className="px-2 py-1 border-b border-fg/5 text-fg/60">{c.idle}s</td>
                 <td className="px-2 py-1 border-b border-fg/5 text-emerald-300/80">{c.cmd}</td>
                 <td className="px-1 py-1 border-b border-fg/5 text-center">
-                  <button type="button" onClick={() => kill(c)} title="中斷此用戶端"
-                    className="px-1.5 py-0.5 rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20">中斷</button>
+                  <button type="button" onClick={() => kill(c)} title={t("中斷此用戶端")}
+                    className="px-1.5 py-0.5 rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20">{t("中斷")}</button>
                 </td>
               </tr>
             ))}
@@ -177,6 +181,7 @@ function ClientsTab({ connId }: { connId: string }) {
 }
 
 function BigKeysTab({ connId, database }: { connId: string; database: string }) {
+  const t = useT();
   const [sample, setSample] = useState("1000");
   const [top, setTop] = useState("50");
   const [rows, setRows] = useState<BigKey[] | null>(null);
@@ -190,7 +195,7 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
       const r = await api.redisBigKeys(connId, database, Number(sample) || 1000, Number(top) || 50);
       setRows(r);
     } catch (e: any) {
-      setErr(e?.message ?? "掃描失敗");
+      setErr(e?.message ?? t("掃描失敗"));
     } finally {
       setScanning(false);
     }
@@ -199,26 +204,26 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
   return (
     <>
       <div className="flex items-center gap-2 mb-2 text-xs">
-        <span className="text-fg/40">DB {database} · 取樣</span>
+        <span className="text-fg/40">DB {database} {t("· 取樣")}</span>
         <input value={sample} onChange={(e) => setSample(e.target.value.replace(/[^\d]/g, ""))}
-          title="SCAN 取樣的鍵數上限" className="w-20 bg-inset border border-fg/10 rounded px-2 py-1 mono text-center outline-none focus:border-accent" />
-        <span className="text-fg/40">取前</span>
+          title={t("SCAN 取樣的鍵數上限")} className="w-20 bg-inset border border-fg/10 rounded px-2 py-1 mono text-center outline-none focus:border-accent" />
+        <span className="text-fg/40">{t("取前")}</span>
         <input value={top} onChange={(e) => setTop(e.target.value.replace(/[^\d]/g, ""))}
           className="w-16 bg-inset border border-fg/10 rounded px-2 py-1 mono text-center outline-none focus:border-accent" />
         <button type="button" onClick={scan} disabled={scanning}
           className="ml-auto px-3 py-1 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">
-          {scanning ? "掃描中…" : "掃描"}
+          {scanning ? t("掃描中…") : t("掃描")}
         </button>
       </div>
-      <div className="text-[11px] text-fg/35 mb-2">取樣式掃描（非全量），以 MEMORY USAGE 估算記憶體用量；大型實例請斟酌取樣數。</div>
+      <div className="text-[11px] text-fg/35 mb-2">{t("取樣式掃描（非全量），以 MEMORY USAGE 估算記憶體用量；大型實例請斟酌取樣數。")}</div>
       <ErrBar err={err} />
-      {rows && rows.length === 0 && <div className="text-fg/40 text-sm">（取樣範圍內無鍵）</div>}
+      {rows && rows.length === 0 && <div className="text-fg/40 text-sm">{t("（取樣範圍內無鍵）")}</div>}
       {rows && rows.length > 0 && (
         <table className="text-xs mono w-full border-collapse">
           <thead><tr className="text-fg/45">
-            <th className="text-left px-2 py-1 border-b border-fg/10">鍵</th>
-            <th className="text-left px-2 py-1 border-b border-fg/10">型別</th>
-            <th className="text-right px-2 py-1 border-b border-fg/10">記憶體</th>
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("鍵")}</th>
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("型別")}</th>
+            <th className="text-right px-2 py-1 border-b border-fg/10">{t("記憶體")}</th>
             <th className="text-right px-2 py-1 border-b border-fg/10">TTL</th>
           </tr></thead>
           <tbody>
@@ -227,7 +232,7 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
                 <td className="px-2 py-1 border-b border-fg/5 break-all text-blue-300/90">{b.key}</td>
                 <td className="px-2 py-1 border-b border-fg/5 text-fg/60">{b.type_}</td>
                 <td className="px-2 py-1 border-b border-fg/5 text-right text-amber-300 whitespace-nowrap">{b.bytes < 0 ? "—" : humanBytes(b.bytes)}</td>
-                <td className="px-2 py-1 border-b border-fg/5 text-right text-fg/50 whitespace-nowrap">{b.ttl < 0 ? "永久" : `${b.ttl}s`}</td>
+                <td className="px-2 py-1 border-b border-fg/5 text-right text-fg/50 whitespace-nowrap">{b.ttl < 0 ? t("永久") : `${b.ttl}s`}</td>
               </tr>
             ))}
           </tbody>

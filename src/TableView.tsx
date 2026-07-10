@@ -18,6 +18,7 @@ import RedisKeyTree from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
 import ProgressBar from "./ui/ProgressBar";
 import { AlterOp } from "./api";
+import { t, useT } from "./i18n";
 
 // 條件掛載的對話框 / 面板改 lazy（code splitting）：開啟時才抓 chunk，首包不含其程式碼。
 const ExportDialog = lazyOverlay(() => import("./ExportDialog"));
@@ -56,6 +57,7 @@ function useIsRedis(connId: string): boolean {
 }
 
 export default function TableView({ tab }: { tab: OpenTab }) {
+  const t = useT();
   const setTabView = useStore((s) => s.setTabView);
 
   return (
@@ -71,7 +73,7 @@ export default function TableView({ tab }: { tab: OpenTab }) {
               tab.view === v ? "bg-fg/10 text-fg" : "text-fg/50 hover:bg-fg/5"
             }`}
           >
-            {v === "data" ? "資料" : "結構"}
+            {v === "data" ? t("資料") : t("結構")}
           </button>
         ))}
       </div>
@@ -82,6 +84,7 @@ export default function TableView({ tab }: { tab: OpenTab }) {
 
 // ---- 資料分頁：表格 + 底部導覽列 ----
 function DataPane({ tab }: { tab: OpenTab }) {
+  const t = useT();
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const [data, setData] = useState<PagedData | null>(null);
@@ -189,7 +192,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const hideColumn = (c: string) => {
     const next = [...hidden.filter((x) => x !== c), c];
     if (data && next.length >= data.columns.length) {
-      toast.info("至少需保留一欄");
+      toast.info(t("至少需保留一欄"));
       return;
     }
     // 若隱藏的正是目前選取欄，清除選取，避免鍵盤導覽卡在不可見欄。
@@ -261,14 +264,14 @@ function DataPane({ tab }: { tab: OpenTab }) {
         incomingRelsRef.current = m.relations;
       }
       const incoming = incomingRelsRef.current.filter((rel) => rel.to_table === tab.table && rel.to_column === col);
-      if (incoming.length === 0) { toast.info(`沒有資料表以外鍵參照 ${tab.table}.${col}`); return; }
+      if (incoming.length === 0) { toast.info(t("沒有資料表以外鍵參照 {table}.{col}", { table: tab.table, col })); return; }
       if (incoming.length === 1) {
         useStore.getState().openTableFiltered(tab.connId, tab.database, incoming[0].from_table, incoming[0].from_column, val);
         return;
       }
       setRefChooser({ x, y, value: val, options: incoming });
     } catch (e: any) {
-      toast.error(e?.message ?? "讀取參照關係失敗");
+      toast.error(e?.message ?? t("讀取參照關係失敗"));
     }
   };
 
@@ -386,7 +389,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           setRangeEnd(null); // 同時清除框選範圍（列索引在重載後可能失效）
         }
       })
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"))
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")))
       .finally(() => !cancelled && setLoading(false));
     if (needCount) {
       setCountPending(true);
@@ -429,7 +432,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // 排序 / 篩選會觸發重載並放棄待套用編輯（與換頁 / 重整的保護一致），先確認。
   const guardDiscard = async (): Promise<boolean> =>
     dirtyCount === 0 ||
-    (await uiConfirm("有未套用的變更，排序 / 篩選將重新載入並放棄。確定？", { title: "放棄變更", danger: true, confirmText: "放棄並繼續" }));
+    (await uiConfirm(t("有未套用的變更，排序 / 篩選將重新載入並放棄。確定？"), { title: t("放棄變更"), danger: true, confirmText: t("放棄並繼續") }));
   // 範圍選取矩形邊界（以可見欄序位計）：供儲存格判斷是否被框選、Ctrl+C 區塊複製定位。
   // useMemo：識別穩定 → DataRow 的 memo 比較才能在選取不變時略過重繪。
   const rangeVisIdx = useMemo(
@@ -615,13 +618,13 @@ function DataPane({ tab }: { tab: OpenTab }) {
       }
       load();
     } catch (e: any) {
-      const msg = e?.message ?? "未知錯誤";
+      const msg = e?.message ?? t("未知錯誤");
       // 逐筆套用：失敗前已套用的 (applied) 筆已寫入 DB。明確告知部分套用狀態，
       // 重新套用是安全的（已套用者會以相同值覆寫，等同無變化）。
       setErr(
         applied > 0
           ? `已套用 ${applied}/${total} 筆，第 ${applied + 1} 筆失敗：${msg}。修正後可再次套用（已套用者會以相同值覆寫，不會重複）。`
-          : `套用失敗：${msg}`
+          : t("套用失敗：{msg}", { msg })
       );
     } finally {
       setApplying(false);
@@ -658,8 +661,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const deleteRow = async (r: number) => {
     if (!data || !editable) return;
     const pkValues = pkLocate(r);
-    const editsNote = dirtyCount > 0 ? `\n（將同時放棄 ${dirtyCount} 筆未套用的編輯）` : "";
-    if (!(await uiConfirm("確定刪除此列？此動作無法復原。" + editsNote, { title: "刪除列", danger: true, confirmText: "刪除" }))) return;
+    const editsNote = dirtyCount > 0 ? t("\n（將同時放棄 {dirtyCount} 筆未套用的編輯）", { dirtyCount }) : "";
+    if (!(await uiConfirm(t("確定刪除此列？此動作無法復原。") + editsNote, { title: t("刪除列"), danger: true, confirmText: t("刪除") }))) return;
     setApplying(true);
     setErr(null);
     try {
@@ -669,7 +672,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
       });
       load();
     } catch (e: any) {
-      setErr(e?.message ?? "刪除失敗");
+      setErr(e?.message ?? t("刪除失敗"));
     } finally {
       setApplying(false);
     }
@@ -689,9 +692,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const bulkDelete = async () => {
     if (!data || !editable || marked.size === 0) return;
     const idxs = [...marked];
-    const bulkEditsNote = dirtyCount > 0 ? `\n（將同時放棄 ${dirtyCount} 筆未套用的編輯）` : "";
-    if (!(await uiConfirm(`確定刪除選取的 ${idxs.length} 列？此動作無法復原。` + bulkEditsNote,
-      { title: "刪除選取列", danger: true, confirmText: `刪除 ${idxs.length} 列` }))) return;
+    const bulkEditsNote = dirtyCount > 0 ? t("\n（將同時放棄 {dirtyCount} 筆未套用的編輯）", { dirtyCount }) : "";
+    if (!(await uiConfirm(t("確定刪除選取的 {length} 列？此動作無法復原。", { length: idxs.length }) + bulkEditsNote,
+      { title: t("刪除選取列"), danger: true, confirmText: t("刪除 {length} 列", { length: idxs.length }) }))) return;
     const pkSets = idxs.map((r) => pkLocate(r));
     setApplying(true);
     setErr(null);
@@ -701,7 +704,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
       setMarked(new Set());
       load();
     } catch (e: any) {
-      setErr(e?.message ?? "批次刪除失敗");
+      setErr(e?.message ?? t("批次刪除失敗"));
       load(); // 反映可能的部分刪除結果
     } finally {
       setApplying(false);
@@ -734,9 +737,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
         bom: fmt === "csv" || fmt === "tsv",
         sql_table: fmt === "sql" ? tab.table : null,
       }, path);
-      toast.success(`已匯出 ${res.rows} 列 · ${fmt.toUpperCase()}`);
+      toast.success(t("已匯出 {rows} 列 · {toUpperCase}", { rows: res.rows, toUpperCase: fmt.toUpperCase() }));
     } catch (e: any) {
-      toast.error(e?.message ?? "匯出失敗");
+      toast.error(e?.message ?? t("匯出失敗"));
     }
   };
 
@@ -745,7 +748,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     if (!data || marked.size === 0 || !connKind) return;
     const idxs = [...marked].sort((a, b) => a - b);
     const rows = idxs.map((i) => data.rows[i]);
-    copyToClipboard(buildInsertValues(connKind, tab.database, tab.table, data.columns, rows), `已複製 ${rows.length} 列為 INSERT`);
+    copyToClipboard(buildInsertValues(connKind, tab.database, tab.table, data.columns, rows), t("已複製 {length} 列為 INSERT", { length: rows.length }));
   };
 
   const submitInsert = async (row: RowInsert) => {
@@ -757,7 +760,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
       setInsertInitial(undefined);
       load();
     } catch (e: any) {
-      setErr(e?.message ?? "新增失敗");
+      setErr(e?.message ?? t("新增失敗"));
     } finally {
       setApplying(false);
     }
@@ -769,14 +772,14 @@ function DataPane({ tab }: { tab: OpenTab }) {
     data ? data.columns.map((_, j) => cellValue(r, j)) : [];
 
   const copyCell = (r: number, c: number) =>
-    copyToClipboard(cellValue(r, c) ?? "", "已複製儲存格");
+    copyToClipboard(cellValue(r, c) ?? "", t("已複製儲存格"));
   const copyRowTsv = (r: number) =>
-    copyToClipboard(rowValues(r).map((v) => v ?? "").join("\t"), "已複製整列 (TSV)");
+    copyToClipboard(rowValues(r).map((v) => v ?? "").join("\t"), t("已複製整列 (TSV)"));
   const copyRowJson = (r: number) => {
     if (!data) return;
     const vals = rowValues(r);
     const obj = Object.fromEntries(data.columns.map((c, j) => [c, vals[j] ?? null]));
-    copyToClipboard(JSON.stringify(obj, null, 2), "已複製整列 (JSON)");
+    copyToClipboard(JSON.stringify(obj, null, 2), t("已複製整列 (JSON)"));
   };
   const copyRowInsert = (r: number) => {
     if (!data) return;
@@ -784,7 +787,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const k = connKind ?? "mysql";
     const cols = data.columns.map((c) => quoteIdent(k, c)).join(", ");
     const lits = rowValues(r).map((v) => sqlLiteral(k, v)).join(", ");
-    copyToClipboard(`INSERT INTO ${quoteIdent(k, tab.table)} (${cols}) VALUES (${lits});`, "已複製為 INSERT");
+    copyToClipboard(`INSERT INTO ${quoteIdent(k, tab.table)} (${cols}) VALUES (${lits});`, t("已複製為 INSERT"));
   };
   // 由某列產生 UPDATE / DELETE（需主鍵定位）。
   const pkValuesOf = (r: number): (string | null)[] =>
@@ -794,19 +797,19 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const k = connKind ?? "mysql";
     copyToClipboard(
       buildRowUpdate(k, tab.table, data.columns, rowValues(r), data.primary_key, pkValuesOf(r)),
-      "已複製為 UPDATE",
+      t("已複製為 UPDATE"),
     );
   };
   const copyRowDelete = (r: number) => {
     if (!data) return;
     const k = connKind ?? "mysql";
-    copyToClipboard(buildRowDelete(k, tab.table, data.primary_key, pkValuesOf(r)), "已複製為 DELETE");
+    copyToClipboard(buildRowDelete(k, tab.table, data.primary_key, pkValuesOf(r)), t("已複製為 DELETE"));
   };
   // 定位此列的 SELECT（唯讀安全：不寫入，readonly 連線亦可用）。
   const copyRowSelect = (r: number) => {
     if (!data) return;
     const k = connKind ?? "mysql";
-    copyToClipboard(buildRowSelect(k, tab.table, data.primary_key, pkValuesOf(r)), "已複製為 SELECT");
+    copyToClipboard(buildRowSelect(k, tab.table, data.primary_key, pkValuesOf(r)), t("已複製為 SELECT"));
   };
   const duplicateRow = (r: number) => {
     if (!data) return;
@@ -826,9 +829,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
         return;
       }
       const range = s.min !== null || s.max !== null ? ` · 範圍 [${s.min ?? "?"}, ${s.max ?? "?"}]` : "";
-      toast.info(`欄位「${col}」：${s.total} 列 · ${s.non_null} 非空 · ${s.distinct} 相異值${range}`);
+      toast.info(t("欄位「{col}」：{total} 列 · {non_null} 非空 · {distinct} 相異值{range}", { col, total: s.total, non_null: s.non_null, distinct: s.distinct, range }));
     } catch (e: any) {
-      toast.error(e?.message ?? "取得欄位統計失敗");
+      toast.error(e?.message ?? t("取得欄位統計失敗"));
     }
   };
 
@@ -851,37 +854,37 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // 儲存格選單項目（依是否可編輯增列）。"sep" 為分隔線。
   const cellMenuItems = (r: number, c: number): ([string, () => void, boolean] | "sep")[] => {
     const items: ([string, () => void, boolean] | "sep")[] = [
-      ["檢視內容…", () => setInspect({ r, c }), false],
-      ["複製值", () => copyCell(r, c), false],
+      [t("檢視內容…"), () => setInspect({ r, c }), false],
+      [t("複製值"), () => copyCell(r, c), false],
       // 右鍵落在框選範圍內：提供整塊複製（滑鼠路徑，與 Ctrl+C 一致）。
       ...(rangeEnd && inRange(r, c)
         ? [
-            ["複製範圍 (TSV)", () => copyRange(), false] as [string, () => void, boolean],
-            ["複製範圍 (Markdown)", () => copyRangeMarkdown(), false] as [string, () => void, boolean],
+            [t("複製範圍 (TSV)"), () => copyRange(), false] as [string, () => void, boolean],
+            [t("複製範圍 (Markdown)"), () => copyRangeMarkdown(), false] as [string, () => void, boolean],
           ]
         : []),
-      ["複製整列 (JSON)", () => copyRowJson(r), false],
-      ["複製整列 (TSV)", () => copyRowTsv(r), false],
+      [t("複製整列 (JSON)"), () => copyRowJson(r), false],
+      [t("複製整列 (TSV)"), () => copyRowTsv(r), false],
       // INSERT 範本僅對 SQL 資料庫有意義（Mongo 用 JSON）。
-      ...(isSqlKind ? [["複製為 INSERT", () => copyRowInsert(r), false] as [string, () => void, boolean]] : []),
+      ...(isSqlKind ? [[t("複製為 INSERT"), () => copyRowInsert(r), false] as [string, () => void, boolean]] : []),
       // SELECT（定位此列）：需主鍵但唯讀安全，唯讀連線也提供。
       ...(isSqlKind && (data?.primary_key.length ?? 0) > 0
-        ? [["複製為 SELECT（定位此列）", () => copyRowSelect(r), false] as [string, () => void, boolean]]
+        ? [[t("複製為 SELECT（定位此列）"), () => copyRowSelect(r), false] as [string, () => void, boolean]]
         : []),
       // UPDATE / DELETE 範本需主鍵定位。
       ...(isSqlKind && editable
         ? [
-            ["複製為 UPDATE", () => copyRowUpdate(r), false] as [string, () => void, boolean],
-            ["複製為 DELETE", () => copyRowDelete(r), false] as [string, () => void, boolean],
+            [t("複製為 UPDATE"), () => copyRowUpdate(r), false] as [string, () => void, boolean],
+            [t("複製為 DELETE"), () => copyRowDelete(r), false] as [string, () => void, boolean],
           ]
         : []),
       // Mongo：整份文件 JSON 編輯（正確處理巢狀 / ObjectId / Date，避免表格逐格編輯破壞結構）。
       ...(isMongo && editable
-        ? [["編輯文件（JSON）…", () => setDocEdit(r), false] as [string, () => void, boolean]]
+        ? [[t("編輯文件（JSON）…"), () => setDocEdit(r), false] as [string, () => void, boolean]]
         : []),
       "sep",
-      ["篩選此值", () => filterByCell(r, c, false), false],
-      ["排除此值", () => filterByCell(r, c, true), false],
+      [t("篩選此值"), () => filterByCell(r, c, false), false],
+      [t("排除此值"), () => filterByCell(r, c, true), false],
     ];
     // 外鍵導覽：此欄是外鍵且值非 NULL → 開被參照表並過濾到該列（致敬 Navicat / TablePlus）。
     const fkCol = data?.columns[c];
@@ -898,22 +901,22 @@ function DataPane({ tab }: { tab: OpenTab }) {
     if (isSqlKind && fkCol && fkVal !== null && data?.primary_key.includes(fkCol)) {
       const mx = cellMenu?.x ?? 0;
       const my = cellMenu?.y ?? 0;
-      items.push(["尋找參照此列的列…", () => findReferencing(r, c, mx, my), false]);
+      items.push([t("尋找參照此列的列…"), () => findReferencing(r, c, mx, my), false]);
     }
     if (editable) {
       items.push(
         "sep",
-        ["編輯儲存格", () => openEditor(r, c), false],
-        ["設為 NULL", () => commitEdit(r, c, "", true), false]
+        [t("編輯儲存格"), () => openEditor(r, c), false],
+        [t("設為 NULL"), () => commitEdit(r, c, "", true), false]
       );
       // 框選範圍內：整塊設 NULL（滑鼠路徑，與 Delete 一致）。
-      if (rangeEnd && inRange(r, c)) items.push(["範圍填入值…", () => fillRange(), false]);
-      if (rangeEnd && inRange(r, c)) items.push(["範圍設為 NULL", () => nullRange(), false]);
+      if (rangeEnd && inRange(r, c)) items.push([t("範圍填入值…"), () => fillRange(), false]);
+      if (rangeEnd && inRange(r, c)) items.push([t("範圍設為 NULL"), () => nullRange(), false]);
       // 此格有待套用編輯時，提供單格還原（不影響其他待套用編輯）。
-      if (`${r}:${c}` in edits) items.push(["還原此格", () => revertCell(r, c), false]);
+      if (`${r}:${c}` in edits) items.push([t("還原此格"), () => revertCell(r, c), false]);
       items.push(
-        ["以此列為範本新增…", () => duplicateRow(r), false],
-        ["刪除此列", () => deleteRow(r), true]
+        [t("以此列為範本新增…"), () => duplicateRow(r), false],
+        [t("刪除此列"), () => deleteRow(r), true]
       );
     }
     return items;
@@ -934,7 +937,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const b = rangeBounds();
     if (!b) return;
     const rows = Array.from({ length: b.r2 - b.r1 + 1 }, (_, k) => b.r1 + k);
-    copyToClipboard(rectToTsv((rr, cc) => cellValue(rr, cc), rows, b.cols), `已複製 ${rows.length}×${b.cols.length} 區塊 (TSV)`);
+    copyToClipboard(rectToTsv((rr, cc) => cellValue(rr, cc), rows, b.cols), t("已複製 {length}×{v2} 區塊 (TSV)", { length: rows.length, v2: b.cols.length }));
   };
   const copyRangeMarkdown = () => {
     const b = rangeBounds();
@@ -942,7 +945,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const rows = Array.from({ length: b.r2 - b.r1 + 1 }, (_, k) => b.r1 + k);
     copyToClipboard(
       rectToMarkdown((rr, cc) => cellValue(rr, cc), rows, b.cols, (c) => data.columns[c]),
-      `已複製 ${rows.length}×${b.cols.length} 區塊 (Markdown)`,
+      t("已複製 {length}×{v2} 區塊 (Markdown)", { length: rows.length, v2: b.cols.length }),
     );
   };
   const nullRange = () => {
@@ -954,7 +957,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const fillRange = async () => {
     const b = rangeBounds();
     if (!b) return;
-    const v = await uiPrompt("填入框選範圍的值：", { title: "範圍填值", placeholder: "值（留空＝空字串）", confirmText: "填入" });
+    const v = await uiPrompt(t("填入框選範圍的值："), { title: t("範圍填值"), placeholder: t("值（留空＝空字串）"), confirmText: t("填入") });
     if (v === null) return;
     for (let rr = b.r1; rr <= b.r2; rr++) for (const cc of b.cols) commitEdit(rr, cc, v, false);
   };
@@ -1080,10 +1083,10 @@ function DataPane({ tab }: { tab: OpenTab }) {
                 const cols = visIdx.slice(Math.min(p1, p2), Math.max(p1, p2) + 1);
                 let n = 0;
                 for (let rr = r1; rr <= r2; rr++) for (const cc of cols) { commitEdit(rr, cc, v, false); n++; }
-                toast.success(`已填入 ${n} 格`);
+                toast.success(t("已填入 {n} 格", { n }));
               } else {
                 commitEdit(baseR, baseC, v, false);
-                toast.success("已貼上到儲存格");
+                toast.success(t("已貼上到儲存格"));
               }
               return;
             }
@@ -1099,9 +1102,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
                 applied++;
               });
             });
-            toast.success(`已貼上 ${applied} 格（待套用）`);
+            toast.success(t("已貼上 {applied} 格（待套用）", { applied }));
           })
-          .catch(() => toast.error("無法讀取剪貼簿"));
+          .catch(() => toast.error(t("無法讀取剪貼簿")));
       }
       return;
     }
@@ -1126,18 +1129,18 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const refresh = () => useStore.getState().bumpDataReload(tab.connId, tab.database, tab.table);
 
   const renameKey = async (key: string) => {
-    const nv = await uiPrompt("輸入新的鍵名：", {
-      title: "重新命名鍵", defaultValue: key, confirmText: "重新命名",
+    const nv = await uiPrompt(t("輸入新的鍵名："), {
+      title: t("重新命名鍵"), defaultValue: key, confirmText: t("重新命名"),
     });
     if (nv === null || nv.trim() === "" || nv === key) return;
     setApplying(true);
     setErr(null);
     try {
       await api.keyEdit(tab.connId, tab.database, key, { action: "rename", new_key: nv });
-      toast.success("已重新命名");
+      toast.success(t("已重新命名"));
       refresh();
     } catch (e: any) {
-      const msg = e?.message ?? "重新命名失敗";
+      const msg = e?.message ?? t("重新命名失敗");
       setErr(msg);
       toast.error(msg); // 樹狀模式未掛載網格的錯誤橫幅，改用 toast 確保可見
     } finally {
@@ -1146,8 +1149,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
   };
 
   const setKeyTtl = async (key: string, current: string | null) => {
-    const v = await uiPrompt("TTL 秒數（-1 表示永不過期）：", {
-      title: "設定 TTL", defaultValue: current ?? "-1", confirmText: "套用",
+    const v = await uiPrompt(t("TTL 秒數（-1 表示永不過期）："), {
+      title: t("設定 TTL"), defaultValue: current ?? "-1", confirmText: t("套用"),
     });
     if (v === null) return;
     setApplying(true);
@@ -1159,10 +1162,10 @@ function DataPane({ tab }: { tab: OpenTab }) {
         pk_columns: ["key"],
         pk_values: [key],
       });
-      toast.success("已設定 TTL");
+      toast.success(t("已設定 TTL"));
       refresh();
     } catch (e: any) {
-      const msg = e?.message ?? "設定 TTL 失敗";
+      const msg = e?.message ?? t("設定 TTL 失敗");
       setErr(msg);
       toast.error(msg);
     } finally {
@@ -1172,15 +1175,15 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   // 依鍵名刪除（鍵樹與右鍵選單共用，不需網格列索引）。
   const deleteKey = async (key: string) => {
-    if (!(await uiConfirm(`確定刪除鍵「${key}」？此動作無法復原。`, { title: "刪除鍵", danger: true, confirmText: "刪除" }))) return;
+    if (!(await uiConfirm(t("確定刪除鍵「{key}」？此動作無法復原。", { key }), { title: t("刪除鍵"), danger: true, confirmText: t("刪除") }))) return;
     setApplying(true);
     setErr(null);
     try {
       await api.deleteRow(tab.connId, tab.database, tab.table, { pk_columns: ["key"], pk_values: [key] });
-      toast.success("已刪除");
+      toast.success(t("已刪除"));
       refresh();
     } catch (e: any) {
-      const msg = e?.message ?? "刪除失敗";
+      const msg = e?.message ?? t("刪除失敗");
       setErr(msg);
       toast.error(msg);
     } finally {
@@ -1190,12 +1193,12 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   // 切換頁面前，若有未套用的變更先確認（避免靜默丟失編輯）。
   const navPage = async (target: number) => {
-    if (dirtyCount > 0 && !(await uiConfirm("有未套用的變更，切換頁面將放棄。確定？", { title: "放棄變更", danger: true, confirmText: "放棄並切換" }))) return;
+    if (dirtyCount > 0 && !(await uiConfirm(t("有未套用的變更，切換頁面將放棄。確定？"), { title: t("放棄變更"), danger: true, confirmText: t("放棄並切換") }))) return;
     setPage(target);
   };
   // 變更每頁列數同樣會重載並丟棄編輯，故套用相同的未套用變更確認。
   const changePageSize = async (n: number) => {
-    if (dirtyCount > 0 && !(await uiConfirm("有未套用的變更，變更每頁列數將放棄。確定？", { title: "放棄變更", danger: true, confirmText: "放棄並變更" }))) return;
+    if (dirtyCount > 0 && !(await uiConfirm(t("有未套用的變更，變更每頁列數將放棄。確定？"), { title: t("放棄變更"), danger: true, confirmText: t("放棄並變更") }))) return;
     setPage(0);
     setPageSize(n);
   };
@@ -1228,50 +1231,50 @@ function DataPane({ tab }: { tab: OpenTab }) {
                 key={v}
                 type="button"
                 onClick={() => setRedisViewPersist(v)}
-                title={v === "tree" ? "命名空間樹狀檢視（依 : 分組）" : "鍵列表（網格）"}
+                title={v === "tree" ? t("命名空間樹狀檢視（依 : 分組）") : t("鍵列表（網格）")}
                 className={`px-2 py-1 inline-flex items-center gap-1 ${redisView === v ? "bg-fg/15 text-fg" : "text-fg/50 hover:bg-fg/5"}`}
               >
                 {v === "tree"
-                  ? <><Icon icon={ListTree} size={14} /> 樹狀</>
-                  : <><Icon icon={Table2} size={14} /> 網格</>}
+                  ? <><Icon icon={ListTree} size={14} /> {t("樹狀")}</>
+                  : <><Icon icon={Table2} size={14} /> {t("網格")}</>}
               </button>
             ))}
           </div>
         )}
         {isRedis && (
           <>
-            <button type="button" onClick={() => setShowNewKey(true)} title="新增鍵（String/List/Set/Hash/ZSet）"
-              className="px-2 py-1 rounded hover:bg-fg/10 text-emerald-300 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> 新增鍵</button>
-            <button type="button" onClick={() => setShowStatus(true)} title="伺服器狀態（INFO，可自動刷新）"
-              className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={BarChart3} size={14} /> 狀態</button>
-            <button type="button" onClick={() => setShowPubSub(true)} title="Pub/Sub 訂閱與發佈"
+            <button type="button" onClick={() => setShowNewKey(true)} title={t("新增鍵（String/List/Set/Hash/ZSet）")}
+              className="px-2 py-1 rounded hover:bg-fg/10 text-emerald-300 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增鍵")}</button>
+            <button type="button" onClick={() => setShowStatus(true)} title={t("伺服器狀態（INFO，可自動刷新）")}
+              className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={BarChart3} size={14} /> {t("狀態")}</button>
+            <button type="button" onClick={() => setShowPubSub(true)} title={t("Pub/Sub 訂閱與發佈")}
               className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Network} size={14} /> Pub/Sub</button>
-            <button type="button" onClick={() => setShowOps(true)} title="維運：慢查詢 / 用戶端 / 大鍵"
-              className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Settings} size={14} /> 維運</button>
-            <button type="button" onClick={() => setShowConsole(true)} title="Redis 命令列"
-              className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Terminal} size={14} /> 命令列</button>
+            <button type="button" onClick={() => setShowOps(true)} title={t("維運：慢查詢 / 用戶端 / 大鍵")}
+              className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Settings} size={14} /> {t("維運")}</button>
+            <button type="button" onClick={() => setShowConsole(true)} title={t("Redis 命令列")}
+              className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Terminal} size={14} /> {t("命令列")}</button>
             <div className="w-px h-4 bg-fg/10 mx-1" />
           </>
         )}
         <button
           onClick={async () => {
-            if (dirtyCount > 0 && !(await uiConfirm("有未套用的變更，重新整理將放棄。確定？", { title: "放棄變更", danger: true, confirmText: "放棄並重整" }))) return;
+            if (dirtyCount > 0 && !(await uiConfirm(t("有未套用的變更，重新整理將放棄。確定？"), { title: t("放棄變更"), danger: true, confirmText: t("放棄並重整") }))) return;
             // Redis 網格：明確「重新整理」= 強制重掃 keyspace（清鍵快照）；一般翻頁則吃快照。
             if (isRedis && redisView === "grid") await api.clearCache(tab.connId).catch(() => {});
             load();
           }}
           disabled={loading}
-          title="重新整理（重新讀取目前頁）"
+          title={t("重新整理（重新讀取目前頁）")}
           className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50 disabled:opacity-40 disabled:hover:bg-transparent inline-flex items-center gap-1"
         >
-          <Icon icon={RefreshCw} size={14} className={loading ? "animate-spin" : ""} /> {loading ? "讀取中…" : "重新整理"}
+          <Icon icon={RefreshCw} size={14} className={loading ? "animate-spin" : ""} /> {loading ? t("讀取中…") : t("重新整理")}
         </button>
         <button
           onClick={() => setShowFind((s) => !s)}
-          title="在目前頁即時尋找（Ctrl+F）"
+          title={t("在目前頁即時尋找（Ctrl+F）")}
           className={`px-2 py-1 rounded hover:bg-fg/10 inline-flex items-center gap-1 ${find ? "text-yellow-300" : "text-fg/50"}`}
         >
-          <Icon icon={Search} size={14} /> 尋找
+          <Icon icon={Search} size={14} /> {t("尋找")}
         </button>
         <button
           onClick={() => setShowFilter((s) => !s)}
@@ -1279,42 +1282,42 @@ function DataPane({ tab }: { tab: OpenTab }) {
             filters.length ? "text-amber-300" : "text-fg/50"
           }`}
         >
-          <Icon icon={Filter} size={14} /> 篩選{filters.length ? `（${filters.length}）` : ""}
+          <Icon icon={Filter} size={14} /> {t("篩選")}{filters.length ? `（${filters.length}）` : ""}
         </button>
         <button
           onClick={() => insertable && setInserting(true)}
           disabled={!insertable}
-          title={insertable ? "新增列" : "無欄位可新增"}
+          title={insertable ? t("新增列") : t("無欄位可新增")}
           className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50 disabled:opacity-30 disabled:hover:bg-transparent inline-flex items-center gap-1"
         >
-          <Icon icon={Plus} size={14} /> 新增列
+          <Icon icon={Plus} size={14} /> {t("新增列")}
         </button>
         {marked.size > 0 && (
           <button
             onClick={exportMarked}
-            title="匯出已勾選的列（CSV / Excel / JSON / SQL…）"
+            title={t("匯出已勾選的列（CSV / Excel / JSON / SQL…）")}
             className="px-2 py-1 rounded hover:bg-fg/10 text-fg/70 inline-flex items-center gap-1"
           >
-            <Icon icon={Upload} size={14} /> 匯出選取（{marked.size}）
+            <Icon icon={Upload} size={14} /> {t("匯出選取（")}{marked.size}）
           </button>
         )}
         {isSqlKind && marked.size > 0 && (
           <button
             onClick={copyMarkedInsert}
-            title="複製已勾選的列為 INSERT 語句"
+            title={t("複製已勾選的列為 INSERT 語句")}
             className="px-2 py-1 rounded hover:bg-fg/10 text-fg/70 inline-flex items-center gap-1"
           >
-            複製為 INSERT（{marked.size}）
+            {t("複製為 INSERT（")}{marked.size}）
           </button>
         )}
         {editable && marked.size > 0 && (
           <button
             onClick={bulkDelete}
             disabled={applying}
-            title="刪除已勾選的列"
+            title={t("刪除已勾選的列")}
             className="px-2 py-1 rounded hover:bg-red-500/20 text-red-300 disabled:opacity-30 inline-flex items-center gap-1"
           >
-            <Icon icon={Trash2} size={14} /> 刪除選取（{marked.size}）
+            <Icon icon={Trash2} size={14} /> {t("刪除選取（")}{marked.size}）
           </button>
         )}
         {sorts.length > 0 && (
@@ -1323,32 +1326,32 @@ function DataPane({ tab }: { tab: OpenTab }) {
             onClick={async () => { if (await guardDiscard()) setSorts([]); }}
             className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50 inline-flex items-center gap-1"
           >
-            <Icon icon={ArrowUpDown} size={14} /> 清除排序
+            <Icon icon={ArrowUpDown} size={14} /> {t("清除排序")}
           </button>
         )}
         <button
           onClick={() => data && data.columns.length > 0 && setExporting(true)}
           disabled={!data || data.columns.length === 0}
-          title="匯出資料（CSV / TSV / JSON / SQL / Markdown）"
+          title={t("匯出資料（CSV / TSV / JSON / SQL / Markdown）")}
           className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50 disabled:opacity-30 disabled:hover:bg-transparent inline-flex items-center gap-1"
         >
-          <Icon icon={Download} size={14} /> 匯出
+          <Icon icon={Download} size={14} /> {t("匯出")}
         </button>
         {isSqlKind && (
           <button
             type="button"
             onClick={() => setImporting(true)}
-            title="從 CSV 匯入資料到此表"
+            title={t("從 CSV 匯入資料到此表")}
             className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50 inline-flex items-center gap-1"
           >
-            <Icon icon={Upload} size={14} /> 匯入
+            <Icon icon={Upload} size={14} /> {t("匯入")}
           </button>
         )}
         {hidden.length > 0 && (
           <button
             type="button"
             onClick={showAllColumns}
-            title={`已隱藏 ${hidden.length} 欄，點此全部顯示`}
+            title={t("已隱藏 {length} 欄，點此全部顯示", { length: hidden.length })}
             className="ml-auto px-2 py-1 rounded hover:bg-fg/10 text-fg/50 inline-flex items-center gap-1"
           >
             <Icon icon={Columns3} size={14} /> 已隱藏 {hidden.length} 欄
@@ -1360,11 +1363,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
         <div className="flex items-center gap-2 px-2 py-1.5 bg-well border-b border-fg/10 text-xs">
           <input autoFocus value={find} onChange={(e) => setFind(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Escape") { setShowFind(false); setFind(""); } }}
-            placeholder="在目前頁即時尋找…"
+            placeholder={t("在目前頁即時尋找…")}
             className="bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent min-w-[220px]" />
-          <span className="text-fg/40">{findLower ? `${matchCount} 格符合` : ""}</span>
+          <span className="text-fg/40">{findLower ? t("{matchCount} 格符合", { matchCount }) : ""}</span>
           <button type="button" onClick={() => { setShowFind(false); setFind(""); }}
-            aria-label="關閉尋找" title="關閉尋找"
+            aria-label={t("關閉尋找")} title={t("關閉尋找")}
             className="ml-auto px-1.5 py-1 rounded hover:bg-fg/10 text-fg/40"><Icon icon={X} size={14} /></button>
         </div>
       )}
@@ -1395,7 +1398,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         {err && <div className="p-3 text-red-400 text-sm mono">{err}</div>}
         {!data && loading && !err && (
           <div className="p-6 text-fg/40 text-sm flex items-center gap-2">
-            <Icon icon={RefreshCw} size={14} className="animate-spin" /> 讀取中…
+            <Icon icon={RefreshCw} size={14} className="animate-spin" /> {t("讀取中…")}
           </div>
         )}
         {data && data.columns.length > 0 && (
@@ -1410,7 +1413,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
               <tr>
                 {editable && (
                   <th className="px-1 py-1.5 border-b border-fg/10 text-center w-8">
-                    <input type="checkbox" title="全選 / 取消本頁"
+                    <input type="checkbox" title={t("全選 / 取消本頁")}
                       checked={data.rows.length > 0 && marked.size === data.rows.length}
                       ref={(el) => { if (el) el.indeterminate = marked.size > 0 && marked.size < data.rows.length; }}
                       onChange={() => setMarked(marked.size === data.rows.length ? new Set() : new Set(data.rows.map((_, i) => i)))} />
@@ -1431,7 +1434,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
                       onClick={(e) => toggleSort(c, e.shiftKey)}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSort(c, e.shiftKey); } }}
                       onContextMenu={(e) => { e.preventDefault(); setColMenu({ col: c, ci, x: e.clientX, y: e.clientY }); }}
-                      title={cmt ? `${cmt}\n\n點擊排序；Shift+點擊可多欄排序；右鍵更多` : "點擊排序；Shift+點擊可多欄排序；右鍵更多"}
+                      title={cmt ? t("{cmt}\n\n點擊排序；Shift+點擊可多欄排序；右鍵更多", { cmt }) : t("點擊排序；Shift+點擊可多欄排序；右鍵更多")}
                       style={{ width: colWidth(c) }}
                       className="relative text-left px-3 py-1.5 border-b border-fg/10 font-medium whitespace-nowrap overflow-hidden text-ellipsis cursor-pointer select-none hover:bg-fg/5 focus-visible:outline-2 focus-visible:outline-accent/60 focus-visible:-outline-offset-2"
                     >
@@ -1450,7 +1453,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
                         onPointerDown={(e) => startResize(c, e)}
                         onClick={(e) => e.stopPropagation()}
                         onDoubleClick={(e) => { e.stopPropagation(); autoFitColumn(c, ci); }}
-                        title="拖曳調整欄寬；雙擊自動符合內容"
+                        title={t("拖曳調整欄寬；雙擊自動符合內容")}
                         className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-accent/50"
                       />
                     </th>
@@ -1488,15 +1491,15 @@ function DataPane({ tab }: { tab: OpenTab }) {
           <EmptyState
             compact
             icon={filters.length ? Filter : Table2}
-            title={filters.length ? "無符合篩選的資料" : "此表沒有資料"}
+            title={filters.length ? t("無符合篩選的資料") : t("此表沒有資料")}
             action={
               filters.length ? (
                 <Button variant="secondary" size="sm" icon={X} onClick={() => setFilters([])}>
-                  清除篩選
+                  {t("清除篩選")}
                 </Button>
               ) : insertable ? (
                 <Button variant="secondary" size="sm" icon={Plus} onClick={() => setInserting(true)}>
-                  新增資料列
+                  {t("新增資料列")}
                 </Button>
               ) : undefined
             }
@@ -1506,13 +1509,13 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
       {/* 底部導覽列（Navicat 手感） */}
       <div className="h-9 bg-panel border-t border-fg/10 flex items-center px-3 gap-1 text-sm">
-        <NavBtn label={<Icon icon={ChevronsLeft} size={16} />} disabled={page === 0 || loading} onClick={() => navPage(0)} title="第一頁" />
-        <NavBtn label={<Icon icon={ChevronLeft} size={16} />} disabled={page === 0 || loading} onClick={() => navPage(page - 1)} title="上一頁" />
+        <NavBtn label={<Icon icon={ChevronsLeft} size={16} />} disabled={page === 0 || loading} onClick={() => navPage(0)} title={t("第一頁")} />
+        <NavBtn label={<Icon icon={ChevronLeft} size={16} />} disabled={page === 0 || loading} onClick={() => navPage(page - 1)} title={t("上一頁")} />
         <span className="px-1 text-fg/60 mono text-xs flex items-center gap-1">
           <input
             key={page}
             defaultValue={page + 1}
-            title="輸入頁碼後按 Enter 跳頁"
+            title={t("輸入頁碼後按 Enter 跳頁")}
             onKeyDown={(e) => {
               if (e.key !== "Enter") return;
               const n = parseInt((e.target as HTMLInputElement).value, 10);
@@ -1522,16 +1525,16 @@ function DataPane({ tab }: { tab: OpenTab }) {
           />
           / {totalPages}
         </span>
-        <NavBtn label={<Icon icon={ChevronRight} size={16} />} disabled={page + 1 >= totalPages || loading} onClick={() => navPage(page + 1)} title="下一頁" />
-        <NavBtn label={<Icon icon={ChevronsRight} size={16} />} disabled={page + 1 >= totalPages || loading} onClick={() => navPage(totalPages - 1)} title="最後一頁" />
+        <NavBtn label={<Icon icon={ChevronRight} size={16} />} disabled={page + 1 >= totalPages || loading} onClick={() => navPage(page + 1)} title={t("下一頁")} />
+        <NavBtn label={<Icon icon={ChevronsRight} size={16} />} disabled={page + 1 >= totalPages || loading} onClick={() => navPage(totalPages - 1)} title={t("最後一頁")} />
         <select
           value={pageSize}
           onChange={(e) => changePageSize(Number(e.target.value))}
-          title="每頁列數"
+          title={t("每頁列數")}
           className="ml-2 bg-inset border border-fg/10 rounded px-1.5 py-0.5 text-xs outline-none focus:border-accent text-fg/60"
         >
           {[100, 200, 500, 1000].map((n) => (
-            <option key={n} value={n}>{n} / 頁</option>
+            <option key={n} value={n}>{n} {t("/ 頁")}</option>
           ))}
         </select>
 
@@ -1539,28 +1542,28 @@ function DataPane({ tab }: { tab: OpenTab }) {
         <button
           onClick={applyEdits}
           disabled={dirtyCount === 0 || applying}
-          title="套用變更"
+          title={t("套用變更")}
           className="h-6 px-2 flex items-center gap-1 rounded text-xs bg-green-600/80 hover:bg-green-600 disabled:opacity-25 disabled:bg-transparent disabled:hover:bg-transparent"
         >
-          <Icon icon={Check} size={14} /> 套用{dirtyCount > 0 ? `（${dirtyCount}）` : ""}
+          <Icon icon={Check} size={14} /> {t("套用")}{dirtyCount > 0 ? `（${dirtyCount}）` : ""}
         </button>
         <button
           onClick={() => { setEdits({}); setEditing(null); }}
           disabled={dirtyCount === 0 || applying}
-          title="捨棄變更"
+          title={t("捨棄變更")}
           className="h-6 px-2 flex items-center gap-1 rounded text-xs hover:bg-fg/10 disabled:opacity-25 disabled:hover:bg-transparent"
         >
-          <Icon icon={X} size={14} /> 捨棄
+          <Icon icon={X} size={14} /> {t("捨棄")}
         </button>
 
         {/* 框選範圍統計 / 單一選取格資訊（Excel 狀態列手感） */}
         {selectionStats ? (
-          <span className="ml-auto mr-3 text-fg/45 text-xs mono whitespace-nowrap" title="框選範圍統計（含待套用編輯值）">
+          <span className="ml-auto mr-3 text-fg/45 text-xs mono whitespace-nowrap" title={t("框選範圍統計（含待套用編輯值）")}>
             已選 {selectionStats.rows}×{selectionStats.colsN}（{selectionStats.count} 格）
             {selectionStats.numCount > 0 &&
-              ` · 數值 ${selectionStats.numCount} · Σ ${fmtNum(selectionStats.sum)} · 平均 ${fmtNum(selectionStats.avg)}`}
+              t(" · 數值 {numCount} · Σ {sum} · 平均 {avg}", { numCount: selectionStats.numCount, sum: fmtNum(selectionStats.sum), avg: fmtNum(selectionStats.avg) })}
             {selectionStats.numCount > 1 &&
-              ` · 最小 ${fmtNum(selectionStats.min)} · 最大 ${fmtNum(selectionStats.max)}`}
+              t(" · 最小 {min} · 最大 {max}", { min: fmtNum(selectionStats.min), max: fmtNum(selectionStats.max) })}
           </span>
         ) : selected && data && data.rows[selected.r] ? (
           <span className="ml-auto mr-3 text-fg/45 text-xs truncate max-w-[40%]" title={cellValue(selected.r, selected.c) ?? "NULL"}>
@@ -1573,11 +1576,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
         ) : null}
         <span className={`${selectionStats || (selected && data && data.rows[selected.r]) ? "" : "ml-auto"} text-fg/40 text-xs`}>
           {applying
-            ? "處理中…"
+            ? t("處理中…")
             : data
-            ? `顯示 ${data.rows.length ? startRow + 1 : 0}–${startRow + data.rows.length} · 共 ${countPending ? "…" : data.total_rows} 列${editable ? "" : readonly ? " · 連線唯讀" : " · 無主鍵唯讀"}`
+            ? `顯示 ${data.rows.length ? startRow + 1 : 0}–${startRow + data.rows.length} · 共 ${countPending ? "…" : data.total_rows} 列${editable ? "" : readonly ? t(" · 連線唯讀") : t(" · 無主鍵唯讀")}`
             : loading
-            ? "讀取中…"
+            ? t("讀取中…")
             : ""}
         </span>
       </div>
@@ -1654,11 +1657,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
             style={{ left: rowMenu.x, top: rowMenu.y }}>
             {(
               [
-                ["檢視內容", () => setDetailKey(rowMenu.key), false],
-                ["複製鍵名", () => copyToClipboard(rowMenu.key, "已複製鍵名"), false],
-                ["重新命名…", () => renameKey(rowMenu.key), false],
-                ["設定 TTL…", () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
-                ["刪除", () => deleteKey(rowMenu.key), true],
+                [t("檢視內容"), () => setDetailKey(rowMenu.key), false],
+                [t("複製鍵名"), () => copyToClipboard(rowMenu.key, t("已複製鍵名")), false],
+                [t("重新命名…"), () => renameKey(rowMenu.key), false],
+                [t("設定 TTL…"), () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
+                [t("刪除"), () => deleteKey(rowMenu.key), true],
               ] as [string, () => void, boolean][]
             ).map(([label, fn, danger]) => (
               <button key={label} type="button"
@@ -1704,22 +1707,22 @@ function DataPane({ tab }: { tab: OpenTab }) {
             style={{ left: colMenu.x, top: colMenu.y }}>
             {(
               [
-                ["升冪排序 ▲", async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "asc" }]); } }],
-                ["降冪排序 ▼", async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "desc" }]); } }],
-                ...(sorts.length ? [["清除排序", async () => { if (await guardDiscard()) setSorts([]); }] as [string, () => void]] : []),
-                ["自動符合寬度", () => autoFitColumn(colMenu.col, colMenu.ci)],
-                ["複製欄名", () => copyToClipboard(colMenu.col, "已複製欄名")],
-                ["複製所有欄名（逗號分隔）", () => copyToClipboard(data.columns.join(", "), "已複製所有欄名")],
-                ["複製整欄（本頁）", () => copyToClipboard(data.rows.map((_, ri) => cellValue(ri, colMenu.ci) ?? "").join("\n"), "已複製整欄")],
-                ...(isSqlKind && connKind ? [["複製整欄為 IN(...)（本頁）", () => copyToClipboard(buildInClause(connKind, colMenu.col, data.rows.map((_, ri) => cellValue(ri, colMenu.ci))), "已複製 IN 子句")] as [string, () => void]] : []),
-                ...(isSqlKind || isMongo ? [["欄位統計（總數/非空/相異）", () => colStats(colMenu.col)] as [string, () => void]] : []),
-                ...(isSqlKind && connKind ? [["相異值分布（Top 50）", () => {
+                [t("升冪排序 ▲"), async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "asc" }]); } }],
+                [t("降冪排序 ▼"), async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "desc" }]); } }],
+                ...(sorts.length ? [[t("清除排序"), async () => { if (await guardDiscard()) setSorts([]); }] as [string, () => void]] : []),
+                [t("自動符合寬度"), () => autoFitColumn(colMenu.col, colMenu.ci)],
+                [t("複製欄名"), () => copyToClipboard(colMenu.col, t("已複製欄名"))],
+                [t("複製所有欄名（逗號分隔）"), () => copyToClipboard(data.columns.join(", "), t("已複製所有欄名"))],
+                [t("複製整欄（本頁）"), () => copyToClipboard(data.rows.map((_, ri) => cellValue(ri, colMenu.ci) ?? "").join("\n"), t("已複製整欄"))],
+                ...(isSqlKind && connKind ? [[t("複製整欄為 IN(...)（本頁）"), () => copyToClipboard(buildInClause(connKind, colMenu.col, data.rows.map((_, ri) => cellValue(ri, colMenu.ci))), t("已複製 IN 子句"))] as [string, () => void]] : []),
+                ...(isSqlKind || isMongo ? [[t("欄位統計（總數/非空/相異）"), () => colStats(colMenu.col)] as [string, () => void]] : []),
+                ...(isSqlKind && connKind ? [[t("相異值分布（Top 50）"), () => {
                   const qc = quoteIdent(connKind, colMenu.col);
                   const sql = `SELECT ${qc}, COUNT(*) AS n\nFROM ${qualifiedName(connKind, tab.database, tab.table)}\nGROUP BY ${qc}\nORDER BY n DESC\nLIMIT 50;`;
                   useStore.getState().setActive(tab.connId);
                   useStore.getState().requestQuery(sql);
                 }] as [string, () => void]] : []),
-                ...(isMongo ? [["相異值分布（Top 50）", () => {
+                ...(isMongo ? [[t("相異值分布（Top 50）"), () => {
                   // 生成 $group 聚合 DSL 到查詢編輯器（與 SQL 版對稱）。
                   const dsl = JSON.stringify({
                     db: tab.database, collection: tab.table,
@@ -1731,8 +1734,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
                   useStore.getState().setActive(tab.connId);
                   useStore.getState().requestQuery(dsl);
                 }] as [string, () => void]] : []),
-                ["隱藏此欄", () => hideColumn(colMenu.col)],
-                ...(hidden.length ? [["顯示所有欄", () => showAllColumns()] as [string, () => void]] : []),
+                [t("隱藏此欄"), () => hideColumn(colMenu.col)],
+                ...(hidden.length ? [[t("顯示所有欄"), () => showAllColumns()] as [string, () => void]] : []),
               ] as [string, () => void][]
             ).map(([label, fn]) => (
               <button key={label} type="button"
@@ -1753,7 +1756,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
             onContextMenu={(e) => { e.preventDefault(); setRefChooser(null); }} />
           <div className="fixed z-[90] min-w-[200px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
             style={{ left: refChooser.x, top: refChooser.y }}>
-            <div className="px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">參照此列的資料表</div>
+            <div className="px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">{t("參照此列的資料表")}</div>
             {refChooser.options.map((rel) => (
               <button key={`${rel.from_table}.${rel.from_column}`} type="button"
                 onClick={() => { const o = refChooser; setRefChooser(null); useStore.getState().openTableFiltered(tab.connId, tab.database, rel.from_table, rel.from_column, o.value); }}
@@ -1811,6 +1814,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
 // Mongo 欄位統計視窗：型別分布橫條（混型欄位核心資訊）+ Top-10 值 + 缺欄 / null / 相異值 / 抽樣註記。
 function FieldStatsModal({ col, stats, onClose }: { col: string; stats: ColumnStats; onClose: () => void }) {
+  const t = useT();
   useModalOverlay(onClose);
   const typeTotal = stats.types.reduce((a, [, n]) => a + n, 0) || 1;
   return (
@@ -1819,27 +1823,27 @@ function FieldStatsModal({ col, stats, onClose }: { col: string; stats: ColumnSt
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
           <Icon icon={BarChart3} size={14} className="text-green-400" />
-          <span className="font-medium text-sm">欄位統計 · <span className="mono">{col}</span></span>
+          <span className="font-medium text-sm">{t("欄位統計 ·")} <span className="mono">{col}</span></span>
           <button type="button" onClick={onClose} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
         <div className="p-4 space-y-4 text-sm">
           <div className="flex flex-wrap gap-2 text-xs">
-            <span className="rounded bg-well border border-fg/10 px-2 py-1">文件數 <span className="mono font-semibold">{stats.total}</span></span>
-            <span className="rounded bg-well border border-fg/10 px-2 py-1">缺欄位 <span className="mono font-semibold">{stats.missing}</span></span>
+            <span className="rounded bg-well border border-fg/10 px-2 py-1">{t("文件數")} <span className="mono font-semibold">{stats.total}</span></span>
+            <span className="rounded bg-well border border-fg/10 px-2 py-1">{t("缺欄位")} <span className="mono font-semibold">{stats.missing}</span></span>
             <span className="rounded bg-well border border-fg/10 px-2 py-1">null <span className="mono font-semibold">{stats.null_count}</span></span>
             <span className="rounded bg-well border border-fg/10 px-2 py-1">
-              相異值 <span className="mono font-semibold">{stats.distinct_capped ? `≥ ${stats.distinct}` : stats.distinct}</span>
+              {t("相異值")} <span className="mono font-semibold">{stats.distinct_capped ? `≥ ${stats.distinct}` : stats.distinct}</span>
             </span>
             {stats.sampled > 0 && (
               <span className="rounded border border-amber-300/40 bg-amber-500/10 px-2 py-1 text-amber-300"
-                title="集合過大時基於隨機抽樣計算（total 為集合估計數，其餘統計基於樣本）">
+                title={t("集合過大時基於隨機抽樣計算（total 為集合估計數，其餘統計基於樣本）")}>
                 抽樣 {stats.sampled} 筆
               </span>
             )}
           </div>
           {stats.types.length > 0 && (
             <div>
-              <div className="text-xs text-fg/50 mb-1.5">BSON 型別分布</div>
+              <div className="text-xs text-fg/50 mb-1.5">{t("BSON 型別分布")}</div>
               <div className="space-y-1">
                 {stats.types.map(([t, n]) => (
                   <div key={t} className="flex items-center gap-2 text-xs">
@@ -1855,7 +1859,7 @@ function FieldStatsModal({ col, stats, onClose }: { col: string; stats: ColumnSt
           )}
           {stats.top_values.length > 0 && (
             <div>
-              <div className="text-xs text-fg/50 mb-1.5">Top {stats.top_values.length} 值</div>
+              <div className="text-xs text-fg/50 mb-1.5">Top {stats.top_values.length} {t("值")}</div>
               <table className="w-full text-xs border-collapse">
                 <tbody>
                   {stats.top_values.map(([v, n], i) => (
@@ -1869,7 +1873,7 @@ function FieldStatsModal({ col, stats, onClose }: { col: string; stats: ColumnSt
             </div>
           )}
           {(stats.min !== null || stats.max !== null) && (
-            <div className="text-xs text-fg/50" title="min / max 依 BSON 型別排序；混型欄位跨型別比較可能看似奇怪">
+            <div className="text-xs text-fg/50" title={t("min / max 依 BSON 型別排序；混型欄位跨型別比較可能看似奇怪")}>
               範圍 <span className="mono text-fg/70">[{stats.min ?? "?"}, {stats.max ?? "?"}]</span>（依 BSON 型別排序）
             </div>
           )}
@@ -1885,6 +1889,7 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
   connId: string; database: string; table: string; docId: string;
   onClose: () => void; onSaved: () => void;
 }) {
+  const t = useT();
   const [text, setText] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1896,7 +1901,7 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
     api
       .documentGet(connId, database, table, docId)
       .then((s) => { if (!cancelled) setText(s); })
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"))
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
   }, [connId, database, table, docId]);
@@ -1910,7 +1915,7 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
       await api.documentReplace(connId, database, table, docId, text);
       onSaved();
     } catch (e: any) {
-      setErr(e?.message ?? "儲存失敗");
+      setErr(e?.message ?? t("儲存失敗"));
     } finally {
       setSaving(false);
     }
@@ -1921,25 +1926,25 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
       <div className="bg-elevated w-[640px] max-h-[85vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
-          <span className="font-medium text-sm">編輯文件（JSON）</span>
+          <span className="font-medium text-sm">{t("編輯文件（JSON）")}</span>
           <span className="text-xs text-fg/40 mono truncate">{table}</span>
-          <button type="button" onClick={onClose} aria-label="關閉" title="關閉" className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+          <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
         <div className="p-4 overflow-auto flex-1">
           {err && <div className="text-danger text-sm mono mb-2 break-all">{err}</div>}
           {loading ? (
-            <div className="text-fg/40 text-sm">讀取中…</div>
+            <div className="text-fg/40 text-sm">{t("讀取中…")}</div>
           ) : (
             <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
               className="w-full h-96 bg-inset border border-fg/10 rounded p-3 mono text-sm outline-none focus:border-accent resize-none" />
           )}
         </div>
         <div className="px-5 py-3 border-t border-fg/10 flex items-center gap-2">
-          <span className="text-xs text-fg/35">以 canonical extended JSON 呈現；_id 不可變更。</span>
-          <button type="button" onClick={onClose} className="ml-auto px-3 py-1 text-sm rounded border border-fg/15 hover:bg-fg/10">取消</button>
+          <span className="text-xs text-fg/35">{t("以 canonical extended JSON 呈現；_id 不可變更。")}</span>
+          <button type="button" onClick={onClose} className="ml-auto px-3 py-1 text-sm rounded border border-fg/15 hover:bg-fg/10">{t("取消")}</button>
           <button type="button" onClick={save} disabled={saving || loading}
             className="px-3 py-1 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">
-            {saving ? "儲存中…" : "儲存"}
+            {saving ? t("儲存中…") : t("儲存")}
           </button>
         </div>
       </div>
@@ -1960,6 +1965,7 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
   onEdit: (colIndex: number, raw: string, setNull: boolean) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   useModalCount(); // 開啟期間讓全域快捷鍵（Ctrl+W/Tab、"/"）讓路，不在背後動作
   // 記錄瀏覽器鍵盤：↑/PageUp 上一列、↓/PageDown 下一列、Esc 關閉（編輯欄位時方向鍵交給輸入框）。
   useEffect(() => {
@@ -1981,13 +1987,13 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2 text-sm">
           <span className="font-medium">第 {rowNo} 列</span>
-          <span className="text-fg/30 text-xs">{columns.length} 欄{editable ? "（可編輯）" : "（唯讀）"}</span>
+          <span className="text-fg/30 text-xs">{columns.length} {t("欄")}{editable ? t("（可編輯）") : t("（唯讀）")}</span>
           <div className="ml-auto flex items-center gap-1">
-            <button type="button" disabled={!hasPrev} onClick={onPrev} title="上一列"
+            <button type="button" disabled={!hasPrev} onClick={onPrev} title={t("上一列")}
               className="w-6 h-6 inline-flex items-center justify-center rounded hover:bg-fg/10 disabled:opacity-30"><Icon icon={ArrowUp} size={14} /></button>
-            <button type="button" disabled={!hasNext} onClick={onNext} title="下一列"
+            <button type="button" disabled={!hasNext} onClick={onNext} title={t("下一列")}
               className="w-6 h-6 inline-flex items-center justify-center rounded hover:bg-fg/10 disabled:opacity-30"><Icon icon={ArrowDown} size={14} /></button>
-            <button type="button" onClick={onClose} aria-label="關閉" title="關閉" className="ml-1 text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+            <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="ml-1 text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
           </div>
         </div>
         <div className="p-4 overflow-auto space-y-1.5">
@@ -2011,6 +2017,7 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
 
 // 列表單內的單欄輸入：blur / Enter 套用變更；按鈕設 NULL。
 function RowField({ value, onSave }: { value: string | null; onSave: (raw: string, setNull: boolean) => void }) {
+  const t = useT();
   const [text, setText] = useState(value ?? "");
   useEffect(() => setText(value ?? ""), [value]);
   const commit = () => { if (text !== (value ?? "")) onSave(text, false); };
@@ -2024,7 +2031,7 @@ function RowField({ value, onSave }: { value: string | null; onSave: (raw: strin
         }`}
         placeholder={value === null ? "NULL" : ""} />
       <button type="button" onMouseDown={(e) => { e.preventDefault(); onSave("", true); }}
-        title="設為 NULL" className="text-[10px] text-fg/40 hover:text-fg/70 shrink-0">NULL</button>
+        title={t("設為 NULL")} className="text-[10px] text-fg/40 hover:text-fg/70 shrink-0">NULL</button>
     </span>
   );
 }
@@ -2039,6 +2046,7 @@ export function CellInspector({ column, value, editable, onSave, onClose, showFo
   // 是否顯示「格式化 JSON」（DDL 檢視等情境關閉）。
   showFormat?: boolean;
 }) {
+  const t = useT();
   const [text, setText] = useState(value ?? "");
   const dirty = editable && text !== (value ?? "");
   useModalOverlay(onClose); // 計入 modalCount + 視窗層級 Esc（不再僅靠 textarea 聚焦才能 Esc）
@@ -2046,7 +2054,7 @@ export function CellInspector({ column, value, editable, onSave, onClose, showFo
     try {
       setText(JSON.stringify(JSON.parse(text), null, 2));
     } catch {
-      toast.error("不是有效的 JSON");
+      toast.error(t("不是有效的 JSON"));
     }
   };
   return (
@@ -2057,14 +2065,14 @@ export function CellInspector({ column, value, editable, onSave, onClose, showFo
           <span className="font-medium text-sm mono truncate">{column}</span>
           {value === null && <span className="text-[10px] px-1.5 py-0.5 rounded bg-fg/10 text-fg/50">NULL</span>}
           <span className="ml-auto text-[11px] text-fg/40 tabular-nums"
-            title="字元數 / UTF-8 位元組數（位元組數對應多數資料庫的 VARCHAR 長度上限）">
-            {text.length} 字元 · {new TextEncoder().encode(text).length} bytes
+            title={t("字元數 / UTF-8 位元組數（位元組數對應多數資料庫的 VARCHAR 長度上限）")}>
+            {text.length} {t("字元 ·")} {new TextEncoder().encode(text).length} bytes
           </span>
-          <button type="button" onClick={onClose} aria-label="關閉" title="關閉" className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+          <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
         <div className="p-4 flex-1 overflow-auto">
           <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)}
-            readOnly={!editable} title={editable ? "儲存格內容（Ctrl+Enter 套用）" : "儲存格內容"}
+            readOnly={!editable} title={editable ? t("儲存格內容（Ctrl+Enter 套用）") : t("儲存格內容")}
             onKeyDown={(e) => {
               if (e.key === "Escape") onClose();
               else if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && editable && dirty) { e.preventDefault(); onSave(text, false); onClose(); }
@@ -2074,22 +2082,22 @@ export function CellInspector({ column, value, editable, onSave, onClose, showFo
         <div className="px-5 py-3 border-t border-fg/10 flex items-center gap-2">
           {showFormat && (
             <button type="button" onClick={formatJson}
-              className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">格式化 JSON</button>
+              className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("格式化 JSON")}</button>
           )}
-          <button type="button" onClick={() => copyToClipboard(text, "已複製")}
-            className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">複製</button>
+          <button type="button" onClick={() => copyToClipboard(text, t("已複製"))}
+            className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("複製")}</button>
           <div className="ml-auto flex gap-2">
             {editable && (
               <button type="button" onClick={() => { onSave("", true); onClose(); }}
-                className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5 text-fg/70">設為 NULL</button>
+                className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5 text-fg/70">{t("設為 NULL")}</button>
             )}
             {editable && (
               <button type="button" disabled={!dirty} onClick={() => { onSave(text, false); onClose(); }}
-                title="套用變更 (Ctrl+Enter)"
-                className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">套用變更</button>
+                title={t("套用變更 (Ctrl+Enter)")}
+                className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">{t("套用變更")}</button>
             )}
             <button type="button" onClick={onClose}
-              className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">關閉</button>
+              className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("關閉")}</button>
           </div>
         </div>
       </div>
@@ -2104,6 +2112,7 @@ const KEY_PAGE = 200;
 function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   connId: string; database: string; table: string; rkey: string; onClose: () => void;
 }) {
+  const t = useT();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount（先前完全沒有 Esc 處理）
   const [page, setPage] = useState<KeyPage | null>(null);
   // 累積已載入的成員（跨多頁），供 KeyDetailBody 以既有渲染呈現。
@@ -2129,7 +2138,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
         setScores(p.scores);
         setCursor(p.cursor);
       })
-      .catch((e) => setErr(e?.message ?? "讀取失敗"))
+      .catch((e) => setErr(e?.message ?? t("讀取失敗")))
       .finally(() => setLoading(false));
   };
 
@@ -2147,7 +2156,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
         setScores(p.scores);
         setCursor(p.cursor);
       })
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"))
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
     // filter 透過 applyFilter 變更後一併重載；故列入依賴。
@@ -2164,7 +2173,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
         setScores((s) => [...s, ...p.scores]);
         setCursor(p.cursor);
       })
-      .catch((e) => setErr(e?.message ?? "讀取失敗"))
+      .catch((e) => setErr(e?.message ?? t("讀取失敗")))
       .finally(() => setLoading(false));
   };
 
@@ -2178,7 +2187,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
     api
       .redisKeyPage(connId, database, rkey, 0, KEY_PAGE, filter, true)
       .then((p) => { setPage(p); setMembers(p.members); setFields(p.fields); setScores(p.scores); setCursor(p.cursor); })
-      .catch((e) => setErr(e?.message ?? "讀取失敗"))
+      .catch((e) => setErr(e?.message ?? t("讀取失敗")))
       .finally(() => setLoading(false));
   };
 
@@ -2198,14 +2207,14 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
             <>
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">{page.type_}</span>
               <span className="text-xs text-fg/40">
-                TTL: {page.ttl < 0 ? "無到期" : `${page.ttl}s`}
+                TTL: {page.ttl < 0 ? t("無到期") : `${page.ttl}s`}
               </span>
               {isCollection && page.total >= 0 && (
                 <span className="text-xs text-fg/35">共 {page.total} 筆</span>
               )}
             </>
           )}
-          <button type="button" onClick={onClose} aria-label="關閉" title="關閉" className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+          <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
 
         {/* 成員過濾（僅集合型）。Enter 或「套用」重載第一頁。 */}
@@ -2213,20 +2222,20 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
           <div className="px-4 py-2 border-b border-fg/10 flex items-center gap-2 text-xs">
             <input value={filterInput} onChange={(e) => setFilterInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") applyFilter(); }}
-              placeholder={page!.type_ === "hash" ? "過濾 field（支援 * ?）" : page!.type_ === "list" ? "過濾子字串" : "過濾成員（支援 * ?）"}
+              placeholder={page!.type_ === "hash" ? t("過濾 field（支援 * ?）") : page!.type_ === "list" ? t("過濾子字串") : t("過濾成員（支援 * ?）")}
               className="flex-1 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
             <button type="button" onClick={applyFilter}
-              className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60">套用</button>
+              className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60">{t("套用")}</button>
             {filter && (
               <button type="button" onClick={() => { setFilterInput(""); setFilter(""); }}
-                className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/40">清除</button>
+                className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/40">{t("清除")}</button>
             )}
           </div>
         )}
 
         <div className="p-4 overflow-auto">
           {err && <div className="text-red-400 text-sm mono mb-2 break-all">{err}</div>}
-          {!page && !err && <div className="text-fg/40 text-sm">讀取中…</div>}
+          {!page && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
           {detail && (
             <KeyDetailBody
               detail={detail}
@@ -2243,14 +2252,14 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
           )}
           {isCollection && (
             <div className="mt-3 flex items-center gap-3 text-xs text-fg/40">
-              <span>已載入 {members.length} 筆{filter ? "（已過濾）" : ""}</span>
+              <span>已載入 {members.length} 筆{filter ? t("（已過濾）") : ""}</span>
               {cursor !== 0 && (
                 <button type="button" onClick={loadMore} disabled={loading}
                   className="px-3 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
-                  {loading ? "載入中…" : "載入更多"}
+                  {loading ? t("載入中…") : t("載入更多")}
                 </button>
               )}
-              {cursor === 0 && members.length > 0 && <span className="text-fg/25">已全部載入</span>}
+              {cursor === 0 && members.length > 0 && <span className="text-fg/25">{t("已全部載入")}</span>}
             </div>
           )}
         </div>
@@ -2268,6 +2277,7 @@ function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError,
   valueBytes?: number;
   onLoadFull?: () => void;
 }) {
+  const t = useT();
   const { type_, entries, fields, scores } = detail;
   const [busy, setBusy] = useState(false);
   // 新增列輸入（依型別語意不同：A = field/member/value，B = value/score）
@@ -2284,7 +2294,7 @@ function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError,
       setAddB("");
       reload();
     } catch (e: any) {
-      onError(e?.message ?? "操作失敗");
+      onError(e?.message ?? t("操作失敗"));
     } finally {
       setBusy(false);
     }
@@ -2292,7 +2302,7 @@ function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError,
   const edit = (e: KeyEdit) => run(() => api.keyEdit(connId, database, rkey, e));
 
   if (type_ === "none") {
-    return <div className="text-fg/40 text-sm">（此鍵已不存在）</div>;
+    return <div className="text-fg/40 text-sm">{t("（此鍵已不存在）")}</div>;
   }
 
   if (type_ === "string") {
@@ -2418,7 +2428,7 @@ function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError,
             {isList && (
               <label className="text-[10px] text-fg/40 flex items-center gap-1">
                 <input type="checkbox" checked={addFront} onChange={(e) => setAddFront(e.target.checked)} />
-                前端
+                {t("前端")}
               </label>
             )}
           </td>
@@ -2438,20 +2448,21 @@ function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError,
 function InlineEdit({ value, onSave, type = "text" }: {
   value: string; onSave: (v: string) => void; type?: string;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(value);
   useEffect(() => setText(value), [value]);
   if (!editing) {
     return (
-      <span onClick={() => { setText(value); setEditing(true); }} title="點擊編輯"
+      <span onClick={() => { setText(value); setEditing(true); }} title={t("點擊編輯")}
         className="cursor-text hover:bg-fg/10 rounded px-1 -mx-1 inline-block min-w-[2rem]">
-        {value === "" ? <span className="text-fg/25">（空）</span> : value}
+        {value === "" ? <span className="text-fg/25">{t("（空）")}</span> : value}
       </span>
     );
   }
   return (
     <input autoFocus type={type} value={text}
-      aria-label="編輯值"
+      aria-label={t("編輯值")}
       onChange={(e) => setText(e.target.value)}
       onKeyDown={(e) => {
         if (e.key === "Enter") { setEditing(false); if (text !== value) onSave(text); }
@@ -2468,6 +2479,7 @@ function StringEditor({ value, onSave, busy, truncated, valueBytes, onLoadFull }
   value: string; onSave: (v: string) => void; busy: boolean;
   truncated?: boolean; valueBytes?: number; onLoadFull?: () => void;
 }) {
+  const t = useT();
   const [text, setText] = useState(value);
   const [view, setView] = useState<ValueView>("raw");
   useEffect(() => setText(value), [value]);
@@ -2485,7 +2497,7 @@ function StringEditor({ value, onSave, busy, truncated, valueBytes, onLoadFull }
           {onLoadFull && (
             <button type="button" onClick={onLoadFull} disabled={busy}
               className="ml-auto shrink-0 px-2 py-1 rounded border border-warning/40 hover:bg-warning/15 text-warning disabled:opacity-40">
-              載入完整值
+              {t("載入完整值")}
             </button>
           )}
         </div>
@@ -2495,24 +2507,24 @@ function StringEditor({ value, onSave, busy, truncated, valueBytes, onLoadFull }
         {(["raw", "json", "hex"] as ValueView[]).map((v) => (
           <button key={v} type="button" onClick={() => setView(v)}
             className={`px-2 py-0.5 rounded ${view === v ? "bg-fg/15 text-fg" : "text-fg/45 hover:bg-fg/10"}`}>
-            {v === "raw" ? "原始" : v === "json" ? "JSON" : "Hex"}
+            {v === "raw" ? t("原始") : v === "json" ? "JSON" : "Hex"}
           </button>
         ))}
         {view === "json" && isJson && (
           <button type="button" onClick={() => setText(prettyJson!)} disabled={busy}
-            title="把美化後的 JSON 回填到編輯區（切到「原始」後可儲存）"
-            className="ml-auto px-2 py-0.5 rounded border border-fg/15 hover:bg-fg/10 text-fg/55">回填美化結果</button>
+            title={t("把美化後的 JSON 回填到編輯區（切到「原始」後可儲存）")}
+            className="ml-auto px-2 py-0.5 rounded border border-fg/15 hover:bg-fg/10 text-fg/55">{t("回填美化結果")}</button>
         )}
         <span className="ml-auto text-fg/30">{byteLen(text)} bytes</span>
       </div>
 
       {view === "raw" && (
-        <textarea value={text} onChange={(e) => setText(e.target.value)} title="字串值"
+        <textarea value={text} onChange={(e) => setText(e.target.value)} title={t("字串值")}
           className="w-full h-40 bg-inset border border-fg/10 rounded p-3 mono text-sm outline-none focus:border-accent resize-none break-all" />
       )}
       {view === "json" && (
         <pre className="w-full h-40 overflow-auto bg-inset border border-fg/10 rounded p-3 mono text-sm whitespace-pre-wrap break-all">
-          {isJson ? prettyJson : <span className="text-fg/35">（非有效 JSON）</span>}
+          {isJson ? prettyJson : <span className="text-fg/35">{t("（非有效 JSON）")}</span>}
         </pre>
       )}
       {view === "hex" && (
@@ -2523,9 +2535,9 @@ function StringEditor({ value, onSave, busy, truncated, valueBytes, onLoadFull }
 
       <div className="flex justify-end">
         <button type="button" disabled={busy || text === value || view !== "raw" || truncated} onClick={() => onSave(text)}
-          title={truncated ? "值已截斷，請先「載入完整值」再儲存" : view !== "raw" ? "切到「原始」模式才能儲存" : "儲存"}
+          title={truncated ? t("值已截斷，請先「載入完整值」再儲存") : view !== "raw" ? t("切到「原始」模式才能儲存") : t("儲存")}
           className="px-3 py-1 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">
-          {busy ? "儲存中…" : "儲存"}
+          {busy ? t("儲存中…") : t("儲存")}
         </button>
       </div>
     </div>
@@ -2546,7 +2558,7 @@ function byteLen(s: string): number {
 
 // 人類可讀的位元組數（B / KB / MB / GB）。
 function fmtBytes(n: number): string {
-  if (n < 0) return "未知";
+  if (n < 0) return t("未知");
   if (n < 1024) return `${n} B`;
   const units = ["KB", "MB", "GB", "TB"];
   let v = n / 1024;
@@ -2558,7 +2570,7 @@ function fmtBytes(n: number): string {
 // 經典 hex dump：每列 16 位元組，左偏移、中段 hex、右側可列印字元。
 function toHexDump(s: string): string {
   const bytes = new TextEncoder().encode(s);
-  if (bytes.length === 0) return "（空）";
+  if (bytes.length === 0) return t("（空）");
   const max = 8192; // 避免超長字串卡渲染
   const view = bytes.subarray(0, max);
   const lines: string[] = [];
@@ -2568,14 +2580,15 @@ function toHexDump(s: string): string {
     const ascii = Array.from(chunk).map((b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".")).join("");
     lines.push(`${off.toString(16).padStart(8, "0")}  ${hex}  ${ascii}`);
   }
-  if (bytes.length > max) lines.push(`… 已截斷，共 ${bytes.length} bytes`);
+  if (bytes.length > max) lines.push(t("… 已截斷，共 {length} bytes", { length: bytes.length }));
   return lines.join("\n");
 }
 
 function DelCell({ onClick, busy }: { onClick: () => void; busy: boolean }) {
+  const t = useT();
   return (
     <td className="px-1 py-1 border-b border-fg/5 text-center">
-      <button type="button" onClick={onClick} disabled={busy} title="刪除"
+      <button type="button" onClick={onClick} disabled={busy} title={t("刪除")}
         className="w-5 h-5 inline-flex items-center justify-center rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20 disabled:opacity-30">
         <Icon icon={Minus} size={14} />
       </button>
@@ -2584,9 +2597,10 @@ function DelCell({ onClick, busy }: { onClick: () => void; busy: boolean }) {
 }
 
 function AddCell({ onClick, busy }: { onClick: () => void; busy: boolean }) {
+  const t = useT();
   return (
     <td className="px-1 py-1 text-center">
-      <button type="button" onClick={onClick} disabled={busy} title="新增"
+      <button type="button" onClick={onClick} disabled={busy} title={t("新增")}
         className="w-5 h-5 inline-flex items-center justify-center rounded text-fg/30 hover:text-green-400 hover:bg-green-500/20 disabled:opacity-30">
         <Icon icon={Plus} size={14} />
       </button>
@@ -2619,6 +2633,7 @@ function FilterBar({ columns, filters, matchAny, onApply }: {
   matchAny: boolean;
   onApply: (filters: FilterCond[], matchAny: boolean) => void;
 }) {
+  const t = useT();
   const blank = (): FilterCond => ({ column: columns[0] ?? "", op: "=", value: "" });
   const [rows, setRows] = useState<FilterCond[]>(filters.length ? filters : [blank()]);
   const [any, setAny] = useState(matchAny);
@@ -2651,8 +2666,8 @@ function FilterBar({ columns, filters, matchAny, onApply }: {
     <div className="px-2 py-1.5 bg-well border-b border-fg/10 text-xs space-y-1.5">
       {rows.length > 1 && (
         <div className="flex items-center gap-1 text-fg/40">
-          <span>符合</span>
-          {([["false", "全部 (AND)"], ["true", "任一 (OR)"]] as [string, string][]).map(([v, label]) => (
+          <span>{t("符合")}</span>
+          {([["false", t("全部 (AND)")], ["true", t("任一 (OR)")]] as [string, string][]).map(([v, label]) => (
             <button key={v} type="button" onClick={() => setAny(v === "true")}
               className={`px-2 py-0.5 rounded border ${
                 any === (v === "true") ? "border-accent bg-accent/15 text-accent" : "border-fg/10 text-fg/50"
@@ -2660,27 +2675,27 @@ function FilterBar({ columns, filters, matchAny, onApply }: {
               {label}
             </button>
           ))}
-          <span>條件</span>
+          <span>{t("條件")}</span>
         </div>
       )}
       {rows.map((r, i) => (
         <div key={i} className="flex items-center gap-2">
-          <select value={r.column} title="篩選欄位" onChange={(e) => update(i, { column: e.target.value })}
+          <select value={r.column} title={t("篩選欄位")} onChange={(e) => update(i, { column: e.target.value })}
             className="bg-inset border border-fg/10 rounded px-1.5 py-1 outline-none">
             {columns.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
-          <select value={r.op} title="運算子" onChange={(e) => update(i, { op: e.target.value })}
+          <select value={r.op} title={t("運算子")} onChange={(e) => update(i, { op: e.target.value })}
             className="bg-inset border border-fg/10 rounded px-1.5 py-1 outline-none">
             {FILTER_OPS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
           </select>
           {opNeedsValue(r.op) && (
             <input value={r.value ?? ""} onChange={(e) => update(i, { value: e.target.value })}
               onKeyDown={(e) => e.key === "Enter" && apply()}
-              placeholder={r.op === "like" ? "%關鍵字%" : "值"}
+              placeholder={r.op === "like" ? t("%關鍵字%") : t("值")}
               className="bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent min-w-[140px]" />
           )}
           <button onClick={() => removeRow(i)} disabled={rows.length === 1}
-            title="移除此條件"
+            title={t("移除此條件")}
             className="px-1.5 py-1 inline-flex items-center justify-center rounded hover:bg-fg/10 text-fg/40 disabled:opacity-30">
             <Icon icon={Minus} size={14} />
           </button>
@@ -2688,11 +2703,11 @@ function FilterBar({ columns, filters, matchAny, onApply }: {
       ))}
       <div className="flex items-center gap-2 pt-0.5">
         <button onClick={addRow}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> 新增條件</button>
+          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增條件")}</button>
         <button onClick={apply}
-          className="px-2 py-1 rounded bg-accent text-white hover:bg-accent/90">套用</button>
+          className="px-2 py-1 rounded bg-accent text-white hover:bg-accent/90">{t("套用")}</button>
         <button onClick={clear}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50">清除</button>
+          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50">{t("清除")}</button>
       </div>
     </div>
   );
@@ -2707,6 +2722,7 @@ function InsertDialog({ columns, onSubmit, onCancel, busy, initial }: {
   // 「以此列為範本新增」的預填值：非 null → 帶入輸入框；null → 勾選 NULL。
   initial?: Record<string, string | null>;
 }) {
+  const t = useT();
   // 每欄一個值；nulls 標記哪些欄留 NULL（不送出 → 走 DB 預設）
   const [values, setValues] = useState<Record<string, string>>(() => {
     const v: Record<string, string> = {};
@@ -2735,9 +2751,9 @@ function InsertDialog({ columns, onSubmit, onCancel, busy, initial }: {
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
       <div className="bg-elevated w-[480px] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl">
-        <div className="px-5 py-3 border-b border-fg/10 font-medium text-sm">新增列</div>
+        <div className="px-5 py-3 border-b border-fg/10 font-medium text-sm">{t("新增列")}</div>
         <div className="p-4 space-y-2 overflow-y-auto">
-          <p className="text-xs text-fg/40">未填寫且未標 NULL 的欄位，交由資料庫預設值處理。</p>
+          <p className="text-xs text-fg/40">{t("未填寫且未標 NULL 的欄位，交由資料庫預設值處理。")}</p>
           {columns.map((c, ci) => (
             <div key={c} className="flex items-center gap-2">
               <span className="text-xs text-fg/60 w-28 truncate text-right">{c}</span>
@@ -2748,7 +2764,7 @@ function InsertDialog({ columns, onSubmit, onCancel, busy, initial }: {
                 onChange={(e) => setValues((v) => ({ ...v, [c]: e.target.value }))}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } }}
                 className="flex-1 bg-inset border border-fg/10 rounded px-2 py-1 text-sm outline-none focus:border-accent disabled:opacity-40"
-                placeholder={nulls[c] ? "NULL" : "（預設）"}
+                placeholder={nulls[c] ? "NULL" : t("（預設）")}
               />
               <label className="text-[10px] text-fg/40 flex items-center gap-1 shrink-0">
                 <input type="checkbox" checked={!!nulls[c]}
@@ -2760,10 +2776,10 @@ function InsertDialog({ columns, onSubmit, onCancel, busy, initial }: {
         </div>
         <div className="px-5 py-3 border-t border-fg/10 flex justify-end gap-2">
           <button type="button" onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">取消</button>
+            className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("取消")}</button>
           <button type="button" onClick={submit} disabled={busy}
             className="px-3 py-1.5 text-sm rounded bg-green-600 hover:bg-green-500 disabled:opacity-50">
-            {busy ? "新增中…" : "新增"}
+            {busy ? t("新增中…") : t("新增")}
           </button>
         </div>
       </div>
@@ -2813,6 +2829,7 @@ const DataRow = memo(function DataRow({
   findLower: string;
   h: RowHandlers;
 }) {
+  const t = useT();
   return (
     <tr
       className={`${selRow ? "bg-accent/[0.06]" : "hover:bg-fg/5"} group`}
@@ -2820,12 +2837,12 @@ const DataRow = memo(function DataRow({
     >
       {editable && (
         <td className="px-1 py-1 border-b border-fg/5 text-center">
-          <input type="checkbox" title="勾選以批次刪除" checked={isMarked} onChange={() => h.toggleMark(i)} />
+          <input type="checkbox" title={t("勾選以批次刪除")} checked={isMarked} onChange={() => h.toggleMark(i)} />
         </td>
       )}
       <td
         onClick={(e) => h.rowNumClick(e, i)}
-        title="點看整列表單、Shift+點選整列"
+        title={t("點看整列表單、Shift+點選整列")}
         className={`px-3 py-1 border-b border-fg/5 cursor-pointer hover:bg-fg/5 hover:text-fg/60 tabular-nums ${
           isMarked ? "text-red-300 bg-red-500/10" : selRow ? "text-accent/90" : "text-fg/30"
         }`}
@@ -2846,7 +2863,7 @@ const DataRow = memo(function DataRow({
             onClick={(e) => h.cellClick(e, i, j)}
             onDoubleClick={() => h.cellDoubleClick(i, j, redisKeyCol, val)}
             onContextMenu={isRedis ? undefined : (e) => h.cellContext(e, i, j)}
-            title={redisKeyCol ? "雙擊檢視鍵內容" : val ?? "NULL"}
+            title={redisKeyCol ? t("雙擊檢視鍵內容") : val ?? "NULL"}
             className={`px-3 py-1 border-b border-fg/5 whitespace-nowrap overflow-hidden text-ellipsis ${
               isSel ? "ring-1 ring-inset ring-accent " : ""
             }${
@@ -2875,7 +2892,7 @@ const DataRow = memo(function DataRow({
         <td className="px-1 py-1 border-b border-fg/5 text-center">
           <button
             onClick={() => h.deleteRow(i)}
-            title="刪除此列"
+            title={t("刪除此列")}
             className="w-5 h-5 inline-flex items-center justify-center rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20"
           >
             <Icon icon={Minus} size={14} />
@@ -2896,6 +2913,7 @@ function CellEditor({ initial, seed, onCommit, onCancel, onAdvance }: {
   /** Enter/Tab 送出後推進到下一格（commit-and-advance）。 */
   onAdvance?: (dir: "down" | "up" | "right" | "left") => void;
 }) {
+  const t = useT();
   const [text, setText] = useState(seed != null ? seed : initial ?? "");
   // 防重複提交：Enter/Tab 推進會讓輸入框失焦，避免 onBlur 再次提交覆寫；Escape 取消亦忽略後續 blur。
   const committedRef = useRef(false);
@@ -2908,7 +2926,7 @@ function CellEditor({ initial, seed, onCommit, onCancel, onAdvance }: {
     <span className="flex items-center gap-1">
       <input
         autoFocus
-        aria-label="編輯儲存格"
+        aria-label={t("編輯儲存格")}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -2931,7 +2949,7 @@ function CellEditor({ initial, seed, onCommit, onCancel, onAdvance }: {
       <button
         type="button"
         onMouseDown={(e) => { e.preventDefault(); commitOnce("", true); }}
-        title="設為 NULL"
+        title={t("設為 NULL")}
         className="text-[10px] text-fg/40 hover:text-fg/70 shrink-0"
       >
         NULL
@@ -2957,6 +2975,7 @@ function NavBtn({ label, onClick, disabled, title }: {
 
 // ---- 結構分頁：欄位定義 ----
 function StructurePane({ tab }: { tab: OpenTab }) {
+  const t = useT();
   const kind = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.kind);
   const isSql = kind === "mysql" || kind === "mariadb" || kind === "postgres" || kind === "sqlite" || kind === "oracle";
   // 索引管理（建立 / 刪除）關聯式與 MongoDB 皆支援；欄位 / DDL 編輯仍僅限 SQL。
@@ -2987,7 +3006,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     try {
       setDdl(await api.tableDdl(tab.connId, tab.database, tab.table));
     } catch (e: any) {
-      toast.error(e?.message ?? "取得建表 SQL 失敗");
+      toast.error(e?.message ?? t("取得建表 SQL 失敗"));
     }
   };
 
@@ -2997,7 +3016,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     api
       .tableColumns(tab.connId, tab.database, tab.table)
       .then((c) => !cancelled && setCols(c))
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"));
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     // 索引：失敗或不支援則視為無索引（不擋欄位顯示）。
     api
       .tableIndexes(tab.connId, tab.database, tab.table)
@@ -3041,11 +3060,11 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     setBusy(true);
     try {
       await api.mongoCreateIndex(tab.connId, tab.database, tab.table, name, keys, options);
-      toast.success("索引已建立");
+      toast.success(t("索引已建立"));
       setAddingIndex(false);
       setNonce((n) => n + 1);
     } catch (e: any) {
-      toast.error(e?.message ?? "建立索引失敗");
+      toast.error(e?.message ?? t("建立索引失敗"));
     } finally {
       setBusy(false);
     }
@@ -3055,23 +3074,23 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   const saveValidation = async (clear: boolean) => {
     const text = clear ? "" : valText.trim();
     if (text) {
-      try { JSON.parse(text); } catch { toast.error("驗證規則需為合法 JSON（$jsonSchema）"); return; }
+      try { JSON.parse(text); } catch { toast.error(t("驗證規則需為合法 JSON（$jsonSchema）")); return; }
     }
     const danger = !clear && valLevel === "strict" && valAction === "error";
     const ok = await uiConfirm(
       clear
-        ? "清除此集合的驗證規則？"
+        ? t("清除此集合的驗證規則？")
         : `套用驗證規則（level=${valLevel} / action=${valAction}）？${danger ? "\nstrict + error 會立即阻擋不符合的寫入（含既有應用程式），請確認影響。" : ""}`,
-      { title: clear ? "清除驗證規則" : "套用驗證規則", danger, confirmText: clear ? "清除" : "套用" },
+      { title: clear ? t("清除驗證規則") : t("套用驗證規則"), danger, confirmText: clear ? t("清除") : t("套用") },
     );
     if (!ok) return;
     setValSaving(true);
     try {
       await api.mongoSetValidation(tab.connId, tab.database, tab.table, text, valLevel, valAction);
-      toast.success(clear ? "已清除驗證規則" : "驗證規則已套用");
+      toast.success(clear ? t("已清除驗證規則") : t("驗證規則已套用"));
       setNonce((n) => n + 1);
     } catch (e: any) {
-      toast.error(e?.message ?? "設定驗證規則失敗");
+      toast.error(e?.message ?? t("設定驗證規則失敗"));
     } finally {
       setValSaving(false);
     }
@@ -3086,31 +3105,31 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       setRename(null);
       setNonce((n) => n + 1);
     } catch (e: any) {
-      toast.error(e?.message ?? "結構變更失敗");
+      toast.error(e?.message ?? t("結構變更失敗"));
     } finally {
       setBusy(false);
     }
   };
 
   const dropCol = async (name: string) => {
-    if (!(await uiConfirm(`刪除欄位「${name}」？此動作無法復原。`, { title: "刪除欄位", danger: true, confirmText: "刪除" }))) return;
-    doAlter({ op: "drop_column", name }, "欄位已刪除");
+    if (!(await uiConfirm(t("刪除欄位「{name}」？此動作無法復原。", { name }), { title: t("刪除欄位"), danger: true, confirmText: t("刪除") }))) return;
+    doAlter({ op: "drop_column", name }, t("欄位已刪除"));
   };
   // 修改欄位型別（MySQL / PostgreSQL；SQLite 不支援）。保留目前可空性。
   const modifyType = async (name: string, currentType: string, nullable: boolean) => {
-    const input = await uiPrompt("新型別", { title: `修改欄位「${name}」型別`, defaultValue: currentType, placeholder: "如 VARCHAR(100) / int / text" });
+    const input = await uiPrompt(t("新型別"), { title: t("修改欄位「{name}」型別", { name }), defaultValue: currentType, placeholder: t("如 VARCHAR(100) / int / text") });
     if (!input?.trim() || input.trim() === currentType) return;
-    doAlter({ op: "modify_column", name, data_type: input.trim(), nullable }, "欄位型別已修改");
+    doAlter({ op: "modify_column", name, data_type: input.trim(), nullable }, t("欄位型別已修改"));
   };
   // 切換欄位可空（保留型別）；改 NOT NULL 若有 NULL 值會由 DB 報錯並以 toast 呈現。
   const toggleNull = (name: string, dataType: string, nullable: boolean) =>
-    doAlter({ op: "modify_column", name, data_type: dataType, nullable: !nullable }, nullable ? "已設為 NOT NULL" : "已設為可空");
+    doAlter({ op: "modify_column", name, data_type: dataType, nullable: !nullable }, nullable ? t("已設為 NOT NULL") : t("已設為可空"));
   // 設定 / 清除欄位預設值（值為原樣 DDL，如 0 / 'x' / CURRENT_TIMESTAMP；清空=移除）。
   const setColDefault = async (name: string, current: string | null) => {
-    const v = await uiPrompt("預設值（清空=移除預設）", { title: `欄位「${name}」預設值`, defaultValue: current ?? "", placeholder: "如 0 / 'x' / CURRENT_TIMESTAMP" });
+    const v = await uiPrompt(t("預設值（清空=移除預設）"), { title: t("欄位「{name}」預設值", { name }), defaultValue: current ?? "", placeholder: t("如 0 / 'x' / CURRENT_TIMESTAMP") });
     if (v === null) return;
     const trimmed = v.trim();
-    doAlter({ op: "set_default", name, default: trimmed === "" ? null : trimmed }, trimmed === "" ? "已移除預設值" : "預設值已設定");
+    doAlter({ op: "set_default", name, default: trimmed === "" ? null : trimmed }, trimmed === "" ? t("已移除預設值") : t("預設值已設定"));
   };
   // 新增外鍵（MySQL / PostgreSQL；走 exec_ddl）。
   const addFk = async (name: string, column: string, refTable: string, refColumn: string, onDelete: string, onUpdate: string) => {
@@ -3118,39 +3137,39 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     setBusy(true);
     try {
       await api.execDdl(tab.connId, buildAddForeignKey(kind, tab.database, tab.table, name, column, refTable, refColumn, onDelete, onUpdate));
-      toast.success("外鍵已新增");
+      toast.success(t("外鍵已新增"));
       setAddingFk(false);
       setNonce((n) => n + 1);
     } catch (e: any) {
-      toast.error(e?.message ?? "新增外鍵失敗");
+      toast.error(e?.message ?? t("新增外鍵失敗"));
     } finally {
       setBusy(false);
     }
   };
   const dropFk = async (name: string) => {
     if (!kind) return;
-    if (!(await uiConfirm(`刪除外鍵「${name}」？`, { title: "刪除外鍵", danger: true, confirmText: "刪除" }))) return;
+    if (!(await uiConfirm(t("刪除外鍵「{name}」？", { name }), { title: t("刪除外鍵"), danger: true, confirmText: t("刪除") }))) return;
     setBusy(true);
     try {
       await api.execDdl(tab.connId, buildDropForeignKey(kind, tab.database, tab.table, name));
-      toast.success("外鍵已刪除");
+      toast.success(t("外鍵已刪除"));
       setNonce((n) => n + 1);
     } catch (e: any) {
-      toast.error(e?.message ?? "刪除外鍵失敗");
+      toast.error(e?.message ?? t("刪除外鍵失敗"));
     } finally {
       setBusy(false);
     }
   };
 
   const dropIndexByName = async (name: string) => {
-    if (!(await uiConfirm(`刪除索引「${name}」？`, { title: "刪除索引", danger: true, confirmText: "刪除" }))) return;
+    if (!(await uiConfirm(t("刪除索引「{name}」？", { name }), { title: t("刪除索引"), danger: true, confirmText: t("刪除") }))) return;
     setBusy(true);
     try {
       await api.dropIndex(tab.connId, tab.database, tab.table, name);
-      toast.success("索引已刪除");
+      toast.success(t("索引已刪除"));
       setNonce((n) => n + 1);
     } catch (e: any) {
-      toast.error(e?.message ?? "刪除索引失敗");
+      toast.error(e?.message ?? t("刪除索引失敗"));
     } finally {
       setBusy(false);
     }
@@ -3159,22 +3178,22 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   // 重新命名索引（僅 MySQL / PG；SQLite 無 ALTER INDEX RENAME）。
   const renameIndexByName = async (oldName: string) => {
     if (!kind) return;
-    const nn = await uiPrompt(`重新命名索引「${oldName}」為：`, { title: "重新命名索引", defaultValue: oldName, confirmText: "重新命名" });
+    const nn = await uiPrompt(t("重新命名索引「{oldName}」為：", { oldName }), { title: t("重新命名索引"), defaultValue: oldName, confirmText: t("重新命名") });
     if (nn === null || !nn.trim() || nn.trim() === oldName) return;
     setBusy(true);
     try {
       await api.execDdl(tab.connId, buildRenameIndex(kind, tab.database, tab.table, oldName, nn));
-      toast.success("索引已重新命名");
+      toast.success(t("索引已重新命名"));
       setNonce((n) => n + 1);
     } catch (e: any) {
-      toast.error(e?.message ?? "重新命名索引失敗");
+      toast.error(e?.message ?? t("重新命名索引失敗"));
     } finally {
       setBusy(false);
     }
   };
 
   const createIndexFn = async (name: string, columns: string[], type: "normal" | "unique" | "fulltext") => {
-    if (!name.trim() || columns.length === 0) { toast.error("請填索引名稱並至少選一欄"); return; }
+    if (!name.trim() || columns.length === 0) { toast.error(t("請填索引名稱並至少選一欄")); return; }
     setBusy(true);
     try {
       if (type === "fulltext") {
@@ -3182,18 +3201,18 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       } else {
         await api.createIndex(tab.connId, tab.database, tab.table, name.trim(), columns, type === "unique");
       }
-      toast.success("索引已建立");
+      toast.success(t("索引已建立"));
       setAddingIndex(false);
       setNonce((n) => n + 1);
     } catch (e: any) {
-      toast.error(e?.message ?? "建立索引失敗");
+      toast.error(e?.message ?? t("建立索引失敗"));
     } finally {
       setBusy(false);
     }
   };
 
   if (err) return <div className="p-3 text-red-400 text-sm mono">{err}</div>;
-  if (!cols) return <div className="p-3 text-fg/40 text-sm">讀取中…</div>;
+  if (!cols) return <div className="p-3 text-fg/40 text-sm">{t("讀取中…")}</div>;
 
   return (
     <div className="flex-1 overflow-auto">
@@ -3201,27 +3220,27 @@ function StructurePane({ tab }: { tab: OpenTab }) {
         <div className="flex items-center gap-1 px-2 py-1 bg-inset border-b border-fg/10 text-xs">
           <button type="button" onClick={() => setAdding((s) => !s)} disabled={busy}
             className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1">
-            <Icon icon={Plus} size={14} /> 新增欄位
+            <Icon icon={Plus} size={14} /> {t("新增欄位")}
           </button>
           <button type="button" onClick={viewDdl}
-            title="檢視 / 複製建表 SQL（CREATE 語句）"
+            title={t("檢視 / 複製建表 SQL（CREATE 語句）")}
             className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1">
-            <Icon icon={Copy} size={14} /> 建表 SQL
+            <Icon icon={Copy} size={14} /> {t("建表 SQL")}
           </button>
           <button type="button" onClick={() => setNonce((n) => n + 1)} disabled={busy}
-            title="重新讀取結構（外部變更後同步）"
+            title={t("重新讀取結構（外部變更後同步）")}
             className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1">
-            <Icon icon={RefreshCw} size={14} /> 重新整理
+            <Icon icon={RefreshCw} size={14} /> {t("重新整理")}
           </button>
-          {busy && <span className="text-fg/40">處理中…</span>}
+          {busy && <span className="text-fg/40">{t("處理中…")}</span>}
         </div>
       )}
       {adding && isSql && <AddColumnForm kind={kind} busy={busy} onCancel={() => setAdding(false)}
-        onSubmit={(op) => doAlter(op, "欄位已新增")} />}
+        onSubmit={(op) => doAlter(op, t("欄位已新增"))} />}
       <table className="text-sm border-collapse w-full">
         <thead className="sticky top-0 bg-bar">
           <tr>
-            {["欄位", "型別", "可空", "鍵", "預設", "額外"].map((h) => (
+            {[t("欄位"), t("型別"), t("可空"), t("鍵"), t("預設"), t("額外")].map((h) => (
               <th key={h} className="text-left px-3 py-1.5 border-b border-fg/10 font-medium">
                 {h}
               </th>
@@ -3238,11 +3257,11 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                     onChange={(e) => setRename({ col: c.name, to: e.target.value })}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && rename.to && rename.to !== c.name)
-                        doAlter({ op: "rename_column", old: c.name, new: rename.to }, "欄位已改名");
+                        doAlter({ op: "rename_column", old: c.name, new: rename.to }, t("欄位已改名"));
                       else if (e.key === "Escape") setRename(null);
                     }}
                     onBlur={() => setRename(null)}
-                    aria-label="欄位改名"
+                    aria-label={t("欄位改名")}
                     className="bg-inset border border-accent/70 rounded px-1 py-0.5 outline-none focus:ring-2 focus:ring-accent/20" />
                 ) : (
                   c.name
@@ -3251,7 +3270,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
               <td className="px-3 py-1 border-b border-fg/5 mono text-fg/70">{c.data_type}</td>
               <td className="px-3 py-1 border-b border-fg/5 text-fg/60">
                 {kind !== "sqlite" ? (
-                  <button type="button" disabled={busy} title="點擊切換可空 / NOT NULL"
+                  <button type="button" disabled={busy} title={t("點擊切換可空 / NOT NULL")}
                     onClick={() => toggleNull(c.name, c.data_type, c.nullable)}
                     className="hover:bg-fg/10 rounded px-1 disabled:opacity-40">{c.nullable ? "YES" : "NO"}</button>
                 ) : (
@@ -3265,7 +3284,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
               </td>
               <td className="px-3 py-1 border-b border-fg/5 mono text-fg/50">
                 {kind !== "sqlite" ? (
-                  <button type="button" disabled={busy} title="點擊設定 / 清除預設值"
+                  <button type="button" disabled={busy} title={t("點擊設定 / 清除預設值")}
                     onClick={() => setColDefault(c.name, c.default)}
                     className="hover:bg-fg/10 rounded px-1 disabled:opacity-40">
                     {c.default ?? <span className="text-fg/25 italic">—</span>}
@@ -3277,15 +3296,15 @@ function StructurePane({ tab }: { tab: OpenTab }) {
               <td className="px-3 py-1 border-b border-fg/5 text-fg/50 text-xs">{c.extra}</td>
               {isSql && (
                 <td className="px-2 py-1 border-b border-fg/5 text-right whitespace-nowrap">
-                  <button type="button" title="改名" disabled={busy}
+                  <button type="button" title={t("改名")} disabled={busy}
                     onClick={() => setRename({ col: c.name, to: c.name })}
                     className="px-1 inline-flex items-center text-fg/20 group-hover:text-fg/70 hover:bg-fg/15 rounded disabled:opacity-40"><Icon icon={Pencil} size={14} /></button>
                   {kind !== "sqlite" && (
-                    <button type="button" title="修改型別" disabled={busy}
+                    <button type="button" title={t("修改型別")} disabled={busy}
                       onClick={() => modifyType(c.name, c.data_type, c.nullable)}
-                      className="px-1 text-fg/20 group-hover:text-fg/70 hover:bg-fg/15 rounded disabled:opacity-40">型</button>
+                      className="px-1 text-fg/20 group-hover:text-fg/70 hover:bg-fg/15 rounded disabled:opacity-40">{t("型")}</button>
                   )}
-                  <button type="button" title="刪除欄位" disabled={busy}
+                  <button type="button" title={t("刪除欄位")} disabled={busy}
                     onClick={() => dropCol(c.name)}
                     className="px-1 inline-flex items-center text-fg/20 group-hover:text-red-400 hover:bg-red-500/20 rounded disabled:opacity-40"><Icon icon={Minus} size={14} /></button>
                 </td>
@@ -3299,10 +3318,10 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       {indexes && (indexes.length > 0 || canIndex) && (
         <div className="mt-2">
           <div className="px-3 py-1.5 text-xs text-fg/40 bg-inset border-y border-fg/10 flex items-center gap-2">
-            <span>索引（{indexes.length}）</span>
+            <span>{t("索引（")}{indexes.length}）</span>
             {canIndex && (
               <button type="button" onClick={() => setAddingIndex((s) => !s)} disabled={busy}
-                className="px-1.5 py-0.5 rounded hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> 新增索引</button>
+                className="px-1.5 py-0.5 rounded hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增索引")}</button>
             )}
           </div>
           {addingIndex && canIndex && cols && (
@@ -3314,12 +3333,12 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                 onCancel={() => setAddingIndex(false)} onSubmit={createIndexFn} />
             )
           )}
-          {indexes.length === 0 && <div className="px-3 py-2 text-fg/30 text-xs">尚無索引。</div>}
+          {indexes.length === 0 && <div className="px-3 py-2 text-fg/30 text-xs">{t("尚無索引。")}</div>}
           {indexes.length > 0 && (
           <table className="text-sm border-collapse w-full">
             <thead className="bg-elevated">
               <tr>
-                {["名稱", "欄位", "唯一", "主鍵", ...(kind === "mongo" ? ["使用次數", "統計起始"] : [])].map((h) => (
+                {[t("名稱"), t("欄位"), t("唯一"), t("主鍵"), ...(kind === "mongo" ? [t("使用次數"), t("統計起始")] : [])].map((h) => (
                   <th key={h} className="text-left px-3 py-1.5 border-b border-fg/10 font-medium">{h}</th>
                 ))}
                 {canIndex && <th className="w-12 border-b border-fg/10" />}
@@ -3342,10 +3361,10 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                   {kind === "mongo" && (
                     <>
                       <td className="px-3 py-1 border-b border-fg/5 mono text-fg/70">
-                        {st ? st.ops : <span title="無法取得 $indexStats（權限不足或不支援）">—</span>}
+                        {st ? st.ops : <span title={t("無法取得 $indexStats（權限不足或不支援）")}>—</span>}
                         {st && st.ops === 0 && !ix.primary && (
                           <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300"
-                            title={`自 ${st.since || "統計起始"} 起未被任何查詢使用（mongod 重啟會重置統計）`}>未使用</span>
+                            title={`自 ${st.since || t("統計起始")} 起未被任何查詢使用（mongod 重啟會重置統計）`}>{t("未使用")}</span>
                         )}
                       </td>
                       <td className="px-3 py-1 border-b border-fg/5 mono text-fg/50 whitespace-nowrap">
@@ -3356,12 +3375,12 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                   {canIndex && (
                     <td className="px-2 py-1 border-b border-fg/5 text-right whitespace-nowrap">
                       {!ix.primary && (kind === "mysql" || kind === "mariadb" || kind === "postgres") && (
-                        <button type="button" title="重新命名索引" disabled={busy}
+                        <button type="button" title={t("重新命名索引")} disabled={busy}
                           onClick={() => renameIndexByName(ix.name)}
                           className="px-1 inline-flex items-center text-fg/20 group-hover:text-blue-400 hover:bg-blue-500/20 rounded disabled:opacity-40"><Icon icon={Pencil} size={14} /></button>
                       )}
                       {!ix.primary && (
-                        <button type="button" title="刪除索引" disabled={busy}
+                        <button type="button" title={t("刪除索引")} disabled={busy}
                           onClick={() => dropIndexByName(ix.name)}
                           className="px-1 inline-flex items-center text-fg/20 group-hover:text-red-400 hover:bg-red-500/20 rounded disabled:opacity-40"><Icon icon={Minus} size={14} /></button>
                       )}
@@ -3380,8 +3399,8 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       {kind === "mongo" && !isView && (
         <div className="mt-2">
           <div className="px-3 py-1.5 text-xs text-fg/40 bg-inset border-y border-fg/10 flex items-center gap-2">
-            <span>驗證規則{validation && validation.validator_json ? "（已設定）" : "（未設定）"}</span>
-            {validation === null && <span className="text-fg/30">— 無法讀取（權限不足或不支援）</span>}
+            <span>{t("驗證規則")}{validation && validation.validator_json ? t("（已設定）") : t("（未設定）")}</span>
+            {validation === null && <span className="text-fg/30">{t("— 無法讀取（權限不足或不支援）")}</span>}
           </div>
           {validation !== null && (
             <div className="p-3 space-y-2">
@@ -3397,7 +3416,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                 <span className="text-fg/50">level</span>
                 <select value={valLevel} onChange={(e) => setValLevel(e.target.value)} disabled={roConn}
                   className="bg-inset border border-fg/10 rounded px-1.5 py-1 outline-none cursor-pointer"
-                  title="off=不驗證；moderate=僅驗證新文件與原本合規的文件；strict=全部驗證">
+                  title={t("off=不驗證；moderate=僅驗證新文件與原本合規的文件；strict=全部驗證")}>
                   <option value="off">off</option>
                   <option value="moderate">moderate</option>
                   <option value="strict">strict</option>
@@ -3405,15 +3424,15 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                 <span className="text-fg/50">action</span>
                 <select value={valAction} onChange={(e) => setValAction(e.target.value)} disabled={roConn}
                   className="bg-inset border border-fg/10 rounded px-1.5 py-1 outline-none cursor-pointer"
-                  title="warn=僅記錄警告；error=拒絕不符合的寫入">
+                  title={t("warn=僅記錄警告；error=拒絕不符合的寫入")}>
                   <option value="warn">warn</option>
                   <option value="error">error</option>
                 </select>
                 {!roConn && (
                   <>
-                    <Button variant="primary" size="sm" loading={valSaving} onClick={() => saveValidation(false)}>套用</Button>
+                    <Button variant="primary" size="sm" loading={valSaving} onClick={() => saveValidation(false)}>{t("套用")}</Button>
                     {validation.validator_json && (
-                      <Button variant="secondary" size="sm" disabled={valSaving} onClick={() => saveValidation(true)}>清除規則</Button>
+                      <Button variant="secondary" size="sm" disabled={valSaving} onClick={() => saveValidation(true)}>{t("清除規則")}</Button>
                     )}
                   </>
                 )}
@@ -3427,10 +3446,10 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       {isSql && !isView && fks && (fks.length > 0 || kind !== "sqlite") && (
         <div className="mt-2">
           <div className="px-3 py-1.5 text-xs text-fg/40 bg-inset border-y border-fg/10 flex items-center gap-2">
-            <span>外鍵（{fks.length}）</span>
+            <span>{t("外鍵（")}{fks.length}）</span>
             {kind !== "sqlite" && (
               <button type="button" onClick={() => setAddingFk((s) => !s)} disabled={busy}
-                className="px-1.5 py-0.5 rounded hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> 新增外鍵</button>
+                className="px-1.5 py-0.5 rounded hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增外鍵")}</button>
             )}
           </div>
           {addingFk && kind !== "sqlite" && cols && (
@@ -3438,15 +3457,15 @@ function StructurePane({ tab }: { tab: OpenTab }) {
               onCancel={() => setAddingFk(false)} onSubmit={addFk} />
           )}
           {fks.length === 0 ? (
-            <div className="px-3 py-2 text-fg/30 text-xs">尚無外鍵。</div>
+            <div className="px-3 py-2 text-fg/30 text-xs">{t("尚無外鍵。")}</div>
           ) : (
             <table className="text-sm border-collapse w-full">
               <thead className="bg-elevated">
                 <tr>
-                  {["約束", "欄位", "參照", "參照欄位"].map((h) => (
+                  {[t("約束"), t("欄位"), t("參照"), t("參照欄位")].map((h) => (
                     <th key={h} className="text-left px-3 py-1.5 border-b border-fg/10 font-medium">{h}</th>
                   ))}
-                  {kind !== "sqlite" && <th className="w-10 border-b border-fg/10" aria-label="操作" />}
+                  {kind !== "sqlite" && <th className="w-10 border-b border-fg/10" aria-label={t("操作")} />}
                 </tr>
               </thead>
               <tbody>
@@ -3458,7 +3477,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                     <td className="px-3 py-1 border-b border-fg/5 mono">{fk.ref_column}</td>
                     {kind !== "sqlite" && (
                       <td className="px-2 py-1 border-b border-fg/5 text-right">
-                        <button type="button" title="刪除外鍵" disabled={busy} onClick={() => dropFk(fk.name)}
+                        <button type="button" title={t("刪除外鍵")} disabled={busy} onClick={() => dropFk(fk.name)}
                           className="px-1 inline-flex items-center text-fg/20 group-hover:text-red-400 hover:bg-red-500/20 rounded disabled:opacity-40"><Icon icon={Minus} size={14} /></button>
                       </td>
                     )}
@@ -3474,12 +3493,12 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       {isSql && incomingFks && incomingFks.length > 0 && (
         <div className="mt-2">
           <div className="px-3 py-1.5 text-xs text-fg/40 bg-inset border-y border-fg/10">
-            被參照（{incomingFks.length}）
+            {t("被參照（")}{incomingFks.length}）
           </div>
           <table className="text-sm border-collapse w-full">
             <thead className="bg-elevated">
               <tr>
-                {["來源表", "來源欄位", "參照本表欄位"].map((h) => (
+                {[t("來源表"), t("來源欄位"), t("參照本表欄位")].map((h) => (
                   <th key={h} className="text-left px-3 py-1.5 border-b border-fg/10 font-medium">{h}</th>
                 ))}
               </tr>
@@ -3498,7 +3517,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       )}
 
       {ddl !== null && (
-        <CellInspector column={`${tab.table} · 建表 SQL`} value={ddl} editable={false}
+        <CellInspector column={t("{table} · 建表 SQL", { table: tab.table })} value={ddl} editable={false}
           showFormat={false} onSave={() => {}} onClose={() => setDdl(null)} />
       )}
     </div>
@@ -3511,6 +3530,7 @@ function AddColumnForm({ kind, onSubmit, onCancel, busy }: {
   onCancel: () => void;
   busy: boolean;
 }) {
+  const t = useT();
   const [name, setName] = useState("");
   const [dataType, setDataType] = useState("");
   const [nullable, setNullable] = useState(true);
@@ -3519,32 +3539,32 @@ function AddColumnForm({ kind, onSubmit, onCancel, busy }: {
   // 常見型別下拉（依連線種類）；選後仍可於輸入框微調長度 / 精度（如 VARCHAR(50)）。
   const presets = (kind && TYPE_PRESETS[kind]) || [];
   const submit = () => {
-    if (!name.trim() || !dataType.trim()) { toast.error("請填欄位名稱與型別"); return; }
+    if (!name.trim() || !dataType.trim()) { toast.error(t("請填欄位名稱與型別")); return; }
     onSubmit({ op: "add_column", name: name.trim(), data_type: dataType.trim(), nullable, default: def.trim() || null });
   };
   return (
     <div className="flex flex-wrap items-end gap-2 px-3 py-2 bg-well border-b border-fg/10 text-xs">
-      <label className="block"><span className="text-fg/50 block mb-0.5">欄位名稱</span>
+      <label className="block"><span className="text-fg/50 block mb-0.5">{t("欄位名稱")}</span>
         <input className={ic} value={name} onChange={(e) => setName(e.target.value)} /></label>
-      <label className="block"><span className="text-fg/50 block mb-0.5">型別</span>
+      <label className="block"><span className="text-fg/50 block mb-0.5">{t("型別")}</span>
         <div className="flex items-center gap-1">
-          <select className={`${ic} cursor-pointer`} title="常見型別快捷"
+          <select className={`${ic} cursor-pointer`} title={t("常見型別快捷")}
             value={presets.includes(dataType) ? dataType : ""}
             onChange={(e) => { if (e.target.value) setDataType(e.target.value); }}>
-            <option value="">選擇…</option>
+            <option value="">{t("選擇…")}</option>
             {presets.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
           </select>
-          <input className={`${ic} w-40`} value={dataType} onChange={(e) => setDataType(e.target.value)} placeholder="如 VARCHAR(50) / INT" />
+          <input className={`${ic} w-40`} value={dataType} onChange={(e) => setDataType(e.target.value)} placeholder={t("如 VARCHAR(50) / INT")} />
         </div></label>
-      <label className="block"><span className="text-fg/50 block mb-0.5">預設值（選填）</span>
-        <input className={ic} value={def} onChange={(e) => setDef(e.target.value)} placeholder="如 0 / 'x' / CURRENT_TIMESTAMP" /></label>
+      <label className="block"><span className="text-fg/50 block mb-0.5">{t("預設值（選填）")}</span>
+        <input className={ic} value={def} onChange={(e) => setDef(e.target.value)} placeholder={t("如 0 / 'x' / CURRENT_TIMESTAMP")} /></label>
       <label className="flex items-center gap-1 pb-1.5 select-none">
-        <input type="checkbox" checked={nullable} onChange={(e) => setNullable(e.target.checked)} /> 可空
+        <input type="checkbox" checked={nullable} onChange={(e) => setNullable(e.target.checked)} /> {t("可空")}
       </label>
       <button type="button" onClick={submit} disabled={busy}
-        className="px-3 py-1.5 rounded bg-green-600 hover:bg-green-500 disabled:opacity-50">新增</button>
+        className="px-3 py-1.5 rounded bg-green-600 hover:bg-green-500 disabled:opacity-50">{t("新增")}</button>
       <button type="button" onClick={onCancel}
-        className="px-3 py-1.5 rounded border border-fg/15 hover:bg-fg/5">取消</button>
+        className="px-3 py-1.5 rounded border border-fg/15 hover:bg-fg/5">{t("取消")}</button>
     </div>
   );
 }
@@ -3559,6 +3579,7 @@ function AddForeignKeyForm({ table, columns, busy, onSubmit, onCancel }: {
   onSubmit: (name: string, column: string, refTable: string, refColumn: string, onDelete: string, onUpdate: string) => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   const [column, setColumn] = useState(columns[0] ?? "");
   const [refTable, setRefTable] = useState("");
   const [refColumn, setRefColumn] = useState("");
@@ -3570,22 +3591,22 @@ function AddForeignKeyForm({ table, columns, busy, onSubmit, onCancel }: {
   const valid = !!column && !!refTable.trim() && !!refColumn.trim();
   return (
     <div className="px-3 py-2 bg-inset border-b border-fg/10 flex flex-wrap items-center gap-2">
-      <select value={column} onChange={(e) => setColumn(e.target.value)} title="本表欄位" className={ic}>
+      <select value={column} onChange={(e) => setColumn(e.target.value)} title={t("本表欄位")} className={ic}>
         {columns.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       <span className="text-fg/40 text-xs">→</span>
-      <input value={refTable} onChange={(e) => setRefTable(e.target.value)} placeholder="參照表" className={`${ic} w-28`} />
-      <input value={refColumn} onChange={(e) => setRefColumn(e.target.value)} placeholder="參照欄位" className={`${ic} w-28`} />
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder={effName} title="約束名稱（留空自動產生）" className={`${ic} w-40`} />
+      <input value={refTable} onChange={(e) => setRefTable(e.target.value)} placeholder={t("參照表")} className={`${ic} w-28`} />
+      <input value={refColumn} onChange={(e) => setRefColumn(e.target.value)} placeholder={t("參照欄位")} className={`${ic} w-28`} />
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder={effName} title={t("約束名稱（留空自動產生）")} className={`${ic} w-40`} />
       <select value={onDelete} onChange={(e) => setOnDelete(e.target.value)} title="ON DELETE" className={ic}>
-        {FK_ACTIONS.map((a) => <option key={a} value={a}>{a ? `ON DELETE ${a}` : "ON DELETE（預設）"}</option>)}
+        {FK_ACTIONS.map((a) => <option key={a} value={a}>{a ? `ON DELETE ${a}` : t("ON DELETE（預設）")}</option>)}
       </select>
       <select value={onUpdate} onChange={(e) => setOnUpdate(e.target.value)} title="ON UPDATE" className={ic}>
-        {FK_ACTIONS.map((a) => <option key={a} value={a}>{a ? `ON UPDATE ${a}` : "ON UPDATE（預設）"}</option>)}
+        {FK_ACTIONS.map((a) => <option key={a} value={a}>{a ? `ON UPDATE ${a}` : t("ON UPDATE（預設）")}</option>)}
       </select>
       <button type="button" disabled={busy || !valid} onClick={() => onSubmit(effName, column, refTable, refColumn, onDelete, onUpdate)}
-        className="px-2 py-1 text-xs rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">建立</button>
-      <button type="button" onClick={onCancel} className="px-2 py-1 text-xs rounded border border-fg/15 hover:bg-fg/5">取消</button>
+        className="px-2 py-1 text-xs rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">{t("建立")}</button>
+      <button type="button" onClick={onCancel} className="px-2 py-1 text-xs rounded border border-fg/15 hover:bg-fg/5">{t("取消")}</button>
     </div>
   );
 }
@@ -3598,6 +3619,7 @@ function MongoAddIndexForm({ columns, busy, onSubmit, onCancel }: {
   onSubmit: (name: string, keys: [string, string][], options: MongoIndexOptions) => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   const [rows, setRows] = useState<{ field: string; spec: string }[]>([{ field: "", spec: "1" }]);
   const [name, setName] = useState("");
   const [unique, setUnique] = useState(false);
@@ -3613,10 +3635,10 @@ function MongoAddIndexForm({ columns, busy, onSubmit, onCancel }: {
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
 
   const submit = () => {
-    if (valid.length === 0) { toast.error("索引至少需一個欄位"); return; }
-    if (ttl.trim() && valid.length > 1) { toast.error("TTL 索引僅支援單一欄位（且需為日期欄位）"); return; }
+    if (valid.length === 0) { toast.error(t("索引至少需一個欄位")); return; }
+    if (ttl.trim() && valid.length > 1) { toast.error(t("TTL 索引僅支援單一欄位（且需為日期欄位）")); return; }
     if (partial.trim()) {
-      try { JSON.parse(partial); } catch { toast.error("partialFilterExpression 需為合法 JSON"); return; }
+      try { JSON.parse(partial); } catch { toast.error(t("partialFilterExpression 需為合法 JSON")); return; }
     }
     onSubmit(
       (name.trim() || autoName),
@@ -3634,12 +3656,12 @@ function MongoAddIndexForm({ columns, busy, onSubmit, onCancel }: {
       {rows.map((r, i) => (
         <div key={i} className="flex items-center gap-2">
           <input list="mongo-index-fields" value={r.field} onChange={(e) => setRow(i, { field: e.target.value })}
-            placeholder="欄位（可含 . 巢狀路徑）"
+            placeholder={t("欄位（可含 . 巢狀路徑）")}
             className="flex-1 h-7 rounded bg-inset border border-fg/10 px-2 outline-none focus:border-accent/60 mono" />
           <select value={r.spec} onChange={(e) => setRow(i, { spec: e.target.value })}
             className="h-7 bg-inset border border-fg/10 rounded px-1.5 outline-none cursor-pointer">
-            <option value="1">1（升冪）</option>
-            <option value="-1">-1（降冪）</option>
+            <option value="1">{t("1（升冪）")}</option>
+            <option value="-1">{t("-1（降冪）")}</option>
             <option value="text">text</option>
             <option value="2dsphere">2dsphere</option>
             <option value="hashed">hashed</option>
@@ -3654,31 +3676,31 @@ function MongoAddIndexForm({ columns, busy, onSubmit, onCancel }: {
         {columns.map((c) => <option key={c} value={c} />)}
       </datalist>
       <button type="button" onClick={() => setRows((rs) => [...rs, { field: "", spec: "1" }])}
-        className="inline-flex items-center gap-1 text-fg/50 hover:text-fg/80"><Icon icon={Plus} size={13} />加欄位</button>
+        className="inline-flex items-center gap-1 text-fg/50 hover:text-fg/80"><Icon icon={Plus} size={13} />{t("加欄位")}</button>
       <div className="flex flex-wrap items-center gap-3">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder={autoName || "索引名稱（留空自動）"}
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder={autoName || t("索引名稱（留空自動）")}
           className="w-56 h-7 rounded bg-inset border border-fg/10 px-2 outline-none focus:border-accent/60 mono" />
         <label className="flex items-center gap-1 cursor-pointer select-none">
-          <input type="checkbox" checked={unique} onChange={(e) => setUnique(e.target.checked)} />唯一（unique）
+          <input type="checkbox" checked={unique} onChange={(e) => setUnique(e.target.checked)} />{t("唯一（unique）")}
         </label>
-        <label className="flex items-center gap-1 cursor-pointer select-none" title="缺此欄位的文件不納入索引">
-          <input type="checkbox" checked={sparse} onChange={(e) => setSparse(e.target.checked)} />稀疏（sparse）
+        <label className="flex items-center gap-1 cursor-pointer select-none" title={t("缺此欄位的文件不納入索引")}>
+          <input type="checkbox" checked={sparse} onChange={(e) => setSparse(e.target.checked)} />{t("稀疏（sparse）")}
         </label>
-        <label className="flex items-center gap-1 cursor-pointer select-none" title="查詢計畫不使用、仍持續維護（4.4+）">
-          <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} />隱藏（hidden）
+        <label className="flex items-center gap-1 cursor-pointer select-none" title={t("查詢計畫不使用、仍持續維護（4.4+）")}>
+          <input type="checkbox" checked={hidden} onChange={(e) => setHidden(e.target.checked)} />{t("隱藏（hidden）")}
         </label>
-        <label className="flex items-center gap-1" title="到期自動刪除文件；僅單一日期欄位索引有效">
-          TTL 秒數
+        <label className="flex items-center gap-1" title={t("到期自動刪除文件；僅單一日期欄位索引有效")}>
+          {t("TTL 秒數")}
           <input type="number" value={ttl} onChange={(e) => setTtl(e.target.value)} placeholder="—"
             className="w-24 h-7 rounded bg-inset border border-fg/10 px-2 outline-none focus:border-accent/60" />
         </label>
       </div>
       <input value={partial} onChange={(e) => setPartial(e.target.value)}
-        placeholder='部分索引條件 partialFilterExpression（選填 JSON，如 {"status":{"$eq":"active"}}）'
+        placeholder={t("部分索引條件 partialFilterExpression（選填 JSON，如 {\"status\":{\"$eq\":\"active\"}}）")}
         className="w-full h-7 rounded bg-inset border border-fg/10 px-2 outline-none focus:border-accent/60 mono" />
       <div className="flex gap-2">
-        <Button variant="primary" size="sm" loading={busy} onClick={submit}>建立索引</Button>
-        <Button variant="secondary" size="sm" disabled={busy} onClick={onCancel}>取消</Button>
+        <Button variant="primary" size="sm" loading={busy} onClick={submit}>{t("建立索引")}</Button>
+        <Button variant="secondary" size="sm" disabled={busy} onClick={onCancel}>{t("取消")}</Button>
       </div>
     </div>
   );
@@ -3691,6 +3713,7 @@ function AddIndexForm({ columns, busy, allowFulltext, onSubmit, onCancel }: {
   onSubmit: (name: string, columns: string[], type: "normal" | "unique" | "fulltext") => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   const [name, setName] = useState("");
   const [sel, setSel] = useState<string[]>([]);
   const [type, setType] = useState<"normal" | "unique" | "fulltext">("normal");
@@ -3699,17 +3722,17 @@ function AddIndexForm({ columns, busy, allowFulltext, onSubmit, onCancel }: {
   return (
     <div className="px-3 py-2 bg-well border-b border-fg/10 text-xs space-y-2">
       <div className="flex flex-wrap items-end gap-2">
-        <label className="block"><span className="text-fg/50 block mb-0.5">索引名稱</span>
-          <input className={ic} value={name} onChange={(e) => setName(e.target.value)} placeholder="如 idx_email" /></label>
-        <label className="block"><span className="text-fg/50 block mb-0.5">類型</span>
-          <select className={ic} value={type} onChange={(e) => setType(e.target.value as typeof type)} title="索引類型">
-            <option value="normal">普通</option>
-            <option value="unique">唯一</option>
-            {allowFulltext && <option value="fulltext">全文 (FULLTEXT)</option>}
+        <label className="block"><span className="text-fg/50 block mb-0.5">{t("索引名稱")}</span>
+          <input className={ic} value={name} onChange={(e) => setName(e.target.value)} placeholder={t("如 idx_email")} /></label>
+        <label className="block"><span className="text-fg/50 block mb-0.5">{t("類型")}</span>
+          <select className={ic} value={type} onChange={(e) => setType(e.target.value as typeof type)} title={t("索引類型")}>
+            <option value="normal">{t("普通")}</option>
+            <option value="unique">{t("唯一")}</option>
+            {allowFulltext && <option value="fulltext">{t("全文 (FULLTEXT)")}</option>}
           </select></label>
       </div>
       <div>
-        <span className="text-fg/50 block mb-1">欄位（可多選，依點選順序組複合索引）</span>
+        <span className="text-fg/50 block mb-1">{t("欄位（可多選，依點選順序組複合索引）")}</span>
         <div className="flex flex-wrap gap-1.5">
           {columns.map((c) => {
             const i = sel.indexOf(c);
@@ -3724,9 +3747,9 @@ function AddIndexForm({ columns, busy, allowFulltext, onSubmit, onCancel }: {
       </div>
       <div className="flex gap-2">
         <button type="button" onClick={() => onSubmit(name, sel, type)} disabled={busy}
-          className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 disabled:opacity-50">建立</button>
+          className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 disabled:opacity-50">{t("建立")}</button>
         <button type="button" onClick={onCancel}
-          className="px-3 py-1 rounded border border-fg/15 hover:bg-fg/5">取消</button>
+          className="px-3 py-1 rounded border border-fg/15 hover:bg-fg/5">{t("取消")}</button>
       </div>
     </div>
   );

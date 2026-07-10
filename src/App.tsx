@@ -183,6 +183,7 @@ function Splitter({ axis, onPointerDown }: { axis: "x" | "y"; onPointerDown: (e:
 }
 
 export default function App() {
+  const t = useT();
   // null = 關閉；{ initial } = 開啟（initial 為 null 表新增、為連線表示編輯）
   const [dialog, setDialog] = useState<{ initial: ConnectionConfig | null } | null>(null);
   const [backupOpen, setBackupOpen] = useState(false);
@@ -308,34 +309,34 @@ export default function App() {
   // 加密匯出所有連線（**含**密碼 / SSH 機密 / OTP，從 keychain 取出，用 passphrase 派生金鑰 AES-256-GCM 加密）。
   const exportConnections = async () => {
     const conns = useStore.getState().connections;
-    if (conns.length === 0) { toast.info("沒有可匯出的連線"); return; }
-    const passphrase = await uiPrompt("設定匯出檔的加密密碼（passphrase）", {
-      title: "加密匯出連線", placeholder: "至少 8 碼，匯入時需輸入相同密碼", confirmText: "匯出",
+    if (conns.length === 0) { toast.info(t("沒有可匯出的連線")); return; }
+    const passphrase = await uiPrompt(t("設定匯出檔的加密密碼（passphrase）"), {
+      title: t("加密匯出連線"), placeholder: t("至少 8 碼，匯入時需輸入相同密碼"), confirmText: t("匯出"),
     });
     if (!passphrase) return;
-    if (passphrase.length < 8) { toast.error("passphrase 至少 8 碼"); return; }
-    const path = await pickSaveFile("db-kit-connections.dbkitenc", [{ name: "db-kit 加密連線", extensions: ["dbkitenc"] }]);
+    if (passphrase.length < 8) { toast.error(t("passphrase 至少 8 碼")); return; }
+    const path = await pickSaveFile("db-kit-connections.dbkitenc", [{ name: t("db-kit 加密連線"), extensions: ["dbkitenc"] }]);
     if (!path) return;
     try {
       const n = await api.exportConnectionsEncrypted(path, passphrase);
-      toast.success(`已加密匯出 ${n} 個連線（含密碼）`);
+      toast.success(t("已加密匯出 {n} 個連線（含密碼）", { n }));
     } catch (e: any) {
-      toast.error(e?.message ?? "匯出失敗");
+      toast.error(e?.message ?? t("匯出失敗"));
     }
   };
   // 從加密檔匯入連線：輸入 passphrase 解密，機密寫回 keychain、設定 upsert，再重載連線清單。
   const importConnections = async () => {
-    const path = await pickOpenFile([{ name: "db-kit 加密連線", extensions: ["dbkitenc"] }]);
+    const path = await pickOpenFile([{ name: t("db-kit 加密連線"), extensions: ["dbkitenc"] }]);
     if (!path) return;
-    const passphrase = await uiPrompt("輸入匯入檔的加密密碼（passphrase）", { title: "解密匯入連線", confirmText: "匯入" });
+    const passphrase = await uiPrompt(t("輸入匯入檔的加密密碼（passphrase）"), { title: t("解密匯入連線"), confirmText: t("匯入") });
     if (!passphrase) return;
     try {
       const n = await api.importConnectionsEncrypted(path, passphrase);
       const saved = await api.listSavedConnections();
       useStore.getState().setConnections(saved.map((c) => ({ ...c, password: c.password ?? "" } as ConnectionConfig)));
-      toast.success(n > 0 ? `已匯入 ${n} 個連線（含密碼）` : "檔案內沒有連線");
+      toast.success(n > 0 ? t("已匯入 {n} 個連線（含密碼）", { n }) : t("檔案內沒有連線"));
     } catch (e: any) {
-      toast.error(`匯入失敗：${e?.message ?? "passphrase 錯誤或檔案損毀"}`);
+      toast.error(`匯入失敗：${e?.message ?? t("passphrase 錯誤或檔案損毀")}`);
     }
   };
 
@@ -389,9 +390,9 @@ export default function App() {
           onSaved={async (c) => {
             try {
               await api.saveConnection(c);
-              toast.success(dialog.initial ? "連線已更新" : "連線已儲存");
+              toast.success(dialog.initial ? t("連線已更新") : t("連線已儲存"));
             } catch (e: any) {
-              toast.error(e?.message ?? "儲存連線失敗");
+              toast.error(e?.message ?? t("儲存連線失敗"));
             }
             useStore.getState().addConnection(c);
             useStore.getState().setActive(c.id);
@@ -427,6 +428,7 @@ export default function App() {
   );
 
   function StatusBar() {
+  const t = useT();
     const active = connections.find((c) => c.id === activeId);
     const isConnected = !!active && connectedIds.has(active.id);
     return (
@@ -435,7 +437,7 @@ export default function App() {
         {active && (
           <span
             className="flex items-center gap-1.5 min-w-0"
-            title={`${KIND_META[active.kind].label} · ${active.host}:${active.port}${isConnected ? " · 已連線" : " · 未連線"}`}
+            title={`${KIND_META[active.kind].label} · ${active.host}:${active.port}${isConnected ? t(" · 已連線") : t(" · 未連線")}`}
           >
             <span
               className="w-2 h-2 rounded-full shrink-0"
@@ -446,7 +448,7 @@ export default function App() {
             />
             <span className="truncate">
               {KIND_META[active.kind].label} · {active.host}:{active.port}
-              {isConnected ? " · 已連線" : " · 未連線"}
+              {isConnected ? t(" · 已連線") : t(" · 未連線")}
             </span>
           </span>
         )}
@@ -478,6 +480,7 @@ function SplashScreen({ leaving, onDone, onSkip }: { leaving: boolean; onDone: (
 
 // 啟動密碼鎖定畫面：全螢幕不透明覆蓋（疊在開場動畫之上），驗證通過才 onUnlock 進入主介面。
 function LockScreen({ onUnlock }: { onUnlock: () => void }) {
+  const t = useT();
   const [pw, setPw] = useState("");
   const [err, setErr] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -501,8 +504,8 @@ function LockScreen({ onUnlock }: { onUnlock: () => void }) {
       <div className="w-[320px] max-w-[88vw] flex flex-col items-center gap-6">
         <img src={logoMark} alt="DB Kit" className="w-16 h-16 rounded-2xl shadow-e4" draggable={false} />
         <div className="text-center space-y-1">
-          <div className="text-base font-semibold text-fg/90">DB Kit 已鎖定</div>
-          <div className="text-xs text-fg/50">輸入啟動密碼以繼續</div>
+          <div className="text-base font-semibold text-fg/90">{t("DB Kit 已鎖定")}</div>
+          <div className="text-xs text-fg/50">{t("輸入啟動密碼以繼續")}</div>
         </div>
         <div className="w-full space-y-2.5">
           <Input
@@ -511,14 +514,14 @@ function LockScreen({ onUnlock }: { onUnlock: () => void }) {
             autoFocus
             value={pw}
             invalid={err}
-            placeholder="啟動密碼"
-            aria-label="啟動密碼"
+            placeholder={t("啟動密碼")}
+            aria-label={t("啟動密碼")}
             onChange={(e) => { setPw(e.target.value); setErr(false); }}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
           />
-          {err && <div className="text-[11px] text-danger text-center">密碼不正確，請再試一次</div>}
+          {err && <div className="text-[11px] text-danger text-center">{t("密碼不正確，請再試一次")}</div>}
           <Button variant="primary" full icon={Lock} loading={busy} disabled={!pw} onClick={submit}>
-            解鎖
+            {t("解鎖")}
           </Button>
         </div>
         {/* 忘記密碼的自救指引：解法只寫在 CHANGELOG 對被鎖在外面的人毫無幫助（死路型 UX）。 */}
@@ -526,19 +529,19 @@ function LockScreen({ onUnlock }: { onUnlock: () => void }) {
           {!showForgot ? (
             <button type="button" onClick={() => setShowForgot(true)}
               className="text-[11px] text-fg/35 hover:text-fg/60 underline decoration-dotted">
-              忘記密碼？
+              {t("忘記密碼？")}
             </button>
           ) : (
             <div className="text-[11px] text-fg/50 leading-relaxed max-w-[300px] text-left space-y-1.5">
               <p>
                 啟動密碼只是開啟 App 的閘門。刪除設定目錄中的
                 <span className="mono"> app_settings.json </span>即可解除，
-                <span className="text-fg/70">不影響已儲存的連線</span>（連線機密存於系統 keychain）。
+                <span className="text-fg/70">{t("不影響已儲存的連線")}</span>（連線機密存於系統 keychain）。
               </p>
               <p className="mono break-all text-fg/40">%APPDATA%\dev.dbkit.app\app_settings.json</p>
               <button type="button"
-                onClick={() => copyToClipboard("%APPDATA%\\dev.dbkit.app\\app_settings.json", "已複製路徑")}
-                className="underline decoration-dotted hover:text-fg/70">複製路徑</button>
+                onClick={() => copyToClipboard("%APPDATA%\\dev.dbkit.app\\app_settings.json", t("已複製路徑"))}
+                className="underline decoration-dotted hover:text-fg/70">{t("複製路徑")}</button>
             </div>
           )}
         </div>
@@ -600,15 +603,15 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
 
   const save = async () => {
     if (busy) return;
-    if (next.length < 4) { toast.error("密碼至少 4 碼"); return; }
-    if (next !== confirm) { toast.error("兩次輸入的密碼不一致"); return; }
+    if (next.length < 4) { toast.error(t("密碼至少 4 碼")); return; }
+    if (next !== confirm) { toast.error(t("兩次輸入的密碼不一致")); return; }
     setBusy(true);
     try {
       await api.setStartupPassword(hasPw ? current : null, next);
-      toast.success(hasPw ? "已更新啟動密碼" : "已啟用啟動密碼");
+      toast.success(hasPw ? t("已更新啟動密碼") : t("已啟用啟動密碼"));
       onClose();
     } catch (e: any) {
-      toast.error(e?.message ?? "設定失敗");
+      toast.error(e?.message ?? t("設定失敗"));
     } finally {
       setBusy(false);
     }
@@ -616,17 +619,17 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
 
   const remove = async () => {
     if (busy || !current) return;
-    const ok = await uiConfirm("移除後，下次開啟 DB Kit 將不再需要輸入密碼。確定移除啟動密碼？", {
-      title: "移除啟動密碼", danger: true, confirmText: "移除",
+    const ok = await uiConfirm(t("移除後，下次開啟 DB Kit 將不再需要輸入密碼。確定移除啟動密碼？"), {
+      title: t("移除啟動密碼"), danger: true, confirmText: t("移除"),
     });
     if (!ok) return;
     setBusy(true);
     try {
       await api.clearStartupPassword(current);
-      toast.success("已移除啟動密碼");
+      toast.success(t("已移除啟動密碼"));
       onClose();
     } catch (e: any) {
-      toast.error(e?.message ?? "移除失敗");
+      toast.error(e?.message ?? t("移除失敗"));
     } finally {
       setBusy(false);
     }
@@ -701,76 +704,76 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
               <span style={{ color: previewDef.colors.keyword }}>AND</span> id{" "}
               <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
               <span style={{ color: previewDef.colors.number }}>1</span>;{" "}
-              <span style={{ color: previewDef.colors.comment }}>-- 註解</span>
+              <span style={{ color: previewDef.colors.comment }}>{t("-- 註解")}</span>
             </div>
           )}
         </div>
         <div className="pt-4 border-t border-fg/10">
           <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Lock} size={15} /> 啟動密碼
+            <Icon icon={Lock} size={15} /> {t("啟動密碼")}
             {hasPw === true && (
               <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-emerald-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> 已啟用
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> {t("已啟用")}
               </span>
             )}
             {hasPw === false && (
               <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-fg/40">
-                <span className="w-1.5 h-1.5 rounded-full bg-fg/30" /> 未啟用
+                <span className="w-1.5 h-1.5 rounded-full bg-fg/30" /> {t("未啟用")}
               </span>
             )}
           </div>
           <p className="text-xs text-fg/50 mt-1.5 leading-relaxed">
             啟用後，每次開啟 DB Kit 需先輸入此密碼才能進入。此密碼僅作為開啟 App 的閘門，
-            <span className="text-fg/70">不會加密你的連線資料</span>（連線機密仍存於作業系統 keychain，
+            <span className="text-fg/70">{t("不會加密你的連線資料")}</span>（連線機密仍存於作業系統 keychain，
             <span className="mono"> dbk </span>CLI 不受影響）。
           </p>
         </div>
         {hasPw ? (
-          <Field label="目前密碼">
-            <Input type="password" inputSize="md" value={current} placeholder="輸入目前的啟動密碼"
+          <Field label={t("目前密碼")}>
+            <Input type="password" inputSize="md" value={current} placeholder={t("輸入目前的啟動密碼")}
               onChange={(e) => setCurrent(e.target.value)} />
           </Field>
         ) : null}
-        <Field label={hasPw ? "新密碼" : "設定密碼"} hint="至少 4 碼">
-          <Input type="password" inputSize="md" value={next} placeholder="輸入密碼"
+        <Field label={hasPw ? t("新密碼") : t("設定密碼")} hint={t("至少 4 碼")}>
+          <Input type="password" inputSize="md" value={next} placeholder={t("輸入密碼")}
             onChange={(e) => setNext(e.target.value)} />
         </Field>
-        <Field label="確認密碼">
-          <Input type="password" inputSize="md" value={confirm} placeholder="再次輸入密碼"
+        <Field label={t("確認密碼")}>
+          <Input type="password" inputSize="md" value={confirm} placeholder={t("再次輸入密碼")}
             onChange={(e) => setConfirm(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") save(); }} />
         </Field>
         {hasPw ? (
           <div className="pt-3 border-t border-fg/10 flex items-center gap-2">
-            <Button variant="danger" disabled={busy || !current} onClick={remove}>移除啟動密碼</Button>
-            {!current && <span className="text-[11px] text-fg/40">需先輸入目前密碼</span>}
+            <Button variant="danger" disabled={busy || !current} onClick={remove}>{t("移除啟動密碼")}</Button>
+            {!current && <span className="text-[11px] text-fg/40">{t("需先輸入目前密碼")}</span>}
           </div>
         ) : null}
         <div className="pt-4 border-t border-fg/10 space-y-3">
           <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Zap} size={15} /> 查詢防護
+            <Icon icon={Zap} size={15} /> {t("查詢防護")}
           </div>
           <p className="text-xs text-fg/50 leading-relaxed">
             防止誤跑 <span className="mono">SELECT *</span> 大表把記憶體塞爆：查詢結果超過上限即截斷並顯示提示
             （取完整結果請改用匯出）。變更立即生效。
           </p>
-          <Field label="結果列數上限">
+          <Field label={t("結果列數上限")}>
             <Select selectSize="md" value={String(guard.maxRows)}
               onChange={(e) => updateGuard({ maxRows: Number(e.target.value) })}>
-              <option value="100">100 列</option>
-              <option value="1000">1,000 列（預設）</option>
-              <option value="10000">10,000 列</option>
-              <option value="100000">100,000 列</option>
-              <option value="0">不限（不建議）</option>
+              <option value="100">{t("100 列")}</option>
+              <option value="1000">{t("1,000 列（預設）")}</option>
+              <option value="10000">{t("10,000 列")}</option>
+              <option value="100000">{t("100,000 列")}</option>
+              <option value="0">{t("不限（不建議）")}</option>
             </Select>
           </Field>
-          <Field label="查詢逾時" hint="逾時後伺服器端查詢可能仍在執行，可從行程清單手動終止；MSSQL 僅支援本端逾時">
+          <Field label={t("查詢逾時")} hint={t("逾時後伺服器端查詢可能仍在執行，可從行程清單手動終止；MSSQL 僅支援本端逾時")}>
             <Select selectSize="md" value={String(guard.timeoutMs)}
               onChange={(e) => updateGuard({ timeoutMs: Number(e.target.value) })}>
-              <option value="0">關閉（預設）</option>
-              <option value="30000">30 秒</option>
-              <option value="60000">60 秒</option>
-              <option value="300000">5 分鐘</option>
+              <option value="0">{t("關閉（預設）")}</option>
+              <option value="30000">{t("30 秒")}</option>
+              <option value="60000">{t("60 秒")}</option>
+              <option value="300000">{t("5 分鐘")}</option>
             </Select>
           </Field>
         </div>
@@ -778,11 +781,10 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
           <label className="flex items-center gap-2 text-sm text-fg/80 cursor-pointer select-none">
             <input type="checkbox" checked={autoUpdate}
               onChange={(e) => { setAutoUpdate(e.target.checked); setAutoCheckEnabled(e.target.checked); }} />
-            啟動時自動檢查更新
+            {t("啟動時自動檢查更新")}
           </label>
           <p className="text-xs text-fg/50 leading-relaxed">
-            每天最多向 GitHub 查一次最新版本（延後於啟動 10 秒後進行）；離線 / 內網環境可關閉。
-            「關於」對話框的手動檢查不受影響。
+            {t("每天最多向 GitHub 查一次最新版本（延後於啟動 10 秒後進行）；離線 / 內網環境可關閉。\r\n            「關於」對話框的手動檢查不受影響。")}
           </p>
         </div>
       </div>
@@ -792,6 +794,7 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
 
 // 連線池即時狀態徽章（每 4 秒輪詢 `pool_status`，呼應規劃 3.5 的連線生命週期監控）。
 function PoolStatusBadge({ connId }: { connId: string }) {
+  const t = useT();
   const [pool, setPool] = useState<PoolStatus | null>(null);
   const [pinging, setPinging] = useState(false);
   useEffect(() => {
@@ -811,8 +814,8 @@ function PoolStatusBadge({ connId }: { connId: string }) {
     setPinging(true);
     api
       .pingConnection(connId)
-      .then((ms) => toast.success(`連線正常 · 延遲 ${ms} ms`))
-      .catch((e) => toast.error(`連線檢測失敗：${String(e)}`))
+      .then((ms) => toast.success(t("連線正常 · 延遲 {ms} ms", { ms })))
+      .catch((e) => toast.error(t("連線檢測失敗：{e}", { e: String(e) })))
       .finally(() => setPinging(false));
   };
   if (!pool) return null;
@@ -821,13 +824,13 @@ function PoolStatusBadge({ connId }: { connId: string }) {
       type="button"
       onClick={ping}
       disabled={pinging}
-      title="點擊 Ping：檢測連線是否仍有效並量測往返延遲（含 SSH 通道）"
+      title={t("點擊 Ping：檢測連線是否仍有效並量測往返延遲（含 SSH 通道）")}
       className="ml-auto tabular-nums hover:text-fg/90 disabled:opacity-50 cursor-pointer"
     >
       {pinging ? (
-        <span className="inline-flex items-center gap-1"><Icon icon={Loader2} size={12} className="animate-spin" />檢測中…</span>
+        <span className="inline-flex items-center gap-1"><Icon icon={Loader2} size={12} className="animate-spin" />{t("檢測中…")}</span>
       ) : pool.size > 0 ? (
-        <span className="inline-flex items-center gap-1"><Icon icon={Zap} size={12} />池 {pool.in_use}/{pool.size}{pool.idle ? ` · 閒置 ${pool.idle}` : ""}</span>
+        <span className="inline-flex items-center gap-1"><Icon icon={Zap} size={12} />{t("池")} {pool.in_use}/{pool.size}{pool.idle ? t(" · 閒置 {idle}", { idle: pool.idle }) : ""}</span>
       ) : (
         /* Mongo / Redis 未公開連線池統計（size=0），顯示 Ping 而非誤導的「池 0/0」 */
         <span className="inline-flex items-center gap-1"><Icon icon={Zap} size={12} />Ping</span>
@@ -1007,59 +1010,60 @@ function LanguageMenu({ compact = false }: { compact?: boolean }) {
 
 // ---- 快捷鍵說明（F1 開啟）----
 function ShortcutsHelp({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const groups: [string, [string, string][]][] = [
-    ["全域", [
-      ["Ctrl+K", "命令面板：跳到連線 / 資料庫 / 資料表，或執行動作"],
-      ["Ctrl+Shift+G", "進階物件搜尋（名稱 / 定義 / 註解 / 萬用字元 / 整字）"],
+    [t("全域"), [
+      ["Ctrl+K", t("命令面板：跳到連線 / 資料庫 / 資料表，或執行動作")],
+      ["Ctrl+Shift+G", t("進階物件搜尋（名稱 / 定義 / 註解 / 萬用字元 / 整字）")],
     ]],
-    ["查詢編輯器", [
-      ["F6", "執行整段查詢"],
-      ["Ctrl+Enter", "執行游標所在語句或選取段"],
-      ["Ctrl+N", "開新查詢分頁（依選取的連線 / 資料庫 / 資料表帶入範圍）"],
-      ["Ctrl+Shift+N", "新增連線"],
-      ["Ctrl+Space", "自動完成（表名 / 欄名 / 關鍵字）"],
-      ["Tab", "縮排"],
-      ["Ctrl+/", "切換 SQL 行註解"],
-      ["Ctrl+Shift+F", "格式化 SQL"],
-      ["Ctrl+S / Ctrl+O", "另存 / 開啟 .sql 檔"],
-      ["工具列下拉", "切換目前連線 / 資料庫；「視覺化解釋」看執行計畫"],
+    [t("查詢編輯器"), [
+      ["F6", t("執行整段查詢")],
+      ["Ctrl+Enter", t("執行游標所在語句或選取段")],
+      ["Ctrl+N", t("開新查詢分頁（依選取的連線 / 資料庫 / 資料表帶入範圍）")],
+      ["Ctrl+Shift+N", t("新增連線")],
+      ["Ctrl+Space", t("自動完成（表名 / 欄名 / 關鍵字）")],
+      ["Tab", t("縮排")],
+      ["Ctrl+/", t("切換 SQL 行註解")],
+      ["Ctrl+Shift+F", t("格式化 SQL")],
+      ["Ctrl+S / Ctrl+O", t("另存 / 開啟 .sql 檔")],
+      [t("工具列下拉"), t("切換目前連線 / 資料庫；「視覺化解釋」看執行計畫")],
     ]],
-    ["資料表格", [
-      ["方向鍵 / Tab", "移動選取儲存格（Tab 於列尾換行）"],
-      ["Home / End", "本列首 / 末欄（Ctrl+ 跳整表角落）"],
-      ["PageUp / PageDown", "上 / 下移約 20 列"],
-      ["Enter / F2", "編輯選取格（Enter 送出後下移）"],
-      ["直接打字", "覆寫式編輯該格"],
-      ["Delete", "將選取格設為 NULL"],
-      ["Shift+點選 / Shift+方向鍵", "框選矩形範圍（Ctrl+C 複製整塊、Delete 整塊設 NULL）"],
-      ["Ctrl+A", "框選整頁所有儲存格"],
-      ["Shift+點列號", "選取整列（狀態列顯示格數 / 加總 / 平均）"],
-      ["Ctrl+C / Ctrl+V", "複製 / 貼上（區塊 TSV；單值貼到框選範圍＝整塊填入）"],
-      ["Ctrl+S", "套用待套用的儲存格編輯"],
-      ["F5", "重新整理目前頁"],
-      ["雙擊儲存格", "編輯；雙擊欄分隔線自動符合寬度"],
-      ["點欄標題 / Shift+點", "排序 / 多欄排序"],
-      ["右鍵", "複製 / 篩選 / 設 NULL / 還原此格 / 刪除"],
+    [t("資料表格"), [
+      [t("方向鍵 / Tab"), t("移動選取儲存格（Tab 於列尾換行）")],
+      ["Home / End", t("本列首 / 末欄（Ctrl+ 跳整表角落）")],
+      ["PageUp / PageDown", t("上 / 下移約 20 列")],
+      ["Enter / F2", t("編輯選取格（Enter 送出後下移）")],
+      [t("直接打字"), t("覆寫式編輯該格")],
+      ["Delete", t("將選取格設為 NULL")],
+      [t("Shift+點選 / Shift+方向鍵"), t("框選矩形範圍（Ctrl+C 複製整塊、Delete 整塊設 NULL）")],
+      ["Ctrl+A", t("框選整頁所有儲存格")],
+      [t("Shift+點列號"), t("選取整列（狀態列顯示格數 / 加總 / 平均）")],
+      ["Ctrl+C / Ctrl+V", t("複製 / 貼上（區塊 TSV；單值貼到框選範圍＝整塊填入）")],
+      ["Ctrl+S", t("套用待套用的儲存格編輯")],
+      ["F5", t("重新整理目前頁")],
+      [t("雙擊儲存格"), t("編輯；雙擊欄分隔線自動符合寬度")],
+      [t("點欄標題 / Shift+點"), t("排序 / 多欄排序")],
+      [t("右鍵"), t("複製 / 篩選 / 設 NULL / 還原此格 / 刪除")],
     ]],
-    ["查詢結果表格", [
-      ["方向鍵 / Tab", "移動選取（Tab 於列尾換行）"],
-      ["Home / End", "本列首 / 末欄（Ctrl+ 跳整頁角落）"],
-      ["Shift+點選 / Shift+方向鍵", "框選矩形範圍"],
-      ["Ctrl+A / Shift+點列號", "框選整頁 / 選取整列"],
-      ["Ctrl+C", "複製選取格或整塊 (TSV)；工具列顯示範圍統計"],
-      ["雙擊 / 右鍵", "檢視內容 / 整列；複製值 / 標題 / 列 / 欄 / 範圍"],
+    [t("查詢結果表格"), [
+      [t("方向鍵 / Tab"), t("移動選取（Tab 於列尾換行）")],
+      ["Home / End", t("本列首 / 末欄（Ctrl+ 跳整頁角落）")],
+      [t("Shift+點選 / Shift+方向鍵"), t("框選矩形範圍")],
+      [t("Ctrl+A / Shift+點列號"), t("框選整頁 / 選取整列")],
+      ["Ctrl+C", t("複製選取格或整塊 (TSV)；工具列顯示範圍統計")],
+      [t("雙擊 / 右鍵"), t("檢視內容 / 整列；複製值 / 標題 / 列 / 欄 / 範圍")],
     ]],
-    ["分頁與導覽", [
-      ["Ctrl+Tab / Ctrl+Shift+Tab", "切換下一 / 上一個分頁"],
-      ["Ctrl+1…9", "跳到第 N 個分頁（9＝最後）"],
-      ["Ctrl+W / 中鍵點分頁", "關閉作用中分頁"],
-      ["Ctrl+F 或 /", "聚焦左側搜尋框"],
-      ["Esc", "關閉對話框 / 選單 / 取消選取"],
-      ["F1", "顯示 / 隱藏本說明"],
+    [t("分頁與導覽"), [
+      ["Ctrl+Tab / Ctrl+Shift+Tab", t("切換下一 / 上一個分頁")],
+      ["Ctrl+1…9", t("跳到第 N 個分頁（9＝最後）")],
+      [t("Ctrl+W / 中鍵點分頁"), t("關閉作用中分頁")],
+      [t("Ctrl+F 或 /"), t("聚焦左側搜尋框")],
+      ["Esc", t("關閉對話框 / 選單 / 取消選取")],
+      ["F1", t("顯示 / 隱藏本說明")],
     ]],
   ];
   return (
-    <Modal open onClose={onClose} title="鍵盤快捷鍵" icon={Keyboard} size="md">
+    <Modal open onClose={onClose} title={t("鍵盤快捷鍵")} icon={Keyboard} size="md">
       <div className="space-y-4">
         {groups.map(([title, rows]) => (
           <div key={title}>
@@ -1358,12 +1362,12 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       setDatabases((d) => ({ ...d, [id]: dbs }));
     } catch (e: any) {
       // 連線失敗改用對話框（取代 6 秒 toast）：訊息可讀完、可全選複製，附友善提示與重試。
-      const raw = e?.message ?? "連線失敗";
+      const raw = e?.message ?? t("連線失敗");
       const hint = friendlyDbError(cfg.kind, raw);
       setBusy(id, false); // 先解除 connecting 狀態，避免重試被防重入擋下
       const retry = await uiConfirm(hint ? `${hint}\n\n${raw}` : raw, {
-        title: `連線失敗：${cfg.name}`,
-        confirmText: "重試",
+        title: t("連線失敗：{name}", { name: cfg.name }),
+        confirmText: t("重試"),
       });
       if (retry) void doConnect(id);
       return;
@@ -1444,17 +1448,17 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       await api.clearCache(id).catch(() => {}); // 外部 gateway：清快取以強制重抓（其餘驅動 no-op）
       const dbs = await api.listDatabases(id);
       setDatabases((d) => ({ ...d, [id]: dbs }));
-      toast.success("已重新整理");
+      toast.success(t("已重新整理"));
     } catch (e: any) {
-      toast.error(e?.message ?? "重新整理失敗");
+      toast.error(e?.message ?? t("重新整理失敗"));
     }
   };
 
   const deleteConn = async (id: string, name: string) => {
-    const ok = await uiConfirm(`刪除連線「${name}」？此動作會一併移除已儲存的密碼。`, {
-      title: "刪除連線",
+    const ok = await uiConfirm(t("刪除連線「{name}」？此動作會一併移除已儲存的密碼。", { name }), {
+      title: t("刪除連線"),
       danger: true,
-      confirmText: "刪除",
+      confirmText: t("刪除"),
     });
     if (!ok) return;
     try {
@@ -1465,7 +1469,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     useStore.getState().markDisconnected(id);
     useStore.getState().removeConnection(id);
     setPins((list) => { const next = removePinsForConn(list, id); persistPins(next); return next; });
-    toast.success("連線已刪除");
+    toast.success(t("連線已刪除"));
   };
 
   const setDbLoading = (key: string, on: boolean) =>
@@ -1508,7 +1512,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       const objs = await fetchDbObjects(connId, cfg.kind, db);
       setExpandedDbs((e) => ({ ...e, [key]: objs }));
     } catch (e: any) {
-      toast.error(e?.message ?? "讀取表失敗");
+      toast.error(e?.message ?? t("讀取表失敗"));
     } finally {
       setDbLoading(key, false);
     }
@@ -1525,7 +1529,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       const objs = await fetchDbObjects(connId, cfg.kind, db);
       setExpandedDbs((e) => ({ ...e, [key]: objs }));
     } catch (e: any) {
-      toast.error(e?.message ?? "讀取表失敗");
+      toast.error(e?.message ?? t("讀取表失敗"));
     } finally {
       setDbLoading(key, false);
     }
@@ -1583,7 +1587,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     } catch (e: any) {
       // 與同檔 toggleDb 的錯誤處理一致：DDL 已成功，僅清單刷新失敗時告知使用者手動重整。
       console.warn("refreshTables failed", e);
-      toast.error("清單刷新失敗，請手動重新整理該資料庫");
+      toast.error(t("清單刷新失敗，請手動重新整理該資料庫"));
     } finally {
       setDbLoading(key, false);
     }
@@ -1591,17 +1595,17 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
 
   // Redis：清空指定 DB（FLUSHDB）。沿用既有 query 通道（DB 前綴語法、無鍵引數，安全）。
   const flushDb = async (connId: string, db: string) => {
-    const ok = await uiConfirm(`清空 DB ${db} 的所有鍵？此動作無法復原。`, {
-      title: "清空資料庫",
+    const ok = await uiConfirm(t("清空 DB {db} 的所有鍵？此動作無法復原。", { db }), {
+      title: t("清空資料庫"),
       danger: true,
-      confirmText: "清空",
+      confirmText: t("清空"),
     });
     if (!ok) return;
     try {
       await api.runQuery(connId, `${db}:FLUSHDB`);
-      toast.success(`DB ${db} 已清空`);
+      toast.success(t("DB {db} 已清空", { db }));
     } catch (e: any) {
-      toast.error(e?.message ?? "清空失敗");
+      toast.error(e?.message ?? t("清空失敗"));
     }
   };
 
@@ -1612,63 +1616,63 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       const out = await pickSaveFile(`${db}_schema.sql`, [{ name: "SQL", extensions: ["sql"] }]);
       if (!out) return;
       await api.saveTextFile(out, sql);
-      toast.success(`已匯出結構 SQL → ${out}`);
+      toast.success(t("已匯出結構 SQL → {out}", { out }));
     } catch (e: any) {
-      toast.error(e?.message ?? "匯出結構失敗");
+      toast.error(e?.message ?? t("匯出結構失敗"));
     }
   };
 
   // 新增集合（MongoDB，schemaless）：提示名稱 → createCollection → 刷新樹狀。
   const createCollection = async (connId: string, db: string) => {
-    const name = await uiPrompt("集合名稱", { title: "新增集合", placeholder: "例：users" });
+    const name = await uiPrompt(t("集合名稱"), { title: t("新增集合"), placeholder: t("例：users") });
     if (!name?.trim()) return;
     try {
       await api.createCollection(connId, db, name.trim());
-      toast.success(`集合「${name.trim()}」已建立`);
+      toast.success(t("集合「{trim}」已建立", { trim: name.trim() }));
       refreshTables(connId, db);
     } catch (e: any) {
-      toast.error(e?.message ?? "建立集合失敗");
+      toast.error(e?.message ?? t("建立集合失敗"));
     }
   };
 
   // 新增資料庫 / schema：MySQL CREATE DATABASE、PostgreSQL CREATE SCHEMA、MongoDB 具現化。
   const createDatabase = async (connId: string, kind: DbKind) => {
     const isPg = kind === "postgres";
-    const label = isPg ? "Schema 名稱" : "資料庫名稱";
-    const name = await uiPrompt(label, { title: isPg ? "新增 Schema" : "新增資料庫", placeholder: "例：app" });
+    const label = isPg ? t("Schema 名稱") : t("資料庫名稱");
+    const name = await uiPrompt(label, { title: isPg ? t("新增 Schema") : t("新增資料庫"), placeholder: t("例：app") });
     if (!name?.trim()) return;
     try {
       await api.createDatabase(connId, name.trim());
-      toast.success(`${isPg ? "Schema" : "資料庫"}「${name.trim()}」已建立`);
+      toast.success(`${isPg ? "Schema" : t("資料庫")}「${name.trim()}」已建立`);
       refreshDbs(connId);
     } catch (e: any) {
-      toast.error(e?.message ?? "新增失敗");
+      toast.error(e?.message ?? t("新增失敗"));
     }
   };
 
   // 刪除資料庫 / schema（DROP DATABASE / DROP SCHEMA CASCADE / Mongo drop）。
   // 高破壞且 CASCADE 不可逆，採 type-to-confirm（須輸入正確名稱）取代單鍵確認。後端另有系統庫硬擋。
   const dropDatabase = async (connId: string, db: string, kind: DbKind) => {
-    const noun = kind === "postgres" ? "Schema" : "資料庫";
+    const noun = kind === "postgres" ? "Schema" : t("資料庫");
     const cascade = kind === "postgres" ? "DROP SCHEMA … CASCADE" : isMysqlFamily(kind) ? "DROP DATABASE" : "dropDatabase";
     const isDefault = kind === "postgres" && db === "public";
-    const warn = isDefault ? `\n注意：「${db}」是此連線的預設工作 schema。` : "";
+    const warn = isDefault ? t("\n注意：「{db}」是此連線的預設工作 schema。", { db }) : "";
     const typed = await uiPrompt(
-      `此操作將執行 ${cascade}，連帶刪除「${db}」下所有資料表 / 視圖 / 物件，無法復原。${warn}\n請輸入「${db}」以確認：`,
-      { title: `刪除${noun}`, confirmText: "刪除", placeholder: db },
+      t("此操作將執行 {cascade}，連帶刪除「{db}」下所有資料表 / 視圖 / 物件，無法復原。{warn}\n請輸入「{v4}」以確認：", { cascade, db, warn, v4: db }),
+      { title: t("刪除{noun}", { noun }), confirmText: t("刪除"), placeholder: db },
     );
     if (typed == null) return; // 取消
     if (typed.trim() !== db) {
-      toast.error("名稱不符，已取消刪除");
+      toast.error(t("名稱不符，已取消刪除"));
       return;
     }
     try {
       await api.dropDatabase(connId, db);
       useStore.getState().closeTablesUnder(connId, db);
-      toast.success(`已刪除${noun}「${db}」`);
+      toast.success(t("已刪除{noun}「{db}」", { noun, db }));
       refreshDbs(connId);
     } catch (e: any) {
-      toast.error(e?.message ?? "刪除失敗");
+      toast.error(e?.message ?? t("刪除失敗"));
     }
   };
 
@@ -1698,7 +1702,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       const names = cols.map((c) => quoteId(m.kind, c.name)).join(", ");
       sendQuery(m.connId, `SELECT ${names}\nFROM ${qualified(m.kind, m.db, m.table)}\nLIMIT 100;`);
     } catch (e: any) {
-      toast.error(e?.message ?? "產生 SELECT 失敗");
+      toast.error(e?.message ?? t("產生 SELECT 失敗"));
     }
   };
   const genMongoFind = (m: TblRef) =>
@@ -1723,20 +1727,20 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       const vals = cols.map(() => "NULL").join(", ");
       sendQuery(m.connId, `INSERT INTO ${qualified(m.kind, m.db, m.table)} (${names})\nVALUES (${vals});`);
     } catch (e: any) {
-      toast.error(e?.message ?? "產生 INSERT 失敗");
+      toast.error(e?.message ?? t("產生 INSERT 失敗"));
     }
   };
   const copyDdl = async (m: TblRef) => {
     try {
-      await copyToClipboard(await api.tableDdl(m.connId, m.db, m.table), "已複製建表 SQL");
+      await copyToClipboard(await api.tableDdl(m.connId, m.db, m.table), t("已複製建表 SQL"));
     } catch (e: any) {
-      toast.error(e?.message ?? "取得建表 SQL 失敗");
+      toast.error(e?.message ?? t("取得建表 SQL 失敗"));
     }
   };
 
   // ---- 資料表 / 集合生命週期（rename / truncate / drop）----
   const renameTable = async (m: TblRef) => {
-    const name = await uiPrompt("新名稱", { title: "重新命名資料表", defaultValue: m.table });
+    const name = await uiPrompt(t("新名稱"), { title: t("重新命名資料表"), defaultValue: m.table });
     if (!name?.trim() || name.trim() === m.table) return;
     try {
       await api.runQuery(m.connId, buildRenameTable(m.kind, m.db, m.table, name.trim()));
@@ -1745,76 +1749,76 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       const oldTab = useStore.getState().tabs.find((tab) => tab.key === oldKey);
       useStore.getState().closeTableTab(m.connId, m.db, m.table);
       if (oldTab) useStore.getState().openTable(m.connId, m.db, name.trim(), oldTab.view);
-      toast.success(`已重新命名為「${name.trim()}」`);
+      toast.success(t("已重新命名為「{trim}」", { trim: name.trim() }));
       refreshTables(m.connId, m.db);
     } catch (e: any) {
-      toast.error(e?.message ?? "重新命名失敗");
+      toast.error(e?.message ?? t("重新命名失敗"));
     }
   };
   // 清空資料表（DELETE 全部列）：可在交易內復原、會觸發 trigger、不重設自增。對標 Navicat「清空資料表」。
   const emptyTable = async (m: TblRef) => {
-    const ok = await uiConfirm(`清空資料表「${m.table}」的所有資料列（DELETE）？此操作會逐列刪除（觸發 trigger）。`, {
-      title: "清空資料表", danger: true, confirmText: "清空",
+    const ok = await uiConfirm(t("清空資料表「{table}」的所有資料列（DELETE）？此操作會逐列刪除（觸發 trigger）。", { table: m.table }), {
+      title: t("清空資料表"), danger: true, confirmText: t("清空"),
     });
     if (!ok) return;
     try {
       await api.runQuery(m.connId, buildDeleteAllRows(m.kind, m.db, m.table));
       useStore.getState().bumpDataReload(m.connId, m.db, m.table);
-      toast.success(`已清空「${m.table}」`);
+      toast.success(t("已清空「{table}」", { table: m.table }));
     } catch (e: any) {
-      toast.error(e?.message ?? "清空失敗");
+      toast.error(e?.message ?? t("清空失敗"));
     }
   };
   // 截斷資料表（TRUNCATE）：立即清空、無法復原、不觸發 trigger，通常重設自增。對標 Navicat「截斷資料表」。
   const truncateTable = async (m: TblRef) => {
-    const ok = await uiConfirm(`截斷資料表「${m.table}」（TRUNCATE）？立即清空且無法復原。`, {
-      title: "截斷資料表", danger: true, confirmText: "截斷",
+    const ok = await uiConfirm(t("截斷資料表「{table}」（TRUNCATE）？立即清空且無法復原。", { table: m.table }), {
+      title: t("截斷資料表"), danger: true, confirmText: t("截斷"),
     });
     if (!ok) return;
     try {
       await api.runQuery(m.connId, buildTruncateTable(m.kind, m.db, m.table));
       // 資料表仍存在（不關分頁）；若該表資料頁開著，強制重載以反映清空。
       useStore.getState().bumpDataReload(m.connId, m.db, m.table);
-      toast.success(`已截斷「${m.table}」`);
+      toast.success(t("已截斷「{table}」", { table: m.table }));
     } catch (e: any) {
-      toast.error(e?.message ?? "截斷失敗");
+      toast.error(e?.message ?? t("截斷失敗"));
     }
   };
   const dropTable = async (m: TblRef) => {
     const isView = m.objKind === "view";
-    const noun = isView ? "視圖" : "資料表";
-    const ok = await uiConfirm(`刪除${noun}「${m.table}」？此動作無法復原。`, {
-      title: `刪除${noun}`, danger: true, confirmText: "刪除",
+    const noun = isView ? t("視圖") : t("資料表");
+    const ok = await uiConfirm(t("刪除{noun}「{table}」？此動作無法復原。", { noun, table: m.table }), {
+      title: t("刪除{noun}", { noun }), danger: true, confirmText: t("刪除"),
     });
     if (!ok) return;
     try {
       const sql = isView ? buildDropView(m.kind, m.db, m.table) : buildDropTable(m.kind, m.db, m.table);
       await api.runQuery(m.connId, sql);
       useStore.getState().closeTableTab(m.connId, m.db, m.table); // 物件消失，連帶關分頁
-      toast.success(`已刪除${noun}「${m.table}」`);
+      toast.success(t("已刪除{noun}「{table}」", { noun, table: m.table }));
       refreshTables(m.connId, m.db);
     } catch (e: any) {
-      toast.error(e?.message ?? "刪除失敗");
+      toast.error(e?.message ?? t("刪除失敗"));
     }
   };
   const dropCollection = async (m: TblRef) => {
-    const ok = await uiConfirm(`刪除集合「${m.table}」？此動作無法復原。`, {
-      title: "刪除集合", danger: true, confirmText: "刪除",
+    const ok = await uiConfirm(t("刪除集合「{table}」？此動作無法復原。", { table: m.table }), {
+      title: t("刪除集合"), danger: true, confirmText: t("刪除"),
     });
     if (!ok) return;
     try {
       await api.dropCollection(m.connId, m.db, m.table);
       useStore.getState().closeTableTab(m.connId, m.db, m.table); // 物件消失，連帶關分頁
-      toast.success(`已刪除集合「${m.table}」`);
+      toast.success(t("已刪除集合「{table}」", { table: m.table }));
       refreshTables(m.connId, m.db);
     } catch (e: any) {
-      toast.error(e?.message ?? "刪除失敗");
+      toast.error(e?.message ?? t("刪除失敗"));
     }
   };
   // 複製資料表結構：產生 CREATE TABLE 語句送往查詢編輯器，供使用者檢視後執行（不直接執行 DDL）。
   const duplicateTable = async (m: TblRef, withData = false) => {
-    const name = await uiPrompt(withData ? "複製為新資料表名稱（含資料）" : "複製為新資料表名稱", {
-      title: withData ? "複製資料表（含資料）" : "複製資料表", defaultValue: `${m.table}_copy`, placeholder: "新表名",
+    const name = await uiPrompt(withData ? t("複製為新資料表名稱（含資料）") : t("複製為新資料表名稱"), {
+      title: withData ? t("複製資料表（含資料）") : t("複製資料表"), defaultValue: `${m.table}_copy`, placeholder: t("新表名"),
     });
     if (!name?.trim()) return;
     const dst = name.trim();
@@ -1880,13 +1884,13 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
           }
         }
         out += chunks.length ? chunks.join("\n") + "\n" : "-- （無資料）\n";
-        if (truncated) toast.info(`資料超過 ${MAX} 列，僅傾印前 ${MAX} 列`);
-        if (binaryWarn) toast.info("含二進位欄位，傾印的二進位值不完整；建議用「備份」做位元組精確匯出。");
+        if (truncated) toast.info(t("資料超過 {MAX} 列，僅傾印前 {v2} 列", { MAX, v2: MAX }));
+        if (binaryWarn) toast.info(t("含二進位欄位，傾印的二進位值不完整；建議用「備份」做位元組精確匯出。"));
       }
       await api.saveTextFile(path, out);
-      toast.success(`已傾印 SQL（${withData ? "結構與資料" : "結構"}）`);
+      toast.success(`已傾印 SQL（${withData ? t("結構與資料") : t("結構")}）`);
     } catch (e: any) {
-      toast.error(e?.message ?? "傾印失敗");
+      toast.error(e?.message ?? t("傾印失敗"));
     }
   };
 
@@ -1912,15 +1916,15 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     const it = (label: string, onClick: () => void, danger?: boolean): MenuNode => ({ kind: "item", label, onClick, danger });
     const sep: MenuNode = { kind: "sep" };
     const ro = readonlyConns[m.connId] === true;
-    const nodes: MenuNode[] = [it("新增查詢", () => newQueryForDb(m.connId, m.db, m.kind))];
+    const nodes: MenuNode[] = [it(t("新增查詢"), () => newQueryForDb(m.connId, m.db, m.kind))];
     if (m.type === "tables" && !ro)
-      nodes.push(it("新增資料表…", () => setDesignTable({ connId: m.connId, db: m.db, kind: m.kind })));
+      nodes.push(it(t("新增資料表…"), () => setDesignTable({ connId: m.connId, db: m.db, kind: m.kind })));
     if (m.type === "views")
-      nodes.push(it("新增視圖…", () => setCreateView({ connId: m.connId, db: m.db, kind: m.kind })));
+      nodes.push(it(t("新增視圖…"), () => setCreateView({ connId: m.connId, db: m.db, kind: m.kind })));
     if (m.type === "functions" && (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "external"))
-      nodes.push(it("預存程序 / 觸發器…", () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind })));
+      nodes.push(it(t("預存程序 / 觸發器…"), () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind })));
     nodes.push(sep);
-    nodes.push(it("重新整理", () => refreshTables(m.connId, m.db)));
+    nodes.push(it(t("重新整理"), () => refreshTables(m.connId, m.db)));
     return nodes;
   };
 
@@ -1929,18 +1933,18 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     const sep: MenuNode = { kind: "sep" };
     if (m.kind === "mongo") {
       return [
-        it("開啟集合", () => useStore.getState().openTable(m.connId, m.db, m.table)),
-        it("屬性…", () => setTableProps({ connId: m.connId, db: m.db, table: m.table, kind: m.kind, objKind: m.objKind })),
+        it(t("開啟集合"), () => useStore.getState().openTable(m.connId, m.db, m.table)),
+        it(t("屬性…"), () => setTableProps({ connId: m.connId, db: m.db, table: m.table, kind: m.kind, objKind: m.objKind })),
         sep,
-        it("查詢此集合（find）", () => genMongoFind(m)),
-        it("聚合範本（aggregate）", () => genMongoAggregate(m)),
-        it("插入範本（insert）", () => genMongoInsert(m)),
-        it("複製集合名", () => copyToClipboard(m.table, "已複製集合名")),
+        it(t("查詢此集合（find）"), () => genMongoFind(m)),
+        it(t("聚合範本（aggregate）"), () => genMongoAggregate(m)),
+        it(t("插入範本（insert）"), () => genMongoInsert(m)),
+        it(t("複製集合名"), () => copyToClipboard(m.table, t("已複製集合名"))),
         sep,
-        it("問 AI：解釋這個集合", () => askAiTable(m, `請解釋 MongoDB 集合 ${m.db}.${m.table} 的用途與常見欄位結構。`)),
+        it(t("問 AI：解釋這個集合"), () => askAiTable(m, t("請解釋 MongoDB 集合 {db}.{table} 的用途與常見欄位結構。", { db: m.db, table: m.table }))),
         sep,
-        it("重新整理", () => refreshTables(m.connId, m.db)),
-        it("刪除集合", () => dropCollection(m), true),
+        it(t("重新整理"), () => refreshTables(m.connId, m.db)),
+        it(t("刪除集合"), () => dropCollection(m), true),
       ];
     }
     const isView = m.objKind === "view";
@@ -1949,111 +1953,111 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     const ro = readonlyConns[m.connId] === true;
     const nodes: MenuNode[] = [];
     // 開啟 / 設計
-    nodes.push(it(isView ? "開啟視圖" : "開啟資料表", () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind)));
-    nodes.push(it(isPinned(pins, m) ? "取消釘選" : "釘選到常用", () => togglePinned({ connId: m.connId, db: m.db, table: m.table, kind: m.objKind ?? "table" })));
-    nodes.push(it("屬性…", () => setTableProps({ connId: m.connId, db: m.db, table: m.table, kind: m.kind, objKind: m.objKind })));
+    nodes.push(it(isView ? t("開啟視圖") : t("開啟資料表"), () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind)));
+    nodes.push(it(isPinned(pins, m) ? t("取消釘選") : t("釘選到常用"), () => togglePinned({ connId: m.connId, db: m.db, table: m.table, kind: m.objKind ?? "table" })));
+    nodes.push(it(t("屬性…"), () => setTableProps({ connId: m.connId, db: m.db, table: m.table, kind: m.kind, objKind: m.objKind })));
     if (!isView) {
-      nodes.push(it("設計資料表", () => useStore.getState().openTable(m.connId, m.db, m.table, "structure")));
-      if (!ro) nodes.push(it("新增資料表…", () => setDesignTable({ connId: m.connId, db: m.db, kind: m.kind })));
-      if (!ro) nodes.push(it("新增資料列…", () => {
+      nodes.push(it(t("設計資料表"), () => useStore.getState().openTable(m.connId, m.db, m.table, "structure")));
+      if (!ro) nodes.push(it(t("新增資料表…"), () => setDesignTable({ connId: m.connId, db: m.db, kind: m.kind })));
+      if (!ro) nodes.push(it(t("新增資料列…"), () => {
         useStore.getState().openTable(m.connId, m.db, m.table);
         useStore.getState().requestInsert(`${m.connId}:${m.db}:${m.table}`);
       }));
     }
     // 設計檢視：載入 SELECT 定義編輯後 CREATE OR REPLACE。僅 MySQL / PG。
-    if (isView && isMyPg) nodes.push(it("設計檢視…", () => setViewDesign({ connId: m.connId, db: m.db, view: m.table, kind: m.kind })));
-    if (isView) nodes.push(it("新增檢視…", () => setCreateView({ connId: m.connId, db: m.db, kind: m.kind })));
+    if (isView && isMyPg) nodes.push(it(t("設計檢視…"), () => setViewDesign({ connId: m.connId, db: m.db, view: m.table, kind: m.kind })));
+    if (isView) nodes.push(it(t("新增檢視…"), () => setCreateView({ connId: m.connId, db: m.db, kind: m.kind })));
     // 查詢產生
     nodes.push(sep);
-    nodes.push(it("查詢前 100 筆", () => genSelect(m)));
-    nodes.push(it("查詢前 100 筆（明列欄位）", () => genSelectColumns(m)));
+    nodes.push(it(t("查詢前 100 筆"), () => genSelect(m)));
+    nodes.push(it(t("查詢前 100 筆（明列欄位）"), () => genSelectColumns(m)));
     nodes.push(it("SELECT COUNT(*)", () => genCount(m)));
-    nodes.push(it("產生 INSERT 範本", () => genInsert(m)));
-    nodes.push(it("複製建表 SQL", () => copyDdl(m)));
-    nodes.push(it("複製表名", () => copyToClipboard(m.table, "已複製表名")));
+    nodes.push(it(t("產生 INSERT 範本"), () => genInsert(m)));
+    nodes.push(it(t("複製建表 SQL"), () => copyDdl(m)));
+    nodes.push(it(t("複製表名"), () => copyToClipboard(m.table, t("已複製表名"))));
     // 問 AI（帶入此表 schema）
     nodes.push({
-      kind: "sub", label: "問 AI", children: [
-        it("解釋這張表", () => askAiTable(m, `請解釋資料表 ${m.db}.${m.table} 的用途，以及每個欄位代表什麼。`)),
-        it("寫常用查詢", () => askAiTable(m, `針對資料表 ${m.db}.${m.table}，寫出 5 個實用的 SQL 查詢，每個都加上中文註解說明用途。`)),
-        it("最佳化建議", () => askAiTable(m, `檢視資料表 ${m.db}.${m.table} 的結構與索引，給我效能與設計上的最佳化建議。`)),
+      kind: "sub", label: t("問 AI"), children: [
+        it(t("解釋這張表"), () => askAiTable(m, t("請解釋資料表 {db}.{table} 的用途，以及每個欄位代表什麼。", { db: m.db, table: m.table }))),
+        it(t("寫常用查詢"), () => askAiTable(m, t("針對資料表 {db}.{table}，寫出 5 個實用的 SQL 查詢，每個都加上中文註解說明用途。", { db: m.db, table: m.table }))),
+        it(t("最佳化建議"), () => askAiTable(m, t("檢視資料表 {db}.{table} 的結構與索引，給我效能與設計上的最佳化建議。", { db: m.db, table: m.table }))),
       ],
     });
     // 匯入 / 匯出 / 傾印 / 文件 / 資料產生
     nodes.push(sep);
-    if (!isView && !ro) nodes.push(it("匯入精靈…", () => setImportTbl({ connId: m.connId, db: m.db, table: m.table })));
-    nodes.push(it("匯出精靈…", () => setExportTbl({ connId: m.connId, db: m.db, table: m.table })));
+    if (!isView && !ro) nodes.push(it(t("匯入精靈…"), () => setImportTbl({ connId: m.connId, db: m.db, table: m.table })));
+    nodes.push(it(t("匯出精靈…"), () => setExportTbl({ connId: m.connId, db: m.db, table: m.table })));
     if (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "sqlite")
-      nodes.push(it("查詢建構器…", () => setBuilderTbl({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
+      nodes.push(it(t("查詢建構器…"), () => setBuilderTbl({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
     if (!isView && (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "sqlite"))
-      nodes.push(it("資料傳輸…", () => setTransferTbl({ connId: m.connId, db: m.db, table: m.table })));
+      nodes.push(it(t("資料傳輸…"), () => setTransferTbl({ connId: m.connId, db: m.db, table: m.table })));
     if (!isView && (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "sqlite"))
-      nodes.push(it("資料比對 / 同步…", () => setSyncTbl({ connId: m.connId, db: m.db, table: m.table })));
+      nodes.push(it(t("資料比對 / 同步…"), () => setSyncTbl({ connId: m.connId, db: m.db, table: m.table })));
     nodes.push({
-      kind: "sub", label: "傾印 SQL 檔案", children: [
-        it("結構", () => dumpTableSql(m, false)),
-        ...(!isView ? [it("結構與資料", () => dumpTableSql(m, true))] : []),
+      kind: "sub", label: t("傾印 SQL 檔案"), children: [
+        it(t("結構"), () => dumpTableSql(m, false)),
+        ...(!isView ? [it(t("結構與資料"), () => dumpTableSql(m, true))] : []),
       ],
     });
-    nodes.push(it("資料字典…", () => setDataDict({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
-    if (!isView && !ro) nodes.push(it("資料產生…", () => setDataGen({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
+    nodes.push(it(t("資料字典…"), () => setDataDict({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
+    if (!isView && !ro) nodes.push(it(t("資料產生…"), () => setDataGen({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
     // 維護 / 權限 / 模型
     const tail: MenuNode[] = [];
     if (!isView && isMysqlFamily(m.kind)) {
       tail.push({
-        kind: "sub", label: "維護", children: [
-          it("分析資料表 (ANALYZE)", () => maint(m, "ANALYZE")),
-          it("檢查資料表 (CHECK)", () => maint(m, "CHECK")),
-          it("最佳化資料表 (OPTIMIZE)", () => maint(m, "OPTIMIZE")),
-          it("修復資料表 (REPAIR)", () => maint(m, "REPAIR")),
+        kind: "sub", label: t("維護"), children: [
+          it(t("分析資料表 (ANALYZE)"), () => maint(m, "ANALYZE")),
+          it(t("檢查資料表 (CHECK)"), () => maint(m, "CHECK")),
+          it(t("最佳化資料表 (OPTIMIZE)"), () => maint(m, "OPTIMIZE")),
+          it(t("修復資料表 (REPAIR)"), () => maint(m, "REPAIR")),
         ],
       });
     }
-    if (isMyPg) tail.push(it("設定權限…", () => genGrant(m)));
+    if (isMyPg) tail.push(it(t("設定權限…"), () => genGrant(m)));
     // 逆向至模型：關聯式（MySQL 系 / PG / SQLite）皆有外鍵關係可視化。
     if (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "sqlite")
-      tail.push(it("逆向至模型…", () => setErTable({ connId: m.connId, db: m.db, table: m.table })));
+      tail.push(it(t("逆向至模型…"), () => setErTable({ connId: m.connId, db: m.db, table: m.table })));
     if (tail.length) { nodes.push(sep); nodes.push(...tail); }
     // 生命週期（唯讀連線全部隱藏，避免破壞資料 / 結構）
     if (!ro) {
       nodes.push(sep);
       // 視圖改名：PG 容許 ALTER … RENAME；MySQL/SQLite 不支援 view 改名，隱藏以免必定失敗。
-      if (!isView || m.kind === "postgres") nodes.push(it("重新命名…", () => renameTable(m)));
+      if (!isView || m.kind === "postgres") nodes.push(it(t("重新命名…"), () => renameTable(m)));
       if (!isView) nodes.push({
-        kind: "sub", label: "複製資料表", children: [
-          it("結構…", () => duplicateTable(m)),
-          it("含資料…", () => duplicateTable(m, true)),
+        kind: "sub", label: t("複製資料表"), children: [
+          it(t("結構…"), () => duplicateTable(m)),
+          it(t("含資料…"), () => duplicateTable(m, true)),
         ],
       });
-      if (!isView) nodes.push(it("清空資料表（DELETE）", () => emptyTable(m), true));
-      if (!isView) nodes.push(it("截斷資料表（TRUNCATE）", () => truncateTable(m), true));
-      nodes.push(it(isView ? "刪除視圖" : "刪除資料表", () => dropTable(m), true));
+      if (!isView) nodes.push(it(t("清空資料表（DELETE）"), () => emptyTable(m), true));
+      if (!isView) nodes.push(it(t("截斷資料表（TRUNCATE）"), () => truncateTable(m), true));
+      nodes.push(it(isView ? t("刪除視圖") : t("刪除資料表"), () => dropTable(m), true));
     }
     // 重新整理
     nodes.push(sep);
-    nodes.push(it("重新整理", () => refreshTables(m.connId, m.db)));
+    nodes.push(it(t("重新整理"), () => refreshTables(m.connId, m.db)));
     return nodes;
   };
 
   // 刪除函式 / 預存程序（樹節點右鍵）。
   const dropRoutine = async (connId: string, db: string, kind: DbKind, r: RoutineInfo) => {
-    const label = r.routine_type === "procedure" ? "預存程序" : "函式";
-    const ok = await uiConfirm(`刪除${label}「${r.name}」？此動作無法復原。`, { title: `刪除${label}`, danger: true, confirmText: "刪除" });
+    const label = r.routine_type === "procedure" ? t("預存程序") : t("函式");
+    const ok = await uiConfirm(t("刪除{label}「{name}」？此動作無法復原。", { label, name: r.name }), { title: t("刪除{label}", { label }), danger: true, confirmText: t("刪除") });
     if (!ok) return;
     try {
       await api.execDdl(connId, buildDropRoutine(kind, db, r));
-      toast.success(`已刪除${label}「${r.name}」`);
+      toast.success(t("已刪除{label}「{name}」", { label, name: r.name }));
       refreshTables(connId, db);
     } catch (e: any) {
-      toast.error(e?.message ?? "刪除失敗");
+      toast.error(e?.message ?? t("刪除失敗"));
     }
   };
   // 複製函式 / 預存程序的建立 SQL（讀取定義後置入剪貼簿）。
   const copyRoutineDdl = async (connId: string, db: string, r: RoutineInfo) => {
     try {
-      await copyToClipboard(await api.routineDefinition(connId, db, r.name, r.routine_type), "已複製建立 SQL");
+      await copyToClipboard(await api.routineDefinition(connId, db, r.name, r.routine_type), t("已複製建立 SQL"));
     } catch (e: any) {
-      toast.error(e?.message ?? "讀取定義失敗");
+      toast.error(e?.message ?? t("讀取定義失敗"));
     }
   };
   // 組函式 / 預存程序右鍵選單樹（對標 Navicat：設計 / 執行 / 新增 / 複製 / 刪除）。
@@ -2061,26 +2065,26 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     const it = (label: string, onClick: () => void, danger?: boolean): MenuNode => ({ kind: "item", label, onClick, danger });
     const sep: MenuNode = { kind: "sep" };
     const r = m.routine;
-    const label = r.routine_type === "procedure" ? "程序" : "函式";
+    const label = r.routine_type === "procedure" ? t("程序") : t("函式");
     // external（gateway）連線為唯讀：不提供新增 / 刪除（按了必被後端擋下）。
     const ro = m.kind === "external" || readonlyConns[m.connId] === true;
     return [
-      it(`設計${label}`, () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, initial: r })),
-      it(`執行${label}…`, () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, initial: r, initialAction: "exec" })),
+      it(t("設計{label}", { label }), () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, initial: r })),
+      it(t("執行{label}…", { label }), () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, initial: r, initialAction: "exec" })),
       ...(ro ? [] : [
         sep,
-        it("新增函式…", () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, newType: "function" })),
-        it("新增程序…", () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, newType: "procedure" })),
+        it(t("新增函式…"), () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, newType: "function" })),
+        it(t("新增程序…"), () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, newType: "procedure" })),
       ]),
       sep,
-      it("複製名稱", () => copyToClipboard(r.name, "已複製名稱")),
-      it("複製建立 SQL", () => copyRoutineDdl(m.connId, m.db, r)),
+      it(t("複製名稱"), () => copyToClipboard(r.name, t("已複製名稱"))),
+      it(t("複製建立 SQL"), () => copyRoutineDdl(m.connId, m.db, r)),
       ...(ro ? [] : [
         sep,
-        it(`刪除${label}…`, () => dropRoutine(m.connId, m.db, m.kind, r), true),
+        it(t("刪除{label}…", { label }), () => dropRoutine(m.connId, m.db, m.kind, r), true),
       ]),
       sep,
-      it("重新整理", () => refreshTables(m.connId, m.db)),
+      it(t("重新整理"), () => refreshTables(m.connId, m.db)),
     ];
   };
 
@@ -2117,12 +2121,12 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
               onKeyDown={(e) => {
                 if (e.key === "Escape") { if (filter) setFilter(""); else filterRef.current?.blur(); }
               }}
-              placeholder="搜尋連線 / 表…"
-              title="搜尋連線或表名稱（Ctrl+F 或 /）"
+              placeholder={t("搜尋連線 / 表…")}
+              title={t("搜尋連線或表名稱（Ctrl+F 或 /）")}
               className="w-full bg-inset border border-fg/10 rounded pl-7 pr-6 py-1 text-xs outline-none focus:border-accent"
             />
             {filter && (
-              <button type="button" onClick={() => setFilter("")} title="清除"
+              <button type="button" onClick={() => setFilter("")} title={t("清除")}
                 className="absolute right-1 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded text-fg/30 hover:text-fg/70 hover:bg-fg/10">
                 <Icon icon={X} size={12} />
               </button>
@@ -2131,9 +2135,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
           {connectedIds.size > 1 && (
             <div className="flex justify-end mt-1">
               <button type="button" onClick={() => { connections.filter((c) => connectedIds.has(c.id)).forEach((c) => doDisconnect(c.id)); }}
-                title="中斷所有已連線的連線"
+                title={t("中斷所有已連線的連線")}
                 className="text-[11px] text-fg/40 hover:text-fg/70 inline-flex items-center gap-1">
-                <Icon icon={Plug} size={11} />全部中斷（{connectedIds.size}）
+                <Icon icon={Plug} size={11} />{t("全部中斷（")}{connectedIds.size}）
               </button>
             </div>
           )}
@@ -2154,11 +2158,11 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
           <div className="border-b border-fg/10 py-1">
             <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-fg/35 flex items-center gap-1">
               <Icon icon={Search} size={11} className="text-sky-300/80" />
-              <span>跨庫表名{hits.length > 0 ? `（${hits.length}${capped ? "+" : ""}）` : ""}</span>
+              <span>{t("跨庫表名")}{hits.length > 0 ? `（${hits.length}${capped ? "+" : ""}）` : ""}</span>
               {searchBusy && <Icon icon={Loader2} size={11} className="animate-spin ml-auto text-fg/40" />}
             </div>
             {!searchBusy && hits.length === 0 && (
-              <div className="px-3 py-1 text-[11px] text-fg/30">查無符合的表</div>
+              <div className="px-3 py-1 text-[11px] text-fg/30">{t("查無符合的表")}</div>
             )}
             {groups.map(([db, ghits]) => (
               <div key={db}>
@@ -2176,7 +2180,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                       useStore.getState().openTable(searchTarget.id, db, h.object_name, "data", h.object_type as TableInfo["kind"]);
                       void ensureDbExpanded(searchTarget.id, db);
                     }}
-                    title={`${searchTarget.name} · ${db} · ${h.object_name}（點擊開啟並在樹中定位）`}>
+                    title={t("{name} · {db} · {object_name}（點擊開啟並在樹中定位）", { name: searchTarget.name, db, object_name: h.object_name })}>
                     <Icon icon={h.object_type === "view" ? Eye : Table2} size={12}
                       className={`shrink-0 ${h.object_type === "view" ? "text-purple-300/80" : "text-sky-300/70"}`} />
                     <span className="truncate">{h.object_name}</span>
@@ -2196,7 +2200,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
         return (
           <div className="border-b border-fg/10 py-1">
             <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-fg/35 flex items-center gap-1">
-              <Icon icon={Star} size={11} className="text-amber-300" />常用
+              <Icon icon={Star} size={11} className="text-amber-300" />{t("常用")}
             </div>
             {visiblePins.map((p) => {
               const cn = connections.find((c) => c.id === p.connId)?.name ?? "";
@@ -2208,7 +2212,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                   <Icon icon={p.kind === "view" ? Eye : Table2} size={12} className="text-fg/30 shrink-0" />
                   <span className="truncate flex-1">{p.table}</span>
                   <span className="text-[10px] text-fg/30 truncate max-w-[90px]">{p.db}</span>
-                  <button type="button" onClick={(e) => { e.stopPropagation(); togglePinned(p); }} title="取消釘選" aria-label="取消釘選"
+                  <button type="button" onClick={(e) => { e.stopPropagation(); togglePinned(p); }} title={t("取消釘選")} aria-label={t("取消釘選")}
                     className="w-4 h-4 shrink-0 items-center justify-center rounded text-fg/30 hover:text-amber-300 hidden group-hover:flex">
                     <Icon icon={X} size={12} />
                   </button>
@@ -2220,7 +2224,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       })()}
       {connections.length === 0 && (
         <div className="p-4 text-fg/30 text-xs leading-relaxed">
-          尚無連線。點上方「連線」新增一個，雙擊以建立連線（右鍵有更多選項）。
+          {t("尚無連線。點上方「連線」新增一個，雙擊以建立連線（右鍵有更多選項）。")}
         </div>
       )}
       {q && visibleConns.length === 0 && !searchBusy && !(searchHits && searchHits.length > 0) && (
@@ -2229,10 +2233,10 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
           {searchTarget ? (
             <Button variant="secondary" size="sm" icon={Search}
               onClick={() => setSearchObjs({ connId: searchTarget.id, kind: searchTarget.kind })}>
-              全資料庫搜尋（含定義 / 註解）…
+              {t("全資料庫搜尋（含定義 / 註解）…")}
             </Button>
           ) : (
-            <div className="text-fg/30">連線後即可搜尋全部資料庫的表名。</div>
+            <div className="text-fg/30">{t("連線後即可搜尋全部資料庫的表名。")}</div>
           )}
         </div>
       )}
@@ -2265,20 +2269,20 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                 />
               )}
               <span className="truncate flex-1" title={`${c.name} · ${KIND_META[c.kind].label} · ${c.host}:${c.port}`}>{c.name}</span>
-              {readonlyConns[c.id] && <span className="shrink-0 text-[9px] px-1 rounded bg-amber-400/20 text-amber-300/90" title="唯讀模式：擋寫入 / DDL 與資料格編輯">唯讀</span>}
-              <button type="button" title="編輯連線"
+              {readonlyConns[c.id] && <span className="shrink-0 text-[9px] px-1 rounded bg-amber-400/20 text-amber-300/90" title={t("唯讀模式：擋寫入 / DDL 與資料格編輯")}>{t("唯讀")}</span>}
+              <button type="button" title={t("編輯連線")}
                 onClick={(e) => { e.stopPropagation(); onEdit(c); }}
                 className="w-5 h-5 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-fg/80 hidden group-hover:flex">
                 <Icon icon={Pencil} size={13} />
               </button>
-              <button type="button" title="刪除連線"
+              <button type="button" title={t("刪除連線")}
                 onClick={(e) => { e.stopPropagation(); deleteConn(c.id, c.name); }}
                 className="w-5 h-5 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-red-300 hidden group-hover:flex">
                 <Icon icon={Trash2} size={13} />
               </button>
             </div>
             {connected && databases[c.id] && databases[c.id].length === 0 && (
-              <div className="pl-7 pr-3 py-1 text-fg/25 text-xs">（無資料庫）</div>
+              <div className="pl-7 pr-3 py-1 text-fg/25 text-xs">{t("（無資料庫）")}</div>
             )}
             {connected &&
               (databases[c.id] ?? []).map((db) => {
@@ -2318,7 +2322,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                       selectedNode.db === db && selectedNode.table === obj.name
                         ? "relative bg-accent/12 before:content-[''] before:absolute before:left-0 before:inset-y-0 before:w-[2px] before:bg-accent" : "hover:bg-fg/5"
                     }`}
-                    title="單擊開啟資料；右鍵可產生 SELECT / 更多動作"
+                    title={t("單擊開啟資料；右鍵可產生 SELECT / 更多動作")}
                   >
                     <Icon icon={obj.kind === "view" ? Eye : Table2} size={14}
                       className={`shrink-0 ${obj.kind === "view" ? "text-purple-300/80" : "text-sky-300/70"}`} />
@@ -2339,7 +2343,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                         setRoutineMenu({ connId: c.id, db, kind: c.kind, routine: r, x: e.clientX, y: e.clientY });
                       }}
                       className="pl-16 pr-3 py-1 text-fg/55 hover:bg-fg/5 cursor-pointer truncate flex items-center gap-1.5"
-                      title={`${isProc ? "預存程序" : "函式"}「${r.name}」（雙擊設計 / 編輯；右鍵更多）`}
+                      title={`${isProc ? t("預存程序") : t("函式")}「${r.name}」（雙擊設計 / 編輯；右鍵更多）`}
                     >
                       <Icon icon={isProc ? Cog : FunctionSquare} size={14}
                         className={`shrink-0 ${isProc ? "text-amber-300/90" : "text-emerald-300/80"}`} />
@@ -2370,7 +2374,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                         <span className="text-fg/70 truncate flex-1">{label}</span>
                         <span className="text-fg/30 text-[11px] tabular-nums">{count}</span>
                       </div>
-                      {open && (count > 0 ? body : <div className="pl-16 pr-3 py-1 text-fg/25 text-xs">（無）</div>)}
+                      {open && (count > 0 ? body : <div className="pl-16 pr-3 py-1 text-fg/25 text-xs">{t("（無）")}</div>)}
                     </div>
                   );
                 };
@@ -2420,17 +2424,17 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                                 onChange={(e) => setDbFilter((m) => ({ ...m, [dbKey]: e.target.value }))}
                                 onClick={(e) => e.stopPropagation()}
                                 onKeyDown={(e) => { if (e.key === "Escape" && (dbFilter[dbKey] ?? "")) { e.stopPropagation(); setDbFilter((m) => ({ ...m, [dbKey]: "" })); } }}
-                                placeholder={`篩選 ${db} 表名…`}
-                                title="只篩選此資料庫的表 / 檢視 / 函式名稱"
+                                placeholder={t("篩選 {db} 表名…", { db })}
+                                title={t("只篩選此資料庫的表 / 檢視 / 函式名稱")}
                                 className="w-full bg-inset border border-fg/10 rounded pl-6 pr-2 py-0.5 text-[11px] outline-none focus:border-accent"
                               />
                             </div>
                           </div>
-                          {folderNode("tables", Table2, "text-sky-300/80", "資料表", vTables.length,
+                          {folderNode("tables", Table2, "text-sky-300/80", t("資料表"), vTables.length,
                             <>{vTables.map((o) => objNode(o, "pl-16"))}</>)}
-                          {folderNode("views", Eye, "text-purple-300/80", "檢視", vViews.length,
+                          {folderNode("views", Eye, "text-purple-300/80", t("檢視"), vViews.length,
                             <>{vViews.map((o) => objNode(o, "pl-16"))}</>)}
-                          {canRoutines && folderNode("functions", FunctionSquare, "text-amber-300/90", "函式", vRoutines.length,
+                          {canRoutines && folderNode("functions", FunctionSquare, "text-amber-300/90", t("函式"), vRoutines.length,
                             <>{vRoutines.map(routineNode)}</>)}
                         </>
                       );
@@ -2440,7 +2444,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                       <>
                         {objs.tables.filter((o) => tableVisible(c.name, o.name)).map((o) => objNode(o, "pl-12"))}
                         {objs.tables.length === 0 && (
-                          <div className="pl-12 pr-3 py-1 text-fg/25 text-xs">無表</div>
+                          <div className="pl-12 pr-3 py-1 text-fg/25 text-xs">{t("無表")}</div>
                         )}
                       </>
                     )}
@@ -2460,52 +2464,52 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
             style={{ left: menu.x, top: menu.y }}>
             {(
               [
-                [connectedIds.has(menu.id) ? "中斷連線" : "連線", () => toggleConnect(menu.id), false],
+                [connectedIds.has(menu.id) ? t("中斷連線") : t("連線"), () => toggleConnect(menu.id), false],
                 ...(connectedIds.has(menu.id)
-                  ? [["重新整理資料庫", () => refreshDbs(menu.id), false] as [string, () => void, boolean]]
+                  ? [[t("重新整理資料庫"), () => refreshDbs(menu.id), false] as [string, () => void, boolean]]
                   : []),
                 ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres" || menuConn.kind === "sqlite")
-                  ? [["新增查詢", () => newQueryForDb(menuConn.id, menuConn.database ?? "", menuConn.kind), false] as [string, () => void, boolean]]
+                  ? [[t("新增查詢"), () => newQueryForDb(menuConn.id, menuConn.database ?? "", menuConn.kind), false] as [string, () => void, boolean]]
                   : []),
                 ...(connectedIds.has(menu.id) && menuConn.kind === "redis"
                   ? [
-                      ["伺服器狀態", () => setStatus({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
-                      ["命令列", () => setConsole({ id: menuConn.id, name: menuConn.name, db: "0" }), false] as [string, () => void, boolean],
+                      [t("伺服器狀態"), () => setStatus({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                      [t("命令列"), () => setConsole({ id: menuConn.id, name: menuConn.name, db: "0" }), false] as [string, () => void, boolean],
                     ]
                   : []),
                 ...(connectedIds.has(menu.id) && menuConn.kind === "mongo"
-                  ? [["監控面板", () => setMongoOps({ id: menuConn.id, name: menuConn.name, db: menuConn.database ?? "" }), false] as [string, () => void, boolean]]
+                  ? [[t("監控面板"), () => setMongoOps({ id: menuConn.id, name: menuConn.name, db: menuConn.database ?? "" }), false] as [string, () => void, boolean]]
                   : []),
                 ...(connectedIds.has(menu.id)
                   ? [["SQL Search…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
                   : []),
                 ...(connectedIds.has(menu.id)
-                  ? [["進階搜尋…", () => onAdvSearch(menuConn.id, menuConn.kind), false] as [string, () => void, boolean]]
+                  ? [[t("進階搜尋…"), () => onAdvSearch(menuConn.id, menuConn.kind), false] as [string, () => void, boolean]]
                   : []),
                 ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres")
                   ? [
-                      ["處理程序…", () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
+                      [t("處理程序…"), () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
                       isMysqlFamily(menuConn.kind)
-                        ? ["使用者管理…", () => setUserMgr({ connId: menuConn.id }), false] as [string, () => void, boolean]
-                        : ["使用者 / 角色…", () => setServerQuery({
+                        ? [t("使用者管理…"), () => setUserMgr({ connId: menuConn.id }), false] as [string, () => void, boolean]
+                        : [t("使用者 / 角色…"), () => setServerQuery({
                             connId: menuConn.id,
-                            title: "使用者 / 角色",
+                            title: t("使用者 / 角色"),
                             sql: "SELECT rolname AS role, rolsuper AS superuser, rolcreatedb AS createdb, rolcanlogin AS login, rolreplication AS replication FROM pg_roles ORDER BY rolname",
                           }), false] as [string, () => void, boolean],
-                      ["伺服器變數…", () => setServerQuery({
+                      [t("伺服器變數…"), () => setServerQuery({
                         connId: menuConn.id,
-                        title: "伺服器變數 / 設定",
+                        title: t("伺服器變數 / 設定"),
                         sql: menuConn.kind === "postgres"
                           ? "SELECT name, setting, unit, category FROM pg_settings ORDER BY category, name"
                           : "SHOW VARIABLES",
                       }), false] as [string, () => void, boolean],
                     ]
                   : []),
-                [readonlyConns[menu.id] ? "關閉唯讀模式" : "設為唯讀模式（擋寫入 / DDL）", () => useStore.getState().setConnReadonly(menu.id, !readonlyConns[menu.id]), false],
-                ["屬性…", () => setConnProps(menuConn), false],
-                ["編輯…", () => onEdit(menuConn), false],
-                ["複製連線…", () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: `${menuConn.name} 複本`, password: "" }), false],
-                ["刪除", () => deleteConn(menuConn.id, menuConn.name), true],
+                [readonlyConns[menu.id] ? t("關閉唯讀模式") : t("設為唯讀模式（擋寫入 / DDL）"), () => useStore.getState().setConnReadonly(menu.id, !readonlyConns[menu.id]), false],
+                [t("屬性…"), () => setConnProps(menuConn), false],
+                [t("編輯…"), () => onEdit(menuConn), false],
+                [t("複製連線…"), () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: t("{name} 複本", { name: menuConn.name }), password: "" }), false],
+                [t("刪除"), () => deleteConn(menuConn.id, menuConn.name), true],
               ] as [string, () => void, boolean][]
             ).map(([label, fn, danger]) => (
               <button key={label} type="button"
@@ -2516,12 +2520,12 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
             ))}
             {/* 連線色標：選色即標記（致敬 Navicat connection color），用以區分環境。 */}
             <div className="border-t border-fg/10 mt-1 pt-1.5 px-3 pb-1">
-              <div className="text-[11px] text-fg/40 mb-1">顏色標記</div>
+              <div className="text-[11px] text-fg/40 mb-1">{t("顏色標記")}</div>
               <div className="flex items-center gap-1.5 flex-wrap">
                 {CONN_COLOR_PALETTE.map((p) => {
                   const active = (connColors[menu.id] ?? "") === p.value;
                   return (
-                    <button key={p.name} type="button" title={p.name}
+                    <button key={p.name} type="button" title={t(p.name)}
                       onClick={() => { applyConnColor(menu.id, p.value); setMenu(null); }}
                       className={`w-4 h-4 rounded-full border ${active ? "ring-2 ring-accent ring-offset-1 ring-offset-elevated" : "border-fg/20"} ${p.value ? "" : "grid place-items-center"}`}
                       style={p.value ? { background: p.value } : undefined}>
@@ -2548,53 +2552,53 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
               const items: [string, () => void, boolean][] =
                 dbConn?.kind === "redis"
                   ? [
-                      ["新增鍵…", () => setNewKey({ connId: dbMenu.connId, db: dbMenu.db }), false],
-                      ["伺服器狀態", () => { if (dbConn) setStatus({ id: dbConn.id, name: dbConn.name }); }, false],
-                      ["命令列", () => { if (dbConn) setConsole({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
-                      ["編輯屬性…", editConn, false],
-                      ["清空 DB（FLUSHDB）", () => flushDb(dbMenu.connId, dbMenu.db), true],
+                      [t("新增鍵…"), () => setNewKey({ connId: dbMenu.connId, db: dbMenu.db }), false],
+                      [t("伺服器狀態"), () => { if (dbConn) setStatus({ id: dbConn.id, name: dbConn.name }); }, false],
+                      [t("命令列"), () => { if (dbConn) setConsole({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
+                      [t("編輯屬性…"), editConn, false],
+                      [t("清空 DB（FLUSHDB）"), () => flushDb(dbMenu.connId, dbMenu.db), true],
                     ]
                   : dbConn?.kind === "mongo"
                   ? ((): [string, () => void, boolean][] => {
                       const arr: [string, () => void, boolean][] = [
-                        ["新增集合…", () => createCollection(dbMenu.connId, dbMenu.db), false],
-                        ["新增資料庫…", () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
-                        ["監控面板", () => { if (dbConn) setMongoOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
-                        ["編輯屬性…", editConn, false],
+                        [t("新增集合…"), () => createCollection(dbMenu.connId, dbMenu.db), false],
+                        [t("新增資料庫…"), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
+                        [t("監控面板"), () => { if (dbConn) setMongoOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
+                        [t("編輯屬性…"), editConn, false],
                       ];
                       // 系統庫（admin/config/local）不顯示刪除（後端亦硬擋）。
                       if (!isSystemDatabase("mongo", dbMenu.db))
-                        arr.push(["刪除資料庫…", () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
+                        arr.push([t("刪除資料庫…"), () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
                       return arr;
                     })()
                   : ((): [string, () => void, boolean][] => {
                       const k = dbConn?.kind;
-                      const noun = k === "postgres" ? "Schema" : "資料庫";
+                      const noun = k === "postgres" ? "Schema" : t("資料庫");
                       const arr: [string, () => void, boolean][] = [
-                        ["新增查詢", () => { if (dbConn) newQueryForDb(dbMenu.connId, dbMenu.db, dbConn.kind); }, false],
-                        ["設計表結構…", () => { if (dbConn) setDesignTable({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false],
+                        [t("新增查詢"), () => { if (dbConn) newQueryForDb(dbMenu.connId, dbMenu.db, dbConn.kind); }, false],
+                        [t("設計表結構…"), () => { if (dbConn) setDesignTable({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false],
                       ];
                       // SQLite 為單檔，無多資料庫概念，故不顯示新增 / 刪除資料庫。
-                      if (k !== "sqlite") arr.push([`新增${noun}…`, () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false]);
-                      arr.push(["新增視圖…", () => { if (dbConn) setCreateView({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
-                      arr.push(["預存程序 / 觸發器…", () => { if (dbConn) setRoutines({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
-                      arr.push(["匯出結構 SQL…", () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
-                      if (isMysqlFamily(k)) arr.push(["資料表大小報表…", () => setServerQuery({
-                        connId: dbMenu.connId, title: `資料表大小：${dbMenu.db}`, sql: tableSizesSql(dbMenu.db),
+                      if (k !== "sqlite") arr.push([t("新增{noun}…", { noun }), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false]);
+                      arr.push([t("新增視圖…"), () => { if (dbConn) setCreateView({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
+                      arr.push([t("預存程序 / 觸發器…"), () => { if (dbConn) setRoutines({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
+                      arr.push([t("匯出結構 SQL…"), () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
+                      if (isMysqlFamily(k)) arr.push([t("資料表大小報表…"), () => setServerQuery({
+                        connId: dbMenu.connId, title: t("資料表大小：{db}", { db: dbMenu.db }), sql: tableSizesSql(dbMenu.db),
                       }), false]);
-                      if ((isMysqlFamily(k) || k === "postgres") && dbConn) arr.push(["結構比對…", () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
-                      if (isMysqlFamily(k) || k === "postgres" || k === "sqlite") arr.push(["資料傳輸（整庫）…", () => setDbTransfer({ connId: dbMenu.connId, db: dbMenu.db }), false]);
-                      if ((isMysqlFamily(k) || k === "postgres" || k === "sqlite") && dbConn) arr.push(["資料庫文件…", () => setDbDict({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
-                      if (isMysqlFamily(k)) arr.push(["資料庫屬性…", () => setDbProps({ connId: dbMenu.connId, db: dbMenu.db }), false]);
-                      arr.push(["編輯屬性…", editConn, false]);
+                      if ((isMysqlFamily(k) || k === "postgres") && dbConn) arr.push([t("結構比對…"), () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
+                      if (isMysqlFamily(k) || k === "postgres" || k === "sqlite") arr.push([t("資料傳輸（整庫）…"), () => setDbTransfer({ connId: dbMenu.connId, db: dbMenu.db }), false]);
+                      if ((isMysqlFamily(k) || k === "postgres" || k === "sqlite") && dbConn) arr.push([t("資料庫文件…"), () => setDbDict({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
+                      if (isMysqlFamily(k)) arr.push([t("資料庫屬性…"), () => setDbProps({ connId: dbMenu.connId, db: dbMenu.db }), false]);
+                      arr.push([t("編輯屬性…"), editConn, false]);
                       // 系統 schema / 庫，以及 MySQL 系使用中的預設庫，不顯示刪除（後端亦硬擋）。
                       const isDefault = isMysqlFamily(k) && dbConn?.database === dbMenu.db;
                       if (k !== "sqlite" && k && !isSystemDatabase(k, dbMenu.db) && !isDefault)
-                        arr.push([`刪除${noun}…`, () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
+                        arr.push([t("刪除{noun}…", { noun }), () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
                       return arr;
                     })();
               // 重新整理：重載此資料庫節點的表 / 集合 / 鍵清單（適用所有種類）。
-              items.unshift(["重新整理", () => refreshTables(dbMenu.connId, dbMenu.db), false]);
+              items.unshift([t("重新整理"), () => refreshTables(dbMenu.connId, dbMenu.db), false]);
               return items.map(([label, fn, danger]) => (
                 <button key={label} type="button"
                   onClick={() => { setDbMenu(null); fn(); }}
@@ -2801,6 +2805,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
 
 // ---- 中央主工作區：分頁式（表分頁 + 查詢） ----
 function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
+  const t = useT();
   const { connections, activeId, connectedIds, tabs, activeTabKey, setActiveTab, closeTab, closeOtherTabs, closeAllTabs,
     queryTabs, addQueryTab, closeQueryTab, closeOtherQueryTabs, closeAllQueryTabs } = useStore();
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
@@ -2871,16 +2876,16 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
       <div className="flex-1 flex items-center justify-center min-w-0">
         <EmptyState
           icon={noConns ? Database : MousePointerClick}
-          title={noConns ? "尚未建立任何連線" : "選擇一個連線開始"}
+          title={noConns ? t("尚未建立任何連線") : t("選擇一個連線開始")}
           hint={
             noConns
-              ? "建立第一個資料庫連線，即可瀏覽資料表、執行查詢與管理結構。"
-              : "雙擊左側的連線以建立連線，再單擊資料表即可在此開啟。"
+              ? t("建立第一個資料庫連線，即可瀏覽資料表、執行查詢與管理結構。")
+              : t("雙擊左側的連線以建立連線，再單擊資料表即可在此開啟。")
           }
           action={
             noConns ? (
               <Button variant="primary" size="md" icon={Plus} onClick={onNewConnection}>
-                新增連線
+                {t("新增連線")}
               </Button>
             ) : undefined
           }
@@ -2904,7 +2909,7 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
               setActiveTab(tab.key);
               setTabMenu({ key: tab.key, x: e.clientX, y: e.clientY });
             }}
-            title={`${tab.database} · ${tab.table}（中鍵關閉）`}
+            title={t("{database} · {table}（中鍵關閉）", { database: tab.database, table: tab.table })}
             className={`flex items-center gap-2 pl-3 pr-2 py-1.5 text-xs border-r border-fg/10 cursor-pointer whitespace-nowrap ${
               tab.key === activeTabKey ? "bg-app text-fg shadow-[inset_0_-2px_0_rgb(var(--c-accent))]" : "text-fg/50 hover:bg-fg/5"
             }`}
@@ -2917,8 +2922,8 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
             <span className="mono">{tab.table}</span>
             <button
               type="button"
-              aria-label={`關閉分頁 ${tab.table}`}
-              title="關閉分頁"
+              aria-label={t("關閉分頁 {table}", { table: tab.table })}
+              title={t("關閉分頁")}
               onClick={(e) => {
                 e.stopPropagation();
                 closeTab(tab.key);
@@ -2934,7 +2939,7 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
           return (
             <QueryTabButton
               key={qid}
-              label={i === 0 ? "查詢" : `查詢 ${i + 1}`}
+              label={i === 0 ? t("查詢") : `查詢 ${i + 1}`}
               active={isActive}
               closable={queryTabs.length > 1}
               btnRef={isActive ? queryTabRef : undefined}
@@ -2950,8 +2955,8 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
             />
           );
         })}
-        <button type="button" onClick={addQueryTab} title="新增查詢分頁（Ctrl+T）"
-          aria-label="新增查詢分頁"
+        <button type="button" onClick={addQueryTab} title={t("新增查詢分頁（Ctrl+T）")}
+          aria-label={t("新增查詢分頁")}
           className="px-2 py-1.5 text-fg/40 hover:text-fg/80 hover:bg-fg/5 border-r border-fg/10 shrink-0">
           <Icon icon={Plus} size={14} />
         </button>
@@ -2973,9 +2978,9 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
             style={{ left: tabMenu.x, top: tabMenu.y }}>
             {(
               [
-                ["關閉", () => closeTab(tabMenu.key)],
-                ["關閉其他", () => closeOtherTabs(tabMenu.key)],
-                ["全部關閉", () => closeAllTabs()],
+                [t("關閉"), () => closeTab(tabMenu.key)],
+                [t("關閉其他"), () => closeOtherTabs(tabMenu.key)],
+                [t("全部關閉"), () => closeAllTabs()],
               ] as [string, () => void][]
             ).map(([label, fn]) => (
               <button key={label} type="button"
@@ -3000,9 +3005,9 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
               // 任一查詢分頁（含第一個「查詢」）皆可關，前提是關完仍留得下至少一個。
               // 只剩一個時 onContextMenu 已擋掉，不會走到這裡。
               const items: [string, () => void][] = [
-                ["關閉查詢", () => closeQueryTab(qid)],
-                ["關閉其他查詢", () => closeOtherQueryTabs(qid)],
-                ["全部關閉查詢", () => closeAllQueryTabs()],
+                [t("關閉查詢"), () => closeQueryTab(qid)],
+                [t("關閉其他查詢"), () => closeOtherQueryTabs(qid)],
+                [t("全部關閉查詢"), () => closeAllQueryTabs()],
               ];
               return items.map(([label, fn]) => (
                 <button key={label} type="button"
@@ -3030,6 +3035,7 @@ function QueryTabButton({ label, active, closable, onActivate, onClose, onContex
   onContextMenu?: (e: React.MouseEvent) => void;
   btnRef?: React.Ref<HTMLButtonElement>;
 }) {
+  const t = useT();
   return (
     <div
       onContextMenu={onContextMenu}
@@ -3042,7 +3048,7 @@ function QueryTabButton({ label, active, closable, onActivate, onClose, onContex
         type="button"
         onClick={onActivate}
         onAuxClick={(e) => { if (e.button === 1 && closable) { e.preventDefault(); onClose(); } }}
-        title={closable ? `${label}（中鍵關閉）` : label}
+        title={closable ? t("{label}（中鍵關閉）", { label }) : label}
         className={`flex items-center gap-1.5 ${closable ? "pl-3 pr-1.5" : "px-3"} py-1.5 text-xs`}
       >
         <Icon icon={FileCode2} size={14} className="text-blue-300/80" />{label}
@@ -3050,8 +3056,8 @@ function QueryTabButton({ label, active, closable, onActivate, onClose, onContex
       {closable && (
         <button
           type="button"
-          aria-label={`關閉 ${label}`}
-          title="關閉查詢分頁"
+          aria-label={t("關閉 {label}", { label })}
+          title={t("關閉查詢分頁")}
           onClick={(e) => { e.stopPropagation(); onClose(); }}
           className="mr-1 w-5 h-5 flex items-center justify-center rounded hover:bg-fg/15 text-fg/40 hover:text-fg/80"
         >
@@ -3122,23 +3128,24 @@ function fmtClock(ms: number): string {
 
 // 「摘要」面板：執行統計（處理數 / 成功 / 錯誤 / 起訖時間 / 總耗時）＋逐條語句結果表。
 function RunSummaryView({ summary }: { summary: RunSummary }) {
+  const t = useT();
   const total = summary.finishedAt - summary.startedAt;
   return (
     <div className="p-3 text-xs">
       <div className="grid grid-cols-2 gap-x-8 gap-y-1 max-w-2xl mb-3">
-        <div className="flex justify-between"><span className="text-fg/50">已處理的查詢</span><span className="text-fg/80">{summary.processed < summary.total ? `${summary.processed} / ${summary.total}（其餘已略過）` : summary.processed}</span></div>
-        <div className="flex justify-between"><span className="text-fg/50">開始時間</span><span className="text-fg/80">{fmtClock(summary.startedAt)}</span></div>
-        <div className="flex justify-between"><span className="text-fg/50">成功</span><span className="text-emerald-400">{summary.success}</span></div>
-        <div className="flex justify-between"><span className="text-fg/50">結束時間</span><span className="text-fg/80">{fmtClock(summary.finishedAt)}</span></div>
-        <div className="flex justify-between"><span className="text-fg/50">錯誤</span><span className={summary.errors ? "text-red-400" : "text-fg/80"}>{summary.errors}</span></div>
-        <div className="flex justify-between"><span className="text-fg/50">運行時間</span><span className="text-fg/80">{fmtElapsed(total)}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">{t("已處理的查詢")}</span><span className="text-fg/80">{summary.processed < summary.total ? t("{processed} / {total}（其餘已略過）", { processed: summary.processed, total: summary.total }) : summary.processed}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">{t("開始時間")}</span><span className="text-fg/80">{fmtClock(summary.startedAt)}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">{t("成功")}</span><span className="text-emerald-400">{summary.success}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">{t("結束時間")}</span><span className="text-fg/80">{fmtClock(summary.finishedAt)}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">{t("錯誤")}</span><span className={summary.errors ? "text-red-400" : "text-fg/80"}>{summary.errors}</span></div>
+        <div className="flex justify-between"><span className="text-fg/50">{t("運行時間")}</span><span className="text-fg/80">{fmtElapsed(total)}</span></div>
       </div>
       <table className="w-full border-collapse">
         <thead>
           <tr className="text-left text-fg/40 border-b border-fg/10">
-            <th className="py-1 pr-3 font-medium">查詢</th>
-            <th className="py-1 pr-3 font-medium">訊息</th>
-            <th className="py-1 pr-3 font-medium w-24">查詢時間</th>
+            <th className="py-1 pr-3 font-medium">{t("查詢")}</th>
+            <th className="py-1 pr-3 font-medium">{t("訊息")}</th>
+            <th className="py-1 pr-3 font-medium w-24">{t("查詢時間")}</th>
           </tr>
         </thead>
         <tbody>
@@ -3157,6 +3164,7 @@ function RunSummaryView({ summary }: { summary: RunSummary }) {
 
 // ---- 查詢面板：上 SQL、下結果（F6 執行） ----
 function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
+  const t = useT();
   const { activeId } = useStore();
   // 目前連線是否唯讀（反應式）：供工具列徽章與寫入提示。
   const activeReadonly = useStore((s) => !!s.activeId && s.readonlyConns[s.activeId] === true);
@@ -3350,7 +3358,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         persistSql("");
         // 開新查詢＝全新起點：一併清掉上一輪的結果 / 錯誤 / 耗時，結果區不殘留舊資料。
         setResult(null); setResultView(null); setErr(null); setErrSql(null); setErrStmt(null); setElapsed(null);
-        toast.success(had ? "已開新查詢（原內容已存入歷史）" : "已開新查詢");
+        toast.success(had ? t("已開新查詢（原內容已存入歷史）") : t("已開新查詢"));
         setTimeout(() => editorRef.current?.focus(), 0);
       } else {
         persistSql(pendingSql);
@@ -3392,7 +3400,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       if (params.length) {
         const values: Record<string, string> = {};
         for (const p of params) {
-          const v = await uiPrompt(`參數 :${p} 的值`, { title: "參數化查詢", placeholder: `:${p}`, confirmText: "確定" });
+          const v = await uiPrompt(t("參數 :{p} 的值", { p }), { title: t("參數化查詢"), placeholder: `:${p}`, confirmText: t("確定") });
           if (v === null) return; // 任一取消 → 中止整次執行
           values[p] = v;
         }
@@ -3422,13 +3430,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         // 純註解 / 空白（如尾端 `-- 註記`）不是可執行語句 → 不送 DB，避免「Query was empty」類錯誤。
         // isSql 經切分後可能為空；external 未切分，逐條檢查是否全為註解。
         if (isSqlLike && userStatements.every((s) => !hasExecutableSql(s))) {
-          toast.info("僅含註解，無可執行語句");
+          toast.info(t("僅含註解，無可執行語句"));
           return;
         }
         // 唯讀連線：擋下任何寫入 / DDL 語句（INSERT/UPDATE/DELETE/CREATE/ALTER/DROP… 與交易控制）。
         const roState = useStore.getState();
         if (isSqlLike && roState.activeId && roState.readonlyConns[roState.activeId] === true && userStatements.some((s) => isWriteStatement(s))) {
-          toast.error("此連線為唯讀，已擋下寫入 / DDL 語句。可在連線右鍵關閉「唯讀模式」。");
+          toast.error(t("此連線為唯讀，已擋下寫入 / DDL 語句。可在連線右鍵關閉「唯讀模式」。"));
           return;
         }
         // 「目前資料庫」選擇器：把所選庫以 USE / search_path 前綴併入「每一條」語句一起送出。
@@ -3444,16 +3452,16 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         const dangerCount = isSqlLike ? userStatements.filter((s) => isDangerousStatement(s)).length : 0;
         if (dangerCount > 0) {
           const ok = await uiConfirm(
-            `偵測到 ${dangerCount} 條無 WHERE 的 UPDATE / DELETE 或 TRUNCATE，將影響整張表的所有資料列。確定執行？`,
-            { title: "危險操作確認", danger: true, confirmText: "仍要執行" },
+            t("偵測到 {dangerCount} 條無 WHERE 的 UPDATE / DELETE 或 TRUNCATE，將影響整張表的所有資料列。確定執行？", { dangerCount }),
+            { title: t("危險操作確認"), danger: true, confirmText: t("仍要執行") },
           );
           if (!ok) return; // finally 會還原 running 狀態
         }
         // Redis：FLUSHALL / FLUSHDB 會清空資料且無法復原，先確認。
         if (kind === "redis" && isDangerousRedisCommand(q)) {
           const ok = await uiConfirm(
-            "FLUSHALL / FLUSHDB 會清空資料庫且無法復原。確定執行？",
-            { title: "危險指令確認", danger: true, confirmText: "仍要執行" },
+            t("FLUSHALL / FLUSHDB 會清空資料庫且無法復原。確定執行？"),
+            { title: t("危險指令確認"), danger: true, confirmText: t("仍要執行") },
           );
           if (!ok) return;
         }
@@ -3474,7 +3482,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         for (let si = 0; si < sentStatements.length; si++) {
           // 軟取消：語句邊界檢查（已完成的結果集保留顯示；停在正在跑的那條之前）。
           if (cancelRef.current) {
-            toast.info(`已在第 ${si} 條語句後停止（先前結果已保留）`);
+            toast.info(t("已在第 {si} 條語句後停止（先前結果已保留）", { si }));
             break;
           }
           if (sentStatements.length > 1) setRunProgress({ done: si, total: sentStatements.length });
@@ -3530,7 +3538,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           }
           if (stmtLabels) {
             for (let gi = 0; gi < grids.length; gi++) {
-              runs.push({ sql: stmtLabels[gi], ok: true, message: `${grids[gi].res.rows.length} 列`, ms });
+              runs.push({ sql: stmtLabels[gi], ok: true, message: t("{length} 列", { length: grids[gi].res.rows.length }), ms });
             }
           } else {
             runs.push({
@@ -3538,10 +3546,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               ok: true,
               message:
                 grids.length > 1
-                  ? `${grids.length} 個結果集`
+                  ? t("{length} 個結果集", { length: grids.length })
                   : grids.length === 1
-                    ? `${grids[0].res.rows.length} 列`
-                    : `OK（影響 ${stmtAffected} 列）`,
+                    ? t("{length} 列", { length: grids[0].res.rows.length })
+                    : t("OK（影響 {stmtAffected} 列）", { stmtAffected }),
               ms,
             });
           }
@@ -3550,13 +3558,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         if (sets.length > 0) applyResultSets(sets);
         else setResult({ columns: [], rows: [], rows_affected: affected }, q);
         setSummary(snapshot());
-        if (userStatements.length > 1) toast.success(`已執行 ${userStatements.length} 條語句`);
+        if (userStatements.length > 1) toast.success(t("已執行 {length} 條語句", { length: userStatements.length }));
       }
       setElapsed(performance.now() - t0);
       setHistory((h) => pushQueryHistory(h, q, connections.find((c) => c.id === activeId)?.name));
     } catch (e: any) {
       setElapsed(performance.now() - t0);
-      setErr(e?.message ?? (mode === "analyze" ? "分析失敗" : "查詢失敗"));
+      setErr(e?.message ?? (mode === "analyze" ? t("分析失敗") : t("查詢失敗")));
       setErrSql(q); // 整批（完整編輯器內容）—供安全一鍵貼回
       setErrStmt((e?.failedSql as string | undefined) ?? null); // 多語句時的失敗單句
       // 中途失敗但已寫入部分結果集（keepResults）→ 保留顯示；其餘照舊清空。
@@ -3572,11 +3580,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const runVisualExplain = async () => {
     if (!activeId || running || !supportsVisualExplain) return;
     const stmts = splitSqlStatements(editorSel?.trim() ? editorSel : sql);
-    if (stmts.length > 1) { toast.info("視覺化解釋一次只能解析一條語句，請反白要解釋的語句"); return; }
+    if (stmts.length > 1) { toast.info(t("視覺化解釋一次只能解析一條語句，請反白要解釋的語句")); return; }
     const base = (stmts[0] ?? "").trim();
-    if (!base) { toast.info("沒有可解釋的語句"); return; }
+    if (!base) { toast.info(t("沒有可解釋的語句")); return; }
     const explainSql = kind ? buildExplainJsonSql(kind, base) : null;
-    if (!explainSql) { toast.info("此查詢無法產生執行計畫"); return; }
+    if (!explainSql) { toast.info(t("此查詢無法產生執行計畫")); return; }
     setRunning(true);
     setPlan(null); // 清掉舊計畫，讓「解釋中…」狀態顯示，避免誤讀前一次的計畫
     setPlanErr(null);
@@ -3593,12 +3601,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       const cell = res.rows?.[0]?.[0] ?? null;
       const node = cell ? parseExplainPlan(kind!, cell) : null;
       if (node) { setPlan(node); setPlanErr(null); }
-      else { setPlan(null); setPlanErr("無法解析執行計畫 JSON（原始輸出見「結果」分頁）"); setResult(res); setBottomTab("result"); }
+      else { setPlan(null); setPlanErr(t("無法解析執行計畫 JSON（原始輸出見「結果」分頁）")); setResult(res); setBottomTab("result"); }
       setElapsed(performance.now() - t0);
     } catch (e: any) {
       setElapsed(performance.now() - t0);
       setPlan(null);
-      setPlanErr(e?.message ?? "視覺化解釋失敗");
+      setPlanErr(e?.message ?? t("視覺化解釋失敗"));
     } finally {
       setRunning(false);
     }
@@ -3609,7 +3617,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const runMongoExplain = async () => {
     if (!activeId || running || !supportsMongoExplain) return;
     const dsl = sql.trim();
-    if (!dsl) { toast.info("沒有可解釋的查詢"); return; }
+    if (!dsl) { toast.info(t("沒有可解釋的查詢")); return; }
     setRunning(true);
     setMongoPlan(null);
     setPlanErr(null);
@@ -3623,7 +3631,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       if (model) { setMongoPlan({ model, raw }); setPlanErr(null); }
       else {
         setMongoPlan(null);
-        setPlanErr("無法解析執行計畫 JSON（原始輸出見「結果」分頁）");
+        setPlanErr(t("無法解析執行計畫 JSON（原始輸出見「結果」分頁）"));
         setResult(res);
         setBottomTab("result");
       }
@@ -3631,7 +3639,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     } catch (e: any) {
       setElapsed(performance.now() - t0);
       setMongoPlan(null);
-      setPlanErr(e?.message ?? "執行計畫失敗");
+      setPlanErr(e?.message ?? t("執行計畫失敗"));
     } finally {
       setRunning(false);
     }
@@ -3659,11 +3667,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 把目前選取（或整段）SQL 存成具名片段。
   const saveAsSnippet = async () => {
     const body = (editorSel ?? sql).trim();
-    if (!body) { toast.info("沒有可儲存的 SQL"); return; }
-    const name = await uiPrompt("片段名稱（輸入此名即可自動完成展開）：", { title: "新增 SQL 片段", placeholder: "例如：active_users", confirmText: "儲存" });
+    if (!body) { toast.info(t("沒有可儲存的 SQL")); return; }
+    const name = await uiPrompt(t("片段名稱（輸入此名即可自動完成展開）："), { title: t("新增 SQL 片段"), placeholder: t("例如：active_users"), confirmText: t("儲存") });
     if (name === null || !name.trim()) return;
     useStore.getState().addSnippet({ name: name.trim(), body });
-    toast.success("已新增片段");
+    toast.success(t("已新增片段"));
   };
   const deleteSnippet = (name: string) => useStore.getState().removeSnippet(name);
 
@@ -3673,9 +3681,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     if (!path) return;
     try {
       persistSql(await api.readTextFile(path));
-      toast.success("已開啟檔案");
+      toast.success(t("已開啟檔案"));
     } catch (e: any) {
-      toast.error(e?.message ?? "開啟失敗");
+      toast.error(e?.message ?? t("開啟失敗"));
     }
   };
   // 將目前查詢另存為 .sql 檔。
@@ -3685,9 +3693,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     if (!path) return;
     try {
       await api.saveTextFile(path, sql);
-      toast.success("已另存 SQL");
+      toast.success(t("已另存 SQL"));
     } catch (e: any) {
-      toast.error(e?.message ?? "另存失敗");
+      toast.error(e?.message ?? t("另存失敗"));
     }
   };
 
@@ -3761,13 +3769,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         !viewFiltered && !isWriteStatement(entry.sql);
       if (canRerun) {
         const res = await api.exportQuery(activeId, entry.sent ?? entry.sql, opts, path);
-        toast.success(`已重新執行查詢並匯出完整結果 ${res.rows} 列 · ${fmt.toUpperCase()}`);
+        toast.success(t("已重新執行查詢並匯出完整結果 {rows} 列 · {toUpperCase}", { rows: res.rows, toUpperCase: fmt.toUpperCase() }));
       } else {
         const res = await api.exportRows(exportRes.columns, exportRes.rows, opts, path);
-        toast.success(`已匯出 ${res.rows} 列 · ${fmt.toUpperCase()}`);
+        toast.success(t("已匯出 {rows} 列 · {toUpperCase}", { rows: res.rows, toUpperCase: fmt.toUpperCase() }));
       }
     } catch (e: any) {
-      toast.error(e?.message ?? "匯出失敗");
+      toast.error(e?.message ?? t("匯出失敗"));
     }
   };
 
@@ -3811,12 +3819,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       const firstName = res.path.replace(/^.*[\\/]/, "");
       const files =
         fmt === "csv" || fmt === "tsv"
-          ? ` · 已拆成 ${resultSets.length} 個檔案（${firstName} … -${resultSets.length}）`
+          ? t(" · 已拆成 {length} 個檔案（{firstName} … -{v3}）", { length: resultSets.length, firstName, v3: resultSets.length })
           : "";
-      const truncNote = resultSets.some((s) => s.res.truncated) ? "；內含已截斷結果集（僅匯出畫面資料）" : "";
-      toast.success(`已匯出 ${resultSets.length} 個結果集 · 共 ${res.rows.toLocaleString()} 列 · ${fmt.toUpperCase()}${files}${truncNote}`);
+      const truncNote = resultSets.some((s) => s.res.truncated) ? t("；內含已截斷結果集（僅匯出畫面資料）") : "";
+      toast.success(t("已匯出 {length} 個結果集 · 共 {toLocaleString} 列 · {toUpperCase}{files}{truncNote}", { length: resultSets.length, toLocaleString: res.rows.toLocaleString(), toUpperCase: fmt.toUpperCase(), files, truncNote }));
     } catch (e: any) {
-      toast.error(e?.message ?? "匯出失敗");
+      toast.error(e?.message ?? t("匯出失敗"));
     }
   };
 
@@ -3827,7 +3835,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     const md = resultSets
       .map((s, i) => `## 結果 ${i + 1}\n\n\`\`\`sql\n${s.sql.trim()}\n\`\`\`\n\n${resultToMarkdown(s.res)}`)
       .join("\n\n");
-    copyToClipboard(md, `已複製 ${resultSets.length} 個結果集 (Markdown)`);
+    copyToClipboard(md, t("已複製 {length} 個結果集 (Markdown)", { length: resultSets.length }));
   };
 
   // 把目前查詢與結果（限前 30 列）帶進 AI 助手分析。
@@ -3835,51 +3843,51 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     if (!result || result.columns.length === 0 || !exportRes) return;
     const MAX = 30;
     const limited: QueryResult = { ...exportRes, rows: exportRes.rows.slice(0, MAX) };
-    const note = exportRes.rows.length > MAX ? `\n（僅附前 ${MAX} 列，共 ${exportRes.rows.length} 列）` : "";
+    const note = exportRes.rows.length > MAX ? t("\n（僅附前 {MAX} 列，共 {length} 列）", { MAX, length: exportRes.rows.length }) : "";
     // 多結果集：帶「作用中」那格對應的單條語句，讓 AI 拿到的查詢與結果一一對應。
     const srcSql = resultSets.length > 1 && resultSets[activeIdx]?.sql ? resultSets[activeIdx].sql : queryToRun();
     const prompt =
       `以下是我在 db-kit 執行的查詢與結果，請幫我分析（資料意義、可能的異常或趨勢、可優化的查詢寫法，並可建議下一步查詢）：\n\n` +
-      `查詢：\n\`\`\`sql\n${srcSql}\n\`\`\`\n\n結果：\n${resultToMarkdown(limited)}${note}`;
+      t("查詢：\n```sql\n{srcSql}\n```\n\n結果：\n{limited}{note}", { srcSql, limited: resultToMarkdown(limited), note });
     useAssistant.getState().ask(prompt);
   };
 
   // 把出錯的 SQL + 錯誤訊息帶進 AI 助手，請它分析原因並給出修正後的 SQL（一鍵自動送出）。
   const askAiFixError = () => {
     if (!err) return;
-    const dialect = kind === "external" ? "MySQL（透過 External gateway）" : (kind ?? "SQL");
+    const dialect = kind === "external" ? t("MySQL（透過 External gateway）") : (kind ?? "SQL");
     const full = errSql ?? queryToRun();
     // 多語句批次：errStmt 為失敗的那一條，與整批不同 → 同時給「失敗單句」與「完整批次」，
     // 讓 AI 不必自己數第幾條，並要求回傳完整批次以利一鍵貼回（不丟失其他正確語句）。
     const multi = !!errStmt && errStmt.trim() !== "" && errStmt.trim() !== full.trim();
     const sqlSection = multi
       ? `這是多語句批次，失敗的是其中這一條（請回傳修正後的【完整批次】，保留其他正確語句）：\n` +
-        `\`\`\`sql\n${errStmt}\n\`\`\`\n\n完整批次：\n\`\`\`sql\n${full}\n\`\`\`\n\n`
+        t("```sql\n{errStmt}\n```\n\n完整批次：\n```sql\n{full}\n```\n\n", { errStmt, full })
       : `SQL：\n\`\`\`sql\n${full}\n\`\`\`\n\n`;
     const prompt =
-      `以下 SQL 在 db-kit 執行時發生錯誤。請幫我：①用中文簡述錯誤原因；` +
+      t("以下 SQL 在 db-kit 執行時發生錯誤。請幫我：①用中文簡述錯誤原因；") +
       `②給出修正後、可直接執行的 SQL（放進 \`\`\`sql 程式碼區塊，方便我一鍵貼回編輯器）。\n\n` +
-      `資料庫類型：${dialect}\n\n` +
+      t("資料庫類型：{dialect}\n\n", { dialect }) +
       sqlSection +
-      `錯誤訊息：\n\`\`\`\n${err}\n\`\`\``;
+      t("錯誤訊息：\n```\n{err}\n```", { err });
     useAssistant.getState().ask(prompt, { send: true });
   };
 
   if (!activeId) {
     return (
       <div className="flex-1 flex items-center justify-center text-fg/25 text-sm">
-        請先選取一個已連線的連線。
+        {t("請先選取一個已連線的連線。")}
       </div>
     );
   }
 
   const rowsInfo =
     resultSets.length > 1
-      ? `${resultSets.length} 個結果集 · 共 ${resultSets.reduce((n, s) => n + s.res.rows.length, 0).toLocaleString()} 列`
+      ? t("{length} 個結果集 · 共 {toLocaleString} 列", { length: resultSets.length, toLocaleString: resultSets.reduce((n, s) => n + s.res.rows.length, 0).toLocaleString() })
       : result &&
         (result.columns.length > 0
-          ? `${result.rows.length} 列`
-          : `影響 ${result.rows_affected} 列`);
+          ? t("{length} 列", { length: result.rows.length })
+          : t("影響 {rows_affected} 列", { rows_affected: result.rows_affected }));
 
   // 連線選擇器清單：已連線的連線（含目前 activeId，即使尚未在 connectedIds 也保留，避免下拉空白）。
   const runnableConns = connections.filter((c) => connectedIds.has(c.id) || c.id === activeId);
@@ -3891,13 +3899,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       <div className="shrink-0">
         <div className="flex items-center justify-between px-3 py-1.5 bg-bar">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-xs text-fg/40 shrink-0">查詢</span>
+            <span className="text-xs text-fg/40 shrink-0">{t("查詢")}</span>
             {runnableConns.length > 0 && (
               <Select
                 selectSize="sm"
                 value={activeId ?? ""}
                 onChange={(e) => useStore.getState().setActive(e.target.value)}
-                title="目前連線：查詢執行的目標連線（Ctrl+Shift+N 新增連線）"
+                title={t("目前連線：查詢執行的目標連線（Ctrl+Shift+N 新增連線）")}
                 className="max-w-[180px] text-xs"
               >
                 {runnableConns.map((c) => (
@@ -3906,17 +3914,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               </Select>
             )}
             {activeReadonly && (
-              <span className="text-[10px] px-1 rounded bg-amber-400/20 text-amber-300/90 shrink-0" title="此連線為唯讀模式：擋寫入 / DDL">唯讀</span>
+              <span className="text-[10px] px-1 rounded bg-amber-400/20 text-amber-300/90 shrink-0" title={t("此連線為唯讀模式：擋寫入 / DDL")}>{t("唯讀")}</span>
             )}
             {supportsDbSelect && (
               <Select
                 selectSize="sm"
                 value={queryDb}
                 onChange={(e) => changeQueryDb(e.target.value)}
-                title="目前資料庫：查詢會以 USE / search_path 限定到所選資料庫"
+                title={t("目前資料庫：查詢會以 USE / search_path 限定到所選資料庫")}
                 className="max-w-[180px] text-xs"
               >
-                <option value="">{kind === "postgres" ? "（預設 schema）" : "（預設資料庫）"}</option>
+                <option value="">{kind === "postgres" ? t("（預設 schema）") : t("（預設資料庫）")}</option>
                 {/* 確保目前選取值即使尚未載入清單 / 已不在清單也仍顯示 */}
                 {queryDb && !dbList.includes(queryDb) && <option value={queryDb}>{queryDb}</option>}
                 {dbList.map((d) => (
@@ -3927,34 +3935,34 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           </div>
           <div className="flex flex-wrap justify-end items-center gap-x-1.5 gap-y-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap">
             <button type="button" onClick={openNodeScopedQueryTab}
-              title="開新查詢分頁：依目前選取的連線 / 資料庫 / 資料表帶入範圍（Ctrl+N）"
+              title={t("開新查詢分頁：依目前選取的連線 / 資料庫 / 資料表帶入範圍（Ctrl+N）")}
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
-              <Icon icon={FilePlus2} size={13} />新查詢
+              <Icon icon={FilePlus2} size={13} />{t("新查詢")}
             </button>
             <div className="w-px self-stretch my-1 bg-fg/10" />
             <div className="relative">
               <button type="button" onClick={() => setShowHistory((s) => !s)}
                 disabled={history.length === 0}
-                title="查詢歷史"
+                title={t("查詢歷史")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-30">
-                <Icon icon={History} size={13} />歷史{history.length ? `（${history.length}）` : ""}
+                <Icon icon={History} size={13} />{t("歷史")}{history.length ? `（${history.length}）` : ""}
               </button>
               {showHistory && history.length > 0 && (
                 <>
                   <div className="fixed inset-0 z-[89]" onClick={() => setShowHistory(false)} />
                   <div className="absolute right-0 mt-1 z-[90] w-[460px] max-h-[360px] overflow-auto bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1">
                     <div className="flex items-center justify-between gap-2 px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">
-                      <span className="shrink-0">最近查詢</span>
+                      <span className="shrink-0">{t("最近查詢")}</span>
                       <input
                         autoFocus
                         value={historyFilter}
                         onChange={(e) => setHistoryFilter(e.target.value)}
-                        placeholder="輸入以過濾…"
+                        placeholder={t("輸入以過濾…")}
                         className="flex-1 min-w-0 bg-inset border border-fg/10 rounded px-2 py-0.5 text-xs text-fg/80 outline-none focus:border-accent/60"
                       />
                       <button type="button"
                         onClick={() => { setHistory([]); try { localStorage.removeItem(QUERY_HISTORY_KEY); } catch {} setShowHistory(false); }}
-                        className="hover:text-fg/80 shrink-0">清除</button>
+                        className="hover:text-fg/80 shrink-0">{t("清除")}</button>
                     </div>
                     {history
                       .filter((h) => !historyFilter.trim() || h.sql.toLowerCase().includes(historyFilter.trim().toLowerCase()))
@@ -3974,23 +3982,23 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             </div>
             <div className="relative">
               <button type="button" onClick={() => setShowSaved((s) => !s)}
-                title="收藏的查詢"
+                title={t("收藏的查詢")}
                 className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
-                收藏{saved.length ? `（${saved.length}）` : ""}
+                {t("收藏")}{saved.length ? `（${saved.length}）` : ""}
               </button>
               {showSaved && (
                 <>
                   <div className="fixed inset-0 z-[89]" onClick={() => setShowSaved(false)} />
                   <div className="absolute right-0 mt-1 z-[90] w-[420px] max-h-[320px] overflow-auto bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1">
                     <div className="flex items-center justify-between px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">
-                      <span>收藏的查詢</span>
+                      <span>{t("收藏的查詢")}</span>
                       <button type="button" onClick={() => { setShowSaved(false); useStore.getState().openSavedManager(); }}
                         className="inline-flex items-center gap-1 text-accent hover:underline">
-                        <Icon icon={Cog} size={11} />管理 / 匯入匯出
+                        <Icon icon={Cog} size={11} />{t("管理 / 匯入匯出")}
                       </button>
                     </div>
                     {saved.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-fg/40">尚無收藏。用「更多 → 收藏目前查詢」新增，或按上方「管理」匯入。</div>
+                      <div className="px-3 py-2 text-xs text-fg/40">{t("尚無收藏。用「更多 → 收藏目前查詢」新增，或按上方「管理」匯入。")}</div>
                     ) : (() => {
                       // 依 group 分組顯示（未分組置底、組內依名稱排序）。
                       const gmap = new Map<string, SavedQuery[]>();
@@ -4010,16 +4018,16 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                             className="flex-1 inline-flex items-center gap-1.5 text-left px-3 py-1.5 text-xs truncate">
                             <Icon icon={Star} size={12} className="text-amber-300 shrink-0" /><span className="truncate">{q.name}</span>
                           </button>
-                          <button type="button" onClick={() => { setShowSaved(false); useStore.getState().openSavedManager({ editName: q.name }); }} title="編輯" aria-label="編輯"
+                          <button type="button" onClick={() => { setShowSaved(false); useStore.getState().openSavedManager({ editName: q.name }); }} title={t("編輯")} aria-label={t("編輯")}
                             className="px-1.5 text-fg/30 hover:text-fg/80"><Icon icon={Pencil} size={13} /></button>
-                          <button type="button" onClick={() => deleteSaved(q.name)} title="刪除收藏" aria-label="刪除收藏"
+                          <button type="button" onClick={() => deleteSaved(q.name)} title={t("刪除收藏")} aria-label={t("刪除收藏")}
                             className="px-2 text-fg/30 hover:text-red-400"><Icon icon={X} size={13} /></button>
                         </div>
                       );
                       return order.map((g) => (
                         <div key={g || "__ungrouped__"}>
                           {showHeaders && (
-                            <div className="px-3 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide text-fg/35">{g || "（未分組）"}</div>
+                            <div className="px-3 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide text-fg/35">{g || t("（未分組）")}</div>
                           )}
                           {gmap.get(g)!.slice().sort((a, b) => a.name.localeCompare(b.name)).map(rowOf)}
                         </div>
@@ -4032,18 +4040,18 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             {supportsSqlEditor && (
               <div className="relative">
                 <button type="button" onClick={() => setShowSnippets((s) => !s)}
-                  title="SQL 片段：插入常用骨架（編輯器內輸入片段名亦可自動完成展開）"
+                  title={t("SQL 片段：插入常用骨架（編輯器內輸入片段名亦可自動完成展開）")}
                   className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
-                  <Icon icon={FileCode2} size={13} />片段
+                  <Icon icon={FileCode2} size={13} />{t("片段")}
                 </button>
                 {showSnippets && (
                   <>
                     <div className="fixed inset-0 z-[89]" onClick={() => setShowSnippets(false)} />
                     <div className="absolute right-0 mt-1 z-[90] w-[460px] max-h-[360px] overflow-auto bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1">
                       <div className="flex items-center justify-between px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">
-                        <span>SQL 片段（點擊插入游標處）</span>
+                        <span>{t("SQL 片段（點擊插入游標處）")}</span>
                         <button type="button" onClick={saveAsSnippet} className="inline-flex items-center gap-1 text-accent hover:underline">
-                          <Icon icon={Plus} size={11} />從選取 / 目前 SQL 新增
+                          <Icon icon={Plus} size={11} />{t("從選取 / 目前 SQL 新增")}
                         </button>
                       </div>
                       {snippets.map((s) => (
@@ -4053,12 +4061,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                             <div className="flex items-center gap-1.5 text-xs">
                               <Icon icon={FileCode2} size={12} className="text-sky-300 shrink-0" />
                               <span className="mono truncate">{s.name}</span>
-                              {s.desc && <span className="text-fg/40 truncate">— {s.desc}</span>}
-                              {s.builtin && <span className="ml-auto text-[9px] text-fg/30 px-1 rounded bg-fg/10 shrink-0">內建</span>}
+                              {s.desc && <span className="text-fg/40 truncate">— {t(s.desc)}</span>}
+                              {s.builtin && <span className="ml-auto text-[9px] text-fg/30 px-1 rounded bg-fg/10 shrink-0">{t("內建")}</span>}
                             </div>
                           </button>
                           {!s.builtin && (
-                            <button type="button" onClick={() => deleteSnippet(s.name)} title="刪除片段" aria-label="刪除片段"
+                            <button type="button" onClick={() => deleteSnippet(s.name)} title={t("刪除片段")} aria-label={t("刪除片段")}
                               className="px-2 py-1.5 text-fg/30 hover:text-red-400"><Icon icon={X} size={13} /></button>
                           )}
                         </div>
@@ -4070,94 +4078,94 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             )}
             {supportsExplain && (
               <button type="button" onClick={() => setBuilderOpen(true)} disabled={running}
-                title="視覺化查詢建構器：勾選表 / 欄、視覺化 JOIN、條件 / 排序 / 聚合，產生 SELECT 並帶入編輯器"
+                title={t("視覺化查詢建構器：勾選表 / 欄、視覺化 JOIN、條件 / 排序 / 聚合，產生 SELECT 並帶入編輯器")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
-                <Icon icon={Blocks} size={13} />建構器
+                <Icon icon={Blocks} size={13} />{t("建構器")}
               </button>
             )}
             {supportsSqlEditor && (
               <button type="button" onClick={() => persistSql(formatSql(sql))} disabled={running || !sql.trim()}
-                title="格式化 SQL：主要子句換行（僅調整字面值外空白，不改語意）(Ctrl+Shift+F)"
+                title={t("格式化 SQL：主要子句換行（僅調整字面值外空白，不改語意）(Ctrl+Shift+F)")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
-                <Icon icon={Wand2} size={13} />格式化
+                <Icon icon={Wand2} size={13} />{t("格式化")}
               </button>
             )}
             <div className="relative">
               <button type="button" onClick={() => setShowMore((s) => !s)}
-                title="更多工具：檔案 / 收藏 / SQL 轉換 / 執行計畫"
+                title={t("更多工具：檔案 / 收藏 / SQL 轉換 / 執行計畫")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
-                <Icon icon={MoreHorizontal} size={13} />更多
+                <Icon icon={MoreHorizontal} size={13} />{t("更多")}
               </button>
               {showMore && (
                 <>
                   <div className="fixed inset-0 z-[89]" onClick={() => setShowMore(false)} />
                   <div className="absolute right-0 mt-1 z-[90] w-56 bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1">
-                    <div className="px-3 py-1 text-[11px] text-fg/40">檔案 / 收藏</div>
+                    <div className="px-3 py-1 text-[11px] text-fg/40">{t("檔案 / 收藏")}</div>
                     <button type="button" onClick={() => { setShowMore(false); openSqlFile(); }}
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10">
-                      <Icon icon={FolderOpen} size={13} className="text-fg/45" />開啟 .sql 檔…
+                      <Icon icon={FolderOpen} size={13} className="text-fg/45" />{t("開啟 .sql 檔…")}
                     </button>
                     <button type="button" onClick={() => { setShowMore(false); saveSqlFile(); }} disabled={!sql.trim()}
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
-                      <Icon icon={Save} size={13} className="text-fg/45" />另存為 .sql 檔…
+                      <Icon icon={Save} size={13} className="text-fg/45" />{t("另存為 .sql 檔…")}
                     </button>
                     <button type="button" onClick={() => { setShowMore(false); saveCurrentQuery(); }} disabled={!sql.trim()}
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
-                      <Icon icon={Star} size={13} className="text-fg/45" />收藏目前查詢…
+                      <Icon icon={Star} size={13} className="text-fg/45" />{t("收藏目前查詢…")}
                     </button>
                     <button type="button" onClick={() => { setShowMore(false); useStore.getState().openSavedManager(); }}
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10">
-                      <Icon icon={Cog} size={13} className="text-fg/45" />管理收藏 / 匯入匯出…
+                      <Icon icon={Cog} size={13} className="text-fg/45" />{t("管理收藏 / 匯入匯出…")}
                     </button>
                     {supportsSqlEditor && (
                       <>
-                        <div className="px-3 py-1 mt-1 text-[11px] text-fg/40 border-t border-fg/10">SQL 轉換</div>
+                        <div className="px-3 py-1 mt-1 text-[11px] text-fg/40 border-t border-fg/10">{t("SQL 轉換")}</div>
                         <button type="button" onClick={() => { setShowMore(false); persistSql(minifySql(sql)); }} disabled={!sql.trim()}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
-                          <Icon icon={FileText} size={13} className="text-fg/45" />壓縮成單行
+                          <Icon icon={FileText} size={13} className="text-fg/45" />{t("壓縮成單行")}
                         </button>
                         <button type="button" onClick={() => { setShowMore(false); persistSql(transformKeywordCase(sql, true)); }} disabled={!sql.trim()}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
-                          <span className="w-[13px] text-center text-fg/45 font-bold text-[10px]">AB</span>關鍵字轉大寫
+                          <span className="w-[13px] text-center text-fg/45 font-bold text-[10px]">AB</span>{t("關鍵字轉大寫")}
                         </button>
                         <button type="button" onClick={() => { setShowMore(false); persistSql(transformKeywordCase(sql, false)); }} disabled={!sql.trim()}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
-                          <span className="w-[13px] text-center text-fg/45 font-bold text-[10px]">ab</span>關鍵字轉小寫
+                          <span className="w-[13px] text-center text-fg/45 font-bold text-[10px]">ab</span>{t("關鍵字轉小寫")}
                         </button>
                       </>
                     )}
                     {(supportsExplain || supportsVisualExplain || supportsMongoExplain) && (
-                      <div className="px-3 py-1 mt-1 text-[11px] text-fg/40 border-t border-fg/10">執行計畫</div>
+                      <div className="px-3 py-1 mt-1 text-[11px] text-fg/40 border-t border-fg/10">{t("執行計畫")}</div>
                     )}
                     {supportsExplain && (
                       <button type="button" onClick={() => { setShowMore(false); execute("analyze"); }} disabled={running}
                         className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
-                        <Icon icon={FlaskConical} size={13} className="text-fg/45" />分析（EXPLAIN 表格）
+                        <Icon icon={FlaskConical} size={13} className="text-fg/45" />{t("分析（EXPLAIN 表格）")}
                       </button>
                     )}
                     {supportsVisualExplain && (
                       <button type="button" onClick={() => { setShowMore(false); runVisualExplain(); }} disabled={running}
                         className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
-                        <Icon icon={GitBranch} size={13} className="text-fg/45" />視覺化解釋
+                        <Icon icon={GitBranch} size={13} className="text-fg/45" />{t("視覺化解釋")}
                       </button>
                     )}
                     {supportsMongoExplain && (
                       <>
                         {/* 詳細度：executionStats 會「實際執行」查詢（昂貴管線改選 queryPlanner）。 */}
                         <div className="flex items-center gap-2 px-3 py-1.5 text-xs" onClick={(e) => e.stopPropagation()}>
-                          <span className="text-fg/45 shrink-0">詳細度</span>
+                          <span className="text-fg/45 shrink-0">{t("詳細度")}</span>
                           <select value={mongoVerbosity}
                             onChange={(e) => setMongoVerbosity(e.target.value as typeof mongoVerbosity)}
-                            title="executionStats / allPlansExecution 會實際執行查詢；queryPlanner 只做計畫（便宜）"
+                            title={t("executionStats / allPlansExecution 會實際執行查詢；queryPlanner 只做計畫（便宜）")}
                             className="flex-1 min-w-0 bg-inset border border-fg/10 rounded px-1 py-0.5 text-xs outline-none cursor-pointer">
-                            <option value="executionStats">executionStats（實際執行）</option>
-                            <option value="queryPlanner">queryPlanner（僅計畫）</option>
-                            <option value="allPlansExecution">allPlansExecution（所有候選）</option>
+                            <option value="executionStats">{t("executionStats（實際執行）")}</option>
+                            <option value="queryPlanner">{t("queryPlanner（僅計畫）")}</option>
+                            <option value="allPlansExecution">{t("allPlansExecution（所有候選）")}</option>
                           </select>
                         </div>
                         <button type="button" onClick={() => { setShowMore(false); runMongoExplain(); }} disabled={running}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
-                          <Icon icon={GitBranch} size={13} className="text-fg/45" />執行計畫（explain）
+                          <Icon icon={GitBranch} size={13} className="text-fg/45" />{t("執行計畫（explain）")}
                         </button>
                       </>
                     )}
@@ -4166,8 +4174,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               )}
             </div>
             {paramCount > 0 && (
-              <span className="text-[11px] text-sky-300/80 px-1" title="偵測到具名參數 :name；執行時會逐一提示輸入並安全代入">
-                ⟨{paramCount} 參數⟩
+              <span className="text-[11px] text-sky-300/80 px-1" title={t("偵測到具名參數 :name；執行時會逐一提示輸入並安全代入")}>
+                ⟨{paramCount} {t("參數⟩")}
               </span>
             )}
             {running ? (
@@ -4175,10 +4183,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 // 執行中變紅色「停止」（軟取消）：多語句批次於語句邊界中止、保留已完成結果；
                 // 單條長查詢無法中斷（由查詢逾時兜底）。Esc 同效。
                 onClick={() => { cancelRef.current = true; }}
-                title="停止（Esc）：於下一條語句前中止，已完成的結果保留"
+                title={t("停止（Esc）：於下一條語句前中止，已完成的結果保留")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-600/80 hover:bg-red-600">
                 <Icon icon={Square} size={13} />
-                停止{runProgress ? `（第 ${runProgress.done + 1}/${runProgress.total} 條）` : ""}
+                {t("停止")}{runProgress ? `（第 ${runProgress.done + 1}/${runProgress.total} 條）` : ""}
               </button>
             ) : (
               <button type="button"
@@ -4187,10 +4195,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 // 非 SQL（mongo / redis textarea）維持單一指令直接執行。
                 // 編輯器 lazy chunk 尚未掛載（editorRef 為 null）時退回 execute("run") 整段執行，避免點擊靜默無效。
                 onClick={() => supportsSqlEditor && editorRef.current ? editorRef.current.submit(true) : execute("run")}
-                title="執行整段（F6）；有選取時只跑選取段；游標所在語句請按 Ctrl+Enter"
+                title={t("執行整段（F6）；有選取時只跑選取段；游標所在語句請按 Ctrl+Enter")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-600/80 hover:bg-green-600 disabled:opacity-50">
                 <Icon icon={Play} size={13} />
-                執行 (F6)
+                {t("執行 (F6)")}
               </button>
             )}
           </div>
@@ -4210,7 +4218,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 onSubmit={onEditorSubmit}
                 onSelectionChange={setEditorSel}
                 autoFocus
-                placeholder="SQL 查詢（F6 整段、Ctrl+Enter 執行游標所在語句／選取段；Ctrl+/ 註解、Tab 縮排）"
+                placeholder={t("SQL 查詢（F6 整段、Ctrl+Enter 執行游標所在語句／選取段；Ctrl+/ 註解、Tab 縮排）")}
               />
             </Suspense>
           </div>
@@ -4225,7 +4233,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 connId={activeId}
                 onSubmit={() => execute("run")}
                 autoFocus
-                placeholder={'find：{ "db":"..", "collection":"..", "filter":{}, "sort":{}, "limit":200 }　|　聚合：{ …, "pipeline":[ { "$match":{} } ] }　|　插入：{ …, "insert":[ { "k":"v" } ] }（F6 / Ctrl+Enter 執行）'}
+                placeholder={t("find：{ \"db\":\"..\", \"collection\":\"..\", \"filter\":{}, \"sort\":{}, \"limit\":200 }　|　聚合：{ …, \"pipeline\":[ { \"$match\":{} } ] }　|　插入：{ …, \"insert\":[ { \"k\":\"v\" } ] }（F6 / Ctrl+Enter 執行）")}
               />
             </Suspense>
           </div>
@@ -4237,7 +4245,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             value={sql}
             onChange={(e) => persistSql(e.target.value)}
             spellCheck={false}
-            placeholder="Redis 指令，如 GET key、HGETALL key、SCAN 0（前綴 1: 可指定 DB）"
+            placeholder={t("Redis 指令，如 GET key、HGETALL key、SCAN 0（前綴 1: 可指定 DB）")}
             onKeyDown={(e) => {
               if (e.key === "F6" || ((e.ctrlKey || e.metaKey) && e.key === "Enter")) {
                 e.preventDefault();
@@ -4262,7 +4270,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         {/* 下方分頁列：結果 / 摘要 / 解釋（致敬 Navicat）；右側為執行回饋與複製 / 匯出 */}
         <div className="shrink-0 flex flex-wrap items-center gap-x-1 gap-y-1 px-2 py-0.5 bg-panel border-t border-fg/10 text-[11px]">
           {((["result", "summary", ...(supportsVisualExplain || supportsMongoExplain ? (["explain"] as const) : [])]) as ("result" | "summary" | "explain")[]).map((key) => {
-            const label = key === "result" ? "結果" : key === "summary" ? "摘要" : "解釋";
+            const label = key === "result" ? t("結果") : key === "summary" ? t("摘要") : t("解釋");
             return (
               <button key={key} type="button" onClick={() => setBottomTab(key)}
                 className={`px-2.5 py-1.5 border-b-2 -mb-px transition-colors ${bottomTab === key ? "border-accent text-fg/90" : "border-transparent text-fg/45 hover:text-fg/70"}`}>
@@ -4274,14 +4282,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           })}
           <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-fg/45 pr-1">
             {running && liveMs !== null ? (
-              <span className="inline-flex items-center gap-1 text-fg/70" title="執行中經過時間">
+              <span className="inline-flex items-center gap-1 text-fg/70" title={t("執行中經過時間")}>
                 <Icon icon={Loader2} size={12} className="animate-spin" />
                 {runProgress ? `第 ${runProgress.done + 1}/${runProgress.total} 條 · ` : ""}{fmtElapsed(liveMs)}
               </span>
-            ) : elapsed !== null && <span className="inline-flex items-center gap-1" title="執行時間"><Icon icon={Clock} size={12} />{fmtElapsed(elapsed)}</span>}
+            ) : elapsed !== null && <span className="inline-flex items-center gap-1" title={t("執行時間")}><Icon icon={Clock} size={12} />{fmtElapsed(elapsed)}</span>}
             {bottomTab === "result" && result?.truncated && (
               <span className="inline-flex items-center gap-1.5 text-amber-400/90"
-                title="後端已於列數上限截斷（防止大結果集塞爆記憶體；上限可於設定調整；取完整結果請用匯出）">
+                title={t("後端已於列數上限截斷（防止大結果集塞爆記憶體；上限可於設定調整；取完整結果請用匯出）")}>
                 已截斷於 {result.rows.length.toLocaleString()} 列
               </span>
             )}
@@ -4292,38 +4300,38 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                   <button type="button"
                     onClick={() => document.querySelector(`[data-result-section="${activeIdx}"]`)?.scrollIntoView({ block: "nearest" })}
                     className="text-accent/80 hover:text-accent"
-                    title="複製 / 匯出 / 問 AI 作用於此結果集（點任一結果格可切換）；點此捲至該格">
-                    結果 {activeIdx + 1}
+                    title={t("複製 / 匯出 / 問 AI 作用於此結果集（點任一結果格可切換）；點此捲至該格")}>
+                    {t("結果")} {activeIdx + 1}
                   </button>
                 )}
                 {/* 複製 ▾：主鍵直接複製 CSV（最常用），四種格式與「全部結果集」收進下拉，主列不再平鋪四顆。 */}
                 <div className="relative">
                   <button type="button" onClick={() => setShowCopyMenu((s) => !s)}
-                    title="複製目前所見（含排序 / 篩選）"
+                    title={t("複製目前所見（含排序 / 篩選）")}
                     className="inline-flex items-center gap-1 hover:text-fg/80">
-                    <Icon icon={Copy} size={12} />複製<Icon icon={ChevronDown} size={11} className="text-fg/40" />
+                    <Icon icon={Copy} size={12} />{t("複製")}<Icon icon={ChevronDown} size={11} className="text-fg/40" />
                   </button>
                   {showCopyMenu && (
                     <>
                       <div className="fixed inset-0 z-[89]" onClick={() => setShowCopyMenu(false)} />
                       <div className="absolute right-0 bottom-full mb-1 z-[90] w-52 bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1 text-xs">
                         {([
-                          ["CSV", resultToCsv, "已複製結果 (CSV)"],
-                          ["TSV", resultToTsv, "已複製結果 (TSV)"],
-                          ["JSON", resultToJson, "已複製結果 (JSON)"],
-                          ["Markdown", resultToMarkdown, "已複製結果 (Markdown)"],
+                          ["CSV", resultToCsv, t("已複製結果 (CSV)")],
+                          ["TSV", resultToTsv, t("已複製結果 (TSV)")],
+                          ["JSON", resultToJson, t("已複製結果 (JSON)")],
+                          ["Markdown", resultToMarkdown, t("已複製結果 (Markdown)")],
                         ] as [string, (r: QueryResult) => string, string][]).map(([label, fn, msg]) => (
                           <button key={label} type="button"
                             onClick={() => { setShowCopyMenu(false); if (exportRes) copyToClipboard(fn(exportRes), msg); }}
                             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-fg/75 hover:bg-fg/10">
-                            <Icon icon={Copy} size={12} className="text-fg/45" />複製為 {label}
+                            <Icon icon={Copy} size={12} className="text-fg/45" />{t("複製為")} {label}
                           </button>
                         ))}
                         {resultSets.length > 1 && (
                           <button type="button" onClick={() => { setShowCopyMenu(false); copyAllResults(); }}
-                            title="把全部結果集串成 Markdown 分節複製（## 結果 N + 原 SQL + 表格）"
+                            title={t("把全部結果集串成 Markdown 分節複製（## 結果 N + 原 SQL + 表格）")}
                             className="flex w-full items-center gap-2 px-3 py-1.5 mt-1 text-left text-accent/90 hover:bg-fg/10 border-t border-fg/10">
-                            <Icon icon={Copy} size={12} className="text-accent/60" />複製全部結果集
+                            <Icon icon={Copy} size={12} className="text-accent/60" />{t("複製全部結果集")}
                           </button>
                         )}
                       </div>
@@ -4334,8 +4342,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 <div className="relative">
                   <button type="button"
                     onClick={() => (resultSets.length > 1 ? setShowExportMenu((s) => !s) : exportResult())}
-                    title="匯出結果" className="inline-flex items-center gap-1 hover:text-fg/80">
-                    <Icon icon={Download} size={12} />匯出
+                    title={t("匯出結果")} className="inline-flex items-center gap-1 hover:text-fg/80">
+                    <Icon icon={Download} size={12} />{t("匯出")}
                     {resultSets.length > 1 && <Icon icon={ChevronDown} size={11} className="text-fg/40" />}
                   </button>
                   {showExportMenu && (
@@ -4344,18 +4352,18 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                       <div className="absolute right-0 bottom-full mb-1 z-[90] w-56 bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1 text-xs">
                         <button type="button" onClick={() => { setShowExportMenu(false); exportResult(); }}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-fg/75 hover:bg-fg/10">
-                          <Icon icon={Download} size={12} className="text-fg/45" />匯出目前結果…
+                          <Icon icon={Download} size={12} className="text-fg/45" />{t("匯出目前結果…")}
                         </button>
                         <button type="button" onClick={() => { setShowExportMenu(false); exportAllResults(); }}
-                          title="全部結果集一次匯出：Excel 一格一工作表；CSV/TSV 拆編號多檔；JSON/MD/SQL 單檔分節"
+                          title={t("全部結果集一次匯出：Excel 一格一工作表；CSV/TSV 拆編號多檔；JSON/MD/SQL 單檔分節")}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-accent/90 hover:bg-fg/10">
-                          <Icon icon={Download} size={12} className="text-accent/60" />全部結果集匯出…
+                          <Icon icon={Download} size={12} className="text-accent/60" />{t("全部結果集匯出…")}
                         </button>
                       </div>
                     </>
                   )}
                 </div>
-                <button type="button" onClick={askAiResult} title="把這份結果帶進 AI 助手分析" className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"><Icon icon={Sparkles} size={12} />問 AI</button>
+                <button type="button" onClick={askAiResult} title={t("把這份結果帶進 AI 助手分析")} className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"><Icon icon={Sparkles} size={12} />{t("問 AI")}</button>
               </div>
             )}
           </div>
@@ -4377,13 +4385,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                   <div className="text-red-400 text-sm mono whitespace-pre-wrap break-words">{err}</div>
                   <div className="flex items-center gap-2">
                     <button type="button" onClick={askAiFixError}
-                      title="把這段 SQL 與錯誤訊息帶進 AI 助手，分析原因並給出修正後的 SQL"
+                      title={t("把這段 SQL 與錯誤訊息帶進 AI 助手，分析原因並給出修正後的 SQL")}
                       className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-blue-400/40 text-blue-300 hover:bg-blue-400/10">
-                      <Icon icon={Sparkles} size={13} />AI 分析修正
+                      <Icon icon={Sparkles} size={13} />{t("AI 分析修正")}
                     </button>
-                    <button type="button" onClick={() => copyToClipboard(err, "已複製錯誤訊息")}
+                    <button type="button" onClick={() => copyToClipboard(err, t("已複製錯誤訊息"))}
                       className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 text-fg/60 hover:bg-fg/5">
-                      複製錯誤
+                      {t("複製錯誤")}
                     </button>
                     {/* errStmt === 整份內容時不顯示（反白全部沒有定位價值；external 整批送出失敗時 errStmt 恆為整批）。 */}
                     {errStmt && supportsSqlEditor && errStmt.trim() !== sql.trim() && sql.indexOf(errStmt) >= 0 && (
@@ -4392,9 +4400,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                           const off = sql.indexOf(errStmt);
                           editorRef.current?.selectRange(off, off + errStmt.length);
                         }}
-                        title="在編輯器中反白失敗的那條語句"
+                        title={t("在編輯器中反白失敗的那條語句")}
                         className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 text-fg/60 hover:bg-fg/5">
-                        定位失敗語句
+                        {t("定位失敗語句")}
                       </button>
                     )}
                   </div>
@@ -4415,20 +4423,20 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                         className={`rounded-md border overflow-hidden [content-visibility:auto] [contain-intrinsic-size:auto_300px] ${i === activeIdx ? "border-accent/50" : "border-fg/10"}`}>
                         <header onClick={() => setActiveResult(i)} title={s.sql}
                           className="flex items-center gap-2 px-2.5 py-1 bg-bar text-[11px] cursor-pointer select-none border-b border-fg/10">
-                          <button type="button" aria-label={collapsed ? "展開結果" : "摺疊結果"} title={collapsed ? "展開" : "摺疊"}
+                          <button type="button" aria-label={collapsed ? t("展開結果") : t("摺疊結果")} title={collapsed ? t("展開") : t("摺疊")}
                             onClick={(e) => { e.stopPropagation(); setCollapsedSets((m) => ({ ...m, [i]: !m[i] })); }}
                             className="shrink-0 text-fg/40 hover:text-fg/80">
                             <Icon icon={ChevronRight} size={12} className={`transition-transform ${collapsed ? "" : "rotate-90"}`} />
                           </button>
-                          <span className={`shrink-0 font-medium ${i === activeIdx ? "text-accent" : "text-fg/60"}`}>結果 {i + 1}</span>
+                          <span className={`shrink-0 font-medium ${i === activeIdx ? "text-accent" : "text-fg/60"}`}>{t("結果")} {i + 1}</span>
                           <span className="mono text-fg/35 truncate flex-1">{s.sql.replace(/\s+/g, " ").trim().slice(0, 200)}</span>
                           {s.res.truncated && (
                             <span className="shrink-0 text-amber-400/90"
-                              title="後端已於列數上限截斷（取完整結果請用匯出）">
-                              已截斷
+                              title={t("後端已於列數上限截斷（取完整結果請用匯出）")}>
+                              {t("已截斷")}
                             </span>
                           )}
-                          <span className="text-fg/45 shrink-0">{s.res.rows.length} 列 · {fmtElapsed(s.ms)}</span>
+                          <span className="text-fg/45 shrink-0">{s.res.rows.length} {t("列 ·")} {fmtElapsed(s.ms)}</span>
                         </header>
                         {/* 摺疊用 display:none 而非卸載：保留該格排序 / 篩選 / 選取狀態 */}
                         <div style={collapsed ? { display: "none" } : undefined} className="max-h-[45vh] overflow-auto">
@@ -4445,8 +4453,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               )}
               {!result && !err && (
                 <EmptyState compact icon={running ? Loader2 : Play}
-                  title={running ? "執行中…" : "尚無查詢結果"}
-                  hint={running ? undefined : "按 F6 執行整段，或 Ctrl+Enter 執行游標所在語句／選取段。"}
+                  title={running ? t("執行中…") : t("尚無查詢結果")}
+                  hint={running ? undefined : t("按 F6 執行整段，或 Ctrl+Enter 執行游標所在語句／選取段。")}
                   className={running ? "[&_svg]:animate-spin" : ""} />
               )}
             </>
@@ -4454,7 +4462,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           {bottomTab === "summary" && (
             summary
               ? <RunSummaryView summary={summary} />
-              : <EmptyState compact icon={FileText} title="尚無執行摘要" hint="執行查詢後，這裡會列出每條語句的結果與耗時。" />
+              : <EmptyState compact icon={FileText} title={t("尚無執行摘要")} hint={t("執行查詢後，這裡會列出每條語句的結果與耗時。")} />
           )}
           {bottomTab === "explain" && (
             mongoPlan
@@ -4464,8 +4472,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               : planErr
                 ? <div className="p-3 text-amber-300 text-sm whitespace-pre-wrap break-words">{planErr}</div>
                 : <EmptyState compact icon={running ? Loader2 : GitBranch}
-                    title={running ? "解釋中…" : "尚無執行計畫"}
-                    hint={running ? undefined : "按「視覺化解釋」以執行計畫樹呈現查詢。"}
+                    title={running ? t("解釋中…") : t("尚無執行計畫")}
+                    hint={running ? undefined : t("按「視覺化解釋」以執行計畫樹呈現查詢。")}
                     className={running ? "[&_svg]:animate-spin" : ""} />
           )}
         </div>
@@ -4486,6 +4494,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
 // memo：多結果集堆疊時，父層（QueryPane）因作用中表格回報 resultView 而頻繁重渲染（每個篩選鍵擊 / 排序點擊），
 // 不 memo 會讓其餘 N-1 個大表格跟著全數 reconcile；props（result / onViewChange / maxRender）皆為穩定 identity。
 const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender = 2000 }: { result: QueryResult; onViewChange?: (rows: (string | null)[][]) => void; maxRender?: number }) {
+  const t = useT();
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
   // 範圍選取（Shift+點選第二角）：null = 單格。Ctrl+C 複製整個矩形為 TSV，狀態列顯示統計。
   const [rangeEnd, setRangeEnd] = useState<{ r: number; c: number } | null>(null);
@@ -4557,25 +4566,25 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   const rendered = viewRows.length > MAX_RENDER ? viewRows.slice(0, MAX_RENDER) : viewRows;
 
   const cell = (r: number, c: number) => viewRows[r]?.[c] ?? null;
-  const copyCell = (r: number, c: number) => copyToClipboard(cell(r, c) ?? "", "已複製儲存格");
+  const copyCell = (r: number, c: number) => copyToClipboard(cell(r, c) ?? "", t("已複製儲存格"));
   const copyRowTsv = (r: number) =>
-    copyToClipboard(viewRows[r].map((v) => v ?? "").join("\t"), "已複製整列 (TSV)");
+    copyToClipboard(viewRows[r].map((v) => v ?? "").join("\t"), t("已複製整列 (TSV)"));
   const copyRowJson = (r: number) =>
     copyToClipboard(
       JSON.stringify(Object.fromEntries(result.columns.map((c, j) => [c, viewRows[r][j] ?? null])), null, 2),
-      "已複製整列 (JSON)"
+      t("已複製整列 (JSON)")
     );
   const copyCol = (c: number) =>
-    copyToClipboard(viewRows.map((row) => row[c] ?? "").join("\n"), "已複製整欄");
-  const copyHeader = (c: number) => copyToClipboard(result.columns[c] ?? "", "已複製標題");
+    copyToClipboard(viewRows.map((row) => row[c] ?? "").join("\n"), t("已複製整欄"));
+  const copyHeader = (c: number) => copyToClipboard(result.columns[c] ?? "", t("已複製標題"));
   // 標題+值：單行「欄名: 值」（貼聊天 / 文件用；機器格式已有整列 TSV/JSON）。NULL → 空字串同「複製值」。
   const copyHeaderValue = (r: number, c: number) =>
-    copyToClipboard(`${result.columns[c] ?? ""}: ${cell(r, c) ?? ""}`, "已複製標題+值");
+    copyToClipboard(`${result.columns[c] ?? ""}: ${cell(r, c) ?? ""}`, t("已複製標題+值"));
   // 整列含標題列：兩行 TSV（標題列 + 資料列），可直接貼 Excel 對欄（SSMS Copy with Headers）。
   const copyRowTsvWithHeader = (r: number) =>
     copyToClipboard(
       `${result.columns.join("\t")}\n${viewRows[r].map((v) => v ?? "").join("\t")}`,
-      "已複製整列（含標題列）"
+      t("已複製整列（含標題列）")
     );
   const toggleSort = (ci: number) =>
     setSort((s) => (s?.c === ci ? (s.dir === "asc" ? { c: ci, dir: "desc" } : null) : { c: ci, dir: "asc" }));
@@ -4595,12 +4604,12 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   const copyRange = () => {
     const rc = rangeRC();
     if (!rc) return;
-    copyToClipboard(rectToTsv((r, c) => cell(r, c), rc.rows, rc.cols), `已複製 ${rc.rows.length}×${rc.cols.length} 區塊 (TSV)`);
+    copyToClipboard(rectToTsv((r, c) => cell(r, c), rc.rows, rc.cols), t("已複製 {length}×{v2} 區塊 (TSV)", { length: rc.rows.length, v2: rc.cols.length }));
   };
   const copyRangeMarkdown = () => {
     const rc = rangeRC();
     if (!rc) return;
-    copyToClipboard(rectToMarkdown((r, c) => cell(r, c), rc.rows, rc.cols, (c) => result.columns[c]), `已複製 ${rc.rows.length}×${rc.cols.length} 區塊 (Markdown)`);
+    copyToClipboard(rectToMarkdown((r, c) => cell(r, c), rc.rows, rc.cols, (c) => result.columns[c]), t("已複製 {length}×{v2} 區塊 (Markdown)", { length: rc.rows.length, v2: rc.cols.length }));
   };
   // 框選範圍統計（Excel 狀態列手感）。以 selected/rangeEnd/viewRows 為相依重算。
   const selStats = useMemo(() => {
@@ -4684,7 +4693,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   if (result.columns.length === 0) {
     return (
       <div className="p-3 text-fg/50 text-sm">
-        影響列數：{result.rows_affected}
+        {t("影響列數：")}{result.rows_affected}
       </div>
     );
   }
@@ -4708,32 +4717,32 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                 else setFilterOpen(false);
               }}
               onBlur={() => { if (!rfilter) setFilterOpen(false); }}
-              placeholder="篩選結果（任一欄含關鍵字）…"
+              placeholder={t("篩選結果（任一欄含關鍵字）…")}
               className="w-64 bg-inset border border-fg/10 rounded pl-7 pr-6 py-1 text-xs outline-none focus:border-accent"
             />
             {rfilter && (
-              <button type="button" onClick={() => { setRfilter(""); setFilterOpen(false); }} title="清除篩選" aria-label="清除篩選"
+              <button type="button" onClick={() => { setRfilter(""); setFilterOpen(false); }} title={t("清除篩選")} aria-label={t("清除篩選")}
                 className="absolute right-1 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded text-fg/30 hover:text-fg/70 hover:bg-fg/10">
                 <Icon icon={X} size={12} />
               </button>
             )}
           </div>
         ) : (
-          <button type="button" onClick={openFilter} title="篩選結果（Ctrl+F）" aria-label="篩選結果"
+          <button type="button" onClick={openFilter} title={t("篩選結果（Ctrl+F）")} aria-label={t("篩選結果")}
             className="w-7 h-7 flex items-center justify-center rounded text-fg/40 hover:text-fg/80 hover:bg-fg/10">
             <Icon icon={Search} size={14} />
           </button>
         )}
         <span className="text-xs text-fg/40">
-          {rfilter.trim() ? `${viewRows.length} / ${result.rows.length} 列` : `${result.rows.length} 列`}
+          {rfilter.trim() ? t("{length} / {v2} 列", { length: viewRows.length, v2: result.rows.length }) : t("{length} 列", { length: result.rows.length })}
         </span>
         {selStats && (
-          <span className="ml-auto text-xs text-fg/45 mono whitespace-nowrap" title="框選範圍統計（Shift+點選）">
+          <span className="ml-auto text-xs text-fg/45 mono whitespace-nowrap" title={t("框選範圍統計（Shift+點選）")}>
             已選 {selStats.rows}×{selStats.colsN}（{selStats.count} 格）
             {selStats.numCount > 0 &&
-              ` · 數值 ${selStats.numCount} · Σ ${fmtNum(selStats.sum)} · 平均 ${fmtNum(selStats.avg)}`}
+              t(" · 數值 {numCount} · Σ {sum} · 平均 {avg}", { numCount: selStats.numCount, sum: fmtNum(selStats.sum), avg: fmtNum(selStats.avg) })}
             {selStats.numCount > 1 &&
-              ` · 最小 ${fmtNum(selStats.min)} · 最大 ${fmtNum(selStats.max)}`}
+              t(" · 最小 {min} · 最大 {max}", { min: fmtNum(selStats.min), max: fmtNum(selStats.max) })}
           </span>
         )}
       </div>
@@ -4746,7 +4755,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSort(ci); } }}
                 {...(sort?.c === ci ? { "aria-sort": sort.dir === "asc" ? "ascending" : "descending" } : {})}
                 onContextMenu={(e) => { e.preventDefault(); setColMenu({ c: ci, x: e.clientX, y: e.clientY }); }}
-                title="點擊排序（再點切換 / 取消）；右鍵更多"
+                title={t("點擊排序（再點切換 / 取消）；右鍵更多")}
                 className="text-left px-3 py-1.5 border-b border-fg/15 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-fg/5 bg-bar focus-visible:outline-2 focus-visible:outline-accent/60 focus-visible:-outline-offset-2">
                 {c}
                 {sort?.c === ci && <Icon icon={sort.dir === "asc" ? ArrowUp : ArrowDown} size={12} className="ml-1 inline text-accent" />}
@@ -4770,7 +4779,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                     (e.currentTarget.closest("[tabindex]") as HTMLElement | null)?.focus();
                   } else setRowDetail(i);
                 }}
-                title="點看整列表單、Shift+點選整列"
+                title={t("點看整列表單、Shift+點選整列")}
                 className={`px-3 py-1 border-b border-fg/5 text-fg/30 tabular-nums cursor-pointer select-none hover:bg-fg/5 hover:text-fg/60 ${rowSel ? "text-accent/90" : "bg-fg/[0.015]"}`}>{i + 1}</td>
               {row.map((c, j) => (
                 <td key={j}
@@ -4792,7 +4801,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                   }${
                     selected?.r === i && selected?.c === j ? "bg-accent/15" : inRange(i, j) ? "bg-accent/10" : ""
                   }`}
-                  title={c == null ? "NULL（雙擊檢視）" : c}>
+                  title={c == null ? t("NULL（雙擊檢視）") : c}>
                   {/* 單行截斷 + 上限寬度：長字串（Memo / RefTransId / JSON）不再換行撐爆列高；完整值看 title 提示、雙擊檢視、或點列號看整列。 */}
                   {c === null ? <span className="text-fg/30 italic">NULL</span> : <div className="truncate max-w-[60ch]">{c}</div>}
                 </td>
@@ -4817,11 +4826,11 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
             style={{ left: colMenu.x, top: colMenu.y }}>
             {(
               [
-                ["升冪排序 ▲", () => setSort({ c: colMenu.c, dir: "asc" })],
-                ["降冪排序 ▼", () => setSort({ c: colMenu.c, dir: "desc" })],
-                ...(sort ? [["清除排序", () => setSort(null)] as [string, () => void]] : []),
-                ["複製欄名", () => copyToClipboard(result.columns[colMenu.c], "已複製欄名")],
-                ["複製整欄", () => copyCol(colMenu.c)],
+                [t("升冪排序 ▲"), () => setSort({ c: colMenu.c, dir: "asc" })],
+                [t("降冪排序 ▼"), () => setSort({ c: colMenu.c, dir: "desc" })],
+                ...(sort ? [[t("清除排序"), () => setSort(null)] as [string, () => void]] : []),
+                [t("複製欄名"), () => copyToClipboard(result.columns[colMenu.c], t("已複製欄名"))],
+                [t("複製整欄"), () => copyCol(colMenu.c)],
               ] as [string, () => void][]
             ).map(([label, fn]) => (
               <button key={label} type="button"
@@ -4849,7 +4858,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
           <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[84vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
             onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
-              <span className="font-medium text-sm">列詳情</span>
+              <span className="font-medium text-sm">{t("列詳情")}</span>
               <span className="text-xs text-fg/40">第 {rowDetail + 1} 列</span>
               <button type="button" onClick={() => setRowDetail(null)} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
             </div>
@@ -4866,7 +4875,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
             </div>
             <div className="px-5 py-3 border-t border-fg/10 flex justify-end">
               <button type="button" onClick={() => setRowDetail(null)}
-                className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">關閉</button>
+                className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("關閉")}</button>
             </div>
           </div>
         </div>
@@ -4881,21 +4890,21 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
             style={{ left: menu.x, top: menu.y }}>
             {(
               [
-                ["檢視內容…", () => setInspect({ r: menu.r, c: menu.c })],
-                ["檢視此列（表單）…", () => setRowDetail(menu.r)],
-                ["複製值", () => copyCell(menu.r, menu.c)],
-                ["複製標題", () => copyHeader(menu.c)],
-                ["複製標題+值", () => copyHeaderValue(menu.r, menu.c)],
+                [t("檢視內容…"), () => setInspect({ r: menu.r, c: menu.c })],
+                [t("檢視此列（表單）…"), () => setRowDetail(menu.r)],
+                [t("複製值"), () => copyCell(menu.r, menu.c)],
+                [t("複製標題"), () => copyHeader(menu.c)],
+                [t("複製標題+值"), () => copyHeaderValue(menu.r, menu.c)],
                 ...(rangeEnd && inRange(menu.r, menu.c)
                   ? [
-                      ["複製範圍 (TSV)", () => copyRange()] as [string, () => void],
-                      ["複製範圍 (Markdown)", () => copyRangeMarkdown()] as [string, () => void],
+                      [t("複製範圍 (TSV)"), () => copyRange()] as [string, () => void],
+                      [t("複製範圍 (Markdown)"), () => copyRangeMarkdown()] as [string, () => void],
                     ]
                   : []),
-                ["複製整列 (TSV)", () => copyRowTsv(menu.r)],
-                ["複製整列（含標題列）", () => copyRowTsvWithHeader(menu.r)],
-                ["複製整列 (JSON)", () => copyRowJson(menu.r)],
-                ["複製整欄", () => copyCol(menu.c)],
+                [t("複製整列 (TSV)"), () => copyRowTsv(menu.r)],
+                [t("複製整列（含標題列）"), () => copyRowTsvWithHeader(menu.r)],
+                [t("複製整列 (JSON)"), () => copyRowJson(menu.r)],
+                [t("複製整欄"), () => copyCol(menu.c)],
               ] as [string, () => void][]
             ).map(([label, fn]) => (
               <button key={label} type="button"

@@ -62,7 +62,7 @@ export default function ExportDialog({ connId, database, table, query, onClose }
   return (
     <Modal
       onClose={onClose}
-      title={<>匯出資料 · <span className="mono text-fg/60">{table}</span></>}
+      title={<>{t("匯出資料 ·")} <span className="mono text-fg/60">{table}</span></>}
       icon={Upload}
       size="sm"
       zClass="z-50"

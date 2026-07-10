@@ -105,13 +105,22 @@ export function t(zh: string, params?: Params): string {
 /**
  * 元件內用：訂閱語言，使切換時重繪。
  *
- * 回傳值的**參考身分綁在 catalog 上**（而非永遠是同一個 `t`），這樣它才能安全地放進
- * `useMemo` / `useCallback` 的依賴陣列 —— 否則像 Sidebar 的 paletteItems 那種
- * 「在 useMemo 裡產生譯文」的地方，切語言後 memo 不會失效，畫面會留在舊語言。
+ * 兩個刻意的性質：
+ *
+ * 1. **參考身分綁在 catalog 上**（而非永遠是同一個 `t`）。這樣它才能安全地放進
+ *    `useMemo` / `useCallback` 的依賴陣列 —— 否則像 Sidebar 的 paletteItems 那種
+ *    「在 useMemo 裡產生譯文」的地方，切語言後 memo 不會失效，畫面會留在舊語言。
+ *
+ * 2. **不把 catalog 關進閉包**，而是委派給讀取即時 store 的 `t`。元件裡的非同步
+ *    callback（`catch (e) { toast.error(t("讀取失敗")) }`）常常在語言切換之後才執行；
+ *    若閉包捕捉了當時的 catalog，那則 toast 會冒出上一個語言。委派後永遠是當前語言，
+ *    因此 `t` 不放進依賴陣列也不會有正確性問題（eslint 的 exhaustive-deps 仍會提醒）。
  */
 export function useT(): typeof t {
   const catalog = useLang((s) => s.catalog);
-  return useMemo<typeof t>(() => (zh, params) => resolve(catalog, zh, params), [catalog]);
+  // catalog 是刻意的「身分標記」而非被讀取的值：換了語言就換一個 t 參考，讓下游 memo 失效。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo<typeof t>(() => (zh, params) => t(zh, params), [catalog]);
 }
 
 /** 同步套用 <html lang>；供啟動時在首次繪製前呼叫。 */

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Folder, KeyRound, Circle } from "lucide-react";
 import { api } from "./api";
 import Icon from "./ui/Icon";
+import { useT } from "./i18n";
 
 const LIMIT = 10000;
 const SEP = ":";
@@ -88,6 +89,7 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
   onOpenKey: (key: string) => void;
   onContextKey: (key: string, x: number, y: number) => void;
 }) {
+  const t = useT();
   const [patternInput, setPatternInput] = useState("*");
   const [pattern, setPattern] = useState("*");
   const [keys, setKeys] = useState<string[] | null>(null);
@@ -108,7 +110,7 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
         setKeys(res.keys);
         setTruncated(res.truncated);
       })
-      .catch((e) => !cancelled && setErr(e?.message ?? "讀取失敗"))
+      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
   }, [connId, database, pattern, nonce]);
@@ -141,17 +143,17 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
           value={patternInput}
           onChange={(e) => setPatternInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) apply(); }}
-          placeholder="MATCH 樣式，如 user:*"
+          placeholder={t("MATCH 樣式，如 user:*")}
           className="w-48 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent"
         />
-        <button type="button" onClick={apply} className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60">套用</button>
+        <button type="button" onClick={apply} className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60">{t("套用")}</button>
         <div className="w-px h-4 bg-fg/10 mx-1" />
         <button type="button" onClick={() => tree && setExpanded(new Set(allFolderPaths(tree)))}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60">展開全部</button>
+          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60">{t("展開全部")}</button>
         <button type="button" onClick={() => setExpanded(new Set())}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60">收合全部</button>
+          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60">{t("收合全部")}</button>
         <span className="ml-auto text-fg/40">
-          {loading ? "讀取中…" : keys ? `${keys.length} 個鍵${truncated ? `（已達 ${LIMIT} 上限）` : ""}` : ""}
+          {loading ? t("讀取中…") : keys ? `${keys.length} 個鍵${truncated ? t("（已達 {LIMIT} 上限）", { LIMIT }) : ""}` : ""}
         </span>
       </div>
 
@@ -163,7 +165,7 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
           </div>
         )}
         {keys && keys.length === 0 && !err && (
-          <div className="p-3 text-fg/40 text-sm">（無符合的鍵）</div>
+          <div className="p-3 text-fg/40 text-sm">{t("（無符合的鍵）")}</div>
         )}
         {rows.map((r, i) =>
           r.kind === "folder" ? (
@@ -181,14 +183,14 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
                 <span
                   onClick={(e) => { e.stopPropagation(); onOpenKey(r.selfKey!); }}
                   onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextKey(r.selfKey!, e.clientX, e.clientY); }}
-                  title={`${r.selfKey}（此節點本身也是一個鍵，點此開啟）`}
+                  title={t("{selfKey}（此節點本身也是一個鍵，點此開啟）", { selfKey: r.selfKey })}
                   className="truncate text-blue-300 hover:underline"
                 >{r.seg}</span>
               ) : (
                 <span className="truncate text-fg/80">{r.seg}</span>
               )}
               <span className="text-[10px] text-fg/30 ml-1">({r.count})</span>
-              {r.selfKey != null && <Icon icon={KeyRound} size={12} className="text-blue-300/70 ml-0.5" title="此節點本身也是一個鍵" />}
+              {r.selfKey != null && <Icon icon={KeyRound} size={12} className="text-blue-300/70 ml-0.5" title={t("此節點本身也是一個鍵")} />}
             </div>
           ) : (
             <div

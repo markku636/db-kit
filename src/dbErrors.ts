@@ -3,6 +3,7 @@
 // 純函式：比對各家族錯誤碼 / 慣用片語，不依賴任何 runtime。
 
 import type { DbKind } from "./api";
+import { t } from "./i18n";
 
 interface ErrorRule {
   /** 適用的連線類型；空陣列 = 全部 */
@@ -65,7 +66,7 @@ export function friendlyDbError(kind: DbKind | undefined, raw: string): string |
   if (!raw) return null;
   for (const r of RULES) {
     if (r.kinds.length > 0 && (!kind || !r.kinds.includes(kind))) continue;
-    if (r.pattern.test(raw)) return r.hint;
+    if (r.pattern.test(raw)) return t(r.hint);
   }
   return null;
 }

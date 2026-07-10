@@ -3,6 +3,7 @@
 // 純函式、可單元測試；UI 載入兩表資料後呼叫，產生的 DML 供檢視後執行（不自動套用）。
 import { DbKind } from "./api";
 import { quoteIdent, sqlLiteral, qualifiedName, buildInsertValues } from "./sql";
+import { t } from "./i18n";
 
 export interface RowSet {
   columns: string[];
@@ -25,10 +26,10 @@ function keyByIdx(row: (string | null)[], idxs: number[]): string {
 export function diffRowsByPk(src: RowSet, dst: RowSet): RowDiff {
   const srcPkIdx = src.pk.map((c) => src.columns.indexOf(c)).filter((i) => i >= 0);
   if (srcPkIdx.length !== src.pk.length || src.pk.length === 0) {
-    throw new Error("來源缺主鍵，無法以主鍵比對");
+    throw new Error(t("來源缺主鍵，無法以主鍵比對"));
   }
   const dstPkIdx = src.pk.map((c) => dst.columns.indexOf(c));
-  if (dstPkIdx.some((i) => i < 0)) throw new Error("目標缺少對應主鍵欄位");
+  if (dstPkIdx.some((i) => i < 0)) throw new Error(t("目標缺少對應主鍵欄位"));
   // 來源欄 → 目標欄索引（比對非主鍵欄值用）。
   const dstColIdx = src.columns.map((c) => dst.columns.indexOf(c));
 

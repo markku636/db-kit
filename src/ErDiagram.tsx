@@ -4,6 +4,7 @@ import { api, ErModel, ErTable } from "./api";
 import Icon from "./ui/Icon";
 import { IconButton } from "./ui/index";
 import { useModalOverlay } from "./ui";
+import { useT } from "./i18n";
 
 const CARD_W = 210;
 const CANVAS_W = 2400;
@@ -17,6 +18,7 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
   initialDb?: string;   // 開啟時預選的資料庫 / schema（由「逆向至模型」帶入該表所屬庫）
   focusTable?: string;  // 開啟時高亮的資料表（突顯該表與其關聯）
 }) {
+  const t = useT();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount
   const [dbs, setDbs] = useState<string[]>([]);
   const [db, setDb] = useState("");
@@ -39,7 +41,7 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
     api
       .listDatabases(connId)
       .then((d) => { setDbs(d); setDb((cur) => cur || initialDb || d[0] || ""); })
-      .catch((e) => setErr(e?.message ?? "讀取資料庫失敗"));
+      .catch((e) => setErr(e?.message ?? t("讀取資料庫失敗")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connId]);
 
@@ -81,7 +83,7 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
         }
         setPos(base);
       })
-      .catch((e) => { if (!cancelled) { setErr(e?.message ?? "讀取 ER 失敗"); setModel(null); } })
+      .catch((e) => { if (!cancelled) { setErr(e?.message ?? t("讀取 ER 失敗")); setModel(null); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -171,29 +173,29 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
       <div className="bg-panel w-[92vw] h-[88vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
         onClick={(e) => e.stopPropagation()}>
         <div className="px-4 py-2 border-b border-fg/10 flex items-center gap-3 text-sm">
-          <span className="font-medium">ER 圖</span>
-          <select value={db} onChange={(e) => setDb(e.target.value)} title="選擇資料庫 / schema"
+          <span className="font-medium">{t("ER 圖")}</span>
+          <select value={db} onChange={(e) => setDb(e.target.value)} title={t("選擇資料庫 / schema")}
             className="bg-inset border border-fg/10 rounded px-2 py-1 text-xs outline-none">
             {dbs.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
-          {loading && <span className="text-fg/40 text-xs">讀取中…</span>}
+          {loading && <span className="text-fg/40 text-xs">{t("讀取中…")}</span>}
           {model && !loading && (
             <span className="text-fg/40 text-xs">{model.tables.length} 表 · {model.relations.length} 關聯（可拖曳表卡）</span>
           )}
           {/* 縮放控制（致敬 Navicat / DBeaver 的 ER 工具） */}
           <div className="ml-auto flex items-center gap-1">
-            <button type="button" className={zbtn} title="縮小" aria-label="縮小" onClick={() => bump(-0.1)}><Icon icon={Minus} size={14} /></button>
+            <button type="button" className={zbtn} title={t("縮小")} aria-label={t("縮小")} onClick={() => bump(-0.1)}><Icon icon={Minus} size={14} /></button>
             <span className="text-fg/50 text-xs w-12 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
-            <button type="button" className={zbtn} title="放大" aria-label="放大" onClick={() => bump(0.1)}><Icon icon={Plus} size={14} /></button>
-            <button type="button" className={zbtn} title="符合視窗" onClick={fit}>適配</button>
-            <button type="button" className={zbtn} title="重置佈局與縮放" onClick={resetLayout}>重置</button>
+            <button type="button" className={zbtn} title={t("放大")} aria-label={t("放大")} onClick={() => bump(0.1)}><Icon icon={Plus} size={14} /></button>
+            <button type="button" className={zbtn} title={t("符合視窗")} onClick={fit}>{t("適配")}</button>
+            <button type="button" className={zbtn} title={t("重置佈局與縮放")} onClick={resetLayout}>{t("重置")}</button>
           </div>
-          <IconButton icon={X} label="關閉" onClick={onClose} className="text-fg/40 hover:text-fg" />
+          <IconButton icon={X} label={t("關閉")} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
         <div ref={viewRef} className="flex-1 overflow-auto relative">
           {err && <div className="p-3 text-red-400 text-sm mono">{err}</div>}
           {model && model.tables.length === 0 && !err && (
-            <div className="p-3 text-fg/40 text-sm">此資料庫沒有表。</div>
+            <div className="p-3 text-fg/40 text-sm">{t("此資料庫沒有表。")}</div>
           )}
           {model && model.tables.length > 0 && (
             <div style={{ width: CANVAS_W * zoom, height: CANVAS_H * zoom }}>

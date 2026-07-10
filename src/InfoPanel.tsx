@@ -5,6 +5,7 @@ import Icon from "./ui/Icon";
 import { IconButton } from "./ui/index";
 import { useStore } from "./store";
 import { databaseOptionsSql } from "./sql";
+import { useT } from "./i18n";
 
 // 右側「詳細資料」面板：單擊左側樹節點（連線 / 資料庫 / 資料表）即時顯示其唯讀摘要。
 // 對標 Navicat 物件資訊面板；編輯仍走右鍵「屬性…」對話框，本面板僅檢視，避免誤改。
@@ -16,6 +17,7 @@ const WIDTH_MAX = 560;
 const WIDTH_DEFAULT = 288; // 對應原本的 w-72
 
 export default function InfoPanel() {
+  const t = useT();
   const node = useStore((s) => s.selectedNode);
   const connections = useStore((s) => s.connections);
   const connectedIds = useStore((s) => s.connectedIds);
@@ -64,9 +66,9 @@ export default function InfoPanel() {
   if (!open) {
     return (
       <div className="w-7 shrink-0 bg-panel border-l border-fg/10 flex flex-col items-center pt-2">
-        <IconButton icon={ChevronLeft} label="顯示詳細資料面板" iconSize={16} box="w-6 h-6"
+        <IconButton icon={ChevronLeft} label={t("顯示詳細資料面板")} iconSize={16} box="w-6 h-6"
           onClick={toggle} />
-        <div className="mt-3 text-[10px] text-fg/30 tracking-wide [writing-mode:vertical-rl]">詳細資料</div>
+        <div className="mt-3 text-[10px] text-fg/30 tracking-wide [writing-mode:vertical-rl]">{t("詳細資料")}</div>
       </div>
     );
   }
@@ -76,17 +78,17 @@ export default function InfoPanel() {
 
   return (
     <div className="shrink-0 bg-panel border-l border-fg/10 flex flex-col text-sm relative" style={{ width }}>
-      <div onPointerDown={startResize} title="拖曳調整寬度"
+      <div onPointerDown={startResize} title={t("拖曳調整寬度")}
         className="absolute left-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent/40 z-10" />
       <div className="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-fg/10">
-        <span className="text-xs text-fg/45 uppercase tracking-wide">詳細資料</span>
-        <IconButton icon={ChevronRight} label="收合面板" iconSize={16} box="w-6 h-6"
+        <span className="text-xs text-fg/45 uppercase tracking-wide">{t("詳細資料")}</span>
+        <IconButton icon={ChevronRight} label={t("收合面板")} iconSize={16} box="w-6 h-6"
           onClick={toggle} className="ml-auto" />
       </div>
       <div className="flex-1 overflow-auto">
         {!node || !conn ? (
           <div className="p-4 text-fg/30 text-xs leading-relaxed">
-            點選左側的連線、資料庫或資料表節點，這裡會顯示其詳細資料。
+            {t("點選左側的連線、資料庫或資料表節點，這裡會顯示其詳細資料。")}
           </div>
         ) : node.type === "connection" ? (
           <ConnectionInfo key={conn.id} conn={conn} connected={connected} />
@@ -109,6 +111,7 @@ export default function InfoPanel() {
 
 // ---- 連線（伺服器）摘要 ----
 function ConnectionInfo({ conn, connected }: { conn: ConnectionConfig; connected: boolean }) {
+  const t = useT();
   const meta = KIND_META[conn.kind];
   const [ping, setPing] = useState<number | null>(null);
   const [pool, setPool] = useState<PoolStatus | null>(null);
@@ -158,7 +161,7 @@ function ConnectionInfo({ conn, connected }: { conn: ConnectionConfig; connected
           // serverStatus + buildInfo（伺服器區的「版本」列）。
           const secs = await api.serverInfo(conn.id).catch(() => []);
           for (const s of secs) {
-            const hit = s.items.find(([k]) => k === "版本");
+            const hit = s.items.find(([k]) => k === t("版本"));
             if (hit) { ver = hit[1]; break; }
           }
         }
@@ -179,54 +182,54 @@ function ConnectionInfo({ conn, connected }: { conn: ConnectionConfig; connected
   }, [conn.id, connected]);
 
   const cfgRows: [string, string][] = meta?.fileBased
-    ? [["檔案路徑", conn.host || "—"]]
-    : [["主機", `${conn.host}:${conn.port}`], ["使用者", conn.username || "—"]];
-  cfgRows.unshift(["類型", meta?.label ?? conn.kind]);
-  cfgRows.push(["預設資料庫", conn.database || "—"]);
-  if (!meta?.fileBased) cfgRows.push(["連線池上限", String(conn.max_connections ?? "—")]);
+    ? [[t("檔案路徑"), conn.host || "—"]]
+    : [[t("主機"), `${conn.host}:${conn.port}`], [t("使用者"), conn.username || "—"]];
+  cfgRows.unshift([t("類型"), meta?.label ?? conn.kind]);
+  cfgRows.push([t("預設資料庫"), conn.database || "—"]);
+  if (!meta?.fileBased) cfgRows.push([t("連線池上限"), String(conn.max_connections ?? "—")]);
 
   const sshRows: [string, string][] = conn.ssh_enabled
     ? [
-        ["SSH 主機", `${conn.ssh_host ?? "—"}:${conn.ssh_port ?? 22}`],
-        ["SSH 使用者", conn.ssh_username || "—"],
-        ["SSH 驗證", conn.ssh_auth_method === "key" ? "金鑰" : "密碼"],
+        [t("SSH 主機"), `${conn.ssh_host ?? "—"}:${conn.ssh_port ?? 22}`],
+        [t("SSH 使用者"), conn.ssh_username || "—"],
+        [t("SSH 驗證"), conn.ssh_auth_method === "key" ? t("金鑰") : t("密碼")],
       ]
     : [];
 
   return (
     <div className="p-3 space-y-3">
       <Header dotColor={meta?.color ?? "#888"} title={conn.name}
-        badge={connected ? "已連線" : "未連線"} badgeOk={connected} />
+        badge={connected ? t("已連線") : t("未連線")} badgeOk={connected} />
 
-      <Section title="連線">
+      <Section title={t("連線")}>
         {cfgRows.map(([k, v]) => <Row key={k} k={k} v={v} />)}
       </Section>
 
       {sshRows.length > 0 && (
-        <Section title="SSH 通道">
+        <Section title={t("SSH 通道")}>
           {sshRows.map(([k, v]) => <Row key={k} k={k} v={v} />)}
         </Section>
       )}
 
       <Section
-        title="伺服器 / 即時"
+        title={t("伺服器 / 即時")}
         action={connected ? (
           <button type="button" onClick={refresh} disabled={busy}
             className="text-[11px] text-blue-400 hover:text-blue-300 disabled:opacity-40">
-            {busy ? "更新中…" : "重新整理"}
+            {busy ? t("更新中…") : t("重新整理")}
           </button>
         ) : undefined}
       >
         {!connected ? (
-          <div className="text-fg/40 text-xs px-3 py-1.5">未連線，無即時狀態。</div>
+          <div className="text-fg/40 text-xs px-3 py-1.5">{t("未連線，無即時狀態。")}</div>
         ) : (
           <>
-            {version && <Row k="伺服器版本" v={version} />}
-            {charset && <Row k="字元集 / 定序" v={charset} />}
-            {dbCount != null && <Row k={meta?.fileBased ? "資料表" : "資料庫數"} v={String(dbCount)} />}
-            <Row k="連線延遲" v={ping == null ? "—" : `${ping} ms`} />
+            {version && <Row k={t("伺服器版本")} v={version} />}
+            {charset && <Row k={t("字元集 / 定序")} v={charset} />}
+            {dbCount != null && <Row k={meta?.fileBased ? t("資料表") : t("資料庫數")} v={String(dbCount)} />}
+            <Row k={t("連線延遲")} v={ping == null ? "—" : `${ping} ms`} />
             {!meta?.fileBased && (
-              <Row k="連線池（用 / 閒 / 總）"
+              <Row k={t("連線池（用 / 閒 / 總）")}
                 v={pool ? `${pool.in_use} / ${pool.idle} / ${pool.size}` : "—"} />
             )}
           </>
@@ -240,11 +243,12 @@ function ConnectionInfo({ conn, connected }: { conn: ConnectionConfig; connected
 function DatabaseInfo({ connId, db, kind, connected }: {
   connId: string; db: string; kind: DbKind; connected: boolean;
 }) {
+  const t = useT();
   const [tables, setTables] = useState<number | null>(null);
   const [views, setViews] = useState<number | null>(null);
   const [charset, setCharset] = useState<string | null>(null);
   const [size, setSize] = useState<string | null>(null);
-  const objNoun = kind === "mongo" ? "集合" : kind === "redis" ? "鍵" : "資料表";
+  const objNoun = kind === "mongo" ? t("集合") : kind === "redis" ? t("鍵") : t("資料表");
 
   useEffect(() => {
     let alive = true;
@@ -276,15 +280,15 @@ function DatabaseInfo({ connId, db, kind, connected }: {
 
   return (
     <div className="p-3 space-y-3">
-      <Header dotColor="#64748b" title={db} badge={kind === "postgres" ? "Schema" : "資料庫"} />
-      <Section title="概要">
+      <Header dotColor="#64748b" title={db} badge={kind === "postgres" ? "Schema" : t("資料庫")} />
+      <Section title={t("概要")}>
         <Row k={objNoun} v={tables == null ? "…" : String(tables)} />
-        {views != null && views > 0 && <Row k="視圖" v={String(views)} />}
-        {charset && <Row k="字元集 / 定序" v={charset} />}
-        {size && <Row k="資料大小" v={size} />}
+        {views != null && views > 0 && <Row k={t("視圖")} v={String(views)} />}
+        {charset && <Row k={t("字元集 / 定序")} v={charset} />}
+        {size && <Row k={t("資料大小")} v={size} />}
       </Section>
       <div className="text-[11px] text-fg/30 px-1 leading-relaxed">
-        右鍵此節點可「設計表結構 / 結構比對 / 匯出結構 SQL」等更多操作。
+        {t("右鍵此節點可「設計表結構 / 結構比對 / 匯出結構 SQL」等更多操作。")}
       </div>
     </div>
   );
@@ -294,8 +298,9 @@ function DatabaseInfo({ connId, db, kind, connected }: {
 function TableInfo({ connId, db, table, kind, objKind }: {
   connId: string; db: string; table: string; kind: DbKind; objKind: string;
 }) {
+  const t = useT();
   const isMongo = kind === "mongo";
-  const objLabel = isMongo ? "集合" : objKind === "view" ? "視圖" : "資料表";
+  const objLabel = isMongo ? t("集合") : objKind === "view" ? t("視圖") : t("資料表");
   const [cols, setCols] = useState<ColumnInfo[] | null>(null);
   const [idx, setIdx] = useState<IndexInfo[] | null>(null);
   const [stats, setStats] = useState<[string, string][] | null>(null);
@@ -324,32 +329,32 @@ function TableInfo({ connId, db, table, kind, objKind }: {
 
       <div className="grid grid-cols-3 gap-2">
         <div className="rounded border border-fg/10 px-2 py-2">
-          <div className="text-[11px] text-fg/40">列數</div>
+          <div className="text-[11px] text-fg/40">{t("列數")}</div>
           {rows === "idle" ? (
-            <button type="button" onClick={countRows} className="text-xs text-blue-400 hover:text-blue-300 mt-0.5">計算</button>
+            <button type="button" onClick={countRows} className="text-xs text-blue-400 hover:text-blue-300 mt-0.5">{t("計算")}</button>
           ) : (
             <div className="text-sm mono text-fg/90 mt-0.5 truncate">
               {rows === "loading" ? "…" : rows === "error" ? "—" : rows.toLocaleString()}
             </div>
           )}
         </div>
-        <Stat label={isMongo ? "欄位*" : "欄位"} value={cols == null ? "…" : String(cols.length)} />
-        <Stat label="索引" value={idx == null ? "…" : String(idx.length)} />
+        <Stat label={isMongo ? t("欄位*") : t("欄位")} value={cols == null ? "…" : String(cols.length)} />
+        <Stat label={t("索引")} value={idx == null ? "…" : String(idx.length)} />
       </div>
 
       {stats && stats.length > 0 && (
-        <Section title="統計">
+        <Section title={t("統計")}>
           {stats.map(([k, v]) => <Row key={k} k={k} v={v} />)}
         </Section>
       )}
 
       <Section title={`欄位（${cols?.length ?? 0}）`}>
-        {cols == null ? <Empty text="載入中…" /> : cols.length === 0 ? <Empty text="（無）" /> : (
+        {cols == null ? <Empty text={t("載入中…")} /> : cols.length === 0 ? <Empty text={t("（無）")} /> : (
           <div className="divide-y divide-fg/5">
             {cols.map((c) => (
               <div key={c.name} className="flex items-baseline gap-2 px-3 py-1">
                 <span className="mono text-fg/85 truncate flex-1" title={c.name}>
-                  {c.key === "PRI" && <span className="text-amber-300 mr-1 inline-flex items-center" title="主鍵"><Icon icon={KeyRound} size={13} /></span>}
+                  {c.key === "PRI" && <span className="text-amber-300 mr-1 inline-flex items-center" title={t("主鍵")}><Icon icon={KeyRound} size={13} /></span>}
                   {c.name}
                 </span>
                 <span className="mono text-[11px] text-fg/40 shrink-0 max-w-[44%] truncate" title={c.data_type}>
@@ -362,7 +367,7 @@ function TableInfo({ connId, db, table, kind, objKind }: {
       </Section>
 
       {idx && idx.length > 0 && (
-        <Section title={`索引（${idx.length}）`}>
+        <Section title={t("索引（{length}）", { length: idx.length })}>
           <div className="divide-y divide-fg/5">
             {idx.map((ix) => (
               <div key={ix.name} className="px-3 py-1">

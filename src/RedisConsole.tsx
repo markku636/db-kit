@@ -5,6 +5,7 @@ import { uiConfirm } from "./ui";
 import { isDangerousRedisCommand } from "./sql";
 import Icon from "./ui/Icon";
 import { Modal } from "./ui/index";
+import { useT } from "./i18n";
 
 interface Entry {
   db: string;
@@ -19,6 +20,7 @@ interface Entry {
 export default function RedisConsole({ connId, connName, initialDb = "0", onClose }: {
   connId: string; connName: string; initialDb?: string; onClose: () => void;
 }) {
+  const t = useT();
   const [db, setDb] = useState(initialDb);
   const [input, setInput] = useState("");
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -48,8 +50,8 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
 
     // FLUSHALL / FLUSHDB 會清空資料且無法復原，先確認；取消則還原輸入方便修改。
     if (isDangerousRedisCommand(cmd)) {
-      const ok = await uiConfirm("FLUSHALL / FLUSHDB 會清空資料庫且無法復原。確定執行？",
-        { title: "危險指令確認", danger: true, confirmText: "仍要執行" });
+      const ok = await uiConfirm(t("FLUSHALL / FLUSHDB 會清空資料庫且無法復原。確定執行？"),
+        { title: t("危險指令確認"), danger: true, confirmText: t("仍要執行") });
       if (!ok) { setInput(cmd); inputRef.current?.focus(); return; }
     }
 
@@ -63,10 +65,10 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
       const res = await api.runQuery(connId, wire);
       const lines = res.rows.length
         ? res.rows.map((r) => r[0] ?? "(nil)")
-        : [`(已執行；影響 ${res.rows_affected} 列)`];
+        : [t("(已執行；影響 {rows_affected} 列)", { rows_affected: res.rows_affected })];
       setEntries((e) => [...e, { db: effDb, cmd, lines }]);
     } catch (err: any) {
-      setEntries((e) => [...e, { db: effDb, cmd, lines: [err?.message ?? "錯誤"], error: true }]);
+      setEntries((e) => [...e, { db: effDb, cmd, lines: [err?.message ?? t("錯誤")], error: true }]);
     } finally {
       setBusy(false);
       inputRef.current?.focus();
@@ -101,21 +103,21 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
       title={
         <div className="flex items-center gap-3 w-full">
           <Icon icon={CircleDot} size={14} className="text-red-400" />
-          <span className="font-medium text-sm">命令列 · {connName}</span>
+          <span className="font-medium text-sm">{t("命令列 ·")} {connName}</span>
           <label className="ml-auto text-xs text-fg/50 flex items-center gap-1.5">
             DB
             <input value={db} onChange={(e) => setDb(e.target.value.replace(/[^\d]/g, "") || "0")}
-              title="目前資料庫；指令可自帶 n: 前綴覆寫"
+              title={t("目前資料庫；指令可自帶 n: 前綴覆寫")}
               className="w-12 bg-inset border border-fg/10 rounded px-1.5 py-0.5 text-center mono outline-none focus:border-accent" />
           </label>
-          <button type="button" onClick={() => setEntries([])} title="清空畫面"
-            className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">清空</button>
+          <button type="button" onClick={() => setEntries([])} title={t("清空畫面")}
+            className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">{t("清空")}</button>
         </div>
       }
     >
       <div className="flex-1 overflow-auto p-3 mono text-xs leading-relaxed" onClick={() => inputRef.current?.focus()}>
         {entries.length === 0 && (
-          <div className="text-fg/30">輸入 Redis 指令並按 Enter，如 GET key、HGETALL key、KEYS *。輸入 clear 或按 Ctrl+L 清空。</div>
+          <div className="text-fg/30">{t("輸入 Redis 指令並按 Enter，如 GET key、HGETALL key、KEYS *。輸入 clear 或按 Ctrl+L 清空。")}</div>
         )}
         {entries.map((en, i) => (
           <div key={i} className="mb-1.5">
@@ -136,7 +138,7 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
         <span className="text-fg/30 shrink-0">{db}&gt;</span>
         <input ref={inputRef} autoFocus value={input} disabled={busy}
           onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown}
-          placeholder={busy ? "執行中…" : "輸入指令…"}
+          placeholder={busy ? t("執行中…") : t("輸入指令…")}
           className="flex-1 bg-transparent outline-none text-fg/90 placeholder:text-fg/40/25" />
       </div>
     </Modal>

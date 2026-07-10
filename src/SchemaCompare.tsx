@@ -5,6 +5,7 @@ import { useStore } from "./store";
 import { toast, copyToClipboard } from "./ui";
 import { Modal, IconButton } from "./ui/index";
 import { diffNameLists, diffColumns, buildAddColumnsDdl, buildModifyColumnsDdl, NameDiff, ColumnDiff, SchemaColumn } from "./sql";
+import { useT } from "./i18n";
 
 // 結構比對（對標 Navicat Premium 的結構同步）：比對兩個資料庫的資料表與欄位差異——
 // 同一連線跨庫，或**跨連線**（如正式 vs 測試，限相同資料庫種類以便產生相容 DDL）。
@@ -15,6 +16,7 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
   sourceDb: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const connections = useStore((s) => s.connections);
   const connectedIds = useStore((s) => s.connectedIds);
   // 目標連線：同種類（DDL 相容）且已連線者，含來源連線本身。
@@ -41,21 +43,21 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
       const others = targetConnId === connId ? list.filter((d) => d !== sourceDb) : list;
       setDbs(others);
       setTarget(others[0] ?? "");
-    }).catch((e: any) => toast.error(e?.message ?? "讀取資料庫清單失敗"));
+    }).catch((e: any) => toast.error(e?.message ?? t("讀取資料庫清單失敗")));
   }, [targetConnId, connId, sourceDb]);
 
   // 產生「缺少資料表」的 CREATE 語句（取來源端 DDL，於目標執行即補齊）。供使用者檢視 / 複製後執行。
   const genSyncSql = async (tables: string[]) => {
     setGenBusy(true);
     try {
-      const ddls = await Promise.all(tables.map((tbl) => api.tableDdl(connId, sourceDb, tbl).catch(() => `-- 取得 ${tbl} 的 DDL 失敗`)));
+      const ddls = await Promise.all(tables.map((tbl) => api.tableDdl(connId, sourceDb, tbl).catch(() => t("-- 取得 {tbl} 的 DDL 失敗", { tbl }))));
       const tgtConnName = connections.find((c) => c.id === targetConnId)?.name ?? "";
       setSyncSql(
-        `-- 於目標「${tgtConnName} · ${target}」執行以補齊來源「${sourceDb}」有而目標缺少的資料表\n\n` +
+        t("-- 於目標「{tgtConnName} · {target}」執行以補齊來源「{sourceDb}」有而目標缺少的資料表\n\n", { tgtConnName, target, sourceDb }) +
         ddls.map((d) => d.trim().replace(/;?\s*$/, ";")).join("\n\n"),
       );
     } catch (e: any) {
-      toast.error(e?.message ?? "產生失敗");
+      toast.error(e?.message ?? t("產生失敗"));
     } finally {
       setGenBusy(false);
     }
@@ -65,10 +67,10 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
     if (!target) return;
     setBusy(true); setDiff(null); setColDiffs({}); setSyncSql(null);
     try {
-      const [s, t] = await Promise.all([api.listTables(connId, sourceDb), api.listTables(targetConnId, target)]);
-      setDiff(diffNameLists(s.map((x) => x.name), t.map((x) => x.name)));
+      const [srcTables, tgtTables] = await Promise.all([api.listTables(connId, sourceDb), api.listTables(targetConnId, target)]);
+      setDiff(diffNameLists(srcTables.map((x) => x.name), tgtTables.map((x) => x.name)));
     } catch (e: any) {
-      toast.error(e?.message ?? "比對失敗");
+      toast.error(e?.message ?? t("比對失敗"));
     } finally {
       setBusy(false);
     }
@@ -90,7 +92,7 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
       const changedCols = srcCols.filter((c) => changedNames.has(c.name));
       setColDiffs((m) => ({ ...m, [table]: { diff: diffRes, addCols, changedCols } }));
     } catch (e: any) {
-      toast.error(e?.message ?? "欄位比對失敗");
+      toast.error(e?.message ?? t("欄位比對失敗"));
       setColDiffs((m) => { const n = { ...m }; delete n[table]; return n; });
     }
   };
@@ -107,50 +109,50 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
   );
 
   return (
-    <Modal onClose={onClose} title="結構比對" icon={GitCompareArrows} size="xl" zClass="z-[95]"
+    <Modal onClose={onClose} title={t("結構比對")} icon={GitCompareArrows} size="xl" zClass="z-[95]"
       className="!w-[880px] max-w-[96vw] h-[82vh]"
       bodyClassName="flex-1 overflow-auto p-4 space-y-4 text-sm">
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="mono text-xs px-2 py-0.5 rounded bg-blue-500/15 text-blue-300">來源：{connections.find((c) => c.id === connId)?.name} · {sourceDb}</span>
-        <span className="text-fg/40 text-xs">→ 目標</span>
+        <span className="mono text-xs px-2 py-0.5 rounded bg-blue-500/15 text-blue-300">{t("來源：")}{connections.find((c) => c.id === connId)?.name} · {sourceDb}</span>
+        <span className="text-fg/40 text-xs">{t("→ 目標")}</span>
         {targetConns.length > 1 && (
-          <select value={targetConnId} onChange={(e) => setTargetConnId(e.target.value)} title="目標連線（同種類）"
+          <select value={targetConnId} onChange={(e) => setTargetConnId(e.target.value)} title={t("目標連線（同種類）")}
             className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent">
             {targetConns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         )}
-        <select value={target} onChange={(e) => setTarget(e.target.value)} title="目標資料庫"
+        <select value={target} onChange={(e) => setTarget(e.target.value)} title={t("目標資料庫")}
           className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent">
-          {dbs.length === 0 && <option value="">（無其他資料庫）</option>}
+          {dbs.length === 0 && <option value="">{t("（無其他資料庫）")}</option>}
           {dbs.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
         <button type="button" onClick={compare} disabled={busy || !target}
-          className="text-xs px-2.5 py-1 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">{busy ? "比對中…" : "比對"}</button>
+          className="text-xs px-2.5 py-1 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">{busy ? t("比對中…") : t("比對")}</button>
       </div>
 
       {!diff ? (
-            <div className="text-fg/40 text-xs">選擇目標資料庫後按「比對」。差異以來源為基準（僅來源有 = 目標需新增）。</div>
+            <div className="text-fg/40 text-xs">{t("選擇目標資料庫後按「比對」。差異以來源為基準（僅來源有 = 目標需新增）。")}</div>
           ) : (
             <>
-              <Section title="僅來源有（目標缺少）" names={diff.onlyInSource} color="border-green-500/40 text-green-300" />
+              <Section title={t("僅來源有（目標缺少）")} names={diff.onlyInSource} color="border-green-500/40 text-green-300" />
               {diff.onlyInSource.length > 0 && (
                 <button type="button" onClick={() => genSyncSql(diff.onlyInSource)} disabled={genBusy}
                   className="text-xs px-2.5 py-1 rounded bg-green-600/80 hover:bg-green-600 disabled:opacity-40">
-                  {genBusy ? "產生中…" : `產生缺少 ${diff.onlyInSource.length} 表的 CREATE SQL`}</button>
+                  {genBusy ? t("產生中…") : t("產生缺少 {length} 表的 CREATE SQL", { length: diff.onlyInSource.length })}</button>
               )}
               {syncSql && (
                 <div className="rounded border border-fg/10">
                   <div className="px-3 py-1.5 border-b border-fg/10 flex items-center gap-2 text-xs">
-                    <span className="text-fg/60">同步 SQL（檢視後於目標執行）</span>
+                    <span className="text-fg/60">{t("同步 SQL（檢視後於目標執行）")}</span>
                     <button type="button" onClick={() => copyToClipboard(syncSql)}
-                      className="ml-auto text-blue-400 hover:text-blue-300">複製</button>
-                    <IconButton icon={X} label="關閉" iconSize={14} onClick={() => setSyncSql(null)} />
+                      className="ml-auto text-blue-400 hover:text-blue-300">{t("複製")}</button>
+                    <IconButton icon={X} label={t("關閉")} iconSize={14} onClick={() => setSyncSql(null)} />
                   </div>
-                  <textarea readOnly value={syncSql} title="同步 SQL"
+                  <textarea readOnly value={syncSql} title={t("同步 SQL")}
                     className="w-full h-40 bg-well p-3 mono text-xs text-fg/80 resize-y outline-none" />
                 </div>
               )}
-              <Section title="僅目標有（來源缺少）" names={diff.onlyInTarget} color="border-red-500/40 text-red-300" />
+              <Section title={t("僅目標有（來源缺少）")} names={diff.onlyInTarget} color="border-red-500/40 text-red-300" />
               <div>
                 <div className="text-xs text-fg/45 mb-1">兩邊皆有（{diff.common.length}）— 點選比對欄位</div>
                 <div className="space-y-1.5">
@@ -163,30 +165,30 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
                         <button type="button" onClick={() => compareCols(item)}
                           className="w-full text-left px-3 py-1.5 mono text-xs hover:bg-fg/5 flex items-center gap-2">
                           <span className="text-fg/80">{item}</span>
-                          {cd === "loading" && <span className="text-fg/40">比對中…</span>}
+                          {cd === "loading" && <span className="text-fg/40">{t("比對中…")}</span>}
                           {d && (hasDiff
-                            ? <span className="text-amber-300">有差異</span>
-                            : <span className="text-fg/30">結構相同</span>)}
+                            ? <span className="text-amber-300">{t("有差異")}</span>
+                            : <span className="text-fg/30">{t("結構相同")}</span>)}
                         </button>
                         {d && hasDiff && (
                           <div className="px-3 py-2 border-t border-fg/5 text-xs space-y-1">
-                            {d.added.length > 0 && <div><span className="text-green-300">＋ 目標需新增：</span><span className="mono text-fg/70">{d.added.join(", ")}</span></div>}
-                            {d.removed.length > 0 && <div><span className="text-red-300">－ 目標多出：</span><span className="mono text-fg/70">{d.removed.join(", ")}</span></div>}
+                            {d.added.length > 0 && <div><span className="text-green-300">{t("＋ 目標需新增：")}</span><span className="mono text-fg/70">{d.added.join(", ")}</span></div>}
+                            {d.removed.length > 0 && <div><span className="text-red-300">{t("－ 目標多出：")}</span><span className="mono text-fg/70">{d.removed.join(", ")}</span></div>}
                             {d.changed.map((c) => (
                               <div key={c.name}><span className="text-amber-300 mono">{c.name}</span>
-                                <span className="text-fg/50">：來源 </span><span className="mono text-fg/80">{c.source}</span>
-                                <span className="text-fg/50"> · 目標 </span><span className="mono text-fg/80">{c.target}</span></div>
+                                <span className="text-fg/50">{t("：來源")} </span><span className="mono text-fg/80">{c.source}</span>
+                                <span className="text-fg/50"> {t("· 目標")} </span><span className="mono text-fg/80">{c.target}</span></div>
                             ))}
                             <div className="flex gap-3 mt-1">
                               {cd !== "loading" && cd.addCols.length > 0 && (
                                 <button type="button"
-                                  onClick={() => copyToClipboard(buildAddColumnsDdl(kind, target, item, cd.addCols), "已複製 ADD COLUMN SQL")}
-                                  className="text-blue-400 hover:text-blue-300">複製補欄位 SQL</button>
+                                  onClick={() => copyToClipboard(buildAddColumnsDdl(kind, target, item, cd.addCols), t("已複製 ADD COLUMN SQL"))}
+                                  className="text-blue-400 hover:text-blue-300">{t("複製補欄位 SQL")}</button>
                               )}
                               {cd !== "loading" && cd.changedCols.length > 0 && (
                                 <button type="button"
-                                  onClick={() => copyToClipboard(buildModifyColumnsDdl(kind, target, item, cd.changedCols), "已複製 MODIFY SQL")}
-                                  className="text-amber-400 hover:text-amber-300">複製改型別 SQL</button>
+                                  onClick={() => copyToClipboard(buildModifyColumnsDdl(kind, target, item, cd.changedCols), t("已複製 MODIFY SQL"))}
+                                  className="text-amber-400 hover:text-amber-300">{t("複製改型別 SQL")}</button>
                               )}
                             </div>
                           </div>

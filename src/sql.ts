@@ -1,6 +1,7 @@
 // 純函式工具：查詢歷史 / 收藏 / 結果序列化 / SQL 多語句切分 / 跨資料庫識別字跳脫。
 // 抽離自 App.tsx / TableView.tsx 以便單元測試（見 sql.test.ts）且不依賴 React / Tauri。
 import type { DbKind, QueryResult, RoutineInfo } from "./api";
+import { t } from "./i18n";
 
 // MariaDB 為 MySQL fork，SQL 方言一致：所有 SQL 生成共用 mysql 分支。
 // 集中成一個 predicate，避免每個 builder 各自比對兩個字串（漏改即產出錯誤方言）。
@@ -173,20 +174,20 @@ export function buildGrantTemplate(kind: DbKind, db: string, table: string): str
   const q = qualifiedName(kind, db, table);
   if (kind === "postgres") {
     return [
-      `-- 資料表權限範本（PostgreSQL）：請將 <role> 換成實際角色名後執行。`,
+      t("-- 資料表權限範本（PostgreSQL）：請將 <role> 換成實際角色名後執行。"),
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ${q} TO <role>;`,
-      `-- 唯讀：GRANT SELECT ON ${q} TO <role>;`,
-      `-- 全部權限：GRANT ALL PRIVILEGES ON ${q} TO <role>;`,
-      `-- 收回：REVOKE ALL PRIVILEGES ON ${q} FROM <role>;`,
+      t("-- 唯讀：GRANT SELECT ON {q} TO <role>;", { q }),
+      t("-- 全部權限：GRANT ALL PRIVILEGES ON {q} TO <role>;", { q }),
+      t("-- 收回：REVOKE ALL PRIVILEGES ON {q} FROM <role>;", { q }),
     ].join("\n");
   }
   // MySQL：帳號為 'user'@'host' 形式。
   return [
-    `-- 資料表權限範本（MySQL）：請將 'user'@'host' 換成實際帳號後執行。`,
+    t("-- 資料表權限範本（MySQL）：請將 'user'@'host' 換成實際帳號後執行。"),
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ${q} TO 'user'@'%';`,
-    `-- 唯讀：GRANT SELECT ON ${q} TO 'user'@'%';`,
-    `-- 全部權限：GRANT ALL PRIVILEGES ON ${q} TO 'user'@'%';`,
-    `-- 收回：REVOKE ALL PRIVILEGES ON ${q} FROM 'user'@'%';`,
+    t("-- 唯讀：GRANT SELECT ON {q} TO 'user'@'%';", { q }),
+    t("-- 全部權限：GRANT ALL PRIVILEGES ON {q} TO 'user'@'%';", { q }),
+    t("-- 收回：REVOKE ALL PRIVILEGES ON {q} FROM 'user'@'%';", { q }),
     `FLUSH PRIVILEGES;`,
   ].join("\n");
 }
@@ -509,7 +510,9 @@ export function buildAlterUserLimits(
 export function userListSql(): string {
   return (
     "SELECT User, Host, " +
-    "IF(ssl_type='', '無', ssl_type) AS ssl_type, " +
+    // ssl_type 原樣回傳（無 SSL 時為空字串）。空值的顯示文字改由 UserManager 負責 ——
+    // 使用者可見的文案不該塞進送往 MySQL 的 SQL：它既進不了譯文表，也把顯示邏輯藏進查詢。
+    "ssl_type, " +
     "max_questions, max_updates, max_connections, max_user_connections, " +
     "Super_priv, account_locked " +
     "FROM mysql.user ORDER BY User, Host"
@@ -967,14 +970,14 @@ export function pushQueryHistory(prev: QueryHistoryEntry[], q: string, connName?
 
 /** 相對時間（歷史下拉顯示）：剛剛 / N 分鐘前 / N 小時前 / N 天前；at=0 顯示「較早」。 */
 export function fmtRelativeTime(at: number, now = Date.now()): string {
-  if (!at) return "較早";
+  if (!at) return t("較早");
   const s = Math.max(0, Math.floor((now - at) / 1000));
-  if (s < 60) return "剛剛";
+  if (s < 60) return t("剛剛");
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} 分鐘前`;
+  if (m < 60) return t("{m} 分鐘前", { m });
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小時前`;
-  return `${Math.floor(h / 24)} 天前`;
+  if (h < 24) return t("{h} 小時前", { h });
+  return t("{floor} 天前", { floor: Math.floor(h / 24) });
 }
 
 // ---- 收藏查詢（具名，localStorage）----
@@ -1157,12 +1160,12 @@ export function parseSqlLibraryBundle(text: string): { savedQueries: SavedQuery[
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error("檔案不是合法的 JSON");
+    throw new Error(t("檔案不是合法的 JSON"));
   }
   const rawQueries = Array.isArray(data) ? data : data?.savedQueries;
   const rawSnippets = Array.isArray(data) ? [] : data?.snippets;
   if (!Array.isArray(rawQueries) && !Array.isArray(rawSnippets)) {
-    throw new Error("檔案內容不是 db-kit SQL 庫格式");
+    throw new Error(t("檔案內容不是 db-kit SQL 庫格式"));
   }
   const savedQueries: SavedQuery[] = Array.isArray(rawQueries)
     ? rawQueries.filter((x) => x && typeof x.name === "string" && typeof x.sql === "string").map(sanitizeSavedQuery)
@@ -1317,8 +1320,8 @@ export function lintSqlStructure(sql: string): SqlLintMark[] {
         j++;
       }
       if (!closed) {
-        const label = ch === "'" ? "字串" : ch === '"' ? '識別字（"）' : "識別字（`）";
-        marks.push({ from: start, to: n, severity: "error", message: `未結束的${label}` });
+        const label = ch === "'" ? t("字串") : ch === '"' ? t("識別字（\"）") : t("識別字（`）");
+        marks.push({ from: start, to: n, severity: "error", message: t("未結束的{label}", { label }) });
         return marks; // 之後無法可靠掃描，提前結束
       }
       i = j;
@@ -1329,7 +1332,7 @@ export function lintSqlStructure(sql: string): SqlLintMark[] {
       const start = i;
       let j = i + 2;
       while (j < n && sql.slice(j, j + 2) !== "*/") j++;
-      if (j >= n) { marks.push({ from: start, to: n, severity: "error", message: "未結束的區塊註解 /* */" }); return marks; }
+      if (j >= n) { marks.push({ from: start, to: n, severity: "error", message: t("未結束的區塊註解 /* */") }); return marks; }
       i = j + 2;
       continue;
     }
@@ -1342,21 +1345,21 @@ export function lintSqlStructure(sql: string): SqlLintMark[] {
         let j = i + tag.length;
         let closed = false;
         while (j < n) { if (sql.startsWith(tag, j)) { j += tag.length; closed = true; break; } j++; }
-        if (!closed) { marks.push({ from: start, to: n, severity: "error", message: `未結束的 ${tag} 區塊` }); return marks; }
+        if (!closed) { marks.push({ from: start, to: n, severity: "error", message: t("未結束的 {tag} 區塊", { tag }) }); return marks; }
         i = j;
         continue;
       }
     }
     if (ch === "(") { parens.push(i); i++; continue; }
     if (ch === ")") {
-      if (parens.length === 0) marks.push({ from: i, to: i + 1, severity: "error", message: "多餘的右括號「)」" });
+      if (parens.length === 0) marks.push({ from: i, to: i + 1, severity: "error", message: t("多餘的右括號「)」") });
       else parens.pop();
       i++;
       continue;
     }
     i++;
   }
-  for (const p of parens) marks.push({ from: p, to: p + 1, severity: "error", message: "未配對的左括號「(」" });
+  for (const p of parens) marks.push({ from: p, to: p + 1, severity: "error", message: t("未配對的左括號「(」") });
   return marks;
 }
 

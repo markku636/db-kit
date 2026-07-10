@@ -3,6 +3,7 @@ import { KeyRound } from "lucide-react";
 import { api } from "./api";
 import { toast } from "./ui";
 import { Modal, Button, Input, Textarea } from "./ui/index";
+import { useT } from "./i18n";
 
 type RType = "string" | "list" | "set" | "hash" | "zset";
 
@@ -19,6 +20,7 @@ const TYPES: { v: RType; label: string }[] = [
 export default function NewKeyDialog({ connId, database, onClose, onCreated }: {
   connId: string; database: string; onClose: () => void; onCreated: () => void;
 }) {
+  const t = useT();
   const [name, setName] = useState("");
   const [type, setType] = useState<RType>("string");
   const [value, setValue] = useState("");   // string value / list value / set member / hash value / zset member
@@ -28,7 +30,7 @@ export default function NewKeyDialog({ connId, database, onClose, onCreated }: {
   const [err, setErr] = useState<string | null>(null);
 
   const submit = async () => {
-    if (!name.trim()) { setErr("請輸入鍵名"); return; }
+    if (!name.trim()) { setErr(t("請輸入鍵名")); return; }
     setBusy(true);
     setErr(null);
     try {
@@ -46,21 +48,21 @@ export default function NewKeyDialog({ connId, database, onClose, onCreated }: {
           await api.keyEdit(connId, database, name, { action: "set_add", member: value });
           break;
         case "hash":
-          if (!field.trim()) { setErr("請輸入 hash field"); setBusy(false); return; }
+          if (!field.trim()) { setErr(t("請輸入 hash field")); setBusy(false); return; }
           await api.keyEdit(connId, database, name, { action: "hash_set", field, value });
           break;
         case "zset": {
           const s = Number(score);
-          if (!Number.isFinite(s)) { setErr("score 必須為數字"); setBusy(false); return; }
+          if (!Number.isFinite(s)) { setErr(t("score 必須為數字")); setBusy(false); return; }
           await api.keyEdit(connId, database, name, { action: "zset_add", member: value, score: s });
           break;
         }
       }
-      toast.success(`已建立鍵 ${name}`);
+      toast.success(t("已建立鍵 {name}", { name }));
       onCreated();
       onClose();
     } catch (e: any) {
-      setErr(e?.message ?? "建立失敗");
+      setErr(e?.message ?? t("建立失敗"));
     } finally {
       setBusy(false);
     }
@@ -69,25 +71,25 @@ export default function NewKeyDialog({ connId, database, onClose, onCreated }: {
   return (
     <Modal
       onClose={onClose}
-      title={`新增鍵（DB ${database}）`}
+      title={t("新增鍵（DB {database}）", { database })}
       icon={KeyRound}
       size="sm"
       zClass="z-[60]"
       bodyClassName="p-5 space-y-3 overflow-auto"
       footer={<>
-        <Button variant="secondary" onClick={onClose}>取消</Button>
-        <Button variant="primary" loading={busy} disabled={busy} onClick={submit}>建立</Button>
+        <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
+        <Button variant="primary" loading={busy} disabled={busy} onClick={submit}>{t("建立")}</Button>
       </>}
     >
       {err && <div className="text-red-400 text-sm mono break-all">{err}</div>}
 
           <div className="space-y-1">
-            <label className="text-xs text-fg/50">鍵名</label>
-            <Input autoFocus inputSize="md" className="mono" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如 user:1000" />
+            <label className="text-xs text-fg/50">{t("鍵名")}</label>
+            <Input autoFocus inputSize="md" className="mono" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("例如 user:1000")} />
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs text-fg/50">型別</label>
+            <label className="text-xs text-fg/50">{t("型別")}</label>
             <div className="flex gap-1">
               {TYPES.map((opt) => (
                 <button key={opt.v} type="button" onClick={() => setType(opt.v)}
@@ -115,7 +117,7 @@ export default function NewKeyDialog({ connId, database, onClose, onCreated }: {
             <label className="text-xs text-fg/50">
               {type === "string" ? "value" : type === "set" || type === "zset" ? "member" : "value"}
             </label>
-            <Textarea aria-label="值" value={value} onChange={(e) => setValue(e.target.value)} rows={type === "string" ? 4 : 2}
+            <Textarea aria-label={t("值")} value={value} onChange={(e) => setValue(e.target.value)} rows={type === "string" ? 4 : 2}
               className="mono resize-none break-all" />
           </div>
     </Modal>

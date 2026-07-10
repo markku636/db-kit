@@ -6,6 +6,7 @@ import { toast } from "./ui";
 import { Modal, Button, Select, Icon } from "./ui/index";
 import { isSystemDatabase } from "./sql";
 import { topoSortByFk } from "./fkorder";
+import { useT } from "./i18n";
 
 // 整庫資料傳輸（致敬 Navicat Data Transfer 的多表 / 整庫模式）：把來源庫的多張表
 // 一次傳到另一連線 / 資料庫（目標同名表）。逐表複用已測試的 transfer_table。
@@ -18,6 +19,7 @@ export default function DbTransferDialog({ connId, database, onClose }: {
   database: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const connections = useStore((s) => s.connections);
   const connectedIds = useStore((s) => s.connectedIds);
   const targetConns = useMemo(
@@ -51,7 +53,7 @@ export default function DbTransferDialog({ connId, database, onClose }: {
         setSrcTables(names);
         setPicked(new Set(names)); // 預設全選
       })
-      .catch((e) => toast.error(e?.message ?? "讀取資料表失敗"));
+      .catch((e) => toast.error(e?.message ?? t("讀取資料表失敗")));
   }, [connId, database]);
 
   // 載入目標連線的資料庫清單。
@@ -80,10 +82,10 @@ export default function DbTransferDialog({ connId, database, onClose }: {
   const run = async () => {
     if (busy) return;
     const tables = srcTables.filter((tbl) => picked.has(tbl));
-    if (tables.length === 0) { toast.error("請至少選一張資料表"); return; }
-    if (sameDb) { toast.error("目標與來源是同一個資料庫"); return; }
-    if (targetReadonly) { toast.error("目標連線為唯讀，無法寫入"); return; }
-    if (createTable && !sameKind) { toast.error("自動建表僅支援相同資料庫種類"); return; }
+    if (tables.length === 0) { toast.error(t("請至少選一張資料表")); return; }
+    if (sameDb) { toast.error(t("目標與來源是同一個資料庫")); return; }
+    if (targetReadonly) { toast.error(t("目標連線為唯讀，無法寫入")); return; }
+    if (createTable && !sameKind) { toast.error(t("自動建表僅支援相同資料庫種類")); return; }
     setBusy(true);
     setOutcomes(null);
     setProgress({ done: 0, total: tables.length });
@@ -102,7 +104,7 @@ export default function DbTransferDialog({ connId, database, onClose }: {
         const res = await api.transferTable(connId, database, val, dstId, dstDb, val, { create_table: createTable, stop_on_error: false });
         results.push({ table: val, transferred: res.transferred, failed: res.failed, created: res.created });
       } catch (e: any) {
-        results.push({ table: val, transferred: 0, failed: 0, created: false, error: e?.message ?? "傳輸失敗" });
+        results.push({ table: val, transferred: 0, failed: 0, created: false, error: e?.message ?? t("傳輸失敗") });
       }
       setProgress({ done: i + 1, total: tables.length });
     }
@@ -110,8 +112,8 @@ export default function DbTransferDialog({ connId, database, onClose }: {
     setBusy(false);
     const tot = results.reduce((a, r) => a + r.transferred, 0);
     const errs = results.filter((r) => r.error || r.failed > 0).length;
-    if (errs === 0) toast.success(`整庫傳輸完成：${results.length} 表 · ${tot} 列`);
-    else toast.error(`完成：${results.length} 表，其中 ${errs} 表有錯誤`);
+    if (errs === 0) toast.success(t("整庫傳輸完成：{length} 表 · {tot} 列", { length: results.length, tot }));
+    else toast.error(t("完成：{length} 表，其中 {errs} 表有錯誤", { length: results.length, errs }));
   };
 
   const dbList = dstKind ? dbs.filter((d) => !isSystemDatabase(dstKind, d)) : dbs;
@@ -119,27 +121,27 @@ export default function DbTransferDialog({ connId, database, onClose }: {
   return (
     <Modal
       onClose={onClose}
-      title={<>整庫資料傳輸 · <span className="mono text-fg/60">{database}</span></>}
+      title={<>{t("整庫資料傳輸 ·")} <span className="mono text-fg/60">{database}</span></>}
       icon={ArrowRight}
       size="lg"
       zClass="z-50"
       bodyClassName="p-5 space-y-4 overflow-auto"
       footer={<>
-        <Button variant="secondary" onClick={onClose}>{outcomes ? "關閉" : "取消"}</Button>
+        <Button variant="secondary" onClick={onClose}>{outcomes ? t("關閉") : t("取消")}</Button>
         <Button variant="primary" loading={busy} onClick={run} disabled={busy || picked.size === 0 || sameDb || targetReadonly}>
-          {busy && progress ? `傳輸中 ${progress.done}/${progress.total}…` : `傳輸選取的 ${picked.size} 表`}
+          {busy && progress ? t("傳輸中 {done}/{total}…", { done: progress.done, total: progress.total }) : t("傳輸選取的 {size} 表", { size: picked.size })}
         </Button>
       </>}
     >
       {/* 目標 */}
       <div className="grid grid-cols-[auto_1fr_auto_1fr] items-center gap-x-2 gap-y-2 text-sm">
-        <span className="text-xs text-fg/40">目標連線</span>
+        <span className="text-xs text-fg/40">{t("目標連線")}</span>
         <Select selectSize="sm" value={dstId} onChange={(e) => { setDstId(e.target.value); setDstDb(""); }}>
           {targetConns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Select>
-        <span className="text-xs text-fg/40">目標{dstKind === "postgres" ? " schema" : "資料庫"}</span>
+        <span className="text-xs text-fg/40">{t("目標")}{dstKind === "postgres" ? " schema" : t("資料庫")}</span>
         {dstKind === "sqlite" ? (
-          <span className="text-xs text-fg/60 mono">{dstDb || "（檔案資料庫）"}</span>
+          <span className="text-xs text-fg/60 mono">{dstDb || t("（檔案資料庫）")}</span>
         ) : (
           <Select selectSize="sm" value={dstDb} onChange={(e) => setDstDb(e.target.value)}>
             {!dbList.includes(dstDb) && dstDb && <option value={dstDb}>{dstDb}</option>}
@@ -150,24 +152,24 @@ export default function DbTransferDialog({ connId, database, onClose }: {
 
       <label className={`flex items-center gap-2 text-sm cursor-pointer select-none ${sameKind ? "" : "opacity-40"}`}>
         <input type="checkbox" checked={createTable} disabled={!sameKind} onChange={(e) => setCreateTable(e.target.checked)} />
-        <span>目標表不存在時自動建立（沿用來源結構{sameKind ? "" : "；限相同資料庫種類"}）</span>
+        <span>{t("目標表不存在時自動建立（沿用來源結構")}{sameKind ? "" : t("；限相同資料庫種類")}）</span>
       </label>
 
       <div className="flex items-start gap-1.5 text-[11px] text-fg/45">
         <Icon icon={Database} size={12} className="mt-0.5 shrink-0" />
-        <span>逐表以同名欄位交集傳到目標同名表。有外鍵的結構，建議目標表預先建好或確認建立順序。</span>
+        <span>{t("逐表以同名欄位交集傳到目標同名表。有外鍵的結構，建議目標表預先建好或確認建立順序。")}</span>
       </div>
 
       {/* 來源表多選 */}
       <div>
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs text-fg/50">來源資料表（{picked.size}/{srcTables.length}）</span>
+          <span className="text-xs text-fg/50">{t("來源資料表（")}{picked.size}/{srcTables.length}）</span>
           <div className="flex items-center gap-2 text-[11px]">
-            <button type="button" onClick={() => setPicked(new Set(srcTables))} className="text-accent hover:underline">全選</button>
-            <button type="button" onClick={() => setPicked(new Set())} className="text-accent hover:underline">全不選</button>
+            <button type="button" onClick={() => setPicked(new Set(srcTables))} className="text-accent hover:underline">{t("全選")}</button>
+            <button type="button" onClick={() => setPicked(new Set())} className="text-accent hover:underline">{t("全不選")}</button>
           </div>
         </div>
-        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="搜尋資料表…"
+        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("搜尋資料表…")}
           className="w-full mb-1 text-xs px-2 py-1 rounded border border-fg/15 bg-app outline-none" />
         <div className="max-h-52 overflow-auto rounded border border-fg/10 bg-app/40 p-1">
           {visible.map((item) => {
@@ -179,17 +181,17 @@ export default function DbTransferDialog({ connId, database, onClose }: {
                 <span className="truncate flex-1 mono">{item}</span>
                 {busy && progress && !o && picked.has(item) && <Icon icon={Loader2} size={11} className="animate-spin text-fg/30" />}
                 {o && (o.error || o.failed > 0
-                  ? <span className="text-red-400 text-[10px]">{o.error ? "失敗" : `${o.transferred}／失敗 ${o.failed}`}</span>
-                  : <span className="text-emerald-400 text-[10px]">{o.transferred} 列{o.created ? " · 已建表" : ""}</span>)}
+                  ? <span className="text-red-400 text-[10px]">{o.error ? t("失敗") : t("{transferred}／失敗 {failed}", { transferred: o.transferred, failed: o.failed })}</span>
+                  : <span className="text-emerald-400 text-[10px]">{o.transferred} {t("列")}{o.created ? t(" · 已建表") : ""}</span>)}
               </label>
             );
           })}
-          {visible.length === 0 && <div className="px-2 py-3 text-xs text-fg/40">無相符資料表</div>}
+          {visible.length === 0 && <div className="px-2 py-3 text-xs text-fg/40">{t("無相符資料表")}</div>}
         </div>
       </div>
 
-      {sameDb && <div className="text-xs text-red-400">目標與來源是同一個資料庫，請改選其他目標。</div>}
-      {targetReadonly && <div className="text-xs text-amber-400">目標連線為唯讀模式，無法寫入。</div>}
+      {sameDb && <div className="text-xs text-red-400">{t("目標與來源是同一個資料庫，請改選其他目標。")}</div>}
+      {targetReadonly && <div className="text-xs text-amber-400">{t("目標連線為唯讀模式，無法寫入。")}</div>}
 
       {outcomes && (
         <div className="text-xs text-fg/60">

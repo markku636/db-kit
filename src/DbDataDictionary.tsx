@@ -4,6 +4,7 @@ import { toast, copyToClipboard, pickSaveFile } from "./ui";
 import { Modal, Button, Segmented } from "./ui/index";
 import { BookText } from "lucide-react";
 import { buildDbDictMarkdown, buildDbDictHtml, type TableDoc } from "./dataDict";
+import { useT } from "./i18n";
 
 // 整庫資料字典 / 文件（致敬 Navicat 的 HTML 文件 / 模型報表）：彙整資料庫所有資料表的
 // 欄位 / 索引 / 外鍵成一份含目錄的文件，可複製或另存 Markdown / HTML。
@@ -14,6 +15,7 @@ export default function DbDataDictionary({ connId, db, onClose }: {
   db: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const [docs, setDocs] = useState<TableDoc[] | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -50,7 +52,7 @@ export default function DbDataDictionary({ connId, db, onClose }: {
         await Promise.all(Array.from({ length: 6 }, worker));
         if (!cancelled) setDocs(results.filter(Boolean));
       } catch (e: any) {
-        if (!cancelled) setErr(e?.message ?? "讀取結構失敗");
+        if (!cancelled) setErr(e?.message ?? t("讀取結構失敗"));
       }
     })();
     return () => { cancelled = true; };
@@ -66,32 +68,32 @@ export default function DbDataDictionary({ connId, db, onClose }: {
       await api.saveTextFile(path, content);
       toast.success(`已儲存資料庫文件（${docs?.length ?? 0} 張表）`);
     } catch (e: any) {
-      toast.error(e?.message ?? "儲存失敗");
+      toast.error(e?.message ?? t("儲存失敗"));
     }
   };
 
   return (
     <Modal
       onClose={onClose}
-      title={<>資料庫文件 · <span className="mono text-fg/60">{db}</span></>}
+      title={<>{t("資料庫文件 ·")} <span className="mono text-fg/60">{db}</span></>}
       icon={BookText}
       size="xl"
       className="h-[80vh]"
       bodyClassName="p-0 flex flex-col min-h-0"
       footer={<>
         <span className="mr-auto text-[11px] text-fg/40">
-          {docs ? `${docs.length} 張表${truncated ? `（前 ${MAX_TABLES} 張）` : ""}` : progress ? `載入中 ${progress.done}/${progress.total}` : ""}
+          {docs ? `${docs.length} 張表${truncated ? t("（前 {MAX_TABLES} 張）", { MAX_TABLES }) : ""}` : progress ? t("載入中 {done}/{total}", { done: progress.done, total: progress.total }) : ""}
         </span>
-        <Segmented ariaLabel="格式" value={view} onChange={(v) => setView(v as "md" | "html")}
+        <Segmented ariaLabel={t("格式")} value={view} onChange={(v) => setView(v as "md" | "html")}
           options={[{ value: "md", label: "Markdown" }, { value: "html", label: "HTML" }]} />
-        <Button onClick={() => copyToClipboard(content)} disabled={!docs}>複製</Button>
-        <Button variant="primary" onClick={save} disabled={!docs}>另存…</Button>
+        <Button onClick={() => copyToClipboard(content)} disabled={!docs}>{t("複製")}</Button>
+        <Button variant="primary" onClick={save} disabled={!docs}>{t("另存…")}</Button>
       </>}
     >
       {err ? (
         <div className="p-4 text-red-400 text-sm whitespace-pre-wrap break-words">{err}</div>
       ) : !docs ? (
-        <div className="p-6 text-fg/50 text-sm">產生中…{progress ? ` ${progress.done}/${progress.total}` : ""}</div>
+        <div className="p-6 text-fg/50 text-sm">{t("產生中…")}{progress ? ` ${progress.done}/${progress.total}` : ""}</div>
       ) : (
         <pre className="flex-1 overflow-auto p-4 text-xs mono text-fg/80 whitespace-pre-wrap break-words">{content}</pre>
       )}

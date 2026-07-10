@@ -4,6 +4,7 @@ import { api, ColumnInfo, DbKind, IndexInfo } from "./api";
 import { toast, uiConfirm } from "./ui";
 import { Modal, Button } from "./ui/index";
 import { tableOptionsSql, buildAlterTableOptions, buildConvertCharset } from "./sql";
+import { useT } from "./i18n";
 
 const TABLE_ENGINES = ["InnoDB", "MyISAM", "MEMORY", "ARCHIVE", "CSV"];
 const CHARSETS = ["utf8mb4", "utf8", "latin1", "ascii", "big5", "gbk", "gb2312", "utf16"];
@@ -17,6 +18,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
   objKind: string; // "table" | "view"（Mongo 為集合）
   onClose: () => void;
 }) {
+  const t = useT();
   const [cols, setCols] = useState<ColumnInfo[] | null>(null);
   const [idx, setIdx] = useState<IndexInfo[] | null>(null);
   // 列數採點擊才計算（大表 COUNT(*) 可能較慢且佔用連線，不在開啟時自動跑）。
@@ -25,7 +27,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
   const aliveRef = useRef(true);
 
   const isMongo = kind === "mongo";
-  const objLabel = isMongo ? "集合" : objKind === "view" ? "視圖" : "資料表";
+  const objLabel = isMongo ? t("集合") : objKind === "view" ? t("視圖") : t("資料表");
   // 可編輯選項（僅 MySQL 系資料表）：引擎 / 註解 / AUTO_INCREMENT。
   const optionsEditable = (kind === "mysql" || kind === "mariadb") && objKind !== "view";
   const [engine, setEngine] = useState("");
@@ -71,14 +73,14 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
     if (autoInc !== orig.autoInc && autoInc.trim() !== "" && Number.isFinite(Number(autoInc)))
       opts.autoIncrement = Number(autoInc);
     const sql = buildAlterTableOptions(db, table, opts);
-    if (!sql) { toast.info("沒有變更"); return; }
+    if (!sql) { toast.info(t("沒有變更")); return; }
     setSavingOpts(true);
     try {
       await api.execDdl(connId, sql);
-      toast.success("資料表選項已更新");
+      toast.success(t("資料表選項已更新"));
       loadStats(); loadOptions();
     } catch (e: any) {
-      toast.error(e?.message ?? "更新失敗");
+      toast.error(e?.message ?? t("更新失敗"));
     } finally {
       setSavingOpts(false);
     }
@@ -87,14 +89,14 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
   const convertCharset = async () => {
     if (!(await uiConfirm(
       `將資料表「${table}」轉換為字元集 ${charset}${collation.trim() ? ` / ${collation.trim()}` : ""}？\n此操作會重寫所有文字欄位，大表可能較久且鎖表。`,
-      { title: "轉換字元集", danger: true, confirmText: "轉換" }))) return;
+      { title: t("轉換字元集"), danger: true, confirmText: t("轉換") }))) return;
     setConverting(true);
     try {
       await api.execDdl(connId, buildConvertCharset(db, table, charset, collation));
-      toast.success("字元集已轉換");
+      toast.success(t("字元集已轉換"));
       loadStats(); loadOptions();
     } catch (e: any) {
-      toast.error(e?.message ?? "轉換失敗");
+      toast.error(e?.message ?? t("轉換失敗"));
     } finally {
       setConverting(false);
     }
@@ -122,25 +124,25 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
           <span className="text-xs text-fg/40 mono">{db}</span>
         </span>
       }
-      footer={<Button variant="secondary" onClick={onClose}>關閉</Button>}
+      footer={<Button variant="secondary" onClick={onClose}>{t("關閉")}</Button>}
     >
       <div className="grid grid-cols-3 gap-2">
             <div className="rounded border border-fg/10 px-3 py-2">
-              <div className="text-xs text-fg/40">列數</div>
+              <div className="text-xs text-fg/40">{t("列數")}</div>
               {rows === "idle" ? (
-                <button type="button" onClick={countRows} className="text-sm text-blue-400 hover:text-blue-300 mt-0.5">點此計算</button>
+                <button type="button" onClick={countRows} className="text-sm text-blue-400 hover:text-blue-300 mt-0.5">{t("點此計算")}</button>
               ) : (
                 <div className="text-base mono text-fg/90 mt-0.5">
-                  {rows === "loading" ? "計算中…" : rows === "error" ? "—" : rows.toLocaleString()}
+                  {rows === "loading" ? t("計算中…") : rows === "error" ? "—" : rows.toLocaleString()}
                 </div>
               )}
             </div>
-            <Stat label={isMongo ? "欄位（取樣）" : "欄位數"} value={cols == null ? "…" : String(cols.length)} />
-            <Stat label="索引數" value={idx == null ? "…" : String(idx.length)} />
+            <Stat label={isMongo ? t("欄位（取樣）") : t("欄位數")} value={cols == null ? "…" : String(cols.length)} />
+            <Stat label={t("索引數")} value={idx == null ? "…" : String(idx.length)} />
           </div>
 
           {stats && stats.length > 0 && (
-            <Section title="統計">
+            <Section title={t("統計")}>
               {stats.map(([k, v]) => (
                 <div key={k} className="flex px-3 py-1.5 gap-3">
                   <span className="text-fg/45 w-28 shrink-0">{k}</span>
@@ -151,11 +153,11 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
           )}
 
           {optionsEditable && (
-            <Section title="選項（可編輯）">
+            <Section title={t("選項（可編輯）")}>
               <div className="px-3 py-2.5 space-y-2.5">
                 <div className="flex items-center gap-3">
-                  <span className="text-fg/45 w-20 shrink-0 text-xs">引擎</span>
-                  <select value={engine} onChange={(e) => setEngine(e.target.value)} title="儲存引擎"
+                  <span className="text-fg/45 w-20 shrink-0 text-xs">{t("引擎")}</span>
+                  <select value={engine} onChange={(e) => setEngine(e.target.value)} title={t("儲存引擎")}
                     className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent min-w-[140px]">
                     {engine && !TABLE_ENGINES.includes(engine) && <option value={engine}>{engine}</option>}
                     {TABLE_ENGINES.map((en) => <option key={en} value={en}>{en}</option>)}
@@ -167,31 +169,31 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
                     className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent w-32 mono" placeholder="—" />
                 </div>
                 <div className="flex items-start gap-3">
-                  <span className="text-fg/45 w-20 shrink-0 text-xs mt-1">註解</span>
+                  <span className="text-fg/45 w-20 shrink-0 text-xs mt-1">{t("註解")}</span>
                   <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2}
-                    className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent flex-1 resize-none" placeholder="（無）" />
+                    className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent flex-1 resize-none" placeholder={t("（無）")} />
                 </div>
                 <div className="flex justify-end">
                   <button type="button" onClick={applyOptions} disabled={savingOpts || !orig}
                     className="px-3 py-1.5 text-xs rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">
-                    {savingOpts ? "套用中…" : "套用"}</button>
+                    {savingOpts ? t("套用中…") : t("套用")}</button>
                 </div>
 
                 <div className="border-t border-fg/10 pt-2.5 space-y-2">
                   <div className="text-fg/40 text-[11px]">
-                    字元集轉換{curCollation ? ` · 目前定序：${curCollation}` : ""}
+                    {t("字元集轉換")}{curCollation ? t(" · 目前定序：{curCollation}", { curCollation }) : ""}
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <select value={charset} onChange={(e) => setCharset(e.target.value)} title="字元集"
+                    <select value={charset} onChange={(e) => setCharset(e.target.value)} title={t("字元集")}
                       className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent">
                       {CHARSETS.map((cs) => <option key={cs} value={cs}>{cs}</option>)}
                     </select>
                     <input value={collation} onChange={(e) => setCollation(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
-                      title="定序（可留空用預設）"
-                      className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent w-48 mono" placeholder="定序（預設）" />
+                      title={t("定序（可留空用預設）")}
+                      className="bg-well border border-fg/15 rounded px-2 py-1 text-xs focus:border-accent w-48 mono" placeholder={t("定序（預設）")} />
                     <button type="button" onClick={convertCharset} disabled={converting}
                       className="px-3 py-1.5 text-xs rounded border border-amber-400/40 text-amber-300 hover:bg-amber-500/10 disabled:opacity-40">
-                      {converting ? "轉換中…" : "轉換字元集"}</button>
+                      {converting ? t("轉換中…") : t("轉換字元集")}</button>
                   </div>
                 </div>
               </div>
@@ -199,17 +201,17 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
           )}
 
           <Section title={`欄位（${cols?.length ?? 0}）`}>
-            {cols == null ? <Empty text="載入中…" /> : cols.length === 0 ? <Empty text="（無）" /> : (
+            {cols == null ? <Empty text={t("載入中…")} /> : cols.length === 0 ? <Empty text={t("（無）")} /> : (
               <table className="w-full text-xs">
                 <thead className="text-fg/40">
-                  <tr><Th>欄名</Th><Th>型別</Th><Th>NULL</Th><Th>鍵</Th><Th>預設</Th><Th>註解</Th></tr>
+                  <tr><Th>{t("欄名")}</Th><Th>{t("型別")}</Th><Th>NULL</Th><Th>{t("鍵")}</Th><Th>{t("預設")}</Th><Th>{t("註解")}</Th></tr>
                 </thead>
                 <tbody>
                   {cols.map((c) => (
                     <tr key={c.name} className="border-t border-fg/5">
                       <Td mono>{c.name}</Td>
                       <Td>{c.data_type}</Td>
-                      <Td>{c.nullable ? "是" : "否"}</Td>
+                      <Td>{c.nullable ? t("是") : t("否")}</Td>
                       <Td>{c.key || "—"}</Td>
                       <Td mono>{c.default ?? "—"}</Td>
                       <Td>{c.comment || "—"}</Td>
@@ -221,18 +223,18 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
           </Section>
 
           <Section title={`索引（${idx?.length ?? 0}）`}>
-            {idx == null ? <Empty text="載入中…" /> : idx.length === 0 ? <Empty text="（無）" /> : (
+            {idx == null ? <Empty text={t("載入中…")} /> : idx.length === 0 ? <Empty text={t("（無）")} /> : (
               <table className="w-full text-xs">
                 <thead className="text-fg/40">
-                  <tr><Th>名稱</Th><Th>欄位</Th><Th>唯一</Th><Th>主鍵</Th></tr>
+                  <tr><Th>{t("名稱")}</Th><Th>{t("欄位")}</Th><Th>{t("唯一")}</Th><Th>{t("主鍵")}</Th></tr>
                 </thead>
                 <tbody>
                   {idx.map((ix) => (
                     <tr key={ix.name} className="border-t border-fg/5">
                       <Td mono>{ix.name}</Td>
                       <Td mono>{ix.columns.join(", ")}</Td>
-                      <Td>{ix.unique ? "是" : "否"}</Td>
-                      <Td>{ix.primary ? "是" : "否"}</Td>
+                      <Td>{ix.unique ? t("是") : t("否")}</Td>
+                      <Td>{ix.primary ? t("是") : t("否")}</Td>
                     </tr>
                   ))}
                 </tbody>

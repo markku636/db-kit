@@ -2,6 +2,7 @@
 // 每個節點顯示操作 / 表名、累積成本與估計列數，成本熱點標紅（致敬 Navicat 視覺化解釋）。
 import type { PlanNode } from "./explain";
 import { planSummary } from "./explain";
+import { useT } from "./i18n";
 
 const KIND_STYLE: Record<PlanNode["kind"], { dot: string; label: string }> = {
   query_block: { dot: "bg-blue-400", label: "查詢區塊" },
@@ -17,6 +18,7 @@ function fmtNum(n: number | null): string {
 }
 
 function PlanNodeView({ node, maxCost }: { node: PlanNode; maxCost: number | null }) {
+  const t = useT();
   const st = KIND_STYLE[node.kind];
   // 成本熱點：以「獨佔成本」（PG 排除子樹累積）接近最大者標紅，快速指出真正瓶頸節點。
   const eff = node.selfCost ?? node.cost;
@@ -26,26 +28,26 @@ function PlanNodeView({ node, maxCost }: { node: PlanNode; maxCost: number | nul
   return (
     <div className="relative">
       <div className="flex items-start gap-2 py-1">
-        <span className={`mt-1.5 h-2.5 w-2.5 rounded-sm shrink-0 ${st.dot}`} title={st.label} />
+        <span className={`mt-1.5 h-2.5 w-2.5 rounded-sm shrink-0 ${st.dot}`} title={t(st.label)} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span className="text-sm font-medium text-fg/90 break-all">{node.label}</span>
             {node.cost != null && (
               <span
                 className={`text-[11px] px-1.5 py-0.5 rounded ${hot ? "bg-red-500/15 text-red-300" : "bg-fg/10 text-fg/60"}`}
-                title="成本估計（cost；MySQL 為單表步驟成本，PostgreSQL 為子樹總成本）"
+                title={t("成本估計（cost；MySQL 為單表步驟成本，PostgreSQL 為子樹總成本）")}
               >
                 cost {fmtNum(node.cost)}
               </span>
             )}
             {showSelf && (
               <span className={`text-[11px] px-1.5 py-0.5 rounded ${hot ? "bg-red-500/15 text-red-300" : "bg-fg/10 text-fg/55"}`}
-                title="獨佔成本（self；本節點 Total 減去子節點累積）——熱點判斷依此值">
+                title={t("獨佔成本（self；本節點 Total 減去子節點累積）——熱點判斷依此值")}>
                 self {fmtNum(node.selfCost!)}
               </span>
             )}
             {node.rows != null && (
-              <span className="text-[11px] px-1.5 py-0.5 rounded bg-fg/10 text-fg/60" title="估計列數">
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-fg/10 text-fg/60" title={t("估計列數")}>
                 rows {fmtNum(node.rows)}
               </span>
             )}
@@ -65,18 +67,19 @@ function PlanNodeView({ node, maxCost }: { node: PlanNode; maxCost: number | nul
 }
 
 export default function ExplainPlan({ node }: { node: PlanNode }) {
+  const t = useT();
   const s = planSummary(node);
   return (
     <div className="p-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-fg/50 mb-2">
-        <span>節點 {s.nodes}</span>
-        <span>資料表 {s.tables}</span>
-        {s.maxCost != null && <span>最高成本 {fmtNum(s.maxCost)}</span>}
+        <span>{t("節點")} {s.nodes}</span>
+        <span>{t("資料表")} {s.tables}</span>
+        {s.maxCost != null && <span>{t("最高成本")} {fmtNum(s.maxCost)}</span>}
         <span className="ml-auto inline-flex items-center gap-2">
           {Object.entries(KIND_STYLE).map(([k, v]) => (
             <span key={k} className="inline-flex items-center gap-1">
               <span className={`h-2 w-2 rounded-sm ${v.dot}`} />
-              {v.label}
+              {t(v.label)}
             </span>
           ))}
         </span>

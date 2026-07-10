@@ -5,6 +5,7 @@ import { toast } from "./ui";
 import { Modal, Button } from "./ui/index";
 import Icon from "./ui/Icon";
 import { buildInsertValues } from "./sql";
+import { useT } from "./i18n";
 
 // ---- 純值合成輔助（不依賴 React state，抽到模組層以降低 synth 複雜度）----
 const rint = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
@@ -51,6 +52,7 @@ export default function DataGenerator({ connId, db, table, kind, onClose, onGene
   onClose: () => void;
   onGenerate: (sql: string) => void;
 }) {
+  const t = useT();
   const [cols, setCols] = useState<ColumnInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -81,7 +83,7 @@ export default function DataGenerator({ connId, db, table, kind, onClose, onGene
         for (const col of c) inc[col.name] = !isAuto(col, pkCount);
         setInclude(inc);
       })
-      .catch((e) => { if (!cancelled) setErr(e?.message ?? "讀取欄位失敗"); })
+      .catch((e) => { if (!cancelled) setErr(e?.message ?? t("讀取欄位失敗")); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [connId, db, table]);
@@ -106,19 +108,19 @@ export default function DataGenerator({ connId, db, table, kind, onClose, onGene
   const strategyLabel = (c: ColumnInfo): string => {
     const val = baseType(c.data_type);
     const dt = c.data_type.toLowerCase();
-    if (dt.startsWith("tinyint(1)") || val === "bool" || val === "boolean") return "布林 0/1";
-    if (INT_TYPES.has(val)) return "整數";
-    if (DEC_TYPES.has(val)) return "小數";
-    if (val === "date") return "日期";
-    if (val === "datetime" || val === "timestamp" || val === "timestamptz") return "日期時間";
-    if (val === "time") return "時間";
-    if (val === "year") return "年份";
+    if (dt.startsWith("tinyint(1)") || val === "bool" || val === "boolean") return t("布林 0/1");
+    if (INT_TYPES.has(val)) return t("整數");
+    if (DEC_TYPES.has(val)) return t("小數");
+    if (val === "date") return t("日期");
+    if (val === "datetime" || val === "timestamp" || val === "timestamptz") return t("日期時間");
+    if (val === "time") return t("時間");
+    if (val === "year") return t("年份");
     if (val === "uuid") return "UUID";
     if (val === "json" || val === "jsonb") return "JSON {}";
     if (/email/i.test(c.name)) return "Email";
-    if (/(^|_)(name|fullname)/i.test(c.name)) return "姓名";
-    if (/(phone|tel|mobile)/i.test(c.name)) return "電話";
-    return "字串";
+    if (/(^|_)(name|fullname)/i.test(c.name)) return t("姓名");
+    if (/(phone|tel|mobile)/i.test(c.name)) return t("電話");
+    return t("字串");
   };
 
   // 合成單一值（回傳字串；NULL 不在此處理）。i 為列序，供部分策略產生較分散的值。
@@ -152,14 +154,14 @@ export default function DataGenerator({ connId, db, table, kind, onClose, onGene
   );
 
   const generate = () => {
-    if (included.length === 0) { toast.error("請至少選一個欄位"); return; }
+    if (included.length === 0) { toast.error(t("請至少選一個欄位")); return; }
     const n = Math.max(1, Math.min(10000, rowCount || 1));
     const names = included.map((c) => c.name);
     const rows: (string | null)[][] = [];
     for (let i = 0; i < n; i++) {
       rows.push(included.map((c) => (c.nullable && Math.random() < 0.1 ? null : synth(c, i))));
     }
-    const sql = `-- 資料產生：${included.length} 欄 × ${n} 列（請檢視後執行）\n` +
+    const sql = t("-- 資料產生：{length} 欄 × {n} 列（請檢視後執行）\n", { length: included.length, n }) +
       buildInsertValues(kind, db, table, names, rows) + "\n";
     onGenerate(sql);
   };
@@ -167,26 +169,26 @@ export default function DataGenerator({ connId, db, table, kind, onClose, onGene
   return (
     <Modal
       onClose={onClose}
-      title={<span className="flex items-center gap-2"><span>資料產生</span><span className="text-xs text-fg/40 mono">{kind === "sqlite" ? table : `${db}.${table}`}</span></span>}
+      title={<span className="flex items-center gap-2"><span>{t("資料產生")}</span><span className="text-xs text-fg/40 mono">{kind === "sqlite" ? table : `${db}.${table}`}</span></span>}
       icon={Wand2}
       size="md"
       zClass="z-[95]"
       bodyClassName="p-0 flex flex-col overflow-hidden"
       footer={<>
         <span className="text-fg/40 text-xs mr-auto">已選 {included.length} / {cols.length} 欄</span>
-        <Button variant="secondary" onClick={onClose}>取消</Button>
-        <Button variant="primary" onClick={generate} disabled={loading || !!err || included.length === 0}>產生到查詢編輯器</Button>
+        <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
+        <Button variant="primary" onClick={generate} disabled={loading || !!err || included.length === 0}>{t("產生到查詢編輯器")}</Button>
       </>}
     >
       <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3 text-sm">
-        <span className="text-fg/45 text-xs">產生列數</span>
-        <input type="number" min={1} max={10000} value={rowCount} aria-label="產生列數"
+        <span className="text-fg/45 text-xs">{t("產生列數")}</span>
+        <input type="number" min={1} max={10000} value={rowCount} aria-label={t("產生列數")}
           onChange={(e) => setRowCount(parseInt(e.target.value, 10) || 0)}
           className="bg-well border border-fg/15 rounded px-2 py-1 text-xs w-24 mono outline-none focus:border-accent" />
-        <span className="text-fg/30 text-xs ml-auto">值依型別 / 欄名合成，可空欄約 10% 為 NULL</span>
+        <span className="text-fg/30 text-xs ml-auto">{t("值依型別 / 欄名合成，可空欄約 10% 為 NULL")}</span>
       </div>
       <div className="flex-1 overflow-auto p-3 text-xs">
-        {loading && <div className="text-fg/40 p-2">讀取中…</div>}
+        {loading && <div className="text-fg/40 p-2">{t("讀取中…")}</div>}
         {err && <div className="text-red-400 mono p-2">{err}</div>}
         {!loading && !err && cols.map((c) => (
           <label key={c.name} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-fg/5 cursor-pointer">

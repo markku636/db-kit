@@ -9,6 +9,7 @@ import { autocompletion, type Completion, type CompletionSource } from "@codemir
 import { api } from "./api";
 import { useTheme } from "./theme";
 import { resolveEditorTheme } from "./editorThemes";
+import { useT } from "./i18n";
 
 // Mongo 查詢編輯器（取代原本的 <textarea>）：JSON 語法高亮 + 即時 JSON lint +
 // 三路自動完成 —— DSL 鍵、$ 聚合階段 / 查詢運算子、目標集合的欄位名（取樣 schema）。
@@ -66,6 +67,7 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
   { value, onChange, connId, onSubmit, placeholder, className, autoFocus },
   ref,
 ) {
+  const t = useT();
   const theme = useTheme((s) => s.theme);
   const themeId = useTheme((s) => s.themeId);
   const cmRef = useRef<ReactCodeMirrorRef>(null);
@@ -122,11 +124,11 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
       if (typed.startsWith("$")) {
         for (const op of DOLLAR_OPS) opts.push(mk(op, "keyword"));
       } else {
-        for (const k of DSL_KEYS) opts.push(mk(k, "property", "查詢 DSL"));
+        for (const k of DSL_KEYS) opts.push(mk(k, "property", t("查詢 DSL")));
         const target = extractTarget(ctx.state.doc.toString());
         if (target) {
           for (const f of fieldsRef.current.get(`${target.db}.${target.coll}`) ?? []) {
-            opts.push(mk(f, "variable", "欄位"));
+            opts.push(mk(f, "variable", t("欄位")));
           }
         }
       }

@@ -7,6 +7,7 @@ import SqlEditor, { type SqlDiagnostic } from "./SqlEditor";
 import { useSqlSchema } from "./useSqlSchema";
 import { ArrowLeft, Plus, Code2 } from "lucide-react";
 import Icon from "./ui/Icon";
+import { useT } from "./i18n";
 
 const TYPE_LABEL: Record<string, string> = { procedure: "預存程序", function: "函式", trigger: "觸發器", event: "事件" };
 
@@ -43,6 +44,7 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
   newType?: string | null; // 無 initial 時帶入種類（function / procedure / trigger …），掛載後直接開新增編輯器（右鍵「新增」用）。
   onClose: () => void;
 }) {
+  const t = useT();
   const schema = useSqlSchema(connId, kind, db); // 表 / 欄自動完成（程序 / 函式 / 觸發器內文亦受用）
   const [list, setList] = useState<RoutineInfo[] | null>(null);
   const [mode, setMode] = useState<"list" | "editor">("list");
@@ -60,7 +62,7 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
   const refresh = useCallback(async () => {
     setList(null);
     try { setList(await api.listRoutines(connId, db)); }
-    catch (e: any) { toast.error(e?.message ?? "讀取失敗"); setList([]); }
+    catch (e: any) { toast.error(e?.message ?? t("讀取失敗")); setList([]); }
   }, [connId, db]);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -82,26 +84,26 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
       setReplace(kind !== "postgres" || r.routine_type === "trigger");
       setMode("editor");
     } catch (e: any) {
-      toast.error(e?.message ?? "讀取定義失敗");
+      toast.error(e?.message ?? t("讀取定義失敗"));
     }
   };
 
   const drop = async (r: RoutineInfo) => {
     if (busy) return; // 避免與執行中的 exec / 其他刪除並行送出 DDL
-    const ok = await uiConfirm(`刪除${TYPE_LABEL[r.routine_type] ?? r.routine_type}「${r.name}」？此動作無法復原。`, {
-      title: "刪除", danger: true, confirmText: "刪除",
+    const ok = await uiConfirm(t("刪除{kind}「{name}」？此動作無法復原。", { kind: t(TYPE_LABEL[r.routine_type] ?? r.routine_type), name: r.name }), {
+      title: t("刪除"), danger: true, confirmText: t("刪除"),
     });
     if (!ok) return;
     setBusy(true);
-    try { await api.execDdl(connId, buildDropRoutine(kind, db, r)); toast.success(`已刪除「${r.name}」`); refresh(); }
-    catch (e: any) { toast.error(e?.message ?? "刪除失敗"); }
+    try { await api.execDdl(connId, buildDropRoutine(kind, db, r)); toast.success(t("已刪除「{name}」", { name: r.name })); refresh(); }
+    catch (e: any) { toast.error(e?.message ?? t("刪除失敗")); }
     finally { setBusy(false); }
   };
   // 執行函式 / 預存程序（對標 Navicat「執行函式」）：詢問引數後以 SELECT / CALL 執行並顯示結果。
   const execute = async (r: RoutineInfo) => {
-    const hint = r.signature ? `引數：${r.signature}` : "無引數";
-    const args = await uiPrompt(`執行${TYPE_LABEL[r.routine_type] ?? ""}「${r.name}」\n${hint}\n請輸入引數（以逗號分隔，自行加引號，如 42, 'abc'）：`, {
-      title: "執行", placeholder: "（無引數可留空）",
+    const hint = r.signature ? t("引數：{signature}", { signature: r.signature }) : t("無引數");
+    const args = await uiPrompt(t("執行{kind}「{name}」\n{hint}\n請輸入引數（以逗號分隔，自行加引號，如 42, 'abc'）：", { kind: t(TYPE_LABEL[r.routine_type] ?? ""), name: r.name, hint }), {
+      title: t("執行"), placeholder: t("（無引數可留空）"),
     });
     if (args === null) return;
     setBusy(true);
@@ -109,7 +111,7 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
       const res = await api.runQuery(connId, buildRoutineCall(kind, db, r.name, r.routine_type, args));
       setExecResult({ title: `${r.name}(${args.trim()})`, result: res });
     } catch (e: any) {
-      toast.error(e?.message ?? "執行失敗");
+      toast.error(e?.message ?? t("執行失敗"));
     } finally {
       setBusy(false);
     }
@@ -123,16 +125,16 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
     try {
       const r = await api.validateDdl(connId, db, sqlText);
       if (r.validated && r.ok) {
-        toast.success("語法驗證通過");
+        toast.success(t("語法驗證通過"));
       } else if (r.validated) {
-        const where = r.line != null ? `第 ${r.line} 行：` : "";
+        const where = r.line != null ? t("第 {line} 行：", { line: r.line }) : "";
         toast.error(`語法錯誤 — ${where}${r.message ?? ""}`);
-        setDiags([{ line: r.line ?? undefined, severity: "error", message: r.message ?? "語法錯誤" }]);
+        setDiags([{ line: r.line ?? undefined, severity: "error", message: r.message ?? t("語法錯誤") }]);
       } else {
-        toast.info(r.caveat ?? "已略過伺服器驗證（僅前端結構檢查）");
+        toast.info(r.caveat ?? t("已略過伺服器驗證（僅前端結構檢查）"));
       }
     } catch (e: any) {
-      toast.error(e?.message ?? "驗證失敗");
+      toast.error(e?.message ?? t("驗證失敗"));
     } finally {
       setValidating(false);
     }
@@ -144,11 +146,11 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
     try {
       if (replace && editingRoutine) await api.execDdl(connId, buildDropRoutine(kind, db, editingRoutine));
       await api.execDdl(connId, sqlText);
-      toast.success("已執行");
+      toast.success(t("已執行"));
       setMode("list");
       refresh();
     } catch (e: any) {
-      toast.error(e?.message ?? "執行失敗");
+      toast.error(e?.message ?? t("執行失敗"));
     } finally {
       setBusy(false);
     }
@@ -181,10 +183,10 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
       bodyClassName="flex flex-col min-h-0 overflow-hidden"
       title={
         <span className="flex items-center gap-2">
-          <span className="font-medium text-sm">預存程序 / 觸發器</span>
+          <span className="font-medium text-sm">{t("預存程序 / 觸發器")}</span>
           <span className="text-xs text-fg/40 mono">{db}</span>
           {mode === "editor" && (
-            <button type="button" onClick={() => setMode("list")} className="text-xs text-blue-400 hover:text-blue-300 inline-flex items-center gap-1"><Icon icon={ArrowLeft} size={13} /> 返回清單</button>
+            <button type="button" onClick={() => setMode("list")} className="text-xs text-blue-400 hover:text-blue-300 inline-flex items-center gap-1"><Icon icon={ArrowLeft} size={13} /> {t("返回清單")}</button>
           )}
         </span>
       }
@@ -192,51 +194,51 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
         <>
           <label className="text-xs text-fg/55 flex items-center gap-1.5 mr-auto">
             <input type="checkbox" checked={replace} onChange={(e) => setReplace(e.target.checked)} />
-            先刪除同名再建立（MySQL / SQLite 無 OR REPLACE 時需勾選）
+            {t("先刪除同名再建立（MySQL / SQLite 無 OR REPLACE 時需勾選）")}
           </label>
-          <Button variant="secondary" onClick={() => setMode("list")}>取消</Button>
+          <Button variant="secondary" onClick={() => setMode("list")}>{t("取消")}</Button>
           <Button variant="secondary" onClick={validate} loading={validating} disabled={validating || busy || !sqlText.trim()}
-            title="以資料庫引擎驗證語法（不會實際建立）">驗證</Button>
-          <Button variant="primary" onClick={run} loading={busy} disabled={busy || !sqlText.trim()}>執行</Button>
+            title={t("以資料庫引擎驗證語法（不會實際建立）")}>{t("驗證")}</Button>
+          <Button variant="primary" onClick={run} loading={busy} disabled={busy || !sqlText.trim()}>{t("執行")}</Button>
         </>
       ) : undefined}
     >
         {mode === "list" ? (
           <>
             <div className="px-5 py-2 border-b border-fg/10 flex items-center gap-2">
-              <span className="text-xs text-fg/45">新增：</span>
+              <span className="text-xs text-fg/45">{t("新增：")}</span>
               {(NEW_TYPES[kind] ?? []).map((item) => (
                 <button key={item} type="button" onClick={() => openNew(item)}
-                  className="text-xs px-2 py-1 rounded bg-fg/5 hover:bg-fg/10 inline-flex items-center gap-1"><Icon icon={Plus} size={13} /> {TYPE_LABEL[item]}</button>
+                  className="text-xs px-2 py-1 rounded bg-fg/5 hover:bg-fg/10 inline-flex items-center gap-1"><Icon icon={Plus} size={13} /> {t(TYPE_LABEL[item])}</button>
               ))}
-              <button type="button" onClick={() => refresh()} className="ml-auto text-xs text-fg/40 hover:text-fg/70">重新整理</button>
+              <button type="button" onClick={() => refresh()} className="ml-auto text-xs text-fg/40 hover:text-fg/70">{t("重新整理")}</button>
             </div>
             <div className="flex-1 overflow-auto p-2">
               {list == null ? (
-                <div className="text-fg/40 text-sm p-4">載入中…</div>
+                <div className="text-fg/40 text-sm p-4">{t("載入中…")}</div>
               ) : list.length === 0 ? (
-                <div className="text-fg/40 text-sm p-4">此資料庫沒有預存程序 / 函式 / 觸發器。</div>
+                <div className="text-fg/40 text-sm p-4">{t("此資料庫沒有預存程序 / 函式 / 觸發器。")}</div>
               ) : (
                 <table className="w-full text-sm">
                   <thead className="text-fg/40 text-xs">
-                    <tr><th className="text-left px-3 py-1.5 font-normal">名稱</th><th className="text-left px-3 py-1.5 font-normal">類型</th><th className="text-left px-3 py-1.5 font-normal">所屬表</th><th className="text-left px-3 py-1.5 font-normal whitespace-nowrap">修改時間</th><th className="text-left px-3 py-1.5 font-normal">決定性</th><th className="text-left px-3 py-1.5 font-normal">註解</th><th className="w-32 font-normal" aria-label="操作" /></tr>
+                    <tr><th className="text-left px-3 py-1.5 font-normal">{t("名稱")}</th><th className="text-left px-3 py-1.5 font-normal">{t("類型")}</th><th className="text-left px-3 py-1.5 font-normal">{t("所屬表")}</th><th className="text-left px-3 py-1.5 font-normal whitespace-nowrap">{t("修改時間")}</th><th className="text-left px-3 py-1.5 font-normal">{t("決定性")}</th><th className="text-left px-3 py-1.5 font-normal">{t("註解")}</th><th className="w-32 font-normal" aria-label={t("操作")} /></tr>
                   </thead>
                   <tbody>
                     {list.map((r) => (
                       <tr key={`${r.routine_type}:${r.name}:${r.signature ?? ""}`} className="border-t border-fg/5 hover:bg-fg/5">
                         <td className="px-3 py-1.5 mono">{r.name}{r.signature != null ? `(${r.signature})` : ""}</td>
-                        <td className="px-3 py-1.5 text-fg/60">{TYPE_LABEL[r.routine_type] ?? r.routine_type}</td>
+                        <td className="px-3 py-1.5 text-fg/60">{t(TYPE_LABEL[r.routine_type] ?? r.routine_type)}</td>
                         <td className="px-3 py-1.5 text-fg/40 mono">{r.parent ?? "—"}</td>
                         <td className="px-3 py-1.5 text-fg/40 mono whitespace-nowrap">{r.modified ?? "—"}</td>
-                        <td className="px-3 py-1.5 text-fg/50">{r.deterministic == null ? "—" : r.deterministic ? "是" : "否"}</td>
+                        <td className="px-3 py-1.5 text-fg/50">{r.deterministic == null ? "—" : r.deterministic ? t("是") : t("否")}</td>
                         <td className="px-3 py-1.5 text-fg/40 max-w-[180px] truncate" title={r.comment ?? ""}>{r.comment || "—"}</td>
                         <td className="px-3 py-1.5 text-right whitespace-nowrap">
                           {(r.routine_type === "function" || r.routine_type === "procedure") && (
                             <button type="button" onClick={() => execute(r)} disabled={busy}
-                              className="text-xs text-green-400 hover:text-green-300 disabled:opacity-40 px-1">執行</button>
+                              className="text-xs text-green-400 hover:text-green-300 disabled:opacity-40 px-1">{t("執行")}</button>
                           )}
-                          <button type="button" onClick={() => openEdit(r)} disabled={busy} className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40 px-1">編輯</button>
-                          <button type="button" onClick={() => drop(r)} disabled={busy} className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40 px-1">刪除</button>
+                          <button type="button" onClick={() => openEdit(r)} disabled={busy} className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40 px-1">{t("編輯")}</button>
+                          <button type="button" onClick={() => drop(r)} disabled={busy} className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40 px-1">{t("刪除")}</button>
                         </td>
                       </tr>
                     ))}
@@ -248,7 +250,7 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
         ) : (
           <>
             <div className="px-5 py-2 border-b border-fg/10 text-xs text-fg/40">
-              {editingRoutine ? `編輯：${editingRoutine.name}` : "新增"}　·　整段以單一語句執行（內部 ; 不切句）
+              {editingRoutine ? t("編輯：{name}", { name: editingRoutine.name }) : t("新增")}　{t("·　整段以單一語句執行（內部 ; 不切句）")}
             </div>
             <div className="flex-1 m-3 min-h-0 bg-inset border border-fg/10 rounded overflow-hidden focus-within:border-accent">
               <SqlEditor
@@ -275,13 +277,13 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
           bodyClassName="overflow-auto"
           title={
             <span className="flex items-center gap-2 w-full">
-              <span className="font-medium text-sm">執行結果：{execResult.title}</span>
-              <span className="ml-auto text-xs text-fg/40">{execResult.result.rows.length} 筆 · 影響 {execResult.result.rows_affected}</span>
+              <span className="font-medium text-sm">{t("執行結果：")}{execResult.title}</span>
+              <span className="ml-auto text-xs text-fg/40">{execResult.result.rows.length} {t("筆 · 影響")} {execResult.result.rows_affected}</span>
             </span>
           }
         >
           {execResult.result.columns.length === 0 ? (
-                <div className="text-fg/50 text-sm p-5">已執行（無結果集）。</div>
+                <div className="text-fg/50 text-sm p-5">{t("已執行（無結果集）。")}</div>
               ) : (
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-inset text-fg/45">

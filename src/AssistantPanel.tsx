@@ -16,6 +16,7 @@ import { toast, copyToClipboard, pickSaveFile, uiConfirm } from "./ui";
 import Icon from "./ui/Icon";
 import { IconButton } from "./ui/index";
 import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Sparkles, Send, Square } from "lucide-react";
+import { t, useT } from "./i18n";
 
 // 右側「AI 助手」面板：驅動本機 claude CLI（使用 Claude 訂閱登入），
 // 串流回答問題與撰寫腳本。對標右側詳細資料面板的版面與主題用色。
@@ -60,6 +61,7 @@ function loadPersisted(): Partial<Persisted> {
 }
 
 export default function AssistantPanel() {
+  const t = useT();
   const open = useAssistant((s) => s.open);
   const persisted = useMemo(loadPersisted, []);
 
@@ -178,7 +180,7 @@ export default function AssistantPanel() {
       setInput(seed);
       setTimeout(() => textareaRef.current?.focus(), 0);
       // 串流中沒有就緒提示列可看，額外提示問題已填入、稍後可送出。
-      if (autoSend && streaming) toast.info("助手回應中，已將問題填入輸入框，結束後按送出即可");
+      if (autoSend && streaming) toast.info(t("助手回應中，已將問題填入輸入框，結束後按送出即可"));
     }
     // 僅需在 seed 變動時觸發；send / streaming / status 取當下 render 的值即可。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -221,12 +223,12 @@ export default function AssistantPanel() {
   };
 
   const exportChat = async () => {
-    if (!messages.length) { toast.info("沒有可匯出的對話"); return; }
-    const md = messages.map((m) => `## ${m.role === "user" ? "我" : "助手"}\n\n${m.text}`).join("\n\n---\n\n");
+    if (!messages.length) { toast.info(t("沒有可匯出的對話")); return; }
+    const md = messages.map((m) => `## ${m.role === "user" ? t("我") : t("助手")}\n\n${m.text}`).join("\n\n---\n\n");
     const path = await pickSaveFile("db-kit-chat.md", [{ name: "Markdown", extensions: ["md"] }]);
     if (!path) return;
-    try { await api.saveTextFile(path, md); toast.success("已匯出對話"); }
-    catch (e: any) { toast.error(e?.message ?? "匯出失敗"); }
+    try { await api.saveTextFile(path, md); toast.success(t("已匯出對話")); }
+    catch (e: any) { toast.error(e?.message ?? t("匯出失敗")); }
   };
 
   const regenerate = () => {
@@ -302,7 +304,7 @@ export default function AssistantPanel() {
               ...x,
               pending: false,
               error: true,
-              text: x.text + (x.text ? "\n\n" : "") + `⚠ ${e.text ?? "發生錯誤"}`,
+              text: x.text + (x.text ? "\n\n" : "") + `⚠ ${e.text ?? t("發生錯誤")}`,
             }));
             break;
           case "done":
@@ -318,7 +320,7 @@ export default function AssistantPanel() {
         ...x,
         pending: false,
         error: true,
-        text: x.text + (x.text ? "\n\n" : "") + `⚠ ${err?.message ?? "送出失敗"}`,
+        text: x.text + (x.text ? "\n\n" : "") + `⚠ ${err?.message ?? t("送出失敗")}`,
       }));
       cleanup();
     }
@@ -332,7 +334,7 @@ export default function AssistantPanel() {
     setMessages((m) =>
       m.map((x) =>
         x.role === "assistant" && x.pending
-          ? { ...x, pending: false, text: x.text + (x.text ? "\n\n" : "") + "（已取消）" }
+          ? { ...x, pending: false, text: x.text + (x.text ? "\n\n" : "") + t("（已取消）") }
           : x,
       ),
     );
@@ -342,7 +344,7 @@ export default function AssistantPanel() {
   const reset = async () => {
     // 有對話內容才需要確認，避免空對話時多一步點擊。
     if (messages.length > 0) {
-      const ok = await uiConfirm("確定要清空目前對話並開新對話嗎？", { title: "清空對話？", danger: true, confirmText: "清空" });
+      const ok = await uiConfirm(t("確定要清空目前對話並開新對話嗎？"), { title: t("清空對話？"), danger: true, confirmText: t("清空") });
       if (!ok) return;
     }
     if (streaming) cancel();
@@ -361,22 +363,22 @@ export default function AssistantPanel() {
 
   return (
     <div className="shrink-0 bg-panel border-l border-fg/10 flex flex-col text-sm relative" style={{ width }}>
-      <div onMouseDown={startResize} title="拖曳調整寬度"
+      <div onMouseDown={startResize} title={t("拖曳調整寬度")}
         className="absolute left-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent/40 z-10" />
       <div className="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-fg/10">
         <Icon icon={Sparkles} size={14} className="text-accent shrink-0" />
-        <span className="text-xs text-fg/45 uppercase tracking-wide">AI 助手</span>
-        {sessionIdRef.current && <span className="text-[10px] text-fg/30">· 對話中</span>}
+        <span className="text-xs text-fg/45 uppercase tracking-wide">{t("AI 助手")}</span>
+        {sessionIdRef.current && <span className="text-[10px] text-fg/30">{t("· 對話中")}</span>}
         <div className="ml-auto flex items-center gap-1">
           {mode === "agent" && (
-            <IconButton icon={Folder} label="開啟助手工作資料夾（腳本檔存放處）" box="w-6 h-6"
+            <IconButton icon={Folder} label={t("開啟助手工作資料夾（腳本檔存放處）")} box="w-6 h-6"
               onClick={() => api.openAgentWorkspace().catch(() => {})} />
           )}
           {messages.length > 0 && (
-            <IconButton icon={Download} label="匯出對話為 Markdown" box="w-6 h-6" onClick={exportChat} />
+            <IconButton icon={Download} label={t("匯出對話為 Markdown")} box="w-6 h-6" onClick={exportChat} />
           )}
-          <IconButton icon={Trash2} label="清空對話 / 開新對話" box="w-6 h-6" onClick={reset} />
-          <IconButton icon={PanelRightClose} label="收合面板" box="w-6 h-6"
+          <IconButton icon={Trash2} label={t("清空對話 / 開新對話")} box="w-6 h-6" onClick={reset} />
+          <IconButton icon={PanelRightClose} label={t("收合面板")} box="w-6 h-6"
             onClick={() => useAssistant.getState().setOpen(false)} />
         </div>
       </div>
@@ -390,7 +392,7 @@ export default function AssistantPanel() {
           )}
           <button type="button" onClick={detect} disabled={detecting}
             className="ml-1 underline hover:text-amber-100 disabled:opacity-50">
-            {detecting ? "偵測中…" : "重新偵測"}
+            {detecting ? t("偵測中…") : t("重新偵測")}
           </button>
         </div>
       )}
@@ -404,7 +406,7 @@ export default function AssistantPanel() {
             {!streaming && messages[messages.length - 1].role === "assistant" && (
               <div className="flex justify-start">
                 <button type="button" onClick={regenerate} disabled={notReady}
-                  className="inline-flex items-center gap-1 text-[11px] text-fg/45 hover:text-fg border border-fg/10 rounded px-2 py-0.5 hover:bg-fg/5 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg/45"><Icon icon={RefreshCw} size={13} /> 重新生成</button>
+                  className="inline-flex items-center gap-1 text-[11px] text-fg/45 hover:text-fg border border-fg/10 rounded px-2 py-0.5 hover:bg-fg/5 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg/45"><Icon icon={RefreshCw} size={13} /> {t("重新生成")}</button>
               </div>
             )}
           </>
@@ -413,22 +415,22 @@ export default function AssistantPanel() {
 
       <div className="relative shrink-0 border-t border-fg/10 p-2 space-y-2">
         <div onMouseDown={startInputResize} onDoubleClick={() => setInputH(0)}
-          title="拖曳調整輸入區高度（雙擊還原自動高度）"
+          title={t("拖曳調整輸入區高度（雙擊還原自動高度）")}
           className="absolute left-0 -top-0.5 w-full h-1.5 cursor-row-resize hover:bg-accent/40 z-10" />
         <div className="flex items-center gap-2 text-[11px] text-fg/50">
-          <label className="flex items-center gap-1 cursor-pointer select-none" title="送出時附帶目前連線 / 選取資料表的結構">
+          <label className="flex items-center gap-1 cursor-pointer select-none" title={t("送出時附帶目前連線 / 選取資料表的結構")}>
             <input type="checkbox" checked={ctxOn} onChange={(e) => setCtxOn(e.target.checked)} className="accent-blue-500" />
-            附帶資料庫內容
+            {t("附帶資料庫內容")}
           </label>
           <select value={mode} onChange={(e) => setMode(e.target.value as AgentMode)}
-            title="唯讀問答：只回答 / 產生腳本文字。可寫腳本檔：允許寫入助手工作資料夾"
+            title={t("唯讀問答：只回答 / 產生腳本文字。可寫腳本檔：允許寫入助手工作資料夾")}
             className="ml-auto bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70">
-            <option value="advise">唯讀問答</option>
-            <option value="agent">可寫腳本檔</option>
+            <option value="advise">{t("唯讀問答")}</option>
+            <option value="agent">{t("可寫腳本檔")}</option>
           </select>
           <select value={model} onChange={(e) => setModel(e.target.value)}
             className="bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70">
-            {MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            {MODELS.map((m) => <option key={m.value} value={m.value}>{t(m.label)}</option>)}
           </select>
         </div>
         <div className="flex items-end gap-2">
@@ -443,15 +445,15 @@ export default function AssistantPanel() {
               }
             }}
             rows={2}
-            placeholder="輸入問題，Enter 送出、Shift+Enter 換行"
+            placeholder={t("輸入問題，Enter 送出、Shift+Enter 換行")}
             className="flex-1 resize-none bg-inset border border-fg/10 rounded px-2 py-1.5 text-fg/90 placeholder:text-fg/30 outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 min-h-[2.5rem] overflow-auto"
           />
           {streaming ? (
             <button type="button" onClick={cancel}
-              className="shrink-0 inline-flex items-center gap-1 h-9 px-3 rounded bg-danger/15 text-danger hover:bg-danger/25 text-xs"><Icon icon={Square} size={13} />停止</button>
+              className="shrink-0 inline-flex items-center gap-1 h-9 px-3 rounded bg-danger/15 text-danger hover:bg-danger/25 text-xs"><Icon icon={Square} size={13} />{t("停止")}</button>
           ) : (
             <button type="button" onClick={() => send()} disabled={!input.trim() || notReady}
-              className="shrink-0 inline-flex items-center gap-1 h-9 px-3 rounded bg-accent text-white hover:bg-accent/90 active:bg-accent/80 disabled:opacity-30 text-xs"><Icon icon={Send} size={13} />送出</button>
+              className="shrink-0 inline-flex items-center gap-1 h-9 px-3 rounded bg-accent text-white hover:bg-accent/90 active:bg-accent/80 disabled:opacity-30 text-xs"><Icon icon={Send} size={13} />{t("送出")}</button>
           )}
         </div>
       </div>
@@ -465,18 +467,19 @@ function EmptyState({ onPick, onFill, disabled }: {
   onFill: (text: string) => void;
   disabled: boolean;
 }) {
+  const t = useT();
   const node = useStore((s) => s.selectedNode);
   const conn = useStore((s) => s.connections.find((c) => c.id === s.activeId) ?? null);
 
   const quick: { label: string; prompt: string; fill?: boolean }[] = [];
   if (node?.type === "table") {
-    quick.push({ label: `解釋資料表 ${node.table}`, prompt: `請解釋資料表 ${node.db}.${node.table} 的用途，以及每個欄位代表什麼。` });
-    quick.push({ label: `為 ${node.table} 寫常用查詢`, prompt: `針對資料表 ${node.db}.${node.table}，寫出 5 個實用的 SQL 查詢，每個都加上中文註解說明用途。` });
+    quick.push({ label: t("解釋資料表 {table}", { table: node.table }), prompt: t("請解釋資料表 {db}.{table} 的用途，以及每個欄位代表什麼。", { db: node.db, table: node.table }) });
+    quick.push({ label: t("為 {table} 寫常用查詢", { table: node.table }), prompt: t("針對資料表 {db}.{table}，寫出 5 個實用的 SQL 查詢，每個都加上中文註解說明用途。", { db: node.db, table: node.table }) });
   } else if (conn) {
-    quick.push({ label: "從哪開始探索這個資料庫", prompt: "我想了解目前連線的這個資料庫，建議我從哪些資料表 / 查詢開始探索？" });
+    quick.push({ label: t("從哪開始探索這個資料庫"), prompt: t("我想了解目前連線的這個資料庫，建議我從哪些資料表 / 查詢開始探索？") });
   }
-  quick.push({ label: "最佳化一段 SQL", prompt: "幫我最佳化這段 SQL（保留語意、說明改了什麼）：\n\n", fill: true });
-  quick.push({ label: "寫一個備份腳本", prompt: "幫我寫一個可重複執行的資料庫備份腳本，並說明怎麼設定排程。" });
+  quick.push({ label: t("最佳化一段 SQL"), prompt: "幫我最佳化這段 SQL（保留語意、說明改了什麼）：\n\n", fill: true });
+  quick.push({ label: t("寫一個備份腳本"), prompt: t("幫我寫一個可重複執行的資料庫備份腳本，並說明怎麼設定排程。") });
 
   return (
     <div className="text-fg/40 text-xs leading-relaxed p-1 space-y-3">
@@ -504,6 +507,7 @@ function EmptyState({ onPick, onFill, disabled }: {
 
 // ---- 訊息泡泡 ----
 function MessageBubble({ msg }: { msg: ChatMsg }) {
+  const t = useT();
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
@@ -526,21 +530,21 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
         {msg.pending && !msg.text ? (
           <div className="flex items-center gap-2 text-fg/40 text-xs">
             <span className="inline-block w-3 h-3 rounded-full border border-fg/40 border-t-transparent animate-spin" />
-            思考中…
+            {t("思考中…")}
           </div>
         ) : (
           <Markdown text={msg.text} />
         )}
         <div className="mt-1 flex items-center gap-2">
-          {msg.error && <span className="text-[11px] text-red-400">回應發生錯誤</span>}
+          {msg.error && <span className="text-[11px] text-red-400">{t("回應發生錯誤")}</span>}
           {!msg.pending && msg.ms != null && (
             <span className="text-[10px] text-fg/25">{(msg.ms / 1000).toFixed(1)}s</span>
           )}
           {!msg.pending && msg.text && (
             <button type="button"
-              onClick={() => { copyToClipboard(msg.text); toast.success("已複製整則回應"); }}
+              onClick={() => { copyToClipboard(msg.text); toast.success(t("已複製整則回應")); }}
               className="ml-auto opacity-60 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-[10px] text-fg/40 hover:text-fg">
-              複製全部
+              {t("複製全部")}
             </button>
           )}
         </div>
@@ -848,6 +852,7 @@ function highlightSql(code: string, c: ThemeColors): ReactNode[] {
 }
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
+  const t = useT();
   const themeId = useTheme((s) => s.themeId);
   const appTheme = useTheme((s) => s.theme);
   const isSql = lang === "sql" || (!lang && looksLikeSql(code));
@@ -863,9 +868,9 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     if (!path) return;
     try {
       await api.saveTextFile(path, code);
-      toast.success("已儲存腳本");
+      toast.success(t("已儲存腳本"));
     } catch (e: any) {
-      toast.error(e?.message ?? "儲存失敗");
+      toast.error(e?.message ?? t("儲存失敗"));
     }
   };
 
@@ -873,17 +878,17 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   return (
     <div className="rounded border border-fg/10 overflow-hidden bg-well">
       <div className="flex items-center gap-1 px-2 py-1 bg-fg/5 text-[10px] text-fg/45">
-        <span className="uppercase tracking-wide">{lang || "程式碼"}</span>
+        <span className="uppercase tracking-wide">{lang || t("程式碼")}</span>
         <div className="ml-auto flex items-center gap-0.5">
           {isSql && (
             <button type="button" className={btn}
-              onClick={() => { useStore.getState().requestQuery(code); toast.success("已貼到查詢編輯器"); }}>
-              貼到編輯器
+              onClick={() => { useStore.getState().requestQuery(code); toast.success(t("已貼到查詢編輯器")); }}>
+              {t("貼到編輯器")}
             </button>
           )}
-          <button type="button" className={btn} onClick={save}>另存</button>
+          <button type="button" className={btn} onClick={save}>{t("另存")}</button>
           <button type="button" className={btn}
-            onClick={() => { copyToClipboard(code); toast.success("已複製"); }}>複製</button>
+            onClick={() => { copyToClipboard(code); toast.success(t("已複製")); }}>{t("複製")}</button>
         </div>
       </div>
       <pre className="p-2 overflow-auto text-[12px] mono leading-relaxed"
@@ -900,16 +905,16 @@ async function buildContext(): Promise<string> {
   const conn = s.connections.find((c) => c.id === s.activeId) ?? null;
   if (!conn) return "";
   const meta = KIND_META[conn.kind];
-  const lines: string[] = [`資料庫類型：${meta.label}`];
-  if (!meta.fileBased) lines.push(`連線位址：${conn.host}:${conn.port}`);
-  if (conn.database) lines.push(`預設資料庫：${conn.database}`);
+  const lines: string[] = [t("資料庫類型：{label}", { label: meta.label })];
+  if (!meta.fileBased) lines.push(t("連線位址：{host}:{port}", { host: conn.host, port: conn.port }));
+  if (conn.database) lines.push(t("預設資料庫：{database}", { database: conn.database }));
 
   const node = s.selectedNode;
   if (node && node.connId === conn.id) {
     if (node.type === "database") {
-      lines.push(`目前選取資料庫：${node.db}`);
+      lines.push(t("目前選取資料庫：{db}", { db: node.db }));
     } else if (node.type === "table") {
-      lines.push(`目前選取${node.objKind === "view" ? "視圖" : "資料表"}：${node.db}.${node.table}`);
+      lines.push(`目前選取${node.objKind === "view" ? t("視圖") : t("資料表")}：${node.db}.${node.table}`);
       try {
         const cols = await api.tableColumns(conn.id, node.db, node.table);
         if (cols.length) {
@@ -922,5 +927,5 @@ async function buildContext(): Promise<string> {
       } catch { /* schema 為加值，失敗略過 */ }
     }
   }
-  return `【目前資料庫環境】\n${lines.join("\n")}\n（以上為使用者在 db-kit 的目前環境；若回答涉及 SQL，請貼合此資料庫類型與結構）`;
+  return t("【目前資料庫環境】\n{join}\n（以上為使用者在 db-kit 的目前環境；若回答涉及 SQL，請貼合此資料庫類型與結構）", { join: lines.join("\n") });
 }
