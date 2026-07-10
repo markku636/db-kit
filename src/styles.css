@@ -135,11 +135,11 @@ body {
 .cm-theme-dark {
   height: 100%;
 }
-/* CodeMirror 編輯器：捲軸加寬且提高對比 —— thin + 低不透明度在暗色主題下幾乎不可見，
-   使用者無從得知長 SQL 還能往下捲。overflow 由編輯器的 baseTheme 明確指定。 */
+/* CodeMirror 編輯器：與全域一致用 thin，僅提高對比補可見度 —— 低不透明度在暗色主題下
+   幾乎不可見，使用者無從得知長 SQL 還能往下捲。overflow 由編輯器的 baseTheme 明確指定。 */
 .cm-scroller {
-  scrollbar-width: auto;
-  scrollbar-color: rgb(var(--c-fg) / 0.35) transparent;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--c-fg) / 0.5) transparent;
 }
 ::-webkit-scrollbar {
   width: 10px;
