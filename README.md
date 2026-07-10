@@ -45,13 +45,20 @@
 
 ## 畫面預覽
 
-> 下圖為 App 實際畫面截圖（深色主題）。
+> App 實際畫面截圖（production build，預設的 **Amethyst 紫水晶**深色主題）；畫面中的連線與資料皆為虛構的示範電商 schema。
+> 隨程式碼演進可用 `npm run make:screenshots` 重拍（Playwright 實拍，見 [`scripts/capture-screenshots.mjs`](./scripts/capture-screenshots.mjs)）。
 
-| 資料表檢視 — 連線樹 · 分頁 · 可編輯資料格 | 查詢編輯器 — 語法高亮 · 結果格 · 歷史 / 收藏 |
+| 資料表檢視 — 連線樹 · 分頁 · 可編輯資料格 | 查詢編輯器 — 多語句 · 結果集堆疊（SSMS 風格） |
 |:---:|:---:|
 | ![資料表檢視](docs/screenshots/01-data-grid.png) | ![查詢編輯器](docs/screenshots/02-query-editor.png) |
 | **ER 圖** — 外鍵關係 · 可拖曳表卡 · 佈局記憶 | **Redis** — 命名空間鍵樹 · 結構編輯 · INFO 狀態 |
 | ![ER 圖](docs/screenshots/03-er-diagram.png) | ![Redis 檢視](docs/screenshots/04-redis.png) |
+
+**進階物件搜尋**（`Ctrl+Shift+G`）— 跨資料庫找表 / 欄位 / 索引 / 預存程序，可搜「定義內文」與「註解」，支援整字比對與萬用字元；命中處高亮，並可一鍵「在物件總管中選取」跳回側欄：
+
+<p align="center">
+  <img src="docs/screenshots/05-advanced-search.png" alt="進階物件搜尋" width="860">
+</p>
 
 ## 下載安裝
 
@@ -120,21 +127,26 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 |----------|--------|
 | 編輯資料 | 雙擊儲存格直接改 → 按 **✓** 套用（以主鍵定位寫回） |
 | 篩選 / 排序 | 點欄位標題排序、Shift+點擊多欄；工具列開多欄複合篩選 |
-| 跑 SQL | 開「查詢編輯器」分頁，**Ctrl+Enter** 執行（可只執行反白段） |
-| 匯出 / 匯入 | 資料格工具列匯出 CSV / JSON / SQL…；CSV 可匯入資料表 |
+| 跑 SQL | 開「查詢編輯器」分頁，**Ctrl+Enter** 執行游標所在語句、**F6** 執行整段（也可只跑反白段） |
+| 一次跑多條 | 多條語句以 `;` 分隔，各自的結果集**堆疊顯示**（SSMS 風格），可分別排序 / 篩選 / 匯出 |
+| 找東西在哪 | **Ctrl+Shift+G** 進階物件搜尋（跨庫找表 / 欄 / 索引 / 程序定義）；**Ctrl+K** 命令面板快速跳轉 |
+| 匯出 / 匯入 | 資料格工具列匯出 CSV / JSON / Excel / SQL…；CSV / Excel 可匯入資料表 |
 | 看表關聯 | 開「ER 圖」分頁，拖曳表卡、佈局自動記憶 |
+| 換配色 | 右上角主題選單：光亮 / 暗黑 + 7 套寶石系變體（整個 App 與編輯器一起換） |
 | 問 AI | 右側面板串接本機 Claude CLI，可附帶目前連線 schema |
 
 ## ✨ 亮點
 
 - **一站式八大資料庫** — MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis，全部可實際連線，共用同一套連線樹、資料格與快捷鍵。
 - **跨平台桌面 App** — 同一份程式碼產出 Windows / macOS / Linux 三平台原生安裝檔，介面、快捷鍵、連線管理與 keychain 完全一致；`dbk` CLI 亦跨平台（見 [跨平台](#跨平台)）。
-- **輕量高效** — Tauri 2 架構，用系統內建 WebView、比 Electron 輕約 10×；深色為預設、可切亮色，依資料庫類型色標區分。
-- **安全可靠** — 連線密碼存於 OS keychain（磁碟不落地）、SSH Tunnel（密碼／私鑰）+ host key TOFU 驗證、所有寫入以主鍵定位 + 全參數化綁定防注入。
-- **桌面級操作手感** — 儲存格直接編輯、右鍵選單、鍵盤導覽、多欄排序、欄寬拖曳、依值篩選、內容檢視器、即時尋找。
+- **輕量高效** — Tauri 2 架構，用系統內建 WebView、比 Electron 輕約 10×；啟動走骨架屏（零白屏）、首包 JS 約 470 KB，CodeMirror 延後到開查詢分頁才載。
+- **一次跑多條、結果各自成格** — 多語句批次執行時每個結果集**堆疊同時顯示**（致敬 SSMS / MySQL Workbench），各格獨立捲動 / 排序 / 篩選，可單格或「全部匯出」；中途失敗仍保留先前已取回的結果集。
+- **整套主題系統** — 內建 7 套寶石系配色（Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian），從工具列一鍵切換，**同時驅動整個 App 與 SQL 編輯器語法高亮**；AI 助手的程式碼區塊也跟著換色。
+- **安全可靠** — 連線密碼存於 OS keychain（磁碟不落地）、SSH Tunnel（密碼／私鑰）+ host key TOFU 驗證、所有寫入以主鍵定位 + 全參數化綁定防注入；另有**結果列數上限**與**查詢逾時**兩道安全網，誤跑 `SELECT *` 大表不會炸掉記憶體。
+- **桌面級操作手感** — 儲存格直接編輯、右鍵選單、鍵盤導覽、多欄排序、欄寬拖曳、依值篩選、內容檢視器、即時尋找、表頭 hover 顯示欄位註解。
 - **內建 AI 助手** — 右側面板串接本機 Claude CLI（用你的 Claude 訂閱登入），串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。
 - **附命令列工具 `dbk`** — 唯讀查詢 / 瀏覽 / 匯出 / 備份的 CLI，重用同一套連線與 keychain，可 `--no-default-features` 編成不連 Tauri 的精簡 binary，適合伺服器與 script 場景（見 [命令列工具](#命令列工具dbk-cli)）。
-- **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、Rust 單元測試覆蓋各方言 SQL 生成（含 MariaDB / Oracle）、前端純函式 vitest 覆蓋（212 項），經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
+- **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、Rust 單元測試覆蓋各方言 SQL 生成（含 MariaDB / Oracle）、前端純函式 vitest 覆蓋（234 項），經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
 
 ## 功能特色
 
@@ -143,12 +155,14 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 關聯式（MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite） | 完整 CRUD、DDL 欄位編輯、索引 / 外鍵管理、EXPLAIN + 視覺化執行計畫（SQL Server 走 SHOWPLAN XML、Oracle 走 DBMS_XPLAN）、routines（預存程序 / 函式）、RETURNING 顯示、ER 圖、結構比對、SSL 模式（MySQL 系 / PG） |
 | 文件型（MongoDB） | 文件攤平成表格、find / 聚合管線、CRUD-via-JSON、**explain 執行計畫視覺化**、JSON 查詢編輯器（語法高亮 + 欄位補全）、進階索引（TTL / partial / text / $indexStats 使用率）、**驗證規則（JSON Schema）**、欄位統計（型別分布 / Top 值）、**監控面板**（serverStatus / dbStats / currentOp / Profiler） |
 | 鍵值型（Redis） | 五種結構檢視＋編輯、命名空間鍵樹、值格式化、Pub/Sub、維運面板、命令列 Console |
-| 通用資料格 | 多欄複合篩選（9 運算子 + AND·OR）、多欄排序、依值篩選、**外鍵雙向導覽**（跳至參照 / 找參照此列者）、**Excel + CSV 匯入**、多格式 + **Excel 匯出**、複製為 INSERT/UPDATE/DELETE/IN、欄位剖析 + 相異值分布 |
-| 查詢工作區 | 語法高亮 + 表/欄自動完成、**視覺化查詢建構器**（JOIN / 聚合 / HAVING / 分頁 / 即時預覽）、**SQL 片段庫**、**參數化查詢 `:name`**、格式化 / 壓縮 / 關鍵字大小寫、查詢歷史 / 收藏、只執行反白段、結果一鍵複製 / 匯出 |
-| 跨庫 / 跨連線 | **資料傳輸**（單表 / 整庫 / 不存在時自動建表）、**資料比對 / 同步**（產生 INSERT/UPDATE/DELETE）、**整庫文件**（HTML / Markdown）、**命令面板 Ctrl+K** 快速跳轉 |
-| 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、釘選常用表 |
-| AI 助手 | 右側面板串接本機 Claude CLI：串流問答、撰寫 / 優化 SQL，可附帶目前 schema |
-| 運維 | 連線設定持久化、排程備份 + 備份歷史、連線池監控 + Ping、跨平台桌面 App |
+| 通用資料格 | 多欄複合篩選（9 運算子 + AND·OR）、多欄排序、依值篩選、**外鍵雙向導覽**（跳至參照 / 找參照此列者）、**Excel + CSV 匯入**、多格式 + **Excel 匯出**、複製為 INSERT/UPDATE/DELETE/IN、欄位剖析 + 相異值分布、**表頭 hover 顯示欄位註解** |
+| 查詢工作區 | 語法高亮 + 表/欄自動完成（含 external gateway）、**`@` 使用者變數提示**、**多結果集堆疊**（SSMS 風格，可摺疊 / 單格或全部匯出）、**視覺化查詢建構器**（JOIN / 聚合 / HAVING / 分頁 / 即時預覽）、**SQL 片段庫**、**參數化查詢 `:name`**、格式化 / 壓縮 / 關鍵字大小寫、查詢歷史（200 筆，可過濾）、**收藏查詢**（分組 / 編輯 / 匯出匯入）、只執行反白段、失敗語句定位、多開查詢分頁（右鍵關閉其他） |
+| 搜尋 / 導覽 | **進階物件搜尋 Ctrl+Shift+G**（跨庫搜名稱 / 定義內文 / 註解，整字比對 + 萬用字元 `*` `?`、定義預覽高亮、在物件總管中選取）、**命令面板 Ctrl+K**、側欄搜尋命中自動展開資料夾 |
+| 跨庫 / 跨連線 | **資料傳輸**（單表 / 整庫 / 不存在時自動建表）、**資料比對 / 同步**（產生 INSERT/UPDATE/DELETE）、**整庫文件**（HTML / Markdown）、結構比對 |
+| 外觀 | **7 套寶石系主題**（Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian）驅動整個 App + 編輯器語法高亮，工具列一鍵切換光亮 / 暗黑 / 變體 |
+| 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、**啟動密碼**（Argon2id）、**結果列數上限 / 查詢逾時**、釘選常用表 |
+| AI 助手 | 右側面板串接本機 Claude CLI：串流問答、撰寫 / 優化 SQL，可附帶目前 schema；程式碼區塊套用目前主題的語法高亮 |
+| 運維 | 連線設定持久化、加密匯出 / 匯入連線（含密碼）、排程備份 + 備份歷史、連線池監控 + Ping、啟動時檢查新版、跨平台桌面 App |
 
 > 目前進度：**八大資料庫全部可連線**；關聯式完整 CRUD / DDL 欄位編輯 / 索引管理 / EXPLAIN / RETURNING 顯示、多欄複合篩選（9 種運算子 + AND·OR）排序、**CSV 匯入** + 多格式匯出 + **轉儲整庫結構 SQL**
 > SQL Server（tiberius + bb8 連線池）：CRUD、結構分頁（索引 / 外鍵 / DDL）、routines（預存程序 / 函式）、執行計畫（SET SHOWPLAN_XML）、ER 圖、欄位統計；備份 / 還原規劃以 sqlpackage 匯出 `.bacpac`（尚未接上）
@@ -157,6 +171,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 > MongoDB 文件攤平 + 查詢編輯器完整 **CRUD-via-JSON**（find / 聚合 aggregate / insert / update / delete）+ **explain 執行計畫**（stage 樹、COLLSCAN 警示、掃描比）+ 進階索引（TTL / partial / text / 2dsphere / hidden + $indexStats 使用率）+ **驗證規則**（$jsonSchema via collMod）+ 欄位統計（BSON 型別分布 / Top-10 / 抽樣）+ **監控面板**（serverStatus / dbStats / currentOp+kill / Profiler 慢查詢）
 > Redis 仿 **Another Redis Desktop Manager**：五種結構檢視＋編輯、**命名空間鍵樹**（依 `:` 分組資料夾）、值格式化（原始 / JSON / Hex）、**Pub/Sub** 訂閱發佈、**維運面板**（慢查詢 / 用戶端 / 大鍵）、**伺服器狀態面板**（INFO 重點指標 + 全分區，可自動刷新）、**命令列 Console**（指令歷史、DB 切換）
 > 連線設定持久化（密碼存 OS keychain）、SSH Tunnel、排程備份 + 備份歷史、Ping 連線延遲、ER 圖、欄寬可拖曳、AI 助手
+> 查詢工作區：多語句 → **多結果集堆疊顯示**（SSMS 風格）、失敗語句定位、查詢歷史 200 筆、收藏查詢分組管理、`@` 使用者變數與表 / 欄自動完成
+> 外觀：**7 套寶石系主題整體驅動 App + 編輯器**（工具列切換，設定頁亦可）；**進階物件搜尋**（跨庫 / 定義內文 / 整字 / 萬用字元）
 
 完整規劃文件見 [`docs/`](./docs/)：[規劃](./docs/planning.md) · [架構](./docs/architecture.md) · [連線生命週期](./docs/connection-lifecycle.md) · [資料表操作習慣](./docs/navicat-ux.md) · [路線圖](./docs/roadmap.md)。變更紀錄見 [CHANGELOG](./CHANGELOG.md)。
 
@@ -218,6 +234,16 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] **命令面板**（Ctrl/Cmd+K）：模糊搜尋跳轉連線 / 資料庫 / 資料表 / 動作
 - [x] **連線唯讀模式**（擋寫入 / DDL 與資料格 / 側欄寫入）、**連線色標**（區分環境）、**釘選常用表**
 - [x] 結構比對（同連線兩資料庫的表 / 欄差異 + 同步 SQL）
+- [x] **啟動密碼**（Argon2id 雜湊，App 開啟閘門；不影響 keychain 與 `dbk` CLI）
+- [x] **查詢安全網**：結果列數上限（預設 1,000）+ 查詢逾時（DB 端 + tokio 兜底），大表操作效能優化（列級 memo / COUNT 並行 / 切庫連線快取）
+- [x] **啟動速度**：骨架屏消除白屏、對話框與 CodeMirror code splitting（首包 1,139 KB → ~470 KB）、資產與字型子集瘦身
+- [x] **多結果集**（SSMS 風格堆疊）：每格獨立捲動 / 排序 / 篩選 / 摺疊，作用中結果集決定複製 / 匯出 / 問 AI 的對象；「全部匯出」一次匯出所有結果集
+- [x] **編輯器主題**：7 套寶石系配色（`src/editorThemes.ts`），0.8.0 起升級為驅動整個 App 的統一主題系統，工具列可切光亮 / 暗黑 / 變體
+- [x] **收藏查詢**完善：分組、編輯 / 重新命名、匯出匯入（含 SQL 片段），管理入口在頂部工具列
+- [x] **SQL 編輯器補全**：表 / 欄自動完成（含 external gateway 一次批次載整庫欄位）、`@` 使用者變數提示
+- [x] **進階物件搜尋**（`Ctrl+Shift+G`）：表格化結果（可排序）、名稱 / 定義 / 註解三種命中、整字比對 + 萬用字元、定義預覽高亮、在物件總管中選取
+- [x] 側欄搜尋 / 篩選命中時自動展開資料夾；資料表格表頭 hover 顯示欄位 comment
+- [x] 「關於 DB Kit」對話框 + 啟動時檢查 GitHub 新版（可於設定關閉）
 
 </details>
 
@@ -227,7 +253,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 |----|------|
 | 應用框架 | Tauri 2 |
 | 前端 | React 18 + TypeScript + Vite |
-| UI | Tailwind CSS（shadcn/ui 風格） |
+| UI | Tailwind CSS（shadcn/ui 風格）；12 個語意 CSS 變數（`--c-*`）承載主題，7 套配色以 `buildAppVars` 推導表面景深 |
+| 編輯器 | CodeMirror 6（SQL / JSON 語法高亮、lint、自動完成） |
 | 狀態 | Zustand |
 | 後端 | Rust：sqlx (MySQL / MariaDB / PostgreSQL / SQLite)、tiberius + bb8 (SQL Server)、rust-oracle / ODPI-C (Oracle，需 Instant Client)、mongodb、redis |
 | 安全 | OS keychain（keyring）、SSH Tunnel（russh）+ host key TOFU |
@@ -296,7 +323,9 @@ dbk --conn prod-mysql backup mydb --to mydb.dump
 
 **唯讀守門**：`query` / `explain` 只放行查詢類語句（`select` / `with` / `show` / `describe` / `explain` / `pragma` / `use` / `values` / `table`），偵測到寫入語句（`insert` / `update` / `delete` / `drop`…）直接擋下並回非零 exit code（逐 `;` 切句、跳過註解）。建議再搭配唯讀 DB 帳號作第二道防線。
 
-其餘子指令：`conn`（list / test / ping / 加密 export）、`table`（list / columns / data / info / ddl / indexes / foreign-keys）、`routine`、`search`、`column-stats`、`er-model`、`server-info`、`redis`（keys / key / slowlog / clients / big-keys）。完整清單 `dbk --help`。
+**結果列數上限**：`query` 預設沿用全域設定（1,000 列），可用 `--max-rows N` 覆寫（`--max-rows 0` 取完整結果；截斷時 stderr 會提示）。
+
+其餘子指令：`conn`（list / test / ping / 加密 export）、`table`（list / columns / data / info / ddl / indexes / foreign-keys）、`routine`、`search`（`--whole-word` 整字比對、`--wildcards` 啟用 `*` `?`）、`column-stats`、`er-model`、`server-info`、`redis`（keys / key / slowlog / clients / big-keys）。完整清單 `dbk --help`。
 
 > 架構上 `tauri` / `tauri-plugin-dialog` 已改為 optional，藏在預設的 `gui` feature 後；GUI binary（`db-kit`）需要 `gui` feature，CLI binary（`dbk`）不需要。
 
