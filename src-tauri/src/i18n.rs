@@ -54,10 +54,15 @@ pub fn current() -> Lang {
 }
 
 /// 查表：`En` 時查譯文，查無回原字面值（identity fallback）；`ZhTw` 直接回原文。
+///
+/// 查表順序 `en` → `en_ext` → 原文。`en_ext` 是給下游打包（overlay / 外掛）注入
+/// 自家私有字串譯文用的擴充點，上游恆回 `None`（見 `locales/en_ext.rs`）。
 pub fn lookup(zh: &'static str) -> &'static str {
     match current() {
         Lang::ZhTw => zh,
-        Lang::En => crate::locales::en::lookup(zh).unwrap_or(zh),
+        Lang::En => crate::locales::en::lookup(zh)
+            .or_else(|| crate::locales::en_ext::lookup(zh))
+            .unwrap_or(zh),
     }
 }
 

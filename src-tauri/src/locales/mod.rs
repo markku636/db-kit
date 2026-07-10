@@ -4,3 +4,4 @@
 //! 好處是不需維護排序、新增 key 只要補一行、查無回 `None` 交由 `i18n::lookup` 做 identity fallback。
 
 pub mod en;
+pub mod en_ext;
