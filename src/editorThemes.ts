@@ -3,8 +3,8 @@ import type { Extension } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 
-// 編輯器語法高亮主題。配色移植自 Notepad++ Dracula PRO 系列 theme XML
-// （GlobalStyles + SQL lexer 色值，規劃期一次抽取定稿），名稱改為寶石系、不用原名。
+// 編輯器語法高亮主題。配色由本機 Notepad++ theme XML
+// （GlobalStyles + SQL lexer 色值，規劃期一次抽取定稿）取樣，名稱一律採寶石系。
 export type EditorThemeId =
   | "amethyst"
   | "moonstone"

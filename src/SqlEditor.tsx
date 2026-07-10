@@ -81,8 +81,12 @@ function lineToRange(doc: string, line: number): { from: number; to: number } {
 
 // 字型 / 尺寸微調（與 app 既有 mono / text-sm 視覺一致）。
 // 背景透明改由 transparentBg 承擔，只在「跟隨 App」模式附加（自訂主題需保留自身背景色）。
+// cm-scroller 的 overflow 明確指定兩軸 auto：CodeMirror baseTheme 只給 overflow-x，
+// 垂直捲動靠 CSS「一軸非 visible 時另一軸的 visible 計算為 auto」的隱式推導撐著，
+// 而外層容器是 overflow-hidden——一旦推導失效，超出高度的 SQL 會被直接裁掉而非捲動。
 const baseTheme = EditorView.theme({
   "&": { fontSize: "13px", height: "100%" },
+  ".cm-scroller": { overflow: "auto" },
   ".cm-content": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
   ".cm-gutters": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
   "&.cm-focused": { outline: "none" },

@@ -8,7 +8,7 @@
    使 text-fg/60、border-fg/10 這類透明度語法自動跟著主題翻轉。
    ============================================================ */
 :root {
-  /* 深色預設＝Dracula PRO「Amethyst(Pro)」（由 editorThemes.ts buildAppVars 推導，JS 未跑前即 Dracula）。
+  /* 深色預設＝「Amethyst」（由 editorThemes.ts buildAppVars 推導；此處為 JS 未跑前的同色兜底）。
      由深到淺：well→inset→app→panel→bar→elevated。JS 選其他變體時會 setProperty 覆寫這些值。 */
   --c-well: 34 33 44; /* #22212C 最深凹陷＝編輯器 / 結果 / 程式碼 */
   --c-inset: 41 41 52; /* 凹陷輸入框 / 區塊 */
@@ -16,7 +16,7 @@
   --c-panel: 53 54 66; /* 側欄 / 面板 / 狀態列 / 詳細資料 */
   --c-bar: 60 61 73; /* 上方工具列 */
   --c-elevated: 66 68 80; /* #424450 對話框 / 選單 / 卡片 / 表頭（最高層） */
-  --c-fg: 248 248 242; /* #F8F8F2 Dracula 前景 */
+  --c-fg: 248 248 242; /* #F8F8F2 前景 */
   --c-accent: 149 128 255; /* #9580FF Amethyst 強調色（每變體自家色系，JS 覆寫） */
   --c-on-accent: 26 26 34; /* #1A1A22 實心 accent 上的文字（取對比較高者；紫底配深字） */
   --c-shadow: 0 0 0; /* 陰影基底（深色＝黑） */
@@ -45,15 +45,15 @@
   --h-lg: 36px; /* AI 送出鈕 */
 
   /* ---- 語意意圖色（深色基底；亮色於 .light 覆寫）。取代散落的 red-300 / emerald-300/70。 ---- */
-  --c-success: 138 255 128; /* #8AFF80 Dracula green */
-  --c-warning: 255 255 128; /* #FFFF80 Dracula yellow */
-  --c-danger: 255 149 128; /* #FF9580 Dracula red */
-  --c-info: 128 255 234; /* #80FFEA Dracula cyan */
+  --c-success: 138 255 128; /* #8AFF80 綠 */
+  --c-warning: 255 255 128; /* #FFFF80 黃 */
+  --c-danger: 255 149 128; /* #FF9580 紅 */
+  --c-info: 128 255 234; /* #80FFEA 青 */
   --c-guide: var(--c-fg); /* 樹狀縮排導引線（以低透明度使用） */
   color-scheme: dark;
 }
 
-/* 亮色主題預設＝Dracula PRO「Alucard」（唯一淺色變體；由 buildAppVars 推導）。
+/* 亮色主題預設＝「Moonstone」（唯一淺色變體；由 buildAppVars 推導）。
    靠柔影 + 低透明度深色描邊（border-fg/10）分層，不倚賴強烈色階。 */
 :root.light {
   --c-well: 236 236 243; /* #ECECF3 更深凹陷：結果 / 程式碼 / 編輯器 */
@@ -62,8 +62,8 @@
   --c-panel: 247 247 250; /* 側欄 / 面板 / 詳細資料 */
   --c-bar: 251 251 253; /* 工具列 */
   --c-elevated: 255 255 255; /* 純白對話框 / 選單（靠陰影浮起） */
-  --c-fg: 31 31 31; /* #1F1F1F Alucard 前景 */
-  --c-accent: 100 74 201; /* #644AC9 Alucard 強調色 */
+  --c-fg: 31 31 31; /* #1F1F1F Moonstone 前景 */
+  --c-accent: 100 74 201; /* #644AC9 Moonstone 強調色 */
   --c-on-accent: 248 248 242; /* 實心 accent 上的文字 */
   --c-shadow: 30 41 59; /* slate-800 作為柔和陰影色 */
   --shadow-strength: 0.13;
@@ -75,10 +75,10 @@
   --e-4: 0 24px 60px -16px rgb(var(--c-shadow) / 0.18), 0 6px 16px rgb(var(--c-shadow) / 0.10);
 
   /* 亮色語意色：加深以維持對比。 */
-  --c-success: 20 113 10; /* #14710A Alucard green */
-  --c-warning: 132 110 21; /* #846E15 Alucard yellow */
-  --c-danger: 203 58 42; /* #CB3A2A Alucard red */
-  --c-info: 3 106 150; /* #036A96 Alucard cyan */
+  --c-success: 20 113 10; /* #14710A 綠 */
+  --c-warning: 132 110 21; /* #846E15 黃 */
+  --c-danger: 203 58 42; /* #CB3A2A 紅 */
+  --c-info: 3 106 150; /* #036A96 青 */
   color-scheme: light;
 }
 
@@ -120,10 +120,26 @@ body {
 
 /* ---- 全域 UI/UX 打磨：致敬商用工具的精緻手感 ---- */
 
-/* 細捲軸，融入主題（取代系統粗捲軸的突兀感）。以前景變數著色，明暗自動翻轉。 */
+/* 細捲軸，融入主題（取代系統粗捲軸的突兀感）。以前景變數著色，明暗自動翻轉。
+   註：Chromium 一旦認得 scrollbar-color，底下整組 ::-webkit-scrollbar-* 規則即被忽略
+   （只在不支援標準屬性的舊 WebView 上生效），故實際對比度由此處決定。 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgb(var(--c-fg) / 0.22) transparent;
+  scrollbar-color: rgb(var(--c-fg) / 0.32) transparent;
+}
+/* @uiw/react-codemirror 在 .cm-editor 外面還包了一層無高度的 div（class = cm-theme）。
+   少了這條，.cm-editor 的 height:100% 會對著 auto 高的父層解析而失效 → 編輯器隨內容長高、
+   被外層 overflow-hidden 裁掉 → scrollHeight === clientHeight，永遠不出現捲軸，長 SQL 捲不動。 */
+.cm-theme,
+.cm-theme-light,
+.cm-theme-dark {
+  height: 100%;
+}
+/* CodeMirror 編輯器：捲軸加寬且提高對比 —— thin + 低不透明度在暗色主題下幾乎不可見，
+   使用者無從得知長 SQL 還能往下捲。overflow 由編輯器的 baseTheme 明確指定。 */
+.cm-scroller {
+  scrollbar-width: auto;
+  scrollbar-color: rgb(var(--c-fg) / 0.35) transparent;
 }
 ::-webkit-scrollbar {
   width: 10px;

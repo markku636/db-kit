@@ -89,14 +89,16 @@ interface AppStore {
   closeOtherTabs: (key: string) => void;
   closeAllTabs: () => void;
   setActiveTab: (key: string) => void;
-  // 多查詢分頁：新增一個查詢分頁並切過去 / 關閉某查詢分頁（預設 __query__ 不可關）。
+  // 多查詢分頁：新增一個查詢分頁並切過去 / 關閉某查詢分頁（任一皆可關，但恆留至少一個）。
   addQueryTab: () => void;
   // 開「新查詢分頁」並可帶入起始 SQL（由新分頁的 QueryPane 掛載後消費）與切換連線。
   // 供側欄節點 / Ctrl+N / 工具列「新查詢」共用：永遠開新分頁、不覆蓋現有編輯器內容。
   newQueryTab: (sql?: string, connId?: string) => void;
   closeQueryTab: (id: string) => void;
-  // 關閉「其他」查詢分頁：保留 home「__query__」與指定 id，其餘全關。
+  // 關閉「其他」查詢分頁：只留指定 id。
   closeOtherQueryTabs: (id: string) => void;
+  // 全部關閉查詢分頁 → 重置為單一乾淨的 home 分頁。
+  closeAllQueryTabs: () => void;
   setTabView: (key: string, view: "data" | "structure") => void;
   // 物件被刪除時連帶關閉其分頁（沿用 markDisconnected 的清理慣例）。
   closeTableTab: (connId: string, database: string, table: string) => void;
@@ -180,12 +182,12 @@ export const useStore = create<AppStore>((set) => ({
         tabs,
         // 中斷連線後，該連線底下的資料庫 / 表節點已不可見，連帶清空詳細資料選取。
         selectedNode: s.selectedNode?.connId === id ? null : s.selectedNode,
-        // "__query__" 是查詢分頁的哨兵鍵，從不在 tabs 內；它屬於仍連線的連線，
+        // 查詢分頁的 id 從不在 tabs 內；它們屬於仍連線的連線，
         // 中斷其他連線時應保留，不該把使用者踢離查詢編輯器。
         activeTabKey:
-          s.activeTabKey === "__query__" || tabs.some((t) => t.key === s.activeTabKey)
+          s.queryTabs.includes(s.activeTabKey ?? "") || tabs.some((t) => t.key === s.activeTabKey)
             ? s.activeTabKey
-            : tabs.length ? tabs[tabs.length - 1].key : "__query__",
+            : tabs.length ? tabs[tabs.length - 1].key : s.queryTabs[0],
       };
     }),
 
@@ -204,18 +206,18 @@ export const useStore = create<AppStore>((set) => ({
       const tabs = s.tabs.filter((t) => t.key !== key);
       return {
         tabs,
-        // 沒有表分頁時退回查詢分頁哨兵（而非 null），使查詢分頁標示為作用中、鍵盤切換索引正確。
+        // 沒有表分頁時退回第一個查詢分頁（而非 null），使查詢分頁標示為作用中、鍵盤切換索引正確。
         activeTabKey:
-          s.activeTabKey === key ? (tabs.length ? tabs[tabs.length - 1].key : "__query__") : s.activeTabKey,
+          s.activeTabKey === key ? (tabs.length ? tabs[tabs.length - 1].key : s.queryTabs[0]) : s.activeTabKey,
       };
     }),
   // 關閉除 key 以外的所有表分頁；保留 key 並設為作用中。
   closeOtherTabs: (key) =>
     set((s) => {
       const tabs = s.tabs.filter((t) => t.key === key);
-      return { tabs, activeTabKey: tabs.length ? key : "__query__" };
+      return { tabs, activeTabKey: tabs.length ? key : s.queryTabs[0] };
     }),
-  closeAllTabs: () => set({ tabs: [], activeTabKey: "__query__" }),
+  closeAllTabs: () => set((s) => ({ tabs: [], activeTabKey: s.queryTabs[0] })),
   // 新增查詢分頁：產生不重複 id（__query__:N）並切過去。
   addQueryTab: () =>
     set((s) => {
@@ -238,23 +240,29 @@ export const useStore = create<AppStore>((set) => ({
         activeId: connId ?? s.activeId,
       };
     }),
-  // 關閉查詢分頁：預設 home「__query__」不可關；關掉作用中者則切到相鄰查詢分頁。
+  // 關閉查詢分頁：任一分頁（含 home「__query__」）皆可關，但恆保留至少一個查詢分頁——
+  // queryTabs[0] 是 activeTabKey 的最終退路（斷線 / 關表分頁時回落於此），清空會使分頁列失去落點。
+  // 關掉作用中者則切到相鄰查詢分頁。
   closeQueryTab: (id) =>
     set((s) => {
-      if (id === "__query__" || s.queryTabs.length <= 1) return {};
+      if (s.queryTabs.length <= 1) return {};
       const queryTabs = s.queryTabs.filter((t) => t !== id);
       const activeTabKey =
         s.activeTabKey === id ? queryTabs[queryTabs.length - 1] : s.activeTabKey;
       return { queryTabs, activeTabKey };
     }),
-  // 關閉「其他」查詢分頁：保留 home「__query__」與指定 id，其餘查詢分頁全關。
+  // 關閉「其他」查詢分頁：只留指定 id（home 若非 id 亦一併關掉）。
   closeOtherQueryTabs: (id) =>
     set((s) => {
-      const queryTabs = s.queryTabs.filter((t) => t === "__query__" || t === id);
-      // 作用中分頁若為被關掉的查詢分頁 → 切到保留的 id；表分頁 / 仍存在者不動。
-      const stillValid =
-        s.tabs.some((t) => t.key === s.activeTabKey) || queryTabs.includes(s.activeTabKey ?? "");
-      return { queryTabs, activeTabKey: stillValid ? s.activeTabKey : id };
+      // 作用中的是表分頁 → 不動它；否則（在某查詢分頁上）切到保留下來的 id。
+      const onTableTab = s.tabs.some((t) => t.key === s.activeTabKey);
+      return { queryTabs: [id], activeTabKey: onTableTab ? s.activeTabKey : id };
+    }),
+  // 全部關閉查詢分頁 → 重置為單一乾淨的 home 分頁（不可能歸零，見 closeQueryTab 註解）。
+  closeAllQueryTabs: () =>
+    set((s) => {
+      const onTableTab = s.tabs.some((t) => t.key === s.activeTabKey);
+      return { queryTabs: ["__query__"], activeTabKey: onTableTab ? s.activeTabKey : "__query__" };
     }),
   // 設定待載入 SQL 並切到查詢分頁（QueryPane 掛載後消費）。作用中已是某查詢分頁則留在原分頁，
   // 否則（在表分頁）切到 home 查詢分頁。

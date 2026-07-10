@@ -35,8 +35,10 @@ const DOLLAR_OPS = [
 ];
 
 // 背景透明改由 transparentBg 承擔，只在「跟隨 App」模式附加（自訂主題需保留自身背景色）。
+// .cm-scroller 明確兩軸 auto：理由同 SqlEditor（外層 overflow-hidden，不可依賴隱式推導）。
 const baseTheme = EditorView.theme({
   "&": { fontSize: "13px", height: "100%" },
+  ".cm-scroller": { overflow: "auto" },
   ".cm-content": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
   ".cm-gutters": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
   "&.cm-focused": { outline: "none" },

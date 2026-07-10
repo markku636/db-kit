@@ -8,7 +8,7 @@ const THEME_ID_KEY = "dbkit:themeId";
 const LEGACY_THEME_KEY = "dbkit:theme"; // 舊：app 深/淺
 const LEGACY_EDITOR_KEY = "dbkit:editorTheme"; // 舊：編輯器配色（auto + 7 寶石）
 
-// 統一主題：整個 app 由單一「變體」驅動。預設深色＝Amethyst(Dracula Pro)；淺色＝Moonstone(Alucard)。
+// 統一主題：整個 app 由單一「變體」驅動。預設深色＝Amethyst；淺色＝Moonstone。
 const DEFAULT_DARK: EditorThemeId = "amethyst";
 const LIGHT_ID: EditorThemeId = "moonstone";
 
@@ -48,7 +48,7 @@ interface ThemeStore {
   theme: Theme; // 派生（dark/light），供既有消費者
   darkVariant: EditorThemeId; // 記住上次深色變體，供深/淺切換還原
   setThemeId: (id: EditorThemeId) => void;
-  toggle: () => void; // 深色變體 ⇄ Alucard(淺)
+  toggle: () => void; // 深色變體 ⇄ Moonstone(淺)
 }
 
 export const useTheme = create<ThemeStore>((set, get) => {
