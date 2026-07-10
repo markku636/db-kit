@@ -3,7 +3,7 @@ import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
 import { indentWithTab } from "@codemirror/commands";
-import { sql, MySQL, MariaSQL, PostgreSQL, SQLite, MSSQL, PLSQL, StandardSQL, type SQLDialect, type SQLNamespace } from "@codemirror/lang-sql";
+import { sql, MySQL, MariaSQL, PostgreSQL, SQLite, MSSQL, PLSQL, StandardSQL, SQLDialect, type SQLNamespace } from "@codemirror/lang-sql";
 import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { snippetCompletion, type Completion, type CompletionSource } from "@codemirror/autocomplete";
 import { DbKind } from "./api";
@@ -41,16 +41,22 @@ export interface SqlDiagnostic {
   message: string;
 }
 
+// MySQL server 把「-- 後接任何空白或控制字元（含換行）」都視為行註解，但 lang-sql 的
+// spaceAfterDashes 只認空白（0x20），害光禿的 `--` 分隔行被斷成兩個減號、染成運算子色。
+// 以原 spec 重定義關掉該檢查（代價：`1--2` 黏著寫法會誤標成註解，實務上幾乎不存在）。
+const MySQLLoose = SQLDialect.define({ ...MySQL.spec, spaceAfterDashes: false });
+const MariaSQLLoose = SQLDialect.define({ ...MariaSQL.spec, spaceAfterDashes: false });
+
 const DIALECT: Record<DbKind, SQLDialect> = {
-  mysql: MySQL,
-  mariadb: MariaSQL,
+  mysql: MySQLLoose,
+  mariadb: MariaSQLLoose,
   postgres: PostgreSQL,
   sqlite: SQLite,
   mssql: MSSQL,
   oracle: PLSQL,
   mongo: StandardSQL,
   redis: StandardSQL,
-  external: MySQL, // 外部 gateway 講 MySQL
+  external: MySQLLoose, // 外部 gateway 講 MySQL
 };
 
 // `@var` 為使用者變數前綴的方言（external = qland gateway，講 MySQL）。
