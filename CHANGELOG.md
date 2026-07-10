@@ -1,4 +1,4 @@
-## Unreleased
+## v0.9.0
 
 - **多語系（i18n）：繁體中文 ⇄ English，即時切換不需重啟。**
   - 切換入口有兩處：工具列右側的語言選單、以及「設定 → 語言」。偏好存於 `localStorage["dbkit:lang"]`，並同步寫入 `app_settings.json`。

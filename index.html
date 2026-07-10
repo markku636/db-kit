@@ -21,6 +21,12 @@
           }
           if (id === "moonstone") document.documentElement.classList.add("light");
         } catch (e) {}
+        // 介面語言：判準與 i18n.ts 的 readStoredLang 一致（無 / 不合法一律 zh-TW）。
+        // 在此設 <html lang>（而非只寫死屬性），讓螢幕閱讀器與 :lang() 從第一幀就正確。
+        try {
+          document.documentElement.lang =
+            localStorage.getItem("dbkit:lang") === "en" ? "en" : "zh-Hant";
+        } catch (e) {}
       })();
     </script>
   </head>
