@@ -10,6 +10,7 @@ import { DbKind } from "./api";
 import { useTheme } from "./theme";
 import { resolveEditorTheme } from "./editorThemes";
 import { lintSqlStructure } from "./sql";
+import { sqlContextCompletion } from "./sqlContextComplete";
 
 // SQL 片段（供編輯器自動完成展開：輸入名稱 → 補入 body）。
 export interface EditorSnippet { name: string; body: string; desc?: string }
@@ -228,6 +229,12 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
         { delay: 250 },
       ),
     ];
+    // 上下文欄位自動完成：解析當前語句 FROM 子句，在 SELECT/WHERE/ON/ORDER BY… 直接提示
+    // 該表欄位（免打 `表名.`），並在打完子句關鍵字（含空白）當下自動跳窗。
+    // 與預設 schema source 分工不重複（表語境打字即讓手），純文件掃描不打後端。
+    if (schema) {
+      ext.push(lang.language.data.of({ autocomplete: sqlContextCompletion(schema) }));
+    }
     // SQL 片段自動完成：把片段以 snippetCompletion 註冊為「此語言」的額外完成來源，
     // 與 schema 表/欄完成併存（CodeMirror 會合併語言資料的所有 autocomplete 來源）。
     if (snippets && snippets.length) {

@@ -3420,6 +3420,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     const t0 = performance.now();
     try {
       if (mode === "analyze") {
+        // 開跑即清掉上次結果：執行期間顯示 loading 空狀態，避免舊資料被誤認為本次結果。
+        setResult(null);
+        setResultView(null);
         setResult(await api.explainQuery(activeId, q));
       } else {
         // SQL：拆成多條語句依序執行（sqlx 不允許單次多語句）。
@@ -3465,6 +3468,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           );
           if (!ok) return;
         }
+        // 守門全數通過、真正開跑 → 先清掉上次的查詢結果（執行期間顯示 loading 空狀態，
+        // 舊資料不再殘留被誤認為本次結果）。提前 return 的路徑（純註解 / 唯讀 / 取消確認）不清。
+        setResult(null);
+        setResultView(null);
         const sets: ResultSetEntry[] = []; // 每條有結果集（columns>0）的語句各收一格（SSMS 風格堆疊顯示）
         let affected = 0;
         const runs: StmtRun[] = []; // 逐條語句結果（供「摘要」面板；記錄使用者原語句，不含注入的 USE 前綴）
@@ -4502,6 +4509,12 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   const [colMenu, setColMenu] = useState<{ c: number; x: number; y: number } | null>(null);
   const [inspect, setInspect] = useState<{ r: number; c: number } | null>(null);
   const [rowDetail, setRowDetail] = useState<number | null>(null);
+  // 單擊即開檢視窗後，雙擊肌肉記憶的第二下會落在遮罩上把窗關掉 —— 開窗後 300ms 內忽略關閉。
+  const inspectOpenedAt = useRef(0);
+  const openInspect = (r: number, c: number) => {
+    inspectOpenedAt.current = Date.now();
+    setInspect({ r, c });
+  };
 
   // 手刻的「整列詳情」浮層：開啟期間計入 modalCount（讓 Ctrl+W/Tab、"/" 等全域快捷鍵讓路），並支援 Esc 關閉。
   useEffect(() => {
@@ -4785,12 +4798,12 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                 <td key={j}
                   ref={activeCell?.r === i && activeCell?.c === j ? activeCellRef : undefined}
                   onClick={(e) => {
-                    // Shift+點選：以選取格為錨點框選矩形（Ctrl+C 整塊複製）；一般點選重置為單格。
+                    // Shift+點選：以選取格為錨點框選矩形（Ctrl+C 整塊複製）；
+                    // 一般點選：選取 + 開檢視窗（與「點列號看整列表單」同一互動語言；長 JSON 免雙擊）。
                     if (e.shiftKey && selected) setRangeEnd({ r: i, c: j });
-                    else { setSelected({ r: i, c: j }); setRangeEnd(null); }
+                    else { setSelected({ r: i, c: j }); setRangeEnd(null); openInspect(i, j); }
                     (e.currentTarget.closest("[tabindex]") as HTMLElement | null)?.focus();
                   }}
-                  onDoubleClick={() => setInspect({ r: i, c: j })}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     if (!inRange(i, j)) { setSelected({ r: i, c: j }); setRangeEnd(null); }
@@ -4801,8 +4814,8 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                   }${
                     selected?.r === i && selected?.c === j ? "bg-accent/15" : inRange(i, j) ? "bg-accent/10" : ""
                   }`}
-                  title={c == null ? t("NULL（雙擊檢視）") : c}>
-                  {/* 單行截斷 + 上限寬度：長字串（Memo / RefTransId / JSON）不再換行撐爆列高；完整值看 title 提示、雙擊檢視、或點列號看整列。 */}
+                  title={c == null ? t("NULL（點擊檢視）") : c}>
+                  {/* 單行截斷 + 上限寬度：長字串（Memo / RefTransId / JSON）不再換行撐爆列高；完整值看 title 提示、點擊檢視、或點列號看整列。 */}
                   {c === null ? <span className="text-fg/30 italic">NULL</span> : <div className="truncate max-w-[60ch]">{c}</div>}
                 </td>
               ))}
@@ -4849,7 +4862,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
           value={cell(inspect.r, inspect.c)}
           editable={false}
           onSave={() => {}}
-          onClose={() => setInspect(null)}
+          onClose={() => { if (Date.now() - inspectOpenedAt.current > 300) setInspect(null); }}
         />
       )}
 
@@ -4890,7 +4903,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
             style={{ left: menu.x, top: menu.y }}>
             {(
               [
-                [t("檢視內容…"), () => setInspect({ r: menu.r, c: menu.c })],
+                [t("檢視內容…"), () => openInspect(menu.r, menu.c)],
                 [t("檢視此列（表單）…"), () => setRowDetail(menu.r)],
                 [t("複製值"), () => copyCell(menu.r, menu.c)],
                 [t("複製標題"), () => copyHeader(menu.c)],

@@ -1803,7 +1803,7 @@ const en: Catalog = {
   "NONE（不要求）": "NONE (not required)",
   "Not Null（不可為空）": "Not Null (cannot be null)",
   "NULL 顯示為": "Show NULL as",
-  "NULL（雙擊檢視）": "NULL (double-click to view)",
+  "NULL（點擊檢視）": "NULL (click to view)",
   "Obsidian 黑曜石": "Obsidian",
   "off=不驗證；moderate=僅驗證新文件與原本合規的文件；strict=全部驗證": "off = no validation; moderate = validate only new documents and previously compliant documents; strict = validate all",
   "OK（影響 {stmtAffected} 列）": "OK ({stmtAffected} rows affected)",
