@@ -180,7 +180,7 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
           </select>
           {loading && <span className="text-fg/40 text-xs">{t("讀取中…")}</span>}
           {model && !loading && (
-            <span className="text-fg/40 text-xs">{model.tables.length} 表 · {model.relations.length} 關聯（可拖曳表卡）</span>
+            <span className="text-fg/40 text-xs">{t("{tables} 表 · {relations} 關聯（可拖曳表卡）", { tables: model.tables.length, relations: model.relations.length })}</span>
           )}
           {/* 縮放控制（致敬 Navicat / DBeaver 的 ER 工具） */}
           <div className="ml-auto flex items-center gap-1">

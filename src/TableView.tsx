@@ -623,7 +623,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
       // 重新套用是安全的（已套用者會以相同值覆寫，等同無變化）。
       setErr(
         applied > 0
-          ? `已套用 ${applied}/${total} 筆，第 ${applied + 1} 筆失敗：${msg}。修正後可再次套用（已套用者會以相同值覆寫，不會重複）。`
+          ? t("已套用 {applied}/{total} 筆，第 {next} 筆失敗：{msg}。修正後可再次套用（已套用者會以相同值覆寫，不會重複）。", { applied, total, next: applied + 1, msg })
           : t("套用失敗：{msg}", { msg })
       );
     } finally {
@@ -828,7 +828,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         setFieldStats({ col, stats: s });
         return;
       }
-      const range = s.min !== null || s.max !== null ? ` · 範圍 [${s.min ?? "?"}, ${s.max ?? "?"}]` : "";
+      const range = s.min !== null || s.max !== null ? t(" · 範圍 [{min}, {max}]", { min: s.min ?? "?", max: s.max ?? "?" }) : "";
       toast.info(t("欄位「{col}」：{total} 列 · {non_null} 非空 · {distinct} 相異值{range}", { col, total: s.total, non_null: s.non_null, distinct: s.distinct, range }));
     } catch (e: any) {
       toast.error(e?.message ?? t("取得欄位統計失敗"));
@@ -892,7 +892,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const fkVal = cellValue(r, c);
     if (fk && fkVal !== null) {
       items.push([
-        `跳至 ${fk.ref_table}（${fk.ref_column} = ${fkVal.length > 18 ? fkVal.slice(0, 18) + "…" : fkVal}）`,
+        t("跳至 {ref_table}（{ref_column} = {value}）", { ref_table: fk.ref_table, ref_column: fk.ref_column, value: fkVal.length > 18 ? fkVal.slice(0, 18) + "…" : fkVal }),
         () => useStore.getState().openTableFiltered(tab.connId, tab.database, fk.ref_table, fk.ref_column, fkVal),
         false,
       ]);
@@ -1354,7 +1354,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
             title={t("已隱藏 {length} 欄，點此全部顯示", { length: hidden.length })}
             className="ml-auto px-2 py-1 rounded hover:bg-fg/10 text-fg/50 inline-flex items-center gap-1"
           >
-            <Icon icon={Columns3} size={14} /> 已隱藏 {hidden.length} 欄
+            <Icon icon={Columns3} size={14} /> {t("已隱藏 {length} 欄", { length: hidden.length })}
           </button>
         )}
       </div>
@@ -1559,7 +1559,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         {/* 框選範圍統計 / 單一選取格資訊（Excel 狀態列手感） */}
         {selectionStats ? (
           <span className="ml-auto mr-3 text-fg/45 text-xs mono whitespace-nowrap" title={t("框選範圍統計（含待套用編輯值）")}>
-            已選 {selectionStats.rows}×{selectionStats.colsN}（{selectionStats.count} 格）
+            {t("已選 {rows}×{colsN}（{count} 格）", { rows: selectionStats.rows, colsN: selectionStats.colsN, count: selectionStats.count })}
             {selectionStats.numCount > 0 &&
               t(" · 數值 {numCount} · Σ {sum} · 平均 {avg}", { numCount: selectionStats.numCount, sum: fmtNum(selectionStats.sum), avg: fmtNum(selectionStats.avg) })}
             {selectionStats.numCount > 1 &&
@@ -1578,7 +1578,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           {applying
             ? t("處理中…")
             : data
-            ? `顯示 ${data.rows.length ? startRow + 1 : 0}–${startRow + data.rows.length} · 共 ${countPending ? "…" : data.total_rows} 列${editable ? "" : readonly ? t(" · 連線唯讀") : t(" · 無主鍵唯讀")}`
+            ? t("顯示 {from}–{to} · 共 {total} 列", { from: data.rows.length ? startRow + 1 : 0, to: startRow + data.rows.length, total: countPending ? "…" : data.total_rows }) + (editable ? "" : readonly ? t(" · 連線唯讀") : t(" · 無主鍵唯讀"))
             : loading
             ? t("讀取中…")
             : ""}
@@ -1837,7 +1837,7 @@ function FieldStatsModal({ col, stats, onClose }: { col: string; stats: ColumnSt
             {stats.sampled > 0 && (
               <span className="rounded border border-amber-300/40 bg-amber-500/10 px-2 py-1 text-amber-300"
                 title={t("集合過大時基於隨機抽樣計算（total 為集合估計數，其餘統計基於樣本）")}>
-                抽樣 {stats.sampled} 筆
+                {t("抽樣 {sampled} 筆", { sampled: stats.sampled })}
               </span>
             )}
           </div>
@@ -1874,7 +1874,7 @@ function FieldStatsModal({ col, stats, onClose }: { col: string; stats: ColumnSt
           )}
           {(stats.min !== null || stats.max !== null) && (
             <div className="text-xs text-fg/50" title={t("min / max 依 BSON 型別排序；混型欄位跨型別比較可能看似奇怪")}>
-              範圍 <span className="mono text-fg/70">[{stats.min ?? "?"}, {stats.max ?? "?"}]</span>（依 BSON 型別排序）
+              {t("範圍")} <span className="mono text-fg/70">[{stats.min ?? "?"}, {stats.max ?? "?"}]</span>{t("（依 BSON 型別排序）")}
             </div>
           )}
         </div>
@@ -1908,7 +1908,7 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
 
   const save = async () => {
     // 前端先驗 JSON，錯誤即時回饋，不必往返後端。
-    try { JSON.parse(text); } catch (e: any) { setErr(`JSON 格式錯誤：${e?.message ?? e}`); return; }
+    try { JSON.parse(text); } catch (e: any) { setErr(t("JSON 格式錯誤：{msg}", { msg: e?.message ?? e })); return; }
     setSaving(true);
     setErr(null);
     try {
@@ -1986,7 +1986,7 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
       <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2 text-sm">
-          <span className="font-medium">第 {rowNo} 列</span>
+          <span className="font-medium">{t("第 {rowNo} 列", { rowNo })}</span>
           <span className="text-fg/30 text-xs">{columns.length} {t("欄")}{editable ? t("（可編輯）") : t("（唯讀）")}</span>
           <div className="ml-auto flex items-center gap-1">
             <button type="button" disabled={!hasPrev} onClick={onPrev} title={t("上一列")}
@@ -2210,7 +2210,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
                 TTL: {page.ttl < 0 ? t("無到期") : `${page.ttl}s`}
               </span>
               {isCollection && page.total >= 0 && (
-                <span className="text-xs text-fg/35">共 {page.total} 筆</span>
+                <span className="text-xs text-fg/35">{t("共 {total} 筆", { total: page.total })}</span>
               )}
             </>
           )}
@@ -2252,7 +2252,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
           )}
           {isCollection && (
             <div className="mt-3 flex items-center gap-3 text-xs text-fg/40">
-              <span>已載入 {members.length} 筆{filter ? t("（已過濾）") : ""}</span>
+              <span>{t("已載入 {count} 筆", { count: members.length })}{filter ? t("（已過濾）") : ""}</span>
               {cursor !== 0 && (
                 <button type="button" onClick={loadMore} disabled={loading}
                   className="px-3 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
@@ -2492,7 +2492,7 @@ function StringEditor({ value, onSave, busy, truncated, valueBytes, onLoadFull }
       {truncated && (
         <div className="flex items-center gap-2 text-xs bg-warning/10 border border-warning/30 rounded px-3 py-2">
           <span className="text-warning">
-            值大小 {fmtBytes(valueBytes ?? 0)}，僅載入前 64 KB 預覽。編輯前請先載入完整值，以免覆蓋時截斷資料。
+            {t("值大小 {size}，僅載入前 64 KB 預覽。編輯前請先載入完整值，以免覆蓋時截斷資料。", { size: fmtBytes(valueBytes ?? 0) })}
           </span>
           {onLoadFull && (
             <button type="button" onClick={onLoadFull} disabled={busy}
@@ -3080,7 +3080,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     const ok = await uiConfirm(
       clear
         ? t("清除此集合的驗證規則？")
-        : `套用驗證規則（level=${valLevel} / action=${valAction}）？${danger ? "\nstrict + error 會立即阻擋不符合的寫入（含既有應用程式），請確認影響。" : ""}`,
+        : t("套用驗證規則（level={level} / action={action}）？", { level: valLevel, action: valAction }) + (danger ? "\n" + t("strict + error 會立即阻擋不符合的寫入（含既有應用程式），請確認影響。") : ""),
       { title: clear ? t("清除驗證規則") : t("套用驗證規則"), danger, confirmText: clear ? t("清除") : t("套用") },
     );
     if (!ok) return;
@@ -3364,7 +3364,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                         {st ? st.ops : <span title={t("無法取得 $indexStats（權限不足或不支援）")}>—</span>}
                         {st && st.ops === 0 && !ix.primary && (
                           <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300"
-                            title={`自 ${st.since || t("統計起始")} 起未被任何查詢使用（mongod 重啟會重置統計）`}>{t("未使用")}</span>
+                            title={t("自 {since} 起未被任何查詢使用（mongod 重啟會重置統計）", { since: st.since || t("統計起始") })}>{t("未使用")}</span>
                         )}
                       </td>
                       <td className="px-3 py-1 border-b border-fg/5 mono text-fg/50 whitespace-nowrap">

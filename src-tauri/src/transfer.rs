@@ -70,11 +70,11 @@ pub fn rewrite_create_table_name(
     let lower = ddl.to_ascii_lowercase();
     let ct = lower
         .find("create table")
-        .ok_or_else(|| AppError::Query("無法解析來源建表 DDL（找不到 CREATE TABLE）".into()))?;
+        .ok_or_else(|| AppError::Query(t!("無法解析來源建表 DDL（找不到 CREATE TABLE）").into()))?;
     let after = ct + "create table".len();
     let paren_rel = ddl[after..]
         .find('(')
-        .ok_or_else(|| AppError::Query("來源建表 DDL 無欄位定義".into()))?;
+        .ok_or_else(|| AppError::Query(t!("來源建表 DDL 無欄位定義").into()))?;
     let paren = after + paren_rel;
     // 保留 IF NOT EXISTS（若原本就有）。
     let between = ddl[after..paren].to_ascii_lowercase();
@@ -98,7 +98,7 @@ pub async fn transfer_table(
 ) -> AppResult<TransferResult> {
     // 防呆：不可把表傳輸到它自己（會邊讀邊寫無限增長）。
     if src_id == dst_id && src_db == dst_db && src_table == dst_table {
-        return Err(AppError::Query("來源與目標是同一張表，無法傳輸".into()));
+        return Err(AppError::Query(t!("來源與目標是同一張表，無法傳輸").into()));
     }
 
     // 0. 目標表不存在且要求自動建表：沿用來源 DDL 建立（限同種類）。
@@ -114,7 +114,7 @@ pub async fn transfer_table(
             let dst_kind = manager.kind(dst_id)?;
             if src_kind != dst_kind {
                 return Err(AppError::Query(
-                    "自動建表僅支援相同資料庫種類；請先在目標手動建立資料表".into(),
+                    t!("自動建表僅支援相同資料庫種類；請先在目標手動建立資料表").into(),
                 ));
             }
             let ddl = manager.table_ddl(src_id, src_db, src_table).await?;
@@ -139,7 +139,7 @@ pub async fn transfer_table(
     }
     if columns.is_empty() {
         return Err(AppError::Query(
-            "來源與目標沒有同名欄位可傳輸；請確認目標表結構".into(),
+            t!("來源與目標沒有同名欄位可傳輸；請確認目標表結構").into(),
         ));
     }
 

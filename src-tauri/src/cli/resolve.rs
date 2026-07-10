@@ -29,7 +29,7 @@ async fn resolve_saved(needle: &str, args: &ConnArgs) -> AppResult<ConnectionCon
     let mut cfg = store::load_connection_in(&dir, &found.id).await?;
     if matches!(cfg.kind, DbKind::External) {
         return Err(AppError::Unsupported(
-            "CLI 不支援外部 gateway（External）連線".into(),
+            t!("CLI 不支援外部 gateway（External）連線").into(),
         ));
     }
     if let Some(db) = &args.database {
@@ -74,12 +74,12 @@ fn resolve_adhoc(args: &ConnArgs) -> AppResult<ConnectionConfig> {
         }
     } else {
         return Err(AppError::Connect(
-            "請以 --conn <名稱> 指定已存連線，或以 --kind / --url 指定臨時連線".into(),
+            t!("請以 --conn <名稱> 指定已存連線，或以 --kind / --url 指定臨時連線").into(),
         ));
     };
 
     let kind = parsed.kind.ok_or_else(|| {
-        AppError::Connect("無法判斷連線種類（請加 --kind 或於 --url 指定 scheme）".into())
+        AppError::Connect(t!("無法判斷連線種類（請加 --kind 或於 --url 指定 scheme）").into())
     })?;
 
     // 個別旗標覆寫 URL 解析到的對應欄位。

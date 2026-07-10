@@ -18,10 +18,11 @@ pub async fn connect_external(config: &ConnectionConfig) -> AppResult<Arc<dyn Da
     let _ = &driver; // 具體驅動由 overlay 覆寫此函式時使用
     match driver {
         "" => Err(AppError::Connect(
-            "External 連線未指定 options.driver".into(),
+            t!("External 連線未指定 options.driver").into(),
         )),
-        other => Err(AppError::Unsupported(format!(
-            "此 build 未編入外部驅動「{other}」"
+        other => Err(AppError::Unsupported(tf!(
+            "此 build 未編入外部驅動「{other}」",
+            other = other
         ))),
     }
 }

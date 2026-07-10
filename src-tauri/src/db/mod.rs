@@ -1125,12 +1125,12 @@ pub trait DatabaseDriver: Send + Sync {
     /// 鍵值型專屬：對單一鍵做結構編輯（List/Set/ZSet/Hash 元素增刪改）。
     /// 非鍵值型資料庫預設回 Unsupported。
     async fn key_edit(&self, _database: &str, _key: &str, _edit: &KeyEdit) -> AppResult<u64> {
-        Err(AppError::Unsupported("此資料庫不支援鍵結構編輯".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援鍵結構編輯").into()))
     }
 
     /// 查詢計畫分析（EXPLAIN）。非關聯式預設 Unsupported。
     async fn explain(&self, _sql: &str) -> AppResult<QueryResult> {
-        Err(AppError::Unsupported("此資料庫不支援查詢計畫分析".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援查詢計畫分析").into()))
     }
 
     /// 資料表統計（引擎 / 列數估計 / 大小 / 排序規則 / 註解…）。回傳 (標籤, 值) 清單，
@@ -1151,29 +1151,29 @@ pub trait DatabaseDriver: Send + Sync {
         _table: &str,
         _column: &str,
     ) -> AppResult<ColumnStats> {
-        Err(AppError::Unsupported("此資料庫不支援欄位統計".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援欄位統計").into()))
     }
 
     /// 建立集合（MongoDB）。關聯式 / 其他預設 Unsupported（請改用 CREATE TABLE）。
     async fn create_collection(&self, _database: &str, _name: &str) -> AppResult<()> {
-        Err(AppError::Unsupported("此資料庫不支援建立集合（請用設計表結構建表）".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援建立集合（請用設計表結構建表）").into()))
     }
 
     /// 建立資料庫 / schema。MySQL → CREATE DATABASE、PostgreSQL → CREATE SCHEMA、
     /// MongoDB → 以建立首個集合具現化。預設 Unsupported（如 SQLite 為單檔）。
     async fn create_database(&self, _name: &str) -> AppResult<()> {
-        Err(AppError::Unsupported("此資料庫不支援新增資料庫".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援新增資料庫").into()))
     }
 
     /// 刪除集合（MongoDB）。關聯式請改用 DROP TABLE。預設 Unsupported。
     async fn drop_collection(&self, _database: &str, _name: &str) -> AppResult<()> {
-        Err(AppError::Unsupported("此資料庫不支援刪除集合".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援刪除集合").into()))
     }
 
     /// 刪除資料庫 / schema。MySQL → DROP DATABASE、PostgreSQL → DROP SCHEMA CASCADE、
     /// MongoDB → Database::drop。SQLite 單檔不支援。
     async fn drop_database(&self, _name: &str) -> AppResult<()> {
-        Err(AppError::Unsupported("此資料庫不支援刪除資料庫".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援刪除資料庫").into()))
     }
 
     /// 列出資料庫 / schema 內的預存程序 / 函式 / 觸發器。非關聯式預設回空清單。
@@ -1188,19 +1188,19 @@ pub trait DatabaseDriver: Send + Sync {
         _name: &str,
         _routine_type: &str,
     ) -> AppResult<String> {
-        Err(AppError::Unsupported("此資料庫不支援預存程序 / 觸發器".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援預存程序 / 觸發器").into()))
     }
 
     /// 全資料庫物件搜尋（SQL Search）。比對名稱 / 定義內文 / 註解，跨所有資料庫 / schema。
     /// 非關聯式預設回 Unsupported（Mongo / Redis 另以名稱層級覆寫）。
     async fn search_objects(&self, _opts: &SearchOptions) -> AppResult<Vec<SearchHit>> {
-        Err(AppError::Unsupported("此資料庫不支援物件搜尋".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援物件搜尋").into()))
     }
 
     /// 執行 DDL（CREATE PROCEDURE / TRIGGER 等編譯語句）。以簡單查詢協定送出整段——
     /// MySQL 的 prepared 協定不支援 CREATE PROCEDURE，且內部 ; 不可被前端切句。SQL 專用。
     async fn exec_ddl(&self, _sql: &str) -> AppResult<()> {
-        Err(AppError::Unsupported("此資料庫不支援此操作".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援此操作").into()))
     }
 
     /// 驗證 DDL 語法而不持久化變更。PG / SQLite 以交易回滾試行；MySQL 以暫存名稱試建後刪除
@@ -1208,23 +1208,23 @@ pub trait DatabaseDriver: Send + Sync {
     /// 預設（Mongo / Redis）回 Unsupported。回 Err 代表「無法執行驗證」（連線等問題）；
     /// 語法錯誤本身是成功回傳的 `ValidationReport{ ok: false }`。
     async fn validate_ddl(&self, _database: &str, _sql: &str) -> AppResult<ValidationReport> {
-        Err(AppError::Unsupported("此資料庫不支援語法驗證".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援語法驗證").into()))
     }
 
     /// 結構編輯（DDL：ALTER TABLE）。非關聯式預設 Unsupported。
     async fn alter_table(&self, _database: &str, _table: &str, _op: &AlterOp) -> AppResult<()> {
-        Err(AppError::Unsupported("此資料庫不支援結構編輯".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援結構編輯").into()))
     }
 
     /// ER 圖模型（表 + 外鍵關係）。非關聯式預設 Unsupported。
     async fn er_model(&self, _database: &str) -> AppResult<ErModel> {
-        Err(AppError::Unsupported("此資料庫不支援 ER 圖".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援 ER 圖").into()))
     }
 
     /// 取得建表 DDL（MySQL `SHOW CREATE TABLE`、SQLite sqlite_master、PG 以欄位重建）。
     /// 非關聯式預設 Unsupported。
     async fn table_ddl(&self, _database: &str, _table: &str) -> AppResult<String> {
-        Err(AppError::Unsupported("此資料庫不支援建表 DDL".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援建表 DDL").into()))
     }
 
     /// 取得表 / 集合的索引清單。預設回空（不支援的資料庫即顯示「無索引」）。
@@ -1234,7 +1234,7 @@ pub trait DatabaseDriver: Send + Sync {
 
     /// 刪除索引。預設 Unsupported（前端僅對關聯式顯示此操作）。
     async fn drop_index(&self, _database: &str, _table: &str, _index: &str) -> AppResult<()> {
-        Err(AppError::Unsupported("此資料庫不支援刪除索引".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援刪除索引").into()))
     }
 
     /// 建立索引。預設 Unsupported。
@@ -1246,12 +1246,12 @@ pub trait DatabaseDriver: Send + Sync {
         _columns: &[String],
         _unique: bool,
     ) -> AppResult<()> {
-        Err(AppError::Unsupported("此資料庫不支援建立索引".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援建立索引").into()))
     }
 
     /// 伺服器狀態（Redis INFO 等）。非鍵值型預設 Unsupported。
     async fn server_info(&self) -> AppResult<Vec<ServerInfoSection>> {
-        Err(AppError::Unsupported("此資料庫不支援伺服器狀態".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援伺服器狀態").into()))
     }
 
     /// 鍵值型：列出符合 pattern 的鍵名（純 SCAN，供鍵樹建構）。
@@ -1262,12 +1262,12 @@ pub trait DatabaseDriver: Send + Sync {
         _pattern: &str,
         _limit: usize,
     ) -> AppResult<RedisKeys> {
-        Err(AppError::Unsupported("此資料庫不支援鍵掃描".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援鍵掃描").into()))
     }
 
     /// 文件型：以主鍵取回整份文件的 canonical extended JSON（美化）。非文件型預設 Unsupported。
     async fn document_get(&self, _database: &str, _table: &str, _id: &str) -> AppResult<String> {
-        Err(AppError::Unsupported("此資料庫不支援文件檢視".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援文件檢視").into()))
     }
 
     /// 文件型：以主鍵用整份 extended JSON 文件取代（保真巢狀 / ObjectId / Date 等）。回傳受影響文件數。
@@ -1278,7 +1278,7 @@ pub trait DatabaseDriver: Send + Sync {
         _id: &str,
         _doc_json: &str,
     ) -> AppResult<u64> {
-        Err(AppError::Unsupported("此資料庫不支援文件取代".into()))
+        Err(AppError::Unsupported(t!("此資料庫不支援文件取代").into()))
     }
 
     /// 清除此驅動的查詢快取（若有）。預設 no-op；有快取的驅動（如外部 gateway）覆寫，
@@ -1318,7 +1318,7 @@ pub fn op_needs_value(op: &str) -> bool {
 pub(crate) fn validate_column_spec(data_type: &str, default: Option<&str>) -> AppResult<()> {
     let dt = data_type.trim();
     if dt.is_empty() {
-        return Err(AppError::Query("請指定欄位型別".into()));
+        return Err(AppError::Query(t!("請指定欄位型別").into()));
     }
     let bad = |s: &str| {
         s.contains(';')
@@ -1329,13 +1329,13 @@ pub(crate) fn validate_column_spec(data_type: &str, default: Option<&str>) -> Ap
     };
     if bad(dt) {
         return Err(AppError::Query(
-            "欄位型別含不允許的字元（; -- /* 或換行）".into(),
+            t!("欄位型別含不允許的字元（; -- /* 或換行）").into(),
         ));
     }
     if let Some(d) = default {
         if bad(d) {
             return Err(AppError::Query(
-                "預設值含不允許的字元（; -- /* 或換行）".into(),
+                t!("預設值含不允許的字元（; -- /* 或換行）").into(),
             ));
         }
     }

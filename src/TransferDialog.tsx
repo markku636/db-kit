@@ -103,7 +103,9 @@ export default function TransferDialog({ connId, database, table, onClose }: {
         create_table: createTable,
       });
       setResult(res);
-      if (res.failed === 0) toast.success(`已傳輸 ${res.transferred} 列${res.created ? t("（已建表）") : ""}`);
+      if (res.failed === 0) toast.success(res.created
+        ? t("已傳輸 {n} 列（已建表）", { n: res.transferred })
+        : t("已傳輸 {n} 列", { n: res.transferred }));
       else toast.error(t("傳輸 {transferred} 列、失敗 {failed} 列", { transferred: res.transferred, failed: res.failed }));
     } catch (e: any) {
       toast.error(e?.message ?? t("傳輸失敗"));
@@ -191,8 +193,8 @@ export default function TransferDialog({ connId, database, table, onClose }: {
       {result && (
         <div className="mt-1 text-sm rounded border border-fg/10 bg-inset p-3 space-y-1">
           <div>
-            傳輸 <span className="text-emerald-400">{result.transferred}</span> 列
-            {result.failed > 0 && <> · 失敗 <span className="text-red-400">{result.failed}</span> 列</>}
+            <span className="text-emerald-400">{t("傳輸 {n} 列", { n: result.transferred })}</span>
+            {result.failed > 0 && <> · <span className="text-red-400">{t("失敗 {n} 列", { n: result.failed })}</span></>}
             {result.created && <span className="ml-2 text-[11px] text-sky-300">{t("（已自動建立目標表）")}</span>}
           </div>
           <div className="text-xs text-fg/50">{t("欄位：")}<span className="mono">{result.columns.join(", ") || "—"}</span></div>

@@ -1,6 +1,6 @@
 // 整庫資料字典 / 文件產生（致敬 Navicat 的 HTML 文件 / 模型報表）。純函式，可單元測試。
 import type { ColumnInfo, IndexInfo, ForeignKeyInfo } from "./api";
-import { t } from "./i18n";
+import { t, useLang } from "./i18n";
 
 export interface TableDoc {
   name: string;
@@ -48,20 +48,20 @@ const esc = (s: string | null | undefined) =>
 export function buildDbDictHtml(dbName: string, tables: TableDoc[]): string {
   const th = (xs: string[]) => `<tr>${xs.map((x) => `<th>${x}</th>`).join("")}</tr>`;
   const tr = (xs: (string | null | undefined)[]) => `<tr>${xs.map((x) => `<td>${esc(x)}</td>`).join("")}</tr>`;
-  const toc = tables.map((tbl) => `<li><a href="#${anchor(tbl.name)}">${esc(tbl.name)}</a>（${tbl.cols.length} 欄）</li>`).join("");
+  const toc = tables.map((tbl) => `<li><a href="#${anchor(tbl.name)}">${esc(tbl.name)}</a>${t("（{length} 欄）", { length: tbl.cols.length })}</li>`).join("");
   const sections = tables.map((tbl) => {
     const colRows = tbl.cols.map((c) => tr([c.name, c.data_type, yn(c.nullable), c.key, c.default, c.extra, c.comment])).join("");
     const idxBlock = tbl.idx.length
-      ? `<h3>索引</h3><table>${th([t("名稱"), t("欄位"), t("唯一"), t("主鍵")])}${tbl.idx.map((i) => tr([i.name, i.columns.join(", "), yn(i.unique), yn(i.primary)])).join("")}</table>`
+      ? `<h3>${t("索引")}</h3><table>${th([t("名稱"), t("欄位"), t("唯一"), t("主鍵")])}${tbl.idx.map((i) => tr([i.name, i.columns.join(", "), yn(i.unique), yn(i.primary)])).join("")}</table>`
       : "";
     const fkBlock = tbl.fks.length
-      ? `<h3>外鍵</h3><table>${th([t("名稱"), t("欄位"), t("參照表"), t("參照欄位")])}${tbl.fks.map((f) => tr([f.name, f.column, f.ref_table, f.ref_column])).join("")}</table>`
+      ? `<h3>${t("外鍵")}</h3><table>${th([t("名稱"), t("欄位"), t("參照表"), t("參照欄位")])}${tbl.fks.map((f) => tr([f.name, f.column, f.ref_table, f.ref_column])).join("")}</table>`
       : "";
     return `<section><h2 id="${anchor(tbl.name)}">${esc(tbl.name)}</h2>` +
       `<table>${th([t("欄位"), t("型別"), t("可空"), t("鍵"), t("預設"), t("額外"), t("註解")])}${colRows}</table>${idxBlock}${fkBlock}</section>`;
   }).join("\n");
   return `<!DOCTYPE html>
-<html lang="zh-Hant"><head><meta charset="utf-8"><title>資料庫文件：${esc(dbName)}</title>
+<html lang="${useLang.getState().lang === "en" ? "en" : "zh-Hant"}"><head><meta charset="utf-8"><title>${t("資料庫文件：{dbName}", { dbName: esc(dbName) })}</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 24px; color: #1f2937; }
   h1 { font-size: 22px; } h2 { font-size: 16px; margin-top: 28px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; } h3 { font-size: 13px; margin-top: 14px; color: #6b7280; }
@@ -70,8 +70,8 @@ export function buildDbDictHtml(dbName: string, tables: TableDoc[]): string {
   th { background: #f3f4f6; }
   nav ul { columns: 3; font-size: 13px; } a { color: #2563eb; text-decoration: none; }
 </style></head><body>
-<h1>資料庫文件：${esc(dbName)}</h1>
-<p>共 ${tables.length} 張資料表。</p>
+<h1>${t("資料庫文件：{dbName}", { dbName: esc(dbName) })}</h1>
+<p>${t("共 {length} 張資料表。", { length: tables.length })}</p>
 <nav><ul>${toc}</ul></nav>
 ${sections}
 </body></html>`;

@@ -348,7 +348,7 @@ function TableInfo({ connId, db, table, kind, objKind }: {
         </Section>
       )}
 
-      <Section title={`欄位（${cols?.length ?? 0}）`}>
+      <Section title={t("欄位（{n}）", { n: cols?.length ?? 0 })}>
         {cols == null ? <Empty text={t("載入中…")} /> : cols.length === 0 ? <Empty text={t("（無）")} /> : (
           <div className="divide-y divide-fg/5">
             {cols.map((c) => (

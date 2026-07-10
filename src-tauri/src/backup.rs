@@ -65,15 +65,15 @@ pub async fn backup(
     out_path: &str,
 ) -> AppResult<BackupResult> {
     if matches!(config.kind, DbKind::External) {
-        return Err(AppError::Query("外部 gateway 連線不支援備份".into()));
+        return Err(AppError::Query(t!("外部 gateway 連線不支援備份").into()));
     }
     // SQL Server 備份規劃以 sqlpackage 匯出 .bacpac，尚未接上。
     if matches!(config.kind, DbKind::Mssql) {
-        return Err(AppError::Query("SQL Server 備份尚未支援（規劃以 sqlpackage 匯出 .bacpac）".into()));
+        return Err(AppError::Query(t!("SQL Server 備份尚未支援（規劃以 sqlpackage 匯出 .bacpac）").into()));
     }
     // Oracle 備份規劃以 Data Pump（expdp）匯出 .dmp，尚未接上。
     if matches!(config.kind, DbKind::Oracle) {
-        return Err(AppError::Query("Oracle 備份尚未支援（規劃以 Data Pump expdp 匯出 .dmp）".into()));
+        return Err(AppError::Query(t!("Oracle 備份尚未支援（規劃以 Data Pump expdp 匯出 .dmp）").into()));
     }
     // SQLite：直接複製資料庫檔案。
     if let DbKind::Sqlite = config.kind {
@@ -81,10 +81,10 @@ pub async fn backup(
             .database
             .clone()
             .filter(|p| !p.is_empty())
-            .ok_or_else(|| AppError::Query("SQLite 連線未指定檔案路徑".to_string()))?;
+            .ok_or_else(|| AppError::Query(t!("SQLite 連線未指定檔案路徑").to_string()))?;
         tokio::fs::copy(&src, out_path)
             .await
-            .map_err(|e| AppError::Query(format!("複製 SQLite 檔失敗：{e}")))?;
+            .map_err(|e| AppError::Query(tf!("複製 SQLite 檔失敗：{e}", e = e)))?;
         let bytes = file_size(out_path).await;
         return Ok(BackupResult {
             path: out_path.to_string(),
@@ -95,9 +95,9 @@ pub async fn backup(
 
     // 其餘：需要對應 CLI。
     if !detect_cli(config.kind).await {
-        return Err(AppError::Query(format!(
-            "找不到 {} 工具，請先安裝後再備份（或改用支援內建匯出的格式）",
-            cli_tool_name(config.kind)
+        return Err(AppError::Query(tf!(
+            "找不到 {tool} 工具，請先安裝後再備份（或改用支援內建匯出的格式）",
+            tool = cli_tool_name(config.kind)
         )));
     }
 
@@ -113,7 +113,7 @@ pub async fn backup(
     };
 
     if !status {
-        return Err(AppError::Query("備份指令執行失敗，請檢查連線與權限".to_string()));
+        return Err(AppError::Query(t!("備份指令執行失敗，請檢查連線與權限").to_string()));
     }
     let bytes = file_size(out_path).await;
     Ok(BackupResult {
@@ -131,7 +131,7 @@ pub async fn restore(
     in_path: &str,
 ) -> AppResult<()> {
     if !Path::new(in_path).exists() {
-        return Err(AppError::Query("備份檔不存在".to_string()));
+        return Err(AppError::Query(t!("備份檔不存在").to_string()));
     }
 
     match config.kind {
@@ -140,7 +140,7 @@ pub async fn restore(
                 .database
                 .clone()
                 .filter(|p| !p.is_empty())
-                .ok_or_else(|| AppError::Query("SQLite 連線未指定檔案路徑".to_string()))?;
+                .ok_or_else(|| AppError::Query(t!("SQLite 連線未指定檔案路徑").to_string()))?;
             // 先驗證來源確為 SQLite 檔，避免以非 DB 檔覆蓋使用者資料庫。
             validate_sqlite_file(in_path).await?;
             // 覆蓋前備份現有檔（.bak），讓還原失敗可復原。
@@ -149,38 +149,38 @@ pub async fn restore(
             }
             tokio::fs::copy(in_path, &dst)
                 .await
-                .map_err(|e| AppError::Query(format!("還原 SQLite 檔失敗：{e}")))?;
+                .map_err(|e| AppError::Query(tf!("還原 SQLite 檔失敗：{e}", e = e)))?;
             Ok(())
         }
         DbKind::Mysql | DbKind::Mariadb => {
             // 還原用 mysql client（非 mysqldump）；缺工具時明確報錯（原為空的死分支）。
             if !detect_cli_named("mysql").await {
-                return Err(AppError::Query("找不到 mysql 客戶端，請先安裝".to_string()));
+                return Err(AppError::Query(t!("找不到 mysql 客戶端，請先安裝").to_string()));
             }
             let ok = run_mysql_restore(config, database, in_path).await?;
-            if ok { Ok(()) } else { Err(AppError::Query("MySQL 還原失敗".to_string())) }
+            if ok { Ok(()) } else { Err(AppError::Query(t!("MySQL 還原失敗").to_string())) }
         }
         DbKind::Postgres => {
             let ok = run_psql_restore(config, database, in_path).await?;
-            if ok { Ok(()) } else { Err(AppError::Query("PostgreSQL 還原失敗".to_string())) }
+            if ok { Ok(()) } else { Err(AppError::Query(t!("PostgreSQL 還原失敗").to_string())) }
         }
         DbKind::Mongo => {
             if !detect_cli(DbKind::Mongo).await {
-                return Err(AppError::Query("找不到 mongorestore，請先安裝".to_string()));
+                return Err(AppError::Query(t!("找不到 mongorestore，請先安裝").to_string()));
             }
             let ok = run_mongorestore(config, database, in_path).await?;
-            if ok { Ok(()) } else { Err(AppError::Query("MongoDB 還原失敗".to_string())) }
+            if ok { Ok(()) } else { Err(AppError::Query(t!("MongoDB 還原失敗").to_string())) }
         }
         DbKind::Redis => Err(AppError::Query(
-            "Redis 自動還原暫未支援；請以 redis-cli 手動匯入 RDB".to_string(),
+            t!("Redis 自動還原暫未支援；請以 redis-cli 手動匯入 RDB").to_string(),
         )),
         DbKind::Mssql => Err(AppError::Query(
-            "SQL Server 還原尚未支援（規劃以 sqlpackage 匯入 .bacpac）".to_string(),
+            t!("SQL Server 還原尚未支援（規劃以 sqlpackage 匯入 .bacpac）").to_string(),
         )),
         DbKind::Oracle => Err(AppError::Query(
-            "Oracle 還原尚未支援（規劃以 Data Pump impdp 匯入 .dmp）".to_string(),
+            t!("Oracle 還原尚未支援（規劃以 Data Pump impdp 匯入 .dmp）").to_string(),
         )),
-        DbKind::External => Err(AppError::Query("外部 gateway 連線不支援還原".to_string())),
+        DbKind::External => Err(AppError::Query(t!("外部 gateway 連線不支援還原").to_string())),
     }
 }
 
@@ -189,7 +189,7 @@ pub async fn restore(
 async fn run_mysqldump(c: &ConnectionConfig, db: &str, out: &str) -> AppResult<bool> {
     // 密碼以環境變數 MYSQL_PWD 傳遞，避免出現在行程列表。
     let file = std::fs::File::create(out)
-        .map_err(|e| AppError::Query(format!("建立輸出檔失敗：{e}")))?;
+        .map_err(|e| AppError::Query(tf!("建立輸出檔失敗：{e}", e = e)))?;
     let status = Command::new("mysqldump")
         .arg("-h").arg(&c.host)
         .arg("-P").arg(c.port.to_string())
@@ -207,7 +207,7 @@ async fn run_mysqldump(c: &ConnectionConfig, db: &str, out: &str) -> AppResult<b
 
 async fn run_mysql_restore(c: &ConnectionConfig, db: &str, inp: &str) -> AppResult<bool> {
     let file = std::fs::File::open(inp)
-        .map_err(|e| AppError::Query(format!("開啟備份檔失敗：{e}")))?;
+        .map_err(|e| AppError::Query(tf!("開啟備份檔失敗：{e}", e = e)))?;
     let status = Command::new("mysql")
         .arg("-h").arg(&c.host)
         .arg("-P").arg(c.port.to_string())
@@ -240,7 +240,7 @@ async fn run_pg_dump(c: &ConnectionConfig, db: &str, out: &str) -> AppResult<boo
 
 async fn run_psql_restore(c: &ConnectionConfig, db: &str, inp: &str) -> AppResult<bool> {
     if !detect_cli_named("psql").await {
-        return Err(AppError::Query("找不到 psql，請先安裝".to_string()));
+        return Err(AppError::Query(t!("找不到 psql，請先安裝").to_string()));
     }
     let status = Command::new("psql")
         .arg("-h").arg(&c.host)
@@ -267,7 +267,7 @@ impl MongoToolConfig {
         let uri = crate::db::mongo::build_mongo_uri(c);
         let path = std::env::temp_dir().join(format!("dbkit-mongo-{}.yaml", uuid::Uuid::new_v4()));
         std::fs::write(&path, format!("uri: {uri}\n"))
-            .map_err(|e| AppError::Query(format!("建立 mongo 工具設定暫存檔失敗：{e}")))?;
+            .map_err(|e| AppError::Query(tf!("建立 mongo 工具設定暫存檔失敗：{e}", e = e)))?;
         Ok(Self(path))
     }
 }
@@ -342,13 +342,13 @@ async fn validate_sqlite_file(path: &str) -> AppResult<()> {
     use tokio::io::AsyncReadExt;
     let mut f = tokio::fs::File::open(path)
         .await
-        .map_err(|e| AppError::Query(format!("開啟備份檔失敗：{e}")))?;
+        .map_err(|e| AppError::Query(tf!("開啟備份檔失敗：{e}", e = e)))?;
     let mut hdr = [0u8; 16];
     f.read_exact(&mut hdr)
         .await
-        .map_err(|_| AppError::Query("備份檔過小或無法讀取".to_string()))?;
+        .map_err(|_| AppError::Query(t!("備份檔過小或無法讀取").to_string()))?;
     if &hdr != b"SQLite format 3\0" {
-        return Err(AppError::Query("備份檔不是有效的 SQLite 資料庫檔".to_string()));
+        return Err(AppError::Query(t!("備份檔不是有效的 SQLite 資料庫檔").to_string()));
     }
     Ok(())
 }

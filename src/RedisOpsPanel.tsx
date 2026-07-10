@@ -76,7 +76,7 @@ function SlowLogTab({ connId }: { connId: string }) {
   return (
     <>
       <div className="flex items-center gap-2 mb-2 text-xs">
-        <span className="text-fg/40">最近 {rows?.length ?? 0} 筆慢查詢</span>
+        <span className="text-fg/40">{t("最近 {count} 筆慢查詢", { count: rows?.length ?? 0 })}</span>
         <button type="button" onClick={() => setNonce((n) => n + 1)}
           className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70"><Icon icon={RefreshCw} size={13} /> {t("刷新")}</button>
         <button type="button" onClick={reset}

@@ -126,15 +126,15 @@ pub fn parse_xlsx(bytes: &[u8]) -> AppResult<Vec<Vec<String>>> {
     use std::io::Cursor;
 
     let mut wb: Xlsx<_> = Xlsx::new(Cursor::new(bytes))
-        .map_err(|e| AppError::Query(format!("讀取 Excel 失敗：{e}")))?;
+        .map_err(|e| AppError::Query(tf!("讀取 Excel 失敗：{e}", e = e)))?;
     let sheet = wb
         .sheet_names()
         .first()
         .cloned()
-        .ok_or_else(|| AppError::Query("Excel 沒有任何工作表".to_string()))?;
+        .ok_or_else(|| AppError::Query(t!("Excel 沒有任何工作表").to_string()))?;
     let range = wb
         .worksheet_range(&sheet)
-        .map_err(|e| AppError::Query(format!("讀取工作表「{sheet}」失敗：{e}")))?;
+        .map_err(|e| AppError::Query(tf!("讀取工作表「{sheet}」失敗：{e}", sheet = sheet, e = e)))?;
 
     let mut out: Vec<Vec<String>> = range
         .rows()
@@ -228,7 +228,7 @@ async fn import_rows(
     opts: &ImportOptions,
 ) -> AppResult<ImportResult> {
     if rows.is_empty() {
-        return Err(AppError::Query("沒有任何資料列".to_string()));
+        return Err(AppError::Query(t!("沒有任何資料列").to_string()));
     }
 
     // 決定欄名。has_header 時先吃掉表頭列；欄名以 opts.columns 覆蓋為優先（致敬 Navicat 匯入欄位對應，
@@ -243,11 +243,11 @@ async fn import_rows(
         (Some(over), _) => over,
         (None, Some(header)) => header,
         (None, None) => {
-            return Err(AppError::Query("未提供欄名（無表頭時必填 columns）".to_string()))
+            return Err(AppError::Query(t!("未提供欄名（無表頭時必填 columns）").to_string()))
         }
     };
     if columns.is_empty() {
-        return Err(AppError::Query("欄名為空".to_string()));
+        return Err(AppError::Query(t!("欄名為空").to_string()));
     }
 
     let mut result = ImportResult::default();
@@ -263,7 +263,12 @@ async fn import_rows(
             continue;
         }
         if row.len() != columns.len() {
-            let msg = format!("第 {line_no} 列欄數 {} 與表頭 {} 不符", row.len(), columns.len());
+            let msg = tf!(
+                "第 {line_no} 列欄數 {got} 與表頭 {want} 不符",
+                line_no = line_no,
+                got = row.len(),
+                want = columns.len()
+            );
             result.failed += 1;
             if result.errors.len() < MAX_ERRORS {
                 result.errors.push(msg.clone());
@@ -290,7 +295,7 @@ async fn import_rows(
             Err(e) => {
                 result.failed += 1;
                 if result.errors.len() < MAX_ERRORS {
-                    result.errors.push(format!("第 {line_no} 列：{e}"));
+                    result.errors.push(tf!("第 {line_no} 列：{e}", line_no = line_no, e = e));
                 }
                 if opts.stop_on_error {
                     return Err(e);

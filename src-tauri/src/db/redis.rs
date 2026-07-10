@@ -452,7 +452,7 @@ impl DatabaseDriver for RedisDriver {
             .await
             .map_err(|e| AppError::Connect(e.to_string()))?;
         if !pong.eq_ignore_ascii_case("pong") {
-            return Err(AppError::Connect(format!("非預期的 PING 回應：{pong}")));
+            return Err(AppError::Connect(tf!("非預期的 PING 回應：{pong}", pong = pong)));
         }
         let db_count = redis::cmd("CONFIG")
             .arg("GET")
@@ -475,7 +475,7 @@ impl DatabaseDriver for RedisDriver {
         if pong.eq_ignore_ascii_case("pong") {
             Ok(())
         } else {
-            Err(AppError::Connect(format!("非預期的 PING 回應：{pong}")))
+            Err(AppError::Connect(tf!("非預期的 PING 回應：{pong}", pong = pong)))
         }
     }
 
@@ -522,7 +522,7 @@ impl DatabaseDriver for RedisDriver {
                 nullable: true,
                 key: String::new(),
                 default: None,
-                extra: "秒；-1 表示無到期".to_string(),
+                extra: t!("秒；-1 表示無到期").to_string(),
                 comment: String::new(),
             },
         ])
@@ -581,7 +581,7 @@ impl DatabaseDriver for RedisDriver {
         // 才能輸入含空白的值，如 SET k "hello world"。
         let parts = split_args(cmdline);
         if parts.is_empty() {
-            return Err(AppError::Query("空命令".to_string()));
+            return Err(AppError::Query(t!("空命令").to_string()));
         }
         let mut conn = self.conn(&db).await?;
         let mut cmd = redis::cmd(&parts[0]);
@@ -628,7 +628,7 @@ impl DatabaseDriver for RedisDriver {
                     .as_deref()
                     .unwrap_or("-1")
                     .parse()
-                    .map_err(|_| AppError::Query("TTL 必須為整數".to_string()))?;
+                    .map_err(|_| AppError::Query(t!("TTL 必須為整數").to_string()))?;
                 if secs < 0 {
                     let _: i64 = conn
                         .persist(&key)
@@ -642,10 +642,10 @@ impl DatabaseDriver for RedisDriver {
                 }
                 Ok(1)
             }
-            "key" => Err(AppError::Query("不支援直接改 key 名稱，請用 RENAME".to_string())),
+            "key" => Err(AppError::Query(t!("不支援直接改 key 名稱，請用 RENAME").to_string())),
             // type 為唯讀的型別中介資料；若以 SET 寫入會把 list/set/zset/hash 覆蓋成 string、
             // 造成資料遺失，故明確拒絕（避免誤觸格內編輯）。
-            "type" => Err(AppError::Query("type 欄為唯讀，無法編輯".to_string())),
+            "type" => Err(AppError::Query(t!("type 欄為唯讀，無法編輯").to_string())),
             // 其餘（string value 編輯）：對 string 型別做 SET
             _ => {
                 let v = edit.new_value.clone().unwrap_or_default();
@@ -678,7 +678,7 @@ impl DatabaseDriver for RedisDriver {
                 _ => {}
             }
         }
-        let key = key.ok_or_else(|| AppError::Query("缺少 key".to_string()))?;
+        let key = key.ok_or_else(|| AppError::Query(t!("缺少 key").to_string()))?;
         let value = value.unwrap_or_default();
         let mut conn = self.conn(database).await?;
         let _: () = conn
@@ -922,8 +922,9 @@ impl DatabaseDriver for RedisDriver {
                     .await
                     .map_err(to_err)?;
                 if renamed == 0 {
-                    return Err(AppError::Query(format!(
-                        "目標鍵「{new_key}」已存在，為避免覆蓋而取消改名"
+                    return Err(AppError::Query(tf!(
+                        "目標鍵「{new_key}」已存在，為避免覆蓋而取消改名",
+                        new_key = new_key
                     )));
                 }
                 1
@@ -1062,10 +1063,10 @@ fn pk_key(cols: &[String], vals: &[Option<String>]) -> AppResult<String> {
     let idx = cols
         .iter()
         .position(|c| c == "key")
-        .ok_or_else(|| AppError::Query("缺少 key".to_string()))?;
+        .ok_or_else(|| AppError::Query(t!("缺少 key").to_string()))?;
     vals.get(idx)
         .and_then(|v| v.clone())
-        .ok_or_else(|| AppError::Query("key 為空".to_string()))
+        .ok_or_else(|| AppError::Query(t!("key 為空").to_string()))
 }
 
 /// 解析 Redis `INFO` 純文字為分區結構。

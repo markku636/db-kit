@@ -34,6 +34,9 @@ pub const APP_SETTINGS_FILE: &str = "app_settings.json";
 pub struct AppSettings {
     #[serde(default)]
     pub startup_password_hash: Option<String>,
+    /// 介面語言碼（`"zh-TW"` / `"en"`）；GUI 與 dbk CLI 共用。舊檔無此欄 → `None`（走預設 zh-TW）。
+    #[serde(default)]
+    pub lang: Option<String>,
 }
 
 /// 連線設定檔（磁碟格式）。
@@ -150,7 +153,7 @@ impl PersistedConnection {
 /// identifier 取自 `tauri.conf.json`（`dev.dbkit.app`），變更時需同步此處。
 pub fn headless_config_dir() -> AppResult<PathBuf> {
     let base = dirs::config_dir()
-        .ok_or_else(|| AppError::Storage("無法取得使用者設定目錄".into()))?;
+        .ok_or_else(|| AppError::Storage(t!("無法取得使用者設定目錄").into()))?;
     Ok(base.join("dev.dbkit.app"))
 }
 
@@ -158,7 +161,7 @@ pub fn headless_config_dir() -> AppResult<PathBuf> {
 fn app_config_dir(app: &AppHandle) -> AppResult<PathBuf> {
     app.path()
         .app_config_dir()
-        .map_err(|e| AppError::Storage(format!("無法取得設定目錄：{e}")))
+        .map_err(|e| AppError::Storage(tf!("無法取得設定目錄：{e}", e = e)))
 }
 
 // ---- 檔案讀寫（path-based 內層，GUI 與 CLI 共用）----
@@ -166,7 +169,7 @@ fn app_config_dir(app: &AppHandle) -> AppResult<PathBuf> {
 async fn ensure_dir_at(dir: &Path) -> AppResult<()> {
     tokio::fs::create_dir_all(dir)
         .await
-        .map_err(|e| AppError::Storage(format!("建立設定目錄失敗：{e}")))
+        .map_err(|e| AppError::Storage(tf!("建立設定目錄失敗：{e}", e = e)))
 }
 
 /// 載入全部已存連線。檔案不存在或解析失敗都回空清單（優雅降級）。
@@ -181,7 +184,7 @@ pub async fn load_all_in(dir: &Path) -> AppResult<Vec<PersistedConnection>> {
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(AppError::Storage(format!("讀取連線設定失敗：{e}"))),
+        Err(e) => Err(AppError::Storage(tf!("讀取連線設定失敗：{e}", e = e))),
     }
 }
 
@@ -195,13 +198,13 @@ pub async fn save_all_in(dir: &Path, conns: &[PersistedConnection]) -> AppResult
         connections: conns.to_vec(),
     };
     let bytes = serde_json::to_vec_pretty(&file)
-        .map_err(|e| AppError::Storage(format!("序列化連線設定失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("序列化連線設定失敗：{e}", e = e)))?;
     tokio::fs::write(&tmp, &bytes)
         .await
-        .map_err(|e| AppError::Storage(format!("寫入連線設定失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("寫入連線設定失敗：{e}", e = e)))?;
     tokio::fs::rename(&tmp, &path)
         .await
-        .map_err(|e| AppError::Storage(format!("更新連線設定失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("更新連線設定失敗：{e}", e = e)))?;
     Ok(())
 }
 
@@ -217,9 +220,9 @@ pub async fn read_json_in<T: DeserializeOwned + Default>(dir: &Path, file: &str)
     let path = dir.join(file);
     match tokio::fs::read(&path).await {
         Ok(bytes) => serde_json::from_slice::<T>(&bytes)
-            .map_err(|e| AppError::Storage(format!("解析 {file} 失敗：{e}"))),
+            .map_err(|e| AppError::Storage(tf!("解析 {file} 失敗：{e}", file = file, e = e))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
-        Err(e) => Err(AppError::Storage(format!("讀取 {file} 失敗：{e}"))),
+        Err(e) => Err(AppError::Storage(tf!("讀取 {file} 失敗：{e}", file = file, e = e))),
     }
 }
 
@@ -229,13 +232,13 @@ pub async fn write_json_in<T: Serialize>(dir: &Path, file: &str, value: &T) -> A
     let path = dir.join(file);
     let tmp = dir.join(format!("{file}.tmp"));
     let bytes = serde_json::to_vec_pretty(value)
-        .map_err(|e| AppError::Storage(format!("序列化 {file} 失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("序列化 {file} 失敗：{e}", file = file, e = e)))?;
     tokio::fs::write(&tmp, &bytes)
         .await
-        .map_err(|e| AppError::Storage(format!("寫入 {file} 失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("寫入 {file} 失敗：{e}", file = file, e = e)))?;
     tokio::fs::rename(&tmp, &path)
         .await
-        .map_err(|e| AppError::Storage(format!("更新 {file} 失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("更新 {file} 失敗：{e}", file = file, e = e)))?;
     Ok(())
 }
 
@@ -317,14 +320,14 @@ pub fn otp_account(id: &str) -> String {
 /// 寫入 keychain。secret 為空字串時視為「刪除該項」。
 pub fn kc_set(account: &str, secret: &str) -> AppResult<()> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
-        .map_err(|e| AppError::Storage(format!("keychain 開啟失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("keychain 開啟失敗：{e}", e = e)))?;
     if secret.is_empty() {
         let _ = entry.delete_credential();
         return Ok(());
     }
     entry
         .set_password(secret)
-        .map_err(|e| AppError::Storage(format!("keychain 寫入失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("keychain 寫入失敗：{e}", e = e)))?;
     Ok(())
 }
 

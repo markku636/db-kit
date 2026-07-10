@@ -330,7 +330,7 @@ impl DatabaseDriver for MssqlDriver {
 
     async fn insert_row(&self, database: &str, table: &str, row: &RowInsert) -> AppResult<u64> {
         if row.columns.len() != row.values.len() {
-            return Err(AppError::Query("欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("欄位與值數量不符").to_string()));
         }
         let (schema, tbl) = split_schema_table(table);
         let qualified = qualified_name(database, &schema, &tbl);
@@ -477,7 +477,7 @@ impl DatabaseDriver for MssqlDriver {
         let rows = self.query_rows(&format!("SELECT OBJECT_DEFINITION(OBJECT_ID({obj}))")).await?;
         rows.first()
             .and_then(|r| get_str(r, 0))
-            .ok_or_else(|| AppError::Query("取不到定義（可能無權限或物件不存在）".to_string()))
+            .ok_or_else(|| AppError::Query(t!("取不到定義（可能無權限或物件不存在）").to_string()))
     }
 
     async fn table_ddl(&self, database: &str, table: &str) -> AppResult<String> {
@@ -503,7 +503,7 @@ impl DatabaseDriver for MssqlDriver {
         );
         let rows = self.query_rows(&sql).await?;
         if rows.is_empty() {
-            return Err(AppError::Query("找不到資料表欄位".to_string()));
+            return Err(AppError::Query(t!("找不到資料表欄位").to_string()));
         }
         let mut lines: Vec<String> = Vec::new();
         for r in &rows {
@@ -580,7 +580,7 @@ impl DatabaseDriver for MssqlDriver {
         let rows = self
             .query_rows(&format!("SELECT COUNT_BIG(*), COUNT_BIG({col}), COUNT_BIG(DISTINCT {col}) FROM {q}"))
             .await?;
-        let r = rows.first().ok_or_else(|| AppError::Query("欄位統計無結果".to_string()))?;
+        let r = rows.first().ok_or_else(|| AppError::Query(t!("欄位統計無結果").to_string()))?;
         let total = r.try_get::<i64, _>(0).ok().flatten().unwrap_or(0) as u64;
         let non_null = r.try_get::<i64, _>(1).ok().flatten().unwrap_or(0) as u64;
         let distinct = r.try_get::<i64, _>(2).ok().flatten().unwrap_or(0) as u64;
@@ -614,10 +614,10 @@ impl DatabaseDriver for MssqlDriver {
         if let Ok(rows) = self.query_rows(&sql).await {
             if let Some(r) = rows.first() {
                 if let Some(n) = r.try_get::<i64, _>(0).ok().flatten() {
-                    out.push(("列數（估計）".to_string(), n.to_string()));
+                    out.push((t!("列數（估計）").to_string(), n.to_string()));
                 }
                 if let Some(b) = r.try_get::<i64, _>(1).ok().flatten() {
-                    out.push(("資料大小".to_string(), fmt_bytes(b)));
+                    out.push((t!("資料大小").to_string(), fmt_bytes(b)));
                 }
             }
         }
@@ -665,7 +665,7 @@ impl DatabaseDriver for MssqlDriver {
 
     async fn drop_database(&self, name: &str) -> AppResult<()> {
         if MSSQL_SYSTEM_DBS.contains(&name.to_lowercase().as_str()) {
-            return Err(AppError::Query(format!("系統資料庫「{name}」不可刪除")));
+            return Err(AppError::Query(tf!("系統資料庫「{name}」不可刪除", name = name)));
         }
         self.exec(&format!("DROP DATABASE [{}]", esc(name))).await.map(|_| ())
     }
@@ -808,13 +808,13 @@ fn build_order(sorts: &[Sort]) -> String {
 /// 以主鍵欄位 / 值組 WHERE 子句。任一主鍵值為 NULL 視為無法安全定位。
 fn pk_where(cols: &[String], vals: &[Option<String>]) -> AppResult<String> {
     if cols.is_empty() {
-        return Err(AppError::Query("缺少主鍵，無法定位列".to_string()));
+        return Err(AppError::Query(t!("缺少主鍵，無法定位列").to_string()));
     }
     let mut parts = Vec::with_capacity(cols.len());
     for (c, v) in cols.iter().zip(vals.iter()) {
         match v {
             Some(val) => parts.push(format!("[{}] = {}", esc(c), lit(val))),
-            None => return Err(AppError::Query("主鍵值為 NULL，無法安全定位列".to_string())),
+            None => return Err(AppError::Query(t!("主鍵值為 NULL，無法安全定位列").to_string())),
         }
     }
     Ok(parts.join(" AND "))

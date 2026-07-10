@@ -27,26 +27,27 @@ fn derive_key_v1(passphrase: &str, salt: &[u8]) -> AppResult<[u8; 32]> {
     let mut key = [0u8; 32];
     Argon2::default()
         .hash_password_into(passphrase.as_bytes(), salt, &mut key)
-        .map_err(|e| AppError::Storage(format!("金鑰派生失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("金鑰派生失敗：{e}", e = e)))?;
     Ok(key)
 }
 
 /// v2 KDF（現行加密）：顯式參數 m=64 MiB / t=3 / p=1，與 MAGIC 版本綁定。
 fn derive_key_v2(passphrase: &str, salt: &[u8]) -> AppResult<[u8; 32]> {
     let params = Params::new(64 * 1024, 3, 1, Some(32))
-        .map_err(|e| AppError::Storage(format!("金鑰派生參數錯誤：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("金鑰派生參數錯誤：{e}", e = e)))?;
     let mut key = [0u8; 32];
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
         .hash_password_into(passphrase.as_bytes(), salt, &mut key)
-        .map_err(|e| AppError::Storage(format!("金鑰派生失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("金鑰派生失敗：{e}", e = e)))?;
     Ok(key)
 }
 
 /// 以 passphrase 加密明文，回傳含檔頭的完整 blob（v2 格式）。
 pub fn encrypt(plain: &[u8], passphrase: &str) -> AppResult<Vec<u8>> {
     if passphrase.len() < MIN_PASSPHRASE {
-        return Err(AppError::Storage(format!(
-            "passphrase 至少 {MIN_PASSPHRASE} 碼（匯出檔可離線暴力破解，弱口令保護不了機密）"
+        return Err(AppError::Storage(tf!(
+            "passphrase 至少 {min} 碼（匯出檔可離線暴力破解，弱口令保護不了機密）",
+            min = MIN_PASSPHRASE
         )));
     }
     let salt: [u8; SALT_LEN] = rand::random();
@@ -55,7 +56,7 @@ pub fn encrypt(plain: &[u8], passphrase: &str) -> AppResult<Vec<u8>> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
     let ct = cipher
         .encrypt(Nonce::from_slice(&nonce_bytes), plain)
-        .map_err(|_| AppError::Storage("加密失敗".into()))?;
+        .map_err(|_| AppError::Storage(t!("加密失敗").into()))?;
 
     let mut out = Vec::with_capacity(MAGIC_V2.len() + SALT_LEN + NONCE_LEN + ct.len());
     out.extend_from_slice(MAGIC_V2);
@@ -69,7 +70,7 @@ pub fn encrypt(plain: &[u8], passphrase: &str) -> AppResult<Vec<u8>> {
 pub fn decrypt(blob: &[u8], passphrase: &str) -> AppResult<Vec<u8>> {
     let header = MAGIC_V2.len() + SALT_LEN + NONCE_LEN;
     if blob.len() < header {
-        return Err(AppError::Storage("非 db-kit 加密連線檔（檔頭不符）".into()));
+        return Err(AppError::Storage(t!("非 db-kit 加密連線檔（檔頭不符）").into()));
     }
     let magic = &blob[..MAGIC_V2.len()];
     let salt = &blob[MAGIC_V2.len()..MAGIC_V2.len() + SALT_LEN];
@@ -80,10 +81,10 @@ pub fn decrypt(blob: &[u8], passphrase: &str) -> AppResult<Vec<u8>> {
     } else if magic == MAGIC_V1 {
         derive_key_v1(passphrase, salt)?
     } else {
-        return Err(AppError::Storage("非 db-kit 加密連線檔（檔頭不符）".into()));
+        return Err(AppError::Storage(t!("非 db-kit 加密連線檔（檔頭不符）").into()));
     };
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
     cipher
         .decrypt(Nonce::from_slice(nonce), ct)
-        .map_err(|_| AppError::Storage("解密失敗（passphrase 錯誤或檔案損毀）".into()))
+        .map_err(|_| AppError::Storage(t!("解密失敗（passphrase 錯誤或檔案損毀）").into()))
 }

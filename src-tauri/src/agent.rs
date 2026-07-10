@@ -198,11 +198,11 @@ async fn workspace_dir(app: &AppHandle) -> AppResult<PathBuf> {
     let dir = app
         .path()
         .app_config_dir()
-        .map_err(|e| AppError::Storage(format!("無法取得設定目錄：{e}")))?
+        .map_err(|e| AppError::Storage(tf!("無法取得設定目錄：{e}", e = e)))?
         .join("agent-workspace");
     tokio::fs::create_dir_all(&dir)
         .await
-        .map_err(|e| AppError::Storage(format!("建立助手工作目錄失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("建立助手工作目錄失敗：{e}", e = e)))?;
     Ok(dir)
 }
 
@@ -241,7 +241,7 @@ pub async fn open_agent_workspace(app: AppHandle) -> AppResult<()> {
 pub async fn open_external(url: String) -> AppResult<()> {
     let u = url.trim();
     if !(u.starts_with("http://") || u.starts_with("https://")) {
-        return Err(AppError::Query("僅允許開啟 http / https 連結".to_string()));
+        return Err(AppError::Query(t!("僅允許開啟 http / https 連結").to_string()));
     }
     #[cfg(windows)]
     {
@@ -417,7 +417,7 @@ pub async fn claude_send(
 ) -> AppResult<()> {
     let bin = resolve_claude_bin()
         .await
-        .ok_or_else(|| AppError::Query("找不到 claude CLI，請先安裝 Claude Code 並登入".to_string()))?;
+        .ok_or_else(|| AppError::Query(t!("找不到 claude CLI，請先安裝 Claude Code 並登入").to_string()))?;
     let workspace = workspace_dir(&app).await?;
     let mode = mode.unwrap_or_else(|| "advise".to_string());
     let (perm, allowed) = flags_for_mode(&mode);
@@ -446,7 +446,7 @@ pub async fn claude_send(
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| AppError::Query(format!("啟動 claude 失敗：{e}")))?;
+        .map_err(|e| AppError::Query(tf!("啟動 claude 失敗：{e}", e = e)))?;
 
     // 提示由 stdin 餵入（避免 Windows 命令列長度上限與引號轉義問題），寫完即 EOF。
     if let Some(mut stdin) = child.stdin.take() {
@@ -496,7 +496,7 @@ pub async fn claude_send(
         if let Some(c) = code {
             if c != 0 {
                 let msg = if err.trim().is_empty() {
-                    format!("claude 以結束碼 {c} 退出")
+                    tf!("claude 以結束碼 {c} 退出", c = c)
                 } else {
                     err.trim().to_string()
                 };

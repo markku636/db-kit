@@ -198,7 +198,7 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
     const appliedQ = overwrite ? incQ.length : incQ.length - qConflicts;
     const appliedS = overwrite ? incS.length : incS.length - sConflicts;
     const skipped = overwrite ? 0 : conflicts;
-    toast.success(`已匯入 ${appliedQ} 收藏、${appliedS} 片段${skipped ? t("（略過 {skipped} 筆同名）", { skipped }) : ""}`);
+    toast.success(t("已匯入 {q} 收藏、{s} 片段", { q: appliedQ, s: appliedS }) + (skipped ? t("（略過 {skipped} 筆同名）", { skipped }) : ""));
   };
 
   // ---- 編輯模式 ----
@@ -325,7 +325,7 @@ export default function SavedQueriesDialog({ onClose, seedSql, editName }: Saved
             </div>
           </div>
         ) : grouped.length === 0 ? (
-          <div className="p-6 text-center text-fg/40 text-sm">找不到符合「{search}」的收藏。</div>
+          <div className="p-6 text-center text-fg/40 text-sm">{t("找不到符合「{search}」的收藏。", { search })}</div>
         ) : (
           grouped.map(({ group, label, items }) => (
             <div key={group || "__ungrouped__"}>

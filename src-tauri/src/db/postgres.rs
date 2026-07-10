@@ -370,13 +370,13 @@ impl DatabaseDriver for PostgresDriver {
         edit: &CellEdit,
     ) -> AppResult<u64> {
         if edit.pk_columns.is_empty() {
-            return Err(AppError::Query("此表無主鍵，無法安全更新".to_string()));
+            return Err(AppError::Query(t!("此表無主鍵，無法安全更新").to_string()));
         }
         if edit.pk_columns.len() != edit.pk_values.len() {
-            return Err(AppError::Query("主鍵欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("主鍵欄位與值數量不符").to_string()));
         }
         if edit.pk_values.iter().any(|v| v.is_none()) {
-            return Err(AppError::Query("主鍵值為 NULL，無法定位該列".to_string()));
+            return Err(AppError::Query(t!("主鍵值為 NULL，無法定位該列").to_string()));
         }
 
         let q_tbl = format!("{}.{}", quote_ident(database), quote_ident(table));
@@ -416,10 +416,10 @@ impl DatabaseDriver for PostgresDriver {
         row: &RowInsert,
     ) -> AppResult<u64> {
         if row.columns.is_empty() {
-            return Err(AppError::Query("未提供任何欄位".to_string()));
+            return Err(AppError::Query(t!("未提供任何欄位").to_string()));
         }
         if row.columns.len() != row.values.len() {
-            return Err(AppError::Query("欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("欄位與值數量不符").to_string()));
         }
         let q_tbl = format!("{}.{}", quote_ident(database), quote_ident(table));
         let cols = row
@@ -456,13 +456,13 @@ impl DatabaseDriver for PostgresDriver {
         del: &RowDelete,
     ) -> AppResult<u64> {
         if del.pk_columns.is_empty() {
-            return Err(AppError::Query("此表無主鍵，無法安全刪除".to_string()));
+            return Err(AppError::Query(t!("此表無主鍵，無法安全刪除").to_string()));
         }
         if del.pk_columns.len() != del.pk_values.len() {
-            return Err(AppError::Query("主鍵欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("主鍵欄位與值數量不符").to_string()));
         }
         if del.pk_values.iter().any(|v| v.is_none()) {
-            return Err(AppError::Query("主鍵值為 NULL，無法定位該列".to_string()));
+            return Err(AppError::Query(t!("主鍵值為 NULL，無法定位該列").to_string()));
         }
         let q_tbl = format!("{}.{}", quote_ident(database), quote_ident(table));
         // 主鍵比對把欄位轉 text（pk::text = $n），整數 / UUID 等主鍵亦可定位
@@ -544,7 +544,7 @@ impl DatabaseDriver for PostgresDriver {
         // 後端硬性護欄：系統 schema 一律拒絕（pg_* 與 information_schema）。
         // public 為使用者預設工作 schema，前端以 type-to-confirm 加強確認，此處不硬擋（容許刻意刪除重建）。
         if name.starts_with("pg_") || name.eq_ignore_ascii_case("information_schema") {
-            return Err(AppError::Query(format!("拒絕刪除 PostgreSQL 系統 schema「{name}」")));
+            return Err(AppError::Query(tf!("拒絕刪除 PostgreSQL 系統 schema「{name}」", name = name)));
         }
         // PG「刪除資料庫」對應 DROP SCHEMA … CASCADE（連帶其表 / 物件）。
         let sql = format!("DROP SCHEMA {} CASCADE", quote_ident(name));
@@ -612,7 +612,7 @@ impl DatabaseDriver for PostgresDriver {
             .map_err(|e| AppError::Query(e.to_string()))?;
         match row {
             Some(r) => r.try_get::<String, _>(0).map_err(|e| AppError::Query(e.to_string())),
-            None => Err(AppError::Query(format!("找不到「{name}」的定義"))),
+            None => Err(AppError::Query(tf!("找不到「{name}」的定義", name = name))),
         }
     }
 
@@ -990,21 +990,21 @@ impl DatabaseDriver for PostgresDriver {
         if let Some(r) = row {
             if let Ok(rows) = r.try_get::<i64, _>(0) {
                 if rows >= 0 {
-                    out.push(("列數（估計）".into(), rows.to_string()));
+                    out.push((t!("列數（估計）").into(), rows.to_string()));
                 }
             }
             if let Ok(sz) = r.try_get::<i64, _>(1) {
-                out.push(("總大小".into(), fmt_bytes(sz)));
+                out.push((t!("總大小").into(), fmt_bytes(sz)));
             }
             if let Ok(sz) = r.try_get::<i64, _>(2) {
-                out.push(("資料大小".into(), fmt_bytes(sz)));
+                out.push((t!("資料大小").into(), fmt_bytes(sz)));
             }
             if let Ok(sz) = r.try_get::<i64, _>(3) {
-                out.push(("索引大小".into(), fmt_bytes(sz)));
+                out.push((t!("索引大小").into(), fmt_bytes(sz)));
             }
             if let Ok(Some(c)) = r.try_get::<Option<String>, _>(4) {
                 if !c.is_empty() {
-                    out.push(("註解".into(), c));
+                    out.push((t!("註解").into(), c));
                 }
             }
         }
@@ -1090,7 +1090,7 @@ impl DatabaseDriver for PostgresDriver {
         // 不含索引 / 外鍵 / 約束等進階定義）。
         let cols = self.table_columns(database, table).await?;
         if cols.is_empty() {
-            return Err(AppError::Query("找不到該表的欄位".into()));
+            return Err(AppError::Query(t!("找不到該表的欄位").into()));
         }
         let pk = self.primary_key(database, table).await?;
         let mut lines: Vec<String> = cols
@@ -1165,7 +1165,7 @@ impl DatabaseDriver for PostgresDriver {
         unique: bool,
     ) -> AppResult<()> {
         if columns.is_empty() {
-            return Err(AppError::Query("請至少選擇一個欄位".into()));
+            return Err(AppError::Query(t!("請至少選擇一個欄位").into()));
         }
         let cols = columns.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
         let uniq = if unique { "UNIQUE " } else { "" };
@@ -1388,7 +1388,7 @@ fn build_where(
     let mut idx = start_idx;
     for f in filters {
         let op = filter_op_sql(&f.op)
-            .ok_or_else(|| AppError::Query(format!("不支援的運算子：{}", f.op)))?;
+            .ok_or_else(|| AppError::Query(tf!("不支援的運算子：{op}", op = f.op)))?;
         let col = quote_ident(&f.column);
         if op_needs_value(&f.op) {
             // 值一律以 text 綁定，但 PostgreSQL 嚴格型別不會把 text 隱式轉成

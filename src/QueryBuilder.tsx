@@ -531,7 +531,7 @@ export default function QueryBuilder({
           {(preview || previewErr) && (
             <div className="border-t border-fg/10 flex flex-col min-h-0 max-h-[45%]">
               <div className="px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10 shrink-0">
-                {previewErr ? <span className="text-red-400">{t("預覽錯誤")}</span> : `預覽結果 · ${preview?.rows.length ?? 0} 列`}
+                {previewErr ? <span className="text-red-400">{t("預覽錯誤")}</span> : t("預覽結果 · {n} 列", { n: preview?.rows.length ?? 0 })}
               </div>
               <div className="overflow-auto">
                 {previewErr ? (

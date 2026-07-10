@@ -336,7 +336,7 @@ export default function App() {
       useStore.getState().setConnections(saved.map((c) => ({ ...c, password: c.password ?? "" } as ConnectionConfig)));
       toast.success(n > 0 ? t("已匯入 {n} 個連線（含密碼）", { n }) : t("檔案內沒有連線"));
     } catch (e: any) {
-      toast.error(`匯入失敗：${e?.message ?? t("passphrase 錯誤或檔案損毀")}`);
+      toast.error(t("匯入失敗：{msg}", { msg: e?.message ?? t("passphrase 錯誤或檔案損毀") }));
     }
   };
 
@@ -534,9 +534,9 @@ function LockScreen({ onUnlock }: { onUnlock: () => void }) {
           ) : (
             <div className="text-[11px] text-fg/50 leading-relaxed max-w-[300px] text-left space-y-1.5">
               <p>
-                啟動密碼只是開啟 App 的閘門。刪除設定目錄中的
-                <span className="mono"> app_settings.json </span>即可解除，
-                <span className="text-fg/70">{t("不影響已儲存的連線")}</span>（連線機密存於系統 keychain）。
+                {t("啟動密碼只是開啟 App 的閘門。刪除設定目錄中的")}
+                <span className="mono"> app_settings.json </span>{t("即可解除，")}
+                <span className="text-fg/70">{t("不影響已儲存的連線")}</span>{t("（連線機密存於系統 keychain）。")}
               </p>
               <p className="mono break-all text-fg/40">%APPDATA%\dev.dbkit.app\app_settings.json</p>
               <button type="button"
@@ -723,9 +723,9 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
             )}
           </div>
           <p className="text-xs text-fg/50 mt-1.5 leading-relaxed">
-            啟用後，每次開啟 DB Kit 需先輸入此密碼才能進入。此密碼僅作為開啟 App 的閘門，
-            <span className="text-fg/70">{t("不會加密你的連線資料")}</span>（連線機密仍存於作業系統 keychain，
-            <span className="mono"> dbk </span>CLI 不受影響）。
+            {t("啟用後，每次開啟 {app} 需先輸入此密碼才能進入。此密碼僅作為開啟 App 的閘門，", { app: APP_NAME })}
+            <span className="text-fg/70">{t("不會加密你的連線資料")}</span>{t("（連線機密仍存於作業系統 keychain，")}
+            <span className="mono"> dbk </span>{t("CLI 不受影響）。")}
           </p>
         </div>
         {hasPw ? (
@@ -754,8 +754,8 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
             <Icon icon={Zap} size={15} /> {t("查詢防護")}
           </div>
           <p className="text-xs text-fg/50 leading-relaxed">
-            防止誤跑 <span className="mono">SELECT *</span> 大表把記憶體塞爆：查詢結果超過上限即截斷並顯示提示
-            （取完整結果請改用匯出）。變更立即生效。
+            {t("防止誤跑")} <span className="mono">SELECT *</span> {t("大表把記憶體塞爆：查詢結果超過上限即截斷並顯示提示")}{" "}
+            {t("（取完整結果請改用匯出）。變更立即生效。")}
           </p>
           <Field label={t("結果列數上限")}>
             <Select selectSize="md" value={String(guard.maxRows)}
@@ -1643,7 +1643,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     if (!name?.trim()) return;
     try {
       await api.createDatabase(connId, name.trim());
-      toast.success(`${isPg ? "Schema" : t("資料庫")}「${name.trim()}」已建立`);
+      toast.success(t("{kind}「{name}」已建立", { kind: isPg ? "Schema" : t("資料庫"), name: name.trim() }));
       refreshDbs(connId);
     } catch (e: any) {
       toast.error(e?.message ?? t("新增失敗"));
@@ -1883,12 +1883,12 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
             page += 1;
           }
         }
-        out += chunks.length ? chunks.join("\n") + "\n" : "-- （無資料）\n";
+        out += chunks.length ? chunks.join("\n") + "\n" : t("-- （無資料）") + "\n";
         if (truncated) toast.info(t("資料超過 {MAX} 列，僅傾印前 {v2} 列", { MAX, v2: MAX }));
         if (binaryWarn) toast.info(t("含二進位欄位，傾印的二進位值不完整；建議用「備份」做位元組精確匯出。"));
       }
       await api.saveTextFile(path, out);
-      toast.success(`已傾印 SQL（${withData ? t("結構與資料") : t("結構")}）`);
+      toast.success(t("已傾印 SQL（{mode}）", { mode: withData ? t("結構與資料") : t("結構") }));
     } catch (e: any) {
       toast.error(e?.message ?? t("傾印失敗"));
     }
@@ -2229,7 +2229,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       )}
       {q && visibleConns.length === 0 && !searchBusy && !(searchHits && searchHits.length > 0) && (
         <div className="p-4 text-xs text-fg/40 space-y-2">
-          <div>查無符合「{filter}」的連線或表。</div>
+          <div>{t("查無符合「{filter}」的連線或表。", { filter })}</div>
           {searchTarget ? (
             <Button variant="secondary" size="sm" icon={Search}
               onClick={() => setSearchObjs({ connId: searchTarget.id, kind: searchTarget.kind })}>
@@ -2343,7 +2343,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                         setRoutineMenu({ connId: c.id, db, kind: c.kind, routine: r, x: e.clientX, y: e.clientY });
                       }}
                       className="pl-16 pr-3 py-1 text-fg/55 hover:bg-fg/5 cursor-pointer truncate flex items-center gap-1.5"
-                      title={`${isProc ? t("預存程序") : t("函式")}「${r.name}」（雙擊設計 / 編輯；右鍵更多）`}
+                      title={t("{type}「{name}」（雙擊設計 / 編輯；右鍵更多）", { type: isProc ? t("預存程序") : t("函式"), name: r.name })}
                     >
                       <Icon icon={isProc ? Cog : FunctionSquare} size={14}
                         className={`shrink-0 ${isProc ? "text-amber-300/90" : "text-emerald-300/80"}`} />
@@ -2939,7 +2939,7 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
           return (
             <QueryTabButton
               key={qid}
-              label={i === 0 ? t("查詢") : `查詢 ${i + 1}`}
+              label={i === 0 ? t("查詢") : t("查詢 {n}", { n: i + 1 })}
               active={isActive}
               closable={queryTabs.length > 1}
               btnRef={isActive ? queryTabRef : undefined}
@@ -3499,7 +3499,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             // SSMS 行為：失敗前已取回的結果集照樣顯示（錯誤橫幅在上、部分結果在下），不必重跑前面的 SELECT。
             if (sets.length > 0) applyResultSets(sets);
             const wrapped = new Error(
-              userStatements.length > 1 ? `第 ${si + 1} 條語句失敗：${msg}` : msg,
+              userStatements.length > 1 ? t("第 {n} 條語句失敗：{msg}", { n: si + 1, msg }) : msg,
             );
             // 多語句批次：記住「出錯的那一條」，供 AI 分析修正對位（整批仍存在 errSql）。
             (wrapped as any).failedSql = userStatements[si];
@@ -3833,7 +3833,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const copyAllResults = () => {
     if (resultSets.length < 2) return;
     const md = resultSets
-      .map((s, i) => `## 結果 ${i + 1}\n\n\`\`\`sql\n${s.sql.trim()}\n\`\`\`\n\n${resultToMarkdown(s.res)}`)
+      .map((s, i) => `## ${t("結果")} ${i + 1}\n\n\`\`\`sql\n${s.sql.trim()}\n\`\`\`\n\n${resultToMarkdown(s.res)}`)
       .join("\n\n");
     copyToClipboard(md, t("已複製 {length} 個結果集 (Markdown)", { length: resultSets.length }));
   };
@@ -3847,7 +3847,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     // 多結果集：帶「作用中」那格對應的單條語句，讓 AI 拿到的查詢與結果一一對應。
     const srcSql = resultSets.length > 1 && resultSets[activeIdx]?.sql ? resultSets[activeIdx].sql : queryToRun();
     const prompt =
-      `以下是我在 db-kit 執行的查詢與結果，請幫我分析（資料意義、可能的異常或趨勢、可優化的查詢寫法，並可建議下一步查詢）：\n\n` +
+      t("以下是我在 db-kit 執行的查詢與結果，請幫我分析（資料意義、可能的異常或趨勢、可優化的查詢寫法，並可建議下一步查詢）：\n\n") +
       t("查詢：\n```sql\n{srcSql}\n```\n\n結果：\n{limited}{note}", { srcSql, limited: resultToMarkdown(limited), note });
     useAssistant.getState().ask(prompt);
   };
@@ -3861,12 +3861,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     // 讓 AI 不必自己數第幾條，並要求回傳完整批次以利一鍵貼回（不丟失其他正確語句）。
     const multi = !!errStmt && errStmt.trim() !== "" && errStmt.trim() !== full.trim();
     const sqlSection = multi
-      ? `這是多語句批次，失敗的是其中這一條（請回傳修正後的【完整批次】，保留其他正確語句）：\n` +
+      ? t("這是多語句批次，失敗的是其中這一條（請回傳修正後的【完整批次】，保留其他正確語句）：\n") +
         t("```sql\n{errStmt}\n```\n\n完整批次：\n```sql\n{full}\n```\n\n", { errStmt, full })
       : `SQL：\n\`\`\`sql\n${full}\n\`\`\`\n\n`;
     const prompt =
       t("以下 SQL 在 db-kit 執行時發生錯誤。請幫我：①用中文簡述錯誤原因；") +
-      `②給出修正後、可直接執行的 SQL（放進 \`\`\`sql 程式碼區塊，方便我一鍵貼回編輯器）。\n\n` +
+      t("②給出修正後、可直接執行的 SQL（放進 ```sql 程式碼區塊，方便我一鍵貼回編輯器）。\n\n") +
       t("資料庫類型：{dialect}\n\n", { dialect }) +
       sqlSection +
       t("錯誤訊息：\n```\n{err}\n```", { err });
@@ -4186,7 +4186,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 title={t("停止（Esc）：於下一條語句前中止，已完成的結果保留")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-600/80 hover:bg-red-600">
                 <Icon icon={Square} size={13} />
-                {t("停止")}{runProgress ? `（第 ${runProgress.done + 1}/${runProgress.total} 條）` : ""}
+                {t("停止")}{runProgress ? t("（第 {done}/{total} 條）", { done: runProgress.done + 1, total: runProgress.total }) : ""}
               </button>
             ) : (
               <button type="button"
@@ -4284,13 +4284,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             {running && liveMs !== null ? (
               <span className="inline-flex items-center gap-1 text-fg/70" title={t("執行中經過時間")}>
                 <Icon icon={Loader2} size={12} className="animate-spin" />
-                {runProgress ? `第 ${runProgress.done + 1}/${runProgress.total} 條 · ` : ""}{fmtElapsed(liveMs)}
+                {runProgress ? t("第 {done}/{total} 條 · ", { done: runProgress.done + 1, total: runProgress.total }) : ""}{fmtElapsed(liveMs)}
               </span>
             ) : elapsed !== null && <span className="inline-flex items-center gap-1" title={t("執行時間")}><Icon icon={Clock} size={12} />{fmtElapsed(elapsed)}</span>}
             {bottomTab === "result" && result?.truncated && (
               <span className="inline-flex items-center gap-1.5 text-amber-400/90"
                 title={t("後端已於列數上限截斷（防止大結果集塞爆記憶體；上限可於設定調整；取完整結果請用匯出）")}>
-                已截斷於 {result.rows.length.toLocaleString()} 列
+                {t("已截斷於 {n} 列", { n: result.rows.length.toLocaleString() })}
               </span>
             )}
             {bottomTab === "result" && rowsInfo && <span>{rowsInfo}</span>}
@@ -4738,7 +4738,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
         </span>
         {selStats && (
           <span className="ml-auto text-xs text-fg/45 mono whitespace-nowrap" title={t("框選範圍統計（Shift+點選）")}>
-            已選 {selStats.rows}×{selStats.colsN}（{selStats.count} 格）
+            {t("已選 {rows}×{colsN}（{count} 格）", { rows: selStats.rows, colsN: selStats.colsN, count: selStats.count })}
             {selStats.numCount > 0 &&
               t(" · 數值 {numCount} · Σ {sum} · 平均 {avg}", { numCount: selStats.numCount, sum: fmtNum(selStats.sum), avg: fmtNum(selStats.avg) })}
             {selStats.numCount > 1 &&
@@ -4813,7 +4813,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
 
       {viewRows.length > MAX_RENDER && (
         <div className="px-3 py-2 text-xs text-amber-300/80 bg-amber-500/5 border-t border-fg/10">
-          僅渲染前 {MAX_RENDER.toLocaleString()} / 已取回 {viewRows.length.toLocaleString()} 列（避免卡頓）；「複製 / 匯出」仍取全部已取回列。
+          {t("僅渲染前 {rendered} / 已取回 {fetched} 列（避免卡頓）；「複製 / 匯出」仍取全部已取回列。", { rendered: MAX_RENDER.toLocaleString(), fetched: viewRows.length.toLocaleString() })}
         </div>
       )}
 
@@ -4859,7 +4859,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
             onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
               <span className="font-medium text-sm">{t("列詳情")}</span>
-              <span className="text-xs text-fg/40">第 {rowDetail + 1} 列</span>
+              <span className="text-xs text-fg/40">{t("第 {n} 列", { n: rowDetail + 1 })}</span>
               <button type="button" onClick={() => setRowDetail(null)} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
             </div>
             <div className="overflow-auto divide-y divide-fg/5">

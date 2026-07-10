@@ -88,7 +88,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
 
   const convertCharset = async () => {
     if (!(await uiConfirm(
-      `將資料表「${table}」轉換為字元集 ${charset}${collation.trim() ? ` / ${collation.trim()}` : ""}？\n此操作會重寫所有文字欄位，大表可能較久且鎖表。`,
+      t("將資料表「{table}」轉換為字元集 {target}？", { table, target: charset + (collation.trim() ? " / " + collation.trim() : "") }) + "\n" + t("此操作會重寫所有文字欄位，大表可能較久且鎖表。"),
       { title: t("轉換字元集"), danger: true, confirmText: t("轉換") }))) return;
     setConverting(true);
     try {
@@ -200,7 +200,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
             </Section>
           )}
 
-          <Section title={`欄位（${cols?.length ?? 0}）`}>
+          <Section title={t("欄位（{count}）", { count: cols?.length ?? 0 })}>
             {cols == null ? <Empty text={t("載入中…")} /> : cols.length === 0 ? <Empty text={t("（無）")} /> : (
               <table className="w-full text-xs">
                 <thead className="text-fg/40">
@@ -222,7 +222,7 @@ export default function TableProperties({ connId, db, table, kind, objKind, onCl
             )}
           </Section>
 
-          <Section title={`索引（${idx?.length ?? 0}）`}>
+          <Section title={t("索引（{count}）", { count: idx?.length ?? 0 })}>
             {idx == null ? <Empty text={t("載入中…")} /> : idx.length === 0 ? <Empty text={t("（無）")} /> : (
               <table className="w-full text-xs">
                 <thead className="text-fg/40">

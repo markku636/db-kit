@@ -517,16 +517,16 @@ impl DatabaseDriver for MysqlDriver {
     ) -> AppResult<u64> {
         if edit.pk_columns.is_empty() {
             return Err(AppError::Query(
-                "此表無主鍵，無法安全更新".to_string(),
+                t!("此表無主鍵，無法安全更新").to_string(),
             ));
         }
         if edit.pk_columns.len() != edit.pk_values.len() {
-            return Err(AppError::Query("主鍵欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("主鍵欄位與值數量不符").to_string()));
         }
         // 任一主鍵值為 NULL 則拒絕（無法以 = 安全比對）。
         if edit.pk_values.iter().any(|v| v.is_none()) {
             return Err(AppError::Query(
-                "主鍵值為 NULL，無法定位該列".to_string(),
+                t!("主鍵值為 NULL，無法定位該列").to_string(),
             ));
         }
 
@@ -564,10 +564,10 @@ impl DatabaseDriver for MysqlDriver {
         row: &RowInsert,
     ) -> AppResult<u64> {
         if row.columns.is_empty() {
-            return Err(AppError::Query("未提供任何欄位".to_string()));
+            return Err(AppError::Query(t!("未提供任何欄位").to_string()));
         }
         if row.columns.len() != row.values.len() {
-            return Err(AppError::Query("欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("欄位與值數量不符").to_string()));
         }
         let q_db = quote_ident(database);
         let q_tbl = quote_ident(table);
@@ -597,13 +597,13 @@ impl DatabaseDriver for MysqlDriver {
         del: &RowDelete,
     ) -> AppResult<u64> {
         if del.pk_columns.is_empty() {
-            return Err(AppError::Query("此表無主鍵，無法安全刪除".to_string()));
+            return Err(AppError::Query(t!("此表無主鍵，無法安全刪除").to_string()));
         }
         if del.pk_columns.len() != del.pk_values.len() {
-            return Err(AppError::Query("主鍵欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("主鍵欄位與值數量不符").to_string()));
         }
         if del.pk_values.iter().any(|v| v.is_none()) {
-            return Err(AppError::Query("主鍵值為 NULL，無法定位該列".to_string()));
+            return Err(AppError::Query(t!("主鍵值為 NULL，無法定位該列").to_string()));
         }
         let q_db = quote_ident(database);
         let q_tbl = quote_ident(table);
@@ -671,11 +671,12 @@ impl DatabaseDriver for MysqlDriver {
     async fn drop_database(&self, name: &str) -> AppResult<()> {
         // 後端硬性護欄：系統庫一律拒絕；使用中的預設庫亦拒絕（drop 後連線預設 schema 失效）。
         if MYSQL_SYSTEM_DBS.iter().any(|s| s.eq_ignore_ascii_case(name)) {
-            return Err(AppError::Query(format!("拒絕刪除 MySQL 系統資料庫「{name}」")));
+            return Err(AppError::Query(tf!("拒絕刪除 MySQL 系統資料庫「{name}」", name = name)));
         }
         if self.default_db.as_deref() == Some(name) {
-            return Err(AppError::Query(format!(
-                "「{name}」是此連線使用中的預設資料庫，無法刪除；請改用其他連線或先變更連線預設庫"
+            return Err(AppError::Query(tf!(
+                "「{name}」是此連線使用中的預設資料庫，無法刪除；請改用其他連線或先變更連線預設庫",
+                name = name
             )));
         }
         let sql = format!("DROP DATABASE {}", quote_ident(name));
@@ -770,7 +771,7 @@ impl DatabaseDriver for MysqlDriver {
             "function" => format!("SHOW CREATE FUNCTION {qn}"),
             "trigger" => format!("SHOW CREATE TRIGGER {qn}"),
             "event" => format!("SHOW CREATE EVENT {qn}"),
-            _ => return Err(AppError::Query(format!("未知的程序類型「{routine_type}」"))),
+            _ => return Err(AppError::Query(tf!("未知的程序類型「{routine_type}」", routine_type = routine_type))),
         };
         // SHOW CREATE EVENT 的定義在第 4 欄（index 3）；其餘在第 3 欄（index 2）。
         let def_idx = if routine_type == "event" { 3 } else { 2 };
@@ -778,7 +779,7 @@ impl DatabaseDriver for MysqlDriver {
             .fetch_one(&self.pool)
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
-        str_col(&row, def_idx).ok_or_else(|| AppError::Query("無法取得定義（可能權限不足）".into()))
+        str_col(&row, def_idx).ok_or_else(|| AppError::Query(t!("無法取得定義（可能權限不足）").into()))
     }
 
     async fn search_objects(&self, opts: &SearchOptions) -> AppResult<Vec<SearchHit>> {
@@ -1082,7 +1083,7 @@ impl DatabaseDriver for MysqlDriver {
             Some(t) => t,
             None => {
                 return Ok(ValidationReport::skipped(
-                    "無法辨識的 MySQL DDL，已略過伺服器驗證（僅前端結構檢查）。".into(),
+                    t!("無法辨識的 MySQL DDL，已略過伺服器驗證（僅前端結構檢查）。").into(),
                 ))
             }
         };
@@ -1091,15 +1092,15 @@ impl DatabaseDriver for MysqlDriver {
             "function" => "FUNCTION",
             "trigger" => {
                 return Ok(ValidationReport::skipped(
-                    "MySQL 觸發器需掛載於真實資料表，無法安全試建驗證；已略過伺服器驗證（僅前端結構檢查）。".into(),
+                    t!("MySQL 觸發器需掛載於真實資料表，無法安全試建驗證；已略過伺服器驗證（僅前端結構檢查）。").into(),
                 ))
             }
             "event" => {
                 return Ok(ValidationReport::skipped(
-                    "MySQL 事件無法安全試建驗證；已略過伺服器驗證（僅前端結構檢查）。".into(),
+                    t!("MySQL 事件無法安全試建驗證；已略過伺服器驗證（僅前端結構檢查）。").into(),
                 ))
             }
-            _ => return Ok(ValidationReport::skipped("未知的 MySQL routine 類型，已略過伺服器驗證。".into())),
+            _ => return Ok(ValidationReport::skipped(t!("未知的 MySQL routine 類型，已略過伺服器驗證。").into())),
         };
 
         // 試建用 schema：優先前端帶入的 database，否則連線預設庫。
@@ -1110,7 +1111,7 @@ impl DatabaseDriver for MysqlDriver {
         };
         if schema.is_empty() {
             return Ok(ValidationReport::skipped(
-                "未指定資料庫，MySQL 無法試建驗證；已略過伺服器驗證（僅前端結構檢查）。".into(),
+                t!("未指定資料庫，MySQL 無法試建驗證；已略過伺服器驗證（僅前端結構檢查）。").into(),
             ));
         }
 
@@ -1138,13 +1139,13 @@ impl DatabaseDriver for MysqlDriver {
                             // 權限不足（無 CREATE ROUTINE / DB 存取）：非語法問題，略過。
                             1142 | 1044 | 1045 | 1370 => {
                                 return Ok(ValidationReport::skipped(
-                                    "目前帳號缺少建立 routine 的權限，無法在伺服器驗證（僅前端結構檢查）。".into(),
+                                    t!("目前帳號缺少建立 routine 的權限，無法在伺服器驗證（僅前端結構檢查）。").into(),
                                 ))
                             }
                             // 函式 binlog 安全限制：非語法問題，略過。
                             1418 => {
                                 return Ok(ValidationReport::skipped(
-                                    "函式需宣告 DETERMINISTIC / READS SQL DATA（或具備權限）才能試建，已略過伺服器驗證。".into(),
+                                    t!("函式需宣告 DETERMINISTIC / READS SQL DATA（或具備權限）才能試建，已略過伺服器驗證。").into(),
                                 ))
                             }
                             _ => {
@@ -1206,17 +1207,17 @@ impl DatabaseDriver for MysqlDriver {
                     }
                 }
             };
-            push_str(&mut out, "引擎", 0);
-            push_str(&mut out, "列數（估計）", 1);
+            push_str(&mut out, t!("引擎"), 0);
+            push_str(&mut out, t!("列數（估計）"), 1);
             if let Some(b) = str_col(&r, 2).and_then(|s| s.parse::<i64>().ok()) {
-                out.push(("資料大小".into(), fmt_bytes(b)));
+                out.push((t!("資料大小").into(), fmt_bytes(b)));
             }
             if let Some(b) = str_col(&r, 3).and_then(|s| s.parse::<i64>().ok()) {
-                out.push(("索引大小".into(), fmt_bytes(b)));
+                out.push((t!("索引大小").into(), fmt_bytes(b)));
             }
-            push_str(&mut out, "排序規則", 4);
-            push_str(&mut out, "建立時間", 5);
-            push_str(&mut out, "註解", 6);
+            push_str(&mut out, t!("排序規則"), 4);
+            push_str(&mut out, t!("建立時間"), 5);
+            push_str(&mut out, t!("註解"), 6);
         }
         Ok(out)
     }
@@ -1295,7 +1296,7 @@ impl DatabaseDriver for MysqlDriver {
             .map_err(|e| AppError::Query(e.to_string()))?;
         str_col(&row, 1)
             .map(|ddl| format!("{ddl};"))
-            .ok_or_else(|| AppError::Query("無法取得建表語句".into()))
+            .ok_or_else(|| AppError::Query(t!("無法取得建表語句").into()))
     }
 
     async fn table_indexes(&self, database: &str, table: &str) -> AppResult<Vec<IndexInfo>> {
@@ -1356,7 +1357,7 @@ impl DatabaseDriver for MysqlDriver {
         unique: bool,
     ) -> AppResult<()> {
         if columns.is_empty() {
-            return Err(AppError::Query("請至少選擇一個欄位".into()));
+            return Err(AppError::Query(t!("請至少選擇一個欄位").into()));
         }
         let cols = columns.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
         let uniq = if unique { "UNIQUE " } else { "" };
@@ -1466,7 +1467,7 @@ fn build_where(filters: &[Filter], match_any: bool) -> AppResult<(String, Vec<Op
     let mut binds = Vec::new();
     for f in filters {
         let op = filter_op_sql(&f.op)
-            .ok_or_else(|| AppError::Query(format!("不支援的運算子：{}", f.op)))?;
+            .ok_or_else(|| AppError::Query(tf!("不支援的運算子：{op}", op = f.op)))?;
         let col = quote_ident(&f.column);
         if op_needs_value(&f.op) {
             clauses.push(format!("{col} {op} ?"));

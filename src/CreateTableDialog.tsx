@@ -145,7 +145,7 @@ export default function CreateTableDialog({ connId, database, kind, onClose, onC
           </div>
 
           {dupCol && (
-            <div className="text-xs text-danger">欄名重複：「{dupCol}」——請改名後再建立。</div>
+            <div className="text-xs text-danger">{t("欄名重複：「{dupCol}」——請改名後再建立。", { dupCol })}</div>
           )}
 
           <div>

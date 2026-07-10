@@ -957,7 +957,7 @@ impl ConnectionManager {
     pub fn redis_driver(&self, id: &str) -> AppResult<Arc<RedisDriver>> {
         match &self.get(id)?.active {
             Active::Redis(d) => Ok(d.clone()),
-            _ => Err(AppError::Unsupported("此連線不是 Redis".into())),
+            _ => Err(AppError::Unsupported(t!("此連線不是 Redis").into())),
         }
     }
 
@@ -967,7 +967,7 @@ impl ConnectionManager {
     pub fn mongo_driver(&self, id: &str) -> AppResult<Arc<MongoDriver>> {
         match &self.get(id)?.active {
             Active::Mongo(d) => Ok(d.clone()),
-            _ => Err(AppError::Unsupported("此連線不是 MongoDB".into())),
+            _ => Err(AppError::Unsupported(t!("此連線不是 MongoDB").into())),
         }
     }
 

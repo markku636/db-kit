@@ -70,9 +70,9 @@ fn ensure_client(explicit: Option<&str>) -> AppResult<()> {
         // 已初始化：僅在「明確要求了不同目錄」時報錯（process-wide 限制，換目錄需重啟）。
         if let (Some(req), cur) = (&requested, &*used) {
             if cur.as_deref() != Some(req.as_str()) {
-                return Err(AppError::Connect(format!(
-                    "Oracle client 已以「{}」初始化；變更 client 目錄需重新啟動應用程式",
-                    cur.as_deref().unwrap_or("PATH")
+                return Err(AppError::Connect(tf!(
+                    "Oracle client 已以「{dir}」初始化；變更 client 目錄需重新啟動應用程式",
+                    dir = cur.as_deref().unwrap_or("PATH")
                 )));
             }
         }
@@ -86,7 +86,7 @@ fn ensure_client(explicit: Option<&str>) -> AppResult<()> {
     if let Some(dir) = &requested {
         params
             .oracle_client_lib_dir(dir.as_str())
-            .map_err(|e| AppError::Connect(format!("client 目錄無效：{e}")))?;
+            .map_err(|e| AppError::Connect(tf!("client 目錄無效：{e}", e = e)))?;
     }
     match params.init() {
         Ok(_) => {
@@ -101,11 +101,10 @@ fn ensure_client(explicit: Option<&str>) -> AppResult<()> {
 fn friendly_ora_error(e: &oracle::Error) -> String {
     let msg = e.to_string();
     if msg.contains("DPI-1047") {
-        format!(
-            "找不到 Oracle Instant Client（或架構不符，需 64 位元）。\n\
-             請安裝 Instant Client Basic / Basic Light 並將其目錄加入 PATH，\
-             或在連線設定的「Instant Client 目錄」填入路徑後重試。\n\
-             下載：{CLIENT_DOWNLOAD_URL}\n（{msg}）"
+        tf!(
+            "找不到 Oracle Instant Client（或架構不符，需 64 位元）。\n請安裝 Instant Client Basic / Basic Light 並將其目錄加入 PATH，或在連線設定的「Instant Client 目錄」填入路徑後重試。\n下載：{url}\n（{msg}）",
+            url = CLIENT_DOWNLOAD_URL,
+            msg = msg
         )
     } else {
         msg
@@ -119,7 +118,7 @@ fn build_connect_string(cfg: &ConnectionConfig) -> AppResult<String> {
     let target = target.trim().to_string();
     if target.is_empty() {
         return Err(AppError::Connect(
-            "Oracle 連線需在「資料庫」欄填入服務名稱（Service Name）/ SID / TNS 別名".into(),
+            t!("Oracle 連線需在「資料庫」欄填入服務名稱（Service Name）/ SID / TNS 別名").into(),
         ));
     }
     match cfg.options.get("connect_type").map(String::as_str).unwrap_or("service") {
@@ -182,13 +181,13 @@ fn build_order(sorts: &[Sort]) -> String {
 /// 主鍵定位 WHERE（無主鍵 / 主鍵含 NULL 拒絕，避免影響多列）。
 fn pk_where(pk_columns: &[String], pk_values: &[Option<String>]) -> AppResult<String> {
     if pk_columns.is_empty() {
-        return Err(AppError::Query("此表無主鍵，拒絕就地編輯（避免影響多列）".into()));
+        return Err(AppError::Query(t!("此表無主鍵，拒絕就地編輯（避免影響多列）").into()));
     }
     let mut parts: Vec<String> = Vec::new();
     for (c, v) in pk_columns.iter().zip(pk_values.iter()) {
         match v {
             Some(val) => parts.push(format!("{} = {}", q(c), lit(val))),
-            None => return Err(AppError::Query("主鍵值為 NULL，無法安全定位該列".into())),
+            None => return Err(AppError::Query(t!("主鍵值為 NULL，無法安全定位該列").into())),
         }
     }
     Ok(parts.join(" AND "))
@@ -333,7 +332,7 @@ impl OracleDriver {
             f(&conn)
         })
         .await
-        .map_err(|e| AppError::Query(format!("背景執行緒失敗：{e}")))?
+        .map_err(|e| AppError::Query(tf!("背景執行緒失敗：{e}", e = e)))?
     }
 
     /// 主鍵欄位（依約束位置排序）。
@@ -384,8 +383,8 @@ impl DatabaseDriver for OracleDriver {
             Ok(pool)
         });
         let pool = match tokio::time::timeout(Duration::from_secs(30), join).await {
-            Err(_) => return Err(AppError::Connect("Oracle 連線逾時（30 秒）".into())),
-            Ok(Err(e)) => return Err(AppError::Connect(format!("背景執行緒失敗：{e}"))),
+            Err(_) => return Err(AppError::Connect(t!("Oracle 連線逾時（30 秒）").into())),
+            Ok(Err(e)) => return Err(AppError::Connect(tf!("背景執行緒失敗：{e}", e = e))),
             Ok(Ok(r)) => r?,
         };
         Ok(Self { pool: Arc::new(pool), username })
@@ -583,10 +582,10 @@ impl DatabaseDriver for OracleDriver {
 
     async fn insert_row(&self, database: &str, table: &str, row: &RowInsert) -> AppResult<u64> {
         if row.columns.len() != row.values.len() {
-            return Err(AppError::Query("欄位與值數量不符".into()));
+            return Err(AppError::Query(t!("欄位與值數量不符").into()));
         }
         if row.columns.is_empty() {
-            return Err(AppError::Query("至少需一個欄位".into()));
+            return Err(AppError::Query(t!("至少需一個欄位").into()));
         }
         let cols: Vec<String> = row.columns.iter().map(|c| q(c)).collect();
         let vals: Vec<String> = row
@@ -666,7 +665,7 @@ impl DatabaseDriver for OracleDriver {
         unique: bool,
     ) -> AppResult<()> {
         if columns.is_empty() {
-            return Err(AppError::Query("索引至少需一個欄位".into()));
+            return Err(AppError::Query(t!("索引至少需一個欄位").into()));
         }
         let cols: Vec<String> = columns.iter().map(|c| q(c)).collect();
         let sql = format!(
@@ -732,7 +731,7 @@ impl DatabaseDriver for OracleDriver {
             get("TABLE")
                 .or_else(|_| get("VIEW"))
                 .map(|s| s.trim().to_string())
-                .map_err(|e| AppError::Query(format!("取得 DDL 失敗（需物件擁有者或 SELECT_CATALOG_ROLE）：{e}")))
+                .map_err(|e| AppError::Query(tf!("取得 DDL 失敗（需物件擁有者或 SELECT_CATALOG_ROLE）：{e}", e = e)))
         })
         .await
     }
@@ -794,7 +793,7 @@ impl DatabaseDriver for OracleDriver {
                 }
             }
             if body.trim().is_empty() {
-                return Err(AppError::Query("找不到原始碼（權限不足或物件不存在）".into()));
+                return Err(AppError::Query(t!("找不到原始碼（權限不足或物件不存在）").into()));
             }
             // all_source 內容以 "PROCEDURE name …" 開頭，補 CREATE OR REPLACE 成可執行 DDL。
             Ok(format!("CREATE OR REPLACE {}", body.trim_start()))
@@ -805,7 +804,7 @@ impl DatabaseDriver for OracleDriver {
     async fn explain(&self, sql: &str) -> AppResult<QueryResult> {
         let stmt_sql = sql.trim().trim_end_matches(';').trim().to_string();
         if stmt_sql.is_empty() {
-            return Err(AppError::Query("沒有可解釋的語句".into()));
+            return Err(AppError::Query(t!("沒有可解釋的語句").into()));
         }
         // EXPLAIN PLAN 寫入 session 的 PLAN_TABLE，DBMS_XPLAN.DISPLAY 讀最近一筆——
         // 兩步必須在「同一條連線」（with_conn 的同一閉包）內完成。
@@ -944,13 +943,13 @@ impl DatabaseDriver for OracleDriver {
                 &[&owner, &tbl],
             ) {
                 if let Ok(n) = row.get::<usize, i64>(0) {
-                    out.push(("列數（統計估計）".into(), n.to_string()));
+                    out.push((t!("列數（統計估計）").into(), n.to_string()));
                 }
                 if let Ok(t) = row.get::<usize, String>(1) {
-                    out.push(("統計時間".into(), t));
+                    out.push((t!("統計時間").into(), t));
                 }
                 if let Ok(ts) = row.get::<usize, String>(2) {
-                    out.push(("表空間".into(), ts));
+                    out.push((t!("表空間").into(), ts));
                 }
             }
             if let Ok(row) = conn.query_row(
@@ -959,7 +958,7 @@ impl DatabaseDriver for OracleDriver {
             ) {
                 if let Ok(c) = row.get::<usize, String>(0) {
                     if !c.trim().is_empty() {
-                        out.push(("註解".into(), c));
+                        out.push((t!("註解").into(), c));
                     }
                 }
             }
@@ -1068,7 +1067,7 @@ impl DatabaseDriver for OracleDriver {
 
     async fn validate_ddl(&self, _database: &str, _sql: &str) -> AppResult<ValidationReport> {
         // Oracle DDL 隱式 commit，無法以「交易 + rollback」安全試行；DBMS_SQL.PARSE 對 DDL 會直接執行。
-        Ok(ValidationReport::skipped("Oracle DDL 隱式提交，無法安全試行驗證；將直接執行".into()))
+        Ok(ValidationReport::skipped(t!("Oracle DDL 隱式提交，無法安全試行驗證；將直接執行").into()))
     }
 
     async fn alter_table(&self, database: &str, table: &str, op: &AlterOp) -> AppResult<()> {
@@ -1095,20 +1094,20 @@ impl DatabaseDriver for OracleDriver {
                 let nn = if *nullable { " NULL" } else { " NOT NULL" };
                 format!("ALTER TABLE {target} MODIFY ({} {}{nn})", q(name), data_type.trim())
             }
-            _ => return Err(AppError::Unsupported("Oracle 尚未支援此結構操作".into())),
+            _ => return Err(AppError::Unsupported(t!("Oracle 尚未支援此結構操作").into())),
         };
         self.with_conn(move |conn| conn.execute(&sql, &[]).map(|_| ()).map_err(ora_q)).await
     }
 
     async fn create_database(&self, _name: &str) -> AppResult<()> {
         Err(AppError::Unsupported(
-            "Oracle 的資料庫＝schema（使用者帳號）；請由 DBA 以 CREATE USER 管理".into(),
+            t!("Oracle 的資料庫＝schema（使用者帳號）；請由 DBA 以 CREATE USER 管理").into(),
         ))
     }
 
     async fn drop_database(&self, _name: &str) -> AppResult<()> {
         Err(AppError::Unsupported(
-            "Oracle 的 schema 即使用者帳號，請由 DBA 以 DROP USER 管理（本工具不代理此高風險操作）".into(),
+            t!("Oracle 的 schema 即使用者帳號，請由 DBA 以 DROP USER 管理（本工具不代理此高風險操作）").into(),
         ))
     }
 

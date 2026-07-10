@@ -20,17 +20,17 @@ const NEW_TYPES: Record<string, string[]> = {
 };
 
 // 單一 CREATE 語句範本（執行時整段以一次 runQuery 送出，不前端切句，避免內部 ; 破壞）。
-function template(kind: DbKind, type: string): string {
+function template(kind: DbKind, type: string, t: ReturnType<typeof useT>): string {
   if (kind === "mysql" || kind === "mariadb") {
     if (type === "procedure") return "CREATE PROCEDURE proc_name(IN p1 INT)\nBEGIN\n  SELECT p1;\nEND";
     if (type === "function") return "CREATE FUNCTION fn_name(p1 INT) RETURNS INT DETERMINISTIC\nBEGIN\n  RETURN p1 + 1;\nEND";
-    if (type === "event") return "CREATE EVENT evt_name\nON SCHEDULE EVERY 1 DAY\nCOMMENT ''\nDO\nBEGIN\n  -- 你的排程 SQL，例如清理舊資料；\n  -- DELETE FROM logs WHERE created < NOW() - INTERVAL 30 DAY;\nEND";
+    if (type === "event") return "CREATE EVENT evt_name\nON SCHEDULE EVERY 1 DAY\nCOMMENT ''\nDO\nBEGIN\n  -- " + t("你的排程 SQL，例如清理舊資料；") + "\n  -- DELETE FROM logs WHERE created < NOW() - INTERVAL 30 DAY;\nEND";
     return "CREATE TRIGGER trg_name BEFORE INSERT ON table_name\nFOR EACH ROW\nBEGIN\n  -- SET NEW.col = ...;\nEND";
   }
   if (kind === "postgres") {
     if (type === "function") return "CREATE OR REPLACE FUNCTION fn_name(p1 integer)\nRETURNS integer LANGUAGE plpgsql AS $$\nBEGIN\n  RETURN p1 + 1;\nEND;\n$$";
     if (type === "procedure") return "CREATE OR REPLACE PROCEDURE proc_name(p1 integer)\nLANGUAGE plpgsql AS $$\nBEGIN\n  -- ...\nEND;\n$$";
-    return "-- 觸發器需先有回傳 trigger 的函式\nCREATE TRIGGER trg_name BEFORE INSERT ON table_name\nFOR EACH ROW EXECUTE FUNCTION trg_fn()";
+    return "-- " + t("觸發器需先有回傳 trigger 的函式") + "\nCREATE TRIGGER trg_name BEFORE INSERT ON table_name\nFOR EACH ROW EXECUTE FUNCTION trg_fn()";
   }
   return "CREATE TRIGGER trg_name AFTER INSERT ON table_name\nBEGIN\n  -- ...\nEND";
 }
@@ -68,7 +68,7 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
   useEffect(() => { void refresh(); }, [refresh]);
 
   const openNew = (type: string) => {
-    setSqlText(template(kind, type));
+    setSqlText(template(kind, type, t));
     setEditingRoutine(null);
     setReplace(false);
     setDiags(undefined);
@@ -128,7 +128,7 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
         toast.success(t("語法驗證通過"));
       } else if (r.validated) {
         const where = r.line != null ? t("第 {line} 行：", { line: r.line }) : "";
-        toast.error(`語法錯誤 — ${where}${r.message ?? ""}`);
+        toast.error(t("語法錯誤 — {where}{message}", { where, message: r.message ?? "" }));
         setDiags([{ line: r.line ?? undefined, severity: "error", message: r.message ?? t("語法錯誤") }]);
       } else {
         toast.info(r.caveat ?? t("已略過伺服器驗證（僅前端結構檢查）"));

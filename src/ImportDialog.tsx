@@ -72,7 +72,9 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
         ? await api.importExcel(connId, database, table, filePath, opts)
         : await api.importCsv(connId, database, table, filePath, opts);
       setResult(res);
-      if (res.failed === 0) toast.success(`已匯入 ${res.imported} 列${isExcel ? "（Excel）" : ""}`);
+      if (res.failed === 0) toast.success(isExcel
+        ? t("已匯入 {n} 列（Excel）", { n: res.imported })
+        : t("已匯入 {n} 列", { n: res.imported }));
       else toast.error(t("匯入 {imported} 列、失敗 {failed} 列", { imported: res.imported, failed: res.failed }));
       onDone?.(); // 重新整理資料格以顯示已匯入的列
     } catch (e: any) {
@@ -102,9 +104,9 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
       {filePath && (
         <div className="text-xs text-fg/55 truncate" title={filePath}>
           {t("檔案：")}<span className="mono">{filePath.split(/[\\/]/).pop()}</span>
-          {preview && <span className="text-fg/40"> · {preview.total_rows} 列資料 · {preview.columns.length} 欄</span>}
+          {preview && <span className="text-fg/40">{t(" · {rows} 列資料 · {cols} 欄", { rows: preview.total_rows, cols: preview.columns.length })}</span>}
           {preview && !overrideNames && targetCols.length > 0 && preview.columns.length !== targetCols.length && (
-            <span className="text-amber-400"> · 欄數與目標（{targetCols.length}）不同，可能需「重新指定欄名」</span>
+            <span className="text-amber-400">{t(" · 欄數與目標（{n}）不同，可能需「重新指定欄名」", { n: targetCols.length })}</span>
           )}
         </div>
       )}
@@ -180,8 +182,8 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
           {result && (
             <div className="mt-1 text-sm rounded border border-fg/10 bg-inset p-3 space-y-1">
               <div>
-                匯入 <span className="text-emerald-400">{result.imported}</span> 列
-                {result.failed > 0 && <> · 失敗 <span className="text-red-400">{result.failed}</span> 列</>}
+                <span className="text-emerald-400">{t("匯入 {n} 列", { n: result.imported })}</span>
+                {result.failed > 0 && <> · <span className="text-red-400">{t("失敗 {n} 列", { n: result.failed })}</span></>}
               </div>
               {result.errors.length > 0 && (
                 <ul className="text-xs text-red-300/80 mono max-h-32 overflow-auto list-disc pl-4">

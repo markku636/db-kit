@@ -171,9 +171,9 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
             <span>{t("新增")} <span className="text-emerald-400">{counts.i}</span></span>
             <span>{t("更新")} <span className="text-amber-300">{counts.u}</span></span>
             <span>{t("刪除")} <span className="text-red-400">{counts.d}</span>{!allowDeletes && counts.d > 0 ? t("（未含）") : ""}</span>
-            <span className="ml-auto text-[11px] text-fg/40">來源 {res?.srcTotal ?? 0} 列 · 目標 {res?.dstTotal ?? 0} 列</span>
+            <span className="ml-auto text-[11px] text-fg/40">{t("來源 {src} 列 · 目標 {dst} 列", { src: res?.srcTotal ?? 0, dst: res?.dstTotal ?? 0 })}</span>
           </div>
-          {res?.capped && <div className="text-[11px] text-amber-300/80 inline-flex items-center gap-1"><Icon icon={AlertTriangle} size={11} />資料量超過 {CAP.toLocaleString()} 列上限，比對僅涵蓋部分列；為安全已停用 DELETE（避免刪到未載入的列）。</div>}
+          {res?.capped && <div className="text-[11px] text-amber-300/80 inline-flex items-center gap-1"><Icon icon={AlertTriangle} size={11} />{t("資料量超過 {cap} 列上限，比對僅涵蓋部分列；為安全已停用 DELETE（避免刪到未載入的列）。", { cap: CAP.toLocaleString() })}</div>}
           {colMismatch && (colMismatch.srcOnly.length > 0 || colMismatch.dstOnly.length > 0) && (
             <div className="text-[11px] text-amber-300/80">
               {t("欄位不完全相同，僅同步共同欄位。")}

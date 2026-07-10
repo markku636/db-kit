@@ -54,6 +54,10 @@ pub struct ConnArgs {
     /// 輸出格式
     #[arg(long, value_enum, default_value = "table", global = true)]
     pub format: Format,
+
+    /// 介面語言（zh-TW | en；亦可用環境變數 DBKIT_LANG）
+    #[arg(long, global = true, value_name = "zh-TW|en")]
+    pub lang: Option<String>,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]

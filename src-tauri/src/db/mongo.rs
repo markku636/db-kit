@@ -253,23 +253,23 @@ impl DatabaseDriver for MongoDriver {
         // cap（0 = 不限）為全域 row cap：cursor 分批拉取，達 cap 即停 — 截斷真省網路。
         let parsed: serde_json::Value = serde_json::from_str(sql)
             .map_err(|_| AppError::Query(
-                "MongoDB 查詢請提供 JSON：{\"db\":\"..\",\"collection\":\"..\",\"filter\":{}}".to_string(),
+                t!("MongoDB 查詢請提供 JSON：{\"db\":\"..\",\"collection\":\"..\",\"filter\":{}}").to_string(),
             ))?;
         let db = parsed.get("db").and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::Query("缺少 db".to_string()))?;
+            .ok_or_else(|| AppError::Query(t!("缺少 db").to_string()))?;
         let coll_name = parsed.get("collection").and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::Query("缺少 collection".to_string()))?;
+            .ok_or_else(|| AppError::Query(t!("缺少 collection").to_string()))?;
 
         // 聚合管線（Mongo 旗艦功能）：提供 "pipeline" 陣列時走 aggregate，回傳各階段結果文件。
         if let Some(pv) = parsed.get("pipeline") {
             let arr = pv
                 .as_array()
-                .ok_or_else(|| AppError::Query("pipeline 必須是陣列".to_string()))?;
+                .ok_or_else(|| AppError::Query(t!("pipeline 必須是陣列").to_string()))?;
             let mut stages: Vec<Document> = Vec::with_capacity(arr.len());
             for v in arr {
                 match bson_from_json(v) {
                     Bson::Document(d) => stages.push(d),
-                    _ => return Err(AppError::Query("pipeline 每個階段必須是物件".to_string())),
+                    _ => return Err(AppError::Query(t!("pipeline 每個階段必須是物件").to_string())),
                 }
             }
             let coll = self.db_handle(db).collection::<Document>(coll_name);
@@ -311,12 +311,12 @@ impl DatabaseDriver for MongoDriver {
         if let Some(iv) = parsed.get("insert") {
             let arr = iv
                 .as_array()
-                .ok_or_else(|| AppError::Query("insert 必須是陣列".to_string()))?;
+                .ok_or_else(|| AppError::Query(t!("insert 必須是陣列").to_string()))?;
             let mut docs: Vec<Document> = Vec::with_capacity(arr.len());
             for v in arr {
                 match bson_from_json(v) {
                     Bson::Document(d) => docs.push(d),
-                    _ => return Err(AppError::Query("insert 每個元素必須是物件".to_string())),
+                    _ => return Err(AppError::Query(t!("insert 每個元素必須是物件").to_string())),
                 }
             }
             if docs.is_empty() {
@@ -346,15 +346,15 @@ impl DatabaseDriver for MongoDriver {
                 .get("set")
                 .map(bson_from_json)
                 .and_then(|b| if let Bson::Document(d) = b { Some(d) } else { None })
-                .ok_or_else(|| AppError::Query("update 需要 set 物件".to_string()))?;
+                .ok_or_else(|| AppError::Query(t!("update 需要 set 物件").to_string()))?;
             if set.is_empty() {
-                return Err(AppError::Query("update 的 set 不可為空".to_string()));
+                return Err(AppError::Query(t!("update 的 set 不可為空").to_string()));
             }
             // 與 delete 一致的安全防護：filter 不可為空，避免一個遺漏 filter 就改動整個集合。
             // 真要全集合更新，請以明確條件（如 {"_id": {"$exists": true}}）表達意圖。
             if filter.is_empty() {
                 return Err(AppError::Query(
-                    "update 需要非空 filter（避免誤改整個集合；要全改請用明確條件如 {\"_id\":{\"$exists\":true}}）"
+                    t!("update 需要非空 filter（避免誤改整個集合；要全改請用明確條件如 {\"_id\":{\"$exists\":true}}）")
                         .to_string(),
                 ));
             }
@@ -371,11 +371,11 @@ impl DatabaseDriver for MongoDriver {
         if let Some(dv) = parsed.get("delete") {
             let filter = match bson_from_json(dv) {
                 Bson::Document(d) => d,
-                _ => return Err(AppError::Query("delete 必須是 filter 物件".to_string())),
+                _ => return Err(AppError::Query(t!("delete 必須是 filter 物件").to_string())),
             };
             if filter.is_empty() {
                 return Err(AppError::Query(
-                    "delete 需要非空 filter（避免誤刪整個集合）".to_string(),
+                    t!("delete 需要非空 filter（避免誤刪整個集合）").to_string(),
                 ));
             }
             let coll = self.db_handle(db).collection::<Document>(coll_name);
@@ -471,10 +471,10 @@ impl DatabaseDriver for MongoDriver {
                 });
                 if composite {
                     let v: serde_json::Value = serde_json::from_str(s.trim()).map_err(|e| {
-                        AppError::Query(format!("此欄為巢狀結構，需輸入合法 JSON：{e}"))
+                        AppError::Query(tf!("此欄為巢狀結構，需輸入合法 JSON：{e}", e = e))
                     })?;
                     Bson::try_from(v)
-                        .map_err(|e| AppError::Query(format!("JSON 轉 BSON 失敗：{e}")))?
+                        .map_err(|e| AppError::Query(tf!("JSON 轉 BSON 失敗：{e}", e = e)))?
                 } else {
                     guess_bson(s)
                 }
@@ -496,7 +496,7 @@ impl DatabaseDriver for MongoDriver {
         row: &RowInsert,
     ) -> AppResult<u64> {
         if row.columns.len() != row.values.len() {
-            return Err(AppError::Query("欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("欄位與值數量不符").to_string()));
         }
         let mut d = Document::new();
         for (c, v) in row.columns.iter().zip(row.values.iter()) {
@@ -528,9 +528,9 @@ impl DatabaseDriver for MongoDriver {
             .pk_columns
             .iter()
             .position(|c| c == "_id")
-            .ok_or_else(|| AppError::Query("缺少 _id，無法刪除".to_string()))?;
+            .ok_or_else(|| AppError::Query(t!("缺少 _id，無法刪除").to_string()))?;
         let raw = del.pk_values.get(idx).and_then(|v| v.clone())
-            .ok_or_else(|| AppError::Query("_id 為空，無法刪除".to_string()))?;
+            .ok_or_else(|| AppError::Query(t!("_id 為空，無法刪除").to_string()))?;
         let filter = doc! { "_id": id_bson(&raw) };
         let coll = self.db_handle(database).collection::<Document>(table);
         let res = coll
@@ -574,7 +574,7 @@ impl DatabaseDriver for MongoDriver {
         unique: bool,
     ) -> AppResult<()> {
         if columns.is_empty() {
-            return Err(AppError::Query("索引至少需一個欄位".to_string()));
+            return Err(AppError::Query(t!("索引至少需一個欄位").to_string()));
         }
         // 依點選順序組複合鍵（皆升冪 1）。
         let mut keys = Document::new();
@@ -635,19 +635,19 @@ impl DatabaseDriver for MongoDriver {
         };
         let mut out = Vec::new();
         if let Some(c) = num("count") {
-            out.push(("文件數".into(), c.to_string()));
+            out.push((t!("文件數").into(), c.to_string()));
         }
         if let Some(s) = num("size") {
-            out.push(("大小".into(), fmt_bytes(s)));
+            out.push((t!("大小").into(), fmt_bytes(s)));
         }
         if let Some(s) = num("storageSize") {
-            out.push(("儲存大小".into(), fmt_bytes(s)));
+            out.push((t!("儲存大小").into(), fmt_bytes(s)));
         }
         if let Some(n) = num("nindexes") {
-            out.push(("索引數".into(), n.to_string()));
+            out.push((t!("索引數").into(), n.to_string()));
         }
         if let Some(a) = num("avgObjSize") {
-            out.push(("平均文件大小".into(), fmt_bytes(a)));
+            out.push((t!("平均文件大小").into(), fmt_bytes(a)));
         }
         Ok(out)
     }
@@ -664,7 +664,7 @@ impl DatabaseDriver for MongoDriver {
         // 後端硬性護欄：MongoDB 系統庫一律拒絕（drop config 會毀分片中繼資料、drop admin 會清使用者/角色）。
         const SYS: [&str; 3] = ["admin", "config", "local"];
         if SYS.iter().any(|s| s.eq_ignore_ascii_case(name)) {
-            return Err(AppError::Query(format!("拒絕刪除 MongoDB 系統資料庫「{name}」")));
+            return Err(AppError::Query(tf!("拒絕刪除 MongoDB 系統資料庫「{name}」", name = name)));
         }
         self.client
             .database(name)
@@ -719,7 +719,7 @@ impl DatabaseDriver for MongoDriver {
             .find_one(doc! { "_id": id_bson(id) })
             .await
             .map_err(|e| AppError::Query(e.to_string()))?
-            .ok_or_else(|| AppError::Query("找不到文件".to_string()))?;
+            .ok_or_else(|| AppError::Query(t!("找不到文件").to_string()))?;
         // canonical extended JSON（保真 ObjectId/Int64/Date/Decimal128），美化輸出供編輯。
         let ext = Bson::Document(doc).into_canonical_extjson();
         serde_json::to_string_pretty(&ext).map_err(|e| AppError::Query(e.to_string()))
@@ -734,12 +734,12 @@ impl DatabaseDriver for MongoDriver {
     ) -> AppResult<u64> {
         let coll = self.db_handle(database).collection::<Document>(table);
         let v: serde_json::Value = serde_json::from_str(doc_json)
-            .map_err(|e| AppError::Query(format!("文件需為合法 JSON：{e}")))?;
+            .map_err(|e| AppError::Query(tf!("文件需為合法 JSON：{e}", e = e)))?;
         let bson = Bson::try_from(v)
-            .map_err(|e| AppError::Query(format!("JSON 轉 BSON 失敗：{e}")))?;
+            .map_err(|e| AppError::Query(tf!("JSON 轉 BSON 失敗：{e}", e = e)))?;
         let mut new_doc = match bson {
             Bson::Document(d) => d,
-            _ => return Err(AppError::Query("文件必須是 JSON 物件".to_string())),
+            _ => return Err(AppError::Query(t!("文件必須是 JSON 物件").to_string())),
         };
         // _id 不可變更：強制與定位鍵一致，避免改動 _id 造成新增而非取代。
         let id_val = id_bson(id);
@@ -757,7 +757,7 @@ impl DatabaseDriver for MongoDriver {
     async fn explain(&self, sql: &str) -> AppResult<QueryResult> {
         let parsed: serde_json::Value = serde_json::from_str(sql).map_err(|_| {
             AppError::Query(
-                "MongoDB 執行計畫請提供與查詢相同的 JSON：{\"db\":\"..\",\"collection\":\"..\",\"filter\":{}}（可加 \"verbosity\"）".to_string(),
+                t!("MongoDB 執行計畫請提供與查詢相同的 JSON：{\"db\":\"..\",\"collection\":\"..\",\"filter\":{}}（可加 \"verbosity\"）").to_string(),
             )
         })?;
         let (db, cmd) = build_explain_command(&parsed)?;
@@ -830,7 +830,7 @@ impl DatabaseDriver for MongoDriver {
             .try_next()
             .await
             .map_err(|e| AppError::Query(e.to_string()))?
-            .ok_or_else(|| AppError::Query("欄位統計無結果".to_string()))?;
+            .ok_or_else(|| AppError::Query(t!("欄位統計無結果").to_string()))?;
 
         // $facet 各結果為文件陣列；count 型 facet 取首件的 n。
         let facet_count = |name: &str| -> u64 {
@@ -961,7 +961,7 @@ impl MongoDriver {
         options: &crate::db::MongoIndexOptions,
     ) -> AppResult<()> {
         if keys.is_empty() {
-            return Err(AppError::Query("索引至少需一個欄位".to_string()));
+            return Err(AppError::Query(t!("索引至少需一個欄位").to_string()));
         }
         let mut key_doc = Document::new();
         for (field, spec) in keys {
@@ -969,7 +969,7 @@ impl MongoDriver {
                 "1" | "" => Bson::Int32(1),
                 "-1" => Bson::Int32(-1),
                 other @ ("text" | "2dsphere" | "hashed") => Bson::String(other.to_string()),
-                other => return Err(AppError::Query(format!("索引規格無效：{other}（可用 1 / -1 / text / 2dsphere / hashed）"))),
+                other => return Err(AppError::Query(tf!("索引規格無效：{other}（可用 1 / -1 / text / 2dsphere / hashed）", other = other))),
             };
             key_doc.insert(field.clone(), v);
         }
@@ -988,10 +988,10 @@ impl MongoDriver {
         }
         if let Some(pf) = options.partial_filter_json.as_deref().filter(|s| !s.trim().is_empty()) {
             let v: serde_json::Value = serde_json::from_str(pf)
-                .map_err(|e| AppError::Query(format!("partialFilterExpression 需為合法 JSON：{e}")))?;
+                .map_err(|e| AppError::Query(tf!("partialFilterExpression 需為合法 JSON：{e}", e = e)))?;
             match bson_from_json(&v) {
                 Bson::Document(d) if !d.is_empty() => opts.partial_filter_expression = Some(d),
-                _ => return Err(AppError::Query("partialFilterExpression 必須是非空 JSON 物件".to_string())),
+                _ => return Err(AppError::Query(t!("partialFilterExpression 必須是非空 JSON 物件").to_string())),
             }
         }
         let model = IndexModel::builder().keys(key_doc).options(opts).build();
@@ -1048,22 +1048,22 @@ impl MongoDriver {
     ) -> AppResult<()> {
         // 系統集合硬擋（比照 drop_database 的 SYS 護欄精神）。
         if collection.starts_with("system.") {
-            return Err(AppError::Query("拒絕修改系統集合的驗證規則".to_string()));
+            return Err(AppError::Query(t!("拒絕修改系統集合的驗證規則").to_string()));
         }
         if !matches!(level, "off" | "moderate" | "strict") {
-            return Err(AppError::Query(format!("validationLevel 無效：{level}")));
+            return Err(AppError::Query(tf!("validationLevel 無效：{level}", level = level)));
         }
         if !matches!(action, "warn" | "error") {
-            return Err(AppError::Query(format!("validationAction 無效：{action}")));
+            return Err(AppError::Query(tf!("validationAction 無效：{action}", action = action)));
         }
         let validator: Document = if validator_json.trim().is_empty() {
             Document::new()
         } else {
             let v: serde_json::Value = serde_json::from_str(validator_json)
-                .map_err(|e| AppError::Query(format!("validator 需為合法 JSON：{e}")))?;
+                .map_err(|e| AppError::Query(tf!("validator 需為合法 JSON：{e}", e = e)))?;
             match bson_from_json(&v) {
                 Bson::Document(d) => d,
-                _ => return Err(AppError::Query("validator 必須是 JSON 物件".to_string())),
+                _ => return Err(AppError::Query(t!("validator 必須是 JSON 物件").to_string())),
             }
         };
         self.db_handle(database)
@@ -1088,25 +1088,25 @@ impl MongoDriver {
         let num = |k: &str| doc_num(&stats, k);
         let mut out: Vec<(String, String)> = Vec::new();
         if let Some(v) = num("collections") {
-            out.push(("集合數".into(), v.to_string()));
+            out.push((t!("集合數").into(), v.to_string()));
         }
         if let Some(v) = num("objects") {
-            out.push(("文件數".into(), v.to_string()));
+            out.push((t!("文件數").into(), v.to_string()));
         }
         if let Some(v) = num("avgObjSize") {
-            out.push(("平均文件大小".into(), fmt_bytes(v)));
+            out.push((t!("平均文件大小").into(), fmt_bytes(v)));
         }
         if let Some(v) = num("dataSize") {
-            out.push(("資料大小".into(), fmt_bytes(v)));
+            out.push((t!("資料大小").into(), fmt_bytes(v)));
         }
         if let Some(v) = num("storageSize") {
-            out.push(("儲存大小".into(), fmt_bytes(v)));
+            out.push((t!("儲存大小").into(), fmt_bytes(v)));
         }
         if let Some(v) = num("indexes") {
-            out.push(("索引數".into(), v.to_string()));
+            out.push((t!("索引數").into(), v.to_string()));
         }
         if let Some(v) = num("indexSize") {
-            out.push(("索引大小".into(), fmt_bytes(v)));
+            out.push((t!("索引大小").into(), fmt_bytes(v)));
         }
         Ok(out)
     }
@@ -1192,7 +1192,7 @@ impl MongoDriver {
     /// mongos 不支援 per-database profiling —— 錯誤原樣呈現。
     pub async fn profile_set(&self, database: &str, level: i32, slow_ms: i64) -> AppResult<crate::db::MongoProfile> {
         if !(0..=2).contains(&level) {
-            return Err(AppError::Query("profiler level 需為 0 / 1 / 2".to_string()));
+            return Err(AppError::Query(t!("profiler level 需為 0 / 1 / 2").to_string()));
         }
         self.db_handle(database)
             .run_command(doc! { "profile": level, "slowms": slow_ms })
@@ -1246,9 +1246,9 @@ fn id_filter(edit: &CellEdit) -> AppResult<Document> {
         .pk_columns
         .iter()
         .position(|c| c == "_id")
-        .ok_or_else(|| AppError::Query("缺少 _id，無法定位文件".to_string()))?;
+        .ok_or_else(|| AppError::Query(t!("缺少 _id，無法定位文件").to_string()))?;
     let raw = edit.pk_values.get(idx).and_then(|v| v.clone())
-        .ok_or_else(|| AppError::Query("_id 為空".to_string()))?;
+        .ok_or_else(|| AppError::Query(t!("_id 為空").to_string()))?;
     Ok(doc! { "_id": id_bson(&raw) })
 }
 
@@ -1521,33 +1521,34 @@ fn build_explain_command(parsed: &serde_json::Value) -> AppResult<(String, Docum
     let db = parsed
         .get("db")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Query("缺少 db".to_string()))?;
+        .ok_or_else(|| AppError::Query(t!("缺少 db").to_string()))?;
     let coll = parsed
         .get("collection")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Query("缺少 collection".to_string()))?;
+        .ok_or_else(|| AppError::Query(t!("缺少 collection").to_string()))?;
     let verbosity = match parsed.get("verbosity").and_then(|v| v.as_str()) {
         None => "executionStats",
         Some(v @ ("queryPlanner" | "executionStats" | "allPlansExecution")) => v,
         Some(other) => {
             return Err(AppError::Query(format!(
-                "verbosity 無效：{other}（可用 queryPlanner / executionStats / allPlansExecution）"
+                "verbosity 無效：{other}（可用 queryPlanner / executionStats / allPlansExecution）",
+                other = other
             )))
         }
     };
     if parsed.get("insert").is_some() || parsed.get("update").is_some() || parsed.get("delete").is_some() {
-        return Err(AppError::Query("執行計畫僅支援 find / aggregate（pipeline）".to_string()));
+        return Err(AppError::Query(t!("執行計畫僅支援 find / aggregate（pipeline）").to_string()));
     }
 
     let inner = if let Some(pv) = parsed.get("pipeline") {
         let arr = pv
             .as_array()
-            .ok_or_else(|| AppError::Query("pipeline 必須是陣列".to_string()))?;
+            .ok_or_else(|| AppError::Query(t!("pipeline 必須是陣列").to_string()))?;
         let mut stages: Vec<Bson> = Vec::with_capacity(arr.len());
         for v in arr {
             match bson_from_json(v) {
                 Bson::Document(d) => stages.push(Bson::Document(d)),
-                _ => return Err(AppError::Query("pipeline 每個階段必須是物件".to_string())),
+                _ => return Err(AppError::Query(t!("pipeline 每個階段必須是物件").to_string())),
             }
         }
         doc! { "aggregate": coll, "pipeline": stages, "cursor": {} }
@@ -1598,7 +1599,7 @@ fn fmt_uptime(secs: i64) -> String {
     let m = (secs % 3_600) / 60;
     let s = secs % 60;
     if d > 0 {
-        format!("{d} 天 {h:02}:{m:02}:{s:02}")
+        tf!("{d} 天 {hms}", d = d, hms = format!("{h:02}:{m:02}:{s:02}"))
     } else {
         format!("{h:02}:{m:02}:{s:02}")
     }
@@ -1624,30 +1625,30 @@ fn server_status_sections(status: &Document, build: &Document) -> Vec<ServerInfo
     // 伺服器
     let mut server: Vec<(String, String)> = Vec::new();
     if let Some(v) = path_str(build, &["version"]).or_else(|| path_str(status, &["version"])) {
-        server.push(("版本".into(), v));
+        server.push((t!("版本").into(), v));
     }
     if let Some(h) = path_str(status, &["host"]) {
-        server.push(("主機".into(), h));
+        server.push((t!("主機").into(), h));
     }
     if let Some(p) = path_str(status, &["process"]) {
-        server.push(("程序".into(), p)); // mongod / mongos
+        server.push((t!("程序").into(), p)); // mongod / mongos
     }
     if let Some(u) = path_num(&["uptime"]) {
-        server.push(("運行時間".into(), fmt_uptime(u)));
+        server.push((t!("運行時間").into(), fmt_uptime(u)));
     }
     if !server.is_empty() {
-        sections.push(ServerInfoSection { name: "伺服器".into(), items: server });
+        sections.push(ServerInfoSection { name: t!("伺服器").into(), items: server });
     }
 
     // 連線
     let mut conns: Vec<(String, String)> = Vec::new();
-    for (label, key) in [("目前", "current"), ("可用", "available"), ("活躍", "active"), ("累計建立", "totalCreated")] {
+    for (label, key) in [(t!("目前"), "current"), (t!("可用"), "available"), (t!("活躍"), "active"), (t!("累計建立"), "totalCreated")] {
         if let Some(v) = path_num(&["connections", key]) {
             conns.push((label.into(), v.to_string()));
         }
     }
     if !conns.is_empty() {
-        sections.push(ServerInfoSection { name: "連線".into(), items: conns });
+        sections.push(ServerInfoSection { name: t!("連線").into(), items: conns });
     }
 
     // 操作計數（自啟動累計）
@@ -1658,40 +1659,40 @@ fn server_status_sections(status: &Document, build: &Document) -> Vec<ServerInfo
         }
     }
     if !ops.is_empty() {
-        sections.push(ServerInfoSection { name: "操作計數".into(), items: ops });
+        sections.push(ServerInfoSection { name: t!("操作計數").into(), items: ops });
     }
 
     // 記憶體（mem.* 單位為 MB；WiredTiger cache 為 bytes）
     let mut mem: Vec<(String, String)> = Vec::new();
     if let Some(v) = path_num(&["mem", "resident"]) {
-        mem.push(("常駐記憶體".into(), fmt_bytes(v.saturating_mul(1024 * 1024))));
+        mem.push((t!("常駐記憶體").into(), fmt_bytes(v.saturating_mul(1024 * 1024))));
     }
     if let Some(v) = path_num(&["mem", "virtual"]) {
-        mem.push(("虛擬記憶體".into(), fmt_bytes(v.saturating_mul(1024 * 1024))));
+        mem.push((t!("虛擬記憶體").into(), fmt_bytes(v.saturating_mul(1024 * 1024))));
     }
     if let Some(v) = path_num(&["wiredTiger", "cache", "bytes currently in the cache"]) {
-        mem.push(("WT 快取使用".into(), fmt_bytes(v)));
+        mem.push((t!("WT 快取使用").into(), fmt_bytes(v)));
     }
     if let Some(v) = path_num(&["wiredTiger", "cache", "maximum bytes configured"]) {
-        mem.push(("WT 快取上限".into(), fmt_bytes(v)));
+        mem.push((t!("WT 快取上限").into(), fmt_bytes(v)));
     }
     if !mem.is_empty() {
-        sections.push(ServerInfoSection { name: "記憶體".into(), items: mem });
+        sections.push(ServerInfoSection { name: t!("記憶體").into(), items: mem });
     }
 
     // 網路
     let mut net: Vec<(String, String)> = Vec::new();
     if let Some(v) = path_num(&["network", "bytesIn"]) {
-        net.push(("流入".into(), fmt_bytes(v)));
+        net.push((t!("流入").into(), fmt_bytes(v)));
     }
     if let Some(v) = path_num(&["network", "bytesOut"]) {
-        net.push(("流出".into(), fmt_bytes(v)));
+        net.push((t!("流出").into(), fmt_bytes(v)));
     }
     if let Some(v) = path_num(&["network", "numRequests"]) {
-        net.push(("請求數".into(), v.to_string()));
+        net.push((t!("請求數").into(), v.to_string()));
     }
     if !net.is_empty() {
-        sections.push(ServerInfoSection { name: "網路".into(), items: net });
+        sections.push(ServerInfoSection { name: t!("網路").into(), items: net });
     }
 
     // 複寫（單機無 repl 區塊 → 整段略過）
@@ -1701,16 +1702,16 @@ fn server_status_sections(status: &Document, build: &Document) -> Vec<ServerInfo
             r.push(("Replica Set".into(), v.to_string()));
         }
         if let Ok(primary) = repl.get_bool("isWritablePrimary") {
-            r.push(("角色".into(), if primary { "Primary".into() } else { "Secondary".into() }));
+            r.push((t!("角色").into(), if primary { "Primary".into() } else { "Secondary".into() }));
         }
         if let Ok(hosts) = repl.get_array("hosts") {
             let list: Vec<String> = hosts.iter().filter_map(|b| b.as_str().map(String::from)).collect();
             if !list.is_empty() {
-                r.push(("成員".into(), list.join(", ")));
+                r.push((t!("成員").into(), list.join(", ")));
             }
         }
         if !r.is_empty() {
-            sections.push(ServerInfoSection { name: "複寫".into(), items: r });
+            sections.push(ServerInfoSection { name: t!("複寫").into(), items: r });
         }
     }
 

@@ -16,7 +16,7 @@ import { toast, copyToClipboard, pickSaveFile, uiConfirm } from "./ui";
 import Icon from "./ui/Icon";
 import { IconButton } from "./ui/index";
 import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Sparkles, Send, Square } from "lucide-react";
-import { t, useT } from "./i18n";
+import { t, useT, useLang } from "./i18n";
 
 // 右側「AI 助手」面板：驅動本機 claude CLI（使用 Claude 訂閱登入），
 // 串流回答問題與撰寫腳本。對標右側詳細資料面板的版面與主題用色。
@@ -386,9 +386,9 @@ export default function AssistantPanel() {
       {notReady && (
         <div className="shrink-0 px-3 py-2 border-b border-fg/10 bg-amber-500/10 text-[11px] text-amber-200/90 leading-relaxed">
           {!status!.installed ? (
-            <>找不到 <span className="mono">claude</span> CLI。請先安裝 Claude Code（<span className="mono">claude.ai/install</span>）。</>
+            <>{t("找不到 ")}<span className="mono">claude</span>{t(" CLI。請先安裝 Claude Code（")}<span className="mono">claude.ai/install</span>{t("）。")}</>
           ) : (
-            <>尚未登入 Claude。請在終端機執行 <span className="mono">claude</span> 並用你的訂閱帳號登入。</>
+            <>{t("尚未登入 Claude。請在終端機執行 ")}<span className="mono">claude</span>{t(" 並用你的訂閱帳號登入。")}</>
           )}
           <button type="button" onClick={detect} disabled={detecting}
             className="ml-1 underline hover:text-amber-100 disabled:opacity-50">
@@ -478,15 +478,15 @@ function EmptyState({ onPick, onFill, disabled }: {
   } else if (conn) {
     quick.push({ label: t("從哪開始探索這個資料庫"), prompt: t("我想了解目前連線的這個資料庫，建議我從哪些資料表 / 查詢開始探索？") });
   }
-  quick.push({ label: t("最佳化一段 SQL"), prompt: "幫我最佳化這段 SQL（保留語意、說明改了什麼）：\n\n", fill: true });
+  quick.push({ label: t("最佳化一段 SQL"), prompt: t("幫我最佳化這段 SQL（保留語意、說明改了什麼）：\n\n"), fill: true });
   quick.push({ label: t("寫一個備份腳本"), prompt: t("幫我寫一個可重複執行的資料庫備份腳本，並說明怎麼設定排程。") });
 
   return (
     <div className="text-fg/40 text-xs leading-relaxed p-1 space-y-3">
       <div>
-        問我問題或請我撰寫腳本（SQL / Shell / Python…）。
-        <br />勾選「附帶資料庫內容」時，我會看到你目前選取的連線與資料表結構，寫出貼合的查詢。
-        <br />程式碼區塊可一鍵「複製 / 另存」，SQL 還能「貼到查詢編輯器」。
+        {t("問我問題或請我撰寫腳本（SQL / Shell / Python…）。")}
+        <br />{t("勾選「附帶資料庫內容」時，我會看到你目前選取的連線與資料表結構，寫出貼合的查詢。")}
+        <br />{t("程式碼區塊可一鍵「複製 / 另存」，SQL 還能「貼到查詢編輯器」。")}
       </div>
       <div className="flex flex-wrap gap-1.5">
         {quick.map((q) => (
@@ -914,7 +914,7 @@ async function buildContext(): Promise<string> {
     if (node.type === "database") {
       lines.push(t("目前選取資料庫：{db}", { db: node.db }));
     } else if (node.type === "table") {
-      lines.push(`目前選取${node.objKind === "view" ? t("視圖") : t("資料表")}：${node.db}.${node.table}`);
+      lines.push(t("目前選取{kind}：{db}.{table}", { kind: node.objKind === "view" ? t("視圖") : t("資料表"), db: node.db, table: node.table }));
       try {
         const cols = await api.tableColumns(conn.id, node.db, node.table);
         if (cols.length) {
@@ -922,10 +922,10 @@ async function buildContext(): Promise<string> {
             .slice(0, 80)
             .map((c) => `${c.name} ${c.data_type}${c.key === "PRI" ? " PK" : ""}${c.nullable ? "" : " NOT NULL"}`)
             .join(", ");
-          lines.push(`欄位：${list}${cols.length > 80 ? " …" : ""}`);
+          lines.push(`${t("欄位：")}${list}${cols.length > 80 ? " …" : ""}`);
         }
       } catch { /* schema 為加值，失敗略過 */ }
     }
   }
-  return t("【目前資料庫環境】\n{join}\n（以上為使用者在 db-kit 的目前環境；若回答涉及 SQL，請貼合此資料庫類型與結構）", { join: lines.join("\n") });
+  return t("【目前資料庫環境】\n{join}\n（以上為使用者在 db-kit 的目前環境；若回答涉及 SQL，請貼合此資料庫類型與結構）", { join: lines.join("\n") }) + (useLang.getState().lang === "en" ? " Respond in English." : "");
 }

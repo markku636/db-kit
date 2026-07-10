@@ -175,7 +175,7 @@ export default function DataGenerator({ connId, db, table, kind, onClose, onGene
       zClass="z-[95]"
       bodyClassName="p-0 flex flex-col overflow-hidden"
       footer={<>
-        <span className="text-fg/40 text-xs mr-auto">已選 {included.length} / {cols.length} 欄</span>
+        <span className="text-fg/40 text-xs mr-auto">{t("已選 {sel} / {total} 欄", { sel: included.length, total: cols.length })}</span>
         <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
         <Button variant="primary" onClick={generate} disabled={loading || !!err || included.length === 0}>{t("產生到查詢編輯器")}</Button>
       </>}
@@ -202,7 +202,7 @@ export default function DataGenerator({ connId, db, table, kind, onClose, onGene
       </div>
       {droppedRequired.length > 0 && (
         <div className="px-5 py-2 border-t border-fg/10 text-amber-300/80 text-xs inline-flex items-center gap-1.5">
-          <Icon icon={AlertTriangle} size={14} /> 已排除 {droppedRequired.length} 個必填欄位（NOT NULL 且無預設）：{droppedRequired.map((c) => c.name).join("、")} — 執行時會違反 NOT NULL 約束。
+          <Icon icon={AlertTriangle} size={14} /> {t("已排除 {n} 個必填欄位（NOT NULL 且無預設）：{cols} — 執行時會違反 NOT NULL 約束。", { n: droppedRequired.length, cols: droppedRequired.map((c) => c.name).join("、") })}
         </div>
       )}
     </Modal>

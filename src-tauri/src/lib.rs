@@ -2,6 +2,11 @@
 // 必然 unused；GUI build 仍會正常檢查 dead_code，故僅在非 gui 時靜音。
 #![cfg_attr(not(feature = "gui"), allow(dead_code))]
 
+// i18n 必須最先宣告：`#[macro_use]` 讓 `t!` / `tf!` 在其後所有模組的文字域內可用。
+#[macro_use]
+mod i18n;
+mod locales;
+
 // 核心層（GUI 與 CLI 共用，不依賴 Tauri）。
 mod backup;
 mod conn_crypto;
@@ -55,6 +60,15 @@ pub fn run() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            // 載入語言偏好（與 dbk CLI 共用 app_settings.json）。啟動時套用，供後端錯誤訊息本地化。
+            tauri::async_runtime::block_on(async {
+                let s: store::AppSettings = store::read_json(&handle, store::APP_SETTINGS_FILE)
+                    .await
+                    .unwrap_or_default();
+                if let Some(l) = s.lang.as_deref().and_then(crate::i18n::Lang::from_code) {
+                    crate::i18n::set_lang(l);
+                }
+            });
             // 載入持久化排程並重算 next_run（啟動只排未來的下一次，不補跑漏掉的）。
             tauri::async_runtime::block_on(async {
                 let loaded: Vec<scheduler::BackupSchedule> =
@@ -85,6 +99,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::show_main_window,
+            commands::set_lang,
             commands::set_query_guard,
             commands::test_connection,
             commands::connect,

@@ -354,7 +354,7 @@ function HistoryTab({ conn }: { conn: ConnectionConfig }) {
 
   const restore = async (entry: BackupHistoryEntry) => {
     if (busy) return;
-    const ok = await uiConfirm(`從此備份還原到「${entry.database || conn.name}」？此動作會覆寫現有資料。`, {
+    const ok = await uiConfirm(t("從此備份還原到「{name}」？此動作會覆寫現有資料。", { name: entry.database || conn.name }), {
       title: t("還原備份"), danger: true, confirmText: t("還原"),
     });
     if (!ok) return;
@@ -401,7 +401,7 @@ function HistoryTab({ conn }: { conn: ConnectionConfig }) {
                 <div className="text-xs text-fg/40 truncate" title={e.error ?? e.path}>
                   {e.status === "ok"
                     ? `${formatBytes(e.bytes)} · ${e.method} · ${e.path}`
-                    : `失敗：${e.error ?? t("未知錯誤")}`}
+                    : t("失敗：{error}", { error: e.error ?? t("未知錯誤") })}
                 </div>
               </div>
               {e.status === "ok" && e.kind !== "redis" && (

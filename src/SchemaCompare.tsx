@@ -154,7 +154,7 @@ export default function SchemaCompare({ connId, kind, sourceDb, onClose }: {
               )}
               <Section title={t("僅目標有（來源缺少）")} names={diff.onlyInTarget} color="border-red-500/40 text-red-300" />
               <div>
-                <div className="text-xs text-fg/45 mb-1">兩邊皆有（{diff.common.length}）— 點選比對欄位</div>
+                <div className="text-xs text-fg/45 mb-1">{t("兩邊皆有（{n}）— 點選比對欄位", { n: diff.common.length })}</div>
                 <div className="space-y-1.5">
                   {diff.common.map((item) => {
                     const cd = colDiffs[item];

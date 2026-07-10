@@ -114,7 +114,7 @@ pub async fn export(
     let bytes = render(&columns, &rows, opts, table)?;
     tokio::fs::write(out_path, &bytes)
         .await
-        .map_err(|e| AppError::Query(format!("寫入檔案失敗：{e}")))?;
+        .map_err(|e| AppError::Query(tf!("寫入檔案失敗：{e}", e = e)))?;
 
     Ok(ExportResult {
         path: out_path.to_string(),
@@ -144,7 +144,7 @@ pub async fn export_query(
     let bytes = render(&res.columns, &res.rows, opts, &table)?;
     tokio::fs::write(out_path, &bytes)
         .await
-        .map_err(|e| AppError::Query(format!("寫入檔案失敗：{e}")))?;
+        .map_err(|e| AppError::Query(tf!("寫入檔案失敗：{e}", e = e)))?;
     Ok(ExportResult {
         path: out_path.to_string(),
         rows: res.rows.len() as u64,
@@ -169,7 +169,7 @@ pub async fn export_rows(
     let bytes = render(&columns, &rows, opts, &table)?;
     tokio::fs::write(out_path, &bytes)
         .await
-        .map_err(|e| AppError::Query(format!("寫入檔案失敗：{e}")))?;
+        .map_err(|e| AppError::Query(tf!("寫入檔案失敗：{e}", e = e)))?;
     Ok(ExportResult {
         path: out_path.to_string(),
         rows: rows.len() as u64,
@@ -199,7 +199,7 @@ pub async fn export_rows_multi(
     out_path: &str,
 ) -> AppResult<ExportResult> {
     if sets.is_empty() {
-        return Err(AppError::Query("沒有可匯出的結果集".to_string()));
+        return Err(AppError::Query(t!("沒有可匯出的結果集").to_string()));
     }
     let total_rows: u64 = sets.iter().map(|s| s.rows.len() as u64).sum();
     let single = render_multi(&sets, opts)?;
@@ -207,7 +207,7 @@ pub async fn export_rows_multi(
     if let Some(bytes) = single {
         tokio::fs::write(out_path, &bytes)
             .await
-            .map_err(|e| AppError::Query(format!("寫入檔案失敗：{e}")))?;
+            .map_err(|e| AppError::Query(tf!("寫入檔案失敗：{e}", e = e)))?;
         return Ok(ExportResult {
             path: out_path.to_string(),
             rows: total_rows,
@@ -224,7 +224,7 @@ pub async fn export_rows_multi(
         let bytes = render(&s.columns, &s.rows, opts, "result")?;
         tokio::fs::write(&path, &bytes)
             .await
-            .map_err(|e| AppError::Query(format!("寫入檔案失敗：{e}")))?;
+            .map_err(|e| AppError::Query(tf!("寫入檔案失敗：{e}", e = e)))?;
         total_bytes += bytes.len() as u64;
         if i == 0 {
             first_path = path;
@@ -246,7 +246,7 @@ fn render_multi(sets: &[ResultSetPayload], opts: &ExportOptions) -> AppResult<Op
         "markdown" => {
             let mut out = String::new();
             for (i, s) in sets.iter().enumerate() {
-                out.push_str(&format!("## 結果 {}\n\n", i + 1));
+                out.push_str(&format!("## {}\n\n", tf!("結果 {n}", n = i + 1)));
                 if let Some(sql) = s.sql.as_deref().filter(|q| !q.trim().is_empty()) {
                     out.push_str(&format!("```sql\n{}\n```\n\n", sql.trim()));
                 }
@@ -288,7 +288,7 @@ fn render_multi(sets: &[ResultSetPayload], opts: &ExportOptions) -> AppResult<Op
             let mut out = String::new();
             for (i, s) in sets.iter().enumerate() {
                 let one_line = s.sql.as_deref().unwrap_or("").replace(['\r', '\n'], " ");
-                out.push_str(&format!("-- 結果 {}: {}\n", i + 1, one_line.trim()));
+                out.push_str(&format!("-- {}: {}\n", tf!("結果 {n}", n = i + 1), one_line.trim()));
                 let per = ExportOptions { sql_table: Some(format!("{}_{}", base, i + 1)), ..opts.clone() };
                 out.push_str(&render_utf8(&s.columns, &s.rows, &per)?);
                 out.push('\n');
@@ -296,7 +296,7 @@ fn render_multi(sets: &[ResultSetPayload], opts: &ExportOptions) -> AppResult<Op
             Some(out.into_bytes())
         }
         "csv" | "tsv" => None,
-        other => return Err(AppError::Query(format!("不支援的匯出格式：{other}"))),
+        other => return Err(AppError::Query(tf!("不支援的匯出格式：{other}", other = other))),
     };
     Ok(single)
 }
@@ -344,7 +344,7 @@ pub async fn schema_dump(
     }
     if out.is_empty() {
         return Err(AppError::Query(
-            "沒有可匯出的結構（此資料庫無資料表或不支援建表 SQL）".to_string(),
+            t!("沒有可匯出的結構（此資料庫無資料表或不支援建表 SQL）").to_string(),
         ));
     }
     Ok(out)
@@ -451,7 +451,7 @@ fn render(
             Ok(out.into_bytes())
         }
         "xlsx" => render_xlsx(columns, rows, opts),
-        other => Err(AppError::Query(format!("不支援的匯出格式：{other}"))),
+        other => Err(AppError::Query(tf!("不支援的匯出格式：{other}", other = other))),
     }
 }
 
@@ -469,7 +469,7 @@ fn render_xlsx(
     let ws = wb.add_worksheet();
     write_xlsx_sheet(ws, columns, rows, opts)?;
     wb.save_to_buffer()
-        .map_err(|e| AppError::Query(format!("產生 Excel 失敗：{e}")))
+        .map_err(|e| AppError::Query(tf!("產生 Excel 失敗：{e}", e = e)))
 }
 
 /// 多結果集 → 單一活頁簿多工作表（結果1..結果N），每張表沿用單表的寫入管線。
@@ -480,13 +480,13 @@ fn render_xlsx_multi(sets: &[ResultSetPayload], opts: &ExportOptions) -> AppResu
     for (i, s) in sets.iter().enumerate() {
         let ws = wb.add_worksheet();
         // 固定命名「結果N」：無 Excel 禁字元（[]:*?/\）、必唯一、遠低於 31 字上限。
-        ws.set_name(format!("結果{}", i + 1))
-            .map_err(|e| AppError::Query(format!("寫入 Excel 失敗：{e}")))?;
+        ws.set_name(tf!("結果{n}", n = i + 1))
+            .map_err(|e| AppError::Query(tf!("寫入 Excel 失敗：{e}", e = e)))?;
         write_xlsx_sheet(ws, &s.columns, &s.rows, opts)
-            .map_err(|e| AppError::Query(format!("結果 {}：{}", i + 1, e)))?;
+            .map_err(|e| AppError::Query(tf!("結果 {n}：{e}", n = i + 1, e = e)))?;
     }
     wb.save_to_buffer()
-        .map_err(|e| AppError::Query(format!("產生 Excel 失敗：{e}")))
+        .map_err(|e| AppError::Query(tf!("產生 Excel 失敗：{e}", e = e)))
 }
 
 /// 把單一結果集寫進一張工作表：上限檢查、（可選）粗體表頭、數字保真、凍結表頭、自動欄寬。
@@ -500,16 +500,16 @@ fn write_xlsx_sheet(
 
     // xlsx 上限：1,048,576 列 × 16,384 欄。超出直接回報，不靜默截斷。
     if columns.len() > 16_384 {
-        return Err(AppError::Query(format!(
-            "欄數 {} 超過 Excel 上限（16384）",
-            columns.len()
+        return Err(AppError::Query(tf!(
+            "欄數 {n} 超過 Excel 上限（16384）",
+            n = columns.len()
         )));
     }
     let header_rows = if opts.include_header { 1 } else { 0 };
     if rows.len() + header_rows > 1_048_576 {
-        return Err(AppError::Query(format!(
-            "列數 {} 超過 Excel 上限（1048576）",
-            rows.len()
+        return Err(AppError::Query(tf!(
+            "列數 {n} 超過 Excel 上限（1048576）",
+            n = rows.len()
         )));
     }
 
@@ -518,7 +518,7 @@ fn write_xlsx_sheet(
         let bold = Format::new().set_bold();
         for (c, name) in columns.iter().enumerate() {
             ws.write_string_with_format(0, c as u16, name, &bold)
-                .map_err(|e| AppError::Query(format!("寫入 Excel 失敗：{e}")))?;
+                .map_err(|e| AppError::Query(tf!("寫入 Excel 失敗：{e}", e = e)))?;
         }
         r = 1;
     }
@@ -530,7 +530,7 @@ fn write_xlsx_sheet(
                     Some(n) => ws.write_number(r, col, n),
                     None => ws.write_string(r, col, s),
                 }
-                .map_err(|e| AppError::Query(format!("寫入 Excel 失敗：{e}")))?;
+                .map_err(|e| AppError::Query(tf!("寫入 Excel 失敗：{e}", e = e)))?;
             }
             // None（NULL）→ 留空白格。
         }

@@ -195,7 +195,7 @@ export default function DbTransferDialog({ connId, database, onClose }: {
 
       {outcomes && (
         <div className="text-xs text-fg/60">
-          完成 {outcomes.length} 表 · 共傳輸 {outcomes.reduce((a, r) => a + r.transferred, 0)} 列
+          {t("完成 {tables} 表 · 共傳輸 {rows} 列", { tables: outcomes.length, rows: outcomes.reduce((a, r) => a + r.transferred, 0) })}
           {outcomes.some((r) => r.error) && (
             <ul className="mt-1 text-red-300/80 mono max-h-24 overflow-auto list-disc pl-4">
               {outcomes.filter((r) => r.error).map((r) => <li key={r.table}>{r.table}：{r.error}</li>)}

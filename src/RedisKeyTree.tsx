@@ -153,7 +153,7 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
         <button type="button" onClick={() => setExpanded(new Set())}
           className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60">{t("收合全部")}</button>
         <span className="ml-auto text-fg/40">
-          {loading ? t("讀取中…") : keys ? `${keys.length} 個鍵${truncated ? t("（已達 {LIMIT} 上限）", { LIMIT }) : ""}` : ""}
+          {loading ? t("讀取中…") : keys ? t("{count} 個鍵", { count: keys.length }) + (truncated ? t("（已達 {LIMIT} 上限）", { LIMIT }) : "") : ""}
         </span>
       </div>
 
@@ -161,7 +161,7 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
         {err && <div className="p-3 text-red-400 text-sm mono break-all">{err}</div>}
         {truncated && (
           <div className="mx-2 mb-1 px-2 py-1 rounded bg-amber-500/10 text-amber-300 text-[11px]">
-            鍵數超過 {LIMIT}，僅顯示前 {LIMIT} 個；可用 MATCH 樣式縮小範圍。
+            {t("鍵數超過 {LIMIT}，僅顯示前 {LIMIT} 個；可用 MATCH 樣式縮小範圍。", { LIMIT })}
           </div>
         )}
         {keys && keys.length === 0 && !err && (

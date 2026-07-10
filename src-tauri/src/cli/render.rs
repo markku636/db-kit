@@ -100,7 +100,7 @@ fn json_scalar(v: &serde_json::Value) -> Option<String> {
 
 fn print_table(columns: &[String], rows: &[Vec<Option<String>>]) {
     if columns.is_empty() {
-        println!("(空結果)");
+        println!("{}", t!("(空結果)"));
         return;
     }
     let n = columns.len();
@@ -131,7 +131,7 @@ fn print_table(columns: &[String], rows: &[Vec<Option<String>>]) {
     for row in &clean_rows {
         println!("{}", render_row(row, &widths));
     }
-    println!("({} 列)", rows.len());
+    println!("{}", tf!("({n} 列)", n = rows.len()));
 }
 
 fn render_row<S: AsRef<str>>(cells: &[S], widths: &[usize]) -> String {
@@ -234,6 +234,6 @@ fn print_json(columns: &[String], rows: &[Vec<Option<String>>]) {
         .collect();
     match serde_json::to_string_pretty(&arr) {
         Ok(s) => println!("{s}"),
-        Err(e) => eprintln!("json 序列化失敗：{e}"),
+        Err(e) => eprintln!("{}", tf!("json 序列化失敗：{e}", e = e)),
     }
 }

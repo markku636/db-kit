@@ -89,7 +89,7 @@ fn load_known_hosts() -> std::io::Result<std::collections::HashMap<String, Strin
 // 原子寫入（temp + rename），避免中斷時產生截斷 / 損毀檔；錯誤一律回傳供呼叫端判斷。
 fn save_known_hosts(map: &std::collections::HashMap<String, String>) -> std::io::Result<()> {
     let p = known_hosts_path()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "找不到設定目錄"))?;
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, t!("找不到設定目錄")))?;
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -124,10 +124,10 @@ impl TunnelGuard {
 /// 依連線設定開一條 SSH tunnel，回傳 guard。撥號目標為「原始」DB host:port。
 pub async fn open_tunnel(cfg: &ConnectionConfig) -> AppResult<TunnelGuard> {
     if matches!(cfg.kind, DbKind::Sqlite) {
-        return Err(AppError::Ssh("SQLite 不支援 SSH Tunnel".into()));
+        return Err(AppError::Ssh(t!("SQLite 不支援 SSH Tunnel").into()));
     }
     if cfg.ssh_host.trim().is_empty() {
-        return Err(AppError::Ssh("未填寫 SSH 主機".into()));
+        return Err(AppError::Ssh(t!("未填寫 SSH 主機").into()));
     }
     let ssh_port = if cfg.ssh_port == 0 { 22 } else { cfg.ssh_port };
     let remote_host = cfg.host.clone();
@@ -143,8 +143,8 @@ pub async fn open_tunnel(cfg: &ConnectionConfig) -> AppResult<TunnelGuard> {
         client::connect(config, (cfg.ssh_host.as_str(), ssh_port), handler),
     )
     .await
-    .map_err(|_| AppError::Ssh("SSH 連線逾時".into()))?
-    .map_err(|e| AppError::Ssh(format!("SSH 連線失敗：{e}")))?;
+    .map_err(|_| AppError::Ssh(t!("SSH 連線逾時").into()))?
+    .map_err(|e| AppError::Ssh(tf!("SSH 連線失敗：{e}", e = e)))?;
 
     // 2. 認證（密碼或私鑰）；同樣加逾時，避免認證階段卡死。
     let auth = match cfg.ssh_auth_method {
@@ -153,8 +153,8 @@ pub async fn open_tunnel(cfg: &ConnectionConfig) -> AppResult<TunnelGuard> {
             session.authenticate_password(cfg.ssh_username.clone(), cfg.ssh_password.clone()),
         )
         .await
-        .map_err(|_| AppError::Ssh("SSH 認證逾時".into()))?
-        .map_err(|e| AppError::Ssh(format!("SSH 認證失敗：{e}")))?,
+        .map_err(|_| AppError::Ssh(t!("SSH 認證逾時").into()))?
+        .map_err(|e| AppError::Ssh(tf!("SSH 認證失敗：{e}", e = e)))?,
         SshAuthMethod::Key => {
             let passphrase = if cfg.ssh_passphrase.is_empty() {
                 None
@@ -162,28 +162,28 @@ pub async fn open_tunnel(cfg: &ConnectionConfig) -> AppResult<TunnelGuard> {
                 Some(cfg.ssh_passphrase.as_str())
             };
             let key = load_secret_key(&cfg.ssh_private_key_path, passphrase)
-                .map_err(|e| AppError::Ssh(format!("讀取 SSH 私鑰失敗：{e}")))?;
+                .map_err(|e| AppError::Ssh(tf!("讀取 SSH 私鑰失敗：{e}", e = e)))?;
             let key = PrivateKeyWithHashAlg::new(Arc::new(key), None);
             tokio::time::timeout(
                 SSH_DIAL_TIMEOUT,
                 session.authenticate_publickey(cfg.ssh_username.clone(), key),
             )
             .await
-            .map_err(|_| AppError::Ssh("SSH 認證逾時".into()))?
-            .map_err(|e| AppError::Ssh(format!("SSH 認證失敗：{e}")))?
+            .map_err(|_| AppError::Ssh(t!("SSH 認證逾時").into()))?
+            .map_err(|e| AppError::Ssh(tf!("SSH 認證失敗：{e}", e = e)))?
         }
     };
     if !auth.success() {
-        return Err(AppError::Ssh("SSH 認證被拒（帳號 / 密碼 / 金鑰不正確）".into()));
+        return Err(AppError::Ssh(t!("SSH 認證被拒（帳號 / 密碼 / 金鑰不正確）").into()));
     }
 
     // 3. 本地監聽（OS 分配空埠，避免手動掃描競態）。
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
-        .map_err(|e| AppError::Ssh(format!("本地監聽失敗：{e}")))?;
+        .map_err(|e| AppError::Ssh(tf!("本地監聽失敗：{e}", e = e)))?;
     let local_addr = listener
         .local_addr()
-        .map_err(|e| AppError::Ssh(format!("取得本地埠失敗：{e}")))?;
+        .map_err(|e| AppError::Ssh(tf!("取得本地埠失敗：{e}", e = e)))?;
 
     // 4. 背景 accept loop：每條進站連線開一條 direct-tcpip 並雙向轉送。
     let (tx, mut rx) = watch::channel(false);

@@ -58,7 +58,7 @@ export default function DatabaseProperties({ connId, db, onClose }: {
       </>}
     >
       <div className="text-fg/40 text-xs">
-        目前：{curr ? `${curr.charset} / ${curr.collation}` : t("讀取中…")}　·　變更僅影響日後新表（不轉換既有資料）。
+        {t("目前：{value}　·　變更僅影響日後新表（不轉換既有資料）。", { value: curr ? `${curr.charset} / ${curr.collation}` : t("讀取中…") })}
       </div>
       <div className="flex items-center gap-3">
         <span className="text-fg/45 w-20 shrink-0 text-xs">{t("字元集")}</span>

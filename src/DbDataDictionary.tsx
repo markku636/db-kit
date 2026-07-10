@@ -66,7 +66,7 @@ export default function DbDataDictionary({ connId, db, onClose }: {
     if (!path) return;
     try {
       await api.saveTextFile(path, content);
-      toast.success(`已儲存資料庫文件（${docs?.length ?? 0} 張表）`);
+      toast.success(t("已儲存資料庫文件（{n} 張表）", { n: docs?.length ?? 0 }));
     } catch (e: any) {
       toast.error(e?.message ?? t("儲存失敗"));
     }
@@ -82,7 +82,7 @@ export default function DbDataDictionary({ connId, db, onClose }: {
       bodyClassName="p-0 flex flex-col min-h-0"
       footer={<>
         <span className="mr-auto text-[11px] text-fg/40">
-          {docs ? `${docs.length} 張表${truncated ? t("（前 {MAX_TABLES} 張）", { MAX_TABLES }) : ""}` : progress ? t("載入中 {done}/{total}", { done: progress.done, total: progress.total }) : ""}
+          {docs ? t("{n} 張表", { n: docs.length }) + (truncated ? t("（前 {MAX_TABLES} 張）", { MAX_TABLES }) : "") : progress ? t("載入中 {done}/{total}", { done: progress.done, total: progress.total }) : ""}
         </span>
         <Segmented ariaLabel={t("格式")} value={view} onChange={(v) => setView(v as "md" | "html")}
           options={[{ value: "md", label: "Markdown" }, { value: "html", label: "HTML" }]} />

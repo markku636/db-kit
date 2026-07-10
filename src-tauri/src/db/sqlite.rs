@@ -105,7 +105,7 @@ impl DatabaseDriver for SqliteDriver {
             .map_err(|e| AppError::Query(e.to_string()))?;
         match row {
             Some(r) => r.try_get::<String, _>(0).map_err(|e| AppError::Query(e.to_string())),
-            None => Err(AppError::Query(format!("找不到觸發器「{name}」"))),
+            None => Err(AppError::Query(tf!("找不到觸發器「{name}」", name = name))),
         }
     }
 
@@ -390,13 +390,13 @@ impl DatabaseDriver for SqliteDriver {
         edit: &CellEdit,
     ) -> AppResult<u64> {
         if edit.pk_columns.is_empty() {
-            return Err(AppError::Query("此表無主鍵，無法安全更新".to_string()));
+            return Err(AppError::Query(t!("此表無主鍵，無法安全更新").to_string()));
         }
         if edit.pk_columns.len() != edit.pk_values.len() {
-            return Err(AppError::Query("主鍵欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("主鍵欄位與值數量不符").to_string()));
         }
         if edit.pk_values.iter().any(|v| v.is_none()) {
-            return Err(AppError::Query("主鍵值為 NULL，無法定位該列".to_string()));
+            return Err(AppError::Query(t!("主鍵值為 NULL，無法定位該列").to_string()));
         }
 
         let q_tbl = quote_ident(table);
@@ -427,10 +427,10 @@ impl DatabaseDriver for SqliteDriver {
         row: &RowInsert,
     ) -> AppResult<u64> {
         if row.columns.is_empty() {
-            return Err(AppError::Query("未提供任何欄位".to_string()));
+            return Err(AppError::Query(t!("未提供任何欄位").to_string()));
         }
         if row.columns.len() != row.values.len() {
-            return Err(AppError::Query("欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("欄位與值數量不符").to_string()));
         }
         let q_tbl = quote_ident(table);
         let cols = row
@@ -459,13 +459,13 @@ impl DatabaseDriver for SqliteDriver {
         del: &RowDelete,
     ) -> AppResult<u64> {
         if del.pk_columns.is_empty() {
-            return Err(AppError::Query("此表無主鍵，無法安全刪除".to_string()));
+            return Err(AppError::Query(t!("此表無主鍵，無法安全刪除").to_string()));
         }
         if del.pk_columns.len() != del.pk_values.len() {
-            return Err(AppError::Query("主鍵欄位與值數量不符".to_string()));
+            return Err(AppError::Query(t!("主鍵欄位與值數量不符").to_string()));
         }
         if del.pk_values.iter().any(|v| v.is_none()) {
-            return Err(AppError::Query("主鍵值為 NULL，無法定位該列".to_string()));
+            return Err(AppError::Query(t!("主鍵值為 NULL，無法定位該列").to_string()));
         }
         let q_tbl = quote_ident(table);
         let where_clause = del
@@ -540,12 +540,12 @@ impl DatabaseDriver for SqliteDriver {
             // SQLite 無法直接改欄位型別 / 預設（需重建表）；明確回報不支援。
             AlterOp::ModifyColumn { .. } => {
                 return Err(AppError::Unsupported(
-                    "SQLite 不支援直接修改欄位型別（需重建資料表）".into(),
+                    t!("SQLite 不支援直接修改欄位型別（需重建資料表）").into(),
                 ))
             }
             AlterOp::SetDefault { .. } => {
                 return Err(AppError::Unsupported(
-                    "SQLite 不支援直接修改欄位預設值（需重建資料表）".into(),
+                    t!("SQLite 不支援直接修改欄位預設值（需重建資料表）").into(),
                 ))
             }
         };
@@ -640,7 +640,7 @@ impl DatabaseDriver for SqliteDriver {
         unique: bool,
     ) -> AppResult<()> {
         if columns.is_empty() {
-            return Err(AppError::Query("請至少選擇一個欄位".into()));
+            return Err(AppError::Query(t!("請至少選擇一個欄位").into()));
         }
         let cols = columns.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
         let uniq = if unique { "UNIQUE " } else { "" };
@@ -668,7 +668,7 @@ impl DatabaseDriver for SqliteDriver {
                 .try_get::<String, _>(0)
                 .map(|ddl| format!("{ddl};"))
                 .map_err(|e| AppError::Query(e.to_string())),
-            None => Err(AppError::Query("找不到該表的建表語句".into())),
+            None => Err(AppError::Query(t!("找不到該表的建表語句").into())),
         }
     }
 
@@ -717,7 +717,7 @@ fn build_where(filters: &[Filter], match_any: bool) -> AppResult<(String, Vec<Op
     let mut binds = Vec::new();
     for f in filters {
         let op = filter_op_sql(&f.op)
-            .ok_or_else(|| AppError::Query(format!("不支援的運算子：{}", f.op)))?;
+            .ok_or_else(|| AppError::Query(tf!("不支援的運算子：{op}", op = f.op)))?;
         let col = quote_ident(&f.column);
         if op_needs_value(&f.op) {
             clauses.push(format!("{col} {op} ?"));

@@ -19,8 +19,9 @@ pub fn ensure_read_only(sql: &str) -> AppResult<()> {
             continue; // 空句 / 純註解
         }
         if !ALLOWED.contains(&kw.as_str()) {
-            return Err(AppError::Query(format!(
-                "CLI 為唯讀模式，僅允許查詢語句（偵測到 `{kw}`）"
+            return Err(AppError::Query(tf!(
+                "CLI 為唯讀模式，僅允許查詢語句（偵測到 `{kw}`）",
+                kw = kw
             )));
         }
         // PostgreSQL 可寫 CTE：`WITH x AS (DELETE …) …` 首關鍵字為 with（被允許），
@@ -28,8 +29,9 @@ pub fn ensure_read_only(sql: &str) -> AppResult<()> {
         if kw == "with" {
             let lower = stmt.to_ascii_lowercase();
             if let Some(w) = CTE_WRITE.iter().find(|w| contains_keyword(&lower, w)) {
-                return Err(AppError::Query(format!(
-                    "CLI 為唯讀模式，偵測到可寫 CTE（含 `{w}`）"
+                return Err(AppError::Query(tf!(
+                    "CLI 為唯讀模式，偵測到可寫 CTE（含 `{w}`）",
+                    w = w
                 )));
             }
         }

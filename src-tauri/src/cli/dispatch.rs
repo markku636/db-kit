@@ -22,14 +22,22 @@ pub async fn dispatch(cli: Cli) -> AppResult<()> {
         Command::Conn(ConnCmd::Test) => {
             let cfg = resolve::resolve(&conn).await?;
             ConnectionManager::new().test(&cfg).await?;
-            println!("連線成功");
+            println!("{}", t!("連線成功"));
             Ok(())
         }
         Command::Backup(b) => {
             // 備份直接以 config 打 backup::backup（讀 DB 產 dump 檔），不經 manager 連線。
             let cfg = resolve::resolve(&conn).await?;
             let res = crate::backup::backup(&cfg, &b.database, &b.to).await?;
-            println!("已備份：{}（{} bytes，方式 {}）", res.path, res.bytes, res.method);
+            println!(
+                "{}",
+                tf!(
+                    "已備份：{path}（{bytes} bytes，方式 {method}）",
+                    path = res.path,
+                    bytes = res.bytes,
+                    method = res.method
+                )
+            );
             Ok(())
         }
         // ---- 其餘需建立連線 ----
@@ -80,12 +88,12 @@ async fn exec(
             let cap = max_rows.unwrap_or_else(crate::db::limits::row_cap);
             let q = mgr.query_capped(id, &sql, cap).await?;
             if q.columns.is_empty() {
-                println!("(無欄位；{} 列受影響)", q.rows_affected);
+                println!("{}", tf!("(無欄位；{n} 列受影響)", n = q.rows_affected));
             } else {
                 render::emit(fmt, &q.columns, &q.rows);
             }
             if q.truncated {
-                eprintln!("(結果已截斷於 {cap} 列；用 --max-rows 0 取完整結果)");
+                eprintln!("{}", tf!("(結果已截斷於 {cap} 列；用 --max-rows 0 取完整結果)", cap = cap));
             }
         }
         Command::Explain { sql } => {
@@ -122,7 +130,14 @@ async fn exec(
             if let Format::Json = fmt {
                 render::emit_value(fmt, &m);
             } else {
-                println!("資料表：{}　關係：{}", m.tables.len(), m.relations.len());
+                println!(
+                    "{}",
+                    tf!(
+                        "資料表：{tables}　關係：{relations}",
+                        tables = m.tables.len(),
+                        relations = m.relations.len()
+                    )
+                );
                 let cols = vec![
                     "from_table".to_string(),
                     "from_column".to_string(),
@@ -200,8 +215,13 @@ async fn exec_table(
             render::emit(fmt, &pd.columns, &pd.rows);
             if let Format::Table = fmt {
                 println!(
-                    "(第 {} 頁，每頁 {}，共 {} 列)",
-                    pd.page, pd.page_size, pd.total_rows
+                    "{}",
+                    tf!(
+                        "(第 {page} 頁，每頁 {page_size}，共 {total} 列)",
+                        page = pd.page,
+                        page_size = pd.page_size,
+                        total = pd.total_rows
+                    )
                 );
             }
         }
@@ -250,8 +270,14 @@ async fn exec_export(
     };
     let res = crate::export::export(mgr, id, db, &e.table, &query, &opts, &e.to).await?;
     println!(
-        "已匯出 {} 列到 {}（{} bytes，{} 格式）",
-        res.rows, res.path, res.bytes, res.format
+        "{}",
+        tf!(
+            "已匯出 {rows} 列到 {path}（{bytes} bytes，{format} 格式）",
+            rows = res.rows,
+            path = res.path,
+            bytes = res.bytes,
+            format = res.format
+        )
     );
     Ok(())
 }
@@ -268,12 +294,12 @@ async fn exec_redis(
             let rk = mgr.scan_keys(id, db, &pattern, limit).await?;
             render::emit_list(fmt, "key", &rk.keys);
             if rk.truncated {
-                eprintln!("(已達上限 {limit}，可能仍有更多鍵)");
+                eprintln!("{}", tf!("(已達上限 {limit}，可能仍有更多鍵)", limit = limit));
             }
         }
         RedisCmd::Key { key } => match mgr.key_detail(id, db, &key).await? {
             Some(kd) => render::emit_value(fmt, &kd),
-            None => println!("(鍵不存在)"),
+            None => println!("{}", t!("(鍵不存在)")),
         },
         RedisCmd::Slowlog { count } => {
             let v = mgr.redis_driver(id)?.slowlog(count).await?;
@@ -336,7 +362,7 @@ struct ExportedConn {
 
 async fn conn_export(path: &str, passphrase: &str) -> AppResult<()> {
     if passphrase.is_empty() {
-        return Err(AppError::Storage("請提供 --passphrase".into()));
+        return Err(AppError::Storage(t!("請提供 --passphrase").into()));
     }
     let dir = store::headless_config_dir()?;
     let conns = store::load_all_in(&dir).await?;
@@ -355,13 +381,13 @@ async fn conn_export(path: &str, passphrase: &str) -> AppResult<()> {
         })
         .collect();
     let count = exported.len();
-    let plain =
-        serde_json::to_vec(&exported).map_err(|e| AppError::Storage(format!("序列化失敗：{e}")))?;
+    let plain = serde_json::to_vec(&exported)
+        .map_err(|e| AppError::Storage(tf!("序列化失敗：{e}", e = e)))?;
     let blob = crate::conn_crypto::encrypt(&plain, passphrase)?;
     tokio::fs::write(path, blob)
         .await
-        .map_err(|e| AppError::Storage(format!("寫入失敗：{e}")))?;
-    println!("已加密匯出 {count} 筆連線到 {path}");
+        .map_err(|e| AppError::Storage(tf!("寫入失敗：{e}", e = e)))?;
+    println!("{}", tf!("已加密匯出 {count} 筆連線到 {path}", count = count, path = path));
     Ok(())
 }
 
@@ -416,12 +442,13 @@ fn parse_filter(spec: &str) -> AppResult<Filter> {
     let op = parts.next().unwrap_or("").trim().to_string();
     let value = parts.next().map(|v| v.to_string());
     if column.is_empty() || op.is_empty() {
-        return Err(AppError::Query(format!(
-            "篩選格式錯誤（應為 col:op[:value]）：{spec}"
+        return Err(AppError::Query(tf!(
+            "篩選格式錯誤（應為 col:op[:value]）：{spec}",
+            spec = spec
         )));
     }
     if crate::db::filter_op_sql(&op).is_none() {
-        return Err(AppError::Query(format!("不支援的篩選運算子：{op}")));
+        return Err(AppError::Query(tf!("不支援的篩選運算子：{op}", op = op)));
     }
     let value = if crate::db::op_needs_value(&op) {
         value
@@ -440,14 +467,15 @@ fn parse_sort(spec: &str) -> AppResult<Sort> {
     let column = parts.next().unwrap_or("").trim().to_string();
     let dir = parts.next().unwrap_or("asc").trim().to_ascii_lowercase();
     if column.is_empty() {
-        return Err(AppError::Query(format!(
-            "排序格式錯誤（應為 col:asc|desc）：{spec}"
+        return Err(AppError::Query(tf!(
+            "排序格式錯誤（應為 col:asc|desc）：{spec}",
+            spec = spec
         )));
     }
     let dir = match dir.as_str() {
         "asc" | "" => SortDir::Asc,
         "desc" => SortDir::Desc,
-        other => return Err(AppError::Query(format!("排序方向需為 asc/desc：{other}"))),
+        other => return Err(AppError::Query(tf!("排序方向需為 asc/desc：{other}", other = other))),
     };
     Ok(Sort { column, dir })
 }

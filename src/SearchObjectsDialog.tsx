@@ -336,7 +336,9 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
         <>
           {results && (
             <span className="mr-auto text-xs text-fg/40">
-              {results.length} 筆{truncated ? t("（已達上限 {LIMIT}）", { LIMIT }) : ""}　·　↑↓ 選擇、Enter / 雙擊開啟
+              {t("{n} 筆", { n: results.length })}
+              {truncated ? t("（已達上限 {LIMIT}）", { LIMIT }) : ""}
+              {t("　·　↑↓ 選擇、Enter / 雙擊開啟")}
             </span>
           )}
           <Button variant="secondary" onClick={onClose}>{t("關閉")}</Button>
@@ -468,7 +470,7 @@ export default function SearchObjectsDialog({ connId, kind, onClose }: {
               <div className="text-red-300 text-sm p-5 mono whitespace-pre-wrap">{err}</div>
             ) : !results ? (
               <div className="text-fg/40 text-sm p-5">
-                開始輸入即可即時搜尋連線上所有資料庫的物件（最多 {LIMIT} 筆）。
+                {t("開始輸入即可即時搜尋連線上所有資料庫的物件（最多 {LIMIT} 筆）。", { LIMIT })}
               </div>
             ) : results.length === 0 ? (
               <div className="text-fg/40 text-sm p-5">{t("查無符合的物件。")}</div>

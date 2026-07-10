@@ -91,6 +91,21 @@ function underSkippedDecl(node) {
   return false;
 }
 
+/**
+ * 這個節點在任何函式裡面嗎？不在 = 模組初始化時求值。
+ *
+ * 模組層級的常數表**不可**包 t()：它只在 import 時求值一次，切換語言不會重算。
+ * 正確作法是常數存繁中原文當資料、消費端才 t(TABLE[k])（見 PALETTE_GROUP_LABEL）。
+ * 這個守門也讓 codemod 具冪等性 —— 否則重跑會把 i18n-unwrap-module.mjs 的成果又包回去。
+ */
+function insideFunction(node) {
+  for (let p = node.parent; p; p = p.parent) {
+    if (ts.isFunctionDeclaration(p) || ts.isFunctionExpression(p) || ts.isArrowFunction(p) ||
+        ts.isMethodDeclaration(p) || ts.isGetAccessor(p)) return true;
+  }
+  return false;
+}
+
 function insideTCall(node) {
   const p = node.parent;
   return p && ts.isCallExpression(p) && ts.isIdentifier(p.expression) && p.expression.text === "t" && p.arguments[0] === node;
@@ -154,6 +169,7 @@ function processFile(file, { dry }) {
   const src = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const edits = [];   // { start, end, text }
   const todos = [];
+  let moduleConsts = 0; // 模組層級常數：刻意不包（見 insideFunction）
   const componentsNeedingT = new Set();
   let needsModuleT = false;
 
@@ -198,6 +214,14 @@ function processFile(file, { dry }) {
 
     // ---- 一般字串 / 樣板 ----
     const skip = insideTCall(node) || insideImportExport(node) || underSkippedDecl(node);
+    if (!skip && !insideFunction(node) && !ts.isJsxText(node) &&
+        (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)) &&
+        isCjk(node.getText(src))) {
+      // 不是 TODO，是刻意如此：常數存繁中原文當資料，消費端 t(TABLE[k])。只計數。
+      moduleConsts++;
+      ts.forEachChild(node, visit);
+      return;
+    }
     if (!skip) {
       const inJsxAttr = node.parent && ts.isJsxAttribute(node.parent);
       const isKey = node.parent && (ts.isPropertyAssignment(node.parent) || ts.isPropertySignature(node.parent)) && node.parent.name === node;
@@ -242,7 +266,7 @@ function processFile(file, { dry }) {
     }
   }
 
-  if (edits.length === 0) return { file, skipped: "nothing-to-wrap", todos };
+  if (edits.length === 0) return { file, skipped: "nothing-to-wrap", todos, moduleConsts };
 
   // 頂層已經有別的 t（如 editorThemes.ts 的 `import { tags as t }`）→ 加了 import 會 duplicate identifier。
   for (const st of src.statements) {
@@ -319,7 +343,7 @@ function processFile(file, { dry }) {
   }
 
   if (!dry) writeFileSync(file, out, "utf8");
-  return { file, wrapped: edits.length, components: compEdits.length, todos };
+  return { file, wrapped: edits.length, components: compEdits.length, todos, moduleConsts };
 }
 
 const args = process.argv.slice(2);
@@ -330,7 +354,7 @@ if (!files.length) {
   process.exit(1);
 }
 
-let totalWrapped = 0, totalTodos = 0;
+let totalWrapped = 0, totalTodos = 0, totalConsts = 0;
 for (const f of files) {
   const r = processFile(f.replaceAll("\\", "/"), { dry });
   if (r.skipped) {
@@ -339,9 +363,11 @@ for (const f of files) {
     totalWrapped += r.wrapped;
     console.log(`✓ ${r.file}: 包了 ${r.wrapped} 處，注入 ${r.components} 個 const t = useT()`);
   }
+  totalConsts += r.moduleConsts ?? 0;
   for (const td of r.todos ?? []) {
     totalTodos++;
     console.log(`  TODO ${r.file}:${td.line}  ${td.why}\n       ${td.snippet}`);
   }
 }
-console.log(`\n合計：包了 ${totalWrapped} 處，${totalTodos} 處需人工${dry ? "（dry-run，未寫檔）" : ""}`);
+console.log(`\n合計：包了 ${totalWrapped} 處，${totalTodos} 處需人工，` +
+  `${totalConsts} 處模組層級常數（刻意不包，由消費端翻譯）${dry ? "（dry-run，未寫檔）" : ""}`);

@@ -60,6 +60,17 @@ pub fn show_main_window(window: tauri::WebviewWindow) {
     let _ = window.set_focus();
 }
 
+/// 設定介面語言：更新進程內語言（供後端錯誤訊息本地化），並寫回 `app_settings.json`
+/// （GUI 與 dbk CLI 共用）。未知語言碼一律退回預設（zh-TW）。
+#[tauri::command]
+pub async fn set_lang(app: AppHandle, lang: String) -> AppResult<()> {
+    let l = crate::i18n::Lang::from_code(&lang).unwrap_or_default();
+    crate::i18n::set_lang(l);
+    let mut s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
+    s.lang = Some(l.as_code().to_string());
+    store::write_json(&app, store::APP_SETTINGS_FILE, &s).await
+}
+
 /// 查詢防護設定（互動查詢 row cap / 逾時），全域生效。
 /// 前端於啟動與設定變更時呼叫；持久化在前端 localStorage（非機密、UI 偏好層級）。
 #[tauri::command]
@@ -161,10 +172,10 @@ pub async fn clear_cache(state: State<'_, AppState>, id: String) -> AppResult<()
 fn hash_startup_password(password: &str) -> AppResult<String> {
     let salt_bytes: [u8; 16] = rand::random();
     let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|e| AppError::Storage(format!("salt 產生失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("salt 產生失敗：{e}", e = e)))?;
     let phc = Argon2::default()
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| AppError::Storage(format!("密碼雜湊失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("密碼雜湊失敗：{e}", e = e)))?;
     Ok(phc.to_string())
 }
 
@@ -203,7 +214,7 @@ pub async fn set_startup_password(
     next: String,
 ) -> AppResult<()> {
     if next.is_empty() {
-        return Err(AppError::Storage("密碼不可為空".into()));
+        return Err(AppError::Storage(t!("密碼不可為空").into()));
     }
     let mut s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
     if let Some(existing) = &s.startup_password_hash {
@@ -212,7 +223,7 @@ pub async fn set_startup_password(
             .map(|c| verify_startup_hash(c, existing))
             .unwrap_or(false);
         if !ok {
-            return Err(AppError::Storage("目前密碼不正確".into()));
+            return Err(AppError::Storage(t!("目前密碼不正確").into()));
         }
     }
     s.startup_password_hash = Some(hash_startup_password(&next)?);
@@ -225,7 +236,7 @@ pub async fn clear_startup_password(app: AppHandle, current: String) -> AppResul
     let mut s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
     if let Some(existing) = &s.startup_password_hash {
         if !verify_startup_hash(&current, existing) {
-            return Err(AppError::Storage("目前密碼不正確".into()));
+            return Err(AppError::Storage(t!("目前密碼不正確").into()));
         }
     }
     s.startup_password_hash = None;
@@ -257,7 +268,7 @@ pub async fn export_connections_encrypted(
     passphrase: String,
 ) -> AppResult<usize> {
     if passphrase.is_empty() {
-        return Err(AppError::Storage("請提供 passphrase".into()));
+        return Err(AppError::Storage(t!("請提供 passphrase").into()));
     }
     let conns = store::load_all(&app).await?;
     let exported: Vec<ExportedConn> = conns
@@ -275,11 +286,11 @@ pub async fn export_connections_encrypted(
         .collect();
     let count = exported.len();
     let plain = serde_json::to_vec(&exported)
-        .map_err(|e| AppError::Storage(format!("序列化失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("序列化失敗：{e}", e = e)))?;
     let blob = crate::conn_crypto::encrypt(&plain, &passphrase)?;
     tokio::fs::write(&path, blob)
         .await
-        .map_err(|e| AppError::Storage(format!("寫入失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("寫入失敗：{e}", e = e)))?;
     Ok(count)
 }
 
@@ -292,10 +303,10 @@ pub async fn import_connections_encrypted(
 ) -> AppResult<usize> {
     let blob = tokio::fs::read(&path)
         .await
-        .map_err(|e| AppError::Storage(format!("讀取失敗：{e}")))?;
+        .map_err(|e| AppError::Storage(tf!("讀取失敗：{e}", e = e)))?;
     let plain = crate::conn_crypto::decrypt(&blob, &passphrase)?;
     let exported: Vec<ExportedConn> = serde_json::from_slice(&plain)
-        .map_err(|_| AppError::Storage("解密成功但內容格式不符（檔案可能來自不同版本）".into()))?;
+        .map_err(|_| AppError::Storage(t!("解密成功但內容格式不符（檔案可能來自不同版本）").into()))?;
     let count = exported.len();
     for e in exported {
         let id = e.base.id.clone();
@@ -397,18 +408,18 @@ pub async fn run_query_multi(
 /// 將文字內容寫入使用者（透過原生另存對話框）選定的路徑。供匯出查詢結果用。
 #[tauri::command]
 pub async fn save_text_file(path: String, content: String) -> AppResult<()> {
-    std::fs::write(&path, content).map_err(|e| AppError::Query(format!("寫入失敗：{e}")))
+    std::fs::write(&path, content).map_err(|e| AppError::Query(tf!("寫入失敗：{e}", e = e)))
 }
 
 /// 讀取使用者（透過原生開啟對話框）選定之文字檔內容。供查詢編輯器開啟 .sql 檔用。
 /// 上限 8 MiB，避免誤選巨大檔案塞爆編輯器 / 記憶體。
 #[tauri::command]
 pub async fn read_text_file(path: String) -> AppResult<String> {
-    let meta = std::fs::metadata(&path).map_err(|e| AppError::Query(format!("讀取失敗：{e}")))?;
+    let meta = std::fs::metadata(&path).map_err(|e| AppError::Query(tf!("讀取失敗：{e}", e = e)))?;
     if meta.len() > 8 * 1024 * 1024 {
-        return Err(AppError::Query("檔案過大（上限 8 MiB）".into()));
+        return Err(AppError::Query(t!("檔案過大（上限 8 MiB）").into()));
     }
-    std::fs::read_to_string(&path).map_err(|e| AppError::Query(format!("讀取失敗：{e}")))
+    std::fs::read_to_string(&path).map_err(|e| AppError::Query(tf!("讀取失敗：{e}", e = e)))
 }
 
 #[tauri::command]
@@ -794,9 +805,9 @@ pub async fn import_csv(
     const MAX_IMPORT_BYTES: u64 = 100 * 1024 * 1024;
     if let Ok(meta) = tokio::fs::metadata(&path).await {
         if meta.len() > MAX_IMPORT_BYTES {
-            return Err(AppError::Query(format!(
-                "檔案過大（約 {} MB），CSV 匯入上限 100 MB；請先分割檔案",
-                meta.len() / 1024 / 1024
+            return Err(AppError::Query(tf!(
+                "檔案過大（約 {mb} MB），CSV 匯入上限 100 MB；請先分割檔案",
+                mb = meta.len() / 1024 / 1024
             )));
         }
     }
@@ -804,10 +815,10 @@ pub async fn import_csv(
         // 非 UTF-8（常見於舊版 Excel / ANSI 匯出）給明確指引，而非難懂的原始錯誤。
         if e.kind() == std::io::ErrorKind::InvalidData {
             AppError::Query(
-                "檔案非 UTF-8 編碼；請在試算表以「另存新檔 → CSV UTF-8」重新匯出後再試".to_string(),
+                t!("檔案非 UTF-8 編碼；請在試算表以「另存新檔 → CSV UTF-8」重新匯出後再試").to_string(),
             )
         } else {
-            AppError::Query(format!("讀取檔案失敗：{e}"))
+            AppError::Query(tf!("讀取檔案失敗：{e}", e = e))
         }
     })?;
     crate::import::import_csv(&state.manager, &id, &database, &table, &content, &options).await
@@ -827,15 +838,15 @@ pub async fn import_excel(
     const MAX_IMPORT_BYTES: u64 = 100 * 1024 * 1024;
     if let Ok(meta) = tokio::fs::metadata(&path).await {
         if meta.len() > MAX_IMPORT_BYTES {
-            return Err(AppError::Query(format!(
-                "檔案過大（約 {} MB），Excel 匯入上限 100 MB",
-                meta.len() / 1024 / 1024
+            return Err(AppError::Query(tf!(
+                "檔案過大（約 {mb} MB），Excel 匯入上限 100 MB",
+                mb = meta.len() / 1024 / 1024
             )));
         }
     }
     let bytes = tokio::fs::read(&path)
         .await
-        .map_err(|e| AppError::Query(format!("讀取檔案失敗：{e}")))?;
+        .map_err(|e| AppError::Query(tf!("讀取檔案失敗：{e}", e = e)))?;
     crate::import::import_xlsx(&state.manager, &id, &database, &table, &bytes, &options).await
 }
 
@@ -853,12 +864,12 @@ pub async fn import_preview(
     let rows = if is_excel {
         let bytes = tokio::fs::read(&path)
             .await
-            .map_err(|e| AppError::Query(format!("讀取檔案失敗：{e}")))?;
+            .map_err(|e| AppError::Query(tf!("讀取檔案失敗：{e}", e = e)))?;
         crate::import::parse_xlsx(&bytes)?
     } else {
         let content = tokio::fs::read_to_string(&path)
             .await
-            .map_err(|e| AppError::Query(format!("讀取檔案失敗：{e}")))?;
+            .map_err(|e| AppError::Query(tf!("讀取檔案失敗：{e}", e = e)))?;
         let delim = options.delimiter.as_deref().and_then(|d| d.chars().next()).unwrap_or(',');
         crate::import::parse_csv(&content, delim)
     };
@@ -1137,12 +1148,18 @@ pub async fn redis_subscribe(
         };
         for c in &channels {
             if let Err(e) = pubsub.subscribe(c).await {
-                let _ = app2.emit("redis-pubsub-error", format!("{id2}: subscribe {c} 失敗：{e}"));
+                let _ = app2.emit(
+                    "redis-pubsub-error",
+                    tf!("{id2}: subscribe {c} 失敗：{e}", id2 = id2, c = c, e = e),
+                );
             }
         }
         for p in &patterns {
             if let Err(e) = pubsub.psubscribe(p).await {
-                let _ = app2.emit("redis-pubsub-error", format!("{id2}: psubscribe {p} 失敗：{e}"));
+                let _ = app2.emit(
+                    "redis-pubsub-error",
+                    tf!("{id2}: psubscribe {p} 失敗：{e}", id2 = id2, p = p, e = e),
+                );
             }
         }
         let mut stream = pubsub.on_message();
@@ -1267,7 +1284,7 @@ pub async fn restore_from_history(app: AppHandle, entry_id: String) -> AppResult
         .find(|e| e.id == entry_id)
         .ok_or_else(|| AppError::NotFound(entry_id))?;
     if entry.status != BackupStatus::Ok {
-        return Err(AppError::Query("此筆為失敗紀錄，無法還原".into()));
+        return Err(AppError::Query(t!("此筆為失敗紀錄，無法還原").into()));
     }
     let cfg = store::load_connection(&app, &entry.connection_id).await?;
     backup::restore(&cfg, &entry.database, &entry.path).await

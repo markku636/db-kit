@@ -160,7 +160,7 @@ pub async fn fire_one(app: &AppHandle, sched: &BackupSchedule) -> BackupHistoryE
                 let out_str = out_path.to_string_lossy().to_string();
                 // 確保輸出目錄存在。
                 if let Err(e) = tokio::fs::create_dir_all(&sched.target_dir).await {
-                    Err(format!("建立輸出目錄失敗：{e}"))
+                    Err(tf!("建立輸出目錄失敗：{e}", e = e))
                 } else {
                     crate::backup::backup(&cfg, &sched.database, &out_str)
                         .await
