@@ -23,6 +23,10 @@
   <strong>💚 100% 開源免費</strong>　·　MIT 授權　·　無付費牆　·　無功能鎖　·　無遙測　·　可自由 fork / 自託管
 </p>
 
+<p align="center">
+  <strong>繁體中文</strong> · <a href="./README.en.md">English</a>
+</p>
+
 ---
 
 ## 這是什麼
