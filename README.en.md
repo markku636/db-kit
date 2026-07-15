@@ -8,7 +8,7 @@
 
 <p align="center">
 An all-in-one cross-platform desktop database tool that manages<br>
-<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis</strong><br>
+<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka</strong><br>
 through a single, consistent interface.
 </p>
 
@@ -111,7 +111,7 @@ To package installers yourself, see [Build from source](#build-from-source) belo
 
 First time after installing — three steps to connect:
 
-1. **Add a connection** — click **"+ New Connection"** at the top left and pick the database type (MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis).
+1. **Add a connection** — click **"+ New Connection"** at the top left and pick the database type (MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis / Kafka).
 2. **Fill in connection details** — host, port, username, password (or pick a SQLite file). Configure a jump host on the **SSH Tunnel** tab if needed. Hit **"Test Connection"** first, then **Save**.
 3. **Start working** — the connection appears in the left tree; expand a database and double-click a table to browse / edit data. Open query editor, ER diagram, and more from the top tabs.
 
@@ -142,7 +142,7 @@ Common operations at a glance:
 
 ## ✨ Highlights
 
-- **Eight databases, one tool** — MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis, all fully connectable, sharing one connection tree, data grid, and shortcut set.
+- **Eight databases + Kafka, one tool** — MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka, all fully connectable, sharing one connection tree, data grid, and shortcut set.
 - **Cross-platform desktop app** — one codebase ships native installers for Windows / macOS / Linux with identical UI, shortcuts, connection management, and keychain integration; the `dbk` CLI is cross-platform too (see [Cross-platform](#cross-platform)).
 - **Light and fast** — Tauri 2 architecture using the system WebView, ~10× lighter than Electron; skeleton-screen startup (zero white flash), ~470 KB initial JS bundle, CodeMirror lazy-loaded only when you open a query tab.
 - **Multi-statement runs, stacked results** — batch execution shows every result set **stacked at once** (in the spirit of SSMS / MySQL Workbench), each pane independently scrollable / sortable / filterable, exportable per pane or "export all"; a mid-batch failure keeps the result sets already fetched.
@@ -160,6 +160,7 @@ Common operations at a glance:
 | Relational (MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite) | Full CRUD, DDL column editing, index / foreign-key management, EXPLAIN + visual execution plans (SHOWPLAN XML on SQL Server, DBMS_XPLAN on Oracle), routines (stored procedures / functions), RETURNING display, ER diagram, schema compare, SSL modes (MySQL family / PG) |
 | Document (MongoDB) | Documents flattened into a grid, find / aggregation pipelines, CRUD-via-JSON, **visual explain plans**, JSON query editor (syntax highlighting + field completion), advanced indexes (TTL / partial / text / $indexStats usage), **validation rules (JSON Schema)**, field statistics (type distribution / top values), **monitoring panel** (serverStatus / dbStats / currentOp / Profiler) |
 | Key-value (Redis) | Five structure views with editing, namespaced key tree, value formatting, Pub/Sub, ops panel, command-line console |
+| Message streaming (Kafka) | Cluster→topic tree, message browser (partition / offset / key / value / timestamp / headers), **live tail**, produce messages, **consumer groups + lag**, offset reset, create / delete topics + configs, **Schema Registry** (subjects / schema + Avro→JSON decode) |
 | Universal data grid | Multi-column compound filters (9 operators + AND·OR), multi-column sort, filter by value, **two-way foreign-key navigation** (jump to referenced row / find referencing rows), **Excel + CSV import**, multi-format + **Excel export**, copy as INSERT/UPDATE/DELETE/IN, column profiling + distinct-value distribution, **column comments on header hover** |
 | Query workspace | Syntax highlighting + table/column autocomplete (incl. external gateway), **`@` user-variable suggestions**, **stacked multi-result sets** (SSMS style, collapsible, export one or all), **visual query builder** (JOIN / aggregates / HAVING / paging / live preview), **SQL snippet library**, **parameterized queries `:name`**, format / minify / keyword casing, query history (200 entries, filterable), **saved queries** (groups / edit / import-export), run selection only, failed-statement locating, multiple query tabs (right-click to close others) |
 | Search / navigation | **Advanced object search Ctrl+Shift+G** (search names / definition bodies / comments across databases, whole-word + wildcards `*` `?`, highlighted definition preview, select in object explorer), **command palette Ctrl+K**, sidebar search auto-expands matching folders |
@@ -169,12 +170,13 @@ Common operations at a glance:
 | AI assistant | Right-hand panel wired to your local Claude CLI: streaming Q&A, write / optimize SQL, optionally attach the current schema; code blocks follow the active theme's highlighting |
 | Operations | Persistent connection settings, encrypted connection export / import (passwords included), scheduled backups + backup history, connection-pool monitoring + ping, update check on launch, cross-platform desktop app |
 
-> Current status: **all eight databases fully connectable**; relational databases have full CRUD / DDL column editing / index management / EXPLAIN / RETURNING display, multi-column compound filters (9 operators + AND·OR) and sorting, **CSV import** + multi-format export + **whole-database schema dump SQL**
+> Current status: **all eight databases + Kafka fully connectable**; relational databases have full CRUD / DDL column editing / index management / EXPLAIN / RETURNING display, multi-column compound filters (9 operators + AND·OR) and sorting, **CSV import** + multi-format export + **whole-database schema dump SQL**
 > SQL Server (tiberius + bb8 connection pool): CRUD, structure tabs (indexes / foreign keys / DDL), routines (stored procedures / functions), execution plans (SET SHOWPLAN_XML), ER diagram, column statistics; backup / restore planned via sqlpackage `.bacpac` export (not wired up yet)
 > MariaDB shares the MySQL driver (wire-protocol compatible): full MySQL feature parity + `INSERT/DELETE … RETURNING` result-set display
 > Oracle (rust-oracle / ODPI-C): CRUD, structure tabs (indexes / foreign keys / DDL via DBMS_METADATA), routines, execution plans (EXPLAIN PLAN + DBMS_XPLAN), ER diagram, column statistics; **requires a self-installed 64-bit Oracle Instant Client** (detected at runtime via PATH / ORACLE_HOME / custom directory, with download guidance if missing; server must be 12c+)
 > MongoDB: document flattening + full **CRUD-via-JSON** in the query editor (find / aggregate / insert / update / delete) + **explain plans** (stage tree, COLLSCAN warnings, scan ratios) + advanced indexes (TTL / partial / text / 2dsphere / hidden + $indexStats usage) + **validation rules** ($jsonSchema via collMod) + field statistics (BSON type distribution / Top-10 / sampling) + **monitoring panel** (serverStatus / dbStats / currentOp+kill / Profiler slow queries)
 > Redis, modeled on dedicated Redis desktop managers: five structure views with editing, **namespaced key tree** (folders grouped by `:`), value formatting (raw / JSON / Hex), **Pub/Sub** subscribe & publish, **ops panel** (slowlog / clients / big keys), **server status panel** (key INFO metrics + all sections, auto-refreshable), **command-line console** (command history, DB switching)
+> Kafka (rdkafka / librdkafka), modeled on **Offset Explorer**: cluster info, topics & partitions (leader / ISR / watermark), bounded consume + JSON / Avro detail, **live tail**, produce, **consumer groups + lag**, offset reset, create / delete topics & configs, **Schema Registry** (Avro→JSON decode); PLAINTEXT / SASL_PLAINTEXT + PLAIN by default, TLS / SASL_SSL / SCRAM via the `kafka-tls` feature (needs prebuilt OpenSSL); librdkafka is C, so Windows builds need CMake (see `build-kafka.ps1`)
 > Persistent connection settings (passwords in the OS keychain), SSH Tunnel, scheduled backups + backup history, connection latency ping, ER diagram, draggable column widths, AI assistant
 > Query workspace: multi-statement → **stacked multi-result sets** (SSMS style), failed-statement locating, 200-entry query history, saved-query groups, `@` user variables and table/column autocomplete
 > Appearance: **7 gemstone themes driving the app + editor together** (switch from the toolbar or Settings); **advanced object search** (cross-database / definition bodies / whole-word / wildcards)
