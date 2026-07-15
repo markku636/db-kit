@@ -1,3 +1,13 @@
+## v0.13.0
+
+Kafka 生態系整合（第四波擴充）：
+
+- **Schema Registry 寫入**：註冊新 schema 版本、設定相容性層級（BACKWARD / FORWARD / FULL / NONE 及其 transitive）、軟刪除 subject / 版本、版本差異比對（行 diff）。新版本以 CodeMirror JSON 編輯，註冊前先檢查相容性。
+- **Protobuf 訊息解碼**：以 protox + prost-reflect 動態解 Confluent wire format 的 protobuf 訊息（正確處理 message-indexes zigzag varint 與 .proto references 遞迴取回），訊息瀏覽器直接顯示 JSON。
+- **Kafka Connect 管理**（連線設定 Connect URL 後啟用）：列連接器與任務狀態、暫停 / 恢復 / 重啟 / 重啟失敗任務 / 刪除、檢視與編輯設定（JSON）、新增連接器（plugin 選擇 → 設定驗證 → 建立）。
+- **ACL 管理**：依 principal 分組檢視、依 principal / 資源類型篩選、新增與刪除 ACL（資源類型 / pattern / 操作 / 權限）；未啟用授權器時明確提示。
+- 開發 / 整合測試用 `scripts/dev-kafka/docker-compose.yml`（broker + Schema Registry + Connect）。
+
 ## v0.12.0
 
 Kafka 監控與告警（第三波擴充）——「監控與告警」面板（連線 / cluster 節點右鍵）：
