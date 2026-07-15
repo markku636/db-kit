@@ -3,6 +3,8 @@ import { Activity, RefreshCw, X } from "lucide-react";
 import {
   api,
   onKafkaMetrics,
+  type KafkaAlertEvent,
+  type KafkaAlertRule,
   type KafkaHealthReport,
   type KafkaMonitorConfig,
   type KafkaSample,
@@ -47,7 +49,7 @@ export default function KafkaMonitorPanel({ connId, connName, onClose }: {
         <div className="flex-1 min-h-0 overflow-auto">
           {tab === "risk" && <RiskTab connId={connId} />}
           {tab === "charts" && <ChartsTab connId={connId} />}
-          {tab === "alerts" && <div className="p-6 text-fg/30 text-sm">{t("尚未設定告警規則。")}</div>}
+          {tab === "alerts" && <AlertsTab connId={connId} />}
         </div>
       </div>
     </div>
@@ -197,6 +199,131 @@ function ChartsTab({ connId }: { connId: string }) {
             </div>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function blankRule(connId: string): KafkaAlertRule {
+  return {
+    id: crypto.randomUUID(), connection_id: connId, enabled: true,
+    scope: "group", target: "", metric: "lag", op: "gt", threshold: 1000, for_ticks: 1,
+  };
+}
+
+function AlertsTab({ connId }: { connId: string }) {
+  const t = useT();
+  const [rules, setRules] = useState<KafkaAlertRule[]>([]);
+  const [history, setHistory] = useState<KafkaAlertEvent[]>([]);
+  const [edit, setEdit] = useState<KafkaAlertRule | null>(null);
+  const [topics, setTopics] = useState<string[]>([]);
+  const [groups, setGroups] = useState<string[]>([]);
+
+  const load = () => {
+    api.kafkaAlertRulesList(connId).then(setRules).catch(() => {});
+    api.kafkaAlertHistory().then((h) => setHistory(h.filter((e) => e.connection_id === connId).reverse())).catch(() => {});
+  };
+  useEffect(() => {
+    load();
+    api.kafkaTopics(connId).then((ts) => setTopics(ts.map((x) => x.name).sort())).catch(() => {});
+    api.kafkaConsumerGroups(connId).then((gs) => setGroups(gs.map((g) => g.group_id).sort())).catch(() => {});
+  }, [connId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = () => {
+    if (!edit) return;
+    api.kafkaAlertRuleSave(edit).then(() => { setEdit(null); load(); }).catch((e) => toast.error(e?.message ?? String(e)));
+  };
+  const remove = (id: string) => api.kafkaAlertRuleRemove(id).then(load).catch(() => {});
+  const toggle = (r: KafkaAlertRule) => api.kafkaAlertRuleSave({ ...r, enabled: !r.enabled }).then(load).catch(() => {});
+
+  const metricOptions = (scope: string) =>
+    scope === "cluster" ? ["offline", "urp"] : scope === "topic" ? ["produce_rate"] : ["lag"];
+
+  const inputCls = "bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent";
+
+  return (
+    <div className="p-4 text-xs space-y-4">
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={() => setEdit(blankRule(connId))} className="px-3 py-1 rounded bg-accent/80 hover:bg-accent text-white">{t("新增規則")}</button>
+        <button type="button" onClick={() => api.kafkaAlertTest(t("這是一則測試通知")).catch((e) => toast.error(e?.message ?? String(e)))} className="px-3 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60">{t("測試通知")}</button>
+        <span className="text-fg/30">{t("規則於背景取樣時評估；未取樣的連線不會觸發")}</span>
+      </div>
+
+      {edit && (
+        <div className="bg-inset rounded border border-fg/10 p-3 flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-0.5"><span className="text-fg/40">{t("範圍")}</span>
+            <select value={edit.scope} onChange={(e) => { const scope = e.target.value as KafkaAlertRule["scope"]; setEdit({ ...edit, scope, metric: metricOptions(scope)[0] as KafkaAlertRule["metric"], target: scope === "cluster" ? "" : edit.target }); }} className={inputCls}>
+              <option value="group">{t("消費者群組")}</option>
+              <option value="topic">{t("主題")}</option>
+              <option value="cluster">{t("叢集")}</option>
+            </select>
+          </label>
+          {edit.scope !== "cluster" && (
+            <label className="flex flex-col gap-0.5"><span className="text-fg/40">{t("目標")}</span>
+              <select value={edit.target} onChange={(e) => setEdit({ ...edit, target: e.target.value })} className={inputCls}>
+                <option value="">{t("（選擇）")}</option>
+                {(edit.scope === "topic" ? topics : groups).map((x) => <option key={x} value={x}>{x}</option>)}
+              </select>
+            </label>
+          )}
+          <label className="flex flex-col gap-0.5"><span className="text-fg/40">{t("指標")}</span>
+            <select value={edit.metric} onChange={(e) => setEdit({ ...edit, metric: e.target.value as KafkaAlertRule["metric"] })} className={inputCls}>
+              {metricOptions(edit.scope).map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-0.5"><span className="text-fg/40">{t("條件")}</span>
+            <select value={edit.op} onChange={(e) => setEdit({ ...edit, op: e.target.value as "gt" | "lt" })} className={inputCls}>
+              <option value="gt">&gt;</option>
+              <option value="lt">&lt;</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-0.5"><span className="text-fg/40">{t("門檻")}</span>
+            <input type="number" value={edit.threshold} onChange={(e) => setEdit({ ...edit, threshold: Number(e.target.value) || 0 })} className={`${inputCls} w-24`} />
+          </label>
+          <label className="flex flex-col gap-0.5"><span className="text-fg/40">{t("持續週期")}</span>
+            <input type="number" min={0} value={edit.for_ticks} onChange={(e) => setEdit({ ...edit, for_ticks: Math.max(0, Number(e.target.value) || 0) })} className={`${inputCls} w-20`} />
+          </label>
+          <button type="button" onClick={save} className="px-3 py-1 rounded bg-accent/80 hover:bg-accent text-white">{t("儲存")}</button>
+          <button type="button" onClick={() => setEdit(null)} className="px-3 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60">{t("取消")}</button>
+        </div>
+      )}
+
+      <table className="w-full text-left mono">
+        <thead className="text-fg/40"><tr>
+          <th className="px-2 py-1 font-normal">{t("範圍")}</th><th className="px-2 py-1 font-normal">{t("目標")}</th>
+          <th className="px-2 py-1 font-normal">{t("指標")}</th><th className="px-2 py-1 font-normal">{t("條件")}</th>
+          <th className="px-2 py-1 font-normal" />
+        </tr></thead>
+        <tbody>
+          {rules.map((r) => (
+            <tr key={r.id} className="border-b border-fg/5">
+              <td className="px-2 py-1 text-fg/60">{r.scope}</td>
+              <td className="px-2 py-1 text-fg/60 max-w-[160px] truncate" title={r.target}>{r.target || "—"}</td>
+              <td className="px-2 py-1 text-fg/60">{r.metric}</td>
+              <td className="px-2 py-1 text-fg/60">{r.op === "gt" ? ">" : "<"} {r.threshold}{r.for_ticks > 1 ? ` ×${r.for_ticks}` : ""}</td>
+              <td className="px-2 py-1 text-right space-x-2 whitespace-nowrap">
+                <button type="button" onClick={() => toggle(r)} className={r.enabled ? "text-emerald-300/80" : "text-fg/30"}>{r.enabled ? t("啟用") : t("停用")}</button>
+                <button type="button" onClick={() => setEdit(r)} className="text-fg/40 hover:text-accent">{t("編輯")}</button>
+                <button type="button" onClick={() => remove(r.id)} className="text-fg/40 hover:text-red-400">{t("刪除")}</button>
+              </td>
+            </tr>
+          ))}
+          {rules.length === 0 && <tr><td colSpan={5} className="px-2 py-4 text-fg/30">{t("尚未設定告警規則。")}</td></tr>}
+        </tbody>
+      </table>
+
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-fg/40">{t("告警歷史")}</span>
+          {history.length > 0 && <button type="button" onClick={() => api.kafkaAlertHistoryClear().then(load)} className="text-fg/40 hover:text-red-400">{t("清除")}</button>}
+        </div>
+        {history.slice(0, 50).map((e) => (
+          <div key={e.id} className="flex gap-2 border-b border-fg/5 py-0.5">
+            <span className="text-fg/35 mono">{new Date(e.fired_at).toLocaleString()}</span>
+            <span className="text-amber-300/80 mono">{e.message}</span>
+          </div>
+        ))}
+        {history.length === 0 && <div className="text-fg/30">{t("無告警記錄。")}</div>}
       </div>
     </div>
   );

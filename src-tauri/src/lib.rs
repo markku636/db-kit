@@ -55,6 +55,7 @@ use tauri::{Manager, RunEvent, WindowEvent};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             manager: ConnectionManager::new(),
             schedules: Arc::new(Mutex::new(Vec::new())),
@@ -69,6 +70,8 @@ pub fn run() {
             kafka_samplers: Arc::new(Mutex::new(std::collections::HashMap::new())),
             #[cfg(feature = "kafka")]
             kafka_metrics: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            #[cfg(feature = "kafka")]
+            kafka_alert_rules: Arc::new(Mutex::new(Vec::new())),
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -94,6 +97,16 @@ pub fn run() {
                 for s in g.iter_mut() {
                     s.next_run = scheduler::compute_next_run(&s.cadence, now);
                 }
+            });
+            // 載入持久化的 Kafka 告警規則到執行時副本。
+            #[cfg(feature = "kafka")]
+            tauri::async_runtime::block_on(async {
+                let loaded: Vec<crate::db::kafka::dto::KafkaAlertRule> =
+                    store::read_json(&handle, commands::KAFKA_ALERTS_FILE)
+                        .await
+                        .unwrap_or_default();
+                let state = handle.state::<AppState>();
+                *state.kafka_alert_rules.lock() = loaded;
             });
             // 背景排程迴圈。
             tauri::async_runtime::spawn(scheduler::run_loop(handle));
@@ -243,6 +256,18 @@ pub fn run() {
             commands::kafka_monitor_status,
             #[cfg(feature = "kafka")]
             commands::kafka_metrics_history,
+            #[cfg(feature = "kafka")]
+            commands::kafka_alert_rules_list,
+            #[cfg(feature = "kafka")]
+            commands::kafka_alert_rule_save,
+            #[cfg(feature = "kafka")]
+            commands::kafka_alert_rule_remove,
+            #[cfg(feature = "kafka")]
+            commands::kafka_alert_history,
+            #[cfg(feature = "kafka")]
+            commands::kafka_alert_history_clear,
+            #[cfg(feature = "kafka")]
+            commands::kafka_alert_test,
             #[cfg(feature = "kafka")]
             commands::kafka_schema_subjects,
             #[cfg(feature = "kafka")]

@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
-import { api, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat, type SearchHit } from "./api";
+import { api, onKafkaAlert, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
 import { LANGUAGES, useLang, useT, type Lang } from "./i18n";
@@ -242,6 +242,13 @@ export default function App() {
   useEffect(() => {
     const g = loadQueryGuard();
     api.setQueryGuard(g.maxRows, g.timeoutMs).catch(() => {});
+  }, []);
+
+  // Kafka 告警：全域訂閱，面板未開也彈 toast（OS 通知另由後端送）。
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    onKafkaAlert((e) => toast.info(`Kafka 告警：${e.message}`)).then((u) => { un = u; });
+    return () => un?.();
   }, []);
 
   // 全域快捷鍵 Ctrl/Cmd+Shift+G：開啟進階物件搜尋（有 modal 開啟時讓路；需已選取並連線）。

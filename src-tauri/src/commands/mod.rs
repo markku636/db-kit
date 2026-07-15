@@ -50,6 +50,9 @@ pub struct AppState {
     /// Kafka 指標環形緩衝（key = 連線 id；上限 2880 點 = 24h@30s）。
     #[cfg(feature = "kafka")]
     pub kafka_metrics: Arc<Mutex<HashMap<String, std::collections::VecDeque<crate::db::kafka::dto::KafkaSample>>>>,
+    /// Kafka 告警規則的執行時權威副本（取樣 tick 評估；命令變更後持久化）。
+    #[cfg(feature = "kafka")]
+    pub kafka_alert_rules: Arc<Mutex<Vec<crate::db::kafka::dto::KafkaAlertRule>>>,
 }
 
 /// 若前端送來的 secret 為空（存檔但未重新輸入的連線），從 keychain 補回。
@@ -1800,6 +1803,7 @@ pub(crate) fn spawn_kafka_sampler(
     }
     std::thread::spawn(move || {
         let mut group_consumers: HashMap<String, rdkafka::consumer::BaseConsumer> = HashMap::new();
+        let mut alert_counters: HashMap<String, u32> = HashMap::new();
         loop {
             if cancel.load(Ordering::Relaxed) {
                 break;
@@ -1825,6 +1829,7 @@ pub(crate) fn spawn_kafka_sampler(
                         }
                     }
                     let _ = app.emit("kafka-metrics", serde_json::json!({ "conn_id": id, "sample": sample }));
+                    evaluate_kafka_alerts(&app, &id, &sample, &mut alert_counters);
                 }
                 Err(_) => { /* 暫時性錯誤：略過本 tick */ }
             }
@@ -1903,6 +1908,196 @@ pub async fn kafka_metrics_history(
 ) -> AppResult<Vec<crate::db::kafka::dto::KafkaSample>> {
     let m = state.kafka_metrics.lock();
     Ok(m.get(&id).map(|b| b.iter().cloned().collect()).unwrap_or_default())
+}
+
+// ---- Kafka 告警 ----
+
+#[cfg(feature = "kafka")]
+pub(crate) const KAFKA_ALERTS_FILE: &str = "kafka_alerts.json";
+#[cfg(feature = "kafka")]
+const KAFKA_ALERT_HISTORY_FILE: &str = "kafka_alert_history.json";
+#[cfg(feature = "kafka")]
+const KAFKA_ALERT_HISTORY_CAP: usize = 500;
+
+/// 取樣 tick 內評估告警規則（邊緣觸發：連續 for_ticks 次越界才觸發一次，解除即重置）。
+/// `counters` 由取樣執行緒擁有，記錄各規則連續越界次數。
+#[cfg(feature = "kafka")]
+fn evaluate_kafka_alerts(
+    app: &AppHandle,
+    conn_id: &str,
+    sample: &crate::db::kafka::dto::KafkaSample,
+    counters: &mut HashMap<String, u32>,
+) {
+    use crate::db::kafka::dto::{KafkaAlertEvent, KafkaAlertRule};
+    let rules: Vec<KafkaAlertRule> = {
+        let state = app.state::<AppState>();
+        let g = state.kafka_alert_rules.lock();
+        g.iter()
+            .filter(|r| r.enabled && r.connection_id == conn_id)
+            .cloned()
+            .collect()
+    };
+    for rule in rules {
+        // 取本規則要比對的值。
+        let value: Option<f64> = match (rule.scope.as_str(), rule.metric.as_str()) {
+            ("cluster", "offline") => Some(sample.health.offline as f64),
+            ("cluster", "urp") => Some(sample.health.urp as f64),
+            ("group", "lag") => sample.group_lag.get(&rule.target).map(|v| *v as f64),
+            ("topic", "produce_rate") => produce_rate_for(app, conn_id, &rule.target),
+            _ => None,
+        };
+        let Some(value) = value else { continue };
+        let breach = match rule.op.as_str() {
+            "lt" => value < rule.threshold,
+            _ => value > rule.threshold,
+        };
+        let need = rule.for_ticks.max(1);
+        let c = counters.entry(rule.id.clone()).or_insert(0);
+        if breach {
+            *c += 1;
+            if *c == need {
+                // 觸發一次。
+                let target = if rule.target.is_empty() { "cluster" } else { &rule.target };
+                let msg = format!(
+                    "{} {} {} {} (={})",
+                    target, rule.metric, rule.op, rule.threshold, value
+                );
+                let event = KafkaAlertEvent {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    rule_id: rule.id.clone(),
+                    connection_id: conn_id.to_string(),
+                    fired_at: chrono::Local::now().timestamp_millis(),
+                    message: msg.clone(),
+                    value,
+                };
+                // OS 通知（未打包的 dev build 可能不顯示 → 另有 in-app toast 保底）。
+                use tauri_plugin_notification::NotificationExt;
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Kafka 告警")
+                    .body(&msg)
+                    .show();
+                let _ = app.emit("kafka-alert", &event);
+                // 追加歷史（read-modify-write，上限 500）。
+                let app2 = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut hist: Vec<KafkaAlertEvent> = store::read_json(&app2, KAFKA_ALERT_HISTORY_FILE)
+                        .await
+                        .unwrap_or_default();
+                    hist.push(event);
+                    let len = hist.len();
+                    if len > KAFKA_ALERT_HISTORY_CAP {
+                        hist.drain(0..len - KAFKA_ALERT_HISTORY_CAP);
+                    }
+                    let _ = store::write_json(&app2, KAFKA_ALERT_HISTORY_FILE, &hist).await;
+                });
+            }
+        } else {
+            *c = 0;
+        }
+    }
+}
+
+/// 由環形緩衝最後兩筆樣本估算某主題的 produce rate（訊息/秒）。不足回 None。
+#[cfg(feature = "kafka")]
+fn produce_rate_for(app: &AppHandle, conn_id: &str, topic: &str) -> Option<f64> {
+    let state = app.state::<AppState>();
+    let m = state.kafka_metrics.lock();
+    let buf = m.get(conn_id)?;
+    if buf.len() < 2 {
+        return None;
+    }
+    let cur = buf.back()?;
+    let prev = &buf[buf.len() - 2];
+    let dv = (*cur.topic_end.get(topic)? - *prev.topic_end.get(topic)?) as f64;
+    let dt = ((cur.ts - prev.ts) as f64) / 1000.0;
+    if dt <= 0.0 {
+        return None;
+    }
+    Some((dv / dt).max(0.0))
+}
+
+/// 列出告警規則（可選依連線過濾）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_alert_rules_list(
+    state: State<'_, AppState>,
+    connection_id: Option<String>,
+) -> AppResult<Vec<crate::db::kafka::dto::KafkaAlertRule>> {
+    let g = state.kafka_alert_rules.lock();
+    Ok(match connection_id {
+        Some(id) => g.iter().filter(|r| r.connection_id == id).cloned().collect(),
+        None => g.clone(),
+    })
+}
+
+/// 新增 / 更新告警規則（依 id upsert）並持久化。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_alert_rule_save(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    rule: crate::db::kafka::dto::KafkaAlertRule,
+) -> AppResult<()> {
+    {
+        let mut g = state.kafka_alert_rules.lock();
+        if let Some(existing) = g.iter_mut().find(|r| r.id == rule.id) {
+            *existing = rule;
+        } else {
+            g.push(rule);
+        }
+    }
+    persist_alert_rules(&app, &state).await
+}
+
+/// 刪除告警規則並持久化。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_alert_rule_remove(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    rule_id: String,
+) -> AppResult<()> {
+    state.kafka_alert_rules.lock().retain(|r| r.id != rule_id);
+    persist_alert_rules(&app, &state).await
+}
+
+#[cfg(feature = "kafka")]
+async fn persist_alert_rules(app: &AppHandle, state: &AppState) -> AppResult<()> {
+    let snapshot = state.kafka_alert_rules.lock().clone();
+    store::write_json(app, KAFKA_ALERTS_FILE, &snapshot).await
+}
+
+/// 取告警歷史。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_alert_history(
+    app: AppHandle,
+) -> AppResult<Vec<crate::db::kafka::dto::KafkaAlertEvent>> {
+    Ok(store::read_json(&app, KAFKA_ALERT_HISTORY_FILE).await.unwrap_or_default())
+}
+
+/// 清除告警歷史。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_alert_history_clear(app: AppHandle) -> AppResult<()> {
+    let empty: Vec<crate::db::kafka::dto::KafkaAlertEvent> = Vec::new();
+    store::write_json(&app, KAFKA_ALERT_HISTORY_FILE, &empty).await
+}
+
+/// 送出測試通知（供前端「測試通知」按鈕驗證 OS 通知是否可用）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_alert_test(app: AppHandle, message: String) -> AppResult<()> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title("Kafka 告警")
+        .body(&message)
+        .show()
+        .map_err(|e| AppError::Query(e.to_string()))?;
+    Ok(())
 }
 
 /// Schema Registry：subjects 清單。

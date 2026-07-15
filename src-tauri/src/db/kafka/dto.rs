@@ -343,6 +343,37 @@ pub struct KafkaSample {
     pub health: KafkaHealthCounts,
 }
 
+/// 告警規則（持久化 kafka_alerts.json）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KafkaAlertRule {
+    pub id: String,
+    pub connection_id: String,
+    pub enabled: bool,
+    /// "topic" | "group" | "cluster"
+    pub scope: String,
+    /// 主題 / 群組名稱；scope=cluster 時為空。
+    pub target: String,
+    /// "lag" | "produce_rate" | "offline" | "urp"
+    pub metric: String,
+    /// "gt" | "lt"
+    pub op: String,
+    pub threshold: f64,
+    /// 連續 N 個取樣週期才觸發（0 = 立即）。
+    #[serde(default)]
+    pub for_ticks: u32,
+}
+
+/// 告警事件（歷史）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KafkaAlertEvent {
+    pub id: String,
+    pub rule_id: String,
+    pub connection_id: String,
+    pub fired_at: i64,
+    pub message: String,
+    pub value: f64,
+}
+
 /// 取樣器狀態查詢結果。
 #[derive(Debug, Clone, Serialize)]
 pub struct KafkaMonitorStatus {

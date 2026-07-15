@@ -662,6 +662,25 @@ export interface KafkaSample {
   health: KafkaHealthCounts;
 }
 export interface KafkaMonitorStatus { running: boolean; config?: KafkaMonitorConfig | null }
+export interface KafkaAlertRule {
+  id: string;
+  connection_id: string;
+  enabled: boolean;
+  scope: "topic" | "group" | "cluster";
+  target: string;
+  metric: "lag" | "produce_rate" | "offline" | "urp";
+  op: "gt" | "lt";
+  threshold: number;
+  for_ticks: number;
+}
+export interface KafkaAlertEvent {
+  id: string;
+  rule_id: string;
+  connection_id: string;
+  fired_at: number;
+  message: string;
+  value: number;
+}
 export interface KafkaSchemaSubject { subject: string; versions: number[]; latest: number }
 export interface KafkaSchema {
   subject: string;
@@ -698,6 +717,10 @@ export function onKafkaMetrics(connId: string, cb: (s: KafkaSample) => void): Pr
   return listen<{ conn_id: string; sample: KafkaSample }>("kafka-metrics", (e) => {
     if (e.payload.conn_id === connId) cb(e.payload.sample);
   });
+}
+// 訂閱告警觸發（全域；payload 為事件）。回傳取消監聽函式。
+export function onKafkaAlert(cb: (e: KafkaAlertEvent) => void): Promise<UnlistenFn> {
+  return listen<KafkaAlertEvent>("kafka-alert", (e) => cb(e.payload));
 }
 
 // 連線類型的顯示資料（色標呼應規劃文件）
@@ -962,6 +985,12 @@ export const api = {
   kafkaMonitorStop: (id: string) => invoke<void>("kafka_monitor_stop", { id }),
   kafkaMonitorStatus: (id: string) => invoke<KafkaMonitorStatus>("kafka_monitor_status", { id }),
   kafkaMetricsHistory: (id: string) => invoke<KafkaSample[]>("kafka_metrics_history", { id }),
+  kafkaAlertRulesList: (connectionId: string) => invoke<KafkaAlertRule[]>("kafka_alert_rules_list", { connectionId }),
+  kafkaAlertRuleSave: (rule: KafkaAlertRule) => invoke<void>("kafka_alert_rule_save", { rule }),
+  kafkaAlertRuleRemove: (ruleId: string) => invoke<void>("kafka_alert_rule_remove", { ruleId }),
+  kafkaAlertHistory: () => invoke<KafkaAlertEvent[]>("kafka_alert_history"),
+  kafkaAlertHistoryClear: () => invoke<void>("kafka_alert_history_clear"),
+  kafkaAlertTest: (message: string) => invoke<void>("kafka_alert_test", { message }),
   kafkaSchemaSubjects: (id: string) => invoke<KafkaSchemaSubject[]>("kafka_schema_subjects", { id }),
   kafkaSchema: (id: string, subject: string, version: number) =>
     invoke<KafkaSchema>("kafka_schema", { id, subject, version }),

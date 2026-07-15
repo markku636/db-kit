@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "default capability",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default"]
+  "permissions": ["core:default", "dialog:default", "notification:default"]
 }

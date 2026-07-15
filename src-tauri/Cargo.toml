@@ -31,6 +31,7 @@ tauri-build = { version = "2", features = [] }
 # Tauri 改為 optional：藏在預設 `gui` feature 後，讓 CLI 能 --no-default-features 編出不連 Tauri 的精簡 binary。
 tauri = { version = "2", features = [], optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-notification = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 # preserve_order：保留 JSON 物件鍵序（IndexMap）。否則 serde_json 預設 BTreeMap 會把鍵按字母排序，
 # 導致 MongoDB 多欄 sort（如 {"name":1,"age":-1}）被重排、排序優先序錯誤；JSON 匯出欄序也會亂。
@@ -103,7 +104,7 @@ keyring = { version = "3", features = ["sync-secret-service"] }
 [features]
 default = ["gui", "kafka", "kafka-js"]
 # gui：啟用 Tauri 桌面程式（commands / agent / scheduler / run()）。預設開啟。
-gui = ["dep:tauri", "dep:tauri-plugin-dialog"]
+gui = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
 custom-protocol = ["gui", "tauri/custom-protocol"]
 # kafka：一等公民 Kafka 支援（rdkafka / librdkafka）。隨 gui 預設開啟，讓開源桌面版內建此功能；
 # slim CLI（dbk）以 --no-default-features 排除，免除 CMake / C toolchain 建置負擔。
