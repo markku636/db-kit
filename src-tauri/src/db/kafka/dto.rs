@@ -308,6 +308,49 @@ pub struct KafkaOffsetReset {
     pub partitions: Option<Vec<i32>>,
 }
 
+/// 背景取樣設定（每連線一份，持久化於 kafka_monitor.json）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct KafkaMonitorConfig {
+    pub enabled: bool,
+    /// 取樣間隔秒（clamp 10..=300）。
+    pub interval_secs: u32,
+    /// 監看的主題（Σ high watermark → produce rate / 訊息數）。
+    #[serde(default)]
+    pub topics: Vec<String>,
+    /// 監看的消費者群組（Σ lag）。
+    #[serde(default)]
+    pub groups: Vec<String>,
+}
+
+/// 叢集健康計數（每 tick 必採）。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaHealthCounts {
+    pub brokers: u32,
+    pub partitions: u32,
+    pub offline: u32,
+    pub urp: u32,
+}
+
+/// 單筆取樣。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaSample {
+    /// epoch 毫秒。
+    pub ts: i64,
+    /// 監看主題 → Σ high watermark。
+    pub topic_end: std::collections::BTreeMap<String, i64>,
+    /// 監看群組 → Σ lag。
+    pub group_lag: std::collections::BTreeMap<String, i64>,
+    pub health: KafkaHealthCounts,
+}
+
+/// 取樣器狀態查詢結果。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaMonitorStatus {
+    pub running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<KafkaMonitorConfig>,
+}
+
 /// 健康掃描報告。
 #[derive(Debug, Clone, Serialize)]
 pub struct KafkaHealthReport {

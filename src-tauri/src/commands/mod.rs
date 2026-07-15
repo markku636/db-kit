@@ -5,7 +5,7 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use argon2::Argon2;
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::backup::{self, BackupResult};
 use crate::db::{
@@ -44,6 +44,12 @@ pub struct AppState {
     /// Kafka 長跑工作的取消旗標（key = "{連線 id}:{kind}"，如 "c1:scan" / "c1:csv"）。
     #[cfg(feature = "kafka")]
     pub kafka_jobs: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
+    /// Kafka 背景取樣器的取消旗標（key = 連線 id；每連線一個取樣器）。
+    #[cfg(feature = "kafka")]
+    pub kafka_samplers: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
+    /// Kafka 指標環形緩衝（key = 連線 id；上限 2880 點 = 24h@30s）。
+    #[cfg(feature = "kafka")]
+    pub kafka_metrics: Arc<Mutex<HashMap<String, std::collections::VecDeque<crate::db::kafka::dto::KafkaSample>>>>,
 }
 
 /// 若前端送來的 secret 為空（存檔但未重新輸入的連線），從 keychain 補回。
@@ -105,12 +111,28 @@ pub async fn test_connection(
 
 #[tauri::command]
 pub async fn connect(
+    app: AppHandle,
     state: State<'_, AppState>,
     config: ConnectionConfig,
 ) -> AppResult<()> {
     let mut config = config;
     hydrate_secrets(&mut config);
-    state.manager.connect(config).await
+    let id = config.id.clone();
+    #[cfg(feature = "kafka")]
+    let is_kafka = matches!(config.kind, crate::db::DbKind::Kafka);
+    state.manager.connect(config).await?;
+    // Kafka：若持久化設定 enabled，連線成功後自動恢復背景取樣。
+    #[cfg(feature = "kafka")]
+    if is_kafka {
+        let cfgs = read_monitor_configs(&app).await;
+        if let Some(cfg) = cfgs.get(&id) {
+            if cfg.enabled {
+                spawn_kafka_sampler(app.clone(), id.clone(), cfg.clone());
+            }
+        }
+    }
+    let _ = (&app, &id);
+    Ok(())
 }
 
 // ---- 連線設定持久化 ----
@@ -184,7 +206,7 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> AppResult<()>
     Ok(())
 }
 
-/// 取消並移除某連線所有登記中的 Kafka 長跑工作（key 前綴 "{id}:"）。
+/// 取消並移除某連線所有登記中的 Kafka 長跑工作（key 前綴 "{id}:"）+ 取樣器 + 指標。
 #[cfg(feature = "kafka")]
 fn cancel_kafka_jobs(state: &AppState, id: &str) {
     let prefix = format!("{id}:");
@@ -199,6 +221,11 @@ fn cancel_kafka_jobs(state: &AppState, id: &str) {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
+    drop(jobs);
+    if let Some(c) = state.kafka_samplers.lock().remove(id) {
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    state.kafka_metrics.lock().remove(id);
 }
 
 /// 清除指定連線驅動的查詢快取（外部 gateway 等），供前端「重新整理」強制重抓。
@@ -1737,6 +1764,145 @@ pub async fn kafka_health_scan(
     id: String,
 ) -> AppResult<KafkaHealthReport> {
     state.manager.kafka_driver(&id)?.health_scan().await
+}
+
+/// 背景取樣設定的持久化檔（HashMap<連線 id, KafkaMonitorConfig>）。
+#[cfg(feature = "kafka")]
+const KAFKA_MONITOR_FILE: &str = "kafka_monitor.json";
+#[cfg(feature = "kafka")]
+const KAFKA_METRICS_CAP: usize = 2880; // 24h @ 30s
+
+/// 讀持久化的取樣設定 map。
+#[cfg(feature = "kafka")]
+async fn read_monitor_configs(
+    app: &AppHandle,
+) -> HashMap<String, crate::db::kafka::dto::KafkaMonitorConfig> {
+    store::read_json(app, KAFKA_MONITOR_FILE).await.unwrap_or_default()
+}
+
+/// 啟動背景取樣器（登記取消旗標，spawn OS 執行緒）。
+#[cfg(feature = "kafka")]
+pub(crate) fn spawn_kafka_sampler(
+    app: AppHandle,
+    id: String,
+    mut cfg: crate::db::kafka::dto::KafkaMonitorConfig,
+) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    cfg.interval_secs = cfg.interval_secs.clamp(10, 300);
+    // 分區數硬保險：監看分區過多則拉長間隔。
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let state = app.state::<AppState>();
+        let old = state.kafka_samplers.lock().insert(id.clone(), cancel.clone());
+        if let Some(old) = old {
+            old.store(true, Ordering::Relaxed);
+        }
+    }
+    std::thread::spawn(move || {
+        let mut group_consumers: HashMap<String, rdkafka::consumer::BaseConsumer> = HashMap::new();
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            // 每 tick 重新取得 driver：斷線即退出（雙保險）。
+            let driver = {
+                let state = app.state::<AppState>();
+                match state.manager.kafka_driver(&id) {
+                    Ok(d) => d,
+                    Err(_) => break,
+                }
+            };
+            match driver.sample_blocking(&cfg, &mut group_consumers) {
+                Ok(mut sample) => {
+                    sample.ts = chrono::Local::now().timestamp_millis();
+                    let state = app.state::<AppState>();
+                    {
+                        let mut m = state.kafka_metrics.lock();
+                        let buf = m.entry(id.clone()).or_default();
+                        buf.push_back(sample.clone());
+                        while buf.len() > KAFKA_METRICS_CAP {
+                            buf.pop_front();
+                        }
+                    }
+                    let _ = app.emit("kafka-metrics", serde_json::json!({ "conn_id": id, "sample": sample }));
+                }
+                Err(_) => { /* 暫時性錯誤：略過本 tick */ }
+            }
+            // 分段睡眠以便即時取消。
+            let mut slept = 0u32;
+            let total_ms = cfg.interval_secs * 1000;
+            while slept < total_ms {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                slept += 250;
+            }
+        }
+    });
+}
+
+/// 開始 / 更新背景取樣（持久化設定、（重）啟動取樣器）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_monitor_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    mut config: crate::db::kafka::dto::KafkaMonitorConfig,
+) -> AppResult<()> {
+    let _ = &state;
+    config.enabled = true;
+    config.interval_secs = config.interval_secs.clamp(10, 300);
+    // 持久化。
+    let mut all = read_monitor_configs(&app).await;
+    all.insert(id.clone(), config.clone());
+    store::write_json(&app, KAFKA_MONITOR_FILE, &all).await?;
+    spawn_kafka_sampler(app.clone(), id, config);
+    Ok(())
+}
+
+/// 停止背景取樣（設取消旗標、持久化 enabled=false）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_monitor_stop(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<()> {
+    if let Some(c) = state.kafka_samplers.lock().remove(&id) {
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let mut all = read_monitor_configs(&app).await;
+    if let Some(cfg) = all.get_mut(&id) {
+        cfg.enabled = false;
+        store::write_json(&app, KAFKA_MONITOR_FILE, &all).await?;
+    }
+    Ok(())
+}
+
+/// 取樣器狀態（是否執行中 + 設定）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_monitor_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<crate::db::kafka::dto::KafkaMonitorStatus> {
+    let running = state.kafka_samplers.lock().contains_key(&id);
+    let config = read_monitor_configs(&app).await.get(&id).cloned();
+    Ok(crate::db::kafka::dto::KafkaMonitorStatus { running, config })
+}
+
+/// 取指標歷史（環形緩衝內全部樣本）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_metrics_history(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<Vec<crate::db::kafka::dto::KafkaSample>> {
+    let m = state.kafka_metrics.lock();
+    Ok(m.get(&id).map(|b| b.iter().cloned().collect()).unwrap_or_default())
 }
 
 /// Schema Registry：subjects 清單。

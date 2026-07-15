@@ -648,6 +648,20 @@ export interface KafkaHealthReport {
   topics_total: number;
   partitions_total: number;
 }
+export interface KafkaMonitorConfig {
+  enabled: boolean;
+  interval_secs: number;
+  topics: string[];
+  groups: string[];
+}
+export interface KafkaHealthCounts { brokers: number; partitions: number; offline: number; urp: number }
+export interface KafkaSample {
+  ts: number;
+  topic_end: Record<string, number>;
+  group_lag: Record<string, number>;
+  health: KafkaHealthCounts;
+}
+export interface KafkaMonitorStatus { running: boolean; config?: KafkaMonitorConfig | null }
 export interface KafkaSchemaSubject { subject: string; versions: number[]; latest: number }
 export interface KafkaSchema {
   subject: string;
@@ -677,6 +691,12 @@ export function onKafkaScanProgress(connId: string, cb: (p: KafkaScanProgress) =
 export function onKafkaProduceProgress(connId: string, cb: (p: KafkaProduceProgress) => void): Promise<UnlistenFn> {
   return listen<KafkaProduceProgress>("kafka-produce-progress", (e) => {
     if (e.payload.conn_id === connId) cb(e.payload);
+  });
+}
+// 訂閱背景取樣的新樣本（僅回呼符合 connId 者）。回傳取消監聽函式。
+export function onKafkaMetrics(connId: string, cb: (s: KafkaSample) => void): Promise<UnlistenFn> {
+  return listen<{ conn_id: string; sample: KafkaSample }>("kafka-metrics", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload.sample);
   });
 }
 
@@ -938,6 +958,10 @@ export const api = {
   kafkaDeleteRecords: (id: string, topic: string, partitions: number[] | null, before: number | null) =>
     invoke<KafkaDeleteRecordsResult[]>("kafka_delete_records", { id, topic, partitions, before }),
   kafkaHealthScan: (id: string) => invoke<KafkaHealthReport>("kafka_health_scan", { id }),
+  kafkaMonitorStart: (id: string, config: KafkaMonitorConfig) => invoke<void>("kafka_monitor_start", { id, config }),
+  kafkaMonitorStop: (id: string) => invoke<void>("kafka_monitor_stop", { id }),
+  kafkaMonitorStatus: (id: string) => invoke<KafkaMonitorStatus>("kafka_monitor_status", { id }),
+  kafkaMetricsHistory: (id: string) => invoke<KafkaSample[]>("kafka_metrics_history", { id }),
   kafkaSchemaSubjects: (id: string) => invoke<KafkaSchemaSubject[]>("kafka_schema_subjects", { id }),
   kafkaSchema: (id: string, subject: string, version: number) =>
     invoke<KafkaSchema>("kafka_schema", { id, subject, version }),

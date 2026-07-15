@@ -65,6 +65,10 @@ pub fn run() {
             kafka_tails: Arc::new(Mutex::new(std::collections::HashMap::new())),
             #[cfg(feature = "kafka")]
             kafka_jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            #[cfg(feature = "kafka")]
+            kafka_samplers: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            #[cfg(feature = "kafka")]
+            kafka_metrics: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -231,6 +235,14 @@ pub fn run() {
             commands::kafka_delete_records,
             #[cfg(feature = "kafka")]
             commands::kafka_health_scan,
+            #[cfg(feature = "kafka")]
+            commands::kafka_monitor_start,
+            #[cfg(feature = "kafka")]
+            commands::kafka_monitor_stop,
+            #[cfg(feature = "kafka")]
+            commands::kafka_monitor_status,
+            #[cfg(feature = "kafka")]
+            commands::kafka_metrics_history,
             #[cfg(feature = "kafka")]
             commands::kafka_schema_subjects,
             #[cfg(feature = "kafka")]

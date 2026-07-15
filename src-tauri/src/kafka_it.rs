@@ -485,6 +485,22 @@ async fn kafka_end_to_end() {
     );
     eprintln!("[kafka_it] health_scan: {} items, topics={}", health.items.len(), health.topics_total);
 
+    // 背景取樣：監看測試 topic → sample.topic_end 應含該 topic 且 health.partitions>0
+    {
+        use std::collections::HashMap;
+        let cfg = crate::db::kafka::dto::KafkaMonitorConfig {
+            enabled: true,
+            interval_secs: 30,
+            topics: vec![topic.clone()],
+            groups: vec![],
+        };
+        let mut gc = HashMap::new();
+        let s1 = d.sample_blocking(&cfg, &mut gc).expect("sample_blocking 1");
+        assert!(s1.health.partitions > 0, "sample health partitions > 0");
+        assert!(s1.topic_end.contains_key(&topic), "sample tracks watched topic");
+        eprintln!("[kafka_it] sample_blocking: partitions={}, topic_end={:?}", s1.health.partitions, s1.topic_end.get(&topic));
+    }
+
     // 加分割區：2 → 3（放在所有分區敏感斷言之後、清理之前）
     d.add_partitions(&topic, 3).await.expect("add_partitions");
     let mut grown = false;

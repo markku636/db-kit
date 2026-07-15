@@ -1,13 +1,16 @@
 //! 健康風險掃描（一次性）。以單次 metadata + 批次 describe_configs + 群組 lag 掃描，
 //! 找出資料遺失 / 可用性風險：RF=1、離線分區、URP、under-min-ISR、高 Lag 群組。
 
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use rdkafka::admin::{AdminOptions, ResourceSpecifier};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 
-use super::dto::{KafkaHealthItem, KafkaHealthReport};
+use super::dto::{
+    KafkaHealthCounts, KafkaHealthItem, KafkaHealthReport, KafkaMonitorConfig, KafkaSample,
+};
 use super::{query_err, KafkaDriver};
 use crate::error::AppResult;
 
@@ -131,6 +134,81 @@ impl KafkaDriver {
         .map_err(query_err)?
     }
 
+    /// 取一次樣本（取樣器專屬 OS 執行緒直接呼叫）。
+    /// 叢集健康每次必採（單次 metadata）；watched 主題 / 群組才打 watermark / lag。
+    /// `group_consumers` 由執行緒擁有、跨 tick 重用（避免每 tick 為每群組新建 broker 連線）。
+    pub fn sample_blocking(
+        &self,
+        cfg: &KafkaMonitorConfig,
+        group_consumers: &mut HashMap<String, BaseConsumer>,
+    ) -> AppResult<KafkaSample> {
+        let md = self
+            .meta
+            .fetch_metadata(None, Duration::from_secs(10))
+            .map_err(query_err)?;
+
+        // 叢集健康計數。
+        let brokers = md.brokers().len() as u32;
+        let mut partitions = 0u32;
+        let mut offline = 0u32;
+        let mut urp = 0u32;
+        for t in md.topics() {
+            for p in t.partitions() {
+                partitions += 1;
+                if p.leader() == -1 {
+                    offline += 1;
+                }
+                if p.isr().len() < p.replicas().len() {
+                    urp += 1;
+                }
+            }
+        }
+
+        // watched 主題：Σ high watermark（訊息總數的近似）。
+        let mut topic_end: BTreeMap<String, i64> = BTreeMap::new();
+        for topic in &cfg.topics {
+            if let Some(t) = md.topics().iter().find(|t| t.name() == topic) {
+                let mut sum = 0i64;
+                for p in t.partitions() {
+                    if let Ok((_low, high)) =
+                        self.meta.fetch_watermarks(topic, p.id(), Duration::from_secs(10))
+                    {
+                        sum += high;
+                    }
+                }
+                topic_end.insert(topic.clone(), sum);
+            }
+        }
+
+        // watched 群組：Σ lag（重用快取 consumer）。
+        let mut group_lag: BTreeMap<String, i64> = BTreeMap::new();
+        // 移除已不在監看清單的快取 consumer。
+        group_consumers.retain(|g, _| cfg.groups.contains(g));
+        for group in &cfg.groups {
+            let consumer = group_consumers.entry(group.clone()).or_insert_with(|| {
+                let mut cc = self.base.clone();
+                cc.set("group.id", group);
+                cc.set("enable.auto.commit", "false");
+                cc.create().expect("create group consumer")
+            });
+            if let Some(lag) = group_lag_via(consumer, self.meta.as_ref(), group) {
+                group_lag.insert(group.clone(), lag);
+            }
+        }
+
+        Ok(KafkaSample {
+            ts: 0, // 由指令層戳
+            topic_end,
+            group_lag,
+            health: KafkaHealthCounts {
+                brokers,
+                partitions,
+                offline,
+                urp,
+            },
+        })
+    }
+
     /// 批次 describe_configs 取各主題 min.insync.replicas（失敗回空 map，退回預設 1）。
     async fn min_isr_map(&self) -> std::collections::HashMap<String, i32> {
         let mut out = std::collections::HashMap::new();
@@ -165,6 +243,39 @@ impl KafkaDriver {
         }
         out
     }
+}
+
+/// 以「已快取、group.id 已設為該群組」的 consumer 計算總 lag（跨 tick 重用）。
+fn group_lag_via(consumer: &BaseConsumer, meta: &BaseConsumer, group: &str) -> Option<i64> {
+    let gl = meta.fetch_group_list(Some(group), Duration::from_secs(10)).ok()?;
+    let g = gl.groups().iter().find(|g| g.name() == group)?;
+    let mut tpl = TopicPartitionList::new();
+    for m in g.members() {
+        if let Some(assignment) = m.assignment() {
+            for (topic, part) in super::admin::parse_assignment_pub(assignment) {
+                tpl.add_partition(&topic, part);
+            }
+        }
+    }
+    if tpl.count() == 0 {
+        return Some(0);
+    }
+    let committed = consumer
+        .committed_offsets(tpl, Duration::from_secs(15))
+        .ok()?;
+    let mut total = 0i64;
+    for e in committed.elements() {
+        let current = match e.offset() {
+            Offset::Offset(o) => o,
+            _ => continue,
+        };
+        if let Ok((_low, high)) =
+            consumer.fetch_watermarks(e.topic(), e.partition(), Duration::from_secs(10))
+        {
+            total += (high - current).max(0);
+        }
+    }
+    Some(total)
 }
 
 /// 某群組所有已提交分區的總 lag（無提交回 0；失敗回 None）。
