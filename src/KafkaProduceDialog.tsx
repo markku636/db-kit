@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Send } from "lucide-react";
 import { api, type KafkaHeader } from "./api";
 import { Modal, Button, Field, Input, Textarea } from "./ui/index";
 import { toast } from "./ui";
 import { useT } from "./i18n";
+import { renderTemplate } from "./kafkaTemplate";
 
 export interface ProduceInitial {
   key?: string | null;
@@ -28,11 +29,30 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent, ini
   const [subjects, setSubjects] = useState<string[]>([]);
   const [subject, setSubject] = useState(`${topic}-value`);
   const [busy, setBusy] = useState(false);
+  // 流量模式：自動連續發佈（前端 setTimeout 迴圈；key/value 套用 {{...}} 模板）。
+  const [mode, setMode] = useState<"single" | "flow">("single");
+  const [flowCount, setFlowCount] = useState(100);
+  const [flowInfinite, setFlowInfinite] = useState(false);
+  const [flowInterval, setFlowInterval] = useState(500);
+  const [useTemplate, setUseTemplate] = useState(true);
+  const [flowRunning, setFlowRunning] = useState(false);
+  const [flowSent, setFlowSent] = useState(0);
+  const [flowFailed, setFlowFailed] = useState(0);
+  const flowRef = useRef<{ stop: boolean; timer: number | null }>({ stop: false, timer: null });
 
   useEffect(() => {
     if (!allowTopicChange) return;
     api.kafkaTopics(connId).then((ts) => setTopics(ts.map((x) => x.name).sort())).catch(() => {});
   }, [connId, allowTopicChange]);
+
+  // 卸載 / 關閉時停止流量。
+  useEffect(() => {
+    const ref = flowRef.current;
+    return () => {
+      ref.stop = true;
+      if (ref.timer != null) window.clearTimeout(ref.timer);
+    };
+  }, []);
 
   useEffect(() => {
     if (valueFormat !== "avro") return;
@@ -73,6 +93,55 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent, ini
     }
   };
 
+  const buildReq = (seq: number) => ({
+    topic: targetTopic,
+    partition: partition.trim() === "" ? null : Number(partition),
+    key: key === "" ? null : (useTemplate ? renderTemplate(key, seq) : key),
+    value: value === "" ? null : (useTemplate ? renderTemplate(value, seq) : value),
+    headers: headers.filter((h) => h.key.trim()),
+    value_format: valueFormat,
+    value_subject: valueFormat === "avro" ? subject : null,
+  });
+
+  const startFlow = () => {
+    if (flowRunning) return;
+    flowRef.current.stop = false;
+    setFlowRunning(true);
+    setFlowSent(0);
+    setFlowFailed(0);
+    let seq = 0;
+    let sent = 0;
+    let failed = 0;
+    const target = flowInfinite ? Infinity : Math.max(1, flowCount);
+    const tick = async () => {
+      if (flowRef.current.stop || seq >= target) {
+        setFlowRunning(false);
+        return;
+      }
+      try {
+        await api.kafkaProduce(connId, buildReq(seq));
+        sent++;
+        setFlowSent(sent);
+      } catch {
+        failed++;
+        setFlowFailed(failed);
+      }
+      seq++;
+      if (flowRef.current.stop || seq >= target) {
+        setFlowRunning(false);
+        return;
+      }
+      flowRef.current.timer = window.setTimeout(tick, Math.max(50, flowInterval));
+    };
+    tick();
+  };
+
+  const stopFlow = () => {
+    flowRef.current.stop = true;
+    if (flowRef.current.timer != null) window.clearTimeout(flowRef.current.timer);
+    setFlowRunning(false);
+  };
+
   return (
     <Modal
       onClose={onClose}
@@ -82,11 +151,45 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent, ini
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>{t("取消")}</Button>
-          <Button variant="primary" onClick={submit} disabled={busy}>{t("送出")}</Button>
+          {mode === "single"
+            ? <Button variant="primary" onClick={submit} disabled={busy}>{t("送出")}</Button>
+            : flowRunning
+              ? <Button variant="danger" onClick={stopFlow}>{t("停止")}（{flowSent}{flowFailed > 0 ? ` / ✗${flowFailed}` : ""}）</Button>
+              : <Button variant="primary" onClick={startFlow}>{t("開始流量")}</Button>}
         </>
       }
     >
       <div className="space-y-3 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-fg/40 text-xs">{t("模式")}</span>
+          <div className="inline-flex rounded border border-fg/15 overflow-hidden text-xs">
+            <button type="button" onClick={() => setMode("single")} disabled={flowRunning} className={`px-2 py-1 ${mode === "single" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"} disabled:opacity-40`}>{t("單筆")}</button>
+            <button type="button" onClick={() => setMode("flow")} disabled={flowRunning} className={`px-2 py-1 ${mode === "flow" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"} disabled:opacity-40`}>{t("流量")}</button>
+          </div>
+          {mode === "flow" && (
+            <label className="flex items-center gap-1 cursor-pointer text-fg/60 text-xs">
+              <input type="checkbox" checked={useTemplate} onChange={(e) => setUseTemplate(e.target.checked)} />
+              {t("套用模板")}
+            </label>
+          )}
+        </div>
+        {mode === "flow" && (
+          <div className="flex flex-wrap items-center gap-2 text-xs bg-inset/40 rounded px-2 py-2">
+            <label className="flex items-center gap-1 cursor-pointer text-fg/60">
+              <input type="checkbox" checked={flowInfinite} onChange={(e) => setFlowInfinite(e.target.checked)} />
+              {t("無限")}
+            </label>
+            {!flowInfinite && (
+              <>
+                <span className="text-fg/40">{t("筆數")}</span>
+                <Input value={String(flowCount)} onChange={(e) => setFlowCount(Math.max(1, Number(e.target.value) || 1))} className="w-20" />
+              </>
+            )}
+            <span className="text-fg/40">{t("間隔（毫秒）")}</span>
+            <Input value={String(flowInterval)} onChange={(e) => setFlowInterval(Math.max(50, Number(e.target.value) || 50))} className="w-20" />
+            {useTemplate && <span className="text-fg/30">{t("key / value 可用 {{uuid}} {{seq}} {{int a b}} {{oneOf a|b}} {{now}} 等")}</span>}
+          </div>
+        )}
         {allowTopicChange && (
           <Field label={t("目標主題")}>
             <select
