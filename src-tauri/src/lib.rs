@@ -284,6 +284,26 @@ pub fn run() {
             commands::kafka_schema_delete_subject,
             #[cfg(feature = "kafka")]
             commands::kafka_schema_delete_version,
+            #[cfg(feature = "kafka")]
+            commands::kafka_connect_list,
+            #[cfg(feature = "kafka")]
+            commands::kafka_connect_config,
+            #[cfg(feature = "kafka")]
+            commands::kafka_connect_pause,
+            #[cfg(feature = "kafka")]
+            commands::kafka_connect_resume,
+            #[cfg(feature = "kafka")]
+            commands::kafka_connect_restart,
+            #[cfg(feature = "kafka")]
+            commands::kafka_connect_restart_task,
+            #[cfg(feature = "kafka")]
+            commands::kafka_connect_delete,
+            #[cfg(feature = "kafka")]
+            commands::kafka_connect_put_config,
+            #[cfg(feature = "kafka")]
+            commands::kafka_connect_plugins,
+            #[cfg(feature = "kafka")]
+            commands::kafka_connect_validate,
             commands::backup_detect_cli,
             commands::backup_run,
             commands::backup_restore,

@@ -413,6 +413,43 @@ pub struct KafkaSchemaSubject {
     pub latest: i32,
 }
 
+/// Kafka Connect 連接器（含任務狀態）。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaConnector {
+    pub name: String,
+    /// "source" | "sink"
+    pub connector_type: String,
+    pub state: String,
+    pub worker_id: String,
+    pub tasks: Vec<KafkaConnectTask>,
+}
+
+/// Connect 任務。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaConnectTask {
+    pub id: i32,
+    pub state: String,
+    pub worker_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace: Option<String>,
+}
+
+/// Connect 外掛（plugin）。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaConnectPlugin {
+    pub class: String,
+    pub kind: String,
+    pub version: String,
+}
+
+/// Connect 設定驗證結果。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaConnectValidation {
+    pub error_count: i32,
+    /// 每欄錯誤（key = 欄名、value = 錯誤訊息）。
+    pub errors: Vec<KafkaHeader>,
+}
+
 /// 相容性層級查詢結果。
 #[derive(Debug, Clone, Serialize)]
 pub struct KafkaCompatibility {

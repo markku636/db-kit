@@ -84,6 +84,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [srUrl, setSrUrl] = useState(initial?.options?.kafka_sr_url ?? "");
   const [srUser, setSrUser] = useState(initial?.options?.kafka_sr_user ?? "");
   const [srPass, setSrPass] = useState(initial?.options?.kafka_sr_password ?? "");
+  const [connectUrl, setConnectUrl] = useState(initial?.options?.kafka_connect_url ?? "");
+  const [connectUser, setConnectUser] = useState(initial?.options?.kafka_connect_user ?? "");
+  const [connectPass, setConnectPass] = useState(initial?.options?.kafka_connect_password ?? "");
 
   // 任一連線欄位變動就清掉上次測試結果，避免「連線成功」殘留成誤導的假成功訊號（改了 host 卻仍顯示舊成功）。
   useEffect(() => {
@@ -91,7 +94,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   }, [kind, host, port, username, password, database, sshEnabled, sshHost, sshPort, sshUsername, sshAuthMethod, sshPassword, sshKeyPath, sshPassphrase,
       redisTls, redisTlsInsecure, mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mssqlEncrypt, mssqlTrust, sslMode,
       oracleConnectType, oracleClientDir,
-      kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass]);
+      kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass, connectUrl, connectUser, connectPass]);
 
   const build = (): ConnectionConfig => ({
     id: initial?.id ?? crypto.randomUUID(),
@@ -158,6 +161,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       if (srUrl.trim()) o.kafka_sr_url = srUrl.trim();
       if (srUrl.trim() && srUser.trim()) o.kafka_sr_user = srUser.trim();
       if (srUrl.trim() && srPass.trim()) o.kafka_sr_password = srPass.trim();
+      if (connectUrl.trim()) o.kafka_connect_url = connectUrl.trim();
+      if (connectUrl.trim() && connectUser.trim()) o.kafka_connect_user = connectUser.trim();
+      if (connectUrl.trim() && connectPass.trim()) o.kafka_connect_password = connectPass.trim();
     } else if (sslKinds.includes(kind)) {
       if (sslMode) o.ssl_mode = sslMode;
     }
@@ -467,6 +473,21 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                     </Field>
                     <Field label={t("SR 密碼（選填）")} className="flex-1">
                       <Input type="password" value={srPass} onChange={(e) => setSrPass(e.target.value)} onKeyDown={submitOnEnter} />
+                    </Field>
+                  </div>
+                )}
+              </div>
+              <div className="border-t border-fg/10 pt-2 space-y-2">
+                <Field label={t("Kafka Connect URL（選填）")}>
+                  <Input value={connectUrl} onChange={(e) => setConnectUrl(e.target.value)} onKeyDown={submitOnEnter} placeholder="http://localhost:8083" />
+                </Field>
+                {connectUrl.trim() && (
+                  <div className="flex gap-3">
+                    <Field label={t("Connect 使用者（選填）")} className="flex-1">
+                      <Input value={connectUser} onChange={(e) => setConnectUser(e.target.value)} onKeyDown={submitOnEnter} />
+                    </Field>
+                    <Field label={t("Connect 密碼（選填）")} className="flex-1">
+                      <Input type="password" value={connectPass} onChange={(e) => setConnectPass(e.target.value)} onKeyDown={submitOnEnter} />
                     </Field>
                   </div>
                 )}

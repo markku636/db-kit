@@ -10,6 +10,7 @@
 
 mod admin;
 mod config;
+mod connect;
 pub(crate) mod consume;
 pub mod dto;
 #[cfg(feature = "kafka-js")]
@@ -56,6 +57,8 @@ pub struct KafkaDriver {
     show_internal: bool,
     /// Schema Registry（若連線有設定 `kafka_sr_url`）。供 Avro 解碼與 schema 檢視。
     pub(super) schema: Option<Arc<schema::SchemaRegistry>>,
+    /// Kafka Connect REST 用戶端（若連線有設定 `kafka_connect_url`）。
+    pub(super) connect: Option<Arc<connect::ConnectClient>>,
 }
 
 /// Kafka 連線 / 建立錯誤 → AppError::Connect。
@@ -117,6 +120,7 @@ impl DatabaseDriver for KafkaDriver {
             bootstrap,
             show_internal,
             schema: config::schema_registry(config).map(Arc::new),
+            connect: config::connect_client(config).map(Arc::new),
         };
         // 實際打一次 metadata 確認 bootstrap 可達（librdkafka 是 lazy connect）。
         driver.ping().await?;

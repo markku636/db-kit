@@ -2207,3 +2207,55 @@ pub async fn kafka_schema_delete_version(
 ) -> AppResult<i32> {
     state.manager.kafka_driver(&id)?.schema_delete_version(&subject, version).await
 }
+
+// ---- Kafka Connect ----
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_connect_list(state: State<'_, AppState>, id: String) -> AppResult<Vec<crate::db::kafka::dto::KafkaConnector>> {
+    state.manager.kafka_driver(&id)?.connect_list().await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_connect_config(state: State<'_, AppState>, id: String, name: String) -> AppResult<serde_json::Value> {
+    state.manager.kafka_driver(&id)?.connect_config(&name).await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_connect_pause(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.connect_pause(&name).await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_connect_resume(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.connect_resume(&name).await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_connect_restart(state: State<'_, AppState>, id: String, name: String, include_tasks: bool, only_failed: bool) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.connect_restart(&name, include_tasks, only_failed).await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_connect_restart_task(state: State<'_, AppState>, id: String, name: String, task: i32) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.connect_restart_task(&name, task).await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_connect_delete(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.connect_delete(&name).await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_connect_put_config(state: State<'_, AppState>, id: String, name: String, config: serde_json::Value) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.connect_put_config(&name, config).await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_connect_plugins(state: State<'_, AppState>, id: String) -> AppResult<Vec<crate::db::kafka::dto::KafkaConnectPlugin>> {
+    state.manager.kafka_driver(&id)?.connect_plugins().await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_connect_validate(state: State<'_, AppState>, id: String, class: String, config: serde_json::Value) -> AppResult<crate::db::kafka::dto::KafkaConnectValidation> {
+    state.manager.kafka_driver(&id)?.connect_validate(&class, config).await
+}

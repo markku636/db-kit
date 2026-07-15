@@ -684,6 +684,16 @@ export interface KafkaAlertEvent {
 export interface KafkaSchemaSubject { subject: string; versions: number[]; latest: number }
 export interface KafkaCompatibility { level: string; inherited: boolean }
 export interface KafkaCompatCheck { compatible: boolean; messages: string[] }
+export interface KafkaConnectTask { id: number; state: string; worker_id: string; trace?: string | null }
+export interface KafkaConnector {
+  name: string;
+  connector_type: string;
+  state: string;
+  worker_id: string;
+  tasks: KafkaConnectTask[];
+}
+export interface KafkaConnectPlugin { class: string; kind: string; version: string }
+export interface KafkaConnectValidation { error_count: number; errors: KafkaHeader[] }
 export interface KafkaSchema {
   subject: string;
   version: number;
@@ -1008,6 +1018,20 @@ export const api = {
     invoke<number[]>("kafka_schema_delete_subject", { id, subject }),
   kafkaSchemaDeleteVersion: (id: string, subject: string, version: number) =>
     invoke<number>("kafka_schema_delete_version", { id, subject, version }),
+  kafkaConnectList: (id: string) => invoke<KafkaConnector[]>("kafka_connect_list", { id }),
+  kafkaConnectConfig: (id: string, name: string) => invoke<Record<string, unknown>>("kafka_connect_config", { id, name }),
+  kafkaConnectPause: (id: string, name: string) => invoke<void>("kafka_connect_pause", { id, name }),
+  kafkaConnectResume: (id: string, name: string) => invoke<void>("kafka_connect_resume", { id, name }),
+  kafkaConnectRestart: (id: string, name: string, includeTasks: boolean, onlyFailed: boolean) =>
+    invoke<void>("kafka_connect_restart", { id, name, includeTasks, onlyFailed }),
+  kafkaConnectRestartTask: (id: string, name: string, task: number) =>
+    invoke<void>("kafka_connect_restart_task", { id, name, task }),
+  kafkaConnectDelete: (id: string, name: string) => invoke<void>("kafka_connect_delete", { id, name }),
+  kafkaConnectPutConfig: (id: string, name: string, config: Record<string, unknown>) =>
+    invoke<void>("kafka_connect_put_config", { id, name, config }),
+  kafkaConnectPlugins: (id: string) => invoke<KafkaConnectPlugin[]>("kafka_connect_plugins", { id }),
+  kafkaConnectValidate: (id: string, cls: string, config: Record<string, unknown>) =>
+    invoke<KafkaConnectValidation>("kafka_connect_validate", { id, class: cls, config }),
 
   // AI 助手：偵測 claude CLI / 送出問答（串流走 onClaudeStream）/ 取消。
   claudeDetect: () => invoke<ClaudeStatus>("claude_detect"),

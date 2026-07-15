@@ -44,6 +44,15 @@ pub fn schema_registry(cfg: &ConnectionConfig) -> Option<super::schema::SchemaRe
     super::schema::SchemaRegistry::new(url, user, pass).ok()
 }
 
+/// 若連線設定了 `kafka_connect_url`，建立 Kafka Connect REST 用戶端。
+/// 帳密目前存於 options（明文）；TODO：移至 keychain（同 SR）。
+pub fn connect_client(cfg: &ConnectionConfig) -> Option<super::connect::ConnectClient> {
+    let url = opt(cfg, "kafka_connect_url")?;
+    let user = opt(cfg, "kafka_connect_user").map(String::from);
+    let pass = opt(cfg, "kafka_connect_password").map(String::from);
+    super::connect::ConnectClient::new(url, user, pass).ok()
+}
+
 /// 建立共用的 `ClientConfig` 模板（給 admin / producer / consumer 各自 create）。
 ///
 /// consumer 於分頁讀 / tail 時另覆寫 `group.id` 等；此模板提供連線與安全設定。

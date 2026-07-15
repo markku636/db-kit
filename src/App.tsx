@@ -59,6 +59,7 @@ const MongoOpsPanel = lazyOverlay(() => import("./MongoOpsPanel"));
 const KafkaConsumerGroups = lazyOverlay(() => import("./KafkaConsumerGroups"));
 const KafkaClusterOverview = lazyOverlay(() => import("./KafkaClusterOverview"));
 const KafkaMonitorPanel = lazyOverlay(() => import("./KafkaMonitorPanel"));
+const KafkaConnectPanel = lazyOverlay(() => import("./KafkaConnectPanel"));
 const KafkaSchemaViewer = lazyOverlay(() => import("./KafkaSchemaViewer"));
 const KafkaCreateTopicDialog = lazyOverlay(() => import("./KafkaCreateTopicDialog"));
 const NewKeyDialog = lazyOverlay(() => import("./NewKeyDialog"));
@@ -1228,6 +1229,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   const [kafkaGroups, setKafkaGroups] = useState<{ id: string; name: string } | null>(null);
   const [kafkaOverview, setKafkaOverview] = useState<{ id: string; name: string } | null>(null);
   const [kafkaMonitor, setKafkaMonitor] = useState<{ id: string; name: string } | null>(null);
+  const [kafkaConnect, setKafkaConnect] = useState<{ id: string; name: string } | null>(null);
   const [kafkaSchema, setKafkaSchema] = useState<{ id: string; name: string } | null>(null);
   const [kafkaCreateTopic, setKafkaCreateTopic] = useState<{ connId: string } | null>(null);
   // 新增 Redis 鍵對話框
@@ -2550,6 +2552,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                       ...(menuConn.options?.kafka_sr_url
                         ? [[t("Schema Registry…"), () => setKafkaSchema({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
                         : []),
+                      ...(menuConn.options?.kafka_connect_url
+                        ? [[t("連接器…"), () => setKafkaConnect({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
+                        : []),
                     ]
                   : []),
                 ...(connectedIds.has(menu.id)
@@ -2723,6 +2728,10 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
 
       {kafkaMonitor && (
         <KafkaMonitorPanel connId={kafkaMonitor.id} connName={kafkaMonitor.name} onClose={() => setKafkaMonitor(null)} />
+      )}
+
+      {kafkaConnect && (
+        <KafkaConnectPanel connId={kafkaConnect.id} connName={kafkaConnect.name} onClose={() => setKafkaConnect(null)} />
       )}
 
       {kafkaSchema && (
