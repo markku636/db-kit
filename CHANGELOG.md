@@ -1,3 +1,19 @@
+## v0.11.0
+
+Kafka 訊息瀏覽與生產進階（第二波擴充）：
+
+- **JS 篩選運算式**（內嵌 boa 引擎）：以 JavaScript 撰寫篩選條件，可用變數 `key`、`value`、`json`（value 的 JSON 解析）、`headers`、`partition`、`offset`、`timestamp`、`topic`；查詢與即時接收皆可套用。附 CodeMirror 編輯器。獨立 `kafka-js` build feature（可關以加速編譯）。
+- **「搜尋更多」掃描**：不再只讀一頁後篩選，而是持續掃描直到命中所需筆數 / 掃到上限 / 到主題末端，過程顯示進度並可取消。
+- **反序列化選擇**：Key / Value 可指定 自動 / 字串 / JSON / Hex / Avro(SR)。
+- **匯出** 目前訊息為 CSV / JSON / xlsx。
+- **重新處理**：訊息列右鍵「以此訊息發佈…」預填發佈對話框（可改目標主題）；或把整批篩選結果送往另一主題。
+- **發佈進階**：
+  - **Avro（Schema Registry）序列化**：以 JSON 撰寫、依 subject 的 Avro schema 編為 Confluent wire format。
+  - **流量模式**：連續自動發佈（筆數 / 無限 / 間隔），key/value 支援隨機模板（`{{uuid}}`、`{{seq}}`、`{{int a b}}`、`{{oneOf a|b}}`、`{{now}}` 等）。
+  - **CSV 批次發佈**：選檔預覽 → key/value 欄對映（或整列轉 JSON）→ 進度與取消。
+- **JSON 欄位投影**：以路徑（`.user.name`、`items[0].id`、逗號多欄）投影 json/avro 訊息，表格與明細直接顯示投影值。
+- 訊息瀏覽器工具列新增「進階」收合列，容納上述篩選 / 反序列化 / 掃描 / 投影選項。
+
 ## v0.10.0
 
 Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升至 0.39）：
