@@ -159,7 +159,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 關聯式（MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite） | 完整 CRUD、DDL 欄位編輯、索引 / 外鍵管理、EXPLAIN + 視覺化執行計畫（SQL Server 走 SHOWPLAN XML、Oracle 走 DBMS_XPLAN）、routines（預存程序 / 函式）、RETURNING 顯示、ER 圖、結構比對、SSL 模式（MySQL 系 / PG） |
 | 文件型（MongoDB） | 文件攤平成表格、find / 聚合管線、CRUD-via-JSON、**explain 執行計畫視覺化**、JSON 查詢編輯器（語法高亮 + 欄位補全）、進階索引（TTL / partial / text / $indexStats 使用率）、**驗證規則（JSON Schema）**、欄位統計（型別分布 / Top 值）、**監控面板**（serverStatus / dbStats / currentOp / Profiler） |
 | 鍵值型（Redis） | 五種結構檢視＋編輯、命名空間鍵樹、值格式化、Pub/Sub、維運面板、命令列 Console |
-| 訊息串流（Kafka） | 叢集→主題樹、訊息瀏覽器（partition / offset / key / value / timestamp / headers）、**即時 tail**、發佈訊息、**消費者群組 + Lag**、位移重設、建 / 刪主題 + 設定、**Schema Registry**（subjects / schema + Avro→JSON 解碼） |
+| 串流（Kafka） | 訊息瀏覽 + live tail、**JS 篩選運算式**（內嵌 boa）+ 反序列化選擇（string / JSON / hex / Avro）+ **搜尋更多**掃描 + JSON 欄位投影、發佈（headers / **Avro 序列化** / **流量模式 + 隨機模板** / CSV 批次）、**叢集總覽**（brokers / URP 健康）、主題設定編輯 / 加分割區 / 清空、位移重設全功能（含預覽）、消費者群組 + Lag、**監控與告警**（背景取樣 / 手刻 SVG 圖表 / 規則 + OS 通知）、**Schema Registry**（讀寫 / 相容性 / 版本 diff）、**Protobuf 解碼**、**Kafka Connect**（連接器管理 / 設定驗證）、**ACL** 管理 |
 | 通用資料格 | 多欄複合篩選（9 運算子 + AND·OR）、多欄排序、依值篩選、**外鍵雙向導覽**（跳至參照 / 找參照此列者）、**Excel + CSV 匯入**、多格式 + **Excel 匯出**、複製為 INSERT/UPDATE/DELETE/IN、欄位剖析 + 相異值分布、**表頭 hover 顯示欄位註解** |
 | 查詢工作區 | 語法高亮 + 表/欄自動完成（含 external gateway）、**`@` 使用者變數提示**、**多結果集堆疊**（SSMS 風格，可摺疊 / 單格或全部匯出）、**視覺化查詢建構器**（JOIN / 聚合 / HAVING / 分頁 / 即時預覽）、**SQL 片段庫**、**參數化查詢 `:name`**、格式化 / 壓縮 / 關鍵字大小寫、查詢歷史（200 筆，可過濾）、**收藏查詢**（分組 / 編輯 / 匯出匯入）、只執行反白段、失敗語句定位、多開查詢分頁（右鍵關閉其他） |
 | 搜尋 / 導覽 | **進階物件搜尋 Ctrl+Shift+G**（跨庫搜名稱 / 定義內文 / 註解，整字比對 + 萬用字元 `*` `?`、定義預覽高亮、在物件總管中選取）、**命令面板 Ctrl+K**、側欄搜尋命中自動展開資料夾 |
@@ -175,7 +175,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 > Oracle（rust-oracle / ODPI-C）：CRUD、結構分頁（索引 / 外鍵 / DDL via DBMS_METADATA）、routines、執行計畫（EXPLAIN PLAN + DBMS_XPLAN）、ER 圖、欄位統計；**需自行安裝 64 位元 Oracle Instant Client**（執行期偵測 PATH / ORACLE_HOME / 自訂目錄，未安裝時給下載指引；伺服器需 12c+）
 > MongoDB 文件攤平 + 查詢編輯器完整 **CRUD-via-JSON**（find / 聚合 aggregate / insert / update / delete）+ **explain 執行計畫**（stage 樹、COLLSCAN 警示、掃描比）+ 進階索引（TTL / partial / text / 2dsphere / hidden + $indexStats 使用率）+ **驗證規則**（$jsonSchema via collMod）+ 欄位統計（BSON 型別分布 / Top-10 / 抽樣）+ **監控面板**（serverStatus / dbStats / currentOp+kill / Profiler 慢查詢）
 > Redis 仿 **Another Redis Desktop Manager**：五種結構檢視＋編輯、**命名空間鍵樹**（依 `:` 分組資料夾）、值格式化（原始 / JSON / Hex）、**Pub/Sub** 訂閱發佈、**維運面板**（慢查詢 / 用戶端 / 大鍵）、**伺服器狀態面板**（INFO 重點指標 + 全分區，可自動刷新）、**命令列 Console**（指令歷史、DB 切換）
-> Kafka（rdkafka / librdkafka）對標 **Offset Explorer**：叢集資訊、主題與分區（leader / ISR / watermark）、有界消費 + JSON / Avro 明細、**即時 tail**、發佈訊息、**消費者群組 + Lag**、位移重設、建 / 刪主題與設定、**Schema Registry**（Avro→JSON 解碼）；預設支援 PLAINTEXT / SASL_PLAINTEXT + PLAIN，TLS / SASL_SSL / SCRAM 以 `kafka-tls` feature 建置（需預建 OpenSSL）；librdkafka 為 C，Windows 建置需 CMake（見 `build-kafka.ps1`）
+> Kafka（rdkafka / librdkafka）參考 **Conduktor Console**：訊息瀏覽 + live tail、**JS 篩選運算式**（內嵌 boa 引擎，可用 key / value / json / headers…）、反序列化選擇 + 「搜尋更多」掃描 + JSON 欄位投影、匯出 CSV / JSON / xlsx、發佈（headers / **Avro 序列化** / **流量模式 + 隨機模板** / **CSV 批次**）；**叢集總覽**（brokers / URP / 離線分區健康）、主題設定編輯 / 加分割區 / 清空（DeleteRecords）、位移重設全功能（指定 / 時間戳 / 平移 + **套用前預覽**）、消費者群組 Lag；**監控與告警**（背景取樣 + 手刻 SVG 時間序列圖 + 規則 → OS 通知 / 告警歷史 / 健康風險掃描）；**Schema Registry**（subject / 版本 / diff / 註冊 / 相容性 / 刪除）、**Protobuf 解碼**（protox + prost-reflect）、**Kafka Connect**（連接器管理 + 設定驗證）、**ACL**（依主體分組管理）
 > 連線設定持久化（密碼存 OS keychain）、SSH Tunnel、排程備份 + 備份歷史、Ping 連線延遲、ER 圖、欄寬可拖曳、AI 助手
 > 查詢工作區：多語句 → **多結果集堆疊顯示**（SSMS 風格）、失敗語句定位、查詢歷史 200 筆、收藏查詢分組管理、`@` 使用者變數與表 / 欄自動完成
 > 外觀：**7 套寶石系主題整體驅動 App + 編輯器**（工具列切換，設定頁亦可）；**進階物件搜尋**（跨庫 / 定義內文 / 整字 / 萬用字元）
@@ -205,6 +205,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] MongoDB（文件攤平成表格，沿用表格手感）
 - [x] Redis（key 列表化 + 五種結構檢視）
 - [x] Redis 強化（仿 Another Redis）：命名空間鍵樹（`:` 分組）、鍵列 / DB / 連線右鍵選單、伺服器狀態（INFO）面板、命令列 Console
+- [x] Kafka 支援（rdkafka / librdkafka，一等公民資料來源）：訊息瀏覽 + live tail、消費者群組 Lag、發佈、Schema Registry 檢視
+- [x] Kafka 強化（參考 Conduktor Console）：JS 篩選 + 反序列化 + 搜尋更多 + 投影、Avro / 流量 / CSV 發佈、叢集總覽 + 設定編輯 + 清空 + 位移重設預覽、監控與告警（圖表 + OS 通知）、SR 寫入 + Protobuf 解碼 + Kafka Connect + ACL
 - [x] 備份 / 還原（手動，CLI 為主 + SQLite 檔案複製）
 - [x] 連線設定持久化 + 密碼 OS keychain 加密
 - [x] SSH Tunnel（密碼 / 私鑰認證）
