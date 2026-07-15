@@ -308,6 +308,29 @@ pub struct KafkaOffsetReset {
     pub partitions: Option<Vec<i32>>,
 }
 
+/// 健康掃描報告。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaHealthReport {
+    /// epoch 毫秒（由指令層戳）。
+    pub scanned_at: i64,
+    pub items: Vec<KafkaHealthItem>,
+    pub topics_total: u32,
+    pub partitions_total: u32,
+}
+
+/// 單一健康風險項。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaHealthItem {
+    /// "high" | "medium" | "info"
+    pub severity: String,
+    /// "rf1" | "offline" | "urp" | "under_min_isr" | "group_lag"
+    pub kind: String,
+    /// 主題或群組名稱。
+    pub target: String,
+    pub detail: String,
+    pub value: i64,
+}
+
 /// Schema Registry 主題（subject）。
 #[derive(Debug, Clone, Serialize)]
 pub struct KafkaSchemaSubject {

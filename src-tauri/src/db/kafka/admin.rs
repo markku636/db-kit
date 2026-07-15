@@ -504,6 +504,11 @@ fn check_topic_results(results: Vec<rdkafka::admin::TopicResult>) -> AppResult<(
     Ok(())
 }
 
+/// 供同模組其他檔（metrics.rs）取用的 assignment 解析。
+pub(super) fn parse_assignment_pub(bytes: &[u8]) -> Vec<(String, i32)> {
+    parse_assignment(bytes)
+}
+
 /// 解析 consumer 協定的 MemberAssignment bytes → 指派的 (topic, partition) 清單。
 /// 格式：version:i16, topics:[{name:string(i16 len), partitions:[i32](i32 count)}], userdata:bytes。
 fn parse_assignment(bytes: &[u8]) -> Vec<(String, i32)> {

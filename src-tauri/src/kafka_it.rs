@@ -474,6 +474,17 @@ async fn kafka_end_to_end() {
     assert!(gone, "group {group} deleted");
     eprintln!("[kafka_it] delete_group OK");
 
+    // 健康掃描：RF=1 主題應被標記（測試 topic 為 replication:1）
+    let health = d.health_scan().await.expect("health_scan");
+    assert!(health.topics_total >= 1, "health topics_total >= 1");
+    // 此時尚未加分割區，測試 topic 為 2 分區（內部主題不計）。
+    assert!(health.partitions_total >= 2, "health partitions_total >= 2, got {}", health.partitions_total);
+    assert!(
+        health.items.iter().any(|it| it.kind == "rf1" && it.target == topic),
+        "rf1 risk flagged for {topic}"
+    );
+    eprintln!("[kafka_it] health_scan: {} items, topics={}", health.items.len(), health.topics_total);
+
     // 加分割區：2 → 3（放在所有分區敏感斷言之後、清理之前）
     d.add_partitions(&topic, 3).await.expect("add_partitions");
     let mut grown = false;

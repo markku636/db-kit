@@ -635,6 +635,19 @@ export interface KafkaOffsetReset {
   target: KafkaResetTarget;
   partitions?: number[] | null;
 }
+export interface KafkaHealthItem {
+  severity: "high" | "medium" | "info";
+  kind: "rf1" | "offline" | "urp" | "under_min_isr" | "group_lag";
+  target: string;
+  detail: string;
+  value: number;
+}
+export interface KafkaHealthReport {
+  scanned_at: number;
+  items: KafkaHealthItem[];
+  topics_total: number;
+  partitions_total: number;
+}
 export interface KafkaSchemaSubject { subject: string; versions: number[]; latest: number }
 export interface KafkaSchema {
   subject: string;
@@ -924,6 +937,7 @@ export const api = {
   /** 刪除訊息：partitions=null 全分區；before=null 清到 high watermark（全清）。 */
   kafkaDeleteRecords: (id: string, topic: string, partitions: number[] | null, before: number | null) =>
     invoke<KafkaDeleteRecordsResult[]>("kafka_delete_records", { id, topic, partitions, before }),
+  kafkaHealthScan: (id: string) => invoke<KafkaHealthReport>("kafka_health_scan", { id }),
   kafkaSchemaSubjects: (id: string) => invoke<KafkaSchemaSubject[]>("kafka_schema_subjects", { id }),
   kafkaSchema: (id: string, subject: string, version: number) =>
     invoke<KafkaSchema>("kafka_schema", { id, subject, version }),

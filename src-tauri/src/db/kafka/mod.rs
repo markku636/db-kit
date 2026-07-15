@@ -14,6 +14,7 @@ pub(crate) mod consume;
 pub mod dto;
 #[cfg(feature = "kafka-js")]
 pub(crate) mod jsfilter;
+mod metrics;
 mod produce;
 mod schema;
 mod tail;

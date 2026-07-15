@@ -23,8 +23,8 @@ use crate::store::{self, PersistedConnection};
 use crate::db::kafka::dto::{
     KafkaBatchResult, KafkaClusterInfo, KafkaConfigEntry, KafkaConsumeQuery, KafkaConsumeResult,
     KafkaConsumerGroup, KafkaCreateTopicSpec, KafkaDeleteRecordsResult, KafkaGroupDetail,
-    KafkaOffsetPlanRow, KafkaOffsetReset, KafkaPartitionInfo, KafkaProduceRequest,
-    KafkaProduceResult, KafkaSchema, KafkaSchemaSubject, KafkaStart, KafkaTopic,
+    KafkaHealthReport, KafkaOffsetPlanRow, KafkaOffsetReset, KafkaPartitionInfo,
+    KafkaProduceRequest, KafkaProduceResult, KafkaSchema, KafkaSchemaSubject, KafkaStart, KafkaTopic,
 };
 
 pub struct AppState {
@@ -1727,6 +1727,16 @@ pub async fn kafka_delete_records(
         .kafka_driver(&id)?
         .delete_records(&topic, partitions.as_deref(), before)
         .await
+}
+
+/// 健康風險掃描（一次性）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_health_scan(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<KafkaHealthReport> {
+    state.manager.kafka_driver(&id)?.health_scan().await
 }
 
 /// Schema Registry：subjects 清單。

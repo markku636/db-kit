@@ -230,6 +230,8 @@ pub fn run() {
             #[cfg(feature = "kafka")]
             commands::kafka_delete_records,
             #[cfg(feature = "kafka")]
+            commands::kafka_health_scan,
+            #[cfg(feature = "kafka")]
             commands::kafka_schema_subjects,
             #[cfg(feature = "kafka")]
             commands::kafka_schema,
