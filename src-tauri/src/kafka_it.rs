@@ -65,10 +65,24 @@ async fn kafka_end_to_end() {
     d.ping().await.expect("ping");
     eprintln!("[kafka_it] connect + ping OK");
 
-    // 叢集資訊
+    // 叢集資訊（含健康摘要 / 控制器 / broker 設定）
     let ci = d.cluster_info().await.expect("cluster_info");
     assert!(ci.broker_count >= 1, "broker_count >= 1");
-    eprintln!("[kafka_it] cluster: {} broker(s), bootstrap={}", ci.broker_count, ci.bootstrap);
+    assert!(ci.controller_id >= 0, "controller_id resolved");
+    assert!(ci.cluster_id.is_some(), "cluster_id resolved");
+    // 單 broker 測試環境不應有 URP / 離線分區
+    assert_eq!(ci.under_replicated, 0, "no URP on single-broker env");
+    assert_eq!(ci.offline_partitions, 0, "no offline partitions");
+    assert!(!ci.librdkafka_version.is_empty(), "librdkafka version");
+    let bc = d
+        .broker_config(ci.brokers[0].id)
+        .await
+        .expect("broker_config");
+    assert!(!bc.is_empty(), "broker config entries non-empty");
+    eprintln!(
+        "[kafka_it] cluster: {} broker(s), controller={}, topics={}, partitions={}, broker cfg {} entries",
+        ci.broker_count, ci.controller_id, ci.topic_count, ci.partition_count, bc.len()
+    );
 
     let id = uniq();
     let topic = format!("dbkit-it-{id}");

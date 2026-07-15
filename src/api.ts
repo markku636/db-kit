@@ -470,6 +470,18 @@ export interface KafkaClusterInfo {
   broker_count: number;
   brokers: KafkaBroker[];
   orig_broker_id: number;
+  cluster_id: string | null;
+  /** 控制器 broker id；-1 表未知。 */
+  controller_id: number;
+  /** 排除內部主題的主題數；內部主題另計。 */
+  topic_count: number;
+  internal_topic_count: number;
+  partition_count: number;
+  /** ISR < replicas 的分區數。 */
+  under_replicated: number;
+  /** leader == -1 的分區數。 */
+  offline_partitions: number;
+  librdkafka_version: string;
 }
 export interface KafkaTopic {
   name: string;
@@ -818,6 +830,8 @@ export const api = {
     invoke<void>("kafka_delete_topic", { id, topic }),
   kafkaTopicConfig: (id: string, topic: string) =>
     invoke<KafkaConfigEntry[]>("kafka_topic_config", { id, topic }),
+  kafkaBrokerConfig: (id: string, brokerId: number) =>
+    invoke<KafkaConfigEntry[]>("kafka_broker_config", { id, brokerId }),
   kafkaAlterTopicConfig: (id: string, topic: string, configs: KafkaHeader[]) =>
     invoke<void>("kafka_alter_topic_config", { id, topic, configs }),
   kafkaSchemaSubjects: (id: string) => invoke<KafkaSchemaSubject[]>("kafka_schema_subjects", { id }),

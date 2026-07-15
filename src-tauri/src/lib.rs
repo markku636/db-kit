@@ -210,6 +210,8 @@ pub fn run() {
             #[cfg(feature = "kafka")]
             commands::kafka_topic_config,
             #[cfg(feature = "kafka")]
+            commands::kafka_broker_config,
+            #[cfg(feature = "kafka")]
             commands::kafka_alter_topic_config,
             #[cfg(feature = "kafka")]
             commands::kafka_schema_subjects,

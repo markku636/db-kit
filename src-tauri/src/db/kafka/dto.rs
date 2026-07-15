@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 叢集資訊（server_info / 叢集資訊面板）。
+/// 叢集資訊（叢集總覽面板）。單次 metadata 計算的靜態快照，不含 watermark / 趨勢。
 #[derive(Debug, Clone, Serialize)]
 pub struct KafkaClusterInfo {
     pub bootstrap: String,
@@ -11,6 +11,20 @@ pub struct KafkaClusterInfo {
     pub brokers: Vec<KafkaBroker>,
     /// 本次 metadata 查詢所連 broker 的 id（-1 表未知）。
     pub orig_broker_id: i32,
+    /// Kafka cluster.id（broker 未回報時為 None）。
+    pub cluster_id: Option<String>,
+    /// 控制器 broker id；-1 表未知。
+    pub controller_id: i32,
+    /// 主題數（排除內部主題；內部主題另計）。
+    pub topic_count: u32,
+    pub internal_topic_count: u32,
+    pub partition_count: u32,
+    /// ISR < replicas 的分區數（URP）。
+    pub under_replicated: u32,
+    /// leader == -1 的分區數。
+    pub offline_partitions: u32,
+    /// broker 軟體版本無法經 rdkafka 取得，以 librdkafka 版本替代顯示。
+    pub librdkafka_version: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

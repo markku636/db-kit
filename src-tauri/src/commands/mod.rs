@@ -1493,6 +1493,21 @@ pub async fn kafka_topic_config(
     state.manager.kafka_driver(&id)?.topic_config(&topic).await
 }
 
+/// 讀取 broker 設定（describe configs）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_broker_config(
+    state: State<'_, AppState>,
+    id: String,
+    broker_id: i32,
+) -> AppResult<Vec<KafkaConfigEntry>> {
+    state
+        .manager
+        .kafka_driver(&id)?
+        .broker_config(broker_id)
+        .await
+}
+
 /// 變更主題設定（整體取代語意）。
 #[cfg(feature = "kafka")]
 #[tauri::command]

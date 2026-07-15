@@ -57,6 +57,7 @@ const RedisStatus = lazyOverlay(() => import("./RedisStatus"));
 const RedisConsole = lazyOverlay(() => import("./RedisConsole"));
 const MongoOpsPanel = lazyOverlay(() => import("./MongoOpsPanel"));
 const KafkaConsumerGroups = lazyOverlay(() => import("./KafkaConsumerGroups"));
+const KafkaClusterOverview = lazyOverlay(() => import("./KafkaClusterOverview"));
 const KafkaSchemaViewer = lazyOverlay(() => import("./KafkaSchemaViewer"));
 const KafkaCreateTopicDialog = lazyOverlay(() => import("./KafkaCreateTopicDialog"));
 const NewKeyDialog = lazyOverlay(() => import("./NewKeyDialog"));
@@ -1217,6 +1218,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   // Mongo 監控面板（serverStatus / dbStats / currentOp / Profiler）。
   const [mongoOps, setMongoOps] = useState<{ id: string; name: string; db: string } | null>(null);
   const [kafkaGroups, setKafkaGroups] = useState<{ id: string; name: string } | null>(null);
+  const [kafkaOverview, setKafkaOverview] = useState<{ id: string; name: string } | null>(null);
   const [kafkaSchema, setKafkaSchema] = useState<{ id: string; name: string } | null>(null);
   const [kafkaCreateTopic, setKafkaCreateTopic] = useState<{ connId: string } | null>(null);
   // 新增 Redis 鍵對話框
@@ -2416,7 +2418,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                         setActive(c.id);
                         selectNode({ type: "database", connId: c.id, db, kind: c.kind });
                       }}
-                      onContextMenu={(isRedis || isSqlKind || c.kind === "mongo") ? (e) => {
+                      onContextMenu={(isRedis || isSqlKind || c.kind === "mongo" || c.kind === "kafka") ? (e) => {
                         e.preventDefault();
                         setActive(c.id);
                         selectNode({ type: "database", connId: c.id, db, kind: c.kind });
@@ -2511,6 +2513,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                   : []),
                 ...(connectedIds.has(menu.id) && menuConn.kind === "kafka"
                   ? [
+                      [t("叢集總覽…"), () => setKafkaOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
                       [t("新增主題…"), () => setKafkaCreateTopic({ connId: menuConn.id }), false] as [string, () => void, boolean],
                       [t("消費者群組…"), () => setKafkaGroups({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
                       ...(menuConn.options?.kafka_sr_url
@@ -2596,6 +2599,13 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                       [t("編輯屬性…"), editConn, false],
                       [t("清空 DB（FLUSHDB）"), () => flushDb(dbMenu.connId, dbMenu.db), true],
                     ]
+                  : dbConn?.kind === "kafka"
+                  ? [
+                      [t("叢集總覽…"), () => { if (dbConn) setKafkaOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                      [t("新增主題…"), () => setKafkaCreateTopic({ connId: dbMenu.connId }), false] as [string, () => void, boolean],
+                      [t("消費者群組…"), () => { if (dbConn) setKafkaGroups({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                      [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
+                    ]
                   : dbConn?.kind === "mongo"
                   ? ((): [string, () => void, boolean][] => {
                       const arr: [string, () => void, boolean][] = [
@@ -2673,6 +2683,10 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
 
       {kafkaGroups && (
         <KafkaConsumerGroups connId={kafkaGroups.id} connName={kafkaGroups.name} onClose={() => setKafkaGroups(null)} />
+      )}
+
+      {kafkaOverview && (
+        <KafkaClusterOverview connId={kafkaOverview.id} connName={kafkaOverview.name} onClose={() => setKafkaOverview(null)} />
       )}
 
       {kafkaSchema && (

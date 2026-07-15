@@ -62,7 +62,8 @@ impl KafkaDriver {
         .map_err(query_err)?
     }
 
-    /// 叢集資訊（brokers）。
+    /// 叢集資訊（brokers + 主題 / 分區統計 + URP / offline 健康摘要）。
+    /// 單次 fetch_metadata 內全部算完，不打 per-partition watermark（那是取樣器的事）。
     pub async fn cluster_info(&self) -> AppResult<KafkaClusterInfo> {
         let meta = self.meta.clone();
         let bootstrap = self.bootstrap.clone();
@@ -79,11 +80,43 @@ impl KafkaDriver {
                     port: b.port(),
                 })
                 .collect();
+            let (mut topic_count, mut internal_topic_count) = (0u32, 0u32);
+            let (mut partition_count, mut under_replicated, mut offline_partitions) =
+                (0u32, 0u32, 0u32);
+            for t in md.topics() {
+                if super::is_internal_topic(t.name()) {
+                    internal_topic_count += 1;
+                } else {
+                    topic_count += 1;
+                }
+                for p in t.partitions() {
+                    partition_count += 1;
+                    if p.leader() == -1 {
+                        offline_partitions += 1;
+                    }
+                    if p.isr().len() < p.replicas().len() {
+                        under_replicated += 1;
+                    }
+                }
+            }
+            // controller id 無高階包裝，走 re-export 的 C binding（回傳 id 本身，-1 未知）。
+            let controller_id = unsafe {
+                rdkafka::bindings::rd_kafka_controllerid(meta.client().native_ptr(), 10_000)
+            };
+            let cluster_id = meta.client().fetch_cluster_id(Duration::from_secs(10));
             Ok(KafkaClusterInfo {
                 bootstrap,
                 broker_count: brokers.len() as u32,
                 brokers,
                 orig_broker_id: md.orig_broker_id(),
+                cluster_id,
+                controller_id,
+                topic_count,
+                internal_topic_count,
+                partition_count,
+                under_replicated,
+                offline_partitions,
+                librdkafka_version: rdkafka::util::get_rdkafka_version().1,
             })
         })
         .await
@@ -226,22 +259,40 @@ impl KafkaDriver {
             .describe_configs(&[ResourceSpecifier::Topic(topic)], &opts)
             .await
             .map_err(query_err)?;
-        let mut out = Vec::new();
-        for r in res {
-            let cr = r.map_err(|e| AppError::Query(format!("讀取設定失敗：{e}")))?;
-            for entry in cr.entries {
-                out.push(KafkaConfigEntry {
-                    name: entry.name,
-                    value: entry.value.unwrap_or_default(),
-                    source: format!("{:?}", entry.source),
-                    is_default: entry.is_default,
-                    is_sensitive: entry.is_sensitive,
-                });
-            }
-        }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
+        config_entries(res)
     }
+
+    /// 讀取 broker 設定（describe configs，ResourceSpecifier::Broker）。
+    pub async fn broker_config(&self, broker_id: i32) -> AppResult<Vec<KafkaConfigEntry>> {
+        let opts = AdminOptions::new().request_timeout(Some(Duration::from_secs(15)));
+        let res = self
+            .admin
+            .describe_configs(&[ResourceSpecifier::Broker(broker_id)], &opts)
+            .await
+            .map_err(query_err)?;
+        config_entries(res)
+    }
+}
+
+/// describe_configs 結果 → 設定項清單（topic_config / broker_config 共用）。
+fn config_entries(
+    res: Vec<rdkafka::admin::ConfigResourceResult>,
+) -> AppResult<Vec<KafkaConfigEntry>> {
+    let mut out = Vec::new();
+    for r in res {
+        let cr = r.map_err(|e| AppError::Query(format!("讀取設定失敗：{e}")))?;
+        for entry in cr.entries {
+            out.push(KafkaConfigEntry {
+                name: entry.name,
+                value: entry.value.unwrap_or_default(),
+                source: format!("{:?}", entry.source),
+                is_default: entry.is_default,
+                is_sensitive: entry.is_sensitive,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
 }
 
 /// 檢查 create/delete topics 的逐主題結果，任一失敗即回錯。
