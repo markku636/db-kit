@@ -177,7 +177,7 @@ async fn kafka_end_to_end() {
     let msgs = d
         .consume_page(
             &topic,
-            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None, key_deser: None, value_deser: None, scan: None },
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None, key_deser: None, value_deser: None, scan: None, js_filter: None },
             None,
             None,
         )
@@ -193,7 +193,7 @@ async fn kafka_end_to_end() {
     let hexed = d
         .consume_page(
             &topic,
-            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 10, filter: None, key_deser: None, value_deser: Some("hex".into()), scan: None },
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 10, filter: None, key_deser: None, value_deser: Some("hex".into()), scan: None, js_filter: None },
             None,
             None,
         )
@@ -204,7 +204,7 @@ async fn kafka_end_to_end() {
     let stringy = d
         .consume_page(
             &topic,
-            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 10, filter: None, key_deser: None, value_deser: Some("string".into()), scan: None },
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 10, filter: None, key_deser: None, value_deser: Some("string".into()), scan: None, js_filter: None },
             None,
             None,
         )
@@ -218,7 +218,7 @@ async fn kafka_end_to_end() {
     let filtered = d
         .consume_page(
             &topic,
-            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: Some("\"n\":3".into()), key_deser: None, value_deser: None, scan: None },
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: Some("\"n\":3".into()), key_deser: None, value_deser: None, scan: None, js_filter: None },
             None,
             None,
         )
@@ -240,6 +240,7 @@ async fn kafka_end_to_end() {
                 key_deser: None,
                 value_deser: None,
                 scan: Some(crate::db::kafka::dto::KafkaScanOptions { max_scan: 1000, max_wait_ms: Some(15000) }),
+                js_filter: None,
             },
             None,
             None,
@@ -250,6 +251,39 @@ async fn kafka_end_to_end() {
     assert!(scanned.reached_end, "scan reached end");
     assert!(scanned.scanned >= 6, "scan scanned all 6, got {}", scanned.scanned);
     eprintln!("[kafka_it] scan (search-more) matched={} scanned={} end={}", scanned.matched, scanned.scanned, scanned.reached_end);
+
+    // JS 篩選（kafka-js feature）：json.n > 3 → 命中 2（n=4,5）；壞運算式 → Err
+    #[cfg(feature = "kafka-js")]
+    {
+        let js = d
+            .consume_page(
+                &topic,
+                &KafkaConsumeQuery {
+                    partition: None, start: KafkaStart::Beginning, limit: 100,
+                    filter: None, key_deser: None, value_deser: None, scan: None,
+                    js_filter: Some("json && json.n > 3".into()),
+                },
+                None,
+                None,
+            )
+            .await
+            .expect("consume js_filter");
+        assert_eq!(js.matched, 2, "js json.n>3 matched 2, got {}", js.matched);
+        let bad = d
+            .consume_page(
+                &topic,
+                &KafkaConsumeQuery {
+                    partition: None, start: KafkaStart::Beginning, limit: 10,
+                    filter: None, key_deser: None, value_deser: None, scan: None,
+                    js_filter: Some("this is (( not valid".into()),
+                },
+                None,
+                None,
+            )
+            .await;
+        assert!(bad.is_err(), "invalid js_filter compile error surfaced");
+        eprintln!("[kafka_it] js_filter matched={} + compile-error OK", js.matched);
+    }
 
     // live-tail：BaseConsumer assign@End，發佈後 poll 到；drop 快速返回
     let consumer = d.build_tail_consumer(&topic, None, KafkaStart::End).await.expect("build_tail_consumer");
@@ -369,7 +403,7 @@ async fn kafka_end_to_end() {
         let after = d
             .consume_page(
                 &topic,
-                &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None, key_deser: None, value_deser: None, scan: None },
+                &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None, key_deser: None, value_deser: None, scan: None, js_filter: None },
                 None,
                 None,
             )

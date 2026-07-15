@@ -12,6 +12,8 @@ mod admin;
 mod config;
 pub(crate) mod consume;
 pub mod dto;
+#[cfg(feature = "kafka-js")]
+pub(crate) mod jsfilter;
 mod produce;
 mod schema;
 mod tail;
@@ -182,6 +184,7 @@ impl DatabaseDriver for KafkaDriver {
                     key_deser: None,
                     value_deser: None,
                     scan: None,
+                    js_filter: None,
                 },
                 None,
                 None,

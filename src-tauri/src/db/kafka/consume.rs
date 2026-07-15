@@ -82,10 +82,16 @@ impl KafkaDriver {
     ) -> AppResult<KafkaConsumeResult> {
         let sr = self.schema.as_deref();
         let filter = query.filter.as_deref();
+        let js_src = query.js_filter.as_deref().filter(|s| !s.trim().is_empty());
         let key_deser = Deser::from_opt(query.key_deser.as_deref());
         let value_deser = Deser::from_opt(query.value_deser.as_deref());
         let limit = (query.limit.max(1)) as usize;
         let started = Instant::now();
+
+        // JS 篩選：開跑前先編譯一次，語法錯誤即快速失敗。
+        if let Some(src) = js_src {
+            validate_js_filter(src).await?;
+        }
 
         // ---- 舊行為（無 scan）：一次 blocking 讀滿 limit，再篩選 ----
         let Some(scan) = &query.scan else {
@@ -99,13 +105,8 @@ impl KafkaDriver {
             .await
             .map_err(query_err)??;
             let scanned = raws.len() as u64;
-            let mut out = Vec::with_capacity(raws.len());
-            for raw in raws {
-                let km = raw_to_dto(raw, topic, "", sr, key_deser, value_deser).await;
-                if passes_filter(&km, filter) {
-                    out.push(km);
-                }
-            }
+            let (mut out, eval_errors) =
+                decode_and_filter(raws, topic, sr, key_deser, value_deser, filter, js_src).await?;
             sort_messages(&mut out);
             let matched = out.len() as u64;
             return Ok(KafkaConsumeResult {
@@ -113,7 +114,7 @@ impl KafkaDriver {
                 scanned,
                 matched,
                 reached_end,
-                eval_errors: 0,
+                eval_errors,
                 elapsed_ms: started.elapsed().as_millis() as u64,
             });
         };
@@ -136,6 +137,7 @@ impl KafkaDriver {
             .unwrap_or(SCAN_DEFAULT_WAIT);
         let mut out: Vec<KafkaMessage> = Vec::new();
         let mut scanned: u64 = 0;
+        let mut eval_errors: u64 = 0;
         loop {
             if out.len() >= limit
                 || scanned >= max_scan
@@ -145,7 +147,7 @@ impl KafkaDriver {
             {
                 break;
             }
-            let want = (limit - out.len()).clamp(1, BATCH_MAX);
+            let want = BATCH_MAX;
             let (s, batch) = tokio::task::spawn_blocking(move || {
                 let mut st = state;
                 let b = fetch_batch(&mut st, want);
@@ -157,16 +159,12 @@ impl KafkaDriver {
             if batch.is_empty() && state.done() {
                 break;
             }
-            for raw in batch {
-                scanned += 1;
-                let km = raw_to_dto(raw, topic, "", sr, key_deser, value_deser).await;
-                if passes_filter(&km, filter) {
-                    out.push(km);
-                }
-                if out.len() >= limit {
-                    break;
-                }
-            }
+            scanned += batch.len() as u64;
+            let (kept, errs) =
+                decode_and_filter(batch, topic, sr, key_deser, value_deser, filter, js_src).await?;
+            eval_errors += errs;
+            out.extend(kept);
+            out.truncate(limit);
             if let Some(p) = &progress {
                 p(scanned, out.len() as u64);
             }
@@ -179,9 +177,90 @@ impl KafkaDriver {
             scanned,
             matched,
             reached_end,
-            eval_errors: 0,
+            eval_errors,
             elapsed_ms: started.elapsed().as_millis() as u64,
         })
+    }
+}
+
+/// 解碼一批 raw（async；Avro 走 registry）→ 子字串篩選 → JS 篩選（於 spawn_blocking 內）。
+/// 回傳（通過的訊息, JS 求值失敗略過的筆數）。
+async fn decode_and_filter(
+    raws: Vec<RawMsg>,
+    topic: &str,
+    sr: Option<&SchemaRegistry>,
+    key_deser: Deser,
+    value_deser: Deser,
+    substr: Option<&str>,
+    js_src: Option<&str>,
+) -> AppResult<(Vec<KafkaMessage>, u64)> {
+    let mut decoded = Vec::with_capacity(raws.len());
+    for raw in raws {
+        let km = raw_to_dto(raw, topic, "", sr, key_deser, value_deser).await;
+        if passes_filter(&km, substr) {
+            decoded.push(km);
+        }
+    }
+    let Some(src) = js_src else {
+        return Ok((decoded, 0));
+    };
+    apply_js_filter(decoded, src).await
+}
+
+/// 編譯驗證 JS 篩選（快速失敗）。無 kafka-js feature 時回 Unsupported。
+async fn validate_js_filter(src: &str) -> AppResult<()> {
+    #[cfg(feature = "kafka-js")]
+    {
+        let src = src.to_string();
+        tokio::task::spawn_blocking(move || {
+            super::jsfilter::JsFilter::compile(&src)
+                .map(|_| ())
+                .map_err(|e| AppError::Query(crate::tf!("JS 篩選編譯失敗：{e}", e = e)))
+        })
+        .await
+        .map_err(query_err)?
+    }
+    #[cfg(not(feature = "kafka-js"))]
+    {
+        let _ = src;
+        Err(AppError::Unsupported(
+            crate::t!("此版本未啟用 JS 篩選（kafka-js feature）").into(),
+        ))
+    }
+}
+
+/// 於 spawn_blocking 內編譯並套用 JS 篩選（Context 為 !Send，僅活在此 closure）。
+async fn apply_js_filter(
+    msgs: Vec<KafkaMessage>,
+    src: &str,
+) -> AppResult<(Vec<KafkaMessage>, u64)> {
+    #[cfg(feature = "kafka-js")]
+    {
+        let src = src.to_string();
+        tokio::task::spawn_blocking(move || {
+            use super::jsfilter::JsFilter;
+            let mut f = JsFilter::compile(&src)
+                .map_err(|e| AppError::Query(crate::tf!("JS 篩選編譯失敗：{e}", e = e)))?;
+            let mut kept = Vec::new();
+            let mut errs = 0u64;
+            for m in msgs {
+                match f.eval(&m) {
+                    Ok(true) => kept.push(m),
+                    Ok(false) => {}
+                    Err(_) => errs += 1,
+                }
+            }
+            Ok((kept, errs))
+        })
+        .await
+        .map_err(query_err)?
+    }
+    #[cfg(not(feature = "kafka-js"))]
+    {
+        let _ = (src, &msgs);
+        Err(AppError::Unsupported(
+            crate::t!("此版本未啟用 JS 篩選（kafka-js feature）").into(),
+        ))
     }
 }
 

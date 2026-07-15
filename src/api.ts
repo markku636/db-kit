@@ -533,6 +533,8 @@ export interface KafkaConsumeQuery {
   value_deser?: string | null;
   /** 搜尋更多：掃描直到命中 limit 筆或掃到上限。null = 舊行為。 */
   scan?: KafkaScanOptions | null;
+  /** JS 篩選運算式（與子字串 filter 為 AND）；需 kafka-js。null = 不用。 */
+  js_filter?: string | null;
 }
 export interface KafkaConsumeResult {
   messages: KafkaMessage[];
@@ -864,8 +866,8 @@ export const api = {
   /** 取消 Kafka 長跑工作（kind 如 "scan" / "csv"）。 */
   kafkaJobCancel: (id: string, kind: string) =>
     invoke<void>("kafka_job_cancel", { id, kind }),
-  kafkaTailStart: (id: string, topic: string, partition: number | null, start: KafkaStartPosition) =>
-    invoke<void>("kafka_tail_start", { id, topic, partition, start }),
+  kafkaTailStart: (id: string, topic: string, partition: number | null, start: KafkaStartPosition, jsFilter?: string | null) =>
+    invoke<void>("kafka_tail_start", { id, topic, partition, start, jsFilter: jsFilter ?? null }),
   kafkaTailStop: (id: string) => invoke<void>("kafka_tail_stop", { id }),
   kafkaProduce: (id: string, req: KafkaProduceRequest) =>
     invoke<KafkaProduceResult>("kafka_produce", { id, req }),

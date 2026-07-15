@@ -116,6 +116,9 @@ pub struct KafkaConsumeQuery {
     /// 「搜尋更多」：掃描直到命中 limit 筆或掃到上限。None = 舊行為（取一頁後篩選）。
     #[serde(default)]
     pub scan: Option<KafkaScanOptions>,
+    /// JS 篩選運算式（與子字串 filter 為 AND）；需 kafka-js feature。None = 不用。
+    #[serde(default)]
+    pub js_filter: Option<String>,
 }
 
 /// 「搜尋更多」掃描參數。

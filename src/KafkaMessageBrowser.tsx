@@ -10,10 +10,16 @@ import {
   type KafkaScanProgress,
   type KafkaStartPosition,
 } from "./api";
+import CodeMirror from "@uiw/react-codemirror";
+import { javascript } from "@codemirror/lang-javascript";
+import { EditorView } from "@codemirror/view";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 import KafkaProduceDialog from "./KafkaProduceDialog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+
+type FilterMode = "simple" | "js";
+const cmExtensions = [javascript(), EditorView.lineWrapping];
 
 type StartMode = "beginning" | "end" | "offset" | "timestamp";
 type Deser = "auto" | "string" | "json" | "hex" | "avro";
@@ -47,7 +53,12 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
   const [maxScan, setMaxScan] = useState(50000);
   const [scanProg, setScanProg] = useState<KafkaScanProgress | null>(null);
   const [scanNote, setScanNote] = useState<string | null>(null);
-  const advActive = keyDeser !== "auto" || valueDeser !== "auto" || searchMore;
+  // 篩選模式：簡易（伺服端子字串）/ JS（boa 運算式）。
+  const [filterMode, setFilterMode] = useState<FilterMode>("simple");
+  const [jsFilter, setJsFilter] = useState("");
+  const [jsOnTail, setJsOnTail] = useState(false);
+  const jsActive = filterMode === "js" && jsFilter.trim() !== "";
+  const advActive = keyDeser !== "auto" || valueDeser !== "auto" || searchMore || jsActive;
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const unlistenErrRef = useRef<UnlistenFn | null>(null);
@@ -100,8 +111,9 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
     setErr(null);
     setScanProg(null);
     setScanNote(null);
-    // 掃描模式時把用戶端快速篩選字串下推為伺服端子字串篩選（才有「搜尋更多」意義）。
-    const serverFilter = searchMore && filter.trim() ? filter.trim() : null;
+    // 簡易模式 + 掃描時把快速篩選字串下推為伺服端子字串篩選（才有「搜尋更多」意義）。
+    const serverFilter = filterMode === "simple" && searchMore && filter.trim() ? filter.trim() : null;
+    const serverJs = jsActive ? jsFilter.trim() : null;
     let unlistenProg: null | (() => void) = null;
     try {
       if (searchMore) {
@@ -114,6 +126,7 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
         start: buildStart(),
         limit,
         filter: serverFilter,
+        js_filter: serverJs,
         key_deser: keyDeser === "auto" ? null : keyDeser,
         value_deser: valueDeser === "auto" ? null : valueDeser,
         scan: searchMore ? { max_scan: Math.max(1, maxScan) } : null,
@@ -155,7 +168,7 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
       if (!unlistenErrRef.current) {
         unlistenErrRef.current = await onKafkaError((msg) => setErr(msg));
       }
-      await api.kafkaTailStart(connId, topic, partition, { type: "end" });
+      await api.kafkaTailStart(connId, topic, partition, { type: "end" }, jsOnTail && jsActive ? jsFilter.trim() : null);
       setTailing(true);
     } catch (e: any) {
       setErr(e?.message ?? t("啟動即時接收失敗"));
@@ -305,9 +318,45 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
         />
       </div>
 
-      {/* 進階列：反序列化選擇（之後擴充：篩選模式 / 搜尋更多 / 投影） */}
+      {/* 進階列：篩選模式 / 反序列化 / 搜尋更多 */}
       {(advOpen || advActive) && (
-        <div className="px-3 py-2 border-b border-fg/10 flex flex-wrap items-center gap-2 bg-inset/40">
+        <div className="px-3 py-2 border-b border-fg/10 flex flex-col gap-2 bg-inset/40">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-fg/40">{t("篩選模式")}</label>
+          <div className="inline-flex rounded border border-fg/15 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setFilterMode("simple")}
+              className={`px-2 py-1 ${filterMode === "simple" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"}`}
+            >{t("簡易")}</button>
+            <button
+              type="button"
+              onClick={() => setFilterMode("js")}
+              className={`px-2 py-1 ${filterMode === "js" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"}`}
+            >{t("JS 運算式")}</button>
+          </div>
+          {filterMode === "simple"
+            ? <span className="text-fg/30">{t("用上方篩選框比對 key / value / header（子字串）")}</span>
+            : <label className="flex items-center gap-1 cursor-pointer text-fg/60">
+                <input type="checkbox" checked={jsOnTail} onChange={(e) => setJsOnTail(e.target.checked)} />
+                {t("套用於即時")}
+              </label>}
+        </div>
+        {filterMode === "js" && (
+          <div className="border border-fg/15 rounded overflow-hidden">
+            <CodeMirror
+              value={jsFilter}
+              onChange={setJsFilter}
+              extensions={cmExtensions}
+              theme="dark"
+              placeholder={"json && json.amount > 100 && headers[\"src\"] === \"web\""}
+              basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
+              height="54px"
+            />
+            <div className="px-2 py-1 text-fg/30 border-t border-fg/10">{t("可用變數：key, value, json, headers, partition, offset, timestamp, topic")}</div>
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
           <label className="text-fg/40">{t("Key 反序列化")}</label>
           <select
             value={keyDeser}
@@ -349,6 +398,7 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
             </>
           )}
           {!searchMore && <span className="text-fg/30">{t("套用於下一次「查詢」（即時接收維持自動判斷）")}</span>}
+        </div>
         </div>
       )}
 

@@ -1436,10 +1436,30 @@ pub async fn kafka_tail_start(
     topic: String,
     partition: Option<i32>,
     start: KafkaStart,
+    js_filter: Option<String>,
 ) -> AppResult<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     let driver = state.manager.kafka_driver(&id)?;
     let consumer = driver.build_tail_consumer(&topic, partition, start).await?;
+    // JS 篩選：開跑前先編譯驗證，避免壞運算式進迴圈才發現。
+    let js_src = js_filter.filter(|s| !s.trim().is_empty());
+    #[cfg(feature = "kafka-js")]
+    if let Some(src) = &js_src {
+        let src = src.clone();
+        // 注意：JsFilter 為 !Send，不可作為 spawn_blocking 的回傳跨執行緒 —— 在 closure 內丟棄。
+        tokio::task::spawn_blocking(move || {
+            crate::db::kafka::jsfilter::JsFilter::compile(&src).map(|_| ())
+        })
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?
+        .map_err(|e| AppError::Query(crate::tf!("JS 篩選編譯失敗：{e}", e = e)))?;
+    }
+    #[cfg(not(feature = "kafka-js"))]
+    if js_src.is_some() {
+        return Err(AppError::Unsupported(
+            crate::t!("此版本未啟用 JS 篩選（kafka-js feature）").into(),
+        ));
+    }
     let cancel = Arc::new(AtomicBool::new(false));
     // 每連線一個 tail：先讓舊的停。
     if let Some(old) = state.kafka_tails.lock().insert(id.clone(), cancel.clone()) {
@@ -1450,10 +1470,31 @@ pub async fn kafka_tail_start(
     // 專屬 OS 執行緒跑阻塞 poll 迴圈；BaseConsumer drop 快速，不擋 tokio worker
     //（StreamConsumer 的 drop 在 assign-only 情境會無限阻塞，故不用）。
     std::thread::spawn(move || {
+        // JsFilter 為 !Send，於本執行緒內編譯（上方已驗證可編譯）。
+        #[cfg(feature = "kafka-js")]
+        let mut js = js_src
+            .as_deref()
+            .and_then(|s| crate::db::kafka::jsfilter::JsFilter::compile(s).ok());
+        #[cfg(feature = "kafka-js")]
+        let mut js_err_sent = false;
         while !cancel.load(Ordering::Relaxed) {
             match consumer.poll(std::time::Duration::from_millis(250)) {
                 Some(Ok(msg)) => {
                     let km = crate::db::kafka::message_to_dto_sync(&msg, &topic, &conn_id);
+                    #[cfg(feature = "kafka-js")]
+                    if let Some(f) = js.as_mut() {
+                        match f.eval(&km) {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(e) => {
+                                if !js_err_sent {
+                                    let _ = app2.emit("kafka-error", format!("{conn_id}: JS {e}"));
+                                    js_err_sent = true;
+                                }
+                                continue;
+                            }
+                        }
+                    }
                     let _ = app2.emit("kafka-message", km);
                 }
                 Some(Err(rdkafka::error::KafkaError::PartitionEOF(_))) => {}

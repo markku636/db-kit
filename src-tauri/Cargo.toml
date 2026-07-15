@@ -86,6 +86,9 @@ rdkafka = { version = "0.39", default-features = false, features = ["cmake-build
 # apache-avro（純 Rust）依 schema id 解 Avro binary → JSON。皆藏在 `kafka` feature 後。
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
 apache-avro = { version = "0.17", optional = true }
+# 訊息 JS 篩選運算式（Conduktor 風）：純 Rust JS 引擎，藏在 kafka-js feature 後。
+# 編譯較重（+2~4 分鐘、二進位 +4~8MB），故獨立成 feature 讓開發/CI 可關。
+boa_engine = { version = "0.20", optional = true }
 
 # OS keychain：依平台選用原生後端，避免在 Windows 上編譯 secret-service。
 [target.'cfg(windows)'.dependencies]
@@ -98,13 +101,15 @@ keyring = { version = "3", features = ["apple-native"] }
 keyring = { version = "3", features = ["sync-secret-service"] }
 
 [features]
-default = ["gui", "kafka"]
+default = ["gui", "kafka", "kafka-js"]
 # gui：啟用 Tauri 桌面程式（commands / agent / scheduler / run()）。預設開啟。
 gui = ["dep:tauri", "dep:tauri-plugin-dialog"]
 custom-protocol = ["gui", "tauri/custom-protocol"]
 # kafka：一等公民 Kafka 支援（rdkafka / librdkafka）。隨 gui 預設開啟，讓開源桌面版內建此功能；
 # slim CLI（dbk）以 --no-default-features 排除，免除 CMake / C toolchain 建置負擔。
 kafka = ["dep:rdkafka", "dep:reqwest", "dep:apache-avro"]
+# kafka-js：在 kafka 之上加內嵌 boa JS 引擎，供訊息 JS 篩選運算式。隨 default 開，可關以加速編譯。
+kafka-js = ["kafka", "dep:boa_engine"]
 # kafka-tls：在 kafka 之上額外開啟 rdkafka 的 ssl（TLS / SASL_SSL）。需預建 OpenSSL（見 P7 建置文件）。
 # 分離成獨立 feature：無 OpenSSL 的開發環境仍可用 kafka（PLAINTEXT / SASL_PLAINTEXT）建置與測試。
 kafka-tls = ["kafka", "rdkafka/ssl"]
