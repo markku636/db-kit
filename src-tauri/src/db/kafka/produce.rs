@@ -31,7 +31,10 @@ impl KafkaDriver {
         }
 
         match self.producer.send(record, Duration::from_secs(15)).await {
-            Ok((partition, offset)) => Ok(KafkaProduceResult { partition, offset }),
+            Ok(d) => Ok(KafkaProduceResult {
+                partition: d.partition,
+                offset: d.offset,
+            }),
             Err((e, _msg)) => Err(query_err(e)),
         }
     }

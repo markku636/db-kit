@@ -81,7 +81,7 @@ calamine = { version = "0.26", features = ["dates"] }
 # 需 CMake + MSVC；本機 VS BuildTools 已具備）。藏在 `kafka` feature 後（隨 gui 預設開）：slim CLI
 # （--no-default-features）不受 librdkafka 建置負擔影響。ssl（TLS / SASL_SSL）待 P7 併同預建 OpenSSL 開啟
 # （見 features.kafka-tls）；此處先支援 PLAINTEXT / SASL_PLAINTEXT（SCRAM/PLAIN 內建於 librdkafka，免 OpenSSL）。
-rdkafka = { version = "0.36", default-features = false, features = ["cmake-build", "tokio"], optional = true }
+rdkafka = { version = "0.39", default-features = false, features = ["cmake-build", "tokio"], optional = true }
 # Schema Registry：以 reqwest（rustls，延續全案避開 OpenSSL/NASM）打 Confluent SR REST API，
 # apache-avro（純 Rust）依 schema id 解 Avro binary → JSON。皆藏在 `kafka` feature 後。
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }

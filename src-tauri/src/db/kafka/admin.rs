@@ -13,9 +13,9 @@ use rdkafka::groups::{GroupInfo, GroupMemberInfo};
 use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 use rdkafka::ClientConfig;
 
-/// 安全取群組成員：規避 rdkafka 0.36 對「空群組（member_cnt=0、members 指標為 null）」
-/// 呼叫 `members()` 時 `slice::from_raw_parts(null, 0)` 的 UB —— 在 debug build 會 abort。
-/// Empty / Dead 為確定零成員的終端狀態，直接回空切片，不觸碰 null 指標。
+/// 安全取群組成員：rdkafka 0.39 起上游已對「空群組（member_cnt=0、members 指標為 null）」
+/// 的 `members()` 加 null guard，此函式保留作語意文件 + 防禦（Empty / Dead 為確定零成員的
+/// 終端狀態，直接回空切片）。
 fn safe_members(g: &GroupInfo) -> &[GroupMemberInfo] {
     match g.state() {
         "Empty" | "Dead" => &[],
