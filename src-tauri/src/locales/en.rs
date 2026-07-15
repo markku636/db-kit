@@ -535,6 +535,9 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "內部主題不可清空" => "Internal topics cannot be emptied",
         "沒有符合的分區" => "No matching partitions",
         "沒有可套用的分區（皆無已提交位移）" => "No partitions to apply (none have committed offsets)",
+        "群組仍有活躍成員，無法刪除（請先停掉消費者）" => {
+            "The group still has active members; stop the consumers before deleting it"
+        }
 
         _ => return None,
     })

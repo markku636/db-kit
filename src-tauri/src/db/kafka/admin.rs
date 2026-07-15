@@ -342,6 +342,43 @@ impl KafkaDriver {
         check_topic_results(res)
     }
 
+    /// 刪除消費者群組（須 Empty；已提交位移一併刪除）。
+    pub async fn delete_group(&self, group: &str) -> AppResult<()> {
+        let meta = self.meta.clone();
+        let group_owned = group.to_string();
+        let has_members = tokio::task::spawn_blocking(move || {
+            let gl = meta
+                .fetch_group_list(Some(&group_owned), Duration::from_secs(15))
+                .map_err(query_err)?;
+            Ok::<bool, AppError>(
+                gl.groups()
+                    .iter()
+                    .find(|g| g.name() == group_owned)
+                    .map(|g| !safe_members(g).is_empty())
+                    .unwrap_or(false),
+            )
+        })
+        .await
+        .map_err(query_err)??;
+        if has_members {
+            return Err(AppError::Query(
+                t!("群組仍有活躍成員，無法刪除（請先停掉消費者）").into(),
+            ));
+        }
+        let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(15)));
+        let res = self
+            .admin
+            .delete_groups(&[group], &opts)
+            .await
+            .map_err(query_err)?;
+        for r in res {
+            if let Err((name, code)) = r {
+                return Err(AppError::Query(format!("{name}: {code}")));
+            }
+        }
+        Ok(())
+    }
+
     /// 刪除主題訊息（DeleteRecords）：清掉 `offset < before` 的訊息。
     /// `before = None` → `Offset::End`（由 broker 解析為當下 high watermark，全清、無 race）；
     /// `partitions = None` → 全部分區。內部主題一律拒絕。

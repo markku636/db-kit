@@ -132,6 +132,26 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
   const inputCls = "bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent";
   const groupEmpty = detail?.state === "Empty";
 
+  const doDeleteGroup = async () => {
+    if (!selected) return;
+    if (!(await uiConfirm(
+      t("確定刪除消費者群組「{name}」？已提交位移將一併刪除，不可復原。", { name: selected }),
+      { danger: true, confirmText: t("刪除") },
+    ))) return;
+    setBusy(true);
+    try {
+      await api.kafkaDeleteGroup(connId, selected);
+      toast.success(t("已刪除群組 {name}", { name: selected }));
+      setSelected(null);
+      setDetail(null);
+      loadGroups();
+    } catch (e: any) {
+      toast.error(e?.message ?? t("刪除失敗"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-app w-[860px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -164,7 +184,18 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
           <div className="flex-1 min-w-0 overflow-auto p-3">
             {detail ? (
               <div className="space-y-4">
-                <div className="text-fg/60">{detail.group_id} · <span className="text-fg/40">{detail.state}</span></div>
+                <div className="flex items-center gap-2">
+                  <span className="text-fg/60">{detail.group_id} · <span className="text-fg/40">{detail.state}</span></span>
+                  <button
+                    type="button"
+                    onClick={doDeleteGroup}
+                    disabled={busy || !groupEmpty}
+                    title={groupEmpty ? undefined : t("群組須 Empty 才能刪除")}
+                    className="ml-auto px-2 py-0.5 rounded text-red-400/80 hover:text-red-300 hover:bg-red-500/10 disabled:opacity-40"
+                  >
+                    {t("刪除群組")}
+                  </button>
+                </div>
 
                 <div>
                   <div className="text-fg/40 mb-1">Lag</div>

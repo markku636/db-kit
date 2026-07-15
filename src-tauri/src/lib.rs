@@ -202,6 +202,8 @@ pub fn run() {
             #[cfg(feature = "kafka")]
             commands::kafka_group_detail,
             #[cfg(feature = "kafka")]
+            commands::kafka_delete_group,
+            #[cfg(feature = "kafka")]
             commands::kafka_preview_reset,
             #[cfg(feature = "kafka")]
             commands::kafka_reset_offsets,

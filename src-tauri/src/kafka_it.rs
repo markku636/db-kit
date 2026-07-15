@@ -328,6 +328,20 @@ async fn kafka_end_to_end() {
     assert!(drained, "topic drained after delete_records");
     eprintln!("[kafka_it] delete_records (partition + all) OK");
 
+    // 刪除消費者群組（reset 產生的 Empty 群組）→ poll 至消失
+    d.delete_group(&group).await.expect("delete_group");
+    let mut gone = false;
+    for _ in 0..20 {
+        let gs = d.list_groups().await.expect("list_groups after delete");
+        if !gs.iter().any(|g| g.group_id == group) {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(gone, "group {group} deleted");
+    eprintln!("[kafka_it] delete_group OK");
+
     // 加分割區：2 → 3（放在所有分區敏感斷言之後、清理之前）
     d.add_partitions(&topic, 3).await.expect("add_partitions");
     let mut grown = false;

@@ -839,6 +839,9 @@ export const api = {
   kafkaConsumerGroups: (id: string) => invoke<KafkaConsumerGroup[]>("kafka_consumer_groups", { id }),
   kafkaGroupDetail: (id: string, group: string) =>
     invoke<KafkaGroupDetail>("kafka_group_detail", { id, group }),
+  /** 刪除消費者群組（須 Empty；已提交位移一併刪除）。 */
+  kafkaDeleteGroup: (id: string, group: string) =>
+    invoke<void>("kafka_delete_group", { id, group }),
   /** 預覽位移重設（不檢查群組狀態、不 commit）。 */
   kafkaPreviewResetOffsets: (id: string, reset: KafkaOffsetReset) =>
     invoke<KafkaOffsetPlanRow[]>("kafka_preview_reset", { id, reset }),

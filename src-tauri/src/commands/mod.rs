@@ -1472,6 +1472,17 @@ pub async fn kafka_reset_offsets(
     state.manager.kafka_driver(&id)?.reset_offsets(&reset).await
 }
 
+/// 刪除消費者群組（須 Empty）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_delete_group(
+    state: State<'_, AppState>,
+    id: String,
+    group: String,
+) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.delete_group(&group).await
+}
+
 /// 建立主題。
 #[cfg(feature = "kafka")]
 #[tauri::command]
