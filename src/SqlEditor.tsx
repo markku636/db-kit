@@ -56,6 +56,7 @@ const DIALECT: Record<DbKind, SQLDialect> = {
   oracle: PLSQL,
   mongo: StandardSQL,
   redis: StandardSQL,
+  kafka: StandardSQL, // Kafka 不開 SQL 編輯器；此值僅滿足 Record 完整性
   external: MySQLLoose, // 外部 gateway 講 MySQL
 };
 

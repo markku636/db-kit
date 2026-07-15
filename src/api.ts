@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "external";
+export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "external";
 
 export type SshAuthMethod = "password" | "key";
 
@@ -462,6 +462,129 @@ export interface SearchOptions {
   limit?: number | null;
 }
 
+// ---- Kafka（一等公民）DTO ----
+
+export interface KafkaBroker { id: number; host: string; port: number }
+export interface KafkaClusterInfo {
+  bootstrap: string;
+  broker_count: number;
+  brokers: KafkaBroker[];
+  orig_broker_id: number;
+}
+export interface KafkaTopic {
+  name: string;
+  partitions: number;
+  replication: number;
+  internal: boolean;
+}
+export interface KafkaPartitionInfo {
+  partition: number;
+  leader: number;
+  replicas: number[];
+  isr: number[];
+  low: number;
+  high: number;
+}
+export interface KafkaHeader { key: string; value: string }
+export interface KafkaMessage {
+  conn_id: string;
+  topic: string;
+  partition: number;
+  offset: number;
+  timestamp: number; // epoch ms；-1 未知
+  key: string | null;
+  value: string | null;
+  headers: KafkaHeader[];
+  key_encoding: "string" | "json" | "avro" | "protobuf" | "binary";
+  value_encoding: "string" | "json" | "avro" | "protobuf" | "binary";
+  value_bytes: number;
+  truncated: boolean;
+  schema_id?: number | null;
+}
+// 消費起點（對齊後端 KafkaStart，serde tag = "type"）。
+export type KafkaStartPosition =
+  | { type: "beginning" }
+  | { type: "end" }
+  | { type: "offset"; offset: number }
+  | { type: "timestamp"; ts: number };
+export interface KafkaConsumeQuery {
+  partition: number | null; // null = 全部分區
+  start: KafkaStartPosition;
+  limit: number;
+  filter?: string | null;
+}
+export interface KafkaProduceRequest {
+  topic: string;
+  partition?: number | null;
+  key?: string | null;
+  value?: string | null;
+  headers: KafkaHeader[];
+}
+export interface KafkaProduceResult { partition: number; offset: number }
+export interface KafkaConfigEntry {
+  name: string;
+  value: string;
+  source: string;
+  is_default: boolean;
+  is_sensitive: boolean;
+}
+export interface KafkaCreateTopicSpec {
+  name: string;
+  partitions: number;
+  replication: number;
+  config: KafkaHeader[]; // {key,value} 當設定 k/v
+}
+export interface KafkaConsumerGroup {
+  group_id: string;
+  state: string;
+  protocol: string;
+  members: number;
+}
+export interface KafkaGroupMember {
+  member_id: string;
+  client_id: string;
+  host: string;
+  assignments: string[]; // "topic:partition"
+}
+export interface KafkaGroupOffset {
+  topic: string;
+  partition: number;
+  current: number;
+  log_end: number;
+  lag: number;
+}
+export interface KafkaGroupDetail {
+  group_id: string;
+  state: string;
+  members: KafkaGroupMember[];
+  offsets: KafkaGroupOffset[];
+}
+export interface KafkaOffsetReset {
+  group: string;
+  topic: string;
+  target: KafkaStartPosition;
+  partitions?: number[] | null;
+}
+export interface KafkaSchemaSubject { subject: string; versions: number[]; latest: number }
+export interface KafkaSchema {
+  subject: string;
+  version: number;
+  id: number;
+  schema_type: string;
+  schema: string;
+}
+
+// 訂閱 live-tail 訊息（僅回呼符合 connId 者）。回傳取消監聽函式。
+export function onKafkaMessage(connId: string, cb: (m: KafkaMessage) => void): Promise<UnlistenFn> {
+  return listen<KafkaMessage>("kafka-message", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload);
+  });
+}
+// 訂閱 Kafka 背景任務錯誤（payload 為字串）。回傳取消監聽函式。
+export function onKafkaError(cb: (msg: string) => void): Promise<UnlistenFn> {
+  return listen<string>("kafka-error", (e) => cb(e.payload));
+}
+
 // 連線類型的顯示資料（色標呼應規劃文件）
 export const KIND_META: Record<DbKind, { label: string; color: string; defaultPort: number; fileBased?: boolean; external?: boolean }> = {
   mysql: { label: "MySQL", color: "#3b82f6", defaultPort: 3306 },
@@ -474,6 +597,8 @@ export const KIND_META: Record<DbKind, { label: string; color: string; defaultPo
   mssql: { label: "SQL Server", color: "#0ea5e9", defaultPort: 1433 },
   // Oracle：orange-500（品牌紅 #f80000 與 Redis 紅撞色，取最近的空缺色相）。
   oracle: { label: "Oracle", color: "#f97316", defaultPort: 1521 },
+  // Kafka：cyan-700（與 sky-500 mssql / violet external 區隔）。
+  kafka: { label: "Kafka", color: "#0891b2", defaultPort: 9092 },
   external: { label: "External", color: "#8b5cf6", defaultPort: 0, external: true },
 };
 
@@ -669,6 +794,35 @@ export const api = {
   restoreFromHistory: (entryId: string) =>
     invoke<void>("restore_from_history", { entryId }),
   clearHistory: () => invoke<void>("clear_history"),
+
+  // ---- Kafka（一等公民）----
+  kafkaTopics: (id: string) => invoke<KafkaTopic[]>("kafka_topics", { id }),
+  kafkaClusterInfo: (id: string) => invoke<KafkaClusterInfo>("kafka_cluster_info", { id }),
+  kafkaTopicPartitions: (id: string, topic: string) =>
+    invoke<KafkaPartitionInfo[]>("kafka_topic_partitions", { id, topic }),
+  kafkaConsume: (id: string, topic: string, query: KafkaConsumeQuery) =>
+    invoke<KafkaMessage[]>("kafka_consume", { id, topic, query }),
+  kafkaTailStart: (id: string, topic: string, partition: number | null, start: KafkaStartPosition) =>
+    invoke<void>("kafka_tail_start", { id, topic, partition, start }),
+  kafkaTailStop: (id: string) => invoke<void>("kafka_tail_stop", { id }),
+  kafkaProduce: (id: string, req: KafkaProduceRequest) =>
+    invoke<KafkaProduceResult>("kafka_produce", { id, req }),
+  kafkaConsumerGroups: (id: string) => invoke<KafkaConsumerGroup[]>("kafka_consumer_groups", { id }),
+  kafkaGroupDetail: (id: string, group: string) =>
+    invoke<KafkaGroupDetail>("kafka_group_detail", { id, group }),
+  kafkaResetOffsets: (id: string, reset: KafkaOffsetReset) =>
+    invoke<void>("kafka_reset_offsets", { id, reset }),
+  kafkaCreateTopic: (id: string, spec: KafkaCreateTopicSpec) =>
+    invoke<void>("kafka_create_topic", { id, spec }),
+  kafkaDeleteTopic: (id: string, topic: string) =>
+    invoke<void>("kafka_delete_topic", { id, topic }),
+  kafkaTopicConfig: (id: string, topic: string) =>
+    invoke<KafkaConfigEntry[]>("kafka_topic_config", { id, topic }),
+  kafkaAlterTopicConfig: (id: string, topic: string, configs: KafkaHeader[]) =>
+    invoke<void>("kafka_alter_topic_config", { id, topic, configs }),
+  kafkaSchemaSubjects: (id: string) => invoke<KafkaSchemaSubject[]>("kafka_schema_subjects", { id }),
+  kafkaSchema: (id: string, subject: string, version: number) =>
+    invoke<KafkaSchema>("kafka_schema", { id, subject, version }),
 
   // AI 助手：偵測 claude CLI / 送出問答（串流走 onClaudeStream）/ 取消。
   claudeDetect: () => invoke<ClaudeStatus>("claude_detect"),

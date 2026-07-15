@@ -32,6 +32,11 @@ async fn resolve_saved(needle: &str, args: &ConnArgs) -> AppResult<ConnectionCon
             t!("CLI 不支援外部 gateway（External）連線").into(),
         ));
     }
+    if matches!(cfg.kind, DbKind::Kafka) {
+        return Err(AppError::Unsupported(
+            t!("CLI 不支援 Kafka 連線（請用 GUI）").into(),
+        ));
+    }
     if let Some(db) = &args.database {
         cfg.database = Some(db.clone());
     }
@@ -48,6 +53,7 @@ fn kind_of(k: KindArg) -> DbKind {
         KindArg::Redis => DbKind::Redis,
         KindArg::Mssql => DbKind::Mssql,
         KindArg::Oracle => DbKind::Oracle,
+        KindArg::Kafka => DbKind::Kafka,
     }
 }
 
@@ -59,6 +65,7 @@ fn default_port(kind: DbKind) -> u16 {
         DbKind::Redis => 6379,
         DbKind::Mssql => 1433,
         DbKind::Oracle => 1521,
+        DbKind::Kafka => 9092,
         DbKind::Sqlite | DbKind::External => 0,
     }
 }
@@ -144,6 +151,7 @@ fn split_scheme(url: &str) -> (Option<String>, String) {
         "mssql",
         "sqlserver",
         "oracle",
+        "kafka",
     ];
     if let Some((s, r)) = url.split_once(':') {
         if SCHEMES.contains(&s.to_ascii_lowercase().as_str()) {
@@ -166,6 +174,7 @@ fn parse_url(url: &str, kind_hint: Option<DbKind>) -> AppResult<Parsed> {
         Some("redis") => Some(DbKind::Redis),
         Some("mssql") | Some("sqlserver") => Some(DbKind::Mssql),
         Some("oracle") => Some(DbKind::Oracle),
+        Some("kafka") => Some(DbKind::Kafka),
         Some("sqlite") => Some(DbKind::Sqlite),
         _ => kind_hint,
     };

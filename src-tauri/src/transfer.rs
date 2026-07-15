@@ -101,6 +101,13 @@ pub async fn transfer_table(
         return Err(AppError::Query(t!("來源與目標是同一張表，無法傳輸").into()));
     }
 
+    // Kafka 為訊息串流，非關聯表；不支援資料傳輸（來源或目標皆不可為 Kafka）。
+    if matches!(manager.kind(src_id)?, DbKind::Kafka)
+        || matches!(manager.kind(dst_id)?, DbKind::Kafka)
+    {
+        return Err(AppError::Unsupported(t!("Kafka 連線不支援資料傳輸").into()));
+    }
+
     // 0. 目標表不存在且要求自動建表：沿用來源 DDL 建立（限同種類）。
     let mut created = false;
     if opts.create_table {

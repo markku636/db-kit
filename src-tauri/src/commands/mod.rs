@@ -19,6 +19,12 @@ use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
 use crate::scheduler::{self, BackupHistoryEntry, BackupSchedule, BackupStatus};
 use crate::store::{self, PersistedConnection};
+#[cfg(feature = "kafka")]
+use crate::db::kafka::dto::{
+    KafkaClusterInfo, KafkaConfigEntry, KafkaConsumeQuery, KafkaConsumerGroup, KafkaCreateTopicSpec,
+    KafkaGroupDetail, KafkaHeader, KafkaMessage, KafkaOffsetReset, KafkaPartitionInfo,
+    KafkaProduceRequest, KafkaProduceResult, KafkaSchema, KafkaSchemaSubject, KafkaStart, KafkaTopic,
+};
 
 pub struct AppState {
     pub manager: ConnectionManager,
@@ -30,6 +36,10 @@ pub struct AppState {
     pub pubsub: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
     /// AI 助手進行中的問答背景任務（key = req_id）。取消時 abort 即終止 claude 子程序。
     pub agent_jobs: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
+    /// Kafka live-tail 的取消旗標（key = 連線 id；每連線一個 tail）。停止 / 斷線時設 true，
+    /// poll 執行緒下一輪見到即退出並釋放 consumer（BaseConsumer drop 快速）。
+    #[cfg(feature = "kafka")]
+    pub kafka_tails: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
 }
 
 /// 若前端送來的 secret 為空（存檔但未重新輸入的連線），從 keychain 補回。
@@ -138,6 +148,10 @@ pub async fn remove_saved_connection(
     if let Some(h) = state.pubsub.lock().remove(&id) {
         h.abort();
     }
+    #[cfg(feature = "kafka")]
+    if let Some(c) = state.kafka_tails.lock().remove(&id) {
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     state.manager.disconnect(&id).await;
     store::remove(&app, &id).await?;
     store::kc_delete(&id);
@@ -151,6 +165,10 @@ pub async fn remove_saved_connection(
 pub async fn disconnect(state: State<'_, AppState>, id: String) -> AppResult<()> {
     if let Some(h) = state.pubsub.lock().remove(&id) {
         h.abort();
+    }
+    #[cfg(feature = "kafka")]
+    if let Some(c) = state.kafka_tails.lock().remove(&id) {
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     state.manager.disconnect(&id).await;
     Ok(())
@@ -1294,4 +1312,225 @@ pub async fn restore_from_history(app: AppHandle, entry_id: String) -> AppResult
 pub async fn clear_history(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     let _g = state.history_lock.lock().await;
     store::write_json(&app, scheduler::HISTORY_FILE, &Vec::<BackupHistoryEntry>::new()).await
+}
+
+// ===================== Kafka（一等公民；kafka feature）=====================
+
+/// 主題清單（含分區數 / 複本數 / 內部標記）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_topics(state: State<'_, AppState>, id: String) -> AppResult<Vec<KafkaTopic>> {
+    state.manager.kafka_driver(&id)?.list_topics().await
+}
+
+/// 叢集資訊（brokers）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_cluster_info(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<KafkaClusterInfo> {
+    state.manager.kafka_driver(&id)?.cluster_info().await
+}
+
+/// 某主題各分區資訊（leader / replicas / ISR / low / high）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_topic_partitions(
+    state: State<'_, AppState>,
+    id: String,
+    topic: String,
+) -> AppResult<Vec<KafkaPartitionInfo>> {
+    state
+        .manager
+        .kafka_driver(&id)?
+        .topic_partitions(&topic)
+        .await
+}
+
+/// 一次性消費一頁訊息（訊息瀏覽器「查詢」用）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_consume(
+    state: State<'_, AppState>,
+    id: String,
+    topic: String,
+    query: KafkaConsumeQuery,
+) -> AppResult<Vec<KafkaMessage>> {
+    state
+        .manager
+        .kafka_driver(&id)?
+        .consume_page(&topic, &query)
+        .await
+}
+
+/// 開始 live-tail：背景任務串流新訊息，以 `kafka-message` 事件推給前端（每連線一個 tail，重呼叫即取代）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_tail_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    topic: String,
+    partition: Option<i32>,
+    start: KafkaStart,
+) -> AppResult<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let driver = state.manager.kafka_driver(&id)?;
+    let consumer = driver.build_tail_consumer(&topic, partition, start).await?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    // 每連線一個 tail：先讓舊的停。
+    if let Some(old) = state.kafka_tails.lock().insert(id.clone(), cancel.clone()) {
+        old.store(true, Ordering::Relaxed);
+    }
+    let app2 = app.clone();
+    let conn_id = id.clone();
+    // 專屬 OS 執行緒跑阻塞 poll 迴圈；BaseConsumer drop 快速，不擋 tokio worker
+    //（StreamConsumer 的 drop 在 assign-only 情境會無限阻塞，故不用）。
+    std::thread::spawn(move || {
+        while !cancel.load(Ordering::Relaxed) {
+            match consumer.poll(std::time::Duration::from_millis(250)) {
+                Some(Ok(msg)) => {
+                    let km = crate::db::kafka::message_to_dto_sync(&msg, &topic, &conn_id);
+                    let _ = app2.emit("kafka-message", km);
+                }
+                Some(Err(rdkafka::error::KafkaError::PartitionEOF(_))) => {}
+                Some(Err(e)) => {
+                    let _ = app2.emit("kafka-error", format!("{conn_id}: {e}"));
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                None => {}
+            }
+        }
+        drop(consumer); // 迴圈結束即釋放（BaseConsumer close 快速返回）
+    });
+    Ok(())
+}
+
+/// 停止 live-tail（設取消旗標，poll 執行緒下一輪退出）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_tail_stop(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    if let Some(c) = state.kafka_tails.lock().remove(&id) {
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// 發佈一則訊息。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_produce(
+    state: State<'_, AppState>,
+    id: String,
+    req: KafkaProduceRequest,
+) -> AppResult<KafkaProduceResult> {
+    state.manager.kafka_driver(&id)?.produce(&req).await
+}
+
+/// 消費者群組清單。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_consumer_groups(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<Vec<KafkaConsumerGroup>> {
+    state.manager.kafka_driver(&id)?.list_groups().await
+}
+
+/// 群組詳細（成員 + 每分區 Lag）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_group_detail(
+    state: State<'_, AppState>,
+    id: String,
+    group: String,
+) -> AppResult<KafkaGroupDetail> {
+    state.manager.kafka_driver(&id)?.describe_group(&group).await
+}
+
+/// 重設群組位移（群組須 Empty）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_reset_offsets(
+    state: State<'_, AppState>,
+    id: String,
+    reset: KafkaOffsetReset,
+) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.reset_offsets(&reset).await
+}
+
+/// 建立主題。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_create_topic(
+    state: State<'_, AppState>,
+    id: String,
+    spec: KafkaCreateTopicSpec,
+) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.create_topic(&spec).await
+}
+
+/// 刪除主題。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_delete_topic(
+    state: State<'_, AppState>,
+    id: String,
+    topic: String,
+) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.delete_topic(&topic).await
+}
+
+/// 讀取主題設定（describe configs）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_topic_config(
+    state: State<'_, AppState>,
+    id: String,
+    topic: String,
+) -> AppResult<Vec<KafkaConfigEntry>> {
+    state.manager.kafka_driver(&id)?.topic_config(&topic).await
+}
+
+/// 變更主題設定（整體取代語意）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_alter_topic_config(
+    state: State<'_, AppState>,
+    id: String,
+    topic: String,
+    configs: Vec<KafkaHeader>,
+) -> AppResult<()> {
+    state
+        .manager
+        .kafka_driver(&id)?
+        .alter_topic_config(&topic, &configs)
+        .await
+}
+
+/// Schema Registry：subjects 清單。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_schema_subjects(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<Vec<KafkaSchemaSubject>> {
+    state.manager.kafka_driver(&id)?.schema_subjects().await
+}
+
+/// Schema Registry：取某 subject 指定版本（version <= 0 為 latest）的 schema。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_schema(
+    state: State<'_, AppState>,
+    id: String,
+    subject: String,
+    version: i32,
+) -> AppResult<KafkaSchema> {
+    state
+        .manager
+        .kafka_driver(&id)?
+        .get_schema(&subject, version)
+        .await
 }

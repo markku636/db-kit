@@ -27,7 +27,7 @@ import {
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
   formatSql, minifySql, transformKeywordCase, buildUseDatabase, hasExecutableSql,
-  extractNamedParams, substituteNamedParams,
+  extractNamedParams, substituteNamedParams, isInternalKafkaTopic,
 } from "./sql";
 import type { SavedQuery } from "./sql";
 import Select from "./ui/Select";
@@ -56,6 +56,9 @@ const ErDiagram = lazyOverlay(() => import("./ErDiagram"));
 const RedisStatus = lazyOverlay(() => import("./RedisStatus"));
 const RedisConsole = lazyOverlay(() => import("./RedisConsole"));
 const MongoOpsPanel = lazyOverlay(() => import("./MongoOpsPanel"));
+const KafkaConsumerGroups = lazyOverlay(() => import("./KafkaConsumerGroups"));
+const KafkaSchemaViewer = lazyOverlay(() => import("./KafkaSchemaViewer"));
+const KafkaCreateTopicDialog = lazyOverlay(() => import("./KafkaCreateTopicDialog"));
 const NewKeyDialog = lazyOverlay(() => import("./NewKeyDialog"));
 const CreateTableDialog = lazyOverlay(() => import("./CreateTableDialog"));
 const ConnectionProperties = lazyOverlay(() => import("./ConnectionProperties"));
@@ -101,7 +104,7 @@ function buildScopedSql(node: SelectedNode | null): string | undefined {
   if (node.kind === "mongo") {
     return JSON.stringify({ db: node.db, collection: node.table, filter: {} }, null, 2);
   }
-  if (node.kind === "redis") return undefined;
+  if (node.kind === "redis" || node.kind === "kafka") return undefined;
   const select = `SELECT *\nFROM ${qualifiedName(node.kind, node.db, node.table)}\nLIMIT 100;`;
   return use ? `${use};\n\n${select}` : select;
 }
@@ -1213,6 +1216,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   const [console_, setConsole] = useState<{ id: string; name: string; db: string } | null>(null);
   // Mongo 監控面板（serverStatus / dbStats / currentOp / Profiler）。
   const [mongoOps, setMongoOps] = useState<{ id: string; name: string; db: string } | null>(null);
+  const [kafkaGroups, setKafkaGroups] = useState<{ id: string; name: string } | null>(null);
+  const [kafkaSchema, setKafkaSchema] = useState<{ id: string; name: string } | null>(null);
+  const [kafkaCreateTopic, setKafkaCreateTopic] = useState<{ connId: string } | null>(null);
   // 新增 Redis 鍵對話框
   const [newKey, setNewKey] = useState<{ connId: string; db: string } | null>(null);
   // 設計表結構（CREATE TABLE）對話框：帶連線 / 資料庫 / 種類。
@@ -1947,6 +1953,29 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
         it(t("刪除集合"), () => dropCollection(m), true),
       ];
     }
+    if (m.kind === "kafka") {
+      const ro = readonlyConns[m.connId] === true;
+      const nodes: MenuNode[] = [
+        it(t("瀏覽訊息"), () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind)),
+        it(t("主題設定 / 分區"), () => useStore.getState().openTable(m.connId, m.db, m.table, "structure", m.objKind)),
+        it(t("複製主題名"), () => copyToClipboard(m.table, t("已複製主題名"))),
+        it(t("重新整理"), () => refreshTables(m.connId, m.db)),
+      ];
+      if (!ro && !isInternalKafkaTopic(m.table)) {
+        nodes.push(sep);
+        nodes.push(it(t("刪除主題"), async () => {
+          if (!(await uiConfirm(t("確定刪除主題「{name}」？此操作不可復原。", { name: m.table })))) return;
+          try {
+            await api.kafkaDeleteTopic(m.connId, m.table);
+            toast.success(t("已刪除主題 {name}", { name: m.table }));
+            refreshTables(m.connId, m.db);
+          } catch (e: any) {
+            toast.error(e?.message ?? t("刪除失敗"));
+          }
+        }, true));
+      }
+      return nodes;
+    }
     const isView = m.objKind === "view";
     const isMyPg = isMysqlFamily(m.kind) || m.kind === "postgres";
     // 唯讀連線：隱藏會寫入 / 破壞資料的動作（新增列 / 匯入 / 產生資料 / 改名 / 複製含資料 / 清空 / 截斷 / 刪除）。
@@ -2480,6 +2509,15 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                 ...(connectedIds.has(menu.id) && menuConn.kind === "mongo"
                   ? [[t("監控面板"), () => setMongoOps({ id: menuConn.id, name: menuConn.name, db: menuConn.database ?? "" }), false] as [string, () => void, boolean]]
                   : []),
+                ...(connectedIds.has(menu.id) && menuConn.kind === "kafka"
+                  ? [
+                      [t("新增主題…"), () => setKafkaCreateTopic({ connId: menuConn.id }), false] as [string, () => void, boolean],
+                      [t("消費者群組…"), () => setKafkaGroups({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                      ...(menuConn.options?.kafka_sr_url
+                        ? [[t("Schema Registry…"), () => setKafkaSchema({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
+                        : []),
+                    ]
+                  : []),
                 ...(connectedIds.has(menu.id)
                   ? [["SQL Search…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
                   : []),
@@ -2631,6 +2669,25 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
 
       {status && (
         <RedisStatus connId={status.id} connName={status.name} onClose={() => setStatus(null)} />
+      )}
+
+      {kafkaGroups && (
+        <KafkaConsumerGroups connId={kafkaGroups.id} connName={kafkaGroups.name} onClose={() => setKafkaGroups(null)} />
+      )}
+
+      {kafkaSchema && (
+        <KafkaSchemaViewer connId={kafkaSchema.id} connName={kafkaSchema.name} onClose={() => setKafkaSchema(null)} />
+      )}
+
+      {kafkaCreateTopic && (
+        <KafkaCreateTopicDialog
+          connId={kafkaCreateTopic.connId}
+          onClose={() => setKafkaCreateTopic(null)}
+          onCreated={() => {
+            const c = connections.find((x) => x.id === kafkaCreateTopic.connId);
+            if (c) refreshTables(kafkaCreateTopic.connId, "cluster");
+          }}
+        />
       )}
 
       {console_ && (
@@ -3079,6 +3136,7 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
   oracle: "SELECT 1 FROM DUAL",
   mongo: '{ "db": "", "collection": "", "filter": {} }',
   redis: "PING",
+  kafka: "", // Kafka 無查詢編輯器
   external: "SELECT 1",
 };
 // 僅關聯式資料庫支援 EXPLAIN 查詢計畫分析（MSSQL 回 SHOWPLAN XML，於結果格顯示、不走 JSON 視覺樹）。

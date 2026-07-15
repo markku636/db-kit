@@ -76,13 +76,22 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   // Oracle 連線選項（存於 options map）：database 欄的解讀方式 + Instant Client 目錄。
   const [oracleConnectType, setOracleConnectType] = useState(initial?.options?.connect_type ?? "service");
   const [oracleClientDir, setOracleClientDir] = useState(initial?.options?.client_dir ?? "");
+  // Kafka 連線選項（存於 options map；SASL 帳密沿用 username/password；SR 帳密亦存 options）。
+  const [kafkaProtocol, setKafkaProtocol] = useState(initial?.options?.kafka_security_protocol ?? "PLAINTEXT");
+  const [kafkaSaslMech, setKafkaSaslMech] = useState(initial?.options?.kafka_sasl_mechanism ?? "PLAIN");
+  const [kafkaCaPath, setKafkaCaPath] = useState(initial?.options?.kafka_ssl_ca ?? "");
+  const [kafkaSkipVerify, setKafkaSkipVerify] = useState(initial?.options?.kafka_ssl_insecure === "1");
+  const [srUrl, setSrUrl] = useState(initial?.options?.kafka_sr_url ?? "");
+  const [srUser, setSrUser] = useState(initial?.options?.kafka_sr_user ?? "");
+  const [srPass, setSrPass] = useState(initial?.options?.kafka_sr_password ?? "");
 
   // 任一連線欄位變動就清掉上次測試結果，避免「連線成功」殘留成誤導的假成功訊號（改了 host 卻仍顯示舊成功）。
   useEffect(() => {
     setMsg(null);
   }, [kind, host, port, username, password, database, sshEnabled, sshHost, sshPort, sshUsername, sshAuthMethod, sshPassword, sshKeyPath, sshPassphrase,
       redisTls, redisTlsInsecure, mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mssqlEncrypt, mssqlTrust, sslMode,
-      oracleConnectType, oracleClientDir]);
+      oracleConnectType, oracleClientDir,
+      kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass]);
 
   const build = (): ConnectionConfig => ({
     id: initial?.id ?? crypto.randomUUID(),
@@ -139,6 +148,16 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     } else if (kind === "oracle") {
       if (oracleConnectType !== "service") o.connect_type = oracleConnectType;
       if (oracleClientDir.trim()) o.client_dir = oracleClientDir.trim();
+    } else if (kind === "kafka") {
+      o.kafka_security_protocol = kafkaProtocol;
+      if (kafkaProtocol.startsWith("SASL")) o.kafka_sasl_mechanism = kafkaSaslMech;
+      if (kafkaProtocol.endsWith("SSL")) {
+        if (kafkaCaPath.trim()) o.kafka_ssl_ca = kafkaCaPath.trim();
+        if (kafkaSkipVerify) o.kafka_ssl_insecure = "1";
+      }
+      if (srUrl.trim()) o.kafka_sr_url = srUrl.trim();
+      if (srUrl.trim() && srUser.trim()) o.kafka_sr_user = srUser.trim();
+      if (srUrl.trim() && srPass.trim()) o.kafka_sr_password = srPass.trim();
     } else if (sslKinds.includes(kind)) {
       if (sslMode) o.ssl_mode = sslMode;
     }
@@ -268,9 +287,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       ) : (
         <>
           <div className="flex gap-3">
-            <Field label={kind === "mongo" && mongoSrv ? t("主機（SRV 域名）") : t("主機")} className="flex-1">
+            <Field label={kind === "mongo" && mongoSrv ? t("主機（SRV 域名）") : kind === "kafka" ? t("Bootstrap servers") : t("主機")} className="flex-1">
               <Input value={host} onChange={(e) => setHost(e.target.value)} onKeyDown={submitOnEnter}
-                placeholder={kind === "mongo" && mongoSrv ? t("例如 cluster0.abcd.mongodb.net") : ""} />
+                placeholder={kind === "mongo" && mongoSrv ? t("例如 cluster0.abcd.mongodb.net") : kind === "kafka" ? t("host1:9092,host2:9092") : ""} />
             </Field>
             {/* SRV 連線由 DNS 記錄決定 port，故不顯示埠欄位。 */}
             {!(kind === "mongo" && mongoSrv) && (
@@ -397,6 +416,62 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                 <input type="checkbox" checked={mssqlTrust} onChange={(e) => setMssqlTrust(e.target.checked)} />
                 <span>{t("信任伺服器憑證（自簽 / 開發用）")}</span>
               </label>
+            </div>
+          )}
+
+          {kind === "kafka" && (
+            <div className="space-y-2">
+              <Field label={t("安全協定")}>
+                <Select selectSize="md" value={kafkaProtocol} onChange={(e) => setKafkaProtocol(e.target.value)}>
+                  {["PLAINTEXT", "SASL_PLAINTEXT", "SSL", "SASL_SSL"].map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </Select>
+              </Field>
+              {kafkaProtocol.startsWith("SASL") && (
+                <Field label={t("SASL 機制")}>
+                  <Select selectSize="md" value={kafkaSaslMech} onChange={(e) => setKafkaSaslMech(e.target.value)}>
+                    {["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"].map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
+              {kafkaProtocol.endsWith("SSL") && (
+                <>
+                  <Field label={t("CA 憑證路徑（選填）")}>
+                    <div className="flex gap-2">
+                      <Input value={kafkaCaPath} onChange={(e) => setKafkaCaPath(e.target.value)} onKeyDown={submitOnEnter} />
+                      <BrowseButton onPick={async () => { const p = await pickOpenFile([{ name: "PEM", extensions: ["pem", "crt", "cer"] }]); if (p) setKafkaCaPath(p); }} />
+                    </div>
+                  </Field>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                    <input type="checkbox" checked={kafkaSkipVerify} onChange={(e) => setKafkaSkipVerify(e.target.checked)} />
+                    <span>{t("略過憑證驗證（自簽憑證用）")}</span>
+                  </label>
+                </>
+              )}
+              {kafkaProtocol !== "PLAINTEXT" && (
+                <div className="text-xs text-warning">
+                  {t("TLS / SCRAM 需以 kafka-tls feature（含 OpenSSL）建置；預設建置僅支援 PLAINTEXT / SASL_PLAINTEXT + PLAIN。")}
+                </div>
+              )}
+              <div className="border-t border-fg/10 pt-2 space-y-2">
+                <Field label={t("Schema Registry URL（選填）")}>
+                  <Input value={srUrl} onChange={(e) => setSrUrl(e.target.value)} onKeyDown={submitOnEnter} placeholder="http://localhost:8081" />
+                </Field>
+                {srUrl.trim() && (
+                  <div className="flex gap-3">
+                    <Field label={t("SR 使用者（選填）")} className="flex-1">
+                      <Input value={srUser} onChange={(e) => setSrUser(e.target.value)} onKeyDown={submitOnEnter} />
+                    </Field>
+                    <Field label={t("SR 密碼（選填）")} className="flex-1">
+                      <Input type="password" value={srPass} onChange={(e) => setSrPass(e.target.value)} onKeyDown={submitOnEnter} />
+                    </Field>
+                  </div>
+                )}
+              </div>
+              <div className="text-xs text-fg/40">{t("SASL 帳密請填上方「使用者 / 密碼」；Bootstrap servers 可逗號分隔多個 broker。")}</div>
             </div>
           )}
         </>

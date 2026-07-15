@@ -77,6 +77,15 @@ rand = "0.8"
 rust_xlsxwriter = "0.79"
 # Excel (.xlsx/.xls) 匯入讀取：純 Rust，dates 特性讓日期欄解析為日期而非序號。
 calamine = { version = "0.26", features = ["dates"] }
+# Kafka：rdkafka（綁定 librdkafka C）。Windows 只支援 cmake-build（vendors librdkafka 原始碼、靜態連結，
+# 需 CMake + MSVC；本機 VS BuildTools 已具備）。藏在 `kafka` feature 後（隨 gui 預設開）：slim CLI
+# （--no-default-features）不受 librdkafka 建置負擔影響。ssl（TLS / SASL_SSL）待 P7 併同預建 OpenSSL 開啟
+# （見 features.kafka-tls）；此處先支援 PLAINTEXT / SASL_PLAINTEXT（SCRAM/PLAIN 內建於 librdkafka，免 OpenSSL）。
+rdkafka = { version = "0.36", default-features = false, features = ["cmake-build", "tokio"], optional = true }
+# Schema Registry：以 reqwest（rustls，延續全案避開 OpenSSL/NASM）打 Confluent SR REST API，
+# apache-avro（純 Rust）依 schema id 解 Avro binary → JSON。皆藏在 `kafka` feature 後。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+apache-avro = { version = "0.17", optional = true }
 
 # OS keychain：依平台選用原生後端，避免在 Windows 上編譯 secret-service。
 [target.'cfg(windows)'.dependencies]
@@ -89,10 +98,16 @@ keyring = { version = "3", features = ["apple-native"] }
 keyring = { version = "3", features = ["sync-secret-service"] }
 
 [features]
-default = ["gui"]
+default = ["gui", "kafka"]
 # gui：啟用 Tauri 桌面程式（commands / agent / scheduler / run()）。預設開啟。
 gui = ["dep:tauri", "dep:tauri-plugin-dialog"]
 custom-protocol = ["gui", "tauri/custom-protocol"]
+# kafka：一等公民 Kafka 支援（rdkafka / librdkafka）。隨 gui 預設開啟，讓開源桌面版內建此功能；
+# slim CLI（dbk）以 --no-default-features 排除，免除 CMake / C toolchain 建置負擔。
+kafka = ["dep:rdkafka", "dep:reqwest", "dep:apache-avro"]
+# kafka-tls：在 kafka 之上額外開啟 rdkafka 的 ssl（TLS / SASL_SSL）。需預建 OpenSSL（見 P7 建置文件）。
+# 分離成獨立 feature：無 OpenSSL 的開發環境仍可用 kafka（PLAINTEXT / SASL_PLAINTEXT）建置與測試。
+kafka-tls = ["kafka", "rdkafka/ssl"]
 
 # Release 瘦身（保守版）：
 # - lto="thin"：跨 codegen unit 最佳化但平行執行，連結期記憶體峰值遠低於 fat LTO

@@ -34,6 +34,10 @@ mod scheduler;
 #[cfg(test)]
 mod it_tests;
 
+// Kafka 後端整合測試（對 live broker；需 kafka feature + DBKIT_KAFKA_IT=1）。
+#[cfg(all(test, feature = "kafka"))]
+mod kafka_it;
+
 #[cfg(feature = "gui")]
 use std::sync::Arc;
 
@@ -57,6 +61,8 @@ pub fn run() {
             history_lock: Arc::new(tokio::sync::Mutex::new(())),
             pubsub: Arc::new(Mutex::new(std::collections::HashMap::new())),
             agent_jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            #[cfg(feature = "kafka")]
+            kafka_tails: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -177,6 +183,38 @@ pub fn run() {
             commands::mongo_profile_get,
             commands::mongo_profile_set,
             commands::mongo_slow_queries,
+            #[cfg(feature = "kafka")]
+            commands::kafka_topics,
+            #[cfg(feature = "kafka")]
+            commands::kafka_cluster_info,
+            #[cfg(feature = "kafka")]
+            commands::kafka_topic_partitions,
+            #[cfg(feature = "kafka")]
+            commands::kafka_consume,
+            #[cfg(feature = "kafka")]
+            commands::kafka_tail_start,
+            #[cfg(feature = "kafka")]
+            commands::kafka_tail_stop,
+            #[cfg(feature = "kafka")]
+            commands::kafka_produce,
+            #[cfg(feature = "kafka")]
+            commands::kafka_consumer_groups,
+            #[cfg(feature = "kafka")]
+            commands::kafka_group_detail,
+            #[cfg(feature = "kafka")]
+            commands::kafka_reset_offsets,
+            #[cfg(feature = "kafka")]
+            commands::kafka_create_topic,
+            #[cfg(feature = "kafka")]
+            commands::kafka_delete_topic,
+            #[cfg(feature = "kafka")]
+            commands::kafka_topic_config,
+            #[cfg(feature = "kafka")]
+            commands::kafka_alter_topic_config,
+            #[cfg(feature = "kafka")]
+            commands::kafka_schema_subjects,
+            #[cfg(feature = "kafka")]
+            commands::kafka_schema,
             commands::backup_detect_cli,
             commands::backup_run,
             commands::backup_restore,

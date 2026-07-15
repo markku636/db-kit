@@ -15,6 +15,11 @@ pub mod sqlite;
 /// 未編入任何外部驅動時 `connect_external` 回 Unsupported。
 pub mod external;
 
+/// Kafka 驅動（一等公民；以 rdkafka 接入）。僅在 `kafka` feature 開啟時編入，
+/// 讓 slim CLI（`--no-default-features`）免除 librdkafka（CMake/C/OpenSSL）建置負擔。
+#[cfg(feature = "kafka")]
+pub mod kafka;
+
 /// 資料庫範式。UI 與操作邏輯依此分流。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -30,6 +35,9 @@ pub enum DbKind {
     Mssql,
     /// Oracle：唯一需要原生 DLL（Instant Client，執行期載入）的類型。實作見 `db::oracle`。
     Oracle,
+    /// Kafka：訊息代理（非 SQL）。以 rdkafka 接入；具體驅動於 `kafka` feature 開啟時編入 `db::kafka`。
+    /// UI 將 cluster→database、topic→table、messages→rows 做最小映射，其餘能力走 `kafka_*` 指令。
+    Kafka,
     /// 外部 web gateway（非真實連線；透過 HTTP 下 SQL）。實作見 `db::external`。
     External,
 }
@@ -46,6 +54,7 @@ impl DbKind {
             DbKind::Sqlite => "sqlite",
             DbKind::Mssql => "mssql",
             DbKind::Oracle => "oracle",
+            DbKind::Kafka => "kafka",
             DbKind::External => "external",
         }
     }
@@ -59,6 +68,7 @@ impl DbKind {
             DbKind::Sqlite => ".db",
             DbKind::Mssql => ".bacpac",
             DbKind::Oracle => ".dmp",
+            DbKind::Kafka => "", // Kafka 不支援備份
             DbKind::External => "",
         }
     }
