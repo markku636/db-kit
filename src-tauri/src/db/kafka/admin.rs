@@ -26,7 +26,7 @@ fn safe_members(g: &GroupInfo) -> &[GroupMemberInfo] {
 use super::dto::{
     KafkaBroker, KafkaClusterInfo, KafkaConfigEntry, KafkaConsumerGroup, KafkaCreateTopicSpec,
     KafkaDeleteRecordsResult, KafkaGroupDetail, KafkaGroupMember, KafkaGroupOffset,
-    KafkaOffsetReset, KafkaPartitionInfo, KafkaStart, KafkaTopic,
+    KafkaOffsetPlanRow, KafkaOffsetReset, KafkaPartitionInfo, KafkaResetTarget, KafkaTopic,
 };
 use super::{query_err, KafkaDriver};
 use crate::error::{AppError, AppResult};
@@ -191,8 +191,30 @@ impl KafkaDriver {
             .map_err(query_err)?
     }
 
-    /// 重設群組位移（群組須為 Empty，無活躍成員）。
-    pub async fn reset_offsets(&self, reset: &KafkaOffsetReset) -> AppResult<()> {
+    /// 預覽位移重設：純解析每分區的 current / target / 水位，不檢查群組狀態、不 commit。
+    pub async fn preview_reset(
+        &self,
+        reset: &KafkaOffsetReset,
+    ) -> AppResult<Vec<KafkaOffsetPlanRow>> {
+        let base = self.base.clone();
+        let meta = self.meta.clone();
+        let reset = reset.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut cc = base.clone();
+            cc.set("group.id", &reset.group);
+            cc.set("enable.auto.commit", "false");
+            let consumer: BaseConsumer = cc.create().map_err(query_err)?;
+            resolve_reset_plan(&consumer, meta.as_ref(), &reset)
+        })
+        .await
+        .map_err(query_err)?
+    }
+
+    /// 重設群組位移（群組須為 Empty，無活躍成員）。回傳實際套用的計畫。
+    pub async fn reset_offsets(
+        &self,
+        reset: &KafkaOffsetReset,
+    ) -> AppResult<Vec<KafkaOffsetPlanRow>> {
         let base = self.base.clone();
         let meta = self.meta.clone();
         let reset = reset.clone();
@@ -571,60 +593,58 @@ fn describe_group_blocking(
     })
 }
 
-fn reset_offsets_blocking(
-    base: &ClientConfig,
+/// 解析重設計畫：分區來源 = 主題 metadata（交集 `reset.partitions`）；current 走
+/// committed_offsets（OffsetFetch 不需 join group）；目標依模式解析並 clamp 至 [low, high]。
+/// Shift 遇無已提交位移（current = -1）之分區 → target = None（略過）。
+fn resolve_reset_plan(
+    consumer: &BaseConsumer,
     meta: &BaseConsumer,
     reset: &KafkaOffsetReset,
-) -> AppResult<()> {
-    // 群組須為 Empty（無活躍成員）。
-    let gl = meta
-        .fetch_group_list(Some(&reset.group), Duration::from_secs(15))
+) -> AppResult<Vec<KafkaOffsetPlanRow>> {
+    let md = meta
+        .fetch_metadata(Some(&reset.topic), Duration::from_secs(10))
         .map_err(query_err)?;
-    if let Some(g) = gl.groups().iter().find(|g| g.name() == reset.group) {
-        if !safe_members(g).is_empty() {
-            return Err(AppError::Query(
-                t!("群組仍有活躍成員，無法重設位移（請先停掉消費者）").into(),
-            ));
+    let topic_md = md
+        .topics()
+        .iter()
+        .find(|t| t.name() == reset.topic)
+        .ok_or_else(|| AppError::Query(format!("找不到主題 {}", reset.topic)))?;
+    let mut pids: Vec<i32> = topic_md.partitions().iter().map(|p| p.id()).collect();
+    if let Some(sel) = &reset.partitions {
+        if !sel.is_empty() {
+            pids.retain(|p| sel.contains(p));
         }
     }
+    if pids.is_empty() {
+        return Err(AppError::Query(t!("沒有符合的分區").into()));
+    }
+    pids.sort_unstable();
 
-    let mut cc = base.clone();
-    cc.set("group.id", &reset.group);
-    cc.set("enable.auto.commit", "false");
-    cc.set("auto.offset.reset", "earliest");
-    let consumer: BaseConsumer = cc.create().map_err(query_err)?;
-
-    // subscribe 讓 consumer 成為群組唯一成員（群組本為 Empty）→ commit 有 coordinator 不會久掛
-    //（rdkafka 0.36 AdminClient 無 alter offsets；assign-only 的裸 commit 會無限等待 coordinator）。
-    consumer
-        .subscribe(&[reset.topic.as_str()])
+    let mut tpl = TopicPartitionList::new();
+    for &pid in &pids {
+        tpl.add_partition(&reset.topic, pid);
+    }
+    let committed = consumer
+        .committed_offsets(tpl, Duration::from_secs(15))
         .map_err(query_err)?;
-    let start = Instant::now();
-    let mut assigned: Vec<i32> = Vec::new();
-    while start.elapsed() < Duration::from_secs(20) {
-        let _ = consumer.poll(Duration::from_millis(200));
-        if let Ok(a) = consumer.assignment() {
-            let ids: Vec<i32> = a.elements().iter().map(|e| e.partition()).collect();
-            if !ids.is_empty() {
-                assigned = ids;
-                break;
-            }
-        }
-    }
-    if assigned.is_empty() {
-        return Err(AppError::Query(t!("重設逾時：無法取得群組分區指派").into()));
-    }
-
-    // 目標分區（指定或全部指派）。
-    let part_ids: Vec<i32> = match &reset.partitions {
-        Some(p) if !p.is_empty() => p.clone(),
-        _ => assigned,
-    };
+    let current: std::collections::HashMap<i32, i64> = committed
+        .elements()
+        .iter()
+        .map(|e| {
+            (
+                e.partition(),
+                match e.offset() {
+                    Offset::Offset(o) => o,
+                    _ => -1,
+                },
+            )
+        })
+        .collect();
 
     // timestamp 目標先解析。
-    let ts_offsets = if let KafkaStart::Timestamp { ts } = &reset.target {
+    let ts_offsets = if let KafkaResetTarget::Timestamp { ts } = &reset.target {
         let mut q = TopicPartitionList::new();
-        for &pid in &part_ids {
+        for &pid in &pids {
             q.add_partition_offset(&reset.topic, pid, Offset::Offset(*ts))
                 .map_err(query_err)?;
         }
@@ -643,24 +663,100 @@ fn reset_offsets_blocking(
         std::collections::HashMap::new()
     };
 
-    let mut tpl = TopicPartitionList::new();
-    for pid in part_ids {
+    let mut rows = Vec::with_capacity(pids.len());
+    for &pid in &pids {
         let (low, high) = consumer
             .fetch_watermarks(&reset.topic, pid, Duration::from_secs(10))
             .map_err(query_err)?;
-        let off = match &reset.target {
-            KafkaStart::Beginning => low,
-            KafkaStart::End => high,
-            KafkaStart::Offset { offset } => (*offset).clamp(low, high),
-            KafkaStart::Timestamp { .. } => {
-                ts_offsets.get(&pid).copied().unwrap_or(high).clamp(low, high)
+        let cur = current.get(&pid).copied().unwrap_or(-1);
+        let target = match &reset.target {
+            KafkaResetTarget::Beginning => Some(low),
+            KafkaResetTarget::End => Some(high),
+            KafkaResetTarget::Offset { offset } => Some((*offset).clamp(low, high)),
+            KafkaResetTarget::Timestamp { .. } => {
+                // 時間戳晚於最後一筆 → offsets_for_times 查無 → 回 high（追到最新）。
+                Some(ts_offsets.get(&pid).copied().unwrap_or(high).clamp(low, high))
+            }
+            KafkaResetTarget::Shift { by } => {
+                if cur < 0 {
+                    None
+                } else {
+                    Some((cur + by).clamp(low, high))
+                }
             }
         };
-        tpl.add_partition_offset(&reset.topic, pid, Offset::Offset(off))
-            .map_err(query_err)?;
+        rows.push(KafkaOffsetPlanRow {
+            partition: pid,
+            current: cur,
+            target,
+            low,
+            high,
+        });
+    }
+    Ok(rows)
+}
+
+fn reset_offsets_blocking(
+    base: &ClientConfig,
+    meta: &BaseConsumer,
+    reset: &KafkaOffsetReset,
+) -> AppResult<Vec<KafkaOffsetPlanRow>> {
+    // 群組須為 Empty（無活躍成員）。
+    let gl = meta
+        .fetch_group_list(Some(&reset.group), Duration::from_secs(15))
+        .map_err(query_err)?;
+    if let Some(g) = gl.groups().iter().find(|g| g.name() == reset.group) {
+        if !safe_members(g).is_empty() {
+            return Err(AppError::Query(
+                t!("群組仍有活躍成員，無法重設位移（請先停掉消費者）").into(),
+            ));
+        }
+    }
+
+    let mut cc = base.clone();
+    cc.set("group.id", &reset.group);
+    cc.set("enable.auto.commit", "false");
+    cc.set("auto.offset.reset", "earliest");
+    let consumer: BaseConsumer = cc.create().map_err(query_err)?;
+
+    // 先解析計畫（committed / watermark / 目標），再 join group commit。
+    let plan = resolve_reset_plan(&consumer, meta, reset)?;
+
+    // subscribe 讓 consumer 成為群組唯一成員（群組本為 Empty）→ commit 有 coordinator 不會久掛
+    //（rdkafka AdminClient 無 alter offsets；assign-only 的裸 commit 會無限等待 coordinator）。
+    consumer
+        .subscribe(&[reset.topic.as_str()])
+        .map_err(query_err)?;
+    let start = Instant::now();
+    let mut joined = false;
+    while start.elapsed() < Duration::from_secs(20) {
+        let _ = consumer.poll(Duration::from_millis(200));
+        if let Ok(a) = consumer.assignment() {
+            if !a.elements().is_empty() {
+                joined = true;
+                break;
+            }
+        }
+    }
+    if !joined {
+        return Err(AppError::Query(t!("重設逾時：無法取得群組分區指派").into()));
+    }
+
+    let mut tpl = TopicPartitionList::new();
+    for row in plan.iter().filter(|r| r.target.is_some()) {
+        tpl.add_partition_offset(
+            &reset.topic,
+            row.partition,
+            Offset::Offset(row.target.unwrap_or(0)),
+        )
+        .map_err(query_err)?;
+    }
+    if tpl.count() == 0 {
+        consumer.unsubscribe();
+        return Err(AppError::Query(t!("沒有可套用的分區（皆無已提交位移）").into()));
     }
 
     consumer.commit(&tpl, CommitMode::Sync).map_err(query_err)?;
     consumer.unsubscribe();
-    Ok(())
+    Ok(plan)
 }

@@ -22,8 +22,9 @@ use crate::store::{self, PersistedConnection};
 #[cfg(feature = "kafka")]
 use crate::db::kafka::dto::{
     KafkaClusterInfo, KafkaConfigEntry, KafkaConsumeQuery, KafkaConsumerGroup, KafkaCreateTopicSpec,
-    KafkaDeleteRecordsResult, KafkaGroupDetail, KafkaMessage, KafkaOffsetReset, KafkaPartitionInfo,
-    KafkaProduceRequest, KafkaProduceResult, KafkaSchema, KafkaSchemaSubject, KafkaStart, KafkaTopic,
+    KafkaDeleteRecordsResult, KafkaGroupDetail, KafkaMessage, KafkaOffsetPlanRow, KafkaOffsetReset,
+    KafkaPartitionInfo, KafkaProduceRequest, KafkaProduceResult, KafkaSchema, KafkaSchemaSubject,
+    KafkaStart, KafkaTopic,
 };
 
 pub struct AppState {
@@ -1449,14 +1450,25 @@ pub async fn kafka_group_detail(
     state.manager.kafka_driver(&id)?.describe_group(&group).await
 }
 
-/// 重設群組位移（群組須 Empty）。
+/// 預覽位移重設（不檢查群組狀態、不 commit）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_preview_reset(
+    state: State<'_, AppState>,
+    id: String,
+    reset: KafkaOffsetReset,
+) -> AppResult<Vec<KafkaOffsetPlanRow>> {
+    state.manager.kafka_driver(&id)?.preview_reset(&reset).await
+}
+
+/// 重設群組位移（群組須 Empty）。回傳實際套用的計畫。
 #[cfg(feature = "kafka")]
 #[tauri::command]
 pub async fn kafka_reset_offsets(
     state: State<'_, AppState>,
     id: String,
     reset: KafkaOffsetReset,
-) -> AppResult<()> {
+) -> AppResult<Vec<KafkaOffsetPlanRow>> {
     state.manager.kafka_driver(&id)?.reset_offsets(&reset).await
 }
 

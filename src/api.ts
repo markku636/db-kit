@@ -577,10 +577,21 @@ export interface KafkaGroupDetail {
   members: KafkaGroupMember[];
   offsets: KafkaGroupOffset[];
 }
+// 位移重設目標（對齊後端 KafkaResetTarget；比消費起點多一個 shift）。
+export type KafkaResetTarget = KafkaStartPosition | { type: "shift"; by: number };
+/** 預覽 / 套用共用的每分區位移計畫列。target=null = 略過（如 shift 遇無已提交位移）。 */
+export interface KafkaOffsetPlanRow {
+  partition: number;
+  /** -1 = 無已提交位移。 */
+  current: number;
+  target: number | null;
+  low: number;
+  high: number;
+}
 export interface KafkaOffsetReset {
   group: string;
   topic: string;
-  target: KafkaStartPosition;
+  target: KafkaResetTarget;
   partitions?: number[] | null;
 }
 export interface KafkaSchemaSubject { subject: string; versions: number[]; latest: number }
@@ -828,8 +839,11 @@ export const api = {
   kafkaConsumerGroups: (id: string) => invoke<KafkaConsumerGroup[]>("kafka_consumer_groups", { id }),
   kafkaGroupDetail: (id: string, group: string) =>
     invoke<KafkaGroupDetail>("kafka_group_detail", { id, group }),
+  /** 預覽位移重設（不檢查群組狀態、不 commit）。 */
+  kafkaPreviewResetOffsets: (id: string, reset: KafkaOffsetReset) =>
+    invoke<KafkaOffsetPlanRow[]>("kafka_preview_reset", { id, reset }),
   kafkaResetOffsets: (id: string, reset: KafkaOffsetReset) =>
-    invoke<void>("kafka_reset_offsets", { id, reset }),
+    invoke<KafkaOffsetPlanRow[]>("kafka_reset_offsets", { id, reset }),
   kafkaCreateTopic: (id: string, spec: KafkaCreateTopicSpec) =>
     invoke<void>("kafka_create_topic", { id, spec }),
   kafkaDeleteTopic: (id: string, topic: string) =>

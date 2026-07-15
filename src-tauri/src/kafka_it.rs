@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::db::kafka::dto::{
     KafkaConsumeQuery, KafkaCreateTopicSpec, KafkaHeader, KafkaOffsetReset, KafkaProduceRequest,
-    KafkaStart,
+    KafkaResetTarget, KafkaStart,
 };
 use crate::db::kafka::KafkaDriver;
 use crate::db::{ConnectionConfig, DatabaseDriver, DbKind};
@@ -222,29 +222,80 @@ async fn kafka_end_to_end() {
     drop(consumer);
     eprintln!("[kafka_it] dropped tail consumer");
 
-    // 消費者群組：reset 建立一個 Empty 群組的 committed offset（加逾時保險）
+    // 位移重設：預覽（Beginning → target == low）→ 套用（建立 Empty 群組的 committed offset）
+    let preview = d
+        .preview_reset(&KafkaOffsetReset {
+            group: group.clone(),
+            topic: topic.clone(),
+            target: KafkaResetTarget::Beginning,
+            partitions: None,
+        })
+        .await
+        .expect("preview_reset beginning");
+    assert_eq!(preview.len(), 2, "preview covers 2 partitions");
+    assert!(
+        preview.iter().all(|r| r.target == Some(r.low)),
+        "beginning preview targets == low"
+    );
+    assert!(
+        preview.iter().all(|r| r.current == -1),
+        "no committed offsets before first reset"
+    );
     let rr = tokio::time::timeout(
         Duration::from_secs(20),
         d.reset_offsets(&KafkaOffsetReset {
             group: group.clone(),
             topic: topic.clone(),
-            target: KafkaStart::Beginning,
+            target: KafkaResetTarget::Beginning,
             partitions: None,
         }),
     )
     .await;
     match rr {
-        Ok(Ok(())) => eprintln!("[kafka_it] reset_offsets OK"),
+        Ok(Ok(plan)) => {
+            assert_eq!(plan.len(), 2, "applied plan covers 2 partitions");
+            eprintln!("[kafka_it] reset_offsets(Beginning) OK");
+        }
         Ok(Err(e)) => panic!("reset_offsets error: {e:?}"),
-        Err(_) => panic!("reset_offsets timed out (30s)"),
+        Err(_) => panic!("reset_offsets timed out (20s)"),
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Shift：現值 low + by（clamp 下限 low）；先重設到 End 再平移 -2 驗證
+    let rr = tokio::time::timeout(
+        Duration::from_secs(20),
+        d.reset_offsets(&KafkaOffsetReset {
+            group: group.clone(),
+            topic: topic.clone(),
+            target: KafkaResetTarget::End,
+            partitions: None,
+        }),
+    )
+    .await;
+    assert!(matches!(rr, Ok(Ok(_))), "reset to End: {rr:?}");
+    let shifted = d
+        .preview_reset(&KafkaOffsetReset {
+            group: group.clone(),
+            topic: topic.clone(),
+            target: KafkaResetTarget::Shift { by: -2 },
+            partitions: None,
+        })
+        .await
+        .expect("preview shift");
+    assert!(
+        shifted
+            .iter()
+            .all(|r| r.target == Some((r.current - 2).clamp(r.low, r.high))),
+        "shift -2 targets clamp(current-2): {shifted:?}"
+    );
+    eprintln!("[kafka_it] preview_reset(Shift -2) OK");
+
     let groups = d.list_groups().await.expect("list_groups");
     assert!(groups.iter().any(|g| g.group_id == group), "list_groups contains {group}");
     // describe 不應報錯（Empty 群組無 active member → offsets 可能為空，屬預期）
     let detail = d.describe_group(&group).await.expect("describe_group");
     assert_eq!(detail.group_id, group);
-    eprintln!("[kafka_it] reset_offsets + list_groups + describe_group OK (state={})", detail.state);
+    eprintln!("[kafka_it] reset/preview + list_groups + describe_group OK (state={})", detail.state);
 
     // 清空（DeleteRecords）：先單分區、再全主題；清空後從頭消費應為 0 筆
     let rs = d

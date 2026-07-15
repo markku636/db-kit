@@ -198,12 +198,36 @@ pub struct KafkaGroupDetail {
     pub offsets: Vec<KafkaGroupOffset>,
 }
 
+/// 位移重設目標（重設專用；不污染 consume / tail 共用的 KafkaStart）。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum KafkaResetTarget {
+    Beginning,
+    End,
+    Offset { offset: i64 },
+    Timestamp { ts: i64 },
+    /// 以現值平移 ±N（無已提交位移的分區跳過）。
+    Shift { by: i64 },
+}
+
+/// 預覽 / 套用共用的每分區位移計畫列。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaOffsetPlanRow {
+    pub partition: i32,
+    /// -1 = 無已提交位移。
+    pub current: i64,
+    /// None = 略過（如 Shift 遇 current = -1）。
+    pub target: Option<i64>,
+    pub low: i64,
+    pub high: i64,
+}
+
 /// 位移重設請求。
 #[derive(Debug, Clone, Deserialize)]
 pub struct KafkaOffsetReset {
     pub group: String,
     pub topic: String,
-    pub target: KafkaStart,
+    pub target: KafkaResetTarget,
     /// None = 該主題所有分區。
     #[serde(default)]
     pub partitions: Option<Vec<i32>>,

@@ -4,16 +4,17 @@ import {
   api,
   type KafkaConsumerGroup,
   type KafkaGroupDetail,
-  type KafkaStartPosition,
+  type KafkaOffsetPlanRow,
+  type KafkaResetTarget,
 } from "./api";
-import { toast, useModalOverlay } from "./ui";
+import { toast, uiConfirm, useModalOverlay } from "./ui";
 import { IconButton } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 
-type ResetMode = "beginning" | "end";
+type ResetMode = "beginning" | "end" | "offset" | "timestamp" | "shift";
 
-// 消費者群組面板（側欄 overlay，仿 MongoOpsPanel）：群組清單 + 成員 + Lag + 重設位移。
+// 消費者群組面板（側欄 overlay，仿 MongoOpsPanel）：群組清單 + 成員 + Lag + 位移重設（含預覽）。
 export default function KafkaConsumerGroups({ connId, connName, initialGroup, onClose }: {
   connId: string; connName: string; initialGroup?: string; onClose: () => void;
 }) {
@@ -23,17 +24,26 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
   const [selected, setSelected] = useState<string | null>(initialGroup ?? null);
   const [detail, setDetail] = useState<KafkaGroupDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [resetTopic, setResetTopic] = useState("");
-  const [resetMode, setResetMode] = useState<ResetMode>("beginning");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  // 重設參數。任一變動即作廢既有預覽（見 invalidate）。
+  const [resetTopic, setResetTopic] = useState("");
+  const [resetMode, setResetMode] = useState<ResetMode>("beginning");
+  const [offsetInput, setOffsetInput] = useState("0");
+  const [tsInput, setTsInput] = useState("");
+  const [shiftInput, setShiftInput] = useState("-100");
+  const [allParts, setAllParts] = useState<number[]>([]);
+  const [checkedParts, setCheckedParts] = useState<Set<number>>(new Set());
+  const [plan, setPlan] = useState<KafkaOffsetPlanRow[] | null>(null);
+
+  const loadGroups = () =>
     api.kafkaConsumerGroups(connId).then(setGroups).catch((e) => setErr(e?.message ?? String(e)));
-  }, [connId]);
+  useEffect(() => { loadGroups(); }, [connId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selected) { setDetail(null); return; }
     setErr(null);
+    setPlan(null);
     api.kafkaGroupDetail(connId, selected).then(setDetail).catch((e) => setErr(e?.message ?? String(e)));
   }, [connId, selected]);
 
@@ -42,20 +52,85 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
     [detail]
   );
 
-  const doReset = async () => {
-    if (!selected || !resetTopic) { toast.error(t("請選擇主題")); return; }
-    const target: KafkaStartPosition = resetMode === "beginning" ? { type: "beginning" } : { type: "end" };
+  // 主題變更 → 抓該主題全部分區（不依賴群組已提交位移的分區集合）。
+  useEffect(() => {
+    setPlan(null);
+    if (!resetTopic) { setAllParts([]); setCheckedParts(new Set()); return; }
+    api.kafkaTopicPartitions(connId, resetTopic)
+      .then((ps) => {
+        const ids = ps.map((p) => p.partition).sort((a, b) => a - b);
+        setAllParts(ids);
+        setCheckedParts(new Set(ids));
+      })
+      .catch(() => { setAllParts([]); setCheckedParts(new Set()); });
+  }, [connId, resetTopic]);
+
+  const invalidate = () => setPlan(null);
+
+  const buildTarget = (): KafkaResetTarget | null => {
+    switch (resetMode) {
+      case "beginning": return { type: "beginning" };
+      case "end": return { type: "end" };
+      case "offset": {
+        const v = Number(offsetInput);
+        if (!Number.isFinite(v) || v < 0) { toast.error(t("位移需為非負整數")); return null; }
+        return { type: "offset", offset: Math.floor(v) };
+      }
+      case "timestamp": {
+        const ms = tsInput ? new Date(tsInput).getTime() : NaN;
+        if (!Number.isFinite(ms)) { toast.error(t("請選擇時間")); return null; }
+        return { type: "timestamp", ts: ms };
+      }
+      case "shift": {
+        const v = Number(shiftInput);
+        if (!Number.isFinite(v) || !Number.isInteger(v) || v === 0) { toast.error(t("平移量需為非零整數")); return null; }
+        return { type: "shift", by: v };
+      }
+    }
+  };
+
+  const buildReset = () => {
+    if (!selected || !resetTopic) { toast.error(t("請選擇主題")); return null; }
+    const target = buildTarget();
+    if (!target) return null;
+    const partitions = checkedParts.size === allParts.length ? null : Array.from(checkedParts).sort((a, b) => a - b);
+    if (partitions !== null && partitions.length === 0) { toast.error(t("請至少勾選一個分區")); return null; }
+    return { group: selected, topic: resetTopic, target, partitions };
+  };
+
+  const doPreview = async () => {
+    const reset = buildReset();
+    if (!reset) return;
     setBusy(true);
     try {
-      await api.kafkaResetOffsets(connId, { group: selected, topic: resetTopic, target, partitions: null });
-      toast.success(t("已重設 {group} / {topic} 位移", { group: selected, topic: resetTopic }));
-      api.kafkaGroupDetail(connId, selected).then(setDetail).catch(() => {});
+      setPlan(await api.kafkaPreviewResetOffsets(connId, reset));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("預覽失敗"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doApply = async () => {
+    const reset = buildReset();
+    if (!reset || !plan) return;
+    const n = plan.filter((r) => r.target !== null).length;
+    if (!(await uiConfirm(t("依預覽表套用位移重設（{n} 個分區）？", { n }), { danger: true, confirmText: t("套用") }))) return;
+    setBusy(true);
+    try {
+      const applied = await api.kafkaResetOffsets(connId, reset);
+      toast.success(t("已重設 {n} 個分區位移", { n: applied.filter((r) => r.target !== null).length }));
+      setPlan(null);
+      if (selected) api.kafkaGroupDetail(connId, selected).then(setDetail).catch(() => {});
     } catch (e: any) {
       toast.error(e?.message ?? t("重設失敗"));
     } finally {
       setBusy(false);
     }
   };
+
+  const inputCls = "bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent";
+  const groupEmpty = detail?.state === "Empty";
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
@@ -131,20 +206,114 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
                   </div>
                 )}
 
-                {/* 重設位移 */}
-                <div className="border-t border-fg/10 pt-3">
-                  <div className="text-fg/40 mb-1">{t("重設位移")}（{t("群組須 Empty")}）</div>
+                {/* 位移重設（預覽 → 套用） */}
+                <div className="border-t border-fg/10 pt-3 space-y-2">
+                  <div className="text-fg/40">{t("重設位移")}（{t("群組須 Empty 才能套用")}）</div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <select value={resetTopic} onChange={(e) => setResetTopic(e.target.value)} className="bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent">
+                    <select
+                      value={resetTopic}
+                      onChange={(e) => { setResetTopic(e.target.value); }}
+                      className={inputCls}
+                    >
                       <option value="">{t("選擇主題…")}</option>
                       {topics.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
                     </select>
-                    <select value={resetMode} onChange={(e) => setResetMode(e.target.value as ResetMode)} className="bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent">
+                    <select
+                      value={resetMode}
+                      onChange={(e) => { setResetMode(e.target.value as ResetMode); invalidate(); }}
+                      className={inputCls}
+                    >
                       <option value="beginning">{t("最舊")}</option>
                       <option value="end">{t("最新")}</option>
+                      <option value="offset">{t("指定位移")}</option>
+                      <option value="timestamp">{t("時間戳")}</option>
+                      <option value="shift">{t("平移 ±N")}</option>
                     </select>
-                    <button type="button" onClick={doReset} disabled={busy} className="px-3 py-1 rounded bg-danger/80 hover:bg-danger text-white disabled:opacity-40">{t("重設")}</button>
+                    {resetMode === "offset" && (
+                      <input
+                        type="number" min={0} value={offsetInput}
+                        onChange={(e) => { setOffsetInput(e.target.value); invalidate(); }}
+                        className={`${inputCls} w-28`} placeholder="offset"
+                      />
+                    )}
+                    {resetMode === "timestamp" && (
+                      <input
+                        type="datetime-local" value={tsInput}
+                        onChange={(e) => { setTsInput(e.target.value); invalidate(); }}
+                        className={inputCls}
+                      />
+                    )}
+                    {resetMode === "shift" && (
+                      <input
+                        type="number" value={shiftInput}
+                        onChange={(e) => { setShiftInput(e.target.value); invalidate(); }}
+                        className={`${inputCls} w-24`} title={t("負數往回、正數往前")}
+                      />
+                    )}
+                    <button
+                      type="button" onClick={doPreview} disabled={busy || !resetTopic}
+                      className="px-3 py-1 rounded bg-accent/80 hover:bg-accent text-white disabled:opacity-40"
+                    >
+                      {t("預覽")}
+                    </button>
+                    <button
+                      type="button" onClick={doApply} disabled={busy || !plan || !groupEmpty}
+                      title={groupEmpty ? undefined : t("群組須 Empty 才能套用")}
+                      className="px-3 py-1 rounded bg-danger/80 hover:bg-danger text-white disabled:opacity-40"
+                    >
+                      {t("套用")}
+                    </button>
                   </div>
+
+                  {allParts.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 text-fg/60">
+                      <span className="text-fg/40">{t("分區")}</span>
+                      {allParts.map((p) => (
+                        <label key={p} className="flex items-center gap-1 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checkedParts.has(p)}
+                            onChange={(e) => {
+                              setCheckedParts((s) => {
+                                const next = new Set(s);
+                                if (e.target.checked) next.add(p); else next.delete(p);
+                                return next;
+                              });
+                              invalidate();
+                            }}
+                          />
+                          <span className="mono">#{p}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+
+                  {plan && (
+                    <table className="w-full text-left mono">
+                      <thead className="text-fg/40">
+                        <tr>
+                          <th className="px-2 py-1 font-normal">P</th>
+                          <th className="px-2 py-1 font-normal">{t("目前")}</th>
+                          <th className="px-2 py-1 font-normal">{t("新位移")}</th>
+                          <th className="px-2 py-1 font-normal">Low … High</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {plan.map((r) => (
+                          <tr key={r.partition} className="border-b border-fg/5">
+                            <td className="px-2 py-1">{r.partition}</td>
+                            <td className="px-2 py-1 text-fg/50">{r.current < 0 ? "—" : r.current}</td>
+                            <td className="px-2 py-1">
+                              {r.target === null
+                                ? <span className="text-fg/30">{t("略過（無已提交位移）")}</span>
+                                : <span className={r.target !== r.current ? "text-accent" : "text-fg/50"}>{r.target}</span>}
+                            </td>
+                            <td className="px-2 py-1 text-fg/40">{r.low} … {r.high}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
               </div>
             ) : (

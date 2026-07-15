@@ -534,6 +534,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "新分區數必須大於目前的 {n}" => "The new partition count must be greater than the current {n}",
         "內部主題不可清空" => "Internal topics cannot be emptied",
         "沒有符合的分區" => "No matching partitions",
+        "沒有可套用的分區（皆無已提交位移）" => "No partitions to apply (none have committed offsets)",
 
         _ => return None,
     })
