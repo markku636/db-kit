@@ -413,6 +413,21 @@ pub struct KafkaSchemaSubject {
     pub latest: i32,
 }
 
+/// 相容性層級查詢結果。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaCompatibility {
+    pub level: String,
+    /// true 表此值繼承自全域（subject 未單獨設定）。
+    pub inherited: bool,
+}
+
+/// 相容性檢查結果。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaCompatCheck {
+    pub compatible: bool,
+    pub messages: Vec<String>,
+}
+
 /// 單一 schema。
 #[derive(Debug, Clone, Serialize)]
 pub struct KafkaSchema {

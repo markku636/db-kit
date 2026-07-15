@@ -2125,3 +2125,85 @@ pub async fn kafka_schema(
         .get_schema(&subject, version)
         .await
 }
+
+/// SR：註冊新 schema 版本。回傳 schema id。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_schema_register(
+    state: State<'_, AppState>,
+    id: String,
+    subject: String,
+    schema: String,
+    schema_type: String,
+) -> AppResult<i32> {
+    state.manager.kafka_driver(&id)?.schema_register(&subject, &schema, &schema_type).await
+}
+
+/// SR：檢查相容性。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_schema_compat_check(
+    state: State<'_, AppState>,
+    id: String,
+    subject: String,
+    schema: String,
+    schema_type: String,
+) -> AppResult<crate::db::kafka::dto::KafkaCompatCheck> {
+    let (compatible, messages) = state
+        .manager
+        .kafka_driver(&id)?
+        .schema_compat_check(&subject, &schema, &schema_type)
+        .await?;
+    Ok(crate::db::kafka::dto::KafkaCompatCheck { compatible, messages })
+}
+
+/// SR：取相容性層級（subject 為 None 取全域）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_schema_compat_get(
+    state: State<'_, AppState>,
+    id: String,
+    subject: Option<String>,
+) -> AppResult<crate::db::kafka::dto::KafkaCompatibility> {
+    let (level, inherited) = state
+        .manager
+        .kafka_driver(&id)?
+        .schema_compat_get(subject.as_deref())
+        .await?;
+    Ok(crate::db::kafka::dto::KafkaCompatibility { level, inherited })
+}
+
+/// SR：設定相容性層級。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_schema_compat_set(
+    state: State<'_, AppState>,
+    id: String,
+    subject: Option<String>,
+    level: String,
+) -> AppResult<()> {
+    state.manager.kafka_driver(&id)?.schema_compat_set(subject.as_deref(), &level).await
+}
+
+/// SR：軟刪除 subject。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_schema_delete_subject(
+    state: State<'_, AppState>,
+    id: String,
+    subject: String,
+) -> AppResult<Vec<i32>> {
+    state.manager.kafka_driver(&id)?.schema_delete_subject(&subject).await
+}
+
+/// SR：軟刪除某版本。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_schema_delete_version(
+    state: State<'_, AppState>,
+    id: String,
+    subject: String,
+    version: i32,
+) -> AppResult<i32> {
+    state.manager.kafka_driver(&id)?.schema_delete_version(&subject, version).await
+}

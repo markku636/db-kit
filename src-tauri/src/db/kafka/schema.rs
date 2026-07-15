@@ -32,6 +32,46 @@ impl KafkaDriver {
     pub async fn get_schema(&self, subject: &str, version: i32) -> AppResult<KafkaSchema> {
         self.require_sr()?.get_schema(subject, version).await
     }
+
+    pub async fn schema_register(&self, subject: &str, schema: &str, schema_type: &str) -> AppResult<i32> {
+        self.require_sr()?.register_schema(subject, schema, schema_type).await
+    }
+    pub async fn schema_compat_check(&self, subject: &str, schema: &str, schema_type: &str) -> AppResult<(bool, Vec<String>)> {
+        self.require_sr()?.check_compatibility(subject, schema, schema_type).await
+    }
+    pub async fn schema_compat_get(&self, subject: Option<&str>) -> AppResult<(String, bool)> {
+        self.require_sr()?.get_compatibility(subject).await
+    }
+    pub async fn schema_compat_set(&self, subject: Option<&str>, level: &str) -> AppResult<()> {
+        self.require_sr()?.set_compatibility(subject, level).await
+    }
+    pub async fn schema_delete_subject(&self, subject: &str) -> AppResult<Vec<i32>> {
+        self.require_sr()?.delete_subject(subject).await
+    }
+    pub async fn schema_delete_version(&self, subject: &str, version: i32) -> AppResult<i32> {
+        self.require_sr()?.delete_version(subject, version).await
+    }
+}
+
+/// 解析 /config 回應的 compatibilityLevel。
+async fn parse_compat_level(resp: reqwest::Response) -> AppResult<String> {
+    #[derive(Deserialize)]
+    struct Resp {
+        #[serde(rename = "compatibilityLevel")]
+        compatibility_level: String,
+    }
+    let r: Resp = resp.json().await.map_err(query_err)?;
+    Ok(r.compatibility_level)
+}
+
+/// 檢查 SR 回應狀態；非 2xx 時把 body（含 SR error_code / message）納入錯誤。
+async fn check_sr_status(resp: reqwest::Response) -> AppResult<reqwest::Response> {
+    if resp.status().is_success() {
+        return Ok(resp);
+    }
+    let code = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    Err(AppError::Query(format!("Schema Registry {code}：{body}")))
 }
 
 #[derive(Clone)]
@@ -155,11 +195,165 @@ impl SchemaRegistry {
     }
 
     fn get(&self, url: String) -> reqwest::RequestBuilder {
-        let mut rb = self.client.get(url);
+        self.req(reqwest::Method::GET, url)
+    }
+
+    /// 通用請求建構（帶 basic auth）。
+    fn req(&self, method: reqwest::Method, url: String) -> reqwest::RequestBuilder {
+        let mut rb = self.client.request(method, url);
         if let Some(u) = &self.user {
             rb = rb.basic_auth(u, self.pass.clone());
         }
         rb
+    }
+
+    /// 註冊新 schema 版本（POST /subjects/{s}/versions）。回傳 schema id。
+    pub async fn register_schema(
+        &self,
+        subject: &str,
+        schema: &str,
+        schema_type: &str,
+    ) -> AppResult<i32> {
+        #[derive(serde::Serialize)]
+        struct Body<'a> {
+            schema: &'a str,
+            #[serde(rename = "schemaType")]
+            schema_type: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            id: i32,
+        }
+        let resp = self
+            .req(
+                reqwest::Method::POST,
+                format!("{}/subjects/{}/versions", self.base_url, subject),
+            )
+            .json(&Body { schema, schema_type })
+            .send()
+            .await
+            .map_err(query_err)?;
+        let resp = check_sr_status(resp).await?;
+        let r: Resp = resp.json().await.map_err(query_err)?;
+        // subject 快取失效（schema 可能已演進）。
+        self.subject_cache.lock().remove(subject);
+        Ok(r.id)
+    }
+
+    /// 檢查 schema 對 subject latest 的相容性（POST /compatibility/.../latest?verbose=true）。
+    pub async fn check_compatibility(
+        &self,
+        subject: &str,
+        schema: &str,
+        schema_type: &str,
+    ) -> AppResult<(bool, Vec<String>)> {
+        #[derive(serde::Serialize)]
+        struct Body<'a> {
+            schema: &'a str,
+            #[serde(rename = "schemaType")]
+            schema_type: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            is_compatible: bool,
+            #[serde(default)]
+            messages: Vec<String>,
+        }
+        let resp = self
+            .req(
+                reqwest::Method::POST,
+                format!(
+                    "{}/compatibility/subjects/{}/versions/latest?verbose=true",
+                    self.base_url, subject
+                ),
+            )
+            .json(&Body { schema, schema_type })
+            .send()
+            .await
+            .map_err(query_err)?;
+        // subject 尚無版本時 SR 回 404 → 視為相容（首個版本）。
+        if resp.status().as_u16() == 404 {
+            return Ok((true, vec![]));
+        }
+        let resp = check_sr_status(resp).await?;
+        let r: Resp = resp.json().await.map_err(query_err)?;
+        Ok((r.is_compatible, r.messages))
+    }
+
+    /// 取相容性層級（subject 為 None 取全域）。404（未設定 subject 層）回全域並標 inherited。
+    pub async fn get_compatibility(&self, subject: Option<&str>) -> AppResult<(String, bool)> {
+        // 先試 subject 層（若有），404 → 回全域並標 inherited。
+        if let Some(s) = subject {
+            let url = format!("{}/config/{}", self.base_url, s);
+            let resp = self.get(url).send().await.map_err(query_err)?;
+            if resp.status().as_u16() != 404 {
+                let resp = check_sr_status(resp).await?;
+                return Ok((parse_compat_level(resp).await?, false));
+            }
+            let level = self.fetch_global_compat().await?;
+            return Ok((level, true));
+        }
+        Ok((self.fetch_global_compat().await?, false))
+    }
+
+    async fn fetch_global_compat(&self) -> AppResult<String> {
+        let resp = self
+            .get(format!("{}/config", self.base_url))
+            .send()
+            .await
+            .map_err(query_err)?;
+        let resp = check_sr_status(resp).await?;
+        parse_compat_level(resp).await
+    }
+
+    /// 設定相容性層級（PUT /config[/{s}]）。
+    pub async fn set_compatibility(&self, subject: Option<&str>, level: &str) -> AppResult<()> {
+        #[derive(serde::Serialize)]
+        struct Body<'a> {
+            compatibility: &'a str,
+        }
+        let url = match subject {
+            Some(s) => format!("{}/config/{}", self.base_url, s),
+            None => format!("{}/config", self.base_url),
+        };
+        let resp = self
+            .req(reqwest::Method::PUT, url)
+            .json(&Body { compatibility: level })
+            .send()
+            .await
+            .map_err(query_err)?;
+        check_sr_status(resp).await?;
+        Ok(())
+    }
+
+    /// 軟刪除 subject（DELETE /subjects/{s}）。回傳被刪版本清單。
+    pub async fn delete_subject(&self, subject: &str) -> AppResult<Vec<i32>> {
+        let resp = self
+            .req(
+                reqwest::Method::DELETE,
+                format!("{}/subjects/{}", self.base_url, subject),
+            )
+            .send()
+            .await
+            .map_err(query_err)?;
+        let resp = check_sr_status(resp).await?;
+        self.subject_cache.lock().remove(subject);
+        Ok(resp.json().await.unwrap_or_default())
+    }
+
+    /// 軟刪除某版本（DELETE /subjects/{s}/versions/{v}）。回傳被刪版本號。
+    pub async fn delete_version(&self, subject: &str, version: i32) -> AppResult<i32> {
+        let resp = self
+            .req(
+                reqwest::Method::DELETE,
+                format!("{}/subjects/{}/versions/{}", self.base_url, subject, version),
+            )
+            .send()
+            .await
+            .map_err(query_err)?;
+        let resp = check_sr_status(resp).await?;
+        self.subject_cache.lock().remove(subject);
+        Ok(resp.json().await.unwrap_or(version))
     }
 
     /// 列出所有 subject 與其版本。

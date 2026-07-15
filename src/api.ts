@@ -682,6 +682,8 @@ export interface KafkaAlertEvent {
   value: number;
 }
 export interface KafkaSchemaSubject { subject: string; versions: number[]; latest: number }
+export interface KafkaCompatibility { level: string; inherited: boolean }
+export interface KafkaCompatCheck { compatible: boolean; messages: string[] }
 export interface KafkaSchema {
   subject: string;
   version: number;
@@ -994,6 +996,18 @@ export const api = {
   kafkaSchemaSubjects: (id: string) => invoke<KafkaSchemaSubject[]>("kafka_schema_subjects", { id }),
   kafkaSchema: (id: string, subject: string, version: number) =>
     invoke<KafkaSchema>("kafka_schema", { id, subject, version }),
+  kafkaSchemaRegister: (id: string, subject: string, schema: string, schemaType: string) =>
+    invoke<number>("kafka_schema_register", { id, subject, schema, schemaType }),
+  kafkaSchemaCompatCheck: (id: string, subject: string, schema: string, schemaType: string) =>
+    invoke<KafkaCompatCheck>("kafka_schema_compat_check", { id, subject, schema, schemaType }),
+  kafkaSchemaCompatGet: (id: string, subject: string | null) =>
+    invoke<KafkaCompatibility>("kafka_schema_compat_get", { id, subject }),
+  kafkaSchemaCompatSet: (id: string, subject: string | null, level: string) =>
+    invoke<void>("kafka_schema_compat_set", { id, subject, level }),
+  kafkaSchemaDeleteSubject: (id: string, subject: string) =>
+    invoke<number[]>("kafka_schema_delete_subject", { id, subject }),
+  kafkaSchemaDeleteVersion: (id: string, subject: string, version: number) =>
+    invoke<number>("kafka_schema_delete_version", { id, subject, version }),
 
   // AI 助手：偵測 claude CLI / 送出問答（串流走 onClaudeStream）/ 取消。
   claudeDetect: () => invoke<ClaudeStatus>("claude_detect"),

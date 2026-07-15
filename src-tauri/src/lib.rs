@@ -272,6 +272,18 @@ pub fn run() {
             commands::kafka_schema_subjects,
             #[cfg(feature = "kafka")]
             commands::kafka_schema,
+            #[cfg(feature = "kafka")]
+            commands::kafka_schema_register,
+            #[cfg(feature = "kafka")]
+            commands::kafka_schema_compat_check,
+            #[cfg(feature = "kafka")]
+            commands::kafka_schema_compat_get,
+            #[cfg(feature = "kafka")]
+            commands::kafka_schema_compat_set,
+            #[cfg(feature = "kafka")]
+            commands::kafka_schema_delete_subject,
+            #[cfg(feature = "kafka")]
+            commands::kafka_schema_delete_version,
             commands::backup_detect_cli,
             commands::backup_run,
             commands::backup_restore,
