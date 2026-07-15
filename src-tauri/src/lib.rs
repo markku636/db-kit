@@ -204,6 +204,8 @@ pub fn run() {
             #[cfg(feature = "kafka")]
             commands::kafka_produce_batch,
             #[cfg(feature = "kafka")]
+            commands::kafka_produce_csv,
+            #[cfg(feature = "kafka")]
             commands::kafka_consumer_groups,
             #[cfg(feature = "kafka")]
             commands::kafka_group_detail,

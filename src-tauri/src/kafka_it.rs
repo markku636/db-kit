@@ -287,6 +287,30 @@ async fn kafka_end_to_end() {
         eprintln!("[kafka_it] js_filter matched={} + compile-error OK", js.matched);
     }
 
+    // CSV 批次發佈：temp CSV（k,v 兩欄）→ produce_csv → sent==2
+    {
+        use std::sync::atomic::AtomicBool;
+        let dir = std::env::temp_dir();
+        let csv_path = dir.join(format!("dbkit-it-{id}.csv"));
+        std::fs::write(&csv_path, "k,v\nck0,cv0\nck1,cv1\n").expect("write csv");
+        let opts = crate::db::kafka::dto::KafkaCsvProduceOptions {
+            topic: topic.clone(),
+            delimiter: None,
+            has_header: true,
+            key_column: Some("k".into()),
+            value_column: Some("v".into()),
+            partition: None,
+        };
+        let r = d
+            .produce_csv(csv_path.to_str().unwrap(), &opts, std::sync::Arc::new(AtomicBool::new(false)), |_, _, _| {})
+            .await
+            .expect("produce_csv");
+        assert_eq!(r.sent, 2, "csv sent 2");
+        assert_eq!(r.failed, 0, "csv none failed");
+        let _ = std::fs::remove_file(&csv_path);
+        eprintln!("[kafka_it] produce_csv sent={} failed={}", r.sent, r.failed);
+    }
+
     // 批次發佈：3 筆並行 → sent==3
     let batch = d
         .produce_batch(&[

@@ -182,6 +182,29 @@ pub struct KafkaBatchResult {
     pub first_error: Option<String>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+/// CSV 批次發佈選項。
+#[derive(Debug, Clone, Deserialize)]
+pub struct KafkaCsvProduceOptions {
+    pub topic: String,
+    /// 分隔字元（預設 ','）。
+    #[serde(default)]
+    pub delimiter: Option<String>,
+    #[serde(default = "default_true")]
+    pub has_header: bool,
+    /// key 欄名（有標頭）或 "0"-based 索引字串；None = 無 key。
+    #[serde(default)]
+    pub key_column: Option<String>,
+    /// value 欄名 / 索引；None = 整列轉 JSON 物件（需 has_header）。
+    #[serde(default)]
+    pub value_column: Option<String>,
+    #[serde(default)]
+    pub partition: Option<i32>,
+}
+
 /// DeleteRecords 每分區結果。
 #[derive(Debug, Clone, Serialize)]
 pub struct KafkaDeleteRecordsResult {

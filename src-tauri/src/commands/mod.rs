@@ -1520,6 +1520,37 @@ pub async fn kafka_tail_stop(state: State<'_, AppState>, id: String) -> AppResul
     Ok(())
 }
 
+/// CSV 批次發佈。登記取消旗標 "{id}:csv"，以 kafka-produce-progress 回報進度。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_produce_csv(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+    options: crate::db::kafka::dto::KafkaCsvProduceOptions,
+) -> AppResult<KafkaBatchResult> {
+    use std::sync::atomic::AtomicBool;
+    let driver = state.manager.kafka_driver(&id)?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let job_key = format!("{id}:csv");
+    if let Some(old) = state.kafka_jobs.lock().insert(job_key.clone(), cancel.clone()) {
+        old.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let app2 = app.clone();
+    let conn_id = id.clone();
+    let res = driver
+        .produce_csv(&path, &options, cancel, move |sent, failed, total| {
+            let _ = app2.emit(
+                "kafka-produce-progress",
+                serde_json::json!({ "conn_id": conn_id, "sent": sent, "failed": failed, "total": total }),
+            );
+        })
+        .await;
+    state.kafka_jobs.lock().remove(&job_key);
+    res
+}
+
 /// 批次發佈多則訊息（並行）。
 #[cfg(feature = "kafka")]
 #[tauri::command]

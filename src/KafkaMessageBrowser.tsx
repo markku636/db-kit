@@ -18,6 +18,7 @@ import Icon from "./ui/Icon";
 import { toast, uiConfirm, uiPrompt, pickSaveFile, copyToClipboard } from "./ui";
 import { useT } from "./i18n";
 import KafkaProduceDialog, { type ProduceInitial } from "./KafkaProduceDialog";
+import KafkaCsvProduceDialog from "./KafkaCsvProduceDialog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 type FilterMode = "simple" | "js";
@@ -46,6 +47,7 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [producing, setProducing] = useState(false);
+  const [csvProducing, setCsvProducing] = useState(false);
   // 重新處理：以某訊息預填發佈對話框（可改目標主題）。
   const [reprocess, setReprocess] = useState<ProduceInitial | null>(null);
   const [rowMenu, setRowMenu] = useState<{ m: KafkaMessage; x: number; y: number } | null>(null);
@@ -371,6 +373,14 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
         </button>
         <button
           type="button"
+          onClick={() => setCsvProducing(true)}
+          className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60"
+          title={t("CSV 批次發佈")}
+        >
+          {t("CSV…")}
+        </button>
+        <button
+          type="button"
           onClick={exportMessages}
           disabled={filtered.length === 0}
           className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1"
@@ -597,6 +607,10 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
 
       {producing && (
         <KafkaProduceDialog connId={connId} topic={topic} onClose={() => setProducing(false)} />
+      )}
+
+      {csvProducing && (
+        <KafkaCsvProduceDialog connId={connId} topic={topic} onClose={() => setCsvProducing(false)} />
       )}
 
       {reprocess && (

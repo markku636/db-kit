@@ -564,6 +564,16 @@ export interface KafkaProduceRequest {
 }
 export interface KafkaProduceResult { partition: number; offset: number }
 export interface KafkaBatchResult { sent: number; failed: number; first_error?: string | null }
+export interface KafkaCsvProduceOptions {
+  topic: string;
+  delimiter?: string | null;
+  has_header: boolean;
+  key_column?: string | null;
+  value_column?: string | null;
+  partition?: number | null;
+}
+/** kafka-produce-progress 事件 payload。 */
+export interface KafkaProduceProgress { conn_id: string; sent: number; failed: number; total: number }
 export interface KafkaConfigEntry {
   name: string;
   value: string;
@@ -647,6 +657,12 @@ export function onKafkaError(cb: (msg: string) => void): Promise<UnlistenFn> {
 // 訂閱掃描進度（僅回呼符合 connId 者）。回傳取消監聽函式。
 export function onKafkaScanProgress(connId: string, cb: (p: KafkaScanProgress) => void): Promise<UnlistenFn> {
   return listen<KafkaScanProgress>("kafka-scan-progress", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload);
+  });
+}
+// 訂閱 CSV 發佈進度（僅回呼符合 connId 者）。回傳取消監聽函式。
+export function onKafkaProduceProgress(connId: string, cb: (p: KafkaProduceProgress) => void): Promise<UnlistenFn> {
+  return listen<KafkaProduceProgress>("kafka-produce-progress", (e) => {
     if (e.payload.conn_id === connId) cb(e.payload);
   });
 }
@@ -878,6 +894,8 @@ export const api = {
     invoke<KafkaProduceResult>("kafka_produce", { id, req }),
   kafkaProduceBatch: (id: string, reqs: KafkaProduceRequest[]) =>
     invoke<KafkaBatchResult>("kafka_produce_batch", { id, reqs }),
+  kafkaProduceCsv: (id: string, path: string, options: KafkaCsvProduceOptions) =>
+    invoke<KafkaBatchResult>("kafka_produce_csv", { id, path, options }),
   kafkaConsumerGroups: (id: string) => invoke<KafkaConsumerGroup[]>("kafka_consumer_groups", { id }),
   kafkaGroupDetail: (id: string, group: string) =>
     invoke<KafkaGroupDetail>("kafka_group_detail", { id, group }),
