@@ -557,6 +557,10 @@ export interface KafkaProduceRequest {
   key?: string | null;
   value?: string | null;
   headers: KafkaHeader[];
+  /** value 序列化："raw"（預設）| "avro"（以 SR schema 編碼）。 */
+  value_format?: string | null;
+  /** value_format="avro" 時的 subject（預設 "{topic}-value"）。 */
+  value_subject?: string | null;
 }
 export interface KafkaProduceResult { partition: number; offset: number }
 export interface KafkaBatchResult { sent: number; failed: number; first_error?: string | null }

@@ -7,7 +7,7 @@ use rdkafka::producer::FutureRecord;
 
 use super::dto::{KafkaBatchResult, KafkaProduceRequest, KafkaProduceResult};
 use super::{query_err, KafkaDriver};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 impl KafkaDriver {
     /// 發佈一則訊息，回傳落地的 partition / offset。
@@ -20,7 +20,21 @@ impl KafkaDriver {
             });
         }
         let key = req.key.clone().unwrap_or_default();
-        let payload = req.value.clone().unwrap_or_default();
+
+        // value：raw → 原文 bytes；avro → 以 SR schema 編碼為 wire-format。
+        let payload: Vec<u8> = if req.value_format.as_deref() == Some("avro") {
+            let sr = self.schema.as_deref().ok_or_else(|| {
+                AppError::Unsupported(t!("此連線未設定 Schema Registry，無法以 Avro 發佈").into())
+            })?;
+            let subject = req
+                .value_subject
+                .clone()
+                .unwrap_or_else(|| format!("{}-value", req.topic));
+            let json = req.value.clone().unwrap_or_default();
+            sr.encode_json(&subject, &json).await?
+        } else {
+            req.value.clone().unwrap_or_default().into_bytes()
+        };
 
         let mut record = FutureRecord::to(&req.topic)
             .payload(&payload)

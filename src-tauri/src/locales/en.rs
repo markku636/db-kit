@@ -544,6 +544,13 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "（非 Confluent wire format，無法以 Avro 解碼）" => {
             "(Not Confluent wire format; cannot decode as Avro)"
         }
+        "此連線未設定 Schema Registry，無法以 Avro 發佈" => {
+            "No Schema Registry configured for this connection; cannot produce as Avro"
+        }
+        "僅支援以 Avro 序列化發佈（此 subject 非 AVRO）" => {
+            "Only Avro serialization is supported for producing (this subject is not AVRO)"
+        }
+        "Avro 編碼失敗" => "Avro encoding failed",
 
         _ => return None,
     })

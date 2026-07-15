@@ -158,6 +158,12 @@ pub struct KafkaProduceRequest {
     pub value: Option<String>,
     #[serde(default)]
     pub headers: Vec<KafkaHeader>,
+    /// value 序列化格式："raw"（預設，原文 bytes）| "avro"（以 SR schema 編碼）。
+    #[serde(default)]
+    pub value_format: Option<String>,
+    /// value_format="avro" 時的 subject（預設猜 "{topic}-value"）。
+    #[serde(default)]
+    pub value_subject: Option<String>,
 }
 
 /// 發佈結果。

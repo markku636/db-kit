@@ -166,6 +166,8 @@ async fn kafka_end_to_end() {
                 key: Some(format!("k{i}")),
                 value: Some(format!("{{\"n\":{i}}}")),
                 headers: vec![KafkaHeader { key: "src".into(), value: "it".into() }],
+                value_format: None,
+                value_subject: None,
             })
             .await
             .expect("produce");
@@ -288,9 +290,9 @@ async fn kafka_end_to_end() {
     // 批次發佈：3 筆並行 → sent==3
     let batch = d
         .produce_batch(&[
-            KafkaProduceRequest { topic: topic.clone(), partition: None, key: Some("b0".into()), value: Some("v0".into()), headers: vec![] },
-            KafkaProduceRequest { topic: topic.clone(), partition: None, key: Some("b1".into()), value: Some("v1".into()), headers: vec![] },
-            KafkaProduceRequest { topic: topic.clone(), partition: None, key: Some("b2".into()), value: Some("v2".into()), headers: vec![] },
+            KafkaProduceRequest { topic: topic.clone(), partition: None, key: Some("b0".into()), value: Some("v0".into()), headers: vec![], value_format: None, value_subject: None },
+            KafkaProduceRequest { topic: topic.clone(), partition: None, key: Some("b1".into()), value: Some("v1".into()), headers: vec![], value_format: None, value_subject: None },
+            KafkaProduceRequest { topic: topic.clone(), partition: None, key: Some("b2".into()), value: Some("v2".into()), headers: vec![], value_format: None, value_subject: None },
         ])
         .await
         .expect("produce_batch");
@@ -307,6 +309,8 @@ async fn kafka_end_to_end() {
         key: Some("tail".into()),
         value: Some("tail-value".into()),
         headers: vec![],
+        value_format: None,
+        value_subject: None,
     })
     .await
     .expect("produce for tail");

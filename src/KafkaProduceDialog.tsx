@@ -24,12 +24,23 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent, ini
   const [key, setKey] = useState(initial?.key ?? "");
   const [value, setValue] = useState(initial?.value ?? "");
   const [headers, setHeaders] = useState<KafkaHeader[]>(initial?.headers ?? []);
+  const [valueFormat, setValueFormat] = useState<"raw" | "avro">("raw");
+  const [subjects, setSubjects] = useState<string[]>([]);
+  const [subject, setSubject] = useState(`${topic}-value`);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!allowTopicChange) return;
     api.kafkaTopics(connId).then((ts) => setTopics(ts.map((x) => x.name).sort())).catch(() => {});
   }, [connId, allowTopicChange]);
+
+  useEffect(() => {
+    if (valueFormat !== "avro") return;
+    api.kafkaSchemaSubjects(connId).then((ss) => setSubjects(ss.map((s) => s.subject).sort())).catch(() => {});
+  }, [connId, valueFormat]);
+
+  // 目標主題變更時，預設 subject 跟著猜 "{topic}-value"（未手動改過才跟）。
+  useEffect(() => { setSubject(`${targetTopic}-value`); }, [targetTopic]);
 
   const submit = async () => {
     if (busy) return;
@@ -41,6 +52,8 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent, ini
         key: key === "" ? null : key,
         value: value === "" ? null : value,
         headers: headers.filter((h) => h.key.trim()),
+        value_format: valueFormat,
+        value_subject: valueFormat === "avro" ? subject : null,
       });
       toast.success(t("已送出 → partition {p} / offset {o}", { p: res.partition, o: res.offset }));
       onSent?.();
@@ -94,10 +107,26 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent, ini
             <Input value={key} onChange={(e) => setKey(e.target.value)} />
           </Field>
         </div>
+        <div className="flex items-center gap-2">
+          <span className="text-fg/40 text-xs">{t("值格式")}</span>
+          <div className="inline-flex rounded border border-fg/15 overflow-hidden text-xs">
+            <button type="button" onClick={() => setValueFormat("raw")} className={`px-2 py-1 ${valueFormat === "raw" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"}`}>{t("原文")}</button>
+            <button type="button" onClick={() => setValueFormat("avro")} className={`px-2 py-1 ${valueFormat === "avro" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"}`}>{t("Avro（Schema Registry）")}</button>
+          </div>
+          {valueFormat === "avro" && (
+            <select value={subject} onChange={(e) => setSubject(e.target.value)} className="bg-inset border border-fg/10 rounded px-2 py-1 text-xs outline-none focus:border-accent">
+              {!subjects.includes(subject) && <option value={subject}>{subject}</option>}
+              {subjects.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          )}
+        </div>
         <Field label="Value">
           <Textarea value={value} onChange={(e) => setValue(e.target.value)} rows={7} className="mono" />
         </Field>
-        <button type="button" onClick={prettify} className="text-xs text-accent hover:underline">{t("JSON 美化")}</button>
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={prettify} className="text-xs text-accent hover:underline">{t("JSON 美化")}</button>
+          {valueFormat === "avro" && <span className="text-fg/30 text-xs">{t("以 JSON 撰寫 value，將依 subject 的 Avro schema 編碼")}</span>}
+        </div>
         <div>
           <div className="flex items-center justify-between mb-1">
             <span className="text-fg/40 text-xs">Headers</span>

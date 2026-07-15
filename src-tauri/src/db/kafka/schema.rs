@@ -47,6 +47,8 @@ pub struct SchemaRegistry {
     client: Client,
     /// schema id → 已取回並（Avro 時）解析的 schema。
     cache: Mutex<HashMap<i32, CachedSchema>>,
+    /// subject → 最新 (id, Avro schema)，供發佈端 Avro 編碼；編碼失敗即失效重抓。
+    subject_cache: Mutex<HashMap<String, (i32, Arc<apache_avro::Schema>)>>,
 }
 
 #[derive(Deserialize)]
@@ -76,7 +78,80 @@ impl SchemaRegistry {
             pass,
             client,
             cache: Mutex::new(HashMap::new()),
+            subject_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// 取 subject latest 的 (id, Avro schema)，供發佈端編碼（快取；`refresh` 強制重抓）。
+    async fn latest_avro_schema(
+        &self,
+        subject: &str,
+        refresh: bool,
+    ) -> AppResult<(i32, Arc<apache_avro::Schema>)> {
+        if !refresh {
+            if let Some(c) = self.subject_cache.lock().get(subject).cloned() {
+                return Ok(c);
+            }
+        }
+        let resp: SubjectVersionResp = self
+            .get(format!("{}/subjects/{}/versions/latest", self.base_url, subject))
+            .send()
+            .await
+            .map_err(query_err)?
+            .error_for_status()
+            .map_err(query_err)?
+            .json()
+            .await
+            .map_err(query_err)?;
+        let stype = resp.schema_type.unwrap_or_else(|| "AVRO".to_string());
+        if !stype.eq_ignore_ascii_case("AVRO") {
+            return Err(AppError::Unsupported(
+                t!("僅支援以 Avro 序列化發佈（此 subject 非 AVRO）").into(),
+            ));
+        }
+        let schema = apache_avro::Schema::parse_str(&resp.schema)
+            .map_err(|e| AppError::Query(format!("解析 Avro schema 失敗：{e}")))?;
+        let entry = (resp.id, Arc::new(schema));
+        self.subject_cache
+            .lock()
+            .insert(subject.to_string(), entry.clone());
+        Ok(entry)
+    }
+
+    /// 以 subject latest 的 Avro schema 把 JSON 文字編為 Confluent wire-format bytes。
+    /// 先以快取 schema 編碼；失敗（可能 schema 已演進）即重抓 latest 再試一次。
+    pub async fn encode_json(&self, subject: &str, json_text: &str) -> AppResult<Vec<u8>> {
+        let jv: serde_json::Value = serde_json::from_str(json_text)
+            .map_err(|e| AppError::Query(format!("value 非合法 JSON：{e}")))?;
+        for attempt in 0..2 {
+            let (id, schema) = self.latest_avro_schema(subject, attempt == 1).await?;
+            let av = apache_avro::types::Value::from(jv.clone());
+            let resolved = match av.resolve(&schema) {
+                Ok(v) => v,
+                Err(e) => {
+                    if attempt == 0 {
+                        continue; // 可能 schema 演進 → 重抓再試
+                    }
+                    return Err(AppError::Query(format!("JSON 無法套入 Avro schema：{e}")));
+                }
+            };
+            match apache_avro::to_avro_datum(&schema, resolved) {
+                Ok(datum) => {
+                    let mut out = Vec::with_capacity(5 + datum.len());
+                    out.push(0x00);
+                    out.extend_from_slice(&id.to_be_bytes());
+                    out.extend_from_slice(&datum);
+                    return Ok(out);
+                }
+                Err(e) => {
+                    if attempt == 0 {
+                        continue;
+                    }
+                    return Err(AppError::Query(format!("Avro 編碼失敗：{e}")));
+                }
+            }
+        }
+        Err(AppError::Query(t!("Avro 編碼失敗").into()))
     }
 
     fn get(&self, url: String) -> reqwest::RequestBuilder {
