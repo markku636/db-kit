@@ -521,6 +521,20 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "複寫" => "Replication",
         "{d} 天 {hms}" => "{d}d {hms}",
 
+        // ---- db/kafka ----
+        "群組仍有活躍成員，無法重設位移（請先停掉消費者）" => {
+            "The group still has active members; stop the consumers before resetting offsets"
+        }
+        "重設逾時：無法取得群組分區指派" => {
+            "Reset timed out: unable to obtain the group's partition assignment"
+        }
+        "主題含無法讀取的敏感設定，整組覆寫會遺失該值，已拒絕編輯" => {
+            "The topic has sensitive config values that cannot be read; a full-set overwrite would silently drop them, so the edit was refused"
+        }
+        "新分區數必須大於目前的 {n}" => "The new partition count must be greater than the current {n}",
+        "內部主題不可清空" => "Internal topics cannot be emptied",
+        "沒有符合的分區" => "No matching partitions",
+
         _ => return None,
     })
 }

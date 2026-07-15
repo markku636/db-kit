@@ -546,6 +546,12 @@ export interface KafkaCreateTopicSpec {
   replication: number;
   config: KafkaHeader[]; // {key,value} 當設定 k/v
 }
+export interface KafkaDeleteRecordsResult {
+  partition: number;
+  /** 刪除後的新 low watermark；-1 表該分區失敗（見 error）。 */
+  low_watermark: number;
+  error?: string | null;
+}
 export interface KafkaConsumerGroup {
   group_id: string;
   state: string;
@@ -832,8 +838,15 @@ export const api = {
     invoke<KafkaConfigEntry[]>("kafka_topic_config", { id, topic }),
   kafkaBrokerConfig: (id: string, brokerId: number) =>
     invoke<KafkaConfigEntry[]>("kafka_broker_config", { id, brokerId }),
-  kafkaAlterTopicConfig: (id: string, topic: string, configs: KafkaHeader[]) =>
-    invoke<void>("kafka_alter_topic_config", { id, topic, configs }),
+  /** value = null 表示還原該鍵為預設。 */
+  kafkaSetTopicConfig: (id: string, topic: string, key: string, value: string | null) =>
+    invoke<void>("kafka_set_topic_config", { id, topic, key, value }),
+  /** newTotal 為新「總數」（Kafka 分區只能增不能減）。 */
+  kafkaAddPartitions: (id: string, topic: string, newTotal: number) =>
+    invoke<void>("kafka_add_partitions", { id, topic, newTotal }),
+  /** 刪除訊息：partitions=null 全分區；before=null 清到 high watermark（全清）。 */
+  kafkaDeleteRecords: (id: string, topic: string, partitions: number[] | null, before: number | null) =>
+    invoke<KafkaDeleteRecordsResult[]>("kafka_delete_records", { id, topic, partitions, before }),
   kafkaSchemaSubjects: (id: string) => invoke<KafkaSchemaSubject[]>("kafka_schema_subjects", { id }),
   kafkaSchema: (id: string, subject: string, version: number) =>
     invoke<KafkaSchema>("kafka_schema", { id, subject, version }),

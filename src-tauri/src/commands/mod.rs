@@ -22,7 +22,7 @@ use crate::store::{self, PersistedConnection};
 #[cfg(feature = "kafka")]
 use crate::db::kafka::dto::{
     KafkaClusterInfo, KafkaConfigEntry, KafkaConsumeQuery, KafkaConsumerGroup, KafkaCreateTopicSpec,
-    KafkaGroupDetail, KafkaHeader, KafkaMessage, KafkaOffsetReset, KafkaPartitionInfo,
+    KafkaDeleteRecordsResult, KafkaGroupDetail, KafkaMessage, KafkaOffsetReset, KafkaPartitionInfo,
     KafkaProduceRequest, KafkaProduceResult, KafkaSchema, KafkaSchemaSubject, KafkaStart, KafkaTopic,
 };
 
@@ -1508,19 +1508,53 @@ pub async fn kafka_broker_config(
         .await
 }
 
-/// 變更主題設定（整體取代語意）。
+/// 設定（value 有值）或還原預設（value = null）單一主題設定鍵。
 #[cfg(feature = "kafka")]
 #[tauri::command]
-pub async fn kafka_alter_topic_config(
+pub async fn kafka_set_topic_config(
     state: State<'_, AppState>,
     id: String,
     topic: String,
-    configs: Vec<KafkaHeader>,
+    key: String,
+    value: Option<String>,
 ) -> AppResult<()> {
     state
         .manager
         .kafka_driver(&id)?
-        .alter_topic_config(&topic, &configs)
+        .set_topic_config(&topic, &key, value.as_deref())
+        .await
+}
+
+/// 增加主題分區數（new_total 為新總數，只能增不能減）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_add_partitions(
+    state: State<'_, AppState>,
+    id: String,
+    topic: String,
+    new_total: u32,
+) -> AppResult<()> {
+    state
+        .manager
+        .kafka_driver(&id)?
+        .add_partitions(&topic, new_total as usize)
+        .await
+}
+
+/// 刪除主題訊息（DeleteRecords）。partitions=null 全分區；before=null 清到 high watermark。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_delete_records(
+    state: State<'_, AppState>,
+    id: String,
+    topic: String,
+    partitions: Option<Vec<i32>>,
+    before: Option<i64>,
+) -> AppResult<Vec<KafkaDeleteRecordsResult>> {
+    state
+        .manager
+        .kafka_driver(&id)?
+        .delete_records(&topic, partitions.as_deref(), before)
         .await
 }
 

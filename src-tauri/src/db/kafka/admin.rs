@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use rdkafka::admin::{
-    AdminOptions, AlterConfig, NewTopic, ResourceSpecifier, TopicReplication,
+    AdminOptions, AlterConfig, NewPartitions, NewTopic, ResourceSpecifier, TopicReplication,
 };
 use rdkafka::consumer::{BaseConsumer, CommitMode, Consumer};
 use rdkafka::groups::{GroupInfo, GroupMemberInfo};
@@ -25,8 +25,8 @@ fn safe_members(g: &GroupInfo) -> &[GroupMemberInfo] {
 
 use super::dto::{
     KafkaBroker, KafkaClusterInfo, KafkaConfigEntry, KafkaConsumerGroup, KafkaCreateTopicSpec,
-    KafkaGroupDetail, KafkaGroupMember, KafkaGroupOffset, KafkaHeader, KafkaOffsetReset,
-    KafkaPartitionInfo, KafkaStart, KafkaTopic,
+    KafkaDeleteRecordsResult, KafkaGroupDetail, KafkaGroupMember, KafkaGroupOffset,
+    KafkaOffsetReset, KafkaPartitionInfo, KafkaStart, KafkaTopic,
 };
 use super::{query_err, KafkaDriver};
 use crate::error::{AppError, AppResult};
@@ -231,16 +231,52 @@ impl KafkaDriver {
         check_topic_results(res)
     }
 
-    /// 變更主題設定（AlterConfigs 為整體取代語意；呼叫端須帶完整設定）。
-    pub async fn alter_topic_config(&self, topic: &str, configs: &[KafkaHeader]) -> AppResult<()> {
-        let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(15)));
-        let mut ac = AlterConfig::new(ResourceSpecifier::Topic(topic));
-        for h in configs {
-            ac = ac.set(&h.key, &h.value);
-        }
+    /// 設定（value = Some）或還原預設（value = None）單一主題設定鍵。
+    ///
+    /// AlterConfigs 為整組取代語意：先 describe 取 `source == DynamicTopic` 的既有覆寫為
+    /// 基底，套用本次變更後整組送回。**絕不可**把 Default / Broker 層的值一併送回——那會被
+    /// 固化成主題層覆寫。若基底含讀不到值的敏感項，整組覆寫會默默清掉它，直接拒絕編輯。
+    /// 兩個 client 同時編輯存在 read-modify-write race；單機桌面工具可接受。
+    pub async fn set_topic_config(
+        &self,
+        topic: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> AppResult<()> {
+        use rdkafka::admin::ConfigSource;
+        let ropts = AdminOptions::new().request_timeout(Some(Duration::from_secs(15)));
         let res = self
             .admin
-            .alter_configs(&[ac], &opts)
+            .describe_configs(&[ResourceSpecifier::Topic(topic)], &ropts)
+            .await
+            .map_err(query_err)?;
+        let mut base: Vec<(String, String)> = Vec::new();
+        for r in res {
+            let cr = r.map_err(|e| AppError::Query(format!("讀取設定失敗：{e}")))?;
+            for entry in cr.entries {
+                if !matches!(entry.source, ConfigSource::DynamicTopic) {
+                    continue;
+                }
+                if entry.is_sensitive {
+                    return Err(AppError::Query(
+                        t!("主題含無法讀取的敏感設定，整組覆寫會遺失該值，已拒絕編輯").into(),
+                    ));
+                }
+                base.push((entry.name, entry.value.unwrap_or_default()));
+            }
+        }
+        base.retain(|(k, _)| k != key);
+        if let Some(v) = value {
+            base.push((key.to_string(), v.to_string()));
+        }
+        let mut ac = AlterConfig::new(ResourceSpecifier::Topic(topic));
+        for (k, v) in &base {
+            ac = ac.set(k, v);
+        }
+        let wopts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(15)));
+        let res = self
+            .admin
+            .alter_configs(&[ac], &wopts)
             .await
             .map_err(query_err)?;
         for r in res {
@@ -249,6 +285,110 @@ impl KafkaDriver {
             }
         }
         Ok(())
+    }
+
+    /// 增加主題分區數（Kafka 只能增不能減）。`new_total` 為新「總數」而非增量。
+    pub async fn add_partitions(&self, topic: &str, new_total: usize) -> AppResult<()> {
+        let meta = self.meta.clone();
+        let topic_owned = topic.to_string();
+        let current = tokio::task::spawn_blocking(move || {
+            let md = meta
+                .fetch_metadata(Some(&topic_owned), Duration::from_secs(10))
+                .map_err(query_err)?;
+            let t = md
+                .topics()
+                .iter()
+                .find(|t| t.name() == topic_owned)
+                .ok_or_else(|| AppError::Query(format!("找不到主題 {topic_owned}")))?;
+            Ok::<usize, AppError>(t.partitions().len())
+        })
+        .await
+        .map_err(query_err)??;
+        if new_total <= current {
+            return Err(AppError::Query(tf!(
+                "新分區數必須大於目前的 {n}",
+                n = current
+            )));
+        }
+        let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(15)));
+        let np = NewPartitions::new(topic, new_total);
+        let res = self
+            .admin
+            .create_partitions(&[np], &opts)
+            .await
+            .map_err(query_err)?;
+        check_topic_results(res)
+    }
+
+    /// 刪除主題訊息（DeleteRecords）：清掉 `offset < before` 的訊息。
+    /// `before = None` → `Offset::End`（由 broker 解析為當下 high watermark，全清、無 race）；
+    /// `partitions = None` → 全部分區。內部主題一律拒絕。
+    /// 單一分區失敗不整體 Err——逐分區回報（cleanup.policy=compact 會被 broker 以
+    /// POLICY_VIOLATION 拒絕，錯誤原樣呈現）。
+    pub async fn delete_records(
+        &self,
+        topic: &str,
+        partitions: Option<&[i32]>,
+        before: Option<i64>,
+    ) -> AppResult<Vec<KafkaDeleteRecordsResult>> {
+        if super::is_internal_topic(topic) {
+            return Err(AppError::Query(t!("內部主題不可清空").into()));
+        }
+        let meta = self.meta.clone();
+        let topic_owned = topic.to_string();
+        let sel: Option<Vec<i32>> = partitions.map(|p| p.to_vec());
+        let pids = tokio::task::spawn_blocking(move || {
+            let md = meta
+                .fetch_metadata(Some(&topic_owned), Duration::from_secs(10))
+                .map_err(query_err)?;
+            let t = md
+                .topics()
+                .iter()
+                .find(|t| t.name() == topic_owned)
+                .ok_or_else(|| AppError::Query(format!("找不到主題 {topic_owned}")))?;
+            let mut ids: Vec<i32> = t.partitions().iter().map(|p| p.id()).collect();
+            if let Some(sel) = sel {
+                ids.retain(|i| sel.contains(i));
+            }
+            Ok::<Vec<i32>, AppError>(ids)
+        })
+        .await
+        .map_err(query_err)??;
+        if pids.is_empty() {
+            return Err(AppError::Query(t!("沒有符合的分區").into()));
+        }
+        let mut tpl = TopicPartitionList::new();
+        for pid in &pids {
+            tpl.add_partition_offset(
+                topic,
+                *pid,
+                before.map(Offset::Offset).unwrap_or(Offset::End),
+            )
+            .map_err(query_err)?;
+        }
+        let opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(15)));
+        let res = self
+            .admin
+            .delete_records(&tpl, &opts)
+            .await
+            .map_err(query_err)?;
+        let mut out: Vec<KafkaDeleteRecordsResult> = res
+            .elements()
+            .iter()
+            .map(|e| {
+                let err = e.error().err().map(|c| c.to_string());
+                KafkaDeleteRecordsResult {
+                    partition: e.partition(),
+                    low_watermark: match e.offset() {
+                        Offset::Offset(o) => o,
+                        _ => -1,
+                    },
+                    error: err,
+                }
+            })
+            .collect();
+        out.sort_by_key(|r| r.partition);
+        Ok(out)
     }
 
     /// 讀取主題設定（describe configs）。

@@ -129,6 +129,34 @@ async fn kafka_end_to_end() {
     assert!(!conf.is_empty(), "topic_config non-empty");
     eprintln!("[kafka_it] topic_partitions=2, topic_config={} entries", conf.len());
 
+    // 設定編輯（merged-full-set）：新增第二個覆寫不可弄丟建題時的 retention.ms 覆寫
+    d.set_topic_config(&topic, "max.message.bytes", Some("2097152"))
+        .await
+        .expect("set_topic_config");
+    let conf = d.topic_config(&topic).await.expect("topic_config after set");
+    let src = |name: &str| {
+        conf.iter()
+            .find(|c| c.name == name)
+            .map(|c| c.source.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(src("max.message.bytes"), "DynamicTopic", "new override applied");
+    assert_eq!(src("retention.ms"), "DynamicTopic", "existing override survives merge");
+    // 還原 retention.ms：該鍵回預設，但 max.message.bytes 覆寫仍在
+    d.set_topic_config(&topic, "retention.ms", None)
+        .await
+        .expect("revert retention.ms");
+    let conf = d.topic_config(&topic).await.expect("topic_config after revert");
+    let src2 = |name: &str| {
+        conf.iter()
+            .find(|c| c.name == name)
+            .map(|c| c.source.clone())
+            .unwrap_or_default()
+    };
+    assert_ne!(src2("retention.ms"), "DynamicTopic", "reverted key back to default");
+    assert_eq!(src2("max.message.bytes"), "DynamicTopic", "other override untouched");
+    eprintln!("[kafka_it] set_topic_config merge + revert OK");
+
     // 發佈 6 則（JSON value + header）
     for i in 0..6 {
         let r = d
@@ -217,6 +245,54 @@ async fn kafka_end_to_end() {
     let detail = d.describe_group(&group).await.expect("describe_group");
     assert_eq!(detail.group_id, group);
     eprintln!("[kafka_it] reset_offsets + list_groups + describe_group OK (state={})", detail.state);
+
+    // 清空（DeleteRecords）：先單分區、再全主題；清空後從頭消費應為 0 筆
+    let rs = d
+        .delete_records(&topic, Some(&[0]), None)
+        .await
+        .expect("delete_records p0");
+    assert_eq!(rs.len(), 1, "one partition result");
+    assert!(rs[0].error.is_none(), "p0 empty ok: {:?}", rs[0].error);
+    let rs = d
+        .delete_records(&topic, None, None)
+        .await
+        .expect("delete_records all");
+    assert_eq!(rs.len(), 2, "two partition results");
+    assert!(rs.iter().all(|r| r.error.is_none()), "all partitions emptied");
+    let mut drained = false;
+    for _ in 0..20 {
+        let after = d
+            .consume_page(
+                &topic,
+                &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None },
+            )
+            .await
+            .expect("consume after empty");
+        if after.is_empty() {
+            drained = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(drained, "topic drained after delete_records");
+    eprintln!("[kafka_it] delete_records (partition + all) OK");
+
+    // 加分割區：2 → 3（放在所有分區敏感斷言之後、清理之前）
+    d.add_partitions(&topic, 3).await.expect("add_partitions");
+    let mut grown = false;
+    for _ in 0..20 {
+        if let Ok(p) = d.topic_partitions(&topic).await {
+            if p.len() == 3 && p.iter().all(|x| x.leader >= 0) {
+                grown = true;
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(grown, "partitions grew to 3 with leaders elected");
+    // 不可縮減 / 等於現數 → 應報錯
+    assert!(d.add_partitions(&topic, 3).await.is_err(), "add_partitions(<=current) rejected");
+    eprintln!("[kafka_it] add_partitions 2→3 OK");
 
     // 清理
     d.delete_topic(&topic).await.expect("delete_topic");

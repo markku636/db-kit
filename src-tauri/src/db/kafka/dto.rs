@@ -130,6 +130,16 @@ pub struct KafkaProduceResult {
     pub offset: i64,
 }
 
+/// DeleteRecords 每分區結果。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaDeleteRecordsResult {
+    pub partition: i32,
+    /// 刪除後的新 low watermark；-1 表該分區失敗（見 error）。
+    pub low_watermark: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// 主題設定項（describe configs）。
 #[derive(Debug, Clone, Serialize)]
 pub struct KafkaConfigEntry {

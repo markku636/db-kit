@@ -1965,6 +1965,27 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       ];
       if (!ro && !isInternalKafkaTopic(m.table)) {
         nodes.push(sep);
+        nodes.push(it(t("清空主題…"), async () => {
+          // 雙重確認：danger confirm + 輸入主題名。清空保留主題與設定；compacted 主題 broker 會拒絕。
+          if (!(await uiConfirm(
+            t("將刪除主題「{name}」所有分區中的全部訊息（保留主題與設定）。已提交位移低於新起點的消費者群組，將依其 auto.offset.reset 跳位。此操作不可復原。", { name: m.table }),
+            { danger: true, confirmText: t("繼續") },
+          ))) return;
+          const typed = await uiPrompt(t("請輸入主題名稱以確認清空"), { placeholder: m.table });
+          if (typed === null) return;
+          if (typed !== m.table) {
+            toast.error(t("輸入的主題名稱不符，已取消"));
+            return;
+          }
+          try {
+            const rs = await api.kafkaDeleteRecords(m.connId, m.table, null, null);
+            const failed = rs.filter((r) => r.error);
+            if (failed.length) toast.error(t("部分分區清空失敗：{detail}", { detail: failed.map((r) => `#${r.partition} ${r.error}`).join("; ") }));
+            else toast.success(t("已清空主題 {name}（{n} 個分區）", { name: m.table, n: rs.length }));
+          } catch (e: any) {
+            toast.error(e?.message ?? t("清空失敗"));
+          }
+        }, true));
         nodes.push(it(t("刪除主題"), async () => {
           if (!(await uiConfirm(t("確定刪除主題「{name}」？此操作不可復原。", { name: m.table })))) return;
           try {

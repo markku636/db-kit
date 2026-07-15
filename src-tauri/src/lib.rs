@@ -212,7 +212,11 @@ pub fn run() {
             #[cfg(feature = "kafka")]
             commands::kafka_broker_config,
             #[cfg(feature = "kafka")]
-            commands::kafka_alter_topic_config,
+            commands::kafka_set_topic_config,
+            #[cfg(feature = "kafka")]
+            commands::kafka_add_partitions,
+            #[cfg(feature = "kafka")]
+            commands::kafka_delete_records,
             #[cfg(feature = "kafka")]
             commands::kafka_schema_subjects,
             #[cfg(feature = "kafka")]
