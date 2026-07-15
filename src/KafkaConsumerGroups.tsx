@@ -10,6 +10,7 @@ import {
 import { toast, uiConfirm, useModalOverlay } from "./ui";
 import { IconButton } from "./ui/index";
 import Icon from "./ui/Icon";
+import Sparkline from "./ui/Sparkline";
 import { useT } from "./i18n";
 
 type ResetMode = "beginning" | "end" | "offset" | "timestamp" | "shift";
@@ -39,6 +40,20 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
   const loadGroups = () =>
     api.kafkaConsumerGroups(connId).then(setGroups).catch((e) => setErr(e?.message ?? String(e)));
   useEffect(() => { loadGroups(); }, [connId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 若背景取樣有歷史，取每個群組的 lag 序列供清單旁 sparkline。
+  const [lagHistory, setLagHistory] = useState<Record<string, number[]>>({});
+  useEffect(() => {
+    api.kafkaMetricsHistory(connId).then((samples) => {
+      const map: Record<string, number[]> = {};
+      for (const s of samples) {
+        for (const [g, lag] of Object.entries(s.group_lag)) {
+          (map[g] ??= []).push(lag);
+        }
+      }
+      setLagHistory(map);
+    }).catch(() => {});
+  }, [connId]);
 
   useEffect(() => {
     if (!selected) { setDetail(null); return; }
@@ -173,7 +188,12 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
                 onClick={() => setSelected(g.group_id)}
                 className={`w-full text-left px-3 py-2 border-b border-fg/5 hover:bg-fg/5 ${selected === g.group_id ? "bg-accent/10" : ""}`}
               >
-                <div className="truncate" title={g.group_id}>{g.group_id}</div>
+                <div className="flex items-center gap-1.5">
+                  <div className="truncate flex-1" title={g.group_id}>{g.group_id}</div>
+                  {lagHistory[g.group_id] && lagHistory[g.group_id].length >= 2 && (
+                    <Sparkline points={lagHistory[g.group_id]} width={44} height={14} className="text-amber-300/70 shrink-0" />
+                  )}
+                </div>
                 <div className="text-fg/35">{g.state} · {g.members} {t("成員")}</div>
               </button>
             ))}

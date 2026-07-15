@@ -10,6 +10,7 @@ import {
 import { toast, useModalOverlay } from "./ui";
 import { IconButton } from "./ui/index";
 import Icon from "./ui/Icon";
+import TimeSeriesChart, { type TsPoint } from "./ui/TimeSeriesChart";
 import { useT } from "./i18n";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -64,6 +65,7 @@ function ChartsTab({ connId }: { connId: string }) {
   const [allTopics, setAllTopics] = useState<string[]>([]);
   const [allGroups, setAllGroups] = useState<string[]>([]);
   const [samples, setSamples] = useState<KafkaSample[]>([]);
+  const [windowH, setWindowH] = useState(1);
   const unlistenRef = useRef<UnlistenFn | null>(null);
 
   useEffect(() => {
@@ -102,6 +104,17 @@ function ChartsTab({ connId }: { connId: string }) {
 
   const latest = samples[samples.length - 1];
 
+  // 依時間窗過濾樣本。
+  const windowed = (() => {
+    if (samples.length === 0) return [];
+    const cutoff = (latest?.ts ?? 0) - windowH * 3600 * 1000;
+    return samples.filter((s) => s.ts >= cutoff);
+  })();
+  const seriesFor = (pick: (s: KafkaSample) => number | undefined): TsPoint[] =>
+    windowed
+      .map((s) => ({ t: s.ts, v: pick(s) }))
+      .filter((p): p is TsPoint => p.v != null);
+
   return (
     <div className="p-4 text-xs space-y-4">
       {/* 取樣控制 */}
@@ -120,17 +133,30 @@ function ChartsTab({ connId }: { connId: string }) {
           className="w-20 bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent"
         />
         {running && <span className="text-emerald-300/70">{t("取樣中")}（{samples.length} {t("點")}）</span>}
-        <span className="text-fg/30">{t("變更清單 / 間隔後按「開始取樣」套用")}</span>
-      </div>
-
-      {/* 叢集健康即時值 */}
-      {latest && (
-        <div className="grid grid-cols-4 gap-2">
-          <Tile label="Brokers" value={latest.health.brokers} />
-          <Tile label={t("分區數")} value={latest.health.partitions} />
-          <Tile label={t("離線分區")} value={latest.health.offline} tone={latest.health.offline > 0 ? "danger" : "dim"} />
-          <Tile label={t("未同步複寫")} value={latest.health.urp} tone={latest.health.urp > 0 ? "warn" : "dim"} />
+        <div className="ml-auto inline-flex rounded border border-fg/15 overflow-hidden">
+          {[1, 6, 24].map((h) => (
+            <button key={h} type="button" onClick={() => setWindowH(h)}
+              className={`px-2 py-1 ${windowH === h ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"}`}>
+              {h}h
+            </button>
+          ))}
         </div>
+      </div>
+      <div className="text-fg/30">{t("變更清單 / 間隔後按「開始取樣」套用")}</div>
+
+      {/* 叢集健康即時值 + 分區趨勢 */}
+      {latest && (
+        <>
+          <div className="grid grid-cols-4 gap-2">
+            <Tile label="Brokers" value={latest.health.brokers} />
+            <Tile label={t("分區數")} value={latest.health.partitions} />
+            <Tile label={t("離線分區")} value={latest.health.offline} tone={latest.health.offline > 0 ? "danger" : "dim"} />
+            <Tile label={t("未同步複寫")} value={latest.health.urp} tone={latest.health.urp > 0 ? "warn" : "dim"} />
+          </div>
+          <div className="text-fg/50">
+            <TimeSeriesChart label={t("分區數")} points={seriesFor((s) => s.health.partitions)} height={90} />
+          </div>
+        </>
       )}
 
       {/* 監看主題 */}
@@ -144,12 +170,13 @@ function ChartsTab({ connId }: { connId: string }) {
             </button>
           ))}
         </div>
-        {latest && topics.map((tp) => (
-          <div key={tp} className="flex justify-between border-b border-fg/5 py-0.5 mono">
-            <span className="text-fg/60 truncate max-w-[70%]" title={tp}>{tp}</span>
-            <span className="text-fg/50">Σend {latest.topic_end[tp] ?? "—"}</span>
-          </div>
-        ))}
+        <div className="space-y-3">
+          {topics.map((tp) => (
+            <div key={tp} className="text-emerald-400/70">
+              <TimeSeriesChart label={`${tp} · ${t("訊息數")}`} points={seriesFor((s) => s.topic_end[tp])} height={90} />
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* 監看群組 */}
@@ -163,12 +190,13 @@ function ChartsTab({ connId }: { connId: string }) {
             </button>
           ))}
         </div>
-        {latest && groups.map((g) => (
-          <div key={g} className="flex justify-between border-b border-fg/5 py-0.5 mono">
-            <span className="text-fg/60 truncate max-w-[70%]" title={g}>{g}</span>
-            <span className={(latest.group_lag[g] ?? 0) > 0 ? "text-amber-300" : "text-fg/50"}>lag {latest.group_lag[g] ?? "—"}</span>
-          </div>
-        ))}
+        <div className="space-y-3">
+          {groups.map((g) => (
+            <div key={g} className="text-amber-300/70">
+              <TimeSeriesChart label={`${g} · Lag`} points={seriesFor((s) => s.group_lag[g])} height={90} />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
