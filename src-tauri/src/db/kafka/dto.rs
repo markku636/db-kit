@@ -107,6 +107,12 @@ pub struct KafkaConsumeQuery {
     /// 子字串篩選（比對 key / value）；None = 不篩選。
     #[serde(default)]
     pub filter: Option<String>,
+    /// key 反序列化覆寫："string" | "json" | "hex" | "avro"；None / 其他 = 自動。
+    #[serde(default)]
+    pub key_deser: Option<String>,
+    /// value 反序列化覆寫；同上。
+    #[serde(default)]
+    pub value_deser: Option<String>,
 }
 
 /// 發佈訊息請求。

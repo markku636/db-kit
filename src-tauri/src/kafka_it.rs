@@ -177,7 +177,7 @@ async fn kafka_end_to_end() {
     let msgs = d
         .consume_page(
             &topic,
-            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None },
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None, key_deser: None, value_deser: None },
         )
         .await
         .expect("consume_page");
@@ -186,11 +186,30 @@ async fn kafka_end_to_end() {
     assert!(msgs.iter().any(|m| m.headers.iter().any(|h| h.key == "src")), "headers preserved");
     eprintln!("[kafka_it] consume_page(Beginning) got {} msgs, json+headers OK", msgs.len());
 
+    // 反序列化覆寫：value_deser="hex" → 一律 binary；"string" → 一律 string
+    let hexed = d
+        .consume_page(
+            &topic,
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 10, filter: None, key_deser: None, value_deser: Some("hex".into()) },
+        )
+        .await
+        .expect("consume hex deser");
+    assert!(!hexed.is_empty() && hexed.iter().all(|m| m.value_encoding == "binary"), "hex deser forces binary");
+    let stringy = d
+        .consume_page(
+            &topic,
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 10, filter: None, key_deser: None, value_deser: Some("string".into()) },
+        )
+        .await
+        .expect("consume string deser");
+    assert!(stringy.iter().all(|m| m.value_encoding == "string"), "string deser forces string");
+    eprintln!("[kafka_it] deser override (hex/string) OK");
+
     // 篩選消費（filter=n":3 → 命中 1 則）
     let filtered = d
         .consume_page(
             &topic,
-            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: Some("\"n\":3".into()) },
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: Some("\"n\":3".into()), key_deser: None, value_deser: None },
         )
         .await
         .expect("consume filtered");
@@ -315,7 +334,7 @@ async fn kafka_end_to_end() {
         let after = d
             .consume_page(
                 &topic,
-                &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None },
+                &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None, key_deser: None, value_deser: None },
             )
             .await
             .expect("consume after empty");

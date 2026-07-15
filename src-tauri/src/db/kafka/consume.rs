@@ -26,6 +26,28 @@ const MAX_VALUE_BYTES: usize = 256 * 1024;
 /// 有界讀的整體逾時（避免無訊息時卡住）。
 const CONSUME_MAX_WAIT: Duration = Duration::from_secs(20);
 
+/// 反序列化覆寫（查詢層級）。`Auto` = 現行自動判斷（wire-format 嗅探 + UTF-8/JSON/hex）。
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Deser {
+    Auto,
+    Str,
+    Json,
+    Hex,
+    Avro,
+}
+
+impl Deser {
+    pub(super) fn from_opt(s: Option<&str>) -> Self {
+        match s {
+            Some("string") => Self::Str,
+            Some("json") => Self::Json,
+            Some("hex") => Self::Hex,
+            Some("avro") => Self::Avro,
+            _ => Self::Auto,
+        }
+    }
+}
+
 /// 從 BorrowedMessage 抽出的擁有式原始訊息（脫離 consumer 借用，供 async 段解碼）。
 pub(super) struct RawMsg {
     pub partition: i32,
@@ -58,9 +80,11 @@ impl KafkaDriver {
         // async 解碼（Avro 走 registry）+ 客戶端篩選。
         let sr = self.schema.as_deref();
         let filter = query.filter.as_deref();
+        let key_deser = Deser::from_opt(query.key_deser.as_deref());
+        let value_deser = Deser::from_opt(query.value_deser.as_deref());
         let mut out = Vec::with_capacity(raws.len());
         for raw in raws {
-            let km = raw_to_dto(raw, topic, "", sr).await;
+            let km = raw_to_dto(raw, topic, "", sr, key_deser, value_deser).await;
             if passes_filter(&km, filter) {
                 out.push(km);
             }
@@ -195,10 +219,17 @@ pub(super) async fn raw_to_dto(
     topic: &str,
     conn_id: &str,
     sr: Option<&SchemaRegistry>,
+    key_deser: Deser,
+    value_deser: Deser,
 ) -> KafkaMessage {
-    let (key, key_encoding, _kb, _kt) = decode_payload(raw.key.as_deref());
+    let (key, key_encoding, _kb, _kt, _kid) = if key_deser == Deser::Auto {
+        let (k, enc, kb, kt) = decode_payload(raw.key.as_deref());
+        (k, enc, kb, kt, None)
+    } else {
+        decode_with(raw.key.as_deref(), sr, key_deser).await
+    };
     let (value, value_encoding, value_bytes, truncated, schema_id) =
-        decode_value(raw.value.as_deref(), sr).await;
+        decode_with(raw.value.as_deref(), sr, value_deser).await;
     KafkaMessage {
         conn_id: conn_id.to_string(),
         topic: topic.to_string(),
@@ -251,6 +282,88 @@ fn decode_value_sync(bytes: Option<&[u8]>) -> (Option<String>, String, u64, bool
     }
     let (val, enc, len, trunc) = decode_payload(Some(b));
     (val, enc, len, trunc, None)
+}
+
+/// 依覆寫模式解碼一段 payload。`Auto` 走現行 `decode_value`；其餘強制指定路徑。
+async fn decode_with(
+    bytes: Option<&[u8]>,
+    sr: Option<&SchemaRegistry>,
+    mode: Deser,
+) -> (Option<String>, String, u64, bool, Option<i32>) {
+    match mode {
+        Deser::Auto => decode_value(bytes, sr).await,
+        Deser::Avro => {
+            let Some(b) = bytes else {
+                return (None, "avro".to_string(), 0, false, None);
+            };
+            if b.len() >= 5 && b[0] == 0x00 {
+                let id = i32::from_be_bytes([b[1], b[2], b[3], b[4]]);
+                if let Some(sr) = sr {
+                    if let Some((json, enc, id)) = sr.decode(b).await {
+                        return (Some(json), enc, b.len() as u64, false, Some(id));
+                    }
+                    // registry 解不動（schema 遺失等）→ payload hex 預覽 + schema id。
+                    let (val, _enc, _len, trunc) = decode_payload(Some(&b[5..]));
+                    return (val, "avro".to_string(), b.len() as u64, trunc, Some(id));
+                }
+                return (
+                    Some(t!("（此連線未設定 Schema Registry，無法以 Avro 解碼）").to_string()),
+                    "avro".to_string(),
+                    b.len() as u64,
+                    false,
+                    Some(id),
+                );
+            }
+            (
+                Some(t!("（非 Confluent wire format，無法以 Avro 解碼）").to_string()),
+                "avro".to_string(),
+                b.len() as u64,
+                false,
+                None,
+            )
+        }
+        Deser::Str => {
+            let Some(b) = bytes else {
+                return (None, "string".to_string(), 0, false, None);
+            };
+            let len = b.len() as u64;
+            let (slice, trunc) = if b.len() > MAX_VALUE_BYTES {
+                (&b[..MAX_VALUE_BYTES], true)
+            } else {
+                (b, false)
+            };
+            (
+                Some(String::from_utf8_lossy(slice).to_string()),
+                "string".to_string(),
+                len,
+                trunc,
+                None,
+            )
+        }
+        Deser::Json => {
+            // 強制 UTF-8 路徑（含 JSON 嗅探；跳過 wire-format 偵測）。非 UTF-8 退 hex。
+            let (val, enc, len, trunc) = decode_payload(bytes);
+            (val, enc, len, trunc, None)
+        }
+        Deser::Hex => {
+            let Some(b) = bytes else {
+                return (None, "binary".to_string(), 0, false, None);
+            };
+            let len = b.len() as u64;
+            let (slice, trunc) = if b.len() > MAX_VALUE_BYTES {
+                (&b[..MAX_VALUE_BYTES], true)
+            } else {
+                (b, false)
+            };
+            (
+                Some(hex_preview(slice)),
+                "binary".to_string(),
+                len,
+                trunc,
+                None,
+            )
+        }
+    }
 }
 
 /// 解碼 value：Confluent 框架（0x00 + schema id）優先走 registry；否則 UTF-8/JSON/hex。

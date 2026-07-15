@@ -524,6 +524,9 @@ export interface KafkaConsumeQuery {
   start: KafkaStartPosition;
   limit: number;
   filter?: string | null;
+  /** 反序列化覆寫："string" | "json" | "hex" | "avro"；null = 自動。 */
+  key_deser?: string | null;
+  value_deser?: string | null;
 }
 export interface KafkaProduceRequest {
   topic: string;

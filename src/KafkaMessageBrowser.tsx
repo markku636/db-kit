@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Play, Pause, Trash2, RefreshCw, Send } from "lucide-react";
+import { ChevronDown, ChevronUp, Play, Pause, Trash2, RefreshCw, Send } from "lucide-react";
 import {
   api,
   onKafkaError,
@@ -14,6 +14,7 @@ import KafkaProduceDialog from "./KafkaProduceDialog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 type StartMode = "beginning" | "end" | "offset" | "timestamp";
+type Deser = "auto" | "string" | "json" | "hex" | "avro";
 
 // tail ring buffer 上限（守住記憶體，仿 PubSubPanel MAX_LINES）。
 const MAX_ROWS = 5000;
@@ -35,6 +36,11 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [producing, setProducing] = useState(false);
+  // 進階列（反序列化等）。任一進階條件作用中則預設展開。
+  const [advOpen, setAdvOpen] = useState(false);
+  const [keyDeser, setKeyDeser] = useState<Deser>("auto");
+  const [valueDeser, setValueDeser] = useState<Deser>("auto");
+  const advActive = keyDeser !== "auto" || valueDeser !== "auto";
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const unlistenErrRef = useRef<UnlistenFn | null>(null);
@@ -91,6 +97,8 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
         start: buildStart(),
         limit,
         filter: null,
+        key_deser: keyDeser === "auto" ? null : keyDeser,
+        value_deser: valueDeser === "auto" ? null : valueDeser,
       });
       setRows(msgs);
       setSelected(msgs.length ? msgs[msgs.length - 1] : null);
@@ -250,6 +258,15 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
         >
           <Icon icon={Send} size={13} /> {t("發佈")}
         </button>
+        <button
+          type="button"
+          onClick={() => setAdvOpen((v) => !v)}
+          className={`px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 inline-flex items-center gap-1 ${advActive ? "text-accent" : "text-fg/60"}`}
+          title={t("進階選項")}
+        >
+          <Icon icon={advOpen ? ChevronUp : ChevronDown} size={13} /> {t("進階")}
+          {advActive && <span className="w-1.5 h-1.5 rounded-full bg-accent inline-block" />}
+        </button>
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -257,6 +274,37 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
           className="flex-1 min-w-[140px] bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent"
         />
       </div>
+
+      {/* 進階列：反序列化選擇（之後擴充：篩選模式 / 搜尋更多 / 投影） */}
+      {(advOpen || advActive) && (
+        <div className="px-3 py-2 border-b border-fg/10 flex flex-wrap items-center gap-2 bg-inset/40">
+          <label className="text-fg/40">{t("Key 反序列化")}</label>
+          <select
+            value={keyDeser}
+            onChange={(e) => setKeyDeser(e.target.value as Deser)}
+            className="bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent"
+          >
+            <option value="auto">{t("自動")}</option>
+            <option value="string">{t("字串")}</option>
+            <option value="json">JSON</option>
+            <option value="hex">Hex</option>
+            <option value="avro">Avro（SR）</option>
+          </select>
+          <label className="text-fg/40">{t("Value 反序列化")}</label>
+          <select
+            value={valueDeser}
+            onChange={(e) => setValueDeser(e.target.value as Deser)}
+            className="bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent"
+          >
+            <option value="auto">{t("自動")}</option>
+            <option value="string">{t("字串")}</option>
+            <option value="json">JSON</option>
+            <option value="hex">Hex</option>
+            <option value="avro">Avro（SR）</option>
+          </select>
+          <span className="text-fg/30">{t("套用於下一次「查詢」（即時接收維持自動判斷）")}</span>
+        </div>
+      )}
 
       {err && <div className="px-3 py-1.5 text-red-400 mono break-all border-b border-fg/10">{err}</div>}
 

@@ -179,6 +179,8 @@ impl DatabaseDriver for KafkaDriver {
                     start: KafkaStart::End,
                     limit,
                     filter: None,
+                    key_deser: None,
+                    value_deser: None,
                 },
             )
             .await?;

@@ -538,6 +538,12 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "群組仍有活躍成員，無法刪除（請先停掉消費者）" => {
             "The group still has active members; stop the consumers before deleting it"
         }
+        "（此連線未設定 Schema Registry，無法以 Avro 解碼）" => {
+            "(No Schema Registry configured for this connection; cannot decode as Avro)"
+        }
+        "（非 Confluent wire format，無法以 Avro 解碼）" => {
+            "(Not Confluent wire format; cannot decode as Avro)"
+        }
 
         _ => return None,
     })
