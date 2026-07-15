@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Play, Pause, Trash2, RefreshCw, Send } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, Play, Pause, Trash2, RefreshCw, Send } from "lucide-react";
 import {
   api,
   onKafkaError,
   onKafkaMessage,
   onKafkaScanProgress,
+  type ExportFormat,
   type KafkaMessage,
   type KafkaPartitionInfo,
   type KafkaScanProgress,
@@ -14,6 +15,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { EditorView } from "@codemirror/view";
 import Icon from "./ui/Icon";
+import { toast, pickSaveFile } from "./ui";
 import { useT } from "./i18n";
 import KafkaProduceDialog from "./KafkaProduceDialog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -151,6 +153,39 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
   };
 
   const cancelScan = () => { api.kafkaJobCancel(connId, "scan").catch(() => {}); };
+
+  // 匯出目前（已篩選）訊息：重用後端 export_rows 管線（csv/json/xlsx）。
+  const exportMessages = async () => {
+    if (filtered.length === 0) { toast.error(t("沒有可匯出的訊息")); return; }
+    const path = await pickSaveFile(`${topic}.csv`, [
+      { name: "CSV", extensions: ["csv"] },
+      { name: "JSON", extensions: ["json"] },
+      { name: "Excel (.xlsx)", extensions: ["xlsx"] },
+    ]);
+    if (!path) return;
+    const lower = path.toLowerCase();
+    const fmt: ExportFormat = lower.endsWith(".json") ? "json" : lower.endsWith(".xlsx") ? "xlsx" : "csv";
+    const columns = ["partition", "offset", "timestamp", "key", "value", "headers"];
+    const rows: (string | null)[][] = filtered.map((m) => [
+      String(m.partition),
+      String(m.offset),
+      m.timestamp >= 0 ? new Date(m.timestamp).toISOString() : "",
+      m.key,
+      m.value,
+      m.headers.map((h) => `${h.key}=${h.value}`).join("; "),
+    ]);
+    try {
+      const res = await api.exportRows(columns, rows, {
+        format: fmt,
+        include_header: true,
+        all_rows: true,
+        bom: fmt === "csv",
+      }, path);
+      toast.success(t("已匯出 {rows} 列 → {path}", { rows: res.rows, path }));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("匯出失敗"));
+    }
+  };
 
   const startTail = async () => {
     setErr(null);
@@ -300,6 +335,15 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
           className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"
         >
           <Icon icon={Send} size={13} /> {t("發佈")}
+        </button>
+        <button
+          type="button"
+          onClick={exportMessages}
+          disabled={filtered.length === 0}
+          className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1"
+          title={t("匯出目前訊息（CSV / JSON / xlsx）")}
+        >
+          <Icon icon={Download} size={13} /> {t("匯出")}
         </button>
         <button
           type="button"
