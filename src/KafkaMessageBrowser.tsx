@@ -19,6 +19,7 @@ import { toast, uiConfirm, uiPrompt, pickSaveFile, copyToClipboard } from "./ui"
 import { useT } from "./i18n";
 import KafkaProduceDialog, { type ProduceInitial } from "./KafkaProduceDialog";
 import KafkaCsvProduceDialog from "./KafkaCsvProduceDialog";
+import { projectText } from "./jsonPath";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 type FilterMode = "simple" | "js";
@@ -64,8 +65,10 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
   const [filterMode, setFilterMode] = useState<FilterMode>("simple");
   const [jsFilter, setJsFilter] = useState("");
   const [jsOnTail, setJsOnTail] = useState(false);
+  const [projection, setProjection] = useState("");
   const jsActive = filterMode === "js" && jsFilter.trim() !== "";
-  const advActive = keyDeser !== "auto" || valueDeser !== "auto" || searchMore || jsActive;
+  const projActive = projection.trim() !== "";
+  const advActive = keyDeser !== "auto" || valueDeser !== "auto" || searchMore || jsActive || projActive;
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const unlistenErrRef = useRef<UnlistenFn | null>(null);
@@ -277,6 +280,17 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
       }
     }
     return m.value;
+  };
+
+  const isJsonLike = (m: KafkaMessage) => m.value_encoding === "json" || m.value_encoding === "avro";
+
+  // 投影：對 json/avro value 套用路徑表達式；投影無效（非 JSON）退回原值。
+  const cellValue = (m: KafkaMessage): string => {
+    if (projActive && isJsonLike(m)) {
+      const proj = projectText(m.value, projection);
+      if (proj != null) return proj;
+    }
+    return m.value ?? "";
   };
 
   return (
@@ -495,6 +509,15 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
           )}
           {!searchMore && <span className="text-fg/30">{t("套用於下一次「查詢」（即時接收維持自動判斷）")}</span>}
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-fg/40">{t("投影")}</label>
+          <input
+            value={projection}
+            onChange={(e) => setProjection(e.target.value)}
+            placeholder={t("投影（JSON 路徑，如 .user.name）")}
+            className="flex-1 min-w-[200px] bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent"
+          />
+        </div>
         </div>
       )}
 
@@ -541,7 +564,7 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
                   <td className="px-2 py-1 text-fg/50">{m.offset}</td>
                   <td className="px-2 py-1 text-fg/40 whitespace-nowrap">{fmtTs(m.timestamp)}</td>
                   <td className="px-2 py-1 text-emerald-400/80 max-w-[160px] truncate" title={m.key ?? ""}>{m.key ?? ""}</td>
-                  <td className="px-2 py-1 text-fg/80 max-w-[420px] truncate" title={m.value ?? ""}>{m.value ?? ""}</td>
+                  <td className={`px-2 py-1 max-w-[420px] truncate ${projActive && isJsonLike(m) ? "text-cyan-300/80" : "text-fg/80"}`} title={cellValue(m)}>{cellValue(m)}</td>
                 </tr>
               ))}
               {filtered.length === 0 && (
@@ -577,6 +600,12 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
                 <div>
                   <div className="text-fg/35 mb-1">Key</div>
                   <pre className="bg-inset rounded p-2 mono whitespace-pre-wrap break-all">{selected.key}</pre>
+                </div>
+              )}
+              {projActive && isJsonLike(selected) && (
+                <div>
+                  <div className="text-fg/35 mb-1">{t("投影結果")}</div>
+                  <pre className="bg-inset rounded p-2 mono whitespace-pre-wrap break-all text-cyan-300/80">{projectText(selected.value, projection) ?? "∅"}</pre>
                 </div>
               )}
               <div>
