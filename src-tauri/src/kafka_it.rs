@@ -177,10 +177,13 @@ async fn kafka_end_to_end() {
     let msgs = d
         .consume_page(
             &topic,
-            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None, key_deser: None, value_deser: None },
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None, key_deser: None, value_deser: None, scan: None },
+            None,
+            None,
         )
         .await
-        .expect("consume_page");
+        .expect("consume_page")
+        .messages;
     assert!(msgs.len() >= 6, "consumed >= 6, got {}", msgs.len());
     assert!(msgs.iter().any(|m| m.value_encoding == "json"), "json encoding detected");
     assert!(msgs.iter().any(|m| m.headers.iter().any(|h| h.key == "src")), "headers preserved");
@@ -190,18 +193,24 @@ async fn kafka_end_to_end() {
     let hexed = d
         .consume_page(
             &topic,
-            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 10, filter: None, key_deser: None, value_deser: Some("hex".into()) },
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 10, filter: None, key_deser: None, value_deser: Some("hex".into()), scan: None },
+            None,
+            None,
         )
         .await
-        .expect("consume hex deser");
+        .expect("consume hex deser")
+        .messages;
     assert!(!hexed.is_empty() && hexed.iter().all(|m| m.value_encoding == "binary"), "hex deser forces binary");
     let stringy = d
         .consume_page(
             &topic,
-            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 10, filter: None, key_deser: None, value_deser: Some("string".into()) },
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 10, filter: None, key_deser: None, value_deser: Some("string".into()), scan: None },
+            None,
+            None,
         )
         .await
-        .expect("consume string deser");
+        .expect("consume string deser")
+        .messages;
     assert!(stringy.iter().all(|m| m.value_encoding == "string"), "string deser forces string");
     eprintln!("[kafka_it] deser override (hex/string) OK");
 
@@ -209,12 +218,38 @@ async fn kafka_end_to_end() {
     let filtered = d
         .consume_page(
             &topic,
-            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: Some("\"n\":3".into()), key_deser: None, value_deser: None },
+            &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: Some("\"n\":3".into()), key_deser: None, value_deser: None, scan: None },
+            None,
+            None,
         )
         .await
-        .expect("consume filtered");
+        .expect("consume filtered")
+        .messages;
     assert_eq!(filtered.len(), 1, "filter matched exactly 1, got {}", filtered.len());
     eprintln!("[kafka_it] consume_page(filter) matched {}", filtered.len());
+
+    // 搜尋更多（scan）：limit=2 + filter 命中僅 1 筆 + max_scan → matched==1、reached_end==true、scanned>2
+    let scanned = d
+        .consume_page(
+            &topic,
+            &KafkaConsumeQuery {
+                partition: None,
+                start: KafkaStart::Beginning,
+                limit: 2,
+                filter: Some("\"n\":3".into()),
+                key_deser: None,
+                value_deser: None,
+                scan: Some(crate::db::kafka::dto::KafkaScanOptions { max_scan: 1000, max_wait_ms: Some(15000) }),
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("consume scan");
+    assert_eq!(scanned.matched, 1, "scan matched 1");
+    assert!(scanned.reached_end, "scan reached end");
+    assert!(scanned.scanned >= 6, "scan scanned all 6, got {}", scanned.scanned);
+    eprintln!("[kafka_it] scan (search-more) matched={} scanned={} end={}", scanned.matched, scanned.scanned, scanned.reached_end);
 
     // live-tail：BaseConsumer assign@End，發佈後 poll 到；drop 快速返回
     let consumer = d.build_tail_consumer(&topic, None, KafkaStart::End).await.expect("build_tail_consumer");
@@ -334,10 +369,13 @@ async fn kafka_end_to_end() {
         let after = d
             .consume_page(
                 &topic,
-                &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None, key_deser: None, value_deser: None },
+                &KafkaConsumeQuery { partition: None, start: KafkaStart::Beginning, limit: 100, filter: None, key_deser: None, value_deser: None, scan: None },
+                None,
+                None,
             )
             .await
-            .expect("consume after empty");
+            .expect("consume after empty")
+            .messages;
         if after.is_empty() {
             drained = true;
             break;

@@ -4,8 +4,10 @@ import {
   api,
   onKafkaError,
   onKafkaMessage,
+  onKafkaScanProgress,
   type KafkaMessage,
   type KafkaPartitionInfo,
+  type KafkaScanProgress,
   type KafkaStartPosition,
 } from "./api";
 import Icon from "./ui/Icon";
@@ -40,7 +42,12 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
   const [advOpen, setAdvOpen] = useState(false);
   const [keyDeser, setKeyDeser] = useState<Deser>("auto");
   const [valueDeser, setValueDeser] = useState<Deser>("auto");
-  const advActive = keyDeser !== "auto" || valueDeser !== "auto";
+  // 搜尋更多（掃描直到命中 limit 筆）。
+  const [searchMore, setSearchMore] = useState(false);
+  const [maxScan, setMaxScan] = useState(50000);
+  const [scanProg, setScanProg] = useState<KafkaScanProgress | null>(null);
+  const [scanNote, setScanNote] = useState<string | null>(null);
+  const advActive = keyDeser !== "auto" || valueDeser !== "auto" || searchMore;
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const unlistenErrRef = useRef<UnlistenFn | null>(null);
@@ -91,23 +98,46 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
   const consume = async () => {
     setBusy(true);
     setErr(null);
+    setScanProg(null);
+    setScanNote(null);
+    // 掃描模式時把用戶端快速篩選字串下推為伺服端子字串篩選（才有「搜尋更多」意義）。
+    const serverFilter = searchMore && filter.trim() ? filter.trim() : null;
+    let unlistenProg: null | (() => void) = null;
     try {
-      const msgs = await api.kafkaConsume(connId, topic, {
+      if (searchMore) {
+        unlistenProg = await onKafkaScanProgress(connId, (p) => {
+          if (p.topic === topic) setScanProg(p);
+        });
+      }
+      const res = await api.kafkaConsume(connId, topic, {
         partition,
         start: buildStart(),
         limit,
-        filter: null,
+        filter: serverFilter,
         key_deser: keyDeser === "auto" ? null : keyDeser,
         value_deser: valueDeser === "auto" ? null : valueDeser,
+        scan: searchMore ? { max_scan: Math.max(1, maxScan) } : null,
       });
-      setRows(msgs);
-      setSelected(msgs.length ? msgs[msgs.length - 1] : null);
+      setRows(res.messages);
+      setSelected(res.messages.length ? res.messages[res.messages.length - 1] : null);
+      if (searchMore) {
+        const parts: string[] = [
+          t("已掃描 {scanned} 筆 · 命中 {matched}", { scanned: res.scanned, matched: res.matched }),
+        ];
+        if (res.reached_end) parts.push(t("已掃到主題末端"));
+        if (res.eval_errors > 0) parts.push(t("{n} 筆訊息評估失敗已略過", { n: res.eval_errors }));
+        setScanNote(parts.join(" · "));
+      }
     } catch (e: any) {
       setErr(e?.message ?? t("消費失敗"));
     } finally {
+      unlistenProg?.();
+      setScanProg(null);
       setBusy(false);
     }
   };
+
+  const cancelScan = () => { api.kafkaJobCancel(connId, "scan").catch(() => {}); };
 
   const startTail = async () => {
     setErr(null);
@@ -302,7 +332,39 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
             <option value="hex">Hex</option>
             <option value="avro">Avro（SR）</option>
           </select>
-          <span className="text-fg/30">{t("套用於下一次「查詢」（即時接收維持自動判斷）")}</span>
+          <span className="w-px h-4 bg-fg/10" />
+          <label className="flex items-center gap-1 cursor-pointer text-fg/60">
+            <input type="checkbox" checked={searchMore} onChange={(e) => setSearchMore(e.target.checked)} />
+            {t("搜尋更多")}
+          </label>
+          {searchMore && (
+            <>
+              <label className="text-fg/40">{t("最多掃描")}</label>
+              <input
+                type="number" min={1} value={maxScan}
+                onChange={(e) => setMaxScan(Math.max(1, Number(e.target.value) || 1))}
+                className="w-24 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent"
+              />
+              <span className="text-fg/30">{t("掃描直到命中「筆數」筆或掃到上限；配合上方篩選框")}</span>
+            </>
+          )}
+          {!searchMore && <span className="text-fg/30">{t("套用於下一次「查詢」（即時接收維持自動判斷）")}</span>}
+        </div>
+      )}
+
+      {/* 掃描進度 / 結果摘要 */}
+      {(scanProg || scanNote) && (
+        <div className="px-3 py-1.5 border-b border-fg/10 flex items-center gap-3 text-fg/50">
+          {scanProg ? (
+            <>
+              <span>{t("已掃描 {scanned} 筆 · 命中 {matched}", { scanned: scanProg.scanned, matched: scanProg.matched })}</span>
+              <button type="button" onClick={cancelScan} className="px-2 py-0.5 rounded border border-fg/15 hover:bg-fg/10 text-fg/60">
+                {t("取消掃描")}
+              </button>
+            </>
+          ) : (
+            <span>{scanNote}</span>
+          )}
         </div>
       )}
 

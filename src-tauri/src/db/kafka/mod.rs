@@ -10,7 +10,7 @@
 
 mod admin;
 mod config;
-mod consume;
+pub(crate) mod consume;
 pub mod dto;
 mod produce;
 mod schema;
@@ -171,7 +171,7 @@ impl DatabaseDriver for KafkaDriver {
     ) -> AppResult<PagedData> {
         // 「資料」分頁：讀該主題最近 N 則訊息（GUI 實際走 kafka_consume；此為 trait 完整性）。
         let limit = if query.page_size > 0 { query.page_size } else { 200 };
-        let msgs = self
+        let res = self
             .consume_page(
                 table,
                 &KafkaConsumeQuery {
@@ -181,10 +181,13 @@ impl DatabaseDriver for KafkaDriver {
                     filter: None,
                     key_deser: None,
                     value_deser: None,
+                    scan: None,
                 },
+                None,
+                None,
             )
             .await?;
-        Ok(consume::messages_to_paged(msgs))
+        Ok(consume::messages_to_paged(res.messages))
     }
 
     async fn query(&self, _sql: &str) -> AppResult<QueryResult> {

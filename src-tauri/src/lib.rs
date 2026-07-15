@@ -63,6 +63,8 @@ pub fn run() {
             agent_jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             #[cfg(feature = "kafka")]
             kafka_tails: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            #[cfg(feature = "kafka")]
+            kafka_jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -191,6 +193,8 @@ pub fn run() {
             commands::kafka_topic_partitions,
             #[cfg(feature = "kafka")]
             commands::kafka_consume,
+            #[cfg(feature = "kafka")]
+            commands::kafka_job_cancel,
             #[cfg(feature = "kafka")]
             commands::kafka_tail_start,
             #[cfg(feature = "kafka")]

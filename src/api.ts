@@ -519,6 +519,10 @@ export type KafkaStartPosition =
   | { type: "end" }
   | { type: "offset"; offset: number }
   | { type: "timestamp"; ts: number };
+export interface KafkaScanOptions {
+  max_scan: number;
+  max_wait_ms?: number | null;
+}
 export interface KafkaConsumeQuery {
   partition: number | null; // null = 全部分區
   start: KafkaStartPosition;
@@ -527,6 +531,23 @@ export interface KafkaConsumeQuery {
   /** 反序列化覆寫："string" | "json" | "hex" | "avro"；null = 自動。 */
   key_deser?: string | null;
   value_deser?: string | null;
+  /** 搜尋更多：掃描直到命中 limit 筆或掃到上限。null = 舊行為。 */
+  scan?: KafkaScanOptions | null;
+}
+export interface KafkaConsumeResult {
+  messages: KafkaMessage[];
+  scanned: number;
+  matched: number;
+  reached_end: boolean;
+  eval_errors: number;
+  elapsed_ms: number;
+}
+/** kafka-scan-progress 事件 payload。 */
+export interface KafkaScanProgress {
+  conn_id: string;
+  topic: string;
+  scanned: number;
+  matched: number;
 }
 export interface KafkaProduceRequest {
   topic: string;
@@ -615,6 +636,12 @@ export function onKafkaMessage(connId: string, cb: (m: KafkaMessage) => void): P
 // 訂閱 Kafka 背景任務錯誤（payload 為字串）。回傳取消監聽函式。
 export function onKafkaError(cb: (msg: string) => void): Promise<UnlistenFn> {
   return listen<string>("kafka-error", (e) => cb(e.payload));
+}
+// 訂閱掃描進度（僅回呼符合 connId 者）。回傳取消監聽函式。
+export function onKafkaScanProgress(connId: string, cb: (p: KafkaScanProgress) => void): Promise<UnlistenFn> {
+  return listen<KafkaScanProgress>("kafka-scan-progress", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload);
+  });
 }
 
 // 連線類型的顯示資料（色標呼應規劃文件）
@@ -833,7 +860,10 @@ export const api = {
   kafkaTopicPartitions: (id: string, topic: string) =>
     invoke<KafkaPartitionInfo[]>("kafka_topic_partitions", { id, topic }),
   kafkaConsume: (id: string, topic: string, query: KafkaConsumeQuery) =>
-    invoke<KafkaMessage[]>("kafka_consume", { id, topic, query }),
+    invoke<KafkaConsumeResult>("kafka_consume", { id, topic, query }),
+  /** 取消 Kafka 長跑工作（kind 如 "scan" / "csv"）。 */
+  kafkaJobCancel: (id: string, kind: string) =>
+    invoke<void>("kafka_job_cancel", { id, kind }),
   kafkaTailStart: (id: string, topic: string, partition: number | null, start: KafkaStartPosition) =>
     invoke<void>("kafka_tail_start", { id, topic, partition, start }),
   kafkaTailStop: (id: string) => invoke<void>("kafka_tail_stop", { id }),

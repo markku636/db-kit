@@ -113,6 +113,34 @@ pub struct KafkaConsumeQuery {
     /// value 反序列化覆寫；同上。
     #[serde(default)]
     pub value_deser: Option<String>,
+    /// 「搜尋更多」：掃描直到命中 limit 筆或掃到上限。None = 舊行為（取一頁後篩選）。
+    #[serde(default)]
+    pub scan: Option<KafkaScanOptions>,
+}
+
+/// 「搜尋更多」掃描參數。
+#[derive(Debug, Clone, Deserialize)]
+pub struct KafkaScanOptions {
+    /// 最多掃描幾筆（不論是否命中）。
+    pub max_scan: u32,
+    /// 整體逾時（毫秒）；None = 60000。
+    #[serde(default)]
+    pub max_wait_ms: Option<u64>,
+}
+
+/// 一次性消費結果（含掃描統計）。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaConsumeResult {
+    pub messages: Vec<KafkaMessage>,
+    /// 已掃描（讀取）的訊息數。
+    pub scanned: u64,
+    /// 通過篩選的訊息數（= messages.len()）。
+    pub matched: u64,
+    /// 是否所有分區都掃到末端。
+    pub reached_end: bool,
+    /// JS 篩選評估失敗而略過的訊息數（B-10 用；此版恆 0）。
+    pub eval_errors: u64,
+    pub elapsed_ms: u64,
 }
 
 /// 發佈訊息請求。

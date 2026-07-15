@@ -21,10 +21,10 @@ use crate::scheduler::{self, BackupHistoryEntry, BackupSchedule, BackupStatus};
 use crate::store::{self, PersistedConnection};
 #[cfg(feature = "kafka")]
 use crate::db::kafka::dto::{
-    KafkaClusterInfo, KafkaConfigEntry, KafkaConsumeQuery, KafkaConsumerGroup, KafkaCreateTopicSpec,
-    KafkaDeleteRecordsResult, KafkaGroupDetail, KafkaMessage, KafkaOffsetPlanRow, KafkaOffsetReset,
-    KafkaPartitionInfo, KafkaProduceRequest, KafkaProduceResult, KafkaSchema, KafkaSchemaSubject,
-    KafkaStart, KafkaTopic,
+    KafkaClusterInfo, KafkaConfigEntry, KafkaConsumeQuery, KafkaConsumeResult, KafkaConsumerGroup,
+    KafkaCreateTopicSpec, KafkaDeleteRecordsResult, KafkaGroupDetail, KafkaOffsetPlanRow,
+    KafkaOffsetReset, KafkaPartitionInfo, KafkaProduceRequest, KafkaProduceResult, KafkaSchema,
+    KafkaSchemaSubject, KafkaStart, KafkaTopic,
 };
 
 pub struct AppState {
@@ -41,6 +41,9 @@ pub struct AppState {
     /// poll 執行緒下一輪見到即退出並釋放 consumer（BaseConsumer drop 快速）。
     #[cfg(feature = "kafka")]
     pub kafka_tails: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
+    /// Kafka 長跑工作的取消旗標（key = "{連線 id}:{kind}"，如 "c1:scan" / "c1:csv"）。
+    #[cfg(feature = "kafka")]
+    pub kafka_jobs: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>,
 }
 
 /// 若前端送來的 secret 為空（存檔但未重新輸入的連線），從 keychain 補回。
@@ -150,8 +153,11 @@ pub async fn remove_saved_connection(
         h.abort();
     }
     #[cfg(feature = "kafka")]
-    if let Some(c) = state.kafka_tails.lock().remove(&id) {
-        c.store(true, std::sync::atomic::Ordering::Relaxed);
+    {
+        if let Some(c) = state.kafka_tails.lock().remove(&id) {
+            c.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        cancel_kafka_jobs(&state, &id);
     }
     state.manager.disconnect(&id).await;
     store::remove(&app, &id).await?;
@@ -168,11 +174,31 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> AppResult<()>
         h.abort();
     }
     #[cfg(feature = "kafka")]
-    if let Some(c) = state.kafka_tails.lock().remove(&id) {
-        c.store(true, std::sync::atomic::Ordering::Relaxed);
+    {
+        if let Some(c) = state.kafka_tails.lock().remove(&id) {
+            c.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        cancel_kafka_jobs(&state, &id);
     }
     state.manager.disconnect(&id).await;
     Ok(())
+}
+
+/// 取消並移除某連線所有登記中的 Kafka 長跑工作（key 前綴 "{id}:"）。
+#[cfg(feature = "kafka")]
+fn cancel_kafka_jobs(state: &AppState, id: &str) {
+    let prefix = format!("{id}:");
+    let mut jobs = state.kafka_jobs.lock();
+    let keys: Vec<String> = jobs
+        .keys()
+        .filter(|k| k.starts_with(&prefix))
+        .cloned()
+        .collect();
+    for k in keys {
+        if let Some(c) = jobs.remove(&k) {
+            c.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 /// 清除指定連線驅動的查詢快取（外部 gateway 等），供前端「重新整理」強制重抓。
@@ -1349,20 +1375,55 @@ pub async fn kafka_topic_partitions(
         .await
 }
 
-/// 一次性消費一頁訊息（訊息瀏覽器「查詢」用）。
+/// 一次性消費一頁訊息（訊息瀏覽器「查詢」用）。掃描模式下以 `kafka-scan-progress`
+/// 回報進度，並登記取消旗標 `{id}:scan`（可由 kafka_job_cancel 中止）。
 #[cfg(feature = "kafka")]
 #[tauri::command]
 pub async fn kafka_consume(
+    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
     topic: String,
     query: KafkaConsumeQuery,
-) -> AppResult<Vec<KafkaMessage>> {
-    state
-        .manager
-        .kafka_driver(&id)?
-        .consume_page(&topic, &query)
-        .await
+) -> AppResult<KafkaConsumeResult> {
+    use std::sync::atomic::AtomicBool;
+    let driver = state.manager.kafka_driver(&id)?;
+
+    // 非掃描模式：直接跑，不登記工作。
+    if query.scan.is_none() {
+        return driver.consume_page(&topic, &query, None, None).await;
+    }
+
+    // 掃描模式：登記取消旗標 + 進度 emit。
+    let cancel = Arc::new(AtomicBool::new(false));
+    let job_key = format!("{id}:scan");
+    if let Some(old) = state.kafka_jobs.lock().insert(job_key.clone(), cancel.clone()) {
+        old.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let app2 = app.clone();
+    let conn_id = id.clone();
+    let topic2 = topic.clone();
+    let progress: crate::db::kafka::consume::ProgressFn = Box::new(move |scanned, matched| {
+        let _ = app2.emit(
+            "kafka-scan-progress",
+            serde_json::json!({ "conn_id": conn_id, "topic": topic2, "scanned": scanned, "matched": matched }),
+        );
+    });
+    let res = driver
+        .consume_page(&topic, &query, Some(cancel), Some(progress))
+        .await;
+    state.kafka_jobs.lock().remove(&job_key);
+    res
+}
+
+/// 取消 Kafka 長跑工作（kind 如 "scan" / "csv"）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_job_cancel(state: State<'_, AppState>, id: String, kind: String) -> AppResult<()> {
+    if let Some(c) = state.kafka_jobs.lock().remove(&format!("{id}:{kind}")) {
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 /// 開始 live-tail：背景任務串流新訊息，以 `kafka-message` 事件推給前端（每連線一個 tail，重呼叫即取代）。
