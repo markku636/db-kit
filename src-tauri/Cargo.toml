@@ -87,6 +87,11 @@ rdkafka = { version = "0.39", default-features = false, features = ["cmake-build
 # apache-avro（純 Rust）依 schema id 解 Avro binary → JSON。皆藏在 `kafka` feature 後。
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
 apache-avro = { version = "0.17", optional = true }
+# Protobuf 動態解碼：protox 由 .proto 文字編出 FileDescriptorSet，prost-reflect 依 descriptor
+# 動態解 protobuf binary → JSON。皆純 Rust，藏在 kafka feature 後。
+protox = { version = "0.9", optional = true }
+prost-reflect = { version = "0.16", features = ["serde"], optional = true }
+prost = { version = "0.14", optional = true }
 # 訊息 JS 篩選運算式（Conduktor 風）：純 Rust JS 引擎，藏在 kafka-js feature 後。
 # 編譯較重（+2~4 分鐘、二進位 +4~8MB），故獨立成 feature 讓開發/CI 可關。
 boa_engine = { version = "0.20", optional = true }
@@ -108,7 +113,7 @@ gui = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
 custom-protocol = ["gui", "tauri/custom-protocol"]
 # kafka：一等公民 Kafka 支援（rdkafka / librdkafka）。隨 gui 預設開啟，讓開源桌面版內建此功能；
 # slim CLI（dbk）以 --no-default-features 排除，免除 CMake / C toolchain 建置負擔。
-kafka = ["dep:rdkafka", "dep:reqwest", "dep:apache-avro"]
+kafka = ["dep:rdkafka", "dep:reqwest", "dep:apache-avro", "dep:protox", "dep:prost-reflect", "dep:prost"]
 # kafka-js：在 kafka 之上加內嵌 boa JS 引擎，供訊息 JS 篩選運算式。隨 default 開，可關以加速編譯。
 kafka-js = ["kafka", "dep:boa_engine"]
 # kafka-tls：在 kafka 之上額外開啟 rdkafka 的 ssl（TLS / SASL_SSL）。需預建 OpenSSL（見 P7 建置文件）。

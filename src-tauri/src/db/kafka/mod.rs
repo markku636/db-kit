@@ -16,6 +16,7 @@ pub mod dto;
 pub(crate) mod jsfilter;
 mod metrics;
 mod produce;
+mod proto;
 mod schema;
 mod tail;
 

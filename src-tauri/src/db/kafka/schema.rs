@@ -77,7 +77,24 @@ async fn check_sr_status(resp: reqwest::Response) -> AppResult<reqwest::Response
 #[derive(Clone)]
 struct CachedSchema {
     schema_type: String,
-    parsed: Option<Arc<apache_avro::Schema>>,
+    parsed: ParsedSchema,
+}
+
+/// 已解析的 schema（依 id 快取；id 不可變 → 無需失效）。
+#[derive(Clone)]
+enum ParsedSchema {
+    Avro(Arc<apache_avro::Schema>),
+    /// (DescriptorPool, root 檔名)。
+    Proto(Arc<prost_reflect::DescriptorPool>, String),
+    None,
+}
+
+/// SR schema 參照（protobuf import 依賴）。
+#[derive(Deserialize, Clone)]
+struct SrReference {
+    name: String,
+    subject: String,
+    version: i32,
 }
 
 pub struct SchemaRegistry {
@@ -105,6 +122,8 @@ struct SchemaByIdResp {
     schema: String,
     #[serde(rename = "schemaType")]
     schema_type: Option<String>,
+    #[serde(default)]
+    references: Vec<SrReference>,
 }
 
 impl SchemaRegistry {
@@ -436,9 +455,35 @@ impl SchemaRegistry {
             .map_err(query_err)?;
         let schema_type = resp.schema_type.unwrap_or_else(|| "AVRO".to_string());
         let parsed = if schema_type.eq_ignore_ascii_case("AVRO") {
-            apache_avro::Schema::parse_str(&resp.schema).ok().map(Arc::new)
+            apache_avro::Schema::parse_str(&resp.schema)
+                .ok()
+                .map(|s| ParsedSchema::Avro(Arc::new(s)))
+                .unwrap_or(ParsedSchema::None)
+        } else if schema_type.eq_ignore_ascii_case("PROTOBUF") {
+            // 遞迴取回 references（.proto import 依賴），編出 DescriptorPool。root 檔名固定。
+            const ROOT: &str = "__dbkit_root.proto";
+            let mut files: Vec<(String, String)> = vec![(ROOT.to_string(), resp.schema.clone())];
+            let mut depth = 0;
+            let mut queue: Vec<SrReference> = resp.references.clone();
+            while let Some(r) = queue.pop() {
+                depth += 1;
+                if depth > 50 {
+                    break; // 遞迴保險
+                }
+                if files.iter().any(|(n, _)| n == &r.name) {
+                    continue;
+                }
+                if let Ok((text, refs)) = self.fetch_ref_schema(&r.subject, r.version).await {
+                    files.push((r.name.clone(), text));
+                    queue.extend(refs);
+                }
+            }
+            super::proto::compile_pool(&files, ROOT)
+                .ok()
+                .map(|pool| ParsedSchema::Proto(Arc::new(pool), ROOT.to_string()))
+                .unwrap_or(ParsedSchema::None)
         } else {
-            None
+            ParsedSchema::None
         };
         let cached = CachedSchema {
             schema_type,
@@ -448,6 +493,28 @@ impl SchemaRegistry {
         Ok(cached)
     }
 
+    /// 取某 subject 版本的 .proto 文字 + 其 references（供 protobuf 依賴遞迴）。
+    async fn fetch_ref_schema(&self, subject: &str, version: i32) -> AppResult<(String, Vec<SrReference>)> {
+        #[derive(Deserialize)]
+        struct Resp {
+            schema: String,
+            #[serde(default)]
+            references: Vec<SrReference>,
+        }
+        let ver = if version <= 0 { "latest".to_string() } else { version.to_string() };
+        let r: Resp = self
+            .get(format!("{}/subjects/{}/versions/{}", self.base_url, subject, ver))
+            .send()
+            .await
+            .map_err(query_err)?
+            .error_for_status()
+            .map_err(query_err)?
+            .json()
+            .await
+            .map_err(query_err)?;
+        Ok((r.schema, r.references))
+    }
+
     /// 解 Confluent wire-format value → (顯示字串, encoding, schema_id)。非框架格式回 None。
     pub async fn decode(&self, bytes: &[u8]) -> Option<(String, String, i32)> {
         if bytes.len() < 5 || bytes[0] != 0x00 {
@@ -455,8 +522,8 @@ impl SchemaRegistry {
         }
         let id = i32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
         let cached = self.schema_by_id(id).await.ok()?;
-        if cached.schema_type.eq_ignore_ascii_case("AVRO") {
-            if let Some(schema) = &cached.parsed {
+        match &cached.parsed {
+            ParsedSchema::Avro(schema) => {
                 let mut cursor = &bytes[5..];
                 if let Ok(value) = apache_avro::from_avro_datum(schema, &mut cursor, None) {
                     // apache_avro::types::Value 未實作 Serialize，經 TryFrom → serde_json::Value。
@@ -466,11 +533,24 @@ impl SchemaRegistry {
                         }
                     }
                 }
+                Some((format!("(avro schema id {id}，解碼失敗)"), "avro".to_string(), id))
             }
-            return Some((format!("(avro schema id {id}，解碼失敗)"), "avro".to_string(), id));
+            ParsedSchema::Proto(pool, root) => {
+                // wire：0x00 + id(4) + message-indexes(zigzag varint) + protobuf payload。
+                let rest = &bytes[5..];
+                let decoded = super::proto::read_message_indexes(rest).and_then(|(idx, consumed)| {
+                    let desc = super::proto::resolve_message(pool, root, &idx)?;
+                    super::proto::decode_dynamic(desc, &rest[consumed..]).ok()
+                });
+                match decoded {
+                    Some(json) => Some((json, "protobuf".to_string(), id)),
+                    None => Some((format!("(protobuf schema id {id}，未解碼)"), "protobuf".to_string(), id)),
+                }
+            }
+            ParsedSchema::None => {
+                let enc = cached.schema_type.to_lowercase();
+                Some((format!("({enc} schema id {id}，未解碼)"), enc, id))
+            }
         }
-        // Protobuf / JSON-schema：MVP 顯示-only。
-        let enc = cached.schema_type.to_lowercase();
-        Some((format!("({enc} schema id {id}，未解碼)"), enc, id))
     }
 }
