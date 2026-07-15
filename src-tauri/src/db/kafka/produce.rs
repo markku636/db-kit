@@ -5,7 +5,7 @@ use std::time::Duration;
 use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::FutureRecord;
 
-use super::dto::{KafkaProduceRequest, KafkaProduceResult};
+use super::dto::{KafkaBatchResult, KafkaProduceRequest, KafkaProduceResult};
 use super::{query_err, KafkaDriver};
 use crate::error::AppResult;
 
@@ -37,5 +37,30 @@ impl KafkaDriver {
             }),
             Err((e, _msg)) => Err(query_err(e)),
         }
+    }
+
+    /// 批次發佈（並行 send）。單筆失敗不整體 Err，統計成功 / 失敗數與首個錯誤。
+    pub async fn produce_batch(&self, reqs: &[KafkaProduceRequest]) -> AppResult<KafkaBatchResult> {
+        let futs = reqs.iter().map(|r| self.produce(r));
+        let results = futures::future::join_all(futs).await;
+        let mut sent = 0u64;
+        let mut failed = 0u64;
+        let mut first_error = None;
+        for r in results {
+            match r {
+                Ok(_) => sent += 1,
+                Err(e) => {
+                    failed += 1;
+                    if first_error.is_none() {
+                        first_error = Some(e.to_string());
+                    }
+                }
+            }
+        }
+        Ok(KafkaBatchResult {
+            sent,
+            failed,
+            first_error,
+        })
     }
 }

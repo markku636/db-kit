@@ -15,9 +15,9 @@ import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { EditorView } from "@codemirror/view";
 import Icon from "./ui/Icon";
-import { toast, pickSaveFile } from "./ui";
+import { toast, uiConfirm, uiPrompt, pickSaveFile, copyToClipboard } from "./ui";
 import { useT } from "./i18n";
-import KafkaProduceDialog from "./KafkaProduceDialog";
+import KafkaProduceDialog, { type ProduceInitial } from "./KafkaProduceDialog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 type FilterMode = "simple" | "js";
@@ -46,6 +46,9 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [producing, setProducing] = useState(false);
+  // 重新處理：以某訊息預填發佈對話框（可改目標主題）。
+  const [reprocess, setReprocess] = useState<ProduceInitial | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ m: KafkaMessage; x: number; y: number } | null>(null);
   // 進階列（反序列化等）。任一進階條件作用中則預設展開。
   const [advOpen, setAdvOpen] = useState(false);
   const [keyDeser, setKeyDeser] = useState<Deser>("auto");
@@ -153,6 +156,36 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
   };
 
   const cancelScan = () => { api.kafkaJobCancel(connId, "scan").catch(() => {}); };
+
+  const openReprocess = (m: KafkaMessage) => {
+    setReprocess({ key: m.key, value: m.value, headers: m.headers, partition: null });
+    setRowMenu(null);
+  };
+
+  // 批次：把目前篩選結果送往另一主題（分批 ≤500）。
+  const sendFilteredToTopic = async () => {
+    if (filtered.length === 0) { toast.error(t("沒有可送出的訊息")); return; }
+    const dest = await uiPrompt(t("目標主題"), { placeholder: topic });
+    if (!dest) return;
+    if (!(await uiConfirm(t("即將送出 {n} 筆到 {topic}，確定？", { n: filtered.length, topic: dest }), { confirmText: t("送出") }))) return;
+    setBusy(true);
+    try {
+      let sent = 0, failed = 0;
+      const CHUNK = 500;
+      for (let i = 0; i < filtered.length; i += CHUNK) {
+        const reqs = filtered.slice(i, i + CHUNK).map((m) => ({
+          topic: dest, partition: null, key: m.key, value: m.value, headers: m.headers,
+        }));
+        const r = await api.kafkaProduceBatch(connId, reqs);
+        sent += r.sent; failed += r.failed;
+      }
+      toast.success(t("已送出 {sent}/{total}（失敗 {failed}）", { sent, total: filtered.length, failed }));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("發佈失敗"));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // 匯出目前（已篩選）訊息：重用後端 export_rows 管線（csv/json/xlsx）。
   const exportMessages = async () => {
@@ -347,6 +380,15 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
         </button>
         <button
           type="button"
+          onClick={sendFilteredToTopic}
+          disabled={busy || filtered.length === 0}
+          className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60 disabled:opacity-40"
+          title={t("將篩選結果送往主題…")}
+        >
+          {t("送往主題…")}
+        </button>
+        <button
+          type="button"
           onClick={() => setAdvOpen((v) => !v)}
           className={`px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 inline-flex items-center gap-1 ${advActive ? "text-accent" : "text-fg/60"}`}
           title={t("進階選項")}
@@ -482,6 +524,7 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
                 <tr
                   key={`${m.partition}-${m.offset}-${i}`}
                   onClick={() => setSelected(m)}
+                  onContextMenu={(e) => { e.preventDefault(); setSelected(m); setRowMenu({ m, x: e.clientX, y: e.clientY }); }}
                   className={`cursor-pointer border-b border-fg/5 hover:bg-fg/5 ${selected === m ? "bg-accent/10" : ""}`}
                 >
                   <td className="px-2 py-1 text-fg/50">{m.partition}</td>
@@ -554,6 +597,27 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
 
       {producing && (
         <KafkaProduceDialog connId={connId} topic={topic} onClose={() => setProducing(false)} />
+      )}
+
+      {reprocess && (
+        <KafkaProduceDialog
+          connId={connId}
+          topic={topic}
+          initial={reprocess}
+          allowTopicChange
+          onClose={() => setReprocess(null)}
+        />
+      )}
+
+      {rowMenu && (
+        <>
+          <div className="fixed inset-0 z-[89]" onClick={() => setRowMenu(null)} onContextMenu={(e) => { e.preventDefault(); setRowMenu(null); }} />
+          <div className="fixed z-[90] min-w-[160px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm" style={{ left: rowMenu.x, top: rowMenu.y }}>
+            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.key ?? "", t("已複製")); setRowMenu(null); }}>{t("複製 Key")}</button>
+            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.value ?? "", t("已複製")); setRowMenu(null); }}>{t("複製 Value")}</button>
+            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => openReprocess(rowMenu.m)}>{t("以此訊息發佈…")}</button>
+          </div>
+        </>
       )}
     </div>
   );

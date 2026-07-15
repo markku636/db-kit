@@ -21,10 +21,10 @@ use crate::scheduler::{self, BackupHistoryEntry, BackupSchedule, BackupStatus};
 use crate::store::{self, PersistedConnection};
 #[cfg(feature = "kafka")]
 use crate::db::kafka::dto::{
-    KafkaClusterInfo, KafkaConfigEntry, KafkaConsumeQuery, KafkaConsumeResult, KafkaConsumerGroup,
-    KafkaCreateTopicSpec, KafkaDeleteRecordsResult, KafkaGroupDetail, KafkaOffsetPlanRow,
-    KafkaOffsetReset, KafkaPartitionInfo, KafkaProduceRequest, KafkaProduceResult, KafkaSchema,
-    KafkaSchemaSubject, KafkaStart, KafkaTopic,
+    KafkaBatchResult, KafkaClusterInfo, KafkaConfigEntry, KafkaConsumeQuery, KafkaConsumeResult,
+    KafkaConsumerGroup, KafkaCreateTopicSpec, KafkaDeleteRecordsResult, KafkaGroupDetail,
+    KafkaOffsetPlanRow, KafkaOffsetReset, KafkaPartitionInfo, KafkaProduceRequest,
+    KafkaProduceResult, KafkaSchema, KafkaSchemaSubject, KafkaStart, KafkaTopic,
 };
 
 pub struct AppState {
@@ -1518,6 +1518,21 @@ pub async fn kafka_tail_stop(state: State<'_, AppState>, id: String) -> AppResul
         c.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     Ok(())
+}
+
+/// 批次發佈多則訊息（並行）。
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_produce_batch(
+    state: State<'_, AppState>,
+    id: String,
+    reqs: Vec<KafkaProduceRequest>,
+) -> AppResult<KafkaBatchResult> {
+    state
+        .manager
+        .kafka_driver(&id)?
+        .produce_batch(&reqs)
+        .await
 }
 
 /// 發佈一則訊息。

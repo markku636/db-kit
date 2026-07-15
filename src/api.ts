@@ -559,6 +559,7 @@ export interface KafkaProduceRequest {
   headers: KafkaHeader[];
 }
 export interface KafkaProduceResult { partition: number; offset: number }
+export interface KafkaBatchResult { sent: number; failed: number; first_error?: string | null }
 export interface KafkaConfigEntry {
   name: string;
   value: string;
@@ -871,6 +872,8 @@ export const api = {
   kafkaTailStop: (id: string) => invoke<void>("kafka_tail_stop", { id }),
   kafkaProduce: (id: string, req: KafkaProduceRequest) =>
     invoke<KafkaProduceResult>("kafka_produce", { id, req }),
+  kafkaProduceBatch: (id: string, reqs: KafkaProduceRequest[]) =>
+    invoke<KafkaBatchResult>("kafka_produce_batch", { id, reqs }),
   kafkaConsumerGroups: (id: string) => invoke<KafkaConsumerGroup[]>("kafka_consumer_groups", { id }),
   kafkaGroupDetail: (id: string, group: string) =>
     invoke<KafkaGroupDetail>("kafka_group_detail", { id, group }),

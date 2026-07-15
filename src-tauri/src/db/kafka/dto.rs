@@ -167,6 +167,15 @@ pub struct KafkaProduceResult {
     pub offset: i64,
 }
 
+/// 批次 / CSV 發佈結果。
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaBatchResult {
+    pub sent: u64,
+    pub failed: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_error: Option<String>,
+}
+
 /// DeleteRecords 每分區結果。
 #[derive(Debug, Clone, Serialize)]
 pub struct KafkaDeleteRecordsResult {

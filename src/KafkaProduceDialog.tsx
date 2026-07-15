@@ -1,27 +1,42 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Send } from "lucide-react";
 import { api, type KafkaHeader } from "./api";
 import { Modal, Button, Field, Input, Textarea } from "./ui/index";
 import { toast } from "./ui";
 import { useT } from "./i18n";
 
-// 發佈訊息對話框（仿 NewKeyDialog）。
-export default function KafkaProduceDialog({ connId, topic, onClose, onSent }: {
+export interface ProduceInitial {
+  key?: string | null;
+  value?: string | null;
+  headers?: KafkaHeader[];
+  partition?: number | null;
+}
+
+// 發佈訊息對話框（仿 NewKeyDialog）。allowTopicChange 時 topic 可改（重新處理到其他主題）。
+export default function KafkaProduceDialog({ connId, topic, onClose, onSent, initial, allowTopicChange }: {
   connId: string; topic: string; onClose: () => void; onSent?: () => void;
+  initial?: ProduceInitial; allowTopicChange?: boolean;
 }) {
   const t = useT();
-  const [partition, setPartition] = useState("");
-  const [key, setKey] = useState("");
-  const [value, setValue] = useState("");
-  const [headers, setHeaders] = useState<KafkaHeader[]>([]);
+  const [targetTopic, setTargetTopic] = useState(topic);
+  const [topics, setTopics] = useState<string[]>([]);
+  const [partition, setPartition] = useState(initial?.partition != null ? String(initial.partition) : "");
+  const [key, setKey] = useState(initial?.key ?? "");
+  const [value, setValue] = useState(initial?.value ?? "");
+  const [headers, setHeaders] = useState<KafkaHeader[]>(initial?.headers ?? []);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!allowTopicChange) return;
+    api.kafkaTopics(connId).then((ts) => setTopics(ts.map((x) => x.name).sort())).catch(() => {});
+  }, [connId, allowTopicChange]);
 
   const submit = async () => {
     if (busy) return;
     setBusy(true);
     try {
       const res = await api.kafkaProduce(connId, {
-        topic,
+        topic: targetTopic,
         partition: partition.trim() === "" ? null : Number(partition),
         key: key === "" ? null : key,
         value: value === "" ? null : value,
@@ -48,7 +63,7 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent }: {
   return (
     <Modal
       onClose={onClose}
-      title={`${t("發佈訊息")} · ${topic}`}
+      title={`${t("發佈訊息")} · ${targetTopic}`}
       icon={Send}
       size="md"
       footer={
@@ -59,6 +74,18 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent }: {
       }
     >
       <div className="space-y-3 text-sm">
+        {allowTopicChange && (
+          <Field label={t("目標主題")}>
+            <select
+              value={targetTopic}
+              onChange={(e) => setTargetTopic(e.target.value)}
+              className="w-full bg-inset border border-fg/10 rounded px-2 py-1.5 outline-none focus:border-accent"
+            >
+              {!topics.includes(targetTopic) && <option value={targetTopic}>{targetTopic}</option>}
+              {topics.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+            </select>
+          </Field>
+        )}
         <div className="flex gap-3">
           <Field label={t("分區（空白＝自動）")} className="w-40">
             <Input value={partition} onChange={(e) => setPartition(e.target.value)} placeholder={t("自動")} />

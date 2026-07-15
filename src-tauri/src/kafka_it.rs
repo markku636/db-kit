@@ -285,6 +285,19 @@ async fn kafka_end_to_end() {
         eprintln!("[kafka_it] js_filter matched={} + compile-error OK", js.matched);
     }
 
+    // 批次發佈：3 筆並行 → sent==3
+    let batch = d
+        .produce_batch(&[
+            KafkaProduceRequest { topic: topic.clone(), partition: None, key: Some("b0".into()), value: Some("v0".into()), headers: vec![] },
+            KafkaProduceRequest { topic: topic.clone(), partition: None, key: Some("b1".into()), value: Some("v1".into()), headers: vec![] },
+            KafkaProduceRequest { topic: topic.clone(), partition: None, key: Some("b2".into()), value: Some("v2".into()), headers: vec![] },
+        ])
+        .await
+        .expect("produce_batch");
+    assert_eq!(batch.sent, 3, "batch sent 3");
+    assert_eq!(batch.failed, 0, "batch none failed");
+    eprintln!("[kafka_it] produce_batch sent={} failed={}", batch.sent, batch.failed);
+
     // live-tail：BaseConsumer assign@End，發佈後 poll 到；drop 快速返回
     let consumer = d.build_tail_consumer(&topic, None, KafkaStart::End).await.expect("build_tail_consumer");
     tokio::time::sleep(Duration::from_millis(800)).await; // 等 assign 生效
