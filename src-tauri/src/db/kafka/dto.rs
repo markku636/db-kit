@@ -413,6 +413,23 @@ pub struct KafkaSchemaSubject {
     pub latest: i32,
 }
 
+/// ACL 綁定 / 過濾器（所有欄位字串；過濾時空字串 / "any" = 萬用）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KafkaAclBinding {
+    /// "topic" | "group" | "cluster" | "transactional_id" | "any"
+    pub resource_type: String,
+    pub name: String,
+    /// "literal" | "prefixed" | "any"
+    pub pattern_type: String,
+    pub principal: String,
+    pub host: String,
+    /// "read"|"write"|"create"|"delete"|"alter"|"describe"|"cluster_action"|
+    /// "describe_configs"|"alter_configs"|"idempotent_write"|"all"|"any"
+    pub operation: String,
+    /// "allow" | "deny" | "any"
+    pub permission: String,
+}
+
 /// Kafka Connect 連接器（含任務狀態）。
 #[derive(Debug, Clone, Serialize)]
 pub struct KafkaConnector {

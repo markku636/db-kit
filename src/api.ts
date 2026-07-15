@@ -694,6 +694,15 @@ export interface KafkaConnector {
 }
 export interface KafkaConnectPlugin { class: string; kind: string; version: string }
 export interface KafkaConnectValidation { error_count: number; errors: KafkaHeader[] }
+export interface KafkaAclBinding {
+  resource_type: string; // topic | group | cluster | transactional_id | any
+  name: string;
+  pattern_type: string; // literal | prefixed | any
+  principal: string;
+  host: string;
+  operation: string;
+  permission: string; // allow | deny | any
+}
 export interface KafkaSchema {
   subject: string;
   version: number;
@@ -1032,6 +1041,9 @@ export const api = {
   kafkaConnectPlugins: (id: string) => invoke<KafkaConnectPlugin[]>("kafka_connect_plugins", { id }),
   kafkaConnectValidate: (id: string, cls: string, config: Record<string, unknown>) =>
     invoke<KafkaConnectValidation>("kafka_connect_validate", { id, class: cls, config }),
+  kafkaAclsList: (id: string, filter: KafkaAclBinding) => invoke<KafkaAclBinding[]>("kafka_acls_list", { id, filter }),
+  kafkaAclsCreate: (id: string, bindings: KafkaAclBinding[]) => invoke<KafkaAclBinding[]>("kafka_acls_create", { id, bindings }),
+  kafkaAclsDelete: (id: string, filter: KafkaAclBinding) => invoke<KafkaAclBinding[]>("kafka_acls_delete", { id, filter }),
 
   // AI 助手：偵測 claude CLI / 送出問答（串流走 onClaudeStream）/ 取消。
   claudeDetect: () => invoke<ClaudeStatus>("claude_detect"),

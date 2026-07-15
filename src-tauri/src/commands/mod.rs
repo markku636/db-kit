@@ -2259,3 +2259,20 @@ pub async fn kafka_connect_plugins(state: State<'_, AppState>, id: String) -> Ap
 pub async fn kafka_connect_validate(state: State<'_, AppState>, id: String, class: String, config: serde_json::Value) -> AppResult<crate::db::kafka::dto::KafkaConnectValidation> {
     state.manager.kafka_driver(&id)?.connect_validate(&class, config).await
 }
+
+// ---- Kafka ACL ----
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_acls_list(state: State<'_, AppState>, id: String, filter: crate::db::kafka::dto::KafkaAclBinding) -> AppResult<Vec<crate::db::kafka::dto::KafkaAclBinding>> {
+    state.manager.kafka_driver(&id)?.acls_list(filter).await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_acls_create(state: State<'_, AppState>, id: String, bindings: Vec<crate::db::kafka::dto::KafkaAclBinding>) -> AppResult<Vec<crate::db::kafka::dto::KafkaAclBinding>> {
+    state.manager.kafka_driver(&id)?.acls_create(bindings).await
+}
+#[cfg(feature = "kafka")]
+#[tauri::command]
+pub async fn kafka_acls_delete(state: State<'_, AppState>, id: String, filter: crate::db::kafka::dto::KafkaAclBinding) -> AppResult<Vec<crate::db::kafka::dto::KafkaAclBinding>> {
+    state.manager.kafka_driver(&id)?.acls_delete(filter).await
+}

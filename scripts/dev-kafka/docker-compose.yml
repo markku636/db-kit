@@ -1,0 +1,66 @@
+# db-kit Kafka 開發 / 整合測試環境。
+#
+#   docker compose -f scripts/dev-kafka/docker-compose.yml up -d
+#
+# 起 broker（KRaft，:9092）+ Schema Registry（:8081）+ Kafka Connect（:8083）。
+# 整合測試（需 live broker）：
+#   $env:DBKIT_KAFKA_IT="1"
+#   $env:DBKIT_KAFKA_SR_URL="http://localhost:8081"        # SR 寫入 / protobuf 測試
+#   $env:DBKIT_KAFKA_CONNECT_URL="http://localhost:8083"    # Connect 測試
+#   .\build-kafka.ps1 test --features kafka-js kafka_it
+#
+# ACL 測試需啟用授權器：見下方 broker 的註解變體（換成 SASL_PLAINTEXT + StandardAuthorizer），
+# 並設 $env:DBKIT_KAFKA_ACL="1"。
+services:
+  kafka:
+    image: apache/kafka:latest
+    container_name: dbkit-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # ---- ACL 測試變體（取消註解並改用 SASL 監聽器）----
+      # KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
+      # KAFKA_SUPER_USERS: User:admin
+      # KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true"
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    container_name: dbkit-sr
+    depends_on:
+      - kafka
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+
+  connect:
+    image: confluentinc/cp-kafka-connect:7.6.0
+    container_name: dbkit-connect
+    depends_on:
+      - kafka
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_GROUP_ID: dbkit-connect
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components

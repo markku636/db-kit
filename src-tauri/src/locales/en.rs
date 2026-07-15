@@ -544,6 +544,11 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "（非 Confluent wire format，無法以 Avro 解碼）" => {
             "(Not Confluent wire format; cannot decode as Avro)"
         }
+        "此連線未設定 Kafka Connect" => "This connection has no Kafka Connect configured",
+        "連接器正在重新平衡，請稍後再試" => "The connector is rebalancing; please try again shortly",
+        "叢集未啟用授權器（authorizer），無法管理 ACL" => {
+            "The cluster has no authorizer enabled; ACLs cannot be managed"
+        }
         "此連線未設定 Schema Registry，無法以 Avro 發佈" => {
             "No Schema Registry configured for this connection; cannot produce as Avro"
         }

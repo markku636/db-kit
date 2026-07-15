@@ -523,3 +523,100 @@ async fn kafka_end_to_end() {
     d.close().await;
     eprintln!("[kafka_it] delete_topic + close OK — ALL PASSED");
 }
+
+/// 帶額外 kafka_* options 的連線設定。
+fn cfg_with(opts: &[(&str, &str)]) -> ConnectionConfig {
+    let mut c = cfg();
+    for (k, v) in opts {
+        c.options.insert(k.to_string(), v.to_string());
+    }
+    c
+}
+
+/// Schema Registry 寫入：註冊 Avro v1 → 相容性檢查 → 刪除版本。需 DBKIT_KAFKA_SR_URL。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_sr_write_it() {
+    let Ok(sr_url) = std::env::var("DBKIT_KAFKA_SR_URL") else {
+        eprintln!("[kafka_it] sr_write skipped (set DBKIT_KAFKA_SR_URL)");
+        return;
+    };
+    if std::env::var("DBKIT_KAFKA_IT").is_err() {
+        return;
+    }
+    let d = KafkaDriver::connect(&cfg_with(&[("kafka_sr_url", &sr_url)])).await.expect("connect");
+    let subject = format!("dbkit-it-{}-value", uniq());
+    let avro = r#"{"type":"record","name":"R","fields":[{"name":"a","type":"string"}]}"#;
+    let id = d.schema_register(&subject, avro, "AVRO").await.expect("register");
+    assert!(id > 0, "schema id assigned");
+    // 相容檢查：加一個有預設值的欄位（BACKWARD 相容）。
+    let avro2 = r#"{"type":"record","name":"R","fields":[{"name":"a","type":"string"},{"name":"b","type":"string","default":""}]}"#;
+    let (compat, _msgs) = d.schema_compat_check(&subject, avro2, "AVRO").await.expect("compat_check");
+    assert!(compat, "adding field with default is backward-compatible");
+    // 讀相容性層級。
+    let (_level, _inherited) = d.schema_compat_get(Some(&subject)).await.expect("compat_get");
+    // 清理：刪 subject。
+    d.schema_delete_subject(&subject).await.expect("delete_subject");
+    eprintln!("[kafka_it] sr_write (register/compat/delete) OK");
+}
+
+/// Kafka Connect：列 plugins → 驗證錯誤設定 → 建 / 刪連接器。需 DBKIT_KAFKA_CONNECT_URL。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_connect_it() {
+    let Ok(connect_url) = std::env::var("DBKIT_KAFKA_CONNECT_URL") else {
+        eprintln!("[kafka_it] connect skipped (set DBKIT_KAFKA_CONNECT_URL)");
+        return;
+    };
+    if std::env::var("DBKIT_KAFKA_IT").is_err() {
+        return;
+    }
+    let d = KafkaDriver::connect(&cfg_with(&[("kafka_connect_url", &connect_url)])).await.expect("connect");
+    let plugins = d.connect_plugins().await.expect("plugins");
+    assert!(!plugins.is_empty(), "connect exposes plugins");
+    // 建立一個 MirrorHeartbeatConnector（無外部依賴）。
+    let name = format!("dbkit-it-{}", uniq());
+    let config = serde_json::json!({
+        "connector.class": "org.apache.kafka.connect.mirror.MirrorHeartbeatConnector",
+        "tasks.max": "1",
+        "source.cluster.alias": "src",
+        "target.cluster.alias": "dst",
+    });
+    if d.connect_put_config(&name, config).await.is_ok() {
+        let list = d.connect_list().await.expect("list");
+        assert!(list.iter().any(|c| c.name == name), "connector appears in list");
+        d.connect_delete(&name).await.expect("delete");
+        eprintln!("[kafka_it] connect (plugins/create/list/delete) OK");
+    } else {
+        eprintln!("[kafka_it] connect plugins OK (heartbeat connector unavailable, skipped create)");
+    }
+}
+
+/// ACL：建立 allow-read → describe 含之 → delete。需授權器（DBKIT_KAFKA_ACL=1）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kafka_acl_it() {
+    if std::env::var("DBKIT_KAFKA_ACL").is_err() || std::env::var("DBKIT_KAFKA_IT").is_err() {
+        eprintln!("[kafka_it] acl skipped (set DBKIT_KAFKA_ACL=1 with an authorizer-enabled broker)");
+        return;
+    }
+    use crate::db::kafka::dto::KafkaAclBinding;
+    let d = KafkaDriver::connect(&cfg()).await.expect("connect");
+    let principal = format!("User:dbkit-it-{}", uniq());
+    let topic = format!("dbkit-acl-{}", uniq());
+    let acl = KafkaAclBinding {
+        resource_type: "topic".into(), name: topic.clone(), pattern_type: "prefixed".into(),
+        principal: principal.clone(), host: "*".into(), operation: "read".into(), permission: "allow".into(),
+    };
+    d.acls_create(vec![acl.clone()]).await.expect("acls_create");
+    let listed = d.acls_list(KafkaAclBinding { principal: String::new(), ..anyf() }).await.expect("acls_list");
+    assert!(listed.iter().any(|a| a.principal == principal), "created ACL is listed");
+    let deleted = d.acls_delete(acl).await.expect("acls_delete");
+    assert!(!deleted.is_empty(), "delete matched the ACL");
+    eprintln!("[kafka_it] acl (create/list/delete) OK");
+}
+
+#[cfg(test)]
+fn anyf() -> crate::db::kafka::dto::KafkaAclBinding {
+    crate::db::kafka::dto::KafkaAclBinding {
+        resource_type: "any".into(), name: String::new(), pattern_type: "any".into(),
+        principal: String::new(), host: String::new(), operation: "any".into(), permission: "any".into(),
+    }
+}

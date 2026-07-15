@@ -304,6 +304,12 @@ pub fn run() {
             commands::kafka_connect_plugins,
             #[cfg(feature = "kafka")]
             commands::kafka_connect_validate,
+            #[cfg(feature = "kafka")]
+            commands::kafka_acls_list,
+            #[cfg(feature = "kafka")]
+            commands::kafka_acls_create,
+            #[cfg(feature = "kafka")]
+            commands::kafka_acls_delete,
             commands::backup_detect_cli,
             commands::backup_run,
             commands::backup_restore,

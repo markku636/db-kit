@@ -8,6 +8,7 @@
 //! 執行緒模型：librdkafka 的 metadata / watermark / offset 查詢是阻塞式 C 呼叫，
 //! 一律包在 `tokio::task::spawn_blocking`；AdminClient / FutureProducer 走原生 async。
 
+mod acl;
 mod admin;
 mod config;
 mod connect;
