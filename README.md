@@ -64,6 +64,12 @@
   <img src="docs/screenshots/05-advanced-search.png" alt="進階物件搜尋" width="860">
 </p>
 
+**Kafka 訊息瀏覽器** — 主題樹、分區 / 位移 / Key / Value 一覽、JSON 明細與 headers；一次性查詢與即時 tail，另有叢集總覽、消費者群組、監控告警、Schema Registry / Connect / ACL 面板：
+
+<p align="center">
+  <img src="docs/screenshots/06-kafka.png" alt="Kafka 訊息瀏覽器" width="860">
+</p>
+
 ## 下載安裝
 
 <p align="center">

@@ -8,6 +8,7 @@ export const CONNECTIONS = [
   { id: "c-mssql", name: "reporting-mssql", kind: "mssql", host: "10.20.0.44", port: 1433, username: "sa", password: "", database: "Reporting", max_connections: 5 },
   { id: "c-mongo", name: "events-mongo", kind: "mongo", host: "10.20.0.52", port: 27017, username: "app", password: "", database: "events", max_connections: 5 },
   { id: "c-redis", name: "cache-redis", kind: "redis", host: "10.20.0.60", port: 6379, username: "", password: "", max_connections: 5 },
+  { id: "c-kafka", name: "stream-kafka", kind: "kafka", host: "10.20.0.71", port: 9092, username: "", password: "", max_connections: 5 },
   { id: "c-sqlite", name: "local.sqlite", kind: "sqlite", host: "", port: 0, username: "", password: "", database: "D:/data/local.sqlite", max_connections: 2 },
 ];
 
@@ -17,6 +18,7 @@ export const DATABASES = {
   "c-mssql": ["Reporting", "master", "tempdb"],
   "c-mongo": ["events", "admin", "local"],
   "c-redis": ["0", "1"], // Redis driver 的 list_databases 回 "0".."15"
+  "c-kafka": ["cluster"], // Kafka driver 回單一合成 cluster 節點
   "c-sqlite": ["main"],
 };
 
@@ -36,6 +38,11 @@ export const TABLES = {
   // Redis 無表概念：driver 回一個虛擬 "keys" 節點
   "c-redis:0": [{ name: "keys", kind: "keyspace" }],
   "c-redis:1": [{ name: "keys", kind: "keyspace" }],
+  // Kafka：主題直接掛在 cluster 節點下（TableInfo kind 一律 "table"）
+  "c-kafka:cluster": [
+    "app.logs", "inventory.updates", "notifications.email", "orders.events",
+    "payments.completed", "shipments.tracking", "users.signups",
+  ].map((name) => ({ name, kind: "table" })),
 };
 
 export const ORDERS_COLUMNS = [
@@ -201,6 +208,56 @@ export const REDIS_INFO = [
   { name: "Stats", items: [["total_connections_received", "1284551"], ["instantaneous_ops_per_sec", "2847"], ["keyspace_hits", "88214005"], ["keyspace_misses", "1204889"]] },
   { name: "Keyspace", items: [["db0", "keys=18,expires=9,avg_ttl=1742000"]] },
 ];
+
+// ---- Kafka（orders.events 主題的訊息瀏覽器）----
+export const KAFKA_PARTITIONS = [
+  { partition: 0, leader: 1, replicas: [1, 2, 3], isr: [1, 2, 3], low: 0, high: 84_127 },
+  { partition: 1, leader: 2, replicas: [2, 3, 1], isr: [2, 3, 1], low: 0, high: 83_902 },
+  { partition: 2, leader: 3, replicas: [3, 1, 2], isr: [3, 1, 2], low: 0, high: 84_455 },
+];
+
+// 訊息時間戳一律由固定字串推導（截圖需可重現，禁 Date.now）。
+const kts = (s) => Date.parse(s);
+const kmsg = (partition, offset, ts, orderId, event, extra) => ({
+  conn_id: "c-kafka",
+  topic: "orders.events",
+  partition,
+  offset,
+  timestamp: kts(ts),
+  key: `order-${orderId}`,
+  value: JSON.stringify({ order_id: orderId, event, ...extra }),
+  headers: [{ key: "source", value: "checkout-api" }, { key: "trace_id", value: `tr-${(orderId * 2654435761 % 0xffffff).toString(16)}` }],
+  key_encoding: "string",
+  value_encoding: "json",
+  value_bytes: 0,
+  truncated: false,
+  schema_id: null,
+});
+const KAFKA_MESSAGES = [
+  kmsg(0, 84_112, "2026-07-02T20:41:07+08:00", 48219, "order.paid", { amount: 7320.5, currency: "TWD", method: "credit_card" }),
+  kmsg(2, 84_440, "2026-07-02T20:42:33+08:00", 48220, "order.shipped", { carrier: "black-cat", tracking_no: "BC-8842-1107" }),
+  kmsg(1, 83_889, "2026-07-02T20:44:02+08:00", 48221, "order.delivered", { signed_by: "customer", pod: true }),
+  kmsg(0, 84_113, "2026-07-02T20:46:19+08:00", 48222, "order.paid", { amount: 15990, currency: "TWD", method: "line_pay", coupon: "VIP500" }),
+  kmsg(2, 84_441, "2026-07-02T20:48:55+08:00", 48223, "order.created", { amount: 1080, currency: "TWD", items: 2 }),
+  kmsg(1, 83_890, "2026-07-02T20:50:31+08:00", 48217, "order.refunded", { amount: 2450, currency: "TWD", reason: "damaged" }),
+  kmsg(0, 84_114, "2026-07-02T20:52:08+08:00", 48224, "order.shipped", { carrier: "sf-express", tracking_no: "SF-3391-0725" }),
+  kmsg(2, 84_442, "2026-07-02T20:53:47+08:00", 48225, "order.delivered", { signed_by: "front-desk", pod: true }),
+  kmsg(1, 83_891, "2026-07-02T20:55:26+08:00", 48226, "order.paid", { amount: 8850, currency: "TWD", method: "apple_pay" }),
+  kmsg(0, 84_115, "2026-07-02T20:56:50+08:00", 48227, "order.created", { amount: 199, currency: "TWD", items: 1 }),
+  kmsg(2, 84_443, "2026-07-02T20:58:12+08:00", 48228, "order.delivered", { signed_by: "customer", pod: false }),
+  kmsg(1, 83_892, "2026-07-02T20:59:03+08:00", 48229, "order.paid", { amount: 3199, currency: "TWD", method: "credit_card" }),
+  kmsg(0, 84_116, "2026-07-02T20:59:41+08:00", 48230, "order.shipped", { carrier: "black-cat", tracking_no: "BC-8901-2216" }),
+  kmsg(2, 84_444, "2026-07-02T21:00:00+08:00", 48231, "order.delivered", { signed_by: "customer", pod: true, rating_prompt: true }),
+].map((m) => ({ ...m, value_bytes: new TextEncoder().encode(m.value).length }));
+
+export const KAFKA_CONSUME = {
+  messages: KAFKA_MESSAGES,
+  scanned: KAFKA_MESSAGES.length,
+  matched: KAFKA_MESSAGES.length,
+  reached_end: true,
+  eval_errors: 0,
+  elapsed_ms: 212,
+};
 
 export const SEARCH_HITS = [
   { database: "shop", object_type: "table", object_name: "orders", parent: null, matched_in: "name", snippet: null, extra: null },

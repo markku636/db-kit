@@ -91,6 +91,9 @@ function installShim(fx) {
     explain_query: () => fx.EXPLAIN_RESULT,
     redis_keys: () => fx.REDIS_KEYS,
     redis_key_page: () => fx.REDIS_KEY_PAGE,
+    kafka_topic_partitions: () => fx.KAFKA_PARTITIONS,
+    kafka_consume: () => fx.KAFKA_CONSUME,
+    kafka_tail_stop: () => null,
     server_info: () => fx.REDIS_INFO,
     redis_slowlog: () => [],
     redis_clients: () => [],
@@ -184,6 +187,20 @@ const SHOTS = {
     await page.getByText("cache-redis", { exact: true }).click();
     await sleep(1200);
     await shot(page, "04-redis");
+  },
+
+  async "06-kafka"(page) {
+    await page.getByText("stream-kafka", { exact: true }).dblclick();
+    await sleep(900);
+    await page.getByText("cluster", { exact: true }).click(); // 展開合成 cluster 節點 → 主題直接列在其下
+    await sleep(700);
+    await page.waitForSelector('[data-tree-table="orders.events"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="orders.events"]').first().click(); // 單擊開訊息瀏覽器
+    await sleep(1000);
+    // 分頁列也有「查詢」home 分頁按鈕，取 last 才是訊息瀏覽器工具列的查詢鈕
+    await page.getByRole("button", { name: "查詢", exact: true }).last().click(); // 消費近期訊息（shim 直接回假資料）
+    await sleep(1500);
+    await shot(page, "06-kafka");
   },
 
   async "05-advanced-search"(page) {

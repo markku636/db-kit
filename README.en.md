@@ -65,6 +65,12 @@ One codebase, one consistent experience, shipping **native desktop apps for Wind
   <img src="docs/screenshots/05-advanced-search.png" alt="Advanced object search" width="860">
 </p>
 
+**Kafka message browser** — topic tree with partition / offset / key / value at a glance, JSON detail pane with headers; one-shot queries and live tail, plus cluster overview, consumer groups, monitoring & alerts, and Schema Registry / Connect / ACL panels:
+
+<p align="center">
+  <img src="docs/screenshots/06-kafka.png" alt="Kafka message browser" width="860">
+</p>
+
 ## Download & install
 
 <p align="center">
