@@ -14,6 +14,7 @@ import { useAssistant } from "./assistant";
 import type { PaletteItem } from "./CommandPalette";
 import lazyOverlay from "./ui/lazyOverlay";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
+import { kindIcon } from "./kindIcons";
 import { friendlyDbError } from "./dbErrors";
 import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
@@ -454,12 +455,11 @@ export default function App() {
             title={`${KIND_META[active.kind].label} · ${active.host}:${active.port}${isConnected ? t(" · 已連線") : t(" · 未連線")}`}
           >
             <span
-              className="w-2 h-2 rounded-full shrink-0"
-              style={{
-                background: isConnected ? KIND_META[active.kind].color : "transparent",
-                border: `1px solid ${KIND_META[active.kind].color}`,
-              }}
-            />
+              className={`shrink-0 flex ${isConnected ? "" : "text-fg/35"}`}
+              style={isConnected ? { color: KIND_META[active.kind].color } : undefined}
+            >
+              <Icon icon={kindIcon(active.kind)} size={13} />
+            </span>
             <span className="truncate">
               {KIND_META[active.kind].label} · {active.host}:{active.port}
               {isConnected ? t(" · 已連線") : t(" · 未連線")}
@@ -2326,12 +2326,18 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
               }`}
             >
               {busy ? (
-                <span className="w-2 h-2 shrink-0 rounded-full border border-fg/50 border-t-transparent animate-spin" />
+                <span className="w-3.5 h-3.5 shrink-0 grid place-items-center">
+                  <Icon icon={Loader2} size={14} className="text-fg/50 animate-spin" />
+                </span>
               ) : (
+                // 依資料庫類型顯示圖示（取代原狀態圓點）：已連線=亮色（kind 色）、未連線=灰暗。
                 <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ background: connected ? meta.color : "transparent", border: `1px solid ${meta.color}` }}
-                />
+                  className={`shrink-0 flex ${connected ? "" : "text-fg/35"}`}
+                  style={connected ? { color: meta.color } : undefined}
+                  title={connected ? `${meta.label}${t(" · 已連線")}` : `${meta.label}${t(" · 未連線")}`}
+                >
+                  <Icon icon={kindIcon(c.kind)} size={14} />
+                </span>
               )}
               <span className="truncate flex-1" title={`${c.name} · ${KIND_META[c.kind].label} · ${c.host}:${c.port}`}>{c.name}</span>
               {readonlyConns[c.id] && <span className="shrink-0 text-[9px] px-1 rounded bg-amber-400/20 text-amber-300/90" title={t("唯讀模式：擋寫入 / DDL 與資料格編輯")}>{t("唯讀")}</span>}
