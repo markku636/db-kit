@@ -48,7 +48,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- Linux 系統依賴（Tauri v2 需 webkit2gtk-4.1；AppImage 需 patchelf）---
+      # --- Linux 系統依賴（Tauri v2 需 webkit2gtk-4.1；AppImage 需 patchelf；
+      #     rdkafka-sys 的 cmake-build 從原始碼編 librdkafka 2.12，預設開 curl（OIDC token 端點）
+      #     需要 libcurl 開發標頭，缺了會 fatal error: curl/curl.h: No such file or directory）---
       - name: Install Linux system deps
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -61,6 +63,7 @@ jobs:
             curl wget file \
             libxdo-dev \
             libssl-dev \
+            libcurl4-openssl-dev \
             libayatana-appindicator3-dev
 
       # Node 24（內建 npm 11）：package-lock.json 由本機 npm 11 產生，npm 10（Node 20 內建）
