@@ -35,6 +35,7 @@ import Select from "./ui/Select";
 import { buildExplainJsonSql, parseExplainPlan, type PlanNode } from "./explain";
 import type { MongoQueryEditorHandle } from "./MongoQueryEditor";
 import type { ElasticQueryEditorHandle } from "./ElasticQueryEditor";
+import { buildSqlNlPrompt, buildEsNlPrompt } from "./nlPrompt";
 import { parseMongoExplain, withVerbosity, type MongoExplainModel } from "./mongoExplain";
 import logoMark from "./assets/db-kit-hero.png";
 import Icon from "./ui/Icon";
@@ -99,6 +100,7 @@ const MongoExplainPlan = lazyOverlay(() => import("./MongoExplainPlan"));
 const SqlEditor = lazy(() => import("./SqlEditor"));
 const MongoQueryEditor = lazy(() => import("./MongoQueryEditor"));
 const ElasticQueryEditor = lazy(() => import("./ElasticQueryEditor"));
+const NlQueryBar = lazy(() => import("./NlQueryBar"));
 
 // ---- 依選取的樹節點，組「新查詢分頁」的起始 SQL（對標 DataGrip / Navicat：在物件上開查詢即帶範圍）----
 //  - 資料表 / 檢視：USE db;（mysql / external）或 SET search_path（postgres）＋ 一條可執行的 SELECT … LIMIT 100；
@@ -3411,6 +3413,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 多語句批次中實際出錯的那一條（單句時為 null）；供 AI prompt 與「第 N 條」錯誤訊息對位。
   const [errStmt, setErrStmt] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [nlOpen, setNlOpen] = useState(false);
   const [elapsed, setElapsed] = useState<number | null>(null);
   // 執行中的即時回饋：經過時間（250ms 更新）與多語句進度「第 N/M 條」。
   const [liveMs, setLiveMs] = useState<number | null>(null);
@@ -3488,6 +3491,29 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         else localStorage.removeItem(sqlStoreKey(activeId, tabId));
       } catch { /* 忽略 */ }
     }
+  };
+
+  // AI 生成查詢：SQL 編輯器類型與 Elasticsearch 支援；用本地 claude CLI 把自然語言轉成語句。
+  const supportsNlQuery = supportsSqlEditor || kind === "elastic";
+  const nlLang: "sql" | "json" = kind === "elastic" ? "json" : "sql";
+  // 生成用 prompt：注入 schema（SQL）或 mapping（ES）。選中表 / index 取自側欄節點。
+  const buildNlPrompt = async (nlText: string): Promise<string> => {
+    const uiLang = useLang.getState().lang;
+    const node = useStore.getState().selectedNode;
+    if (kind === "elastic") {
+      const targetIndex = node && node.type === "table" && node.kind === "elastic" ? node.table : null;
+      return buildEsNlPrompt({ connId: activeId!, nl: nlText, targetIndex, uiLang });
+    }
+    const db = queryDb || connections.find((c) => c.id === activeId)?.database || "";
+    const selectedTable = node && node.type === "table" ? node.table : null;
+    return buildSqlNlPrompt({ connId: activeId!, kind: kind!, db, nl: nlText, selectedTable, uiLang });
+  };
+  // 套用生成語句：原草稿非空先存入查詢歷史（同 Ctrl+N 路徑），再填入編輯器。
+  const applyNlStatement = (code: string) => {
+    if (sql.trim()) setHistory((h) => pushQueryHistory(h, sql, connections.find((c) => c.id === activeId)?.name));
+    persistSql(code);
+    toast.success(t("已帶入編輯器（原內容已存入歷史）"));
+    (kind === "elastic" ? elasticEditorRef : editorRef).current?.focus?.();
   };
 
   // 切換連線：載入該連線上次的查詢內容（或該類型預設），並清掉殘留結果。
@@ -3894,8 +3920,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 查詢面板快捷鍵：Ctrl/Cmd+S 另存 .sql、Ctrl/Cmd+O 開啟 .sql、Ctrl/Cmd+Shift+F 格式化 SQL
   //（以 ref 取最新函式，listener 只掛一次）。僅在查詢分頁掛載時存在；有對話框開啟時讓路。
   const formatCurrent = () => { if (supportsSqlEditor && sql.trim()) persistSql(formatSql(sql)); };
-  const fileShortcutRef = useRef({ saveSqlFile, openSqlFile, formatCurrent });
-  fileShortcutRef.current = { saveSqlFile, openSqlFile, formatCurrent };
+  const toggleNl = () => { if (supportsNlQuery) setNlOpen((v) => !v); };
+  const fileShortcutRef = useRef({ saveSqlFile, openSqlFile, formatCurrent, toggleNl });
+  fileShortcutRef.current = { saveSqlFile, openSqlFile, formatCurrent, toggleNl };
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
@@ -3903,6 +3930,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       const k = e.key.toLowerCase();
       if (e.shiftKey) {
         if (k === "f") { e.preventDefault(); fileShortcutRef.current.formatCurrent(); } // Ctrl/Cmd+Shift+F 格式化
+        else if (k === "a") { e.preventDefault(); fileShortcutRef.current.toggleNl(); } // Ctrl/Cmd+Shift+A AI 生成
         return;
       }
       if (k === "s") { e.preventDefault(); fileShortcutRef.current.saveSqlFile(); }
@@ -4275,6 +4303,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 <Icon icon={Blocks} size={13} />{t("建構器")}
               </button>
             )}
+            {supportsNlQuery && (
+              <button type="button" onClick={() => setNlOpen((v) => !v)}
+                title={t("用自然語言生成查詢語句（本地 Claude CLI）(Ctrl+Shift+A)")}
+                className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
+                  nlOpen ? "border-accent/50 bg-accent/12 text-accent" : "border-fg/15 hover:bg-fg/10 text-fg/70"}`}>
+                <Icon icon={Sparkles} size={13} />{t("AI 生成")}
+              </button>
+            )}
             {supportsSqlEditor && (
               <button type="button" onClick={() => persistSql(formatSql(sql))} disabled={running || !sql.trim()}
                 title={t("格式化 SQL：主要子句換行（僅調整字面值外空白，不改語意）(Ctrl+Shift+F)")}
@@ -4395,6 +4431,18 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             )}
           </div>
         </div>
+        {supportsNlQuery && nlOpen && (
+          <Suspense fallback={null}>
+            <NlQueryBar
+              open={nlOpen}
+              onClose={() => setNlOpen(false)}
+              lang={nlLang}
+              buildPrompt={buildNlPrompt}
+              onApply={applyNlStatement}
+              lastError={err ? { message: err, sql: errStmt ?? errSql ?? sql } : null}
+            />
+          </Suspense>
+        )}
         {supportsSqlEditor ? (
           // SQL（mysql/postgres/sqlite/mssql/oracle/external gateway）：CodeMirror 編輯器 — 語法高亮 +
           // 行號 + 即時檢查 + 表/欄自動完成；F6 整段、Ctrl+Enter 游標所在語句或選取段、Ctrl+/ 註解、Tab 縮排。

@@ -377,6 +377,9 @@ fn flags_for_mode(mode: &str) -> (&'static str, &'static str) {
             "dontAsk",
             "Read,Glob,Grep,Write,Edit,MultiEdit,WebSearch,WebFetch",
         ),
+        // 一次性語句生成（NL→SQL / NL→ES DSL）：零工具、單回合，回覆即語句。
+        // 空 allowedTools + dontAsk → 清單外一律自動拒絕（見下方 claude_send 略過旗標）。
+        "generate" => ("dontAsk", ""),
         // 純問答 / 產生腳本文字（預設）：只放行唯讀與查資料工具。
         _ => ("dontAsk", "Read,Glob,Grep,WebSearch,WebFetch"),
     }
@@ -429,9 +432,16 @@ pub async fn claude_send(
         .arg("--verbose")
         .arg("--include-partial-messages")
         .arg("--permission-mode")
-        .arg(perm)
-        .arg("--allowedTools")
-        .arg(allowed);
+        .arg(perm);
+    // 空 allowedTools（generate 模式）略過該旗標：dontAsk 下未列入允許者一律自動拒絕，
+    // 行為等價「全拒」，且避開 CLI 對空字串引數的解析歧義。
+    if !allowed.is_empty() {
+        cmd.arg("--allowedTools").arg(allowed);
+    }
+    // 一次性語句生成：限單回合（防守性——即使模型嘗試 tool call 被拒也不會進入多回合重試）。
+    if mode == "generate" {
+        cmd.arg("--max-turns").arg("1");
+    }
     if let Some(sid) = session_id.as_ref().filter(|s| !s.is_empty()) {
         cmd.arg("--resume").arg(sid);
     }

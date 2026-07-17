@@ -356,7 +356,8 @@ export interface ClaudeStatus {
 }
 
 // 助手模式：advise = 純問答 / 產生腳本文字（唯讀）；agent = 可寫腳本檔到工作資料夾。
-export type AgentMode = "advise" | "agent";
+// generate：一次性 NL→查詢語句生成（零工具、單回合、無 session）。
+export type AgentMode = "advise" | "agent" | "generate";
 
 // 後端 `claude-stream` 事件 payload（依 kind 取用欄位）。
 export interface AgentEvent {
