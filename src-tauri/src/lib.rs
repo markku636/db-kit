@@ -311,6 +311,16 @@ pub fn run() {
             commands::kafka_acls_create,
             #[cfg(feature = "kafka")]
             commands::kafka_acls_delete,
+            #[cfg(feature = "elastic")]
+            commands::es_cluster_health,
+            #[cfg(feature = "elastic")]
+            commands::es_indices,
+            #[cfg(feature = "elastic")]
+            commands::es_nodes,
+            #[cfg(feature = "elastic")]
+            commands::es_mapping,
+            #[cfg(feature = "elastic")]
+            commands::es_delete_index,
             commands::backup_detect_cli,
             commands::backup_run,
             commands::backup_restore,

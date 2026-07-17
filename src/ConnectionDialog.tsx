@@ -105,6 +105,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [connectUrl, setConnectUrl] = useState(initial?.options?.kafka_connect_url ?? "");
   const [connectUser, setConnectUser] = useState(initial?.options?.kafka_connect_user ?? "");
   const [connectPass, setConnectPass] = useState(initial?.options?.kafka_connect_password ?? "");
+  // Elasticsearch / OpenSearch 連線選項（存於 options map）。認證方式：none（無）/ basic（帳密）/ apikey（password 存 API key）。
+  const [esAuth, setEsAuth] = useState(initial?.options?.es_auth ?? (initial?.username ? "basic" : "none"));
+  const [esTls, setEsTls] = useState(initial?.options?.es_tls === "1");
+  const [esSslCa, setEsSslCa] = useState(initial?.options?.es_ssl_ca ?? "");
+  const [esSslInsecure, setEsSslInsecure] = useState(initial?.options?.es_ssl_insecure === "1");
+  const [esShowHidden, setEsShowHidden] = useState(initial?.options?.es_show_hidden === "1");
+  const [esCloudId, setEsCloudId] = useState("");
 
   // 任一連線欄位變動就清掉上次測試結果，避免「連線成功」殘留成誤導的假成功訊號（改了 host 卻仍顯示舊成功）。
   useEffect(() => {
@@ -113,10 +120,20 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       redisTls, redisTlsInsecure, mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mongoTlsCa, mongoTlsInsecure,
       mssqlEncrypt, mssqlTrust, mssqlCaPath, sslMode, sslCa,
       oracleConnectType, oracleClientDir,
-      kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass, connectUrl, connectUser, connectPass]);
+      kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass, connectUrl, connectUser, connectPass,
+      esAuth, esTls, esSslCa, esSslInsecure, esShowHidden]);
 
-  // Kafka 帳密僅 SASL 協定使用；非 SASL 存檔時清空，避免把預設 root / 舊密碼誤存進設定與 keychain。
-  const usesAuth = kind !== "kafka" || kafkaProtocol.startsWith("SASL");
+  // Elastic：host 為完整 URL 時 TLS 由 URL 決定（勾選不顯示/停用）。
+  const esHostIsUrl = /^https?:\/\//i.test(host.trim());
+
+  // 帳密使用情境依 kind：Kafka 僅 SASL 協定；Elastic 依認證方式（none 不用）；其餘一律使用。
+  // 非使用情境存檔時清空 username/password，避免把預設 root / 舊密碼誤存進設定與 keychain。
+  const usesAuth =
+    kind === "kafka" ? kafkaProtocol.startsWith("SASL")
+    : kind === "elastic" ? esAuth !== "none"
+    : true;
+  // Elastic API Key 模式：password 存 API key，username 不使用（存檔清空）。
+  const usesUsername = usesAuth && !(kind === "elastic" && esAuth === "apikey");
 
   const build = (): ConnectionConfig => ({
     id: initial?.id ?? crypto.randomUUID(),
@@ -128,7 +145,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     kind,
     host,
     port,
-    username: usesAuth ? username : "",
+    username: usesUsername ? username : "",
     password: usesAuth ? password : "",
     database: KIND_META[kind].noDatabase ? null : database || null,
     max_connections: 5,
@@ -190,6 +207,12 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       if (connectUrl.trim()) o.kafka_connect_url = connectUrl.trim();
       if (connectUrl.trim() && connectUser.trim()) o.kafka_connect_user = connectUser.trim();
       if (connectUrl.trim() && connectPass.trim()) o.kafka_connect_password = connectPass.trim();
+    } else if (kind === "elastic") {
+      o.es_auth = esAuth; // none / basic / apikey
+      if (!esHostIsUrl && esTls) o.es_tls = "1";
+      if (esTls && esSslCa.trim()) o.es_ssl_ca = esSslCa.trim();
+      if (esTls && esSslInsecure) o.es_ssl_insecure = "1";
+      if (esShowHidden) o.es_show_hidden = "1";
     } else if (sslKinds.includes(kind)) {
       if (sslMode) o.ssl_mode = sslMode;
       // CA 只在 verify-* 模式生效（require/required 不驗證憑證，sqlx 會忽略）。
@@ -198,12 +221,14 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     return Object.keys(o).length ? o : undefined;
   };
 
+  // 無 root 帳號慣例的類型（Kafka / Elastic）：切入時清掉預設 root、切出且留空時補回。
+  const noRootKind = (k: DbKind) => k === "kafka" || k === "elastic";
+
   const onKindChange = (k: DbKind) => {
     // 僅在使用者尚未自訂埠（仍等於前一個 kind 的預設埠）時，才覆寫為新 kind 的預設埠
     setPort((prev) => (prev === KIND_META[kind].defaultPort ? KIND_META[k].defaultPort : prev));
-    // Kafka 的 SASL 帳號沒有 root 慣例：仍是預設 root 就清空；切回其他類型且留空則補回預設。
-    if (k === "kafka" && username === "root") setUsername("");
-    else if (kind === "kafka" && k !== "kafka" && username === "") setUsername("root");
+    if (noRootKind(k) && username === "root") setUsername("");
+    else if (noRootKind(kind) && !noRootKind(k) && username === "") setUsername("root");
     // ssl_mode 詞彙 PG（require）與 MySQL 系（required）不同，跨 kind 不可沿用；CA 路徑一併清除。
     if (k !== kind) { setSslMode(""); setSslCa(""); }
     setKind(k);
@@ -217,11 +242,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     const knownKind = p.kind && p.kind !== "external" && p.kind in KIND_META ? p.kind : null;
     if (knownKind) {
       if (knownKind !== kind) { setSslMode(""); setSslCa(""); }
-      // 與 onKindChange 的 kafka username 慣例對齊（匯入路徑繞過 onKindChange）：
-      // URL 未帶帳號時，切到 kafka 清掉預設 root；離開 kafka 且留空則補回 root。
+      // 與 onKindChange 的無 root 慣例對齊（匯入路徑繞過 onKindChange）：
+      // URL 未帶帳號時，切到 kafka/elastic 清掉預設 root；離開時留空則補回 root。
       if (p.username == null) {
-        if (knownKind === "kafka" && username === "root") setUsername("");
-        else if (kind === "kafka" && knownKind !== "kafka" && username === "") setUsername("root");
+        if (noRootKind(knownKind) && username === "root") setUsername("");
+        else if (noRootKind(kind) && !noRootKind(knownKind) && username === "") setUsername("root");
       }
       setKind(knownKind);
       // port 用解析值，缺省補該 kind 預設；不走 onKindChange 的「跟隨前一 kind 預設埠」啟發式。
@@ -269,6 +294,25 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       });
     } catch (e: any) {
       setImportMsg({ ok: false, text: e?.message ?? t("無法解析連線字串") });
+    }
+  };
+
+  // Elastic Cloud ID：`deployment-name:base64(host$es_uuid$kibana_uuid)` → 節點 URL `https://{es_uuid}.{host}`。
+  // 純前端一次性展開（不入 options），解析失敗不阻擋、留給使用者自行填主機。
+  const onCloudIdChange = (v: string) => {
+    setEsCloudId(v);
+    const raw = v.trim();
+    const colon = raw.indexOf(":");
+    if (colon <= 0) return;
+    try {
+      const decoded = atob(raw.slice(colon + 1));
+      const [cloudHost, esUuid] = decoded.split("$");
+      if (cloudHost && esUuid) {
+        setHost(`https://${esUuid}.${cloudHost}`);
+        setEsTls(true);
+      }
+    } catch {
+      /* 非合法 base64：忽略，讓使用者手動填 */
     }
   };
 
@@ -396,19 +440,19 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       ) : (
         <>
           <div className="flex gap-3">
-            <Field label={kind === "mongo" && mongoSrv ? t("主機（SRV 域名）") : kind === "kafka" ? t("Bootstrap servers") : t("主機")} className="flex-1">
+            <Field label={kind === "mongo" && mongoSrv ? t("主機（SRV 域名）") : kind === "kafka" ? t("Bootstrap servers") : kind === "elastic" ? t("節點 URL / 主機") : t("主機")} className="flex-1">
               <Input value={host} onChange={(e) => setHost(e.target.value)} onKeyDown={submitOnEnter}
-                placeholder={kind === "mongo" && mongoSrv ? t("例如 cluster0.abcd.mongodb.net") : kind === "kafka" ? t("host1:9092,host2:9092") : ""} />
+                placeholder={kind === "mongo" && mongoSrv ? t("例如 cluster0.abcd.mongodb.net") : kind === "kafka" ? t("host1:9092,host2:9092") : kind === "elastic" ? t("https://es.example.com:9243 或 localhost") : ""} />
             </Field>
-            {/* SRV 連線由 DNS 記錄決定 port，故不顯示埠欄位。 */}
-            {!(kind === "mongo" && mongoSrv) && (
+            {/* SRV 連線由 DNS 記錄決定 port；Elastic 貼完整 URL 時 port 內含於 URL，皆不顯示埠欄位。 */}
+            {!(kind === "mongo" && mongoSrv) && !(kind === "elastic" && esHostIsUrl) && (
               <Field label={t("埠")} className="w-24">
                 <Input type="number" value={port} onChange={(e) => setPort(Number(e.target.value))} onKeyDown={submitOnEnter} />
               </Field>
             )}
           </div>
-          {/* Kafka 無共用帳密（僅 SASL 協定需要，欄位在下方安全協定區），不顯示這排。 */}
-          {kind !== "kafka" && (
+          {/* Kafka / Elastic 無共用帳密（各有專屬認證區塊），不顯示這排。 */}
+          {kind !== "kafka" && kind !== "elastic" && (
             <div className="flex gap-3">
               <Field label={t("使用者")} className="flex-1">
                 <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
@@ -627,6 +671,72 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                 )}
               </Section>
               <div className="text-xs text-fg/40">{t("Bootstrap servers 可逗號分隔多個 broker。")}</div>
+            </Section>
+          )}
+
+          {kind === "elastic" && (
+            <Section>
+              <Field label={t("貼上 Elastic Cloud ID（選填）")} hint={t("Elastic Cloud 主控台複製，貼上後自動解出節點 URL")}>
+                <Input value={esCloudId} onChange={(e) => onCloudIdChange(e.target.value)} onKeyDown={submitOnEnter}
+                  placeholder="deployment-name:dXMtZWFzdC0xLmF3cy4uLg==" />
+              </Field>
+              <Field label={t("認證方式")}>
+                <Segmented
+                  full
+                  ariaLabel={t("認證方式")}
+                  value={esAuth}
+                  onChange={setEsAuth}
+                  options={[
+                    { value: "none", label: t("無") },
+                    { value: "basic", label: "Basic" },
+                    { value: "apikey", label: "API Key" },
+                  ]}
+                />
+              </Field>
+              {esAuth === "basic" && (
+                <div className="flex gap-3">
+                  <Field label={t("使用者")} className="flex-1">
+                    <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
+                  </Field>
+                  <Field label={t("密碼")} className="flex-1">
+                    <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={submitOnEnter}
+                      placeholder={editing ? t("留空＝不變更") : ""} />
+                  </Field>
+                </div>
+              )}
+              {esAuth === "apikey" && (
+                <Field label="API Key" hint={t("Elastic Cloud 的 encoded API key，或 id:key 兩段式（自動編碼）")}>
+                  <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={submitOnEnter}
+                    placeholder={editing ? t("留空＝不變更") : ""} />
+                </Field>
+              )}
+              {esHostIsUrl ? (
+                <div className="text-xs text-fg/40">{t("TLS 由節點 URL 的 https/http 決定。")}</div>
+              ) : (
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <input type="checkbox" checked={esTls} onChange={(e) => setEsTls(e.target.checked)} />
+                  <span>{t("使用 TLS（https）")}</span>
+                </label>
+              )}
+              {(esTls || esHostIsUrl) && (
+                <>
+                  <CaPathField value={esSslCa} onChange={setEsSslCa} onKeyDown={submitOnEnter}
+                    hint={t("自簽 / 內網憑證可指定 CA；企業 CA 已進系統信任庫則免填")} />
+                  <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                    <input type="checkbox" checked={esSslInsecure} onChange={(e) => setEsSslInsecure(e.target.checked)} />
+                    <span>{t("略過憑證驗證（自簽憑證用）")}</span>
+                  </label>
+                </>
+              )}
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={esShowHidden} onChange={(e) => setEsShowHidden(e.target.checked)} />
+                <span>{t("顯示系統索引（. 開頭）")}</span>
+              </label>
+              {(esTls || esHostIsUrl) && sshEnabled && (
+                <div className="text-xs text-warning">
+                  {t("透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，通常需勾「略過憑證驗證」。")}
+                </div>
+              )}
             </Section>
           )}
         </>

@@ -26,6 +26,8 @@ use crate::db::kafka::dto::{
     KafkaHealthReport, KafkaOffsetPlanRow, KafkaOffsetReset, KafkaPartitionInfo,
     KafkaProduceRequest, KafkaProduceResult, KafkaSchema, KafkaSchemaSubject, KafkaStart, KafkaTopic,
 };
+#[cfg(feature = "elastic")]
+use crate::db::elastic::dto::{EsClusterHealth, EsIndexInfo, EsNodeInfo};
 
 pub struct AppState {
     pub manager: ConnectionManager,
@@ -2289,4 +2291,41 @@ pub async fn kafka_acls_create(state: State<'_, AppState>, id: String, bindings:
 #[tauri::command]
 pub async fn kafka_acls_delete(state: State<'_, AppState>, id: String, filter: crate::db::kafka::dto::KafkaAclBinding) -> AppResult<Vec<crate::db::kafka::dto::KafkaAclBinding>> {
     state.manager.kafka_driver(&id)?.acls_delete(filter).await
+}
+
+// ===================== Elasticsearch / OpenSearch（一等公民；elastic feature）=====================
+
+/// 叢集健康總覽（含偵測到的 flavor / version）。
+#[cfg(feature = "elastic")]
+#[tauri::command]
+pub async fn es_cluster_health(state: State<'_, AppState>, id: String) -> AppResult<EsClusterHealth> {
+    state.manager.elastic_driver(&id)?.cluster_health().await
+}
+
+/// 索引清單（_cat/indices）。
+#[cfg(feature = "elastic")]
+#[tauri::command]
+pub async fn es_indices(state: State<'_, AppState>, id: String) -> AppResult<Vec<EsIndexInfo>> {
+    state.manager.elastic_driver(&id)?.indices().await
+}
+
+/// 節點清單（_cat/nodes）。
+#[cfg(feature = "elastic")]
+#[tauri::command]
+pub async fn es_nodes(state: State<'_, AppState>, id: String) -> AppResult<Vec<EsNodeInfo>> {
+    state.manager.elastic_driver(&id)?.nodes().await
+}
+
+/// 某索引的 mapping 原文（pretty JSON）。
+#[cfg(feature = "elastic")]
+#[tauri::command]
+pub async fn es_mapping(state: State<'_, AppState>, id: String, index: String) -> AppResult<String> {
+    state.manager.elastic_driver(&id)?.mapping(&index).await
+}
+
+/// 刪除索引（破壞性）。
+#[cfg(feature = "elastic")]
+#[tauri::command]
+pub async fn es_delete_index(state: State<'_, AppState>, id: String, index: String) -> AppResult<()> {
+    state.manager.elastic_driver(&id)?.delete_index(&index).await
 }

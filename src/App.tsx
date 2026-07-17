@@ -34,6 +34,7 @@ import type { SavedQuery } from "./sql";
 import Select from "./ui/Select";
 import { buildExplainJsonSql, parseExplainPlan, type PlanNode } from "./explain";
 import type { MongoQueryEditorHandle } from "./MongoQueryEditor";
+import type { ElasticQueryEditorHandle } from "./ElasticQueryEditor";
 import { parseMongoExplain, withVerbosity, type MongoExplainModel } from "./mongoExplain";
 import logoMark from "./assets/db-kit-hero.png";
 import Icon from "./ui/Icon";
@@ -64,6 +65,8 @@ const KafkaConnectPanel = lazyOverlay(() => import("./KafkaConnectPanel"));
 const KafkaAclPanel = lazyOverlay(() => import("./KafkaAclPanel"));
 const KafkaSchemaViewer = lazyOverlay(() => import("./KafkaSchemaViewer"));
 const KafkaCreateTopicDialog = lazyOverlay(() => import("./KafkaCreateTopicDialog"));
+const EsClusterOverview = lazyOverlay(() => import("./EsClusterOverview"));
+const EsMappingViewer = lazyOverlay(() => import("./EsMappingViewer"));
 const NewKeyDialog = lazyOverlay(() => import("./NewKeyDialog"));
 const CreateTableDialog = lazyOverlay(() => import("./CreateTableDialog"));
 const ConnectionProperties = lazyOverlay(() => import("./ConnectionProperties"));
@@ -95,6 +98,7 @@ const MongoExplainPlan = lazyOverlay(() => import("./MongoExplainPlan"));
 // 需要 ref 轉發的編輯器：直接 React.lazy（lazy 對 forwardRef 透明），使用處手動包 Suspense。
 const SqlEditor = lazy(() => import("./SqlEditor"));
 const MongoQueryEditor = lazy(() => import("./MongoQueryEditor"));
+const ElasticQueryEditor = lazy(() => import("./ElasticQueryEditor"));
 
 // ---- 依選取的樹節點，組「新查詢分頁」的起始 SQL（對標 DataGrip / Navicat：在物件上開查詢即帶範圍）----
 //  - 資料表 / 檢視：USE db;（mysql / external）或 SET search_path（postgres）＋ 一條可執行的 SELECT … LIMIT 100；
@@ -108,6 +112,9 @@ function buildScopedSql(node: SelectedNode | null): string | undefined {
   // 資料表 / 檢視節點：
   if (node.kind === "mongo") {
     return JSON.stringify({ db: node.db, collection: node.table, filter: {} }, null, 2);
+  }
+  if (node.kind === "elastic") {
+    return JSON.stringify({ index: node.table, query: { match_all: {} }, size: 200 }, null, 2);
   }
   if (node.kind === "redis" || node.kind === "kafka") return undefined;
   const select = `SELECT *\nFROM ${qualifiedName(node.kind, node.db, node.table)}\nLIMIT 100;`;
@@ -1234,6 +1241,10 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   const [kafkaAcl, setKafkaAcl] = useState<{ id: string; name: string } | null>(null);
   const [kafkaSchema, setKafkaSchema] = useState<{ id: string; name: string } | null>(null);
   const [kafkaCreateTopic, setKafkaCreateTopic] = useState<{ connId: string } | null>(null);
+  // Elasticsearch / OpenSearch 叢集總覽面板。
+  const [esOverview, setEsOverview] = useState<{ id: string; name: string } | null>(null);
+  // Elasticsearch / OpenSearch 索引 Mapping 檢視器。
+  const [esMapping, setEsMapping] = useState<{ connId: string; index: string } | null>(null);
   // 新增 Redis 鍵對話框
   const [newKey, setNewKey] = useState<{ connId: string; db: string } | null>(null);
   // 設計表結構（CREATE TABLE）對話框：帶連線 / 資料庫 / 種類。
@@ -2012,6 +2023,32 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       }
       return nodes;
     }
+    if (m.kind === "elastic") {
+      const ro = readonlyConns[m.connId] === true;
+      const nodes: MenuNode[] = [
+        it(t("開啟索引"), () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind)),
+        it(t("檢視 Mapping…"), () => setEsMapping({ connId: m.connId, index: m.table })),
+        it(t("複製索引名"), () => copyToClipboard(m.table, t("已複製索引名"))),
+        it(t("重新整理"), () => refreshTables(m.connId, m.db)),
+      ];
+      if (!ro) {
+        nodes.push(sep);
+        nodes.push(it(t("刪除索引…"), async () => {
+          if (!(await uiConfirm(
+            t("確定刪除索引「{name}」？此操作不可復原。", { name: m.table }),
+            { title: t("刪除索引"), danger: true, confirmText: t("刪除") },
+          ))) return;
+          try {
+            await api.esDeleteIndex(m.connId, m.table);
+            toast.success(t("已刪除索引 {name}", { name: m.table }));
+            refreshTables(m.connId, m.db);
+          } catch (e: any) {
+            toast.error(e?.message ?? t("刪除失敗"));
+          }
+        }, true));
+      }
+      return nodes;
+    }
     const isView = m.objKind === "view";
     const isMyPg = isMysqlFamily(m.kind) || m.kind === "postgres";
     // 唯讀連線：隱藏會寫入 / 破壞資料的動作（新增列 / 匯入 / 產生資料 / 改名 / 複製含資料 / 清空 / 截斷 / 刪除）。
@@ -2458,7 +2495,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                         setActive(c.id);
                         selectNode({ type: "database", connId: c.id, db, kind: c.kind });
                       }}
-                      onContextMenu={(isRedis || isSqlKind || c.kind === "mongo" || c.kind === "kafka") ? (e) => {
+                      onContextMenu={(isRedis || isSqlKind || c.kind === "mongo" || c.kind === "kafka" || c.kind === "elastic") ? (e) => {
                         e.preventDefault();
                         setActive(c.id);
                         selectNode({ type: "database", connId: c.id, db, kind: c.kind });
@@ -2566,6 +2603,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                       [t("ACL…"), () => setKafkaAcl({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
                     ]
                   : []),
+                ...(connectedIds.has(menu.id) && menuConn.kind === "elastic"
+                  ? [[t("叢集總覽…"), () => setEsOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
+                  : []),
                 ...(connectedIds.has(menu.id)
                   ? [["SQL Search…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
                   : []),
@@ -2650,6 +2690,11 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                       [t("監控與告警…"), () => { if (dbConn) setKafkaMonitor({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
                       [t("新增主題…"), () => setKafkaCreateTopic({ connId: dbMenu.connId }), false] as [string, () => void, boolean],
                       [t("消費者群組…"), () => { if (dbConn) setKafkaGroups({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                      [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
+                    ]
+                  : dbConn?.kind === "elastic"
+                  ? [
+                      [t("叢集總覽…"), () => { if (dbConn) setEsOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
                       [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
                     ]
                   : dbConn?.kind === "mongo"
@@ -2749,6 +2794,14 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
 
       {kafkaSchema && (
         <KafkaSchemaViewer connId={kafkaSchema.id} connName={kafkaSchema.name} onClose={() => setKafkaSchema(null)} />
+      )}
+
+      {esOverview && (
+        <EsClusterOverview connId={esOverview.id} connName={esOverview.name} onClose={() => setEsOverview(null)} />
+      )}
+
+      {esMapping && (
+        <EsMappingViewer connId={esMapping.connId} index={esMapping.index} onClose={() => setEsMapping(null)} />
       )}
 
       {kafkaCreateTopic && (
@@ -3209,6 +3262,7 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
   mongo: '{ "db": "", "collection": "", "filter": {} }',
   redis: "PING",
   kafka: "", // Kafka 無查詢編輯器
+  elastic: '{ "index": "", "query": { "match_all": {} }, "size": 200 }',
   external: "SELECT 1",
 };
 // 僅關聯式資料庫支援 EXPLAIN 查詢計畫分析（MSSQL 回 SHOWPLAN XML，於結果格顯示、不走 JSON 視覺樹）。
@@ -3398,6 +3452,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // executionStats 會「實際執行」查詢；queryPlanner 只做計畫（便宜），供昂貴管線選用。
   const [mongoVerbosity, setMongoVerbosity] = useState<"queryPlanner" | "executionStats" | "allPlansExecution">("executionStats");
   const mongoEditorRef = useRef<MongoQueryEditorHandle>(null);
+  const elasticEditorRef = useRef<ElasticQueryEditorHandle>(null);
   // 視覺化查詢建構器（致敬 Navicat SQL Builder）：僅關聯式（mysql/postgres/sqlite）。
   const [builderOpen, setBuilderOpen] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -4371,6 +4426,21 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 onSubmit={() => execute("run")}
                 autoFocus
                 placeholder={t("find：{ \"db\":\"..\", \"collection\":\"..\", \"filter\":{}, \"sort\":{}, \"limit\":200 }　|　聚合：{ …, \"pipeline\":[ { \"$match\":{} } ] }　|　插入：{ …, \"insert\":[ { \"k\":\"v\" } ] }（F6 / Ctrl+Enter 執行）")}
+              />
+            </Suspense>
+          </div>
+        ) : kind === "elastic" ? (
+          // Elasticsearch：CodeMirror JSON 編輯器 — Query DSL envelope（頂層 "index" + search body）。
+          <div style={{ height: editor.size }} className="overflow-hidden bg-app border-t border-fg/10">
+            <Suspense fallback={<div className="h-full w-full bg-well/50 animate-pulse" />}>
+              <ElasticQueryEditor
+                ref={elasticEditorRef}
+                value={sql}
+                onChange={persistSql}
+                connId={activeId}
+                onSubmit={() => execute("run")}
+                autoFocus
+                placeholder={t("查詢：{ \"index\":\"logs-*\", \"query\":{ \"match\":{ \"msg\":\"error\" } }, \"size\":200, \"sort\":[{ \"@timestamp\":\"desc\" }] }　|　計數：{ \"index\":\"..\", \"count\":true, \"query\":{} }（F6 / Ctrl+Enter 執行）")}
               />
             </Suspense>
           </div>

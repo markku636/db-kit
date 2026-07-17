@@ -108,6 +108,13 @@ pub async fn transfer_table(
         return Err(AppError::Unsupported(t!("Kafka 連線不支援資料傳輸").into()));
     }
 
+    // Elasticsearch / OpenSearch 為搜尋引擎（文件 / DSL），非關聯表；不支援資料傳輸。
+    if matches!(manager.kind(src_id)?, DbKind::Elastic)
+        || matches!(manager.kind(dst_id)?, DbKind::Elastic)
+    {
+        return Err(AppError::Unsupported(t!("搜尋引擎類連線不支援資料傳輸").into()));
+    }
+
     // 0. 目標表不存在且要求自動建表：沿用來源 DDL 建立（限同種類）。
     let mut created = false;
     if opts.create_table {

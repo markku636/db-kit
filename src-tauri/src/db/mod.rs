@@ -23,6 +23,11 @@ pub mod external;
 #[cfg(feature = "kafka")]
 pub mod kafka;
 
+/// Elasticsearch / OpenSearch 驅動（一等公民；以 reqwest REST 接入）。僅在 `elastic` feature
+/// 開啟時編入，讓 slim CLI（`--no-default-features`）免除 reqwest / rustls 相依。
+#[cfg(feature = "elastic")]
+pub mod elastic;
+
 /// 資料庫範式。UI 與操作邏輯依此分流。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -41,6 +46,10 @@ pub enum DbKind {
     /// Kafka：訊息代理（非 SQL）。以 rdkafka 接入；具體驅動於 `kafka` feature 開啟時編入 `db::kafka`。
     /// UI 將 cluster→database、topic→table、messages→rows 做最小映射，其餘能力走 `kafka_*` 指令。
     Kafka,
+    /// Elasticsearch / OpenSearch：搜尋引擎（非 SQL）。以 REST 接入；具體驅動於 `elastic` feature
+    /// 開啟時編入 `db::elastic`。UI 將 cluster→database、index→table、document→row 做最小映射，
+    /// 其餘能力走 `es_*` 指令。OpenSearch 與 ES REST 相容，連線時自動偵測 flavor。
+    Elastic,
     /// 外部 web gateway（非真實連線；透過 HTTP 下 SQL）。實作見 `db::external`。
     External,
 }
@@ -58,6 +67,7 @@ impl DbKind {
             DbKind::Mssql => "mssql",
             DbKind::Oracle => "oracle",
             DbKind::Kafka => "kafka",
+            DbKind::Elastic => "elastic",
             DbKind::External => "external",
         }
     }
@@ -72,6 +82,7 @@ impl DbKind {
             DbKind::Mssql => ".bacpac",
             DbKind::Oracle => ".dmp",
             DbKind::Kafka => "", // Kafka 不支援備份
+            DbKind::Elastic => "", // Elasticsearch 不支援備份
             DbKind::External => "",
         }
     }

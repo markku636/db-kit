@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "external";
+export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "external";
 
 export type SshAuthMethod = "password" | "key";
 
@@ -489,6 +489,37 @@ export interface KafkaTopic {
   replication: number;
   internal: boolean;
 }
+
+// Elasticsearch / OpenSearch DTO（欄位對齊後端 db/elastic/dto.rs 的 snake_case serde）。
+export interface EsClusterHealth {
+  cluster_name: string;
+  status: string; // green / yellow / red
+  flavor: string; // elasticsearch / opensearch
+  version: string;
+  number_of_nodes: number;
+  number_of_data_nodes: number;
+  active_primary_shards: number;
+  active_shards: number;
+  relocating_shards: number;
+  unassigned_shards: number;
+}
+export interface EsIndexInfo {
+  index: string;
+  health: string;
+  status: string;
+  docs_count: number;
+  docs_deleted: number;
+  store_size: string;
+  pri: number;
+  rep: number;
+}
+export interface EsNodeInfo {
+  name: string;
+  version: string;
+  roles: string;
+  heap_percent: string;
+  cpu: string;
+}
 export interface KafkaPartitionInfo {
   partition: number;
   leader: number;
@@ -773,6 +804,8 @@ export const KIND_META: Record<DbKind, { label: string; color: string; defaultPo
   oracle: { label: "Oracle", color: "#f97316", defaultPort: 1521, category: "relational" },
   // Kafka：cyan-700（與 sky-500 mssql / violet external 區隔）。
   kafka: { label: "Kafka", color: "#0891b2", defaultPort: 9092, category: "queue", noDatabase: true },
+  // Elasticsearch / OpenSearch（單一類型，flavor 連線時自動偵測）：yellow-500 呼應 Elastic 品牌黃。
+  elastic: { label: "Elasticsearch", color: "#eab308", defaultPort: 9200, category: "search", noDatabase: true },
   external: { label: "External", color: "#8b5cf6", defaultPort: 0, category: "other", external: true },
 };
 
@@ -1072,6 +1105,13 @@ export const api = {
   kafkaAclsList: (id: string, filter: KafkaAclBinding) => invoke<KafkaAclBinding[]>("kafka_acls_list", { id, filter }),
   kafkaAclsCreate: (id: string, bindings: KafkaAclBinding[]) => invoke<KafkaAclBinding[]>("kafka_acls_create", { id, bindings }),
   kafkaAclsDelete: (id: string, filter: KafkaAclBinding) => invoke<KafkaAclBinding[]>("kafka_acls_delete", { id, filter }),
+
+  // Elasticsearch / OpenSearch：叢集健康、index / 節點清單、mapping、刪 index（唯讀瀏覽 + DSL 查詢）。
+  esClusterHealth: (id: string) => invoke<EsClusterHealth>("es_cluster_health", { id }),
+  esIndices: (id: string) => invoke<EsIndexInfo[]>("es_indices", { id }),
+  esNodes: (id: string) => invoke<EsNodeInfo[]>("es_nodes", { id }),
+  esMapping: (id: string, index: string) => invoke<string>("es_mapping", { id, index }),
+  esDeleteIndex: (id: string, index: string) => invoke<void>("es_delete_index", { id, index }),
 
   // AI 助手：偵測 claude CLI / 送出問答（串流走 onClaudeStream）/ 取消。
   claudeDetect: () => invoke<ClaudeStatus>("claude_detect"),

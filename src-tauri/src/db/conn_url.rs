@@ -43,6 +43,7 @@ fn scheme_kind(s: &str) -> Option<DbKind> {
         "mssql" | "sqlserver" => Some(DbKind::Mssql),
         "oracle" => Some(DbKind::Oracle),
         "kafka" => Some(DbKind::Kafka),
+        "elasticsearch" | "opensearch" | "elastic" => Some(DbKind::Elastic),
         "sqlite" => Some(DbKind::Sqlite),
         _ => None,
     }

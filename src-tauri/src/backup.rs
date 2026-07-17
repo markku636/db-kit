@@ -44,6 +44,7 @@ fn cli_tool_name(kind: DbKind) -> &'static str {
         DbKind::Mssql => "sqlpackage", // 規劃以 sqlpackage 匯出 .bacpac（尚未接上）
         DbKind::Oracle => "expdp", // 規劃以 Data Pump 匯出 .dmp（尚未接上）
         DbKind::Kafka => "", // Kafka 不支援備份
+        DbKind::Elastic => "", // Elasticsearch 不支援備份
         DbKind::External => "", // 外部 gateway 不支援備份
     }
 }
@@ -70,6 +71,9 @@ pub async fn backup(
     }
     if matches!(config.kind, DbKind::Kafka) {
         return Err(AppError::Query(t!("Kafka 連線不支援備份").into()));
+    }
+    if matches!(config.kind, DbKind::Elastic) {
+        return Err(AppError::Query(t!("Elasticsearch 連線不支援備份").into()));
     }
     // SQL Server 備份規劃以 sqlpackage 匯出 .bacpac，尚未接上。
     if matches!(config.kind, DbKind::Mssql) {
@@ -114,6 +118,7 @@ pub async fn backup(
         DbKind::Mssql => unreachable!(), // 上方已 early-return
         DbKind::Oracle => unreachable!(), // 上方已 early-return
         DbKind::Kafka => unreachable!(), // 上方已 early-return
+        DbKind::Elastic => unreachable!(), // 上方已 early-return
         DbKind::External => unreachable!(), // 上方已 early-return
     };
 
@@ -186,6 +191,7 @@ pub async fn restore(
             t!("Oracle 還原尚未支援（規劃以 Data Pump impdp 匯入 .dmp）").to_string(),
         )),
         DbKind::Kafka => Err(AppError::Query(t!("Kafka 連線不支援還原").to_string())),
+        DbKind::Elastic => Err(AppError::Query(t!("Elasticsearch 連線不支援還原").to_string())),
         DbKind::External => Err(AppError::Query(t!("外部 gateway 連線不支援還原").to_string())),
     }
 }

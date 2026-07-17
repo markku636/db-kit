@@ -561,6 +561,31 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         }
         "Avro 編碼失敗" => "Avro encoding failed",
 
+        // ---- Elasticsearch / OpenSearch（elastic feature）----
+        "此連線不是 Elasticsearch" => "This connection is not Elasticsearch",
+        "此版本未編入 Elasticsearch 支援（請以 --features elastic 建置）" => {
+            "This build does not include Elasticsearch support (build with --features elastic)"
+        }
+        "Elasticsearch 查詢請提供含 index 的 JSON 物件" => {
+            "Provide a JSON object with an \"index\" field for the Elasticsearch query"
+        }
+        "Elasticsearch 查詢需為 JSON：{e}" => "The Elasticsearch query must be JSON: {e}",
+        "Elasticsearch 連線第一版為唯讀，不支援直接編輯文件（請以 DSL 查詢瀏覽）" => {
+            "Elasticsearch connections are read-only in this version; documents cannot be edited directly (use DSL queries to browse)"
+        }
+        "Elasticsearch 深度分頁超過 max_result_window（10000）；請改用 DSL 查詢（search_after）或縮小頁數" => {
+            "Deep pagination exceeds max_result_window (10000); use a DSL query (search_after) or reduce the page number"
+        }
+        "文件不存在：{id}" => "Document not found: {id}",
+        "Elastic Cloud cloud_id 格式無法解析" => "Could not parse the Elastic Cloud cloud_id",
+        "讀取 CA 憑證檔失敗：{e}" => "Failed to read the CA certificate file: {e}",
+        "搜尋引擎類連線不支援資料傳輸" => "Search-engine connections do not support data transfer",
+        "Elasticsearch 連線不支援備份" => "Elasticsearch connections do not support backup",
+        "Elasticsearch 連線不支援還原" => "Elasticsearch connections do not support restore",
+        "CLI 不支援 Elasticsearch 連線（請用 GUI）" => {
+            "The CLI does not support Elasticsearch connections (use the GUI)"
+        }
+
         _ => return None,
     })
 }

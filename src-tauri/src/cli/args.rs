@@ -71,6 +71,7 @@ pub enum KindArg {
     Mssql,
     Oracle,
     Kafka,
+    Elastic,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
