@@ -1,6 +1,6 @@
 [package]
 name = "db-kit"
-version = "0.16.0"
+version = "0.17.0"
 description = "Unified database management tool"
 license = "MIT"
 edition = "2021"
@@ -99,6 +99,12 @@ prost = { version = "0.14", optional = true }
 # 訊息 JS 篩選運算式（Conduktor 風）：純 Rust JS 引擎，藏在 kafka-js feature 後。
 # 編譯較重（+2~4 分鐘、二進位 +4~8MB），故獨立成 feature 讓開發/CI 可關。
 boa_engine = { version = "0.20", optional = true }
+# RabbitMQ：lapin（純 Rust AMQP 0-9-1）。default-features=false + 明確選 rustls--ring：
+# rustls--ring 鎖定 ring 為 rustls 的 crypto provider，避開 aws-lc-sys（需 NASM，Windows 打包地雷），
+# 延續全案 ring 決定。tokio feature 讓 lapin 走 tokio reactor/executor（與本 app runtime 一致）。
+# rustls-native-certs：以 OS 憑證庫為信任根（amqps 企業內部 CA 免手動指定）。藏在 `rabbitmq` feature 後。
+# 注意：lapin 4.10 宣告 rust-version 1.88（本機 toolchain 1.96 可編）；Management REST 走既有 reqwest。
+lapin = { version = "4.10", default-features = false, features = ["tokio", "rustls-native-certs", "rustls--ring"], optional = true }
 
 # OS keychain：依平台選用原生後端，避免在 Windows 上編譯 secret-service。
 [target.'cfg(windows)'.dependencies]
@@ -111,7 +117,7 @@ keyring = { version = "3", features = ["apple-native"] }
 keyring = { version = "3", features = ["sync-secret-service"] }
 
 [features]
-default = ["gui", "kafka", "kafka-js", "elastic"]
+default = ["gui", "kafka", "kafka-js", "elastic", "rabbitmq"]
 # gui：啟用 Tauri 桌面程式（commands / agent / scheduler / run()）。預設開啟。
 gui = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
 custom-protocol = ["gui", "tauri/custom-protocol"]
@@ -126,6 +132,10 @@ kafka-tls = ["kafka", "rdkafka/ssl"]
 # elastic：一等公民 Elasticsearch / OpenSearch 支援（REST；以 reqwest rustls 接入，純 Rust 無 C 相依）。
 # 隨 gui 預設開啟；slim CLI（--no-default-features）排除。第一版唯讀瀏覽 + DSL 查詢。
 elastic = ["dep:reqwest", "dep:base64"]
+# rabbitmq：一等公民 RabbitMQ 支援。AMQP 0-9-1 走 lapin（peek/publish/delete）、Management REST（15672）
+# 走既有 reqwest（overview/queues/exchanges/purge）。lapin 以 rustls--ring 鎖 provider，純 Rust 無 NASM 相依。
+# 隨 gui 預設開啟；slim CLI（--no-default-features）排除。
+rabbitmq = ["dep:lapin", "dep:reqwest"]
 
 # Release 瘦身（保守版）：
 # - lto="thin"：跨 codegen unit 最佳化但平行執行，連結期記憶體峰值遠低於 fat LTO

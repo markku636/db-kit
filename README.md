@@ -8,7 +8,7 @@
 
 <p align="center">
 一站式跨平台桌面資料庫工具，以單一一致的介面管理<br>
-<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka · Elasticsearch</strong>。
+<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka · Elasticsearch · RabbitMQ</strong>。
 </p>
 
 <p align="center">
@@ -209,6 +209,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] 新增連線對話框改版：連線類型依**分類分組**（關聯式 / 文件 / 鍵值 / 訊息佇列 / 搜尋引擎）＋圖示選擇器，選定後收合為單列、可隨時「變更類型」
 - [x] Elasticsearch / OpenSearch 支援（一等公民；純 reqwest REST，無額外 C 相依，`elastic` feature 隨 gui 預設開）：叢集→索引樹、**Query DSL 查詢編輯器**（JSON envelope `{ "index":"..", "query":{..} }` + lint + 欄位補全）、search / count / 單層聚合（雙結果集）、**叢集總覽**（健康 / 節點 / 索引狀態）、Mapping 檢視、刪除索引；認證支援 Basic / API Key / Elastic Cloud ID，TLS + 自訂 CA；flavor（ES vs OpenSearch）連線時自動偵測
 - [x] **自然語言查詢**（NL→SQL / NL→ES DSL）：查詢面板「AI 生成」列（Ctrl+Shift+A），用自然語言描述需求 → 本地 Claude CLI（沿用 AI 助手管線，訂閱登入、不需 API key）注入 schema / mapping 後生成查詢語句。生成語句**先顯示於預覽**（可檢視 / 複製 / 重新生成）再由使用者「套用到編輯器」執行，非黑箱；破壞性語句（DROP/TRUNCATE 等）套用前警示；執行失敗可「帶錯誤重試」。單回合零工具（tool 自動拒絕，無副作用）
+- [x] RabbitMQ 支援（一等公民；lapin AMQP 0-9-1 + Management REST 雙軌，`rabbitmq` feature 隨 gui 預設開，rustls-ring 純 Rust 無 NASM）：連線→vhost→佇列樹、**佇列訊息瀏覽**（basic.get 非破壞性預覽 + requeue，含 redelivered / quorum 警告；stream 佇列擋）、**發布訊息**（publisher confirm）、佇列詳情、清空 / 刪除佇列（危險確認）、叢集總覽（版本 / 節點 / 佇列 / 訊息數 / 速率）；amqp(s):// 貼上即用（CloudAMQP）；vhost / TLS / Management URL 可設
 - [x] 儲存格直接編輯 + ✓ 套用（以主鍵定位，寫回 DB）
 - [x] 新增列 / 刪除列（完整 CRUD）
 - [x] 篩選（單欄條件）、排序（點欄位標題）

@@ -1,3 +1,11 @@
+## v0.17.0
+
+- **RabbitMQ 支援（一等公民）**：新增 `rabbitmq` 連線類型，雙軌架構——lapin（純 Rust AMQP 0-9-1，rustls-ring 無 NASM）負責連線 / 訊息 peek / publish / 刪佇列，Management REST API（既有 reqwest）負責總覽 / 佇列 / exchange 清單。`rabbitmq` feature 隨 gui 預設開，slim CLI 不受影響。
+  - **佇列訊息瀏覽**：basic.get 非破壞性預覽（先全部取出、後統一 requeue，避免重複），常駐警告（會標記 redelivered、可能改變順序、quorum 佇列累加 delivery count）；stream 佇列偵測並擋。
+  - **發布訊息**（publisher confirm）、佇列詳情、清空 / 刪除佇列（危險確認）、叢集總覽（rabbitmq / erlang 版本、節點、佇列 / 連線 / consumer 數、ready / unacked、publish / deliver 速率）。
+  - 連線：`amqp://` / `amqps://` 貼上即用（CloudAMQP，vhost 常等於使用者名稱）；vhost、TLS（amqps，埠自動 5671）、Management API URL 可設；帳密預設 guest / guest。
+  - 已知限制：amqps 自簽憑證「略過驗證」第一版未支援（多數雲端 RabbitMQ 用公認 CA）；Management 帳密沿用 AMQP 帳密（不另設）。
+
 ## v0.16.0
 
 - **自然語言查詢（NL→SQL / NL→ES DSL）**：查詢面板新增「AI 生成」列（Ctrl+Shift+A），用自然語言描述需求即生成查詢語句。沿用既有 AI 助手管線（本地 Claude CLI、訂閱登入、不需 API key），SQL 情境注入方言 + 全表名清單 + 最相關表的完整欄位，Elasticsearch 情境注入 index 清單 + 目標 index mapping。
