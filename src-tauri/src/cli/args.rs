@@ -72,6 +72,7 @@ pub enum KindArg {
     Oracle,
     Kafka,
     Elastic,
+    Rabbitmq,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]

@@ -321,6 +321,22 @@ pub fn run() {
             commands::es_mapping,
             #[cfg(feature = "elastic")]
             commands::es_delete_index,
+            #[cfg(feature = "rabbitmq")]
+            commands::rabbitmq_overview,
+            #[cfg(feature = "rabbitmq")]
+            commands::rabbitmq_queues,
+            #[cfg(feature = "rabbitmq")]
+            commands::rabbitmq_exchanges,
+            #[cfg(feature = "rabbitmq")]
+            commands::rabbitmq_queue_detail,
+            #[cfg(feature = "rabbitmq")]
+            commands::rabbitmq_peek,
+            #[cfg(feature = "rabbitmq")]
+            commands::rabbitmq_publish,
+            #[cfg(feature = "rabbitmq")]
+            commands::rabbitmq_purge,
+            #[cfg(feature = "rabbitmq")]
+            commands::rabbitmq_delete_queue,
             commands::backup_detect_cli,
             commands::backup_run,
             commands::backup_restore,

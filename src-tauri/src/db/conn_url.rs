@@ -44,6 +44,7 @@ fn scheme_kind(s: &str) -> Option<DbKind> {
         "oracle" => Some(DbKind::Oracle),
         "kafka" => Some(DbKind::Kafka),
         "elasticsearch" | "opensearch" | "elastic" => Some(DbKind::Elastic),
+        "amqp" | "amqps" => Some(DbKind::RabbitMq),
         "sqlite" => Some(DbKind::Sqlite),
         _ => None,
     }
@@ -221,6 +222,16 @@ pub fn parse_url(url: &str, kind_hint: Option<DbKind>) -> AppResult<Parsed> {
     // 本 app 的 redis TLS URL 方言：`#insecure` fragment（見 db/redis.rs）→ 略過憑證驗證。
     if matches!(p.kind, Some(DbKind::Redis)) && fragment.as_deref() == Some("insecure") {
         p.options.insert("redis_tls_insecure".into(), "true".into());
+    }
+    // RabbitMQ：amqps → TLS；URL path 段（database）為 vhost，改存 rabbitmq_vhost 供前端欄位還原
+    // （CloudAMQP `amqps://user:pass@host/vhost`；vhost 常等於 username）。
+    if matches!(p.kind, Some(DbKind::RabbitMq)) {
+        if scheme.as_deref() == Some("amqps") {
+            p.options.insert("rabbitmq_tls".into(), "1".into());
+        }
+        if let Some(vhost) = p.database.take() {
+            p.options.insert("rabbitmq_vhost".into(), vhost);
+        }
     }
 
     // query 參數 → per-kind options 映射（未知參數靜默忽略）。

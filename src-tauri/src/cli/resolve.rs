@@ -43,6 +43,11 @@ async fn resolve_saved(needle: &str, args: &ConnArgs) -> AppResult<ConnectionCon
             t!("CLI 不支援 Elasticsearch 連線（請用 GUI）").into(),
         ));
     }
+    if matches!(cfg.kind, DbKind::RabbitMq) {
+        return Err(AppError::Unsupported(
+            t!("CLI 不支援 RabbitMQ 連線（請用 GUI）").into(),
+        ));
+    }
     if let Some(db) = &args.database {
         cfg.database = Some(db.clone());
     }
@@ -61,6 +66,7 @@ fn kind_of(k: KindArg) -> DbKind {
         KindArg::Oracle => DbKind::Oracle,
         KindArg::Kafka => DbKind::Kafka,
         KindArg::Elastic => DbKind::Elastic,
+        KindArg::Rabbitmq => DbKind::RabbitMq,
     }
 }
 
@@ -74,6 +80,7 @@ fn default_port(kind: DbKind) -> u16 {
         DbKind::Oracle => 1521,
         DbKind::Kafka => 9092,
         DbKind::Elastic => 9200,
+        DbKind::RabbitMq => 5672,
         DbKind::Sqlite | DbKind::External => 0,
     }
 }

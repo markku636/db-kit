@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "external";
+export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "external";
 
 export type SshAuthMethod = "password" | "key";
 
@@ -521,6 +521,50 @@ export interface EsNodeInfo {
   heap_percent: string;
   cpu: string;
 }
+
+// RabbitMQ DTO（欄位對齊後端 db/rabbitmq/dto.rs 的 snake_case serde）。
+export interface RabbitOverview {
+  rabbitmq_version: string;
+  erlang_version: string;
+  node: string;
+  queue_total: number;
+  connection_total: number;
+  consumer_total: number;
+  messages_ready: number;
+  messages_unacked: number;
+  publish_rate: number;
+  deliver_rate: number;
+}
+export interface RabbitQueue {
+  name: string;
+  vhost: string;
+  queue_type: string; // classic | quorum | stream
+  state: string;
+  messages: number;
+  messages_ready: number;
+  messages_unacked: number;
+  consumers: number;
+  durable: boolean;
+  auto_delete: boolean;
+  memory: number;
+}
+export interface RabbitExchange {
+  name: string;
+  exchange_type: string;
+  durable: boolean;
+  auto_delete: boolean;
+}
+export interface RabbitMessage {
+  payload: string;
+  properties: string; // JSON 字串
+  routing_key: string;
+  exchange: string;
+  redelivered: boolean;
+  message_count: number;
+}
+export interface RabbitPublishResult {
+  confirmed: boolean;
+}
 export interface KafkaPartitionInfo {
   partition: number;
   leader: number;
@@ -807,6 +851,8 @@ export const KIND_META: Record<DbKind, { label: string; color: string; defaultPo
   kafka: { label: "Kafka", color: "#0891b2", defaultPort: 9092, category: "queue", noDatabase: true },
   // Elasticsearch / OpenSearch（單一類型，flavor 連線時自動偵測）：yellow-500 呼應 Elastic 品牌黃。
   elastic: { label: "Elasticsearch", color: "#eab308", defaultPort: 9200, category: "search", noDatabase: true },
+  // RabbitMQ：pink-500（現有色相唯一空缺；品牌橘與 oracle #f97316 撞色不用）。
+  rabbitmq: { label: "RabbitMQ", color: "#ec4899", defaultPort: 5672, category: "queue", noDatabase: true },
   external: { label: "External", color: "#8b5cf6", defaultPort: 0, category: "other", external: true },
 };
 
@@ -1113,6 +1159,19 @@ export const api = {
   esNodes: (id: string) => invoke<EsNodeInfo[]>("es_nodes", { id }),
   esMapping: (id: string, index: string) => invoke<string>("es_mapping", { id, index }),
   esDeleteIndex: (id: string, index: string) => invoke<void>("es_delete_index", { id, index }),
+
+  // RabbitMQ：總覽、佇列 / exchange 清單、佇列詳情、訊息 peek、發布、清空、刪除佇列。
+  rabbitmqOverview: (id: string) => invoke<RabbitOverview>("rabbitmq_overview", { id }),
+  rabbitmqQueues: (id: string) => invoke<RabbitQueue[]>("rabbitmq_queues", { id }),
+  rabbitmqExchanges: (id: string) => invoke<RabbitExchange[]>("rabbitmq_exchanges", { id }),
+  rabbitmqQueueDetail: (id: string, queue: string) => invoke<RabbitQueue>("rabbitmq_queue_detail", { id, queue }),
+  /** peek：basic.get N 則，requeue=true 會重新入列（標記 redelivered）。 */
+  rabbitmqPeek: (id: string, queue: string, count: number, requeue: boolean) =>
+    invoke<RabbitMessage[]>("rabbitmq_peek", { id, queue, count, requeue }),
+  rabbitmqPublish: (id: string, exchange: string, routingKey: string, payload: string, persistent: boolean) =>
+    invoke<RabbitPublishResult>("rabbitmq_publish", { id, exchange, routingKey, payload, persistent }),
+  rabbitmqPurge: (id: string, queue: string) => invoke<void>("rabbitmq_purge", { id, queue }),
+  rabbitmqDeleteQueue: (id: string, queue: string) => invoke<void>("rabbitmq_delete_queue", { id, queue }),
 
   // AI 助手：偵測 claude CLI / 送出問答（串流走 onClaudeStream）/ 取消。
   claudeDetect: () => invoke<ClaudeStatus>("claude_detect"),

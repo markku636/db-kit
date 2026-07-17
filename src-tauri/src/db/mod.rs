@@ -22,6 +22,9 @@ pub mod external;
 /// 讓 slim CLI（`--no-default-features`）免除 librdkafka（CMake/C/OpenSSL）建置負擔。
 #[cfg(feature = "kafka")]
 pub mod kafka;
+/// RabbitMQ 驅動（lapin AMQP + Management REST）。於 `rabbitmq` feature 開啟時編入。
+#[cfg(feature = "rabbitmq")]
+pub mod rabbitmq;
 
 /// Elasticsearch / OpenSearch 驅動（一等公民；以 reqwest REST 接入）。僅在 `elastic` feature
 /// 開啟時編入，讓 slim CLI（`--no-default-features`）免除 reqwest / rustls 相依。
@@ -50,6 +53,10 @@ pub enum DbKind {
     /// 開啟時編入 `db::elastic`。UI 將 cluster→database、index→table、document→row 做最小映射，
     /// 其餘能力走 `es_*` 指令。OpenSearch 與 ES REST 相容，連線時自動偵測 flavor。
     Elastic,
+    /// RabbitMQ：訊息佇列（AMQP 0-9-1，非 SQL）。以 lapin + Management REST 接入；具體驅動於
+    /// `rabbitmq` feature 開啟時編入 `db::rabbitmq`。UI 將 vhost→database、queue→table 做最小映射，
+    /// 其餘能力（peek / publish / purge）走 `rabbitmq_*` 指令。
+    RabbitMq,
     /// 外部 web gateway（非真實連線；透過 HTTP 下 SQL）。實作見 `db::external`。
     External,
 }
@@ -68,6 +75,7 @@ impl DbKind {
             DbKind::Oracle => "oracle",
             DbKind::Kafka => "kafka",
             DbKind::Elastic => "elastic",
+            DbKind::RabbitMq => "rabbitmq",
             DbKind::External => "external",
         }
     }
@@ -83,6 +91,7 @@ impl DbKind {
             DbKind::Oracle => ".dmp",
             DbKind::Kafka => "", // Kafka 不支援備份
             DbKind::Elastic => "", // Elasticsearch 不支援備份
+            DbKind::RabbitMq => "", // RabbitMQ 不支援備份
             DbKind::External => "",
         }
     }

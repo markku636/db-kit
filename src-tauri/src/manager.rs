@@ -14,6 +14,8 @@ use crate::db::sqlite::SqliteDriver;
 use crate::db::kafka::KafkaDriver;
 #[cfg(feature = "elastic")]
 use crate::db::elastic::ElasticDriver;
+#[cfg(feature = "rabbitmq")]
+use crate::db::rabbitmq::RabbitMqDriver;
 use crate::db::{
     AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, DbKind,
     ErModel, ForeignKeyInfo, IndexInfo, KeyDetail, KeyEdit, PagedData, PoolStatus, QueryResult, RedisKeys,
@@ -37,6 +39,9 @@ enum Active {
     /// Elasticsearch / OpenSearch 驅動（一等公民；具體型別於 `elastic` feature 開啟時編入）。
     #[cfg(feature = "elastic")]
     Elastic(Arc<ElasticDriver>),
+    /// RabbitMQ 驅動（一等公民；具體型別於 `rabbitmq` feature 開啟時編入）。
+    #[cfg(feature = "rabbitmq")]
+    RabbitMq(Arc<RabbitMqDriver>),
     /// 外部 gateway 驅動（trait object，見 db::external）。
     Dyn(Arc<dyn DatabaseDriver>),
 }
@@ -55,6 +60,8 @@ impl Active {
             Active::Oracle(_) => DbKind::Oracle,
             #[cfg(feature = "kafka")]
             Active::Kafka(_) => DbKind::Kafka,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(_) => DbKind::RabbitMq,
             #[cfg(feature = "elastic")]
             Active::Elastic(_) => DbKind::Elastic,
             Active::Dyn(_) => DbKind::External,
@@ -72,6 +79,8 @@ impl Active {
             Active::Oracle(d) => d.ping().await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.ping().await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.ping().await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.ping().await,
             Active::Dyn(d) => d.ping().await,
@@ -88,6 +97,8 @@ impl Active {
             Active::Oracle(d) => d.list_databases().await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.list_databases().await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.list_databases().await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.list_databases().await,
             Active::Dyn(d) => d.list_databases().await,
@@ -104,6 +115,8 @@ impl Active {
             Active::Oracle(d) => d.list_tables(database).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.list_tables(database).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.list_tables(database).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.list_tables(database).await,
             Active::Dyn(d) => d.list_tables(database).await,
@@ -120,6 +133,8 @@ impl Active {
             Active::Oracle(d) => d.table_columns(database, table).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.table_columns(database, table).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.table_columns(database, table).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.table_columns(database, table).await,
             Active::Dyn(d) => d.table_columns(database, table).await,
@@ -136,6 +151,8 @@ impl Active {
             Active::Oracle(d) => d.schema_columns(database).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.schema_columns(database).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.schema_columns(database).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.schema_columns(database).await,
             Active::Dyn(d) => d.schema_columns(database).await,
@@ -157,6 +174,8 @@ impl Active {
             Active::Oracle(d) => d.table_data(database, table, query).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.table_data(database, table, query).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.table_data(database, table, query).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.table_data(database, table, query).await,
             Active::Dyn(d) => d.table_data(database, table, query).await,
@@ -174,6 +193,8 @@ impl Active {
             Active::Oracle(d) => d.query_capped(sql, cap).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.query_capped(sql, cap).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.query_capped(sql, cap).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.query_capped(sql, cap).await,
             Active::Dyn(d) => d.query_capped(sql, cap).await,
@@ -191,6 +212,8 @@ impl Active {
             Active::Oracle(d) => d.query_multi_capped(sql, cap).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.query_multi_capped(sql, cap).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.query_multi_capped(sql, cap).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.query_multi_capped(sql, cap).await,
             Active::Dyn(d) => d.query_multi_capped(sql, cap).await,
@@ -212,6 +235,8 @@ impl Active {
             Active::Oracle(d) => d.update_cell(database, table, edit).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.update_cell(database, table, edit).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.update_cell(database, table, edit).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.update_cell(database, table, edit).await,
             Active::Dyn(d) => d.update_cell(database, table, edit).await,
@@ -233,6 +258,8 @@ impl Active {
             Active::Oracle(d) => d.insert_row(database, table, row).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.insert_row(database, table, row).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.insert_row(database, table, row).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.insert_row(database, table, row).await,
             Active::Dyn(d) => d.insert_row(database, table, row).await,
@@ -254,6 +281,8 @@ impl Active {
             Active::Oracle(d) => d.delete_row(database, table, del).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.delete_row(database, table, del).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.delete_row(database, table, del).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.delete_row(database, table, del).await,
             Active::Dyn(d) => d.delete_row(database, table, del).await,
@@ -270,6 +299,8 @@ impl Active {
             Active::Oracle(d) => d.pool_status(),
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.pool_status(),
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.pool_status(),
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.pool_status(),
             Active::Dyn(d) => d.pool_status(),
@@ -286,6 +317,8 @@ impl Active {
             Active::Oracle(d) => d.key_detail(database, key).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.key_detail(database, key).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.key_detail(database, key).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.key_detail(database, key).await,
             Active::Dyn(d) => d.key_detail(database, key).await,
@@ -302,6 +335,8 @@ impl Active {
             Active::Oracle(d) => d.key_edit(database, key, edit).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.key_edit(database, key, edit).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.key_edit(database, key, edit).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.key_edit(database, key, edit).await,
             Active::Dyn(d) => d.key_edit(database, key, edit).await,
@@ -318,6 +353,8 @@ impl Active {
             Active::Oracle(d) => d.explain(sql).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.explain(sql).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.explain(sql).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.explain(sql).await,
             Active::Dyn(d) => d.explain(sql).await,
@@ -334,6 +371,8 @@ impl Active {
             Active::Oracle(d) => d.column_stats(database, table, column).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.column_stats(database, table, column).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.column_stats(database, table, column).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.column_stats(database, table, column).await,
             Active::Dyn(d) => d.column_stats(database, table, column).await,
@@ -350,6 +389,8 @@ impl Active {
             Active::Oracle(d) => d.table_info(database, table).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.table_info(database, table).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.table_info(database, table).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.table_info(database, table).await,
             Active::Dyn(d) => d.table_info(database, table).await,
@@ -366,6 +407,8 @@ impl Active {
             Active::Oracle(d) => d.list_foreign_keys(database, table).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.list_foreign_keys(database, table).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.list_foreign_keys(database, table).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.list_foreign_keys(database, table).await,
             Active::Dyn(d) => d.list_foreign_keys(database, table).await,
@@ -382,6 +425,8 @@ impl Active {
             Active::Oracle(d) => d.create_collection(database, name).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.create_collection(database, name).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.create_collection(database, name).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.create_collection(database, name).await,
             Active::Dyn(d) => d.create_collection(database, name).await,
@@ -398,6 +443,8 @@ impl Active {
             Active::Oracle(d) => d.create_database(name).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.create_database(name).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.create_database(name).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.create_database(name).await,
             Active::Dyn(d) => d.create_database(name).await,
@@ -414,6 +461,8 @@ impl Active {
             Active::Oracle(d) => d.drop_collection(database, name).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.drop_collection(database, name).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.drop_collection(database, name).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.drop_collection(database, name).await,
             Active::Dyn(d) => d.drop_collection(database, name).await,
@@ -430,6 +479,8 @@ impl Active {
             Active::Oracle(d) => d.drop_database(name).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.drop_database(name).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.drop_database(name).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.drop_database(name).await,
             Active::Dyn(d) => d.drop_database(name).await,
@@ -446,6 +497,8 @@ impl Active {
             Active::Oracle(d) => d.list_routines(database).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.list_routines(database).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.list_routines(database).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.list_routines(database).await,
             Active::Dyn(d) => d.list_routines(database).await,
@@ -462,6 +515,8 @@ impl Active {
             Active::Oracle(d) => d.routine_definition(database, name, routine_type).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.routine_definition(database, name, routine_type).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.routine_definition(database, name, routine_type).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.routine_definition(database, name, routine_type).await,
             Active::Dyn(d) => d.routine_definition(database, name, routine_type).await,
@@ -478,6 +533,8 @@ impl Active {
             Active::Oracle(d) => d.search_objects(opts).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.search_objects(opts).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.search_objects(opts).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.search_objects(opts).await,
             Active::Dyn(d) => d.search_objects(opts).await,
@@ -494,6 +551,8 @@ impl Active {
             Active::Oracle(d) => d.exec_ddl(sql).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.exec_ddl(sql).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.exec_ddl(sql).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.exec_ddl(sql).await,
             Active::Dyn(d) => d.exec_ddl(sql).await,
@@ -510,6 +569,8 @@ impl Active {
             Active::Oracle(d) => d.validate_ddl(database, sql).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.validate_ddl(database, sql).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.validate_ddl(database, sql).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.validate_ddl(database, sql).await,
             Active::Dyn(d) => d.validate_ddl(database, sql).await,
@@ -526,6 +587,8 @@ impl Active {
             Active::Oracle(d) => d.alter_table(database, table, op).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.alter_table(database, table, op).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.alter_table(database, table, op).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.alter_table(database, table, op).await,
             Active::Dyn(d) => d.alter_table(database, table, op).await,
@@ -542,6 +605,8 @@ impl Active {
             Active::Oracle(d) => d.er_model(database).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.er_model(database).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.er_model(database).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.er_model(database).await,
             Active::Dyn(d) => d.er_model(database).await,
@@ -558,6 +623,8 @@ impl Active {
             Active::Oracle(d) => d.table_ddl(database, table).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.table_ddl(database, table).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.table_ddl(database, table).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.table_ddl(database, table).await,
             Active::Dyn(d) => d.table_ddl(database, table).await,
@@ -574,6 +641,8 @@ impl Active {
             Active::Oracle(d) => d.table_indexes(database, table).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.table_indexes(database, table).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.table_indexes(database, table).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.table_indexes(database, table).await,
             Active::Dyn(d) => d.table_indexes(database, table).await,
@@ -590,6 +659,8 @@ impl Active {
             Active::Oracle(d) => d.drop_index(database, table, index).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.drop_index(database, table, index).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.drop_index(database, table, index).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.drop_index(database, table, index).await,
             Active::Dyn(d) => d.drop_index(database, table, index).await,
@@ -606,6 +677,8 @@ impl Active {
             Active::Oracle(d) => d.create_index(database, table, name, columns, unique).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.create_index(database, table, name, columns, unique).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.create_index(database, table, name, columns, unique).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.create_index(database, table, name, columns, unique).await,
             Active::Dyn(d) => d.create_index(database, table, name, columns, unique).await,
@@ -622,6 +695,8 @@ impl Active {
             Active::Oracle(d) => d.server_info().await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.server_info().await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.server_info().await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.server_info().await,
             Active::Dyn(d) => d.server_info().await,
@@ -638,6 +713,8 @@ impl Active {
             Active::Oracle(d) => d.scan_keys(database, pattern, limit).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.scan_keys(database, pattern, limit).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.scan_keys(database, pattern, limit).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.scan_keys(database, pattern, limit).await,
             Active::Dyn(d) => d.scan_keys(database, pattern, limit).await,
@@ -654,6 +731,8 @@ impl Active {
             Active::Oracle(d) => d.document_get(database, table, id).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.document_get(database, table, id).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.document_get(database, table, id).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.document_get(database, table, id).await,
             Active::Dyn(d) => d.document_get(database, table, id).await,
@@ -670,6 +749,8 @@ impl Active {
             Active::Oracle(d) => d.document_replace(database, table, id, doc_json).await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.document_replace(database, table, id, doc_json).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.document_replace(database, table, id, doc_json).await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.document_replace(database, table, id, doc_json).await,
             Active::Dyn(d) => d.document_replace(database, table, id, doc_json).await,
@@ -686,6 +767,8 @@ impl Active {
             Active::Oracle(d) => d.clear_cache().await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.clear_cache().await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.clear_cache().await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.clear_cache().await,
             Active::Dyn(d) => d.clear_cache().await,
@@ -702,6 +785,8 @@ impl Active {
             Active::Oracle(d) => d.close().await,
             #[cfg(feature = "kafka")]
             Active::Kafka(d) => d.close().await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.close().await,
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.close().await,
             Active::Dyn(d) => d.close().await,
@@ -775,6 +860,13 @@ impl ConnectionManager {
             #[cfg(not(feature = "elastic"))]
             DbKind::Elastic => Err(AppError::Unsupported(
                 t!("此版本未編入 Elasticsearch 支援（請以 --features elastic 建置）").into(),
+            )),
+            // RabbitMQ：具體驅動於 `rabbitmq` feature 開啟時編入；未編入時回 Unsupported。
+            #[cfg(feature = "rabbitmq")]
+            DbKind::RabbitMq => RabbitMqDriver::connect(&cfg).await.map(|d| Active::RabbitMq(Arc::new(d))),
+            #[cfg(not(feature = "rabbitmq"))]
+            DbKind::RabbitMq => Err(AppError::Unsupported(
+                t!("此版本未編入 RabbitMQ 支援（請以 --features rabbitmq 建置）").into(),
             )),
             DbKind::External => crate::db::external::connect_external(&cfg).await.map(Active::Dyn),
         };
@@ -890,6 +982,17 @@ impl ConnectionManager {
             #[cfg(not(feature = "elastic"))]
             DbKind::Elastic => Err(AppError::Unsupported(
                 t!("此版本未編入 Elasticsearch 支援（請以 --features elastic 建置）").into(),
+            )),
+            #[cfg(feature = "rabbitmq")]
+            DbKind::RabbitMq => {
+                let driver = RabbitMqDriver::connect(config).await?;
+                driver.ping().await?;
+                driver.close().await;
+                Ok(())
+            }
+            #[cfg(not(feature = "rabbitmq"))]
+            DbKind::RabbitMq => Err(AppError::Unsupported(
+                t!("此版本未編入 RabbitMQ 支援（請以 --features rabbitmq 建置）").into(),
             )),
             DbKind::External => {
                 let d = crate::db::external::connect_external(config).await?;
@@ -1196,6 +1299,16 @@ impl ConnectionManager {
         match &self.get(id)?.active {
             Active::Elastic(d) => Ok(d.clone()),
             _ => Err(AppError::Unsupported(t!("此連線不是 Elasticsearch").into())),
+        }
+    }
+
+    /// 取得 RabbitMQ driver 本體，供 `rabbitmq_*` 專屬命令呼叫其 inherent 方法
+    /// （peek / publish / delete_queue）。非 RabbitMQ 連線回 Unsupported。
+    #[cfg(feature = "rabbitmq")]
+    pub fn rabbitmq_driver(&self, id: &str) -> AppResult<Arc<RabbitMqDriver>> {
+        match &self.get(id)?.active {
+            Active::RabbitMq(d) => Ok(d.clone()),
+            _ => Err(AppError::Unsupported(t!("此連線不是 RabbitMQ").into())),
         }
     }
 

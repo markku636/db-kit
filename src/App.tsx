@@ -68,6 +68,8 @@ const KafkaSchemaViewer = lazyOverlay(() => import("./KafkaSchemaViewer"));
 const KafkaCreateTopicDialog = lazyOverlay(() => import("./KafkaCreateTopicDialog"));
 const EsClusterOverview = lazyOverlay(() => import("./EsClusterOverview"));
 const EsMappingViewer = lazyOverlay(() => import("./EsMappingViewer"));
+const RabbitMqOverview = lazyOverlay(() => import("./RabbitMqOverview"));
+const RabbitMqPublishDialog = lazyOverlay(() => import("./RabbitMqPublishDialog"));
 const NewKeyDialog = lazyOverlay(() => import("./NewKeyDialog"));
 const CreateTableDialog = lazyOverlay(() => import("./CreateTableDialog"));
 const ConnectionProperties = lazyOverlay(() => import("./ConnectionProperties"));
@@ -1247,6 +1249,10 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   const [esOverview, setEsOverview] = useState<{ id: string; name: string } | null>(null);
   // Elasticsearch / OpenSearch 索引 Mapping 檢視器。
   const [esMapping, setEsMapping] = useState<{ connId: string; index: string } | null>(null);
+  // RabbitMQ 總覽面板。
+  const [rabbitOverview, setRabbitOverview] = useState<{ id: string; name: string } | null>(null);
+  // RabbitMQ 發布訊息對話框（從連線 / db 層開啟時 routingKey 空；從佇列開啟時預填佇列名）。
+  const [rabbitPublish, setRabbitPublish] = useState<{ connId: string; routingKey?: string } | null>(null);
   // 新增 Redis 鍵對話框
   const [newKey, setNewKey] = useState<{ connId: string; db: string } | null>(null);
   // 設計表結構（CREATE TABLE）對話框：帶連線 / 資料庫 / 種類。
@@ -2051,6 +2057,53 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       }
       return nodes;
     }
+    if (m.kind === "rabbitmq") {
+      const ro = readonlyConns[m.connId] === true;
+      const nodes: MenuNode[] = [
+        it(t("瀏覽訊息"), () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind)),
+        it(t("佇列詳情"), () => useStore.getState().openTable(m.connId, m.db, m.table, "structure", m.objKind)),
+        it(t("複製佇列名"), () => copyToClipboard(m.table, t("已複製佇列名"))),
+        it(t("重新整理"), () => refreshTables(m.connId, m.db)),
+      ];
+      if (!ro) {
+        nodes.splice(2, 0, it(t("發布到此佇列…"), () => setRabbitPublish({ connId: m.connId, routingKey: m.table })));
+        nodes.push(sep);
+        nodes.push(it(t("清空佇列…"), async () => {
+          // 雙重確認：danger confirm + 輸入佇列名。清空保留佇列本身。
+          if (!(await uiConfirm(
+            t("將刪除佇列「{name}」中的全部訊息（保留佇列本身）。此操作不可復原。", { name: m.table }),
+            { danger: true, confirmText: t("繼續") },
+          ))) return;
+          const typed = await uiPrompt(t("請輸入佇列名稱以確認清空"), { placeholder: m.table });
+          if (typed === null) return;
+          if (typed !== m.table) {
+            toast.error(t("輸入的佇列名稱不符，已取消"));
+            return;
+          }
+          try {
+            await api.rabbitmqPurge(m.connId, m.table);
+            toast.success(t("已清空佇列 {name}", { name: m.table }));
+            refreshTables(m.connId, m.db);
+          } catch (e: any) {
+            toast.error(e?.message ?? t("清空失敗"));
+          }
+        }, true));
+        nodes.push(it(t("刪除佇列…"), async () => {
+          if (!(await uiConfirm(
+            t("確定刪除佇列「{name}」？此操作不可復原。", { name: m.table }),
+            { title: t("刪除佇列"), danger: true, confirmText: t("刪除") },
+          ))) return;
+          try {
+            await api.rabbitmqDeleteQueue(m.connId, m.table);
+            toast.success(t("已刪除佇列 {name}", { name: m.table }));
+            refreshTables(m.connId, m.db);
+          } catch (e: any) {
+            toast.error(e?.message ?? t("刪除失敗"));
+          }
+        }, true));
+      }
+      return nodes;
+    }
     const isView = m.objKind === "view";
     const isMyPg = isMysqlFamily(m.kind) || m.kind === "postgres";
     // 唯讀連線：隱藏會寫入 / 破壞資料的動作（新增列 / 匯入 / 產生資料 / 改名 / 複製含資料 / 清空 / 截斷 / 刪除）。
@@ -2497,7 +2550,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                         setActive(c.id);
                         selectNode({ type: "database", connId: c.id, db, kind: c.kind });
                       }}
-                      onContextMenu={(isRedis || isSqlKind || c.kind === "mongo" || c.kind === "kafka" || c.kind === "elastic") ? (e) => {
+                      onContextMenu={(isRedis || isSqlKind || c.kind === "mongo" || c.kind === "kafka" || c.kind === "elastic" || c.kind === "rabbitmq") ? (e) => {
                         e.preventDefault();
                         setActive(c.id);
                         selectNode({ type: "database", connId: c.id, db, kind: c.kind });
@@ -2608,6 +2661,14 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                 ...(connectedIds.has(menu.id) && menuConn.kind === "elastic"
                   ? [[t("叢集總覽…"), () => setEsOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
                   : []),
+                ...(connectedIds.has(menu.id) && menuConn.kind === "rabbitmq"
+                  ? [
+                      [t("總覽…"), () => setRabbitOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                      ...(readonlyConns[menu.id]
+                        ? []
+                        : [[t("發布訊息…"), () => setRabbitPublish({ connId: menuConn.id }), false] as [string, () => void, boolean]]),
+                    ]
+                  : []),
                 ...(connectedIds.has(menu.id)
                   ? [["SQL Search…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
                   : []),
@@ -2697,6 +2758,14 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                   : dbConn?.kind === "elastic"
                   ? [
                       [t("叢集總覽…"), () => { if (dbConn) setEsOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                      [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
+                    ]
+                  : dbConn?.kind === "rabbitmq"
+                  ? [
+                      [t("總覽…"), () => { if (dbConn) setRabbitOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                      ...(readonlyConns[dbMenu.connId]
+                        ? []
+                        : [[t("發布訊息…"), () => setRabbitPublish({ connId: dbMenu.connId }), false] as [string, () => void, boolean]]),
                       [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
                     ]
                   : dbConn?.kind === "mongo"
@@ -2804,6 +2873,18 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
 
       {esMapping && (
         <EsMappingViewer connId={esMapping.connId} index={esMapping.index} onClose={() => setEsMapping(null)} />
+      )}
+
+      {rabbitOverview && (
+        <RabbitMqOverview connId={rabbitOverview.id} connName={rabbitOverview.name} onClose={() => setRabbitOverview(null)} />
+      )}
+
+      {rabbitPublish && (
+        <RabbitMqPublishDialog
+          connId={rabbitPublish.connId}
+          initialRoutingKey={rabbitPublish.routingKey}
+          onClose={() => setRabbitPublish(null)}
+        />
       )}
 
       {kafkaCreateTopic && (
@@ -3265,6 +3346,7 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
   redis: "PING",
   kafka: "", // Kafka 無查詢編輯器
   elastic: '{ "index": "", "query": { "match_all": {} }, "size": 200 }',
+  rabbitmq: "", // RabbitMQ 無查詢編輯器（走專屬佇列瀏覽 / 發布面板）
   external: "SELECT 1",
 };
 // 僅關聯式資料庫支援 EXPLAIN 查詢計畫分析（MSSQL 回 SHOWPLAN XML，於結果格顯示、不走 JSON 視覺樹）。

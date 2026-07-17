@@ -112,6 +112,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [esSslInsecure, setEsSslInsecure] = useState(initial?.options?.es_ssl_insecure === "1");
   const [esShowHidden, setEsShowHidden] = useState(initial?.options?.es_show_hidden === "1");
   const [esCloudId, setEsCloudId] = useState("");
+  // RabbitMQ 連線選項（存於 options map）；帳密沿用 username/password（預設 guest/guest）。
+  const [rabbitVhost, setRabbitVhost] = useState(initial?.options?.rabbitmq_vhost ?? "/");
+  const [rabbitTls, setRabbitTls] = useState(initial?.options?.rabbitmq_tls === "1");
+  const [rabbitMgmtUrl, setRabbitMgmtUrl] = useState(initial?.options?.rabbitmq_mgmt_url ?? "");
 
   // 任一連線欄位變動就清掉上次測試結果，避免「連線成功」殘留成誤導的假成功訊號（改了 host 卻仍顯示舊成功）。
   useEffect(() => {
@@ -121,7 +125,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       mssqlEncrypt, mssqlTrust, mssqlCaPath, sslMode, sslCa,
       oracleConnectType, oracleClientDir,
       kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass, connectUrl, connectUser, connectPass,
-      esAuth, esTls, esSslCa, esSslInsecure, esShowHidden]);
+      esAuth, esTls, esSslCa, esSslInsecure, esShowHidden,
+      rabbitVhost, rabbitTls, rabbitMgmtUrl]);
 
   // Elastic：host 為完整 URL 時 TLS 由 URL 決定（勾選不顯示/停用）。
   const esHostIsUrl = /^https?:\/\//i.test(host.trim());
@@ -213,6 +218,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       if (esTls && esSslCa.trim()) o.es_ssl_ca = esSslCa.trim();
       if (esTls && esSslInsecure) o.es_ssl_insecure = "1";
       if (esShowHidden) o.es_show_hidden = "1";
+    } else if (kind === "rabbitmq") {
+      if (rabbitVhost.trim() && rabbitVhost.trim() !== "/") o.rabbitmq_vhost = rabbitVhost.trim();
+      if (rabbitTls) o.rabbitmq_tls = "1";
+      if (rabbitMgmtUrl.trim()) o.rabbitmq_mgmt_url = rabbitMgmtUrl.trim();
     } else if (sslKinds.includes(kind)) {
       if (sslMode) o.ssl_mode = sslMode;
       // CA 只在 verify-* 模式生效（require/required 不驗證憑證，sqlx 會忽略）。
@@ -227,7 +236,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const onKindChange = (k: DbKind) => {
     // 僅在使用者尚未自訂埠（仍等於前一個 kind 的預設埠）時，才覆寫為新 kind 的預設埠
     setPort((prev) => (prev === KIND_META[kind].defaultPort ? KIND_META[k].defaultPort : prev));
+    // 預設帳號：kafka/elastic 無 root 慣例（清空）；rabbitmq 慣例為 guest；其餘為 root。
     if (noRootKind(k) && username === "root") setUsername("");
+    else if (k === "rabbitmq" && username === "root") setUsername("guest");
+    else if (kind === "rabbitmq" && k !== "rabbitmq" && username === "guest") setUsername("root");
     else if (noRootKind(kind) && !noRootKind(k) && username === "") setUsername("root");
     // ssl_mode 詞彙 PG（require）與 MySQL 系（required）不同，跨 kind 不可沿用；CA 路徑一併清除。
     if (k !== kind) { setSslMode(""); setSslCa(""); }
@@ -276,6 +288,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     if (o.encrypt != null) setMssqlEncrypt(o.encrypt !== "false");
     if (o.trust_server_certificate != null) setMssqlTrust(optBool(o.trust_server_certificate));
     if (o.trust_cert_ca != null) setMssqlCaPath(o.trust_cert_ca);
+    if (o.rabbitmq_vhost != null) setRabbitVhost(o.rabbitmq_vhost);
+    if (o.rabbitmq_tls != null) setRabbitTls(optBool(o.rabbitmq_tls));
+    if (o.rabbitmq_mgmt_url != null) setRabbitMgmtUrl(o.rabbitmq_mgmt_url);
   };
 
   const doImport = async () => {
@@ -737,6 +752,28 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                   {t("透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，通常需勾「略過憑證驗證」。")}
                 </div>
               )}
+            </Section>
+          )}
+
+          {kind === "rabbitmq" && (
+            <Section>
+              <Field label={t("Virtual host（vhost）")} hint={t("預設 /；CloudAMQP 的 vhost 通常等於使用者名稱")}>
+                <Input value={rabbitVhost} onChange={(e) => setRabbitVhost(e.target.value)} onKeyDown={submitOnEnter} placeholder="/" />
+              </Field>
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={rabbitTls}
+                  onChange={(e) => {
+                    setRabbitTls(e.target.checked);
+                    // 勾 TLS 時若埠仍是預設 5672 → 改 5671（amqps）；取消則還原。
+                    setPort((p) => (e.target.checked ? (p === 5672 ? 5671 : p) : (p === 5671 ? 5672 : p)));
+                  }} />
+                <span>{t("使用 TLS（amqps）")}</span>
+              </label>
+              <Field label={t("Management API URL（選填）")}
+                hint={t("留空＝ http(s)://{host}:15672；佇列清單 / 總覽需要此 API。帳密沿用上方 AMQP 帳密")}>
+                <Input value={rabbitMgmtUrl} onChange={(e) => setRabbitMgmtUrl(e.target.value)} onKeyDown={submitOnEnter}
+                  placeholder={rabbitTls ? "https://host:15672" : "http://host:15672"} />
+              </Field>
             </Section>
           )}
         </>

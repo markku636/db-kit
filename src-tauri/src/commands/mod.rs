@@ -28,6 +28,10 @@ use crate::db::kafka::dto::{
 };
 #[cfg(feature = "elastic")]
 use crate::db::elastic::dto::{EsClusterHealth, EsIndexInfo, EsNodeInfo};
+#[cfg(feature = "rabbitmq")]
+use crate::db::rabbitmq::dto::{
+    RabbitExchange, RabbitMessage, RabbitOverview, RabbitPublishResult, RabbitQueue,
+};
 
 pub struct AppState {
     pub manager: ConnectionManager,
@@ -2328,4 +2332,62 @@ pub async fn es_mapping(state: State<'_, AppState>, id: String, index: String) -
 #[tauri::command]
 pub async fn es_delete_index(state: State<'_, AppState>, id: String, index: String) -> AppResult<()> {
     state.manager.elastic_driver(&id)?.delete_index(&index).await
+}
+
+// ===================== RabbitMQ（一等公民；rabbitmq feature）=====================
+
+/// 叢集總覽（Management /api/overview）。
+#[cfg(feature = "rabbitmq")]
+#[tauri::command]
+pub async fn rabbitmq_overview(state: State<'_, AppState>, id: String) -> AppResult<RabbitOverview> {
+    state.manager.rabbitmq_driver(&id)?.overview().await
+}
+
+/// 佇列清單（Management）。
+#[cfg(feature = "rabbitmq")]
+#[tauri::command]
+pub async fn rabbitmq_queues(state: State<'_, AppState>, id: String) -> AppResult<Vec<RabbitQueue>> {
+    state.manager.rabbitmq_driver(&id)?.queues().await
+}
+
+/// 交換器清單（Management）。
+#[cfg(feature = "rabbitmq")]
+#[tauri::command]
+pub async fn rabbitmq_exchanges(state: State<'_, AppState>, id: String) -> AppResult<Vec<RabbitExchange>> {
+    state.manager.rabbitmq_driver(&id)?.exchanges().await
+}
+
+/// 單一佇列詳情（Management）。
+#[cfg(feature = "rabbitmq")]
+#[tauri::command]
+pub async fn rabbitmq_queue_detail(state: State<'_, AppState>, id: String, queue: String) -> AppResult<RabbitQueue> {
+    state.manager.rabbitmq_driver(&id)?.queue_detail(&queue).await
+}
+
+/// 非破壞性預覽訊息（basic.get + requeue）。stream 佇列不支援。
+#[cfg(feature = "rabbitmq")]
+#[tauri::command]
+pub async fn rabbitmq_peek(state: State<'_, AppState>, id: String, queue: String, count: u32, requeue: bool) -> AppResult<Vec<RabbitMessage>> {
+    state.manager.rabbitmq_driver(&id)?.peek(&queue, count, requeue).await
+}
+
+/// 發布訊息（publisher confirm）。
+#[cfg(feature = "rabbitmq")]
+#[tauri::command]
+pub async fn rabbitmq_publish(state: State<'_, AppState>, id: String, exchange: String, routing_key: String, payload: String, persistent: bool) -> AppResult<RabbitPublishResult> {
+    state.manager.rabbitmq_driver(&id)?.publish(&exchange, &routing_key, &payload, persistent).await
+}
+
+/// 清空佇列（Management，破壞性）。
+#[cfg(feature = "rabbitmq")]
+#[tauri::command]
+pub async fn rabbitmq_purge(state: State<'_, AppState>, id: String, queue: String) -> AppResult<()> {
+    state.manager.rabbitmq_driver(&id)?.purge(&queue).await
+}
+
+/// 刪除佇列（破壞性）。
+#[cfg(feature = "rabbitmq")]
+#[tauri::command]
+pub async fn rabbitmq_delete_queue(state: State<'_, AppState>, id: String, queue: String) -> AppResult<()> {
+    state.manager.rabbitmq_driver(&id)?.delete_queue(&queue).await
 }

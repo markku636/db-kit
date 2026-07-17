@@ -66,11 +66,12 @@ export const TYPE_PRESETS: Record<DbKind, string[]> = {
   sqlite: ["INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC"],
   mssql: ["INT IDENTITY(1,1)", "INT", "BIGINT", "DECIMAL(18,2)", "NVARCHAR(255)", "NVARCHAR(MAX)", "VARCHAR(255)", "BIT", "DATE", "DATETIME2", "DATETIMEOFFSET", "UNIQUEIDENTIFIER", "MONEY"],
   oracle: ["NUMBER GENERATED AS IDENTITY", "NUMBER", "NUMBER(10)", "NUMBER(10,2)", "VARCHAR2(255)", "NVARCHAR2(255)", "CLOB", "CHAR(1)", "DATE", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE", "RAW(16)", "BLOB"],
-  // 非 SQL（mongo / redis / kafka / elastic）不會用到型別下拉，但需滿足 Record<DbKind> 完整性。
+  // 非 SQL（mongo / redis / kafka / elastic / rabbitmq）不會用到型別下拉，但需滿足 Record<DbKind> 完整性。
   mongo: [],
   redis: [],
   kafka: [],
   elastic: [],
+  rabbitmq: [],
   external: [], // 外部 gateway 唯讀，不建表
 };
 

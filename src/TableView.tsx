@@ -14,6 +14,8 @@ import {
 import { OpenTab, useStore } from "./store";
 import KafkaMessageBrowser from "./KafkaMessageBrowser";
 import KafkaTopicConfig from "./KafkaTopicConfig";
+import RabbitMqQueueBrowser from "./RabbitMqQueueBrowser";
+import RabbitMqQueueDetail from "./RabbitMqQueueDetail";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, TYPE_PRESETS } from "./sql";
 import RedisKeyTree from "./RedisKeyTree";
@@ -61,11 +63,13 @@ function useIsRedis(connId: string): boolean {
 export default function TableView({ tab }: { tab: OpenTab }) {
   const t = useT();
   const setTabView = useStore((s) => s.setTabView);
-  const isKafka = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.kind === "kafka");
+  const connKind = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.kind);
+  const isKafka = connKind === "kafka";
+  const isRabbit = connKind === "rabbitmq";
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {/* 結構 / 資料 分頁切換（Navicat 手感；Kafka 改為 訊息 / 設定） */}
+      {/* 結構 / 資料 分頁切換（Navicat 手感；Kafka 改為 訊息 / 設定，RabbitMQ 為 訊息 / 詳情） */}
       <div className="flex items-center gap-1 px-2 py-1 bg-bar border-b border-fg/10">
         <span className="text-xs text-fg/40 mr-2 pl-1">{tab.table}</span>
         {(["data", "structure"] as const).map((v) => (
@@ -76,7 +80,9 @@ export default function TableView({ tab }: { tab: OpenTab }) {
               tab.view === v ? "bg-fg/10 text-fg" : "text-fg/50 hover:bg-fg/5"
             }`}
           >
-            {isKafka ? (v === "data" ? t("訊息") : t("設定")) : v === "data" ? t("資料") : t("結構")}
+            {isKafka ? (v === "data" ? t("訊息") : t("設定"))
+              : isRabbit ? (v === "data" ? t("訊息") : t("詳情"))
+              : v === "data" ? t("資料") : t("結構")}
           </button>
         ))}
       </div>
@@ -85,6 +91,12 @@ export default function TableView({ tab }: { tab: OpenTab }) {
           <KafkaMessageBrowser connId={tab.connId} topic={tab.table} />
         ) : (
           <KafkaTopicConfig connId={tab.connId} topic={tab.table} />
+        )
+      ) : isRabbit ? (
+        tab.view === "data" ? (
+          <RabbitMqQueueBrowser connId={tab.connId} queue={tab.table} />
+        ) : (
+          <RabbitMqQueueDetail connId={tab.connId} queue={tab.table} />
         )
       ) : tab.view === "data" ? (
         <DataPane tab={tab} />
