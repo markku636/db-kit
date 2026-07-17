@@ -1,3 +1,7 @@
+## v0.13.3
+
+- **Kafka 連線表單 UX**（仿 Conduktor / kafka-ui）：帳密欄位改為僅在選擇 SASL 協定時顯示，更名「SASL 使用者 / SASL 密碼」並移到「SASL 機制」下方；隱藏對 Kafka 無意義的「資料庫」欄位；非 SASL 儲存時不再夾帶預設 root 帳密進設定與 keychain；切到 Kafka 分頁時自動清掉不適用的預設 root 帳號。
+
 ## v0.13.2
 
 - **文件**：README（繁中 / English）新增 Kafka 訊息瀏覽器截圖（06-kafka）；截圖管線補 Kafka shim 與拍攝場景，全部介面預覽圖重拍。
