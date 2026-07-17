@@ -8,7 +8,7 @@
 
 <p align="center">
 一站式跨平台桌面資料庫工具，以單一一致的介面管理<br>
-<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka</strong>。
+<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka · Elasticsearch</strong>。
 </p>
 
 <p align="center">
@@ -207,6 +207,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] MySQL / PostgreSQL SSL 模式（sqlx rustls；typed 連線參數，密碼特殊字元不再需編碼）
 - [x] 雲端連線強化：**從連線字串匯入**（貼 `mysql://` / `postgres://` / `mongodb+srv://` / `rediss://` / `sqlserver://` 及 Azure ADO.NET 一鍵填表；GUI 與 `dbk --url` 共用同一套解析）、自訂 CA 憑證（MySQL / PostgreSQL / SQL Server / MongoDB，適配 AWS RDS / DocumentDB / Aiven / Supabase / Upstash 等）
 - [x] 新增連線對話框改版：連線類型依**分類分組**（關聯式 / 文件 / 鍵值 / 訊息佇列 / 搜尋引擎）＋圖示選擇器，選定後收合為單列、可隨時「變更類型」
+- [x] Elasticsearch / OpenSearch 支援（一等公民；純 reqwest REST，無額外 C 相依，`elastic` feature 隨 gui 預設開）：叢集→索引樹、**Query DSL 查詢編輯器**（JSON envelope `{ "index":"..", "query":{..} }` + lint + 欄位補全）、search / count / 單層聚合（雙結果集）、**叢集總覽**（健康 / 節點 / 索引狀態）、Mapping 檢視、刪除索引；認證支援 Basic / API Key / Elastic Cloud ID，TLS + 自訂 CA；flavor（ES vs OpenSearch）連線時自動偵測
 - [x] 儲存格直接編輯 + ✓ 套用（以主鍵定位，寫回 DB）
 - [x] 新增列 / 刪除列（完整 CRUD）
 - [x] 篩選（單欄條件）、排序（點欄位標題）

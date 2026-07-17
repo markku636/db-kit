@@ -1620,12 +1620,13 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
 name = "db-kit"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "aes-gcm 0.10.3",
  "apache-avro",
  "argon2 0.5.3",
  "async-trait",
+ "base64 0.22.1",
  "bb8",
  "bb8-tiberius",
  "bigdecimal",
@@ -3035,10 +3036,10 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rustls 0.23.41",
+ "rustls-native-certs 0.8.4",
  "tokio",
  "tokio-rustls 0.26.4",
  "tower-service",
- "webpki-roots",
 ]
 
 [[package]]
@@ -5697,6 +5698,7 @@ dependencies = [
  "pin-project-lite",
  "quinn",
  "rustls 0.23.41",
+ "rustls-native-certs 0.8.4",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -5711,7 +5713,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
 ]
 
 [[package]]

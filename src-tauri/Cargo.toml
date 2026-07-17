@@ -1,6 +1,6 @@
 [package]
 name = "db-kit"
-version = "0.14.0"
+version = "0.15.0"
 description = "Unified database management tool"
 license = "MIT"
 edition = "2021"
@@ -85,7 +85,11 @@ calamine = { version = "0.26", features = ["dates"] }
 rdkafka = { version = "0.39", default-features = false, features = ["cmake-build", "tokio"], optional = true }
 # Schema Registry：以 reqwest（rustls，延續全案避開 OpenSSL/NASM）打 Confluent SR REST API，
 # apache-avro（純 Rust）依 schema id 解 Avro binary → JSON。皆藏在 `kafka` feature 後。
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+# rustls-tls-native-roots：改用 OS 憑證庫當信任根（讓企業內部 CA 免手動指定 CA 檔）；
+# 同時惠及 Kafka Schema Registry / Connect 與 Elasticsearch REST client。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"], optional = true }
+# Elasticsearch / OpenSearch：API key 以 base64(id:key) 編碼（純 Rust 極小）。藏在 `elastic` feature 後。
+base64 = { version = "0.22", optional = true }
 apache-avro = { version = "0.17", optional = true }
 # Protobuf 動態解碼：protox 由 .proto 文字編出 FileDescriptorSet，prost-reflect 依 descriptor
 # 動態解 protobuf binary → JSON。皆純 Rust，藏在 kafka feature 後。
@@ -107,7 +111,7 @@ keyring = { version = "3", features = ["apple-native"] }
 keyring = { version = "3", features = ["sync-secret-service"] }
 
 [features]
-default = ["gui", "kafka", "kafka-js"]
+default = ["gui", "kafka", "kafka-js", "elastic"]
 # gui：啟用 Tauri 桌面程式（commands / agent / scheduler / run()）。預設開啟。
 gui = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
 custom-protocol = ["gui", "tauri/custom-protocol"]
@@ -119,6 +123,9 @@ kafka-js = ["kafka", "dep:boa_engine"]
 # kafka-tls：在 kafka 之上額外開啟 rdkafka 的 ssl（TLS / SASL_SSL）。需預建 OpenSSL（見 P7 建置文件）。
 # 分離成獨立 feature：無 OpenSSL 的開發環境仍可用 kafka（PLAINTEXT / SASL_PLAINTEXT）建置與測試。
 kafka-tls = ["kafka", "rdkafka/ssl"]
+# elastic：一等公民 Elasticsearch / OpenSearch 支援（REST；以 reqwest rustls 接入，純 Rust 無 C 相依）。
+# 隨 gui 預設開啟；slim CLI（--no-default-features）排除。第一版唯讀瀏覽 + DSL 查詢。
+elastic = ["dep:reqwest", "dep:base64"]
 
 # Release 瘦身（保守版）：
 # - lto="thin"：跨 codegen unit 最佳化但平行執行，連結期記憶體峰值遠低於 fat LTO

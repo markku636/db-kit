@@ -1,3 +1,11 @@
+## v0.15.0
+
+- **Elasticsearch / OpenSearch 支援（一等公民）**：新增 `elastic` 連線類型（單一類型涵蓋兩家，flavor 於連線時 `GET /` 自動偵測）。純 reqwest REST client（無額外 C 相依），`elastic` feature 隨 gui 預設開、slim CLI（`--no-default-features`）不受影響。
+  - **Query DSL 查詢編輯器**：CodeMirror JSON 編輯器，envelope 格式 `{ "index":"logs-*", "query":{…}, "size":200, "sort":[…] }`；`"count": true` 走 `_count`；有 `aggs` 時回傳 hits + 聚合雙結果集。即時 JSON lint + envelope 鍵 / DSL 關鍵字 / 索引欄位三路補全。
+  - **側欄與面板**：連線→叢集→索引樹、叢集總覽（健康色塊 / 節點 / 索引 docs 與大小 / 分片）、Mapping 檢視、刪除索引（危險確認）。
+  - **認證與 TLS**：Basic / API Key（存 keychain）/ Elastic Cloud ID 一鍵解出節點 URL；TLS + 自訂 CA + 略過驗證（自簽 / 內網）。
+  - reqwest 改用 `rustls-tls-native-roots`（OS 憑證庫當信任根，企業內部 CA 免手動指定），同時惠及 Kafka Schema Registry / Connect。
+
 ## v0.14.0
 
 - **從連線字串匯入**：連線對話框新增「從連線字串匯入」，貼上 `mysql://` / `postgres://` / `mongodb+srv://` / `rediss://` / `sqlserver://` 或 Azure ADO.NET 字串即自動填表（含 host / port / 帳密 / 資料庫 / TLS 選項）；解析改由 Rust 端統一（新 `db/conn_url.rs`），GUI 與 `dbk --url` CLI 共用同一套邏輯，順帶修正 query 參數被吃進資料庫、IPv6 主機、percent-decode 等既有缺陷。

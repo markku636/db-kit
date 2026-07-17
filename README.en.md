@@ -8,7 +8,7 @@
 
 <p align="center">
 An all-in-one cross-platform desktop database tool that manages<br>
-<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka</strong><br>
+<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka · Elasticsearch</strong><br>
 through a single, consistent interface.
 </p>
 
@@ -207,6 +207,7 @@ All core features are complete (50+ items). Expand for the full list:
 - [x] MySQL / PostgreSQL SSL modes (sqlx rustls; typed connection params — special characters in passwords no longer need encoding)
 - [x] Cloud connection improvements: **import from connection string** (paste `mysql://` / `postgres://` / `mongodb+srv://` / `rediss://` / `sqlserver://` or Azure ADO.NET to auto-fill the form; the GUI and `dbk --url` share one parser) and custom CA certificates (MySQL / PostgreSQL / SQL Server / MongoDB — for AWS RDS / DocumentDB / Aiven / Supabase / Upstash, etc.)
 - [x] Add-connection dialog redesign: connection types **grouped by category** (relational / document / key-value / message queue / search) with an icon picker; collapses to a single row after selection with a "change type" action
+- [x] Elasticsearch / OpenSearch support (first-class; pure reqwest REST, no extra C dependency, `elastic` feature on by default with gui): cluster→index tree, **Query DSL editor** (JSON envelope `{ "index":"..", "query":{..} }` + lint + field completion), search / count / single-level aggregations (dual result sets), **cluster overview** (health / nodes / index status), mapping viewer, delete index; Basic / API Key / Elastic Cloud ID auth, TLS + custom CA; flavor (ES vs OpenSearch) auto-detected on connect
 - [x] In-cell editing + ✓ apply (keyed by primary key, written back to the DB)
 - [x] Insert / delete rows (full CRUD)
 - [x] Filtering (single-column conditions), sorting (click column headers)
