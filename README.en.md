@@ -205,6 +205,8 @@ All core features are complete (50+ items). Expand for the full list:
 - [x] Oracle support (rust-oracle / ODPI-C; runtime Instant Client detection, EZConnect / SID / TNS connection styles, structure tabs / routines / DBMS_XPLAN plans / ER diagram; server 12c+)
 - [x] MongoDB deep-dive: visual explain, JSON query editor (completion), advanced indexes + $indexStats, validation rules, field statistics, monitoring panel (currentOp / Profiler)
 - [x] MySQL / PostgreSQL SSL modes (sqlx rustls; typed connection params — special characters in passwords no longer need encoding)
+- [x] Cloud connection improvements: **import from connection string** (paste `mysql://` / `postgres://` / `mongodb+srv://` / `rediss://` / `sqlserver://` or Azure ADO.NET to auto-fill the form; the GUI and `dbk --url` share one parser) and custom CA certificates (MySQL / PostgreSQL / SQL Server / MongoDB — for AWS RDS / DocumentDB / Aiven / Supabase / Upstash, etc.)
+- [x] Add-connection dialog redesign: connection types **grouped by category** (relational / document / key-value / message queue / search) with an icon picker; collapses to a single row after selection with a "change type" action
 - [x] In-cell editing + ✓ apply (keyed by primary key, written back to the DB)
 - [x] Insert / delete rows (full CRUD)
 - [x] Filtering (single-column conditions), sorting (click column headers)

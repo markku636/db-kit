@@ -205,6 +205,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] MongoDB 強化：explain 視覺化、JSON 查詢編輯器（補全）、進階索引 + $indexStats、驗證規則、欄位統計、監控面板（currentOp / Profiler）
 - [x] Kafka 支援（一等公民；rdkafka / librdkafka）：叢集→主題樹、訊息瀏覽器 + JSON/Avro 明細、**即時 tail**、發佈訊息、**消費者群組 + Lag**、位移重設、建/刪主題 + 設定、**Schema Registry**（Avro→JSON）；`kafka` feature 隨 gui 預設開，TLS/SCRAM 走 `kafka-tls`（需 OpenSSL）
 - [x] MySQL / PostgreSQL SSL 模式（sqlx rustls；typed 連線參數，密碼特殊字元不再需編碼）
+- [x] 雲端連線強化：**從連線字串匯入**（貼 `mysql://` / `postgres://` / `mongodb+srv://` / `rediss://` / `sqlserver://` 及 Azure ADO.NET 一鍵填表；GUI 與 `dbk --url` 共用同一套解析）、自訂 CA 憑證（MySQL / PostgreSQL / SQL Server / MongoDB，適配 AWS RDS / DocumentDB / Aiven / Supabase / Upstash 等）
+- [x] 新增連線對話框改版：連線類型依**分類分組**（關聯式 / 文件 / 鍵值 / 訊息佇列 / 搜尋引擎）＋圖示選擇器，選定後收合為單列、可隨時「變更類型」
 - [x] 儲存格直接編輯 + ✓ 套用（以主鍵定位，寫回 DB）
 - [x] 新增列 / 刪除列（完整 CRUD）
 - [x] 篩選（單欄條件）、排序（點欄位標題）

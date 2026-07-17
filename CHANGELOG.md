@@ -1,3 +1,10 @@
+## v0.14.0
+
+- **從連線字串匯入**：連線對話框新增「從連線字串匯入」，貼上 `mysql://` / `postgres://` / `mongodb+srv://` / `rediss://` / `sqlserver://` 或 Azure ADO.NET 字串即自動填表（含 host / port / 帳密 / 資料庫 / TLS 選項）；解析改由 Rust 端統一（新 `db/conn_url.rs`），GUI 與 `dbk --url` CLI 共用同一套邏輯，順帶修正 query 參數被吃進資料庫、IPv6 主機、percent-decode 等既有缺陷。
+- **雲端連線 CA 憑證**：MySQL / MariaDB / PostgreSQL（verify-* 模式）、SQL Server、MongoDB 新增自訂 CA 憑證路徑欄位，適配 AWS RDS / DocumentDB / Aiven / Supabase / Upstash 等需服務商 CA bundle 的雲端資料庫。
+- **新增連線對話框改版**：連線類型改為依分類分組（關聯式 / 文件 / 鍵值 / 訊息佇列 / 搜尋引擎 / 其他）＋圖示的選擇器，選定後收合為單列 chip、可隨時「變更類型」；對話框加寬，各類型專屬設定以分隔區塊整理。
+- **對抗式審查**：本次針對連線字串解析與匯入路徑做多角度自我審查，修正 MSSQL 密碼含分號被截斷、ADO.NET 誤判、JDBC 非 sqlserver 方言亂解析、postgres sslmode 大小寫、匯入布林選項遺失、Kafka 匯入殘留預設帳號等 9 項問題。
+
 ## v0.13.3
 
 - **Kafka 連線表單 UX**（仿 Conduktor / kafka-ui）：帳密欄位改為僅在選擇 SASL 協定時顯示，更名「SASL 使用者 / SASL 密碼」並移到「SASL 機制」下方；隱藏對 Kafka 無意義的「資料庫」欄位；非 SASL 儲存時不再夾帶預設 root 帳密進設定與 keychain；切到 Kafka 分頁時自動清掉不適用的預設 root 帳號。
