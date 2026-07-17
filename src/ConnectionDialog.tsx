@@ -96,6 +96,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       oracleConnectType, oracleClientDir,
       kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass, connectUrl, connectUser, connectPass]);
 
+  // Kafka 帳密僅 SASL 協定使用；非 SASL 存檔時清空，避免把預設 root / 舊密碼誤存進設定與 keychain。
+  const usesAuth = kind !== "kafka" || kafkaProtocol.startsWith("SASL");
+
   const build = (): ConnectionConfig => ({
     id: initial?.id ?? crypto.randomUUID(),
     name:
@@ -106,9 +109,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     kind,
     host,
     port,
-    username,
-    password,
-    database: database || null,
+    username: usesAuth ? username : "",
+    password: usesAuth ? password : "",
+    database: kind === "kafka" ? null : database || null,
     max_connections: 5,
     ssh_enabled: !KIND_META[kind].fileBased && sshEnabled,
     ssh_host: sshHost,
@@ -173,6 +176,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const onKindChange = (k: DbKind) => {
     // 僅在使用者尚未自訂埠（仍等於前一個 kind 的預設埠）時，才覆寫為新 kind 的預設埠
     setPort((prev) => (prev === KIND_META[kind].defaultPort ? KIND_META[k].defaultPort : prev));
+    // Kafka 的 SASL 帳號沒有 root 慣例：仍是預設 root 就清空；切回其他類型且留空則補回預設。
+    if (k === "kafka" && username === "root") setUsername("");
+    else if (kind === "kafka" && k !== "kafka" && username === "") setUsername("root");
     // ssl_mode 詞彙 PG（require）與 MySQL 系（required）不同，跨 kind 不可沿用。
     if (k !== kind) setSslMode("");
     setKind(k);
@@ -304,28 +310,33 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
               </Field>
             )}
           </div>
-          <div className="flex gap-3">
-            <Field label={t("使用者")} className="flex-1">
-              <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
-            </Field>
-            <Field label={t("密碼")} className="flex-1">
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={submitOnEnter}
-                placeholder={editing ? t("留空＝不變更") : ""}
-              />
-            </Field>
-          </div>
-          <Field label={
-            kind === "oracle"
-              ? (oracleConnectType === "sid" ? "SID" : oracleConnectType === "tns" ? t("TNS 別名") : t("服務名稱（Service Name）"))
-              : t("資料庫（選填）")
-          }>
-            <Input value={database} onChange={(e) => setDatabase(e.target.value)} onKeyDown={submitOnEnter}
-              placeholder={kind === "oracle" ? t("例如 ORCLPDB1 / FREEPDB1") : ""} />
-          </Field>
+          {/* Kafka 無帳密（僅 SASL 協定需要，欄位在下方安全協定區）與資料庫概念，不顯示這兩排。 */}
+          {kind !== "kafka" && (
+            <>
+              <div className="flex gap-3">
+                <Field label={t("使用者")} className="flex-1">
+                  <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
+                </Field>
+                <Field label={t("密碼")} className="flex-1">
+                  <Input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    onKeyDown={submitOnEnter}
+                    placeholder={editing ? t("留空＝不變更") : ""}
+                  />
+                </Field>
+              </div>
+              <Field label={
+                kind === "oracle"
+                  ? (oracleConnectType === "sid" ? "SID" : oracleConnectType === "tns" ? t("TNS 別名") : t("服務名稱（Service Name）"))
+                  : t("資料庫（選填）")
+              }>
+                <Input value={database} onChange={(e) => setDatabase(e.target.value)} onKeyDown={submitOnEnter}
+                  placeholder={kind === "oracle" ? t("例如 ORCLPDB1 / FREEPDB1") : ""} />
+              </Field>
+            </>
+          )}
 
           {kind === "redis" && (
             <div className="space-y-2">
@@ -434,14 +445,26 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                   ))}
                 </Select>
               </Field>
+              {/* 帳密僅 SASL 需要（仿 Conduktor / kafka-ui：選了 SASL 協定才出現認證欄位）。 */}
               {kafkaProtocol.startsWith("SASL") && (
-                <Field label={t("SASL 機制")}>
-                  <Select selectSize="md" value={kafkaSaslMech} onChange={(e) => setKafkaSaslMech(e.target.value)}>
-                    {["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"].map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </Select>
-                </Field>
+                <>
+                  <Field label={t("SASL 機制")}>
+                    <Select selectSize="md" value={kafkaSaslMech} onChange={(e) => setKafkaSaslMech(e.target.value)}>
+                      {["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"].map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <div className="flex gap-3">
+                    <Field label={t("SASL 使用者")} className="flex-1">
+                      <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
+                    </Field>
+                    <Field label={t("SASL 密碼")} className="flex-1">
+                      <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={submitOnEnter}
+                        placeholder={editing ? t("留空＝不變更") : ""} />
+                    </Field>
+                  </div>
+                </>
               )}
               {kafkaProtocol.endsWith("SSL") && (
                 <>
@@ -492,7 +515,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                   </div>
                 )}
               </div>
-              <div className="text-xs text-fg/40">{t("SASL 帳密請填上方「使用者 / 密碼」；Bootstrap servers 可逗號分隔多個 broker。")}</div>
+              <div className="text-xs text-fg/40">{t("Bootstrap servers 可逗號分隔多個 broker。")}</div>
             </div>
           )}
         </>
