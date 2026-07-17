@@ -216,7 +216,27 @@ if ($PSScriptRoot -match '\s') {
     Write-Host "偵測到專案路徑含空白，已將 Rust target 目錄改到不含空白處：$relocated" -ForegroundColor Yellow
 }
 
-# --- 5. 打包 ---
+# --- 4.95 CMake generator（Kafka 的 librdkafka 需 CMake 編 C 原始碼）------------
+# 本專案打包一律含 Kafka（default features）。Kafka 的 rdkafka-sys 會用 CMake 編 librdkafka，
+# 而 CMake 預設自動挑「最新」的 Visual Studio 當 generator。若機器同時裝了較新的 VS
+# （如 VS 2026 / v18）但 CMake 版本不認得該 generator 名稱（"Visual Studio 18 2026"），
+# 建置會失敗（CMake Error: Could not create named generator …）。
+# 解法：只要偵測到 VS 2022（v17，CMake 3.21+ 皆支援），就明確指定它當 generator，
+# 讓 Kafka 一律編得過，不受更新版 VS 影響。
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+if (Test-Path $vswhere) {
+    $vs2022 = & $vswhere -version "[17.0,18.0)" -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath 2>$null
+    if ($vs2022) {
+        $env:CMAKE_GENERATOR = "Visual Studio 17 2022"
+        Write-Host "已指定 CMake generator = Visual Studio 17 2022（避開較新 VS 的 generator 未被 CMake 認得的問題，確保 Kafka/librdkafka 編得過）" -ForegroundColor Yellow
+    } else {
+        Write-Host "警告：未偵測到 VS 2022（v17）的 C++ 工具。若 CMake 版本太舊、機器只有更新版 VS，Kafka（librdkafka）可能編不過——請更新 CMake 或安裝 VS 2022 Build Tools。" -ForegroundColor DarkYellow
+    }
+}
+
+# --- 5. 打包（含 Kafka：default features = gui + kafka + kafka-js + elastic + rabbitmq）---
 Write-Step "開始 tauri build（第一次會編譯 Rust，請耐心等候）"
 npm run tauri build
 Assert-LastExit "tauri build"

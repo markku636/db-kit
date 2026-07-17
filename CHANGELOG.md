@@ -1,3 +1,7 @@
+## v0.17.2
+
+- **build(打包)**：`build-installer.ps1` 打包前明確指定 CMake generator 為 `Visual Studio 17 2022`（偵測到 VS 2022 v17 的 C++ 工具時）。同時裝了較新 Visual Studio（如 VS 2026 / v18）而 CMake 版本不認得其 generator 名稱時，Kafka 的 rdkafka-sys 會在編 librdkafka 時失敗（`CMake Error: Could not create named generator Visual Studio 18 2026`）；改用已裝好的 VS 2022 generator 讓本地打包一律含 Kafka。功能無異動。
+
 ## v0.17.1
 
 - **fix(RabbitMQ)**：對抗式審查修正兩項後端問題。
