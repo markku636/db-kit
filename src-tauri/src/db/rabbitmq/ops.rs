@@ -39,7 +39,9 @@ impl RabbitMqDriver {
             }
         }
 
-        let chan = self.chan.lock().await;
+        // 每次操作開一條新 channel：basic.get 不存在的佇列會回 404 並關閉該 channel，
+        // 用完即棄可避免癱瘓後續操作（見 mod.rs RabbitMqDriver 說明）。
+        let chan = self.conn.create_channel().await.map_err(query_err)?;
         let mut messages: Vec<RabbitMessage> = Vec::new();
         let mut tags: Vec<u64> = Vec::new();
         for _ in 0..count {
@@ -72,8 +74,8 @@ impl RabbitMqDriver {
         payload: &str,
         persistent: bool,
     ) -> AppResult<RabbitPublishResult> {
-        let chan = self.chan.lock().await;
-        // 啟用 publisher confirm（重複呼叫 confirm.select 在已啟用的 channel 上為 no-op）。
+        let chan = self.conn.create_channel().await.map_err(query_err)?;
+        // 啟用 publisher confirm（新 channel 首次啟用）。
         chan.confirm_select(ConfirmSelectOptions::default())
             .await
             .map_err(query_err)?;
@@ -100,7 +102,7 @@ impl RabbitMqDriver {
 
     /// 刪除佇列（含其訊息）。
     pub async fn delete_queue(&self, name: &str) -> AppResult<()> {
-        let chan = self.chan.lock().await;
+        let chan = self.conn.create_channel().await.map_err(query_err)?;
         chan.queue_delete(ShortString::from(name), QueueDeleteOptions::default())
             .await
             .map_err(query_err)?;

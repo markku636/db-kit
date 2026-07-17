@@ -1,3 +1,10 @@
+## v0.17.1
+
+- **fix(RabbitMQ)**：對抗式審查修正兩項後端問題。
+  - **共用 channel 被一次錯誤癱瘓（HIGH）**：peek / publish / delete 原本共用單一長生命週期 AMQP channel，一旦遇到 channel-level 例外（如 basic.get 一個不存在 / 打錯字的佇列 → broker 回 404）該 channel 會永久關閉，導致該連線後續所有佇列操作全部失敗，且 ping 仍報健康。改為每個操作開一條新 channel、用完即棄，錯誤只影響單次操作。
+  - **Management URL 預設綁到 AMQP TLS（MED）**：原本 amqps 時把管理 URL 翻成 `https://host:15672`，但 RabbitMQ 管理外掛預設是純 HTTP:15672（TLS 管理是另外的 opt-in，慣例 15671），導致「TLS AMQP + 預設管理埠」對 15672 做 https 握手而失敗。改為預設一律 `http://host:15672`；CloudAMQP（管理在 443）等情形以 Management API URL 覆寫。
+  - 已知限制（未於本版處理）：二進位訊息 payload 以 UTF-8 lossy 顯示（非文字訊息會看到替代字元）；SSH tunnel 下 Management URL 不隨隧道改寫；amqps 自簽憑證略過驗證未支援。
+
 ## v0.17.0
 
 - **RabbitMQ 支援（一等公民）**：新增 `rabbitmq` 連線類型，雙軌架構——lapin（純 Rust AMQP 0-9-1，rustls-ring 無 NASM）負責連線 / 訊息 peek / publish / 刪佇列，Management REST API（既有 reqwest）負責總覽 / 佇列 / exchange 清單。`rabbitmq` feature 隨 gui 預設開，slim CLI 不受影響。

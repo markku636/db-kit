@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use lapin::types::ShortString;
 use lapin::{Connection, ConnectionProperties};
-use tokio::sync::Mutex;
 
 use mgmt::MgmtClient;
 
@@ -27,10 +26,10 @@ use crate::error::{AppError, AppResult};
 /// 一個已連線的 RabbitMQ。持有長生命週期 AMQP connection + 一條共用 channel（Mutex 序列化操作），
 /// 以及選用的 Management REST 用戶端（清單 / 總覽走它）。
 pub struct RabbitMqDriver {
-    /// 長生命週期 AMQP 連線（close 時收尾）。
-    conn: Connection,
-    /// 共用 channel：peek / publish / delete 皆序列化在此（basic_get + reject 的順序性需要）。
-    pub(super) chan: Mutex<lapin::Channel>,
+    /// 長生命週期 AMQP 連線（close 時收尾）。每個操作（peek / publish / delete）開一條**新** channel，
+    /// 用完即棄——AMQP channel-level 例外（如 basic.get 不存在的佇列回 404）會永久關閉該 channel，
+    /// 若共用單一 channel，一次預期錯誤就會癱瘓整條連線的所有後續操作。
+    pub(super) conn: Connection,
     /// Management REST 用戶端（清單 / 總覽 / purge）。construction 不連線，呼叫時才可能失敗。
     pub(super) mgmt: Option<Arc<MgmtClient>>,
     /// 目標 vhost（list_databases 回它；mgmt 路徑段用它）。
@@ -112,7 +111,8 @@ impl DatabaseDriver for RabbitMqDriver {
         let conn = Connection::connect(&uri, ConnectionProperties::default())
             .await
             .map_err(conn_err)?;
-        let chan = conn.create_channel().await.map_err(conn_err)?;
+        // 建立時開一條 channel 驗證握手可用即棄（操作時各自開新 channel）。
+        conn.create_channel().await.map_err(conn_err)?;
         // Management 用戶端（帳密沿用 AMQP 帳密；construction 不連線，list/總覽呼叫時才驗證可達）。
         let mgmt = MgmtClient::new(
             &config::mgmt_url(config),
@@ -121,12 +121,7 @@ impl DatabaseDriver for RabbitMqDriver {
         )
         .ok()
         .map(Arc::new);
-        Ok(RabbitMqDriver {
-            conn,
-            chan: Mutex::new(chan),
-            mgmt,
-            vhost,
-        })
+        Ok(RabbitMqDriver { conn, mgmt, vhost })
     }
 
     async fn ping(&self) -> AppResult<()> {

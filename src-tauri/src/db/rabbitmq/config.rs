@@ -88,13 +88,16 @@ pub fn amqp_uri(cfg: &ConnectionConfig) -> String {
     )
 }
 
-/// 組出 Management REST base URL：`rabbitmq_mgmt_url` 覆寫，否則 `http(s)://host:15672`。
+/// 組出 Management REST base URL：`rabbitmq_mgmt_url` 覆寫，否則 `http://host:15672`。
+///
+/// 預設一律 http:15672——RabbitMQ management 外掛預設即以「純 HTTP、15672」提供，與 AMQP 是否走
+/// TLS 無關（管理端 TLS 是另外的 opt-in，慣例埠 15671）。把 scheme/埠綁到 AMQP 的 TLS 會讓
+/// 「TLS AMQP + 預設管理埠」對 15672 做 https 握手而失敗；CloudAMQP（管理在 443）等情形請覆寫此 URL。
 pub fn mgmt_url(cfg: &ConnectionConfig) -> String {
     if let Some(u) = opt(cfg, "rabbitmq_mgmt_url") {
         return u.trim_end_matches('/').to_string();
     }
-    let scheme = if is_tls(cfg) { "https" } else { "http" };
-    format!("{scheme}://{}:15672", host(cfg))
+    format!("http://{}:15672", host(cfg))
 }
 
 #[cfg(test)]
@@ -197,11 +200,13 @@ mod tests {
     fn mgmt_url_default_and_override() {
         let mut c = cfg();
         assert_eq!(mgmt_url(&c), "http://mq.example.com:15672");
+        // 管理端預設一律 http:15672，不隨 AMQP 的 TLS 翻成 https（管理外掛預設即純 HTTP）。
         c.options.insert("rabbitmq_tls".into(), "1".into());
-        assert_eq!(mgmt_url(&c), "https://mq.example.com:15672");
+        assert_eq!(mgmt_url(&c), "http://mq.example.com:15672");
+        // TLS 管理 / CloudAMQP（443）等情形以 rabbitmq_mgmt_url 明確覆寫。
         c.options
-            .insert("rabbitmq_mgmt_url".into(), "http://proxy:8080/rmq/".into());
-        assert_eq!(mgmt_url(&c), "http://proxy:8080/rmq");
+            .insert("rabbitmq_mgmt_url".into(), "https://proxy:15671/rmq/".into());
+        assert_eq!(mgmt_url(&c), "https://proxy:15671/rmq");
     }
 
     #[test]
