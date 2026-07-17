@@ -1,3 +1,9 @@
+## v0.16.0
+
+- **自然語言查詢（NL→SQL / NL→ES DSL）**：查詢面板新增「AI 生成」列（Ctrl+Shift+A），用自然語言描述需求即生成查詢語句。沿用既有 AI 助手管線（本地 Claude CLI、訂閱登入、不需 API key），SQL 情境注入方言 + 全表名清單 + 最相關表的完整欄位，Elasticsearch 情境注入 index 清單 + 目標 index mapping。
+  - **不是黑箱**：生成語句先顯示於預覽（可檢視 / 複製 / 重新生成），使用者按「套用到編輯器」後才進編輯器、由使用者自行執行；破壞性語句（DROP/TRUNCATE、無 WHERE 的 DELETE/UPDATE）套用前紅字警示；執行失敗可「帶錯誤重試」（原語句 + 錯誤回送重生成）。
+  - 後端新增 `generate` 模式（單回合、無 session、零工具）：`--permission-mode dontAsk` 下未列入允許的工具一律自動拒絕（已實測 Write 被拒、無檔案產生），`--max-turns 1` 防守多回合。未安裝 / 未登入 Claude CLI 時顯示提示並停用輸入。
+
 ## v0.15.0
 
 - **Elasticsearch / OpenSearch 支援（一等公民）**：新增 `elastic` 連線類型（單一類型涵蓋兩家，flavor 於連線時 `GET /` 自動偵測）。純 reqwest REST client（無額外 C 相依），`elastic` feature 隨 gui 預設開、slim CLI（`--no-default-features`）不受影響。
