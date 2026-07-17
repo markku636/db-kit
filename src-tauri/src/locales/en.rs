@@ -63,6 +63,10 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "{id2}: psubscribe {p} 失敗：{e}" => "{id2}: psubscribe {p} failed: {e}",
         "此筆為失敗紀錄，無法還原" => "This entry is a failed backup and cannot be restored",
 
+        // ---- db/conn_url.rs：連線字串解析（GUI parse_connection_url / CLI --url 共用）----
+        "無法解析連線字串" => "Unable to parse the connection string",
+        "不支援的連線字串格式：{scheme}" => "Unsupported connection string format: {scheme}",
+
         // ---- CLI 執行期輸出（cli/*.rs）----
         "連線成功" => "Connected successfully",
         "已備份：{path}（{bytes} bytes，方式 {method}）" => "Backed up: {path} ({bytes} bytes, method {method})",

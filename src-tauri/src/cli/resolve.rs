@@ -2,6 +2,7 @@
 
 use uuid::Uuid;
 
+use crate::db::conn_url::{parse_url, Parsed};
 use crate::db::{ConnectionConfig, DbKind};
 use crate::error::{AppError, AppResult};
 use crate::store;
@@ -100,6 +101,8 @@ fn resolve_adhoc(args: &ConnArgs) -> AppResult<ConnectionConfig> {
     let password = args.password.clone().or(parsed.password).unwrap_or_default();
     // sqlite：database 視為檔案路徑；其餘為預設 DB / schema。
     let database = args.database.clone().or(parsed.database);
+    // URL query 解析出的 driver options（ssl_mode / mongo_* / redis_tls 等）直接帶入。
+    let options = parsed.options;
 
     Ok(ConnectionConfig {
         id: format!("cli-{}", Uuid::new_v4()),
@@ -119,117 +122,7 @@ fn resolve_adhoc(args: &ConnArgs) -> AppResult<ConnectionConfig> {
         ssh_password: String::new(),
         ssh_private_key_path: String::new(),
         ssh_passphrase: String::new(),
-        options: Default::default(),
+        options,
         otp_secret: String::new(),
     })
-}
-
-#[derive(Default)]
-struct Parsed {
-    kind: Option<DbKind>,
-    host: Option<String>,
-    port: Option<u16>,
-    username: Option<String>,
-    password: Option<String>,
-    database: Option<String>,
-}
-
-/// 取出 scheme：先試 `scheme://`，再試 `scheme:`（僅限已知 scheme，避免把 Windows 磁碟機 `C:` 當 scheme）。
-fn split_scheme(url: &str) -> (Option<String>, String) {
-    if let Some((s, r)) = url.split_once("://") {
-        return (Some(s.to_ascii_lowercase()), r.to_string());
-    }
-    const SCHEMES: &[&str] = &[
-        "sqlite",
-        "mysql",
-        "mariadb",
-        "postgres",
-        "postgresql",
-        "mongodb",
-        "mongo",
-        "redis",
-        "mssql",
-        "sqlserver",
-        "oracle",
-        "kafka",
-    ];
-    if let Some((s, r)) = url.split_once(':') {
-        if SCHEMES.contains(&s.to_ascii_lowercase().as_str()) {
-            return (Some(s.to_ascii_lowercase()), r.to_string());
-        }
-    }
-    (None, url.to_string())
-}
-
-/// 極簡 URL/DSN 解析：`scheme://[user[:pass]@]host[:port][/db]`。
-/// sqlite 特例：`sqlite:path` / `sqlite://path` 或直接給檔案路徑 → database = path（不需 url crate）。
-fn parse_url(url: &str, kind_hint: Option<DbKind>) -> AppResult<Parsed> {
-    let (scheme, rest) = split_scheme(url);
-
-    let kind = match scheme.as_deref() {
-        Some("mysql") => Some(DbKind::Mysql),
-        Some("mariadb") => Some(DbKind::Mariadb),
-        Some("postgres") | Some("postgresql") => Some(DbKind::Postgres),
-        Some("mongodb") | Some("mongo") => Some(DbKind::Mongo),
-        Some("redis") => Some(DbKind::Redis),
-        Some("mssql") | Some("sqlserver") => Some(DbKind::Mssql),
-        Some("oracle") => Some(DbKind::Oracle),
-        Some("kafka") => Some(DbKind::Kafka),
-        Some("sqlite") => Some(DbKind::Sqlite),
-        _ => kind_hint,
-    };
-
-    // sqlite：去掉 scheme 後整段當檔案路徑。
-    if matches!(kind, Some(DbKind::Sqlite)) {
-        let path = if scheme.is_some() { rest } else { url.to_string() };
-        return Ok(Parsed {
-            kind,
-            database: Some(path),
-            ..Default::default()
-        });
-    }
-
-    let mut p = Parsed {
-        kind,
-        ..Default::default()
-    };
-
-    // 切出 /db。
-    let (authority, db) = match rest.split_once('/') {
-        Some((a, d)) => (
-            a.to_string(),
-            if d.is_empty() { None } else { Some(d.to_string()) },
-        ),
-        None => (rest, None),
-    };
-    p.database = db;
-
-    // 切出 user[:pass]@。
-    let hostport = if let Some((userinfo, hp)) = authority.rsplit_once('@') {
-        match userinfo.split_once(':') {
-            Some((u, pw)) => {
-                p.username = Some(u.to_string());
-                p.password = Some(pw.to_string());
-            }
-            None => p.username = Some(userinfo.to_string()),
-        }
-        hp.to_string()
-    } else {
-        authority
-    };
-
-    // 切出 host[:port]。
-    match hostport.rsplit_once(':') {
-        Some((h, port_str)) if !h.is_empty() => {
-            p.host = Some(h.to_string());
-            p.port = port_str.parse::<u16>().ok();
-        }
-        _ => {
-            if !hostport.is_empty() {
-                p.host = Some(hostport);
-            }
-        }
-    }
-
-    Ok(p)
 }

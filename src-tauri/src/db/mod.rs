@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 
+/// 連線字串（URL / DSN / ADO.NET）解析統一落點。GUI `parse_connection_url` 指令與
+/// dbk CLI `--url` 共用；不可 feature-gate（slim CLI 依賴）。
+pub mod conn_url;
 pub mod limits;
 pub mod mongo;
 pub mod mssql;

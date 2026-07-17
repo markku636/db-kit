@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
-import { api, ConnectionConfig, DbKind, KIND_META, SshAuthMethod } from "./api";
+import { useEffect, useState, type ReactNode } from "react";
+import { api, ConnectionConfig, DbKind, KIND_META, ParsedUrl, SshAuthMethod } from "./api";
 import { pickOpenFile } from "./ui";
 import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
-import { Plug, FolderOpen } from "lucide-react";
+import { Plug, FolderOpen, ClipboardPaste } from "lucide-react";
 import { useT } from "./i18n";
+import KindPicker from "./KindPicker";
 
 interface Props {
   onClose: () => void;
@@ -13,6 +14,10 @@ interface Props {
 
 // 支援 ssl_mode 選項的類型（sqlx driver；MariaDB 與 MySQL 共用詞彙）。
 const sslKinds: DbKind[] = ["mysql", "mariadb", "postgres"];
+
+// 會驗證憑證鏈的 ssl_mode 值（PG 與 MySQL 系詞彙合併）；只有這些模式下 CA 憑證才有作用，
+// require/required 模式 sqlx 不驗證憑證，常駐顯示 CA 欄會誤導。
+const VERIFY_SSL_MODES = ["verify-ca", "verify-full", "verify_ca", "verify_identity"];
 
 // ssl_mode 下拉選項（值即後端 options.ssl_mode；require/required 只加密不驗證憑證鏈）。
 const SSL_MODE_OPTIONS: Record<string, { value: string; label: string }[]> = {
@@ -44,6 +49,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [database, setDatabase] = useState(initial?.database ?? "");
   const [testing, setTesting] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // 類型選擇器展開狀態：新增模式先選類型（展開）；編輯模式直達表單（收合成 chip）。
+  const [pickerOpen, setPickerOpen] = useState(!editing);
+  // 「從連線字串匯入」列（貼雲端服務給的 URI 一鍵填表）。
+  const [importOpen, setImportOpen] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
+  // 匯入結果與測試結果分開存：applyParsed 改欄位會觸發 msg 清除 effect，共用會讓成功訊息立刻消失。
+  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // SSH Tunnel
   const [sshEnabled, setSshEnabled] = useState(initial?.ssh_enabled ?? false);
   const [sshHost, setSshHost] = useState(initial?.ssh_host ?? "");
@@ -68,11 +80,17 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [mongoTls, setMongoTls] = useState(initial?.options?.mongo_tls === "1");
   const [mongoReplicaSet, setMongoReplicaSet] = useState(initial?.options?.mongo_replica_set ?? "");
   const [mongoDirect, setMongoDirect] = useState(initial?.options?.mongo_direct === "1");
+  // Mongo TLS 進階（AWS DocumentDB 等需自訂 CA；值格式沿 mongo 系 "1"）。
+  const [mongoTlsCa, setMongoTlsCa] = useState(initial?.options?.mongo_tls_ca ?? "");
+  const [mongoTlsInsecure, setMongoTlsInsecure] = useState(initial?.options?.mongo_tls_insecure === "1");
   // MSSQL 連線選項（存於 options map）；加密預設開啟。
   const [mssqlEncrypt, setMssqlEncrypt] = useState(initial?.options?.encrypt !== "false");
   const [mssqlTrust, setMssqlTrust] = useState(initial?.options?.trust_server_certificate === "true");
+  const [mssqlCaPath, setMssqlCaPath] = useState(initial?.options?.trust_cert_ca ?? "");
   // MySQL / PostgreSQL SSL 模式（存於 options map；空值＝沿用 driver 預設 prefer/preferred）。
   const [sslMode, setSslMode] = useState(initial?.options?.ssl_mode ?? "");
+  // verify-* 模式的 CA 憑證檔（AWS RDS 等雲端服務的 CA bundle）。
+  const [sslCa, setSslCa] = useState(initial?.options?.ssl_ca ?? "");
   // Oracle 連線選項（存於 options map）：database 欄的解讀方式 + Instant Client 目錄。
   const [oracleConnectType, setOracleConnectType] = useState(initial?.options?.connect_type ?? "service");
   const [oracleClientDir, setOracleClientDir] = useState(initial?.options?.client_dir ?? "");
@@ -92,7 +110,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   useEffect(() => {
     setMsg(null);
   }, [kind, host, port, username, password, database, sshEnabled, sshHost, sshPort, sshUsername, sshAuthMethod, sshPassword, sshKeyPath, sshPassphrase,
-      redisTls, redisTlsInsecure, mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mssqlEncrypt, mssqlTrust, sslMode,
+      redisTls, redisTlsInsecure, mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mongoTlsCa, mongoTlsInsecure,
+      mssqlEncrypt, mssqlTrust, mssqlCaPath, sslMode, sslCa,
       oracleConnectType, oracleClientDir,
       kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass, connectUrl, connectUser, connectPass]);
 
@@ -111,7 +130,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     port,
     username: usesAuth ? username : "",
     password: usesAuth ? password : "",
-    database: kind === "kafka" ? null : database || null,
+    database: KIND_META[kind].noDatabase ? null : database || null,
     max_connections: 5,
     ssh_enabled: !KIND_META[kind].fileBased && sshEnabled,
     ssh_host: sshHost,
@@ -148,9 +167,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       if (mongoTls) o.mongo_tls = "1";
       if (mongoReplicaSet.trim()) o.mongo_replica_set = mongoReplicaSet.trim();
       if (mongoDirect) o.mongo_direct = "1";
+      if (mongoTls && mongoTlsCa.trim()) o.mongo_tls_ca = mongoTlsCa.trim();
+      if (mongoTls && mongoTlsInsecure) o.mongo_tls_insecure = "1";
     } else if (kind === "mssql") {
       o.encrypt = mssqlEncrypt ? "true" : "false";
       if (mssqlTrust) o.trust_server_certificate = "true";
+      // 自訂 CA 只在「加密且未信任任意憑證」時有意義（tiberius trust_cert_ca）。
+      if (mssqlEncrypt && !mssqlTrust && mssqlCaPath.trim()) o.trust_cert_ca = mssqlCaPath.trim();
     } else if (kind === "oracle") {
       if (oracleConnectType !== "service") o.connect_type = oracleConnectType;
       if (oracleClientDir.trim()) o.client_dir = oracleClientDir.trim();
@@ -169,6 +192,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       if (connectUrl.trim() && connectPass.trim()) o.kafka_connect_password = connectPass.trim();
     } else if (sslKinds.includes(kind)) {
       if (sslMode) o.ssl_mode = sslMode;
+      // CA 只在 verify-* 模式生效（require/required 不驗證憑證，sqlx 會忽略）。
+      if (VERIFY_SSL_MODES.includes(sslMode) && sslCa.trim()) o.ssl_ca = sslCa.trim();
     }
     return Object.keys(o).length ? o : undefined;
   };
@@ -179,9 +204,72 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     // Kafka 的 SASL 帳號沒有 root 慣例：仍是預設 root 就清空；切回其他類型且留空則補回預設。
     if (k === "kafka" && username === "root") setUsername("");
     else if (kind === "kafka" && k !== "kafka" && username === "") setUsername("root");
-    // ssl_mode 詞彙 PG（require）與 MySQL 系（required）不同，跨 kind 不可沿用。
-    if (k !== kind) setSslMode("");
+    // ssl_mode 詞彙 PG（require）與 MySQL 系（required）不同，跨 kind 不可沿用；CA 路徑一併清除。
+    if (k !== kind) { setSslMode(""); setSslCa(""); }
     setKind(k);
+  };
+
+  // 「從連線字串匯入」：後端 parse_connection_url 解析（與 dbk --url 同一套邏輯），前端只負責填表。
+  // options 布林值的兩種既有編碼（mongo 系 "1" / redis 系 "true"）統一在這判讀。
+  const optBool = (v: string | undefined) => v === "1" || v === "true";
+  const applyParsed = (p: ParsedUrl) => {
+    // 後端可能先於前端認識新 kind（分階段上線）；未知 kind 不索引 KIND_META，僅填主機等欄位。
+    const knownKind = p.kind && p.kind !== "external" && p.kind in KIND_META ? p.kind : null;
+    if (knownKind) {
+      if (knownKind !== kind) { setSslMode(""); setSslCa(""); }
+      // 與 onKindChange 的 kafka username 慣例對齊（匯入路徑繞過 onKindChange）：
+      // URL 未帶帳號時，切到 kafka 清掉預設 root；離開 kafka 且留空則補回 root。
+      if (p.username == null) {
+        if (knownKind === "kafka" && username === "root") setUsername("");
+        else if (kind === "kafka" && knownKind !== "kafka" && username === "") setUsername("root");
+      }
+      setKind(knownKind);
+      // port 用解析值，缺省補該 kind 預設；不走 onKindChange 的「跟隨前一 kind 預設埠」啟發式。
+      setPort(p.port ?? KIND_META[knownKind].defaultPort);
+    } else if (p.port != null) {
+      setPort(p.port);
+    }
+    if (p.host) setHost(p.host);
+    if (p.username != null) setUsername(p.username);
+    if (p.password != null) setPassword(p.password);
+    if (p.database != null) setDatabase(p.database);
+    const o = p.options ?? {};
+    if (o.ssl_mode != null) setSslMode(o.ssl_mode);
+    if (o.ssl_ca != null) setSslCa(o.ssl_ca);
+    if (o.redis_tls != null) setRedisTls(optBool(o.redis_tls));
+    if (o.redis_tls_insecure != null) setRedisTlsInsecure(optBool(o.redis_tls_insecure));
+    if (o.mongo_srv != null) setMongoSrv(optBool(o.mongo_srv));
+    if (o.mongo_auth_source != null) setMongoAuthSource(o.mongo_auth_source);
+    if (o.mongo_replica_set != null) setMongoReplicaSet(o.mongo_replica_set);
+    if (o.mongo_direct != null) setMongoDirect(optBool(o.mongo_direct));
+    if (o.mongo_tls_ca != null) setMongoTlsCa(o.mongo_tls_ca);
+    if (o.mongo_tls_insecure != null) setMongoTlsInsecure(optBool(o.mongo_tls_insecure));
+    // tlsCAFile / tlsAllowInvalidCertificates 隱含 TLS（Atlas / DocumentDB 字串常不帶 tls=true）——
+    // 不連動 mongo_tls 的話 CA 欄位會被 gate 隱藏、buildOptions 會把匯入值靜默剔除。
+    if (o.mongo_tls != null || o.mongo_tls_ca != null || o.mongo_tls_insecure != null)
+      setMongoTls(o.mongo_tls != null ? optBool(o.mongo_tls) : true);
+    if (o.encrypt != null) setMssqlEncrypt(o.encrypt !== "false");
+    if (o.trust_server_certificate != null) setMssqlTrust(optBool(o.trust_server_certificate));
+    if (o.trust_cert_ca != null) setMssqlCaPath(o.trust_cert_ca);
+  };
+
+  const doImport = async () => {
+    const url = importUrl.trim();
+    if (!url) return;
+    setImportMsg(null);
+    try {
+      const p = await api.parseConnectionUrl(url);
+      applyParsed(p);
+      setImportOpen(false);
+      setImportUrl("");
+      setPickerOpen(false);
+      setImportMsg({
+        ok: true,
+        text: t("已依連線字串填入 {kind} 設定，請確認後測試連線", { kind: p.kind ? KIND_META[p.kind].label : "—" }),
+      });
+    } catch (e: any) {
+      setImportMsg({ ok: false, text: e?.message ?? t("無法解析連線字串") });
+    }
   };
 
   const handleTest = async () => {
@@ -213,7 +301,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       onClose={onClose}
       title={editing ? t("編輯連線") : t("新增連線")}
       icon={Plug}
-      size="md"
+      size="lg"
       zClass="z-50"
       bodyClassName="p-5 space-y-3 overflow-auto"
       footer={
@@ -226,27 +314,36 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         </>
       }
     >
-      {/* 連線類型 tab：欄數固定 4，超過就換到下一排（避免長標籤如「SQL Server」在單排等寬時被壓到換行而跑版）。 */}
-      <div className="grid grid-cols-4 gap-2">
-        {/* 外部 gateway（external）連線類型：開源版無內建驅動，預設隱藏（__EXTERNAL__ 建置期開關）。 */}
-        {(Object.keys(KIND_META) as DbKind[])
-          .filter((k) => __EXTERNAL__ || k !== "external")
-          .map((k) => (
-          <button
-            key={k}
-            type="button"
-            onClick={() => onKindChange(k)}
-            className="h-8 rounded text-sm border transition-colors whitespace-nowrap"
-            style={{
-              borderColor: kind === k ? KIND_META[k].color : "rgb(var(--c-fg) / 0.12)",
-              background: kind === k ? KIND_META[k].color + "22" : "transparent",
-              color: kind === k ? KIND_META[k].color : "rgb(var(--c-fg) / 0.55)",
-            }}
-          >
-            {KIND_META[k].label}
-          </button>
-        ))}
-      </div>
+      {/* 從連線字串匯入：貼雲端服務控制台給的 URI（Supabase / Atlas / Upstash / Azure…）一鍵填表。 */}
+      {!importOpen ? (
+        <Button variant="secondary" icon={ClipboardPaste} onClick={() => { setImportOpen(true); setImportMsg(null); }}>
+          {t("從連線字串匯入")}
+        </Button>
+      ) : (
+        <Field hint={t("支援 mysql:// postgres:// mongodb+srv:// rediss:// sqlserver:// 及 Azure ADO.NET 格式")}>
+          <div className="flex gap-2">
+            <Input
+              autoFocus
+              value={importUrl}
+              onChange={(e) => setImportUrl(e.target.value)}
+              placeholder="postgres://user:pass@db.xxx.supabase.co:5432/postgres?sslmode=require"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); void doImport(); }
+                if (e.key === "Escape") { setImportOpen(false); setImportMsg(null); }
+              }}
+            />
+            <Button variant="secondary" onClick={() => void doImport()} className="shrink-0">{t("解析並填入")}</Button>
+          </div>
+        </Field>
+      )}
+      {importMsg && <div className={`text-sm ${importMsg.ok ? "text-success" : "text-danger"}`}>{importMsg.text}</div>}
+
+      <KindPicker
+        value={kind}
+        collapsed={!pickerOpen}
+        onChange={(k) => { onKindChange(k); setPickerOpen(false); }}
+        onExpand={() => setPickerOpen(true)}
+      />
 
       <Field label={t("名稱")}>
         <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("選填")} />
@@ -310,36 +407,37 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
               </Field>
             )}
           </div>
-          {/* Kafka 無帳密（僅 SASL 協定需要，欄位在下方安全協定區）與資料庫概念，不顯示這兩排。 */}
+          {/* Kafka 無共用帳密（僅 SASL 協定需要，欄位在下方安全協定區），不顯示這排。 */}
           {kind !== "kafka" && (
-            <>
-              <div className="flex gap-3">
-                <Field label={t("使用者")} className="flex-1">
-                  <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
-                </Field>
-                <Field label={t("密碼")} className="flex-1">
-                  <Input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    onKeyDown={submitOnEnter}
-                    placeholder={editing ? t("留空＝不變更") : ""}
-                  />
-                </Field>
-              </div>
-              <Field label={
-                kind === "oracle"
-                  ? (oracleConnectType === "sid" ? "SID" : oracleConnectType === "tns" ? t("TNS 別名") : t("服務名稱（Service Name）"))
-                  : t("資料庫（選填）")
-              }>
-                <Input value={database} onChange={(e) => setDatabase(e.target.value)} onKeyDown={submitOnEnter}
-                  placeholder={kind === "oracle" ? t("例如 ORCLPDB1 / FREEPDB1") : ""} />
+            <div className="flex gap-3">
+              <Field label={t("使用者")} className="flex-1">
+                <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
               </Field>
-            </>
+              <Field label={t("密碼")} className="flex-1">
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={submitOnEnter}
+                  placeholder={editing ? t("留空＝不變更") : ""}
+                />
+              </Field>
+            </div>
+          )}
+          {/* 無資料庫概念的類型（KIND_META.noDatabase：kafka 等）不顯示 database 欄。 */}
+          {!KIND_META[kind].noDatabase && (
+            <Field label={
+              kind === "oracle"
+                ? (oracleConnectType === "sid" ? "SID" : oracleConnectType === "tns" ? t("TNS 別名") : t("服務名稱（Service Name）"))
+                : t("資料庫（選填）")
+            }>
+              <Input value={database} onChange={(e) => setDatabase(e.target.value)} onKeyDown={submitOnEnter}
+                placeholder={kind === "oracle" ? t("例如 ORCLPDB1 / FREEPDB1") : ""} />
+            </Field>
           )}
 
           {kind === "redis" && (
-            <div className="space-y-2">
+            <Section>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={redisTls} onChange={(e) => setRedisTls(e.target.checked)} />
                 <span>{t("使用 TLS（rediss://）")}</span>
@@ -355,11 +453,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                   {t("透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，通常需勾「略過憑證驗證」。")}
                 </div>
               )}
-            </div>
+            </Section>
           )}
 
           {kind === "mongo" && (
-            <div className="space-y-2">
+            <Section>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={mongoSrv} onChange={(e) => setMongoSrv(e.target.checked)} />
                 <span>{t("SRV 連線（mongodb+srv://，Atlas 等）")}</span>
@@ -376,15 +474,25 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                 <input type="checkbox" checked={mongoTls} onChange={(e) => setMongoTls(e.target.checked)} />
                 <span>{t("使用 TLS")}</span>
               </label>
+              {mongoTls && (
+                <>
+                  <CaPathField value={mongoTlsCa} onChange={setMongoTlsCa} onKeyDown={submitOnEnter}
+                    hint={t("AWS DocumentDB 等服務需指定服務商 CA bundle")} />
+                  <label className="flex items-center gap-2 text-sm cursor-pointer select-none pl-6">
+                    <input type="checkbox" checked={mongoTlsInsecure} onChange={(e) => setMongoTlsInsecure(e.target.checked)} />
+                    <span>{t("略過憑證驗證（自簽憑證用）")}</span>
+                  </label>
+                </>
+              )}
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={mongoDirect} onChange={(e) => setMongoDirect(e.target.checked)} />
                 <span>{t("直連（directConnection，繞過拓撲探索）")}</span>
               </label>
-            </div>
+            </Section>
           )}
 
           {sslKinds.includes(kind) && (
-            <div className="space-y-2">
+            <Section>
               <Field label={t("SSL 模式")}>
                 <Select selectSize="md" value={sslMode} onChange={(e) => setSslMode(e.target.value)}>
                   {(SSL_MODE_OPTIONS[kind === "postgres" ? "postgres" : "mysql"] ?? []).map((o) => (
@@ -392,16 +500,20 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                   ))}
                 </Select>
               </Field>
+              {VERIFY_SSL_MODES.includes(sslMode) && (
+                <CaPathField value={sslCa} onChange={setSslCa} onKeyDown={submitOnEnter}
+                  hint={t("AWS RDS 等服務需下載服務商 CA bundle（如 global-bundle.pem）")} />
+              )}
               {sshEnabled && (sslMode === "verify-full" || sslMode === "verify_identity") && (
                 <div className="text-xs text-warning">
                   {t("透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，建議改用 verify-ca 或 require。")}
                 </div>
               )}
-            </div>
+            </Section>
           )}
 
           {kind === "oracle" && (
-            <div className="space-y-2">
+            <Section>
               <Segmented
                 full
                 ariaLabel={t("Oracle 連線方式")}
@@ -420,11 +532,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
               <div className="text-xs text-fg/40">
                 {t("需安裝 64 位元 Oracle Instant Client（Basic / Basic Light）。client 目錄於首個 Oracle 連線生效，之後變更需重啟應用程式。")}
               </div>
-            </div>
+            </Section>
           )}
 
           {kind === "mssql" && (
-            <div className="space-y-2">
+            <Section>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={mssqlEncrypt} onChange={(e) => setMssqlEncrypt(e.target.checked)} />
                 <span>{t("加密連線（encrypt）")}</span>
@@ -433,11 +545,15 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                 <input type="checkbox" checked={mssqlTrust} onChange={(e) => setMssqlTrust(e.target.checked)} />
                 <span>{t("信任伺服器憑證（自簽 / 開發用）")}</span>
               </label>
-            </div>
+              {mssqlEncrypt && !mssqlTrust && (
+                <CaPathField value={mssqlCaPath} onChange={setMssqlCaPath} onKeyDown={submitOnEnter}
+                  hint={t("自簽 / 私有 CA 環境可指定 CA 憑證，避免整個信任任意憑證")} />
+              )}
+            </Section>
           )}
 
           {kind === "kafka" && (
-            <div className="space-y-2">
+            <Section>
               <Field label={t("安全協定")}>
                 <Select selectSize="md" value={kafkaProtocol} onChange={(e) => setKafkaProtocol(e.target.value)}>
                   {["PLAINTEXT", "SASL_PLAINTEXT", "SSL", "SASL_SSL"].map((p) => (
@@ -468,12 +584,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
               )}
               {kafkaProtocol.endsWith("SSL") && (
                 <>
-                  <Field label={t("CA 憑證路徑（選填）")}>
-                    <div className="flex gap-2">
-                      <Input value={kafkaCaPath} onChange={(e) => setKafkaCaPath(e.target.value)} onKeyDown={submitOnEnter} />
-                      <BrowseButton onPick={async () => { const p = await pickOpenFile([{ name: "PEM", extensions: ["pem", "crt", "cer"] }]); if (p) setKafkaCaPath(p); }} />
-                    </div>
-                  </Field>
+                  <CaPathField value={kafkaCaPath} onChange={setKafkaCaPath} onKeyDown={submitOnEnter} />
                   <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                     <input type="checkbox" checked={kafkaSkipVerify} onChange={(e) => setKafkaSkipVerify(e.target.checked)} />
                     <span>{t("略過憑證驗證（自簽憑證用）")}</span>
@@ -485,7 +596,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                   {t("TLS / SCRAM 需以 kafka-tls feature（含 OpenSSL）建置；預設建置僅支援 PLAINTEXT / SASL_PLAINTEXT + PLAIN。")}
                 </div>
               )}
-              <div className="border-t border-fg/10 pt-2 space-y-2">
+              <Section title="Schema Registry">
                 <Field label={t("Schema Registry URL（選填）")}>
                   <Input value={srUrl} onChange={(e) => setSrUrl(e.target.value)} onKeyDown={submitOnEnter} placeholder="http://localhost:8081" />
                 </Field>
@@ -499,8 +610,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                     </Field>
                   </div>
                 )}
-              </div>
-              <div className="border-t border-fg/10 pt-2 space-y-2">
+              </Section>
+              <Section title="Kafka Connect">
                 <Field label={t("Kafka Connect URL（選填）")}>
                   <Input value={connectUrl} onChange={(e) => setConnectUrl(e.target.value)} onKeyDown={submitOnEnter} placeholder="http://localhost:8083" />
                 </Field>
@@ -514,15 +625,15 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                     </Field>
                   </div>
                 )}
-              </div>
+              </Section>
               <div className="text-xs text-fg/40">{t("Bootstrap servers 可逗號分隔多個 broker。")}</div>
-            </div>
+            </Section>
           )}
         </>
       )}
 
       {!fileBased && !external && (
-        <div className="border-t border-fg/10 pt-3 space-y-3">
+        <Section>
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={sshEnabled} onChange={(e) => setSshEnabled(e.target.checked)} />
             <span>{t("透過 SSH Tunnel 連線")}</span>
@@ -588,7 +699,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
               )}
             </>
           )}
-        </div>
+        </Section>
       )}
 
       {msg && <div className={`text-sm ${msg.ok ? "text-success" : "text-danger"}`}>{msg.text}</div>}
@@ -602,5 +713,44 @@ function BrowseButton({ onPick }: { onPick: () => void }) {
     <Button variant="secondary" icon={FolderOpen} onClick={onPick} title={t("瀏覽…")} className="shrink-0">
       {t("瀏覽")}
     </Button>
+  );
+}
+
+// 各 kind 專屬選項的視覺分組（上緣分隔線 + 可選小標）。新 kind 的專屬區塊一律用它，不手刻 border-t。
+function Section({ title, children }: { title?: string; children: ReactNode }) {
+  return (
+    <div className="border-t border-fg/10 pt-3 space-y-2.5">
+      {title && <div className="text-xs font-medium text-fg/50">{title}</div>}
+      {children}
+    </div>
+  );
+}
+
+// CA 憑證路徑欄（Input + 瀏覽鈕 + PEM filter）。mongo / mysql-pg / mssql / kafka 共用，
+// 新 kind 的 TLS 區塊直接用，避免每處重抄同一段 JSX 與副檔名清單。
+function CaPathField({
+  value,
+  onChange,
+  onKeyDown,
+  hint,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onKeyDown?: React.KeyboardEventHandler;
+  hint?: ReactNode;
+}) {
+  const t = useT();
+  return (
+    <Field label={t("CA 憑證路徑（選填）")} hint={hint}>
+      <div className="flex gap-2">
+        <Input value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
+        <BrowseButton
+          onPick={async () => {
+            const p = await pickOpenFile([{ name: "PEM", extensions: ["pem", "crt", "cer"] }]);
+            if (p) onChange(p);
+          }}
+        />
+      </div>
+    </Field>
   );
 }

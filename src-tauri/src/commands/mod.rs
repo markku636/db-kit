@@ -102,6 +102,20 @@ pub fn set_query_guard(max_rows: usize, timeout_ms: u64) {
     crate::db::limits::set_timeout_ms(timeout_ms);
 }
 
+/// 解析使用者貼上的連線字串（URL / DSN / JDBC / ADO.NET），回填連線對話框欄位。
+/// 同步純函式：不建連線、不碰 State。直接回傳 `conn_url::Parsed`（已 Serialize，
+/// kind 沿 DbKind lowercase serde），欄位皆可選（None = 字串未提供，前端保留現值）。
+#[tauri::command]
+pub fn parse_connection_url(url: String) -> AppResult<crate::db::conn_url::Parsed> {
+    let p = crate::db::conn_url::parse_url(url.trim(), None)?;
+    // GUI 匯入至少要判得出 kind（否則對話框無法切到正確類型）；判不出即明確報錯，
+    // 而非把整段當 host 靜默填入（貼到非連線字串時的假成功）。
+    if p.kind.is_none() {
+        return Err(AppError::Connect(t!("無法解析連線字串").into()));
+    }
+    Ok(p)
+}
+
 #[tauri::command]
 pub async fn test_connection(
     state: State<'_, AppState>,

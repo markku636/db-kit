@@ -207,6 +207,10 @@ impl DatabaseDriver for MysqlDriver {
         if !db.is_empty() {
             opts = opts.database(&db);
         }
+        // 自訂 CA 憑證檔（options["ssl_ca"]）：verify_ca / verify_identity 驗證自簽 / 私有 CA 用。
+        if let Some(ca) = config.options.get("ssl_ca").filter(|s| !s.is_empty()) {
+            opts = opts.ssl_ca(ca);
+        }
 
         let pool = MySqlPoolOptions::new()
             .max_connections(config.max_connections)

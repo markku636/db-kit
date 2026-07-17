@@ -43,13 +43,17 @@ impl DatabaseDriver for PostgresDriver {
             Some("verify-full") => PgSslMode::VerifyFull,
             _ => PgSslMode::Prefer,
         };
-        let opts = PgConnectOptions::new()
+        let mut opts = PgConnectOptions::new()
             .host(&config.host)
             .port(config.port)
             .username(&config.username)
             .password(&config.password)
             .database(&db)
             .ssl_mode(ssl_mode);
+        // 自訂 CA 憑證檔（options["ssl_ca"]）：verify-ca / verify-full 驗證自簽 / 私有 CA 用。
+        if let Some(ca) = config.options.get("ssl_ca").filter(|s| !s.is_empty()) {
+            opts = opts.ssl_root_cert(ca);
+        }
 
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)

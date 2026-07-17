@@ -126,6 +126,7 @@ pub fn run() {
             commands::show_main_window,
             commands::set_lang,
             commands::set_query_guard,
+            commands::parse_connection_url,
             commands::test_connection,
             commands::connect,
             commands::disconnect,

@@ -744,22 +744,48 @@ export function onKafkaAlert(cb: (e: KafkaAlertEvent) => void): Promise<Unlisten
   return listen<KafkaAlertEvent>("kafka-alert", (e) => cb(e.payload));
 }
 
+// 連線類型分類（新增連線對話框的分組選擇器用；種類將達 12+，靠分類維持可掃視性）。
+export type KindCategory = "relational" | "document" | "kv" | "queue" | "search" | "other";
+
+// 分類顯示順序與標籤（繁中字串即 i18n key，渲染時過 t()）。
+export const KIND_CATEGORIES: { id: KindCategory; label: string }[] = [
+  { id: "relational", label: "關聯式" },
+  { id: "document", label: "文件" },
+  { id: "kv", label: "鍵值" },
+  { id: "queue", label: "訊息佇列" },
+  { id: "search", label: "搜尋引擎" },
+  { id: "other", label: "其他" },
+];
+
 // 連線類型的顯示資料（色標呼應規劃文件）
-export const KIND_META: Record<DbKind, { label: string; color: string; defaultPort: number; fileBased?: boolean; external?: boolean }> = {
-  mysql: { label: "MySQL", color: "#3b82f6", defaultPort: 3306 },
+// category 為必填：新增 kind 時 TS 會強制選一個分類（KindPicker 依此分組）。
+// noDatabase：無「資料庫」概念的類型（kafka 等），ConnectionDialog 據此隱藏 database 欄。
+export const KIND_META: Record<DbKind, { label: string; color: string; defaultPort: number; category: KindCategory; fileBased?: boolean; external?: boolean; noDatabase?: boolean }> = {
+  mysql: { label: "MySQL", color: "#3b82f6", defaultPort: 3306, category: "relational" },
   // MariaDB：後端共用 MySQL driver（線協定相容），前端獨立類型（teal 不與 mysql 藍撞色）。
-  mariadb: { label: "MariaDB", color: "#14b8a6", defaultPort: 3306 },
-  postgres: { label: "PostgreSQL", color: "#6366f1", defaultPort: 5432 },
-  mongo: { label: "MongoDB", color: "#22c55e", defaultPort: 27017 },
-  redis: { label: "Redis", color: "#ef4444", defaultPort: 6379 },
-  sqlite: { label: "SQLite", color: "#f59e0b", defaultPort: 0, fileBased: true },
-  mssql: { label: "SQL Server", color: "#0ea5e9", defaultPort: 1433 },
+  mariadb: { label: "MariaDB", color: "#14b8a6", defaultPort: 3306, category: "relational" },
+  postgres: { label: "PostgreSQL", color: "#6366f1", defaultPort: 5432, category: "relational" },
+  mongo: { label: "MongoDB", color: "#22c55e", defaultPort: 27017, category: "document" },
+  redis: { label: "Redis", color: "#ef4444", defaultPort: 6379, category: "kv" },
+  sqlite: { label: "SQLite", color: "#f59e0b", defaultPort: 0, category: "relational", fileBased: true },
+  mssql: { label: "SQL Server", color: "#0ea5e9", defaultPort: 1433, category: "relational" },
   // Oracle：orange-500（品牌紅 #f80000 與 Redis 紅撞色，取最近的空缺色相）。
-  oracle: { label: "Oracle", color: "#f97316", defaultPort: 1521 },
+  oracle: { label: "Oracle", color: "#f97316", defaultPort: 1521, category: "relational" },
   // Kafka：cyan-700（與 sky-500 mssql / violet external 區隔）。
-  kafka: { label: "Kafka", color: "#0891b2", defaultPort: 9092 },
-  external: { label: "External", color: "#8b5cf6", defaultPort: 0, external: true },
+  kafka: { label: "Kafka", color: "#0891b2", defaultPort: 9092, category: "queue", noDatabase: true },
+  external: { label: "External", color: "#8b5cf6", defaultPort: 0, category: "other", external: true },
 };
+
+// parse_connection_url 的回傳：連線字串解析結果（欄位皆可缺；options 為 per-kind 映射後的鍵值）。
+export interface ParsedUrl {
+  kind: DbKind | null;
+  host: string | null;
+  port: number | null;
+  username: string | null;
+  password: string | null;
+  database: string | null;
+  options: Record<string, string>;
+}
 
 // 後端 command 包裝
 export const api = {
@@ -786,6 +812,8 @@ export const api = {
     invoke<number>("export_connections_encrypted", { path, passphrase }),
   importConnectionsEncrypted: (path: string, passphrase: string) =>
     invoke<number>("import_connections_encrypted", { path, passphrase }),
+  // 解析連線字串（mysql:// postgres:// mongodb+srv:// rediss:// sqlserver:// / ADO.NET 等）→ 填表用。
+  parseConnectionUrl: (url: string) => invoke<ParsedUrl>("parse_connection_url", { url }),
   // 連線設定持久化（密碼存 keychain，磁碟不含密碼）
   listSavedConnections: () =>
     invoke<ConnectionConfig[]>("list_saved_connections"),

@@ -1258,6 +1258,8 @@ fn id_filter(edit: &CellEdit) -> AppResult<Document> {
 /// - mongo_tls=1        → tls=true
 /// - mongo_replica_set  → replicaSet
 /// - mongo_direct=1     → directConnection=true
+/// - mongo_tls_ca       → tlsCAFile（自訂 CA 憑證檔）
+/// - mongo_tls_insecure=1 → tlsAllowInvalidCertificates=true（自簽 / 開發用）
 /// userinfo（帳號 / 密碼）做 percent-encoding，避免特殊字元破壞 URI。
 pub(crate) fn build_mongo_uri(config: &ConnectionConfig) -> String {
     let auth = if config.username.is_empty() {
@@ -1288,6 +1290,13 @@ pub(crate) fn build_mongo_uri(config: &ConnectionConfig) -> String {
     }
     if opt("mongo_direct") == "1" {
         params.push("directConnection=true".to_string());
+    }
+    let tls_ca = opt("mongo_tls_ca");
+    if !tls_ca.is_empty() {
+        params.push(format!("tlsCAFile={}", pct_encode(tls_ca)));
+    }
+    if opt("mongo_tls_insecure") == "1" {
+        params.push("tlsAllowInvalidCertificates=true".to_string());
     }
 
     if params.is_empty() {

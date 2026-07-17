@@ -132,6 +132,9 @@ impl DatabaseDriver for MssqlDriver {
         c.encryption(if encrypt { EncryptionLevel::Required } else { EncryptionLevel::Off });
         if config.options.get("trust_server_certificate").map(|v| v == "true").unwrap_or(false) {
             c.trust_cert();
+        } else if let Some(ca) = config.options.get("trust_cert_ca").filter(|s| !s.is_empty()) {
+            // 自簽 / 私有 CA：信任指定 CA 憑證檔（PEM），仍驗證伺服器憑證鏈（優先序低於全信任）。
+            c.trust_cert_ca(ca);
         }
 
         let mgr = ConnectionManager::new(c);
