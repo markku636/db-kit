@@ -32,7 +32,8 @@ export default function KindPicker({ value, onChange, collapsed, onExpand }: Pro
     );
   }
   return (
-    <div className="space-y-2.5" role="radiogroup" aria-label={t("連線類型")}>
+    <div className="space-y-4" role="radiogroup" aria-label={t("連線類型")}>
+      <div className="text-sm text-fg/50">{t("選擇要連線的資料庫類型")}</div>
       {KIND_CATEGORIES.map((cat) => {
         const kinds = (Object.keys(KIND_META) as DbKind[])
           .filter((k) => KIND_META[k].category === cat.id)
@@ -41,27 +42,40 @@ export default function KindPicker({ value, onChange, collapsed, onExpand }: Pro
         if (kinds.length === 0) return null;
         return (
           <div key={cat.id}>
-            <div className="text-[11px] uppercase tracking-wide text-fg/40 mb-1.5">{t(cat.label)}</div>
-            {/* 欄數固定 4，超過換行（長標籤如「SQL Server」在單排等寬時會被壓到換行而跑版）。 */}
-            <div className="grid grid-cols-4 gap-2">
-              {kinds.map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  role="radio"
-                  aria-checked={value === k}
-                  onClick={() => onChange(k)}
-                  className="h-9 px-2 rounded text-sm border transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap"
-                  style={{
-                    borderColor: value === k ? KIND_META[k].color : "rgb(var(--c-fg) / 0.12)",
-                    background: value === k ? KIND_META[k].color + "22" : "transparent",
-                    color: value === k ? KIND_META[k].color : "rgb(var(--c-fg) / 0.55)",
-                  }}
-                >
-                  <Icon icon={kindIcon(k)} size={14} />
-                  {KIND_META[k].label}
-                </button>
-              ))}
+            <div className="text-[11px] uppercase tracking-wide text-fg/40 mb-2">{t(cat.label)}</div>
+            {/* 卡片式類型格：圖示在上、標籤在下（Navicat / TablePlus 風）。欄數固定 4，超過換行。 */}
+            <div className="grid grid-cols-4 gap-2.5">
+              {kinds.map((k) => {
+                const active = value === k;
+                const color = KIND_META[k].color;
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => onChange(k)}
+                    className="group flex flex-col items-center justify-center gap-2 h-[76px] rounded-lg border transition-all hover:-translate-y-0.5 hover:shadow-sm"
+                    style={{
+                      borderColor: active ? color : "rgb(var(--c-fg) / 0.12)",
+                      background: active ? color + "1a" : "rgb(var(--c-fg) / 0.02)",
+                    }}
+                  >
+                    <span
+                      className="flex items-center justify-center w-9 h-9 rounded-md transition-colors"
+                      style={{ background: color + (active ? "33" : "1f"), color }}
+                    >
+                      <Icon icon={kindIcon(k)} size={18} />
+                    </span>
+                    <span
+                      className="text-xs font-medium whitespace-nowrap"
+                      style={{ color: active ? color : "rgb(var(--c-fg) / 0.72)" }}
+                    >
+                      {KIND_META[k].label}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         );

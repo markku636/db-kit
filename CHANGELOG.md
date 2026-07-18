@@ -1,3 +1,8 @@
+## v0.17.3
+
+- **新增連線對話框改為兩步式**：開啟「新增連線」時先只顯示連線類型選擇器，選定類型後才展開下方的主機 / 帳密等輸入欄位，避免類型格與十餘個欄位同屏擠壓、逼使用者捲動。選類型階段底部只留「取消」（此時測試 / 儲存尚無意義）；已填內容在收合類型選擇器時不會遺失（編輯連線維持直達表單，不受影響）。
+- **類型選擇器改卡片式**：類型改為圖示在上、標籤在下的卡片（Navicat / TablePlus 風），帶品牌色圖示底與 hover 微浮起，視覺較原本的橫向小按鈕清爽。
+
 ## v0.17.2
 
 - **build(打包)**：`build-installer.ps1` 打包前明確指定 CMake generator 為 `Visual Studio 17 2022`（偵測到 VS 2022 v17 的 C++ 工具時）。同時裝了較新 Visual Studio（如 VS 2026 / v18）而 CMake 版本不認得其 generator 名稱時，Kafka 的 rdkafka-sys 會在編 librdkafka 時失敗（`CMake Error: Could not create named generator Visual Studio 18 2026`）；改用已裝好的 VS 2022 generator 讓本地打包一律含 Kafka。功能無異動。

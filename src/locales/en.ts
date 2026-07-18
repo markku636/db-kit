@@ -1904,6 +1904,7 @@ const en: Catalog = {
   "選擇…": "Select…",
   "選擇一個連線開始": "Select a connection to start",
   "選擇主題…": "Select a topic…",
+  "選擇要連線的資料庫類型": "Choose a database type to connect to",
   "選擇目標資料庫後按「比對」。差異以來源為基準（僅來源有 = 目標需新增）。": "Select a target database, then click \"Compare\". Differences use the source as the baseline (only in source = target needs it added).",
   "選擇目錄…": "Choose directory…",
   "選擇位置並匯出": "Choose location and export",

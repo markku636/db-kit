@@ -364,13 +364,19 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       zClass="z-50"
       bodyClassName="p-5 space-y-3 overflow-auto"
       footer={
-        <>
-          <Button variant="secondary" className="mr-auto" loading={testing} onClick={handleTest}>
-            {t("測試連線")}
-          </Button>
+        // 選類型階段（pickerOpen）只留「取消」：此時尚未進表單，測試 / 儲存無意義（host 有預設值會讓
+        // valid 為真而誤導可存）。選定類型後才顯示完整動作列。
+        pickerOpen ? (
           <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
-          <Button variant="primary" onClick={handleSave} disabled={!valid}>{t("儲存")}</Button>
-        </>
+        ) : (
+          <>
+            <Button variant="secondary" className="mr-auto" loading={testing} onClick={handleTest}>
+              {t("測試連線")}
+            </Button>
+            <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
+            <Button variant="primary" onClick={handleSave} disabled={!valid}>{t("儲存")}</Button>
+          </>
+        )
       }
     >
       {/* 從連線字串匯入：貼雲端服務控制台給的 URI（Supabase / Atlas / Upstash / Azure…）一鍵填表。 */}
@@ -404,6 +410,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         onExpand={() => setPickerOpen(true)}
       />
 
+      {/* 兩步流程：先選類型（pickerOpen＝只顯示上方類型選擇器），選定後才展開表單，避免類型格與
+          十餘欄輸入同屏擠壓、逼使用者捲動。狀態常駐在本元件，收合不會遺失已填內容。 */}
+      {!pickerOpen && (
+      <>
       <Field label={t("名稱")}>
         <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("選填")} />
       </Field>
@@ -850,6 +860,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       )}
 
       {msg && <div className={`text-sm ${msg.ok ? "text-success" : "text-danger"}`}>{msg.text}</div>}
+      </>
+      )}
     </Modal>
   );
 }
