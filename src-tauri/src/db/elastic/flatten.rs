@@ -332,6 +332,34 @@ fn like_to_wildcard(pattern: &str) -> String {
         .collect()
 }
 
+// ---- (e) ILM/data-stream backing index → Data View 分組 ----
+
+/// 依 ILM/data-stream 命名規則解析 backing index：
+/// `.ds-{group}-{yyyy.MM.dd}-{generation}` → `Some(group)`；不符合此形式 → `None`
+/// （一般索引、`.kibana` 等系統索引、或格式異常的 `.ds-` 項目 → 一律維持原樣個別顯示，
+/// 不嘗試分組、不 panic）。
+///
+/// 用 `rsplit_once` 從右側依序剝離「世代號」與「日期」兩段（而非用正則貪婪比對），
+/// 只認「最靠右側」的一組合法日期+世代後綴，避免群組名稱本身含數字/連字號時的匹配歧義。
+pub fn ds_backing_group(index: &str) -> Option<String> {
+    let rest = index.strip_prefix(".ds-")?;
+    // 世代號：純數字（如 "000076"）。
+    let (head, generation) = rest.rsplit_once('-')?;
+    if generation.is_empty() || !generation.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    // 日期：`yyyy.MM.dd`（10 碼、第 5/8 碼為 '.'、三段皆數字，不驗證日期範圍合法性）。
+    let (group, date) = head.rsplit_once('-')?;
+    let date_ok = date.len() == 10
+        && date.as_bytes().get(4) == Some(&b'.')
+        && date.as_bytes().get(7) == Some(&b'.')
+        && date.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+    if !date_ok || group.is_empty() {
+        return None;
+    }
+    Some(group.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,5 +574,35 @@ mod tests {
     fn like_to_wildcard_converts_both_metachars() {
         assert_eq!(like_to_wildcard("jo%"), "jo*");
         assert_eq!(like_to_wildcard("a_b%"), "a?b*");
+    }
+
+    #[test]
+    fn ds_backing_group_parses_normal_cases() {
+        assert_eq!(
+            ds_backing_group(".ds-nova88-t1p-k8s_api_adminsite-2026.07.02-000076"),
+            Some("nova88-t1p-k8s_api_adminsite".to_string())
+        );
+        assert_eq!(
+            ds_backing_group(".ds-nova88-prod-mysql-2026.07.07-000012"),
+            Some("nova88-prod-mysql".to_string())
+        );
+    }
+
+    #[test]
+    fn ds_backing_group_rejects_non_ds_prefixed_names() {
+        assert_eq!(ds_backing_group(".kibana_task_manager"), None);
+        assert_eq!(ds_backing_group("my-index"), None);
+        // 人工模仿 ILM 命名但非 .ds- 前綴：不得被誤判分組。
+        assert_eq!(ds_backing_group("xxx-2026.07.02-000001"), None);
+    }
+
+    #[test]
+    fn ds_backing_group_rejects_malformed_ds_names() {
+        assert_eq!(ds_backing_group(".ds-onlyname"), None);
+        assert_eq!(ds_backing_group(".ds-name-2026.07.02"), None); // 缺世代號
+        assert_eq!(ds_backing_group(".ds-name-notanumber-2026.07.02"), None);
+        assert_eq!(ds_backing_group(".ds-name-2026.07.02-00a1"), None); // 世代號非純數字
+        assert_eq!(ds_backing_group(".ds-name-2026-07-02-000001"), None); // 日期段用 '-' 而非 '.'，長度/分隔符不合規則
+        assert_eq!(ds_backing_group(".ds--2026.07.02-000001"), None); // 群組名稱為空
     }
 }

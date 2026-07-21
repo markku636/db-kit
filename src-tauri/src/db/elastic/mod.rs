@@ -275,7 +275,9 @@ impl DatabaseDriver for ElasticDriver {
 
     async fn list_tables(&self, _database: &str) -> AppResult<Vec<TableInfo>> {
         let mut tables: Vec<TableInfo> = Vec::new();
-        // 索引 → table。
+        // Data View 分組去重集合：同一 ILM/data-stream 名稱的多筆每日 backing index 只留一筆節點。
+        let mut data_views: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // 索引 → table（或併入 Data View 分組，見 flatten::ds_backing_group）。
         let indices = self
             .client
             .get_json("/_cat/indices?format=json&h=index,health,status,docs.count")
@@ -286,12 +288,23 @@ impl DatabaseDriver for ElasticDriver {
                     if !self.show_hidden && name.starts_with('.') {
                         continue;
                     }
-                    tables.push(TableInfo {
-                        name: name.to_string(),
-                        kind: "table".to_string(),
-                    });
+                    match flatten::ds_backing_group(name) {
+                        Some(group) => {
+                            data_views.insert(group);
+                        }
+                        None => tables.push(TableInfo {
+                            name: name.to_string(),
+                            kind: "table".to_string(),
+                        }),
+                    }
                 }
             }
+        }
+        for group in data_views {
+            tables.push(TableInfo {
+                name: group,
+                kind: "data_view".to_string(),
+            });
         }
         tables.sort_by(|a, b| a.name.cmp(&b.name));
 

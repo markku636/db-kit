@@ -46,7 +46,7 @@ import {
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
-  ScanSearch, Copy, ChevronDown, Globe,
+  ScanSearch, Copy, ChevronDown, Globe, Layers,
   type LucideIcon,
 } from "lucide-react";
 
@@ -1949,6 +1949,18 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     useAssistant.getState().ask(prompt);
   };
 
+  // 右鍵 Data View →「查詢 log」：選取節點（讓 NlQueryBar 的 buildEsNlPrompt 以此為目標索引）、
+  // 開一個新查詢分頁，並請該分頁掛載後自動展開既有的 NlQueryBar（不新增任何 prompt 邏輯，
+  // 完整複用 src/NlQueryBar.tsx + src/nlPrompt.ts::buildEsNlPrompt，已支援一鍵「套用到編輯器」）。
+  const onQueryLog = (dataView: { connId: string; db: string; table: string; kind: DbKind; objKind: string }) => {
+    useStore.getState().selectNode({
+      type: "table", connId: dataView.connId, db: dataView.db,
+      table: dataView.table, kind: dataView.kind, objKind: dataView.objKind,
+    });
+    useStore.getState().requestNlAutoOpen();
+    useStore.getState().newQueryTab(undefined, dataView.connId);
+  };
+
   // 依物件種類組出資料表右鍵選單樹（item / 分隔線 / 子選單）；交由 <MenuItems> 遞迴渲染。
   // 物件資料夾（資料表 / 檢視 / 函式 / 查詢）右鍵選單：一律提供「新增查詢」（開該資料庫的空白查詢），
   // 並依資料夾種類附上對應的新增動作，末端加「重新整理」重載清單。
@@ -2032,6 +2044,19 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       return nodes;
     }
     if (m.kind === "elastic") {
+      if (m.objKind === "data_view") {
+        // Data View（分組後的 data stream）：與單一索引選單完全分開——
+        // 真正的 data stream 不合法用 DELETE /{index} 刪除（須走未串接的 _data_stream API），
+        // 故刻意不提供「刪除」；其餘動作複用單一索引既有的處理函式，僅替換文案。
+        return [
+          it(t("查詢 log"), () => onQueryLog(m)),
+          sep,
+          it(t("開啟 Data View"), () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind)),
+          it(t("檢視 Mapping…"), () => setEsMapping({ connId: m.connId, index: m.table })),
+          it(t("複製 Data View 名稱"), () => copyToClipboard(m.table, t("已複製 Data View 名稱"))),
+          it(t("重新整理"), () => refreshTables(m.connId, m.db)),
+        ];
+      }
       const ro = readonlyConns[m.connId] === true;
       const nodes: MenuNode[] = [
         it(t("開啟索引"), () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind)),
@@ -2487,8 +2512,10 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                     }`}
                     title={t("單擊開啟資料；右鍵可產生 SELECT / 更多動作")}
                   >
-                    <Icon icon={obj.kind === "view" ? Eye : Table2} size={14}
-                      className={`shrink-0 ${obj.kind === "view" ? "text-purple-300/80" : "text-sky-300/70"}`} />
+                    <Icon icon={obj.kind === "view" ? Eye : obj.kind === "data_view" ? Layers : Table2} size={14}
+                      className={`shrink-0 ${
+                        obj.kind === "view" ? "text-purple-300/80" : obj.kind === "data_view" ? "text-teal-300/80" : "text-sky-300/70"
+                      }`} />
                     <span className="truncate">{obj.name}</span>
                   </div>
                 );
@@ -3180,9 +3207,11 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
             }`}
           >
             <Icon
-              icon={tab.objKind === "view" ? Eye : Table2}
+              icon={tab.objKind === "view" ? Eye : tab.objKind === "data_view" ? Layers : Table2}
               size={13}
-              className={`shrink-0 ${tab.objKind === "view" ? "text-purple-300/70" : "text-sky-300/70"}`}
+              className={`shrink-0 ${
+                tab.objKind === "view" ? "text-purple-300/70" : tab.objKind === "data_view" ? "text-teal-300/70" : "text-sky-300/70"
+              }`}
             />
             <span className="mono">{tab.table}</span>
             <button
@@ -3578,6 +3607,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // AI 生成查詢：SQL 編輯器類型與 Elasticsearch 支援；用本地 claude CLI 把自然語言轉成語句。
   const supportsNlQuery = supportsSqlEditor || kind === "elastic";
   const nlLang: "sql" | "json" = kind === "elastic" ? "json" : "sql";
+
+  // 消費側欄「查詢 log」的一次性自動展開請求（比照下方 pendingSql 消費慣例）。
+  // key={activeQueryId} 使 QueryPane 每次切換查詢分頁都是全新掛載，nlOpen 必為初始 false，
+  // 故用「掛載時讀一次」而非訂閱式 useStore((s)=>s.pendingNlOpen)，避免其他分頁的旗標誤觸發。
+  useEffect(() => {
+    if (useStore.getState().pendingNlOpen && supportsNlQuery) {
+      useStore.getState().clearPendingNlOpen();
+      setNlOpen(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // 生成用 prompt：注入 schema（SQL）或 mapping（ES）。選中表 / index 取自側欄節點。
   const buildNlPrompt = async (nlText: string): Promise<string> => {
     const uiLang = useLang.getState().lang;

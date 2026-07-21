@@ -59,6 +59,8 @@ interface AppStore {
   queryTabs: string[];
   // 由側欄「產生 SQL」送往查詢編輯器的待載入語句（消費後清空）。
   pendingSql: string | null;
+  // 由側欄「查詢 log」設定；開新查詢分頁後由該分頁的 QueryPane 消費一次（自動展開 NlQueryBar）。
+  pendingNlOpen: boolean;
   // 待開啟新增列對話框的分頁鍵（右鍵「新增資料列」→ 開表後由該分頁消費）。
   pendingInsert: string | null;
   // 外鍵導覽：開啟被參照表並套用 col=value 篩選（開表後由該分頁消費）。
@@ -106,6 +108,9 @@ interface AppStore {
   // 將一段 SQL 載入查詢編輯器並切到查詢分頁。
   requestQuery: (sql: string) => void;
   clearPendingSql: () => void;
+  // 要求下一個掛載的 QueryPane 自動展開 NlQueryBar（側欄「查詢 log」用；消費後清空）。
+  requestNlAutoOpen: () => void;
+  clearPendingNlOpen: () => void;
   // 要求某分頁開啟新增列對話框（右鍵新增資料列）。
   requestInsert: (key: string) => void;
   clearPendingInsert: () => void;
@@ -144,6 +149,7 @@ export const useStore = create<AppStore>((set) => ({
   activeTabKey: null,
   queryTabs: ["__query__"],
   pendingSql: null,
+  pendingNlOpen: false,
   pendingInsert: null,
   pendingFilter: null,
   dataReload: {},
@@ -272,6 +278,8 @@ export const useStore = create<AppStore>((set) => ({
       activeTabKey: s.queryTabs.includes(s.activeTabKey ?? "") ? s.activeTabKey : s.queryTabs[0],
     })),
   clearPendingSql: () => set({ pendingSql: null }),
+  requestNlAutoOpen: () => set({ pendingNlOpen: true }),
+  clearPendingNlOpen: () => set({ pendingNlOpen: false }),
   requestInsert: (key) => set({ pendingInsert: key }),
   clearPendingInsert: () => set({ pendingInsert: null }),
   // 開啟（或切到）被參照表，並排入 col=value 篩選；TableView 掛載 / pendingFilter 變動時消費。
