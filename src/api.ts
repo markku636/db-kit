@@ -1035,6 +1035,9 @@ export const api = {
     invoke<void>("redis_client_kill", { id, clientId }),
   redisBigKeys: (id: string, database: string, sample: number, top: number) =>
     invoke<BigKey[]>("redis_big_keys", { id, database, sample, top }),
+  // 批次刪除鍵（DEL）：鍵樹「刪除整個命名空間」用，回傳實際刪除數。
+  redisDeleteKeys: (id: string, database: string, keys: string[]) =>
+    invoke<number>("redis_delete_keys", { id, database, keys }),
   redisPublish: (id: string, channel: string, message: string) =>
     invoke<number>("redis_publish", { id, channel, message }),
   redisSubscribe: (id: string, channels: string[], patterns: string[]) =>

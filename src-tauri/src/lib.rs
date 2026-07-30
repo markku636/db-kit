@@ -190,6 +190,7 @@ pub fn run() {
             commands::redis_clients,
             commands::redis_client_kill,
             commands::redis_big_keys,
+            commands::redis_delete_keys,
             commands::redis_publish,
             commands::redis_subscribe,
             commands::redis_unsubscribe,

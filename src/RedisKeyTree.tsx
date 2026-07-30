@@ -82,12 +82,16 @@ function allFolderPaths(root: TNode): string[] {
 
 // Redis 命名空間鍵樹：仿 Another Redis Desktop Manager 的左側鍵樹，
 // 把 user:1:name 之類的鍵依 ":" 分組成可摺疊資料夾。葉節點＝實際鍵。
-export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onContextKey }: {
+export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onContextKey, onContextFolder, onContextBlank }: {
   connId: string;
   database: string;
   nonce: number;
   onOpenKey: (key: string) => void;
   onContextKey: (key: string, x: number, y: number) => void;
+  // 資料夾（命名空間）右鍵：帶出該前綴與其底下所有鍵，供「在此新增鍵 / 整段刪除」。
+  onContextFolder?: (prefix: string, keys: string[], x: number, y: number) => void;
+  // 空白處右鍵：只提供「新增鍵 / 重新整理」。
+  onContextBlank?: (x: number, y: number) => void;
 }) {
   const t = useT();
   const [patternInput, setPatternInput] = useState("*");
@@ -135,6 +139,10 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
 
   const apply = () => setPattern(patternInput.trim() || "*");
 
+  // 某命名空間底下的所有鍵（含「自己也是一個鍵」的節點）。前綴比對走原字串，不經 glob。
+  const keysUnder = (prefix: string) =>
+    (keys ?? []).filter((k) => k === prefix || k.startsWith(prefix + SEP));
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* 工具列：MATCH 樣式 + 展開/收合 */}
@@ -157,7 +165,14 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
         </span>
       </div>
 
-      <div className="flex-1 overflow-auto py-1">
+      <div
+        className="flex-1 overflow-auto py-1"
+        onContextMenu={(e) => {
+          if (!onContextBlank) return;
+          e.preventDefault();
+          onContextBlank(e.clientX, e.clientY);
+        }}
+      >
         {err && <div className="p-3 text-red-400 text-sm mono break-all">{err}</div>}
         {truncated && (
           <div className="mx-2 mb-1 px-2 py-1 rounded bg-amber-500/10 text-amber-300 text-[11px]">
@@ -172,6 +187,13 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
             <div
               key={`f:${r.path}`}
               onClick={() => toggle(r.path)}
+              onContextMenu={(e) => {
+                if (!onContextFolder) return;
+                e.preventDefault();
+                e.stopPropagation();
+                onContextFolder(r.path, keysUnder(r.path), e.clientX, e.clientY);
+              }}
+              title={t("命名空間 {path}（{count} 個鍵）；右鍵可在此新增鍵或整段刪除", { path: r.path, count: r.count })}
               style={{ paddingLeft: 8 + r.depth * INDENT }}
               className="flex items-center gap-1 pr-3 py-0.5 cursor-pointer hover:bg-fg/5 text-sm select-none"
             >
@@ -196,7 +218,7 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
             <div
               key={`k:${r.key}:${i}`}
               onClick={() => onOpenKey(r.key)}
-              onContextMenu={(e) => { e.preventDefault(); onContextKey(r.key, e.clientX, e.clientY); }}
+              onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextKey(r.key, e.clientX, e.clientY); }}
               title={r.key}
               style={{ paddingLeft: 8 + r.depth * INDENT + 16 }}
               className="flex items-center gap-1.5 pr-3 py-0.5 cursor-pointer hover:bg-fg/5 text-sm mono text-blue-300/90"

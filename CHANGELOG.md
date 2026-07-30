@@ -1,3 +1,19 @@
+## v0.19.0
+
+- **`dbk` CLI 支援修改與刪除**：CLI 從「唯讀查詢 + 匯出」擴為「查詢 + 匯出 + 寫入」。新增 `exec`（任意 INSERT / UPDATE / DELETE / DDL）、`db create` / `db drop`、`table drop` / `table truncate`，以及 Redis 的 `set`（可帶 `--ttl`）/ `del` / `del-prefix` / `expire` / `persist` / `rename` / `flush-db`。
+  - **兩段式確認**：任何寫入都要 `--yes`；**高破壞動作**（`DROP` / `TRUNCATE` / `FLUSHDB` / 沒有 `WHERE` 的 `UPDATE`·`DELETE`）再要 `--force`。未帶旗標時**不執行**，只印出將要做的動作並回非零 exit code——等於內建預演，把「腳本裡手滑一行毀掉整個庫」擋在執行前。判斷語句是否高破壞沿用既有的分句器（跳過字串 / 註解 / dollar-quote），`deleted_at`、`nowhere` 這類字根不會誤判。
+  - `query` / `explain` 的唯讀守門原封不動：要寫入就得明講用 `exec`，不會因為這版而變寬鬆。
+  - `redis del-prefix` 不把前綴當 pattern 丟給 Redis：先 `SCAN MATCH <prefix>*` 取出實際鍵名（`--limit` 上限，預設 10,000）再分批 `DEL`，確認訊息會先報「將刪除 N 個鍵」。
+  - 新增 `AppError::NeedsConfirm`（`ERR_NEEDS_CONFIRM`）：確認不足是「未執行」而非「查詢失敗」，訊息不再被包成誤導的 `查詢失敗：…`。
+  - Kafka / Elasticsearch / RabbitMQ 的**臨時連線**（`--kind` / `--url`）現在與已存連線一樣在解析階段就擋下並說明原因；先前只擋已存連線，臨時連線會連上後才在每個指令報錯。
+- **Redis 鍵樹右鍵：新增 / 修改 / 刪除補齊**：命名空間資料夾與空白處都可右鍵——「在此命名空間新增鍵…」（預填前綴）、「複製前綴」、「重新整理」、**「刪除此命名空間（N 個鍵）…」**（danger 確認 + 輸入前綴二次確認，走新的 `redis_delete_keys` 批次 `DEL`，明確鍵名清單而非 pattern，鍵名含 `*` `?` 也不會誤傷旁邊的鍵）。鍵節點選單補上「新增鍵…」「複製鍵值」「重新整理」，並把「檢視內容」正名為「檢視 / 編輯內容…」（該視窗本來就能改值）。
+- 鍵樹的「設定 TTL…」先讀一次目前 TTL 當預設值：樹狀模式沒有網格的 ttl 欄，之前一律顯示 `-1`，直接按下確定會把既有到期時間清掉。
+- **Kafka 主題右鍵：直達發佈與建立**：新增「發佈訊息…」與「從 CSV 批次發佈…」（原本得先開訊息瀏覽器才發得出訊息）、「新增主題…」「消費者群組…」。「刪除主題」升級為與「清空主題」同級的雙重確認（danger 確認 + 輸入主題名），刪除後連帶關閉該主題的分頁。唯讀連線與內部主題（`__consumer_offsets` 等）一律不顯示寫入入口。
+- **修正：Kafka / RabbitMQ 連線的查詢分頁顯示 Redis 提示**。這兩種連線的 driver `query()` 一律回 `Unsupported`，卻仍呈現一個可打字的輸入框，提示文字還寫著「Redis 指令，如 GET key…」，按執行必定報錯。改為在編輯器位置放導引卡（說明該用主題 / 佇列樹與右鍵選單的哪些功能），並移除「執行」鈕。
+- **修正：第一個「查詢」分頁關不掉**。原本 home 分頁刻意不給關閉鈕（它是 `activeTabKey` 的最終退路）。改為任一查詢分頁皆可關、可一路關到零：分頁列只剩「+」、主區顯示空狀態，按「+」或 `Ctrl+T` 即回到乾淨的 `__query__`。落點計算統一為 `landingKey()`（優先留在原分頁 → 最後一個表分頁 → 第一個查詢分頁 → null），`Ctrl+W`、右鍵選單、斷線清理與 `requestQuery` 全部走同一條規則。
+- 修正 `i18n.test.ts` 在 node 環境下 `Storage is not defined` 的失敗（spy 改掛在測試自己 stub 進去的 `localStorage` 實例上），前端測試回到全綠 313/313。
+- i18n：補上本版新字串與 v0.18.0 遺漏的 4 條（Data View 相關）英文譯文，`node scripts/i18n-scan.mjs` 缺漏數歸零；`dbk --lang en` 的 help 與寫入確認訊息亦全數英文化。
+
 ## v0.18.0
 
 - **Elasticsearch Data View 分組 + 右鍵查詢 log**：連線樹依 ILM data-stream 命名規則（`.ds-{group}-{yyyy.MM.dd}-{generation}`）把同一資料串流因每日輪替產生的多筆 backing index 合併顯示為單一「Data View」節點，取代逐日展開的雜亂清單；不符合此命名規則的一般索引與別名維持原樣個別顯示。

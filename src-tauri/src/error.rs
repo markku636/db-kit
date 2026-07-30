@@ -33,6 +33,12 @@ pub enum AppError {
     /// 前端錯誤文案應引導使用者以行程清單（ProcessList）手動 KILL。
     #[error("query timed out after {0} ms")]
     Timeout(u64),
+
+    /// 寫入動作缺少明確確認（dbk CLI 的 `--yes` / `--force`）。detail 已是完整的使用者可見句子
+    /// （含「未執行」與該補哪個旗標），故 `message()` 原樣輸出，不再外包一層「查詢失敗：」。
+    #[error("confirmation required: {0}")]
+    #[allow(dead_code)] // GUI 端不會產生此變體（改用對話框確認）
+    NeedsConfirm(String),
 }
 
 impl AppError {
@@ -47,6 +53,7 @@ impl AppError {
             AppError::Storage(_) => "storage",
             AppError::Ssh(_) => "ssh",
             AppError::Timeout(_) => "timeout",
+            AppError::NeedsConfirm(_) => "needs_confirm",
         }
     }
 
@@ -61,6 +68,7 @@ impl AppError {
             AppError::Storage(_) => "ERR_STORAGE",
             AppError::Ssh(_) => "ERR_SSH",
             AppError::Timeout(_) => "ERR_TIMEOUT",
+            AppError::NeedsConfirm(_) => "ERR_NEEDS_CONFIRM",
         }
     }
 
@@ -79,6 +87,7 @@ impl AppError {
                 "查詢逾時（{ms} ms）；伺服器端查詢可能仍在執行，可從行程清單手動終止",
                 ms = ms
             ),
+            AppError::NeedsConfirm(s) => s.clone(),
         }
     }
 }

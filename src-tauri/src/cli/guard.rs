@@ -39,6 +39,46 @@ pub fn ensure_read_only(sql: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// 高破壞語句開頭關鍵字：整個物件 / 整批資料一次消失，且多半無法在交易外回復。
+const DESTRUCTIVE: &[&str] = &["drop", "truncate"];
+
+/// 寫入指令的確認守門：任何寫入都要 `--yes`；高破壞動作再要 `--force`。
+/// `action` 是要印給使用者看的動作描述（未確認時原樣回報，等同預演）。
+pub fn ensure_confirmed(yes: bool, force: bool, destructive: bool, action: &str) -> AppResult<()> {
+    if !yes {
+        return Err(AppError::NeedsConfirm(tf!(
+            "此為寫入指令，未執行：{action}。確認無誤請加 --yes{extra}",
+            action = action,
+            extra = if destructive { " --force" } else { "" }
+        )));
+    }
+    if destructive && !force {
+        return Err(AppError::NeedsConfirm(tf!(
+            "此為高破壞動作，未執行：{action}。請再加 --force 確認",
+            action = action
+        )));
+    }
+    Ok(())
+}
+
+/// 判斷一段 SQL 是否含高破壞語句：DROP / TRUNCATE，或沒有 WHERE 的 UPDATE / DELETE
+///（後者會掃過整張表，與 GUI 資料格的「危險操作確認」同一條判準）。
+pub fn is_destructive_sql(sql: &str) -> bool {
+    for stmt in split_statements(sql) {
+        let kw = first_keyword(stmt);
+        if kw.is_empty() {
+            continue;
+        }
+        if DESTRUCTIVE.contains(&kw.as_str()) {
+            return true;
+        }
+        if (kw == "update" || kw == "delete") && !contains_keyword(&stmt.to_ascii_lowercase(), "where") {
+            return true;
+        }
+    }
+    false
+}
+
 /// 以「字界」判斷 haystack（已小寫）是否含關鍵字 word（避免 `deleted_at` 誤判為 `delete`）。
 fn contains_keyword(haystack: &str, word: &str) -> bool {
     let bytes = haystack.as_bytes();
@@ -162,7 +202,32 @@ fn first_keyword(stmt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_read_only;
+    use super::{ensure_confirmed, ensure_read_only, is_destructive_sql};
+
+    #[test]
+    fn write_needs_yes_and_destructive_needs_force() {
+        // 一般寫入：--yes 即可。
+        assert!(ensure_confirmed(false, false, false, "x").is_err());
+        assert!(ensure_confirmed(true, false, false, "x").is_ok());
+        // 高破壞：--yes 之外還要 --force；只給 --force 不算數。
+        assert!(ensure_confirmed(true, false, true, "x").is_err());
+        assert!(ensure_confirmed(false, true, true, "x").is_err());
+        assert!(ensure_confirmed(true, true, true, "x").is_ok());
+    }
+
+    #[test]
+    fn detects_destructive_sql() {
+        assert!(is_destructive_sql("drop table t"));
+        assert!(is_destructive_sql("TRUNCATE TABLE t"));
+        assert!(is_destructive_sql("delete from t"));
+        assert!(is_destructive_sql("update t set a=1"));
+        assert!(is_destructive_sql("insert into t values (1); drop table u"));
+        // 有 WHERE 的 UPDATE / DELETE 屬一般寫入；欄名含 where 字根不誤判成有 WHERE。
+        assert!(!is_destructive_sql("delete from t where id=1"));
+        assert!(!is_destructive_sql("update t set a=1 where id=1"));
+        assert!(!is_destructive_sql("insert into t values (1)"));
+        assert!(is_destructive_sql("delete from t /* nowhere */"));
+    }
 
     #[test]
     fn allows_select_and_friends() {

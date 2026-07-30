@@ -150,6 +150,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [fieldStats, setFieldStats] = useState<{ col: string; stats: ColumnStats } | null>(null);
   const [detailKey, setDetailKey] = useState<string | null>(null);
   const [rowMenu, setRowMenu] = useState<{ key: string; ttl: string | null; x: number; y: number } | null>(null);
+  // 鍵樹的命名空間（資料夾）右鍵選單；keys = 該前綴底下所有鍵。x/y 為 null 代表空白處選單。
+  const [folderMenu, setFolderMenu] = useState<{ prefix: string; keys: string[]; x: number; y: number } | null>(null);
   // Redis 鍵檢視模式：樹狀（命名空間資料夾）/ 網格（key 列表）。記憶於 localStorage。
   const [redisView, setRedisView] = useState<"tree" | "grid">(() => {
     try { return localStorage.getItem("db-kit:redisKeyView") === "grid" ? "grid" : "tree"; }
@@ -163,6 +165,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // Redis 動作列：把原本藏在右鍵的功能變成一眼可見的工具列按鈕。
   const connName = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.name ?? "Redis");
   const [showNewKey, setShowNewKey] = useState(false);
+  // 「在此命名空間新增鍵」的預填鍵名（如 user:1000:）；一般新增鍵為空字串。
+  const [newKeySeed, setNewKeySeed] = useState("");
+  const openNewKey = (seed = "") => { setNewKeySeed(seed); setShowNewKey(true); };
   const [showStatus, setShowStatus] = useState(false);
   const [showConsole, setShowConsole] = useState(false);
   const [showPubSub, setShowPubSub] = useState(false);
@@ -1174,8 +1179,17 @@ function DataPane({ tab }: { tab: OpenTab }) {
   };
 
   const setKeyTtl = async (key: string, current: string | null) => {
+    // 鍵樹沒有網格的 ttl 欄 → current 為 null 時先讀一次目前 TTL 當預設值，
+    // 使用者才不會在對話框看到 -1 而誤把既有到期時間清掉。
+    let seed = current;
+    if (seed == null) {
+      try {
+        const p = await api.redisKeyPage(tab.connId, tab.database, key, 0, 1, "");
+        seed = String(p.ttl);
+      } catch { /* 讀不到就用 -1 預設 */ }
+    }
     const v = await uiPrompt(t("TTL 秒數（-1 表示永不過期）："), {
-      title: t("設定 TTL"), defaultValue: current ?? "-1", confirmText: t("套用"),
+      title: t("設定 TTL"), defaultValue: seed ?? "-1", confirmText: t("套用"),
     });
     if (v === null) return;
     setApplying(true);
@@ -1206,6 +1220,55 @@ function DataPane({ tab }: { tab: OpenTab }) {
     try {
       await api.deleteRow(tab.connId, tab.database, tab.table, { pk_columns: ["key"], pk_values: [key] });
       toast.success(t("已刪除"));
+      refresh();
+    } catch (e: any) {
+      const msg = e?.message ?? t("刪除失敗");
+      setErr(msg);
+      toast.error(msg);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  // 鍵名的命名空間前綴（含尾端 ":"）：user:1000:name → user:1000:；無 ":" 則回空字串。
+  const namespaceOf = (key: string) => {
+    const i = key.lastIndexOf(":");
+    return i < 0 ? "" : key.slice(0, i + 1);
+  };
+
+  // 複製鍵值到剪貼簿：依型別組成可讀文字（string 取完整值、hash 為 field=value、zset 帶 score）。
+  const copyKeyValue = async (key: string) => {
+    try {
+      const p = await api.redisKeyPage(tab.connId, tab.database, key, 0, 1000, "", true);
+      let text: string;
+      if (p.type_ === "hash") text = p.fields.map((f, i) => `${f}=${p.members[i] ?? ""}`).join("\n");
+      else if (p.type_ === "zset") text = p.members.map((m, i) => `${p.scores[i] ?? 0} ${m}`).join("\n");
+      else text = p.members.join("\n");
+      await copyToClipboard(text, t("已複製鍵值"));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("讀取鍵值失敗"));
+    }
+  };
+
+  // 刪除整個命名空間（鍵樹資料夾右鍵）：以明確鍵名清單批次 DEL，需輸入前綴二次確認。
+  const deleteKeyNamespace = async (prefix: string, keys: string[]) => {
+    if (keys.length === 0) return;
+    const ok = await uiConfirm(
+      t("將刪除命名空間「{prefix}」底下的 {n} 個鍵，此動作無法復原。", { prefix, n: keys.length }),
+      { title: t("刪除命名空間"), danger: true, confirmText: t("繼續") },
+    );
+    if (!ok) return;
+    const typed = await uiPrompt(t("請輸入命名空間前綴以確認刪除："), { placeholder: prefix, confirmText: t("刪除") });
+    if (typed === null) return;
+    if (typed.trim() !== prefix) {
+      toast.error(t("輸入的前綴不符，已取消"));
+      return;
+    }
+    setApplying(true);
+    setErr(null);
+    try {
+      const n = await api.redisDeleteKeys(tab.connId, tab.database, keys);
+      toast.success(t("已刪除 {n} 個鍵", { n }));
       refresh();
     } catch (e: any) {
       const msg = e?.message ?? t("刪除失敗");
@@ -1268,7 +1331,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         )}
         {isRedis && (
           <>
-            <button type="button" onClick={() => setShowNewKey(true)} title={t("新增鍵（String/List/Set/Hash/ZSet）")}
+            <button type="button" onClick={() => openNewKey()} title={t("新增鍵（String/List/Set/Hash/ZSet）")}
               className="px-2 py-1 rounded hover:bg-fg/10 text-emerald-300 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增鍵")}</button>
             <button type="button" onClick={() => setShowStatus(true)} title={t("伺服器狀態（INFO，可自動刷新）")}
               className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={BarChart3} size={14} /> {t("狀態")}</button>
@@ -1414,6 +1477,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
           nonce={reloadNonce}
           onOpenKey={(k) => setDetailKey(k)}
           onContextKey={(k, x, y) => setRowMenu({ key: k, ttl: null, x, y })}
+          onContextFolder={(prefix, keys, x, y) => setFolderMenu({ prefix, keys, x, y })}
+          onContextBlank={(x, y) => setFolderMenu({ prefix: "", keys: [], x, y })}
         />
       ) : (
       <>
@@ -1656,6 +1721,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         <NewKeyDialog
           connId={tab.connId}
           database={tab.database}
+          initialName={newKeySeed}
           onClose={() => setShowNewKey(false)}
           onCreated={() => refresh()}
         />
@@ -1682,10 +1748,13 @@ function DataPane({ tab }: { tab: OpenTab }) {
             style={{ left: rowMenu.x, top: rowMenu.y }}>
             {(
               [
-                [t("檢視內容"), () => setDetailKey(rowMenu.key), false],
+                [t("檢視 / 編輯內容…"), () => setDetailKey(rowMenu.key), false],
+                [t("新增鍵…"), () => openNewKey(namespaceOf(rowMenu.key)), false],
                 [t("複製鍵名"), () => copyToClipboard(rowMenu.key, t("已複製鍵名")), false],
+                [t("複製鍵值"), () => copyKeyValue(rowMenu.key), false],
                 [t("重新命名…"), () => renameKey(rowMenu.key), false],
                 [t("設定 TTL…"), () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
+                [t("重新整理"), () => refresh(), false],
                 [t("刪除"), () => deleteKey(rowMenu.key), true],
               ] as [string, () => void, boolean][]
             ).map(([label, fn, danger]) => (
@@ -1695,6 +1764,39 @@ function DataPane({ tab }: { tab: OpenTab }) {
                 {label}
               </button>
             ))}
+          </div>
+        </>
+      )}
+
+      {/* Redis 鍵樹：命名空間（資料夾）/ 空白處右鍵選單 */}
+      {folderMenu && (
+        <>
+          <div className="fixed inset-0 z-[89]"
+            onClick={() => setFolderMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setFolderMenu(null); }} />
+          <div className="fixed z-[90] min-w-[180px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
+            style={{ left: folderMenu.x, top: folderMenu.y }}>
+            {(() => {
+              const { prefix, keys } = folderMenu;
+              const items: [string, () => void, boolean][] = prefix
+                ? [
+                    [t("在此命名空間新增鍵…"), () => openNewKey(`${prefix}:`), false],
+                    [t("複製前綴"), () => copyToClipboard(prefix, t("已複製前綴")), false],
+                    [t("重新整理"), () => refresh(), false],
+                    [t("刪除此命名空間（{n} 個鍵）…", { n: keys.length }), () => deleteKeyNamespace(prefix, keys), true],
+                  ]
+                : [
+                    [t("新增鍵…"), () => openNewKey(), false],
+                    [t("重新整理"), () => refresh(), false],
+                  ];
+              return items.map(([label, fn, danger]) => (
+                <button key={label} type="button"
+                  onClick={() => { setFolderMenu(null); fn(); }}
+                  className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
+                  {label}
+                </button>
+              ));
+            })()}
           </div>
         </>
       )}

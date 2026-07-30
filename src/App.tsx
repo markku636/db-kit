@@ -46,7 +46,7 @@ import {
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
-  ScanSearch, Copy, ChevronDown, Globe, Layers,
+  ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox,
   type LucideIcon,
 } from "lucide-react";
 
@@ -66,6 +66,8 @@ const KafkaConnectPanel = lazyOverlay(() => import("./KafkaConnectPanel"));
 const KafkaAclPanel = lazyOverlay(() => import("./KafkaAclPanel"));
 const KafkaSchemaViewer = lazyOverlay(() => import("./KafkaSchemaViewer"));
 const KafkaCreateTopicDialog = lazyOverlay(() => import("./KafkaCreateTopicDialog"));
+const KafkaProduceDialog = lazyOverlay(() => import("./KafkaProduceDialog"));
+const KafkaCsvProduceDialog = lazyOverlay(() => import("./KafkaCsvProduceDialog"));
 const EsClusterOverview = lazyOverlay(() => import("./EsClusterOverview"));
 const EsMappingViewer = lazyOverlay(() => import("./EsMappingViewer"));
 const RabbitMqOverview = lazyOverlay(() => import("./RabbitMqOverview"));
@@ -1245,6 +1247,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   const [kafkaAcl, setKafkaAcl] = useState<{ id: string; name: string } | null>(null);
   const [kafkaSchema, setKafkaSchema] = useState<{ id: string; name: string } | null>(null);
   const [kafkaCreateTopic, setKafkaCreateTopic] = useState<{ connId: string } | null>(null);
+  // 側欄主題右鍵直達的發佈入口（原本只能先開訊息瀏覽器才發得出訊息）。
+  const [kafkaProduce, setKafkaProduce] = useState<{ connId: string; topic: string } | null>(null);
+  const [kafkaCsvProduce, setKafkaCsvProduce] = useState<{ connId: string; topic: string } | null>(null);
   // Elasticsearch / OpenSearch 叢集總覽面板。
   const [esOverview, setEsOverview] = useState<{ id: string; name: string } | null>(null);
   // Elasticsearch / OpenSearch 索引 Mapping 檢視器。
@@ -2001,13 +2006,26 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     }
     if (m.kind === "kafka") {
       const ro = readonlyConns[m.connId] === true;
+      const internal = isInternalKafkaTopic(m.table);
       const nodes: MenuNode[] = [
         it(t("瀏覽訊息"), () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind)),
         it(t("主題設定 / 分區"), () => useStore.getState().openTable(m.connId, m.db, m.table, "structure", m.objKind)),
-        it(t("複製主題名"), () => copyToClipboard(m.table, t("已複製主題名"))),
-        it(t("重新整理"), () => refreshTables(m.connId, m.db)),
       ];
-      if (!ro && !isInternalKafkaTopic(m.table)) {
+      // 新增（發佈訊息 / 建主題）：不必先開訊息瀏覽器就能從側欄直接寫入。內部主題（__consumer_offsets 等）不給寫。
+      if (!ro && !internal) {
+        nodes.push(sep);
+        nodes.push(it(t("發佈訊息…"), () => setKafkaProduce({ connId: m.connId, topic: m.table })));
+        nodes.push(it(t("從 CSV 批次發佈…"), () => setKafkaCsvProduce({ connId: m.connId, topic: m.table })));
+      }
+      nodes.push(sep);
+      if (!ro) nodes.push(it(t("新增主題…"), () => setKafkaCreateTopic({ connId: m.connId })));
+      nodes.push(it(t("消費者群組…"), () => {
+        const c = connections.find((x) => x.id === m.connId);
+        if (c) setKafkaGroups({ id: c.id, name: c.name });
+      }));
+      nodes.push(it(t("複製主題名"), () => copyToClipboard(m.table, t("已複製主題名"))));
+      nodes.push(it(t("重新整理"), () => refreshTables(m.connId, m.db)));
+      if (!ro && !internal) {
         nodes.push(sep);
         nodes.push(it(t("清空主題…"), async () => {
           // 雙重確認：danger confirm + 輸入主題名。清空保留主題與設定；compacted 主題 broker 會拒絕。
@@ -2030,10 +2048,21 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
             toast.error(e?.message ?? t("清空失敗"));
           }
         }, true));
-        nodes.push(it(t("刪除主題"), async () => {
-          if (!(await uiConfirm(t("確定刪除主題「{name}」？此操作不可復原。", { name: m.table })))) return;
+        nodes.push(it(t("刪除主題…"), async () => {
+          // 刪主題比清空更不可逆（連設定 / 分區配置一起消失）→ 與清空同樣採 danger confirm + 輸入主題名。
+          if (!(await uiConfirm(
+            t("確定刪除主題「{name}」？主題、其設定與所有分區資料都會消失，此操作不可復原。", { name: m.table }),
+            { title: t("刪除主題"), danger: true, confirmText: t("繼續") },
+          ))) return;
+          const typed = await uiPrompt(t("請輸入主題名稱以確認刪除"), { placeholder: m.table, confirmText: t("刪除") });
+          if (typed === null) return;
+          if (typed !== m.table) {
+            toast.error(t("輸入的主題名稱不符，已取消"));
+            return;
+          }
           try {
             await api.kafkaDeleteTopic(m.connId, m.table);
+            useStore.getState().closeTableTab(m.connId, m.db, m.table); // 主題消失，連帶關分頁
             toast.success(t("已刪除主題 {name}", { name: m.table }));
             refreshTables(m.connId, m.db);
           } catch (e: any) {
@@ -2925,6 +2954,23 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
         />
       )}
 
+      {kafkaProduce && (
+        <KafkaProduceDialog
+          connId={kafkaProduce.connId}
+          topic={kafkaProduce.topic}
+          allowTopicChange
+          onClose={() => setKafkaProduce(null)}
+        />
+      )}
+
+      {kafkaCsvProduce && (
+        <KafkaCsvProduceDialog
+          connId={kafkaCsvProduce.connId}
+          topic={kafkaCsvProduce.topic}
+          onClose={() => setKafkaCsvProduce(null)}
+        />
+      )}
+
       {console_ && (
         <RedisConsole
           connId={console_.id}
@@ -3108,7 +3154,8 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
   const canUse = activeId && connectedIds.has(activeId);
   const activeTab = tabs.find((tab) => tab.key === activeTabKey) ?? null;
   // 作用中的查詢分頁 id（非表分頁時）：解析未知 / null → 第一個查詢分頁（home 可被關掉，不能寫死 __query__）。
-  const activeQueryId = activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : queryTabs[0];
+  // 查詢分頁可全部關光 → undefined，此時主區顯示空狀態（見下方 render）。
+  const activeQueryId: string | undefined = activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : queryTabs[0];
 
   // 分頁鍵盤操作：Ctrl/Cmd+N 開新查詢、Ctrl/Cmd+Shift+N 新增連線、Ctrl/Cmd+W 關閉、
   // Ctrl+Tab / Ctrl+Shift+Tab 循環、Ctrl+1..9 跳轉（9=最後一個，含查詢分頁）。
@@ -3128,9 +3175,9 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
         return;
       }
       if (e.key === "w" || e.key === "W") {
-        // 表分頁 → 關表；查詢分頁 → 關該查詢分頁（僅剩一個時 closeQueryTab 會自行忽略）。
+        // 表分頁 → 關表；查詢分頁 → 關該查詢分頁（含第一個，可一路關到零）。
         if (activeTabKey && tabs.some((tab) => tab.key === activeTabKey)) { e.preventDefault(); closeTab(activeTabKey); return; }
-        if (activeTabKey && queryTabs.length > 1 && queryTabs.includes(activeTabKey)) { e.preventDefault(); closeQueryTab(activeTabKey); return; }
+        if (activeTabKey && queryTabs.includes(activeTabKey)) { e.preventDefault(); closeQueryTab(activeTabKey); return; }
         return;
       }
       if (e.key === "t" || e.key === "T") { e.preventDefault(); addQueryTab(); return; } // Ctrl+T 新增查詢分頁
@@ -3235,15 +3282,13 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
               key={qid}
               label={i === 0 ? t("查詢") : t("查詢 {n}", { n: i + 1 })}
               active={isActive}
-              closable={queryTabs.length > 1}
+              closable
               btnRef={isActive ? queryTabRef : undefined}
               onActivate={() => setActiveTab(qid)}
               onClose={() => closeQueryTab(qid)}
               onContextMenu={(e) => {
                 e.preventDefault(); // 攔掉 WebView 預設右鍵選單
                 setActiveTab(qid);
-                // 只剩一個查詢分頁時無任何可執行動作 → 不開空選單。
-                if (queryTabs.length <= 1) return;
                 setQueryTabMenu({ id: qid, x: e.clientX, y: e.clientY });
               }}
             />
@@ -3256,11 +3301,25 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
         </button>
       </div>
 
-      {/* 內容：表分頁 → 資料格；否則 → 對應查詢分頁的編輯器（key 隨分頁 → 各自獨立狀態與草稿）。 */}
+      {/* 內容：表分頁 → 資料格；否則 → 對應查詢分頁的編輯器（key 隨分頁 → 各自獨立狀態與草稿）。
+          查詢分頁全部關光且無表分頁在前景 → 空狀態（分頁列的「+」仍可開新查詢）。 */}
       {activeTab ? (
         <TableView tab={activeTab} />
-      ) : (
+      ) : activeQueryId ? (
         <QueryPane key={activeQueryId} tabId={activeQueryId} />
+      ) : (
+        <div className="flex-1 flex items-center justify-center min-w-0">
+          <EmptyState
+            icon={FileCode2}
+            title={t("已關閉所有查詢分頁")}
+            hint={t("點分頁列的「+」或按 Ctrl+T 開新查詢；點左側資料表也可開啟資料分頁。")}
+            action={
+              <Button variant="primary" size="md" icon={Plus} onClick={addQueryTab}>
+                {t("新增查詢分頁")}
+              </Button>
+            }
+          />
+        </div>
       )}
 
       {tabMenu && (
@@ -3296,13 +3355,13 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
             style={{ left: queryTabMenu.x, top: queryTabMenu.y }}>
             {(() => {
               const qid = queryTabMenu.id;
-              // 任一查詢分頁（含第一個「查詢」）皆可關，前提是關完仍留得下至少一個。
-              // 只剩一個時 onContextMenu 已擋掉，不會走到這裡。
-              const items: [string, () => void][] = [
-                [t("關閉查詢"), () => closeQueryTab(qid)],
-                [t("關閉其他查詢"), () => closeOtherQueryTabs(qid)],
-                [t("全部關閉查詢"), () => closeAllQueryTabs()],
-              ];
+              // 任一查詢分頁（含第一個「查詢」）皆可關，可一路關到零。
+              // 只剩一個時「關閉其他 / 全部關閉」無意義，僅留「關閉查詢」。
+              const items: [string, () => void][] = [[t("關閉查詢"), () => closeQueryTab(qid)]];
+              if (queryTabs.length > 1) {
+                items.push([t("關閉其他查詢"), () => closeOtherQueryTabs(qid)]);
+                items.push([t("全部關閉查詢"), () => closeAllQueryTabs()]);
+              }
               return items.map(([label, fn]) => (
                 <button key={label} type="button"
                   onClick={() => { setQueryTabMenu(null); fn(); }}
@@ -3474,6 +3533,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 與 supportsExplain（EXPLAIN 查詢計畫能力）是兩個關注點——external 走 gateway、
   // 不進 EXPLAIN_KINDS（那會誤開前端多語句切分），視覺化解釋另有 supportsVisualExplain gate。
   const supportsSqlEditor = supportsExplain || kind === "external";
+  // Kafka / RabbitMQ 沒有查詢語言（driver 的 query() 一律回 Unsupported）：不給可打字的編輯器與「執行」鈕，
+  // 改在編輯器位置放導引卡（開主題 / 佇列瀏覽器、叢集總覽、發布訊息），避免呈現一個按了必錯的輸入框。
+  const supportsQueryEditor = kind !== "kafka" && kind !== "rabbitmq";
   // 視覺化解釋（解釋分頁）支援的類型：能取得 JSON 執行計畫者（MySQL / PostgreSQL / 外部 gateway；SQLite 無）。
   const supportsVisualExplain = !!kind && (isMysqlFamily(kind) || kind === "postgres" || kind === "external");
   // Mongo explain：獨立 gate —— 不可把 mongo 加進 EXPLAIN_KINDS（那同時 gate SQL 切割 / 參數 / 編輯器選擇）。
@@ -4528,7 +4590,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 ⟨{paramCount} {t("參數⟩")}
               </span>
             )}
-            {running ? (
+            {!supportsQueryEditor ? null : running ? (
               <button type="button"
                 // 執行中變紅色「停止」（軟取消）：多語句批次於語句邊界中止、保留已完成結果；
                 // 單條長查詢無法中斷（由查詢逾時兜底）。Esc 同效。
@@ -4613,6 +4675,20 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 placeholder={t("查詢：{ \"index\":\"logs-*\", \"query\":{ \"match\":{ \"msg\":\"error\" } }, \"size\":200, \"sort\":[{ \"@timestamp\":\"desc\" }] }　|　計數：{ \"index\":\"..\", \"count\":true, \"query\":{} }（F6 / Ctrl+Enter 執行）")}
               />
             </Suspense>
+          </div>
+        ) : !supportsQueryEditor ? (
+          // Kafka / RabbitMQ：沒有查詢語言，改放導引卡（原本會顯示一個帶 Redis 提示的輸入框，按執行必定報錯）。
+          <div style={{ height: editor.size }} className="overflow-auto bg-app border-t border-fg/10">
+            <EmptyState
+              compact
+              icon={kind === "kafka" ? Radio : Inbox}
+              title={kind === "kafka" ? t("Kafka 連線不使用 SQL 查詢") : t("RabbitMQ 連線不使用 SQL 查詢")}
+              hint={
+                kind === "kafka"
+                  ? t("點左側主題可開啟訊息瀏覽器（消費 / 過濾 / 即時追尾 / 發佈）；對主題按右鍵可發佈訊息、改設定、加分割區、清空或刪除；對連線按右鍵有叢集總覽、消費者群組與新增主題。")
+                  : t("點左側佇列可開啟訊息瀏覽；對佇列按右鍵可發布訊息、清空或刪除佇列；對連線按右鍵有總覽與發布訊息。")
+              }
+            />
           </div>
         ) : (
           <textarea

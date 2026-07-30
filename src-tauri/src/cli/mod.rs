@@ -1,8 +1,10 @@
-//! db-kit 命令列介面（唯讀查詢 + 匯出）。
+//! db-kit 命令列介面（查詢 + 匯出 + 寫入）。
 //!
 //! 直接重用核心層（`manager` / `store` / `export` / `backup` / `conn_crypto`），
 //! 不經過 Tauri commands，因此可在 `--no-default-features`（無 gui）下單獨編譯。
-//! 對資料庫唯讀：只開放查詢 / 瀏覽 / 匯出，`query` 另過唯讀守門（見 `guard`）。
+//! 讀取類指令免確認，`query` / `explain` 另過唯讀守門（見 `guard`）；
+//! 寫入類指令（`exec` / `db create·drop` / `table drop·truncate` / `redis` 的修改刪除）
+//! 一律要 `--yes`，高破壞動作再要 `--force`，避免在腳本裡手滑一行毀掉整個庫。
 
 mod args;
 mod dispatch;

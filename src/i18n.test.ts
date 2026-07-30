@@ -112,7 +112,9 @@ describe("readStoredLang", () => {
   });
 
   it("localStorage 拋錯時退回 zh-TW", () => {
-    const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    // spy 掛在上面 stub 進去的實例上：vitest 跑在 node 環境，沒有全域 `Storage` 建構子可 spy
+    // （在較舊 / 未開旗標的 Node 會直接 ReferenceError），而受測碼本來就只透過 localStorage 存取。
+    const spy = vi.spyOn(localStorage, "getItem").mockImplementation(() => {
       throw new Error("disabled");
     });
     expect(readStoredLang()).toBe("zh-TW");

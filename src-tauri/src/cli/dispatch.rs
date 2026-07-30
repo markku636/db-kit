@@ -1,7 +1,7 @@
 //! 指令分派：解析連線 → 連線 → 呼叫 manager / store / export / backup → 渲染。
-//! 全部唯讀 / 匯出；`query` / `explain` 另過唯讀守門。
+//! 讀取類指令免確認；`query` / `explain` 另過唯讀守門，寫入類指令過 `guard::ensure_confirmed`。
 
-use crate::db::{DataQuery, Filter, SearchOptions, Sort, SortDir};
+use crate::db::{DataQuery, DbKind, Filter, KeyEdit, RowInsert, SearchOptions, Sort, SortDir};
 use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
 use crate::store::{self, PersistedConnection};
@@ -11,6 +11,42 @@ use super::args::{
     TableCmd,
 };
 use super::{guard, render, resolve};
+
+/// 寫入確認旗標（`--yes` / `--force`）：從全域 ConnArgs 攤平帶進各 exec 分支。
+#[derive(Clone, Copy)]
+pub struct Confirm {
+    pub yes: bool,
+    pub force: bool,
+}
+
+impl Confirm {
+    /// 一般寫入（需 --yes）。
+    fn write(&self, action: &str) -> AppResult<()> {
+        guard::ensure_confirmed(self.yes, self.force, false, action)
+    }
+    /// 高破壞寫入（需 --yes --force）。
+    fn destroy(&self, action: &str) -> AppResult<()> {
+        guard::ensure_confirmed(self.yes, self.force, true, action)
+    }
+}
+
+/// 識別字跳脫（PostgreSQL / Oracle 雙引號、MSSQL 中括號、其餘反引號；內部引號加倍）。
+fn quote_ident(kind: DbKind, id: &str) -> String {
+    match kind {
+        DbKind::Postgres | DbKind::Oracle => format!("\"{}\"", id.replace('"', "\"\"")),
+        DbKind::Mssql => format!("[{}]", id.replace(']', "]]")),
+        _ => format!("`{}`", id.replace('`', "``")),
+    }
+}
+
+/// 限定名：SQLite 單檔無 schema 概念；其餘以 db.table 限定。
+fn qualified(kind: DbKind, db: &str, table: &str) -> String {
+    if matches!(kind, DbKind::Sqlite) || db.is_empty() {
+        quote_ident(kind, table)
+    } else {
+        format!("{}.{}", quote_ident(kind, db), quote_ident(kind, table))
+    }
+}
 
 pub async fn dispatch(cli: Cli) -> AppResult<()> {
     let fmt = cli.conn.format;
@@ -49,14 +85,16 @@ pub async fn dispatch(cli: Cli) -> AppResult<()> {
 async fn run_connected(conn: &ConnArgs, fmt: Format, command: Command) -> AppResult<()> {
     let cfg = resolve::resolve(conn).await?;
     let id = cfg.id.clone();
+    let kind = cfg.kind;
     let db = conn
         .database
         .clone()
         .or_else(|| cfg.database.clone())
         .unwrap_or_default();
+    let cf = Confirm { yes: conn.yes, force: conn.force };
     let mgr = ConnectionManager::new();
     mgr.connect(cfg).await?;
-    let res = exec(&mgr, &id, &db, fmt, command).await;
+    let res = exec(&mgr, &id, kind, &db, fmt, cf, command).await;
     mgr.disconnect(&id).await;
     res
 }
@@ -64,8 +102,10 @@ async fn run_connected(conn: &ConnArgs, fmt: Format, command: Command) -> AppRes
 async fn exec(
     mgr: &ConnectionManager,
     id: &str,
+    kind: DbKind,
     db: &str,
     fmt: Format,
+    cf: Confirm,
     command: Command,
 ) -> AppResult<()> {
     match command {
@@ -80,8 +120,20 @@ async fn exec(
             let dbs = mgr.list_databases(id).await?;
             render::emit_list(fmt, "database", &dbs);
         }
+        Command::Db(DbCmd::Create { name }) => {
+            let noun = if matches!(kind, DbKind::Postgres) { "schema" } else { t!("資料庫") };
+            cf.write(&tf!("新增{noun}「{name}」", noun = noun, name = name))?;
+            mgr.create_database(id, &name).await?;
+            println!("{}", tf!("已新增{noun}「{name}」", noun = noun, name = name));
+        }
+        Command::Db(DbCmd::Drop { name }) => {
+            let noun = if matches!(kind, DbKind::Postgres) { "schema" } else { t!("資料庫") };
+            cf.destroy(&tf!("刪除{noun}「{name}」（含其所有物件）", noun = noun, name = name))?;
+            mgr.drop_database(id, &name).await?;
+            println!("{}", tf!("已刪除{noun}「{name}」", noun = noun, name = name));
+        }
 
-        Command::Table(tc) => exec_table(mgr, id, db, fmt, tc).await?,
+        Command::Table(tc) => exec_table(mgr, id, kind, db, fmt, cf, tc).await?,
 
         Command::Query { sql, max_rows } => {
             guard::ensure_read_only(&sql)?;
@@ -94,6 +146,18 @@ async fn exec(
             }
             if q.truncated {
                 eprintln!("{}", tf!("(結果已截斷於 {cap} 列；用 --max-rows 0 取完整結果)", cap = cap));
+            }
+        }
+        Command::Exec { sql } => {
+            // 寫入入口：不過唯讀守門（那正是 `query` 的職責），改用 --yes / --force 兩段確認。
+            // 純唯讀語句誤用 exec 也照跑，只是把結果集印出來，行為與 query 一致。
+            let destructive = guard::is_destructive_sql(&sql);
+            guard::ensure_confirmed(cf.yes, cf.force, destructive, &tf!("執行：{sql}", sql = sql))?;
+            let q = mgr.query(id, &sql).await?;
+            if q.columns.is_empty() {
+                println!("{}", tf!("完成（{n} 列受影響）", n = q.rows_affected));
+            } else {
+                render::emit(fmt, &q.columns, &q.rows);
             }
         }
         Command::Explain { sql } => {
@@ -171,7 +235,7 @@ async fn exec(
                 }
             }
         }
-        Command::Redis(rc) => exec_redis(mgr, id, db, fmt, rc).await?,
+        Command::Redis(rc) => exec_redis(mgr, id, db, fmt, cf, rc).await?,
 
         // 連線前已處理。
         Command::Backup(_) => unreachable!("backup 在連線前已處理"),
@@ -182,8 +246,10 @@ async fn exec(
 async fn exec_table(
     mgr: &ConnectionManager,
     id: &str,
+    kind: DbKind,
     db: &str,
     fmt: Format,
+    cf: Confirm,
     tc: TableCmd,
 ) -> AppResult<()> {
     match tc {
@@ -241,6 +307,35 @@ async fn exec_table(
             let v = mgr.list_foreign_keys(id, db, &table).await?;
             render::emit_value(fmt, &v);
         }
+        TableCmd::Drop { table } => {
+            let noun = if matches!(kind, DbKind::Mongo) { t!("集合") } else { t!("資料表") };
+            cf.destroy(&tf!("刪除{noun}「{table}」", noun = noun, table = table))?;
+            if matches!(kind, DbKind::Mongo) {
+                mgr.drop_collection(id, db, &table).await?;
+            } else {
+                mgr.query(id, &format!("DROP TABLE {}", qualified(kind, db, &table))).await?;
+            }
+            println!("{}", tf!("已刪除{noun}「{table}」", noun = noun, table = table));
+        }
+        TableCmd::Truncate { table } => {
+            // Mongo 的 delete_many 刻意禁止空 filter（避免一個 {} 掃掉整個集合），
+            // 故此處不代為繞過；要整個清掉請用 `table drop` 後重建集合。
+            if matches!(kind, DbKind::Mongo) {
+                return Err(AppError::Unsupported(
+                    t!("Mongo 不支援 truncate（請用 dbk table drop 刪除集合，或以 query 帶明確 filter 刪除）").into(),
+                ));
+            }
+            cf.destroy(&tf!("清空資料表「{table}」的所有資料列", table = table))?;
+            // SQLite 無 TRUNCATE，改 DELETE FROM（語意等同清空，不重設 rowid）。
+            let q = qualified(kind, db, &table);
+            let sql = if matches!(kind, DbKind::Sqlite) {
+                format!("DELETE FROM {q}")
+            } else {
+                format!("TRUNCATE TABLE {q}")
+            };
+            let n = mgr.query(id, &sql).await?.rows_affected;
+            println!("{}", tf!("已清空「{table}」（{n} 列）", table = table, n = n));
+        }
     }
     Ok(())
 }
@@ -287,6 +382,7 @@ async fn exec_redis(
     id: &str,
     db: &str,
     fmt: Format,
+    cf: Confirm,
     rc: RedisCmd,
 ) -> AppResult<()> {
     match rc {
@@ -312,6 +408,69 @@ async fn exec_redis(
         RedisCmd::BigKeys { sample, top } => {
             let v = mgr.redis_driver(id)?.big_keys(db, sample, top).await?;
             render::emit_value(fmt, &v);
+        }
+
+        // ---- 寫入（修改 / 刪除）----
+        RedisCmd::Set { key, value, ttl } => {
+            cf.write(&tf!("設定鍵「{key}」的值", key = key))?;
+            mgr.insert_row(
+                id,
+                db,
+                "keys",
+                &RowInsert {
+                    columns: vec!["key".into(), "value".into()],
+                    values: vec![Some(key.clone()), Some(value)],
+                },
+            )
+            .await?;
+            if let Some(secs) = ttl {
+                mgr.redis_driver(id)?.expire_key(db, &key, secs).await?;
+            }
+            match ttl {
+                Some(s) if s >= 0 => println!("{}", tf!("已設定鍵「{key}」（TTL {s} 秒）", key = key, s = s)),
+                _ => println!("{}", tf!("已設定鍵「{key}」", key = key)),
+            }
+        }
+        RedisCmd::Del { keys } => {
+            cf.write(&tf!("刪除 {n} 個鍵", n = keys.len()))?;
+            let n = mgr.redis_driver(id)?.delete_keys(db, &keys).await?;
+            println!("{}", tf!("已刪除 {n} 個鍵", n = n));
+        }
+        RedisCmd::DelPrefix { prefix, limit } => {
+            // 先以 SCAN MATCH <prefix>* 取出實際鍵名再逐一 DEL：印出將刪的鍵數供預演，
+            // 不把 prefix 直接丟給 DEL（Redis 的 DEL 不吃 pattern）。
+            let rk = mgr.scan_keys(id, db, &format!("{prefix}*"), limit).await?;
+            if rk.truncated {
+                eprintln!("{}", tf!("(掃描已達上限 {limit}；請縮小前綴或調高 --limit 後再執行)", limit = limit));
+            }
+            cf.destroy(&tf!(
+                "刪除前綴「{prefix}」底下的 {n} 個鍵",
+                prefix = prefix,
+                n = rk.keys.len()
+            ))?;
+            let n = mgr.redis_driver(id)?.delete_keys(db, &rk.keys).await?;
+            println!("{}", tf!("已刪除 {n} 個鍵", n = n));
+        }
+        RedisCmd::Expire { key, seconds } => {
+            cf.write(&tf!("設定鍵「{key}」存活 {seconds} 秒", key = key, seconds = seconds))?;
+            let ok = mgr.redis_driver(id)?.expire_key(db, &key, seconds.max(0)).await?;
+            println!("{}", if ok { tf!("已設定 TTL：{key}", key = key) } else { t!("(鍵不存在)").to_string() });
+        }
+        RedisCmd::Persist { key } => {
+            cf.write(&tf!("移除鍵「{key}」的存活時間", key = key))?;
+            let ok = mgr.redis_driver(id)?.expire_key(db, &key, -1).await?;
+            println!("{}", if ok { tf!("已改為永不過期：{key}", key = key) } else { t!("(鍵不存在或本就無 TTL)").to_string() });
+        }
+        RedisCmd::Rename { key, new_key } => {
+            cf.write(&tf!("將鍵「{key}」改名為「{new_key}」", key = key, new_key = new_key))?;
+            mgr.key_edit(id, db, &key, &KeyEdit::Rename { new_key: new_key.clone() }).await?;
+            println!("{}", tf!("已改名：{key} → {new_key}", key = key, new_key = new_key));
+        }
+        RedisCmd::FlushDb => {
+            let target = if db.is_empty() { "0" } else { db };
+            cf.destroy(&tf!("清空 DB {target} 的所有鍵（FLUSHDB）", target = target))?;
+            mgr.query(id, &format!("{target}:FLUSHDB")).await?;
+            println!("{}", tf!("已清空 DB {target}", target = target));
         }
     }
     Ok(())

@@ -28,30 +28,25 @@ async fn resolve_saved(needle: &str, args: &ConnArgs) -> AppResult<ConnectionCon
         .or_else(|| all.iter().find(|c| c.id == needle))
         .ok_or_else(|| AppError::NotFound(needle.to_string()))?;
     let mut cfg = store::load_connection_in(&dir, &found.id).await?;
-    if matches!(cfg.kind, DbKind::External) {
-        return Err(AppError::Unsupported(
-            t!("CLI 不支援外部 gateway（External）連線").into(),
-        ));
-    }
-    if matches!(cfg.kind, DbKind::Kafka) {
-        return Err(AppError::Unsupported(
-            t!("CLI 不支援 Kafka 連線（請用 GUI）").into(),
-        ));
-    }
-    if matches!(cfg.kind, DbKind::Elastic) {
-        return Err(AppError::Unsupported(
-            t!("CLI 不支援 Elasticsearch 連線（請用 GUI）").into(),
-        ));
-    }
-    if matches!(cfg.kind, DbKind::RabbitMq) {
-        return Err(AppError::Unsupported(
-            t!("CLI 不支援 RabbitMQ 連線（請用 GUI）").into(),
-        ));
-    }
+    ensure_cli_kind(cfg.kind)?;
     if let Some(db) = &args.database {
         cfg.database = Some(db.clone());
     }
     Ok(cfg)
+}
+
+/// CLI 支援的連線種類守門。訊息 / 搜尋引擎類（Kafka / Elasticsearch / RabbitMQ）與 external gateway
+/// 沒有可在終端機表達的通用查詢語言，且 slim CLI（`--no-default-features`）根本沒編入其驅動，
+/// 故已存連線與臨時連線（`--kind` / `--url`）都在此擋下，而非讓使用者連上後每個指令才報錯。
+fn ensure_cli_kind(kind: DbKind) -> AppResult<()> {
+    let msg = match kind {
+        DbKind::External => t!("CLI 不支援外部 gateway（External）連線"),
+        DbKind::Kafka => t!("CLI 不支援 Kafka 連線（請用 GUI）"),
+        DbKind::Elastic => t!("CLI 不支援 Elasticsearch 連線（請用 GUI）"),
+        DbKind::RabbitMq => t!("CLI 不支援 RabbitMQ 連線（請用 GUI）"),
+        _ => return Ok(()),
+    };
+    Err(AppError::Unsupported(msg.into()))
 }
 
 fn kind_of(k: KindArg) -> DbKind {
@@ -103,6 +98,7 @@ fn resolve_adhoc(args: &ConnArgs) -> AppResult<ConnectionConfig> {
     let kind = parsed.kind.ok_or_else(|| {
         AppError::Connect(t!("無法判斷連線種類（請加 --kind 或於 --url 指定 scheme）").into())
     })?;
+    ensure_cli_kind(kind)?;
 
     // 個別旗標覆寫 URL 解析到的對應欄位。
     let host = args

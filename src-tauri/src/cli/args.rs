@@ -1,4 +1,6 @@
-//! CLI 參數定義（clap derive 指令樹 + 全域連線旗標）。唯讀 + 匯出範圍。
+//! CLI 參數定義（clap derive 指令樹 + 全域連線旗標）。
+//! 讀取 / 匯出指令一律免確認；寫入指令（`exec` / `table drop` / `db drop` / `redis` 的修改刪除）
+//! 一律要 `--yes`，其中高破壞動作（DROP / TRUNCATE / FLUSHDB / 無 WHERE 的 UPDATE·DELETE）再要 `--force`。
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -6,7 +8,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[command(
     name = "dbk",
     version,
-    about = "db-kit CLI — 唯讀查詢與匯出（重用 GUI 已存連線 / 臨時連線）"
+    about = "db-kit CLI — 查詢、匯出與寫入（重用 GUI 已存連線 / 臨時連線；寫入需 --yes）"
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -58,6 +60,14 @@ pub struct ConnArgs {
     /// 介面語言（zh-TW | en；亦可用環境變數 DBKIT_LANG）
     #[arg(long, global = true, value_name = "zh-TW|en")]
     pub lang: Option<String>,
+
+    /// 確認執行寫入指令（修改 / 刪除）。未加時只印出將執行的動作並以錯誤結束（等同預演）
+    #[arg(short = 'y', long, global = true)]
+    pub yes: bool,
+
+    /// 額外確認高破壞動作（DROP / TRUNCATE / FLUSHDB / 無 WHERE 的 UPDATE·DELETE），需與 --yes 併用
+    #[arg(long, global = true)]
+    pub force: bool,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -104,6 +114,9 @@ pub enum Command {
         max_rows: Option<usize>,
     },
 
+    /// 執行寫入語句（INSERT / UPDATE / DELETE / DDL）。需 --yes；高破壞動作另需 --force
+    Exec { sql: String },
+
     /// 查詢計畫（EXPLAIN）
     Explain { sql: String },
 
@@ -132,7 +145,7 @@ pub enum Command {
     /// 伺服器資訊
     ServerInfo,
 
-    /// Redis 唯讀操作
+    /// Redis 操作（掃描 / 檢視 + 修改 / 刪除）
     #[command(subcommand)]
     Redis(RedisCmd),
 }
@@ -157,6 +170,10 @@ pub enum ConnCmd {
 pub enum DbCmd {
     /// 列出資料庫 / schema
     List,
+    /// 新增資料庫 / schema（PostgreSQL 為 schema）。需 --yes
+    Create { name: String },
+    /// 刪除資料庫 / schema（含其所有物件，不可復原）。需 --yes --force
+    Drop { name: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -190,6 +207,10 @@ pub enum TableCmd {
     Indexes { table: String },
     /// 外鍵清單
     ForeignKeys { table: String },
+    /// 刪除資料表 / 集合（DROP TABLE / dropCollection）。需 --yes --force
+    Drop { table: String },
+    /// 清空資料表（TRUNCATE；Mongo 為刪除所有文件）。需 --yes --force
+    Truncate { table: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -303,4 +324,33 @@ pub enum RedisCmd {
         #[arg(long, default_value_t = 20)]
         top: usize,
     },
+
+    /// 設定 string 鍵的值（SET；可同時設 TTL）。需 --yes
+    Set {
+        key: String,
+        value: String,
+        /// 同時設定存活秒數（省略 = 不動既有 TTL）
+        #[arg(long)]
+        ttl: Option<i64>,
+    },
+    /// 刪除鍵（DEL，可一次多個）。需 --yes
+    Del {
+        #[arg(required = true)]
+        keys: Vec<String>,
+    },
+    /// 依前綴批次刪除鍵（先 SCAN 出鍵名再 DEL；預設只預覽，加 --yes 才真刪）。需 --yes --force
+    DelPrefix {
+        prefix: String,
+        /// 掃描鍵數上限（保護大型實例）
+        #[arg(long, default_value_t = 10000)]
+        limit: usize,
+    },
+    /// 設定鍵的存活秒數（EXPIRE）。需 --yes
+    Expire { key: String, seconds: i64 },
+    /// 移除鍵的存活時間，使其永不過期（PERSIST）。需 --yes
+    Persist { key: String },
+    /// 重新命名鍵（RENAME；目標已存在會被擋下）。需 --yes
+    Rename { key: String, new_key: String },
+    /// 清空目前 DB 的所有鍵（FLUSHDB，不可復原）。需 --yes --force
+    FlushDb,
 }

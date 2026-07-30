@@ -1063,6 +1063,18 @@ pub async fn redis_client_kill(
     state.manager.redis_driver(&id)?.client_kill(&client_id).await
 }
 
+/// 批次刪除鍵（DEL）。回傳實際刪除數（不存在的鍵不計入）。
+/// 供鍵樹「刪除整個命名空間」用：呼叫端傳明確鍵名清單，後端不做 pattern 展開。
+#[tauri::command]
+pub async fn redis_delete_keys(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    keys: Vec<String>,
+) -> AppResult<u64> {
+    state.manager.redis_driver(&id)?.delete_keys(&database, &keys).await
+}
+
 /// 大鍵掃描（SCAN 取樣 + MEMORY USAGE，回前 top 名）。
 #[tauri::command]
 pub async fn redis_big_keys(

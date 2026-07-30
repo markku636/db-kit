@@ -403,6 +403,48 @@ impl RedisDriver {
         Ok(all)
     }
 
+    /// 批次刪除鍵（DEL，分批 pipeline），回傳實際被刪除的鍵數。
+    /// 走「明確鍵名清單」而非 pattern：命名空間批次刪除由呼叫端先算好要刪哪些鍵，
+    /// 鍵名內含 glob 字元（* ? [）也不會誤傷旁邊的鍵。
+    pub async fn delete_keys(&self, database: &str, keys: &[String]) -> AppResult<u64> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.conn(database).await?;
+        let mut removed: i64 = 0;
+        // 分批送出：單次 DEL 參數過多會撐大 RESP 封包並長時間佔用單執行緒的 Redis。
+        for chunk in keys.chunks(500) {
+            let mut cmd = redis::cmd("DEL");
+            for k in chunk {
+                cmd.arg(k.as_str());
+            }
+            let n: i64 = cmd
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?;
+            removed += n;
+        }
+        self.invalidate_snapshot().await; // 刪鍵後翻頁不應再看到殭屍鍵
+        Ok(removed as u64)
+    }
+
+    /// 設定 / 解除鍵的存活時間。`secs < 0` → PERSIST（永不過期）；否則 EXPIRE。
+    /// 回傳 true 表示鍵存在且已套用。
+    pub async fn expire_key(&self, database: &str, key: &str, secs: i64) -> AppResult<bool> {
+        let mut conn = self.conn(database).await?;
+        let cmd = if secs < 0 { "PERSIST" } else { "EXPIRE" };
+        let mut c = redis::cmd(cmd);
+        c.arg(key);
+        if secs >= 0 {
+            c.arg(secs);
+        }
+        let n: i64 = c
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(n == 1)
+    }
+
     /// 發佈訊息到頻道（PUBLISH），回傳收到的訂閱者數。
     pub async fn publish(&self, channel: &str, message: &str) -> AppResult<i64> {
         let mut conn = self.admin_conn().await?;

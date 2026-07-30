@@ -104,9 +104,53 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
             "Cannot determine the connection kind (add --kind or specify a scheme in --url)"
         }
 
+        "CLI 不支援 Kafka 連線（請用 GUI）" => "The CLI does not support Kafka connections (use the GUI)",
+        "CLI 不支援 RabbitMQ 連線（請用 GUI）" => "The CLI does not support RabbitMQ connections (use the GUI)",
+
+        // ---- cli/guard.rs、cli/dispatch.rs：寫入確認與寫入結果 ----
+        "此為寫入指令，未執行：{action}。確認無誤請加 --yes{extra}" => {
+            "This is a write command and was not executed: {action}. Add --yes{extra} once you have checked it"
+        }
+        "此為高破壞動作，未執行：{action}。請再加 --force 確認" => {
+            "This is a highly destructive action and was not executed: {action}. Add --force as well to confirm"
+        }
+        "執行：{sql}" => "Execute: {sql}",
+        "完成（{n} 列受影響）" => "Done ({n} rows affected)",
+        "新增{noun}「{name}」" => "Create {noun} \"{name}\"",
+        "已新增{noun}「{name}」" => "Created {noun} \"{name}\"",
+        "刪除{noun}「{name}」（含其所有物件）" => "Drop {noun} \"{name}\" (including all objects in it)",
+        "已刪除{noun}「{name}」" => "Dropped {noun} \"{name}\"",
+        "刪除{noun}「{table}」" => "Drop {noun} \"{table}\"",
+        "已刪除{noun}「{table}」" => "Dropped {noun} \"{table}\"",
+        "清空資料表「{table}」的所有資料列" => "Delete all rows in table \"{table}\"",
+        "已清空「{table}」（{n} 列）" => "Emptied \"{table}\" ({n} rows)",
+        "Mongo 不支援 truncate（請用 dbk table drop 刪除集合，或以 query 帶明確 filter 刪除）" => {
+            "Mongo does not support truncate (use `dbk table drop` to drop the collection, or delete with an explicit filter)"
+        }
+        "設定鍵「{key}」的值" => "Set the value of key \"{key}\"",
+        "已設定鍵「{key}」（TTL {s} 秒）" => "Set key \"{key}\" (TTL {s}s)",
+        "已設定鍵「{key}」" => "Set key \"{key}\"",
+        "刪除 {n} 個鍵" => "Delete {n} keys",
+        "已刪除 {n} 個鍵" => "Deleted {n} keys",
+        "(掃描已達上限 {limit}；請縮小前綴或調高 --limit 後再執行)" => {
+            "(the scan hit the {limit} cap; narrow the prefix or raise --limit before running)"
+        }
+        "刪除前綴「{prefix}」底下的 {n} 個鍵" => "Delete the {n} keys under prefix \"{prefix}\"",
+        "設定鍵「{key}」存活 {seconds} 秒" => "Set key \"{key}\" to expire in {seconds}s",
+        "已設定 TTL：{key}" => "TTL set: {key}",
+        "移除鍵「{key}」的存活時間" => "Remove the expiry of key \"{key}\"",
+        "已改為永不過期：{key}" => "Now persistent: {key}",
+        "(鍵不存在或本就無 TTL)" => "(the key does not exist or had no TTL)",
+        "將鍵「{key}」改名為「{new_key}」" => "Rename key \"{key}\" to \"{new_key}\"",
+        "已改名：{key} → {new_key}" => "Renamed: {key} -> {new_key}",
+        "清空 DB {target} 的所有鍵（FLUSHDB）" => "Flush all keys in DB {target} (FLUSHDB)",
+        "已清空 DB {target}" => "Flushed DB {target}",
+        "資料表" => "table",
+        "集合" => "collection",
+
         // ---- clap 說明（cli/args.rs：about / 參數 / 子指令）----
-        "db-kit CLI — 唯讀查詢與匯出（重用 GUI 已存連線 / 臨時連線）" => {
-            "db-kit CLI — read-only query and export (reuses GUI saved connections / ad-hoc connections)"
+        "db-kit CLI — 查詢、匯出與寫入（重用 GUI 已存連線 / 臨時連線；寫入需 --yes）" => {
+            "db-kit CLI — query, export and write (reuses GUI saved connections / ad-hoc connections; writes require --yes)"
         }
         "使用已存連線（名稱或 id；讀 GUI 的 connections.json + keychain）" => {
             "Use a saved connection (name or id; reads the GUI's connections.json + keychain)"
@@ -128,6 +172,46 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "介面語言（zh-TW | en；亦可用環境變數 DBKIT_LANG）" => {
             "Interface language (zh-TW | en; can also use the DBKIT_LANG env var)"
         }
+        "確認執行寫入指令（修改 / 刪除）。未加時只印出將執行的動作並以錯誤結束（等同預演）" => {
+            "Confirm a write command (modify / delete). Without it, the action is only printed and the command exits with an error (dry run)"
+        }
+        "額外確認高破壞動作（DROP / TRUNCATE / FLUSHDB / 無 WHERE 的 UPDATE·DELETE），需與 --yes 併用" => {
+            "Extra confirmation for highly destructive actions (DROP / TRUNCATE / FLUSHDB / UPDATE·DELETE without WHERE); use together with --yes"
+        }
+        "執行寫入語句（INSERT / UPDATE / DELETE / DDL）。需 --yes；高破壞動作另需 --force" => {
+            "Run a write statement (INSERT / UPDATE / DELETE / DDL). Requires --yes; destructive actions also require --force"
+        }
+        "新增資料庫 / schema（PostgreSQL 為 schema）。需 --yes" => {
+            "Create a database / schema (schema on PostgreSQL). Requires --yes"
+        }
+        "刪除資料庫 / schema（含其所有物件，不可復原）。需 --yes --force" => {
+            "Drop a database / schema and everything in it (irreversible). Requires --yes --force"
+        }
+        "刪除資料表 / 集合（DROP TABLE / dropCollection）。需 --yes --force" => {
+            "Drop a table / collection (DROP TABLE / dropCollection). Requires --yes --force"
+        }
+        "清空資料表（TRUNCATE；Mongo 為刪除所有文件）。需 --yes --force" => {
+            "Empty a table (TRUNCATE). Requires --yes --force"
+        }
+        "設定 string 鍵的值（SET；可同時設 TTL）。需 --yes" => {
+            "Set the value of a string key (SET; can also set a TTL). Requires --yes"
+        }
+        "同時設定存活秒數（省略 = 不動既有 TTL）" => "Also set the TTL in seconds (omit to leave the existing TTL untouched)",
+        "刪除鍵（DEL，可一次多個）。需 --yes" => "Delete keys (DEL; accepts several at once). Requires --yes",
+        "依前綴批次刪除鍵（先 SCAN 出鍵名再 DEL；預設只預覽，加 --yes 才真刪）。需 --yes --force" => {
+            "Delete keys by prefix (SCAN for key names, then DEL; previews only by default). Requires --yes --force"
+        }
+        "掃描鍵數上限（保護大型實例）" => "Maximum number of keys to scan (protects large instances)",
+        "設定鍵的存活秒數（EXPIRE）。需 --yes" => "Set a key's TTL in seconds (EXPIRE). Requires --yes",
+        "移除鍵的存活時間，使其永不過期（PERSIST）。需 --yes" => {
+            "Remove a key's TTL so it never expires (PERSIST). Requires --yes"
+        }
+        "重新命名鍵（RENAME；目標已存在會被擋下）。需 --yes" => {
+            "Rename a key (RENAME; blocked if the target already exists). Requires --yes"
+        }
+        "清空目前 DB 的所有鍵（FLUSHDB，不可復原）。需 --yes --force" => {
+            "Flush every key in the current DB (FLUSHDB, irreversible). Requires --yes --force"
+        }
         "連線管理（唯讀 + 加密匯出）" => "Connection management (read-only + encrypted export)",
         "列出資料庫 / schema" => "List databases / schemas",
         "資料表瀏覽" => "Browse tables",
@@ -145,6 +229,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "ER 模型（表 + 外鍵關係）" => "ER model (tables + foreign key relations)",
         "伺服器資訊" => "Server info",
         "Redis 唯讀操作" => "Redis read-only operations",
+        "Redis 操作（掃描 / 檢視 + 修改 / 刪除）" => "Redis operations (scan / inspect + modify / delete)",
         "列出已存連線" => "List saved connections",
         "測試連線（不保留）" => "Test the connection (not persisted)",
         "Ping（量測 RTT）" => "Ping (measure RTT)",

@@ -17,11 +17,12 @@ const TYPES: { v: RType; label: string }[] = [
 
 // 新增 Redis 鍵：選型別 + 初始元素。沿用既有 API（insert_row / key_edit），
 // list/set/hash/zset 由對應寫入指令自動建立該鍵。
-export default function NewKeyDialog({ connId, database, onClose, onCreated }: {
-  connId: string; database: string; onClose: () => void; onCreated: () => void;
+export default function NewKeyDialog({ connId, database, initialName = "", onClose, onCreated }: {
+  connId: string; database: string; initialName?: string; onClose: () => void; onCreated: () => void;
 }) {
   const t = useT();
-  const [name, setName] = useState("");
+  // 由鍵樹「在此命名空間新增鍵」帶入前綴（如 user:1000:），游標即落在前綴後方續打。
+  const [name, setName] = useState(initialName);
   const [type, setType] = useState<RType>("string");
   const [value, setValue] = useState("");   // string value / list value / set member / hash value / zset member
   const [field, setField] = useState("");   // hash field

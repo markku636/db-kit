@@ -43,7 +43,7 @@ One codebase, one consistent experience, shipping **native desktop apps for Wind
 - **One codebase, three native targets** — based on Tauri 2, `npm run tauri build` produces native installers on each platform: Windows `.msi` / `.exe` (NSIS), macOS `.dmg`, Linux `.AppImage` / `.deb` — all native windows, not browser tabs.
 - **Identical UI and feel everywhere** — the connection tree, editable data grid, query editor, ER diagram, keyboard shortcuts, and dark/light themes are exactly the same on all three platforms. Switching machines requires no re-learning.
 - **Passwords stored in each OS's native keychain** — via `keyring`, mapped to Windows Credential Manager, macOS Keychain, and Linux Secret Service (libsecret). Passwords never touch the disk.
-- **The `dbk` CLI is cross-platform too** — build a lean, Tauri-free binary with `--no-default-features` for Linux servers; SSH in and query / export / back up right there.
+- **The `dbk` CLI is cross-platform too** — build a lean, Tauri-free binary with `--no-default-features` for Linux servers; SSH in and query / export / back up / write right there.
 - **Lightweight** — Tauri uses the system WebView (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux) instead of bundling Chromium: small installers, ~10× less memory than Electron equivalents.
 
 > GitHub Releases provides prebuilt installers for **Windows / macOS / Linux** (packaged automatically by GitHub Actions). macOS builds ship for both Apple Silicon and Intel. Installers are not code-signed with a paid certificate, so the first launch requires bypassing the OS warning (steps below). You can also build your own via [Build from source](#build-from-source).
@@ -156,7 +156,7 @@ Common operations at a glance:
 - **Secure and safe** — connection passwords in the OS keychain (never on disk), SSH Tunnel (password / private key) with host-key TOFU verification, all writes keyed by primary key with fully parameterized bindings against injection; plus **row-count caps** and **query timeouts** as two safety nets — an accidental `SELECT *` on a huge table won't blow up memory.
 - **Desktop-grade grid feel** — in-cell editing, context menus, keyboard navigation, multi-column sort, draggable column widths, filter-by-value, content viewer, instant find, column comments on header hover.
 - **Built-in AI assistant** — the right panel connects to your local Claude CLI (sign in with your Claude subscription) to stream answers to database questions, write / optimize SQL, and optionally attach the current connection's schema as context.
-- **Ships with the `dbk` CLI** — a read-only query / browse / export / backup command-line tool reusing the same connections and keychain; compile it Tauri-free with `--no-default-features` for servers and scripts (see [Command-line tool](#command-line-tool-dbk-cli)).
+- **Ships with the `dbk` CLI** — a query / browse / export / backup command-line tool that also **writes (modify · delete, gated behind `--yes`, destructive actions behind `--force`)**, reusing the same connections and keychain; compile it Tauri-free with `--no-default-features` for servers and scripts (see [Command-line tool](#command-line-tool-dbk-cli)).
 - **Solid engineering practice** — backend integration tests against real Docker databases (MySQL / PostgreSQL / SQLite / MongoDB / Redis), Rust unit tests covering per-dialect SQL generation (including MariaDB / Oracle), pure-function frontend coverage with vitest (234 tests), hardened through multiple rounds of adversarial self-review for security and correctness (see [CHANGELOG](./CHANGELOG.md)).
 
 ## Features
@@ -315,7 +315,7 @@ Build artifacts land in `src-tauri/target/release/bundle/` (`.msi` / `.exe` / `.
 
 ## Command-line tool (`dbk` CLI)
 
-Alongside the desktop GUI, db-kit ships a **`dbk` command-line tool** — **read-only queries + export** — for SSH sessions, scripts, and scheduled jobs where opening a GUI makes no sense. It reuses the core layer directly (connection management / export / backup / crypto) and **does not go through Tauri**, so `--no-default-features` builds a **lean, Tauri-free binary**.
+Alongside the desktop GUI, db-kit ships a **`dbk` command-line tool** — **queries, export and writes (modify · delete)** — for SSH sessions, scripts, and scheduled jobs where opening a GUI makes no sense. It reuses the core layer directly (connection management / export / backup / crypto) and **does not go through Tauri**, so `--no-default-features` builds a **lean, Tauri-free binary**.
 
 ```bash
 # Build the lean CLI (no GUI / Tauri)
@@ -340,11 +340,38 @@ dbk --conn prod-mysql schema-dump > schema.sql
 dbk --conn prod-mysql backup mydb --to mydb.dump
 ```
 
-**Read-only guard**: `query` / `explain` only allow query-class statements (`select` / `with` / `show` / `describe` / `explain` / `pragma` / `use` / `values` / `table`); write statements (`insert` / `update` / `delete` / `drop`…) are rejected with a non-zero exit code (statements split per `;`, comments skipped). Pairing it with a read-only DB account as a second line of defense is recommended.
+**Read-only guard**: `query` / `explain` only allow query-class statements (`select` / `with` / `show` / `describe` / `explain` / `pragma` / `use` / `values` / `table`); write statements (`insert` / `update` / `delete` / `drop`…) are rejected with a non-zero exit code (statements split per `;`, comments skipped). Use `exec` below to write; pairing it with a read-only DB account as a second line of defense is still recommended.
 
 **Row cap**: `query` defaults to the global setting (1,000 rows); override with `--max-rows N` (`--max-rows 0` fetches everything; truncation is reported on stderr).
 
-Other subcommands: `conn` (list / test / ping / encrypted export), `table` (list / columns / data / info / ddl / indexes / foreign-keys), `routine`, `search` (`--whole-word` exact-word matching, `--wildcards` enables `*` `?`), `column-stats`, `er-model`, `server-info`, `redis` (keys / key / slowlog / clients / big-keys). Full list via `dbk --help`.
+### Writes (modify / delete)
+
+Every write requires **`--yes`**; **highly destructive** actions (`DROP` / `TRUNCATE` / `FLUSHDB` / `UPDATE`·`DELETE` without a `WHERE`) additionally require **`--force`**. Without the flags nothing runs: the command prints what it *would* do and exits non-zero — a built-in dry run, so you can confirm which host and which table you are about to hit before wiring it into a script.
+
+```bash
+# Ordinary write: --yes
+dbk --conn prod-mysql exec "update users set status='active' where id=42" --yes
+
+# Destructive: --yes --force (missing either one blocks it)
+dbk --conn prod-mysql exec "delete from sessions" --yes --force
+dbk --conn prod-mysql table truncate audit_log --yes --force
+dbk --conn prod-mysql table drop tmp_import --yes --force
+dbk --conn prod-mysql db create staging --yes
+
+# Redis: set value / TTL / rename / delete / bulk delete by prefix
+dbk --conn cache redis set session:42 '{"uid":42}' --ttl 3600 --yes
+dbk --conn cache redis expire session:42 600 --yes
+dbk --conn cache redis persist session:42 --yes
+dbk --conn cache redis rename session:42 session:42:old --yes
+dbk --conn cache redis del session:42:old --yes
+dbk --conn cache redis del-prefix session: --yes --force   # SCAN for key names, then DEL
+```
+
+> `del-prefix` never hands the prefix to Redis as a pattern: it runs `SCAN MATCH <prefix>*` first (capped by `--limit`, default 10,000) and then deletes the resolved key names in batches — the confirmation message tells you how many keys are about to go.
+
+Other subcommands: `conn` (list / test / ping / encrypted export), `db` (list / create / drop), `table` (list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate), `routine`, `search` (`--whole-word` exact-word matching, `--wildcards` enables `*` `?`), `column-stats`, `er-model`, `server-info`, `exec`, `redis` (keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db). Full list via `dbk --help`.
+
+> Kafka / Elasticsearch / RabbitMQ connections are not supported by the CLI (no general-purpose query language that makes sense in a terminal, and the lean binary does not compile their drivers in); specifying one fails fast with a clear message — use the GUI instead.
 
 > Architecturally, `tauri` / `tauri-plugin-dialog` are optional dependencies behind the default `gui` feature; the GUI binary (`db-kit`) needs the `gui` feature, the CLI binary (`dbk`) does not.
 

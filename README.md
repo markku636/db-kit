@@ -42,7 +42,7 @@
 - **同一份程式碼，三平台原生輸出** — 基於 Tauri 2，`npm run tauri build` 在各平台直接產出對應的原生安裝檔：Windows `.msi` / `.exe`（NSIS）、macOS `.dmg`、Linux `.AppImage` / `.deb`，皆為原生視窗而非瀏覽器分頁。
 - **介面與操作手感跨平台一致** — 連線樹、可編輯資料格、查詢編輯器、ER 圖、鍵盤快捷鍵、深 / 亮色主題在三個平台完全相同，換機器不必重新熟悉。
 - **密碼存各 OS 原生 keychain** — 透過 `keyring` 對應到 Windows 認證管理員、macOS Keychain、Linux Secret Service（libsecret），密碼不落地到磁碟。
-- **`dbk` CLI 同樣跨平台** — 可在 Linux 伺服器上以 `--no-default-features` 編出不連 Tauri 的精簡 binary，SSH 進機器即可查詢 / 匯出 / 備份。
+- **`dbk` CLI 同樣跨平台** — 可在 Linux 伺服器上以 `--no-default-features` 編出不連 Tauri 的精簡 binary，SSH 進機器即可查詢 / 匯出 / 備份 / 寫入。
 - **輕量** — Tauri 直接用系統內建 WebView（Windows 為 WebView2、macOS 為 WKWebView、Linux 為 WebKitGTK），不內嵌 Chromium，安裝檔小、記憶體佔用約為 Electron 同類產品的十分之一。
 
 > GitHub Releases 已提供 **Windows / macOS / Linux** 三平台預編譯安裝檔（由 GitHub Actions 自動打包）。macOS 同時提供 Apple Silicon 與 Intel 版本；安裝檔皆未付費簽章，首次開啟需依下方步驟略過系統警示。也可依 [從原始碼建置](#從原始碼建置) 自行 `npm run tauri build`。
@@ -155,7 +155,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - **安全可靠** — 連線密碼存於 OS keychain（磁碟不落地）、SSH Tunnel（密碼／私鑰）+ host key TOFU 驗證、所有寫入以主鍵定位 + 全參數化綁定防注入；另有**結果列數上限**與**查詢逾時**兩道安全網，誤跑 `SELECT *` 大表不會炸掉記憶體。
 - **桌面級操作手感** — 儲存格直接編輯、右鍵選單、鍵盤導覽、多欄排序、欄寬拖曳、依值篩選、內容檢視器、即時尋找、表頭 hover 顯示欄位註解。
 - **內建 AI 助手** — 右側面板串接本機 Claude CLI（用你的 Claude 訂閱登入），串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。
-- **附命令列工具 `dbk`** — 唯讀查詢 / 瀏覽 / 匯出 / 備份的 CLI，重用同一套連線與 keychain，可 `--no-default-features` 編成不連 Tauri 的精簡 binary，適合伺服器與 script 場景（見 [命令列工具](#命令列工具dbk-cli)）。
+- **附命令列工具 `dbk`** — 查詢 / 瀏覽 / 匯出 / 備份 + **寫入（修改 · 刪除，需 `--yes`，高破壞再要 `--force`）** 的 CLI，重用同一套連線與 keychain，可 `--no-default-features` 編成不連 Tauri 的精簡 binary，適合伺服器與 script 場景（見 [命令列工具](#命令列工具dbk-cli)）。
 - **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、Rust 單元測試覆蓋各方言 SQL 生成（含 MariaDB / Oracle）、前端純函式 vitest 覆蓋（234 項），經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
 
 ## 功能特色
@@ -316,7 +316,7 @@ npm run tauri build
 
 ## 命令列工具（`dbk` CLI）
 
-除了桌面 GUI，db-kit 另附一支 **`dbk` 命令列工具**——**唯讀查詢 + 匯出**，適合 SSH 進伺服器、寫 script、排程任務時用，不必開 GUI。它直接重用核心層（連線管理 / 匯出 / 備份 / 加密），**不經過 Tauri**，所以能 `--no-default-features` 編出一支**不連 Tauri 的精簡 binary**。
+除了桌面 GUI，db-kit 另附一支 **`dbk` 命令列工具**——**查詢 / 匯出 / 寫入（修改 · 刪除）**，適合 SSH 進伺服器、寫 script、排程任務時用，不必開 GUI。它直接重用核心層（連線管理 / 匯出 / 備份 / 加密），**不經過 Tauri**，所以能 `--no-default-features` 編出一支**不連 Tauri 的精簡 binary**。
 
 ```bash
 # 編譯精簡 CLI（不含 GUI / Tauri）
@@ -341,11 +341,38 @@ dbk --conn prod-mysql schema-dump > schema.sql
 dbk --conn prod-mysql backup mydb --to mydb.dump
 ```
 
-**唯讀守門**：`query` / `explain` 只放行查詢類語句（`select` / `with` / `show` / `describe` / `explain` / `pragma` / `use` / `values` / `table`），偵測到寫入語句（`insert` / `update` / `delete` / `drop`…）直接擋下並回非零 exit code（逐 `;` 切句、跳過註解）。建議再搭配唯讀 DB 帳號作第二道防線。
+**唯讀守門**：`query` / `explain` 只放行查詢類語句（`select` / `with` / `show` / `describe` / `explain` / `pragma` / `use` / `values` / `table`），偵測到寫入語句（`insert` / `update` / `delete` / `drop`…）直接擋下並回非零 exit code（逐 `;` 切句、跳過註解）。要寫入請改用下方的 `exec`；另建議搭配唯讀 DB 帳號作第二道防線。
 
 **結果列數上限**：`query` 預設沿用全域設定（1,000 列），可用 `--max-rows N` 覆寫（`--max-rows 0` 取完整結果；截斷時 stderr 會提示）。
 
-其餘子指令：`conn`（list / test / ping / 加密 export）、`table`（list / columns / data / info / ddl / indexes / foreign-keys）、`routine`、`search`（`--whole-word` 整字比對、`--wildcards` 啟用 `*` `?`）、`column-stats`、`er-model`、`server-info`、`redis`（keys / key / slowlog / clients / big-keys）。完整清單 `dbk --help`。
+### 寫入（修改 / 刪除）
+
+寫入一律要 **`--yes`**；**高破壞動作**（`DROP` / `TRUNCATE` / `FLUSHDB` / 沒有 `WHERE` 的 `UPDATE`·`DELETE`）再要 **`--force`**。沒帶旗標時**不會執行**，只印出「將要做什麼」並回非零 exit code——等於內建預演（dry run），貼進 script 前可先跑一次確認打到的是哪一台、哪一張表。
+
+```bash
+# 一般寫入：--yes
+dbk --conn prod-mysql exec "update users set status='active' where id=42" --yes
+
+# 高破壞：--yes --force（少一個就擋下）
+dbk --conn prod-mysql exec "delete from sessions" --yes --force
+dbk --conn prod-mysql table truncate audit_log --yes --force
+dbk --conn prod-mysql table drop tmp_import --yes --force
+dbk --conn prod-mysql db create staging --yes
+
+# Redis：設值 / TTL / 改名 / 刪鍵 / 依前綴批次刪
+dbk --conn cache redis set session:42 '{"uid":42}' --ttl 3600 --yes
+dbk --conn cache redis expire session:42 600 --yes
+dbk --conn cache redis persist session:42 --yes
+dbk --conn cache redis rename session:42 session:42:old --yes
+dbk --conn cache redis del session:42:old --yes
+dbk --conn cache redis del-prefix session: --yes --force   # 先 SCAN 出鍵名再 DEL
+```
+
+> `del-prefix` 不會把前綴丟給 Redis 當 pattern：先 `SCAN MATCH <prefix>*` 取出實際鍵名（上限 `--limit`，預設 10,000）再分批 `DEL`，確認訊息會先告訴你會刪掉幾個鍵。
+
+其餘子指令：`conn`（list / test / ping / 加密 export）、`db`（list / create / drop）、`table`（list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate）、`routine`、`search`（`--whole-word` 整字比對、`--wildcards` 啟用 `*` `?`）、`column-stats`、`er-model`、`server-info`、`exec`、`redis`（keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db）。完整清單 `dbk --help`。
+
+> Kafka / Elasticsearch / RabbitMQ 連線 CLI 不支援（沒有可在終端機表達的通用查詢語言，且精簡 binary 未編入其驅動），指定時會直接回明確錯誤，請改用 GUI。
 
 > 架構上 `tauri` / `tauri-plugin-dialog` 已改為 optional，藏在預設的 `gui` feature 後；GUI binary（`db-kit`）需要 `gui` feature，CLI binary（`dbk`）不需要。
 
