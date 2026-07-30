@@ -58,6 +58,8 @@ const BackupDialog = lazyOverlay(() => import("./BackupDialog"));
 const ErDiagram = lazyOverlay(() => import("./ErDiagram"));
 const RedisStatus = lazyOverlay(() => import("./RedisStatus"));
 const RedisConsole = lazyOverlay(() => import("./RedisConsole"));
+const RedisOpsPanel = lazyOverlay(() => import("./RedisOpsPanel"));
+const PubSubPanel = lazyOverlay(() => import("./PubSubPanel"));
 const MongoOpsPanel = lazyOverlay(() => import("./MongoOpsPanel"));
 const KafkaConsumerGroups = lazyOverlay(() => import("./KafkaConsumerGroups"));
 const KafkaClusterOverview = lazyOverlay(() => import("./KafkaClusterOverview"));
@@ -1238,6 +1240,10 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   const [status, setStatus] = useState<{ id: string; name: string } | null>(null);
   // Redis 命令列
   const [console_, setConsole] = useState<{ id: string; name: string; db: string } | null>(null);
+  // Redis 維運面板（慢查詢 / 用戶端 / 大鍵）與 Pub/Sub：原本只能從已開啟的鍵分頁工具列進，
+  // 側欄右鍵直達，不必先開一個資料分頁。
+  const [redisOps, setRedisOps] = useState<{ id: string; name: string; db: string } | null>(null);
+  const [pubSub, setPubSub] = useState<{ id: string; name: string } | null>(null);
   // Mongo 監控面板（serverStatus / dbStats / currentOp / Profiler）。
   const [mongoOps, setMongoOps] = useState<{ id: string; name: string; db: string } | null>(null);
   const [kafkaGroups, setKafkaGroups] = useState<{ id: string; name: string } | null>(null);
@@ -2694,6 +2700,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                   ? [
                       [t("伺服器狀態"), () => setStatus({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
                       [t("命令列"), () => setConsole({ id: menuConn.id, name: menuConn.name, db: "0" }), false] as [string, () => void, boolean],
+                      // 連線層沒有「目前 DB」概念，大鍵掃描一律對 DB 0（要看別的 DB 從該 DB 節點右鍵進）。
+                      [t("維運面板（慢查詢 / 用戶端 / 大鍵）…"), () => setRedisOps({ id: menuConn.id, name: menuConn.name, db: menuConn.database || "0" }), false] as [string, () => void, boolean],
+                      [t("Pub/Sub…"), () => setPubSub({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
                     ]
                   : []),
                 ...(connectedIds.has(menu.id) && menuConn.kind === "mongo"
@@ -2800,6 +2809,8 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                       [t("新增鍵…"), () => setNewKey({ connId: dbMenu.connId, db: dbMenu.db }), false],
                       [t("伺服器狀態"), () => { if (dbConn) setStatus({ id: dbConn.id, name: dbConn.name }); }, false],
                       [t("命令列"), () => { if (dbConn) setConsole({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
+                      [t("維運面板（慢查詢 / 用戶端 / 大鍵）…"), () => { if (dbConn) setRedisOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
+                      [t("Pub/Sub…"), () => { if (dbConn) setPubSub({ id: dbConn.id, name: dbConn.name }); }, false],
                       [t("編輯屬性…"), editConn, false],
                       [t("清空 DB（FLUSHDB）"), () => flushDb(dbMenu.connId, dbMenu.db), true],
                     ]
@@ -2978,6 +2989,19 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
           initialDb={console_.db}
           onClose={() => setConsole(null)}
         />
+      )}
+
+      {redisOps && (
+        <RedisOpsPanel
+          connId={redisOps.id}
+          connName={redisOps.name}
+          database={redisOps.db}
+          onClose={() => setRedisOps(null)}
+        />
+      )}
+
+      {pubSub && (
+        <PubSubPanel connId={pubSub.id} connName={pubSub.name} onClose={() => setPubSub(null)} />
       )}
 
       {mongoOps && (

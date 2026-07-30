@@ -86,6 +86,30 @@ const CASES = {
     check("按「+」後回到查詢分頁", !(await page.locator("#root").innerText()).includes("已關閉所有查詢分頁"));
   },
 
+  // Redis 側欄右鍵：連線層與 DB 層都能直達維運面板 / Pub/Sub（不必先開資料分頁）
+  async "redis-sidebar-menus"(page) {
+    // 連線名在側欄樹、狀態列與右側詳細資料都會出現，取第一個（樹裡的節點）
+    await page.getByText("cache-redis", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("cache-redis", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    let items = await menuItems(page);
+    check("Redis 連線右鍵：伺服器狀態", items.some((i) => i.includes("伺服器狀態")), items.join(" | "));
+    check("Redis 連線右鍵：命令列", items.some((i) => i.includes("命令列")));
+    check("Redis 連線右鍵：維運面板…", items.some((i) => i.includes("維運面板")));
+    check("Redis 連線右鍵：Pub/Sub…", items.some((i) => i.includes("Pub/Sub")));
+    await closeMenu(page);
+
+    await page.getByText("0", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    items = await menuItems(page);
+    check("Redis DB 右鍵：新增鍵…", items.some((i) => i.includes("新增鍵")), items.join(" | "));
+    check("Redis DB 右鍵：維運面板…", items.some((i) => i.includes("維運面板")));
+    check("Redis DB 右鍵：Pub/Sub…", items.some((i) => i.includes("Pub/Sub")));
+    check("Redis DB 右鍵：清空 DB（FLUSHDB）", items.some((i) => i.includes("清空 DB")));
+    await closeMenu(page);
+  },
+
   // Redis 鍵樹：命名空間資料夾右鍵（新增鍵 / 複製前綴 / 刪除整段）、鍵節點右鍵
   async "redis-key-tree-menus"(page) {
     await page.getByText("cache-redis", { exact: true }).dblclick();

@@ -38,6 +38,8 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
   const [plan, setPlan] = useState<KafkaOffsetPlanRow[] | null>(null);
   // 群組清單右鍵選單（empty 決定「刪除群組」是否可用——Kafka 只允許刪除 Empty 群組）。
   const [groupMenu, setGroupMenu] = useState<{ group: string; empty: boolean; x: number; y: number } | null>(null);
+  // 群組名篩選：叢集上動輒數十個群組，沒得篩就只能靠捲動找。
+  const [filter, setFilter] = useState("");
 
   const loadGroups = () =>
     api.kafkaConsumerGroups(connId).then(setGroups).catch((e) => setErr(e?.message ?? String(e)));
@@ -148,6 +150,11 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
 
   const inputCls = "bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent";
   const groupEmpty = detail?.state === "Empty";
+  // 篩選只作用於清單顯示；已選取的群組即使被篩掉，右側詳細仍留著（不會因為打字就跳掉）。
+  const shownGroups = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return q ? groups.filter((g) => g.group_id.toLowerCase().includes(q)) : groups;
+  }, [groups, filter]);
 
   // 以群組名為參數（不讀 selected）：清單右鍵與詳細頁按鈕共用同一條路徑，
   // 不必依賴 setSelected 已生效，右鍵到哪個就刪哪個。
@@ -187,7 +194,16 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
         <div className="flex-1 min-h-0 flex text-xs">
           {/* 群組清單 */}
           <div className="w-56 border-r border-fg/10 overflow-auto">
-            {groups.map((g) => (
+            <div className="p-2 sticky top-0 bg-app z-10 border-b border-fg/5">
+              <input
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Escape" && filter) { e.stopPropagation(); setFilter(""); } }}
+                placeholder={t("篩選群組名…")}
+                className="w-full bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent"
+              />
+            </div>
+            {shownGroups.map((g) => (
               <button
                 key={g.group_id}
                 onClick={() => setSelected(g.group_id)}
@@ -208,6 +224,9 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
               </button>
             ))}
             {groups.length === 0 && <div className="px-3 py-4 text-fg/30">{t("無消費者群組")}</div>}
+            {groups.length > 0 && shownGroups.length === 0 && (
+              <div className="px-3 py-4 text-fg/30">{t("無符合「{filter}」的群組", { filter })}</div>
+            )}
           </div>
 
           {/* 群組詳細 */}
