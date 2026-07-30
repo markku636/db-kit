@@ -164,8 +164,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 |------|----------|
 | 關聯式（MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite） | 完整 CRUD、DDL 欄位編輯、索引 / 外鍵管理、EXPLAIN + 視覺化執行計畫（SQL Server 走 SHOWPLAN XML、Oracle 走 DBMS_XPLAN）、routines（預存程序 / 函式）、RETURNING 顯示、ER 圖、結構比對、SSL 模式（MySQL 系 / PG） |
 | 文件型（MongoDB） | 文件攤平成表格、find / 聚合管線、CRUD-via-JSON、**explain 執行計畫視覺化**、JSON 查詢編輯器（語法高亮 + 欄位補全）、進階索引（TTL / partial / text / $indexStats 使用率）、**驗證規則（JSON Schema）**、欄位統計（型別分布 / Top 值）、**監控面板**（serverStatus / dbStats / currentOp / Profiler） |
-| 鍵值型（Redis） | 五種結構檢視＋編輯、命名空間鍵樹、值格式化、Pub/Sub、維運面板、命令列 Console |
-| 串流（Kafka） | 訊息瀏覽 + live tail、**JS 篩選運算式**（內嵌 boa）+ 反序列化選擇（string / JSON / hex / Avro）+ **搜尋更多**掃描 + JSON 欄位投影、發佈（headers / **Avro 序列化** / **流量模式 + 隨機模板** / CSV 批次）、**叢集總覽**（brokers / URP 健康）、主題設定編輯 / 加分割區 / 清空、位移重設全功能（含預覽）、消費者群組 + Lag、**監控與告警**（背景取樣 / 手刻 SVG 圖表 / 規則 + OS 通知）、**Schema Registry**（讀寫 / 相容性 / 版本 diff）、**Protobuf 解碼**、**Kafka Connect**（連接器管理 / 設定驗證）、**ACL** 管理 |
+| 鍵值型（Redis） | 五種結構檢視＋編輯、命名空間鍵樹（**右鍵新增 / 改名 / TTL / 複製鍵值 / 整個命名空間批次刪除**、就地縮小 SCAN 範圍）、值格式化、Pub/Sub、**維運面板**（慢查詢 / 用戶端 / 大鍵，掃出的大鍵可勾選批次清除）、命令列 Console |
+| 串流（Kafka） | 訊息瀏覽 + live tail、**JS 篩選運算式**（內嵌 boa）+ 反序列化選擇（string / JSON / hex / Avro）+ **搜尋更多**掃描 + JSON 欄位投影、發佈（headers / **Avro 序列化** / **流量模式 + 隨機模板** / CSV 批次；**主題右鍵可直接發佈**）、**叢集總覽**（brokers / URP 健康）、建 / 刪主題（雙重確認）、主題設定編輯 / 加分割區 / 清空、位移重設全功能（含預覽）、消費者群組 + Lag（清單可篩選、右鍵刪除），**監控與告警**（背景取樣 / 手刻 SVG 圖表 / 規則 + OS 通知）、**Schema Registry**（讀寫 / 相容性 / 版本 diff）、**Protobuf 解碼**、**Kafka Connect**（連接器管理 / 設定驗證）、**ACL** 管理 |
 | 通用資料格 | 多欄複合篩選（9 運算子 + AND·OR）、多欄排序、依值篩選、**外鍵雙向導覽**（跳至參照 / 找參照此列者）、**Excel + CSV 匯入**、多格式 + **Excel 匯出**、複製為 INSERT/UPDATE/DELETE/IN、欄位剖析 + 相異值分布、**表頭 hover 顯示欄位註解** |
 | 查詢工作區 | 語法高亮 + 表/欄自動完成（含 external gateway）、**`@` 使用者變數提示**、**多結果集堆疊**（SSMS 風格，可摺疊 / 單格或全部匯出）、**視覺化查詢建構器**（JOIN / 聚合 / HAVING / 分頁 / 即時預覽）、**SQL 片段庫**、**參數化查詢 `:name`**、格式化 / 壓縮 / 關鍵字大小寫、查詢歷史（200 筆，可過濾）、**收藏查詢**（分組 / 編輯 / 匯出匯入）、只執行反白段、失敗語句定位、多開查詢分頁（右鍵關閉其他） |
 | 搜尋 / 導覽 | **進階物件搜尋 Ctrl+Shift+G**（跨庫搜名稱 / 定義內文 / 註解，整字比對 + 萬用字元 `*` `?`、定義預覽高亮、在物件總管中選取）、**命令面板 Ctrl+K**、側欄搜尋命中自動展開資料夾 |
@@ -218,6 +218,9 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] Redis 強化（仿 Another Redis）：命名空間鍵樹（`:` 分組）、鍵列 / DB / 連線右鍵選單、伺服器狀態（INFO）面板、命令列 Console
 - [x] Kafka 支援（rdkafka / librdkafka，一等公民資料來源）：訊息瀏覽 + live tail、消費者群組 Lag、發佈、Schema Registry 檢視
 - [x] Kafka 強化（參考 Conduktor Console）：JS 篩選 + 反序列化 + 搜尋更多 + 投影、Avro / 流量 / CSV 發佈、叢集總覽 + 設定編輯 + 清空 + 位移重設預覽、監控與告警（圖表 + OS 通知）、SR 寫入 + Protobuf 解碼 + Kafka Connect + ACL
+- [x] **Redis / Kafka 右鍵補齊新增 · 修改 · 刪除**：Redis 命名空間右鍵批次刪除 / 在此新增鍵 / 只顯示此命名空間、鍵右鍵複製鍵值 + TTL、大鍵面板勾選批次清除、維運與 Pub/Sub 從側欄直達；Kafka 主題右鍵發佈訊息 / CSV 批次 / 建主題、刪除主題雙重確認、消費者群組清單篩選 + 右鍵刪除
+- [x] **`dbk` CLI 寫入**：`exec`、`db create/drop`、`table drop/truncate`、`redis set/del/del-prefix/expire/persist/rename/flush-db`；寫入需 `--yes`、高破壞需 `--force`，未帶旗標只印出將執行的動作（內建預演）
+- [x] **UI 冒煙檢查** `npm run verify:ui`：production build + Tauri invoke shim，斷言右鍵選單與分頁行為（免 Docker / 免真實資料庫）
 - [x] 備份 / 還原（手動，CLI 為主 + SQLite 檔案複製）
 - [x] 連線設定持久化 + 密碼 OS keychain 加密
 - [x] SSH Tunnel（密碼 / 私鑰認證）
