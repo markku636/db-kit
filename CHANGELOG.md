@@ -6,6 +6,7 @@
   - `redis del-prefix` 不把前綴當 pattern 丟給 Redis：先 `SCAN MATCH <prefix>*` 取出實際鍵名（`--limit` 上限，預設 10,000）再分批 `DEL`，確認訊息會先報「將刪除 N 個鍵」。
   - 新增 `AppError::NeedsConfirm`（`ERR_NEEDS_CONFIRM`）：確認不足是「未執行」而非「查詢失敗」，訊息不再被包成誤導的 `查詢失敗：…`。
   - Kafka / Elasticsearch / RabbitMQ 的**臨時連線**（`--kind` / `--url`）現在與已存連線一樣在解析階段就擋下並說明原因；先前只擋已存連線，臨時連線會連上後才在每個指令報錯。
+  - `table drop` / `table truncate` 的限定名與前端 `sql.ts::qualifiedName` 對齊：**SQL Server 用三段式 `[db].[schema].[table]`**（T-SQL 的 `a.b` 會解析成 schema.object，只給 `db.table` 會找不到表；schema 取自表名的 `schema.` 前綴，沒有則 `dbo`），PostgreSQL / Oracle 的「db」即 schema、SQLite 只給表名。附單元測試釘住各方言的引號與限定形式。
 - **Redis 鍵樹右鍵：新增 / 修改 / 刪除補齊**：命名空間資料夾與空白處都可右鍵——「在此命名空間新增鍵…」（預填前綴）、「複製前綴」、「重新整理」、**「刪除此命名空間（N 個鍵）…」**（danger 確認 + 輸入前綴二次確認，走新的 `redis_delete_keys` 批次 `DEL`，明確鍵名清單而非 pattern，鍵名含 `*` `?` 也不會誤傷旁邊的鍵）。鍵節點選單補上「新增鍵…」「複製鍵值」「重新整理」，並把「檢視內容」正名為「檢視 / 編輯內容…」（該視窗本來就能改值）。
 - 鍵樹的「設定 TTL…」先讀一次目前 TTL 當預設值：樹狀模式沒有網格的 ttl 欄，之前一律顯示 `-1`，直接按下確定會把既有到期時間清掉。
 - **Kafka 主題右鍵：直達發佈與建立**：新增「發佈訊息…」與「從 CSV 批次發佈…」（原本得先開訊息瀏覽器才發得出訊息）、「新增主題…」「消費者群組…」。「刪除主題」升級為與「清空主題」同級的雙重確認（danger 確認 + 輸入主題名），刪除後連帶關閉該主題的分頁。唯讀連線與內部主題（`__consumer_offsets` 等）一律不顯示寫入入口。

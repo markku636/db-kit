@@ -39,13 +39,33 @@ fn quote_ident(kind: DbKind, id: &str) -> String {
     }
 }
 
-/// 限定名：SQLite 單檔無 schema 概念；其餘以 db.table 限定。
+/// 限定名。與前端 `sql.ts::qualifiedName` 同一套規則（同一份 SQL 由兩邊產生，不可分歧）：
+/// - SQLite：單檔無 schema 概念，只給表名。
+/// - SQL Server：三段式 `db.schema.table`——T-SQL 的 `a.b` 解析成 *schema*.object，
+///   只給 `db.table` 會被當成「schema=db」而找不到表。schema 取自表名中的 `schema.table`
+///   前綴，沒有則用 `dbo`。
+/// - 其餘（MySQL 家族 / PostgreSQL / Oracle）：`db.table`，其中 PostgreSQL / Oracle 的
+///   「db」本來就是 schema。
 fn qualified(kind: DbKind, db: &str, table: &str) -> String {
-    if matches!(kind, DbKind::Sqlite) || db.is_empty() {
-        quote_ident(kind, table)
-    } else {
-        format!("{}.{}", quote_ident(kind, db), quote_ident(kind, table))
+    if matches!(kind, DbKind::Sqlite) {
+        return quote_ident(kind, table);
     }
+    if matches!(kind, DbKind::Mssql) {
+        let (schema, tbl) = match table.split_once('.') {
+            Some((s, t)) => (s, t),
+            None => ("dbo", table),
+        };
+        return format!(
+            "{}.{}.{}",
+            quote_ident(kind, db),
+            quote_ident(kind, schema),
+            quote_ident(kind, tbl)
+        );
+    }
+    if db.is_empty() {
+        return quote_ident(kind, table);
+    }
+    format!("{}.{}", quote_ident(kind, db), quote_ident(kind, table))
 }
 
 pub async fn dispatch(cli: Cli) -> AppResult<()> {
@@ -637,4 +657,30 @@ fn parse_sort(spec: &str) -> AppResult<Sort> {
         other => return Err(AppError::Query(tf!("排序方向需為 asc/desc：{other}", other = other))),
     };
     Ok(Sort { column, dir })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{qualified, quote_ident};
+    use crate::db::DbKind;
+
+    #[test]
+    fn quotes_per_dialect_and_escapes_inner_quotes() {
+        assert_eq!(quote_ident(DbKind::Mysql, "or`ders"), "`or``ders`");
+        assert_eq!(quote_ident(DbKind::Postgres, "or\"ders"), "\"or\"\"ders\"");
+        assert_eq!(quote_ident(DbKind::Oracle, "ORDERS"), "\"ORDERS\"");
+        assert_eq!(quote_ident(DbKind::Mssql, "or]ders"), "[or]]ders]");
+    }
+
+    #[test]
+    fn qualifies_like_the_frontend() {
+        // SQLite 單檔：只給表名（沿用前端的反引號寫法，SQLite 為相容 MySQL 亦接受）。
+        assert_eq!(qualified(DbKind::Sqlite, "main", "orders"), "`orders`");
+        // MySQL 家族 / PostgreSQL / Oracle：db.table（PG / Oracle 的 db 即 schema）。
+        assert_eq!(qualified(DbKind::Mysql, "shop", "orders"), "`shop`.`orders`");
+        assert_eq!(qualified(DbKind::Postgres, "public", "orders"), "\"public\".\"orders\"");
+        // SQL Server 必須三段式：只給 db.table 會被 T-SQL 當成 schema.object。
+        assert_eq!(qualified(DbKind::Mssql, "Reporting", "orders"), "[Reporting].[dbo].[orders]");
+        assert_eq!(qualified(DbKind::Mssql, "Reporting", "sales.orders"), "[Reporting].[sales].[orders]");
+    }
 }
