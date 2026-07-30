@@ -311,6 +311,7 @@ const en: Catalog = {
   "已複製所有欄名": "All column names copied",
   "已複製版本資訊": "Version info copied",
   "已複製表名": "Table name copied",
+  "已複製前 {shown} 筆（共 {total} 筆）": "Copied the first {shown} of {total} entries",
   "已複製前綴": "Prefix copied",
   "已複製建立 SQL": "CREATE SQL copied",
   "已複製建表 SQL": "CREATE TABLE SQL copied",

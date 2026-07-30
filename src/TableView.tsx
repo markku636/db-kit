@@ -1241,14 +1241,23 @@ function DataPane({ tab }: { tab: OpenTab }) {
   };
 
   // 複製鍵值到剪貼簿：依型別組成可讀文字（string 取完整值、hash 為 field=value、zset 帶 score）。
+  // 集合型只讀第一頁（COPY_MAX 個元素）；不足全量時明講，避免使用者以為貼到的是完整資料。
+  const COPY_MAX = 1000;
   const copyKeyValue = async (key: string) => {
     try {
-      const p = await api.redisKeyPage(tab.connId, tab.database, key, 0, 1000, "", true);
+      const p = await api.redisKeyPage(tab.connId, tab.database, key, 0, COPY_MAX, "", true);
       let text: string;
       if (p.type_ === "hash") text = p.fields.map((f, i) => `${f}=${p.members[i] ?? ""}`).join("\n");
       else if (p.type_ === "zset") text = p.members.map((m, i) => `${p.scores[i] ?? 0} ${m}`).join("\n");
       else text = p.members.join("\n");
-      await copyToClipboard(text, t("已複製鍵值"));
+      const shown = p.type_ === "hash" ? p.fields.length : p.members.length;
+      const partial = p.type_ !== "string" && p.total > shown;
+      await copyToClipboard(
+        text,
+        partial
+          ? t("已複製前 {shown} 筆（共 {total} 筆）", { shown, total: p.total })
+          : t("已複製鍵值"),
+      );
     } catch (e: any) {
       toast.error(e?.message ?? t("讀取鍵值失敗"));
     }
