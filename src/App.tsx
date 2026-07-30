@@ -2806,13 +2806,18 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
               const items: [string, () => void, boolean][] =
                 dbConn?.kind === "redis"
                   ? [
-                      [t("新增鍵…"), () => setNewKey({ connId: dbMenu.connId, db: dbMenu.db }), false],
+                      // 唯讀連線隱藏寫入入口（新增鍵 / FLUSHDB），與資料格 / 鍵樹的唯讀規則一致。
+                      ...(readonlyConns[dbMenu.connId]
+                        ? []
+                        : [[t("新增鍵…"), () => setNewKey({ connId: dbMenu.connId, db: dbMenu.db }), false] as [string, () => void, boolean]]),
                       [t("伺服器狀態"), () => { if (dbConn) setStatus({ id: dbConn.id, name: dbConn.name }); }, false],
                       [t("命令列"), () => { if (dbConn) setConsole({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
                       [t("維運面板（慢查詢 / 用戶端 / 大鍵）…"), () => { if (dbConn) setRedisOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
                       [t("Pub/Sub…"), () => { if (dbConn) setPubSub({ id: dbConn.id, name: dbConn.name }); }, false],
                       [t("編輯屬性…"), editConn, false],
-                      [t("清空 DB（FLUSHDB）"), () => flushDb(dbMenu.connId, dbMenu.db), true],
+                      ...(readonlyConns[dbMenu.connId]
+                        ? []
+                        : [[t("清空 DB（FLUSHDB）"), () => flushDb(dbMenu.connId, dbMenu.db), true] as [string, () => void, boolean]]),
                     ]
                   : dbConn?.kind === "kafka"
                   ? [

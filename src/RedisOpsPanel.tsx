@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CircleDot, RefreshCw, X } from "lucide-react";
 import { api, BigKey, ClientInfo, SlowLogEntry } from "./api";
 import { copyToClipboard, toast, uiConfirm, useModalOverlay } from "./ui";
+import { useStore } from "./store";
 import { IconButton } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
@@ -182,6 +183,8 @@ function ClientsTab({ connId }: { connId: string }) {
 
 function BigKeysTab({ connId, database }: { connId: string; database: string }) {
   const t = useT();
+  // 唯讀連線：只掃描不清除（與資料格 / 鍵樹的唯讀規則一致）。
+  const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [sample, setSample] = useState("1000");
   const [top, setTop] = useState("50");
   const [rows, setRows] = useState<BigKey[] | null>(null);
@@ -251,7 +254,7 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
         </button>
       </div>
       <div className="text-[11px] text-fg/35 mb-2">{t("取樣式掃描（非全量），以 MEMORY USAGE 估算記憶體用量；大型實例請斟酌取樣數。")}</div>
-      {rows && rows.length > 0 && (
+      {rows && rows.length > 0 && !readonly && (
         <div className="flex items-center gap-2 mb-2 text-xs">
           <span className="text-fg/40">{t("已勾選 {n}", { n: marked.size })}</span>
           <button type="button" onClick={() => removeKeys([...marked])} disabled={marked.size === 0 || deleting}
@@ -266,12 +269,14 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
       {rows && rows.length > 0 && (
         <table className="text-xs mono w-full border-collapse">
           <thead><tr className="text-fg/45">
-            <th className="px-2 py-1 border-b border-fg/10 w-8 text-center">
-              <input type="checkbox" title={t("全選 / 取消")}
-                checked={marked.size === rows.length}
-                ref={(el) => { if (el) el.indeterminate = marked.size > 0 && marked.size < rows.length; }}
-                onChange={() => setMarked(marked.size === rows.length ? new Set() : new Set(rows.map((b) => b.key)))} />
-            </th>
+            {!readonly && (
+              <th className="px-2 py-1 border-b border-fg/10 w-8 text-center">
+                <input type="checkbox" title={t("全選 / 取消")}
+                  checked={marked.size === rows.length}
+                  ref={(el) => { if (el) el.indeterminate = marked.size > 0 && marked.size < rows.length; }}
+                  onChange={() => setMarked(marked.size === rows.length ? new Set() : new Set(rows.map((b) => b.key)))} />
+              </th>
+            )}
             <th className="text-left px-2 py-1 border-b border-fg/10">{t("鍵")}</th>
             <th className="text-left px-2 py-1 border-b border-fg/10">{t("型別")}</th>
             <th className="text-right px-2 py-1 border-b border-fg/10">{t("記憶體")}</th>
@@ -281,9 +286,11 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
           <tbody>
             {rows.map((b) => (
               <tr key={b.key} className="hover:bg-fg/5 group">
-                <td className="px-2 py-1 border-b border-fg/5 text-center">
-                  <input type="checkbox" aria-label={b.key} checked={marked.has(b.key)} onChange={() => toggle(b.key)} />
-                </td>
+                {!readonly && (
+                  <td className="px-2 py-1 border-b border-fg/5 text-center">
+                    <input type="checkbox" aria-label={b.key} checked={marked.has(b.key)} onChange={() => toggle(b.key)} />
+                  </td>
+                )}
                 <td className="px-2 py-1 border-b border-fg/5 break-all text-blue-300/90">{b.key}</td>
                 <td className="px-2 py-1 border-b border-fg/5 text-fg/60">{b.type_}</td>
                 <td className="px-2 py-1 border-b border-fg/5 text-right text-amber-300 whitespace-nowrap">{b.bytes < 0 ? "—" : humanBytes(b.bytes)}</td>
@@ -291,8 +298,10 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
                 <td className="px-1 py-1 border-b border-fg/5 text-right whitespace-nowrap">
                   <button type="button" onClick={() => copyToClipboard(b.key, t("已複製鍵名"))} title={t("複製鍵名")}
                     className="px-1.5 py-0.5 rounded text-fg/20 group-hover:text-fg/70 hover:bg-fg/10">{t("複製")}</button>
-                  <button type="button" onClick={() => removeKeys([b.key])} disabled={deleting} title={t("刪除此鍵")}
-                    className="px-1.5 py-0.5 rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20 disabled:opacity-30">{t("刪除")}</button>
+                  {!readonly && (
+                    <button type="button" onClick={() => removeKeys([b.key])} disabled={deleting} title={t("刪除此鍵")}
+                      className="px-1.5 py-0.5 rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20 disabled:opacity-30">{t("刪除")}</button>
+                  )}
                 </td>
               </tr>
             ))}

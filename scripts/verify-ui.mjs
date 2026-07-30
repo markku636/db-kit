@@ -110,6 +110,40 @@ const CASES = {
     await closeMenu(page);
   },
 
+  // 唯讀連線：Redis 的寫入入口（新增鍵 / 刪除命名空間 / FLUSHDB）要整批消失，讀取類保留
+  async "redis-readonly-hides-writes"(page) {
+    await page.getByText("cache-redis", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("cache-redis", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("設為唯讀模式（擋寫入 / DDL）", { exact: true }).click();
+    await sleep(500);
+
+    // DB 節點：新增鍵 / 清空 DB 應消失，狀態 / 命令列 / 維運 / Pub-Sub 留著
+    await page.getByText("0", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    let items = await menuItems(page);
+    check("唯讀：DB 右鍵沒有「新增鍵」", !items.some((i) => i.includes("新增鍵")), items.join(" | "));
+    check("唯讀：DB 右鍵沒有「清空 DB」", !items.some((i) => i.includes("清空 DB")));
+    check("唯讀：DB 右鍵保留「伺服器狀態」", items.some((i) => i.includes("伺服器狀態")));
+    await closeMenu(page);
+
+    // 鍵樹命名空間：新增鍵 / 刪除整段應消失，複製 / 縮範圍留著
+    await page.getByText("0", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="keys"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="keys"]').first().click();
+    await sleep(1200);
+    await page.getByText("session", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    items = await menuItems(page);
+    check("唯讀：命名空間右鍵沒有「在此命名空間新增鍵」", !items.some((i) => i.includes("在此命名空間新增鍵")), items.join(" | "));
+    check("唯讀：命名空間右鍵沒有「刪除此命名空間」", !items.some((i) => i.includes("刪除此命名空間")));
+    check("唯讀：命名空間右鍵保留「複製前綴」", items.some((i) => i.includes("複製前綴")));
+    await closeMenu(page);
+
+    check("唯讀：工具列沒有「新增鍵」按鈕", (await page.getByRole("button", { name: /^新增鍵$/ }).count()) === 0);
+  },
+
   // Redis 鍵樹：命名空間資料夾右鍵（新增鍵 / 複製前綴 / 刪除整段）、鍵節點右鍵
   async "redis-key-tree-menus"(page) {
     await page.getByText("cache-redis", { exact: true }).dblclick();

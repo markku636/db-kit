@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CircleDot, X, Play, Pause } from "lucide-react";
 import { api, onRedisPubSub, onRedisPubSubError, PubSubMessage } from "./api";
 import { toast, useModalOverlay } from "./ui";
+import { useStore } from "./store";
 import { IconButton } from "./ui/index";
 import Icon from "./ui/Icon";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -23,6 +24,8 @@ export default function PubSubPanel({ connId, connName, onClose }: {
 }) {
   const t = useT();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount
+  // 唯讀連線：訂閱（讀）照常，PUBLISH（寫）隱藏——與資料格的唯讀規則一致。
+  const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [channelsInput, setChannelsInput] = useState("");
   const [patternsInput, setPatternsInput] = useState("*");
   const [subscribed, setSubscribed] = useState(false);
@@ -173,17 +176,23 @@ export default function PubSubPanel({ connId, connName, onClose }: {
           <div ref={bottomRef} />
         </div>
 
-        {/* 發佈列 */}
-        <div className="border-t border-fg/10 px-4 py-2 flex items-center gap-2 text-xs">
-          <span className="text-fg/40 shrink-0">{t("發佈")}</span>
-          <input value={pubChannel} onChange={(e) => setPubChannel(e.target.value)} placeholder={t("頻道")}
-            className="w-32 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
-          <input value={pubMessage} onChange={(e) => setPubMessage(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) publish(); }} placeholder={t("訊息內容…")}
-            className="flex-1 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
-          <button type="button" onClick={publish} disabled={busy}
-            className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-fg disabled:opacity-50">{t("送出")}</button>
-        </div>
+        {/* 發佈列（唯讀連線只留訂閱，PUBLISH 是寫入） */}
+        {readonly ? (
+          <div className="border-t border-fg/10 px-4 py-2 text-xs text-fg/35">
+            {t("此連線為唯讀，已隱藏發佈。可在連線右鍵關閉「唯讀模式」。")}
+          </div>
+        ) : (
+          <div className="border-t border-fg/10 px-4 py-2 flex items-center gap-2 text-xs">
+            <span className="text-fg/40 shrink-0">{t("發佈")}</span>
+            <input value={pubChannel} onChange={(e) => setPubChannel(e.target.value)} placeholder={t("頻道")}
+              className="w-32 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
+            <input value={pubMessage} onChange={(e) => setPubMessage(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) publish(); }} placeholder={t("訊息內容…")}
+              className="flex-1 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
+            <button type="button" onClick={publish} disabled={busy}
+              className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-fg disabled:opacity-50">{t("送出")}</button>
+          </div>
+        )}
       </div>
     </div>
   );

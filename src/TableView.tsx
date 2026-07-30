@@ -1344,8 +1344,10 @@ function DataPane({ tab }: { tab: OpenTab }) {
         )}
         {isRedis && (
           <>
-            <button type="button" onClick={() => openNewKey()} title={t("新增鍵（String/List/Set/Hash/ZSet）")}
-              className="px-2 py-1 rounded hover:bg-fg/10 text-emerald-300 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增鍵")}</button>
+            {!readonly && (
+              <button type="button" onClick={() => openNewKey()} title={t("新增鍵（String/List/Set/Hash/ZSet）")}
+                className="px-2 py-1 rounded hover:bg-fg/10 text-emerald-300 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增鍵")}</button>
+            )}
             <button type="button" onClick={() => setShowStatus(true)} title={t("伺服器狀態（INFO，可自動刷新）")}
               className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={BarChart3} size={14} /> {t("狀態")}</button>
             <button type="button" onClick={() => setShowPubSub(true)} title={t("Pub/Sub 訂閱與發佈")}
@@ -1762,14 +1764,18 @@ function DataPane({ tab }: { tab: OpenTab }) {
             style={{ left: rowMenu.x, top: rowMenu.y }}>
             {(
               [
+                // 唯讀連線只留「看」與「複製」；寫入項（新增 / 改名 / TTL / 刪除）整批隱藏，
+                // 與資料格 editable 的唯讀規則一致。
                 [t("檢視 / 編輯內容…"), () => setDetailKey(rowMenu.key), false],
-                [t("新增鍵…"), () => openNewKey(namespaceOf(rowMenu.key)), false],
+                ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(namespaceOf(rowMenu.key)), false] as [string, () => void, boolean]]),
                 [t("複製鍵名"), () => copyToClipboard(rowMenu.key, t("已複製鍵名")), false],
                 [t("複製鍵值"), () => copyKeyValue(rowMenu.key), false],
-                [t("重新命名…"), () => renameKey(rowMenu.key), false],
-                [t("設定 TTL…"), () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
+                ...(readonly ? [] : ([
+                  [t("重新命名…"), () => renameKey(rowMenu.key), false],
+                  [t("設定 TTL…"), () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
+                ] as [string, () => void, boolean][])),
                 [t("重新整理"), () => refresh(), false],
-                [t("刪除"), () => deleteKey(rowMenu.key), true],
+                ...(readonly ? [] : [[t("刪除"), () => deleteKey(rowMenu.key), true] as [string, () => void, boolean]]),
               ] as [string, () => void, boolean][]
             ).map(([label, fn, danger]) => (
               <button key={label} type="button"
@@ -1792,17 +1798,18 @@ function DataPane({ tab }: { tab: OpenTab }) {
             style={{ left: folderMenu.x, top: folderMenu.y }}>
             {(() => {
               const { prefix, keys } = folderMenu;
+              // 唯讀連線隱藏寫入項（新增鍵 / 刪除整段），保留瀏覽與複製。
               const items: [string, () => void, boolean][] = prefix
                 ? [
-                    [t("在此命名空間新增鍵…"), () => openNewKey(`${prefix}:`), false],
+                    ...(readonly ? [] : [[t("在此命名空間新增鍵…"), () => openNewKey(`${prefix}:`), false] as [string, () => void, boolean]]),
                     // 把 SCAN 樣式縮到此前綴：大型實例上鍵樹有 10,000 筆上限，縮範圍才看得到全貌。
                     [t("只顯示此命名空間"), () => focusTree(`${prefix}:*`), false],
                     [t("複製前綴"), () => copyToClipboard(prefix, t("已複製前綴")), false],
                     [t("重新整理"), () => refresh(), false],
-                    [t("刪除此命名空間（{n} 個鍵）…", { n: keys.length }), () => deleteKeyNamespace(prefix, keys), true],
+                    ...(readonly ? [] : [[t("刪除此命名空間（{n} 個鍵）…", { n: keys.length }), () => deleteKeyNamespace(prefix, keys), true] as [string, () => void, boolean]]),
                   ]
                 : [
-                    [t("新增鍵…"), () => openNewKey(), false],
+                    ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(), false] as [string, () => void, boolean]]),
                     [t("顯示全部鍵"), () => focusTree("*"), false],
                     [t("重新整理"), () => refresh(), false],
                   ];
