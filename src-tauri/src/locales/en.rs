@@ -128,6 +128,15 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
             "Mongo does not support truncate (use `dbk table drop` to drop the collection, or delete with an explicit filter)"
         }
         "設定鍵「{key}」的值" => "Set the value of key \"{key}\"",
+        "--ttl 需為正整數秒數（0 或負數在 Redis 等同立刻刪除該鍵；不設 TTL 請省略此旗標）" => {
+            "--ttl must be a positive number of seconds (0 or negative deletes the key immediately in Redis; omit the flag for no TTL)"
+        }
+        "秒數需為正整數（0 或負數在 Redis 等同立刻刪除該鍵；要改為永不過期請用 dbk redis persist）" => {
+            "Seconds must be positive (0 or negative deletes the key immediately in Redis; use `dbk redis persist` to remove the expiry)"
+        }
+        "前綴不可為空（要清空整個 DB 請用 dbk redis flush-db）" => {
+            "The prefix cannot be empty (use `dbk redis flush-db` to clear the whole DB)"
+        }
         "已設定鍵「{key}」（TTL {s} 秒）" => "Set key \"{key}\" (TTL {s}s)",
         "已設定鍵「{key}」" => "Set key \"{key}\"",
         "刪除 {n} 個鍵" => "Delete {n} keys",

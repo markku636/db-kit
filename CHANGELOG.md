@@ -3,7 +3,8 @@
 - **`dbk` CLI 支援修改與刪除**：CLI 從「唯讀查詢 + 匯出」擴為「查詢 + 匯出 + 寫入」。新增 `exec`（任意 INSERT / UPDATE / DELETE / DDL）、`db create` / `db drop`、`table drop` / `table truncate`，以及 Redis 的 `set`（可帶 `--ttl`）/ `del` / `del-prefix` / `expire` / `persist` / `rename` / `flush-db`。
   - **兩段式確認**：任何寫入都要 `--yes`；**高破壞動作**（`DROP` / `TRUNCATE` / `FLUSHDB` / 沒有 `WHERE` 的 `UPDATE`·`DELETE`）再要 `--force`。未帶旗標時**不執行**，只印出將要做的動作並回非零 exit code——等於內建預演，把「腳本裡手滑一行毀掉整個庫」擋在執行前。判斷語句是否高破壞沿用既有的分句器（跳過字串 / 註解 / dollar-quote），`deleted_at`、`nowhere` 這類字根不會誤判。
   - `query` / `explain` 的唯讀守門原封不動：要寫入就得明講用 `exec`，不會因為這版而變寬鬆。
-  - `redis del-prefix` 不把前綴當 pattern 丟給 Redis：先 `SCAN MATCH <prefix>*` 取出實際鍵名（`--limit` 上限，預設 10,000）再分批 `DEL`，確認訊息會先報「將刪除 N 個鍵」。
+  - `redis del-prefix` 不把前綴當 pattern 丟給 Redis：先 `SCAN MATCH <prefix>*` 取出實際鍵名（`--limit` 上限，預設 10,000）再分批 `DEL`，確認訊息會先報「將刪除 N 個鍵」；空前綴直接擋下（那等於整個 DB，請走 `flush-db`）。
+  - Redis 時間參數不做靜默夾值：`redis set --ttl 0`、`redis expire <key> 0/-1` 皆擋下並說明——`EXPIRE 0` 在 Redis 等同立刻刪鍵，把 `-1` 當「取消過期」的直覺會反而毀掉資料（要永不過期請用 `redis persist`）。
   - 新增 `AppError::NeedsConfirm`（`ERR_NEEDS_CONFIRM`）：確認不足是「未執行」而非「查詢失敗」，訊息不再被包成誤導的 `查詢失敗：…`。
   - Kafka / Elasticsearch / RabbitMQ 的**臨時連線**（`--kind` / `--url`）現在與已存連線一樣在解析階段就擋下並說明原因；先前只擋已存連線，臨時連線會連上後才在每個指令報錯。
   - `table drop` / `table truncate` 的限定名與前端 `sql.ts::qualifiedName` 對齊：**SQL Server 用三段式 `[db].[schema].[table]`**（T-SQL 的 `a.b` 會解析成 schema.object，只給 `db.table` 會找不到表；schema 取自表名的 `schema.` 前綴，沒有則 `dbo`），PostgreSQL / Oracle 的「db」即 schema、SQLite 只給表名。附單元測試釘住各方言的引號與限定形式。

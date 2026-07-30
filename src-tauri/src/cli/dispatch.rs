@@ -432,6 +432,14 @@ async fn exec_redis(
 
         // ---- 寫入（修改 / 刪除）----
         RedisCmd::Set { key, value, ttl } => {
+            // EXPIRE 0 / 負數在 Redis 等同立刻刪鍵——這裡剛建完就刪掉顯然不是使用者要的，直接擋下。
+            if let Some(s) = ttl {
+                if s <= 0 {
+                    return Err(AppError::Query(
+                        t!("--ttl 需為正整數秒數（0 或負數在 Redis 等同立刻刪除該鍵；不設 TTL 請省略此旗標）").into(),
+                    ));
+                }
+            }
             cf.write(&tf!("設定鍵「{key}」的值", key = key))?;
             mgr.insert_row(
                 id,
@@ -457,6 +465,12 @@ async fn exec_redis(
             println!("{}", tf!("已刪除 {n} 個鍵", n = n));
         }
         RedisCmd::DelPrefix { prefix, limit } => {
+            // 空前綴會展開成 `*`＝整個 DB，那是 flush-db 的職責（另有獨立確認），不從這裡繞過去。
+            if prefix.trim().is_empty() {
+                return Err(AppError::Query(
+                    t!("前綴不可為空（要清空整個 DB 請用 dbk redis flush-db）").into(),
+                ));
+            }
             // 先以 SCAN MATCH <prefix>* 取出實際鍵名再逐一 DEL：印出將刪的鍵數供預演，
             // 不把 prefix 直接丟給 DEL（Redis 的 DEL 不吃 pattern）。
             let rk = mgr.scan_keys(id, db, &format!("{prefix}*"), limit).await?;
@@ -472,8 +486,15 @@ async fn exec_redis(
             println!("{}", tf!("已刪除 {n} 個鍵", n = n));
         }
         RedisCmd::Expire { key, seconds } => {
+            // 不做 `max(0)` 靜默夾值：EXPIRE 0 會立刻刪鍵，把 `expire k -1` 當成「取消過期」
+            // 的使用者反而會刪掉資料。要永不過期請用 `redis persist`。
+            if seconds <= 0 {
+                return Err(AppError::Query(
+                    t!("秒數需為正整數（0 或負數在 Redis 等同立刻刪除該鍵；要改為永不過期請用 dbk redis persist）").into(),
+                ));
+            }
             cf.write(&tf!("設定鍵「{key}」存活 {seconds} 秒", key = key, seconds = seconds))?;
-            let ok = mgr.redis_driver(id)?.expire_key(db, &key, seconds.max(0)).await?;
+            let ok = mgr.redis_driver(id)?.expire_key(db, &key, seconds).await?;
             println!("{}", if ok { tf!("已設定 TTL：{key}", key = key) } else { t!("(鍵不存在)").to_string() });
         }
         RedisCmd::Persist { key } => {
