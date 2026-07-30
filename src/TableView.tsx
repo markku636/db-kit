@@ -150,8 +150,12 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [fieldStats, setFieldStats] = useState<{ col: string; stats: ColumnStats } | null>(null);
   const [detailKey, setDetailKey] = useState<string | null>(null);
   const [rowMenu, setRowMenu] = useState<{ key: string; ttl: string | null; x: number; y: number } | null>(null);
-  // 鍵樹的命名空間（資料夾）右鍵選單；keys = 該前綴底下所有鍵。x/y 為 null 代表空白處選單。
+  // 鍵樹的命名空間（資料夾）右鍵選單；keys = 該前綴底下所有鍵。prefix 為空字串代表空白處選單。
   const [folderMenu, setFolderMenu] = useState<{ prefix: string; keys: string[]; x: number; y: number } | null>(null);
+  // 要求鍵樹改用某個 SCAN MATCH 樣式（右鍵「只顯示此命名空間 / 顯示全部鍵」）。
+  // seq 讓同一個樣式再按一次也會重新套用。
+  const [treeFocus, setTreeFocus] = useState<{ pattern: string; seq: number } | null>(null);
+  const focusTree = (pattern: string) => setTreeFocus((f) => ({ pattern, seq: (f?.seq ?? 0) + 1 }));
   // Redis 鍵檢視模式：樹狀（命名空間資料夾）/ 網格（key 列表）。記憶於 localStorage。
   const [redisView, setRedisView] = useState<"tree" | "grid">(() => {
     try { return localStorage.getItem("db-kit:redisKeyView") === "grid" ? "grid" : "tree"; }
@@ -1475,6 +1479,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           connId={tab.connId}
           database={tab.database}
           nonce={reloadNonce}
+          focus={treeFocus}
           onOpenKey={(k) => setDetailKey(k)}
           onContextKey={(k, x, y) => setRowMenu({ key: k, ttl: null, x, y })}
           onContextFolder={(prefix, keys, x, y) => setFolderMenu({ prefix, keys, x, y })}
@@ -1781,12 +1786,15 @@ function DataPane({ tab }: { tab: OpenTab }) {
               const items: [string, () => void, boolean][] = prefix
                 ? [
                     [t("在此命名空間新增鍵…"), () => openNewKey(`${prefix}:`), false],
+                    // 把 SCAN 樣式縮到此前綴：大型實例上鍵樹有 10,000 筆上限，縮範圍才看得到全貌。
+                    [t("只顯示此命名空間"), () => focusTree(`${prefix}:*`), false],
                     [t("複製前綴"), () => copyToClipboard(prefix, t("已複製前綴")), false],
                     [t("重新整理"), () => refresh(), false],
                     [t("刪除此命名空間（{n} 個鍵）…", { n: keys.length }), () => deleteKeyNamespace(prefix, keys), true],
                   ]
                 : [
                     [t("新增鍵…"), () => openNewKey(), false],
+                    [t("顯示全部鍵"), () => focusTree("*"), false],
                     [t("重新整理"), () => refresh(), false],
                   ];
               return items.map(([label, fn, danger]) => (

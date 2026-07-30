@@ -82,10 +82,13 @@ function allFolderPaths(root: TNode): string[] {
 
 // Redis 命名空間鍵樹：仿 Another Redis Desktop Manager 的左側鍵樹，
 // 把 user:1:name 之類的鍵依 ":" 分組成可摺疊資料夾。葉節點＝實際鍵。
-export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onContextKey, onContextFolder, onContextBlank }: {
+export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey, onContextKey, onContextFolder, onContextBlank }: {
   connId: string;
   database: string;
   nonce: number;
+  // 外部要求把 SCAN MATCH 樣式換掉（右鍵「只顯示此命名空間 / 顯示全部鍵」）。
+  // 帶 seq 是為了讓「同一個樣式再按一次」也能重新套用。
+  focus?: { pattern: string; seq: number } | null;
   onOpenKey: (key: string) => void;
   onContextKey: (key: string, x: number, y: number) => void;
   // 資料夾（命名空間）右鍵：帶出該前綴與其底下所有鍵，供「在此新增鍵 / 整段刪除」。
@@ -118,6 +121,15 @@ export default function RedisKeyTree({ connId, database, nonce, onOpenKey, onCon
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
   }, [connId, database, pattern, nonce]);
+
+  // 外部（右鍵選單）換樣式：同步輸入框與實際查詢的樣式，並重置「首次自動展開」的判定，
+  // 讓縮到單一命名空間後可以再次自動展開。
+  useEffect(() => {
+    if (!focus) return;
+    setPatternInput(focus.pattern);
+    setPattern(focus.pattern);
+    didInit.current = false;
+  }, [focus?.seq]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tree = useMemo(() => (keys ? buildTree(keys) : null), [keys]);
 

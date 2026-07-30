@@ -15,9 +15,10 @@
 - **新增 Redis 鍵可直接設 TTL**：新增鍵對話框加「TTL 秒數（留白 = 不過期）」，五種型別共用同一條 `EXPIRE` 路徑；留白維持永久，非正整數會擋下。
 - **Kafka 訊息右鍵補齊複製動作**：「複製整筆（JSON）」（含 topic / 分區 / 位移 / ISO 時間 / headers，value 為 JSON·Avro 時內嵌成物件而非字串）、「複製 Headers」、「複製座標（topic[分區]@位移）」。
 - **Kafka 消費者群組清單支援右鍵**：複製群組名 / 重新整理 / 刪除群組（非 `Empty` 的群組維持不可刪，與 broker 行為一致）。刪除改以群組名為參數，右鍵到哪個就刪哪個，不再依賴選取狀態已生效。
+- **Redis 鍵樹可就地縮小 SCAN 範圍**：命名空間右鍵「只顯示此命名空間」把 MATCH 樣式換成 `<前綴>:*`、空白處右鍵「顯示全部鍵」換回 `*`，並重置自動展開判定。鍵樹一次最多載 10,000 個鍵，大型實例上原本只能自己手打樣式才看得到全貌。
 - **Redis 維運面板 / Pub/Sub 可從側欄右鍵直達**：原本兩者只掛在鍵分頁的工具列上，得先開一個資料分頁才點得到。現在連線節點與 DB 節點右鍵都能直接開（大鍵掃描的目標 DB 隨進入點：DB 節點用該 DB、連線節點用預設 DB 或 0）。
 - **Kafka 消費者群組清單加篩選框**：叢集上動輒數十個群組，原本只能捲動找。篩選只作用於清單，已選取的群組即使被篩掉，右側詳細仍留著。
-- 新增 **UI 冒煙檢查** `npm run verify:ui`（`scripts/verify-ui.mjs`）：沿用截圖管線那套「vite preview + Tauri invoke shim」跑真正的 production build，斷言 Kafka 主題右鍵八個選項、Kafka 查詢分頁不再出現 Redis 提示與執行鈕、第一個查詢分頁可關到零再由「+」復原、Redis 側欄（連線 / DB 節點）與鍵樹（命名空間 / 鍵節點）右鍵各項目都在，共 30 項全綠。免 Docker、免真實資料庫。假 invoke shim 抽成 `scripts/tauri-shim.mjs` 供截圖與此檢查共用（避免兩邊各自漂移）。
+- 新增 **UI 冒煙檢查** `npm run verify:ui`（`scripts/verify-ui.mjs`）：沿用截圖管線那套「vite preview + Tauri invoke shim」跑真正的 production build，斷言 Kafka 主題右鍵八個選項、Kafka 查詢分頁不再出現 Redis 提示與執行鈕、第一個查詢分頁可關到零再由「+」復原、Redis 側欄（連線 / DB 節點）與鍵樹（命名空間 / 鍵節點）右鍵各項目都在、「只顯示此命名空間」確實改掉 MATCH 樣式，共 32 項全綠。免 Docker、免真實資料庫。假 invoke shim 抽成 `scripts/tauri-shim.mjs` 供截圖與此檢查共用（避免兩邊各自漂移）。
 - 新增 `src/store.test.ts`（16 項）鎖住分頁落點規則：關到零、關作用中 / 非作用中、關光後「+」回到乾淨 home、表分頁關光的退路、`requestQuery` 在無查詢分頁時現開一個、斷線清理後的落點。
 - 修正 `i18n.test.ts` 在 node 環境下 `Storage is not defined` 的失敗（spy 改掛在測試自己 stub 進去的 `localStorage` 實例上），前端測試全綠 329/329。
 - i18n：補上本版新字串與 v0.18.0 遺漏的 4 條（Data View 相關）英文譯文，`node scripts/i18n-scan.mjs` 缺漏數歸零；`dbk --lang en` 的 help 與寫入確認訊息亦全數英文化。

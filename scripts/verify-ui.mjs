@@ -126,9 +126,15 @@ const CASES = {
     await sleep(300);
     let items = await menuItems(page);
     check("Redis 命名空間右鍵：在此命名空間新增鍵…", items.some((i) => i.includes("在此命名空間新增鍵")), items.join(" | "));
+    check("Redis 命名空間右鍵：只顯示此命名空間", items.some((i) => i.includes("只顯示此命名空間")));
     check("Redis 命名空間右鍵：複製前綴", items.some((i) => i.includes("複製前綴")));
     check("Redis 命名空間右鍵：刪除此命名空間", items.some((i) => i.includes("刪除此命名空間")));
-    await closeMenu(page);
+
+    // 「只顯示此命名空間」應把 MATCH 樣式換成 session:*
+    await page.getByText("只顯示此命名空間", { exact: true }).click();
+    await sleep(900);
+    const pat = await page.locator('input[placeholder*="MATCH"]').first().inputValue();
+    check("只顯示此命名空間 → MATCH 樣式縮到該前綴", pat === "session:*", `pattern=${pat}`);
 
     // 鍵（葉）節點：fixtures 的 cart:10427 展開後葉片段是 "10427"
     const leaf = page.locator("div.mono", { hasText: /^10427$/ }).first();
