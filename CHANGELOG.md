@@ -15,6 +15,7 @@
 - **新增 Redis 鍵可直接設 TTL**：新增鍵對話框加「TTL 秒數（留白 = 不過期）」，五種型別共用同一條 `EXPIRE` 路徑；留白維持永久，非正整數會擋下。
 - **Kafka 訊息右鍵補齊複製動作**：「複製整筆（JSON）」（含 topic / 分區 / 位移 / ISO 時間 / headers，value 為 JSON·Avro 時內嵌成物件而非字串）、「複製 Headers」、「複製座標（topic[分區]@位移）」。
 - **Kafka 消費者群組清單支援右鍵**：複製群組名 / 重新整理 / 刪除群組（非 `Empty` 的群組維持不可刪，與 broker 行為一致）。刪除改以群組名為參數，右鍵到哪個就刪哪個，不再依賴選取狀態已生效。
+- 新增 **UI 冒煙檢查** `npm run verify:ui`（`scripts/verify-ui.mjs`）：沿用截圖管線那套「vite preview + Tauri invoke shim」跑真正的 production build，斷言 Kafka 主題右鍵八個選項、Kafka 查詢分頁不再出現 Redis 提示與執行鈕、第一個查詢分頁可關到零再由「+」復原、Redis 命名空間 / 鍵右鍵各項目都在，共 22 項全綠。免 Docker、免真實資料庫。假 invoke shim 抽成 `scripts/tauri-shim.mjs` 供截圖與此檢查共用（避免兩邊各自漂移）。
 - 新增 `src/store.test.ts`（16 項）鎖住分頁落點規則：關到零、關作用中 / 非作用中、關光後「+」回到乾淨 home、表分頁關光的退路、`requestQuery` 在無查詢分頁時現開一個、斷線清理後的落點。
 - 修正 `i18n.test.ts` 在 node 環境下 `Storage is not defined` 的失敗（spy 改掛在測試自己 stub 進去的 `localStorage` 實例上），前端測試全綠 329/329。
 - i18n：補上本版新字串與 v0.18.0 遺漏的 4 條（Data View 相關）英文譯文，`node scripts/i18n-scan.mjs` 缺漏數歸零；`dbk --lang en` 的 help 與寫入確認訊息亦全數英文化。

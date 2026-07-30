@@ -3377,7 +3377,7 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
   );
 }
 
-// 單一查詢分頁鈕（受控）：可關閉者（額外分頁）顯示關閉鈕，中鍵亦可關。home「查詢」不可關。
+// 單一查詢分頁鈕（受控）：closable 時顯示關閉鈕，中鍵亦可關。任一分頁（含第一個 home「查詢」）皆可關。
 // 右鍵選單由呼叫端提供（onContextMenu 掛在外框，含關閉鈕區域）。
 function QueryTabButton({ label, active, closable, onActivate, onClose, onContextMenu, btnRef }: {
   label: string;

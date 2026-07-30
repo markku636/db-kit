@@ -14,7 +14,8 @@
     "make:favicon": "node scripts/make-favicon.mjs",
     "make:hero": "node scripts/make-hero.mjs",
     "make:splash": "node scripts/make-splash.mjs",
-    "make:screenshots": "node scripts/capture-screenshots.mjs"
+    "make:screenshots": "node scripts/capture-screenshots.mjs",
+  "verify:ui": "node scripts/verify-ui.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.0",
