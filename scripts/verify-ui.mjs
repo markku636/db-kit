@@ -59,6 +59,35 @@ const CASES = {
     await closeMenu(page);
   },
 
+  // 唯讀連線：Kafka 的寫入入口（主題右鍵發佈 / 建刪主題、訊息瀏覽器的發佈列）要整批消失
+  async "kafka-readonly-hides-writes"(page) {
+    await page.getByText("stream-kafka", { exact: true }).first().dblclick();
+    await sleep(1000);
+    await page.getByText("stream-kafka", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("設為唯讀模式（擋寫入 / DDL）", { exact: true }).click();
+    await sleep(500);
+
+    await page.getByText("cluster", { exact: true }).click();
+    await page.waitForSelector('[data-tree-table="orders.events"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="orders.events"]').first().click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("唯讀：主題右鍵沒有「發佈訊息」", !items.some((i) => i.includes("發佈訊息")), items.join(" | "));
+    check("唯讀：主題右鍵沒有「新增主題」", !items.some((i) => i.includes("新增主題")));
+    check("唯讀：主題右鍵沒有「刪除主題」", !items.some((i) => i.includes("刪除主題")));
+    check("唯讀：主題右鍵沒有「清空主題」", !items.some((i) => i.includes("清空主題")));
+    check("唯讀：主題右鍵保留「瀏覽訊息」", items.some((i) => i.includes("瀏覽訊息")));
+    await closeMenu(page);
+
+    // 訊息瀏覽器：發佈 / CSV / 送往主題 應消失，匯出留著
+    await page.locator('[data-tree-table="orders.events"]').first().click();
+    await sleep(1000);
+    check("唯讀：訊息瀏覽器沒有「發佈」鈕", (await page.getByRole("button", { name: /^發佈$/ }).count()) === 0);
+    check("唯讀：訊息瀏覽器沒有「送往主題…」鈕", (await page.getByRole("button", { name: /送往主題/ }).count()) === 0);
+    check("唯讀：訊息瀏覽器保留「匯出」鈕", (await page.getByRole("button", { name: /^匯出$/ }).count()) > 0);
+  },
+
   // Kafka 連線的查詢分頁：不該再出現 Redis 指令提示，也不該有「執行」鈕
   async "kafka-query-pane"(page) {
     await page.getByText("stream-kafka", { exact: true }).dblclick();

@@ -8,6 +8,7 @@ import {
   type KafkaResetTarget,
 } from "./api";
 import { copyToClipboard, toast, uiConfirm, useModalOverlay } from "./ui";
+import { useStore } from "./store";
 import { IconButton } from "./ui/index";
 import Icon from "./ui/Icon";
 import Sparkline from "./ui/Sparkline";
@@ -21,6 +22,8 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
 }) {
   const t = useT();
   useModalOverlay(onClose);
+  // 唯讀連線：看 Lag / 成員照常，位移重設與刪除群組（都會改動 broker 狀態）隱藏。
+  const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [groups, setGroups] = useState<KafkaConsumerGroup[]>([]);
   const [selected, setSelected] = useState<string | null>(initialGroup ?? null);
   const [detail, setDetail] = useState<KafkaGroupDetail | null>(null);
@@ -235,15 +238,17 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
                   <span className="text-fg/60">{detail.group_id} · <span className="text-fg/40">{detail.state}</span></span>
-                  <button
-                    type="button"
-                    onClick={doDeleteGroup}
-                    disabled={busy || !groupEmpty}
-                    title={groupEmpty ? undefined : t("群組須 Empty 才能刪除")}
-                    className="ml-auto px-2 py-0.5 rounded text-red-400/80 hover:text-red-300 hover:bg-red-500/10 disabled:opacity-40"
-                  >
-                    {t("刪除群組")}
-                  </button>
+                  {!readonly && (
+                    <button
+                      type="button"
+                      onClick={doDeleteGroup}
+                      disabled={busy || !groupEmpty}
+                      title={groupEmpty ? undefined : t("群組須 Empty 才能刪除")}
+                      className="ml-auto px-2 py-0.5 rounded text-red-400/80 hover:text-red-300 hover:bg-red-500/10 disabled:opacity-40"
+                    >
+                      {t("刪除群組")}
+                    </button>
+                  )}
                 </div>
 
                 <div>
@@ -286,7 +291,12 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
                   </div>
                 )}
 
-                {/* 位移重設（預覽 → 套用） */}
+                {/* 位移重設（預覽 → 套用）；唯讀連線隱藏——重設位移會改動 broker 上的已提交位移 */}
+                {readonly ? (
+                  <div className="border-t border-fg/10 pt-3 text-fg/35">
+                    {t("此連線為唯讀，已隱藏位移重設與刪除群組。可在連線右鍵關閉「唯讀模式」。")}
+                  </div>
+                ) : (
                 <div className="border-t border-fg/10 pt-3 space-y-2">
                   <div className="text-fg/40">{t("重設位移")}（{t("群組須 Empty 才能套用")}）</div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -395,6 +405,7 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
                     </table>
                   )}
                 </div>
+                )}
               </div>
             ) : (
               <div className="text-fg/30">{t("左側選一個群組查看 Lag。")}</div>
@@ -418,13 +429,15 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
               onClick={() => { setGroupMenu(null); loadGroups(); }}
               className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("重新整理")}</button>
             <div className="my-1 border-t border-fg/10" />
-            <button type="button"
-              disabled={busy || !groupMenu.empty}
-              title={groupMenu.empty ? undefined : t("群組須 Empty 才能刪除")}
-              onClick={() => { const g = groupMenu.group; setGroupMenu(null); void deleteGroupNamed(g); }}
-              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-danger disabled:opacity-40 disabled:hover:bg-transparent">
-              {t("刪除群組")}
-            </button>
+            {!readonly && (
+              <button type="button"
+                disabled={busy || !groupMenu.empty}
+                title={groupMenu.empty ? undefined : t("群組須 Empty 才能刪除")}
+                onClick={() => { const g = groupMenu.group; setGroupMenu(null); void deleteGroupNamed(g); }}
+                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-danger disabled:opacity-40 disabled:hover:bg-transparent">
+                {t("刪除群組")}
+              </button>
+            )}
           </div>
         </>
       )}

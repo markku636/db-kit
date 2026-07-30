@@ -623,6 +623,7 @@ const en: Catalog = {
   "此表沒有資料": "This table has no data",
   "此查詢無法產生執行計畫": "This query can't generate an execution plan",
   "此連線為唯讀，已擋下寫入 / DDL 語句。可在連線右鍵關閉「唯讀模式」。": "This connection is read-only; write / DDL statements were blocked. Right-click the connection to turn off \"Read-only mode\".",
+  "此連線為唯讀，已隱藏位移重設與刪除群組。可在連線右鍵關閉「唯讀模式」。": "This connection is read-only, so offset reset and group deletion are hidden. Turn off \"read-only mode\" from the connection's context menu.",
   "此連線為唯讀，已隱藏發佈。可在連線右鍵關閉「唯讀模式」。": "This connection is read-only, so publishing is hidden. Turn off \"read-only mode\" from the connection's context menu.",
   "此連線為唯讀模式：擋寫入 / DDL": "This connection is read-only: blocks writes / DDL",
   "此結果無法直接開啟資料表": "This result can't be opened as a table",

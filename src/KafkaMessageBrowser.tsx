@@ -16,6 +16,7 @@ import { javascript } from "@codemirror/lang-javascript";
 import { EditorView } from "@codemirror/view";
 import Icon from "./ui/Icon";
 import { toast, uiConfirm, uiPrompt, pickSaveFile, copyToClipboard } from "./ui";
+import { useStore } from "./store";
 import { useT } from "./i18n";
 import KafkaProduceDialog, { type ProduceInitial } from "./KafkaProduceDialog";
 import KafkaCsvProduceDialog from "./KafkaCsvProduceDialog";
@@ -34,6 +35,8 @@ const MAX_ROWS = 5000;
 // Kafka 訊息瀏覽器（TableView 內嵌）：一次性消費 + live-tail + 明細窗格。
 export default function KafkaMessageBrowser({ connId, topic }: { connId: string; topic: string }) {
   const t = useT();
+  // 唯讀連線：消費 / 篩選 / 匯出照常，發佈類（produce / CSV 批次 / 送往主題 / 以此訊息發佈）隱藏。
+  const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [partition, setPartition] = useState<number | null>(null);
   const [startMode, setStartMode] = useState<StartMode>("end");
   const [offsetInput, setOffsetInput] = useState("0");
@@ -400,21 +403,26 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
         >
           <Icon icon={Trash2} size={13} /> {t("清空")}
         </button>
-        <button
-          type="button"
-          onClick={() => setProducing(true)}
-          className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"
-        >
-          <Icon icon={Send} size={13} /> {t("發佈")}
-        </button>
-        <button
-          type="button"
-          onClick={() => setCsvProducing(true)}
-          className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60"
-          title={t("CSV 批次發佈")}
-        >
-          {t("CSV…")}
-        </button>
+        {/* 發佈是寫入：唯讀連線隱藏（與側欄主題右鍵、資料格 editable 同一條規則） */}
+        {!readonly && (
+          <>
+            <button
+              type="button"
+              onClick={() => setProducing(true)}
+              className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"
+            >
+              <Icon icon={Send} size={13} /> {t("發佈")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCsvProducing(true)}
+              className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60"
+              title={t("CSV 批次發佈")}
+            >
+              {t("CSV…")}
+            </button>
+          </>
+        )}
         <button
           type="button"
           onClick={exportMessages}
@@ -424,15 +432,17 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
         >
           <Icon icon={Download} size={13} /> {t("匯出")}
         </button>
-        <button
-          type="button"
-          onClick={sendFilteredToTopic}
-          disabled={busy || filtered.length === 0}
-          className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60 disabled:opacity-40"
-          title={t("將篩選結果送往主題…")}
-        >
-          {t("送往主題…")}
-        </button>
+        {!readonly && (
+          <button
+            type="button"
+            onClick={sendFilteredToTopic}
+            disabled={busy || filtered.length === 0}
+            className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60 disabled:opacity-40"
+            title={t("將篩選結果送往主題…")}
+          >
+            {t("送往主題…")}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setAdvOpen((v) => !v)}
@@ -685,8 +695,12 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
               <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.headers.map((h) => `${h.key}=${h.value}`).join("\n"), t("已複製 Headers")); setRowMenu(null); }}>{t("複製 Headers")}</button>
             )}
             <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(`${rowMenu.m.topic}[${rowMenu.m.partition}]@${rowMenu.m.offset}`, t("已複製座標")); setRowMenu(null); }}>{t("複製座標（topic[分區]@位移）")}</button>
-            <div className="my-1 border-t border-fg/10" />
-            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => openReprocess(rowMenu.m)}>{t("以此訊息發佈…")}</button>
+            {!readonly && (
+              <>
+                <div className="my-1 border-t border-fg/10" />
+                <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => openReprocess(rowMenu.m)}>{t("以此訊息發佈…")}</button>
+              </>
+            )}
           </div>
         </>
       )}
