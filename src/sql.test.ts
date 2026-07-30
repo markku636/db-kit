@@ -85,6 +85,7 @@ import {
   supportsRoutines,
   userListSql,
   isDangerousRedisCommand,
+  isReadOnlyRedisCommand,
   lintSqlStructure,
   buildSelectQuery,
   isStringLikeType,
@@ -903,6 +904,46 @@ describe("isDangerousRedisCommand", () => {
     expect(isDangerousRedisCommand("SCAN 0")).toBe(false);
     // 不誤傷以 flush 開頭的鍵名（非指令）
     expect(isDangerousRedisCommand("GET flushall_count")).toBe(false);
+  });
+});
+
+describe("isReadOnlyRedisCommand", () => {
+  it("放行純讀取指令（大小寫不敏感、容許 N: 前綴）", () => {
+    expect(isReadOnlyRedisCommand("GET key")).toBe(true);
+    expect(isReadOnlyRedisCommand("hgetall user:1")).toBe(true);
+    expect(isReadOnlyRedisCommand("1: SCAN 0 MATCH a*")).toBe(true);
+    expect(isReadOnlyRedisCommand("ZRANGE z 0 -1 WITHSCORES")).toBe(true);
+    expect(isReadOnlyRedisCommand("INFO")).toBe(true);
+    expect(isReadOnlyRedisCommand("TTL k")).toBe(true);
+    // 空指令沒有東西會被執行
+    expect(isReadOnlyRedisCommand("   ")).toBe(true);
+  });
+
+  it("擋下寫入 / 破壞性指令", () => {
+    expect(isReadOnlyRedisCommand("SET k v")).toBe(false);
+    expect(isReadOnlyRedisCommand("del user:1")).toBe(false);
+    expect(isReadOnlyRedisCommand("FLUSHALL")).toBe(false);
+    expect(isReadOnlyRedisCommand("1: FLUSHDB")).toBe(false);
+    expect(isReadOnlyRedisCommand("EXPIRE k 60")).toBe(false);
+    expect(isReadOnlyRedisCommand("RENAME a b")).toBe(false);
+    expect(isReadOnlyRedisCommand("PUBLISH ch msg")).toBe(false);
+    expect(isReadOnlyRedisCommand("EVAL \"return 1\" 0")).toBe(false);
+    // 白名單缺漏一律當成寫入（未知指令保守處理）
+    expect(isReadOnlyRedisCommand("SOMENEWCOMMAND x")).toBe(false);
+  });
+
+  it("容器型指令只放行讀取子指令", () => {
+    expect(isReadOnlyRedisCommand("CONFIG GET maxmemory")).toBe(true);
+    expect(isReadOnlyRedisCommand("CONFIG SET maxmemory 0")).toBe(false);
+    expect(isReadOnlyRedisCommand("CONFIG RESETSTAT")).toBe(false);
+    expect(isReadOnlyRedisCommand("CLIENT LIST")).toBe(true);
+    expect(isReadOnlyRedisCommand("CLIENT KILL ID 3")).toBe(false);
+    expect(isReadOnlyRedisCommand("SLOWLOG GET 10")).toBe(true);
+    expect(isReadOnlyRedisCommand("SLOWLOG RESET")).toBe(false);
+    expect(isReadOnlyRedisCommand("ACL WHOAMI")).toBe(true);
+    expect(isReadOnlyRedisCommand("ACL SETUSER bob on")).toBe(false);
+    // 容器型指令沒帶子指令時不放行（避免 `CONFIG` 之類被當成讀取）
+    expect(isReadOnlyRedisCommand("CONFIG")).toBe(false);
   });
 });
 

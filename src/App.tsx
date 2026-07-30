@@ -21,7 +21,7 @@ import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type Pin
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile, useEscToClose } from "./ui";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
-  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand, isReadOnlyRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName, isMysqlFamily, supportsRoutines,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
@@ -3883,6 +3883,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             { title: t("危險操作確認"), danger: true, confirmText: t("仍要執行") },
           );
           if (!ok) return; // finally 會還原 running 狀態
+        }
+        // 唯讀連線 + Redis：查詢分頁同樣是任意指令通道，只放行白名單內的讀取指令
+        //（上面的 isWriteStatement 檢查只適用 SQL 方言，對 Redis 指令無效）。
+        if (kind === "redis" && roState.activeId && roState.readonlyConns[roState.activeId] === true
+            && !isReadOnlyRedisCommand(q)) {
+          toast.error(t("此連線為唯讀，已擋下非讀取指令。可在連線右鍵關閉「唯讀模式」。"));
+          return;
         }
         // Redis：FLUSHALL / FLUSHDB 會清空資料且無法復原，先確認。
         if (kind === "redis" && isDangerousRedisCommand(q)) {

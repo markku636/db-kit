@@ -1282,6 +1282,64 @@ export function isDangerousRedisCommand(cmd: string): boolean {
   return /^(flushall|flushdb)\b/i.test(c);
 }
 
+// Redis 唯讀指令白名單（僅讀取 / 不改資料與伺服器狀態）。用「白名單」而非黑名單：
+// Redis 有兩百多個指令且各版本會新增，漏掉一個寫入指令的代價是唯讀連線被寫穿，
+// 漏掉一個讀取指令只是使用者要自己關掉唯讀模式，兩邊的失敗方向差很多。
+const REDIS_READ_ONLY = new Set([
+  // 通用 / 鍵空間
+  "get", "getrange", "mget", "strlen", "substr", "exists", "type", "ttl", "pttl", "expiretime",
+  "pexpiretime", "keys", "scan", "randomkey", "dbsize", "touch", "dump",
+  // hash
+  "hget", "hmget", "hgetall", "hkeys", "hvals", "hlen", "hexists", "hstrlen", "hscan", "hrandfield",
+  // list
+  "lrange", "llen", "lindex", "lpos",
+  // set
+  "smembers", "sismember", "smismember", "scard", "srandmember", "sscan", "sinter", "sunion",
+  "sdiff", "sintercard",
+  // zset
+  "zrange", "zrangebyscore", "zrangebylex", "zrevrange", "zrevrangebyscore", "zrevrangebylex",
+  "zscore", "zmscore", "zcard", "zcount", "zlexcount", "zrank", "zrevrank", "zscan", "zrandmember",
+  "zdiff", "zinter", "zunion", "zintercard",
+  // bitmap / geo / stream（讀取類）
+  "getbit", "bitcount", "bitpos", "geopos", "geodist", "geohash", "geosearch",
+  "xrange", "xrevrange", "xlen", "xinfo", "xpending",
+  // 伺服器 / 連線（讀取類；SELECT 只切當前連線的 DB，不改資料）
+  "info", "ping", "echo", "time", "lastsave", "select", "lolwut", "wait",
+  "command", "config", "client", "memory", "object", "slowlog", "acl", "cluster", "latency",
+  "pubsub", "function", "script",
+]);
+
+// 上述「容器型」指令只有部分子指令是讀取（如 CONFIG GET 可讀、CONFIG SET 會改設定）。
+const REDIS_READ_ONLY_SUB: Record<string, Set<string>> = {
+  config: new Set(["get"]),
+  client: new Set(["list", "info", "id", "getname", "no-evict", "no-touch"]),
+  memory: new Set(["usage", "stats", "doctor", "malloc-stats"]),
+  object: new Set(["encoding", "freq", "idletime", "refcount", "help"]),
+  slowlog: new Set(["get", "len", "help"]),
+  acl: new Set(["list", "cat", "getuser", "users", "whoami"]),
+  cluster: new Set(["info", "nodes", "slots", "shards", "myid", "countkeysinslot", "keyslot"]),
+  latency: new Set(["latest", "history", "doctor"]),
+  pubsub: new Set(["channels", "numsub", "numpat", "shardchannels", "shardnumsub"]),
+  command: new Set(["count", "docs", "info", "list", "getkeys", "getkeysandflags"]),
+  function: new Set(["list", "dump", "stats"]),
+  script: new Set(["exists"]),
+  xinfo: new Set(["stream", "groups", "consumers"]),
+};
+
+// 判斷一條 Redis 指令是否為唯讀。容許可選的 "N:" 資料庫前綴（查詢編輯器語法），如 "1: GET k"。
+// 空字串 / 純空白視為唯讀（沒有東西會被執行）。
+export function isReadOnlyRedisCommand(cmd: string): boolean {
+  const c = cmd.replace(/^\s*\d+\s*:\s*/, "").trim();
+  if (!c) return true;
+  const parts = c.split(/\s+/);
+  const verb = parts[0].toLowerCase();
+  if (!REDIS_READ_ONLY.has(verb)) return false;
+  const subs = REDIS_READ_ONLY_SUB[verb];
+  if (!subs) return true;
+  const sub = (parts[1] ?? "").toLowerCase();
+  return subs.has(sub);
+}
+
 export function isDangerousStatement(sql: string): boolean {
   const code = stripCode(sql).toLowerCase().trim();
   if (/^truncate\b/.test(code)) return true;

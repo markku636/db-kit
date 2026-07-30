@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { CircleDot } from "lucide-react";
 import { api } from "./api";
 import { uiConfirm } from "./ui";
-import { isDangerousRedisCommand } from "./sql";
+import { useStore } from "./store";
+import { isDangerousRedisCommand, isReadOnlyRedisCommand } from "./sql";
 import Icon from "./ui/Icon";
 import { Modal } from "./ui/index";
 import { useT } from "./i18n";
@@ -21,6 +22,8 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
   connId: string; connName: string; initialDb?: string; onClose: () => void;
 }) {
   const t = useT();
+  // 唯讀連線：Console 是任意指令通道，同樣要擋寫入（否則唯讀模式等於形同虛設）。
+  const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [db, setDb] = useState(initialDb);
   const [input, setInput] = useState("");
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -45,6 +48,17 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
     // 本地指令：清空畫面。
     if (cmd.toLowerCase() === "clear" || cmd.toLowerCase() === "cls") {
       setEntries([]);
+      return;
+    }
+
+    // 唯讀連線：只放行白名單內的讀取指令（對齊 SQL 查詢編輯器在唯讀模式下擋寫入 / DDL 的行為）。
+    // 不送出、直接在畫面上回報，使用者才知道是被本機擋下而非伺服器拒絕。
+    if (readonly && !isReadOnlyRedisCommand(cmd)) {
+      setEntries((e) => [...e, {
+        db, cmd, error: true,
+        lines: [t("此連線為唯讀，已擋下非讀取指令。可在連線右鍵關閉「唯讀模式」。")],
+      }]);
+      inputRef.current?.focus();
       return;
     }
 
