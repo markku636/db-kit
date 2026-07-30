@@ -27,11 +27,18 @@ export default function NewKeyDialog({ connId, database, initialName = "", onClo
   const [value, setValue] = useState("");   // string value / list value / set member / hash value / zset member
   const [field, setField] = useState("");   // hash field
   const [score, setScore] = useState("0");  // zset score
+  // 存活秒數（空白 = 不設，永不過期）；建立後另下一次 EXPIRE，各型別共用同一條路徑。
+  const [ttl, setTtl] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const submit = async () => {
     if (!name.trim()) { setErr(t("請輸入鍵名")); return; }
+    const ttlSecs = ttl.trim() ? Number(ttl.trim()) : null;
+    if (ttlSecs !== null && (!Number.isInteger(ttlSecs) || ttlSecs <= 0)) {
+      setErr(t("TTL 需為正整數秒數（留白表示不過期）"));
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
@@ -59,7 +66,19 @@ export default function NewKeyDialog({ connId, database, initialName = "", onClo
           break;
         }
       }
-      toast.success(t("已建立鍵 {name}", { name }));
+      if (ttlSecs !== null) {
+        await api.updateCell(connId, database, "keys", {
+          column: "ttl",
+          new_value: String(ttlSecs),
+          pk_columns: ["key"],
+          pk_values: [name],
+        });
+      }
+      toast.success(
+        ttlSecs !== null
+          ? t("已建立鍵 {name}（TTL {ttlSecs} 秒）", { name, ttlSecs })
+          : t("已建立鍵 {name}", { name }),
+      );
       onCreated();
       onClose();
     } catch (e: any) {
@@ -120,6 +139,12 @@ export default function NewKeyDialog({ connId, database, initialName = "", onClo
             </label>
             <Textarea aria-label={t("值")} value={value} onChange={(e) => setValue(e.target.value)} rows={type === "string" ? 4 : 2}
               className="mono resize-none break-all" />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-fg/50">{t("TTL 秒數（留白 = 不過期）")}</label>
+            <Input aria-label="TTL" inputSize="md" className="mono" value={ttl} inputMode="numeric"
+              onChange={(e) => setTtl(e.target.value.replace(/[^\d]/g, ""))} placeholder={t("例如 3600")} />
           </div>
     </Modal>
   );

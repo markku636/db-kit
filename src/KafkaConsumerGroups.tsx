@@ -7,7 +7,7 @@ import {
   type KafkaOffsetPlanRow,
   type KafkaResetTarget,
 } from "./api";
-import { toast, uiConfirm, useModalOverlay } from "./ui";
+import { copyToClipboard, toast, uiConfirm, useModalOverlay } from "./ui";
 import { IconButton } from "./ui/index";
 import Icon from "./ui/Icon";
 import Sparkline from "./ui/Sparkline";
@@ -36,6 +36,8 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
   const [allParts, setAllParts] = useState<number[]>([]);
   const [checkedParts, setCheckedParts] = useState<Set<number>>(new Set());
   const [plan, setPlan] = useState<KafkaOffsetPlanRow[] | null>(null);
+  // 群組清單右鍵選單（empty 決定「刪除群組」是否可用——Kafka 只允許刪除 Empty 群組）。
+  const [groupMenu, setGroupMenu] = useState<{ group: string; empty: boolean; x: number; y: number } | null>(null);
 
   const loadGroups = () =>
     api.kafkaConsumerGroups(connId).then(setGroups).catch((e) => setErr(e?.message ?? String(e)));
@@ -147,18 +149,19 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
   const inputCls = "bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent";
   const groupEmpty = detail?.state === "Empty";
 
-  const doDeleteGroup = async () => {
-    if (!selected) return;
+  // 以群組名為參數（不讀 selected）：清單右鍵與詳細頁按鈕共用同一條路徑，
+  // 不必依賴 setSelected 已生效，右鍵到哪個就刪哪個。
+  const deleteGroupNamed = async (group: string) => {
     if (!(await uiConfirm(
-      t("確定刪除消費者群組「{name}」？已提交位移將一併刪除，不可復原。", { name: selected }),
+      t("確定刪除消費者群組「{name}」？已提交位移將一併刪除，不可復原。", { name: group }),
       { danger: true, confirmText: t("刪除") },
     ))) return;
     setBusy(true);
     try {
-      await api.kafkaDeleteGroup(connId, selected);
-      toast.success(t("已刪除群組 {name}", { name: selected }));
-      setSelected(null);
-      setDetail(null);
+      await api.kafkaDeleteGroup(connId, group);
+      toast.success(t("已刪除群組 {name}", { name: group }));
+      setSelected((cur) => (cur === group ? null : cur));
+      setDetail((cur) => (cur?.group_id === group ? null : cur));
       loadGroups();
     } catch (e: any) {
       toast.error(e?.message ?? t("刪除失敗"));
@@ -166,6 +169,8 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
       setBusy(false);
     }
   };
+
+  const doDeleteGroup = () => { if (selected) void deleteGroupNamed(selected); };
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
@@ -186,6 +191,11 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
               <button
                 key={g.group_id}
                 onClick={() => setSelected(g.group_id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setSelected(g.group_id); // 選單動作一律作用在剛按到的群組
+                  setGroupMenu({ group: g.group_id, empty: g.state === "Empty", x: e.clientX, y: e.clientY });
+                }}
                 className={`w-full text-left px-3 py-2 border-b border-fg/5 hover:bg-fg/5 ${selected === g.group_id ? "bg-accent/10" : ""}`}
               >
                 <div className="flex items-center gap-1.5">
@@ -373,6 +383,32 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
           </div>
         </div>
       </div>
+
+      {groupMenu && (
+        <>
+          <div className="fixed inset-0 z-[89]"
+            onClick={() => setGroupMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setGroupMenu(null); }} />
+          <div className="fixed z-[90] min-w-[180px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
+            style={{ left: groupMenu.x, top: groupMenu.y }}
+            onClick={(e) => e.stopPropagation()}>
+            <button type="button"
+              onClick={() => { const g = groupMenu.group; setGroupMenu(null); copyToClipboard(g, t("已複製群組名")); }}
+              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("複製群組名")}</button>
+            <button type="button"
+              onClick={() => { setGroupMenu(null); loadGroups(); }}
+              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("重新整理")}</button>
+            <div className="my-1 border-t border-fg/10" />
+            <button type="button"
+              disabled={busy || !groupMenu.empty}
+              title={groupMenu.empty ? undefined : t("群組須 Empty 才能刪除")}
+              onClick={() => { const g = groupMenu.group; setGroupMenu(null); void deleteGroupNamed(g); }}
+              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-danger disabled:opacity-40 disabled:hover:bg-transparent">
+              {t("刪除群組")}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

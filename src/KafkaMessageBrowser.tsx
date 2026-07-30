@@ -284,6 +284,28 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
 
   const isJsonLike = (m: KafkaMessage) => m.value_encoding === "json" || m.value_encoding === "avro";
 
+  // 整筆訊息（含座標 / 時間 / headers）序列化為 JSON，供貼進 issue、log 或另一支工具重放。
+  // value 為 JSON / Avro 時內嵌成物件而非字串，貼出來即是可直接讀的巢狀結構。
+  const messageAsJson = (m: KafkaMessage): string => {
+    let value: unknown = m.value;
+    if (isJsonLike(m) && m.value != null) {
+      try { value = JSON.parse(m.value); } catch { /* 解不開就維持原字串 */ }
+    }
+    return JSON.stringify(
+      {
+        topic: m.topic,
+        partition: m.partition,
+        offset: m.offset,
+        timestamp: m.timestamp >= 0 ? new Date(m.timestamp).toISOString() : null,
+        key: m.key,
+        headers: Object.fromEntries(m.headers.map((h) => [h.key, h.value])),
+        value,
+      },
+      null,
+      2,
+    );
+  };
+
   // 投影：對 json/avro value 套用路徑表達式；投影無效（非 JSON）退回原值。
   const cellValue = (m: KafkaMessage): string => {
     if (projActive && isJsonLike(m)) {
@@ -658,6 +680,12 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
           <div className="fixed z-[90] min-w-[160px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm" style={{ left: rowMenu.x, top: rowMenu.y }}>
             <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.key ?? "", t("已複製")); setRowMenu(null); }}>{t("複製 Key")}</button>
             <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.value ?? "", t("已複製")); setRowMenu(null); }}>{t("複製 Value")}</button>
+            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(messageAsJson(rowMenu.m), t("已複製整筆訊息")); setRowMenu(null); }}>{t("複製整筆（JSON）")}</button>
+            {rowMenu.m.headers.length > 0 && (
+              <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.headers.map((h) => `${h.key}=${h.value}`).join("\n"), t("已複製 Headers")); setRowMenu(null); }}>{t("複製 Headers")}</button>
+            )}
+            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(`${rowMenu.m.topic}[${rowMenu.m.partition}]@${rowMenu.m.offset}`, t("已複製座標")); setRowMenu(null); }}>{t("複製座標（topic[分區]@位移）")}</button>
+            <div className="my-1 border-t border-fg/10" />
             <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => openReprocess(rowMenu.m)}>{t("以此訊息發佈…")}</button>
           </div>
         </>

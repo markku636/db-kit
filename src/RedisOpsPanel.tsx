@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { CircleDot, RefreshCw, X } from "lucide-react";
 import { api, BigKey, ClientInfo, SlowLogEntry } from "./api";
-import { toast, uiConfirm, useModalOverlay } from "./ui";
+import { copyToClipboard, toast, uiConfirm, useModalOverlay } from "./ui";
 import { IconButton } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
@@ -187,6 +187,9 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
   const [rows, setRows] = useState<BigKey[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  // 勾選要清掉的大鍵；每次重新掃描即清空（避免對已不存在的鍵下 DEL）。
+  const [marked, setMarked] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   const scan = async () => {
     setScanning(true);
@@ -194,10 +197,42 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
     try {
       const r = await api.redisBigKeys(connId, database, Number(sample) || 1000, Number(top) || 50);
       setRows(r);
+      setMarked(new Set());
     } catch (e: any) {
       setErr(e?.message ?? t("掃描失敗"));
     } finally {
       setScanning(false);
+    }
+  };
+
+  const toggle = (key: string) =>
+    setMarked((s) => {
+      const n = new Set(s);
+      n.has(key) ? n.delete(key) : n.add(key);
+      return n;
+    });
+
+  // 找到大鍵之後就地清掉（維運面板的重點在於「找出來能處理」，不必再回鍵樹逐一刪）。
+  const removeKeys = async (keys: string[]) => {
+    if (keys.length === 0 || deleting) return;
+    const preview = keys.slice(0, 5).join("\n") + (keys.length > 5 ? t("\n…等 {n} 個鍵", { n: keys.length }) : "");
+    if (!(await uiConfirm(
+      t("將刪除 DB {database} 的 {n} 個鍵，此動作無法復原：\n{preview}", { database, n: keys.length, preview }),
+      { title: t("刪除鍵"), danger: true, confirmText: t("刪除") },
+    ))) return;
+    setDeleting(true);
+    try {
+      const n = await api.redisDeleteKeys(connId, database, keys);
+      toast.success(t("已刪除 {n} 個鍵", { n }));
+      const gone = new Set(keys);
+      setRows((r) => (r ? r.filter((b) => !gone.has(b.key)) : r));
+      setMarked((s) => new Set([...s].filter((k) => !gone.has(k))));
+    } catch (e: any) {
+      const msg = e?.message ?? t("刪除失敗");
+      setErr(msg);
+      toast.error(msg);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -216,23 +251,49 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
         </button>
       </div>
       <div className="text-[11px] text-fg/35 mb-2">{t("取樣式掃描（非全量），以 MEMORY USAGE 估算記憶體用量；大型實例請斟酌取樣數。")}</div>
+      {rows && rows.length > 0 && (
+        <div className="flex items-center gap-2 mb-2 text-xs">
+          <span className="text-fg/40">{t("已勾選 {n}", { n: marked.size })}</span>
+          <button type="button" onClick={() => removeKeys([...marked])} disabled={marked.size === 0 || deleting}
+            title={t("刪除已勾選的鍵")}
+            className="px-2 py-1 rounded border border-fg/15 hover:bg-red-500/20 text-red-300 disabled:opacity-30 disabled:hover:bg-transparent">
+            {deleting ? t("刪除中…") : t("刪除選取")}
+          </button>
+        </div>
+      )}
       <ErrBar err={err} />
       {rows && rows.length === 0 && <div className="text-fg/40 text-sm">{t("（取樣範圍內無鍵）")}</div>}
       {rows && rows.length > 0 && (
         <table className="text-xs mono w-full border-collapse">
           <thead><tr className="text-fg/45">
+            <th className="px-2 py-1 border-b border-fg/10 w-8 text-center">
+              <input type="checkbox" title={t("全選 / 取消")}
+                checked={marked.size === rows.length}
+                ref={(el) => { if (el) el.indeterminate = marked.size > 0 && marked.size < rows.length; }}
+                onChange={() => setMarked(marked.size === rows.length ? new Set() : new Set(rows.map((b) => b.key)))} />
+            </th>
             <th className="text-left px-2 py-1 border-b border-fg/10">{t("鍵")}</th>
             <th className="text-left px-2 py-1 border-b border-fg/10">{t("型別")}</th>
             <th className="text-right px-2 py-1 border-b border-fg/10">{t("記憶體")}</th>
             <th className="text-right px-2 py-1 border-b border-fg/10">TTL</th>
+            <th className="w-20 border-b border-fg/10" />
           </tr></thead>
           <tbody>
             {rows.map((b) => (
-              <tr key={b.key} className="hover:bg-fg/5">
+              <tr key={b.key} className="hover:bg-fg/5 group">
+                <td className="px-2 py-1 border-b border-fg/5 text-center">
+                  <input type="checkbox" aria-label={b.key} checked={marked.has(b.key)} onChange={() => toggle(b.key)} />
+                </td>
                 <td className="px-2 py-1 border-b border-fg/5 break-all text-blue-300/90">{b.key}</td>
                 <td className="px-2 py-1 border-b border-fg/5 text-fg/60">{b.type_}</td>
                 <td className="px-2 py-1 border-b border-fg/5 text-right text-amber-300 whitespace-nowrap">{b.bytes < 0 ? "—" : humanBytes(b.bytes)}</td>
                 <td className="px-2 py-1 border-b border-fg/5 text-right text-fg/50 whitespace-nowrap">{b.ttl < 0 ? t("永久") : `${b.ttl}s`}</td>
+                <td className="px-1 py-1 border-b border-fg/5 text-right whitespace-nowrap">
+                  <button type="button" onClick={() => copyToClipboard(b.key, t("已複製鍵名"))} title={t("複製鍵名")}
+                    className="px-1.5 py-0.5 rounded text-fg/20 group-hover:text-fg/70 hover:bg-fg/10">{t("複製")}</button>
+                  <button type="button" onClick={() => removeKeys([b.key])} disabled={deleting} title={t("刪除此鍵")}
+                    className="px-1.5 py-0.5 rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20 disabled:opacity-30">{t("刪除")}</button>
+                </td>
               </tr>
             ))}
           </tbody>
