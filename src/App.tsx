@@ -1216,6 +1216,12 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   // 摺疊狀態純 UI，走 localStorage；群組本身與歸屬順序則持久化在 connections.json。
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed);
   // 進行中的拖曳：連線或群組。null = 沒在拖。
+  //
+  // ⚠️ 這裡的 HTML5 拖曳依賴 tauri.conf.json 的 `app.windows[].dragDropEnabled: false`。
+  // Tauri v2 預設為 true，webview 會攔截原生 drag-drop（用來接「從檔案總管拖檔進來」），
+  // 副作用是頁面內完全收不到 dragover / drop —— Tauri 官方 schema 明載
+  // 「Disabling it is required to use HTML5 drag and drop on the frontend on Windows」。
+  // 本 app 開檔一律走 pickOpenFile / pickSaveFile 對話框，沒用到原生檔案拖放，關掉無損失。
   const [drag, setDrag] = useState<{ kind: "conn" | "group"; id: string } | null>(null);
   // 目前的落點提示。conn/group = 插在該列前 / 後；into = 丟進某群組末端（拖到群組標題上）。
   const [dropAt, setDropAt] = useState<
