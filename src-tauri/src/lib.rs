@@ -322,6 +322,7 @@ pub fn run() {
             commands::es_mapping,
             #[cfg(feature = "elastic")]
             commands::es_delete_index,
+            commands::es_data_view_id,
             #[cfg(feature = "rabbitmq")]
             commands::rabbitmq_overview,
             #[cfg(feature = "rabbitmq")]

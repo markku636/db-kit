@@ -120,6 +120,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [esSslInsecure, setEsSslInsecure] = useState(initial?.options?.es_ssl_insecure === "1");
   const [esShowHidden, setEsShowHidden] = useState(initial?.options?.es_show_hidden === "1");
   const [esCloudId, setEsCloudId] = useState("");
+  // Kibana Discover 連結：根網址 + 時間欄位。認證沿用同一份 ES 設定，不另外填。
+  const [esKibanaUrl, setEsKibanaUrl] = useState(initial?.options?.es_kibana_url ?? "");
+  const [esTimeField, setEsTimeField] = useState(initial?.options?.es_time_field ?? "");
   // RabbitMQ 連線選項（存於 options map）；帳密沿用 username/password（預設 guest/guest）。
   const [rabbitVhost, setRabbitVhost] = useState(initial?.options?.rabbitmq_vhost ?? "/");
   const [rabbitTls, setRabbitTls] = useState(initial?.options?.rabbitmq_tls === "1");
@@ -236,6 +239,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       if (esTls && esSslCa.trim()) o.es_ssl_ca = esSslCa.trim();
       if (esTls && esSslInsecure) o.es_ssl_insecure = "1";
       if (esShowHidden) o.es_show_hidden = "1";
+      if (esKibanaUrl.trim()) o.es_kibana_url = esKibanaUrl.trim().replace(/\/+$/, "");
+      if (esTimeField.trim()) o.es_time_field = esTimeField.trim();
     } else if (kind === "rabbitmq") {
       if (rabbitVhost.trim() && rabbitVhost.trim() !== "/") o.rabbitmq_vhost = rabbitVhost.trim();
       if (rabbitTls) o.rabbitmq_tls = "1";
@@ -791,6 +796,16 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                 <input type="checkbox" checked={esShowHidden} onChange={(e) => setEsShowHidden(e.target.checked)} />
                 <span>{t("顯示系統索引（. 開頭）")}</span>
               </label>
+              <Field label={t("Kibana 網址（選填）")}
+                hint={t("填了才能從查詢結果產生 Kibana Discover 連結；認證沿用上面的設定，不必重填")}>
+                <Input value={esKibanaUrl} onChange={(e) => setEsKibanaUrl(e.target.value)} onKeyDown={submitOnEnter}
+                  placeholder="https://kibana.example.com" />
+              </Field>
+              <Field label={t("時間欄位（選填）")}
+                hint={t("Discover 連結的時間區間依此欄位換算；留空為 @timestamp")}>
+                <Input value={esTimeField} onChange={(e) => setEsTimeField(e.target.value)} onKeyDown={submitOnEnter}
+                  placeholder="@timestamp" />
+              </Field>
               {(esTls || esHostIsUrl) && sshEnabled && (
                 <div className="text-xs text-warning">
                   {t("透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，通常需勾「略過憑證驗證」。")}

@@ -2321,6 +2321,16 @@ const en: Catalog = {
   "verify-full（加密 + 驗證 CA 與主機名）": "verify-full (encrypt + verify CA and hostname)",
   "warn=僅記錄警告；error=拒絕不符合的寫入": "warn = log a warning only; error = reject non-conforming writes",
   "WITH GRANT OPTION（允許此帳號轉授上述權限）": "WITH GRANT OPTION (allows this account to re-grant the above privileges)",
+  "Kibana 網址（選填）": "Kibana URL (optional)",
+  "填了才能從查詢結果產生 Kibana Discover 連結；認證沿用上面的設定，不必重填": "Required to turn a query into a Kibana Discover link. Authentication is reused from the settings above.",
+  "時間欄位（選填）": "Time field (optional)",
+  "Discover 連結的時間區間依此欄位換算；留空為 @timestamp": "The Discover link derives its time range from this field; defaults to @timestamp.",
+  "Kibana 連結": "Kibana link",
+  "把目前查詢轉成 Kibana Discover 連結並複製": "Turn the current query into a Kibana Discover link and copy it",
+  "Kibana 連結已複製": "Kibana link copied",
+  "查詢不是合法 JSON，無法產生 Kibana 連結。": "The query is not valid JSON, so no Kibana link can be generated.",
+  "查詢的頂層缺少 \"index\"，無法決定要開哪個 data view。": "The query has no top-level \"index\", so the data view to open cannot be determined.",
+  "有 {n} 個條件無法轉成 Kibana 篩選器，已原樣保留為 raw DSL filter（查詢結果相同）。": "{n} condition(s) could not be mapped to Kibana filters and were kept verbatim as a raw DSL filter (same results).",
 };
 
 export default en;

@@ -13,6 +13,7 @@ import { useSqlSchema } from "./useSqlSchema";
 import { useAssistant } from "./assistant";
 import type { PaletteItem } from "./CommandPalette";
 import lazyOverlay from "./ui/lazyOverlay";
+import { buildDiscoverUrl, countRawClauses } from "./kibanaUrl";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
 import {
   deleteGroup, groupSize, loadCollapsed, moveConnection, moveGroup, persistCollapsed,
@@ -51,7 +52,7 @@ import {
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
-  ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, FolderPlus,
+  ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, FolderPlus, ExternalLink,
   type LucideIcon,
 } from "lucide-react";
 
@@ -3973,6 +3974,49 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const supportsNlQuery = supportsSqlEditor || kind === "elastic";
   const nlLang: "sql" | "json" = kind === "elastic" ? "json" : "sql";
 
+  // ---- Kibana Discover 連結（elastic 且連線設了 es_kibana_url 才出現）----
+  const esOpts = useStore((s) => s.connections.find((c) => c.id === activeId)?.options);
+  const kibanaUrl = kind === "elastic" ? (esOpts?.es_kibana_url ?? "") : "";
+  const [kibanaBusy, setKibanaBusy] = useState(false);
+
+  /**
+   * 把編輯器裡的 DSL 轉成 Discover 連結並複製。
+   *
+   * 走的是編輯器現有內容而非上一次的執行結果：使用者常改完條件想「拿這個去 Kibana 看」，
+   * 要求先執行一次才給連結是多餘的。
+   */
+  const copyKibanaLink = async () => {
+    let dsl: Record<string, unknown>;
+    try {
+      dsl = JSON.parse(sql);
+    } catch {
+      toast.error(t("查詢不是合法 JSON，無法產生 Kibana 連結。"));
+      return;
+    }
+    const index = typeof dsl.index === "string" ? dsl.index.trim() : "";
+    if (!index) {
+      toast.error(t("查詢的頂層缺少 \"index\"，無法決定要開哪個 data view。"));
+      return;
+    }
+    setKibanaBusy(true);
+    try {
+      const dataViewId = await api.esDataViewId(activeId!, index);
+      const timeField = esOpts?.es_time_field || undefined;
+      const url = buildDiscoverUrl({ kibanaUrl, dataViewId, dsl, timeField });
+      await copyToClipboard(url, t("Kibana 連結已複製"));
+      // 轉不成原生 filter 的條件會包成 raw DSL filter —— 結果集不變，但 Kibana 上會多一顆
+      // 看不懂的 pill，先講清楚比讓使用者自己困惑好。
+      const raw = countRawClauses(dsl, timeField ?? "@timestamp");
+      if (raw > 0) {
+        toast.info(t("有 {n} 個條件無法轉成 Kibana 篩選器，已原樣保留為 raw DSL filter（查詢結果相同）。", { n: raw }));
+      }
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setKibanaBusy(false);
+    }
+  };
+
   // 消費側欄「查詢 log」的一次性自動展開請求（比照下方 pendingSql 消費慣例）。
   // key={activeQueryId} 使 QueryPane 每次切換查詢分頁都是全新掛載，nlOpen 必為初始 false，
   // 故用「掛載時讀一次」而非訂閱式 useStore((s)=>s.pendingNlOpen)，避免其他分頁的旗標誤觸發。
@@ -4817,6 +4861,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
                   nlOpen ? "border-accent/50 bg-accent/12 text-accent" : "border-fg/15 hover:bg-fg/10 text-fg/70"}`}>
                 <Icon icon={Sparkles} size={13} />{t("AI 生成")}
+              </button>
+            )}
+            {kind === "elastic" && kibanaUrl && (
+              <button type="button" onClick={copyKibanaLink} disabled={kibanaBusy || !sql.trim()}
+                title={t("把目前查詢轉成 Kibana Discover 連結並複製")}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
+                <Icon icon={kibanaBusy ? Loader2 : ExternalLink} size={13} className={kibanaBusy ? "animate-spin" : ""} />
+                {t("Kibana 連結")}
               </button>
             )}
             {supportsSqlEditor && (

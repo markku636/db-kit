@@ -1197,6 +1197,8 @@ export const api = {
   esIndices: (id: string) => invoke<EsIndexInfo[]>("es_indices", { id }),
   esNodes: (id: string) => invoke<EsNodeInfo[]>("es_nodes", { id }),
   esMapping: (id: string, index: string) => invoke<string>("es_mapping", { id, index }),
+  // 索引 pattern → Kibana data view id（產生 Discover 連結用；網址在 kibanaUrl.ts 組）。
+  esDataViewId: (id: string, index: string) => invoke<string>("es_data_view_id", { id, index }),
   esDeleteIndex: (id: string, index: string) => invoke<void>("es_delete_index", { id, index }),
 
   // RabbitMQ：總覽、佇列 / exchange 清單、佇列詳情、訊息 peek、發布、清空、刪除佇列。

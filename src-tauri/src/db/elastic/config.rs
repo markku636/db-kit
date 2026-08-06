@@ -115,6 +115,22 @@ fn build_ca_pem(cfg: &ConnectionConfig) -> AppResult<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
+/// 產生 Kibana Discover 連結時，要打哪個 Kibana（`es_kibana_url`）。未設 → None。
+///
+/// 認證 / CA / insecure 一律沿用同一份 ES 連線設定：Kibana 與其背後的叢集共用同一組
+/// API key 或帳密，逼使用者再填一次只會多一個會過期不同步的欄位。
+pub fn build_kibana_params(cfg: &ConnectionConfig) -> AppResult<Option<EsClientParams>> {
+    let Some(url) = opt(cfg, "es_kibana_url") else {
+        return Ok(None);
+    };
+    Ok(Some(EsClientParams {
+        base_url: url.trim_end_matches('/').to_string(),
+        auth: build_auth(cfg),
+        ca_pem: build_ca_pem(cfg)?,
+        insecure: opt_bool(cfg, "es_ssl_insecure"),
+    }))
+}
+
 /// 由連線設定組出 EsClient 建構參數。
 pub fn build_params(cfg: &ConnectionConfig) -> AppResult<EsClientParams> {
     Ok(EsClientParams {

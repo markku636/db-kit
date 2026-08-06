@@ -2386,6 +2386,20 @@ pub async fn es_mapping(state: State<'_, AppState>, id: String, index: String) -
     state.manager.elastic_driver(&id)?.mapping(&index).await
 }
 
+/// 索引 pattern → Kibana data view id（產生 Discover 連結用）。
+///
+/// 只回 id，網址由前端的 kibanaUrl.ts 組：rison 編碼與 DSL → Discover state 的映射是
+/// 純字串處理，放前端才好寫單元測試；後端只負責這段做不到的部分（跨網域打 Kibana API）。
+#[cfg(feature = "elastic")]
+#[tauri::command]
+pub async fn es_data_view_id(
+    state: State<'_, AppState>,
+    id: String,
+    index: String,
+) -> AppResult<String> {
+    state.manager.elastic_driver(&id)?.kibana_data_view_id(&index).await
+}
+
 /// 刪除索引（破壞性）。
 #[cfg(feature = "elastic")]
 #[tauri::command]

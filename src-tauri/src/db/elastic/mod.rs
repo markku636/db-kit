@@ -27,6 +27,9 @@ use crate::error::{AppError, AppResult};
 /// 一個已連線的 Elasticsearch / OpenSearch 端點。
 pub struct ElasticDriver {
     client: EsClient,
+    /// 打 Kibana 用的 client（`es_kibana_url`，認證沿用同一份設定）。
+    /// None = 該連線未設定 Kibana，產生 Discover 連結的功能停用。
+    kibana: Option<EsClient>,
     /// "elasticsearch" | "opensearch"（connect 時由 `version.distribution` 偵測）。
     flavor: String,
     /// 發行版本號（`version.number`）。
@@ -38,7 +41,60 @@ pub struct ElasticDriver {
 /// `_id` 主鍵（合成，同 table_columns）。
 const ID_FIELD: &str = "_id";
 
+/// query string 值的百分號編碼（RFC 3986 unreserved 之外全部編碼）。
+///
+/// 只為了 Kibana data view 查詢這一處而多拉一個 urlencoding crate 不划算；
+/// 索引 pattern 可能含 `*`、`:`（跨叢集）、空白等需要編碼的字元，故不能直接內插。
+fn percent_encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 impl ElasticDriver {
+    /// 索引 pattern → Kibana data view（index-pattern saved object）的 id。
+    ///
+    /// Discover 的網址狀態認的是 data view id，不是索引名；沒有對應的 data view 就開不了
+    /// 連結，此時回明確錯誤而不是給一個開起來空白的網址。
+    ///
+    /// 不做快取：這是使用者按下「產生連結」才觸發的一次性動作，多打一次 API 的成本
+    /// 遠低於快取失效（data view 被改名 / 刪除後仍回舊 id）造成的困惑。
+    pub async fn kibana_data_view_id(&self, pattern: &str) -> AppResult<String> {
+        let kb = self.kibana.as_ref().ok_or_else(|| {
+            AppError::Query(t!("此連線未設定 Kibana 網址，無法產生 Discover 連結。").into())
+        })?;
+        // data view 的 title 可能帶或不帶結尾 *，兩種都視為命中。
+        let trimmed = pattern.trim().trim_end_matches('*');
+        if trimmed.is_empty() {
+            return Err(AppError::Query(t!("索引名稱為空，無法解析 Kibana data view。").into()));
+        }
+        let q = percent_encode_query(&format!("{trimmed}*"));
+        let path = format!(
+            "/api/saved_objects/_find?type=index-pattern&per_page=50&search_fields=title&search={q}"
+        );
+        let found = kb.get_json(&path).await?;
+        let objects = found.get("saved_objects").and_then(|v| v.as_array());
+        for obj in objects.into_iter().flatten() {
+            let title = obj.pointer("/attributes/title").and_then(|v| v.as_str()).unwrap_or("");
+            if title == trimmed || title == format!("{trimmed}*") {
+                if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+                    return Ok(id.to_string());
+                }
+            }
+        }
+        Err(AppError::Query(tf!(
+            "Kibana 找不到對應「{pattern}」的 data view；請先在 Kibana 建立，或改用已存在的索引 pattern。",
+            pattern = pattern
+        )))
+    }
+
     /// 叢集健康（`GET /_cluster/health`）；flavor / version 取自連線時偵測值。
     pub async fn cluster_health(&self) -> AppResult<EsClusterHealth> {
         let h = self.client.get_json("/_cluster/health").await?;
@@ -258,6 +314,9 @@ impl DatabaseDriver for ElasticDriver {
         .to_string();
         Ok(ElasticDriver {
             client,
+            // Kibana 是選配：沒設 es_kibana_url 就只是不能產生 Discover 連結，
+            // 不影響任何查詢功能，所以不在 connect 時驗證它是否連得上。
+            kibana: config::build_kibana_params(config)?.map(EsClient::new).transpose()?,
             flavor,
             version,
             show_hidden: config::show_hidden(config),
@@ -267,6 +326,7 @@ impl DatabaseDriver for ElasticDriver {
     async fn ping(&self) -> AppResult<()> {
         self.client.get_json("/_cluster/health?timeout=5s").await.map(|_| ())
     }
+
 
     async fn list_databases(&self) -> AppResult<Vec<String>> {
         // ES 無資料庫層級；回單一合成 cluster 節點供連線樹展開（同 Kafka）。
