@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
-import { api, onKafkaAlert, ConnectionConfig, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat, type SearchHit } from "./api";
+import { api, onKafkaAlert, isProdConn, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
 import { LANGUAGES, useLang, useT, type Lang } from "./i18n";
@@ -14,11 +14,16 @@ import { useAssistant } from "./assistant";
 import type { PaletteItem } from "./CommandPalette";
 import lazyOverlay from "./ui/lazyOverlay";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
+import {
+  deleteGroup, groupSize, loadCollapsed, moveConnection, moveGroup, persistCollapsed,
+  sectionize, toPlacements, uniqueGroupName, UNGROUPED_KEY,
+} from "./connGroups";
 import { kindIcon } from "./kindIcons";
 import { friendlyDbError } from "./dbErrors";
 import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile, useEscToClose } from "./ui";
+import { askOtpCode } from "./otpGate";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
   resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand, isReadOnlyRedisCommand,
@@ -46,7 +51,7 @@ import {
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
-  ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox,
+  ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, FolderPlus,
   type LucideIcon,
 } from "lucide-react";
 
@@ -303,6 +308,11 @@ export default function App() {
           .getState()
           .setConnections(saved.map((c) => ({ ...c, password: c.password ?? "" })))
       )
+      .catch(() => {});
+    // 側欄群組與連線同源（connections.json），但分開取：舊版設定檔沒有群組，
+    // 這裡失敗只代表「沒有群組」，不該連帶讓連線清單載不出來。
+    api.listConnectionGroups()
+      .then((gs) => useStore.getState().setConnGroups(gs))
       .catch(() => {});
   }, [lockState]);
 
@@ -1201,7 +1211,123 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 // ---- 左側連線/物件樹 ----
 function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig) => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void }) {
   const t = useT();
-  const { connections, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
+  const { connections, connGroups, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
+  // ---- 連線群組（側欄排版）----
+  // 摺疊狀態純 UI，走 localStorage；群組本身與歸屬順序則持久化在 connections.json。
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed);
+  // 進行中的拖曳：連線或群組。null = 沒在拖。
+  const [drag, setDrag] = useState<{ kind: "conn" | "group"; id: string } | null>(null);
+  // 目前的落點提示。conn/group = 插在該列前 / 後；into = 丟進某群組末端（拖到群組標題上）。
+  const [dropAt, setDropAt] = useState<
+    { kind: "conn" | "group"; id: string; before: boolean } | { kind: "into"; id: string | null } | null
+  >(null);
+  // 重新命名中的群組（id → 編輯中的名稱）；null = 沒有在改名。
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  // 群組標題的右鍵選單。
+  const [groupMenu, setGroupMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+
+  const toggleGroupCollapsed = (id: string) =>
+    setCollapsedGroups((s) => {
+      const next = new Set(s);
+      if (!next.delete(id)) next.add(id);
+      persistCollapsed(next);
+      return next;
+    });
+
+  /** 套用新排版：先更新畫面再落地，寫入失敗則回滾並提示（避免畫面與磁碟不一致）。 */
+  const applyLayout = async (nextConns: ConnectionConfig[], nextGroups: ConnGroup[]) => {
+    const prevConns = connections;
+    const prevGroups = connGroups;
+    useStore.getState().setConnections(nextConns);
+    useStore.getState().setConnGroups(nextGroups);
+    try {
+      await api.saveConnectionLayout(nextGroups, toPlacements(nextConns));
+    } catch (e) {
+      useStore.getState().setConnections(prevConns);
+      useStore.getState().setConnGroups(prevGroups);
+      toast.error(t("儲存群組排版失敗：{e}", { e: String(e) }));
+    }
+  };
+
+  const addGroup = () => {
+    const g: ConnGroup = { id: crypto.randomUUID(), name: uniqueGroupName(connGroups, t("新群組")) };
+    void applyLayout(connections, [...connGroups, g]);
+    // 建完直接進入改名，省一次右鍵：新群組的預設名字幾乎一定要改。
+    setRenaming({ id: g.id, name: g.name });
+  };
+
+  const commitRename = () => {
+    if (!renaming) return;
+    const name = renaming.name.trim();
+    const target = connGroups.find((g) => g.id === renaming.id);
+    setRenaming(null);
+    if (!target || !name || name === target.name) return;
+    const unique = uniqueGroupName(connGroups, name, renaming.id);
+    void applyLayout(
+      connections,
+      connGroups.map((g) => (g.id === renaming.id ? { ...g, name: unique } : g))
+    );
+  };
+
+  /** 刪群組：底下有連線就先問過（連線只會移到未分組，不會被刪）。空群組直接刪，不囉嗦。 */
+  const removeGroup = async (id: string) => {
+    const g = connGroups.find((x) => x.id === id);
+    if (!g) return;
+    const count = groupSize(connections, id);
+    if (count > 0) {
+      const ok = await uiConfirm(
+        t("群組「{name}」底下還有 {count} 個連線，刪除群組後它們會移到「未分組」。連線本身與已儲存的密碼都不會被刪除。", {
+          name: g.name,
+          count,
+        }),
+        { title: t("刪除群組"), danger: true, confirmText: t("刪除群組") }
+      );
+      if (!ok) return;
+    }
+    const next = deleteGroup(connections, connGroups, id);
+    void applyLayout(next.conns, next.groups);
+  };
+
+  /** 放開滑鼠：把 drag + dropAt 換算成一次排版更新。 */
+  const commitDrop = () => {
+    const d = drag;
+    const at = dropAt;
+    setDrag(null);
+    setDropAt(null);
+    if (!d || !at) return;
+
+    if (d.kind === "group") {
+      // 群組只跟群組換位；拖到連線或群組內容上不做事。
+      if (at.kind === "group") void applyLayout(connections, moveGroup(connGroups, d.id, at.id, at.before));
+      return;
+    }
+
+    // 拖到群組標題上 → 接在該群組末端，並展開它（不然看不到東西跑哪去了）。
+    if (at.kind === "into") {
+      if (at.id) setCollapsedGroups((s) => { const n = new Set(s); n.delete(at.id!); persistCollapsed(n); return n; });
+      void applyLayout(moveConnection(connections, connGroups, d.id, at.id, Number.MAX_SAFE_INTEGER), connGroups);
+      return;
+    }
+
+    // 拖到某條連線上 → 插在它前 / 後，落在該連線所屬的群組。
+    const target = connections.find((c) => c.id === at.id);
+    if (!target || target.id === d.id) return;
+    const raw = target.group_id ?? null;
+    const gid = raw && connGroups.some((g) => g.id === raw) ? raw : null;
+    const list = sectionize(connections, connGroups)
+      .find((s) => (s.group?.id ?? null) === gid)!
+      .conns.filter((c) => c.id !== d.id);
+    const found = list.findIndex((c) => c.id === at.id);
+    const index = found < 0 ? list.length : found + (at.before ? 0 : 1);
+    void applyLayout(moveConnection(connections, connGroups, d.id, gid, index), connGroups);
+  };
+
+  /** 依游標落在列的上半 / 下半決定插在前面還是後面。 */
+  const dropHalf = (e: React.DragEvent) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return e.clientY < r.top + r.height / 2;
+  };
+
   const [databases, setDatabases] = useState<Record<string, string[]>>({});
   // 已展開的資料庫: 鍵為 connId:db，值為樹狀分組（資料表 / 檢視 / 函式）
   const [expandedDbs, setExpandedDbs] = useState<Record<string, DbObjects>>({});
@@ -1405,9 +1531,12 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   const doConnect = async (id: string) => {
     const cfg = connections.find((c) => c.id === id);
     if (!cfg || connectedIds.has(id) || connecting.has(id)) return;
+    // 手動 OTP 模式：先跳窗要驗證碼。取消＝放棄這次連線（非失敗，不彈錯誤對話框）。
+    const gate = await askOtpCode(cfg);
+    if (gate.cancelled) return;
     setBusy(id, true);
     try {
-      await api.connect(cfg);
+      await api.connect(cfg, gate.code);
       useStore.getState().markConnected(id);
       const dbs = await api.listDatabases(id);
       setDatabases((d) => ({ ...d, [id]: dbs }));
@@ -2320,6 +2449,8 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   const tableVisible = (connName: string, tName: string) =>
     !q || connName.toLowerCase().includes(q) || tName.toLowerCase().includes(q);
   const visibleConns = connections.filter(connVisible);
+  // 側欄分區（群組順序 → 未分組）。搜尋過濾在各區段內做，讓命中的連線留在原本的群組底下。
+  const sections = sectionize(connections, connGroups);
   // 跨庫搜尋 / 全資料庫搜尋的目標連線：目前 active 且已連線者，否則第一個已連線者。
   const searchTarget =
     connections.find((c) => c.id === activeId && connectedIds.has(c.id)) ??
@@ -2349,15 +2480,20 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
               </button>
             )}
           </div>
-          {connectedIds.size > 1 && (
-            <div className="flex justify-end mt-1">
+          <div className="flex items-center justify-between mt-1">
+            <button type="button" onClick={addGroup}
+              title={t("建立群組後，把連線拖進來即可分類")}
+              className="text-[11px] text-fg/40 hover:text-fg/70 inline-flex items-center gap-1">
+              <Icon icon={FolderPlus} size={11} />{t("新增群組")}
+            </button>
+            {connectedIds.size > 1 && (
               <button type="button" onClick={() => { connections.filter((c) => connectedIds.has(c.id)).forEach((c) => doDisconnect(c.id)); }}
                 title={t("中斷所有已連線的連線")}
                 className="text-[11px] text-fg/40 hover:text-fg/70 inline-flex items-center gap-1">
                 <Icon icon={Plug} size={11} />{t("全部中斷（")}{connectedIds.size}）
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
       {q.length >= 2 && searchTarget && (searchBusy || searchHits !== null) && (() => {
@@ -2457,13 +2593,119 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
           )}
         </div>
       )}
-      {visibleConns.map((c) => {
+      {sections.map((section) => {
+        const gid = section.group?.id ?? null;
+        const key = gid ?? UNGROUPED_KEY;
+        const shown = section.conns.filter(connVisible);
+        // 空的具名群組要留著（它是拖放目標）；搜尋無命中的區段、以及空的未分組區則不佔版面。
+        if (shown.length === 0 && (q || !section.group)) return null;
+        // 沒有任何群組時，側欄維持原本的扁平清單——不為了一個「未分組」標題就多一層。
+        const headed = section.group !== null || connGroups.length > 0;
+        // 搜尋中一律展開，否則命中的連線被摺疊藏住，搜尋等於失效。
+        const collapsed = !q && collapsedGroups.has(key);
+        const dragOverInto = dropAt?.kind === "into" && dropAt.id === gid;
+        const groupLine = dropAt?.kind === "group" && dropAt.id === gid ? dropAt.before : null;
+        return (
+          <div
+            key={`g:${key}`}
+            onDragOver={(e) => {
+              // 區段空白處：接受連線 → 丟進這一組。
+              if (drag?.kind !== "conn") return;
+              e.preventDefault();
+              setDropAt({ kind: "into", id: gid });
+            }}
+            onDrop={(e) => { e.preventDefault(); commitDrop(); }}
+          >
+            {headed && (
+              <div
+                draggable={!!section.group && !renaming}
+                onDragStart={(e) => {
+                  if (!section.group) return;
+                  e.stopPropagation();
+                  setDrag({ kind: "group", id: section.group.id });
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => { setDrag(null); setDropAt(null); }}
+                onDragOver={(e) => {
+                  if (!drag) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  // 拖群組 → 換位（未分組區不是群組，不能當換位目標）；拖連線 → 丟進這組。
+                  if (drag.kind === "group") {
+                    if (section.group && drag.id !== section.group.id) {
+                      setDropAt({ kind: "group", id: section.group.id, before: dropHalf(e) });
+                    }
+                  } else setDropAt({ kind: "into", id: gid });
+                }}
+                onDrop={(e) => { e.preventDefault(); e.stopPropagation(); commitDrop(); }}
+                onClick={() => toggleGroupCollapsed(key)}
+                onContextMenu={(e) => {
+                  if (!section.group) return;
+                  e.preventDefault();
+                  setGroupMenu({ id: section.group.id, x: e.clientX, y: e.clientY });
+                }}
+                title={section.group ? t("點擊摺疊 / 展開；拖曳可調整群組順序；右鍵可重新命名或刪除") : t("點擊摺疊 / 展開")}
+                className={`group/hdr flex items-center gap-1 px-2 py-1 cursor-pointer select-none text-[11px] uppercase tracking-wide text-fg/40 hover:text-fg/70 hover:bg-fg/5 ${
+                  dragOverInto ? "bg-accent/15 outline outline-1 outline-accent/40" : ""
+                } ${groupLine === true ? "border-t-2 border-accent" : ""} ${groupLine === false ? "border-b-2 border-accent" : ""}`}
+              >
+                <Icon icon={collapsed ? ChevronRight : ChevronDown} size={12} className="shrink-0" />
+                {/* 注意要先確認 section.group 存在：未分組區的 id 是 undefined，
+                    只寫 renaming?.id === section.group?.id 會在沒改名時 undefined === undefined 而誤判。 */}
+                {renaming && section.group && renaming.id === section.group.id ? (
+                  <input
+                    autoFocus
+                    value={renaming.name}
+                    onChange={(e) => setRenaming({ id: renaming.id, name: e.target.value })}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") commitRename();
+                      if (e.key === "Escape") setRenaming(null);
+                    }}
+                    className="flex-1 min-w-0 bg-inset border border-accent rounded px-1 py-0 text-[11px] outline-none normal-case tracking-normal"
+                  />
+                ) : (
+                  <span className="truncate flex-1">{section.group ? section.group.name : t("未分組")}</span>
+                )}
+                <span className="shrink-0 text-fg/30 tabular-nums">{section.conns.length}</span>
+                {section.group && !renaming && (
+                  <button type="button" title={t("刪除群組")}
+                    onClick={(e) => { e.stopPropagation(); removeGroup(section.group!.id); }}
+                    className="w-4 h-4 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-red-300 hidden group-hover/hdr:flex">
+                    <Icon icon={Trash2} size={11} />
+                  </button>
+                )}
+              </div>
+            )}
+            {!collapsed && shown.map((c) => {
         const meta = KIND_META[c.kind];
         const connected = connectedIds.has(c.id);
         const busy = connecting.has(c.id);
+        const dragLine = dropAt?.kind === "conn" && dropAt.id === c.id ? dropAt.before : null;
         return (
           <div key={c.id}>
             <div
+              // 拖曳掛在「連線這一列」而不是外層容器：容器包含展開後的整棵資料庫樹，
+              // 掛在容器上會讓落點指示線橫跨整棵樹，上/下半判斷也會以整棵樹的高度計算。
+              draggable={!renaming}
+              onDragStart={(e) => {
+                setDrag({ kind: "conn", id: c.id });
+                e.dataTransfer.effectAllowed = "move";
+                // 某些瀏覽器沒有 setData 就不會真的啟動拖曳。
+                e.dataTransfer.setData("text/plain", c.id);
+              }}
+              onDragEnd={() => { setDrag(null); setDropAt(null); }}
+              onDragOver={(e) => {
+                if (drag?.kind !== "conn") return;
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = "move";
+                // 停在自己身上＝不動作：不攔掉的話會冒泡到區段容器，變成「丟到本群組末端」。
+                setDropAt(drag.id === c.id ? null : { kind: "conn", id: c.id, before: dropHalf(e) });
+              }}
+              onDrop={(e) => { e.preventDefault(); e.stopPropagation(); commitDrop(); }}
               onClick={() => { setActive(c.id); selectNode({ type: "connection", connId: c.id }); }}
               onDoubleClick={() => toggleConnect(c.id)}
               onContextMenu={(e) => {
@@ -2475,6 +2717,8 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
               style={connColors[c.id] ? { boxShadow: `inset 3px 0 0 ${connColors[c.id]}` } : undefined}
               className={`group flex items-center gap-2 px-3 py-1.5 cursor-pointer ${
                 activeId === c.id ? "relative bg-accent/12 before:content-[''] before:absolute before:left-0 before:inset-y-0 before:w-[2px] before:bg-accent" : "hover:bg-fg/5"
+              } ${dragLine === true ? "border-t-2 border-accent" : ""} ${dragLine === false ? "border-b-2 border-accent" : ""} ${
+                drag?.kind === "conn" && drag.id === c.id ? "opacity-40" : ""
               }`}
             >
               {busy ? (
@@ -2492,6 +2736,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                 </span>
               )}
               <span className="truncate flex-1" title={`${c.name} · ${KIND_META[c.kind].label} · ${c.host}:${c.port}`}>{c.name}</span>
+              {isProdConn(c) && <span className="shrink-0 text-[9px] px-1 rounded bg-red-500/25 text-red-300/90" title={t("正式環境：執行查詢前會跳確認")}>PROD</span>}
               {readonlyConns[c.id] && <span className="shrink-0 text-[9px] px-1 rounded bg-amber-400/20 text-amber-300/90" title={t("唯讀模式：擋寫入 / DDL 與資料格編輯")}>{t("唯讀")}</span>}
               <button type="button" title={t("編輯連線")}
                 onClick={(e) => { e.stopPropagation(); onEdit(c); }}
@@ -2678,7 +2923,30 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
               })}
           </div>
         );
+            })}
+          </div>
+        );
       })}
+
+      {groupMenu && (
+        <MenuPanel x={groupMenu.x} y={groupMenu.y} onClose={() => setGroupMenu(null)}>
+          <MenuItems
+            nodes={[
+              {
+                kind: "item",
+                label: t("重新命名"),
+                onClick: () => {
+                  const g = connGroups.find((x) => x.id === groupMenu.id);
+                  if (g) setRenaming({ id: g.id, name: g.name });
+                },
+              },
+              { kind: "sep" },
+              { kind: "item", label: t("刪除群組"), danger: true, onClick: () => void removeGroup(groupMenu.id) },
+            ]}
+            onClose={() => setGroupMenu(null)}
+          />
+        </MenuPanel>
+      )}
 
       {menu && menuConn && (
         <>
@@ -3875,6 +4143,20 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             ? buildUseDatabase(kind!, queryDb)
             : null;
         const sentStatements = usePrefix ? userStatements.map((s) => `${usePrefix};\n${s}`) : userStatements;
+        // 正式環境連線：每次執行都先確認。這裡是手滑成本最高的入口（任意語句通道），
+        // 所以不分讀寫一律問；讀取型語句按 Enter 就過，寫入型再被下面的危險操作確認擋第二道。
+        const runConn = roState.connections.find((c) => c.id === roState.activeId);
+        if (runConn && isProdConn(runConn)) {
+          const trimmed = q.trim();
+          const ok = await uiConfirm(
+            t("「{name}」是正式環境（production）連線。\n\n即將執行：\n{preview}\n\n確定執行？", {
+              name: runConn.name,
+              preview: trimmed.length > 300 ? `${trimmed.slice(0, 300)}…` : trimmed,
+            }),
+            { title: t("正式環境確認"), danger: true, confirmText: t("執行") },
+          );
+          if (!ok) return;
+        }
         // 防手滑：無 WHERE 的 UPDATE/DELETE 或 TRUNCATE 會影響整張表，先確認（external 亦講 MySQL，需納入）。
         const dangerCount = isSqlLike ? userStatements.filter((s) => isDangerousStatement(s)).length : 0;
         if (dangerCount > 0) {

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { ConnectionConfig, DbKind } from "./api";
+import { ConnectionConfig, ConnGroup, DbKind } from "./api";
 import { loadReadonly, persistReadonly, setReadonlyFlag, type ReadonlyMap } from "./connReadonly";
 import {
   loadSavedQueries,
@@ -62,7 +62,10 @@ export interface RevealRequest {
 
 interface AppStore {
   // 已儲存的連線設定（持久化於磁碟，密碼存 OS keychain；啟動時載入清單）
+  // 陣列順序＝側欄顯示順序（拖曳排序的真實來源）。
   connections: ConnectionConfig[];
+  // 側欄群組（持久化於 connections.json）。陣列順序＝群組顯示順序。
+  connGroups: ConnGroup[];
   // 目前已開啟連線的 id 集合
   connectedIds: Set<string>;
   // 唯讀連線（connId → true）：擋查詢編輯器寫入 / DDL 與資料格編輯，避免正式環境誤改。
@@ -96,6 +99,7 @@ interface AppStore {
   savedMgr: { seedSql: string | null; editName: string | null } | null;
 
   setConnections: (cs: ConnectionConfig[]) => void;
+  setConnGroups: (gs: ConnGroup[]) => void;
   addConnection: (c: ConnectionConfig) => void;
   removeConnection: (id: string) => void;
   setActive: (id: string | null) => void;
@@ -160,6 +164,7 @@ interface AppStore {
 
 export const useStore = create<AppStore>((set) => ({
   connections: [],
+  connGroups: [],
   connectedIds: new Set(),
   readonlyConns: loadReadonly(),
   activeId: null,
@@ -184,8 +189,18 @@ export const useStore = create<AppStore>((set) => ({
       return { readonlyConns: next };
     }),
   setConnections: (cs) => set({ connections: cs }),
+  setConnGroups: (gs) => set({ connGroups: gs }),
+  // 既有連線就地取代、新連線接在尾端：陣列順序＝側欄顯示順序，編輯一下密碼就讓連線
+  // 跳到清單最後會把拖曳排好的順序打亂（後端 upsert_in 也是同樣語意）。
   addConnection: (c) =>
-    set((s) => ({ connections: [...s.connections.filter((x) => x.id !== c.id), c] })),
+    set((s) => {
+      const i = s.connections.findIndex((x) => x.id === c.id);
+      if (i < 0) return { connections: [...s.connections, c] };
+      const next = s.connections.slice();
+      // group_id 由排版指令維護，存連線的表單不帶它 → 沿用既有值，避免存個密碼就掉出群組。
+      next[i] = { ...c, group_id: c.group_id ?? next[i].group_id ?? null };
+      return { connections: next };
+    }),
   removeConnection: (id) =>
     set((s) => ({
       connections: s.connections.filter((c) => c.id !== id),

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, ConnectionConfig, DbKind, KIND_META, ParsedUrl, SshAuthMethod } from "./api";
 import { pickOpenFile } from "./ui";
+import { askOtpCode } from "./otpGate";
 import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
 import { Plug, FolderOpen, ClipboardPaste } from "lucide-react";
 import { useT } from "./i18n";
@@ -65,12 +66,19 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [sshPassword, setSshPassword] = useState("");
   const [sshKeyPath, setSshKeyPath] = useState(initial?.ssh_private_key_path ?? "");
   const [sshPassphrase, setSshPassphrase] = useState("");
-  // 外部 gateway（kind === "external"）：driver / base_url / env 等存於 options map。
-  const [driver, setDriver] = useState(initial?.options?.driver ?? "");
+  // 外部 gateway（kind === "external"）：driver / base_url 等存於 options map。
+  // driver 不再讓使用者填：目前唯一的外部驅動就是 qland（見後端 db::external::connect_external），
+  // 選了「QLand」類型卻還要手打 driver 名稱只會打錯。日後有第二個外部驅動再把選擇 UI 加回來。
+  const driver = initial?.options?.driver || "qland";
   const [baseUrl, setBaseUrl] = useState(initial?.options?.base_url ?? "");
-  const [env, setEnv] = useState(initial?.options?.env ?? "");
   const [insecure, setInsecure] = useState(initial?.options?.insecure === "1");
   const [otpSecret, setOtpSecret] = useState("");
+  // 每次連線跳窗手動輸入 OTP（不儲存 TOTP secret）。新連線預設開啟：
+  // gateway 帳號多半有 2FA，而把 secret 存在本機等於 2FA 只剩一道密碼。
+  const [otpPrompt, setOtpPrompt] = useState(editing ? initial?.options?.otp_prompt === "1" : true);
+  // 正式環境標記（所有類型共用，存 options.prod）：不改變連線 / 查詢行為，
+  // 只影響防呆 UI —— 側欄掛 PROD 標記 + 執行查詢前跳確認。
+  const [prod, setProd] = useState(initial?.options?.prod === "1");
   // Redis 連線選項（存於 options map）
   const [redisTls, setRedisTls] = useState(initial?.options?.redis_tls === "true");
   const [redisTlsInsecure, setRedisTlsInsecure] = useState(initial?.options?.redis_tls_insecure === "true");
@@ -163,7 +171,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     ssh_private_key_path: sshKeyPath,
     ssh_passphrase: sshPassphrase,
     options: buildOptions(),
-    otp_secret: otpSecret,
+    // 手動輸入模式不留 secret：送空字串＝維持 keychain 現況（後端「空＝不變更」語意），
+    // 驅動端則因 otp_prompt=1 而直接忽略任何既存 secret。
+    otp_secret: otpPrompt ? "" : otpSecret,
   });
 
   // 依 kind 組 options map（連線層非機密設定）。回 undefined 表示無額外選項。
@@ -174,9 +184,17 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       const ext: Record<string, string> = { ...(initial?.options ?? {}) };
       ext.driver = driver;
       ext.base_url = baseUrl;
-      ext.env = env;
+      // env 已移除：它從來沒有任何讀取端（驅動與前端都不看），只是個會誤導人的空欄位。
+      // 分環境請用側欄群組。存檔時順手清掉舊連線殘留的鍵，別讓死資料一直留在設定檔。
+      delete ext.env;
       if (insecure) ext.insecure = "1";
       else delete ext.insecure; // 取消勾選要真的移除，不能靠 spread 蓋掉舊值
+      if (otpPrompt) ext.otp_prompt = "1";
+      else delete ext.otp_prompt;
+      if (prod) ext.prod = "1";
+      else delete ext.prod;
+      // 一次性驗證碼由後端在連線當下注入 options，絕不隨設定存檔（spread 保險起見再清一次）。
+      delete ext.otp_code;
       return ext;
     }
     const o: Record<string, string> = {};
@@ -227,6 +245,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       // CA 只在 verify-* 模式生效（require/required 不驗證憑證，sqlx 會忽略）。
       if (VERIFY_SSL_MODES.includes(sslMode) && sslCa.trim()) o.ssl_ca = sslCa.trim();
     }
+    // 正式環境標記與 kind 無關（每種 DB 都可能是 prod），故放在各 kind 分支之外。
+    if (prod) o.prod = "1";
     return Object.keys(o).length ? o : undefined;
   };
 
@@ -332,11 +352,15 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   };
 
   const handleTest = async () => {
+    const cfg = build();
+    // 手動 OTP 模式：測試連線也要走同一道關卡（後端無 secret 可用，不先問就必定失敗）。
+    const gate = await askOtpCode(cfg);
+    if (gate.cancelled) return;
     setTesting(true);
     setMsg(null);
     const t0 = performance.now();
     try {
-      await api.testConnection(build());
+      await api.testConnection(cfg, gate.code);
       setMsg({ ok: true, text: t("連線成功（{round} ms）", { round: Math.round(performance.now() - t0) }) });
     } catch (e: any) {
       setMsg({ ok: false, text: e?.message ?? t("連線失敗") });
@@ -418,16 +442,16 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("選填")} />
       </Field>
 
+      {/* 正式環境標記：與 kind 無關，放在名稱下方讓它在任何類型都第一眼看得到。 */}
+      <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+        <input type="checkbox" checked={prod} onChange={(e) => setProd(e.target.checked)} />
+        <span>{t("正式環境（production）：側欄標記 PROD，執行查詢前跳確認")}</span>
+      </label>
+
       {external ? (
         <>
-          <Field label={t("驅動")}>
-            <Input value={driver} onChange={(e) => setDriver(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("driver 名稱")} />
-          </Field>
-          <Field label={t("Gateway 網址（base URL）")}>
+          <Field label={t("Gateway 網址（base URL）")} hint={t("只填根網址，登入路徑（/account/login 等）由驅動自己接")}>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} onKeyDown={submitOnEnter} placeholder="https://gateway.internal" />
-          </Field>
-          <Field label={t("環境（env，選填）")}>
-            <Input value={env} onChange={(e) => setEnv(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("例如 n8xuat / otprod")} />
           </Field>
           <div className="flex gap-3">
             <Field label={t("使用者")} className="flex-1">
@@ -437,9 +461,19 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
               <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? t("留空＝不變更") : ""} />
             </Field>
           </div>
-          <Field label={t("OTP secret（2FA，選填）")}>
-            <Input type="password" value={otpSecret} onChange={(e) => setOtpSecret(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? t("留空＝不變更") : t("base32 或 otpauth:// URI")} />
-          </Field>
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <input type="checkbox" checked={otpPrompt} onChange={(e) => setOtpPrompt(e.target.checked)} />
+            <span>{t("每次連線跳窗手動輸入 OTP（不儲存 secret）")}</span>
+          </label>
+          {otpPrompt ? (
+            <div className="text-xs text-fg/40">
+              {t("每次連線 / 測試連線都會要求輸入驗證器當下的 6 碼；本機不留 TOTP secret。連線期間 session 過期需重新連線。")}
+            </div>
+          ) : (
+            <Field label={t("OTP secret（2FA，選填）")} hint={t("存 OS keychain，由 db-kit 自動算出驗證碼")}>
+              <Input type="password" value={otpSecret} onChange={(e) => setOtpSecret(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? t("留空＝不變更") : t("base32 或 otpauth:// URI")} />
+            </Field>
+          )}
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={insecure} onChange={(e) => setInsecure(e.target.checked)} />
             <span>{t("略過 TLS 憑證驗證（內部自簽憑證用）")}</span>

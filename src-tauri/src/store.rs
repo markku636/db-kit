@@ -39,11 +39,27 @@ pub struct AppSettings {
     pub lang: Option<String>,
 }
 
+/// 側欄連線群組。`id` 穩定不變（重新命名不影響歸屬），`name` 是顯示名稱。
+///
+/// 群組刻意做成獨立實體而非「從連線標籤推導」：空群組要能存在——先建群組再把連線拖進去，
+/// 以及「刪除群組」才有意義（推導式的群組一沒成員就自己消失，談不上刪除）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnGroup {
+    pub id: String,
+    pub name: String,
+}
+
 /// 連線設定檔（磁碟格式）。
+///
+/// v1 → v2 只是加欄位（`groups` 與各連線的 `group_id`），兩邊都有 `#[serde(default)]`：
+/// v1 舊檔讀進來就是「全部未分組」，不需要 migration。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectionsFile {
     #[serde(default = "schema_v1")]
     pub version: u32,
+    /// 側欄群組，陣列順序＝顯示順序。
+    #[serde(default)]
+    pub groups: Vec<ConnGroup>,
     #[serde(default)]
     pub connections: Vec<PersistedConnection>,
 }
@@ -52,10 +68,14 @@ fn schema_v1() -> u32 {
     1
 }
 
+/// 寫檔用的 schema 版號。讀取仍接受 v1（缺 `groups` / `group_id` → 視為未分組）。
+const SCHEMA_VERSION: u32 = 2;
+
 impl Default for ConnectionsFile {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: SCHEMA_VERSION,
+            groups: Vec::new(),
             connections: Vec::new(),
         }
     }
@@ -88,9 +108,16 @@ pub struct PersistedConnection {
     pub ssh_auth_method: SshAuthMethod,
     #[serde(default)]
     pub ssh_private_key_path: String,
-    /// 外部 gateway 驅動的非機密設定（driver / base_url / env …）。
+    /// 外部 gateway 驅動的非機密設定（driver / base_url …）。
     #[serde(default)]
     pub options: std::collections::BTreeMap<String, String>,
+    /// 所屬側欄群組（`ConnGroup::id`）；`None` = 未分組。
+    ///
+    /// 刻意只存在磁碟層、不進 `ConnectionConfig`：分組純屬側欄排版，驅動與連線邏輯都不讀它。
+    /// 因此「編輯連線」存檔（`upsert_in`）不會攜帶群組，由 `upsert_in` 保留既有值，
+    /// 只有 `save_layout_in`（拖曳 / 群組操作）能改動。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
 }
 
 fn default_max_conns_pub() -> u32 {
@@ -115,6 +142,8 @@ impl From<&ConnectionConfig> for PersistedConnection {
             ssh_auth_method: c.ssh_auth_method,
             ssh_private_key_path: c.ssh_private_key_path.clone(),
             options: c.options.clone(),
+            // 群組不隨連線設定往返（見 group_id 欄位說明）；upsert_in 會補回既有值。
+            group_id: None,
         }
     }
 }
@@ -174,30 +203,31 @@ async fn ensure_dir_at(dir: &Path) -> AppResult<()> {
 
 /// 載入全部已存連線。檔案不存在或解析失敗都回空清單（優雅降級）。
 pub async fn load_all_in(dir: &Path) -> AppResult<Vec<PersistedConnection>> {
+    Ok(load_file_in(dir).await?.connections)
+}
+
+/// 讀整份設定檔（連線 + 群組）。檔案不存在或解析失敗 → 空的預設值（與既有行為一致）。
+pub async fn load_file_in(dir: &Path) -> AppResult<ConnectionsFile> {
     let path = dir.join(CONNECTIONS_FILE);
     match tokio::fs::read(&path).await {
         Ok(bytes) => match serde_json::from_slice::<ConnectionsFile>(&bytes) {
-            Ok(f) => Ok(f.connections),
+            Ok(f) => Ok(f),
             Err(e) => {
                 eprintln!("[store] connections.json 解析失敗，忽略：{e}");
-                Ok(Vec::new())
+                Ok(ConnectionsFile::default())
             }
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ConnectionsFile::default()),
         Err(e) => Err(AppError::Storage(tf!("讀取連線設定失敗：{e}", e = e))),
     }
 }
 
-/// 原子寫入：先寫 `.tmp` 再 rename，避免中途崩潰損毀檔案。
-pub async fn save_all_in(dir: &Path, conns: &[PersistedConnection]) -> AppResult<()> {
+/// 原子寫入整份設定檔：先寫 `.tmp` 再 rename，避免中途崩潰損毀檔案。
+pub async fn save_file_in(dir: &Path, file: &ConnectionsFile) -> AppResult<()> {
     ensure_dir_at(dir).await?;
     let path = dir.join(CONNECTIONS_FILE);
     let tmp = dir.join(format!("{CONNECTIONS_FILE}.tmp"));
-    let file = ConnectionsFile {
-        version: 1,
-        connections: conns.to_vec(),
-    };
-    let bytes = serde_json::to_vec_pretty(&file)
+    let bytes = serde_json::to_vec_pretty(file)
         .map_err(|e| AppError::Storage(tf!("序列化連線設定失敗：{e}", e = e)))?;
     tokio::fs::write(&tmp, &bytes)
         .await
@@ -208,11 +238,74 @@ pub async fn save_all_in(dir: &Path, conns: &[PersistedConnection]) -> AppResult
     Ok(())
 }
 
+/// 只換掉連線清單，保留既有群組定義。
+///
+/// 讀一次再寫的理由：呼叫端（CLI 的匯入、刪除…）拿到的是 `Vec<PersistedConnection>`，
+/// 沒有群組資訊；若直接以預設值寫回，使用者的群組會在每次存連線時被默默清掉。
+pub async fn save_all_in(dir: &Path, conns: &[PersistedConnection]) -> AppResult<()> {
+    let groups = load_file_in(dir).await?.groups;
+    save_file_in(
+        dir,
+        &ConnectionsFile {
+            version: SCHEMA_VERSION,
+            groups,
+            connections: conns.to_vec(),
+        },
+    )
+    .await
+}
+
+/// 新增或更新單筆連線。
+///
+/// 既有連線就地取代（不是移到清單尾端）：陣列順序即側欄顯示順序，改個密碼就讓連線跳到最後
+/// 會把使用者拖好的排序打亂。群組同理由既有值保留——編輯連線的表單根本沒有群組欄位。
 pub async fn upsert_in(dir: &Path, conn: PersistedConnection) -> AppResult<()> {
-    let mut all = load_all_in(dir).await?;
-    all.retain(|c| c.id != conn.id);
-    all.push(conn);
-    save_all_in(dir, &all).await
+    let mut file = load_file_in(dir).await?;
+    match file.connections.iter().position(|c| c.id == conn.id) {
+        Some(i) => {
+            let group_id = file.connections[i].group_id.clone();
+            file.connections[i] = PersistedConnection { group_id, ..conn };
+        }
+        None => file.connections.push(conn),
+    }
+    file.version = SCHEMA_VERSION;
+    save_file_in(dir, &file).await
+}
+
+/// 套用側欄排版：群組清單（順序＝顯示順序）+ 連線順序與歸屬，單次原子寫入。
+///
+/// `order` 是前端算好的完整結果；沒被列到的連線（前端狀態落後於磁碟時可能發生）原樣接在
+/// 尾端，不會被丟掉。指向不存在群組的 `group_id` 一律歸零成未分組，避免留下孤兒參照。
+pub async fn save_layout_in(
+    dir: &Path,
+    groups: Vec<ConnGroup>,
+    order: &[(String, Option<String>)],
+) -> AppResult<()> {
+    let mut file = load_file_in(dir).await?;
+    let valid = |g: &Option<String>| -> Option<String> {
+        g.as_ref()
+            .filter(|id| groups.iter().any(|x| &x.id == *id))
+            .cloned()
+    };
+
+    let mut remaining = std::mem::take(&mut file.connections);
+    let mut sorted: Vec<PersistedConnection> = Vec::with_capacity(remaining.len());
+    for (id, group_id) in order {
+        if let Some(i) = remaining.iter().position(|c| &c.id == id) {
+            let mut c = remaining.remove(i);
+            c.group_id = valid(group_id);
+            sorted.push(c);
+        }
+    }
+    for mut c in remaining {
+        c.group_id = valid(&c.group_id);
+        sorted.push(c);
+    }
+
+    file.version = SCHEMA_VERSION;
+    file.groups = groups;
+    file.connections = sorted;
+    save_file_in(dir, &file).await
 }
 
 /// 讀取設定目錄下的 JSON 檔。檔案不存在回 `T::default()`。
@@ -274,6 +367,20 @@ pub async fn load_connection_in(dir: &Path, id: &str) -> AppResult<ConnectionCon
 #[cfg(feature = "gui")]
 pub async fn load_all(app: &AppHandle) -> AppResult<Vec<PersistedConnection>> {
     load_all_in(&app_config_dir(app)?).await
+}
+
+#[cfg(feature = "gui")]
+pub async fn load_groups(app: &AppHandle) -> AppResult<Vec<ConnGroup>> {
+    Ok(load_file_in(&app_config_dir(app)?).await?.groups)
+}
+
+#[cfg(feature = "gui")]
+pub async fn save_layout(
+    app: &AppHandle,
+    groups: Vec<ConnGroup>,
+    order: &[(String, Option<String>)],
+) -> AppResult<()> {
+    save_layout_in(&app_config_dir(app)?, groups, order).await
 }
 
 #[cfg(feature = "gui")]
@@ -353,5 +460,144 @@ pub fn kc_get(account: &str) -> Option<String> {
 pub fn kc_delete(account: &str) {
     if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE, account) {
         let _ = entry.delete_credential();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conn(id: &str) -> PersistedConnection {
+        PersistedConnection {
+            id: id.into(),
+            name: id.into(),
+            kind: DbKind::Sqlite,
+            host: "127.0.0.1".into(),
+            port: 0,
+            username: String::new(),
+            database: None,
+            max_connections: 5,
+            ssh_enabled: false,
+            ssh_host: String::new(),
+            ssh_port: 22,
+            ssh_username: String::new(),
+            ssh_auth_method: SshAuthMethod::default(),
+            ssh_private_key_path: String::new(),
+            options: Default::default(),
+            group_id: None,
+        }
+    }
+
+    fn group(id: &str) -> ConnGroup {
+        ConnGroup { id: id.into(), name: id.to_uppercase() }
+    }
+
+    fn tmpdir() -> PathBuf {
+        let d = std::env::temp_dir().join(format!("dbkit-store-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// v1 舊檔（無 groups / group_id）要能照讀，全部視為未分組。
+    #[tokio::test]
+    async fn reads_v1_file_as_ungrouped() {
+        let dir = tmpdir();
+        std::fs::write(
+            dir.join(CONNECTIONS_FILE),
+            r#"{"version":1,"connections":[
+                 {"id":"a","name":"a","kind":"sqlite","host":"h","port":0,"username":""}]}"#,
+        )
+        .unwrap();
+        let f = load_file_in(&dir).await.unwrap();
+        assert!(f.groups.is_empty());
+        assert_eq!(f.connections.len(), 1);
+        assert_eq!(f.connections[0].group_id, None);
+    }
+
+    /// 編輯連線要就地更新，不能把它擠到清單尾端（陣列順序＝側欄順序），且群組要留著。
+    #[tokio::test]
+    async fn upsert_keeps_position_and_group() {
+        let dir = tmpdir();
+        save_file_in(
+            &dir,
+            &ConnectionsFile {
+                version: SCHEMA_VERSION,
+                groups: vec![group("g1")],
+                connections: vec![
+                    PersistedConnection { group_id: Some("g1".into()), ..conn("a") },
+                    conn("b"),
+                    conn("c"),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        // 模擬「編輯連線」存檔：group_id 為 None（前端表單不帶群組）。
+        let mut edited = conn("a");
+        edited.name = "renamed".into();
+        upsert_in(&dir, edited).await.unwrap();
+
+        let f = load_file_in(&dir).await.unwrap();
+        assert_eq!(
+            f.connections.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            ["a", "b", "c"],
+            "就地更新，順序不變"
+        );
+        assert_eq!(f.connections[0].name, "renamed");
+        assert_eq!(f.connections[0].group_id.as_deref(), Some("g1"), "群組保留");
+    }
+
+    /// save_layout_in：套用新順序與歸屬；未列到的連線接在尾端不遺失。
+    #[tokio::test]
+    async fn save_layout_applies_order_and_keeps_unlisted() {
+        let dir = tmpdir();
+        save_all_in(&dir, &[conn("a"), conn("b"), conn("c")]).await.unwrap();
+
+        save_layout_in(
+            &dir,
+            vec![group("g1")],
+            &[("c".into(), Some("g1".into())), ("a".into(), None)],
+        )
+        .await
+        .unwrap();
+
+        let f = load_file_in(&dir).await.unwrap();
+        assert_eq!(
+            f.connections.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            ["c", "a", "b"],
+            "未列到的 b 接在尾端"
+        );
+        assert_eq!(f.connections[0].group_id.as_deref(), Some("g1"));
+        assert_eq!(f.connections[1].group_id, None);
+        assert_eq!(f.version, SCHEMA_VERSION);
+    }
+
+    /// 刪除群組（新清單不含它）→ 指向它的連線自動歸零成未分組，不留孤兒參照。
+    #[tokio::test]
+    async fn dropping_a_group_ungroups_its_members() {
+        let dir = tmpdir();
+        save_layout_in(&dir, vec![group("g1")], &[]).await.unwrap();
+        save_all_in(&dir, &[PersistedConnection { group_id: Some("g1".into()), ..conn("a") }])
+            .await
+            .unwrap();
+
+        // 新排版不再包含 g1。
+        save_layout_in(&dir, vec![], &[("a".into(), Some("g1".into()))]).await.unwrap();
+
+        let f = load_file_in(&dir).await.unwrap();
+        assert!(f.groups.is_empty());
+        assert_eq!(f.connections[0].group_id, None, "孤兒 group_id 歸零");
+    }
+
+    /// 存連線不得清掉群組定義（save_all_in 只換連線清單）。
+    #[tokio::test]
+    async fn save_all_preserves_groups() {
+        let dir = tmpdir();
+        save_layout_in(&dir, vec![group("g1"), group("g2")], &[]).await.unwrap();
+        save_all_in(&dir, &[conn("a")]).await.unwrap();
+
+        let f = load_file_in(&dir).await.unwrap();
+        assert_eq!(f.groups.len(), 2, "群組定義保留");
     }
 }

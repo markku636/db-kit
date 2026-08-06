@@ -342,6 +342,8 @@ pub fn run() {
             commands::backup_run,
             commands::backup_restore,
             commands::list_saved_connections,
+            commands::list_connection_groups,
+            commands::save_connection_layout,
             commands::save_connection,
             commands::remove_saved_connection,
             commands::list_schedules,

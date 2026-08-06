@@ -27,6 +27,21 @@ export interface ConnectionConfig {
   // 外部 gateway 驅動（kind === "external"）
   options?: Record<string, string>;
   otp_secret?: string;
+  // 所屬側欄群組（ConnGroup.id）；null / 未設 = 未分組。
+  // 唯讀欄位：由後端讀出，改動只能透過 api.saveConnectionLayout（saveConnection 不會動它）。
+  group_id?: string | null;
+}
+
+/// 側欄連線群組。id 穩定不變（重新命名不影響歸屬）。
+export interface ConnGroup {
+  id: string;
+  name: string;
+}
+
+/// 側欄排版中一筆連線的擺放位置。
+export interface ConnPlacement {
+  id: string;
+  group_id: string | null;
 }
 
 export interface QueryResult {
@@ -867,11 +882,28 @@ export interface ParsedUrl {
   options: Record<string, string>;
 }
 
+/**
+ * 此連線是否標記為正式環境（`options.prod`）。
+ * 標記只影響 UI 防呆（查詢前確認、側欄標記），不改變任何連線 / 查詢行為。
+ */
+export function isProdConn(config: ConnectionConfig): boolean {
+  return config.options?.prod === "1";
+}
+
+/**
+ * 此連線是否採「每次連線手動輸入 OTP」（外部 gateway 的 `options.otp_prompt`）。
+ * 為真時前端必須先跳窗要 6 碼驗證碼，再帶 otpCode 呼叫 connect / testConnection——
+ * 驗證碼一次性、不入 keychain，故不能像密碼那樣由後端 hydrate 補回。
+ */
+export function needsOtpPrompt(config: ConnectionConfig): boolean {
+  return config.kind === "external" && config.options?.otp_prompt === "1";
+}
+
 // 後端 command 包裝
 export const api = {
-  testConnection: (config: ConnectionConfig) =>
-    invoke<void>("test_connection", { config }),
-  connect: (config: ConnectionConfig) => invoke<void>("connect", { config }),
+  testConnection: (config: ConnectionConfig, otpCode?: string) =>
+    invoke<void>("test_connection", { config, otpCode }),
+  connect: (config: ConnectionConfig, otpCode?: string) => invoke<void>("connect", { config, otpCode }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   // 清除外部 gateway 等驅動的查詢快取（供「重新整理」強制重抓）。
   clearCache: (id: string) => invoke<void>("clear_cache", { id }),
@@ -897,6 +929,10 @@ export const api = {
   // 連線設定持久化（密碼存 keychain，磁碟不含密碼）
   listSavedConnections: () =>
     invoke<ConnectionConfig[]>("list_saved_connections"),
+  listConnectionGroups: () => invoke<ConnGroup[]>("list_connection_groups"),
+  // 套用側欄排版：整份群組清單 + 連線順序與歸屬，後端單次原子寫入。
+  saveConnectionLayout: (groups: ConnGroup[], order: ConnPlacement[]) =>
+    invoke<void>("save_connection_layout", { groups, order }),
   saveConnection: (config: ConnectionConfig) =>
     invoke<void>("save_connection", { config }),
   removeSavedConnection: (id: string) =>

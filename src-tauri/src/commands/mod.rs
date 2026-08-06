@@ -122,13 +122,29 @@ pub fn parse_connection_url(url: String) -> AppResult<crate::db::conn_url::Parse
     Ok(p)
 }
 
+/// 把使用者本次手動輸入的 OTP 驗證碼放進 `options["otp_code"]`，供外部 gateway 驅動取用。
+///
+/// 刻意走「連線請求當下的這份 config」而非 keychain / PersistedConnection：
+/// 此 config 只活在這次 connect / test，永遠不會被 `save_connection` 寫進 connections.json
+///（存檔走對話框另一份 config），所以一次性碼不會落地。
+fn inject_otp_code(config: &mut ConnectionConfig, otp_code: Option<String>) {
+    if let Some(code) = otp_code {
+        let code = code.trim();
+        if !code.is_empty() {
+            config.options.insert("otp_code".into(), code.to_string());
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn test_connection(
     state: State<'_, AppState>,
     config: ConnectionConfig,
+    otp_code: Option<String>,
 ) -> AppResult<()> {
     let mut config = config;
     hydrate_secrets(&mut config);
+    inject_otp_code(&mut config, otp_code);
     state.manager.test(&config).await
 }
 
@@ -137,9 +153,11 @@ pub async fn connect(
     app: AppHandle,
     state: State<'_, AppState>,
     config: ConnectionConfig,
+    otp_code: Option<String>,
 ) -> AppResult<()> {
     let mut config = config;
     hydrate_secrets(&mut config);
+    inject_otp_code(&mut config, otp_code);
     let id = config.id.clone();
     #[cfg(feature = "kafka")]
     let is_kafka = matches!(config.kind, crate::db::DbKind::Kafka);
@@ -163,6 +181,35 @@ pub async fn connect(
 #[tauri::command]
 pub async fn list_saved_connections(app: AppHandle) -> AppResult<Vec<PersistedConnection>> {
     store::load_all(&app).await
+}
+
+#[tauri::command]
+pub async fn list_connection_groups(app: AppHandle) -> AppResult<Vec<store::ConnGroup>> {
+    store::load_groups(&app).await
+}
+
+/// 側欄一筆連線的擺放位置（前端算好的完整排版結果的一項）。
+#[derive(serde::Deserialize)]
+pub struct ConnPlacement {
+    pub id: String,
+    /// 所屬群組 id；`None` = 未分組。
+    #[serde(default)]
+    pub group_id: Option<String>,
+}
+
+/// 套用側欄排版（拖曳排序 / 移動群組 / 新增・重新命名・刪除群組）。
+///
+/// 前端一律送出「完整」的群組清單與連線順序，後端整份取代並原子寫入——增量指令
+/// （move_connection / delete_group…）在拖曳這種高頻連續操作下容易讓兩邊狀態岔開。
+#[tauri::command]
+pub async fn save_connection_layout(
+    app: AppHandle,
+    groups: Vec<store::ConnGroup>,
+    order: Vec<ConnPlacement>,
+) -> AppResult<()> {
+    let order: Vec<(String, Option<String>)> =
+        order.into_iter().map(|p| (p.id, p.group_id)).collect();
+    store::save_layout(&app, groups, &order).await
 }
 
 #[tauri::command]
