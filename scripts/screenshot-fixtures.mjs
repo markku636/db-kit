@@ -300,6 +300,17 @@ export const SCHEMA_COLUMNS = {
   payments: ["payment_id", "order_id", "method", "amount", "paid_at"],
 };
 
+// 結構快取。這裡存的是「年齡」而不是絕對時刻，因為徽章顯示的是相對時間，而它是拿
+// 瀏覽器真正的 Date.now() 去算的——寫死一個絕對時刻的話，今天顯示「2 小時前」、
+// 下個月就變成「36 天前」，截圖與斷言全部漂掉。年齡固定，畫面才固定。
+// （絕對時刻由 shim 在瀏覽器內以 Date.now() - 年齡 算出，見 tauri-shim.mjs。）
+export const SCHEMA_CACHE_AGE_MS = 2 * 60 * 60 * 1000;
+
+export const SCHEMA_CACHE_STATS = {
+  dir: "C:\\Users\\demo\\AppData\\Roaming\\dev.dbkit.app\\schema-cache",
+  entries: [{ conn_id: "c-mysql", databases: 2, tables: 5, bytes: 3_412 }],
+};
+
 // localStorage 種子：連線色標 / 唯讀 / 釘選 / 查詢歷史 / 收藏查詢
 export const STORAGE_SEED = {
   "db-kit:connColors": { "c-mysql": "#ef4444", "c-pg": "#22c55e" },

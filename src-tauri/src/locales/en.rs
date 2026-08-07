@@ -397,6 +397,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "此 build 未編入外部驅動「{other}」" => "This build does not include the external driver \"{other}\"",
 
         // ---- db/mod.rs：trait 預設 Unsupported + 欄位驗證 ----
+        "此連線不支援取消執行中的查詢" => "This connection does not support cancelling a running query",
         "此資料庫不支援鍵結構編輯" => "This database does not support key structure editing",
         "此資料庫不支援查詢計畫分析" => "This database does not support query plan analysis",
         "此資料庫不支援欄位統計" => "This database does not support column statistics",

@@ -3,10 +3,10 @@ use sqlx::{Column, Row, SqlitePool, TypeInfo, ValueRef};
 use std::time::Duration;
 
 use crate::db::{
-    filter_op_sql, finalize_hits, make_snippet, op_needs_value, sqlx_db_message, AlterOp, CellEdit,
+    filter_op_sql, finalize_hits, group_table_columns, make_snippet, op_needs_value, sqlx_db_message, AlterOp, CellEdit,
     ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable,
     Filter, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, SearchHit,
-    SearchOptions, Sort, SortDir, TableInfo, ValidationReport,
+    SearchOptions, Sort, SortDir, TableColumns, TableInfo, ValidationReport,
 };
 use crate::error::{AppError, AppResult};
 
@@ -78,6 +78,38 @@ impl DatabaseDriver for SqliteDriver {
                 Some(TableInfo { name, kind: ttype })
             })
             .collect())
+    }
+
+    async fn schema_columns(&self, database: &str) -> AppResult<Vec<TableColumns>> {
+        // sqlite_master 與 pragma_table_info() 這個 table-valued function 做 cross join，
+        // 一次查完整庫欄名，取代預設實作的逐表 PRAGMA。TVF 自 SQLite 3.16 起提供，
+        // sqlx 內建的 libsqlite3 遠新於此；仍保留退回逐表的路徑，免得單一查詢失敗就整個沒提示。
+        let rows = sqlx::query(
+            "SELECT m.name, p.name FROM sqlite_master m, pragma_table_info(m.name) p \
+             WHERE m.type IN ('table','view') AND m.name NOT LIKE 'sqlite_%' \
+             ORDER BY m.name, p.cid",
+        )
+        .fetch_all(&self.pool)
+        .await;
+        let rows = match rows {
+            Ok(r) => r,
+            Err(_) => {
+                let tables = self.list_tables(database).await?;
+                let mut out = Vec::with_capacity(tables.len());
+                for t in tables {
+                    let columns = self
+                        .table_columns(database, &t.name)
+                        .await
+                        .map(|cols| cols.into_iter().map(|c| c.name).collect())
+                        .unwrap_or_default();
+                    out.push(TableColumns { table: t.name, columns });
+                }
+                return Ok(out);
+            }
+        };
+        Ok(group_table_columns(rows.iter().filter_map(|r| {
+            Some((r.try_get::<String, _>(0).ok()?, r.try_get::<String, _>(1).ok()?))
+        })))
     }
 
     // SQLite 無預存程序 / 函式，僅有觸發器（存於 sqlite_master）。

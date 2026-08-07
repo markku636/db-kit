@@ -9,7 +9,9 @@ import TableView, { CellInspector } from "./TableView";
 import InfoPanel from "./InfoPanel";
 import AssistantPanel from "./AssistantPanel";
 import type { SqlSubmit, SqlEditorHandle } from "./SqlEditor";
-import { useSqlSchema } from "./useSqlSchema";
+import { invalidateSchemaCache, useSqlSchemaState } from "./useSqlSchema";
+import { SchemaCacheBadge } from "./SchemaCacheBadge";
+import { SchemaCacheSettings } from "./SchemaCacheSettings";
 import { useAssistant } from "./assistant";
 import type { PaletteItem } from "./CommandPalette";
 import lazyOverlay from "./ui/lazyOverlay";
@@ -29,12 +31,12 @@ import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
   resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand, isReadOnlyRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
-  quoteIdent, qualifiedName, isMysqlFamily, supportsRoutines,
+  quoteIdent, qualifiedName, isMysqlFamily, supportsRoutines, supportsQueryEditorKind,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
   formatSql, minifySql, transformKeywordCase, buildUseDatabase, hasExecutableSql,
-  extractNamedParams, substituteNamedParams, isInternalKafkaTopic,
+  extractNamedParams, substituteNamedParams, isInternalKafkaTopic, suggestQueryName,
 } from "./sql";
 import type { SavedQuery } from "./sql";
 import Select from "./ui/Select";
@@ -827,6 +829,7 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
             {t("每天最多向 GitHub 查一次最新版本（延後於啟動 10 秒後進行）；離線 / 內網環境可關閉。\r\n            「關於」對話框的手動檢查不受影響。")}
           </p>
         </div>
+        <SchemaCacheSettings />
       </div>
     </Modal>
   );
@@ -956,20 +959,25 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
 
   return (
     <div ref={barRef} className="h-16 bg-bar border-b border-fg/10 flex items-center px-3 gap-1">
-      <div className="font-semibold text-fg/90 mr-4 pl-1 flex items-baseline gap-1.5 shrink-0">
-        <span>{APP_NAME}</span>
-        <button
-          type="button"
-          onClick={onAbout}
-          title={t("版本 {version} · 點擊開啟「關於 {app}」", { version: __APP_VERSION__, app: APP_NAME })}
-          className="text-[11px] font-normal text-fg/40 tabular-nums hover:text-fg/70 hover:underline focus-visible:outline-2 focus-visible:outline-accent/60 rounded"
-        >v{__APP_VERSION__}</button>
+      {/* 標題塊分兩行：上排「名稱＋目前版本」，下排才是「有新版」提示。
+          三者擠在同一行時，更新提示會被讀成版本號的一部分（DB Kit v0.17.2 ● 有新版 v0.21.0），
+          而且會把後面的工具列往右推、更早觸發 compact 純圖示模式。 */}
+      <div className="mr-4 pl-1 flex flex-col justify-center shrink-0 leading-tight">
+        <div className="font-semibold text-fg/90 flex items-baseline gap-1.5">
+          <span>{APP_NAME}</span>
+          <button
+            type="button"
+            onClick={onAbout}
+            title={t("版本 {version} · 點擊開啟「關於 {app}」", { version: __APP_VERSION__, app: APP_NAME })}
+            className="text-[11px] font-normal text-fg/40 tabular-nums hover:text-fg/70 hover:underline focus-visible:outline-2 focus-visible:outline-accent/60 rounded"
+          >v{__APP_VERSION__}</button>
+        </div>
         {update && (
           <button
             type="button"
             onClick={() => api.openExternal(update.url).catch(() => {})}
             title={t("點擊前往下載 v{version}", { version: update.version })}
-            className="self-center text-[11px] font-medium text-accent hover:underline inline-flex items-center gap-1 focus-visible:outline-2 focus-visible:outline-accent/60 rounded"
+            className="mt-0.5 self-start text-[11px] font-medium text-accent hover:underline inline-flex items-center gap-1 focus-visible:outline-2 focus-visible:outline-accent/60 rounded"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-accent" aria-hidden />
             {t("有新版 v{version}", { version: update.version })}
@@ -1065,7 +1073,9 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
       ["Tab", t("縮排")],
       ["Ctrl+/", t("切換 SQL 行註解")],
       ["Ctrl+Shift+F", t("格式化 SQL")],
+      ["Ctrl+Shift+A", t("開 / 關 AI 生成查詢列（本地 Claude CLI）")],
       ["Ctrl+S / Ctrl+O", t("另存 / 開啟 .sql 檔")],
+      ["Esc", t("停止執行中的查詢（已完成的結果保留）")],
       [t("工具列下拉"), t("切換目前連線 / 資料庫；「視覺化解釋」看執行計畫")],
     ]],
     [t("資料表格"), [
@@ -1585,6 +1595,8 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
 
   const doDisconnect = async (id: string) => {
     await api.disconnect(id);
+    // 只丟行程內的結構快取，磁碟上的留著：下次連線時仍能立即補全，再於背景重抓一次。
+    invalidateSchemaCache(id);
     useStore.getState().markDisconnected(id);
     expandConn(id); // 收合是「已連線」節點的狀態，斷線後不留著（下次連上即展開）
     setDatabases((d) => ({ ...d, [id]: [] }));
@@ -1652,6 +1664,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     if (!connectedIds.has(id)) return;
     try {
       await api.clearCache(id).catch(() => {}); // 外部 gateway：清快取以強制重抓（其餘驅動 no-op）
+      invalidateSchemaCache(id); // 結構快取另計：下次用到時重抓（api.clearCache 只管驅動的行程內快取）
       const dbs = await api.listDatabases(id);
       setDatabases((d) => ({ ...d, [id]: dbs }));
       toast.success(t("已重新整理"));
@@ -1788,6 +1801,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     setDbLoading(key, true);
     try {
       await api.clearCache(connId).catch(() => {}); // 外部 gateway：清快取以強制重抓（其餘驅動 no-op）
+      // 這是所有「表清單變了」的匯流點（建表 / 刪表 / DDL 後都會走到），順手讓該庫的結構快取失效，
+      // 自動完成才不會繼續提示已經不存在的欄位。
+      invalidateSchemaCache(connId, db);
       const objs = await fetchDbObjects(connId, cfg.kind, db);
       setExpandedDbs((e) => ({ ...e, [key]: objs }));
     } catch (e: any) {
@@ -2483,9 +2499,14 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     connections.find((c) => connectedIds.has(c.id)) ?? null;
 
   return (
-    <div style={{ width }} className="shrink-0 bg-panel overflow-y-auto text-sm flex flex-col">
+    // 外殼只負責排版（column flex）與裁切，捲動交給下方那層獨立的視窗 div。
+    // 兩者曾經是同一個元素（既是 column flex 容器又是捲動容器），連線多到滿出頁面時
+    // 子項會先被 flex-shrink 壓縮、捲動高度以壓縮後的盒計算 → 最後幾筆永遠滾不到。
+    <div style={{ width }} className="shrink-0 bg-panel text-sm flex flex-col min-h-0 overflow-hidden">
       {connections.length > 0 && (
-        <div className="sticky top-0 z-10 bg-panel p-2 border-b border-fg/10">
+        // 搜尋列改成 shrink-0 的固定列（原本靠 sticky 疊在捲動內容上）：對使用者一樣永遠可見，
+        // 但不再參與捲動容器的 overflow 計算。
+        <div className="shrink-0 bg-panel p-2 border-b border-fg/10">
           <div className="relative">
             <Icon icon={Search} size={13} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-fg/35" />
             <input
@@ -2522,6 +2543,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
           </div>
         </div>
       )}
+      {/* 捲動視窗：普通 block（非 flex），高度由 flex-1 + min-h-0 給定，
+          overscroll-contain 讓滾到底時不把捲動傳給主區；pb-2 讓最後一筆不貼齊邊緣。 */}
+      <div data-sidebar-scroll="" className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-2">
       {q.length >= 2 && searchTarget && (searchBusy || searchHits !== null) && (() => {
         // 跨資料庫表名搜尋結果（含尚未展開的庫），依資料庫分組。點擊 → 開表 + 樹中展開定位。
         const hits = searchHits ?? [];
@@ -2970,7 +2994,10 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
           </div>
         );
       })}
+      </div>
 
+      {/* 以下皆為 fixed 定位的選單 / 對話框：放在捲動視窗之外，不受其 overflow 影響，
+          也不會被算進捲動高度。 */}
       {groupMenu && (
         <MenuPanel x={groupMenu.x} y={groupMenu.y} onClose={() => setGroupMenu(null)}>
           <MenuItems
@@ -3015,7 +3042,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                       [t("重新整理資料庫"), () => refreshDbs(menu.id), false] as [string, () => void, boolean],
                     ]
                   : []),
-                ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres" || menuConn.kind === "sqlite")
+                // 新增查詢：所有有查詢編輯器的 kind 都給（原本只列 MySQL 家族 / PG / SQLite，
+                // SQL Server / Oracle / gateway / Mongo / Redis / ES 右鍵都看不到這一項）。
+                ...(connectedIds.has(menu.id) && supportsQueryEditorKind(menuConn.kind)
                   ? [[t("新增查詢"), () => newQueryForDb(menuConn.id, menuConn.database ?? "", menuConn.kind), false] as [string, () => void, boolean]]
                   : []),
                 ...(connectedIds.has(menu.id) && menuConn.kind === "redis"
@@ -3886,7 +3915,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const supportsSqlEditor = supportsExplain || kind === "external";
   // Kafka / RabbitMQ 沒有查詢語言（driver 的 query() 一律回 Unsupported）：不給可打字的編輯器與「執行」鈕，
   // 改在編輯器位置放導引卡（開主題 / 佇列瀏覽器、叢集總覽、發布訊息），避免呈現一個按了必錯的輸入框。
-  const supportsQueryEditor = kind !== "kafka" && kind !== "rabbitmq";
+  const supportsQueryEditor = supportsQueryEditorKind(kind);
   // 視覺化解釋（解釋分頁）支援的類型：能取得 JSON 執行計畫者（MySQL / PostgreSQL / 外部 gateway；SQLite 無）。
   const supportsVisualExplain = !!kind && (isMysqlFamily(kind) || kind === "postgres" || kind === "external");
   // Mongo explain：獨立 gate —— 不可把 mongo 加進 EXPLAIN_KINDS（那同時 gate SQL 切割 / 參數 / 編輯器選擇）。
@@ -3900,7 +3929,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 帶進去當 databaseOverride，讓自動完成對準目前選的庫（如 Siebog），與實際 USE queryDb 執行一致；
   // 未選（空字串）→ undefined → useSqlSchema 回退連線預設庫。postgres 的 queryDb 是 schema 非 DB，維持原行為。
   const schemaDb = kind && (isMysqlFamily(kind) || kind === "external") ? (queryDb || undefined) : undefined;
-  const schema = useSqlSchema(activeId, kind, schemaDb);
+  const schemaState = useSqlSchemaState(activeId, kind, schemaDb);
+  const schema = schemaState.schema;
   const [editorSel, setEditorSel] = useState<string | null>(null);
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
@@ -3942,19 +3972,49 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 執行中的即時回饋：經過時間（250ms 更新）與多語句進度「第 N/M 條」。
   const [liveMs, setLiveMs] = useState<number | null>(null);
   const [runProgress, setRunProgress] = useState<{ done: number; total: number } | null>(null);
-  // 軟取消：使用者按「停止」後，多語句批次在語句邊界中止（已完成的結果保留）。
-  // 單條長查詢無法中斷本端等待（後端取消為 deferred），由查詢逾時設定兜底。
+  // 「停止」旗標：多語句批次據此在語句邊界中止（已完成的結果保留），
+  // 且讓取消造成的 DB 錯誤（MySQL 1317 / PG 57014）不被當成查詢失敗顯示成紅色橫幅。
   const cancelRef = useRef(false);
+  // 執行序號：每次執行遞增。進行中的那輪把自己的序號記在閉包裡，
+  // 每個 await 之後比對——序號已被後續執行蓋掉（stale）就不再寫任何 state，
+  // 避免「停止後馬上跑下一條」時舊查詢遲到的結果覆蓋新結果。
+  const runSeqRef = useRef(0);
+  // 停止：① 請後端做伺服器端真取消（MySQL KILL QUERY / PG pg_cancel_backend）；
+  // ② 不論後端支不支援，都立刻結束本端等待讓 UI 回到閒置。
+  // 舊做法只設 cancelRef 旗標，而旗標只在多語句迴圈的語句邊界被檢查 —— 單條長查詢
+  //（external gateway 更是不做前端切分、永遠只有一條）按下去完全沒有反應。
+  const stopRun = useCallback(() => {
+    cancelRef.current = true;
+    setRunning(false);
+    setRunProgress(null);
+    if (!activeId) return;
+    api.cancelQuery(activeId)
+      .then((n) => {
+        if (n > 0) toast.success(t("已送出取消，伺服器端查詢已中止"));
+        else toast.info(t("已停止等待（查詢已結束或尚未送達伺服器）"));
+      })
+      .catch((e: any) => {
+        // ERR_UNSUPPORTED＝此驅動沒有旁路取消通道（SQLite / Redis / 外部 gateway…）。
+        // 其他錯誤（如連線池被長查詢佔滿、取不到連線送 KILL）要照實說，別誤報成「不支援」。
+        // 兩種情況本端都已停等，但伺服器端可能還在跑 → 導引使用者用行程清單手動終止。
+        if (e?.code === "ERR_UNSUPPORTED") toast.info(t("已停止等待；此連線不支援伺服器端取消，查詢可能仍在執行（可用行程清單終止）"));
+        else toast.error(t("已停止等待，但送出取消失敗：{msg}；查詢可能仍在執行（可用行程清單終止）", { msg: e?.message ?? String(e) }));
+      });
+  }, [activeId, t]);
   useEffect(() => {
     if (!running) { setLiveMs(null); return; }
     const t0 = performance.now();
     setLiveMs(0);
     const timer = window.setInterval(() => setLiveMs(performance.now() - t0), 250);
-    // 編輯器聚焦時 Esc 也會冒泡到 window：執行中按 Esc = 停止。
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancelRef.current = true; };
-    window.addEventListener("keydown", onKey);
-    return () => { window.clearInterval(timer); window.removeEventListener("keydown", onKey); };
+    return () => window.clearInterval(timer);
   }, [running]);
+  useEffect(() => {
+    if (!running) return;
+    // 編輯器聚焦時 Esc 也會冒泡到 window：執行中按 Esc = 停止（與紅色停止鈕同一條路徑）。
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") stopRun(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [running, stopRun]);
   const [history, setHistory] = useState<QueryHistoryEntry[]>(loadQueryHistory);
   const [showHistory, setShowHistory] = useState(false);
   const [historyFilter, setHistoryFilter] = useState("");
@@ -3965,6 +4025,49 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [showSnippets, setShowSnippets] = useState(false);
   // 工具列「更多」溢位選單：收納次要動作（開啟 / 另存 / 收藏 / 壓縮 / 大小寫 / 分析 / 視覺化解釋），讓主列不擁擠。
   const [showMore, setShowMore] = useState(false);
+  // 工具列寬度自適應（三段）：0 圖示+文字 → 1 次要鈕只留圖示 → 2 無下拉的次要鈕整顆折進「更多」。
+  //
+  // 為何量測而非寫死斷點：標籤寬度取決於語言與連線種類（Kibana / AI 生成 等按鈕按 kind 出現），
+  // 固定 px 斷點對哪一組都不會剛好 —— 與標題列 Toolbar 同一個理由、同一套做法。
+  //
+  // 遲滯：降階後 scrollWidth 會縮小，直接拿它判斷會在臨界點來回震盪。故記住「該階所需的完整寬度」，
+  // 只有可用寬度重新超過前一階的需求才升回去。
+  const tbRef = useRef<HTMLDivElement>(null);
+  const [barTier, setBarTier] = useState(0);
+  const tierNeedRef = useRef<[number, number]>([0, 0]);
+  // 換語言 / 換連線種類 → 按鈕組成與標籤長度都變了，先前記住的需求寬度失效，重量一次。
+  useLayoutEffect(() => { tierNeedRef.current = [0, 0]; setBarTier(0); }, [t, kind]);
+  useLayoutEffect(() => {
+    const el = tbRef.current;
+    if (!el) return;
+    const measure = () => {
+      const kids = Array.from(el.children) as HTMLElement[];
+      if (!kids.length) return;
+      // 以「有沒有換行」判斷放不放得下，而不是 scrollWidth > clientWidth：後者要配 nowrap +
+      // overflow-hidden，而 justify-end 的溢位是往「左邊」擠 —— 放不下時會把最左邊的
+      // 新查詢 / 歷史 / 收藏星星整個裁掉，既看不到也點不到（比換行糟得多）。
+      // 保留 flex-wrap，最壞情況只是退回換行。
+      // 容差 12px：分隔線有 my-1，offsetTop 天生比按鈕差 4px，真正換行則差一整個列高（≈26px）。
+      const tops = kids.map((k) => k.offsetTop);
+      const wrapped = Math.max(...tops) - Math.min(...tops) > 12;
+      if (wrapped && barTier < 2) {
+        tierNeedRef.current[barTier] = el.clientWidth; // 這個寬度裝不下本階
+        setBarTier((n) => Math.min(2, n + 1));
+      } else if (!wrapped && barTier > 0) {
+        const need = tierNeedRef.current[barTier - 1];
+        // 嚴格大於：等於當初裝不下的寬度就升回去會立刻再降，卡在震盪。
+        if (need && el.clientWidth > need) setBarTier((n) => Math.max(0, n - 1));
+      }
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [barTier, t, kind]);
+  // dense：次要按鈕的文字標籤退到 title tooltip；folded：沒有下拉面板的次要按鈕整顆折進「更多」。
+  // 擁有下拉面板者（歷史 / 收藏 / 片段）不折 —— 把一整片面板塞進選單項只會更難用。
+  const dense = barTier >= 1;
+  const folded = barTier >= 2;
   // 結果列的「複製 ▾」「匯出 ▾」溢位選單：四種複製格式 + 全部結果集動作都收進下拉，主列只留三顆。
   const [showCopyMenu, setShowCopyMenu] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -4206,13 +4309,19 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     cancelRef.current = false;
     setRunProgress(null);
     setRunning(true);
+    // 本輪的執行序號；每個 await 之後以 stale() 檢查是否已被後續執行蓋掉
+    //（按「停止」會立刻解鎖執行鈕，使用者可能在舊查詢還沒回來時就跑下一條）。
+    const myRun = ++runSeqRef.current;
+    const stale = () => runSeqRef.current !== myRun;
     const t0 = performance.now();
     try {
       if (mode === "analyze") {
         // 開跑即清掉上次結果：執行期間顯示 loading 空狀態，避免舊資料被誤認為本次結果。
         setResult(null);
         setResultView(null);
-        setResult(await api.explainQuery(activeId, q));
+        const analyzed = await api.explainQuery(activeId, q);
+        if (stale()) return;
+        setResult(analyzed);
       } else {
         // SQL：拆成多條語句依序執行（sqlx 不允許單次多語句）。
         // 非 SQL（Mongo / Redis）維持單一指令。純註解 / 空白片段已於切分時濾除。
@@ -4309,7 +4418,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             // 多結果集入口：單結果集驅動回單元素陣列（行為同 runQuery）；
             // external（gateway）整批一次呼叫、MSSQL 的 EXEC 多結果集則回多元素。
             resArr = await api.runQueryMulti(activeId, sentStatements[si]);
+            if (stale()) return;
           } catch (e: any) {
+            if (stale()) return;
+            // 使用者按了「停止」→ 這個錯誤是伺服器端取消造成的（MySQL 1317 / PG 57014），
+            // 不是查詢失敗：安靜跳出迴圈，前面已完成的結果集照常顯示（停止的 toast 已在 stopRun 發過）。
+            if (cancelRef.current) break;
             const msg = e?.message ?? String(e);
             runs.push({ sql: userStatements[si], ok: false, message: msg, ms: performance.now() - tStmt });
             setSummary(snapshot());
@@ -4372,14 +4486,16 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           }
         }
         // 有任何結果集 → 全部「同時」顯示（SSMS 風格，多個時堆疊）；否則顯示累計影響列數。
+        // 被停止且一條都沒跑完時不寫「影響 0 列」的假結果（會被誤讀為查詢真的回了 0 列）。
         if (sets.length > 0) applyResultSets(sets);
-        else setResult({ columns: [], rows: [], rows_affected: affected }, q);
+        else if (!cancelRef.current) setResult({ columns: [], rows: [], rows_affected: affected }, q);
         setSummary(snapshot());
-        if (userStatements.length > 1) toast.success(t("已執行 {length} 條語句", { length: userStatements.length }));
+        if (!cancelRef.current && userStatements.length > 1) toast.success(t("已執行 {length} 條語句", { length: userStatements.length }));
       }
       setElapsed(performance.now() - t0);
       setHistory((h) => pushQueryHistory(h, q, connections.find((c) => c.id === activeId)?.name));
     } catch (e: any) {
+      if (stale()) return;
       setElapsed(performance.now() - t0);
       setErr(e?.message ?? (mode === "analyze" ? t("分析失敗") : t("查詢失敗")));
       setErrSql(q); // 整批（完整編輯器內容）—供安全一鍵貼回
@@ -4387,8 +4503,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       // 中途失敗但已寫入部分結果集（keepResults）→ 保留顯示；其餘照舊清空。
       if (!e?.keepResults) setResult(null);
     } finally {
-      setRunning(false);
-      setRunProgress(null);
+      // 已被後續執行蓋掉 → 執行狀態屬於新的那一輪，別把它的 running 關掉。
+      if (!stale()) {
+        setRunning(false);
+        setRunProgress(null);
+      }
     }
   };
 
@@ -4469,6 +4588,30 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     useStore.getState().openSavedManager({ seedSql: q });
   };
   const deleteSaved = (name: string) => useStore.getState().removeSavedQuery(name);
+
+  // 目前編輯器內容是否已收藏 —— 以「SQL 內容」比對而非名稱：使用者按星星時想的是
+  // 「這段查詢存了沒」，名稱只是事後貼上去的標籤。
+  const savedEntry = useMemo(() => {
+    const q = sql.trim();
+    return q ? saved.find((x) => x.sql.trim() === q) ?? null : null;
+  }, [saved, sql]);
+  // 一鍵收藏 / 取消收藏：不跳對話框，名稱由 SQL 自動推導（要改名 / 分組走收藏清單的鉛筆）。
+  // 原本只有「更多 → 收藏目前查詢」一條路，要點兩層選單再填一個對話框才存得起來。
+  const toggleSaveCurrent = () => {
+    const q = sql.trim();
+    if (!q) {
+      toast.info(t("沒有可收藏的 SQL"));
+      return;
+    }
+    if (savedEntry) {
+      useStore.getState().removeSavedQuery(savedEntry.name);
+      toast.info(t("已取消收藏「{name}」", { name: savedEntry.name }));
+      return;
+    }
+    const name = suggestQueryName(q, saved.map((x) => x.name));
+    useStore.getState().addSavedQuery({ name, sql: q });
+    toast.success(t("已收藏「{name}」，可在收藏清單改名 / 分組", { name }));
+  };
 
   // 片段：傳給編輯器的精簡形（穩定 identity，避免每次 render 重建編輯器 extensions）。
   const editorSnippets = useMemo(
@@ -4716,47 +4859,57 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     // 會撐破視窗（畫過狀態列）；鎖住後高度交給內層「結果」容器的 overflow-auto 捲動。
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
       <div className="shrink-0">
-        <div className="flex items-center justify-between px-3 py-1.5 bg-bar">
+        {/* flex-wrap：面板被側欄 / AI 助手夾窄時整列換行，而不是把左側的連線 / 資料庫壓扁。 */}
+        <div className="flex flex-wrap items-center justify-between gap-y-1 px-3 py-1.5 bg-bar">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-xs text-fg/40 shrink-0">{t("查詢")}</span>
             {runnableConns.length > 0 && (
-              <Select
-                selectSize="sm"
-                value={activeId ?? ""}
-                onChange={(e) => useStore.getState().setActive(e.target.value)}
-                title={t("目前連線：查詢執行的目標連線（Ctrl+Shift+N 新增連線）")}
-                className="max-w-[180px] text-xs"
-              >
-                {runnableConns.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </Select>
+              // 寬度下限給在「外層」：Select 的 className 是套在 <select> 上（w-full），
+              // 真正被 flex 壓扁的是它的 relative 包層 —— 只寫 max-w 擋不住縮到看不出連哪台。
+              <div className="min-w-[8rem] max-w-[13rem] shrink-0">
+                <Select
+                  selectSize="sm"
+                  value={activeId ?? ""}
+                  onChange={(e) => useStore.getState().setActive(e.target.value)}
+                  title={t("目前連線：{name} · Ctrl+Shift+N 新增連線", { name: connections.find((c) => c.id === activeId)?.name ?? "—" })}
+                  className="text-xs"
+                >
+                  {runnableConns.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </Select>
+              </div>
             )}
             {activeReadonly && (
               <span className="text-[10px] px-1 rounded bg-amber-400/20 text-amber-300/90 shrink-0" title={t("此連線為唯讀模式：擋寫入 / DDL")}>{t("唯讀")}</span>
             )}
             {supportsDbSelect && (
-              <Select
-                selectSize="sm"
-                value={queryDb}
-                onChange={(e) => changeQueryDb(e.target.value)}
-                title={t("目前資料庫：查詢會以 USE / search_path 限定到所選資料庫")}
-                className="max-w-[180px] text-xs"
-              >
-                <option value="">{kind === "postgres" ? t("（預設 schema）") : t("（預設資料庫）")}</option>
-                {/* 確保目前選取值即使尚未載入清單 / 已不在清單也仍顯示 */}
-                {queryDb && !dbList.includes(queryDb) && <option value={queryDb}>{queryDb}</option>}
-                {dbList.map((d) => (
-                  <option key={d} value={d}>{d}</option>
-                ))}
-              </Select>
+              <div className="min-w-[8rem] max-w-[13rem] shrink-0">
+                <Select
+                  selectSize="sm"
+                  value={queryDb}
+                  onChange={(e) => changeQueryDb(e.target.value)}
+                  title={t("目前資料庫：{db}（查詢會以 USE / search_path 限定到所選資料庫）", { db: queryDb || (kind === "postgres" ? t("（預設 schema）") : t("（預設資料庫）")) })}
+                  className="text-xs"
+                >
+                  <option value="">{kind === "postgres" ? t("（預設 schema）") : t("（預設資料庫）")}</option>
+                  {/* 確保目前選取值即使尚未載入清單 / 已不在清單也仍顯示 */}
+                  {queryDb && !dbList.includes(queryDb) && <option value={queryDb}>{queryDb}</option>}
+                  {dbList.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </Select>
+              </div>
             )}
+            <SchemaCacheBadge state={schemaState} />
           </div>
-          <div className="flex flex-wrap justify-end items-center gap-x-1.5 gap-y-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap">
+          {/* 保留 flex-wrap：barTier 靠「子元素有沒有換行」量測（見上方 measure），
+              放不下時先降階，降到底仍放不下才真的換行 —— 絕不裁掉按鈕。 */}
+          <div ref={tbRef} className="flex-1 min-w-0 flex flex-wrap justify-end items-center gap-x-1 gap-y-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap">
             <button type="button" onClick={openNodeScopedQueryTab}
-              title={t("開新查詢分頁：依目前選取的連線 / 資料庫 / 資料表帶入範圍（Ctrl+N）")}
+              title={t("開新查詢分頁：依目前選取的連線 / 資料庫 / 資料表帶入範圍 · Ctrl+N")}
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
-              <Icon icon={FilePlus2} size={13} />{t("新查詢")}
+              <Icon icon={FilePlus2} size={13} />{!dense && t("新查詢")}
             </button>
             <div className="w-px self-stretch my-1 bg-fg/10" />
             <div className="relative">
@@ -4764,7 +4917,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 disabled={history.length === 0}
                 title={t("查詢歷史")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-30">
-                <Icon icon={History} size={13} />{t("歷史")}{history.length ? `（${history.length}）` : ""}
+                <Icon icon={History} size={13} />{dense ? (history.length ? String(history.length) : "") : `${t("歷史")}${history.length ? `（${history.length}）` : ""}`}
               </button>
               {showHistory && history.length > 0 && (
                 <>
@@ -4799,11 +4952,25 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 </>
               )}
             </div>
-            <div className="relative">
+            {/* 收藏＝分裂式控制項：左半星星一鍵存 / 取消存（不跳對話框），右半箭頭開收藏清單。 */}
+            <div className="relative inline-flex items-stretch rounded border border-fg/15 overflow-hidden">
+              <button type="button" onClick={toggleSaveCurrent} disabled={!sql.trim()}
+                title={savedEntry
+                  ? t("已收藏為「{name}」——點擊取消收藏（改名 / 分組請用右側清單）", { name: savedEntry.name })
+                  : t("一鍵收藏目前查詢（名稱自動命名，可事後改名）")}
+                aria-pressed={!!savedEntry}
+                className={`inline-flex items-center gap-1 text-xs px-2 py-1 hover:bg-fg/10 disabled:opacity-40 ${
+                  savedEntry ? "text-amber-300" : "text-fg/70"}`}>
+                <Icon icon={Star} size={13} className={savedEntry ? "fill-current" : ""} />
+                {/* 未收藏用「加入收藏」而非「收藏」：後者的英文與「已收藏」同為 Saved，
+                    英文介面下星星的兩個狀態會長得一模一樣，看不出按下去會發生什麼。 */}
+                {!dense && (savedEntry ? t("已收藏") : t("加入收藏"))}
+              </button>
               <button type="button" onClick={() => setShowSaved((s) => !s)}
-                title={t("收藏的查詢")}
-                className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
-                {t("收藏")}{saved.length ? `（${saved.length}）` : ""}
+                title={t("收藏的查詢")} aria-label={t("收藏的查詢")}
+                className="inline-flex items-center px-1 border-l border-fg/15 text-xs text-fg/50 hover:bg-fg/10 hover:text-fg/80">
+                <Icon icon={ChevronDown} size={12} />
+                {saved.length ? <span className="pr-0.5 tabular-nums">{saved.length}</span> : null}
               </button>
               {showSaved && (
                 <>
@@ -4817,7 +4984,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                       </button>
                     </div>
                     {saved.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-fg/40">{t("尚無收藏。用「更多 → 收藏目前查詢」新增，或按上方「管理」匯入。")}</div>
+                      <div className="px-3 py-2 text-xs text-fg/40">{t("尚無收藏。按左側星星即可一鍵收藏目前查詢，或按上方「管理」匯入。")}</div>
                     ) : (() => {
                       // 依 group 分組顯示（未分組置底、組內依名稱排序）。
                       const gmap = new Map<string, SavedQuery[]>();
@@ -4856,12 +5023,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 </>
               )}
             </div>
+            {supportsSqlEditor && <div className="w-px self-stretch my-1 bg-fg/10" />}
             {supportsSqlEditor && (
               <div className="relative">
                 <button type="button" onClick={() => setShowSnippets((s) => !s)}
                   title={t("SQL 片段：插入常用骨架（編輯器內輸入片段名亦可自動完成展開）")}
                   className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
-                  <Icon icon={FileCode2} size={13} />{t("片段")}
+                  <Icon icon={FileCode2} size={13} />{!dense && t("片段")}
                 </button>
                 {showSnippets && (
                   <>
@@ -4895,36 +5063,38 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 )}
               </div>
             )}
-            {supportsExplain && (
+            {/* 以下四顆沒有自己的下拉面板，寬度不足時（folded）整顆折進「更多」選單。 */}
+            {supportsExplain && !folded && (
               <button type="button" onClick={() => setBuilderOpen(true)} disabled={running}
                 title={t("視覺化查詢建構器：勾選表 / 欄、視覺化 JOIN、條件 / 排序 / 聚合，產生 SELECT 並帶入編輯器")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
-                <Icon icon={Blocks} size={13} />{t("建構器")}
+                <Icon icon={Blocks} size={13} />{!dense && t("建構器")}
               </button>
             )}
-            {supportsNlQuery && (
+            {supportsNlQuery && !folded && (
               <button type="button" onClick={() => setNlOpen((v) => !v)}
-                title={t("用自然語言生成查詢語句（本地 Claude CLI）(Ctrl+Shift+A)")}
+                title={t("用自然語言生成查詢語句（本地 Claude CLI） · Ctrl+Shift+A")}
                 className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
                   nlOpen ? "border-accent/50 bg-accent/12 text-accent" : "border-fg/15 hover:bg-fg/10 text-fg/70"}`}>
-                <Icon icon={Sparkles} size={13} />{t("AI 生成")}
+                <Icon icon={Sparkles} size={13} />{!dense && t("AI 生成")}
               </button>
             )}
-            {kind === "elastic" && kibanaUrl && (
+            {kind === "elastic" && kibanaUrl && !folded && (
               <button type="button" onClick={copyKibanaLink} disabled={kibanaBusy || !sql.trim()}
                 title={t("把目前查詢轉成 Kibana Discover 連結並複製")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
                 <Icon icon={kibanaBusy ? Loader2 : ExternalLink} size={13} className={kibanaBusy ? "animate-spin" : ""} />
-                {t("Kibana 連結")}
+                {!dense && t("Kibana 連結")}
               </button>
             )}
-            {supportsSqlEditor && (
+            {supportsSqlEditor && !folded && (
               <button type="button" onClick={() => persistSql(formatSql(sql))} disabled={running || !sql.trim()}
-                title={t("格式化 SQL：主要子句換行（僅調整字面值外空白，不改語意）(Ctrl+Shift+F)")}
+                title={t("格式化 SQL：主要子句換行（僅調整字面值外空白，不改語意） · Ctrl+Shift+F")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
-                <Icon icon={Wand2} size={13} />{t("格式化")}
+                <Icon icon={Wand2} size={13} />{!dense && t("格式化")}
               </button>
             )}
+            <div className="w-px self-stretch my-1 bg-fg/10" />
             <div className="relative">
               <button type="button" onClick={() => setShowMore((s) => !s)}
                 title={t("更多工具：檔案 / 收藏 / SQL 轉換 / 執行計畫")}
@@ -4935,6 +5105,39 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 <>
                   <div className="fixed inset-0 z-[89]" onClick={() => setShowMore(false)} />
                   <div className="absolute right-0 mt-1 z-[90] w-56 bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1">
+                    {/* 寬度不足而被折進來的主列按鈕：放最上面，因為它們本來就該在一眼可見處。 */}
+                    {folded && (
+                      <>
+                        <div className="px-3 py-1 text-[11px] text-fg/40">{t("工具")}</div>
+                        {supportsExplain && (
+                          <button type="button" onClick={() => { setShowMore(false); setBuilderOpen(true); }} disabled={running}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
+                            <Icon icon={Blocks} size={13} className="text-fg/45" />{t("建構器")}
+                          </button>
+                        )}
+                        {supportsNlQuery && (
+                          <button type="button" onClick={() => { setShowMore(false); setNlOpen((v) => !v); }}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10">
+                            <Icon icon={Sparkles} size={13} className="text-fg/45" />{t("AI 生成")}
+                            <span className="ml-auto text-[10px] text-fg/30">Ctrl+Shift+A</span>
+                          </button>
+                        )}
+                        {kind === "elastic" && kibanaUrl && (
+                          <button type="button" onClick={() => { setShowMore(false); copyKibanaLink(); }} disabled={kibanaBusy || !sql.trim()}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
+                            <Icon icon={ExternalLink} size={13} className="text-fg/45" />{t("Kibana 連結")}
+                          </button>
+                        )}
+                        {supportsSqlEditor && (
+                          <button type="button" onClick={() => { setShowMore(false); persistSql(formatSql(sql)); }} disabled={running || !sql.trim()}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
+                            <Icon icon={Wand2} size={13} className="text-fg/45" />{t("格式化")}
+                            <span className="ml-auto text-[10px] text-fg/30">Ctrl+Shift+F</span>
+                          </button>
+                        )}
+                        <div className="mt-1 border-t border-fg/10" />
+                      </>
+                    )}
                     <div className="px-3 py-1 text-[11px] text-fg/40">{t("檔案 / 收藏")}</div>
                     <button type="button" onClick={() => { setShowMore(false); openSqlFile(); }}
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10">
@@ -4946,7 +5149,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                     </button>
                     <button type="button" onClick={() => { setShowMore(false); saveCurrentQuery(); }} disabled={!sql.trim()}
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
-                      <Icon icon={Star} size={13} className="text-fg/45" />{t("收藏目前查詢…")}
+                      <Icon icon={Star} size={13} className="text-fg/45" />{t("收藏目前查詢（可命名 / 分組）…")}
                     </button>
                     <button type="button" onClick={() => { setShowMore(false); useStore.getState().openSavedManager(); }}
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10">
@@ -5015,10 +5218,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             )}
             {!supportsQueryEditor ? null : running ? (
               <button type="button"
-                // 執行中變紅色「停止」（軟取消）：多語句批次於語句邊界中止、保留已完成結果；
-                // 單條長查詢無法中斷（由查詢逾時兜底）。Esc 同效。
-                onClick={() => { cancelRef.current = true; }}
-                title={t("停止（Esc）：於下一條語句前中止，已完成的結果保留")}
+                // 執行中變紅色「停止」：送伺服器端取消（MySQL KILL QUERY / PG pg_cancel_backend）
+                // 並立刻結束本端等待；多語句批次於語句邊界中止、已完成的結果保留。Esc 同效。
+                onClick={stopRun}
+                title={t("取消伺服器端執行中的查詢並結束等待，已完成的結果保留 · Esc")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-red-600/80 hover:bg-red-600">
                 <Icon icon={Square} size={13} />
                 {t("停止")}{runProgress ? t("（第 {done}/{total} 條）", { done: runProgress.done + 1, total: runProgress.total }) : ""}
@@ -5030,7 +5233,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 // 非 SQL（mongo / redis textarea）維持單一指令直接執行。
                 // 編輯器 lazy chunk 尚未掛載（editorRef 為 null）時退回 execute("run") 整段執行，避免點擊靜默無效。
                 onClick={() => supportsSqlEditor && editorRef.current ? editorRef.current.submit(true) : execute("run")}
-                title={t("執行整段（F6）；有選取時只跑選取段；游標所在語句請按 Ctrl+Enter")}
+                title={t("執行整段；有選取時只跑選取段（游標所在語句請按 Ctrl+Enter） · F6")}
                 className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-600/80 hover:bg-green-600 disabled:opacity-50">
                 <Icon icon={Play} size={13} />
                 {t("執行 (F6)")}

@@ -18,6 +18,7 @@ import RabbitMqQueueBrowser from "./RabbitMqQueueBrowser";
 import RabbitMqQueueDetail from "./RabbitMqQueueDetail";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, TYPE_PRESETS } from "./sql";
+import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
 import ProgressBar from "./ui/ProgressBar";
@@ -3251,6 +3252,9 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     setBusy(true);
     try {
       await api.alterTable(tab.connId, tab.database, tab.table, op);
+      // 欄位級 DDL 的匯流點（新增 / 刪除 / 改名 / 改型別）。這條路徑不經側欄的 refreshTables，
+      // 所以要自己讓結構快取失效——否則自動完成會繼續提示剛剛被刪掉的欄位。
+      invalidateSchemaCache(tab.connId, tab.database);
       toast.success(okMsg);
       setAdding(false);
       setRename(null);

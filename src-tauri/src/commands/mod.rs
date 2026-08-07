@@ -299,6 +299,10 @@ fn cancel_kafka_jobs(state: &AppState, id: &str) {
 }
 
 /// 清除指定連線驅動的查詢快取（外部 gateway 等），供前端「重新整理」強制重抓。
+///
+/// 注意：這裡**只清驅動的行程內快取**，不動落地的結構快取（schema_cache）。兩者刻意分開——
+/// 本指令綁在 F5 與各層級右鍵「重新整理」上，若順手把磁碟快取一起砍了，對單一表按一次
+/// 「重新整理」就會丟掉整庫（大型 Oracle 可能好幾分鐘）的結構載入結果。
 #[tauri::command]
 pub async fn clear_cache(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.manager.clear_cache(&id).await
@@ -311,6 +315,86 @@ pub async fn clear_cache(state: State<'_, AppState>, id: String) -> AppResult<()
 #[tauri::command]
 pub async fn external_session_alive(config: ConnectionConfig) -> AppResult<bool> {
     Ok(crate::db::external::external_session_alive(&config))
+}
+
+// ---- 結構快取（SQL 自動完成的智慧提示來源）----
+
+/// 正式環境連線預設不把結構寫上磁碟，除非該連線明確開啟（`options.schema_cache = "on"`）。
+/// 沿用既有的 `options.prod` 旗標，不另立一套「敏感連線」概念。
+/// 查不到已存連線時從嚴（不寫）——快取只是加速，失敗頂多慢一點；寫錯地方是把正式環境的
+/// 表名欄名留在磁碟上。
+async fn schema_cache_allowed(app: &AppHandle, id: &str) -> bool {
+    let conns = store::load_all(app).await.unwrap_or_default();
+    match conns.iter().find(|c| c.id == id) {
+        Some(c) => {
+            let prod = c.options.get("prod").map(|v| v == "1").unwrap_or(false);
+            let opted_in = c.options.get("schema_cache").map(|v| v == "on").unwrap_or(false);
+            !prod || opted_in
+        }
+        None => false,
+    }
+}
+
+/// 讀取已落地的結構快取。**純讀檔、不連線**——所以未連線時也能立刻給出自動完成。
+#[tauri::command]
+pub async fn get_schema_cache(
+    app: AppHandle,
+    id: String,
+    database: String,
+) -> AppResult<Option<crate::schema_cache::CachedDatabase>> {
+    let dir = store::app_config_dir(&app)?;
+    Ok(crate::schema_cache::get(&dir, &id, &database).await)
+}
+
+/// 重抓整庫結構並（在政策允許時）落地。
+///
+/// 即使因正式環境政策不寫磁碟，本次仍照常回傳新鮮快照——「不留下痕跡」不等於「不給提示」。
+#[tauri::command]
+pub async fn refresh_schema_cache(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+) -> AppResult<crate::schema_cache::CachedDatabase> {
+    // 兩邊都要：schema_columns 是欄名來源，list_tables 才有完整的物件清單與順序
+    // （沒有任何欄位紀錄的物件不會出現在前者，卻仍該能被 FROM 補全）。
+    let tables = state.manager.list_tables(&id, &database).await?;
+    let cols = state.manager.schema_columns(&id, &database).await?;
+    let mut by_name: HashMap<String, Vec<String>> =
+        cols.into_iter().map(|tc| (tc.table, tc.columns)).collect();
+    let merged: Vec<TableColumns> = tables
+        .into_iter()
+        .map(|t| {
+            let columns = by_name.remove(&t.name).unwrap_or_default();
+            TableColumns { table: t.name, columns }
+        })
+        .collect();
+    let entry = crate::schema_cache::CachedDatabase {
+        database: database.clone(),
+        updated_at_ms: chrono::Utc::now().timestamp_millis(),
+        tables: merged,
+    };
+    if schema_cache_allowed(&app, &id).await {
+        let dir = store::app_config_dir(&app)?;
+        crate::schema_cache::put(&dir, &id, entry.clone()).await?;
+    }
+    Ok(entry)
+}
+
+/// 清除結構快取：帶 id 清單一連線，不帶則整個目錄清掉。
+#[tauri::command]
+pub async fn clear_schema_cache(app: AppHandle, id: Option<String>) -> AppResult<()> {
+    let dir = store::app_config_dir(&app)?;
+    crate::schema_cache::clear(&dir, id.as_deref()).await
+}
+
+/// 結構快取摘要（設定頁：存放路徑 + 各連線的資料庫數 / 表數 / 佔用空間 / 最後更新）。
+#[tauri::command]
+pub async fn schema_cache_stats(
+    app: AppHandle,
+) -> AppResult<crate::schema_cache::SchemaCacheSummary> {
+    let dir = store::app_config_dir(&app)?;
+    Ok(crate::schema_cache::summary(&dir).await)
 }
 
 // ---- 啟動密碼（app-lock 閘門）----
@@ -554,6 +638,15 @@ pub async fn run_query_multi(
         Some(cap) => state.manager.query_multi_capped(&id, &sql, cap).await,
         None => state.manager.query_multi(&id, &sql).await,
     }
+}
+
+/// 取消該連線上執行中的互動查詢——伺服器端真取消（MySQL `KILL QUERY` / PG `pg_cancel_backend`），
+/// 被取消的查詢會讓對應的 run_query / run_query_multi 立刻以錯誤回來。
+/// 回傳送出取消訊號的查詢數（0 = 已經跑完了）；不具旁路取消通道的驅動回 Unsupported，
+/// 前端據此退回「只停止本端等待」。
+#[tauri::command]
+pub async fn cancel_query(state: State<'_, AppState>, id: String) -> AppResult<usize> {
+    state.manager.cancel_query(&id).await
 }
 
 /// 將文字內容寫入使用者（透過原生另存對話框）選定的路徑。供匯出查詢結果用。

@@ -5,9 +5,9 @@ use bb8_tiberius::ConnectionManager;
 use tiberius::{AuthMethod, ColumnType, Config, EncryptionLevel};
 
 use crate::db::{
-    filter_op_sql, fmt_bytes, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery,
+    filter_op_sql, fmt_bytes, group_table_columns, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery,
     DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable, Filter, ForeignKeyInfo, IndexInfo,
-    PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, Sort, SortDir, TableInfo,
+    PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, Sort, SortDir, TableColumns, TableInfo,
 };
 use crate::error::{AppError, AppResult};
 
@@ -225,6 +225,28 @@ impl DatabaseDriver for MssqlDriver {
                 })
             })
             .collect())
+    }
+
+    async fn schema_columns(&self, database: &str) -> AppResult<Vec<TableColumns>> {
+        // 一次取回整庫（表 + 視圖）欄名。表名組法必須與 list_tables 一致——dbo 回裸名、
+        // 非 dbo 回 `schema.table`——否則前端無法把欄位對回樹上的節點。
+        // 排序鍵用 schema/表名，與 list_tables 的 ORDER BY 1,2 對齊，group_table_columns 才分得對。
+        let db = esc(database);
+        let sql = format!(
+            "SELECT s.name, o.name, c.name FROM [{db}].sys.columns c \
+                 JOIN [{db}].sys.objects o ON o.object_id = c.object_id \
+                 JOIN [{db}].sys.schemas s ON s.schema_id = o.schema_id \
+             WHERE o.type IN ('U','V') \
+             ORDER BY s.name, o.name, c.column_id"
+        );
+        let rows = self.query_rows(&sql).await?;
+        Ok(group_table_columns(rows.iter().filter_map(|r| {
+            let sch = get_str(r, 0)?;
+            let obj = get_str(r, 1)?;
+            let col = get_str(r, 2)?;
+            let table = if sch == "dbo" { obj } else { format!("{sch}.{obj}") };
+            Some((table, col))
+        })))
     }
 
     async fn table_data(&self, database: &str, table: &str, query: &DataQuery) -> AppResult<PagedData> {

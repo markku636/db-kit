@@ -14,6 +14,13 @@ export const isMysqlFamily = (kind: DbKind | null | undefined): boolean =>
 export const supportsRoutines = (kind: DbKind | null | undefined): boolean =>
   isMysqlFamily(kind) || kind === "postgres" || kind === "mssql" || kind === "oracle" || kind === "external";
 
+// 有查詢編輯器可用的 kind：Kafka / RabbitMQ 沒有查詢語言（driver 的 query() 一律回 Unsupported），
+// 其餘（含 Mongo 的 DSL、Redis 的指令、Elasticsearch 的 Query DSL）都有可打字的編輯器。
+// 單一落點：查詢面板的編輯器 gate 與側欄右鍵「新增查詢」共用 —— 兩處曾各寫一份白名單，
+// 側欄那份漏了 mssql / oracle / external / mongo / redis / elastic，右鍵選單因此看不到「新增查詢」。
+export const supportsQueryEditorKind = (kind: DbKind | null | undefined): boolean =>
+  !!kind && kind !== "kafka" && kind !== "rabbitmq";
+
 // ---- 跨資料庫識別字 / 字面值跳脫（MySQL / PostgreSQL / SQLite 一致性關鍵）----
 // 識別字：PostgreSQL 用雙引號，SQL Server 用 [方括號]（] 加倍），其餘（MySQL / MariaDB / SQLite）用反引號；內部引號加倍轉義。
 export function quoteIdent(kind: DbKind, id: string): string {
@@ -1057,6 +1064,76 @@ export function reorderSavedQueries(list: SavedQuery[], from: number, to: number
   next.splice(to, 0, moved);
   return next;
 }
+// 只清掉註解與單引號字面值，保留反引號 / 雙引號 / 方括號識別字 —— 那正是我們要抓的表名。
+// 不能用 stripCode：它把識別字一起抹掉，`shop`.`orders` 會只剩一個點，表名整個消失。
+function stripForNaming(sql: string): string {
+  let out = "";
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const two = sql.slice(i, i + 2);
+    if (two === "--") {
+      const nl = sql.indexOf("\n", i);
+      i = nl < 0 ? n : nl;
+      out += " ";
+      continue;
+    }
+    if (two === "/*") {
+      const e = sql.indexOf("*/", i + 2);
+      i = e < 0 ? n : e + 2;
+      out += " ";
+      continue;
+    }
+    if (sql[i] === "'") {
+      let j = i + 1;
+      while (j < n) {
+        if (sql[j] === "'") {
+          if (sql[j + 1] === "'") { j += 2; continue; }
+          j++;
+          break;
+        }
+        j++;
+      }
+      i = Math.min(j, n);
+      out += " ";
+      continue;
+    }
+    out += sql[i];
+    i++;
+  }
+  return out;
+}
+
+// 由 SQL 推導一個可讀的收藏名稱（工具列「一鍵收藏」用）：動詞 + 主要目標表，如「SELECT orders」。
+// 推不出來就退回壓成單行的前 40 字 —— 名稱只是給人看的標籤，取不到好名字也不該擋下收藏動作。
+// 與既有收藏撞名時補上 2 / 3 …（taken 由呼叫端傳入目前已用的名稱）。
+export function suggestQueryName(sql: string, taken: Iterable<string> = []): string {
+  const code = stripForNaming(sql).replace(/\s+/g, " ").trim();
+  const verb = /^([a-z]+)/i.exec(code)?.[1]?.toUpperCase() ?? "";
+  let base = "";
+  if (verb) {
+    // 目標表：SELECT / DELETE 看 FROM、UPDATE 看動詞後、INSERT / REPLACE 看 INTO、
+    // TRUNCATE / ALTER 看 TABLE；都沒有就退回動詞後的第一個字（SHOW TABLES、USE db…）。
+    const raw =
+      /\b(?:from|into|update|table)\s+([^\s,(;]+)/i.exec(code)?.[1] ??
+      /^[a-z]+\s+([^\s,(;]+)/i.exec(code)?.[1] ??
+      "";
+    // 去掉引用符與 schema 前綴（`shop`.`orders` → orders），純顯示用。
+    const obj = raw.split(".").pop()?.replace(/^["`[]+|["`\]]+$/g, "") ?? "";
+    base = obj ? `${verb} ${obj}` : verb;
+  }
+  if (!base) base = code.slice(0, 40).trim();
+  if (base.length > 48) base = `${base.slice(0, 47)}…`;
+  if (!base) base = t("未命名查詢");
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+  for (let i = 2; i <= 999; i++) {
+    const candidate = `${base} ${i}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return `${base} ${Date.now()}`;
+}
+
 // 導出去重、排序後的分組名清單（未分組不列入）。供 datalist 與側欄 / 管理視窗分組。
 export function savedQueryGroups(list: SavedQuery[]): string[] {
   const set = new Set<string>();

@@ -32,9 +32,13 @@ export function installShim(fx) {
   };
 
   const isMysql = ({ id }) => id === "c-mysql";
+  const cachedAt = () => Date.now() - fx.SCHEMA_CACHE_AGE_MS;
   const handlers = {
     has_startup_password: () => false,
     list_saved_connections: () => fx.CONNECTIONS,
+    // 側欄分組（v0.20 起）。預設無群組＝扁平清單，與截圖情境一致；情境可用 fx 覆寫。
+    list_connection_groups: () => fx.CONN_GROUPS ?? [],
+    save_connection_layout: () => null,
     set_query_guard: () => null,
     connect: () => null,
     disconnect: () => null,
@@ -49,6 +53,28 @@ export function installShim(fx) {
     list_tables: ({ id, database }) => fx.TABLES[`${id}:${database}`] ?? [],
     list_routines: (a) => (isMysql(a) ? fx.ROUTINES : []),
     schema_columns: (a) => (isMysql(a) ? Object.entries(fx.SCHEMA_COLUMNS).map(([table, columns]) => ({ table, columns })) : []),
+    // 結構快取。時間由「固定年齡」推出（cachedAt），不是寫死的絕對時刻——徽章顯示相對時間，
+    // 而它算的是瀏覽器真正的 Date.now()，寫死絕對時刻的話畫面會隨日期漂掉（見 fixtures 的說明）。
+    get_schema_cache: (a) =>
+      isMysql(a)
+        ? {
+            database: a.database ?? "shop",
+            updated_at_ms: cachedAt(),
+            tables: Object.entries(fx.SCHEMA_COLUMNS).map(([table, columns]) => ({ table, columns })),
+          }
+        : null,
+    refresh_schema_cache: (a) => ({
+      database: a.database ?? "shop",
+      updated_at_ms: cachedAt(),
+      tables: isMysql(a) ? Object.entries(fx.SCHEMA_COLUMNS).map(([table, columns]) => ({ table, columns })) : [],
+    }),
+    clear_schema_cache: () => null,
+    schema_cache_stats: () => ({
+      dir: fx.SCHEMA_CACHE_STATS.dir,
+      entries: fx.SCHEMA_CACHE_STATS.entries.map((e) => ({ ...e, updated_at_ms: cachedAt() })),
+    }),
+    // 停止查詢：v0.21 工作區加的按鈕會打這個，漏了它「停止」一按就是頁面錯誤。
+    cancel_query: () => 1,
     // 結構類只對 MySQL 連線回 orders 的資料，Redis / 其他連線回空，右側「詳細資料」才不會串味
     table_columns: (a) => (isMysql(a) ? fx.ORDERS_COLUMNS : []),
     table_indexes: (a) => (isMysql(a) ? fx.ORDERS_INDEXES : []),

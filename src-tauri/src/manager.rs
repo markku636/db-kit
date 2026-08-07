@@ -219,6 +219,25 @@ impl Active {
             Active::Dyn(d) => d.query_multi_capped(sql, cap).await,
         }
     }
+    /// 取消執行中的互動查詢（伺服器端）。未實作的驅動由 trait 預設回 Unsupported。
+    async fn cancel_query(&self) -> AppResult<usize> {
+        match self {
+            Active::Mysql(d) => d.cancel_query().await,
+            Active::Postgres(d) => d.cancel_query().await,
+            Active::Sqlite(d) => d.cancel_query().await,
+            Active::Mongo(d) => d.cancel_query().await,
+            Active::Redis(d) => d.cancel_query().await,
+            Active::Mssql(d) => d.cancel_query().await,
+            Active::Oracle(d) => d.cancel_query().await,
+            #[cfg(feature = "kafka")]
+            Active::Kafka(d) => d.cancel_query().await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.cancel_query().await,
+            #[cfg(feature = "elastic")]
+            Active::Elastic(d) => d.cancel_query().await,
+            Active::Dyn(d) => d.cancel_query().await,
+        }
+    }
     async fn update_cell(
         &self,
         database: &str,
@@ -1084,6 +1103,12 @@ impl ConnectionManager {
             Ok(r) => r,
             Err(_) => Err(AppError::Timeout(ms)),
         }
+    }
+
+    /// 取消該連線上執行中的互動查詢（伺服器端真取消，不是放棄本端等待）。
+    /// 回傳送出取消訊號的查詢數；不支援旁路取消的驅動回 Unsupported。
+    pub async fn cancel_query(&self, id: &str) -> AppResult<usize> {
+        self.get(id)?.active.cancel_query().await
     }
 
     /// 多結果集查詢並將每集各自截斷於 cap（0 = 不限）。

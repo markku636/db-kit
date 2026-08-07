@@ -3,10 +3,10 @@ use sqlx::{Column, PgPool, Row, TypeInfo, ValueRef};
 use std::time::Duration;
 
 use crate::db::{
-    classify_match, collect_relations, filter_op_sql, finalize_hits, fmt_bytes, make_snippet,
-    op_needs_value, sqlx_db_message, AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver,
+    classify_match, collect_relations, filter_op_sql, finalize_hits, fmt_bytes, group_table_columns,
+    make_snippet, op_needs_value, sqlx_db_message, AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver,
     ErColumn, ErModel, ErTable, Filter, ForeignKeyInfo, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo,
-    RowDelete, RowInsert, SearchHit, SearchOptions, Sort, SortDir, TableInfo, ValidationReport,
+    RowDelete, RowInsert, SearchHit, SearchOptions, Sort, SortDir, TableColumns, TableInfo, ValidationReport,
 };
 use crate::error::{AppError, AppResult};
 
@@ -20,13 +20,39 @@ pub struct PostgresDriver {
     /// 不得回池，但同前綴且 60 秒內用過即重用（免 acquire + SET + 重建連線）。
     /// 異前綴 / 閒置過久 / 查詢出錯 → drop 關閉。close() 時一併清空。
     switched: tokio::sync::Mutex<Option<SwitchedConn>>,
+    /// 執行中互動查詢（query_capped）的後端行程 PID（`pg_backend_pid()`）。
+    /// cancel_query 據此以「另一條」連線送 `pg_cancel_backend`。比照 mysql.rs 的 running。
+    running: parking_lot::Mutex<std::collections::HashSet<i32>>,
 }
 
 /// 已改 search_path（detach 出池）的連線 + 其 SET 語句與最後使用時刻。
 struct SwitchedConn {
     set_stmt: String,
     conn: sqlx::postgres::PgConnection,
+    /// 該連線的 `pg_backend_pid()`：快取連線重用時免再問一次（省一趟往返）。
+    pid: i32,
     last_used: std::time::Instant,
+}
+
+/// 查詢期間把 PID 留在 `running` 內，drop 時自動移除（含失敗 / 被取消 / 外層逾時丟棄 future）。
+struct RunningGuard<'a> {
+    set: &'a parking_lot::Mutex<std::collections::HashSet<i32>>,
+    pid: i32,
+}
+
+impl Drop for RunningGuard<'_> {
+    fn drop(&mut self) {
+        self.set.lock().remove(&self.pid);
+    }
+}
+
+/// 問出該連線的 PG 後端行程 PID（`pg_backend_pid()` 為 int4）。
+async fn backend_pid(conn: &mut sqlx::postgres::PgConnection) -> AppResult<i32> {
+    sqlx::query("SELECT pg_backend_pid()")
+        .fetch_one(&mut *conn)
+        .await
+        .and_then(|r| r.try_get::<i32, _>(0))
+        .map_err(|e| AppError::Query(e.to_string()))
 }
 
 #[async_trait::async_trait]
@@ -91,7 +117,11 @@ impl DatabaseDriver for PostgresDriver {
             .await
             .map_err(|e| AppError::Connect(e.to_string()))?;
 
-        let driver = Self { pool, switched: tokio::sync::Mutex::new(None) };
+        let driver = Self {
+            pool,
+            switched: tokio::sync::Mutex::new(None),
+            running: parking_lot::Mutex::new(std::collections::HashSet::new()),
+        };
         driver.ping().await?;
         Ok(driver)
     }
@@ -207,6 +237,22 @@ impl DatabaseDriver for PostgresDriver {
             .collect())
     }
 
+    async fn schema_columns(&self, database: &str) -> AppResult<Vec<TableColumns>> {
+        // 一次取回整個 schema 所有表 / 視圖的欄名（SQL 自動完成用），取代預設實作的逐表往返。
+        // 不 join pg_description / 不查主鍵——快取與自動完成只需欄名，少一次 join 也少一份 PII。
+        let rows = sqlx::query(
+            "SELECT table_name, column_name FROM information_schema.columns \
+             WHERE table_schema = $1 ORDER BY table_name, ordinal_position",
+        )
+        .bind(database)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(group_table_columns(rows.iter().filter_map(|r| {
+            Some((r.try_get::<String, _>(0).ok()?, r.try_get::<String, _>(1).ok()?))
+        })))
+    }
+
     async fn table_data(
         &self,
         database: &str,
@@ -284,12 +330,12 @@ impl DatabaseDriver for PostgresDriver {
                         if sc.set_stmt == set_stmt
                             && sc.last_used.elapsed() < Duration::from_secs(60) =>
                     {
-                        Some(sc.conn)
+                        Some((sc.conn, sc.pid))
                     }
                     _ => None, // 異前綴 / 過期的快取連線在此 drop 關閉
                 }
             };
-            let mut conn: sqlx::postgres::PgConnection = match cached {
+            let (mut conn, pid): (sqlx::postgres::PgConnection, i32) = match cached {
                 Some(c) => c,
                 None => {
                     let pooled = self
@@ -303,9 +349,13 @@ impl DatabaseDriver for PostgresDriver {
                         .execute(&mut owned)
                         .await
                         .map_err(|e| AppError::Query(e.to_string()))?;
-                    owned
+                    // PID 隨快取一起留著：同前綴下一查詢重用連線時不必再問。
+                    let pid = backend_pid(&mut owned).await?;
+                    (owned, pid)
                 }
             };
+            // 登記為「執行中」：cancel_query 才有目標可 pg_cancel_backend（drop 時自動撤銷）。
+            let _guard = self.track(pid);
             let t = rest.trim_start().to_ascii_lowercase();
             let is_read = t.starts_with("select")
                 || t.starts_with("show")
@@ -333,6 +383,7 @@ impl DatabaseDriver for PostgresDriver {
                 *self.switched.lock().await = Some(SwitchedConn {
                     set_stmt,
                     conn,
+                    pid,
                     last_used: std::time::Instant::now(),
                 });
             } // 失敗 → conn 在此 drop（狀態不明，不快取）
@@ -348,14 +399,24 @@ impl DatabaseDriver for PostgresDriver {
 
         // 寫入語句若帶 RETURNING（PG 支援），改走 fetch 取回回傳列（致敬 DataGrip / DBeaver
         // 顯示 RETURNING 結果）；無 RETURNING 則 execute 取 rows_affected。
+        // 取「具名的一條」連線而非把 &self.pool 交給 sqlx：先問出 pg_backend_pid() 登記起來，
+        // cancel_query 才有辦法以另一條連線送 pg_cancel_backend 真正中止（比照 mysql.rs）。
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let pid = backend_pid(&mut conn).await?;
+        let _guard = self.track(pid);
+
         if is_read || trimmed.contains("returning") {
-            let (rows, truncated) = fetch_rows_capped(&self.pool, sql, cap).await?;
+            let (rows, truncated) = fetch_rows_capped(&mut *conn, sql, cap).await?;
             let mut result = rows_to_result(&rows);
             result.truncated = truncated;
             Ok(result)
         } else {
             let res = sqlx::query(sql)
-                .execute(&self.pool)
+                .execute(&mut *conn)
                 .await
                 .map_err(|e| AppError::Query(e.to_string()))?;
             Ok(QueryResult {
@@ -365,6 +426,33 @@ impl DatabaseDriver for PostgresDriver {
                 truncated: false,
             })
         }
+    }
+
+    async fn cancel_query(&self) -> AppResult<usize> {
+        let pids: Vec<i32> = self.running.lock().iter().copied().collect();
+        if pids.is_empty() {
+            return Ok(0); // 查詢已結束或尚未送達 DB —— 不是錯誤
+        }
+        // pg_cancel_backend 只中止「當前語句」，連線與交易保留（pg_terminate_backend 才斷連線）。
+        // 走另一條 pool 連線送：原連線正阻塞在該查詢上。回傳 false = 該 PID 已不在執行（不算送出）。
+        let mut sent = 0usize;
+        for pid in pids {
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?;
+            let ok: bool = sqlx::query("SELECT pg_cancel_backend($1)")
+                .bind(pid)
+                .fetch_one(&mut *conn)
+                .await
+                .and_then(|r| r.try_get::<bool, _>(0))
+                .unwrap_or(false);
+            if ok {
+                sent += 1;
+            }
+        }
+        Ok(sent)
     }
 
     async fn update_cell(
@@ -1194,6 +1282,12 @@ impl DatabaseDriver for PostgresDriver {
 }
 
 impl PostgresDriver {
+    /// 把後端 PID 登記為「執行中」，回傳的 guard drop 時自動撤銷登記。
+    fn track(&self, pid: i32) -> RunningGuard<'_> {
+        self.running.lock().insert(pid);
+        RunningGuard { set: &self.running, pid }
+    }
+
     /// SQL Search 共用：執行一段已組好的搜尋查詢。
     /// 綁定順序為「schema 過濾值」（$1…）在前、LIKE 樣式（重複 like_count 次）在後，
     /// 對應 SQL 中 `$n` 的編號順序（schema filter 先佔號，like_or 接續）。

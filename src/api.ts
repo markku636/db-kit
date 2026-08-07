@@ -246,6 +246,22 @@ export type AlterOp =
 // SQL 自動完成：整庫每張表的欄名（schema_columns 一次載回，供批次補全）。
 export interface TableColumns { table: string; columns: string[] }
 
+// 結構快取：落地磁碟的整庫快照，讓自動完成開檔即用、離線可用、看得到「上次更新」。
+export interface CachedSchema {
+  database: string;
+  /** Unix epoch 毫秒；0 表示無時間資訊（UI 一律當成已過期）。 */
+  updated_at_ms: number;
+  tables: TableColumns[];
+}
+export interface SchemaCacheStat {
+  conn_id: string;
+  databases: number;
+  tables: number;
+  bytes: number;
+  updated_at_ms: number;
+}
+export interface SchemaCacheSummary { dir: string; entries: SchemaCacheStat[] }
+
 // ER 圖模型
 export interface ErColumn { name: string; data_type: string; pk: boolean; fk: boolean }
 export interface ErTable { name: string; columns: ErColumn[] }
@@ -947,6 +963,16 @@ export const api = {
     invoke<ColumnInfo[]>("table_columns", { id, database, table }),
   schemaColumns: (id: string, database: string) =>
     invoke<TableColumns[]>("schema_columns", { id, database }),
+  // ---- 結構快取 ----
+  // 讀已落地的快照。純讀檔不連線，所以未連線時也能立刻給出自動完成。
+  getSchemaCache: (id: string, database: string) =>
+    invoke<CachedSchema | null>("get_schema_cache", { id, database }),
+  // 重抓整庫結構並（政策允許時）落地。正式環境連線不寫磁碟，但仍照常回傳本次快照。
+  refreshSchemaCache: (id: string, database: string) =>
+    invoke<CachedSchema>("refresh_schema_cache", { id, database }),
+  // 清快取：帶 id 清單一連線，不帶則清全部。
+  clearSchemaCache: (id?: string) => invoke<void>("clear_schema_cache", { id: id ?? null }),
+  schemaCacheStats: () => invoke<SchemaCacheSummary>("schema_cache_stats"),
   tableData: (id: string, database: string, table: string, query: DataQuery) =>
     invoke<PagedData>("table_data", { id, database, table, query }),
   runQuery: (id: string, sql: string, maxRows?: number) =>
@@ -955,6 +981,9 @@ export const api = {
   // 後端保證至少 1 元素；未覆寫的驅動回單元素陣列，與 runQuery 等價。
   runQueryMulti: (id: string, sql: string, maxRows?: number) =>
     invoke<QueryResult[]>("run_query_multi", { id, sql, maxRows: maxRows ?? null }),
+  // 取消該連線上執行中的查詢（伺服器端真取消：MySQL KILL QUERY / PG pg_cancel_backend）。
+  // 回傳送出取消訊號的查詢數（0 = 已經跑完）；不支援的驅動 reject（kind=unsupported）。
+  cancelQuery: (id: string) => invoke<number>("cancel_query", { id }),
   // 後端重新執行查詢直接寫檔（不受互動 row cap 限制、rows 不經 IPC）：截斷結果的完整匯出用。
   exportQuery: (id: string, sql: string, options: ExportOptions, outPath: string) =>
     invoke<ExportResult>("export_query", { id, sql, options, outPath }),

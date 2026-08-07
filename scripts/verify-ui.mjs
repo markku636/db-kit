@@ -26,6 +26,25 @@ function check(name, ok, detail = "") {
   else { failures.push(`${name}${detail ? ` — ${detail}` : ""}`); console.log(`  ✗ ${name}${detail ? ` — ${detail}` : ""}`); }
 }
 
+// 少數情境需要與截圖不同的假資料（如「連線多到滿出側欄」要 40 筆而非 7 筆）。
+// 在此以 fx 欄位覆寫；其餘情境仍共用 screenshot-fixtures.mjs 的那一份。
+const MANY_GROUPS = [
+  { id: "g-prod", name: "PROD" },
+  { id: "g-stage", name: "STAGE" },
+  { id: "g-dev", name: "DEV" },
+];
+const MANY_CONNECTIONS = Array.from({ length: 40 }, (_, i) => ({
+  ...FX.CONNECTIONS[i % FX.CONNECTIONS.length],
+  id: `many-${i}`,
+  // 補零讓字典序＝建立序，最後一筆固定是 conn-39。
+  name: `conn-${String(i).padStart(2, "0")}`,
+  // 前 30 筆分三組、後 10 筆留未分組 —— 兩種區段都在畫面上。
+  group_id: i < 30 ? MANY_GROUPS[i % 3].id : null,
+}));
+const CASE_FX = {
+  "sidebar-scroll-reaches-last": { CONNECTIONS: MANY_CONNECTIONS, CONN_GROUPS: MANY_GROUPS },
+};
+
 // 目前開啟的右鍵選單裡的所有項目文字（選單一律是 fixed z-[90] 的面板）。
 const menuItems = (page) =>
   page.locator('div.fixed.z-\\[90\\] button').allTextContents();
@@ -38,6 +57,30 @@ async function closeMenu(page) {
 
 // ── 情境 ───────────────────────────────────────────────────────────────
 const CASES = {
+  // 結構快取徽章：MySQL 查詢分頁要顯示快取時間並可點；Kafka 這種沒有欄位結構的連線不該出現。
+  // 徽章是「自動完成用的是哪個時間點的結構」的唯一告知處，消失了使用者就只能盲信提示。
+  async "schema-cache-badge"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await sleep(900);
+    const badge = page.getByRole("button", { name: /^結構/ });
+    const shown = (await badge.count()) > 0;
+    check("MySQL 查詢分頁顯示結構快取徽章", shown, shown ? "" : await page.locator("#root").innerText());
+    if (shown) {
+      check("徽章顯示快取時間（固定年齡 → 2 小時前）", /2 小時前/.test(await badge.first().innerText()));
+      const title = await badge.first().getAttribute("title");
+      check("徽章提示說明快取時間與外部變更偵測不到", /結構快取更新於/.test(title ?? ""), title ?? "(無 title)");
+    }
+
+    // 沒有欄位結構的連線不顯示徽章（Kafka：主題不是表，沒有欄位可補全）
+    await page.getByText("stream-kafka", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await sleep(700);
+    check("Kafka 查詢分頁沒有結構快取徽章", (await page.getByRole("button", { name: /^結構/ }).count()) === 0);
+  },
+
   // Kafka 主題右鍵：新增（發佈 / 建主題）· 修改（設定 / 分區）· 刪除（清空 / 刪除主題）
   async "kafka-topic-menu"(page) {
     await page.getByText("stream-kafka", { exact: true }).dblclick();
@@ -215,6 +258,136 @@ const CASES = {
       check("Redis 鍵節點可右鍵", false, "找不到葉節點");
     }
   },
+
+  // 側欄連線滿出頁面時，最後一筆必須滾得到（回歸：外殼曾經同時是 column flex 與捲動容器，
+  // 子項被 flex-shrink 壓縮後捲動高度算不出來，最底下幾筆永遠碰不到）。
+  async "sidebar-scroll-reaches-last"(page, caseFx) {
+    // 40 筆連線（見 CASE_FX），在一般視窗高度下就會滿出側欄 —— 使用者回報的正是這個情境。
+    const box = page.locator("[data-sidebar-scroll]").first();
+    if (!(await box.count())) { check("側欄有獨立的捲動視窗", false, "找不到 [data-sidebar-scroll]"); return; }
+
+    const m = await box.evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight }));
+    check("內容溢出時側欄真的產生捲動高度", m.scroll > m.client, `scrollHeight=${m.scroll} clientHeight=${m.client}`);
+
+    // 用真實滑鼠滾輪捲（使用者回報的是「滾」不到，不是程式捲不到）：
+    // 游標移到側欄上，連續滾到底。
+    const bb = await box.boundingBox();
+    await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2);
+    for (let i = 0; i < 12; i++) { await page.mouse.wheel(0, 400); await sleep(60); }
+    await sleep(300);
+    const after = await box.evaluate((el) => ({ top: el.scrollTop, max: el.scrollHeight - el.clientHeight }));
+    check("滑鼠滾輪可把側欄捲到底", after.top >= after.max - 2, `scrollTop=${after.top} max=${after.max}`);
+
+    // 最後一筆連線捲到底後必須完整落在捲動視窗內。
+    const conns = caseFx.CONNECTIONS;
+    const lastName = conns[conns.length - 1].name;
+    const last = page.getByText(lastName, { exact: true }).first();
+    const rects = await box.evaluate((el, name) => {
+      const c = el.getBoundingClientRect();
+      const row = Array.from(el.querySelectorAll("span")).find((s) => s.textContent === name);
+      const r = row?.getBoundingClientRect();
+      return r ? { top: c.top, bottom: c.bottom, rowTop: r.top, rowBottom: r.bottom } : null;
+    }, lastName);
+    if (!rects) { check(`捲到底後找得到最後一筆連線（${lastName}）`, false); return; }
+    // 容 1px 的次像素誤差。
+    check(
+      `捲到底後最後一筆（${lastName}）完整可見`,
+      rects.rowBottom <= rects.bottom + 1 && rects.rowTop >= rects.top - 1,
+      JSON.stringify(rects),
+    );
+    check(`最後一筆（${lastName}）可點擊`, await last.isVisible());
+
+    // 搜尋列改成固定列後，捲到底仍要看得見（不能因為拿掉 sticky 就跟著捲走）。
+    check("捲到底時搜尋列仍可見", await page.locator('input[placeholder="搜尋連線 / 表…"]').first().isVisible());
+  },
+
+  // 工具列星星：一鍵收藏目前查詢（自動命名、不跳對話框），再點一次取消收藏。
+  // 原本只有「更多 → 收藏目前查詢…」一條路，要穿兩層 UI 才存得起來。
+  async "query-toolbar-star-favorite"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await sleep(600);
+
+    const star = page.locator('button[title*="一鍵收藏目前查詢"]');
+    check("工具列有一鍵收藏的星星鈕", (await star.count()) > 0);
+
+    // 編輯器是 lazy chunk，等它掛上；分頁開起來時已帶入 USE 範圍前綴，先清空才測得到停用態。
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await sleep(400);
+    check("空 SQL 時星星停用", await star.first().isDisabled());
+
+    await page.keyboard.type("SELECT * FROM orders WHERE id > 10");
+    await sleep(400);
+    check("輸入 SQL 後星星啟用", !(await star.first().isDisabled()));
+
+    await star.first().click();
+    await sleep(400);
+    // 存起來後：星星轉成「已收藏」狀態（title 改為可取消收藏），名稱由 SQL 自動推導。
+    const savedStar = page.locator('button[title*="已收藏為"]');
+    check("一鍵收藏後星星轉為已收藏狀態", (await savedStar.count()) > 0);
+    const savedTitle = (await savedStar.first().getAttribute("title")) ?? "";
+    check("名稱由 SQL 自動推導為「SELECT orders」", savedTitle.includes("SELECT orders"), savedTitle);
+
+    // 下拉清單裡看得到它。
+    await page.locator('button[aria-label="收藏的查詢"]').first().click();
+    await sleep(300);
+    check("收藏清單列出剛存的查詢", (await page.getByText("SELECT orders", { exact: true }).count()) > 0);
+    await closeMenu(page);
+
+    // 再點一次＝取消收藏（同一顆鈕的 toggle 語意）。
+    await savedStar.first().click();
+    await sleep(400);
+    check("再點一次即取消收藏", (await page.locator('button[title*="已收藏為"]').count()) === 0);
+    check("取消後回到未收藏狀態", (await page.locator('button[title*="一鍵收藏目前查詢"]').count()) > 0);
+  },
+
+  // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
+  // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
+  // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。
+  async "query-toolbar-adapts-to-width"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await sleep(600);
+
+    const fmt = page.locator('button[title*="格式化 SQL"]');
+    const star = page.locator('button[title*="一鍵收藏目前查詢"], button[title*="已收藏為"]');
+    // 寬度門檻刻意訂得寬鬆：查詢面板還要跟側欄、右側詳細資料分寬度，1280 的視窗實際只留給
+    // 工具列 ~340px（量過），所以「完整標籤」得在很寬的視窗才看得到。
+    await page.setViewportSize({ width: 1920, height: 900 });
+    await sleep(700);
+    check("寬版：格式化鈕帶文字標籤", (await fmt.first().innerText()).includes("格式化"), await fmt.first().innerText());
+
+    // 窄版：無下拉的次要鈕整顆折進「更多」，主列只留關鍵動作。
+    await page.setViewportSize({ width: 1000, height: 900 });
+    await sleep(800);
+    check("窄版：格式化鈕已離開主列", (await fmt.count()) === 0);
+    // 這三顆永遠不折、也永遠不能被裁掉 —— 正是先前 overflow-hidden 版本會出事的地方。
+    check("窄版：收藏星星仍可見可點", await star.first().isVisible());
+    check("窄版：執行鈕仍可見", await page.getByRole("button", { name: /執行/ }).first().isVisible());
+    check("窄版：新查詢鈕仍可見", await page.locator('button[title*="開新查詢分頁"]').first().isVisible());
+
+    await page.locator('button[title*="更多工具"]').first().click();
+    await sleep(300);
+    // 工具列的下拉是 absolute z-[90]（錨在按鈕上），不是側欄右鍵那種 fixed z-[90]，
+    // 所以不能共用 menuItems()。
+    const more = await page.locator('div.absolute.z-\\[90\\] button').allTextContents();
+    check("窄版：格式化落到「更多」選單裡", more.some((i) => i.includes("格式化")), more.join(" | "));
+    check("窄版：建構器落到「更多」選單裡", more.some((i) => i.includes("建構器")));
+    await closeMenu(page);
+
+    // 拉回寬版要還原（遲滯不能把它永久卡在降階狀態）。
+    await page.setViewportSize({ width: 1920, height: 900 });
+    await sleep(900);
+    check(
+      "拉回寬版：格式化鈕回到主列且帶文字",
+      (await page.locator('button[title*="格式化 SQL"]').first().innerText()).includes("格式化"),
+    );
+  },
 };
 
 // ── main ───────────────────────────────────────────────────────────────
@@ -247,11 +420,12 @@ for (const name of want) {
   const page = await ctx.newPage();
   const pageErrors = [];
   page.on("pageerror", (e) => pageErrors.push(String(e).slice(0, 200)));
-  await page.addInitScript(installShim, fx);
+  const caseFx = { ...fx, ...(CASE_FX[name] ?? {}) };
+  await page.addInitScript(installShim, caseFx);
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#root");
   await sleep(1200);
-  try { await CASES[name](page); }
+  try { await CASES[name](page, caseFx); }
   catch (e) { check(`${name} 執行`, false, String(e).split("\n")[0]); }
   if (pageErrors.length) check(`${name} 無前端例外`, false, pageErrors[0]);
   await ctx.close();

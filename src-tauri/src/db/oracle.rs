@@ -5,10 +5,10 @@ use oracle::pool::{CloseMode, Pool, PoolBuilder};
 use oracle::sql_type::OracleType;
 
 use crate::db::{
-    bytes_to_display, filter_op_sql, op_needs_value, validate_column_spec, AlterOp, CellEdit, ColumnInfo,
+    bytes_to_display, filter_op_sql, group_table_columns, op_needs_value, validate_column_spec, AlterOp, CellEdit, ColumnInfo,
     ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable, Filter,
     ForeignKeyInfo, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert,
-    SearchHit, SearchOptions, Sort, SortDir, TableInfo, ValidationReport,
+    SearchHit, SearchOptions, Sort, SortDir, TableColumns, TableInfo, ValidationReport,
 };
 use crate::error::{AppError, AppResult};
 
@@ -450,6 +450,36 @@ impl DatabaseDriver for OracleDriver {
                 });
             }
             Ok(out)
+        })
+        .await
+    }
+
+    async fn schema_columns(&self, database: &str) -> AppResult<Vec<TableColumns>> {
+        let owner = database.to_string();
+        self.with_conn(move |conn| {
+            // all_tab_columns 是出了名的慢字典 view，但單次掃描仍遠優於預設實作的逐表往返：
+            // table_columns 每張表除了欄位查詢還會多打一次 primary_key，identity_column 不存在時
+            // 更會吃一次 ORA-00904 再退回重查——5000 張表就是上萬次來回。
+            // BIN$%（回收站殘留）比照 list_tables 排除。all_tab_columns 同時涵蓋表與視圖。
+            let rows = conn
+                .query(
+                    "SELECT table_name, column_name FROM all_tab_columns \
+                     WHERE owner = :1 AND table_name NOT LIKE 'BIN$%' \
+                     ORDER BY table_name, column_id",
+                    &[&owner],
+                )
+                .map_err(ora_q)?;
+            let mut pairs: Vec<(String, String)> = Vec::new();
+            for r in rows {
+                let row = r.map_err(ora_q)?;
+                let table: String = row.get::<usize, String>(0).unwrap_or_default();
+                let column: String = row.get::<usize, String>(1).unwrap_or_default();
+                if table.is_empty() || column.is_empty() {
+                    continue;
+                }
+                pairs.push((table, column));
+            }
+            Ok(group_table_columns(pairs))
         })
         .await
     }

@@ -261,7 +261,7 @@ All core features are complete (50+ items). Expand for the full list:
 - [x] **Multi-result sets** (SSMS-style stacking): each pane independently scrolls / sorts / filters / collapses; the active pane drives copy / export / ask-AI; "Export all" exports every result set at once
 - [x] **Editor themes**: 7 gemstone palettes (`src/editorThemes.ts`), upgraded in 0.8.0 into the unified theme system driving the whole app, switchable from the toolbar (light / dark / variants)
 - [x] **Saved queries**, complete: groups, edit / rename, import & export (SQL snippets included), managed from the top toolbar
-- [x] **SQL editor completion**: table / column autocomplete (incl. batch-loading a whole database's columns over the external gateway), `@` user-variable suggestions
+- [x] **SQL editor completion**: table / column autocomplete (**whole database loaded in one batch, no table-count cap**), **schema cache** (persisted to disk — instant on open, works offline; a toolbar badge shows how old it is and refreshes on click), `@` user-variable suggestions
 - [x] **Advanced object search** (`Ctrl+Shift+G`): sortable tabular results (name / database(schema) / type / matched-in / detail), name / definition / comment matches, whole-word + wildcards, highlighted definition preview, select in object explorer
 - [x] Sidebar search / filter auto-expands folders on match; grid headers show column comments on hover
 - [x] "About DB Kit" dialog + GitHub update check on launch (can be disabled in Settings)

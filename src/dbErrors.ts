@@ -24,6 +24,7 @@ const RULES: ErrorRule[] = [
   { kinds: ["mysql", "mariadb"], pattern: /\b1142\b|command denied/i, hint: "權限不足（MySQL 1142）：目前帳號沒有此操作的權限，請調整授權或改用其他帳號。" },
   { kinds: ["mysql", "mariadb"], pattern: /\b1205\b|lock wait timeout/i, hint: "等鎖逾時（MySQL 1205）：有其他交易鎖住目標列，稍後重試或檢查長交易。" },
   { kinds: ["mysql", "mariadb"], pattern: /\b3024\b|max_execution_time|max_statement_time/i, hint: "查詢已達伺服器端逾時上限而被中止（設定 → 查詢逾時可調整）。" },
+  { kinds: ["mysql", "mariadb"], pattern: /\b1317\b|query execution was interrupted/i, hint: "查詢已被取消（MySQL 1317）：來自「停止」或行程清單的 KILL QUERY；連線可繼續使用。" },
 
   // ---- PostgreSQL ----
   { kinds: ["postgres"], pattern: /28P01|password authentication failed/i, hint: "帳號或密碼錯誤（PG 28P01）：檢查使用者與密碼；亦確認 pg_hba.conf 允許此來源。" },

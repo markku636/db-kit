@@ -3,6 +3,7 @@ import {
   splitSqlStatements,
   splitSqlStatementsWithRanges,
   statementAtOffset,
+  suggestQueryName,
   hasExecutableSql,
   buildUseDatabase,
   parseClipboardGrid,
@@ -1497,5 +1498,27 @@ describe("收藏查詢 — 匯出 / 匯入 bundle", () => {
     const over = mergeSavedQueries(existing, incoming, true);
     expect(over.find((x) => x.name === "a")).toEqual({ name: "a", sql: "A2", createdAt: 5 });
     expect(over.map((x) => x.name)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("suggestQueryName", () => {
+  it("動詞 + 目標表", () => {
+    expect(suggestQueryName("SELECT * FROM orders WHERE id=1")).toBe("SELECT orders");
+    expect(suggestQueryName("update users set a=1")).toBe("UPDATE users");
+    expect(suggestQueryName("INSERT INTO logs (a) VALUES (1)")).toBe("INSERT logs");
+    expect(suggestQueryName("DELETE FROM t")).toBe("DELETE t");
+    expect(suggestQueryName("TRUNCATE TABLE `shop`.`orders`")).toBe("TRUNCATE orders");
+  });
+  it("字面值 / 註解裡的關鍵字不影響推導", () => {
+    expect(suggestQueryName("-- from nowhere\nSELECT * FROM sales")).toBe("SELECT sales");
+    expect(suggestQueryName("SELECT 'from fake' FROM real_t")).toBe("SELECT real_t");
+  });
+  it("推不出目標就退回動詞後第一個字 / 前 40 字", () => {
+    expect(suggestQueryName("SHOW TABLES")).toBe("SHOW TABLES");
+    expect(suggestQueryName("")).toBe("未命名查詢");
+  });
+  it("撞名補序號", () => {
+    expect(suggestQueryName("SELECT * FROM orders", ["SELECT orders"])).toBe("SELECT orders 2");
+    expect(suggestQueryName("SELECT * FROM orders", ["SELECT orders", "SELECT orders 2"])).toBe("SELECT orders 3");
   });
 });

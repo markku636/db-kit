@@ -267,10 +267,34 @@ pub struct ColumnInfo {
 }
 
 /// 整個資料庫「每張表的欄名」批次結果（供 SQL 自動完成一次載入整庫欄位，減少往返）。
-#[derive(Debug, Clone, Serialize)]
+/// 亦為結構快取（schema_cache）的落地格式，故需 Deserialize——它從未出現在 command
+/// 參數位置（只在回傳位置），補上不增加 IPC 攻擊面。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TableColumns {
     pub table: String,
+    #[serde(default)]
     pub columns: Vec<String>,
+}
+
+/// 將「已依表名排序」的 (表名, 欄名) 序列摺疊成 `Vec<TableColumns>`。
+///
+/// 各 driver 的批次 `schema_columns` 共用：一次 information_schema / 字典查詢取回整庫
+/// (表, 欄) 配對後，用本函式分組。純函式，以單元測試覆蓋。
+///
+/// 前提：輸入須依表名分組相鄰（查詢端務必 `ORDER BY` 表名）。同名表若不相鄰會產生兩筆
+/// entry——這是刻意的線性行為，不用 HashMap 去重，以免打亂欄序與表序。
+pub fn group_table_columns<I>(pairs: I) -> Vec<TableColumns>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    let mut out: Vec<TableColumns> = Vec::new();
+    for (table, column) in pairs {
+        match out.last_mut() {
+            Some(last) if last.table == table => last.columns.push(column),
+            _ => out.push(TableColumns { table, columns: vec![column] }),
+        }
+    }
+    out
 }
 
 /// 分頁資料結果（「資料」分頁用）。含總列數以渲染分頁器。
@@ -1123,6 +1147,20 @@ pub trait DatabaseDriver: Send + Sync {
         Ok(vec![self.query_capped(sql, cap).await?])
     }
 
+    /// 取消此連線上「執行中」的互動查詢——**伺服器端真取消**，非放棄本端等待。
+    /// 回傳成功送出取消訊號的查詢數（0 = 當下沒有執行中的查詢，屬正常結果非錯誤）。
+    ///
+    /// 實作要點：取消訊號必須走「另一條」連線送（原連線正忙於該查詢），且只中止當前語句、
+    /// 保留工作階段（MySQL `KILL QUERY` / PG `pg_cancel_backend`），否則交易與暫存狀態會一併沒了。
+    ///
+    /// 預設回 Unsupported：沒有旁路取消通道的驅動（SQLite / Redis / 外部 gateway…）沿用之，
+    /// 前端據此退回「只停止本端等待」並提示伺服器端可能仍在跑。
+    async fn cancel_query(&self) -> AppResult<usize> {
+        Err(AppError::Unsupported(
+            t!("此連線不支援取消執行中的查詢").into(),
+        ))
+    }
+
     /// 更新單一儲存格（寫回 DB）。以主鍵定位列。
     async fn update_cell(
         &self,
@@ -1393,6 +1431,72 @@ pub(crate) fn bytes_to_display(b: &[u8]) -> String {
             }
             hex
         }
+    }
+}
+
+#[cfg(test)]
+mod group_table_columns_tests {
+    use super::*;
+
+    fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+        v.iter().map(|(t, c)| (t.to_string(), c.to_string())).collect()
+    }
+
+    #[test]
+    fn groups_adjacent_rows_and_preserves_order() {
+        let out = group_table_columns(pairs(&[
+            ("orders", "id"),
+            ("orders", "customer_id"),
+            ("orders", "total"),
+            ("users", "id"),
+            ("users", "email"),
+        ]));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].table, "orders");
+        // 欄序必須是查詢的 ORDER BY 序（ordinal_position），不得被重排。
+        assert_eq!(out[0].columns, vec!["id", "customer_id", "total"]);
+        assert_eq!(out[1].table, "users");
+        assert_eq!(out[1].columns, vec!["id", "email"]);
+    }
+
+    #[test]
+    fn empty_input_yields_empty_output() {
+        assert!(group_table_columns(pairs(&[])).is_empty());
+    }
+
+    #[test]
+    fn single_column_table_still_produces_entry() {
+        let out = group_table_columns(pairs(&[("flags", "enabled")]));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].columns, vec!["enabled"]);
+    }
+
+    #[test]
+    fn non_adjacent_same_name_splits_rather_than_merges() {
+        // 刻意的線性行為：不用 HashMap 去重，否則會打亂表序與欄序。
+        // 查詢端一律 ORDER BY 表名，所以實務上不會走到這條。
+        let out = group_table_columns(pairs(&[("a", "x"), ("b", "y"), ("a", "z")]));
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[2].table, "a");
+    }
+
+    #[test]
+    fn table_columns_round_trips_through_json() {
+        // 結構快取以 JSON 落地，Serialize/Deserialize 必須對稱。
+        let src = group_table_columns(pairs(&[("t", "a"), ("t", "b")]));
+        let json = serde_json::to_string(&src).unwrap();
+        let back: Vec<TableColumns> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].table, "t");
+        assert_eq!(back[0].columns, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn missing_columns_field_defaults_to_empty() {
+        // 舊檔 / 手改檔缺欄位時走 #[serde(default)]，不得整批解析失敗。
+        let back: TableColumns = serde_json::from_str(r#"{"table":"t"}"#).unwrap();
+        assert_eq!(back.table, "t");
+        assert!(back.columns.is_empty());
     }
 }
 

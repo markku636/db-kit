@@ -187,7 +187,7 @@ pub fn headless_config_dir() -> AppResult<PathBuf> {
 }
 
 #[cfg(feature = "gui")]
-fn app_config_dir(app: &AppHandle) -> AppResult<PathBuf> {
+pub fn app_config_dir(app: &AppHandle) -> AppResult<PathBuf> {
     app.path()
         .app_config_dir()
         .map_err(|e| AppError::Storage(tf!("無法取得設定目錄：{e}", e = e)))
@@ -325,6 +325,25 @@ pub async fn write_json_in<T: Serialize>(dir: &Path, file: &str, value: &T) -> A
     let path = dir.join(file);
     let tmp = dir.join(format!("{file}.tmp"));
     let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|e| AppError::Storage(tf!("序列化 {file} 失敗：{e}", file = file, e = e)))?;
+    tokio::fs::write(&tmp, &bytes)
+        .await
+        .map_err(|e| AppError::Storage(tf!("寫入 {file} 失敗：{e}", file = file, e = e)))?;
+    tokio::fs::rename(&tmp, &path)
+        .await
+        .map_err(|e| AppError::Storage(tf!("更新 {file} 失敗：{e}", file = file, e = e)))?;
+    Ok(())
+}
+
+/// 原子寫入設定目錄下的 JSON 檔，但**不做 pretty 縮排**（temp + rename）。
+/// 給機器產生、體積可觀的資料用（結構快取：一個大 schema 的 pretty 縮排要多吃約五成空間，
+/// 而且沒人會去手讀它）。人會編輯 / 想 diff 的設定檔請continue 用 `write_json_in`。
+pub async fn write_json_compact_in<T: Serialize>(dir: &Path, file: &str, value: &T) -> AppResult<()> {
+    ensure_dir_at(dir).await?;
+    let path = dir.join(file);
+    let tmp = dir.join(format!("{file}.tmp"));
+    // 錯誤訊息刻意與 write_json_in 逐字相同——zh 原文即 i18n key，共用等於免再翻一次。
+    let bytes = serde_json::to_vec(value)
         .map_err(|e| AppError::Storage(tf!("序列化 {file} 失敗：{e}", file = file, e = e)))?;
     tokio::fs::write(&tmp, &bytes)
         .await

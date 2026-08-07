@@ -3,10 +3,10 @@ use sqlx::{Column, MySqlPool, Row, TypeInfo, ValueRef};
 use std::time::Duration;
 
 use crate::db::{
-    classify_match, collect_relations, filter_op_sql, finalize_hits, fmt_bytes, make_snippet,
-    op_needs_value, sqlx_db_message, AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver,
+    classify_match, collect_relations, filter_op_sql, finalize_hits, fmt_bytes, group_table_columns,
+    make_snippet, op_needs_value, sqlx_db_message, AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver,
     ErColumn, ErModel, ErTable, Filter, ForeignKeyInfo, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo,
-    RowDelete, RowInsert, SearchHit, SearchOptions, Sort, SortDir, TableInfo, ValidationReport,
+    RowDelete, RowInsert, SearchHit, SearchOptions, Sort, SortDir, TableColumns, TableInfo, ValidationReport,
 };
 use crate::error::{AppError, AppResult};
 
@@ -24,13 +24,41 @@ pub struct MysqlDriver {
     /// 但也不必每次丟棄重建 — 同 USE 語句且 60 秒內用過即重用（免 acquire + USE + 重建連線）。
     /// 異庫 / 閒置過久 / 查詢出錯 → drop 關閉。close() 時一併清空。
     switched: tokio::sync::Mutex<Option<SwitchedConn>>,
+    /// 執行中互動查詢（query_capped）的工作階段 ID（`CONNECTION_ID()`）。
+    /// cancel_query 據此以「另一條」連線送 `KILL QUERY <id>` 做伺服器端真取消。
+    /// 同一連線可有多個查詢分頁併行 → 集合而非單值；各查詢落在不同 pool 連線故 ID 不重複。
+    running: parking_lot::Mutex<std::collections::HashSet<u64>>,
 }
 
 /// 已切庫（detach 出池）的連線 + 其 USE 語句與最後使用時刻。
 struct SwitchedConn {
     use_stmt: String,
     conn: sqlx::MySqlConnection,
+    /// 該連線的 `CONNECTION_ID()`：快取連線重用時免再問一次（省一趟往返）。
+    session_id: u64,
     last_used: std::time::Instant,
+}
+
+/// 查詢期間把工作階段 ID 留在 `running` 內，drop 時自動移除。
+/// 用 RAII 而非手動清除：查詢失敗、被 KILL、或外層 tokio 逾時丟棄整個 future 時都不會漏。
+struct RunningGuard<'a> {
+    set: &'a parking_lot::Mutex<std::collections::HashSet<u64>>,
+    id: u64,
+}
+
+impl Drop for RunningGuard<'_> {
+    fn drop(&mut self) {
+        self.set.lock().remove(&self.id);
+    }
+}
+
+/// 問出該連線的 MySQL 工作階段 ID（`CONNECTION_ID()` 為 BIGINT UNSIGNED）。
+async fn session_id(conn: &mut sqlx::MySqlConnection) -> AppResult<u64> {
+    sqlx::query("SELECT CONNECTION_ID()")
+        .fetch_one(&mut *conn)
+        .await
+        .and_then(|r| r.try_get::<u64, _>(0))
+        .map_err(|e| AppError::Query(e.to_string()))
 }
 
 /// MySQL 系統資料庫（不可刪除）。
@@ -259,7 +287,12 @@ impl DatabaseDriver for MysqlDriver {
             .map_err(|e| AppError::Connect(e.to_string()))?;
 
         let default_db = config.database.clone().filter(|s| !s.is_empty());
-        let driver = Self { pool, default_db, switched: tokio::sync::Mutex::new(None) };
+        let driver = Self {
+            pool,
+            default_db,
+            switched: tokio::sync::Mutex::new(None),
+            running: parking_lot::Mutex::new(std::collections::HashSet::new()),
+        };
         driver.ping().await?;
         Ok(driver)
     }
@@ -342,6 +375,23 @@ impl DatabaseDriver for MysqlDriver {
             .collect())
     }
 
+    async fn schema_columns(&self, database: &str) -> AppResult<Vec<TableColumns>> {
+        // 一次取回整庫所有表 / 視圖的欄名（SQL 自動完成用），取代預設實作的逐表往返：
+        // N 張表 N 次來回 → 1 次。這正是 gateway 型 driver 早就在做的事（見 trait 預設實作註解），
+        // 內建 driver 一併比照，前端才能拿掉「只補前 80 張表」的權宜上限。
+        // 只取欄名不取型別 / 預設值——快取落地只需欄名，且 COLUMN_DEFAULT 可能夾帶敏感值。
+        let sql = "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS \
+                   WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION";
+        let rows = sqlx::query(sql)
+            .bind(database)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(group_table_columns(
+            rows.iter().filter_map(|r| Some((str_col(r, 0)?, str_col(r, 1)?))),
+        ))
+    }
+
     async fn table_data(
         &self,
         database: &str,
@@ -417,12 +467,12 @@ impl DatabaseDriver for MysqlDriver {
                         if sc.use_stmt == use_stmt
                             && sc.last_used.elapsed() < std::time::Duration::from_secs(60) =>
                     {
-                        Some(sc.conn)
+                        Some((sc.conn, sc.session_id))
                     }
                     _ => None, // 異庫 / 過期的快取連線在此 drop 關閉
                 }
             };
-            let mut conn: sqlx::MySqlConnection = match cached {
+            let (mut conn, sid): (sqlx::MySqlConnection, u64) = match cached {
                 Some(c) => c,
                 None => {
                     let pooled = self
@@ -439,9 +489,13 @@ impl DatabaseDriver for MysqlDriver {
                         .execute(use_stmt.as_str())
                         .await
                         .map_err(|e| AppError::Query(e.to_string()))?;
-                    owned
+                    // 工作階段 ID 隨快取一起留著：同庫下一查詢重用連線時不必再問。
+                    let sid = session_id(&mut owned).await?;
+                    (owned, sid)
                 }
             };
+            // 登記為「執行中」：cancel_query 才有目標可 KILL QUERY（drop 時自動撤銷登記）。
+            let _guard = self.track(sid);
             let t = rest.trim_start().to_ascii_lowercase();
             // contains("returning")：MariaDB 10.5+ 的 INSERT/REPLACE/DELETE … RETURNING 會回結果集，
             // 需走 fetch 路徑才看得到（比照 postgres.rs 的字串偵測取捨）。
@@ -470,6 +524,7 @@ impl DatabaseDriver for MysqlDriver {
                 *self.switched.lock().await = Some(SwitchedConn {
                     use_stmt,
                     conn,
+                    session_id: sid,
                     last_used: std::time::Instant::now(),
                 });
             } // 失敗 → conn 在此 drop（協定狀態不明，不快取）
@@ -484,14 +539,25 @@ impl DatabaseDriver for MysqlDriver {
             || trimmed.starts_with("explain")
             || trimmed.contains("returning");
 
+        // 取「具名的一條」連線而非把 &self.pool 交給 sqlx：先問出 CONNECTION_ID() 登記起來，
+        // cancel_query 才有辦法以另一條連線送 KILL QUERY 真正中止（交給 pool 執行則無從得知
+        // 落在哪條連線上）。代價是每次互動查詢多一趟極輕量往返；查詢結束連線照常回池。
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let sid = session_id(&mut conn).await?;
+        let _guard = self.track(sid);
+
         if is_read {
-            let (rows, truncated) = fetch_rows_capped(&self.pool, sql, cap).await?;
+            let (rows, truncated) = fetch_rows_capped(&mut *conn, sql, cap).await?;
             let mut result = rows_to_result(&rows);
             result.truncated = truncated;
             Ok(result)
         } else {
             let res = sqlx::query(sql)
-                .execute(&self.pool)
+                .execute(&mut *conn)
                 .await
                 .map_err(|e| AppError::Query(e.to_string()))?;
             Ok(QueryResult {
@@ -501,6 +567,34 @@ impl DatabaseDriver for MysqlDriver {
                 truncated: false,
             })
         }
+    }
+
+    async fn cancel_query(&self) -> AppResult<usize> {
+        let ids: Vec<u64> = self.running.lock().iter().copied().collect();
+        if ids.is_empty() {
+            return Ok(0); // 查詢已結束或尚未送達 DB —— 不是錯誤
+        }
+        // KILL QUERY 只中止「當前語句」，工作階段 / 交易 / 暫存表保留（不帶 QUERY 會斷整條連線）。
+        // 走另一條 pool 連線送：原連線正阻塞在該查詢上。若 pool 已被長查詢佔滿，acquire 會在
+        // acquire_timeout（10 秒）後回錯，訊息由前端顯示並引導改用行程清單。
+        use sqlx::Executor;
+        let mut sent = 0usize;
+        for id in ids {
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?;
+            // 查詢可能在取得連線的空檔自行結束（1094 Unknown thread id）→ 不算失敗，略過即可。
+            if (&mut *conn)
+                .execute(format!("KILL QUERY {id}").as_str())
+                .await
+                .is_ok()
+            {
+                sent += 1;
+            }
+        }
+        Ok(sent)
     }
 
     fn pool_status(&self) -> PoolStatus {
@@ -1386,6 +1480,12 @@ impl DatabaseDriver for MysqlDriver {
 }
 
 impl MysqlDriver {
+    /// 把工作階段 ID 登記為「執行中」，回傳的 guard drop 時自動撤銷登記。
+    fn track(&self, id: u64) -> RunningGuard<'_> {
+        self.running.lock().insert(id);
+        RunningGuard { set: &self.running, id }
+    }
+
     /// SQL Search 共用：執行一段已組好的搜尋查詢。
     /// 綁定順序為「schema 過濾值」在前、LIKE 樣式（重複 like_count 次）在後，對應 SQL 中 `?` 的出現順序。
     async fn run_search(

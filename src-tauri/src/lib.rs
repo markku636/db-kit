@@ -15,6 +15,7 @@ mod error;
 mod export;
 mod import;
 mod manager;
+mod schema_cache;
 mod ssh;
 mod store;
 mod transfer;
@@ -142,9 +143,14 @@ pub fn run() {
             commands::list_tables,
             commands::table_columns,
             commands::schema_columns,
+            commands::get_schema_cache,
+            commands::refresh_schema_cache,
+            commands::clear_schema_cache,
+            commands::schema_cache_stats,
             commands::table_data,
             commands::run_query,
             commands::run_query_multi,
+            commands::cancel_query,
             commands::save_text_file,
             commands::read_text_file,
             commands::update_cell,
