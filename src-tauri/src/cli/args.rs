@@ -120,6 +120,35 @@ pub enum Command {
     /// 查詢計畫（EXPLAIN）
     Explain { sql: String },
 
+    /// 壓力測試：多執行緒重複執行同一段查詢，量測 TPS 與延遲分佈（唯讀；寫入語句會被擋下）
+    Stress {
+        sql: String,
+        /// 並行執行緒數（1..64）
+        #[arg(long, default_value_t = 4)]
+        threads: u32,
+        /// 每執行緒迭代次數。與 --seconds 互斥；兩者皆未給時預設跑 100 次
+        #[arg(long, conflicts_with = "seconds")]
+        iterations: Option<u64>,
+        /// 改以「持續時間」計：跑滿 N 秒（含暖機與爬升）
+        #[arg(long)]
+        seconds: Option<u64>,
+        /// 執行緒逐步進場的爬升秒數（僅 --seconds 模式有意義）
+        #[arg(long, default_value_t = 0)]
+        ramp: u64,
+        /// 每執行緒暖機次數（不計入統計）
+        #[arg(long, default_value_t = 0)]
+        warmup: u64,
+        /// 每次迭代之間的間隔（毫秒）
+        #[arg(long, default_value_t = 0)]
+        delay_ms: u64,
+        /// 每次查詢的取列上限（0 = 完整取回）
+        #[arg(long, default_value_t = 1000)]
+        max_rows: usize,
+        /// 單次查詢逾時（毫秒；0 = 不逾時）
+        #[arg(long, default_value_t = 30_000)]
+        timeout_ms: u64,
+    },
+
     /// 欄位統計（總數 / 非空 / 相異 / 範圍）
     ColumnStats { table: String, column: String },
 

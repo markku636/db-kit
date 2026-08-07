@@ -1,5 +1,15 @@
 ## v0.22.0
 
+- **SQL 壓力測試**（致敬 [SQLQueryStress](https://github.com/ErikEJ/SqlQueryStress)，並補上 pgbench / HammerDB 那一派的持續時間模式）：查詢分頁「更多 → 效能 → 壓力測試…」，把目前語句以多執行緒重複執行，量測 TPS 與延遲分佈。
+  - **兩種負載形態**：固定迭代（執行緒 × 每執行緒次數）或持續時間（跑滿 N 秒，可設爬升秒數讓執行緒分批進場，看得出系統在多少併發開始劣化）。另有每執行緒暖機（不計入統計，免得首次建連的數十毫秒整個灌進 p99）、迭代間延遲、取列上限與單次逾時。
+  - **報表**：TPS、平均 / 最小 / 最大 / 標準差、**p50 / p90 / p95 / p99**（nearest-rank），以及每秒一格的 TPS 與 p95 折線圖（執行中即時更新）。錯誤**指紋化分組**——`Duplicate entry '123'` 與 `'456'` 歸同一組（仿 pt-query-digest），不會讓幾千筆同種錯誤刷成幾千列。可一鍵複製成 Markdown 貼進 Jira 或丟給 AI。
+  - **參數替換**（對標 SQLQueryStress 的 Parameter Substitution）：語句寫 `:name`，貼一段 CSV 當參數表，每列展開成一條語句由各 worker 輪替取用——避免整場壓測只打同一把 key 而全落在快取上。展開沿用查詢面板既有的方言跳脫（`sql.ts`），不另寫一份。
+  - **專屬連線池，不佔用互動池**：壓測另開一個 `max_connections = 執行緒數` 的連線（沿用既有 connect 路徑，SSH tunnel / TLS / CA 全部照舊），跑完在所有離開路徑（成功 / 失敗 / 取消 / panic）都由 RAII 守衛收掉。否則 64 條併發會把預設 5 條的互動池吃光，連線樹與自動完成全部卡死。池 id 含 run_id，同一條連線併發兩場壓測互不干擾。
+  - **安全守門**：預設只放行查詢語句（與 CLI `query` 同一道判準，含可寫 CTE 偵測）；即使扳開「允許寫入」，**DROP / TRUNCATE / 無 WHERE 的 UPDATE·DELETE 一律拒絕**——這類語句在迴圈裡重放一次就足以清空整張表，第二次之後量到的也不是同一件事。另外擋下 `EXPLAIN ANALYZE <寫入>`（它會真的執行，而只看首關鍵字的守門會誤放）。唯讀連線的危險開關直接停用。全部檢查在**建連線之前**一次做完，不做部分執行。
+  - **`dbk stress` CLI**：`dbk --conn prod stress "SELECT …" --threads 8 --seconds 30 --ramp 5`，進度走 stderr、報表走 stdout（`--format json` 可直接導檔）。CLI 一律唯讀，不提供 `--allow-writes`。
+  - 新增 `src/stress.ts`（50 項測試）、`src-tauri/src/stress.rs`（19 項）與 **7 項 Docker 整合測試**（真 MySQL 8 / PostgreSQL 16：迭代計數精確、持續時間收斂、取消即時性、守門攔截、錯誤分組、互動池不被餓死、併發壓測互相隔離）。
+- **修正：`is_destructive_sql` 會被註解或子查詢裡的 `where` 騙過**（`cli/guard.rs`，同時影響 `dbk` 的 `--force` 判定與 GUI 資料格的危險操作確認）。`DELETE FROM logs -- WHERE id = 1`（把條件註解掉試最壞情況）原本被判成「有 WHERE、不危險」而放行；`UPDATE t SET a = (SELECT … WHERE …)` 的 WHERE 在子查詢裡，頂層其實會掃全表。現在先剝掉註解 / 字串 / dollar-quote 再剝掉括號，只認頂層的 WHERE——與前端 `sql.ts::isDangerousStatement` 早就在做的 `stripCode` + `stripParens` 對齊成同一套判準。
+
 - **結構快取：自動完成不再只補前 80 張表**。編輯器的表 / 欄自動完成原本為了避免逐表往返，寫死「只補前 80 張表」——超過的資料庫，第 81 張表之後**完全沒有欄位提示**；而行程內快取又**永不失效**，在 app 裡跑完 DDL 也不會更新，得重開才會變。這版把兩件事都解掉：
   - **各 driver 覆寫 `schema_columns`，改為單一字典查詢**（MySQL / PostgreSQL 走 `information_schema.COLUMNS`、SQL Server 走 `sys.columns` join `sys.objects`、Oracle 走 `ALL_TAB_COLUMNS`、SQLite 走 `sqlite_master` join `pragma_table_info()`）。原本的預設實作是**逐表 sequential 呼叫 `table_columns`**——5,000 張表的 Oracle 就是 5,000 次來回（每張還多打一次主鍵查詢），LAN 上約 190 秒、VPN 上超過 10 分鐘。這正是 external gateway 早就在做的事，現在下放給所有內建 driver，於是 80 張的上限沒有存在的理由了。**沒有新增任何 trait 方法**（`schema_columns` 本來就在），`manager.rs` 一行未動。
   - **快取落地磁碟**（`%APPDATA%\dev.dbkit.app\schema-cache\<連線>.json`，一連線一檔）：開啟查詢分頁**當下**就有整庫表名與欄名，不必等查詢回來；未連線、離線也照樣有提示。載入順序為行程內 → 磁碟 →（每個工作階段第一次）背景重抓一次，不做 TTL 輪詢。
@@ -9,6 +19,9 @@
   - **標記為正式環境的連線預設不寫入磁碟**（沿用既有的 `options.prod`，不另立一套「敏感連線」概念），仍照常提供本次工作階段的提示。設定 → 結構快取可看到存放路徑、連線數 / 表數 / 佔用空間 / 最後更新，並一鍵清除全部。
   - 內容沒變的重抓會沿用原本的物件，避免 CodeMirror 整組重建擴充套件（大 schema 會卡一下）；併回時**空的結果不覆蓋既有非空快取**（權限不足 / 逾時常表現為「成功回傳 0 張表」）。
   - 新增 `src/schemaCache.test.ts`（30 項）與 Rust 端 `schema_cache` / `group_table_columns` 測試（含半截 JSON、缺欄位、未知欄位、路徑穿越字元的容錯），前端 460 項、後端 203 項全綠。
+- **側欄捲動結構重整**：側欄根層原本同時扮演三個角色——column flex 容器、捲動容器，以及二十多個 `fixed` 右鍵選單／對話框的掛載點。拆成「外殼 `flex flex-col overflow-hidden`」+「內層 `flex-1 min-h-0 overflow-y-auto` 純捲動視窗」，搜尋列由 `sticky` 改成外殼上的固定列（對使用者一樣永遠可見，但不再參與捲動容器的 overflow 計算），選單與對話框移出捲動視窗。捲動區帶 `data-sidebar-scroll` 供 UI 檢查定位，並補 `overscroll-contain`（捲到底不把捲動傳給主區）與 `pb-2`（最後一筆不貼齊邊緣）。
+  - `verify:ui` 新增 `sidebar-scroll-reaches-last`（5 項）：**40 筆連線分 3 個群組**的情境下，斷言捲動高度確實產生、**用真實滑鼠滾輪**捲得到底、最後一筆連線捲到底後幾何上完整落在視窗內且可點、搜尋列在捲到底時仍可見。invoke shim 一併補上 `list_connection_groups` / `save_connection_layout`（原本未實作，側欄分組路徑從來沒被冒煙檢查覆蓋過）。
+- **連線右鍵「新增查詢」不再只給三種連線**：原本白名單寫死 MySQL 家族 / PostgreSQL / SQLite，**SQL Server、Oracle、external gateway、MongoDB、Redis、Elasticsearch 的連線右鍵完全看不到這一項**，只能改從別處開查詢分頁。抽出 `supportsQueryEditorKind()` 放進 `sql.ts` 當單一落點（Kafka / RabbitMQ 沒有查詢語言，其餘皆有編輯器），查詢面板的編輯器 gate 與側欄右鍵共用同一個判準——兩處原本各寫一份白名單，這正是漂移的來源。
 - **查詢可中途取消**：執行中的查詢可按「停止」真正在**伺服器端**取消（MySQL `KILL QUERY` / PostgreSQL `pg_cancel_backend`），走另一條連線送訊號、只中止當前語句而保留工作階段（交易與暫存狀態不會一起沒了）。沒有旁路取消通道的驅動（SQLite / Redis / gateway）回報不支援，前端退回「只停止本端等待」並說明伺服器端可能仍在跑。MySQL 1317 的錯誤訊息一併正名為「查詢已被取消」。
 - **工具列一鍵收藏**：查詢分頁工具列加星星鈕，直接收藏 / 取消收藏目前的 SQL，名稱由語句自動推導（`suggestQueryName`，同名自動加序號）。原本要開「收藏查詢」對話框才存得起來。
 - **工具列三階響應式降階**：視窗變窄時按鈕依序落入「更多」選單，**絕不裁掉**任何鈕——先降階、降到底仍放不下才換行。窄版下執行 / 新查詢 / 收藏星星保證可見可點。

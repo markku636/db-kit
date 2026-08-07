@@ -2032,3 +2032,223 @@ async fn import_csv_skips_whitespace_only_row_when_trimming() {
     mgr.disconnect(id).await;
     let _ = std::fs::remove_file(dbfile);
 }
+
+// ============================ 壓力測試（Docker）============================
+//
+// 驗 stress.rs 對「真的資料庫」的行為：並行下的計數正確性、持續時間模式的收斂、
+// 取消的即時性、守門的攔截，以及專屬連線池不吃掉互動池。純函式（percentile /
+// summarize / normalize_error）在 stress.rs 內以一般 cargo test 覆蓋，不需要 Docker。
+//
+// 前置容器（與上方既有的 13306 / 15432 共用；兩邊都要有 testdb 與 bench 表）：
+//   docker run --name dbkit-stress-mysql -e MYSQL_ROOT_PASSWORD=test1234 -p 13306:3306 -d mysql:8
+//   docker run --name dbkit-stress-pg    -e POSTGRES_PASSWORD=test1234  -p 15432:5432 -d postgres:16
+//   CREATE TABLE bench (id …, name …, n int); 塞幾列即可（壓測只讀不寫）。
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use crate::stress::{StressMode, StressPlan};
+
+/// 壓測計畫的預設值：各測試只改自己關心的欄位，讓斷言的意圖不被一長串樣板淹沒。
+fn splan(statements: &[&str], threads: u32, mode: StressMode) -> StressPlan {
+    StressPlan {
+        statements: statements.iter().map(|s| s.to_string()).collect(),
+        threads,
+        mode,
+        warmup_iterations: 0,
+        delay_ms: 0,
+        row_cap: 100,
+        query_timeout_ms: 10_000,
+        allow_writes: false,
+    }
+}
+
+fn stress_mysql_cfg() -> ConnectionConfig {
+    cfg(DbKind::Mysql, "127.0.0.1", 13306, "root", "test1234", Some("testdb"))
+}
+
+fn stress_pg_cfg() -> ConnectionConfig {
+    cfg(DbKind::Postgres, "127.0.0.1", 15432, "postgres", "test1234", Some("testdb"))
+}
+
+/// 不關心進度事件時的空 callback。
+fn no_progress(_: crate::stress::StressProgress) {}
+
+/// 固定迭代模式：完成數必須「剛好」等於 threads × per_thread —— 併發計數少一筆或多一筆
+/// 都代表 atomic 累加或收尾 join 有問題，而那正是壓測工具最不能出錯的地方。
+#[tokio::test]
+#[ignore = "需要 Docker MySQL:13306"]
+async fn stress_mysql_iterations() {
+    let mgr = Arc::new(crate::manager::ConnectionManager::new());
+    let p = splan(&["SELECT COUNT(*) FROM bench"], 4, StressMode::Iterations { per_thread: 50 });
+    let r = crate::stress::run_stress(mgr.clone(), "it-iter", stress_mysql_cfg(), p, &no_progress)
+        .await
+        .unwrap();
+
+    assert_eq!(r.completed, 200, "4 執行緒 × 50 次應剛好 200 次，錯誤：{:?}", r.error_groups);
+    assert_eq!(r.errors, 0, "查詢不該失敗：{:?}", r.error_groups);
+    assert!(!r.cancelled);
+    assert_eq!(r.threads, 4);
+    // 百分位必須單調，且被 min / max 夾住。排序漏做或 nearest-rank 算錯時這裡會炸。
+    assert!(
+        r.p50_ms <= r.p90_ms && r.p90_ms <= r.p95_ms && r.p95_ms <= r.p99_ms,
+        "百分位應單調遞增：{} {} {} {}", r.p50_ms, r.p90_ms, r.p95_ms, r.p99_ms
+    );
+    assert!(r.min_ms <= r.p50_ms && r.p99_ms <= r.max_ms);
+    assert!(r.avg_ms > 0.0 && r.rps > 0.0);
+    assert!(!r.series.is_empty(), "至少要有一格取樣");
+}
+
+/// 持續時間模式：跑滿指定秒數才收工（含 1 秒爬升）。上界放寬——收尾要等最後一輪查詢回來。
+/// 這一項同時釘住「secs 自 t0 起算」：deadline 若改成各 worker 自己暖機後才起算，
+/// elapsed_ms 會系統性超出而讓這個斷言失敗。
+#[tokio::test]
+#[ignore = "需要 Docker PostgreSQL:15432"]
+async fn stress_pg_duration() {
+    let mgr = Arc::new(crate::manager::ConnectionManager::new());
+    let mut p = splan(&["SELECT 1"], 3, StressMode::Duration { secs: 3, ramp_secs: 1 });
+    p.warmup_iterations = 5; // 暖機含在 secs 內，不該把總時間往後推
+    let r = crate::stress::run_stress(mgr.clone(), "it-dur", stress_pg_cfg(), p, &no_progress)
+        .await
+        .unwrap();
+
+    assert!(r.elapsed_ms >= 3_000, "應跑滿 3 秒，實際 {} ms", r.elapsed_ms);
+    assert!(r.elapsed_ms <= 5_000, "暖機不應把總時間往後推，實際 {} ms", r.elapsed_ms);
+    assert!(r.completed > 0 && r.rps > 0.0);
+    assert_eq!(r.errors, 0, "{:?}", r.error_groups);
+    assert_eq!(r.mode, "duration");
+}
+
+/// 取消要「立刻」生效：對排定跑 60 秒的壓測在 0.7 秒後喊停，整體必須在數秒內收斂，
+/// 且報表標記 cancelled。若取消旗標只在迴圈頂端看一次而 delay / ramp 是一次睡到底，這裡會逾時。
+#[tokio::test]
+#[ignore = "需要 Docker MySQL:13306"]
+async fn stress_cancel_is_prompt() {
+    let mgr = Arc::new(crate::manager::ConnectionManager::new());
+    let p = splan(&["SELECT 1"], 2, StressMode::Duration { secs: 60, ramp_secs: 0 });
+    let canceller = tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert!(crate::stress::cancel("it-cancel"), "取消時該壓測應仍在登錄簿中");
+    });
+
+    let started = std::time::Instant::now();
+    let r = crate::stress::run_stress(mgr.clone(), "it-cancel", stress_mysql_cfg(), p, &no_progress)
+        .await
+        .unwrap();
+    canceller.await.unwrap();
+
+    assert!(r.cancelled, "報表應標記為已取消");
+    assert!(started.elapsed() < Duration::from_secs(10), "取消後應迅速收斂，實際 {:?}", started.elapsed());
+    assert!(r.elapsed_ms < 55_000, "不該跑完原訂的 60 秒：{} ms", r.elapsed_ms);
+    // 取消後登錄簿要清乾淨，否則同 id 重跑會撞到殘留的舊旗標。
+    assert!(!crate::stress::is_running("it-cancel"));
+}
+
+/// 守門：唯讀模式擋所有寫入；即使明示 allow_writes，高破壞語句仍不放行。
+/// 兩者都必須在「建連線之前」就 Err —— 跑到一半才擋，資料早就被改了 N 次。
+#[tokio::test]
+#[ignore = "需要 Docker MySQL:13306"]
+async fn stress_rejects_writes() {
+    let mgr = Arc::new(crate::manager::ConnectionManager::new());
+
+    let mut p = splan(
+        &["UPDATE bench SET n = n + 1 WHERE id = 1"],
+        2,
+        StressMode::Iterations { per_thread: 1 },
+    );
+    let e = crate::stress::run_stress(mgr.clone(), "it-w1", stress_mysql_cfg(), p.clone(), &no_progress)
+        .await
+        .unwrap_err();
+    assert!(matches!(e, crate::error::AppError::Query(_)), "唯讀模式應擋下 UPDATE：{e:?}");
+
+    // 明示允許寫入 → 帶 WHERE 的 UPDATE 可過（只驗守門不誤擋，不實際寫入）。
+    p.allow_writes = true;
+    assert!(crate::stress::validate_plan(&p).is_ok(), "帶 WHERE 的 UPDATE 在 allow_writes 下應放行");
+
+    // DROP / TRUNCATE / 無 WHERE 的 DELETE 一律拒絕，即使 allow_writes；
+    // 把 WHERE 註解掉也不算有條件（迴圈重放會清空整張表）。
+    for sql in [
+        "DROP TABLE bench",
+        "TRUNCATE TABLE bench",
+        "DELETE FROM bench",
+        "DELETE FROM bench -- WHERE id = 1",
+    ] {
+        let mut d = splan(&[sql], 1, StressMode::Iterations { per_thread: 1 });
+        d.allow_writes = true;
+        assert!(crate::stress::validate_plan(&d).is_err(), "高破壞語句應被拒絕：{sql}");
+    }
+}
+
+/// 錯誤路徑：打不存在的表，每次迭代都失敗但壓測不中斷，且同類錯誤指紋化後歸成一組。
+#[tokio::test]
+#[ignore = "需要 Docker MySQL:13306"]
+async fn stress_groups_errors() {
+    let mgr = Arc::new(crate::manager::ConnectionManager::new());
+    let p = splan(&["SELECT * FROM no_such_table_here"], 2, StressMode::Iterations { per_thread: 10 });
+    let r = crate::stress::run_stress(mgr.clone(), "it-err", stress_mysql_cfg(), p, &no_progress)
+        .await
+        .unwrap();
+
+    assert_eq!(r.completed, 0, "全部失敗時不應計入完成數");
+    assert_eq!(r.errors, 20, "2 執行緒 × 10 次都應失敗");
+    assert_eq!(r.error_groups.len(), 1, "同一個錯誤指紋化後應只有一組：{:?}", r.error_groups);
+    assert_eq!(r.error_groups[0].count, 20);
+}
+
+/// 專屬連線池：壓測期間互動連線（同一個 manager、原本的 id）仍可正常查詢。
+/// 這是「壓測不該把 UI 卡死」的最小可驗證形式——共用池的話 8 條併發會把預設 5 條吃光。
+#[tokio::test]
+#[ignore = "需要 Docker MySQL:13306"]
+async fn stress_does_not_starve_interactive_pool() {
+    let mgr = Arc::new(crate::manager::ConnectionManager::new());
+    let c = stress_mysql_cfg();
+    mgr.connect(c.clone()).await.unwrap(); // 互動連線：預設 max_connections = 5
+    let id = c.id.clone();
+
+    let hits = Arc::new(AtomicU64::new(0));
+    let probe = {
+        let (mgr2, id2, hits2) = (mgr.clone(), id.clone(), hits.clone());
+        tokio::spawn(async move {
+            // 壓測跑滿 3 秒，期間每 100ms 打一次互動查詢，全部都要成功。
+            for _ in 0..25 {
+                mgr2.query(&id2, "SELECT 1").await.expect("壓測期間互動查詢不該被連線池餓死");
+                hits2.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+    };
+
+    let p = splan(&["SELECT COUNT(*) FROM bench"], 8, StressMode::Duration { secs: 3, ramp_secs: 0 });
+    let r = crate::stress::run_stress(mgr.clone(), "it-pool", c, p, &no_progress).await.unwrap();
+    probe.await.unwrap();
+
+    assert!(r.completed > 0);
+    assert!(hits.load(Ordering::Relaxed) >= 20, "互動查詢應幾乎全部成功");
+    // 壓測結束後專屬池要收掉，只留互動連線。
+    assert!(
+        mgr.pool_status(&format!("{id}::stress::it-pool")).is_err(),
+        "壓測專屬連線應已釋放"
+    );
+    mgr.disconnect(&id).await;
+}
+
+/// 同一條連線併發兩場壓測：兩邊都要拿到乾淨的數據。
+/// 專屬池 id 若不含 run_id，後開的 connect 會把先開的池抽掉（先開的剩餘迭代全部
+/// 收到 connection not found），先開的收尾又把後開的斷掉——兩邊數據一起作廢。
+#[tokio::test]
+#[ignore = "需要 Docker MySQL:13306"]
+async fn stress_concurrent_runs_are_isolated() {
+    let mgr = Arc::new(crate::manager::ConnectionManager::new());
+    let p = |n: u64| splan(&["SELECT 1"], 2, StressMode::Iterations { per_thread: n });
+
+    let (a, b) = tokio::join!(
+        crate::stress::run_stress(mgr.clone(), "it-c1", stress_mysql_cfg(), p(40), &no_progress),
+        crate::stress::run_stress(mgr.clone(), "it-c2", stress_mysql_cfg(), p(40), &no_progress),
+    );
+    let (a, b) = (a.unwrap(), b.unwrap());
+
+    assert_eq!(a.completed, 80, "第一場應跑滿，錯誤：{:?}", a.error_groups);
+    assert_eq!(b.completed, 80, "第二場應跑滿，錯誤：{:?}", b.error_groups);
+    assert_eq!(a.errors, 0, "{:?}", a.error_groups);
+    assert_eq!(b.errors, 0, "{:?}", b.error_groups);
+}

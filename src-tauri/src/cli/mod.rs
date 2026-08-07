@@ -8,7 +8,9 @@
 
 mod args;
 mod dispatch;
-mod guard;
+// 唯讀 / 高破壞語句守門不只 CLI 用：壓力測試（stress.rs）會反覆重放語句，
+// 開跑前要走同一道判準——判準只能有一份，兩份必然漂移成「這裡擋、那裡不擋」。
+pub(crate) mod guard;
 mod render;
 mod resolve;
 

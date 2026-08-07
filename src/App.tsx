@@ -54,7 +54,7 @@ import {
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
-  ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, FolderPlus, ExternalLink,
+  ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, FolderPlus, ExternalLink, Gauge,
   type LucideIcon,
 } from "lucide-react";
 
@@ -102,6 +102,7 @@ const ImportDialog = lazyOverlay(() => import("./ImportDialog"));
 const DataDictionary = lazyOverlay(() => import("./DataDictionary"));
 const DataGenerator = lazyOverlay(() => import("./DataGenerator"));
 const QueryBuilder = lazyOverlay(() => import("./QueryBuilder"));
+const StressDialog = lazyOverlay(() => import("./StressDialog"));
 const TransferDialog = lazyOverlay(() => import("./TransferDialog"));
 const DbTransferDialog = lazyOverlay(() => import("./DbTransferDialog"));
 const CommandPalette = lazyOverlay(() => import("./CommandPalette"));
@@ -3920,6 +3921,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const supportsVisualExplain = !!kind && (isMysqlFamily(kind) || kind === "postgres" || kind === "external");
   // Mongo explain：獨立 gate —— 不可把 mongo 加進 EXPLAIN_KINDS（那同時 gate SQL 切割 / 參數 / 編輯器選擇）。
   const supportsMongoExplain = kind === "mongo";
+  // 壓力測試：後端 runner 走 manager.query_capped，只對「SQL 家族」有意義（Mongo 的 DSL 與 Redis 的
+  // 指令雖然也能執行，但延遲分佈的解讀方式完全不同，另做才誠實）。與 supportsSqlEditor 同一組 kind。
+  const supportsStress = supportsSqlEditor;
   // 「目前資料庫」選擇器：把查詢以 USE / search_path 限定到所選庫（MySQL / PostgreSQL / 外部 gateway）。
   const supportsDbSelect = !!kind && DB_SELECT_KINDS.includes(kind);
   const [dbList, setDbList] = useState<string[]>([]);
@@ -4025,6 +4029,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [showSnippets, setShowSnippets] = useState(false);
   // 工具列「更多」溢位選單：收納次要動作（開啟 / 另存 / 收藏 / 壓縮 / 大小寫 / 分析 / 視覺化解釋），讓主列不擁擠。
   const [showMore, setShowMore] = useState(false);
+  // 壓力測試對話框（對標 SQLQueryStress）：帶目前編輯器內容進去，開窗後與查詢面板互不干擾。
+  const [stressOpen, setStressOpen] = useState(false);
   // 工具列寬度自適應（三段）：0 圖示+文字 → 1 次要鈕只留圖示 → 2 無下拉的次要鈕整顆折進「更多」。
   //
   // 為何量測而非寫死斷點：標籤寬度取決於語言與連線種類（Kibana / AI 生成 等按鈕按 kind 出現），
@@ -5187,6 +5193,16 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                         <Icon icon={GitBranch} size={13} className="text-fg/45" />{t("視覺化解釋")}
                       </button>
                     )}
+                    {supportsStress && (
+                      <>
+                        <div className="px-3 py-1 mt-1 text-[11px] text-fg/40 border-t border-fg/10">{t("效能")}</div>
+                        <button type="button" onClick={() => { setShowMore(false); setStressOpen(true); }} disabled={running || !sql.trim()}
+                          title={t("以多執行緒重複執行這段語句，量測 TPS 與延遲分佈（會真的打目標資料庫）")}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
+                          <Icon icon={Gauge} size={13} className="text-fg/45" />{t("壓力測試…")}
+                        </button>
+                      </>
+                    )}
                     {supportsMongoExplain && (
                       <>
                         {/* 詳細度：executionStats 會「實際執行」查詢（昂貴管線改選 queryPlanner）。 */}
@@ -5557,6 +5573,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           )}
         </div>
       </div>
+      {stressOpen && activeId && (
+        // 帶「要跑的那段」而非整個編輯器：有反白用反白，與執行鍵的語意一致。
+        <StressDialog
+          connId={activeId}
+          initialSql={(editorSel?.trim() ? editorSel : sql).trim()}
+          onClose={() => setStressOpen(false)}
+        />
+      )}
       {builderOpen && activeId && kind && (
         <QueryBuilder
           connId={activeId}

@@ -18,6 +18,8 @@ mod manager;
 mod schema_cache;
 mod ssh;
 mod store;
+// 壓力測試核心：不依賴 Tauri（進度以 callback 注入），slim CLI build 也編得進來。
+mod stress;
 mod transfer;
 
 // CLI（唯讀查詢 + 匯出）。一直編譯；不依賴 Tauri，直接呼叫 manager / store / export / backup。
@@ -58,7 +60,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(AppState {
-            manager: ConnectionManager::new(),
+            manager: Arc::new(ConnectionManager::new()),
             schedules: Arc::new(Mutex::new(Vec::new())),
             history_lock: Arc::new(tokio::sync::Mutex::new(())),
             pubsub: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -346,6 +348,8 @@ pub fn run() {
             commands::rabbitmq_purge,
             #[cfg(feature = "rabbitmq")]
             commands::rabbitmq_delete_queue,
+            commands::stress_run,
+            commands::stress_cancel,
             commands::backup_detect_cli,
             commands::backup_run,
             commands::backup_restore,

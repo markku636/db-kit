@@ -112,15 +112,21 @@ async fn run_connected(conn: &ConnArgs, fmt: Format, command: Command) -> AppRes
         .or_else(|| cfg.database.clone())
         .unwrap_or_default();
     let cf = Confirm { yes: conn.yes, force: conn.force };
-    let mgr = ConnectionManager::new();
+    // Arc：壓力測試的 worker 要 spawn 到 runtime 執行緒池（需要 'static），借用滿足不了。
+    // 其餘分支照樣走 deref，寫法完全不變。
+    let mgr = std::sync::Arc::new(ConnectionManager::new());
+    // 壓力測試要用同一份設定另開專屬連線池（不共用互動連線），故先留一份副本。
+    let cfg_copy = cfg.clone();
     mgr.connect(cfg).await?;
-    let res = exec(&mgr, &id, kind, &db, fmt, cf, command).await;
+    let res = exec(&mgr, &cfg_copy, &id, kind, &db, fmt, cf, command).await;
     mgr.disconnect(&id).await;
     res
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn exec(
-    mgr: &ConnectionManager,
+    mgr: &std::sync::Arc<ConnectionManager>,
+    cfg: &crate::db::ConnectionConfig,
     id: &str,
     kind: DbKind,
     db: &str,
@@ -184,6 +190,91 @@ async fn exec(
             guard::ensure_read_only(&sql)?;
             let q = mgr.explain(id, &sql).await?;
             render::emit(fmt, &q.columns, &q.rows);
+        }
+        Command::Stress {
+            sql,
+            threads,
+            iterations,
+            seconds,
+            ramp,
+            warmup,
+            delay_ms,
+            max_rows,
+            timeout_ms,
+        } => {
+            // CLI 一律唯讀（不提供 allow_writes）：腳本裡的壓測沒有互動確認可依靠，
+            // 而寫入壓測會重放上千次不可回復的動作——要跑就到 GUI 明確扳開開關。
+            let mode = match (seconds, iterations) {
+                (Some(secs), _) => crate::stress::StressMode::Duration { secs, ramp_secs: ramp },
+                (None, it) => crate::stress::StressMode::Iterations { per_thread: it.unwrap_or(100) },
+            };
+            let plan = crate::stress::StressPlan {
+                statements: vec![sql.clone()],
+                threads,
+                mode,
+                warmup_iterations: warmup,
+                delay_ms,
+                row_cap: max_rows,
+                query_timeout_ms: timeout_ms,
+                allow_writes: false,
+            };
+            // 進度走 stderr：stdout 留給報表本身，`dbk --format json stress … > r.json` 才不會被污染。
+            let progress = |p: crate::stress::StressProgress| {
+                eprint!(
+                    "\r{}",
+                    tf!(
+                        "壓測中… {done} 完成 / {err} 錯誤 · {rps} TPS · p95 {p95} ms",
+                        done = p.completed,
+                        err = p.errors,
+                        rps = format!("{:.0}", p.rps),
+                        p95 = format!("{:.1}", p.p95_ms)
+                    )
+                );
+            };
+            let run_id = format!("cli-{}", std::process::id());
+            let report =
+                crate::stress::run_stress(mgr.clone(), &run_id, cfg.clone(), plan, &progress).await?;
+            eprintln!(); // 收掉進度那一行的游標
+
+            if let Format::Json = fmt {
+                render::emit_value(fmt, &report); // 完整報表（含 series / error_groups）
+            } else {
+                // table / csv：攤成兩欄的重點指標，序列與錯誤分組另外印——
+                // 巢狀陣列塞進對齊表格只會變成一坨看不懂的 JSON 字串。
+                let f1 = |v: f64| format!("{v:.1}");
+                render::emit_pairs(
+                    fmt,
+                    &[
+                        (t!("模式").to_string(), report.mode.clone()),
+                        (t!("執行緒").to_string(), report.threads.to_string()),
+                        (t!("總耗時").to_string(), format!("{} ms", report.elapsed_ms)),
+                        (t!("完成查詢數").to_string(), report.completed.to_string()),
+                        (t!("錯誤數").to_string(), report.errors.to_string()),
+                        (t!("回傳列數").to_string(), report.rows_total.to_string()),
+                        ("TPS".to_string(), f1(report.rps)),
+                        (t!("平均").to_string(), f1(report.avg_ms)),
+                        (t!("最小").to_string(), f1(report.min_ms)),
+                        ("p50".to_string(), f1(report.p50_ms)),
+                        ("p90".to_string(), f1(report.p90_ms)),
+                        ("p95".to_string(), f1(report.p95_ms)),
+                        ("p99".to_string(), f1(report.p99_ms)),
+                        (t!("最大").to_string(), f1(report.max_ms)),
+                        (t!("標準差").to_string(), f1(report.stddev_ms)),
+                    ],
+                );
+                if !report.error_groups.is_empty() {
+                    println!();
+                    render::emit(
+                        fmt,
+                        &[t!("次數").to_string(), t!("訊息").to_string()],
+                        &report
+                            .error_groups
+                            .iter()
+                            .map(|g| vec![Some(g.count.to_string()), Some(g.message.clone())])
+                            .collect::<Vec<_>>(),
+                    );
+                }
+            }
         }
         Command::ColumnStats { table, column } => {
             let s = mgr.column_stats(id, db, &table, &column).await?;

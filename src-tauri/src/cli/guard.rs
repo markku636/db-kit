@@ -72,11 +72,114 @@ pub fn is_destructive_sql(sql: &str) -> bool {
         if DESTRUCTIVE.contains(&kw.as_str()) {
             return true;
         }
-        if (kw == "update" || kw == "delete") && !contains_keyword(&stmt.to_ascii_lowercase(), "where") {
+        // WHERE 要在「真正的程式碼」上找，且只認頂層的：
+        // - 不剝註解 / 字串 → `DELETE FROM logs -- WHERE id = 1`（使用者把條件註解掉試最壞情況）
+        //   會被判成安全，然後在壓測迴圈裡把整張表清光。
+        // - 不剝括號 → `UPDATE t SET a = (SELECT x FROM y WHERE z)` 的 WHERE 在子查詢裡，
+        //   頂層其實沒有條件，一樣掃全表。
+        // 與前端 sql.ts::isDangerousStatement 的 stripCode + stripParens 是同一套判準。
+        if (kw == "update" || kw == "delete")
+            && !contains_keyword(&strip_parens(&strip_noncode(stmt)).to_ascii_lowercase(), "where")
+        {
             return true;
         }
     }
     false
+}
+
+/// 把字串 / 識別字 / 註解 / dollar-quote 的內容換成空白，只留下可供關鍵字比對的程式碼。
+/// 掃描規則與 `split_statements` 相同（同一套引號與註解處理），差別只在輸出。
+fn strip_noncode(sql: &str) -> String {
+    let b = sql.as_bytes();
+    let n = b.len();
+    let is_tag = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut out = String::with_capacity(n);
+    let mut i = 0usize;
+    while i < n {
+        let c = b[i];
+        let nx = if i + 1 < n { b[i + 1] } else { 0 };
+        match c {
+            b'\'' | b'"' | b'`' => {
+                i += 1;
+                while i < n {
+                    if b[i] == c {
+                        if i + 1 < n && b[i + 1] == c {
+                            i += 2;
+                            continue;
+                        }
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                out.push(' ');
+            }
+            b'-' if nx == b'-' => {
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+                out.push(' ');
+            }
+            b'/' if nx == b'*' => {
+                i += 2;
+                while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(n);
+                out.push(' ');
+            }
+            b'$' => {
+                // dollar-quote：$tag$ … $tag$（tag 可空）。找不到收尾標記就當普通字元。
+                let mut j = i + 1;
+                while j < n && is_tag(b[j]) {
+                    j += 1;
+                }
+                if j < n && b[j] == b'$' {
+                    let tag = &sql[i..=j];
+                    match sql[j + 1..].find(tag) {
+                        Some(rel) => {
+                            i = j + 1 + rel + tag.len();
+                            out.push(' ');
+                        }
+                        None => {
+                            out.push('$');
+                            i += 1;
+                        }
+                    }
+                } else {
+                    out.push('$');
+                    i += 1;
+                }
+            }
+            // 非 ASCII 一律換成空白：關鍵字比對只認 ASCII，而逐位元組 `as char` 會把
+            // UTF-8 續位元組解成 Latin-1 的怪字元。換空白同時保住了字界語意。
+            _ if c >= 0x80 => {
+                out.push(' ');
+                i += 1;
+            }
+            _ => {
+                out.push(c as char);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// 移除所有成對括號內的內容（只留 depth-0 的文字），供「頂層是否有 WHERE」的判斷。
+/// 與前端 sql.ts::stripParens 同一個理由：子查詢裡的 WHERE 不算數。
+fn strip_parens(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut depth = 0usize;
+    for ch in s.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// 以「字界」判斷 haystack（已小寫）是否含關鍵字 word（避免 `deleted_at` 誤判為 `delete`）。
@@ -276,5 +379,46 @@ mod tests {
         // dollar-quote 函式本體含分號不應被切；首句為唯讀 DO/SELECT 才放行。
         assert!(ensure_read_only("SELECT $$a; delete from t$$ AS body").is_ok());
         assert!(ensure_read_only("SELECT $tag$x; update y$tag$ AS body").is_ok());
+    }
+
+    #[test]
+    fn destructive_detects_drop_truncate_and_bare_dml() {
+        assert!(is_destructive_sql("DROP TABLE t"));
+        assert!(is_destructive_sql("truncate table t"));
+        assert!(is_destructive_sql("DELETE FROM t"));
+        assert!(is_destructive_sql("UPDATE t SET a = 1"));
+        // 帶 WHERE 的 DML 不算高破壞；欄名含 where 字根不誤判成有條件。
+        assert!(!is_destructive_sql("DELETE FROM t WHERE id = 1"));
+        assert!(!is_destructive_sql("UPDATE t SET a = 1 WHERE id = 1"));
+        assert!(!is_destructive_sql("SELECT * FROM t"));
+    }
+
+    #[test]
+    fn destructive_ignores_where_hidden_in_comments_and_literals() {
+        // 註解掉的 WHERE 不是條件：整句仍會掃全表，必須判為高破壞。
+        assert!(is_destructive_sql("DELETE FROM logs -- WHERE id = 1"));
+        assert!(is_destructive_sql("DELETE FROM logs /* WHERE id = 1 */"));
+        assert!(is_destructive_sql("UPDATE t SET a = 1 --where x"));
+        // 字串字面值裡的 where 同理不算條件。
+        assert!(is_destructive_sql("UPDATE t SET note = 'where'"));
+        assert!(is_destructive_sql("DELETE FROM t /* keep */ -- where\n"));
+        // 但真正的 WHERE 即使旁邊有註解 / 字串仍算數。
+        assert!(!is_destructive_sql("DELETE FROM t -- 清掉舊資料\nWHERE id = 1"));
+        assert!(!is_destructive_sql("UPDATE t SET note = 'where' WHERE id = 1"));
+    }
+
+    #[test]
+    fn destructive_only_counts_top_level_where() {
+        // 子查詢裡的 WHERE 不是本句的條件：這句會改到每一列。
+        assert!(is_destructive_sql(
+            "UPDATE t SET a = (SELECT x FROM y WHERE y.id = 1)"
+        ));
+        assert!(is_destructive_sql(
+            "DELETE FROM t USING (SELECT id FROM y WHERE y.n > 0) s"
+        ));
+        // 頂層有 WHERE 就算安全，即使子查詢裡也有一個。
+        assert!(!is_destructive_sql(
+            "UPDATE t SET a = (SELECT x FROM y WHERE y.id = 1) WHERE t.id = 2"
+        ));
     }
 }

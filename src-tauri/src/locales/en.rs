@@ -620,6 +620,23 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "複寫" => "Replication",
         "{d} 天 {hms}" => "{d}d {hms}",
 
+        // ---- stress.rs：壓力測試守門 ----
+        "壓力測試至少需要一條 SQL 語句" => "A stress test needs at least one SQL statement",
+        "壓力測試的並行執行緒數至少為 1" => "A stress test needs at least 1 concurrent thread",
+        "壓力測試的每執行緒迭代次數至少為 1" => {
+            "A stress test needs at least 1 iteration per thread"
+        }
+        "壓力測試的持續時間至少為 1 秒" => "A stress test must run for at least 1 second",
+        "壓力測試的持續時間上限為 {max} 秒" => {
+            "A stress test may run for at most {max} seconds"
+        }
+        "壓力測試會反覆執行語句，已拒絕高破壞語句（DROP / TRUNCATE 或無 WHERE 的 UPDATE / DELETE）：{sql}" => {
+            "A stress test replays statements repeatedly, so highly destructive statements are refused (DROP / TRUNCATE, or UPDATE / DELETE without WHERE): {sql}"
+        }
+        "壓力測試會反覆執行語句，已拒絕 EXPLAIN ANALYZE 寫入語句（它會真的執行，不只產生執行計畫）：{sql}" => {
+            "A stress test replays statements repeatedly, so EXPLAIN ANALYZE on a write statement is refused (it really executes the statement, not just plans it): {sql}"
+        }
+
         // ---- db/kafka ----
         "群組仍有活躍成員，無法重設位移（請先停掉消費者）" => {
             "The group still has active members; stop the consumers before resetting offsets"

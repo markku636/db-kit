@@ -915,6 +915,81 @@ export function needsOtpPrompt(config: ConnectionConfig): boolean {
   return config.kind === "external" && config.options?.otp_prompt === "1";
 }
 
+// ---- 壓力測試（SQL 家族）DTO ----
+// 對標 SQLQueryStress（迭代 × 執行緒 × 參數替換 × 例外歸類）與 pgbench / HammerDB（持續時間 + 暖機 + 百分位）。
+// 欄位名與 Rust 端 stress.rs 一一對應（serde 保留 snake_case），改名要兩邊一起改。
+
+/** 負載形態：固定迭代數，或跑滿一段時間（可讓執行緒逐步爬升）。 */
+export type StressMode =
+  | { kind: "iterations"; per_thread: number }
+  | { kind: "duration"; secs: number; ramp_secs: number };
+
+export interface StressPlan {
+  /** 語句池：至少 1 條。具名參數展開後會有多條，各 worker 輪替取用（見 stress.ts::expandParamPool）。 */
+  statements: string[];
+  threads: number;
+  mode: StressMode;
+  /** 每執行緒的暖機迭代數，不計入統計（避免把連線建立 / 計畫編譯的成本算進延遲）。 */
+  warmup_iterations: number;
+  delay_ms: number;
+  /** 每次查詢的取列上限；0 = 完整取回（最貼近真實負載，但要小心記憶體）。 */
+  row_cap: number;
+  /** 單次迭代逾時；0 = 不逾時。避免一條卡死的查詢拖垮整輪統計。 */
+  query_timeout_ms: number;
+  /** 放行寫入語句（高破壞語句仍一律拒絕，見後端守門）。 */
+  allow_writes: boolean;
+}
+
+/** 錯誤分組：訊息已指紋化（數字 / 引號內容換成佔位符），同類錯誤歸為一組。 */
+export interface StressErrorGroup {
+  message: string;
+  count: number;
+}
+
+/** 每秒一個取樣點。三個值都是「該秒區間內」的值，不是累計值。 */
+export interface StressSample {
+  /** 自壓測開始的相對毫秒。 */
+  t_ms: number;
+  rps: number;
+  p95_ms: number;
+  errors: number;
+}
+
+/** 進行中的即時進度（事件 `stress-progress`，約每 500ms 一筆）。 */
+export interface StressProgress {
+  run_id: string;
+  elapsed_ms: number;
+  completed: number;
+  errors: number;
+  rps: number;
+  avg_ms: number;
+  p95_ms: number;
+  in_flight: number;
+}
+
+export interface StressReport {
+  elapsed_ms: number;
+  completed: number;
+  errors: number;
+  rows_total: number;
+  rps: number;
+  avg_ms: number;
+  min_ms: number;
+  max_ms: number;
+  stddev_ms: number;
+  p50_ms: number;
+  p90_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  error_groups: StressErrorGroup[];
+  series: StressSample[];
+  threads: number;
+  mode: string;
+  warmup_iterations: number;
+  /** 使用者按了停止：報表仍有效，但只涵蓋已完成的部分。 */
+  cancelled: boolean;
+}
+
 // 後端 command 包裝
 export const api = {
   testConnection: (config: ConnectionConfig, otpCode?: string) =>
@@ -1245,6 +1320,13 @@ export const api = {
     invoke<RabbitPublishResult>("rabbitmq_publish", { id, exchange, routingKey, payload, persistent }),
   rabbitmqPurge: (id: string, queue: string) => invoke<void>("rabbitmq_purge", { id, queue }),
   rabbitmqDeleteQueue: (id: string, queue: string) => invoke<void>("rabbitmq_delete_queue", { id, queue }),
+
+  // 壓力測試：後端另建一個 max_connections = threads 的專屬連線池（不佔用互動池），
+  // 跑完即釋放。故傳的是 ConnectionConfig 而非連線 id（同 backupRun / testConnection 的路徑）。
+  // 進行中的即時進度走 `stress-progress` 事件；runId 由前端產生，供事件對號與取消。
+  stressRun: (runId: string, config: ConnectionConfig, plan: StressPlan) =>
+    invoke<StressReport>("stress_run", { runId, config, plan }),
+  stressCancel: (runId: string) => invoke<void>("stress_cancel", { runId }),
 
   // AI 助手：偵測 claude CLI / 送出問答（串流走 onClaudeStream）/ 取消。
   claudeDetect: () => invoke<ClaudeStatus>("claude_detect"),

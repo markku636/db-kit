@@ -34,7 +34,10 @@ use crate::db::rabbitmq::dto::{
 };
 
 pub struct AppState {
-    pub manager: ConnectionManager,
+    /// 包 `Arc`：壓測 worker 以 `tokio::spawn` 送進 runtime 執行緒池才是真並行，
+    /// 而 spawn 的 future 需要 'static —— 借用 `&ConnectionManager` 滿足不了。
+    /// 其餘呼叫端不受影響（`Arc<T>` deref 成 `T`，`state.manager.query(..)` 寫法不變）。
+    pub manager: Arc<ConnectionManager>,
     /// 排程清單的執行時權威副本（背景迴圈每 tick 讀取；命令變更後持久化）。
     pub schedules: Arc<Mutex<Vec<BackupSchedule>>>,
     /// 序列化 history.json 的讀-改-寫（避免排程 append 與 clear_history 競態）。
@@ -721,6 +724,39 @@ pub async fn key_detail(
     key: String,
 ) -> AppResult<Option<KeyDetail>> {
     state.manager.key_detail(&id, &database, &key).await
+}
+
+// ---- 壓力測試（對標 SQLQueryStress / pgbench）----
+
+/// 跑一次壓力測試，回傳完整報表。進行中的即時進度以 `stress-progress` 事件推給前端。
+///
+/// 收 `ConnectionConfig` 而非連線 id（同 `backup_run` / `test_connection` 的路徑）：
+/// 壓測要另開一個 `max_connections = threads` 的專屬池，不能借用互動池的設定與大小。
+/// 密碼照例由 keychain 補回——前端存過的連線不會把明文帶在手上。
+#[tauri::command]
+pub async fn stress_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: String,
+    config: ConnectionConfig,
+    plan: crate::stress::StressPlan,
+) -> AppResult<crate::stress::StressReport> {
+    let mut config = config;
+    hydrate_secrets(&mut config);
+    let manager = state.manager.clone();
+    // 進度事件是全域廣播，run_id 由前端產生並隨事件帶回，讓多個壓測視窗各認各的。
+    let emit = move |p: crate::stress::StressProgress| {
+        let _ = app.emit("stress-progress", p);
+    };
+    crate::stress::run_stress(manager, &run_id, config, plan, &emit).await
+}
+
+/// 要求中止壓測：只設取消旗標，worker 於下一次迭代邊界收手，
+/// `stress_run` 仍會回傳一份（部分的）報表並標記 cancelled。
+#[tauri::command]
+pub async fn stress_cancel(run_id: String) -> AppResult<()> {
+    crate::stress::cancel(&run_id);
+    Ok(())
 }
 
 #[tauri::command]
