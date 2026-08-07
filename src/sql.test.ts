@@ -880,6 +880,16 @@ describe("isDangerousStatement", () => {
     expect(isDangerousStatement("UPDATE t SET name = 'where' ")).toBe(true);
     expect(isDangerousStatement("DELETE FROM t -- where id=1")).toBe(true);
   });
+  it("does not count WHERE that appears only inside a [bracketed identifier] (SQL Server)", () => {
+    // 欄位剛好叫 [Where] 時，不剝中括號的話碼裡會看到 where 而放行整表更新。
+    expect(isDangerousStatement("UPDATE t SET [Where] = 1")).toBe(true);
+    expect(isDangerousStatement("DELETE FROM [where]")).toBe(true);
+    // 真正的 WHERE 仍算數，中括號識別字不影響判定。
+    expect(isDangerousStatement("UPDATE [t] SET [Where] = 1 WHERE [id] = 2")).toBe(false);
+    // 未閉合 / 跨行的 `[` 不吃掉後文（pg 陣列下標與筆誤都不該讓後面的 WHERE 消失）。
+    expect(isDangerousStatement("UPDATE t SET tags[1] = 'x' WHERE id = 2")).toBe(false);
+    expect(isDangerousStatement("UPDATE t SET a = 1 -- [\nWHERE id = 2")).toBe(false);
+  });
   it("flags UPDATE/DELETE whose only WHERE is inside a subquery (still affects all rows)", () => {
     // 子查詢內的 WHERE 不算頂層條件——這些語句其實會影響整張表。
     expect(isDangerousStatement("UPDATE t SET a = (SELECT MAX(b) FROM u WHERE u.x = 1)")).toBe(true);

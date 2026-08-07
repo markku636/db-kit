@@ -1,5 +1,14 @@
 ## v0.22.0
 
+- **SQL 審查：規則引擎 + AI 兩層**（對標 Redgate SQL Prompt / SonarQube 的 SQL rules 做確定性檢查，再用 EverSQL / Plan Explorer 那一層的思路交給 AI）。查詢分頁底部新增「**審查**」分頁，打字當下即時列出寫法與效能問題，**不執行查詢、不需要 claude CLI、離線可用**。
+  - **15 條規則**，分三個嚴重度：`no-where-dml`（無 WHERE 的 UPDATE·DELETE）與 `missing-join-condition`（逗號 JOIN 笛卡兒積）為 error；`non-sargable-func`（欄位套函式讓索引失效）、`leading-wildcard-like`、`not-in-subquery`（子查詢一個 NULL 讓整條件恆為 unknown）、`or-chain`、`union-vs-union-all`、`select-star-with-join`、`nolock`、`implicit-cast-literal` 為 warn；`select-star`、`order-by-without-limit`、`distinct-with-group-by`、`count-star-exists`、`cursor-loop` 為建議。方言感知（NOLOCK 只對 SQL Server；筆數限制認得 LIMIT / TOP / FETCH FIRST / ROWNUM）。
+  - **設計準則是「寧可漏報，不要誤報」**：一次誤報就會讓整個分頁被忽略。所有比對都在剝掉字串 / 註解 / dollar-quote / `[方括號識別字]` 之後做，WHERE 只認頂層（子查詢裡的不算），關鍵字比對帶字界（`deleted_at` 不是 `delete`、`counterparty` 不是 `count`）。對抗式審查用 30 條真實查詢（五種方言，含 CTE、視窗函式、`information_schema`、`MERGE`）掃過，只剩 1 筆 warn 且是真陽性。
+  - 點一筆發現即在編輯器選取對應範圍。分頁徽章：有 error 顯示紅色數字，其餘只顯示一個小點——建議級的噪音不該渲染成警報。面板上明寫「規則引擎只檢查寫法樣式」，避免把「沒有發現問題」讀成「這段 SQL 沒問題」。
+- **AI 審查 / 調校 / 壓測判讀**（沿用既有的本機 Claude CLI 助手，不接任何雲端 API）：
+  - **AI 審查 SQL**（更多 → 審查，或審查分頁右上）：把規則引擎的發現、相關表的欄位與索引、以及（若已跑過）執行計畫一起送出，要求逐條回應規則引擎的判斷（**同意或不同意都要講理由**——讓模型無條件附和只會放大誤報），再給一段可直接執行的改寫。
+  - **AI 調校建議**（解釋分頁上方）：多帶計畫摘要與**熱點節點**（用與計畫樹標紅相同的「獨佔成本」判準挑，兩處不會各講各的），要求輸出①瓶頸診斷（指名節點與成本，不准給「建議加索引」這種泛論）②索引 DDL ③改寫 SQL ④**代價**（索引的寫入維護成本、磁碟、建立期間的鎖）。
+  - **AI 分析結果**（壓測報表）：要求從延遲百分位的「形狀」反推瓶頸類型——p99 遠大於 p50 是排隊/鎖競爭、整體平坦偏高是單次成本高、最大值遠離 p99 是偶發事件。
+  - 相關表結構的蒐集沿用 `nlPrompt.ts` 既有的挑表與字元上限機制；任何一支 API 失敗只會少帶一張表，不會讓整件事失敗。截斷一律砍在行界並明講「另有 N 張表未列出」，避免模型對半截欄位名建索引。
 - **SQL 壓力測試**（致敬 [SQLQueryStress](https://github.com/ErikEJ/SqlQueryStress)，並補上 pgbench / HammerDB 那一派的持續時間模式）：查詢分頁「更多 → 效能 → 壓力測試…」，把目前語句以多執行緒重複執行，量測 TPS 與延遲分佈。
   - **兩種負載形態**：固定迭代（執行緒 × 每執行緒次數）或持續時間（跑滿 N 秒，可設爬升秒數讓執行緒分批進場，看得出系統在多少併發開始劣化）。另有每執行緒暖機（不計入統計，免得首次建連的數十毫秒整個灌進 p99）、迭代間延遲、取列上限與單次逾時。
   - **報表**：TPS、平均 / 最小 / 最大 / 標準差、**p50 / p90 / p95 / p99**（nearest-rank），以及每秒一格的 TPS 與 p95 折線圖（執行中即時更新）。錯誤**指紋化分組**——`Duplicate entry '123'` 與 `'456'` 歸同一組（仿 pt-query-digest），不會讓幾千筆同種錯誤刷成幾千列。可一鍵複製成 Markdown 貼進 Jira 或丟給 AI。
@@ -8,6 +17,7 @@
   - **安全守門**：預設只放行查詢語句（與 CLI `query` 同一道判準，含可寫 CTE 偵測）；即使扳開「允許寫入」，**DROP / TRUNCATE / 無 WHERE 的 UPDATE·DELETE 一律拒絕**——這類語句在迴圈裡重放一次就足以清空整張表，第二次之後量到的也不是同一件事。另外擋下 `EXPLAIN ANALYZE <寫入>`（它會真的執行，而只看首關鍵字的守門會誤放）。唯讀連線的危險開關直接停用。全部檢查在**建連線之前**一次做完，不做部分執行。
   - **`dbk stress` CLI**：`dbk --conn prod stress "SELECT …" --threads 8 --seconds 30 --ramp 5`，進度走 stderr、報表走 stdout（`--format json` 可直接導檔）。CLI 一律唯讀，不提供 `--allow-writes`。
   - 新增 `src/stress.ts`（50 項測試）、`src-tauri/src/stress.rs`（19 項）與 **7 項 Docker 整合測試**（真 MySQL 8 / PostgreSQL 16：迭代計數精確、持續時間收斂、取消即時性、守門攔截、錯誤分組、互動池不被餓死、併發壓測互相隔離）。
+- **修正：危險語句偵測看不見 `[方括號識別字]`**（`sql.ts::stripCode`，影響資料格與查詢編輯器的破壞性操作確認）。欄位剛好叫 `[Where]` 時，`UPDATE t SET [Where] = 1` 會讓判定在碼裡看到 `where` 而放行 —— 一次無條件全表更新就這樣靜默略過確認框。現在連同中括號識別字一起剝掉（只認同一行內閉合的 `]`，pg 的陣列下標 `tags[1]` 不受影響）。
 - **修正：`is_destructive_sql` 會被註解或子查詢裡的 `where` 騙過**（`cli/guard.rs`，同時影響 `dbk` 的 `--force` 判定與 GUI 資料格的危險操作確認）。`DELETE FROM logs -- WHERE id = 1`（把條件註解掉試最壞情況）原本被判成「有 WHERE、不危險」而放行；`UPDATE t SET a = (SELECT … WHERE …)` 的 WHERE 在子查詢裡，頂層其實會掃全表。現在先剝掉註解 / 字串 / dollar-quote 再剝掉括號，只認頂層的 WHERE——與前端 `sql.ts::isDangerousStatement` 早就在做的 `stripCode` + `stripParens` 對齊成同一套判準。
 
 - **結構快取：自動完成不再只補前 80 張表**。編輯器的表 / 欄自動完成原本為了避免逐表往返，寫死「只補前 80 張表」——超過的資料庫，第 81 張表之後**完全沒有欄位提示**；而行程內快取又**永不失效**，在 app 裡跑完 DDL 也不會更新，得重開才會變。這版把兩件事都解掉：

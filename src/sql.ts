@@ -1318,7 +1318,9 @@ export function resultToMarkdown(r: QueryResult): string {
   return [header, sep, ...rows].join("\n");
 }
 // 把字串 / 識別字 / 註解 / $$ 區塊以空白取代，留下「程式碼」供關鍵字判斷（避免字面值內的字誤判）。
-function stripCode(sql: string): string {
+// 對外開放給 sqlLint.ts：SQL 審查規則同樣得在「真正的程式碼」上比對關鍵字，
+// 各自再寫一份剝離器必然漂移（漏處理 dollar-quote 或加倍引號就會誤報 / 漏報）。
+export function stripCode(sql: string): string {
   let out = "";
   let i = 0;
   const n = sql.length;
@@ -1329,6 +1331,14 @@ function stripCode(sql: string): string {
       let j = i + 1;
       while (j < n) { if (sql[j] === ch) { if (sql[j + 1] === ch) { j += 2; continue; } j++; break; } j++; }
       out += " "; i = j; continue;
+    }
+    // SQL Server 的 [方括號識別字]：不剝的話 `UPDATE t SET [Where] = 1` 會讓危險語句偵測
+    // 在碼裡看到 "where" 而放行——一次無條件全表更新就這樣靜默略過確認框。
+    // 只認「同一行內閉合」的 `]`，避免 pg 陣列下標 `tags[1]` 之類的孤立 `[` 吃掉後文。
+    if (ch === "[") {
+      const close = sql.indexOf("]", i + 1);
+      const nl = sql.indexOf("\n", i + 1);
+      if (close !== -1 && (nl === -1 || close < nl)) { out += " "; i = close + 1; continue; }
     }
     if (two === "--") { let j = i; while (j < n && sql[j] !== "\n") j++; out += " "; i = j; continue; }
     if (two === "/*") { let j = i + 2; while (j < n && sql.slice(j, j + 2) !== "*/") j++; out += " "; i = Math.min(n, j + 2); continue; }
@@ -1341,7 +1351,7 @@ function stripCode(sql: string): string {
 // 危險語句偵測（防手滑）：無 WHERE 的 UPDATE / DELETE，或 TRUNCATE。在字面值 / 註解外判斷關鍵字。
 // 移除所有成對括號內的內容（保留 depth-0 文字），供「危險語句」偵測排除子查詢。
 // 例：UPDATE t SET a=(SELECT … WHERE …) 的 WHERE 在子查詢內，去括號後頂層才看得出沒有 WHERE。
-function stripParens(s: string): string {
+export function stripParens(s: string): string {
   let out = "";
   let depth = 0;
   for (const ch of s) {

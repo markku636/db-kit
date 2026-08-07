@@ -40,7 +40,9 @@ import {
 } from "./sql";
 import type { SavedQuery } from "./sql";
 import Select from "./ui/Select";
-import { buildExplainJsonSql, parseExplainPlan, type PlanNode } from "./explain";
+import { buildExplainJsonSql, parseExplainPlan, planSummary, type PlanNode } from "./explain";
+import { lintSql, MAX_SQL_CHARS as LINT_MAX_CHARS, type LintFinding, type LintSeverity } from "./sqlLint";
+import { buildReviewPrompt, buildTunePrompt, collectSchemaContext } from "./aiReview";
 import type { MongoQueryEditorHandle } from "./MongoQueryEditor";
 import type { ElasticQueryEditorHandle } from "./ElasticQueryEditor";
 import { buildSqlNlPrompt, buildEsNlPrompt } from "./nlPrompt";
@@ -3939,6 +3941,15 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
   const paramCount = useMemo(() => (supportsSqlEditor ? extractNamedParams(sql).length : 0), [supportsSqlEditor, sql]);
+  // 靜態審查（規則引擎）：純前端、不需執行查詢也不需要 AI，故隨打字即時更新。
+  // 超過上限時 lintSql 會回空陣列（避免貼一份巨大腳本讓每次按鍵都卡住），
+  // 但「沒問題」與「太長沒審」對使用者是兩件事，所以在這裡分開判並各自顯示。
+  const lintSkipped = supportsSqlEditor && sql.length > LINT_MAX_CHARS;
+  const findings = useMemo(
+    () => (supportsSqlEditor && kind && !lintSkipped ? lintSql(kind, sql) : []),
+    [supportsSqlEditor, kind, sql, lintSkipped],
+  );
+  const findingErrors = findings.filter((f) => f.severity === "error").length;
   // 結果集清單（SSMS 風格）：多語句批次中每條有回傳結果集的語句各佔一格、堆疊「同時」顯示；
   // 單語句 / 純 DML / 分析模式只有一筆。activeResult 標記工具列（複製 / 匯出 / 問 AI）作用的結果集。
   const [resultSets, setResultSets] = useState<ResultSetEntry[]>([]);
@@ -4078,11 +4089,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [showCopyMenu, setShowCopyMenu] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const editorRef = useRef<SqlEditorHandle>(null);
-  // 下方分頁（致敬 Navicat 結果 / 摘要 / 解釋）：result=結果表格、summary=執行摘要、explain=視覺化執行計畫。
-  const [bottomTab, setBottomTab] = useState<"result" | "summary" | "explain">("result");
+  // 下方分頁（致敬 Navicat 結果 / 摘要 / 解釋）：result=結果表格、summary=執行摘要、
+  // explain=視覺化執行計畫、review=靜態審查（規則引擎，不需執行也不需 AI）。
+  const [bottomTab, setBottomTab] = useState<"result" | "summary" | "explain" | "review">("result");
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [plan, setPlan] = useState<PlanNode | null>(null);
   const [planErr, setPlanErr] = useState<string | null>(null);
+  // 計畫的原始 JSON：AI 調校要看的是完整計畫（成本 / 列數 / 存取方式），
+  // 而 PlanNode 樹是為了畫圖而正規化過的，回頭序列化會丟掉方言特有欄位。
+  const [planRaw, setPlanRaw] = useState<string | null>(null);
+  // AI 審查 / 調校進行中（要先打幾支 api 抓結構，不是瞬間完成）。
+  const [aiBusy, setAiBusy] = useState(false);
   // Mongo 執行計畫（與 SQL 的 plan 分開：階段指標與成本模型不同，各自渲染器）。
   const [mongoPlan, setMongoPlan] = useState<{ model: MongoExplainModel; raw: string } | null>(null);
   // executionStats 會「實際執行」查詢；queryPlanner 只做計畫（便宜），供昂貴管線選用。
@@ -4542,8 +4559,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       const res = await api.runQuery(activeId, usePrefix ? `${usePrefix};\n${explainSql}` : explainSql);
       const cell = res.rows?.[0]?.[0] ?? null;
       const node = cell ? parseExplainPlan(kind!, cell) : null;
-      if (node) { setPlan(node); setPlanErr(null); }
-      else { setPlan(null); setPlanErr(t("無法解析執行計畫 JSON（原始輸出見「結果」分頁）")); setResult(res); setBottomTab("result"); }
+      if (node) { setPlan(node); setPlanRaw(cell); setPlanErr(null); }
+      else { setPlan(null); setPlanRaw(null); setPlanErr(t("無法解析執行計畫 JSON（原始輸出見「結果」分頁）")); setResult(res); setBottomTab("result"); }
       setElapsed(performance.now() - t0);
     } catch (e: any) {
       setElapsed(performance.now() - t0);
@@ -4819,6 +4836,43 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       t("查詢：\n```sql\n{srcSql}\n```\n\n結果：\n{limited}{note}", { srcSql, limited: resultToMarkdown(limited), note });
     useAssistant.getState().ask(prompt);
   };
+
+  // AI 審查 / 調校：先把「相關表的欄位與索引」抓回來（要打幾支 api，故有 busy 狀態），
+  // 再組 prompt 丟給既有的助手面板自動送出。兩者共用同一份上下文，只差要求的輸出格式。
+  const askAiSql = async (mode: "review" | "tune") => {
+    if (!activeId || !kind || aiBusy) return;
+    const target = (editorSel?.trim() ? editorSel : sql).trim();
+    if (!target) { toast.info(t("沒有可審查的 SQL")); return; }
+    setAiBusy(true);
+    try {
+      // 側欄選中的表一定入選（rankTables 的 selectedTable），讓「我正在看這張表」的意圖被帶進去。
+      const picked = useStore.getState().selectedNode;
+      const schema = await collectSchemaContext(
+        activeId, queryDb, target,
+        picked?.type === "table" ? picked.table : null,
+      );
+      // 計畫 JSON：只有「解釋」分頁已經跑過視覺化解釋時才有，沒有就不附（不為了湊資料多跑一次查詢）。
+      const planJson = planRaw;
+      const base = {
+        kind, db: queryDb, sql: target, findings, schema, planJson,
+        uiLang: useLang.getState().lang,
+      };
+      const prompt = mode === "review"
+        ? buildReviewPrompt(base)
+        : buildTunePrompt({
+            ...base,
+            planSummary: plan ? planSummary(plan) : null,
+            hotNodes: plan ? hotPlanNodes(plan) : [],
+          });
+      useAssistant.getState().ask(prompt, { send: true });
+    } catch (e: any) {
+      toast.error(e?.message ?? t("組裝 AI 提示失敗"));
+    } finally {
+      setAiBusy(false);
+    }
+  };
+  const askAiReview = () => void askAiSql("review");
+  const askAiTune = () => void askAiSql("tune");
 
   // 把出錯的 SQL + 錯誤訊息帶進 AI 助手，請它分析原因並給出修正後的 SQL（一鍵自動送出）。
   const askAiFixError = () => {
@@ -5193,6 +5247,26 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                         <Icon icon={GitBranch} size={13} className="text-fg/45" />{t("視覺化解釋")}
                       </button>
                     )}
+                    {supportsSqlEditor && (
+                      <>
+                        <div className="px-3 py-1 mt-1 text-[11px] text-fg/40 border-t border-fg/10">{t("審查")}</div>
+                        <button type="button" onClick={() => { setShowMore(false); setBottomTab("review"); }}
+                          title={t("規則引擎的靜態審查（不執行查詢、離線可用）")}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10">
+                          <Icon icon={ScanSearch} size={13} className="text-fg/45" />{t("靜態審查結果")}
+                          {findings.length > 0 && (
+                            <span className={`ml-auto text-[10px] ${findingErrors > 0 ? "text-red-400" : "text-amber-400"}`}>
+                              {findings.length}
+                            </span>
+                          )}
+                        </button>
+                        <button type="button" onClick={() => { setShowMore(false); askAiReview(); }} disabled={aiBusy || !sql.trim()}
+                          title={t("把規則引擎的發現、相關表結構與索引一起交給 AI 助手做深入審查")}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
+                          <Icon icon={Sparkles} size={13} className="text-fg/45" />{t("AI 審查 SQL")}
+                        </button>
+                      </>
+                    )}
                     {supportsStress && (
                       <>
                         <div className="px-3 py-1 mt-1 text-[11px] text-fg/40 border-t border-fg/10">{t("效能")}</div>
@@ -5364,14 +5438,22 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       <div className="flex-1 flex flex-col min-h-0">
         {/* 下方分頁列：結果 / 摘要 / 解釋（致敬 Navicat）；右側為執行回饋與複製 / 匯出 */}
         <div className="shrink-0 flex flex-wrap items-center gap-x-1 gap-y-1 px-2 py-0.5 bg-panel border-t border-fg/10 text-[11px]">
-          {((["result", "summary", ...(supportsVisualExplain || supportsMongoExplain ? (["explain"] as const) : [])]) as ("result" | "summary" | "explain")[]).map((key) => {
-            const label = key === "result" ? t("結果") : key === "summary" ? t("摘要") : t("解釋");
+          {((["result", "summary",
+              ...(supportsVisualExplain || supportsMongoExplain ? (["explain"] as const) : []),
+              ...(supportsSqlEditor ? (["review"] as const) : []),
+            ]) as ("result" | "summary" | "explain" | "review")[]).map((key) => {
+            const label = key === "result" ? t("結果") : key === "summary" ? t("摘要")
+              : key === "explain" ? t("解釋") : t("審查");
             return (
               <button key={key} type="button" onClick={() => setBottomTab(key)}
                 className={`px-2.5 py-1.5 border-b-2 -mb-px transition-colors ${bottomTab === key ? "border-accent text-fg/90" : "border-transparent text-fg/45 hover:text-fg/70"}`}>
                 {label}
                 {key === "summary" && summary && summary.errors > 0 && <span className="ml-1 text-red-400">{summary.errors}</span>}
                 {key === "explain" && (plan || mongoPlan) && <span className="ml-1 text-emerald-400">●</span>}
+                {/* 審查徽章：有 error 級用紅色數字（那是會掃全表 / 笛卡兒積的等級），
+                    其餘只用一個小點提示「有東西可看」，避免把建議級的噪音渲染成警報。 */}
+                {key === "review" && findingErrors > 0 && <span className="ml-1 text-red-400">{findingErrors}</span>}
+                {key === "review" && findingErrors === 0 && findings.length > 0 && <span className="ml-1 text-amber-400">●</span>}
               </button>
             );
           })}
@@ -5563,13 +5645,37 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             mongoPlan
               ? <MongoExplainPlan model={mongoPlan.model} raw={mongoPlan.raw} />
               : plan
-              ? <ExplainPlan node={plan} />
+              ? (
+                <>
+                  {/* 計畫看完接著就是「那要怎麼辦」——把調校入口放在計畫上方，
+                      不必再切回工具列去找。 */}
+                  <div className="flex items-center px-3 pt-2">
+                    <button type="button" onClick={askAiTune} disabled={aiBusy}
+                      title={t("把執行計畫、熱點節點、相關表結構與索引一起交給 AI 助手，請它給出索引 DDL 與改寫建議")}
+                      className="ml-auto inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
+                      <Icon icon={aiBusy ? Loader2 : Sparkles} size={12} className={aiBusy ? "animate-spin" : ""} />
+                      {t("AI 調校建議")}
+                    </button>
+                  </div>
+                  <ExplainPlan node={plan} />
+                </>
+              )
               : planErr
                 ? <div className="p-3 text-amber-300 text-sm whitespace-pre-wrap break-words">{planErr}</div>
                 : <EmptyState compact icon={running ? Loader2 : GitBranch}
                     title={running ? t("解釋中…") : t("尚無執行計畫")}
                     hint={running ? undefined : t("按「視覺化解釋」以執行計畫樹呈現查詢。")}
                     className={running ? "[&_svg]:animate-spin" : ""} />
+          )}
+          {bottomTab === "review" && (
+            <ReviewPanel
+              findings={findings}
+              skipped={lintSkipped}
+              hasSql={!!sql.trim()}
+              onJump={(f) => editorRef.current?.selectRange(f.from, f.to)}
+              onAskAi={askAiReview}
+              busy={aiBusy}
+            />
           )}
         </div>
       </div>
@@ -5590,6 +5696,110 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           onUse={(generated) => { persistSql(generated); setBuilderOpen(false); }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * 從計畫樹挑出最貴的幾個節點，攤成給 AI 讀的一行摘要。
+ * 用「獨佔成本」排序（PG 的 selfCost 已排除子樹累積；MySQL 無 selfCost 退回步驟 cost），
+ * 與 ExplainPlan 標紅熱點的判準一致——兩處若各排各的，畫面標紅的和 AI 講的會是不同節點。
+ * 排除 query_block：它的成本是整段查詢的總和，永遠最大且不指向任何具體操作。
+ */
+function hotPlanNodes(root: PlanNode, limit = 8): string[] {
+  const flat: PlanNode[] = [];
+  const walk = (n: PlanNode) => { flat.push(n); n.children.forEach(walk); };
+  walk(root);
+  return flat
+    .filter((n) => n.kind !== "query_block" && (n.selfCost ?? n.cost) != null)
+    .sort((a, b) => (b.selfCost ?? b.cost ?? 0) - (a.selfCost ?? a.cost ?? 0))
+    .slice(0, limit)
+    .map((n) => {
+      const cost = n.selfCost ?? n.cost;
+      const parts = [n.label, cost != null ? `cost ${Math.round(cost * 100) / 100}` : null,
+        n.rows != null ? `rows ${Math.round(n.rows)}` : null, n.detail || null];
+      return parts.filter(Boolean).join(" · ");
+    });
+}
+
+// 靜態審查面板：列出規則引擎的發現，點擊跳到編輯器對應位置；上方一鍵把「lint 結果 + 結構 +
+// 計畫」丟給 AI 做深入審查。獨立成元件而非塞進 QueryPane —— 它只吃 findings，
+// 不需要 QueryPane 那七十幾個 state。
+const SEVERITY_STYLE: Record<LintSeverity, { dot: string; label: string }> = {
+  error: { dot: "bg-red-400", label: "錯誤" },
+  warn: { dot: "bg-amber-400", label: "警告" },
+  info: { dot: "bg-sky-400", label: "建議" },
+};
+
+function ReviewPanel({ findings, skipped, hasSql, onJump, onAskAi, busy }: {
+  findings: LintFinding[];
+  skipped: boolean;
+  hasSql: boolean;
+  onJump: (f: LintFinding) => void;
+  onAskAi: () => void;
+  busy: boolean;
+}) {
+  const t = useT();
+  const counts = { error: 0, warn: 0, info: 0 };
+  for (const f of findings) counts[f.severity]++;
+
+  // 「太長略過」與「乾淨」是兩件事：lintSql 對兩者都回空陣列，混為一談會讓使用者
+  // 誤以為一份根本沒審過的腳本已經通過檢查。
+  if (skipped) {
+    return (
+      <EmptyState compact icon={ScanSearch} title={t("SQL 過長，已略過審查")}
+        hint={t("超過 20 萬字元的腳本不做即時審查（每次按鍵都掃一遍會卡住編輯器）。請只保留要檢查的段落。")} />
+    );
+  }
+  if (!hasSql) {
+    return (
+      <EmptyState compact icon={ScanSearch} title={t("尚無可審查的 SQL")}
+        hint={t("在上方編輯器輸入查詢，這裡會即時列出寫法與效能上的問題。")} />
+    );
+  }
+
+  return (
+    <div className="p-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-fg/50">
+        {findings.length === 0 ? (
+          <span className="text-emerald-300/90">{t("規則引擎沒有發現問題")}</span>
+        ) : (
+          (Object.keys(SEVERITY_STYLE) as LintSeverity[])
+            .filter((s) => counts[s] > 0)
+            .map((s) => (
+              <span key={s} className="inline-flex items-center gap-1">
+                <span className={`h-2 w-2 rounded-sm ${SEVERITY_STYLE[s].dot}`} />
+                {t(SEVERITY_STYLE[s].label)} {counts[s]}
+              </span>
+            ))
+        )}
+        <button type="button" onClick={onAskAi} disabled={busy}
+          title={t("把規則引擎的發現、相關表結構與索引一起交給 AI 助手做深入審查")}
+          className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
+          <Icon icon={busy ? Loader2 : Sparkles} size={12} className={busy ? "animate-spin" : ""} />
+          {t("AI 深入審查")}
+        </button>
+      </div>
+      {/* 規則引擎只認得出「樣式層級」的問題，語意與索引選擇度要靠 AI 那一層 ——
+          講清楚免得使用者把「沒有發現問題」讀成「這段 SQL 沒問題」。 */}
+      <div className="text-[11px] text-fg/35">
+        {t("規則引擎只檢查寫法樣式（不執行查詢、不看資料分布）。語意、索引選擇度與鎖的範圍請用「AI 深入審查」。")}
+      </div>
+      {findings.map((f, i) => (
+        <button key={`${f.id}:${f.from}:${i}`} type="button" onClick={() => onJump(f)}
+          title={t("點擊在編輯器中選取這段")}
+          className="flex w-full items-start gap-2 text-left px-2 py-1.5 rounded hover:bg-fg/5">
+          <span className={`mt-1.5 h-2 w-2 rounded-sm shrink-0 ${SEVERITY_STYLE[f.severity].dot}`} />
+          <span className="min-w-0 flex-1">
+            <span className="flex flex-wrap items-baseline gap-x-2">
+              <span className="text-sm text-fg/85">{f.message}</span>
+              <span className="text-[10px] text-fg/30 mono">{f.id}</span>
+              <span className="text-[10px] text-fg/30">{t("第 {line} 行", { line: f.line })}</span>
+            </span>
+            <span className="block text-[11px] text-fg/45 mt-0.5">{f.hint}</span>
+          </span>
+        </button>
+      ))}
     </div>
   );
 }

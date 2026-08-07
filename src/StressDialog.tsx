@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { AlertTriangle, Copy, Gauge, Lock, Play, Square } from "lucide-react";
+import { AlertTriangle, Copy, Gauge, Lock, Play, Sparkles, Square } from "lucide-react";
 import { api, KIND_META, type StressPlan, type StressProgress, type StressReport } from "./api";
 import { useStore } from "./store";
 import { toast, copyToClipboard } from "./ui";
@@ -10,7 +10,9 @@ import { extractNamedParams } from "./sql";
 import { loadConnColors } from "./connColors";
 import { isReadonly } from "./connReadonly";
 import { expandParamPool, fmtMs, fmtRps, parseParamCsv, reportToMarkdown, seriesToPoints, validatePlan } from "./stress";
-import { useT } from "./i18n";
+import { useLang, useT } from "./i18n";
+import { useAssistant } from "./assistant";
+import { buildStressAnalysisPrompt } from "./aiReview";
 
 // 壓力測試對話框（致敬 SQLQueryStress）：對單一連線重複執行語句，量測 TPS 與延遲分佈。
 // 這個視窗會「真的打」目標資料庫，因此版面刻意把目標連線 / 唯讀狀態放在最上方，
@@ -181,6 +183,21 @@ export default function StressDialog({ connId, initialSql, onClose }: {
     }
   };
 
+  // 把報告丟給 AI 助手判讀（百分位的「形狀」比單一數字更能指出瓶頸類型）。
+  // 語句用 ranSql（實際跑的那一份）而非編輯框現值——使用者可能在看報告時已經改了 SQL。
+  const askAiAnalysis = () => {
+    if (!report) return;
+    useAssistant.getState().ask(
+      buildStressAnalysisPrompt({
+        kind,
+        sql: ranSql,
+        reportMarkdown: reportToMarkdown(report, ranSql),
+        uiLang: useLang.getState().lang,
+      }),
+      { send: true },
+    );
+  };
+
   // 壓測進行中關窗會讓執行緒在背景繼續打，且進度無處可看 → 先擋下並提示。
   const requestClose = () => {
     if (running) { toast.error(t("壓測進行中，請先按「停止」再關閉")); return; }
@@ -227,6 +244,12 @@ export default function StressDialog({ connId, initialSql, onClose }: {
       ) : (
         <>
           <Button variant="secondary" onClick={requestClose}>{t("關閉")}</Button>
+          {report && (
+            <Button icon={Sparkles} onClick={askAiAnalysis}
+              title={t("把這份報告與受測語句交給 AI 助手，請它從百分位的形狀反推瓶頸類型")}>
+              {t("AI 分析結果")}
+            </Button>
+          )}
           {report && (
             <Button icon={Copy} onClick={() => copyToClipboard(reportToMarkdown(report, ranSql))}>
               {t("複製為 Markdown")}

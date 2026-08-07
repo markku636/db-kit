@@ -259,6 +259,47 @@ const CASES = {
     }
   },
 
+  // 查詢分頁的「審查」分頁：規則引擎在打字當下就要列出發現，點擊可跳到編輯器對應位置。
+  // 這條驗的是 glue（分頁存在 / 徽章 / 面板內容 / AI 入口），規則本身由 sqlLint.test.ts 覆蓋。
+  async "sql-review-tab"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await sleep(900);
+
+    // 一段刻意寫壞的 SQL：無 WHERE 的 UPDATE（error）+ 前綴萬用字元 LIKE（warn）。
+    const editor = page.locator(".cm-content").first();
+    await editor.click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.type("UPDATE orders SET status = 'x';\nSELECT * FROM orders WHERE note LIKE '%abc%';");
+    await sleep(700);
+
+    const tab = page.getByRole("button", { name: /^審查/ });
+    check("查詢分頁有「審查」分頁", (await tab.count()) > 0);
+    await tab.first().click();
+    await sleep(500);
+
+    const body = await page.locator("#root").innerText();
+    check("審查列出無 WHERE 的 UPDATE（error）", body.includes("沒有 WHERE 條件"), body.slice(0, 400));
+    check("審查列出前綴萬用字元 LIKE（warn）", body.includes("萬用字元開頭"));
+    check("審查顯示規則代號", body.includes("no-where-dml"));
+    check("審查面板有「AI 深入審查」入口", (await page.getByRole("button", { name: /AI 深入審查/ }).count()) > 0);
+    check("審查面板標明規則引擎的侷限", body.includes("規則引擎只檢查寫法樣式"));
+
+    // 點一筆 finding 應在編輯器選取對應範圍（不丟例外、選取非空）。
+    await page.getByText("沒有 WHERE 條件", { exact: false }).first().click();
+    await sleep(300);
+    const sel = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+    check("點擊 finding 會在編輯器選取該段", sel.length > 0, `selection=${JSON.stringify(sel)}`);
+
+    // 清空 SQL → 應回到空狀態而非「沒有發現問題」（兩者語意不同）。
+    await editor.click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await sleep(600);
+    check("清空後顯示空狀態", (await page.locator("#root").innerText()).includes("尚無可審查的 SQL"));
+  },
+
   // 側欄連線滿出頁面時，最後一筆必須滾得到（回歸：外殼曾經同時是 column flex 與捲動容器，
   // 子項被 flex-shrink 壓縮後捲動高度算不出來，最底下幾筆永遠碰不到）。
   async "sidebar-scroll-reaches-last"(page, caseFx) {
