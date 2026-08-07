@@ -12,6 +12,17 @@ use std::sync::Arc;
 use crate::db::{ConnectionConfig, DatabaseDriver};
 use crate::error::{AppError, AppResult};
 
+/// 此 external 連線在本次 app 執行中是否已有可複用的登入 session。
+///
+/// 供前端在跳 OTP 窗前先問：gateway session 還在就不必再要一次驗證碼——驗證碼只有在真正要
+/// 重新登入時才用得到。session 一律只存在記憶體，關掉 app 即消失（重開必須重新驗證）。
+///
+/// 本體不含具體驅動 → 一律 false（前端維持「每次連線都問」的既有行為）。
+pub fn external_session_alive(config: &ConnectionConfig) -> bool {
+    let _ = config; // 具體驅動由 overlay 覆寫此函式時使用
+    false
+}
+
 /// 依 `options["driver"]` 建立外部驅動。本體不含具體驅動 → 回 Unsupported。
 pub async fn connect_external(config: &ConnectionConfig) -> AppResult<Arc<dyn DatabaseDriver>> {
     let driver = config.options.get("driver").map(|s| s.as_str()).unwrap_or("");

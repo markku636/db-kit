@@ -907,6 +907,9 @@ export const api = {
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   // 清除外部 gateway 等驅動的查詢快取（供「重新整理」強制重抓）。
   clearCache: (id: string) => invoke<void>("clear_cache", { id }),
+  // 此 external 連線是否已有可複用的登入 session（本次 app 執行內）。
+  // 供 OTP 關卡判斷還要不要跳窗——見 otpGate.askOtpCode。
+  externalSessionAlive: (config: ConnectionConfig) => invoke<boolean>("external_session_alive", { config }),
   // 介面語言同步給後端：Rust 錯誤訊息與 dbk CLI 共用 app_settings.json 的 lang。
   // 後端 command 尚未上線時會 reject —— 呼叫端（i18n.setLang）已 catch，不擋 UI 切換。
   setLang: (lang: string) => invoke<void>("set_lang", { lang }),

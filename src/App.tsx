@@ -1241,6 +1241,25 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       return next;
     });
 
+  // ---- 已連線節點的收合狀態 ----
+  // 收合 ≠ 中斷連線：只把資料庫子樹折起來，連線與後端 session 原封不動
+  //（走 OTP 的 gateway 連線因此不會因為「把樹收起來」而要重新驗證）。
+  // 要真的斷線走右鍵選單的「中斷連線」。不持久化：連線狀態本來就不跨重啟。
+  const [collapsedConns, setCollapsedConns] = useState<Set<string>>(new Set());
+  const toggleConnCollapsed = (id: string) =>
+    setCollapsedConns((s) => {
+      const next = new Set(s);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  const expandConn = (id: string) =>
+    setCollapsedConns((s) => {
+      if (!s.has(id)) return s; // 已是展開狀態：回同一個 Set，不觸發重繪
+      const next = new Set(s);
+      next.delete(id);
+      return next;
+    });
+
   /** 套用新排版：先更新畫面再落地，寫入失敗則回滾並提示（避免畫面與磁碟不一致）。 */
   const applyLayout = async (nextConns: ConnectionConfig[], nextGroups: ConnGroup[]) => {
     const prevConns = connections;
@@ -1545,6 +1564,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     try {
       await api.connect(cfg, gate.code);
       useStore.getState().markConnected(id);
+      expandConn(id); // 剛連上就把樹打開（上一輪殘留的收合狀態不該蓋掉新連線）
       const dbs = await api.listDatabases(id);
       setDatabases((d) => ({ ...d, [id]: dbs }));
     } catch (e: any) {
@@ -1566,6 +1586,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
   const doDisconnect = async (id: string) => {
     await api.disconnect(id);
     useStore.getState().markDisconnected(id);
+    expandConn(id); // 收合是「已連線」節點的狀態，斷線後不留著（下次連上即展開）
     setDatabases((d) => ({ ...d, [id]: [] }));
     setExpandedDbs((e) => {
       const n = { ...e };
@@ -1576,8 +1597,6 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     });
   };
 
-  const toggleConnect = (id: string) =>
-    connectedIds.has(id) ? doDisconnect(id) : doConnect(id);
 
   // 命令面板項目：連線 / 資料庫 / 已載入的資料表（含視圖）/ 常用動作。
   const paletteItems = useMemo<PaletteItem[]>(() => {
@@ -1585,7 +1604,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     for (const c of connections) {
       items.push({
         id: `conn:${c.id}`, label: c.name, hint: KIND_META[c.kind].label, group: "conn", icon: Database,
-        run: () => { setActive(c.id); selectNode({ type: "connection", connId: c.id }); if (!connectedIds.has(c.id)) toggleConnect(c.id); },
+        run: () => { setActive(c.id); selectNode({ type: "connection", connId: c.id }); if (!connectedIds.has(c.id)) doConnect(c.id); },
       });
     }
     for (const [connId, dbs] of Object.entries(databases)) {
@@ -2690,6 +2709,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
         const meta = KIND_META[c.kind];
         const connected = connectedIds.has(c.id);
         const busy = connecting.has(c.id);
+        const treeCollapsed = collapsedConns.has(c.id);
         const dragLine = dropAt?.kind === "conn" && dropAt.id === c.id ? dropAt.before : null;
         return (
           <div key={c.id}>
@@ -2714,7 +2734,10 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
               }}
               onDrop={(e) => { e.preventDefault(); e.stopPropagation(); commitDrop(); }}
               onClick={() => { setActive(c.id); selectNode({ type: "connection", connId: c.id }); }}
-              onDoubleClick={() => toggleConnect(c.id)}
+              // 雙擊：未連線＝連線；已連線＝收合 / 展開資料庫樹，**不中斷連線**。
+              // 斷線是明確動作，只走右鍵選單的「中斷連線」——把樹收起來不該把 session
+              // （以及走 OTP 的 gateway 那次驗證）一起丟掉。
+              onDoubleClick={() => (connected ? toggleConnCollapsed(c.id) : doConnect(c.id))}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setActive(c.id);
@@ -2728,6 +2751,19 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                 drag?.kind === "conn" && drag.id === c.id ? "opacity-40" : ""
               }`}
             >
+              {/* 收合 / 展開箭頭（樣式對齊資料庫節點）。只在已連線時可按——未連線沒有樹可收，
+                  但仍佔位，讓連線名稱在連線前後維持同一條垂直對齊線。 */}
+              {connected ? (
+                <button type="button"
+                  title={treeCollapsed ? t("展開資料庫清單") : t("收合資料庫清單（不會中斷連線）")}
+                  aria-label={treeCollapsed ? t("展開資料庫清單") : t("收合資料庫清單（不會中斷連線）")}
+                  onClick={(e) => { e.stopPropagation(); toggleConnCollapsed(c.id); }}
+                  className="w-3 flex items-center justify-center shrink-0 text-fg/35 hover:text-fg/80">
+                  <Icon icon={ChevronRight} size={13} className={`transition-transform ${treeCollapsed ? "" : "rotate-90"}`} />
+                </button>
+              ) : (
+                <span className="w-3 shrink-0" />
+              )}
               {busy ? (
                 <span className="w-3.5 h-3.5 shrink-0 grid place-items-center">
                   <Icon icon={Loader2} size={14} className="text-fg/50 animate-spin" />
@@ -2756,10 +2792,10 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
                 <Icon icon={Trash2} size={13} />
               </button>
             </div>
-            {connected && databases[c.id] && databases[c.id].length === 0 && (
+            {connected && !treeCollapsed && databases[c.id] && databases[c.id].length === 0 && (
               <div className="pl-7 pr-3 py-1 text-fg/25 text-xs">{t("（無資料庫）")}</div>
             )}
-            {connected &&
+            {connected && !treeCollapsed &&
               (databases[c.id] ?? []).map((db) => {
                 const dbKey = `${c.id}:${db}`;
                 const objs = expandedDbs[dbKey];
@@ -2964,9 +3000,20 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
             style={{ left: menu.x, top: menu.y }}>
             {(
               [
-                [connectedIds.has(menu.id) ? t("中斷連線") : t("連線"), () => toggleConnect(menu.id), false],
+                // 連線 / 中斷連線分成兩條明確路徑（不再是隱式 toggle）：中斷連線是「放掉這條連線」
+                // 的唯一入口，把樹收起來請用下面那條（或雙擊 / 箭頭），兩者不互相牽動。
+                connectedIds.has(menu.id)
+                  ? [t("中斷連線"), () => doDisconnect(menu.id), false]
+                  : [t("連線"), () => doConnect(menu.id), false],
                 ...(connectedIds.has(menu.id)
-                  ? [[t("重新整理資料庫"), () => refreshDbs(menu.id), false] as [string, () => void, boolean]]
+                  ? [
+                      [
+                        collapsedConns.has(menu.id) ? t("展開資料庫清單") : t("收合資料庫清單"),
+                        () => toggleConnCollapsed(menu.id),
+                        false,
+                      ] as [string, () => void, boolean],
+                      [t("重新整理資料庫"), () => refreshDbs(menu.id), false] as [string, () => void, boolean],
+                    ]
                   : []),
                 ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres" || menuConn.kind === "sqlite")
                   ? [[t("新增查詢"), () => newQueryForDb(menuConn.id, menuConn.database ?? "", menuConn.kind), false] as [string, () => void, boolean]]

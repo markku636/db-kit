@@ -131,6 +131,7 @@ pub fn run() {
             commands::connect,
             commands::disconnect,
             commands::clear_cache,
+            commands::external_session_alive,
             commands::has_startup_password,
             commands::verify_startup_password,
             commands::set_startup_password,

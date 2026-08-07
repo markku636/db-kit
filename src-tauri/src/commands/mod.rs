@@ -304,6 +304,15 @@ pub async fn clear_cache(state: State<'_, AppState>, id: String) -> AppResult<()
     state.manager.clear_cache(&id).await
 }
 
+/// 此 external 連線在本次 app 執行中是否已有可複用的登入 session。
+///
+/// 前端在跳 OTP 窗前先問這個：session 還在（例如中斷連線後再連）就直接放行，不必重輸驗證碼；
+/// 只有重開 app 或 session 被 gateway 判過期時才會再問。不需要 secrets，故不做 hydrate。
+#[tauri::command]
+pub async fn external_session_alive(config: ConnectionConfig) -> AppResult<bool> {
+    Ok(crate::db::external::external_session_alive(&config))
+}
+
 // ---- 啟動密碼（app-lock 閘門）----
 //
 // GUI 啟動時擋一道：Argon2id PHC 雜湊存 app_settings.json（非機密、可落地）。驗證在後端做，
