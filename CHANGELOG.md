@@ -1,4 +1,4 @@
-## v0.22.0
+## v0.23.0
 
 - **SQL 審查：規則引擎 + AI 兩層**（對標 Redgate SQL Prompt / SonarQube 的 SQL rules 做確定性檢查，再用 EverSQL / Plan Explorer 那一層的思路交給 AI）。查詢分頁底部新增「**審查**」分頁，打字當下即時列出寫法與效能問題，**不執行查詢、不需要 claude CLI、離線可用**。
   - **15 條規則**，分三個嚴重度：`no-where-dml`（無 WHERE 的 UPDATE·DELETE）與 `missing-join-condition`（逗號 JOIN 笛卡兒積）為 error；`non-sargable-func`（欄位套函式讓索引失效）、`leading-wildcard-like`、`not-in-subquery`（子查詢一個 NULL 讓整條件恆為 unknown）、`or-chain`、`union-vs-union-all`、`select-star-with-join`、`nolock`、`implicit-cast-literal` 為 warn；`select-star`、`order-by-without-limit`、`distinct-with-group-by`、`count-star-exists`、`cursor-loop` 為建議。方言感知（NOLOCK 只對 SQL Server；筆數限制認得 LIMIT / TOP / FETCH FIRST / ROWNUM）。
@@ -29,6 +29,8 @@
   - **標記為正式環境的連線預設不寫入磁碟**（沿用既有的 `options.prod`，不另立一套「敏感連線」概念），仍照常提供本次工作階段的提示。設定 → 結構快取可看到存放路徑、連線數 / 表數 / 佔用空間 / 最後更新，並一鍵清除全部。
   - 內容沒變的重抓會沿用原本的物件，避免 CodeMirror 整組重建擴充套件（大 schema 會卡一下）；併回時**空的結果不覆蓋既有非空快取**（權限不足 / 逾時常表現為「成功回傳 0 張表」）。
   - 新增 `src/schemaCache.test.ts`（30 項）與 Rust 端 `schema_cache` / `group_table_columns` 測試（含半截 JSON、缺欄位、未知欄位、路徑穿越字元的容錯），前端 460 項、後端 203 項全綠。
+## v0.22.0
+
 - **側欄捲動結構重整**：側欄根層原本同時扮演三個角色——column flex 容器、捲動容器，以及二十多個 `fixed` 右鍵選單／對話框的掛載點。拆成「外殼 `flex flex-col overflow-hidden`」+「內層 `flex-1 min-h-0 overflow-y-auto` 純捲動視窗」，搜尋列由 `sticky` 改成外殼上的固定列（對使用者一樣永遠可見，但不再參與捲動容器的 overflow 計算），選單與對話框移出捲動視窗。捲動區帶 `data-sidebar-scroll` 供 UI 檢查定位，並補 `overscroll-contain`（捲到底不把捲動傳給主區）與 `pb-2`（最後一筆不貼齊邊緣）。
   - `verify:ui` 新增 `sidebar-scroll-reaches-last`（5 項）：**40 筆連線分 3 個群組**的情境下，斷言捲動高度確實產生、**用真實滑鼠滾輪**捲得到底、最後一筆連線捲到底後幾何上完整落在視窗內且可點、搜尋列在捲到底時仍可見。invoke shim 一併補上 `list_connection_groups` / `save_connection_layout`（原本未實作，側欄分組路徑從來沒被冒煙檢查覆蓋過）。
 - **連線右鍵「新增查詢」不再只給三種連線**：原本白名單寫死 MySQL 家族 / PostgreSQL / SQLite，**SQL Server、Oracle、external gateway、MongoDB、Redis、Elasticsearch 的連線右鍵完全看不到這一項**，只能改從別處開查詢分頁。抽出 `supportsQueryEditorKind()` 放進 `sql.ts` 當單一落點（Kafka / RabbitMQ 沒有查詢語言，其餘皆有編輯器），查詢面板的編輯器 gate 與側欄右鍵共用同一個判準——兩處原本各寫一份白名單，這正是漂移的來源。
