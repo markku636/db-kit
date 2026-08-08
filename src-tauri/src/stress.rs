@@ -42,6 +42,17 @@ const TAIL_SAMPLE_MIN_MS: u64 = 200;
 /// 與 `Instant + Duration` 算術溢位 panic（debug build 直接炸 worker），順便擋掉手滑多打幾個零。
 const MAX_DURATION_SECS: u64 = 86_400;
 
+/// 壓測專屬池的 `options` 旗標鍵（值固定 `"1"`）。驅動端請用 [`is_stress_pool`] 判讀。
+///
+/// 這是給「自帶客戶端快取 / 自我節流」的驅動用的通用擴充點，本身不涉及任何特定驅動；
+/// 沒有這類機制的驅動忽略它即可。設定的地方見 `run_stress`。
+pub const STRESS_POOL_FLAG: &str = "stress_pool";
+
+/// 此連線設定是否為壓測專屬池（供驅動在 `connect` 時判讀）。
+pub fn is_stress_pool(config: &ConnectionConfig) -> bool {
+    config.options.get(STRESS_POOL_FLAG).map(|v| v == "1").unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // DTO（欄位名 = 前端 src/api.ts 的契約，serde 預設 snake_case，勿改）
 // ---------------------------------------------------------------------------
@@ -532,6 +543,16 @@ pub async fn run_stress(
     let stress_id = format!("{}::stress::{run_id}", cfg.id);
     cfg.id = stress_id.clone();
     cfg.max_connections = threads;
+    // 通用旗標：告訴驅動「這條連線是壓測專用池」。
+    //
+    // 對 sqlx 系（MySQL / PG / MSSQL…）無作用——它們沒有客戶端快取，量到的本來就是伺服器。
+    // 但凡是自帶「結果快取」或「自我節流」的驅動（HTTP gateway 類尤其常見），照平常那套跑
+    // 壓測量到的會是自己的快取與號誌，不是被測系統：同一句 SELECT 第二次起直接吃快取，
+    // 延遲掉到微秒、rps 衝到天上，報表完全是假的。這些驅動應在 connect 時檢查本旗標並
+    // 關掉快取 / 改用 `max_connections`（= 執行緒數）當併發上限。
+    //
+    // 用 options 而非解析 id 的 `::stress::` 後綴：後者是本檔的內部命名，外部驅動不該依賴。
+    cfg.options.insert(STRESS_POOL_FLAG.to_string(), "1".to_string());
 
     let cancel_flag = Arc::new(AtomicBool::new(false));
     register(run_id, cancel_flag.clone());
