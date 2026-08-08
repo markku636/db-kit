@@ -91,6 +91,20 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      # Release 說明取自 CHANGELOG 中該版本的段落（+ 下載指引）。原本是寫死的一句
+      # 「見 CHANGELOG.md」，每個版本的 Release 頁面長得一模一樣，使用者得自己翻 commit
+      # 才知道改了什麼。多行內容用 heredoc 分隔符寫進 GITHUB_ENV；bash 在三個平台的 runner
+      # 上都有（Windows 走 Git Bash）。四個 matrix job 都會算一次，內容相同，
+      # tauri-action 建立 / 更新的是同一個 Release，不會互相蓋掉。
+      - name: Extract release notes from CHANGELOG
+        shell: bash
+        run: |
+          {
+            echo 'RELEASE_NOTES<<DBKIT_NOTES_EOF'
+            node scripts/changelog-section.mjs "${{ github.ref_name }}"
+            echo 'DBKIT_NOTES_EOF'
+          } >> "$GITHUB_ENV"
+
       # tauri-action 會跑 beforeBuildCommand（npm run build）→ tauri build，
       # 然後依 tagName 建立 / 更新同一個 Release 並上傳該平台的安裝檔
       # （Windows: .msi/.exe；macOS: .dmg；Linux: .deb/.rpm/.AppImage）。
@@ -102,7 +116,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "db-kit ${{ github.ref_name }}"
-          releaseBody: "見 CHANGELOG.md。Windows 下載 .exe（NSIS）或 .msi；macOS 下載 .dmg（Apple Silicon 選 aarch64、Intel 選 x64；未簽章，首次開啟請右鍵→開啟）；Linux 下載 .AppImage（免安裝）、.deb（Debian/Ubuntu）或 .rpm（Fedora/RHEL）。"
+          releaseBody: ${{ env.RELEASE_NOTES }}
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
