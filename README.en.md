@@ -71,6 +71,18 @@ One codebase, one consistent experience, shipping **native desktop apps for Wind
   <img src="docs/screenshots/06-kafka.png" alt="Kafka message browser" width="860">
 </p>
 
+**SQL stress test** — replay one statement across many threads and measure TPS and latency distribution. Fixed iterations or duration + ramp-up, per-thread warmup, and `:name` parameters substituted round-robin from pasted CSV (so the run does not hammer one key and sit entirely in cache). The report carries p50 / p90 / p95 / p99, per-second TPS and p95 charts, and fingerprinted error groups. Runs on its **own connection pool** so it never starves the interactive one; writes and highly destructive statements are refused by default:
+
+<p align="center">
+  <img src="docs/screenshots/07-stress-test.png" alt="SQL stress test" width="860">
+</p>
+
+**SQL review** — style and performance issues listed as you type, with **no query executed, no AI required, works offline**. Click a finding to select it in the editor; for the semantics and index selectivity the rules cannot see, hand it to "Deep review with AI" in one click:
+
+<p align="center">
+  <img src="docs/screenshots/08-sql-review.png" alt="SQL review" width="860">
+</p>
+
 ## Download & install
 
 <p align="center">
@@ -320,6 +332,8 @@ Build artifacts land in `src-tauri/target/release/bundle/` (`.msi` / `.exe` / `.
 
 ## Command-line tool (`dbk` CLI)
 
+> 📖 **Full guide: [docs/cli.md](./docs/cli.md)** (written in Traditional Chinese) — every subcommand's flags, output formats, worked scenarios (scheduled backups / performance baselines / auditing), exit codes and limitations. What follows is a quick tour.
+
 Alongside the desktop GUI, db-kit ships a **`dbk` command-line tool** — **queries, export and writes (modify · delete)** — for SSH sessions, scripts, and scheduled jobs where opening a GUI makes no sense. It reuses the core layer directly (connection management / export / backup / crypto) and **does not go through Tauri**, so `--no-default-features` builds a **lean, Tauri-free binary**.
 
 ```bash
@@ -374,7 +388,17 @@ dbk --conn cache redis del-prefix session: --yes --force   # SCAN for key names,
 
 > `del-prefix` never hands the prefix to Redis as a pattern: it runs `SCAN MATCH <prefix>*` first (capped by `--limit`, default 10,000) and then deletes the resolved key names in batches — the confirmation message tells you how many keys are about to go.
 
-Other subcommands: `conn` (list / test / ping / encrypted export), `db` (list / create / drop), `table` (list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate), `routine`, `search` (`--whole-word` exact-word matching, `--wildcards` enables `*` `?`), `column-stats`, `er-model`, `server-info`, `exec`, `redis` (keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db). Full list via `dbk --help`.
+**Stress test** — multi-threaded replay of one query, sharing the same core as the GUI:
+
+```bash
+dbk --conn prod-mysql stress "select * from orders where status='paid' limit 100" \
+    --threads 8 --seconds 30 --ramp 5 --warmup 20
+dbk --conn prod-mysql --format json stress "select 1" --threads 16 --seconds 60 > bench.json
+```
+
+> `stress` is always read-only (there is no `--allow-writes`). It opens a dedicated connection with `max_connections = --threads` and releases it afterwards — so `--threads 64` really does open 64 connections to the target; make sure the server can take it.
+
+Other subcommands: `conn` (list / test / ping / encrypted export), `db` (list / create / drop), `table` (list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate), `routine`, `search` (`--whole-word` exact-word matching, `--wildcards` enables `*` `?`), `column-stats`, `er-model`, `server-info`, `exec`, `stress`, `redis` (keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db). Per-command detail and worked examples in **[docs/cli.md](./docs/cli.md)**, or `dbk --help` / `dbk <subcommand> --help`.
 
 > Kafka / Elasticsearch / RabbitMQ connections are not supported by the CLI (no general-purpose query language that makes sense in a terminal, and the lean binary does not compile their drivers in); specifying one fails fast with a clear message — use the GUI instead.
 

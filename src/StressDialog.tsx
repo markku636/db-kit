@@ -403,9 +403,13 @@ export default function StressDialog({ connId, initialSql, onClose }: {
 
       {err && <div className="text-xs text-danger whitespace-pre-wrap break-words">{err}</div>}
 
-      {/* 執行中即時數字 + 趨勢 */}
-      {(running || progress) && (
+      {/* 執行中即時數字 + 趨勢。
+          外層也認 report：跑太快（迭代少、查詢便宜）時一次進度事件都來不及發，progress 恆為 null、
+          running 也已翻回 false —— 只看這兩者的話，明明 report.series 有資料，圖表卻整組不渲染。 */}
+      {(running || progress || report) && (
         <div className="space-y-3 rounded border border-fg/10 bg-inset p-3">
+          {(running || progress) && (
+          <>
           <div className="flex items-center gap-2">
             <span className="text-xs text-fg/50">
               {running ? t("壓測進行中") : t("最近一輪")}
@@ -427,14 +431,20 @@ export default function StressDialog({ connId, initialSql, onClose }: {
             <Stat label={t("平均延遲")} value={orDash(progress?.avg_ms, fmtMs)} />
             <Stat label="p95" value={orDash(progress?.p95_ms, fmtMs)} />
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="text-accent">
-              <TimeSeriesChart label="TPS" points={chart.tps} height={90} formatValue={fmtRps} />
+          </>
+          )}
+          {/* 折線圖獨立判斷「有沒有點可畫」：資料在執行中來自進度事件、完成後改用報表的
+              每秒取樣（後端算得比進度事件細），兩者都可能單獨存在。 */}
+          {chart.tps.length >= 2 && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="text-accent">
+                <TimeSeriesChart label="TPS" points={chart.tps} height={90} formatValue={fmtRps} />
+              </div>
+              <div className="text-amber-300/80">
+                <TimeSeriesChart label={t("p95 延遲")} points={chart.p95} height={90} formatValue={fmtMs} />
+              </div>
             </div>
-            <div className="text-amber-300/80">
-              <TimeSeriesChart label={t("p95 延遲")} points={chart.p95} height={90} formatValue={fmtMs} />
-            </div>
-          </div>
+          )}
         </div>
       )}
 

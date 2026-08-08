@@ -70,6 +70,18 @@
   <img src="docs/screenshots/06-kafka.png" alt="Kafka 訊息瀏覽器" width="860">
 </p>
 
+**SQL 壓力測試** — 多執行緒重複執行同一段查詢，量 TPS 與延遲分佈。固定迭代或持續時間 + 爬升、每執行緒暖機、`:name` 參數以 CSV 輪替代入（避免整場只打同一把 key 而全落在快取）；報表含 p50 / p90 / p95 / p99、每秒取樣的 TPS 與 p95 折線，錯誤指紋化分組。走**專屬連線池**不佔用互動連線，寫入與高破壞語句預設擋下：
+
+<p align="center">
+  <img src="docs/screenshots/07-stress-test.png" alt="SQL 壓力測試" width="860">
+</p>
+
+**SQL 審查** — 打字當下即時列出寫法與效能問題，**不執行查詢、不需要 AI、離線可用**。點一筆即在編輯器選取對應範圍；規則涵蓋不到的語意與索引選擇度，再一鍵交給「AI 深入審查」：
+
+<p align="center">
+  <img src="docs/screenshots/08-sql-review.png" alt="SQL 審查" width="860">
+</p>
+
 ## 下載安裝
 
 <p align="center">
@@ -321,6 +333,8 @@ npm run tauri build
 
 ## 命令列工具（`dbk` CLI）
 
+> 📖 **完整操作指南：[docs/cli.md](./docs/cli.md)** —— 每個子指令的旗標、輸出格式、常見情境（排程備份 / 效能基準線 / 稽核）、結束碼與限制。以下為速覽。
+
 除了桌面 GUI，db-kit 另附一支 **`dbk` 命令列工具**——**查詢 / 匯出 / 寫入（修改 · 刪除）**，適合 SSH 進伺服器、寫 script、排程任務時用，不必開 GUI。它直接重用核心層（連線管理 / 匯出 / 備份 / 加密），**不經過 Tauri**，所以能 `--no-default-features` 編出一支**不連 Tauri 的精簡 binary**。
 
 ```bash
@@ -344,6 +358,11 @@ dbk --conn prod-mysql export orders --to orders.csv --data-format csv --bom
 dbk --conn prod-mysql export orders --to orders.xlsx --data-format xlsx
 dbk --conn prod-mysql schema-dump > schema.sql
 dbk --conn prod-mysql backup mydb --to mydb.dump
+
+# 壓力測試：8 執行緒跑滿 30 秒（前 5 秒逐步進場），報表導成 JSON
+dbk --conn prod-mysql stress "select * from orders where status='paid' limit 100" \
+    --threads 8 --seconds 30 --ramp 5 --warmup 20
+dbk --conn prod-mysql --format json stress "select 1" --threads 16 --seconds 60 > bench.json
 ```
 
 **唯讀守門**：`query` / `explain` 只放行查詢類語句（`select` / `with` / `show` / `describe` / `explain` / `pragma` / `use` / `values` / `table`），偵測到寫入語句（`insert` / `update` / `delete` / `drop`…）直接擋下並回非零 exit code（逐 `;` 切句、跳過註解）。要寫入請改用下方的 `exec`；另建議搭配唯讀 DB 帳號作第二道防線。
@@ -375,7 +394,9 @@ dbk --conn cache redis del-prefix session: --yes --force   # 先 SCAN 出鍵名�
 
 > `del-prefix` 不會把前綴丟給 Redis 當 pattern：先 `SCAN MATCH <prefix>*` 取出實際鍵名（上限 `--limit`，預設 10,000）再分批 `DEL`，確認訊息會先告訴你會刪掉幾個鍵。
 
-其餘子指令：`conn`（list / test / ping / 加密 export）、`db`（list / create / drop）、`table`（list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate）、`routine`、`search`（`--whole-word` 整字比對、`--wildcards` 啟用 `*` `?`）、`column-stats`、`er-model`、`server-info`、`exec`、`redis`（keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db）。完整清單 `dbk --help`。
+其餘子指令：`conn`（list / test / ping / 加密 export）、`db`（list / create / drop）、`table`（list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate）、`routine`、`search`（`--whole-word` 整字比對、`--wildcards` 啟用 `*` `?`）、`column-stats`、`er-model`、`server-info`、`exec`、`stress`、`redis`（keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db）。逐項說明與實例見 **[docs/cli.md](./docs/cli.md)**，或 `dbk --help` / `dbk <子指令> --help`。
+
+> `stress` 一律唯讀（不提供 `--allow-writes`）。它會另開一條 `max_connections = --threads` 的專屬連線，跑完釋放——所以 `--threads 64` 就是對目標打 64 條連線，先確認伺服器撐得住。
 
 > Kafka / Elasticsearch / RabbitMQ 連線 CLI 不支援（沒有可在終端機表達的通用查詢語言，且精簡 binary 未編入其驅動），指定時會直接回明確錯誤，請改用 GUI。
 

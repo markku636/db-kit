@@ -1,4 +1,26 @@
+## v0.23.1
+
+修補版：壓測跑太快時圖表不顯示，另補上 `dbk` CLI 的完整操作指南與 Release Notes 自動化。
+
+- **修正：短時間壓測看不到 TPS / p95 折線圖**。即時數字與圖表整塊的顯示條件是「執行中或收到過進度事件」，但進度事件每 500ms 才發一次——迭代數少、查詢又便宜的壓測（例如 100 次跑完只花 36ms）一次都來不及發，於是 `report.series` 明明有每秒取樣資料，圖表卻整組不渲染。改成外層也認報表，折線圖自己判斷有沒有點可畫。
+- **新增 [`docs/cli.md`](https://github.com/markku636/db-kit/blob/main/docs/cli.md)**：`dbk` CLI 的完整操作指南——三種連線指定方式、三層安全模型（唯讀守門 / `--yes` / `--force`）、每個子指令的旗標與實例、常見情境（排程備份 / 效能基準線 / 稽核 / dry run）、結束碼與限制。文中指令均對真實資料庫實跑驗證；同時更正 `backup` 的說明：它**沒有**內建降級路徑，找不到 `mysqldump` / `pg_dump` / `mongodump` 會直接失敗（僅 SQLite 走檔案複製）。
+- **Release Notes 改為自動取自 CHANGELOG**（`scripts/changelog-section.mjs`）。先前是 workflow 裡寫死的一句「見 CHANGELOG.md」加下載指引，每個版本的 Release 頁面長得一模一樣，使用者得自己翻 commit 才知道改了什麼。找不到對應版本時降級為只印下載指引，不讓發佈流程掛掉。
+- README 補上壓力測試與 SQL 審查的實拍截圖。
+
 ## v0.23.0
+
+這一版加了兩組「查詢寫完之後」的工具：**SQL 壓力測試**（多執行緒重放、延遲百分位、錯誤指紋化分組，對標 SQLQueryStress）與 **SQL 審查**（15 條靜態規則即時檢查寫法，離線可用；再一鍵交給 AI 做語意層的深入審查）。另外修掉兩個「危險語句偵測會被騙過」的既有漏洞。
+
+| | |
+|---|---|
+| 🔥 壓力測試 | 查詢分頁 → 更多 → 效能 → 壓力測試…；亦可用 `dbk stress` |
+| 🔍 SQL 審查 | 查詢分頁底部新的「審查」分頁，打字當下即時檢查 |
+| 🤖 AI 三入口 | AI 審查 SQL · AI 調校建議 · AI 分析壓測結果 |
+| 🔒 安全修正 | 註解掉的 WHERE、子查詢裡的 WHERE、`[Where]` 方括號識別字都不再能繞過確認框 |
+| 📖 新文件 | [`docs/cli.md`](https://github.com/markku636/db-kit/blob/main/docs/cli.md) —— `dbk` CLI 完整操作指南 |
+
+<details>
+<summary><b>完整內容</b></summary>
 
 - **SQL 審查：規則引擎 + AI 兩層**（對標 Redgate SQL Prompt / SonarQube 的 SQL rules 做確定性檢查，再用 EverSQL / Plan Explorer 那一層的思路交給 AI）。查詢分頁底部新增「**審查**」分頁，打字當下即時列出寫法與效能問題，**不執行查詢、不需要 claude CLI、離線可用**。
   - **15 條規則**，分三個嚴重度：`no-where-dml`（無 WHERE 的 UPDATE·DELETE）與 `missing-join-condition`（逗號 JOIN 笛卡兒積）為 error；`non-sargable-func`（欄位套函式讓索引失效）、`leading-wildcard-like`、`not-in-subquery`（子查詢一個 NULL 讓整條件恆為 unknown）、`or-chain`、`union-vs-union-all`、`select-star-with-join`、`nolock`、`implicit-cast-literal` 為 warn；`select-star`、`order-by-without-limit`、`distinct-with-group-by`、`count-star-exists`、`cursor-loop` 為建議。方言感知（NOLOCK 只對 SQL Server；筆數限制認得 LIMIT / TOP / FETCH FIRST / ROWNUM）。
@@ -19,6 +41,12 @@
   - 新增 `src/stress.ts`（50 項測試）、`src-tauri/src/stress.rs`（19 項）與 **7 項 Docker 整合測試**（真 MySQL 8 / PostgreSQL 16：迭代計數精確、持續時間收斂、取消即時性、守門攔截、錯誤分組、互動池不被餓死、併發壓測互相隔離）。
 - **修正：危險語句偵測看不見 `[方括號識別字]`**（`sql.ts::stripCode`，影響資料格與查詢編輯器的破壞性操作確認）。欄位剛好叫 `[Where]` 時，`UPDATE t SET [Where] = 1` 會讓判定在碼裡看到 `where` 而放行 —— 一次無條件全表更新就這樣靜默略過確認框。現在連同中括號識別字一起剝掉（只認同一行內閉合的 `]`，pg 的陣列下標 `tags[1]` 不受影響）。
 - **修正：`is_destructive_sql` 會被註解或子查詢裡的 `where` 騙過**（`cli/guard.rs`，同時影響 `dbk` 的 `--force` 判定與 GUI 資料格的危險操作確認）。`DELETE FROM logs -- WHERE id = 1`（把條件註解掉試最壞情況）原本被判成「有 WHERE、不危險」而放行；`UPDATE t SET a = (SELECT … WHERE …)` 的 WHERE 在子查詢裡，頂層其實會掃全表。現在先剝掉註解 / 字串 / dollar-quote 再剝掉括號，只認頂層的 WHERE——與前端 `sql.ts::isDangerousStatement` 早就在做的 `stripCode` + `stripParens` 對齊成同一套判準。
+- **新增 [`docs/cli.md`](https://github.com/markku636/db-kit/blob/main/docs/cli.md)**：`dbk` CLI 的完整操作指南——三種連線指定方式、三層安全模型（唯讀守門 / `--yes` / `--force`）、每個子指令的旗標與實例、常見情境（排程備份 / 效能基準線 / 稽核）、結束碼與限制。同時更正 `backup` 的說明：它**沒有**內建降級路徑，找不到 `mysqldump` / `pg_dump` / `mongodump` 會直接失敗（SQLite 走檔案複製除外）。
+- Release Notes 改為從 CHANGELOG 自動抽出該版本的段落（`scripts/changelog-section.mjs`）。先前每個版本的 Release 頁面都只有一句「見 CHANGELOG.md」加下載指引，看不出改了什麼。
+
+</details>
+
+## v0.22.0
 
 - **結構快取：自動完成不再只補前 80 張表**。編輯器的表 / 欄自動完成原本為了避免逐表往返，寫死「只補前 80 張表」——超過的資料庫，第 81 張表之後**完全沒有欄位提示**；而行程內快取又**永不失效**，在 app 裡跑完 DDL 也不會更新，得重開才會變。這版把兩件事都解掉：
   - **各 driver 覆寫 `schema_columns`，改為單一字典查詢**（MySQL / PostgreSQL 走 `information_schema.COLUMNS`、SQL Server 走 `sys.columns` join `sys.objects`、Oracle 走 `ALL_TAB_COLUMNS`、SQLite 走 `sqlite_master` join `pragma_table_info()`）。原本的預設實作是**逐表 sequential 呼叫 `table_columns`**——5,000 張表的 Oracle 就是 5,000 次來回（每張還多打一次主鍵查詢），LAN 上約 190 秒、VPN 上超過 10 分鐘。這正是 external gateway 早就在做的事，現在下放給所有內建 driver，於是 80 張的上限沒有存在的理由了。**沒有新增任何 trait 方法**（`schema_columns` 本來就在），`manager.rs` 一行未動。
@@ -29,8 +57,6 @@
   - **標記為正式環境的連線預設不寫入磁碟**（沿用既有的 `options.prod`，不另立一套「敏感連線」概念），仍照常提供本次工作階段的提示。設定 → 結構快取可看到存放路徑、連線數 / 表數 / 佔用空間 / 最後更新，並一鍵清除全部。
   - 內容沒變的重抓會沿用原本的物件，避免 CodeMirror 整組重建擴充套件（大 schema 會卡一下）；併回時**空的結果不覆蓋既有非空快取**（權限不足 / 逾時常表現為「成功回傳 0 張表」）。
   - 新增 `src/schemaCache.test.ts`（30 項）與 Rust 端 `schema_cache` / `group_table_columns` 測試（含半截 JSON、缺欄位、未知欄位、路徑穿越字元的容錯），前端 460 項、後端 203 項全綠。
-## v0.22.0
-
 - **側欄捲動結構重整**：側欄根層原本同時扮演三個角色——column flex 容器、捲動容器，以及二十多個 `fixed` 右鍵選單／對話框的掛載點。拆成「外殼 `flex flex-col overflow-hidden`」+「內層 `flex-1 min-h-0 overflow-y-auto` 純捲動視窗」，搜尋列由 `sticky` 改成外殼上的固定列（對使用者一樣永遠可見，但不再參與捲動容器的 overflow 計算），選單與對話框移出捲動視窗。捲動區帶 `data-sidebar-scroll` 供 UI 檢查定位，並補 `overscroll-contain`（捲到底不把捲動傳給主區）與 `pb-2`（最後一筆不貼齊邊緣）。
   - `verify:ui` 新增 `sidebar-scroll-reaches-last`（5 項）：**40 筆連線分 3 個群組**的情境下，斷言捲動高度確實產生、**用真實滑鼠滾輪**捲得到底、最後一筆連線捲到底後幾何上完整落在視窗內且可點、搜尋列在捲到底時仍可見。invoke shim 一併補上 `list_connection_groups` / `save_connection_layout`（原本未實作，側欄分組路徑從來沒被冒煙檢查覆蓋過）。
 - **連線右鍵「新增查詢」不再只給三種連線**：原本白名單寫死 MySQL 家族 / PostgreSQL / SQLite，**SQL Server、Oracle、external gateway、MongoDB、Redis、Elasticsearch 的連線右鍵完全看不到這一項**，只能改從別處開查詢分頁。抽出 `supportsQueryEditorKind()` 放進 `sql.ts` 當單一落點（Kafka / RabbitMQ 沒有查詢語言，其餘皆有編輯器），查詢面板的編輯器 gate 與側欄右鍵共用同一個判準——兩處原本各寫一份白名單，這正是漂移的來源。
