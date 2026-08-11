@@ -82,6 +82,12 @@
   <img src="docs/screenshots/08-sql-review.png" alt="SQL 審查" width="860">
 </p>
 
+**執行預存程序** — 右鍵程序 →「執行程序…」，一格一引數：方向（IN / OUT / INOUT）、名稱、型別由畫面給，引號由型別決定，留空即 `NULL`。OUT 引數走 session 變數自動接回值。送出的 SQL 一律攤在下方，需要運算式時勾「編輯 SQL」直接改：
+
+<p align="center">
+  <img src="docs/screenshots/09-routine-exec.png" alt="執行預存程序的引數表單" width="860">
+</p>
+
 ## 下載安裝
 
 <p align="center">

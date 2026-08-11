@@ -83,6 +83,12 @@ One codebase, one consistent experience, shipping **native desktop apps for Wind
   <img src="docs/screenshots/08-sql-review.png" alt="SQL review" width="860">
 </p>
 
+**Run a stored procedure** — right-click a routine → "Run procedure…" for one field per argument: mode (IN / OUT / INOUT), name and type come from the screen, quoting follows the type, and a blank field means `NULL`. OUT arguments are wired through session variables and read back automatically. The SQL being sent is always shown below; tick "Edit SQL" to hand-edit it when you need an expression:
+
+<p align="center">
+  <img src="docs/screenshots/09-routine-exec.png" alt="Stored procedure argument form" width="860">
+</p>
+
 ## Download & install
 
 <p align="center">

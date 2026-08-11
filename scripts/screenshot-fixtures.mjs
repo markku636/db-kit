@@ -285,10 +285,12 @@ export const SEARCH_HITS = [
   { database: "shop", object_type: "column", object_name: "orders_count", parent: "customers", matched_in: "comment", snippet: "累計 orders 筆數（每日排程回填）", extra: "int" },
 ];
 
+// signature 由 list_routines 從 information_schema.PARAMETERS 組出（MySQL / gateway），
+// 格式即 `IN 名稱 型別`。無引數的 routine 沒有 PARAMETERS 列 → null（UI 顯示「無引數」）。
 export const ROUTINES = [
-  { name: "sp_close_order", routine_type: "procedure", parent: null, signature: null, modified: "2026-06-18 14:02:11", deterministic: false, comment: null },
+  { name: "sp_close_order", routine_type: "procedure", parent: null, signature: "IN p_order_id bigint, IN p_note varchar(200), OUT p_affected int", modified: "2026-06-18 14:02:11", deterministic: false, comment: "結案並回寫庫存" },
   { name: "sp_rebuild_inventory", routine_type: "procedure", parent: null, signature: null, modified: "2026-05-30 09:41:07", deterministic: false, comment: null },
-  { name: "fn_order_total", routine_type: "function", parent: null, signature: null, modified: "2026-06-02 17:20:33", deterministic: true, comment: null },
+  { name: "fn_order_total", routine_type: "function", parent: null, signature: "p_order_id bigint, p_with_tax tinyint(1)", modified: "2026-06-02 17:20:33", deterministic: true, comment: null },
   { name: "trg_orders_audit", routine_type: "trigger", parent: "orders", signature: null, modified: null, deterministic: null, comment: null },
 ];
 

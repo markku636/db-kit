@@ -120,6 +120,24 @@ const SHOTS = {
     await shot(page, "06-kafka");
   },
 
+  // 右鍵預存程序 →「執行程序…」的引數表單：方向 / 名稱 / 型別各一欄，下方即時顯示送出的 SQL。
+  // 走右鍵而非雙擊——雙擊進的是設計編輯器，那只是一個 SQL 編輯器，沒什麼好拍的。
+  async "09-routine-exec"(page) {
+    await openOrders(page);
+    await page.getByText("函式", { exact: true }).first().click(); // 展開 routines 資料夾
+    await sleep(700);
+    await page.getByText("sp_close_order", { exact: true }).first().click({ button: "right" });
+    await sleep(500);
+    await page.getByText("執行程序…", { exact: true }).click();
+    await sleep(900);
+    // 填前兩個 IN 引數；第三個是 OUT，沒有輸入格（值由程序寫回）。
+    const inputs = page.locator('input[placeholder="留空 = NULL"]');
+    await inputs.nth(0).fill("48127");
+    await inputs.nth(1).fill("客服代結");
+    await sleep(600); // 等下方 SQL 預覽跟上
+    await shot(page, "09-routine-exec");
+  },
+
   async "05-advanced-search"(page) {
     await openOrders(page);
     await page.getByRole("button", { name: /進階搜尋/ }).click();
