@@ -141,9 +141,16 @@ fn mysql_read_ident(cs: &[(usize, char)], k: usize) -> Option<usize> {
     }
 }
 
-/// 在 SQL 頂層（略過註解 / 字串 / 反引號、含可選 DEFINER 子句）定位 MySQL routine 的種類與
-/// 名稱位元組範圍。回傳 (kind, name_start_byte, name_end_byte)，kind ∈ procedure|function|trigger|event。
-fn locate_mysql_routine(sql: &str) -> Option<(String, usize, usize)> {
+/// 在 SQL 頂層（略過註解 / 字串 / 反引號、含可選 DEFINER 子句）定位 MySQL routine 的種類、
+/// 關鍵字與名稱位元組範圍。回傳 (kind, kw_start_byte, name_start_byte, name_end_byte)，
+/// kind ∈ procedure|function|trigger|event。
+///
+/// `kw_start` 指向 PROCEDURE / FUNCTION / … 這個關鍵字本身，前面（CREATE 之後）可能夾著
+/// `DEFINER=`user`@`host``；試建驗證要重寫成 `CREATE {sql[kw_start..]}` 把 DEFINER 拿掉——
+/// 保留它會要求 SUPER / SET_USER_ID 權限，讓「語法驗證」變成權限錯誤（見 validate_ddl）。
+///
+/// `pub(crate)`：qland gateway 驅動（overlay 注入）講 MySQL 方言，共用同一套定位 / 錯誤解析。
+pub(crate) fn locate_mysql_routine(sql: &str) -> Option<(String, usize, usize, usize)> {
     let cs: Vec<(usize, char)> = sql.char_indices().collect();
     let m = cs.len();
     let byte_at = |k: usize| if k < m { cs[k].0 } else { sql.len() };
@@ -157,6 +164,7 @@ fn locate_mysql_routine(sql: &str) -> Option<(String, usize, usize)> {
 
     // 掃描 token，跳過 DEFINER=... 子句，直到遇到 routine 關鍵字（裸字比對，不含引號內字）。
     let kind;
+    let kw_start;
     let mut guard = 0usize;
     loop {
         guard += 1;
@@ -177,6 +185,7 @@ fn locate_mysql_routine(sql: &str) -> Option<(String, usize, usize)> {
             let lw = w.to_ascii_lowercase();
             if matches!(lw.as_str(), "procedure" | "function" | "trigger" | "event") {
                 kind = lw;
+                kw_start = byte_at(k);
                 k = e;
                 break;
             }
@@ -200,11 +209,12 @@ fn locate_mysql_routine(sql: &str) -> Option<(String, usize, usize)> {
             end = e2;
         }
     }
-    Some((kind, name_start, byte_at(end)))
+    Some((kind, kw_start, name_start, byte_at(end)))
 }
 
 /// 從 MySQL 錯誤訊息嘗試取出行號（訊息常以 "... at line N" 結尾）。
-fn parse_mysql_line(msg: &str) -> Option<u32> {
+/// `pub(crate)`：qland gateway 驅動（overlay 注入）共用（gateway 回的是同一套 MySQL 錯誤字串）。
+pub(crate) fn parse_mysql_line(msg: &str) -> Option<u32> {
     let lower = msg.to_ascii_lowercase();
     let pos = lower.rfind("at line ")?;
     let rest = &msg[pos + "at line ".len()..];
@@ -787,6 +797,34 @@ impl DatabaseDriver for MysqlDriver {
 
     async fn list_routines(&self, database: &str) -> AppResult<Vec<RoutineInfo>> {
         let mut out = Vec::new();
+        // 引數簽章。少了它，「執行預存程序」的提示會一律說「無引數」——不是沒查到引數，
+        // 而是從來沒查過，於是每個有參數的程序都被講成沒參數。
+        //
+        // ORDINAL_POSITION = 0 是函式的**回傳型別**（PARAMETER_MODE / PARAMETER_NAME 皆 NULL），
+        // 不是引數，故排除。MySQL 不允許重載，但同名的 procedure 與 function 可並存，
+        // 所以鍵要帶上類型。
+        let prows = sqlx::query(
+            "SELECT SPECIFIC_NAME, ROUTINE_TYPE, PARAMETER_MODE, PARAMETER_NAME, DTD_IDENTIFIER \
+             FROM information_schema.PARAMETERS \
+             WHERE SPECIFIC_SCHEMA = ? AND ORDINAL_POSITION > 0 \
+             ORDER BY SPECIFIC_NAME, ORDINAL_POSITION",
+        )
+        .bind(database)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?;
+        let mut params: std::collections::HashMap<(String, String), Vec<String>> =
+            std::collections::HashMap::new();
+        for r in &prows {
+            if let Some(owner) = str_col(r, 0) {
+                let rt = str_col(r, 1).unwrap_or_default().to_lowercase();
+                params.entry((owner, rt)).or_default().push(fmt_routine_param(
+                    str_col(r, 2).as_deref(),
+                    str_col(r, 3).as_deref(),
+                    str_col(r, 4).as_deref(),
+                ));
+            }
+        }
         let rows = sqlx::query(
             "SELECT ROUTINE_NAME, ROUTINE_TYPE, \
              DATE_FORMAT(LAST_ALTERED, '%Y-%m-%d %H:%i:%s'), IS_DETERMINISTIC, ROUTINE_COMMENT \
@@ -805,11 +843,13 @@ impl DatabaseDriver for MysqlDriver {
                 } else {
                     None
                 };
+                // 無引數的程序在 PARAMETERS 沒有列 → None（前端據此顯示「無引數」）。
+                let signature = params.get(&(name.clone(), rt.clone())).map(|v| v.join(", "));
                 out.push(RoutineInfo {
                     name,
                     routine_type: rt,
                     parent: None,
-                    signature: None,
+                    signature,
                     modified: str_col(r, 2),
                     deterministic,
                     comment: str_col(r, 4).filter(|s| !s.is_empty()),
@@ -1177,7 +1217,7 @@ impl DatabaseDriver for MysqlDriver {
         // 資料表 / 排程，無法安全試建，略過伺服器驗證（仍有前端結構檢查）。
         use sqlx::Executor;
 
-        let (rtype, ns, ne) = match locate_mysql_routine(sql) {
+        let (rtype, kws, ns, ne) = match locate_mysql_routine(sql) {
             Some(t) => t,
             None => {
                 return Ok(ValidationReport::skipped(
@@ -1219,7 +1259,10 @@ impl DatabaseDriver for MysqlDriver {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let temp_ref = format!("`{}`.`__dbkit_validate_{suffix}`", schema.replace('`', "``"));
-        let temp_sql = format!("{}{}{}", &sql[..ns], temp_ref, &sql[ne..]);
+        // 從 routine 關鍵字重組（`CREATE PROCEDURE …`），**丟掉 DEFINER 子句**：SHOW CREATE
+        // 回來的定義一律帶 DEFINER，照原樣試建會要求 SUPER / SET_USER_ID，讓語法驗證變成權限錯誤。
+        // 暫存 routine 建完即刪，definer 是誰無關緊要。
+        let temp_sql = format!("CREATE {}{}{}", &sql[kws..ns], temp_ref, &sql[ne..]);
 
         // 專屬連線執行，避免 session 狀態外洩到 pool 其他使用者。
         let mut conn = self.pool.acquire().await.map_err(|e| AppError::Query(e.to_string()))?;
@@ -1234,8 +1277,8 @@ impl DatabaseDriver for MysqlDriver {
                 if let sqlx::Error::Database(db) = &e {
                     if let Some(my) = db.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>() {
                         match my.number() {
-                            // 權限不足（無 CREATE ROUTINE / DB 存取）：非語法問題，略過。
-                            1142 | 1044 | 1045 | 1370 => {
+                            // 權限不足（無 CREATE ROUTINE / DB 存取 / SET_USER_ID）：非語法問題，略過。
+                            1142 | 1044 | 1045 | 1370 | 1227 => {
                                 return Ok(ValidationReport::skipped(
                                     t!("目前帳號缺少建立 routine 的權限，無法在伺服器驗證（僅前端結構檢查）。").into(),
                                 ))
@@ -1553,6 +1596,18 @@ fn my_like_or(cols: &[&str]) -> String {
 /// 穩健讀取字串欄位：先試 String，失敗則以 bytes 解碼。
 /// sqlx-mysql 對部分 information_schema 欄位（如 SCHEMATA.SCHEMA_NAME）會回 binary，
 /// 直接 try_get::<String> 會失敗——若再用 .ok() 默默丟棄，整個清單就變空。
+/// 把 `information_schema.PARAMETERS` 的一列組成人看得懂的引數字樣，如 `IN p_id int(11)`。
+///
+/// 函式的引數沒有 mode（欄位為 NULL），該段直接略過而非填 "IN"——MySQL 函式引數必為傳入，
+/// 補一個恆真的字只是噪音。任何一段缺值就少印那段，不硬掰型別。
+fn fmt_routine_param(mode: Option<&str>, name: Option<&str>, dtd: Option<&str>) -> String {
+    [mode.unwrap_or(""), name.unwrap_or(""), dtd.unwrap_or("")]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn str_col(row: &MySqlRow, idx: usize) -> Option<String> {
     row.try_get::<String, _>(idx).ok().or_else(|| {
         row.try_get::<Vec<u8>, _>(idx)
@@ -1815,5 +1870,46 @@ mod tests {
         let (u, r) = split_leading_use("USE `odd;name`; SELECT 1").unwrap();
         assert_eq!(u, "USE `odd;name`");
         assert_eq!(r, "SELECT 1");
+    }
+
+    use super::locate_mysql_routine;
+
+    /// 驗證用的重寫：從 routine 關鍵字重組（丟掉 DEFINER）、名稱換成暫存名。
+    /// 與 validate_ddl 內的組法一致，抽出來測純字串邏輯。
+    fn rewrite_for_validate(sql: &str, temp: &str) -> Option<String> {
+        let (_, kws, ns, ne) = locate_mysql_routine(sql)?;
+        Some(format!("CREATE {}{}{}", &sql[kws..ns], temp, &sql[ne..]))
+    }
+
+    #[test]
+    fn locates_routine_kind_keyword_and_name() {
+        let sql = "CREATE PROCEDURE `db`.`p1`() BEGIN SELECT 1; END";
+        let (kind, kws, ns, ne) = locate_mysql_routine(sql).unwrap();
+        assert_eq!(kind, "procedure");
+        assert_eq!(&sql[kws..kws + 9], "PROCEDURE");
+        assert_eq!(&sql[ns..ne], "`db`.`p1`");
+    }
+
+    #[test]
+    fn rewrite_drops_definer_clause() {
+        // SHOW CREATE PROCEDURE 回來的定義一律帶 DEFINER；試建時保留它會要求 SUPER / SET_USER_ID，
+        // 讓「語法驗證」變成權限錯誤。重寫必須把 CREATE 與關鍵字之間的東西全部丟掉。
+        let sql = "CREATE DEFINER=`nova88`@`%` PROCEDURE `TpCustInfo_Get_V2`(\n  IN TpId INT\n)\nBEGIN\n  SELECT TpId;\nEND";
+        let out = rewrite_for_validate(sql, "`Siebog`.`__dbkit_validate_1`").unwrap();
+        assert!(!out.contains("DEFINER"), "DEFINER 未被移除：{out}");
+        assert!(out.starts_with("CREATE PROCEDURE `Siebog`.`__dbkit_validate_1`("), "{out}");
+        assert!(out.ends_with("BEGIN\n  SELECT TpId;\nEND"), "{out}");
+    }
+
+    #[test]
+    fn rewrite_handles_unqualified_name_and_function() {
+        let sql = "CREATE FUNCTION fn_name(p1 INT) RETURNS INT DETERMINISTIC\nBEGIN\n  RETURN p1 + 1;\nEND";
+        let (kind, ..) = locate_mysql_routine(sql).unwrap();
+        assert_eq!(kind, "function");
+        let out = rewrite_for_validate(sql, "`d`.`tmp`").unwrap();
+        assert_eq!(
+            out,
+            "CREATE FUNCTION `d`.`tmp`(p1 INT) RETURNS INT DETERMINISTIC\nBEGIN\n  RETURN p1 + 1;\nEND"
+        );
     }
 }
