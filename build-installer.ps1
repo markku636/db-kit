@@ -62,6 +62,44 @@ function Test-MsvcLinker {
     return [bool]$path
 }
 
+# 確保 cmake 可用（rdkafka-sys 會用它編 librdkafka；缺了就在 build script 裡 panic，
+# 而且訊息只說 "is `cmake` not installed?"，看不出是哪個相依要它）。
+#
+# 多數人不會另外裝 cmake，但 VS Build Tools 的「Desktop development with C++」本來就附一份，
+# 只是不在 PATH。先撈那一份加進 PATH，撈不到才要求安裝——為了一個已經躺在硬碟上的執行檔
+# 叫人再裝一次 CMake 是很沒道理的事。
+function Initialize-CMake {
+    if (Test-Cmd cmake) {
+        Write-Host "cmake 已可用：$((Get-Command cmake).Source)" -ForegroundColor Green
+        return
+    }
+    # 走訪**所有**安裝而非 -latest：同一台機器常同時有 VS Community 與 Build Tools，
+    # 而 -latest 挑到的那個未必是勾了 C++ 工作負載（也就是附了 CMake）的那個。
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        foreach ($vsRoot in @(& $vswhere -all -prerelease -products * -property installationPath 2>$null)) {
+            if (-not $vsRoot) { continue }
+            $bundled = Join-Path $vsRoot "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin"
+            if (Test-Path (Join-Path $bundled "cmake.exe")) {
+                $env:Path = "$bundled;$env:Path"
+                Write-Host "cmake 取自 Visual Studio 內附：$bundled" -ForegroundColor Green
+                return
+            }
+        }
+    }
+    Write-Step "未偵測到 cmake（rdkafka-sys 需要），嘗試以 winget 安裝…"
+    if (Test-Cmd winget) {
+        winget install -e --id Kitware.CMake --accept-source-agreements --accept-package-agreements
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                    [System.Environment]::GetEnvironmentVariable("Path", "User")
+    } else {
+        throw "找不到 winget，請手動安裝 CMake：https://cmake.org/download/"
+    }
+    if (-not (Test-Cmd cmake)) {
+        throw "CMake 安裝後仍無法在此工作階段使用，請重開 PowerShell 再執行一次。"
+    }
+}
+
 # --- 版本號工具 ---------------------------------------------------------------
 # 版本號散落三個檔，以 tauri.conf.json（實際決定安裝檔版本者）為單一事實來源，
 # 打包前同步更新另外兩個，三者永遠一致。
@@ -158,6 +196,9 @@ if (Test-MsvcLinker) {
         throw "MSVC C++ Build Tools 安裝後仍未偵測到。請重開 PowerShell（必要時重開機）後再執行一次；若仍失敗，請用 Visual Studio Installer 手動勾選『Desktop development with C++』。"
     }
 }
+
+# --- 2.6 cmake（rdkafka-sys 編 librdkafka 用）---
+Initialize-CMake
 
 # Windows 上 Tauri 需要 WebView2（Win11 內建；Win10 多數已有）。提醒即可。
 Write-Host "提醒：Tauri 需要 WebView2 Runtime（Windows 11 內建）。若缺少，安裝檔執行時會提示。" -ForegroundColor DarkYellow
