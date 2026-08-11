@@ -359,6 +359,42 @@ describe("collectSchemaContext", () => {
     expect(ctx.indexes).toContain("- orders: (無索引)");
   });
 
+  // 跨庫查詢送去審查時，模型若只看得到一半的表，就會替另一半編出欄位與索引。
+  it("跨庫（`其他庫.表`）的表也帶進 prompt，並以 庫.表 標示", async () => {
+    mocks.listTables.mockImplementation(async (_id: string, database: string) =>
+      database === "warehouse"
+        ? [{ name: "shipments", kind: "table" }]
+        : [{ name: "orders", kind: "table" }, { name: "users", kind: "table" }],
+    );
+    const ctx = await collectSchemaContext(
+      "c1",
+      "sakila",
+      "SELECT * FROM orders o JOIN warehouse.shipments s ON s.order_id = o.id",
+    );
+    expect(ctx.tables).toContain("- warehouse.shipments:");
+    expect(ctx.tables).toContain("- orders:");
+    expect(ctx.indexes).toContain("- warehouse.shipments:");
+    // 跨庫的欄位要真的去那個庫拿，不是拿目前庫的同名表。
+    expect(mocks.tableColumns).toHaveBeenCalledWith("c1", "warehouse", "shipments");
+  });
+
+  it("限定到目前資料庫（`sakila.orders`）不算跨庫，維持裸名輸出", async () => {
+    const ctx = await collectSchemaContext("c1", "sakila", "SELECT * FROM sakila.orders");
+    expect(ctx.tables).toContain("- orders:");
+    expect(ctx.tables).not.toContain("- sakila.orders:");
+  });
+
+  // 限定名可能打錯、可能指向沒權限的庫。先對一次 list_tables，別拿去打一串註定失敗的查詢。
+  it("跨庫參照在該庫裡不存在（或列不出來）就跳過，不影響其餘", async () => {
+    mocks.listTables.mockImplementation(async (_id: string, database: string) =>
+      database === "sakila" ? [{ name: "orders", kind: "table" }] : [],
+    );
+    const ctx = await collectSchemaContext("c1", "sakila", "SELECT * FROM orders JOIN typo_db.nope ON 1=1");
+    expect(ctx.tables).toContain("- orders:");
+    expect(ctx.tables).not.toContain("nope");
+    expect(mocks.tableColumns).not.toHaveBeenCalledWith("c1", "typo_db", "nope");
+  });
+
   it("listTables 失敗 → 回空字串而非丟例外", async () => {
     mocks.listTables.mockRejectedValue(new Error("connection lost"));
     await expect(collectSchemaContext("c1", "sakila", "SELECT 1")).resolves.toEqual({ tables: "", indexes: "" });

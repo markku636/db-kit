@@ -122,6 +122,23 @@ export function buildDropView(kind: DbKind, db: string, table: string): string {
   return `DROP VIEW ${qualifiedName(kind, db, table)};`;
 }
 
+/**
+ * 連線設定裡的 `database` 欄位，可不可以直接拿去當 `list_tables(id, database)` 的那個 database 用。
+ *
+ * 兩者**不是**同一個東西的情況比想像中多：
+ * - **PostgreSQL**：`list_databases` 回的是 **schema**（後端刻意讓 schema 對應 MySQL 的「資料庫」
+ *   層級），而連線設定存的是 PG 的資料庫名。拿資料庫名去查 `table_schema` 只會得到零張表。
+ * - **Oracle**：`list_databases` 回的是 **schema（使用者帳號）**，連線設定存的是服務名 / SID。
+ * - **SQLite**：連線設定存的是**檔案路徑**，`list_databases` 固定回 `main`。
+ *
+ * 只有 MySQL 家族 / SQL Server / MongoDB / external gateway 兩者同義。
+ * 不分辨的話，退路會拿一個根本不存在的「資料庫」去查，而且失敗得很安靜——查得到零張表
+ * 跟查不到是兩回事，前者不會有任何錯誤訊息。
+ */
+export function connDatabaseIsNamespace(kind: DbKind | null | undefined): boolean {
+  return isMysqlFamily(kind) || kind === "external" || kind === "mssql" || kind === "mongo";
+}
+
 // 系統資料庫 / schema：前端據此隱藏刪除項，後端亦硬性拒絕（雙重防護）。public 不算系統（可刻意刪重建）。
 // PG 的 pg_ 前綴比對須大小寫敏感，與後端 starts_with("pg_") 一致；否則引號保留大小寫的使用者 schema
 // （如 "PG_data"）會被前端誤判為系統而隱藏刪除（後端其實允許）→ 過度封鎖。

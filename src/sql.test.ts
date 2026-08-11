@@ -104,6 +104,7 @@ import {
   persistSnippets,
   BUILTIN_SNIPPETS,
   SNIPPETS_KEY,
+  connDatabaseIsNamespace,
   type NewColumn,
   type QbSpec,
   type SqlSnippet,
@@ -955,6 +956,28 @@ describe("isReadOnlyRedisCommand", () => {
     expect(isReadOnlyRedisCommand("ACL SETUSER bob on")).toBe(false);
     // 容器型指令沒帶子指令時不放行（避免 `CONFIG` 之類被當成讀取）
     expect(isReadOnlyRedisCommand("CONFIG")).toBe(false);
+  });
+});
+
+describe("connDatabaseIsNamespace", () => {
+  // 這是政策測試：它擋的是「反正都叫 database，應該可以通用吧」這個假設。
+  it("同義的 kind：連線設定的 database 就是 list_databases 那個 database", () => {
+    for (const k of ["mysql", "mariadb", "mssql", "mongo", "external"] as const) {
+      expect(connDatabaseIsNamespace(k)).toBe(true);
+    }
+  });
+
+  // PG / Oracle 的 list_databases 回的是 schema，SQLite 存的是檔案路徑。
+  // 誤判成同義的話，退路會拿一個不存在的「資料庫」去查，然後安靜地回零張表。
+  it("不同義的 kind：拿連線設定的 database 去查會得到零張表", () => {
+    for (const k of ["postgres", "oracle", "sqlite"] as const) {
+      expect(connDatabaseIsNamespace(k)).toBe(false);
+    }
+  });
+
+  it("null / undefined 一律不採信", () => {
+    expect(connDatabaseIsNamespace(null)).toBe(false);
+    expect(connDatabaseIsNamespace(undefined)).toBe(false);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   schemaCacheAllowed,
   shouldCacheKind,
   STALE_DAYS,
+  toMultiDbSqlNamespace,
   toSqlNamespace,
 } from "./schemaCache";
 
@@ -121,6 +122,61 @@ describe("toSqlNamespace", () => {
       { table: "loose", columns: ["a", 3 as never, null as never] },
     ]);
     expect(ns).toEqual({ ok: ["a"], loose: ["a"] });
+  });
+});
+
+describe("toMultiDbSqlNamespace", () => {
+  const primary = [
+    { table: "orders", columns: ["id", "total"] },
+    { table: "users", columns: ["id"] },
+  ];
+
+  it("沒有額外庫時與單庫 namespace 等價", () => {
+    expect(toMultiDbSqlNamespace(primary, [])).toEqual(toSqlNamespace(primary));
+    expect(toMultiDbSqlNamespace(primary, undefined)).toEqual(toSqlNamespace(primary));
+  });
+
+  it("額外庫掛成巢狀，目前庫維持裸名", () => {
+    const ns = toMultiDbSqlNamespace(primary, [
+      { database: "shop2", tables: [{ table: "customers", columns: ["id", "name"] }] },
+    ]);
+    expect(ns).toEqual({
+      orders: ["id", "total"],
+      users: ["id"],
+      shop2: { customers: ["id", "name"] },
+    });
+  });
+
+  // 額外庫的表只以限定名出現：裸名池被十個庫灌爆的話，`FROM ` 的提示就廢了。
+  it("額外庫的表不進裸名池", () => {
+    const ns = toMultiDbSqlNamespace(primary, [
+      { database: "shop2", tables: [{ table: "invoices", columns: ["id"] }] },
+    ]) as Record<string, unknown>;
+    expect(ns.invoices).toBeUndefined();
+  });
+
+  it("庫名撞到目前庫的表名時，表名優先", () => {
+    const ns = toMultiDbSqlNamespace(primary, [
+      { database: "orders", tables: [{ table: "x", columns: ["id"] }] },
+    ]) as Record<string, unknown>;
+    expect(ns.orders).toEqual(["id", "total"]);
+  });
+
+  // lang-sql 用未跳脫的 `.` 當層級分隔，庫名含點不跳脫就會被拆成兩層而找不到。
+  it("庫名含點時跳脫", () => {
+    const ns = toMultiDbSqlNamespace([], [
+      { database: "a.b", tables: [{ table: "t", columns: ["c"] }] },
+    ]) as Record<string, unknown>;
+    expect(ns["a\\.b"]).toEqual({ t: ["c"] });
+  });
+
+  it("略過壞掉的庫項目", () => {
+    const ns = toMultiDbSqlNamespace([], [
+      null as never,
+      { database: "", tables: [] },
+      { database: "ok", tables: [{ table: "t", columns: [] }] },
+    ]);
+    expect(ns).toEqual({ ok: { t: [] } });
   });
 });
 

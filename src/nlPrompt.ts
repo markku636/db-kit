@@ -67,14 +67,30 @@ export interface SqlPromptOpts {
   nl: string;
   selectedTable: string | null;
   uiLang: string;
+  /**
+   * 同一連線裡使用者已宣告要跨的其他資料庫 / schema（「跨庫」多選 + 已載入者）。
+   * 不給就完全維持單庫行為——模型不知道別的庫存在，自然也不會生出跨庫語句。
+   */
+  crossDbs?: string[];
 }
+
+/** 每個跨庫最多帶幾張表的完整欄位。跨庫是輔助角色，不該把主庫的預算吃光。 */
+const MAX_CROSS_DETAIL_PER_DB = 2;
+
+/** 一張候選表：db = null 代表目前資料庫（沿用裸名，既有輸出格式不變）。 */
+interface Cand {
+  db: string | null;
+  table: string;
+}
+
+const candLabel = (c: Cand): string => (c.db ? `${c.db}.${c.table}` : c.table);
 
 /**
  * NL → SQL：注入方言 + 全表名清單（保底）+ 最相關表的完整欄位。
  * 只輸出一個 ```sql 區塊。
  */
 export async function buildSqlNlPrompt(opts: SqlPromptOpts): Promise<string> {
-  const { connId, kind, db, nl, selectedTable, uiLang } = opts;
+  const { connId, kind, db, nl, selectedTable, uiLang, crossDbs } = opts;
   const label = KIND_META[kind].label;
 
   let allTables: TableInfo[] = [];
@@ -84,19 +100,47 @@ export async function buildSqlNlPrompt(opts: SqlPromptOpts): Promise<string> {
     /* 抓不到表清單仍可生成（模型靠 NL 猜） */
   }
   const tableNames = allTables.map((t) => t.name);
-  const listed = tableNames.slice(0, MAX_TABLES_LISTED).join(", ").slice(0, 3000);
 
-  // 挑最相關的表抓完整欄位（並行）。
-  const picked = rankTables(nl, tableNames, selectedTable, MAX_DETAIL_TABLES);
+  // 跨庫：把其他庫的表也列進來（以 `庫.表` 限定名）。這是整件事最關鍵的一段——
+  // 模型不知道那些庫存在的話，再怎麼提示也生不出跨庫語句。
+  const cross: { db: string; tables: string[] }[] = [];
+  for (const d of crossDbs ?? []) {
+    if (!d || d === db) continue;
+    try {
+      cross.push({ db: d, tables: (await api.listTables(connId, d)).map((x) => x.name) });
+    } catch {
+      /* 某個庫列不出來（權限 / 剛被刪）只讓它缺席，不影響其餘 */
+    }
+  }
+
+  const allCands: Cand[] = [
+    ...tableNames.map((table) => ({ db: null, table })),
+    ...cross.flatMap((c) => c.tables.map((table) => ({ db: c.db, table }))),
+  ];
+  const listed = allCands.slice(0, MAX_TABLES_LISTED).map(candLabel).join(", ").slice(0, 3000);
+
+  // 挑最相關的表抓完整欄位。跨庫的表**以裸表名評分**——rankTables 是拿「表名」當 query 去比對
+  // NL 文字，`庫.表` 這種帶點的字串在 NL 裡幾乎不可能是子序列，照 label 評分等於全部淘汰。
+  const picked: Cand[] = [];
+  for (const c of cross) {
+    for (const table of rankTables(nl, c.tables, null, MAX_CROSS_DETAIL_PER_DB)) {
+      picked.push({ db: c.db, table });
+    }
+  }
+  const room = Math.max(0, MAX_DETAIL_TABLES - picked.length);
+  picked.unshift(
+    ...(room ? rankTables(nl, tableNames, selectedTable, room) : []).map((table) => ({ db: null, table })),
+  );
+
   const detailed = await Promise.all(
-    picked.map(async (table) => {
+    picked.map(async (c) => {
       try {
-        const cols = await api.tableColumns(connId, db, table);
+        const cols = await api.tableColumns(connId, c.db ?? db, c.table);
         const body = cols
           .slice(0, MAX_COLS_PER_TABLE)
-          .map((c) => `${c.name} ${c.data_type}${c.key === "PRI" ? " PK" : ""}${c.nullable ? "" : " NOT NULL"}`)
+          .map((col) => `${col.name} ${col.data_type}${col.key === "PRI" ? " PK" : ""}${col.nullable ? "" : " NOT NULL"}`)
           .join(", ");
-        return `- ${table}: ${body}`;
+        return `- ${candLabel(c)}: ${body}`;
       } catch {
         return null;
       }
@@ -104,16 +148,21 @@ export async function buildSqlNlPrompt(opts: SqlPromptOpts): Promise<string> {
   );
   const schema = detailed.filter(Boolean).join("\n").slice(0, MAX_SCHEMA_CHARS);
 
+  // 只有真的有跨庫的表可用時才提這條規則：沒有的話，它只會誘導模型去猜一個不存在的庫名。
+  const crossRule = cross.some((c) => c.tables.length)
+    ? `\n可跨資料庫查詢：清單中帶 \`庫.表\` 的項目要原樣以限定名參照（可用的庫：${cross.map((c) => c.db).join("、")}）；`
+    : "";
+
   return [
     `你是 SQL 產生器。只輸出一個 \`\`\`sql 程式碼區塊，區塊外不得有任何文字；`,
     `需要說明或標註假設時，用 SQL 註解（--）寫在語句上方。`,
-    `規則：方言為 ${label}；優先使用下方結構中存在的表與欄位；`,
+    `規則：方言為 ${label}；優先使用下方結構中存在的表與欄位；${crossRule}`,
     `SELECT 無明確筆數需求時加 LIMIT 200；除非使用者明確要求，不產生 DDL。${commentLangLine(uiLang)}`,
     ``,
     `【資料庫環境】`,
     `類型：${label}`,
     `資料庫：${db || "(預設)"}`,
-    `全部資料表（${tableNames.length} 張）：${listed || "(無法取得，請依需求推斷)"}`,
+    `全部資料表（${allCands.length} 張）：${listed || "(無法取得，請依需求推斷)"}`,
     ``,
     `【最相關資料表結構】`,
     schema || "(無法取得欄位，請依表名與需求推斷)",

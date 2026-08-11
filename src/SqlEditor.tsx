@@ -10,7 +10,7 @@ import { DbKind } from "./api";
 import { useTheme } from "./theme";
 import { resolveEditorTheme } from "./editorThemes";
 import { lintSqlStructure } from "./sql";
-import { sqlContextCompletion } from "./sqlContextComplete";
+import { sqlContextCompletion, type CrossDbOptions } from "./sqlContextComplete";
 
 // SQL 片段（供編輯器自動完成展開：輸入名稱 → 補入 body）。
 export interface EditorSnippet { name: string; body: string; desc?: string }
@@ -112,6 +112,11 @@ interface SqlEditorProps {
   kind: DbKind;
   /** 表/欄結構，供自動完成（FROM/JOIN 後補表名、欄名）。 */
   schema?: SQLNamespace;
+  /**
+   * 跨庫補全（同一連線、多個 database / schema）。給了才會在打 `other_db.` 時按需載入
+   * 該庫結構；對話框（新增視圖 / 預存程序）不傳，維持單庫行為。
+   */
+  cross?: CrossDbOptions;
   /** SQL 片段，供自動完成展開（輸入名稱即補入內容）。 */
   snippets?: EditorSnippet[];
   diagnostics?: SqlDiagnostic[];
@@ -129,6 +134,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
   onChange,
   kind,
   schema,
+  cross,
   snippets,
   diagnostics,
   onSubmit,
@@ -195,6 +201,13 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
     lastSelRef.current = null;
   }, []);
 
+  // 跨庫設定：內容當相依鍵（物件本身每次 render 都是新的），回呼走 ref。
+  const crossRef = useRef(cross);
+  crossRef.current = cross;
+  const crossKey = cross
+    ? `${(cross.databases ?? []).join("\0")}|${(cross.loaded ?? []).join("\0")}|${cross.currentDb ?? ""}`
+    : "";
+
   const extensions = useMemo<Extension[]>(() => {
     // schema 提供表/欄自動完成；upperCaseKeywords 讓補入的關鍵字為大寫（符合 SQL 慣例）。
     const lang = sql({ dialect: DIALECT[kind] ?? StandardSQL, schema, upperCaseKeywords: true });
@@ -242,7 +255,16 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
     // 該表欄位（免打 `表名.`），並在打完子句關鍵字（含空白）當下自動跳窗。
     // 與預設 schema source 分工不重複（表語境打字即讓手），純文件掃描不打後端。
     if (schema) {
-      ext.push(lang.language.data.of({ autocomplete: sqlContextCompletion(schema) }));
+      // onNeedDatabase 走 ref：它是呼叫端每次 render 新建的閉包，直接進相依會讓整組擴充套件
+      // 一直重建（打字打到一半重建 = 補全視窗被關掉）。真正該觸發重建的是庫清單與 schema，
+      // 那兩者由 crossKey / schema 涵蓋。
+      const crossOpts: CrossDbOptions | undefined = cross && {
+        databases: cross.databases,
+        loaded: cross.loaded,
+        currentDb: cross.currentDb,
+        onNeedDatabase: (db) => crossRef.current?.onNeedDatabase?.(db) ?? Promise.resolve([]),
+      };
+      ext.push(lang.language.data.of({ autocomplete: sqlContextCompletion(schema, crossOpts) }));
     }
     // SQL 片段自動完成：把片段以 snippetCompletion 註冊為「此語言」的額外完成來源，
     // 與 schema 表/欄完成併存（CodeMirror 會合併語言資料的所有 autocomplete 來源）。
@@ -289,7 +311,8 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       ),
     );
     return ext;
-  }, [kind, diagnostics, schema, snippets]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- cross 走 crossKey / crossRef（見上）
+  }, [kind, diagnostics, schema, snippets, crossKey]);
 
   return (
     <CodeMirror

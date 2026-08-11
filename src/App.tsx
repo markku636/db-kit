@@ -3836,6 +3836,9 @@ const sqlStoreKey = (id: string, tabId = "__query__") =>
   tabId === "__query__" ? `db-kit:querySql:${id}` : `db-kit:querySql:${id}:${tabId}`;
 // 「目前資料庫」選擇 per-連線 持久化（切換連線 / 重開後沿用上次選的庫）。
 const queryDbStoreKey = (id: string) => `db-kit:queryDb:${id}`;
+// 「跨庫」預載清單 per-連線 持久化：常態跨庫的人一次選好，開檔即有 `other_db.` 的提示。
+// 沒選也不影響——打 `other_db.` 時會按需載入（見 SqlEditor 的 cross.onNeedDatabase）。
+const queryExtraDbsStoreKey = (id: string) => `db-kit:queryExtraDbs:${id}`;
 function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefined, tabId = "__query__"): string {
   if (id) {
     try {
@@ -3931,12 +3934,34 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [dbList, setDbList] = useState<string[]>([]);
   const [queryDb, setQueryDb] = useState<string>("");
   // 自動完成 schema（僅關聯式）；SQL 編輯器目前選取段（供 queryToRun 只跑選取段）。
-  // 對「queryDb 即資料庫名」的 kind（mysql 家族 + external/qland gateway），把工具列選的資料庫
-  // 帶進去當 databaseOverride，讓自動完成對準目前選的庫（如 Siebog），與實際 USE queryDb 執行一致；
-  // 未選（空字串）→ undefined → useSqlSchema 回退連線預設庫。postgres 的 queryDb 是 schema 非 DB，維持原行為。
-  const schemaDb = kind && (isMysqlFamily(kind) || kind === "external") ? (queryDb || undefined) : undefined;
-  const schemaState = useSqlSchemaState(activeId, kind, schemaDb);
+  // 把工具列選的「目前資料庫」帶進去當 databaseOverride，讓自動完成對準目前選的庫（如 Siebog），
+  // 與實際 USE / SET search_path 執行一致；未選（空字串）→ undefined → 由 useSqlSchema 決定退路。
+  //
+  // 這裡涵蓋**全部** DB_SELECT_KINDS，包含 postgres。先前 postgres 被排除在外，理由寫的是
+  // 「queryDb 是 schema 非 DB」——但那正是該傳的東西：PG 的 list_databases / list_tables /
+  // schema_columns 三者吃的都是 schema，選擇器的值與它們同一個層級。排除它的結果是選了 schema
+  // 補全卻不會跟著換（而且退路還會拿 PG 的資料庫名去查 schema，一張表都補不到）。
+  const schemaDb = supportsDbSelect ? (queryDb || undefined) : undefined;
+  // 跨庫：使用者明示要預載結構的其他資料庫 / schema（同一連線）。
+  const [extraDbs, setExtraDbs] = useState<string[]>([]);
+  const [showExtraDbs, setShowExtraDbs] = useState(false);
+  const schemaState = useSqlSchemaState(activeId, kind, schemaDb, extraDbs);
   const schema = schemaState.schema;
+  // 交給編輯器的跨庫設定：dbList 用來認出 `xxx.` 的 xxx 是不是一個庫，
+  // ensureDatabase 則在它還沒載入時當場抓進來（有磁碟快取就是零往返）。
+  const crossDb = useMemo(
+    () => ({
+      databases: dbList,
+      loaded: schemaState.databases,
+      currentDb: schemaState.database,
+      onNeedDatabase: schemaState.ensureDatabase,
+    }),
+    [dbList, schemaState.databases, schemaState.database, schemaState.ensureDatabase],
+  );
+  // AI 審查 / 調校 / NL→SQL 的目標資料庫。**不能直接用 queryDb**：使用者沒在工具列選庫時
+  // 它是空字串，拿去 list_tables 回零張表，於是 AI 完全看不到結構卻不會有任何錯誤訊息。
+  // 結構快取已經解析過「實際是哪個庫」（連線預設庫 / 第一個非系統庫），沿用同一個答案。
+  const schemaTargetDb = queryDb || schemaState.database || "";
   const [editorSel, setEditorSel] = useState<string | null>(null);
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
@@ -4208,9 +4233,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       const targetIndex = node && node.type === "table" && node.kind === "elastic" ? node.table : null;
       return buildEsNlPrompt({ connId: activeId!, nl: nlText, targetIndex, uiLang });
     }
-    const db = queryDb || connections.find((c) => c.id === activeId)?.database || "";
+    const db = schemaTargetDb;
     const selectedTable = node && node.type === "table" ? node.table : null;
-    return buildSqlNlPrompt({ connId: activeId!, kind: kind!, db, nl: nlText, selectedTable, uiLang });
+    // 跨庫：把使用者已宣告 / 已載入的其他庫一併告訴模型，否則它不知道那些庫存在，
+    // 再怎麼描述需求也生不出 `其他庫.表` 的語句。
+    const crossDbs = schemaState.databases.filter((d) => d !== db);
+    return buildSqlNlPrompt({ connId: activeId!, kind: kind!, db, nl: nlText, selectedTable, uiLang, crossDbs });
   };
   // 套用生成語句：原草稿非空先存入查詢歷史（同 Ctrl+N 路徑），再填入編輯器。
   const applyNlStatement = (code: string) => {
@@ -4259,6 +4287,30 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const changeQueryDb = (db: string) => {
     setQueryDb(db);
     if (activeId) { try { localStorage.setItem(queryDbStoreKey(activeId), db); } catch { /* 忽略 */ } }
+  };
+
+  // 切換連線：還原上次勾選的跨庫清單（庫名只在單一連線內有意義，故 per 連線各存一份）。
+  useEffect(() => {
+    if (!activeId || !supportsDbSelect) { setExtraDbs([]); return; }
+    let restored: string[] = [];
+    try {
+      const raw = localStorage.getItem(queryExtraDbsStoreKey(activeId));
+      const parsed: unknown = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed)) restored = parsed.filter((d): d is string => typeof d === "string" && !!d);
+    } catch { /* 壞掉的偏好只該讓人少一份預載，不該讓查詢分頁開不起來 */ }
+    setExtraDbs(restored);
+    setShowExtraDbs(false);
+  }, [activeId, supportsDbSelect]);
+
+  // 勾 / 取消勾一個跨庫並持久化（per 連線）。
+  const toggleExtraDb = (db: string) => {
+    setExtraDbs((prev) => {
+      const next = prev.includes(db) ? prev.filter((d) => d !== db) : [...prev, db];
+      if (activeId) {
+        try { localStorage.setItem(queryExtraDbsStoreKey(activeId), JSON.stringify(next)); } catch { /* 忽略 */ }
+      }
+      return next;
+    });
   };
 
   // 消費側欄「產生 SQL」送來的待載入語句（在 activeId 載入之後執行，故會覆蓋之）。
@@ -4848,13 +4900,15 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       // 側欄選中的表一定入選（rankTables 的 selectedTable），讓「我正在看這張表」的意圖被帶進去。
       const picked = useStore.getState().selectedNode;
       const schema = await collectSchemaContext(
-        activeId, queryDb, target,
+        activeId, schemaTargetDb, target,
         picked?.type === "table" ? picked.table : null,
       );
       // 計畫 JSON：只有「解釋」分頁已經跑過視覺化解釋時才有，沒有就不附（不為了湊資料多跑一次查詢）。
       const planJson = planRaw;
       const base = {
-        kind, db: queryDb, sql: target, findings, schema, planJson,
+        // 與 collectSchemaContext 用同一個庫：prompt 裡寫「資料庫：(空)」卻附上某個庫的表，
+        // 只會讓模型去猜那些表是誰的。
+        kind, db: schemaTargetDb, sql: target, findings, schema, planJson,
         uiLang: useLang.getState().lang,
       };
       const prompt = mode === "review"
@@ -4959,6 +5013,36 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                     <option key={d} value={d}>{d}</option>
                   ))}
                 </Select>
+              </div>
+            )}
+            {supportsDbSelect && dbList.length > 1 && (
+              // 跨庫：勾選的庫會先把結構載進來，`other_db.` 開檔即補。沒勾也能用——
+              // 打 `other_db.` 當下會按需載入；這裡只是省掉第一次的等待。
+              <div className="relative shrink-0">
+                <button type="button" onClick={() => setShowExtraDbs((s) => !s)}
+                  title={t("跨庫結構：預先載入其他資料庫的表 / 欄，讓 `其他庫.表` 也能自動完成（查詢用限定名跨庫，不必切換目前資料庫）")}
+                  aria-pressed={extraDbs.length > 0}
+                  className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 ${
+                    extraDbs.length > 0 ? "text-accent" : "text-fg/70"}`}>
+                  <Icon icon={Layers} size={13} />
+                  {!dense && t("跨庫")}{extraDbs.length > 0 ? `（${extraDbs.length}）` : ""}
+                </button>
+                {showExtraDbs && (
+                  <>
+                    <div className="fixed inset-0 z-[89]" onClick={() => setShowExtraDbs(false)} />
+                    <div className="absolute left-0 mt-1 z-[90] w-[260px] max-h-[340px] overflow-auto bg-elevated border border-fg/10 rounded-lg shadow-2xl py-1">
+                      <div className="px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">
+                        {t("跨庫結構（同一連線）")}
+                      </div>
+                      {dbList.filter((d) => d !== schemaState.database).map((d) => (
+                        <label key={d} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-fg/10 cursor-pointer">
+                          <input type="checkbox" checked={extraDbs.includes(d)} onChange={() => toggleExtraDb(d)} />
+                          <span className="truncate text-fg/80">{d}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
             )}
             <SchemaCacheBadge state={schemaState} />
@@ -5354,6 +5438,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 onChange={persistSql}
                 kind={kind!}
                 schema={schema}
+                cross={crossDb}
                 snippets={editorSnippets}
                 onSubmit={onEditorSubmit}
                 onSelectionChange={setEditorSel}

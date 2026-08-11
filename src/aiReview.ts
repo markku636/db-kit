@@ -7,6 +7,7 @@
 import { api, KIND_META, type ColumnInfo, type DbKind, type IndexInfo } from "./api";
 import { t } from "./i18n";
 import { rankTables } from "./nlPrompt";
+import { statementTables } from "./sqlContextComplete";
 
 // ---- 規則引擎 DTO ----
 // 與 sqlLint.ts 同一份契約。這裡另立一份而非 import，是為了讓 prompt 組裝不相依規則引擎
@@ -205,6 +206,49 @@ function indexLine(i: IndexInfo): string {
   return `${i.name}(${i.columns.join(", ")})${i.primary ? " PK" : i.unique ? " UNIQUE" : ""}`;
 }
 
+/** 一筆入選的表：db = null 代表目前資料庫。 */
+interface TableRef {
+  db: string | null;
+  table: string;
+}
+
+/**
+ * 找出 SQL 裡以 `其他庫.表` 明確限定、且真的存在的跨庫參照。
+ *
+ * 「真的存在」這一關不能省：限定名可能是打錯的、可能指向沒有權限的庫，直接拿去打
+ * tableColumns 只會換來一串失敗；先用 list_tables 對一次也順便把大小寫對回實際表名。
+ * 同一個庫只列一次表。
+ */
+async function resolveCrossDbTables(
+  connId: string,
+  currentDb: string,
+  sql: string,
+  limit: number,
+): Promise<TableRef[]> {
+  const current = currentDb.toLowerCase();
+  const wanted = statementTables(sql).filter((r) => r.db && r.db.toLowerCase() !== current);
+  if (wanted.length === 0) return [];
+
+  const listed = new Map<string, Promise<string[]>>();
+  const listOf = (d: string): Promise<string[]> => {
+    const key = d.toLowerCase();
+    let p = listed.get(key);
+    if (!p) {
+      p = api.listTables(connId, d).then((ts) => ts.map((x) => x.name)).catch(() => []);
+      listed.set(key, p);
+    }
+    return p;
+  };
+
+  const out: TableRef[] = [];
+  for (const r of wanted) {
+    if (out.length >= limit) break;
+    const real = (await listOf(r.db!)).find((n) => n.toLowerCase() === r.table.toLowerCase());
+    if (real) out.push({ db: r.db!, table: real });
+  }
+  return out;
+}
+
 /**
  * 抓「與這段 SQL 最相關的表」的欄位與索引，組成兩段文字。
  *
@@ -226,24 +270,35 @@ export async function collectSchemaContext(
     return { tables: "", indexes: "" };
   }
 
-  const picked = rankTables(sql, names, selectedTable ?? null, MAX_DETAIL_TABLES);
+  // 跨庫（同一連線、`其他庫.表`）：這些參照是使用者親手寫下的，相關性無須再猜，直接排在
+  // 候選最前面。少了它們，模型看到的是半份結構——然後它會替另一半編出欄位與索引來。
+  const cross = await resolveCrossDbTables(connId, db, sql, MAX_DETAIL_TABLES);
+  const room = Math.max(0, MAX_DETAIL_TABLES - cross.length);
+  const picked: TableRef[] = [
+    ...cross,
+    ...(room ? rankTables(sql, names, selectedTable ?? null, room) : []).map((table) => ({ db: null, table })),
+  ];
+
   const parts = await Promise.all(
-    picked.map(async (table) => {
+    picked.map(async (ref) => {
+      // 跨庫的表以 `庫.表` 標示，同庫維持裸名（既有輸出格式不動）。
+      const label = ref.db ? `${ref.db}.${ref.table}` : ref.table;
+      const owner = ref.db ?? db;
       // 欄位與索引各自 catch：某張表讀不到索引時不該連它的欄位一起丟掉
       // （沿 nlPrompt.ts 的慣例——單一 api 失敗只讓那一塊留白，不讓整個 prompt 生不出來）。
       const [cols, idx] = await Promise.all([
-        api.tableColumns(connId, db, table).catch(() => null),
-        api.tableIndexes(connId, db, table).catch(() => null),
+        api.tableColumns(connId, owner, ref.table).catch(() => null),
+        api.tableIndexes(connId, owner, ref.table).catch(() => null),
       ]);
       return {
         // 欄位為零筆（權限受限的 view、不支援欄位內省的類型）也明寫，比留下 `- orders: ` 這種
         // 冒號後空白的行清楚——後者模型會讀成格式壞掉而自行補一份欄位。
         table: cols
-          ? `- ${table}: ${cols.length ? cols.slice(0, MAX_COLS_PER_TABLE).map(columnLine).join(", ") : t("(無欄位資訊)")}`
+          ? `- ${label}: ${cols.length ? cols.slice(0, MAX_COLS_PER_TABLE).map(columnLine).join(", ") : t("(無欄位資訊)")}`
           : null,
         // 「一個索引都沒有」本身就是調校時最有用的訊號，明寫出來而不是讓該表消失。
         index: idx
-          ? `- ${table}: ${idx.length ? idx.slice(0, MAX_INDEXES_PER_TABLE).map(indexLine).join("; ") : t("(無索引)")}`
+          ? `- ${label}: ${idx.length ? idx.slice(0, MAX_INDEXES_PER_TABLE).map(indexLine).join("; ") : t("(無索引)")}`
           : null,
       };
     }),
@@ -252,7 +307,7 @@ export async function collectSchemaContext(
   // 挑表有上限（8 表 JOIN 只會帶到 6 張）。不講明的話，模型會把「沒列出來」讀成「沒有索引」，
   // 進而建議去建一個其實早就存在的索引。
   const note =
-    picked.length >= MAX_DETAIL_TABLES && names.length > picked.length
+    picked.length >= MAX_DETAIL_TABLES && names.length + cross.length > picked.length
       ? t("（僅列出與這段 SQL 最相關的 {n} 張表；未列出的表不代表沒有索引。）", { n: picked.length })
       : null;
 

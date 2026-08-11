@@ -6,12 +6,24 @@ import type { SQLNamespace } from "@codemirror/lang-sql";
 // 並在打完子句關鍵字（含空白）當下自動跳窗 —— 補 @codemirror/lang-sql 預設 schema 補全
 // 「空前綴不觸發、頂層不出欄位」的空缺。純文件掃描、不打後端。
 
-// 可帶引號的識別字：`t`、"t"、[t]、裸字；表參照可帶 db. 前綴（取末段）。
+// 可帶引號的識別字：`t`、"t"、[t]、裸字；表參照可帶 db. 前綴（跨庫查詢會用到，故保留不丟）。
 const IDENT = "(?:`[^`]+`|\"[^\"]+\"|\\[[^\\]]+\\]|[\\w$]+)";
-const TABLE_REF = new RegExp("\\b(from|join|update|into)\\s+(" + IDENT + "(?:\\s*\\.\\s*" + IDENT + ")*)", "gi");
-// FROM/UPDATE 清單的逗號接續（`FROM a x, b y` — 可夾別名）。別名限單一裸字，
-// 後面必須緊跟逗號才算清單延續（WHERE / JOIN 等關鍵字不會誤吞）。
-const LIST_CONT = new RegExp("^(?:[ \\t]+(?:as\\s+)?[\\w$]+)?\\s*,\\s*(" + IDENT + "(?:\\s*\\.\\s*" + IDENT + ")*)", "i");
+const REF = IDENT + "(?:\\s*\\.\\s*" + IDENT + ")*";
+const TABLE_REF = new RegExp("\\b(from|join|update|into)\\s+(" + REF + ")", "gi");
+// FROM/UPDATE 清單的逗號接續（`FROM a x, b y`）。緊跟逗號才算清單延續（WHERE / JOIN 不會誤吞）。
+const LIST_CONT = new RegExp("^\\s*,\\s*(" + REF + ")", "i");
+// 表參照之後的別名：`t x` / `t AS x`。
+const ALIAS_AFTER = /^[ \t]+(?:as[ \t]+)?([\w$]+)/i;
+// 出現在「別名位置」但其實是接續子句的字——把它們當別名會讓 `FROM t WHERE` 認出一個叫 where 的別名。
+const NOT_ALIAS = new Set([
+  "as", "on", "using", "where", "group", "order", "having", "limit", "offset", "fetch",
+  "join", "inner", "left", "right", "full", "outer", "cross", "natural", "straight_join",
+  "union", "intersect", "except", "set", "values", "into", "select", "insert", "update",
+  "delete", "for", "window", "partition", "with", "force", "use", "ignore", "lock", "and", "or",
+]);
+// 「限定名後打點」時取出限定字（`dbB.` → dbB）。前面不能再有一個點——`dbB.customers.` 是
+// 兩段限定，那是內建 source 的守備範圍。
+const QUALIFIER_END = new RegExp("(?:^|[^\\w$.])(" + IDENT + ")\\s*\\.\\s*$");
 
 // 字串 / 註解以等長空白替換（位移不變），避免其中的 from/where 誤導解析。
 const NOISE = /'(?:[^'\\]|\\.)*'|--[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\//g;
@@ -27,10 +39,25 @@ const POP_KW = /\b(select|where|and|or|on|having|when|then|else|by|set|between|n
 const POP_SYM = /(,|\(|=|<|>|<>|!=)\s*$/;
 const POP_TABLE = /\b(from|join|update|into)\s+$/i;
 
+/** 語句中的一筆表參照（去引號）。db 為 null 代表沒寫限定名 → 目前資料庫。 */
+export interface TableRef {
+  db: string | null;
+  table: string;
+  alias: string | null;
+}
+
 export interface SqlContext {
-  mode: "column" | "table";
-  /** 語句中出現的表名（去引號、去 db. 前綴、依出現序去重）。 */
-  tables: string[];
+  /**
+   * - `column` / `table`：由本 source 提示欄位 / 表名
+   * - `qualifier`：游標停在 `xxx.` 之後。本 source 只在 xxx 是「尚未載入結構的資料庫」時
+   *   接手（按需載入），其餘一律讓給 lang-sql 內建 source——它已經會走巢狀命名空間，
+   *   也會自己解析 `FROM db.t AS x` 的別名。
+   */
+  mode: "column" | "table" | "qualifier";
+  /** 語句中出現的表參照（依出現序去重；保留 db 限定與別名）。 */
+  tables: TableRef[];
+  /** mode = "qualifier" 時，點號前的那一段（去引號）。 */
+  qualifier?: string;
   /** 已輸入的字前綴與其在整份文件中的起點。 */
   word: string;
   wordFrom: number;
@@ -61,39 +88,70 @@ export function stripNoise(sql: string): { text: string; spans: Array<{ s: numbe
   return { text, spans };
 }
 
-/** 解析語句中 FROM/JOIN/UPDATE/INTO 參照的表名（含 FROM/UPDATE 清單的逗號接續）。 */
-export function statementTables(stmt: string): string[] {
-  const out: string[] = [];
+/** 表參照鍵：`db.table` 或裸 `table`（小寫）。同一份 key 規則也用於 schemaTableMap。 */
+export function refKey(db: string | null, table: string): string {
+  return (db ? `${db}.${table}` : table).toLowerCase();
+}
+
+/**
+ * 把 `dbB.customers` / `dbB.sales.orders` 拆成 (db, table)。
+ *
+ * 三段式取後兩段當表名——後端的 list_tables 對非 dbo 的 SQL Server 物件本來就回
+ * `schema.table`（見 mssql.rs），所以「前面是庫、後面整串是表」才對得起既有的表名慣例。
+ */
+function splitRef(ref: string): { db: string | null; table: string } {
+  const parts = ref.split(".").map((p) => unquote(p.trim()));
+  if (parts.length === 1) return { db: null, table: parts[0] };
+  if (parts.length === 2) return { db: parts[0], table: parts[1] };
+  return { db: parts[0], table: parts.slice(1).join(".") };
+}
+
+/**
+ * 解析語句中 FROM/JOIN/UPDATE/INTO 參照的表（含 FROM/UPDATE 清單的逗號接續與別名）。
+ *
+ * db 限定**刻意保留**：`FROM dbB.orders` 與目前庫的 `orders` 是兩張不同的表，
+ * 丟掉限定就會拿錯一張表的欄位去提示——跨庫 join 兩張同名表時尤其致命。
+ */
+export function statementTables(stmt: string): TableRef[] {
+  const out: TableRef[] = [];
   const seen = new Set<string>();
-  const push = (ref: string) => {
-    const parts = ref.split(".");
-    const name = unquote(parts[parts.length - 1].trim());
-    const key = name.toLowerCase();
-    if (name && !seen.has(key)) {
-      seen.add(key);
-      out.push(name);
+  // 解析一筆參照與其後的別名，回傳掃描該吃掉到哪裡。
+  const push = (ref: string, from: number): number => {
+    const { db, table } = splitRef(ref);
+    let next = from;
+    let alias: string | null = null;
+    const am = ALIAS_AFTER.exec(stmt.slice(from));
+    if (am && !NOT_ALIAS.has(am[1].toLowerCase())) {
+      alias = am[1];
+      next = from + am[0].length;
     }
+    const key = refKey(db, table);
+    if (table && !seen.has(key)) {
+      seen.add(key);
+      out.push({ db, table, alias });
+    }
+    return next;
   };
   TABLE_REF.lastIndex = 0;
   for (let m = TABLE_REF.exec(stmt); m; m = TABLE_REF.exec(stmt)) {
-    push(m[2]);
+    let idx = push(m[2], TABLE_REF.lastIndex);
     const kw = m[1].toLowerCase();
     if (kw === "from" || kw === "update") {
-      let idx = TABLE_REF.lastIndex;
       for (;;) {
         const mm = LIST_CONT.exec(stmt.slice(idx));
         if (!mm) break;
-        push(mm[1]);
-        idx += mm[0].length;
+        idx = push(mm[1], idx + mm[0].length);
       }
     }
+    // 別名與清單接續已經吃掉的範圍不必再掃一次（也避免把別名當成新的表參照）。
+    TABLE_REF.lastIndex = Math.max(TABLE_REF.lastIndex, idx);
   }
   return out;
 }
 
 /**
  * 分析文件 pos 處的補全語境。回傳 null 代表不由本 source 提示
- * （游標在字串 / 註解 / 未閉合引號內、`表名.` 限定名後、或非表非欄語境）。
+ * （游標在字串 / 註解 / 未閉合引號內、或非表非欄語境）。
  */
 export function analyzeSqlContext(doc: string, pos: number): SqlContext | null {
   // 當前語句 = 游標前後最近分號之間（FROM 在游標後也解析得到）。
@@ -110,8 +168,21 @@ export function analyzeSqlContext(doc: string, pos: number): SqlContext | null {
   if (((beforeAll.match(/`/g) ?? []).length & 1) === 1) return null;
   const word = /[\w$]*$/.exec(beforeAll)![0];
   const before = beforeAll.slice(0, beforeAll.length - word.length);
-  // `表名.` 限定名 → 交給預設 schema source（避免重複項）。
-  if (/\.\s*$/.test(before)) return null;
+  const wordStart = offset + cur - word.length;
+  // `xxx.` 限定名：本 source 只在 xxx 是「還沒載入結構的資料庫」時接手（見 sqlContextCompletion），
+  // 其餘（表名、別名、多段限定）一律讓給預設 schema source，避免重複項。
+  if (/\.\s*$/.test(before)) {
+    const q = QUALIFIER_END.exec(before);
+    if (!q) return null;
+    return {
+      mode: "qualifier",
+      qualifier: unquote(q[1]),
+      tables: statementTables(stmt),
+      word,
+      wordFrom: wordStart,
+      autoPop: false,
+    };
+  }
 
   let last: string | null = null;
   CLAUSE_RE.lastIndex = 0;
@@ -119,7 +190,7 @@ export function analyzeSqlContext(doc: string, pos: number): SqlContext | null {
   if (!last || NONE_KW.has(last)) return null;
 
   const tables = statementTables(stmt);
-  const wordFrom = offset + cur - word.length;
+  const wordFrom = wordStart;
   if (TABLE_KW.has(last)) {
     return {
       mode: "table",
@@ -140,31 +211,55 @@ export function analyzeSqlContext(doc: string, pos: number): SqlContext | null {
 
 interface TableEntry {
   name: string;
+  /** null = 目前資料庫（namespace 頂層的裸表名）。 */
+  db: string | null;
   columns: string[];
 }
 
-/** 把 SQLNamespace 攤平成「小寫表名 → 欄位」查找表（含 db.table 巢狀、self/children 形態）。 */
+/**
+ * 把 SQLNamespace 攤平成「參照 → 欄位」查找表。
+ *
+ * 鍵有兩種，對應 toMultiDbSqlNamespace 的兩層形態：頂層（目前庫）的表用裸名 `orders`，
+ * 巢狀（跨庫）的表用 `dbb.orders`。兩者不互相覆蓋——跨庫 join 兩張同名表時，
+ * 只有限定名分得出來誰是誰。
+ */
 export function schemaTableMap(schema: SQLNamespace): Map<string, TableEntry> {
   const map = new Map<string, TableEntry>();
-  const add = (name: string, cols: readonly (string | Completion)[]) => {
-    const key = name.toLowerCase();
-    if (!map.has(key)) map.set(key, { name, columns: cols.map((c) => (typeof c === "string" ? c : c.label)) });
+  const add = (db: string | null, name: string, cols: readonly (string | Completion)[]) => {
+    const key = refKey(db, name);
+    if (!map.has(key)) {
+      map.set(key, { name, db, columns: cols.map((c) => (typeof c === "string" ? c : c.label)) });
+    }
   };
-  const visit = (ns: SQLNamespace) => {
+  // depth 0 = 目前庫的表；depth 1 = 某個庫底下的表。再深的（理論上不會出現）不再往下鑽。
+  const visit = (ns: SQLNamespace, db: string | null) => {
     if (Array.isArray(ns)) return;
-    for (const [key, val] of Object.entries(ns)) {
-      if (Array.isArray(val)) add(key, val as readonly (string | Completion)[]);
+    for (const [rawKey, val] of Object.entries(ns)) {
+      const key = rawKey.replace(/\\\./g, "."); // 還原 toMultiDbSqlNamespace 對庫名的點跳脫
+      if (Array.isArray(val)) add(db, key, val as readonly (string | Completion)[]);
       else if (val && typeof val === "object") {
         if ("self" in val && "children" in val) {
           const ch = (val as { children: SQLNamespace }).children;
-          if (Array.isArray(ch)) add(key, ch as readonly (string | Completion)[]);
-          else visit(ch);
-        } else visit(val as SQLNamespace);
+          if (Array.isArray(ch)) add(db, key, ch as readonly (string | Completion)[]);
+          else if (db === null) visit(ch, key);
+        } else if (db === null) visit(val as SQLNamespace, key);
       }
     }
   };
-  visit(schema);
+  visit(schema, null);
   return map;
+}
+
+/** 跨庫補全所需的外部資訊（由查詢分頁提供；對話框不傳即維持單庫行為）。 */
+export interface CrossDbOptions {
+  /** 此連線可見的資料庫清單——用來判斷 `xxx.` 的 xxx 是不是一個庫。 */
+  databases?: string[];
+  /** 已載入結構的資料庫（這些由內建 source 走巢狀命名空間處理，本 source 不插手）。 */
+  loaded?: string[];
+  /** 目前資料庫的名字——`目前庫.表` 這種寫法要對得回頂層的裸表名。 */
+  currentDb?: string | null;
+  /** 按需載入某個庫的結構，resolve 出該庫的表名。 */
+  onNeedDatabase?: (db: string) => Promise<string[]>;
 }
 
 /**
@@ -173,23 +268,69 @@ export function schemaTableMap(schema: SQLNamespace): Map<string, TableEntry> {
  * - 表語境：只在「空前綴 + 剛打完 FROM/JOIN/逗號」自動跳表名補預設 source 的空缺；
  *   一開始打字或 Ctrl+Space 即回 null 讓預設 source 接手（避免重複項）。
  */
-export function sqlContextCompletion(schema: SQLNamespace): CompletionSource {
+export function sqlContextCompletion(schema: SQLNamespace, cross?: CrossDbOptions): CompletionSource {
   const tableMap = schemaTableMap(schema);
-  const allTables: Completion[] = Array.from(tableMap.values(), (t) => ({
-    label: t.name,
-    type: "class",
-    boost: 1,
-  }));
-  return (ctx: CompletionContext): CompletionResult | null => {
+  // 表語境的自動跳窗只出「目前庫」的表：額外庫的表也塞進來的話，`FROM ` 一按就湧出十個庫的
+  // 表名，那比沒有提示更糟——它們一律以 `db.table` 限定名經由內建 source 取用。
+  const allTables: Completion[] = Array.from(tableMap.values())
+    .filter((t) => t.db === null)
+    .map((t) => ({ label: t.name, type: "class", boost: 1 }));
+  const loaded = new Set((cross?.loaded ?? []).map((d) => d.toLowerCase()));
+  const known = new Set((cross?.databases ?? []).map((d) => d.toLowerCase()));
+  const currentDb = cross?.currentDb?.toLowerCase() ?? null;
+
+  /**
+   * 表參照 → 結構。限定名優先精確命中；命中不到時**只在該庫結構還沒載入**才退回同名的
+   * 目前庫表——`USE shop; SELECT … FROM shop.orders` 這種自我限定的寫法（跨庫功能之前
+   * 一律靠丟掉前綴才work）不能因此變成沒有提示。反過來，庫已載入卻沒這張表，那就是真的
+   * 沒有，硬退回別庫的同名表只會給出錯的欄位。
+   */
+  const resolveRef = (t: TableRef): TableEntry | undefined => {
+    const bare = () => tableMap.get(refKey(null, t.table));
+    if (!t.db) return bare();
+    const db = t.db.toLowerCase();
+    if (currentDb && db === currentDb) return bare();
+    return tableMap.get(refKey(t.db, t.table)) ?? (loaded.has(db) ? undefined : bare());
+  };
+
+  /** 這個 `xxx.` 是不是「連線裡有、但結構還沒載」的庫？是的話回庫名，否則 null。 */
+  const unloadedDb = (a: SqlContext): string | null => {
+    const db = a.qualifier ?? "";
+    const key = db.toLowerCase();
+    if (!cross?.onNeedDatabase || !db || !known.has(key) || loaded.has(key)) return null;
+    // 別名剛好與某個庫同名時（`FROM t nova` 後打 `nova.`），別名優先——它是本句明確的宣告。
+    if (a.tables.some((r) => r.alias?.toLowerCase() === key)) return null;
+    return db;
+  };
+
+  // 載進來並直接把表名回給這一次補全。之後 schema 更新，同樣的位置就換內建 source
+  //（走巢狀命名空間）負責，所以這條非同步路徑每個庫只會走一次。
+  const loadTables = async (db: string, a: SqlContext, ctx: CompletionContext) => {
+    const names = await cross!.onNeedDatabase!(db);
+    if (names.length === 0 || ctx.aborted) return null;
+    return {
+      from: a.wordFrom,
+      options: names.map((n) => ({ label: n, type: "class", boost: 1 })),
+      validFor: /^[\w$]*$/,
+    };
+  };
+
+  return (ctx: CompletionContext): CompletionResult | Promise<CompletionResult | null> | null => {
     const a = analyzeSqlContext(ctx.state.doc.toString(), ctx.pos);
     if (!a) return null;
+    if (a.mode === "qualifier") {
+      // 絕大多數的 `xxx.`（表名 / 別名 / 已載入的庫）在這裡同步回 null 讓內建 source 接手；
+      // 只有真的要去載一個庫時才回 Promise，不讓每一次打點都多等一個 microtask。
+      const db = unloadedDb(a);
+      return db ? loadTables(db, a, ctx) : null;
+    }
     if (a.mode === "table") {
       if (ctx.explicit || a.word !== "" || !a.autoPop || allTables.length === 0) return null;
       return { from: ctx.pos, options: allTables };
     }
     const entries: TableEntry[] = [];
     for (const t of a.tables) {
-      const e = tableMap.get(t.toLowerCase());
+      const e = resolveRef(t);
       if (e && e.columns.length > 0) entries.push(e);
     }
     if (entries.length === 0) return null;
@@ -198,11 +339,13 @@ export function sqlContextCompletion(schema: SQLNamespace): CompletionSource {
     const seen = new Set<string>();
     const options: Completion[] = [];
     for (const e of entries) {
+      // 多表時標出欄位來自哪張表；跨庫時帶上庫名，兩張同名表才分得出來。
+      const detail = e.db ? `${e.db}.${e.name}` : e.name;
       for (const col of e.columns) {
         const key = col.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        options.push({ label: col, type: "property", boost: 1, ...(multi ? { detail: e.name } : {}) });
+        options.push({ label: col, type: "property", boost: 1, ...(multi ? { detail } : {}) });
       }
     }
     if (options.length === 0) return null;

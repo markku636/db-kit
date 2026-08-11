@@ -62,6 +62,43 @@ export function toSqlNamespace(tables: TableColumns[] | undefined): SQLNamespace
   return ns as SQLNamespace;
 }
 
+/** 一個資料庫的表結構（多庫 namespace 的輸入單位）。 */
+export interface DbTables {
+  database: string;
+  tables: TableColumns[];
+}
+
+/**
+ * 多庫版 namespace：目前庫的表放頂層（裸名），其餘各庫各掛一層巢狀。
+ *
+ * ```
+ * { orders: [...], users: [...],          // 目前庫 → 裸名（行為與單庫時完全相同）
+ *   other_db: { customers: [...] } }      // 額外庫 → 只以 other_db.customers 出現
+ * ```
+ *
+ * 額外庫的表**刻意不進裸名池**：`FROM ` 一按就湧出十個庫的表，比沒有提示更糟。
+ * 巢狀形態是 @codemirror/lang-sql 原生支援的，所以 `other_db.` → 表名、
+ * `other_db.customers.` → 欄名、乃至 `FROM other_db.customers c` 之後的 `c.`（內建
+ * source 自己解析別名）全都不必我們動手。
+ *
+ * 庫名與目前庫的**表名**撞名時，表名優先——打字時參照裸表名遠比參照別的庫常見，
+ * 而被讓開的庫仍可用完整限定名執行，只是少了提示。
+ */
+export function toMultiDbSqlNamespace(
+  primary: TableColumns[] | undefined,
+  others: DbTables[] | undefined,
+): SQLNamespace {
+  const ns = toSqlNamespace(primary) as Record<string, unknown>;
+  for (const o of others ?? []) {
+    if (!o || typeof o.database !== "string" || !o.database) continue;
+    // lang-sql 把鍵名裡未跳脫的 `.` 當成層級分隔；庫名含點時跳脫，才不會被拆成兩層。
+    const key = o.database.replace(/\./g, "\\.");
+    if (Object.prototype.hasOwnProperty.call(ns, key)) continue; // 撞名 → 表名優先
+    ns[key] = toSqlNamespace(o.tables);
+  }
+  return ns as SQLNamespace;
+}
+
 /**
  * 把後端回來的東西整成可信的 CachedSchema，或 null。
  *
