@@ -1,21 +1,27 @@
-// i18n 覆蓋率棘輪：抽出所有 t("…") 的 key，比對 src/locales/en.ts。**開發期工具，不進 build。**
+// i18n 覆蓋率棘輪：抽出所有 t("…") 的 key，比對 src/locales/*.ts。**開發期工具，不進 build。**
 //
 // 刻意**不**做成 eslint rule / build gate：遷移期間會讓建置長紅，扼殺「逐檔 commit」的節奏。
-// 它的用途是回答兩個問題：
-//   1. 還有哪些 key 沒有英文譯文？（缺漏）
+// 它的用途是回答三個問題：
+//   1. 還有哪些 key 沒有譯文？（缺漏）
 //   2. 譯文表裡有哪些 key 已經沒人用了？（過時）
+//   3. 譯文表裡有沒有**打錯的 key**？（幽靈）—— 手寫 ja / ko 時最容易發生：
+//      中文 key 少一個字就永遠查不到，畫面上看起來只是「這句沒翻到」，不會報錯。
 //
-//   node scripts/i18n-scan.mjs             # 摘要 + 缺漏清單
-//   node scripts/i18n-scan.mjs --json      # 缺漏的 key 陣列（給翻譯用）
-//   node scripts/i18n-scan.mjs --stale     # 只列出過時的 key
+//   node scripts/i18n-scan.mjs             # 每個語言一份摘要
+//   node scripts/i18n-scan.mjs ja          # 只看某語言，並列出缺漏
+//   node scripts/i18n-scan.mjs ja --json   # 缺漏的 key 陣列（給翻譯用）
+//   node scripts/i18n-scan.mjs ja --stale  # 只列出過時的 key
 import ts from "typescript";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const CJK = /[一-鿿]/;
+const LOCALES = ["en", "ja", "ko", "zh-CN"];
+
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
 const onlyStale = args.includes("--stale");
+const only = args.find((a) => LOCALES.includes(a));
 
 const files = [];
 (function walk(d) {
@@ -47,40 +53,72 @@ for (const f of files) {
   walk(src);
 }
 
-// 從 en.ts 取 key（用 AST，避免執行它）
-const enSrc = ts.createSourceFile("src/locales/en.ts", readFileSync("src/locales/en.ts", "utf8"), ts.ScriptTarget.Latest, true);
-const translated = new Set();
-(function walk(n) {
-  if (ts.isPropertyAssignment(n)) {
-    const k = n.name;
-    if (ts.isStringLiteral(k)) translated.add(k.text);
-    else if (ts.isIdentifier(k)) translated.add(k.text); // 中文可以當作合法的 identifier key
-  }
-  ts.forEachChild(n, walk);
-})(enSrc);
-
-const missing = [...used.keys()].filter((k) => !translated.has(k)).sort();
-const stale = [...translated].filter((k) => CJK.test(k) && !used.has(k)).sort();
-
-if (asJson) { console.log(JSON.stringify(missing, null, 2)); process.exit(0); }
-if (onlyStale) { stale.forEach((k) => console.log(k)); process.exit(0); }
-
-console.log(`使用中的 key：${used.size}`);
-console.log(`已有英文譯文：${used.size - missing.length}`);
-console.log(`缺英文譯文：  ${missing.length}`);
-console.log(`過時（en.ts 有、程式碼沒用）：${stale.length}`);
-console.log(`動態 key（t(TABLE[x])，無法靜態檢查）：${dynamic}`);
-
-if (missing.length) {
-  // 依檔案分組，方便逐檔補
-  const byFile = new Map();
-  for (const k of missing) {
-    const f = used.get(k)[0].split(":")[0];
-    if (!byFile.has(f)) byFile.set(f, []);
-    byFile.get(f).push(k);
-  }
-  console.log("\n缺漏（前 20 檔）：");
-  [...byFile.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 20)
-    .forEach(([f, ks]) => console.log(`  ${String(ks.length).padStart(4)}  ${f}`));
+/** 從譯文表取 key（用 AST，避免執行它）。 */
+function catalogKeys(locale) {
+  const path = `src/locales/${locale}.ts`;
+  const src = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true);
+  const keys = new Set();
+  (function walk(n) {
+    if (ts.isPropertyAssignment(n)) {
+      const k = n.name;
+      // one / other 是單複數子鍵，不是 translation key
+      if (ts.isStringLiteral(k) && k.text !== "one" && k.text !== "other") keys.add(k.text);
+      else if (ts.isIdentifier(k)) keys.add(k.text); // 中文可以當作合法的 identifier key
+    }
+    ts.forEachChild(n, walk);
+  })(src);
+  return keys;
 }
-process.exitCode = missing.length ? 1 : 0;
+
+const report = (locale) => {
+  const translated = catalogKeys(locale);
+  const missing = [...used.keys()].filter((k) => !translated.has(k)).sort();
+  const stale = [...translated].filter((k) => CJK.test(k) && !used.has(k)).sort();
+  return { locale, translated, missing, stale };
+};
+
+// ---- 單一語言：詳細模式 ----
+if (only) {
+  const { translated, missing, stale } = report(only);
+  if (asJson) { console.log(JSON.stringify(missing, null, 2)); process.exit(0); }
+  if (onlyStale) { stale.forEach((k) => console.log(k)); process.exit(0); }
+
+  console.log(`使用中的 key：${used.size}`);
+  console.log(`已有 ${only} 譯文：${used.size - missing.length}`);
+  console.log(`缺 ${only} 譯文：  ${missing.length}`);
+  console.log(`過時（${only}.ts 有、程式碼沒用）：${stale.length}`);
+  console.log(`動態 key（t(TABLE[x])，無法靜態檢查）：${dynamic}`);
+  if (missing.length) {
+    const byFile = new Map(); // 依檔案分組，方便逐檔補
+    for (const k of missing) {
+      const f = used.get(k)[0].split(":")[0];
+      if (!byFile.has(f)) byFile.set(f, []);
+      byFile.get(f).push(k);
+    }
+    console.log("\n缺漏（前 20 檔）：");
+    [...byFile.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 20)
+      .forEach(([f, ks]) => console.log(`  ${String(ks.length).padStart(4)}  ${f}`));
+  }
+  process.exitCode = missing.length ? 1 : 0;
+} else {
+  // ---- 總覽：每語一列，另外揪出「幽靈 key」----
+  //
+  // 幽靈 = 這個語言有、但 en 沒有的中文 key。en 是覆蓋率最高的表，任何語言冒出 en 沒有的
+  // 中文 key，幾乎都是手打時漏字 / 多字 —— 那條譯文永遠不會被查到，而畫面不會有任何錯誤。
+  const en = catalogKeys("en");
+  console.log(`使用中的 key：${used.size}（動態 key ${dynamic} 條無法靜態檢查）\n`);
+  console.log("語言     已翻譯 / 使用中   缺漏   過時   幽靈 key");
+  for (const locale of LOCALES) {
+    const { translated, missing, stale } = report(locale);
+    const ghosts = [...translated].filter((k) => CJK.test(k) && !en.has(k));
+    const done = used.size - missing.length;
+    const pct = ((done / used.size) * 100).toFixed(1).padStart(5);
+    console.log(
+      `${locale.padEnd(8)} ${String(done).padStart(4)} / ${used.size}  ${pct}%  ` +
+      `${String(missing.length).padStart(5)}  ${String(stale.length).padStart(4)}  ${String(ghosts.length).padStart(6)}`,
+    );
+    for (const g of ghosts.slice(0, 10)) console.log(`         ⚠ 幽靈：${JSON.stringify(g)}`);
+    if (ghosts.length > 10) console.log(`         ⚠ …另有 ${ghosts.length - 10} 條`);
+  }
+  console.log("\n日 / 韓缺漏會退回英文（見 src/i18n.ts 的 FALLBACK），不會露出中文。");
+}

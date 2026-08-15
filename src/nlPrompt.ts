@@ -2,6 +2,7 @@
 // 純函式 + 少量 async schema 抓取，供 NlQueryBar 使用；核心邏輯以 nlPrompt.test.ts 覆蓋。
 import { api, KIND_META, type DbKind, type TableInfo } from "./api";
 import { fuzzyScore } from "./fuzzy";
+import { promptLanguageName } from "./i18n";
 
 // ---- 輸出截取 ----
 
@@ -55,9 +56,11 @@ const MAX_COLS_PER_TABLE = 80;
 const MAX_SCHEMA_CHARS = 8000;
 const MAX_MAPPING_CHARS = 6000;
 
-// en 語系時要求 SQL 註解用英文（沿 buildContext 慣例）。
+// 非繁中語系時要求 SQL 註解用該語言（沿 buildContext 慣例）。語言名取自 i18n 的單一真相，
+// 新增語言只要改 i18n.ts。
 function commentLangLine(uiLang: string): string {
-  return uiLang.startsWith("en") ? "\nWrite any SQL comments in English." : "";
+  const name = promptLanguageName(uiLang);
+  return name ? `\nWrite any SQL comments in ${name}.` : "";
 }
 
 export interface SqlPromptOpts {

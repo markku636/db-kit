@@ -3,7 +3,7 @@ import { api, ColumnInfo, IndexInfo, ForeignKeyInfo, DbKind } from "./api";
 import { toast, copyToClipboard, pickSaveFile } from "./ui";
 import { Modal, Button } from "./ui/index";
 import { BookText } from "lucide-react";
-import { useT, useLang } from "./i18n";
+import { htmlLangAttr, useT, useLang } from "./i18n";
 
 // 資料字典：彙整單一資料表的結構（欄位 / 索引 / 外鍵）成可閱讀文件，並可另存 Markdown / HTML。
 // 對標 Navicat「資料字典」。後端的 table_columns / table_indexes / list_foreign_keys 皆已支援。
@@ -87,7 +87,7 @@ export default function DataDictionary({ connId, db, table, kind, onClose }: {
       ? `<h2>${t("外鍵")}</h2><table>${th([t("名稱"), t("欄位"), t("參照表"), t("參照欄位")])}${fks.map((f) => tr([f.name, f.column, f.ref_table, f.ref_column])).join("")}</table>`
       : "";
     return `<!DOCTYPE html>
-<html lang="${useLang.getState().lang === "en" ? "en" : "zh-Hant"}"><head><meta charset="utf-8"><title>${t("資料字典：{title}", { title: esc(title) })}</title>
+<html lang="${htmlLangAttr(useLang.getState().lang)}"><head><meta charset="utf-8"><title>${t("資料字典：{title}", { title: esc(title) })}</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 24px; color: #1f2937; }
   h1 { font-size: 20px; } h2 { font-size: 15px; margin-top: 20px; }

@@ -2452,6 +2452,7 @@ const en: Catalog = {
   "Garnet 石榴石": "Garnet",
   "Gateway 網址（base URL）": "Gateway URL (base URL)",
   "GitHub 專案": "GitHub repository",
+  "作者部落格": "Author's blog",
   "https://es.example.com:9243 或 localhost": "https://es.example.com:9243 or localhost",
   "INSERT 目標表名": "INSERT target table name",
   "Instant Client 目錄（選填）": "Instant Client directory (optional)",

@@ -94,7 +94,7 @@ DBKIT_PASSWORD=secret dbk --kind mysql --host 10.0.0.5 --port 3306 --user app -d
 | `--kind` `--host` `--port` `--user` `--password` | 逐項指定臨時連線 |
 | `-d, --database <名稱>` | 預設資料庫 / schema（SQLite 為檔案路徑、Redis 為 DB index） |
 | `--format table\|csv\|json` | 輸出格式，預設 `table` |
-| `--lang zh-TW\|en` | 訊息與 `--help` 的語言（亦可用 `DBKIT_LANG`；預設讀 GUI 的設定） |
+| `--lang zh-TW\|zh-CN\|en\|ja\|ko` | 訊息與 `--help` 的語言（亦可用 `DBKIT_LANG`；預設讀 GUI 的設定） |
 | `-y, --yes` | 確認執行寫入指令 |
 | `--force` | 額外確認高破壞動作，須與 `--yes` 併用 |
 

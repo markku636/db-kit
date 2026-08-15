@@ -178,8 +178,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
             "Default database / schema (sqlite = file path, redis = db index)"
         }
         "輸出格式" => "Output format",
-        "介面語言（zh-TW | en；亦可用環境變數 DBKIT_LANG）" => {
-            "Interface language (zh-TW | en; can also use the DBKIT_LANG env var)"
+        "介面語言（zh-TW | zh-CN | en | ja | ko；亦可用環境變數 DBKIT_LANG）" => {
+            "Interface language (zh-TW | zh-CN | en | ja | ko; can also use the DBKIT_LANG env var)"
         }
         "確認執行寫入指令（修改 / 刪除）。未加時只印出將執行的動作並以錯誤結束（等同預演）" => {
             "Confirm a write command (modify / delete). Without it, the action is only printed and the command exits with an error (dry run)"

@@ -5,7 +5,7 @@
 // 抽成純函式後才能用單元測試釘住（見 aiReview.test.ts）；UI 只負責蒐集輸入與送出。
 // 唯一的例外是 collectSchemaContext（要抓結構），它把所有 api 失敗都吞成「該段留白」。
 import { api, KIND_META, type ColumnInfo, type DbKind, type IndexInfo } from "./api";
-import { t } from "./i18n";
+import { replyLanguageLine, t } from "./i18n";
 import { rankTables } from "./nlPrompt";
 import { statementTables } from "./sqlContextComplete";
 
@@ -118,12 +118,6 @@ function joinLines(parts: (string | null | undefined)[]): string {
   return parts.filter((p): p is string => p != null).join("\n");
 }
 
-// en 語系時要求整段回覆用英文（比照 nlPrompt.ts 的 commentLangLine；差別在這裡是整段回覆
-// 而非只有 SQL 註解，因為三支 prompt 的產出主體都是散文分析）。
-function replyLangLine(uiLang: string): string | null {
-  return uiLang.startsWith("en") ? "Reply in English." : null;
-}
-
 // 三支 prompt 共用的抬頭：先講身分再講方言，模型才不會拿 PostgreSQL 的語法去改 MySQL 的查詢。
 // db 為 null 表示該情境沒有資料庫名（壓測分析只帶 kind）。
 function headerLines(role: string, kind: DbKind, db: string | null, uiLang: string): (string | null)[] {
@@ -134,7 +128,9 @@ function headerLines(role: string, kind: DbKind, db: string | null, uiLang: stri
     name
       ? t("方言：{label}；資料庫：{db}", { label, db: name })
       : t("方言：{label}", { label }),
-    replyLangLine(uiLang),
+    // 非繁中語系時要求整段回覆用該語言（比照 nlPrompt.ts 的 commentLangLine；差別在這裡是
+    // 整段回覆而非只有 SQL 註解，因為三支 prompt 的產出主體都是散文分析）。
+    replyLanguageLine(uiLang),
   ];
 }
 

@@ -1,6 +1,6 @@
 // 整庫資料字典 / 文件產生（致敬 Navicat 的 HTML 文件 / 模型報表）。純函式，可單元測試。
 import type { ColumnInfo, IndexInfo, ForeignKeyInfo } from "./api";
-import { t, useLang } from "./i18n";
+import { htmlLangAttr, t, useLang } from "./i18n";
 
 export interface TableDoc {
   name: string;
@@ -61,7 +61,7 @@ export function buildDbDictHtml(dbName: string, tables: TableDoc[]): string {
       `<table>${th([t("欄位"), t("型別"), t("可空"), t("鍵"), t("預設"), t("額外"), t("註解")])}${colRows}</table>${idxBlock}${fkBlock}</section>`;
   }).join("\n");
   return `<!DOCTYPE html>
-<html lang="${useLang.getState().lang === "en" ? "en" : "zh-Hant"}"><head><meta charset="utf-8"><title>${t("資料庫文件：{dbName}", { dbName: esc(dbName) })}</title>
+<html lang="${htmlLangAttr(useLang.getState().lang)}"><head><meta charset="utf-8"><title>${t("資料庫文件：{dbName}", { dbName: esc(dbName) })}</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 24px; color: #1f2937; }
   h1 { font-size: 22px; } h2 { font-size: 16px; margin-top: 28px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; } h3 { font-size: 13px; margin-top: 14px; color: #6b7280; }

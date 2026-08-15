@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { Bug, Copy, ExternalLink, FileText, Info, RefreshCw } from "lucide-react";
+import { BookOpen, Bug, Copy, ExternalLink, FileText, Info, RefreshCw } from "lucide-react";
 import { Button, Icon, Modal } from "./ui/index";
 import { api, KIND_META } from "./api";
 import { checkForUpdate, isNewer, REPO, type UpdateInfo } from "./updateCheck";
 import { copyToClipboard } from "./ui";
 import { useT } from "./i18n";
-import { APP_NAME } from "./brand";
+import { APP_NAME, BLOG_URL } from "./brand";
 
 // 手動檢查更新的狀態機：idle（未檢查）→ checking → latest / update / failed。
 type CheckState =
@@ -35,6 +35,7 @@ export default function AboutDialog({ onClose }: { onClose: () => void }) {
     .join(" · ");
   const links: { icon: typeof ExternalLink; label: string; url: string }[] = [
     { icon: ExternalLink, label: t("GitHub 專案"), url: `https://github.com/${REPO}` },
+    { icon: BookOpen, label: t("作者部落格"), url: BLOG_URL },
     { icon: FileText, label: t("變更紀錄"), url: `https://github.com/${REPO}/blob/main/CHANGELOG.md` },
     { icon: Bug, label: t("回報問題"), url: `https://github.com/${REPO}/issues/new` },
   ];

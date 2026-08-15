@@ -6,3 +6,6 @@
 //    改前它得在 AboutDialog.tsx / App.tsx 用 4 個字面值錨點做字串取代（其中兩個含中文，i18n 後必失效）；
 //    改後只需 patch 本檔這一行，且錨點不含中文，往後 i18n 文案怎麼動都打不到 overlay。
 export const APP_NAME = "DB Kit";
+
+/** 作者部落格（「關於」對話框的連結）。與 APP_NAME 同理集中在此，overlay 打包時一行即可換掉。 */
+export const BLOG_URL = "https://blog.markkulab.net/";

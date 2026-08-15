@@ -16,7 +16,7 @@ import { toast, copyToClipboard, pickSaveFile, uiConfirm } from "./ui";
 import Icon from "./ui/Icon";
 import { IconButton } from "./ui/index";
 import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Sparkles, Send, Square } from "lucide-react";
-import { t, useT, useLang } from "./i18n";
+import { replyLanguageLine, t, useT, useLang } from "./i18n";
 
 // 右側「AI 助手」面板：驅動本機 claude CLI（使用 Claude 訂閱登入），
 // 串流回答問題與撰寫腳本。對標右側詳細資料面板的版面與主題用色。
@@ -927,5 +927,6 @@ async function buildContext(): Promise<string> {
       } catch { /* schema 為加值，失敗略過 */ }
     }
   }
-  return t("【目前資料庫環境】\n{join}\n（以上為使用者在 db-kit 的目前環境；若回答涉及 SQL，請貼合此資料庫類型與結構）", { join: lines.join("\n") }) + (useLang.getState().lang === "en" ? " Respond in English." : "");
+  const reply = replyLanguageLine(useLang.getState().lang);
+  return t("【目前資料庫環境】\n{join}\n（以上為使用者在 db-kit 的目前環境；若回答涉及 SQL，請貼合此資料庫類型與結構）", { join: lines.join("\n") }) + (reply ? ` ${reply}` : "");
 }

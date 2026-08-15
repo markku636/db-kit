@@ -30,9 +30,9 @@ pub async fn run() -> ExitCode {
     let lang = resolve_lang(&argv).await;
     crate::i18n::set_lang(lang);
 
-    // 依語言覆寫 clap 的 about / 參數說明（原文即中文，zh 直接沿用不覆寫）。
+    // 依語言覆寫 clap 的 about / 參數說明（原文即繁中，zh-TW 直接沿用不覆寫）。
     let mut cmd = args::Cli::command();
-    if lang == Lang::En {
+    if lang != Lang::ZhTw {
         cmd = localize_command(cmd);
     }
     // get_matches_from 於 --help / --version / 參數錯誤時自行印出並 exit。
@@ -94,7 +94,7 @@ async fn resolve_lang(argv: &[String]) -> Lang {
     Lang::default()
 }
 
-/// 遞迴以 en 表覆寫 command 樹的 about / 參數說明。查無譯文者保留原文。
+/// 遞迴以目前語言的對照表覆寫 command 樹的 about / 參數說明。查無譯文者保留原文。
 fn localize_command(mut cmd: clap::Command) -> clap::Command {
     if let Some(about) = cmd.get_about().map(|s| s.to_string()) {
         if let Some(en) = tr_help(&about) {
@@ -124,17 +124,16 @@ fn localize_command(mut cmd: clap::Command) -> clap::Command {
     cmd
 }
 
-/// 查 en 表；查無且字串含中文時，於 debug build 以 `debug_assert!` 大聲失敗
+/// 查目前語言的譯文（日 / 韓查無會自動退英文，見 `i18n::lookup_opt`）。
+///
+/// 另外於 debug build 檢查 **en 表**的覆蓋率：查無且字串含中文時以 `debug_assert!` 大聲失敗
 /// （clap 內建英文 help 不含中文，不會誤觸；真正遺漏譯文的 help 才會炸出來，避免靜默不生效）。
+/// 只盯 en 是因為它是次選語言 —— en 有收，其餘語言至少不會露出中文。
 fn tr_help(s: &str) -> Option<&'static str> {
-    match crate::locales::en::lookup(s) {
-        Some(en) => Some(en),
-        None => {
-            debug_assert!(
-                !s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
-                "missing en translation for clap help text: {s:?}"
-            );
-            None
-        }
-    }
+    debug_assert!(
+        crate::locales::en::lookup(s).is_some()
+            || !s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+        "missing en translation for clap help text: {s:?}"
+    );
+    crate::i18n::lookup_opt(s)
 }

@@ -57,8 +57,8 @@ pub struct ConnArgs {
     #[arg(long, value_enum, default_value = "table", global = true)]
     pub format: Format,
 
-    /// 介面語言（zh-TW | en；亦可用環境變數 DBKIT_LANG）
-    #[arg(long, global = true, value_name = "zh-TW|en")]
+    /// 介面語言（zh-TW | zh-CN | en | ja | ko；亦可用環境變數 DBKIT_LANG）
+    #[arg(long, global = true, value_name = "zh-TW|zh-CN|en|ja|ko")]
     pub lang: Option<String>,
 
     /// 確認執行寫入指令（修改 / 刪除）。未加時只印出將執行的動作並以錯誤結束（等同預演）
