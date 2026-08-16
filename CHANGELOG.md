@@ -12,6 +12,8 @@
 - 可用性判斷與實際驗證用的 policy 刻意不同：macOS 判斷用 `DeviceOwnerAuthenticationWithBiometrics`（否則只要有登入密碼就會回 Ok，沒有 Touch ID 的 Mac 也被判成「有生物辨識」），驗證則用 `DeviceOwnerAuthentication`（濕手指刷不過時還能用開機密碼過關）。
 - 鎖定畫面的自救指引改為**依平台顯示正確的設定檔路徑**（先前一律寫死 Windows 的 `%APPDATA%\…`，macOS / Linux 使用者照著找只會撲空），文案也涵蓋生物辨識；`LockScreen` 與啟動鎖定設定各自抽成 `src/LockScreen.tsx` / `src/AppLockSettings.tsx`（原本都內嵌在 5,600 行的 `App.tsx` 裡）。
 
+- **App 圖示推近 1.3 倍**。原圖裡海豹連尾鰭橫跨整張畫布，頭臉只佔一半左右，縮到工作列 / 開始選單搜尋的 16~32px 就糊成一團藍灰色團塊，認不出是哪個 App。改成往頭部推近、尾鰭出血裁掉，小尺寸才有足夠面積表現五官（圓角圖磚輪廓不變）。來源改由 `scripts/make-app-icon.mjs` 從 `brand/icon-source.png` 產生（`npm run make:app-icon` → `npm run tauri icon src-tauri/app-icon.png`）；`make-favicon.mjs` 不再兼差輸出 App 圖示，兩條線的母檔本來就不同。
+
 > 驗證：後端新增 `biometric.rs`（三平台 `status` / `verify`）+ 5 個 command（`app_lock_status` / `biometric_status` / `biometric_verify` / `set_biometric_unlock` / `set_auto_lock_minutes`），`AppSettings` 加兩欄並補 3 項測試（**舊版設定檔缺欄位仍讀得回既有密碼與語言**）；`cargo test` 236 項全通過、`cargo clippy` 未新增警告、slim CLI `--no-default-features` 仍編得過。前端新增 `autoLock.ts` 純函式 + 6 項 vitest（含「休眠兩小時回來必須算閒置」），vitest 746 項全通過、`tsc` + `eslint` + `vite build` 綠燈；`i18n:scan` en / zh-CN 100%、四語系幽靈 key 與過時 key 皆為 0。Windows 11 + Windows Hello 實機驗證啟用、重開解鎖、取消後改用密碼、閒置鎖定後查詢結果保留。
 
 ## v0.25.0

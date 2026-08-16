@@ -12,6 +12,7 @@
     "test": "vitest run",
     "tauri": "tauri",
     "make:favicon": "node scripts/make-favicon.mjs",
+    "make:app-icon": "node scripts/make-app-icon.mjs",
     "make:hero": "node scripts/make-hero.mjs",
     "make:splash": "node scripts/make-splash.mjs",
     "make:screenshots": "node scripts/capture-screenshots.mjs",
