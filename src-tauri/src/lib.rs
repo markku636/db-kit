@@ -29,6 +29,10 @@ pub mod cli;
 // 連同 tauri / tauri-plugin-dialog 相依一起不被連入。
 #[cfg(feature = "gui")]
 mod agent;
+// 生物辨識解鎖（Windows Hello / Touch ID）。本身不相依 Tauri，但平台綁定（windows / objc2）
+// 掛在 gui feature 後，slim CLI 不編；且 CLI 也沒有可以彈提示的視窗。
+#[cfg(feature = "gui")]
+mod biometric;
 #[cfg(feature = "gui")]
 mod commands;
 #[cfg(feature = "gui")]
@@ -135,10 +139,14 @@ pub fn run() {
             commands::disconnect,
             commands::clear_cache,
             commands::external_session_alive,
-            commands::has_startup_password,
+            commands::app_lock_status,
             commands::verify_startup_password,
             commands::set_startup_password,
             commands::clear_startup_password,
+            commands::biometric_status,
+            commands::biometric_verify,
+            commands::set_biometric_unlock,
+            commands::set_auto_lock_minutes,
             commands::export_connections_encrypted,
             commands::import_connections_encrypted,
             commands::list_databases,

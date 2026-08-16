@@ -41,6 +41,21 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "密碼雜湊失敗：{e}" => "Failed to hash the password: {e}",
         "密碼不可為空" => "Password must not be empty",
         "目前密碼不正確" => "Current password is incorrect",
+        // 啟動鎖定：生物辨識（Windows Hello / Touch ID）。第一句會出現在 OS 的驗證對話框上。
+        "驗證以解鎖 DB Kit" => "Verify to unlock DB Kit",
+        "此裝置無法使用生物辨識" => "Biometrics are not available on this device",
+        "驗證未通過，尚未啟用生物辨識解鎖" => {
+            "Verification failed; biometric unlock was not enabled"
+        }
+        "驗證未通過；若已設定啟動密碼，可改以密碼關閉" => {
+            "Verification failed; if a startup password is set, you can turn this off with the password instead"
+        }
+        "驗證執行緒異常結束：{e}" => "The verification thread ended unexpectedly: {e}",
+        // ---- biometric.rs ----
+        "無法取得 Windows Hello 狀態：{e}" => "Could not read Windows Hello status: {e}",
+        "無法建立驗證介面：{e}" => "Could not create the verification interface: {e}",
+        "無法顯示驗證提示：{e}" => "Could not show the verification prompt: {e}",
+        "驗證過程發生錯誤：{e}" => "The verification failed with an error: {e}",
         "請提供 passphrase" => "A passphrase is required",
         "序列化失敗：{e}" => "Serialization failed: {e}",
         "寫入失敗：{e}" => "Write failed: {e}",

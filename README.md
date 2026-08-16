@@ -191,7 +191,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 跨庫 / 跨連線 | **跨庫查詢自動完成**（同一連線寫 `其他庫.表` 也補得到表 / 欄 / 別名，打 `其他庫.` 當下按需載入）、**資料傳輸**（單表 / 整庫 / 不存在時自動建表）、**資料比對 / 同步**（產生 INSERT/UPDATE/DELETE）、**整庫文件**（HTML / Markdown）、結構比對 |
 | 效能 | **SQL 壓力測試**（致敬 SQLQueryStress）：多執行緒重複執行、固定迭代或持續時間 + 爬升、暖機、**p50/p90/p95/p99 延遲百分位** + TPS 即時折線、**錯誤指紋化分組**、`:name` 參數 CSV 替換、報表一鍵複製為 Markdown；走**專屬連線池**不佔用互動連線，寫入與高破壞語句預設擋下；亦可用 `dbk stress` 在腳本中跑 |
 | 外觀 | **7 套寶石系主題**（Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian）驅動整個 App + 編輯器語法高亮，工具列一鍵切換光亮 / 暗黑 / 變體 |
-| 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、**啟動密碼**（Argon2id）、**結果列數上限 / 查詢逾時**、釘選常用表 |
+| 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、**啟動鎖定**（Windows Hello / Touch ID 或 Argon2id 密碼、閒置自動鎖定）、**結果列數上限 / 查詢逾時**、釘選常用表 |
 | SQL 審查 | **靜態規則引擎**（對標 Redgate SQL Prompt / SonarQube SQL rules）：15 條規則、三級嚴重度，打字當下即時列出無 WHERE 的 DML、笛卡兒積、欄位套函式讓索引失效、前綴萬用字元 LIKE、`NOT IN` 的 NULL 陷阱、UNION vs UNION ALL、NOLOCK 髒讀、游標逐列處理…；方言感知、**不執行查詢也不需要 AI**，點一筆即跳到編輯器對應位置 |
 | AI 助手 | 右側面板串接本機 Claude CLI：串流問答、撰寫 / 優化 SQL，可附帶目前 schema；程式碼區塊套用目前主題的語法高亮。另有三個一鍵入口——**AI 審查 SQL**（帶規則引擎發現 + 結構 + 索引 + 計畫）、**AI 調校建議**（帶計畫熱點，要求索引 DDL / 改寫 / 代價評估）、**AI 分析壓測結果**（從延遲百分位的形狀反推瓶頸類型） |
 | 多語系 | **繁體中文 · 简体中文 · English · 日本語 · 한국어**，工具列或設定頁即時切換、不需重啟；前端 / Rust 後端錯誤訊息 / `dbk` CLI（`--lang`、`DBKIT_LANG`）三處同步。各語言的譯文表由 vite 各切一個 chunk，只下載自己那包 |
@@ -279,7 +279,10 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] **命令面板**（Ctrl/Cmd+K）：模糊搜尋跳轉連線 / 資料庫 / 資料表 / 動作
 - [x] **連線唯讀模式**（擋寫入 / DDL 與資料格 / 側欄寫入）、**連線色標**（區分環境）、**釘選常用表**
 - [x] 結構比對（同連線兩資料庫的表 / 欄差異 + 同步 SQL）
-- [x] **啟動密碼**（Argon2id 雜湊，App 開啟閘門；不影響 keychain 與 `dbk` CLI）
+- [x] **啟動鎖定**（App 開啟閘門；不影響 keychain 與 `dbk` CLI）
+  - 生物辨識：Windows Hello（指紋 / 臉 / PIN）、macOS Touch ID；Linux 不支援，退回密碼
+  - 啟動密碼：Argon2id 雜湊。與生物辨識互相獨立，可單開或併用
+  - 閒置自動鎖定：5 / 15 / 30 分鐘或 1 小時，重新鎖定時不會丟失開著的查詢與編輯內容
 - [x] **查詢安全網**：結果列數上限（預設 1,000）+ 查詢逾時（DB 端 + tokio 兜底），大表操作效能優化（列級 memo / COUNT 並行 / 切庫連線快取）
 - [x] **啟動速度**：骨架屏消除白屏、對話框與 CodeMirror code splitting（首包 1,139 KB → ~470 KB）、資產與字型子集瘦身
 - [x] **多結果集**（SSMS 風格堆疊）：每格獨立捲動 / 排序 / 篩選 / 摺疊，作用中結果集決定複製 / 匯出 / 問 AI 的對象；「全部匯出」一次匯出所有結果集

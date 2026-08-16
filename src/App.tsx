@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
-import { api, onKafkaAlert, isProdConn, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type ExportFormat, type SearchHit } from "./api";
+import { api, onKafkaAlert, isProdConn, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
 import { LANGUAGES, useLang, useT, type Lang } from "./i18n";
@@ -48,8 +48,11 @@ import type { ElasticQueryEditorHandle } from "./ElasticQueryEditor";
 import { buildSqlNlPrompt, buildEsNlPrompt } from "./nlPrompt";
 import { parseMongoExplain, withVerbosity, type MongoExplainModel } from "./mongoExplain";
 import logoMark from "./assets/db-kit-hero.png";
+import LockScreen from "./LockScreen";
+import { AppLockSettings } from "./AppLockSettings";
+import { useAutoLock } from "./autoLock";
 import Icon from "./ui/Icon";
-import { Button, EmptyState, Modal, Input, Field } from "./ui/index";
+import { Button, EmptyState, Modal, Field } from "./ui/index";
 import {
   Plug, Network, DatabaseBackup, Upload, Download, Sparkles, Keyboard, Moon,
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
@@ -227,8 +230,14 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // 啟動密碼閘門：checking（查詢中）→ locked（需輸入密碼）/ open（已解鎖或未設密碼）。
+  // 啟動鎖定閘門：checking（查詢中）→ locked（需驗證）/ open（已解鎖或未設鎖）。
   const [lockState, setLockState] = useState<"checking" | "locked" | "open">("checking");
+  // 鎖定設定（密碼 / 生物辨識 / 閒置分鐘數）。鎖定畫面要據此決定顯示哪幾種解法。
+  const [lockStatus, setLockStatus] = useState<AppLockStatus | null>(null);
+  // 閒置或手動觸發的「重新鎖定」。和冷啟動的 lockState 分開，因為兩者掛載語意相反：
+  // 冷啟動是**還沒掛**主介面（早退），重新鎖定則是**疊在已掛載的主介面之上**——
+  // 若比照冷啟動卸載整棵樹，查詢結果、開著的分頁、未存的 SQL 會一併蒸發。
+  const [relocked, setRelocked] = useState(false);
   // 開場動畫狀態：show → leaving（淡出）→ done（卸載）。每次啟動只播一次；
   // prefers-reduced-motion 使用者直接跳過（原本只停動畫仍要乾等計時，形同懲罰）。
   const [splash, setSplash] = useState<"show" | "leaving" | "done">(() => {
@@ -300,10 +309,30 @@ export default function App() {
   useEffect(() => {
     savedConnsRef.current = api.listSavedConnections().catch(() => [] as ConnectionConfig[]);
     api
-      .hasStartupPassword()
-      .then((has) => setLockState(has ? "locked" : "open"))
+      .appLockStatus()
+      .then((s) => {
+        setLockStatus(s);
+        // 密碼與生物辨識互相獨立，任一啟用就要擋。
+        setLockState(s.password || s.biometric ? "locked" : "open");
+      })
       .catch(() => setLockState("open"));
   }, []);
+
+  // 設定對話框關閉後重讀一次：剛在裡面開 / 關了鎖，閒置自動鎖定的分鐘數要立刻跟上，
+  // 不必等下次重開 app。
+  useEffect(() => {
+    if (settingsOpen || lockState !== "open") return;
+    api.appLockStatus().then(setLockStatus).catch(() => {});
+  }, [settingsOpen, lockState]);
+
+  // 閒置自動重新鎖定。只在「已解鎖 + 有設鎖 + 有設分鐘數」時掛載；
+  // 覆蓋層是疊上去而非卸載主介面，所以查詢結果與未存的 SQL 都會原封不動留著。
+  useAutoLock(
+    lockState === "open" && !relocked && (lockStatus?.password || lockStatus?.biometric)
+      ? (lockStatus?.auto_lock_minutes ?? 0)
+      : 0,
+    () => setRelocked(true),
+  );
 
   // 解鎖後才把連線清單寫入 store（僅清單，不自動連線；密碼留在 keychain）。
   useEffect(() => {
@@ -386,14 +415,16 @@ export default function App() {
     }
   };
 
-  // 啟動密碼閘門：未解鎖前只顯示開場動畫 + 鎖定畫面，不掛載主介面（避免鎖定時仍抓連線資料）。
+  // 冷啟動閘門：未解鎖前只顯示開場動畫 + 鎖定畫面，不掛載主介面（避免鎖定時仍抓連線資料）。
   if (lockState !== "open") {
     return (
       <div className="h-full bg-app">
         {splash !== "done" && (
           <SplashScreen leaving={splash === "leaving"} onDone={onSplashDone} onSkip={() => setSplash("leaving")} />
         )}
-        {lockState === "locked" && <LockScreen onUnlock={() => setLockState("open")} />}
+        {lockState === "locked" && lockStatus && (
+          <LockScreen status={lockStatus} onUnlock={() => setLockState("open")} />
+        )}
       </div>
     );
   }
@@ -402,6 +433,10 @@ export default function App() {
     <div className="h-full flex flex-col">
       {splash !== "done" && (
         <SplashScreen leaving={splash === "leaving"} onDone={onSplashDone} onSkip={() => setSplash("leaving")} />
+      )}
+      {/* 重新鎖定：疊在主介面之上（不卸載），解鎖後查詢結果與未存的編輯內容都還在。 */}
+      {relocked && lockStatus && (
+        <LockScreen status={lockStatus} onUnlock={() => setRelocked(false)} />
       )}
       <Toolbar
         onNewConnection={() => setDialog({ initial: null })}
@@ -422,6 +457,7 @@ export default function App() {
           width={sidebar.size}
           onEdit={(c) => setDialog({ initial: c })}
           onAdvSearch={(id, k) => setAdvSearch({ connId: id, kind: k })}
+          onLockNow={lockStatus?.password || lockStatus?.biometric ? () => setRelocked(true) : null}
         />
         <Splitter axis="x" onPointerDown={sidebar.onPointerDown} />
         <MainArea onNewConnection={() => setDialog({ initial: null })} />
@@ -523,78 +559,6 @@ function SplashScreen({ leaving, onDone, onSkip }: { leaving: boolean; onDone: (
   );
 }
 
-// 啟動密碼鎖定畫面：全螢幕不透明覆蓋（疊在開場動畫之上），驗證通過才 onUnlock 進入主介面。
-function LockScreen({ onUnlock }: { onUnlock: () => void }) {
-  const t = useT();
-  const [pw, setPw] = useState("");
-  const [err, setErr] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [showForgot, setShowForgot] = useState(false);
-  const submit = async () => {
-    if (busy || !pw) return;
-    setBusy(true);
-    try {
-      const ok = await api.verifyStartupPassword(pw);
-      if (ok) { onUnlock(); return; }
-      setErr(true);
-      setPw("");
-    } catch {
-      setErr(true);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="fixed inset-0 z-[300] grid place-items-center bg-app">
-      <div className="w-[320px] max-w-[88vw] flex flex-col items-center gap-6">
-        <img src={logoMark} alt="DB Kit" className="w-16 h-16 rounded-2xl shadow-e4" draggable={false} />
-        <div className="text-center space-y-1">
-          <div className="text-base font-semibold text-fg/90">{t("DB Kit 已鎖定")}</div>
-          <div className="text-xs text-fg/50">{t("輸入啟動密碼以繼續")}</div>
-        </div>
-        <div className="w-full space-y-2.5">
-          <Input
-            type="password"
-            inputSize="md"
-            autoFocus
-            value={pw}
-            invalid={err}
-            placeholder={t("啟動密碼")}
-            aria-label={t("啟動密碼")}
-            onChange={(e) => { setPw(e.target.value); setErr(false); }}
-            onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-          />
-          {err && <div className="text-[11px] text-danger text-center">{t("密碼不正確，請再試一次")}</div>}
-          <Button variant="primary" full icon={Lock} loading={busy} disabled={!pw} onClick={submit}>
-            {t("解鎖")}
-          </Button>
-        </div>
-        {/* 忘記密碼的自救指引：解法只寫在 CHANGELOG 對被鎖在外面的人毫無幫助（死路型 UX）。 */}
-        <div className="text-center">
-          {!showForgot ? (
-            <button type="button" onClick={() => setShowForgot(true)}
-              className="text-[11px] text-fg/35 hover:text-fg/60 underline decoration-dotted">
-              {t("忘記密碼？")}
-            </button>
-          ) : (
-            <div className="text-[11px] text-fg/50 leading-relaxed max-w-[300px] text-left space-y-1.5">
-              <p>
-                {t("啟動密碼只是開啟 App 的閘門。刪除設定目錄中的")}
-                <span className="mono"> app_settings.json </span>{t("即可解除，")}
-                <span className="text-fg/70">{t("不影響已儲存的連線")}</span>{t("（連線機密存於系統 keychain）。")}
-              </p>
-              <p className="mono break-all text-fg/40">%APPDATA%\dev.dbkit.app\app_settings.json</p>
-              <button type="button"
-                onClick={() => copyToClipboard("%APPDATA%\\dev.dbkit.app\\app_settings.json", t("已複製路徑"))}
-                className="underline decoration-dotted hover:text-fg/70">{t("複製路徑")}</button>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ---- 查詢防護設定（row cap / 逾時）：UI 偏好層級，持久化於 localStorage，啟動與變更時同步後端 ----
 const QUERY_GUARD_KEY = "dbkit:queryGuard";
 interface QueryGuard { maxRows: number; timeoutMs: number; }
@@ -615,16 +579,14 @@ function persistQueryGuard(g: QueryGuard) {
   api.setQueryGuard(g.maxRows, g.timeoutMs).catch(() => {});
 }
 
-// 設定對話框：「啟動密碼」（app-lock 閘門，不加密連線資料）與「查詢防護」（row cap / 逾時）。
+// 設定對話框：「啟動鎖定」（app-lock 閘門，不加密連線資料）與「查詢防護」（row cap / 逾時）。
+//
+// 啟動鎖定那段自成一個元件（AppLockSettings）並自帶存檔按鈕：它有密碼、生物辨識、閒置三組
+// 互相獨立的設定，硬要塞進對話框底部那一顆共用的主按鈕，只會讓「啟用」到底在啟用什麼變得曖昧。
 function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const t = useT();
   const lang = useLang((s) => s.lang);
   const setLang = useLang((s) => s.setLang);
-  const [hasPw, setHasPw] = useState<boolean | null>(null);
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [busy, setBusy] = useState(false);
   const [guard, setGuard] = useState<QueryGuard>(loadQueryGuard);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(autoCheckEnabled);
   const themeId = useTheme((s) => s.themeId);
@@ -639,47 +601,6 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
     });
   };
 
-  // 開啟時重置欄位並查詢目前是否已設定啟動密碼。
-  useEffect(() => {
-    if (!open) return;
-    setCurrent(""); setNext(""); setConfirm(""); setHasPw(null);
-    api.hasStartupPassword().then(setHasPw).catch(() => setHasPw(false));
-  }, [open]);
-
-  const save = async () => {
-    if (busy) return;
-    if (next.length < 4) { toast.error(t("密碼至少 4 碼")); return; }
-    if (next !== confirm) { toast.error(t("兩次輸入的密碼不一致")); return; }
-    setBusy(true);
-    try {
-      await api.setStartupPassword(hasPw ? current : null, next);
-      toast.success(hasPw ? t("已更新啟動密碼") : t("已啟用啟動密碼"));
-      onClose();
-    } catch (e: any) {
-      toast.error(e?.message ?? t("設定失敗"));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    if (busy || !current) return;
-    const ok = await uiConfirm(t("移除後，下次開啟 DB Kit 將不再需要輸入密碼。確定移除啟動密碼？"), {
-      title: t("移除啟動密碼"), danger: true, confirmText: t("移除"),
-    });
-    if (!ok) return;
-    setBusy(true);
-    try {
-      await api.clearStartupPassword(current);
-      toast.success(t("已移除啟動密碼"));
-      onClose();
-    } catch (e: any) {
-      toast.error(e?.message ?? t("移除失敗"));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <Modal
       open={open}
@@ -687,19 +608,7 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
       title={t("設定")}
       icon={Cog}
       size="sm"
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>{t("關閉")}</Button>
-          <Button
-            variant="primary"
-            loading={busy}
-            disabled={!next || !confirm || (!!hasPw && !current)}
-            onClick={save}
-          >
-            {hasPw ? t("更新密碼") : t("啟用")}
-          </Button>
-        </>
-      }
+      footer={<Button variant="ghost" onClick={onClose}>{t("關閉")}</Button>}
     >
       <div className="space-y-4">
         <div className="space-y-3">
@@ -753,47 +662,7 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
             </div>
           )}
         </div>
-        <div className="pt-4 border-t border-fg/10">
-          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Lock} size={15} /> {t("啟動密碼")}
-            {hasPw === true && (
-              <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-emerald-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> {t("已啟用")}
-              </span>
-            )}
-            {hasPw === false && (
-              <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-fg/40">
-                <span className="w-1.5 h-1.5 rounded-full bg-fg/30" /> {t("未啟用")}
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-fg/50 mt-1.5 leading-relaxed">
-            {t("啟用後，每次開啟 {app} 需先輸入此密碼才能進入。此密碼僅作為開啟 App 的閘門，", { app: APP_NAME })}
-            <span className="text-fg/70">{t("不會加密你的連線資料")}</span>{t("（連線機密仍存於作業系統 keychain，")}
-            <span className="mono"> dbk </span>{t("CLI 不受影響）。")}
-          </p>
-        </div>
-        {hasPw ? (
-          <Field label={t("目前密碼")}>
-            <Input type="password" inputSize="md" value={current} placeholder={t("輸入目前的啟動密碼")}
-              onChange={(e) => setCurrent(e.target.value)} />
-          </Field>
-        ) : null}
-        <Field label={hasPw ? t("新密碼") : t("設定密碼")} hint={t("至少 4 碼")}>
-          <Input type="password" inputSize="md" value={next} placeholder={t("輸入密碼")}
-            onChange={(e) => setNext(e.target.value)} />
-        </Field>
-        <Field label={t("確認密碼")}>
-          <Input type="password" inputSize="md" value={confirm} placeholder={t("再次輸入密碼")}
-            onChange={(e) => setConfirm(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") save(); }} />
-        </Field>
-        {hasPw ? (
-          <div className="pt-3 border-t border-fg/10 flex items-center gap-2">
-            <Button variant="danger" disabled={busy || !current} onClick={remove}>{t("移除啟動密碼")}</Button>
-            {!current && <span className="text-[11px] text-fg/40">{t("需先輸入目前密碼")}</span>}
-          </div>
-        ) : null}
+        <AppLockSettings />
         <div className="pt-4 border-t border-fg/10 space-y-3">
           <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
             <Icon icon={Zap} size={15} /> {t("查詢防護")}
@@ -1223,7 +1092,7 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 }
 
 // ---- 左側連線/物件樹 ----
-function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig) => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void }) {
+function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
   const t = useT();
   const { connections, connGroups, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
   // ---- 連線群組（側欄排版）----
@@ -1649,6 +1518,9 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
       },
     });
     items.push({ id: "act:theme", label: t("切換深淺色主題"), group: "action", icon: Moon, run: () => useTheme.getState().toggle() });
+    // 只有已啟用啟動鎖定時才出現——沒設鎖卻給一顆「立即鎖定」，按下去要嘛沒反應、
+    // 要嘛把人關在一道他沒鑰匙的門外。
+    if (onLockNow) items.push({ id: "act:lock", label: t("立即鎖定"), group: "action", icon: Lock, run: onLockNow });
     // 釘選的常用表（含未展開資料庫者）也納入索引，確保最愛永遠可搜尋。
     for (const p of pins) {
       if (!connections.some((c) => c.id === p.connId)) continue;
@@ -1661,7 +1533,7 @@ function Sidebar({ onEdit, width, onAdvSearch }: { onEdit: (c: ConnectionConfig)
     return items;
     // t 必須在依賴內：切換語言時 useT() 會換一個新的函式參考，此 memo 才會重算出新語言的標籤。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections, connectedIds, databases, expandedDbs, pins, activeId, onAdvSearch, t]);
+  }, [connections, connectedIds, databases, expandedDbs, pins, activeId, onAdvSearch, onLockNow, t]);
 
   const refreshDbs = async (id: string) => {
     if (!connectedIds.has(id)) return;

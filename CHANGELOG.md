@@ -1,3 +1,19 @@
+## v0.26.0
+
+**指紋 / 臉部辨識解鎖（Windows Hello、macOS Touch ID）與閒置自動鎖定**。啟動閘門從「一組密碼」變成兩把互相獨立的鎖：有感測器的機器刷指紋就進得去，沒有的照樣用密碼，兩個都開就是兩種解法。「設定 → 啟動密碼」因此更名為**啟動鎖定**。
+
+- **安全模型一個字都沒變，文案也刻意不升級**。這仍然只是**開啟 App 的閘門**：不加密任何資料、連線機密仍在 OS keychain、`dbk` CLI 不受影響、刪掉 `app_settings.json` 就解除。生物辨識比密碼強的地方在於「當面驗證」而非「更難破解」——把它講成加密保護，會讓人以為連線密碼受到了它並不存在的保障。設定頁那段說明因此照舊。
+- **兩個開關互相獨立，不是二選一**。`biometric_unlock`（布林）與 `startup_password_hash`（Argon2id PHC）各存各的，任一為真即鎖定。只開生物辨識是合法狀態，於是 `verify_startup_password` 的語意得跟著修：**未設密碼時從回 `true` 改為回 `false`**。舊版「沒密碼＝沒鎖」時那樣寫沒問題（前端也只在有密碼時才叫它），但生物辨識加進來之後，那就是一條任意字串都能過的旁路。
+- **改動鎖之前要先過得了那道鎖**，比照既有的「改密碼要先驗目前密碼」：開啟生物辨識必須當場驗證成功（順帶確認這台機器真的驗得過，不會存進一個開不了的鎖）；關閉時驗證失敗**還能改用啟動密碼**——少了這條退路，感測器一壞就只剩去刪設定檔一途。
+- **閒置自動鎖定**（關閉 / 5 / 15 / 30 分 / 1 小時）。判定用 `Date.now()` 相減而非 `setTimeout`：闔蓋休眠期間 timer 不會前進，而那段時間正是最該算進閒置的——用 timer 的話，闔蓋一整晚回來反而還剩幾分鐘才鎖，語意完全相反。命令面板另有「立即鎖定」（未啟用鎖定時不出現）。
+- **重新鎖定是疊上去，不是把主介面卸載掉**。冷啟動維持早退不掛載（鎖著就不該去抓連線資料），但閒置鎖定若比照辦理，查詢結果、開著的分頁、未存的 SQL 會一併蒸發——鎖個螢幕不該賠掉半小時的工作。所以 `relocked` 與 `lockState` 是兩個狀態，覆蓋層走 `z-[400]` 且**完全不透明**（半透明或只加模糊等於把結果集留在螢幕上給人看，鎖了跟沒鎖一樣）。
+- **平台綁定自己寫，沒有引第三方 crate**。官方 `tauri-plugin-biometric` 是 `#![cfg(mobile)]`，桌面版整包不編譯；`robius-authentication` 把父視窗寫死成 `GetDesktopWindow()` 且用 `windows 0.56`（Tauri 是 0.61，會多編一份）。Windows 端 `windows 0.61` + `Win32_System_WinRT` 的 `IUserConsentVerifierInterop` 約 60 行、macOS 端 `objc2-local-authentication` 的 `LAContext` 約 60 行，都掛在 `gui` feature 後，slim CLI（`--no-default-features`）不編。Linux 誠實回報不支援（polkit 是授權不是「證明你本人在場」，fprintd 又只涵蓋指紋機種），開關以停用狀態呈現並引導改用密碼。
+- 三個做錯就當掉、而且不是編譯錯誤的細節，都寫在 `biometric.rs` 的註解裡：**先問 `CheckAvailabilityAsync` 再叫驗證**（略過這步在未設定 Hello 的機器上會 hang 住不返回）、**在專屬 MTA 執行緒上跑**（`IAsyncOperation::get()` 是阻塞的，在擁有父視窗的 STA 上阻塞會和 modal 互鎖）、**交出真正的 HWND**（傳 null 或桌面視窗，Hello 對話框會跑到 App 後面，使用者看到的就是「按了沒反應」）。macOS 端則是每次都開新的 `LAContext`（重用會讓上一次成功在一段時間內直接放行），且 `localized_reason` 不可為空字串（會丟 ObjC 例外，穿過 Rust frame 就是整個 process abort）。
+- 可用性判斷與實際驗證用的 policy 刻意不同：macOS 判斷用 `DeviceOwnerAuthenticationWithBiometrics`（否則只要有登入密碼就會回 Ok，沒有 Touch ID 的 Mac 也被判成「有生物辨識」），驗證則用 `DeviceOwnerAuthentication`（濕手指刷不過時還能用開機密碼過關）。
+- 鎖定畫面的自救指引改為**依平台顯示正確的設定檔路徑**（先前一律寫死 Windows 的 `%APPDATA%\…`，macOS / Linux 使用者照著找只會撲空），文案也涵蓋生物辨識；`LockScreen` 與啟動鎖定設定各自抽成 `src/LockScreen.tsx` / `src/AppLockSettings.tsx`（原本都內嵌在 5,600 行的 `App.tsx` 裡）。
+
+> 驗證：後端新增 `biometric.rs`（三平台 `status` / `verify`）+ 5 個 command（`app_lock_status` / `biometric_status` / `biometric_verify` / `set_biometric_unlock` / `set_auto_lock_minutes`），`AppSettings` 加兩欄並補 3 項測試（**舊版設定檔缺欄位仍讀得回既有密碼與語言**）；`cargo test` 236 項全通過、`cargo clippy` 未新增警告、slim CLI `--no-default-features` 仍編得過。前端新增 `autoLock.ts` 純函式 + 6 項 vitest（含「休眠兩小時回來必須算閒置」），vitest 746 項全通過、`tsc` + `eslint` + `vite build` 綠燈；`i18n:scan` en / zh-CN 100%、四語系幽靈 key 與過時 key 皆為 0。Windows 11 + Windows Hello 實機驗證啟用、重開解鎖、取消後改用密碼、閒置鎖定後查詢結果保留。
+
 ## v0.25.0
 
 **日本語・한국어・简体中文**（[#1](https://github.com/markku636/db-kit/issues/1)）。介面語言從 2 種變成 5 種：繁體中文 / 简体中文 / English / 日本語 / 한국어，工具列與設定頁即時切換、不需重啟，前端 / Rust 後端 / `dbk` CLI 三處同步。

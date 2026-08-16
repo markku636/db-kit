@@ -22,7 +22,7 @@ use crate::error::{AppError, AppResult};
 const KEYCHAIN_SERVICE: &str = "db-kit";
 const CONNECTIONS_FILE: &str = "connections.json";
 
-/// App 層級設定檔名（非連線設定）。目前僅存啟動密碼的 Argon2 雜湊，未來可擴充其他全域偏好。
+/// App 層級設定檔名（非連線設定）。存啟動鎖定的設定與介面語言，未來可擴充其他全域偏好。
 pub const APP_SETTINGS_FILE: &str = "app_settings.json";
 
 /// App 全域設定（磁碟格式，`read_json` / `write_json` 讀寫）。
@@ -30,6 +30,10 @@ pub const APP_SETTINGS_FILE: &str = "app_settings.json";
 /// `startup_password_hash` 存的是 **Argon2id PHC 字串**（含參數 + salt），不是明文密碼——
 /// 單向雜湊，磁碟外洩也無法還原密碼。用途是「啟動閘門」：擋別人打開 GUI，
 /// **不加密連線機密**（機密仍在 OS keychain，`dbk` CLI 不受影響）。
+///
+/// `biometric_unlock` 與密碼**互相獨立**：任一啟用即進入鎖定狀態，兩個都開就是兩種解法。
+/// 它只是一個布林旗標，不是金鑰 —— 這與整體安全模型一致（閘門，不是加密），
+/// 能改這個檔的人本來就能把密碼雜湊一起刪掉。
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -37,6 +41,15 @@ pub struct AppSettings {
     /// 介面語言碼（`"zh-TW"` / `"en"`）；GUI 與 dbk CLI 共用。舊檔無此欄 → `None`（走預設 zh-TW）。
     #[serde(default)]
     pub lang: Option<String>,
+    /// 生物辨識解鎖（Windows Hello / Touch ID）是否啟用。舊檔無此欄 → `false`。
+    #[serde(default)]
+    pub biometric_unlock: bool,
+    /// 閒置多久（分鐘）自動重新鎖定；`0` / 舊檔無此欄 = 關閉。
+    ///
+    /// 存在後端而非前端 localStorage：它是鎖定設定的一部分，跟著密碼雜湊一起走才不會出現
+    /// 「換了設定檔但自動鎖定還留在舊機器的瀏覽器儲存區」這種半套狀態。
+    #[serde(default)]
+    pub auto_lock_minutes: u32,
 }
 
 /// 側欄連線群組。`id` 穩定不變（重新命名不影響歸屬），`name` 是顯示名稱。
@@ -618,5 +631,53 @@ mod tests {
 
         let f = load_file_in(&dir).await.unwrap();
         assert_eq!(f.groups.len(), 2, "群組定義保留");
+    }
+
+    /// 舊版 app_settings.json（沒有生物辨識 / 閒置鎖定欄位）讀進來必須是「都沒開」。
+    /// 這兩個欄位若少了 `#[serde(default)]`，升級後第一次啟動就會整份設定讀失敗
+    /// ——連語言與既有的啟動密碼一起消失。
+    #[tokio::test]
+    async fn app_settings_reads_pre_biometric_file() {
+        let dir = tmpdir();
+        std::fs::write(
+            dir.join(APP_SETTINGS_FILE),
+            r#"{"startup_password_hash":"$argon2id$v=19$m=1,t=1,p=1$c2FsdA$aGFzaA","lang":"ja"}"#,
+        )
+        .unwrap();
+
+        let s: AppSettings = read_json_in(&dir, APP_SETTINGS_FILE).await.unwrap();
+        assert!(s.startup_password_hash.is_some(), "舊有的啟動密碼必須保住");
+        assert_eq!(s.lang.as_deref(), Some("ja"));
+        assert!(!s.biometric_unlock, "缺欄 → 未啟用");
+        assert_eq!(s.auto_lock_minutes, 0, "缺欄 → 關閉");
+    }
+
+    /// 新欄位寫得出去也讀得回來（且不影響既有欄位）。
+    #[tokio::test]
+    async fn app_settings_roundtrips_lock_fields() {
+        let dir = tmpdir();
+        let s = AppSettings {
+            startup_password_hash: None,
+            lang: Some("zh-TW".into()),
+            biometric_unlock: true,
+            auto_lock_minutes: 15,
+        };
+        write_json_in(&dir, APP_SETTINGS_FILE, &s).await.unwrap();
+
+        let back: AppSettings = read_json_in(&dir, APP_SETTINGS_FILE).await.unwrap();
+        assert!(back.biometric_unlock);
+        assert_eq!(back.auto_lock_minutes, 15);
+        assert_eq!(back.lang.as_deref(), Some("zh-TW"));
+        assert!(back.startup_password_hash.is_none());
+    }
+
+    /// 完全沒有設定檔時＝沒有任何鎖。
+    #[tokio::test]
+    async fn app_settings_defaults_to_unlocked() {
+        let dir = tmpdir();
+        let s: AppSettings = read_json_in(&dir, APP_SETTINGS_FILE).await.unwrap();
+        assert!(s.startup_password_hash.is_none());
+        assert!(!s.biometric_unlock);
+        assert_eq!(s.auto_lock_minutes, 0);
     }
 }

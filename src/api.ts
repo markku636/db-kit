@@ -262,6 +262,28 @@ export interface SchemaCacheStat {
 }
 export interface SchemaCacheSummary { dir: string; entries: SchemaCacheStat[] }
 
+// 啟動鎖定（app-lock 閘門）。密碼與生物辨識互相獨立，任一為真即進入鎖定狀態。
+export interface AppLockStatus {
+  /** 已設定啟動密碼。 */
+  password: boolean;
+  /** 已啟用生物辨識解鎖。 */
+  biometric: boolean;
+  /** 閒置自動重新鎖定的分鐘數；0 = 關閉。 */
+  auto_lock_minutes: number;
+}
+/** 生物辨識可用性。`reason` 是穩定的機器可讀字串，文案（含四語系譯文）由前端負責。 */
+export interface BiometricStatus {
+  available: boolean;
+  kind: "windows_hello" | "touch_id" | "none";
+  reason:
+    | "available"
+    | "no_device"
+    | "not_enrolled"
+    | "disabled_by_policy"
+    | "device_busy"
+    | "unsupported_platform";
+}
+
 // ER 圖模型
 export interface ErColumn { name: string; data_type: string; pk: boolean; fk: boolean }
 export interface ErTable { name: string; columns: ErColumn[] }
@@ -1004,8 +1026,9 @@ export const api = {
   // 介面語言同步給後端：Rust 錯誤訊息與 dbk CLI 共用 app_settings.json 的 lang。
   // 後端 command 尚未上線時會 reject —— 呼叫端（i18n.setLang）已 catch，不擋 UI 切換。
   setLang: (lang: string) => invoke<void>("set_lang", { lang }),
-  // 啟動密碼（app-lock 閘門）：Argon2 雜湊存後端 app_settings.json，明文不落地、不入 keychain。
-  hasStartupPassword: () => invoke<boolean>("has_startup_password"),
+  // 啟動鎖定（app-lock 閘門）：Argon2 雜湊存後端 app_settings.json，明文不落地、不入 keychain。
+  // 密碼與生物辨識互相獨立，一次查詢就拿到兩者狀態 + 閒置自動鎖定設定。
+  appLockStatus: () => invoke<AppLockStatus>("app_lock_status"),
   verifyStartupPassword: (password: string) =>
     invoke<boolean>("verify_startup_password", { password }),
   // current 為 null 表首次設定；已有密碼時須傳目前密碼驗證。
@@ -1013,6 +1036,13 @@ export const api = {
     invoke<void>("set_startup_password", { current, next }),
   clearStartupPassword: (current: string) =>
     invoke<void>("clear_startup_password", { current }),
+  // 生物辨識（Windows Hello / Touch ID）。status 不跳提示，verify 才會。
+  biometricStatus: () => invoke<BiometricStatus>("biometric_status"),
+  biometricVerify: () => invoke<boolean>("biometric_verify"),
+  // 開啟必須當場驗證通過；關閉時驗不過可改帶啟動密碼（感測器壞掉時的退路）。
+  setBiometricUnlock: (enabled: boolean, password: string | null) =>
+    invoke<void>("set_biometric_unlock", { enabled, password }),
+  setAutoLockMinutes: (minutes: number) => invoke<void>("set_auto_lock_minutes", { minutes }),
   // 加密匯出 / 匯入連線（含密碼；passphrase 派生金鑰 + AES-256-GCM）。回傳筆數。
   exportConnectionsEncrypted: (path: string, passphrase: string) =>
     invoke<number>("export_connections_encrypted", { path, passphrase }),

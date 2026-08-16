@@ -1,6 +1,6 @@
 [package]
 name = "db-kit"
-version = "0.25.0"
+version = "0.26.0"
 description = "Unified database management tool"
 license = "MIT"
 edition = "2021"
@@ -109,9 +109,34 @@ lapin = { version = "4.10", default-features = false, features = ["tokio", "rust
 # OS keychain：依平台選用原生後端，避免在 Windows 上編譯 secret-service。
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+# 生物辨識解鎖（Windows Hello：指紋 / 臉 / PIN）。版本刻意對齊 Tauri 2.11 用的 windows 0.61，
+# 讓 WebviewWindow::hwnd() 回傳的 HWND 型別直接通用，也不會在依賴圖上多編一份 windows crate。
+# Win32_System_WinRT 是關鍵 feature —— IUserConsentVerifierInterop 藏在那底下；少了它就只剩
+# 無視窗版的 RequestVerificationAsync，而那個在非 UWP 的 Win32 程式上叫不起來。
+# optional：藏在 gui feature 後，slim CLI（--no-default-features）不必編 WinRT 綁定。
+windows = { version = "0.61", optional = true, features = [
+  "Foundation",
+  "Security_Credentials_UI",
+  "Win32_System_WinRT",
+  "Win32_Foundation",
+  "Win32_System_Com",
+] }
+# IAsyncOperation。windows 0.61 配 windows-future 0.2（阻塞取值是 .get()；0.3 才改名 .join()）。
+windows-future = { version = "0.2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+# 生物辨識解鎖（Touch ID）：LocalAuthentication framework。objc2 家族一級 crate，
+# 純綁定不需 Swift toolchain（apple-localauthentication 那條路會在 build.rs 呼叫 swift build）。
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", optional = true, features = ["NSString", "NSError"] }
+objc2-local-authentication = { version = "0.3", optional = true, features = [
+  "LAContext",
+  "LAError",
+  "LABiometryType",
+  "block2",
+] }
+block2 = { version = "0.6", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }
@@ -119,7 +144,19 @@ keyring = { version = "3", features = ["sync-secret-service"] }
 [features]
 default = ["gui", "kafka", "kafka-js", "elastic", "rabbitmq"]
 # gui：啟用 Tauri 桌面程式（commands / agent / scheduler / run()）。預設開啟。
-gui = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
+# 生物辨識解鎖的平台綁定一併掛在此：兩組 dep 都宣告在 per-target 區塊內，
+# 於非該平台編譯時 Cargo 直接忽略，不需要再寫一層 cfg。
+gui = [
+  "dep:tauri",
+  "dep:tauri-plugin-dialog",
+  "dep:tauri-plugin-notification",
+  "dep:windows",
+  "dep:windows-future",
+  "dep:objc2",
+  "dep:objc2-foundation",
+  "dep:objc2-local-authentication",
+  "dep:block2",
+]
 custom-protocol = ["gui", "tauri/custom-protocol"]
 # kafka：一等公民 Kafka 支援（rdkafka / librdkafka）。隨 gui 預設開啟，讓開源桌面版內建此功能；
 # slim CLI（dbk）以 --no-default-features 排除，免除 CMake / C toolchain 建置負擔。

@@ -400,11 +400,57 @@ pub async fn schema_cache_stats(
     Ok(crate::schema_cache::summary(&dir).await)
 }
 
-// ---- 啟動密碼（app-lock 閘門）----
+// ---- 啟動鎖定（app-lock 閘門）----
 //
-// GUI 啟動時擋一道：Argon2id PHC 雜湊存 app_settings.json（非機密、可落地）。驗證在後端做，
-// 明文密碼不落地、不入 keychain。刻意不加密連線機密——機密仍走 OS keychain，dbk CLI 不受影響
-//（見 store::AppSettings）。
+// GUI 啟動時擋一道，兩種解法互相獨立、可單開也可併用：
+//   1. 啟動密碼：Argon2id PHC 雜湊存 app_settings.json（非機密、可落地）。驗證在後端做，
+//      明文密碼不落地、不入 keychain。
+//   2. 生物辨識：Windows Hello / macOS Touch ID（見 crate::biometric），只在設定檔存一個布林旗標。
+//
+// 刻意不加密連線機密——機密仍走 OS keychain，dbk CLI 不受影響（見 store::AppSettings）。
+
+/// 啟動鎖定的整體狀態。前端啟動閘門與設定頁共用同一次查詢。
+#[derive(Debug, serde::Serialize)]
+pub struct AppLockStatus {
+    /// 已設定啟動密碼。
+    pub password: bool,
+    /// 已啟用生物辨識解鎖。
+    pub biometric: bool,
+    /// 閒置自動重新鎖定的分鐘數；0 = 關閉。
+    pub auto_lock_minutes: u32,
+}
+
+/// 解鎖提示要顯示給使用者看的理由字串（Windows Hello 對話框與 Touch ID 都會秀出來）。
+/// 依當前語言即時產生。
+fn unlock_reason() -> String {
+    t!("驗證以解鎖 DB Kit").to_string()
+}
+
+/// 取主視窗的 HWND（Windows 專用；其他平台回 0，`biometric::verify` 會忽略）。
+///
+/// 轉成 `isize` 而非直接傳 `HWND`：Tauri 與本 crate 各自相依 `windows` crate，
+/// 型別雖然目前同版，但用整數傳遞就永遠不會因為哪天版本分岔而編不過。
+#[allow(unused_variables)]
+fn window_handle(window: &tauri::WebviewWindow) -> isize {
+    #[cfg(windows)]
+    {
+        window.hwnd().map(|h| h.0 as isize).unwrap_or(0)
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
+}
+
+/// 跑一次生物辨識驗證。底層是阻塞呼叫（等使用者刷指紋），必須丟到 blocking 執行緒，
+/// 否則會把 tokio 的 worker 卡住，連帶讓其他 command 一起沒回應。
+async fn run_biometric_verify(window: &tauri::WebviewWindow) -> AppResult<bool> {
+    let hwnd = window_handle(window);
+    let reason = unlock_reason();
+    tokio::task::spawn_blocking(move || crate::biometric::verify(hwnd, &reason))
+        .await
+        .map_err(|e| AppError::Storage(tf!("驗證執行緒異常結束：{e}", e = e)))?
+}
 
 /// 以隨機 salt 產生 Argon2id PHC 雜湊字串。
 fn hash_startup_password(password: &str) -> AppResult<String> {
@@ -427,21 +473,98 @@ fn verify_startup_hash(password: &str, phc: &str) -> bool {
     }
 }
 
-/// 是否已設定啟動密碼（前端據此決定啟動時要不要顯示鎖定畫面）。
+/// 啟動鎖定狀態：前端據此決定啟動時要不要顯示鎖定畫面、要顯示哪幾種解法。
 #[tauri::command]
-pub async fn has_startup_password(app: AppHandle) -> AppResult<bool> {
+pub async fn app_lock_status(app: AppHandle) -> AppResult<AppLockStatus> {
     let s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
-    Ok(s.startup_password_hash.is_some())
+    Ok(AppLockStatus {
+        password: s.startup_password_hash.is_some(),
+        biometric: s.biometric_unlock,
+        auto_lock_minutes: s.auto_lock_minutes,
+    })
 }
 
-/// 驗證啟動密碼。未設定時一律視為通過（回 true）。
+/// 驗證啟動密碼。
+///
+/// **未設定密碼時回 `false`**：沒設密碼，密碼這條路本來就不該通得過。舊版在此回 `true`
+/// （當時「沒密碼」等於「沒鎖」，前端也只在有密碼時才會呼叫），但生物辨識加進來之後，
+/// 「只開生物辨識、沒設密碼」是合法狀態，再回 `true` 就等於開了一條任意字串都能過的旁路。
 #[tauri::command]
 pub async fn verify_startup_password(app: AppHandle, password: String) -> AppResult<bool> {
     let s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
     Ok(match s.startup_password_hash {
         Some(h) => verify_startup_hash(&password, &h),
-        None => true,
+        None => false,
     })
+}
+
+/// 探測生物辨識可用性。**不會跳出任何提示**，設定頁開啟時即可呼叫。
+#[tauri::command]
+pub async fn biometric_status() -> AppResult<crate::biometric::BiometricStatus> {
+    Ok(tokio::task::spawn_blocking(crate::biometric::status)
+        .await
+        .unwrap_or_else(|_| crate::biometric::status()))
+}
+
+/// 跳出 OS 生物辨識提示以解鎖。使用者取消 / 比對失敗回 `Ok(false)`。
+#[tauri::command]
+pub async fn biometric_verify(window: tauri::WebviewWindow) -> AppResult<bool> {
+    run_biometric_verify(&window).await
+}
+
+/// 開啟 / 關閉生物辨識解鎖。
+///
+/// 授權規則對齊「改密碼要先驗目前密碼」的既有精神——改動鎖，就得先證明你過得了這道鎖：
+///
+/// * **開啟**：必須當場驗證成功。順帶確認這台機器真的驗得過，避免存進一個開不了的鎖。
+/// * **關閉**：驗證成功即可；**驗不過（感測器壞了、Hello 被移除）時，若另設有啟動密碼，
+///   可改用密碼關閉**。少了這條退路，感測器一壞使用者就只能去刪 `app_settings.json`。
+#[tauri::command]
+pub async fn set_biometric_unlock(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    enabled: bool,
+    password: Option<String>,
+) -> AppResult<()> {
+    let mut s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
+    if s.biometric_unlock == enabled {
+        return Ok(());
+    }
+
+    if enabled {
+        let status = crate::biometric::status();
+        if !status.available {
+            return Err(AppError::Storage(t!("此裝置無法使用生物辨識").into()));
+        }
+        if !run_biometric_verify(&window).await? {
+            return Err(AppError::Storage(t!("驗證未通過，尚未啟用生物辨識解鎖").into()));
+        }
+    } else {
+        // 先給生物辨識一次機會；驗不過再看密碼這條備援。
+        let by_biometric = run_biometric_verify(&window).await.unwrap_or(false);
+        if !by_biometric {
+            let by_password = match (&s.startup_password_hash, password.as_deref()) {
+                (Some(h), Some(p)) => verify_startup_hash(p, h),
+                _ => false,
+            };
+            if !by_password {
+                return Err(AppError::Storage(
+                    t!("驗證未通過；若已設定啟動密碼，可改以密碼關閉").into(),
+                ));
+            }
+        }
+    }
+
+    s.biometric_unlock = enabled;
+    store::write_json(&app, store::APP_SETTINGS_FILE, &s).await
+}
+
+/// 設定閒置自動重新鎖定的分鐘數（0 = 關閉）。
+#[tauri::command]
+pub async fn set_auto_lock_minutes(app: AppHandle, minutes: u32) -> AppResult<()> {
+    let mut s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
+    s.auto_lock_minutes = minutes;
+    store::write_json(&app, store::APP_SETTINGS_FILE, &s).await
 }
 
 /// 設定 / 變更啟動密碼。已有密碼時必須先以 `current` 驗證通過才可變更。
@@ -469,6 +592,8 @@ pub async fn set_startup_password(
 }
 
 /// 移除啟動密碼。必須先以 `current` 驗證通過。
+///
+/// 生物辨識若仍啟用，鎖定不會因此解除——只是少了密碼這條解法。
 #[tauri::command]
 pub async fn clear_startup_password(app: AppHandle, current: String) -> AppResult<()> {
     let mut s: store::AppSettings = store::read_json(&app, store::APP_SETTINGS_FILE).await?;
