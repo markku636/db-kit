@@ -1065,6 +1065,7 @@ const en: Catalog = {
   "拖曳調整寬度": "Drag to resize width",
   "拖曳調整輸入區高度（雙擊還原自動高度）": "Drag to resize the input area (double-click to restore auto height)",
   "拖曳調整欄寬；雙擊自動符合內容": "Drag to resize column; double-click to fit content",
+  "拖曳調整欄寬；雙擊恢復自動寬度": "Drag to resize column; double-click to restore auto width",
   "放大": "Zoom in",
   "放棄並切換": "Discard and switch",
   "放棄並重整": "Discard and refresh",

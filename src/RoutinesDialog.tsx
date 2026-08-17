@@ -4,6 +4,7 @@ import { buildDropRoutine } from "./sql";
 import { parseRoutineParams, formatSignature } from "./routineParams";
 import { toast, uiConfirm } from "./ui";
 import { Modal, Button, Input } from "./ui/index";
+import { useColWidths, ColResizer, COL_FONT_XS } from "./ui/useColWidths";
 import RoutineExecDialog from "./RoutineExecDialog";
 import SqlEditor, { type SqlDiagnostic } from "./SqlEditor";
 import { useSqlSchema } from "./useSqlSchema";
@@ -373,27 +374,42 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
                 {execTables.length > 1 && (
                   <div className="px-3 pt-2 text-[11px] text-fg/35">{t("結果集 {n}", { n: ri + 1 })}</div>
                 )}
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-inset text-fg/45">
-                    <tr>{res.columns.map((c) => <th key={c} className="text-left px-3 py-1.5 font-normal whitespace-nowrap">{c}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {res.rows.map((row, i) => (
-                      <tr key={i} className="border-t border-fg/5 hover:bg-fg/5">
-                        {row.map((v, j) => (
-                          <td key={j} className="px-3 py-1 mono text-fg/80 max-w-[360px] truncate" title={v ?? "NULL"}>
-                            {v ?? <span className="text-fg/30">NULL</span>}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <ExecResultTable res={res} />
               </div>
             ))
           )}
         </Modal>
       )}
     </>
+  );
+}
+
+// 執行結果的單一結果集表格：獨立元件讓每個結果集有自己的 useColWidths 實例
+// （多結果集欄位集不同，欄寬不能共用同一份狀態）。
+function ExecResultTable({ res }: { res: QueryResult }) {
+  const { colWidth, tableWidth, startResize, resetCol } = useColWidths(res.columns, res.rows, { font: COL_FONT_XS });
+  return (
+    <table className="text-xs" style={{ tableLayout: "fixed", width: tableWidth() }}>
+      <thead className="sticky top-0 bg-inset text-fg/45">
+        <tr>{res.columns.map((c, ci) => (
+          <th key={c} style={{ width: colWidth(ci) }}
+            className="relative text-left px-3 py-1.5 font-normal whitespace-nowrap overflow-hidden text-ellipsis">
+            {c}
+            <ColResizer onStart={(e) => startResize(ci, e)} onReset={() => resetCol(ci)} />
+          </th>
+        ))}</tr>
+      </thead>
+      <tbody>
+        {res.rows.map((row, i) => (
+          <tr key={i} className="border-t border-fg/5 hover:bg-fg/5">
+            {row.map((v, j) => (
+              <td key={j} className="px-3 py-1 mono text-fg/80 truncate" title={v ?? "NULL"}>
+                {v ?? <span className="text-fg/30">NULL</span>}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

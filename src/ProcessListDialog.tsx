@@ -3,7 +3,12 @@ import { Activity } from "lucide-react";
 import { api, DbKind, QueryResult } from "./api";
 import { toast, uiConfirm } from "./ui";
 import { Modal, Button } from "./ui/index";
+import { useColWidths, ColResizer, COL_FONT_XS } from "./ui/useColWidths";
 import { useT } from "./i18n";
+
+// hooks 不能條件呼叫：res 尚未載入時以穩定的空陣列餵 useColWidths。
+const NO_COLS: string[] = [];
+const NO_ROWS: (string | null)[][] = [];
 
 // 列出目前連線 / 工作階段（致敬 Navicat 的伺服器監控）。沿用既有 runQuery（清單）+ execDdl（終止），免後端改動。
 const LIST_SQL: Partial<Record<DbKind, string>> = {
@@ -51,6 +56,10 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
 
   // 終止：以每列第一欄為工作階段 ID（MySQL Id / PG pid）。ID 僅接受純數字（防注入）。
   // queryOnly=true 僅取消目前查詢（保留連線）：MySQL KILL QUERY / PG pg_cancel_backend。
+  // 欄寬：自動量測 + 拖曳表頭右緣調整（與查詢結果格同手感）；Info 欄的長 SQL 可拉寬看。
+  const { colWidth, tableWidth, startResize, resetCol } =
+    useColWidths(res?.columns ?? NO_COLS, res?.rows ?? NO_ROWS, { font: COL_FONT_XS });
+
   const kill = async (row: (string | null)[], queryOnly: boolean) => {
     const id = (row[0] ?? "").trim();
     if (!/^\d+$/.test(id)) { toast.error(t("無法辨識工作階段 ID")); return; }
@@ -98,11 +107,17 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
           ) : !res ? (
             <div className="text-fg/40 text-sm p-5">{t("讀取中…")}</div>
           ) : (
-            <table className="w-full text-xs">
+            <table className="text-xs" style={{ tableLayout: "fixed", width: tableWidth(96) }}>
               <thead className="sticky top-0 bg-inset text-fg/45">
                 <tr>
                   <th className="w-24 px-2 py-1.5" aria-label={t("操作")} />
-                  {res.columns.map((c) => <th key={c} className="text-left px-2 py-1.5 font-normal whitespace-nowrap">{c}</th>)}
+                  {res.columns.map((c, ci) => (
+                    <th key={c} style={{ width: colWidth(ci) }}
+                      className="relative text-left px-2 py-1.5 font-normal whitespace-nowrap overflow-hidden text-ellipsis">
+                      {c}
+                      <ColResizer onStart={(e) => startResize(ci, e)} onReset={() => resetCol(ci)} />
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -115,7 +130,7 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
                         className="text-[11px] px-1.5 py-0.5 rounded text-red-400 hover:bg-red-500/15">{t("終止")}</button>
                     </td>
                     {row.map((v, j) => (
-                      <td key={j} className="px-2 py-1 mono text-fg/80 max-w-[340px] truncate" title={v ?? "NULL"}>
+                      <td key={j} className="px-2 py-1 mono text-fg/80 truncate" title={v ?? "NULL"}>
                         {v ?? <span className="text-fg/30">NULL</span>}
                       </td>
                     ))}

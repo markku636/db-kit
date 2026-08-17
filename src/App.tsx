@@ -15,6 +15,7 @@ import { SchemaCacheSettings } from "./SchemaCacheSettings";
 import { useAssistant } from "./assistant";
 import type { PaletteItem } from "./CommandPalette";
 import lazyOverlay from "./ui/lazyOverlay";
+import { useColWidths, ColResizer } from "./ui/useColWidths";
 import { buildDiscoverUrl, countRawClauses } from "./kibanaUrl";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
 import {
@@ -5841,6 +5842,10 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   const MAX_RENDER = maxRender;
   const rendered = viewRows.length > MAX_RENDER ? viewRows.slice(0, MAX_RENDER) : viewRows;
 
+  // 欄寬：共用 useColWidths（依內容自動量測 + 拖曳表頭右緣調整 + 雙擊恢復自動寬）。
+  // 結果集是暫態的，不做 localStorage 持久化；同一組欄位的重跑（F6）保留手動調過的寬度。
+  const { colWidth, tableWidth, startResize, resetCol } = useColWidths(result.columns, result.rows);
+
   const cell = (r: number, c: number) => viewRows[r]?.[c] ?? null;
   const copyCell = (r: number, c: number) => copyToClipboard(cell(r, c) ?? "", t("已複製儲存格"));
   const copyRowTsv = (r: number) =>
@@ -6022,7 +6027,8 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
           </span>
         )}
       </div>
-      <table className="text-sm border-collapse w-full">
+      <table className="text-sm border-collapse"
+        style={{ tableLayout: "fixed", width: tableWidth(48) }}>
         <thead className="sticky top-[34px] bg-bar">
           <tr>
             <th className="text-left px-3 py-1.5 border-b border-fg/15 text-fg/30 w-12 bg-bar">#</th>
@@ -6032,9 +6038,11 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                 {...(sort?.c === ci ? { "aria-sort": sort.dir === "asc" ? "ascending" : "descending" } : {})}
                 onContextMenu={(e) => { e.preventDefault(); setColMenu({ c: ci, x: e.clientX, y: e.clientY }); }}
                 title={t("點擊排序（再點切換 / 取消）；右鍵更多")}
-                className="text-left px-3 py-1.5 border-b border-fg/15 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-fg/5 bg-bar focus-visible:outline-2 focus-visible:outline-accent/60 focus-visible:-outline-offset-2">
+                style={{ width: colWidth(ci) }}
+                className="relative text-left px-3 py-1.5 border-b border-fg/15 font-medium whitespace-nowrap overflow-hidden text-ellipsis cursor-pointer select-none hover:bg-fg/5 bg-bar focus-visible:outline-2 focus-visible:outline-accent/60 focus-visible:-outline-offset-2">
                 {c}
                 {sort?.c === ci && <Icon icon={sort.dir === "asc" ? ArrowUp : ArrowDown} size={12} className="ml-1 inline text-accent" />}
+                <ColResizer onStart={(e) => startResize(ci, e)} onReset={() => resetCol(ci)} />
               </th>
             ))}
           </tr>
@@ -6078,8 +6086,8 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                     selected?.r === i && selected?.c === j ? "bg-accent/15" : inRange(i, j) ? "bg-accent/10" : ""
                   }`}
                   title={c == null ? t("NULL（點擊檢視）") : c}>
-                  {/* 單行截斷 + 上限寬度：長字串（Memo / RefTransId / JSON）不再換行撐爆列高；完整值看 title 提示、點擊檢視、或點列號看整列。 */}
-                  {c === null ? <span className="text-fg/30 italic">NULL</span> : <div className="truncate max-w-[60ch]">{c}</div>}
+                  {/* 單行截斷於欄寬（tableLayout: fixed）：長字串（Memo / RefTransId / JSON）不換行撐爆列高；完整值看 title 提示、點擊檢視、或點列號看整列。 */}
+                  {c === null ? <span className="text-fg/30 italic">NULL</span> : <div className="truncate">{c}</div>}
                 </td>
               ))}
             </tr>

@@ -15,6 +15,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { EditorView } from "@codemirror/view";
 import Icon from "./ui/Icon";
+import { useColWidths, ColResizer, COL_FONT_XS } from "./ui/useColWidths";
 import { toast, uiConfirm, uiPrompt, pickSaveFile, copyToClipboard } from "./ui";
 import { useStore } from "./store";
 import { useT } from "./i18n";
@@ -318,6 +319,17 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
     return m.value ?? "";
   };
 
+  // 訊息表欄寬：固定 5 欄，依內容（投影後的 value）自動量測，拖曳表頭右緣可調。
+  const msgCols = useMemo(() => ["P", "Offset", t("時間"), "Key", "Value"], [t]);
+  const msgSample = useMemo(
+    () => filtered.slice(0, 200).map((m) => [
+      String(m.partition), String(m.offset), fmtTs(m.timestamp), m.key ?? "",
+      projActive && isJsonLike(m) ? (projectText(m.value, projection) ?? m.value ?? "") : (m.value ?? ""),
+    ]),
+    [filtered, projActive, projection]
+  );
+  const { colWidth, tableWidth, startResize, resetCol } = useColWidths(msgCols, msgSample, { font: COL_FONT_XS });
+
   return (
     <div className="flex flex-col h-full min-h-0 text-xs">
       {/* 工具列 */}
@@ -574,14 +586,16 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
       {/* 訊息表格 + 明細 */}
       <div className="flex-1 min-h-0 flex">
         <div className="flex-1 min-w-0 overflow-auto">
-          <table className="w-full text-left mono">
+          <table className="text-left mono" style={{ tableLayout: "fixed", width: tableWidth() }}>
             <thead className="sticky top-0 bg-app text-fg/40">
               <tr>
-                <th className="px-2 py-1 font-normal">P</th>
-                <th className="px-2 py-1 font-normal">Offset</th>
-                <th className="px-2 py-1 font-normal">{t("時間")}</th>
-                <th className="px-2 py-1 font-normal">Key</th>
-                <th className="px-2 py-1 font-normal">Value</th>
+                {msgCols.map((c, ci) => (
+                  <th key={c} style={{ width: colWidth(ci) }}
+                    className="relative px-2 py-1 font-normal whitespace-nowrap overflow-hidden text-ellipsis">
+                    {c}
+                    <ColResizer onStart={(e) => startResize(ci, e)} onReset={() => resetCol(ci)} />
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -592,11 +606,11 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
                   onContextMenu={(e) => { e.preventDefault(); setSelected(m); setRowMenu({ m, x: e.clientX, y: e.clientY }); }}
                   className={`cursor-pointer border-b border-fg/5 hover:bg-fg/5 ${selected === m ? "bg-accent/10" : ""}`}
                 >
-                  <td className="px-2 py-1 text-fg/50">{m.partition}</td>
-                  <td className="px-2 py-1 text-fg/50">{m.offset}</td>
-                  <td className="px-2 py-1 text-fg/40 whitespace-nowrap">{fmtTs(m.timestamp)}</td>
-                  <td className="px-2 py-1 text-emerald-400/80 max-w-[160px] truncate" title={m.key ?? ""}>{m.key ?? ""}</td>
-                  <td className={`px-2 py-1 max-w-[420px] truncate ${projActive && isJsonLike(m) ? "text-cyan-300/80" : "text-fg/80"}`} title={cellValue(m)}>{cellValue(m)}</td>
+                  <td className="px-2 py-1 text-fg/50 truncate">{m.partition}</td>
+                  <td className="px-2 py-1 text-fg/50 truncate">{m.offset}</td>
+                  <td className="px-2 py-1 text-fg/40 truncate">{fmtTs(m.timestamp)}</td>
+                  <td className="px-2 py-1 text-emerald-400/80 truncate" title={m.key ?? ""}>{m.key ?? ""}</td>
+                  <td className={`px-2 py-1 truncate ${projActive && isJsonLike(m) ? "text-cyan-300/80" : "text-fg/80"}`} title={cellValue(m)}>{cellValue(m)}</td>
                 </tr>
               ))}
               {filtered.length === 0 && (
