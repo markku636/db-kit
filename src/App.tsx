@@ -375,13 +375,6 @@ export default function App() {
     return () => { clearTimeout(timer); window.removeEventListener("keydown", skip); };
   }, [splash]);
 
-  // 鎖定畫面（z-300）會直接蓋住開場動畫（z-200），播了也看不到 → 直接標記完成，
-  // 解鎖後也不再補播。
-  useEffect(() => {
-    if (lockState === "locked" && splash !== "done") onSplashDone();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lockState]);
-
   // 加密匯出所有連線（**含**密碼 / SSH 機密 / OTP，從 keychain 取出，用 passphrase 派生金鑰 AES-256-GCM 加密）。
   const exportConnections = async () => {
     const conns = useStore.getState().connections;
@@ -423,7 +416,10 @@ export default function App() {
         {splash !== "done" && (
           <SplashScreen leaving={splash === "leaving"} onDone={onSplashDone} onSkip={() => setSplash("leaving")} />
         )}
-        {lockState === "locked" && lockStatus && (
+        {/* 開場動畫播完才掛鎖定畫面：鎖定畫面（z-400）會蓋住開場動畫（z-200），同時掛載
+            等於把 banner 藏掉；而且它一掛載就會自動跳 OS 生物辨識提示，那顆 modal 一彈出
+            就沒人在看背景了。順序改成 banner → 鎖定 → 主介面，解鎖後直接進場不再等待。 */}
+        {lockState === "locked" && lockStatus && splash === "done" && (
           <LockScreen status={lockStatus} onUnlock={() => setLockState("open")} />
         )}
       </div>

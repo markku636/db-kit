@@ -14,7 +14,10 @@ import { api, type AppLockStatus, type BiometricStatus } from "./api";
 import { useT } from "./i18n";
 import { Button, Icon, Input } from "./ui/index";
 import { copyToClipboard } from "./ui";
-import logoMark from "./assets/db-kit-hero.png";
+// 識別標記用**方形** App 圖示，不是 hero banner：banner 是 1280×520，塞進 64×64 的圓角磚
+// 會被壓扁成一團看不出是什麼的色塊。直接引 src-tauri/icons 那份，`npm run make:app-icon`
+// 重產圖示時這裡自動跟上，不必再複製一份到 src/assets 等著和母檔漂移。
+import logoMark from "../src-tauri/icons/128x128.png";
 
 /** 生物辨識驗證的當下狀態。 */
 type BioPhase =
