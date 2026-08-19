@@ -4842,10 +4842,16 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     // 會撐破視窗（畫過狀態列）；鎖住後高度交給內層「結果」容器的 overflow-auto 捲動。
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
       <div className="shrink-0">
-        {/* flex-wrap：面板被側欄 / AI 助手夾窄時整列換行，而不是把左側的連線 / 資料庫壓扁。 */}
-        <div className="flex flex-wrap items-center justify-between gap-y-1 px-3 py-1.5 bg-bar">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-xs text-fg/40 shrink-0">{t("查詢")}</span>
+        {/* flex-wrap：面板被側欄 / AI 助手夾窄時整列換行，而不是把左側的連線 / 資料庫壓扁。
+            items-start（非 items-center）：右側工具列真的換成多列時，左側「查詢 / 連線 / 資料庫」
+            要對齊第一列 —— items-center 會把它垂直置中到多列正中間，看起來像散落在按鈕堆裡。 */}
+        <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 px-3 py-1.5 bg-bar">
+          {/* 本組每顆都是 shrink-0（連線 / 資料庫下拉縮到看不出連哪台就沒意義了），min-content ~500px：
+              沒有 flex-wrap 時面板再窄下去就直接裁掉尾端的資料庫下拉與快取徽章 —— 看不到也點不到。
+              與右組同一原則（絕不裁掉控制項），寬度不足時換行而非切掉。 */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            {/* 面板夠寬才留這個標題字：窄面板時它只是佔掉 ~38px，而分頁列上本來就寫著「查詢」。 */}
+            {!dense && <span className="text-xs text-fg/40 shrink-0">{t("查詢")}</span>}
             {runnableConns.length > 0 && (
               // 寬度下限給在「外層」：Select 的 className 是套在 <select> 上（w-full），
               // 真正被 flex 壓扁的是它的 relative 包層 —— 只寫 max-w 擋不住縮到看不出連哪台。
@@ -4917,8 +4923,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             <SchemaCacheBadge state={schemaState} />
           </div>
           {/* 保留 flex-wrap：barTier 靠「子元素有沒有換行」量測（見上方 measure），
-              放不下時先降階，降到底仍放不下才真的換行 —— 絕不裁掉按鈕。 */}
-          <div ref={tbRef} className="flex-1 min-w-0 flex flex-wrap justify-end items-center gap-x-1 gap-y-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap">
+              放不下時先降階，降到底仍放不下才真的換行 —— 絕不裁掉按鈕。
+
+              min-w-[15rem] 而非 min-w-0：左側那組（查詢標籤 / 連線 / 資料庫 / 跨庫 / 快取徽章）
+              每顆都是 shrink-0，min-content 就吃掉 ~450px。本組若允許縮到 0，外層永遠不會換行，
+              而是把整組壓成一條窄縫 —— 於是每顆鈕各佔一列，疊成五六列的高塔（降到 folded 也救不回：
+              能折進「更多」的只有 4 顆無下拉的鈕）。給下限後，寬度不足時改由「外層」把本組整組
+              換到下一列，拿到整排寬度、乾淨的兩列版面。 */}
+          <div ref={tbRef} className="flex-1 min-w-[15rem] flex flex-wrap justify-end items-center gap-x-1 gap-y-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap">
             <button type="button" onClick={openNodeScopedQueryTab}
               title={t("開新查詢分頁：依目前選取的連線 / 資料庫 / 資料表帶入範圍 · Ctrl+N")}
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
