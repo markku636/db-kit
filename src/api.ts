@@ -921,6 +921,30 @@ export interface ParsedUrl {
 }
 
 /**
+ * 加密匯出連線的範圍與機密政策（「進階匯出」對話框 → 後端 `conn_export::ExportScope`）。
+ * 欄位皆可省略；省略＝全部連線 + 全部機密。
+ *
+ * 注意：PROD 連線（`options.prod === "1"`）不受這裡的勾選影響 —— 後端一律抹掉它的
+ * 帳號與所有機密。匯出檔是可攜的密文，正式環境帳密不該進去。
+ */
+export interface ConnExportScope {
+  /** 只匯出這些連線 id；省略 / 空陣列＝全部。 */
+  ids?: string[];
+  include_password?: boolean;
+  /** SSH 密碼與私鑰 passphrase。 */
+  include_ssh?: boolean;
+  include_otp?: boolean;
+  /** 側欄群組歸屬；false＝匯入端視為未分組。 */
+  include_groups?: boolean;
+}
+
+/** 匯出結果：`redacted` = 其中因 PROD 規則被抹掉帳密的筆數。 */
+export interface ConnExportSummary {
+  count: number;
+  redacted: number;
+}
+
+/**
  * 此連線是否標記為正式環境（`options.prod`）。
  * 標記只影響 UI 防呆（查詢前確認、側欄標記），不改變任何連線 / 查詢行為。
  */
@@ -1043,9 +1067,10 @@ export const api = {
   setBiometricUnlock: (enabled: boolean, password: string | null) =>
     invoke<void>("set_biometric_unlock", { enabled, password }),
   setAutoLockMinutes: (minutes: number) => invoke<void>("set_auto_lock_minutes", { minutes }),
-  // 加密匯出 / 匯入連線（含密碼；passphrase 派生金鑰 + AES-256-GCM）。回傳筆數。
-  exportConnectionsEncrypted: (path: string, passphrase: string) =>
-    invoke<number>("export_connections_encrypted", { path, passphrase }),
+  // 加密匯出連線（passphrase 派生金鑰 + AES-256-GCM）。scope 省略＝全部連線 + 全部機密；
+  // PROD 連線的帳號密碼一律不會被帶出（後端 conn_export 硬規則，勾了也無效）。
+  exportConnectionsEncrypted: (path: string, passphrase: string, scope?: ConnExportScope) =>
+    invoke<ConnExportSummary>("export_connections_encrypted", { path, passphrase, scope: scope ?? null }),
   importConnectionsEncrypted: (path: string, passphrase: string) =>
     invoke<number>("import_connections_encrypted", { path, passphrase }),
   // 解析連線字串（mysql:// postgres:// mongodb+srv:// rediss:// sqlserver:// / ADO.NET 等）→ 填表用。

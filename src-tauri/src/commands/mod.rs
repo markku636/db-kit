@@ -606,55 +606,30 @@ pub async fn clear_startup_password(app: AppHandle, current: String) -> AppResul
     store::write_json(&app, store::APP_SETTINGS_FILE, &s).await
 }
 
-/// 加密匯出時的單筆連線（PersistedConnection + 從 keychain 取出的機密）。
-/// 只用於加密檔內部，不會以明文落地。
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ExportedConn {
-    #[serde(flatten)]
-    base: PersistedConnection,
-    #[serde(default)]
-    password: String,
-    #[serde(default)]
-    ssh_password: String,
-    #[serde(default)]
-    ssh_passphrase: String,
-    #[serde(default)]
-    otp_secret: String,
-}
-
-/// 加密匯出所有連線（**含**密碼 / SSH 機密 / OTP secret，從 keychain 取出），
-/// 以 passphrase 派生金鑰用 AES-256-GCM 加密整包寫入 path。回傳匯出筆數。
+/// 加密匯出連線（可選範圍與機密政策，見 `conn_export::ExportScope`）：從 keychain 取出勾選的
+/// 機密，以 passphrase 派生金鑰用 AES-256-GCM 加密整包寫入 path。回傳匯出筆數與
+/// 「因 PROD 規則被抹掉帳密」的筆數。
+///
+/// `scope` 省略 = 全部連線 + 全部機密（改版前的行為）。PROD 連線的帳密永遠不會被帶出，
+/// 這條規則在 `conn_export` 而不在此處——CLI 走同一份。
 #[tauri::command]
 pub async fn export_connections_encrypted(
     app: AppHandle,
     path: String,
     passphrase: String,
-) -> AppResult<usize> {
+    scope: Option<crate::conn_export::ExportScope>,
+) -> AppResult<crate::conn_export::ExportSummary> {
     if passphrase.is_empty() {
         return Err(AppError::Storage(t!("請提供 passphrase").into()));
     }
+    let scope = scope.unwrap_or_default();
     let conns = store::load_all(&app).await?;
-    let exported: Vec<ExportedConn> = conns
-        .into_iter()
-        .map(|c| {
-            let id = c.id.clone();
-            ExportedConn {
-                password: store::kc_get(&id).unwrap_or_default(),
-                ssh_password: store::kc_get(&store::ssh_account(&id)).unwrap_or_default(),
-                ssh_passphrase: store::kc_get(&store::ssh_passphrase_account(&id)).unwrap_or_default(),
-                otp_secret: store::kc_get(&store::otp_account(&id)).unwrap_or_default(),
-                base: c,
-            }
-        })
-        .collect();
-    let count = exported.len();
-    let plain = serde_json::to_vec(&exported)
-        .map_err(|e| AppError::Storage(tf!("序列化失敗：{e}", e = e)))?;
-    let blob = crate::conn_crypto::encrypt(&plain, &passphrase)?;
-    tokio::fs::write(&path, blob)
-        .await
-        .map_err(|e| AppError::Storage(tf!("寫入失敗：{e}", e = e)))?;
-    Ok(count)
+    let (exported, summary) = crate::conn_export::build(conns, &scope);
+    if summary.count == 0 {
+        return Err(AppError::Storage(t!("沒有可匯出的連線").into()));
+    }
+    crate::conn_export::write_encrypted(&path, &passphrase, &exported).await?;
+    Ok(summary)
 }
 
 /// 從加密檔匯入連線：以 passphrase 解密後，機密寫回 keychain、設定 upsert。回傳匯入筆數。
@@ -668,11 +643,23 @@ pub async fn import_connections_encrypted(
         .await
         .map_err(|e| AppError::Storage(tf!("讀取失敗：{e}", e = e)))?;
     let plain = crate::conn_crypto::decrypt(&blob, &passphrase)?;
-    let exported: Vec<ExportedConn> = serde_json::from_slice(&plain)
+    let exported: Vec<crate::conn_export::ExportedConn> = serde_json::from_slice(&plain)
         .map_err(|_| AppError::Storage(t!("解密成功但內容格式不符（檔案可能來自不同版本）").into()))?;
     let count = exported.len();
-    for e in exported {
+    // 匯出端可能刻意沒帶帳號（PROD 硬規則）或沒帶某類機密：空值一律解讀成「這次沒帶」，
+    // 不是「請清空」。機密靠下面逐項的 is_empty 判斷跳過，帳號則要拿本機既有值補回 ——
+    // 否則匯入一份 PROD 匯出檔，會把本機早就填好的帳號抹掉。
+    let existing = store::load_all(&app).await.unwrap_or_default();
+    for mut e in exported {
         let id = e.base.id.clone();
+        if let Some(prev) = existing.iter().find(|c| c.id == id) {
+            if e.base.username.is_empty() {
+                e.base.username = prev.username.clone();
+            }
+            if e.base.ssh_username.is_empty() {
+                e.base.ssh_username = prev.ssh_username.clone();
+            }
+        }
         if !e.password.is_empty() {
             store::kc_set(&id, &e.password)?;
         }

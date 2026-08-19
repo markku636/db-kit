@@ -4,7 +4,7 @@
 use crate::db::{DataQuery, DbKind, Filter, KeyEdit, RowInsert, SearchOptions, Sort, SortDir};
 use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
-use crate::store::{self, PersistedConnection};
+use crate::store;
 
 use super::args::{
     Cli, Command, ConnArgs, ConnCmd, DbCmd, ExportArgs, Format, RedisCmd, RoutineCmd, SearchArgs,
@@ -640,45 +640,22 @@ async fn conn_list(fmt: Format) -> AppResult<()> {
     Ok(())
 }
 
-/// 與 GUI `export_connections_encrypted` 同檔格式（flatten base + 4 個 keychain 機密），可被 GUI 匯入。
-#[derive(serde::Serialize)]
-struct ExportedConn {
-    #[serde(flatten)]
-    base: PersistedConnection,
-    password: String,
-    ssh_password: String,
-    ssh_passphrase: String,
-    otp_secret: String,
-}
-
+/// 加密匯出全部連線。檔格式與機密政策都走 `conn_export`（與 GUI「進階匯出」同一份），
+/// 所以 PROD 連線在 CLI 這條路徑同樣不帶帳號密碼 —— 不會出現「GUI 擋住、CLI 繞過」。
 async fn conn_export(path: &str, passphrase: &str) -> AppResult<()> {
     if passphrase.is_empty() {
         return Err(AppError::Storage(t!("請提供 --passphrase").into()));
     }
     let dir = store::headless_config_dir()?;
     let conns = store::load_all_in(&dir).await?;
-    let exported: Vec<ExportedConn> = conns
-        .into_iter()
-        .map(|c| {
-            let id = c.id.clone();
-            ExportedConn {
-                password: store::kc_get(&id).unwrap_or_default(),
-                ssh_password: store::kc_get(&store::ssh_account(&id)).unwrap_or_default(),
-                ssh_passphrase: store::kc_get(&store::ssh_passphrase_account(&id))
-                    .unwrap_or_default(),
-                otp_secret: store::kc_get(&store::otp_account(&id)).unwrap_or_default(),
-                base: c,
-            }
-        })
-        .collect();
-    let count = exported.len();
-    let plain = serde_json::to_vec(&exported)
-        .map_err(|e| AppError::Storage(tf!("序列化失敗：{e}", e = e)))?;
-    let blob = crate::conn_crypto::encrypt(&plain, passphrase)?;
-    tokio::fs::write(path, blob)
-        .await
-        .map_err(|e| AppError::Storage(tf!("寫入失敗：{e}", e = e)))?;
+    let (exported, summary) = crate::conn_export::build(conns, &Default::default());
+    crate::conn_export::write_encrypted(path, passphrase, &exported).await?;
+    let count = summary.count;
     println!("{}", tf!("已加密匯出 {count} 筆連線到 {path}", count = count, path = path));
+    if summary.redacted > 0 {
+        let n = summary.redacted;
+        println!("{}", tf!("其中 {n} 筆是 PROD 連線，一律不含帳號與密碼", n = n));
+    }
     Ok(())
 }
 

@@ -68,6 +68,7 @@ import {
 //      首包只留 App shell + TableView + InfoPanel/AssistantPanel。CodeMirror 全家桶
 //      隨 SqlEditor / MongoQueryEditor 的 chunk 延後載入（manualChunks 見 vite.config.ts）。----
 const ConnectionDialog = lazyOverlay(() => import("./ConnectionDialog"));
+const ExportConnectionsDialog = lazyOverlay(() => import("./ExportConnectionsDialog"));
 const BackupDialog = lazyOverlay(() => import("./BackupDialog"));
 const ErDiagram = lazyOverlay(() => import("./ErDiagram"));
 const RedisStatus = lazyOverlay(() => import("./RedisStatus"));
@@ -231,6 +232,9 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 進階匯出連線（逐筆選連線 + 逐類選機密）。每次開啟都是全新狀態：路徑不記憶，
+  // 必須現選 —— 見 ExportConnectionsDialog 檔頭。
+  const [exportConnsOpen, setExportConnsOpen] = useState(false);
   // 啟動鎖定閘門：checking（查詢中）→ locked（需驗證）/ open（已解鎖或未設鎖）。
   const [lockState, setLockState] = useState<"checking" | "locked" | "open">("checking");
   // 鎖定設定（密碼 / 生物辨識 / 閒置分鐘數）。鎖定畫面要據此決定顯示哪幾種解法。
@@ -252,7 +256,7 @@ export default function App() {
     try { sessionStorage.setItem("dbkit:splashed", "1"); } catch {}
     setSplash("done");
   };
-  const { connections, connectedIds, activeId } = useStore();
+  const { connections, connGroups, connectedIds, activeId } = useStore();
   const savedMgr = useStore((s) => s.savedMgr);
   const activeConn = connections.find((c) => c.id === activeId) ?? null;
   // 左側連線樹寬度：可拖曳分隔線調整，記憶於 localStorage。
@@ -375,23 +379,11 @@ export default function App() {
     return () => { clearTimeout(timer); window.removeEventListener("keydown", skip); };
   }, [splash]);
 
-  // 加密匯出所有連線（**含**密碼 / SSH 機密 / OTP，從 keychain 取出，用 passphrase 派生金鑰 AES-256-GCM 加密）。
-  const exportConnections = async () => {
-    const conns = useStore.getState().connections;
-    if (conns.length === 0) { toast.info(t("沒有可匯出的連線")); return; }
-    const passphrase = await uiPrompt(t("設定匯出檔的加密密碼（passphrase）"), {
-      title: t("加密匯出連線"), placeholder: t("至少 8 碼，匯入時需輸入相同密碼"), confirmText: t("匯出"),
-    });
-    if (!passphrase) return;
-    if (passphrase.length < 8) { toast.error(t("passphrase 至少 8 碼")); return; }
-    const path = await pickSaveFile("db-kit-connections.dbkitenc", [{ name: t("db-kit 加密連線"), extensions: ["dbkitenc"] }]);
-    if (!path) return;
-    try {
-      const n = await api.exportConnectionsEncrypted(path, passphrase);
-      toast.success(t("已加密匯出 {n} 個連線（含密碼）", { n }));
-    } catch (e: any) {
-      toast.error(e?.message ?? t("匯出失敗"));
-    }
+  // 加密匯出連線：範圍（哪些連線）、機密類別、passphrase、輸出路徑全部在 ExportConnectionsDialog
+  // 內決定 —— 這裡只做「有沒有東西可匯出」的前置檢查。
+  const exportConnections = () => {
+    if (useStore.getState().connections.length === 0) { toast.info(t("沒有可匯出的連線")); return; }
+    setExportConnsOpen(true);
   };
   // 從加密檔匯入連線：輸入 passphrase 解密，機密寫回 keychain、設定 upsert，再重載連線清單。
   const importConnections = async () => {
@@ -491,6 +483,13 @@ export default function App() {
       )}
       {advSearch && (
         <AdvancedSearchDialog connId={advSearch.connId} kind={advSearch.kind} onClose={() => setAdvSearch(null)} />
+      )}
+      {exportConnsOpen && (
+        <ExportConnectionsDialog
+          connections={connections}
+          groups={connGroups}
+          onClose={() => setExportConnsOpen(false)}
+        />
       )}
       {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}

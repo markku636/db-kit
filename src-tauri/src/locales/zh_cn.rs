@@ -67,6 +67,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "已匯出 {rows} 列到 {path}（{bytes} bytes，{format} 格式）" => "已导出 {rows} 行到 {path}（{bytes} bytes，{format} 格式）",
         "請提供 --passphrase" => "请提供 --passphrase",
         "已加密匯出 {count} 筆連線到 {path}" => "已加密导出 {count} 笔连接到 {path}",
+        "其中 {n} 筆是 PROD 連線，一律不含帳號與密碼" => "其中 {n} 笔是 PROD 连接，一律不含账号与密码",
+        "沒有可匯出的連線" => "没有可导出的连接",
         "篩選格式錯誤（應為 col:op[:value]）：{spec}" => "筛选格式错误（应为 col:op[:value]）：{spec}",
         "不支援的篩選運算子：{op}" => "不支持的筛选操作符：{op}",
         "排序格式錯誤（應為 col:asc|desc）：{spec}" => "排序格式错误（应为 col:asc|desc）：{spec}",
