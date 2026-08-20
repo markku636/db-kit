@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ListTree, Table2, Plus, Minus, BarChart3, Network, Settings, Terminal,
   RefreshCw, Search, Filter, Trash2, ArrowUpDown, Download, Upload, X, Check,
@@ -320,17 +320,22 @@ function DataPane({ tab }: { tab: OpenTab }) {
     return () => window.removeEventListener("keydown", h);
   }, [cellMenu, colMenu, refChooser]);
 
+  // 拖曳中的欄名；供下方 layout effect 把被拖的界線留在可視範圍內。
+  const resizingCol = useRef<string | null>(null);
+
   // 拖曳表頭右緣調整欄寬（在 window 上掛 move/up，拖出表頭也能追蹤）。
   const startResize = (col: string, e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
     const startW = colWidth(col);
+    resizingCol.current = col;
     const onMove = (ev: PointerEvent) => {
       const next = Math.max(MIN_COL_W, startW + (ev.clientX - startX));
       setWidths((w) => ({ ...w, [col]: next }));
     };
     const onUp = () => {
+      resizingCol.current = null;
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       document.body.style.cursor = "";
@@ -349,6 +354,22 @@ function DataPane({ tab }: { tab: OpenTab }) {
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   };
+
+  // 拖曳中讓被拖的欄界線保持在可視範圍內（等同 Excel / Navicat 拖到邊緣會自動捲動）。
+  // 少了這段，最後一欄一旦被拉寬到超出格子寬度，它的右緣就被推到格子外（右側面板底下），
+  // 把手再也抓不到 —— 該欄等於只能調整一次、之後完全動不了。
+  useLayoutEffect(() => {
+    const col = resizingCol.current;
+    const grid = gridRef.current;
+    if (!col || !grid) return;
+    const th = [...grid.querySelectorAll<HTMLElement>("thead th[data-col]")].find((el) => el.dataset.col === col);
+    if (!th) return;
+    const gr = grid.getBoundingClientRect();
+    const edge = th.getBoundingClientRect().right;
+    const clientRight = gr.left + grid.clientWidth; // clientWidth 已扣掉垂直捲軸
+    if (edge > clientRight) grid.scrollLeft += edge - clientRight;
+    else if (edge < gr.left) grid.scrollLeft -= gr.left - edge;
+  }, [widths]);
 
   // 雙擊欄分隔線：依內容自動調整欄寬（致敬 Navicat / TablePlus 的 auto-fit）。
   // 以 canvas 量測表頭與目前頁各儲存格文字寬度，取最大值（含內距，夾在 [MIN, 600]）。
@@ -1536,6 +1557,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
                     <th
                       key={c}
                       scope="col"
+                      data-col={c}
                       tabIndex={0}
                       {...(dir ? { "aria-sort": dir === "asc" ? "ascending" : "descending" } : {})}
                       onClick={(e) => toggleSort(c, e.shiftKey)}
@@ -1566,7 +1588,23 @@ function DataPane({ tab }: { tab: OpenTab }) {
                     </th>
                   );
                 })}
-                {editable && <th className="w-8 border-b border-fg/10" />}
+                {editable && (
+                  <th className="relative w-8 border-b border-fg/10">
+                    {/* 最後一欄的界線也能從操作欄這側抓：原本只有 6px 又緊貼刪除鈕欄，很難瞄準 */}
+                    {visibleCols.length > 0 && (() => {
+                      const lastVis = visibleCols[visibleCols.length - 1];
+                      return (
+                        <span
+                          onPointerDown={(e) => startResize(lastVis.name, e)}
+                          onClick={(e) => e.stopPropagation()}
+                          onDoubleClick={(e) => { e.stopPropagation(); autoFitColumn(lastVis.name, lastVis.j); }}
+                          title={t("拖曳調整欄寬；雙擊自動符合內容")}
+                          className="absolute left-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-accent/50"
+                        />
+                      );
+                    })()}
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="mono">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useT } from "../i18n";
 
 // 表格欄寬共用邏輯：查詢結果格、處理程序、伺服器查詢、Routine 執行結果、Kafka 訊息表共用。
@@ -55,17 +55,34 @@ export function useColWidths(
   /** 表格總寬 = 各欄寬總和 + 固定欄（列號 / 操作鈕等）的 extra px。 */
   const tableWidth = (extra = 0) => extra + columns.reduce((a, _c, ci) => a + colWidth(ci), 0);
 
+  // 拖曳中的表頭格；供下方 layout effect 把被拖的界線留在可視範圍內。
+  const dragTh = useRef<HTMLElement | null>(null);
+  // 拖曳中自動水平捲動，讓被拖的界線不會被推出捲動容器外（等同 Excel / Navicat 的行為）。
+  // 少了這段，最後一欄一旦被拉寬到超出容器，它的右緣就落在容器外、把手再也抓不到。
+  useLayoutEffect(() => {
+    const th = dragTh.current;
+    const sc = th && scrollParentX(th);
+    if (!th || !sc) return;
+    const sr = sc.getBoundingClientRect();
+    const edge = th.getBoundingClientRect().right;
+    const clientRight = sr.left + sc.clientWidth; // clientWidth 已扣掉垂直捲軸
+    if (edge > clientRight) sc.scrollLeft += edge - clientRight;
+    else if (edge < sr.left) sc.scrollLeft -= sr.left - edge;
+  }, [overrides]);
+
   // 拖曳表頭右緣調整（move/up 掛在 window 上，拖出表頭也能追蹤）。
   const startResize = (ci: number, e: ReactPointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
     const startW = colWidth(ci);
+    dragTh.current = (e.currentTarget as HTMLElement).closest("th");
     const onMove = (ev: PointerEvent) => {
       const next = Math.max(COL_MIN_W, startW + (ev.clientX - startX));
       setOverrides((w) => ({ ...w, [ci]: next }));
     };
     const onUp = () => {
+      dragTh.current = null;
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       document.body.style.cursor = "";
@@ -80,6 +97,15 @@ export function useColWidths(
     setOverrides((w) => { const nw = { ...w }; delete nw[ci]; return nw; });
 
   return { colWidth, tableWidth, startResize, resetCol };
+}
+
+/** 往上找最近的水平捲動容器（拖曳欄寬時要靠它把界線捲回可視範圍）。 */
+function scrollParentX(el: HTMLElement): HTMLElement | null {
+  for (let n = el.parentElement; n; n = n.parentElement) {
+    const ox = getComputedStyle(n).overflowX;
+    if (ox === "auto" || ox === "scroll") return n;
+  }
+  return null;
 }
 
 /** 表頭右緣的拖曳把手：掛在 position:relative 的 <th> 內；點擊不冒泡（不誤觸表頭排序）。 */
