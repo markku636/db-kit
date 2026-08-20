@@ -3707,6 +3707,9 @@ const queryDbStoreKey = (id: string) => `db-kit:queryDb:${id}`;
 // 「跨庫」預載清單 per-連線 持久化：常態跨庫的人一次選好，開檔即有 `other_db.` 的提示。
 // 沒選也不影響——打 `other_db.` 時會按需載入（見 SqlEditor 的 cross.onNeedDatabase）。
 const queryExtraDbsStoreKey = (id: string) => `db-kit:queryExtraDbs:${id}`;
+// 查詢工具列「左組」（「查詢」/「跨庫」兩個文字標籤）在外層列窄於此寬度時只留圖示與下拉。
+// 判準是**外層列寬**而不是 barTier —— 理由見 rowNarrow 的註解（綁 barTier 會炸整個 app）。
+const QUERY_ROW_LABEL_MIN_W = 720;
 function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefined, tabId = "__query__"): string {
   if (id) {
     try {
@@ -3945,6 +3948,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const tbRef = useRef<HTMLDivElement>(null);
   const [barTier, setBarTier] = useState(0);
   const tierNeedRef = useRef<[number, number]>([0, 0]);
+  // 震盪保險（見下方 measure 的 flipRef 註解）。
+  const flipRef = useRef(0);
   // 換語言 / 換連線種類 → 按鈕組成與標籤長度都變了，先前記住的需求寬度失效，重量一次。
   useLayoutEffect(() => { tierNeedRef.current = [0, 0]; setBarTier(0); }, [t, kind]);
   useLayoutEffect(() => {
@@ -3960,13 +3965,27 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       // 容差 12px：分隔線有 my-1，offsetTop 天生比按鈕差 4px，真正換行則差一整個列高（≈26px）。
       const tops = kids.map((k) => k.offsetTop);
       const wrapped = Math.max(...tops) - Math.min(...tops) > 12;
+      // 震盪保險：連續 8 次量測都在改階就停手。正常情況一次縮放最多跨一兩階，而且中間必然
+      // 夾著「這次不用改」的量測（每改一階本效果就重跑一次）→ 計數歸零，這道保險不會誤觸。
+      // 唯一會撞上限的情形是「階數反過來影響本組可用寬度」的餵食迴圈（rowNarrow 的註解講的
+      // 就是這件事）。那時寧可停在某一階、版面稍微不理想，也不要把 React 撞上 nested update
+      // 上限（Minified React error #185）讓整個 app 死在錯誤邊界上。
+      const bump = () => (flipRef.current += 1) <= 8;
       if (wrapped && barTier < 2) {
+        if (!bump()) return;
         tierNeedRef.current[barTier] = el.clientWidth; // 這個寬度裝不下本階
         setBarTier((n) => Math.min(2, n + 1));
       } else if (!wrapped && barTier > 0) {
         const need = tierNeedRef.current[barTier - 1];
         // 嚴格大於：等於當初裝不下的寬度就升回去會立刻再降，卡在震盪。
-        if (need && el.clientWidth > need) setBarTier((n) => Math.max(0, n - 1));
+        if (need && el.clientWidth > need) {
+          if (!bump()) return;
+          setBarTier((n) => Math.max(0, n - 1));
+        } else {
+          flipRef.current = 0;
+        }
+      } else {
+        flipRef.current = 0; // 這次量測不用改階＝版面已穩定
       }
     };
     measure();
@@ -3974,6 +3993,27 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     ro.observe(el);
     return () => ro.disconnect();
   }, [barTier, t, kind]);
+  // 左組（「查詢」/「跨庫」文字標籤）的收放**不可以**綁 barTier。
+  //
+  // barTier 是「右組有沒有換行」的量測結果，而左右兩組在同一個 flex 列裡搶同一份寬度：
+  // 收掉左組的兩個標籤 → 右組多拿約 66px → 不再換行 → 升回上一階 → 標籤又出現 → 又換行…
+  // 兩個 layout effect 互相餵食，同步巢狀更新一路累積到 React 的上限，整頁掛在錯誤邊界上
+  // （Minified React error #185：Maximum update depth exceeded）。實測面板寬約 1180px 時
+  // 每次選連線都必炸。
+  //
+  // 改以「外層列的寬度」為判準：它由面板寬度（側欄 / AI 助手 / 視窗）決定，與 barTier 無關，
+  // 迴圈從結構上就不存在；而且 setRowNarrow 存的是布林值，值沒變 React 直接 bail out。
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [rowNarrow, setRowNarrow] = useState(false);
+  useLayoutEffect(() => {
+    const el = rowRef.current;
+    if (!el) return;
+    const measure = () => setRowNarrow(el.clientWidth < QUERY_ROW_LABEL_MIN_W);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   // dense：次要按鈕的文字標籤退到 title tooltip；folded：沒有下拉面板的次要按鈕整顆折進「更多」。
   // 擁有下拉面板者（歷史 / 收藏 / 片段）不折 —— 把一整片面板塞進選單項只會更難用。
   const dense = barTier >= 1;
@@ -4844,13 +4884,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         {/* flex-wrap：面板被側欄 / AI 助手夾窄時整列換行，而不是把左側的連線 / 資料庫壓扁。
             items-start（非 items-center）：右側工具列真的換成多列時，左側「查詢 / 連線 / 資料庫」
             要對齊第一列 —— items-center 會把它垂直置中到多列正中間，看起來像散落在按鈕堆裡。 */}
-        <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 px-3 py-1.5 bg-bar">
+        <div ref={rowRef} className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 px-3 py-1.5 bg-bar">
           {/* 本組每顆都是 shrink-0（連線 / 資料庫下拉縮到看不出連哪台就沒意義了），min-content ~500px：
               沒有 flex-wrap 時面板再窄下去就直接裁掉尾端的資料庫下拉與快取徽章 —— 看不到也點不到。
               與右組同一原則（絕不裁掉控制項），寬度不足時換行而非切掉。 */}
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
-            {/* 面板夠寬才留這個標題字：窄面板時它只是佔掉 ~38px，而分頁列上本來就寫著「查詢」。 */}
-            {!dense && <span className="text-xs text-fg/40 shrink-0">{t("查詢")}</span>}
+            {/* 面板夠寬才留這個標題字：窄面板時它只是佔掉 ~38px，而分頁列上本來就寫著「查詢」。
+                判準用 rowNarrow（外層列寬）而非 dense（barTier）—— 見 rowNarrow 的註解。 */}
+            {!rowNarrow && <span className="text-xs text-fg/40 shrink-0">{t("查詢")}</span>}
             {runnableConns.length > 0 && (
               // 寬度下限給在「外層」：Select 的 className 是套在 <select> 上（w-full），
               // 真正被 flex 壓扁的是它的 relative 包層 —— 只寫 max-w 擋不住縮到看不出連哪台。
@@ -4899,7 +4940,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                   className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 ${
                     extraDbs.length > 0 ? "text-accent" : "text-fg/70"}`}>
                   <Icon icon={Layers} size={13} />
-                  {!dense && t("跨庫")}{extraDbs.length > 0 ? `（${extraDbs.length}）` : ""}
+                  {!rowNarrow && t("跨庫")}{extraDbs.length > 0 ? `（${extraDbs.length}）` : ""}
                 </button>
                 {showExtraDbs && (
                   <>
