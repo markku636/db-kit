@@ -17,7 +17,7 @@ import KafkaTopicConfig from "./KafkaTopicConfig";
 import RabbitMqQueueBrowser from "./RabbitMqQueueBrowser";
 import RabbitMqQueueDetail from "./RabbitMqQueueDetail";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
-import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, TYPE_PRESETS } from "./sql";
+import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, isJsonColumnType, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
@@ -259,18 +259,25 @@ function DataPane({ tab }: { tab: OpenTab }) {
   }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
 
   // 欄位 comment：欄名 → COLUMN_COMMENT（供表頭 hover 顯示欄位說明，致敬 Navicat）。僅 SQL 資料表 + 資料分頁時載入。
+  // 同一份 tableColumns 順手記下宣告型別（欄名 → data_type，小寫），供 JSON 欄位開窗自動格式化判斷。
   const [commentMap, setCommentMap] = useState<Record<string, string>>({});
+  const [typeMap, setTypeMap] = useState<Record<string, string>>({});
   useEffect(() => {
-    if (!isSqlKind || tab.view !== "data") { setCommentMap({}); return; }
+    if (!isSqlKind || tab.view !== "data") { setCommentMap({}); setTypeMap({}); return; }
     let alive = true;
     api.tableColumns(tab.connId, tab.database, tab.table)
       .then((cols) => {
         if (!alive) return;
         const m: Record<string, string> = {};
-        for (const col of cols) if (col.comment) m[col.name] = col.comment;
+        const tm: Record<string, string> = {};
+        for (const col of cols) {
+          if (col.comment) m[col.name] = col.comment;
+          tm[col.name] = (col.data_type ?? "").toLowerCase();
+        }
         setCommentMap(m);
+        setTypeMap(tm);
       })
-      .catch(() => { if (alive) setCommentMap({}); });
+      .catch(() => { if (alive) { setCommentMap({}); setTypeMap({}); } });
     return () => { alive = false; };
   }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
 
@@ -867,6 +874,20 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const k = connKind ?? "mysql";
     copyToClipboard(buildRowSelect(k, tab.table, data.primary_key, pkValuesOf(r)), t("已複製為 SELECT"));
   };
+  // 產生「只改這一欄」的 UPDATE 腳本，開一個新查詢分頁承接（不直接寫入、也不蓋掉別的分頁）。
+  // 刻意不受 editable 限制：唯讀連線（qland 正式環境）正是最需要腳本的情境——自己不能改，
+  // 但要把一份可執行的 SQL 交出去。真要執行時仍會被唯讀連線的防護擋下。
+  // text 可指定（儲存格檢視器裡排版 / 改過的內容），未給則用目前格內的值。
+  const cellUpdateScript = (r: number, c: number, text?: string | null) => {
+    if (!data || !connKind) return;
+    const sql = buildCellUpdate(
+      connKind, tab.database, tab.table, data.columns[c],
+      text === undefined ? cellValue(r, c) : text,
+      data.primary_key, pkValuesOf(r),
+    );
+    useStore.getState().newQueryTab(sql, tab.connId);
+    toast.success(t("已產生 UPDATE 腳本（新查詢分頁）"));
+  };
   const duplicateRow = (r: number) => {
     if (!data) return;
     const vals = rowValues(r);
@@ -925,7 +946,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
       ...(isSqlKind ? [[t("複製為 INSERT"), () => copyRowInsert(r), false] as [string, () => void, boolean]] : []),
       // SELECT（定位此列）：需主鍵但唯讀安全，唯讀連線也提供。
       ...(isSqlKind && (data?.primary_key.length ?? 0) > 0
-        ? [[t("複製為 SELECT（定位此列）"), () => copyRowSelect(r), false] as [string, () => void, boolean]]
+        ? [
+            [t("複製為 SELECT（定位此列）"), () => copyRowSelect(r), false] as [string, () => void, boolean],
+            // UPDATE 腳本（只改這一欄）：帶到查詢編輯器，不直接寫入，故與 SELECT 同一層開放。
+            [t("產生 UPDATE 腳本（僅此欄）"), () => cellUpdateScript(r, c), false] as [string, () => void, boolean],
+          ]
         : []),
       // UPDATE / DELETE 範本需主鍵定位。
       ...(isSqlKind && editable
@@ -1964,7 +1989,12 @@ function DataPane({ tab }: { tab: OpenTab }) {
           column={data.columns[inspect.c]}
           value={cellValue(inspect.r, inspect.c)}
           editable={editable}
+          autoFormat={isJsonColumnType(typeMap[data.columns[inspect.c]])}
           onSave={(raw, setNull) => commitEdit(inspect.r, inspect.c, raw, setNull)}
+          // 需主鍵定位才生得出 WHERE；唯讀連線同樣提供（只是產生腳本，不寫入）。
+          onScript={isSqlKind && connKind && data.primary_key.length > 0
+            ? (text) => cellUpdateScript(inspect.r, inspect.c, text)
+            : undefined}
           onClose={() => setInspect(null)}
         />
       )}
@@ -2226,23 +2256,67 @@ function RowField({ value, onSave }: { value: string | null; onSave: (raw: strin
   );
 }
 
-// 儲存格內容檢視器：檢視 / 編輯長文字、JSON、二進位預覽。可一鍵格式化 JSON、複製。
-export function CellInspector({ column, value, editable, onSave, onClose, showFormat = true }: {
+// 儲存格內容檢視器：檢視 / 編輯長文字、JSON、二進位預覽。可切換 JSON 排版、複製、產生 UPDATE 腳本。
+export function CellInspector({ column, value, editable, onSave, onClose, onScript, showFormat = true, autoFormat = false }: {
   column: string;
   value: string | null;
   editable: boolean;
   onSave: (raw: string, setNull: boolean) => void;
   onClose: () => void;
+  // 由呼叫端（知道表 / 主鍵的那一層）把目前內容變成 UPDATE 腳本。未給則不顯示該按鈕。
+  onScript?: (text: string) => void;
   // 是否顯示「格式化 JSON」（DDL 檢視等情境關閉）。
   showFormat?: boolean;
+  // 開窗即自動縮排 JSON。由呼叫端確認「這欄就是 JSON」（宣告型別 json / jsonb）或唯讀情境時才開：
+  // 否則 VARCHAR 裡的緊湊 JSON 被擅自排版，使用者一改就把縮排寫回去，可能撞欄位長度上限。
+  autoFormat?: boolean;
 }) {
   const t = useT();
-  const [text, setText] = useState(value ?? "");
-  const dirty = editable && text !== (value ?? "");
+  // 初始內容：autoFormat 時把 JSON 物件 / 陣列先排好版，省去每次手動按「格式化 JSON」。
+  // 純量（數字 / 字串 / true）與非合法 JSON 維持原文；要看原始單行內容按 footer 的「原始格式」。
+  const initial = useMemo(
+    () => (autoFormat ? prettyJsonIfStructured(value ?? "") : value ?? ""),
+    [value, autoFormat],
+  );
+  const [text, setText] = useState(initial);
+  // 與 initial（可能已自動排版）比對：單純的自動排版不算「未套用的編輯」，套用變更仍維持 disabled。
+  const dirty = editable && text !== initial;
   useModalOverlay(onClose); // 計入 modalCount + 視窗層級 Esc（不再僅靠 textarea 聚焦才能 Esc）
-  const formatJson = () => {
+  // 文字選取範圍（onSelect 同步）：整格值動輒上千字元，多半只想要其中一段（某個 JSON key 的值、
+  // 一段 URL、一組 ID）。有選取時「複製」只給選取片段，沒選取才退回整格。
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [sel, setSel] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
+  const syncSel = () => {
+    const el = taRef.current;
+    if (el) setSel({ start: el.selectionStart, end: el.selectionEnd });
+  };
+  // 內容被改寫（格式化 / 編輯）後舊索引可能越界 → 夾在 text.length 內再算長度。
+  const selStart = Math.min(sel.start, text.length);
+  const selEnd = Math.min(sel.end, text.length);
+  const selLen = selEnd - selStart;
+  const hasSel = selLen > 0;
+  const doCopy = () => {
+    if (hasSel) copyToClipboard(text.slice(selStart, selEnd), t("已複製選取的 {n} 字元", { n: selLen }));
+    else copyToClipboard(text, t("已複製"));
+  };
+  // 目前內容是「已縮排的 JSON」還是「單行原始 JSON」：決定同一顆按鈕是要格式化還是切回原始。
+  // 非結構化（純量 / 不是合法 JSON）回 null——按鈕維持「格式化 JSON」，按下去照舊提示不是有效的 JSON。
+  const jsonMode = useMemo<"pretty" | "compact" | null>(() => {
     try {
-      setText(JSON.stringify(JSON.parse(text), null, 2));
+      const parsed: unknown = JSON.parse(text);
+      if (parsed === null || typeof parsed !== "object") return null;
+      return text === JSON.stringify(parsed) ? "compact" : "pretty";
+    } catch {
+      return null;
+    }
+  }, [text]);
+  // 雙向切換：縮排 ↔ 單行。兩個方向都以「目前內容」為準，所以編輯過的內容不會被丟掉
+  // （切回原始 ≠ 還原編輯；要放棄編輯照舊按「關閉」）。
+  const toggleJson = () => {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      setText(jsonMode === "pretty" ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2));
+      setSel({ start: 0, end: 0 }); // 全文重排，舊選取位置已無意義
     } catch {
       toast.error(t("不是有效的 JSON"));
     }
@@ -2261,7 +2335,9 @@ export function CellInspector({ column, value, editable, onSave, onClose, showFo
           <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
         <div className="p-4 flex-1 overflow-auto">
-          <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)}
+          <textarea autoFocus ref={taRef} value={text}
+            onChange={(e) => { setText(e.target.value); syncSel(); }}
+            onSelect={syncSel} onMouseUp={syncSel} onKeyUp={syncSel}
             readOnly={!editable} title={editable ? t("儲存格內容（Ctrl+Enter 套用）") : t("儲存格內容")}
             onKeyDown={(e) => {
               if (e.key === "Escape") onClose();
@@ -2271,11 +2347,23 @@ export function CellInspector({ column, value, editable, onSave, onClose, showFo
         </div>
         <div className="px-5 py-3 border-t border-fg/10 flex items-center gap-2">
           {showFormat && (
-            <button type="button" onClick={formatJson}
-              className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("格式化 JSON")}</button>
+            <button type="button" onClick={toggleJson}
+              title={jsonMode === "pretty" ? t("切回單行原始格式（資料庫存的樣子）") : t("縮排排版，方便閱讀")}
+              className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">
+              {jsonMode === "pretty" ? t("原始格式") : t("格式化 JSON")}
+            </button>
           )}
-          <button type="button" onClick={() => copyToClipboard(text, t("已複製"))}
-            className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("複製")}</button>
+          {/* onMouseDown preventDefault：不讓按鈕搶走焦點，textarea 的選取才不會在按下的瞬間被清掉。 */}
+          <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={doCopy}
+            title={hasSel ? t("只複製選取的 {n} 字元（取消選取則複製整格）", { n: selLen }) : t("複製整格內容（先在內容中選取一段，就只複製那一段）")}
+            className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">
+            {hasSel ? t("複製選取") : t("複製")}
+          </button>
+          {onScript && (
+            <button type="button" onClick={() => { onScript(text); onClose(); }}
+              title={t("以目前內容產生 UPDATE 腳本，送到查詢編輯器（不直接寫入資料庫）")}
+              className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("產生 UPDATE 腳本")}</button>
+          )}
           <div className="ml-auto flex gap-2">
             {editable && (
               <button type="button" onClick={() => { onSave("", true); onClose(); }}

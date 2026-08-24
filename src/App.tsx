@@ -5,7 +5,9 @@ import { useTheme } from "./theme";
 import { LANGUAGES, useLang, useT, type Lang } from "./i18n";
 import { APP_NAME } from "./brand";
 import { EDITOR_THEMES, getEditorThemeDef, type EditorThemeId } from "./editorThemes";
+import { createPortal } from "react-dom";
 import TableView, { CellInspector } from "./TableView";
+import { parseEditTarget } from "./queryEditTarget";
 import InfoPanel from "./InfoPanel";
 import AssistantPanel from "./AssistantPanel";
 import type { SqlSubmit, SqlEditorHandle } from "./SqlEditor";
@@ -37,7 +39,7 @@ import {
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
   formatSql, minifySql, transformKeywordCase, buildUseDatabase, hasExecutableSql,
-  extractNamedParams, substituteNamedParams, isInternalKafkaTopic, suggestQueryName,
+  extractNamedParams, substituteNamedParams, isInternalKafkaTopic, suggestQueryName, buildCellUpdate,
 } from "./sql";
 import type { SavedQuery } from "./sql";
 import Select from "./ui/Select";
@@ -3698,6 +3700,11 @@ const EXPLAIN_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "mssq
 // SQLite 為單檔無多庫；Mongo / Redis 的資料庫切換走各自指令，不在此列。
 const DB_SELECT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "external"];
 
+// 查詢結果可否就地寫回（後端 update_cell 有實作的驅動）。
+// external（gateway）列入：驅動端只開放「以主鍵定位的單格更新」，其餘寫入仍拒絕。
+// db-kit 本體的 external stub 連線都建不起來，列進來對開源版沒有副作用。
+const RESULT_EDIT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "mssql", "oracle", "external"];
+
 // 查詢編輯器內容 per-連線 持久化（重開 / 切換連線後沿用上次的查詢）。
 // 查詢內容持久化鍵：每連線 × 每查詢分頁。預設 home 分頁沿用舊鍵（向後相容，既有草稿不遺失）。
 const sqlStoreKey = (id: string, tabId = "__query__") =>
@@ -3834,6 +3841,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 它是空字串，拿去 list_tables 回零張表，於是 AI 完全看不到結構卻不會有任何錯誤訊息。
   // 結構快取已經解析過「實際是哪個庫」（連線預設庫 / 第一個非系統庫），沿用同一個答案。
   const schemaTargetDb = queryDb || schemaState.database || "";
+  // 結果集的「可定位目標連線」：單表 SELECT 要對得回原始列，需要連線 + 驅動支援。
+  // **不含唯讀判斷**——唯讀連線同樣要能「產生 UPDATE 腳本」（自己不能改才更需要一份 SQL 交出去），
+  // 只是不能就地編輯。就地編輯的那道關卡改由 writable 傳下去。
+  // 交給 ResultTable 當 effect 相依，故必須 memo。
+  const resultConn = useMemo(
+    () =>
+      activeId && kind && RESULT_EDIT_KINDS.includes(kind)
+        ? { connId: activeId, database: schemaTargetDb, kind }
+        : null,
+    [activeId, kind, schemaTargetDb],
+  );
   const [editorSel, setEditorSel] = useState<string | null>(null);
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
@@ -5626,6 +5644,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                         <div style={collapsed ? { display: "none" } : undefined} className="max-h-[45vh] overflow-auto">
                           <ResultTable result={s.res}
                             maxRender={Math.max(100, Math.floor(2000 / resultSets.length))}
+                            conn={resultConn} writable={!activeReadonly} sql={s.sql}
                             onViewChange={i === activeIdx ? setResultView : undefined} />
                         </div>
                       </section>
@@ -5633,7 +5652,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                   })}
                 </div>
               ) : (
-                result && <ResultTable result={result} onViewChange={setResultView} />
+                result && <ResultTable result={result} onViewChange={setResultView}
+                  conn={resultConn} writable={!activeReadonly} sql={resultSets[activeIdx]?.sql} />
               )}
               {!result && !err && (
                 <EmptyState compact icon={running ? Loader2 : Play}
@@ -5813,7 +5833,19 @@ function ReviewPanel({ findings, skipped, hasSql, onJump, onAskAi, busy }: {
 
 // memo：多結果集堆疊時，父層（QueryPane）因作用中表格回報 resultView 而頻繁重渲染（每個篩選鍵擊 / 排序點擊），
 // 不 memo 會讓其餘 N-1 個大表格跟著全數 reconcile；props（result / onViewChange / maxRender）皆為穩定 identity。
-const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender = 2000 }: { result: QueryResult; onViewChange?: (rows: (string | null)[][]) => void; maxRender?: number }) {
+const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender = 2000, conn, writable = false, sql }: {
+  result: QueryResult;
+  onViewChange?: (rows: (string | null)[][]) => void;
+  maxRender?: number;
+  // 「這個結果集對得回哪張表」用的連線（驅動支援時才由 QueryPane 給；否則 undefined＝純檢視）。
+  // 不含唯讀判斷：唯讀連線也要能產生 UPDATE 腳本，只是不能就地改（見 writable）。
+  // 必須是 memo 過的穩定參考，否則下面解析目標表的 effect 每次 render 都重跑。
+  conn?: { connId: string; database: string; kind: DbKind } | null;
+  // 連線可寫（非唯讀連線）。false＝可以定位列、可以產生腳本，但不給就地編輯。
+  writable?: boolean;
+  // 產生這個結果集的原語句（不含注入的 USE 前綴）：用來推出可寫回的單一資料表。
+  sql?: string;
+}) {
   const t = useT();
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
   // 範圍選取（Shift+點選第二角）：null = 單格。Ctrl+C 複製整個矩形為 TSV，狀態列顯示統計。
@@ -5844,13 +5876,62 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
     };
   }, [rowDetail]);
 
+  // 就地編輯後的覆寫（原始列索引 → 整列新值）：result 是 props 不能就地改，也不想為了改一格
+  // 重跑整段查詢（可能要跑幾十秒，還會打亂排序 / 篩選 / 捲動位置）。
+  const [patch, setPatch] = useState<Record<number, (string | null)[]>>({});
+  const baseRows = useMemo(() => {
+    const keys = Object.keys(patch);
+    if (keys.length === 0) return result.rows;
+    const out = result.rows.slice();
+    for (const k of keys) out[Number(k)] = patch[Number(k)];
+    return out;
+  }, [result.rows, patch]);
+
+  // 唯讀連線同樣要能把「這一格」對回原始列（產生 UPDATE 腳本用），所以這道解析只看 conn
+  // 不看 writable；能不能就地改另外用 editConn 收斂（唯讀時為 null，行為與過去一致）。
+  const editConn = writable ? conn ?? null : null;
+
+  // 可定位的目標表：單表 SELECT ＋ 該表有主鍵 ＋ 主鍵有被選出來 ＋ 每個結果欄都是實體欄位。
+  // 少一項就只給檢視，並把理由留在 editWhy —— 使用者要看得出是「不給改」而不是「壞了」。
+  const [rowTarget, setRowTarget] = useState<{ db: string; table: string; pk: string[] } | null>(null);
+  const [editWhy, setEditWhy] = useState<string | null>(null);
+  useEffect(() => {
+    setRowTarget(null);
+    setEditWhy(null);
+    if (!conn || !sql || result.columns.length === 0) return;
+    const tgt = parseEditTarget(sql);
+    if (!tgt) { setEditWhy(t("只有「單一資料表的 SELECT」能直接改：JOIN / UNION / GROUP BY / DISTINCT / 子查詢的結果對不回原始列。")); return; }
+    const db = tgt.database || conn.database;
+    if (!db) { setEditWhy(t("查詢沒指定資料庫，工具列先選「目前資料庫」才能寫回。")); return; }
+    let alive = true;
+    api.tableColumns(conn.connId, db, tgt.table)
+      .then((cols) => {
+        if (!alive) return;
+        const names = new Set(cols.map((c) => c.name.toLowerCase()));
+        // 每個結果欄都得對得上實體欄位：別名 / 運算式 / 聚合的標題對不上，放行等於
+        // 把 `AS x` 的別名當欄名送進 UPDATE。這一關同時擋掉沒有 GROUP BY 的聚合查詢。
+        const alias = result.columns.find((c) => !names.has(c.toLowerCase()));
+        if (alias) { setEditWhy(t("結果含非實體欄位「{col}」（別名或運算式），無法寫回。", { col: alias })); return; }
+        const pk = cols.filter((c) => c.key.toUpperCase() === "PRI").map((c) => c.name);
+        if (pk.length === 0) { setEditWhy(t("資料表 {table} 沒有主鍵，無法定位要改的那一列。", { table: tgt.table })); return; }
+        const lower = result.columns.map((c) => c.toLowerCase());
+        const missing = pk.find((k) => !lower.includes(k.toLowerCase()));
+        if (missing) { setEditWhy(t("結果沒有選出主鍵欄 {col}，無法定位要改的那一列。", { col: missing })); return; }
+        setRowTarget({ db, table: tgt.table, pk });
+      })
+      .catch((e: any) => { if (alive) setEditWhy(e?.message ?? t("讀取資料表結構失敗，暫不開放編輯。")); });
+    return () => { alive = false; };
+  }, [conn, sql, result.columns, t]);
+  // 就地編輯的目標＝可定位 ＋ 連線可寫。
+  const editTarget = editConn ? rowTarget : null;
+
   // 點欄位標題做 client-side 排序（asc → desc → 無）；數字欄以數值比較，NULL 最後。
   const [sort, setSort] = useState<{ c: number; dir: "asc" | "desc" } | null>(null);
   const sortedRows = useMemo(() => {
-    if (!sort) return result.rows;
+    if (!sort) return baseRows;
     const { c, dir } = sort;
     const f = dir === "asc" ? 1 : -1;
-    return [...result.rows].sort((ra, rb) => {
+    return [...baseRows].sort((ra, rb) => {
       const a = ra[c];
       const b = rb[c];
       if (a === null && b === null) return 0;
@@ -5861,7 +5942,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
       const bothNum = a !== "" && b !== "" && !Number.isNaN(na) && !Number.isNaN(nb);
       return (bothNum ? na - nb : a < b ? -1 : a > b ? 1 : 0) * f;
     });
-  }, [result.rows, sort]);
+  }, [baseRows, sort]);
 
   // client-side 篩選：任一儲存格含關鍵字（不分大小寫）。在排序後套用。
   const [rfilter, setRfilter] = useState("");
@@ -5884,7 +5965,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   // 將目前可視列（排序 + 篩選後）回報給父層，使複製 / 匯出與所見一致。
   useEffect(() => { onViewChange?.(viewRows); }, [viewRows, onViewChange]);
   // 新查詢結果到達時重置排序 / 篩選 / 選取（避免沿用上一個查詢的狀態，例如欄序失效或舊篩選字）。
-  useEffect(() => { setSort(null); setRfilter(""); setSelected(null); setRangeEnd(null); }, [result]);
+  useEffect(() => { setSort(null); setRfilter(""); setSelected(null); setRangeEnd(null); setPatch({}); }, [result]);
 
   // 大結果集只渲染前 N 列，避免數萬列 DOM 卡死 UI；複製 / 匯出仍取全部。
   // 多結果集堆疊時由父層按格數縮小上限（總 DOM 列數有預算）。
@@ -5918,6 +5999,55 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
     );
   const toggleSort = (ci: number) =>
     setSort((s) => (s?.c === ci ? (s.dir === "asc" ? { c: ci, dir: "desc" } : null) : { c: ci, dir: "asc" }));
+
+  // 產生「只改這一格」的 UPDATE 腳本，開新查詢分頁承接（不直接寫入、也不蓋掉目前這條查詢）。
+  // 只要能把列對回原表就給，不看連線是否唯讀——唯讀時自己不能改，正是最需要一份 SQL 交出去的情境。
+  // text 可指定（儲存格檢視器裡排版 / 改過的內容），未給則用目前格內的值。
+  const cellUpdateScript = (r: number, c: number, text?: string | null) => {
+    if (!conn || !rowTarget) return;
+    const row = viewRows[r];
+    if (!row) return;
+    const lower = result.columns.map((x) => x.toLowerCase());
+    const pkValues = rowTarget.pk.map((k) => row[lower.indexOf(k.toLowerCase())] ?? null);
+    if (pkValues.some((v) => v === null)) { toast.error(t("這一列的主鍵是 NULL，無法定位，產生不了腳本。")); return; }
+    const script = buildCellUpdate(
+      conn.kind, rowTarget.db, rowTarget.table, result.columns[c],
+      text === undefined ? cell(r, c) : text,
+      rowTarget.pk, pkValues,
+    );
+    useStore.getState().newQueryTab(script, conn.connId);
+    toast.success(t("已產生 UPDATE 腳本（新查詢分頁）"));
+  };
+
+  // 把一格改動寫回資料庫；成功才更新畫面，失敗時畫面留在資料庫真正的值，不會出現假的已存狀態。
+  const applyEdit = async (r: number, c: number, rawText: string, setNull: boolean) => {
+    if (!editTarget || !editConn) return;
+    const row = viewRows[r];
+    if (!row) return;
+    const lower = result.columns.map((x) => x.toLowerCase());
+    const pkValues = editTarget.pk.map((k) => row[lower.indexOf(k.toLowerCase())] ?? null);
+    if (pkValues.some((v) => v === null)) { toast.error(t("這一列的主鍵是 NULL，無法定位，請改從資料表分頁編輯。")); return; }
+    const newValue = setNull ? null : rawText;
+    if ((row[c] ?? null) === newValue) return;
+    try {
+      const n = await api.updateCell(editConn.connId, editTarget.db, editTarget.table, {
+        column: result.columns[c],
+        new_value: newValue,
+        pk_columns: editTarget.pk,
+        pk_values: pkValues,
+      });
+      // viewRows 的元素就是 baseRows 的元素（排序 / 篩選只換順序，不複製列）→ 可用參考回推原始索引。
+      const idx = baseRows.indexOf(row);
+      if (idx >= 0) {
+        const next = row.slice();
+        next[c] = newValue;
+        setPatch((m) => ({ ...m, [idx]: next }));
+      }
+      toast.success(t("已更新 {n} 列", { n }));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("更新失敗"));
+    }
+  };
 
   // 範圍選取矩形（結果集無隱藏欄，欄序即 0..n-1）：Shift+點選第二角。
   const rangeBox = selected && rangeEnd
@@ -5960,6 +6090,11 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   }, [selected, rangeEnd]);
 
   const onKey = (e: React.KeyboardEvent) => {
+    // 浮層與篩選框的鍵盤事件會沿著 React 元件樹冒泡到這裡（浮層已 portal 到 body，DOM 上不在裡面，
+    // 但 React 事件仍走元件樹）。不擋的話在儲存格檢視窗裡按方向鍵會被 preventDefault 吃掉，
+    // 游標動不了；篩選框裡按方向鍵同理。
+    const tag = (e.target as HTMLElement | null)?.tagName;
+    if (inspect || rowDetail !== null || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     if (e.key === "Escape") {
       // Esc 先關開啟中的選單，其次取消儲存格 / 範圍選取。
       if (menu || colMenu) { setMenu(null); setColMenu(null); }
@@ -6066,6 +6201,18 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
         <span className="text-xs text-fg/40">
           {rfilter.trim() ? t("{length} / {v2} 列", { length: viewRows.length, v2: result.rows.length }) : t("{length} 列", { length: result.rows.length })}
         </span>
+        {/* 能不能就地改要講清楚：能改就標出寫回哪張表，不能改就把原因掛在 tooltip 上。 */}
+        {editConn && (editTarget ? (
+          <span title={t("點儲存格可直接改，以主鍵（{pk}）寫回 {db}.{table}", { pk: editTarget.pk.join(", "), db: editTarget.db, table: editTarget.table })}
+            className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-400/15 text-emerald-300/90 whitespace-nowrap cursor-help">
+            {t("可編輯")}
+          </span>
+        ) : editWhy ? (
+          <span title={editWhy}
+            className="text-[10px] px-1.5 py-0.5 rounded bg-fg/10 text-fg/40 whitespace-nowrap cursor-help">
+            {t("唯讀結果")}
+          </span>
+        ) : null)}
         {selStats && (
           <span className="ml-auto text-xs text-fg/45 mono whitespace-nowrap" title={t("框選範圍統計（Shift+點選）")}>
             {t("已選 {rows}×{colsN}（{count} 格）", { rows: selStats.rows, colsN: selStats.colsN, count: selStats.count })}
@@ -6150,104 +6297,122 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
         </div>
       )}
 
-      {colMenu && (
+      {/* 浮層一律 portal 到 body：多結果集的每一格 <section> 帶 content-visibility:auto，
+          它隱含 contain:paint，會讓 position:fixed 的子元素改以該 section 為定位基準並被裁切 ——
+          症狀就是點儲存格「跳窗跳不出來」（遮罩只蓋住那一格、對話框被裁掉）。 */}
+      {createPortal(
         <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setColMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setColMenu(null); }} />
-          <div className="fixed z-[90] min-w-[150px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: colMenu.x, top: colMenu.y }}>
-            {(
-              [
-                [t("升冪排序 ▲"), () => setSort({ c: colMenu.c, dir: "asc" })],
-                [t("降冪排序 ▼"), () => setSort({ c: colMenu.c, dir: "desc" })],
-                ...(sort ? [[t("清除排序"), () => setSort(null)] as [string, () => void]] : []),
-                [t("複製欄名"), () => copyToClipboard(result.columns[colMenu.c], t("已複製欄名"))],
-                [t("複製整欄"), () => copyCol(colMenu.c)],
-              ] as [string, () => void][]
-            ).map(([label, fn]) => (
-              <button key={label} type="button"
-                onClick={() => { setColMenu(null); fn(); }}
-                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
-                {label}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-
-      {inspect && (
-        <CellInspector
-          column={result.columns[inspect.c]}
-          value={cell(inspect.r, inspect.c)}
-          editable={false}
-          onSave={() => {}}
-          onClose={() => { if (Date.now() - inspectOpenedAt.current > 300) setInspect(null); }}
-        />
-      )}
-
-      {rowDetail !== null && viewRows[rowDetail] && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={() => setRowDetail(null)}>
-          <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[84vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}>
-            <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
-              <span className="font-medium text-sm">{t("列詳情")}</span>
-              <span className="text-xs text-fg/40">{t("第 {n} 列", { n: rowDetail + 1 })}</span>
-              <button type="button" onClick={() => setRowDetail(null)} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+        {colMenu && (
+          <>
+            <div className="fixed inset-0 z-[89]"
+              onClick={() => setColMenu(null)}
+              onContextMenu={(e) => { e.preventDefault(); setColMenu(null); }} />
+            <div className="fixed z-[90] min-w-[150px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
+              style={{ left: colMenu.x, top: colMenu.y }}>
+              {(
+                [
+                  [t("升冪排序 ▲"), () => setSort({ c: colMenu.c, dir: "asc" })],
+                  [t("降冪排序 ▼"), () => setSort({ c: colMenu.c, dir: "desc" })],
+                  ...(sort ? [[t("清除排序"), () => setSort(null)] as [string, () => void]] : []),
+                  [t("複製欄名"), () => copyToClipboard(result.columns[colMenu.c], t("已複製欄名"))],
+                  [t("複製整欄"), () => copyCol(colMenu.c)],
+                ] as [string, () => void][]
+              ).map(([label, fn]) => (
+                <button key={label} type="button"
+                  onClick={() => { setColMenu(null); fn(); }}
+                  className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+                  {label}
+                </button>
+              ))}
             </div>
-            <div className="overflow-auto divide-y divide-fg/5">
-              {result.columns.map((col, j) => {
-                const v = viewRows[rowDetail][j];
-                return (
-                  <div key={col} className="flex gap-3 px-4 py-1.5 text-sm hover:bg-fg/5">
-                    <span className="text-fg/45 w-40 shrink-0 mono break-all">{col}</span>
-                    <span className="text-fg/85 mono break-all flex-1">{v === null ? <span className="text-fg/30 italic">NULL</span> : v}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="px-5 py-3 border-t border-fg/10 flex justify-end">
-              <button type="button" onClick={() => setRowDetail(null)}
-                className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("關閉")}</button>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
 
-      {menu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
-          <div className="fixed z-[90] min-w-[160px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: menu.x, top: menu.y }}>
-            {(
-              [
-                [t("檢視內容…"), () => openInspect(menu.r, menu.c)],
-                [t("檢視此列（表單）…"), () => setRowDetail(menu.r)],
-                [t("複製值"), () => copyCell(menu.r, menu.c)],
-                [t("複製標題"), () => copyHeader(menu.c)],
-                [t("複製標題+值"), () => copyHeaderValue(menu.r, menu.c)],
-                ...(rangeEnd && inRange(menu.r, menu.c)
-                  ? [
-                      [t("複製範圍 (TSV)"), () => copyRange()] as [string, () => void],
-                      [t("複製範圍 (Markdown)"), () => copyRangeMarkdown()] as [string, () => void],
-                    ]
-                  : []),
-                [t("複製整列 (TSV)"), () => copyRowTsv(menu.r)],
-                [t("複製整列（含標題列）"), () => copyRowTsvWithHeader(menu.r)],
-                [t("複製整列 (JSON)"), () => copyRowJson(menu.r)],
-                [t("複製整欄"), () => copyCol(menu.c)],
-              ] as [string, () => void][]
-            ).map(([label, fn]) => (
-              <button key={label} type="button"
-                onClick={() => { setMenu(null); fn(); }}
-                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
-                {label}
-              </button>
-            ))}
+        {inspect && (
+          <CellInspector
+            column={result.columns[inspect.c]}
+            value={cell(inspect.r, inspect.c)}
+            editable={!!editTarget}
+            // 查詢結果沒有欄位型別資訊（QueryResult 只回欄名 + 字串），所以改以「唯讀時才自動排版」為界：
+            // 唯讀不會寫回，直接看到縮排 JSON 只有好處；可編輯（editTarget 有對應單表）時保守不動，避免把
+            // VARCHAR 裡的緊湊 JSON 排版後寫回去。要排版仍可按「格式化 JSON」。
+            autoFormat={!editTarget}
+            onSave={(rawText, setNull) => void applyEdit(inspect.r, inspect.c, rawText, setNull)}
+            // 能把列對回原表就給「產生 UPDATE 腳本」：可用視窗裡排版 / 改過的內容產生，唯讀連線也給。
+            onScript={conn && rowTarget ? (text) => cellUpdateScript(inspect.r, inspect.c, text) : undefined}
+            onClose={() => { if (Date.now() - inspectOpenedAt.current > 300) setInspect(null); }}
+          />
+        )}
+
+        {rowDetail !== null && viewRows[rowDetail] && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={() => setRowDetail(null)}>
+            <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[84vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}>
+              <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
+                <span className="font-medium text-sm">{t("列詳情")}</span>
+                <span className="text-xs text-fg/40">{t("第 {n} 列", { n: rowDetail + 1 })}</span>
+                <button type="button" onClick={() => setRowDetail(null)} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+              </div>
+              <div className="overflow-auto divide-y divide-fg/5">
+                {result.columns.map((col, j) => {
+                  const v = viewRows[rowDetail][j];
+                  return (
+                    <div key={col} className="flex gap-3 px-4 py-1.5 text-sm hover:bg-fg/5">
+                      <span className="text-fg/45 w-40 shrink-0 mono break-all">{col}</span>
+                      <span className="text-fg/85 mono break-all flex-1">{v === null ? <span className="text-fg/30 italic">NULL</span> : v}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="px-5 py-3 border-t border-fg/10 flex justify-end">
+                <button type="button" onClick={() => setRowDetail(null)}
+                  className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("關閉")}</button>
+              </div>
+            </div>
           </div>
-        </>
+        )}
+
+        {menu && (
+          <>
+            <div className="fixed inset-0 z-[89]"
+              onClick={() => setMenu(null)}
+              onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
+            <div className="fixed z-[90] min-w-[160px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
+              style={{ left: menu.x, top: menu.y }}>
+              {(
+                [
+                  [t("檢視內容…"), () => openInspect(menu.r, menu.c)],
+                  [t("檢視此列（表單）…"), () => setRowDetail(menu.r)],
+                  [t("複製值"), () => copyCell(menu.r, menu.c)],
+                  [t("複製標題"), () => copyHeader(menu.c)],
+                  [t("複製標題+值"), () => copyHeaderValue(menu.r, menu.c)],
+                  ...(rangeEnd && inRange(menu.r, menu.c)
+                    ? [
+                        [t("複製範圍 (TSV)"), () => copyRange()] as [string, () => void],
+                        [t("複製範圍 (Markdown)"), () => copyRangeMarkdown()] as [string, () => void],
+                      ]
+                    : []),
+                  [t("複製整列 (TSV)"), () => copyRowTsv(menu.r)],
+                  [t("複製整列（含標題列）"), () => copyRowTsvWithHeader(menu.r)],
+                  [t("複製整列 (JSON)"), () => copyRowJson(menu.r)],
+                  [t("複製整欄"), () => copyCol(menu.c)],
+                  // 只改這一格的 UPDATE 腳本（開新查詢分頁）：能把列對回原表就給，唯讀連線也給。
+                  ...(conn && rowTarget
+                    ? [[t("產生 UPDATE 腳本（僅此欄）"), () => cellUpdateScript(menu.r, menu.c)] as [string, () => void]]
+                    : []),
+                ] as [string, () => void][]
+              ).map(([label, fn]) => (
+                <button key={label} type="button"
+                  onClick={() => { setMenu(null); fn(); }}
+                  className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+                  {label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        </>,
+        document.body,
       )}
     </div>
   );

@@ -18,6 +18,9 @@ import {
   pushQueryHistory,
   quoteIdent,
   qualifiedName,
+  isJsonColumnType,
+  prettyJsonIfStructured,
+  buildCellUpdate,
   sqlLiteral,
   loadSavedQueries,
   persistSavedQueries,
@@ -1553,5 +1556,64 @@ describe("suggestQueryName", () => {
   it("撞名補序號", () => {
     expect(suggestQueryName("SELECT * FROM orders", ["SELECT orders"])).toBe("SELECT orders 2");
     expect(suggestQueryName("SELECT * FROM orders", ["SELECT orders", "SELECT orders 2"])).toBe("SELECT orders 3");
+  });
+});
+
+describe("isJsonColumnType", () => {
+  it("認得 MySQL 的 json 與 PostgreSQL 的 jsonb（大小寫 / 前後空白不敏感）", () => {
+    expect(isJsonColumnType("json")).toBe(true);
+    expect(isJsonColumnType("JSON")).toBe(true);
+    expect(isJsonColumnType("jsonb")).toBe(true);
+    expect(isJsonColumnType(" JSONB ")).toBe(true);
+  });
+  it("其他型別一律為否——含 MariaDB 的 longtext 與名字裡有 json 的欄位型別", () => {
+    // MariaDB 的 JSON 是 longtext + CHECK(JSON_VALID())，型別上無從分辨，故不自動排版。
+    expect(isJsonColumnType("longtext")).toBe(false);
+    expect(isJsonColumnType("varchar(500)")).toBe(false);
+    expect(isJsonColumnType("jsonpath")).toBe(false);
+    expect(isJsonColumnType("")).toBe(false);
+    expect(isJsonColumnType(null)).toBe(false);
+    expect(isJsonColumnType(undefined)).toBe(false);
+  });
+});
+
+describe("prettyJsonIfStructured", () => {
+  it("物件 / 陣列以兩空格縮排排版", () => {
+    expect(prettyJsonIfStructured('{"a":1}')).toBe('{\n  "a": 1\n}');
+    expect(prettyJsonIfStructured("[1,2]")).toBe("[\n  1,\n  2\n]");
+  });
+  it("純量與 null 原樣回傳（排版沒有意義）", () => {
+    expect(prettyJsonIfStructured("123")).toBe("123");
+    expect(prettyJsonIfStructured('"abc"')).toBe('"abc"');
+    expect(prettyJsonIfStructured("true")).toBe("true");
+    expect(prettyJsonIfStructured("null")).toBe("null");
+  });
+  it("不是合法 JSON 就原封不動（長文字 / SQL / 空字串都不能被動到）", () => {
+    expect(prettyJsonIfStructured("")).toBe("");
+    expect(prettyJsonIfStructured("SELECT 1")).toBe("SELECT 1");
+    expect(prettyJsonIfStructured('{"a":')).toBe('{"a":');
+  });
+  it("排版後再排版是穩定的（同一份內容不會越排越亂）", () => {
+    const once = prettyJsonIfStructured('{"a":[1,{"b":2}]}');
+    expect(prettyJsonIfStructured(once)).toBe(once);
+  });
+});
+
+describe("buildCellUpdate", () => {
+  it("只 SET 指定的那一欄，並以主鍵定位、限定資料庫", () => {
+    expect(buildCellUpdate("mysql", "Betting", "BetSetting", "Setting", '{"a":1}', ["Id"], ["7"])).toBe(
+      "UPDATE `Betting`.`BetSetting`\nSET `Setting` = '{\"a\":1}'\nWHERE `Id` = '7';",
+    );
+  });
+  it("複合主鍵以 AND 串接；NULL 值走 SQL NULL 而非字串", () => {
+    expect(buildCellUpdate("postgres", "app", "t", "memo", null, ["a", "b"], ["1", null])).toBe(
+      'UPDATE "app"."t"\nSET "memo" = NULL\nWHERE "a" = \'1\' AND "b" = NULL;',
+    );
+  });
+  it("值裡的單引號 / 反斜線照 sqlLiteral 跳脫（不會生出可注入的腳本）", () => {
+    const bs = String.fromCharCode(92); // 單一反斜線（避免在測試字面值裡數跳脫層數）
+    expect(buildCellUpdate("mysql", "d", "t", "c", `O'Brien${bs}x`, ["id"], ["1"])).toBe(
+      `UPDATE \`d\`.\`t\`\nSET \`c\` = 'O''Brien${bs}${bs}x'\nWHERE \`id\` = '1';`,
+    );
   });
 });

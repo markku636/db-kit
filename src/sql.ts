@@ -1727,3 +1727,40 @@ export function statementAtOffset(sql: string, offset: number): string | null {
   const after = spans.find((s) => s.from >= offset);
   return (after ?? spans[spans.length - 1]).text;
 }
+
+// 宣告型別是否為 JSON：MySQL / Oracle 的 `json`、PostgreSQL 的 `json` 與 `jsonb`。
+// MariaDB 的 JSON 是 `longtext` + CHECK(JSON_VALID())，information_schema 回的是 longtext，
+// 型別上無從分辨，故不視為 JSON（使用者仍可手動按「格式化 JSON」）。
+export function isJsonColumnType(dataType: string | null | undefined): boolean {
+  return /^jsonb?$/.test((dataType ?? "").trim().toLowerCase());
+}
+
+// 儲存格檢視器「JSON 欄位開窗即縮排」用：只有物件 / 陣列值得排版。
+// 純量（數字 / 字串 / true / null）排版後跟原文一樣、非合法 JSON 不能動，兩者都原樣回傳。
+export function prettyJsonIfStructured(raw: string): string {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object") return raw;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+// 由單一儲存格產生「只改這一欄」的 UPDATE 腳本。與 buildRowUpdate（整列所有欄一起 SET）分開：
+// 想手改一個 JSON / 長文字欄位時，把沒動到的欄一起寫回去反而是風險（同時被別人改過就會被蓋掉）。
+// 目的地是查詢編輯器而非直接執行，故限定資料庫（qualifiedName）——編輯器的目前庫未必是這張表的庫。
+// WHERE 以主鍵定位（呼叫端確保有主鍵）；SET 獨立成行，長 JSON 值才好在編輯器裡改。
+export function buildCellUpdate(
+  kind: DbKind,
+  database: string,
+  table: string,
+  column: string,
+  value: string | null,
+  pkCols: string[],
+  pkVals: (string | null)[],
+): string {
+  const qi = (id: string) => quoteIdent(kind, id);
+  const where = pkCols.map((c, i) => `${qi(c)} = ${sqlLiteral(kind, pkVals[i])}`).join(" AND ");
+  return `UPDATE ${qualifiedName(kind, database, table)}\nSET ${qi(column)} = ${sqlLiteral(kind, value)}\nWHERE ${where};`;
+}
