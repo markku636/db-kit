@@ -254,7 +254,10 @@ describe("sqlContextCompletion（跨庫）", () => {
       ...cross,
       onNeedDatabase: async (db) => {
         loads.push(db);
-        return ["Alpha", "Beta"];
+        return [
+          { table: "Alpha", columns: ["AlphaId"] },
+          { table: "Beta", columns: ["BetaId"] },
+        ];
       },
     });
     const doc = "SELECT * FROM NotLoaded.";
@@ -270,7 +273,7 @@ describe("sqlContextCompletion（跨庫）", () => {
       ...cross,
       onNeedDatabase: async (db) => {
         calls.push(db);
-        return ["X"];
+        return [{ table: "X", columns: ["XId"] }];
       },
     });
     // 同步回 null（不是 Promise）：每次打點都多等一個 microtask 沒有道理。
@@ -287,11 +290,84 @@ describe("sqlContextCompletion（跨庫）", () => {
       ...cross,
       onNeedDatabase: async (db) => {
         calls.push(db);
-        return ["X"];
+        return [{ table: "X", columns: ["XId"] }];
       },
     });
     expect(s(ctx("SELECT * FROM PayList NotLoaded WHERE NotLoaded."))).toBeNull();
     expect(calls).toEqual([]);
+  });
+
+  // 工具列沒選庫時預設庫是「清單第一個」，於是「一律寫 `Siebog.表`」的人整個語句都限定到
+  // 一個沒載入的庫——這條路徑沒有按需載入的話，欄位提示對他們等於不存在。
+  it("`FROM 未載入庫.表` 之後的欄語境 → 載進來並直接出該表欄位", async () => {
+    const loads: string[] = [];
+    const s = sqlContextCompletion(CROSS_SCHEMA, {
+      ...cross,
+      onNeedDatabase: async (db) => {
+        loads.push(db);
+        return [{ table: "Alpha", columns: ["AlphaId", "AlphaName"] }];
+      },
+    });
+    const doc = "SELECT * FROM NotLoaded.Alpha WHERE Alpha";
+    const r = (await s(ctx(doc))) as CompletionResult;
+    expect(loads).toEqual(["NotLoaded"]);
+    expect(r.options.map((o) => o.label)).toEqual(["AlphaId", "AlphaName"]);
+    expect(r.from).toBe(doc.length - "Alpha".length);
+    // 載回來的結構留在 source 內，後續按鍵同步命中（不再回 Promise、也不再打一次）。
+    const again = s(ctx("SELECT * FROM NotLoaded.Alpha WHERE ")) as CompletionResult;
+    expect(again.options.map((o) => o.label)).toEqual(["AlphaId", "AlphaName"]);
+    expect(loads).toEqual(["NotLoaded"]);
+  });
+
+  it("跨庫 join 一邊已載入一邊按需載入：欄位都到齊", async () => {
+    const s = sqlContextCompletion(CROSS_SCHEMA, {
+      ...cross,
+      onNeedDatabase: async () => [{ table: "Alpha", columns: ["AlphaId"] }],
+    });
+    const r = (await s(ctx("SELECT * FROM PayList p JOIN NotLoaded.Alpha a ON "))) as CompletionResult;
+    expect(r.options.map((o) => o.label)).toEqual(["Id", "PayName", "AlphaId"]);
+    expect(r.options[2].detail).toBe("NotLoaded.Alpha");
+  });
+
+  it("載不到（未連線 / 權限不足）不重試，之後一律同步回 null", async () => {
+    let calls = 0;
+    const s = sqlContextCompletion(CROSS_SCHEMA, {
+      ...cross,
+      onNeedDatabase: async () => {
+        calls += 1;
+        return [];
+      },
+    });
+    expect(await s(ctx("SELECT * FROM NotLoaded.Alpha WHERE "))).toBeNull();
+    expect(s(ctx("SELECT * FROM NotLoaded.Alpha WHERE A"))).toBeNull(); // 同步，不是 Promise
+    expect(calls).toBe(1);
+  });
+
+  it("不該跳窗的位置不會為了限定名跑一趟整庫載入", () => {
+    let calls = 0;
+    const s = sqlContextCompletion(CROSS_SCHEMA, {
+      ...cross,
+      onNeedDatabase: async () => {
+        calls += 1;
+        return [{ table: "Alpha", columns: ["AlphaId"] }];
+      },
+    });
+    // 空前綴 + 不是剛打完關鍵字 / 逗號 / 運算子 → 本來就不跳窗，更不該為它查一整個庫。
+    expect(s(ctx("SELECT * FROM NotLoaded.Alpha WHERE Id = 1 "))).toBeNull();
+    expect(calls).toBe(0);
+  });
+
+  it("未限定的表名不會觸發按需載入（沒有庫可以指）", () => {
+    let calls = 0;
+    const s = sqlContextCompletion(CROSS_SCHEMA, {
+      ...cross,
+      onNeedDatabase: async () => {
+        calls += 1;
+        return [{ table: "Alpha", columns: ["AlphaId"] }];
+      },
+    });
+    expect(s(ctx("SELECT * FROM Whatever WHERE "))).toBeNull();
+    expect(calls).toBe(0);
   });
 
   it("沒給 onNeedDatabase（對話框情境）就完全不接手 qualifier", () => {

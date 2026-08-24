@@ -3705,7 +3705,8 @@ const sqlStoreKey = (id: string, tabId = "__query__") =>
 // 「目前資料庫」選擇 per-連線 持久化（切換連線 / 重開後沿用上次選的庫）。
 const queryDbStoreKey = (id: string) => `db-kit:queryDb:${id}`;
 // 「跨庫」預載清單 per-連線 持久化：常態跨庫的人一次選好，開檔即有 `other_db.` 的提示。
-// 沒選也不影響——打 `other_db.` 時會按需載入（見 SqlEditor 的 cross.onNeedDatabase）。
+// 沒選也不影響——打 `other_db.`、或語句裡寫了 `other_db.表` 都會按需載入
+// （見 SqlEditor 的 cross.onNeedDatabase）。
 const queryExtraDbsStoreKey = (id: string) => `db-kit:queryExtraDbs:${id}`;
 // 查詢工具列「左組」（「查詢」/「跨庫」兩個文字標籤）在外層列窄於此寬度時只留圖示與下拉。
 // 判準是**外層列寬**而不是 barTier —— 理由見 rowNarrow 的註解（綁 barTier 會炸整個 app）。

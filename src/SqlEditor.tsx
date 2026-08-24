@@ -253,7 +253,8 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
     ];
     // 上下文欄位自動完成：解析當前語句 FROM 子句，在 SELECT/WHERE/ON/ORDER BY… 直接提示
     // 該表欄位（免打 `表名.`），並在打完子句關鍵字（含空白）當下自動跳窗。
-    // 與預設 schema source 分工不重複（表語境打字即讓手），純文件掃描不打後端。
+    // 與預設 schema source 分工不重複（表語境打字即讓手）；語境判斷純文件掃描，
+    // 只有跨庫的按需載入（cross.onNeedDatabase）會打後端，且每個庫只載一次。
     if (schema) {
       // onNeedDatabase 走 ref：它是呼叫端每次 render 新建的閉包，直接進相依會讓整組擴充套件
       // 一直重建（打字打到一半重建 = 補全視窗被關掉）。真正該觸發重建的是庫清單與 schema，
