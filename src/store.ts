@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { ConnectionConfig, ConnGroup, DbKind } from "./api";
 import { loadReadonly, persistReadonly, setReadonlyFlag, type ReadonlyMap } from "./connReadonly";
+import { loadSession, saveQueryTabSession } from "./session";
 import {
   loadSavedQueries,
   persistSavedQueries,
@@ -162,6 +163,10 @@ interface AppStore {
   closeSavedManager: () => void;
 }
 
+// 上次關掉 app 時開著的查詢分頁（含停在哪一個）。各分頁的編輯器內容自己從 localStorage 讀
+// （見 App.tsx 的 loadPersistedSql），這裡只負責把「當時開著哪幾個分頁」擺回來。
+const session = loadSession();
+
 export const useStore = create<AppStore>((set) => ({
   connections: [],
   connGroups: [],
@@ -169,8 +174,9 @@ export const useStore = create<AppStore>((set) => ({
   readonlyConns: loadReadonly(),
   activeId: null,
   tabs: [],
-  activeTabKey: null,
-  queryTabs: ["__query__"],
+  // 表分頁不還原（要有實際連線才開得起來），故啟動時作用中分頁落在還原回來的查詢分頁上。
+  activeTabKey: session.activeQueryTab,
+  queryTabs: session.queryTabs,
   pendingSql: null,
   pendingNlOpen: false,
   pendingInsert: null,
@@ -414,3 +420,13 @@ export const useStore = create<AppStore>((set) => ({
     set({ savedMgr: { seedSql: opts?.seedSql ?? null, editName: opts?.editName ?? null } }),
   closeSavedManager: () => set({ savedMgr: null }),
 }));
+
+// 分頁清單 / 作用中分頁一有變動就寫回工作階段，下次啟動據此還原。
+// queryTabs 與 activeTabKey 散在十幾條 mutation 裡（新增 / 關閉 / 關其他 / 全部關閉 / 切換，
+// 還有 markDisconnected 與各 closeTab* 的落點計算），逐一插 persist 遲早漏掉一條；
+// 訂閱一次涵蓋全部路徑，也涵蓋日後新增的路徑。
+useStore.subscribe((s, prev) => {
+  if (s.queryTabs === prev.queryTabs && s.activeTabKey === prev.activeTabKey) return;
+  saveQueryTabSession(s.queryTabs, s.activeTabKey);
+});
+

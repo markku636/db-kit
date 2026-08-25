@@ -159,3 +159,31 @@ describe("markDisconnected", () => {
     expect(s().activeTabKey).toBe("c2:db:t2");
   });
 });
+
+// 工作階段還原的接線：store 的分頁 mutation 是否真的寫回 db-kit:session。
+// session.ts 自己的正規化 / 還原規則另有 session.test.ts 覆蓋，這裡只驗「有接上」。
+describe("工作階段持久化（訂閱寫回）", () => {
+  const saved = () => JSON.parse(localStorage.getItem("db-kit:session") || "null");
+
+  it("新增 / 切換 / 關閉查詢分頁都會寫回存檔", () => {
+    s().addQueryTab();
+    expect(saved()).toEqual({ queryTabs: ["__query__", "__query__:2"], activeQueryTab: "__query__:2" });
+    s().setActiveTab("__query__");
+    expect(saved().activeQueryTab).toBe("__query__");
+    s().closeQueryTab("__query__:2");
+    expect(saved()).toEqual({ queryTabs: ["__query__"], activeQueryTab: "__query__" });
+  });
+
+  it("開表分頁不會把記住的查詢分頁換成表分頁鍵（表分頁不還原）", () => {
+    s().addQueryTab();
+    s().openTable("c1", "db", "users");
+    expect(s().activeTabKey).toBe("c1:db:users");
+    expect(saved()).toEqual({ queryTabs: ["__query__", "__query__:2"], activeQueryTab: "__query__:2" });
+  });
+
+  it("全部關閉查詢分頁後存檔為空清單（下次啟動照實還原）", () => {
+    s().addQueryTab();
+    s().closeAllQueryTabs();
+    expect(saved()).toEqual({ queryTabs: [], activeQueryTab: null });
+  });
+});
