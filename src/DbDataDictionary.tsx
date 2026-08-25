@@ -75,6 +75,7 @@ export default function DbDataDictionary({ connId, db, onClose }: {
   return (
     <Modal
       onClose={onClose}
+      codeZoom
       title={<>{t("資料庫文件 ·")} <span className="mono text-fg/60">{db}</span></>}
       icon={BookText}
       size="xl"
@@ -95,7 +96,7 @@ export default function DbDataDictionary({ connId, db, onClose }: {
       ) : !docs ? (
         <div className="p-6 text-fg/50 text-sm">{t("產生中…")}{progress ? ` ${progress.done}/${progress.total}` : ""}</div>
       ) : (
-        <pre className="flex-1 overflow-auto p-4 text-xs mono text-fg/80 whitespace-pre-wrap break-words">{content}</pre>
+        <pre className="flex-1 overflow-auto p-4 code-scale mono text-fg/80 whitespace-pre-wrap break-words">{content}</pre>
       )}
     </Modal>
   );

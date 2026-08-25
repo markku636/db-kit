@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Rabbit, X } from "lucide-react";
 import { api, type RabbitOverview } from "./api";
 import { useModalOverlay } from "./ui";
-import { IconButton } from "./ui/index";
+import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 
@@ -25,9 +25,11 @@ export default function RabbitMqOverview({ connId, connName, onClose }: {
     return () => { alive = false; };
   }, [connId]);
 
+  const { shellClass } = useModalView();
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-app w-[720px] max-w-[95vw] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className={`bg-app w-[720px] max-w-[95vw] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`} onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3">
           <Icon icon={Rabbit} size={14} className="text-pink-300/90" />
           <span className="font-medium text-sm">{t("總覽")} · {connName}</span>
@@ -36,7 +38,8 @@ export default function RabbitMqOverview({ connId, connName, onClose }: {
               RabbitMQ {info.rabbitmq_version}
             </span>
           )}
-          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
+          <ModalViewControls className="ml-auto" />
+          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
 
         {err && <div className="px-4 py-1.5 text-red-400 text-xs mono break-all border-b border-fg/10">{err}</div>}

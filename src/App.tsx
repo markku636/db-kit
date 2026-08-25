@@ -55,7 +55,7 @@ import LockScreen from "./LockScreen";
 import { AppLockSettings } from "./AppLockSettings";
 import { useAutoLock } from "./autoLock";
 import Icon from "./ui/Icon";
-import { Button, EmptyState, Modal, Field } from "./ui/index";
+import { Button, EmptyState, Modal, Field, ModalViewControls, useModalView } from "./ui/index";
 import {
   Plug, Network, DatabaseBackup, Upload, Download, Sparkles, Keyboard, Moon,
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
@@ -3404,6 +3404,9 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
   const activeTabRef = useRef<HTMLDivElement>(null);
   const queryTabRef = useRef<HTMLButtonElement>(null);
 
+  // 關掉的查詢分頁不該留著結果快取（id 會被回收）。涵蓋單關 / 關其他 / 全部關閉三條路徑。
+  useEffect(() => { pruneQueryPaneResults(queryTabs); }, [queryTabs]);
+
   const canUse = activeId && connectedIds.has(activeId);
   const activeTab = tabs.find((tab) => tab.key === activeTabKey) ?? null;
   // 作用中的查詢分頁 id（非表分頁時）：解析未知 / null → 第一個查詢分頁（home 可被關掉，不能寫死 __query__）。
@@ -3740,6 +3743,36 @@ interface RunSummary { startedAt: number; finishedAt: number; total: number; pro
 // 匯出重跑後取同位結果集。單結果集呼叫恆為 0。
 interface ResultSetEntry { res: QueryResult; sql: string; ms: number; sent?: string; setIdx?: number; }
 
+// 查詢分頁的「結果區」記憶（模組層，僅本次執行期間有效）。
+// QueryPane 以 key={activeQueryId} 掛載——切走查詢分頁必然整個卸載，結果集只活在元件 state
+// 的話回來就只剩空結果區，得重跑一次查詢。編輯器內容早已 per-分頁 持久化（sqlStoreKey），
+// 結果卻沒有，兩者對不上。這裡把結果區整組記下來，切回同一分頁時原樣還原。
+// 只放記憶體、不進 localStorage：結果集動輒數萬列，且可能含敏感資料。
+interface PaneResultState {
+  // 產生這批結果的連線。查詢分頁沒有自己的連線（activeId 是全域的），換連線後舊結果就對不上了，
+  // 故還原前先比對——不同連線一律不還原，寧可空著也不要拿 A 庫的資料冒充 B 庫。
+  connId: string | null;
+  resultSets: ResultSetEntry[];
+  activeResult: number;
+  collapsedSets: Record<number, boolean>;
+  err: string | null;
+  errSql: string | null;
+  errStmt: string | null;
+  elapsed: number | null;
+  bottomTab: "result" | "summary" | "explain" | "review";
+  summary: RunSummary | null;
+  plan: PlanNode | null;
+  planErr: string | null;
+  planRaw: string | null;
+  mongoPlan: { model: MongoExplainModel; raw: string } | null;
+}
+const paneResults = new Map<string, PaneResultState>();
+// 分頁關閉後丟掉它的快取：分頁 id 會被回收（全部關光再開又是 __query__），
+// 留著會讓新開的分頁一掛上就掛著上一輪的結果。
+function pruneQueryPaneResults(liveTabIds: string[]) {
+  for (const id of [...paneResults.keys()]) if (!liveTabIds.includes(id)) paneResults.delete(id);
+}
+
 // 毫秒時間戳 → 本地「YYYY-MM-DD HH:mm:ss」（摘要面板的開始 / 結束時間）。
 function fmtClock(ms: number): string {
   const d = new Date(ms);
@@ -3867,8 +3900,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const findingErrors = findings.filter((f) => f.severity === "error").length;
   // 結果集清單（SSMS 風格）：多語句批次中每條有回傳結果集的語句各佔一格、堆疊「同時」顯示；
   // 單語句 / 純 DML / 分析模式只有一筆。activeResult 標記工具列（複製 / 匯出 / 問 AI）作用的結果集。
-  const [resultSets, setResultSets] = useState<ResultSetEntry[]>([]);
-  const [activeResult, setActiveResult] = useState(0);
+  // 切回本分頁時的還原來源（見 paneResults）。只在掛載當下取一次，之後由下方的同步 effect 寫回。
+  const [restored] = useState(() => {
+    const cached = paneResults.get(tabId);
+    return cached && cached.connId === (activeId ?? null) ? cached : undefined;
+  });
+  const [resultSets, setResultSets] = useState<ResultSetEntry[]>(() => restored?.resultSets ?? []);
+  const [activeResult, setActiveResult] = useState(() => restored?.activeResult ?? 0);
   const activeIdx = resultSets.length > 0 ? Math.min(activeResult, resultSets.length - 1) : 0;
   const result = resultSets[activeIdx]?.res ?? null;
   // 以單一結果覆蓋結果區（分析模式 / 視覺化解釋回退 / 清空等單結果路徑）；null = 清空。
@@ -3880,7 +3918,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 重跑同形狀批次時整格重掛（重置各格的捲動位置 / 排序 / 篩選，避免新結果停在舊捲動深處像缺列）。
   const [runSeq, setRunSeq] = useState(0);
   // 各結果格摺疊狀態（多結果集時）：摺疊只藏內容不卸載，保留該格排序 / 篩選；新批次到達時重置。
-  const [collapsedSets, setCollapsedSets] = useState<Record<number, boolean>>({});
+  const [collapsedSets, setCollapsedSets] = useState<Record<number, boolean>>(() => restored?.collapsedSets ?? {});
   // 寫入一批新結果集（執行成功、或中途失敗但已有部分結果）：作用中重設為第一格、重置摺疊、遞增序號。
   const applyResultSets = useCallback((sets: ResultSetEntry[]) => {
     setResultSets(sets);
@@ -3891,14 +3929,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 結果表格目前的可視列（排序 + 篩選後）；複製 / 匯出依此而非原始 result，使輸出與所見一致。
   // 多結果集時只綁「作用中」那格的表格回報。
   const [resultView, setResultView] = useState<(string | null)[][] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(() => restored?.err ?? null);
   // 發生錯誤時實際送出的語句（供「AI 分析修正」帶進助手；queryToRun() 之後可能因選取改變而不同）。
-  const [errSql, setErrSql] = useState<string | null>(null);
+  const [errSql, setErrSql] = useState<string | null>(() => restored?.errSql ?? null);
   // 多語句批次中實際出錯的那一條（單句時為 null）；供 AI prompt 與「第 N 條」錯誤訊息對位。
-  const [errStmt, setErrStmt] = useState<string | null>(null);
+  const [errStmt, setErrStmt] = useState<string | null>(() => restored?.errStmt ?? null);
   const [running, setRunning] = useState(false);
   const [nlOpen, setNlOpen] = useState(false);
-  const [elapsed, setElapsed] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState<number | null>(() => restored?.elapsed ?? null);
   // 執行中的即時回饋：經過時間（250ms 更新）與多語句進度「第 N/M 條」。
   const [liveMs, setLiveMs] = useState<number | null>(null);
   const [runProgress, setRunProgress] = useState<{ done: number; total: number } | null>(null);
@@ -4043,17 +4081,26 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const editorRef = useRef<SqlEditorHandle>(null);
   // 下方分頁（致敬 Navicat 結果 / 摘要 / 解釋）：result=結果表格、summary=執行摘要、
   // explain=視覺化執行計畫、review=靜態審查（規則引擎，不需執行也不需 AI）。
-  const [bottomTab, setBottomTab] = useState<"result" | "summary" | "explain" | "review">("result");
-  const [summary, setSummary] = useState<RunSummary | null>(null);
-  const [plan, setPlan] = useState<PlanNode | null>(null);
-  const [planErr, setPlanErr] = useState<string | null>(null);
+  const [bottomTab, setBottomTab] = useState<"result" | "summary" | "explain" | "review">(() => restored?.bottomTab ?? "result");
+  const [summary, setSummary] = useState<RunSummary | null>(() => restored?.summary ?? null);
+  const [plan, setPlan] = useState<PlanNode | null>(() => restored?.plan ?? null);
+  const [planErr, setPlanErr] = useState<string | null>(() => restored?.planErr ?? null);
   // 計畫的原始 JSON：AI 調校要看的是完整計畫（成本 / 列數 / 存取方式），
   // 而 PlanNode 樹是為了畫圖而正規化過的，回頭序列化會丟掉方言特有欄位。
-  const [planRaw, setPlanRaw] = useState<string | null>(null);
+  const [planRaw, setPlanRaw] = useState<string | null>(() => restored?.planRaw ?? null);
   // AI 審查 / 調校進行中（要先打幾支 api 抓結構，不是瞬間完成）。
   const [aiBusy, setAiBusy] = useState(false);
   // Mongo 執行計畫（與 SQL 的 plan 分開：階段指標與成本模型不同，各自渲染器）。
-  const [mongoPlan, setMongoPlan] = useState<{ model: MongoExplainModel; raw: string } | null>(null);
+  const [mongoPlan, setMongoPlan] = useState<{ model: MongoExplainModel; raw: string } | null>(() => restored?.mongoPlan ?? null);
+  // 結果區狀態同步進快取：切走時 QueryPane 被卸載，來不及在 unmount 時收集，故隨改隨寫。
+  useEffect(() => {
+    paneResults.set(tabId, {
+      connId: activeId ?? null,
+      resultSets, activeResult, collapsedSets, err, errSql, errStmt, elapsed,
+      bottomTab, summary, plan, planErr, planRaw, mongoPlan,
+    });
+  }, [tabId, activeId, resultSets, activeResult, collapsedSets, err, errSql, errStmt, elapsed,
+      bottomTab, summary, plan, planErr, planRaw, mongoPlan]);
   // executionStats 會「實際執行」查詢；queryPlanner 只做計畫（便宜），供昂貴管線選用。
   const [mongoVerbosity, setMongoVerbosity] = useState<"queryPlanner" | "executionStats" | "allPlansExecution">("executionStats");
   const mongoEditorRef = useRef<MongoQueryEditorHandle>(null);
@@ -4177,7 +4224,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
 
   // 切換連線：載入該連線上次的查詢內容（或該類型預設），並清掉殘留結果。
   // 用 raw setSql（非 persistSql），避免把載入動作又寫回 localStorage。
+  //
+  // 掛載那一次不算「切換連線」——切回查詢分頁時 QueryPane 是重新掛載的，讓它跑就會把剛從
+  // paneResults 還原的結果集又清成空的。掛載時 sql 的 useState 初值本來就是同一個
+  // loadPersistedSql(...)，其餘清空對象也都還是初始值，跳過這一次不改變任何結果。
+  const connSwitched = useRef(false);
   useEffect(() => {
+    if (!connSwitched.current) { connSwitched.current = true; return; }
     setSql(loadPersistedSql(activeId, kind, tabId));
     setResult(null);
     setErr(null);
@@ -5847,6 +5900,8 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   sql?: string;
 }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass: rowDetailShell } = useModalView();
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
   // 範圍選取（Shift+點選第二角）：null = 單格。Ctrl+C 複製整個矩形為 TSV，狀態列顯示統計。
   const [rangeEnd, setRangeEnd] = useState<{ r: number; c: number } | null>(null);
@@ -6333,10 +6388,6 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
             column={result.columns[inspect.c]}
             value={cell(inspect.r, inspect.c)}
             editable={!!editTarget}
-            // 查詢結果沒有欄位型別資訊（QueryResult 只回欄名 + 字串），所以改以「唯讀時才自動排版」為界：
-            // 唯讀不會寫回，直接看到縮排 JSON 只有好處；可編輯（editTarget 有對應單表）時保守不動，避免把
-            // VARCHAR 裡的緊湊 JSON 排版後寫回去。要排版仍可按「格式化 JSON」。
-            autoFormat={!editTarget}
             onSave={(rawText, setNull) => void applyEdit(inspect.r, inspect.c, rawText, setNull)}
             // 能把列對回原表就給「產生 UPDATE 腳本」：可用視窗裡排版 / 改過的內容產生，唯讀連線也給。
             onScript={conn && rowTarget ? (text) => cellUpdateScript(inspect.r, inspect.c, text) : undefined}
@@ -6346,18 +6397,19 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
 
         {rowDetail !== null && viewRows[rowDetail] && (
           <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={() => setRowDetail(null)}>
-            <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[84vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+            <div className={`bg-elevated w-[560px] max-w-[92vw] max-h-[84vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${rowDetailShell}`}
               onClick={(e) => e.stopPropagation()}>
               <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
                 <span className="font-medium text-sm">{t("列詳情")}</span>
                 <span className="text-xs text-fg/40">{t("第 {n} 列", { n: rowDetail + 1 })}</span>
-                <button type="button" onClick={() => setRowDetail(null)} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+                <ModalViewControls code className="ml-auto" />
+                <button type="button" onClick={() => setRowDetail(null)} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
               </div>
               <div className="overflow-auto divide-y divide-fg/5">
                 {result.columns.map((col, j) => {
                   const v = viewRows[rowDetail][j];
                   return (
-                    <div key={col} className="flex gap-3 px-4 py-1.5 text-sm hover:bg-fg/5">
+                    <div key={col} className="flex gap-3 px-4 py-1.5 code-scale hover:bg-fg/5">
                       <span className="text-fg/45 w-40 shrink-0 mono break-all">{col}</span>
                       <span className="text-fg/85 mono break-all flex-1">{v === null ? <span className="text-fg/30 italic">NULL</span> : v}</span>
                     </div>

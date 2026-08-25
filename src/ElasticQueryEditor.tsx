@@ -40,7 +40,7 @@ const DSL_KEYWORDS = [
 ];
 
 const baseTheme = EditorView.theme({
-  "&": { fontSize: "13px", height: "100%" },
+  "&": { fontSize: "var(--code-font-size, 13px)", height: "100%" },
   ".cm-scroller": { overflow: "auto" },
   ".cm-content": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
   ".cm-gutters": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },

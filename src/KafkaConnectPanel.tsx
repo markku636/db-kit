@@ -8,7 +8,7 @@ import {
   type KafkaConnectPlugin,
 } from "./api";
 import { toast, uiConfirm, useModalOverlay } from "./ui";
-import { IconButton } from "./ui/index";
+import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 
@@ -91,15 +91,18 @@ export default function KafkaConnectPanel({ connId, connName, onClose }: {
     <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATE_CLS[state] ?? STATE_CLS.UNASSIGNED}`}>{state}</span>
   );
 
+  const { shellClass } = useModalView();
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-app w-[920px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className={`bg-app w-[920px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`} onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3">
           <Icon icon={Cable} size={14} className="text-cyan-300/90" />
           <span className="font-medium text-sm">{t("連接器")} · {connName}</span>
           <span className="text-xs text-fg/35">{connectors.length}</span>
           <button type="button" onClick={startCreate} className="ml-2 px-2 py-1 rounded bg-accent/80 hover:bg-accent text-white text-xs">{t("新增連接器")}</button>
-          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
+          <ModalViewControls code className="ml-auto" />
+          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
 
         {err && <div className="px-4 py-1.5 text-red-400 text-xs mono break-all border-b border-fg/10">{err}</div>}
@@ -165,7 +168,7 @@ export default function KafkaConnectPanel({ connId, connName, onClose }: {
                         {tk.trace && <button type="button" onClick={() => setOpenTrace(openTrace === tk.id ? null : tk.id)} className="text-fg/40 hover:text-accent">{openTrace === tk.id ? t("收合") : t("錯誤")}</button>}
                         <button type="button" onClick={() => act(() => api.kafkaConnectRestartTask(connId, detail.name, tk.id), t("已重啟任務"))} className="ml-auto text-fg/40 hover:text-accent">{t("重啟")}</button>
                       </div>
-                      {openTrace === tk.id && tk.trace && <pre className="bg-inset rounded p-2 mono whitespace-pre-wrap break-all text-red-300/80 mt-1">{tk.trace}</pre>}
+                      {openTrace === tk.id && tk.trace && <pre className="bg-inset rounded p-2 mono code-scale whitespace-pre-wrap break-all text-red-300/80 mt-1">{tk.trace}</pre>}
                     </div>
                   ))}
                 </div>
@@ -179,7 +182,7 @@ export default function KafkaConnectPanel({ connId, connName, onClose }: {
                   </div>
                   {editing
                     ? <div className="border border-fg/15 rounded overflow-hidden"><CodeMirror value={config} onChange={setConfig} extensions={[jsonLang()]} theme="dark" height="220px" basicSetup={{ foldGutter: false }} /></div>
-                    : <pre className="bg-inset rounded p-2 mono whitespace-pre-wrap break-all">{config}</pre>}
+                    : <pre className="bg-inset rounded p-2 mono code-scale whitespace-pre-wrap break-all">{config}</pre>}
                 </div>
               </div>
             ) : (

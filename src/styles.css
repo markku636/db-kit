@@ -22,6 +22,11 @@
   --c-shadow: 0 0 0; /* 陰影基底（深色＝黑） */
   --shadow-strength: 0.5; /* 陰影濃度 */
 
+  /* ---- 程式碼字級：由跳窗標題列的 A−/A＋ 與 Ctrl +/-/0 調整（見 ui/modalChrome.tsx）。
+     三個 CodeMirror 編輯器的主題與 .code-scale 區塊都讀它，故一次調整處處生效。
+     JS 啟動時會 setProperty 覆寫；此處是 JS 未跑前的兜底，避免閃一下預設字級。 ---- */
+  --code-font-size: 13px;
+
   /* ---- 圓角刻度：控制項=sm(5)、容器=md(8)、modal=lg(12)、徽章=xs(3) ---- */
   --r-xs: 3px;
   --r-sm: 5px;
@@ -110,6 +115,14 @@ body {
 }
 .shadow-2xl {
   box-shadow: var(--e-4);
+}
+
+/* 整塊都是程式碼 / 等寬內容的區域：字級跟著 --code-font-size 走（跳窗可即時調整）。
+   只掛在「整塊是程式碼」的地方（SQL 檢視、JSON 預覽、DDL、訊息輸出）；
+   不要掛到資料表格的 mono 儲存格上——欄寬會跟著跳。 */
+.code-scale {
+  font-size: var(--code-font-size, 13px);
+  line-height: 1.55;
 }
 
 /* 等寬字型用於資料/SQL */

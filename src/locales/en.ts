@@ -2658,6 +2658,11 @@ const en: Catalog = {
   "讀取資料表結構失敗，暫不開放編輯。": "Could not read the table structure, so editing stays off.",
   "這一列的主鍵是 NULL，無法定位，請改從資料表分頁編輯。": "This row has a NULL primary key and cannot be located. Edit it from the table tab instead.",
   "已更新 {n} 列": { one: "{n} row updated", other: "{n} rows updated" },
+  "最大化": "Maximize",
+  "還原視窗大小": "Restore size",
+  "縮小程式碼字級 (Ctrl+-)": "Smaller code text (Ctrl+-)",
+  "放大程式碼字級 (Ctrl++)": "Larger code text (Ctrl++)",
+  "程式碼字級 {n}px（點一下回預設 {d}px）": "Code text {n}px (click to reset to {d}px)",
 };
 
 export default en;

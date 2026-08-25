@@ -62,6 +62,7 @@ export default function ViewDesigner({ connId, db, view, kind, onClose, onSaved 
   return (
     <Modal
       onClose={onClose}
+      codeZoom
       icon={Eye}
       title={(
         <span className="flex items-center gap-2">

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Server, X } from "lucide-react";
 import { api, type KafkaClusterInfo, type KafkaConfigEntry } from "./api";
 import { useModalOverlay } from "./ui";
-import { IconButton } from "./ui/index";
+import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 
@@ -41,9 +41,11 @@ export default function KafkaClusterOverview({ connId, connName, onClose }: {
 
   const healthy = info != null && info.under_replicated === 0 && info.offline_partitions === 0;
 
+  const { shellClass } = useModalView();
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-app w-[860px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className={`bg-app w-[860px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`} onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3">
           <Icon icon={Server} size={14} className="text-cyan-300/90" />
           <span className="font-medium text-sm">{t("叢集總覽")} · {connName}</span>
@@ -52,7 +54,8 @@ export default function KafkaClusterOverview({ connId, connName, onClose }: {
               ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">{t("健康")}</span>
               : <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">{t("需注意")}</span>
           )}
-          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
+          <ModalViewControls className="ml-auto" />
+          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
 
         {err && <div className="px-4 py-1.5 text-red-400 text-xs mono break-all border-b border-fg/10">{err}</div>}

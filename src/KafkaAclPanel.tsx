@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Shield, X } from "lucide-react";
 import { api, type KafkaAclBinding } from "./api";
 import { toast, uiConfirm, useModalOverlay } from "./ui";
-import { IconButton, EmptyState } from "./ui/index";
+import { IconButton, EmptyState, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 
@@ -79,15 +79,18 @@ export default function KafkaAclPanel({ connId, connName, onClose }: {
     <span className={`text-[10px] px-1.5 py-0.5 rounded ${p === "deny" ? "bg-red-500/15 text-red-300" : "bg-emerald-500/15 text-emerald-300"}`}>{p}</span>
   );
 
+  const { shellClass } = useModalView();
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-app w-[900px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className={`bg-app w-[900px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`} onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3">
           <Icon icon={Shield} size={14} className="text-indigo-300/90" />
           <span className="font-medium text-sm">ACL · {connName}</span>
           <span className="text-xs text-fg/35">{acls.length}</span>
           <button type="button" onClick={() => setCreating(blankAcl())} className="ml-2 px-2 py-1 rounded bg-accent/80 hover:bg-accent text-white text-xs">{t("新增 ACL")}</button>
-          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
+          <ModalViewControls className="ml-auto" />
+          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
 
         <div className="px-4 py-2 border-b border-fg/10 flex flex-wrap items-center gap-2 text-xs">

@@ -9,7 +9,7 @@ import {
 } from "./api";
 import { copyToClipboard, toast, uiConfirm, useModalOverlay } from "./ui";
 import { useStore } from "./store";
-import { IconButton } from "./ui/index";
+import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import Sparkline from "./ui/Sparkline";
 import { useT } from "./i18n";
@@ -182,14 +182,17 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
 
   const doDeleteGroup = () => { if (selected) void deleteGroupNamed(selected); };
 
+  const { shellClass } = useModalView();
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-app w-[860px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className={`bg-app w-[860px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`} onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3">
           <Icon icon={Users} size={14} className="text-amber-300/90" />
           <span className="font-medium text-sm">{t("消費者群組")} · {connName}</span>
           <span className="text-xs text-fg/35">{groups.length} {t("個")}</span>
-          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
+          <ModalViewControls className="ml-auto" />
+          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
 
         {err && <div className="px-4 py-1.5 text-red-400 text-xs mono break-all border-b border-fg/10">{err}</div>}

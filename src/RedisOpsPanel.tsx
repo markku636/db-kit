@@ -3,7 +3,7 @@ import { CircleDot, RefreshCw, X } from "lucide-react";
 import { api, BigKey, ClientInfo, SlowLogEntry } from "./api";
 import { copyToClipboard, toast, uiConfirm, useModalOverlay } from "./ui";
 import { useStore } from "./store";
-import { IconButton } from "./ui/index";
+import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 
@@ -17,9 +17,11 @@ export default function RedisOpsPanel({ connId, connName, database, onClose }: {
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount（避免全域快捷鍵在面板背後動作）
   const [tab, setTab] = useState<Tab>("slowlog");
 
+  const { shellClass } = useModalView();
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-elevated w-[860px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+      <div className={`bg-elevated w-[860px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3">
           <Icon icon={CircleDot} size={14} className="text-red-400" />
@@ -32,7 +34,8 @@ export default function RedisOpsPanel({ connId, connName, database, onClose }: {
               </button>
             ))}
           </div>
-          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
+          <ModalViewControls className="ml-auto" />
+          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
         <div className="flex-1 overflow-auto p-4">
           {tab === "slowlog" && <SlowLogTab connId={connId} />}

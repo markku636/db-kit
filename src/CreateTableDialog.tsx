@@ -77,6 +77,7 @@ export default function CreateTableDialog({ connId, database, kind, onClose, onC
   return (
     <Modal
       onClose={onClose}
+      codeZoom
       title={<span className="flex items-center gap-2">{t("設計表結構")}<span className="text-xs text-fg/40 mono">{database}</span></span>}
       icon={Table2}
       size="xl"
@@ -150,7 +151,7 @@ export default function CreateTableDialog({ connId, database, kind, onClose, onC
 
           <div>
             <span className="text-xs text-fg/40 mb-1 block">{t("SQL 預覽")}</span>
-            <pre className="bg-inset border border-fg/10 rounded p-3 text-xs mono text-fg/70 overflow-auto max-h-40 whitespace-pre-wrap">{previewSql}</pre>
+            <pre className="bg-inset border border-fg/10 rounded p-3 code-scale mono text-fg/70 overflow-auto max-h-40 whitespace-pre-wrap">{previewSql}</pre>
           </div>
     </Modal>
   );

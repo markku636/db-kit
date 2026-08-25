@@ -99,6 +99,7 @@ export default function RoutineExecDialog({ connId, db, kind, routine, onClose, 
   return (
     <Modal
       onClose={onClose}
+      codeZoom
       size="md"
       zClass="z-[97]"
       title={
@@ -152,7 +153,7 @@ export default function RoutineExecDialog({ connId, db, kind, routine, onClose, 
               className="w-full text-xs mono resize-y"
             />
           ) : (
-            <pre className="bg-inset border border-fg/10 rounded px-3 py-2 text-xs mono text-fg/70 whitespace-pre-wrap break-all max-h-40 overflow-auto">{sql}</pre>
+            <pre className="bg-inset border border-fg/10 rounded px-3 py-2 code-scale mono text-fg/70 whitespace-pre-wrap break-all max-h-40 overflow-auto">{sql}</pre>
           )}
         </div>
       </div>

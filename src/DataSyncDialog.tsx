@@ -111,6 +111,7 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
   return (
     <Modal
       onClose={onClose}
+      codeZoom
       title={<>{t("資料比對 / 同步 ·")} <span className="mono text-fg/60">{table}</span></>}
       icon={GitCompare}
       size="lg"
@@ -182,7 +183,7 @@ export default function DataSyncDialog({ connId, database, table, onClose, onUse
             </div>
           )}
           {dml ? (
-            <pre className="max-h-60 overflow-auto text-[11px] mono text-fg/75 whitespace-pre-wrap break-words bg-app/40 rounded p-2">{dml}</pre>
+            <pre className="max-h-60 overflow-auto code-scale mono text-fg/75 whitespace-pre-wrap break-words bg-app/40 rounded p-2">{dml}</pre>
           ) : (
             <div className="text-xs text-fg/40">{t("兩表資料一致，無需同步。")}</div>
           )}

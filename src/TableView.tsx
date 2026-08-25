@@ -6,7 +6,7 @@ import {
   Copy, Pencil, Columns3,
 } from "lucide-react";
 import Icon from "./ui/Icon";
-import { Button, EmptyState } from "./ui/index";
+import { Button, EmptyState, ModalViewControls, useModalView } from "./ui/index";
 import {
   api, ColumnInfo, ColumnStats, DbKind, ErRelation, Filter as FilterCond, ForeignKeyInfo, IndexInfo, KeyDetail, KeyEdit, KeyPage,
   MongoIndexOptions, MongoIndexStat, MongoValidation, PagedData, RowInsert, Sort, SortDir,
@@ -17,7 +17,7 @@ import KafkaTopicConfig from "./KafkaTopicConfig";
 import RabbitMqQueueBrowser from "./RabbitMqQueueBrowser";
 import RabbitMqQueueDetail from "./RabbitMqQueueDetail";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
-import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, isJsonColumnType, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
+import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
@@ -259,25 +259,20 @@ function DataPane({ tab }: { tab: OpenTab }) {
   }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
 
   // 欄位 comment：欄名 → COLUMN_COMMENT（供表頭 hover 顯示欄位說明，致敬 Navicat）。僅 SQL 資料表 + 資料分頁時載入。
-  // 同一份 tableColumns 順手記下宣告型別（欄名 → data_type，小寫），供 JSON 欄位開窗自動格式化判斷。
   const [commentMap, setCommentMap] = useState<Record<string, string>>({});
-  const [typeMap, setTypeMap] = useState<Record<string, string>>({});
   useEffect(() => {
-    if (!isSqlKind || tab.view !== "data") { setCommentMap({}); setTypeMap({}); return; }
+    if (!isSqlKind || tab.view !== "data") { setCommentMap({}); return; }
     let alive = true;
     api.tableColumns(tab.connId, tab.database, tab.table)
       .then((cols) => {
         if (!alive) return;
         const m: Record<string, string> = {};
-        const tm: Record<string, string> = {};
         for (const col of cols) {
           if (col.comment) m[col.name] = col.comment;
-          tm[col.name] = (col.data_type ?? "").toLowerCase();
         }
         setCommentMap(m);
-        setTypeMap(tm);
       })
-      .catch(() => { if (alive) { setCommentMap({}); setTypeMap({}); } });
+      .catch(() => { if (alive) setCommentMap({}); });
     return () => { alive = false; };
   }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
 
@@ -1989,7 +1984,6 @@ function DataPane({ tab }: { tab: OpenTab }) {
           column={data.columns[inspect.c]}
           value={cellValue(inspect.r, inspect.c)}
           editable={editable}
-          autoFormat={isJsonColumnType(typeMap[data.columns[inspect.c]])}
           onSave={(raw, setNull) => commitEdit(inspect.r, inspect.c, raw, setNull)}
           // 需主鍵定位才生得出 WHERE；唯讀連線同樣提供（只是產生腳本，不寫入）。
           onScript={isSqlKind && connKind && data.primary_key.length > 0
@@ -2035,16 +2029,19 @@ function DataPane({ tab }: { tab: OpenTab }) {
 // Mongo 欄位統計視窗：型別分布橫條（混型欄位核心資訊）+ Top-10 值 + 缺欄 / null / 相異值 / 抽樣註記。
 function FieldStatsModal({ col, stats, onClose }: { col: string; stats: ColumnStats; onClose: () => void }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   useModalOverlay(onClose);
   const typeTotal = stats.types.reduce((a, [, n]) => a + n, 0) || 1;
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[80vh] overflow-auto rounded-lg border border-fg/10 shadow-2xl"
+      <div className={`bg-elevated w-[560px] max-w-[92vw] max-h-[80vh] overflow-auto rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
           <Icon icon={BarChart3} size={14} className="text-green-400" />
           <span className="font-medium text-sm">{t("欄位統計 ·")} <span className="mono">{col}</span></span>
-          <button type="button" onClick={onClose} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+          <ModalViewControls className="ml-auto" />
+          <button type="button" onClick={onClose} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
         <div className="p-4 space-y-4 text-sm">
           <div className="flex flex-wrap gap-2 text-xs">
@@ -2110,6 +2107,8 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
   onClose: () => void; onSaved: () => void;
 }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   const [text, setText] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -2143,12 +2142,13 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-elevated w-[640px] max-h-[85vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+      <div className={`bg-elevated w-[640px] max-h-[85vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
           <span className="font-medium text-sm">{t("編輯文件（JSON）")}</span>
           <span className="text-xs text-fg/40 mono truncate">{table}</span>
-          <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+          <ModalViewControls code className="ml-auto" />
+          <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
         <div className="p-4 overflow-auto flex-1">
           {err && <div className="text-danger text-sm mono mb-2 break-all">{err}</div>}
@@ -2156,7 +2156,7 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
             <div className="text-fg/40 text-sm">{t("讀取中…")}</div>
           ) : (
             <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
-              className="w-full h-96 bg-inset border border-fg/10 rounded p-3 mono text-sm outline-none focus:border-accent resize-none" />
+              className="w-full h-96 bg-inset border border-fg/10 rounded p-3 mono code-scale outline-none focus:border-accent resize-none" />
           )}
         </div>
         <div className="px-5 py-3 border-t border-fg/10 flex items-center gap-2">
@@ -2186,6 +2186,8 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
   onClose: () => void;
 }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   useModalCount(); // 開啟期間讓全域快捷鍵（Ctrl+W/Tab、"/"）讓路，不在背後動作
   // 記錄瀏覽器鍵盤：↑/PageUp 上一列、↓/PageDown 下一列、Esc 關閉（編輯欄位時方向鍵交給輸入框）。
   useEffect(() => {
@@ -2203,7 +2205,7 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={onClose}>
-      <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+      <div className={`bg-elevated w-[560px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2 text-sm">
           <span className="font-medium">{t("第 {rowNo} 列", { rowNo })}</span>
@@ -2223,7 +2225,7 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
               {editable ? (
                 <RowField value={values[ci]} onSave={(raw, setNull) => onEdit(ci, raw, setNull)} />
               ) : (
-                <span className="flex-1 mono text-sm break-all py-1" data-selectable>
+                <span className="flex-1 mono code-scale break-all py-1" data-selectable>
                   {values[ci] === null ? <span className="text-fg/30 italic">NULL</span> : values[ci]}
                 </span>
               )}
@@ -2257,7 +2259,7 @@ function RowField({ value, onSave }: { value: string | null; onSave: (raw: strin
 }
 
 // 儲存格內容檢視器：檢視 / 編輯長文字、JSON、二進位預覽。可切換 JSON 排版、複製、產生 UPDATE 腳本。
-export function CellInspector({ column, value, editable, onSave, onClose, onScript, showFormat = true, autoFormat = false }: {
+export function CellInspector({ column, value, editable, onSave, onClose, onScript, showFormat = true }: {
   column: string;
   value: string | null;
   editable: boolean;
@@ -2267,18 +2269,39 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
   onScript?: (text: string) => void;
   // 是否顯示「格式化 JSON」（DDL 檢視等情境關閉）。
   showFormat?: boolean;
-  // 開窗即自動縮排 JSON。由呼叫端確認「這欄就是 JSON」（宣告型別 json / jsonb）或唯讀情境時才開：
-  // 否則 VARCHAR 裡的緊湊 JSON 被擅自排版，使用者一改就把縮排寫回去，可能撞欄位長度上限。
-  autoFormat?: boolean;
 }) {
   const t = useT();
-  // 初始內容：autoFormat 時把 JSON 物件 / 陣列先排好版，省去每次手動按「格式化 JSON」。
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
+  // 初始內容：一律把 JSON 物件 / 陣列先排好版，省去每次手動按「格式化 JSON」。
   // 純量（數字 / 字串 / true）與非合法 JSON 維持原文；要看原始單行內容按 footer 的「原始格式」。
-  const initial = useMemo(
-    () => (autoFormat ? prettyJsonIfStructured(value ?? "") : value ?? ""),
-    [value, autoFormat],
-  );
+  const initial = useMemo(() => prettyJsonIfStructured(value ?? ""), [value]);
+  // 原值是不是「單行緊湊 JSON」：自動排版只為了好讀，不該連帶改變資料庫裡的存法。
+  // 是的話寫回前壓回單行，免得縮排空白跟著存進去（VARCHAR 有長度上限，撐爆就寫入失敗）。
+  // 想把某欄改存成縮排格式，走「產生 UPDATE 腳本」——那條路以視窗裡的內容原樣產生。
+  const wasCompact = useMemo(() => {
+    const raw = value ?? "";
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      // 同 jsonMode：以「沒有換行」認定原值是單行存法，而不是跟 JSON.stringify 逐字元比對——
+      // MySQL 回 JSON 欄位會正規化成 {"a": 1, "b": 2}（冒號 / 逗號後帶空格），逐字元比對會把它
+      // 誤判成「原本就是縮排的」，套用變更時就把自動排版的縮排一起寫回資料庫。
+      return parsed !== null && typeof parsed === "object" && !raw.includes("\n");
+    } catch {
+      return false;
+    }
+  }, [value]);
   const [text, setText] = useState(initial);
+  const outgoing = () => {
+    if (!wasCompact) return text;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (parsed === null || typeof parsed !== "object") return text;
+      return JSON.stringify(parsed);
+    } catch {
+      return text; // 改成不合法 JSON 就照原樣寫回，錯誤留給資料庫報
+    }
+  };
   // 與 initial（可能已自動排版）比對：單純的自動排版不算「未套用的編輯」，套用變更仍維持 disabled。
   const dirty = editable && text !== initial;
   useModalOverlay(onClose); // 計入 modalCount + 視窗層級 Esc（不再僅靠 textarea 聚焦才能 Esc）
@@ -2305,7 +2328,10 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
     try {
       const parsed: unknown = JSON.parse(text);
       if (parsed === null || typeof parsed !== "object") return null;
-      return text === JSON.stringify(parsed) ? "compact" : "pretty";
+      // 以「有沒有換行」判斷是否已縮排，而不是跟 JSON.stringify 逐字元比對：MySQL 回 JSON 欄位時
+      // 會正規化成冒號 / 逗號後帶一個空格（{"a": 1, "b": 2}），逐字元比對會把這種單行值誤判成
+      // 「已排版」，按鈕顯示成「原始格式」，使用者得先壓成單行再按第二次才真的縮排。
+      return text.includes("\n") ? "pretty" : "compact";
     } catch {
       return null;
     }
@@ -2322,9 +2348,8 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
     }
   };
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={onClose}>
-      <div className="bg-elevated w-[660px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]">
+      <div className={`bg-elevated w-[660px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
           <span className="font-medium text-sm mono truncate">{column}</span>
           {value === null && <span className="text-[10px] px-1.5 py-0.5 rounded bg-fg/10 text-fg/50">NULL</span>}
@@ -2341,9 +2366,9 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
             readOnly={!editable} title={editable ? t("儲存格內容（Ctrl+Enter 套用）") : t("儲存格內容")}
             onKeyDown={(e) => {
               if (e.key === "Escape") onClose();
-              else if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && editable && dirty) { e.preventDefault(); onSave(text, false); onClose(); }
+              else if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && editable && dirty) { e.preventDefault(); onSave(outgoing(), false); onClose(); }
             }}
-            className="w-full h-72 bg-inset border border-fg/10 rounded p-3 mono text-sm outline-none focus:border-accent resize-none break-all" />
+            className="w-full h-72 bg-inset border border-fg/10 rounded p-3 mono code-scale outline-none focus:border-accent resize-none break-all" />
         </div>
         <div className="px-5 py-3 border-t border-fg/10 flex items-center gap-2">
           {showFormat && (
@@ -2366,11 +2391,7 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
           )}
           <div className="ml-auto flex gap-2">
             {editable && (
-              <button type="button" onClick={() => { onSave("", true); onClose(); }}
-                className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5 text-fg/70">{t("設為 NULL")}</button>
-            )}
-            {editable && (
-              <button type="button" disabled={!dirty} onClick={() => { onSave(text, false); onClose(); }}
+              <button type="button" disabled={!dirty} onClick={() => { onSave(outgoing(), false); onClose(); }}
                 title={t("套用變更 (Ctrl+Enter)")}
                 className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">{t("套用變更")}</button>
             )}
@@ -2391,6 +2412,8 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   connId: string; database: string; table: string; rkey: string; onClose: () => void;
 }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount（先前完全沒有 Esc 處理）
   const [page, setPage] = useState<KeyPage | null>(null);
   // 累積已載入的成員（跨多頁），供 KeyDetailBody 以既有渲染呈現。
@@ -2477,7 +2500,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-elevated w-[560px] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+      <div className={`bg-elevated w-[560px] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
           <span className="font-medium text-sm mono truncate">{rkey}</span>
@@ -2798,7 +2821,7 @@ function StringEditor({ value, onSave, busy, truncated, valueBytes, onLoadFull }
 
       {view === "raw" && (
         <textarea value={text} onChange={(e) => setText(e.target.value)} title={t("字串值")}
-          className="w-full h-40 bg-inset border border-fg/10 rounded p-3 mono text-sm outline-none focus:border-accent resize-none break-all" />
+          className="w-full h-40 bg-inset border border-fg/10 rounded p-3 mono code-scale outline-none focus:border-accent resize-none break-all" />
       )}
       {view === "json" && (
         <pre className="w-full h-40 overflow-auto bg-inset border border-fg/10 rounded p-3 mono text-sm whitespace-pre-wrap break-all">
@@ -3001,6 +3024,8 @@ function InsertDialog({ columns, onSubmit, onCancel, busy, initial }: {
   initial?: Record<string, string | null>;
 }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   // 每欄一個值；nulls 標記哪些欄留 NULL（不送出 → 走 DB 預設）
   const [values, setValues] = useState<Record<string, string>>(() => {
     const v: Record<string, string> = {};
@@ -3028,8 +3053,11 @@ function InsertDialog({ columns, onSubmit, onCancel, busy, initial }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-elevated w-[480px] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl">
-        <div className="px-5 py-3 border-b border-fg/10 font-medium text-sm">{t("新增列")}</div>
+      <div className={`bg-elevated w-[480px] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}>
+        <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2 font-medium text-sm">
+          {t("新增列")}
+          <ModalViewControls className="ml-auto" />
+        </div>
         <div className="p-4 space-y-2 overflow-y-auto">
           <p className="text-xs text-fg/40">{t("未填寫且未標 NULL 的欄位，交由資料庫預設值處理。")}</p>
           {columns.map((c, ci) => (

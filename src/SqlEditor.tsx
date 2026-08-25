@@ -95,7 +95,7 @@ function lineToRange(doc: string, line: number): { from: number; to: number } {
 // 垂直捲動靠 CSS「一軸非 visible 時另一軸的 visible 計算為 auto」的隱式推導撐著，
 // 而外層容器是 overflow-hidden——一旦推導失效，超出高度的 SQL 會被直接裁掉而非捲動。
 const baseTheme = EditorView.theme({
-  "&": { fontSize: "13px", height: "100%" },
+  "&": { fontSize: "var(--code-font-size, 13px)", height: "100%" },
   ".cm-scroller": { overflow: "auto" },
   ".cm-content": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
   ".cm-gutters": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" },
