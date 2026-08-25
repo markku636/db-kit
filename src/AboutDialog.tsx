@@ -79,14 +79,14 @@ export default function AboutDialog({ onClose }: { onClose: () => void }) {
           </Button>
         </div>
 
-        {/* 相關連結（以系統瀏覽器開啟） */}
-        <div className="mt-3 flex items-center gap-1">
+        {/* 相關連結（以系統瀏覽器開啟）。標籤不可斷行，容不下時整顆按鈕換行（字級放大時會排成 2×2）。 */}
+        <div className="mt-3 flex flex-wrap justify-center items-center gap-x-1 gap-y-0.5 max-w-full">
           {links.map((l) => (
             <button
               type="button"
               key={l.label}
               onClick={() => openUrl(l.url)}
-              className="inline-flex items-center gap-1.5 text-[13px] text-fg/60 hover:text-fg hover:bg-fg/5 rounded px-2 py-1"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap text-[13px] text-fg/60 hover:text-fg hover:bg-fg/5 rounded px-2 py-1"
             >
               <Icon icon={l.icon} size={13} />
               {l.label}
