@@ -11,12 +11,15 @@ export type ModalSize = "sm" | "md" | "lg" | "xl" | "full";
 // 開啟中的對話框堆疊（後進者為最上層）：Esc 僅關最上層，避免巢狀對話框一次全關。
 const modalStack: symbol[] = [];
 
+// 寬度以 rem 表示（1rem = 使用者選的介面字級，見 uiFont.ts）：字級調大時對話框跟著變寬，
+// 否則放大字之後每個欄位都在原本的 420px 裡換行。註解的 px 為預設字級 16px 下的等值。
+// 溢出由 shell 的 max-w-[94vw] 收尾，小視窗 + 超大字級也不會被切掉。
 const widths: Record<ModalSize, string> = {
-  sm: "w-[420px]",
-  md: "w-[560px]",
-  lg: "w-[720px]",
-  xl: "w-[920px]",
-  full: "w-[1100px]",
+  sm: "w-[26.25rem]", // 420px
+  md: "w-[35rem]", // 560px
+  lg: "w-[45rem]", // 720px
+  xl: "w-[57.5rem]", // 920px
+  full: "w-[68.75rem]", // 1100px
 };
 
 export interface ModalProps {

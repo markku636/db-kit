@@ -93,6 +93,11 @@
     "PingFang TC", "Microsoft JhengHei", sans-serif;
   /* cv05＝單層 a、cv08＝改良 6/9、tabular-friendly；提升開發者工具的辨識度。 */
   font-feature-settings: "cv05", "cv08";
+  /* 全域介面字級＝整份 rem 的基準（見 uiFont.ts 與「設定 → 字級」）。
+     Tailwind 的 text-* 與間距刻度都是 rem，故調這一個值＝整個介面等比縮放：
+     文字與版面一起長大，不會出現字撐破列高的擠壓。
+     JS 啟動前由 index.html 的開機腳本寫入變數，此處 16px 只是變數未設好時的兜底。 */
+  font-size: var(--ui-font-size, 16px);
 }
 
 html, body, #root {
@@ -130,6 +135,17 @@ body {
   font-family: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
+
+/* Tailwind 的任意值字級（text-[11px] 這類小標籤，全案 200+ 處）會編成固定 px，
+   不跟著 --ui-font-size 走 —— 而那些正是放大介面時最需要一起長大的字。
+   這裡以同名、同特異性的規則改寫為 rem；本檔在 @tailwind utilities 之後，
+   同分時後者出線，故不需要 !important。除數 16 = 預設介面字級，換算後與原 px 等值，
+   沒調過字級的使用者外觀零變化。日後新寫的 text-[Npx] 也自動受惠，補一行即可。 */
+.text-\[9px\] { font-size: 0.5625rem; } /* 9 / 16 */
+.text-\[10px\] { font-size: 0.625rem; } /* 10 / 16 */
+.text-\[11px\] { font-size: 0.6875rem; } /* 11 / 16 */
+.text-\[12px\] { font-size: 0.75rem; } /* 12 / 16 */
+.text-\[13px\] { font-size: 0.8125rem; } /* 13 / 16 */
 
 /* ---- 全域 UI/UX 打磨：致敬商用工具的精緻手感 ---- */
 

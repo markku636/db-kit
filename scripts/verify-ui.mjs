@@ -429,6 +429,46 @@ const CASES = {
       (await page.locator('button[title*="格式化 SQL"]').first().innerText()).includes("格式化"),
     );
   },
+
+  // 全域介面字級：設定裡改一次，整份 rem 基準（<html> 的 font-size）跟著變，
+  // 連 text-[11px] 這種任意值小標籤也一起放大（靠 styles.css 的 rem 覆寫，見該檔註解）。
+  // 這是最容易默默失效的一環：Tailwind 會把任意值編成固定 px，只要覆寫沒生效或被
+  // utilities 蓋回去，畫面就是「大字配一排小到看不清的標籤」，而且不會有任何錯誤。
+  async "ui-font-size-global"(page) {
+    const rootPx = () =>
+      page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
+    const tinyPx = () =>
+      page.evaluate(() => {
+        const el = [...document.querySelectorAll("*")].find((e) => e.classList.contains("text-[11px]"));
+        return el ? parseFloat(getComputedStyle(el).fontSize) : null;
+      });
+    const codeVar = () =>
+      page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--code-font-size").trim());
+
+    check("預設介面字級 16px（未設定過的使用者外觀不變）", (await rootPx()) === 16);
+    check("預設下 text-[11px] 仍是 11px", (await tinyPx()) === 11);
+
+    await page.locator('button[title="設定"]').first().click();
+    await sleep(600);
+    const picker = page.locator('select:has(option:text-is("標準（預設）"))');
+    check("設定對話框有介面字級下拉", (await picker.count()) > 0);
+
+    await picker.selectOption("20");
+    await sleep(400);
+    check("選「特大」後 rem 基準變 20px", (await rootPx()) === 20, String(await rootPx()));
+    // 11 / 16 × 20 = 13.75：任意值小標籤有跟著等比長大，不是停在 11px。
+    check("text-[11px] 等比放大到 13.75px", Math.abs((await tinyPx()) - 13.75) < 0.05, String(await tinyPx()));
+    check("程式碼字級不受介面字級影響（仍 13px）", (await codeVar()) === "13px", await codeVar());
+    check(
+      "偏好寫進 localStorage（下次啟動可還原）",
+      (await page.evaluate(() => localStorage.getItem("dbkit:uiFontSize"))) === "20",
+    );
+
+    await picker.selectOption("16");
+    await sleep(400);
+    check("選回「標準（預設）」即還原 16px", (await rootPx()) === 16);
+    check("還原後 text-[11px] 回到 11px", (await tinyPx()) === 11);
+  },
 };
 
 // ── main ───────────────────────────────────────────────────────────────
