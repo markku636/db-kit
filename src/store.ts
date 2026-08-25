@@ -2,7 +2,10 @@ import { create } from "zustand";
 import { ConnectionConfig, ConnGroup, DbKind } from "./api";
 import { loadReadonly, persistReadonly, setReadonlyFlag, type ReadonlyMap } from "./connReadonly";
 import { loadSession, saveQueryTabSession } from "./session";
+import { pruneQueryDrafts } from "./queryDrafts";
 import {
+  loadQueryHistory,
+  pushQueryHistory,
   loadSavedQueries,
   persistSavedQueries,
   upsertSavedQuery,
@@ -426,7 +429,20 @@ export const useStore = create<AppStore>((set) => ({
 // 還有 markDisconnected 與各 closeTab* 的落點計算），逐一插 persist 遲早漏掉一條；
 // 訂閱一次涵蓋全部路徑，也涵蓋日後新增的路徑。
 useStore.subscribe((s, prev) => {
+  if (s.queryTabs !== prev.queryTabs) dropClosedQueryDrafts(s.queryTabs, s.connections);
   if (s.queryTabs === prev.queryTabs && s.activeTabKey === prev.activeTabKey) return;
   saveQueryTabSession(s.queryTabs, s.activeTabKey);
 });
+
+// 關掉的查詢分頁：草稿（所有連線）一併清掉——分頁 id 會被回收（關掉「查詢 2」再按「+」/ Ctrl+N
+// 拿到的又是 __query__:2），留著會讓新分頁一掛上就是舊內容。清掉前先存進查詢歷史，誤關仍救得回來。
+// 走同一個訂閱，單關 / 關其他 / 全部關閉一次涵蓋；仍開著的分頁草稿原樣保留，重開 app 照舊還原。
+// 啟動時也跑一次：把改版前累積的孤兒草稿（沒有分頁承接卻躺在磁碟上的）收進歷史。
+function dropClosedQueryDrafts(queryTabs: string[], connections: ConnectionConfig[]) {
+  const removed = pruneQueryDrafts(queryTabs);
+  if (!removed.length) return;
+  let hist = loadQueryHistory();
+  for (const d of removed) hist = pushQueryHistory(hist, d.sql, connections.find((c) => c.id === d.connId)?.name);
+}
+dropClosedQueryDrafts(session.queryTabs, []);
 

@@ -28,6 +28,7 @@ import { kindIcon } from "./kindIcons";
 import { friendlyDbError } from "./dbErrors";
 import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
+import { sqlStoreKey } from "./queryDrafts";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile } from "./ui";
 import { askOtpCode } from "./otpGate";
 import {
@@ -3701,10 +3702,8 @@ const DB_SELECT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "external"];
 // db-kit 本體的 external stub 連線都建不起來，列進來對開源版沒有副作用。
 const RESULT_EDIT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "mssql", "oracle", "external"];
 
-// 查詢編輯器內容 per-連線 持久化（重開 / 切換連線後沿用上次的查詢）。
-// 查詢內容持久化鍵：每連線 × 每查詢分頁。預設 home 分頁沿用舊鍵（向後相容，既有草稿不遺失）。
-const sqlStoreKey = (id: string, tabId = "__query__") =>
-  tabId === "__query__" ? `db-kit:querySql:${id}` : `db-kit:querySql:${id}:${tabId}`;
+// 查詢編輯器內容 per-連線 × per-分頁 持久化（重開 / 切換連線後沿用上次的查詢）：鍵見 queryDrafts.ts 的
+// sqlStoreKey。分頁關閉時 store 會把該分頁在所有連線下的草稿清掉（見 store.ts），新分頁才不會撿到舊內容。
 // 「目前資料庫」選擇 per-連線 持久化（切換連線 / 重開後沿用上次選的庫）。
 const queryDbStoreKey = (id: string) => `db-kit:queryDb:${id}`;
 // 「跨庫」預載清單 per-連線 持久化：常態跨庫的人一次選好，開檔即有 `other_db.` 的提示。
