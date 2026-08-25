@@ -9,7 +9,7 @@ import {
 } from "./api";
 import { copyToClipboard, toast, uiConfirm, useModalOverlay } from "./ui";
 import { useStore } from "./store";
-import { IconButton, ModalViewControls, useModalView } from "./ui/index";
+import { IconButton, MenuPanel, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import Sparkline from "./ui/Sparkline";
 import { useT } from "./i18n";
@@ -418,31 +418,24 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
       </div>
 
       {groupMenu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setGroupMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setGroupMenu(null); }} />
-          <div className="fixed z-[90] min-w-[180px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: groupMenu.x, top: groupMenu.y }}
-            onClick={(e) => e.stopPropagation()}>
+        <MenuPanel x={groupMenu.x} y={groupMenu.y} minW={180} onClose={() => setGroupMenu(null)}>
+          <button type="button"
+            onClick={() => { const g = groupMenu.group; setGroupMenu(null); copyToClipboard(g, t("已複製群組名")); }}
+            className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("複製群組名")}</button>
+          <button type="button"
+            onClick={() => { setGroupMenu(null); loadGroups(); }}
+            className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("重新整理")}</button>
+          <div className="my-1 border-t border-fg/10" />
+          {!readonly && (
             <button type="button"
-              onClick={() => { const g = groupMenu.group; setGroupMenu(null); copyToClipboard(g, t("已複製群組名")); }}
-              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("複製群組名")}</button>
-            <button type="button"
-              onClick={() => { setGroupMenu(null); loadGroups(); }}
-              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("重新整理")}</button>
-            <div className="my-1 border-t border-fg/10" />
-            {!readonly && (
-              <button type="button"
-                disabled={busy || !groupMenu.empty}
-                title={groupMenu.empty ? undefined : t("群組須 Empty 才能刪除")}
-                onClick={() => { const g = groupMenu.group; setGroupMenu(null); void deleteGroupNamed(g); }}
-                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-danger disabled:opacity-40 disabled:hover:bg-transparent">
-                {t("刪除群組")}
-              </button>
-            )}
-          </div>
-        </>
+              disabled={busy || !groupMenu.empty}
+              title={groupMenu.empty ? undefined : t("群組須 Empty 才能刪除")}
+              onClick={() => { const g = groupMenu.group; setGroupMenu(null); void deleteGroupNamed(g); }}
+              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-danger disabled:opacity-40 disabled:hover:bg-transparent">
+              {t("刪除群組")}
+            </button>
+          )}
+        </MenuPanel>
       )}
     </div>
   );

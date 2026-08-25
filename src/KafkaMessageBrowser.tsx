@@ -15,6 +15,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { EditorView } from "@codemirror/view";
 import Icon from "./ui/Icon";
+import { MenuPanel } from "./ui/index";
 import { useColWidths, ColResizer, COL_FONT_XS } from "./ui/useColWidths";
 import { toast, uiConfirm, uiPrompt, pickSaveFile, copyToClipboard } from "./ui";
 import { useStore } from "./store";
@@ -699,24 +700,21 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
       )}
 
       {rowMenu && (
-        <>
-          <div className="fixed inset-0 z-[89]" onClick={() => setRowMenu(null)} onContextMenu={(e) => { e.preventDefault(); setRowMenu(null); }} />
-          <div className="fixed z-[90] min-w-[160px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm" style={{ left: rowMenu.x, top: rowMenu.y }}>
-            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.key ?? "", t("已複製")); setRowMenu(null); }}>{t("複製 Key")}</button>
-            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.value ?? "", t("已複製")); setRowMenu(null); }}>{t("複製 Value")}</button>
-            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(messageAsJson(rowMenu.m), t("已複製整筆訊息")); setRowMenu(null); }}>{t("複製整筆（JSON）")}</button>
-            {rowMenu.m.headers.length > 0 && (
-              <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.headers.map((h) => `${h.key}=${h.value}`).join("\n"), t("已複製 Headers")); setRowMenu(null); }}>{t("複製 Headers")}</button>
-            )}
-            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(`${rowMenu.m.topic}[${rowMenu.m.partition}]@${rowMenu.m.offset}`, t("已複製座標")); setRowMenu(null); }}>{t("複製座標（topic[分區]@位移）")}</button>
-            {!readonly && (
-              <>
-                <div className="my-1 border-t border-fg/10" />
-                <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => openReprocess(rowMenu.m)}>{t("以此訊息發佈…")}</button>
-              </>
-            )}
-          </div>
-        </>
+        <MenuPanel x={rowMenu.x} y={rowMenu.y} minW={160} onClose={() => setRowMenu(null)}>
+          <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.key ?? "", t("已複製")); setRowMenu(null); }}>{t("複製 Key")}</button>
+          <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.value ?? "", t("已複製")); setRowMenu(null); }}>{t("複製 Value")}</button>
+          <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(messageAsJson(rowMenu.m), t("已複製整筆訊息")); setRowMenu(null); }}>{t("複製整筆（JSON）")}</button>
+          {rowMenu.m.headers.length > 0 && (
+            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(rowMenu.m.headers.map((h) => `${h.key}=${h.value}`).join("\n"), t("已複製 Headers")); setRowMenu(null); }}>{t("複製 Headers")}</button>
+          )}
+          <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => { copyToClipboard(`${rowMenu.m.topic}[${rowMenu.m.partition}]@${rowMenu.m.offset}`, t("已複製座標")); setRowMenu(null); }}>{t("複製座標（topic[分區]@位移）")}</button>
+          {!readonly && (
+            <>
+              <div className="my-1 border-t border-fg/10" />
+              <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-fg/10" onClick={() => openReprocess(rowMenu.m)}>{t("以此訊息發佈…")}</button>
+            </>
+          )}
+        </MenuPanel>
       )}
     </div>
   );

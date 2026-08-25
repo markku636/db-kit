@@ -6,7 +6,7 @@ import {
   Copy, Pencil, Columns3,
 } from "lucide-react";
 import Icon from "./ui/Icon";
-import { Button, EmptyState, ModalViewControls, useModalView } from "./ui/index";
+import { Button, EmptyState, MenuPanel, ModalViewControls, useModalView } from "./ui/index";
 import {
   api, ColumnInfo, ColumnStats, DbKind, ErRelation, Filter as FilterCond, ForeignKeyInfo, IndexInfo, KeyDetail, KeyEdit, KeyPage,
   MongoIndexOptions, MongoIndexStat, MongoValidation, PagedData, RowInsert, Sort, SortDir,
@@ -1815,167 +1815,137 @@ function DataPane({ tab }: { tab: OpenTab }) {
       )}
 
       {rowMenu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setRowMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setRowMenu(null); }} />
-          <div className="fixed z-[90] min-w-[150px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: rowMenu.x, top: rowMenu.y }}>
-            {(
-              [
-                // 唯讀連線只留「看」與「複製」；寫入項（新增 / 改名 / TTL / 刪除）整批隱藏，
-                // 與資料格 editable 的唯讀規則一致。
-                [t("檢視 / 編輯內容…"), () => setDetailKey(rowMenu.key), false],
-                ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(namespaceOf(rowMenu.key)), false] as [string, () => void, boolean]]),
-                [t("複製鍵名"), () => copyToClipboard(rowMenu.key, t("已複製鍵名")), false],
-                [t("複製鍵值"), () => copyKeyValue(rowMenu.key), false],
-                ...(readonly ? [] : ([
-                  [t("重新命名…"), () => renameKey(rowMenu.key), false],
-                  [t("設定 TTL…"), () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
-                ] as [string, () => void, boolean][])),
-                [t("重新整理"), () => refresh(), false],
-                ...(readonly ? [] : [[t("刪除"), () => deleteKey(rowMenu.key), true] as [string, () => void, boolean]]),
-              ] as [string, () => void, boolean][]
-            ).map(([label, fn, danger]) => (
-              <button key={label} type="button"
-                onClick={() => { setRowMenu(null); fn(); }}
-                className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </>
+        <MenuPanel x={rowMenu.x} y={rowMenu.y} minW={150} onClose={() => setRowMenu(null)}>
+          {(
+            [
+              // 唯讀連線只留「看」與「複製」；寫入項（新增 / 改名 / TTL / 刪除）整批隱藏，
+              // 與資料格 editable 的唯讀規則一致。
+              [t("檢視 / 編輯內容…"), () => setDetailKey(rowMenu.key), false],
+              ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(namespaceOf(rowMenu.key)), false] as [string, () => void, boolean]]),
+              [t("複製鍵名"), () => copyToClipboard(rowMenu.key, t("已複製鍵名")), false],
+              [t("複製鍵值"), () => copyKeyValue(rowMenu.key), false],
+              ...(readonly ? [] : ([
+                [t("重新命名…"), () => renameKey(rowMenu.key), false],
+                [t("設定 TTL…"), () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
+              ] as [string, () => void, boolean][])),
+              [t("重新整理"), () => refresh(), false],
+              ...(readonly ? [] : [[t("刪除"), () => deleteKey(rowMenu.key), true] as [string, () => void, boolean]]),
+            ] as [string, () => void, boolean][]
+          ).map(([label, fn, danger]) => (
+            <button key={label} type="button"
+              onClick={() => { setRowMenu(null); fn(); }}
+              className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
+              {label}
+            </button>
+          ))}
+        </MenuPanel>
       )}
 
       {/* Redis 鍵樹：命名空間（資料夾）/ 空白處右鍵選單 */}
       {folderMenu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setFolderMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setFolderMenu(null); }} />
-          <div className="fixed z-[90] min-w-[180px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: folderMenu.x, top: folderMenu.y }}>
-            {(() => {
-              const { prefix, keys } = folderMenu;
-              // 唯讀連線隱藏寫入項（新增鍵 / 刪除整段），保留瀏覽與複製。
-              const items: [string, () => void, boolean][] = prefix
-                ? [
-                    ...(readonly ? [] : [[t("在此命名空間新增鍵…"), () => openNewKey(`${prefix}:`), false] as [string, () => void, boolean]]),
-                    // 把 SCAN 樣式縮到此前綴：大型實例上鍵樹有 10,000 筆上限，縮範圍才看得到全貌。
-                    [t("只顯示此命名空間"), () => focusTree(`${prefix}:*`), false],
-                    [t("複製前綴"), () => copyToClipboard(prefix, t("已複製前綴")), false],
-                    [t("重新整理"), () => refresh(), false],
-                    ...(readonly ? [] : [[t("刪除此命名空間（{n} 個鍵）…", { n: keys.length }), () => deleteKeyNamespace(prefix, keys), true] as [string, () => void, boolean]]),
-                  ]
-                : [
-                    ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(), false] as [string, () => void, boolean]]),
-                    [t("顯示全部鍵"), () => focusTree("*"), false],
-                    [t("重新整理"), () => refresh(), false],
-                  ];
-              return items.map(([label, fn, danger]) => (
-                <button key={label} type="button"
-                  onClick={() => { setFolderMenu(null); fn(); }}
-                  className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
-                  {label}
-                </button>
-              ));
-            })()}
-          </div>
-        </>
+        <MenuPanel x={folderMenu.x} y={folderMenu.y} minW={180} onClose={() => setFolderMenu(null)}>
+          {(() => {
+            const { prefix, keys } = folderMenu;
+            // 唯讀連線隱藏寫入項（新增鍵 / 刪除整段），保留瀏覽與複製。
+            const items: [string, () => void, boolean][] = prefix
+              ? [
+                  ...(readonly ? [] : [[t("在此命名空間新增鍵…"), () => openNewKey(`${prefix}:`), false] as [string, () => void, boolean]]),
+                  // 把 SCAN 樣式縮到此前綴：大型實例上鍵樹有 10,000 筆上限，縮範圍才看得到全貌。
+                  [t("只顯示此命名空間"), () => focusTree(`${prefix}:*`), false],
+                  [t("複製前綴"), () => copyToClipboard(prefix, t("已複製前綴")), false],
+                  [t("重新整理"), () => refresh(), false],
+                  ...(readonly ? [] : [[t("刪除此命名空間（{n} 個鍵）…", { n: keys.length }), () => deleteKeyNamespace(prefix, keys), true] as [string, () => void, boolean]]),
+                ]
+              : [
+                  ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(), false] as [string, () => void, boolean]]),
+                  [t("顯示全部鍵"), () => focusTree("*"), false],
+                  [t("重新整理"), () => refresh(), false],
+                ];
+            return items.map(([label, fn, danger]) => (
+              <button key={label} type="button"
+                onClick={() => { setFolderMenu(null); fn(); }}
+                className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
+                {label}
+              </button>
+            ));
+          })()}
+        </MenuPanel>
       )}
 
       {/* SQL 表儲存格右鍵選單 */}
       {cellMenu && data && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setCellMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setCellMenu(null); }} />
-          <div className="fixed z-[90] min-w-[180px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: cellMenu.x, top: cellMenu.y }}>
-            {cellMenuItems(cellMenu.r, cellMenu.c).map((it, idx) => {
-              if (it === "sep") return <div key={`sep-${idx}`} className="my-1 border-t border-fg/10" />;
-              const [label, fn, danger] = it;
-              return (
-                <button key={label} type="button"
-                  onClick={() => { setCellMenu(null); fn(); }}
-                  className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </>
+        <MenuPanel x={cellMenu.x} y={cellMenu.y} minW={180} onClose={() => setCellMenu(null)}>
+          {cellMenuItems(cellMenu.r, cellMenu.c).map((it, idx) => {
+            if (it === "sep") return <div key={`sep-${idx}`} className="my-1 border-t border-fg/10" />;
+            const [label, fn, danger] = it;
+            return (
+              <button key={label} type="button"
+                onClick={() => { setCellMenu(null); fn(); }}
+                className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
+                {label}
+              </button>
+            );
+          })}
+        </MenuPanel>
       )}
 
       {/* 欄位標題右鍵選單 */}
       {colMenu && data && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setColMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setColMenu(null); }} />
-          <div className="fixed z-[90] min-w-[170px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: colMenu.x, top: colMenu.y }}>
-            {(
-              [
-                [t("升冪排序 ▲"), async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "asc" }]); } }],
-                [t("降冪排序 ▼"), async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "desc" }]); } }],
-                ...(sorts.length ? [[t("清除排序"), async () => { if (await guardDiscard()) setSorts([]); }] as [string, () => void]] : []),
-                [t("自動符合寬度"), () => autoFitColumn(colMenu.col, colMenu.ci)],
-                [t("複製欄名"), () => copyToClipboard(colMenu.col, t("已複製欄名"))],
-                [t("複製所有欄名（逗號分隔）"), () => copyToClipboard(data.columns.join(", "), t("已複製所有欄名"))],
-                [t("複製整欄（本頁）"), () => copyToClipboard(data.rows.map((_, ri) => cellValue(ri, colMenu.ci) ?? "").join("\n"), t("已複製整欄"))],
-                ...(isSqlKind && connKind ? [[t("複製整欄為 IN(...)（本頁）"), () => copyToClipboard(buildInClause(connKind, colMenu.col, data.rows.map((_, ri) => cellValue(ri, colMenu.ci))), t("已複製 IN 子句"))] as [string, () => void]] : []),
-                ...(isSqlKind || isMongo ? [[t("欄位統計（總數/非空/相異）"), () => colStats(colMenu.col)] as [string, () => void]] : []),
-                ...(isSqlKind && connKind ? [[t("相異值分布（Top 50）"), () => {
-                  const qc = quoteIdent(connKind, colMenu.col);
-                  const sql = `SELECT ${qc}, COUNT(*) AS n\nFROM ${qualifiedName(connKind, tab.database, tab.table)}\nGROUP BY ${qc}\nORDER BY n DESC\nLIMIT 50;`;
-                  useStore.getState().setActive(tab.connId);
-                  useStore.getState().requestQuery(sql);
-                }] as [string, () => void]] : []),
-                ...(isMongo ? [[t("相異值分布（Top 50）"), () => {
-                  // 生成 $group 聚合 DSL 到查詢編輯器（與 SQL 版對稱）。
-                  const dsl = JSON.stringify({
-                    db: tab.database, collection: tab.table,
-                    pipeline: [
-                      { $group: { _id: `$${colMenu.col}`, n: { $sum: 1 } } },
-                      { $sort: { n: -1 } }, { $limit: 50 },
-                    ],
-                  }, null, 2);
-                  useStore.getState().setActive(tab.connId);
-                  useStore.getState().requestQuery(dsl);
-                }] as [string, () => void]] : []),
-                [t("隱藏此欄"), () => hideColumn(colMenu.col)],
-                ...(hidden.length ? [[t("顯示所有欄"), () => showAllColumns()] as [string, () => void]] : []),
-              ] as [string, () => void][]
-            ).map(([label, fn]) => (
-              <button key={label} type="button"
-                onClick={() => { setColMenu(null); fn(); }}
-                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
-                {label}
-              </button>
-            ))}
-          </div>
-        </>
+        <MenuPanel x={colMenu.x} y={colMenu.y} minW={170} onClose={() => setColMenu(null)}>
+          {(
+            [
+              [t("升冪排序 ▲"), async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "asc" }]); } }],
+              [t("降冪排序 ▼"), async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "desc" }]); } }],
+              ...(sorts.length ? [[t("清除排序"), async () => { if (await guardDiscard()) setSorts([]); }] as [string, () => void]] : []),
+              [t("自動符合寬度"), () => autoFitColumn(colMenu.col, colMenu.ci)],
+              [t("複製欄名"), () => copyToClipboard(colMenu.col, t("已複製欄名"))],
+              [t("複製所有欄名（逗號分隔）"), () => copyToClipboard(data.columns.join(", "), t("已複製所有欄名"))],
+              [t("複製整欄（本頁）"), () => copyToClipboard(data.rows.map((_, ri) => cellValue(ri, colMenu.ci) ?? "").join("\n"), t("已複製整欄"))],
+              ...(isSqlKind && connKind ? [[t("複製整欄為 IN(...)（本頁）"), () => copyToClipboard(buildInClause(connKind, colMenu.col, data.rows.map((_, ri) => cellValue(ri, colMenu.ci))), t("已複製 IN 子句"))] as [string, () => void]] : []),
+              ...(isSqlKind || isMongo ? [[t("欄位統計（總數/非空/相異）"), () => colStats(colMenu.col)] as [string, () => void]] : []),
+              ...(isSqlKind && connKind ? [[t("相異值分布（Top 50）"), () => {
+                const qc = quoteIdent(connKind, colMenu.col);
+                const sql = `SELECT ${qc}, COUNT(*) AS n\nFROM ${qualifiedName(connKind, tab.database, tab.table)}\nGROUP BY ${qc}\nORDER BY n DESC\nLIMIT 50;`;
+                useStore.getState().setActive(tab.connId);
+                useStore.getState().requestQuery(sql);
+              }] as [string, () => void]] : []),
+              ...(isMongo ? [[t("相異值分布（Top 50）"), () => {
+                // 生成 $group 聚合 DSL 到查詢編輯器（與 SQL 版對稱）。
+                const dsl = JSON.stringify({
+                  db: tab.database, collection: tab.table,
+                  pipeline: [
+                    { $group: { _id: `$${colMenu.col}`, n: { $sum: 1 } } },
+                    { $sort: { n: -1 } }, { $limit: 50 },
+                  ],
+                }, null, 2);
+                useStore.getState().setActive(tab.connId);
+                useStore.getState().requestQuery(dsl);
+              }] as [string, () => void]] : []),
+              [t("隱藏此欄"), () => hideColumn(colMenu.col)],
+              ...(hidden.length ? [[t("顯示所有欄"), () => showAllColumns()] as [string, () => void]] : []),
+            ] as [string, () => void][]
+          ).map(([label, fn]) => (
+            <button key={label} type="button"
+              onClick={() => { setColMenu(null); fn(); }}
+              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+              {label}
+            </button>
+          ))}
+        </MenuPanel>
       )}
 
       {/* 反向外鍵：多個來源表時的選擇器 */}
       {refChooser && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setRefChooser(null)}
-            onContextMenu={(e) => { e.preventDefault(); setRefChooser(null); }} />
-          <div className="fixed z-[90] min-w-[200px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: refChooser.x, top: refChooser.y }}>
-            <div className="px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">{t("參照此列的資料表")}</div>
-            {refChooser.options.map((rel) => (
-              <button key={`${rel.from_table}.${rel.from_column}`} type="button"
-                onClick={() => { const o = refChooser; setRefChooser(null); useStore.getState().openTableFiltered(tab.connId, tab.database, rel.from_table, rel.from_column, o.value); }}
-                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80 mono text-xs">
-                {rel.from_table}.{rel.from_column}
-              </button>
-            ))}
-          </div>
-        </>
+        <MenuPanel x={refChooser.x} y={refChooser.y} minW={200} onClose={() => setRefChooser(null)}>
+          <div className="px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">{t("參照此列的資料表")}</div>
+          {refChooser.options.map((rel) => (
+            <button key={`${rel.from_table}.${rel.from_column}`} type="button"
+              onClick={() => { const o = refChooser; setRefChooser(null); useStore.getState().openTableFiltered(tab.connId, tab.database, rel.from_table, rel.from_column, o.value); }}
+              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80 mono text-xs">
+              {rel.from_table}.{rel.from_column}
+            </button>
+          ))}
+        </MenuPanel>
       )}
 
       {/* 儲存格內容檢視器（長文字 / JSON / 二進位） */}
