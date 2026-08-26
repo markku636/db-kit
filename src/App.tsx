@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
-import { api, onKafkaAlert, isProdConn, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
+import { api, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
 import { LANGUAGES, useLang, useT, type Lang } from "./i18n";
@@ -400,10 +400,18 @@ export default function App() {
     const passphrase = await uiPrompt(t("輸入匯入檔的加密密碼（passphrase）"), { title: t("解密匯入連線"), confirmText: t("匯入") });
     if (!passphrase) return;
     try {
-      const n = await api.importConnectionsEncrypted(path, passphrase);
+      const res = await api.importConnectionsEncrypted(path, passphrase);
       const saved = await api.listSavedConnections();
       useStore.getState().setConnections(saved.map((c) => ({ ...c, password: c.password ?? "" } as ConnectionConfig)));
-      toast.success(n > 0 ? t("已匯入 {n} 個連線（含密碼）", { n }) : t("檔案內沒有連線"));
+      // 群組跟連線一起進來，側欄分區要一起刷新（否則新群組的連線會先落在「未分組」直到重啟）。
+      api.listConnectionGroups().then((gs) => useStore.getState().setConnGroups(gs)).catch(() => {});
+      if (res.count === 0) { toast.info(t("檔案內沒有連線")); return; }
+      let msg = t("已匯入 {n} 個連線", { n: res.count });
+      if (res.groups_added > 0) msg += t("，新增 {g} 個群組", { g: res.groups_added });
+      if (res.prod_without_credentials > 0) {
+        msg += t("；{p} 個 PROD 連線尚無帳密，連線前請先輸入帳號及密碼", { p: res.prod_without_credentials });
+      }
+      toast.success(msg);
     } catch (e: any) {
       toast.error(t("匯入失敗：{msg}", { msg: e?.message ?? t("passphrase 錯誤或檔案損毀") }));
     }
@@ -1455,6 +1463,16 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
   const doConnect = async (id: string) => {
     const cfg = connections.find((c) => c.id === id);
     if (!cfg || connectedIds.has(id) || connecting.has(id)) return;
+    // 帳密缺漏（典型：PROD 匯出檔一律不含帳密、或匯出時沒勾密碼）：直接連只會得到一句
+    // 難懂的 access denied，改成先提示、按下即開編輯表單補填。密碼在 keychain，由後端判斷有無。
+    if (await missingCredentials(cfg)) {
+      const go = await uiConfirm(
+        t("此連線尚未設定帳號或密碼（PROD 匯出檔一律不含帳密）。請先輸入帳號及密碼，再重新連線。"),
+        { title: t("需要帳號及密碼：{name}", { name: cfg.name }), confirmText: t("輸入帳號及密碼") },
+      );
+      if (go) onEdit(cfg);
+      return;
+    }
     // 手動 OTP 模式：先跳窗要驗證碼。取消＝放棄這次連線（非失敗，不彈錯誤對話框）。
     const gate = await askOtpCode(cfg);
     if (gate.cancelled) return;

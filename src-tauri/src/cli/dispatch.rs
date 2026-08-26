@@ -647,11 +647,16 @@ async fn conn_export(path: &str, passphrase: &str) -> AppResult<()> {
         return Err(AppError::Storage(t!("請提供 --passphrase").into()));
     }
     let dir = store::headless_config_dir()?;
-    let conns = store::load_all_in(&dir).await?;
-    let (exported, summary) = crate::conn_export::build(conns, &Default::default());
+    let file = store::load_file_in(&dir).await?;
+    let (exported, summary) =
+        crate::conn_export::build(file.connections, file.groups, &Default::default());
     crate::conn_export::write_encrypted(path, passphrase, &exported).await?;
     let count = summary.count;
     println!("{}", tf!("已加密匯出 {count} 筆連線到 {path}", count = count, path = path));
+    if summary.groups > 0 {
+        let n = summary.groups;
+        println!("{}", tf!("含 {n} 個側欄群組", n = n));
+    }
     if summary.redacted > 0 {
         let n = summary.redacted;
         println!("{}", tf!("其中 {n} 筆是 PROD 連線，一律不含帳號與密碼", n = n));

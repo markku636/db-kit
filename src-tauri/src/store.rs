@@ -285,6 +285,57 @@ pub async fn upsert_in(dir: &Path, conn: PersistedConnection) -> AppResult<()> {
     save_file_in(dir, &file).await
 }
 
+/// 匯入連線 + 群組（加密匯入檔）。單次讀寫；回傳新增的群組數。
+///
+/// 群組合併規則（依序）：id 相同 → 同一個群組（保留本機名稱）；否則名稱相同（不分大小寫）
+/// → 視為同一個群組、把匯入連線改掛到本機那個 id（避免側欄出現兩個「PROD」）；
+/// 都沒有 → 新群組接在尾端。
+///
+/// 連線的群組：匯入檔有給（`Some`）就套用（對回本機 id）；沒給（`None`，匯出時沒勾群組、
+/// 或 v1 檔）→ 既有連線維持原群組、新連線未分組。指向匯入檔裡不存在群組的 `group_id`
+/// 一律歸零，不留孤兒。
+pub async fn import_in(
+    dir: &Path,
+    groups: Vec<ConnGroup>,
+    conns: Vec<PersistedConnection>,
+) -> AppResult<usize> {
+    let mut file = load_file_in(dir).await?;
+    let mut remap: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut added = 0usize;
+    for g in groups {
+        let name = g.name.trim().to_lowercase();
+        let local_id = file
+            .groups
+            .iter()
+            .find(|x| x.id == g.id)
+            .or_else(|| file.groups.iter().find(|x| x.name.trim().to_lowercase() == name))
+            .map(|x| x.id.clone());
+        match local_id {
+            Some(id) => {
+                remap.insert(g.id.clone(), id);
+            }
+            None => {
+                remap.insert(g.id.clone(), g.id.clone());
+                file.groups.push(g);
+                added += 1;
+            }
+        }
+    }
+    for conn in conns {
+        let imported = conn.group_id.as_ref().and_then(|g| remap.get(g).cloned());
+        match file.connections.iter().position(|c| c.id == conn.id) {
+            Some(i) => {
+                let group_id = imported.or_else(|| file.connections[i].group_id.clone());
+                file.connections[i] = PersistedConnection { group_id, ..conn };
+            }
+            None => file.connections.push(PersistedConnection { group_id: imported, ..conn }),
+        }
+    }
+    file.version = SCHEMA_VERSION;
+    save_file_in(dir, &file).await?;
+    Ok(added)
+}
+
 /// 套用側欄排版：群組清單（順序＝顯示順序）+ 連線順序與歸屬，單次原子寫入。
 ///
 /// `order` 是前端算好的完整結果；沒被列到的連線（前端狀態落後於磁碟時可能發生）原樣接在
@@ -421,6 +472,15 @@ pub async fn upsert(app: &AppHandle, conn: PersistedConnection) -> AppResult<()>
 }
 
 #[cfg(feature = "gui")]
+pub async fn import_connections(
+    app: &AppHandle,
+    groups: Vec<ConnGroup>,
+    conns: Vec<PersistedConnection>,
+) -> AppResult<usize> {
+    import_in(&app_config_dir(app)?, groups, conns).await
+}
+
+#[cfg(feature = "gui")]
 pub async fn read_json<T: DeserializeOwned + Default>(app: &AppHandle, file: &str) -> AppResult<T> {
     read_json_in(&app_config_dir(app)?, file).await
 }
@@ -528,6 +588,70 @@ mod tests {
         let d = std::env::temp_dir().join(format!("dbkit-store-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// 匯入：群組依 id → 名稱合併，全新的接尾端；連線 group_id 對回本機 id，孤兒歸零。
+    #[tokio::test]
+    async fn import_merges_groups_by_id_then_name() {
+        let dir = tmpdir();
+        save_layout_in(
+            &dir,
+            vec![group("g1"), ConnGroup { id: "local-prod".into(), name: "PROD".into() }],
+            &[],
+        )
+        .await
+        .unwrap();
+        let incoming = vec![
+            group("g1"),                                                 // 同 id
+            ConnGroup { id: "remote-prod".into(), name: "prod".into() }, // 同名（不分大小寫）
+            group("g9"),                                                 // 全新
+        ];
+        let conns = vec![
+            PersistedConnection { group_id: Some("g1".into()), ..conn("a") },
+            PersistedConnection { group_id: Some("remote-prod".into()), ..conn("b") },
+            PersistedConnection { group_id: Some("g9".into()), ..conn("c") },
+            PersistedConnection { group_id: Some("ghost".into()), ..conn("d") },
+        ];
+        let added = import_in(&dir, incoming, conns).await.unwrap();
+        assert_eq!(added, 1);
+        let f = load_file_in(&dir).await.unwrap();
+        assert_eq!(
+            f.groups.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(),
+            ["g1", "local-prod", "g9"]
+        );
+        let gid = |id: &str| f.connections.iter().find(|c| c.id == id).unwrap().group_id.clone();
+        assert_eq!(gid("a").as_deref(), Some("g1"));
+        assert_eq!(gid("b").as_deref(), Some("local-prod"), "同名群組對回本機 id");
+        assert_eq!(gid("c").as_deref(), Some("g9"));
+        assert_eq!(gid("d"), None, "指向不存在的群組 → 未分組");
+    }
+
+    /// 匯入檔沒帶群組（None）→ 既有連線的群組不動；有帶（Some）→ 套用。同 id 群組不重複新增。
+    #[tokio::test]
+    async fn import_keeps_existing_group_when_file_has_none() {
+        let dir = tmpdir();
+        save_layout_in(&dir, vec![group("g1"), group("g2")], &[]).await.unwrap();
+        save_all_in(
+            &dir,
+            &[
+                PersistedConnection { group_id: Some("g1".into()), ..conn("a") },
+                PersistedConnection { group_id: Some("g1".into()), ..conn("b") },
+            ],
+        )
+        .await
+        .unwrap();
+        let added = import_in(
+            &dir,
+            vec![group("g2")],
+            vec![conn("a"), PersistedConnection { group_id: Some("g2".into()), ..conn("b") }],
+        )
+        .await
+        .unwrap();
+        assert_eq!(added, 0, "同 id 群組不算新增");
+        let f = load_file_in(&dir).await.unwrap();
+        assert_eq!(f.connections[0].group_id.as_deref(), Some("g1"), "None → 維持原群組");
+        assert_eq!(f.connections[1].group_id.as_deref(), Some("g2"), "Some → 套用");
+        assert_eq!(f.groups.len(), 2);
     }
 
     /// v1 舊檔（無 groups / group_id）要能照讀，全部視為未分組。

@@ -624,33 +624,37 @@ pub async fn export_connections_encrypted(
     }
     let scope = scope.unwrap_or_default();
     let conns = store::load_all(&app).await?;
-    let (exported, summary) = crate::conn_export::build(conns, &scope);
+    let groups = store::load_groups(&app).await?;
+    let (file, summary) = crate::conn_export::build(conns, groups, &scope);
     if summary.count == 0 {
         return Err(AppError::Storage(t!("沒有可匯出的連線").into()));
     }
-    crate::conn_export::write_encrypted(&path, &passphrase, &exported).await?;
+    crate::conn_export::write_encrypted(&path, &passphrase, &file).await?;
     Ok(summary)
 }
 
-/// 從加密檔匯入連線：以 passphrase 解密後，機密寫回 keychain、設定 upsert。回傳匯入筆數。
+/// 從加密檔匯入連線與群組：以 passphrase 解密後，機密寫回 keychain、連線與群組合併寫入
+/// （群組合併規則見 `store::import_in`）。
 #[tauri::command]
 pub async fn import_connections_encrypted(
     app: AppHandle,
     path: String,
     passphrase: String,
-) -> AppResult<usize> {
+) -> AppResult<crate::conn_export::ImportSummary> {
     let blob = tokio::fs::read(&path)
         .await
         .map_err(|e| AppError::Storage(tf!("讀取失敗：{e}", e = e)))?;
     let plain = crate::conn_crypto::decrypt(&blob, &passphrase)?;
-    let exported: Vec<crate::conn_export::ExportedConn> = serde_json::from_slice(&plain)
-        .map_err(|_| AppError::Storage(t!("解密成功但內容格式不符（檔案可能來自不同版本）").into()))?;
-    let count = exported.len();
+    let file = crate::conn_export::parse(&plain)
+        .ok_or_else(|| AppError::Storage(t!("解密成功但內容格式不符（檔案可能來自不同版本）").into()))?;
+    let count = file.connections.len();
     // 匯出端可能刻意沒帶帳號（PROD 硬規則）或沒帶某類機密：空值一律解讀成「這次沒帶」，
     // 不是「請清空」。機密靠下面逐項的 is_empty 判斷跳過，帳號則要拿本機既有值補回 ——
     // 否則匯入一份 PROD 匯出檔，會把本機早就填好的帳號抹掉。
     let existing = store::load_all(&app).await.unwrap_or_default();
-    for mut e in exported {
+    let mut conns = Vec::with_capacity(count);
+    let mut prod_without_credentials = 0usize;
+    for mut e in file.connections {
         let id = e.base.id.clone();
         if let Some(prev) = existing.iter().find(|c| c.id == id) {
             if e.base.username.is_empty() {
@@ -672,9 +676,24 @@ pub async fn import_connections_encrypted(
         if !e.otp_secret.is_empty() {
             store::kc_set(&store::otp_account(&id), &e.otp_secret)?;
         }
-        store::upsert(&app, e.base).await?;
+        // 匯入後仍沒帳號的 PROD 連線：前端要提醒「連線前先輸入帳號及密碼」。
+        if crate::conn_export::is_prod(&e.base) && e.base.username.is_empty() {
+            prod_without_credentials += 1;
+        }
+        conns.push(e.base);
     }
-    Ok(count)
+    let groups_added = store::import_connections(&app, file.groups, conns).await?;
+    Ok(crate::conn_export::ImportSummary { count, groups_added, prod_without_credentials })
+}
+
+/// 此連線在 keychain 是否已存有資料庫密碼（前端連線前的帳密檢查用；不回傳密碼本身）。
+///
+/// 為何要有這支：磁碟設定與 `list_saved_connections` 都不含密碼，前端無從判斷
+/// 「這筆連線到底有沒有密碼」—— PROD 匯出檔一律不帶帳密，匯入後直接連只會得到一句
+/// 難懂的 access denied；前端先問這裡，缺的話就提示使用者補填。
+#[tauri::command]
+pub fn has_stored_password(id: String) -> bool {
+    store::kc_get(&id).map(|p| !p.is_empty()).unwrap_or(false)
 }
 
 #[tauri::command]

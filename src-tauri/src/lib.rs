@@ -150,6 +150,7 @@ pub fn run() {
             commands::set_auto_lock_minutes,
             commands::export_connections_encrypted,
             commands::import_connections_encrypted,
+            commands::has_stored_password,
             commands::list_databases,
             commands::list_tables,
             commands::table_columns,
