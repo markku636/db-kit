@@ -27,6 +27,8 @@
   <strong>繁體中文</strong> · <a href="./README.en.md">English</a>
 </p>
 
+> ☕ 這個工具免費且開源。如果幫上忙，可以 [請我喝杯咖啡](#贊助開源)。
+
 ---
 
 ## 這是什麼
@@ -34,6 +36,17 @@
 工程師與 DBA 的日常往往要在 MySQL、MariaDB、PostgreSQL、SQL Server、Oracle、MongoDB、Redis… 之間來回切換，桌面上散落著好幾個各有脾氣的管理工具。**db-kit** 把它們收進同一套介面、同一套連線管理、同一套主題——關聯式、文件型、鍵值型三種資料範式都有貼合各自手感的瀏覽與編輯體驗，且日常操作（資料格、查詢、ER 圖、匯入匯出、備份）跨資料庫對齊。
 
 採用 **Tauri 2（Rust 後端 + Web 前端）**，安裝檔小、記憶體佔用約為 Electron 同類產品的十分之一；資料庫連線一律收在 Rust 後端、前端透過 Tauri command 呼叫，不直連、兼顧安全與效能。
+
+## 贊助開源
+
+這個工具免費且開源。如果它幫你省下了時間，可以請我喝杯咖啡，讓後續的更新繼續做下去。
+
+[![PayPal $5](https://img.shields.io/badge/PayPal-%245-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8B7GRXA6UJH36)
+[![PayPal $10](https://img.shields.io/badge/PayPal-%2410-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8LBTFUBBF2CHS)
+[![PayPal $15](https://img.shields.io/badge/PayPal-%2415-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/A653DD46GEU4W)
+[![PayPal $25](https://img.shields.io/badge/PayPal-%2425-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/Y5WPSXVGH3YS4)
+
+其他金額請走 [PayPal.Me](https://paypal.me/226network)。
 
 ## 跨平台
 
@@ -436,17 +449,6 @@ git tag v0.1.6 && git push origin v0.1.6
 ## 作者
 
 由 [Mark.K](https://github.com/markku636) 開發。開發筆記與技術文章寫在 **[blog.markkulab.net](https://blog.markkulab.net/)** —— app 內「關於 DB Kit」也有這個連結。
-
-## ☕ 贊助開源
-
-這個工具免費且開源。如果它幫你省下了時間，可以請我喝杯咖啡，讓後續的更新繼續做下去。
-
-[![PayPal $5](https://img.shields.io/badge/PayPal-%245-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8B7GRXA6UJH36)
-[![PayPal $10](https://img.shields.io/badge/PayPal-%2410-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8LBTFUBBF2CHS)
-[![PayPal $15](https://img.shields.io/badge/PayPal-%2415-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/A653DD46GEU4W)
-[![PayPal $25](https://img.shields.io/badge/PayPal-%2425-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/Y5WPSXVGH3YS4)
-
-其他金額請走 [PayPal.Me](https://paypal.me/226network)。
 
 ## 授權
 
