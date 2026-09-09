@@ -398,10 +398,14 @@ export function onRedisPubSubError(cb: (msg: string) => void): Promise<UnlistenF
   return listen<string>("redis-pubsub-error", (e) => cb(e.payload));
 }
 
-// ---- AI 助手（本機 claude CLI）----
+// ---- AI 助手（本機 claude / codex CLI）----
 
-// claude CLI 偵測結果（決定是否顯示安裝 / 登入提示）。
-export interface ClaudeStatus {
+// 助手供應商：兩者都走「訂閱登入的本機 CLI」，不需要 API key。
+export type AgentProvider = "claude" | "codex";
+
+// CLI 偵測結果（決定是否顯示安裝 / 登入提示）。provider 回聲後端實際採用的供應商。
+export interface AgentStatus {
+  provider: AgentProvider;
   installed: boolean;
   version: string | null;
   logged_in: boolean;
@@ -412,7 +416,8 @@ export interface ClaudeStatus {
 // generate：一次性 NL→查詢語句生成（零工具、單回合、無 session）。
 export type AgentMode = "advise" | "agent" | "generate";
 
-// 後端 `claude-stream` 事件 payload（依 kind 取用欄位）。
+// 後端 `agent-stream` 事件 payload（依 kind 取用欄位）。
+// 註：Claude 的 text 是 token 級增量、Codex 是整段一次到齊，前端一律「附加」即可。
 export interface AgentEvent {
   req_id: string;
   kind: "system" | "text" | "tool" | "result" | "error" | "done";
@@ -426,8 +431,8 @@ export interface AgentEvent {
 }
 
 // 訂閱某次問答的串流事件（僅回呼符合 reqId 者）。回傳取消監聽函式。
-export function onClaudeStream(reqId: string, cb: (e: AgentEvent) => void): Promise<UnlistenFn> {
-  return listen<AgentEvent>("claude-stream", (e) => {
+export function onAgentStream(reqId: string, cb: (e: AgentEvent) => void): Promise<UnlistenFn> {
+  return listen<AgentEvent>("agent-stream", (e) => {
     if (e.payload.req_id === reqId) cb(e.payload);
   });
 }
@@ -1358,23 +1363,26 @@ export const api = {
     invoke<StressReport>("stress_run", { runId, config, plan }),
   stressCancel: (runId: string) => invoke<void>("stress_cancel", { runId }),
 
-  // AI 助手：偵測 claude CLI / 送出問答（串流走 onClaudeStream）/ 取消。
-  claudeDetect: () => invoke<ClaudeStatus>("claude_detect"),
-  claudeSend: (args: {
+  // AI 助手：偵測 CLI / 送出問答（串流走 onAgentStream）/ 取消。provider 省略時後端預設 claude。
+  agentDetect: (provider?: AgentProvider | null) =>
+    invoke<AgentStatus>("agent_detect", { provider: provider ?? null }),
+  agentSend: (args: {
     reqId: string;
     prompt: string;
     sessionId?: string | null;
     model?: string | null;
     mode?: AgentMode | null;
+    provider?: AgentProvider | null;
   }) =>
-    invoke<void>("claude_send", {
+    invoke<void>("agent_send", {
       reqId: args.reqId,
       prompt: args.prompt,
       sessionId: args.sessionId ?? null,
       model: args.model ?? null,
       mode: args.mode ?? null,
+      provider: args.provider ?? null,
     }),
-  claudeCancel: (reqId: string) => invoke<void>("claude_cancel", { reqId }),
+  agentCancel: (reqId: string) => invoke<void>("agent_cancel", { reqId }),
   openAgentWorkspace: () => invoke<void>("open_agent_workspace"),
   openExternal: (url: string) => invoke<void>("open_external", { url }),
 };

@@ -1,3 +1,16 @@
+## v0.27.0
+
+**AI 助手多了一個選擇：OpenAI Codex**。右側助手面板與查詢面板的「AI 生成」列都多了一個供應商下拉，Claude Code 與 Codex 二選一，切一次兩邊同時跟著換。設計前提沒變：**一律走本機 CLI + 你自己的訂閱登入，不收也不存 API key**（Claude Pro/Max 或 ChatGPT Plus/Pro），db-kit 只負責把提示餵進 stdin、把 NDJSON 串回畫面。
+
+- **兩家的「限制副作用」機制不同，各自用它原生的那一套**，沒有硬套成同一組旗標。Claude 走工具允許清單 + `dontAsk`（清單外一律自動拒絕，shell / MCP / Task 全被擋）；Codex 沒有等價的工具閘門，改用 OS 層沙箱 `--sandbox`：唯讀問答與 NL→SQL 生成走 `read-only`（不可寫檔、不可連網），「可寫腳本檔」走 `workspace-write` 並以 `--cd` 把可寫範圍綁死在助手工作資料夾。**這兩層不等價，值得知道**：Codex 在 read-only 下仍可能執行唯讀指令（`ls` 之類），Claude 則是連 shell 都拿不到。
+- **Codex 沒有 token 級串流**。`codex exec --json` 的回答在 `item.completed` 一次到齊，不像 Claude 的 `--include-partial-messages` 逐字吐；因此選 Codex 時畫面是「想一下 → 整段出現」，工具動作（Command / Edit / WebSearch / MCP / Plan）仍會即時標示。前端不為此分支，兩者都只是「把 text 事件附加上去」。
+- **多輪對話各接各的**：Claude 用 `--resume <session_id>`、Codex 用 `exec resume <thread_id>`。切換供應商時**只重置對話串接、不清空訊息**——對方的 id 拿過去必定失敗，但已經看到的回答不該憑空消失。
+- **模型選擇也分家**。Claude 維持 opus / sonnet / haiku 下拉（別名穩定）；Codex 改成自由輸入，留白就用 `codex` 自己的預設。理由很現實：Codex 的模型名稱換得比誰都勤，寫死一份清單只會過期，而過期的下拉比沒有下拉更糟。兩邊各記各的模型，別名互餵只會炸。
+- **偵測與提示跟著供應商走**：`where` / `which` 找不到時，Claude 提示 `claude.ai/install`、Codex 提示 `npm i -g @openai/codex`；登入判定 Claude 看 `~/.claude/.credentials.json` 或 `ANTHROPIC_API_KEY`，Codex 看 `$CODEX_HOME/auth.json`（預設 `~/.codex`）或 `CODEX_API_KEY` / `OPENAI_API_KEY`。找不到執行檔時可用 `DB_KIT_CLAUDE_BIN` / `DB_KIT_CODEX_BIN` 指定路徑。
+- 後端的 Tauri 指令與事件一併改成供應商中立：`claude_detect` / `claude_send` / `claude_cancel` → `agent_detect` / `agent_send` / `agent_cancel`，串流事件 `claude-stream` → `agent-stream`。前端 `ClaudeStatus` → `AgentStatus`（多一個 `provider` 欄位回聲後端實際採用的供應商），供應商偏好抽成 `src/aiProvider.ts` 讓助手面板與 NL 查詢列共用。
+
+> 驗證：`cargo check` 綠燈、`tsc` + `eslint src` 0 error、vitest 746 項全通過、`i18n:scan` en / zh-CN 100%，四語系幽靈 key 與新增的過時 key 皆為 0。**尚未在裝有 `codex` 的機器上做端對端實測**——Codex 分支的旗標與 `exec --json` 事件解析是依官方非互動模式文件實作的，第一次實跑請留意 `codex exec resume <id> -` 是否吃 stdin 提示。Claude 分支的行為與 v0.26.1 相同（只換了指令與事件名稱）。
+
 ## v0.26.1
 
 **開了啟動鎖定就看不到開場動畫**——v0.26.0 的鎖定閘門把 banner 整段跳掉了。鎖定畫面是 `z-[400]`、開場動畫是 `z-200`，兩者同時掛載時 banner 一定被蓋住，當時的處置是「鎖著就直接標記播完、解鎖後也不補播」，於是只要啟用了密碼或生物辨識，啟動看到的第一個畫面就是鎖定畫面，品牌開場等於不存在。改成**依序播**：banner（1.5 秒，按任意鍵或點擊可跳過）→ 鎖定畫面 → 主介面。OS 生物辨識提示因此晚 1.5 秒才彈，這是刻意的——那顆 modal 一出現就沒人在看背景了，先彈等於 banner 還是白播。解鎖後直接進主介面，不補播（不然每次解鎖都要多等一輪）。

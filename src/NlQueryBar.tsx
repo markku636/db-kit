@@ -1,18 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { api, onClaudeStream, type AgentEvent, type ClaudeStatus } from "./api";
+import { api, onAgentStream, type AgentEvent, type AgentProvider, type AgentStatus } from "./api";
 import { Button, Select } from "./ui/index";
 import Icon from "./ui/Icon";
 import { Sparkles, X, StopCircle, ClipboardCopy, RotateCw, CornerDownLeft, AlertTriangle } from "lucide-react";
 import { useT } from "./i18n";
 import { extractFirstCodeBlock } from "./nlPrompt";
 import { copyToClipboard } from "./ui";
-
-const MODELS: { value: string; label: string }[] = [
-  { value: "", label: "預設模型" },
-  { value: "opus", label: "Opus" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "haiku", label: "Haiku" },
-];
+import { CLAUDE_MODELS, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
 
 // 破壞性語句偵測（套用前警示）：DROP/TRUNCATE/ALTER，或無 WHERE 的 DELETE/UPDATE。
 const DESTRUCTIVE = /\b(drop|truncate|alter)\b/i;
@@ -41,8 +35,13 @@ export interface NlQueryBarProps {
 export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, lastError }: NlQueryBarProps) {
   const t = useT();
   const [nl, setNl] = useState("");
-  const [model, setModel] = useState("");
-  const [status, setStatus] = useState<ClaudeStatus | null>(null);
+  // 供應商與右側助手面板共用同一個偏好（aiProvider store）；模型各記一個，別名不能互餵。
+  const provider = useAiProvider((s) => s.provider);
+  const setProvider = useAiProvider((s) => s.setProvider);
+  const [models, setModels] = useState<Partial<Record<AgentProvider, string>>>({});
+  const model = models[provider] || "";
+  const setModel = (v: string) => setModels((m) => ({ ...m, [provider]: v }));
+  const [status, setStatus] = useState<AgentStatus | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [preview, setPreview] = useState(""); // 串流原文
@@ -55,13 +54,13 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
   const detect = async () => {
     setDetecting(true);
     try {
-      setStatus(await api.claudeDetect());
+      setStatus(await api.agentDetect(provider));
     } finally {
       setDetecting(false);
     }
   };
 
-  // 首次展開時偵測 claude CLI，並聚焦輸入。
+  // 首次展開時偵測 CLI，並聚焦輸入。
   useEffect(() => {
     if (!open) return;
     if (!status) void detect();
@@ -69,9 +68,17 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // 換供應商就重測一次（狀態清空避免沿用上一支 CLI 的結果）。
+  useEffect(() => {
+    setStatus(null);
+    if (open) void detect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
+
   useEffect(() => () => { unlistenRef.current?.(); }, []);
 
   const notReady = !!status && (!status.installed || !status.logged_in);
+  const meta = providerMeta(provider);
 
   const finalize = (text: string) => {
     const code = extractFirstCodeBlock(text, [lang]);
@@ -91,7 +98,7 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
     reqIdRef.current = reqId;
     let acc = "";
     try {
-      const un = await onClaudeStream(reqId, (e: AgentEvent) => {
+      const un = await onAgentStream(reqId, (e: AgentEvent) => {
         switch (e.kind) {
           case "text":
             if (e.text) { acc += e.text; setPreview(acc); }
@@ -113,7 +120,7 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
         }
       });
       unlistenRef.current = un;
-      await api.claudeSend({ reqId, prompt, sessionId: null, model, mode: "generate" });
+      await api.agentSend({ reqId, prompt, sessionId: null, model, mode: "generate", provider });
     } catch (err: any) {
       setGenerating(false);
       setPreview(`⚠ ${err?.message ?? t("發生錯誤")}`);
@@ -144,7 +151,7 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
   };
 
   const stop = () => {
-    if (reqIdRef.current) void api.claudeCancel(reqIdRef.current);
+    if (reqIdRef.current) void api.agentCancel(reqIdRef.current);
     setGenerating(false);
   };
 
@@ -155,9 +162,20 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
       <div className="flex items-center gap-2">
         <Icon icon={Sparkles} size={14} className="text-accent shrink-0" />
         <span className="text-xs font-medium text-fg/70">{t("AI 生成查詢")}</span>
-        <Select selectSize="sm" value={model} onChange={(e) => setModel(e.target.value)} className="w-28 ml-1">
-          {MODELS.map((m) => <option key={m.value} value={m.value}>{m.value ? m.label : t("預設模型")}</option>)}
+        <Select selectSize="sm" value={provider} onChange={(e) => setProvider(e.target.value as AgentProvider)}
+          title={t("要用哪一支本機 CLI 生成（兩者都用你自己的訂閱登入）")} className="w-32 ml-1">
+          {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </Select>
+        {provider === "claude" ? (
+          <Select selectSize="sm" value={model} onChange={(e) => setModel(e.target.value)} className="w-28">
+            {CLAUDE_MODELS.map((m) => <option key={m.value} value={m.value}>{m.value ? m.label : t("預設模型")}</option>)}
+          </Select>
+        ) : (
+          <input value={model} onChange={(e) => setModel(e.target.value)}
+            placeholder={t("預設模型")}
+            title={t("留白用 codex 自己的預設模型；也可填模型名稱，如 gpt-5-codex")}
+            className="w-28 h-7 bg-inset border border-fg/10 rounded px-2 text-xs outline-none focus:border-accent" />
+        )}
         <button type="button" onClick={onClose} title={t("關閉")} className="ml-auto text-fg/40 hover:text-fg/70">
           <Icon icon={X} size={15} />
         </button>
@@ -166,9 +184,9 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
       {notReady ? (
         <div className="text-[11px] text-amber-200/90 bg-amber-500/10 rounded px-2 py-1.5 leading-relaxed">
           {!status!.installed ? (
-            <>{t("找不到 ")}<span className="mono">claude</span>{t(" CLI。請先安裝 Claude Code（")}<span className="mono">claude.ai/install</span>{t("）。")}</>
+            t("找不到 {cli} CLI。請先安裝 {name}（{how}）。", { cli: meta.cli, name: meta.label, how: meta.install })
           ) : (
-            <>{t("尚未登入 Claude。請在終端機執行 ")}<span className="mono">claude</span>{t(" 並用你的訂閱帳號登入。")}</>
+            t("尚未登入 {name}。請在終端機執行 {cmd} 並用你的訂閱帳號登入。", { name: meta.label, cmd: meta.loginCmd })
           )}
           <button type="button" onClick={detect} disabled={detecting} className="ml-1 underline hover:text-amber-100 disabled:opacity-50">
             {detecting ? t("偵測中…") : t("重新偵測")}

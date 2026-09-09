@@ -403,9 +403,12 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         // 註：「無法取得設定目錄：{e}」已於 store.rs 分類收錄（agent.rs 共用同一 key）。
         "建立助手工作目錄失敗：{e}" => "Failed to create the assistant working directory: {e}",
         "僅允許開啟 http / https 連結" => "Only http / https links may be opened",
-        "找不到 claude CLI，請先安裝 Claude Code 並登入" => "claude CLI not found; install Claude Code and sign in first",
-        "啟動 claude 失敗：{e}" => "Failed to start claude: {e}",
-        "claude 以結束碼 {c} 退出" => "claude exited with code {c}",
+        "找不到 {cli} CLI，請先安裝並以你的訂閱帳號登入" => {
+            "{cli} CLI not found; install it and sign in with your subscription first"
+        }
+        "啟動 {cli} 失敗：{e}" => "Failed to start {cli}: {e}",
+        "{cli} 以結束碼 {c} 退出" => "{cli} exited with code {c}",
+        "Codex 回合失敗" => "The Codex turn failed",
         "此連線不是 Redis" => "This connection is not Redis",
         "此連線不是 MongoDB" => "This connection is not MongoDB",
         "External 連線未指定 options.driver" => "The External connection did not specify options.driver",

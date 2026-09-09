@@ -374,9 +374,9 @@ pub fn run() {
             commands::list_backup_history,
             commands::restore_from_history,
             commands::clear_history,
-            agent::claude_detect,
-            agent::claude_send,
-            agent::claude_cancel,
+            agent::agent_detect,
+            agent::agent_send,
+            agent::agent_cancel,
             agent::open_agent_workspace,
             agent::open_external,
         ])

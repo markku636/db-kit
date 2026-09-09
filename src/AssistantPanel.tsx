@@ -4,11 +4,13 @@ import {
   api,
   AgentEvent,
   AgentMode,
-  ClaudeStatus,
+  AgentProvider,
+  AgentStatus,
   KIND_META,
-  onClaudeStream,
+  onAgentStream,
 } from "./api";
 import { useStore } from "./store";
+import { CLAUDE_MODELS, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
 import { useTheme } from "./theme";
 import { resolveHighlightColors, type ThemeColors } from "./editorThemes";
 import { useAssistant } from "./assistant";
@@ -18,9 +20,9 @@ import { IconButton } from "./ui/index";
 import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Sparkles, Send, Square } from "lucide-react";
 import { replyLanguageLine, t, useT, useLang } from "./i18n";
 
-// 右側「AI 助手」面板：驅動本機 claude CLI（使用 Claude 訂閱登入），
+// 右側「AI 助手」面板：驅動本機 claude 或 codex CLI（皆用訂閱登入，不需 API key），
 // 串流回答問題與撰寫腳本。對標右側詳細資料面板的版面與主題用色。
-// 串流事件走後端 `claude-stream`（見 agent.rs / onClaudeStream）。
+// 串流事件走後端 `agent-stream`（見 agent.rs / onAgentStream）。
 
 type ChatRole = "user" | "assistant";
 
@@ -34,13 +36,6 @@ interface ChatMsg {
   ms?: number; // 本則回應耗時（result.duration_ms）
 }
 
-const MODELS: { value: string; label: string }[] = [
-  { value: "", label: "預設模型" },
-  { value: "opus", label: "Opus" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "haiku", label: "Haiku" },
-];
-
 // ---- 對話 / 偏好持久化（localStorage；重開 db-kit 後保留）----
 const CHAT_KEY = "db-kit:assistantChat";
 
@@ -48,7 +43,10 @@ interface Persisted {
   messages: ChatMsg[];
   sessionId: string | null;
   mode: AgentMode;
-  model: string;
+  /** 舊版欄位（單一模型），只在讀取時做一次遷移。 */
+  model?: string;
+  /** 各供應商各記一個模型：Claude 的別名餵給 codex 只會出錯。 */
+  models: Partial<Record<AgentProvider, string>>;
   ctxOn: boolean;
 }
 
@@ -70,11 +68,18 @@ export default function AssistantPanel() {
   );
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [status, setStatus] = useState<ClaudeStatus | null>(null);
+  const [status, setStatus] = useState<AgentStatus | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [ctxOn, setCtxOn] = useState(persisted.ctxOn ?? true);
   const [mode, setMode] = useState<AgentMode>(persisted.mode || "advise");
-  const [model, setModel] = useState(persisted.model || "");
+  const provider = useAiProvider((s) => s.provider);
+  const setProvider = useAiProvider((s) => s.setProvider);
+  // 舊版只存一個 model 字串（必為 Claude 的別名），遷移成 claude 那一格。
+  const [models, setModels] = useState<Partial<Record<AgentProvider, string>>>(
+    () => persisted.models || { claude: persisted.model || "" },
+  );
+  const model = models[provider] || "";
+  const setModel = (v: string) => setModels((m) => ({ ...m, [provider]: v }));
   const [width, setWidth] = useState<number>(() => {
     const v = Number(localStorage.getItem("db-kit:assistantWidth"));
     return v >= 300 && v <= 900 ? v : 384;
@@ -95,17 +100,26 @@ export default function AssistantPanel() {
   const detect = async () => {
     setDetecting(true);
     try {
-      setStatus(await api.claudeDetect());
+      setStatus(await api.agentDetect(provider));
     } catch {
-      setStatus({ installed: false, version: null, logged_in: false, path: null });
+      setStatus({ provider, installed: false, version: null, logged_in: false, path: null });
     } finally {
       setDetecting(false);
     }
   };
 
-  // 掛載即偵測一次（面板恆掛載，僅在 !open 時不渲染）。
+  // 掛載即偵測一次，之後每次換供應商再測一次（面板恆掛載，僅在 !open 時不渲染）。
+  // 換供應商等於換一支 CLI，對方的 session / thread id 不通用，重置成新對話串（訊息保留）。
+  const firstDetectRef = useRef(true);
   useEffect(() => {
+    if (firstDetectRef.current) firstDetectRef.current = false;
+    else sessionIdRef.current = null;
+    setStatus(null);
     detect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
+
+  useEffect(() => {
     return () => {
       if (unlistenRef.current) unlistenRef.current();
     };
@@ -118,12 +132,12 @@ export default function AssistantPanel() {
         messages: messages.slice(-60),
         sessionId: sessionIdRef.current,
         mode,
-        model,
+        models,
         ctxOn,
       };
       localStorage.setItem(CHAT_KEY, JSON.stringify(data));
     } catch { /* 忽略寫入失敗 */ }
-  }, [messages, mode, model, ctxOn]);
+  }, [messages, mode, models, ctxOn]);
 
   // 內容變動時自動捲到底：僅在使用者已接近底部、或剛送出自己的訊息時才跟隨，
   // 讓使用者可在串流途中往上閱讀而不被拉回底部。
@@ -171,7 +185,7 @@ export default function AssistantPanel() {
     if (seed == null) return;
     const autoSend = useAssistant.getState().seedSend;
     useAssistant.getState().clearSeed();
-    // 自動送出只在「助手就緒（claude 已安裝且登入）且未在串流中」時直接送出；
+    // 自動送出只在「助手就緒（CLI 已安裝且登入）且未在串流中」時直接送出；
     // 否則（串流中 / 未就緒 / 非自動送出）一律保底把問題填回輸入框並聚焦——絕不靜默遺失。
     const ready = !!status && status.installed && status.logged_in;
     if (autoSend && ready && !streaming) {
@@ -276,7 +290,7 @@ export default function AssistantPanel() {
     reqIdRef.current = reqId;
 
     try {
-      const un = await onClaudeStream(reqId, (e: AgentEvent) => {
+      const un = await onAgentStream(reqId, (e: AgentEvent) => {
         switch (e.kind) {
           case "system":
             if (e.session_id) sessionIdRef.current = e.session_id;
@@ -314,7 +328,7 @@ export default function AssistantPanel() {
         }
       });
       unlistenRef.current = un;
-      await api.claudeSend({ reqId, prompt, sessionId: sessionIdRef.current, model, mode });
+      await api.agentSend({ reqId, prompt, sessionId: sessionIdRef.current, model, mode, provider });
     } catch (err: any) {
       update((x) => ({
         ...x,
@@ -329,7 +343,7 @@ export default function AssistantPanel() {
   const cancel = async () => {
     const reqId = reqIdRef.current;
     if (reqId) {
-      try { await api.claudeCancel(reqId); } catch { /* 忽略 */ }
+      try { await api.agentCancel(reqId); } catch { /* 忽略 */ }
     }
     setMessages((m) =>
       m.map((x) =>
@@ -360,6 +374,7 @@ export default function AssistantPanel() {
   if (!open) return null;
 
   const notReady = !!status && (!status.installed || !status.logged_in);
+  const meta = providerMeta(provider);
 
   return (
     <div className="shrink-0 bg-panel border-l border-fg/10 flex flex-col text-sm relative" style={{ width }}>
@@ -386,9 +401,9 @@ export default function AssistantPanel() {
       {notReady && (
         <div className="shrink-0 px-3 py-2 border-b border-fg/10 bg-amber-500/10 text-[11px] text-amber-200/90 leading-relaxed">
           {!status!.installed ? (
-            <>{t("找不到 ")}<span className="mono">claude</span>{t(" CLI。請先安裝 Claude Code（")}<span className="mono">claude.ai/install</span>{t("）。")}</>
+            t("找不到 {cli} CLI。請先安裝 {name}（{how}）。", { cli: meta.cli, name: meta.label, how: meta.install })
           ) : (
-            <>{t("尚未登入 Claude。請在終端機執行 ")}<span className="mono">claude</span>{t(" 並用你的訂閱帳號登入。")}</>
+            t("尚未登入 {name}。請在終端機執行 {cmd} 並用你的訂閱帳號登入。", { name: meta.label, cmd: meta.loginCmd })
           )}
           <button type="button" onClick={detect} disabled={detecting}
             className="ml-1 underline hover:text-amber-100 disabled:opacity-50">
@@ -422,16 +437,28 @@ export default function AssistantPanel() {
             <input type="checkbox" checked={ctxOn} onChange={(e) => setCtxOn(e.target.checked)} className="accent-blue-500" />
             {t("附帶資料庫內容")}
           </label>
+          <select value={provider} onChange={(e) => setProvider(e.target.value as AgentProvider)}
+            title={t("要用哪一支本機 CLI 回答（兩者都用你自己的訂閱登入）")}
+            className="ml-auto bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70">
+            {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
           <select value={mode} onChange={(e) => setMode(e.target.value as AgentMode)}
             title={t("唯讀問答：只回答 / 產生腳本文字。可寫腳本檔：允許寫入助手工作資料夾")}
-            className="ml-auto bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70">
+            className="bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70">
             <option value="advise">{t("唯讀問答")}</option>
             <option value="agent">{t("可寫腳本檔")}</option>
           </select>
-          <select value={model} onChange={(e) => setModel(e.target.value)}
-            className="bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70">
-            {MODELS.map((m) => <option key={m.value} value={m.value}>{t(m.label)}</option>)}
-          </select>
+          {provider === "claude" ? (
+            <select value={model} onChange={(e) => setModel(e.target.value)}
+              className="bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70">
+              {CLAUDE_MODELS.map((m) => <option key={m.value} value={m.value}>{t(m.label)}</option>)}
+            </select>
+          ) : (
+            <input value={model} onChange={(e) => setModel(e.target.value)}
+              placeholder={t("預設模型")}
+              title={t("留白用 codex 自己的預設模型；也可填模型名稱，如 gpt-5-codex")}
+              className="w-28 bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70 outline-none focus:border-accent/60" />
+          )}
         </div>
         <div className="flex items-end gap-2">
           <textarea

@@ -942,7 +942,7 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
       ["Tab", t("縮排")],
       ["Ctrl+/", t("切換 SQL 行註解")],
       ["Ctrl+Shift+F", t("格式化 SQL")],
-      ["Ctrl+Shift+A", t("開 / 關 AI 生成查詢列（本地 Claude CLI）")],
+      ["Ctrl+Shift+A", t("開 / 關 AI 生成查詢列（本機 Claude / Codex CLI）")],
       ["Ctrl+S / Ctrl+O", t("另存 / 開啟 .sql 檔")],
       ["Esc", t("停止執行中的查詢（已完成的結果保留）")],
       [t("工具列下拉"), t("切換目前連線 / 資料庫；「視覺化解釋」看執行計畫")],
@@ -4037,7 +4037,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     }
   };
 
-  // AI 生成查詢：SQL 編輯器類型與 Elasticsearch 支援；用本地 claude CLI 把自然語言轉成語句。
+  // AI 生成查詢：SQL 編輯器類型與 Elasticsearch 支援；用本機 claude / codex CLI 把自然語言轉成語句。
   const supportsNlQuery = supportsSqlEditor || kind === "elastic";
   const nlLang: "sql" | "json" = kind === "elastic" ? "json" : "sql";
 
@@ -5086,7 +5086,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             )}
             {supportsNlQuery && !folded && (
               <button type="button" onClick={() => setNlOpen((v) => !v)}
-                title={t("用自然語言生成查詢語句（本地 Claude CLI） · Ctrl+Shift+A")}
+                title={t("用自然語言生成查詢語句（本機 Claude / Codex CLI） · Ctrl+Shift+A")}
                 className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
                   nlOpen ? "border-accent/50 bg-accent/12 text-accent" : "border-fg/15 hover:bg-fg/10 text-fg/70"}`}>
                 <Icon icon={Sparkles} size={13} />{!dense && t("AI 生成")}

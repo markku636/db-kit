@@ -79,7 +79,7 @@ src-tauri/src/
 ├── export.rs          資料匯出（CSV / TSV / Excel / JSON / SQL / Markdown）
 ├── import.rs          資料匯入（CSV / TSV / Excel）
 ├── transfer.rs        跨連線 / 跨庫資料傳輸與比對同步
-├── agent.rs           AI 助手（本機 Claude CLI 串流橋接）
+├── agent.rs           AI 助手（本機 Claude Code / OpenAI Codex CLI 串流橋接）
 ├── it_tests.rs        Docker 真實資料庫整合測試
 ├── commands/mod.rs    Tauri command（薄包裝）
 ├── cli/               dbk CLI（args / dispatch / guard / render / resolve）

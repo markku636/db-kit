@@ -162,7 +162,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 匯出 / 匯入 | 資料格工具列匯出 CSV / JSON / Excel / SQL…；CSV / Excel 可匯入資料表 |
 | 看表關聯 | 開「ER 圖」分頁，拖曳表卡、佈局自動記憶 |
 | 換配色 | 右上角主題選單：光亮 / 暗黑 + 7 套寶石系變體（整個 App 與編輯器一起換） |
-| 問 AI | 右側面板串接本機 Claude CLI，可附帶目前連線 schema |
+| 問 AI | 右側面板串接本機 Claude Code 或 OpenAI Codex CLI（面板上可切換），可附帶目前連線 schema |
 
 ## ✨ 亮點
 
@@ -173,7 +173,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - **整套主題系統** — 內建 7 套寶石系配色（Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian），從工具列一鍵切換，**同時驅動整個 App 與 SQL 編輯器語法高亮**；AI 助手的程式碼區塊也跟著換色。
 - **安全可靠** — 連線密碼存於 OS keychain（磁碟不落地）、SSH Tunnel（密碼／私鑰）+ host key TOFU 驗證、所有寫入以主鍵定位 + 全參數化綁定防注入；另有**結果列數上限**與**查詢逾時**兩道安全網，誤跑 `SELECT *` 大表不會炸掉記憶體。
 - **桌面級操作手感** — 儲存格直接編輯、右鍵選單、鍵盤導覽、多欄排序、欄寬拖曳、依值篩選、內容檢視器、即時尋找、表頭 hover 顯示欄位註解。
-- **內建 AI 助手** — 右側面板串接本機 Claude CLI（用你的 Claude 訂閱登入），串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。
+- **內建 AI 助手（Claude Code / OpenAI Codex 二選一）** — 右側面板串接本機 CLI，用你自己的訂閱登入（Claude Pro/Max 或 ChatGPT Plus/Pro），不需要 API key；串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。供應商在面板上隨時切換，助手與「AI 生成查詢」列共用同一個選擇。
 - **附命令列工具 `dbk`** — 查詢 / 瀏覽 / 匯出 / 備份 + **寫入（修改 · 刪除，需 `--yes`，高破壞再要 `--force`）** 的 CLI，重用同一套連線與 keychain，可 `--no-default-features` 編成不連 Tauri 的精簡 binary，適合伺服器與 script 場景（見 [命令列工具](#命令列工具dbk-cli)）。
 - **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、Rust 單元測試覆蓋各方言 SQL 生成（含 MariaDB / Oracle）、前端 vitest 覆蓋（329 項），另有 **`npm run verify:ui` UI 冒煙檢查**（production build + Tauri invoke shim 驗右鍵選單與分頁行為，免 Docker / 免真實資料庫），經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
 
@@ -193,7 +193,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 外觀 | **7 套寶石系主題**（Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian）驅動整個 App + 編輯器語法高亮，工具列一鍵切換光亮 / 暗黑 / 變體 |
 | 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、**啟動鎖定**（Windows Hello / Touch ID 或 Argon2id 密碼、閒置自動鎖定）、**結果列數上限 / 查詢逾時**、釘選常用表 |
 | SQL 審查 | **靜態規則引擎**（對標 Redgate SQL Prompt / SonarQube SQL rules）：15 條規則、三級嚴重度，打字當下即時列出無 WHERE 的 DML、笛卡兒積、欄位套函式讓索引失效、前綴萬用字元 LIKE、`NOT IN` 的 NULL 陷阱、UNION vs UNION ALL、NOLOCK 髒讀、游標逐列處理…；方言感知、**不執行查詢也不需要 AI**，點一筆即跳到編輯器對應位置 |
-| AI 助手 | 右側面板串接本機 Claude CLI：串流問答、撰寫 / 優化 SQL，可附帶目前 schema；程式碼區塊套用目前主題的語法高亮。另有三個一鍵入口——**AI 審查 SQL**（帶規則引擎發現 + 結構 + 索引 + 計畫）、**AI 調校建議**（帶計畫熱點，要求索引 DDL / 改寫 / 代價評估）、**AI 分析壓測結果**（從延遲百分位的形狀反推瓶頸類型） |
+| AI 助手 | 右側面板串接本機 **Claude Code 或 OpenAI Codex** CLI（下拉即切、各自記住模型）：串流問答、撰寫 / 優化 SQL，可附帶目前 schema；程式碼區塊套用目前主題的語法高亮。另有三個一鍵入口——**AI 審查 SQL**（帶規則引擎發現 + 結構 + 索引 + 計畫）、**AI 調校建議**（帶計畫熱點，要求索引 DDL / 改寫 / 代價評估）、**AI 分析壓測結果**（從延遲百分位的形狀反推瓶頸類型） |
 | 多語系 | **繁體中文 · 简体中文 · English · 日本語 · 한국어**，工具列或設定頁即時切換、不需重啟；前端 / Rust 後端錯誤訊息 / `dbk` CLI（`--lang`、`DBKIT_LANG`）三處同步。各語言的譯文表由 vite 各切一個 chunk，只下載自己那包 |
 | 運維 | 連線設定持久化、加密匯出 / 匯入連線（含密碼）、排程備份 + 備份歷史、連線池監控 + Ping、啟動時檢查新版、跨平台桌面 App |
 
@@ -230,7 +230,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] 雲端連線強化：**從連線字串匯入**（貼 `mysql://` / `postgres://` / `mongodb+srv://` / `rediss://` / `sqlserver://` 及 Azure ADO.NET 一鍵填表；GUI 與 `dbk --url` 共用同一套解析）、自訂 CA 憑證（MySQL / PostgreSQL / SQL Server / MongoDB，適配 AWS RDS / DocumentDB / Aiven / Supabase / Upstash 等）
 - [x] 新增連線對話框改版：連線類型依**分類分組**（關聯式 / 文件 / 鍵值 / 訊息佇列 / 搜尋引擎）＋圖示選擇器，選定後收合為單列、可隨時「變更類型」
 - [x] Elasticsearch / OpenSearch 支援（一等公民；純 reqwest REST，無額外 C 相依，`elastic` feature 隨 gui 預設開）：叢集→索引樹、**Query DSL 查詢編輯器**（JSON envelope `{ "index":"..", "query":{..} }` + lint + 欄位補全）、search / count / 單層聚合（雙結果集）、**叢集總覽**（健康 / 節點 / 索引狀態）、Mapping 檢視、刪除索引；認證支援 Basic / API Key / Elastic Cloud ID，TLS + 自訂 CA；flavor（ES vs OpenSearch）連線時自動偵測
-- [x] **自然語言查詢**（NL→SQL / NL→ES DSL）：查詢面板「AI 生成」列（Ctrl+Shift+A），用自然語言描述需求 → 本地 Claude CLI（沿用 AI 助手管線，訂閱登入、不需 API key）注入 schema / mapping 後生成查詢語句。生成語句**先顯示於預覽**（可檢視 / 複製 / 重新生成）再由使用者「套用到編輯器」執行，非黑箱；破壞性語句（DROP/TRUNCATE 等）套用前警示；執行失敗可「帶錯誤重試」。單回合零工具（tool 自動拒絕，無副作用）
+- [x] **自然語言查詢**（NL→SQL / NL→ES DSL）：查詢面板「AI 生成」列（Ctrl+Shift+A），用自然語言描述需求 → 本機 Claude Code / Codex CLI（沿用 AI 助手管線，訂閱登入、不需 API key）注入 schema / mapping 後生成查詢語句。生成語句**先顯示於預覽**（可檢視 / 複製 / 重新生成）再由使用者「套用到編輯器」執行，非黑箱；破壞性語句（DROP/TRUNCATE 等）套用前警示；執行失敗可「帶錯誤重試」。單回合零工具（tool 自動拒絕，無副作用）
 - [x] RabbitMQ 支援（一等公民；lapin AMQP 0-9-1 + Management REST 雙軌，`rabbitmq` feature 隨 gui 預設開，rustls-ring 純 Rust 無 NASM）：連線→vhost→佇列樹、**佇列訊息瀏覽**（basic.get 非破壞性預覽 + requeue，含 redelivered / quorum 警告；stream 佇列擋）、**發布訊息**（publisher confirm）、佇列詳情、清空 / 刪除佇列（危險確認）、叢集總覽（版本 / 節點 / 佇列 / 訊息數 / 速率）；amqp(s):// 貼上即用（CloudAMQP）；vhost / TLS / Management URL 可設
 - [x] 儲存格直接編輯 + ✓ 套用（以主鍵定位，寫回 DB）
 - [x] 新增列 / 刪除列（完整 CRUD）
@@ -266,7 +266,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] 側欄：搜尋過濾、表右鍵產生查詢（SQL SELECT/COUNT/INSERT、Mongo find 範本）、複製連線
 - [x] 分頁管理（中鍵 / 關閉其他 / 全部 / Ctrl+W）、連線池即時監控 + **Ping**（量測既有連線往返延遲，含 SSH 通道）、全域 UI/UX 打磨
 - [x] Redis 進階：值格式化（原始 / JSON / Hex）+ 大集合游標式分頁、**Pub/Sub** 訂閱發佈、**維運面板**（慢查詢 / 用戶端 / 大鍵）
-- [x] AI 助手（右側面板，串接本機 Claude CLI）：串流問答、撰寫 / 優化 SQL，可附帶目前連線 schema 作上下文
+- [x] AI 助手（右側面板，串接本機 Claude Code / OpenAI Codex CLI）：串流問答、撰寫 / 優化 SQL，可附帶目前連線 schema 作上下文
 - [x] 跨資料庫一致：上述能力於 MySQL / PostgreSQL / SQL Server / SQLite / MongoDB 對齊（識別字 / 篩選 / 索引依各庫對應）
 - [x] **視覺化查詢建構器**：勾選表 / 欄、外鍵自動 JOIN、WHERE / 聚合 / HAVING / ORDER BY / DISTINCT / LIMIT / OFFSET、即時預覽 + 計數，帶入編輯器；可從資料表右鍵開啟
 - [x] **Excel（.xlsx）匯出 / 匯入**：純 Rust（rust_xlsxwriter / calamine），數字保真、凍結表頭 + 自動欄寬
@@ -307,7 +307,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 狀態 | Zustand |
 | 後端 | Rust：sqlx (MySQL / MariaDB / PostgreSQL / SQLite)、tiberius + bb8 (SQL Server)、rust-oracle / ODPI-C (Oracle，需 Instant Client)、mongodb、redis |
 | 安全 | OS keychain（keyring）、SSH Tunnel（russh）+ host key TOFU |
-| AI 助手 | 本機 Claude CLI（Claude 訂閱登入，串流） |
+| AI 助手 | 本機 Claude Code / OpenAI Codex CLI（訂閱登入，串流） |
 
 ## 連線生命週期設計
 
