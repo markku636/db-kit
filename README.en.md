@@ -28,6 +28,10 @@ through a single, consistent interface.
   <a href="./README.md">繁體中文</a> · <strong>English</strong>
 </p>
 
+<p align="center">
+  ☕ Free and open source. If it helps, <a href="#support-open-source">buy me a coffee</a>.
+</p>
+
 ---
 
 ## What is this
@@ -428,6 +432,17 @@ The installers land in `src-tauri\target\release\bundle\` (`msi\` and `nsis\` su
 ```bash
 git tag v0.1.6 && git push origin v0.1.6
 ```
+
+## Support open source
+
+This tool is free and open source. If it saved you time, buy me a coffee so the updates keep coming.
+
+[![PayPal $5](https://img.shields.io/badge/PayPal-%245-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8B7GRXA6UJH36)
+[![PayPal $10](https://img.shields.io/badge/PayPal-%2410-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8LBTFUBBF2CHS)
+[![PayPal $15](https://img.shields.io/badge/PayPal-%2415-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/A653DD46GEU4W)
+[![PayPal $25](https://img.shields.io/badge/PayPal-%2425-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/Y5WPSXVGH3YS4)
+
+For any other amount, use [PayPal.Me](https://paypal.me/226network). The same buttons are in the in-app "About" dialog.
 
 ## Author
 

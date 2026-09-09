@@ -27,6 +27,10 @@
   <strong>繁體中文</strong> · <a href="./README.en.md">English</a>
 </p>
 
+<p align="center">
+  ☕ 這個工具免費且開源。如果幫上忙，可以 <a href="#贊助開源">請我喝杯咖啡</a>。
+</p>
+
 ---
 
 ## 這是什麼
@@ -431,6 +435,17 @@ powershell -ExecutionPolicy Bypass -File .\build-installer.ps1
 ```bash
 git tag v0.1.6 && git push origin v0.1.6
 ```
+
+## 贊助開源
+
+這個工具免費且開源。如果它幫你省下了時間，可以請我喝杯咖啡，讓後續的更新繼續做下去。
+
+[![PayPal $5](https://img.shields.io/badge/PayPal-%245-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8B7GRXA6UJH36)
+[![PayPal $10](https://img.shields.io/badge/PayPal-%2410-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8LBTFUBBF2CHS)
+[![PayPal $15](https://img.shields.io/badge/PayPal-%2415-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/A653DD46GEU4W)
+[![PayPal $25](https://img.shields.io/badge/PayPal-%2425-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/Y5WPSXVGH3YS4)
+
+其他金額請走 [PayPal.Me](https://paypal.me/226network)。應用程式內的「關於」對話框也有同一組贊助按鈕。
 
 ## 作者
 

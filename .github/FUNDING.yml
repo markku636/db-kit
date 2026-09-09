@@ -1,0 +1,5 @@
+# GitHub 的贊助列（repo 頁面上方的 ♥ Sponsor 按鈕）。
+# 與 README 的贊助段、`src/donate.ts` 是同一組連結，換帳號時三處都要改。
+custom:
+  - https://paypal.me/226network
+  - https://www.paypal.com/ncp/payment/8B7GRXA6UJH36

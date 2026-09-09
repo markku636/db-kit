@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { BookOpen, Bug, Copy, ExternalLink, FileText, Info, RefreshCw } from "lucide-react";
+import { BookOpen, Bug, Copy, ExternalLink, FileText, Heart, Info, RefreshCw } from "lucide-react";
 import { Button, Icon, Modal } from "./ui/index";
 import { api, KIND_META } from "./api";
 import { checkForUpdate, isNewer, REPO, type UpdateInfo } from "./updateCheck";
 import { copyToClipboard } from "./ui";
 import { useT } from "./i18n";
 import { APP_NAME, BLOG_URL } from "./brand";
+import { DONATE_TIERS, PAYPAL_ME_URL } from "./donate";
 
 // 手動檢查更新的狀態機：idle（未檢查）→ checking → latest / update / failed。
 type CheckState =
@@ -92,6 +93,35 @@ export default function AboutDialog({ onClose }: { onClose: () => void }) {
               {l.label}
             </button>
           ))}
+        </div>
+
+        {/*
+          贊助。排在連結列之後、授權行之前 —— 打開「關於」的人多半是為了查版本或找
+          回報入口，那些事辦完了才輪得到「這東西幫了我」。排到更上面只會擋住功能。
+          四個固定金額直接是四顆按鈕（見 donate.ts：不寫「隨意」）。
+        */}
+        <div className="mt-4 w-full border-t border-fg/10 pt-3">
+          <div className="text-[13px] text-fg/60">{t("這個工具免費且開源。如果它幫你省下時間，可以請我喝杯咖啡。")}</div>
+          <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
+            {DONATE_TIERS.map((tier) => (
+              <button
+                type="button"
+                key={tier.usd}
+                onClick={() => openUrl(tier.url)}
+                title={t("以 PayPal 贊助 US${usd}", { usd: tier.usd })}
+                className="inline-flex items-center gap-1 rounded border border-fg/15 px-2.5 py-1 text-[13px] tabular-nums text-fg/70 hover:border-accent/40 hover:text-accent hover:bg-accent/5"
+              >
+                <Icon icon={Heart} size={12} />${tier.usd}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => openUrl(PAYPAL_ME_URL)}
+              className="rounded px-2 py-1 text-[13px] text-fg/50 hover:text-fg hover:bg-fg/5"
+            >
+              {t("其他金額")}
+            </button>
+          </div>
         </div>
 
         <div className="mt-3 text-[11px] text-fg/35">{t("MIT 授權 · Tauri + React 打造")}</div>
