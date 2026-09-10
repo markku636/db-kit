@@ -29,6 +29,10 @@ pub mod cli;
 // 連同 tauri / tauri-plugin-dialog 相依一起不被連入。
 #[cfg(feature = "gui")]
 mod agent;
+// HTTP LLM 供應商（Anthropic-compatible / OpenAI-compatible）。相依 reqwest，
+// 與 agent 一起掛在 gui feature 後：slim CLI（dbk）不含 AI，也就不需要把 reqwest 連進去。
+#[cfg(feature = "gui")]
+mod llm;
 // 生物辨識解鎖（Windows Hello / Touch ID）。本身不相依 Tauri，但平台綁定（windows / objc2）
 // 掛在 gui feature 後，slim CLI 不編；且 CLI 也沒有可以彈提示的視窗。
 #[cfg(feature = "gui")]
@@ -69,6 +73,7 @@ pub fn run() {
             history_lock: Arc::new(tokio::sync::Mutex::new(())),
             pubsub: Arc::new(Mutex::new(std::collections::HashMap::new())),
             agent_jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            llm_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
             #[cfg(feature = "kafka")]
             kafka_tails: Arc::new(Mutex::new(std::collections::HashMap::new())),
             #[cfg(feature = "kafka")]
@@ -377,6 +382,9 @@ pub fn run() {
             agent::agent_detect,
             agent::agent_send,
             agent::agent_cancel,
+            agent::llm_key_set,
+            agent::llm_key_status,
+            agent::llm_list_models,
             agent::open_agent_workspace,
             agent::open_external,
         ])

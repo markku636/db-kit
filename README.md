@@ -166,7 +166,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 匯出 / 匯入 | 資料格工具列匯出 CSV / JSON / Excel / SQL…；CSV / Excel 可匯入資料表 |
 | 看表關聯 | 開「ER 圖」分頁，拖曳表卡、佈局自動記憶 |
 | 換配色 | 右上角主題選單：光亮 / 暗黑 + 7 套寶石系變體（整個 App 與編輯器一起換） |
-| 問 AI | 右側面板串接本機 Claude Code 或 OpenAI Codex CLI（面板上可切換），可附帶目前連線 schema |
+| 問 AI | 右側面板串接本機 Claude Code / OpenAI Codex CLI，或任何 Anthropic / OpenAI 相容 API（面板上可切換），可附帶目前連線 schema |
 
 ## ✨ 亮點
 
@@ -177,7 +177,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - **整套主題系統** — 內建 7 套寶石系配色（Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian），從工具列一鍵切換，**同時驅動整個 App 與 SQL 編輯器語法高亮**；AI 助手的程式碼區塊也跟著換色。
 - **安全可靠** — 連線密碼存於 OS keychain（磁碟不落地）、SSH Tunnel（密碼／私鑰）+ host key TOFU 驗證、所有寫入以主鍵定位 + 全參數化綁定防注入；另有**結果列數上限**與**查詢逾時**兩道安全網，誤跑 `SELECT *` 大表不會炸掉記憶體。
 - **桌面級操作手感** — 儲存格直接編輯、右鍵選單、鍵盤導覽、多欄排序、欄寬拖曳、依值篩選、內容檢視器、即時尋找、表頭 hover 顯示欄位註解。
-- **內建 AI 助手（Claude Code / OpenAI Codex 二選一）** — 右側面板串接本機 CLI，用你自己的訂閱登入（Claude Pro/Max 或 ChatGPT Plus/Pro），不需要 API key；串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。供應商在面板上隨時切換，助手與「AI 生成查詢」列共用同一個選擇。
+- **內建 AI 助手（四種供應商）** — 右側面板可接**本機 CLI**（Claude Code / OpenAI Codex，用你自己的訂閱登入，不需要 API key）或**任何 Anthropic / OpenAI 相容 API**（官方 API、OpenRouter / DeepSeek / Kimi / GLM / Groq，以及地端的 Ollama / LM Studio / vLLM —— 填 Base URL 與模型即可，地端端點免金鑰）。串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。供應商在面板上隨時切換，助手與「AI 生成查詢」列共用同一個選擇。**API 金鑰只存 OS keychain**，設定檔與前端都拿不到明文。
+- **人設與技能** — 助手的系統提示詞（人設）可以改，並可存多組具名的「技能」（如「SQL 效能診斷」「唯讀安全至上」），在面板上一鍵勾選套用；四種供應商共用同一份設定。
 - **附命令列工具 `dbk`** — 查詢 / 瀏覽 / 匯出 / 備份 + **寫入（修改 · 刪除，需 `--yes`，高破壞再要 `--force`）** 的 CLI，重用同一套連線與 keychain，可 `--no-default-features` 編成不連 Tauri 的精簡 binary，適合伺服器與 script 場景（見 [命令列工具](#命令列工具dbk-cli)）。
 - **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、Rust 單元測試覆蓋各方言 SQL 生成（含 MariaDB / Oracle）、前端 vitest 覆蓋（329 項），另有 **`npm run verify:ui` UI 冒煙檢查**（production build + Tauri invoke shim 驗右鍵選單與分頁行為，免 Docker / 免真實資料庫），經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
 
@@ -311,7 +312,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 狀態 | Zustand |
 | 後端 | Rust：sqlx (MySQL / MariaDB / PostgreSQL / SQLite)、tiberius + bb8 (SQL Server)、rust-oracle / ODPI-C (Oracle，需 Instant Client)、mongodb、redis |
 | 安全 | OS keychain（keyring）、SSH Tunnel（russh）+ host key TOFU |
-| AI 助手 | 本機 Claude Code / OpenAI Codex CLI（訂閱登入，串流） |
+| AI 助手 | 本機 Claude Code / OpenAI Codex CLI（訂閱登入，串流），或 Anthropic / OpenAI 相容 API（金鑰存 OS keychain） |
 
 ## 連線生命週期設計
 

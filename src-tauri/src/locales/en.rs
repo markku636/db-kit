@@ -716,6 +716,35 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
             "The CLI does not support Elasticsearch connections (use the GUI)"
         }
 
+
+        // ---- llm/：Anthropic / OpenAI 相容供應商 ----
+        "尚未設定 API Base URL" => "No API base URL configured",
+        "尚未指定模型" => "No model specified",
+        "未知的供應商：{kind}" => "Unknown provider: {kind}",
+        "（金鑰無效或沒有權限）" => " (invalid key or insufficient permission)",
+        "（Base URL 可能不對，或這個服務沒有這個端點）" => " (the base URL may be wrong, or this service has no such endpoint)",
+        "（額度或速率上限）" => " (quota or rate limit)",
+        "串流中斷：{e}" => "Stream interrupted: {e}",
+        "連線失敗：{e}" => "Connection failed: {e}",
+        "回應不是 JSON：{e}" => "The response is not JSON: {e}",
+        "端點連續拒絕請求（已嘗試相容性調整）" => "The endpoint kept rejecting the request (compatibility adjustments were already tried)",
+        "（回應長度達上限，內容可能不完整）" => "(Reached the length limit; the answer may be incomplete.)",
+        "模型重複呼叫同一支工具且沒有進展，已中止" => "The model kept calling the same tool without progress, so the run was stopped",
+        "超過 {n} 回合仍未收斂，已中止" => "Stopped after {n} turns without converging",
+        "讀取助手工作資料夾裡的一個檔案（相對路徑）。" => "Read one file inside the assistant workspace folder (relative path).",
+        "列出助手工作資料夾裡的檔案，可用 * 與 ? 萬用字元過濾。" => "List files in the assistant workspace folder; * and ? wildcards are supported.",
+        "在助手工作資料夾的文字檔中搜尋字串，回傳檔名、行號與該行內容。" => "Search text files in the assistant workspace folder and return file, line number and the matching line.",
+        "把內容寫進助手工作資料夾裡的檔案（會覆蓋同名檔，可建立子目錄）。" => "Write content to a file in the assistant workspace folder (overwrites an existing file; subdirectories are created).",
+        "path 不可為空" => "path must not be empty",
+        "只能使用相對路徑（限助手工作資料夾內）" => "Only relative paths are allowed (inside the assistant workspace folder)",
+        "路徑不可包含 .. 或磁碟前綴（限助手工作資料夾內）" => "The path must not contain .. or a drive prefix (inside the assistant workspace folder)",
+        "建立目錄失敗：{e}" => "Failed to create the directory: {e}",
+        "query 不可為空" => "query must not be empty",
+        "目前是唯讀模式（advise），要寫檔請切到 agent 模式" => "This is read-only mode (advise); switch to agent mode to write files",
+        "未知的工具：{name}" => "Unknown tool: {name}",
+        "（找不到「{query}」）" => "(no match for “{query}”)",
+        "（工作資料夾裡沒有符合的檔案）" => "(no matching file in the workspace folder)",
+        "已寫入 {path}（{n} 位元組）" => "Wrote {path} ({n} bytes)",
         _ => return None,
     })
 }

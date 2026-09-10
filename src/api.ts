@@ -398,12 +398,15 @@ export function onRedisPubSubError(cb: (msg: string) => void): Promise<UnlistenF
   return listen<string>("redis-pubsub-error", (e) => cb(e.payload));
 }
 
-// ---- AI 助手（本機 claude / codex CLI）----
+// ---- AI 助手（本機 claude / codex CLI，或 Anthropic / OpenAI 相容 API）----
 
-// 助手供應商：兩者都走「訂閱登入的本機 CLI」，不需要 API key。
-export type AgentProvider = "claude" | "codex";
+// 助手供應商：
+// - claude / codex：走「訂閱登入的本機 CLI」，不需要 API key。
+// - anthropic-api / openai-api：直接打相容端點，需要 Base URL（+ 金鑰，地端端點可免）。
+export type AgentProvider = "claude" | "codex" | "anthropic-api" | "openai-api";
 
-// CLI 偵測結果（決定是否顯示安裝 / 登入提示）。provider 回聲後端實際採用的供應商。
+// 供應商偵測結果（決定是否顯示安裝 / 登入 / 設定提示）。provider 回聲後端實際採用的供應商。
+// API 供應商沒有版本號：`installed` = 有 Base URL、`logged_in` = 有金鑰或是地端端點、`path` = Base URL。
 export interface AgentStatus {
   provider: AgentProvider;
   installed: boolean;
@@ -1363,9 +1366,10 @@ export const api = {
     invoke<StressReport>("stress_run", { runId, config, plan }),
   stressCancel: (runId: string) => invoke<void>("stress_cancel", { runId }),
 
-  // AI 助手：偵測 CLI / 送出問答（串流走 onAgentStream）/ 取消。provider 省略時後端預設 claude。
-  agentDetect: (provider?: AgentProvider | null) =>
-    invoke<AgentStatus>("agent_detect", { provider: provider ?? null }),
+  // AI 助手：偵測供應商 / 送出問答（串流走 onAgentStream）/ 取消。provider 省略時後端預設 claude。
+  // baseUrl 只有 API 供應商會用到；systemPrompt 是人設 + 選中的技能（四種供應商都吃）。
+  agentDetect: (provider?: AgentProvider | null, baseUrl?: string | null) =>
+    invoke<AgentStatus>("agent_detect", { provider: provider ?? null, baseUrl: baseUrl ?? null }),
   agentSend: (args: {
     reqId: string;
     prompt: string;
@@ -1373,6 +1377,8 @@ export const api = {
     model?: string | null;
     mode?: AgentMode | null;
     provider?: AgentProvider | null;
+    baseUrl?: string | null;
+    systemPrompt?: string | null;
   }) =>
     invoke<void>("agent_send", {
       reqId: args.reqId,
@@ -1381,8 +1387,18 @@ export const api = {
       model: args.model ?? null,
       mode: args.mode ?? null,
       provider: args.provider ?? null,
+      baseUrl: args.baseUrl ?? null,
+      systemPrompt: args.systemPrompt ?? null,
     }),
   agentCancel: (reqId: string) => invoke<void>("agent_cancel", { reqId }),
+
+  // API 金鑰：只進 OS keychain，前端永遠拿不到明文（只能問「有沒有」）。
+  // kind 是供應商 id（"anthropic-api" / "openai-api"）；key 傳空字串 = 刪除。
+  llmKeySet: (kind: AgentProvider, key: string) => invoke<void>("llm_key_set", { kind, key }),
+  llmKeyStatus: (kind: AgentProvider) => invoke<boolean>("llm_key_status", { kind }),
+  // 取模型清單（同時當「測試連線」）。抓不到回空陣列，UI 退回手填。
+  llmListModels: (kind: AgentProvider, baseUrl?: string | null) =>
+    invoke<string[]>("llm_list_models", { kind, baseUrl: baseUrl ?? null }),
   openAgentWorkspace: () => invoke<void>("open_agent_workspace"),
   openExternal: (url: string) => invoke<void>("open_external", { url }),
 };

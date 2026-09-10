@@ -6,7 +6,8 @@ import { Sparkles, X, StopCircle, ClipboardCopy, RotateCw, CornerDownLeft, Alert
 import { useT } from "./i18n";
 import { extractFirstCodeBlock } from "./nlPrompt";
 import { copyToClipboard } from "./ui";
-import { CLAUDE_MODELS, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
+import { baseUrlOf, CLAUDE_MODELS, isApiProvider, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
+import { currentSystemPrompt } from "./aiSkills";
 
 // 破壞性語句偵測（套用前警示）：DROP/TRUNCATE/ALTER，或無 WHERE 的 DELETE/UPDATE。
 const DESTRUCTIVE = /\b(drop|truncate|alter)\b/i;
@@ -38,9 +39,13 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
   // 供應商與右側助手面板共用同一個偏好（aiProvider store）；模型各記一個，別名不能互餵。
   const provider = useAiProvider((s) => s.provider);
   const setProvider = useAiProvider((s) => s.setProvider);
-  const [models, setModels] = useState<Partial<Record<AgentProvider, string>>>({});
+  // 模型與 Base URL 與助手面板共用同一份設定（aiProvider store）。
+  const models = useAiProvider((s) => s.models);
+  const setModels = useAiProvider((s) => s.setModel);
+  const baseUrls = useAiProvider((s) => s.baseUrls);
   const model = models[provider] || "";
-  const setModel = (v: string) => setModels((m) => ({ ...m, [provider]: v }));
+  const setModel = (v: string) => setModels(provider, v);
+  const baseUrl = baseUrlOf(provider, baseUrls);
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -54,7 +59,7 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
   const detect = async () => {
     setDetecting(true);
     try {
-      setStatus(await api.agentDetect(provider));
+      setStatus(await api.agentDetect(provider, baseUrl || null));
     } finally {
       setDetecting(false);
     }
@@ -73,7 +78,7 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
     setStatus(null);
     if (open) void detect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider]);
+  }, [provider, baseUrl]);
 
   useEffect(() => () => { unlistenRef.current?.(); }, []);
 
@@ -120,7 +125,16 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
         }
       });
       unlistenRef.current = un;
-      await api.agentSend({ reqId, prompt, sessionId: null, model, mode: "generate", provider });
+      await api.agentSend({
+        reqId,
+        prompt,
+        sessionId: null,
+        model,
+        mode: "generate",
+        provider,
+        baseUrl: baseUrl || null,
+        systemPrompt: currentSystemPrompt(false),
+      });
     } catch (err: any) {
       setGenerating(false);
       setPreview(`⚠ ${err?.message ?? t("發生錯誤")}`);
@@ -163,7 +177,7 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
         <Icon icon={Sparkles} size={14} className="text-accent shrink-0" />
         <span className="text-xs font-medium text-fg/70">{t("AI 生成查詢")}</span>
         <Select selectSize="sm" value={provider} onChange={(e) => setProvider(e.target.value as AgentProvider)}
-          title={t("要用哪一支本機 CLI 生成（兩者都用你自己的訂閱登入）")} className="w-32 ml-1">
+          title={t("要用哪個供應商生成（CLI 走你的訂閱登入，API 走你自己的端點與金鑰）")} className="w-32 ml-1">
           {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </Select>
         {provider === "claude" ? (
@@ -172,8 +186,10 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
           </Select>
         ) : (
           <input value={model} onChange={(e) => setModel(e.target.value)}
-            placeholder={t("預設模型")}
-            title={t("留白用 codex 自己的預設模型；也可填模型名稱，如 gpt-5-codex")}
+            placeholder={isApiProvider(provider) ? t("模型名稱") : t("預設模型")}
+            title={isApiProvider(provider)
+              ? t("這個端點的模型名稱（可在 AI 設定裡從端點抓清單）")
+              : t("留白用 codex 自己的預設模型；也可填模型名稱，如 gpt-5-codex")}
             className="w-28 h-7 bg-inset border border-fg/10 rounded px-2 text-xs outline-none focus:border-accent" />
         )}
         <button type="button" onClick={onClose} title={t("關閉")} className="ml-auto text-fg/40 hover:text-fg/70">
@@ -183,7 +199,11 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
 
       {notReady ? (
         <div className="text-[11px] text-amber-200/90 bg-amber-500/10 rounded px-2 py-1.5 leading-relaxed">
-          {!status!.installed ? (
+          {isApiProvider(provider) ? (
+            !status!.installed
+              ? t("尚未設定 {name} 的 Base URL。", { name: meta.label })
+              : t("{name} 還沒有 API 金鑰（地端端點可以不用）。", { name: meta.label })
+          ) : !status!.installed ? (
             t("找不到 {cli} CLI。請先安裝 {name}（{how}）。", { cli: meta.cli, name: meta.label, how: meta.install })
           ) : (
             t("尚未登入 {name}。請在終端機執行 {cmd} 並用你的訂閱帳號登入。", { name: meta.label, cmd: meta.loginCmd })

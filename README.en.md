@@ -167,7 +167,7 @@ Common operations at a glance:
 | Export / import | Export CSV / JSON / Excel / SQL… from the grid toolbar; import CSV / Excel into tables |
 | See table relations | Open the "ER Diagram" tab — drag table cards, layout is remembered |
 | Change the look | Theme menu at the top right: light / dark + 7 gemstone variants (the whole app and the editor switch together) |
-| Ask AI | The right-hand panel connects to your local Claude Code or OpenAI Codex CLI (switchable in the panel) and can attach the current connection's schema |
+| Ask AI | The right-hand panel connects to your local Claude Code / OpenAI Codex CLI, or to any Anthropic / OpenAI-compatible API (switchable in the panel), and can attach the current connection's schema |
 
 ## ✨ Highlights
 
@@ -178,7 +178,8 @@ Common operations at a glance:
 - **A full theme system** — 7 built-in gemstone palettes (Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian), switchable from the toolbar, **driving the entire app and SQL editor syntax highlighting together**; the AI assistant's code blocks recolor too.
 - **Secure and safe** — connection passwords in the OS keychain (never on disk), SSH Tunnel (password / private key) with host-key TOFU verification, all writes keyed by primary key with fully parameterized bindings against injection; plus **row-count caps** and **query timeouts** as two safety nets — an accidental `SELECT *` on a huge table won't blow up memory.
 - **Desktop-grade grid feel** — in-cell editing, context menus, keyboard navigation, multi-column sort, draggable column widths, filter-by-value, content viewer, instant find, column comments on header hover.
-- **Built-in AI assistant (Claude Code or OpenAI Codex)** — the right panel drives a local CLI signed in with your own subscription (Claude Pro/Max or ChatGPT Plus/Pro), no API key required: streaming answers to database questions, writing / optimizing SQL, and optionally attaching the current connection's schema as context. Switch provider from the panel at any time; the assistant and the "AI generate" query bar share the same choice.
+- **Built-in AI assistant (four providers)** — the right panel drives either a **local CLI** (Claude Code / OpenAI Codex, signed in with your own subscription, no API key required) or **any Anthropic / OpenAI-compatible API** (the official APIs, OpenRouter / DeepSeek / Kimi / GLM / Groq, and local Ollama / LM Studio / vLLM — just a base URL and a model; local endpoints need no key): streaming answers to database questions, writing / optimizing SQL, and optionally attaching the current connection's schema as context. Switch provider from the panel at any time; the assistant and the "AI generate" query bar share the same choice. **API keys live only in the OS keychain** — neither the settings file nor the front end ever sees the plain text.
+- **Persona and skills** — the assistant's system prompt (persona) is editable, and you can save named "skills" (SQL performance diagnosis, read-only safety first, …) and toggle them per question from the panel; all four providers share the same setting.
 - **Ships with the `dbk` CLI** — a query / browse / export / backup command-line tool that also **writes (modify · delete, gated behind `--yes`, destructive actions behind `--force`)**, reusing the same connections and keychain; compile it Tauri-free with `--no-default-features` for servers and scripts (see [Command-line tool](#command-line-tool-dbk-cli)).
 - **Solid engineering practice** — backend integration tests against real Docker databases (MySQL / PostgreSQL / SQLite / MongoDB / Redis), Rust unit tests covering per-dialect SQL generation (including MariaDB / Oracle), frontend coverage with vitest (329 tests), plus **`npm run verify:ui`** — a UI smoke check that drives the production build through a Tauri invoke shim to assert context menus and tab behaviour (no Docker, no real database) — hardened through multiple rounds of adversarial self-review for security and correctness (see [CHANGELOG](./CHANGELOG.md)).
 
@@ -305,7 +306,7 @@ All core features are complete (50+ items). Expand for the full list:
 | State | Zustand |
 | Backend | Rust: sqlx (MySQL / MariaDB / PostgreSQL / SQLite), tiberius + bb8 (SQL Server), rust-oracle / ODPI-C (Oracle, needs Instant Client), mongodb, redis |
 | Security | OS keychain (keyring), SSH Tunnel (russh) + host-key TOFU |
-| AI assistant | Local Claude Code / OpenAI Codex CLI (subscription sign-in, streaming) |
+| AI assistant | Local Claude Code / OpenAI Codex CLI (subscription sign-in, streaming), or an Anthropic / OpenAI-compatible API (keys in the OS keychain) |
 
 ## Connection lifecycle design
 

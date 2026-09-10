@@ -46,6 +46,10 @@ pub struct AppState {
     pub pubsub: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
     /// AI 助手進行中的問答背景任務（key = req_id）。取消時 abort 即終止 claude 子程序。
     pub agent_jobs: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
+    /// HTTP 供應商（Anthropic / OpenAI 相容）的對話歷史（key = session id）。
+    /// CLI 後端的 session 由 CLI 自己保管，走 HTTP 就得自己存 —— 每回合整串重送，
+    /// 故 `llm::agent_loop::trim_history` 會修剪長度。App 關閉即消失（不落地）。
+    pub llm_sessions: Arc<Mutex<HashMap<String, Vec<crate::llm::Message>>>>,
     /// Kafka live-tail 的取消旗標（key = 連線 id；每連線一個 tail）。停止 / 斷線時設 true，
     /// poll 執行緒下一輪見到即退出並釋放 consumer（BaseConsumer drop 快速）。
     #[cfg(feature = "kafka")]

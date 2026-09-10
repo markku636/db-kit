@@ -10,14 +10,16 @@ import {
   onAgentStream,
 } from "./api";
 import { useStore } from "./store";
-import { CLAUDE_MODELS, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
+import { baseUrlOf, CLAUDE_MODELS, isApiProvider, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
+import { currentSystemPrompt, useAiSkills } from "./aiSkills";
+import AiSettingsDialog from "./AiSettingsDialog";
 import { useTheme } from "./theme";
 import { resolveHighlightColors, type ThemeColors } from "./editorThemes";
 import { useAssistant } from "./assistant";
 import { toast, copyToClipboard, pickSaveFile, uiConfirm } from "./ui";
 import Icon from "./ui/Icon";
 import { IconButton } from "./ui/index";
-import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Sparkles, Send, Square } from "lucide-react";
+import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Settings2, Sparkles, Send, Square } from "lucide-react";
 import { replyLanguageLine, t, useT, useLang } from "./i18n";
 
 // 右側「AI 助手」面板：驅動本機 claude 或 codex CLI（皆用訂閱登入，不需 API key），
@@ -43,10 +45,10 @@ interface Persisted {
   messages: ChatMsg[];
   sessionId: string | null;
   mode: AgentMode;
-  /** 舊版欄位（單一模型），只在讀取時做一次遷移。 */
+  /** 舊版欄位（單一模型 / 各供應商模型）。v0.28 起模型改存 aiProvider store，
+   *  這裡只保留讀取端的遷移路徑（見 aiProvider.readModels），不再寫入。 */
   model?: string;
-  /** 各供應商各記一個模型：Claude 的別名餵給 codex 只會出錯。 */
-  models: Partial<Record<AgentProvider, string>>;
+  models?: Partial<Record<AgentProvider, string>>;
   ctxOn: boolean;
 }
 
@@ -74,12 +76,17 @@ export default function AssistantPanel() {
   const [mode, setMode] = useState<AgentMode>(persisted.mode || "advise");
   const provider = useAiProvider((s) => s.provider);
   const setProvider = useAiProvider((s) => s.setProvider);
-  // 舊版只存一個 model 字串（必為 Claude 的別名），遷移成 claude 那一格。
-  const [models, setModels] = useState<Partial<Record<AgentProvider, string>>>(
-    () => persisted.models || { claude: persisted.model || "" },
-  );
+  // 供應商設定（模型 / Base URL）改由 aiProvider store 持有：設定對話框與 NL 查詢列共用同一份。
+  const models = useAiProvider((s) => s.models);
+  const setModels = useAiProvider((s) => s.setModel);
+  const baseUrls = useAiProvider((s) => s.baseUrls);
   const model = models[provider] || "";
-  const setModel = (v: string) => setModels((m) => ({ ...m, [provider]: v }));
+  const setModel = (v: string) => setModels(provider, v);
+  const baseUrl = baseUrlOf(provider, baseUrls);
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  const skills = useAiSkills((s) => s.all());
+  const selectedSkills = useAiSkills((s) => s.selected);
+  const toggleSkill = useAiSkills((s) => s.toggle);
   const [width, setWidth] = useState<number>(() => {
     const v = Number(localStorage.getItem("db-kit:assistantWidth"));
     return v >= 300 && v <= 900 ? v : 384;
@@ -100,7 +107,7 @@ export default function AssistantPanel() {
   const detect = async () => {
     setDetecting(true);
     try {
-      setStatus(await api.agentDetect(provider));
+      setStatus(await api.agentDetect(provider, baseUrl || null));
     } catch {
       setStatus({ provider, installed: false, version: null, logged_in: false, path: null });
     } finally {
@@ -117,7 +124,7 @@ export default function AssistantPanel() {
     setStatus(null);
     detect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider]);
+  }, [provider, baseUrl]);
 
   useEffect(() => {
     return () => {
@@ -132,12 +139,11 @@ export default function AssistantPanel() {
         messages: messages.slice(-60),
         sessionId: sessionIdRef.current,
         mode,
-        models,
         ctxOn,
       };
       localStorage.setItem(CHAT_KEY, JSON.stringify(data));
     } catch { /* 忽略寫入失敗 */ }
-  }, [messages, mode, models, ctxOn]);
+  }, [messages, mode, ctxOn]);
 
   // 內容變動時自動捲到底：僅在使用者已接近底部、或剛送出自己的訊息時才跟隨，
   // 讓使用者可在串流途中往上閱讀而不被拉回底部。
@@ -328,7 +334,16 @@ export default function AssistantPanel() {
         }
       });
       unlistenRef.current = un;
-      await api.agentSend({ reqId, prompt, sessionId: sessionIdRef.current, model, mode, provider });
+      await api.agentSend({
+        reqId,
+        prompt,
+        sessionId: sessionIdRef.current,
+        model,
+        mode,
+        provider,
+        baseUrl: baseUrl || null,
+        systemPrompt: currentSystemPrompt(true),
+      });
     } catch (err: any) {
       update((x) => ({
         ...x,
@@ -400,15 +415,26 @@ export default function AssistantPanel() {
 
       {notReady && (
         <div className="shrink-0 px-3 py-2 border-b border-fg/10 bg-amber-500/10 text-[11px] text-amber-200/90 leading-relaxed">
-          {!status!.installed ? (
+          {isApiProvider(provider) ? (
+            !status!.installed
+              ? t("尚未設定 {name} 的 Base URL。", { name: meta.label })
+              : t("{name} 還沒有 API 金鑰（地端端點可以不用）。", { name: meta.label })
+          ) : !status!.installed ? (
             t("找不到 {cli} CLI。請先安裝 {name}（{how}）。", { cli: meta.cli, name: meta.label, how: meta.install })
           ) : (
             t("尚未登入 {name}。請在終端機執行 {cmd} 並用你的訂閱帳號登入。", { name: meta.label, cmd: meta.loginCmd })
           )}
-          <button type="button" onClick={detect} disabled={detecting}
-            className="ml-1 underline hover:text-amber-100 disabled:opacity-50">
-            {detecting ? t("偵測中…") : t("重新偵測")}
-          </button>
+          {isApiProvider(provider) ? (
+            <button type="button" onClick={() => setAiSettingsOpen(true)}
+              className="ml-1 underline hover:text-amber-100">
+              {t("開啟 AI 設定")}
+            </button>
+          ) : (
+            <button type="button" onClick={detect} disabled={detecting}
+              className="ml-1 underline hover:text-amber-100 disabled:opacity-50">
+              {detecting ? t("偵測中…") : t("重新偵測")}
+            </button>
+          )}
         </div>
       )}
 
@@ -438,7 +464,7 @@ export default function AssistantPanel() {
             {t("附帶資料庫內容")}
           </label>
           <select value={provider} onChange={(e) => setProvider(e.target.value as AgentProvider)}
-            title={t("要用哪一支本機 CLI 回答（兩者都用你自己的訂閱登入）")}
+            title={t("要用哪個供應商回答（CLI 走你的訂閱登入，API 走你自己的端點與金鑰）")}
             className="ml-auto bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70">
             {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
@@ -455,11 +481,35 @@ export default function AssistantPanel() {
             </select>
           ) : (
             <input value={model} onChange={(e) => setModel(e.target.value)}
-              placeholder={t("預設模型")}
-              title={t("留白用 codex 自己的預設模型；也可填模型名稱，如 gpt-5-codex")}
+              placeholder={isApiProvider(provider) ? t("模型名稱") : t("預設模型")}
+              title={isApiProvider(provider)
+                ? t("這個端點的模型名稱（可在 AI 設定裡從端點抓清單）")
+                : t("留白用 codex 自己的預設模型；也可填模型名稱，如 gpt-5-codex")}
               className="w-28 bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70 outline-none focus:border-accent/60" />
           )}
+          <button type="button" onClick={() => setAiSettingsOpen(true)} title={t("AI 設定（供應商 / 人設 / 技能）")}
+            className="shrink-0 text-fg/45 hover:text-fg/80">
+            <Icon icon={Settings2} size={13} />
+          </button>
         </div>
+
+        {skills.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="text-[10px] text-fg/35 mr-0.5">{t("技能")}</span>
+            {skills.map((sk) => {
+              const on = selectedSkills.includes(sk.id);
+              return (
+                <button key={sk.id} type="button" onClick={() => toggleSkill(sk.id)}
+                  title={sk.builtin ? t(sk.body) : sk.body}
+                  className={`px-1.5 py-0.5 rounded-full border text-[10px] ${
+                    on ? "border-accent/60 bg-accent/15 text-accent" : "border-fg/10 text-fg/45 hover:text-fg/70 hover:bg-fg/5"
+                  }`}>
+                  {sk.builtin ? t(sk.name) : sk.name}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
@@ -484,6 +534,8 @@ export default function AssistantPanel() {
           )}
         </div>
       </div>
+
+      {aiSettingsOpen && <AiSettingsDialog open onClose={() => setAiSettingsOpen(false)} />}
     </div>
   );
 }

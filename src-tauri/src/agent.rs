@@ -1,9 +1,14 @@
 //! 內建 AI 助手：驅動本機 `claude` 或 `codex` CLI（使用使用者的訂閱登入），
-//! 以 headless 串流模式回答問題與撰寫腳本。
+//! 以 headless 串流模式回答問題與撰寫腳本；或直接以 HTTP 打 Anthropic-compatible /
+//! OpenAI-compatible 端點（見 `llm/`）。四種供應商共用同一組 `agent-stream` 事件，
+//! 前端不需要分辨後端是誰。
 //!
 //! 設計取捨：
-//! - 用「訂閱（Claude Pro/Max、ChatGPT Plus/Pro 登入）」而非 API key，唯一可行路徑是呼叫
+//! - CLI 後端用「訂閱（Claude Pro/Max、ChatGPT Plus/Pro 登入）」而非 API key，唯一可行路徑是呼叫
 //!   官方 CLI，而非 Agent SDK 函式庫（SDK 需付費 API key，官方也不允許第三方走網頁登入）。
+//! - API 後端則相反：不需要任何外部安裝，但工具得自己實作 —— CLI 那套內建工具（Read/Write/
+//!   WebSearch…）在 HTTP 上不存在，改用 `llm::tools` 限定在助手工作資料夾內的檔案工具，
+//!   且沒有網路搜尋。
 //! - 串流方式對標 Redis Pub/Sub：背景任務逐行讀 stdout 的 NDJSON，
 //!   以 `agent-stream` 事件推給前端；JoinHandle 存在 AppState 供取消。
 //! - 兩家 CLI 的「限制副作用」機制不同，各自用它原生的那一套：
@@ -31,17 +36,22 @@ use crate::error::{AppError, AppResult};
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// 支援的 CLI 供應商。前端以字串傳入（"claude" / "codex"），未指定時預設 Claude。
+/// 支援的供應商。前端以字串傳入（"claude" / "codex" / "anthropic-api" / "openai-api"），
+/// 未指定或不認得時預設 Claude（設錯字串不該讓整個助手掛掉）。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Provider {
     Claude,
     Codex,
+    AnthropicApi,
+    OpenAiApi,
 }
 
 impl Provider {
     fn parse(s: Option<&str>) -> Provider {
         match s.map(str::trim) {
             Some("codex") => Provider::Codex,
+            Some("anthropic-api") => Provider::AnthropicApi,
+            Some("openai-api") => Provider::OpenAiApi,
             _ => Provider::Claude,
         }
     }
@@ -50,12 +60,27 @@ impl Provider {
         match self {
             Provider::Claude => "claude",
             Provider::Codex => "codex",
+            Provider::AnthropicApi => "anthropic-api",
+            Provider::OpenAiApi => "openai-api",
         }
     }
 
-    /// 執行檔名稱（同時也是 `where` / `which` 的查找目標）。
+    /// 走 HTTP 的供應商回 `Some(kind)`；CLI 供應商回 `None`。
+    fn llm_kind(self) -> Option<crate::llm::LlmKind> {
+        match self {
+            Provider::AnthropicApi => Some(crate::llm::LlmKind::Anthropic),
+            Provider::OpenAiApi => Some(crate::llm::LlmKind::OpenAi),
+            _ => None,
+        }
+    }
+
+    /// 執行檔名稱（同時也是 `where` / `which` 的查找目標）。API 供應商沒有執行檔。
     fn exe(self) -> &'static str {
-        self.id()
+        match self {
+            Provider::Claude => "claude",
+            Provider::Codex => "codex",
+            _ => "",
+        }
     }
 
     /// 允許使用者以環境變數指定執行檔路徑（PATH 找不到、或想指定特定版本時）。
@@ -63,6 +88,7 @@ impl Provider {
         match self {
             Provider::Claude => "DB_KIT_CLAUDE_BIN",
             Provider::Codex => "DB_KIT_CODEX_BIN",
+            _ => "",
         }
     }
 }
@@ -181,6 +207,8 @@ fn default_install_paths(provider: Provider, home: &std::path::Path) -> Vec<Path
             home.join(".codex").join("bin").join(&exe),
             home.join(".local").join("bin").join(&exe),
         ],
+        // API 供應商沒有執行檔。
+        Provider::AnthropicApi | Provider::OpenAiApi => Vec::new(),
     }
 }
 
@@ -241,6 +269,10 @@ fn logged_in(provider: Provider) -> bool {
                 .map(PathBuf::from)
                 .or_else(|| home_dir().map(|h| h.join(".codex")));
             dir.map(|d| d.join("auth.json").exists()).unwrap_or(false)
+        }
+        // API 供應商：keychain / env 有金鑰即可用（地端端點另在 agent_detect 放行）。
+        Provider::AnthropicApi | Provider::OpenAiApi => {
+            provider.llm_kind().and_then(crate::llm::resolve_key).is_some()
         }
     }
 }
@@ -609,7 +641,7 @@ fn codex_sandbox_for_mode(mode: &str) -> &'static str {
     }
 }
 
-fn claude_args(mode: &str, session_id: Option<&str>, model: Option<&str>) -> Vec<String> {
+fn claude_args(mode: &str, session_id: Option<&str>, model: Option<&str>, system_prompt: Option<&str>) -> Vec<String> {
     let (perm, allowed) = claude_flags_for_mode(mode);
     let mut a: Vec<String> = vec![
         "-p".into(),
@@ -638,6 +670,11 @@ fn claude_args(mode: &str, session_id: Option<&str>, model: Option<&str>) -> Vec
     if let Some(m) = model {
         a.push("--model".into());
         a.push(m.into());
+    }
+    // 人設 / 技能：接在 CLI 自己的系統提示之後（不取代它，那會弄壞 Claude Code 的工具行為）。
+    if let Some(sp) = system_prompt.map(str::trim).filter(|s| !s.is_empty()) {
+        a.push("--append-system-prompt".into());
+        a.push(sp.into());
     }
     a
 }
@@ -670,11 +707,30 @@ fn codex_args(
     a
 }
 
+/// Codex 沒有等價於 `--append-system-prompt` 的旗標，人設只能併進提示本文最前面。
+fn prepend_system(prompt: &str, system_prompt: Option<&str>) -> String {
+    match system_prompt.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(sp) => format!("[人設與技能]\n{sp}\n\n[問題]\n{prompt}"),
+        None => prompt.to_string(),
+    }
+}
+
 // ---- Tauri 指令 ----
 
 #[tauri::command]
-pub async fn agent_detect(provider: Option<String>) -> AgentStatus {
+pub async fn agent_detect(provider: Option<String>, base_url: Option<String>) -> AgentStatus {
     let p = Provider::parse(provider.as_deref());
+    // API 供應商沒有執行檔可偵測：有 Base URL 就算「裝好了」，有金鑰（或是地端端點）算「已登入」。
+    if let Some(kind) = p.llm_kind() {
+        let cfg = crate::llm::LlmConfig::resolve(kind, base_url.as_deref(), None);
+        return AgentStatus {
+            provider: p.id().to_string(),
+            installed: !cfg.base.is_empty(),
+            version: None,
+            logged_in: cfg.api_key.is_some() || cfg.is_local(),
+            path: if cfg.base.is_empty() { None } else { Some(cfg.base) },
+        };
+    }
     match resolve_bin(p).await {
         Some(bin) => {
             let version = cli_version(&bin).await;
@@ -709,14 +765,10 @@ pub async fn agent_send(
     model: Option<String>,
     mode: Option<String>,
     provider: Option<String>,
+    base_url: Option<String>,
+    system_prompt: Option<String>,
 ) -> AppResult<()> {
     let p = Provider::parse(provider.as_deref());
-    let bin = resolve_bin(p).await.ok_or_else(|| {
-        AppError::Query(tf!(
-            "找不到 {cli} CLI，請先安裝並以你的訂閱帳號登入",
-            cli = p.exe()
-        ))
-    })?;
     let workspace = workspace_dir(&app).await?;
     let mode = mode.unwrap_or_else(|| "advise".to_string());
     let sid = session_id
@@ -724,10 +776,31 @@ pub async fn agent_send(
         .map(str::trim)
         .filter(|s| !s.is_empty());
     let model = model.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let sys = system_prompt.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    // ---- HTTP 供應商：不開子程序，直接跑工具迴圈 ----
+    if let Some(kind) = p.llm_kind() {
+        return llm_send(app, state, req_id, prompt, sid, model, &mode, kind, base_url.as_deref(), sys, workspace).await;
+    }
+
+    let bin = resolve_bin(p).await.ok_or_else(|| {
+        AppError::Query(tf!(
+            "找不到 {cli} CLI，請先安裝並以你的訂閱帳號登入",
+            cli = p.exe()
+        ))
+    })?;
+
+    // Codex 沒有 append-system-prompt，人設併進提示本文。
+    let prompt = match p {
+        Provider::Codex => prepend_system(&prompt, sys),
+        _ => prompt,
+    };
 
     let args = match p {
-        Provider::Claude => claude_args(&mode, sid, model),
+        Provider::Claude => claude_args(&mode, sid, model, sys),
         Provider::Codex => codex_args(&mode, &workspace, sid, model),
+        // 上面已提前 return，這裡到不了。
+        Provider::AnthropicApi | Provider::OpenAiApi => unreachable!(),
     };
 
     let mut cmd = make_cmd(&bin);
@@ -782,10 +855,11 @@ pub async fn agent_send(
                 Ok(Some(line)) => {
                     if !line.trim().is_empty() {
                         match p {
-                            Provider::Claude => parse_claude_line(&app2, &req2, &line),
                             Provider::Codex => {
                                 parse_codex_line(&app2, &req2, &line, &mut turn, started)
                             }
+                            // Claude 與（到不了的）API 供應商都走 stream-json 解析。
+                            _ => parse_claude_line(&app2, &req2, &line),
                         }
                     }
                 }
@@ -830,11 +904,165 @@ pub async fn agent_send(
     Ok(())
 }
 
-/// 取消進行中的問答：abort 背景任務 → kill_on_drop 終止子程序。
+/// 取消進行中的問答：abort 背景任務 → CLI 走 kill_on_drop 終止子程序、
+/// API 走 drop 掉 reqwest 串流關閉連線。
 #[tauri::command]
 pub async fn agent_cancel(state: State<'_, AppState>, req_id: String) -> AppResult<()> {
     if let Some(h) = state.agent_jobs.lock().remove(&req_id) {
         h.abort();
     }
     Ok(())
+}
+
+// ---- HTTP 供應商 ----
+
+/// API 供應商的送出路徑：先回應前端（`system` 事件帶自產的 session id），
+/// 再於背景跑工具迴圈，逐字送 `text`，收尾送 `result` + `done`。
+#[allow(clippy::too_many_arguments)]
+async fn llm_send(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req_id: String,
+    prompt: String,
+    session_id: Option<&str>,
+    model: Option<&str>,
+    mode: &str,
+    kind: crate::llm::LlmKind,
+    base_url: Option<&str>,
+    system_prompt: Option<&str>,
+    workspace: PathBuf,
+) -> AppResult<()> {
+    let cfg = crate::llm::LlmConfig::resolve(kind, base_url, model);
+    if cfg.base.is_empty() {
+        return Err(AppError::Query(t!("尚未設定 API Base URL").to_string()));
+    }
+    if cfg.model.trim().is_empty() {
+        return Err(AppError::Query(t!("尚未指定模型").to_string()));
+    }
+
+    // HTTP 沒有伺服器端 session，對話歷史存在 App 記憶體裡，id 由這裡產。
+    let sid = session_id.map(String::from).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let mut history = state.llm_sessions.lock().get(&sid).cloned().unwrap_or_default();
+
+    emit(
+        &app,
+        AgentEvent {
+            req_id: req_id.clone(),
+            kind: "system".to_string(),
+            session_id: Some(sid.clone()),
+            model: Some(cfg.model.clone()),
+            ..Default::default()
+        },
+    );
+
+    if let Some(h) = state.agent_jobs.lock().remove(&req_id) {
+        h.abort();
+    }
+
+    let app2 = app.clone();
+    let req2 = req_id.clone();
+    let jobs = state.agent_jobs.clone();
+    let sessions = state.llm_sessions.clone();
+    let mode = mode.to_string();
+    let system_prompt = system_prompt.map(String::from);
+    let handle = tauri::async_runtime::spawn(async move {
+        let started = Instant::now();
+        let sink_app = app2.clone();
+        let sink_req = req2.clone();
+        let sink = move |ev: crate::llm::StreamEvent| match ev {
+            crate::llm::StreamEvent::Text(t) => emit(
+                &sink_app,
+                AgentEvent { req_id: sink_req.clone(), kind: "text".to_string(), text: Some(t), ..Default::default() },
+            ),
+            crate::llm::StreamEvent::ToolStart(name) => emit(
+                &sink_app,
+                AgentEvent { req_id: sink_req.clone(), kind: "tool".to_string(), tool: Some(name), ..Default::default() },
+            ),
+        };
+
+        let result = crate::llm::agent_loop::run(
+            crate::llm::client(),
+            &cfg,
+            &mode,
+            &workspace,
+            &mut history,
+            prompt,
+            system_prompt.as_deref(),
+            &sink,
+        )
+        .await;
+
+        let ms = started.elapsed().as_millis() as u64;
+        let code = match result {
+            Ok(text) => {
+                sessions.lock().insert(sid.clone(), history);
+                emit(
+                    &app2,
+                    AgentEvent {
+                        req_id: req2.clone(),
+                        kind: "result".to_string(),
+                        session_id: Some(sid.clone()),
+                        is_error: Some(false),
+                        text: Some(text),
+                        duration_ms: Some(ms),
+                        ..Default::default()
+                    },
+                );
+                0
+            }
+            Err(e) => {
+                // 失敗的那一輪不寫回歷史：把壞掉的 tool_use / tool_result 留著，
+                // 下一次送出會整串一起被端點拒絕。
+                emit(
+                    &app2,
+                    AgentEvent { req_id: req2.clone(), kind: "error".to_string(), text: Some(e), ..Default::default() },
+                );
+                emit(
+                    &app2,
+                    AgentEvent {
+                        req_id: req2.clone(),
+                        kind: "result".to_string(),
+                        session_id: Some(sid.clone()),
+                        is_error: Some(true),
+                        duration_ms: Some(ms),
+                        ..Default::default()
+                    },
+                );
+                1
+            }
+        };
+        emit(
+            &app2,
+            AgentEvent { req_id: req2.clone(), kind: "done".to_string(), code: Some(code), ..Default::default() },
+        );
+        jobs.lock().remove(&req2);
+    });
+    state.agent_jobs.lock().insert(req_id, handle);
+    Ok(())
+}
+
+/// 寫入 / 刪除 API 金鑰（空字串 = 刪除）。金鑰只進 OS keychain，不落地到設定檔。
+#[tauri::command]
+pub async fn llm_key_set(kind: String, key: String) -> AppResult<()> {
+    let k = crate::llm::LlmKind::parse(&kind)
+        .ok_or_else(|| AppError::Query(tf!("未知的供應商：{kind}", kind = kind)))?;
+    crate::store::kc_set(k.key_account(), key.trim())
+}
+
+/// 只回「有沒有金鑰」，永不回傳明文。env 有設也算有。
+#[tauri::command]
+pub async fn llm_key_status(kind: String) -> bool {
+    match crate::llm::LlmKind::parse(&kind) {
+        Some(k) => crate::llm::resolve_key(k).is_some(),
+        None => false,
+    }
+}
+
+/// 取模型清單（順便當「測試連線」用）。抓不到回空陣列，前端退回手填。
+#[tauri::command]
+pub async fn llm_list_models(kind: String, base_url: Option<String>) -> Vec<String> {
+    match crate::llm::LlmKind::parse(&kind) {
+        Some(k) => crate::llm::models::list(crate::llm::client(), k, base_url.as_deref()).await,
+        None => Vec::new(),
+    }
 }

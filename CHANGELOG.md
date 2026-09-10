@@ -1,3 +1,17 @@
+## v0.29.0
+
+**AI 助手多了兩個供應商：任何 Anthropic 相容或 OpenAI 相容的 API**。原本只有本機 CLI 一條路（Claude Code / Codex + 你自己的訂閱登入），沒裝、公司不給裝、或想用自家地端模型的人等於用不到助手。這一版把「不開子程序、直接打 HTTP」那條路補上：填 Base URL、API Key 與模型就能用，官方 API、代理（OpenRouter / DeepSeek / Kimi / GLM / Groq）與地端推論（Ollama / LM Studio / vLLM）都接得上。四種供應商在面板上平等，助手與「AI 生成查詢」列共用同一個選擇。
+
+- **不用官方 SDK crate，手刻兩家的 wire format**。本案的重點正是「第三方相容端點」，而 SDK 對欄位與版本的嚴格度反而是阻礙（相容端點常常少一個欄位、多一個欄位）。Anthropic 走 `POST {base}/v1/messages`、OpenAI 走 `POST {base}/chat/completions`，SSE 逐 token 解析後轉成既有的 `agent-stream` 事件 —— **前端不必分辨後端是誰**。
+- **API 供應商沒有 CLI 的內建工具，所以自己實作一組**：`read_file` / `list_files` / `search_files` / `write_file`，全部限制在助手工作資料夾內（路徑出現 `..`、絕對路徑或磁碟前綴一律拒絕），沒有 shell、沒有網路搜尋。工具迴圈也在 Rust 端自己跑：回合上限 16 次，同一支工具連續三次同參數就中止（小模型很容易卡在那裡空轉）。設定畫面直說「API 供應商沒有網路搜尋」，不讓人以為切過去什麼都一樣。
+- **相容性差異各給一條降級路徑，而不是整個功能掛掉**：`max_tokens` 被拒就改送 `max_completion_tokens`、`temperature` 不接受非預設值就整個不送。Base URL 也做正規化 —— 結尾有沒有 `/v1`、自帶路徑（`/anthropic`、`/api/paas/v4`）都能用，規則寫成純函式並釘上測試。
+- **金鑰只進 OS keychain**（service `db-kit`），前端只能寫入與查詢「有沒有」，永遠拿不到明文；也可以用 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 環境變數覆寫。錯誤訊息只取回應內容前 300 字，不回送出去的內容。
+- **HTTP 沒有伺服器端 session**，所以對話歷史存在 App 記憶體裡（關掉即消失），每回合整串重送前會修剪：最多 40 則、序列化 200 KB，而且**保證不留下落單的 tool_result**（兩家 API 都會對落單的那筆回 400）。
+- **人設與技能（四種供應商共用）**：助手的系統提示詞可以改（留白用內建預設），另可存多組具名的「技能」範本 —— 內建四組（SQL 效能診斷 / 資料模型審查 / 唯讀安全至上 / 遷移腳本），可勾選複用、可複製成自訂。CLI 後端走 `--append-system-prompt`（codex 沒有等價旗標，改併進提示本文最前面），API 供應商走 `system` 欄位。NL→SQL 只吃人設不吃技能：技能是給對話用的工作方式，套在「只回一句 SQL」上只會把輸出帶偏。
+- 供應商偵測跟著改：API 供應商沒有執行檔可找，改成「有 Base URL 就算裝好、有金鑰或是地端端點就算登入」；設定畫面的「測試連線」直接跟端點要模型清單（`GET {base}/models`），要不到就退回手填，不當成錯誤。
+
+> 驗證：`cargo test` 256 項全通過（新增 21 項：Base URL 正規化、兩家 SSE 解析與跨 chunk 的中文不亂碼、工具參數跨 chunk 累積、工作資料夾越界路徑被拒、歷史修剪不留落單 tool_result）、`cargo check --no-default-features`（slim CLI 不含 AI，reqwest 掛在 gui feature 後）綠燈、`tsc` + `eslint src` 0 error、vitest 755 項全通過。**尚未對每一家第三方端點做端對端實測**——降級路徑是依兩家公開文件與常見代理的回應實作的。
+
 ## v0.28.0
 
 **「關於 DB Kit」多了一段贊助**。db-kit 免費、也會一直免費：這一版只是把「想道謝的人找不到門」補起來 —— 沒有任何功能被關到門後，也不會有任何東西跳出來提醒你去按它。
