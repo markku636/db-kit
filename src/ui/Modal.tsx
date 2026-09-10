@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import Icon from "./Icon";
+import ModalViewControls, { useModalView } from "./modalChrome";
 import { useT } from "../i18n";
 
 export type ModalSize = "sm" | "md" | "lg" | "xl" | "full";
@@ -10,12 +11,15 @@ export type ModalSize = "sm" | "md" | "lg" | "xl" | "full";
 // 開啟中的對話框堆疊（後進者為最上層）：Esc 僅關最上層，避免巢狀對話框一次全關。
 const modalStack: symbol[] = [];
 
+// 寬度以 rem 表示（1rem = 使用者選的介面字級，見 uiFont.ts）：字級調大時對話框跟著變寬，
+// 否則放大字之後每個欄位都在原本的 420px 裡換行。註解的 px 為預設字級 16px 下的等值。
+// 溢出由 shell 的 max-w-[94vw] 收尾，小視窗 + 超大字級也不會被切掉。
 const widths: Record<ModalSize, string> = {
-  sm: "w-[420px]",
-  md: "w-[560px]",
-  lg: "w-[720px]",
-  xl: "w-[920px]",
-  full: "w-[1100px]",
+  sm: "w-[26.25rem]", // 420px
+  md: "w-[35rem]", // 560px
+  lg: "w-[45rem]", // 720px
+  xl: "w-[57.5rem]", // 920px
+  full: "w-[68.75rem]", // 1100px
 };
 
 export interface ModalProps {
@@ -33,6 +37,10 @@ export interface ModalProps {
   bodyClassName?: string;
   /** shell 額外 class（例如自訂高度）。 */
   className?: string;
+  /** 這個對話框裝的是程式碼 / 等寬內容時給 true，標題列才出現字級調整鈕。 */
+  codeZoom?: boolean;
+  /** 隱藏標題列的最大化鈕（版面本來就固定小、放大沒有意義的對話框，如確認框）。 */
+  noMaximize?: boolean;
   children: ReactNode;
 }
 
@@ -53,9 +61,14 @@ export default function Modal({
   zClass = "z-[100]",
   bodyClassName = "p-5 overflow-auto",
   className = "",
+  codeZoom = false,
+  noMaximize = false,
   children,
 }: ModalProps) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：切一次之後每個對話框都照著開，不必逐個放大。
+  const { shellClass } = useModalView();
+  const maximizable = !noMaximize;
   const shellRef = useRef<HTMLDivElement>(null);
   const idRef = useRef<symbol | null>(null);
   if (idRef.current === null) idRef.current = Symbol("modal");
@@ -137,7 +150,7 @@ export default function Modal({
         aria-modal="true"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className={`bg-elevated rounded-lg border border-fg/10 shadow-e4 flex flex-col max-h-[88vh] max-w-[94vw] outline-none ${widths[size]} modal-shell-in ${className}`}
+        className={`bg-elevated rounded-lg border border-fg/10 shadow-e4 flex flex-col max-h-[88vh] max-w-[94vw] outline-none ${widths[size]} modal-shell-in ${className} ${maximizable ? shellClass : ""}`}
       >
         {title !== undefined && (
           <div
@@ -147,11 +160,12 @@ export default function Modal({
           >
             {icon && <Icon icon={icon} size={16} className={danger ? "text-danger" : "text-fg/50"} />}
             <div className="text-sm font-medium truncate">{title}</div>
+            {maximizable && <ModalViewControls code={codeZoom} className="ml-auto" />}
             <button
               type="button"
               onClick={onClose}
               aria-label={t("關閉")}
-              className="ml-auto w-7 h-7 grid place-items-center rounded text-fg/40 hover:text-fg hover:bg-fg/10 active:bg-fg/[0.14] shrink-0"
+              className={`w-7 h-7 grid place-items-center rounded text-fg/40 hover:text-fg hover:bg-fg/10 active:bg-fg/[0.14] shrink-0 ${maximizable ? "" : "ml-auto"}`}
             >
               <Icon icon={X} size={16} />
             </button>

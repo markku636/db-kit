@@ -929,6 +929,84 @@ export interface ParsedUrl {
 }
 
 /**
+ * 加密匯出連線的範圍與機密政策（「進階匯出」對話框 → 後端 `conn_export::ExportScope`）。
+ * 欄位皆可省略；省略＝全部連線 + 全部機密。
+ *
+ * 注意：PROD 連線（`options.prod === "1"`）不受這裡的勾選影響 —— 後端一律抹掉它的
+ * 帳號與所有機密。匯出檔是可攜的密文，正式環境帳密不該進去。
+ */
+export interface ConnExportScope {
+  /** 只匯出這些連線 id；省略 / 空陣列＝全部。 */
+  ids?: string[];
+  include_password?: boolean;
+  /** SSH 密碼與私鑰 passphrase。 */
+  include_ssh?: boolean;
+  include_otp?: boolean;
+  /** 側欄群組歸屬；false＝匯入端視為未分組。 */
+  include_groups?: boolean;
+}
+
+/** 匯出結果：`redacted` = 其中因 PROD 規則被抹掉帳密的筆數；`groups` = 一併帶出的群組數。 */
+export interface ConnExportSummary {
+  count: number;
+  redacted: number;
+  groups: number;
+}
+
+/**
+ * 匯入結果：`groups_added` = 本機新增的群組數（同 id / 同名的群組會合併、不算新增）；
+ * `prod_without_credentials` = 匯入後仍沒有帳號的 PROD 連線數（連線前得先補帳密）。
+ */
+export interface ConnImportSummary {
+  count: number;
+  groups_added: number;
+  prod_without_credentials: number;
+}
+
+/** 連線前需要哪些登入資訊：`both` 帳號 + 密碼、`password` 只要密碼（Elastic API key）、`none` 不需要。 */
+export type AuthRequirement = "none" | "password" | "both";
+
+/**
+ * 依類型判斷此連線需不需要帳密才連得上。與 ConnectionDialog 的 usesAuth / usesUsername 同一套規則：
+ * Kafka 只有 SASL 協定要、Elastic 依認證方式、sqlite 沒有帳密、mongo / redis 認證可選、
+ * external 走 gateway；其餘關聯式資料庫與 RabbitMQ 一律要帳號 + 密碼。
+ */
+export function authRequirement(config: ConnectionConfig): AuthRequirement {
+  switch (config.kind) {
+    case "mysql":
+    case "mariadb":
+    case "postgres":
+    case "mssql":
+    case "oracle":
+    case "rabbitmq":
+      return "both";
+    case "elastic": {
+      const mode = config.options?.es_auth ?? (config.username ? "basic" : "none");
+      return mode === "apikey" ? "password" : mode === "basic" ? "both" : "none";
+    }
+    case "kafka":
+      return (config.options?.kafka_security_protocol ?? "").startsWith("SASL") ? "both" : "none";
+    default:
+      return "none";
+  }
+}
+
+/**
+ * 連線前檢查帳密是否齊備。回 true ＝ 缺帳號或缺密碼，應先提示使用者補填再連。
+ *
+ * 密碼存在 keychain、前端拿到的 `config.password` 平常是空字串，所以要問後端有沒有；
+ * 剛在表單輸入、尚未落地的密碼（`config.password` 非空）直接算有。
+ * 典型觸發情境：PROD 匯出檔一律不含帳密，匯入後直接連只會得到難懂的 access denied。
+ */
+export async function missingCredentials(config: ConnectionConfig): Promise<boolean> {
+  const req = authRequirement(config);
+  if (req === "none") return false;
+  if (req === "both" && !config.username) return true;
+  if (config.password) return false;
+  return !(await api.hasStoredPassword(config.id));
+}
+
+/**
  * 此連線是否標記為正式環境（`options.prod`）。
  * 標記只影響 UI 防呆（查詢前確認、側欄標記），不改變任何連線 / 查詢行為。
  */
@@ -1051,11 +1129,15 @@ export const api = {
   setBiometricUnlock: (enabled: boolean, password: string | null) =>
     invoke<void>("set_biometric_unlock", { enabled, password }),
   setAutoLockMinutes: (minutes: number) => invoke<void>("set_auto_lock_minutes", { minutes }),
-  // 加密匯出 / 匯入連線（含密碼；passphrase 派生金鑰 + AES-256-GCM）。回傳筆數。
-  exportConnectionsEncrypted: (path: string, passphrase: string) =>
-    invoke<number>("export_connections_encrypted", { path, passphrase }),
+  // 加密匯出連線（passphrase 派生金鑰 + AES-256-GCM）。scope 省略＝全部連線 + 全部機密；
+  // PROD 連線的帳號密碼一律不會被帶出（後端 conn_export 硬規則，勾了也無效）。
+  exportConnectionsEncrypted: (path: string, passphrase: string, scope?: ConnExportScope) =>
+    invoke<ConnExportSummary>("export_connections_encrypted", { path, passphrase, scope: scope ?? null }),
+  // 匯入連線 + 群組（v1 純陣列與 v2 含群組的檔都吃）；群組合併規則見後端 store::import_in。
   importConnectionsEncrypted: (path: string, passphrase: string) =>
-    invoke<number>("import_connections_encrypted", { path, passphrase }),
+    invoke<ConnImportSummary>("import_connections_encrypted", { path, passphrase }),
+  // keychain 是否已有此連線的資料庫密碼（連線前帳密檢查；不回傳密碼本身）。
+  hasStoredPassword: (id: string) => invoke<boolean>("has_stored_password", { id }),
   // 解析連線字串（mysql:// postgres:// mongodb+srv:// rediss:// sqlserver:// / ADO.NET 等）→ 填表用。
   parseConnectionUrl: (url: string) => invoke<ParsedUrl>("parse_connection_url", { url }),
   // 連線設定持久化（密碼存 keychain，磁碟不含密碼）

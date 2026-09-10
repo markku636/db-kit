@@ -14,10 +14,11 @@ import { api, type AppLockStatus, type BiometricStatus } from "./api";
 import { useT } from "./i18n";
 import { Button, Icon, Input } from "./ui/index";
 import { copyToClipboard } from "./ui";
-// 識別標記用**方形** App 圖示，不是 hero banner：banner 是 1280×520，塞進 64×64 的圓角磚
+// 識別標記用**方形** App 圖示，不是 hero banner：banner 是 1280×520，塞進正方形的圓角磚
 // 會被壓扁成一團看不出是什麼的色塊。直接引 src-tauri/icons 那份，`npm run make:app-icon`
 // 重產圖示時這裡自動跟上，不必再複製一份到 src/assets 等著和母檔漂移。
-import logoMark from "../src-tauri/icons/128x128.png";
+// 取 @2x（256×256）而不是 128：磚是 112px，在 2x DPI 要 224px 才不會放大到發軟。
+import logoMark from "../src-tauri/icons/128x128@2x.png";
 
 /** 生物辨識驗證的當下狀態。 */
 type BioPhase =
@@ -109,7 +110,9 @@ export default function LockScreen({
   return (
     <div className="fixed inset-0 z-[400] grid place-items-center bg-app">
       <div className="w-[320px] max-w-[88vw] flex flex-col items-center gap-6">
-        <img src={logoMark} alt="DB Kit" className="w-16 h-16 rounded-2xl shadow-e4" draggable={false} />
+        {/* 鎖定畫面是全螢幕的，上下都是留白 —— 識別標記照工具列的 64px 給，會小得像顆 favicon。
+            112px 才撐得起這個版面；圓角同比例放大（16/64 → 28/112）維持一樣的方角觀感。 */}
+        <img src={logoMark} alt="DB Kit" className="w-28 h-28 rounded-[28px] shadow-e4" draggable={false} />
         <div className="text-center space-y-1">
           <div className="text-base font-semibold text-fg/90">{t("DB Kit 已鎖定")}</div>
           <div className="text-xs text-fg/50">

@@ -1,10 +1,12 @@
 import type { Completion, CompletionContext, CompletionResult, CompletionSource } from "@codemirror/autocomplete";
 import type { SQLNamespace } from "@codemirror/lang-sql";
+import type { TableColumns } from "./api";
 
 // 上下文感知的 SQL 欄位自動提示：解析當前語句的 FROM/JOIN 子句，
 // 在 SELECT / WHERE / ON / ORDER BY… 等「欄位語境」直接提示該表欄位（免打 `表名.` 前綴），
 // 並在打完子句關鍵字（含空白）當下自動跳窗 —— 補 @codemirror/lang-sql 預設 schema 補全
-// 「空前綴不觸發、頂層不出欄位」的空缺。純文件掃描、不打後端。
+// 「空前綴不觸發、頂層不出欄位」的空缺。語境判斷純文件掃描；唯一會打後端的是跨庫的
+// 按需載入（`其他庫.` 與 `FROM 其他庫.表`），且每個庫只載一次。
 
 // 可帶引號的識別字：`t`、"t"、[t]、裸字；表參照可帶 db. 前綴（跨庫查詢會用到，故保留不丟）。
 const IDENT = "(?:`[^`]+`|\"[^\"]+\"|\\[[^\\]]+\\]|[\\w$]+)";
@@ -258,8 +260,13 @@ export interface CrossDbOptions {
   loaded?: string[];
   /** 目前資料庫的名字——`目前庫.表` 這種寫法要對得回頂層的裸表名。 */
   currentDb?: string | null;
-  /** 按需載入某個庫的結構，resolve 出該庫的表名。 */
-  onNeedDatabase?: (db: string) => Promise<string[]>;
+  /**
+   * 按需載入某個庫的結構，resolve 出該庫的表與欄位。
+   *
+   * 回的是「表 + 欄位」而不只是表名：`FROM 其他庫.表` 之後的欄語境也靠這一趟載入，
+   * 而載回來的東西要等下一次 render 才進得了 schema prop——使用者的補全視窗就在這一次。
+   */
+  onNeedDatabase?: (db: string) => Promise<TableColumns[]>;
 }
 
 /**
@@ -278,6 +285,13 @@ export function sqlContextCompletion(schema: SQLNamespace, cross?: CrossDbOption
   const loaded = new Set((cross?.loaded ?? []).map((d) => d.toLowerCase()));
   const known = new Set((cross?.databases ?? []).map((d) => d.toLowerCase()));
   const currentDb = cross?.currentDb?.toLowerCase() ?? null;
+  // 按需載入回來的表結構，補在 tableMap 之外：那一趟載入的結果要等下一次 render 才進 schema，
+  // 而要開的補全視窗就在這一次。同一個 source 實例內共用，所以後續幾次按鍵是同步命中。
+  const patch = new Map<string, TableEntry>();
+  // 每個庫只載一次（打字每按一鍵都會進來一次）；載回來是空的（未連線 / 權限不足 / 空庫）記進
+  // failed，之後一律同步回 null——否則每按一鍵都回一個註定沒有候選的 Promise。
+  const inflight = new Map<string, Promise<TableColumns[]>>();
+  const failed = new Set<string>();
 
   /**
    * 表參照 → 結構。限定名優先精確命中；命中不到時**只在該庫結構還沒載入**才退回同名的
@@ -290,51 +304,82 @@ export function sqlContextCompletion(schema: SQLNamespace, cross?: CrossDbOption
     if (!t.db) return bare();
     const db = t.db.toLowerCase();
     if (currentDb && db === currentDb) return bare();
-    return tableMap.get(refKey(t.db, t.table)) ?? (loaded.has(db) ? undefined : bare());
+    return (
+      tableMap.get(refKey(t.db, t.table)) ??
+      patch.get(refKey(t.db, t.table)) ??
+      (loaded.has(db) ? undefined : bare())
+    );
   };
 
   /** 這個 `xxx.` 是不是「連線裡有、但結構還沒載」的庫？是的話回庫名，否則 null。 */
   const unloadedDb = (a: SqlContext): string | null => {
     const db = a.qualifier ?? "";
     const key = db.toLowerCase();
-    if (!cross?.onNeedDatabase || !db || !known.has(key) || loaded.has(key)) return null;
+    if (!cross?.onNeedDatabase || !db || !known.has(key) || loaded.has(key) || failed.has(key)) return null;
     // 別名剛好與某個庫同名時（`FROM t nova` 後打 `nova.`），別名優先——它是本句明確的宣告。
     if (a.tables.some((r) => r.alias?.toLowerCase() === key)) return null;
     return db;
   };
 
+  /**
+   * 載一個庫的結構進 patch 並回傳它的表。同一個庫的併發 / 後續呼叫共用同一個 promise，
+   * 所以「打點跳表名」與「限定名欄語境」兩條路加起來，每個庫也只會真的載一次。
+   */
+  const loadDatabase = (db: string): Promise<TableColumns[]> => {
+    const key = db.toLowerCase();
+    let p = inflight.get(key);
+    if (!p) {
+      p = cross!
+        .onNeedDatabase!(db)
+        .then((tables) => {
+          for (const t of tables) patch.set(refKey(db, t.table), { name: t.table, db, columns: t.columns });
+          if (tables.length === 0) failed.add(key);
+          return tables;
+        })
+        .catch(() => {
+          failed.add(key);
+          return [] as TableColumns[];
+        });
+      inflight.set(key, p);
+    }
+    return p;
+  };
+
   // 載進來並直接把表名回給這一次補全。之後 schema 更新，同樣的位置就換內建 source
   //（走巢狀命名空間）負責，所以這條非同步路徑每個庫只會走一次。
   const loadTables = async (db: string, a: SqlContext, ctx: CompletionContext) => {
-    const names = await cross!.onNeedDatabase!(db);
-    if (names.length === 0 || ctx.aborted) return null;
+    const tables = await loadDatabase(db);
+    if (tables.length === 0 || ctx.aborted) return null;
     return {
       from: a.wordFrom,
-      options: names.map((n) => ({ label: n, type: "class", boost: 1 })),
+      options: tables.map((t) => ({ label: t.table, type: "class", boost: 1 })),
       validFor: /^[\w$]*$/,
     };
   };
 
-  return (ctx: CompletionContext): CompletionResult | Promise<CompletionResult | null> | null => {
-    const a = analyzeSqlContext(ctx.state.doc.toString(), ctx.pos);
-    if (!a) return null;
-    if (a.mode === "qualifier") {
-      // 絕大多數的 `xxx.`（表名 / 別名 / 已載入的庫）在這裡同步回 null 讓內建 source 接手；
-      // 只有真的要去載一個庫時才回 Promise，不讓每一次打點都多等一個 microtask。
-      const db = unloadedDb(a);
-      return db ? loadTables(db, a, ctx) : null;
-    }
-    if (a.mode === "table") {
-      if (ctx.explicit || a.word !== "" || !a.autoPop || allTables.length === 0) return null;
-      return { from: ctx.pos, options: allTables };
-    }
+  /**
+   * 這筆限定名（`FROM 其他庫.表`）指向的庫值不值得跑一趟載入？值得就回庫名。
+   *
+   * 與 unloadedDb（打點那條路）只差在 known 的處理：庫清單拿不到時（list_databases 失敗）
+   * 這裡仍願意試一趟——寫在 FROM 後面的限定名是使用者明講的一張表，不像打點打到一半那樣
+   * 容易只是誤觸。
+   */
+  const refNeedsLoad = (t: TableRef): string | null => {
+    if (!cross?.onNeedDatabase || !t.db) return null;
+    const key = t.db.toLowerCase();
+    if (loaded.has(key) || failed.has(key) || (currentDb && key === currentDb)) return null;
+    if (known.size > 0 && !known.has(key)) return null;
+    return t.db;
+  };
+
+  /** 由語句中各表參照組出欄位候選（解析不到結構的參照略過）。 */
+  const columnResult = (a: SqlContext): CompletionResult | null => {
     const entries: TableEntry[] = [];
     for (const t of a.tables) {
       const e = resolveRef(t);
       if (e && e.columns.length > 0) entries.push(e);
     }
     if (entries.length === 0) return null;
-    if (a.word === "" && !ctx.explicit && !a.autoPop) return null;
     const multi = entries.length > 1;
     const seen = new Set<string>();
     const options: Completion[] = [];
@@ -350,5 +395,34 @@ export function sqlContextCompletion(schema: SQLNamespace, cross?: CrossDbOption
     }
     if (options.length === 0) return null;
     return { from: a.wordFrom, options, validFor: /^[\w$]*$/ };
+  };
+
+  return (ctx: CompletionContext): CompletionResult | Promise<CompletionResult | null> | null => {
+    const a = analyzeSqlContext(ctx.state.doc.toString(), ctx.pos);
+    if (!a) return null;
+    if (a.mode === "qualifier") {
+      // 絕大多數的 `xxx.`（表名 / 別名 / 已載入的庫）在這裡同步回 null 讓內建 source 接手；
+      // 只有真的要去載一個庫時才回 Promise，不讓每一次打點都多等一個 microtask。
+      const db = unloadedDb(a);
+      return db ? loadTables(db, a, ctx) : null;
+    }
+    if (a.mode === "table") {
+      if (ctx.explicit || a.word !== "" || !a.autoPop || allTables.length === 0) return null;
+      return { from: ctx.pos, options: allTables };
+    }
+    // 不該跳窗的情形先擋掉（順序刻意排在載入之前：沒有窗要開，就不值得跑一趟整庫查詢）。
+    if (a.word === "" && !ctx.explicit && !a.autoPop) return null;
+    // `FROM 其他庫.表` 而該庫還沒載入結構：載進來，這一次就要提示得出欄位。少了這一段，
+    // 「工具列沒選庫（預設庫＝清單第一個）＋ 一律寫全限定名」這個很常見的用法一個欄位都補不到。
+    const wanted: string[] = [];
+    for (const t of a.tables) {
+      if (resolveRef(t)) continue;
+      const db = refNeedsLoad(t);
+      if (db && !wanted.includes(db)) wanted.push(db);
+    }
+    if (wanted.length > 0) {
+      return Promise.all(wanted.map(loadDatabase)).then(() => (ctx.aborted ? null : columnResult(a)));
+    }
+    return columnResult(a);
   };
 }

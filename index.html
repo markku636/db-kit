@@ -27,6 +27,15 @@
           document.documentElement.lang =
             localStorage.getItem("dbkit:lang") === "en" ? "en" : "zh-Hant";
         } catch (e) {}
+        // 介面字級：整份 rem 的基準，判準與 uiFont.ts 的 readStoredUiFontSize 一致
+        //（無 / 不合法一律退回 styles.css 的 16px 兜底）。在此先寫，才不會先以預設
+        // 字級繪製骨架屏與首屏、React 掛載後整個版面再跳一次。
+        try {
+          var uf = Number(localStorage.getItem("dbkit:uiFontSize"));
+          if (uf >= 12 && uf <= 22) {
+            document.documentElement.style.setProperty("--ui-font-size", Math.round(uf) + "px");
+          }
+        } catch (e) {}
       })();
     </script>
   </head>

@@ -9,7 +9,7 @@ import {
   type KafkaSchemaSubject,
 } from "./api";
 import { toast, uiConfirm, useModalOverlay } from "./ui";
-import { IconButton } from "./ui/index";
+import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import { diffLines } from "./diff";
 import { useT } from "./i18n";
@@ -108,14 +108,17 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
     } catch (e: any) { toast.error(e?.message ?? String(e)); }
   };
 
+  const { shellClass } = useModalView();
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-app w-[900px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className={`bg-app w-[900px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`} onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3">
           <Icon icon={FileJson} size={14} className="text-emerald-300/80" />
           <span className="font-medium text-sm">Schema Registry · {connName}</span>
           <span className="text-xs text-fg/35">{subjects.length} subjects</span>
-          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
+          <ModalViewControls code className="ml-auto" />
+          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
 
         {err && <div className="px-4 py-1.5 text-red-400 text-xs mono break-all border-b border-fg/10">{err}</div>}
@@ -167,7 +170,7 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
                 </div>
 
                 {mode === "view" && (
-                  <pre className="bg-inset rounded p-3 mono whitespace-pre-wrap break-all">{prettySchema(schema.schema)}</pre>
+                  <pre className="bg-inset rounded p-3 mono code-scale whitespace-pre-wrap break-all">{prettySchema(schema.schema)}</pre>
                 )}
 
                 {mode === "diff" && (
@@ -179,7 +182,7 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
                       </select>
                       <span className="text-fg/30">→ v{schema.version}</span>
                     </div>
-                    <pre className="bg-inset rounded p-3 mono whitespace-pre-wrap break-all leading-tight">
+                    <pre className="bg-inset rounded p-3 mono code-scale whitespace-pre-wrap break-all leading-tight">
                       {diff.map((l, i) => (
                         <div key={i} className={l.type === "add" ? "bg-emerald-500/10 text-emerald-300/90" : l.type === "del" ? "bg-red-500/10 text-red-300/90" : "text-fg/60"}>
                           {l.type === "add" ? "+ " : l.type === "del" ? "- " : "  "}{l.text}

@@ -275,6 +275,7 @@ export default function QueryBuilder({
     <Modal
       open
       onClose={onClose}
+      codeZoom
       title={t("視覺化查詢建構器")}
       icon={Blocks}
       size="full"
@@ -525,7 +526,7 @@ export default function QueryBuilder({
               <Icon icon={Play} size={11} />{previewing ? t("預覽中…") : t("預覽")}
             </button>
           </div>
-          <pre className="flex-1 overflow-auto p-3 text-xs mono text-fg/80 whitespace-pre-wrap break-words min-h-[80px]">
+          <pre className="flex-1 overflow-auto p-3 code-scale mono text-fg/80 whitespace-pre-wrap break-words min-h-[80px]">
             {generated || "—"}
           </pre>
           {(preview || previewErr) && (

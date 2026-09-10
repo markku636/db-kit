@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStore } from "./store";
-import { api, CachedSchema, DbKind } from "./api";
+import { api, CachedSchema, DbKind, TableColumns } from "./api";
 import { connDatabaseIsNamespace, isSystemDatabase } from "./sql";
 import {
   isStale,
@@ -158,10 +158,13 @@ export interface SqlSchemaState {
   /** 目前已載入結構的資料庫（主庫在最前，其後為跨庫的額外庫）。 */
   databases: string[];
   /**
-   * 按需載入某個資料庫的結構（跨庫補全用），回傳該庫的表名。
+   * 按需載入某個資料庫的結構（跨庫補全用），回傳該庫的表與欄位。
    * 已載入者不重抓；載不到（未連線 / 權限不足）回空陣列。
+   *
+   * 回欄位而不只是表名：補全在「載回來的當下」就要提示得出欄位（見 sqlContextCompletion），
+   * 等這裡 setExtraDbs 觸發的下一次 render 才有結構的話，那個補全視窗早就過去了。
    */
-  ensureDatabase: (db: string) => Promise<string[]>;
+  ensureDatabase: (db: string) => Promise<TableColumns[]>;
 }
 
 /**
@@ -265,15 +268,15 @@ export function useSqlSchemaState(
     setExtraDbs([]);
   }, [connId, supported]);
 
-  /** 按需載入單一庫（打 `other_db.` 時觸發），回傳表名。已載入者直接回，不重抓。 */
+  /** 按需載入單一庫（打 `other_db.` 或寫了 `other_db.表` 時觸發）。已載入者直接回，不重抓。 */
   const ensureDatabase = useCallback(
-    async (db: string): Promise<string[]> => {
+    async (db: string): Promise<TableColumns[]> => {
       if (!connId || !supported || !db) return [];
       const got = memory.get(cacheKey(connId, db)) ?? (await loadDatabase(connId, db));
       if (!got) return [];
       setExtraDbs((prev) => mergeUnique(prev, [db]));
       notify(); // 同一連線的其他編輯器也一起拿到這個庫
-      return got.tables.map((t) => t.table);
+      return got.tables;
     },
     [connId, supported],
   );

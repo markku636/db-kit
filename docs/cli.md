@@ -155,7 +155,7 @@ dbk --conn prod --format json query "select * from orders limit 100" | jq '.[].s
 dbk conn list                                   # 列出 GUI 已存的連線（不含密碼）
 dbk --conn prod conn test                       # 測試連線，不保留
 dbk --conn prod conn ping                       # 量測往返延遲（含 SSH tunnel）
-dbk conn export conns.enc --passphrase "…"      # 加密匯出全部連線（含密碼）
+dbk conn export conns.enc --passphrase "…"      # 加密匯出全部連線（含密碼；PROD 連線一律不含帳密）
 ```
 
 ### `db` — 資料庫 / schema

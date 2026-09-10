@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { KeyRound, Link2, Minus, Plus, X } from "lucide-react";
 import { api, ErModel, ErTable } from "./api";
 import Icon from "./ui/Icon";
-import { IconButton } from "./ui/index";
+import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import { useModalOverlay } from "./ui";
 import { useT } from "./i18n";
 
@@ -19,6 +19,8 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
   focusTable?: string;  // 開啟時高亮的資料表（突顯該表與其關聯）
 }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount
   const [dbs, setDbs] = useState<string[]>([]);
   const [db, setDb] = useState("");
@@ -170,7 +172,7 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-panel w-[92vw] h-[88vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+      <div className={`bg-panel w-[92vw] h-[88vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-4 py-2 border-b border-fg/10 flex items-center gap-3 text-sm">
           <span className="font-medium">{t("ER 圖")}</span>
@@ -190,6 +192,7 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
             <button type="button" className={zbtn} title={t("符合視窗")} onClick={fit}>{t("適配")}</button>
             <button type="button" className={zbtn} title={t("重置佈局與縮放")} onClick={resetLayout}>{t("重置")}</button>
           </div>
+          <ModalViewControls />
           <IconButton icon={X} label={t("關閉")} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
         <div ref={viewRef} className="flex-1 overflow-auto relative">

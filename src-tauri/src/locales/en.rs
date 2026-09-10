@@ -98,6 +98,11 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         }
         "請提供 --passphrase" => "--passphrase is required",
         "已加密匯出 {count} 筆連線到 {path}" => "Encrypted and exported {count} connections to {path}",
+        "其中 {n} 筆是 PROD 連線，一律不含帳號與密碼" => {
+            "{n} of them are PROD connections and never carry a username or password"
+        }
+        "沒有可匯出的連線" => "There are no connections to export",
+        "含 {n} 個側欄群組" => "Including {n} sidebar groups",
         "篩選格式錯誤（應為 col:op[:value]）：{spec}" => "Invalid filter format (expected col:op[:value]): {spec}",
         "不支援的篩選運算子：{op}" => "Unsupported filter operator: {op}",
         "排序格式錯誤（應為 col:asc|desc）：{spec}" => "Invalid sort format (expected col:asc|desc): {spec}",

@@ -7,6 +7,13 @@ export { default as IconButton } from "./IconButton";
 export type { IconButtonProps } from "./IconButton";
 export { default as Modal } from "./Modal";
 export type { ModalProps, ModalSize } from "./Modal";
+export { default as MenuPanel } from "./MenuPanel";
+export type { MenuPanelProps } from "./MenuPanel";
+export {
+  default as ModalViewControls, useModalView, MAXIMIZED_SHELL,
+  setCodeFontSize, CODE_FONT_DEFAULT, CODE_FONT_MIN, CODE_FONT_MAX,
+} from "./modalChrome";
+export type { ModalViewControlsProps } from "./modalChrome";
 export { Input, Textarea } from "./Input";
 export type { InputProps, TextareaProps, ControlSize } from "./Input";
 export { default as Field, FormGrid } from "./Field";

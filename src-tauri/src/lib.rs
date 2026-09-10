@@ -10,6 +10,7 @@ mod locales;
 // 核心層（GUI 與 CLI 共用，不依賴 Tauri）。
 mod backup;
 mod conn_crypto;
+mod conn_export;
 mod db;
 mod error;
 mod export;
@@ -154,6 +155,7 @@ pub fn run() {
             commands::set_auto_lock_minutes,
             commands::export_connections_encrypted,
             commands::import_connections_encrypted,
+            commands::has_stored_password,
             commands::list_databases,
             commands::list_tables,
             commands::table_columns,

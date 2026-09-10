@@ -213,6 +213,7 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
     <>
     <Modal
       onClose={onClose}
+      codeZoom
       icon={Code2}
       size="lg"
       zClass="z-[95]"

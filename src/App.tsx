@@ -1,11 +1,13 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
-import { api, onKafkaAlert, isProdConn, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
+import { api, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
 import { LANGUAGES, useLang, useT, type Lang } from "./i18n";
 import { APP_NAME } from "./brand";
 import { EDITOR_THEMES, getEditorThemeDef, type EditorThemeId } from "./editorThemes";
+import { createPortal } from "react-dom";
 import TableView, { CellInspector } from "./TableView";
+import { parseEditTarget } from "./queryEditTarget";
 import InfoPanel from "./InfoPanel";
 import AssistantPanel from "./AssistantPanel";
 import type { SqlSubmit, SqlEditorHandle } from "./SqlEditor";
@@ -26,7 +28,8 @@ import { kindIcon } from "./kindIcons";
 import { friendlyDbError } from "./dbErrors";
 import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
-import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile, useEscToClose } from "./ui";
+import { sqlStoreKey } from "./queryDrafts";
+import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile } from "./ui";
 import { askOtpCode } from "./otpGate";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
@@ -37,7 +40,7 @@ import {
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
   formatSql, minifySql, transformKeywordCase, buildUseDatabase, hasExecutableSql,
-  extractNamedParams, substituteNamedParams, isInternalKafkaTopic, suggestQueryName,
+  extractNamedParams, substituteNamedParams, isInternalKafkaTopic, suggestQueryName, buildCellUpdate,
 } from "./sql";
 import type { SavedQuery } from "./sql";
 import Select from "./ui/Select";
@@ -53,7 +56,11 @@ import LockScreen from "./LockScreen";
 import { AppLockSettings } from "./AppLockSettings";
 import { useAutoLock } from "./autoLock";
 import Icon from "./ui/Icon";
-import { Button, EmptyState, Modal, Field } from "./ui/index";
+import {
+  Button, EmptyState, MenuPanel, Modal, Field, IconButton, ModalViewControls, useModalView,
+  setCodeFontSize, CODE_FONT_DEFAULT, CODE_FONT_MIN, CODE_FONT_MAX,
+} from "./ui/index";
+import { useUiFont, UI_FONT_STEPS } from "./uiFont";
 import {
   Plug, Network, DatabaseBackup, Upload, Download, Sparkles, Keyboard, Moon,
   Database, ChevronRight, Table2, Eye, FunctionSquare, Cog, FileCode2,
@@ -61,6 +68,7 @@ import {
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
   ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, FolderPlus, ExternalLink, Gauge,
+  Type, AArrowDown, AArrowUp,
   type LucideIcon,
 } from "lucide-react";
 
@@ -68,6 +76,7 @@ import {
 //      首包只留 App shell + TableView + InfoPanel/AssistantPanel。CodeMirror 全家桶
 //      隨 SqlEditor / MongoQueryEditor 的 chunk 延後載入（manualChunks 見 vite.config.ts）。----
 const ConnectionDialog = lazyOverlay(() => import("./ConnectionDialog"));
+const ExportConnectionsDialog = lazyOverlay(() => import("./ExportConnectionsDialog"));
 const BackupDialog = lazyOverlay(() => import("./BackupDialog"));
 const ErDiagram = lazyOverlay(() => import("./ErDiagram"));
 const RedisStatus = lazyOverlay(() => import("./RedisStatus"));
@@ -231,6 +240,9 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 進階匯出連線（逐筆選連線 + 逐類選機密）。每次開啟都是全新狀態：路徑不記憶，
+  // 必須現選 —— 見 ExportConnectionsDialog 檔頭。
+  const [exportConnsOpen, setExportConnsOpen] = useState(false);
   // 啟動鎖定閘門：checking（查詢中）→ locked（需驗證）/ open（已解鎖或未設鎖）。
   const [lockState, setLockState] = useState<"checking" | "locked" | "open">("checking");
   // 鎖定設定（密碼 / 生物辨識 / 閒置分鐘數）。鎖定畫面要據此決定顯示哪幾種解法。
@@ -252,7 +264,7 @@ export default function App() {
     try { sessionStorage.setItem("dbkit:splashed", "1"); } catch {}
     setSplash("done");
   };
-  const { connections, connectedIds, activeId } = useStore();
+  const { connections, connGroups, connectedIds, activeId } = useStore();
   const savedMgr = useStore((s) => s.savedMgr);
   const activeConn = connections.find((c) => c.id === activeId) ?? null;
   // 左側連線樹寬度：可拖曳分隔線調整，記憶於 localStorage。
@@ -375,23 +387,11 @@ export default function App() {
     return () => { clearTimeout(timer); window.removeEventListener("keydown", skip); };
   }, [splash]);
 
-  // 加密匯出所有連線（**含**密碼 / SSH 機密 / OTP，從 keychain 取出，用 passphrase 派生金鑰 AES-256-GCM 加密）。
-  const exportConnections = async () => {
-    const conns = useStore.getState().connections;
-    if (conns.length === 0) { toast.info(t("沒有可匯出的連線")); return; }
-    const passphrase = await uiPrompt(t("設定匯出檔的加密密碼（passphrase）"), {
-      title: t("加密匯出連線"), placeholder: t("至少 8 碼，匯入時需輸入相同密碼"), confirmText: t("匯出"),
-    });
-    if (!passphrase) return;
-    if (passphrase.length < 8) { toast.error(t("passphrase 至少 8 碼")); return; }
-    const path = await pickSaveFile("db-kit-connections.dbkitenc", [{ name: t("db-kit 加密連線"), extensions: ["dbkitenc"] }]);
-    if (!path) return;
-    try {
-      const n = await api.exportConnectionsEncrypted(path, passphrase);
-      toast.success(t("已加密匯出 {n} 個連線（含密碼）", { n }));
-    } catch (e: any) {
-      toast.error(e?.message ?? t("匯出失敗"));
-    }
+  // 加密匯出連線：範圍（哪些連線）、機密類別、passphrase、輸出路徑全部在 ExportConnectionsDialog
+  // 內決定 —— 這裡只做「有沒有東西可匯出」的前置檢查。
+  const exportConnections = () => {
+    if (useStore.getState().connections.length === 0) { toast.info(t("沒有可匯出的連線")); return; }
+    setExportConnsOpen(true);
   };
   // 從加密檔匯入連線：輸入 passphrase 解密，機密寫回 keychain、設定 upsert，再重載連線清單。
   const importConnections = async () => {
@@ -400,10 +400,18 @@ export default function App() {
     const passphrase = await uiPrompt(t("輸入匯入檔的加密密碼（passphrase）"), { title: t("解密匯入連線"), confirmText: t("匯入") });
     if (!passphrase) return;
     try {
-      const n = await api.importConnectionsEncrypted(path, passphrase);
+      const res = await api.importConnectionsEncrypted(path, passphrase);
       const saved = await api.listSavedConnections();
       useStore.getState().setConnections(saved.map((c) => ({ ...c, password: c.password ?? "" } as ConnectionConfig)));
-      toast.success(n > 0 ? t("已匯入 {n} 個連線（含密碼）", { n }) : t("檔案內沒有連線"));
+      // 群組跟連線一起進來，側欄分區要一起刷新（否則新群組的連線會先落在「未分組」直到重啟）。
+      api.listConnectionGroups().then((gs) => useStore.getState().setConnGroups(gs)).catch(() => {});
+      if (res.count === 0) { toast.info(t("檔案內沒有連線")); return; }
+      let msg = t("已匯入 {n} 個連線", { n: res.count });
+      if (res.groups_added > 0) msg += t("，新增 {g} 個群組", { g: res.groups_added });
+      if (res.prod_without_credentials > 0) {
+        msg += t("；{p} 個 PROD 連線尚無帳密，連線前請先輸入帳號及密碼", { p: res.prod_without_credentials });
+      }
+      toast.success(msg);
     } catch (e: any) {
       toast.error(t("匯入失敗：{msg}", { msg: e?.message ?? t("passphrase 錯誤或檔案損毀") }));
     }
@@ -491,6 +499,13 @@ export default function App() {
       )}
       {advSearch && (
         <AdvancedSearchDialog connId={advSearch.connId} kind={advSearch.kind} onClose={() => setAdvSearch(null)} />
+      )}
+      {exportConnsOpen && (
+        <ExportConnectionsDialog
+          connections={connections}
+          groups={connGroups}
+          onClose={() => setExportConnsOpen(false)}
+        />
       )}
       {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
@@ -588,6 +603,18 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
   const [autoUpdate, setAutoUpdate] = useState<boolean>(autoCheckEnabled);
   const themeId = useTheme((s) => s.themeId);
   const setThemeId = useTheme((s) => s.setThemeId);
+  const uiFontSize = useUiFont((s) => s.size);
+  const setUiFontSize = useUiFont((s) => s.setSize);
+  // 程式碼字級與跳窗標題列的 A− / A＋ 共用同一組全域偏好（見 ui/modalChrome）：
+  // 這裡只是第二個遙控器，不持有自己的 state，兩邊調完立刻互相看得到。
+  const { codeFontSize } = useModalView();
+  // 介面字級的選項文案。刻度本身由 uiFont.ts 決定，這裡只負責措辭 —— 寫成字面
+  // t("…") 才收得進 i18n 掃描（scripts/i18n-scan.mjs 只認字串字面值）；
+  // 刻度日後增減時，沒對到的段會退回顯示 px 值而不是空白選項。
+  const uiFontLabels: Record<number, string> = {
+    12: t("特小"), 14: t("小"), 16: t("標準（預設）"),
+    18: t("大"), 20: t("特大"), 22: t("超大"),
+  };
   // 迷你預覽用的主題定義（統一後恆有值）。
   const previewDef = getEditorThemeDef(themeId);
   const updateGuard = (patch: Partial<QueryGuard>) => {
@@ -658,6 +685,33 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
               <span style={{ color: previewDef.colors.comment }}>{t("-- 註解")}</span>
             </div>
           )}
+        </div>
+        <div className="space-y-3">
+          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+            <Icon icon={Type} size={15} /> {t("字級")}
+          </div>
+          <p className="text-xs text-fg/50 leading-relaxed">
+            {t("介面字級是整個 app 的縮放基準：側欄 / 工具列 / 表格 / 對話框的文字與間距一起等比放大，變更立即生效、不需重啟。程式碼字級只管查詢編輯器與 SQL / JSON 等程式碼區塊，兩者各自獨立——想放大介面但把 SQL 維持在慣用字級（或反過來）都可以。")}
+          </p>
+          <Field label={t("介面字級")}>
+            <Select selectSize="md" value={String(uiFontSize)}
+              onChange={(e) => setUiFontSize(Number(e.target.value))}>
+              {UI_FONT_STEPS.map((px) => (
+                <option key={px} value={px}>{uiFontLabels[px] ?? `${px}px`}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={t("程式碼字級")} hint={t("跳窗標題列的 A− / A＋ 與 Ctrl + / − / 0 也能調整")}>
+            <div className="flex items-center gap-1">
+              <IconButton icon={AArrowDown} iconSize={15} label={t("縮小程式碼字級 (Ctrl+-)")}
+                disabled={codeFontSize <= CODE_FONT_MIN} onClick={() => setCodeFontSize(codeFontSize - 1)} />
+              <span className="w-14 text-center text-sm tabular-nums text-fg/80">{codeFontSize} px</span>
+              <IconButton icon={AArrowUp} iconSize={15} label={t("放大程式碼字級 (Ctrl++)")}
+                disabled={codeFontSize >= CODE_FONT_MAX} onClick={() => setCodeFontSize(codeFontSize + 1)} />
+              <Button variant="ghost" className="ml-1" disabled={codeFontSize === CODE_FONT_DEFAULT}
+                onClick={() => setCodeFontSize(CODE_FONT_DEFAULT)}>{t("重設")}</Button>
+            </div>
+          </Field>
         </div>
         <AppLockSettings />
         <div className="pt-4 border-t border-fg/10 space-y-3">
@@ -1023,34 +1077,7 @@ type MenuNode =
   | { kind: "sep" }
   | { kind: "sub"; label: string; children: MenuNode[] };
 
-// 右鍵選單外框：點擊背景關閉，並把面板位置夾在視窗內（選單變長後，於下半部點擊不致溢出視窗底部、
-// 讓刪除 / 截斷等項目無法點按）。不使用 overflow-auto，以免裁切向右展開的子選單。
-function MenuPanel({ x, y, onClose, children }: { x: number; y: number; onClose: () => void; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEscToClose(onClose); // Esc 關閉選單，與對話框一致
-  const [pos, setPos] = useState({ left: x, top: y });
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const { width, height } = el.getBoundingClientRect();
-    setPos({
-      left: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
-      top: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
-    });
-  }, [x, y]);
-  return (
-    <>
-      <div className="fixed inset-0 z-[89]"
-        onClick={onClose}
-        onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div ref={ref}
-        className="fixed z-[90] min-w-[180px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-        style={{ left: pos.left, top: pos.top }}>
-        {children}
-      </div>
-    </>
-  );
-}
+// 右鍵選單外框已收斂到 ui/MenuPanel（夾回視窗 + 塞不下時可捲）；此處只留選單樹的渲染。
 
 // 遞迴渲染選單節點；子選單以滑鼠懸停展開，定位於父項右側（左側連線樹空間充足，固定向右展開）。
 function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void }) {
@@ -1436,6 +1463,16 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
   const doConnect = async (id: string) => {
     const cfg = connections.find((c) => c.id === id);
     if (!cfg || connectedIds.has(id) || connecting.has(id)) return;
+    // 帳密缺漏（典型：PROD 匯出檔一律不含帳密、或匯出時沒勾密碼）：直接連只會得到一句
+    // 難懂的 access denied，改成先提示、按下即開編輯表單補填。密碼在 keychain，由後端判斷有無。
+    if (await missingCredentials(cfg)) {
+      const go = await uiConfirm(
+        t("此連線尚未設定帳號或密碼（PROD 匯出檔一律不含帳密）。請先輸入帳號及密碼，再重新連線。"),
+        { title: t("需要帳號及密碼：{name}", { name: cfg.name }), confirmText: t("輸入帳號及密碼") },
+      );
+      if (go) onEdit(cfg);
+      return;
+    }
     // 手動 OTP 模式：先跳窗要驗證碼。取消＝放棄這次連線（非失敗，不彈錯誤對話框）。
     const gate = await askOtpCode(cfg);
     if (gate.cancelled) return;
@@ -2891,229 +2928,217 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
       )}
 
       {menu && menuConn && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
-          <div className="fixed z-[90] min-w-[150px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: menu.x, top: menu.y }}>
-            {(
-              [
-                // 連線 / 中斷連線分成兩條明確路徑（不再是隱式 toggle）：中斷連線是「放掉這條連線」
-                // 的唯一入口，把樹收起來請用下面那條（或雙擊 / 箭頭），兩者不互相牽動。
-                connectedIds.has(menu.id)
-                  ? [t("中斷連線"), () => doDisconnect(menu.id), false]
-                  : [t("連線"), () => doConnect(menu.id), false],
-                ...(connectedIds.has(menu.id)
-                  ? [
-                      [
-                        collapsedConns.has(menu.id) ? t("展開資料庫清單") : t("收合資料庫清單"),
-                        () => toggleConnCollapsed(menu.id),
-                        false,
-                      ] as [string, () => void, boolean],
-                      [t("重新整理資料庫"), () => refreshDbs(menu.id), false] as [string, () => void, boolean],
-                    ]
-                  : []),
-                // 新增查詢：所有有查詢編輯器的 kind 都給（原本只列 MySQL 家族 / PG / SQLite，
-                // SQL Server / Oracle / gateway / Mongo / Redis / ES 右鍵都看不到這一項）。
-                ...(connectedIds.has(menu.id) && supportsQueryEditorKind(menuConn.kind)
-                  ? [[t("新增查詢"), () => newQueryForDb(menuConn.id, menuConn.database ?? "", menuConn.kind), false] as [string, () => void, boolean]]
-                  : []),
-                ...(connectedIds.has(menu.id) && menuConn.kind === "redis"
-                  ? [
-                      [t("伺服器狀態"), () => setStatus({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
-                      [t("命令列"), () => setConsole({ id: menuConn.id, name: menuConn.name, db: "0" }), false] as [string, () => void, boolean],
-                      // 連線層沒有「目前 DB」概念，大鍵掃描一律對 DB 0（要看別的 DB 從該 DB 節點右鍵進）。
-                      [t("維運面板（慢查詢 / 用戶端 / 大鍵）…"), () => setRedisOps({ id: menuConn.id, name: menuConn.name, db: menuConn.database || "0" }), false] as [string, () => void, boolean],
-                      [t("Pub/Sub…"), () => setPubSub({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
-                    ]
-                  : []),
-                ...(connectedIds.has(menu.id) && menuConn.kind === "mongo"
-                  ? [[t("監控面板"), () => setMongoOps({ id: menuConn.id, name: menuConn.name, db: menuConn.database ?? "" }), false] as [string, () => void, boolean]]
-                  : []),
-                ...(connectedIds.has(menu.id) && menuConn.kind === "kafka"
-                  ? [
-                      [t("叢集總覽…"), () => setKafkaOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
-                      [t("監控與告警…"), () => setKafkaMonitor({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
-                      [t("新增主題…"), () => setKafkaCreateTopic({ connId: menuConn.id }), false] as [string, () => void, boolean],
-                      [t("消費者群組…"), () => setKafkaGroups({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
-                      ...(menuConn.options?.kafka_sr_url
-                        ? [[t("Schema Registry…"), () => setKafkaSchema({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
-                        : []),
-                      ...(menuConn.options?.kafka_connect_url
-                        ? [[t("連接器…"), () => setKafkaConnect({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
-                        : []),
-                      [t("ACL…"), () => setKafkaAcl({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
-                    ]
-                  : []),
-                ...(connectedIds.has(menu.id) && menuConn.kind === "elastic"
-                  ? [[t("叢集總覽…"), () => setEsOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
-                  : []),
-                ...(connectedIds.has(menu.id) && menuConn.kind === "rabbitmq"
-                  ? [
-                      [t("總覽…"), () => setRabbitOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
-                      ...(readonlyConns[menu.id]
-                        ? []
-                        : [[t("發布訊息…"), () => setRabbitPublish({ connId: menuConn.id }), false] as [string, () => void, boolean]]),
-                    ]
-                  : []),
-                ...(connectedIds.has(menu.id)
-                  ? [["SQL Search…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
-                  : []),
-                ...(connectedIds.has(menu.id)
-                  ? [[t("進階搜尋…"), () => onAdvSearch(menuConn.id, menuConn.kind), false] as [string, () => void, boolean]]
-                  : []),
-                ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres")
-                  ? [
-                      [t("處理程序…"), () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
-                      isMysqlFamily(menuConn.kind)
-                        ? [t("使用者管理…"), () => setUserMgr({ connId: menuConn.id }), false] as [string, () => void, boolean]
-                        : [t("使用者 / 角色…"), () => setServerQuery({
-                            connId: menuConn.id,
-                            title: t("使用者 / 角色"),
-                            sql: "SELECT rolname AS role, rolsuper AS superuser, rolcreatedb AS createdb, rolcanlogin AS login, rolreplication AS replication FROM pg_roles ORDER BY rolname",
-                          }), false] as [string, () => void, boolean],
-                      [t("伺服器變數…"), () => setServerQuery({
-                        connId: menuConn.id,
-                        title: t("伺服器變數 / 設定"),
-                        sql: menuConn.kind === "postgres"
-                          ? "SELECT name, setting, unit, category FROM pg_settings ORDER BY category, name"
-                          : "SHOW VARIABLES",
-                      }), false] as [string, () => void, boolean],
-                    ]
-                  : []),
-                [readonlyConns[menu.id] ? t("關閉唯讀模式") : t("設為唯讀模式（擋寫入 / DDL）"), () => useStore.getState().setConnReadonly(menu.id, !readonlyConns[menu.id]), false],
-                [t("屬性…"), () => setConnProps(menuConn), false],
-                [t("編輯…"), () => onEdit(menuConn), false],
-                [t("複製連線…"), () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: t("{name} 複本", { name: menuConn.name }), password: "" }), false],
-                [t("刪除"), () => deleteConn(menuConn.id, menuConn.name), true],
-              ] as [string, () => void, boolean][]
-            ).map(([label, fn, danger]) => (
-              <button key={label} type="button"
-                onClick={() => { setMenu(null); fn(); }}
-                className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-danger" : "text-fg/80"}`}>
-                {label}
-              </button>
-            ))}
-            {/* 連線色標：選色即標記（致敬 Navicat connection color），用以區分環境。 */}
-            <div className="border-t border-fg/10 mt-1 pt-1.5 px-3 pb-1">
-              <div className="text-[11px] text-fg/40 mb-1">{t("顏色標記")}</div>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {CONN_COLOR_PALETTE.map((p) => {
-                  const active = (connColors[menu.id] ?? "") === p.value;
-                  return (
-                    <button key={p.name} type="button" title={t(p.name)}
-                      onClick={() => { applyConnColor(menu.id, p.value); setMenu(null); }}
-                      className={`w-4 h-4 rounded-full border ${active ? "ring-2 ring-accent ring-offset-1 ring-offset-elevated" : "border-fg/20"} ${p.value ? "" : "grid place-items-center"}`}
-                      style={p.value ? { background: p.value } : undefined}>
-                      {!p.value && <Icon icon={X} size={10} className="text-fg/50" />}
-                    </button>
-                  );
-                })}
-              </div>
+        <MenuPanel x={menu.x} y={menu.y} minW={150} onClose={() => setMenu(null)}>
+          {(
+            [
+              // 連線 / 中斷連線分成兩條明確路徑（不再是隱式 toggle）：中斷連線是「放掉這條連線」
+              // 的唯一入口，把樹收起來請用下面那條（或雙擊 / 箭頭），兩者不互相牽動。
+              connectedIds.has(menu.id)
+                ? [t("中斷連線"), () => doDisconnect(menu.id), false]
+                : [t("連線"), () => doConnect(menu.id), false],
+              ...(connectedIds.has(menu.id)
+                ? [
+                    [
+                      collapsedConns.has(menu.id) ? t("展開資料庫清單") : t("收合資料庫清單"),
+                      () => toggleConnCollapsed(menu.id),
+                      false,
+                    ] as [string, () => void, boolean],
+                    [t("重新整理資料庫"), () => refreshDbs(menu.id), false] as [string, () => void, boolean],
+                  ]
+                : []),
+              // 新增查詢：所有有查詢編輯器的 kind 都給（原本只列 MySQL 家族 / PG / SQLite，
+              // SQL Server / Oracle / gateway / Mongo / Redis / ES 右鍵都看不到這一項）。
+              ...(connectedIds.has(menu.id) && supportsQueryEditorKind(menuConn.kind)
+                ? [[t("新增查詢"), () => newQueryForDb(menuConn.id, menuConn.database ?? "", menuConn.kind), false] as [string, () => void, boolean]]
+                : []),
+              ...(connectedIds.has(menu.id) && menuConn.kind === "redis"
+                ? [
+                    [t("伺服器狀態"), () => setStatus({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                    [t("命令列"), () => setConsole({ id: menuConn.id, name: menuConn.name, db: "0" }), false] as [string, () => void, boolean],
+                    // 連線層沒有「目前 DB」概念，大鍵掃描一律對 DB 0（要看別的 DB 從該 DB 節點右鍵進）。
+                    [t("維運面板（慢查詢 / 用戶端 / 大鍵）…"), () => setRedisOps({ id: menuConn.id, name: menuConn.name, db: menuConn.database || "0" }), false] as [string, () => void, boolean],
+                    [t("Pub/Sub…"), () => setPubSub({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                  ]
+                : []),
+              ...(connectedIds.has(menu.id) && menuConn.kind === "mongo"
+                ? [[t("監控面板"), () => setMongoOps({ id: menuConn.id, name: menuConn.name, db: menuConn.database ?? "" }), false] as [string, () => void, boolean]]
+                : []),
+              ...(connectedIds.has(menu.id) && menuConn.kind === "kafka"
+                ? [
+                    [t("叢集總覽…"), () => setKafkaOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                    [t("監控與告警…"), () => setKafkaMonitor({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                    [t("新增主題…"), () => setKafkaCreateTopic({ connId: menuConn.id }), false] as [string, () => void, boolean],
+                    [t("消費者群組…"), () => setKafkaGroups({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                    ...(menuConn.options?.kafka_sr_url
+                      ? [[t("Schema Registry…"), () => setKafkaSchema({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
+                      : []),
+                    ...(menuConn.options?.kafka_connect_url
+                      ? [[t("連接器…"), () => setKafkaConnect({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
+                      : []),
+                    [t("ACL…"), () => setKafkaAcl({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                  ]
+                : []),
+              ...(connectedIds.has(menu.id) && menuConn.kind === "elastic"
+                ? [[t("叢集總覽…"), () => setEsOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
+                : []),
+              ...(connectedIds.has(menu.id) && menuConn.kind === "rabbitmq"
+                ? [
+                    [t("總覽…"), () => setRabbitOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                    ...(readonlyConns[menu.id]
+                      ? []
+                      : [[t("發布訊息…"), () => setRabbitPublish({ connId: menuConn.id }), false] as [string, () => void, boolean]]),
+                  ]
+                : []),
+              ...(connectedIds.has(menu.id)
+                ? [["SQL Search…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
+                : []),
+              ...(connectedIds.has(menu.id)
+                ? [[t("進階搜尋…"), () => onAdvSearch(menuConn.id, menuConn.kind), false] as [string, () => void, boolean]]
+                : []),
+              ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres")
+                ? [
+                    [t("處理程序…"), () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
+                    isMysqlFamily(menuConn.kind)
+                      ? [t("使用者管理…"), () => setUserMgr({ connId: menuConn.id }), false] as [string, () => void, boolean]
+                      : [t("使用者 / 角色…"), () => setServerQuery({
+                          connId: menuConn.id,
+                          title: t("使用者 / 角色"),
+                          sql: "SELECT rolname AS role, rolsuper AS superuser, rolcreatedb AS createdb, rolcanlogin AS login, rolreplication AS replication FROM pg_roles ORDER BY rolname",
+                        }), false] as [string, () => void, boolean],
+                    [t("伺服器變數…"), () => setServerQuery({
+                      connId: menuConn.id,
+                      title: t("伺服器變數 / 設定"),
+                      sql: menuConn.kind === "postgres"
+                        ? "SELECT name, setting, unit, category FROM pg_settings ORDER BY category, name"
+                        : "SHOW VARIABLES",
+                    }), false] as [string, () => void, boolean],
+                  ]
+                : []),
+              [readonlyConns[menu.id] ? t("關閉唯讀模式") : t("設為唯讀模式（擋寫入 / DDL）"), () => useStore.getState().setConnReadonly(menu.id, !readonlyConns[menu.id]), false],
+              [t("屬性…"), () => setConnProps(menuConn), false],
+              [t("編輯…"), () => onEdit(menuConn), false],
+              [t("複製連線…"), () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: t("{name} 複本", { name: menuConn.name }), password: "" }), false],
+              [t("刪除"), () => deleteConn(menuConn.id, menuConn.name), true],
+            ] as [string, () => void, boolean][]
+          ).map(([label, fn, danger]) => (
+            <button key={label} type="button"
+              onClick={() => { setMenu(null); fn(); }}
+              className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-danger" : "text-fg/80"}`}>
+              {label}
+            </button>
+          ))}
+          {/* 連線色標：選色即標記（致敬 Navicat connection color），用以區分環境。 */}
+          <div className="border-t border-fg/10 mt-1 pt-1.5 px-3 pb-1">
+            <div className="text-[11px] text-fg/40 mb-1">{t("顏色標記")}</div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {CONN_COLOR_PALETTE.map((p) => {
+                const active = (connColors[menu.id] ?? "") === p.value;
+                return (
+                  <button key={p.name} type="button" title={t(p.name)}
+                    onClick={() => { applyConnColor(menu.id, p.value); setMenu(null); }}
+                    className={`w-4 h-4 rounded-full border ${active ? "ring-2 ring-accent ring-offset-1 ring-offset-elevated" : "border-fg/20"} ${p.value ? "" : "grid place-items-center"}`}
+                    style={p.value ? { background: p.value } : undefined}>
+                    {!p.value && <Icon icon={X} size={10} className="text-fg/50" />}
+                  </button>
+                );
+              })}
             </div>
           </div>
-        </>
+        </MenuPanel>
       )}
 
       {dbMenu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setDbMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setDbMenu(null); }} />
-          <div className="fixed z-[90] min-w-[150px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: dbMenu.x, top: dbMenu.y }}>
-            {(() => {
-              const dbConn = connections.find((x) => x.id === dbMenu.connId);
-              const editConn = () => { if (dbConn) onEdit(dbConn); };
-              const items: [string, () => void, boolean][] =
-                dbConn?.kind === "redis"
-                  ? [
-                      // 唯讀連線隱藏寫入入口（新增鍵 / FLUSHDB），與資料格 / 鍵樹的唯讀規則一致。
-                      ...(readonlyConns[dbMenu.connId]
-                        ? []
-                        : [[t("新增鍵…"), () => setNewKey({ connId: dbMenu.connId, db: dbMenu.db }), false] as [string, () => void, boolean]]),
-                      [t("伺服器狀態"), () => { if (dbConn) setStatus({ id: dbConn.id, name: dbConn.name }); }, false],
-                      [t("命令列"), () => { if (dbConn) setConsole({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
-                      [t("維運面板（慢查詢 / 用戶端 / 大鍵）…"), () => { if (dbConn) setRedisOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
-                      [t("Pub/Sub…"), () => { if (dbConn) setPubSub({ id: dbConn.id, name: dbConn.name }); }, false],
+        <MenuPanel x={dbMenu.x} y={dbMenu.y} minW={150} onClose={() => setDbMenu(null)}>
+          {(() => {
+            const dbConn = connections.find((x) => x.id === dbMenu.connId);
+            const editConn = () => { if (dbConn) onEdit(dbConn); };
+            const items: [string, () => void, boolean][] =
+              dbConn?.kind === "redis"
+                ? [
+                    // 唯讀連線隱藏寫入入口（新增鍵 / FLUSHDB），與資料格 / 鍵樹的唯讀規則一致。
+                    ...(readonlyConns[dbMenu.connId]
+                      ? []
+                      : [[t("新增鍵…"), () => setNewKey({ connId: dbMenu.connId, db: dbMenu.db }), false] as [string, () => void, boolean]]),
+                    [t("伺服器狀態"), () => { if (dbConn) setStatus({ id: dbConn.id, name: dbConn.name }); }, false],
+                    [t("命令列"), () => { if (dbConn) setConsole({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
+                    [t("維運面板（慢查詢 / 用戶端 / 大鍵）…"), () => { if (dbConn) setRedisOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
+                    [t("Pub/Sub…"), () => { if (dbConn) setPubSub({ id: dbConn.id, name: dbConn.name }); }, false],
+                    [t("編輯屬性…"), editConn, false],
+                    ...(readonlyConns[dbMenu.connId]
+                      ? []
+                      : [[t("清空 DB（FLUSHDB）"), () => flushDb(dbMenu.connId, dbMenu.db), true] as [string, () => void, boolean]]),
+                  ]
+                : dbConn?.kind === "kafka"
+                ? [
+                    [t("叢集總覽…"), () => { if (dbConn) setKafkaOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                    [t("監控與告警…"), () => { if (dbConn) setKafkaMonitor({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                    [t("新增主題…"), () => setKafkaCreateTopic({ connId: dbMenu.connId }), false] as [string, () => void, boolean],
+                    [t("消費者群組…"), () => { if (dbConn) setKafkaGroups({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                    [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
+                  ]
+                : dbConn?.kind === "elastic"
+                ? [
+                    [t("叢集總覽…"), () => { if (dbConn) setEsOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                    [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
+                  ]
+                : dbConn?.kind === "rabbitmq"
+                ? [
+                    [t("總覽…"), () => { if (dbConn) setRabbitOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                    ...(readonlyConns[dbMenu.connId]
+                      ? []
+                      : [[t("發布訊息…"), () => setRabbitPublish({ connId: dbMenu.connId }), false] as [string, () => void, boolean]]),
+                    [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
+                  ]
+                : dbConn?.kind === "mongo"
+                ? ((): [string, () => void, boolean][] => {
+                    const arr: [string, () => void, boolean][] = [
+                      [t("新增集合…"), () => createCollection(dbMenu.connId, dbMenu.db), false],
+                      [t("新增資料庫…"), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
+                      [t("監控面板"), () => { if (dbConn) setMongoOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
                       [t("編輯屬性…"), editConn, false],
-                      ...(readonlyConns[dbMenu.connId]
-                        ? []
-                        : [[t("清空 DB（FLUSHDB）"), () => flushDb(dbMenu.connId, dbMenu.db), true] as [string, () => void, boolean]]),
-                    ]
-                  : dbConn?.kind === "kafka"
-                  ? [
-                      [t("叢集總覽…"), () => { if (dbConn) setKafkaOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
-                      [t("監控與告警…"), () => { if (dbConn) setKafkaMonitor({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
-                      [t("新增主題…"), () => setKafkaCreateTopic({ connId: dbMenu.connId }), false] as [string, () => void, boolean],
-                      [t("消費者群組…"), () => { if (dbConn) setKafkaGroups({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
-                      [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
-                    ]
-                  : dbConn?.kind === "elastic"
-                  ? [
-                      [t("叢集總覽…"), () => { if (dbConn) setEsOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
-                      [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
-                    ]
-                  : dbConn?.kind === "rabbitmq"
-                  ? [
-                      [t("總覽…"), () => { if (dbConn) setRabbitOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
-                      ...(readonlyConns[dbMenu.connId]
-                        ? []
-                        : [[t("發布訊息…"), () => setRabbitPublish({ connId: dbMenu.connId }), false] as [string, () => void, boolean]]),
-                      [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
-                    ]
-                  : dbConn?.kind === "mongo"
-                  ? ((): [string, () => void, boolean][] => {
-                      const arr: [string, () => void, boolean][] = [
-                        [t("新增集合…"), () => createCollection(dbMenu.connId, dbMenu.db), false],
-                        [t("新增資料庫…"), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
-                        [t("監控面板"), () => { if (dbConn) setMongoOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
-                        [t("編輯屬性…"), editConn, false],
-                      ];
-                      // 系統庫（admin/config/local）不顯示刪除（後端亦硬擋）。
-                      if (!isSystemDatabase("mongo", dbMenu.db))
-                        arr.push([t("刪除資料庫…"), () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
-                      return arr;
-                    })()
-                  : ((): [string, () => void, boolean][] => {
-                      const k = dbConn?.kind;
-                      const noun = k === "postgres" ? "Schema" : t("資料庫");
-                      const arr: [string, () => void, boolean][] = [
-                        [t("新增查詢"), () => { if (dbConn) newQueryForDb(dbMenu.connId, dbMenu.db, dbConn.kind); }, false],
-                        [t("設計表結構…"), () => { if (dbConn) setDesignTable({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false],
-                      ];
-                      // SQLite 為單檔，無多資料庫概念，故不顯示新增 / 刪除資料庫。
-                      if (k !== "sqlite") arr.push([t("新增{noun}…", { noun }), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false]);
-                      arr.push([t("新增視圖…"), () => { if (dbConn) setCreateView({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
-                      arr.push([t("預存程序 / 觸發器…"), () => { if (dbConn) setRoutines({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
-                      arr.push([t("匯出結構 SQL…"), () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
-                      if (isMysqlFamily(k)) arr.push([t("資料表大小報表…"), () => setServerQuery({
-                        connId: dbMenu.connId, title: t("資料表大小：{db}", { db: dbMenu.db }), sql: tableSizesSql(dbMenu.db),
-                      }), false]);
-                      if ((isMysqlFamily(k) || k === "postgres") && dbConn) arr.push([t("結構比對…"), () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
-                      if (isMysqlFamily(k) || k === "postgres" || k === "sqlite") arr.push([t("資料傳輸（整庫）…"), () => setDbTransfer({ connId: dbMenu.connId, db: dbMenu.db }), false]);
-                      if ((isMysqlFamily(k) || k === "postgres" || k === "sqlite") && dbConn) arr.push([t("資料庫文件…"), () => setDbDict({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
-                      if (isMysqlFamily(k)) arr.push([t("資料庫屬性…"), () => setDbProps({ connId: dbMenu.connId, db: dbMenu.db }), false]);
-                      arr.push([t("編輯屬性…"), editConn, false]);
-                      // 系統 schema / 庫，以及 MySQL 系使用中的預設庫，不顯示刪除（後端亦硬擋）。
-                      const isDefault = isMysqlFamily(k) && dbConn?.database === dbMenu.db;
-                      if (k !== "sqlite" && k && !isSystemDatabase(k, dbMenu.db) && !isDefault)
-                        arr.push([t("刪除{noun}…", { noun }), () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
-                      return arr;
-                    })();
-              // 重新整理：重載此資料庫節點的表 / 集合 / 鍵清單（適用所有種類）。
-              items.unshift([t("重新整理"), () => refreshTables(dbMenu.connId, dbMenu.db), false]);
-              return items.map(([label, fn, danger]) => (
-                <button key={label} type="button"
-                  onClick={() => { setDbMenu(null); fn(); }}
-                  className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-danger" : "text-fg/80"}`}>
-                  {label}
-                </button>
-              ));
-            })()}
-          </div>
-        </>
+                    ];
+                    // 系統庫（admin/config/local）不顯示刪除（後端亦硬擋）。
+                    if (!isSystemDatabase("mongo", dbMenu.db))
+                      arr.push([t("刪除資料庫…"), () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
+                    return arr;
+                  })()
+                : ((): [string, () => void, boolean][] => {
+                    const k = dbConn?.kind;
+                    const noun = k === "postgres" ? "Schema" : t("資料庫");
+                    const arr: [string, () => void, boolean][] = [
+                      [t("新增查詢"), () => { if (dbConn) newQueryForDb(dbMenu.connId, dbMenu.db, dbConn.kind); }, false],
+                      [t("設計表結構…"), () => { if (dbConn) setDesignTable({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false],
+                    ];
+                    // SQLite 為單檔，無多資料庫概念，故不顯示新增 / 刪除資料庫。
+                    if (k !== "sqlite") arr.push([t("新增{noun}…", { noun }), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false]);
+                    arr.push([t("新增視圖…"), () => { if (dbConn) setCreateView({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
+                    arr.push([t("預存程序 / 觸發器…"), () => { if (dbConn) setRoutines({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
+                    arr.push([t("匯出結構 SQL…"), () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
+                    if (isMysqlFamily(k)) arr.push([t("資料表大小報表…"), () => setServerQuery({
+                      connId: dbMenu.connId, title: t("資料表大小：{db}", { db: dbMenu.db }), sql: tableSizesSql(dbMenu.db),
+                    }), false]);
+                    if ((isMysqlFamily(k) || k === "postgres") && dbConn) arr.push([t("結構比對…"), () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
+                    if (isMysqlFamily(k) || k === "postgres" || k === "sqlite") arr.push([t("資料傳輸（整庫）…"), () => setDbTransfer({ connId: dbMenu.connId, db: dbMenu.db }), false]);
+                    if ((isMysqlFamily(k) || k === "postgres" || k === "sqlite") && dbConn) arr.push([t("資料庫文件…"), () => setDbDict({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
+                    if (isMysqlFamily(k)) arr.push([t("資料庫屬性…"), () => setDbProps({ connId: dbMenu.connId, db: dbMenu.db }), false]);
+                    arr.push([t("編輯屬性…"), editConn, false]);
+                    // 系統 schema / 庫，以及 MySQL 系使用中的預設庫，不顯示刪除（後端亦硬擋）。
+                    const isDefault = isMysqlFamily(k) && dbConn?.database === dbMenu.db;
+                    if (k !== "sqlite" && k && !isSystemDatabase(k, dbMenu.db) && !isDefault)
+                      arr.push([t("刪除{noun}…", { noun }), () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
+                    return arr;
+                  })();
+            // 重新整理：重載此資料庫節點的表 / 集合 / 鍵清單（適用所有種類）。
+            items.unshift([t("重新整理"), () => refreshTables(dbMenu.connId, dbMenu.db), false]);
+            return items.map(([label, fn, danger]) => (
+              <button key={label} type="button"
+                onClick={() => { setDbMenu(null); fn(); }}
+                className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-danger" : "text-fg/80"}`}>
+                {label}
+              </button>
+            ));
+          })()}
+        </MenuPanel>
       )}
 
       {folderMenu && (
@@ -3403,6 +3428,9 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
   const activeTabRef = useRef<HTMLDivElement>(null);
   const queryTabRef = useRef<HTMLButtonElement>(null);
 
+  // 關掉的查詢分頁不該留著結果快取（id 會被回收）。涵蓋單關 / 關其他 / 全部關閉三條路徑。
+  useEffect(() => { pruneQueryPaneResults(queryTabs); }, [queryTabs]);
+
   const canUse = activeId && connectedIds.has(activeId);
   const activeTab = tabs.find((tab) => tab.key === activeTabKey) ?? null;
   // 作用中的查詢分頁 id（非表分頁時）：解析未知 / null → 第一個查詢分頁（home 可被關掉，不能寫死 __query__）。
@@ -3575,55 +3603,43 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
       )}
 
       {tabMenu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setTabMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setTabMenu(null); }} />
-          <div className="fixed z-[90] min-w-[140px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: tabMenu.x, top: tabMenu.y }}>
-            {(
-              [
-                [t("關閉"), () => closeTab(tabMenu.key)],
-                [t("關閉其他"), () => closeOtherTabs(tabMenu.key)],
-                [t("全部關閉"), () => closeAllTabs()],
-              ] as [string, () => void][]
-            ).map(([label, fn]) => (
-              <button key={label} type="button"
-                onClick={() => { setTabMenu(null); fn(); }}
-                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
-                {label}
-              </button>
-            ))}
-          </div>
-        </>
+        <MenuPanel x={tabMenu.x} y={tabMenu.y} minW={140} onClose={() => setTabMenu(null)}>
+          {(
+            [
+              [t("關閉"), () => closeTab(tabMenu.key)],
+              [t("關閉其他"), () => closeOtherTabs(tabMenu.key)],
+              [t("全部關閉"), () => closeAllTabs()],
+            ] as [string, () => void][]
+          ).map(([label, fn]) => (
+            <button key={label} type="button"
+              onClick={() => { setTabMenu(null); fn(); }}
+              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+              {label}
+            </button>
+          ))}
+        </MenuPanel>
       )}
 
       {queryTabMenu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setQueryTabMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setQueryTabMenu(null); }} />
-          <div className="fixed z-[90] min-w-[140px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: queryTabMenu.x, top: queryTabMenu.y }}>
-            {(() => {
-              const qid = queryTabMenu.id;
-              // 任一查詢分頁（含第一個「查詢」）皆可關，可一路關到零。
-              // 只剩一個時「關閉其他 / 全部關閉」無意義，僅留「關閉查詢」。
-              const items: [string, () => void][] = [[t("關閉查詢"), () => closeQueryTab(qid)]];
-              if (queryTabs.length > 1) {
-                items.push([t("關閉其他查詢"), () => closeOtherQueryTabs(qid)]);
-                items.push([t("全部關閉查詢"), () => closeAllQueryTabs()]);
-              }
-              return items.map(([label, fn]) => (
-                <button key={label} type="button"
-                  onClick={() => { setQueryTabMenu(null); fn(); }}
-                  className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
-                  {label}
-                </button>
-              ));
-            })()}
-          </div>
-        </>
+        <MenuPanel x={queryTabMenu.x} y={queryTabMenu.y} minW={140} onClose={() => setQueryTabMenu(null)}>
+          {(() => {
+            const qid = queryTabMenu.id;
+            // 任一查詢分頁（含第一個「查詢」）皆可關，可一路關到零。
+            // 只剩一個時「關閉其他 / 全部關閉」無意義，僅留「關閉查詢」。
+            const items: [string, () => void][] = [[t("關閉查詢"), () => closeQueryTab(qid)]];
+            if (queryTabs.length > 1) {
+              items.push([t("關閉其他查詢"), () => closeOtherQueryTabs(qid)]);
+              items.push([t("全部關閉查詢"), () => closeAllQueryTabs()]);
+            }
+            return items.map(([label, fn]) => (
+              <button key={label} type="button"
+                onClick={() => { setQueryTabMenu(null); fn(); }}
+                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+                {label}
+              </button>
+            ));
+          })()}
+        </MenuPanel>
       )}
     </div>
   );
@@ -3699,15 +3715,22 @@ const EXPLAIN_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "mssq
 // SQLite 為單檔無多庫；Mongo / Redis 的資料庫切換走各自指令，不在此列。
 const DB_SELECT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "external"];
 
-// 查詢編輯器內容 per-連線 持久化（重開 / 切換連線後沿用上次的查詢）。
-// 查詢內容持久化鍵：每連線 × 每查詢分頁。預設 home 分頁沿用舊鍵（向後相容，既有草稿不遺失）。
-const sqlStoreKey = (id: string, tabId = "__query__") =>
-  tabId === "__query__" ? `db-kit:querySql:${id}` : `db-kit:querySql:${id}:${tabId}`;
+// 查詢結果可否就地寫回（後端 update_cell 有實作的驅動）。
+// external（gateway）列入：驅動端只開放「以主鍵定位的單格更新」，其餘寫入仍拒絕。
+// db-kit 本體的 external stub 連線都建不起來，列進來對開源版沒有副作用。
+const RESULT_EDIT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "mssql", "oracle", "external"];
+
+// 查詢編輯器內容 per-連線 × per-分頁 持久化（重開 / 切換連線後沿用上次的查詢）：鍵見 queryDrafts.ts 的
+// sqlStoreKey。分頁關閉時 store 會把該分頁在所有連線下的草稿清掉（見 store.ts），新分頁才不會撿到舊內容。
 // 「目前資料庫」選擇 per-連線 持久化（切換連線 / 重開後沿用上次選的庫）。
 const queryDbStoreKey = (id: string) => `db-kit:queryDb:${id}`;
 // 「跨庫」預載清單 per-連線 持久化：常態跨庫的人一次選好，開檔即有 `other_db.` 的提示。
-// 沒選也不影響——打 `other_db.` 時會按需載入（見 SqlEditor 的 cross.onNeedDatabase）。
+// 沒選也不影響——打 `other_db.`、或語句裡寫了 `other_db.表` 都會按需載入
+// （見 SqlEditor 的 cross.onNeedDatabase）。
 const queryExtraDbsStoreKey = (id: string) => `db-kit:queryExtraDbs:${id}`;
+// 查詢工具列「左組」（「查詢」/「跨庫」兩個文字標籤）在外層列窄於此寬度時只留圖示與下拉。
+// 判準是**外層列寬**而不是 barTier —— 理由見 rowNarrow 的註解（綁 barTier 會炸整個 app）。
+const QUERY_ROW_LABEL_MIN_W = 720;
 function loadPersistedSql(id: string | null | undefined, kind: DbKind | undefined, tabId = "__query__"): string {
   if (id) {
     try {
@@ -3729,6 +3752,36 @@ interface RunSummary { startedAt: number; finishedAt: number; total: number; pro
 // setIdx：本格在該次 run_query_multi 回傳陣列中的索引（含無欄位的 DML 結果）；
 // 匯出重跑後取同位結果集。單結果集呼叫恆為 0。
 interface ResultSetEntry { res: QueryResult; sql: string; ms: number; sent?: string; setIdx?: number; }
+
+// 查詢分頁的「結果區」記憶（模組層，僅本次執行期間有效）。
+// QueryPane 以 key={activeQueryId} 掛載——切走查詢分頁必然整個卸載，結果集只活在元件 state
+// 的話回來就只剩空結果區，得重跑一次查詢。編輯器內容早已 per-分頁 持久化（sqlStoreKey），
+// 結果卻沒有，兩者對不上。這裡把結果區整組記下來，切回同一分頁時原樣還原。
+// 只放記憶體、不進 localStorage：結果集動輒數萬列，且可能含敏感資料。
+interface PaneResultState {
+  // 產生這批結果的連線。查詢分頁沒有自己的連線（activeId 是全域的），換連線後舊結果就對不上了，
+  // 故還原前先比對——不同連線一律不還原，寧可空著也不要拿 A 庫的資料冒充 B 庫。
+  connId: string | null;
+  resultSets: ResultSetEntry[];
+  activeResult: number;
+  collapsedSets: Record<number, boolean>;
+  err: string | null;
+  errSql: string | null;
+  errStmt: string | null;
+  elapsed: number | null;
+  bottomTab: "result" | "summary" | "explain" | "review";
+  summary: RunSummary | null;
+  plan: PlanNode | null;
+  planErr: string | null;
+  planRaw: string | null;
+  mongoPlan: { model: MongoExplainModel; raw: string } | null;
+}
+const paneResults = new Map<string, PaneResultState>();
+// 分頁關閉後丟掉它的快取：分頁 id 會被回收（全部關光再開又是 __query__），
+// 留著會讓新開的分頁一掛上就掛著上一輪的結果。
+function pruneQueryPaneResults(liveTabIds: string[]) {
+  for (const id of [...paneResults.keys()]) if (!liveTabIds.includes(id)) paneResults.delete(id);
+}
 
 // 毫秒時間戳 → 本地「YYYY-MM-DD HH:mm:ss」（摘要面板的開始 / 結束時間）。
 function fmtClock(ms: number): string {
@@ -3831,6 +3884,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 它是空字串，拿去 list_tables 回零張表，於是 AI 完全看不到結構卻不會有任何錯誤訊息。
   // 結構快取已經解析過「實際是哪個庫」（連線預設庫 / 第一個非系統庫），沿用同一個答案。
   const schemaTargetDb = queryDb || schemaState.database || "";
+  // 結果集的「可定位目標連線」：單表 SELECT 要對得回原始列，需要連線 + 驅動支援。
+  // **不含唯讀判斷**——唯讀連線同樣要能「產生 UPDATE 腳本」（自己不能改才更需要一份 SQL 交出去），
+  // 只是不能就地編輯。就地編輯的那道關卡改由 writable 傳下去。
+  // 交給 ResultTable 當 effect 相依，故必須 memo。
+  const resultConn = useMemo(
+    () =>
+      activeId && kind && RESULT_EDIT_KINDS.includes(kind)
+        ? { connId: activeId, database: schemaTargetDb, kind }
+        : null,
+    [activeId, kind, schemaTargetDb],
+  );
   const [editorSel, setEditorSel] = useState<string | null>(null);
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
@@ -3846,8 +3910,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const findingErrors = findings.filter((f) => f.severity === "error").length;
   // 結果集清單（SSMS 風格）：多語句批次中每條有回傳結果集的語句各佔一格、堆疊「同時」顯示；
   // 單語句 / 純 DML / 分析模式只有一筆。activeResult 標記工具列（複製 / 匯出 / 問 AI）作用的結果集。
-  const [resultSets, setResultSets] = useState<ResultSetEntry[]>([]);
-  const [activeResult, setActiveResult] = useState(0);
+  // 切回本分頁時的還原來源（見 paneResults）。只在掛載當下取一次，之後由下方的同步 effect 寫回。
+  const [restored] = useState(() => {
+    const cached = paneResults.get(tabId);
+    return cached && cached.connId === (activeId ?? null) ? cached : undefined;
+  });
+  const [resultSets, setResultSets] = useState<ResultSetEntry[]>(() => restored?.resultSets ?? []);
+  const [activeResult, setActiveResult] = useState(() => restored?.activeResult ?? 0);
   const activeIdx = resultSets.length > 0 ? Math.min(activeResult, resultSets.length - 1) : 0;
   const result = resultSets[activeIdx]?.res ?? null;
   // 以單一結果覆蓋結果區（分析模式 / 視覺化解釋回退 / 清空等單結果路徑）；null = 清空。
@@ -3859,7 +3928,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 重跑同形狀批次時整格重掛（重置各格的捲動位置 / 排序 / 篩選，避免新結果停在舊捲動深處像缺列）。
   const [runSeq, setRunSeq] = useState(0);
   // 各結果格摺疊狀態（多結果集時）：摺疊只藏內容不卸載，保留該格排序 / 篩選；新批次到達時重置。
-  const [collapsedSets, setCollapsedSets] = useState<Record<number, boolean>>({});
+  const [collapsedSets, setCollapsedSets] = useState<Record<number, boolean>>(() => restored?.collapsedSets ?? {});
   // 寫入一批新結果集（執行成功、或中途失敗但已有部分結果）：作用中重設為第一格、重置摺疊、遞增序號。
   const applyResultSets = useCallback((sets: ResultSetEntry[]) => {
     setResultSets(sets);
@@ -3870,14 +3939,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 結果表格目前的可視列（排序 + 篩選後）；複製 / 匯出依此而非原始 result，使輸出與所見一致。
   // 多結果集時只綁「作用中」那格的表格回報。
   const [resultView, setResultView] = useState<(string | null)[][] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(() => restored?.err ?? null);
   // 發生錯誤時實際送出的語句（供「AI 分析修正」帶進助手；queryToRun() 之後可能因選取改變而不同）。
-  const [errSql, setErrSql] = useState<string | null>(null);
+  const [errSql, setErrSql] = useState<string | null>(() => restored?.errSql ?? null);
   // 多語句批次中實際出錯的那一條（單句時為 null）；供 AI prompt 與「第 N 條」錯誤訊息對位。
-  const [errStmt, setErrStmt] = useState<string | null>(null);
+  const [errStmt, setErrStmt] = useState<string | null>(() => restored?.errStmt ?? null);
   const [running, setRunning] = useState(false);
   const [nlOpen, setNlOpen] = useState(false);
-  const [elapsed, setElapsed] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState<number | null>(() => restored?.elapsed ?? null);
   // 執行中的即時回饋：經過時間（250ms 更新）與多語句進度「第 N/M 條」。
   const [liveMs, setLiveMs] = useState<number | null>(null);
   const [runProgress, setRunProgress] = useState<{ done: number; total: number } | null>(null);
@@ -3946,6 +4015,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const tbRef = useRef<HTMLDivElement>(null);
   const [barTier, setBarTier] = useState(0);
   const tierNeedRef = useRef<[number, number]>([0, 0]);
+  // 震盪保險（見下方 measure 的 flipRef 註解）。
+  const flipRef = useRef(0);
   // 換語言 / 換連線種類 → 按鈕組成與標籤長度都變了，先前記住的需求寬度失效，重量一次。
   useLayoutEffect(() => { tierNeedRef.current = [0, 0]; setBarTier(0); }, [t, kind]);
   useLayoutEffect(() => {
@@ -3961,13 +4032,27 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       // 容差 12px：分隔線有 my-1，offsetTop 天生比按鈕差 4px，真正換行則差一整個列高（≈26px）。
       const tops = kids.map((k) => k.offsetTop);
       const wrapped = Math.max(...tops) - Math.min(...tops) > 12;
+      // 震盪保險：連續 8 次量測都在改階就停手。正常情況一次縮放最多跨一兩階，而且中間必然
+      // 夾著「這次不用改」的量測（每改一階本效果就重跑一次）→ 計數歸零，這道保險不會誤觸。
+      // 唯一會撞上限的情形是「階數反過來影響本組可用寬度」的餵食迴圈（rowNarrow 的註解講的
+      // 就是這件事）。那時寧可停在某一階、版面稍微不理想，也不要把 React 撞上 nested update
+      // 上限（Minified React error #185）讓整個 app 死在錯誤邊界上。
+      const bump = () => (flipRef.current += 1) <= 8;
       if (wrapped && barTier < 2) {
+        if (!bump()) return;
         tierNeedRef.current[barTier] = el.clientWidth; // 這個寬度裝不下本階
         setBarTier((n) => Math.min(2, n + 1));
       } else if (!wrapped && barTier > 0) {
         const need = tierNeedRef.current[barTier - 1];
         // 嚴格大於：等於當初裝不下的寬度就升回去會立刻再降，卡在震盪。
-        if (need && el.clientWidth > need) setBarTier((n) => Math.max(0, n - 1));
+        if (need && el.clientWidth > need) {
+          if (!bump()) return;
+          setBarTier((n) => Math.max(0, n - 1));
+        } else {
+          flipRef.current = 0;
+        }
+      } else {
+        flipRef.current = 0; // 這次量測不用改階＝版面已穩定
       }
     };
     measure();
@@ -3975,6 +4060,27 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     ro.observe(el);
     return () => ro.disconnect();
   }, [barTier, t, kind]);
+  // 左組（「查詢」/「跨庫」文字標籤）的收放**不可以**綁 barTier。
+  //
+  // barTier 是「右組有沒有換行」的量測結果，而左右兩組在同一個 flex 列裡搶同一份寬度：
+  // 收掉左組的兩個標籤 → 右組多拿約 66px → 不再換行 → 升回上一階 → 標籤又出現 → 又換行…
+  // 兩個 layout effect 互相餵食，同步巢狀更新一路累積到 React 的上限，整頁掛在錯誤邊界上
+  // （Minified React error #185：Maximum update depth exceeded）。實測面板寬約 1180px 時
+  // 每次選連線都必炸。
+  //
+  // 改以「外層列的寬度」為判準：它由面板寬度（側欄 / AI 助手 / 視窗）決定，與 barTier 無關，
+  // 迴圈從結構上就不存在；而且 setRowNarrow 存的是布林值，值沒變 React 直接 bail out。
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [rowNarrow, setRowNarrow] = useState(false);
+  useLayoutEffect(() => {
+    const el = rowRef.current;
+    if (!el) return;
+    const measure = () => setRowNarrow(el.clientWidth < QUERY_ROW_LABEL_MIN_W);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   // dense：次要按鈕的文字標籤退到 title tooltip；folded：沒有下拉面板的次要按鈕整顆折進「更多」。
   // 擁有下拉面板者（歷史 / 收藏 / 片段）不折 —— 把一整片面板塞進選單項只會更難用。
   const dense = barTier >= 1;
@@ -3985,17 +4091,26 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const editorRef = useRef<SqlEditorHandle>(null);
   // 下方分頁（致敬 Navicat 結果 / 摘要 / 解釋）：result=結果表格、summary=執行摘要、
   // explain=視覺化執行計畫、review=靜態審查（規則引擎，不需執行也不需 AI）。
-  const [bottomTab, setBottomTab] = useState<"result" | "summary" | "explain" | "review">("result");
-  const [summary, setSummary] = useState<RunSummary | null>(null);
-  const [plan, setPlan] = useState<PlanNode | null>(null);
-  const [planErr, setPlanErr] = useState<string | null>(null);
+  const [bottomTab, setBottomTab] = useState<"result" | "summary" | "explain" | "review">(() => restored?.bottomTab ?? "result");
+  const [summary, setSummary] = useState<RunSummary | null>(() => restored?.summary ?? null);
+  const [plan, setPlan] = useState<PlanNode | null>(() => restored?.plan ?? null);
+  const [planErr, setPlanErr] = useState<string | null>(() => restored?.planErr ?? null);
   // 計畫的原始 JSON：AI 調校要看的是完整計畫（成本 / 列數 / 存取方式），
   // 而 PlanNode 樹是為了畫圖而正規化過的，回頭序列化會丟掉方言特有欄位。
-  const [planRaw, setPlanRaw] = useState<string | null>(null);
+  const [planRaw, setPlanRaw] = useState<string | null>(() => restored?.planRaw ?? null);
   // AI 審查 / 調校進行中（要先打幾支 api 抓結構，不是瞬間完成）。
   const [aiBusy, setAiBusy] = useState(false);
   // Mongo 執行計畫（與 SQL 的 plan 分開：階段指標與成本模型不同，各自渲染器）。
-  const [mongoPlan, setMongoPlan] = useState<{ model: MongoExplainModel; raw: string } | null>(null);
+  const [mongoPlan, setMongoPlan] = useState<{ model: MongoExplainModel; raw: string } | null>(() => restored?.mongoPlan ?? null);
+  // 結果區狀態同步進快取：切走時 QueryPane 被卸載，來不及在 unmount 時收集，故隨改隨寫。
+  useEffect(() => {
+    paneResults.set(tabId, {
+      connId: activeId ?? null,
+      resultSets, activeResult, collapsedSets, err, errSql, errStmt, elapsed,
+      bottomTab, summary, plan, planErr, planRaw, mongoPlan,
+    });
+  }, [tabId, activeId, resultSets, activeResult, collapsedSets, err, errSql, errStmt, elapsed,
+      bottomTab, summary, plan, planErr, planRaw, mongoPlan]);
   // executionStats 會「實際執行」查詢；queryPlanner 只做計畫（便宜），供昂貴管線選用。
   const [mongoVerbosity, setMongoVerbosity] = useState<"queryPlanner" | "executionStats" | "allPlansExecution">("executionStats");
   const mongoEditorRef = useRef<MongoQueryEditorHandle>(null);
@@ -4119,7 +4234,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
 
   // 切換連線：載入該連線上次的查詢內容（或該類型預設），並清掉殘留結果。
   // 用 raw setSql（非 persistSql），避免把載入動作又寫回 localStorage。
+  //
+  // 掛載那一次不算「切換連線」——切回查詢分頁時 QueryPane 是重新掛載的，讓它跑就會把剛從
+  // paneResults 還原的結果集又清成空的。掛載時 sql 的 useState 初值本來就是同一個
+  // loadPersistedSql(...)，其餘清空對象也都還是初始值，跳過這一次不改變任何結果。
+  const connSwitched = useRef(false);
   useEffect(() => {
+    if (!connSwitched.current) { connSwitched.current = true; return; }
     setSql(loadPersistedSql(activeId, kind, tabId));
     setResult(null);
     setErr(null);
@@ -4842,10 +4963,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     // 會撐破視窗（畫過狀態列）；鎖住後高度交給內層「結果」容器的 overflow-auto 捲動。
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
       <div className="shrink-0">
-        {/* flex-wrap：面板被側欄 / AI 助手夾窄時整列換行，而不是把左側的連線 / 資料庫壓扁。 */}
-        <div className="flex flex-wrap items-center justify-between gap-y-1 px-3 py-1.5 bg-bar">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-xs text-fg/40 shrink-0">{t("查詢")}</span>
+        {/* flex-wrap：面板被側欄 / AI 助手夾窄時整列換行，而不是把左側的連線 / 資料庫壓扁。
+            items-start（非 items-center）：右側工具列真的換成多列時，左側「查詢 / 連線 / 資料庫」
+            要對齊第一列 —— items-center 會把它垂直置中到多列正中間，看起來像散落在按鈕堆裡。 */}
+        <div ref={rowRef} className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 px-3 py-1.5 bg-bar">
+          {/* 本組每顆都是 shrink-0（連線 / 資料庫下拉縮到看不出連哪台就沒意義了），min-content ~500px：
+              沒有 flex-wrap 時面板再窄下去就直接裁掉尾端的資料庫下拉與快取徽章 —— 看不到也點不到。
+              與右組同一原則（絕不裁掉控制項），寬度不足時換行而非切掉。 */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            {/* 面板夠寬才留這個標題字：窄面板時它只是佔掉 ~38px，而分頁列上本來就寫著「查詢」。
+                判準用 rowNarrow（外層列寬）而非 dense（barTier）—— 見 rowNarrow 的註解。 */}
+            {!rowNarrow && <span className="text-xs text-fg/40 shrink-0">{t("查詢")}</span>}
             {runnableConns.length > 0 && (
               // 寬度下限給在「外層」：Select 的 className 是套在 <select> 上（w-full），
               // 真正被 flex 壓扁的是它的 relative 包層 —— 只寫 max-w 擋不住縮到看不出連哪台。
@@ -4894,7 +5022,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                   className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 ${
                     extraDbs.length > 0 ? "text-accent" : "text-fg/70"}`}>
                   <Icon icon={Layers} size={13} />
-                  {!dense && t("跨庫")}{extraDbs.length > 0 ? `（${extraDbs.length}）` : ""}
+                  {!rowNarrow && t("跨庫")}{extraDbs.length > 0 ? `（${extraDbs.length}）` : ""}
                 </button>
                 {showExtraDbs && (
                   <>
@@ -4917,8 +5045,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
             <SchemaCacheBadge state={schemaState} />
           </div>
           {/* 保留 flex-wrap：barTier 靠「子元素有沒有換行」量測（見上方 measure），
-              放不下時先降階，降到底仍放不下才真的換行 —— 絕不裁掉按鈕。 */}
-          <div ref={tbRef} className="flex-1 min-w-0 flex flex-wrap justify-end items-center gap-x-1 gap-y-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap">
+              放不下時先降階，降到底仍放不下才真的換行 —— 絕不裁掉按鈕。
+
+              min-w-[15rem] 而非 min-w-0：左側那組（查詢標籤 / 連線 / 資料庫 / 跨庫 / 快取徽章）
+              每顆都是 shrink-0，min-content 就吃掉 ~450px。本組若允許縮到 0，外層永遠不會換行，
+              而是把整組壓成一條窄縫 —— 於是每顆鈕各佔一列，疊成五六列的高塔（降到 folded 也救不回：
+              能折進「更多」的只有 4 顆無下拉的鈕）。給下限後，寬度不足時改由「外層」把本組整組
+              換到下一列，拿到整排寬度、乾淨的兩列版面。 */}
+          <div ref={tbRef} className="flex-1 min-w-[15rem] flex flex-wrap justify-end items-center gap-x-1 gap-y-1 [&>*]:shrink-0 [&_button]:whitespace-nowrap">
             <button type="button" onClick={openNodeScopedQueryTab}
               title={t("開新查詢分頁：依目前選取的連線 / 資料庫 / 資料表帶入範圍 · Ctrl+N")}
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
@@ -5573,6 +5707,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                         <div style={collapsed ? { display: "none" } : undefined} className="max-h-[45vh] overflow-auto">
                           <ResultTable result={s.res}
                             maxRender={Math.max(100, Math.floor(2000 / resultSets.length))}
+                            conn={resultConn} writable={!activeReadonly} sql={s.sql}
                             onViewChange={i === activeIdx ? setResultView : undefined} />
                         </div>
                       </section>
@@ -5580,7 +5715,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                   })}
                 </div>
               ) : (
-                result && <ResultTable result={result} onViewChange={setResultView} />
+                result && <ResultTable result={result} onViewChange={setResultView}
+                  conn={resultConn} writable={!activeReadonly} sql={resultSets[activeIdx]?.sql} />
               )}
               {!result && !err && (
                 <EmptyState compact icon={running ? Loader2 : Play}
@@ -5760,8 +5896,22 @@ function ReviewPanel({ findings, skipped, hasSql, onJump, onAskAi, busy }: {
 
 // memo：多結果集堆疊時，父層（QueryPane）因作用中表格回報 resultView 而頻繁重渲染（每個篩選鍵擊 / 排序點擊），
 // 不 memo 會讓其餘 N-1 個大表格跟著全數 reconcile；props（result / onViewChange / maxRender）皆為穩定 identity。
-const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender = 2000 }: { result: QueryResult; onViewChange?: (rows: (string | null)[][]) => void; maxRender?: number }) {
+const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender = 2000, conn, writable = false, sql }: {
+  result: QueryResult;
+  onViewChange?: (rows: (string | null)[][]) => void;
+  maxRender?: number;
+  // 「這個結果集對得回哪張表」用的連線（驅動支援時才由 QueryPane 給；否則 undefined＝純檢視）。
+  // 不含唯讀判斷：唯讀連線也要能產生 UPDATE 腳本，只是不能就地改（見 writable）。
+  // 必須是 memo 過的穩定參考，否則下面解析目標表的 effect 每次 render 都重跑。
+  conn?: { connId: string; database: string; kind: DbKind } | null;
+  // 連線可寫（非唯讀連線）。false＝可以定位列、可以產生腳本，但不給就地編輯。
+  writable?: boolean;
+  // 產生這個結果集的原語句（不含注入的 USE 前綴）：用來推出可寫回的單一資料表。
+  sql?: string;
+}) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass: rowDetailShell } = useModalView();
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
   // 範圍選取（Shift+點選第二角）：null = 單格。Ctrl+C 複製整個矩形為 TSV，狀態列顯示統計。
   const [rangeEnd, setRangeEnd] = useState<{ r: number; c: number } | null>(null);
@@ -5791,13 +5941,62 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
     };
   }, [rowDetail]);
 
+  // 就地編輯後的覆寫（原始列索引 → 整列新值）：result 是 props 不能就地改，也不想為了改一格
+  // 重跑整段查詢（可能要跑幾十秒，還會打亂排序 / 篩選 / 捲動位置）。
+  const [patch, setPatch] = useState<Record<number, (string | null)[]>>({});
+  const baseRows = useMemo(() => {
+    const keys = Object.keys(patch);
+    if (keys.length === 0) return result.rows;
+    const out = result.rows.slice();
+    for (const k of keys) out[Number(k)] = patch[Number(k)];
+    return out;
+  }, [result.rows, patch]);
+
+  // 唯讀連線同樣要能把「這一格」對回原始列（產生 UPDATE 腳本用），所以這道解析只看 conn
+  // 不看 writable；能不能就地改另外用 editConn 收斂（唯讀時為 null，行為與過去一致）。
+  const editConn = writable ? conn ?? null : null;
+
+  // 可定位的目標表：單表 SELECT ＋ 該表有主鍵 ＋ 主鍵有被選出來 ＋ 每個結果欄都是實體欄位。
+  // 少一項就只給檢視，並把理由留在 editWhy —— 使用者要看得出是「不給改」而不是「壞了」。
+  const [rowTarget, setRowTarget] = useState<{ db: string; table: string; pk: string[] } | null>(null);
+  const [editWhy, setEditWhy] = useState<string | null>(null);
+  useEffect(() => {
+    setRowTarget(null);
+    setEditWhy(null);
+    if (!conn || !sql || result.columns.length === 0) return;
+    const tgt = parseEditTarget(sql);
+    if (!tgt) { setEditWhy(t("只有「單一資料表的 SELECT」能直接改：JOIN / UNION / GROUP BY / DISTINCT / 子查詢的結果對不回原始列。")); return; }
+    const db = tgt.database || conn.database;
+    if (!db) { setEditWhy(t("查詢沒指定資料庫，工具列先選「目前資料庫」才能寫回。")); return; }
+    let alive = true;
+    api.tableColumns(conn.connId, db, tgt.table)
+      .then((cols) => {
+        if (!alive) return;
+        const names = new Set(cols.map((c) => c.name.toLowerCase()));
+        // 每個結果欄都得對得上實體欄位：別名 / 運算式 / 聚合的標題對不上，放行等於
+        // 把 `AS x` 的別名當欄名送進 UPDATE。這一關同時擋掉沒有 GROUP BY 的聚合查詢。
+        const alias = result.columns.find((c) => !names.has(c.toLowerCase()));
+        if (alias) { setEditWhy(t("結果含非實體欄位「{col}」（別名或運算式），無法寫回。", { col: alias })); return; }
+        const pk = cols.filter((c) => c.key.toUpperCase() === "PRI").map((c) => c.name);
+        if (pk.length === 0) { setEditWhy(t("資料表 {table} 沒有主鍵，無法定位要改的那一列。", { table: tgt.table })); return; }
+        const lower = result.columns.map((c) => c.toLowerCase());
+        const missing = pk.find((k) => !lower.includes(k.toLowerCase()));
+        if (missing) { setEditWhy(t("結果沒有選出主鍵欄 {col}，無法定位要改的那一列。", { col: missing })); return; }
+        setRowTarget({ db, table: tgt.table, pk });
+      })
+      .catch((e: any) => { if (alive) setEditWhy(e?.message ?? t("讀取資料表結構失敗，暫不開放編輯。")); });
+    return () => { alive = false; };
+  }, [conn, sql, result.columns, t]);
+  // 就地編輯的目標＝可定位 ＋ 連線可寫。
+  const editTarget = editConn ? rowTarget : null;
+
   // 點欄位標題做 client-side 排序（asc → desc → 無）；數字欄以數值比較，NULL 最後。
   const [sort, setSort] = useState<{ c: number; dir: "asc" | "desc" } | null>(null);
   const sortedRows = useMemo(() => {
-    if (!sort) return result.rows;
+    if (!sort) return baseRows;
     const { c, dir } = sort;
     const f = dir === "asc" ? 1 : -1;
-    return [...result.rows].sort((ra, rb) => {
+    return [...baseRows].sort((ra, rb) => {
       const a = ra[c];
       const b = rb[c];
       if (a === null && b === null) return 0;
@@ -5808,7 +6007,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
       const bothNum = a !== "" && b !== "" && !Number.isNaN(na) && !Number.isNaN(nb);
       return (bothNum ? na - nb : a < b ? -1 : a > b ? 1 : 0) * f;
     });
-  }, [result.rows, sort]);
+  }, [baseRows, sort]);
 
   // client-side 篩選：任一儲存格含關鍵字（不分大小寫）。在排序後套用。
   const [rfilter, setRfilter] = useState("");
@@ -5831,7 +6030,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   // 將目前可視列（排序 + 篩選後）回報給父層，使複製 / 匯出與所見一致。
   useEffect(() => { onViewChange?.(viewRows); }, [viewRows, onViewChange]);
   // 新查詢結果到達時重置排序 / 篩選 / 選取（避免沿用上一個查詢的狀態，例如欄序失效或舊篩選字）。
-  useEffect(() => { setSort(null); setRfilter(""); setSelected(null); setRangeEnd(null); }, [result]);
+  useEffect(() => { setSort(null); setRfilter(""); setSelected(null); setRangeEnd(null); setPatch({}); }, [result]);
 
   // 大結果集只渲染前 N 列，避免數萬列 DOM 卡死 UI；複製 / 匯出仍取全部。
   // 多結果集堆疊時由父層按格數縮小上限（總 DOM 列數有預算）。
@@ -5865,6 +6064,55 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
     );
   const toggleSort = (ci: number) =>
     setSort((s) => (s?.c === ci ? (s.dir === "asc" ? { c: ci, dir: "desc" } : null) : { c: ci, dir: "asc" }));
+
+  // 產生「只改這一格」的 UPDATE 腳本，開新查詢分頁承接（不直接寫入、也不蓋掉目前這條查詢）。
+  // 只要能把列對回原表就給，不看連線是否唯讀——唯讀時自己不能改，正是最需要一份 SQL 交出去的情境。
+  // text 可指定（儲存格檢視器裡排版 / 改過的內容），未給則用目前格內的值。
+  const cellUpdateScript = (r: number, c: number, text?: string | null) => {
+    if (!conn || !rowTarget) return;
+    const row = viewRows[r];
+    if (!row) return;
+    const lower = result.columns.map((x) => x.toLowerCase());
+    const pkValues = rowTarget.pk.map((k) => row[lower.indexOf(k.toLowerCase())] ?? null);
+    if (pkValues.some((v) => v === null)) { toast.error(t("這一列的主鍵是 NULL，無法定位，產生不了腳本。")); return; }
+    const script = buildCellUpdate(
+      conn.kind, rowTarget.db, rowTarget.table, result.columns[c],
+      text === undefined ? cell(r, c) : text,
+      rowTarget.pk, pkValues,
+    );
+    useStore.getState().newQueryTab(script, conn.connId);
+    toast.success(t("已產生 UPDATE 腳本（新查詢分頁）"));
+  };
+
+  // 把一格改動寫回資料庫；成功才更新畫面，失敗時畫面留在資料庫真正的值，不會出現假的已存狀態。
+  const applyEdit = async (r: number, c: number, rawText: string, setNull: boolean) => {
+    if (!editTarget || !editConn) return;
+    const row = viewRows[r];
+    if (!row) return;
+    const lower = result.columns.map((x) => x.toLowerCase());
+    const pkValues = editTarget.pk.map((k) => row[lower.indexOf(k.toLowerCase())] ?? null);
+    if (pkValues.some((v) => v === null)) { toast.error(t("這一列的主鍵是 NULL，無法定位，請改從資料表分頁編輯。")); return; }
+    const newValue = setNull ? null : rawText;
+    if ((row[c] ?? null) === newValue) return;
+    try {
+      const n = await api.updateCell(editConn.connId, editTarget.db, editTarget.table, {
+        column: result.columns[c],
+        new_value: newValue,
+        pk_columns: editTarget.pk,
+        pk_values: pkValues,
+      });
+      // viewRows 的元素就是 baseRows 的元素（排序 / 篩選只換順序，不複製列）→ 可用參考回推原始索引。
+      const idx = baseRows.indexOf(row);
+      if (idx >= 0) {
+        const next = row.slice();
+        next[c] = newValue;
+        setPatch((m) => ({ ...m, [idx]: next }));
+      }
+      toast.success(t("已更新 {n} 列", { n }));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("更新失敗"));
+    }
+  };
 
   // 範圍選取矩形（結果集無隱藏欄，欄序即 0..n-1）：Shift+點選第二角。
   const rangeBox = selected && rangeEnd
@@ -5907,6 +6155,11 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   }, [selected, rangeEnd]);
 
   const onKey = (e: React.KeyboardEvent) => {
+    // 浮層與篩選框的鍵盤事件會沿著 React 元件樹冒泡到這裡（浮層已 portal 到 body，DOM 上不在裡面，
+    // 但 React 事件仍走元件樹）。不擋的話在儲存格檢視窗裡按方向鍵會被 preventDefault 吃掉，
+    // 游標動不了；篩選框裡按方向鍵同理。
+    const tag = (e.target as HTMLElement | null)?.tagName;
+    if (inspect || rowDetail !== null || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     if (e.key === "Escape") {
       // Esc 先關開啟中的選單，其次取消儲存格 / 範圍選取。
       if (menu || colMenu) { setMenu(null); setColMenu(null); }
@@ -6013,6 +6266,18 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
         <span className="text-xs text-fg/40">
           {rfilter.trim() ? t("{length} / {v2} 列", { length: viewRows.length, v2: result.rows.length }) : t("{length} 列", { length: result.rows.length })}
         </span>
+        {/* 能不能就地改要講清楚：能改就標出寫回哪張表，不能改就把原因掛在 tooltip 上。 */}
+        {editConn && (editTarget ? (
+          <span title={t("點儲存格可直接改，以主鍵（{pk}）寫回 {db}.{table}", { pk: editTarget.pk.join(", "), db: editTarget.db, table: editTarget.table })}
+            className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-400/15 text-emerald-300/90 whitespace-nowrap cursor-help">
+            {t("可編輯")}
+          </span>
+        ) : editWhy ? (
+          <span title={editWhy}
+            className="text-[10px] px-1.5 py-0.5 rounded bg-fg/10 text-fg/40 whitespace-nowrap cursor-help">
+            {t("唯讀結果")}
+          </span>
+        ) : null)}
         {selStats && (
           <span className="ml-auto text-xs text-fg/45 mono whitespace-nowrap" title={t("框選範圍統計（Shift+點選）")}>
             {t("已選 {rows}×{colsN}（{count} 格）", { rows: selStats.rows, colsN: selStats.colsN, count: selStats.count })}
@@ -6097,13 +6362,13 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
         </div>
       )}
 
-      {colMenu && (
+      {/* 浮層一律 portal 到 body：多結果集的每一格 <section> 帶 content-visibility:auto，
+          它隱含 contain:paint，會讓 position:fixed 的子元素改以該 section 為定位基準並被裁切 ——
+          症狀就是點儲存格「跳窗跳不出來」（遮罩只蓋住那一格、對話框被裁掉）。 */}
+      {createPortal(
         <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setColMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setColMenu(null); }} />
-          <div className="fixed z-[90] min-w-[150px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: colMenu.x, top: colMenu.y }}>
+        {colMenu && (
+          <MenuPanel x={colMenu.x} y={colMenu.y} minW={150} onClose={() => setColMenu(null)}>
             {(
               [
                 [t("升冪排序 ▲"), () => setSort({ c: colMenu.c, dir: "asc" })],
@@ -6119,55 +6384,52 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                 {label}
               </button>
             ))}
+          </MenuPanel>
+        )}
+
+        {inspect && (
+          <CellInspector
+            column={result.columns[inspect.c]}
+            value={cell(inspect.r, inspect.c)}
+            editable={!!editTarget}
+            onSave={(rawText, setNull) => void applyEdit(inspect.r, inspect.c, rawText, setNull)}
+            // 能把列對回原表就給「產生 UPDATE 腳本」：可用視窗裡排版 / 改過的內容產生，唯讀連線也給。
+            onScript={conn && rowTarget ? (text) => cellUpdateScript(inspect.r, inspect.c, text) : undefined}
+            onClose={() => { if (Date.now() - inspectOpenedAt.current > 300) setInspect(null); }}
+          />
+        )}
+
+        {rowDetail !== null && viewRows[rowDetail] && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={() => setRowDetail(null)}>
+            <div className={`bg-elevated w-[560px] max-w-[92vw] max-h-[84vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${rowDetailShell}`}
+              onClick={(e) => e.stopPropagation()}>
+              <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
+                <span className="font-medium text-sm">{t("列詳情")}</span>
+                <span className="text-xs text-fg/40">{t("第 {n} 列", { n: rowDetail + 1 })}</span>
+                <ModalViewControls code className="ml-auto" />
+                <button type="button" onClick={() => setRowDetail(null)} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+              </div>
+              <div className="overflow-auto divide-y divide-fg/5">
+                {result.columns.map((col, j) => {
+                  const v = viewRows[rowDetail][j];
+                  return (
+                    <div key={col} className="flex gap-3 px-4 py-1.5 code-scale hover:bg-fg/5">
+                      <span className="text-fg/45 w-40 shrink-0 mono break-all">{col}</span>
+                      <span className="text-fg/85 mono break-all flex-1">{v === null ? <span className="text-fg/30 italic">NULL</span> : v}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="px-5 py-3 border-t border-fg/10 flex justify-end">
+                <button type="button" onClick={() => setRowDetail(null)}
+                  className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("關閉")}</button>
+              </div>
+            </div>
           </div>
-        </>
-      )}
+        )}
 
-      {inspect && (
-        <CellInspector
-          column={result.columns[inspect.c]}
-          value={cell(inspect.r, inspect.c)}
-          editable={false}
-          onSave={() => {}}
-          onClose={() => { if (Date.now() - inspectOpenedAt.current > 300) setInspect(null); }}
-        />
-      )}
-
-      {rowDetail !== null && viewRows[rowDetail] && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={() => setRowDetail(null)}>
-          <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[84vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}>
-            <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
-              <span className="font-medium text-sm">{t("列詳情")}</span>
-              <span className="text-xs text-fg/40">{t("第 {n} 列", { n: rowDetail + 1 })}</span>
-              <button type="button" onClick={() => setRowDetail(null)} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
-            </div>
-            <div className="overflow-auto divide-y divide-fg/5">
-              {result.columns.map((col, j) => {
-                const v = viewRows[rowDetail][j];
-                return (
-                  <div key={col} className="flex gap-3 px-4 py-1.5 text-sm hover:bg-fg/5">
-                    <span className="text-fg/45 w-40 shrink-0 mono break-all">{col}</span>
-                    <span className="text-fg/85 mono break-all flex-1">{v === null ? <span className="text-fg/30 italic">NULL</span> : v}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="px-5 py-3 border-t border-fg/10 flex justify-end">
-              <button type="button" onClick={() => setRowDetail(null)}
-                className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("關閉")}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {menu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
-          <div className="fixed z-[90] min-w-[160px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: menu.x, top: menu.y }}>
+        {menu && (
+          <MenuPanel x={menu.x} y={menu.y} minW={160} onClose={() => setMenu(null)}>
             {(
               [
                 [t("檢視內容…"), () => openInspect(menu.r, menu.c)],
@@ -6185,6 +6447,10 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                 [t("複製整列（含標題列）"), () => copyRowTsvWithHeader(menu.r)],
                 [t("複製整列 (JSON)"), () => copyRowJson(menu.r)],
                 [t("複製整欄"), () => copyCol(menu.c)],
+                // 只改這一格的 UPDATE 腳本（開新查詢分頁）：能把列對回原表就給，唯讀連線也給。
+                ...(conn && rowTarget
+                  ? [[t("產生 UPDATE 腳本（僅此欄）"), () => cellUpdateScript(menu.r, menu.c)] as [string, () => void]]
+                  : []),
               ] as [string, () => void][]
             ).map(([label, fn]) => (
               <button key={label} type="button"
@@ -6193,8 +6459,10 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
                 {label}
               </button>
             ))}
-          </div>
-        </>
+          </MenuPanel>
+        )}
+        </>,
+        document.body,
       )}
     </div>
   );

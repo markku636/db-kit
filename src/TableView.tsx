@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ListTree, Table2, Plus, Minus, BarChart3, Network, Settings, Terminal,
   RefreshCw, Search, Filter, Trash2, ArrowUpDown, Download, Upload, X, Check,
@@ -6,7 +6,7 @@ import {
   Copy, Pencil, Columns3,
 } from "lucide-react";
 import Icon from "./ui/Icon";
-import { Button, EmptyState } from "./ui/index";
+import { Button, EmptyState, MenuPanel, ModalViewControls, useModalView } from "./ui/index";
 import {
   api, ColumnInfo, ColumnStats, DbKind, ErRelation, Filter as FilterCond, ForeignKeyInfo, IndexInfo, KeyDetail, KeyEdit, KeyPage,
   MongoIndexOptions, MongoIndexStat, MongoValidation, PagedData, RowInsert, Sort, SortDir,
@@ -17,7 +17,7 @@ import KafkaTopicConfig from "./KafkaTopicConfig";
 import RabbitMqQueueBrowser from "./RabbitMqQueueBrowser";
 import RabbitMqQueueDetail from "./RabbitMqQueueDetail";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
-import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, TYPE_PRESETS } from "./sql";
+import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
@@ -267,7 +267,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
       .then((cols) => {
         if (!alive) return;
         const m: Record<string, string> = {};
-        for (const col of cols) if (col.comment) m[col.name] = col.comment;
+        for (const col of cols) {
+          if (col.comment) m[col.name] = col.comment;
+        }
         setCommentMap(m);
       })
       .catch(() => { if (alive) setCommentMap({}); });
@@ -320,17 +322,22 @@ function DataPane({ tab }: { tab: OpenTab }) {
     return () => window.removeEventListener("keydown", h);
   }, [cellMenu, colMenu, refChooser]);
 
+  // 拖曳中的欄名；供下方 layout effect 把被拖的界線留在可視範圍內。
+  const resizingCol = useRef<string | null>(null);
+
   // 拖曳表頭右緣調整欄寬（在 window 上掛 move/up，拖出表頭也能追蹤）。
   const startResize = (col: string, e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
     const startW = colWidth(col);
+    resizingCol.current = col;
     const onMove = (ev: PointerEvent) => {
       const next = Math.max(MIN_COL_W, startW + (ev.clientX - startX));
       setWidths((w) => ({ ...w, [col]: next }));
     };
     const onUp = () => {
+      resizingCol.current = null;
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       document.body.style.cursor = "";
@@ -349,6 +356,22 @@ function DataPane({ tab }: { tab: OpenTab }) {
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   };
+
+  // 拖曳中讓被拖的欄界線保持在可視範圍內（等同 Excel / Navicat 拖到邊緣會自動捲動）。
+  // 少了這段，最後一欄一旦被拉寬到超出格子寬度，它的右緣就被推到格子外（右側面板底下），
+  // 把手再也抓不到 —— 該欄等於只能調整一次、之後完全動不了。
+  useLayoutEffect(() => {
+    const col = resizingCol.current;
+    const grid = gridRef.current;
+    if (!col || !grid) return;
+    const th = [...grid.querySelectorAll<HTMLElement>("thead th[data-col]")].find((el) => el.dataset.col === col);
+    if (!th) return;
+    const gr = grid.getBoundingClientRect();
+    const edge = th.getBoundingClientRect().right;
+    const clientRight = gr.left + grid.clientWidth; // clientWidth 已扣掉垂直捲軸
+    if (edge > clientRight) grid.scrollLeft += edge - clientRight;
+    else if (edge < gr.left) grid.scrollLeft -= gr.left - edge;
+  }, [widths]);
 
   // 雙擊欄分隔線：依內容自動調整欄寬（致敬 Navicat / TablePlus 的 auto-fit）。
   // 以 canvas 量測表頭與目前頁各儲存格文字寬度，取最大值（含內距，夾在 [MIN, 600]）。
@@ -846,6 +869,20 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const k = connKind ?? "mysql";
     copyToClipboard(buildRowSelect(k, tab.table, data.primary_key, pkValuesOf(r)), t("已複製為 SELECT"));
   };
+  // 產生「只改這一欄」的 UPDATE 腳本，開一個新查詢分頁承接（不直接寫入、也不蓋掉別的分頁）。
+  // 刻意不受 editable 限制：唯讀連線（qland 正式環境）正是最需要腳本的情境——自己不能改，
+  // 但要把一份可執行的 SQL 交出去。真要執行時仍會被唯讀連線的防護擋下。
+  // text 可指定（儲存格檢視器裡排版 / 改過的內容），未給則用目前格內的值。
+  const cellUpdateScript = (r: number, c: number, text?: string | null) => {
+    if (!data || !connKind) return;
+    const sql = buildCellUpdate(
+      connKind, tab.database, tab.table, data.columns[c],
+      text === undefined ? cellValue(r, c) : text,
+      data.primary_key, pkValuesOf(r),
+    );
+    useStore.getState().newQueryTab(sql, tab.connId);
+    toast.success(t("已產生 UPDATE 腳本（新查詢分頁）"));
+  };
   const duplicateRow = (r: number) => {
     if (!data) return;
     const vals = rowValues(r);
@@ -904,7 +941,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
       ...(isSqlKind ? [[t("複製為 INSERT"), () => copyRowInsert(r), false] as [string, () => void, boolean]] : []),
       // SELECT（定位此列）：需主鍵但唯讀安全，唯讀連線也提供。
       ...(isSqlKind && (data?.primary_key.length ?? 0) > 0
-        ? [[t("複製為 SELECT（定位此列）"), () => copyRowSelect(r), false] as [string, () => void, boolean]]
+        ? [
+            [t("複製為 SELECT（定位此列）"), () => copyRowSelect(r), false] as [string, () => void, boolean],
+            // UPDATE 腳本（只改這一欄）：帶到查詢編輯器，不直接寫入，故與 SELECT 同一層開放。
+            [t("產生 UPDATE 腳本（僅此欄）"), () => cellUpdateScript(r, c), false] as [string, () => void, boolean],
+          ]
         : []),
       // UPDATE / DELETE 範本需主鍵定位。
       ...(isSqlKind && editable
@@ -1536,6 +1577,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
                     <th
                       key={c}
                       scope="col"
+                      data-col={c}
                       tabIndex={0}
                       {...(dir ? { "aria-sort": dir === "asc" ? "ascending" : "descending" } : {})}
                       onClick={(e) => toggleSort(c, e.shiftKey)}
@@ -1566,7 +1608,23 @@ function DataPane({ tab }: { tab: OpenTab }) {
                     </th>
                   );
                 })}
-                {editable && <th className="w-8 border-b border-fg/10" />}
+                {editable && (
+                  <th className="relative w-8 border-b border-fg/10">
+                    {/* 最後一欄的界線也能從操作欄這側抓：原本只有 6px 又緊貼刪除鈕欄，很難瞄準 */}
+                    {visibleCols.length > 0 && (() => {
+                      const lastVis = visibleCols[visibleCols.length - 1];
+                      return (
+                        <span
+                          onPointerDown={(e) => startResize(lastVis.name, e)}
+                          onClick={(e) => e.stopPropagation()}
+                          onDoubleClick={(e) => { e.stopPropagation(); autoFitColumn(lastVis.name, lastVis.j); }}
+                          title={t("拖曳調整欄寬；雙擊自動符合內容")}
+                          className="absolute left-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-accent/50"
+                        />
+                      );
+                    })()}
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="mono">
@@ -1757,167 +1815,137 @@ function DataPane({ tab }: { tab: OpenTab }) {
       )}
 
       {rowMenu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setRowMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setRowMenu(null); }} />
-          <div className="fixed z-[90] min-w-[150px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: rowMenu.x, top: rowMenu.y }}>
-            {(
-              [
-                // 唯讀連線只留「看」與「複製」；寫入項（新增 / 改名 / TTL / 刪除）整批隱藏，
-                // 與資料格 editable 的唯讀規則一致。
-                [t("檢視 / 編輯內容…"), () => setDetailKey(rowMenu.key), false],
-                ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(namespaceOf(rowMenu.key)), false] as [string, () => void, boolean]]),
-                [t("複製鍵名"), () => copyToClipboard(rowMenu.key, t("已複製鍵名")), false],
-                [t("複製鍵值"), () => copyKeyValue(rowMenu.key), false],
-                ...(readonly ? [] : ([
-                  [t("重新命名…"), () => renameKey(rowMenu.key), false],
-                  [t("設定 TTL…"), () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
-                ] as [string, () => void, boolean][])),
-                [t("重新整理"), () => refresh(), false],
-                ...(readonly ? [] : [[t("刪除"), () => deleteKey(rowMenu.key), true] as [string, () => void, boolean]]),
-              ] as [string, () => void, boolean][]
-            ).map(([label, fn, danger]) => (
-              <button key={label} type="button"
-                onClick={() => { setRowMenu(null); fn(); }}
-                className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </>
+        <MenuPanel x={rowMenu.x} y={rowMenu.y} minW={150} onClose={() => setRowMenu(null)}>
+          {(
+            [
+              // 唯讀連線只留「看」與「複製」；寫入項（新增 / 改名 / TTL / 刪除）整批隱藏，
+              // 與資料格 editable 的唯讀規則一致。
+              [t("檢視 / 編輯內容…"), () => setDetailKey(rowMenu.key), false],
+              ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(namespaceOf(rowMenu.key)), false] as [string, () => void, boolean]]),
+              [t("複製鍵名"), () => copyToClipboard(rowMenu.key, t("已複製鍵名")), false],
+              [t("複製鍵值"), () => copyKeyValue(rowMenu.key), false],
+              ...(readonly ? [] : ([
+                [t("重新命名…"), () => renameKey(rowMenu.key), false],
+                [t("設定 TTL…"), () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
+              ] as [string, () => void, boolean][])),
+              [t("重新整理"), () => refresh(), false],
+              ...(readonly ? [] : [[t("刪除"), () => deleteKey(rowMenu.key), true] as [string, () => void, boolean]]),
+            ] as [string, () => void, boolean][]
+          ).map(([label, fn, danger]) => (
+            <button key={label} type="button"
+              onClick={() => { setRowMenu(null); fn(); }}
+              className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
+              {label}
+            </button>
+          ))}
+        </MenuPanel>
       )}
 
       {/* Redis 鍵樹：命名空間（資料夾）/ 空白處右鍵選單 */}
       {folderMenu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setFolderMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setFolderMenu(null); }} />
-          <div className="fixed z-[90] min-w-[180px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: folderMenu.x, top: folderMenu.y }}>
-            {(() => {
-              const { prefix, keys } = folderMenu;
-              // 唯讀連線隱藏寫入項（新增鍵 / 刪除整段），保留瀏覽與複製。
-              const items: [string, () => void, boolean][] = prefix
-                ? [
-                    ...(readonly ? [] : [[t("在此命名空間新增鍵…"), () => openNewKey(`${prefix}:`), false] as [string, () => void, boolean]]),
-                    // 把 SCAN 樣式縮到此前綴：大型實例上鍵樹有 10,000 筆上限，縮範圍才看得到全貌。
-                    [t("只顯示此命名空間"), () => focusTree(`${prefix}:*`), false],
-                    [t("複製前綴"), () => copyToClipboard(prefix, t("已複製前綴")), false],
-                    [t("重新整理"), () => refresh(), false],
-                    ...(readonly ? [] : [[t("刪除此命名空間（{n} 個鍵）…", { n: keys.length }), () => deleteKeyNamespace(prefix, keys), true] as [string, () => void, boolean]]),
-                  ]
-                : [
-                    ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(), false] as [string, () => void, boolean]]),
-                    [t("顯示全部鍵"), () => focusTree("*"), false],
-                    [t("重新整理"), () => refresh(), false],
-                  ];
-              return items.map(([label, fn, danger]) => (
-                <button key={label} type="button"
-                  onClick={() => { setFolderMenu(null); fn(); }}
-                  className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
-                  {label}
-                </button>
-              ));
-            })()}
-          </div>
-        </>
+        <MenuPanel x={folderMenu.x} y={folderMenu.y} minW={180} onClose={() => setFolderMenu(null)}>
+          {(() => {
+            const { prefix, keys } = folderMenu;
+            // 唯讀連線隱藏寫入項（新增鍵 / 刪除整段），保留瀏覽與複製。
+            const items: [string, () => void, boolean][] = prefix
+              ? [
+                  ...(readonly ? [] : [[t("在此命名空間新增鍵…"), () => openNewKey(`${prefix}:`), false] as [string, () => void, boolean]]),
+                  // 把 SCAN 樣式縮到此前綴：大型實例上鍵樹有 10,000 筆上限，縮範圍才看得到全貌。
+                  [t("只顯示此命名空間"), () => focusTree(`${prefix}:*`), false],
+                  [t("複製前綴"), () => copyToClipboard(prefix, t("已複製前綴")), false],
+                  [t("重新整理"), () => refresh(), false],
+                  ...(readonly ? [] : [[t("刪除此命名空間（{n} 個鍵）…", { n: keys.length }), () => deleteKeyNamespace(prefix, keys), true] as [string, () => void, boolean]]),
+                ]
+              : [
+                  ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(), false] as [string, () => void, boolean]]),
+                  [t("顯示全部鍵"), () => focusTree("*"), false],
+                  [t("重新整理"), () => refresh(), false],
+                ];
+            return items.map(([label, fn, danger]) => (
+              <button key={label} type="button"
+                onClick={() => { setFolderMenu(null); fn(); }}
+                className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
+                {label}
+              </button>
+            ));
+          })()}
+        </MenuPanel>
       )}
 
       {/* SQL 表儲存格右鍵選單 */}
       {cellMenu && data && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setCellMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setCellMenu(null); }} />
-          <div className="fixed z-[90] min-w-[180px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: cellMenu.x, top: cellMenu.y }}>
-            {cellMenuItems(cellMenu.r, cellMenu.c).map((it, idx) => {
-              if (it === "sep") return <div key={`sep-${idx}`} className="my-1 border-t border-fg/10" />;
-              const [label, fn, danger] = it;
-              return (
-                <button key={label} type="button"
-                  onClick={() => { setCellMenu(null); fn(); }}
-                  className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </>
+        <MenuPanel x={cellMenu.x} y={cellMenu.y} minW={180} onClose={() => setCellMenu(null)}>
+          {cellMenuItems(cellMenu.r, cellMenu.c).map((it, idx) => {
+            if (it === "sep") return <div key={`sep-${idx}`} className="my-1 border-t border-fg/10" />;
+            const [label, fn, danger] = it;
+            return (
+              <button key={label} type="button"
+                onClick={() => { setCellMenu(null); fn(); }}
+                className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
+                {label}
+              </button>
+            );
+          })}
+        </MenuPanel>
       )}
 
       {/* 欄位標題右鍵選單 */}
       {colMenu && data && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setColMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setColMenu(null); }} />
-          <div className="fixed z-[90] min-w-[170px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: colMenu.x, top: colMenu.y }}>
-            {(
-              [
-                [t("升冪排序 ▲"), async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "asc" }]); } }],
-                [t("降冪排序 ▼"), async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "desc" }]); } }],
-                ...(sorts.length ? [[t("清除排序"), async () => { if (await guardDiscard()) setSorts([]); }] as [string, () => void]] : []),
-                [t("自動符合寬度"), () => autoFitColumn(colMenu.col, colMenu.ci)],
-                [t("複製欄名"), () => copyToClipboard(colMenu.col, t("已複製欄名"))],
-                [t("複製所有欄名（逗號分隔）"), () => copyToClipboard(data.columns.join(", "), t("已複製所有欄名"))],
-                [t("複製整欄（本頁）"), () => copyToClipboard(data.rows.map((_, ri) => cellValue(ri, colMenu.ci) ?? "").join("\n"), t("已複製整欄"))],
-                ...(isSqlKind && connKind ? [[t("複製整欄為 IN(...)（本頁）"), () => copyToClipboard(buildInClause(connKind, colMenu.col, data.rows.map((_, ri) => cellValue(ri, colMenu.ci))), t("已複製 IN 子句"))] as [string, () => void]] : []),
-                ...(isSqlKind || isMongo ? [[t("欄位統計（總數/非空/相異）"), () => colStats(colMenu.col)] as [string, () => void]] : []),
-                ...(isSqlKind && connKind ? [[t("相異值分布（Top 50）"), () => {
-                  const qc = quoteIdent(connKind, colMenu.col);
-                  const sql = `SELECT ${qc}, COUNT(*) AS n\nFROM ${qualifiedName(connKind, tab.database, tab.table)}\nGROUP BY ${qc}\nORDER BY n DESC\nLIMIT 50;`;
-                  useStore.getState().setActive(tab.connId);
-                  useStore.getState().requestQuery(sql);
-                }] as [string, () => void]] : []),
-                ...(isMongo ? [[t("相異值分布（Top 50）"), () => {
-                  // 生成 $group 聚合 DSL 到查詢編輯器（與 SQL 版對稱）。
-                  const dsl = JSON.stringify({
-                    db: tab.database, collection: tab.table,
-                    pipeline: [
-                      { $group: { _id: `$${colMenu.col}`, n: { $sum: 1 } } },
-                      { $sort: { n: -1 } }, { $limit: 50 },
-                    ],
-                  }, null, 2);
-                  useStore.getState().setActive(tab.connId);
-                  useStore.getState().requestQuery(dsl);
-                }] as [string, () => void]] : []),
-                [t("隱藏此欄"), () => hideColumn(colMenu.col)],
-                ...(hidden.length ? [[t("顯示所有欄"), () => showAllColumns()] as [string, () => void]] : []),
-              ] as [string, () => void][]
-            ).map(([label, fn]) => (
-              <button key={label} type="button"
-                onClick={() => { setColMenu(null); fn(); }}
-                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
-                {label}
-              </button>
-            ))}
-          </div>
-        </>
+        <MenuPanel x={colMenu.x} y={colMenu.y} minW={170} onClose={() => setColMenu(null)}>
+          {(
+            [
+              [t("升冪排序 ▲"), async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "asc" }]); } }],
+              [t("降冪排序 ▼"), async () => { if (await guardDiscard()) { setPage(0); setSorts([{ column: colMenu.col, dir: "desc" }]); } }],
+              ...(sorts.length ? [[t("清除排序"), async () => { if (await guardDiscard()) setSorts([]); }] as [string, () => void]] : []),
+              [t("自動符合寬度"), () => autoFitColumn(colMenu.col, colMenu.ci)],
+              [t("複製欄名"), () => copyToClipboard(colMenu.col, t("已複製欄名"))],
+              [t("複製所有欄名（逗號分隔）"), () => copyToClipboard(data.columns.join(", "), t("已複製所有欄名"))],
+              [t("複製整欄（本頁）"), () => copyToClipboard(data.rows.map((_, ri) => cellValue(ri, colMenu.ci) ?? "").join("\n"), t("已複製整欄"))],
+              ...(isSqlKind && connKind ? [[t("複製整欄為 IN(...)（本頁）"), () => copyToClipboard(buildInClause(connKind, colMenu.col, data.rows.map((_, ri) => cellValue(ri, colMenu.ci))), t("已複製 IN 子句"))] as [string, () => void]] : []),
+              ...(isSqlKind || isMongo ? [[t("欄位統計（總數/非空/相異）"), () => colStats(colMenu.col)] as [string, () => void]] : []),
+              ...(isSqlKind && connKind ? [[t("相異值分布（Top 50）"), () => {
+                const qc = quoteIdent(connKind, colMenu.col);
+                const sql = `SELECT ${qc}, COUNT(*) AS n\nFROM ${qualifiedName(connKind, tab.database, tab.table)}\nGROUP BY ${qc}\nORDER BY n DESC\nLIMIT 50;`;
+                useStore.getState().setActive(tab.connId);
+                useStore.getState().requestQuery(sql);
+              }] as [string, () => void]] : []),
+              ...(isMongo ? [[t("相異值分布（Top 50）"), () => {
+                // 生成 $group 聚合 DSL 到查詢編輯器（與 SQL 版對稱）。
+                const dsl = JSON.stringify({
+                  db: tab.database, collection: tab.table,
+                  pipeline: [
+                    { $group: { _id: `$${colMenu.col}`, n: { $sum: 1 } } },
+                    { $sort: { n: -1 } }, { $limit: 50 },
+                  ],
+                }, null, 2);
+                useStore.getState().setActive(tab.connId);
+                useStore.getState().requestQuery(dsl);
+              }] as [string, () => void]] : []),
+              [t("隱藏此欄"), () => hideColumn(colMenu.col)],
+              ...(hidden.length ? [[t("顯示所有欄"), () => showAllColumns()] as [string, () => void]] : []),
+            ] as [string, () => void][]
+          ).map(([label, fn]) => (
+            <button key={label} type="button"
+              onClick={() => { setColMenu(null); fn(); }}
+              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+              {label}
+            </button>
+          ))}
+        </MenuPanel>
       )}
 
       {/* 反向外鍵：多個來源表時的選擇器 */}
       {refChooser && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setRefChooser(null)}
-            onContextMenu={(e) => { e.preventDefault(); setRefChooser(null); }} />
-          <div className="fixed z-[90] min-w-[200px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: refChooser.x, top: refChooser.y }}>
-            <div className="px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">{t("參照此列的資料表")}</div>
-            {refChooser.options.map((rel) => (
-              <button key={`${rel.from_table}.${rel.from_column}`} type="button"
-                onClick={() => { const o = refChooser; setRefChooser(null); useStore.getState().openTableFiltered(tab.connId, tab.database, rel.from_table, rel.from_column, o.value); }}
-                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80 mono text-xs">
-                {rel.from_table}.{rel.from_column}
-              </button>
-            ))}
-          </div>
-        </>
+        <MenuPanel x={refChooser.x} y={refChooser.y} minW={200} onClose={() => setRefChooser(null)}>
+          <div className="px-3 py-1 text-[11px] text-fg/40 border-b border-fg/10">{t("參照此列的資料表")}</div>
+          {refChooser.options.map((rel) => (
+            <button key={`${rel.from_table}.${rel.from_column}`} type="button"
+              onClick={() => { const o = refChooser; setRefChooser(null); useStore.getState().openTableFiltered(tab.connId, tab.database, rel.from_table, rel.from_column, o.value); }}
+              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80 mono text-xs">
+              {rel.from_table}.{rel.from_column}
+            </button>
+          ))}
+        </MenuPanel>
       )}
 
       {/* 儲存格內容檢視器（長文字 / JSON / 二進位） */}
@@ -1927,6 +1955,10 @@ function DataPane({ tab }: { tab: OpenTab }) {
           value={cellValue(inspect.r, inspect.c)}
           editable={editable}
           onSave={(raw, setNull) => commitEdit(inspect.r, inspect.c, raw, setNull)}
+          // 需主鍵定位才生得出 WHERE；唯讀連線同樣提供（只是產生腳本，不寫入）。
+          onScript={isSqlKind && connKind && data.primary_key.length > 0
+            ? (text) => cellUpdateScript(inspect.r, inspect.c, text)
+            : undefined}
           onClose={() => setInspect(null)}
         />
       )}
@@ -1967,16 +1999,19 @@ function DataPane({ tab }: { tab: OpenTab }) {
 // Mongo 欄位統計視窗：型別分布橫條（混型欄位核心資訊）+ Top-10 值 + 缺欄 / null / 相異值 / 抽樣註記。
 function FieldStatsModal({ col, stats, onClose }: { col: string; stats: ColumnStats; onClose: () => void }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   useModalOverlay(onClose);
   const typeTotal = stats.types.reduce((a, [, n]) => a + n, 0) || 1;
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[80vh] overflow-auto rounded-lg border border-fg/10 shadow-2xl"
+      <div className={`bg-elevated w-[560px] max-w-[92vw] max-h-[80vh] overflow-auto rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
           <Icon icon={BarChart3} size={14} className="text-green-400" />
           <span className="font-medium text-sm">{t("欄位統計 ·")} <span className="mono">{col}</span></span>
-          <button type="button" onClick={onClose} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+          <ModalViewControls className="ml-auto" />
+          <button type="button" onClick={onClose} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
         <div className="p-4 space-y-4 text-sm">
           <div className="flex flex-wrap gap-2 text-xs">
@@ -2042,6 +2077,8 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
   onClose: () => void; onSaved: () => void;
 }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   const [text, setText] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -2075,12 +2112,13 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-elevated w-[640px] max-h-[85vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+      <div className={`bg-elevated w-[640px] max-h-[85vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
           <span className="font-medium text-sm">{t("編輯文件（JSON）")}</span>
           <span className="text-xs text-fg/40 mono truncate">{table}</span>
-          <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+          <ModalViewControls code className="ml-auto" />
+          <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
         <div className="p-4 overflow-auto flex-1">
           {err && <div className="text-danger text-sm mono mb-2 break-all">{err}</div>}
@@ -2088,7 +2126,7 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
             <div className="text-fg/40 text-sm">{t("讀取中…")}</div>
           ) : (
             <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
-              className="w-full h-96 bg-inset border border-fg/10 rounded p-3 mono text-sm outline-none focus:border-accent resize-none" />
+              className="w-full h-96 bg-inset border border-fg/10 rounded p-3 mono code-scale outline-none focus:border-accent resize-none" />
           )}
         </div>
         <div className="px-5 py-3 border-t border-fg/10 flex items-center gap-2">
@@ -2118,6 +2156,8 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
   onClose: () => void;
 }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   useModalCount(); // 開啟期間讓全域快捷鍵（Ctrl+W/Tab、"/"）讓路，不在背後動作
   // 記錄瀏覽器鍵盤：↑/PageUp 上一列、↓/PageDown 下一列、Esc 關閉（編輯欄位時方向鍵交給輸入框）。
   useEffect(() => {
@@ -2135,7 +2175,7 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={onClose}>
-      <div className="bg-elevated w-[560px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+      <div className={`bg-elevated w-[560px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2 text-sm">
           <span className="font-medium">{t("第 {rowNo} 列", { rowNo })}</span>
@@ -2155,7 +2195,7 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
               {editable ? (
                 <RowField value={values[ci]} onSave={(raw, setNull) => onEdit(ci, raw, setNull)} />
               ) : (
-                <span className="flex-1 mono text-sm break-all py-1" data-selectable>
+                <span className="flex-1 mono code-scale break-all py-1" data-selectable>
                   {values[ci] === null ? <span className="text-fg/30 italic">NULL</span> : values[ci]}
                 </span>
               )}
@@ -2188,31 +2228,98 @@ function RowField({ value, onSave }: { value: string | null; onSave: (raw: strin
   );
 }
 
-// 儲存格內容檢視器：檢視 / 編輯長文字、JSON、二進位預覽。可一鍵格式化 JSON、複製。
-export function CellInspector({ column, value, editable, onSave, onClose, showFormat = true }: {
+// 儲存格內容檢視器：檢視 / 編輯長文字、JSON、二進位預覽。可切換 JSON 排版、複製、產生 UPDATE 腳本。
+export function CellInspector({ column, value, editable, onSave, onClose, onScript, showFormat = true }: {
   column: string;
   value: string | null;
   editable: boolean;
   onSave: (raw: string, setNull: boolean) => void;
   onClose: () => void;
+  // 由呼叫端（知道表 / 主鍵的那一層）把目前內容變成 UPDATE 腳本。未給則不顯示該按鈕。
+  onScript?: (text: string) => void;
   // 是否顯示「格式化 JSON」（DDL 檢視等情境關閉）。
   showFormat?: boolean;
 }) {
   const t = useT();
-  const [text, setText] = useState(value ?? "");
-  const dirty = editable && text !== (value ?? "");
-  useModalOverlay(onClose); // 計入 modalCount + 視窗層級 Esc（不再僅靠 textarea 聚焦才能 Esc）
-  const formatJson = () => {
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
+  // 初始內容：一律把 JSON 物件 / 陣列先排好版，省去每次手動按「格式化 JSON」。
+  // 純量（數字 / 字串 / true）與非合法 JSON 維持原文；要看原始單行內容按 footer 的「原始格式」。
+  const initial = useMemo(() => prettyJsonIfStructured(value ?? ""), [value]);
+  // 原值是不是「單行緊湊 JSON」：自動排版只為了好讀，不該連帶改變資料庫裡的存法。
+  // 是的話寫回前壓回單行，免得縮排空白跟著存進去（VARCHAR 有長度上限，撐爆就寫入失敗）。
+  // 想把某欄改存成縮排格式，走「產生 UPDATE 腳本」——那條路以視窗裡的內容原樣產生。
+  const wasCompact = useMemo(() => {
+    const raw = value ?? "";
     try {
-      setText(JSON.stringify(JSON.parse(text), null, 2));
+      const parsed: unknown = JSON.parse(raw);
+      // 同 jsonMode：以「沒有換行」認定原值是單行存法，而不是跟 JSON.stringify 逐字元比對——
+      // MySQL 回 JSON 欄位會正規化成 {"a": 1, "b": 2}（冒號 / 逗號後帶空格），逐字元比對會把它
+      // 誤判成「原本就是縮排的」，套用變更時就把自動排版的縮排一起寫回資料庫。
+      return parsed !== null && typeof parsed === "object" && !raw.includes("\n");
+    } catch {
+      return false;
+    }
+  }, [value]);
+  const [text, setText] = useState(initial);
+  const outgoing = () => {
+    if (!wasCompact) return text;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (parsed === null || typeof parsed !== "object") return text;
+      return JSON.stringify(parsed);
+    } catch {
+      return text; // 改成不合法 JSON 就照原樣寫回，錯誤留給資料庫報
+    }
+  };
+  // 與 initial（可能已自動排版）比對：單純的自動排版不算「未套用的編輯」，套用變更仍維持 disabled。
+  const dirty = editable && text !== initial;
+  useModalOverlay(onClose); // 計入 modalCount + 視窗層級 Esc（不再僅靠 textarea 聚焦才能 Esc）
+  // 文字選取範圍（onSelect 同步）：整格值動輒上千字元，多半只想要其中一段（某個 JSON key 的值、
+  // 一段 URL、一組 ID）。有選取時「複製」只給選取片段，沒選取才退回整格。
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [sel, setSel] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
+  const syncSel = () => {
+    const el = taRef.current;
+    if (el) setSel({ start: el.selectionStart, end: el.selectionEnd });
+  };
+  // 內容被改寫（格式化 / 編輯）後舊索引可能越界 → 夾在 text.length 內再算長度。
+  const selStart = Math.min(sel.start, text.length);
+  const selEnd = Math.min(sel.end, text.length);
+  const selLen = selEnd - selStart;
+  const hasSel = selLen > 0;
+  const doCopy = () => {
+    if (hasSel) copyToClipboard(text.slice(selStart, selEnd), t("已複製選取的 {n} 字元", { n: selLen }));
+    else copyToClipboard(text, t("已複製"));
+  };
+  // 目前內容是「已縮排的 JSON」還是「單行原始 JSON」：決定同一顆按鈕是要格式化還是切回原始。
+  // 非結構化（純量 / 不是合法 JSON）回 null——按鈕維持「格式化 JSON」，按下去照舊提示不是有效的 JSON。
+  const jsonMode = useMemo<"pretty" | "compact" | null>(() => {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (parsed === null || typeof parsed !== "object") return null;
+      // 以「有沒有換行」判斷是否已縮排，而不是跟 JSON.stringify 逐字元比對：MySQL 回 JSON 欄位時
+      // 會正規化成冒號 / 逗號後帶一個空格（{"a": 1, "b": 2}），逐字元比對會把這種單行值誤判成
+      // 「已排版」，按鈕顯示成「原始格式」，使用者得先壓成單行再按第二次才真的縮排。
+      return text.includes("\n") ? "pretty" : "compact";
+    } catch {
+      return null;
+    }
+  }, [text]);
+  // 雙向切換：縮排 ↔ 單行。兩個方向都以「目前內容」為準，所以編輯過的內容不會被丟掉
+  // （切回原始 ≠ 還原編輯；要放棄編輯照舊按「關閉」）。
+  const toggleJson = () => {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      setText(jsonMode === "pretty" ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2));
+      setSel({ start: 0, end: 0 }); // 全文重排，舊選取位置已無意義
     } catch {
       toast.error(t("不是有效的 JSON"));
     }
   };
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={onClose}>
-      <div className="bg-elevated w-[660px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]">
+      <div className={`bg-elevated w-[660px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
           <span className="font-medium text-sm mono truncate">{column}</span>
           {value === null && <span className="text-[10px] px-1.5 py-0.5 rounded bg-fg/10 text-fg/50">NULL</span>}
@@ -2223,28 +2330,38 @@ export function CellInspector({ column, value, editable, onSave, onClose, showFo
           <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
         <div className="p-4 flex-1 overflow-auto">
-          <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)}
+          <textarea autoFocus ref={taRef} value={text}
+            onChange={(e) => { setText(e.target.value); syncSel(); }}
+            onSelect={syncSel} onMouseUp={syncSel} onKeyUp={syncSel}
             readOnly={!editable} title={editable ? t("儲存格內容（Ctrl+Enter 套用）") : t("儲存格內容")}
             onKeyDown={(e) => {
               if (e.key === "Escape") onClose();
-              else if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && editable && dirty) { e.preventDefault(); onSave(text, false); onClose(); }
+              else if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && editable && dirty) { e.preventDefault(); onSave(outgoing(), false); onClose(); }
             }}
-            className="w-full h-72 bg-inset border border-fg/10 rounded p-3 mono text-sm outline-none focus:border-accent resize-none break-all" />
+            className="w-full h-72 bg-inset border border-fg/10 rounded p-3 mono code-scale outline-none focus:border-accent resize-none break-all" />
         </div>
         <div className="px-5 py-3 border-t border-fg/10 flex items-center gap-2">
           {showFormat && (
-            <button type="button" onClick={formatJson}
-              className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("格式化 JSON")}</button>
+            <button type="button" onClick={toggleJson}
+              title={jsonMode === "pretty" ? t("切回單行原始格式（資料庫存的樣子）") : t("縮排排版，方便閱讀")}
+              className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">
+              {jsonMode === "pretty" ? t("原始格式") : t("格式化 JSON")}
+            </button>
           )}
-          <button type="button" onClick={() => copyToClipboard(text, t("已複製"))}
-            className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("複製")}</button>
+          {/* onMouseDown preventDefault：不讓按鈕搶走焦點，textarea 的選取才不會在按下的瞬間被清掉。 */}
+          <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={doCopy}
+            title={hasSel ? t("只複製選取的 {n} 字元（取消選取則複製整格）", { n: selLen }) : t("複製整格內容（先在內容中選取一段，就只複製那一段）")}
+            className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">
+            {hasSel ? t("複製選取") : t("複製")}
+          </button>
+          {onScript && (
+            <button type="button" onClick={() => { onScript(text); onClose(); }}
+              title={t("以目前內容產生 UPDATE 腳本，送到查詢編輯器（不直接寫入資料庫）")}
+              className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5">{t("產生 UPDATE 腳本")}</button>
+          )}
           <div className="ml-auto flex gap-2">
             {editable && (
-              <button type="button" onClick={() => { onSave("", true); onClose(); }}
-                className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5 text-fg/70">{t("設為 NULL")}</button>
-            )}
-            {editable && (
-              <button type="button" disabled={!dirty} onClick={() => { onSave(text, false); onClose(); }}
+              <button type="button" disabled={!dirty} onClick={() => { onSave(outgoing(), false); onClose(); }}
                 title={t("套用變更 (Ctrl+Enter)")}
                 className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">{t("套用變更")}</button>
             )}
@@ -2265,6 +2382,8 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   connId: string; database: string; table: string; rkey: string; onClose: () => void;
 }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount（先前完全沒有 Esc 處理）
   const [page, setPage] = useState<KeyPage | null>(null);
   // 累積已載入的成員（跨多頁），供 KeyDetailBody 以既有渲染呈現。
@@ -2351,7 +2470,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-elevated w-[560px] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl"
+      <div className={`bg-elevated w-[560px] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
           <span className="font-medium text-sm mono truncate">{rkey}</span>
@@ -2672,7 +2791,7 @@ function StringEditor({ value, onSave, busy, truncated, valueBytes, onLoadFull }
 
       {view === "raw" && (
         <textarea value={text} onChange={(e) => setText(e.target.value)} title={t("字串值")}
-          className="w-full h-40 bg-inset border border-fg/10 rounded p-3 mono text-sm outline-none focus:border-accent resize-none break-all" />
+          className="w-full h-40 bg-inset border border-fg/10 rounded p-3 mono code-scale outline-none focus:border-accent resize-none break-all" />
       )}
       {view === "json" && (
         <pre className="w-full h-40 overflow-auto bg-inset border border-fg/10 rounded p-3 mono text-sm whitespace-pre-wrap break-all">
@@ -2875,6 +2994,8 @@ function InsertDialog({ columns, onSubmit, onCancel, busy, initial }: {
   initial?: Record<string, string | null>;
 }) {
   const t = useT();
+  // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
+  const { shellClass } = useModalView();
   // 每欄一個值；nulls 標記哪些欄留 NULL（不送出 → 走 DB 預設）
   const [values, setValues] = useState<Record<string, string>>(() => {
     const v: Record<string, string> = {};
@@ -2902,8 +3023,11 @@ function InsertDialog({ columns, onSubmit, onCancel, busy, initial }: {
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-elevated w-[480px] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl">
-        <div className="px-5 py-3 border-b border-fg/10 font-medium text-sm">{t("新增列")}</div>
+      <div className={`bg-elevated w-[480px] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}>
+        <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2 font-medium text-sm">
+          {t("新增列")}
+          <ModalViewControls className="ml-auto" />
+        </div>
         <div className="p-4 space-y-2 overflow-y-auto">
           <p className="text-xs text-fg/40">{t("未填寫且未標 NULL 的欄位，交由資料庫預設值處理。")}</p>
           {columns.map((c, ci) => (

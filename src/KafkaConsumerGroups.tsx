@@ -9,7 +9,7 @@ import {
 } from "./api";
 import { copyToClipboard, toast, uiConfirm, useModalOverlay } from "./ui";
 import { useStore } from "./store";
-import { IconButton } from "./ui/index";
+import { IconButton, MenuPanel, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import Sparkline from "./ui/Sparkline";
 import { useT } from "./i18n";
@@ -182,14 +182,17 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
 
   const doDeleteGroup = () => { if (selected) void deleteGroupNamed(selected); };
 
+  const { shellClass } = useModalView();
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-app w-[860px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className={`bg-app w-[860px] max-w-[95vw] h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`} onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-3">
           <Icon icon={Users} size={14} className="text-amber-300/90" />
           <span className="font-medium text-sm">{t("消費者群組")} · {connName}</span>
           <span className="text-xs text-fg/35">{groups.length} {t("個")}</span>
-          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="ml-auto text-fg/40 hover:text-fg" />
+          <ModalViewControls className="ml-auto" />
+          <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
 
         {err && <div className="px-4 py-1.5 text-red-400 text-xs mono break-all border-b border-fg/10">{err}</div>}
@@ -415,31 +418,24 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
       </div>
 
       {groupMenu && (
-        <>
-          <div className="fixed inset-0 z-[89]"
-            onClick={() => setGroupMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setGroupMenu(null); }} />
-          <div className="fixed z-[90] min-w-[180px] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm"
-            style={{ left: groupMenu.x, top: groupMenu.y }}
-            onClick={(e) => e.stopPropagation()}>
+        <MenuPanel x={groupMenu.x} y={groupMenu.y} minW={180} onClose={() => setGroupMenu(null)}>
+          <button type="button"
+            onClick={() => { const g = groupMenu.group; setGroupMenu(null); copyToClipboard(g, t("已複製群組名")); }}
+            className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("複製群組名")}</button>
+          <button type="button"
+            onClick={() => { setGroupMenu(null); loadGroups(); }}
+            className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("重新整理")}</button>
+          <div className="my-1 border-t border-fg/10" />
+          {!readonly && (
             <button type="button"
-              onClick={() => { const g = groupMenu.group; setGroupMenu(null); copyToClipboard(g, t("已複製群組名")); }}
-              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("複製群組名")}</button>
-            <button type="button"
-              onClick={() => { setGroupMenu(null); loadGroups(); }}
-              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">{t("重新整理")}</button>
-            <div className="my-1 border-t border-fg/10" />
-            {!readonly && (
-              <button type="button"
-                disabled={busy || !groupMenu.empty}
-                title={groupMenu.empty ? undefined : t("群組須 Empty 才能刪除")}
-                onClick={() => { const g = groupMenu.group; setGroupMenu(null); void deleteGroupNamed(g); }}
-                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-danger disabled:opacity-40 disabled:hover:bg-transparent">
-                {t("刪除群組")}
-              </button>
-            )}
-          </div>
-        </>
+              disabled={busy || !groupMenu.empty}
+              title={groupMenu.empty ? undefined : t("群組須 Empty 才能刪除")}
+              onClick={() => { const g = groupMenu.group; setGroupMenu(null); void deleteGroupNamed(g); }}
+              className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-danger disabled:opacity-40 disabled:hover:bg-transparent">
+              {t("刪除群組")}
+            </button>
+          )}
+        </MenuPanel>
       )}
     </div>
   );

@@ -6,6 +6,7 @@ import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
 import { Plug, FolderOpen, ClipboardPaste } from "lucide-react";
 import { useT } from "./i18n";
 import KindPicker from "./KindPicker";
+import { useStore } from "./store";
 
 interface Props {
   onClose: () => void;
@@ -79,6 +80,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   // 正式環境標記（所有類型共用，存 options.prod）：不改變連線 / 查詢行為，
   // 只影響防呆 UI —— 側欄掛 PROD 標記 + 執行查詢前跳確認。
   const [prod, setProd] = useState(initial?.options?.prod === "1");
+  // 唯讀連線（與側欄右鍵「設為唯讀模式」同一份狀態，存 localStorage 而非連線設定檔）：
+  // 擋查詢編輯器的寫入 / DDL 與資料格編輯。放進表單是因為「新增連線的當下」才是決定它能不能寫的時機，
+  // 存好之後再去右鍵補設定，中間那段空窗期就是誤改正式資料的機會。
+  const [readonlyConn, setReadonlyConn] = useState(() =>
+    initial ? useStore.getState().readonlyConns[initial.id] === true : KIND_META[kind].external === true);
+  // 使用者自己動過勾選之後就別再自動改：換類型的自動預設只在「還沒表態」時生效。
+  const [readonlyTouched, setReadonlyTouched] = useState(false);
   // Redis 連線選項（存於 options map）
   const [redisTls, setRedisTls] = useState(initial?.options?.redis_tls === "true");
   const [redisTlsInsecure, setRedisTlsInsecure] = useState(initial?.options?.redis_tls_insecure === "true");
@@ -268,6 +276,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     else if (noRootKind(kind) && !noRootKind(k) && username === "") setUsername("root");
     // ssl_mode 詞彙 PG（require）與 MySQL 系（required）不同，跨 kind 不可沿用；CA 路徑一併清除。
     if (k !== kind) { setSslMode(""); setSslCa(""); }
+    // 新連線的「唯讀」預設跟著類型走：external（QLand gateway）指到的是共用的 UAT / PROD，
+    // 預設鎖起來，真要改的人得自己來取消勾選。編輯既有連線不動它（那是使用者已經決定過的事）。
+    if (!editing && !readonlyTouched) setReadonlyConn(KIND_META[k].external === true);
     setKind(k);
   };
 
@@ -378,7 +389,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const external = KIND_META[kind].external;
   // 檔案型路徑可留空；外部 gateway 需 base URL；伺服器型至少需要主機。
   const valid = external ? baseUrl.trim() !== "" : fileBased || host.trim() !== "";
-  const handleSave = () => { if (valid) onSaved(build()); };
+  const handleSave = () => {
+    if (!valid) return;
+    const cfg = build();
+    // 先寫唯讀旗標再回報存檔：onSaved 可能立刻開連線 / 重繪側欄，旗標晚一步會閃到「可寫」狀態。
+    useStore.getState().setConnReadonly(cfg.id, readonlyConn);
+    onSaved(cfg);
+  };
   // 文字輸入按 Enter 直接儲存（與其他對話框一致）。
   const submitOnEnter = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.nativeEvent.isComposing && valid) { e.preventDefault(); handleSave(); }
@@ -451,6 +468,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
         <input type="checkbox" checked={prod} onChange={(e) => setProd(e.target.checked)} />
         <span>{t("正式環境（production）：側欄標記 PROD，執行查詢前跳確認")}</span>
+      </label>
+
+      {/* 唯讀 / 可編輯：與 prod 同層級的防呆開關，兩者互相獨立（UAT 也可能想鎖唯讀）。 */}
+      <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+        <input type="checkbox" checked={readonlyConn}
+          onChange={(e) => { setReadonlyTouched(true); setReadonlyConn(e.target.checked); }} />
+        <span>{t("唯讀連線：擋寫入 / DDL 語句與資料格編輯（取消勾選＝可編輯）")}</span>
       </label>
 
       {external ? (

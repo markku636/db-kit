@@ -1,7 +1,11 @@
 import { create } from "zustand";
 import { ConnectionConfig, ConnGroup, DbKind } from "./api";
 import { loadReadonly, persistReadonly, setReadonlyFlag, type ReadonlyMap } from "./connReadonly";
+import { loadSession, saveQueryTabSession } from "./session";
+import { pruneQueryDrafts } from "./queryDrafts";
 import {
+  loadQueryHistory,
+  pushQueryHistory,
   loadSavedQueries,
   persistSavedQueries,
   upsertSavedQuery,
@@ -162,6 +166,10 @@ interface AppStore {
   closeSavedManager: () => void;
 }
 
+// 上次關掉 app 時開著的查詢分頁（含停在哪一個）。各分頁的編輯器內容自己從 localStorage 讀
+// （見 App.tsx 的 loadPersistedSql），這裡只負責把「當時開著哪幾個分頁」擺回來。
+const session = loadSession();
+
 export const useStore = create<AppStore>((set) => ({
   connections: [],
   connGroups: [],
@@ -169,8 +177,9 @@ export const useStore = create<AppStore>((set) => ({
   readonlyConns: loadReadonly(),
   activeId: null,
   tabs: [],
-  activeTabKey: null,
-  queryTabs: ["__query__"],
+  // 表分頁不還原（要有實際連線才開得起來），故啟動時作用中分頁落在還原回來的查詢分頁上。
+  activeTabKey: session.activeQueryTab,
+  queryTabs: session.queryTabs,
   pendingSql: null,
   pendingNlOpen: false,
   pendingInsert: null,
@@ -414,3 +423,26 @@ export const useStore = create<AppStore>((set) => ({
     set({ savedMgr: { seedSql: opts?.seedSql ?? null, editName: opts?.editName ?? null } }),
   closeSavedManager: () => set({ savedMgr: null }),
 }));
+
+// 分頁清單 / 作用中分頁一有變動就寫回工作階段，下次啟動據此還原。
+// queryTabs 與 activeTabKey 散在十幾條 mutation 裡（新增 / 關閉 / 關其他 / 全部關閉 / 切換，
+// 還有 markDisconnected 與各 closeTab* 的落點計算），逐一插 persist 遲早漏掉一條；
+// 訂閱一次涵蓋全部路徑，也涵蓋日後新增的路徑。
+useStore.subscribe((s, prev) => {
+  if (s.queryTabs !== prev.queryTabs) dropClosedQueryDrafts(s.queryTabs, s.connections);
+  if (s.queryTabs === prev.queryTabs && s.activeTabKey === prev.activeTabKey) return;
+  saveQueryTabSession(s.queryTabs, s.activeTabKey);
+});
+
+// 關掉的查詢分頁：草稿（所有連線）一併清掉——分頁 id 會被回收（關掉「查詢 2」再按「+」/ Ctrl+N
+// 拿到的又是 __query__:2），留著會讓新分頁一掛上就是舊內容。清掉前先存進查詢歷史，誤關仍救得回來。
+// 走同一個訂閱，單關 / 關其他 / 全部關閉一次涵蓋；仍開著的分頁草稿原樣保留，重開 app 照舊還原。
+// 啟動時也跑一次：把改版前累積的孤兒草稿（沒有分頁承接卻躺在磁碟上的）收進歷史。
+function dropClosedQueryDrafts(queryTabs: string[], connections: ConnectionConfig[]) {
+  const removed = pruneQueryDrafts(queryTabs);
+  if (!removed.length) return;
+  let hist = loadQueryHistory();
+  for (const d of removed) hist = pushQueryHistory(hist, d.sql, connections.find((c) => c.id === d.connId)?.name);
+}
+dropClosedQueryDrafts(session.queryTabs, []);
+
