@@ -10,7 +10,7 @@
 - **人設與技能（四種供應商共用）**：助手的系統提示詞可以改（留白用內建預設），另可存多組具名的「技能」範本 —— 內建四組（SQL 效能診斷 / 資料模型審查 / 唯讀安全至上 / 遷移腳本），可勾選複用、可複製成自訂。CLI 後端走 `--append-system-prompt`（codex 沒有等價旗標，改併進提示本文最前面），API 供應商走 `system` 欄位。NL→SQL 只吃人設不吃技能：技能是給對話用的工作方式，套在「只回一句 SQL」上只會把輸出帶偏。
 - 供應商偵測跟著改：API 供應商沒有執行檔可找，改成「有 Base URL 就算裝好、有金鑰或是地端端點就算登入」；設定畫面的「測試連線」直接跟端點要模型清單（`GET {base}/models`），要不到就退回手填，不當成錯誤。
 
-> 驗證：`cargo test` 256 項全通過（新增 21 項：Base URL 正規化、兩家 SSE 解析與跨 chunk 的中文不亂碼、工具參數跨 chunk 累積、工作資料夾越界路徑被拒、歷史修剪不留落單 tool_result）、`cargo check --no-default-features`（slim CLI 不含 AI，reqwest 掛在 gui feature 後）綠燈、`tsc` + `eslint src` 0 error、vitest 755 項全通過。**尚未對每一家第三方端點做端對端實測**——降級路徑是依兩家公開文件與常見代理的回應實作的。
+> 驗證（併回遠端 0.26.11 那條線之後重跑）：`cargo test` 266 項全通過（本次新增 21 項：Base URL 正規化、兩家 SSE 解析與跨 chunk 的中文不亂碼、工具參數跨 chunk 累積、工作資料夾越界路徑被拒、歷史修剪不留落單 tool_result）、`cargo check --no-default-features`（slim CLI 不含 AI，reqwest 掛在 gui feature 後）綠燈、`tsc` + `eslint src` 0 error、vitest 810 項全通過。**尚未對每一家第三方端點做端對端實測**——降級路徑是依兩家公開文件與常見代理的回應實作的。
 
 ## v0.28.0
 
