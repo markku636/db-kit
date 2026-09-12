@@ -1,6 +1,6 @@
 import type { InputHTMLAttributes, TextareaHTMLAttributes } from "react";
 
-export type ControlSize = "sm" | "md";
+export type ControlSize = "sm" | "md" | "lg";
 
 const fieldBase =
   "w-full rounded bg-inset border text-sm placeholder:text-fg/30 outline-none " +
@@ -10,6 +10,7 @@ const fieldBase =
 const heights: Record<ControlSize, string> = {
   sm: "h-7 px-2.5",
   md: "h-8 px-3",
+  lg: "h-10 px-3.5", // 與 Button size="lg" 同高，鎖定畫面這類單欄表單上下對齊
 };
 
 function stateCls(invalid?: boolean) {

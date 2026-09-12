@@ -6,18 +6,22 @@
 //
 // **背景必須完全不透明**（bg-app）。閒置重新鎖定時這層是疊在已掛載的主介面之上的，
 // 半透明或只加 blur 等於把查詢結果留在螢幕上給人看，鎖了跟沒鎖一樣。
+//
+// 版面：全部收進一張卡片，由上而下「識別 → 狀態 → 錯誤 → 主要動作 → 替代動作」，
+// 「無法解鎖？」獨立在卡片底部的分隔區。每層只有一個主角 —— 舊版把 40px 臉部圖示、
+// 11px 紅字、按鈕、兩個虛線連結擠在 10px 間距裡，圖示還跟按鈕上的重複一次。
 
-import { useEffect, useRef, useState } from "react";
-import { FingerprintPattern, Lock, ScanFace } from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { ChevronDown, CircleAlert, CircleHelp, Copy, FingerprintPattern, KeyRound, Lock, ScanFace } from "lucide-react";
 
 import { api, type AppLockStatus, type BiometricStatus } from "./api";
 import { useT } from "./i18n";
-import { Button, Icon, Input } from "./ui/index";
+import { Button, Icon, IconButton, Input } from "./ui/index";
 import { copyToClipboard } from "./ui";
 // 識別標記用**方形** App 圖示，不是 hero banner：banner 是 1280×520，塞進正方形的圓角磚
 // 會被壓扁成一團看不出是什麼的色塊。直接引 src-tauri/icons 那份，`npm run make:app-icon`
 // 重產圖示時這裡自動跟上，不必再複製一份到 src/assets 等著和母檔漂移。
-// 取 @2x（256×256）而不是 128：磚是 112px，在 2x DPI 要 224px 才不會放大到發軟。
+// 取 @2x（256×256）：磚是 80px，在 2x DPI 要 160px 才不會放大到發軟。
 import logoMark from "../src-tauri/icons/128x128@2x.png";
 
 /** 生物辨識驗證的當下狀態。 */
@@ -40,6 +44,9 @@ function biometricName(kind: BiometricStatus["kind"]): string {
   return kind === "touch_id" ? "Touch ID" : "Windows Hello";
 }
 
+// 卡片外的光暈。疊在不透明的 bg-app 之上當背景圖層，不改變「底色完全不透明」這件事。
+const GLOW = "radial-gradient(ellipse 50% 42% at 50% 45%, rgb(var(--c-accent) / 0.12), transparent 72%)";
+
 export default function LockScreen({
   status,
   onUnlock,
@@ -55,7 +62,6 @@ export default function LockScreen({
   const [pw, setPw] = useState("");
   const [err, setErr] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [showForgot, setShowForgot] = useState(false);
 
   const runBiometric = async () => {
     setBio("prompting");
@@ -107,110 +113,143 @@ export default function LockScreen({
   const name = biometricName(bioKind);
   const bioIcon = bioKind === "touch_id" ? FingerprintPattern : ScanFace;
 
-  return (
-    <div className="fixed inset-0 z-[400] grid place-items-center bg-app">
-      <div className="w-[320px] max-w-[88vw] flex flex-col items-center gap-6">
-        {/* 鎖定畫面是全螢幕的，上下都是留白 —— 識別標記照工具列的 64px 給，會小得像顆 favicon。
-            112px 才撐得起這個版面；圓角同比例放大（16/64 → 28/112）維持一樣的方角觀感。 */}
-        <img src={logoMark} alt="DB Kit" className="w-28 h-28 rounded-[28px] shadow-e4" draggable={false} />
-        <div className="text-center space-y-1">
-          <div className="text-base font-semibold text-fg/90">{t("DB Kit 已鎖定")}</div>
-          <div className="text-xs text-fg/50">
-            {usePassword
-              ? t("輸入啟動密碼以繼續")
-              : bio === "prompting"
-                ? t("請在 {name} 完成驗證", { name })
-                : bio === "unavailable"
-                  ? t("{name} 目前無法使用", { name })
-                  : t("使用 {name} 驗證以繼續", { name })}
-          </div>
-        </div>
+  let subtitle: string;
+  if (usePassword) subtitle = t("輸入啟動密碼以繼續");
+  else if (bio === "prompting") subtitle = t("請在 {name} 完成驗證", { name });
+  else if (bio === "unavailable") subtitle = t("{name} 目前無法使用", { name });
+  else subtitle = t("使用 {name} 驗證以繼續", { name });
 
-        {usePassword ? (
-          <div className="w-full space-y-2.5">
-            <Input
-              type="password"
-              inputSize="md"
-              autoFocus
-              value={pw}
-              invalid={err}
-              placeholder={t("啟動密碼")}
-              aria-label={t("啟動密碼")}
-              onChange={(e) => { setPw(e.target.value); setErr(false); }}
-              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-            />
-            {err && <div className="text-[11px] text-danger text-center">{t("密碼不正確，請再試一次")}</div>}
-            <Button variant="primary" full icon={Lock} loading={busy} disabled={!pw} onClick={submit}>
-              {t("解鎖")}
-            </Button>
-            {status.biometric && (
-              <button
-                type="button"
-                onClick={() => { setUsePassword(false); void runBiometric(); }}
-                className="w-full text-[11px] text-fg/45 hover:text-fg/70 underline decoration-dotted"
+  // 同一時間最多一則錯誤，一律進主要按鈕上方的提示框。
+  let alert: string | null = null;
+  if (usePassword) alert = err ? t("密碼不正確，請再試一次") : null;
+  else if (bio === "failed") alert = t("驗證未通過，請再試一次");
+  else if (bio === "unavailable")
+    alert = status.password ? t("請改用啟動密碼解鎖") : t("請確認系統的生物辨識設定仍然有效");
+
+  return (
+    <div className="fixed inset-0 z-[400] overflow-y-auto bg-app" style={{ backgroundImage: GLOW }}>
+      <div className="min-h-full grid place-items-center px-6 py-10">
+        <div className="modal-shell-in w-[400px] max-w-full rounded-lg border border-fg/10 bg-elevated shadow-e4">
+          <div className="px-8 pt-10 pb-8 flex flex-col items-center text-center">
+            <div className="relative">
+              <img src={logoMark} alt="DB Kit" draggable={false} className="w-20 h-20 rounded-[20px] shadow-e3" />
+              {/* 鎖頭徽章：外圈用卡片底色描 4px，看起來像從圖示角落挖出來的，不是貼上去的貼紙。 */}
+              <span className="absolute -right-2 -bottom-2 grid place-items-center w-8 h-8 rounded-full bg-accent ring-4 ring-elevated">
+                <Icon icon={Lock} size={14} strokeWidth={2.25} />
+              </span>
+            </div>
+            <h1 className="mt-7 text-xl font-semibold tracking-tight text-fg">{t("DB Kit 已鎖定")}</h1>
+            <p className="mt-1.5 text-sm text-fg/55">{subtitle}</p>
+
+            {alert && (
+              <div
+                role="alert"
+                className="mt-6 w-full flex items-start gap-2 rounded-md border border-danger/25 bg-danger/10 px-3 py-2.5 text-left text-[13px] leading-snug text-danger"
               >
-                {t("改用 {name}", { name })}
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="w-full space-y-2.5 flex flex-col items-center">
-            <Icon
-              icon={bioIcon}
-              size={40}
-              className={bio === "prompting" ? "text-accent animate-pulse" : "text-fg/35"}
-            />
-            {bio === "failed" && (
-              <div className="text-[11px] text-danger text-center">{t("驗證未通過，請再試一次")}</div>
-            )}
-            {bio === "unavailable" && (
-              <div className="text-[11px] text-danger text-center">
-                {status.password ? t("請改用啟動密碼解鎖") : t("請確認系統的生物辨識設定仍然有效")}
+                <Icon icon={CircleAlert} size={16} className="shrink-0" />
+                <span>{alert}</span>
               </div>
             )}
-            <Button
-              variant="primary"
-              full
-              icon={bioIcon}
-              loading={bio === "prompting"}
-              onClick={() => void runBiometric()}
-            >
-              {bio === "idle" || bio === "prompting" ? t("使用 {name} 驗證", { name }) : t("再試一次")}
-            </Button>
-            {status.password && (
-              <button
-                type="button"
-                onClick={() => setUsePassword(true)}
-                className="w-full text-[11px] text-fg/45 hover:text-fg/70 underline decoration-dotted"
-              >
-                {t("改用密碼")}
-              </button>
-            )}
-          </div>
-        )}
 
-        {/* 被鎖在外面時的自救指引：解法只寫在 CHANGELOG 對當事人毫無幫助（死路型 UX）。 */}
-        <div className="text-center">
-          {!showForgot ? (
-            <button type="button" onClick={() => setShowForgot(true)}
-              className="text-[11px] text-fg/35 hover:text-fg/60 underline decoration-dotted">
-              {t("無法解鎖？")}
-            </button>
-          ) : (
-            <div className="text-[11px] text-fg/50 leading-relaxed max-w-[300px] text-left space-y-1.5">
-              <p>
-                {t("啟動鎖定只是開啟 App 的閘門。刪除設定目錄中的")}
-                <span className="mono"> app_settings.json </span>{t("即可解除（密碼與生物辨識一併失效），")}
-                <span className="text-fg/70">{t("不影響已儲存的連線")}</span>{t("（連線機密存於系統 keychain）。")}
-              </p>
-              <p className="mono break-all text-fg/40">{settingsPath()}</p>
-              <button type="button"
-                onClick={() => copyToClipboard(settingsPath(), t("已複製路徑"))}
-                className="underline decoration-dotted hover:text-fg/70">{t("複製路徑")}</button>
+            <div className={`w-full ${alert ? "mt-4" : "mt-8"}`}>
+              {usePassword ? (
+                <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+                  <Input
+                    type="password"
+                    inputSize="lg"
+                    autoFocus
+                    value={pw}
+                    invalid={err}
+                    placeholder={t("啟動密碼")}
+                    aria-label={t("啟動密碼")}
+                    onChange={(e) => { setPw(e.target.value); setErr(false); }}
+                  />
+                  <Button type="submit" variant="primary" size="lg" full icon={Lock} loading={busy} disabled={!pw}>
+                    {t("解鎖")}
+                  </Button>
+                  {status.biometric && (
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      full
+                      icon={bioIcon}
+                      onClick={() => { setUsePassword(false); void runBiometric(); }}
+                    >
+                      {t("改用 {name}", { name })}
+                    </Button>
+                  )}
+                </form>
+              ) : (
+                <div className="space-y-3">
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    full
+                    icon={bioIcon}
+                    loading={bio === "prompting"}
+                    onClick={() => void runBiometric()}
+                  >
+                    {bio === "idle" || bio === "prompting" ? t("使用 {name} 驗證", { name }) : t("再試一次")}
+                  </Button>
+                  {status.password && (
+                    <Button variant="secondary" size="lg" full icon={KeyRound} onClick={() => setUsePassword(true)}>
+                      {t("改用密碼")}
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
-          )}
+          </div>
+
+          <ForgotHelp />
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 被鎖在外面時的自救指引：解法只寫在 CHANGELOG 對當事人毫無幫助（死路型 UX）。 */
+function ForgotHelp() {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const path = settingsPath();
+  return (
+    <div className="border-t border-fg/[0.08] px-8 py-3">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="mx-auto flex items-center gap-1.5 rounded px-2 py-1 text-[13px] text-fg/45 hover:text-fg/75 transition-colors focus-visible:outline-2 focus-visible:outline-accent/60"
+      >
+        <Icon icon={CircleHelp} size={14} />
+        {t("無法解鎖？")}
+        <Icon icon={ChevronDown} size={14} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="mt-2 mb-3 space-y-3 text-left text-[13px] leading-relaxed text-fg/60">
+          <p>
+            {t("啟動鎖定只是開啟 App 的閘門。刪除設定目錄中的")}
+            <code className="mono mx-0.5 rounded-xs bg-fg/[0.07] px-1 py-px text-[12px] text-fg/80">app_settings.json</code>
+            {t("即可解除（密碼與生物辨識一併失效），")}
+            <span className="text-fg/85">{t("不影響已儲存的連線")}</span>
+            {t("（連線機密存於系統 keychain）。")}
+          </p>
+          <div className="flex items-center gap-1 rounded-md border border-fg/[0.08] bg-well py-1 pl-3 pr-1">
+            {/* 只在路徑分隔符後斷行（<wbr>）；break-all 會把 app_settings.json 切成「.js / on」。 */}
+            <span className="mono min-w-0 flex-1 text-[12px] text-fg/70 [overflow-wrap:anywhere]">
+              {path.split(/(?<=[\\/])/).map((seg, i) => (
+                <Fragment key={i}>{i > 0 && <wbr />}{seg}</Fragment>
+              ))}
+            </span>
+            <IconButton
+              icon={Copy}
+              label={t("複製路徑")}
+              iconSize={14}
+              onClick={() => copyToClipboard(path, t("已複製路徑"))}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

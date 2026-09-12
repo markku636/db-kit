@@ -9,7 +9,7 @@ export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 
 /** 原生 <select> 包裝：沿用 Input 樣式 + 自訂 chevron，保留原生鍵盤 / 無障礙。 */
 export default function Select({ selectSize = "sm", className = "", children, ...rest }: SelectProps) {
-  const h = selectSize === "sm" ? "h-7 pl-2.5 pr-7" : "h-8 pl-3 pr-8";
+  const h = { sm: "h-7 pl-2.5 pr-7", md: "h-8 pl-3 pr-8", lg: "h-10 pl-3.5 pr-9" }[selectSize];
   return (
     <div className="relative">
       <select
