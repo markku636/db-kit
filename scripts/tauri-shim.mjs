@@ -35,6 +35,8 @@ export function installShim(fx) {
   const cachedAt = () => Date.now() - fx.SCHEMA_CACHE_AGE_MS;
   const handlers = {
     has_startup_password: () => false,
+    // 假資料的連線不帶明文密碼；回 true＝keychain 裡有，連線前的「缺帳密」防呆才不會擋住
+    has_stored_password: () => true,
     list_saved_connections: () => fx.CONNECTIONS,
     // 側欄分組（v0.20 起）。預設無群組＝扁平清單，與截圖情境一致；情境可用 fx 覆寫。
     list_connection_groups: () => fx.CONN_GROUPS ?? [],

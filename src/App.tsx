@@ -5099,26 +5099,30 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 </>
               )}
             </div>
-            {/* 收藏＝分裂式控制項：左半星星一鍵存 / 取消存（不跳對話框），右半箭頭開收藏清單。 */}
-            <div className="relative inline-flex items-stretch rounded border border-fg/15 overflow-hidden">
-              <button type="button" onClick={toggleSaveCurrent} disabled={!sql.trim()}
-                title={savedEntry
-                  ? t("已收藏為「{name}」——點擊取消收藏（改名 / 分組請用右側清單）", { name: savedEntry.name })
-                  : t("一鍵收藏目前查詢（名稱自動命名，可事後改名）")}
-                aria-pressed={!!savedEntry}
-                className={`inline-flex items-center gap-1 text-xs px-2 py-1 hover:bg-fg/10 disabled:opacity-40 ${
-                  savedEntry ? "text-amber-300" : "text-fg/70"}`}>
-                <Icon icon={Star} size={13} className={savedEntry ? "fill-current" : ""} />
-                {/* 未收藏用「加入收藏」而非「收藏」：後者的英文與「已收藏」同為 Saved，
-                    英文介面下星星的兩個狀態會長得一模一樣，看不出按下去會發生什麼。 */}
-                {!dense && (savedEntry ? t("已收藏") : t("加入收藏"))}
-              </button>
-              <button type="button" onClick={() => setShowSaved((s) => !s)}
-                title={t("收藏的查詢")} aria-label={t("收藏的查詢")}
-                className="inline-flex items-center px-1 border-l border-fg/15 text-xs text-fg/50 hover:bg-fg/10 hover:text-fg/80">
-                <Icon icon={ChevronDown} size={12} />
-                {saved.length ? <span className="pr-0.5 tabular-nums">{saved.length}</span> : null}
-              </button>
+            {/* 收藏＝分裂式控制項：左半星星一鍵存 / 取消存（不跳對話框），右半箭頭開收藏清單。
+                定位（relative）與圓角裁切（overflow-hidden）必須分兩層：兩者放同一個 div 時，
+                overflow-hidden 會連同下拉面板一起裁掉，清單被壓成按鈕大小的一條縫（issue #2）。 */}
+            <div className="relative inline-flex items-stretch">
+              <div className="inline-flex items-stretch rounded border border-fg/15 overflow-hidden">
+                <button type="button" onClick={toggleSaveCurrent} disabled={!sql.trim()}
+                  title={savedEntry
+                    ? t("已收藏為「{name}」——點擊取消收藏（改名 / 分組請用右側清單）", { name: savedEntry.name })
+                    : t("一鍵收藏目前查詢（名稱自動命名，可事後改名）")}
+                  aria-pressed={!!savedEntry}
+                  className={`inline-flex items-center gap-1 text-xs px-2 py-1 hover:bg-fg/10 disabled:opacity-40 ${
+                    savedEntry ? "text-amber-300" : "text-fg/70"}`}>
+                  <Icon icon={Star} size={13} className={savedEntry ? "fill-current" : ""} />
+                  {/* 未收藏用「加入收藏」而非「收藏」：後者的英文與「已收藏」同為 Saved，
+                      英文介面下星星的兩個狀態會長得一模一樣，看不出按下去會發生什麼。 */}
+                  {!dense && (savedEntry ? t("已收藏") : t("加入收藏"))}
+                </button>
+                <button type="button" onClick={() => setShowSaved((s) => !s)}
+                  title={t("收藏的查詢")} aria-label={t("收藏的查詢")}
+                  className="inline-flex items-center px-1 border-l border-fg/15 text-xs text-fg/50 hover:bg-fg/10 hover:text-fg/80">
+                  <Icon icon={ChevronDown} size={12} />
+                  {saved.length ? <span className="pr-0.5 tabular-nums">{saved.length}</span> : null}
+                </button>
+              </div>
               {showSaved && (
                 <>
                   <div className="fixed inset-0 z-[89]" onClick={() => setShowSaved(false)} />

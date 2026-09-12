@@ -81,6 +81,44 @@ const CASES = {
     check("Kafka 查詢分頁沒有結構快取徽章", (await page.getByRole("button", { name: /^結構/ }).count()) === 0);
   },
 
+  // 收藏下拉：面板要完整露出，不能被祖先的 overflow-hidden 裁掉（issue #2）。
+  // 分裂鈕用 overflow-hidden 讓左右兩半共用一組圓角；定位若掛在同一個 div，
+  // 下拉會連著被裁成按鈕大小的一條縫。DOM 與文字都還在，只有量「可見範圍」才驗得出來。
+  async "saved-queries-dropdown-not-clipped"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await sleep(900);
+
+    await page.getByRole("button", { name: "收藏的查詢", exact: true }).first().click();
+    await sleep(300);
+    const panel = page.locator('div[class~="absolute"][class~="z-[90]"]').filter({ hasText: "管理 / 匯入匯出" }).first();
+    check("收藏下拉會開啟", (await panel.count()) > 0);
+    if ((await panel.count()) === 0) return;
+
+    // 面板自身的盒子一定是 420×N —— 被裁的是「畫得出來」的部分，
+    // 所以往上逐層與會裁切的祖先取交集，量真正看得到的範圍。
+    const vis = await panel.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      let box = { l: r.left, t: r.top, r: r.right, b: r.bottom };
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        const cs = getComputedStyle(p);
+        if (!/visible/.test(cs.overflowX + " " + cs.overflowY)) {
+          const pr = p.getBoundingClientRect();
+          box = { l: Math.max(box.l, pr.left), t: Math.max(box.t, pr.top),
+                  r: Math.min(box.r, pr.right), b: Math.min(box.b, pr.bottom) };
+        }
+      }
+      return { w: Math.round(r.width), h: Math.round(r.height),
+               visW: Math.round(Math.max(0, box.r - box.l)), visH: Math.round(Math.max(0, box.b - box.t)) };
+    });
+    check("收藏下拉沒被裁掉寬度", vis.visW >= vis.w - 1, `面板 ${vis.w}px，看得到 ${vis.visW}px`);
+    check("收藏下拉沒被裁掉高度", vis.visH >= vis.h - 1, `面板 ${vis.h}px，看得到 ${vis.visH}px`);
+    check("收藏下拉列出收藏的查詢",
+      (await panel.getByText("每日營收", { exact: true }).count()) > 0,
+      (await panel.innerText()).replace(/\s+/g, " ").slice(0, 160));
+  },
+
   // Kafka 主題右鍵：新增（發佈 / 建主題）· 修改（設定 / 分區）· 刪除（清空 / 刪除主題）
   async "kafka-topic-menu"(page) {
     await page.getByText("stream-kafka", { exact: true }).dblclick();
