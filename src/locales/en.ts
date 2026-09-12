@@ -2693,6 +2693,7 @@ const en: Catalog = {
   "開啟 AI 設定": "Open AI settings",
   "要用哪個供應商回答（CLI 走你的訂閱登入，API 走你自己的端點與金鑰）": "Which provider answers (CLI uses your subscription login, API uses your own endpoint and key)",
   "要用哪個供應商生成（CLI 走你的訂閱登入，API 走你自己的端點與金鑰）": "Which provider generates (CLI uses your subscription login, API uses your own endpoint and key)",
+  "模型": "Model",
   "模型名稱": "Model name",
   "這個端點的模型名稱（可在 AI 設定裡從端點抓清單）": "The model name on this endpoint (AI settings can fetch the list from it)",
   "AI 設定（供應商 / 人設 / 技能）": "AI settings (provider / persona / skills)",
