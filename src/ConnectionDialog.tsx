@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { api, ConnectionConfig, DbKind, KIND_META, ParsedUrl, SshAuthMethod } from "./api";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { api, ConnectionConfig, DbKind, KIND_META, SshAuthMethod } from "./api";
+import { applyParsedToForm, ChangedField, ConnFormFields, looksLikeConnectionString } from "./connString";
 import { pickOpenFile } from "./ui";
 import { askOtpCode } from "./otpGate";
 import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
@@ -39,6 +40,29 @@ const SSL_MODE_OPTIONS: Record<string, { value: string; label: string }[]> = {
   ],
 };
 
+// 匯入變動摘要要逐項列出的欄位（繁中字串即 i18n key）。只收使用者真正需要核對的主要欄位——
+// 類型專屬設定有三十幾個，全列出來摘要會比表單還長，那些只報件數。
+const IMPORT_SUMMARY_LABELS: Partial<Record<keyof ConnFormFields, string>> = {
+  kind: "類型",
+  host: "主機",
+  port: "埠",
+  username: "使用者",
+  password: "密碼",
+  database: "資料庫",
+};
+
+/** 摘要的值格式化。密碼一律遮罩；空值與布林給得出人話。 */
+function fmtSummaryVal(
+  key: keyof ConnFormFields,
+  v: string | number | boolean,
+  t: (zh: string, params?: Readonly<Record<string, string | number>>) => string,
+): string {
+  if (key === "password") return v === "" ? t("（空）") : "••••••";
+  if (key === "kind") return KIND_META[v as DbKind]?.label ?? String(v);
+  if (typeof v === "boolean") return v ? t("開") : t("關");
+  return v === "" ? t("（空）") : String(v);
+}
+
 export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const t = useT();
   const editing = !!initial;
@@ -53,11 +77,15 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // 類型選擇器展開狀態：新增模式先選類型（展開）；編輯模式直達表單（收合成 chip）。
   const [pickerOpen, setPickerOpen] = useState(!editing);
-  // 「從連線字串匯入」列（貼雲端服務給的 URI 一鍵填表）。
-  const [importOpen, setImportOpen] = useState(false);
+  // 連線字串欄（常駐；貼上即解析）。
   const [importUrl, setImportUrl] = useState("");
-  // 匯入結果與測試結果分開存：applyParsed 改欄位會觸發 msg 清除 effect，共用會讓成功訊息立刻消失。
+  // 匯入結果與測試結果分開存：套用解析結果會改欄位並觸發 msg 清除 effect，共用會讓成功訊息立刻消失。
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // 本次匯入實際改動了哪些欄位（供「已填入」摘要）；null＝尚未匯入過。
+  const [importChanged, setImportChanged] = useState<ChangedField[] | null>(null);
+  // 匯入前的欄位快照，供單步「復原」。存 ref 而非 state：它不參與渲染決策，
+  // 只在按下復原時被讀一次，放進 state 只會多一輪無意義的重繪。
+  const undoRef = useRef<ConnFormFields | null>(null);
   // SSH Tunnel
   const [sshEnabled, setSshEnabled] = useState(initial?.ssh_enabled ?? false);
   const [sshHost, setSshHost] = useState(initial?.ssh_host ?? "");
@@ -282,61 +310,54 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     setKind(k);
   };
 
-  // 「從連線字串匯入」：後端 parse_connection_url 解析（與 dbk --url 同一套邏輯），前端只負責填表。
-  // options 布林值的兩種既有編碼（mongo 系 "1" / redis 系 "true"）統一在這判讀。
-  const optBool = (v: string | undefined) => v === "1" || v === "true";
-  const applyParsed = (p: ParsedUrl) => {
-    // 後端可能先於前端認識新 kind（分階段上線）；未知 kind 不索引 KIND_META，僅填主機等欄位。
-    const knownKind = p.kind && p.kind !== "external" && p.kind in KIND_META ? p.kind : null;
-    if (knownKind) {
-      if (knownKind !== kind) { setSslMode(""); setSslCa(""); }
-      // 與 onKindChange 的無 root 慣例對齊（匯入路徑繞過 onKindChange）：
-      // URL 未帶帳號時，切到 kafka/elastic 清掉預設 root；離開時留空則補回 root。
-      if (p.username == null) {
-        if (noRootKind(knownKind) && username === "root") setUsername("");
-        else if (noRootKind(kind) && !noRootKind(knownKind) && username === "") setUsername("root");
-      }
-      setKind(knownKind);
-      // port 用解析值，缺省補該 kind 預設；不走 onKindChange 的「跟隨前一 kind 預設埠」啟發式。
-      setPort(p.port ?? KIND_META[knownKind].defaultPort);
-    } else if (p.port != null) {
-      setPort(p.port);
-    }
-    if (p.host) setHost(p.host);
-    if (p.username != null) setUsername(p.username);
-    if (p.password != null) setPassword(p.password);
-    if (p.database != null) setDatabase(p.database);
-    const o = p.options ?? {};
-    if (o.ssl_mode != null) setSslMode(o.ssl_mode);
-    if (o.ssl_ca != null) setSslCa(o.ssl_ca);
-    if (o.redis_tls != null) setRedisTls(optBool(o.redis_tls));
-    if (o.redis_tls_insecure != null) setRedisTlsInsecure(optBool(o.redis_tls_insecure));
-    if (o.mongo_srv != null) setMongoSrv(optBool(o.mongo_srv));
-    if (o.mongo_auth_source != null) setMongoAuthSource(o.mongo_auth_source);
-    if (o.mongo_replica_set != null) setMongoReplicaSet(o.mongo_replica_set);
-    if (o.mongo_direct != null) setMongoDirect(optBool(o.mongo_direct));
-    if (o.mongo_tls_ca != null) setMongoTlsCa(o.mongo_tls_ca);
-    if (o.mongo_tls_insecure != null) setMongoTlsInsecure(optBool(o.mongo_tls_insecure));
-    // tlsCAFile / tlsAllowInvalidCertificates 隱含 TLS（Atlas / DocumentDB 字串常不帶 tls=true）——
-    // 不連動 mongo_tls 的話 CA 欄位會被 gate 隱藏、buildOptions 會把匯入值靜默剔除。
-    if (o.mongo_tls != null || o.mongo_tls_ca != null || o.mongo_tls_insecure != null)
-      setMongoTls(o.mongo_tls != null ? optBool(o.mongo_tls) : true);
-    if (o.encrypt != null) setMssqlEncrypt(o.encrypt !== "false");
-    if (o.trust_server_certificate != null) setMssqlTrust(optBool(o.trust_server_certificate));
-    if (o.trust_cert_ca != null) setMssqlCaPath(o.trust_cert_ca);
-    if (o.rabbitmq_vhost != null) setRabbitVhost(o.rabbitmq_vhost);
-    if (o.rabbitmq_tls != null) setRabbitTls(optBool(o.rabbitmq_tls));
-    if (o.rabbitmq_mgmt_url != null) setRabbitMgmtUrl(o.rabbitmq_mgmt_url);
+  // 匯入的快照 / 還原。本元件有約 40 個 useState，改寫成單一 reducer 動到的範圍太大、風險遠大於
+  // 收益；改以一份 ConnFormFields 型別同時服務三件事：快照（復原用）、純映射的輸入與輸出、
+  // 以及變動摘要的 diff 來源。少寫一個欄位 TS 就會報錯，不會默默漏掉。
+  const snapshotForm = (): ConnFormFields => ({
+    kind, host, port, username, password, database,
+    sslMode, sslCa,
+    redisTls, redisTlsInsecure,
+    mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mongoTlsCa, mongoTlsInsecure,
+    mssqlEncrypt, mssqlTrust, mssqlCaPath,
+    oracleConnectType, oracleClientDir,
+    kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify,
+    esAuth, esTls, esSslCa, esSslInsecure, esKibanaUrl,
+    rabbitVhost, rabbitTls, rabbitMgmtUrl,
+  });
+
+  const restoreForm = (f: ConnFormFields) => {
+    setKind(f.kind); setHost(f.host); setPort(f.port); setUsername(f.username);
+    setPassword(f.password); setDatabase(f.database);
+    setSslMode(f.sslMode); setSslCa(f.sslCa);
+    setRedisTls(f.redisTls); setRedisTlsInsecure(f.redisTlsInsecure);
+    setMongoSrv(f.mongoSrv); setMongoAuthSource(f.mongoAuthSource); setMongoTls(f.mongoTls);
+    setMongoReplicaSet(f.mongoReplicaSet); setMongoDirect(f.mongoDirect);
+    setMongoTlsCa(f.mongoTlsCa); setMongoTlsInsecure(f.mongoTlsInsecure);
+    setMssqlEncrypt(f.mssqlEncrypt); setMssqlTrust(f.mssqlTrust); setMssqlCaPath(f.mssqlCaPath);
+    setOracleConnectType(f.oracleConnectType); setOracleClientDir(f.oracleClientDir);
+    setKafkaProtocol(f.kafkaProtocol); setKafkaSaslMech(f.kafkaSaslMech);
+    setKafkaCaPath(f.kafkaCaPath); setKafkaSkipVerify(f.kafkaSkipVerify);
+    setEsAuth(f.esAuth); setEsTls(f.esTls); setEsSslCa(f.esSslCa);
+    setEsSslInsecure(f.esSslInsecure); setEsKibanaUrl(f.esKibanaUrl);
+    setRabbitVhost(f.rabbitVhost); setRabbitTls(f.rabbitTls); setRabbitMgmtUrl(f.rabbitMgmtUrl);
   };
 
-  const doImport = async () => {
-    const url = importUrl.trim();
+  // 解析連線字串並填表。後端 parse_connection_url（與 dbk --url 同一套邏輯）負責解析，
+  // 前端只負責把結果映射進欄位（純函式在 connString.ts，可單測）。
+  // 先套用、再顯示變動摘要、留一顆「復原」——而不是套用前再插一層確認：
+  // 這個對話框已經十幾欄還要捲動，modal-in-modal 只會更難用。
+  const doImport = async (raw: string) => {
+    const url = raw.trim();
     if (!url) return;
     setImportMsg(null);
+    setImportChanged(null);
     try {
       const p = await api.parseConnectionUrl(url);
-      applyParsed(p);
-      setImportOpen(false);
+      const before = snapshotForm();
+      const { next, changed } = applyParsedToForm(p, before);
+      undoRef.current = before;
+      restoreForm(next);
+      setImportChanged(changed);
       setImportUrl("");
       setPickerOpen(false);
       setImportMsg({
@@ -344,8 +365,30 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         text: t("已依連線字串填入 {kind} 設定，請確認後測試連線", { kind: p.kind ? KIND_META[p.kind].label : "—" }),
       });
     } catch (e: any) {
+      // 失敗時保留 importUrl，讓使用者看得到自己貼了什麼（常見是複製被截斷）。
+      setImportUrl(url);
       setImportMsg({ ok: false, text: e?.message ?? t("無法解析連線字串") });
     }
+  };
+
+  const undoImport = () => {
+    const snap = undoRef.current;
+    if (!snap) return;
+    restoreForm(snap);
+    undoRef.current = null;
+    setImportChanged(null);
+    setImportMsg(null);
+  };
+
+  // 主機 / 名稱欄的貼上攔截：若貼進來的是連線字串就改走解析，而不是把整串倒進欄位。
+  // 這條才是「直接貼上就會動」的關鍵——多數人不會先去找上面那個連線字串欄。
+  // looksLikeConnectionString 刻意保守（見 connString.ts），不是連線字串就完全不介入。
+  const onFieldPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (!looksLikeConnectionString(text)) return;
+    e.preventDefault();
+    setImportUrl(text.trim());
+    void doImport(text);
   };
 
   // Elastic Cloud ID：`deployment-name:base64(host$es_uuid$kibana_uuid)` → 節點 URL `https://{es_uuid}.{host}`。
@@ -425,29 +468,75 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         )
       }
     >
-      {/* 從連線字串匯入：貼雲端服務控制台給的 URI（Supabase / Atlas / Upstash / Azure…）一鍵填表。 */}
-      {!importOpen ? (
-        <Button variant="secondary" icon={ClipboardPaste} onClick={() => { setImportOpen(true); setImportMsg(null); }}>
-          {t("從連線字串匯入")}
-        </Button>
-      ) : (
-        <Field hint={t("支援 mysql:// postgres:// mongodb+srv:// rediss:// sqlserver:// 及 Azure ADO.NET 格式")}>
-          <div className="flex gap-2">
-            <Input
-              autoFocus
-              value={importUrl}
-              onChange={(e) => setImportUrl(e.target.value)}
-              placeholder="postgres://user:pass@db.xxx.supabase.co:5432/postgres?sslmode=require"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); void doImport(); }
-                if (e.key === "Escape") { setImportOpen(false); setImportMsg(null); }
-              }}
-            />
-            <Button variant="secondary" onClick={() => void doImport()} className="shrink-0">{t("解析並填入")}</Button>
+      {/* 連線字串：常駐欄位，不再藏在按鈕後面。貼雲端控制台給的 URI（Supabase / Atlas / Upstash /
+          Confluent / Azure…）一次填完整張表。貼上即解析；手打則按 Enter 或右側按鈕。
+          刻意不做「輸入中 debounce 自動解析」——每個按鍵都會重寫類型並清掉類型專屬欄位，會抖動。 */}
+      <Field
+        label={t("連線字串")}
+        hint={t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")}
+      >
+        <div className="flex gap-2">
+          <Input
+            value={importUrl}
+            onChange={(e) => setImportUrl(e.target.value)}
+            onPaste={(e) => {
+              // 自己接手剪貼簿原文：不讓它先進欄位再等使用者按按鈕（那就是原本被抱怨的多餘步驟）。
+              const text = e.clipboardData.getData("text");
+              if (!text.trim()) return;
+              e.preventDefault();
+              setImportUrl(text.trim());
+              void doImport(text);
+            }}
+            placeholder="postgresql://user:pass@localhost:5432/dbname"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); void doImport(importUrl); }
+            }}
+          />
+          <Button
+            variant="secondary"
+            icon={ClipboardPaste}
+            onClick={() => void doImport(importUrl)}
+            className="shrink-0"
+            disabled={!importUrl.trim()}
+          >
+            {t("解析並填入")}
+          </Button>
+        </div>
+      </Field>
+
+      {/* 匯入結果 + 變動摘要 + 復原。摘要只列使用者需要核對的主要欄位（密碼一律遮罩——
+          這塊會留在畫面上，截圖與共享畫面都看得到），其餘類型專屬設定只報件數。 */}
+      {importMsg && (
+        <div className={`text-sm ${importMsg.ok ? "text-success" : "text-danger"}`}>
+          <div className="flex items-start gap-2">
+            <span className="flex-1">{importMsg.text}</span>
+            {importMsg.ok && undoRef.current && (
+              <button
+                type="button"
+                onClick={undoImport}
+                className="shrink-0 underline text-fg/60 hover:text-fg"
+              >
+                {t("復原")}
+              </button>
+            )}
           </div>
-        </Field>
+          {importMsg.ok && importChanged && importChanged.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-fg/50">
+              {importChanged
+                .filter((c) => c.key in IMPORT_SUMMARY_LABELS)
+                .map((c) => (
+                  <span key={c.key} className="whitespace-nowrap">
+                    {t(IMPORT_SUMMARY_LABELS[c.key]!)} {fmtSummaryVal(c.key, c.from, t)} → {fmtSummaryVal(c.key, c.to, t)}
+                  </span>
+                ))}
+              {(() => {
+                const rest = importChanged.filter((c) => !(c.key in IMPORT_SUMMARY_LABELS)).length;
+                return rest > 0 ? <span className="whitespace-nowrap">{t("其他 {n} 項設定", { n: rest })}</span> : null;
+              })()}
+            </div>
+          )}
+        </div>
       )}
-      {importMsg && <div className={`text-sm ${importMsg.ok ? "text-success" : "text-danger"}`}>{importMsg.text}</div>}
 
       <KindPicker
         value={kind}
@@ -461,7 +550,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
       {!pickerOpen && (
       <>
       <Field label={t("名稱")}>
-        <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("選填")} />
+        <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={submitOnEnter}
+          onPaste={onFieldPaste} placeholder={t("選填")} />
       </Field>
 
       {/* 正式環境標記：與 kind 無關，放在名稱下方讓它在任何類型都第一眼看得到。 */}
@@ -529,7 +619,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         <>
           <div className="flex gap-3">
             <Field label={kind === "mongo" && mongoSrv ? t("主機（SRV 域名）") : kind === "kafka" ? t("Bootstrap servers") : kind === "elastic" ? t("節點 URL / 主機") : t("主機")} className="flex-1">
+              {/* 貼上攔截：直覺動作是把整串連線字串貼進「主機」，原本會把整串倒進欄位。 */}
               <Input value={host} onChange={(e) => setHost(e.target.value)} onKeyDown={submitOnEnter}
+                onPaste={onFieldPaste}
                 placeholder={kind === "mongo" && mongoSrv ? t("例如 cluster0.abcd.mongodb.net") : kind === "kafka" ? t("host1:9092,host2:9092") : kind === "elastic" ? t("https://es.example.com:9243 或 localhost") : ""} />
             </Field>
             {/* SRV 連線由 DNS 記錄決定 port；Elastic 貼完整 URL 時 port 內含於 URL，皆不顯示埠欄位。 */}
