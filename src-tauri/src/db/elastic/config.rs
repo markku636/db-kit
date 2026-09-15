@@ -25,22 +25,9 @@ pub fn show_hidden(cfg: &ConnectionConfig) -> bool {
     opt_bool(cfg, "es_show_hidden")
 }
 
-/// 解 Elastic Cloud 的 `cloud_id`：`name:base64(host$es_uuid$kibana_uuid)`。
-///
-/// 回傳 `(host, es_uuid)`，供組出 `https://{es_uuid}.{host}` 的叢集端點。
-/// 格式不符（無 `:`、base64 解不開、欄位不足或缺 host/es_uuid）→ None。
-pub fn decode_cloud_id(cloud_id: &str) -> Option<(String, String)> {
-    let (_name, b64) = cloud_id.trim().split_once(':')?;
-    let decoded = STANDARD.decode(b64.trim()).ok()?;
-    let text = String::from_utf8(decoded).ok()?;
-    let mut parts = text.split('$');
-    let host = parts.next()?.trim();
-    let es_uuid = parts.next()?.trim();
-    if host.is_empty() || es_uuid.is_empty() {
-        return None;
-    }
-    Some((host.to_string(), es_uuid.to_string()))
-}
+/// 解 Elastic Cloud 的 `cloud_id`。實作搬到 db/conn_url（連線字串解析的統一落點，無 feature
+/// gate），讓「貼上 Cloud ID 自動填表」與這裡的 base URL 推導共用同一份邏輯；呼叫點不變。
+pub use crate::db::conn_url::decode_cloud_id;
 
 /// API key 編碼：Elasticsearch 的 `Authorization: ApiKey <value>` 需 base64(id:key)。
 ///

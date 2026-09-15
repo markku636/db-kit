@@ -88,8 +88,10 @@ rdkafka = { version = "0.39", default-features = false, features = ["cmake-build
 # rustls-tls-native-roots：改用 OS 憑證庫當信任根（讓企業內部 CA 免手動指定 CA 檔）；
 # 同時惠及 Kafka Schema Registry / Connect 與 Elasticsearch REST client。
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "stream"], optional = true }
-# Elasticsearch / OpenSearch：API key 以 base64(id:key) 編碼（純 Rust 極小）。藏在 `elastic` feature 後。
-base64 = { version = "0.22", optional = true }
+# base64：Elasticsearch 的 API key（base64(id:key)）與 Elastic Cloud ID 解碼共用。
+# 刻意**不**藏在 elastic feature 後：Cloud ID 的解碼住在 db/conn_url（連線字串解析的統一落點，
+# 沒有 feature gate，精簡 CLI 也依賴它）。純 Rust 無相依的小 crate，精簡版多連它不痛。
+base64 = "0.22"
 apache-avro = { version = "0.17", optional = true }
 # Protobuf 動態解碼：protox 由 .proto 文字編出 FileDescriptorSet，prost-reflect 依 descriptor
 # 動態解 protobuf binary → JSON。皆純 Rust，藏在 kafka feature 後。
@@ -170,7 +172,7 @@ kafka-js = ["kafka", "dep:boa_engine"]
 kafka-tls = ["kafka", "rdkafka/ssl"]
 # elastic：一等公民 Elasticsearch / OpenSearch 支援（REST；以 reqwest rustls 接入，純 Rust 無 C 相依）。
 # 隨 gui 預設開啟；slim CLI（--no-default-features）排除。第一版唯讀瀏覽 + DSL 查詢。
-elastic = ["dep:reqwest", "dep:base64"]
+elastic = ["dep:reqwest"]
 # rabbitmq：一等公民 RabbitMQ 支援。AMQP 0-9-1 走 lapin（peek/publish/delete）、Management REST（15672）
 # 走既有 reqwest（overview/queues/exchanges/purge）。lapin 以 rustls--ring 鎖 provider，純 Rust 無 NASM 相依。
 # 隨 gui 預設開啟；slim CLI（--no-default-features）排除。

@@ -18,19 +18,29 @@
 //! 未知參數靜默忽略。**只發各 driver 真的會讀、且前端表單有對應欄位的鍵**——前端
 //! `ConnectionDialog.buildOptions` 每次存檔都重建整個 options 物件，沒有表單 state 的鍵會被靜默丟棄。
 //!
+//! - Oracle：`jdbc:oracle:thin:@//host:port/service`、`@host:port:SID`、EZConnect、
+//!   TNS descriptor `(DESCRIPTION=…)`、TNS 別名
+//! - Elasticsearch：`http(s)://[user:pass@]host[:port]`（整段 URL 存進 host）與 Elastic Cloud ID
+//! - Kafka：client properties 區塊（`bootstrap.servers=…` / `security.protocol=…` / JAAS）
+//!
 //! 模組分工：
 //! - `normalize` — 貼上內容的雜訊前置處理
 //! - `standard`  — scheme 之後的標準 URL 主體
 //! - `kv`        — 無 scheme 的 `key=value` 方言（分號的 ADO.NET / Npgsql、空白的 libpq）
+//! - `vendor`    — 廠商專屬方言（Oracle / Elastic / Kafka）
 //! - `params`    — host/port 切割、query → options 映射、percent-decode 等共用工具
 //!
 //! 偵測優先序（`parse_url` 依序試，先中先贏）：
-//! 1. `jdbc:` 前綴 → 剝殼後續走下面的流程（非白名單 dialect 直接報錯）
-//! 2. 分號 KV（ADO.NET / Npgsql）—— 僅在無 scheme 時
-//! 3. libpq 空白 KV —— 僅在無 scheme 時
-//! 4. 已知 scheme URL（含 `+driver` 剝除）
-//! 5. sqlite 路徑
-//! 6. 未知 scheme → 有 hint 沿用 hint，無 hint 回 Err
+//! 1. Kafka properties（點號鍵；`;` 串接的 blob 會被 KV 偵測器搶走，故必須最前）
+//! 2. Oracle TNS descriptor（`(DESCRIPTION=…)`，內含大量 `=` 與 `,`）
+//! 3. `jdbc:` 前綴 → oracle 交給 `vendor`，其餘剝殼後續走下面的流程（非白名單 dialect 報錯）
+//! 4. 分號 KV（ADO.NET / Npgsql）—— 僅在無 scheme 時
+//! 5. libpq 空白 KV —— 僅在無 scheme 時
+//! 6. Elastic Cloud ID —— 僅在無 scheme 時
+//! 7. 已知 scheme URL（含 `+driver` 剝除）
+//! 8. `http(s)` → Elastic（整段 URL 留在 host）
+//! 9. sqlite 路徑
+//! 10. 未知 scheme → 有 hint 沿用 hint，無 hint 回 Err
 //!
 //! 防誤判護欄（動偵測順序前務必先讀）：
 //! - `kv` 的偵測器只在字串**不含 `://`**（即 `split_scheme` 未取出 scheme）時才跑。
@@ -46,11 +56,36 @@ mod kv;
 mod normalize;
 mod params;
 mod standard;
+mod vendor;
 
 use std::collections::BTreeMap;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+
 use crate::db::DbKind;
 use crate::error::{AppError, AppResult};
+
+/// 解 Elastic Cloud 的 `cloud_id`：`name:base64(host$es_uuid$kibana_uuid)`。
+///
+/// 回傳 `(host, es_uuid)`，供組出 `https://{es_uuid}.{host}` 的叢集端點。
+/// 格式不符（無 `:`、base64 解不開、欄位不足或缺 host / es_uuid）→ None。
+///
+/// 住在這裡而非 db/elastic/config.rs：`elastic` 是 cargo feature，而本模組沒有 gate
+/// （精簡 CLI 依賴它），「貼上 Cloud ID 自動填表」與 Elastic driver 的 base URL 推導
+/// 得共用同一份邏輯。config.rs 以 `pub use` 取回這個名字，原呼叫點與其單元測試不變。
+pub fn decode_cloud_id(cloud_id: &str) -> Option<(String, String)> {
+    let (_name, b64) = cloud_id.trim().split_once(':')?;
+    let decoded = STANDARD.decode(b64.trim()).ok()?;
+    let text = String::from_utf8(decoded).ok()?;
+    let mut parts = text.split('$');
+    let host = parts.next()?.trim();
+    let es_uuid = parts.next()?.trim();
+    if host.is_empty() || es_uuid.is_empty() {
+        return None;
+    }
+    Some((host.to_string(), es_uuid.to_string()))
+}
 
 /// URL / DSN 解析結果。欄位皆可選：None = 字串中未提供（CLI 沿用旗標 / 預設值、
 /// GUI 前端保留欄位現值）。直接序列化回前端（snake_case 欄位名，與 ConnectionConfig / api.ts
@@ -78,6 +113,10 @@ fn scheme_kind(s: &str) -> Option<DbKind> {
         "mongodb" | "mongodb+srv" | "mongo" => Some(DbKind::Mongo),
         // valkey 為 Redis 的 fork，協定相同，沿用 Redis driver。
         "redis" | "rediss" | "valkey" | "valkeys" => Some(DbKind::Redis),
+        // 純 http(s) URL 視為 Elasticsearch / OpenSearch：貼上路徑裡沒有別的以 http 為基礎的
+        // 一等類型（external gateway 不在此範圍），而 GUI 會顯示解析出的類型且可一鍵改，
+        // 猜錯看得見也改得回；回報「不支援」則什麼都不給。走 vendor::parse_elastic_url。
+        "http" | "https" => Some(DbKind::Elastic),
         "mssql" | "sqlserver" => Some(DbKind::Mssql),
         "oracle" => Some(DbKind::Oracle),
         "kafka" => Some(DbKind::Kafka),
@@ -96,6 +135,8 @@ pub(super) struct SchemeFlags {
     pub tls: bool,
     /// DNS SRV 查詢（`mongodb+srv`）：port 由 SRV 記錄決定。
     pub srv: bool,
+    /// scheme 是 `http` / `https`：整段 URL 要留在 host 欄（見 vendor::parse_elastic_url）。
+    pub http: bool,
 }
 
 /// TLS 語意的 scheme 別名（完整比對）。
@@ -117,6 +158,7 @@ fn normalize_scheme(raw: &str) -> Option<(DbKind, SchemeFlags)> {
             SchemeFlags {
                 tls: scheme_is_tls(&s),
                 srv: s == "mongodb+srv",
+                http: matches!(s.as_str(), "http" | "https"),
             },
         ));
     }
@@ -127,6 +169,7 @@ fn normalize_scheme(raw: &str) -> Option<(DbKind, SchemeFlags)> {
         SchemeFlags {
             tls: scheme_is_tls(head) || matches!(tail, "tls" | "ssl"),
             srv: false,
+            http: false,
         },
     ))
 }
@@ -145,6 +188,39 @@ pub fn split_scheme(url: &str) -> (Option<String>, String) {
         }
     }
     (None, url.to_string())
+}
+
+/// 輸入是否「看得出結構」——供有 kind hint 時的防呆用。
+///
+/// 為什麼需要：hint 會讓 `parse_url` 一定給得出 kind，等於關掉「判不出類型就報錯」那道防呆。
+/// 沒有這層檢查，在 MySQL 對話框貼一段隨手複製的文字也會「成功」並把整段塞進 host。
+///
+/// 接受：URL（含 `://`）、`jdbc:`、TNS descriptor、任何含 `=` 的 KV、檔案路徑、`host:port`。
+/// 拒絕：單一裸字（`localhost` / 一段密碼）——它不帶埠或資料庫資訊，解析它毫無意義，
+/// 使用者直接填「主機」欄即可。
+pub fn looks_structured(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if t.contains("://") || t.contains('=') || t.starts_with('(') {
+        return true;
+    }
+    if params::strip_prefix_ci(t, "jdbc:").is_some() {
+        return true;
+    }
+    // sqlite 檔案路徑
+    if t.contains('/') || t.contains('\\') {
+        return true;
+    }
+    // `host:port`（單一 token，且冒號後是合法埠號）
+    if t.split_whitespace().count() != 1 {
+        return false;
+    }
+    match t.rsplit_once(':') {
+        Some((h, port)) => !h.is_empty() && port.parse::<u16>().is_ok(),
+        None => false,
+    }
 }
 
 /// `jdbc:` 後放行的 dialect 白名單：剝掉前綴後內層即為標準 URL（已有測試覆蓋）。
@@ -167,9 +243,28 @@ pub fn parse_url(input: &str, kind_hint: Option<DbKind>) -> AppResult<Parsed> {
     let prepared = normalize::prepare(input);
     let url = prepared.as_str();
 
+    // Kafka client properties：點號鍵與其他方言完全不重疊，且 `;` 串接的 blob 會被下面的
+    // KV 偵測器搶走，故必須排在最前面。
+    if let Some(p) = vendor::try_kafka_properties(url, kind_hint) {
+        return Ok(p);
+    }
+
+    // Oracle TNS descriptor：`(DESCRIPTION=…)`。內含大量 `=` 與 `,`，同樣得先攔下來。
+    if matches!(kind_hint, None | Some(DbKind::Oracle)) {
+        if let Some(p) = vendor::try_tns(url) {
+            return Ok(p);
+        }
+    }
+
     // JDBC：剝掉 `jdbc:` 前綴後照常解析，但只放行白名單 dialect（見 JDBC_URL_DIALECTS）。
+    // oracle 例外：`jdbc:oracle:thin:@…` 的內層不是 URL，交給 vendor 自己解。
     let url = if let Some(rest) = params::strip_prefix_ci(url, "jdbc:") {
         let dialect = rest.split([':', '/']).next().unwrap_or("").to_ascii_lowercase();
+        if dialect == "oracle" {
+            if let Some(p) = vendor::try_jdbc_oracle(rest) {
+                return Ok(p);
+            }
+        }
         if !JDBC_URL_DIALECTS.contains(&dialect.as_str()) {
             return Err(AppError::Connect(tf!(
                 "不支援的連線字串格式：{scheme}",
@@ -195,6 +290,11 @@ pub fn parse_url(input: &str, kind_hint: Option<DbKind>) -> AppResult<Parsed> {
         if let Some(p) = kv::try_libpq_kv(url, kind_hint) {
             return Ok(p);
         }
+        // Elastic Cloud ID（`name:base64(...)`）。排在 KV 之後、已知 scheme 之前：
+        // 判別靠「base64 解得開」，`sqlite:app.db` 這種解不開所以不會被誤吃。
+        if let Some(p) = vendor::try_cloud_id(url, kind_hint) {
+            return Ok(p);
+        }
     }
 
     // scheme → (DbKind, SchemeFlags)。已給 scheme 但不認得且無 hint → 明確報錯。
@@ -213,6 +313,15 @@ pub fn parse_url(input: &str, kind_hint: Option<DbKind>) -> AppResult<Parsed> {
         },
         None => (kind_hint, SchemeFlags::default()),
     };
+
+    // http(s)：整段 URL 要留在 host 欄（Elastic 的慣例，見 vendor::parse_elastic_url），
+    // 不能走 standard 的 host/port/db 切割。
+    if flags.http {
+        return Ok(vendor::parse_elastic_url(
+            scheme.as_deref().unwrap_or("https"),
+            &rest,
+        ));
+    }
 
     // sqlite：去掉 scheme 後整段當檔案路徑（路徑可含 ? / #，不做 query 切割）。
     if matches!(kind, Some(DbKind::Sqlite)) {
@@ -460,26 +569,23 @@ mod tests {
 
     #[test]
     fn non_ado_semicolon_text_not_misclassified() {
-        // Kafka properties / 含分號的檔案路徑：有 `;`+`=` 但無 ADO 識別鍵 → 不判成 MSSQL。
-        assert_eq!(
-            parse_url("bootstrap.servers=h:9092;security.protocol=SSL", None).unwrap().kind,
-            None
-        );
+        // 含分號的檔案路徑：有 `;`+`=` 但無任何識別鍵 → 不判成 MSSQL。
         assert_eq!(parse_url("C:\\data\\app;ver=2.db", None).unwrap().kind, None);
         // 反例：含 Server= 識別鍵仍正確判為 MSSQL。
         assert_eq!(
             parse_url("Server=h;Integrated Security=true", None).unwrap().kind,
             Some(DbKind::Mssql)
         );
+        // 註：`bootstrap.servers=…;security.protocol=…` 原本也在這裡（判不出 kind），
+        // 現在由 Kafka properties 偵測器認走，正向案例見 kafka_properties_semicolon_separated。
     }
 
     #[test]
     fn jdbc_non_allowlisted_dialect_rejected() {
-        // 白名單外的 dialect（db2 / oracle thin）剝殼後會亂解析，須明確報錯而非默默解錯。
+        // 白名單外的 dialect 剝殼後會亂解析，須明確報錯而非默默解錯。
         let err = parse_url("jdbc:db2://dbhost:50000/SAMPLE", None).unwrap_err();
         assert!(err.message().contains("jdbc:db2"), "錯誤應含 dialect：{}", err.message());
-        // oracle thin 的 `@//host` 語法尚未支援（待 vendor 模組），目前仍報錯。
-        assert!(parse_url("jdbc:oracle:thin:@//dbhost:1521/XEPDB1", None).is_err());
+        assert!(parse_url("jdbc:sybase:Tds:h:5000", None).is_err());
     }
 
     #[test]
@@ -868,5 +974,240 @@ mod tests {
         assert_eq!(p.kind, Some(DbKind::Postgres));
         assert_eq!(p.host, None);
         assert_eq!(p.database.as_deref(), Some("mydb"));
+    }
+
+    // ---- Oracle：JDBC thin / EZConnect / TNS ----
+
+    #[test]
+    fn jdbc_oracle_thin_service_form() {
+        let p = parse("jdbc:oracle:thin:@//dbhost:1521/XEPDB1");
+        assert_eq!(p.kind, Some(DbKind::Oracle));
+        assert_eq!(p.host.as_deref(), Some("dbhost"));
+        assert_eq!(p.port, Some(1521));
+        assert_eq!(p.database.as_deref(), Some("XEPDB1"));
+        // service 是預設值，不發 connect_type（對齊前端 buildOptions 的省略規則）。
+        assert_eq!(opt(&p, "connect_type"), None);
+    }
+
+    #[test]
+    fn jdbc_oracle_thin_sid_form() {
+        let p = parse("jdbc:oracle:thin:@dbhost:1521:ORCL");
+        assert_eq!(p.kind, Some(DbKind::Oracle));
+        assert_eq!(p.host.as_deref(), Some("dbhost"));
+        assert_eq!(p.port, Some(1521));
+        assert_eq!(p.database.as_deref(), Some("ORCL"));
+        assert_eq!(opt(&p, "connect_type"), Some("sid"));
+    }
+
+    #[test]
+    fn jdbc_oracle_oci_and_tns_alias() {
+        // oci driver 與 thin 同樣處理。
+        let p = parse("jdbc:oracle:oci:@//h:1521/svc");
+        assert_eq!(p.database.as_deref(), Some("svc"));
+        // 單一 token → TNS 別名。
+        let a = parse("jdbc:oracle:thin:@MYALIAS");
+        assert_eq!(a.kind, Some(DbKind::Oracle));
+        assert_eq!(a.database.as_deref(), Some("MYALIAS"));
+        assert_eq!(opt(&a, "connect_type"), Some("tns"));
+    }
+
+    #[test]
+    fn oracle_ezconnect_with_hint() {
+        // 裸 `host:port/service` 需搭配 kind hint（無 scheme 時本模組不猜類型）。
+        let p = parse_url("dbhost:1521/XEPDB1", Some(DbKind::Oracle)).unwrap();
+        assert_eq!(p.host.as_deref(), Some("dbhost"));
+        assert_eq!(p.port, Some(1521));
+        assert_eq!(p.database.as_deref(), Some("XEPDB1"));
+    }
+
+    #[test]
+    fn tns_descriptor_fields_extracted() {
+        let p = parse(
+            "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=db.example.com)(PORT=1521))\
+             (CONNECT_DATA=(SERVICE_NAME=XEPDB1)))",
+        );
+        assert_eq!(p.kind, Some(DbKind::Oracle));
+        assert_eq!(p.host.as_deref(), Some("db.example.com"));
+        assert_eq!(p.port, Some(1521));
+        assert_eq!(p.database.as_deref(), Some("XEPDB1"));
+        assert_eq!(opt(&p, "connect_type"), None); // SERVICE_NAME → service
+    }
+
+    #[test]
+    fn tns_descriptor_sid_sets_connect_type() {
+        let p = parse("(DESCRIPTION=(ADDRESS=(HOST=h)(PORT=1521))(CONNECT_DATA=(SID=ORCL)))");
+        assert_eq!(p.database.as_deref(), Some("ORCL"));
+        assert_eq!(opt(&p, "connect_type"), Some("sid"));
+    }
+
+    #[test]
+    fn tns_descriptor_unparseable_falls_back_to_tns() {
+        // 抓不到 HOST → 整段當 TNS 別名交給 driver（oracle.rs 的 tns 分支原樣傳遞）。
+        let raw = "(DESCRIPTION=(CONNECT_DATA=(SERVICE_NAME=svc)))";
+        let p = parse(raw);
+        assert_eq!(p.kind, Some(DbKind::Oracle));
+        assert_eq!(opt(&p, "connect_type"), Some("tns"));
+        assert_eq!(p.database.as_deref(), Some(raw));
+    }
+
+    // ---- Elasticsearch：http(s) URL 與 Cloud ID ----
+
+    #[test]
+    fn elastic_https_url_host_is_full_url() {
+        let p = parse("https://es.example.com:9243");
+        assert_eq!(p.kind, Some(DbKind::Elastic));
+        // 整段 URL 存進 host（elastic/config.rs 的 build_base_url 對此原樣採用）。
+        assert_eq!(p.host.as_deref(), Some("https://es.example.com:9243"));
+        assert_eq!(p.port, Some(9243));
+        assert_eq!(p.database, None); // elastic 無資料庫概念
+        assert_eq!(opt(&p, "es_tls"), None); // scheme 已在 host 裡，不重複發
+    }
+
+    #[test]
+    fn elastic_https_url_sets_basic_auth() {
+        let p = parse("https://elastic:pw%40123@es.example.com:9243");
+        assert_eq!(p.username.as_deref(), Some("elastic"));
+        assert_eq!(p.password.as_deref(), Some("pw@123")); // userinfo 仍 percent-decode
+        // 沒有這條，前端 esAuth 會留在 none，而 build() 會把剛填好的帳密清空存檔。
+        assert_eq!(opt(&p, "es_auth"), Some("basic"));
+        // host 不可殘留 userinfo。
+        assert_eq!(p.host.as_deref(), Some("https://es.example.com:9243"));
+    }
+
+    #[test]
+    fn elastic_url_without_credentials_does_not_emit_es_auth() {
+        // 刻意不發 "none"：發了會害使用者之後手動補的帳密被 usesAuth 判定為不需認證而清空。
+        let p = parse("http://localhost:9200");
+        assert_eq!(p.host.as_deref(), Some("http://localhost:9200"));
+        assert_eq!(opt(&p, "es_auth"), None);
+    }
+
+    #[test]
+    fn elastic_url_path_and_trailing_slash() {
+        // 尾斜線去掉；路徑保留在 host 內（反向代理常掛在子路徑下）。
+        assert_eq!(
+            parse("https://es.example.com/").host.as_deref(),
+            Some("https://es.example.com")
+        );
+        assert_eq!(
+            parse("https://proxy.example.com/es").host.as_deref(),
+            Some("https://proxy.example.com/es")
+        );
+    }
+
+    #[test]
+    fn cloud_id_expands_to_node_url() {
+        // `name:base64("host$es_uuid$kibana_uuid")`
+        // base64("example.aws.found.io$abc123$def456")
+        let cid = "mydeploy:ZXhhbXBsZS5hd3MuZm91bmQuaW8kYWJjMTIzJGRlZjQ1Ng==";
+        let p = parse(cid);
+        assert_eq!(p.kind, Some(DbKind::Elastic));
+        assert_eq!(p.host.as_deref(), Some("https://abc123.example.aws.found.io"));
+    }
+
+    #[test]
+    fn known_scheme_with_colon_not_mistaken_for_cloud_id() {
+        // `sqlite:app.db` 的右半段不是合法 base64，且已知 scheme 也排在 cloud id 之前。
+        assert_eq!(parse("sqlite:app.db").kind, Some(DbKind::Sqlite));
+        // 一般 `name:value` 解不開 base64 → 不誤判成 Elastic。
+        assert_eq!(parse_url("label:some.value", None).unwrap().kind, None);
+    }
+
+    // ---- Kafka properties ----
+
+    #[test]
+    fn kafka_properties_newline_separated() {
+        let p = parse(
+            "bootstrap.servers=pkc-x.confluent.cloud:9092\n\
+             security.protocol=SASL_SSL\n\
+             sasl.mechanism=PLAIN\n\
+             sasl.username=MYKEY\n\
+             sasl.password=MYSECRET",
+        );
+        assert_eq!(p.kind, Some(DbKind::Kafka));
+        assert_eq!(p.host.as_deref(), Some("pkc-x.confluent.cloud:9092"));
+        assert_eq!(opt(&p, "kafka_security_protocol"), Some("SASL_SSL"));
+        assert_eq!(opt(&p, "kafka_sasl_mechanism"), Some("PLAIN"));
+        assert_eq!(p.username.as_deref(), Some("MYKEY"));
+        assert_eq!(p.password.as_deref(), Some("MYSECRET"));
+    }
+
+    #[test]
+    fn kafka_properties_semicolon_separated() {
+        let p = parse("bootstrap.servers=h:9092;security.protocol=SSL");
+        assert_eq!(p.kind, Some(DbKind::Kafka));
+        assert_eq!(p.host.as_deref(), Some("h:9092"));
+        assert_eq!(opt(&p, "kafka_security_protocol"), Some("SSL"));
+    }
+
+    #[test]
+    fn kafka_jaas_config_credentials_extracted() {
+        let p = parse(
+            "bootstrap.servers=h:9092\n\
+             security.protocol=SASL_SSL\n\
+             sasl.mechanism=PLAIN\n\
+             sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule \
+             required username=\"K1\" password=\"S1\";",
+        );
+        assert_eq!(p.username.as_deref(), Some("K1"));
+        assert_eq!(p.password.as_deref(), Some("S1"));
+    }
+
+    #[test]
+    fn kafka_properties_comments_ignored() {
+        let p = parse(
+            "# Confluent Cloud\n\
+             bootstrap.servers=h:9092\n\
+             ! legacy comment\n\
+             security.protocol=SASL_SSL",
+        );
+        assert_eq!(p.kind, Some(DbKind::Kafka));
+        assert_eq!(opt(&p, "kafka_security_protocol"), Some("SASL_SSL"));
+    }
+
+    #[test]
+    fn kafka_properties_without_marker_returns_none() {
+        // 沒有任何 Kafka 識別鍵 → 不認（避免亂吃普通 properties 檔）。
+        assert_eq!(parse_url("foo.bar=1\nbaz.qux=2", None).unwrap().kind, None);
+    }
+
+    // ---- looks_structured：有 kind hint 時的防呆 ----
+
+    #[test]
+    fn looks_structured_accepts_real_connection_strings() {
+        for s in [
+            "postgresql://u:p@h:5432/db",
+            "jdbc:oracle:thin:@//h:1521/svc",
+            "(DESCRIPTION=(ADDRESS=(HOST=h)(PORT=1521)))",
+            "host=localhost port=5432 dbname=app",
+            "Server=h;Database=d",
+            "dbhost:1521/XEPDB1",
+            "localhost:5434",
+            "C:\\data\\app.db",
+            "/var/lib/app.sqlite",
+        ] {
+            assert!(looks_structured(s), "應視為有結構：{s}");
+        }
+    }
+
+    #[test]
+    fn looks_structured_rejects_bare_words() {
+        // 單一裸字不帶埠 / 資料庫資訊，解析它沒有意義；使用者直接填「主機」欄即可。
+        // 這道防呆是有 kind hint 時唯一擋得住「隨手貼一段文字」的東西。
+        for s in ["", "   ", "localhost", "ranai_pass_2026", "p@ssw0rd", "SELECT 1 FROM t"] {
+            assert!(!looks_structured(s), "不應視為有結構：{s}");
+        }
+    }
+
+    #[test]
+    fn kafka_ssl_options_mapped() {
+        let p = parse(
+            "bootstrap.servers=h:9092\n\
+             security.protocol=SSL\n\
+             ssl.ca.location=/etc/ca.pem\n\
+             enable.ssl.certificate.verification=false",
+        );
+        assert_eq!(opt(&p, "kafka_ssl_ca"), Some("/etc/ca.pem"));
+        assert_eq!(opt(&p, "kafka_ssl_insecure"), Some("1"));
     }
 }

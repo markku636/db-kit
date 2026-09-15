@@ -352,7 +352,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     setImportMsg(null);
     setImportChanged(null);
     try {
-      const p = await api.parseConnectionUrl(url);
+      // 傳當下選的類型當提示：Oracle EZConnect / 裸 host:port / sqlite 路徑都不帶類型資訊，
+      // 沒提示的話後端只能報「無法解析」。後端對有提示的輸入會多做一道結構檢查（looks_structured），
+      // 所以隨手貼一段文字仍然會被擋下來，不會靜默塞進主機欄。
+      const p = await api.parseConnectionUrl(url, kind);
       const before = snapshotForm();
       const { next, changed } = applyParsedToForm(p, before);
       undoRef.current = before;

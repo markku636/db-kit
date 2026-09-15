@@ -115,12 +115,24 @@ pub fn set_query_guard(max_rows: usize, timeout_ms: u64) {
     crate::db::limits::set_timeout_ms(timeout_ms);
 }
 
-/// 解析使用者貼上的連線字串（URL / DSN / JDBC / ADO.NET），回填連線對話框欄位。
-/// 同步純函式：不建連線、不碰 State。直接回傳 `conn_url::Parsed`（已 Serialize，
-/// kind 沿 DbKind lowercase serde），欄位皆可選（None = 字串未提供，前端保留現值）。
+/// 解析使用者貼上的連線字串（URL / DSN / JDBC / ADO.NET / libpq / TNS / Kafka properties），
+/// 回填連線對話框欄位。同步純函式：不建連線、不碰 State。直接回傳 `conn_url::Parsed`
+/// （已 Serialize，kind 沿 DbKind lowercase serde），欄位皆可選（None = 字串未提供，前端保留現值）。
+///
+/// `kind` 為對話框當下選的類型，當作解析提示：有些格式本身不帶類型資訊
+/// （Oracle EZConnect `host:1521/svc`、裸 `host:port`、sqlite 檔案路徑），沒有提示就只能報錯。
 #[tauri::command]
-pub fn parse_connection_url(url: String) -> AppResult<crate::db::conn_url::Parsed> {
-    let p = crate::db::conn_url::parse_url(url.trim(), None)?;
+pub fn parse_connection_url(
+    url: String,
+    kind: Option<crate::db::DbKind>,
+) -> AppResult<crate::db::conn_url::Parsed> {
+    let url = url.trim();
+    // hint 會讓 kind 一定是 Some，等於關掉下面那道「判不出類型」的防呆。所以有 hint 時
+    // 先擋一道結構檢查，否則在 MySQL 對話框貼一段隨手複製的文字也會「成功」並塞進 host。
+    if kind.is_some() && !crate::db::conn_url::looks_structured(url) {
+        return Err(AppError::Connect(t!("無法解析連線字串").into()));
+    }
+    let p = crate::db::conn_url::parse_url(url, kind)?;
     // GUI 匯入至少要判得出 kind（否則對話框無法切到正確類型）；判不出即明確報錯，
     // 而非把整段當 host 靜默填入（貼到非連線字串時的假成功）。
     if p.kind.is_none() {

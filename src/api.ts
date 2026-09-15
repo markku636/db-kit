@@ -1139,7 +1139,10 @@ export const api = {
   // keychain 是否已有此連線的資料庫密碼（連線前帳密檢查；不回傳密碼本身）。
   hasStoredPassword: (id: string) => invoke<boolean>("has_stored_password", { id }),
   // 解析連線字串（mysql:// postgres:// mongodb+srv:// rediss:// sqlserver:// / ADO.NET 等）→ 填表用。
-  parseConnectionUrl: (url: string) => invoke<ParsedUrl>("parse_connection_url", { url }),
+  // kind 為對話框當下選的類型，當作解析提示：有些格式本身不帶類型資訊
+  // （Oracle EZConnect `host:1521/svc`、裸 `host:port`、sqlite 檔案路徑），沒提示只能報錯。
+  parseConnectionUrl: (url: string, kind?: DbKind) =>
+    invoke<ParsedUrl>("parse_connection_url", { url, kind }),
   // 連線設定持久化（密碼存 keychain，磁碟不含密碼）
   listSavedConnections: () =>
     invoke<ConnectionConfig[]>("list_saved_connections"),
