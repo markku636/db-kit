@@ -651,15 +651,18 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
               </Field>
             </div>
           )}
-          {/* 無資料庫概念的類型（KIND_META.noDatabase：kafka 等）不顯示 database 欄。 */}
+          {/* 無資料庫概念的類型（KIND_META.noDatabase：kafka 等）不顯示 database 欄。
+              Redis 的「資料庫」是數字索引（0..CONFIG GET databases，通常 16）而非名稱；
+              連線前拿不到實際上限，故維持文字輸入而非下拉。 */}
           {!KIND_META[kind].noDatabase && (
             <Field label={
               kind === "oracle"
                 ? (oracleConnectType === "sid" ? "SID" : oracleConnectType === "tns" ? t("TNS 別名") : t("服務名稱（Service Name）"))
+                : kind === "redis" ? t("資料庫索引（選填）")
                 : t("資料庫（選填）")
             }>
               <Input value={database} onChange={(e) => setDatabase(e.target.value)} onKeyDown={submitOnEnter}
-                placeholder={kind === "oracle" ? t("例如 ORCLPDB1 / FREEPDB1") : ""} />
+                placeholder={kind === "oracle" ? t("例如 ORCLPDB1 / FREEPDB1") : kind === "redis" ? "0" : ""} />
             </Field>
           )}
 

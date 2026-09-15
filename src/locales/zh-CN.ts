@@ -293,6 +293,8 @@ const zhCN: Catalog = {
   "貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql":
     "粘贴即自动解析。支持 URL（postgres:// mysql:// mongodb+srv:// rediss://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql",
   "復原": "撤销",
+  // Redis 的「数据库」是数字索引而非名称，label 与其他类型分开。
+  "資料庫索引（選填）": "数据库索引（选填）",
   "其他 {n} 項設定": "其他 {n} 项设置",
   "開": "开",
   "關": "关",

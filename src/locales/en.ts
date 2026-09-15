@@ -298,6 +298,8 @@ const en: Catalog = {
   "貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql":
     "Paste to parse automatically. Supports URLs (postgres:// mysql:// mongodb+srv:// rediss://), libpq (host=… port=…), JDBC, and ADO.NET / Npgsql",
   "復原": "Undo",
+  // Redis 的「資料庫」是數字索引而非名稱，label 與其他類型分開。
+  "資料庫索引（選填）": "Database index (optional)",
   "其他 {n} 項設定": "{n} more setting(s)",
   "開": "On",
   "關": "Off",

@@ -17,8 +17,45 @@ pub(super) fn prepare(raw: &str) -> String {
             break;
         }
     }
+    // CLI 指令整行貼上：抽出其中含 `scheme://` 的那個參數。放在引號 / env 前綴處理之後——
+    // 指令列裡的 URL 通常自己被引號包著，前面那圈只剝整行的最外層引號。
+    if let Some(url) = extract_url_from_command(&s) {
+        s = url;
+    }
     s = join_wrapped_lines(&s);
     strip_trailing_semicolon(&s).trim().to_string()
+}
+
+/// 認得的用戶端指令名（比對時去掉路徑與 `.exe`）。
+const CLI_TOOLS: &[&str] = &[
+    "psql", "mysql", "mariadb", "mongosh", "mongo", "redis-cli", "valkey-cli", "sqlcmd",
+    "sqlite3", "dbk",
+];
+
+/// CLI 指令貼上：`psql "postgres://…"` / `mongosh "mongodb+srv://…"` 這類整行複製。
+///
+/// 只做最便宜的一半——抽出含 `scheme://` 的那個參數。旗標形式
+/// （`mysql -h H -P 3306 -u U -pSECRET db`）刻意不做：四張 flag 表換來的格式，使用者手改更快。
+///
+/// 要求第一個 token 是已知指令名，否則不介入——否則任何「一段話裡剛好有個 URL」都會被抽走。
+fn extract_url_from_command(s: &str) -> Option<String> {
+    let mut toks = s.split_whitespace();
+    let cmd = toks.next()?;
+    let base = cmd
+        .rsplit(['/', '\\'])
+        .next()?
+        .trim_end_matches(".exe")
+        .to_ascii_lowercase();
+    if !CLI_TOOLS.contains(&base.as_str()) {
+        return None;
+    }
+    let tok = toks.find(|t| t.contains("://"))?;
+    let url = tok.trim_matches(|c| c == '"' || c == '\'' || c == '`');
+    if url.is_empty() {
+        None
+    } else {
+        Some(url.to_string())
+    }
 }
 
 /// 剝除成對的外層引號（`'…'`、`"…"`、`` `…` ``）。只剝一層，由 `prepare` 的迴圈處理多層。
@@ -169,6 +206,32 @@ mod tests {
     fn multiline_properties_kept() {
         let blob = "bootstrap.servers=pkc-x.confluent.cloud:9092\nsecurity.protocol=SASL_SSL";
         assert_eq!(prepare(blob), blob);
+    }
+
+    #[test]
+    fn cli_command_url_extracted() {
+        assert_eq!(prepare("psql \"postgres://u:p@h:5432/db\""), "postgres://u:p@h:5432/db");
+        assert_eq!(
+            prepare("mongosh 'mongodb+srv://u:p@c0.example.mongodb.net/app'"),
+            "mongodb+srv://u:p@c0.example.mongodb.net/app"
+        );
+        // 帶路徑與 .exe 的指令名也要認得。
+        assert_eq!(
+            prepare("C:\\tools\\psql.exe postgres://h/db"),
+            "postgres://h/db"
+        );
+        // 指令後還有其他旗標時仍抽得出 URL。
+        assert_eq!(prepare("redis-cli -u rediss://h:6380 --tls"), "rediss://h:6380");
+    }
+
+    #[test]
+    fn non_cli_text_with_url_left_alone() {
+        // 第一個 token 不是已知指令名 → 不介入（否則「一段話裡剛好有 URL」都會被抽走）。
+        let s = "see postgres://h/db for details";
+        assert_eq!(prepare(s), s);
+        // libpq KV 有空白但沒有 `://`，不受影響。
+        let kv = "host=localhost port=5432 dbname=app";
+        assert_eq!(prepare(kv), kv);
     }
 
     #[test]

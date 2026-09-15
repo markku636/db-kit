@@ -67,9 +67,25 @@ dbk --url "mysql://app:secret@10.0.0.5:3306/shop" table list
 dbk --url "postgres://user@host/db?sslmode=require" db list
 dbk --url "oracle://user:pass@host:1521/SERVICE" table list
 dbk --url "/var/data/local.sqlite" table list          # SQLite 直接給檔案路徑
+dbk --url "host=db.internal port=5432 dbname=app user=svc sslmode=require" db list
+dbk --url "jdbc:oracle:thin:@//db:1521/XEPDB1" table list
 ```
 
-與 GUI 的「從連線字串匯入」共用同一套解析器（`conn_url.rs`），支援 `mysql://` `postgres://` `mongodb+srv://` `rediss://` `sqlserver://` `oracle://` 與 Azure ADO.NET 格式。
+與 GUI 的「連線字串」欄共用同一套解析器（`db/conn_url/`），支援：
+
+- **URL**：`mysql://` `mariadb://` `postgres://`（`postgresql://`）`mongodb://`（`mongodb+srv://`）`redis://`（`rediss://`）`valkey://`（`valkeys://`）`mssql://` `sqlserver://` `oracle://` `kafka://` `amqp://`（`amqps://`）`sqlite:`
+- **框架方言後綴**：`postgresql+psycopg2://` `mysql+pymysql://` `mssql+pyodbc://` 等（driver 後綴忽略；`+tls` / `+ssl` 視為 TLS）
+- **libpq keyword/value**：`host=… port=… dbname=… user=… sslmode=…`（psql 慣用形式，值可用單引號包住含空白的密碼）
+- **JDBC**：`jdbc:sqlserver://` `jdbc:mysql://` `jdbc:mariadb://` `jdbc:postgresql://` `jdbc:sqlite:`；帳密放 query string（`?user=…&password=…`）也認得
+- **Oracle**：`jdbc:oracle:thin:@//host:1521/service`、`@host:1521:SID`、`@TNS_ALIAS`、TNS descriptor `(DESCRIPTION=(ADDRESS=(HOST=…)(PORT=…))(CONNECT_DATA=(SERVICE_NAME=…)))`，以及 EZConnect `host:1521/service`（需搭配 `--kind oracle`）
+- **ADO.NET / Npgsql 分號字串**：`Server=…;Database=…;User ID=…`（判為 SQL Server）、`Host=…;Database=…;Username=…`（判為 PostgreSQL）
+- **雜訊容錯**：外層引號、`export DATABASE_URL=` 前綴、尾端分號、終端機折行，以及 `psql "postgres://…"` 這類整行指令貼上
+
+不帶類型資訊的格式（EZConnect、裸 `host:port`、SQLite 檔案路徑）需要 `--kind` 當提示。
+
+> Kafka client properties 與 Elasticsearch 的 `http(s)://` / Cloud ID 同樣解得出來，但 CLI
+> 目前不支援 Kafka / Elasticsearch / RabbitMQ 三種類型（見 `cli/resolve.rs` 的
+> `ensure_cli_kind`），那幾種格式只有 GUI 用得到。
 
 ### 3. 逐項旗標
 
