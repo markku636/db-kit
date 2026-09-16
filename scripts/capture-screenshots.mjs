@@ -257,6 +257,32 @@ const SHOTS = {
     await shot(page, "compare-guide-06-confirm");
   },
 
+  // 審查並執行：查詢分頁工具列的盾牌鈕 → AI 審查串流完、左側逐句的回滾等級與注意事項。
+  // 示範資料把 prod-mysql 設成唯讀；這幾張要拍的是可以執行的狀態，先關掉唯讀。
+  async "12-review-run"(page) {
+    await openReviewRun(page);
+    await page.locator('label:has-text("我了解有") input[type="checkbox"]').first().check();
+    await sleep(300);
+    await shot(page, "12-review-run");
+  },
+
+  // 執行後的結果分頁：輸出目錄、檔案清單與逐欄的執行前 / 執行後差異。
+  async "13-review-run-diff"(page) {
+    await runReviewRun(page);
+    // 捲到「執行前後差異」標題，讓畫面從差異表開始（上方的輸出檔案清單另見 README 說明）。
+    await page.getByText("執行前後差異", { exact: true }).first().evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await sleep(300);
+    await shot(page, "13-review-run-diff");
+  },
+
+  // 回滾腳本：最後一句排最前面，無法安全還原的列以註解列出並寫明原因。
+  async "14-review-run-rollback"(page) {
+    await runReviewRun(page);
+    await page.getByText("回滾腳本", { exact: true }).first().click();
+    await sleep(500);
+    await shot(page, "14-review-run-rollback");
+  },
+
   // 整庫資料字典：資料庫右鍵 →「資料庫文件…」，等逐表結構抓完後拍 Markdown 預覽。
   async "11-db-docs"(page) {
     await page.getByText("prod-mysql", { exact: true }).dblclick();
@@ -268,6 +294,40 @@ const SHOTS = {
     await shot(page, "11-db-docs");
   },
 };
+
+// 審查並執行：關唯讀 → 開查詢分頁 → 貼腳本 → 按盾牌鈕 → 等 AI 審查串流完。
+const REVIEW_SQL =
+  "UPDATE orders SET status = 'cancelled' WHERE status = 'pending' AND placed_at < '2026-01-01';\n" +
+  "DELETE FROM order_notes WHERE created_at < '2025-01-01';";
+async function openReviewRun(page) {
+  await page.getByText("prod-mysql", { exact: true }).first().click({ button: "right" });
+  await sleep(400);
+  await page.getByText("關閉唯讀模式", { exact: true }).click();
+  await sleep(500);
+  await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+  await sleep(1200);
+  await page.getByText("查詢", { exact: true }).first().click();
+  await sleep(900);
+  await page.locator(".cm-content").first().click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText(REVIEW_SQL);
+  await sleep(500);
+  await page.locator('[data-testid="review-run-open"]').first().click();
+  await page.getByRole("button", { name: "重新審查", exact: true }).first().waitFor({ timeout: 20000 });
+  await sleep(600);
+}
+async function runReviewRun(page) {
+  await openReviewRun(page);
+  await page.locator('label:has-text("我了解有") input[type="checkbox"]').first().check();
+  await sleep(300);
+  await page.getByRole("button", { name: "執行（含備份）", exact: true }).click();
+  await sleep(600);
+  await page.getByRole("button", { name: "執行", exact: true }).last().click(); // 確認框
+  await page.waitForFunction(() => document.body.innerText.includes("已執行完成"), null, { timeout: 8000 });
+  // 等「已執行」toast 自己消失，截圖右下角才乾淨。
+  await page.waitForFunction(() => !document.body.innerText.includes("已執行，備份與差異已寫入輸出目錄"), null, { timeout: 15000 }).catch(() => {});
+  await sleep(400);
+}
 
 // ── main ───────────────────────────────────────────────────────────────
 if (!existsSync(resolve(root, "dist/index.html"))) {

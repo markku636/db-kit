@@ -22,6 +22,7 @@
   - [`export` / `schema-dump` / `backup`](#export--schema-dump--backup)
   - [`search` / `column-stats` / `routine` / `er-model` / `server-info`](#search--column-stats--routine--er-model--server-info)
   - [`compare` / `schema` — 結構 / 資料比對與快照](#compare--schema--結構--資料比對與快照)
+  - [`run` — 審查並執行 SQL 腳本](#run--審查並執行-sql-腳本)
   - [`redis` — Redis 操作](#redis--redis-操作)
   - [`mcp` — MCP 伺服器（給 AI 用戶端）](#mcp--mcp-伺服器給-ai-用戶端)
 - [常見情境](#常見情境)
@@ -128,6 +129,8 @@ error: 此為寫入指令，未執行：執行：update users set status='active
 $ dbk --conn prod exec "delete from sessions" --yes
 error: 此為高破壞動作，未執行：執行：delete from sessions。請再加 --force 確認
 ```
+
+**第四層（選用）— 留下回滾。** 跑正式環境的遷移腳本時改用 `run`：同樣要 `--yes` / `--force`，另外逐句擷取前像並把回滾腳本寫進 `--out` 目錄，沒有完整回滾的語句要再加 `--allow-incomplete`，正式環境連線要再加 `--allow-prod`。見 [`run` — 審查並執行 SQL 腳本](#run--審查並執行-sql-腳本)。
 
 > 建議搭配**唯讀資料庫帳號**作為第二道防線。CLI 的守門是防手滑，不是防惡意。
 
@@ -359,6 +362,41 @@ dbk --conn staging -d shop compare data orders --dst prod --apply --include-dele
 - 目標連線標記為正式環境（`options.prod`）時 `--apply` 會被擋下，確定要套用請加 `--allow-prod`。
 - 引擎表達不出來的變更（SQLite 改型別、SQL Server 改預設值）會列在 `skipped` 區，不會靜默漏掉。
 
+### `run` — 審查並執行 SQL 腳本
+
+逐句「擷取前像 → 寫入回滾腳本 → 執行 → 擷取後像」，把腳本、AI 審查、回滾腳本、前後像快照與差異報告寫進 `--out` 底下的新子目錄。沒帶 `--yes` 只做到產生審查與備份（不執行），與其他寫入指令的預演語意一致。
+
+```bash
+# 預演：分析 + 前像 + 回滾腳本，不執行
+dbk --conn prod-mysql -d shop run migrate.sql --out D:/db-backups
+
+# 外部 AI 審查：提示從 stdin 餵入、stdout 存成 review.md；AI 判 STOP 時只產生備份
+dbk --conn prod-mysql -d shop run migrate.sql --out D:/db-backups --review-cmd "claude -p"
+
+# 執行（含 DROP / TRUNCATE / 無 WHERE 寫入時再加 --force；正式環境連線再加 --allow-prod）
+dbk --conn prod-mysql -d shop run migrate.sql --out D:/db-backups --yes
+
+# 只印出審查提示，接到任何 AI 工具
+dbk --conn prod-mysql -d shop run migrate.sql --out D:/db-backups --print-prompt > prompt.md
+
+# 從 stdin 讀腳本；還原時可以對 rollback.sql 再跑一次（還原前先備份現況）
+cat migrate.sql | dbk --conn prod-mysql -d shop run - --out D:/db-backups --yes
+dbk --conn prod-mysql -d shop run D:/db-backups/20260916-210000_prod-mysql_shop/rollback.sql --out D:/db-backups --yes
+```
+
+| 旗標 | 說明 |
+|---|---|
+| `--out`, `-o` | 輸出目錄（必填；每次建立 `時間_連線_資料庫` 子目錄） |
+| `--review-cmd <CMD>` | AI 審查指令（Windows 走 `cmd /C`、其餘走 `sh -c`） |
+| `--ignore-verdict` | AI 結論為 STOP 仍執行 |
+| `--review-samples <N>` | 附給 AI 的前像樣本列數（預設 0，不送資料） |
+| `--print-prompt` | 只印出審查提示後結束 |
+| `--max-capture-rows <N>` | 每句前像擷取上限（預設 10,000） |
+| `--allow-incomplete` | 有語句沒有完整回滾仍執行 |
+| `--allow-prod` | 連線標記為正式環境時必須加上 |
+
+含 `BEGIN` / `COMMIT`、`USE` / `SET`、非 PostgreSQL 的程序本體或 `DROP DATABASE` 的腳本會整份擋下、一句都不執行。stderr 印逐句分析與進度，stdout 印每句的狀態 / 影響列數 / 回滾等級 / 差異摘要（`--format json` 則為目錄路徑 + 完整 manifest）。回滾等級、各語句的備份方式、各資料庫的值還原做法與限制見 **[審查並執行使用指南](./review-run.md)**。
+
 ### `redis` — Redis 操作
 
 讀取類：
@@ -475,6 +513,17 @@ dbk --conn staging --format json stress "SELECT 1" --threads 8 --seconds 30 \
 dbk --conn prod exec "delete from sessions where expired_at < now()"
 ```
 
+**上線遷移：先預演、看審查，再執行並留下回滾**
+
+```bash
+# 1) 預演：分析 + AI 審查 + 前像與回滾腳本，不執行
+dbk --conn prod -d shop run release-42.sql --out /backup/releases --review-cmd "claude -p"
+# 2) 看過 review.md / rollback.sql 後執行（每次都會重新擷取前像，不沿用第 1 步的檔案）
+dbk --conn prod -d shop run release-42.sql --out /backup/releases --yes --allow-prod
+# 3) 出事時還原：對回滾腳本再跑一次，還原前也會先備份現況
+dbk --conn prod -d shop run /backup/releases/<子目錄>/rollback.sql --out /backup/releases --yes --allow-prod
+```
+
 **稽核：找出所有引用某欄位的預存程序**
 
 ```bash
@@ -500,7 +549,8 @@ dbk --conn prod --format json search "customer_id" --definitions --type procedur
 
 - **Kafka / Elasticsearch / RabbitMQ 連線 CLI 不支援**。沒有可在終端機表達的通用查詢語言，且精簡 binary 未編入其驅動；指定時會回明確錯誤，請改用 GUI。
 - **`mcp` 逐一處理請求**，不併發。資料庫工具本來就該一條一條跑，而且共用同一條連線。
-- **`GO` 批次分隔未支援**。SSMS 貼出來的腳本，`GO` 之後的語句不會被切成獨立批次。
+- **`GO` 批次分隔只有 `run` 支援**。`exec` 收到 SSMS 貼出來的腳本時，`GO` 之後的語句不會被切成獨立批次。
+- **`run` 不包交易、逐句提交**；含 `BEGIN` / `COMMIT`、`USE` / `SET` 或非 PostgreSQL 程序本體的腳本整份擋下。**Oracle 尚未實測**。
 - **`stress` 一律唯讀**，不提供 `--allow-writes`。
 - **不做還原**。`backup` 只產出 dump 檔；還原請用 GUI 或各資料庫的原生工具（還原是破壞性操作，需要互動確認）。
 - **`backup` 需要各資料庫的官方 dump 工具在 `PATH`**（SQLite 除外，走檔案複製），沒有內建降級；SQL Server 與 Oracle 的備份尚未接上。

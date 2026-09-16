@@ -109,6 +109,20 @@
 
 > 逐步操作、四種比對情境（兩個庫 / 單一資料表 / 跨連線 / 對快照）與各資料庫的注意事項，見 **[結構比對使用指南](./docs/compare.md)**。
 
+**審查並執行** — 在正式環境跑會改資料的腳本之前，查詢分頁工具列的「審查並執行」會先請 AI 審查（預期的前後差異、風險、修正建議），接著**逐句**「擷取會被改到的列 → 寫入回滾語句 → 執行 → 再擷取一次比對差異」，腳本、AI 審查、`rollback.sql`、前後像快照與 `diff.md` 全部寫進你指定的目錄。前像以依型別改寫的查詢無損擷取（BLOB、時間戳時區、浮點精度都原封不動），不確定能安全還原的回滾語句一律註解掉並寫明原因；交易控制、session 狀態這類在連線池上不可靠的語句會整份擋下。AI 助手對話裡的寫入語句、命令列 `dbk run` 走同一套。
+
+<p align="center">
+  <img src="docs/screenshots/12-review-run.png" alt="審查並執行：逐句回滾等級與 AI 審查結論" width="860">
+</p>
+
+執行後結果分頁列出逐欄的執行前 / 執行後差異；回滾腳本最後一句排最前面，無法安全還原的列以註解列出並寫明原因：
+
+<p align="center">
+  <img src="docs/screenshots/13-review-run-diff.png" alt="審查並執行：執行前後差異" width="860">
+</p>
+
+> 回滾等級怎麼判、輸出目錄裡每個檔案是什麼、各資料庫的還原做法與限制，見 **[審查並執行使用指南](./docs/review-run.md)**。
+
 **整庫文件** — 右鍵資料庫 →「資料庫文件…」，把每張表的欄位、型別、可空、鍵、預設值與註解整理成一份可交付的文件，Markdown 與 HTML 兩種格式，附目錄錨點：
 
 <p align="center">
@@ -205,7 +219,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - **內建 AI 助手（四種供應商）** — 右側面板可接**本機 CLI**（Claude Code / OpenAI Codex，用你自己的訂閱登入，不需要 API key）或**任何 Anthropic / OpenAI 相容 API**（官方 API、OpenRouter / DeepSeek / Kimi / GLM / Groq，以及地端的 Ollama / LM Studio / vLLM —— 填 Base URL 與模型即可，地端端點免金鑰）。串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。供應商在面板上隨時切換，助手與「AI 生成查詢」列共用同一個選擇。**API 金鑰只存 OS keychain**，設定檔與前端都拿不到明文。
 - **助手能自己讀資料庫（唯讀）** — 不再只能看前端塞給它的那一張表：助手可以自己 `list_tables` / `describe_table` / 取樣 / 下 `SELECT`，所以「這個庫是做什麼的」「上個月訂單多少」這類問題它查得到答案。**一律唯讀**，且是機制上做不到寫入而非提示裡請它不要——連 `EXPLAIN ANALYZE DELETE` 都擋；一次一條語句、200 列 / 8 KB / 30 秒上限；**它跑過的每一條 SQL 與結果摘要都列在回應裡**，可一鍵貼回編輯器稽核。正式環境連線第一次使用前另外確認一次。API 供應商內建此能力，CLI 供應商（Claude Code / Codex）則透過內建的 `dbk mcp` 提供同一組工具。
 - **編輯器內的 AI 動作 + 差異預覽** — 選一段 SQL（或把游標放在某條語句上），右鍵／`Ctrl+Shift+E`／工具列「AI 動作」：解釋、最佳化、修正錯誤、加註解、轉換方言（MySQL ↔ PostgreSQL ↔ SQL Server ↔ Oracle ↔ SQLite）、產生測試資料、白話解釋執行計畫。`Ctrl+I` 可直接用一句話描述要怎麼改。改寫類動作**一律先顯示差異**：逐塊可拒絕、可手動微調，按「接受」才寫回編輯器，而且進 undo 歷史（`Ctrl+Z` 退得回去）。
-- **對話面板：@ 範圍、/ 指令、就地執行** — 打 `@` 指定要附帶哪幾張表（或 `@query` / `@result` / `@error` 帶入編輯器現況），送出前就看得到「這則帶了 3 張表、約 4.2 KB」；沒帶成的也會標出原因，不會靜默消失。`/explain`、`/fix`、`/optimize`、`/sql`、`/schema` 等指令免打整段提示。回應裡的 SQL 區塊可直接「執行」或「執行並回饋」（結果交回模型接著分析），守門與查詢分頁同一套——唯讀連線擋寫入、破壞性語句與正式環境要確認。HTTP 供應商的對話歷史會落地，重開 App 續聊不會失憶。
+- **對話面板：@ 範圍、/ 指令、就地執行** — 打 `@` 指定要附帶哪幾張表（或 `@query` / `@result` / `@error` 帶入編輯器現況），送出前就看得到「這則帶了 3 張表、約 4.2 KB」；沒帶成的也會標出原因，不會靜默消失。`/explain`、`/fix`、`/optimize`、`/sql`、`/schema` 等指令免打整段提示。回應裡的 SQL 區塊可直接「執行」或「執行並回饋」（結果交回模型接著分析），守門與查詢分頁同一套——唯讀連線擋寫入；**寫入語句先進入「審查並執行」**（AI 審查 + 逐句備份 + 回滾腳本）才會執行。HTTP 供應商的對話歷史會落地，重開 App 續聊不會失憶。
+- **審查並執行：寫入前的安全網** — 查詢分頁工具列一鍵：AI 先審查腳本（預期前後差異、風險、修正建議），接著**逐句**擷取會被改到的列、回滾語句先寫進檔案、執行、再擷取一次比對。腳本、AI 審查、`rollback.sql`、`diff.md` 與前後像快照全部寫進你指定的目錄；值依型別無損擷取（BLOB、時區、浮點精度原封不動），不確定能安全還原的語句一律註解掉並寫明原因。命令列 `dbk run` 同一套（詳見 [審查並執行使用指南](./docs/review-run.md)）。
 - **人設與技能** — 助手的系統提示詞（人設）可以改，並可存多組具名的「技能」（如「SQL 效能診斷」「唯讀安全至上」），在面板上一鍵勾選套用；四種供應商共用同一份設定。
 - **附命令列工具 `dbk`** — 查詢 / 瀏覽 / 匯出 / 備份 + **寫入（修改 · 刪除，需 `--yes`，高破壞再要 `--force`）** 的 CLI，重用同一套連線與 keychain，可 `--no-default-features` 編成不連 Tauri 的精簡 binary，適合伺服器與 script 場景（見 [命令列工具](#命令列工具dbk-cli)）。
 - **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、Rust 單元測試覆蓋各方言 SQL 生成（含 MariaDB / Oracle）、前端 vitest 覆蓋（329 項），另有 **`npm run verify:ui` UI 冒煙檢查**（production build + Tauri invoke shim 驗右鍵選單與分頁行為，免 Docker / 免真實資料庫），經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
@@ -227,6 +242,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、**啟動鎖定**（Windows Hello / Touch ID 或 Argon2id 密碼、閒置自動鎖定）、**結果列數上限 / 查詢逾時**、釘選常用表 |
 | SQL 審查 | **靜態規則引擎**（對標 Redgate SQL Prompt / SonarQube SQL rules）：15 條規則、三級嚴重度，打字當下即時列出無 WHERE 的 DML、笛卡兒積、欄位套函式讓索引失效、前綴萬用字元 LIKE、`NOT IN` 的 NULL 陷阱、UNION vs UNION ALL、NOLOCK 髒讀、游標逐列處理…；方言感知、**不執行查詢也不需要 AI**，點一筆即跳到編輯器對應位置 |
 | AI 助手 | 右側面板串接本機 **Claude Code 或 OpenAI Codex** CLI（下拉即切、各自記住模型）或任何 Anthropic / OpenAI 相容 API：串流問答、撰寫 / 優化 SQL；程式碼區塊套用目前主題的語法高亮。**助手可自己下唯讀查詢**（列表 / 看結構 / 取樣 / SELECT / EXPLAIN；跑過的 SQL 全列在回應裡）；輸入框支援 **`@` 指定範圍**與 **`/` 指令**；回應裡的 SQL 可直接執行並把結果回饋給模型。另有三個一鍵入口——**AI 審查 SQL**（帶規則引擎發現 + 結構 + 索引 + 計畫）、**AI 調校建議**（帶計畫熱點，要求索引 DDL / 改寫 / 代價評估）、**AI 分析壓測結果**（從延遲百分位的形狀反推瓶頸類型） |
+| 審查並執行 | 執行前 **AI 審查**（結論徽章：可以執行 / 注意風險 / 不建議執行，預設不送資料列）→ **逐句擷取前像 → 回滾語句先落地 → 執行 → 擷取後像比對**；回滾等級逐句標示（完整 / 部分 / 無），不完整或正式環境要勾選確認；輸出 `script.sql` / `review.md` / `rollback.sql` / `diff.md` / `report.md` / `manifest.json` / `snapshots/`；「只產生備份」不執行（唯讀連線可用）；回滾腳本可再走一次審查並執行；AI 助手寫入語句與 `dbk run` 共用；支援 MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite |
 | AI 動作（編輯器） | 選一段 SQL → 右鍵 / `Ctrl+Shift+E` / 工具列「AI 動作」：解釋、最佳化、修正、加註解、**轉換方言**、產生測試資料、白話解釋執行計畫；`Ctrl+I` 用一句話描述要怎麼改。改寫類一律先走**差異預覽**（逐塊可拒絕、可手改），接受後進 undo 歷史 |
 | 多語系 | **繁體中文 · 简体中文 · English · 日本語 · 한국어 · Tiếng Việt**，工具列或設定頁即時切換、不需重啟；前端 / Rust 後端錯誤訊息 / `dbk` CLI（`--lang`、`DBKIT_LANG`）三處同步。各語言的譯文表由 vite 各切一個 chunk，只下載自己那包 |
 | 運維 | 連線設定持久化、加密匯出 / 匯入連線（逐筆選連線與機密類別；PROD 連線一律不含帳密）、排程備份 + 備份歷史、連線池監控 + Ping、啟動時檢查新版、跨平台桌面 App |
@@ -315,6 +331,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] **外鍵雙向導覽**（跳至參照的列 / 找參照此列的列）、**Copy as IN**、**相異值分布**
 - [x] **命令面板**（Ctrl/Cmd+K）：模糊搜尋跳轉連線 / 資料庫 / 資料表 / 動作
 - [x] **連線唯讀模式**（擋寫入 / DDL 與資料格 / 側欄寫入）、**連線色標**（區分環境）、**釘選常用表**
+- [x] **審查並執行**（AI 審查 + 逐句前後像 + 回滾腳本 + 差異報告寫入指定目錄；依型別無損取值；DDL 回滾沿用結構比對產生器；交易控制 / session 狀態語句整份擋下；AI 助手寫入語句同走此流程；`dbk run`）
 - [x] **結構比對**（單表或整庫；跨連線 / 跨庫 / 對快照檔：表 / 欄位 / 索引 / 外鍵 / 視圖 / 程序差異，雙向同步 DDL 含破壞性分級與「略過」清單；結構快照存檔；**AI 總結**；Markdown / HTML / JSON 報告；`dbk compare schema`）
   - MySQL / MariaDB / PostgreSQL / SQLite / **SQL Server** / Oracle；SQL Server 的視圖與程序自動包成目標庫的 `sp_executesql`（T-SQL 不收三部式名稱），被索引擋住的 `ALTER COLUMN` 自動卸索引再重建
   - 端對端驗證跑在真實伺服器上：MySQL 8.4、PostgreSQL 16、**兩台獨立的 SQL Server 2022**（跨連線），判準是「同步後再比一次必須零差異」
@@ -445,7 +462,9 @@ dbk --conn cache redis del-prefix session: --yes --force   # 先 SCAN 出鍵名�
 
 > `del-prefix` 不會把前綴丟給 Redis 當 pattern：先 `SCAN MATCH <prefix>*` 取出實際鍵名（上限 `--limit`，預設 10,000）再分批 `DEL`，確認訊息會先告訴你會刪掉幾個鍵。
 
-其餘子指令：`conn`（list / test / ping / 加密 export）、`db`（list / create / drop）、`table`（list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate）、`routine`、`search`（`--whole-word` 整字比對、`--wildcards` 啟用 `*` `?`）、`column-stats`、`er-model`、`server-info`、`exec`、`stress`、`redis`（keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db）。逐項說明與實例見 **[docs/cli.md](./docs/cli.md)**，或 `dbk --help` / `dbk <子指令> --help`。
+其餘子指令：`conn`（list / test / ping / 加密 export）、`db`（list / create / drop）、`table`（list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate）、`routine`、`search`（`--whole-word` 整字比對、`--wildcards` 啟用 `*` `?`）、`column-stats`、`er-model`、`server-info`、`exec`、`run`（審查並執行腳本）、`stress`、`redis`（keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db）。逐項說明與實例見 **[docs/cli.md](./docs/cli.md)**，或 `dbk --help` / `dbk <子指令> --help`。
+
+> **審查並執行腳本**：`dbk run migrate.sql --out <目錄>` 逐句備份前後像並產生回滾腳本（沒帶 `--yes` 只產生審查與備份，`--review-cmd "claude -p"` 接外部 AI 審查），見 [docs/cli.md](./docs/cli.md#run--審查並執行-sql-腳本) 與 [審查並執行使用指南](./docs/review-run.md)。
 
 > `stress` 一律唯讀（不提供 `--allow-writes`）。它會另開一條 `max_connections = --threads` 的專屬連線，跑完釋放——所以 `--threads 64` 就是對目標打 64 條連線，先確認伺服器撐得住。
 

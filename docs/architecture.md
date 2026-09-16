@@ -63,6 +63,24 @@ pub trait DatabaseDriver: Send + Sync {
 - 所有識別字（庫/表/欄）以對應引號包裹並轉義：MySQL / MariaDB 反引號、PG/SQLite/**Oracle** 雙引號、**SQL Server 方括號 `[…]`（`]` 以 `]]` 轉義），寫入採三部式限定 `[db].[schema].[table]`**。Oracle 採 exact-case + 全程雙引號策略（目錄查回什麼就綁什麼）。
 - 值綁定：MySQL/SQLite 用 `?`、PostgreSQL 用 `$1` 參數綁定，不字串拼接。**SQL Server（tiberius）與 Oracle 目前改以字面值轉義**（單引號加倍；SQL Server 字串另包 `N'…'`；數字 / 日期以字串傳入由引擎隱式轉型），非參數綁定但同樣做逸出處理。
 
+## 審查並執行：寫入前的安全網
+
+`review_run/` 讓「跑一份會改資料的腳本」在執行前留下可以還原的東西。它刻意不包交易：db-kit 的連線是連線池，
+而使用者要的是「這句跑完之後我還回得去」，不是「整份一起成功或失敗」。規則同樣是「機制上做不到」而非「提醒使用者小心」：
+
+| 面向 | 規則 | 落點 |
+|------|------|------|
+| 前像擷取 | 只送唯讀查詢；述詞是從使用者語句切出來的，送出前一律過嚴格唯讀檢查 | `capture::guard_read_only` → `cli::guard::read_only_violation(strict_explain=true)` |
+| 擷取時機 | **逐句**：執行第 N 句之前才抓第 N 句的前像，並重新探測（前一句可能建了表、改了結構） | `run::run` → `plan::probe_statement` |
+| 值的保真 | 不走顯示用的 `cell_to_string`（會截斷二進位 / CLOB）；每欄依方言與型別改寫成可無損往返的運算式，並成對定義還原字面值；做不到無損的值讓該列回滾被註解掉，不寫 NULL | `codec::select_expr` / `codec::literal` / `codec::restorable` |
+| 回滾落地 | 每句執行**前**先把涵蓋到這句的 `rollback.sql` 寫進輸出目錄（暫存檔 + rename） | `run::Out::write` |
+| 不確定的回滾 | 以註解輸出並寫明原因（UPDATE 後依原鍵找不到的列、無鍵表的修改、自動編號 INSERT 數量對不上…） | `rollback::Line::Disabled` |
+| 擋下整份腳本 | 交易控制、session 狀態（USE / SET / DECLARE / 暫存表 / LOCK）、非 PG 程序本體、DROP DATABASE、未代入參數；例外是回滾腳本自己產生的檔頭 SET 與 SQL Server identity 批次 | `analyze::Issue::is_blocker` |
+| 需要確認 | 回滾等級不是「完整」、正式環境連線；擷取時才發現超過上限或等級變差，停在那一句之前 | `RunOptions::allow_incomplete` / `confirm_prod`；CLI 為 `--allow-incomplete` / `--allow-prod` |
+| AI | 提示在後端組（GUI 與 `dbk run --review-cmd` 同一份），預設不含任何資料列；模式 `review` 零工具、單回合、不落地對話歷史 | `report::build_review_prompt`、`agent::is_one_shot_mode` |
+
+DDL 的回滾沿用 `compare/` 的結構擷取與同步 DDL 產生器（讓「執行後」變回「執行前」），資料部分再依主鍵比對前後整表寫回。
+
 ## AI 助手的工具邊界
 
 助手可以自己讀資料庫，因此界線必須是「機制上做不到」而非「提示裡請它不要」——模型被繞過的方式太多。
@@ -77,7 +95,7 @@ pub trait DatabaseDriver: Send + Sync {
 | 稽核 | 每次工具呼叫的輸入與結果預覽都推到前端 | `llm::ToolTrace` → `agent-stream` 的 `tool` / `tool_result` 事件 → 聊天面板的「工具呼叫」清單 |
 | 正式環境 | 第一次要讓助手查 prod 連線時前端先確認 | `AssistantPanel`（後端 `is_prod` 只用於調整工具說明，不阻擋） |
 
-一次性模式（`generate` / `edit`）零工具、單回合：它們的輸出就是一段語句，給工具只會讓模型多繞路。
+一次性模式（`generate` / `edit` / `review`）零工具、單回合：它們的輸出就是一段語句或一份審查報告，給工具只會讓模型多繞路。API 供應商在一次性模式下不落地對話歷史——沒有 session 可以續，而審查提示可能夾帶前像樣本資料。
 
 ## 模組結構
 
@@ -104,6 +122,16 @@ src-tauri/src/
 │   ├── rowstream.rs   主鍵排序分頁串流（keyset / offset）
 │   ├── merge.rs       merge-join（順序守衛）/ hash_diff
 │   └── data.rs        單表 / 整庫資料比對編排、DML spool 與分批交易套用
+├── review_run/        審查並執行（GUI 與 dbk run 共用，不依賴 Tauri）
+│   ├── scan.rs        位移保留式 SQL 遮罩 + 語句切分（含 SQL Server GO）
+│   ├── names.rs       表參照解析（引號 / 大小寫折疊 / 別名）
+│   ├── analyze.rs     逐句靜態分析：目標、WHERE、擷取計畫、阻擋理由
+│   ├── plan.rs        探測：解析表 / 鍵 / 估列數，決定擷取策略與回滾等級
+│   ├── codec.rs       依方言與型別的無損取值運算式 ↔ 還原字面值
+│   ├── capture.rs     執行脈絡、表結構與鍵、依述詞 / 鍵 / 整表抓列、結構快照
+│   ├── rollback.rs    前後像比對與反向語句（DELETE → UPDATE → INSERT）
+│   ├── report.rs      AI 審查提示、report.md / diff.md / manifest
+│   └── run.rs         編排：逐句前像 → 回滾落地 → 執行 → 後像 → 輸出目錄
 ├── agent.rs           AI 助手（四種供應商共用一組 agent-stream 事件；CLI 走子程序 + dbk mcp、API 走 llm/）
 ├── dbtools/mod.rs     AI 唯讀資料庫工具（list/describe/sample/run_query/explain）—— GUI 工具迴圈與 dbk mcp 共用
 ├── llm/               HTTP 供應商（Anthropic / OpenAI 相容）
@@ -117,7 +145,7 @@ src-tauri/src/
 │   └── sessions.rs    對話歷史落地（<config>/llm-sessions/<id>.json，30 天 / 50 段上限）
 ├── it_tests.rs        Docker 真實資料庫整合測試
 ├── commands/mod.rs    Tauri command（薄包裝）
-├── cli/               dbk CLI（args / dispatch / guard / mcp / render / resolve）
+├── cli/               dbk CLI（args / dispatch / guard / mcp / render / resolve / run_script）
 ├── bin/dbk.rs         CLI binary 進入點（不連 Tauri）
 └── db/
     ├── mod.rs         DbKind、共用型別、DatabaseDriver trait
