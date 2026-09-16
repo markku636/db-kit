@@ -184,8 +184,15 @@ impl DatabaseDriver for PostgresDriver {
         // GENERATED ALWAYS AS IDENTITY 欄（兩者皆不可由使用者明確賦值；資料產生會據此預設排除）。
         // 註解經 col_description 取得；以 attname 對 join（而非 ordinal_position 對 attnum），
         // 避免表曾 DROP COLUMN 後兩者編號錯位。
+        // 型別取 format_type(atttypid, atttypmod) 而非 information_schema 的 data_type：
+        // 後者是型別「家族名」且永遠不帶 typmod（varchar(50) → "character varying"、
+        // numeric(12,4) → "numeric"）。這個字串同時餵給合成 CREATE TABLE、ADD / MODIFY COLUMN
+        // 與結構比對，長度 / 精度在擷取這層丟掉的話：同步出去的欄位會少掉長度（資料可被靜默截斷），
+        // 而且 varchar(50) → varchar(20) 這種會截斷資料的縮短根本比不出來。pg_attribute 本來就 join 了。
         let col_rows = sqlx::query(
-            "SELECT c.column_name, c.data_type, c.is_nullable, c.column_default, \
+            "SELECT c.column_name, \
+                    COALESCE(format_type(pga.atttypid, pga.atttypmod), c.data_type), \
+                    c.is_nullable, c.column_default, \
                     c.is_generated, c.is_identity, c.identity_generation, \
                     col_description(pgc.oid, pga.attnum) \
              FROM information_schema.columns c \
@@ -1022,6 +1029,30 @@ impl DatabaseDriver for PostgresDriver {
             .map_err(|e| AppError::Query(e.to_string()))
     }
 
+    async fn exec_batch(&self, statements: &[String], transactional: bool) -> AppResult<(u64, bool)> {
+        if !transactional {
+            let mut n = 0u64;
+            for s in statements {
+                n += self.query(s).await?.rows_affected;
+            }
+            return Ok((n, false));
+        }
+        use sqlx::Executor;
+        let mut tx = self.pool.begin().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut n = 0u64;
+        for s in statements {
+            match (&mut *tx).execute(s.as_str()).await {
+                Ok(r) => n += r.rows_affected(),
+                Err(e) => {
+                    let _ = tx.rollback().await;
+                    return Err(AppError::Query(sqlx_db_message(&e)));
+                }
+            }
+        }
+        tx.commit().await.map_err(|e| AppError::Query(e.to_string()))?;
+        Ok((n, true))
+    }
+
     async fn validate_ddl(&self, _database: &str, sql: &str) -> AppResult<ValidationReport> {
         // PostgreSQL 的 DDL 具交易性：在交易內試行 CREATE（plpgsql 程序體在建立時即做語法檢查），
         // 再一律 ROLLBACK 丟棄。固定於同一連線（begin 取得後綁定），避免簡單協定散落到不同連線。
@@ -1037,16 +1068,21 @@ impl DatabaseDriver for PostgresDriver {
     }
 
     async fn list_foreign_keys(&self, database: &str, table: &str) -> AppResult<Vec<ForeignKeyInfo>> {
-        // 單欄外鍵情境正確；複合外鍵的 column/ref_column 配對為近似（MVP）。
+        // 以 pg_constraint 的 conkey / confkey 逐位配對（unnest … WITH ORDINALITY）。
+        // 舊版用 key_column_usage × constraint_column_usage 只以約束名 join：N 欄的複合外鍵會得到
+        // N×N 列笛卡兒積（(x,a)(x,b)(y,a)(y,b)），摺疊後產出 `FOREIGN KEY (x,x,y,y)` 這種被 PG 拒絕的語句，
+        // 也沒有欄位序 —— 而 compare::schema::group_fks 的契約正是「driver 依約束名、欄位序排好」。
         let rows = sqlx::query(
-            "SELECT tc.constraint_name, kcu.column_name, ccu.table_name, ccu.column_name \
-             FROM information_schema.table_constraints tc \
-             JOIN information_schema.key_column_usage kcu \
-               ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema \
-             JOIN information_schema.constraint_column_usage ccu \
-               ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema \
-             WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = $1 AND tc.table_name = $2 \
-             ORDER BY tc.constraint_name",
+            "SELECT con.conname, att.attname, rel.relname, ratt.attname \
+             FROM pg_constraint con \
+             JOIN pg_class c ON c.oid = con.conrelid \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             JOIN pg_class rel ON rel.oid = con.confrelid \
+             JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(col, rcol, ord) ON true \
+             JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.col \
+             JOIN pg_attribute ratt ON ratt.attrelid = con.confrelid AND ratt.attnum = k.rcol \
+             WHERE con.contype = 'f' AND n.nspname = $1 AND c.relname = $2 \
+             ORDER BY con.conname, k.ord",
         )
         .bind(database)
         .bind(table)

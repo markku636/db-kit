@@ -1893,6 +1893,210 @@ async fn transfer_rejects_same_table() {
     let _ = std::fs::remove_file(dbfile);
 }
 
+// ---------------------------------------------------------------------------
+// 結構 / 資料比對（compare/）：以兩個 SQLite 檔做端到端驗證，不需 Docker。
+// 最強的正確性檢查是「冪等」：比對 → 產生同步 → 套用 → 再比對必須為零差異。
+// ---------------------------------------------------------------------------
+
+/// 在同一個 manager 開兩個 SQLite 檔（來源 a / 目標 b），回 (mgr, id_a, id_b, 檔名)。
+async fn two_sqlite(tag: &str) -> (crate::manager::ConnectionManager, String, String, [String; 2]) {
+    let fa = format!("dbkit_cmp_{tag}_a_{}.db", std::process::id());
+    let fb = format!("dbkit_cmp_{tag}_b_{}.db", std::process::id());
+    let _ = std::fs::remove_file(&fa);
+    let _ = std::fs::remove_file(&fb);
+    let mut ca = cfg(DbKind::Sqlite, "", 0, "", "", Some(&fa));
+    ca.id = format!("cmp-{tag}-a");
+    let mut cb = cfg(DbKind::Sqlite, "", 0, "", "", Some(&fb));
+    cb.id = format!("cmp-{tag}-b");
+    let mgr = crate::manager::ConnectionManager::new();
+    mgr.connect(ca.clone()).await.unwrap();
+    mgr.connect(cb.clone()).await.unwrap();
+    (mgr, ca.id, cb.id, [fa, fb])
+}
+
+fn no_cmp_progress(_: crate::compare::CompareProgress) {}
+
+/// 結構：capture → diff → generate → 逐句 exec_ddl → 再 diff 為空；快照存讀後與即時擷取無差異。
+#[tokio::test]
+async fn compare_schema_sqlite_sync_is_idempotent() {
+    use crate::compare::{ddl, diff, schema, snapshot};
+    let (mgr, a, b, files) = two_sqlite("schema").await;
+    mgr.query(&a, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)").await.unwrap();
+    mgr.query(&a, "CREATE INDEX ix_name ON t (name)").await.unwrap();
+    mgr.query(&a, "CREATE TABLE only_a (id INTEGER PRIMARY KEY, v TEXT)").await.unwrap();
+    mgr.query(&a, "CREATE VIEW v_t AS SELECT id FROM t").await.unwrap();
+    mgr.query(&b, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)").await.unwrap();
+    mgr.query(&b, "CREATE TABLE only_b (id INTEGER PRIMARY KEY)").await.unwrap();
+
+    let opts = schema::CaptureOptions::default();
+    let sa = schema::capture(&mgr, &a, "main", "a", &opts, None).await.unwrap();
+    let sb = schema::capture(&mgr, &b, "main", "b", &opts, None).await.unwrap();
+    assert_eq!(sa.tables.len(), 2);
+    assert_eq!(sa.views.len(), 1);
+    assert!(sa.tables.iter().all(|t| t.ddl.is_some()), "SQLite 應回真實 DDL");
+
+    let d = diff::diff(&sa, &sb, &diff::DiffOptions::default());
+    assert_eq!(d.tables_added, vec!["only_a"]);
+    assert_eq!(d.tables_removed, vec!["only_b"]);
+    assert_eq!(d.views_added, vec!["v_t"]);
+    let td = &d.tables_changed[0];
+    assert_eq!(td.name, "t");
+    assert_eq!(td.columns_added[0].name, "age");
+    assert_eq!(td.indexes_added[0].name, "ix_name");
+
+    // 快照存讀 → 與即時擷取零差異。
+    let snap = std::env::temp_dir().join(format!("dbkit_cmp_snap_{}.json", std::process::id()));
+    snapshot::save(&snap, &sa).await.unwrap();
+    let loaded = snapshot::load(&snap).await.unwrap().schema;
+    assert!(diff::diff(&sa, &loaded, &diff::DiffOptions::default()).is_empty());
+    let _ = std::fs::remove_file(&snap);
+
+    // 產生並套用同步（含 DROP）。
+    let sync = ddl::SyncOptions { include_drops: true, ..Default::default() };
+    let script = ddl::generate(&d, &sa, &sb, &sync).unwrap();
+    assert!(script.statements.iter().any(|s| s.kind == ddl::SyncKind::DropTable && s.destructive));
+    assert!(script.skipped.is_empty(), "此案例全部可表達：{:?}", script.skipped);
+    for s in &script.statements {
+        // SQLite 的視圖同步是 DROP VIEW IF EXISTS + CREATE VIEW 兩句一組。
+        for one in s.sql.split(";\n").filter(|x| !x.trim().is_empty()) {
+            mgr.exec_ddl(&b, one).await.unwrap_or_else(|e| panic!("套用失敗：{one}\n{e}"));
+        }
+    }
+    let sb2 = schema::capture(&mgr, &b, "main", "b", &opts, None).await.unwrap();
+    let d2 = diff::diff(&sa, &sb2, &diff::DiffOptions::default());
+    assert!(d2.is_empty(), "同步後應零差異：{:?}", d2.summary);
+
+    mgr.disconnect(&a).await;
+    mgr.disconnect(&b).await;
+    for f in files {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
+/// 資料：report 計數 → sql 文字 → apply 套用 → 再比對為零；數值正規化（1.0 == 1）不誤報。
+#[tokio::test]
+async fn compare_data_sqlite_report_sql_apply_roundtrip() {
+    use crate::compare::data::{self, DataCompareOptions, RunMode, TableRef};
+    let (mgr, a, b, files) = two_sqlite("data").await;
+    mgr.query(&a, "CREATE TABLE d (id INTEGER PRIMARY KEY, name TEXT, n REAL)").await.unwrap();
+    mgr.query(&a, "INSERT INTO d VALUES (1,'a',1.0),(2,'b',2.5),(4,'d',NULL)").await.unwrap();
+    mgr.query(&b, "CREATE TABLE d (id INTEGER PRIMARY KEY, name TEXT, n REAL)").await.unwrap();
+    mgr.query(&b, "INSERT INTO d VALUES (1,'a',1),(2,'B',2.5),(3,'c',0)").await.unwrap();
+    let s = TableRef { conn_id: a.clone(), database: "main".into(), table: "d".into() };
+    let t = TableRef { conn_id: b.clone(), database: "main".into(), table: "d".into() };
+
+    let r = data::compare_table(&mgr, "it-cmp-report", &s, &t, &DataCompareOptions::default(), &no_cmp_progress).await.unwrap();
+    assert_eq!((r.summary.inserts, r.summary.updates, r.summary.deletes, r.summary.compared_rows), (1, 1, 1, 1), "{:?}", r.summary);
+    assert_eq!(r.summary.strategy_used, "merge_join");
+    assert!(r.summary.truncated_reason.is_none());
+    assert_eq!(r.pk, vec!["id"]);
+    assert_eq!(r.samples.updates[0].changed, vec!["name"]);
+    assert!(r.sql.is_none() && r.apply.is_none());
+
+    let sql_opts = DataCompareOptions { mode: RunMode::Sql, include_deletes: true, ..Default::default() };
+    let r = data::compare_table(&mgr, "it-cmp-sql", &s, &t, &sql_opts, &no_cmp_progress).await.unwrap();
+    let sql = r.sql.expect("sql 模式應回文字");
+    assert!(sql.contains("DELETE FROM `d` WHERE `id` = '3'"), "{sql}");
+    assert!(sql.contains("UPDATE `d` SET `name` = 'b' WHERE `id` = '2'"), "{sql}");
+    assert!(sql.contains("INSERT INTO `d` (`id`, `name`, `n`) VALUES ('4', 'd', NULL)"), "{sql}");
+    // include_deletes=false → 不出 DELETE 但仍計數。
+    let r = data::compare_table(&mgr, "it-cmp-sql2", &s, &t, &DataCompareOptions { mode: RunMode::Sql, ..Default::default() }, &no_cmp_progress).await.unwrap();
+    assert!(!r.sql.unwrap().contains("DELETE"));
+    assert_eq!(r.summary.deletes, 1);
+
+    let apply_opts = DataCompareOptions { mode: RunMode::Apply, include_deletes: true, ..Default::default() };
+    let r = data::compare_table(&mgr, "it-cmp-apply", &s, &t, &apply_opts, &no_cmp_progress).await.unwrap();
+    let ap = r.apply.expect("apply 模式應回套用結果");
+    assert_eq!(ap.applied, 3, "{:?}", ap.errors);
+    assert_eq!(ap.failed, 0);
+    assert!(ap.transactional);
+
+    let r = data::compare_table(&mgr, "it-cmp-again", &s, &t, &DataCompareOptions::default(), &no_cmp_progress).await.unwrap();
+    assert_eq!((r.summary.inserts, r.summary.updates, r.summary.deletes), (0, 0, 0), "套用後應零差異：{:?}", r.samples);
+    assert_eq!(r.summary.compared_rows, 3);
+    // 同表防呆。
+    assert!(data::compare_table(&mgr, "it-cmp-same", &s, &s, &DataCompareOptions::default(), &no_cmp_progress).await.is_err());
+
+    mgr.disconnect(&a).await;
+    mgr.disconnect(&b).await;
+    for f in files {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
+/// 套用時壞語句：stop_on_error 整批回滾（目標不變）；預設模式逐句重放，好的套、壞的記錯。
+#[tokio::test]
+async fn compare_data_apply_isolates_bad_rows() {
+    use crate::compare::data::{self, DataCompareOptions, RunMode, TableRef};
+    let (mgr, a, b, files) = two_sqlite("badrow").await;
+    mgr.query(&a, "CREATE TABLE u (id INTEGER PRIMARY KEY, name TEXT)").await.unwrap();
+    mgr.query(&a, "INSERT INTO u VALUES (1,'a'),(2,'a'),(3,'c')").await.unwrap();
+    mgr.query(&b, "CREATE TABLE u (id INTEGER PRIMARY KEY, name TEXT UNIQUE)").await.unwrap();
+    let s = TableRef { conn_id: a.clone(), database: "main".into(), table: "u".into() };
+    let t = TableRef { conn_id: b.clone(), database: "main".into(), table: "u".into() };
+
+    let strict = DataCompareOptions { mode: RunMode::Apply, stop_on_error: true, ..Default::default() };
+    assert!(data::compare_table(&mgr, "it-bad-strict", &s, &t, &strict, &no_cmp_progress).await.is_err());
+    let n = mgr.query(&b, "SELECT COUNT(*) FROM u").await.unwrap();
+    assert_eq!(n.rows[0][0].as_deref(), Some("0"), "整批應回滾，目標仍為空");
+
+    let lenient = DataCompareOptions { mode: RunMode::Apply, ..Default::default() };
+    let r = data::compare_table(&mgr, "it-bad-lenient", &s, &t, &lenient, &no_cmp_progress).await.unwrap();
+    let ap = r.apply.unwrap();
+    assert_eq!(ap.applied, 2, "{:?}", ap.errors);
+    assert_eq!(ap.failed, 1);
+    assert!(!ap.transactional, "有逐句重放就不算整批交易");
+    assert_eq!(ap.errors.len(), 1);
+    let n = mgr.query(&b, "SELECT COUNT(*) FROM u").await.unwrap();
+    assert_eq!(n.rows[0][0].as_deref(), Some("2"));
+
+    mgr.disconnect(&a).await;
+    mgr.disconnect(&b).await;
+    for f in files {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
+/// 整庫：交集逐表；無主鍵表略過、視圖不比、僅一側有的表列出；預檢相同的表直接略過。
+#[tokio::test]
+async fn compare_database_sqlite_skips_and_prechecks() {
+    use crate::compare::data::{self, DataCompareOptions, DbCompareOptions, DbRef, TableStatus};
+    let (mgr, a, b, files) = two_sqlite("db").await;
+    for id in [&a, &b] {
+        mgr.query(id, "CREATE TABLE p (id INTEGER PRIMARY KEY, v TEXT)").await.unwrap();
+        mgr.query(id, "CREATE TABLE same (id INTEGER PRIMARY KEY, v TEXT)").await.unwrap();
+        mgr.query(id, "INSERT INTO same VALUES (1,'x'),(2,'y')").await.unwrap();
+        mgr.query(id, "CREATE TABLE nopk (x INTEGER)").await.unwrap();
+        mgr.query(id, "CREATE VIEW vw AS SELECT id FROM p").await.unwrap();
+    }
+    mgr.query(&a, "INSERT INTO p VALUES (1,'a'),(2,'b')").await.unwrap();
+    mgr.query(&b, "INSERT INTO p VALUES (1,'a')").await.unwrap();
+    mgr.query(&a, "CREATE TABLE only_a (id INTEGER PRIMARY KEY)").await.unwrap();
+    mgr.query(&b, "CREATE TABLE only_b (id INTEGER PRIMARY KEY)").await.unwrap();
+
+    let s = DbRef { conn_id: a.clone(), database: "main".into() };
+    let t = DbRef { conn_id: b.clone(), database: "main".into() };
+    let opts = DbCompareOptions { table: DataCompareOptions::default(), tables: None, precheck: true, precheck_only: false };
+    let r = data::compare_database(&mgr, "it-db", &s, &t, &opts, &no_cmp_progress).await.unwrap();
+    assert_eq!(r.only_in_src, vec!["only_a"]);
+    assert_eq!(r.only_in_dst, vec!["only_b"]);
+    assert!(!r.cancelled);
+    let by = |n: &str| r.tables.iter().find(|e| e.table == n).unwrap_or_else(|| panic!("缺 {n}：{:?}", r.tables.iter().map(|e| &e.table).collect::<Vec<_>>()));
+    assert_eq!(by("p").status, TableStatus::Compared);
+    assert_eq!(by("p").report.as_ref().unwrap().summary.inserts, 1);
+    assert_eq!(by("nopk").status, TableStatus::Skipped);
+    assert_eq!(by("same").status, TableStatus::Skipped, "預檢相同應略過：{:?}", by("same").reason);
+    assert!(by("same").precheck.as_ref().unwrap().likely_identical);
+    assert!(r.tables.iter().all(|e| e.table != "vw"), "視圖不比對");
+    assert_eq!(r.totals.inserts, 1);
+
+    mgr.disconnect(&a).await;
+    mgr.disconnect(&b).await;
+    for f in files {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
 /// 資料傳輸 create_table：目標表不存在時，沿用來源 DDL 自動建立並傳資料。
 #[tokio::test]
 async fn transfer_auto_creates_target_table() {

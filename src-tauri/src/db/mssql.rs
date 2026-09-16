@@ -195,8 +195,11 @@ impl DatabaseDriver for MssqlDriver {
         let (schema, tbl) = split_schema_table(table);
         let db = esc(database);
         let obj = object_literal(database, &schema, &tbl);
+        // 型別要帶長度 / 精度：只回 sys.types.name 的話，結構比對看不出 nvarchar(50) → nvarchar(200)，
+        // 而且 compare 的 ALTER COLUMN 會照抄成 `ALTER COLUMN [c] nvarchar`——T-SQL 省略長度等於
+        // nvarchar(1)，一句同步就把欄位截成 1 個字元。與 PG（format_type）/ Oracle 的回法對齊。
         let sql = format!(
-            "SELECT c.name, ty.name, c.is_nullable, c.is_identity, dc.definition \
+            "SELECT c.name, ty.name, c.is_nullable, c.is_identity, dc.definition, c.max_length, c.precision, c.scale \
              FROM [{db}].sys.columns c \
              JOIN [{db}].sys.types ty ON c.user_type_id = ty.user_type_id \
              LEFT JOIN [{db}].sys.default_constraints dc ON c.default_object_id = dc.object_id \
@@ -209,7 +212,12 @@ impl DatabaseDriver for MssqlDriver {
             .iter()
             .filter_map(|r| {
                 let name = get_str(r, 0)?;
-                let data_type = get_str(r, 1).unwrap_or_default();
+                let data_type = mssql_type_str(
+                    &get_str(r, 1).unwrap_or_default(),
+                    r.try_get::<i16, _>(5).ok().flatten().unwrap_or(0),
+                    r.try_get::<u8, _>(6).ok().flatten().unwrap_or(0),
+                    r.try_get::<u8, _>(7).ok().flatten().unwrap_or(0),
+                );
                 let nullable = r.try_get::<bool, _>(2).ok().flatten().unwrap_or(true);
                 let is_identity = r.try_get::<bool, _>(3).ok().flatten().unwrap_or(false);
                 let default = get_str(r, 4);
@@ -445,12 +453,13 @@ impl DatabaseDriver for MssqlDriver {
 
     async fn list_routines(&self, database: &str) -> AppResult<Vec<RoutineInfo>> {
         let db = esc(database);
-        // 預存程序 / 函式。
+        // 預存程序 / 函式。型別碼清單與 `routine_type_of` 必須同步：查出來卻對不上的列會被略過。
         let sql = format!(
             "SELECT s.name, o.name, o.type, CONVERT(NVARCHAR(30), o.modify_date, 120) \
              FROM [{db}].sys.objects o JOIN [{db}].sys.schemas s ON o.schema_id = s.schema_id \
-             WHERE o.type IN ('P','FN','IF','TF','AF') AND o.is_ms_shipped = 0 \
-             ORDER BY o.type, o.name"
+             WHERE o.type IN ({types}) AND o.is_ms_shipped = 0 \
+             ORDER BY o.type, o.name",
+            types = ROUTINE_TYPE_CODES.iter().map(|c| format!("'{c}'")).collect::<Vec<_>>().join(",")
         );
         let mut out = Vec::new();
         for r in &self.query_rows(&sql).await? {
@@ -460,10 +469,9 @@ impl DatabaseDriver for MssqlDriver {
                 None => continue,
             };
             let ty = get_str(r, 2).unwrap_or_default();
-            let routine_type = if ty.trim() == "P" { "procedure" } else { "function" };
-            let name = if sch == "dbo" { nm } else { format!("{sch}.{nm}") };
+            let Some(routine_type) = routine_type_of(&ty) else { continue };
             out.push(RoutineInfo {
-                name,
+                name: schema_qualified(&sch, nm),
                 routine_type: routine_type.to_string(),
                 parent: None,
                 signature: None,
@@ -472,21 +480,26 @@ impl DatabaseDriver for MssqlDriver {
                 comment: None,
             });
         }
-        // 觸發器（掛在資料表上）。
+        // 觸發器（掛在資料表上）。DML 觸發器的 schema 跟著父表，DROP TRIGGER 需要它，
+        // 所以名稱與程序 / 函式一樣以 `schema.name` 表示（dbo 省略）。
         let tsql = format!(
-            "SELECT t.name, OBJECT_NAME(t.parent_id, DB_ID(N'{db_raw}')), CONVERT(NVARCHAR(30), t.modify_date, 120) \
-             FROM [{db}].sys.triggers t WHERE t.is_ms_shipped = 0 AND t.parent_class = 1 ORDER BY t.name",
+            "SELECT s.name, t.name, OBJECT_NAME(t.parent_id, DB_ID(N'{db_raw}')), CONVERT(NVARCHAR(30), t.modify_date, 120) \
+             FROM [{db}].sys.triggers t \
+             JOIN [{db}].sys.objects o ON o.object_id = t.object_id \
+             JOIN [{db}].sys.schemas s ON s.schema_id = o.schema_id \
+             WHERE t.is_ms_shipped = 0 AND t.parent_class = 1 ORDER BY t.name",
             db_raw = database.replace('\'', "''")
         );
         if let Ok(trows) = self.query_rows(&tsql).await {
             for r in &trows {
-                if let Some(nm) = get_str(r, 0) {
+                let sch = get_str(r, 0).unwrap_or_else(|| "dbo".to_string());
+                if let Some(nm) = get_str(r, 1) {
                     out.push(RoutineInfo {
-                        name: nm,
+                        name: schema_qualified(&sch, nm),
                         routine_type: "trigger".to_string(),
-                        parent: get_str(r, 1),
+                        parent: get_str(r, 2),
                         signature: None,
-                        modified: get_str(r, 2),
+                        modified: get_str(r, 3),
                         deterministic: None,
                         comment: None,
                     });
@@ -749,6 +762,28 @@ fn split_schema_table(table: &str) -> (String, String) {
     }
 }
 
+/// `split_schema_table` 的反向：dbo 省略、其餘 schema 以 `schema.name` 呈現（樹狀 / 右鍵 / DROP 共用同一種寫法）。
+fn schema_qualified(schema: &str, name: String) -> String {
+    if schema == "dbo" { name } else { format!("{schema}.{name}") }
+}
+
+/// `list_routines` 要撈的 `sys.objects.type` 型別碼（程序 + 函式）。
+/// P = T-SQL 程序、PC = CLR 程序；FN / IF / TF = T-SQL 標量 / 內嵌資料表 / 多語句資料表函式，
+/// FS / FT = CLR 標量 / 資料表函式，AF = CLR 聚合函式。X（擴充程序）/ RF（複寫篩選程序）刻意不列：
+/// 前者已棄用且只會在 master，後者是複寫內部物件，不是使用者要維護的東西。
+const ROUTINE_TYPE_CODES: &[&str] = &["P", "PC", "FN", "IF", "TF", "FS", "FT", "AF"];
+
+/// `sys.objects.type`（char(2)，有尾空白）→ 本專案的 routine 種類。
+/// 明列兩邊的正向對應，不寫成「不是 P 就是 function」——那種寫法在型別碼清單一擴充
+///（例如補進 PC）就會把 CLR 程序當成函式；對不上的碼回 None，呼叫端略過。
+fn routine_type_of(ty: &str) -> Option<&'static str> {
+    match ty.trim() {
+        "P" | "PC" => Some("procedure"),
+        "FN" | "IF" | "TF" | "FS" | "FT" | "AF" => Some("function"),
+        _ => None,
+    }
+}
+
 /// 三部式限定名 `[db].[schema].[table]`。
 fn qualified_name(db: &str, schema: &str, table: &str) -> String {
     format!("[{}].[{}].[{}]", esc(db), esc(schema), esc(table))
@@ -904,5 +939,50 @@ fn cell_to_string(row: &tiberius::Row, idx: usize) -> Option<String> {
         ColumnType::Null => None,
         // NVarchar / NChar / BigVarChar / BigChar / Text / NText / Xml / Udt / SSVariant → 字串。
         _ => row.try_get::<&str, _>(idx).ok().flatten().map(|v| v.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routine_type_of_maps_procedure_codes_including_clr() {
+        // sys.objects.type 是 char(2)：T-SQL 程序回來是 "P "（尾空白）。
+        assert_eq!(routine_type_of("P "), Some("procedure"));
+        assert_eq!(routine_type_of("P"), Some("procedure"));
+        assert_eq!(routine_type_of("PC"), Some("procedure"));
+    }
+
+    #[test]
+    fn routine_type_of_maps_every_function_flavor() {
+        for code in ["FN", "IF", "TF", "FS", "FT", "AF"] {
+            assert_eq!(routine_type_of(code), Some("function"), "{code}");
+        }
+    }
+
+    #[test]
+    fn routine_type_of_rejects_unknown_codes_instead_of_defaulting_to_function() {
+        // 以前是「不是 P 就是 function」：資料表 / 檢視 / 觸發器 / 空字串全會被貼上函式標籤。
+        for code in ["U ", "V ", "TR", "X ", "RF", "", "  "] {
+            assert_eq!(routine_type_of(code), None, "{code:?}");
+        }
+    }
+
+    #[test]
+    fn query_type_codes_all_have_a_mapping() {
+        // 查詢 IN (...) 清單與對應表脫鉤時，撈出來的列會被 `continue` 悄悄吞掉；這裡釘住兩者同步。
+        for code in ROUTINE_TYPE_CODES {
+            assert!(routine_type_of(code).is_some(), "{code} 在 IN 清單裡卻沒有對應");
+        }
+    }
+
+    #[test]
+    fn schema_qualified_omits_dbo_only() {
+        assert_eq!(schema_qualified("dbo", "sp_x".into()), "sp_x");
+        assert_eq!(schema_qualified("sales", "sp_x".into()), "sales.sp_x");
+        // 與 split_schema_table 互為反向。
+        assert_eq!(split_schema_table("sales.sp_x"), ("sales".to_string(), "sp_x".to_string()));
+        assert_eq!(split_schema_table("sp_x"), ("dbo".to_string(), "sp_x".to_string()));
     }
 }

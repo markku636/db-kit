@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::db::{
     filter_op_sql, finalize_hits, group_table_columns, make_snippet, op_needs_value, sqlx_db_message, AlterOp, CellEdit,
     ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable,
-    Filter, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, SearchHit,
+    Filter, ForeignKeyInfo, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, SearchHit,
     SearchOptions, Sort, SortDir, TableColumns, TableInfo, ValidationReport,
 };
 use crate::error::{AppError, AppResult};
@@ -265,6 +265,30 @@ impl DatabaseDriver for SqliteDriver {
             .await
             .map(|_| ())
             .map_err(|e| AppError::Query(e.to_string()))
+    }
+
+    async fn exec_batch(&self, statements: &[String], transactional: bool) -> AppResult<(u64, bool)> {
+        if !transactional {
+            let mut n = 0u64;
+            for s in statements {
+                n += self.query(s).await?.rows_affected;
+            }
+            return Ok((n, false));
+        }
+        use sqlx::Executor;
+        let mut tx = self.pool.begin().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut n = 0u64;
+        for s in statements {
+            match (&mut *tx).execute(s.as_str()).await {
+                Ok(r) => n += r.rows_affected(),
+                Err(e) => {
+                    let _ = tx.rollback().await;
+                    return Err(AppError::Query(sqlx_db_message(&e)));
+                }
+            }
+        }
+        tx.commit().await.map_err(|e| AppError::Query(e.to_string()))?;
+        Ok((n, true))
     }
 
     async fn validate_ddl(&self, _database: &str, sql: &str) -> AppResult<ValidationReport> {
@@ -628,6 +652,27 @@ impl DatabaseDriver for SqliteDriver {
             tables.push(ErTable { name: t.name.clone(), columns: er_cols });
         }
         Ok(ErModel { tables, relations })
+    }
+
+    async fn list_foreign_keys(&self, _database: &str, table: &str) -> AppResult<Vec<ForeignKeyInfo>> {
+        // PRAGMA foreign_key_list 欄位：id, seq, table, from, to, on_update, on_delete, match。
+        // SQLite 外鍵沒有約束名；以 `fk_<table>_<id>` 合成穩定名稱，複合外鍵（同 id、多 seq）
+        // 藉同名摺疊（見 compare::schema::group_fks）。
+        let rows = sqlx::query(&format!("PRAGMA foreign_key_list({})", quote_ident(table)))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| {
+                let id: i64 = r.try_get(0).ok()?;
+                let ref_table: String = r.try_get(2).ok()?;
+                let column: String = r.try_get(3).ok()?;
+                // `to` 為 NULL 表示參照對方主鍵；以空字串表示。
+                let ref_column: String = r.try_get::<Option<String>, _>(4).ok().flatten().unwrap_or_default();
+                Some(ForeignKeyInfo { name: format!("fk_{table}_{id}"), column, ref_table, ref_column })
+            })
+            .collect())
     }
 
     async fn table_indexes(&self, _database: &str, table: &str) -> AppResult<Vec<IndexInfo>> {

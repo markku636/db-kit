@@ -147,6 +147,43 @@ const SHOTS = {
     await sleep(1200);
     await shot(page, "05-advanced-search");
   },
+
+  // 整庫結構 / 資料比對：資料庫右鍵 →「結構 / 資料比對…」，目標改成 shop_archive（同連線跨庫，
+  // 預設目標與來源同庫會被擋下），模式選「兩者」，按下比對後拍逐表狀態 + 彙總同步腳本。
+  async "10-schema-compare"(page) {
+    await page.getByText("prod-mysql", { exact: true }).dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+    await sleep(400);
+    await page.getByText("結構比對…", { exact: true }).click();
+    await sleep(1200);
+    // 認出對話框的「目標資料庫」下拉：頁面上另有一個列出所有庫（含系統庫）的下拉，
+    // 只靠 shop_archive 會選到它；比對對話框這個已濾掉系統庫，用 hasNot 把它區分出來。
+    await page.locator("select")
+      .filter({ has: page.locator('option[value="shop_archive"]') })
+      .filter({ hasNot: page.locator('option[value="information_schema"]') })
+      .first()
+      .selectOption("shop_archive");
+    await sleep(500);
+    await page.getByRole("button", { name: /比對選取的/ }).click();
+    await sleep(2200);
+    // 順便把 AI 總結跑出來——那一格空著時截圖看不出這個功能存在。
+    await page.getByRole("button", { name: "產生總結", exact: true }).click();
+    await page.waitForFunction(() => document.body.innerText.includes("建議順序"), null, { timeout: 15_000 });
+    await sleep(400);
+    await shot(page, "10-schema-compare");
+  },
+
+  // 整庫資料字典：資料庫右鍵 →「資料庫文件…」，等逐表結構抓完後拍 Markdown 預覽。
+  async "11-db-docs"(page) {
+    await page.getByText("prod-mysql", { exact: true }).dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+    await sleep(400);
+    await page.getByText("資料庫文件…", { exact: true }).click();
+    await sleep(2600);
+    await shot(page, "11-db-docs");
+  },
 };
 
 // ── main ───────────────────────────────────────────────────────────────

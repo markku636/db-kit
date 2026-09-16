@@ -1211,6 +1211,31 @@ impl DatabaseDriver for MysqlDriver {
             .map_err(|e| AppError::Query(e.to_string()))
     }
 
+    async fn exec_batch(&self, statements: &[String], transactional: bool) -> AppResult<(u64, bool)> {
+        if !transactional {
+            let mut n = 0u64;
+            for s in statements {
+                n += self.query(s).await?.rows_affected;
+            }
+            return Ok((n, false));
+        }
+        // 同步 DML（INSERT / UPDATE / DELETE）具交易性；DDL 會隱式 commit，但比對套用只送 DML。
+        use sqlx::Executor;
+        let mut tx = self.pool.begin().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut n = 0u64;
+        for s in statements {
+            match (&mut *tx).execute(s.as_str()).await {
+                Ok(r) => n += r.rows_affected(),
+                Err(e) => {
+                    let _ = tx.rollback().await;
+                    return Err(AppError::Query(sqlx_db_message(&e)));
+                }
+            }
+        }
+        tx.commit().await.map_err(|e| AppError::Query(e.to_string()))?;
+        Ok((n, true))
+    }
+
     async fn validate_ddl(&self, database: &str, sql: &str) -> AppResult<ValidationReport> {
         // MySQL 的 DDL 會隱式 commit，無法用交易回滾驗證。對 procedure/function 改用
         // 「暫存名稱試建 → 立即刪除」（CREATE 時即檢查程序體語法）；trigger/event 會掛載真實

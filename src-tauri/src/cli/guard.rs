@@ -12,31 +12,142 @@ const ALLOWED: &[&str] = &[
 /// 可寫 CTE 偵測用的寫入關鍵字。
 const CTE_WRITE: &[&str] = &["insert", "update", "delete", "merge"];
 
-pub fn ensure_read_only(sql: &str) -> AppResult<()> {
+/// 唯讀違規的種類（供 CLI 與 AI 工具各自措辭）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadOnlyViolation {
+    /// 語句開頭不是查詢類關鍵字（帶出該關鍵字）。
+    Statement(String),
+    /// `WITH … AS (INSERT/UPDATE/DELETE/MERGE …)` 可寫 CTE（帶出寫入關鍵字）。
+    WritableCte(String),
+    /// `EXPLAIN [ANALYZE] <寫入語句>`：PostgreSQL 的 EXPLAIN ANALYZE 會真的執行內層語句。
+    ExplainInner(String),
+}
+
+/// EXPLAIN 後面可能出現的修飾詞（各方言混列；只用來跳過，找出真正的內層語句）。
+const EXPLAIN_MODIFIERS: &[&str] = &[
+    "analyze", "analyse", "verbose", "plan", "for", "query", "extended", "partitions", "format",
+    "json", "xml", "yaml", "text", "tree", "traditional", "costs", "buffers", "timing", "summary",
+    "settings", "wal", "generic_plan", "memory", "serialize", "into", "connection",
+];
+
+/// EXPLAIN 內層若是這些關鍵字就視為寫入（block-list：內層也可能是 `EXPLAIN 表名`＝DESCRIBE，
+/// 不能用 allow-list 一刀切）。
+const EXPLAIN_INNER_WRITE: &[&str] = &[
+    "insert", "update", "delete", "merge", "replace", "upsert", "create", "alter", "drop", "truncate",
+    "rename", "grant", "revoke", "set", "call", "exec", "execute", "do", "lock", "copy", "load",
+    "import", "vacuum", "reindex", "cluster", "refresh", "commit", "rollback", "begin", "start",
+];
+
+/// 找出第一個違反唯讀的地方；`None` = 全部語句皆為唯讀。
+/// `strict_explain`：連 `EXPLAIN` 的內層語句也檢查（AI 工具 / MCP 用；CLI 沿用舊行為）。
+pub fn read_only_violation(sql: &str, strict_explain: bool) -> Option<ReadOnlyViolation> {
     for stmt in split_statements(sql) {
         let kw = first_keyword(stmt);
         if kw.is_empty() {
             continue; // 空句 / 純註解
         }
         if !ALLOWED.contains(&kw.as_str()) {
-            return Err(AppError::Query(tf!(
-                "CLI 為唯讀模式，僅允許查詢語句（偵測到 `{kw}`）",
-                kw = kw
-            )));
+            return Some(ReadOnlyViolation::Statement(kw));
         }
         // PostgreSQL 可寫 CTE：`WITH x AS (DELETE …) …` 首關鍵字為 with（被允許），
         // 但實際會改資料。含寫入關鍵字即擋下（寧可多擋）。
         if kw == "with" {
             let lower = stmt.to_ascii_lowercase();
             if let Some(w) = CTE_WRITE.iter().find(|w| contains_keyword(&lower, w)) {
-                return Err(AppError::Query(tf!(
-                    "CLI 為唯讀模式，偵測到可寫 CTE（含 `{w}`）",
-                    w = w
-                )));
+                return Some(ReadOnlyViolation::WritableCte((*w).to_string()));
+            }
+        }
+        if strict_explain && kw == "explain" {
+            if let Some(inner) = explain_inner_keyword(stmt) {
+                if EXPLAIN_INNER_WRITE.contains(&inner.as_str()) {
+                    return Some(ReadOnlyViolation::ExplainInner(inner));
+                }
+                // 內層是 WITH：同樣檢查可寫 CTE。
+                if inner == "with" {
+                    let lower = stmt.to_ascii_lowercase();
+                    if let Some(w) = CTE_WRITE.iter().find(|w| contains_keyword(&lower, w)) {
+                        return Some(ReadOnlyViolation::ExplainInner((*w).to_string()));
+                    }
+                }
             }
         }
     }
-    Ok(())
+    None
+}
+
+/// 取 `EXPLAIN …` 內層語句的首關鍵字（小寫）。跳過括號選項 `(ANALYZE, FORMAT JSON)`、
+/// `FORMAT=JSON`、`ANALYZE VERBOSE`、`PLAN FOR`、`QUERY PLAN` 等修飾詞。找不到回 `None`。
+fn explain_inner_keyword(stmt: &str) -> Option<String> {
+    let code = strip_noncode(stmt);
+    let lower = code.to_ascii_lowercase();
+    let start = lower.find("explain")? + "explain".len();
+    let mut rest = lower[start..].trim_start();
+    loop {
+        if rest.is_empty() {
+            return None;
+        }
+        if let Some(r) = rest.strip_prefix('(') {
+            // 括號選項群：跳到對應的右括號之後。
+            let mut depth = 1usize;
+            let mut idx = 0usize;
+            for (i, ch) in r.char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            idx = i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if idx == 0 {
+                return None; // 括號沒收尾
+            }
+            rest = r[idx..].trim_start();
+            continue;
+        }
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '(')
+            .unwrap_or(rest.len());
+        let tok = &rest[..end];
+        let tok_clean = tok.trim_matches(|c: char| c == ',' || c == ';');
+        if tok_clean.is_empty() {
+            rest = rest[end..].trim_start();
+            continue;
+        }
+        if tok_clean.contains('=') || EXPLAIN_MODIFIERS.contains(&tok_clean) {
+            rest = rest[end..].trim_start();
+            continue;
+        }
+        return Some(tok_clean.to_string());
+    }
+}
+
+pub fn ensure_read_only(sql: &str) -> AppResult<()> {
+    match read_only_violation(sql, false) {
+        None => Ok(()),
+        Some(ReadOnlyViolation::Statement(kw)) => Err(AppError::Query(tf!(
+            "CLI 為唯讀模式，僅允許查詢語句（偵測到 `{kw}`）",
+            kw = kw
+        ))),
+        Some(ReadOnlyViolation::WritableCte(w)) | Some(ReadOnlyViolation::ExplainInner(w)) => {
+            Err(AppError::Query(tf!(
+                "CLI 為唯讀模式，偵測到可寫 CTE（含 `{w}`）",
+                w = w
+            )))
+        }
+    }
+}
+
+/// 非空語句數（AI 工具「一次一條語句」的判準；純註解不算）。
+pub fn statement_count(sql: &str) -> usize {
+    split_statements(sql)
+        .into_iter()
+        .filter(|s| !first_keyword(s).is_empty())
+        .count()
 }
 
 /// 高破壞語句開頭關鍵字：整個物件 / 整批資料一次消失，且多半無法在交易外回復。
@@ -405,6 +516,48 @@ mod tests {
         // 但真正的 WHERE 即使旁邊有註解 / 字串仍算數。
         assert!(!is_destructive_sql("DELETE FROM t -- 清掉舊資料\nWHERE id = 1"));
         assert!(!is_destructive_sql("UPDATE t SET note = 'where' WHERE id = 1"));
+    }
+
+    #[test]
+    fn strict_explain_blocks_inner_writes_only() {
+        use super::{read_only_violation, statement_count, ReadOnlyViolation};
+        // 舊行為（CLI）：EXPLAIN 只看首關鍵字。
+        assert!(read_only_violation("EXPLAIN ANALYZE DELETE FROM users", false).is_none());
+        // 嚴格版：PG 的 EXPLAIN ANALYZE 會真的執行內層 DELETE。
+        assert_eq!(
+            read_only_violation("EXPLAIN ANALYZE DELETE FROM users", true),
+            Some(ReadOnlyViolation::ExplainInner("delete".into()))
+        );
+        assert_eq!(
+            read_only_violation("EXPLAIN (ANALYZE, BUFFERS) UPDATE t SET a = 1", true),
+            Some(ReadOnlyViolation::ExplainInner("update".into()))
+        );
+        assert_eq!(
+            read_only_violation("explain format=json insert into t values (1)", true),
+            Some(ReadOnlyViolation::ExplainInner("insert".into()))
+        );
+        assert_eq!(
+            read_only_violation("EXPLAIN WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d", true),
+            Some(ReadOnlyViolation::ExplainInner("delete".into()))
+        );
+        // 唯讀內層照常放行（各方言修飾詞都要能跳過）。
+        assert!(read_only_violation("EXPLAIN (ANALYZE, FORMAT JSON) SELECT 1", true).is_none());
+        assert!(read_only_violation("EXPLAIN ANALYZE VERBOSE SELECT * FROM t", true).is_none());
+        assert!(read_only_violation("EXPLAIN QUERY PLAN SELECT * FROM t", true).is_none());
+        assert!(read_only_violation("EXPLAIN PLAN FOR SELECT * FROM t", true).is_none());
+        assert!(read_only_violation("EXPLAIN FORMAT=TREE SELECT 1", true).is_none());
+        // MySQL 的 `EXPLAIN 表名`（= DESCRIBE）不是寫入。
+        assert!(read_only_violation("EXPLAIN orders", true).is_none());
+        // 其他違規種類不受 strict 影響。
+        assert_eq!(read_only_violation("DELETE FROM t", true), Some(ReadOnlyViolation::Statement("delete".into())));
+        assert_eq!(
+            read_only_violation("WITH u AS (UPDATE t SET a=1 RETURNING id) SELECT * FROM u", true),
+            Some(ReadOnlyViolation::WritableCte("update".into()))
+        );
+        // 語句計數：純註解與空句不算。
+        assert_eq!(statement_count("select 1; -- c\n; select 2"), 2);
+        assert_eq!(statement_count("/* only */"), 0);
+        assert_eq!(statement_count("SELECT 'a; b'"), 1);
     }
 
     #[test]

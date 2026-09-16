@@ -101,6 +101,18 @@
   <img src="docs/screenshots/09-routine-exec.png" alt="執行預存程序的引數表單" width="860">
 </p>
 
+**結構比對** — 比整個資料庫，或只比某一張表。目標可以是同一條連線的另一個庫、**另一條連線**，或先前存下的結構快照檔。差異涵蓋欄位、索引、外鍵、視圖與預存程序；同步 DDL 依相依性排序產生，破壞性語句（DROP / 改型別 / 加 NOT NULL）另外分組、要再勾一次才送得出去，引擎表達不出來的變更一律列進「略過」而不是靜默漏掉。**AI 總結**把差異濃縮成風險與執行順序（只送結構摘要，不送任何資料）；報告可匯出 Markdown / HTML / JSON：
+
+<p align="center">
+  <img src="docs/screenshots/10-schema-compare.png" alt="整庫結構比對與同步腳本" width="860">
+</p>
+
+**整庫文件** — 右鍵資料庫 →「資料庫文件…」，把每張表的欄位、型別、可空、鍵、預設值與註解整理成一份可交付的文件，Markdown 與 HTML 兩種格式，附目錄錨點：
+
+<p align="center">
+  <img src="docs/screenshots/11-db-docs.png" alt="整庫資料字典" width="860">
+</p>
+
 ## 下載安裝
 
 <p align="center">
@@ -203,13 +215,13 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 通用資料格 | 多欄複合篩選（9 運算子 + AND·OR）、多欄排序、依值篩選、**外鍵雙向導覽**（跳至參照 / 找參照此列者）、**Excel + CSV 匯入**、多格式 + **Excel 匯出**、複製為 INSERT/UPDATE/DELETE/IN、欄位剖析 + 相異值分布、**表頭 hover 顯示欄位註解** |
 | 查詢工作區 | 語法高亮 + 表/欄自動完成（含 external gateway）、**`@` 使用者變數提示**、**多結果集堆疊**（SSMS 風格，可摺疊 / 單格或全部匯出）、**視覺化查詢建構器**（JOIN / 聚合 / HAVING / 分頁 / 即時預覽）、**SQL 片段庫**、**參數化查詢 `:name`**、格式化 / 壓縮 / 關鍵字大小寫、查詢歷史（200 筆，可過濾）、**收藏查詢**（分組 / 編輯 / 匯出匯入）、只執行反白段、失敗語句定位、多開查詢分頁（右鍵關閉其他）、**重開 app 還原上次開著的分頁**（含停在哪一個；內容本來就 per-連線 × per-分頁 記憶） |
 | 搜尋 / 導覽 | **進階物件搜尋 Ctrl+Shift+G**（跨庫搜名稱 / 定義內文 / 註解，整字比對 + 萬用字元 `*` `?`、定義預覽高亮、在物件總管中選取）、**命令面板 Ctrl+K**、側欄搜尋命中自動展開資料夾 |
-| 跨庫 / 跨連線 | **跨庫查詢自動完成**（同一連線寫 `其他庫.表` 也補得到表 / 欄 / 別名，打 `其他庫.` 當下按需載入）、**資料傳輸**（單表 / 整庫 / 不存在時自動建表）、**資料比對 / 同步**（產生 INSERT/UPDATE/DELETE）、**整庫文件**（HTML / Markdown）、結構比對 |
+| 跨庫 / 跨連線 | **跨庫查詢自動完成**（同一連線寫 `其他庫.表` 也補得到表 / 欄 / 別名，打 `其他庫.` 當下按需載入）、**資料傳輸**（單表 / 整庫 / 不存在時自動建表）、**結構比對**（單表 / 整庫；目標可為另一條連線、同連線的其他庫，或結構快照檔；差異含欄位 / 索引 / 外鍵 / 視圖 / 程序，同步 SQL 可直接套用，破壞性語句分級確認；**AI 總結**；Markdown / HTML / JSON 報告）、**資料列比對**（以主鍵串流、無列數上限，走 CLI `dbk compare data`）、**整庫文件**（HTML / Markdown） |
 | 效能 | **SQL 壓力測試**（致敬 SQLQueryStress）：多執行緒重複執行、固定迭代或持續時間 + 爬升、暖機、**p50/p90/p95/p99 延遲百分位** + TPS 即時折線、**錯誤指紋化分組**、`:name` 參數 CSV 替換、報表一鍵複製為 Markdown；走**專屬連線池**不佔用互動連線，寫入與高破壞語句預設擋下；亦可用 `dbk stress` 在腳本中跑 |
 | 外觀 | **7 套寶石系主題**（Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian）驅動整個 App + 編輯器語法高亮，工具列一鍵切換光亮 / 暗黑 / 變體；**全域介面字級**（6 段，整個 App 等比縮放）與**程式碼字級**分開設定 |
 | 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、**啟動鎖定**（Windows Hello / Touch ID 或 Argon2id 密碼、閒置自動鎖定）、**結果列數上限 / 查詢逾時**、釘選常用表 |
 | SQL 審查 | **靜態規則引擎**（對標 Redgate SQL Prompt / SonarQube SQL rules）：15 條規則、三級嚴重度，打字當下即時列出無 WHERE 的 DML、笛卡兒積、欄位套函式讓索引失效、前綴萬用字元 LIKE、`NOT IN` 的 NULL 陷阱、UNION vs UNION ALL、NOLOCK 髒讀、游標逐列處理…；方言感知、**不執行查詢也不需要 AI**，點一筆即跳到編輯器對應位置 |
 | AI 助手 | 右側面板串接本機 **Claude Code 或 OpenAI Codex** CLI（下拉即切、各自記住模型）：串流問答、撰寫 / 優化 SQL，可附帶目前 schema；程式碼區塊套用目前主題的語法高亮。另有三個一鍵入口——**AI 審查 SQL**（帶規則引擎發現 + 結構 + 索引 + 計畫）、**AI 調校建議**（帶計畫熱點，要求索引 DDL / 改寫 / 代價評估）、**AI 分析壓測結果**（從延遲百分位的形狀反推瓶頸類型） |
-| 多語系 | **繁體中文 · 简体中文 · English · 日本語 · 한국어**，工具列或設定頁即時切換、不需重啟；前端 / Rust 後端錯誤訊息 / `dbk` CLI（`--lang`、`DBKIT_LANG`）三處同步。各語言的譯文表由 vite 各切一個 chunk，只下載自己那包 |
+| 多語系 | **繁體中文 · 简体中文 · English · 日本語 · 한국어 · Tiếng Việt**，工具列或設定頁即時切換、不需重啟；前端 / Rust 後端錯誤訊息 / `dbk` CLI（`--lang`、`DBKIT_LANG`）三處同步。各語言的譯文表由 vite 各切一個 chunk，只下載自己那包 |
 | 運維 | 連線設定持久化、加密匯出 / 匯入連線（逐筆選連線與機密類別；PROD 連線一律不含帳密）、排程備份 + 備份歷史、連線池監控 + Ping、啟動時檢查新版、跨平台桌面 App |
 
 > 目前進度：**八大資料庫 + Kafka 全部可連線**；關聯式完整 CRUD / DDL 欄位編輯 / 索引管理 / EXPLAIN / RETURNING 顯示、多欄複合篩選（9 種運算子 + AND·OR）排序、**CSV 匯入** + 多格式匯出 + **轉儲整庫結構 SQL**
@@ -288,12 +300,14 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] **查詢結果匯出**走後端統一管線（CSV / TSV / Excel / JSON / SQL / Markdown）
 - [x] **SQL 片段庫**（編輯器自動完成 + 工具列管理）、**參數化查詢 `:name`**、SQL **格式化 / 壓縮 / 關鍵字大小寫**
 - [x] **資料傳輸**（跨連線 / 跨庫；單表 / 整庫；目標不存在時自動建表）
-- [x] **資料比對 / 同步**（以主鍵比對兩表，產生 INSERT / UPDATE / DELETE 同步 DML）
+- [x] **資料列比對 / 同步**（以主鍵串流比對兩表或整庫，無列數上限；產生 INSERT / UPDATE / DELETE，可直接分批交易套用）——CLI 專屬：`dbk compare data`
 - [x] **整庫資料庫文件**（HTML / Markdown 報表，含目錄）
 - [x] **外鍵雙向導覽**（跳至參照的列 / 找參照此列的列）、**Copy as IN**、**相異值分布**
 - [x] **命令面板**（Ctrl/Cmd+K）：模糊搜尋跳轉連線 / 資料庫 / 資料表 / 動作
 - [x] **連線唯讀模式**（擋寫入 / DDL 與資料格 / 側欄寫入）、**連線色標**（區分環境）、**釘選常用表**
-- [x] 結構比對（同連線兩資料庫的表 / 欄差異 + 同步 SQL）
+- [x] **結構比對**（單表或整庫；跨連線 / 跨庫 / 對快照檔：表 / 欄位 / 索引 / 外鍵 / 視圖 / 程序差異，雙向同步 DDL 含破壞性分級與「略過」清單；結構快照存檔；**AI 總結**；Markdown / HTML / JSON 報告；`dbk compare schema`）
+  - MySQL / MariaDB / PostgreSQL / SQLite / **SQL Server** / Oracle；SQL Server 的視圖與程序自動包成目標庫的 `sp_executesql`（T-SQL 不收三部式名稱），被索引擋住的 `ALTER COLUMN` 自動卸索引再重建
+  - 端對端驗證跑在真實伺服器上：MySQL 8.4、PostgreSQL 16、**兩台獨立的 SQL Server 2022**（跨連線），判準是「同步後再比一次必須零差異」
 - [x] **啟動鎖定**（App 開啟閘門；不影響 keychain 與 `dbk` CLI）
   - 生物辨識：Windows Hello（指紋 / 臉 / PIN）、macOS Touch ID；Linux 不支援，退回密碼
   - 啟動密碼：Argon2id 雜湊。與生物辨識互相獨立，可單開或併用
@@ -307,7 +321,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] **進階物件搜尋**（`Ctrl+Shift+G`）：表格化結果（可排序）、名稱 / 定義 / 註解三種命中、整字比對 + 萬用字元、定義預覽高亮、在物件總管中選取
 - [x] 側欄搜尋 / 篩選命中時自動展開資料夾；資料表格表頭 hover 顯示欄位 comment
 - [x] 「關於 DB Kit」對話框 + 啟動時檢查 GitHub 新版（可於設定關閉）
-- [x] **多語系（i18n）**：繁體中文 / 简体中文 / English / 日本語 / 한국어，即時切換不需重啟；前端、Rust 後端與 `dbk` CLI（`--lang`、`DBKIT_LANG`）全部在地化。日 / 韓譯文缺漏時退回英文而非中文，簡中對照表由 `scripts/i18n-gen-zhcn.mjs` 產生（OpenCC + 資料庫用語詞表）
+- [x] **多語系（i18n）**：繁體中文 / 简体中文 / English / 日本語 / 한국어 / Tiếng Việt，即時切換不需重啟；前端、Rust 後端與 `dbk` CLI（`--lang`、`DBKIT_LANG`）全部在地化。日 / 韓 / 越譯文缺漏時退回英文而非中文，簡中對照表由 `scripts/i18n-gen-zhcn.mjs` 產生（OpenCC + 資料庫用語詞表）
 
 </details>
 

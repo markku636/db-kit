@@ -507,6 +507,73 @@ const CASES = {
     check("選回「標準（預設）」即還原 16px", (await rootPx()) === 16);
     check("還原後 text-[11px] 回到 11px", (await tinyPx()) === 11);
   },
+
+  // 結構比對（v0.30）：資料表右鍵與資料庫右鍵都要有入口；兩個對話框都能開、單表能比出結果，
+  // 且整段沒有前端例外——shim 少一個 command 就是 pageerror，這裡會抓到。
+  async "compare-dialogs-open"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    // 「常用」釘選區也有 shop / orders 字樣，取 nth(1) 才是樹裡的節點；表在「資料表」資料夾下，先展開。
+    await page.getByText("shop", { exact: true }).nth(1).click();
+    await sleep(700);
+    await page.getByText("資料表", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="orders"]', { timeout: 8000 });
+    await sleep(300);
+    await page.locator('[data-tree-table="orders"]').first().click({ button: "right" });
+    await sleep(300);
+    let items = await menuItems(page);
+    check("資料表右鍵：結構比對…", items.some((i) => i.includes("結構比對")), items.join(" | "));
+    check("資料表右鍵：舊的「資料比對 / 同步」已移除", !items.some((i) => i.includes("資料比對 / 同步")));
+    await page.getByText("結構比對…", { exact: true }).click();
+    await sleep(900);
+    check("單表比對對話框開啟", (await page.getByText("比對目標", { exact: true }).count()) > 0);
+    check("單表比對只談結構，沒有資料分頁", !(await page.locator("#root").innerText()).includes("含 DELETE"));
+    // 一開就要是可按的狀態：目標庫預設挑「非來源」的庫，而不是把來源自己填進去。
+    check("單表比對預設目標不是來源自己",
+      !(await page.locator("#root").innerText()).includes("來源與目標是同一張表"));
+    const cmpBtn = page.getByRole("button", { name: "比對", exact: true }).first();
+    check("單表比對「比對」鈕開啟即可按", await cmpBtn.isEnabled());
+    await cmpBtn.click();
+    await sleep(1500);
+    const body = await page.locator("#root").innerText();
+    check("單表比對顯示結構結果", /有差異|結構相同|僅來源有|僅目標有/.test(body), body.replace(/\s+/g, " ").slice(0, 200));
+    check("單表比對列出同步語句", body.includes("同步語句"));
+    await page.keyboard.press("Escape");
+    await sleep(400);
+
+    await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+    await sleep(300);
+    items = await menuItems(page);
+    check("資料庫右鍵：結構比對…", items.some((i) => i.includes("結構比對")), items.join(" | "));
+    check("資料庫右鍵：儲存結構快照…", items.some((i) => i.includes("儲存結構快照")));
+    await page.getByText("結構比對…", { exact: true }).click();
+    await sleep(900);
+    check("整庫比對對話框開啟", (await page.getByRole("button", { name: /比對選取的/ }).count()) > 0);
+    check("整庫比對列出來源資料表", (await page.getByText("資料表（", { exact: false }).count()) > 0);
+    check("整庫比對預設目標不是來源庫",
+      !(await page.locator("#root").innerText()).includes("目標與來源是同一個資料庫"));
+
+    // 跨連線：目標連線下拉要列出同族的另一條連線（prod-mysql 之外還有 external 家族的…這裡只驗有下拉）
+    await page.locator("select").filter({ has: page.locator('option[value="shop_archive"]') })
+      .filter({ hasNot: page.locator('option[value="information_schema"]') }).first().selectOption("shop_archive");
+    await sleep(400);
+    await page.getByRole("button", { name: /比對選取的/ }).click();
+    await sleep(2500);
+    const after = await page.locator("#root").innerText();
+    check("整庫比對跑出結果與同步腳本", after.includes("同步語句"), after.replace(/\s+/g, " ").slice(0, 200));
+    check("整庫比對有 AI 總結區塊", after.includes("AI 總結"));
+    check("整庫比對不再出現資料比對選項", !after.includes("快速預檢") && !after.includes("兩者"));
+
+    // AI 總結：shim 會把假回覆以 agent-stream 事件一段段送回，驗的是串流累積真的有渲染出來。
+    await page.getByRole("button", { name: "產生總結", exact: true }).click();
+    let streamed = false;
+    try {
+      await page.waitForFunction(() => document.body.innerText.includes("建議順序"), null, { timeout: 15_000 });
+      streamed = true;
+    } catch { /* 下面的 check 會報 */ }
+    check("AI 總結串流回填", streamed, (await page.locator("#root").innerText()).replace(/\s+/g, " ").slice(0, 200));
+    check("AI 總結完成後可重新產生", (await page.getByRole("button", { name: "重新產生", exact: true }).count()) > 0);
+  },
 };
 
 // ── main ───────────────────────────────────────────────────────────────

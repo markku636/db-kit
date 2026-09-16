@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+use crate::db::sqlgen::qualified;
 use crate::db::{DataQuery, DbKind, RowInsert, Sort, SortDir};
 use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
@@ -39,23 +40,6 @@ pub struct TransferResult {
     /// 是否在本次傳輸中自動建立了目標表。
     pub created: bool,
     pub errors: Vec<String>,
-}
-
-/// 識別字跳脫（PostgreSQL 雙引號、其餘反引號；內部引號加倍）。
-fn quote_ident(kind: DbKind, id: &str) -> String {
-    match kind {
-        DbKind::Postgres | DbKind::Oracle => format!("\"{}\"", id.replace('"', "\"\"")),
-        DbKind::Mssql => format!("[{}]", id.replace(']', "]]")),
-        _ => format!("`{}`", id.replace('`', "``")),
-    }
-}
-
-/// 目標限定名：SQLite 不加 schema；其餘以 db.table 限定（確保建在指定庫 / schema）。
-fn qualified(kind: DbKind, db: &str, table: &str) -> String {
-    match kind {
-        DbKind::Sqlite => quote_ident(kind, table),
-        _ => format!("{}.{}", quote_ident(kind, db), quote_ident(kind, table)),
-    }
 }
 
 /// 把來源建表 DDL 的表名換成目標表（限定到目標庫 / schema），保留 IF NOT EXISTS 與欄位定義原樣。

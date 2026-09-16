@@ -57,8 +57,8 @@ pub struct ConnArgs {
     #[arg(long, value_enum, default_value = "table", global = true)]
     pub format: Format,
 
-    /// 介面語言（zh-TW | zh-CN | en | ja | ko；亦可用環境變數 DBKIT_LANG）
-    #[arg(long, global = true, value_name = "zh-TW|zh-CN|en|ja|ko")]
+    /// 介面語言（zh-TW | zh-CN | en | ja | ko | vi；亦可用環境變數 DBKIT_LANG）
+    #[arg(long, global = true, value_name = "zh-TW|zh-CN|en|ja|ko|vi")]
     pub lang: Option<String>,
 
     /// 確認執行寫入指令（修改 / 刪除）。未加時只印出將執行的動作並以錯誤結束（等同預演）
@@ -161,6 +161,14 @@ pub enum Command {
 
     /// 匯出資料庫結構（所有表 DDL）
     SchemaDump,
+
+    /// 結構快照（擷取整庫結構為 JSON 檔，供日後比對）
+    #[command(subcommand)]
+    Schema(SchemaCmd),
+
+    /// 比對來源與目標（結構 / 資料列），可輸出或套用同步 SQL
+    #[command(subcommand)]
+    Compare(CompareCmd),
 
     /// 匯出資料表資料（csv/tsv/json/sql/markdown）
     Export(ExportArgs),
@@ -317,6 +325,137 @@ pub struct ExportArgs {
     /// 篩選以 OR 連接
     #[arg(long)]
     pub match_any: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SchemaCmd {
+    /// 擷取目前連線 / 資料庫的結構為 JSON 快照檔
+    Snapshot {
+        /// 輸出檔路徑（.json）
+        #[arg(long)]
+        to: String,
+        /// 不含建表 DDL（檔案較小；無法比對 charset / engine 等 DDL 層差異）
+        #[arg(long = "no-ddl")]
+        no_ddl: bool,
+        /// 不含預存程序 / 函式 / 觸發器
+        #[arg(long = "no-routines")]
+        no_routines: bool,
+    },
+    /// 顯示快照檔摘要（種類 / 資料庫 / 表數 / 擷取時間）
+    Show { path: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CompareCmd {
+    /// 結構比對：表 / 欄位 / 索引 / 外鍵 / 視圖 / 程序；可輸出同步 DDL
+    Schema(CompareSchemaArgs),
+    /// 資料列比對：以主鍵逐列比對兩表（或整庫），可輸出 / 套用同步 SQL
+    Data(CompareDataArgs),
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrategyArg {
+    Auto,
+    Merge,
+    Hash,
+}
+
+#[derive(Args, Debug)]
+pub struct CompareDataArgs {
+    /// 來源表名（與 --all 互斥）
+    #[arg(required_unless_present = "all", conflicts_with = "all")]
+    pub table: Option<String>,
+    /// 目標：已存連線名稱 / id 或連線字串（省略 = 與來源同一連線）
+    #[arg(long)]
+    pub dst: Option<String>,
+    /// 目標資料庫 / schema（預設同來源）
+    #[arg(long = "dst-db")]
+    pub dst_db: Option<String>,
+    /// 目標表名（預設同來源）
+    #[arg(long = "dst-table")]
+    pub dst_table: Option<String>,
+    /// 比對整庫（來源 ∩ 目標的資料表；略過視圖與無主鍵表）
+    #[arg(long)]
+    pub all: bool,
+    /// 先以 COUNT / MIN / MAX 預檢，看起來相同的表直接略過（僅 --all）
+    #[arg(long)]
+    pub precheck: bool,
+    /// 只做預檢，不逐列比對（僅 --all）
+    #[arg(long = "precheck-only")]
+    pub precheck_only: bool,
+    /// 將同步 SQL 輸出到 stdout（不執行）
+    #[arg(long, conflicts_with = "apply")]
+    pub sql: bool,
+    /// 在目標直接執行同步 SQL。需 --yes；含 --include-deletes 時另需 --force
+    #[arg(long)]
+    pub apply: bool,
+    /// 同步 SQL 含 DELETE（刪除目標多出的列）
+    #[arg(long = "include-deletes")]
+    pub include_deletes: bool,
+    /// 每側最多掃描列數（0 = 不限）
+    #[arg(long = "max-rows", default_value_t = 5_000_000)]
+    pub max_rows: u64,
+    /// 每類差異保留的樣本列數
+    #[arg(long, default_value_t = 20)]
+    pub samples: usize,
+    /// 忽略的欄位（可重複）
+    #[arg(long = "ignore-column")]
+    pub ignore_columns: Vec<String>,
+    /// 忽略字串尾端空白
+    #[arg(long = "ignore-trailing-spaces")]
+    pub ignore_trailing_spaces: bool,
+    /// 比對策略：auto（排序合併，失敗自動退雜湊）| merge | hash
+    #[arg(long, value_enum, default_value = "auto")]
+    pub strategy: StrategyArg,
+    /// 套用時任一批失敗即中止（預設：該批改逐句重放，隔離壞列後繼續）
+    #[arg(long = "stop-on-error")]
+    pub stop_on_error: bool,
+    /// 允許對標記為正式環境（prod）的目標連線套用
+    #[arg(long = "allow-prod")]
+    pub allow_prod: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CompareSchemaArgs {
+    /// 目標：已存連線名稱 / id、連線字串，或 .json 快照檔路徑
+    #[arg(long)]
+    pub dst: String,
+    /// 來源（省略 = 全域連線旗標 --conn / --url）；同樣接受連線或快照檔
+    #[arg(long)]
+    pub src: Option<String>,
+    /// 來源資料庫 / schema（預設沿用 -d）
+    #[arg(long = "src-db")]
+    pub src_db: Option<String>,
+    /// 目標資料庫 / schema（預設同來源）
+    #[arg(long = "dst-db")]
+    pub dst_db: Option<String>,
+    /// 名稱比對忽略大小寫
+    #[arg(long = "ignore-case")]
+    pub ignore_case: bool,
+    /// 忽略欄位註解差異
+    #[arg(long = "ignore-comments")]
+    pub ignore_comments: bool,
+    /// 忽略欄位預設值差異
+    #[arg(long = "ignore-defaults")]
+    pub ignore_defaults: bool,
+    /// 不比對預存程序 / 函式 / 觸發器
+    #[arg(long = "no-routines")]
+    pub no_routines: bool,
+    /// 輸出同步 SQL（使目標與來源一致）而非差異表
+    #[arg(long)]
+    pub sync: bool,
+    /// 同步 SQL 含 DROP 語句（刪除目標多出的表 / 欄 / 視圖）
+    #[arg(long = "include-drops")]
+    pub include_drops: bool,
+    /// 同步 SQL 含程序 / 函式 / 觸發器
+    #[arg(long = "with-routines")]
+    pub with_routines: bool,
+    /// 直接在目標執行同步 SQL。需 --yes；含高破壞語句時另需 --force
+    #[arg(long, requires = "sync")]
+    pub apply: bool,
+    /// 有差異時以非零結束碼結束（腳本 / CI 用）
+    #[arg(long = "exit-code")]
+    pub exit_code: bool,
 }
 
 #[derive(Args, Debug)]

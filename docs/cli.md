@@ -21,6 +21,7 @@
   - [`stress` — 壓力測試](#stress--壓力測試)
   - [`export` / `schema-dump` / `backup`](#export--schema-dump--backup)
   - [`search` / `column-stats` / `routine` / `er-model` / `server-info`](#search--column-stats--routine--er-model--server-info)
+  - [`compare` / `schema` — 結構 / 資料比對與快照](#compare--schema--結構--資料比對與快照)
   - [`redis` — Redis 操作](#redis--redis-操作)
 - [常見情境](#常見情境)
 - [結束碼與錯誤處理](#結束碼與錯誤處理)
@@ -67,25 +68,9 @@ dbk --url "mysql://app:secret@10.0.0.5:3306/shop" table list
 dbk --url "postgres://user@host/db?sslmode=require" db list
 dbk --url "oracle://user:pass@host:1521/SERVICE" table list
 dbk --url "/var/data/local.sqlite" table list          # SQLite 直接給檔案路徑
-dbk --url "host=db.internal port=5432 dbname=app user=svc sslmode=require" db list
-dbk --url "jdbc:oracle:thin:@//db:1521/XEPDB1" table list
 ```
 
-與 GUI 的「連線字串」欄共用同一套解析器（`db/conn_url/`），支援：
-
-- **URL**：`mysql://` `mariadb://` `postgres://`（`postgresql://`）`mongodb://`（`mongodb+srv://`）`redis://`（`rediss://`）`valkey://`（`valkeys://`）`mssql://` `sqlserver://` `oracle://` `kafka://` `amqp://`（`amqps://`）`sqlite:`
-- **框架方言後綴**：`postgresql+psycopg2://` `mysql+pymysql://` `mssql+pyodbc://` 等（driver 後綴忽略；`+tls` / `+ssl` 視為 TLS）
-- **libpq keyword/value**：`host=… port=… dbname=… user=… sslmode=…`（psql 慣用形式，值可用單引號包住含空白的密碼）
-- **JDBC**：`jdbc:sqlserver://` `jdbc:mysql://` `jdbc:mariadb://` `jdbc:postgresql://` `jdbc:sqlite:`；帳密放 query string（`?user=…&password=…`）也認得
-- **Oracle**：`jdbc:oracle:thin:@//host:1521/service`、`@host:1521:SID`、`@TNS_ALIAS`、TNS descriptor `(DESCRIPTION=(ADDRESS=(HOST=…)(PORT=…))(CONNECT_DATA=(SERVICE_NAME=…)))`，以及 EZConnect `host:1521/service`（需搭配 `--kind oracle`）
-- **ADO.NET / Npgsql 分號字串**：`Server=…;Database=…;User ID=…`（判為 SQL Server）、`Host=…;Database=…;Username=…`（判為 PostgreSQL）
-- **雜訊容錯**：外層引號、`export DATABASE_URL=` 前綴、尾端分號、終端機折行，以及 `psql "postgres://…"` 這類整行指令貼上
-
-不帶類型資訊的格式（EZConnect、裸 `host:port`、SQLite 檔案路徑）需要 `--kind` 當提示。
-
-> Kafka client properties 與 Elasticsearch 的 `http(s)://` / Cloud ID 同樣解得出來，但 CLI
-> 目前不支援 Kafka / Elasticsearch / RabbitMQ 三種類型（見 `cli/resolve.rs` 的
-> `ensure_cli_kind`），那幾種格式只有 GUI 用得到。
+與 GUI 的「從連線字串匯入」共用同一套解析器（`conn_url.rs`），支援 `mysql://` `postgres://` `mongodb+srv://` `rediss://` `sqlserver://` `oracle://` 與 Azure ADO.NET 格式。
 
 ### 3. 逐項旗標
 
@@ -110,7 +95,7 @@ DBKIT_PASSWORD=secret dbk --kind mysql --host 10.0.0.5 --port 3306 --user app -d
 | `--kind` `--host` `--port` `--user` `--password` | 逐項指定臨時連線 |
 | `-d, --database <名稱>` | 預設資料庫 / schema（SQLite 為檔案路徑、Redis 為 DB index） |
 | `--format table\|csv\|json` | 輸出格式，預設 `table` |
-| `--lang zh-TW\|zh-CN\|en\|ja\|ko` | 訊息與 `--help` 的語言（亦可用 `DBKIT_LANG`；預設讀 GUI 的設定） |
+| `--lang zh-TW\|zh-CN\|en\|ja\|ko\|vi` | 訊息與 `--help` 的語言（亦可用 `DBKIT_LANG`；預設讀 GUI 的設定） |
 | `-y, --yes` | 確認執行寫入指令 |
 | `--force` | 額外確認高破壞動作，須與 `--yes` 併用 |
 
@@ -341,6 +326,37 @@ dbk --conn prod server-info
 ```
 
 三個比對範圍（`--names` / `--definitions` / `--comments`）都不給時，預設只比對名稱。
+
+### `compare` / `schema` — 結構 / 資料比對與快照
+
+與 GUI 的「結構比對」共用同一套 Rust 引擎（`compare data` 是 CLI 專屬——GUI 只做結構）。來源以全域連線旗標指定，目標以 `--dst` 指定（已存連線名 / id、連線字串，或 `.json` 快照檔）。差異一律以**來源為基準**：產生的同步 SQL 是「讓目標變成來源」。支援 MySQL / MariaDB / PostgreSQL / SQLite / SQL Server / Oracle。
+
+```bash
+# 結構快照：整庫表 / 視圖 / 程序定義存成 JSON，之後可跟即時結構或另一份快照比
+dbk --conn prod -d shop schema snapshot --to shop-2026-09.json
+dbk schema show shop-2026-09.json
+
+# 結構比對：表 / 欄位（型別 / 可空 / 預設 / 註解）/ 索引 / 外鍵 / 視圖 / 程序
+dbk --conn staging -d shop compare schema --dst prod
+dbk --conn staging -d shop compare schema --dst prod --format json > diff.json
+dbk --conn staging -d shop compare schema --dst shop-2026-09.json --exit-code   # CI：有差異回非零
+dbk --conn staging -d shop compare schema --dst prod --sync                     # 印同步 DDL（不含 DROP）
+dbk --conn staging -d shop compare schema --dst prod --sync --include-drops     # 含 DROP TABLE / COLUMN
+dbk --conn staging -d shop compare schema --dst prod --sync --apply --yes       # 直接在目標執行
+
+# 資料比對：以主鍵串流比對（無列數上限）；單表或 --all 整庫
+dbk --conn staging -d shop compare data orders --dst prod
+dbk --conn staging -d shop compare data orders --dst prod --sql > sync.sql      # 印 INSERT / UPDATE（/ DELETE）
+dbk --conn staging -d shop compare data --all --dst prod --precheck             # 筆數 / 主鍵範圍相同的表直接略過
+dbk --conn staging -d shop compare data orders --dst prod --apply --yes         # 分批交易套用到目標
+dbk --conn staging -d shop compare data orders --dst prod --apply --include-deletes --yes --force
+```
+
+- `--apply` 沒帶 `--yes` 時只印差異摘要（等同預演）並回非零；`--sync --apply` 的腳本含高破壞 DDL（DROP / 改型別 / 改 NOT NULL）、或 `compare data --apply --include-deletes`，另需 `--force`。
+- **PostgreSQL 的 `-d` / `--src-db` / `--dst-db` 是 schema，不是資料庫**。PG 是唯一「命名空間」與「要連上的資料庫」不同軸的引擎：要連的資料庫寫在連線字串（`postgres://…/testdb`）或已存連線裡，旗標只指定 schema。所以是 `--dst "postgres://…/testdb" --dst-db public`，不是把 `public` 塞進連線字串。其餘引擎兩者同義，旗標會一併當成連線的預設資料庫（MySQL 的視圖 / 程序 DDL 未限定庫名，同步時要靠它）。
+- 資料比對的兩側主鍵排序規則不一致（如 MySQL `_ci` vs PostgreSQL）時會自動改用雜湊比對（`--strategy auto`），結果一樣精確、只是記憶體多一點；掃描被 `--max-rows` 截斷時**不會**輸出 DELETE。
+- 目標連線標記為正式環境（`options.prod`）時 `--apply` 會被擋下，確定要套用請加 `--allow-prod`。
+- 引擎表達不出來的變更（SQLite 改型別、SQL Server 改預設值）會列在 `skipped` 區，不會靜默漏掉。
 
 ### `redis` — Redis 操作
 

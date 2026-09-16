@@ -86,6 +86,8 @@ import {
   buildGrant,
   buildRevoke,
   buildDropRoutine,
+  buildScopedDdl,
+  splitMssqlName,
   supportsRoutines,
   userListSql,
   isDangerousRedisCommand,
@@ -258,9 +260,53 @@ describe("buildDropRoutine", () => {
     expect(buildDropRoutine("sqlite", "main", { name: "trg", routine_type: "trigger", parent: null, signature: null }))
       .toBe("DROP TRIGGER IF EXISTS `trg`");
   });
+  it("SQL Server: USE switches DB, then a two-part DROP (T-SQL rejects a 3-part name here)", () => {
+    // 這個分支以前不存在：刪預存程序會掉到結尾的 trigger fallback，送出 DROP TRIGGER。
+    expect(buildDropRoutine("mssql", "shop", { ...base, routine_type: "procedure" }))
+      .toBe("USE [shop];\nDROP PROCEDURE IF EXISTS [dbo].[do_thing]");
+    expect(buildDropRoutine("mssql", "shop", { ...base, routine_type: "function" }))
+      .toBe("USE [shop];\nDROP FUNCTION IF EXISTS [dbo].[do_thing]");
+    expect(buildDropRoutine("mssql", "shop", { ...base, routine_type: "trigger" }))
+      .toBe("USE [shop];\nDROP TRIGGER IF EXISTS [dbo].[do_thing]");
+  });
+  it("SQL Server: a non-dbo name carries its schema through instead of being quoted whole", () => {
+    expect(buildDropRoutine("mssql", "shop", { ...base, name: "sales.sp_close" }))
+      .toBe("USE [shop];\nDROP PROCEDURE IF EXISTS [sales].[sp_close]");
+  });
+  it("SQL Server: an empty database drops the USE rather than emitting a literal \"null;\"", () => {
+    expect(buildDropRoutine("mssql", "", { ...base, routine_type: "procedure" }))
+      .toBe("DROP PROCEDURE IF EXISTS [dbo].[do_thing]");
+  });
   it("external gateway speaks MySQL dialect (not the trigger fallback)", () => {
     expect(buildDropRoutine("external", "app", { ...base, routine_type: "procedure" })).toBe("DROP PROCEDURE IF EXISTS `app`.`do_thing`");
     expect(buildDropRoutine("external", "app", { ...base, routine_type: "function" })).toBe("DROP FUNCTION IF EXISTS `app`.`do_thing`");
+  });
+});
+
+describe("splitMssqlName", () => {
+  it("splits on the first dot only; no dot means dbo", () => {
+    expect(splitMssqlName("sales.sp_x")).toEqual({ schema: "sales", obj: "sp_x" });
+    expect(splitMssqlName("sp_x")).toEqual({ schema: "dbo", obj: "sp_x" });
+    // 只切第一個點：物件名本身含點時，剩下的都算名字。
+    expect(splitMssqlName("sales.a.b")).toEqual({ schema: "sales", obj: "a.b" });
+  });
+});
+
+describe("buildScopedDdl", () => {
+  it("SQL Server: wraps CREATE in a database-qualified sp_executesql (CREATE must start its batch)", () => {
+    expect(buildScopedDdl("mssql", "shop", "CREATE PROCEDURE p AS BEGIN SELECT 1 END"))
+      .toBe("EXEC [shop].sys.sp_executesql N'CREATE PROCEDURE p AS BEGIN SELECT 1 END'");
+  });
+  it("SQL Server: doubles single quotes so a quoted literal in the body survives", () => {
+    expect(buildScopedDdl("mssql", "shop", "CREATE PROCEDURE p AS SELECT 'x'"))
+      .toBe("EXEC [shop].sys.sp_executesql N'CREATE PROCEDURE p AS SELECT ''x'''");
+  });
+  it("an empty database passes through instead of wrapping in EXEC [].sys...", () => {
+    expect(buildScopedDdl("mssql", "", "CREATE PROCEDURE p AS SELECT 1")).toBe("CREATE PROCEDURE p AS SELECT 1");
+  });
+  it("every other kind passes the DDL through untouched", () => {
+    for (const k of ["mysql", "mariadb", "postgres", "sqlite", "oracle", "external"] as const)
+      expect(buildScopedDdl(k, "shop", "CREATE PROCEDURE p()")).toBe("CREATE PROCEDURE p()");
   });
 });
 
@@ -785,6 +831,11 @@ describe("table/database lifecycle DDL", () => {
     expect(buildRoutineCall("mysql", "db", "p", "procedure", "'x'")).toBe("CALL `db`.`p`('x')");
     expect(buildRoutineCall("postgres", "public", "fn", "function", "")).toBe('SELECT * FROM "public"."fn"()');
     expect(buildRoutineCall("postgres", "public", "p", "procedure", "3")).toBe('CALL "public"."p"(3)');
+    // T-SQL 沒有 CALL：程序用 EXEC，引數不加括號。
+    expect(buildRoutineCall("mssql", "shop", "p", "procedure", "1, N'x'")).toBe("EXEC [shop].[dbo].[p] 1, N'x'");
+    expect(buildRoutineCall("mssql", "shop", "p", "procedure", "")).toBe("EXEC [shop].[dbo].[p]");
+    expect(buildRoutineCall("mssql", "shop", "sales.sp_close", "procedure", "7")).toBe("EXEC [shop].[sales].[sp_close] 7");
+    expect(buildRoutineCall("mssql", "shop", "fn", "function", "1")).toBe("SELECT [shop].[dbo].[fn](1) AS result");
   });
 
   it("buildAddForeignKey: ALTER ADD CONSTRAINT … FOREIGN KEY … REFERENCES", () => {

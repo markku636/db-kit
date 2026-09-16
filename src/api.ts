@@ -199,6 +199,193 @@ export interface TransferResult {
   errors: string[];
 }
 
+// ---- 結構 / 資料比對（後端 compare/）：型別 1:1 鏡射 Rust DTO（snake_case）----
+export interface TableSchema {
+  name: string;
+  kind: string; // "table" | "view"
+  columns: ColumnInfo[];
+  indexes: IndexInfo[];
+  foreign_keys: ForeignKeyInfo[];
+  ddl: string | null;
+  ddl_synthesized: boolean; // PG / MSSQL 的表 DDL 由 catalog 合成，不含索引 / 外鍵
+  warnings: string[];
+}
+export interface RoutineSchema { info: RoutineInfo; definition: string | null }
+export interface DbSchema {
+  kind: DbKind;
+  database: string;
+  captured_at_ms: number;
+  label: string;
+  tables: TableSchema[];
+  views: TableSchema[];
+  routines: RoutineSchema[];
+  warnings: string[];
+}
+export interface CaptureOptions {
+  include_ddl?: boolean;
+  include_routines?: boolean;
+  include_views?: boolean;
+  tables?: string[] | null;
+}
+export interface DiffOptions {
+  ignore_case?: boolean;
+  ignore_comments?: boolean;
+  ignore_defaults?: boolean;
+  match_by_content?: boolean;
+}
+export type ColumnAttr = "data_type" | "nullable" | "default" | "extra" | "comment";
+export interface ColumnChange { name: string; src: ColumnInfo; dst: ColumnInfo; attrs: ColumnAttr[] }
+export interface IndexChange { name: string; src: IndexInfo; dst: IndexInfo; renamed: boolean }
+export interface ForeignKeyDef { name: string; columns: string[]; ref_table: string; ref_columns: string[] }
+export interface FkChange { name: string; src: ForeignKeyDef; dst: ForeignKeyDef; renamed: boolean }
+export interface TableDiff {
+  name: string;
+  columns_added: ColumnInfo[];
+  columns_removed: ColumnInfo[];
+  columns_changed: ColumnChange[];
+  indexes_added: IndexInfo[];
+  indexes_removed: IndexInfo[];
+  indexes_changed: IndexChange[];
+  fks_added: ForeignKeyDef[];
+  fks_removed: ForeignKeyDef[];
+  fks_changed: FkChange[];
+  ddl_differs: boolean;
+}
+export interface TextChange { name: string; routine_type: string | null; src: string | null; dst: string | null }
+export interface DiffSummary {
+  tables_added: number; tables_removed: number; tables_changed: number;
+  views_added: number; views_removed: number; views_changed: number;
+  routines_added: number; routines_removed: number; routines_changed: number;
+  total: number;
+}
+export interface SchemaDiff {
+  src_kind: DbKind;
+  dst_kind: DbKind;
+  src_db: string;
+  dst_db: string;
+  cross_engine: boolean;
+  tables_added: string[];
+  tables_removed: string[];
+  tables_changed: TableDiff[];
+  tables_identical: string[];
+  views_added: string[];
+  views_removed: string[];
+  views_changed: TextChange[];
+  routines_added: TextChange[];
+  routines_removed: TextChange[];
+  routines_changed: TextChange[];
+  summary: DiffSummary;
+}
+// 前端把資料同步 DML 也包成同一種語句物件（insert / update / delete 為前端自加的種類）。
+export type SyncKind =
+  | "create_table" | "drop_table" | "add_column" | "alter_column" | "drop_column"
+  | "create_index" | "drop_index" | "add_foreign_key" | "drop_foreign_key"
+  | "create_view" | "drop_view" | "create_routine" | "drop_routine" | "comment"
+  | "insert" | "update" | "delete";
+export interface SyncStatement { sql: string; kind: SyncKind; object: string; destructive: boolean; note: string | null }
+export interface SyncScript {
+  target_kind: DbKind;
+  target_db: string;
+  statements: SyncStatement[];
+  destructive_count: number;
+  skipped: string[];
+}
+export interface SyncOptions {
+  include_drops?: boolean;
+  include_indexes?: boolean;
+  include_fks?: boolean;
+  include_views?: boolean;
+  include_routines?: boolean;
+}
+export interface SnapshotInfo { path: string; bytes: number; tables: number; views: number; routines: number; captured_at_ms: number }
+export interface CompareProgress {
+  run_id: string;
+  phase: "capture" | "precheck" | "scan" | "apply" | string;
+  table: string;
+  table_index: number;
+  table_count: number;
+  src_rows: number;
+  dst_rows: number;
+  inserts: number;
+  updates: number;
+  deletes: number;
+  applied: number;
+  elapsed_ms: number;
+}
+export interface CompareTableRef { conn_id: string; database: string; table: string }
+export interface CompareDbRef { conn_id: string; database: string }
+export type DataRunMode = "report" | "sql" | "apply";
+export type DataStrategy = "auto" | "merge_join" | "hash_diff";
+export interface DataCompareOptions {
+  mode?: DataRunMode;
+  strategy?: DataStrategy;
+  include_deletes?: boolean;
+  sample_cap?: number;
+  max_rows?: number;
+  ignore_columns?: string[];
+  ignore_trailing_spaces?: boolean;
+  null_equals_empty?: boolean | null;
+  batch_size?: number;
+  stop_on_error?: boolean;
+  allow_prod_target?: boolean;
+}
+export type TruncReason = "max_rows" | "pk_order_mismatch" | "duplicate_key" | "cancelled" | "sql_too_large";
+export interface DataDiffSummary {
+  inserts: number;
+  updates: number;
+  deletes: number;
+  compared_rows: number;
+  src_rows: number;
+  dst_rows: number;
+  strategy_used: string;
+  truncated_reason: TruncReason | null;
+  deletes_suppressed: boolean;
+  cancelled: boolean;
+  elapsed_ms: number;
+  warnings: string[];
+}
+export interface UpdateSample { src: (string | null)[]; dst: (string | null)[]; changed: string[] }
+export interface DiffSamples { inserts: (string | null)[][]; updates: UpdateSample[]; deletes: (string | null)[][] }
+export interface DataApplyResult { applied: number; failed: number; batches: number; transactional: boolean; errors: string[] }
+export interface DataDiffReport {
+  src: string;
+  dst: string;
+  pk: string[];
+  columns: string[];
+  skipped_src_columns: string[];
+  skipped_dst_columns: string[];
+  summary: DataDiffSummary;
+  samples: DiffSamples;
+  sql: string | null;
+  apply: DataApplyResult | null;
+}
+export type CompareTableStatus = "compared" | "skipped" | "failed";
+export interface PrecheckResult {
+  src_count: number; dst_count: number;
+  src_min: string | null; src_max: string | null;
+  dst_min: string | null; dst_max: string | null;
+  likely_identical: boolean;
+}
+export interface TableDiffEntry {
+  table: string;
+  status: CompareTableStatus;
+  reason: string | null;
+  precheck: PrecheckResult | null;
+  report: DataDiffReport | null;
+}
+export interface DbCompareOptions extends DataCompareOptions {
+  tables?: string[] | null;
+  precheck?: boolean;
+  precheck_only?: boolean;
+}
+export interface DataDiffDbReport {
+  tables: TableDiffEntry[];
+  totals: DataDiffSummary;
+  only_in_src: string[];
+  only_in_dst: string[];
+  cancelled: boolean;
+}
+
 export interface ColumnStats {
   total: number;
   non_null: number;
@@ -413,17 +600,24 @@ export interface AgentStatus {
   version: string | null;
   logged_in: boolean;
   path: string | null;
+  /**
+   * 資料庫工具的提供方式：API 供應商為 "builtin"（內建在 Rust 工具迴圈）；
+   * CLI 供應商為找到的 `dbk` 執行檔路徑（走 `dbk mcp`），找不到為 null。
+   */
+  db_tools?: string | null;
 }
 
 // 助手模式：advise = 純問答 / 產生腳本文字（唯讀）；agent = 可寫腳本檔到工作資料夾。
 // generate：一次性 NL→查詢語句生成（零工具、單回合、無 session）。
-export type AgentMode = "advise" | "agent" | "generate";
+// edit：編輯器內的一次性 SQL 改寫（同樣零工具 / 單回合，但額度放寬到 4096 token——
+//       改寫要回傳整段語句，generate 的 1024 對長 SQL 不夠）。
+export type AgentMode = "advise" | "agent" | "generate" | "edit";
 
 // 後端 `agent-stream` 事件 payload（依 kind 取用欄位）。
 // 註：Claude 的 text 是 token 級增量、Codex 是整段一次到齊，前端一律「附加」即可。
 export interface AgentEvent {
   req_id: string;
-  kind: "system" | "text" | "tool" | "result" | "error" | "done";
+  kind: "system" | "text" | "tool" | "tool_result" | "result" | "error" | "done";
   text?: string | null;
   session_id?: string | null;
   model?: string | null;
@@ -431,6 +625,14 @@ export interface AgentEvent {
   is_error?: boolean | null;
   duration_ms?: number | null;
   code?: number | null;
+  // ---- 工具呼叫細節（kind = tool / tool_result）----
+  // 讓使用者看得到助手實際跑了哪條 SQL、拿回幾列；tool_id 用來把「開始」與「結果」配對。
+  tool_id?: string | null;
+  tool_input?: string | null;
+  tool_output_preview?: string | null;
+  tool_rows?: number | null;
+  tool_truncated?: boolean | null;
+  tool_ms?: number | null;
 }
 
 // 訂閱某次問答的串流事件（僅回呼符合 reqId 者）。回傳取消監聽函式。
@@ -865,6 +1067,12 @@ export function onKafkaScanProgress(connId: string, cb: (p: KafkaScanProgress) =
   });
 }
 // 訂閱 CSV 發佈進度（僅回呼符合 connId 者）。回傳取消監聽函式。
+export function onCompareProgress(runId: string, cb: (p: CompareProgress) => void): Promise<UnlistenFn> {
+  // 結構 / 資料比對進度：事件為全域廣播，只回呼符合 runId 者（多個比對視窗各認各的）。
+  return listen<CompareProgress>("compare-progress", (e) => {
+    if (e.payload.run_id === runId) cb(e.payload);
+  });
+}
 export function onKafkaProduceProgress(connId: string, cb: (p: KafkaProduceProgress) => void): Promise<UnlistenFn> {
   return listen<KafkaProduceProgress>("kafka-produce-progress", (e) => {
     if (e.payload.conn_id === connId) cb(e.payload);
@@ -1249,6 +1457,24 @@ export const api = {
     dstId: string, dstDb: string, dstTable: string,
     options: TransferOptions,
   ) => invoke<TransferResult>("transfer_table", { srcId, srcDb, srcTable, dstId, dstDb, dstTable, options }),
+  // ---- 結構 / 資料比對 ----
+  // 擷取整庫結構；runId 有給時以 compare-progress 事件回報逐表進度（phase = capture）。
+  captureSchema: (runId: string | null, id: string, database: string, label: string | null, options?: CaptureOptions) =>
+    invoke<DbSchema>("capture_schema", { runId, id, database, label, options }),
+  diffSchema: (src: DbSchema, dst: DbSchema, options?: DiffOptions) =>
+    invoke<SchemaDiff>("diff_schema", { src, dst, options }),
+  // 差異在後端重算（純函式）；tables 可限定只產生這些表的語句（單表 drill-in）。
+  generateSchemaSync: (src: DbSchema, dst: DbSchema, diffOptions?: DiffOptions, syncOptions?: SyncOptions, tables?: string[]) =>
+    invoke<SyncScript>("generate_schema_sync", { src, dst, diffOptions, syncOptions, tables }),
+  saveSchemaSnapshot: (path: string, schema: DbSchema) =>
+    invoke<SnapshotInfo>("save_schema_snapshot", { path, schema }),
+  loadSchemaSnapshot: (path: string) => invoke<DbSchema>("load_schema_snapshot", { path }),
+  // 資料列比對：options.mode = report | sql | apply；進度走 onCompareProgress、取消走 compareDataCancel。
+  compareDataTable: (runId: string, src: CompareTableRef, dst: CompareTableRef, options?: DataCompareOptions) =>
+    invoke<DataDiffReport>("compare_data_table", { runId, src, dst, options }),
+  compareDataDatabase: (runId: string, src: CompareDbRef, dst: CompareDbRef, options: DbCompareOptions) =>
+    invoke<DataDiffDbReport>("compare_data_database", { runId, src, dst, options }),
+  compareDataCancel: (runId: string) => invoke<void>("compare_data_cancel", { runId }),
   explainQuery: (id: string, sql: string) =>
     invoke<QueryResult>("explain_query", { id, sql }),
   alterTable: (id: string, database: string, table: string, op: AlterOp) =>
@@ -1455,6 +1681,8 @@ export const api = {
   // baseUrl 只有 API 供應商會用到；systemPrompt 是人設 + 選中的技能（四種供應商都吃）。
   agentDetect: (provider?: AgentProvider | null, baseUrl?: string | null) =>
     invoke<AgentStatus>("agent_detect", { provider: provider ?? null, baseUrl: baseUrl ?? null }),
+  // connectionId / database：附帶目前連線，讓助手能用唯讀資料庫工具自己查（見 dbtools）。
+  // 不給就沒有資料庫工具，其餘行為完全不變；generate / edit 模式後端一律忽略。
   agentSend: (args: {
     reqId: string;
     prompt: string;
@@ -1464,6 +1692,8 @@ export const api = {
     provider?: AgentProvider | null;
     baseUrl?: string | null;
     systemPrompt?: string | null;
+    connectionId?: string | null;
+    database?: string | null;
   }) =>
     invoke<void>("agent_send", {
       reqId: args.reqId,
@@ -1474,6 +1704,8 @@ export const api = {
       provider: args.provider ?? null,
       baseUrl: args.baseUrl ?? null,
       systemPrompt: args.systemPrompt ?? null,
+      connectionId: args.connectionId ?? null,
+      database: args.database ?? null,
     }),
   agentCancel: (reqId: string) => invoke<void>("agent_cancel", { reqId }),
 
@@ -1484,6 +1716,14 @@ export const api = {
   // 取模型清單（同時當「測試連線」）。抓不到回空陣列，UI 退回手填。
   llmListModels: (kind: AgentProvider, baseUrl?: string | null) =>
     invoke<string[]>("llm_list_models", { kind, baseUrl: baseUrl ?? null }),
+  // HTTP 供應商的對話歷史（落地於設定目錄）：清空對話 / 開新對話時一併刪掉，
+  // 免得使用者以為畫面清乾淨了、磁碟上卻還留著夾帶查詢結果的歷史。
+  agentSessionDelete: (sessionId: string) => invoke<void>("agent_session_delete", { sessionId }),
+  agentSessionsClear: () => invoke<void>("agent_sessions_clear"),
+  // 助手工作資料夾：供聊天輸入框的 `@file:` 補全與內容帶入（邊界同 read_file 工具）。
+  agentWorkspaceFiles: (pattern?: string | null) =>
+    invoke<string[]>("agent_workspace_files", { pattern: pattern ?? null }),
+  agentWorkspaceRead: (path: string) => invoke<string>("agent_workspace_read", { path }),
   openAgentWorkspace: () => invoke<void>("open_agent_workspace"),
   openExternal: (url: string) => invoke<void>("open_external", { url }),
 };

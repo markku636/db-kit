@@ -16,7 +16,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const CJK = /[一-鿿]/;
-const LOCALES = ["en", "ja", "ko", "zh-CN"];
+const LOCALES = ["en", "ja", "ko", "vi", "zh-CN"];
 
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
@@ -120,5 +120,5 @@ if (only) {
     for (const g of ghosts.slice(0, 10)) console.log(`         ⚠ 幽靈：${JSON.stringify(g)}`);
     if (ghosts.length > 10) console.log(`         ⚠ …另有 ${ghosts.length - 10} 條`);
   }
-  console.log("\n日 / 韓缺漏會退回英文（見 src/i18n.ts 的 FALLBACK），不會露出中文。");
+  console.log("\n日 / 韓 / 越缺漏會退回英文（見 src/i18n.ts 的 FALLBACK），不會露出中文。");
 }

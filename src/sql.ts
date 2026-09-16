@@ -14,6 +14,11 @@ export const isMysqlFamily = (kind: DbKind | null | undefined): boolean =>
 export const supportsRoutines = (kind: DbKind | null | undefined): boolean =>
   isMysqlFamily(kind) || kind === "postgres" || kind === "mssql" || kind === "oracle" || kind === "external";
 
+// 支援結構 / 資料比對的 kind：與後端 compare::schema::supports_schema_compare 對齊
+// （SQL 引擎；Mongo / Redis / 訊息類與 external gateway 沒有可比對的結構）。
+export const supportsSchemaCompare = (kind: DbKind | null | undefined): boolean =>
+  isMysqlFamily(kind) || kind === "postgres" || kind === "sqlite" || kind === "mssql" || kind === "oracle";
+
 // 有查詢編輯器可用的 kind：Kafka / RabbitMQ 沒有查詢語言（driver 的 query() 一律回 Unsupported），
 // 其餘（含 Mongo 的 DSL、Redis 的指令、Elasticsearch 的 Query DSL）都有可打字的編輯器。
 // 單一落點：查詢面板的編輯器 gate 與側欄右鍵「新增查詢」共用 —— 兩處曾各寫一份白名單，
@@ -32,13 +37,18 @@ export function quoteIdent(kind: DbKind, id: string): string {
 // MySQL / PostgreSQL 為 db.table（PG 之 db 即 schema）。
 export function qualifiedName(kind: DbKind, db: string, table: string): string {
   if (kind === "sqlite") return quoteIdent(kind, table);
-  if (kind === "mssql") {
-    const dot = table.indexOf(".");
-    const schema = dot >= 0 ? table.slice(0, dot) : "dbo";
-    const tbl = dot >= 0 ? table.slice(dot + 1) : table;
-    return `${quoteIdent(kind, db)}.${quoteIdent(kind, schema)}.${quoteIdent(kind, tbl)}`;
-  }
+  if (kind === "mssql") return `${quoteIdent(kind, db)}.${mssqlSchemaName(table)}`;
   return `${quoteIdent(kind, db)}.${quoteIdent(kind, table)}`;
+}
+// SQL Server 物件名可能內嵌 schema（`sales.sp_x`，後端 list_* 對非 dbo 的物件就這樣回）；第一個點之前是 schema，沒有就是 dbo。
+export function splitMssqlName(name: string): { schema: string; obj: string } {
+  const dot = name.indexOf(".");
+  return dot >= 0 ? { schema: name.slice(0, dot), obj: name.slice(dot + 1) } : { schema: "dbo", obj: name };
+}
+// 二部式 `[schema].[name]`：DROP PROCEDURE / FUNCTION / TRIGGER 只收這種（T-SQL 不允許在這些 DROP 上帶資料庫名）。
+export function mssqlSchemaName(name: string): string {
+  const { schema, obj } = splitMssqlName(name);
+  return `${quoteIdent("mssql", schema)}.${quoteIdent("mssql", obj)}`;
 }
 // SQL 字串字面值：NULL → NULL，其餘以單引號包裹並轉義內部單引號。
 // MySQL（與 external gateway，講 MySQL 方言）預設把反斜線當字串轉義字元，故需加倍——否則像 `a\`
@@ -377,7 +387,7 @@ export function buildTableMaintenance(op: TableMaintenanceOp, db: string, table:
   return `${op} TABLE ${qualifiedName("mysql", db, table)}`;
 }
 
-// 呼叫 routine（執行函式 / 預存程序）：函式以 SELECT、程序以 CALL。
+// 呼叫 routine（執行函式 / 預存程序）：函式以 SELECT、程序以 CALL（T-SQL 為 EXEC）。
 // 引數為使用者輸入的原樣字串（自行加引號 / 型別，如 42, 'abc'），不再跳脫（呼叫端負責），與 DDL 一致。
 export function buildRoutineCall(kind: DbKind, db: string, name: string, routineType: string, args: string): string {
   const q = qualifiedName(kind, db, name);
@@ -388,7 +398,18 @@ export function buildRoutineCall(kind: DbKind, db: string, name: string, routine
     if (kind === "oracle") return `SELECT ${q}(${a}) AS result FROM DUAL`;
     return `SELECT ${q}(${a}) AS result`;
   }
+  // SQL Server 沒有 CALL：EXEC 後直接接以逗號分隔的引數，不加括號（三部式名稱合法）。
+  if (kind === "mssql") return a ? `EXEC ${q} ${a}` : `EXEC ${q}`;
   return `CALL ${q}(${a})`;
+}
+
+// 把一段 DDL 綁進指定資料庫執行（給 RoutinesDialog 的 CREATE 用）。
+// SQL Server 的 CREATE PROCEDURE / FUNCTION / TRIGGER 必須是批次的第一句，不能用 `USE [db];` 前綴，
+// 也不接受三部式名稱；改以資料庫限定的 sp_executesql 執行，動態 SQL 就會在該庫的脈絡裡跑。
+// 其他資料庫原樣回傳（MySQL 走連線目前庫、PG 走 search_path、Oracle 走 owner）。
+export function buildScopedDdl(kind: DbKind, db: string, sql: string): string {
+  if (kind !== "mssql" || !db) return sql; // db 為空無從限定，原樣送出（用連線當下的資料庫）
+  return `EXEC ${quoteIdent(kind, db)}.sys.sp_executesql N'${sql.replace(/'/g, "''")}'`;
 }
 
 // 組 routine 的 DROP 語句（刪除 / 先刪後建用）。
@@ -404,6 +425,16 @@ export function buildDropRoutine(kind: DbKind, db: string, r: RoutineInfo): stri
     if (routineType === "trigger") return `DROP TRIGGER IF EXISTS ${quoteIdent(kind, r.name)} ON ${qualifiedName(kind, db, r.parent ?? "")}`;
     const sig = r.signature ?? "";
     return `DROP ${routineType === "procedure" ? "PROCEDURE" : "FUNCTION"} IF EXISTS ${qualifiedName(kind, db, r.name)}(${sig})`;
+  }
+  if (kind === "mssql") {
+    // T-SQL 的 DROP PROCEDURE / FUNCTION / TRIGGER 只收 `[schema].[name]`，不能帶資料庫名，
+    // 所以同一批次先 USE 切庫（與查詢面板 buildUseDatabase 的作法一致；exec_ddl 是單批次 simple_query，USE 在批次內即生效）。
+    // 以前這裡沒有 mssql 分支，落到結尾的 trigger fallback → 刪預存程序送出 DROP TRIGGER。
+    const kw = routineType === "procedure" ? "PROCEDURE" : routineType === "function" ? "FUNCTION" : "TRIGGER";
+    const drop = `DROP ${kw} IF EXISTS ${mssqlSchemaName(r.name)}`;
+    // db 為空時 buildUseDatabase 回 null；直接內插會變成字面上的 "null;"，寧可不切庫、用連線當下的資料庫。
+    const use = buildUseDatabase(kind, db);
+    return use ? `${use};\n${drop}` : drop;
   }
   if (kind === "oracle") {
     // Oracle 無 IF EXISTS（23c 前）；觸發器不帶 schema 前綴表。
@@ -1717,15 +1748,21 @@ export function parseClipboardGrid(text: string): string[][] {
   return val.split("\n").map((line) => line.split("\t"));
 }
 
-// 回傳游標位移所在的語句文字；游標落在語句之間的空白時取後一條。無可辨識語句回 null。
-export function statementAtOffset(sql: string, offset: number): string | null {
+// 回傳游標位移所在的語句範圍（含文字與位移）；游標落在語句之間的空白時取後一條。
+// 無可辨識語句回 null。AI 動作要「就地改寫選取範圍」，只有文字不夠——得知道改哪一段。
+export function statementSpanAtOffset(sql: string, offset: number): SqlStatementSpan | null {
   const spans = splitSqlStatementsWithRanges(sql);
   if (spans.length === 0) return null;
   for (const s of spans) {
-    if (offset >= s.from && offset <= s.to) return s.text;
+    if (offset >= s.from && offset <= s.to) return s;
   }
   const after = spans.find((s) => s.from >= offset);
-  return (after ?? spans[spans.length - 1]).text;
+  return after ?? spans[spans.length - 1];
+}
+
+// 回傳游標位移所在的語句文字；游標落在語句之間的空白時取後一條。無可辨識語句回 null。
+export function statementAtOffset(sql: string, offset: number): string | null {
+  return statementSpanAtOffset(sql, offset)?.text ?? null;
 }
 
 // 宣告型別是否為 JSON：MySQL / Oracle 的 `json`、PostgreSQL 的 `json` 與 `jsonb`。

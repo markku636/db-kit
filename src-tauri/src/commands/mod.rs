@@ -1325,6 +1325,123 @@ pub async fn transfer_table(
     .await
 }
 
+// ---- 結構 / 資料比對（compare/）----
+
+/// 擷取整庫結構快照。`run_id` 有給時以 `compare-progress` 事件回報逐表進度（phase = capture）。
+/// `label` 為顯示用（連線名 / 庫名），由前端提供；後端不持有連線名稱。
+#[tauri::command]
+pub async fn capture_schema(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: Option<String>,
+    id: String,
+    database: String,
+    label: Option<String>,
+    options: Option<crate::compare::schema::CaptureOptions>,
+) -> AppResult<crate::compare::schema::DbSchema> {
+    let opts = options.unwrap_or_default();
+    let label = label.unwrap_or_else(|| format!("{id} / {database}"));
+    let rid = run_id.clone();
+    let emit = move |done: usize, total: usize| {
+        if let Some(rid) = &rid {
+            let _ = app.emit(
+                "compare-progress",
+                crate::compare::CompareProgress {
+                    run_id: rid.clone(),
+                    phase: "capture".into(),
+                    table_index: done,
+                    table_count: total,
+                    ..Default::default()
+                },
+            );
+        }
+    };
+    let cb: Option<&(dyn Fn(usize, usize) + Send + Sync)> = if run_id.is_some() { Some(&emit) } else { None };
+    crate::compare::schema::capture(&state.manager, &id, &database, &label, &opts, cb).await
+}
+
+/// 兩份結構快照的差異（純計算；兩側皆可為即時擷取或快照檔載入的結果）。
+#[tauri::command]
+pub async fn diff_schema(
+    src: crate::compare::schema::DbSchema,
+    dst: crate::compare::schema::DbSchema,
+    options: Option<crate::compare::diff::DiffOptions>,
+) -> AppResult<crate::compare::diff::SchemaDiff> {
+    Ok(crate::compare::diff::diff(&src, &dst, &options.unwrap_or_default()))
+}
+
+/// 產生「讓目標變成來源」的同步 DDL。差異在後端重算（純函式、便宜），前端不必回傳 SchemaDiff；
+/// `tables` 可限定只產生這些表的語句（單表 drill-in 用）。
+#[tauri::command]
+pub async fn generate_schema_sync(
+    src: crate::compare::schema::DbSchema,
+    dst: crate::compare::schema::DbSchema,
+    diff_options: Option<crate::compare::diff::DiffOptions>,
+    sync_options: Option<crate::compare::ddl::SyncOptions>,
+    tables: Option<Vec<String>>,
+) -> AppResult<crate::compare::ddl::SyncScript> {
+    let mut d = crate::compare::diff::diff(&src, &dst, &diff_options.unwrap_or_default());
+    if let Some(only) = tables {
+        d.retain_tables(&only);
+    }
+    crate::compare::ddl::generate(&d, &src, &dst, &sync_options.unwrap_or_default())
+}
+
+/// 把結構快照存成 JSON 檔（路徑由前端的存檔對話框決定）。
+#[tauri::command]
+pub async fn save_schema_snapshot(
+    path: String,
+    schema: crate::compare::schema::DbSchema,
+) -> AppResult<crate::compare::snapshot::SnapshotInfo> {
+    crate::compare::snapshot::save(std::path::Path::new(&path), &schema).await
+}
+
+/// 載入結構快照檔（壞檔 / 未知版本 → 錯誤，不會靜默變成空結構）。
+#[tauri::command]
+pub async fn load_schema_snapshot(path: String) -> AppResult<crate::compare::schema::DbSchema> {
+    Ok(crate::compare::snapshot::load(std::path::Path::new(&path)).await?.schema)
+}
+
+/// 單表資料列比對（report / sql / apply 由 options.mode 決定）。進度以 `compare-progress` 事件回報，
+/// `compare_data_cancel` 可中止；中止後仍回傳（部分的）報表並標記 cancelled。
+#[tauri::command]
+pub async fn compare_data_table(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: String,
+    src: crate::compare::data::TableRef,
+    dst: crate::compare::data::TableRef,
+    options: Option<crate::compare::data::DataCompareOptions>,
+) -> AppResult<crate::compare::data::DataDiffReport> {
+    let emit = move |p: crate::compare::CompareProgress| {
+        let _ = app.emit("compare-progress", p);
+    };
+    crate::compare::data::compare_table(&state.manager, &run_id, &src, &dst, &options.unwrap_or_default(), &emit).await
+}
+
+/// 整庫資料列比對：兩側資料表交集逐表比對（略過視圖與無主鍵表）。
+#[tauri::command]
+pub async fn compare_data_database(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: String,
+    src: crate::compare::data::DbRef,
+    dst: crate::compare::data::DbRef,
+    options: crate::compare::data::DbCompareOptions,
+) -> AppResult<crate::compare::data::DataDiffDbReport> {
+    let emit = move |p: crate::compare::CompareProgress| {
+        let _ = app.emit("compare-progress", p);
+    };
+    crate::compare::data::compare_database(&state.manager, &run_id, &src, &dst, &options, &emit).await
+}
+
+/// 要求中止比對：只設取消旗標，掃描於下一頁邊界、套用於下一批邊界收手。
+#[tauri::command]
+pub async fn compare_data_cancel(run_id: String) -> AppResult<()> {
+    crate::compare::cancel(&run_id);
+    Ok(())
+}
+
 /// 匯出整個資料庫的結構 SQL（所有表的建表語句）。致敬 Navicat / DBeaver 的「轉儲結構」。
 #[tauri::command]
 pub async fn schema_dump(

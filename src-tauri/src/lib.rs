@@ -9,6 +9,8 @@ mod locales;
 
 // 核心層（GUI 與 CLI 共用，不依賴 Tauri）。
 mod backup;
+// 結構 / 資料比對核心：不依賴 Tauri（進度以 callback 注入），GUI 與 dbk CLI 共用。
+mod compare;
 mod conn_crypto;
 mod conn_export;
 mod db;
@@ -185,6 +187,14 @@ pub fn run() {
             commands::import_excel,
             commands::import_preview,
             commands::transfer_table,
+            commands::capture_schema,
+            commands::diff_schema,
+            commands::generate_schema_sync,
+            commands::save_schema_snapshot,
+            commands::load_schema_snapshot,
+            commands::compare_data_table,
+            commands::compare_data_database,
+            commands::compare_data_cancel,
             commands::schema_dump,
             commands::explain_query,
             commands::column_stats,

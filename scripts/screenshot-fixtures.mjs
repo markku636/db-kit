@@ -325,6 +325,18 @@ export const STORAGE_SEED = {
   ],
 };
 
+// 結構比對報告的 AI 總結：shim 會一段一段 emit 成 agent-stream 事件，
+// 內容要對得上 diff_schema / generate_schema_sync 的假差異，否則截圖看起來像模型在胡說。
+export const AI_SUMMARY_CHUNKS = [
+  "這次共 3 處結構差異，整體風險中等，建議分兩批執行。\n\n",
+  "1. orders 新增 coupon_code varchar(32) NULL —— 可直接執行，允許 NULL 不會鎖表寫入。\n",
+  "2. orders 的 total_amount 由 decimal(10,2) 放寬為 decimal(12,2) —— 放寬精度不會截斷既有金額，",
+  "但 MODIFY COLUMN 在 MySQL 8 仍會重建資料表，請避開尖峰。\n",
+  "3. 新增索引 idx_orders_status_placed(status, placed_at) —— 與既有查詢樣態相符，建議一併執行。\n\n",
+  "需要留意：DROP TABLE legacy_log 為破壞性語句，執行前請確認已無服務讀取，並先備份。\n",
+  "建議順序：先 1、3，確認服務正常後再做 2，最後單獨處理 DROP。",
+];
+
 export const DEMO_SQL =
   "SELECT status, COUNT(*) AS orders, SUM(total_amount) AS revenue,\n" +
   "ROUND(AVG(total_amount), 2) AS avg_ticket\nFROM orders\nWHERE placed_at >= '2026-01-01'\nGROUP BY status ORDER BY revenue DESC;\n\n" +

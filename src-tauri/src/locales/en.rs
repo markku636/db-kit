@@ -198,8 +198,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
             "Default database / schema (sqlite = file path, redis = db index)"
         }
         "輸出格式" => "Output format",
-        "介面語言（zh-TW | zh-CN | en | ja | ko；亦可用環境變數 DBKIT_LANG）" => {
-            "Interface language (zh-TW | zh-CN | en | ja | ko; can also use the DBKIT_LANG env var)"
+        "介面語言（zh-TW | zh-CN | en | ja | ko | vi；亦可用環境變數 DBKIT_LANG）" => {
+            "Interface language (zh-TW | zh-CN | en | ja | ko | vi; can also use the DBKIT_LANG env var)"
         }
         "確認執行寫入指令（修改 / 刪除）。未加時只印出將執行的動作並以錯誤結束（等同預演）" => {
             "Confirm a write command (modify / delete). Without it, the action is only printed and the command exits with an error (dry run)"
@@ -750,6 +750,275 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "（找不到「{query}」）" => "(no match for “{query}”)",
         "（工作資料夾裡沒有符合的檔案）" => "(no matching file in the workspace folder)",
         "已寫入 {path}（{n} 位元組）" => "Wrote {path} ({n} bytes)",
+
+        // ---- compare/：結構 / 資料比對（schema.rs / ddl.rs / snapshot.rs）----
+        "此資料庫種類不支援結構比對" => "This database kind does not support schema comparison",
+        "無法取得 {name} 的定義：{err}" => "Unable to fetch the definition of {name}: {err}",
+        "無法列出程序 / 函式：{err}" => "Unable to list routines: {err}",
+        "欄位：{err}" => "columns: {err}",
+        "索引：{err}" => "indexes: {err}",
+        "外鍵：{err}" => "foreign keys: {err}",
+        "DDL：{err}" => "DDL: {err}",
+        "找不到視圖定義" => "View definition not found",
+        "來源與目標資料庫種類不同，無法產生同步 DDL" => "Source and target are different database kinds; cannot generate sync DDL",
+        "資料表 {name}：來源無 DDL，無法產生 CREATE TABLE" => "Table {name}: the source has no DDL, so CREATE TABLE cannot be generated",
+        "Oracle DDL 含儲存子句（TABLESPACE 等），目標環境可能需調整" => "Oracle DDL includes storage clauses (TABLESPACE etc.) that may need adjusting for the target",
+        "資料表 {name}：{err}" => "Table {name}: {err}",
+        "資料表 {name}：目標多出（未含 DROP）" => "Table {name}: only in target (DROP not included)",
+        "{table}：主鍵變更請手動處理" => "{table}: primary key changes must be handled manually",
+        "SQLite 無 DEFAULT 的 NOT NULL 欄無法新增，已改為允許 NULL" => "SQLite cannot add a NOT NULL column without a DEFAULT; changed to nullable",
+        "{obj}：identity / generated 屬性變更（{src} → {dst}）請手動處理" => "{obj}: identity / generated attribute change ({src} → {dst}) must be handled manually",
+        "{obj}：SQLite 無法修改欄位型別 / NULL / 預設值（需重建資料表）" => "{obj}: SQLite cannot alter column type / nullability / default (table rebuild required)",
+        "{obj}：SQL Server 預設值為具名約束，請手動處理" => "{obj}: SQL Server defaults are named constraints; handle manually",
+        "{obj}：identity 屬性變更請手動處理" => "{obj}: identity attribute change must be handled manually",
+        "{obj}：此引擎不支援欄位變更" => "{obj}: this engine does not support column changes",
+        "{obj}：目標多出的欄位（未含 DROP）" => "{obj}: column only in target (DROP not included)",
+        "需 SQLite 3.35+" => "Requires SQLite 3.35+",
+        "若此唯一索引由 UNIQUE 約束建立，請改用 DROP CONSTRAINT" => "If this unique index backs a UNIQUE constraint, use DROP CONSTRAINT instead",
+        "{table}.{fk}：SQLite 無法新增外鍵（需重建資料表）" => "{table}.{fk}: SQLite cannot add foreign keys (table rebuild required)",
+        "{table}.{fk}：SQLite 無法刪除外鍵（需重建資料表）" => "{table}.{fk}: SQLite cannot drop foreign keys (table rebuild required)",
+        "視圖 {name}：目標多出（未含 DROP）" => "View {name}: only in target (DROP not included)",
+        "視圖 {name}：來源無定義" => "View {name}: the source has no definition",
+        "視圖本體引用的表未限定資料庫，請在目標資料庫的連線環境下執行" => "Tables referenced in the view body are not database-qualified; run this while connected to the target database",
+        "{rtype} {name}：目標多出（未含 DROP）" => "{rtype} {name}: only in target (DROP not included)",
+        "{name}：來源無定義" => "{name}: the source has no definition",
+        "定義沿用來源（{src}），若內含 schema 限定名請改為 {dst}" => "Definition taken from the source ({src}); change any schema-qualified names to {dst}",
+        "請在目標資料庫的連線環境下執行" => "Run while connected to the target database",
+        "快照路徑無效" => "Invalid snapshot path",
+        "目錄不存在：{dir}" => "Directory does not exist: {dir}",
+        "讀取快照失敗：{err}" => "Failed to read the snapshot: {err}",
+        "快照格式錯誤：{err}" => "Invalid snapshot format: {err}",
+        "快照版本 {v} 高於本程式支援的 {max}，請更新 db-kit" => "Snapshot version {v} is newer than the supported {max}; please update db-kit",
+
+        // ---- cli/compare.rs ----
+        "請以 -d 指定要擷取的資料庫 / schema" => "Specify the database / schema to capture with -d",
+        "擷取結構中… {done}/{total}" => "Capturing schema… {done}/{total}",
+        "已存快照：{path}（{tables} 表 / {views} 視圖 / {routines} 程序，{bytes} bytes）" => "Snapshot saved: {path} ({tables} tables / {views} views / {routines} routines, {bytes} bytes)",
+        "種類" => "kind",
+        "標籤" => "label",
+        "擷取時間" => "captured at",
+        "資料表數" => "tables",
+        "視圖數" => "views",
+        "程序 / 函式 / 觸發器數" => "routines",
+        "快照版本" => "snapshot version",
+        "產生程式版本" => "app version",
+        "{role}未指定資料庫 / schema" => "No database / schema specified for the {role}",
+        "擷取{role}結構中… {done}/{total}" => "Capturing {role} schema… {done}/{total}",
+        "來源" => "source",
+        "目標" => "target",
+        "目標為快照檔，無法套用同步 SQL" => "The target is a snapshot file; sync SQL cannot be applied",
+        "結構一致，無需同步。" => "Schemas match; nothing to sync.",
+        "在目標「{db}」執行 {n} 句同步 DDL（{d} 句為高破壞）" => "Run {n} sync DDL statements on target \"{db}\" ({d} destructive)",
+        "套用中… {i}/{n}" => "Applying… {i}/{n}",
+        "第 {i} 句失敗（{obj}）：{err}\n{sql}" => "Statement {i} failed ({obj}): {err}\n{sql}",
+        "已套用 {n} 句同步 DDL" => "Applied {n} sync DDL statements",
+        "{n} 句（{d} 句高破壞，{s} 項未能自動產生）" => "{n} statements ({d} destructive, {s} could not be generated)",
+        "結構一致，無差異。" => "Schemas match; no differences.",
+        "發現 {n} 項結構差異" => "Found {n} schema differences",
+
+        // ---- cli/args.rs：ConnArgs 與 stress 的 help（v0.29 起漏收，害 `dbk --lang en` 在 debug build
+        //      直接觸發 cli/mod.rs 的 debug_assert 而 panic）----
+        "全域連線與輸出旗標（flatten 到所有子指令；`global = true` 讓它們可放在子指令前後）。" => {
+            "Global connection and output flags (flattened into every subcommand; `global = true` lets them appear before or after the subcommand)."
+        }
+        "壓力測試：多執行緒重複執行同一段查詢，量測 TPS 與延遲分佈（唯讀；寫入語句會被擋下）" => {
+            "Stress test: replay one statement from multiple threads and measure TPS and latency distribution (read-only; writes are blocked)"
+        }
+        "並行執行緒數（1..64）" => "Number of concurrent threads (1..64)",
+        "每執行緒迭代次數。與 --seconds 互斥；兩者皆未給時預設跑 100 次" => {
+            "Iterations per thread. Mutually exclusive with --seconds; defaults to 100 when neither is given"
+        }
+        "改以「持續時間」計：跑滿 N 秒（含暖機與爬升）" => {
+            "Measure by duration instead: run for N seconds (including warmup and ramp-up)"
+        }
+        "執行緒逐步進場的爬升秒數（僅 --seconds 模式有意義）" => {
+            "Seconds over which threads ramp up (only meaningful with --seconds)"
+        }
+        "每執行緒暖機次數（不計入統計）" => "Warmup iterations per thread (excluded from the statistics)",
+        "每次迭代之間的間隔（毫秒）" => "Delay between iterations (milliseconds)",
+        "每次查詢的取列上限（0 = 完整取回）" => "Row cap per query (0 = fetch everything)",
+        "單次查詢逾時（毫秒；0 = 不逾時）" => "Timeout per query (milliseconds; 0 = no timeout)",
+
+        // ---- cli/args.rs：schema / compare 子命令 help ----
+        "結構快照（擷取整庫結構為 JSON 檔，供日後比對）" => "Schema snapshots (capture a whole database schema to a JSON file for later comparison)",
+        "比對來源與目標（結構 / 資料列），可輸出或套用同步 SQL" => "Compare source and target (schema / rows); print or apply sync SQL",
+        "擷取目前連線 / 資料庫的結構為 JSON 快照檔" => "Capture the current connection / database schema to a JSON snapshot file",
+        "輸出檔路徑（.json）" => "Output file path (.json)",
+        "不含建表 DDL（檔案較小；無法比對 charset / engine 等 DDL 層差異）" => "Exclude CREATE TABLE DDL (smaller file; DDL-level differences such as charset / engine cannot be compared)",
+        "不含預存程序 / 函式 / 觸發器" => "Exclude stored procedures / functions / triggers",
+        "顯示快照檔摘要（種類 / 資料庫 / 表數 / 擷取時間）" => "Show a snapshot file summary (kind / database / table count / captured time)",
+        "結構比對：表 / 欄位 / 索引 / 外鍵 / 視圖 / 程序；可輸出同步 DDL" => "Schema comparison: tables / columns / indexes / foreign keys / views / routines; can print sync DDL",
+        "目標：已存連線名稱 / id、連線字串，或 .json 快照檔路徑" => "Target: saved connection name / id, connection string, or .json snapshot path",
+        "來源（省略 = 全域連線旗標 --conn / --url）；同樣接受連線或快照檔" => "Source (omit = global --conn / --url); also accepts a connection or snapshot file",
+        "來源資料庫 / schema（預設沿用 -d）" => "Source database / schema (defaults to -d)",
+        "目標資料庫 / schema（預設同來源）" => "Target database / schema (defaults to the source's)",
+        "名稱比對忽略大小寫" => "Ignore case when matching names",
+        "忽略欄位註解差異" => "Ignore column comment differences",
+        "忽略欄位預設值差異" => "Ignore column default differences",
+        "不比對預存程序 / 函式 / 觸發器" => "Skip stored procedures / functions / triggers",
+        "輸出同步 SQL（使目標與來源一致）而非差異表" => "Print sync SQL (make the target match the source) instead of a diff table",
+        "同步 SQL 含 DROP 語句（刪除目標多出的表 / 欄 / 視圖）" => "Include DROP statements in sync SQL (remove tables / columns / views only in target)",
+        "同步 SQL 含程序 / 函式 / 觸發器" => "Include routines in sync SQL",
+        "直接在目標執行同步 SQL。需 --yes；含高破壞語句時另需 --force" => "Apply sync SQL on the target directly. Requires --yes; --force too when destructive statements are included",
+        "有差異時以非零結束碼結束（腳本 / CI 用）" => "Exit non-zero when differences are found (for scripts / CI)",
+
+        // ---- compare/data.rs + cli compare data ----
+        "目標缺少對應主鍵欄位 {col}" => "The target lacks primary-key column {col}",
+        "來源與目標沒有同名欄位可比對" => "Source and target share no columns to compare",
+        "寫入暫存檔失敗：{err}" => "Failed to write the temp file: {err}",
+        "建立暫存檔失敗：{err}" => "Failed to create the temp file: {err}",
+        "讀取暫存檔失敗：{err}" => "Failed to read the temp file: {err}",
+        "此資料庫種類不支援資料比對" => "This database kind does not support data comparison",
+        "來源資料表沒有主鍵，無法以主鍵比對" => "The source table has no primary key; cannot compare by key",
+        "來源與目標是同一張表" => "Source and target are the same table",
+        "目標連線標記為正式環境，未允許套用同步" => "The target connection is marked as production; applying sync is not allowed",
+        "含二進位欄位，以原字串比對（跨引擎可能不可比）" => "Binary columns are compared as raw strings (may not be comparable across engines)",
+        "兩側主鍵排序與比較器不一致，已改用雜湊比對" => "Primary-key ordering differs from the comparer; switched to hash comparison",
+        "無主鍵" => "no primary key",
+        "預檢相同（筆數 / 主鍵範圍一致）" => "precheck identical (row count / key range match)",
+        "預檢有差異（僅預檢）" => "precheck differs (precheck only)",
+        "預檢失敗：{err}" => "precheck failed: {err}",
+        "請以 -d 指定來源資料庫 / schema" => "Specify the source database / schema with -d",
+        "資料比對的目標必須是連線，不能是快照檔" => "The target of a data comparison must be a connection, not a snapshot file",
+        "比對中… {table} {i}/{n} · 來源 {s} 列 / 目標 {d} 列 · +{ins} ~{upd} -{del}" => "Comparing… {table} {i}/{n} · source {s} rows / target {d} rows · +{ins} ~{upd} -{del}",
+        "資料一致，無需同步。" => "Data match; nothing to sync.",
+        "套用同步到目標「{db}」：{i} INSERT / {u} UPDATE / {d} DELETE（{t} 表）" => "Apply sync to target \"{db}\": {i} INSERT / {u} UPDATE / {d} DELETE ({t} tables)",
+        "{n} 句同步 SQL 失敗" => "{n} sync SQL statements failed",
+        "+{ins} ~{upd} -{del}" => "+{ins} ~{upd} -{del}",
+        "套用同步到目標「{dst}」：{i} INSERT / {u} UPDATE / {d} DELETE" => "Apply sync to target \"{dst}\": {i} INSERT / {u} UPDATE / {d} DELETE",
+        "同步 SQL 超過文字上限，請改用 --apply 或縮小範圍" => "Sync SQL exceeds the text limit; use --apply or narrow the scope",
+        "新增（目標缺）" => "inserts (missing in target)",
+        "更新（值不同）" => "updates (values differ)",
+        "刪除（目標多出）" => "deletes (only in target)",
+        "相同" => "identical",
+        "來源列數" => "source rows",
+        "目標列數" => "target rows",
+        "策略" => "strategy",
+        "耗時（ms）" => "elapsed (ms)",
+        "截斷原因" => "truncated",
+        "DELETE 已停用" => "DELETE suppressed",
+        "比對被截斷，為安全不輸出 DELETE" => "The comparison was truncated; DELETE is withheld for safety",
+        "主鍵" => "primary key",
+        "來源獨有欄位（忽略）" => "source-only columns (ignored)",
+        "目標獨有欄位（不受影響）" => "target-only columns (untouched)",
+        "已套用" => "applied",
+        "失敗" => "failed",
+        "已套用 {a}，失敗 {f}" => "applied {a}, failed {f}",
+        "僅來源有：{list}" => "Only in source: {list}",
+        "僅目標有：{list}" => "Only in target: {list}",
+        "合計 +{ins} ~{upd} -{del}" => "Total +{ins} ~{upd} -{del}",
+        "已取消" => "Cancelled",
+        "資料列比對：以主鍵逐列比對兩表（或整庫），可輸出 / 套用同步 SQL" => "Row comparison: compare two tables (or a whole database) row by row on the primary key; print or apply sync SQL",
+        "來源表名（與 --all 互斥）" => "Source table name (mutually exclusive with --all)",
+        "目標：已存連線名稱 / id 或連線字串（省略 = 與來源同一連線）" => "Target: saved connection name / id or connection string (omit = same connection as the source)",
+        "目標表名（預設同來源）" => "Target table name (defaults to the source's)",
+        "比對整庫（來源 ∩ 目標的資料表；略過視圖與無主鍵表）" => "Compare the whole database (tables in both source and target; views and tables without a primary key are skipped)",
+        "先以 COUNT / MIN / MAX 預檢，看起來相同的表直接略過（僅 --all）" => "Precheck with COUNT / MIN / MAX first and skip tables that look identical (--all only)",
+        "只做預檢，不逐列比對（僅 --all）" => "Precheck only, no row-by-row comparison (--all only)",
+        "將同步 SQL 輸出到 stdout（不執行）" => "Print sync SQL to stdout (do not execute)",
+        "在目標直接執行同步 SQL。需 --yes；含 --include-deletes 時另需 --force" => "Execute sync SQL on the target directly. Requires --yes; --force too with --include-deletes",
+        "同步 SQL 含 DELETE（刪除目標多出的列）" => "Include DELETE in sync SQL (remove rows only in target)",
+        "每側最多掃描列數（0 = 不限）" => "Maximum rows to scan per side (0 = unlimited)",
+        "每類差異保留的樣本列數" => "Sample rows kept per difference category",
+        "忽略的欄位（可重複）" => "Columns to ignore (repeatable)",
+        "忽略字串尾端空白" => "Ignore trailing whitespace in strings",
+        "比對策略：auto（排序合併，失敗自動退雜湊）| merge | hash" => "Comparison strategy: auto (sort-merge, falls back to hash) | merge | hash",
+        "套用時任一批失敗即中止（預設：該批改逐句重放，隔離壞列後繼續）" => "Stop when any batch fails while applying (default: replay that batch statement by statement, isolating bad rows, then continue)",
+        "允許對標記為正式環境（prod）的目標連線套用" => "Allow applying to a target connection marked as production (prod)",
+        // ---- cli/args.rs：dbk mcp ----
+        "以 MCP（stdio JSON-RPC）伺服器模式啟動，把唯讀資料庫工具提供給 AI 用戶端（Claude Code / Codex）" => {
+            "Start as an MCP (stdio JSON-RPC) server exposing read-only database tools to AI clients (Claude Code / Codex)"
+        }
+        // ---- cli/mcp.rs ----
+        "這些工具唯讀地存取使用者在 db-kit 選定的資料庫連線。寫查詢前先用 describe_table 確認欄名；查詢一律加 LIMIT；不要猜測不存在的表或欄位。" => {
+            "These tools give read-only access to the database connection the user selected in db-kit. Call describe_table before writing a query; always add LIMIT; never guess tables or columns that you have not listed."
+        }
+        "MCP 伺服器已啟動（stdio）；等待用戶端 initialize…" => "MCP server started (stdio); waiting for the client to initialize…",
+
+        // ---- dbtools/mod.rs：AI 助手的唯讀資料庫工具 ----
+        "資料庫 / schema 名稱；省略則用目前對話的資料庫" => "Database / schema name; defaults to the current database of this conversation",
+        "此為正式環境連線，請保持查詢輕量（小 LIMIT、避免全表掃描）。" => "This is a production connection: keep queries light (small LIMIT, avoid full scans).",
+        "列出此連線上的資料庫 / schema。" => "List the databases / schemas on this connection.",
+        "列出資料庫裡的 {noun}（含視圖）。" => "List the {noun}s in a database (including views).",
+        "取得一個 {noun} 的欄位（名稱 / 型別 / 可空 / 主鍵 / 預設值 / 註解）、索引與外鍵。寫查詢前請先用它確認欄名。" => {
+            "Get the columns (name / type / nullable / primary key / default / comment), indexes and foreign keys of a {noun}. Use it to confirm column names before writing a query."
+        }
+        "抓取一個 {noun} 的前幾列樣本（最多 {max} 列），用來了解資料長相。{prod}" => {
+            "Fetch the first few sample rows of a {noun} (at most {max}) to see what the data looks like.{prod}"
+        }
+        "預設 {n}" => "Default {n}",
+        "對目前連線執行**唯讀** MongoDB 查詢。參數 query 為 JSON：find 用 {\"collection\":\"..\",\"filter\":{},\"sort\":{},\"projection\":{},\"limit\":N}；聚合用 {\"collection\":\"..\",\"pipeline\":[…]}（省略 db 則用目前資料庫）。禁止 $out / $merge 與任何寫入。結果最多 {max} 列、{kb} KB。{prod}" => {
+            "Run a **read-only** MongoDB query on the current connection. `query` is JSON: find with {\"collection\":\"..\",\"filter\":{},\"sort\":{},\"projection\":{},\"limit\":N}; aggregate with {\"collection\":\"..\",\"pipeline\":[…]} (db defaults to the current database). $out / $merge and any write are forbidden. At most {max} rows / {kb} KB.{prod}"
+        }
+        "對目前連線執行**唯讀** Redis 命令（如 GET k、HGETALL h、SCAN 0 MATCH user:* COUNT 100；可用 \"2:GET k\" 指定 DB index）。只放行讀取類命令；KEYS 會全庫掃描，請改用 SCAN。{prod}" => {
+            "Run a **read-only** Redis command on the current connection (e.g. GET k, HGETALL h, SCAN 0 MATCH user:* COUNT 100; prefix \"2:GET k\" to pick the DB index). Only read commands are allowed; KEYS scans the whole keyspace, prefer SCAN.{prod}"
+        }
+        "對目前連線執行**唯讀** SQL（單一語句）。寫 SQL 前請先用 describe_table 確認欄名；一律加 LIMIT（結果最多 {max} 列、{kb} KB）。禁止 INSERT / UPDATE / DELETE / DDL；可寫 CTE 與 EXPLAIN ANALYZE 寫入語句也會被擋。{prod}" => {
+            "Run a **read-only** SQL statement (one statement) on the current connection. Call describe_table first to confirm column names; always add LIMIT (at most {max} rows / {kb} KB). INSERT / UPDATE / DELETE / DDL are rejected, as are writable CTEs and EXPLAIN ANALYZE over writes.{prod}"
+        }
+        "MongoDB 查詢 JSON" => "MongoDB query JSON",
+        "Redis 命令列" => "Redis command line",
+        "要執行的 SQL（單一語句）" => "The SQL to run (one statement)",
+        "結果列數上限，預設 {n}" => "Maximum rows to return, default {n}",
+        "取得一條唯讀查詢的執行計畫（EXPLAIN），用來判斷索引是否用上、哪個節點最貴。不會執行寫入語句。" => {
+            "Get the execution plan (EXPLAIN) of a read-only query to see whether indexes are used and which node is the most expensive. Never runs write statements."
+        }
+        "要解釋的查詢（單一語句）" => "The query to explain (one statement)",
+        "一次只能執行一條語句；請拆成多次呼叫" => "Only one statement per call; split it into several calls",
+        "唯讀工具只允許查詢語句（偵測到 `{kw}`）；不要嘗試寫入" => "Read-only tool: only query statements are allowed (detected `{kw}`); do not attempt writes",
+        "唯讀工具不允許可寫 CTE（含 `{w}`）" => "Read-only tool: writable CTEs are not allowed (contains `{w}`)",
+        "唯讀工具不允許 EXPLAIN 寫入語句（含 `{w}`；EXPLAIN ANALYZE 會真的執行）" => {
+            "Read-only tool: EXPLAIN over a write statement is not allowed (contains `{w}`; EXPLAIN ANALYZE really executes it)"
+        }
+        "MongoDB 查詢必須是 JSON 物件：{e}" => "The MongoDB query must be a JSON object: {e}",
+        "MongoDB 查詢必須是 JSON 物件" => "The MongoDB query must be a JSON object",
+        "不允許的鍵：{k}（只接受 db / collection / filter / sort / projection / limit / pipeline）" => {
+            "Key not allowed: {k} (only db / collection / filter / sort / projection / limit / pipeline)"
+        }
+        "唯讀工具不允許 {k} 階段" => "Read-only tool: the {k} stage is not allowed",
+        "唯讀工具不允許 Redis 命令 `{cmd}`；只放行讀取類命令（GET / HGETALL / SCAN / TTL …）" => {
+            "Read-only tool: Redis command `{cmd}` is not allowed; only read commands (GET / HGETALL / SCAN / TTL …) are permitted"
+        }
+        "此連線種類不支援 run_query；請改用 list_tables / describe_table / sample_rows" => {
+            "run_query is not supported for this connection kind; use list_tables / describe_table / sample_rows instead"
+        }
+        " | …（另有 {n} 欄未列出）" => " | …({n} more columns not shown)",
+        "…（文字達 {kb} KB 上限，只顯示前 {shown} 列，共取回 {total} 列）" => "…(text hit the {kb} KB cap; showing the first {shown} of {total} fetched rows)",
+        "（無結果集；rows_affected = {n}）" => "(no result set; rows_affected = {n})",
+        "{label}：{n} 欄" => "{label}: {n} columns",
+        "（無欄位資訊：資料表可能不存在，請用 list_tables 確認名稱）" => "(no column info: the table may not exist; confirm the name with list_tables)",
+        "（另有 {n} 欄未列出）" => "({n} more columns not shown)",
+        "索引：" => "Indexes:",
+        "（無索引）" => "(no indexes)",
+        "（無法取得索引資訊；請勿假設任何索引存在）" => "(index info unavailable; do not assume any index exists)",
+        "外鍵：" => "Foreign keys:",
+        "（無外鍵）" => "(no foreign keys)",
+        "（無法取得外鍵資訊）" => "(foreign key info unavailable)",
+        "…（內容過長，其餘已截斷）" => "…(content too long; the rest was truncated)",
+        "…（共 {total} 筆，只列前 {n} 筆）" => "…({total} in total; only the first {n} listed)",
+        "未指定 database：請先呼叫 list_databases，再以 database 參數指定" => "No database given: call list_databases first, then pass the database parameter",
+        "工具逾時（{ms} ms）；請縮小查詢範圍或加 LIMIT" => "Tool timed out ({ms} ms); narrow the query or add LIMIT",
+        "（此連線沒有可列出的資料庫）" => "(this connection has no databases to list)",
+        "（此資料庫沒有資料表）" => "(this database has no tables)",
+        "缺少 table" => "Missing table",
+        "\n（樣本 {n} 列）" => "\n({n} sample rows)",
+        "缺少 query" => "Missing query",
+        "\n（顯示 {n} 列；結果已在 {cap} 列處截斷，需要更多請縮小範圍或加條件）" => "\n({n} rows shown; the result was cut at {cap} rows — narrow the query or add conditions for more)",
+        "\n（共 {n} 列）" => "\n({n} rows)",
+        "此連線種類不支援 explain_query" => "explain_query is not supported for this connection kind",
+
+        // ---- llm/tools.rs ----
+        "此對話未附帶資料庫連線，無法使用資料庫工具" => "No database connection is attached to this conversation, so database tools are unavailable",
+
+        // ---- agent.rs：資料庫工具指引 ----
+        "{kind} 連線，目前資料庫：{db}" => "{kind} connection, current database: {db}",
+        "{kind} 連線" => "{kind} connection",
+        "【資料庫工具】你可以用這些工具直接讀取使用者目前在 db-kit 的 {target}：{names}。全部唯讀。寫查詢前先用 describe_table 確認欄名與型別；查詢一律加 LIMIT；不要猜測不存在的表或欄位，先 list_tables。需要看資料時直接呼叫工具，不要請使用者代跑；回答時附上你實際執行的查詢。" => {
+            "[Database tools] You can use these tools to read the user's current {target} in db-kit directly: {names}. All read-only. Call describe_table to confirm column names and types before writing a query; always add LIMIT; never guess tables or columns — list_tables first. When you need data, call the tools yourself instead of asking the user to run queries; include the queries you actually ran in your answer."
+        }
+        "此連線是正式環境：查詢保持輕量（小 LIMIT、避免全表掃描、不要重複同一條查詢）。" => {
+            "This connection is production: keep queries light (small LIMIT, no full scans, do not repeat the same query)."
+        }
         _ => return None,
     })
 }

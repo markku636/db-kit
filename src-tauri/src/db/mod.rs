@@ -7,6 +7,9 @@ use crate::error::{AppError, AppResult};
 pub mod conn_url;
 pub mod limits;
 pub mod mongo;
+/// 給定 DbKind 的跨連線 SQL 片段產生器（引號 / 限定名 / 字面值 / 簡單 DML）。
+/// 傳輸、比對、CLI 共用；不可 feature-gate（slim CLI 依賴）。
+pub mod sqlgen;
 pub mod mssql;
 pub mod mysql;
 pub mod oracle;
@@ -179,8 +182,12 @@ pub struct QueryResult {
     pub truncated: bool,
 }
 
+// 以下結構 DTO（TableInfo / IndexInfo / ForeignKeyInfo / RoutineInfo / ColumnInfo）加 Deserialize
+// 是為了結構快照（compare::snapshot）能從 JSON 檔載回；它們從未出現在 command 參數位置
+// （只在回傳位置），補上不增加 IPC 攻擊面——與 TableColumns 同一理由。
+
 /// 表 / 視圖的基本資訊（連線樹展開用）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableInfo {
     pub name: String,
     /// "table" 或 "view"
@@ -188,7 +195,7 @@ pub struct TableInfo {
 }
 
 /// 索引定義（「結構」分頁的索引區用）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexInfo {
     pub name: String,
     pub columns: Vec<String>,
@@ -197,7 +204,7 @@ pub struct IndexInfo {
 }
 
 /// 外鍵（含約束名，供結構分頁顯示與刪除）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForeignKeyInfo {
     pub name: String,
     pub column: String,
@@ -206,13 +213,15 @@ pub struct ForeignKeyInfo {
 }
 
 /// 預存程序 / 函式 / 觸發器（routine browser 用）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutineInfo {
     pub name: String,
     pub routine_type: String, // "procedure" | "function" | "trigger"
     /// 觸發器所屬資料表（procedure / function 為 None）。PG 刪除觸發器需此資訊。
+    #[serde(default)]
     pub parent: Option<String>,
     /// PG 函式 / 程序的引數型別簽章（如 "integer, text"），用於消除重載歧義刪除。其餘為 None。
+    #[serde(default)]
     pub signature: Option<String>,
     /// 最後修改時間（MySQL routines / triggers；其餘 None）。對標 Navicat 函式檢視「修改日期」。
     #[serde(default)]
@@ -254,13 +263,16 @@ impl ValidationReport {
 }
 
 /// 欄位定義（「結構」分頁用）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnInfo {
     pub name: String,
     pub data_type: String,
     pub nullable: bool,
+    #[serde(default)]
     pub key: String,    // PRI / UNI / MUL / 空
+    #[serde(default)]
     pub default: Option<String>,
+    #[serde(default)]
     pub extra: String,  // auto_increment 等
     #[serde(default)]
     pub comment: String, // 欄位註解（MySQL COLUMN_COMMENT；其餘暫為空）
@@ -1272,6 +1284,17 @@ pub trait DatabaseDriver: Send + Sync {
     /// MySQL 的 prepared 協定不支援 CREATE PROCEDURE，且內部 ; 不可被前端切句。SQL 專用。
     async fn exec_ddl(&self, _sql: &str) -> AppResult<()> {
         Err(AppError::Unsupported(t!("此資料庫不支援此操作").into()))
+    }
+
+    /// 依序執行多條寫入語句（資料比對「套用同步」用）。回 (受影響列數總和, 是否真的在一個交易內)。
+    /// `transactional = true` 時整批同一交易、任一失敗即回滾整批；預設實作逐句 autocommit
+    /// 並回 `false`，讓呼叫端知道失敗時前面的語句已生效。
+    async fn exec_batch(&self, statements: &[String], _transactional: bool) -> AppResult<(u64, bool)> {
+        let mut n = 0u64;
+        for s in statements {
+            n += self.query(s).await?.rows_affected;
+        }
+        Ok((n, false))
     }
 
     /// 驗證 DDL 語法而不持久化變更。PG / SQLite 以交易回滾試行；MySQL 以暫存名稱試建後刪除

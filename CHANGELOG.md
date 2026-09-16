@@ -1,3 +1,69 @@
+## v0.30.0
+
+**SQL Server 的預存程序看起來全被叫成「函式」**。側欄樹從來只有一個資料夾放 routine，而那個資料夾的名字就叫「函式」——程序與函式一起倒進去。MySQL / PostgreSQL 的使用者兩種都有，還看得出來是混在一起；SQL Server 這邊手上多半只有預存程序，於是整批物件就這樣頂著「函式」的標題。追這條線的時候，同一條路徑上還有幾個真的會送錯 SQL 的地方。
+
+- **程序與函式拆成兩個資料夾**（對標 SSMS / DBeaver）：「預存程序」用齒輪、琥珀色，「函式」用 fx、綠色，跟樹節點自己的圖示與 tooltip 一致。兩個資料夾都預設收合，數量各自計算，每庫篩選框照舊同時吃兩邊。
+- **刪除 SQL Server 的預存程序會送出 `DROP TRIGGER`**。`buildDropRoutine` 少了 mssql 分支，程序 / 函式 / 觸發器一律掉到結尾那行 trigger fallback。補上分支：T-SQL 的 `DROP PROCEDURE / FUNCTION / TRIGGER` 不收三部式名稱，所以同批次先 `USE [db];` 再以 `[schema].[name]` 刪——非 dbo 的物件（後端回的是 `sales.sp_x`）以前會被整串當成一個識別字包進 `[sales.sp_x]`。存檔時的「先刪後建」走同一支，所以編輯既有程序也一起修好了。
+- **執行預存程序送的是 `CALL`**，T-SQL 沒有這個關鍵字。改成 `EXEC [db].[schema].[p] 引數`（EXEC 的引數不加括號），函式維持 `SELECT`。
+- **`CREATE` 會建到登入的預設資料庫**（通常是 master），因為 DDL 直接送出、沒有帶資料庫脈絡。SQL Server 的 `CREATE PROCEDURE` 必須是批次的第一句，不能像 DROP 那樣加 `USE` 前綴，改用資料庫限定的 `sp_executesql` 包起來執行。
+- **右鍵「新增程序…」給的是 `CREATE TRIGGER` 範本**：`NEW_TYPES` 與 `template()` 都沒有 mssql / oracle 那列，種類按鈕整排消失、範本落到 SQLite 的 fallback。兩者補上 T-SQL 與 PL/SQL 範本。順帶：Oracle 的定義一律帶 `OR REPLACE`，開啟既有物件時不該再勾「先刪後建」。
+- **後端的型別判斷從「不是 P 就是 function」改成正向對應**。`sys.objects.type` 撈的是 `('P','FN','IF','TF','AF')`，然後 `ty == "P"` 以外全部標成函式——CLR 程序（`PC`）只要哪天被加進 IN 清單，就會直接變成「函式」。現在 `P` / `PC` → 程序，`FN` / `IF` / `TF` / `FS` / `FT` / `AF` → 函式（補上漏掉的 CLR 標量與資料表函式），對不上的碼略過不猜。觸發器查詢也補 join `sys.schemas`，非 dbo 的觸發器名稱跟程序一樣帶 schema，DROP 才刪得掉。
+- **簡體中文把「程序」翻成「进程」**（OS process）。右鍵選單因此是「设计进程… / 执行进程… / 删除进程…」。zh-CN 是 OpenCC 產生的，所以修在產生器的詞表（`scripts/i18n-gen-zhcn.mjs`）而不是產物：新增 `程序 → 存储过程`，並以長詞優先的既有規則讓「預存程序」與「處理程序」先命中——後者的「程序」才真的是 OS process，維持原譯。一併掃出後端 CLI 訊息裡同源的七處（「无法列出进程 / 函数」「进程 / 函数 / 触发器数」等），以及 `未知的程序類型` 改用涵蓋三種 routine 的「例程」。英文的 `procedure` 補成大寫，與同排的 `Function` 對齊。
+- 全庫物件搜尋的型別篩選給了 Oracle 一個「外鍵」選項，但 `oracle.rs` 的 `search_objects` 從不產出這個型別，勾了永遠是空的——拿掉。
+
+> 驗證：`cargo +stable-x86_64-pc-windows-gnu test --no-default-features --lib` 316 項全通過（本次新增 5 項：程序 / 函式 / CLR 型別碼對應、未知碼不再預設成函式、查詢的 IN 清單與對應表同步、schema 限定名與 `split_schema_table` 互為反向）。vitest 855 項全通過（本次新增 13 項：SQL Server 的 DROP / EXEC / `sp_executesql` 包裝、schema 拆解，以及資料庫名為空時不產出 `null;` 的退路）。`tsc` 0 error、`eslint src` 0 error（30 則既有 warning）、`i18n:scan` en / zh-CN 維持 100%、0 幽靈 key；zh-CN 以 `node scripts/i18n-gen-zhcn.mjs` 重新產生，前端 4 條、後端 7 條變更逐條核對過，「處理程序」未受波及。**尚未對真實 SQL Server 實例做端對端實測**——語法是依 T-SQL 文件寫的，`sp_executesql` 與 `USE` 同批次的行為亦然。
+
+**結構 / 資料比對重做：引擎搬進 Rust，GUI 與 `dbk` 共用一套**。舊的兩個對話框都是前端純 TS 在記憶體裡比：結構只看表名與欄位的名稱 / 型別 / 可空，沒有索引、外鍵、預設值、視圖、程序，也產不出 DROP；資料比對每側最多載 20,000 列，超過就只能比一段。這一版新增 `src-tauri/src/compare/`，結構與資料兩條路都在後端串流完成，六種 SQL 引擎（MySQL / MariaDB / PostgreSQL / SQLite / SQL Server / Oracle）一視同仁。
+
+- **結構比對**：擷取整庫成 `DbSchema`（表 / 視圖 / 程序，含 DDL）→ 純函式 diff（欄位五個屬性逐項標出、索引與外鍵支援「名稱不同但定義相同 → 改名」、主鍵不看名字）→ 產生「讓目標變成來源」的同步 DDL。語句依全域順序排（先卸外鍵、建缺表、卸索引、改欄位、建索引、加外鍵、視圖、程序、最後 DROP TABLE），每句帶 `destructive` 旗標：DROP / 改型別 / 改 NOT NULL / 卸 unique 索引都算，GUI 要二次勾選、CLI 要 `--force`。引擎表達不出來的（SQLite 改型別、SQL Server 改預設值）進 `skipped` 清單而不是靜默漏掉。
+- **資料比對**：兩側各開一條依主鍵排序的分頁串流做 sort-merge join，記憶體只留一頁。跨引擎字串主鍵的排序規則不一致（MySQL `_ci`、PG locale、MSSQL `_CI_AS`）是這類工具的經典地雷——這裡加了**順序守衛**，某側在比較器下不是嚴格遞增就自動改走順序無關的雜湊比對，結果一樣精確。值先正規化再比：`1.0 == 1.00`、`1 == true`、`2024-01-01T00:00:00Z == 2024-01-01 00:00:00`、JSON 鍵序、CHAR 尾空白、Oracle 的 `''` 即 NULL。
+- **套用同步是兩階段的**：掃描期間 DML 先 spool 到暫存檔，掃完才分批（500 句一交易）重放——邊 OFFSET 分頁邊改目標會讓頁面位移。掃描被截斷（`max_rows` / 取消）時**永不輸出 DELETE**，這條規則從舊對話框沿用下來。某批失敗時整批回滾、再逐句重放隔離壞列；`--stop-on-error` 則整批停下。目標連線標了 `prod` 要另外 `--allow-prod`；前端另有唯讀連線閘門。
+- **整庫模式**：兩側資料表交集逐表比（略過視圖與無主鍵表），可先以 COUNT / MIN / MAX 預檢跳過看起來相同的表；進度走 `compare-progress` 事件，可中途取消並拿到部分結果。
+- **結構快照**：資料庫右鍵「儲存結構快照…」存成 JSON，比對時目標可選「快照檔案」——即時 vs 快照、快照 vs 快照都行。載入是嚴格的：壞檔直接報錯，不會像結構快取那樣退成空結構然後產出一整串 DROP TABLE。
+- **GUI 只做結構比對**，兩種粒度：資料表右鍵「結構比對…」（單表）、資料庫右鍵「結構比對…」（整庫多選、逐表狀態 icon、點列 drill-in、彙總腳本）。資料列比對留在 CLI——在 GUI 裡它是個會改動目標資料的長時間作業，而使用者九成的需求是「這兩個庫結構差在哪、怎麼補上」，兩件事擠在同一個對話框只是讓後者變難用。同步腳本可複製、送到目標連線的查詢編輯器，或直接執行（含破壞性語句時多一格「我了解」勾選）。報告可匯出 Markdown / HTML / JSON。
+- **目標可以是另一條連線**，不限同連線的其他庫。連線下拉列出所有同族且已連上的連線（含來源自己），選了跨連線會明說「同步 SQL 會送到目標連線」。目標庫預設挑一個**不是來源**的庫——預設成來源自己會讓對話框一開就卡在「來源與目標相同」、比對鈕是灰的。
+- **報告可附 AI 總結**：把差異摘要（不含任何資料列）送給目前設定的 AI 供應商，要它產出風險與執行順序，不要 SQL。串流顯示、可中途停、可重新產生；匯出的 Markdown / HTML / JSON 都帶這段（HTML 會跳脫——模型輸出同樣是不可信的文字）。
+- **CLI**：`dbk schema snapshot|show`、`dbk compare schema --dst … [--sync] [--include-drops] [--apply] [--exit-code]`、`dbk compare data <table>|--all --dst … [--sql|--apply] [--precheck] [--include-deletes]`；`--apply` 沒帶 `--yes` 就是預演。
+- 順手修掉一個潛在錯誤：`transfer.rs` 自帶的 `qualified()` 對 SQL Server 只給兩段式 `[db].[table]`（T-SQL 會讀成 *schema*.object），現在與 `cli/dispatch.rs`、前端 `sql.ts` 統一到 `db/sqlgen.rs` 的三段式版本。SQLite 補上 `list_foreign_keys`（`PRAGMA foreign_key_list`），比對才看得到外鍵。
+- **CLI 的 `-d` 對 PostgreSQL 修正語意**。`-d` / `--src-db` / `--dst-db` 指的是「要檢視的命名空間」，而 PG 是唯一命名空間（schema）與「要連上的資料庫」不同軸的引擎——舊行為把 schema 名寫進 `ConnectionConfig.database`，於是 `--dst postgres://…/testdb --dst-db public` 在連線階段就死在 `database "public" does not exist`。現在 PG 以連線自帶的資料庫為準，旗標只當 schema（連線沒指定時才補位）；其餘引擎行為不變。這條在 `compare` 之外也影響既有的 `-d`，是本次實測跨引擎比對時才打到的。
+- **補上 `stress` 指令缺的 9 條英文 help 譯文**。`cli/mod.rs` 有個 `debug_assert`：clap help 文字含中文卻查不到 en 譯文就 panic。壓力測試那組（v0.27 加入）從沒收進 `locales/en.rs`，所以 debug build 下 **`dbk --lang en` 不論跑什麼子指令都直接 panic**（release build 因 assert 被編掉而僥倖沒事）。順帶補齊 `ConnArgs` 的說明。
+
+**實機打出來的 12 個引擎錯誤**。上面那版是照各家文件寫的；真的架起 MySQL 8.4、PostgreSQL 16 與兩台 SQL Server 2022 逐條打過之後，以下每一項都是「語句產得出來、看起來也對，套用時才炸或更糟——套用成功但結果是錯的」：
+
+- **SQL Server 的欄位型別沒有長度**。`table_columns` 只選 `sys.types.name`，於是 `nvarchar(50)` 回成 `nvarchar`。比對看不出 50 → 200 的差異是小事；真正的問題是同步產出的 `ALTER COLUMN [c] nvarchar` ——**T-SQL 省略長度等於 `nvarchar(1)`**，一句同步就把整欄截成一個字元。改成用既有的 `mssql_type_str` 帶上 max_length / precision / scale（與 PG 的 `format_type`、Oracle 的回法對齊）。
+- **SQL Server 的視圖 / 程序 / 觸發器同步會建到錯的資料庫**。T-SQL 的 `CREATE`、`DROP VIEW / PROCEDURE / FUNCTION / TRIGGER` 一律拒收三部式名稱（Msg 166），而 `CREATE VIEW / PROCEDURE / TRIGGER` 又必須是批次的第一句——兩條規則夾起來，語句就沒辦法自己指定資料庫，只能靠連線當下 USE 在哪。跨連線同步時那正好是**來源**庫。現在包成 `EXEC [目標庫].sys.sp_executesql N'…'`，名稱只留 `[schema].[obj]`，資料庫由外層指定。
+- **SQL Server 改不了被索引蓋住的欄位**（Msg 5074）。產出的 `ALTER COLUMN` 必定失敗，而使用者只會看到一句紅字、不知道要自己先拆索引。現在一般索引自動「卸 → 改欄位 → 重建」（全域順序本來就排得下）；主鍵 / 唯一索引多半由約束建立、`DROP INDEX` 卸不掉，改記進 `skipped` 並**抽掉**那句注定失敗的 ALTER。
+- **PostgreSQL 的欄位型別掉精度**。`information_schema.columns.data_type` 給的是 `character varying`，長度在另一欄；於是 varchar(50) vs varchar(20) 比起來相同，合成的 CREATE TABLE 也沒有長度。改用 `format_type(atttypid, atttypmod)`。
+- **PostgreSQL 的複合外鍵變成笛卡兒積**。`list_foreign_keys` join `key_column_usage` × `constraint_column_usage` 不配序號，雙欄外鍵回出 4 列 → 產出的 `ADD CONSTRAINT` 欄位重複。改走 `pg_constraint` 的 `unnest(conkey, confkey) WITH ORDINALITY`。
+- **PostgreSQL 的 `CREATE INDEX` 帶了 schema 前綴**（`CREATE INDEX "s"."ix" ON …`），PG 直接語法錯誤——索引名不可限定。
+- **PostgreSQL 的 view / routine / serial 跨 schema 同步是靜默錯的**：`pg_get_viewdef` 把本體裡的表限定在**來源** schema，函式定義同理，`serial` 欄位的 `nextval('來源.seq')` 會讓兩個 schema 共用同一個序列。語句全都套用成功、再比一次也看不出差異——但目標讀的是來源的資料。視圖改成加註記、函式與 serial 改進 `skipped`。
+- **MySQL 的 `MODIFY COLUMN` 會吃掉 `ON UPDATE CURRENT_TIMESTAMP`**：重下的欄位規格沒有從 EXTRA 帶回這段，同步完那欄就不再自動更新。（只取一個 token——MySQL 8.0.23+ 會在後面接 `INVISIBLE`。）
+- **MySQL 的視圖 DDL 帶著來源庫名**，`SHOW CREATE VIEW` 回的是 `` `來源庫`.`v` ``，於是同一份視圖在兩個庫之間永遠「有差異」，而同步出去的定義又指回來源庫。改在擷取時就剝掉。
+- **布林值寫成目標讀不懂的字面值**：PG 的 `true` 直接塞進 MySQL 的 `tinyint(1)` 會整批失敗。改成依**目標欄位型別**決定（不是依比較模式——後者在兩側型別不同時會判錯）。
+- **PG 的 `character varying` 被當成 CHAR 補空白**，尾端空白的差異因此完全看不見。
+- 「只有原始 DDL 不同」（字元集 / 引擎 / 註解）的表，以前 `columns_changed` 空、`skipped` 也空，畫面上顯示有差異卻給不出任何語句也不說為什麼；現在一律記一筆 skipped。
+
+> 驗證：`cargo +stable-x86_64-pc-windows-gnu test --no-default-features --lib` **345 項全通過**，另有 **34 項需要真實伺服器的 `#[ignore]` 測試全通過**（`-- --ignored --test-threads=1`）。單元部分本次新增 60+ 項：正規化 / diff / DDL 各引擎語法與全域順序 / 快照嚴格載入 / merge-join 順序守衛與 hash_diff 一致性 / DML 產生 / CLI 命名空間旗標 / 以兩個 SQLite 檔做端到端。
+>
+> 實機測試分四組，判準一律是「同步後再比一次必須零差異」，而且會回頭讀目標的 catalog 確認東西真的建對（例如 `varchar(20)` 沒被截成 `varchar(1)`）：
+> - `compare::it_mysql`（MySQL 8.4）4 項：深度結構同步冪等、`DiffOptions` 逐項收斂、分頁跨頁計數、整庫略過與套用。
+> - `compare::it_pg`（PostgreSQL 16）7 項：結構同步冪等、程序 DROP 排序與複合外鍵、`DiffOptions`、值正規化、文字主鍵策略、截斷停用 DELETE、壞列隔離。
+> - `compare::it_cross`（MySQL ↔ PG）7 項：跨引擎只依家族比型別且拒產 DDL、雙向 DML 方言、排序規則不一致時退雜湊比對、欄名大小寫。
+> - `compare::it_mssql`（**兩台獨立的 SQL Server 2022，11433 / 11434，兩條連線**）5 項：跨連線深度同步冪等（含非 dbo schema、視圖、程序、觸發器、雙欄外鍵、被索引蓋住的欄位）、快照往返、單表範圍保留 schema 前綴、表達不出來的變更落進 `skipped` 且一句都不產、每一句都限定到目標庫而不漏出來源庫。
+>
+> 既有的 Docker 整合測試（MySQL / PostgreSQL / MongoDB / Redis / stress）11 項一併通過。vitest 856 項全通過（新增 compareModel / compareReport）；`tsc` 0 error、`eslint src` 0 error（30 則既有 warning）；`verify:ui` 98 項全通過，`compare-dialogs-open` 擴充到 18 項（含 AI 總結的串流回填——`tauri-shim.mjs` 這次補上真正的事件投遞，以前 `plugin:event|listen` 是回個號碼就算了，任何走事件的路徑在瀏覽器裡都驗不到）。`i18n:scan` en / zh-CN 維持 100%。
+>
+> **Oracle 仍未實測**；Oracle 與 SQL Server 的 `exec_batch` 目前走預設逐句 autocommit（非整批交易）。
+
+**介面語言新增越南語（Tiếng Việt）**。第六個語系，規則與日 / 韓完全一樣：`t()` / `t!` 的 key 仍是繁中原文，查無譯文時退回**英文**而不是露出中文，所以部分收錄就能上線，不必等全部翻完。
+
+- **前端** `src/locales/vi.ts` 收 1,476 條，與 ja / ko 同一組核心 key（工具列 / 對話框 / toast、短標籤、AI 供應商設定、結構 / 資料比對）。產生時先濾掉 ja / ko 表裡已經沒人使用的 15 條過時 key，因此 `i18n:scan` 下 vi 的覆蓋率與日韓同步（1458 / 2662，54.8%）、幽靈 key 為 0，而過時 key 比日韓少 15 條。
+- **後端** `src-tauri/src/locales/vi.rs` 收 198 條（`AppError` 外層包裝、設定 / keychain、CLI 輸出與 clap 的 help），另附 `vi_ext.rs` 擴充點。`Lang::Vi` 佔 `AtomicU8` 的 5 號（既有語言的編號不動），`from_code` 一併認 `vi` / `vi-VN` / `vi_VN` / `vn` 這幾種 OS locale 寫法。
+- `dbk --lang vi` 與 `DBKIT_LANG=vi` 同步生效；`--lang` 的 help 文字、`value_name` 與 `docs/cli.md` 的旗標表都補上 `vi`。
+- 譯名取向：資料庫術語用工程圈講得出口的越南語（bảng / cột / chỉ mục / truy vấn / khóa chính），各家產品的專名（topic、collection、offset、shard、exchange、routing key）維持英文不硬翻——硬翻反而讓人對不回原本的介面。
+
+> 驗證：`cargo +stable-x86_64-pc-windows-gnu test --no-default-features --lib` 343 項全通過（`i18n::tests` 的語言碼往返、`AtomicU8` 往返、「英文查得到就不該退回繁中」三項都擴充到涵蓋 `Lang::Vi`）。vitest 856 項全通過（`htmlLangAttr` / `replyLanguageLine` / `promptLanguageName` 各補一條 vi 斷言；`LANGUAGES` 的往返測試本來就會掃到新語言）。`tsc` 0 error、`eslint src` 0 error（30 則既有 warning）、`i18n:scan` vi 0 幽靈 key。**尚未在實機 GUI 逐畫面目視**——長字串（越南語普遍比中文長 1.5–2 倍）在窄欄位的斷行還沒看過。
+
 ## v0.29.1
 
 **點開「收藏」旁的箭頭，清單被壓成一條縫**（[#2](https://github.com/markku636/db-kit/issues/2)）。收藏做成分裂式控制項：左半星星一鍵存／取消存、右半箭頭開清單，兩半共用一組圓角，靠外框的 `overflow-hidden` 把各自的直角切掉。問題是那個外框同時也是下拉的定位錨點（`relative`），而下拉是它的子元素——於是圓角裁切連著把下拉一起裁了：420×166 的面板實際只畫得出按鈕大小的 61×18，回報截圖裡那條擠在一起的東西就是它。清單一直都在、也點得到，只是看不見。

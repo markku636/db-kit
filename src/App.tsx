@@ -35,7 +35,7 @@ import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
   resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand, isReadOnlyRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
-  quoteIdent, qualifiedName, isMysqlFamily, supportsRoutines, supportsQueryEditorKind,
+  quoteIdent, qualifiedName, isMysqlFamily, supportsRoutines, supportsQueryEditorKind, supportsSchemaCompare,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
@@ -43,6 +43,7 @@ import {
   extractNamedParams, substituteNamedParams, isInternalKafkaTopic, suggestQueryName, buildCellUpdate,
 } from "./sql";
 import type { SavedQuery } from "./sql";
+import { snapshotFileName } from "./compareModel";
 import Select from "./ui/Select";
 import { buildExplainJsonSql, parseExplainPlan, planSummary, type PlanNode } from "./explain";
 import { lintSql, MAX_SQL_CHARS as LINT_MAX_CHARS, type LintFinding, type LintSeverity } from "./sqlLint";
@@ -109,7 +110,7 @@ const ProcessListDialog = lazyOverlay(() => import("./ProcessListDialog"));
 const ServerQueryDialog = lazyOverlay(() => import("./ServerQueryDialog"));
 const UserManager = lazyOverlay(() => import("./UserManager"));
 const DatabaseProperties = lazyOverlay(() => import("./DatabaseProperties"));
-const SchemaCompare = lazyOverlay(() => import("./SchemaCompare"));
+const CompareDialog = lazyOverlay(() => import("./CompareDialog"));
 const SearchObjectsDialog = lazyOverlay(() => import("./SearchObjectsDialog"));
 const AdvancedSearchDialog = lazyOverlay(() => import("./AdvancedSearchDialog"));
 const ExportDialog = lazyOverlay(() => import("./ExportDialog"));
@@ -123,7 +124,7 @@ const DbTransferDialog = lazyOverlay(() => import("./DbTransferDialog"));
 const CommandPalette = lazyOverlay(() => import("./CommandPalette"));
 const AboutDialog = lazyOverlay(() => import("./AboutDialog"));
 const DbDataDictionary = lazyOverlay(() => import("./DbDataDictionary"));
-const DataSyncDialog = lazyOverlay(() => import("./DataSyncDialog"));
+const TableCompareDialog = lazyOverlay(() => import("./TableCompareDialog"));
 const ExplainPlan = lazyOverlay(() => import("./ExplainPlan"));
 const MongoExplainPlan = lazyOverlay(() => import("./MongoExplainPlan"));
 // 需要 ref 轉發的編輯器：直接 React.lazy（lazy 對 forwardRef 透明），使用處手動包 Suspense。
@@ -1056,20 +1057,24 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   );
 }
 
-// 一個資料庫展開後的物件集合（依 Navicat 樹狀分組：資料表 / 檢視 / 函式）。
+// 一個資料庫展開後的物件集合（對標 SSMS / DBeaver 的樹狀分組：資料表 / 檢視 / 預存程序 / 函式）。
 interface DbObjects {
   tables: TableInfo[];   // 一般資料表 / 集合（kind !== "view"）
   views: TableInfo[];    // 視圖（kind === "view"）
-  routines: RoutineInfo[]; // 預存程序 + 函式
+  procedures: RoutineInfo[]; // 預存程序（routine_type === "procedure"）
+  functions: RoutineInfo[];  // 函式（routine_type === "function"）
 }
 // 把 list_tables（含表 + 視圖）與 list_routines（含程序 / 函式 / 觸發器）拆成樹狀分組。
+// 程序與函式分成兩個資料夾：以前合在一個叫「函式」的資料夾裡，SQL Server 使用者手上多半只有預存程序，
+// 整批看起來都被叫成函式。觸發器 / 事件不進樹（在 RoutinesDialog 清單裡管理）。
 const splitDbObjects = (tables: TableInfo[], routines: RoutineInfo[]): DbObjects => ({
   tables: tables.filter((tbl) => tbl.kind !== "view"),
   views: tables.filter((tbl) => tbl.kind === "view"),
-  routines: routines.filter((r) => r.routine_type === "procedure" || r.routine_type === "function"),
+  procedures: routines.filter((r) => r.routine_type === "procedure"),
+  functions: routines.filter((r) => r.routine_type === "function"),
 });
 // 物件分組資料夾預設展開狀態：全部預設收合（展開資料庫時不自動攤開資料表，避免大量物件一次塞滿）。
-const FOLDER_DEFAULT_OPEN: Record<string, boolean> = { tables: false, views: false, functions: false, queries: false };
+const FOLDER_DEFAULT_OPEN: Record<string, boolean> = { tables: false, views: false, procedures: false, functions: false, queries: false };
 
 // ---- 右鍵選單樹（支援巢狀子選單）：對標 Navicat 的多層選單（複製資料表 / 維護 / 傾印 SQL）----
 type MenuNode =
@@ -1370,7 +1375,7 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
   const [exportTbl, setExportTbl] = useState<{ connId: string; db: string; table: string } | null>(null);
   const [transferTbl, setTransferTbl] = useState<{ connId: string; db: string; table: string } | null>(null);
   const [builderTbl, setBuilderTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
-  const [syncTbl, setSyncTbl] = useState<{ connId: string; db: string; table: string } | null>(null);
+  const [syncTbl, setSyncTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [dbTransfer, setDbTransfer] = useState<{ connId: string; db: string } | null>(null);
   const [dbDict, setDbDict] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
   const [dataDict, setDataDict] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
@@ -1750,6 +1755,21 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
       toast.success(t("已匯出結構 SQL → {out}", { out }));
     } catch (e: any) {
       toast.error(e?.message ?? t("匯出結構失敗"));
+    }
+  };
+
+  // 儲存結構快照（JSON）：擷取整庫表 / 視圖 / 程序定義 → 另存檔，之後可與即時結構或另一份快照比對。
+  const saveSchemaSnapshot = async (connId: string, db: string) => {
+    const out = await pickSaveFile(snapshotFileName(db, new Date()), [{ name: t("結構快照"), extensions: ["json"] }]);
+    if (!out) return;
+    try {
+      toast.info(t("擷取結構中…"));
+      const name = connections.find((c) => c.id === connId)?.name ?? connId;
+      const schema = await api.captureSchema(null, connId, db, `${name} / ${db}`);
+      const info = await api.saveSchemaSnapshot(out, schema);
+      toast.success(t("已儲存結構快照：{tables} 表 / {views} 視圖 / {routines} 程序", { tables: info.tables, views: info.views, routines: info.routines }));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("儲存快照失敗"));
     }
   };
 
@@ -2288,8 +2308,8 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
       nodes.push(it(t("查詢建構器…"), () => setBuilderTbl({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
     if (!isView && (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "sqlite"))
       nodes.push(it(t("資料傳輸…"), () => setTransferTbl({ connId: m.connId, db: m.db, table: m.table })));
-    if (!isView && (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "sqlite"))
-      nodes.push(it(t("資料比對 / 同步…"), () => setSyncTbl({ connId: m.connId, db: m.db, table: m.table })));
+    if (supportsSchemaCompare(m.kind))
+      nodes.push(it(t("結構比對…"), () => setSyncTbl({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
     nodes.push({
       kind: "sub", label: t("傾印 SQL 檔案"), children: [
         it(t("結構"), () => dumpTableSql(m, false)),
@@ -2390,7 +2410,7 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
   // 搜尋過濾：連線依名稱、物件依名稱；搜尋物件名也會讓其所屬連線浮現。
   const q = filter.trim().toLowerCase();
   const objNames = (o: DbObjects) =>
-    [...o.tables, ...o.views].map((x) => x.name).concat(o.routines.map((r) => r.name));
+    [...o.tables, ...o.views].map((x) => x.name).concat([...o.procedures, ...o.functions].map((r) => r.name));
   const connTableMatches = (connId: string) =>
     Object.entries(expandedDbs).some(
       ([k, o]) => k.startsWith(`${connId}:`) && objNames(o).some((n) => n.toLowerCase().includes(q))
@@ -2859,7 +2879,8 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
                       const dbMatch = (name: string) => !dq || name.toLowerCase().includes(dq);
                       const vTables = objs.tables.filter((o) => tableVisible(c.name, o.name) && dbMatch(o.name));
                       const vViews = objs.views.filter((o) => tableVisible(c.name, o.name) && dbMatch(o.name));
-                      const vRoutines = objs.routines.filter((r) => tableVisible(c.name, r.name) && dbMatch(r.name));
+                      const vProcs = objs.procedures.filter((r) => tableVisible(c.name, r.name) && dbMatch(r.name));
+                      const vFns = objs.functions.filter((r) => tableVisible(c.name, r.name) && dbMatch(r.name));
                       return (
                         <>
                           <div className="pl-11 pr-3 py-1">
@@ -2871,7 +2892,7 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
                                 onClick={(e) => e.stopPropagation()}
                                 onKeyDown={(e) => { if (e.key === "Escape" && (dbFilter[dbKey] ?? "")) { e.stopPropagation(); setDbFilter((m) => ({ ...m, [dbKey]: "" })); } }}
                                 placeholder={t("篩選 {db} 表名…", { db })}
-                                title={t("只篩選此資料庫的表 / 檢視 / 函式名稱")}
+                                title={t("只篩選此資料庫的表 / 檢視 / 程序 / 函式名稱")}
                                 className="w-full bg-inset border border-fg/10 rounded pl-6 pr-2 py-0.5 text-[11px] outline-none focus:border-accent"
                               />
                             </div>
@@ -2880,8 +2901,10 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
                             <>{vTables.map((o) => objNode(o, "pl-16"))}</>)}
                           {folderNode("views", Eye, "text-purple-300/80", t("檢視"), vViews.length,
                             <>{vViews.map((o) => objNode(o, "pl-16"))}</>)}
-                          {canRoutines && folderNode("functions", FunctionSquare, "text-amber-300/90", t("函式"), vRoutines.length,
-                            <>{vRoutines.map(routineNode)}</>)}
+                          {canRoutines && folderNode("procedures", Cog, "text-amber-300/90", t("預存程序"), vProcs.length,
+                            <>{vProcs.map(routineNode)}</>)}
+                          {canRoutines && folderNode("functions", FunctionSquare, "text-emerald-300/80", t("函式"), vFns.length,
+                            <>{vFns.map(routineNode)}</>)}
                         </>
                       );
                     })()}
@@ -3117,7 +3140,10 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
                     if (isMysqlFamily(k)) arr.push([t("資料表大小報表…"), () => setServerQuery({
                       connId: dbMenu.connId, title: t("資料表大小：{db}", { db: dbMenu.db }), sql: tableSizesSql(dbMenu.db),
                     }), false]);
-                    if ((isMysqlFamily(k) || k === "postgres") && dbConn) arr.push([t("結構比對…"), () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
+                    if (supportsSchemaCompare(k) && dbConn) {
+                      arr.push([t("結構比對…"), () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
+                      arr.push([t("儲存結構快照…"), () => saveSchemaSnapshot(dbMenu.connId, dbMenu.db), false]);
+                    }
                     if (isMysqlFamily(k) || k === "postgres" || k === "sqlite") arr.push([t("資料傳輸（整庫）…"), () => setDbTransfer({ connId: dbMenu.connId, db: dbMenu.db }), false]);
                     if ((isMysqlFamily(k) || k === "postgres" || k === "sqlite") && dbConn) arr.push([t("資料庫文件…"), () => setDbDict({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
                     if (isMysqlFamily(k)) arr.push([t("資料庫屬性…"), () => setDbProps({ connId: dbMenu.connId, db: dbMenu.db }), false]);
@@ -3345,7 +3371,8 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
       )}
 
       {schemaCompare && (
-        <SchemaCompare connId={schemaCompare.connId} kind={schemaCompare.kind} sourceDb={schemaCompare.db} onClose={() => setSchemaCompare(null)} />
+        <CompareDialog connId={schemaCompare.connId} kind={schemaCompare.kind} sourceDb={schemaCompare.db} onClose={() => setSchemaCompare(null)}
+          onUse={(sql, targetConnId) => { sendQuery(targetConnId, sql); setSchemaCompare(null); }} />
       )}
 
       {viewDesign && (
@@ -3384,7 +3411,7 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
       )}
 
       {syncTbl && (
-        <DataSyncDialog connId={syncTbl.connId} database={syncTbl.db} table={syncTbl.table}
+        <TableCompareDialog connId={syncTbl.connId} kind={syncTbl.kind} database={syncTbl.db} table={syncTbl.table}
           onClose={() => setSyncTbl(null)}
           onUse={(sql, targetConnId) => { sendQuery(targetConnId, sql); setSyncTbl(null); }} />
       )}

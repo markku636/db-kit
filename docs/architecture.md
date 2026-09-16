@@ -78,7 +78,16 @@ src-tauri/src/
 ├── backup.rs          備份 / 還原（各 DB 外部工具分派）
 ├── export.rs          資料匯出（CSV / TSV / Excel / JSON / SQL / Markdown）
 ├── import.rs          資料匯入（CSV / TSV / Excel）
-├── transfer.rs        跨連線 / 跨庫資料傳輸與比對同步
+├── transfer.rs        跨連線 / 跨庫資料傳輸
+├── compare/           結構 / 資料比對引擎（GUI 與 dbk compare 共用，不依賴 Tauri）
+│   ├── schema.rs      DbSchema 擷取 + 型別 / 預設值 / 定義文字正規化
+│   ├── diff.rs        結構差異（表 / 欄 / 索引 / 外鍵 / 視圖 / 程序）
+│   ├── ddl.rs         同步 DDL 產生（全域順序、destructive 分級、skipped）
+│   ├── snapshot.rs    結構快照 JSON 存讀（壞檔即失敗）
+│   ├── normalize.rs   跨引擎值正規化（數值 / 布林 / 日期 / JSON）
+│   ├── rowstream.rs   主鍵排序分頁串流（keyset / offset）
+│   ├── merge.rs       merge-join（順序守衛）/ hash_diff
+│   └── data.rs        單表 / 整庫資料比對編排、DML spool 與分批交易套用
 ├── agent.rs           AI 助手（本機 Claude Code / OpenAI Codex CLI 串流橋接）
 ├── it_tests.rs        Docker 真實資料庫整合測試
 ├── commands/mod.rs    Tauri command（薄包裝）
@@ -86,6 +95,7 @@ src-tauri/src/
 ├── bin/dbk.rs         CLI binary 進入點（不連 Tauri）
 └── db/
     ├── mod.rs         DbKind、共用型別、DatabaseDriver trait
+    ├── sqlgen.rs      跨連線 SQL 片段（quote_ident / qualified / sql_literal / DML）—— transfer / compare / CLI 共用
     ├── mysql.rs       MySQL driver（sqlx）
     ├── postgres.rs    PostgreSQL driver（sqlx）
     ├── sqlite.rs      SQLite driver（sqlx）

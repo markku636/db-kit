@@ -1,14 +1,15 @@
 //! 指令分派：解析連線 → 連線 → 呼叫 manager / store / export / backup → 渲染。
 //! 讀取類指令免確認；`query` / `explain` 另過唯讀守門，寫入類指令過 `guard::ensure_confirmed`。
 
+use crate::db::sqlgen::qualified;
 use crate::db::{DataQuery, DbKind, Filter, KeyEdit, RowInsert, SearchOptions, Sort, SortDir};
 use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
 use crate::store;
 
 use super::args::{
-    Cli, Command, ConnArgs, ConnCmd, DbCmd, ExportArgs, Format, RedisCmd, RoutineCmd, SearchArgs,
-    TableCmd,
+    Cli, Command, ConnArgs, ConnCmd, DbCmd, ExportArgs, Format, RedisCmd, RoutineCmd, SchemaCmd,
+    SearchArgs, TableCmd,
 };
 use super::{guard, render, resolve};
 
@@ -28,44 +29,6 @@ impl Confirm {
     fn destroy(&self, action: &str) -> AppResult<()> {
         guard::ensure_confirmed(self.yes, self.force, true, action)
     }
-}
-
-/// 識別字跳脫（PostgreSQL / Oracle 雙引號、MSSQL 中括號、其餘反引號；內部引號加倍）。
-fn quote_ident(kind: DbKind, id: &str) -> String {
-    match kind {
-        DbKind::Postgres | DbKind::Oracle => format!("\"{}\"", id.replace('"', "\"\"")),
-        DbKind::Mssql => format!("[{}]", id.replace(']', "]]")),
-        _ => format!("`{}`", id.replace('`', "``")),
-    }
-}
-
-/// 限定名。與前端 `sql.ts::qualifiedName` 同一套規則（同一份 SQL 由兩邊產生，不可分歧）：
-/// - SQLite：單檔無 schema 概念，只給表名。
-/// - SQL Server：三段式 `db.schema.table`——T-SQL 的 `a.b` 解析成 *schema*.object，
-///   只給 `db.table` 會被當成「schema=db」而找不到表。schema 取自表名中的 `schema.table`
-///   前綴，沒有則用 `dbo`。
-/// - 其餘（MySQL 家族 / PostgreSQL / Oracle）：`db.table`，其中 PostgreSQL / Oracle 的
-///   「db」本來就是 schema。
-fn qualified(kind: DbKind, db: &str, table: &str) -> String {
-    if matches!(kind, DbKind::Sqlite) {
-        return quote_ident(kind, table);
-    }
-    if matches!(kind, DbKind::Mssql) {
-        let (schema, tbl) = match table.split_once('.') {
-            Some((s, t)) => (s, t),
-            None => ("dbo", table),
-        };
-        return format!(
-            "{}.{}.{}",
-            quote_ident(kind, db),
-            quote_ident(kind, schema),
-            quote_ident(kind, tbl)
-        );
-    }
-    if db.is_empty() {
-        return quote_ident(kind, table);
-    }
-    format!("{}.{}", quote_ident(kind, db), quote_ident(kind, table))
 }
 
 pub async fn dispatch(cli: Cli) -> AppResult<()> {
@@ -96,6 +59,9 @@ pub async fn dispatch(cli: Cli) -> AppResult<()> {
             );
             Ok(())
         }
+        Command::Schema(SchemaCmd::Show { path }) => super::compare::show_snapshot(&path, fmt).await,
+        // 比對要同時開兩條連線（或連線 + 快照檔），自己管連線生命週期。
+        Command::Compare(c) => super::compare::run(&conn, fmt, c).await,
         // ---- 其餘需建立連線 ----
         other => run_connected(&conn, fmt, other).await,
     }
@@ -299,6 +265,11 @@ async fn exec(
             let s = crate::export::schema_dump(mgr, id, db).await?;
             print!("{s}");
         }
+        Command::Schema(SchemaCmd::Snapshot { to, no_ddl, no_routines }) => {
+            super::compare::snapshot(mgr, id, &cfg.name, db, &to, no_ddl, no_routines).await?;
+        }
+        Command::Schema(SchemaCmd::Show { .. }) => unreachable!("schema show 在連線前已處理"),
+        Command::Compare(_) => unreachable!("compare 在連線前已處理"),
         Command::Export(e) => exec_export(mgr, id, db, e).await?,
         Command::ErModel => {
             let m = mgr.er_model(id, db).await?;
@@ -751,30 +722,4 @@ fn parse_sort(spec: &str) -> AppResult<Sort> {
         other => return Err(AppError::Query(tf!("排序方向需為 asc/desc：{other}", other = other))),
     };
     Ok(Sort { column, dir })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{qualified, quote_ident};
-    use crate::db::DbKind;
-
-    #[test]
-    fn quotes_per_dialect_and_escapes_inner_quotes() {
-        assert_eq!(quote_ident(DbKind::Mysql, "or`ders"), "`or``ders`");
-        assert_eq!(quote_ident(DbKind::Postgres, "or\"ders"), "\"or\"\"ders\"");
-        assert_eq!(quote_ident(DbKind::Oracle, "ORDERS"), "\"ORDERS\"");
-        assert_eq!(quote_ident(DbKind::Mssql, "or]ders"), "[or]]ders]");
-    }
-
-    #[test]
-    fn qualifies_like_the_frontend() {
-        // SQLite 單檔：只給表名（沿用前端的反引號寫法，SQLite 為相容 MySQL 亦接受）。
-        assert_eq!(qualified(DbKind::Sqlite, "main", "orders"), "`orders`");
-        // MySQL 家族 / PostgreSQL / Oracle：db.table（PG / Oracle 的 db 即 schema）。
-        assert_eq!(qualified(DbKind::Mysql, "shop", "orders"), "`shop`.`orders`");
-        assert_eq!(qualified(DbKind::Postgres, "public", "orders"), "\"public\".\"orders\"");
-        // SQL Server 必須三段式：只給 db.table 會被 T-SQL 當成 schema.object。
-        assert_eq!(qualified(DbKind::Mssql, "Reporting", "orders"), "[Reporting].[dbo].[orders]");
-        assert_eq!(qualified(DbKind::Mssql, "Reporting", "sales.orders"), "[Reporting].[sales].[orders]");
-    }
 }

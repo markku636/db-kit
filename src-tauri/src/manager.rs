@@ -577,6 +577,24 @@ impl Active {
             Active::Dyn(d) => d.exec_ddl(sql).await,
         }
     }
+    async fn exec_batch(&self, statements: &[String], transactional: bool) -> AppResult<(u64, bool)> {
+        match self {
+            Active::Mysql(d) => d.exec_batch(statements, transactional).await,
+            Active::Postgres(d) => d.exec_batch(statements, transactional).await,
+            Active::Sqlite(d) => d.exec_batch(statements, transactional).await,
+            Active::Mongo(d) => d.exec_batch(statements, transactional).await,
+            Active::Redis(d) => d.exec_batch(statements, transactional).await,
+            Active::Mssql(d) => d.exec_batch(statements, transactional).await,
+            Active::Oracle(d) => d.exec_batch(statements, transactional).await,
+            #[cfg(feature = "kafka")]
+            Active::Kafka(d) => d.exec_batch(statements, transactional).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.exec_batch(statements, transactional).await,
+            #[cfg(feature = "elastic")]
+            Active::Elastic(d) => d.exec_batch(statements, transactional).await,
+            Active::Dyn(d) => d.exec_batch(statements, transactional).await,
+        }
+    }
     async fn validate_ddl(&self, database: &str, sql: &str) -> AppResult<ValidationReport> {
         match self {
             Active::Mysql(d) => d.validate_ddl(database, sql).await,
@@ -818,6 +836,9 @@ impl Active {
 struct LiveConn {
     active: Active,
     tunnel: Mutex<Option<TunnelGuard>>,
+    /// 連線設定的 `options.prod == "1"`（正式環境標記）。留在這裡讓比對 / 傳輸這類寫入路徑
+    /// 不必回頭讀 connections.json（CLI 的臨時連線根本沒存檔）。
+    prod: bool,
 }
 
 /// 全域連線管理器。負責建立、查找、釋放連線池。
@@ -901,9 +922,11 @@ impl ConnectionManager {
             }
         };
 
+        let prod = cfg.options.get("prod").map(|v| v == "1").unwrap_or(false);
         let live = Arc::new(LiveConn {
             active,
             tunnel: Mutex::new(tunnel),
+            prod,
         });
         // 並發 connect 同一 id 的競態：insert 回傳被覆蓋的舊連線時，收掉其 tunnel + driver，
         // 避免背景任務 / session 洩漏（起始的 disconnect 只處理「先前已存在」的常見情形）。
@@ -1220,6 +1243,16 @@ impl ConnectionManager {
 
     pub async fn exec_ddl(&self, id: &str, sql: &str) -> AppResult<()> {
         self.get(id)?.active.exec_ddl(sql).await
+    }
+
+    /// 批次寫入（資料比對套用同步用）。見 `DatabaseDriver::exec_batch`。
+    pub async fn exec_batch(&self, id: &str, statements: &[String], transactional: bool) -> AppResult<(u64, bool)> {
+        self.get(id)?.active.exec_batch(statements, transactional).await
+    }
+
+    /// 此連線是否標記為正式環境（`options.prod == "1"`）。比對套用同步前的後端守門。
+    pub fn is_prod(&self, id: &str) -> AppResult<bool> {
+        Ok(self.get(id)?.prod)
     }
 
     pub async fn validate_ddl(&self, id: &str, database: &str, sql: &str) -> AppResult<ValidationReport> {
