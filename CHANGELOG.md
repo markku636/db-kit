@@ -64,6 +64,20 @@
 
 > 驗證：`cargo +stable-x86_64-pc-windows-gnu test --no-default-features --lib` 343 項全通過（`i18n::tests` 的語言碼往返、`AtomicU8` 往返、「英文查得到就不該退回繁中」三項都擴充到涵蓋 `Lang::Vi`）。vitest 856 項全通過（`htmlLangAttr` / `replyLanguageLine` / `promptLanguageName` 各補一條 vi 斷言；`LANGUAGES` 的往返測試本來就會掃到新語言）。`tsc` 0 error、`eslint src` 0 error（30 則既有 warning）、`i18n:scan` vi 0 幽靈 key。**尚未在實機 GUI 逐畫面目視**——長字串（越南語普遍比中文長 1.5–2 倍）在窄欄位的斷行還沒看過。
 
+**貼上連線字串要點四次才會填表**。入口藏在「從連線字串匯入」按鈕後面：點按鈕 → 展開第二個輸入框 → 貼上 → 再按「解析並填入」。而最直覺的動作——直接把整串貼進「主機」欄——只會把它原封不動倒進 host。順著這條線把解析器吃得下的格式盤點了一遍，也挖出四個會**靜默吃掉使用者資料**的問題。
+
+- **連線字串改成對話框頂端的常駐欄位，貼上即解析**。「主機」與「名稱」欄也攔貼上：看起來是連線字串就改走解析，不是就完全不介入（判別在 `src/connString.ts`，保守優先——寧可漏判，也不要劫持一次正常的貼上）。套用後列出實際變動的欄位（密碼遮罩）並留一顆「復原」，而不是套用前再插一層確認：這張表已經十幾欄還要捲動，modal-in-modal 只會更難用。欄位映射抽成純函式 `applyParsedToForm`，與 40 個 `useState` 的快照 / 還原共用同一份 `ConnFormFields` 型別——少寫一個欄位 TS 就會報錯。
+- **解析器從 767 行的單檔拆成目錄模組** `db/conn_url/`，`parse_url` 由 175 行縮成一條偵測鏈：`normalize`（雜訊）/ `standard`（URL 主體）/ `kv`（分號與空白 KV）/ `vendor`（廠商方言）/ `params`（共用工具）。偵測優先序與每條防誤判護欄都寫進模組 doc。
+- **新增格式**：SQLAlchemy 等框架方言後綴（`postgresql+psycopg2://`、`mysql+pymysql://`）、libpq keyword/value（`host=… port=… dbname=… sslmode=…`）、`jdbc:mysql|mariadb|postgresql|sqlite`（帳密可放 query string）、`valkey(s)://` 與 `redis+tls://`、Redis 的 `?db=N` 與 `?ssl=true`、Oracle 的 `jdbc:oracle:thin:@//host/svc` / `@host:port:SID` / `@ALIAS` 與 TNS descriptor、Elasticsearch 的 `http(s)://` 與 Elastic Cloud ID、Kafka 的 client properties 區塊（含從 `sasl.jaas.config` 的 JAAS 字串挖出帳密）。雜訊容錯：外層引號、`export DATABASE_URL=` 前綴、尾端分號、終端機折行，以及 `psql "postgres://…"` 這類整行指令貼上。
+- **Npgsql 的 `Host=…;Database=…` 被判成 SQL Server**。ADO.NET 偵測器看到 `database=` 就收，而 `host` 不在它的 server 別名表裡——於是類型錯、host 是空的，卻回報解析成功。現在分號 KV 依識別鍵分流：命中 MSSQL 專屬鍵（`Initial Catalog` / `Encrypt` / `TrustServerCertificate`…）→ SQL Server，否則有 `host=` 且無 `server=` → PostgreSQL，其餘維持 SQL Server 不變。Npgsql 的 `SSL Mode` 是 PascalCase，另外翻成 `postgres.rs` 讀的小寫 libpq 詞彙。
+- **匯入 Elasticsearch / Kafka 的帳密，存檔時會被自己清掉**。`build()` 的 `usesAuth` 對 elastic 看 `es_auth`、對 kafka 看 protocol 是否 SASL，而匯入路徑從來沒設過這兩個鍵——帳密明明填進欄位了，按下儲存又被當成「這個類型不需要認證」抹掉。Oracle 同理漏了 `connect_type`，SID 字串會被靜默當成 service name 連線。三條分支補上。反過來，Elastic 的 `es_auth` 只在 URL **真的帶帳密**時才發 `basic`，不發 `none`——發了會害使用者之後手動補的帳密掉進同一個坑。
+- **Mongo 多主機**（`mongodb://h1:27017,h2:27017/db`）以前整串塞進 host，`build_mongo_uri` 再接一次 `:{port}`，組出 `h1:27017,h2:27017:27017` 這種連不上的 URI。改成取第一個 seed，其餘成員由 driver 自 `replicaSet` 發現（功能等價）。Kafka 的 bootstrap 清單則維持原樣保留——`kafka/config.rs` 對含逗號的 host 本來就直接採用。
+- Redis 的「資料庫（選填）」改標成「**資料庫索引**（選填）」、placeholder 給 `0`：它是 0 起算的數字索引（上限來自 `CONFIG GET databases`），不是名稱。維持文字輸入而非下拉——連線前拿不到實際上限。
+- `parse_connection_url` 加上選配的 `kind` 參數，前端把對話框當下選的類型當提示傳進去：Oracle EZConnect、裸 `host:port`、SQLite 檔案路徑本身都不帶類型資訊，沒提示只能報錯。但提示會讓類型一定判得出來、等於關掉「判不出就報錯」那道防呆，所以補了 `looks_structured`：URL / `jdbc:` / TNS / 含 `=` 的 KV / 檔案路徑 / `host:port` 才收，單一裸字（`localhost`、一段密碼）一律拒絕。
+- `decode_cloud_id` 從 `db/elastic/config.rs` 搬進 `db/conn_url/`——`elastic` 是 cargo feature，而連線字串解析沒有 gate（精簡 CLI 依賴它），兩邊得共用同一份解碼邏輯；`base64` 因此改為非選配依賴（純 Rust 無相依的小 crate）。`config.rs` 以 `pub use` 取回同一個名字，原呼叫點與其單元測試不動。`docs/cli.md` 的 `--url` 格式清單一併重寫，並註明 Kafka / Elasticsearch / RabbitMQ 三種格式雖然解得出來，CLI 卻不支援那三種類型（`ensure_cli_kind`），免得文件承諾了 CLI 做不到的事。
+
+> 驗證：`cargo +stable-x86_64-pc-windows-gnu test --no-default-features --lib` 345 項全通過，其中 `conn_url` 93 項（本次新增 64 項：格式偵測順序、每條防誤判護欄、四個資料遺失回歸，以及使用者回報的那串原始字串）。vitest 1153 項全通過（本次新增 27 項：`looksLikeConnectionString` 的正負向判別——裸主機名 / 密碼 / SQL 片段都不可被攔、`applyParsedToForm` 的欄位映射與三個帳密遺失回歸）。`tsc` 0 error、`eslint src` 0 error、`i18n:scan` en / zh-CN 維持 100%。**未對真實資料庫做端對端實測**——解析與填表都在純函式層驗證，實際用解析出的設定連線沒跑過。
+
 ## v0.29.1
 
 **點開「收藏」旁的箭頭，清單被壓成一條縫**（[#2](https://github.com/markku636/db-kit/issues/2)）。收藏做成分裂式控制項：左半星星一鍵存／取消存、右半箭頭開清單，兩半共用一組圓角，靠外框的 `overflow-hidden` 把各自的直角切掉。問題是那個外框同時也是下拉的定位錨點（`relative`），而下拉是它的子元素——於是圓角裁切連著把下拉一起裁了：420×166 的面板實際只畫得出按鈕大小的 61×18，回報截圖裡那條擠在一起的東西就是它。清單一直都在、也點得到，只是看不見。
