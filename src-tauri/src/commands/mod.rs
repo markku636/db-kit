@@ -1442,6 +1442,85 @@ pub async fn compare_data_cancel(run_id: String) -> AppResult<()> {
     Ok(())
 }
 
+// ---- 審查並執行（review_run/）----
+
+/// 分析 + 探測 + AI 審查提示。只送唯讀查詢；`sample_rows` > 0 時附上前像樣本給 AI。
+#[tauri::command]
+pub async fn review_run_prepare(
+    state: State<'_, AppState>,
+    id: String,
+    conn_label: String,
+    database: String,
+    script: String,
+    max_capture_rows: Option<usize>,
+    sample_rows: Option<usize>,
+) -> AppResult<crate::review_run::run::ReviewPrepared> {
+    crate::review_run::run::prepare_review(
+        &state.manager,
+        &id,
+        &conn_label,
+        &database,
+        &script,
+        max_capture_rows.unwrap_or(0),
+        sample_rows.unwrap_or(0),
+    )
+    .await
+}
+
+/// 只產生備份（mode = backup）或備份後執行（mode = execute），檔案寫進 `out_dir` 底下的新子目錄。
+/// 進度以 `review-run-progress` 事件回報，`review_run_cancel` 於語句之間收手。
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn review_run_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: String,
+    id: String,
+    conn_label: String,
+    database: String,
+    script: String,
+    out_dir: String,
+    mode: crate::review_run::run::RunMode,
+    options: Option<crate::review_run::run::RunOptions>,
+    review: Option<String>,
+) -> AppResult<crate::review_run::run::RunOutcome> {
+    let dir = std::path::PathBuf::from(out_dir.trim());
+    if !dir.is_absolute() {
+        return Err(AppError::Storage(t!("輸出目錄必須是絕對路徑").into()));
+    }
+    let emit = move |p: crate::review_run::run::Progress| {
+        let _ = app.emit("review-run-progress", p);
+    };
+    let req = crate::review_run::run::RunRequest {
+        run_id: &run_id,
+        conn_label: &conn_label,
+        database: &database,
+        script: &script,
+        out_dir: &dir,
+        mode,
+        options: options.unwrap_or_default(),
+        review,
+    };
+    crate::review_run::run::run(&state.manager, &id, req, &emit).await
+}
+
+#[tauri::command]
+pub async fn review_run_cancel(run_id: String) -> AppResult<()> {
+    crate::compare::cancel(&run_id);
+    Ok(())
+}
+
+/// 在檔案總管開啟某次的輸出目錄。只接受含 manifest.json 的目錄——不讓這支變成任意路徑開啟器。
+#[tauri::command]
+pub async fn review_run_reveal(path: String) -> AppResult<()> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.is_dir() || !p.join("manifest.json").is_file() {
+        return Err(AppError::Storage(tf!("不是審查並執行的輸出目錄：{path}", path = path)));
+    }
+    crate::agent::open_path(&p);
+    Ok(())
+}
+
 /// 匯出整個資料庫的結構 SQL（所有表的建表語句）。致敬 Navicat / DBeaver 的「轉儲結構」。
 #[tauri::command]
 pub async fn schema_dump(

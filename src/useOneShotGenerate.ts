@@ -15,8 +15,9 @@ import { useT } from "./i18n";
  * mode 的差別只在額度：
  * - `generate`（1024 token）：NL→SQL，輸出就是一條語句。
  * - `edit`（4096 token）：編輯器內改寫，要把整段 SQL 原樣吐回來，1024 對長查詢不夠。
+ * - `review`（8192 token）：審查並執行的執行前審查，是一份含修正 SQL 的完整報告。
  */
-export function useOneShotGenerate(opts?: { mode?: Extract<AgentMode, "generate" | "edit"> }) {
+export function useOneShotGenerate(opts?: { mode?: Extract<AgentMode, "generate" | "edit" | "review"> }) {
   const mode = opts?.mode ?? "generate";
   const t = useT();
   const { provider, baseUrls, models } = useAiProvider();

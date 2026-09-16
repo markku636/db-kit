@@ -20,6 +20,8 @@ mod error;
 mod export;
 mod import;
 mod manager;
+// 審查並執行：逐句前後像 + 回滾腳本 + 輸出目錄。不依賴 Tauri，GUI 與 `dbk run` 共用。
+mod review_run;
 mod schema_cache;
 mod ssh;
 mod store;
@@ -217,6 +219,10 @@ pub fn run() {
             commands::compare_data_table,
             commands::compare_data_database,
             commands::compare_data_cancel,
+            commands::review_run_prepare,
+            commands::review_run_start,
+            commands::review_run_cancel,
+            commands::review_run_reveal,
             commands::schema_dump,
             commands::explain_query,
             commands::column_stats,

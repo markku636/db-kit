@@ -7,10 +7,11 @@
 //
 // 全模組為純函式（不碰 React / DOM / Tauri），判斷規則一律轉呼 sql.ts 既有的偵測器：
 // 守門邏輯若在這裡另寫一份，漂移的那天不會有人發現，只會有人少一張表。
-import type { DbKind, QueryResult } from "./api";
+import type { DbKind, QueryResult, ReviewRunOutcome } from "./api";
 import { clipMarkdown, fencedBlock, fencedClipBlock, joinLines } from "./aiReview";
 import type { ChatRunResult } from "./chatTypes";
 import { t } from "./i18n";
+import { supportsReviewRun } from "./reviewRun";
 import {
   buildUseDatabase,
   fmtElapsed,
@@ -233,4 +234,28 @@ export function runFeedbackDisplay(r: ChatRunResult): string {
   if (r.error != null) return t("已執行 SQL（失敗）");
   if (r.columns.length === 0) return t("已執行 SQL（影響 {n} 列）", { n: r.rowsAffected });
   return t("已執行 SQL（{n} 列）", { n: r.rows.length });
+}
+
+/**
+ * 模型寫的寫入語句改走「審查並執行」（AI 審查 → 逐句備份 → 回滾腳本）而不是只跳確認框。
+ *
+ * 這是全程式手滑成本最高的入口（見檔頭）：一條由模型產生、使用者只按了一下的 DELETE，
+ * 最需要的就是「執行前先把會被改的列存下來」。只收審查並執行支援的連線種類——external
+ * gateway 的結構 API 不可靠，仍走原本的確認框。
+ */
+export function routeToReviewRun(cls: RunClassification, kind: DbKind | null | undefined): boolean {
+  return cls.ok && cls.confirm.includes("write") && supportsReviewRun(kind);
+}
+
+/**
+ * 審查並執行的結果 → 聊天訊息裡存的執行結果（影響列數合計）。
+ * 只產生備份（沒有執行）時回 null：那不是一次執行，不該在訊息上掛一個「已執行」的結果。
+ */
+export function reviewOutcomeToChatRun(sql: string, o: ReviewRunOutcome): ChatRunResult | null {
+  const m = o.manifest;
+  if (m.status === "backup_only") return null;
+  const rowsAffected = m.statements.reduce((n, s) => n + (s.rows_affected ?? 0), 0);
+  const ms = m.statements.reduce((n, s) => n + (s.elapsed_ms ?? 0), 0);
+  const error = m.status === "completed" ? null : (m.stop_reason ?? t("未完成"));
+  return { sql, columns: [], rows: [], rowsAffected, truncated: false, error, ms };
 }

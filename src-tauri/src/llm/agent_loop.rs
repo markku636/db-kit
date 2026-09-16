@@ -30,12 +30,14 @@ pub const MAX_HISTORY: usize = 40;
 pub const MAX_HISTORY_BYTES: usize = 200 * 1024;
 
 /// 助手模式 → 這回合的參數。`generate`（NL→SQL）刻意零工具、單回合、temperature 0；
-/// `edit`（編輯器內改寫 SQL）同樣零工具與 temperature 0，但要回傳整段語句，額度放寬到 4096。
+/// `edit`（編輯器內改寫 SQL）同樣零工具與 temperature 0，但要回傳整段語句，額度放寬到 4096；
+/// `review`（審查並執行的執行前審查）是一份含修正 SQL 的完整報告，給到 8192。
 fn params_for_mode(mode: &str) -> (u32, Option<f32>, bool) {
     // (max_tokens, temperature, 允許工具)
     match mode {
         "generate" => (1024, Some(0.0), false),
         "edit" => (4096, Some(0.0), false),
+        "review" => (8192, Some(0.0), false),
         "agent" => (8192, None, true),
         _ => (8192, None, true),
     }
@@ -193,6 +195,7 @@ mod tests {
     fn mode_params() {
         assert_eq!(params_for_mode("generate"), (1024, Some(0.0), false));
         assert_eq!(params_for_mode("edit"), (4096, Some(0.0), false));
+        assert_eq!(params_for_mode("review"), (8192, Some(0.0), false));
         let (_, _, tools_on) = params_for_mode("agent");
         assert!(tools_on);
     }

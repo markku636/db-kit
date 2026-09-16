@@ -117,6 +117,9 @@ pub enum Command {
     /// 執行寫入語句（INSERT / UPDATE / DELETE / DDL）。需 --yes；高破壞動作另需 --force
     Exec { sql: String },
 
+    /// 審查並執行 SQL 腳本：逐句擷取前後像、產生回滾腳本與差異報告到輸出目錄。未加 --yes 只產生審查與備份
+    Run(RunArgs),
+
     /// 查詢計畫（EXPLAIN）
     Explain { sql: String },
 
@@ -459,6 +462,36 @@ pub struct CompareSchemaArgs {
     /// 有差異時以非零結束碼結束（腳本 / CI 用）
     #[arg(long = "exit-code")]
     pub exit_code: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct RunArgs {
+    /// SQL 腳本檔（- = 從 stdin 讀）
+    pub file: String,
+    /// 輸出目錄：每次在底下建立一個子目錄，放腳本、審查、回滾腳本、前後像與報告
+    #[arg(long, short = 'o')]
+    pub out: String,
+    /// AI 審查指令：審查提示從 stdin 餵入、stdout 存成 review.md（如 "claude -p"）
+    #[arg(long, value_name = "CMD")]
+    pub review_cmd: Option<String>,
+    /// 附給 AI 的前像樣本列數（0 = 不附資料，只給結構與列數）
+    #[arg(long, default_value_t = 0, value_name = "N")]
+    pub review_samples: usize,
+    /// 只把審查提示印到 stdout 後結束（不擷取、不執行）
+    #[arg(long)]
+    pub print_prompt: bool,
+    /// 每句前像的擷取上限（列）
+    #[arg(long, default_value_t = 10_000, value_name = "N")]
+    pub max_capture_rows: usize,
+    /// 接受「有語句沒有完整回滾」仍執行
+    #[arg(long)]
+    pub allow_incomplete: bool,
+    /// 目標連線標記為正式環境時，執行需加上此旗標
+    #[arg(long)]
+    pub allow_prod: bool,
+    /// AI 審查結論為 STOP 時仍執行（預設只產生備份）
+    #[arg(long)]
+    pub ignore_verdict: bool,
 }
 
 #[derive(Args, Debug)]

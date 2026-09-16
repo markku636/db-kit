@@ -611,7 +611,8 @@ export interface AgentStatus {
 // generate：一次性 NL→查詢語句生成（零工具、單回合、無 session）。
 // edit：編輯器內的一次性 SQL 改寫（同樣零工具 / 單回合，但額度放寬到 4096 token——
 //       改寫要回傳整段語句，generate 的 1024 對長 SQL 不夠）。
-export type AgentMode = "advise" | "agent" | "generate" | "edit";
+// review：審查並執行的執行前審查（零工具 / 單回合、8192 token、API 供應商不落地對話歷史）。
+export type AgentMode = "advise" | "agent" | "generate" | "edit" | "review";
 
 // 後端 `agent-stream` 事件 payload（依 kind 取用欄位）。
 // 註：Claude 的 text 是 token 級增量、Codex 是整段一次到齊，前端一律「附加」即可。
@@ -1073,6 +1074,134 @@ export function onCompareProgress(runId: string, cb: (p: CompareProgress) => voi
     if (e.payload.run_id === runId) cb(e.payload);
   });
 }
+
+// ---- 審查並執行（src-tauri/src/review_run/）----
+
+export type ReviewRollbackLevel = "not_needed" | "full" | "partial" | "none";
+export type ReviewNoteLevel = "info" | "warn" | "error";
+
+/** 探測說明；message 已由後端依目前語言產生。 */
+export interface ReviewNote {
+  code: string;
+  level: ReviewNoteLevel;
+  message: string;
+}
+
+export interface ReviewStatement {
+  index: number;
+  sql: string;
+  /** read / update / delete / insert / replace / merge / truncate / create_table / drop_table / alter_table / … */
+  op: string;
+  write: boolean;
+  destructive: boolean;
+  has_where: boolean | null;
+  /** predicate / whole_table / keys / key_range / schema / rename / none / unsupported */
+  method: string;
+  targets: string[];
+  estimated_rows: number | null;
+  estimate_exact: boolean;
+  rollback: ReviewRollbackLevel;
+  notes: ReviewNote[];
+}
+
+export interface ReviewBlocker {
+  index: number;
+  issue: string;
+  message: string;
+}
+
+export interface ReviewPrepared {
+  prepared: {
+    kind: DbKind;
+    database: string;
+    prod: boolean;
+    max_capture_rows: number;
+    statements: ReviewStatement[];
+    blockers: ReviewBlocker[];
+    needs_ack: boolean;
+    has_writes: boolean;
+  };
+  /** 送給 AI 的審查提示（後端組，與 `dbk run --review-cmd` 同一份）。 */
+  prompt: string;
+}
+
+export type ReviewRunMode = "backup" | "execute";
+
+export interface ReviewRunOptions {
+  max_capture_rows?: number;
+  allow_incomplete?: boolean;
+  confirm_prod?: boolean;
+}
+
+export interface ReviewRunProgress {
+  run_id: string;
+  phase: "prepare" | "capture_before" | "execute" | "capture_after" | "write" | "done";
+  index: number;
+  total: number;
+  detail: string;
+}
+
+export interface ReviewDiffSummary {
+  table: string;
+  inserted: number;
+  deleted: number;
+  updated: number;
+  unchanged: number;
+  keyless: boolean;
+  incomplete: boolean;
+}
+
+export interface ReviewStatementRecord {
+  index: number;
+  sql: string;
+  op: string;
+  write: boolean;
+  destructive: boolean;
+  targets: string[];
+  method: string;
+  estimated_rows: number | null;
+  rollback: ReviewRollbackLevel;
+  notes: ReviewNote[];
+  status: "not_run" | "ok" | "failed";
+  rows_affected: number | null;
+  elapsed_ms: number | null;
+  error: string | null;
+  files: string[];
+  diff: ReviewDiffSummary[];
+  ddl_statements: number;
+  rollback_statements: number;
+  rollback_disabled: number;
+  rollback_exact: boolean;
+}
+
+export interface ReviewRunOutcome {
+  /** 本次輸出子目錄（絕對路徑）。 */
+  dir: string;
+  manifest: {
+    run_id: string;
+    mode: ReviewRunMode;
+    status: "backup_only" | "completed" | "failed" | "cancelled" | "stopped";
+    stop_reason: string | null;
+    connection: string;
+    kind: DbKind;
+    database: string;
+    prod: boolean;
+    started_at: string;
+    finished_at: string;
+    max_capture_rows: number;
+    verdict: "go" | "caution" | "stop" | null;
+    statements: ReviewStatementRecord[];
+    files: string[];
+  };
+  rollback_preview: string;
+  diff_preview: string;
+}
+
+export function onReviewRunProgress(runId: string, cb: (p: ReviewRunProgress) => void): Promise<UnlistenFn> {
+  return listen<ReviewRunProgress>("review-run-progress", (e) => {
+    if (e.payload.run_id === runId) cb(e.payload);
+  });
+}
 export function onKafkaProduceProgress(connId: string, cb: (p: KafkaProduceProgress) => void): Promise<UnlistenFn> {
   return listen<KafkaProduceProgress>("kafka-produce-progress", (e) => {
     if (e.payload.conn_id === connId) cb(e.payload);
@@ -1475,6 +1604,15 @@ export const api = {
   compareDataDatabase: (runId: string, src: CompareDbRef, dst: CompareDbRef, options: DbCompareOptions) =>
     invoke<DataDiffDbReport>("compare_data_database", { runId, src, dst, options }),
   compareDataCancel: (runId: string) => invoke<void>("compare_data_cancel", { runId }),
+  // 審查並執行：prepare 只送唯讀查詢；start 的進度走 onReviewRunProgress、取消走 reviewRunCancel。
+  reviewRunPrepare: (id: string, connLabel: string, database: string, script: string, maxCaptureRows?: number, sampleRows?: number) =>
+    invoke<ReviewPrepared>("review_run_prepare", { id, connLabel, database, script, maxCaptureRows, sampleRows }),
+  reviewRunStart: (args: {
+    runId: string; id: string; connLabel: string; database: string; script: string; outDir: string;
+    mode: ReviewRunMode; options?: ReviewRunOptions; review?: string | null;
+  }) => invoke<ReviewRunOutcome>("review_run_start", args),
+  reviewRunCancel: (runId: string) => invoke<void>("review_run_cancel", { runId }),
+  reviewRunReveal: (path: string) => invoke<void>("review_run_reveal", { path }),
   explainQuery: (id: string, sql: string) =>
     invoke<QueryResult>("explain_query", { id, sql }),
   alterTable: (id: string, database: string, table: string, op: AlterOp) =>

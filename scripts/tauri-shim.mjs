@@ -188,20 +188,39 @@ export function installShim(fx) {
     },
     compare_data_cancel: () => null,
 
+    // ── 審查並執行 ───────────────────────────────────────────────────────
+    review_run_prepare: () => fx.REVIEW_PREPARED,
+    review_run_start: ({ runId, mode }) => {
+      // 先打幾個進度事件，再回結果：對話框的進度列與結果分頁兩條路徑都跑得到。
+      const outcome = mode === "execute" && fx.REVIEW_OUTCOME_EXECUTED ? fx.REVIEW_OUTCOME_EXECUTED : fx.REVIEW_OUTCOME;
+      const total = outcome.manifest.statements.length;
+      for (let i = 0; i < total; i++) {
+        emit("review-run-progress", { run_id: runId, phase: "capture_before", index: i, total, detail: "" });
+      }
+      return new Promise((res) => setTimeout(() => {
+        emit("review-run-progress", { run_id: runId, phase: "done", index: total, total, detail: "" });
+        res(outcome);
+      }, 250));
+    },
+    review_run_cancel: () => null,
+    review_run_reveal: () => null,
+
     // ── AI 助手 ──────────────────────────────────────────────────────────
     app_lock_status: () => ({ locked: false, has_password: false, idle_minutes: 0 }),
     agent_detect: () => ({ available: true, provider: "claude", version: "2.0.0", path: "claude", models: [], note: null }),
     agent_cancel: () => { aiCancelled = true; return null; },
     // 串流回覆：一小段一小段 emit，讓截圖 / 冒煙檢查看到的是真的串流渲染路徑。
-    agent_send: ({ reqId }) => {
+    agent_send: ({ reqId, mode }) => {
       aiCancelled = false;
       let i = 0;
+      // 審查並執行的審查（mode = review）回一份帶 VERDICT 的審查；其餘沿用比對報告的總結。
+      const chunks = mode === "review" && fx.AI_REVIEW_CHUNKS ? fx.AI_REVIEW_CHUNKS : fx.AI_SUMMARY_CHUNKS;
       const tick = () => {
-        if (aiCancelled || i >= fx.AI_SUMMARY_CHUNKS.length) {
+        if (aiCancelled || i >= chunks.length) {
           emit("agent-stream", { req_id: reqId, kind: "done", text: null });
           return;
         }
-        emit("agent-stream", { req_id: reqId, kind: "text", text: fx.AI_SUMMARY_CHUNKS[i++] });
+        emit("agent-stream", { req_id: reqId, kind: "text", text: chunks[i++] });
         setTimeout(tick, 60);
       };
       setTimeout(tick, 80);

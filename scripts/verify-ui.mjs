@@ -312,7 +312,8 @@ const CASES = {
     await page.keyboard.type("UPDATE orders SET status = 'x';\nSELECT * FROM orders WHERE note LIKE '%abc%';");
     await sleep(700);
 
-    const tab = page.getByRole("button", { name: /^審查/ });
+    // 下方分頁鈕的名稱是「審查」後面可能接徽章（數字 / ●）；工具列的「審查並執行」同樣以「審查」開頭，要排除。
+    const tab = page.getByRole("button", { name: /^審查(?!並執行)/ });
     check("查詢分頁有「審查」分頁", (await tab.count()) > 0);
     await tab.first().click();
     await sleep(500);
@@ -515,6 +516,51 @@ const CASES = {
 
   // 結構比對（v0.30）：資料表右鍵與資料庫右鍵都要有入口；兩個對話框都能開、單表能比出結果，
   // 且整段沒有前端例外——shim 少一個 command 就是 pageerror，這裡會抓到。
+  // 審查並執行：查詢分頁工具列開對話框 → 分析結果（回滾等級 / 注意事項）→ AI 審查串流帶出結論徽章 →
+  // 唯讀連線只能「只產生備份」→ 產生後切到結果分頁、列出輸出檔案。
+  async "review-run-dialog"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await sleep(900);
+    const editor = page.locator(".cm-content").first();
+    await editor.click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.type("UPDATE orders SET status = 'cancelled' WHERE status = 'pending';\nDELETE FROM order_notes WHERE created_at < '2025-01-01';");
+    await sleep(500);
+
+    const open = page.locator('[data-testid="review-run-open"]');
+    check("查詢分頁工具列有「審查並執行」", (await open.count()) > 0);
+    await open.first().click();
+    await page.waitForFunction(() => document.body.innerText.includes("完整回滾"), null, { timeout: 8000 }).catch(() => {});
+    let body = await page.locator("#root").innerText();
+    check("對話框列出語句與回滾等級", body.includes("完整回滾") && body.includes("部分回滾"), body.replace(/\s+/g, " ").slice(0, 300));
+    check("部分回滾的語句自動展開注意事項", body.includes("attachment"));
+    check("需要確認時出現勾選框", body.includes("我了解有 1 句沒有完整回滾"));
+    check("輸出目錄沿用上次設定", (await page.locator('input[value="C:\\\\Users\\\\demo\\\\db-kit-backups"]').count()) > 0);
+
+    // 開啟時自動審查：串流完成後出現結論徽章。
+    await page.waitForFunction(() => document.body.innerText.includes("AI：注意風險後再執行"), null, { timeout: 15_000 }).catch(() => {});
+    // 結論在串流第一段就出現；串流結束（出現「重新審查」）前兩個動作鈕都該是停用的。
+    check("AI 串流中不能產生備份", !(await page.getByRole("button", { name: "只產生備份", exact: true }).first().isEnabled()));
+    await page.getByRole("button", { name: "重新審查", exact: true }).first().waitFor({ timeout: 15_000 }).catch(() => {});
+    body = await page.locator("#root").innerText();
+    check("AI 審查串流並顯示結論徽章", body.includes("AI：注意風險後再執行"));
+    check("結論那一行不重複出現在內文", !body.includes("VERDICT: CAUTION"));
+
+    const exec = page.getByRole("button", { name: "執行（含備份）", exact: true });
+    check("唯讀連線不能執行", (await exec.count()) > 0 && !(await exec.first().isEnabled()));
+    check("說明為什麼不能執行", body.includes("此連線為唯讀模式，只能產生備份"));
+    const backup = page.getByRole("button", { name: "只產生備份", exact: true });
+    check("唯讀連線仍可只產生備份", (await backup.count()) > 0 && (await backup.first().isEnabled()));
+    await backup.first().click();
+    await page.waitForFunction(() => document.body.innerText.includes("已產生審查與備份（未執行）"), null, { timeout: 8000 }).catch(() => {});
+    body = await page.locator("#root").innerText();
+    check("產生備份後切到結果分頁", body.includes("已產生審查與備份（未執行）"), body.replace(/\s+/g, " ").slice(0, 300));
+    check("結果列出輸出檔案", body.includes("rollback.sql") && body.includes("snapshots/01-before-orders.json"));
+    check("結果可以回滾分頁查看腳本", (await page.getByText("回滾腳本", { exact: true }).count()) > 0);
+  },
+
   async "compare-dialogs-open"(page) {
     await page.getByText("prod-mysql", { exact: true }).first().dblclick();
     await sleep(1200);

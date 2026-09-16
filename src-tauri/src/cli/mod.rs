@@ -17,6 +17,8 @@ pub(crate) mod guard;
 mod mcp;
 mod render;
 mod resolve;
+// `dbk run`：審查並執行（核心在 crate::review_run，與 GUI 共用）。
+mod run_script;
 
 use std::process::ExitCode;
 

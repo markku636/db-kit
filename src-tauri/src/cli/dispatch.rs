@@ -64,6 +64,8 @@ pub async fn dispatch(cli: Cli) -> AppResult<()> {
         Command::Compare(c) => super::compare::run(&conn, fmt, c).await,
         // MCP 伺服器：連線延遲到第一次 tools/call，且由伺服器自己管生命週期。
         Command::Mcp => super::mcp::serve(&conn).await,
+        // 審查並執行：命名空間要直接看 -d 旗標（PG 的 schema 與連線的 database 不同軸），自己管連線。
+        Command::Run(a) => super::run_script::run_cli(&conn, fmt, a).await,
         // ---- 其餘需建立連線 ----
         other => run_connected(&conn, fmt, other).await,
     }
@@ -324,6 +326,7 @@ async fn exec(
         // 連線前已處理。
         Command::Backup(_) => unreachable!("backup 在連線前已處理"),
         Command::Mcp => unreachable!("mcp 在連線前已處理"),
+        Command::Run(_) => unreachable!("run 在連線前已處理"),
     }
     Ok(())
 }

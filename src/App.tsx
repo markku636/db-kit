@@ -76,9 +76,10 @@ import {
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
   ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, FolderPlus, ExternalLink, Gauge,
-  Type, AArrowDown, AArrowUp,
+  Type, AArrowDown, AArrowUp, ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
+import { supportsReviewRun } from "./reviewRun";
 
 // ---- Lazy 載入（code splitting）：對話框 / 工具面板全部條件掛載，開啟時才抓 chunk，
 //      首包只留 App shell + TableView + InfoPanel/AssistantPanel。CodeMirror 全家桶
@@ -111,6 +112,7 @@ const ConnectionProperties = lazyOverlay(() => import("./ConnectionProperties"))
 const TableProperties = lazyOverlay(() => import("./TableProperties"));
 const RoutinesDialog = lazyOverlay(() => import("./RoutinesDialog"));
 const SavedQueriesDialog = lazyOverlay(() => import("./SavedQueriesDialog"));
+const ReviewRunDialog = lazyOverlay(() => import("./ReviewRunDialog"));
 const CreateViewDialog = lazyOverlay(() => import("./CreateViewDialog"));
 const ViewDesigner = lazyOverlay(() => import("./ViewDesigner"));
 const ProcessListDialog = lazyOverlay(() => import("./ProcessListDialog"));
@@ -278,6 +280,7 @@ export default function App() {
   };
   const { connections, connGroups, connectedIds, activeId } = useStore();
   const savedMgr = useStore((s) => s.savedMgr);
+  const reviewRun = useStore((s) => s.reviewRun);
   const activeConn = connections.find((c) => c.id === activeId) ?? null;
   // 左側連線樹寬度：可拖曳分隔線調整，記憶於 localStorage。
   const sidebar = useResizable({
@@ -528,6 +531,10 @@ export default function App() {
           editName={savedMgr.editName}
           onClose={() => useStore.getState().closeSavedManager()}
         />
+      )}
+      {reviewRun && (
+        <ReviewRunDialog key={reviewRun.nonce} request={reviewRun}
+          onClose={() => useStore.getState().closeReviewRun()} />
       )}
       <UiHost />
     </div>
@@ -4436,6 +4443,35 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     return sql;
   };
 
+  // 參數化查詢（致敬 Navicat）：偵測 `:name` 參數，逐一提示輸入後代入（SQL-like 連線）。
+  // 回傳 null = 使用者取消。執行與「審查並執行」共用，兩個入口代入的結果必須一致。
+  const substituteParamsInteractively = async (q: string): Promise<string | null> => {
+    if (!kind || !(EXPLAIN_KINDS.includes(kind) || kind === "external" || kind === "mssql")) return q;
+    const params = extractNamedParams(q);
+    if (!params.length) return q;
+    const values: Record<string, string> = {};
+    for (const p of params) {
+      const v = await uiPrompt(t("參數 :{p} 的值", { p }), { title: t("參數化查詢"), placeholder: `:${p}`, confirmText: t("確定") });
+      if (v === null) return null; // 任一取消 → 中止整次執行
+      values[p] = v;
+    }
+    return substituteNamedParams(kind, q, values);
+  };
+
+  // 審查並執行：選取段（或整段）交給對話框——AI 審查、逐句備份前後像、產生回滾腳本後才執行。
+  const openReviewRun = async () => {
+    if (!activeId || !kind || running) return;
+    const raw = queryToRun();
+    if (!raw.trim()) {
+      toast.info(t("沒有可執行的語句。"));
+      return;
+    }
+    const q = await substituteParamsInteractively(raw);
+    if (q === null) return;
+    // 與查詢分頁送出語句一致：有選擇目前資料庫才帶（MySQL / PG 以前綴切換）；其餘由後端依連線判斷。
+    useStore.getState().openReviewRun({ connId: activeId, database: supportsDbSelect ? queryDb : "", sql: q, origin: "query" });
+  };
+
   // SQL 編輯器送出：有選取→跑選取；F6→整段；否則→跑游標所在語句（Ctrl+Enter）。
   const onEditorSubmit = (s: SqlSubmit) => {
     if (running) return;
@@ -4445,21 +4481,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
 
   const execute = async (mode: "run" | "analyze", overrideQuery?: string) => {
     if (!activeId || running) return;
-    let q = overrideQuery && overrideQuery.trim() ? overrideQuery : queryToRun();
-    if (!q.trim()) return;
-    // 參數化查詢（致敬 Navicat）：偵測 `:name` 參數，逐一提示輸入後代入（SQL-like 連線）。
-    if (kind && (EXPLAIN_KINDS.includes(kind) || kind === "external" || kind === "mssql")) {
-      const params = extractNamedParams(q);
-      if (params.length) {
-        const values: Record<string, string> = {};
-        for (const p of params) {
-          const v = await uiPrompt(t("參數 :{p} 的值", { p }), { title: t("參數化查詢"), placeholder: `:${p}`, confirmText: t("確定") });
-          if (v === null) return; // 任一取消 → 中止整次執行
-          values[p] = v;
-        }
-        q = substituteNamedParams(kind, q, values);
-      }
-    }
+    const raw = overrideQuery && overrideQuery.trim() ? overrideQuery : queryToRun();
+    if (!raw.trim()) return;
+    const substituted = await substituteParamsInteractively(raw);
+    if (substituted === null) return;
+    const q = substituted;
     setErr(null);
     setErrSql(null);
     setErrStmt(null);
@@ -5648,6 +5674,15 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               <span className="text-[11px] text-sky-300/80 px-1" title={t("偵測到具名參數 :name；執行時會逐一提示輸入並安全代入")}>
                 ⟨{paramCount} {t("參數⟩")}
               </span>
+            )}
+            {supportsReviewRun(kind) && !running && (
+              // 不收進「更多」選單：寫入前的安全網要跟「執行」並排，才會在按下執行前被看見。
+              <button type="button" onClick={() => void openReviewRun()} data-testid="review-run-open"
+                title={t("審查並執行：AI 審查、逐句備份前後像並產生回滾腳本後才執行（有選取時只處理選取段）")}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 text-fg/80 hover:bg-fg/10">
+                <Icon icon={ShieldCheck} size={13} className="text-emerald-400/90" />
+                {!dense && t("審查並執行")}
+              </button>
             )}
             {!supportsQueryEditor ? null : running ? (
               <button type="button"

@@ -317,6 +317,7 @@ export const SCHEMA_CACHE_STATS = {
 export const STORAGE_SEED = {
   "db-kit:connColors": { "c-mysql": "#ef4444", "c-pg": "#22c55e" },
   "db-kit:readonlyConns": { "c-mysql": true },
+  "db-kit:reviewRun:prefs": { outDir: "C:\\Users\\demo\\db-kit-backups", maxRows: 10000, sampleRows: 0, autoReview: true },
   "db-kit:pinnedTables": [{ connId: "c-mysql", db: "shop", table: "orders", kind: "table" }],
   "db-kit:savedQueries": [
     { name: "每日營收", sql: "SELECT DATE(placed_at) d, SUM(total_amount) revenue\nFROM orders GROUP BY 1 ORDER BY 1 DESC;", group: "報表" },
@@ -341,6 +342,147 @@ export const AI_SUMMARY_CHUNKS = [
   "需要留意：DROP TABLE legacy_log 為破壞性語句，執行前請確認已無服務讀取，並先備份。\n",
   "建議順序：先 1、3，確認服務正常後再做 2，最後單獨處理 DROP。",
 ];
+
+// ── 審查並執行 ───────────────────────────────────────────────────────────
+// 輸出目錄預先設好：冒煙檢查不走目錄挑選器（shim 的開檔對話框回的是快照檔路徑）。
+export const REVIEW_RUN_OUT_DIR = "C:\\Users\\demo\\db-kit-backups";
+
+// review_run_prepare 的假回覆：一句完整回滾的 UPDATE + 一句沒有主鍵、只能部分回滾的 DELETE。
+export const REVIEW_PREPARED = {
+  prepared: {
+    kind: "mysql",
+    database: "shop",
+    prod: false,
+    max_capture_rows: 10000,
+    statements: [
+      {
+        index: 0, sql: "UPDATE orders SET status = 'cancelled' WHERE status = 'pending' AND placed_at < '2026-01-01'",
+        op: "update", write: true, destructive: false, has_where: true, method: "predicate", targets: ["shop.orders"],
+        estimated_rows: 42, estimate_exact: true, rollback: "full", notes: [],
+      },
+      {
+        index: 1, sql: "DELETE FROM order_notes WHERE created_at < '2025-01-01'",
+        op: "delete", write: true, destructive: false, has_where: true, method: "predicate", targets: ["shop.order_notes"],
+        estimated_rows: 380, estimate_exact: true, rollback: "partial",
+        notes: [{ code: "unrestorable_columns", level: "warn", message: "order_notes 的欄位 attachment 型別無法以字面值無損還原；這些欄位有值的列不會自動回滾。" }],
+      },
+    ],
+    blockers: [],
+    needs_ack: true,
+    has_writes: true,
+  },
+  prompt: "You are a senior database administrator reviewing a SQL script BEFORE it is executed…",
+};
+
+export const AI_REVIEW_CHUNKS = [
+  "VERDICT: CAUTION\n\n",
+  "## Summary\n兩句都有 WHERE，影響範圍與估算一致（42 + 380 列）；#2 的回滾不完整，執行前請確認 `attachment` 欄位不需要保留。\n\n",
+  "## Expected changes (before → after)\n- **#1**：42 筆 `pending` 且下單早於 2026-01-01 的訂單 → `cancelled`，其他欄位不變。\n",
+  "- **#2**：刪除 380 筆 2025 年以前的訂單備註；其中 9 筆帶有附件（BLOB 超過 2 KB）。\n\n",
+  "## Risks\n- #1 在尖峰時段會鎖住 orders 的相關列，建議離峰執行。\n",
+  "- `orders.status` 沒有索引，#1 會掃描整張 orders（約 12 萬列）。\n",
+  "- 若有觸發器依 `status` 寫入稽核表，那些變更不在回滾範圍內。\n\n",
+  "## Suggested fixes\n先確認沒有被引用的備註，再刪：\n\n",
+  "```sql\nSELECT COUNT(*) FROM order_notes n\nJOIN orders o ON o.order_id = n.order_id\nWHERE n.created_at < '2025-01-01' AND o.status <> 'cancelled';\n```\n\n",
+  "## Rollback check\n#1 可完整還原；#2 有 9 列附件無法以字面值寫回，這 9 列的 INSERT 會以註解列出，請另行備份 `order_notes.attachment`。\n",
+];
+
+// review_run_start（只產生備份）的假回覆。
+export const REVIEW_OUTCOME = {
+  dir: "C:\\Users\\demo\\db-kit-backups\\20260916-210000_prod-mysql_shop",
+  manifest: {
+    run_id: "demo", mode: "backup", status: "backup_only", stop_reason: null, connection: "prod-mysql", kind: "mysql",
+    database: "shop", prod: false, started_at: "2026-09-16 21:00:00 +08:00", finished_at: "2026-09-16 21:00:01 +08:00",
+    max_capture_rows: 10000, verdict: "caution",
+    statements: [
+      {
+        index: 0, sql: "UPDATE orders SET status = 'cancelled' WHERE status = 'pending' AND placed_at < '2026-01-01'", op: "update",
+        write: true, destructive: false, targets: ["shop.orders"], method: "predicate", estimated_rows: 42, rollback: "full", notes: [],
+        status: "not_run", rows_affected: null, elapsed_ms: null, error: null, files: ["snapshots/01-before-orders.json"], diff: [],
+        ddl_statements: 0, rollback_statements: 42, rollback_disabled: 0, rollback_exact: false,
+      },
+      {
+        index: 1, sql: "DELETE FROM order_notes WHERE created_at < '2025-01-01'", op: "delete", write: true, destructive: false,
+        targets: ["shop.order_notes"], method: "predicate", estimated_rows: 380, rollback: "partial", notes: [], status: "not_run",
+        rows_affected: null, elapsed_ms: null, error: null, files: ["snapshots/02-before-order_notes.json"], diff: [],
+        ddl_statements: 0, rollback_statements: 371, rollback_disabled: 9, rollback_exact: false,
+      },
+    ],
+    files: ["manifest.json", "report.md", "review.md", "rollback.sql", "script.sql", "snapshots/01-before-orders.json", "snapshots/02-before-order_notes.json"],
+  },
+  rollback_preview: "-- db-kit 回滾腳本\nSET NAMES utf8mb4;\nSET time_zone = '+00:00';\n\nINSERT INTO `shop`.`order_notes` (`note_id`, `order_id`, `body`) VALUES (7, 1001, 'call back');\n",
+  diff_preview: "",
+};
+
+// review_run_start（執行模式）的假回覆：結果分頁的前後差異與回滾腳本截圖用。
+export const REVIEW_OUTCOME_EXECUTED = {
+  dir: "C:\\Users\\demo\\db-kit-backups\\20260916-210312_prod-mysql_shop",
+  manifest: {
+    ...REVIEW_OUTCOME.manifest,
+    mode: "execute",
+    status: "completed",
+    finished_at: "2026-09-16 21:03:14 +08:00",
+    statements: [
+      { ...REVIEW_OUTCOME.manifest.statements[0], status: "ok", rows_affected: 42, elapsed_ms: 38, rollback_exact: true,
+        files: ["snapshots/01-before-orders.json", "snapshots/01-after-orders.json"],
+        diff: [{ table: "shop.orders", inserted: 0, deleted: 0, updated: 42, unchanged: 0, keyless: false, incomplete: false }] },
+      { ...REVIEW_OUTCOME.manifest.statements[1], status: "ok", rows_affected: 380, elapsed_ms: 61, rollback_exact: true,
+        files: ["snapshots/02-before-order_notes.json", "snapshots/02-after-order_notes.json"],
+        diff: [{ table: "shop.order_notes", inserted: 0, deleted: 380, updated: 0, unchanged: 0, keyless: false, incomplete: false }] },
+    ],
+    files: ["diff.md", "manifest.json", "report.md", "review.md", "rollback.sql", "script.sql",
+      "snapshots/01-after-orders.json", "snapshots/01-before-orders.json",
+      "snapshots/02-after-order_notes.json", "snapshots/02-before-order_notes.json"],
+  },
+  diff_preview: [
+    "# 執行前後差異", "",
+    "連線 prod-mysql · 資料庫 shop · 2026-09-16 21:03:14 +08:00", "",
+    "## #1 UPDATE orders SET status = 'cancelled' WHERE status = 'pending' AND placed_at < '2026-01-01'", "",
+    "狀態：成功，影響 42 列", "",
+    "### shop.orders — 修改 42、新增 0、刪除 0、未變 0", "",
+    "| 鍵 | 欄位 | 執行前 | 執行後 |", "|---|---|---|---|",
+    "| order_id=48127 | status | `pending` | `cancelled` |",
+    "| order_id=48133 | status | `pending` | `cancelled` |",
+    "| order_id=48140 | status | `pending` | `cancelled` |",
+    "| order_id=48152 | status | `pending` | `cancelled` |", "",
+    "## #2 DELETE FROM order_notes WHERE created_at < '2025-01-01'", "",
+    "狀態：成功，影響 380 列", "",
+    "### shop.order_notes — 修改 0、新增 0、刪除 380、未變 0", "",
+    "#### 刪除的列（380）", "",
+    "| note_id | order_id | body | created_at |", "|---|---|---|---|",
+    "| `7` | `31002` | `客戶要求改寄公司地址` | `2024-03-18 10:21:07` |",
+    "| `12` | `31077` | `電話未接，已發簡訊` | `2024-04-02 16:45:30` |",
+    "| `19` | `31544` | `發票抬頭：瑞昱科技` | `2024-06-11 09:02:55` |",
+  ].join("\n"),
+  rollback_preview: [
+    "-- db-kit 回滾腳本",
+    "-- 連線：prod-mysql　資料庫：shop　種類：MySQL　產生時間：2026-09-16 21:03:14 +08:00",
+    "-- 依執行前後的前後像比對產生；某句若拿不到後像，該段改用執行前的預估。",
+    "-- 最後一句排在最前面，請由上往下執行。被註解掉的語句需人工確認後再取消註解。",
+    "",
+    "SET NAMES utf8mb4;",
+    "SET time_zone = '+00:00';",
+    "",
+    "-- ============================================================",
+    "-- #2 DELETE FROM order_notes WHERE created_at < '2025-01-01'",
+    "-- 目標：shop.order_notes　回滾：部分",
+    "-- ============================================================",
+    "-- ⚠ order_notes 的欄位 attachment 型別無法以字面值無損還原；這些欄位有值的列不會自動回滾。",
+    "INSERT INTO `shop`.`order_notes` (`note_id`, `order_id`, `body`, `attachment`, `created_at`) VALUES (7, 31002, '客戶要求改寄公司地址', NULL, '2024-03-18 10:21:07');",
+    "INSERT INTO `shop`.`order_notes` (`note_id`, `order_id`, `body`, `attachment`, `created_at`) VALUES (12, 31077, '電話未接，已發簡訊', NULL, '2024-04-02 16:45:30');",
+    "-- [需人工確認] 欄位 attachment 的值無法以 SQL 字面值無損還原（型別 longblob）",
+    "-- （此列的 INSERT 無法產生）;",
+    "",
+    "-- ============================================================",
+    "-- #1 UPDATE orders SET status = 'cancelled' WHERE status = 'pending' AND placed_at < '2026-01-01'",
+    "-- 目標：shop.orders　回滾：完整",
+    "-- ============================================================",
+    "UPDATE `shop`.`orders` SET `status` = 'pending' WHERE `order_id` = 48127;",
+    "UPDATE `shop`.`orders` SET `status` = 'pending' WHERE `order_id` = 48133;",
+    "UPDATE `shop`.`orders` SET `status` = 'pending' WHERE `order_id` = 48140;",
+    "UPDATE `shop`.`orders` SET `status` = 'pending' WHERE `order_id` = 48152;",
+  ].join("\n"),
+};
 
 export const DEMO_SQL =
   "SELECT status, COUNT(*) AS orders, SUM(total_amount) AS revenue,\n" +

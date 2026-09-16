@@ -373,7 +373,7 @@ fn emit(app: &AppHandle, ev: AgentEvent) {
 }
 
 /// 用 OS 檔案總管開啟指定路徑（fire-and-forget；explorer 會回非零碼，不檢查）。
-fn open_path(path: &std::path::Path) {
+pub(crate) fn open_path(path: &std::path::Path) {
     #[cfg(windows)]
     let prog = "explorer";
     #[cfg(target_os = "macos")]
@@ -705,9 +705,9 @@ struct McpAttach {
     tool_names: Vec<&'static str>,
 }
 
-/// 一次性語句生成 / 改寫：零工具、單回合，不掛 MCP。
+/// 一次性語句生成 / 改寫 / 執行前審查：零工具、單回合，不掛 MCP。
 fn is_one_shot_mode(mode: &str) -> bool {
-    matches!(mode, "generate" | "edit")
+    matches!(mode, "generate" | "edit" | "review")
 }
 
 /// 由助手模式推導 Claude 的 CLI 旗標：採「允許清單 + dontAsk」而非黑名單。
@@ -724,7 +724,7 @@ fn claude_flags_for_mode(mode: &str) -> (&'static str, &'static str) {
         ),
         // 一次性語句生成 / 改寫（NL→SQL / NL→ES DSL / 編輯器改寫）：零工具、單回合，回覆即語句。
         // 空 allowedTools + dontAsk → 清單外一律自動拒絕（見下方 agent_send 略過旗標）。
-        "generate" | "edit" => ("dontAsk", ""),
+        "generate" | "edit" | "review" => ("dontAsk", ""),
         // 純問答 / 產生腳本文字（預設）：只放行唯讀與查資料工具。
         _ => ("dontAsk", "Read,Glob,Grep,WebSearch,WebFetch"),
     }
@@ -1252,7 +1252,9 @@ async fn llm_send(
     let sessions = state.llm_sessions.clone();
     let mode = mode.to_string();
     let system_prompt = system_prompt.map(String::from);
-    let persist_dir = config_dir.clone();
+    // 一次性模式沒有 session 可以續（前端每次都帶 sessionId = null），落地只會堆出一次一檔的歷史；
+    // 而審查提示可能夾帶前像樣本資料，更不該留在設定目錄裡。
+    let persist_dir = if is_one_shot_mode(&mode) { None } else { config_dir.clone() };
     let persist_provider = match cfg.kind {
         crate::llm::LlmKind::Anthropic => "anthropic-api",
         crate::llm::LlmKind::OpenAi => "openai-api",
@@ -1541,7 +1543,7 @@ mod tests {
         assert!(!a.contains(&"--max-turns".to_string()));
 
         // generate / edit：不掛 MCP、單回合、無 allowedTools。
-        for mode in ["generate", "edit"] {
+        for mode in ["generate", "edit", "review"] {
             let g = claude_args(mode, None, None, None, Some(&m));
             assert!(!g.contains(&"--mcp-config".to_string()), "{mode}");
             assert!(!g.contains(&"--allowedTools".to_string()), "{mode}");

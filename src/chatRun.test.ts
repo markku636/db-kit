@@ -4,6 +4,8 @@ import {
   classifyForRun,
   persistableRun,
   prepareStatements,
+  reviewOutcomeToChatRun,
+  routeToReviewRun,
   runFeedbackDisplay,
   runFeedbackPrompt,
   toChatRunResult,
@@ -433,5 +435,41 @@ describe("runFeedbackDisplay", () => {
 
   it("氣泡文字很短：整張表格貼進氣泡會把對話捲成表格牆", () => {
     expect(runFeedbackDisplay(mk({ rows: rowsOf(500) })).length).toBeLessThan(30);
+  });
+});
+
+describe("routeToReviewRun / reviewOutcomeToChatRun", () => {
+  it("只有支援的連線上的寫入語句改走審查並執行", () => {
+    const write = classifyForRun("DELETE FROM t WHERE id = 1", "mysql", { readonly: false, prod: false });
+    const read = classifyForRun("SELECT 1", "mysql", { readonly: false, prod: false });
+    expect(routeToReviewRun(write, "mysql")).toBe(true);
+    expect(routeToReviewRun(read, "mysql")).toBe(false);
+    const ext = classifyForRun("DELETE FROM t WHERE id = 1", "external", { readonly: false, prod: false });
+    expect(routeToReviewRun(ext, "external")).toBe(false);
+    const ro = classifyForRun("DELETE FROM t", "mysql", { readonly: true, prod: false });
+    expect(routeToReviewRun(ro, "mysql")).toBe(false);
+  });
+
+  it("合計影響列數；只備份不算執行；失敗帶原因", () => {
+    const stmt = (rows: number | null, ms: number | null) => ({
+      index: 0, sql: "x", op: "update", write: true, destructive: false, targets: [], method: "predicate",
+      estimated_rows: null, rollback: "full" as const, notes: [], status: "ok" as const, rows_affected: rows, elapsed_ms: ms,
+      error: null, files: [], diff: [], ddl_statements: 0, rollback_statements: 0, rollback_disabled: 0, rollback_exact: true,
+    });
+    const outcome = (status: "completed" | "backup_only" | "failed", stop: string | null = null) => ({
+      dir: "D:\bak\run",
+      rollback_preview: "",
+      diff_preview: "",
+      manifest: {
+        run_id: "r", mode: "execute" as const, status, stop_reason: stop, connection: "c", kind: "mysql" as const, database: "shop",
+        prod: false, started_at: "", finished_at: "", max_capture_rows: 10000, verdict: null,
+        statements: [stmt(2, 5), stmt(3, 7), stmt(null, null)], files: [],
+      },
+    });
+    expect(reviewOutcomeToChatRun("sql", outcome("completed"))).toEqual({
+      sql: "sql", columns: [], rows: [], rowsAffected: 5, truncated: false, error: null, ms: 12,
+    });
+    expect(reviewOutcomeToChatRun("sql", outcome("backup_only"))).toBeNull();
+    expect(reviewOutcomeToChatRun("sql", outcome("failed", "第 2 句執行失敗"))?.error).toBe("第 2 句執行失敗");
   });
 });

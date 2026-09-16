@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { ConnectionConfig, ConnGroup, DbKind } from "./api";
+import { ConnectionConfig, ConnGroup, DbKind, type ReviewRunOutcome } from "./api";
 import { loadReadonly, persistReadonly, setReadonlyFlag, type ReadonlyMap } from "./connReadonly";
 import { loadSession, saveQueryTabSession } from "./session";
 import { pruneQueryDrafts } from "./queryDrafts";
@@ -104,6 +104,9 @@ interface AppStore {
   // 收藏查詢管理視窗開啟狀態（跨 Sidebar / QueryPane 觸發；null = 關閉）。
   // seedSql 非 null → 直接開「新增」編輯模式並預填 SQL；editName 非 null → 開該筆「編輯」模式。
   savedMgr: { seedSql: string | null; editName: string | null } | null;
+  // 審查並執行對話框（查詢分頁工具列 / AI 助手的 SQL 區塊觸發；null = 關閉）。
+  // nonce 讓「以審查並執行回滾」在對話框已開啟時換一份腳本也會重新掛載。
+  reviewRun: (ReviewRunRequest & { nonce: number }) | null;
 
   setConnections: (cs: ConnectionConfig[]) => void;
   setConnGroups: (gs: ConnGroup[]) => void;
@@ -170,6 +173,18 @@ interface AppStore {
   // 開 / 關收藏查詢管理視窗。
   openSavedManager: (opts?: { seedSql?: string | null; editName?: string | null }) => void;
   closeSavedManager: () => void;
+  openReviewRun: (req: ReviewRunRequest) => void;
+  closeReviewRun: () => void;
+}
+
+/** 開啟審查並執行的請求。sql 為已代入具名參數的腳本；database 空字串 = 由後端判斷目前資料庫。 */
+export interface ReviewRunRequest {
+  connId: string;
+  database: string;
+  sql: string;
+  origin: "query" | "chat";
+  /** 產生備份或執行結束後呼叫（聊天室用來把結果掛回訊息）。 */
+  onDone?: (outcome: ReviewRunOutcome) => void;
 }
 
 // 上次關掉 app 時開著的查詢分頁（含停在哪一個）。各分頁的編輯器內容自己從 localStorage 讀
@@ -197,6 +212,7 @@ export const useStore = create<AppStore>((set) => ({
   savedQueries: loadSavedQueries(),
   snippets: loadSnippets(),
   savedMgr: null,
+  reviewRun: null,
 
   setConnReadonly: (id, ro) =>
     set((s) => {
@@ -438,6 +454,8 @@ export const useStore = create<AppStore>((set) => ({
   openSavedManager: (opts) =>
     set({ savedMgr: { seedSql: opts?.seedSql ?? null, editName: opts?.editName ?? null } }),
   closeSavedManager: () => set({ savedMgr: null }),
+  openReviewRun: (req) => set((s) => ({ reviewRun: { ...req, nonce: (s.reviewRun?.nonce ?? 0) + 1 } })),
+  closeReviewRun: () => set({ reviewRun: null }),
 }));
 
 // 分頁清單 / 作用中分頁一有變動就寫回工作階段，下次啟動據此還原。
