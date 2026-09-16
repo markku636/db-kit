@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, DbKind, RoutineInfo, QueryResult } from "./api";
-import { buildDropRoutine } from "./sql";
+import { buildDropRoutine, buildScopedDdl } from "./sql";
 import { parseRoutineParams, formatSignature } from "./routineParams";
 import { toast, uiConfirm } from "./ui";
 import { Modal, Button, Input } from "./ui/index";
@@ -17,11 +17,14 @@ const TYPE_LABEL: Record<string, string> = { procedure: "預存程序", function
 // 各資料庫可新增的 routine 種類。
 // external gateway 講 MySQL 方言（同 sql.ts 的 sqlLiteral / genUseDb / buildDropRoutine）；
 // 漏掉這列會讓「新增：」那排按鈕整個消失——qland 版只能改既有程序、不能新建。
+// 漏掉 mssql / oracle 那兩列，右鍵「新增程序…」進來會看不到種類按鈕、範本也落到 SQLite 的 CREATE TRIGGER。
 const NEW_TYPES: Record<string, string[]> = {
   mysql: ["procedure", "function", "trigger", "event"],
   mariadb: ["procedure", "function", "trigger", "event"],
   external: ["procedure", "function", "trigger", "event"],
   postgres: ["function", "procedure", "trigger"],
+  mssql: ["procedure", "function", "trigger"],
+  oracle: ["procedure", "function", "trigger"],
   sqlite: ["trigger"],
 };
 
@@ -38,6 +41,19 @@ function template(kind: DbKind, type: string, t: ReturnType<typeof useT>): strin
     if (type === "procedure") return "CREATE OR REPLACE PROCEDURE proc_name(p1 integer)\nLANGUAGE plpgsql AS $$\nBEGIN\n  -- ...\nEND;\n$$";
     return "-- " + t("觸發器需先有回傳 trigger 的函式") + "\nCREATE TRIGGER trg_name BEFORE INSERT ON table_name\nFOR EACH ROW EXECUTE FUNCTION trg_fn()";
   }
+  if (kind === "mssql") {
+    // T-SQL：參數以 @ 開頭、不加括號；不寫 schema 讓它落在使用者的預設 schema（通常 dbo）。
+    if (type === "procedure") return "CREATE PROCEDURE proc_name\n  @p1 INT\nAS\nBEGIN\n  SET NOCOUNT ON;\n  SELECT @p1 AS p1;\nEND";
+    if (type === "function") return "CREATE FUNCTION fn_name(@p1 INT)\nRETURNS INT\nAS\nBEGIN\n  RETURN @p1 + 1;\nEND";
+    return "CREATE TRIGGER trg_name ON table_name\nAFTER INSERT\nAS\nBEGIN\n  SET NOCOUNT ON;\n  -- SELECT * FROM inserted;\nEND";
+  }
+  if (kind === "oracle") {
+    // PL/SQL 都帶 OR REPLACE，存檔時不需先 DROP（見 openEdit 的 replace 判斷）。
+    if (type === "procedure") return "CREATE OR REPLACE PROCEDURE proc_name(p1 IN NUMBER) AS\nBEGIN\n  NULL;\nEND;";
+    if (type === "function") return "CREATE OR REPLACE FUNCTION fn_name(p1 IN NUMBER) RETURN NUMBER AS\nBEGIN\n  RETURN p1 + 1;\nEND;";
+    return "CREATE OR REPLACE TRIGGER trg_name\nBEFORE INSERT ON table_name\nFOR EACH ROW\nBEGIN\n  NULL;\nEND;";
+  }
+  // SQLite：只有觸發器。
   return "CREATE TRIGGER trg_name AFTER INSERT ON table_name\nBEGIN\n  -- ...\nEND";
 }
 
@@ -110,7 +126,8 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
       const def = await api.routineDefinition(connId, db, r.name, r.routine_type);
       setSqlText(def);
       // PG 函式 / 程序定義含 OR REPLACE（不需先刪）；但 PG 觸發器無 OR REPLACE，與 MySQL/SQLite 一樣需先刪後建。
-      setReplace(kind !== "postgres" || r.routine_type === "trigger");
+      // Oracle 的程序 / 函式 / 觸發器定義一律 CREATE OR REPLACE，全都不需先刪。
+      setReplace(kind === "oracle" ? false : kind !== "postgres" || r.routine_type === "trigger");
     } catch (e: any) {
       toast.error(e?.message ?? t("讀取定義失敗"));
       setMode("list"); // 讀不到定義就退回清單，不留一個空編輯器讓人以為程序是空的
@@ -161,7 +178,8 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
     setBusy(true);
     try {
       if (replace && editingRoutine) await api.execDdl(connId, buildDropRoutine(kind, db, editingRoutine));
-      await api.execDdl(connId, sqlText);
+      // SQL Server 的 CREATE 得綁進所選資料庫執行，否則建到登入的預設庫（多半是 master）；其他 kind 原樣。
+      await api.execDdl(connId, buildScopedDdl(kind, db, sqlText));
       toast.success(t("已執行"));
       setList(null); // 建立 / 取代後清單已過期，回到清單時由下方 effect 重查
       setMode("list");

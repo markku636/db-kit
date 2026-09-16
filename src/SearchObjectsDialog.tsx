@@ -40,6 +40,8 @@ function typesForKind(kind: DbKind): string[] {
       return ["collection"];
     case "redis":
       return ["key"];
+    case "oracle": // 後端 oracle.rs 的 search_objects 不產出 foreign_key
+      return ["table", "view", "column", "index", "procedure", "function", "trigger"];
     default: // mysql / postgres
       return ["table", "view", "column", "index", "procedure", "function", "trigger", "foreign_key"];
   }
