@@ -5,6 +5,7 @@
 本文件彙整專案的設計決策與規劃。其他細節文件見同目錄：
 
 - [架構設計](./architecture.md)
+- [結構比對使用指南](./compare.md)
 - [連線生命週期與資源釋放](./connection-lifecycle.md)
 - [Navicat 操作習慣復刻](./navicat-ux.md)
 - [開發路線圖](./roadmap.md)

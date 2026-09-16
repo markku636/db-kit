@@ -330,7 +330,7 @@ dbk --conn prod server-info
 
 ### `compare` / `schema` — 結構 / 資料比對與快照
 
-與 GUI 的「結構比對」共用同一套 Rust 引擎（`compare data` 是 CLI 專屬——GUI 只做結構）。來源以全域連線旗標指定，目標以 `--dst` 指定（已存連線名 / id、連線字串，或 `.json` 快照檔）。差異一律以**來源為基準**：產生的同步 SQL 是「讓目標變成來源」。支援 MySQL / MariaDB / PostgreSQL / SQLite / SQL Server / Oracle。
+與 GUI 的「結構比對」共用同一套 Rust 引擎（`compare data` 是 CLI 專屬——GUI 只做結構；圖形介面的操作步驟見 **[結構比對使用指南](./compare.md)**）。來源以全域連線旗標指定，目標以 `--dst` 指定（已存連線名 / id、連線字串，或 `.json` 快照檔）。差異一律以**來源為基準**：產生的同步 SQL 是「讓目標變成來源」。支援 MySQL / MariaDB / PostgreSQL / SQLite / SQL Server / Oracle。
 
 ```bash
 # 結構快照：整庫表 / 視圖 / 程序定義存成 JSON，之後可跟即時結構或另一份快照比

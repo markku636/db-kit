@@ -107,6 +107,8 @@
   <img src="docs/screenshots/10-schema-compare.png" alt="整庫結構比對與同步腳本" width="860">
 </p>
 
+> 逐步操作、四種比對情境（兩個庫 / 單一資料表 / 跨連線 / 對快照）與各資料庫的注意事項，見 **[結構比對使用指南](./docs/compare.md)**。
+
 **整庫文件** — 右鍵資料庫 →「資料庫文件…」，把每張表的欄位、型別、可空、鍵、預設值與註解整理成一份可交付的文件，Markdown 與 HTML 兩種格式，附目錄錨點：
 
 <p align="center">
