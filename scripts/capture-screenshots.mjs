@@ -63,6 +63,31 @@ async function openOrders(page) {
   await sleep(1000);
 }
 
+// 連線 prod-mysql → 資料庫 shop 右鍵 →「結構比對…」（整庫）
+async function openCompareDialog(page) {
+  // .first()：連線開起來之後「prod-mysql」在分頁列與常用區也會出現，嚴格模式會抱怨多個命中。
+  // 不能改成「已經有 shop 就跳過」——常用釘選區一開始就有 shop，那樣連線永遠不會展開。
+  await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+  await sleep(1200);
+  await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+  await sleep(400);
+  await page.getByText("結構比對…", { exact: true }).click();
+  await sleep(1200);
+}
+
+// 開對話框 → 目標選 shop_archive → 按「比對選取的 N 表」→ 等結果出來
+async function runCompare(page) {
+  await openCompareDialog(page);
+  await page.locator("select")
+    .filter({ has: page.locator('option[value="shop_archive"]') })
+    .filter({ hasNot: page.locator('option[value="information_schema"]') })
+    .first()
+    .selectOption("shop_archive");
+  await sleep(500);
+  await page.getByRole("button", { name: /比對選取的/ }).click();
+  await sleep(2400);
+}
+
 const SHOTS = {
   async "01-data-grid"(page) {
     await openOrders(page);
@@ -151,27 +176,85 @@ const SHOTS = {
   // 整庫結構 / 資料比對：資料庫右鍵 →「結構 / 資料比對…」，目標改成 shop_archive（同連線跨庫，
   // 預設目標與來源同庫會被擋下），模式選「兩者」，按下比對後拍逐表狀態 + 彙總同步腳本。
   async "10-schema-compare"(page) {
-    await page.getByText("prod-mysql", { exact: true }).dblclick();
-    await sleep(1200);
-    await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
-    await sleep(400);
-    await page.getByText("結構比對…", { exact: true }).click();
-    await sleep(1200);
-    // 認出對話框的「目標資料庫」下拉：頁面上另有一個列出所有庫（含系統庫）的下拉，
-    // 只靠 shop_archive 會選到它；比對對話框這個已濾掉系統庫，用 hasNot 把它區分出來。
-    await page.locator("select")
-      .filter({ has: page.locator('option[value="shop_archive"]') })
-      .filter({ hasNot: page.locator('option[value="information_schema"]') })
-      .first()
-      .selectOption("shop_archive");
-    await sleep(500);
-    await page.getByRole("button", { name: /比對選取的/ }).click();
-    await sleep(2200);
+    await runCompare(page);
     // 順便把 AI 總結跑出來——那一格空著時截圖看不出這個功能存在。
     await page.getByRole("button", { name: "產生總結", exact: true }).click();
     await page.waitForFunction(() => document.body.innerText.includes("建議順序"), null, { timeout: 15_000 });
     await sleep(400);
     await shot(page, "10-schema-compare");
+  },
+
+  // ── docs/compare.md 的教學圖 ──────────────────────────────────────────
+  // 與 10-schema-compare 的差別：那張是「功能長怎樣」的門面圖，這幾張是「第幾步該按哪裡」，
+  // 所以刻意停在中間狀態（選單打開、還沒比、確認框跳出來）。
+
+  // 入口：資料庫右鍵選單，同時看得到「結構比對…」與「儲存結構快照…」。
+  async "compare-guide-01-menu"(page) {
+    await page.getByText("prod-mysql", { exact: true }).dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+    await sleep(500);
+    await shot(page, "compare-guide-01-menu");
+  },
+
+  // 比對前：目標選擇器（連線 / 資料庫）+ 左欄的資料表多選。
+  async "compare-guide-02-setup"(page) {
+    await openCompareDialog(page);
+    await sleep(600);
+    await shot(page, "compare-guide-02-setup");
+  },
+
+  // 單一資料表：多一個「資料表」下拉，可以比不同名字的兩張表。
+  async "compare-guide-03-table"(page) {
+    await page.getByText("prod-mysql", { exact: true }).dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click();
+    await sleep(700);
+    await page.getByText("資料表", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="orders"]', { timeout: 8000 });
+    await sleep(300);
+    await page.locator('[data-tree-table="orders"]').first().click({ button: "right" });
+    await sleep(400);
+    await page.getByText("結構比對…", { exact: true }).click();
+    await sleep(1400);
+    await shot(page, "compare-guide-03-table");
+  },
+
+  // 目標改用快照檔：載入後會顯示種類 / 庫名 / 擷取時間 / 表數。
+  async "compare-guide-04-snapshot"(page) {
+    await openCompareDialog(page);
+    await page.getByRole("radio", { name: "快照檔案", exact: true }).click();
+    await sleep(400);
+    await page.getByRole("button", { name: /選擇快照檔/ }).click();
+    await sleep(900);
+    await shot(page, "compare-guide-04-snapshot");
+  },
+
+  // 差異細節：點結果列展開某張表的欄位 / 索引 / 外鍵差異與並排 DDL。
+  async "compare-guide-05-drilldown"(page) {
+    await runCompare(page);
+    await page.locator('button:has-text("orders")').first().click();
+    await sleep(1200);
+    await shot(page, "compare-guide-05-drilldown");
+  },
+
+  // 破壞性確認框：勾了「包含破壞性語句」再按「直接執行」才會跳出來。
+  async "compare-guide-06-confirm"(page) {
+    // 示範資料把 prod-mysql 設成唯讀（那正是 10-schema-compare 那張「無法執行」的由來），
+    // 但這張要拍的就是執行前的確認框，所以先關掉唯讀。
+    // 不先 dblclick：連線節點不展開也右鍵得到，而 runCompare 自己會展開——
+    // 這裡多按一次反而會把剛展開的樹收回去。
+    await page.getByText("prod-mysql", { exact: true }).first().click({ button: "right" });
+    await sleep(400);
+    await page.getByText("關閉唯讀模式", { exact: true }).click();
+    await sleep(500);
+    await runCompare(page);
+    // 破壞性那組預設不勾，勾了「直接執行」才送得出去。
+    await page.locator('label:has-text("包含破壞性語句") input[type="checkbox"]').first().check();
+    await sleep(400);
+    await page.getByRole("button", { name: "直接執行", exact: true }).click();
+    await sleep(800);
+    await shot(page, "compare-guide-06-confirm");
   },
 
   // 整庫資料字典：資料庫右鍵 →「資料庫文件…」，等逐表結構抓完後拍 Markdown 預覽。

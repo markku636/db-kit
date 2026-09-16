@@ -325,6 +325,11 @@ export const STORAGE_SEED = {
   ],
 };
 
+// 檔案對話框的假回覆。開檔指向一份「上個月的結構快照」，讓比對目標可以選快照檔；
+// 存檔隨便給個桌面路徑，匯出報告 / 存快照的 toast 才有東西可顯示。
+export const PICKED_OPEN_PATH = "C:\\Users\\demo\\Desktop\\shop-schema-20260815-0900.json";
+export const PICKED_SAVE_PATH = "C:\\Users\\demo\\Desktop\\shop-compare.md";
+
 // 結構比對報告的 AI 總結：shim 會一段一段 emit 成 agent-stream 事件，
 // 內容要對得上 diff_schema / generate_schema_sync 的假差異，否則截圖看起來像模型在胡說。
 export const AI_SUMMARY_CHUNKS = [

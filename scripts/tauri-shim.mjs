@@ -102,6 +102,12 @@ export function installShim(fx) {
     run_query_multi: ({ sql }) => queryFor(sql),
     // DDL 執行（結構比對「直接執行」會打；早於 v0.30 就缺這個 handler）。
     exec_ddl: () => null,
+    // 寫檔類：對話框 handler 會回假路徑，所以這些後續步驟也要有回應，否則匯出一按就是紅字。
+    save_text_file: () => null,
+    export_rows: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
+    export_rows_multi: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
+    export_query: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
+    export_table: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
     // ---- 結構 / 資料比對（v0.30）：回固定形狀的假結果，讓兩個對話框能開、能點、能匯出 ----
     capture_schema: ({ id, database }) => ({
       kind: id === "c-pg" ? "postgres" : "mysql",
@@ -150,7 +156,13 @@ export function installShim(fx) {
       };
     },
     save_schema_snapshot: ({ path }) => ({ path, bytes: 48_213, tables: 5, views: 2, routines: 0, captured_at_ms: fx.now }),
-    load_schema_snapshot: () => ({ kind: "mysql", database: "shop", captured_at_ms: fx.now - 86_400_000, label: "snapshot", tables: [], views: [], routines: [], warnings: [] }),
+    // 快照載入：回一份「上個月的 shop」——沿用 capture_schema 的形狀，這樣以快照為目標比對時
+    // 走的是跟即時連線完全相同的路徑，選擇器上的「12 表」也才不是 0。
+    load_schema_snapshot: () => ({
+      ...handlers.capture_schema({ id: "c-mysql", database: "shop" }),
+      captured_at_ms: fx.now - 31 * 86_400_000,
+      label: "snapshot",
+    }),
     compare_data_table: ({ src, dst, options }) => ({
       src: `${src.database}.${src.table}`, dst: `${dst.database}.${dst.table}`, pk: ["order_id"], columns: ["order_id", "status", "total_amount"],
       skipped_src_columns: [], skipped_dst_columns: ["legacy_flag"],
@@ -236,6 +248,10 @@ export function installShim(fx) {
       }
       if (cmd === "plugin:event|unlisten") return unregisterListener(args?.event, args?.eventId).then(() => null);
       if (cmd.startsWith("plugin:event|")) return Promise.resolve(1);
+      // 檔案對話框：回一個假路徑，開 / 存檔的後續流程（載入快照、匯出報告）才走得完。
+      // 回 null 等於「使用者按取消」，那條路徑在截圖與冒煙檢查裡都驗不到東西。
+      if (cmd === "plugin:dialog|open") return Promise.resolve(fx.PICKED_OPEN_PATH);
+      if (cmd === "plugin:dialog|save") return Promise.resolve(fx.PICKED_SAVE_PATH);
       if (cmd.startsWith("plugin:")) return Promise.resolve(null);
       const h = handlers[cmd];
       if (!h) { unknown.push(cmd); return Promise.reject(new Error(`screenshot shim: 未實作的 command ${cmd}`)); }
