@@ -437,7 +437,12 @@ const CASES = {
     const star = page.locator('button[title*="一鍵收藏目前查詢"], button[title*="已收藏為"]');
     // 寬度門檻刻意訂得寬鬆：查詢面板還要跟側欄、右側詳細資料分寬度，1280 的視窗實際只留給
     // 工具列 ~340px（量過），所以「完整標籤」得在很寬的視窗才看得到。
-    await page.setViewportSize({ width: 1920, height: 900 });
+    //
+    // 2026-09-16 由 1920 上調到 2200：AI 那組按鈕進了工具列之後實測（1440 / 1600 / 1920 /
+    // 2200 / 2560）門檻整個往上移 —— 1440 與 1600 連格式化鈕都折進「更多」，1920 只剩圖示，
+    // 要到 2200 才看得到文字。本案驗的是「三階自適應會動」，不是某個像素值，所以改門檻而不是
+    // 改元件；但這代表**一般 1920 螢幕上的查詢工具列已經是純圖示**，工具列是否過擠值得回頭看。
+    await page.setViewportSize({ width: 2200, height: 900 });
     await sleep(700);
     check("寬版：格式化鈕帶文字標籤", (await fmt.first().innerText()).includes("格式化"), await fmt.first().innerText());
 
@@ -459,8 +464,8 @@ const CASES = {
     check("窄版：建構器落到「更多」選單裡", more.some((i) => i.includes("建構器")));
     await closeMenu(page);
 
-    // 拉回寬版要還原（遲滯不能把它永久卡在降階狀態）。
-    await page.setViewportSize({ width: 1920, height: 900 });
+    // 拉回寬版要還原（遲滯不能把它永久卡在降階狀態）。門檻同上，2026-09-16 起是 2200。
+    await page.setViewportSize({ width: 2200, height: 900 });
     await sleep(900);
     check(
       "拉回寬版：格式化鈕回到主列且帶文字",
