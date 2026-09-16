@@ -21,7 +21,7 @@
 //! - Codex 的 `exec --json` 沒有 token 級增量事件，整段回答會在 `item.completed` 一次到齊；
 //!   Claude 走 `--include-partial-messages` 則是逐字串流。前端兩者都只是「附加文字」，無需分支。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Instant;
 
@@ -31,7 +31,13 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 use crate::commands::AppState;
+use crate::dbtools::DbToolCtx;
 use crate::error::{AppError, AppResult};
+
+/// 掛給 CLI 供應商的 MCP 伺服器名稱（Claude 的工具名會變成 `mcp__dbkit__<tool>`）。
+const MCP_SERVER_NAME: &str = "dbkit";
+/// 工具結果給前端的預覽長度（字元），與 `llm::agent_loop` 同值。
+const TOOL_PREVIEW_CHARS: usize = 600;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -108,13 +114,16 @@ pub struct AgentStatus {
     version: Option<String>,
     logged_in: bool,
     path: Option<String>,
+    /// 資料庫工具的提供方式：HTTP 供應商為 `"builtin"`；CLI 供應商為找到的 `dbk` 路徑，
+    /// 找不到為 `None`（前端據此顯示「需要 dbk」）。
+    db_tools: Option<String>,
 }
 
 /// 推送給前端的串流事件（事件名 `agent-stream`）。扁平結構，欄位依 kind 取捨。
-#[derive(Clone, Serialize, Default)]
+#[derive(Clone, Serialize, Default, Debug, PartialEq)]
 struct AgentEvent {
     req_id: String,
-    /// "system" | "text" | "tool" | "result" | "error" | "done"
+    /// "system" | "text" | "tool" | "tool_result" | "result" | "error" | "done"
     kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
@@ -130,6 +139,60 @@ struct AgentEvent {
     duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<i32>,
+    // ---- 工具呼叫細節（kind = tool / tool_result）：讓使用者看到助手跑了哪條 SQL、拿回幾列 ----
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_input: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_output_preview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_rows: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_truncated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_ms: Option<u64>,
+}
+
+fn preview(s: &str) -> String {
+    let mut p: String = s.chars().take(TOOL_PREVIEW_CHARS).collect();
+    if s.chars().count() > TOOL_PREVIEW_CHARS {
+        p.push('…');
+    }
+    p
+}
+
+/// 工具輸入的顯示字串：查詢類直接給 query / sql；其餘給緊湊 JSON。
+fn tool_input_display(input: &serde_json::Value) -> Option<String> {
+    for k in ["query", "sql", "table", "path"] {
+        if let Some(s) = input.get(k).and_then(|v| v.as_str()) {
+            let mut out = s.trim().to_string();
+            if k == "table" {
+                if let Some(db) = input.get("database").and_then(|v| v.as_str()).filter(|d| !d.trim().is_empty()) {
+                    out = format!("{}.{}", db.trim(), out);
+                }
+            }
+            return Some(out);
+        }
+    }
+    match input {
+        serde_json::Value::Object(m) if m.is_empty() => None,
+        serde_json::Value::Null => None,
+        other => Some(other.to_string()),
+    }
+}
+
+/// `mcp__dbkit__run_query` / `dbkit:run_query` → `run_query`（前端徽章只要工具名）。
+fn strip_mcp_prefix(name: &str) -> String {
+    let n = name.strip_prefix("mcp__").unwrap_or(name);
+    let n = match n.split_once("__") {
+        Some((_, rest)) if name.starts_with("mcp__") => rest,
+        _ => n,
+    };
+    match n.split_once(':') {
+        Some((_, rest)) => rest.to_string(),
+        None => n.to_string(),
+    }
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -365,110 +428,127 @@ pub async fn open_external(url: String) -> AppResult<()> {
 
 // ---- Claude Code：stream-json 解析 ----
 
-/// 解析單行 NDJSON 並轉成前端事件。
-/// CLI 的 stream-json 外層為包裝型別（system/assistant/result/stream_event），
+/// 解析單行 NDJSON 並轉成前端事件（純函式，方便測試；由呼叫端逐一 emit）。
+/// CLI 的 stream-json 外層為包裝型別（system/assistant/user/result/stream_event），
 /// 非原始 API 事件；token 級增量在 `--include-partial-messages` 的 `stream_event` 裡。
-fn parse_claude_line(app: &AppHandle, req: &str, line: &str) {
+///
+/// 工具呼叫的細節走兩條路：`stream_event.content_block_start` 先亮徽章（沒有輸入），
+/// 完整的 `assistant` 訊息再補上 tool_use 的 id 與 input；`user` 訊息裡的 tool_result 給結果預覽。
+fn claude_events(req: &str, line: &str) -> Vec<AgentEvent> {
+    let mut out = Vec::new();
     let v: serde_json::Value = match serde_json::from_str(line) {
         Ok(v) => v,
-        Err(_) => return,
+        Err(_) => return out,
     };
+    let ev = |kind: &str| AgentEvent { req_id: req.to_string(), kind: kind.to_string(), ..Default::default() };
     match v.get("type").and_then(|t| t.as_str()) {
         Some("system") => {
             if v.get("subtype").and_then(|s| s.as_str()) == Some("init") {
-                let session_id = v
-                    .get("session_id")
-                    .and_then(|s| s.as_str())
-                    .map(String::from);
+                let session_id = v.get("session_id").and_then(|s| s.as_str()).map(String::from);
                 let model = v
                     .get("model")
                     .and_then(|m| m.as_str())
-                    .or_else(|| {
-                        v.get("data")
-                            .and_then(|d| d.get("model"))
-                            .and_then(|m| m.as_str())
-                    })
+                    .or_else(|| v.get("data").and_then(|d| d.get("model")).and_then(|m| m.as_str()))
                     .map(String::from);
-                emit(
-                    app,
-                    AgentEvent {
-                        req_id: req.to_string(),
-                        kind: "system".to_string(),
-                        session_id,
-                        model,
-                        ..Default::default()
-                    },
-                );
+                out.push(AgentEvent { session_id, model, ..ev("system") });
             }
         }
         Some("stream_event") => {
-            let ev = match v.get("event") {
-                Some(e) => e,
-                None => return,
-            };
-            match ev.get("type").and_then(|t| t.as_str()) {
+            let Some(e) = v.get("event") else { return out };
+            match e.get("type").and_then(|t| t.as_str()) {
                 Some("content_block_delta") => {
-                    if let Some(d) = ev.get("delta") {
+                    if let Some(d) = e.get("delta") {
                         if d.get("type").and_then(|t| t.as_str()) == Some("text_delta") {
                             if let Some(t) = d.get("text").and_then(|t| t.as_str()) {
-                                emit(
-                                    app,
-                                    AgentEvent {
-                                        req_id: req.to_string(),
-                                        kind: "text".to_string(),
-                                        text: Some(t.to_string()),
-                                        ..Default::default()
-                                    },
-                                );
+                                out.push(AgentEvent { text: Some(t.to_string()), ..ev("text") });
                             }
                         }
                     }
                 }
                 Some("content_block_start") => {
-                    if let Some(cb) = ev.get("content_block") {
+                    if let Some(cb) = e.get("content_block") {
                         if cb.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                            let name = cb
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("tool")
-                                .to_string();
-                            emit(
-                                app,
-                                AgentEvent {
-                                    req_id: req.to_string(),
-                                    kind: "tool".to_string(),
-                                    tool: Some(name),
-                                    ..Default::default()
-                                },
-                            );
+                            let name = cb.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                            out.push(AgentEvent {
+                                tool: Some(strip_mcp_prefix(name)),
+                                tool_id: cb.get("id").and_then(|i| i.as_str()).map(String::from),
+                                ..ev("tool")
+                            });
                         }
                     }
                 }
                 _ => {}
             }
         }
+        // 完整的助理訊息：補上每個 tool_use 的 id 與輸入（串流開頭事件拿不到 input）。
+        Some("assistant") => {
+            for cb in content_blocks(&v) {
+                if cb.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                    continue;
+                }
+                let name = cb.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                out.push(AgentEvent {
+                    tool: Some(strip_mcp_prefix(name)),
+                    tool_id: cb.get("id").and_then(|i| i.as_str()).map(String::from),
+                    tool_input: cb.get("input").and_then(tool_input_display),
+                    ..ev("tool")
+                });
+            }
+        }
+        // 工具結果（CLI 把它包成 user 訊息）：給前端結果預覽，SQL 有沒有跑成功一眼可見。
+        Some("user") => {
+            for cb in content_blocks(&v) {
+                if cb.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                    continue;
+                }
+                let text = tool_result_text(cb.get("content"));
+                let is_error = cb.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false);
+                out.push(AgentEvent {
+                    tool_id: cb.get("tool_use_id").and_then(|i| i.as_str()).map(String::from),
+                    tool_output_preview: Some(preview(&text)),
+                    is_error: Some(is_error),
+                    ..ev("tool_result")
+                });
+            }
+        }
         Some("result") => {
-            let session_id = v
-                .get("session_id")
-                .and_then(|s| s.as_str())
-                .map(String::from);
+            let session_id = v.get("session_id").and_then(|s| s.as_str()).map(String::from);
             let is_error = v.get("is_error").and_then(|b| b.as_bool());
             let text = v.get("result").and_then(|s| s.as_str()).map(String::from);
             let duration_ms = v.get("duration_ms").and_then(|d| d.as_u64());
-            emit(
-                app,
-                AgentEvent {
-                    req_id: req.to_string(),
-                    kind: "result".to_string(),
-                    session_id,
-                    is_error,
-                    text,
-                    duration_ms,
-                    ..Default::default()
-                },
-            );
+            out.push(AgentEvent { session_id, is_error, text, duration_ms, ..ev("result") });
         }
         _ => {}
+    }
+    out
+}
+
+/// `message.content[]`（找不到回空）。
+fn content_blocks(v: &serde_json::Value) -> Vec<&serde_json::Value> {
+    v.get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+        .map(|a| a.iter().collect())
+        .unwrap_or_default()
+}
+
+/// tool_result 的 content 可能是字串或 `[{type:"text",text}]` 陣列；取出純文字。
+fn tool_result_text(content: Option<&serde_json::Value>) -> String {
+    match content {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Array(a)) => a
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
+}
+
+fn parse_claude_line(app: &AppHandle, req: &str, line: &str) {
+    for e in claude_events(req, line) {
+        emit(app, e);
     }
 }
 
@@ -493,76 +573,88 @@ fn codex_tool_label(kind: &str) -> Option<&'static str> {
     }
 }
 
-/// 解析 `codex exec --json` 的單行 JSONL。
+/// MCP 工具項目的顯示名：`item.tool`（去掉伺服器前綴）；拿不到退回 "MCP"。
+fn codex_mcp_tool_name(item: &serde_json::Value) -> String {
+    item.get("tool")
+        .or_else(|| item.get("name"))
+        .and_then(|t| t.as_str())
+        .map(strip_mcp_prefix)
+        .unwrap_or_else(|| "MCP".to_string())
+}
+
+/// 解析 `codex exec --json` 的單行 JSONL（純函式，方便測試）。
 /// 事件族：thread.started / turn.started / turn.completed / turn.failed / item.* / error。
 /// 與 Claude 最大的差異是「沒有 token 級增量」：整段回答在 item.completed 一次給完。
-fn parse_codex_line(app: &AppHandle, req: &str, line: &str, st: &mut CodexTurn, started: Instant) {
+/// 欄位名依 Codex 公開輸出格式；解析一律寬鬆（拿不到就略過），版本差異不至於讓整輪失敗。
+fn codex_events(req: &str, line: &str, st: &mut CodexTurn, started: Instant) -> Vec<AgentEvent> {
+    let mut out = Vec::new();
     let v: serde_json::Value = match serde_json::from_str(line) {
         Ok(v) => v,
-        Err(_) => return,
+        Err(_) => return out,
     };
-    let kind = match v.get("type").and_then(|t| t.as_str()) {
-        Some(k) => k,
-        None => return,
-    };
+    let Some(kind) = v.get("type").and_then(|t| t.as_str()) else { return out };
+    let ev = |kind: &str| AgentEvent { req_id: req.to_string(), kind: kind.to_string(), ..Default::default() };
     match kind {
         "thread.started" => {
-            let id = v
-                .get("thread_id")
-                .and_then(|s| s.as_str())
-                .map(String::from);
+            let id = v.get("thread_id").and_then(|s| s.as_str()).map(String::from);
             st.session_id = id.clone();
-            emit(
-                app,
-                AgentEvent {
-                    req_id: req.to_string(),
-                    kind: "system".to_string(),
-                    session_id: id,
-                    ..Default::default()
-                },
-            );
+            out.push(AgentEvent { session_id: id, ..ev("system") });
         }
         "item.started" => {
-            let item_type = v
-                .get("item")
-                .and_then(|i| i.get("type"))
-                .and_then(|t| t.as_str())
-                .unwrap_or("");
-            if let Some(label) = codex_tool_label(item_type) {
-                emit(
-                    app,
-                    AgentEvent {
-                        req_id: req.to_string(),
-                        kind: "tool".to_string(),
-                        tool: Some(label.to_string()),
-                        ..Default::default()
-                    },
-                );
+            let Some(item) = v.get("item") else { return out };
+            let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if item_type == "mcp_tool_call" {
+                out.push(AgentEvent {
+                    tool: Some(codex_mcp_tool_name(item)),
+                    tool_id: item.get("id").and_then(|i| i.as_str()).map(String::from),
+                    tool_input: item.get("arguments").and_then(tool_input_display),
+                    ..ev("tool")
+                });
+            } else if let Some(label) = codex_tool_label(item_type) {
+                out.push(AgentEvent { tool: Some(label.to_string()), ..ev("tool") });
             }
         }
         "item.completed" => {
-            let item = match v.get("item") {
-                Some(i) => i,
-                None => return,
-            };
-            // 只把 agent_message 當回答內容；reasoning 與工具項目不進聊天氣泡。
-            if item.get("type").and_then(|t| t.as_str()) != Some("agent_message") {
-                return;
-            }
-            if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                if text.is_empty() {
-                    return;
+            let Some(item) = v.get("item") else { return out };
+            match item.get("type").and_then(|t| t.as_str()) {
+                // 只把 agent_message 當回答內容；reasoning 與工具項目不進聊天氣泡。
+                Some("agent_message") => {
+                    if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                        if text.is_empty() {
+                            return out;
+                        }
+                        st.last_text = Some(text.to_string());
+                        out.push(AgentEvent { text: Some(text.to_string()), ..ev("text") });
+                    }
                 }
-                st.last_text = Some(text.to_string());
-                emit(
-                    app,
-                    AgentEvent {
-                        req_id: req.to_string(),
-                        kind: "text".to_string(),
-                        text: Some(text.to_string()),
-                        ..Default::default()
-                    },
-                );
+                // MCP 工具結果：給前端預覽（result 可能是字串 / 物件 / content 陣列）。
+                Some("mcp_tool_call") => {
+                    let err = item.get("error").map(|e| match e {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.get("message").and_then(|m| m.as_str()).map(String::from).unwrap_or_else(|| other.to_string()),
+                    });
+                    let text = match (&err, item.get("result")) {
+                        (Some(e), _) => e.clone(),
+                        (None, Some(r)) => {
+                            let inner = r.get("content").or(Some(r));
+                            match inner {
+                                Some(serde_json::Value::Array(_)) => tool_result_text(inner),
+                                Some(serde_json::Value::String(s)) => s.clone(),
+                                Some(other) => other.to_string(),
+                                None => String::new(),
+                            }
+                        }
+                        (None, None) => String::new(),
+                    };
+                    out.push(AgentEvent {
+                        tool: Some(codex_mcp_tool_name(item)),
+                        tool_id: item.get("id").and_then(|i| i.as_str()).map(String::from),
+                        tool_output_preview: Some(preview(&text)),
+                        is_error: Some(err.is_some() || item.get("status").and_then(|s| s.as_str()) == Some("failed")),
+                        ..ev("tool_result")
+                    });
+                }
+                _ => {}
             }
         }
         "turn.completed" | "turn.failed" => {
@@ -577,56 +669,62 @@ fn parse_codex_line(app: &AppHandle, req: &str, line: &str, st: &mut CodexTurn, 
             } else {
                 st.last_text.clone()
             };
-            emit(
-                app,
-                AgentEvent {
-                    req_id: req.to_string(),
-                    kind: "result".to_string(),
-                    session_id: st.session_id.clone(),
-                    is_error: Some(failed),
-                    text,
-                    duration_ms: Some(started.elapsed().as_millis() as u64),
-                    ..Default::default()
-                },
-            );
+            out.push(AgentEvent {
+                session_id: st.session_id.clone(),
+                is_error: Some(failed),
+                text,
+                duration_ms: Some(started.elapsed().as_millis() as u64),
+                ..ev("result")
+            });
         }
         "error" => {
-            let msg = v
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("")
-                .to_string();
-            emit(
-                app,
-                AgentEvent {
-                    req_id: req.to_string(),
-                    kind: "error".to_string(),
-                    text: Some(msg),
-                    ..Default::default()
-                },
-            );
+            let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+            out.push(AgentEvent { text: Some(msg), ..ev("error") });
         }
         _ => {}
+    }
+    out
+}
+
+fn parse_codex_line(app: &AppHandle, req: &str, line: &str, st: &mut CodexTurn, started: Instant) {
+    for e in codex_events(req, line, st, started) {
+        emit(app, e);
     }
 }
 
 // ---- 指令組裝 ----
 
+/// 掛給 CLI 供應商的 `dbk mcp` 伺服器描述。每次送出各建一份 Claude 用的設定檔，跑完即刪。
+struct McpAttach {
+    /// Claude：`--mcp-config` 指向的 JSON 檔。
+    config_path: PathBuf,
+    /// dbk 執行檔與參數（Codex 以 `-c mcp_servers.dbkit.*` 直接帶）。
+    command: String,
+    args: Vec<String>,
+    /// 此連線種類有的工具名（決定 Claude `--allowedTools` 要放行哪些 `mcp__dbkit__<name>`）。
+    tool_names: Vec<&'static str>,
+}
+
+/// 一次性語句生成 / 改寫：零工具、單回合，不掛 MCP。
+fn is_one_shot_mode(mode: &str) -> bool {
+    matches!(mode, "generate" | "edit")
+}
+
 /// 由助手模式推導 Claude 的 CLI 旗標：採「允許清單 + dontAsk」而非黑名單。
 /// dontAsk 會自動拒絕清單外的所有工具（不會卡住等待輸入），
-/// 因此 shell（Windows 是 PowerShell、類 Unix 是 Bash）、所有 MCP 工具、
-/// Task / Workflow / Skill 等一律被擋下，與平台無關。
+/// 因此 shell（Windows 是 PowerShell、類 Unix 是 Bash）、其他 MCP 伺服器、
+/// Task / Workflow / Skill 等一律被擋下，與平台無關。只有我們自己掛的 `dbkit` MCP 工具會被逐一放行。
 fn claude_flags_for_mode(mode: &str) -> (&'static str, &'static str) {
     // (permission_mode, allowed_tools)
     match mode {
-        // 可寫腳本檔：額外放行寫檔 / 改檔（限工作資料夾），仍不放行 shell / MCP。
+        // 可寫腳本檔：額外放行寫檔 / 改檔（限工作資料夾），仍不放行 shell。
         "agent" => (
             "dontAsk",
             "Read,Glob,Grep,Write,Edit,MultiEdit,WebSearch,WebFetch",
         ),
-        // 一次性語句生成（NL→SQL / NL→ES DSL）：零工具、單回合，回覆即語句。
+        // 一次性語句生成 / 改寫（NL→SQL / NL→ES DSL / 編輯器改寫）：零工具、單回合，回覆即語句。
         // 空 allowedTools + dontAsk → 清單外一律自動拒絕（見下方 agent_send 略過旗標）。
-        "generate" => ("dontAsk", ""),
+        "generate" | "edit" => ("dontAsk", ""),
         // 純問答 / 產生腳本文字（預設）：只放行唯讀與查資料工具。
         _ => ("dontAsk", "Read,Glob,Grep,WebSearch,WebFetch"),
     }
@@ -641,7 +739,13 @@ fn codex_sandbox_for_mode(mode: &str) -> &'static str {
     }
 }
 
-fn claude_args(mode: &str, session_id: Option<&str>, model: Option<&str>, system_prompt: Option<&str>) -> Vec<String> {
+fn claude_args(
+    mode: &str,
+    session_id: Option<&str>,
+    model: Option<&str>,
+    system_prompt: Option<&str>,
+    mcp: Option<&McpAttach>,
+) -> Vec<String> {
     let (perm, allowed) = claude_flags_for_mode(mode);
     let mut a: Vec<String> = vec![
         "-p".into(),
@@ -652,14 +756,27 @@ fn claude_args(mode: &str, session_id: Option<&str>, model: Option<&str>, system
         "--permission-mode".into(),
         perm.into(),
     ];
-    // 空 allowedTools（generate 模式）略過該旗標：dontAsk 下未列入允許者一律自動拒絕，
+    // 一次性模式不掛 MCP（零工具）。
+    let mcp = mcp.filter(|_| !is_one_shot_mode(mode));
+    let mut allowed_list: Vec<String> = allowed.split(',').filter(|s| !s.is_empty()).map(String::from).collect();
+    if let Some(m) = mcp {
+        allowed_list.extend(m.tool_names.iter().map(|n| format!("mcp__{MCP_SERVER_NAME}__{n}")));
+    }
+    // 空 allowedTools（generate / edit 模式）略過該旗標：dontAsk 下未列入允許者一律自動拒絕，
     // 行為等價「全拒」，且避開 CLI 對空字串引數的解析歧義。
-    if !allowed.is_empty() {
+    if !allowed_list.is_empty() {
         a.push("--allowedTools".into());
-        a.push(allowed.into());
+        a.push(allowed_list.join(","));
+    }
+    if let Some(m) = mcp {
+        a.push("--mcp-config".into());
+        a.push(m.config_path.to_string_lossy().to_string());
+        // 只用我們給的伺服器：使用者自己的 ~/.claude.json / 專案 .mcp.json 不併入（那些不在允許清單，
+        // 掛了也只是白啟動幾個子程序）。
+        a.push("--strict-mcp-config".into());
     }
     // 一次性語句生成：限單回合（防守性——即使模型嘗試 tool call 被拒也不會進入多回合重試）。
-    if mode == "generate" {
+    if is_one_shot_mode(mode) {
         a.push("--max-turns".into());
         a.push("1".into());
     }
@@ -679,11 +796,23 @@ fn claude_args(mode: &str, session_id: Option<&str>, model: Option<&str>, system
     a
 }
 
+/// TOML 字串字面值：能用單引號（literal string，反斜線不需跳脫，Windows 路徑最友善）就用；
+/// 內含單引號或換行才退回雙引號 basic string。
+fn toml_string(s: &str) -> String {
+    if !s.contains('\'') && !s.contains('\n') && !s.contains('\r') {
+        format!("'{s}'")
+    } else {
+        let esc = s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r");
+        format!("\"{esc}\"")
+    }
+}
+
 fn codex_args(
     mode: &str,
-    workspace: &std::path::Path,
+    workspace: &Path,
     session_id: Option<&str>,
     model: Option<&str>,
+    mcp: Option<&McpAttach>,
 ) -> Vec<String> {
     let mut a: Vec<String> = vec!["exec".into()];
     // 多輪對話：`codex exec resume <THREAD_ID>` 接續同一個 thread。
@@ -698,6 +827,14 @@ fn codex_args(
     a.push(codex_sandbox_for_mode(mode).into());
     a.push("--cd".into());
     a.push(workspace.to_string_lossy().to_string());
+    // MCP 伺服器以 `-c` 覆寫設定帶入（不動使用者的 ~/.codex/config.toml）。值以 TOML 字面值給。
+    if let Some(m) = mcp.filter(|_| !is_one_shot_mode(mode)) {
+        a.push("-c".into());
+        a.push(format!("mcp_servers.{MCP_SERVER_NAME}.command={}", toml_string(&m.command)));
+        let args_toml = m.args.iter().map(|s| toml_string(s)).collect::<Vec<_>>().join(", ");
+        a.push("-c".into());
+        a.push(format!("mcp_servers.{MCP_SERVER_NAME}.args=[{args_toml}]"));
+    }
     if let Some(m) = model {
         a.push("--model".into());
         a.push(m.into());
@@ -715,6 +852,118 @@ fn prepend_system(prompt: &str, system_prompt: Option<&str>) -> String {
     }
 }
 
+// ---- 資料庫工具：連線上下文、系統提示、dbk MCP ----
+
+/// 由前端帶來的 connection_id / database 建立工具上下文。一次性模式、沒給 id、或該連線未連線
+/// 時回 None（沒有資料庫工具，其餘照常）。
+fn db_ctx(state: &AppState, mode: &str, connection_id: Option<&str>, database: Option<&str>) -> Option<DbToolCtx> {
+    if is_one_shot_mode(mode) {
+        return None;
+    }
+    let id = connection_id.map(str::trim).filter(|s| !s.is_empty())?;
+    DbToolCtx::from_manager(state.manager.clone(), id, database).ok()
+}
+
+/// 給模型的工具使用指引（接在人設 / 技能之後）。不含主機 / 帳密，只講「有哪些工具、怎麼用」。
+fn db_tools_guidance(ctx: &DbToolCtx, via_mcp: bool) -> String {
+    let names = crate::dbtools::tool_defs(ctx.kind, ctx.prod)
+        .into_iter()
+        .map(|d| if via_mcp { format!("mcp__{MCP_SERVER_NAME}__{}", d.name) } else { d.name.to_string() })
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let target = match &ctx.database {
+        Some(db) => tf!("{kind} 連線，目前資料庫：{db}", kind = ctx.kind.as_str(), db = db),
+        None => tf!("{kind} 連線", kind = ctx.kind.as_str()),
+    };
+    let mut s = tf!(
+        "【資料庫工具】你可以用這些工具直接讀取使用者目前在 db-kit 的 {target}：{names}。全部唯讀。寫查詢前先用 describe_table 確認欄名與型別；查詢一律加 LIMIT；不要猜測不存在的表或欄位，先 list_tables。需要看資料時直接呼叫工具，不要請使用者代跑；回答時附上你實際執行的查詢。",
+        target = target,
+        names = names
+    );
+    if ctx.prod {
+        s.push(' ');
+        s.push_str(&t!("此連線是正式環境：查詢保持輕量（小 LIMIT、避免全表掃描、不要重複同一條查詢）。"));
+    }
+    s
+}
+
+/// 人設 / 技能 + 工具指引合成系統提示（兩者都可能沒有）。
+fn compose_system(user: Option<&str>, guidance: Option<&str>) -> Option<String> {
+    let u = user.map(str::trim).filter(|s| !s.is_empty());
+    let g = guidance.map(str::trim).filter(|s| !s.is_empty());
+    match (u, g) {
+        (None, None) => None,
+        (Some(u), None) => Some(u.to_string()),
+        (None, Some(g)) => Some(g.to_string()),
+        (Some(u), Some(g)) => Some(format!("{u}\n\n{g}")),
+    }
+}
+
+/// 找 `dbk` 執行檔：env 覆寫 → 與 GUI 同目錄（打包 sidecar）→ PATH → 開發用 target 目錄。
+async fn resolve_dbk_bin() -> Option<String> {
+    if let Ok(p) = std::env::var("DB_KIT_DBK_BIN") {
+        let p = p.trim();
+        if !p.is_empty() && Path::new(p).exists() {
+            return Some(p.to_string());
+        }
+    }
+    let exe = if cfg!(windows) { "dbk.exe" } else { "dbk" };
+    if let Ok(cur) = std::env::current_exe() {
+        if let Some(dir) = cur.parent() {
+            let cand = dir.join(exe);
+            if cand.exists() {
+                return Some(cand.to_string_lossy().to_string());
+            }
+        }
+    }
+    if let Some(p) = which_bin("dbk").await {
+        return Some(p);
+    }
+    // 開發模式：cargo 的 target 目錄（`cargo build --bin dbk --no-default-features`）。
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for profile in ["debug", "release"] {
+        let cand = manifest.join("target").join(profile).join(exe);
+        if cand.exists() {
+            return Some(cand.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+/// `dbk mcp` 的參數：以連線 id 指定（GUI 存的就是 id）、帶目前資料庫與介面語言。不含任何帳密。
+fn dbk_mcp_args(ctx: &DbToolCtx) -> Vec<String> {
+    let mut a = vec!["mcp".to_string(), "--conn".to_string(), ctx.conn_id.clone()];
+    if let Some(db) = &ctx.database {
+        a.push("-d".to_string());
+        a.push(db.clone());
+    }
+    a.push("--lang".to_string());
+    a.push(crate::i18n::current().as_code().to_string());
+    a
+}
+
+/// Claude 的 `--mcp-config` 檔內容。
+fn mcp_config_json(command: &str, args: &[String]) -> serde_json::Value {
+    serde_json::json!({
+        "mcpServers": {
+            MCP_SERVER_NAME: { "command": command, "args": args }
+        }
+    })
+}
+
+/// 準備 MCP 掛載：找 dbk、寫設定檔。找不到 dbk 回 None（助手照常運作，只是沒有資料庫工具）。
+async fn mcp_attach(app: &AppHandle, ctx: &DbToolCtx, req_id: &str) -> Option<McpAttach> {
+    let command = resolve_dbk_bin().await?;
+    let args = dbk_mcp_args(ctx);
+    let dir = app.path().app_config_dir().ok()?.join("agent-mcp");
+    tokio::fs::create_dir_all(&dir).await.ok()?;
+    let config_path = dir.join(format!("{}.json", crate::schema_cache::sanitize_id(req_id)));
+    let body = serde_json::to_vec_pretty(&mcp_config_json(&command, &args)).ok()?;
+    tokio::fs::write(&config_path, body).await.ok()?;
+    let tool_names = crate::dbtools::tool_defs(ctx.kind, ctx.prod).into_iter().map(|d| d.name).collect();
+    Some(McpAttach { config_path, command, args, tool_names })
+}
+
 // ---- Tauri 指令 ----
 
 #[tauri::command]
@@ -729,8 +978,12 @@ pub async fn agent_detect(provider: Option<String>, base_url: Option<String>) ->
             version: None,
             logged_in: cfg.api_key.is_some() || cfg.is_local(),
             path: if cfg.base.is_empty() { None } else { Some(cfg.base) },
+            // HTTP 供應商的資料庫工具內建在 Rust 工具迴圈裡，不需要外部程式。
+            db_tools: Some("builtin".to_string()),
         };
     }
+    // CLI 供應商的資料庫工具靠 `dbk mcp`；一併回報找得到與否，讓面板能提示「需要 dbk」。
+    let db_tools = resolve_dbk_bin().await;
     match resolve_bin(p).await {
         Some(bin) => {
             let version = cli_version(&bin).await;
@@ -740,6 +993,7 @@ pub async fn agent_detect(provider: Option<String>, base_url: Option<String>) ->
                 version,
                 logged_in: logged_in(p),
                 path: Some(bin.display),
+                db_tools,
             }
         }
         None => AgentStatus {
@@ -748,6 +1002,7 @@ pub async fn agent_detect(provider: Option<String>, base_url: Option<String>) ->
             version: None,
             logged_in: logged_in(p),
             path: None,
+            db_tools,
         },
     }
 }
@@ -767,6 +1022,8 @@ pub async fn agent_send(
     provider: Option<String>,
     base_url: Option<String>,
     system_prompt: Option<String>,
+    connection_id: Option<String>,
+    database: Option<String>,
 ) -> AppResult<()> {
     let p = Provider::parse(provider.as_deref());
     let workspace = workspace_dir(&app).await?;
@@ -777,10 +1034,14 @@ pub async fn agent_send(
         .filter(|s| !s.is_empty());
     let model = model.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let sys = system_prompt.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    // 前端附帶的連線 → 資料庫工具上下文（一次性模式 / 未連線時為 None）。
+    let db = db_ctx(&state, &mode, connection_id.as_deref(), database.as_deref());
 
     // ---- HTTP 供應商：不開子程序，直接跑工具迴圈 ----
     if let Some(kind) = p.llm_kind() {
-        return llm_send(app, state, req_id, prompt, sid, model, &mode, kind, base_url.as_deref(), sys, workspace).await;
+        let guidance = db.as_ref().map(|c| db_tools_guidance(c, false));
+        let sys = compose_system(sys, guidance.as_deref());
+        return llm_send(app, state, req_id, prompt, sid, model, &mode, kind, base_url.as_deref(), sys.as_deref(), workspace, db).await;
     }
 
     let bin = resolve_bin(p).await.ok_or_else(|| {
@@ -790,6 +1051,18 @@ pub async fn agent_send(
         ))
     })?;
 
+    // CLI 供應商的資料庫工具走 `dbk mcp`：找得到 dbk 才掛；找不到照常回答（前端另有提示）。
+    let mcp = match &db {
+        Some(c) => mcp_attach(&app, c, &req_id).await,
+        None => None,
+    };
+    let guidance = match (&db, &mcp) {
+        (Some(c), Some(_)) => Some(db_tools_guidance(c, matches!(p, Provider::Claude))),
+        _ => None,
+    };
+    let sys_full = compose_system(sys, guidance.as_deref());
+    let sys = sys_full.as_deref();
+
     // Codex 沒有 append-system-prompt，人設併進提示本文。
     let prompt = match p {
         Provider::Codex => prepend_system(&prompt, sys),
@@ -797,11 +1070,12 @@ pub async fn agent_send(
     };
 
     let args = match p {
-        Provider::Claude => claude_args(&mode, sid, model, sys),
-        Provider::Codex => codex_args(&mode, &workspace, sid, model),
+        Provider::Claude => claude_args(&mode, sid, model, sys, mcp.as_ref()),
+        Provider::Codex => codex_args(&mode, &workspace, sid, model, mcp.as_ref()),
         // 上面已提前 return，這裡到不了。
         Provider::AnthropicApi | Provider::OpenAiApi => unreachable!(),
     };
+    let mcp_config = mcp.map(|m| m.config_path);
 
     let mut cmd = make_cmd(&bin);
     for a in &args {
@@ -870,6 +1144,10 @@ pub async fn agent_send(
 
         let status = child.wait().await;
         let err = err_task.await.unwrap_or_default();
+        // MCP 設定檔是一次性的（內含連線 id 與 dbk 路徑，不含帳密）；子程序結束即清掉。
+        if let Some(pth) = &mcp_config {
+            let _ = tokio::fs::remove_file(pth).await;
+        }
         let code = status.ok().and_then(|s| s.code());
         if let Some(c) = code {
             if c != 0 {
@@ -931,6 +1209,7 @@ async fn llm_send(
     base_url: Option<&str>,
     system_prompt: Option<&str>,
     workspace: PathBuf,
+    db: Option<DbToolCtx>,
 ) -> AppResult<()> {
     let cfg = crate::llm::LlmConfig::resolve(kind, base_url, model);
     if cfg.base.is_empty() {
@@ -942,7 +1221,15 @@ async fn llm_send(
 
     // HTTP 沒有伺服器端 session，對話歷史存在 App 記憶體裡，id 由這裡產。
     let sid = session_id.map(String::from).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let mut history = state.llm_sessions.lock().get(&sid).cloned().unwrap_or_default();
+    let config_dir = crate::store::app_config_dir(&app).ok();
+    // 記憶體沒有、但前端帶了既有 session id → 從磁碟接回來（App 重開後的續聊）。
+    // 讀失敗一律當成「沒有歷史」，見 llm::sessions 的模組說明。
+    let cached = state.llm_sessions.lock().get(&sid).cloned();
+    let mut history = match (cached, session_id, &config_dir) {
+        (Some(h), _, _) => h,
+        (None, Some(_), Some(dir)) => crate::llm::sessions::load_in(dir, &sid).await.map(|f| f.messages).unwrap_or_default(),
+        _ => Vec::new(),
+    };
 
     emit(
         &app,
@@ -965,6 +1252,12 @@ async fn llm_send(
     let sessions = state.llm_sessions.clone();
     let mode = mode.to_string();
     let system_prompt = system_prompt.map(String::from);
+    let persist_dir = config_dir.clone();
+    let persist_provider = match cfg.kind {
+        crate::llm::LlmKind::Anthropic => "anthropic-api",
+        crate::llm::LlmKind::OpenAi => "openai-api",
+    };
+    let persist_model = cfg.model.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let started = Instant::now();
         let sink_app = app2.clone();
@@ -978,6 +1271,22 @@ async fn llm_send(
                 &sink_app,
                 AgentEvent { req_id: sink_req.clone(), kind: "tool".to_string(), tool: Some(name), ..Default::default() },
             ),
+            crate::llm::StreamEvent::ToolDone(tr) => emit(
+                &sink_app,
+                AgentEvent {
+                    req_id: sink_req.clone(),
+                    kind: "tool_result".to_string(),
+                    tool: Some(tr.name),
+                    tool_id: Some(tr.id),
+                    tool_input: tr.input_label,
+                    tool_output_preview: Some(tr.output_preview),
+                    tool_rows: tr.rows,
+                    tool_truncated: Some(tr.truncated),
+                    tool_ms: Some(tr.ms),
+                    is_error: Some(tr.is_error),
+                    ..Default::default()
+                },
+            ),
         };
 
         let result = crate::llm::agent_loop::run(
@@ -985,6 +1294,7 @@ async fn llm_send(
             &cfg,
             &mode,
             &workspace,
+            db.as_ref(),
             &mut history,
             prompt,
             system_prompt.as_deref(),
@@ -995,6 +1305,23 @@ async fn llm_send(
         let ms = started.elapsed().as_millis() as u64;
         let code = match result {
             Ok(text) => {
+                // 先落地再進記憶體：寫檔失敗只記 log，不該讓這一輪的回答看起來像失敗。
+                // 歷史已在 agent_loop 內修剪過（40 則 / 200 KB），這裡直接寫修剪後的版本。
+                if let Some(dir) = &persist_dir {
+                    let now = now_ms();
+                    let file = crate::llm::sessions::SessionFile {
+                        version: 1,
+                        session_id: sid.clone(),
+                        provider: persist_provider.to_string(),
+                        model: persist_model.clone(),
+                        created_at_ms: now,
+                        updated_at_ms: now,
+                        messages: history.clone(),
+                    };
+                    if let Err(e) = crate::llm::sessions::save_in(dir, &file).await {
+                        eprintln!("[agent] 寫入對話歷史失敗：{e}");
+                    }
+                }
                 sessions.lock().insert(sid.clone(), history);
                 emit(
                     &app2,
@@ -1058,11 +1385,220 @@ pub async fn llm_key_status(kind: String) -> bool {
     }
 }
 
+/// Unix epoch 毫秒。時鐘倒退（使用者改系統時間）時回 0，讓該筆歷史被當成最舊的，
+/// 在 prune 時先被清掉——總比一個負數時間戳永遠排在最前面、把新對話擠掉好。
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 刪除一段落地的對話歷史（前端「清空對話 / 開新對話」時呼叫）。
+/// 記憶體與磁碟都清；HTTP 供應商以外的 session id 不存在於此，刪了也是 no-op。
+#[tauri::command]
+pub async fn agent_session_delete(app: AppHandle, state: State<'_, AppState>, session_id: String) -> AppResult<()> {
+    state.llm_sessions.lock().remove(&session_id);
+    let dir = crate::store::app_config_dir(&app)?;
+    crate::llm::sessions::delete_in(&dir, &session_id).await
+}
+
+/// 清掉所有落地的對話歷史（AI 設定裡的「清除所有對話紀錄」）。
+#[tauri::command]
+pub async fn agent_sessions_clear(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    state.llm_sessions.lock().clear();
+    let dir = crate::store::app_config_dir(&app)?;
+    crate::llm::sessions::clear_in(&dir).await
+}
+
+/// 列出助手工作資料夾裡的檔案（供聊天輸入框的 `@file:` 補全）。
+/// 與 `read_file` 工具同一套邊界：只看得到工作資料夾，路徑逃逸在 `llm::tools::safe_path` 擋下。
+#[tauri::command]
+pub async fn agent_workspace_files(app: AppHandle, pattern: Option<String>) -> AppResult<Vec<String>> {
+    let dir = workspace_dir(&app).await?;
+    Ok(crate::llm::tools::list_files(&dir, pattern.as_deref().unwrap_or("")))
+}
+
+/// 讀助手工作資料夾裡的一個檔案（供 `@file:` 把內容帶進上下文）。
+#[tauri::command]
+pub async fn agent_workspace_read(app: AppHandle, path: String) -> AppResult<String> {
+    let dir = workspace_dir(&app).await?;
+    crate::llm::tools::read_file(&dir, &path)
+        .await
+        .map_err(AppError::Query)
+}
+
 /// 取模型清單（順便當「測試連線」用）。抓不到回空陣列，前端退回手填。
 #[tauri::command]
 pub async fn llm_list_models(kind: String, base_url: Option<String>) -> Vec<String> {
     match crate::llm::LlmKind::parse(&kind) {
         Some(k) => crate::llm::models::list(crate::llm::client(), k, base_url.as_deref()).await,
         None => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn attach() -> McpAttach {
+        McpAttach {
+            config_path: PathBuf::from("C:\\cfg\\agent-mcp\\r1.json"),
+            command: "C:\\Program Files\\DB Kit\\dbk.exe".into(),
+            args: vec!["mcp".into(), "--conn".into(), "c1".into(), "-d".into(), "shop".into()],
+            tool_names: vec!["list_tables", "run_query"],
+        }
+    }
+
+    #[test]
+    fn strip_prefix_handles_claude_and_codex_names() {
+        assert_eq!(strip_mcp_prefix("mcp__dbkit__run_query"), "run_query");
+        assert_eq!(strip_mcp_prefix("dbkit:run_query"), "run_query");
+        assert_eq!(strip_mcp_prefix("run_query"), "run_query");
+        assert_eq!(strip_mcp_prefix("Read"), "Read");
+    }
+
+    #[test]
+    fn tool_input_display_prefers_query_then_table_with_db() {
+        assert_eq!(tool_input_display(&json!({ "query": " select 1 ", "limit": 5 })).as_deref(), Some("select 1"));
+        assert_eq!(tool_input_display(&json!({ "table": "orders", "database": "shop" })).as_deref(), Some("shop.orders"));
+        assert_eq!(tool_input_display(&json!({ "table": "orders" })).as_deref(), Some("orders"));
+        assert_eq!(tool_input_display(&json!({})), None);
+        assert_eq!(tool_input_display(&json!({ "pattern": "*.sql" })).as_deref(), Some(r#"{"pattern":"*.sql"}"#));
+    }
+
+    #[test]
+    fn claude_events_tool_use_and_result() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"},{"type":"tool_use","id":"toolu_1","name":"mcp__dbkit__run_query","input":{"query":"select count(*) from t"}}]}}"#;
+        let evs = claude_events("r", line);
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].kind, "tool");
+        assert_eq!(evs[0].tool.as_deref(), Some("run_query"));
+        assert_eq!(evs[0].tool_id.as_deref(), Some("toolu_1"));
+        assert_eq!(evs[0].tool_input.as_deref(), Some("select count(*) from t"));
+
+        let res = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"count\n42\n（共 1 列）"}],"is_error":false}]}}"#;
+        let evs = claude_events("r", res);
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].kind, "tool_result");
+        assert_eq!(evs[0].tool_id.as_deref(), Some("toolu_1"));
+        assert!(evs[0].tool_output_preview.as_deref().unwrap().starts_with("count\n42"));
+        assert_eq!(evs[0].is_error, Some(false));
+
+        // 字串型 content 與 is_error
+        let res2 = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"boom","is_error":true}]}}"#;
+        let evs = claude_events("r", res2);
+        assert_eq!(evs[0].tool_output_preview.as_deref(), Some("boom"));
+        assert_eq!(evs[0].is_error, Some(true));
+
+        // 既有事件不受影響
+        let start = r#"{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"toolu_3","name":"Read"}}}"#;
+        let evs = claude_events("r", start);
+        assert_eq!(evs[0].kind, "tool");
+        assert_eq!(evs[0].tool.as_deref(), Some("Read"));
+        let delta = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"x"}}}"#;
+        assert_eq!(claude_events("r", delta)[0].text.as_deref(), Some("x"));
+        assert!(claude_events("r", "not json").is_empty());
+    }
+
+    #[test]
+    fn codex_events_mcp_tool_call() {
+        let mut st = CodexTurn::default();
+        let started = Instant::now();
+        let s = r#"{"type":"item.started","item":{"id":"i1","type":"mcp_tool_call","server":"dbkit","tool":"run_query","arguments":{"query":"select 1"}}}"#;
+        let evs = codex_events("r", s, &mut st, started);
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].kind, "tool");
+        assert_eq!(evs[0].tool.as_deref(), Some("run_query"));
+        assert_eq!(evs[0].tool_input.as_deref(), Some("select 1"));
+        let c = r#"{"type":"item.completed","item":{"id":"i1","type":"mcp_tool_call","server":"dbkit","tool":"run_query","status":"completed","result":{"content":[{"type":"text","text":"1\n1"}]}}}"#;
+        let evs = codex_events("r", c, &mut st, started);
+        assert_eq!(evs[0].kind, "tool_result");
+        assert_eq!(evs[0].tool_output_preview.as_deref(), Some("1\n1"));
+        assert_eq!(evs[0].is_error, Some(false));
+        let e = r#"{"type":"item.completed","item":{"id":"i2","type":"mcp_tool_call","tool":"run_query","status":"failed","error":{"message":"nope"}}}"#;
+        let evs = codex_events("r", e, &mut st, started);
+        assert_eq!(evs[0].tool_output_preview.as_deref(), Some("nope"));
+        assert_eq!(evs[0].is_error, Some(true));
+        // 非 MCP 工具維持標籤
+        let cmd = r#"{"type":"item.started","item":{"id":"i3","type":"command_execution"}}"#;
+        assert_eq!(codex_events("r", cmd, &mut st, started)[0].tool.as_deref(), Some("Command"));
+    }
+
+    #[test]
+    fn claude_args_attach_mcp_only_in_conversational_modes() {
+        let m = attach();
+        let a = claude_args("advise", None, None, None, Some(&m));
+        let allowed = a[a.iter().position(|x| x == "--allowedTools").unwrap() + 1].clone();
+        assert!(allowed.contains("Read,Glob,Grep"));
+        assert!(allowed.contains("mcp__dbkit__list_tables"));
+        assert!(allowed.contains("mcp__dbkit__run_query"));
+        assert!(!allowed.contains("mcp__dbkit__write"), "只放行工具清單裡的名字");
+        let i = a.iter().position(|x| x == "--mcp-config").unwrap();
+        assert_eq!(a[i + 1], "C:\\cfg\\agent-mcp\\r1.json");
+        assert!(a.contains(&"--strict-mcp-config".to_string()));
+        assert!(!a.contains(&"--max-turns".to_string()));
+
+        // generate / edit：不掛 MCP、單回合、無 allowedTools。
+        for mode in ["generate", "edit"] {
+            let g = claude_args(mode, None, None, None, Some(&m));
+            assert!(!g.contains(&"--mcp-config".to_string()), "{mode}");
+            assert!(!g.contains(&"--allowedTools".to_string()), "{mode}");
+            assert!(g.contains(&"--max-turns".to_string()), "{mode}");
+        }
+        // 沒有 MCP 時與舊行為相同。
+        let plain = claude_args("agent", Some("s1"), Some("opus"), Some("persona"), None);
+        assert!(!plain.contains(&"--mcp-config".to_string()));
+        assert!(plain.windows(2).any(|w| w[0] == "--resume" && w[1] == "s1"));
+        assert!(plain.windows(2).any(|w| w[0] == "--append-system-prompt" && w[1] == "persona"));
+    }
+
+    #[test]
+    fn codex_args_config_overrides_shape() {
+        let m = attach();
+        let a = codex_args("advise", Path::new("C:\\ws"), None, None, Some(&m));
+        let cmd = a.iter().find(|x| x.starts_with("mcp_servers.dbkit.command=")).unwrap();
+        assert_eq!(cmd, "mcp_servers.dbkit.command='C:\\Program Files\\DB Kit\\dbk.exe'");
+        let args = a.iter().find(|x| x.starts_with("mcp_servers.dbkit.args=")).unwrap();
+        assert_eq!(args, "mcp_servers.dbkit.args=['mcp', '--conn', 'c1', '-d', 'shop']");
+        assert_eq!(a.last().map(String::as_str), Some("-"));
+        assert!(a.windows(2).any(|w| w[0] == "--sandbox" && w[1] == "read-only"));
+        // generate 不掛
+        let g = codex_args("generate", Path::new("C:\\ws"), None, None, Some(&m));
+        assert!(!g.iter().any(|x| x.starts_with("mcp_servers.")));
+    }
+
+    #[test]
+    fn toml_string_escapes_only_when_needed() {
+        assert_eq!(toml_string("C:\\a\\b.exe"), "'C:\\a\\b.exe'");
+        assert_eq!(toml_string("it's"), "\"it's\"");
+        assert_eq!(toml_string("a\"b\\c"), "'a\"b\\c'");
+        assert_eq!(toml_string("x\ny'"), "\"x\\ny'\"");
+    }
+
+    #[test]
+    fn mcp_config_json_has_no_secrets_and_right_shape() {
+        let v = mcp_config_json("C:\\dbk.exe", &["mcp".into(), "--conn".into(), "c1".into()]);
+        assert_eq!(v["mcpServers"]["dbkit"]["command"], "C:\\dbk.exe");
+        assert_eq!(v["mcpServers"]["dbkit"]["args"][1], "--conn");
+        let s = v.to_string();
+        assert!(!s.contains("password"));
+    }
+
+    #[test]
+    fn compose_system_joins_or_passes_through() {
+        assert_eq!(compose_system(None, None), None);
+        assert_eq!(compose_system(Some(" a "), None).as_deref(), Some("a"));
+        assert_eq!(compose_system(None, Some("g")).as_deref(), Some("g"));
+        assert_eq!(compose_system(Some("a"), Some("g")).as_deref(), Some("a\n\ng"));
+        assert_eq!(compose_system(Some(""), Some("")), None);
+    }
+
+    #[test]
+    fn preview_caps_length() {
+        let long = "y".repeat(2000);
+        assert_eq!(preview(&long).chars().count(), TOOL_PREVIEW_CHARS + 1);
+        assert_eq!(preview("ok"), "ok");
     }
 }

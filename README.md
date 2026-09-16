@@ -188,7 +188,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 看表關聯 | 開「ER 圖」分頁，拖曳表卡、佈局自動記憶 |
 | 換配色 | 右上角主題選單：光亮 / 暗黑 + 7 套寶石系變體（整個 App 與編輯器一起換） |
 | 調字級 | 設定 → 字級：**介面字級**讓整個 App 的文字與間距等比縮放（最小 12px ～ 超大 22px）；**程式碼字級**只管查詢編輯器與程式碼區塊（也吃 **Ctrl** **+** / **−** / **0**） |
-| 問 AI | 右側面板串接本機 Claude Code / OpenAI Codex CLI，或任何 Anthropic / OpenAI 相容 API（面板上可切換），可附帶目前連線 schema |
+| 問 AI | 右側面板（**Ctrl+L**）串接本機 Claude Code / OpenAI Codex CLI，或任何 Anthropic / OpenAI 相容 API（面板上可切換）。助手可自己下唯讀查詢；輸入 `@` 指定要附帶哪幾張表、`/` 用指令 |
+| 改 SQL | 在編輯器選一段 → 右鍵或 **Ctrl+Shift+E**：解釋 / 最佳化 / 修正 / 加註解 / 轉方言，改寫先看差異再套用（**Ctrl+I** 可直接用一句話下指示） |
 
 ## ✨ 亮點
 
@@ -200,6 +201,9 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - **安全可靠** — 連線密碼存於 OS keychain（磁碟不落地）、SSH Tunnel（密碼／私鑰）+ host key TOFU 驗證、所有寫入以主鍵定位 + 全參數化綁定防注入；另有**結果列數上限**與**查詢逾時**兩道安全網，誤跑 `SELECT *` 大表不會炸掉記憶體。
 - **桌面級操作手感** — 儲存格直接編輯、右鍵選單、鍵盤導覽、多欄排序、欄寬拖曳、依值篩選、內容檢視器、即時尋找、表頭 hover 顯示欄位註解。
 - **內建 AI 助手（四種供應商）** — 右側面板可接**本機 CLI**（Claude Code / OpenAI Codex，用你自己的訂閱登入，不需要 API key）或**任何 Anthropic / OpenAI 相容 API**（官方 API、OpenRouter / DeepSeek / Kimi / GLM / Groq，以及地端的 Ollama / LM Studio / vLLM —— 填 Base URL 與模型即可，地端端點免金鑰）。串流回答資料庫問題、撰寫／優化 SQL，並可附帶目前連線的 schema 作上下文。供應商在面板上隨時切換，助手與「AI 生成查詢」列共用同一個選擇。**API 金鑰只存 OS keychain**，設定檔與前端都拿不到明文。
+- **助手能自己讀資料庫（唯讀）** — 不再只能看前端塞給它的那一張表：助手可以自己 `list_tables` / `describe_table` / 取樣 / 下 `SELECT`，所以「這個庫是做什麼的」「上個月訂單多少」這類問題它查得到答案。**一律唯讀**，且是機制上做不到寫入而非提示裡請它不要——連 `EXPLAIN ANALYZE DELETE` 都擋；一次一條語句、200 列 / 8 KB / 30 秒上限；**它跑過的每一條 SQL 與結果摘要都列在回應裡**，可一鍵貼回編輯器稽核。正式環境連線第一次使用前另外確認一次。API 供應商內建此能力，CLI 供應商（Claude Code / Codex）則透過內建的 `dbk mcp` 提供同一組工具。
+- **編輯器內的 AI 動作 + 差異預覽** — 選一段 SQL（或把游標放在某條語句上），右鍵／`Ctrl+Shift+E`／工具列「AI 動作」：解釋、最佳化、修正錯誤、加註解、轉換方言（MySQL ↔ PostgreSQL ↔ SQL Server ↔ Oracle ↔ SQLite）、產生測試資料、白話解釋執行計畫。`Ctrl+I` 可直接用一句話描述要怎麼改。改寫類動作**一律先顯示差異**：逐塊可拒絕、可手動微調，按「接受」才寫回編輯器，而且進 undo 歷史（`Ctrl+Z` 退得回去）。
+- **對話面板：@ 範圍、/ 指令、就地執行** — 打 `@` 指定要附帶哪幾張表（或 `@query` / `@result` / `@error` 帶入編輯器現況），送出前就看得到「這則帶了 3 張表、約 4.2 KB」；沒帶成的也會標出原因，不會靜默消失。`/explain`、`/fix`、`/optimize`、`/sql`、`/schema` 等指令免打整段提示。回應裡的 SQL 區塊可直接「執行」或「執行並回饋」（結果交回模型接著分析），守門與查詢分頁同一套——唯讀連線擋寫入、破壞性語句與正式環境要確認。HTTP 供應商的對話歷史會落地，重開 App 續聊不會失憶。
 - **人設與技能** — 助手的系統提示詞（人設）可以改，並可存多組具名的「技能」（如「SQL 效能診斷」「唯讀安全至上」），在面板上一鍵勾選套用；四種供應商共用同一份設定。
 - **附命令列工具 `dbk`** — 查詢 / 瀏覽 / 匯出 / 備份 + **寫入（修改 · 刪除，需 `--yes`，高破壞再要 `--force`）** 的 CLI，重用同一套連線與 keychain，可 `--no-default-features` 編成不連 Tauri 的精簡 binary，適合伺服器與 script 場景（見 [命令列工具](#命令列工具dbk-cli)）。
 - **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、Rust 單元測試覆蓋各方言 SQL 生成（含 MariaDB / Oracle）、前端 vitest 覆蓋（329 項），另有 **`npm run verify:ui` UI 冒煙檢查**（production build + Tauri invoke shim 驗右鍵選單與分頁行為，免 Docker / 免真實資料庫），經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
@@ -220,7 +224,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 外觀 | **7 套寶石系主題**（Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian）驅動整個 App + 編輯器語法高亮，工具列一鍵切換光亮 / 暗黑 / 變體；**全域介面字級**（6 段，整個 App 等比縮放）與**程式碼字級**分開設定 |
 | 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、**啟動鎖定**（Windows Hello / Touch ID 或 Argon2id 密碼、閒置自動鎖定）、**結果列數上限 / 查詢逾時**、釘選常用表 |
 | SQL 審查 | **靜態規則引擎**（對標 Redgate SQL Prompt / SonarQube SQL rules）：15 條規則、三級嚴重度，打字當下即時列出無 WHERE 的 DML、笛卡兒積、欄位套函式讓索引失效、前綴萬用字元 LIKE、`NOT IN` 的 NULL 陷阱、UNION vs UNION ALL、NOLOCK 髒讀、游標逐列處理…；方言感知、**不執行查詢也不需要 AI**，點一筆即跳到編輯器對應位置 |
-| AI 助手 | 右側面板串接本機 **Claude Code 或 OpenAI Codex** CLI（下拉即切、各自記住模型）：串流問答、撰寫 / 優化 SQL，可附帶目前 schema；程式碼區塊套用目前主題的語法高亮。另有三個一鍵入口——**AI 審查 SQL**（帶規則引擎發現 + 結構 + 索引 + 計畫）、**AI 調校建議**（帶計畫熱點，要求索引 DDL / 改寫 / 代價評估）、**AI 分析壓測結果**（從延遲百分位的形狀反推瓶頸類型） |
+| AI 助手 | 右側面板串接本機 **Claude Code 或 OpenAI Codex** CLI（下拉即切、各自記住模型）或任何 Anthropic / OpenAI 相容 API：串流問答、撰寫 / 優化 SQL；程式碼區塊套用目前主題的語法高亮。**助手可自己下唯讀查詢**（列表 / 看結構 / 取樣 / SELECT / EXPLAIN；跑過的 SQL 全列在回應裡）；輸入框支援 **`@` 指定範圍**與 **`/` 指令**；回應裡的 SQL 可直接執行並把結果回饋給模型。另有三個一鍵入口——**AI 審查 SQL**（帶規則引擎發現 + 結構 + 索引 + 計畫）、**AI 調校建議**（帶計畫熱點，要求索引 DDL / 改寫 / 代價評估）、**AI 分析壓測結果**（從延遲百分位的形狀反推瓶頸類型） |
+| AI 動作（編輯器） | 選一段 SQL → 右鍵 / `Ctrl+Shift+E` / 工具列「AI 動作」：解釋、最佳化、修正、加註解、**轉換方言**、產生測試資料、白話解釋執行計畫；`Ctrl+I` 用一句話描述要怎麼改。改寫類一律先走**差異預覽**（逐塊可拒絕、可手改），接受後進 undo 歷史 |
 | 多語系 | **繁體中文 · 简体中文 · English · 日本語 · 한국어 · Tiếng Việt**，工具列或設定頁即時切換、不需重啟；前端 / Rust 後端錯誤訊息 / `dbk` CLI（`--lang`、`DBKIT_LANG`）三處同步。各語言的譯文表由 vite 各切一個 chunk，只下載自己那包 |
 | 運維 | 連線設定持久化、加密匯出 / 匯入連線（逐筆選連線與機密類別；PROD 連線一律不含帳密）、排程備份 + 備份歷史、連線池監控 + Ping、啟動時檢查新版、跨平台桌面 App |
 
@@ -294,6 +299,9 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] 分頁管理（中鍵 / 關閉其他 / 全部 / Ctrl+W）、連線池即時監控 + **Ping**（量測既有連線往返延遲，含 SSH 通道）、全域 UI/UX 打磨
 - [x] Redis 進階：值格式化（原始 / JSON / Hex）+ 大集合游標式分頁、**Pub/Sub** 訂閱發佈、**維運面板**（慢查詢 / 用戶端 / 大鍵）
 - [x] AI 助手（右側面板，串接本機 Claude Code / OpenAI Codex CLI）：串流問答、撰寫 / 優化 SQL，可附帶目前連線 schema 作上下文
+- [x] **AI 唯讀資料庫工具**：助手自己 list / describe / 取樣 / SELECT / EXPLAIN（一次一句，200 列 / 8 KB / 30 秒上限；寫入是機制上做不到，連 `EXPLAIN ANALYZE DELETE` 都擋）；每次呼叫的 SQL 與結果都列在回應裡可稽核、可貼回編輯器；正式環境連線首次使用前確認。API 供應商內建，CLI 供應商透過內建 `dbk mcp`（MCP stdio 伺服器）取得同一組工具
+- [x] **編輯器 AI 動作 + 差異預覽**：選取段 / 游標所在語句 → 右鍵 · `Ctrl+Shift+E` · 工具列，解釋 / 最佳化 / 修正 / 加註解 / 轉方言 / 產生測試資料 / 白話解釋執行計畫；`Ctrl+I` 用一句話下指示。改寫類先逐塊比對（可拒絕、可手改），接受後進 undo 歷史
+- [x] **對話面板增強**：`@` 指定附帶範圍（表 / 庫 / 檔案 / `@query` / `@result` / `@error`，含預算與「沒帶成」的交代）、`/` 斜線命令、SQL 區塊「執行」/「執行並回饋」（守門同查詢分頁）、HTTP 供應商對話歷史落地（重開不失憶）、`Ctrl+L` 開關並聚焦
 - [x] 跨資料庫一致：上述能力於 MySQL / PostgreSQL / SQL Server / SQLite / MongoDB 對齊（識別字 / 篩選 / 索引依各庫對應）
 - [x] **視覺化查詢建構器**：勾選表 / 欄、外鍵自動 JOIN、WHERE / 聚合 / HAVING / ORDER BY / DISTINCT / LIMIT / OFFSET、即時預覽 + 計數，帶入編輯器；可從資料表右鍵開啟
 - [x] **Excel（.xlsx）匯出 / 匯入**：純 Rust（rust_xlsxwriter / calamine），數字保真、凍結表頭 + 自動欄寬
@@ -336,7 +344,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 狀態 | Zustand |
 | 後端 | Rust：sqlx (MySQL / MariaDB / PostgreSQL / SQLite)、tiberius + bb8 (SQL Server)、rust-oracle / ODPI-C (Oracle，需 Instant Client)、mongodb、redis |
 | 安全 | OS keychain（keyring）、SSH Tunnel（russh）+ host key TOFU |
-| AI 助手 | 本機 Claude Code / OpenAI Codex CLI（訂閱登入，串流），或 Anthropic / OpenAI 相容 API（金鑰存 OS keychain） |
+| AI 助手 | 本機 Claude Code / OpenAI Codex CLI（訂閱登入，串流），或 Anthropic / OpenAI 相容 API（金鑰存 OS keychain）；唯讀資料庫工具（CLI 供應商經 `dbk mcp`）、`@codemirror/merge` 差異預覽 |
 
 ## 連線生命週期設計
 

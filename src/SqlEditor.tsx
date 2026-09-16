@@ -23,6 +23,20 @@ export interface SqlEditorHandle {
   submit: (runAll: boolean) => void;
   // 反白指定字元範圍並捲至可見（錯誤橫幅「定位失敗語句」用）。
   selectRange: (from: number, to: number) => void;
+  // ---- AI 動作用（解釋 / 最佳化 / 修正 / 轉方言…）----
+  // 取「現在」的選取與游標。父層的 editorSel 只有文字沒有位移，而 AI 改寫要就地替換某一段，
+  // 非得知道 from / to 不可；而且 React state 會落後一個 render，按下選單當下必須直接問編輯器。
+  getSelection: () => { from: number; to: number; text: string } | null;
+  getCursor: () => number;
+  getDoc: () => string;
+  /**
+   * 就地替換一段文字。走 `view.dispatch`（而非 setValue）才會進 CodeMirror 的 undo 歷史——
+   * 使用者按 Ctrl+Z 就能退回 AI 改之前，這是「敢按接受」的前提。
+   * 唯讀或範圍越界回 false。
+   */
+  replaceRange: (from: number, to: number, text: string) => boolean;
+  /** 某個位移在畫面上的座標（Ctrl+I 的浮動輸入框要貼在選取段上方）。 */
+  coordsAt: (pos: number) => { left: number; top: number; bottom: number } | null;
 }
 
 // 送出（執行）時的上下文：選取文字、游標位移、是否整段執行（F6）。
@@ -47,7 +61,8 @@ export interface SqlDiagnostic {
 const MySQLLoose = SQLDialect.define({ ...MySQL.spec, spaceAfterDashes: false });
 const MariaSQLLoose = SQLDialect.define({ ...MariaSQL.spec, spaceAfterDashes: false });
 
-const DIALECT: Record<DbKind, SQLDialect> = {
+// 匯出給 AI 差異預覽用：diff 視圖要與編輯器用同一個方言，否則同一段 SQL 兩邊上色不一致。
+export const DIALECT: Record<DbKind, SQLDialect> = {
   mysql: MySQLLoose,
   mariadb: MariaSQLLoose,
   postgres: PostgreSQL,
@@ -127,6 +142,10 @@ interface SqlEditorProps {
   className?: string;
   autoFocus?: boolean;
   readOnly?: boolean;
+  /** 編輯器內按右鍵（給 AI 動作選單）。給了就抑制 webview 預設選單。 */
+  onContextMenu?: (p: { x: number; y: number }) => void;
+  /** AI 快捷鍵：Ctrl/Cmd+I = 就地下指示、Ctrl/Cmd+Shift+E = 動作快選。 */
+  onAiCommand?: (cmd: "inline" | "picker") => void;
 }
 
 const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor({
@@ -143,6 +162,8 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
   className,
   autoFocus,
   readOnly,
+  onContextMenu,
+  onAiCommand,
 }, ref) {
   const theme = useTheme((s) => s.theme);
   const themeId = useTheme((s) => s.themeId);
@@ -175,10 +196,46 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       const selection = sel.empty ? null : view.state.sliceDoc(sel.from, sel.to);
       submitRef.current?.({ selection, cursorOffset: sel.head, runAll });
     },
+    getSelection: () => {
+      const view = cmRef.current?.view;
+      if (!view) return null;
+      const sel = view.state.selection.main;
+      if (sel.empty) return null;
+      return { from: sel.from, to: sel.to, text: view.state.sliceDoc(sel.from, sel.to) };
+    },
+    getCursor: () => cmRef.current?.view?.state.selection.main.head ?? 0,
+    getDoc: () => cmRef.current?.view?.state.doc.toString() ?? "",
+    replaceRange: (from: number, to: number, text: string) => {
+      const view = cmRef.current?.view;
+      if (!view || view.state.readOnly) return false;
+      const len = view.state.doc.length;
+      if (from < 0 || to > len || from > to) return false;
+      view.dispatch({
+        changes: { from, to, insert: text },
+        // 選取改寫後的整段：使用者馬上看得到 AI 動了哪裡，想退就直接 Ctrl+Z。
+        selection: { anchor: from, head: from + text.length },
+        scrollIntoView: true,
+        userEvent: "input.ai",
+      });
+      view.focus();
+      return true;
+    },
+    coordsAt: (pos: number) => {
+      const view = cmRef.current?.view;
+      if (!view) return null;
+      const c = view.coordsAtPos(Math.max(0, Math.min(pos, view.state.doc.length)));
+      return c ? { left: c.left, top: c.top, bottom: c.bottom } : null;
+    },
   }), []);
   // onSubmit 以 ref 持有，避免每次 render 重建 extensions（CodeMirror 會重新配置）。
   const submitRef = useRef(onSubmit);
   submitRef.current = onSubmit;
+  // 同理：AI 選單 / 快捷鍵的回呼每次 render 都是新閉包，直接進 extensions 相依會讓
+  // 整組擴充在打字途中重建（補全視窗被關掉），故一律走 ref。
+  const ctxMenuRef = useRef(onContextMenu);
+  ctxMenuRef.current = onContextMenu;
+  const aiCmdRef = useRef(onAiCommand);
+  aiCmdRef.current = onAiCommand;
   // 選取回呼與上次選取值（以 ref 持有，使 onUpdate handler 維持穩定 identity）。
   const selChangeRef = useRef(onSelectionChange);
   selChangeRef.current = onSelectionChange;
@@ -302,14 +359,30 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
       submitRef.current?.({ selection, cursorOffset: sel.head, runAll });
       return true;
     };
+    // AI 快捷鍵掛在同一組高優先 keymap 裡：Mod-i 在 CodeMirror 預設是 selectParentSyntax，
+    // 要蓋掉它就得走 Prec.high，掛在外層 div 上是攔不到的（編輯器會先吃掉）。
     ext.push(
       Prec.high(
         keymap.of([
           { key: "Mod-Enter", run: (v) => fire(v, false) },
           { key: "F6", run: (v) => fire(v, true), preventDefault: true },
+          { key: "Mod-i", run: () => { aiCmdRef.current?.("inline"); return !!aiCmdRef.current; }, preventDefault: true },
+          { key: "Mod-Shift-e", run: () => { aiCmdRef.current?.("picker"); return !!aiCmdRef.current; }, preventDefault: true },
           indentWithTab,
         ]),
       ),
+    );
+    // 右鍵：交給父層開 AI 動作選單，並抑制 webview 自己的選單（回 true = 已處理）。
+    ext.push(
+      EditorView.domEventHandlers({
+        contextmenu: (e) => {
+          const cb = ctxMenuRef.current;
+          if (!cb) return false;
+          e.preventDefault();
+          cb({ x: e.clientX, y: e.clientY });
+          return true;
+        },
+      }),
     );
     return ext;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- cross 走 crossKey / crossRef（見上）

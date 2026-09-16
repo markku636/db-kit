@@ -9,16 +9,9 @@ import { copyToClipboard } from "./ui";
 import { baseUrlOf, CLAUDE_MODELS, isApiProvider, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
 import { currentSystemPrompt } from "./aiSkills";
 
-// 破壞性語句偵測（套用前警示）：DROP/TRUNCATE/ALTER，或無 WHERE 的 DELETE/UPDATE。
-const DESTRUCTIVE = /\b(drop|truncate|alter)\b/i;
-function isDestructive(code: string): boolean {
-  if (DESTRUCTIVE.test(code)) return true;
-  const noWhere = /\b(delete\s+from|update)\b/i.test(code) && !/\bwhere\b/i.test(code);
-  return noWhere;
-}
-
-// 無 code block 時的整段 SQL fallback 判定。
-const SQL_LEAD = /^\s*(select|insert|update|delete|create|alter|drop|truncate|with|explain)\b/i;
+// 破壞性偵測與「整段像不像 SQL」的判定搬到 aiActions.ts：編輯器的 AI 動作要用同一套判準。
+// 兩份的話，同一段 DELETE 在生成列示警、在差異預覽不示警（或反過來），使用者只會學會忽略警告。
+import { isDestructive, SQL_LEAD } from "./aiActions";
 
 export interface NlQueryBarProps {
   open: boolean;

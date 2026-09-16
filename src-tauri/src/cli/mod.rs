@@ -13,6 +13,8 @@ mod dispatch;
 // 唯讀 / 高破壞語句守門不只 CLI 用：壓力測試（stress.rs）會反覆重放語句，
 // 開跑前要走同一道判準——判準只能有一份，兩份必然漂移成「這裡擋、那裡不擋」。
 pub(crate) mod guard;
+// `dbk mcp`：把 dbtools 的唯讀資料庫工具以 MCP stdio 伺服器提供給 AI 用戶端。
+mod mcp;
 mod render;
 mod resolve;
 
@@ -126,7 +128,7 @@ fn localize_command(mut cmd: clap::Command) -> clap::Command {
     cmd
 }
 
-/// 查目前語言的譯文（日 / 韓查無會自動退英文，見 `i18n::lookup_opt`）。
+/// 查目前語言的譯文（日 / 韓 / 越查無會自動退英文，見 `i18n::lookup_opt`）。
 ///
 /// 另外於 debug build 檢查 **en 表**的覆蓋率：查無且字串含中文時以 `debug_assert!` 大聲失敗
 /// （clap 內建英文 help 不含中文，不會誤觸；真正遺漏譯文的 help 才會炸出來，避免靜默不生效）。

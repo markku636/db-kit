@@ -29,7 +29,12 @@ export interface PaletteItem {
 
 // 命令面板（Ctrl/Cmd+K）：跨連線快速跳到 連線 / 資料庫 / 資料表，或執行常用動作。
 // 致敬現代工具與 Navicat 的快速導覽；模糊比對排序、方向鍵 + Enter 選取、Esc 關閉。
-export default function CommandPalette({ items, onClose }: { items: PaletteItem[]; onClose: () => void }) {
+export default function CommandPalette({ items, onClose, placeholder }: {
+  items: PaletteItem[];
+  onClose: () => void;
+  /** 覆寫搜尋框提示字（AI 動作快選共用這個殼，但它只搜動作、不跳連線）。 */
+  placeholder?: string;
+}) {
   const t = useT();
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
@@ -64,7 +69,7 @@ export default function CommandPalette({ items, onClose }: { items: PaletteItem[
         <div className="flex items-center gap-2 px-3 h-11 border-b border-fg/10 shrink-0">
           <Icon icon={Search} size={15} className="text-fg/40" />
           <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey}
-            placeholder={t("跳到連線 / 資料庫 / 資料表，或執行動作…")}
+            placeholder={placeholder ?? t("跳到連線 / 資料庫 / 資料表，或執行動作…")}
             className="flex-1 bg-transparent outline-none text-sm" />
           <kbd className="text-[10px] text-fg/30 border border-fg/15 rounded px-1">Esc</kbd>
         </div>

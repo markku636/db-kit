@@ -14,6 +14,8 @@ mod compare;
 mod conn_crypto;
 mod conn_export;
 mod db;
+// AI 助手的唯讀資料庫工具：GUI 的 HTTP 工具迴圈與 `dbk mcp` 共用，不依賴 Tauri。
+mod dbtools;
 mod error;
 mod export;
 mod import;
@@ -99,6 +101,26 @@ pub fn run() {
                     crate::i18n::set_lang(l);
                 }
             });
+            // 清掉過期的 AI 對話歷史（30 天 / 上限 50 段）。背景跑：這只是清垃圾，
+            // 不該讓視窗晚一步出現；失敗也只是多留幾個檔案，不值得中斷啟動。
+            {
+                let h = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Ok(dir) = store::app_config_dir(&h) {
+                        let now = chrono::Local::now().timestamp_millis();
+                        let n = llm::sessions::prune_in(
+                            &dir,
+                            now,
+                            llm::sessions::MAX_AGE_DAYS,
+                            llm::sessions::MAX_SESSIONS,
+                        )
+                        .await;
+                        if n > 0 {
+                            eprintln!("[agent] 已清理 {n} 段過期的對話歷史");
+                        }
+                    }
+                });
+            }
             // 載入持久化排程並重算 next_run（啟動只排未來的下一次，不補跑漏掉的）。
             tauri::async_runtime::block_on(async {
                 let loaded: Vec<scheduler::BackupSchedule> =
@@ -356,6 +378,7 @@ pub fn run() {
             commands::es_mapping,
             #[cfg(feature = "elastic")]
             commands::es_delete_index,
+            #[cfg(feature = "elastic")]
             commands::es_data_view_id,
             #[cfg(feature = "rabbitmq")]
             commands::rabbitmq_overview,
@@ -397,6 +420,10 @@ pub fn run() {
             agent::llm_key_set,
             agent::llm_key_status,
             agent::llm_list_models,
+            agent::agent_workspace_files,
+            agent::agent_workspace_read,
+            agent::agent_session_delete,
+            agent::agent_sessions_clear,
             agent::open_agent_workspace,
             agent::open_external,
         ])

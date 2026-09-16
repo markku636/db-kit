@@ -58,7 +58,7 @@ const MAX_MAPPING_CHARS = 6000;
 
 // 非繁中語系時要求 SQL 註解用該語言（沿 buildContext 慣例）。語言名取自 i18n 的單一真相，
 // 新增語言只要改 i18n.ts。
-function commentLangLine(uiLang: string): string {
+export function commentLangLine(uiLang: string): string {
   const name = promptLanguageName(uiLang);
   return name ? `\nWrite any SQL comments in ${name}.` : "";
 }

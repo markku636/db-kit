@@ -23,6 +23,7 @@
   - [`search` / `column-stats` / `routine` / `er-model` / `server-info`](#search--column-stats--routine--er-model--server-info)
   - [`compare` / `schema` — 結構 / 資料比對與快照](#compare--schema--結構--資料比對與快照)
   - [`redis` — Redis 操作](#redis--redis-操作)
+  - [`mcp` — MCP 伺服器（給 AI 用戶端）](#mcp--mcp-伺服器給-ai-用戶端)
 - [常見情境](#常見情境)
 - [結束碼與錯誤處理](#結束碼與錯誤處理)
 - [限制](#限制)
@@ -391,6 +392,46 @@ dbk --conn cache redis flush-db --yes --force
 
 指定 DB index 用 `-d`：`dbk --conn cache -d 3 redis keys`。
 
+### `mcp` — MCP 伺服器（給 AI 用戶端）
+
+以 [Model Context Protocol](https://modelcontextprotocol.io) 的 stdio 模式啟動，把一組**唯讀**資料庫工具提供給 Claude Code、Codex 或任何支援 MCP 的 AI 用戶端。
+
+```bash
+dbk --conn shop -d shop mcp
+```
+
+它不是給人直接跑的——stdout 只走協定（一行一則 JSON-RPC 2.0），診斷訊息一律走 stderr。由用戶端當子程序啟動：
+
+```bash
+# Claude Code
+claude mcp add dbkit -- dbk --conn shop -d shop mcp
+```
+
+```jsonc
+// 或寫進專案的 .mcp.json
+{ "mcpServers": { "dbkit": { "command": "dbk", "args": ["--conn", "shop", "-d", "shop", "mcp"] } } }
+```
+
+提供的工具：
+
+| 工具 | 作用 |
+|------|------|
+| `list_databases` | 列出資料庫 / schema |
+| `list_tables` | 列出資料表（含視圖） |
+| `describe_table` | 欄位（型別 / 可空 / 主鍵 / 預設值 / 註解）＋ 索引 ＋ 外鍵 |
+| `sample_rows` | 前幾列樣本（上限 20 列） |
+| `run_query` | 執行唯讀查詢（上限 200 列 / 8 KB / 30 秒） |
+| `explain_query` | 取執行計畫 |
+
+安全模型（與 GUI 內建助手同一份實作，見 [架構設計](./architecture.md#ai-助手的工具邊界)）：
+
+- **一律唯讀**，沒有開關可以放寬。SQL 走與 `query` 同一道守門的嚴格版——連 `EXPLAIN ANALYZE DELETE …` 都擋（PostgreSQL 會真的執行內層語句）；MongoDB 拒絕 `$out` / `$merge`；Redis 只放行讀取類命令。
+- **一次一條語句**，多語句要拆成多次呼叫。
+- 工具失敗回的是 `isError` 的**結果**而非協定錯誤，讓模型看得到原因並自行修正。
+- 連線延遲到第一次 `tools/call` 才建立，所以資料庫暫時連不上不會讓用戶端整個握手失敗。
+
+> GUI 的 AI 助手會自動使用它：選 Claude / Codex 供應商時，db-kit 會找到 `dbk` 並以目前連線把它掛上去（找不到就退回沒有資料庫工具，面板會提示）。用 `DB_KIT_DBK_BIN` 可指定路徑。
+
 ---
 
 ## 常見情境
@@ -458,6 +499,7 @@ dbk --conn prod --format json search "customer_id" --definitions --type procedur
 ## 限制
 
 - **Kafka / Elasticsearch / RabbitMQ 連線 CLI 不支援**。沒有可在終端機表達的通用查詢語言，且精簡 binary 未編入其驅動；指定時會回明確錯誤，請改用 GUI。
+- **`mcp` 逐一處理請求**，不併發。資料庫工具本來就該一條一條跑，而且共用同一條連線。
 - **`GO` 批次分隔未支援**。SSMS 貼出來的腳本，`GO` 之後的語句不會被切成獨立批次。
 - **`stress` 一律唯讀**，不提供 `--allow-writes`。
 - **不做還原**。`backup` 只產出 dump 檔；還原請用 GUI 或各資料庫的原生工具（還原是破壞性操作，需要互動確認）。

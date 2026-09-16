@@ -63,6 +63,22 @@ pub trait DatabaseDriver: Send + Sync {
 - 所有識別字（庫/表/欄）以對應引號包裹並轉義：MySQL / MariaDB 反引號、PG/SQLite/**Oracle** 雙引號、**SQL Server 方括號 `[…]`（`]` 以 `]]` 轉義），寫入採三部式限定 `[db].[schema].[table]`**。Oracle 採 exact-case + 全程雙引號策略（目錄查回什麼就綁什麼）。
 - 值綁定：MySQL/SQLite 用 `?`、PostgreSQL 用 `$1` 參數綁定，不字串拼接。**SQL Server（tiberius）與 Oracle 目前改以字面值轉義**（單引號加倍；SQL Server 字串另包 `N'…'`；數字 / 日期以字串傳入由引擎隱式轉型），非參數綁定但同樣做逸出處理。
 
+## AI 助手的工具邊界
+
+助手可以自己讀資料庫，因此界線必須是「機制上做不到」而非「提示裡請它不要」——模型被繞過的方式太多。
+
+| 面向 | 規則 | 落點 |
+|------|------|------|
+| 資料庫 | **一律唯讀**，與助手模式無關 | `dbtools::ensure_tool_read_only`：SQL 走 `cli::guard::read_only_violation(strict_explain=true)`（連 `EXPLAIN ANALYZE DELETE` 都擋，PG 會真的執行內層語句）；Mongo 拒絕 `$out` / `$merge`；Redis 只放行讀取類命令白名單 |
+| 語句數 | 一次一條 | `guard::statement_count`；多語句要拆成多次呼叫 |
+| 結果量 | 200 列 / 8 KB / 30 秒 | `dbtools` 的 `MAX_QUERY_ROWS`、`MAX_TEXT_BYTES`、`tool_timeout_ms` |
+| 檔案 | 只在助手工作資料夾內，且 `agent` 模式才可寫 | `llm::tools::safe_path`（磁碟前綴 / UNC / `..` 自己判，不靠平台語意） |
+| Shell / 網路 | 完全不提供 | `llm::tools` 不實作；Claude 走 `--allowedTools` 允許清單 + `--strict-mcp-config`，Codex 走 `--sandbox` |
+| 稽核 | 每次工具呼叫的輸入與結果預覽都推到前端 | `llm::ToolTrace` → `agent-stream` 的 `tool` / `tool_result` 事件 → 聊天面板的「工具呼叫」清單 |
+| 正式環境 | 第一次要讓助手查 prod 連線時前端先確認 | `AssistantPanel`（後端 `is_prod` 只用於調整工具說明，不阻擋） |
+
+一次性模式（`generate` / `edit`）零工具、單回合：它們的輸出就是一段語句，給工具只會讓模型多繞路。
+
 ## 模組結構
 
 ```
@@ -88,10 +104,20 @@ src-tauri/src/
 │   ├── rowstream.rs   主鍵排序分頁串流（keyset / offset）
 │   ├── merge.rs       merge-join（順序守衛）/ hash_diff
 │   └── data.rs        單表 / 整庫資料比對編排、DML spool 與分批交易套用
-├── agent.rs           AI 助手（本機 Claude Code / OpenAI Codex CLI 串流橋接）
+├── agent.rs           AI 助手（四種供應商共用一組 agent-stream 事件；CLI 走子程序 + dbk mcp、API 走 llm/）
+├── dbtools/mod.rs     AI 唯讀資料庫工具（list/describe/sample/run_query/explain）—— GUI 工具迴圈與 dbk mcp 共用
+├── llm/               HTTP 供應商（Anthropic / OpenAI 相容）
+│   ├── mod.rs         供應商中立的訊息 / 工具 / 串流事件模型、Base URL 正規化、金鑰解析
+│   ├── anthropic.rs   /v1/messages 請求組裝與 SSE 串流
+│   ├── openai.rs      /chat/completions（含相容性降級鏈）
+│   ├── sse.rs         chunk 邊界安全的 SSE 行讀取
+│   ├── models.rs      GET /models（順便當「測試連線」）
+│   ├── tools.rs       檔案工具（限助手工作資料夾）+ 掛載 dbtools
+│   ├── agent_loop.rs  工具迴圈（回合上限 / 重複呼叫中止 / 歷史修剪）
+│   └── sessions.rs    對話歷史落地（<config>/llm-sessions/<id>.json，30 天 / 50 段上限）
 ├── it_tests.rs        Docker 真實資料庫整合測試
 ├── commands/mod.rs    Tauri command（薄包裝）
-├── cli/               dbk CLI（args / dispatch / guard / render / resolve）
+├── cli/               dbk CLI（args / dispatch / guard / mcp / render / resolve）
 ├── bin/dbk.rs         CLI binary 進入點（不連 Tauri）
 └── db/
     ├── mod.rs         DbKind、共用型別、DatabaseDriver trait

@@ -14,6 +14,7 @@ pub mod agent_loop;
 pub mod anthropic;
 pub mod models;
 pub mod openai;
+pub mod sessions;
 pub mod sse;
 pub mod tools;
 
@@ -199,10 +200,29 @@ pub struct ToolSpec {
     pub schema: serde_json::Value,
 }
 
+/// 一次工具執行的紀錄（串流給前端顯示「跑了什麼、拿回什麼」，讓使用者能稽核助手下的查詢）。
+#[derive(Clone, Debug, Default)]
+pub struct ToolTrace {
+    /// 供應商給的 tool_use id（前端用它把「開始」與「結果」對上）。
+    pub id: String,
+    pub name: String,
+    /// 輸入摘要：SQL / JSON DSL / `db.table` / 檔案路徑。
+    pub input_label: Option<String>,
+    /// 回傳內容前段（≤ 600 字）。
+    pub output_preview: String,
+    pub rows: Option<usize>,
+    pub truncated: bool,
+    pub is_error: bool,
+    pub ms: u64,
+}
+
 /// 串流過程中往外推的事件（由 `agent.rs` 轉成 `agent-stream`）。
 pub enum StreamEvent {
     Text(String),
+    /// 模型開始呼叫某支工具（名稱先亮徽章）。
     ToolStart(String),
+    /// 工具執行完（含資料庫與檔案工具）。
+    ToolDone(ToolTrace),
 }
 
 pub type Sink<'a> = &'a (dyn Fn(StreamEvent) + Send + Sync);

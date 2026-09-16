@@ -34,7 +34,7 @@ const MAX_COLS_PER_TABLE = 60;
 const MAX_INDEXES_PER_TABLE = 24;
 const MAX_SCHEMA_CHARS = 6000;
 const MAX_INDEX_CHARS = 3000;
-const MAX_SQL_CHARS = 8000;
+export const MAX_SQL_CHARS = 8000;
 const MAX_PLAN_CHARS = 12000;
 const MAX_REPORT_CHARS = 8000;
 const MAX_FINDINGS = 40;
@@ -69,7 +69,7 @@ function clip(text: string, max: number): string {
  * 提示若落在 ```sql 內，那行中文就成了「待審 SQL」的最後一行，而輸出格式又要求「保持原本
  * 語意改寫」——模型沒有理由不把它當語句的一部分。（超過 8000 字的寬 SELECT 就會踩到。）
  */
-function fencedClipBlock(lang: string, body: string, max: number): string {
+export function fencedClipBlock(lang: string, body: string, max: number): string {
   if (body.length <= max) return fencedBlock(lang, body);
   return `${fencedBlock(lang, body.slice(0, max))}\n${t("…（內容過長，其餘已截斷）")}`;
 }
@@ -79,7 +79,7 @@ function fencedClipBlock(lang: string, body: string, max: number): string {
  * 壓測報告尾端就是一個 ```sql 區塊，切在區塊中間會留下沒收尾的圍籬——後面的
  * 【受測語句】【現有索引】【執行計畫】會整段被模型當成程式碼讀。
  */
-function clipMarkdown(md: string, max: number): string {
+export function clipMarkdown(md: string, max: number): string {
   if (md.length <= max) return md;
   const head = md.slice(0, max);
   let open: string | null = null;
@@ -97,7 +97,7 @@ function clipMarkdown(md: string, max: number): string {
  * 名字當成真欄位拿去建索引；寧可整行不要，並明說少了幾張表。
  * 註記本身可能讓結果略微超過 max，這點刻意容許——重點是「不切在字中間」與「有交代」。
  */
-function clipTableLines(lines: string[], max: number): string {
+export function clipTableLines(lines: string[], max: number): string {
   const kept: string[] = [];
   let used = 0;
   for (const line of lines) {
@@ -114,13 +114,13 @@ function clipTableLines(lines: string[], max: number): string {
 }
 
 // 以 null 表示「這行不出現」，讓各 builder 用同一個陣列骨架寫（空字串仍是有意義的空行）。
-function joinLines(parts: (string | null | undefined)[]): string {
+export function joinLines(parts: (string | null | undefined)[]): string {
   return parts.filter((p): p is string => p != null).join("\n");
 }
 
 // 三支 prompt 共用的抬頭：先講身分再講方言，模型才不會拿 PostgreSQL 的語法去改 MySQL 的查詢。
 // db 為 null 表示該情境沒有資料庫名（壓測分析只帶 kind）。
-function headerLines(role: string, kind: DbKind, db: string | null, uiLang: string): (string | null)[] {
+export function headerLines(role: string, kind: DbKind, db: string | null, uiLang: string): (string | null)[] {
   const label = KIND_META[kind].label;
   const name = (db ?? "").trim();
   return [
@@ -134,7 +134,7 @@ function headerLines(role: string, kind: DbKind, db: string | null, uiLang: stri
   ];
 }
 
-function findingsSection(findings: LintFinding[]): string {
+export function findingsSection(findings: LintFinding[]): string {
   // 空清單若留成空區段，模型會讀成「規則引擎的結果沒附上」而自行腦補一份；
   // 必須明講「檢查過但沒發現」，順便把「所以請找規則以外的問題」講明。
   if (findings.length === 0) {
@@ -155,7 +155,7 @@ function findingsSection(findings: LintFinding[]): string {
   return rows.join("\n");
 }
 
-function planSection(planJson: string | null | undefined): string {
+export function planSection(planJson: string | null | undefined): string {
   const raw = (planJson ?? "").trim();
   // 沒有計畫時明講「沒有」並禁止杜撰：模型很願意編出 cost 數字，而編出來的熱點會直接誤導調校。
   if (!raw) {
@@ -168,7 +168,7 @@ function planSection(planJson: string | null | undefined): string {
 // 免得剛好把「另有 N 張表未列出」那行切掉。
 const SCHEMA_SLACK = 256;
 
-function schemaSections(schema: SchemaContext | null | undefined): (string | null)[] {
+export function schemaSections(schema: SchemaContext | null | undefined): (string | null)[] {
   // 這裡再夾一次上限：SchemaContext 不保證出自 collectSchemaContext（主線可能改餵結構快取），
   // 而一張 5000 欄的寬表就足以把後面的執行計畫擠出模型的上下文，計畫才是調校最關鍵的輸入。
   const bound = (s: string, max: number): string =>

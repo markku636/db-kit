@@ -62,6 +62,8 @@ pub async fn dispatch(cli: Cli) -> AppResult<()> {
         Command::Schema(SchemaCmd::Show { path }) => super::compare::show_snapshot(&path, fmt).await,
         // 比對要同時開兩條連線（或連線 + 快照檔），自己管連線生命週期。
         Command::Compare(c) => super::compare::run(&conn, fmt, c).await,
+        // MCP 伺服器：連線延遲到第一次 tools/call，且由伺服器自己管生命週期。
+        Command::Mcp => super::mcp::serve(&conn).await,
         // ---- 其餘需建立連線 ----
         other => run_connected(&conn, fmt, other).await,
     }
@@ -321,6 +323,7 @@ async fn exec(
 
         // 連線前已處理。
         Command::Backup(_) => unreachable!("backup 在連線前已處理"),
+        Command::Mcp => unreachable!("mcp 在連線前已處理"),
     }
     Ok(())
 }

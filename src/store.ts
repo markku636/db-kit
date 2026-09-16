@@ -86,6 +86,9 @@ interface AppStore {
   pendingSql: string | null;
   // 由側欄「查詢 log」設定；開新查詢分頁後由該分頁的 QueryPane 消費一次（自動展開 NlQueryBar）。
   pendingNlOpen: boolean;
+  // 由命令面板（Ctrl+K）派給查詢分頁執行的 AI 動作 id（消費後清空）。
+  // 命令面板住在側欄、AI 動作住在 QueryPane，兩者沒有共同祖先能直接呼叫，沿用 pendingSql 那套單次請求。
+  pendingAiAction: string | null;
   // 待開啟新增列對話框的分頁鍵（右鍵「新增資料列」→ 開表後由該分頁消費）。
   pendingInsert: string | null;
   // 外鍵導覽：開啟被參照表並套用 col=value 篩選（開表後由該分頁消費）。
@@ -137,6 +140,9 @@ interface AppStore {
   // 要求下一個掛載的 QueryPane 自動展開 NlQueryBar（側欄「查詢 log」用；消費後清空）。
   requestNlAutoOpen: () => void;
   clearPendingNlOpen: () => void;
+  // 要求查詢分頁執行某個 AI 動作（命令面板用；必要時切 / 開查詢分頁）。
+  requestAiAction: (id: string) => void;
+  clearPendingAiAction: () => void;
   // 要求某分頁開啟新增列對話框（右鍵新增資料列）。
   requestInsert: (key: string) => void;
   clearPendingInsert: () => void;
@@ -182,6 +188,7 @@ export const useStore = create<AppStore>((set) => ({
   queryTabs: session.queryTabs,
   pendingSql: null,
   pendingNlOpen: false,
+  pendingAiAction: null,
   pendingInsert: null,
   pendingFilter: null,
   dataReload: {},
@@ -315,6 +322,15 @@ export const useStore = create<AppStore>((set) => ({
   clearPendingSql: () => set({ pendingSql: null }),
   requestNlAutoOpen: () => set({ pendingNlOpen: true }),
   clearPendingNlOpen: () => set({ pendingNlOpen: false }),
+  // 與 requestQuery 同一套落點邏輯：AI 動作的對象是編輯器內容，沒有查詢分頁就先開一個。
+  requestAiAction: (id) =>
+    set((s) => {
+      if (s.queryTabs.includes(s.activeTabKey ?? "")) return { pendingAiAction: id };
+      if (s.queryTabs.length) return { pendingAiAction: id, activeTabKey: s.queryTabs[0] };
+      const tab = nextQueryTabId(s.queryTabs);
+      return { pendingAiAction: id, queryTabs: [tab], activeTabKey: tab };
+    }),
+  clearPendingAiAction: () => set({ pendingAiAction: null }),
   requestInsert: (key) => set({ pendingInsert: key }),
   clearPendingInsert: () => set({ pendingInsert: null }),
   // 開啟（或切到）被參照表，並排入 col=value 篩選；TableView 掛載 / pendingFilter 變動時消費。

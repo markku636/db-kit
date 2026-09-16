@@ -185,6 +185,9 @@ pub enum Command {
     /// Redis 操作（掃描 / 檢視 + 修改 / 刪除）
     #[command(subcommand)]
     Redis(RedisCmd),
+
+    /// 以 MCP（stdio JSON-RPC）伺服器模式啟動，把唯讀資料庫工具提供給 AI 用戶端（Claude Code / Codex）
+    Mcp,
 }
 
 #[derive(Subcommand, Debug)]

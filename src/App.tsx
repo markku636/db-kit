@@ -48,6 +48,13 @@ import Select from "./ui/Select";
 import { buildExplainJsonSql, parseExplainPlan, planSummary, type PlanNode } from "./explain";
 import { lintSql, MAX_SQL_CHARS as LINT_MAX_CHARS, type LintFinding, type LintSeverity } from "./sqlLint";
 import { buildReviewPrompt, buildTunePrompt, collectSchemaContext } from "./aiReview";
+import {
+  buildCommentPrompt, buildConvertPrompt, buildExplainPlanPrompt, buildExplainPrompt,
+  buildFixPrompt, buildInlineEditPrompt, buildOptimizePrompt, buildTestDataPrompt, MAX_TESTDATA_ROWS,
+  resolveAiTarget, type AiActionId, type AiTarget,
+} from "./aiActions";
+import { aiActionItems, type AiActionAvailability } from "./AiActionMenu";
+import { statementTables } from "./sqlContextComplete";
 import type { MongoQueryEditorHandle } from "./MongoQueryEditor";
 import type { ElasticQueryEditorHandle } from "./ElasticQueryEditor";
 import { buildSqlNlPrompt, buildEsNlPrompt } from "./nlPrompt";
@@ -132,6 +139,10 @@ const SqlEditor = lazy(() => import("./SqlEditor"));
 const MongoQueryEditor = lazy(() => import("./MongoQueryEditor"));
 const ElasticQueryEditor = lazy(() => import("./ElasticQueryEditor"));
 const NlQueryBar = lazy(() => import("./NlQueryBar"));
+// AI 動作（解釋 / 最佳化 / 修正 / 加註解 / 轉方言 / 測試資料）：差異預覽與選單都只在用到時載入。
+const AiDiffDialog = lazyOverlay(() => import("./AiDiffDialog"));
+const AiActionMenu = lazyOverlay(() => import("./AiActionMenu"));
+const AiInlineInput = lazyOverlay(() => import("./AiInlineInput"));
 
 // ---- 依選取的樹節點，組「新查詢分頁」的起始 SQL（對標 DataGrip / Navicat：在物件上開查詢即帶範圍）----
 //  - 資料表 / 檢視：USE db;（mysql / external）或 SET search_path（postgres）＋ 一條可執行的 SELECT … LIMIT 100；
@@ -986,6 +997,7 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   const groups: [string, [string, string][]][] = [
     [t("全域"), [
       ["Ctrl+K", t("命令面板：跳到連線 / 資料庫 / 資料表，或執行動作")],
+      ["Ctrl+L", t("開 / 關 AI 助手並聚焦輸入框")],
       ["Ctrl+Shift+G", t("進階物件搜尋（名稱 / 定義 / 註解 / 萬用字元 / 整字）")],
     ]],
     [t("查詢編輯器"), [
@@ -998,6 +1010,9 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
       ["Ctrl+/", t("切換 SQL 行註解")],
       ["Ctrl+Shift+F", t("格式化 SQL")],
       ["Ctrl+Shift+A", t("開 / 關 AI 生成查詢列（本機 Claude / Codex CLI）")],
+      ["Ctrl+Shift+E", t("AI 動作快選（解釋 / 最佳化 / 修正 / 加註解 / 轉方言 / 測試資料）")],
+      ["Ctrl+I", t("用自然語言修改選取段（差異預覽後才套用）")],
+      [t("編輯器右鍵"), t("開 AI 動作選單")],
       ["Ctrl+S / Ctrl+O", t("另存 / 開啟 .sql 檔")],
       ["Esc", t("停止執行中的查詢（已完成的結果保留）")],
       [t("工具列下拉"), t("切換目前連線 / 資料庫；「視覺化解釋」看執行計畫")],
@@ -1557,6 +1572,21 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
       },
     });
     items.push({ id: "act:theme", label: t("切換深淺色主題"), group: "action", icon: Moon, run: () => useTheme.getState().toggle() });
+    // 編輯器 AI 動作：只有關聯式連線才列（Mongo / Redis / Kafka 沒有可改寫的 SQL）。
+    // 真正的可用性（有沒有錯誤可修、有沒有計畫可解釋）由查詢分頁在消費時判斷——
+    // 側欄看不到那些狀態，在這裡猜只會猜錯。
+    {
+      const c = connections.find((x) => x.id === activeId) ?? null;
+      if (c && supportsQueryEditorKind(c.kind) && c.kind !== "mongo" && c.kind !== "redis") {
+        for (const it of aiActionItems(
+          { kind: c.kind, hasError: true, hasPlan: true, hasTable: true },
+          (id) => useStore.getState().requestAiAction(id),
+          t,
+        )) {
+          items.push(it);
+        }
+      }
+    }
     // 只有已啟用啟動鎖定時才出現——沒設鎖卻給一顆「立即鎖定」，按下去要嘛沒反應、
     // 要嘛把人關在一道他沒鑰匙的門外。
     if (onLockNow) items.push({ id: "act:lock", label: t("立即鎖定"), group: "action", icon: Lock, run: onLockNow });
@@ -4127,6 +4157,18 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [planRaw, setPlanRaw] = useState<string | null>(() => restored?.planRaw ?? null);
   // AI 審查 / 調校進行中（要先打幾支 api 抓結構，不是瞬間完成）。
   const [aiBusy, setAiBusy] = useState(false);
+  // ---- 編輯器 AI 動作 ----
+  // 右鍵選單座標 / 快選面板 / Ctrl+I 浮動輸入框 / 差異預覽工作階段。
+  const [aiMenu, setAiMenu] = useState<{ x: number; y: number } | null>(null);
+  const [aiPickOpen, setAiPickOpen] = useState(false);
+  const [aiInline, setAiInline] = useState<{ anchor: { left: number; top: number } | null; target: AiTarget } | null>(null);
+  const [aiEdit, setAiEdit] = useState<{
+    title: string;
+    target: AiTarget;
+    /** 送出當下的整份文件：接受前用它確認那段文字還在原位（見 AiDiffDialog.isStale）。 */
+    baseDoc: string;
+    prompt: string;
+  } | null>(null);
   // Mongo 執行計畫（與 SQL 的 plan 分開：階段指標與成本模型不同，各自渲染器）。
   const [mongoPlan, setMongoPlan] = useState<{ model: MongoExplainModel; raw: string } | null>(() => restored?.mongoPlan ?? null);
   // 結果區狀態同步進快取：切走時 QueryPane 被卸載，來不及在 unmount 時收集，故隨改隨寫。
@@ -4138,6 +4180,22 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     });
   }, [tabId, activeId, resultSets, activeResult, collapsedSets, err, errSql, errStmt, elapsed,
       bottomTab, summary, plan, planErr, planRaw, mongoPlan]);
+  // 把編輯器現況發佈給 AI 助手，讓對話能用 `@query` / `@result` / `@error` 與 /explain、/fix。
+  // 只存參照不複製資料列；過期與否由消費端以 connId 判斷（見 chatTypes.EditorSnapshot）。
+  useEffect(() => {
+    useAssistant.getState().publishEditor({
+      tabId,
+      connId: activeId ?? null,
+      kind,
+      db: schemaTargetDb,
+      sql,
+      selection: editorSel,
+      result,
+      resultSql: resultSets[activeIdx]?.sql ?? null,
+      error: err ? { message: err, sql: errStmt ?? errSql ?? sql } : null,
+      updatedAt: Date.now(),
+    });
+  }, [tabId, activeId, kind, schemaTargetDb, sql, editorSel, result, resultSets, activeIdx, err, errStmt, errSql]);
   // executionStats 會「實際執行」查詢；queryPlanner 只做計畫（便宜），供昂貴管線選用。
   const [mongoVerbosity, setMongoVerbosity] = useState<"queryPlanner" | "executionStats" | "allPlansExecution">("executionStats");
   const mongoEditorRef = useRef<MongoQueryEditorHandle>(null);
@@ -4236,6 +4294,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 消費命令面板派來的 AI 動作。與 pendingNlOpen 不同的是它可能在分頁已掛載時才發生
+  //（使用者在查詢分頁上按 Ctrl+K），故走訂閱式。
+  const pendingAiAction = useStore((s) => s.pendingAiAction);
+  useEffect(() => {
+    if (!pendingAiAction) return;
+    useStore.getState().clearPendingAiAction();
+    if (pendingAiAction === "inline") openAiInline();
+    else void runAiAction(pendingAiAction as AiActionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAiAction]);
   // 生成用 prompt：注入 schema（SQL）或 mapping（ES）。選中表 / index 取自側欄節點。
   const buildNlPrompt = async (nlText: string): Promise<string> => {
     const uiLang = useLang.getState().lang;
@@ -4420,15 +4489,19 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         const isSql = !!kind && (EXPLAIN_KINDS.includes(kind) || kind === "mssql");
         const isSqlLike = isSql || kind === "external"; // external（gateway）也講 SQL，但不走前端切分
         const userStatements = isSql ? splitSqlStatements(q) : [q];
+        // 守門掃描的單位與「送出」的單位刻意分開：external 整批送（gateway 自己會拆，前端切了
+        // 會破壞它的多結果集對位），但檢查一定要看切分後的每一條。isWriteStatement 只認語句的
+        // **第一個**關鍵字，拿整批去問等於只檢查了第一句——`SELECT 1; DROP TABLE users` 會就這樣
+        // 從唯讀連線的閘門底下過去。
+        const scanStatements = isSqlLike ? splitSqlStatements(q) : userStatements;
         // 純註解 / 空白（如尾端 `-- 註記`）不是可執行語句 → 不送 DB，避免「Query was empty」類錯誤。
-        // isSql 經切分後可能為空；external 未切分，逐條檢查是否全為註解。
-        if (isSqlLike && userStatements.every((s) => !hasExecutableSql(s))) {
+        if (isSqlLike && scanStatements.every((s) => !hasExecutableSql(s))) {
           toast.info(t("僅含註解，無可執行語句"));
           return;
         }
         // 唯讀連線：擋下任何寫入 / DDL 語句（INSERT/UPDATE/DELETE/CREATE/ALTER/DROP… 與交易控制）。
         const roState = useStore.getState();
-        if (isSqlLike && roState.activeId && roState.readonlyConns[roState.activeId] === true && userStatements.some((s) => isWriteStatement(s))) {
+        if (isSqlLike && roState.activeId && roState.readonlyConns[roState.activeId] === true && scanStatements.some((s) => isWriteStatement(s))) {
           toast.error(t("此連線為唯讀，已擋下寫入 / DDL 語句。可在連線右鍵關閉「唯讀模式」。"));
           return;
         }
@@ -4456,7 +4529,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           if (!ok) return;
         }
         // 防手滑：無 WHERE 的 UPDATE/DELETE 或 TRUNCATE 會影響整張表，先確認（external 亦講 MySQL，需納入）。
-        const dangerCount = isSqlLike ? userStatements.filter((s) => isDangerousStatement(s)).length : 0;
+        // 同樣掃切分後的版本（見上）：external 整批只會算出 0 或 1，第二條之後的 TRUNCATE 數不到。
+        const dangerCount = isSqlLike ? scanStatements.filter((s) => isDangerousStatement(s)).length : 0;
         if (dangerCount > 0) {
           const ok = await uiConfirm(
             t("偵測到 {dangerCount} 條無 WHERE 的 UPDATE / DELETE 或 TRUNCATE，將影響整張表的所有資料列。確定執行？", { dangerCount }),
@@ -4755,8 +4829,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   //（以 ref 取最新函式，listener 只掛一次）。僅在查詢分頁掛載時存在；有對話框開啟時讓路。
   const formatCurrent = () => { if (supportsSqlEditor && sql.trim()) persistSql(formatSql(sql)); };
   const toggleNl = () => { if (supportsNlQuery) setNlOpen((v) => !v); };
-  const fileShortcutRef = useRef({ saveSqlFile, openSqlFile, formatCurrent, toggleNl });
-  fileShortcutRef.current = { saveSqlFile, openSqlFile, formatCurrent, toggleNl };
+  // AI 快選 / 就地指示：編輯器內按會被 CodeMirror 的 keymap 先接走（見 SqlEditor.onAiCommand），
+  // 這裡是焦點不在編輯器時的後備路徑——使用者剛按完「執行」還把手放在鍵盤上，也該叫得出來。
+  const openAiPicker = () => { if (supportsSqlEditor) setAiPickOpen(true); };
+  const aiInlineShortcut = () => { if (supportsSqlEditor) openAiInline(); };
+  const fileShortcutRef = useRef({ saveSqlFile, openSqlFile, formatCurrent, toggleNl, openAiPicker, aiInlineShortcut });
+  fileShortcutRef.current = { saveSqlFile, openSqlFile, formatCurrent, toggleNl, openAiPicker, aiInlineShortcut };
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
@@ -4765,10 +4843,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       if (e.shiftKey) {
         if (k === "f") { e.preventDefault(); fileShortcutRef.current.formatCurrent(); } // Ctrl/Cmd+Shift+F 格式化
         else if (k === "a") { e.preventDefault(); fileShortcutRef.current.toggleNl(); } // Ctrl/Cmd+Shift+A AI 生成
+        else if (k === "e") { e.preventDefault(); fileShortcutRef.current.openAiPicker(); } // Ctrl/Cmd+Shift+E AI 動作快選
         return;
       }
       if (k === "s") { e.preventDefault(); fileShortcutRef.current.saveSqlFile(); }
       else if (k === "o") { e.preventDefault(); fileShortcutRef.current.openSqlFile(); }
+      else if (k === "i") { e.preventDefault(); fileShortcutRef.current.aiInlineShortcut(); } // Ctrl/Cmd+I 就地指示
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
@@ -4944,6 +5024,142 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   };
   const askAiReview = () => void askAiSql("review");
   const askAiTune = () => void askAiSql("tune");
+
+  // ---- 編輯器 AI 動作（解釋 / 最佳化 / 修正 / 加註解 / 轉方言 / 測試資料 / 白話計畫 / 就地指示）----
+
+  /** 目前情境能跑哪些動作（灰掉沒有輸入的那幾個，而不是讓使用者按了才發現沒反應）。 */
+  const aiAvailability = (): AiActionAvailability => ({
+    kind: (kind ?? "mysql") as DbKind,
+    hasError: !!err,
+    hasPlan: !!planRaw || !!plan,
+    hasTable: !!(useStore.getState().selectedNode?.type === "table" || statementTables(sql).length),
+  });
+
+  /** 取這次動作要處理的範圍：選取 > 游標所在語句 > 整份文件。直接問編輯器而不是讀 editorSel——
+   *  後者只有文字沒有位移，而且是 React state，按下選單當下可能還落後一個 render。 */
+  const aiTarget = (): AiTarget | null => {
+    const ed = editorRef.current;
+    if (!ed) return null;
+    const doc = ed.getDoc();
+    const sel = ed.getSelection();
+    return resolveAiTarget(doc, sel ? { from: sel.from, to: sel.to } : null, ed.getCursor());
+  };
+
+  const scopeLabel = (target: AiTarget): string =>
+    target.scope === "selection" ? t("選取範圍") : target.scope === "statement" ? t("游標所在語句") : t("整個編輯器");
+
+  const openAiEdit = (title: string, target: AiTarget, prompt: string) => {
+    setAiEdit({ title, target, baseDoc: editorRef.current?.getDoc() ?? "", prompt });
+  };
+
+  /**
+   * 跑一個 AI 動作。散文類（解釋 / 白話計畫）丟給右側助手面板；改寫類（其餘）走差異預覽。
+   * 兩者共用同一套「取範圍 → 抓結構 → 組 prompt」，差別只在結果送去哪裡。
+   */
+  const runAiAction = async (id: AiActionId, opts?: { targetKind?: DbKind; instruction?: string }) => {
+    if (!activeId || !kind || aiBusy) return;
+    const target = aiTarget();
+    const uiLang = useLang.getState().lang;
+
+    // 測試資料不是「改寫某段 SQL」，走自己的輸入流程（選表 + 筆數）。
+    if (id === "testdata") {
+      const picked = useStore.getState().selectedNode;
+      const table = picked?.type === "table" ? picked.table : statementTables(target?.text ?? sql)[0]?.table;
+      if (!table) { toast.info(t("請先選取一張資料表")); return; }
+      const ans = await uiPrompt(t("要產生幾列測試資料？"), { title: t("產生測試資料"), defaultValue: "20" });
+      if (ans == null) return;
+      const rows = Math.max(1, Math.min(Number(ans) || 20, MAX_TESTDATA_ROWS));
+      setAiBusy(true);
+      try {
+        const columns = await api.tableColumns(activeId, schemaTargetDb, table);
+        const prompt = buildTestDataPrompt({ kind, db: schemaTargetDb, table, columns, rows, uiLang });
+        // 沒有「原文」可比對，就以空字串當原文——差異視圖等於整段都是新增，語意剛好正確。
+        openAiEdit(t("產生測試資料：{table}", { table }), { from: 0, to: 0, text: "", scope: "document" }, prompt);
+      } catch (e: any) {
+        toast.error(e?.message ?? t("組裝 AI 提示失敗"));
+      } finally { setAiBusy(false); }
+      return;
+    }
+
+    if (!target) { toast.info(t("編輯器裡沒有可處理的 SQL")); return; }
+
+    setAiBusy(true);
+    try {
+      const picked = useStore.getState().selectedNode;
+      const schema = await collectSchemaContext(
+        activeId, schemaTargetDb, target.text,
+        picked?.type === "table" ? picked.table : null,
+      );
+      const base = { kind, db: schemaTargetDb, sql: target.text, schema, uiLang };
+      switch (id) {
+        case "explain":
+          useAssistant.getState().ask(buildExplainPrompt(base), { send: true });
+          break;
+        case "explainPlan":
+          useAssistant.getState().ask(
+            buildExplainPlanPrompt({
+              ...base,
+              planJson: planRaw,
+              planSummary: plan ? planSummary(plan) : null,
+              hotNodes: plan ? hotPlanNodes(plan) : [],
+            }),
+            { send: true },
+          );
+          break;
+        case "optimize":
+          openAiEdit(t("最佳化 SQL"), target, buildOptimizePrompt({ ...base, findings, planJson: planRaw }));
+          break;
+        case "fix": {
+          if (!err) { toast.info(t("沒有執行錯誤可修正")); break; }
+          // 多語句批次沿用 askAiFixError 的判準：失敗的單句與整批都給，並要求回傳完整批次。
+          const full = errSql ?? queryToRun();
+          const failed = errStmt && errStmt.trim() && errStmt.trim() !== full.trim() ? errStmt : null;
+          // 修正的作用範圍是「送出執行的那一段」而非游標所在句，否則接受後會貼錯地方。
+          const fixTarget: AiTarget = failed
+            ? { from: 0, to: sql.length, text: sql, scope: "document" }
+            : target;
+          openAiEdit(t("修正 SQL 錯誤"), fixTarget, buildFixPrompt({ ...base, sql: full, error: err, failedStmt: failed }));
+          break;
+        }
+        case "comment":
+          openAiEdit(t("為 SQL 加上註解"), target, buildCommentPrompt(base));
+          break;
+        case "convert": {
+          const to = opts?.targetKind;
+          if (!to) break;
+          openAiEdit(t("轉換為 {label}", { label: KIND_META[to].label }), target, buildConvertPrompt({ ...base, target: to }));
+          break;
+        }
+        case "inline": {
+          if (!opts?.instruction) break;
+          openAiEdit(t("依指示修改"), target, buildInlineEditPrompt({ ...base, instruction: opts.instruction }));
+          break;
+        }
+      }
+    } catch (e: any) {
+      toast.error(e?.message ?? t("組裝 AI 提示失敗"));
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  /** Ctrl+I：先問「要怎麼改」，拿到指示才組 prompt。 */
+  const openAiInline = () => {
+    const target = aiTarget();
+    if (!target) { toast.info(t("編輯器裡沒有可處理的 SQL")); return; }
+    const c = editorRef.current?.coordsAt(target.from) ?? null;
+    setAiInline({ anchor: c ? { left: c.left, top: c.top } : null, target });
+  };
+
+  /** 接受差異：就地替換那段文字（走 CodeMirror 的 dispatch，因此 Ctrl+Z 可復原）。 */
+  const acceptAiEdit = (finalSql: string) => {
+    const s = aiEdit;
+    if (!s) return;
+    const ok = editorRef.current?.replaceRange(s.target.from, s.target.to, finalSql);
+    setAiEdit(null);
+    if (ok) toast.success(t("已套用 AI 修改（Ctrl+Z 可復原）"));
+    else toast.error(t("套用失敗，請改用「在新分頁開啟」"));
+  };
 
   // 把出錯的 SQL + 錯誤訊息帶進 AI 助手，請它分析原因並給出修正後的 SQL（一鍵自動送出）。
   const askAiFixError = () => {
@@ -5257,6 +5473,15 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 <Icon icon={Sparkles} size={13} />{!dense && t("AI 生成")}
               </button>
             )}
+            {supportsSqlEditor && !folded && (
+              <button type="button" onClick={(e) => setAiMenu({ x: e.currentTarget.getBoundingClientRect().left, y: e.currentTarget.getBoundingClientRect().bottom + 4 })}
+                disabled={aiBusy}
+                title={t("對選取段 / 游標所在語句執行 AI 動作：解釋、最佳化、修正、加註解、轉方言… · Ctrl+Shift+E")}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
+                <Icon icon={Wand2} size={13} />{!dense && t("AI 動作")}
+                <Icon icon={ChevronDown} size={11} className="text-fg/35" />
+              </button>
+            )}
             {kind === "elastic" && kibanaUrl && !folded && (
               <button type="button" onClick={copyKibanaLink} disabled={kibanaBusy || !sql.trim()}
                 title={t("把目前查詢轉成 Kibana Discover 連結並複製")}
@@ -5476,8 +5701,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 snippets={editorSnippets}
                 onSubmit={onEditorSubmit}
                 onSelectionChange={setEditorSel}
+                onContextMenu={(p) => setAiMenu(p)}
+                onAiCommand={(cmd) => (cmd === "inline" ? openAiInline() : setAiPickOpen(true))}
                 autoFocus
-                placeholder={t("SQL 查詢（F6 整段、Ctrl+Enter 執行游標所在語句／選取段；Ctrl+/ 註解、Tab 縮排）")}
+                placeholder={t("SQL 查詢（F6 整段、Ctrl+Enter 執行游標所在語句／選取段；Ctrl+/ 註解、Tab 縮排；右鍵或 Ctrl+Shift+E 開 AI 動作）")}
               />
             </Suspense>
           </div>
@@ -5680,6 +5907,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                   })()}
                   <div className="text-red-400 text-sm mono whitespace-pre-wrap break-words">{err}</div>
                   <div className="flex items-center gap-2">
+                    {supportsSqlEditor && (
+                      <button type="button" onClick={() => void runAiAction("fix")} disabled={aiBusy}
+                        title={t("請 AI 修正這段 SQL，並以差異比對確認後才套用回編輯器")}
+                        className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-blue-400/40 text-blue-300 hover:bg-blue-400/10 disabled:opacity-40">
+                        <Icon icon={aiBusy ? Loader2 : Wand2} size={13} className={aiBusy ? "animate-spin" : ""} />{t("AI 修正（差異預覽）")}
+                      </button>
+                    )}
                     <button type="button" onClick={askAiFixError}
                       title={t("把這段 SQL 與錯誤訊息帶進 AI 助手，分析原因並給出修正後的 SQL")}
                       className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-blue-400/40 text-blue-300 hover:bg-blue-400/10">
@@ -5770,10 +6004,16 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 <>
                   {/* 計畫看完接著就是「那要怎麼辦」——把調校入口放在計畫上方，
                       不必再切回工具列去找。 */}
-                  <div className="flex items-center px-3 pt-2">
+                  <div className="flex items-center gap-1.5 px-3 pt-2">
+                    <button type="button" onClick={() => void runAiAction("explainPlan")} disabled={aiBusy}
+                      title={t("請 AI 用白話說明這份執行計畫在做什麼、哪一步最貴")}
+                      className="ml-auto inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
+                      <Icon icon={aiBusy ? Loader2 : Sparkles} size={12} className={aiBusy ? "animate-spin" : ""} />
+                      {t("白話解釋計畫")}
+                    </button>
                     <button type="button" onClick={askAiTune} disabled={aiBusy}
                       title={t("把執行計畫、熱點節點、相關表結構與索引一起交給 AI 助手，請它給出索引 DDL 與改寫建議")}
-                      className="ml-auto inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
+                      className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
                       <Icon icon={aiBusy ? Loader2 : Sparkles} size={12} className={aiBusy ? "animate-spin" : ""} />
                       {t("AI 調校建議")}
                     </button>
@@ -5815,6 +6055,39 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           initialDb={queryDb}
           onClose={() => setBuilderOpen(false)}
           onUse={(generated) => { persistSql(generated); setBuilderOpen(false); }}
+        />
+      )}
+      {/* ---- 編輯器 AI 動作 ---- */}
+      {aiMenu && supportsSqlEditor && (
+        <AiActionMenu x={aiMenu.x} y={aiMenu.y} av={aiAvailability()}
+          onClose={() => setAiMenu(null)}
+          onRun={(id, o) => (id === "inline" ? openAiInline() : void runAiAction(id, o))} />
+      )}
+      {aiPickOpen && supportsSqlEditor && (
+        <CommandPalette
+          placeholder={t("選擇 AI 動作…")}
+          items={aiActionItems(aiAvailability(), (id, o) => (id === "inline" ? openAiInline() : void runAiAction(id, o)), t)}
+          onClose={() => setAiPickOpen(false)}
+        />
+      )}
+      {aiInline && (
+        <AiInlineInput anchor={aiInline.anchor} scopeLabel={scopeLabel(aiInline.target)}
+          onClose={() => setAiInline(null)}
+          onSubmit={(instruction) => { setAiInline(null); void runAiAction("inline", { instruction }); }} />
+      )}
+      {aiEdit && kind && (
+        <AiDiffDialog
+          title={aiEdit.title}
+          kind={kind}
+          scopeLabel={scopeLabel(aiEdit.target)}
+          original={aiEdit.target.text}
+          prompt={aiEdit.prompt}
+          // 過期判斷：那段文字是否還原封不動待在原位。整份文件比對太嚴（改了別處也會擋），
+          // 只比對目標範圍才是「能不能安全就地替換」真正的判準。
+          isStale={() => editorRef.current?.getDoc().slice(aiEdit.target.from, aiEdit.target.to) !== aiEdit.target.text}
+          onAccept={acceptAiEdit}
+          onOpenInNewTab={(s) => useStore.getState().newQueryTab(s, activeId ?? undefined)}
+          onClose={() => setAiEdit(null)}
         />
       )}
     </div>

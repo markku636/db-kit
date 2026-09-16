@@ -1,5 +1,18 @@
 ## v0.30.0
 
+**AI 助手以前看不到資料庫**。它拿到的一切都是前端事先塞進提示裡的：目前選中那一張表的欄位，如此而已。於是「這個庫是做什麼的」只能靠猜，「上個月訂單多少」只能回一段 SQL 請使用者自己去跑，而模型很樂意對著它沒看過的表編出欄位來。這一版把三件事補上：讓它自己查（唯讀）、讓編輯器裡的改寫看得到差異、讓對話能講清楚要附帶什麼。
+
+- **助手可以自己讀資料庫，而且只能讀**。新增 `src-tauri/src/dbtools/`：`list_databases` / `list_tables` / `describe_table` / `sample_rows` / `run_query` / `explain_query` 六支唯讀工具。唯讀是**機制上做不到寫入**，不是提示裡請它不要——SQL 走 `cli::guard` 的嚴格版，連 `EXPLAIN ANALYZE DELETE` 都擋（PostgreSQL 的 EXPLAIN ANALYZE 會真的執行內層語句，舊的守門放它過去）；MongoDB 拒絕 `$out` / `$merge`；Redis 只放行讀取類命令白名單（`CONFIG GET` 可以、`CONFIG SET` 不行）。一次一條語句，200 列 / 8 KB / 30 秒三道上限——工具回傳是要塞進模型上下文的，一張寬表就能把整段對話擠掉。
+- **它跑了什麼，使用者看得見**。`agent-stream` 新增 `tool_result` 事件與 `tool_input` / `tool_output_preview` / `tool_rows` / `tool_ms` 欄位，聊天面板把每次工具呼叫列成可展開的清單：哪一支工具、下了哪條 SQL（照主題上色）、拿回幾列、花了多久、失敗訊息是什麼，SQL 可一鍵貼回編輯器。模型能對正式資料庫下查詢之後，「它到底查了什麼」就不再是實作細節而是稽核需求。正式環境連線第一次要給工具時另外確認一次。
+- **CLI 供應商走 `dbk mcp`**，與 API 供應商用同一份實作。新增 `dbk mcp` 子指令：手寫的 MCP stdio 伺服器（JSON-RPC 2.0，五個方法），不引入框架——surface 只有這麼大，而把帶 proc-macro 的 crate 拉進精簡 binary 不划算。GUI 送出時自動找到 `dbk`、以目前連線把它掛給 Claude Code（`--mcp-config` + `--strict-mcp-config`，並逐一放行 `mcp__dbkit__*`）或 Codex（`-c mcp_servers.dbkit.*`）；找不到就退回沒有資料庫工具，面板會說明。`dbk mcp` 也能獨立給任何 MCP 用戶端用。
+- **編輯器裡的 AI 改寫先看差異再套用**。選一段 SQL（或把游標放在某條語句上），右鍵 / `Ctrl+Shift+E` / 工具列「AI 動作」：解釋、最佳化、修正錯誤、加註解、轉換方言、產生測試資料、白話解釋執行計畫；`Ctrl+I` 直接用一句話描述要怎麼改。改寫類一律進差異預覽（`@codemirror/merge` 的 unifiedMergeView）：逐塊可拒絕、提案本身可手改，「接受」才寫回，而且走 `view.dispatch` 所以進 undo 歷史。先前的「貼到編輯器」是整段覆蓋，使用者無從得知模型改了哪幾行，於是只有盲目接受或整段丟掉兩種用法。提示裡另外要求「沒被要求改的行逐字元照抄」——少了這條，模型會把整段重排，每一行都顯示成變更，差異就白做了。
+- **對話面板：`@` 指定範圍、`/` 用指令、SQL 區塊可就地執行**。`@orders` 把那張表的欄位與索引烘進上下文，`@db:shop` / `@file:x.sql` / `@query` / `@result` / `@error` 分別帶入其他庫、工作資料夾的檔案、以及查詢分頁的現況；送出前就顯示「已附帶 3 張表、約 4.2 KB」。**沒帶成的一律留下痕跡**（找不到 / 超出預算 / 取不到），靜默丟掉一張表的後果不是模型少知道一件事，而是它自己編一張出來。`/explain`、`/fix`、`/optimize`、`/sql`、`/schema` 免打整段提示。回應裡的 SQL 區塊可「執行」或「執行並回饋」（結果交回模型接著分析），守門與查詢分頁同一套：唯讀連線硬擋寫入、破壞性語句與正式環境要確認、逐句執行遇錯即停。
+- **HTTP 供應商的對話歷史會落地**。以前它只活在 `AppState.llm_sessions` 這個 HashMap 裡，App 一關就沒——但前端帶著同一個 session id 與整段對話畫面回來，使用者看得到上文、模型卻一無所知，而且完全沒有徵兆。改存 `<config>/llm-sessions/<id>.json`（30 天 / 50 段上限，啟動時背景清理），讀失敗一律當成「沒有歷史」而不是讓對話開不起來。這些檔案夾帶查詢結果，所以與 `connections.json` 同目錄，並在「清空對話」時一併刪除。
+- **唯讀連線在 external（gateway）上擋不住多語句寫入**（既有問題，這次寫聊天室的執行守門時撞到）。執行路徑對 external 刻意不做前端切分（gateway 自己會拆，切了會破壞多結果集對位），但守門也跟著拿**整批**去問 `isWriteStatement`——而那支只認語句的第一個關鍵字。於是 `SELECT 1; DROP TABLE users` 在標了唯讀的 external 連線上就這樣通過閘門，破壞性語句的確認框同理只數得到第一句。掃描單位與送出單位本來就不必相同：現在一律掃切分後的版本，送出維持原樣。
+- **順帶修掉的**：`es_data_view_id` 在 `lib.rs` 的註冊漏了 `#[cfg(feature = "elastic")]`，`--features gui` 單獨建置從來編不過（預設 features 含 elastic 才沒被發現）。`llm::tools::safe_path` 的磁碟前綴判斷原本靠 `Path` 的平台語意，在 Linux 上 `C:/Windows/win.ini` 被當成合法相對路徑——改成自己判（含 UNC），三個平台同一份結論。`isDestructive` 與 `SQL_LEAD` 從 `NlQueryBar` 搬進 `aiActions`：同一段 DELETE 在生成列示警、在差異預覽不示警的話，使用者只會學會忽略警告。
+
+> 驗證：`cargo test --no-default-features --features gui --lib`（Docker）通過，本次新增 46 項 Rust 測試（dbtools 的格式化上限與三種方言的唯讀守門、`EXPLAIN ANALYZE` 內層寫入偵測、MCP 的握手 / tools/list / 錯誤碼 / 通知不回應、Claude 與 Codex 的工具事件解析、`--mcp-config` 與 `-c mcp_servers` 的參數組裝、對話歷史的存讀 / 修剪 / 路徑逃逸）。vitest 1153 項全通過（本次新增 297 項：提示組裝、`@` 文法與預算、斜線命令展開、執行守門、工具事件 reducer）。`tsc` 0 error、`eslint src` 0 error。**尚未對真實資料庫做端對端實測**，Codex 的 `-c mcp_servers.*` 覆寫與 `--json` 的 `mcp_tool_call` 欄位名是依公開行為寫的，解析一律寬鬆（拿不到就略過），但值得在裝了 Codex 的機器上跑一次確認。
+
 **SQL Server 的預存程序看起來全被叫成「函式」**。側欄樹從來只有一個資料夾放 routine，而那個資料夾的名字就叫「函式」——程序與函式一起倒進去。MySQL / PostgreSQL 的使用者兩種都有，還看得出來是混在一起；SQL Server 這邊手上多半只有預存程序，於是整批物件就這樣頂著「函式」的標題。追這條線的時候，同一條路徑上還有幾個真的會送錯 SQL 的地方。
 
 - **程序與函式拆成兩個資料夾**（對標 SSMS / DBeaver）：「預存程序」用齒輪、琥珀色，「函式」用 fx、綠色，跟樹節點自己的圖示與 tooltip 一致。兩個資料夾都預設收合，數量各自計算，每庫篩選框照舊同時吃兩邊。

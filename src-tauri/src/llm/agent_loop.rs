@@ -6,8 +6,21 @@
 //! - 對話歷史上限：HTTP 沒有伺服器端 session，整串歷史每回合都要重送，不修剪會越送越貴
 
 use std::path::Path;
+use std::time::Instant;
 
-use super::{stream_turn, tools, LlmConfig, LlmResult, Message, Sink, StopReason, ToolOutput, ToolSpec, TurnRequest};
+use super::{stream_turn, tools, LlmConfig, LlmResult, Message, Sink, StopReason, StreamEvent, ToolOutput, ToolSpec, ToolTrace, TurnRequest};
+use crate::dbtools::DbToolCtx;
+
+/// 工具結果給前端看的預覽長度（字元）。
+const PREVIEW_CHARS: usize = 600;
+
+fn preview(s: &str) -> String {
+    let mut p: String = s.chars().take(PREVIEW_CHARS).collect();
+    if s.chars().count() > PREVIEW_CHARS {
+        p.push('…');
+    }
+    p
+}
 
 /// 一次問答內最多來回幾次（含工具回合）。
 const MAX_TURNS: usize = 16;
@@ -16,11 +29,13 @@ pub const MAX_HISTORY: usize = 40;
 /// 對話歷史序列化後的位元組上限（超過從最舊的開始丟）。
 pub const MAX_HISTORY_BYTES: usize = 200 * 1024;
 
-/// 助手模式 → 這回合的參數。`generate`（NL→SQL）刻意零工具、單回合、temperature 0。
+/// 助手模式 → 這回合的參數。`generate`（NL→SQL）刻意零工具、單回合、temperature 0；
+/// `edit`（編輯器內改寫 SQL）同樣零工具與 temperature 0，但要回傳整段語句，額度放寬到 4096。
 fn params_for_mode(mode: &str) -> (u32, Option<f32>, bool) {
     // (max_tokens, temperature, 允許工具)
     match mode {
         "generate" => (1024, Some(0.0), false),
+        "edit" => (4096, Some(0.0), false),
         "agent" => (8192, None, true),
         _ => (8192, None, true),
     }
@@ -47,12 +62,14 @@ pub fn trim_history(history: &mut Vec<Message>) {
 }
 
 /// 跑完一次問答。`history` 進來是這個 session 既有的訊息，回來是加上本回合之後的完整歷史。
+/// `db` 為這次對話附帶的連線（有才給資料庫工具）。
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     http: &reqwest::Client,
     cfg: &LlmConfig,
     mode: &str,
     workspace: &Path,
+    db: Option<&DbToolCtx>,
     history: &mut Vec<Message>,
     prompt: String,
     system: Option<&str>,
@@ -62,7 +79,7 @@ pub async fn run(
         return Err(t!("尚未指定模型").to_string());
     }
     let (max_tokens, temperature, tools_on) = params_for_mode(mode);
-    let specs: Vec<ToolSpec> = if tools_on { tools::specs(mode) } else { Vec::new() };
+    let specs: Vec<ToolSpec> = if tools_on { tools::specs(mode, db) } else { Vec::new() };
     let allow_write = mode == "agent";
 
     history.push(Message::User(prompt));
@@ -109,11 +126,38 @@ pub async fn run(
 
         let mut results = Vec::new();
         for call in &out.tool_calls {
-            let r = tools::call(workspace, &call.name, &call.args, allow_write).await;
-            let (content, is_error) = match r {
-                Ok(text) => (text, false),
-                Err(e) => (e, true),
+            let started = Instant::now();
+            let r = tools::call(workspace, db, &call.name, &call.args, allow_write).await;
+            // 每次工具執行都往前端推一筆紀錄：資料庫工具跑了哪條 SQL、拿回幾列，使用者要能稽核。
+            let (content, is_error, trace) = match r {
+                Ok(o) => {
+                    let trace = ToolTrace {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        input_label: o.input_label.clone(),
+                        output_preview: preview(&o.text),
+                        rows: o.rows,
+                        truncated: o.truncated,
+                        is_error: false,
+                        ms: o.ms,
+                    };
+                    (o.text, false, trace)
+                }
+                Err(e) => {
+                    let trace = ToolTrace {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        input_label: tool_input_label(&call.name, &call.args),
+                        output_preview: preview(&e),
+                        rows: None,
+                        truncated: false,
+                        is_error: true,
+                        ms: started.elapsed().as_millis() as u64,
+                    };
+                    (e, true, trace)
+                }
             };
+            sink(StreamEvent::ToolDone(trace));
             results.push(ToolOutput { id: call.id.clone(), name: call.name.clone(), content, is_error });
         }
         history.push(Message::ToolResults(results));
@@ -126,6 +170,19 @@ pub async fn run(
     Ok(answer)
 }
 
+/// 工具失敗時仍要給前端一個輸入摘要（成功路徑由工具自己回）：查詢類取 query，其餘取 path / table。
+fn tool_input_label(name: &str, args: &serde_json::Value) -> Option<String> {
+    let pick = |k: &str| args.get(k).and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    match name {
+        "run_query" | "explain_query" => pick("query").or_else(|| pick("sql")),
+        "describe_table" | "sample_rows" => pick("table"),
+        "read_file" | "write_file" => pick("path"),
+        "search_files" => pick("query"),
+        "list_files" => pick("pattern"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,8 +192,20 @@ mod tests {
     #[test]
     fn mode_params() {
         assert_eq!(params_for_mode("generate"), (1024, Some(0.0), false));
+        assert_eq!(params_for_mode("edit"), (4096, Some(0.0), false));
         let (_, _, tools_on) = params_for_mode("agent");
         assert!(tools_on);
+    }
+
+    #[test]
+    fn preview_and_labels() {
+        let long = "x".repeat(1000);
+        assert_eq!(preview(&long).chars().count(), PREVIEW_CHARS + 1);
+        assert_eq!(preview("short"), "short");
+        assert_eq!(tool_input_label("run_query", &json!({ "query": " select 1 " })).as_deref(), Some("select 1"));
+        assert_eq!(tool_input_label("run_query", &json!({ "sql": "select 2" })).as_deref(), Some("select 2"));
+        assert_eq!(tool_input_label("describe_table", &json!({ "table": "t" })).as_deref(), Some("t"));
+        assert_eq!(tool_input_label("list_files", &json!({})), None);
     }
 
     #[test]
