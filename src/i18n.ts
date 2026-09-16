@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 // 介面語言。以「繁中原文」作為 translation key，查無翻譯時回傳 key 本身（identity fallback）。
 // 好處：未遷移的元件照常渲染中文、既有測試的中文斷言逐字元不變、不需發明上千個 dotted key。
-export type Lang = "zh-TW" | "zh-CN" | "en" | "ja" | "ko";
+export type Lang = "zh-TW" | "zh-CN" | "en" | "ja" | "ko" | "vi";
 
 const LANG_KEY = "dbkit:lang"; // 與 theme.ts 的 THEME_ID_KEY 同前綴
 
@@ -15,6 +15,7 @@ export const LANGUAGES: readonly { id: Lang; label: string }[] = [
   { id: "en", label: "English" },
   { id: "ja", label: "日本語" },
   { id: "ko", label: "한국어" },
+  { id: "vi", label: "Tiếng Việt" },
 ];
 
 /** 英文等有單複數之分的語言用；中文一律只填字串。 */
@@ -73,16 +74,17 @@ const LOADERS: Record<Exclude<Lang, "zh-TW">, () => Promise<{ default: Catalog }
   en: () => import("./locales/en"),
   ja: () => import("./locales/ja"),
   ko: () => import("./locales/ko"),
+  vi: () => import("./locales/vi"),
 };
 
 /**
- * 次選語言。日 / 韓查無譯文時退到英文，而不是直接露出繁中 ——
- * 對日文使用者來說中文漢字勉強能猜，對韓文使用者則完全無法閱讀；英文是兩者都通的最小公倍數。
+ * 次選語言。日 / 韓 / 越查無譯文時退到英文，而不是直接露出繁中 ——
+ * 對日文使用者來說中文漢字勉強能猜，對韓文與越南文使用者則完全無法閱讀；英文是三者都通的最小公倍數。
  *
  * 簡中不列入：它的 key 就是繁中原文，退回原文本來就看得懂（只是字體是繁體），
  * 不值得為此多下載一包英文。
  */
-const FALLBACK: Partial<Record<Lang, Lang>> = { ja: "en", ko: "en" };
+const FALLBACK: Partial<Record<Lang, Lang>> = { ja: "en", ko: "en", vi: "en" };
 
 async function loadOne(l: Lang): Promise<Catalog> {
   if (l === "zh-TW") return {};
@@ -162,6 +164,7 @@ export function htmlLangAttr(l: string): string {
   if (l.startsWith("zh-CN") || l.startsWith("zh-Hans")) return "zh-Hans";
   if (l.startsWith("ja")) return "ja";
   if (l.startsWith("ko")) return "ko";
+  if (l.startsWith("vi")) return "vi";
   if (l.startsWith("en")) return "en";
   return "zh-Hant";
 }
@@ -174,6 +177,7 @@ export function replyLanguageLine(uiLang: string): string | null {
   if (uiLang.startsWith("en")) return "Reply in English.";
   if (uiLang.startsWith("ja")) return "日本語で回答してください。";
   if (uiLang.startsWith("ko")) return "한국어로 답변해 주세요.";
+  if (uiLang.startsWith("vi")) return "Vui lòng trả lời bằng tiếng Việt.";
   if (uiLang.startsWith("zh-CN") || uiLang.startsWith("zh-Hans")) return "请用简体中文回答。";
   return null;
 }
@@ -186,6 +190,7 @@ export function promptLanguageName(uiLang: string): string | null {
   if (uiLang.startsWith("en")) return "English";
   if (uiLang.startsWith("ja")) return "Japanese";
   if (uiLang.startsWith("ko")) return "Korean";
+  if (uiLang.startsWith("vi")) return "Vietnamese";
   if (uiLang.startsWith("zh-CN") || uiLang.startsWith("zh-Hans")) return "Simplified Chinese";
   return null;
 }

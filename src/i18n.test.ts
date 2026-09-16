@@ -98,7 +98,7 @@ describe("t — 單複數", () => {
   });
 });
 
-describe("t — 次選語言（日 / 韓退英文，不退中文）", () => {
+describe("t — 次選語言（日 / 韓 / 越退英文，不退中文）", () => {
   it("主表沒有、次選表有時，用次選表", () => {
     setCatalog({}, "ja", { 連線: "Connect" });
     expect(t("連線")).toBe("Connect");
@@ -129,6 +129,7 @@ describe("htmlLangAttr", () => {
   it("其餘語言直接對應", () => {
     expect(htmlLangAttr("ja")).toBe("ja");
     expect(htmlLangAttr("ko")).toBe("ko");
+    expect(htmlLangAttr("vi")).toBe("vi");
     expect(htmlLangAttr("en")).toBe("en");
   });
 
@@ -147,11 +148,13 @@ describe("replyLanguageLine / promptLanguageName", () => {
     expect(replyLanguageLine("en")).toBe("Reply in English.");
     expect(replyLanguageLine("ja")).toContain("日本語");
     expect(replyLanguageLine("ko")).toContain("한국어");
+    expect(replyLanguageLine("vi")).toContain("tiếng Việt");
     expect(replyLanguageLine("zh-CN")).toContain("简体中文");
   });
 
   it("嵌在英文句子裡的片語用英文語言名", () => {
     expect(promptLanguageName("ja")).toBe("Japanese");
+    expect(promptLanguageName("vi")).toBe("Vietnamese");
     expect(promptLanguageName("zh-CN")).toBe("Simplified Chinese");
   });
 

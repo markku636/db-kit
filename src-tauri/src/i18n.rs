@@ -19,6 +19,7 @@ pub enum Lang {
     Ja,
     Ko,
     ZhCn,
+    Vi,
 }
 
 impl Lang {
@@ -30,6 +31,7 @@ impl Lang {
             Lang::Ja => "ja",
             Lang::Ko => "ko",
             Lang::ZhCn => "zh-CN",
+            Lang::Vi => "vi",
         }
     }
 
@@ -46,12 +48,13 @@ impl Lang {
             "ja" | "ja-jp" | "ja_jp" | "jp" => Some(Lang::Ja),
             "ko" | "ko-kr" | "ko_kr" | "kr" => Some(Lang::Ko),
             "zh-cn" | "zh_cn" | "zh-hans" | "zh-sg" | "zh_sg" => Some(Lang::ZhCn),
+            "vi" | "vi-vn" | "vi_vn" | "vn" => Some(Lang::Vi),
             _ => None,
         }
     }
 }
 
-// 以 `Lang as u8` 對應（0 = ZhTw、1 = En、2 = Ja、3 = Ko、4 = ZhCn），載入時反查。
+// 以 `Lang as u8` 對應（0 = ZhTw、1 = En、2 = Ja、3 = Ko、4 = ZhCn、5 = Vi），載入時反查。
 static LANG: AtomicU8 = AtomicU8::new(0);
 
 /// 設定進程語言（GUI command / CLI 啟動時呼叫）。
@@ -66,6 +69,7 @@ pub fn current() -> Lang {
         2 => Lang::Ja,
         3 => Lang::Ko,
         4 => Lang::ZhCn,
+        5 => Lang::Vi,
         _ => Lang::ZhTw,
     }
 }
@@ -82,14 +86,15 @@ fn lookup_in(l: Lang, zh: &str) -> Option<&'static str> {
         Lang::Ja => loc::ja::lookup(zh).or_else(|| loc::ja_ext::lookup(zh)),
         Lang::Ko => loc::ko::lookup(zh).or_else(|| loc::ko_ext::lookup(zh)),
         Lang::ZhCn => loc::zh_cn::lookup(zh).or_else(|| loc::zh_cn_ext::lookup(zh)),
+        Lang::Vi => loc::vi::lookup(zh).or_else(|| loc::vi_ext::lookup(zh)),
     }
 }
 
-/// 次選語言。與前端 `src/i18n.ts` 的 `FALLBACK` 同一份決策：日 / 韓查無譯文時退到英文，
+/// 次選語言。與前端 `src/i18n.ts` 的 `FALLBACK` 同一份決策：日 / 韓 / 越查無譯文時退到英文，
 /// 而不是直接露出繁中；簡中的 key 本身就是中文，退回原文即可。
 fn fallback_of(l: Lang) -> Option<Lang> {
     match l {
-        Lang::Ja | Lang::Ko => Some(Lang::En),
+        Lang::Ja | Lang::Ko | Lang::Vi => Some(Lang::En),
         _ => None,
     }
 }
@@ -215,7 +220,7 @@ mod tests {
         assert_eq!(Lang::from_code("zh-TW"), Some(Lang::ZhTw));
         assert_eq!(Lang::from_code("fr"), None);
         assert_eq!(Lang::En.as_code(), "en");
-        for l in [Lang::ZhTw, Lang::En, Lang::Ja, Lang::Ko, Lang::ZhCn] {
+        for l in [Lang::ZhTw, Lang::En, Lang::Ja, Lang::Ko, Lang::ZhCn, Lang::Vi] {
             assert_eq!(Lang::from_code(l.as_code()), Some(l), "{}", l.as_code());
         }
     }
@@ -226,25 +231,26 @@ mod tests {
         assert_eq!(Lang::from_code("ko-KR"), Some(Lang::Ko));
         assert_eq!(Lang::from_code("zh_CN.UTF-8"), Some(Lang::ZhCn));
         assert_eq!(Lang::from_code("zh-Hans"), Some(Lang::ZhCn));
+        assert_eq!(Lang::from_code("vi_VN"), Some(Lang::Vi));
     }
 
     /// `current()` 的反查表若漏掉一個 variant，該語言會靜默變成 zh-TW。
     #[test]
     fn set_lang_round_trips_through_atomic() {
         let _g = LANG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for l in [Lang::En, Lang::Ja, Lang::Ko, Lang::ZhCn, Lang::ZhTw] {
+        for l in [Lang::En, Lang::Ja, Lang::Ko, Lang::ZhCn, Lang::Vi, Lang::ZhTw] {
             set_lang(l);
             assert_eq!(current(), l, "{}", l.as_code());
         }
     }
 
-    /// 日 / 韓查無譯文時應退到英文，而不是直接露出繁中 —— 故「英文查得到」蘊含「日韓查得到」。
+    /// 日 / 韓 / 越查無譯文時應退到英文，而不是直接露出繁中 —— 故「英文查得到」蘊含「日韓越查得到」。
     #[test]
-    fn ja_ko_never_show_chinese_for_keys_english_covers() {
+    fn ja_ko_vi_never_show_chinese_for_keys_english_covers() {
         let _g = LANG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         const KEY: &str = "連線池已耗盡或關閉"; // en.rs 收錄
         assert!(crate::locales::en::lookup(KEY).is_some(), "前提：en 表收錄此 key");
-        for l in [Lang::Ja, Lang::Ko] {
+        for l in [Lang::Ja, Lang::Ko, Lang::Vi] {
             set_lang(l);
             assert_ne!(lookup(KEY), KEY, "{} 不該退回繁中原文", l.as_code());
         }
