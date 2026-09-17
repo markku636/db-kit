@@ -389,13 +389,8 @@ impl DatabaseDriver for SqliteDriver {
     }
 
     async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
-        let trimmed = sql.trim_start().to_ascii_lowercase();
-        let is_read = trimmed.starts_with("select")
-            || trimmed.starts_with("pragma")
-            || trimmed.starts_with("explain");
-
         // 寫入語句若帶 RETURNING（SQLite 3.35+ 支援），改走 fetch 取回回傳列。
-        if is_read || trimmed.contains("returning") {
+        if is_read_sql(sql) {
             use futures::TryStreamExt;
             let mut stream = sqlx::query(sql).fetch(&self.pool);
             let mut rows: Vec<SqliteRow> = Vec::new();
@@ -778,6 +773,14 @@ impl SqliteDriver {
         pks.sort_by_key(|(idx, _)| *idx);
         Ok(pks.into_iter().map(|(_, n)| n).collect())
     }
+}
+
+/// 這條語句會不會回結果集（→ 走 fetch）。前導註解與大小寫由 `db::stmt` 統一處理，
+/// 這裡只列 SQLite 方言中「會回列」的起始關鍵字（`with` = CTE、`values` = 獨立列建構）。
+/// RETURNING（3.35+）以 `body_has_word` 而非 `contains` 判斷，註解 / 字串裡的 returning 不算。
+fn is_read_sql(sql: &str) -> bool {
+    const READ_HEADS: &[&str] = &["select", "pragma", "explain", "with", "values"];
+    crate::db::stmt::head_is_any(sql, READ_HEADS) || crate::db::stmt::body_has_word(sql, "returning")
 }
 
 /// 以雙引號包裹識別字（SQLite 標準），轉義內部雙引號。

@@ -312,9 +312,7 @@ impl DatabaseDriver for MssqlDriver {
     }
 
     async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
-        let head = sql.trim_start();
-        let is_read = starts_ci(head, "select") || starts_ci(head, "with") || starts_ci(head, "exec") || starts_ci(head, "show");
-        if is_read {
+        if is_read_sql(sql) {
             let (rows, truncated) = self.query_rows_capped(sql, cap).await?;
             let columns: Vec<String> = rows
                 .first()
@@ -332,9 +330,7 @@ impl DatabaseDriver for MssqlDriver {
     }
 
     async fn query_multi_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
-        let head = sql.trim_start();
-        let is_read = starts_ci(head, "select") || starts_ci(head, "with") || starts_ci(head, "exec") || starts_ci(head, "show");
-        if !is_read {
+        if !is_read_sql(sql) {
             let n = self.exec(sql).await?;
             return Ok(vec![QueryResult { columns: vec![], rows: vec![], rows_affected: n, truncated: false }]);
         }
@@ -813,8 +809,13 @@ fn mssql_type_str(ty: &str, max_length: i16, precision: u8, scale: u8) -> String
     }
 }
 
-fn starts_ci(s: &str, prefix: &str) -> bool {
-    s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix)
+/// 這條語句會不會回結果集（→ 走 fetch）。前導註解與大小寫由 `db::stmt` 統一處理，
+/// 這裡只列 T-SQL 中「會回列」的起始關鍵字。
+///
+/// `exec` 與 `execute` 要分別列出：改成「完整字詞」比對之後，`exec` 不再是 `execute` 的前綴。
+fn is_read_sql(sql: &str) -> bool {
+    const READ_HEADS: &[&str] = &["select", "with", "exec", "execute", "show"];
+    crate::db::stmt::head_is_any(sql, READ_HEADS)
 }
 
 fn get_str(row: &tiberius::Row, idx: usize) -> Option<String> {

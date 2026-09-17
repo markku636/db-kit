@@ -955,18 +955,30 @@ export function substituteNamedParams(kind: DbKind, sql: string, values: Record<
     .join("");
 }
 
+// 去掉開頭的空白與註解（`-- 行`、`# 行`（MySQL）、`/* 區塊 */`），回傳語句真正的起點。
+// 「第一個關鍵字是什麼」的判斷一律先過這一關：使用者反白時很常多框到上一行的 `-- 說明`，
+// 直接拿原文比對開頭會把同一條語句判成別的東西（後端踩過同一個坑，見 src-tauri/src/db/stmt.rs）。
+export function stripLeadingComments(sql: string): string {
+  let s = sql;
+  for (;;) {
+    const v = s.replace(/^\s+/, "");
+    if (v.startsWith("--") || v.startsWith("#")) { const nl = v.indexOf("\n"); s = nl === -1 ? "" : v.slice(nl + 1); continue; }
+    if (v.startsWith("/*")) { const e = v.indexOf("*/"); s = e === -1 ? "" : v.slice(e + 2); continue; }
+    return v;
+  }
+}
+
+// 語句是否已自帶開頭的資料庫切換（USE / SET search_path）。「目前資料庫」選擇器據此決定
+// 要不要再加一層前綴——前導註解不可讓它看走眼，否則會疊出兩段切庫語句，後端只認得第一段，
+// 第二段連同查詢被當成「一條」送出而報多語句錯誤。
+export function hasLeadingDbSwitch(sql: string): boolean {
+  return /^(use\s|set\s+search_path)/i.test(stripLeadingComments(sql));
+}
+
 // 是否為「寫入 / DDL」語句（供唯讀連線攔截）。略過開頭的空白 / 行 / 區塊註解後，
 // 檢查第一個關鍵字是否為會改動資料 / 結構者。SELECT / SHOW / EXPLAIN / WITH(…SELECT) 等視為唯讀。
 export function isWriteStatement(sql: string): boolean {
-  // 去掉開頭的空白與註解。
-  let s = sql;
-  for (;;) {
-    const val = s.replace(/^\s+/, "");
-    if (val.startsWith("--")) { const nl = val.indexOf("\n"); s = nl === -1 ? "" : val.slice(nl + 1); continue; }
-    if (val.startsWith("/*")) { const e = val.indexOf("*/"); s = e === -1 ? "" : val.slice(e + 2); continue; }
-    s = val;
-    break;
-  }
+  const s = stripLeadingComments(sql);
   // PostgreSQL 可寫 CTE：`WITH x AS (DELETE/UPDATE/INSERT …) …` 起始為 WITH，第一關鍵字看不出寫入。
   // 唯讀守門寧可多擋：起始為 WITH 且含寫入字樣即視為寫入。
   if (/^with\b/i.test(s)) return /\b(insert|update|delete|merge)\b/i.test(s);

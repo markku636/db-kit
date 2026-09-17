@@ -220,6 +220,49 @@ fn persisted_connection_drops_secrets() {
 
 // ============================ SQLite（本機檔案）============================
 
+/// 前導註解不得讓查詢改走 execute 路徑（issue #5）。
+///
+/// 使用者在編輯器裡反白時常會多框到上一行的 `-- 說明`，之前 driver 以
+/// `sql.trim_start().starts_with("select")` 分流，開頭是 `--` 就比對不中，於是同一條 SELECT
+/// 走了 execute → 回空結果集。症狀是「單獨選 SQL 正常，連註解一起選就沒有輸出」。
+///
+/// 這裡用真的 SQLite driver 跑一遍：註解版與無註解版必須回出**一模一樣**的結果。
+/// 各方言的關鍵字清單不同，但跳過註解的那一段是共用的 `db::stmt`，所以這個
+/// 端對端驗證對 MySQL / PostgreSQL / MSSQL / Oracle 同樣成立。
+#[tokio::test]
+async fn leading_comments_do_not_suppress_query_results() {
+    let dbfile = format!("dbkit_it_comment_{}.db", std::process::id());
+    let dbfile = dbfile.as_str();
+    let _ = std::fs::remove_file(dbfile);
+    let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile));
+
+    {
+        let d = SqliteDriver::connect(&c).await.unwrap();
+        d.query("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)").await.unwrap();
+        d.query("INSERT INTO t (id, name) VALUES (1, 'a'), (2, 'b')").await.unwrap();
+
+        let bare = d.query("SELECT id, name FROM t ORDER BY id").await.unwrap();
+        assert_eq!(bare.rows.len(), 2, "基準：無註解時應回 2 列");
+
+        for prefixed in [
+            "-- 查詢客戶\nSELECT id, name FROM t ORDER BY id",
+            "/* 客戶清單 */ SELECT id, name FROM t ORDER BY id",
+            "-- a\n/* b */\n\n-- c\nSELECT id, name FROM t ORDER BY id",
+        ] {
+            let got = d.query(prefixed).await.unwrap();
+            assert_eq!(got.columns, bare.columns, "欄位應與無註解版一致：{prefixed}");
+            assert_eq!(got.rows, bare.rows, "資料列應與無註解版一致：{prefixed}");
+        }
+
+        // 反向不可誤傷：註解裡的 returning 不是語法，DELETE 仍要走 execute 並回受影響列數。
+        let del = d.query("DELETE FROM t WHERE id = 1 -- 也可以加 RETURNING").await.unwrap();
+        assert!(del.columns.is_empty(), "DELETE 不該回結果集：{:?}", del.columns);
+        assert_eq!(del.rows_affected, 1, "DELETE 應回受影響列數");
+    }
+
+    let _ = std::fs::remove_file(dbfile);
+}
+
 #[tokio::test]
 async fn sqlite_crud_and_backup() {
     let dbfile = format!("dbkit_it_test_{}.db", std::process::id());

@@ -301,8 +301,13 @@ fn oracle_type_str(
     }
 }
 
-fn starts_ci(s: &str, kw: &str) -> bool {
-    s.trim_start().to_ascii_lowercase().starts_with(kw)
+/// 這條語句會不會回結果集（→ 走 fetch）。前導註解與大小寫由 `db::stmt` 統一處理，
+/// 這裡只列 Oracle 方言中「會回列」的起始關鍵字。
+/// Oracle 的 `EXPLAIN PLAN FOR …` 寫進 PLAN_TABLE 而不回列，RETURNING 走 `RETURNING … INTO`
+/// 繫結變數也不是結果集 —— 兩者都刻意不納入。
+fn is_read_sql(sql: &str) -> bool {
+    const READ_HEADS: &[&str] = &["select", "with"];
+    crate::db::stmt::head_is_any(sql, READ_HEADS)
 }
 
 fn ora_q(e: oracle::Error) -> AppError {
@@ -580,7 +585,7 @@ impl DatabaseDriver for OracleDriver {
         // Oracle 對一般 SQL 不接受尾端分號（PL/SQL 區塊除外——那類請走 exec_ddl / RoutinesDialog）。
         let sql = sql.trim().trim_end_matches(';').trim().to_string();
         self.with_conn(move |conn| {
-            if starts_ci(&sql, "select") || starts_ci(&sql, "with") {
+            if is_read_sql(&sql) {
                 rows_to_result_conn_capped(conn, &sql, cap)
             } else {
                 let stmt = conn.execute(&sql, &[]).map_err(ora_q)?;

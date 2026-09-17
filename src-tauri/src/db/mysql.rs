@@ -506,14 +506,7 @@ impl DatabaseDriver for MysqlDriver {
             };
             // 登記為「執行中」：cancel_query 才有目標可 KILL QUERY（drop 時自動撤銷登記）。
             let _guard = self.track(sid);
-            let t = rest.trim_start().to_ascii_lowercase();
-            // contains("returning")：MariaDB 10.5+ 的 INSERT/REPLACE/DELETE … RETURNING 會回結果集，
-            // 需走 fetch 路徑才看得到（比照 postgres.rs 的字串偵測取捨）。
-            let is_read = t.starts_with("select")
-                || t.starts_with("show")
-                || t.starts_with("describe")
-                || t.starts_with("explain")
-                || t.contains("returning");
+            let is_read = is_read_sql(&rest);
             let out = if is_read {
                 fetch_rows_capped(&mut conn, &rest, cap)
                     .await
@@ -541,13 +534,7 @@ impl DatabaseDriver for MysqlDriver {
             return out;
         }
 
-        let trimmed = sql.trim_start().to_ascii_lowercase();
-        // contains("returning")：見上（MariaDB RETURNING 結果集）。
-        let is_read = trimmed.starts_with("select")
-            || trimmed.starts_with("show")
-            || trimmed.starts_with("describe")
-            || trimmed.starts_with("explain")
-            || trimmed.contains("returning");
+        let is_read = is_read_sql(sql);
 
         // 取「具名的一條」連線而非把 &self.pool 交給 sqlx：先問出 CONNECTION_ID() 登記起來，
         // cancel_query 才有辦法以另一條連線送 KILL QUERY 真正中止（交給 pool 執行則無從得知
@@ -1683,6 +1670,23 @@ fn build_order(sorts: &[Sort]) -> String {
     format!(" ORDER BY {parts}")
 }
 
+/// 這條語句會不會回結果集（→ 走 fetch）。前導註解與大小寫由 `db::stmt` 統一處理，
+/// 這裡只列 MySQL / MariaDB 方言中「會回列」的起始關鍵字。
+///
+/// - `desc` 與 `describe` 必須分別列出：前者是後者的縮寫，不是它的前綴。
+/// - `with` / `table` / `values` 是 MySQL 8.0 的查詢形式（CTE、`TABLE t`、`VALUES ROW(…)`），
+///   漏了就跟 `DESC` 一樣「有查到卻顯示不出來」。
+/// - `analyze` / `check` / `checksum` / `optimize` / `repair` TABLE 都回狀態表格而非受影響列數。
+/// - RETURNING：MariaDB 10.5+ 的 INSERT / REPLACE / DELETE … RETURNING 會回結果集。以
+///   `body_has_word` 而非 `contains` 判斷，註解 / 字串裡的 returning 不算。
+fn is_read_sql(sql: &str) -> bool {
+    const READ_HEADS: &[&str] = &[
+        "select", "show", "desc", "describe", "explain", "with", "table", "values", "analyze",
+        "check", "checksum", "optimize", "repair", "help",
+    ];
+    crate::db::stmt::head_is_any(sql, READ_HEADS) || crate::db::stmt::body_has_word(sql, "returning")
+}
+
 /// 偵測並切出開頭的 `USE `db`;`（「目前資料庫」選擇器帶入）。回傳 (USE 語句, 剩餘語句)；
 /// 無開頭 USE、或 USE 後沒有可執行語句時回 None（讓呼叫端走一般 pool 路徑）。
 fn split_leading_use(sql: &str) -> Option<(String, String)> {
@@ -1873,7 +1877,44 @@ fn string_fallback(row: &MySqlRow, idx: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::split_leading_use;
+    use super::{is_read_sql, split_leading_use};
+
+    #[test]
+    fn desc_is_a_read_statement() {
+        // issue #6：DESC 是 DESCRIBE 的縮寫，走 execute 路徑就永遠回 0 列。
+        assert!(is_read_sql("DESC users"));
+        assert!(is_read_sql("desc mydb.users"));
+        assert!(is_read_sql("DESCRIBE users"));
+    }
+
+    #[test]
+    fn leading_comment_does_not_hide_a_read_statement() {
+        // issue #5：反白時多框到上一行註解，同一條 SQL 不該就此變成「沒有輸出」。
+        assert!(is_read_sql("-- 查詢客戶\nSELECT * FROM users"));
+        assert!(is_read_sql("/* 客戶清單 */\nSELECT * FROM users"));
+        assert!(is_read_sql("# MySQL 註解\nDESC users"));
+        assert!(is_read_sql("-- a\n/* b */\n-- c\nSHOW TABLES"));
+    }
+
+    #[test]
+    fn mysql8_query_forms_are_reads() {
+        assert!(is_read_sql("WITH c AS (SELECT 1) SELECT * FROM c"));
+        assert!(is_read_sql("TABLE users"));
+        assert!(is_read_sql("VALUES ROW(1, 2)"));
+        assert!(is_read_sql("CHECKSUM TABLE users"));
+    }
+
+    #[test]
+    fn writes_stay_on_the_execute_path() {
+        assert!(!is_read_sql("INSERT INTO t VALUES (1)"));
+        assert!(!is_read_sql("-- 註解\nUPDATE t SET a = 1 WHERE id = 2"));
+        assert!(!is_read_sql("DELETE FROM t WHERE id = 1"));
+        assert!(!is_read_sql("CREATE TABLE t (id INT)"));
+        // 註解裡的 returning 不是語法，不該把 DELETE 推去 fetch 而丟掉受影響列數。
+        assert!(!is_read_sql("DELETE FROM t WHERE id = 1 -- MariaDB 可加 RETURNING"));
+        // MariaDB 10.5+ 真的帶 RETURNING 時仍要走 fetch。
+        assert!(is_read_sql("DELETE FROM t WHERE id = 1 RETURNING id"));
+    }
 
     #[test]
     fn splits_leading_use_then_rest() {

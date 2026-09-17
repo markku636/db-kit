@@ -10,6 +10,9 @@ pub mod mongo;
 /// 給定 DbKind 的跨連線 SQL 片段產生器（引號 / 限定名 / 字面值 / 簡單 DML）。
 /// 傳輸、比對、CLI 共用；不可 feature-gate（slim CLI 依賴）。
 pub mod sqlgen;
+/// 語句開頭關鍵字判讀（跳過前導註解後取第一個完整字詞）。所有 SQL driver 的
+/// 「該 fetch 還是 execute」分流共用這一份，見該檔說明。
+pub mod stmt;
 pub mod mssql;
 pub mod mysql;
 pub mod oracle;

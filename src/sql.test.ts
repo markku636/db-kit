@@ -100,6 +100,8 @@ import {
   extractNamedParams,
   substituteNamedParams,
   isWriteStatement,
+  stripLeadingComments,
+  hasLeadingDbSwitch,
   buildInClause,
   transformKeywordCase,
   mergeSnippets,
@@ -1400,6 +1402,37 @@ describe("isWriteStatement（唯讀攔截）", () => {
   it("略過開頭註解後判斷", () => {
     expect(isWriteStatement("-- comment\nDELETE FROM t")).toBe(true);
     expect(isWriteStatement("/* x */ SELECT 1")).toBe(false);
+  });
+});
+
+describe("stripLeadingComments", () => {
+  it("略過空白與各式前導註解，回到語句真正的起點", () => {
+    expect(stripLeadingComments("  \n SELECT 1")).toBe("SELECT 1");
+    expect(stripLeadingComments("-- 查詢客戶\nSELECT 1")).toBe("SELECT 1");
+    expect(stripLeadingComments("/* 客戶清單 */ SELECT 1")).toBe("SELECT 1");
+    expect(stripLeadingComments("# MySQL 行註解\nSELECT 1")).toBe("SELECT 1");
+    expect(stripLeadingComments("-- a\n/* b */\n\n-- c\nSELECT 1")).toBe("SELECT 1");
+  });
+  it("整段都是註解時回空字串（未閉合的區塊註解吃到結尾）", () => {
+    expect(stripLeadingComments("-- 只有註解")).toBe("");
+    expect(stripLeadingComments("/* 未閉合")).toBe("");
+  });
+});
+
+describe("hasLeadingDbSwitch（「目前資料庫」前綴去重）", () => {
+  it("認得開頭的 USE / SET search_path", () => {
+    expect(hasLeadingDbSwitch("USE shop; SELECT 1")).toBe(true);
+    expect(hasLeadingDbSwitch("set search_path to public; SELECT 1")).toBe(true);
+  });
+  it("前導註解不可讓它看走眼（否則會疊出兩段切庫語句）", () => {
+    expect(hasLeadingDbSwitch("-- 切到 shop\nUSE shop; SELECT 1")).toBe(true);
+    expect(hasLeadingDbSwitch("/* 切庫 */ SET search_path TO app; SELECT 1")).toBe(true);
+  });
+  it("一般查詢為 false（含註解裡提到 use 的情形）", () => {
+    expect(hasLeadingDbSwitch("SELECT 1")).toBe(false);
+    expect(hasLeadingDbSwitch("-- 記得先 use shop\nSELECT 1")).toBe(false);
+    // user_logs 不是 use：需為完整關鍵字後接空白。
+    expect(hasLeadingDbSwitch("SELECT * FROM user_logs")).toBe(false);
   });
 });
 

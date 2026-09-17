@@ -33,7 +33,7 @@ import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pick
 import { askOtpCode } from "./otpGate";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
-  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, isDangerousRedisCommand, isReadOnlyRedisCommand,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName, isMysqlFamily, supportsRoutines, supportsQueryEditorKind, supportsSchemaCompare,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
@@ -4536,7 +4536,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         // （避免 USE 與查詢落在 pool 不同連線而失效）；external 由 gateway strip_leading_use 處理。
         // 使用者查詢若已自帶開頭 USE / SET search_path（側欄「新增查詢」）則不重複加。
         const usePrefix =
-          supportsDbSelect && queryDb && !/^\s*(use\s|set\s+search_path)/i.test(q)
+          supportsDbSelect && queryDb && !hasLeadingDbSwitch(q)
             ? buildUseDatabase(kind!, queryDb)
             : null;
         const sentStatements = usePrefix ? userStatements.map((s) => `${usePrefix};\n${s}`) : userStatements;
@@ -4722,7 +4722,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     try {
       // 「目前資料庫」前綴併入同段送出（mysql/postgres driver 同連線切庫；external 由 gateway 處理）。
       const usePrefix =
-        supportsDbSelect && queryDb && !/^\s*(use\s|set\s+search_path)/i.test(base)
+        supportsDbSelect && queryDb && !hasLeadingDbSwitch(base)
           ? buildUseDatabase(kind!, queryDb)
           : null;
       const res = await api.runQuery(activeId, usePrefix ? `${usePrefix};\n${explainSql}` : explainSql);

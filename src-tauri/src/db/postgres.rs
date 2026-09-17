@@ -363,13 +363,7 @@ impl DatabaseDriver for PostgresDriver {
             };
             // 登記為「執行中」：cancel_query 才有目標可 pg_cancel_backend（drop 時自動撤銷）。
             let _guard = self.track(pid);
-            let t = rest.trim_start().to_ascii_lowercase();
-            let is_read = t.starts_with("select")
-                || t.starts_with("show")
-                || t.starts_with("explain")
-                || t.starts_with("table")
-                || t.starts_with("with")
-                || t.contains("returning");
+            let is_read = is_read_sql(&rest);
             let out = if is_read {
                 fetch_rows_capped(&mut conn, &rest, cap)
                     .await
@@ -397,15 +391,10 @@ impl DatabaseDriver for PostgresDriver {
             return out;
         }
 
-        let trimmed = sql.trim_start().to_ascii_lowercase();
-        let is_read = trimmed.starts_with("select")
-            || trimmed.starts_with("show")
-            || trimmed.starts_with("explain")
-            || trimmed.starts_with("table")
-            || trimmed.starts_with("with");
-
         // 寫入語句若帶 RETURNING（PG 支援），改走 fetch 取回回傳列（致敬 DataGrip / DBeaver
         // 顯示 RETURNING 結果）；無 RETURNING 則 execute 取 rows_affected。
+        let is_read = is_read_sql(sql);
+
         // 取「具名的一條」連線而非把 &self.pool 交給 sqlx：先問出 pg_backend_pid() 登記起來，
         // cancel_query 才有辦法以另一條連線送 pg_cancel_backend 真正中止（比照 mysql.rs）。
         let mut conn = self
@@ -416,7 +405,7 @@ impl DatabaseDriver for PostgresDriver {
         let pid = backend_pid(&mut conn).await?;
         let _guard = self.track(pid);
 
-        if is_read || trimmed.contains("returning") {
+        if is_read {
             let (rows, truncated) = fetch_rows_capped(&mut *conn, sql, cap).await?;
             let mut result = rows_to_result(&rows);
             result.truncated = truncated;
@@ -1567,6 +1556,18 @@ fn build_order(sorts: &[Sort]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(" ORDER BY {parts}")
+}
+
+/// 這條語句會不會回結果集（→ 走 fetch）。前導註解與大小寫由 `db::stmt` 統一處理，
+/// 這裡只列 PostgreSQL 方言中「會回列」的起始關鍵字。
+///
+/// `values` 是獨立的查詢形式（`VALUES (1),(2)`）；`fetch` 是游標取列。RETURNING 以
+/// `body_has_word` 而非 `contains` 判斷，註解 / 字串裡的 returning 不算。
+fn is_read_sql(sql: &str) -> bool {
+    const READ_HEADS: &[&str] = &[
+        "select", "show", "explain", "table", "with", "values", "fetch",
+    ];
+    crate::db::stmt::head_is_any(sql, READ_HEADS) || crate::db::stmt::body_has_word(sql, "returning")
 }
 
 /// 偵測並切出開頭的 `SET search_path TO ...;`（「目前資料庫」選擇器帶入）。回傳 (SET 語句, 剩餘語句)；
