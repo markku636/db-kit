@@ -15,13 +15,19 @@ import AiSettingsDialog from "./AiSettingsDialog";
 import { useTheme } from "./theme";
 import { resolveHighlightColors, type ThemeColors } from "./editorThemes";
 import { useAssistant } from "./assistant";
-import { toast, copyToClipboard, pickSaveFile, uiConfirm } from "./ui";
+import { toast, copyToClipboard, pickSaveFile, uiConfirm, uiPrompt } from "./ui";
 import Icon from "./ui/Icon";
 import { IconButton } from "./ui/index";
-import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Settings2, Sparkles, Send, Square, Database, Play, ChevronDown, ChevronRight, GitBranch, ListFilter, AlertTriangle } from "lucide-react";
+import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Settings2, Sparkles, Send, Square, Database, Play, ChevronDown, ChevronRight, GitBranch, ListFilter, AlertTriangle, MessageSquarePlus, MessagesSquare, Pencil } from "lucide-react";
 import { useT, useLang } from "./i18n";
 import type { DbKind } from "./api";
 import type { ChatMsg, ChatRunResult, MentionChip, MentionRef } from "./chatTypes";
+import { fmtRelativeTime } from "./sql";
+import {
+  activeConversation, addConversation, conversationTitle, findConversation, loadArchive, newConversation,
+  pruneArchive, removeConversation, saveArchive, sortedConversations, updateConversation,
+  type ChatArchive, type ChatConversation,
+} from "./chatSessions";
 import { applyToolEvent, dbTarget, isSqlToolCall, type ToolCallView } from "./agentTools";
 import { buildAutoContext, estimateContext, expandMentions, parseMentions, stripMentions, type MentionEnv } from "./chatMentions";
 import MentionPopover, { type MentionPopoverHandle, type PopoverItem } from "./MentionPopover";
@@ -40,11 +46,13 @@ type ChatRole = "user" | "assistant";
 // ChatMsg / MentionChip / ChatRunResult 定義在 chatTypes.ts（見該檔說明：切斷循環相依）。
 
 // ---- 對話 / 偏好持久化（localStorage；重開 db-kit 後保留）----
+//
+// 對話本體自 v0.32 起改存在 chatSessions.ts 的「多對話」存檔裡（db-kit:assistantSessions），
+// 這個鍵只留偏好（模式 / 附帶內容 / 資料庫工具）。舊版的 messages / sessionId 仍會被
+// chatSessions.loadArchive 讀走做一次性遷移，之後第一次寫偏好就自然被覆蓋掉。
 const CHAT_KEY = "db-kit:assistantChat";
 
 interface Persisted {
-  messages: ChatMsg[];
-  sessionId: string | null;
   mode: AgentMode;
   /** 舊版欄位（單一模型 / 各供應商模型）。v0.28 起模型改存 aiProvider store，
    *  這裡只保留讀取端的遷移路徑（見 aiProvider.readModels），不再寫入。 */
@@ -53,11 +61,6 @@ interface Persisted {
   ctxOn: boolean;
   /** 助手可否對目前連線下唯讀查詢（資料庫工具）。 */
   dbToolsOn?: boolean;
-  /**
-   * 寫下 sessionId 時用的是哪個供應商。換供應商後那個 id 對新端點毫無意義，
-   * 帶著它續聊只會讓後端去找一段不存在的歷史（CLI 更會直接以「找不到 session」失敗）。
-   */
-  sessionProvider?: AgentProvider | null;
 }
 
 function loadPersisted(): Partial<Persisted> {
@@ -73,9 +76,14 @@ export default function AssistantPanel() {
   const open = useAssistant((s) => s.open);
   const persisted = useMemo(loadPersisted, []);
 
-  const [messages, setMessages] = useState<ChatMsg[]>(() =>
-    (persisted.messages || []).map((m) => ({ ...m, pending: false, tools: m.tools || [] })),
-  );
+  // ---- 多對話 ----
+  // 畫面上的 `messages` 永遠屬於 `archive.activeId` 那一串。archive 只在「結構」變動
+  // （新增 / 刪除 / 改名 / 切換）時 setState；訊息本身由下方的持久化 effect 折回去再落地。
+  // 兩份狀態而不是一份，是為了不動到元件裡二十幾處既有的 setMessages —— 那才是真正會出錯的地方。
+  const [archive, setArchive] = useState<ChatArchive>(() => loadArchive());
+  const activeConvId = archive.activeId;
+  const [messages, setMessages] = useState<ChatMsg[]>(() => activeConversation(archive).messages);
+  const [convListOpen, setConvListOpen] = useState(false);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [status, setStatus] = useState<AgentStatus | null>(null);
@@ -111,11 +119,12 @@ export default function AssistantPanel() {
   // 目前連線的種類（反應式）：工具呼叫要不要當成 SQL 上色，得跟著切換連線即時更新。
   const activeKind = useStore((s) => s.connections.find((c) => c.id === s.activeId)?.kind ?? null);
 
-  // 供應商對不上就丟掉舊 session id（見 Persisted.sessionProvider）。
+  // 供應商對不上就丟掉舊 session id（見 ChatConversation.agentProvider）。
   const sessionIdRef = useRef<string | null>(
-    persisted.sessionProvider && persisted.sessionProvider !== useAiProvider.getState().provider
-      ? null
-      : persisted.sessionId ?? null,
+    (() => {
+      const c = activeConversation(archive);
+      return c.agentProvider && c.agentProvider !== useAiProvider.getState().provider ? null : c.agentSessionId;
+    })(),
   );
   // 本次對話已對哪些正式環境連線確認過「可以讓助手查」；同一段對話不重複問。
   const prodOkRef = useRef<Set<string>>(new Set());
@@ -197,26 +206,47 @@ export default function AssistantPanel() {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
-  // 對話 / 偏好變動即持久化（訊息僅留最近 60 則，避免 localStorage 爆掉）。
+  // 偏好變動即持久化（對話本體走下面的多對話存檔）。
   useEffect(() => {
     try {
-      const data: Persisted = {
-        // 執行結果只留前 30 列：整張結果表寫進 localStorage 會很快撞上配額，
-        // 撞上之後是「整個對話都存不進去」，不是只丟掉那張表。
-        messages: messages.slice(-60).map((m) =>
-          m.runs
-            ? { ...m, runs: Object.fromEntries(Object.entries(m.runs).map(([k, v]) => [k, persistableRun(v)])) }
-            : m,
-        ),
-        sessionId: sessionIdRef.current,
-        sessionProvider: provider,
-        mode,
-        ctxOn,
-        dbToolsOn,
-      };
-      localStorage.setItem(CHAT_KEY, JSON.stringify(data));
+      localStorage.setItem(CHAT_KEY, JSON.stringify({ mode, ctxOn, dbToolsOn } satisfies Persisted));
     } catch { /* 忽略寫入失敗 */ }
-  }, [messages, mode, ctxOn, dbToolsOn, provider]);
+  }, [mode, ctxOn, dbToolsOn]);
+
+  /** 把目前畫面上的訊息與 session 折進 archive 的作用中那一串。切換 / 落地前都要先過這關。 */
+  const foldActive = (a: ChatArchive = archive): ChatArchive => {
+    const s = useStore.getState();
+    const conn = s.connections.find((c) => c.id === s.activeId) ?? null;
+    return updateConversation(a, activeConvId, (c) => ({
+      ...c,
+      // 執行結果只留前 30 列：整張結果表寫進 localStorage 會很快撞上配額，
+      // 撞上之後是「整串對話都存不進去」，不是只丟掉那張表。
+      messages: messages.map((m) =>
+        m.runs
+          ? { ...m, runs: Object.fromEntries(Object.entries(m.runs).map(([k, v]) => [k, persistableRun(v)])) }
+          : m,
+      ),
+      agentSessionId: sessionIdRef.current,
+      agentProvider: provider,
+      // 連線只在「這串第一次有內容」時記下來：使用者常是先開面板才選庫，空對話標到某個庫沒有意義。
+      connId: c.connId ?? (messages.length ? conn?.id ?? null : null),
+      connName: c.connName ?? (messages.length ? conn?.name ?? null : null),
+    }));
+  };
+
+  // 對話變動即落地。saveArchive 會在配額爆掉時逐步丟最舊的對話再試（見 chatSessions.ts），
+  // 一串都塞不下才回 0 —— 那時要出聲，靜默失敗等於使用者以為存著、其實沒有。
+  const quotaWarnedRef = useRef(false);
+  useEffect(() => {
+    const saved = saveArchive(foldActive());
+    if (saved === 0 && !quotaWarnedRef.current) {
+      quotaWarnedRef.current = true;
+      toast.error(t("瀏覽器儲存空間已滿，這串對話無法保存。請先刪除幾串舊對話。"));
+    } else if (saved > 0) {
+      quotaWarnedRef.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, archive, activeConvId, provider]);
 
   // 內容變動時自動捲到底：僅在使用者已接近底部、或剛送出自己的訊息時才跟隨，
   // 讓使用者可在串流途中往上閱讀而不被拉回底部。
@@ -558,24 +588,99 @@ export default function AssistantPanel() {
     cleanup();
   };
 
-  // 丟掉目前的 session：記憶體與落地的歷史都清掉。
+  // 丟掉某個 session：記憶體與落地的歷史都清掉。
   // 只清畫面不清磁碟的話，使用者以為「清空對話」了，夾帶查詢結果的歷史卻還躺在設定目錄裡。
+  const dropSessionId = (sid: string | null) => {
+    if (sid && isApiProvider(provider)) void api.agentSessionDelete(sid).catch(() => {});
+  };
+
+  /** 丟掉「目前這串」的 session（畫面上的訊息不動）。 */
   const dropSession = () => {
     const sid = sessionIdRef.current;
     sessionIdRef.current = null;
     prodOkRef.current = new Set();
-    if (sid && isApiProvider(provider)) void api.agentSessionDelete(sid).catch(() => {});
+    dropSessionId(sid);
   };
 
   const reset = async () => {
     // 有對話內容才需要確認，避免空對話時多一步點擊。
     if (messages.length > 0) {
-      const ok = await uiConfirm(t("確定要清空目前對話並開新對話嗎？"), { title: t("清空對話？"), danger: true, confirmText: t("清空") });
+      const ok = await uiConfirm(t("確定要清空目前對話嗎？（其他對話串不受影響）"), { title: t("清空對話？"), danger: true, confirmText: t("清空") });
       if (!ok) return;
     }
     if (streaming) cancel();
     dropSession();
     setMessages([]);
+  };
+
+  // ---- 多對話：新增 / 切換 / 改名 / 刪除 ----
+  //
+  // 不同資料庫共用一串對話時，模型手上還握著上一個庫的表結構與結果，答案就串了庫。
+  // 以前唯一的出路是「清空」，但那是不可逆的。現在一個庫開一串，切走再切回來歷史都在。
+
+  /** 開一串新對話並切過去（目前這串原封不動留在清單裡）。 */
+  const newChat = () => {
+    if (streaming) return;
+    const s = useStore.getState();
+    const conn = s.connections.find((c) => c.id === s.activeId) ?? null;
+    // 先把畫面上的現況折回舊那串，否則切走的瞬間這幾則就沒了。
+    const folded = foldActive();
+    const fresh = newConversation({ id: conn?.id ?? null, name: conn?.name ?? null });
+    setArchive(pruneArchive(addConversation(folded, fresh)));
+    setMessages([]);
+    // 新對話從零開始：不沿用舊 session（沿用等於換了標題卻還帶著同一段上文）。
+    sessionIdRef.current = null;
+    prodOkRef.current = new Set();
+    setConvListOpen(false);
+  };
+
+  /** 切到另一串既有對話。串流中不切——換走之後那些事件會落到錯的對話裡。 */
+  const switchChat = (id: string) => {
+    setConvListOpen(false);
+    if (streaming || id === activeConvId) return;
+    const folded = foldActive();
+    const target = findConversation(folded, id);
+    if (!target) return;
+    setArchive({ ...folded, activeId: id });
+    setMessages(target.messages);
+    // 供應商對不上的 session id 對新端點毫無意義（見 ChatConversation.agentProvider）。
+    sessionIdRef.current = target.agentProvider && target.agentProvider !== provider ? null : target.agentSessionId;
+    prodOkRef.current = new Set();
+  };
+
+  const renameChat = async (id: string) => {
+    const conv = findConversation(archive, id);
+    if (!conv) return;
+    const name = await uiPrompt(t("對話名稱"), {
+      title: t("重新命名對話"),
+      defaultValue: conversationTitle(id === activeConvId ? { ...conv, messages } : conv) ?? "",
+    });
+    if (name === null) return;
+    setArchive((a) => updateConversation(a, id, (c) => ({ ...c, title: name.trim() })));
+  };
+
+  const deleteChat = async (id: string) => {
+    const conv = findConversation(archive, id);
+    if (!conv) return;
+    if (id === activeConvId && streaming) return;
+    const label = conversationTitle(id === activeConvId ? { ...conv, messages } : conv) ?? t("新對話");
+    if (conv.messages.length > 0 || (id === activeConvId && messages.length > 0)) {
+      const ok = await uiConfirm(t("確定要刪除對話「{name}」嗎？此動作無法復原。", { name: label }), {
+        title: t("刪除對話？"), danger: true, confirmText: t("刪除"),
+      });
+      if (!ok) return;
+    }
+    dropSessionId(conv.agentSessionId);
+    // 刪的是目前這串 → 先折回再刪，讓 removeConversation 選出的接手對象帶著正確的訊息。
+    const base = id === activeConvId ? foldActive() : archive;
+    const next = removeConversation(base, id);
+    setArchive(next);
+    if (id === activeConvId) {
+      const now = activeConversation(next);
+      setMessages(now.messages);
+      sessionIdRef.current = now.agentProvider && now.agentProvider !== provider ? null : now.agentSessionId;
+      prodOkRef.current = new Set();
+    }
   };
 
   /**
@@ -816,6 +921,11 @@ export default function AssistantPanel() {
   const meta = providerMeta(provider);
   // 資料庫工具現況：API 供應商內建；CLI 供應商要找得到 dbk 才有（見 agent_detect.db_tools）。
   const dbToolsReady = !!status?.db_tools;
+  // 清單上的標題：作用中的那串要用畫面上的 messages 推導（archive 裡的副本要等 effect 才折回去，
+  // 不然剛問完第一句，標題還會停在「新對話」）。
+  const titleOf = (c: ChatConversation) =>
+    conversationTitle(c.id === activeConvId ? { ...c, messages } : c) ?? t("新對話");
+  const convList = sortedConversations(archive);
 
   return (
     <div className="shrink-0 bg-panel border-l border-fg/10 flex flex-col text-sm relative" style={{ width }}>
@@ -826,6 +936,10 @@ export default function AssistantPanel() {
         <span className="text-xs text-fg/45 uppercase tracking-wide">{t("AI 助手")}</span>
         {sessionIdRef.current && <span className="text-[10px] text-fg/30">{t("· 對話中")}</span>}
         <div className="ml-auto flex items-center gap-1">
+          <IconButton icon={MessageSquarePlus} label={t("開新對話（目前這串會留在清單裡）")} box="w-6 h-6"
+            onClick={newChat} disabled={streaming} />
+          <IconButton icon={MessagesSquare} label={t("對話清單（{n}）", { n: convList.length })} box="w-6 h-6"
+            onClick={() => setConvListOpen((v) => !v)} />
           {mode === "agent" && (
             <IconButton icon={Folder} label={t("開啟助手工作資料夾（腳本檔存放處）")} box="w-6 h-6"
               onClick={() => api.openAgentWorkspace().catch(() => {})} />
@@ -833,11 +947,48 @@ export default function AssistantPanel() {
           {messages.length > 0 && (
             <IconButton icon={Download} label={t("匯出對話為 Markdown")} box="w-6 h-6" onClick={exportChat} />
           )}
-          <IconButton icon={Trash2} label={t("清空對話 / 開新對話")} box="w-6 h-6" onClick={reset} />
+          <IconButton icon={Trash2} label={t("清空目前對話")} box="w-6 h-6" onClick={reset} />
           <IconButton icon={PanelRightClose} label={t("收合面板")} box="w-6 h-6"
             onClick={() => useAssistant.getState().setOpen(false)} />
         </div>
       </div>
+
+      {/* 對話清單：一個資料庫一串，切走再切回來歷史都在（見 chatSessions.ts）。 */}
+      {convListOpen && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setConvListOpen(false)} />
+          <div className="absolute right-2 top-9 z-30 w-[min(20rem,calc(100%-1rem))] max-h-80 overflow-auto
+                          bg-panel border border-fg/15 rounded shadow-lg py-1">
+            {convList.map((c) => {
+              const isActive = c.id === activeConvId;
+              const count = isActive ? messages.length : c.messages.length;
+              return (
+                <div key={c.id}
+                  className={`group flex items-center gap-1 px-2 py-1.5 text-xs cursor-pointer hover:bg-fg/5 ${isActive ? "bg-accent/10" : ""}`}
+                  onClick={() => switchChat(c.id)}>
+                  <div className="min-w-0 flex-1">
+                    <div className={`truncate ${isActive ? "text-fg" : "text-fg/80"}`}>{titleOf(c)}</div>
+                    <div className="truncate text-[10px] text-fg/35">
+                      {[c.connName, t("{n} 則", { n: count }), fmtRelativeTime(c.updatedAt)].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                  <IconButton icon={Pencil} label={t("重新命名")} box="w-5 h-5"
+                    className="opacity-0 group-hover:opacity-100"
+                    onClick={(e) => { e.stopPropagation(); void renameChat(c.id); }} />
+                  <IconButton icon={Trash2} label={t("刪除對話")} box="w-5 h-5"
+                    className="opacity-0 group-hover:opacity-100"
+                    onClick={(e) => { e.stopPropagation(); void deleteChat(c.id); }} />
+                </div>
+              );
+            })}
+            <button type="button" onClick={newChat} disabled={streaming}
+              className="w-full flex items-center gap-1.5 px-2 py-1.5 text-xs text-fg/60 hover:text-fg hover:bg-fg/5
+                         border-t border-fg/10 mt-1 disabled:opacity-40 disabled:hover:bg-transparent">
+              <Icon icon={MessageSquarePlus} size={13} /> {t("開新對話")}
+            </button>
+          </div>
+        </>
+      )}
 
       {notReady && (
         <div className="shrink-0 px-3 py-2 border-b border-fg/10 bg-amber-500/10 text-[11px] text-amber-200/90 leading-relaxed">

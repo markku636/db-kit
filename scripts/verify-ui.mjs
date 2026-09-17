@@ -514,6 +514,67 @@ const CASES = {
     check("還原後 text-[11px] 回到 11px", (await tinyPx()) === 11);
   },
 
+  // AI 助手多對話（issue #4）：以前整個助手只有一串，換個庫接著問就串了庫，想乾淨開始只能「清空」——
+  // 而清空是不可逆的。這裡驗的是使用者實際的動線：既有的幾串讀得回來、切換不丟訊息、開新的一串
+  // 不會吃掉舊的、刪掉作用中的那串會接手下一串。
+  async "assistant-conversations"(page) {
+    // 先種兩串既有對話再重載：這同時驗了 chatSessions.loadArchive 真的讀得回落地的存檔。
+    await page.evaluate(() => {
+      const mk = (id, title, text, at) => ({
+        id, title, agentSessionId: null, agentProvider: null,
+        connId: null, connName: "prod-mysql", createdAt: at, updatedAt: at,
+        messages: [{ id: `${id}-m`, role: "user", text, tools: [], pending: false, error: false }],
+      });
+      localStorage.setItem("db-kit:assistantSessions", JSON.stringify({
+        conversations: [mk("c1", "", "訂單表有哪些欄位？", 1), mk("c2", "庫存盤點", "庫存怎麼算", 2)],
+        activeId: "c1",
+      }));
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#root");
+    await sleep(1200);
+
+    await page.getByRole("button", { name: "AI 助手" }).first().click();
+    await sleep(600);
+    check("助手面板開啟並顯示作用中那串的訊息", await page.getByText("訂單表有哪些欄位？").first().isVisible());
+
+    const listBtn = page.getByRole("button", { name: /^對話清單/ });
+    check("標題列有對話清單入口", (await listBtn.count()) > 0);
+    await listBtn.first().click();
+    await sleep(400);
+    // 沒取過名的那串從第一則使用者訊息推導標題；取過名的用使用者給的名字。
+    check("清單列出未命名那串（標題取自第一則提問）", (await page.getByText("訂單表有哪些欄位？").count()) >= 2);
+    check("清單列出已命名那串", await page.getByText("庫存盤點", { exact: true }).first().isVisible());
+
+    await page.getByText("庫存盤點", { exact: true }).first().click();
+    await sleep(500);
+    check("切換過去看得到那串的歷史", await page.getByText("庫存怎麼算").first().isVisible());
+    check("切換後不再顯示前一串的訊息", (await page.getByText("訂單表有哪些欄位？").count()) === 0);
+
+    // 切回去：歷史必須還在（這正是「清空」做不到、而 issue #4 要的東西）。
+    await listBtn.first().click();
+    await sleep(400);
+    await page.getByText("訂單表有哪些欄位？").first().click();
+    await sleep(500);
+    check("切回來歷史仍在", await page.getByText("訂單表有哪些欄位？").first().isVisible());
+
+    await page.getByRole("button", { name: /^開新對話/ }).first().click();
+    await sleep(500);
+    check("開新對話後是空白對話", (await page.getByText("庫存怎麼算").count()) === 0);
+    await listBtn.first().click();
+    await sleep(400);
+    check("開新對話不吃掉舊的兩串", (await page.getByText("庫存盤點", { exact: true }).count()) >= 1);
+    check("清單計數跟著長到 3", /對話清單（3）/.test(await listBtn.first().getAttribute("title")));
+
+    // 刪掉作用中的空白那串 → 接手清單上的下一串，而不是留下指不到的 activeId（會整頁白掉）。
+    await page.getByRole("button", { name: "刪除對話" }).first().click();
+    await sleep(600);
+    const stillThere = await page.locator("#root").innerText();
+    check("刪除作用中那串後面板仍可用", stillThere.includes("AI 助手"));
+    check("刪除後落地存檔剩兩串", await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("db-kit:assistantSessions")).conversations.length === 2));
+  },
+
   // 結構比對（v0.30）：資料表右鍵與資料庫右鍵都要有入口；兩個對話框都能開、單表能比出結果，
   // 且整段沒有前端例外——shim 少一個 command 就是 pageerror，這裡會抓到。
   // 審查並執行：查詢分頁工具列開對話框 → 分析結果（回滾等級 / 注意事項）→ AI 審查串流帶出結論徽章 →
