@@ -1,3 +1,16 @@
+## v0.32.0
+
+**三個從 GitHub issue 回報進來的問題，前兩個是同一個根因。** `desc users` 沒有任何輸出（[#6](https://github.com/markku636/db-kit/issues/6)）、反白時多框到上一行註解就「同一條 SQL 卻沒有結果」（[#5](https://github.com/markku636/db-kit/issues/5)），看起來是兩回事，其實都壞在每個 driver 各寫一份的那行「這條語句該 fetch 還是 execute」。
+
+- **語句開頭關鍵字的判讀集中成一份**（`src-tauri/src/db/stmt.rs`）。五個 SQL driver 原本各自寫著 `sql.trim_start().starts_with("select")`，有兩個破口：**前導註解**——`-- 查詢客戶\nSELECT …` 去掉空白後開頭是 `--`，比對不中就落到 execute 路徑，回的是「影響 0 列」而不是結果集；**前綴比對**——`starts_with("describe")` 認不得 MySQL 慣用的縮寫 `DESC`，於是查看表結構這種純讀取的指令永遠回 0 列。現在統一「跳過前導空白與註解（`--` / `#` / `/* */`，可連續夾雜）→ 取第一個**完整字詞**」，各 driver 只留自己方言的關鍵字清單。順帶修掉 mssql 的 `starts_ci` 會在非 ASCII 開頭的語句上切到非字元邊界而 panic。
+- **各方言的關鍵字清單一併補齊**。MySQL 補 `desc`（#6 的直接成因）與 MySQL 8 的查詢形式 `with`（CTE）/ `table` / `values`，以及會回狀態表格的 `analyze` / `check` / `checksum` / `optimize` / `repair`——漏掉的症狀和 `DESC` 一模一樣：查得到，但顯示不出來。PostgreSQL 補 `values` / `fetch`，SQLite 補 `with` / `values`。改成完整字詞比對之後 `exec` 不再是 `execute` 的前綴，mssql 兩者都列。
+- **RETURNING 的偵測不再拿原文 `contains`**。`DELETE … -- MariaDB 可加 RETURNING` 這種註記會讓語句被推去 fetch，受影響列數就這樣不見了。改成先剝掉註解與字串字面值（`stmt::code_only`）再做完整字詞比對。
+- **前端的「目前資料庫」前綴去重同樣認不得前導註解**。`hasLeadingDbSwitch` 取代原本直接對原文比對開頭的 regex，否則自帶 `USE` 的查詢前面加一行註解，就會被疊上第二段切庫語句，後端只認得第一段，第二段連同查詢被當成「一條」送出而報多語句錯誤。`isWriteStatement` 內嵌的那份剝註解迴圈抽成共用的 `stripLeadingComments`（順帶補上 MySQL 的 `#` 行註解）。
+- **AI 助手改成多對話**（[#4](https://github.com/markku636/db-kit/issues/4)）。以前整個助手只有一串：換個庫接著問，模型手上還握著上一個庫的表結構與結果，答案就串了庫；想乾淨開始只能「清空」，而那是不可逆的，「新話題」分隔線又只斷開送給模型的上文、畫面上仍是同一串，找不回也切不回去。新增 `src/chatSessions.ts`：多串並存、各自保有訊息與後端 session id，標題列「開新對話」另起一串（舊的原封不動留在清單裡），清單顯示標題（取自第一則提問，可改名）、開串時的連線與最後更新時間，可逐串刪除。切換時會把畫面上的現況先折回舊那串，切走再切回來歷史都在。供應商對不上的 session id 照舊丟棄（那個 id 對新端點毫無意義）。
+- **落地策略跟著改**。對話本體搬到 `db-kit:assistantSessions`（舊的 `db-kit:assistantChat` 只留偏好，首次啟動會把舊對話遷移成第一串，不會有人發現自己的對話不見了）。上限每串 60 則、共 30 串，超出時丟最久沒動的，但**作用中的那串一定留著**。`saveArchive` 在配額爆掉時逐步丟最舊的再試，而不是靜默放棄整份存檔——後者的後果是「這一輪之後的對話全部存不進去」，而且完全沒有徵兆；真的一串都塞不下才出聲提醒。
+
+> 驗證：`cargo test --no-default-features --lib` **417 項全通過**（新增 14 項：`db::stmt` 9 項涵蓋連續 / 混合註解、完整字詞邊界、非 ASCII 開頭、字串字面值裡的註解標記與 `returning`；`db::mysql` 4 項針對 #5 / #6 的實際輸入；另有 1 項 **SQLite 端到端**每次 `cargo test` 都跑——同一條 SELECT 加不加前導註解必須回出一模一樣的欄位與列，且註解裡的 `returning` 不可讓 DELETE 丟掉受影響列數）。vitest **1192 項全通過**（新增 26 項：`chatSessions` 21 項涵蓋標題推導、增刪切換、裁切時保住作用中那串、壞存檔的修復、舊版單串遷移與配額退讓；`sql` 5 項涵蓋剝註解與前綴去重）。`tsc` 0 error、`eslint src` 0 error、`vite build` 綠燈；`i18n:scan` en / zh-CN 100%、0 幽靈 key（新增 13 條，zh-CN 以產生器重建，只有新增）。`verify:ui` 全套 **137 項全通過**，新增情境 `assistant-conversations` 12 項（種兩串既有對話後重載，驗讀回、切換不丟訊息、切回歷史仍在、開新不吃掉舊的、刪除作用中那串會接手下一串且存檔剩兩串）。**#5 / #6 的修正未對真實 MySQL 實測**——手上沒有回報者的環境，端到端驗證走 SQLite（跳過註解的那段是共用的 `db::stmt`，各方言只差關鍵字清單）。
+
 ## v0.31.0
 
 **在正式環境跑一份會改資料的腳本，以前只有「確認框」這一道防線**。查詢分頁會問「這是正式環境，確定嗎？」「這句沒有 WHERE，確定嗎？」，但按下去之後改了哪些列、改之前長什麼樣、要怎麼還原，全都沒有留下來。`src/impact.ts` 早就寫好一半（把 UPDATE / DELETE 改寫成「還原用 SELECT」），只是從沒接上畫面。這一版把它做完，並搬進後端讓 GUI 與 CLI 共用：新增 `src-tauri/src/review_run/`。
