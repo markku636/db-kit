@@ -30,6 +30,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
+use crate::agent_setup::{self, Os};
 use crate::commands::AppState;
 use crate::dbtools::DbToolCtx;
 use crate::error::{AppError, AppResult};
@@ -117,6 +118,8 @@ pub struct AgentStatus {
     /// 資料庫工具的提供方式：HTTP 供應商為 `"builtin"`；CLI 供應商為找到的 `dbk` 路徑，
     /// 找不到為 `None`（前端據此顯示「需要 dbk」）。
     db_tools: Option<String>,
+    /// 這台機器上的官方安裝指令（CLI 供應商才有）：面板照抄顯示，「在終端機安裝」跑的也是這一行。
+    install_cmd: Option<String>,
 }
 
 /// 推送給前端的串流事件（事件名 `agent-stream`）。扁平結構，欄位依 kind 取捨。
@@ -980,10 +983,12 @@ pub async fn agent_detect(provider: Option<String>, base_url: Option<String>) ->
             path: if cfg.base.is_empty() { None } else { Some(cfg.base) },
             // HTTP 供應商的資料庫工具內建在 Rust 工具迴圈裡，不需要外部程式。
             db_tools: Some("builtin".to_string()),
+            install_cmd: None,
         };
     }
     // CLI 供應商的資料庫工具靠 `dbk mcp`；一併回報找得到與否，讓面板能提示「需要 dbk」。
     let db_tools = resolve_dbk_bin().await;
+    let install_cmd = agent_setup::install_command(p.id(), Os::current()).map(String::from);
     match resolve_bin(p).await {
         Some(bin) => {
             let version = cli_version(&bin).await;
@@ -994,6 +999,7 @@ pub async fn agent_detect(provider: Option<String>, base_url: Option<String>) ->
                 logged_in: logged_in(p),
                 path: Some(bin.display),
                 db_tools,
+                install_cmd,
             }
         }
         None => AgentStatus {
@@ -1003,8 +1009,38 @@ pub async fn agent_detect(provider: Option<String>, base_url: Option<String>) ->
             logged_in: logged_in(p),
             path: None,
             db_tools,
+            install_cmd,
         },
     }
+}
+
+/// 開一個看得見的終端機視窗，跑官方安裝指令（`action = "install"`）或登入（`"login"`）。
+/// 指令由後端決定（見 `agent_setup`），前端只選供應商與動作；只負責開窗，不等它跑完 ——
+/// 前端在使用者切回 App 時重新偵測。
+#[tauri::command]
+pub async fn agent_setup_terminal(provider: Option<String>, action: String) -> AppResult<()> {
+    let p = Provider::parse(provider.as_deref());
+    let os = Os::current();
+    let command = match action.as_str() {
+        "install" => agent_setup::install_command(p.id(), os).map(String::from),
+        "login" => match resolve_bin(p).await {
+            Some(bin) => agent_setup::login_command(p.id(), &bin.display, os),
+            None => {
+                return Err(AppError::Query(tf!("找不到 {cli} CLI，請先安裝並以你的訂閱帳號登入", cli = p.exe())));
+            }
+        },
+        _ => None,
+    }
+    .ok_or_else(|| AppError::Query(t!("這個供應商不需要在終端機安裝或登入").to_string()))?;
+    let home = home_dir().unwrap_or_else(std::env::temp_dir);
+    let script = agent_setup::terminal_script(
+        &command,
+        &t!("指令已結束。沒有錯誤的話，回到 DB Kit 就會自動重新偵測；這個視窗可以關掉。"),
+        os,
+    );
+    agent_setup::open_terminal(&script, &home, &std::env::temp_dir()).map_err(|e| {
+        AppError::Query(tf!("無法開啟終端機（{e}），請自行在終端機執行：{cmd}", e = e, cmd = command))
+    })
 }
 
 /// 送出一次問答（多輪以 session_id 串接：Claude 走 `--resume`、Codex 走 `exec resume`）。

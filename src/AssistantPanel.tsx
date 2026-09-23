@@ -12,6 +12,7 @@ import { useStore } from "./store";
 import { baseUrlOf, CLAUDE_MODELS, isApiProvider, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
 import { currentSystemPrompt, useAiSkills } from "./aiSkills";
 import AiSettingsDialog from "./AiSettingsDialog";
+import CliSetupHint from "./CliSetupHint";
 import { useTheme } from "./theme";
 import { resolveHighlightColors, type ThemeColors } from "./editorThemes";
 import { useAssistant } from "./assistant";
@@ -993,24 +994,17 @@ export default function AssistantPanel() {
       {notReady && (
         <div className="shrink-0 px-3 py-2 border-b border-fg/10 bg-amber-500/10 text-[11px] text-amber-200/90 leading-relaxed">
           {isApiProvider(provider) ? (
-            !status!.installed
-              ? t("尚未設定 {name} 的 Base URL。", { name: meta.label })
-              : t("{name} 還沒有 API 金鑰（地端端點可以不用）。", { name: meta.label })
-          ) : !status!.installed ? (
-            t("找不到 {cli} CLI。請先安裝 {name}（{how}）。", { cli: meta.cli, name: meta.label, how: meta.install })
+            <>
+              {!status!.installed
+                ? t("尚未設定 {name} 的 Base URL。", { name: meta.label })
+                : t("{name} 還沒有 API 金鑰（地端端點可以不用）。", { name: meta.label })}
+              <button type="button" onClick={() => setAiSettingsOpen(true)}
+                className="ml-1 underline hover:text-amber-100">
+                {t("開啟 AI 設定")}
+              </button>
+            </>
           ) : (
-            t("尚未登入 {name}。請在終端機執行 {cmd} 並用你的訂閱帳號登入。", { name: meta.label, cmd: meta.loginCmd })
-          )}
-          {isApiProvider(provider) ? (
-            <button type="button" onClick={() => setAiSettingsOpen(true)}
-              className="ml-1 underline hover:text-amber-100">
-              {t("開啟 AI 設定")}
-            </button>
-          ) : (
-            <button type="button" onClick={detect} disabled={detecting}
-              className="ml-1 underline hover:text-amber-100 disabled:opacity-50">
-              {detecting ? t("偵測中…") : t("重新偵測")}
-            </button>
+            <CliSetupHint provider={provider} status={status!} detecting={detecting} onDetect={detect} />
           )}
         </div>
       )}

@@ -605,6 +605,8 @@ export interface AgentStatus {
    * CLI 供應商為找到的 `dbk` 執行檔路徑（走 `dbk mcp`），找不到為 null。
    */
   db_tools?: string | null;
+  /** 這台機器上的官方安裝指令（CLI 供應商才有）；「在終端機安裝」跑的也是這一行。 */
+  install_cmd?: string | null;
 }
 
 // 助手模式：advise = 純問答 / 產生腳本文字（唯讀）；agent = 可寫腳本檔到工作資料夾。
@@ -1819,6 +1821,9 @@ export const api = {
   // baseUrl 只有 API 供應商會用到；systemPrompt 是人設 + 選中的技能（四種供應商都吃）。
   agentDetect: (provider?: AgentProvider | null, baseUrl?: string | null) =>
     invoke<AgentStatus>("agent_detect", { provider: provider ?? null, baseUrl: baseUrl ?? null }),
+  // 開一個看得見的終端機視窗跑官方安裝指令 / 登入；指令由後端決定，這裡只選動作。只開窗，不等它跑完。
+  agentSetupTerminal: (provider: AgentProvider, action: "install" | "login") =>
+    invoke<void>("agent_setup_terminal", { provider, action }),
   // connectionId / database：附帶目前連線，讓助手能用唯讀資料庫工具自己查（見 dbtools）。
   // 不給就沒有資料庫工具，其餘行為完全不變；generate / edit 模式後端一律忽略。
   agentSend: (args: {

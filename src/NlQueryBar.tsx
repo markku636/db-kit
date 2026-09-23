@@ -8,6 +8,7 @@ import { extractFirstCodeBlock } from "./nlPrompt";
 import { copyToClipboard } from "./ui";
 import { baseUrlOf, CLAUDE_MODELS, isApiProvider, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
 import { currentSystemPrompt } from "./aiSkills";
+import CliSetupHint from "./CliSetupHint";
 
 // 破壞性偵測與「整段像不像 SQL」的判定搬到 aiActions.ts：編輯器的 AI 動作要用同一套判準。
 // 兩份的話，同一段 DELETE 在生成列示警、在差異預覽不示警（或反過來），使用者只會學會忽略警告。
@@ -193,17 +194,17 @@ export default function NlQueryBar({ open, onClose, lang, buildPrompt, onApply, 
       {notReady ? (
         <div className="text-[11px] text-amber-200/90 bg-amber-500/10 rounded px-2 py-1.5 leading-relaxed">
           {isApiProvider(provider) ? (
-            !status!.installed
-              ? t("尚未設定 {name} 的 Base URL。", { name: meta.label })
-              : t("{name} 還沒有 API 金鑰（地端端點可以不用）。", { name: meta.label })
-          ) : !status!.installed ? (
-            t("找不到 {cli} CLI。請先安裝 {name}（{how}）。", { cli: meta.cli, name: meta.label, how: meta.install })
+            <>
+              {!status!.installed
+                ? t("尚未設定 {name} 的 Base URL。", { name: meta.label })
+                : t("{name} 還沒有 API 金鑰（地端端點可以不用）。", { name: meta.label })}
+              <button type="button" onClick={detect} disabled={detecting} className="ml-1 underline hover:text-amber-100 disabled:opacity-50">
+                {detecting ? t("偵測中…") : t("重新偵測")}
+              </button>
+            </>
           ) : (
-            t("尚未登入 {name}。請在終端機執行 {cmd} 並用你的訂閱帳號登入。", { name: meta.label, cmd: meta.loginCmd })
+            <CliSetupHint provider={provider} status={status!} detecting={detecting} onDetect={detect} />
           )}
-          <button type="button" onClick={detect} disabled={detecting} className="ml-1 underline hover:text-amber-100 disabled:opacity-50">
-            {detecting ? t("偵測中…") : t("重新偵測")}
-          </button>
         </div>
       ) : (
         <div className="flex gap-2">

@@ -36,6 +36,10 @@ pub mod cli;
 // 連同 tauri / tauri-plugin-dialog 相依一起不被連入。
 #[cfg(feature = "gui")]
 mod agent;
+// 幫使用者安裝 / 登入 CLI 供應商（開終端機跑官方指令）。只有 agent 會用，但只依賴 std，
+// 所以測試時也編進 slim build —— 不必開 GUI feature 就能在本機跑它的測試。
+#[cfg(any(feature = "gui", test))]
+mod agent_setup;
 // HTTP LLM 供應商（Anthropic-compatible / OpenAI-compatible）。相依 reqwest，
 // 與 agent 一起掛在 gui feature 後：slim CLI（dbk）不含 AI，也就不需要把 reqwest 連進去。
 #[cfg(feature = "gui")]
@@ -421,6 +425,7 @@ pub fn run() {
             commands::restore_from_history,
             commands::clear_history,
             agent::agent_detect,
+            agent::agent_setup_terminal,
             agent::agent_send,
             agent::agent_cancel,
             agent::llm_key_set,

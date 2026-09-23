@@ -24,8 +24,8 @@ export interface ProviderMeta {
   kind: ProviderKind;
   /** 執行檔名稱，用於「找不到 xxx CLI」提示（僅 cli）。 */
   cli: string;
-  /** 安裝方式（提示用一行字，非可執行指令；僅 cli）。 */
-  install: string;
+  /** 官方安裝說明頁（僅 cli）。實際的安裝指令依平台而異，由後端 agent_detect 回報。 */
+  installDocs: string;
   /** 登入指令（僅 cli）。 */
   loginCmd: string;
 }
@@ -36,7 +36,7 @@ export const PROVIDERS: readonly ProviderMeta[] = [
     label: "Claude Code",
     kind: "cli",
     cli: "claude",
-    install: "claude.ai/install",
+    installDocs: "https://code.claude.com/docs/en/setup",
     loginCmd: "claude",
   },
   {
@@ -44,11 +44,11 @@ export const PROVIDERS: readonly ProviderMeta[] = [
     label: "OpenAI Codex",
     kind: "cli",
     cli: "codex",
-    install: "npm i -g @openai/codex",
+    installDocs: "https://github.com/openai/codex#quickstart",
     loginCmd: "codex login",
   },
-  { id: "anthropic-api", label: "Anthropic API", kind: "api", cli: "", install: "", loginCmd: "" },
-  { id: "openai-api", label: "OpenAI API", kind: "api", cli: "", install: "", loginCmd: "" },
+  { id: "anthropic-api", label: "Anthropic API", kind: "api", cli: "", installDocs: "", loginCmd: "" },
+  { id: "openai-api", label: "OpenAI API", kind: "api", cli: "", installDocs: "", loginCmd: "" },
 ];
 
 export function providerMeta(id: AgentProvider): ProviderMeta {

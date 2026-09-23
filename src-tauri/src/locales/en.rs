@@ -411,6 +411,13 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "找不到 {cli} CLI，請先安裝並以你的訂閱帳號登入" => {
             "{cli} CLI not found; install it and sign in with your subscription first"
         }
+        "這個供應商不需要在終端機安裝或登入" => "This provider has nothing to install or sign in to in a terminal",
+        "指令已結束。沒有錯誤的話，回到 DB Kit 就會自動重新偵測；這個視窗可以關掉。" => {
+            "The command has finished. If there were no errors, switch back to DB Kit and it will detect again automatically. You can close this window."
+        }
+        "無法開啟終端機（{e}），請自行在終端機執行：{cmd}" => {
+            "Could not open a terminal ({e}). Run this in a terminal yourself: {cmd}"
+        }
         "啟動 {cli} 失敗：{e}" => "Failed to start {cli}: {e}",
         "{cli} 以結束碼 {c} 退出" => "{cli} exited with code {c}",
         "Codex 回合失敗" => "The Codex turn failed",
