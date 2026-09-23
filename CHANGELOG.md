@@ -1,3 +1,20 @@
+## v0.32.1
+
+**找不到 CLI 時可以一鍵在終端機安裝 / 登入。** 以前 AI 助手與 NL 查詢列找不到 CLI 時只有一行「請先安裝 Claude Code（claude.ai/install）」：那不是指令、也不是連結，使用者得自己去查該在哪個 shell 跑什麼；裝好之後還卡在登入，一樣只給一句「請在終端機執行 claude」。新增 `src-tauri/src/agent_setup.rs` 與前端 `CliSetupHint`：
+
+- 提示列直接顯示**這台機器**的官方安裝指令（Windows `irm https://claude.ai/install.ps1 | iex`；macOS / Linux `curl -fsSL https://claude.ai/install.sh | bash`；Codex `npm i -g @openai/codex`），可一鍵複製，另附安裝說明連結。「在終端機安裝」開一個**看得見的**終端機視窗跑同一行；裝好但沒登入時換成「在終端機登入」（用解析到的絕對路徑呼叫——剛裝好時新視窗的 PATH 多半還找不到 `claude`）。切回 App 就自動重新偵測。
+- 開看得見的視窗而不是背景默默跑：安裝腳本是從網路抓下來執行的，應該讓使用者看到跑了什麼、有沒有錯；登入本來就是互動式的，背景跑不了。指令由後端組（前端只送供應商與 install / login），無法藉此執行任意指令——面板顯示的就是終端機實際跑的那一行。
+- Windows 用 PowerShell + `CREATE_NEW_CONSOLE`（`-ExecutionPolicy Bypass` 只作用於該行程，否則 `npm.ps1` 會被預設原則擋掉）並先從登錄檔重讀 PATH；macOS 走 `.command` 檔交給 Terminal（`osascript` 屬 Apple Event，未宣告自動化權限會被 TCC 擋掉）；Linux 依序嘗試常見終端機。
+
+**v0.32.0 的多對話在「跨供應商」時是壞的。** 供應商（Claude Code / Codex / API）是全域單一設定，不跟著對話走：用 Codex 開了一串、再切到 Claude 開的另一串，供應商選擇器不會跟著切回去，於是那串的 `agentProvider` 對不上、thread id 被丟掉——畫面上歷史還在，模型卻接不回上文，每次切回去都要重講一遍。等於多對話只有在「從頭到尾只用一個供應商」時才成立。
+
+- **供應商跟著對話走**。切到某一串時，一併把供應商切回那串用的那個（`asAgentProvider` 驗證過的才切；認不得的舊存檔維持現狀並丟掉 session id——那個 id 屬於一個我們叫不出名字的端點）。對話清單每一列補上供應商名稱：模型會跟著切換而變，沒標的話使用者無從得知。
+- **這裡有個會互相抵銷的地雷**：換供應商的偵測 effect 本來就會清掉 session id（換了端點，舊 id 沒有意義）。切對話時把供應商一起切，正好觸發它，把剛還原好的 session id 清掉——症狀與修之前一模一樣，只是原因換了一個。加 `providerFollowsChatRef` 區分「使用者自己換供應商」與「切對話帶動的」，只有前者清。`verify:ui` 實測過：把這個旗標拿掉，兩串的 session id 都會被抹掉。
+- **刪除對話時用錯了供應商判斷**。只有 API 供應商的對話歷史由我們落地（CLI 的 session 歸它自己的 CLI 管），但 `dropSessionId` 問的是「現在選的是哪個供應商」而不是「這個 session 是誰建的」。人在 Codex、刪掉一串 API 供應商的對話時，整個刪除就被跳過，夾帶查詢結果的歷史檔留在設定目錄裡。改成以該串自己的 `agentProvider` 判斷。
+- 刪掉作用中那串之後「接手」的下一串，同樣把供應商帶過來（原本只還原訊息，session 一樣會掉）。
+
+> 驗證：vitest **1195 項全通過**（新增 3 項 `asAgentProvider`——特別釘住「認不得的 id 必須回 null，不可比照 `providerMeta` 退回第一個供應商」，那會讓改過名的舊存檔被默默當成 Claude）。`verify:ui` 全套 **143 項全通過**，`assistant-conversations` 從 12 項擴到 18 項：兩串分別種成 claude / codex 並各帶一個 session id，驗清單標出供應商、切過去供應商跟著變、**兩串的 session id 都沒被丟掉**、切回來再驗一次。這六項不是裝飾——拿掉 `providerFollowsChatRef` 後其中兩項確實會紅。`tsc` 0 error、`eslint src` 0 error、`vite build` 綠燈；`i18n:scan` en / zh-CN 100%（多對話這部分無新增 key——供應商名稱用 `providerMeta().label`，本來就不是譯文；一鍵安裝那部分新增 8 條）。一鍵安裝 / 登入另有 `agent_setup` 單元測試 5 項，並以 GUI subsystem 的探針程式（無主控台、無 std handles，等同正式版 App）實際開出 PowerShell 視窗確認。**未實測的部分**：Codex CLI 沒安裝在開發機上，`codex exec resume <THREAD_ID>` 的組裝與 `thread.started` 的解析沿用 v0.30 既有實作，本次只改前端「哪一串配哪個供應商」；真正的 Claude Code 安裝流程、macOS 與 Linux 的開窗也未實測。
+
 ## v0.32.0
 
 **三個從 GitHub issue 回報進來的問題，前兩個是同一個根因。** `desc users` 沒有任何輸出（[#6](https://github.com/markku636/db-kit/issues/6)）、反白時多框到上一行註解就「同一條 SQL 卻沒有結果」（[#5](https://github.com/markku636/db-kit/issues/5)），看起來是兩回事，其實都壞在每個 driver 各寫一份的那行「這條語句該 fetch 還是 execute」。
