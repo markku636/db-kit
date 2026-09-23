@@ -9,7 +9,7 @@ import {
   onAgentStream,
 } from "./api";
 import { useStore } from "./store";
-import { baseUrlOf, CLAUDE_MODELS, isApiProvider, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
+import { asAgentProvider, baseUrlOf, CLAUDE_MODELS, isApiProvider, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
 import { currentSystemPrompt, useAiSkills } from "./aiSkills";
 import AiSettingsDialog from "./AiSettingsDialog";
 import CliSetupHint from "./CliSetupHint";
@@ -123,8 +123,12 @@ export default function AssistantPanel() {
   // 供應商對不上就丟掉舊 session id（見 ChatConversation.agentProvider）。
   const sessionIdRef = useRef<string | null>(
     (() => {
+      // 開機時不動供應商選擇器（那是使用者上次的選擇，不是某一串對話的事）；對不上就丟掉
+      // session id——帶著它去問另一個端點只會找不到歷史。實務上兩者會一致：每次落地都會把
+      // 當下的供應商寫進作用中的那串（見 foldActive）。
       const c = activeConversation(archive);
-      return c.agentProvider && c.agentProvider !== useAiProvider.getState().provider ? null : c.agentSessionId;
+      const want = asAgentProvider(c.agentProvider);
+      return want && want === useAiProvider.getState().provider ? c.agentSessionId : null;
     })(),
   );
   // 本次對話已對哪些正式環境連線確認過「可以讓助手查」；同一段對話不重複問。
@@ -171,9 +175,18 @@ export default function AssistantPanel() {
   // 掛載即偵測一次，之後每次換供應商再測一次（面板恆掛載，僅在 !open 時不渲染）。
   // 換供應商等於換一支 CLI，對方的 session / thread id 不通用，重置成新對話串（訊息保留）。
   const firstDetectRef = useRef(true);
+  /**
+   * 這次的供應商變動是「切對話帶動的」，不是使用者自己換的。
+   *
+   * 切到另一串時會把供應商一起切回那串用的那個（見 switchChat），而那會觸發下面這個 effect。
+   * 少了這個旗標，effect 就會把 switchChat 剛還原好的 session id 當成「換供應商」清掉——
+   * 畫面上歷史還在、模型卻接不回上文，而且完全沒有徵兆。
+   */
+  const providerFollowsChatRef = useRef(false);
   useEffect(() => {
     if (firstDetectRef.current) firstDetectRef.current = false;
-    else sessionIdRef.current = null;
+    else if (!providerFollowsChatRef.current) sessionIdRef.current = null;
+    providerFollowsChatRef.current = false;
     setStatus(null);
     detect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -591,8 +604,10 @@ export default function AssistantPanel() {
 
   // 丟掉某個 session：記憶體與落地的歷史都清掉。
   // 只清畫面不清磁碟的話，使用者以為「清空對話」了，夾帶查詢結果的歷史卻還躺在設定目錄裡。
-  const dropSessionId = (sid: string | null) => {
-    if (sid && isApiProvider(provider)) void api.agentSessionDelete(sid).catch(() => {});
+  // 只有 API 供應商的歷史由我們落地（CLI 供應商的 session 歸它自己的 CLI 管），所以要問的是
+  // 「這個 session 是哪個供應商建的」，不是「現在選的是哪個」——兩者在多對話下經常不同。
+  const dropSessionId = (sid: string | null, owner: AgentProvider) => {
+    if (sid && isApiProvider(owner)) void api.agentSessionDelete(sid).catch(() => {});
   };
 
   /** 丟掉「目前這串」的 session（畫面上的訊息不動）。 */
@@ -600,7 +615,7 @@ export default function AssistantPanel() {
     const sid = sessionIdRef.current;
     sessionIdRef.current = null;
     prodOkRef.current = new Set();
-    dropSessionId(sid);
+    dropSessionId(sid, provider);
   };
 
   const reset = async () => {
@@ -644,8 +659,18 @@ export default function AssistantPanel() {
     if (!target) return;
     setArchive({ ...folded, activeId: id });
     setMessages(target.messages);
-    // 供應商對不上的 session id 對新端點毫無意義（見 ChatConversation.agentProvider）。
-    sessionIdRef.current = target.agentProvider && target.agentProvider !== provider ? null : target.agentSessionId;
+    // 供應商跟著對話走：Codex 開的那串切回去仍是 Codex，thread 才接得回去。
+    // 供應商是全域單一設定，不跟著切的話，Claude 一串、Codex 一串就永遠只有其中一串續得上——
+    // 另一串的 session id 會因為「供應商對不上」被丟掉，每次切回去都要重講一遍。
+    // 認不得的值（舊版 / 手改過的存檔）當成沒記，維持目前供應商（見 asAgentProvider）。
+    const want = asAgentProvider(target.agentProvider);
+    if (want && want !== provider) {
+      providerFollowsChatRef.current = true; // 讓偵測 effect 別把下面還原的 session 清掉
+      setProvider(want);
+    }
+    // 認得供應商 → session 一定對得上（供應商剛切過去）。認不得卻留著 id → 那個 id 屬於一個
+    // 我們叫不出名字的端點，帶著它續聊只會讓後端去找一段不存在的歷史，丟掉。
+    sessionIdRef.current = want ? target.agentSessionId : null;
     prodOkRef.current = new Set();
   };
 
@@ -671,7 +696,9 @@ export default function AssistantPanel() {
       });
       if (!ok) return;
     }
-    dropSessionId(conv.agentSessionId);
+    // 以「這串自己的」供應商判斷要不要刪後端歷史：拿當下的供應商去問，會在
+    // 「人在 Codex、刪掉一串 API 供應商的對話」時整個跳過，夾帶查詢結果的歷史檔就留在設定目錄裡。
+    dropSessionId(conv.agentSessionId, asAgentProvider(conv.agentProvider) ?? provider);
     // 刪的是目前這串 → 先折回再刪，讓 removeConversation 選出的接手對象帶著正確的訊息。
     const base = id === activeConvId ? foldActive() : archive;
     const next = removeConversation(base, id);
@@ -679,7 +706,13 @@ export default function AssistantPanel() {
     if (id === activeConvId) {
       const now = activeConversation(next);
       setMessages(now.messages);
-      sessionIdRef.current = now.agentProvider && now.agentProvider !== provider ? null : now.agentSessionId;
+      // 接手的那串同樣把供應商帶過來（理由見 switchChat）。
+      const want = asAgentProvider(now.agentProvider);
+      if (want && want !== provider) {
+        providerFollowsChatRef.current = true;
+        setProvider(want);
+      }
+      sessionIdRef.current = want ? now.agentSessionId : null;
       prodOkRef.current = new Set();
     }
   };
@@ -970,7 +1003,13 @@ export default function AssistantPanel() {
                   <div className="min-w-0 flex-1">
                     <div className={`truncate ${isActive ? "text-fg" : "text-fg/80"}`}>{titleOf(c)}</div>
                     <div className="truncate text-[10px] text-fg/35">
-                      {[c.connName, t("{n} 則", { n: count }), fmtRelativeTime(c.updatedAt)].filter(Boolean).join(" · ")}
+                      {[
+                        // 供應商跟著對話走，所以要標出來——不然「為什麼切過去模型換了」無從得知。
+                        asAgentProvider(c.agentProvider) ? providerMeta(asAgentProvider(c.agentProvider)!).label : null,
+                        c.connName,
+                        t("{n} 則", { n: count }),
+                        fmtRelativeTime(c.updatedAt),
+                      ].filter(Boolean).join(" · ")}
                     </div>
                   </div>
                   <IconButton icon={Pencil} label={t("重新命名")} box="w-5 h-5"

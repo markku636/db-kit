@@ -12,7 +12,7 @@ globalThis.localStorage = {
   length: 0,
 } as unknown as Storage;
 
-const { API_PRESETS, baseUrlOf, DEFAULT_BASE_URL, isApiProvider, presetsFor, PROVIDERS, providerMeta } = await import("./aiProvider");
+const { API_PRESETS, asAgentProvider, baseUrlOf, DEFAULT_BASE_URL, isApiProvider, presetsFor, PROVIDERS, providerMeta } = await import("./aiProvider");
 const { BUILTIN_SKILLS, composeSystemPrompt, defaultPersona, useAiSkills } = await import("./aiSkills");
 
 describe("AI 供應商清單", () => {
@@ -94,5 +94,29 @@ describe("人設與技能", () => {
     expect(all[all.length - 1].builtin).toBeUndefined();
     useAiSkills.getState().remove(BUILTIN_SKILLS[0].id);
     expect(useAiSkills.getState().all().filter((x) => x.builtin)).toHaveLength(BUILTIN_SKILLS.length);
+  });
+});
+
+describe("asAgentProvider（多對話：供應商跟著對話走）", () => {
+  it("認得的 id 原樣回傳", () => {
+    for (const p of PROVIDERS) expect(asAgentProvider(p.id)).toBe(p.id);
+  });
+
+  it("認不得的一律回 null —— 不可比照 providerMeta 退回第一個供應商", () => {
+    // providerMeta 對未知 id 會退回 PROVIDERS[0]（讓 UI 不必到處防呆）。判斷「這串該切到
+    // 哪個供應商」若也那樣退，改過名的舊存檔會被默默當成 Claude，切過去之後 session 對不上、
+    // 上文整個不見，而且完全沒有徵兆。
+    expect(providerMeta("gemini" as never).id).toBe(PROVIDERS[0].id);
+    expect(asAgentProvider("gemini")).toBeNull();
+    expect(asAgentProvider("")).toBeNull();
+    expect(asAgentProvider(null)).toBeNull();
+    expect(asAgentProvider(undefined)).toBeNull();
+  });
+
+  it("CLI 與 API 供應商都認得（deleteChat 要靠它決定刪不刪後端歷史）", () => {
+    expect(asAgentProvider("codex")).toBe("codex");
+    expect(asAgentProvider("claude")).toBe("claude");
+    expect(isApiProvider(asAgentProvider("openai-api")!)).toBe(true);
+    expect(isApiProvider(asAgentProvider("codex")!)).toBe(false);
   });
 });

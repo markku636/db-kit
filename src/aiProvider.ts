@@ -59,6 +59,18 @@ export function isApiProvider(id: AgentProvider): boolean {
   return providerMeta(id).kind === "api";
 }
 
+/**
+ * 把存檔裡的字串還原成 AgentProvider；認不得的一律回 null。
+ *
+ * 落地的對話會記下它是用哪個供應商問的（見 chatSessions.ChatConversation.agentProvider），
+ * 而那份存檔可能來自改過名的舊版、或被手動編輯過。`providerMeta` 對未知 id 會**退回第一個**
+ * 供應商（讓 UI 不必到處防呆），拿它來判斷「這串該切到哪個供應商」就會把未知值默默當成 Claude，
+ * 於是切過去之後 session 對不上、上文整個不見。要判斷「認不認得」只能用這支。
+ */
+export function asAgentProvider(v: string | null | undefined): AgentProvider | null {
+  return PROVIDERS.some((p) => p.id === v) ? (v as AgentProvider) : null;
+}
+
 /** 常見服務的 Base URL 一鍵帶入。清單會過期，所以模型名一律自己填 / 現抓，不寫死。 */
 export interface ApiPreset {
   id: string;

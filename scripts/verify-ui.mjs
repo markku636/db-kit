@@ -519,16 +519,22 @@ const CASES = {
   // 不會吃掉舊的、刪掉作用中的那串會接手下一串。
   async "assistant-conversations"(page) {
     // 先種兩串既有對話再重載：這同時驗了 chatSessions.loadArchive 真的讀得回落地的存檔。
+    // 兩串刻意用不同供應商（claude / codex）：供應商是全域單一設定，切對話時若不跟著切，
+    // 另一串的 session id 就會因為「供應商對不上」被丟掉，每次切回去都得重講一遍。
     await page.evaluate(() => {
-      const mk = (id, title, text, at) => ({
-        id, title, agentSessionId: null, agentProvider: null,
+      const mk = (id, title, text, at, provider, sid) => ({
+        id, title, agentSessionId: sid, agentProvider: provider,
         connId: null, connName: "prod-mysql", createdAt: at, updatedAt: at,
         messages: [{ id: `${id}-m`, role: "user", text, tools: [], pending: false, error: false }],
       });
       localStorage.setItem("db-kit:assistantSessions", JSON.stringify({
-        conversations: [mk("c1", "", "訂單表有哪些欄位？", 1), mk("c2", "庫存盤點", "庫存怎麼算", 2)],
+        conversations: [
+          mk("c1", "", "訂單表有哪些欄位？", 1, "claude", "sess-claude-1"),
+          mk("c2", "庫存盤點", "庫存怎麼算", 2, "codex", "thread-codex-2"),
+        ],
         activeId: "c1",
       }));
+      localStorage.setItem("db-kit:aiProvider", "claude"); // 純字串，不是 JSON（見 aiProvider.readProvider）
     });
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForSelector("#root");
@@ -546,17 +552,36 @@ const CASES = {
     check("清單列出未命名那串（標題取自第一則提問）", (await page.getByText("訂單表有哪些欄位？").count()) >= 2);
     check("清單列出已命名那串", await page.getByText("庫存盤點", { exact: true }).first().isVisible());
 
+    // 清單要標出每串是哪個供應商 —— 切過去模型換了，沒標的話無從得知。
+    const listText = await page.locator("#root").innerText();
+    check("清單標出各串的供應商", /Claude Code/.test(listText) && /OpenAI Codex/.test(listText),
+      listText.slice(0, 200));
+
+    const providerSel = page.locator("select").filter({ hasText: "OpenAI Codex" }).first();
+    check("目前供應商是 Claude", (await providerSel.inputValue()) === "claude");
+
     await page.getByText("庫存盤點", { exact: true }).first().click();
-    await sleep(500);
+    await sleep(600);
     check("切換過去看得到那串的歷史", await page.getByText("庫存怎麼算").first().isVisible());
     check("切換後不再顯示前一串的訊息", (await page.getByText("訂單表有哪些欄位？").count()) === 0);
+    // 這串是 Codex 開的 → 供應商選擇器要跟著切過去，否則它的 thread 接不回來。
+    check("供應商跟著對話切到 Codex", (await providerSel.inputValue()) === "codex");
+    check("Codex 那串的 session id 沒被丟掉", await page.evaluate(() => {
+      const a = JSON.parse(localStorage.getItem("db-kit:assistantSessions"));
+      return a.conversations.find((c) => c.id === "c2")?.agentSessionId === "thread-codex-2";
+    }));
 
     // 切回去：歷史必須還在（這正是「清空」做不到、而 issue #4 要的東西）。
     await listBtn.first().click();
     await sleep(400);
     await page.getByText("訂單表有哪些欄位？").first().click();
-    await sleep(500);
+    await sleep(600);
     check("切回來歷史仍在", await page.getByText("訂單表有哪些欄位？").first().isVisible());
+    check("供應商跟著切回 Claude", (await providerSel.inputValue()) === "claude");
+    check("切回來後 Claude 那串的 session id 仍在", await page.evaluate(() => {
+      const a = JSON.parse(localStorage.getItem("db-kit:assistantSessions"));
+      return a.conversations.find((c) => c.id === "c1")?.agentSessionId === "sess-claude-1";
+    }));
 
     await page.getByRole("button", { name: /^開新對話/ }).first().click();
     await sleep(500);
