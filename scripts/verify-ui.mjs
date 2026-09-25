@@ -50,6 +50,7 @@ const CASE_FX = {
   "ssh-ai-suggest": { STORAGE_SEED: SSH_STORAGE_SEED },
   "sftp-edit-and-chmod": { STORAGE_SEED: SSH_STORAGE_SEED },
   "sftp-multi-select": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ssh-key-manager": { STORAGE_SEED: SSH_STORAGE_SEED },
 };
 
 // xterm 目前畫面（DOM renderer）的純文字。
@@ -201,6 +202,89 @@ const CASES = {
     await sleep(300);
     check("清單的權限欄就地更新成 rwxr-xr-x", (await sftp.getByText("-rwxr-xr-x", { exact: true }).count()) > 0);
     check("沒有未實作的 SFTP command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // SSH 金鑰管理（Xshell 的使用者金鑰管理員）：貼上公鑰 → 說明這是公鑰；貼上加密私鑰 → 要密語、錯的密語
+  // 講明是密語錯、對的才能匯入；產生新金鑰 → 拿得到公鑰那一行；主機設定從金鑰庫選 → 存下去的是 keystore:<id>。
+  async "ssh-key-manager"(page) {
+    const tree = page.locator("[data-ssh-host-tree]");
+    await tree.getByText("web-01", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    await tree.getByRole("button", { name: "SSH 金鑰", exact: true }).first().click();
+    const mgr = page.getByTestId("ssh-key-manager");
+    await mgr.waitFor({ timeout: 5000 }).catch(() => {});
+    check("側欄「SSH 主機」標題列開得出金鑰管理", (await mgr.count()) > 0);
+    check("列出金鑰庫裡的金鑰（名稱 / 類型 / 密語 / 憑證）",
+      /prod-deploy/.test(await mgr.innerText().catch(() => "")) && /Ed25519/.test(await mgr.innerText().catch(() => "")));
+
+    // 貼上公鑰 → 明確說明
+    await mgr.getByRole("button", { name: "貼上金鑰…" }).click();
+    await page.getByLabel("貼上私鑰內容").fill("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKE me@laptop");
+    await page.getByRole("button", { name: "下一步", exact: true }).click();
+    await page.getByText(/這是公鑰，不是私鑰/).first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("貼上公鑰 → 說明這是公鑰、該選私鑰", (await page.getByText(/這是公鑰，不是私鑰/).count()) > 0);
+    check("不能用的金鑰「匯入」按不下去", await page.getByRole("button", { name: "匯入", exact: true }).isDisabled().catch(() => false));
+    await page.getByRole("button", { name: "返回", exact: true }).click();
+
+    // 貼上加密私鑰 → 密語錯 / 對
+    await mgr.getByRole("button", { name: "貼上金鑰…" }).click();
+    await page.getByLabel("貼上私鑰內容").fill("-----BEGIN OPENSSH PRIVATE KEY-----\nENCRYPTED-DEMO\n-----END OPENSSH PRIVATE KEY-----");
+    await page.getByRole("button", { name: "下一步", exact: true }).click();
+    const pass = page.getByLabel("私鑰密語", { exact: true });
+    await pass.waitFor({ timeout: 5000 }).catch(() => {});
+    check("加密私鑰先要密語", (await pass.count()) > 0);
+    await pass.fill("wrong");
+    await page.getByRole("button", { name: "解開", exact: true }).click();
+    await page.getByText(/密語不正確/).first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("密語錯 → 講明是密語不正確", (await page.getByText(/密語不正確/).count()) > 0);
+    await pass.fill("right-one");
+    await page.getByRole("button", { name: "解開", exact: true }).click();
+    const importView = page.getByTestId("ssh-key-import");
+    await importView.getByText("SHA256:pasted0kLx3VbQ9nZr7TfYwHc2Jm5Ud8Ae1Gs4Ki6Po").first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("解開後顯示指紋", (await importView.getByText("SHA256:pasted0kLx3VbQ9nZr7TfYwHc2Jm5Ud8Ae1Gs4Ki6Po").count()) > 0);
+    await importView.getByLabel("名稱", { exact: true }).fill("pasted key");
+    await page.getByRole("button", { name: "匯入", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_KEY_IMPORTS__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const imports = await page.evaluate(() => window.__DBKIT_KEY_IMPORTS__);
+    check("匯入帶的是解得開的那個密語與名稱",
+      imports.length === 1 && imports[0].passphrase === "right-one" && imports[0].name === "pasted key" && imports[0].source.kind === "text",
+      JSON.stringify(imports));
+    await mgr.getByText("pasted key", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("匯入後清單多了一把", (await mgr.locator("[data-key-id]").count()) === 2);
+
+    // 產生新金鑰
+    await mgr.getByRole("button", { name: "產生新金鑰…" }).click();
+    await page.getByRole("button", { name: "產生", exact: true }).click();
+    const pub = page.getByTestId("ssh-key-public");
+    await pub.waitFor({ timeout: 5000 }).catch(() => {});
+    check("產生後拿得到 authorized_keys 那一行", /^ssh-ed25519 /.test(await pub.inputValue().catch(() => "")));
+    await page.getByRole("button", { name: "完成", exact: true }).click();
+    check("產生後清單多了一把", (await mgr.locator("[data-key-id]").count()) === 3);
+    await page.keyboard.press("Escape");
+    await sleep(200);
+
+    // 主機設定：從金鑰庫選 → 存下去的是 keystore:<id>
+    await tree.getByText("web-01", { exact: true }).first().click({ button: "right" });
+    await sleep(150);
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: "編輯…" }).first().click();
+    await page.getByRole("button", { name: "金鑰庫…" }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByRole("button", { name: "金鑰庫…" }).first().click();
+    const row = page.locator('[data-testid=ssh-key-manager] [data-key-id="key-prod"]');
+    await row.waitFor({ timeout: 5000 }).catch(() => {});
+    await row.getByRole("button", { name: "使用", exact: true }).click();
+    const chip = page.getByTestId("ssh-key-chip");
+    await chip.waitFor({ timeout: 5000 }).catch(() => {});
+    check("選了之後欄位顯示金鑰名稱而不是 id", /prod-deploy/.test(await chip.innerText().catch(() => "")));
+    const status = page.getByTestId("ssh-key-status");
+    await status.first().waitFor({ timeout: 5000 }).catch(() => {});
+    await page.waitForFunction(() => /OpenSSH 憑證/.test(document.querySelector("[data-testid=ssh-key-status]")?.textContent ?? ""), null, { timeout: 5000 }).catch(() => {});
+    const statusText = await status.first().innerText().catch(() => "");
+    check("欄位下顯示金鑰檢查結果與憑證", /Ed25519/.test(statusText) && /OpenSSH 憑證/.test(statusText), statusText);
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_SSH_SESSION_SAVES__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const saves = await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__);
+    check("存下去的是 keystore:<id>", saves.length === 1 && saves[0].private_key_path === "keystore:key-prod", JSON.stringify(saves).slice(0, 300));
+    check("沒有未實作的 SSH command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 

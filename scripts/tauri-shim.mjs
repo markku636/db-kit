@@ -25,6 +25,9 @@ export function installShim(fx) {
   // SFTP 刪除與多選批次傳輸的紀錄（驗「刪了哪些、批次帶了哪些路徑與同名策略」用）。
   window.__DBKIT_SFTP_REMOVES__ = [];
   window.__DBKIT_SFTP_BATCH__ = [];
+  // SSH 主機儲存與金鑰匯入 / 產生的紀錄（驗「存下去的是 keystore:<id>」「匯入帶了哪個密語」用）。
+  window.__DBKIT_SSH_SESSION_SAVES__ = [];
+  window.__DBKIT_KEY_IMPORTS__ = [];
   const one = (columns, cells) => ({ columns, rows: [cells], rows_affected: 0 });
 
   const queryFor = (sql) => {
@@ -244,7 +247,46 @@ export function installShim(fx) {
     // 假 shell：逐字回聲、Enter 跑幾個固定指令（ls / pwd / echo / systemctl status nginx），其餘回 command not found。
     // 輸出走 Channel（見 channelSender），與真後端一樣是 raw bytes → ArrayBuffer。
     ssh_sessions_list: () => fx.SSH_SESSIONS ?? { version: 1, folders: [], sessions: [] },
-    ssh_session_save: () => null,
+    ssh_session_save: ({ session }) => { window.__DBKIT_SSH_SESSION_SAVES__.push(session); return null; },
+    // ── SSH 金鑰庫（假的：內容看起來像加密的就要密語，密語 "wrong" 算錯；以 ssh- 開頭的是公鑰）──
+    ssh_keys_list: () => sshKeys.map((k) => ({ ...k })),
+    ssh_key_inspect: ({ source, passphrase }) => sshInspect(source, passphrase),
+    ssh_key_import: ({ source, passphrase, newPassphrase, name }) => {
+      const r = sshInspect(source, passphrase);
+      if (r.status !== "ok") return Promise.reject(new Error(r.message ?? "cannot import"));
+      window.__DBKIT_KEY_IMPORTS__.push({ source, passphrase, newPassphrase, name });
+      const existing = sshKeys.find((k) => k.fingerprint === r.info.fingerprint);
+      if (existing) return { key: existing, existed: true };
+      const key = {
+        id: `key-${++sshSeq}`, name: name || r.info.comment || "imported", algorithm: r.info.algorithm, bits: r.info.bits,
+        fingerprint: r.info.fingerprint, comment: r.info.comment, encrypted: r.info.encrypted || !!newPassphrase,
+        source_format: r.info.format, created_at: Math.floor(Date.now() / 1000), has_cert: false,
+      };
+      sshKeys.push(key);
+      return { key, existed: false };
+    },
+    ssh_key_generate: ({ algorithm, comment, passphrase, name }) => {
+      const n = ++sshSeq;
+      const key = {
+        id: `key-${n}`, name: name || comment || `${algorithm} ${n}`, algorithm: algorithm.startsWith("rsa") ? "ssh-rsa" : algorithm === "ed25519" ? "ssh-ed25519" : "ecdsa-sha2-nistp256",
+        bits: algorithm === "rsa-4096" ? 4096 : algorithm === "rsa-3072" ? 3072 : 256, fingerprint: `SHA256:generated${n}Xq9vT2pLmNc8RfYw`,
+        comment: comment || "", encrypted: !!passphrase, source_format: "", created_at: Math.floor(Date.now() / 1000), has_cert: false,
+      };
+      sshKeys.push(key);
+      return key;
+    },
+    ssh_key_public: ({ id }) => {
+      const k = sshKeys.find((x) => x.id === id);
+      return k ? `${k.algorithm} AAAAC3NzaC1lZDI1NTE5AAAAIDbkitFakePublicKeyForScreenshotsOnly ${k.comment}`.trim() : Promise.reject(new Error("not found"));
+    },
+    ssh_key_rename: ({ id, name }) => { const k = sshKeys.find((x) => x.id === id); if (k) k.name = name; return null; },
+    ssh_key_remove: ({ id }) => { const i = sshKeys.findIndex((x) => x.id === id); if (i >= 0) sshKeys.splice(i, 1); return null; },
+    ssh_key_export: () => null,
+    ssh_key_attach_cert: ({ id }) => {
+      const k = sshKeys.find((x) => x.id === id);
+      if (k) k.has_cert = true;
+      return { path: "", key_id: "demo", principals: ["deploy"], valid_after: 0, valid_before: 4102444800, cert_type: "user", ca_fingerprint: "SHA256:ca", matches_key: true, validity: "valid" };
+    },
     ssh_session_remove: () => null,
     ssh_sessions_layout_save: () => null,
     ssh_has_stored_password: () => true,
@@ -321,6 +363,28 @@ export function installShim(fx) {
 
   // ── SSH 假 shell 的狀態與工具 ──────────────────────────────────────────
   let sshSeq = 0;
+  const sshKeys = (fx.SSH_KEYS ?? []).map((k) => ({ ...k }));
+  function sshInspect(source, passphrase) {
+    const text = source?.kind === "text" ? source.text : "";
+    const path = source?.kind === "path" ? source.path : "";
+    const stored = path.startsWith("keystore:") ? sshKeys.find((k) => `keystore:${k.id}` === path) : null;
+    if (path.startsWith("keystore:") && !stored) {
+      return { status: "invalid", format: null, info: null, message: "金鑰庫裡找不到這把金鑰（可能已刪除）", cert: null };
+    }
+    if (/^\s*(ssh-|ecdsa-)/.test(text)) {
+      return { status: "unsupported", format: null, info: null, message: "這是公鑰，不是私鑰。請選對應的私鑰檔（通常是同名、沒有 .pub 的那個）。", cert: null };
+    }
+    const encrypted = stored ? stored.encrypted : /ENCRYPTED|aes256|_enc/i.test(text + path);
+    const info = stored
+      ? { format: "OpenSSH", algorithm: stored.algorithm, bits: stored.bits, fingerprint: stored.fingerprint, comment: stored.comment, encrypted, public_openssh: "" }
+      : { format: text.includes("PuTTY") ? "PuTTY PPK v3" : "OpenSSH", algorithm: "ssh-ed25519", bits: 256, fingerprint: "SHA256:pasted0kLx3VbQ9nZr7TfYwHc2Jm5Ud8Ae1Gs4Ki6Po", comment: "pasted@demo", encrypted, public_openssh: "" };
+    const cert = stored?.has_cert
+      ? { path: "", key_id: "demo", principals: ["deploy"], valid_after: 0, valid_before: 4102444800, cert_type: "user", ca_fingerprint: "SHA256:ca", matches_key: true, validity: "valid" }
+      : null;
+    if (encrypted && !stored && !passphrase) return { status: "need_passphrase", format: info.format, info, message: "這把私鑰受密語保護，請輸入密語", cert };
+    if (encrypted && !stored && passphrase === "wrong") return { status: "bad_passphrase", format: info.format, info, message: "密語不正確（或不支援這種加密方式）：decrypt", cert };
+    return { status: "ok", format: info.format, info, message: null, cert };
+  }
   const sshConns = new Map(); // connId → { host, port, username }
   const sshTerms = new Map(); // termId → { send, prompt, line }
   // SFTP 假檔案：內容（read_text / write_text）與被改過的屬性（大小 / 時間 / 權限）疊在 fixtures 上。

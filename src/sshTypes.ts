@@ -24,7 +24,10 @@ export interface SshSession {
   port: number;
   username: string;
   auth: SshAuthKind;
+  /** 私鑰檔路徑，或金鑰庫參照 `keystore:<id>`。 */
   private_key_path: string;
+  /** OpenSSH 使用者憑證；空 = 自動找私鑰旁邊的 `<私鑰>-cert.pub`。 */
+  certificate_path: string;
   folder_id: string | null;
   options: SshTermOptions;
 }
@@ -145,6 +148,70 @@ export interface SftpProgress {
 /** 批次傳輸時目的地已有同名項目：整批不開始 / 覆蓋（資料夾合併）/ 略過同名。 */
 export type SftpOnConflict = "fail" | "overwrite" | "skip";
 
+// ---- 使用者金鑰（後端 ssh/keys.rs） ----
+
+/** 主機設定裡參照金鑰庫的前綴。 */
+export const KEYSTORE_PREFIX = "keystore:";
+
+export interface SshKeyInfo {
+  /** 格式名（OpenSSH / PuTTY PPK v3 / PKCS#8 / PEM (PKCS#1 RSA), DES-EDE3-CBC …） */
+  format: string;
+  algorithm: string;
+  bits: number | null;
+  fingerprint: string;
+  comment: string;
+  encrypted: boolean;
+  /** authorized_keys 那一行 */
+  public_openssh: string;
+}
+
+export interface SshCertInfo {
+  path: string;
+  key_id: string;
+  principals: string[];
+  valid_after: number;
+  /** u64::MAX（JSON 裡會失真成 ~1.8e19）= 永久有效 */
+  valid_before: number;
+  cert_type: "user" | "host";
+  ca_fingerprint: string;
+  matches_key: boolean | null;
+  validity: "valid" | "expired" | "not_yet_valid";
+}
+
+export type SshKeyInspectStatus = "ok" | "need_passphrase" | "bad_passphrase" | "unsupported" | "invalid";
+
+export interface SshKeyInspect {
+  status: SshKeyInspectStatus;
+  format: string | null;
+  /** ok 時完整；要密語時若公鑰是明文存的（OpenSSH / PPK）也會先給 */
+  info: SshKeyInfo | null;
+  message: string | null;
+  cert: SshCertInfo | null;
+}
+
+export interface SshStoredKey {
+  id: string;
+  name: string;
+  algorithm: string;
+  bits: number | null;
+  fingerprint: string;
+  comment: string;
+  encrypted: boolean;
+  source_format: string;
+  created_at: number;
+  has_cert: boolean;
+}
+
+export interface SshKeyImportOutcome {
+  key: SshStoredKey;
+  /** 同一把（指紋相同）早就在金鑰庫裡 */
+  existed: boolean;
+}
+
+export type SshKeySource = { kind: "path"; path: string } | { kind: "text"; text: string };
+
+export type SshKeyGenAlgorithm = "ed25519" | "ecdsa-p256" | "ecdsa-p384" | "rsa-3072" | "rsa-4096";
+
 /** 前端執行期的連線狀態（不進後端）。 */
 export type SshStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -172,6 +239,7 @@ export function blankSshSession(id: string, folderId: string | null = null): Ssh
     username: "",
     auth: "password",
     private_key_path: "",
+    certificate_path: "",
     folder_id: folderId,
     options: defaultSshTermOptions(),
   };

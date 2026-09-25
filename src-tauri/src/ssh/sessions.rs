@@ -93,6 +93,9 @@ pub struct SshSession {
     pub auth: SshAuthKind,
     #[serde(default)]
     pub private_key_path: String,
+    /// OpenSSH 使用者憑證（`*-cert.pub`）。空 = 找私鑰旁邊的 `<私鑰>-cert.pub`（OpenSSH 的慣例）。
+    #[serde(default)]
+    pub certificate_path: String,
     /// 所屬資料夾（`SshFolder::id`）；`None` = 未分類。
     #[serde(default)]
     pub folder_id: Option<String>,
@@ -254,6 +257,7 @@ mod tests {
             username: "deploy".into(),
             auth: SshAuthKind::Key,
             private_key_path: "C:/keys/id_ed25519".into(),
+            certificate_path: String::new(),
             folder_id: None,
             options: SshTermOptions::default(),
         }

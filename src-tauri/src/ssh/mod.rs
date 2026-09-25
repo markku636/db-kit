@@ -10,9 +10,11 @@
 //! - `sessions`：側欄「SSH 主機」的持久化（`ssh_sessions.json`）與 keychain 帳號名。
 //! - `terminal`：PTY shell channel、輸出合併、resize / close。
 //! - `sftp`：SFTP 子系統（russh-sftp）、路徑安全、上下傳與取消。
+//! - `keys`：使用者金鑰——各種私鑰格式的辨識與載入、OpenSSH 憑證、App 內金鑰庫（`keystore:<id>`）。
 //! - `runtime`：`SshRuntime`——活著的連線 / 終端 / SFTP / 待答提示 / 傳輸旗標的登記簿。
 
 pub mod auth;
+pub mod keys;
 pub mod known_hosts;
 pub mod runtime;
 pub mod sessions;

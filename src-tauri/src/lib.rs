@@ -99,6 +99,10 @@ pub fn run() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            // SSH 金鑰庫：主機以 `keystore:<id>` 參照金鑰，DB tunnel 等沒有 AppHandle 的地方也要解析得到。
+            if let Ok(dir) = store::app_config_dir(&handle) {
+                crate::ssh::keys::init_store_root(&dir);
+            }
             // 載入語言偏好（與 dbk CLI 共用 app_settings.json）。啟動時套用，供後端錯誤訊息本地化。
             tauri::async_runtime::block_on(async {
                 let s: store::AppSettings = store::read_json(&handle, store::APP_SETTINGS_FILE)
@@ -455,6 +459,15 @@ pub fn run() {
             commands::ssh::ssh_sftp_download_many,
             commands::ssh::ssh_sftp_upload_many,
             commands::ssh::ssh_sftp_local_conflicts,
+            commands::ssh::ssh_key_inspect,
+            commands::ssh::ssh_keys_list,
+            commands::ssh::ssh_key_import,
+            commands::ssh::ssh_key_generate,
+            commands::ssh::ssh_key_rename,
+            commands::ssh::ssh_key_remove,
+            commands::ssh::ssh_key_public,
+            commands::ssh::ssh_key_export,
+            commands::ssh::ssh_key_attach_cert,
             commands::ssh::ssh_sftp_cancel,
             agent::agent_detect,
             agent::agent_setup_terminal,

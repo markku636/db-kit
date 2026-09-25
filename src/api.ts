@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   SshSessionsFile, SshSession, SshFolder, SshPlacement, SshTargetRef, SshConnInfo, SshHostKeyDecision,
   SshHostKeyPrompt, SshAuthPrompt, SshTermExit, SshConnClosed, SftpEntry, SftpOnConflict, SftpOpenInfo, SftpProgress, SftpText,
+  SshKeyInspect, SshKeySource, SshStoredKey, SshKeyImportOutcome, SshKeyGenAlgorithm, SshCertInfo,
 } from "./sshTypes";
 
 export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "external";
@@ -1959,4 +1960,17 @@ export const api = {
   sshSftpLocalConflicts: (localDir: string, names: string[]) =>
     invoke<string[]>("ssh_sftp_local_conflicts", { localDir, names }),
   sshSftpCancel: (transferId: string) => invoke<void>("ssh_sftp_cancel", { transferId }),
+  // 使用者金鑰（Xshell 的「使用者金鑰管理員」）：檢視任何格式的私鑰（含 keystore:<id>）、金鑰庫 CRUD、產生、匯出。
+  sshKeyInspect: (source: SshKeySource, passphrase: string | null, certificatePath: string | null) =>
+    invoke<SshKeyInspect>("ssh_key_inspect", { source, passphrase, certificatePath }),
+  sshKeysList: () => invoke<SshStoredKey[]>("ssh_keys_list"),
+  sshKeyImport: (source: SshKeySource, passphrase: string | null, newPassphrase: string | null, name: string | null) =>
+    invoke<SshKeyImportOutcome>("ssh_key_import", { source, passphrase, newPassphrase, name }),
+  sshKeyGenerate: (algorithm: SshKeyGenAlgorithm, comment: string, passphrase: string | null, name: string | null) =>
+    invoke<SshStoredKey>("ssh_key_generate", { algorithm, comment, passphrase, name }),
+  sshKeyRename: (id: string, name: string) => invoke<void>("ssh_key_rename", { id, name }),
+  sshKeyRemove: (id: string) => invoke<void>("ssh_key_remove", { id }),
+  sshKeyPublic: (id: string) => invoke<string>("ssh_key_public", { id }),
+  sshKeyExport: (id: string, dest: string) => invoke<void>("ssh_key_export", { id, dest }),
+  sshKeyAttachCert: (id: string, source: SshKeySource) => invoke<SshCertInfo>("ssh_key_attach_cert", { id, source }),
 };

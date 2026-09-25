@@ -1,12 +1,15 @@
 // 側欄的「SSH 主機」區塊：資料夾 + 主機清單（獨立於資料庫連線，不進 DbKind / selectedNode）。
 // 單擊只在本區高亮，雙擊 / Enter 開終端機分頁；右鍵有連線 / SFTP / 編輯 / 複製 / 刪除 / 移到資料夾。
-import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ChevronDown, ChevronRight, Folder, FolderPlus, Plus, SquareTerminal } from "lucide-react";
+import { lazy, Suspense, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { ChevronDown, ChevronRight, Folder, FolderPlus, KeyRound, Plus, SquareTerminal } from "lucide-react";
 import { useT } from "./i18n";
 import { Icon, MenuPanel } from "./ui/index";
 import { toast, uiConfirm, uiPrompt } from "./ui";
 import type { SshFolder, SshSession, SshTargetRef } from "./sshTypes";
 import { filterSessions, groupSessions, sessionLabel, uniqueFolderName, useSshSessions } from "./sshSessions";
+
+// 金鑰管理用得少：第一次打開才下載。
+const SshKeyManager = lazy(() => import("./SshKeyManager"));
 
 const SECTION_KEY = "db-kit:sshSectionCollapsed";
 const FOLDERS_KEY = "db-kit:sshFoldersCollapsed";
@@ -38,6 +41,7 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
   const [closedFolders, setClosedFolders] = useState<Set<string>>(() => loadSet(FOLDERS_KEY));
   const [selected, setSelected] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; session?: SshSession; folder?: SshFolder } | null>(null);
+  const [keysOpen, setKeysOpen] = useState(false);
 
   useEffect(() => { if (!loaded) void useSshSessions.getState().load(); }, [loaded]);
 
@@ -111,6 +115,10 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
         <Icon icon={showBody ? ChevronDown : ChevronRight} size={11} className="text-fg/40" />
         <span>{t("SSH 主機")}{total ? ` (${total})` : ""}</span>
         <span className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
+          <button type="button" onClick={(e) => { e.stopPropagation(); setKeysOpen(true); }} title={t("SSH 金鑰（匯入 / 產生 / 憑證）")} aria-label={t("SSH 金鑰")}
+            className="w-5 h-5 grid place-items-center rounded text-fg/40 hover:text-fg/80 hover:bg-fg/10">
+            <Icon icon={KeyRound} size={12} />
+          </button>
           <button type="button" onClick={(e) => { e.stopPropagation(); void addFolder(); }} title={t("新資料夾")} aria-label={t("新資料夾")}
             className="w-5 h-5 grid place-items-center rounded text-fg/40 hover:text-fg/80 hover:bg-fg/10">
             <Icon icon={FolderPlus} size={12} />
@@ -182,6 +190,11 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
             </button>
           ))}
         </MenuPanel>
+      )}
+      {keysOpen && (
+        <Suspense fallback={null}>
+          <SshKeyManager open onClose={() => setKeysOpen(false)} />
+        </Suspense>
       )}
     </div>
   );

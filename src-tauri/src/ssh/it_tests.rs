@@ -7,6 +7,11 @@
 //! cargo test --no-default-features --lib ssh::it_tests -- --ignored
 //! ```
 //! 環境變數 `DBKIT_SSH_IT_HOST` / `_PORT` / `_USER` / `_PASS` 可覆寫目標。
+//!
+//! 憑證登入的測試另外要伺服器信任測試 CA（只需做一次；測試每次自己產生 CA 並寫進那個檔）：
+//! ```text
+//! docker exec dbkit-ssh sh -c 'echo "TrustedUserCAKeys /config/.ssh/dbkit_test_ca.pub" >> /config/sshd/sshd_config; kill -HUP $(cat /config/sshd.pid)'
+//! ```
 //! known_hosts 用臨時檔，不碰使用者真正的信任清單。
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +24,8 @@ use super::auth::{connect_and_auth, SilentUi, SshTarget, TargetOrigin};
 use super::known_hosts::KnownHostsStore;
 use super::runtime::SshConn;
 use super::sessions::{SshAuthKind, SshTermOptions};
+use super::keys::test_support::{legacy_encrypt_pem, sec1_p256_der};
+use super::keys::{self, LegacyCipher};
 use super::sftp::{local_conflicts, OnConflict, SftpClient};
 use super::terminal::{TermEvent, TermHandle, TermOpen, TermSink};
 use crate::error::AppError;
@@ -35,6 +42,7 @@ fn target() -> SshTarget {
         auth: SshAuthKind::Password,
         password: env_or("DBKIT_SSH_IT_PASS", "dbkit123"),
         private_key_path: String::new(),
+        certificate_path: String::new(),
         passphrase: String::new(),
         term: SshTermOptions { keepalive_secs: 5, ..Default::default() },
         origin: TargetOrigin::AdHoc,
@@ -460,6 +468,174 @@ async fn sftp_batch_many_with_conflicts() {
     assert!(matches!(err, AppError::SshCancelled), "{err:?}");
 
     sftp.remove(&remote_dir, true).await.unwrap();
+    sftp.close().await;
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = conn.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+}
+
+// ---- 金鑰 / 憑證登入 ----
+
+fn key_target(path: &std::path::Path, passphrase: &str) -> SshTarget {
+    SshTarget {
+        auth: SshAuthKind::Key,
+        password: String::new(),
+        private_key_path: path.display().to_string(),
+        passphrase: passphrase.into(),
+        ..target()
+    }
+}
+
+/// 用密碼連上去，把公鑰們加進 `~/.ssh/authorized_keys`（保留原本的內容），回原本的內容供測試結束時還原。
+async fn authorize(sftp: &SftpClient, home: &str, lines: &[String]) -> String {
+    let _ = sftp.mkdir(&format!("{home}/.ssh")).await;
+    let path = format!("{home}/.ssh/authorized_keys");
+    let before = sftp.read_small(&path, 1 << 20).await.map(|t| t.text).unwrap_or_default();
+    let mut next = before.clone();
+    if !next.is_empty() && !next.ends_with('\n') {
+        next.push('\n');
+    }
+    for l in lines {
+        next.push_str(l);
+        next.push('\n');
+    }
+    match sftp.stat(&path).await {
+        Ok(_) => sftp.write_text(&path, &next, false).await.unwrap(),
+        Err(_) => sftp.write_text(&path, &next, true).await.unwrap(),
+    };
+    before
+}
+
+async fn restore_authorized(sftp: &SftpClient, home: &str, before: &str) {
+    let _ = sftp.write_text(&format!("{home}/.ssh/authorized_keys"), before, false).await;
+}
+
+async fn login(t: &SshTarget) -> Result<(), AppError> {
+    let c = connect_and_auth(t, "it-key", Arc::new(SilentUi), tmp_store()).await?;
+    let _ = c.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+    Ok(())
+}
+
+/// 各種格式的私鑰都真的登得進 OpenSSH：OpenSSH（bcrypt 密語）、PKCS#8（加密）、SEC1 EC 的 OpenSSL
+/// 傳統 3DES 加密（russh 原生解不開的那種）、金鑰庫的 `keystore:<id>`（轉存成 OpenSSH、同一個密語）。
+/// 密語錯誤時失敗，而且訊息講的是密語、不是一句「讀取失敗」。
+#[tokio::test]
+#[ignore = "需要 Docker OpenSSH:2222"]
+async fn key_login_in_every_format() {
+    use russh::keys::ssh_key::{Algorithm, EcdsaCurve, LineEnding, PrivateKey};
+    let conn = connect().await;
+    let (sftp, home) = SftpClient::open(&conn).await.expect("sftp open");
+    let tmp = std::env::temp_dir().join(format!("dbkit-it-keys-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let ed = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
+    let ec = PrivateKey::random(&mut rand010::rng(), Algorithm::Ecdsa { curve: EcdsaCurve::NistP256 }).unwrap();
+    let ed2 = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
+    let before = authorize(
+        &sftp,
+        &home,
+        &[ed.public_key().to_openssh().unwrap(), ec.public_key().to_openssh().unwrap(), ed2.public_key().to_openssh().unwrap()],
+    )
+    .await;
+
+    // OpenSSH，密語保護
+    let p1 = tmp.join("id_ed25519");
+    std::fs::write(&p1, ed.encrypt(&mut rand010::rng(), "pw-openssh").unwrap().to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
+    login(&key_target(&p1, "pw-openssh")).await.expect("OpenSSH 加密私鑰登入");
+    // SEC1 EC + OpenSSL 傳統 3DES 加密
+    let p2 = tmp.join("ec.pem");
+    std::fs::write(&p2, legacy_encrypt_pem("EC PRIVATE KEY", &sec1_p256_der(&ec), LegacyCipher::DesEde3Cbc, "pw-legacy", &[9u8; 8])).unwrap();
+    login(&key_target(&p2, "pw-legacy")).await.expect("3DES 加密的 SEC1 PEM 登入");
+    // PKCS#8（加密）
+    let p3 = tmp.join("ed2.p8");
+    let mut pem = Vec::new();
+    russh::keys::encode_pkcs8_pem_encrypted(&ed2, b"pw-pkcs8", 100, &mut pem).unwrap();
+    std::fs::write(&p3, &pem).unwrap();
+    login(&key_target(&p3, "pw-pkcs8")).await.expect("加密 PKCS#8 登入");
+
+    // 密語錯誤：SilentUi 不能問 → 私鑰這步略過 → 沒有其他方法 → 認證失敗，訊息講密語
+    let err = login(&key_target(&p2, "wrong")).await.unwrap_err();
+    let msg = err.message();
+    assert!(msg.contains("密語"), "{msg}");
+
+    // 金鑰庫：匯入 3DES PEM → keystore:<id>（轉成 OpenSSH、同一個密語）
+    let store = tmp.join("cfg");
+    keys::init_store_root(&store);
+    let out = keys::import_in(&store, &std::fs::read(&p2).unwrap(), Some("pw-legacy"), None, Some("it"), None).await.unwrap();
+    let mut t = key_target(&p2, "pw-legacy");
+    t.private_key_path = format!("{}{}", keys::KEYSTORE_PREFIX, out.key.id);
+    login(&t).await.expect("keystore:<id> 登入");
+
+    restore_authorized(&sftp, &home, &before).await;
+    sftp.close().await;
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = conn.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+}
+
+/// OpenSSH 使用者憑證：金鑰本身**不在** authorized_keys，只靠 CA 簽的憑證登入。
+/// 憑證放在私鑰旁邊（`<私鑰>-cert.pub`）自動找到；主體不符的憑證被拒，而且不會因為退回
+/// 金鑰本身而意外成功；主機設定明確指定的憑證路徑也用得上。
+#[tokio::test]
+#[ignore = "需要 Docker OpenSSH:2222（且 sshd 設了 TrustedUserCAKeys，見檔頭）"]
+async fn certificate_login() {
+    use russh::keys::ssh_key::{certificate, Algorithm, LineEnding, PrivateKey};
+    let conn = connect().await;
+    let (sftp, home) = SftpClient::open(&conn).await.expect("sftp open");
+    let cfg = sftp.read_small("/config/sshd/sshd_config", 1 << 20).await.map(|t| t.text).unwrap_or_default();
+    assert!(
+        cfg.lines().any(|l| l.trim_start().starts_with("TrustedUserCAKeys")),
+        "sshd 沒有設 TrustedUserCAKeys，見 it_tests.rs 檔頭的設定指令"
+    );
+    let tmp = std::env::temp_dir().join(format!("dbkit-it-cert-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let ca = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
+    let _ = sftp.mkdir(&format!("{home}/.ssh")).await;
+    let ca_path = format!("{home}/.ssh/dbkit_test_ca.pub");
+    let ca_line = format!("{}\n", ca.public_key().to_openssh().unwrap());
+    match sftp.stat(&ca_path).await {
+        Ok(_) => sftp.write_text(&ca_path, &ca_line, false).await.unwrap(),
+        Err(_) => sftp.write_text(&ca_path, &ca_line, true).await.unwrap(),
+    };
+
+    let user = target().username;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let sign = |key: &PrivateKey, principal: &str| {
+        let mut b = certificate::Builder::new_with_random_nonce(&mut rand010::rng(), key.public_key().key_data().clone(), now - 60, now + 600).unwrap();
+        b.serial(7).unwrap();
+        b.key_id("dbkit-it").unwrap();
+        b.cert_type(certificate::CertType::User).unwrap();
+        b.valid_principal(principal).unwrap();
+        b.extension("permit-pty", "").unwrap();
+        b.sign(&ca).unwrap()
+    };
+
+    let key = PrivateKey::random(&mut rand010::rng(), Algorithm::Ed25519).unwrap();
+    let kpath = tmp.join("id_cert_user");
+    std::fs::write(&kpath, key.to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
+    // 沒有憑證 → 金鑰不在 authorized_keys → 失敗
+    assert!(login(&key_target(&kpath, "")).await.is_err(), "沒有憑證不該登得進去");
+
+    // 憑證放在旁邊（OpenSSH 慣例）→ 成功
+    let cpath = tmp.join("id_cert_user-cert.pub");
+    std::fs::write(&cpath, format!("{}\n", sign(&key, &user).to_openssh().unwrap())).unwrap();
+    login(&key_target(&kpath, "")).await.expect("旁邊的 -cert.pub 憑證登入");
+    let ins = keys::inspect_path(&kpath, None, "");
+    let ci = ins.cert.expect("檢視要看得到憑證");
+    assert_eq!((ci.principals.clone(), ci.matches_key, ci.validity.as_str()), (vec![user.clone()], Some(true), "valid"));
+
+    // 主體不符 → 被拒，退回金鑰本身也登不進去
+    std::fs::write(&cpath, format!("{}\n", sign(&key, "someone-else").to_openssh().unwrap())).unwrap();
+    assert!(login(&key_target(&kpath, "")).await.is_err(), "主體不符的憑證不該成功");
+
+    // 明確指定憑證路徑（不在旁邊、檔名也不照慣例）
+    std::fs::remove_file(&cpath).unwrap();
+    let elsewhere = tmp.join("elsewhere.cert");
+    std::fs::write(&elsewhere, format!("{}\n", sign(&key, &user).to_openssh().unwrap())).unwrap();
+    let mut t = key_target(&kpath, "");
+    t.certificate_path = elsewhere.display().to_string();
+    login(&t).await.expect("指定路徑的憑證登入");
+
+    let _ = sftp.write_text(&ca_path, "", false).await;
     sftp.close().await;
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = conn.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;

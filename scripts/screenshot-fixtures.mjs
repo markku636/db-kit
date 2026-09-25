@@ -501,6 +501,14 @@ export const SSH_SESSIONS = {
     { id: "ssh-bastion", name: "", host: "bastion.example.com", port: 2222, username: "ops", auth: "password", private_key_path: "", folder_id: null, options: SSH_OPTS },
   ],
 };
+// SSH 金鑰庫：一把已匯入的（受密語保護、帶憑證）。DTO 形狀與 src/sshTypes.ts 的 SshStoredKey 一致。
+export const SSH_KEYS = [
+  {
+    id: "key-prod", name: "prod-deploy", algorithm: "ssh-ed25519", bits: 256,
+    fingerprint: "SHA256:wTYfUbmS5bOWvt0+9QOYCFmyF6hggtSOANNC5/GPtPo", comment: "deploy@laptop",
+    encrypted: true, source_format: "PuTTY PPK v3", created_at: 1790000000, has_cert: true,
+  },
+];
 const sftpEntry = (dir, name, extra = {}) => ({
   name, path: dir === "/" ? `/${name}` : `${dir}/${name}`, is_dir: false, is_symlink: false, link_target_is_dir: null,
   size: 0, mtime: Math.floor((Date.now() - 3 * 86_400_000) / 1000), permissions: 0o644, mode: "-rw-r--r--", uid: 1000, gid: 1000, owner: "deploy", group: "deploy", ...extra,

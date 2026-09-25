@@ -19,11 +19,12 @@ use async_trait::async_trait;
 use russh::client::{self, AuthResult, DisconnectReason, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::agent::AgentIdentity;
-use russh::keys::{load_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKey};
+use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKey};
 use russh::{MethodKind, MethodSet};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
+use super::keys::{self, KeyError};
 use super::known_hosts::{HostKeyStatus, KnownHostsStore};
 use super::sessions::{SshAuthKind, SshSession, SshTermOptions};
 use crate::db::{ConnectionConfig, SshAuthMethod};
@@ -57,7 +58,10 @@ pub struct SshTarget {
     pub username: String,
     pub auth: SshAuthKind,
     pub password: String,
+    /// 私鑰檔路徑，或金鑰庫參照 `keystore:<id>`。
     pub private_key_path: String,
+    /// OpenSSH 使用者憑證；空 = 找私鑰旁邊的 `<私鑰>-cert.pub`。
+    pub certificate_path: String,
     pub passphrase: String,
     pub term: SshTermOptions,
     pub origin: TargetOrigin,
@@ -73,6 +77,7 @@ impl SshTarget {
             auth: s.auth,
             password: password.unwrap_or_default(),
             private_key_path: s.private_key_path.clone(),
+            certificate_path: s.certificate_path.clone(),
             passphrase: passphrase.unwrap_or_default(),
             term: s.options.clone(),
             origin: TargetOrigin::Session(s.id.clone()),
@@ -98,6 +103,7 @@ impl SshTarget {
             },
             password: cfg.ssh_password.clone(),
             private_key_path: cfg.ssh_private_key_path.clone(),
+            certificate_path: String::new(),
             passphrase: cfg.ssh_passphrase.clone(),
             term: SshTermOptions::default(),
             origin: TargetOrigin::Connection(cfg.id.clone()),
@@ -545,6 +551,13 @@ pub async fn connect_and_auth(
             methods = rejected.join(" / ")
         )
     };
+    // 有步驟被拒、也有步驟根本沒送出（例如私鑰密語不對、金鑰庫找不到）：兩者都講，
+    // 否則使用者只看到「密碼被拒」，不知道其實是私鑰那一步沒成行。
+    let detail = if !rejected.is_empty() && !skipped.is_empty() {
+        tf!("{detail}；另外略過：{skipped}", detail = detail, skipped = skipped.join("；"))
+    } else {
+        detail
+    };
     Err(AppError::SshAuth(detail))
 }
 
@@ -571,7 +584,8 @@ where
     }
 }
 
-/// ssh-agent：逐把公鑰試（憑證型身分 v1 略過）。
+/// ssh-agent：逐把試——一般公鑰，以及 agent 裡的 OpenSSH 憑證（`ssh-add` 時私鑰旁邊有 `-cert.pub`
+/// 就會一起載入）。
 async fn step_agent(
     handle: &mut client::Handle<DbkHandler>,
     t: &SshTarget,
@@ -589,13 +603,24 @@ async fn step_agent(
     };
     let mut last: Option<StepOutcome> = None;
     for id in ids {
-        let AgentIdentity::PublicKey { key, .. } = id else { continue };
-        let hash = if key.algorithm().is_rsa() { rsa_hash } else { None };
-        let r = tokio::time::timeout(
-            AUTH_STEP_TIMEOUT,
-            handle.authenticate_publickey_with(t.username.clone(), key, hash, agent),
-        )
-        .await;
+        let r = match id {
+            AgentIdentity::PublicKey { key, .. } => {
+                let hash = if key.algorithm().is_rsa() { rsa_hash } else { None };
+                tokio::time::timeout(
+                    AUTH_STEP_TIMEOUT,
+                    handle.authenticate_publickey_with(t.username.clone(), key, hash, agent),
+                )
+                .await
+            }
+            AgentIdentity::Certificate { certificate, .. } => {
+                let hash = if certificate.algorithm().is_rsa() { rsa_hash } else { None };
+                tokio::time::timeout(
+                    AUTH_STEP_TIMEOUT,
+                    handle.authenticate_certificate_with(t.username.clone(), certificate, hash, agent),
+                )
+                .await
+            }
+        };
         match r {
             Ok(Ok(AuthResult::Success)) => return Ok(StepOutcome::Success),
             Ok(Ok(fail)) => {
@@ -617,7 +642,11 @@ async fn step_agent(
     Ok(last.unwrap_or_else(|| StepOutcome::Skipped(t!("ssh-agent 沒有任何金鑰").to_string())))
 }
 
-/// 私鑰檔：讀不到 → 略過；受密語保護且沒存密語 → 問一次。
+/// 私鑰（檔案，或金鑰庫的 `keystore:<id>`）。讀不到、格式不能用 → 略過並說明原因；受密語保護 →
+/// 先用存的密語，沒存或不對就問（最多三次，與 OpenSSH 相同）。
+///
+/// 有 OpenSSH 憑證（主機指定，或私鑰旁邊的 `<私鑰>-cert.pub`）就先用憑證試，伺服器不收（CA 不受信任、
+/// 主體不符、過期）再用金鑰本身試——順序與 OpenSSH 一致。
 async fn step_key(
     handle: &mut client::Handle<DbkHandler>,
     t: &SshTarget,
@@ -625,33 +654,58 @@ async fn step_key(
     ui: &dyn AuthUi,
     rsa_hash: Option<HashAlg>,
 ) -> AppResult<StepOutcome> {
-    let path = t.private_key_path.trim();
-    let stored = (!t.passphrase.is_empty()).then_some(t.passphrase.as_str());
-    let key = match load_secret_key(path, stored) {
-        Ok(k) => k,
-        Err(russh::keys::Error::KeyIsEncrypted) if stored.is_none() && ui.can_prompt() => {
-            let answers = ui
-                .prompt(AuthPrompt {
-                    conn_id: conn_id.to_string(),
-                    kind: AuthPromptKind::Passphrase,
-                    name: String::new(),
-                    instructions: tf!("私鑰 {path} 受密語保護", path = path),
-                    prompts: vec![PromptItem { prompt: t!("私鑰密語").to_string(), echo: false }],
-                })
-                .await;
-            let Some(answers) = answers else {
-                return Err(AppError::SshCancelled);
-            };
-            let pass = answers.into_iter().next().unwrap_or_default();
-            match load_secret_key(path, Some(&pass)) {
-                Ok(k) => k,
-                Err(e) => {
-                    return Ok(StepOutcome::Skipped(tf!("讀取 SSH 私鑰失敗：{e}", e = e)));
-                }
-            }
-        }
+    let shown = t.private_key_path.trim();
+    let path = match keys::resolve_key_path(shown) {
+        Ok(p) => p,
+        Err(e) => return Ok(StepOutcome::Skipped(e.message())),
+    };
+    let bytes = match tokio::fs::read(&path).await {
+        Ok(b) => b,
         Err(e) => return Ok(StepOutcome::Skipped(tf!("讀取 SSH 私鑰失敗：{e}", e = e))),
     };
+    let mut pass: Option<String> = (!t.passphrase.is_empty()).then(|| t.passphrase.clone());
+    let mut asked = 0;
+    let key = loop {
+        match keys::load_private_key(&bytes, pass.as_deref()) {
+            Ok((k, _, _)) => break k,
+            Err(e @ (KeyError::NeedPassphrase | KeyError::BadPassphrase(_))) if ui.can_prompt() && asked < 3 => {
+                asked += 1;
+                let instructions = if matches!(e, KeyError::NeedPassphrase) {
+                    tf!("私鑰 {path} 受密語保護", path = shown)
+                } else {
+                    tf!("密語不正確，請再輸入一次（{path}）", path = shown)
+                };
+                let answers = ui
+                    .prompt(AuthPrompt {
+                        conn_id: conn_id.to_string(),
+                        kind: AuthPromptKind::Passphrase,
+                        name: String::new(),
+                        instructions,
+                        prompts: vec![PromptItem { prompt: t!("私鑰密語").to_string(), echo: false }],
+                    })
+                    .await;
+                let Some(answers) = answers else {
+                    return Err(AppError::SshCancelled);
+                };
+                pass = Some(answers.into_iter().next().unwrap_or_default());
+            }
+            Err(e) => return Ok(StepOutcome::Skipped(tf!("讀取 SSH 私鑰失敗：{e}", e = e.message()))),
+        }
+    };
+    match keys::find_certificate(&path, &t.certificate_path) {
+        Ok(Some((cpath, cert))) if cert.public_key() == key.public_key().key_data() => {
+            let r = timed(handle.authenticate_openssh_cert(t.username.clone(), Arc::new(key.clone()), cert)).await?;
+            match map_auth_result(r) {
+                StepOutcome::Failed { partial: false, .. } => {
+                    eprintln!("[ssh] 伺服器不接受憑證 {}，改用金鑰本身", cpath.display());
+                }
+                o => return Ok(o),
+            }
+        }
+        Ok(Some((cpath, _))) => eprintln!("[ssh] 憑證 {} 簽的不是這把私鑰，略過", cpath.display()),
+        Ok(None) => {}
+        Err(e) => eprintln!("[ssh] {}", e.message()),
+    }
     // 非 RSA 金鑰 `new` 會自行忽略 hash。
     let key = PrivateKeyWithHashAlg::new(Arc::new(key), rsa_hash);
     let r = timed(handle.authenticate_publickey(t.username.clone(), key)).await?;
@@ -798,6 +852,7 @@ mod tests {
             auth,
             password: String::new(),
             private_key_path: key.into(),
+            certificate_path: String::new(),
             passphrase: String::new(),
             term: SshTermOptions::default(),
             origin: TargetOrigin::AdHoc,
@@ -887,6 +942,7 @@ mod tests {
             username: "deploy".into(),
             auth: SshAuthKind::Password,
             private_key_path: String::new(),
+            certificate_path: String::new(),
             folder_id: None,
             options: SshTermOptions::default(),
         };

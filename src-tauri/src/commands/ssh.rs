@@ -26,6 +26,7 @@ use crate::ssh::auth::{
 use crate::ssh::known_hosts::{HostKeyStatus, KnownHostsStore};
 use crate::ssh::runtime::{PromptAnswer, SshConn, SshConnInfo, SshRuntime};
 use crate::ssh::sessions::{self, SshFolder, SshSession, SshSessionsFile};
+use crate::ssh::keys;
 use crate::ssh::sftp::{self as sftp_mod, OnConflict, ProgressFn, SftpClient, SftpEntry, SftpText};
 use crate::ssh::terminal::{decode_b64_input, TermEvent, TermHandle, TermOpen, TermSink};
 use crate::store;
@@ -725,6 +726,107 @@ pub async fn ssh_sftp_upload_many(
 #[tauri::command]
 pub async fn ssh_sftp_local_conflicts(local_dir: String, names: Vec<String>) -> AppResult<Vec<String>> {
     Ok(sftp_mod::local_conflicts(Path::new(&local_dir), &names).await)
+}
+
+// ---- 使用者金鑰（Xshell 的「使用者金鑰管理員」）----
+
+/// 要檢視 / 匯入的金鑰來源：檔案（也接受 `keystore:<id>`），或貼上的文字。
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum KeySource {
+    Path { path: String },
+    Text { text: String },
+}
+
+/// 檢視一把私鑰：格式、演算法、指紋、要不要密語，以及旁邊（或指定路徑）的 OpenSSH 憑證。
+/// 解密很吃 CPU（bcrypt / Argon2），放到 blocking 執行緒。
+#[tauri::command]
+pub async fn ssh_key_inspect(
+    source: KeySource,
+    passphrase: Option<String>,
+    certificate_path: Option<String>,
+) -> AppResult<keys::KeyInspect> {
+    let r = tauri::async_runtime::spawn_blocking(move || match source {
+        KeySource::Path { path } => match keys::resolve_key_path(&path) {
+            Ok(p) => keys::inspect_path(&p, passphrase.as_deref(), certificate_path.as_deref().unwrap_or("")),
+            Err(e) => keys::KeyInspect::unreadable(e.message()),
+        },
+        KeySource::Text { text } => keys::inspect(text.as_bytes(), passphrase.as_deref()).0,
+    })
+    .await;
+    r.map_err(|e| AppError::Ssh(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn ssh_keys_list(app: AppHandle) -> AppResult<Vec<keys::StoredKey>> {
+    keys::list_in(&store::app_config_dir(&app)?).await
+}
+
+/// 匯入金鑰庫（任何支援的格式；一律轉存成 OpenSSH）。來源是檔案時，旁邊的 `-cert.pub` 一起帶進去。
+#[tauri::command]
+pub async fn ssh_key_import(
+    app: AppHandle,
+    source: KeySource,
+    passphrase: Option<String>,
+    new_passphrase: Option<String>,
+    name: Option<String>,
+) -> AppResult<keys::ImportOutcome> {
+    let dir = store::app_config_dir(&app)?;
+    let (bytes, path) = match &source {
+        KeySource::Path { path } => {
+            let p = keys::resolve_key_path(path)?;
+            let b = tokio::fs::read(&p).await.map_err(|e| AppError::Ssh(tf!("讀取 SSH 私鑰失敗：{e}", e = e)))?;
+            (b, Some(p))
+        }
+        KeySource::Text { text } => (text.clone().into_bytes(), None),
+    };
+    let cert = path.as_ref().and_then(|p| keys::find_certificate(p, "").ok().flatten()).map(|(_, c)| c);
+    keys::import_in(&dir, &bytes, passphrase.as_deref(), new_passphrase.as_deref(), name.as_deref(), cert.as_ref()).await
+}
+
+#[tauri::command]
+pub async fn ssh_key_generate(
+    app: AppHandle,
+    algorithm: keys::GenAlgorithm,
+    comment: String,
+    passphrase: Option<String>,
+    name: Option<String>,
+) -> AppResult<keys::StoredKey> {
+    keys::generate_in(&store::app_config_dir(&app)?, algorithm, &comment, passphrase.as_deref(), name.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn ssh_key_rename(app: AppHandle, id: String, name: String) -> AppResult<()> {
+    keys::rename_in(&store::app_config_dir(&app)?, &id, &name).await
+}
+
+#[tauri::command]
+pub async fn ssh_key_remove(app: AppHandle, id: String) -> AppResult<()> {
+    keys::remove_in(&store::app_config_dir(&app)?, &id).await
+}
+
+/// 公鑰那一行（貼進伺服器的 `~/.ssh/authorized_keys`）。
+#[tauri::command]
+pub async fn ssh_key_public(app: AppHandle, id: String) -> AppResult<String> {
+    keys::public_key_in(&store::app_config_dir(&app)?, &id).await
+}
+
+/// 匯出成 OpenSSH 私鑰檔（原本有密語就還是有；有憑證也一起放在旁邊）。
+#[tauri::command]
+pub async fn ssh_key_export(app: AppHandle, id: String, dest: String) -> AppResult<()> {
+    keys::export_in(&store::app_config_dir(&app)?, &id, Path::new(&dest)).await
+}
+
+/// 把 OpenSSH 憑證（檔案或貼上的文字）掛到金鑰庫裡的金鑰上。
+#[tauri::command]
+pub async fn ssh_key_attach_cert(app: AppHandle, id: String, source: KeySource) -> AppResult<keys::CertInfo> {
+    let text = match source {
+        KeySource::Path { path } => tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| AppError::Ssh(tf!("讀不到憑證 {path}：{e}", path = path, e = e)))?,
+        KeySource::Text { text } => text,
+    };
+    keys::attach_cert_in(&store::app_config_dir(&app)?, &id, &text).await
 }
 
 #[tauri::command]

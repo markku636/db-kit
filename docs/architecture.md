@@ -110,7 +110,8 @@ src-tauri/src/
 ├── conn_crypto.rs     連線設定加密 export / import
 ├── ssh/               SSH（russh；整個目錄不依賴 Tauri，GUI 與 dbk CLI 共用）
 │   ├── known_hosts.rs host key 指紋存讀（TOFU；`ssh_known_hosts.json`，路徑可注入）
-│   ├── auth.rs        SshTarget / AuthUi（SilentUi 不發問）/ DbkHandler / connect_and_auth / plan_auth / ssh-agent
+│   ├── auth.rs        SshTarget / AuthUi（SilentUi 不發問）/ DbkHandler / connect_and_auth / plan_auth / ssh-agent（含 agent 裡的 OpenSSH 憑證）；私鑰步驟有憑證就先試憑證、被拒再試金鑰本身
+│   ├── keys.rs        使用者金鑰：格式辨識與載入（OpenSSH / PPK v2·v3 / PKCS#8 / PKCS#1 / SEC1 / DER，補上 OpenSSL 傳統 PEM 的 3DES·DES·AES-CBC 解密）、認得但不能用的格式給轉換說明、OpenSSH 憑證（`<私鑰>-cert.pub`）、金鑰庫（`ssh_keys/`，一律轉存 OpenSSH、原本有密語就用同一個重新加密，主機以 `keystore:<id>` 參照）
 │   ├── tunnel.rs      DB 連線的 direct-tcpip port forward（open_tunnel / TunnelGuard）
 │   ├── sessions.rs    側欄「SSH 主機」持久化（`ssh_sessions.json`）+ keychain 帳號名；不含密碼欄位
 │   ├── terminal.rs    PTY shell channel：輸出合併（16 KiB / 8 ms）、write / send_line / resize / close

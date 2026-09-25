@@ -7,6 +7,7 @@ import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
 import { Plug, FolderOpen, ClipboardPaste } from "lucide-react";
 import { useT } from "./i18n";
 import KindPicker from "./KindPicker";
+import SshKeyPathField from "./SshKeyPathField";
 import { useStore } from "./store";
 
 interface Props {
@@ -1000,20 +1001,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
                 </Field>
               ) : (
                 <>
-                  <Field label={t("私鑰檔路徑")}>
-                    <div className="flex gap-2">
-                      <Input
-                        value={sshKeyPath}
-                        onChange={(e) => setSshKeyPath(e.target.value)}
-                        placeholder={t("例如 C:\\\\Users\\\\me\\\\.ssh\\\\id_ed25519")}
-                      />
-                      <BrowseButton
-                        onPick={async () => {
-                          const p = await pickOpenFile();
-                          if (p) setSshKeyPath(p);
-                        }}
-                      />
-                    </div>
+                  <Field label={t("私鑰")}>
+                    <SshKeyPathField value={sshKeyPath} onChange={setSshKeyPath} passphrase={sshPassphrase} />
                   </Field>
                   <Field label={t("私鑰密語（選填）")}>
                     <Input

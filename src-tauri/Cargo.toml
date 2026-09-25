@@ -71,6 +71,15 @@ russh = { version = "0.61", default-features = false, features = ["ring", "flate
 # SFTP 子系統（SSH 終端機分頁的檔案瀏覽 / 上下傳）：純 Rust、與 russh 版本無耦合，套在 russh channel 的
 # `into_stream()` 上即可。核心層即用（`ssh/sftp.rs` 不依賴 Tauri），故不藏在 gui feature 後。
 russh-sftp = { version = "3.0", default-features = false }
+# 舊式 OpenSSL 加密的 PEM 私鑰（Proc-Type: 4,ENCRYPTED；openssl genrsa -des3 之類）：russh 只解 AES-128，
+# 3DES / DES / AES-192/256-CBC 與 EVP_BytesToKey(MD5) 在 ssh/keys.rs 補。版本對齊依賴樹裡既有的
+# （aes-gcm 0.10 → aes 0.8 / cipher 0.4），不另外多拉一套。
+aes = "0.8"
+cbc = "0.1"
+des = "0.8"
+md-5 = "0.10"
+# ssh-key 0.7（russh 帶的）用 rand_core 0.10：產生金鑰、金鑰庫重新加密要一顆同代的 RNG。與下面的 rand 0.8 並存。
+rand010 = { package = "rand", version = "0.10" }
 # russh `ChannelMsg::Data` 的 payload 型別；終端機讀端測試要能自己組 `ChannelMsg`，且 `data_bytes` 吃 `Into<Bytes>`。
 # 交給 IPC channel 的是 `Vec<u8>`（`InvokeResponseBody::Raw` 只收 Vec），合併緩衝直接 `mem::take` 零複製。
 bytes = "1"

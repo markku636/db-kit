@@ -5,6 +5,7 @@ import { pickOpenFile, toast } from "./ui";
 import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
 import { useT } from "./i18n";
 import { SshAuthPromptDialog, SshHostKeyDialog } from "./SshPrompts";
+import SshKeyPathField from "./SshKeyPathField";
 import { useSshSessions } from "./sshSessions";
 import {
   blankSshSession,
@@ -51,6 +52,8 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
   const [password, setPassword] = useState("");
   const [rememberPassword, setRememberPassword] = useState(true);
   const [keyPath, setKeyPath] = useState(base.private_key_path);
+  // OpenSSH 使用者憑證；空 = 找私鑰旁邊的 <私鑰>-cert.pub（舊存檔沒有這個欄位）。
+  const [certPath, setCertPath] = useState(base.certificate_path ?? "");
   const [passphrase, setPassphrase] = useState("");
   const [rememberPassphrase, setRememberPassphrase] = useState(true);
   const [startupCommand, setStartupCommand] = useState(base.options.startup_command ?? "");
@@ -88,7 +91,7 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
   // 任一連線欄位變動就清掉上次測試結果（同 ConnectionDialog：別讓舊的「連線成功」誤導）。
   useEffect(() => {
     setMsg(null);
-  }, [host, port, username, auth, password, keyPath, passphrase, term, keepalive]);
+  }, [host, port, username, auth, password, keyPath, certPath, passphrase, term, keepalive]);
 
   // 卸載時把事件訂閱收掉，並取消還在跑的測試（測試進行中被關掉對話框的情況）。
   useEffect(
@@ -120,6 +123,7 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
       auth,
       // 非私鑰認證不留路徑：後端 plan_auth 看到路徑就會先試 key，白白多一輪失敗。
       private_key_path: auth === "key" ? keyPath.trim() : "",
+      certificate_path: auth === "key" ? certPath.trim() : "",
       folder_id: folderId || null,
       options: {
         ...base.options,
@@ -207,9 +211,9 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
     }
   };
 
-  const browseKey = async () => {
+  const browseCert = async () => {
     const p = await pickOpenFile();
-    if (p) setKeyPath(p);
+    if (p) setCertPath(p);
   };
 
   return (
@@ -297,18 +301,8 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
         )}
         {auth === "key" && (
           <>
-            <Field label={t("私鑰檔路徑")} required>
-              <div className="flex gap-2">
-                <Input
-                  value={keyPath}
-                  onChange={(e) => setKeyPath(e.target.value)}
-                  onKeyDown={submitOnEnter}
-                  placeholder={t("例如 C:\\\\Users\\\\me\\\\.ssh\\\\id_ed25519")}
-                />
-                <Button variant="secondary" icon={FolderOpen} onClick={browseKey} title={t("瀏覽…")} className="shrink-0">
-                  {t("瀏覽")}
-                </Button>
-              </div>
+            <Field label={t("私鑰")} required>
+              <SshKeyPathField value={keyPath} onChange={setKeyPath} passphrase={passphrase} certificatePath={certPath} onKeyDown={submitOnEnter} />
             </Field>
             <Field label={t("私鑰密語（選填）")}>
               <Input
@@ -320,6 +314,14 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
               />
             </Field>
             <Checkbox checked={rememberPassphrase} onChange={setRememberPassphrase} label={t("記住密語")} hint={t("存進系統鑰匙圈，不寫入設定檔")} />
+            <Field label={t("OpenSSH 憑證（選填）")} hint={t("留空＝自動找私鑰旁邊的 <私鑰>-cert.pub")}>
+              <div className="flex gap-2">
+                <Input value={certPath} onChange={(e) => setCertPath(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("自動")} aria-label={t("OpenSSH 憑證（選填）")} />
+                <Button variant="secondary" icon={FolderOpen} onClick={browseCert} title={t("瀏覽…")} className="shrink-0">
+                  {t("瀏覽")}
+                </Button>
+              </div>
+            </Field>
           </>
         )}
         {auth === "agent" && (
