@@ -4,6 +4,7 @@
 // 訊息（ChatMsg）要引用工具呼叫，工具層（agentTools.ts）又要引用訊息裡的執行結果，
 // 兩邊直接互相 import 會讓 vite 在 dev 模式下拿到半初始化的模組。型別集中在最底層即可解套。
 import type { DbKind, QueryResult } from "./api";
+import type { SshStatus } from "./sshTypes";
 
 // ---- @ 提及 ----
 
@@ -13,8 +14,12 @@ import type { DbKind, QueryResult } from "./api";
  * - query / result / error：指向查詢分頁的現況（見 EditorSnapshot），不必連線也能展開。
  * - run：指向對話中「助手剛剛跑過的那次查詢」，內容隨 ref 夾帶（見 MentionRef.payload），
  *   所以展開時完全不碰 api——那次結果已經過去了，重跑一次未必拿到同一份資料。
+ * - term / output / lastcmd：指向 SSH 終端機的現況（見 TerminalSnapshot）：整個畫面尾段、
+ *   最近一次指令的輸出、最近一次指令本身。與 query 系列同理，不必連 DB 也能展開。
  */
-export type MentionKind = "table" | "db" | "file" | "query" | "result" | "error" | "run";
+export type MentionKind =
+  | "table" | "db" | "file" | "query" | "result" | "error" | "run"
+  | "term" | "output" | "lastcmd";
 
 /** 從輸入文字解析出來的一則提及。from / to 是字元位移（與 CodeMirror 文件位移一致）。 */
 export interface MentionRef {
@@ -60,6 +65,33 @@ export interface ChatRunResult {
   ms: number;
 }
 
+/**
+ * 使用者按「執行並回饋」把助手建議的 shell 指令送進 SSH 終端機的那一次。
+ * 掛在 ```bash 區塊底下，與 ChatRunResult 同一個 runs 表共存，靠 `kind` 分流。
+ *
+ * host 存的是顯示用標籤（`user@host`），不是裸主機名：回饋 prompt 與結果格都只需要
+ * 「在哪台機器上跑的」這一句話，拆成兩欄沒有任何消費者。
+ */
+export interface ChatShellRun {
+  kind: "shell";
+  cmd: string;
+  output: string;
+  durationMs: number;
+  /** 擷取端達到 maxBytes / maxMs 而截斷（不是本地存檔的夾行）。 */
+  truncated: boolean;
+  tabKey: string;
+  host: string;
+  /** 送出失敗的原因（未連線、後端拒絕）；成功為 null，輸出裡的錯誤訊息不算。 */
+  error: string | null;
+}
+
+/**
+ * runs 表裡的一格。舊存檔的 SQL 結果沒有 `kind` 欄位，所以判斷一律以「kind === "shell"」
+ * 為準、其餘視為 SQL（見 chatShell.ts 的 isShellRun）——不能反過來用「有 sql 欄位」判斷，
+ * ChatRunResult 刻意不加 kind 是為了讓既有存檔與既有測試一個位元組都不用動。
+ */
+export type ChatRun = ChatRunResult | ChatShellRun;
+
 // ---- 對話 ----
 
 export type ChatRole = "user" | "assistant";
@@ -83,8 +115,8 @@ export interface ChatMsg {
    * 本檔的 ChatRunResult——寫成具體型別就成了循環相依。面板取用時自行 cast。
    */
   toolCalls?: unknown[];
-  /** tool_id → 該次執行的結果（與 toolCalls 對號）。 */
-  runs?: Record<string, ChatRunResult>;
+  /** tool_id / blockIdx → 該次執行的結果（與 toolCalls 對號；SQL 與 shell 共用一張表）。 */
+  runs?: Record<string, ChatRun>;
 }
 
 // ---- 編輯器快照 ----
@@ -108,5 +140,34 @@ export interface EditorSnapshot {
   /** 產生 result 的那段 SQL；可能與 sql 不同（跑完之後又改了編輯器內容）。 */
   resultSql: string | null;
   error: { message: string; sql: string } | null;
+  updatedAt: number;
+}
+
+// ---- 終端機快照 ----
+
+/**
+ * SSH 終端機分頁對外公布的現況，讓對話面板能展開 `@term` / `@output` / `@lastcmd`
+ * 與自動附上「使用者現在在哪台機器上」。與 EditorSnapshot 並列，由 sshTerminals.ts 發佈。
+ *
+ * tail 已去除 ANSI 色碼、至多 200 行：色碼進 prompt 只會讓模型把 `\x1b[0m` 當成輸出內容
+ * 來解讀。lastOutput 是「送出指令後擷取到閒置為止」的那段，可能只是尚未回到提示符的部分結果。
+ */
+export interface TerminalSnapshot {
+  tabKey: string;
+  termId: string | null;
+  /** 分頁標題（session 名或 `user@host`）。 */
+  title: string;
+  host: string;
+  user: string;
+  /** 從哪條 DB 連線的 SSH tunnel 設定開出來的（target=connection 時）；用來決定要不要附 DB 上下文。 */
+  connId?: string | null;
+  status: SshStatus;
+  /** 由 banner 猜出來的作業系統（guessOs）；猜不到就沒有，不自動送偵測指令。 */
+  os?: string;
+  shell?: string;
+  cwd: string | null;
+  lastCommand: string | null;
+  lastOutput: string | null;
+  tail: string;
   updatedAt: number;
 }

@@ -489,3 +489,40 @@ export const DEMO_SQL =
   "ROUND(AVG(total_amount), 2) AS avg_ticket\nFROM orders\nWHERE placed_at >= '2026-01-01'\nGROUP BY status ORDER BY revenue DESC;\n\n" +
   "SELECT p.product_id, p.name, c.name AS category,\n  SUM(oi.qty) AS units_sold, SUM(oi.qty * oi.unit_price) AS revenue\n" +
   "FROM order_items oi\n  JOIN products p USING (product_id)\n  JOIN categories c USING (category_id)\nGROUP BY 1, 2, 3 ORDER BY revenue DESC LIMIT 6;";
+
+// ── SSH 終端機 / SFTP ──────────────────────────────────────────────────
+// 側欄「SSH 主機」：一個資料夾（PROD）裡一台、未分類一台；DTO 形狀與 src/sshTypes.ts 一致。
+const SSH_OPTS = { term: "xterm-256color", encoding: "utf-8", startup_command: "", keepalive_secs: 30, connect_timeout_secs: 0, env: {}, ui: {} };
+export const SSH_SESSIONS = {
+  version: 1,
+  folders: [{ id: "sf-prod", name: "PROD", parent_id: null }],
+  sessions: [
+    { id: "ssh-web01", name: "web-01", host: "10.20.0.15", port: 22, username: "deploy", auth: "key", private_key_path: "C:\Users\demo\.ssh\id_ed25519", folder_id: "sf-prod", options: SSH_OPTS },
+    { id: "ssh-bastion", name: "", host: "bastion.example.com", port: 2222, username: "ops", auth: "password", private_key_path: "", folder_id: null, options: SSH_OPTS },
+  ],
+};
+const sftpEntry = (dir, name, extra = {}) => ({
+  name, path: dir === "/" ? `/${name}` : `${dir}/${name}`, is_dir: false, is_symlink: false, link_target_is_dir: null,
+  size: 0, mtime: Math.floor((Date.now() - 3 * 86_400_000) / 1000), permissions: 0o644, mode: "-rw-r--r--", uid: 1000, gid: 1000, owner: "deploy", group: "deploy", ...extra,
+});
+const sftpDir = (dir, name) => sftpEntry(dir, name, { is_dir: true, permissions: 0o755, mode: "drwxr-xr-x" });
+export const SFTP_LISTING = {
+  "/": [sftpDir("/", "etc"), sftpDir("/", "home"), sftpDir("/", "var")],
+  "/home": [sftpDir("/home", "deploy")],
+  "/home/deploy": [
+    sftpDir("/home/deploy", "app"),
+    sftpDir("/home/deploy", "logs"),
+    sftpEntry("/home/deploy", "backup.tar.gz", { size: 48_213_120 }),
+    sftpEntry("/home/deploy", ".bashrc", { size: 3771 }),
+  ],
+  "/home/deploy/logs": [sftpEntry("/home/deploy/logs", "app.log", { size: 1_048_576 }), sftpEntry("/home/deploy/logs", "error.log", { size: 20_480 })],
+  "/home/deploy/app": [sftpEntry("/home/deploy/app", "server.js", { size: 8_192 }), sftpEntry("/home/deploy/app", "package.json", { size: 640 })],
+};
+// AI 助手在 SSH 終端機情境的回覆：一般建議（兩個 bash 區塊）與危險建議（rm -rf，要走確認框）。
+export const AI_SHELL_CHUNKS = [
+  "先看 nginx 的服務狀態：\n\n```bash\nsystemctl status nginx\n```\n\n",
+  "若顯示 inactive，再看最後 50 行日誌找原因：\n\n```bash\njournalctl -u nginx -n 50 --no-pager\n```\n",
+];
+export const AI_SHELL_DANGER_CHUNKS = [
+  "這會**遞迴刪除** /tmp/cache 底下所有檔案，請先確認路徑沒錯：\n\n```bash\nrm -rf /tmp/cache\n```\n",
+];

@@ -17,6 +17,8 @@ export function installShim(fx) {
 
   const unknown = [];
   window.__DBKIT_UNKNOWN__ = unknown;
+  // 經「指令列 / AI 送到終端機」送進假 shell 的整行指令（冒煙檢查驗「取消確認框後什麼都沒送」用）。
+  window.__DBKIT_SSH_WRITES__ = [];
   const one = (columns, cells) => ({ columns, rows: [cells], rows_affected: 0 });
 
   const queryFor = (sql) => {
@@ -210,11 +212,16 @@ export function installShim(fx) {
     agent_detect: () => ({ available: true, provider: "claude", version: "2.0.0", path: "claude", models: [], note: null }),
     agent_cancel: () => { aiCancelled = true; return null; },
     // 串流回覆：一小段一小段 emit，讓截圖 / 冒煙檢查看到的是真的串流渲染路徑。
-    agent_send: ({ reqId, mode }) => {
+    agent_send: ({ reqId, mode, prompt }) => {
       aiCancelled = false;
       let i = 0;
-      // 審查並執行的審查（mode = review）回一份帶 VERDICT 的審查；其餘沿用比對報告的總結。
-      const chunks = mode === "review" && fx.AI_REVIEW_CHUNKS ? fx.AI_REVIEW_CHUNKS : fx.AI_SUMMARY_CHUNKS;
+      // 審查並執行的審查（mode = review）回一份帶 VERDICT 的審查；SSH 終端機情境（prompt 帶終端機上下文）
+      // 回 bash 建議——提到「刪除」就回危險版（rm -rf，驗確認框）；其餘沿用比對報告的總結。
+      const p = String(prompt ?? "");
+      const chunks = mode === "review" && fx.AI_REVIEW_CHUNKS ? fx.AI_REVIEW_CHUNKS
+        : /SSH 終端機/.test(p) && /刪除/.test(p) && fx.AI_SHELL_DANGER_CHUNKS ? fx.AI_SHELL_DANGER_CHUNKS
+        : /SSH 終端機/.test(p) && fx.AI_SHELL_CHUNKS ? fx.AI_SHELL_CHUNKS
+        : fx.AI_SUMMARY_CHUNKS;
       const tick = () => {
         if (aiCancelled || i >= chunks.length) {
           emit("agent-stream", { req_id: reqId, kind: "done", text: null });
@@ -226,7 +233,108 @@ export function installShim(fx) {
       setTimeout(tick, 80);
       return null;
     },
+
+    // ── SSH 終端機 / SFTP ──────────────────────────────────────────────
+    // 假 shell：逐字回聲、Enter 跑幾個固定指令（ls / pwd / echo / systemctl status nginx），其餘回 command not found。
+    // 輸出走 Channel（見 channelSender），與真後端一樣是 raw bytes → ArrayBuffer。
+    ssh_sessions_list: () => fx.SSH_SESSIONS ?? { version: 1, folders: [], sessions: [] },
+    ssh_session_save: () => null,
+    ssh_session_remove: () => null,
+    ssh_sessions_layout_save: () => null,
+    ssh_has_stored_password: () => true,
+    ssh_connect: ({ connId, target }) => {
+      const sessions = fx.SSH_SESSIONS?.sessions ?? [];
+      const s = target?.kind === "session" ? sessions.find((x) => x.id === target.id)
+        : target?.kind === "ad_hoc" ? target.session
+        : { host: "db-bastion.internal", port: 22, username: "tunnel" };
+      const info = { conn_id: connId, host: s?.host ?? "web-01", port: s?.port ?? 22, username: s?.username ?? "deploy" };
+      sshConns.set(connId, info);
+      return info;
+    },
+    ssh_test: () => new Promise((r) => setTimeout(() => r(null), 200)),
+    ssh_disconnect: ({ connId }) => { sshConns.delete(connId); return null; },
+    ssh_term_open: ({ connId, onOutput }) => {
+      const send = channelSender(onOutput);
+      const info = sshConns.get(connId);
+      const user = info?.username ?? "deploy";
+      const named = (fx.SSH_SESSIONS?.sessions ?? []).find((x) => x.host === info?.host);
+      const hostShort = named?.name || String(info?.host ?? "web-01").split(".")[0];
+      const termId = `term-${++sshSeq}`;
+      const term = { send, prompt: `${user}@${hostShort}:~$ `, line: "" };
+      sshTerms.set(termId, term);
+      setTimeout(() => send(`Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-107-generic x86_64)\r\n\r\nLast login: Tue Sep 23 09:12:44 2026 from 10.0.0.8\r\n${term.prompt}`), 40);
+      return termId;
+    },
+    ssh_term_write: ({ termId, dataB64 }) => { const t = sshTerms.get(termId); if (t) for (const ch of atob(dataB64)) sshFeed(t, ch); return null; },
+    ssh_term_send_line: ({ termId, line }) => {
+      const t = sshTerms.get(termId);
+      if (!t) return null;
+      window.__DBKIT_SSH_WRITES__.push(line);
+      for (const ch of `${line}\r`) sshFeed(t, ch);
+      return null;
+    },
+    ssh_term_resize: () => null,
+    ssh_term_close: ({ termId }) => { sshTerms.delete(termId); return null; },
+    ssh_hostkey_answer: () => null,
+    ssh_auth_answer: () => null,
+    ssh_sftp_open: () => ({ sftp_id: `sftp-${++sshSeq}`, home: "/home/deploy" }),
+    ssh_sftp_close: () => null,
+    ssh_sftp_list: ({ path }) => fx.SFTP_LISTING?.[path] ?? [],
+    ssh_sftp_stat: ({ path }) => Object.values(fx.SFTP_LISTING ?? {}).flat().find((e) => e.path === path) ?? null,
+    ssh_sftp_mkdir: () => null,
+    ssh_sftp_rename: () => null,
+    ssh_sftp_remove: () => null,
+    ssh_sftp_read_text: () => ({ text: "", truncated: false, size: 0 }),
+    ssh_sftp_download: ({ remote }) => sshTransfer(remote),
+    ssh_sftp_upload: ({ local }) => sshTransfer(local),
+    ssh_sftp_cancel: () => null,
   };
+
+  // ── SSH 假 shell 的狀態與工具 ──────────────────────────────────────────
+  let sshSeq = 0;
+  const sshConns = new Map(); // connId → { host, port, username }
+  const sshTerms = new Map(); // termId → { send, prompt, line }
+  // @tauri-apps/api 的 Channel 建構時已透過 transformCallback 把回呼登錄進 callbacks（id 在 ch.id）；
+  // 真後端送 { message, index }，index 遞增讓 Channel 端保序，這裡照同一形狀餵。
+  function channelSender(ch) {
+    const cb = callbacks.get(ch?.id);
+    let index = 0;
+    return (text) => { if (cb) cb({ message: new TextEncoder().encode(text).buffer, index: index++ }); };
+  }
+  function sshRun(cmd) {
+    const c = cmd.trim();
+    if (!c) return "";
+    if (c === "ls" || c.startsWith("ls ")) return "app  backup.tar.gz  logs";
+    if (c === "pwd") return "/home/deploy";
+    if (c.startsWith("echo ")) return c.slice(5).replace(/^["']|["']$/g, "");
+    if (/^systemctl status nginx/.test(c)) return "● nginx.service - A high performance web server\r\n     Active: active (running) since Mon 2026-09-22 08:00:11 UTC; 1 day 3h ago";
+    if (/^(cd\b|clear$)/.test(c)) return "";
+    return `bash: ${c.split(/\s+/)[0]}: command not found`;
+  }
+  function sshFeed(t, ch) {
+    if (ch === "\r" || ch === "\n") {
+      const out = sshRun(t.line);
+      t.line = "";
+      t.send(`\r\n${out ? `${out}\r\n` : ""}${t.prompt}`);
+    } else if (ch === "\x7f" || ch === "\b") {
+      if (t.line) { t.line = t.line.slice(0, -1); t.send("\b \b"); }
+    } else if (ch === "\x03") {
+      t.line = "";
+      t.send(`^C\r\n${t.prompt}`);
+    } else if (ch >= " ") {
+      t.line += ch;
+      t.send(ch);
+    }
+  }
+  function sshTransfer(name) {
+    const id = `tr-${++sshSeq}`;
+    const total = 4096;
+    [0.25, 0.6, 1].forEach((p, i) => setTimeout(() => emit("ssh-sftp-progress", {
+      transfer_id: id, done: Math.round(total * p), total, state: p === 1 ? "done" : "running", message: null,
+    }), 80 + i * 90));
+    void name;
+    return id;
+  }
 
   // ── 事件投遞 ───────────────────────────────────────────────────────────
   // 真的 Tauri 會把 handler 存起來、由 Rust 端呼叫；這裡自己記一份，

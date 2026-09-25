@@ -22,7 +22,7 @@ import { IconButton } from "./ui/index";
 import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Settings2, Sparkles, Send, Square, Database, Play, ChevronDown, ChevronRight, GitBranch, ListFilter, AlertTriangle, MessageSquarePlus, MessagesSquare, Pencil } from "lucide-react";
 import { useT, useLang } from "./i18n";
 import type { DbKind } from "./api";
-import type { ChatMsg, ChatRunResult, MentionChip, MentionRef } from "./chatTypes";
+import type { ChatMsg, ChatRun, ChatRunResult, MentionChip, MentionRef } from "./chatTypes";
 import { fmtRelativeTime } from "./sql";
 import {
   activeConversation, addConversation, conversationTitle, findConversation, loadArchive, newConversation,
@@ -34,7 +34,14 @@ import { buildAutoContext, estimateContext, expandMentions, parseMentions, strip
 import MentionPopover, { type MentionPopoverHandle, type PopoverItem } from "./MentionPopover";
 import { expandSlash, parseSlash, SLASH_COMMANDS, type SlashEnv } from "./slashCommands";
 import { classifyForRun, prepareStatements, persistableRun, reviewOutcomeToChatRun, routeToReviewRun, runFeedbackDisplay, runFeedbackPrompt, toChatRunResult } from "./chatRun";
+import { isShellRun, persistableShellRun, SHELL_LANGS, normalizeShellCode, toChatShellRun, shellFeedbackDisplay, shellFeedbackPrompt } from "./chatShell";
 import ChatSqlResult from "./ChatSqlResult";
+import ChatShellResult from "./ChatShellResult";
+import { classifyShell } from "./shellGuard";
+import { explainOutputAsk, sshTerminalGuidance, summarizeSessionAsk, type QuickAsk } from "./sshAiPrompts";
+import { activeSshTabKey, connectedSshTabKeys, useSshTerminals } from "./sshTerminals";
+import { SquareTerminal } from "lucide-react";
+import type { ChatShellRun } from "./chatTypes";
 import { parseBlocks, TextBlock } from "./MarkdownLite";
 import { isProdConn } from "./api";
 
@@ -163,12 +170,18 @@ export default function AssistantPanel() {
   const mentionEnv = (): MentionEnv => {
     const s = useStore.getState();
     const target = dbTarget(s);
+    // 終端機快照「可用」= 那個分頁還開著（可能已斷線）；「作用中」= 使用者現在就停在它上面。
+    const term = useAssistant.getState().terminal;
+    const termOpen = !!term && !!useSshTerminals.getState().rt[term.tabKey];
     return {
       connId: s.activeId,
       kind: s.connections.find((c) => c.id === s.activeId)?.kind ?? null,
       db: target?.database ?? "",
       editor: useAssistant.getState().editor,
       uiLang: useLang.getState().lang,
+      terminal: term,
+      terminalOpen: termOpen,
+      terminalActive: termOpen && activeSshTabKey() === term!.tabKey,
     };
   };
 
@@ -205,6 +218,8 @@ export default function AssistantPanel() {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
       if (e.key.toLowerCase() !== "l") return;
       if (document.body.dataset.modalCount) return;
+      // 焦點在 SSH 終端機：Ctrl+L 是 shell 的 clear，AI 面板改由終端機工具條的 ✨ 開。
+      if ((e.target as HTMLElement | null)?.closest?.(".xterm")) return;
       e.preventDefault();
       const st = useAssistant.getState();
       if (!st.open) {
@@ -231,20 +246,23 @@ export default function AssistantPanel() {
   const foldActive = (a: ChatArchive = archive): ChatArchive => {
     const s = useStore.getState();
     const conn = s.connections.find((c) => c.id === s.activeId) ?? null;
+    // 沒有資料庫連線但停在 SSH 終端機上：對話清單的副標改用主機名，才看得出這串在聊哪台機器。
+    const term = useAssistant.getState().terminal;
+    const termName = !conn && term && activeSshTabKey() === term.tabKey ? (term.title || `${term.user}@${term.host}`) : null;
     return updateConversation(a, activeConvId, (c) => ({
       ...c,
       // 執行結果只留前 30 列：整張結果表寫進 localStorage 會很快撞上配額，
       // 撞上之後是「整串對話都存不進去」，不是只丟掉那張表。
       messages: messages.map((m) =>
         m.runs
-          ? { ...m, runs: Object.fromEntries(Object.entries(m.runs).map(([k, v]) => [k, persistableRun(v)])) }
+          ? { ...m, runs: Object.fromEntries(Object.entries(m.runs).map(([k, v]) => [k, isShellRun(v) ? persistableShellRun(v) : persistableRun(v)])) }
           : m,
       ),
       agentSessionId: sessionIdRef.current,
       agentProvider: provider,
       // 連線只在「這串第一次有內容」時記下來：使用者常是先開面板才選庫，空對話標到某個庫沒有意義。
       connId: c.connId ?? (messages.length ? conn?.id ?? null : null),
-      connName: c.connName ?? (messages.length ? conn?.name ?? null : null),
+      connName: c.connName ?? (messages.length ? conn?.name ?? termName : null),
     }));
   };
 
@@ -307,12 +325,14 @@ export default function AssistantPanel() {
   useEffect(() => {
     if (seed == null) return;
     const autoSend = useAssistant.getState().seedSend;
+    const seedOpts = useAssistant.getState().seedOpts;
     useAssistant.getState().clearSeed();
     // 自動送出只在「助手就緒（CLI 已安裝且登入）且未在串流中」時直接送出；
     // 否則（串流中 / 未就緒 / 非自動送出）一律保底把問題填回輸入框並聚焦——絕不靜默遺失。
+    // 隱藏上下文（終端機輸出）只在自動送出時帶得上；退回輸入框時它無處可放，只保留問題本文。
     const ready = !!status && status.installed && status.logged_in;
     if (autoSend && ready && !streaming) {
-      send(seed);
+      send(seed, false, seedOpts ? { extraContext: seedOpts.extraContext, extraChips: seedOpts.extraChips } : undefined);
     } else {
       setInput(seed);
       setTimeout(() => textareaRef.current?.focus(), 0);
@@ -409,6 +429,8 @@ export default function AssistantPanel() {
     let slashPrompt: string | null = null;
     let slashDisplay = text;
     let slashRefs: MentionRef[] = [];
+    let slashExtra: string | null = null;
+    let slashChips: MentionChip[] = [];
 
     // 斜線命令：展開成一般的一輪（或就地處理）。放在最前面——它可能整段改寫要送出的內容。
     const slash = parseSlash(text);
@@ -446,6 +468,8 @@ export default function AssistantPanel() {
       slashPrompt = action.prompt;
       slashDisplay = action.display;
       slashRefs = action.mentions ?? [];
+      slashExtra = action.extraContext ?? null;
+      slashChips = action.extraChips ?? [];
     }
 
     // @ 提及：先解析、展開成預先烘焙好的上下文，再把 token 換成純名字當作使用者看到的訊息本文。
@@ -483,11 +507,12 @@ export default function AssistantPanel() {
       else target = null; // 不同意就這次不給工具，但問題照送（模型改用附帶的結構回答）。
     }
 
-    const chips = [...mentionChips, ...(opts?.extraChips ?? [])];
+    const chips = [...mentionChips, ...slashChips, ...(opts?.extraChips ?? [])];
+    const extraContext = [opts?.extraContext, slashExtra].filter((x): x is string => !!x).join("\n\n");
     const userMsg: ChatMsg = {
       id: crypto.randomUUID(), role: "user", text: display, tools: [], pending: false, error: false,
       mentions: chips.length ? chips : undefined,
-      ctxBytes: mentionCtx.length + (opts?.extraContext?.length ?? 0),
+      ctxBytes: mentionCtx.length + extraContext.length,
     };
     const aId = crypto.randomUUID();
     const aMsg: ChatMsg = { id: aId, role: "assistant", text: "", tools: [], pending: true, error: false, toolCalls: [] };
@@ -510,7 +535,7 @@ export default function AssistantPanel() {
       } catch { /* 上下文為加值，失敗就只送問題本文 */ }
     }
     if (mentionCtx) chunks.push(mentionCtx);
-    if (opts?.extraContext) chunks.push(opts.extraContext);
+    if (extraContext) chunks.push(extraContext);
     chunks.push(slashPrompt ?? display);
     const prompt = chunks.join("\n\n");
 
@@ -572,7 +597,12 @@ export default function AssistantPanel() {
         baseUrl: baseUrl || null,
         // 一次性回合不疊技能：技能講的是「回答時要附上風險說明」這類語氣要求，
         // 對「只回一個 ```sql 區塊」的生成只會製造區塊外的雜訊。
-        systemPrompt: currentSystemPrompt(turnMode === "advise" || turnMode === "agent"),
+        // 有 SSH 終端機開著就附上「你沒有 shell、只能建議」那段守則（四種供應商都吃 systemPrompt；
+        // Codex 是前置到 prompt，效果相同）。一次性 generate 回合（/shell）也要，它決定輸出格式。
+        systemPrompt: [
+          currentSystemPrompt(turnMode === "advise" || turnMode === "agent"),
+          mentionEnv().terminalOpen ? sshTerminalGuidance() : "",
+        ].filter(Boolean).join("\n\n"),
         connectionId: target?.connectionId ?? null,
         database: target?.database ?? null,
       });
@@ -753,6 +783,13 @@ export default function AssistantPanel() {
       if (ed.sql.trim()) out.push({ id: "sp:query", label: "@query", hint: t("目前編輯器的查詢"), group: "special", insert: "@query" });
       if (ed.result) out.push({ id: "sp:result", label: "@result", hint: t("目前的查詢結果"), group: "special", insert: "@result" });
       if (ed.error) out.push({ id: "sp:error", label: "@error", hint: t("上一次的執行錯誤"), group: "special", insert: "@error" });
+    }
+    // SSH 終端機：分頁還開著才列；指令輸出 / 最近指令要真的有東西才列（同上面的理由）。
+    if (!scopeMode && !prefix && env.terminalOpen && env.terminal) {
+      const tm = env.terminal;
+      out.push({ id: "sp:term", label: "@term", hint: t("終端機畫面（最後 200 行）"), group: "special", insert: "@term" });
+      if (tm.lastCommand && tm.lastOutput) out.push({ id: "sp:output", label: "@output", hint: t("最近一次指令的輸出"), group: "special", insert: "@output" });
+      if (tm.lastCommand) out.push({ id: "sp:lastcmd", label: "@lastcmd", hint: t("最近一次送出的指令"), group: "special", insert: "@lastcmd" });
     }
     if (prefix === "file") {
       try {
@@ -942,6 +979,68 @@ export default function AssistantPanel() {
     if (feedback) void send(runFeedbackDisplay(result), false, { extraContext: runFeedbackPrompt(result) });
   };
 
+  /**
+   * 「送到終端機」的目標分頁：作用中的 SSH 分頁優先；不在終端機上時，只開了一個已連線的終端機就用它；
+   * 開了好幾個又都不在前景 → 不猜，請使用者切過去（送錯台機器的代價太高）。
+   */
+  const shellTarget = (): string | null => {
+    const active = activeSshTabKey();
+    if (active && useSshTerminals.getState().rt[active]?.status === "connected") return active;
+    const keys = connectedSshTabKeys();
+    return keys.length === 1 ? keys[0] : null;
+  };
+
+  /** 把 bash 區塊放進終端機的指令列（附加，不送出、不分級——什麼都還沒執行）。 */
+  const sendToCompose = (code: string, lang: string) => {
+    const key = shellTarget() ?? useStore.getState().sshTabs[0]?.key ?? null;
+    if (!key) { toast.info(t("請先開一個 SSH 終端機分頁")); return; }
+    useSshTerminals.getState().insertCompose(key, normalizeShellCode(code, lang));
+    useStore.getState().setActiveTab(key);
+    toast.success(t("已放進終端機指令列"));
+  };
+
+  /**
+   * 「執行並回饋」：把 bash 區塊送進終端機、擷取輸出、掛回這則訊息，必要時回饋給模型。
+   * AI 本身沒有 shell 工具——這條路是**唯一**會把模型寫的指令送進 shell 的地方，所以分級在這裡：
+   * block 直接擋（要手改）、confirm 先問（列出理由）、safe 才直接送。
+   */
+  const runShellBlock: ShellRunBlock = async (msgId, blockIdx, code, feedback, lang) => {
+    const key = shellTarget();
+    if (!key) { toast.info(t("請先切到要送出的終端機分頁（或只保留一個已連線的終端機）")); return; }
+    const cmd = normalizeShellCode(code, lang);
+    if (!cmd.trim()) { toast.info(t("沒有可執行的指令。")); return; }
+    const rt = useSshTerminals.getState().rt[key];
+    const host = rt ? `${rt.user}@${rt.host}` : "";
+    const title = useStore.getState().sshTabs.find((x) => x.key === key)?.title ?? host;
+    const cls = classifyShell(cmd);
+    if (cls.level === "block") {
+      toast.error(t("已擋下：{reasons}。請手動修改後再送。", { reasons: cls.reasons.join("、") }));
+      return;
+    }
+    if (cls.level === "confirm") {
+      const ok = await uiConfirm(
+        t("這段指令涉及：{reasons}。確定送到「{title}」並執行？", { reasons: cls.reasons.join("、"), title }),
+        { title: t("確認執行指令"), danger: true, confirmText: t("執行") },
+      );
+      if (!ok) return;
+    }
+    useStore.getState().setActiveTab(key);
+    let result: ChatShellRun;
+    try {
+      const r = await useSshTerminals.getState().sendCommand(key, cmd);
+      result = toChatShellRun(cmd, r, { tabKey: key, host }, null);
+    } catch (e: any) {
+      result = toChatShellRun(cmd, null, { tabKey: key, host }, e?.message ?? String(e));
+    }
+    setMessages((m) => m.map((x) => (x.id === msgId ? { ...x, runs: { ...(x.runs ?? {}), [String(blockIdx)]: result } } : x)));
+    if (feedback) void send(shellFeedbackDisplay(result), false, { extraContext: shellFeedbackPrompt(result) });
+  };
+  /** 既有結果格上的「回饋給 AI」：只送結果，不重跑。 */
+  const feedbackShell = (r: ChatShellRun) => void send(shellFeedbackDisplay(r), false, { extraContext: shellFeedbackPrompt(r) });
+  /** 終端機快速提問（空狀態的 chips）。 */
+  const askQuick = (q: QuickAsk) => void send(q.display, false, { extraContext: q.extraContext, extraChips: q.chips });
+  const termOpen = useSshTerminals((s) => Object.values(s.rt).some((r) => r.status === "connected"));
+
   /** 以某則回應為引言開新話題：保留脈絡但不再拖著整段舊歷史（見 newTopic 的成本說明）。 */
   const fork = (msg: ChatMsg) => {
     newTopic();
@@ -1050,11 +1149,12 @@ export default function AssistantPanel() {
 
       <div ref={scrollRef} className="flex-1 overflow-auto p-3 space-y-3">
         {messages.length === 0 ? (
-          <EmptyState onPick={(p) => send(p)} onFill={fillInput} disabled={notReady} />
+          <EmptyState onPick={(p) => send(p)} onFill={fillInput} onAsk={askQuick} disabled={notReady} />
         ) : (
           <>
             {messages.map((m) => (
-              <MessageBubble key={m.id} msg={m} kind={activeKind} onFork={fork} onRun={runBlock} />
+              <MessageBubble key={m.id} msg={m} kind={activeKind} onFork={fork} onRun={runBlock}
+                onShellRun={runShellBlock} onCompose={sendToCompose} onShellFeedback={feedbackShell} termOpen={termOpen} />
             ))}
             {!streaming && messages[messages.length - 1].role === "assistant" && (
               <div className="flex justify-start gap-1.5">
@@ -1074,9 +1174,11 @@ export default function AssistantPanel() {
           title={t("拖曳調整輸入區高度（雙擊還原自動高度）")}
           className="absolute left-0 -top-0.5 w-full h-1.5 cursor-row-resize hover:bg-accent/40 z-10" />
         <div className="flex items-center gap-2 text-[11px] text-fg/50">
-          <label className="flex items-center gap-1 cursor-pointer select-none" title={t("送出時附帶目前連線 / 選取資料表的結構")}>
+          <label className="flex items-center gap-1 cursor-pointer select-none"
+            title={termOpen ? t("送出時附帶目前連線 / 資料表結構，以及作用中的 SSH 終端機畫面") : t("送出時附帶目前連線 / 選取資料表的結構")}>
             <input type="checkbox" checked={ctxOn} onChange={(e) => setCtxOn(e.target.checked)} className="accent-blue-500" />
-            {t("附帶資料庫內容")}
+            {termOpen && <Icon icon={SquareTerminal} size={11} />}
+            {termOpen ? t("附帶目前環境") : t("附帶資料庫內容")}
           </label>
           <label className={`flex items-center gap-1 select-none ${dbToolsReady ? "cursor-pointer" : "opacity-40 cursor-not-allowed"}`}
             title={dbToolsReady
@@ -1220,16 +1322,25 @@ export default function AssistantPanel() {
 }
 
 // ---- 空狀態：說明 + 依目前選取情境的起手式建議 ----
-function EmptyState({ onPick, onFill, disabled }: {
+function EmptyState({ onPick, onFill, onAsk, disabled }: {
   onPick: (prompt: string) => void;
   onFill: (text: string) => void;
+  /** 帶隱藏上下文的快速提問（終端機畫面 / session 摘要）。 */
+  onAsk: (q: QuickAsk) => void;
   disabled: boolean;
 }) {
   const t = useT();
   const node = useStore((s) => s.selectedNode);
   const conn = useStore((s) => s.connections.find((c) => c.id === s.activeId) ?? null);
+  const term = useAssistant((s) => s.terminal);
+  const activeTabKey = useStore((s) => s.activeTabKey);
+  const termActive = !!term && term.tabKey === activeTabKey;
 
-  const quick: { label: string; prompt: string; fill?: boolean }[] = [];
+  const quick: { label: string; prompt: string; fill?: boolean; ask?: QuickAsk }[] = [];
+  if (termActive && term) {
+    quick.push({ label: t("解釋目前終端機畫面"), prompt: "", ask: explainOutputAsk(term, null) });
+    quick.push({ label: t("摘要這個 session"), prompt: "", ask: summarizeSessionAsk(term) });
+  }
   if (node?.type === "table") {
     quick.push({ label: t("解釋資料表 {table}", { table: node.table }), prompt: t("請解釋資料表 {db}.{table} 的用途，以及每個欄位代表什麼。", { db: node.db, table: node.table }) });
     quick.push({ label: t("為 {table} 寫常用查詢", { table: node.table }), prompt: t("針對資料表 {db}.{table}，寫出 5 個實用的 SQL 查詢，每個都加上中文註解說明用途。", { db: node.db, table: node.table }) });
@@ -1252,7 +1363,7 @@ function EmptyState({ onPick, onFill, disabled }: {
             key={q.label}
             type="button"
             disabled={disabled}
-            onClick={() => (q.fill ? onFill(q.prompt) : onPick(q.prompt))}
+            onClick={() => (q.ask ? onAsk(q.ask) : q.fill ? onFill(q.prompt) : onPick(q.prompt))}
             className="px-2 py-1 rounded-full border border-fg/10 bg-fg/5 text-fg/70 hover:bg-fg/10 hover:text-fg disabled:opacity-40 text-[11px]"
           >
             {q.label}
@@ -1291,6 +1402,15 @@ function MentionChips({ chips, bytes }: { chips: MentionChip[]; bytes?: number }
 
 /** 在對話裡執行某個程式碼區塊：(訊息 id, 區塊序號, SQL, 是否把結果回饋給模型)。 */
 type RunBlock = (msgId: string, blockIdx: number, code: string, feedback: boolean) => void;
+/** 同上，但送進 SSH 終端機；多帶區塊語言（console 區塊要先剝掉提示符與輸出行）。 */
+type ShellRunBlock = (msgId: string, blockIdx: number, code: string, feedback: boolean, lang: string) => void;
+/** bash 區塊的終端機動作（沒有終端機時不給，按鈕顯示為停用）。 */
+interface ShellHandlers {
+  onShellRun: ShellRunBlock | null;
+  onCompose: ((code: string, lang: string) => void) | null;
+  onShellFeedback: ((run: ChatShellRun) => void) | null;
+  termOpen: boolean;
+}
 
 // ---- 工具呼叫明細 ----
 
@@ -1363,12 +1483,12 @@ function ToolCalls({ calls, kind }: { calls: ToolCallView[]; kind: DbKind | null
 }
 
 // ---- 訊息泡泡 ----
-function MessageBubble({ msg, kind, onFork, onRun }: {
+function MessageBubble({ msg, kind, onFork, onRun, ...shell }: {
   msg: ChatMsg;
   kind: DbKind | null;
   onFork: (msg: ChatMsg) => void;
   onRun: RunBlock | null;
-}) {
+} & ShellHandlers) {
   const t = useT();
   // 「新話題」分隔線：不是一則訊息，只是視覺上把 session 斷開的地方標出來。
   if (msg.divider) {
@@ -1408,7 +1528,7 @@ function MessageBubble({ msg, kind, onFork, onRun }: {
             {t("思考中…")}
           </div>
         ) : (
-          <Markdown text={msg.text} msgId={msg.id} runs={msg.runs} onRun={onRun} />
+          <Markdown text={msg.text} msgId={msg.id} runs={msg.runs} onRun={onRun} shell={shell} />
         )}
         <div className="mt-1 flex items-center gap-2">
           {msg.error && <span className="text-[11px] text-red-400">{t("回應發生錯誤")}</span>}
@@ -1435,12 +1555,13 @@ function MessageBubble({ msg, kind, onFork, onRun }: {
   );
 }
 
-function Markdown({ text, msgId, runs, onRun }: {
+function Markdown({ text, msgId, runs, onRun, shell }: {
   text: string;
   msgId?: string;
-  /** blockIdx（字串化）→ 該區塊已執行過的結果。 */
-  runs?: Record<string, ChatRunResult>;
+  /** blockIdx（字串化）→ 該區塊已執行過的結果（SQL 或 shell，見 chatTypes.ChatRun）。 */
+  runs?: Record<string, ChatRun>;
   onRun?: RunBlock | null;
+  shell?: ShellHandlers;
 }) {
   const parts = useMemo(() => parseBlocks(text), [text]);
   // 程式碼區塊的序號要獨立於 parts 的索引：文字段落也占 parts 的位置，
@@ -1453,10 +1574,18 @@ function Markdown({ text, msgId, runs, onRun }: {
         if (p.type !== "code") return <TextBlock key={i} text={p.text} />;
         codeIdx++;
         const idx = codeIdx;
+        // 同一張 runs 表：SQL 結果進 ChatSqlResult、shell 結果進 ChatShellResult（靠 kind 分流）。
+        const run = runs?.[String(idx)];
+        const shellRun = run && isShellRun(run) ? run : undefined;
         return (
           <CodeBlock key={i} lang={p.lang} code={p.code}
-            run={runs?.[String(idx)]}
-            onRun={onRun && msgId ? (feedback) => onRun(msgId, idx, p.code, feedback) : undefined} />
+            run={run && !isShellRun(run) ? run : undefined}
+            onRun={onRun && msgId ? (feedback) => onRun(msgId, idx, p.code, feedback) : undefined}
+            shellRun={shellRun}
+            termOpen={!!shell?.termOpen}
+            onShellRun={shell?.onShellRun && msgId ? (feedback) => shell.onShellRun!(msgId, idx, p.code, feedback, p.lang) : undefined}
+            onCompose={shell?.onCompose ? () => shell.onCompose!(p.code, p.lang) : undefined}
+            onShellFeedback={shellRun && shell?.onShellFeedback ? () => shell.onShellFeedback!(shellRun) : undefined} />
         );
       })}
     </div>
@@ -1595,17 +1724,27 @@ function highlightSql(code: string, c: ThemeColors): ReactNode[] {
   return out;
 }
 
-function CodeBlock({ lang, code, run, onRun }: {
+function CodeBlock({ lang, code, run, onRun, shellRun, termOpen = false, onShellRun, onCompose, onShellFeedback }: {
   lang: string;
   code: string;
   run?: ChatRunResult;
   /** 有值才顯示「執行」；參數為「是否把結果回饋給 AI」。 */
   onRun?: (feedback: boolean) => void;
+  /** bash 區塊送進終端機後的結果。 */
+  shellRun?: ChatShellRun;
+  /** 有已連線的 SSH 終端機：bash 區塊的兩顆終端機鈕才可按。 */
+  termOpen?: boolean;
+  onShellRun?: (feedback: boolean) => void;
+  onCompose?: () => void;
+  onShellFeedback?: () => void;
 }) {
   const t = useT();
   const themeId = useTheme((s) => s.themeId);
   const appTheme = useTheme((s) => s.theme);
   const isSql = lang === "sql" || (!lang && looksLikeSql(code));
+  const isShell = SHELL_LANGS.has((lang || "").toLowerCase());
+  // 送出前的分級徽章：使用者在按鈕旁就看得到「這段會先確認 / 已封鎖」，不用按下去才知道。
+  const verdict = useMemo(() => (isShell ? classifyShell(normalizeShellCode(code, lang)) : null), [isShell, code, lang]);
   // 套用目前整體主題的色盤（統一後恆為指定變體 → 吃該變體背景，與編輯器一致）。
   const { colors, useBg } = resolveHighlightColors(themeId, appTheme);
 
@@ -1648,6 +1787,28 @@ function CodeBlock({ lang, code, run, onRun }: {
               {t("貼到編輯器")}
             </button>
           )}
+          {isShell && verdict && verdict.level !== "safe" && (
+            <span
+              title={verdict.reasons.join("、")}
+              className={`inline-flex items-center gap-0.5 px-1 rounded ${verdict.level === "block" ? "bg-danger/15 text-danger" : "bg-warning/15 text-warning"}`}>
+              <Icon icon={AlertTriangle} size={10} />{verdict.level === "block" ? t("已封鎖") : t("送出前確認")}
+            </span>
+          )}
+          {isShell && onCompose && (
+            <button type="button" className={`${btn} disabled:opacity-40`} disabled={!termOpen}
+              title={termOpen ? t("放進 SSH 終端機的指令列（不會直接執行）") : t("開啟 SSH 終端機後可直接送出")}
+              onClick={onCompose}>
+              <span className="inline-flex items-center gap-0.5"><Icon icon={SquareTerminal} size={11} />{t("送到終端機")}</span>
+            </button>
+          )}
+          {isShell && onShellRun && (
+            <button type="button" className={`${btn} disabled:opacity-40`} disabled={!termOpen || verdict?.level === "block"}
+              title={verdict?.level === "block" ? t("已封鎖：{reasons}", { reasons: verdict.reasons.join("、") })
+                : termOpen ? t("送進終端機執行、擷取輸出（到閒置 300 ms 為止）後交給 AI 接著分析") : t("開啟 SSH 終端機後可直接送出")}
+              onClick={() => onShellRun(true)}>
+              {t("執行並回饋")}
+            </button>
+          )}
           <button type="button" className={btn} onClick={save}>{t("另存")}</button>
           <button type="button" className={btn}
             onClick={() => { copyToClipboard(code); toast.success(t("已複製")); }}>{t("複製")}</button>
@@ -1662,6 +1823,7 @@ function CodeBlock({ lang, code, run, onRun }: {
           onOpenInTab={(sql) => useStore.getState().newQueryTab(sql, useStore.getState().activeId ?? undefined)}
           onFeedback={() => onRun?.(true)} />
       )}
+      {shellRun && <ChatShellResult run={shellRun} onFeedback={onShellFeedback} />}
     </div>
   );
 }

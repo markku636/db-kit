@@ -23,6 +23,7 @@
 | — | 多欄篩選 AND / OR 切換 | ✅ 完成 |
 | — | 資料匯出（CSV / TSV / JSON / SQL / Markdown，多選項） | ✅ 完成 |
 | — | SSH host key 驗證（TOFU） | ✅ 完成 |
+| — | **SSH 終端機 + SFTP**（參考 Xshell）：側欄獨立「SSH 主機」清單（資料夾）、多分頁 xterm.js 終端機（密碼 / 私鑰 / keyboard-interactive / ssh-agent · Pageant）、host key 首次 / 變更確認、命令列輸入條、SFTP 分割面板（瀏覽 / 上下傳 / 改名 / 刪除）、已設 SSH tunnel 的資料庫連線可直接開終端機；AI 只建議指令、由使用者按鈕送出（危險指令分級確認） | ✅ 完成 |
 | — | 查詢效能分析（EXPLAIN） | ✅ 完成 |
 | — | 結構編輯（DDL：新增/刪除/改名欄位） | ✅ 完成 |
 | — | ER 圖（表 + 外鍵關係） | ✅ 完成 |

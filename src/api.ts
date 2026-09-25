@@ -1,5 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type {
+  SshSessionsFile, SshSession, SshFolder, SshPlacement, SshTargetRef, SshConnInfo, SshHostKeyDecision,
+  SshHostKeyPrompt, SshAuthPrompt, SshTermExit, SshConnClosed, SftpEntry, SftpOpenInfo, SftpProgress, SftpText,
+} from "./sshTypes";
 
 export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "external";
 
@@ -583,6 +587,34 @@ export function onRedisPubSub(connId: string, cb: (m: PubSubMessage) => void): P
 // 訂閱 Pub/Sub 背景任務錯誤（payload 為字串）。回傳取消監聽函式。
 export function onRedisPubSubError(cb: (msg: string) => void): Promise<UnlistenFn> {
   return listen<string>("redis-pubsub-error", (e) => cb(e.payload));
+}
+
+// ---- SSH 終端機 / SFTP 事件（DTO 見 sshTypes.ts）----
+// 連線期間的 host key / 認證提問：conn_id 由前端在 sshConnect 前就產好，所以 invoke 還沒回來就能對上。
+export function onSshHostKeyPrompt(connId: string, cb: (p: SshHostKeyPrompt) => void): Promise<UnlistenFn> {
+  return listen<SshHostKeyPrompt>("ssh-hostkey-prompt", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload);
+  });
+}
+export function onSshAuthPrompt(connId: string, cb: (p: SshAuthPrompt) => void): Promise<UnlistenFn> {
+  return listen<SshAuthPrompt>("ssh-auth-prompt", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload);
+  });
+}
+// 終端 shell 結束（exit / 被踢）與整條連線關閉（keepalive 逾時、對方斷線）。輸出本身走 Channel，不走事件。
+export function onSshTermExit(termId: string, cb: (p: SshTermExit) => void): Promise<UnlistenFn> {
+  return listen<SshTermExit>("ssh-term-exit", (e) => {
+    if (e.payload.term_id === termId) cb(e.payload);
+  });
+}
+export function onSshConnClosed(connId: string, cb: (p: SshConnClosed) => void): Promise<UnlistenFn> {
+  return listen<SshConnClosed>("ssh-conn-closed", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload);
+  });
+}
+// SFTP 傳輸進度：全域一個監聽，由呼叫端依 transfer_id 分派（同時可能有多個上下傳）。
+export function onSftpProgress(cb: (p: SftpProgress) => void): Promise<UnlistenFn> {
+  return listen<SftpProgress>("ssh-sftp-progress", (e) => cb(e.payload));
 }
 
 // ---- AI 助手（本機 claude / codex CLI，或 Anthropic / OpenAI 相容 API）----
@@ -1869,4 +1901,48 @@ export const api = {
   agentWorkspaceRead: (path: string) => invoke<string>("agent_workspace_read", { path }),
   openAgentWorkspace: () => invoke<void>("open_agent_workspace"),
   openExternal: (url: string) => invoke<void>("open_external", { url }),
+
+  // ---- SSH 終端機 / SFTP（DTO 見 sshTypes.ts；命令 / 事件契約見計畫）----
+  // 主機清單：永不含密碼。存檔時密碼 / 密語另帶，非空才寫 keychain、空 = 保留原值（同 saveConnection 語意）。
+  sshSessionsList: () => invoke<SshSessionsFile>("ssh_sessions_list"),
+  sshSessionSave: (session: SshSession, password?: string | null, passphrase?: string | null) =>
+    invoke<void>("ssh_session_save", { session, password: password ?? null, passphrase: passphrase ?? null }),
+  sshSessionRemove: (id: string) => invoke<void>("ssh_session_remove", { id }),
+  sshSessionsLayoutSave: (folders: SshFolder[], order: SshPlacement[]) =>
+    invoke<void>("ssh_sessions_layout_save", { folders, order }),
+  sshHasStoredPassword: (id: string) => invoke<boolean>("ssh_has_stored_password", { id }),
+  // 連線：connId 由前端產（crypto.randomUUID），這樣 host key / 認證提問事件在 invoke 回來前就能過濾。
+  // 會等到認證完成（含使用者回答提問）才 resolve；期間可用 sshDisconnect 取消。
+  sshConnect: (connId: string, target: SshTargetRef) => invoke<SshConnInfo>("ssh_connect", { connId, target }),
+  sshTest: (connId: string, target: SshTargetRef) => invoke<void>("ssh_test", { connId, target }),
+  sshDisconnect: (connId: string) => invoke<void>("ssh_disconnect", { connId }),
+  // 終端：輸出走 Channel（raw bytes → ArrayBuffer），每終端一條、有序、不廣播。
+  sshTermOpen: (connId: string, cols: number, rows: number, onOutput: Channel<ArrayBuffer>) =>
+    invoke<string>("ssh_term_open", { connId, cols, rows, onOutput }),
+  sshTermWrite: (termId: string, dataB64: string) => invoke<void>("ssh_term_write", { termId, dataB64 }),
+  // 送一整行（後端補 \r）：命令列輸入條與 AI「送到終端機」專用，獨立命令便於稽核。
+  sshTermSendLine: (termId: string, line: string) => invoke<void>("ssh_term_send_line", { termId, line }),
+  sshTermResize: (termId: string, cols: number, rows: number) => invoke<void>("ssh_term_resize", { termId, cols, rows }),
+  sshTermClose: (termId: string) => invoke<void>("ssh_term_close", { termId }),
+  sshHostkeyAnswer: (promptId: string, decision: SshHostKeyDecision) =>
+    invoke<void>("ssh_hostkey_answer", { promptId, decision }),
+  // answers = null 代表使用者取消（連線會以 SshCancelled 失敗）。
+  sshAuthAnswer: (promptId: string, answers: string[] | null) => invoke<void>("ssh_auth_answer", { promptId, answers }),
+  // SFTP：從同一條連線開 subsystem，不再問密碼；回 home 讓面板有起始路徑。
+  sshSftpOpen: (connId: string) => invoke<SftpOpenInfo>("ssh_sftp_open", { connId }),
+  sshSftpClose: (sftpId: string) => invoke<void>("ssh_sftp_close", { sftpId }),
+  sshSftpList: (sftpId: string, path: string) => invoke<SftpEntry[]>("ssh_sftp_list", { sftpId, path }),
+  sshSftpStat: (sftpId: string, path: string) => invoke<SftpEntry>("ssh_sftp_stat", { sftpId, path }),
+  sshSftpMkdir: (sftpId: string, path: string) => invoke<void>("ssh_sftp_mkdir", { sftpId, path }),
+  sshSftpRename: (sftpId: string, from: string, to: string) => invoke<void>("ssh_sftp_rename", { sftpId, from, to }),
+  sshSftpRemove: (sftpId: string, path: string, recursive: boolean) =>
+    invoke<void>("ssh_sftp_remove", { sftpId, path, recursive }),
+  sshSftpReadText: (sftpId: string, path: string, maxBytes: number) =>
+    invoke<SftpText>("ssh_sftp_read_text", { sftpId, path, maxBytes }),
+  // 上下傳立即回 transfer_id，進度走 onSftpProgress；取消後不留 .part。
+  sshSftpDownload: (sftpId: string, remote: string, local: string, overwrite: boolean) =>
+    invoke<string>("ssh_sftp_download", { sftpId, remote, local, overwrite }),
+  sshSftpUpload: (sftpId: string, local: string, remote: string, overwrite: boolean) =>
+    invoke<string>("ssh_sftp_upload", { sftpId, local, remote, overwrite }),
+  sshSftpCancel: (transferId: string) => invoke<void>("ssh_sftp_cancel", { transferId }),
 };

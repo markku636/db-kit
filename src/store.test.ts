@@ -250,3 +250,91 @@ describe("工作階段持久化（訂閱寫回）", () => {
     expect(saved()).toEqual({ queryTabs: [], activeQueryTab: null });
   });
 });
+
+describe("SSH 終端機分頁：第三種分頁與其他兩種的落點互動", () => {
+  beforeEach(() => {
+    useStore.setState({ tabs: [], activeTabKey: "__query__", queryTabs: ["__query__"], sshTabs: [], connectedIds: new Set(["c1"]) });
+  });
+
+  it("openSshTab 產生 __ssh__: 鍵、接在尾端並切過去；同一台主機可開多個", () => {
+    const k1 = s().openSshTab({ target: { kind: "session", id: "h1" }, title: "web-01", sessionId: "h1" });
+    const k2 = s().openSshTab({ target: { kind: "session", id: "h1" }, title: "web-01", sessionId: "h1" });
+    expect(k1.startsWith("__ssh__:")).toBe(true);
+    expect(k1).not.toBe(k2);
+    expect(s().sshTabs.map((t) => t.key)).toEqual([k1, k2]);
+    expect(s().activeTabKey).toBe(k2);
+  });
+
+  it("關掉作用中的 SSH 分頁 → 落到鄰居（右邊優先）；沒有鄰居才退回查詢分頁", () => {
+    const k1 = s().openSshTab({ target: { kind: "session", id: "h1" }, title: "a" });
+    const k2 = s().openSshTab({ target: { kind: "session", id: "h2" }, title: "b" });
+    const k3 = s().openSshTab({ target: { kind: "session", id: "h3" }, title: "c" });
+    s().setActiveTab(k2);
+    s().closeSshTab(k2);
+    expect(s().activeTabKey).toBe(k3);
+    s().closeSshTab(k3);
+    expect(s().activeTabKey).toBe(k1);
+    s().closeSshTab(k1);
+    expect(s().sshTabs).toEqual([]);
+    expect(s().activeTabKey).toBe("__query__");
+  });
+
+  it("關掉非作用中的 SSH 分頁不動作用中分頁", () => {
+    const k1 = s().openSshTab({ target: { kind: "session", id: "h1" }, title: "a" });
+    s().setActiveTab("__query__");
+    s().closeSshTab(k1);
+    expect(s().activeTabKey).toBe("__query__");
+  });
+
+  it("查詢分頁全關且沒有表分頁時，落到最後一個 SSH 分頁", () => {
+    const k1 = s().openSshTab({ target: { kind: "session", id: "h1" }, title: "a" });
+    s().setActiveTab("__query__");
+    s().closeQueryTab("__query__");
+    expect(s().queryTabs).toEqual([]);
+    expect(s().activeTabKey).toBe(k1);
+  });
+
+  it("關表分頁時作用中若是 SSH 分頁就留在原地；表分頁被關才依序退位", () => {
+    openTwoTables();
+    const k1 = s().openSshTab({ target: { kind: "connection", id: "c1" }, title: "u@h", connId: "c1" });
+    s().closeTab("c1:db:t1");
+    expect(s().activeTabKey).toBe(k1);
+    s().setActiveTab("c1:db:t2");
+    s().closeTab("c1:db:t2");
+    // 表分頁全關 → 第一個查詢分頁優先於 SSH 分頁。
+    expect(s().activeTabKey).toBe("__query__");
+  });
+
+  it("markDisconnected 不關 SSH 分頁（即使它是從該連線的 tunnel 設定開出來的）", () => {
+    openTwoTables();
+    const k1 = s().openSshTab({ target: { kind: "connection", id: "c1" }, title: "u@h", connId: "c1" });
+    s().markDisconnected("c1");
+    expect(s().tabs).toEqual([]);
+    expect(s().sshTabs.map((t) => t.key)).toEqual([k1]);
+    expect(s().activeTabKey).toBe(k1);
+  });
+
+  it("closeOtherQueryTabs / closeAllQueryTabs 在 SSH 分頁作用中時不搶焦點", () => {
+    useStore.setState({ queryTabs: ["__query__", "__query__:2"] });
+    const k1 = s().openSshTab({ target: { kind: "session", id: "h1" }, title: "a" });
+    s().closeOtherQueryTabs("__query__");
+    expect(s().queryTabs).toEqual(["__query__"]);
+    expect(s().activeTabKey).toBe(k1);
+    s().closeAllQueryTabs();
+    expect(s().queryTabs).toEqual([]);
+    expect(s().activeTabKey).toBe(k1);
+  });
+
+  it("closeOtherSshTabs / closeAllSshTabs / renameSshTab", () => {
+    const k1 = s().openSshTab({ target: { kind: "session", id: "h1" }, title: "a" });
+    const k2 = s().openSshTab({ target: { kind: "session", id: "h2" }, title: "b" });
+    s().renameSshTab(k2, "prod");
+    expect(s().sshTabs.find((t) => t.key === k2)?.title).toBe("prod");
+    s().closeOtherSshTabs(k1);
+    expect(s().sshTabs.map((t) => t.key)).toEqual([k1]);
+    expect(s().activeTabKey).toBe(k1);
+    s().closeAllSshTabs();
+    expect(s().sshTabs).toEqual([]);
+    expect(s().activeTabKey).toBe("__query__");
+  });
+});

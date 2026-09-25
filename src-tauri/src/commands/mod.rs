@@ -1,3 +1,6 @@
+// SSH 終端機 / SFTP / 已存主機的 command（含 TauriUi）。
+pub mod ssh;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -50,6 +53,9 @@ pub struct AppState {
     /// CLI 後端的 session 由 CLI 自己保管，走 HTTP 就得自己存 —— 每回合整串重送，
     /// 故 `llm::agent_loop::trim_history` 會修剪長度。App 關閉即消失（不落地）。
     pub llm_sessions: Arc<Mutex<HashMap<String, Vec<crate::llm::Message>>>>,
+    /// SSH 終端機 / SFTP 的登記簿：活著的連線、終端、SFTP、待答提示、傳輸取消旗標。
+    /// 包 `Arc`：傳輸背景任務與斷線 watcher 都要 `'static` 地拿著它。
+    pub ssh: Arc<crate::ssh::SshRuntime>,
     /// Kafka live-tail 的取消旗標（key = 連線 id；每連線一個 tail）。停止 / 斷線時設 true，
     /// poll 執行緒下一輪見到即退出並釋放 consumer（BaseConsumer drop 快速）。
     #[cfg(feature = "kafka")]

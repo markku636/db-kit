@@ -241,8 +241,9 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 效能 | **SQL 壓力測試**（致敬 SQLQueryStress）：多執行緒重複執行、固定迭代或持續時間 + 爬升、暖機、**p50/p90/p95/p99 延遲百分位** + TPS 即時折線、**錯誤指紋化分組**、`:name` 參數 CSV 替換、報表一鍵複製為 Markdown；走**專屬連線池**不佔用互動連線，寫入與高破壞語句預設擋下；亦可用 `dbk stress` 在腳本中跑 |
 | 外觀 | **7 套寶石系主題**（Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian）驅動整個 App + 編輯器語法高亮，工具列一鍵切換光亮 / 暗黑 / 變體；**全域介面字級**（6 段，整個 App 等比縮放）與**程式碼字級**分開設定 |
 | 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、**啟動鎖定**（Windows Hello / Touch ID 或 Argon2id 密碼、閒置自動鎖定）、**結果列數上限 / 查詢逾時**、釘選常用表 |
+| SSH 終端機 | 參考 Xshell：側欄獨立「SSH 主機」清單（可分資料夾、搜尋），**多分頁 xterm.js 終端機**（密碼 / 私鑰 + 密語 / keyboard-interactive / ssh-agent · Pageant，密碼只進 OS keychain），host key 首次連線 / 指紋變更時明確確認，斷線一鍵或按 Enter 重連，搜尋、字級縮放、主題跟隨 App、右鍵複製貼上（多行貼上先確認）；**命令列輸入條**（打好再送、↑↓ 歷史）；**SFTP 分割面板**（瀏覽 / 上傳 / 下載 / 改名 / 刪除 / 建資料夾 / 在終端機 cd 到此，同一條連線不再問密碼）；已設 SSH Tunnel 的資料庫連線右鍵即可**開啟終端機** |
 | SQL 審查 | **靜態規則引擎**（對標 Redgate SQL Prompt / SonarQube SQL rules）：15 條規則、三級嚴重度，打字當下即時列出無 WHERE 的 DML、笛卡兒積、欄位套函式讓索引失效、前綴萬用字元 LIKE、`NOT IN` 的 NULL 陷阱、UNION vs UNION ALL、NOLOCK 髒讀、游標逐列處理…；方言感知、**不執行查詢也不需要 AI**，點一筆即跳到編輯器對應位置 |
-| AI 助手 | 右側面板串接本機 **Claude Code 或 OpenAI Codex** CLI（下拉即切、各自記住模型）或任何 Anthropic / OpenAI 相容 API：串流問答、撰寫 / 優化 SQL；程式碼區塊套用目前主題的語法高亮。**助手可自己下唯讀查詢**（列表 / 看結構 / 取樣 / SELECT / EXPLAIN；跑過的 SQL 全列在回應裡）；輸入框支援 **`@` 指定範圍**與 **`/` 指令**；回應裡的 SQL 可直接執行並把結果回饋給模型。另有三個一鍵入口——**AI 審查 SQL**（帶規則引擎發現 + 結構 + 索引 + 計畫）、**AI 調校建議**（帶計畫熱點，要求索引 DDL / 改寫 / 代價評估）、**AI 分析壓測結果**（從延遲百分位的形狀反推瓶頸類型） |
+| AI 助手 | 右側面板串接本機 **Claude Code 或 OpenAI Codex** CLI（下拉即切、各自記住模型）或任何 Anthropic / OpenAI 相容 API：串流問答、撰寫 / 優化 SQL；程式碼區塊套用目前主題的語法高亮。**助手可自己下唯讀查詢**（列表 / 看結構 / 取樣 / SELECT / EXPLAIN；跑過的 SQL 全列在回應裡）；輸入框支援 **`@` 指定範圍**與 **`/` 指令**；回應裡的 SQL 可直接執行並把結果回饋給模型。另有三個一鍵入口——**AI 審查 SQL**（帶規則引擎發現 + 結構 + 索引 + 計畫）、**AI 調校建議**（帶計畫熱點，要求索引 DDL / 改寫 / 代價評估）、**AI 分析壓測結果**（從延遲百分位的形狀反推瓶頸類型）。在 **SSH 終端機分頁**可「解釋這段輸出 / 修正這個錯誤 / 摘要 session / 用自然語言產生指令」，回覆裡的 bash 區塊有「送到終端機」「執行並回饋」——**AI 只建議，指令一律由你按鈕送出**，危險指令（rm -rf、dd、mkfs…）先確認、致命指令直接擋下 |
 | 審查並執行 | 執行前 **AI 審查**（結論徽章：可以執行 / 注意風險 / 不建議執行，預設不送資料列）→ **逐句擷取前像 → 回滾語句先落地 → 執行 → 擷取後像比對**；回滾等級逐句標示（完整 / 部分 / 無），不完整或正式環境要勾選確認；輸出 `script.sql` / `review.md` / `rollback.sql` / `diff.md` / `report.md` / `manifest.json` / `snapshots/`；「只產生備份」不執行（唯讀連線可用）；回滾腳本可再走一次審查並執行；AI 助手寫入語句與 `dbk run` 共用；支援 MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite |
 | AI 動作（編輯器） | 選一段 SQL → 右鍵 / `Ctrl+Shift+E` / 工具列「AI 動作」：解釋、最佳化、修正、加註解、**轉換方言**、產生測試資料、白話解釋執行計畫；`Ctrl+I` 用一句話描述要怎麼改。改寫類一律先走**差異預覽**（逐塊可拒絕、可手改），接受後進 undo 歷史 |
 | 多語系 | **繁體中文 · 简体中文 · English · 日本語 · 한국어 · Tiếng Việt**，工具列或設定頁即時切換、不需重啟；前端 / Rust 後端錯誤訊息 / `dbk` CLI（`--lang`、`DBKIT_LANG`）三處同步。各語言的譯文表由 vite 各切一個 chunk，只下載自己那包 |
@@ -306,6 +307,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] 欄位資料剖析（欄位標題右鍵「欄位統計」：總列數 / 非空 / 相異值）
 - [x] 操作體驗：原生檔案選擇器、編輯連線、Toast 通知、連線樹右鍵選單
 - [x] SSH host key 驗證（TOFU：首次記憶指紋、之後比對）
+- [x] **SSH 終端機 + SFTP**（參考 Xshell）：側欄「SSH 主機」清單（資料夾 / 搜尋 / 右鍵）、多分頁 xterm.js 終端機（四種認證、host key 確認、重連、搜尋、命令列輸入條）、SFTP 分割面板、資料庫連線右鍵「開啟 SSH 終端機」；AI 建議指令由使用者按鈕送出（`shellGuard` 三級分類）
 - [x] 查詢效能分析（EXPLAIN）
 - [x] 結構編輯（DDL：新增 / 刪除 / 改名欄位）
 - [x] ER 圖（表 + 外鍵關係，表卡可拖曳、縮放、佈局記憶、關聯高亮）

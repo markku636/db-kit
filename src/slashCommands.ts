@@ -16,9 +16,10 @@ import {
   type ActionCtx,
 } from "./aiActions";
 import { collectSchemaContext, joinLines } from "./aiReview";
-import type { EditorSnapshot, MentionRef } from "./chatTypes";
+import type { EditorSnapshot, MentionChip, MentionRef, TerminalSnapshot } from "./chatTypes";
 import { t } from "./i18n";
 import { buildEsNlPrompt, buildSqlNlPrompt } from "./nlPrompt";
+import { buildNlShellPrompt, explainOutputAsk, fixLastErrorAsk } from "./sshAiPrompts";
 import { lintSql } from "./sqlLint";
 
 // ---- 命令清單 ----
@@ -45,6 +46,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "/optimize", args: "optional", get hint() { return t("最佳化 SQL（附上規則引擎的檢查結果）"); } },
   { name: "/sql", args: "required", get hint() { return t("用一句話描述需求，生成查詢語句"); } },
   { name: "/schema", args: "required", get hint() { return t("說明某張資料表的結構與設計（可寫成 庫.表）"); } },
+  // SSH 終端機三條：/shell 生指令（放進指令列，不執行）、/term 解釋最近一次指令的輸出、/tfix 修上一條失敗的指令。
+  // 名字刻意不動到既有的唯一前綴：/f → /fix、/o → /optimize、/c → /clear、/n → /new 都照舊成立
+  // （/s 本來就因 /sql、/schema 不唯一，/shell 加進來不改變任何人的肌肉記憶）。
+  { name: "/shell", args: "required", get hint() { return t("用一句話描述要在 SSH 主機上做什麼，生成 shell 指令（放進指令列，不會直接執行）"); } },
+  { name: "/term", args: "none", get hint() { return t("解釋 SSH 終端機最近一次指令的輸出"); } },
+  { name: "/tfix", args: "none", get hint() { return t("修正 SSH 終端機最近一次失敗的指令"); } },
   { name: "/clear", args: "none", get hint() { return t("清空對話並開始新的一輪"); } },
   { name: "/export", args: "none", get hint() { return t("把目前的對話匯出成檔案"); } },
   { name: "/new", args: "none", get hint() { return t("開新話題（保留畫面上的對話，但不再一起送給模型）"); } },
@@ -83,7 +90,11 @@ export function parseSlash(text: string): { cmd: SlashCommand; arg: string } | n
 
 export type SlashAction =
   /** 送出一輪。prompt 是完整指令文、display 是氣泡上顯示的短句，兩者刻意分家（見 displayOf）。 */
-  | { kind: "send"; prompt: string; display: string; mentions?: MentionRef[]; mode?: AgentMode; ignoreSession?: boolean }
+  | {
+      kind: "send"; prompt: string; display: string; mentions?: MentionRef[]; mode?: AgentMode; ignoreSession?: boolean;
+      /** 已組好、要接在 prompt 前面的上下文（終端機輸出這類不是從提及展開來的東西）與其收據。 */
+      extraContext?: string; extraChips?: MentionChip[];
+    }
   /** 面板自己處理，不送出任何東西。 */
   | { kind: "local"; action: "clear" | "export" | "new" }
   /** 前置條件不成立。訊息直接顯示在對話裡，且**不佔用一輪對話**——見 info()。 */
@@ -98,6 +109,13 @@ export interface SlashEnv {
   /** 側欄選中的表。餵給 collectSchemaContext / NL prompt 當「一定要帶上的那張表」。 */
   selectedTable: string | null;
   uiLang: string;
+  /** SSH 終端機快照（見 assistant.ts::publishTerminal）；分頁仍開著才算可用。 */
+  terminal?: TerminalSnapshot | null;
+  terminalOpen?: boolean;
+}
+
+function usableTerminal(env: SlashEnv): TerminalSnapshot | null {
+  return env.terminal && env.terminalOpen ? env.terminal : null;
 }
 
 /**
@@ -348,6 +366,46 @@ function expandSchema(arg: string, env: SlashEnv): SlashAction {
   };
 }
 
+// ---- ⑥ /shell、⑦ /term、⑧ /tfix（SSH 終端機）----
+
+function noTerminalInfo(): SlashAction {
+  return info(t("目前沒有開啟的 SSH 終端機分頁。先從側欄「SSH 主機」開一個終端機再用這條命令。"));
+}
+
+/** NL → shell 指令：與 /sql 同為一次性 generate 回合；結果由面板的 bash 區塊「送到終端機」放進指令列。 */
+function expandCmd(arg: string, env: SlashEnv): SlashAction {
+  const request = arg.trim();
+  if (!request) return info(t("請在 /shell 後面用一句話描述要做什麼，例如：/shell 找出佔最多空間的十個目錄。"));
+  const term = usableTerminal(env);
+  if (!term) return noTerminalInfo();
+  return {
+    kind: "send",
+    prompt: buildNlShellPrompt({ request, snapshot: term, uiLang: env.uiLang }),
+    display: displayOf("/shell", request),
+    mode: "generate",
+    ignoreSession: true,
+  };
+}
+
+function expandOutput(env: SlashEnv): SlashAction {
+  const term = usableTerminal(env);
+  if (!term) return noTerminalInfo();
+  if (!term.lastCommand || !term.lastOutput?.trim()) {
+    return info(t("還沒有透過指令列送出過指令，沒有可解釋的輸出（直接在終端機打的指令不會被擷取；可改用 @term 附整個畫面）。"));
+  }
+  const q = explainOutputAsk(term, null);
+  // prompt 只放一句，內容都在 extraContext（它已含指示與輸出）；display 由 QuickAsk 給。
+  return { kind: "send", prompt: q.display, display: q.display, extraContext: q.extraContext, extraChips: q.chips };
+}
+
+function expandFixCmd(env: SlashEnv): SlashAction {
+  const term = usableTerminal(env);
+  if (!term) return noTerminalInfo();
+  const q = fixLastErrorAsk(term);
+  if (!q) return info(t("還沒有透過指令列送出過指令，沒有可修正的對象。"));
+  return { kind: "send", prompt: q.display, display: q.display, extraContext: q.extraContext, extraChips: q.chips };
+}
+
 // ---- 派送 ----
 
 /**
@@ -370,6 +428,12 @@ export async function expandSlash(cmd: SlashCommand, arg: string, env: SlashEnv)
       return expandNl(arg, env);
     case "/schema":
       return expandSchema(arg, env);
+    case "/shell":
+      return expandCmd(arg, env);
+    case "/term":
+      return expandOutput(env);
+    case "/tfix":
+      return expandFixCmd(env);
     case "/clear":
       return { kind: "local", action: "clear" };
     case "/export":

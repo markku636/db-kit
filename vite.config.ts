@@ -27,6 +27,8 @@ export default defineConfig({
           // CodeMirror 全家桶（含 @lezer 語法樹核心）獨立一包：只有 lazy 的
           // SqlEditor / MongoQueryEditor 等 chunk 依賴它，不進 initial load。
           if (/@codemirror|@uiw|@lezer|[\\/]node_modules[\\/]codemirror/.test(id)) return "codemirror";
+          // xterm.js 全家桶獨立一包：只有 lazy 的 SshTerminalPane 依賴它，沒開終端機就不下載。
+          if (/[\\/]node_modules[\\/]@xterm[\\/]/.test(id)) return "xterm";
           // React 核心獨立一包：快取穩定（App 改版時 vendor chunk hash 不變）。
           if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return "react-vendor";
         },

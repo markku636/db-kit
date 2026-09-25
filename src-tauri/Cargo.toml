@@ -68,6 +68,12 @@ bigdecimal = "0.4"
 clap = { version = "4", features = ["derive", "env"] }
 # SSH Tunnel：純 Rust。用 ring 當 crypto backend（避免 aws-lc-sys 需要 NASM 才能在 Windows 編譯）。
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
+# SFTP 子系統（SSH 終端機分頁的檔案瀏覽 / 上下傳）：純 Rust、與 russh 版本無耦合，套在 russh channel 的
+# `into_stream()` 上即可。核心層即用（`ssh/sftp.rs` 不依賴 Tauri），故不藏在 gui feature 後。
+russh-sftp = { version = "3.0", default-features = false }
+# russh `ChannelMsg::Data` 的 payload 型別；終端機讀端測試要能自己組 `ChannelMsg`，且 `data_bytes` 吃 `Into<Bytes>`。
+# 交給 IPC channel 的是 `Vec<u8>`（`InvokeResponseBody::Raw` 只收 Vec），合併緩衝直接 `mem::take` 零複製。
+bytes = "1"
 # 取 OS 設定目錄（SSH known-hosts 指紋存放位置；CLI 亦以此推導與 GUI 相同的設定目錄）。
 dirs = "6"
 # 連線設定加密匯出 / 匯入（含密碼；passphrase 經 Argon2 派生金鑰 + AES-256-GCM）。

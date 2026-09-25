@@ -41,9 +41,24 @@ const MANY_CONNECTIONS = Array.from({ length: 40 }, (_, i) => ({
   // 前 30 筆分三組、後 10 筆留未分組 —— 兩種區段都在畫面上。
   group_id: i < 30 ? MANY_GROUPS[i % 3].id : null,
 }));
+// SSH 終端機情境改用 xterm 的 DOM renderer：無頭 Chrome 的 WebGL 不保證可用，
+// 而且只有 DOM 渲染的文字才在 .xterm-rows 讀得到（WebGL 畫在 canvas 上）。
+const SSH_STORAGE_SEED = { ...FX.STORAGE_SEED, "dbkit:ssh.prefs": { renderer: "dom" } };
 const CASE_FX = {
   "sidebar-scroll-reaches-last": { CONNECTIONS: MANY_CONNECTIONS, CONN_GROUPS: MANY_GROUPS },
+  "ssh-terminal": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ssh-ai-suggest": { STORAGE_SEED: SSH_STORAGE_SEED },
 };
+
+// xterm 目前畫面（DOM renderer）的純文字。
+const termText = (page) => page.evaluate(() => document.querySelector(".xterm-rows")?.innerText ?? "");
+async function openSshWeb01(page) {
+  const tree = page.locator("[data-ssh-host-tree]");
+  await tree.getByText("web-01", { exact: true }).first().dblclick();
+  await page.waitForFunction(
+    () => (document.querySelector(".xterm-rows")?.innerText ?? "").includes("deploy@web-01"), null, { timeout: 10000 },
+  ).catch(() => {});
+}
 
 // 目前開啟的右鍵選單裡的所有項目文字（選單一律是 fixed z-[90] 的面板）。
 const menuItems = (page) =>
@@ -57,6 +72,118 @@ async function closeMenu(page) {
 
 // ── 情境 ───────────────────────────────────────────────────────────────
 const CASES = {
+  // SSH 終端機：側欄「SSH 主機」雙擊開分頁 → xterm 印 banner → 鍵入有回聲 → 指令列送 ls → SFTP 列出檔案 → 分頁右鍵。
+  async "ssh-terminal"(page) {
+    check("側欄有「SSH 主機」區塊", (await page.locator("[data-ssh-host-tree]").count()) > 0);
+    await openSshWeb01(page);
+    check("終端機分頁開啟並印出提示符", (await termText(page)).includes("deploy@web-01"), (await termText(page)).slice(0, 200));
+
+    await page.locator(".xterm-helper-textarea").first().focus();
+    await page.keyboard.type("echo hi");
+    await sleep(300);
+    check("鍵入的字元有回聲", (await termText(page)).includes("echo hi"));
+    await page.keyboard.press("Enter");
+    await sleep(400);
+    check("Enter 後回到新的提示符", ((await termText(page)).match(/deploy@web-01/g) ?? []).length >= 2);
+
+    const compose = page.getByTestId("ssh-compose");
+    check("有命令列輸入條", (await compose.count()) > 0);
+    await compose.fill("ls");
+    await compose.press("Enter");
+    await sleep(500);
+    check("指令列送出的 ls 有輸出", (await termText(page)).includes("backup.tar.gz"), (await termText(page)).slice(-300));
+
+    // Ctrl+V 走原生 paste 事件、由 xterm 自己接——多行內容不先確認的話，每一行都會被當成 Enter 執行。
+    const pasteInto = (text) => page.evaluate((s) => {
+      const ta = document.querySelector(".xterm-helper-textarea");
+      const dt = new DataTransfer();
+      dt.setData("text/plain", s);
+      ta.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, text);
+    await page.locator(".xterm-helper-textarea").first().focus();
+    await pasteInto("pwd\nls");
+    await sleep(300);
+    check("Ctrl+V 多行貼上先跳確認框", (await page.getByText(/貼上內容含 2 行/).count()) > 0);
+    await page.getByRole("button", { name: "取消", exact: true }).last().click();
+    await sleep(300);
+    check("取消多行貼上後什麼都沒送出", !(await termText(page)).includes("/home/deploy"));
+    await pasteInto("pwd\nls");
+    await sleep(300);
+    await page.getByRole("button", { name: "貼上", exact: true }).last().click();
+    await sleep(500);
+    check("確認後多行貼上逐行執行", (await termText(page)).includes("/home/deploy"), (await termText(page)).slice(-300));
+
+    await page.getByRole("button", { name: "開啟 SFTP" }).first().click();
+    const sftp = page.getByTestId("sftp-panel");
+    await sftp.getByText("backup.tar.gz", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    // 開在家目錄而不是根目錄：開啟後更新 sftpId 會觸發重列，曾經拿舊的 "/" 蓋掉家目錄。
+    check("SFTP 面板開在家目錄並列出檔案",
+      (await sftp.getByText("logs", { exact: true }).count()) > 0 && (await sftp.getByText("backup.tar.gz", { exact: true }).count()) > 0,
+      (await sftp.innerText().catch(() => "(no sftp panel)")).slice(0, 300));
+    check("麵包屑停在 /home/deploy", (await sftp.getByRole("button", { name: "deploy", exact: true }).count()) > 0);
+    if ((await sftp.getByText("logs", { exact: true }).count()) > 0) {
+      await sftp.getByText("logs", { exact: true }).first().dblclick();
+      await sftp.getByText("app.log", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+      check("雙擊資料夾進入 logs", (await sftp.getByText("app.log", { exact: true }).count()) > 0);
+    }
+    // 關掉再打開：回到剛才的資料夾，不是重新從家目錄開始。
+    await page.getByRole("button", { name: "關閉 SFTP" }).first().click();
+    await sleep(300);
+    await page.getByRole("button", { name: "開啟 SFTP" }).first().click();
+    await sftp.getByText("app.log", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("SFTP 面板重開後回到上次的資料夾", (await sftp.getByText("app.log", { exact: true }).count()) > 0);
+
+    await page.locator("span.mono", { hasText: "web-01" }).first().click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    const has = (s) => items.some((i) => i.includes(s));
+    check("終端機分頁右鍵：複製分頁", has("複製分頁"), items.join(" | "));
+    check("終端機分頁右鍵：開啟 SFTP", has("開啟 SFTP"));
+    check("終端機分頁右鍵：關閉", has("關閉"));
+    await closeMenu(page);
+    check("沒有未實作的 SSH command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // AI 協助（建議模式）：終端機開著時問 AI → 回覆的 bash 區塊有「送到終端機」→ 指令進命令列輸入條、不直接執行；
+  // 危險指令（rm -rf）按「執行並回饋」先跳確認框，取消後假 shell 一行都沒收到。AI 本身沒有 shell 工具。
+  async "ssh-ai-suggest"(page) {
+    await openSshWeb01(page);
+    await page.getByRole("button", { name: "AI 助手" }).first().click();
+    await sleep(600);
+    const input = page.getByPlaceholder(/輸入問題/).first();
+    check("AI 面板有輸入框", (await input.count()) > 0);
+    await input.fill("列出 nginx 狀態");
+    await input.press("Enter");
+    await page.waitForFunction(() => (document.querySelector("#root")?.innerText ?? "").includes("systemctl status nginx"), null, { timeout: 8000 }).catch(() => {});
+    const sendBtn = page.getByRole("button", { name: "送到終端機" });
+    check("bash 區塊有「送到終端機」", (await sendBtn.count()) > 0, (await page.locator("#root").innerText()).slice(-500));
+    if ((await sendBtn.count()) > 0) {
+      await sendBtn.first().click();
+      await sleep(300);
+      const compose = page.getByTestId("ssh-compose");
+      const val = await compose.inputValue();
+      const writes = await page.evaluate(() => window.__DBKIT_SSH_WRITES__.length);
+      check("指令進了命令列輸入條、沒有直接執行", /systemctl status nginx/.test(val) && writes === 0, `compose=${JSON.stringify(val)} writes=${writes}`);
+      await compose.fill("");
+    }
+
+    await input.fill("幫我刪除 /tmp 的暫存");
+    await input.press("Enter");
+    await page.waitForFunction(() => (document.querySelector("#root")?.innerText ?? "").includes("rm -rf /tmp/cache"), null, { timeout: 8000 }).catch(() => {});
+    const runBtn = page.getByRole("button", { name: "執行並回饋" });
+    check("危險 bash 區塊也有「執行並回饋」", (await runBtn.count()) > 0, (await page.locator("#root").innerText()).slice(-500));
+    if ((await runBtn.count()) > 0) {
+      await runBtn.last().click();
+      await sleep(500);
+      check("危險指令先跳確認框（標出遞迴刪除）", (await page.getByText(/遞迴刪除/).count()) > 0, (await page.locator("#root").innerText()).slice(-400));
+      const cancel = page.getByRole("button", { name: "取消", exact: true });
+      if ((await cancel.count()) > 0) await cancel.last().click();
+      await sleep(300);
+      check("取消後沒有任何指令送進 shell", await page.evaluate(() => window.__DBKIT_SSH_WRITES__.length === 0));
+    }
+  },
+
   // 結構快取徽章：MySQL 查詢分頁要顯示快取時間並可點；Kafka 這種沒有欄位結構的連線不該出現。
   // 徽章是「自動完成用的是哪個時間點的結構」的唯一告知處，消失了使用者就只能盲信提示。
   async "schema-cache-badge"(page) {

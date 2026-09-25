@@ -85,6 +85,7 @@ pub fn run() {
             pubsub: Arc::new(Mutex::new(std::collections::HashMap::new())),
             agent_jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             llm_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            ssh: Arc::new(ssh::SshRuntime::new()),
             #[cfg(feature = "kafka")]
             kafka_tails: Arc::new(Mutex::new(std::collections::HashMap::new())),
             #[cfg(feature = "kafka")]
@@ -424,6 +425,32 @@ pub fn run() {
             commands::list_backup_history,
             commands::restore_from_history,
             commands::clear_history,
+            commands::ssh::ssh_sessions_list,
+            commands::ssh::ssh_session_save,
+            commands::ssh::ssh_session_remove,
+            commands::ssh::ssh_sessions_layout_save,
+            commands::ssh::ssh_has_stored_password,
+            commands::ssh::ssh_connect,
+            commands::ssh::ssh_test,
+            commands::ssh::ssh_disconnect,
+            commands::ssh::ssh_hostkey_answer,
+            commands::ssh::ssh_auth_answer,
+            commands::ssh::ssh_term_open,
+            commands::ssh::ssh_term_write,
+            commands::ssh::ssh_term_send_line,
+            commands::ssh::ssh_term_resize,
+            commands::ssh::ssh_term_close,
+            commands::ssh::ssh_sftp_open,
+            commands::ssh::ssh_sftp_close,
+            commands::ssh::ssh_sftp_list,
+            commands::ssh::ssh_sftp_stat,
+            commands::ssh::ssh_sftp_mkdir,
+            commands::ssh::ssh_sftp_rename,
+            commands::ssh::ssh_sftp_remove,
+            commands::ssh::ssh_sftp_read_text,
+            commands::ssh::ssh_sftp_download,
+            commands::ssh::ssh_sftp_upload,
+            commands::ssh::ssh_sftp_cancel,
             agent::agent_detect,
             agent::agent_setup_terminal,
             agent::agent_send,
@@ -442,8 +469,12 @@ pub fn run() {
             // 視窗關閉時，優雅釋放所有連線池（呼應規劃 3.5）。
             if let WindowEvent::CloseRequested { .. } = event {
                 let state = window.state::<AppState>();
-                // close_all 是 async；用 block 確保釋放完成才讓視窗關閉。
-                tauri::async_runtime::block_on(state.manager.close_all());
+                // close_all 是 async；用 block 確保釋放完成才讓視窗關閉。SSH 終端 / SFTP 一併收掉
+                // （abort 讀端、取消傳輸、送 disconnect），否則 shell 會在遠端多活到 TCP 逾時。
+                tauri::async_runtime::block_on(async {
+                    state.manager.close_all().await;
+                    state.ssh.shutdown_all().await;
+                });
             }
         })
         .build(tauri::generate_context!())
@@ -452,7 +483,10 @@ pub fn run() {
             // 程序整體退出時再保險 drain 一次。
             if let RunEvent::Exit = event {
                 let state = app_handle.state::<AppState>();
-                tauri::async_runtime::block_on(state.manager.close_all());
+                tauri::async_runtime::block_on(async {
+                    state.manager.close_all().await;
+                    state.ssh.shutdown_all().await;
+                });
             }
         });
 }

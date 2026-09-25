@@ -57,10 +57,10 @@ const MAX_SCHEMA_CHARS = 8000;
 const MAX_MAPPING_CHARS = 6000;
 
 // 非繁中語系時要求 SQL 註解用該語言（沿 buildContext 慣例）。語言名取自 i18n 的單一真相，
-// 新增語言只要改 i18n.ts。
-export function commentLangLine(uiLang: string): string {
+// 新增語言只要改 i18n.ts。what 讓 shell 指令產生器（sshAiPrompts）借用同一句話。
+export function commentLangLine(uiLang: string, what = "SQL"): string {
   const name = promptLanguageName(uiLang);
-  return name ? `\nWrite any SQL comments in ${name}.` : "";
+  return name ? `\nWrite any ${what} comments in ${name}.` : "";
 }
 
 export interface SqlPromptOpts {

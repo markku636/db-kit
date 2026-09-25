@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
@@ -25,6 +25,15 @@ import {
   sectionize, toPlacements, uniqueGroupName, UNGROUPED_KEY,
 } from "./connGroups";
 import { kindIcon } from "./kindIcons";
+import { SquareTerminal } from "lucide-react";
+import { useResizable, Splitter } from "./ui/resizable";
+import { tabOrder, type SshTab } from "./sshTabs";
+import type { SshSession } from "./sshTypes";
+import { useSshSessions, sessionLabel } from "./sshSessions";
+import { useSshTerminals, termRegistry } from "./sshTerminals";
+import { inTerminal, isAppReserved } from "./ui/keyScope";
+import SshHostTree from "./SshHostTree";
+import SshPrefsSettings from "./SshPrefsSettings";
 import { friendlyDbError } from "./dbErrors";
 import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
@@ -141,6 +150,9 @@ const SqlEditor = lazy(() => import("./SqlEditor"));
 const MongoQueryEditor = lazy(() => import("./MongoQueryEditor"));
 const ElasticQueryEditor = lazy(() => import("./ElasticQueryEditor"));
 const NlQueryBar = lazy(() => import("./NlQueryBar"));
+// SSH 終端機分頁：常駐掛載（切分頁只切 display），所以不能走 lazyOverlay，用 React.lazy + 一次 Suspense。
+const SshTerminalPane = lazy(() => import("./SshTerminalPane"));
+const SshSessionDialog = lazyOverlay(() => import("./SshSessionDialog"));
 // AI 動作（解釋 / 最佳化 / 修正 / 加註解 / 轉方言 / 測試資料）：差異預覽與選單都只在用到時載入。
 const AiDiffDialog = lazyOverlay(() => import("./AiDiffDialog"));
 const AiActionMenu = lazyOverlay(() => import("./AiActionMenu"));
@@ -174,79 +186,14 @@ function openNodeScopedQueryTab() {
   useStore.getState().newQueryTab(buildScopedSql(node), node?.connId);
 }
 
-// ---- 可拖曳分隔線：記憶尺寸（localStorage）+ 指標拖曳調整 ----
-function clampSize(v: number, min: number, max: number) {
-  return Math.max(min, Math.min(v, max));
-}
-
-// axis "x" 調寬度、"y" 調高度；max 可為函式（依視窗大小動態算上限）。
-// 回傳目前尺寸與要綁在分隔線上的 onPointerDown；拖曳結束才寫回 localStorage。
-function useResizable(opts: {
-  storageKey: string;
-  initial: number;
-  min: number;
-  max: number | (() => number);
-  axis: "x" | "y";
-}) {
-  const maxOf = () => (typeof opts.max === "function" ? opts.max() : opts.max);
-  const [size, setSize] = useState<number>(() => {
-    try {
-      const v = localStorage.getItem(opts.storageKey);
-      if (v != null) {
-        const n = parseFloat(v);
-        if (Number.isFinite(n)) return clampSize(n, opts.min, maxOf());
-      }
-    } catch {
-      /* 忽略讀取失敗 */
-    }
-    return opts.initial;
-  });
-
-  const onPointerDown = (e: ReactPointerEvent) => {
-    e.preventDefault();
-    const start = opts.axis === "x" ? e.clientX : e.clientY;
-    const startSize = size;
-    let latest = startSize;
-    const move = (ev: PointerEvent) => {
-      const cur = opts.axis === "x" ? ev.clientX : ev.clientY;
-      latest = clampSize(startSize + (cur - start), opts.min, maxOf());
-      setSize(latest);
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      try { localStorage.setItem(opts.storageKey, String(latest)); } catch { /* 忽略寫入失敗 */ }
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    document.body.style.cursor = opts.axis === "x" ? "col-resize" : "row-resize";
-    document.body.style.userSelect = "none";
-  };
-
-  return { size, onPointerDown };
-}
-
-// 拖曳把手：axis "x" → 直立細條（調左右）、"y" → 水平細條（調上下）。
-function Splitter({ axis, onPointerDown }: { axis: "x" | "y"; onPointerDown: (e: ReactPointerEvent) => void }) {
-  return (
-    <div
-      onPointerDown={onPointerDown}
-      role="separator"
-      aria-orientation={axis === "x" ? "vertical" : "horizontal"}
-      className={
-        "shrink-0 bg-fg/10 hover:bg-accent/60 active:bg-accent transition-colors " +
-        (axis === "x" ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize")
-      }
-    />
-  );
-}
-
+// useResizable / Splitter 搬到 ui/resizable.tsx（SSH 終端機的 SFTP 分割面板也要用），行為不變。
 export default function App() {
   const t = useT();
   // null = 關閉；{ initial } = 開啟（initial 為 null 表新增、為連線表示編輯）
   const [dialog, setDialog] = useState<{ initial: ConnectionConfig | null } | null>(null);
+  // SSH 主機對話框：initial null = 新增（folderId 為預設資料夾）、否則編輯。
+  const [sshDialog, setSshDialog] = useState<{ initial: SshSession | null; folderId: string | null } | null>(null);
+  const sshFolders = useSshSessions((s) => s.folders);
   const [backupOpen, setBackupOpen] = useState(false);
   const [erOpen, setErOpen] = useState(false);
   // 進階物件搜尋（全螢幕 Modal）：null = 關閉。放 App 級以便工具列 / 側欄 / 快捷鍵共用。
@@ -322,6 +269,8 @@ export default function App() {
     const h = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "g" || e.key === "G")) {
         if (document.body.dataset.modalCount) return;
+        if (inTerminal(e)) return; // 終端機內的 Ctrl+Shift+G 留給 shell
+
         if (!activeConn || !connectedIds.has(activeConn.id)) return;
         e.preventDefault();
         setAdvSearch({ connId: activeConn.id, kind: activeConn.kind });
@@ -377,6 +326,8 @@ export default function App() {
     api.listConnectionGroups()
       .then((gs) => useStore.getState().setConnGroups(gs))
       .catch(() => {});
+    // SSH 主機清單另一份檔（ssh_sessions.json），同樣解鎖後才載、失敗不影響資料庫連線。
+    void useSshSessions.getState().load();
   }, [lockState]);
 
   // 啟動時套用目前變體的整套 --c-* CSS 變數（與 index.html 防閃爍腳本的 .light 類別互補）。
@@ -476,15 +427,33 @@ export default function App() {
         <Sidebar
           width={sidebar.size}
           onEdit={(c) => setDialog({ initial: c })}
+          onEditSsh={(s, folderId) => setSshDialog({ initial: s, folderId: folderId ?? null })}
           onAdvSearch={(id, k) => setAdvSearch({ connId: id, kind: k })}
           onLockNow={lockStatus?.password || lockStatus?.biometric ? () => setRelocked(true) : null}
         />
         <Splitter axis="x" onPointerDown={sidebar.onPointerDown} />
-        <MainArea onNewConnection={() => setDialog({ initial: null })} />
+        <MainArea onNewConnection={() => setDialog({ initial: null })} onNewSshSession={() => setSshDialog({ initial: null, folderId: null })} />
         <InfoPanel />
         <AssistantPanel />
       </div>
       <StatusBar />
+      {sshDialog && (
+        <SshSessionDialog
+          open
+          initial={sshDialog.initial}
+          folders={sshFolders}
+          defaultFolderId={sshDialog.folderId}
+          onClose={() => setSshDialog(null)}
+          onSaved={(s) => {
+            // 對話框自己已寫入後端（含 keychain），這裡只要重讀清單。
+            // 「更新」看的是 id 是否已存在（側欄「複製」會帶預填資料進來，那是新增）。
+            const existed = useSshSessions.getState().sessions.some((x) => x.id === s.id);
+            setSshDialog(null);
+            void useSshSessions.getState().load();
+            toast.success(existed ? t("SSH 主機已更新") : t("SSH 主機已儲存"));
+          }}
+        />
+      )}
       {dialog && (
         <ConnectionDialog
           initial={dialog.initial}
@@ -772,6 +741,7 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
           </p>
         </div>
         <SchemaCacheSettings />
+        <SshPrefsSettings />
       </div>
     </Modal>
   );
@@ -1049,6 +1019,16 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
       ["Ctrl+C", t("複製選取格或整塊 (TSV)；工具列顯示範圍統計")],
       [t("雙擊 / 右鍵"), t("檢視內容 / 整列；複製值 / 標題 / 列 / 欄 / 範圍")],
     ]],
+    [t("SSH 終端機"), [
+      ["Ctrl+Shift+T", t("新終端機（列出 SSH 主機）")],
+      ["Ctrl+Shift+W", t("關閉作用中的終端機分頁")],
+      ["Ctrl+Shift+F", t("搜尋終端機內容")],
+      ["Ctrl+Shift+C / Ctrl+Shift+V", t("複製選取 / 貼上（多行貼上會先確認）")],
+      ["Ctrl+= / Ctrl+− / Ctrl+0", t("終端機字級放大 / 縮小 / 還原")],
+      [t("右鍵"), t("有選取＝複製；無選取＝貼上；Shift+右鍵開選單")],
+      ["Enter", t("斷線後按 Enter 重新連線")],
+      [t("其餘 Ctrl 組合"), t("原樣送進 shell（Ctrl+C / D / Z / L / R / W…）")],
+    ]],
     [t("分頁與導覽"), [
       ["Ctrl+Tab / Ctrl+Shift+Tab", t("切換下一 / 上一個分頁")],
       ["Ctrl+1…9", t("跳到第 N 個分頁（9＝最後）")],
@@ -1143,7 +1123,7 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 }
 
 // ---- 左側連線/物件樹 ----
-function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
+function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; onEditSsh: (s: SshSession | null, folderId?: string | null) => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
   const t = useT();
   const { connections, connGroups, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
   // ---- 連線群組（側欄排版）----
@@ -1304,6 +1284,7 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
     const h = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
         if (document.body.dataset.modalCount) return; // 有對話框時讓路
+        if (inTerminal(e)) return; // shell 的 Ctrl+K 是 kill-line
         e.preventDefault();
         setPalette((p) => !p);
       }
@@ -2963,6 +2944,15 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
           </div>
         );
       })}
+      {/* SSH 主機：獨立於資料庫連線的區塊（不進 DbKind / selectedNode）；雙擊開終端機分頁。 */}
+      <SshHostTree
+        q={q}
+        onOpen={(target, title, sessionId, opts) => {
+          const key = useStore.getState().openSshTab({ target, title, sessionId });
+          if (opts?.sftp) useSshTerminals.getState().patch(key, { sftpOpen: true });
+        }}
+        onEdit={onEditSsh}
+      />
       </div>
 
       {/* 以下皆為 fixed 定位的選單 / 對話框：放在捲動視窗之外，不受其 overflow 影響，
@@ -3054,6 +3044,14 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
                 : []),
               ...(connectedIds.has(menu.id)
                 ? [[t("進階搜尋…"), () => onAdvSearch(menuConn.id, menuConn.kind), false] as [string, () => void, boolean]]
+                : []),
+              // 有設 SSH tunnel 的連線：沿用同一組跳板憑證直接開終端機（不論資料庫是否已連線）。
+              ...(menuConn.ssh_enabled
+                ? [[t("開啟 SSH 終端機"), () => useStore.getState().openSshTab({
+                    target: { kind: "connection", id: menuConn.id },
+                    title: `${menuConn.ssh_username || "?"}@${menuConn.ssh_host || "?"}`,
+                    connId: menuConn.id,
+                  }), false] as [string, () => void, boolean]]
                 : []),
               ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres")
                 ? [
@@ -3483,12 +3481,28 @@ function Sidebar({ onEdit, width, onAdvSearch, onLockNow }: { onEdit: (c: Connec
 }
 
 // ---- 中央主工作區：分頁式（表分頁 + 查詢） ----
-function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
+function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () => void; onNewSshSession: () => void }) {
   const t = useT();
   const { connections, activeId, connectedIds, tabs, activeTabKey, setActiveTab, closeTab, closeOtherTabs, closeAllTabs,
-    queryTabs, addQueryTab, closeQueryTab, closeOtherQueryTabs, closeAllQueryTabs } = useStore();
+    queryTabs, addQueryTab, closeQueryTab, closeOtherQueryTabs, closeAllQueryTabs,
+    sshTabs, openSshTab, closeSshTab, closeOtherSshTabs, closeAllSshTabs, renameSshTab } = useStore();
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   const [queryTabMenu, setQueryTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [sshTabMenu, setSshTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
+  // 分頁列的「新終端機」浮層（列出已存的 SSH 主機）。
+  const [sshPicker, setSshPicker] = useState<{ x: number; y: number } | null>(null);
+  // 只訂閱「各分頁的連線狀態」：rt 裡的標題 / cwd 每個提示符都會變，訂閱整包會讓整個主區跟著重繪。
+  // 選成字串，zustand 以值比較，狀態沒變就不重繪。
+  const sshStatusKey = useSshTerminals((s) => sshTabs.map((tb) => `${tb.key}=${s.rt[tb.key]?.status ?? ""}`).join("|"));
+  const sshStatusOf = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const part of sshStatusKey.split("|")) {
+      const i = part.lastIndexOf("=");
+      if (i > 0) m.set(part.slice(0, i), part.slice(i + 1));
+    }
+    return m;
+  }, [sshStatusKey]);
+  const sshSessions = useSshSessions((s) => s.sessions);
   const activeTabRef = useRef<HTMLDivElement>(null);
   const queryTabRef = useRef<HTMLButtonElement>(null);
 
@@ -3497,9 +3511,10 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
 
   const canUse = activeId && connectedIds.has(activeId);
   const activeTab = tabs.find((tab) => tab.key === activeTabKey) ?? null;
-  // 作用中的查詢分頁 id（非表分頁時）：解析未知 / null → 第一個查詢分頁（home 可被關掉，不能寫死 __query__）。
+  const activeSsh: SshTab | null = sshTabs.find((tab) => tab.key === activeTabKey) ?? null;
+  // 作用中的查詢分頁 id（非表 / SSH 分頁時）：解析未知 / null → 第一個查詢分頁（home 可被關掉，不能寫死 __query__）。
   // 查詢分頁可全部關光 → undefined，此時主區顯示空狀態（見下方 render）。
-  const activeQueryId: string | undefined = activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : queryTabs[0];
+  const activeQueryId: string | undefined = activeSsh ? undefined : activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : queryTabs[0];
 
   // 分頁鍵盤操作：Ctrl/Cmd+N 開新查詢、Ctrl/Cmd+Shift+N 新增連線、Ctrl/Cmd+W 關閉、
   // Ctrl+Tab / Ctrl+Shift+Tab 循環、Ctrl+1..9 跳轉（9=最後一個，含查詢分頁）。
@@ -3507,6 +3522,8 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       if (document.body.dataset.modalCount) return; // 有對話框開啟時不要在背後切換 / 關閉分頁
+      // 焦點在 SSH 終端機裡：Ctrl+W / T / N / 數字都是 readline 鍵，要進 shell；只有 app 保留鍵（Shift 組合、Tab）才處理。
+      if (inTerminal(e) && !isAppReserved(e)) return;
       if (e.key === "n" || e.key === "N") {
         // Ctrl+N 開「新查詢分頁」：依目前選取的樹節點帶入範圍（USE + SELECT / USE / 空白）；Ctrl+Shift+N 新增連線。
         // 永遠開新分頁、不覆蓋現有編輯器內容（對標 DataGrip New Query Console）。
@@ -3519,14 +3536,24 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
         return;
       }
       if (e.key === "w" || e.key === "W") {
-        // 表分頁 → 關表；查詢分頁 → 關該查詢分頁（含第一個，可一路關到零）。
+        // 表分頁 → 關表；查詢分頁 → 關該查詢分頁（含第一個，可一路關到零）；SSH 分頁 → 關終端機。
+        // Ctrl+Shift+W 是終端機內也能用的「關閉作用中分頁」（Ctrl+W 在 shell 裡是刪一個字）。
         if (activeTabKey && tabs.some((tab) => tab.key === activeTabKey)) { e.preventDefault(); closeTab(activeTabKey); return; }
         if (activeTabKey && queryTabs.includes(activeTabKey)) { e.preventDefault(); closeQueryTab(activeTabKey); return; }
+        if (activeTabKey && sshTabs.some((tab) => tab.key === activeTabKey)) { e.preventDefault(); closeSshTab(activeTabKey); return; }
         return;
       }
-      if (e.key === "t" || e.key === "T") { e.preventDefault(); addQueryTab(); return; } // Ctrl+T 新增查詢分頁
-      // 所有表分頁後接所有查詢分頁，組成可循環 / 跳轉的鍵序列。
-      const keys = [...tabs.map((tab) => tab.key), ...queryTabs];
+      if (e.key === "t" || e.key === "T") {
+        e.preventDefault();
+        // Ctrl+T 新增查詢分頁；Ctrl+Shift+T 新終端機（列出 SSH 主機；沒有主機就直接開新增對話框）。
+        if (!e.shiftKey) { addQueryTab(); return; }
+        if (useSshSessions.getState().sessions.length === 0) { onNewSshSession(); return; }
+        const anchor = sshPickerBtnRef.current?.getBoundingClientRect();
+        setSshPicker({ x: anchor?.left ?? 200, y: anchor ? anchor.bottom + 4 : 60 });
+        return;
+      }
+      // 所有表分頁後接所有查詢分頁、再接 SSH 分頁，組成可循環 / 跳轉的鍵序列。
+      const keys = tabOrder(tabs, queryTabs, sshTabs);
       if (e.key === "Tab") {
         e.preventDefault();
         const cur = keys.indexOf(activeTabKey ?? "");
@@ -3544,7 +3571,8 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tabs, activeTabKey, setActiveTab, closeTab, onNewConnection, queryTabs, addQueryTab, closeQueryTab]);
+  }, [tabs, activeTabKey, setActiveTab, closeTab, onNewConnection, queryTabs, addQueryTab, closeQueryTab, sshTabs, closeSshTab, onNewSshSession]);
+  const sshPickerBtnRef = useRef<HTMLButtonElement>(null);
 
   // 作用中分頁捲入可視範圍（Ctrl+W / Ctrl+Tab 切換後不會被擠到畫面外；含查詢分頁）。
   useEffect(() => {
@@ -3553,7 +3581,7 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [activeTabKey, queryTabs]);
 
-  if (!canUse && tabs.length === 0) {
+  if (!canUse && tabs.length === 0 && sshTabs.length === 0) {
     const noConns = connections.length === 0;
     return (
       <div className="flex-1 flex items-center justify-center min-w-0">
@@ -3638,10 +3666,51 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
             />
           );
         })}
+        {sshTabs.map((tab) => {
+          const st = sshStatusOf.get(tab.key);
+          const dot = st === "connected" ? "bg-success" : st === "connecting" ? "bg-warning animate-pulse" : "bg-danger";
+          const isActive = tab.key === activeTabKey;
+          return (
+            <div
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeSshTab(tab.key); } }}
+              onContextMenu={(e) => { e.preventDefault(); setActiveTab(tab.key); setSshTabMenu({ key: tab.key, x: e.clientX, y: e.clientY }); }}
+              title={t("{title}（SSH 終端機，中鍵關閉）", { title: tab.title })}
+              className={`flex items-center gap-2 pl-3 pr-2 py-1.5 text-xs border-r border-fg/10 cursor-pointer whitespace-nowrap ${
+                isActive ? "bg-app text-fg shadow-[inset_0_-2px_0_rgb(var(--c-accent))]" : "text-fg/50 hover:bg-fg/5"
+              }`}
+            >
+              <Icon icon={SquareTerminal} size={13} className="shrink-0 text-emerald-300/80" />
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} aria-hidden />
+              <span className="mono">{tab.title}</span>
+              <button
+                type="button"
+                aria-label={t("關閉分頁 {table}", { table: tab.title })}
+                title={t("關閉分頁")}
+                onClick={(e) => { e.stopPropagation(); closeSshTab(tab.key); }}
+                className="w-5 h-5 flex items-center justify-center rounded hover:bg-fg/15 text-fg/40 hover:text-fg/80"
+              >
+                <Icon icon={X} size={12} />
+              </button>
+            </div>
+          );
+        })}
         <button type="button" onClick={addQueryTab} title={t("新增查詢分頁（Ctrl+T）")}
           aria-label={t("新增查詢分頁")}
           className="px-2 py-1.5 text-fg/40 hover:text-fg/80 hover:bg-fg/5 border-r border-fg/10 shrink-0">
           <Icon icon={Plus} size={14} />
+        </button>
+        <button type="button" ref={sshPickerBtnRef}
+          onClick={(e) => {
+            if (sshSessions.length === 0) { onNewSshSession(); return; }
+            const r = e.currentTarget.getBoundingClientRect();
+            setSshPicker({ x: r.left, y: r.bottom + 4 });
+          }}
+          title={t("新增 SSH 終端機（Ctrl+Shift+T）")}
+          aria-label={t("新增 SSH 終端機")}
+          className="px-2 py-1.5 text-fg/40 hover:text-fg/80 hover:bg-fg/5 border-r border-fg/10 shrink-0">
+          <Icon icon={SquareTerminal} size={14} />
         </button>
       </div>
 
@@ -3649,7 +3718,7 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
           查詢分頁全部關光且無表分頁在前景 → 空狀態（分頁列的「+」仍可開新查詢）。 */}
       {activeTab ? (
         <TableView tab={activeTab} />
-      ) : activeQueryId ? (
+      ) : activeSsh ? null : activeQueryId ? (
         <QueryPane key={activeQueryId} tabId={activeQueryId} />
       ) : (
         <div className="flex-1 flex items-center justify-center min-w-0">
@@ -3665,6 +3734,12 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
           />
         </div>
       )}
+      {/* SSH 終端機：全部常駐掛載、只有作用中的那個顯示 —— xterm buffer 與 shell 不因切分頁消失。 */}
+      <Suspense fallback={null}>
+        {sshTabs.map((tab) => (
+          <SshTerminalPane key={tab.key} tab={tab} active={tab.key === activeTabKey} />
+        ))}
+      </Suspense>
 
       {tabMenu && (
         <MenuPanel x={tabMenu.x} y={tabMenu.y} minW={140} onClose={() => setTabMenu(null)}>
@@ -3705,8 +3780,61 @@ function MainArea({ onNewConnection }: { onNewConnection: () => void }) {
           })()}
         </MenuPanel>
       )}
+
+      {sshTabMenu && (
+        <MenuPanel x={sshTabMenu.x} y={sshTabMenu.y} minW={160} onClose={() => setSshTabMenu(null)}>
+          {(() => {
+            const key = sshTabMenu.key;
+            const tab = sshTabs.find((x) => x.key === key);
+            const st = sshStatusOf.get(key);
+            const items: [string, () => void][] = [];
+            if (st === "disconnected" || st === "error") items.push([t("重新連線"), () => useSshTerminals.getState().rt[key] && termReconnect(key)]);
+            if (tab) items.push([t("複製分頁"), () => openSshTab({ target: tab.target, title: tab.title, connId: tab.connId, sessionId: tab.sessionId })]);
+            items.push([t("重新命名…"), () => {
+              void uiPrompt(t("分頁名稱"), { title: t("重新命名分頁"), defaultValue: tab?.title ?? "" }).then((v) => { if (v?.trim()) renameSshTab(key, v.trim()); });
+            }]);
+            items.push([t("開啟 SFTP"), () => useSshTerminals.getState().patch(key, { sftpOpen: true })]);
+            items.push([t("關閉"), () => closeSshTab(key)]);
+            if (sshTabs.length > 1) {
+              items.push([t("關閉其他終端機"), () => closeOtherSshTabs(key)]);
+              items.push([t("全部關閉終端機"), () => closeAllSshTabs()]);
+            }
+            return items.map(([label, fn]) => (
+              <button key={label} type="button"
+                onClick={() => { setSshTabMenu(null); fn(); }}
+                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+                {label}
+              </button>
+            ));
+          })()}
+        </MenuPanel>
+      )}
+
+      {sshPicker && (
+        <MenuPanel x={sshPicker.x} y={sshPicker.y} minW={200} onClose={() => setSshPicker(null)}>
+          {sshSessions.map((s) => (
+            <button key={s.id} type="button"
+              onClick={() => { setSshPicker(null); openSshTab({ target: { kind: "session", id: s.id }, title: sessionLabel(s), sessionId: s.id }); }}
+              className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+              <Icon icon={SquareTerminal} size={12} className="text-emerald-300/80 shrink-0" />
+              <span className="truncate">{sessionLabel(s)}</span>
+              <span className="ml-auto text-[10px] text-fg/35 mono truncate max-w-[120px]">{s.username}@{s.host}</span>
+            </button>
+          ))}
+          <div className="border-t border-fg/10 my-1" />
+          <button type="button" onClick={() => { setSshPicker(null); onNewSshSession(); }}
+            className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/60">
+            {t("新增 SSH 主機…")}
+          </button>
+        </MenuPanel>
+      )}
     </div>
   );
+}
+
+/** 分頁右鍵「重新連線」：透過 termRegistry 叫該分頁的 pane 重連（pane 自己持有 xterm 與連線）。 */
+function termReconnect(tabKey: string) {
+  termRegistry.get(tabKey)?.reconnect();
 }
 
 // 單一查詢分頁鈕（受控）：closable 時顯示關閉鈕，中鍵亦可關。任一分頁（含第一個 home「查詢」）皆可關。

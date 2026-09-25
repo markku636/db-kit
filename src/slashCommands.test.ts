@@ -85,9 +85,9 @@ beforeEach(() => {
 // ---- 清單 ----
 
 describe("SLASH_COMMANDS", () => {
-  it("八條命令、名稱不重複且都帶前導斜線", () => {
+  it("十一條命令、名稱不重複且都帶前導斜線", () => {
     const names = SLASH_COMMANDS.map((c) => c.name);
-    expect(names).toEqual(["/explain", "/fix", "/optimize", "/sql", "/schema", "/clear", "/export", "/new"]);
+    expect(names).toEqual(["/explain", "/fix", "/optimize", "/sql", "/schema", "/shell", "/term", "/tfix", "/clear", "/export", "/new"]);
     expect(new Set(names).size).toBe(names.length);
   });
 
@@ -482,5 +482,83 @@ describe("expandSlash 的保底", () => {
     const a = await expandSlash(fake, "", env());
     expect(a.kind).toBe("info");
     if (a.kind === "info") expect(a.message).toContain("/whatever");
+  });
+});
+
+// ---- SSH 終端機：/shell、/term、/tfix ----
+
+describe("SSH 終端機命令", () => {
+  const term = (over?: Partial<import("./chatTypes").TerminalSnapshot>): import("./chatTypes").TerminalSnapshot => ({
+    tabKey: "__ssh__:1",
+    termId: "t1",
+    title: "web-01",
+    host: "10.20.0.15",
+    user: "deploy",
+    connId: null,
+    status: "connected",
+    os: "Ubuntu 22.04",
+    shell: "bash",
+    cwd: "/var/www",
+    lastCommand: "systemctl status nginx",
+    lastOutput: "● nginx.service - failed",
+    tail: "deploy@web-01:~$ systemctl status nginx\n● nginx.service - failed",
+    updatedAt: 1,
+    ...over,
+  });
+  const withTerm = (over?: Partial<import("./chatTypes").TerminalSnapshot>) =>
+    env({ connId: null, kind: null, db: "", terminal: term(over), terminalOpen: true });
+
+  it("新命令不搶走既有的唯一前綴（/c → /clear、/f → /fix、/o → /optimize）", () => {
+    expect(parseSlash("/c")?.cmd.name).toBe("/clear");
+    expect(parseSlash("/f")?.cmd.name).toBe("/fix");
+    expect(parseSlash("/o")?.cmd.name).toBe("/optimize");
+    expect(parseSlash("/sh 找大檔")?.cmd.name).toBe("/shell");
+    expect(parseSlash("/te")?.cmd.name).toBe("/term");
+    expect(parseSlash("/tf")?.cmd.name).toBe("/tfix");
+    expect(parseSlash("/t")).toBeNull(); // term / tfix
+  });
+
+  it("沒有開著的終端機 → info，不送出", async () => {
+    for (const name of ["/shell", "/term", "/tfix"]) {
+      const a = await expandSlash(cmd(name), "找出大檔", env());
+      expect(a.kind).toBe("info");
+      if (a.kind === "info") expect(a.message).toContain("SSH 主機");
+    }
+    // 快照還在但分頁已關：一樣視為沒有。
+    const closed = await expandSlash(cmd("/term"), "", env({ terminal: term(), terminalOpen: false }));
+    expect(closed.kind).toBe("info");
+  });
+
+  it("/shell：generate + ignoreSession，prompt 帶主機與需求，不需要資料庫連線", async () => {
+    const a = await send("/shell", "找出佔最多空間的十個目錄", withTerm());
+    expect(a.mode).toBe("generate");
+    expect(a.ignoreSession).toBe(true);
+    expect(a.prompt).toContain("找出佔最多空間的十個目錄");
+    expect(a.prompt).toContain("deploy@10.20.0.15");
+    expect(a.prompt).toContain("Ubuntu 22.04");
+    expect(a.display).toContain("/shell");
+  });
+
+  it("/shell 沒給需求 → info", async () => {
+    expect(await kindOf("/shell", "  ", withTerm())).toBe("info");
+  });
+
+  it("/term：輸出走 extraContext（圍籬 + 不可信前言），氣泡只顯示短句", async () => {
+    const a = await send("/term", "", withTerm());
+    expect(a.extraContext).toContain("nginx.service - failed");
+    expect(a.extraContext).toContain("不可信的原始輸出資料");
+    expect(a.display.length).toBeLessThan(40);
+    expect(a.extraChips?.length).toBeGreaterThan(0);
+  });
+
+  it("/term、/tfix：沒透過指令列送過指令 → info（直接在終端機打的不會被擷取）", async () => {
+    expect(await kindOf("/term", "", withTerm({ lastCommand: null, lastOutput: null }))).toBe("info");
+    expect(await kindOf("/tfix", "", withTerm({ lastCommand: null, lastOutput: null }))).toBe("info");
+  });
+
+  it("/tfix：帶上失敗的指令與輸出", async () => {
+    const a = await send("/tfix", "", withTerm());
+    expect(a.extraContext).toContain("systemctl status nginx");
+    expect(a.extraContext).toContain("nginx.service - failed");
   });
 });

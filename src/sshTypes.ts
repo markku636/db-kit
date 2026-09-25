@@ -1,0 +1,171 @@
+// SSH 終端機 / SFTP 的前後端共用 DTO。
+// 欄位名與 Rust serde 完全鏡射（snake_case；tagged enum 用 `kind`），前端不做任何改名轉換。
+// 放獨立檔而非 api.ts：純邏輯模組（sshTabs / sshCapture / AI 提示）只 `import type`，不拖進 invoke。
+
+/** 認證方式；對映 Rust `ssh::SshAuthKind`。 */
+export type SshAuthKind = "password" | "key" | "agent" | "keyboard_interactive";
+
+/** 終端機選項；後端只解讀 term / startup_command / keepalive / env，`ui` 是前端自己的（字級、配色等）。 */
+export interface SshTermOptions {
+  term: string;
+  encoding: string;
+  startup_command: string;
+  keepalive_secs: number;
+  connect_timeout_secs: number;
+  env: Record<string, string>;
+  ui: Record<string, string>;
+}
+
+/** 已儲存的 SSH 主機。刻意沒有 password / passphrase 欄位——秘密只進 OS keychain，永不落地、永不回前端。 */
+export interface SshSession {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  auth: SshAuthKind;
+  private_key_path: string;
+  folder_id: string | null;
+  options: SshTermOptions;
+}
+
+export interface SshFolder {
+  id: string;
+  name: string;
+  parent_id: string | null;
+}
+
+export interface SshSessionsFile {
+  version: number;
+  folders: SshFolder[];
+  sessions: SshSession[];
+}
+
+/** 側欄拖放 / 移到資料夾後回存的版面：每個 session 落在哪個資料夾（null = 未分類）。 */
+export interface SshPlacement {
+  id: string;
+  folder_id: string | null;
+}
+
+/**
+ * 連線目標。`connection` 是沿用資料庫連線的 SSH tunnel 設定（後端從 keychain 取憑證）；
+ * `ad_hoc` 供「測試連線」與快速連線用，session 不落地，密碼直接帶過去。
+ */
+export type SshTargetRef =
+  | { kind: "session"; id: string }
+  | { kind: "connection"; id: string }
+  | { kind: "ad_hoc"; session: SshSession; password?: string | null; passphrase?: string | null };
+
+export interface SshConnInfo {
+  conn_id: string;
+  host: string;
+  port: number;
+  username: string;
+}
+
+export type SshHostKeyDecision = "accept_save" | "accept_once" | "reject";
+
+/** 後端事件 `ssh-hostkey-prompt`：首次連線或指紋變更時要使用者決定。 */
+export interface SshHostKeyPrompt {
+  prompt_id: string;
+  conn_id: string;
+  host_id: string;
+  key_type: string;
+  fingerprint: string;
+  status: "new" | "changed";
+  old_fingerprint?: string | null;
+}
+
+/** 後端事件 `ssh-auth-prompt`：缺密碼 / 私鑰密語 / keyboard-interactive 時向使用者要答案。 */
+export interface SshAuthPrompt {
+  prompt_id: string;
+  conn_id: string;
+  kind: "password" | "passphrase" | "keyboard_interactive";
+  name: string;
+  instructions: string;
+  prompts: { prompt: string; echo: boolean }[];
+}
+
+/** 後端事件 `ssh-term-exit`。 */
+export interface SshTermExit {
+  term_id: string;
+  status: number | null;
+  signal: string | null;
+}
+
+/** 後端事件 `ssh-conn-closed`。 */
+export interface SshConnClosed {
+  conn_id: string;
+  reason: string | null;
+}
+
+export interface SftpEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_symlink: boolean;
+  link_target_is_dir: boolean | null;
+  size: number;
+  /** 修改時間（秒，epoch）；伺服器沒給就是 null。 */
+  mtime: number | null;
+  permissions: number | null;
+  /** `ls -l` 風格字串，如 "drwxr-xr-x"。 */
+  mode: string;
+  uid: number | null;
+  gid: number | null;
+  owner: string | null;
+  group: string | null;
+}
+
+/** `ssh_sftp_read_text` 的結果：小檔預覽（上限 1 MiB），超過就截斷並標記。 */
+export interface SftpText {
+  text: string;
+  truncated: boolean;
+  size: number;
+}
+
+export interface SftpOpenInfo {
+  sftp_id: string;
+  home: string;
+}
+
+/** 後端事件 `ssh-sftp-progress`。 */
+export interface SftpProgress {
+  transfer_id: string;
+  done: number;
+  total: number | null;
+  state: "running" | "done" | "error" | "cancelled";
+  message?: string | null;
+}
+
+/** 前端執行期的連線狀態（不進後端）。 */
+export type SshStatus = "connecting" | "connected" | "disconnected" | "error";
+
+export const SSH_AUTH_KINDS: readonly SshAuthKind[] = ["password", "key", "agent", "keyboard_interactive"];
+
+export function defaultSshTermOptions(): SshTermOptions {
+  return {
+    term: "xterm-256color",
+    encoding: "utf-8",
+    startup_command: "",
+    keepalive_secs: 30,
+    connect_timeout_secs: 0,
+    env: {},
+    ui: {},
+  };
+}
+
+/** 新主機的空白骨架（對話框「新增」用）；id 由呼叫端決定（通常 `crypto.randomUUID()`）。 */
+export function blankSshSession(id: string, folderId: string | null = null): SshSession {
+  return {
+    id,
+    name: "",
+    host: "",
+    port: 22,
+    username: "",
+    auth: "password",
+    private_key_path: "",
+    folder_id: folderId,
+    options: defaultSshTermOptions(),
+  };
+}

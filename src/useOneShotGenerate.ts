@@ -17,8 +17,13 @@ import { useT } from "./i18n";
  * - `edit`（4096 token）：編輯器內改寫，要把整段 SQL 原樣吐回來，1024 對長查詢不夠。
  * - `review`（8192 token）：審查並執行的執行前審查，是一份含修正 SQL 的完整報告。
  */
-export function useOneShotGenerate(opts?: { mode?: Extract<AgentMode, "generate" | "edit" | "review"> }) {
+export function useOneShotGenerate(opts?: {
+  mode?: Extract<AgentMode, "generate" | "edit" | "review">;
+  /** 額外附在 persona 之後的系統提示（SSH 終端機的指令產生器用它帶入「你沒有 shell」守則）。 */
+  systemPrompt?: string;
+}) {
   const mode = opts?.mode ?? "generate";
+  const extraSystem = opts?.systemPrompt ?? "";
   const t = useT();
   const { provider, baseUrls, models } = useAiProvider();
   const reqIdRef = useRef<string | null>(null);
@@ -85,7 +90,7 @@ export function useOneShotGenerate(opts?: { mode?: Extract<AgentMode, "generate"
         baseUrl: baseUrlOf(provider, baseUrls) || null,
         // 技能（skills）不帶：一次性生成要的是「照格式吐一段語句」，
         // 疊上「請附上風險說明」這類技能只會讓輸出多出程式碼區塊以外的東西。
-        systemPrompt: currentSystemPrompt(false),
+        systemPrompt: [currentSystemPrompt(false), extraSystem].filter(Boolean).join("\n\n"),
         // 一次性模式後端不給資料庫工具，故不附連線。
       });
     } catch (e: any) {
@@ -93,7 +98,7 @@ export function useOneShotGenerate(opts?: { mode?: Extract<AgentMode, "generate"
       setRunning(false);
       reqIdRef.current = null;
     }
-  }, [provider, baseUrls, models, mode, t]);
+  }, [provider, baseUrls, models, mode, t, extraSystem]);
 
   const reset = useCallback(() => { setText(""); setError(null); }, []);
 

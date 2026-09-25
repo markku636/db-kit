@@ -29,6 +29,23 @@ pub enum AppError {
     #[error("ssh tunnel error: {0}")]
     Ssh(String),
 
+    /// SSH 認證被伺服器拒絕（帳號 / 密碼 / 金鑰 / OTP 不對）。傳輸層錯誤仍走 `Ssh`。
+    #[error("ssh auth failed: {0}")]
+    SshAuth(String),
+
+    /// host key 驗證失敗：指紋不符、known_hosts 讀寫不到（fail-closed）。
+    #[error("ssh host key rejected: {0}")]
+    SshHostKey(String),
+
+    /// 使用者在 host key / 密碼對話框按了取消，或連線中途被 `ssh_disconnect`。
+    /// 前端收到此碼不該 toast（是使用者自己的動作）。
+    #[error("ssh cancelled by user")]
+    SshCancelled,
+
+    /// SFTP 操作失敗（detail 已依 SFTP 狀態碼本地化）。
+    #[error("sftp error: {0}")]
+    Sftp(String),
+
     /// 查詢超過全域逾時（毫秒）。注意：伺服器端查詢可能仍在執行，
     /// 前端錯誤文案應引導使用者以行程清單（ProcessList）手動 KILL。
     #[error("query timed out after {0} ms")]
@@ -52,6 +69,10 @@ impl AppError {
             AppError::PoolUnavailable => "pool_unavailable",
             AppError::Storage(_) => "storage",
             AppError::Ssh(_) => "ssh",
+            AppError::SshAuth(_) => "ssh_auth",
+            AppError::SshHostKey(_) => "ssh_hostkey",
+            AppError::SshCancelled => "ssh_cancelled",
+            AppError::Sftp(_) => "sftp",
             AppError::Timeout(_) => "timeout",
             AppError::NeedsConfirm(_) => "needs_confirm",
         }
@@ -67,6 +88,10 @@ impl AppError {
             AppError::PoolUnavailable => "ERR_POOL_UNAVAILABLE",
             AppError::Storage(_) => "ERR_STORAGE",
             AppError::Ssh(_) => "ERR_SSH",
+            AppError::SshAuth(_) => "ERR_SSH_AUTH",
+            AppError::SshHostKey(_) => "ERR_SSH_HOSTKEY",
+            AppError::SshCancelled => "ERR_SSH_CANCELLED",
+            AppError::Sftp(_) => "ERR_SFTP",
             AppError::Timeout(_) => "ERR_TIMEOUT",
             AppError::NeedsConfirm(_) => "ERR_NEEDS_CONFIRM",
         }
@@ -83,6 +108,10 @@ impl AppError {
             AppError::PoolUnavailable => t!("連線池已耗盡或關閉").to_string(),
             AppError::Storage(s) => tf!("儲存錯誤：{detail}", detail = s),
             AppError::Ssh(s) => tf!("SSH 通道錯誤：{detail}", detail = s),
+            AppError::SshAuth(s) => tf!("SSH 認證失敗：{detail}", detail = s),
+            AppError::SshHostKey(s) => tf!("SSH 主機金鑰驗證失敗：{detail}", detail = s),
+            AppError::SshCancelled => t!("使用者已取消 SSH 連線").to_string(),
+            AppError::Sftp(s) => tf!("SFTP 錯誤：{detail}", detail = s),
             AppError::Timeout(ms) => tf!(
                 "查詢逾時（{ms} ms）；伺服器端查詢可能仍在執行，可從行程清單手動終止",
                 ms = ms
