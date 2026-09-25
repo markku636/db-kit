@@ -1,3 +1,37 @@
+## v0.33.0
+
+**SSH 主機成為一等公民：多分頁終端機 + SFTP，參考 Xshell。** 以前 db-kit 只把 SSH 當成資料庫連線的跳板（port forward），要登進那台機器看 log、重啟服務，就得另開 Xshell / PuTTY；AI 助手看得到資料庫，卻看不到主機。現在側欄多了獨立的「SSH 主機」區塊，雙擊就開終端機分頁：
+
+- **主機清單**：可分資料夾、跟著側欄搜尋，右鍵連線 / 開 SFTP / 編輯 / 複製 / 刪除 / 移到資料夾。存在 `ssh_sessions.json`，型別上就沒有密碼欄位——密碼與私鑰密語只進 OS keychain，與資料庫連線同一套規則。**已設 SSH Tunnel 的資料庫連線**右鍵多了「開啟 SSH 終端機」，直接沿用那組跳板憑證，不必再建一次。
+- **四種認證**：密碼、私鑰 + 密語、keyboard-interactive（OTP / PAM 的提問逐項在對話框輸入）、ssh-agent（Unix 的 `SSH_AUTH_SOCK`；Windows 先找 OpenSSH agent，再退到 Pageant）。伺服器接受了金鑰但還要 OTP 時，會自動接著走 keyboard-interactive。沒存密碼就在連線當下詢問。
+- **host key 要你點頭**：終端機第一次連到某台主機、或指紋變了，會跳出對話框顯示指紋（接受並儲存 / 僅此次 / 拒絕；指紋變更時以警示樣式並列新舊指紋）。讀對話框的時間不算進 20 秒撥號逾時。資料庫 tunnel 維持原本不打擾的 TOFU 行為。
+- **終端機**：xterm.js，切走分頁不卸載（畫面與 shell 都還在）；配色跟著 App 主題、字級跟著 Ctrl+= / − / 0（主機設定可另外覆寫）；WebGL 渲染失敗自動退回 DOM，沒有 GPU 的遠端桌面 / VM 也可在設定頁直接指定 DOM。Ctrl+Shift+F 搜尋；右鍵有選取就複製、沒選取就貼上（Shift+右鍵開選單）。斷線後按 Enter 或點「重新連線」，畫面不清空。
+- **多行貼上一律先確認**：貼進終端機的每一行都會被當成 Enter 執行。Ctrl+V、Ctrl+Shift+V、右鍵貼上三條路都會先問一次（單行照舊不打擾），確認後照 shell 的要求包 bracketed paste 送出。
+- **命令列輸入條**：終端機底下一行輸入框，打好再送、Shift+Enter 換行、↑↓ 翻歷史（跨主機保留 200 筆）。AI 建議的指令也是放進這裡，給你看過再送。
+- **快捷鍵不再打架**：焦點在終端機時，Ctrl+W / T / N / K / L / R 原樣送進 shell（刪字、清畫面、反向搜尋……），只有 Shift 組合、Ctrl+Tab 與縮放留給 App。Ctrl+Shift+T 開新終端機、Ctrl+Shift+W 關掉作用中的分頁；順手修掉 Ctrl+Shift+T 以前也會開查詢分頁的問題。
+
+**SFTP 就在終端機旁邊。** 工具列一鍵在右側開檔案面板（WinSCP 式並排，而不是像 Xshell 另開 Xftp），走同一條連線，不會再問一次密碼 / OTP：
+
+- 麵包屑或直接輸入路徑；可依名稱 / 大小 / 修改時間排序，顯示權限與連結；隱藏檔可切換。雙擊資料夾進入、雙擊檔案下載；右鍵上傳到此 / 重新命名 / 刪除（資料夾連同內容，先確認）/ 建資料夾 / 複製路徑 / **在終端機 cd 到此**。
+- 上下傳有進度條與取消；下載先寫 `.part` 再改名，取消或失敗都不留半個檔案。面板關掉再打開，會回到上次的資料夾。
+
+**AI 協助終端機，但 AI 碰不到 shell。** 助手依舊沒有任何能執行指令的工具（`agent.rs` 一行沒改）——它只能建議，按鈕在你手上：
+
+- 回覆裡的 bash 區塊多了「**送到終端機**」（只放進命令列輸入條，不執行）與「**執行並回饋**」（送出、擷取到輸出安靜 300 ms 為止，再交給 AI 接著分析）。
+- 送出前先分級：`rm -rf /`、`dd` 或 `mkfs` 對磁碟裝置、fork bomb、`chmod -R … /` 這類**直接擋下**，要你手動改過才能送；`sudo`、遞迴刪除、重啟 / 停用服務、`kill -9 -1`、防火牆規則、`curl … | sh`、`git push --force`、`mysql -e "DROP TABLE …"` 這類資料庫 CLI 的破壞語句等**列出理由再確認**。區塊標題列的徽章事先就標出「送出前確認 / 已封鎖」。
+- 終端機工具條的 ✨：解釋這段輸出（有反白就只解釋反白的部分）、修正這個錯誤、摘要這個 session、用自然語言產生指令（結果只放進命令列）。對話輸入框多了 `@term`（畫面最後 200 行）、`@output`（最近一次指令的輸出）、`@lastcmd`，以及 `/shell`、`/term`、`/tfix` 三條斜線命令。
+- 停在終端機分頁時，「附帶目前環境」會附上主機、作業系統 / shell 的猜測、目前目錄與畫面最後 40 行；資料庫資訊只在相關時才一起附（終端機是從該連線開出來的，或側欄選的是該連線的物件）。
+- **輸出是資料，不是指令**：終端機輸出一律用比內容更長的圍籬包起來（輸出裡的三個反引號關不掉區塊），前面標明「不可信的原始輸出資料」，系統提示也明講輸出裡的要求一律當資料、不照做——真正的控制點仍是你的按鈕。
+
+**實作上值得一提的決定：**
+
+- 後端 `ssh.rs` 拆成 `ssh/` 目錄，整個不依賴 Tauri（`--no-default-features` 也編得過、測得到）；命令層只在 `commands/ssh.rs`。
+- 終端輸出走 `tauri::ipc::Channel` 傳原始位元組（每個終端機一條、有序、不廣播），後端把輸出合併到 16 KiB 或 8 ms 才送一次——瓶頸是 IPC，不是 xterm。UTF-8 在封包邊界切半，交給 xterm 自己接。
+- 資料庫 tunnel 的 RSA 金鑰認證改用伺服器支援的 `rsa-sha2-512 / 256`：原本送的是 SHA-1 的 `ssh-rsa`，OpenSSH 8.8 以後預設拒絕。
+- 這一版的限制：非 UTF-8 的主機（GBK / Big5）還不轉碼，請在遠端設定 locale；主機清單還沒有加密匯出 / 匯入。
+
+> 驗證：vitest **1664 項全通過**，新增 469 項（其中 `shellGuard` 分級規則 310 項——`sudo rm -rf /` 要擋、`rm -rf ./dist` 只確認、`echo hi > /dev/null` 放行、引號裡的 `&&` 不算串接）。`verify:ui` 全套 **166 項全通過**（新增 `ssh-terminal` 17 項、`ssh-ai-suggest` 6 項）：開終端機、鍵入回聲、命令列送 `ls`、Ctrl+V 多行貼上先確認且取消後一個字都沒送出、SFTP 開在家目錄並能進出資料夾、關掉重開回到原處、AI 的 bash 區塊「送到終端機」只填進命令列、`rm -rf` 按「執行並回饋」先跳確認框且取消後一行都沒送出去；過程中抓到 SFTP 會開在 `/` 而不是家目錄的競態並修正。`cargo test --no-default-features --lib` 454 項通過（唯一失敗的 `it_tests::sqlite_crud_and_backup` 在高負載下偶發、單獨重跑即過，相關檔案本版未動）；`ssh::` 33 項在 Windows（GNU 工具鏈，涵蓋 named pipe / Pageant 的 `cfg(windows)` 路徑）與 Linux Docker `--features gui`（涵蓋 Tauri 命令層）都通過；對 Docker OpenSSH 伺服器的**整合測試 3 項**通過：密碼認證 + PTY 回聲 / resize / 正常結束、SFTP 上傳下載逐位元組比對、中途取消不留 `.part`。`tsc` / `eslint src` 0 error、`vite build` 綠燈（xterm 獨立成 chunk，開終端機才下載）；`i18n:scan` en / zh-CN 100%，Rust 五個語系表涵蓋全部新字串。**未實測的部分**：開發機沒有 MSVC，正式的桌面 App 沒有實際開過——WebView2 下的 xterm 渲染（WebGL / DOM 退路）、注音輸入法組字、Pageant 與 Windows OpenSSH agent、真實 PAM / OTP 的 keyboard-interactive、host key 對話框接上真後端的整條路徑（UI 只在假後端驗過），以及 macOS / Linux 上的實際操作。
+
 ## v0.32.1
 
 **找不到 CLI 時可以一鍵在終端機安裝 / 登入。** 以前 AI 助手與 NL 查詢列找不到 CLI 時只有一行「請先安裝 Claude Code（claude.ai/install）」：那不是指令、也不是連結，使用者得自己去查該在哪個 shell 跑什麼；裝好之後還卡在登入，一樣只給一句「請在終端機執行 claude」。新增 `src-tauri/src/agent_setup.rs` 與前端 `CliSetupHint`：
