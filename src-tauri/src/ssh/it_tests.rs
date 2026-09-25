@@ -19,7 +19,7 @@ use super::auth::{connect_and_auth, SilentUi, SshTarget, TargetOrigin};
 use super::known_hosts::KnownHostsStore;
 use super::runtime::SshConn;
 use super::sessions::{SshAuthKind, SshTermOptions};
-use super::sftp::SftpClient;
+use super::sftp::{local_conflicts, OnConflict, SftpClient};
 use super::terminal::{TermEvent, TermHandle, TermOpen, TermSink};
 use crate::error::AppError;
 
@@ -318,5 +318,149 @@ async fn sftp_edit_text_and_chmod() {
     sftp.remove(&dir, true).await.unwrap();
     sftp.close().await;
     let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = conn.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+}
+
+/// 資料夾遞迴：本機樹上傳 → 遠端結構一致 → 整棵下載回另一處 → 逐檔內容一致；
+/// 已存在且未允許覆蓋要失敗；允許覆蓋時合併；中途取消回 SshCancelled。
+#[tokio::test]
+#[ignore = "需要 Docker OpenSSH:2222"]
+async fn sftp_tree_upload_download_roundtrip() {
+    let conn = connect().await;
+    let (sftp, home) = SftpClient::open(&conn).await.expect("sftp open");
+    let tmp = std::env::temp_dir().join(format!("dbkit-sftp-tree-{}", uuid::Uuid::new_v4()));
+    let src = tmp.join("site");
+    std::fs::create_dir_all(src.join("css")).unwrap();
+    std::fs::create_dir_all(src.join("js/vendor")).unwrap();
+    std::fs::create_dir_all(src.join("empty")).unwrap();
+    std::fs::write(src.join("index.html"), b"<h1>hi</h1>\n").unwrap();
+    std::fs::write(src.join("css/app.css"), b"body{margin:0}\n").unwrap();
+    std::fs::write(src.join("js/vendor/lib.js"), vec![b'x'; 200_000]).unwrap();
+    std::fs::write(src.join("中文檔名.txt"), "內容".as_bytes()).unwrap();
+
+    let remote_root = format!("{home}/dbkit-it-tree-{}", uuid::Uuid::new_v4());
+    let no_cancel = AtomicBool::new(false);
+    let last = Arc::new(std::sync::Mutex::new((0u64, None::<u64>)));
+    let l2 = last.clone();
+    let r = sftp
+        .upload_tree(&src, &remote_root, false, Box::new(move |d, t| *l2.lock().unwrap() = (d, t)), &no_cancel)
+        .await
+        .expect("upload_tree");
+    assert_eq!(r, remote_root);
+    let total = 12 + 15 + 200_000 + "內容".len() as u64;
+    assert_eq!(*last.lock().unwrap(), (total, Some(total)), "進度最後要到 100%");
+    let names: Vec<String> = sftp.list_dir(&remote_root).await.unwrap().into_iter().map(|e| e.name).collect();
+    for n in ["css", "js", "empty", "index.html", "中文檔名.txt"] {
+        assert!(names.contains(&n.to_string()), "遠端少了 {n}：{names:?}");
+    }
+    assert_eq!(sftp.stat(&format!("{remote_root}/js/vendor/lib.js")).await.unwrap().size, 200_000);
+
+    // 已存在、未允許覆蓋 → 失敗；允許覆蓋 → 合併成功
+    assert!(sftp.upload_tree(&src, &remote_root, false, Box::new(|_, _| {}), &no_cancel).await.is_err());
+    sftp.upload_tree(&src, &remote_root, true, Box::new(|_, _| {}), &no_cancel).await.expect("merge");
+
+    // 整棵下載到另一個本機資料夾（給既有資料夾 → 放進去成 <dst>/<遠端資料夾名>）
+    let dst = tmp.join("dl");
+    std::fs::create_dir_all(&dst).unwrap();
+    let got = sftp.download_tree(&remote_root, &dst, false, Box::new(|_, _| {}), &no_cancel).await.expect("download_tree");
+    assert_eq!(got, dst.join(super::sftp::basename(&remote_root)));
+    for rel in ["index.html", "css/app.css", "js/vendor/lib.js", "中文檔名.txt"] {
+        assert_eq!(std::fs::read(got.join(rel)).unwrap(), std::fs::read(src.join(rel)).unwrap(), "{rel} 內容不一致");
+    }
+    assert!(got.join("empty").is_dir(), "空資料夾也要建");
+    // 再下載一次、未允許覆蓋 → 失敗（本機已有同名資料夾）
+    assert!(sftp.download_tree(&remote_root, &dst, false, Box::new(|_, _| {}), &no_cancel).await.is_err());
+
+    // 中途取消
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c2 = cancel.clone();
+    let err = sftp
+        .download_tree(&remote_root, &tmp.join("dl2"), false, Box::new(move |d, _| if d > 0 { c2.store(true, Ordering::Relaxed) }), &cancel)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::SshCancelled), "{err:?}");
+
+    sftp.remove(&remote_root, true).await.unwrap();
+    sftp.close().await;
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = conn.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+}
+
+/// 多選批次：檔案 + 資料夾混合上傳成一個工作 → 遠端都在；再傳一次，Fail 整批不動、Skip 全略過、
+/// Overwrite 合併；批次下載回本機（同名檢查與實際下載用同一套檔名）→ 逐檔內容一致；
+/// 下載時本機已有其中一項 → Skip 只傳其餘的。
+#[tokio::test]
+#[ignore = "需要 Docker OpenSSH:2222"]
+async fn sftp_batch_many_with_conflicts() {
+    let conn = connect().await;
+    let (sftp, home) = SftpClient::open(&conn).await.expect("sftp open");
+    let tmp = std::env::temp_dir().join(format!("dbkit-sftp-batch-{}", uuid::Uuid::new_v4()));
+    let src = tmp.join("src");
+    std::fs::create_dir_all(src.join("conf.d/extra")).unwrap();
+    std::fs::write(src.join("a.txt"), b"alpha\n").unwrap();
+    std::fs::write(src.join("b.log"), vec![b'b'; 150_000]).unwrap();
+    std::fs::write(src.join("conf.d/site.conf"), b"server {}\n").unwrap();
+    std::fs::write(src.join("conf.d/extra/x.conf"), b"# x\n").unwrap();
+
+    let remote_dir = format!("{home}/dbkit-it-batch-{}", uuid::Uuid::new_v4());
+    sftp.mkdir(&remote_dir).await.unwrap();
+    let no_cancel = AtomicBool::new(false);
+    let locals = vec![src.join("a.txt"), src.join("b.log"), src.join("conf.d")];
+    let last = Arc::new(std::sync::Mutex::new((0u64, None::<u64>)));
+    let l2 = last.clone();
+    let sum = sftp
+        .upload_many(&locals, &remote_dir, OnConflict::Fail, Box::new(move |d, t| *l2.lock().unwrap() = (d, t)), &no_cancel)
+        .await
+        .expect("upload_many");
+    assert_eq!(sum.files, 4);
+    assert_eq!(sum.message(), None);
+    let total = 6 + 150_000 + 10 + 4;
+    assert_eq!(*last.lock().unwrap(), (total, Some(total)), "一條合併的進度，最後到 100%");
+    assert_eq!(sftp.stat(&format!("{remote_dir}/conf.d/extra/x.conf")).await.unwrap().size, 4);
+
+    // 再傳一次：Fail 整批不開始、Skip 全部略過、Overwrite 合併
+    let err = sftp.upload_many(&locals, &remote_dir, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.unwrap_err();
+    assert!(matches!(err, AppError::Sftp(_)), "{err:?}");
+    let sum = sftp.upload_many(&locals, &remote_dir, OnConflict::Skip, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+    assert_eq!((sum.files, sum.skipped_existing), (0, 3));
+    assert!(sum.message().is_some());
+    std::fs::write(src.join("a.txt"), b"alpha v2\n").unwrap();
+    let sum = sftp.upload_many(&locals, &remote_dir, OnConflict::Overwrite, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+    assert_eq!((sum.files, sum.skipped_existing), (4, 0));
+
+    // 批次下載回本機
+    let dst = tmp.join("dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    let remotes: Vec<String> = ["a.txt", "b.log", "conf.d"].iter().map(|n| format!("{remote_dir}/{n}")).collect();
+    let names: Vec<String> = ["a.txt", "b.log", "conf.d"].iter().map(|n| n.to_string()).collect();
+    assert!(local_conflicts(&dst, &names).await.is_empty());
+    let sum = sftp.download_many(&remotes, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.expect("download_many");
+    assert_eq!(sum.files, 4);
+    for rel in ["a.txt", "b.log", "conf.d/site.conf", "conf.d/extra/x.conf"] {
+        assert_eq!(std::fs::read(dst.join(rel)).unwrap(), std::fs::read(src.join(rel)).unwrap(), "{rel} 內容不一致");
+    }
+    assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"alpha v2\n", "Overwrite 要真的換掉遠端內容");
+
+    // 本機已有其中兩項：同名檢查列得出來；Fail 不動、Skip 只傳剩下的
+    std::fs::remove_file(dst.join("b.log")).unwrap();
+    assert_eq!(local_conflicts(&dst, &names).await, vec!["a.txt".to_string(), "conf.d".to_string()]);
+    assert!(sftp.download_many(&remotes, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.is_err());
+    assert!(!dst.join("b.log").exists(), "Fail 時一個檔都不能傳");
+    let sum = sftp.download_many(&remotes, &dst, OnConflict::Skip, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+    assert_eq!((sum.files, sum.skipped_existing), (1, 2));
+    assert_eq!(std::fs::read(dst.join("b.log")).unwrap().len(), 150_000);
+
+    // 中途取消
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c2 = cancel.clone();
+    let err = sftp
+        .download_many(&remotes, &tmp.join("dst2"), OnConflict::Fail, Box::new(move |d, _| if d > 0 { c2.store(true, Ordering::Relaxed) }), &cancel)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::SshCancelled), "{err:?}");
+
+    sftp.remove(&remote_dir, true).await.unwrap();
+    sftp.close().await;
+    let _ = std::fs::remove_dir_all(&tmp);
     let _ = conn.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
 }

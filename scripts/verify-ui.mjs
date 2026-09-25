@@ -49,6 +49,7 @@ const CASE_FX = {
   "ssh-terminal": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-ai-suggest": { STORAGE_SEED: SSH_STORAGE_SEED },
   "sftp-edit-and-chmod": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "sftp-multi-select": { STORAGE_SEED: SSH_STORAGE_SEED },
 };
 
 // xterm 目前畫面（DOM renderer）的純文字。
@@ -199,6 +200,91 @@ const CASES = {
       JSON.stringify(chmods));
     await sleep(300);
     check("清單的權限欄就地更新成 rwxr-xr-x", (await sftp.getByText("-rwxr-xr-x", { exact: true }).count()) > 0);
+    check("沒有未實作的 SFTP command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // SFTP 多選（檔案總管 / Xftp 慣例）：單擊、Ctrl 單擊、Shift 單擊、Ctrl+A；右鍵點在選取裡 → 對整組操作。
+  // 批次下載 / 上傳必須是「一個工作、帶全部路徑」（不是每項各開一個傳輸），同名時問覆蓋 / 略過；
+  // Delete 刪多項先確認、取消後一個都沒刪。
+  async "sftp-multi-select"(page) {
+    await openSshWeb01(page);
+    await page.getByRole("button", { name: "開啟 SFTP" }).first().click();
+    const sftp = page.getByTestId("sftp-panel");
+    await sftp.getByText("backup.tar.gz", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    const row = (n) => sftp.locator(`tr[data-name="${n}"]`);
+    const selected = () => sftp.locator('tr[aria-selected="true"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-name")));
+    const menuBtn = (text) => page.locator('div.fixed.z-\\[90\\] button', { hasText: text }).first();
+
+    await row("app").click();
+    await row("backup.tar.gz").click({ modifiers: ["Control"] });
+    let got = await selected();
+    check("Ctrl 單擊加選", JSON.stringify(got) === JSON.stringify(["app", "backup.tar.gz"]), JSON.stringify(got));
+    await row("app").click();
+    await row("backup.tar.gz").click({ modifiers: ["Shift"] });
+    got = await selected();
+    check("Shift 單擊選一段（隱藏檔不算）", JSON.stringify(got) === JSON.stringify(["app", "logs", "backup.tar.gz"]), JSON.stringify(got));
+    check("狀態列顯示已選取 3 項", /已選取 3 項/.test(await page.getByTestId("sftp-status").innerText().catch(() => "")));
+
+    // 右鍵點在選取裡 → 整組；本機已有其中的 logs → 三選一，選「略過同名」
+    await page.evaluate(() => { window.__DBKIT_DIALOG_OPEN__ = "C:\\Users\\demo\\Downloads"; window.__DBKIT_LOCAL_EXISTING__ = ["logs"]; });
+    await row("logs").click({ button: "right" });
+    await sleep(150);
+    check("右鍵點在選取裡保留整組（選單是「下載 3 項…」）", (await menuBtn("下載 3 項…").count()) > 0, (await menuItems(page)).join(" | "));
+    await menuBtn("下載 3 項…").click();
+    const skipBtn = page.getByRole("button", { name: "略過同名", exact: true }).first();
+    await skipBtn.waitFor({ timeout: 5000 }).catch(() => {});
+    check("本機已有其中一項 → 問覆蓋 / 略過同名", (await page.getByText(/目的地已有 1 個同名項目：logs/).count()) > 0);
+    await skipBtn.click().catch(() => {});
+    await page.waitForFunction(() => window.__DBKIT_SFTP_BATCH__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const batch = await page.evaluate(() => window.__DBKIT_SFTP_BATCH__);
+    check("批次下載是一個工作、帶全部三個路徑、策略 skip",
+      batch.length === 1 && batch[0].kind === "download" && batch[0].localDir === "C:\\Users\\demo\\Downloads" && batch[0].onConflict === "skip"
+        && JSON.stringify(batch[0].remotes) === JSON.stringify(["/home/deploy/app", "/home/deploy/logs", "/home/deploy/backup.tar.gz"]),
+      JSON.stringify(batch));
+    await page.getByText("已下載 app 等 3 項").first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("完成提示寫出批次名稱", (await page.getByText("已下載 app 等 3 項").count()) > 0);
+
+    // Ctrl+A → Delete：確認框列出數量與資料夾；取消 → 一個都沒刪
+    await row("app").click();
+    await page.keyboard.press("Control+a");
+    check("Ctrl+A 全選看得到的項目", (await selected()).length === 3);
+    await page.keyboard.press("Delete");
+    const confirmText = page.getByText(/刪除這 3 個項目（其中 2 個資料夾連同全部內容）/);
+    await confirmText.first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("Delete 刪多項先確認，並講明含資料夾", (await confirmText.count()) > 0);
+    await page.getByRole("button", { name: "取消", exact: true }).last().click();
+    await sleep(200);
+    check("取消後一個都沒刪", await page.evaluate(() => window.__DBKIT_SFTP_REMOVES__.length === 0));
+
+    // 換資料夾清空選取；兩個檔 Shift 選取 → Delete → 確認 → 依畫面順序刪、非遞迴
+    await row("logs").dblclick();
+    await sftp.getByText("app.log", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("換資料夾後選取清空", (await selected()).length === 0);
+    await row("app.log").click();
+    await row("error.log").click({ modifiers: ["Shift"] });
+    await page.keyboard.press("Delete");
+    await page.getByText(/刪除這 2 個項目？/).first().waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByRole("button", { name: "刪除", exact: true }).last().click();
+    await page.waitForFunction(() => window.__DBKIT_SFTP_REMOVES__.length >= 2, null, { timeout: 5000 }).catch(() => {});
+    const removes = await page.evaluate(() => window.__DBKIT_SFTP_REMOVES__);
+    check("確認後依畫面順序刪兩個檔（非遞迴）",
+      JSON.stringify(removes) === JSON.stringify([
+        { path: "/home/deploy/logs/app.log", recursive: false }, { path: "/home/deploy/logs/error.log", recursive: false },
+      ]), JSON.stringify(removes));
+
+    // 一次上傳兩個檔，其中 app.log 撞名 → 三選一，選「覆蓋」
+    await page.evaluate(() => { window.__DBKIT_DIALOG_OPEN__ = ["C:\\tmp\\app.log", "C:\\tmp\\new.txt"]; });
+    await sftp.getByRole("button", { name: "上傳檔案", exact: true }).first().click();
+    const clash = page.getByText(/目的地已有 1 個同名項目：app\.log/);
+    await clash.first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("上傳多檔時部分同名 → 三選一", (await clash.count()) > 0);
+    await page.getByRole("button", { name: "覆蓋", exact: true }).last().click();
+    await page.waitForFunction(() => window.__DBKIT_SFTP_BATCH__.length > 1, null, { timeout: 5000 }).catch(() => {});
+    const up = (await page.evaluate(() => window.__DBKIT_SFTP_BATCH__))[1];
+    check("批次上傳到目前資料夾：兩個檔一個工作、策略 overwrite",
+      up?.kind === "upload" && up.remoteDir === "/home/deploy/logs" && up.locals.length === 2 && up.onConflict === "overwrite", JSON.stringify(up));
+    await page.evaluate(() => { delete window.__DBKIT_DIALOG_OPEN__; delete window.__DBKIT_LOCAL_EXISTING__; });
     check("沒有未實作的 SFTP command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },

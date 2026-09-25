@@ -55,7 +55,9 @@ interface ConfirmReq {
   title?: string;
   danger?: boolean;
   confirmText?: string;
-  resolve: (ok: boolean) => void;
+  /** 第三個按鈕（uiChoose），按下回 "alt"。 */
+  altText?: string;
+  resolve: (ok: boolean | "alt") => void;
 }
 
 interface PromptReq {
@@ -74,7 +76,7 @@ interface UiStore {
   pushToast: (kind: Toast["kind"], text: string) => void;
   dismissToast: (id: number) => void;
   requestConfirm: (req: ConfirmReq) => void;
-  resolveConfirm: (ok: boolean) => void;
+  resolveConfirm: (ok: boolean | "alt") => void;
   requestPrompt: (req: PromptReq) => void;
   resolvePrompt: (value: string | null) => void;
 }
@@ -127,7 +129,24 @@ export function uiConfirm(
   opts?: { title?: string; danger?: boolean; confirmText?: string }
 ): Promise<boolean> {
   return new Promise((resolve) => {
-    useUi.getState().requestConfirm({ message, resolve, ...opts });
+    useUi.getState().requestConfirm({ message, ...opts, resolve: (v) => resolve(v === true) });
+  });
+}
+
+/**
+ * 三選一的確認框：主要按鈕回 "confirm"、第三個按鈕回 "alt"；取消 / Esc / 點背景回 null。
+ * 例：批次傳輸遇到同名 →「覆蓋」/「略過同名」/「取消」。
+ */
+export function uiChoose(
+  message: string,
+  opts: { title?: string; danger?: boolean; confirmText: string; altText: string },
+): Promise<"confirm" | "alt" | null> {
+  return new Promise((resolve) => {
+    useUi.getState().requestConfirm({
+      message,
+      ...opts,
+      resolve: (v) => resolve(v === "alt" ? "alt" : v ? "confirm" : null),
+    });
   });
 }
 
@@ -184,6 +203,13 @@ type Filter = { name: string; extensions: string[] };
 export async function pickOpenFile(filters?: Filter[]): Promise<string | null> {
   const res = await open({ multiple: false, directory: false, filters });
   return typeof res === "string" ? res : null;
+}
+
+/** 一次選多個檔（SFTP 批次上傳）。取消回空陣列；只選一個時 plugin 可能回字串，一併正規化成陣列。 */
+export async function pickOpenFiles(filters?: Filter[]): Promise<string[]> {
+  const res = await open({ multiple: true, directory: false, filters });
+  if (Array.isArray(res)) return res.filter((x): x is string => typeof x === "string");
+  return typeof res === "string" ? [res] : [];
 }
 
 export async function pickDirectory(): Promise<string | null> {
@@ -268,6 +294,15 @@ export function UiHost() {
               >
                 {t("取消")}
               </button>
+              {confirmReq.altText && (
+                <button
+                  type="button"
+                  onClick={() => resolveConfirm("alt")}
+                  className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5"
+                >
+                  {confirmReq.altText}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => resolveConfirm(true)}

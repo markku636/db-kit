@@ -26,7 +26,7 @@ use crate::ssh::auth::{
 use crate::ssh::known_hosts::{HostKeyStatus, KnownHostsStore};
 use crate::ssh::runtime::{PromptAnswer, SshConn, SshConnInfo, SshRuntime};
 use crate::ssh::sessions::{self, SshFolder, SshSession, SshSessionsFile};
-use crate::ssh::sftp::{ProgressFn, SftpClient, SftpEntry, SftpText};
+use crate::ssh::sftp::{self as sftp_mod, OnConflict, ProgressFn, SftpClient, SftpEntry, SftpText};
 use crate::ssh::terminal::{decode_b64_input, TermEvent, TermHandle, TermOpen, TermSink};
 use crate::store;
 
@@ -617,10 +617,18 @@ pub async fn ssh_sftp_download(
     let tid = transfer_id.clone();
     tauri::async_runtime::spawn(async move {
         let progress = reporter.progress_fn();
-        let r = sftp
-            .download(&remote, Path::new(&local), overwrite, progress, &cancel)
+        // 資料夾（或指向資料夾的 symlink）整棵下載；其餘照單檔。前端不必分兩條命令。
+        let is_dir = sftp
+            .stat(&remote)
             .await
-            .map(|p| Some(p.display().to_string()));
+            .map(|e| (e.is_dir && !e.is_symlink) || e.link_target_is_dir == Some(true))
+            .unwrap_or(false);
+        let r = if is_dir {
+            sftp.download_tree(&remote, Path::new(&local), overwrite, progress, &cancel).await
+        } else {
+            sftp.download(&remote, Path::new(&local), overwrite, progress, &cancel).await
+        }
+        .map(|p| Some(p.display().to_string()));
         reporter.finish(r);
         rt.finish_transfer(&tid);
     });
@@ -644,14 +652,79 @@ pub async fn ssh_sftp_upload(
     let tid = transfer_id.clone();
     tauri::async_runtime::spawn(async move {
         let progress = reporter.progress_fn();
-        let r = sftp
-            .upload(Path::new(&local), &remote, overwrite, progress, &cancel)
-            .await
-            .map(|_| Some(remote.clone()));
+        // 本機資料夾 → 整棵上傳到 `remote`（遠端新資料夾的完整路徑）；其餘照單檔。
+        let is_dir = tokio::fs::metadata(&local).await.map(|m| m.is_dir()).unwrap_or(false);
+        let r = if is_dir {
+            sftp.upload_tree(Path::new(&local), &remote, overwrite, progress, &cancel).await
+        } else {
+            sftp.upload(Path::new(&local), &remote, overwrite, progress, &cancel).await.map(|_| remote.clone())
+        }
+        .map(Some);
         reporter.finish(r);
         rt.finish_transfer(&tid);
     });
     Ok(transfer_id)
+}
+
+/// 多選下載（Xftp 多選拖到本機）：檔案 / 資料夾混合，全部放進 `local_dir`。整批一個 transfer、
+/// 依序傳、進度合併；`on_conflict` 決定本機已有同名項目時覆蓋 / 略過 / 整批不開始。
+/// 完成事件的 `message` 是略過項目的摘要（沒有略過就是 null）。
+#[tauri::command]
+pub async fn ssh_sftp_download_many(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    sftp_id: String,
+    remotes: Vec<String>,
+    local_dir: String,
+    on_conflict: OnConflict,
+) -> AppResult<String> {
+    let rt = state.ssh.clone();
+    let sftp = rt.sftp(&sftp_id)?;
+    let (transfer_id, cancel) = rt.register_transfer(&sftp.conn_id);
+    let reporter = TransferReporter::new(app, transfer_id.clone());
+    let tid = transfer_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let r = sftp
+            .download_many(&remotes, Path::new(&local_dir), on_conflict, reporter.progress_fn(), &cancel)
+            .await
+            .map(|s| s.message());
+        reporter.finish(r);
+        rt.finish_transfer(&tid);
+    });
+    Ok(transfer_id)
+}
+
+/// 多選上傳：本機檔案 / 資料夾混合，全部放進遠端的 `remote_dir`。其餘同 `ssh_sftp_download_many`。
+#[tauri::command]
+pub async fn ssh_sftp_upload_many(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    sftp_id: String,
+    locals: Vec<String>,
+    remote_dir: String,
+    on_conflict: OnConflict,
+) -> AppResult<String> {
+    let rt = state.ssh.clone();
+    let sftp = rt.sftp(&sftp_id)?;
+    let (transfer_id, cancel) = rt.register_transfer(&sftp.conn_id);
+    let reporter = TransferReporter::new(app, transfer_id.clone());
+    let tid = transfer_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let locals: Vec<std::path::PathBuf> = locals.into_iter().map(Into::into).collect();
+        let r = sftp
+            .upload_many(&locals, &remote_dir, on_conflict, reporter.progress_fn(), &cancel)
+            .await
+            .map(|s| s.message());
+        reporter.finish(r);
+        rt.finish_transfer(&tid);
+    });
+    Ok(transfer_id)
+}
+
+/// 下載前的同名檢查：`names` 裡哪些在 `local_dir` 已經有了（與實際下載同一套檔名轉換）。
+#[tauri::command]
+pub async fn ssh_sftp_local_conflicts(local_dir: String, names: Vec<String>) -> AppResult<Vec<String>> {
+    Ok(sftp_mod::local_conflicts(Path::new(&local_dir), &names).await)
 }
 
 #[tauri::command]

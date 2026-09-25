@@ -14,7 +14,7 @@ use futures::StreamExt;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::runtime::SshConn;
@@ -69,6 +69,93 @@ pub struct SftpText {
 
 /// `write_text` 一次寫入的上限。編輯器只給 ≤ 1 MiB 的檔案編輯，這裡留一點貼上內容的餘裕。
 pub const WRITE_TEXT_MAX: usize = 2 * 1024 * 1024;
+
+/// 資料夾遞迴傳輸一次最多處理的項目數（檔案 + 資料夾）。誤點到 `/usr` 這種樹時先擋下來，
+/// 而不是掃好幾分鐘、塞滿本機磁碟才發現。
+pub const TREE_MAX_ENTRIES: usize = 20_000;
+
+/// 資料夾遞迴傳輸的計畫：先整棵掃完（算總大小給進度條），再依序建資料夾、傳檔案。
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TreePlan {
+    /// 要建立的資料夾（相對於根，已清理過的路徑段；根本身是空陣列，不列在這裡）。
+    pub dirs: Vec<Vec<String>>,
+    /// 要傳的檔案：(來源完整路徑, 目的相對路徑段, 大小)。
+    pub files: Vec<(String, Vec<String>, u64)>,
+    /// 略過的項目數（指向資料夾的 symlink、特殊檔）。
+    pub skipped: usize,
+}
+
+impl TreePlan {
+    pub fn total_bytes(&self) -> u64 {
+        self.files.iter().map(|f| f.2).sum()
+    }
+
+    /// 項目總數（資料夾 + 檔案），給 `TREE_MAX_ENTRIES` 比對。
+    pub fn len(&self) -> usize {
+        self.dirs.len() + self.files.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.dirs.is_empty() && self.files.is_empty()
+    }
+
+    /// 把一棵子樹併進來，放在 `name` 這一段底下（批次傳輸：每個選取的資料夾是結果裡的一個子資料夾）。
+    pub fn absorb(&mut self, name: &str, sub: TreePlan) {
+        let prefixed = |seg: Vec<String>| std::iter::once(name.to_string()).chain(seg).collect::<Vec<_>>();
+        self.dirs.push(vec![name.to_string()]);
+        self.dirs.extend(sub.dirs.into_iter().map(prefixed));
+        self.files.extend(sub.files.into_iter().map(|(p, seg, sz)| (p, prefixed(seg), sz)));
+        self.skipped += sub.skipped;
+    }
+}
+
+/// 批次傳輸時，目的地已有同名項目怎麼辦。只看最上層：資料夾一旦決定合併，裡面的同名檔一律覆蓋
+/// （Xftp 的「全部覆蓋」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnConflict {
+    /// 有任何同名就整批不開始。前端先查過沒有衝突時用這個：查完到開始之間被別人建了同名項目，
+    /// 也不會默默覆蓋。
+    #[default]
+    Fail,
+    /// 同名檔案取代、同名資料夾合併。
+    Overwrite,
+    /// 同名的項目整個略過，只傳其餘的。
+    Skip,
+}
+
+/// 批次傳輸完成後的摘要（變成完成事件的訊息，前端接在「已下載 …」後面）。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct BatchSummary {
+    pub files: usize,
+    /// 因 `OnConflict::Skip` 略過的最上層項目。
+    pub skipped_existing: usize,
+    /// 略過的 symlink（指向資料夾 / 讀不到目標）與裝置檔、FIFO、socket。
+    pub skipped_special: usize,
+}
+
+impl BatchSummary {
+    pub fn message(&self) -> Option<String> {
+        match (self.skipped_existing, self.skipped_special) {
+            (0, 0) => None,
+            (a, 0) => Some(tf!("略過 {n} 個同名項目", n = a)),
+            (0, b) => Some(tf!("略過 {n} 個連結或特殊檔案", n = b)),
+            (a, b) => Some(tf!("略過 {a} 個同名項目、{b} 個連結或特殊檔案", a = a, b = b)),
+        }
+    }
+}
+
+/// 下載前的同名檢查：`names`（遠端檔名）裡哪些在 `local_dir` 已經有了。用與 `download_many`
+/// 同一套檔名轉換（`sanitize_local_filename`），前端不必自己猜 Windows 會把名字改成什麼。
+pub async fn local_conflicts(local_dir: &Path, names: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for n in names {
+        if tokio::fs::try_exists(local_dir.join(sanitize_local_filename(n))).await.unwrap_or(false) {
+            out.push(n.clone());
+        }
+    }
+    out
+}
 
 /// 進度回呼：`(已完成位元組, 總大小)`。
 pub type ProgressFn = Box<dyn Fn(u64, Option<u64>) + Send + Sync>;
@@ -126,7 +213,7 @@ impl SftpClient {
             let resolved: Vec<(usize, Option<bool>)> = futures::stream::iter(links)
                 .map(|i| {
                     let p = out[i].path.clone();
-                    async move { (i, self.inner.metadata(p).await.ok().map(|m| m.is_dir())) }
+                    async move { (i, self.inner.metadata(p).await.ok().map(|m| kind_of(&m) == Kind::Dir)) }
                 })
                 .buffer_unordered(SYMLINK_STAT_CONCURRENCY)
                 .collect()
@@ -143,7 +230,7 @@ impl SftpClient {
         let md = self.inner.symlink_metadata(path.to_string()).await.map_err(map_err)?;
         let mut e = entry_from(basename(path).to_string(), path.to_string(), &md);
         if e.is_symlink {
-            e.link_target_is_dir = self.inner.metadata(path.to_string()).await.ok().map(|m| m.is_dir());
+            e.link_target_is_dir = self.inner.metadata(path.to_string()).await.ok().map(|m| kind_of(&m) == Kind::Dir);
         }
         Ok(e)
     }
@@ -164,7 +251,7 @@ impl SftpClient {
         }
         let md = self.inner.symlink_metadata(path.to_string()).await.map_err(map_err)?;
         // symlink 指向目錄也只刪連結本身，絕不跟進去。
-        if md.is_dir() && !md.is_symlink() {
+        if kind_of(&md) == Kind::Dir {
             if !recursive {
                 return self.inner.remove_dir(path.to_string()).await.map_err(map_err);
             }
@@ -179,7 +266,7 @@ impl SftpClient {
                         AppError::Sftp(tf!("伺服器回傳可疑的檔名，已中止刪除：{name}", name = name))
                     })?;
                     let m = e.metadata();
-                    if m.is_dir() && !m.is_symlink() {
+                    if kind_of(&m) == Kind::Dir {
                         stack.push(p);
                     } else {
                         self.inner.remove_file(p).await.map_err(map_err)?;
@@ -384,6 +471,355 @@ impl SftpClient {
             }
         }
     }
+
+    /// 整個遠端資料夾下載（Xftp 把資料夾拖下來）。`local` 若是既有資料夾就放進去
+    /// （`local/<遠端資料夾名>`），否則當成目的資料夾本身——與單檔下載同一套語意。
+    ///
+    /// 先整棵掃完再傳：進度條才有總量；掃描超過 `TREE_MAX_ENTRIES` 直接擋下。指向資料夾的
+    /// symlink 一律略過（可能繞回自己形成無限迴圈），指向檔案的照常下載目標內容。
+    /// 取消 / 失敗時已完成的檔案保留（與 Xftp 相同），進行中那個檔的 `.part` 由 `download` 清掉。
+    pub async fn download_tree(
+        &self,
+        remote_dir: &str,
+        local: &Path,
+        overwrite: bool,
+        progress: ProgressFn,
+        cancel: &AtomicBool,
+    ) -> AppResult<PathBuf> {
+        let local_root = match tokio::fs::metadata(local).await {
+            Ok(m) if m.is_dir() => local.join(sanitize_local_filename(basename(remote_dir))),
+            _ => local.to_path_buf(),
+        };
+        if !overwrite && tokio::fs::try_exists(&local_root).await.unwrap_or(false) {
+            return Err(AppError::Sftp(tf!("本機已有同名資料夾：{path}", path = local_root.display())));
+        }
+        let plan = self.plan_remote_tree(remote_dir, cancel).await?;
+        tokio::fs::create_dir_all(&local_root).await.map_err(local_err)?;
+        self.run_download_plan(&plan, &local_root, progress, cancel).await?;
+        Ok(local_root)
+    }
+
+    /// 整個本機資料夾上傳到 `remote_root`（遠端的新資料夾完整路徑）。已存在且 `!overwrite` 即失敗；
+    /// `overwrite` 時合併進去（同名檔覆蓋、既有資料夾沿用）。本機的 symlink 一律略過。
+    pub async fn upload_tree(
+        &self,
+        local_dir: &Path,
+        remote_root: &str,
+        overwrite: bool,
+        progress: ProgressFn,
+        cancel: &AtomicBool,
+    ) -> AppResult<String> {
+        if !overwrite && self.inner.try_exists(remote_root.to_string()).await.unwrap_or(false) {
+            return Err(AppError::Sftp(tf!("遠端已有同名項目：{path}", path = remote_root)));
+        }
+        let plan = plan_local_tree(local_dir, cancel).await?;
+        self.ensure_remote_dir(remote_root).await?;
+        self.run_upload_plan(&plan, remote_root, progress, cancel).await?;
+        Ok(remote_root.to_string())
+    }
+
+    /// 多選下載（檔案 / 資料夾混合）到同一個本機資料夾 `local_dir`，每個項目成為其中的
+    /// `<名稱>`。整批是一個工作：先把所有項目規劃完（算總量、擋超量），再依序傳——不會同時開
+    /// 幾十個檔案 handle，進度條與取消也只有一個。
+    ///
+    /// 最上層的項目跟著 symlink 走（使用者點的就是它）；樹裡面指向資料夾的 symlink 照樣略過。
+    pub async fn download_many(
+        &self,
+        remotes: &[String],
+        local_dir: &Path,
+        on_conflict: OnConflict,
+        progress: ProgressFn,
+        cancel: &AtomicBool,
+    ) -> AppResult<BatchSummary> {
+        let mut plan = TreePlan::default();
+        let mut sum = BatchSummary::default();
+        for r in remotes {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AppError::SshCancelled);
+            }
+            let name = sanitize_local_filename(basename(r));
+            let target = local_dir.join(&name);
+            if tokio::fs::try_exists(&target).await.unwrap_or(false) {
+                match on_conflict {
+                    OnConflict::Skip => {
+                        sum.skipped_existing += 1;
+                        continue;
+                    }
+                    OnConflict::Fail => {
+                        return Err(AppError::Sftp(tf!("本機已有同名項目：{path}", path = target.display())));
+                    }
+                    OnConflict::Overwrite => {}
+                }
+            }
+            let md = match self.inner.metadata(r.clone()).await {
+                Ok(m) => m,
+                // 指向不存在目標的 symlink：略過，不讓整批失敗
+                Err(e) => {
+                    let dangling = self
+                        .inner
+                        .symlink_metadata(r.clone())
+                        .await
+                        .map(|m| kind_of(&m) == Kind::Symlink)
+                        .unwrap_or(false);
+                    if dangling {
+                        sum.skipped_special += 1;
+                        continue;
+                    }
+                    return Err(map_err(e));
+                }
+            };
+            match kind_of(&md) {
+                Kind::Dir => {
+                    let sub = self.plan_remote_tree(r, cancel).await?;
+                    plan.absorb(&name, sub);
+                }
+                Kind::File => plan.files.push((r.clone(), vec![name], md.size.unwrap_or(0))),
+                Kind::Symlink | Kind::Other => sum.skipped_special += 1,
+            }
+            if plan.len() > TREE_MAX_ENTRIES {
+                return Err(too_many_entries());
+            }
+        }
+        sum.skipped_special += plan.skipped;
+        sum.files = plan.files.len();
+        tokio::fs::create_dir_all(local_dir).await.map_err(local_err)?;
+        self.run_download_plan(&plan, local_dir, progress, cancel).await?;
+        Ok(sum)
+    }
+
+    /// 多選上傳（本機檔案 / 資料夾混合）到遠端資料夾 `remote_dir`。與 `download_many` 同一套：
+    /// 先規劃、再依序傳，一個工作、一條進度。
+    pub async fn upload_many(
+        &self,
+        locals: &[PathBuf],
+        remote_dir: &str,
+        on_conflict: OnConflict,
+        progress: ProgressFn,
+        cancel: &AtomicBool,
+    ) -> AppResult<BatchSummary> {
+        let mut plan = TreePlan::default();
+        let mut sum = BatchSummary::default();
+        for l in locals {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AppError::SshCancelled);
+            }
+            // 非 UTF-8 的本機檔名在遠端沒有對應的寫法：略過
+            let (Some(name), Some(local)) = (l.file_name().and_then(|n| n.to_str()), l.to_str()) else {
+                sum.skipped_special += 1;
+                continue;
+            };
+            let target = remote_join(remote_dir, name)?;
+            if self.inner.try_exists(target.clone()).await.unwrap_or(false) {
+                match on_conflict {
+                    OnConflict::Skip => {
+                        sum.skipped_existing += 1;
+                        continue;
+                    }
+                    OnConflict::Fail => {
+                        return Err(AppError::Sftp(tf!("遠端已有同名項目：{path}", path = target)));
+                    }
+                    OnConflict::Overwrite => {}
+                }
+            }
+            let md = tokio::fs::metadata(l).await.map_err(local_err)?;
+            if md.is_dir() {
+                let sub = plan_local_tree(l, cancel).await?;
+                plan.absorb(name, sub);
+            } else if md.is_file() {
+                plan.files.push((local.to_string(), vec![name.to_string()], md.len()));
+            } else {
+                sum.skipped_special += 1;
+            }
+            if plan.len() > TREE_MAX_ENTRIES {
+                return Err(too_many_entries());
+            }
+        }
+        sum.skipped_special += plan.skipped;
+        sum.files = plan.files.len();
+        self.run_upload_plan(&plan, remote_dir, progress, cancel).await?;
+        Ok(sum)
+    }
+
+    /// 依計畫建本機資料夾、依序下載；進度合併成一條（每個檔的進度加上前面檔案的總量）。
+    /// 計畫裡的檔一律覆蓋：最上層的同名已由呼叫端處理過（`overwrite` / `OnConflict`）。
+    /// 取消 / 失敗時已完成的檔案保留（與 Xftp 相同），進行中那個檔的 `.part` 由 `download` 清掉。
+    async fn run_download_plan(
+        &self,
+        plan: &TreePlan,
+        local_root: &Path,
+        progress: ProgressFn,
+        cancel: &AtomicBool,
+    ) -> AppResult<()> {
+        for d in &plan.dirs {
+            tokio::fs::create_dir_all(join_segments(local_root, d)).await.map_err(local_err)?;
+        }
+        let total = plan.total_bytes();
+        let progress = std::sync::Arc::new(progress);
+        (*progress)(0, Some(total));
+        let mut base = 0u64;
+        for (remote, rel, size) in &plan.files {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AppError::SshCancelled);
+            }
+            let p = progress.clone();
+            let b = base;
+            self.download(remote, &join_segments(local_root, rel), true, Box::new(move |d, _| (*p)(b + d, Some(total))), cancel)
+                .await?;
+            base += size;
+        }
+        (*progress)(total.max(base), Some(total.max(base)));
+        Ok(())
+    }
+
+    /// 依計畫建遠端資料夾（父資料夾先建；已存在的沿用）、依序上傳。其餘同 `run_download_plan`。
+    async fn run_upload_plan(
+        &self,
+        plan: &TreePlan,
+        remote_root: &str,
+        progress: ProgressFn,
+        cancel: &AtomicBool,
+    ) -> AppResult<()> {
+        for d in &plan.dirs {
+            self.ensure_remote_dir(&remote_join_segments(remote_root, d)?).await?;
+        }
+        let total = plan.total_bytes();
+        let progress = std::sync::Arc::new(progress);
+        (*progress)(0, Some(total));
+        let mut base = 0u64;
+        for (local, rel, size) in &plan.files {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AppError::SshCancelled);
+            }
+            let p = progress.clone();
+            let b = base;
+            let remote = remote_join_segments(remote_root, rel)?;
+            self.upload(Path::new(local), &remote, true, Box::new(move |d, _| (*p)(b + d, Some(total))), cancel)
+                .await?;
+            base += size;
+        }
+        (*progress)(total.max(base), Some(total.max(base)));
+        Ok(())
+    }
+
+    /// 遠端資料夾存在就沿用；不存在就建；同名的是檔案則回錯（不能把檔案當資料夾合併）。
+    async fn ensure_remote_dir(&self, path: &str) -> AppResult<()> {
+        match self.inner.symlink_metadata(path.to_string()).await {
+            Ok(m) if kind_of(&m) == Kind::Dir => Ok(()),
+            Ok(_) => Err(AppError::Sftp(tf!("遠端已有同名檔案，無法建立資料夾：{path}", path = path))),
+            Err(_) => self.inner.create_dir(path.to_string()).await.map_err(map_err),
+        }
+    }
+
+    /// 掃描遠端資料夾樹（DFS）。伺服器回的檔名是不可信資料：經 `remote_join` 驗過才用，
+    /// 本機端的路徑段再經 `sanitize_local_filename` 清成 Windows 也合法的名字。
+    async fn plan_remote_tree(&self, root: &str, cancel: &AtomicBool) -> AppResult<TreePlan> {
+        let mut plan = TreePlan::default();
+        let mut stack: Vec<(String, Vec<String>)> = vec![(root.to_string(), Vec::new())];
+        let mut seen = 0usize;
+        while let Some((dir, rel)) = stack.pop() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AppError::SshCancelled);
+            }
+            let rd = self.inner.read_dir(dir.clone()).await.map_err(map_err)?;
+            for e in rd {
+                let name = e.file_name();
+                let Ok(full) = remote_join(&dir, &name) else {
+                    plan.skipped += 1;
+                    continue;
+                };
+                seen += 1;
+                if seen > TREE_MAX_ENTRIES {
+                    return Err(too_many_entries());
+                }
+                let mut seg = rel.clone();
+                seg.push(sanitize_local_filename(&name));
+                let md = e.metadata();
+                match kind_of(&md) {
+                    Kind::Symlink => match self.inner.metadata(full.clone()).await {
+                        Ok(t) if kind_of(&t) == Kind::File => plan.files.push((full, seg, t.size.unwrap_or(0))),
+                        _ => plan.skipped += 1,
+                    },
+                    Kind::Dir => {
+                        plan.dirs.push(seg.clone());
+                        stack.push((full, seg));
+                    }
+                    // 裝置檔 / FIFO / socket：下載沒有意義，讀了還可能卡住
+                    Kind::Other => plan.skipped += 1,
+                    Kind::File => plan.files.push((full, seg, md.size.unwrap_or(0))),
+                }
+            }
+        }
+        plan.dirs.sort_by_key(|d| d.len()); // 父資料夾先建
+        Ok(plan)
+    }
+}
+
+fn too_many_entries() -> AppError {
+    AppError::Sftp(tf!(
+        "資料夾內的項目超過 {max} 個，請改用終端機（例如 tar）處理",
+        max = TREE_MAX_ENTRIES
+    ))
+}
+
+/// 掃描本機資料夾樹。symlink 一律略過（Windows 的 junction 同理，可能指回上層）；
+/// 名稱不是合法 UTF-8 的也略過（遠端路徑是字串，轉不過去）。
+pub async fn plan_local_tree(root: &Path, cancel: &AtomicBool) -> AppResult<TreePlan> {
+    let mut plan = TreePlan::default();
+    let mut stack: Vec<(PathBuf, Vec<String>)> = vec![(root.to_path_buf(), Vec::new())];
+    let mut seen = 0usize;
+    while let Some((dir, rel)) = stack.pop() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::SshCancelled);
+        }
+        let mut rd = tokio::fs::read_dir(&dir).await.map_err(local_err)?;
+        while let Some(e) = rd.next_entry().await.map_err(local_err)? {
+            seen += 1;
+            if seen > TREE_MAX_ENTRIES {
+                return Err(too_many_entries());
+            }
+            let Some(name) = e.file_name().to_str().map(str::to_string) else {
+                plan.skipped += 1;
+                continue;
+            };
+            if remote_join("/", &name).is_err() {
+                plan.skipped += 1;
+                continue;
+            }
+            let ft = e.file_type().await.map_err(local_err)?;
+            let mut seg = rel.clone();
+            seg.push(name);
+            if ft.is_symlink() {
+                plan.skipped += 1;
+            } else if ft.is_dir() {
+                plan.dirs.push(seg.clone());
+                stack.push((e.path(), seg));
+            } else if ft.is_file() {
+                let size = e.metadata().await.map(|m| m.len()).unwrap_or(0);
+                plan.files.push((e.path().to_string_lossy().into_owned(), seg, size));
+            } else {
+                plan.skipped += 1;
+            }
+        }
+    }
+    plan.dirs.sort_by_key(|d| d.len());
+    Ok(plan)
+}
+
+fn join_segments(root: &Path, seg: &[String]) -> PathBuf {
+    let mut p = root.to_path_buf();
+    for s in seg {
+        p.push(s);
+    }
+    p
+}
+
+/// 遠端根路徑 + 相對路徑段；每一段都經 `remote_join` 驗過（拒 `..`、`/`、NUL）。
+pub fn remote_join_segments(root: &str, seg: &[String]) -> AppResult<String> {
+    let mut p = root.to_string();
+    for s in seg {
+        p = remote_join(&p, s)?;
+    }
+    Ok(p)
 }
 
 // ---- 屬性 / 路徑工具（純函式，可測）----
@@ -404,13 +840,39 @@ fn decode_text(mut buf: Vec<u8>, truncated: bool, size: u64) -> SftpText {
     SftpText { text: String::from_utf8_lossy(&buf).into_owned(), truncated, size, lossy, binary }
 }
 
+/// 檔案型別只看 S_IFMT（`0o170000`）那 4 個位元。**不要用** russh-sftp 的 `FileAttributes::is_dir()`
+/// / `is_symlink()`：那是 bit-contains，socket（`0o140000`）與區塊裝置（`0o060000`）都「包含」DIR
+/// 位元，會被當成資料夾——列表顯示成資料夾、遞迴刪除 / 整包下載還會對它 read_dir 而整批失敗。
+/// 伺服器沒給型別位元（沒有 permissions，或只給權限位元）時當一般檔案。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Dir,
+    File,
+    Symlink,
+    Other,
+}
+
+pub fn kind_of_mode(perm: Option<u32>) -> Kind {
+    match perm.map(|p| p & 0o170000) {
+        Some(0o040000) => Kind::Dir,
+        Some(0o120000) => Kind::Symlink,
+        Some(0o100000) | Some(0) | None => Kind::File,
+        Some(_) => Kind::Other,
+    }
+}
+
+fn kind_of(md: &FileAttributes) -> Kind {
+    kind_of_mode(md.permissions)
+}
+
 fn entry_from(name: String, path: String, md: &FileAttributes) -> SftpEntry {
     let permissions = md.permissions;
+    let kind = kind_of(md);
     SftpEntry {
         name,
         path,
-        is_dir: md.is_dir(),
-        is_symlink: md.is_symlink(),
+        is_dir: kind == Kind::Dir,
+        is_symlink: kind == Kind::Symlink,
         link_target_is_dir: None,
         size: md.size.unwrap_or(0),
         mtime: md.mtime.map(u64::from),
@@ -591,6 +1053,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tree_plan_absorb_prefixes_segments() {
+        let sub = TreePlan {
+            dirs: vec![vec!["css".into()]],
+            files: vec![
+                ("/r/site/index.html".into(), vec!["index.html".into()], 12),
+                ("/r/site/css/a.css".into(), vec!["css".into(), "a.css".into()], 3),
+            ],
+            skipped: 1,
+        };
+        let mut plan = TreePlan::default();
+        assert!(plan.is_empty());
+        plan.files.push(("/r/notes.txt".into(), vec!["notes.txt".into()], 5));
+        plan.absorb("site", sub);
+        assert_eq!(plan.dirs, vec![vec!["site".to_string()], vec!["site".to_string(), "css".to_string()]]);
+        assert_eq!(plan.files[1].1, vec!["site".to_string(), "index.html".to_string()]);
+        assert_eq!(plan.files[2].1, vec!["site".to_string(), "css".to_string(), "a.css".to_string()]);
+        assert_eq!(plan.skipped, 1);
+        assert_eq!(plan.len(), 5);
+        assert_eq!(plan.total_bytes(), 20);
+    }
+
+    #[test]
+    fn batch_summary_messages() {
+        assert_eq!(BatchSummary::default().message(), None);
+        let m = BatchSummary { files: 3, skipped_existing: 2, skipped_special: 0 }.message().unwrap();
+        assert!(m.contains('2'), "{m}");
+        let m = BatchSummary { files: 0, skipped_existing: 0, skipped_special: 7 }.message().unwrap();
+        assert!(m.contains('7'), "{m}");
+        let m = BatchSummary { files: 0, skipped_existing: 1, skipped_special: 4 }.message().unwrap();
+        assert!(m.contains('1') && m.contains('4'), "{m}");
+    }
+
+    #[test]
+    fn on_conflict_deserializes_snake_case() {
+        assert_eq!(serde_json::from_str::<OnConflict>("\"skip\"").unwrap(), OnConflict::Skip);
+        assert_eq!(serde_json::from_str::<OnConflict>("\"overwrite\"").unwrap(), OnConflict::Overwrite);
+        assert_eq!(serde_json::from_str::<OnConflict>("\"fail\"").unwrap(), OnConflict::Fail);
+        assert!(serde_json::from_str::<OnConflict>("\"Skip\"").is_err());
+    }
+
+    #[tokio::test]
+    async fn local_conflicts_uses_sanitized_names() {
+        let dir = std::env::temp_dir().join(format!("dbkit-conflicts-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("logs")).unwrap();
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        std::fs::write(dir.join(sanitize_local_filename("b:c.txt")), b"x").unwrap();
+        let names: Vec<String> = ["a.txt", "logs", "b:c.txt", "zzz"].iter().map(|s| s.to_string()).collect();
+        let got = local_conflicts(&dir, &names).await;
+        assert_eq!(got, vec!["a.txt".to_string(), "logs".to_string(), "b:c.txt".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kind_uses_exact_type_bits() {
+        assert_eq!(kind_of_mode(Some(0o040755)), Kind::Dir);
+        assert_eq!(kind_of_mode(Some(0o120777)), Kind::Symlink);
+        assert_eq!(kind_of_mode(Some(0o100644)), Kind::File);
+        // bit-contains 會把這兩個當成資料夾（0o140000 / 0o060000 都含 0o040000）
+        assert_eq!(kind_of_mode(Some(0o140755)), Kind::Other);
+        assert_eq!(kind_of_mode(Some(0o060660)), Kind::Other);
+        assert_eq!(kind_of_mode(Some(0o020620)), Kind::Other);
+        assert_eq!(kind_of_mode(Some(0o010644)), Kind::Other);
+        // 沒有型別位元 → 一般檔案
+        assert_eq!(kind_of_mode(Some(0o644)), Kind::File);
+        assert_eq!(kind_of_mode(None), Kind::File);
+        let mut md = FileAttributes::empty();
+        md.permissions = Some(0o140755);
+        let e = entry_from("S.gpg-agent".into(), "/home/u/S.gpg-agent".into(), &md);
+        assert!(!e.is_dir && !e.is_symlink);
+        assert_eq!(e.mode, "srwxr-xr-x");
+    }
+
+    #[test]
     fn mode_strings() {
         assert_eq!(mode_string(0o40755), "drwxr-xr-x");
         assert_eq!(mode_string(0o100644), "-rw-r--r--");
@@ -673,6 +1208,37 @@ mod tests {
         let mut late = vec![b'a'; 9000];
         late.push(0);
         assert!(!decode_text(late, false, 9001).binary, "8 KiB 之後的 NUL 不看");
+    }
+
+    #[test]
+    fn tree_path_helpers() {
+        let seg = vec!["a".to_string(), "b.txt".to_string()];
+        assert_eq!(remote_join_segments("/home/u/dst", &seg).unwrap(), "/home/u/dst/a/b.txt");
+        assert_eq!(remote_join_segments("/", &seg).unwrap(), "/a/b.txt");
+        assert!(remote_join_segments("/x", &["..".to_string()]).is_err(), "不可信的路徑段要擋");
+        assert!(remote_join_segments("/x", &["a/b".to_string()]).is_err());
+        assert_eq!(join_segments(Path::new("C:/dl"), &seg), PathBuf::from("C:/dl").join("a").join("b.txt"));
+        let plan = TreePlan { dirs: vec![], files: vec![("r".into(), vec![], 5), ("s".into(), vec![], 7)], skipped: 0 };
+        assert_eq!(plan.total_bytes(), 12);
+    }
+
+    #[tokio::test]
+    async fn plan_local_tree_walks_nested_dirs() {
+        let root = std::env::temp_dir().join(format!("dbkit-plan-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("sub/deeper")).unwrap();
+        std::fs::write(root.join("top.txt"), b"12345").unwrap();
+        std::fs::write(root.join("sub/mid.txt"), b"123").unwrap();
+        std::fs::write(root.join("sub/deeper/leaf.bin"), [0u8; 10]).unwrap();
+        let plan = plan_local_tree(&root, &AtomicBool::new(false)).await.unwrap();
+        assert_eq!(plan.total_bytes(), 18);
+        assert_eq!(plan.files.len(), 3);
+        assert_eq!(plan.dirs, vec![vec!["sub".to_string()], vec!["sub".to_string(), "deeper".to_string()]], "父資料夾先建");
+        let mut rels: Vec<String> = plan.files.iter().map(|f| f.1.join("/")).collect();
+        rels.sort();
+        assert_eq!(rels, vec!["sub/deeper/leaf.bin", "sub/mid.txt", "top.txt"]);
+        // 取消旗標一開始就立起來 → 不掃
+        assert!(matches!(plan_local_tree(&root, &AtomicBool::new(true)).await, Err(AppError::SshCancelled)));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

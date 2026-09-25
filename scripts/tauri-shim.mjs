@@ -22,6 +22,9 @@ export function installShim(fx) {
   // SFTP 編輯器存檔 / chmod 的紀錄（冒煙檢查驗「存了什麼、改成幾號權限」用）。
   window.__DBKIT_SFTP_WRITES__ = [];
   window.__DBKIT_SFTP_CHMOD__ = [];
+  // SFTP 刪除與多選批次傳輸的紀錄（驗「刪了哪些、批次帶了哪些路徑與同名策略」用）。
+  window.__DBKIT_SFTP_REMOVES__ = [];
+  window.__DBKIT_SFTP_BATCH__ = [];
   const one = (columns, cells) => ({ columns, rows: [cells], rows_affected: 0 });
 
   const queryFor = (sql) => {
@@ -286,7 +289,7 @@ export function installShim(fx) {
     ssh_sftp_stat: ({ path }) => sftpFind(path) ?? Promise.reject(new Error("找不到檔案或目錄")),
     ssh_sftp_mkdir: () => null,
     ssh_sftp_rename: () => null,
-    ssh_sftp_remove: () => null,
+    ssh_sftp_remove: ({ path, recursive }) => { window.__DBKIT_SFTP_REMOVES__.push({ path, recursive }); return null; },
     ssh_sftp_read_text: ({ path }) => { const text = sftpFiles.get(path) ?? ""; return { text, truncated: false, size: new TextEncoder().encode(text).length, lossy: false, binary: false }; },
     ssh_sftp_write_text: ({ path, content, createNew }) => {
       window.__DBKIT_SFTP_WRITES__.push({ path, content, createNew });
@@ -303,6 +306,16 @@ export function installShim(fx) {
     },
     ssh_sftp_download: ({ remote }) => sshTransfer(remote),
     ssh_sftp_upload: ({ local }) => sshTransfer(local),
+    ssh_sftp_download_many: ({ remotes, localDir, onConflict }) => {
+      window.__DBKIT_SFTP_BATCH__.push({ kind: "download", remotes, localDir, onConflict });
+      return sshTransfer(remotes[0]);
+    },
+    ssh_sftp_upload_many: ({ locals, remoteDir, onConflict }) => {
+      window.__DBKIT_SFTP_BATCH__.push({ kind: "upload", locals, remoteDir, onConflict });
+      return sshTransfer(locals[0]);
+    },
+    // 本機「已經有」哪些名稱由情境自己設（window.__DBKIT_LOCAL_EXISTING__），預設都沒有。
+    ssh_sftp_local_conflicts: ({ names }) => names.filter((n) => (window.__DBKIT_LOCAL_EXISTING__ ?? []).includes(n)),
     ssh_sftp_cancel: () => null,
   };
 
@@ -407,7 +420,8 @@ export function installShim(fx) {
       if (cmd.startsWith("plugin:event|")) return Promise.resolve(1);
       // 檔案對話框：回一個假路徑，開 / 存檔的後續流程（載入快照、匯出報告）才走得完。
       // 回 null 等於「使用者按取消」，那條路徑在截圖與冒煙檢查裡都驗不到東西。
-      if (cmd === "plugin:dialog|open") return Promise.resolve(fx.PICKED_OPEN_PATH);
+      // 情境可用 window.__DBKIT_DIALOG_OPEN__ 換掉「選到的東西」（例如 SFTP 批次下載要的是資料夾）。
+      if (cmd === "plugin:dialog|open") return Promise.resolve(window.__DBKIT_DIALOG_OPEN__ ?? fx.PICKED_OPEN_PATH);
       if (cmd === "plugin:dialog|save") return Promise.resolve(fx.PICKED_SAVE_PATH);
       if (cmd.startsWith("plugin:")) return Promise.resolve(null);
       const h = handlers[cmd];

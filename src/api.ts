@@ -2,7 +2,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   SshSessionsFile, SshSession, SshFolder, SshPlacement, SshTargetRef, SshConnInfo, SshHostKeyDecision,
-  SshHostKeyPrompt, SshAuthPrompt, SshTermExit, SshConnClosed, SftpEntry, SftpOpenInfo, SftpProgress, SftpText,
+  SshHostKeyPrompt, SshAuthPrompt, SshTermExit, SshConnClosed, SftpEntry, SftpOnConflict, SftpOpenInfo, SftpProgress, SftpText,
 } from "./sshTypes";
 
 export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "external";
@@ -1949,5 +1949,14 @@ export const api = {
     invoke<string>("ssh_sftp_download", { sftpId, remote, local, overwrite }),
   sshSftpUpload: (sftpId: string, local: string, remote: string, overwrite: boolean) =>
     invoke<string>("ssh_sftp_upload", { sftpId, local, remote, overwrite }),
+  // 多選批次（檔案 / 資料夾混合）：一個 transfer、依序傳、進度合併；onConflict 決定目的地已有同名時
+  // 整批不開始 / 覆蓋 / 略過。完成事件的 message 是略過項目的摘要。
+  sshSftpDownloadMany: (sftpId: string, remotes: string[], localDir: string, onConflict: SftpOnConflict) =>
+    invoke<string>("ssh_sftp_download_many", { sftpId, remotes, localDir, onConflict }),
+  sshSftpUploadMany: (sftpId: string, locals: string[], remoteDir: string, onConflict: SftpOnConflict) =>
+    invoke<string>("ssh_sftp_upload_many", { sftpId, locals, remoteDir, onConflict }),
+  // 下載前的同名檢查：names 裡哪些在 localDir 已經有了（與實際下載同一套 Windows 檔名轉換）。
+  sshSftpLocalConflicts: (localDir: string, names: string[]) =>
+    invoke<string[]>("ssh_sftp_local_conflicts", { localDir, names }),
   sshSftpCancel: (transferId: string) => invoke<void>("ssh_sftp_cancel", { transferId }),
 };

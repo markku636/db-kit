@@ -142,6 +142,9 @@ export interface SftpProgress {
   message?: string | null;
 }
 
+/** 批次傳輸時目的地已有同名項目：整批不開始 / 覆蓋（資料夾合併）/ 略過同名。 */
+export type SftpOnConflict = "fail" | "overwrite" | "skip";
+
 /** 前端執行期的連線狀態（不進後端）。 */
 export type SshStatus = "connecting" | "connected" | "disconnected" | "error";
 

@@ -114,7 +114,7 @@ src-tauri/src/
 │   ├── tunnel.rs      DB 連線的 direct-tcpip port forward（open_tunnel / TunnelGuard）
 │   ├── sessions.rs    側欄「SSH 主機」持久化（`ssh_sessions.json`）+ keychain 帳號名；不含密碼欄位
 │   ├── terminal.rs    PTY shell channel：輸出合併（16 KiB / 8 ms）、write / send_line / resize / close
-│   ├── sftp.rs        SFTP 子系統（russh-sftp）：列表 / stat / mkdir / rename / 遞迴刪除 / 上下傳 + 取消、路徑安全
+│   ├── sftp.rs        SFTP 子系統（russh-sftp）：列表 / stat / mkdir / rename / 遞迴刪除 / 上下傳 + 取消、路徑安全；App 內編輯（read / write text，覆寫原檔保留權限）、chmod；資料夾與多選批次傳輸（先整批規劃再依序傳、一條進度、同名策略 fail / overwrite / skip）；檔案型別只看 S_IFMT（不用 russh-sftp 的 bit-contains `is_dir()`）
 │   ├── runtime.rs     SshRuntime：活著的連線 / 終端 / SFTP / 待答提示 / 傳輸旗標（AppState.ssh）
 │   └── it_tests.rs    Docker OpenSSH 整合測試（#[ignore]）
 ├── scheduler.rs       排程備份
