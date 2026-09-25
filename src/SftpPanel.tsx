@@ -1,8 +1,8 @@
 // SFTP 檔案瀏覽：掛在 SSH 終端機分頁右側的分割面板（WinSCP 式並排，而非 Xshell 另開 Xftp 視窗）。
 // 用同一條 SSH 連線開 sftp subsystem，不會再問一次密碼 / OTP；「在終端機 cd 到此」也因此指向同一個 shell。
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
-  ArrowUp, ChevronRight, Download, EyeOff, File, Folder, FolderPlus, Link2, Pencil, RefreshCw, Upload, X, Eye,
+  ArrowUp, ChevronRight, Download, EyeOff, File, FilePlus, Folder, FolderPlus, Link2, ListFilter, Pencil, RefreshCw, Upload, X, Eye,
 } from "lucide-react";
 import { api } from "./api";
 import type { SftpEntry } from "./sshTypes";
@@ -12,6 +12,11 @@ import { useT } from "./i18n";
 import { Icon, IconButton, MenuPanel, Spinner } from "./ui/index";
 import { copyToClipboard, pickOpenFile, pickSaveFile, toast, uiConfirm, uiPrompt } from "./ui";
 import { fmtBytes } from "./schemaCache";
+import { canOpenInEditor, toOctal } from "./sftpText";
+
+// 編輯器帶 CodeMirror + 語言包、權限對話框用得少：都只在第一次打開時才下載。
+const SftpFileEditor = lazy(() => import("./SftpFileEditor"));
+const SftpPermsDialog = lazy(() => import("./SftpPermsDialog"));
 
 export interface SftpPanelProps {
   tabKey: string;
@@ -64,6 +69,12 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
   const [selected, setSelected] = useState<string | null>(null);
   const [editingPath, setEditingPath] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; entry: SftpEntry | null } | null>(null);
+  // App 內編輯 / 權限對話框的對象（null = 沒開）。
+  const [editing, setEditing] = useState<Pick<SftpEntry, "path" | "name" | "size" | "mtime"> | null>(null);
+  const [permsFor, setPermsFor] = useState<SftpEntry | null>(null);
+  // 清單篩選（只過濾目前這一層的名稱，不遞迴搜尋）。
+  const [filter, setFilter] = useState("");
+  const filterRef = useRef<HTMLInputElement>(null);
   const pathInputRef = useRef<HTMLInputElement>(null);
   const openingRef = useRef<string | null>(null);
   // 已經列過的 sftpId：自己剛開好的那個不要被 effect 再列一次（那次會拿舊的 path 蓋掉家目錄）。
@@ -120,7 +131,8 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
   const refresh = () => navigate(path);
 
   const visible = useMemo(() => {
-    const filtered = showHidden ? entries : entries.filter((e) => !e.name.startsWith("."));
+    const q = filter.trim().toLowerCase();
+    const filtered = entries.filter((e) => (showHidden || !e.name.startsWith(".")) && (!q || e.name.toLowerCase().includes(q)));
     const isDir = (e: SftpEntry) => e.is_dir || e.link_target_is_dir === true;
     const cmp = (a: SftpEntry, b: SftpEntry) => {
       const da = isDir(a) ? 0 : 1;
@@ -133,15 +145,30 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
       return r * sort.dir;
     };
     return [...filtered].sort(cmp);
-  }, [entries, showHidden, sort]);
+  }, [entries, showHidden, sort, filter]);
 
   const toggleSort = (col: SortCol) => setSort((s) => (s.col === col ? { col, dir: s.dir === 1 ? -1 : 1 } : { col, dir: 1 }));
 
   // ---- 動作 ----
+  // 雙擊 / Enter：資料夾進入；1 MiB 以內的檔在 App 內開（Xftp 的「編輯」）；更大的才下載。
   const openEntry = (e: SftpEntry) => {
     if (e.is_dir || e.link_target_is_dir) navigate(e.path);
+    else if (canOpenInEditor(e.size)) setEditing(e);
     else void download(e);
   };
+  const newFile = async () => {
+    if (!sftpId) return;
+    const name = await uiPrompt(t("新檔案名稱"), { title: t("新增檔案"), placeholder: t("例如 notes.txt") });
+    if (!name?.trim()) return;
+    try {
+      const st = await api.sshSftpWriteText(sftpId, joinRemote(path, name.trim()), "", true);
+      refresh();
+      setEditing(st);
+    } catch (err) { toast.error(errMsg(err)); }
+  };
+  // 編輯器存檔 / 權限變更後：就地更新這一列（大小、時間、權限），不必整個目錄重列。
+  const patchEntry = (st: SftpEntry) =>
+    setEntries((es) => es.map((x) => (x.path === st.path ? { ...st, name: x.name } : x)));
   const download = async (e: SftpEntry) => {
     if (!sftpId) return;
     const local = await pickSaveFile(e.name);
@@ -191,11 +218,23 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
   };
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
-    if (e.key === "Backspace" && !editingPath) { e.preventDefault(); navigate(parentOf(path)); return; }
+    // 只接「焦點在面板本身 / 檔案清單」的按鍵。路徑、篩選框、權限對話框、編輯器（CodeMirror 是
+    // contenteditable，而且對話框沒有走 portal、DOM 就在這個面板裡）的按鍵都會冒泡上來——
+    // 不擋的話，在編輯器裡按 Backspace 會跳上一層、按 Delete 會跳出刪檔確認。
+    const el = e.target as HTMLElement;
+    if (el !== e.currentTarget && !el.closest?.("[data-sftp-list]")) return;
+    if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F") && !e.shiftKey) {
+      e.preventDefault();
+      filterRef.current?.focus();
+      filterRef.current?.select();
+      return;
+    }
+    if (e.key === "Backspace") { e.preventDefault(); navigate(parentOf(path)); return; }
     if (e.key === "F5") { e.preventDefault(); refresh(); return; }
     const cur = visible.find((x) => x.name === selected);
     if (e.key === "Enter" && cur) { e.preventDefault(); openEntry(cur); return; }
     if (e.key === "Delete" && cur) { e.preventDefault(); void remove(cur); return; }
+    if (e.key === "F2" && cur) { e.preventDefault(); void rename(cur); return; }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const i = visible.findIndex((x) => x.name === selected);
@@ -224,6 +263,7 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
           <IconButton icon={ArrowUp} label={t("上一層（Backspace）")} onClick={() => navigate(parentOf(path))} disabled={path === "/"} />
           <IconButton icon={RefreshCw} label={t("重新整理（F5）")} onClick={refresh} disabled={!sftpId} />
           <IconButton icon={showHidden ? Eye : EyeOff} label={showHidden ? t("隱藏隱藏檔") : t("顯示隱藏檔")} active={showHidden} onClick={() => setShowHidden((v) => !v)} />
+          <IconButton icon={FilePlus} label={t("新增檔案")} onClick={() => void newFile()} disabled={!sftpId} />
           <IconButton icon={FolderPlus} label={t("新資料夾")} onClick={() => void mkdir()} disabled={!sftpId} />
           <IconButton icon={Upload} label={t("上傳到此")} onClick={() => void upload()} disabled={!sftpId} />
           <IconButton icon={X} label={t("關閉 SFTP")} onClick={onClose} />
@@ -257,8 +297,22 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
           </>
         )}
       </div>
+      {/* 篩選：只過濾這一層的名稱（Ctrl+F 聚焦、Esc 清除） */}
+      <div className="shrink-0 flex items-center gap-1 px-2 py-1 border-b border-fg/10">
+        <Icon icon={ListFilter} size={12} className="text-fg/35 shrink-0" />
+        <input
+          ref={filterRef}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setFilter(""); (e.currentTarget.closest("[data-testid=sftp-panel]") as HTMLElement | null)?.focus(); } }}
+          placeholder={t("篩選名稱…（Ctrl+F）")}
+          aria-label={t("篩選名稱")}
+          className="flex-1 min-w-0 bg-transparent outline-none placeholder:text-fg/30"
+        />
+        {filter && <IconButton icon={X} label={t("清除篩選")} box="w-5 h-5" iconSize={11} onClick={() => setFilter("")} />}
+      </div>
       {/* 清單 */}
-      <div className="flex-1 min-h-0 overflow-auto" onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, entry: null }); }}>
+      <div data-sftp-list="" className="flex-1 min-h-0 overflow-auto" onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, entry: null }); }}>
         <table className="w-full border-collapse">
           <thead className="sticky top-0 bg-panel text-fg/45 text-[10px] uppercase tracking-wide">
             <tr>
@@ -295,7 +349,22 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
         </table>
         {loading && <div className="flex items-center gap-2 p-3 text-fg/50"><Spinner size={12} />{t("載入中…")}</div>}
         {!loading && error && <div className="p-3 text-danger">{error}</div>}
-        {!loading && !error && visible.length === 0 && <div className="p-3 text-fg/40">{t("（空資料夾）")}</div>}
+        {!loading && !error && visible.length === 0 && (
+          <div className="p-3 text-fg/40">{filter.trim() ? t("沒有符合「{q}」的項目", { q: filter.trim() }) : t("（空資料夾）")}</div>
+        )}
+      </div>
+      {/* 狀態列：項目數 / 選取的那一項（Xftp 底部的摘要） */}
+      <div className="shrink-0 flex items-center gap-2 px-2 py-0.5 border-t border-fg/10 text-[10px] text-fg/45">
+        <span>{filter.trim() ? t("{shown} / {n} 項", { shown: visible.length, n: entries.length }) : t("{n} 項", { n: visible.length })}</span>
+        {(() => {
+          const cur = visible.find((x) => x.name === selected);
+          if (!cur) return null;
+          return (
+            <span className="truncate mono" title={cur.path}>
+              {cur.name}{cur.is_dir ? "" : ` · ${fmtBytes(cur.size)}`}{cur.permissions != null ? ` · ${toOctal(cur.permissions)}` : ""}
+            </span>
+          );
+        })()}
       </div>
       {/* 傳輸進度 */}
       {myJobs.length > 0 && (
@@ -325,14 +394,19 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
             ? ([
                 ...(menu.entry.is_dir || menu.entry.link_target_is_dir
                   ? [[t("開啟"), () => navigate(menu.entry!.path)]]
-                  : [[t("下載"), () => void download(menu.entry!)]]),
-                [t("重新命名…"), () => void rename(menu.entry!)],
+                  : [
+                      ...(canOpenInEditor(menu.entry.size) ? [[t("編輯"), () => setEditing(menu.entry!)]] : []),
+                      [t("下載"), () => void download(menu.entry!)],
+                    ]),
+                [t("重新命名…（F2）"), () => void rename(menu.entry!)],
+                [t("權限…"), () => setPermsFor(menu.entry!)],
                 [t("刪除"), () => void remove(menu.entry!)],
                 [t("複製路徑"), () => void copyToClipboard(menu.entry!.path)],
                 [t("在終端機 cd 到此"), () => onCd(menu.entry!.is_dir ? menu.entry!.path : parentOf(menu.entry!.path))],
               ] as [string, () => void][])
             : ([
                 [t("上傳到此…"), () => void upload()],
+                [t("新增檔案…"), () => void newFile()],
                 [t("新資料夾…"), () => void mkdir()],
                 [t("重新整理"), refresh],
                 [t("複製路徑"), () => void copyToClipboard(path)],
@@ -346,6 +420,16 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
             </button>
           ))}
         </MenuPanel>
+      )}
+      {sftpId && (editing || permsFor) && (
+        <Suspense fallback={null}>
+          {editing && (
+            <SftpFileEditor sftpId={sftpId} entry={editing} onClose={() => setEditing(null)} onSaved={patchEntry} />
+          )}
+          {permsFor && (
+            <SftpPermsDialog sftpId={sftpId} entry={permsFor} onClose={() => setPermsFor(null)} onChanged={patchEntry} />
+          )}
+        </Suspense>
       )}
     </div>
   );

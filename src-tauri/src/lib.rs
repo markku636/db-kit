@@ -448,6 +448,8 @@ pub fn run() {
             commands::ssh::ssh_sftp_rename,
             commands::ssh::ssh_sftp_remove,
             commands::ssh::ssh_sftp_read_text,
+            commands::ssh::ssh_sftp_write_text,
+            commands::ssh::ssh_sftp_chmod,
             commands::ssh::ssh_sftp_download,
             commands::ssh::ssh_sftp_upload,
             commands::ssh::ssh_sftp_cancel,

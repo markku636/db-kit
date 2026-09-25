@@ -260,3 +260,63 @@ async fn cancelled_download_leaves_no_part_file() {
     let _ = std::fs::remove_dir_all(&local_dir);
     let _ = conn.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
 }
+
+/// Xftp「編輯」與「權限」：新增檔案 → 讀回 → 覆寫（權限與擁有者不能被換掉）→ chmod → 非 UTF-8 標 lossy。
+#[tokio::test]
+#[ignore = "需要 Docker OpenSSH:2222"]
+async fn sftp_edit_text_and_chmod() {
+    let conn = connect().await;
+    let (sftp, home) = SftpClient::open(&conn).await.expect("sftp open");
+    let dir = format!("{home}/dbkit-it-edit-{}", uuid::Uuid::new_v4());
+    sftp.mkdir(&dir).await.unwrap();
+    let path = format!("{dir}/app.conf");
+
+    // 新增：create_new 對不存在的檔成功，第二次（已存在）必須失敗，不能蓋掉別人的檔。
+    let st = sftp.write_text(&path, "listen 80;\n", true).await.expect("create");
+    assert_eq!(st.size, 11);
+    assert!(sftp.write_text(&path, "x", true).await.is_err(), "create_new 不該覆蓋既有檔");
+
+    // chmod 0640 → 讀回的權限位元一致；型別位元（一般檔）保留。
+    let st = sftp.chmod(&path, 0o640).await.expect("chmod");
+    assert_eq!(st.permissions.map(|p| p & 0o7777), Some(0o640), "{:?}", st.permissions);
+    assert!(st.mode.starts_with("-rw-r-----"), "{}", st.mode);
+
+    // 覆寫（編輯存檔）：內容換掉、長度縮短也不留尾巴，權限維持 0640（沒有被換成新檔的預設權限）。
+    let st = sftp.write_text(&path, "listen 8080;\nserver_name 範例;\n", false).await.expect("overwrite");
+    let back = sftp.read_small(&path, 0).await.unwrap();
+    assert_eq!(back.text, "listen 8080;\nserver_name 範例;\n");
+    assert!(!back.lossy && !back.binary && !back.truncated);
+    assert_eq!(st.permissions.map(|p| p & 0o7777), Some(0o640), "直接覆寫不該換掉權限");
+    let st = sftp.write_text(&path, "a\n", false).await.unwrap();
+    assert_eq!(st.size, 2, "TRUNCATE：變短不留舊內容的尾巴");
+
+    // 檔案在編輯途中被刪掉：不帶 CREATE，存檔要失敗而不是默默重建。
+    let gone = format!("{dir}/gone.txt");
+    assert!(sftp.write_text(&gone, "x", false).await.is_err(), "不存在的檔不該被當成編輯目標重建");
+
+    // 非 UTF-8（Big5 的「中」= a4 a4）→ lossy；NUL → binary。原始位元組經本機暫存檔上傳。
+    let local_dir = std::env::temp_dir().join(format!("dbkit-sftp-edit-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&local_dir).unwrap();
+    let put = |name: &str, bytes: &[u8]| {
+        let p = local_dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p
+    };
+    let no_cancel = AtomicBool::new(false);
+    let big5 = format!("{dir}/big5.txt");
+    sftp.upload(&put("big5.txt", &[0xa4, 0xa4, b'\n']), &big5, true, Box::new(|_, _| {}), &no_cancel)
+        .await
+        .unwrap();
+    let t = sftp.read_small(&big5, 0).await.unwrap();
+    assert!(t.lossy, "Big5 內容要標 lossy，前端才會只給唯讀");
+    let bin = format!("{dir}/blob.bin");
+    sftp.upload(&put("blob.bin", b"\x7fELF\0\x02\x01"), &bin, true, Box::new(|_, _| {}), &no_cancel)
+        .await
+        .unwrap();
+    assert!(sftp.read_small(&bin, 0).await.unwrap().binary);
+
+    sftp.remove(&dir, true).await.unwrap();
+    sftp.close().await;
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = conn.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+}

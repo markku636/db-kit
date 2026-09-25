@@ -19,6 +19,9 @@ export function installShim(fx) {
   window.__DBKIT_UNKNOWN__ = unknown;
   // 經「指令列 / AI 送到終端機」送進假 shell 的整行指令（冒煙檢查驗「取消確認框後什麼都沒送」用）。
   window.__DBKIT_SSH_WRITES__ = [];
+  // SFTP 編輯器存檔 / chmod 的紀錄（冒煙檢查驗「存了什麼、改成幾號權限」用）。
+  window.__DBKIT_SFTP_WRITES__ = [];
+  window.__DBKIT_SFTP_CHMOD__ = [];
   const one = (columns, cells) => ({ columns, rows: [cells], rows_affected: 0 });
 
   const queryFor = (sql) => {
@@ -279,12 +282,25 @@ export function installShim(fx) {
     ssh_auth_answer: () => null,
     ssh_sftp_open: () => ({ sftp_id: `sftp-${++sshSeq}`, home: "/home/deploy" }),
     ssh_sftp_close: () => null,
-    ssh_sftp_list: ({ path }) => fx.SFTP_LISTING?.[path] ?? [],
-    ssh_sftp_stat: ({ path }) => Object.values(fx.SFTP_LISTING ?? {}).flat().find((e) => e.path === path) ?? null,
+    ssh_sftp_list: ({ path }) => (fx.SFTP_LISTING?.[path] ?? []).map(sftpWithMeta),
+    ssh_sftp_stat: ({ path }) => sftpFind(path) ?? Promise.reject(new Error("找不到檔案或目錄")),
     ssh_sftp_mkdir: () => null,
     ssh_sftp_rename: () => null,
     ssh_sftp_remove: () => null,
-    ssh_sftp_read_text: () => ({ text: "", truncated: false, size: 0 }),
+    ssh_sftp_read_text: ({ path }) => { const text = sftpFiles.get(path) ?? ""; return { text, truncated: false, size: new TextEncoder().encode(text).length, lossy: false, binary: false }; },
+    ssh_sftp_write_text: ({ path, content, createNew }) => {
+      window.__DBKIT_SFTP_WRITES__.push({ path, content, createNew });
+      sftpFiles.set(path, content);
+      sftpMeta.set(path, { ...(sftpMeta.get(path) ?? {}), size: new TextEncoder().encode(content).length, mtime: Math.floor(Date.now() / 1000) });
+      return sftpFind(path) ?? { name: path.split("/").pop(), path, is_dir: false, is_symlink: false, link_target_is_dir: null, size: content.length, mtime: Math.floor(Date.now() / 1000), permissions: 0o100644, mode: "-rw-r--r--", uid: 1000, gid: 1000, owner: "deploy", group: "deploy" };
+    },
+    ssh_sftp_chmod: ({ path, mode }) => {
+      window.__DBKIT_SFTP_CHMOD__.push({ path, mode });
+      const base = sftpFind(path);
+      const type = base?.is_dir ? 0o40000 : 0o100000;
+      sftpMeta.set(path, { ...(sftpMeta.get(path) ?? {}), permissions: type | mode });
+      return sftpFind(path);
+    },
     ssh_sftp_download: ({ remote }) => sshTransfer(remote),
     ssh_sftp_upload: ({ local }) => sshTransfer(local),
     ssh_sftp_cancel: () => null,
@@ -294,6 +310,20 @@ export function installShim(fx) {
   let sshSeq = 0;
   const sshConns = new Map(); // connId → { host, port, username }
   const sshTerms = new Map(); // termId → { send, prompt, line }
+  // SFTP 假檔案：內容（read_text / write_text）與被改過的屬性（大小 / 時間 / 權限）疊在 fixtures 上。
+  const sftpFiles = new Map(Object.entries(fx.SFTP_FILES ?? {}));
+  const sftpMeta = new Map();
+  const rwx = (m) => [6, 3, 0].map((sh) => ["r", "w", "x"].map((c, i) => ((m >> sh) & (4 >> i)) ? c : "-").join("")).join("");
+  function sftpWithMeta(e) {
+    const m = sftpMeta.get(e.path);
+    if (!m) return e;
+    const permissions = m.permissions ?? e.permissions;
+    return { ...e, ...m, permissions, mode: (e.is_dir ? "d" : "-") + rwx(permissions) };
+  }
+  function sftpFind(path) {
+    const e = Object.values(fx.SFTP_LISTING ?? {}).flat().find((x) => x.path === path);
+    return e ? sftpWithMeta(e) : null;
+  }
   // @tauri-apps/api 的 Channel 建構時已透過 transformCallback 把回呼登錄進 callbacks（id 在 ch.id）；
   // 真後端送 { message, index }，index 遞增讓 Channel 端保序，這裡照同一形狀餵。
   function channelSender(ch) {

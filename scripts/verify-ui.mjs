@@ -48,6 +48,7 @@ const CASE_FX = {
   "sidebar-scroll-reaches-last": { CONNECTIONS: MANY_CONNECTIONS, CONN_GROUPS: MANY_GROUPS },
   "ssh-terminal": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-ai-suggest": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "sftp-edit-and-chmod": { STORAGE_SEED: SSH_STORAGE_SEED },
 };
 
 // xterm 目前畫面（DOM renderer）的純文字。
@@ -112,6 +113,12 @@ const CASES = {
     await page.getByRole("button", { name: "貼上", exact: true }).last().click();
     await sleep(500);
     check("確認後多行貼上逐行執行", (await termText(page)).includes("/home/deploy"), (await termText(page)).slice(-300));
+    // 單行但結尾帶換行（網頁三連擊選取常這樣）貼上後也會立刻執行，一樣要先問。
+    await pasteInto("whoami\n");
+    await sleep(300);
+    check("單行但結尾有換行的貼上也先確認", (await page.getByText(/結尾有換行/).count()) > 0);
+    await page.getByRole("button", { name: "取消", exact: true }).last().click();
+    await sleep(200);
 
     await page.getByRole("button", { name: "開啟 SFTP" }).first().click();
     const sftp = page.getByTestId("sftp-panel");
@@ -142,6 +149,57 @@ const CASES = {
     check("終端機分頁右鍵：關閉", has("關閉"));
     await closeMenu(page);
     check("沒有未實作的 SSH command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // SFTP 的 Xftp 式操作：雙擊文字檔在 App 內開編輯器 → 改內容 → Ctrl+S 存回遠端；右鍵「權限…」改成 755。
+  // 另外釘住一個審閱時發現的坑：對話框沒有走 portal，編輯器裡的 Backspace 會冒泡到檔案清單，
+  // 不擋的話就是「刪一個字，面板跳回上一層」。
+  async "sftp-edit-and-chmod"(page) {
+    await openSshWeb01(page);
+    await page.getByRole("button", { name: "開啟 SFTP" }).first().click();
+    const sftp = page.getByTestId("sftp-panel");
+    await sftp.getByText("app", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    await sftp.getByText("app", { exact: true }).first().dblclick();
+    await sftp.getByText("package.json", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    await sftp.getByText("package.json", { exact: true }).first().dblclick();
+    const editor = page.getByTestId("sftp-editor");
+    await editor.locator(".cm-content").first().waitFor({ timeout: 8000 }).catch(() => {});
+    check("雙擊 1 MiB 以內的檔案在 App 內開編輯器", (await editor.locator(".cm-content").count()) > 0);
+    check("編輯器載入遠端內容", /web-01-app/.test(await editor.innerText().catch(() => "")));
+
+    await editor.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type("// edited");
+    await page.keyboard.press("Backspace");
+    await sleep(200);
+    check("編輯器裡按 Backspace 不會讓 SFTP 跳回上一層", (await sftp.getByText("server.js", { exact: true }).count()) > 0);
+    await page.keyboard.press("Control+s");
+    await page.waitForFunction(() => window.__DBKIT_SFTP_WRITES__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const writes = await page.evaluate(() => window.__DBKIT_SFTP_WRITES__);
+    check("Ctrl+S 存回遠端（覆寫原檔，不是新增）",
+      writes.length === 1 && writes[0].path === "/home/deploy/app/package.json" && writes[0].createNew === false,
+      JSON.stringify(writes).slice(0, 200));
+    check("存回去的是改過的內容", writes.length === 1 && writes[0].content.includes("// edite") && writes[0].content.includes("web-01-app"));
+    await page.getByRole("button", { name: "關閉", exact: true }).last().click();
+    await sleep(300);
+    check("存檔後關閉不再問未儲存", (await editor.count()) === 0);
+
+    await sftp.getByText("server.js", { exact: true }).first().click({ button: "right" });
+    await sleep(200);
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: "權限…" }).first().click();
+    const perms = page.getByTestId("sftp-perms");
+    await perms.waitFor({ timeout: 5000 }).catch(() => {});
+    check("右鍵「權限…」開啟權限對話框", (await perms.count()) > 0);
+    await page.getByLabel("八進位").first().fill("755");
+    await page.getByRole("button", { name: "套用", exact: true }).first().click();
+    await page.waitForFunction(() => window.__DBKIT_SFTP_CHMOD__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const chmods = await page.evaluate(() => window.__DBKIT_SFTP_CHMOD__);
+    check("chmod 送出 0755", chmods.length === 1 && chmods[0].path === "/home/deploy/app/server.js" && chmods[0].mode === 0o755,
+      JSON.stringify(chmods));
+    await sleep(300);
+    check("清單的權限欄就地更新成 rwxr-xr-x", (await sftp.getByText("-rwxr-xr-x", { exact: true }).count()) > 0);
+    check("沒有未實作的 SFTP command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 

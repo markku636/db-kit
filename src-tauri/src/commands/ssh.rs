@@ -519,6 +519,32 @@ pub async fn ssh_sftp_read_text(
     sftp.read_small(&path, max_bytes).await
 }
 
+/// 把編輯器內容寫回遠端（Xftp「編輯」的存檔）。`create_new` = 新增檔案（已存在即失敗）。
+/// 回傳寫完後的屬性，前端拿 mtime / size 當下一次存檔的衝突基準。
+#[tauri::command]
+pub async fn ssh_sftp_write_text(
+    state: State<'_, AppState>,
+    sftp_id: String,
+    path: String,
+    content: String,
+    create_new: bool,
+) -> AppResult<SftpEntry> {
+    let sftp = state.ssh.sftp(&sftp_id)?;
+    sftp.write_text(&path, &content, create_new).await
+}
+
+/// chmod：只改權限位元（`0o7777` 以內）。回傳變更後的屬性。
+#[tauri::command]
+pub async fn ssh_sftp_chmod(
+    state: State<'_, AppState>,
+    sftp_id: String,
+    path: String,
+    mode: u32,
+) -> AppResult<SftpEntry> {
+    let sftp = state.ssh.sftp(&sftp_id)?;
+    sftp.chmod(&path, mode).await
+}
+
 /// 進度追蹤 + 收尾事件，上下傳共用。
 struct TransferReporter {
     app: AppHandle,

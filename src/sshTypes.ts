@@ -122,6 +122,10 @@ export interface SftpText {
   text: string;
   truncated: boolean;
   size: number;
+  /** 內容有無效的 UTF-8（畫面上已被替換字元取代）：照這份存回去會弄壞原檔，編輯器只給唯讀。 */
+  lossy: boolean;
+  /** 前 8 KiB 內有 NUL：幾乎確定是二進位檔。 */
+  binary: boolean;
 }
 
 export interface SftpOpenInfo {

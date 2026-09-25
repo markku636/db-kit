@@ -53,12 +53,22 @@ pub struct SftpEntry {
 }
 
 /// `read_small` 的結果。
+///
+/// `lossy` / `binary` 是給編輯器的安全閥：內容不是乾淨的 UTF-8 時，畫面上看到的是轉換過的字
+/// （無效位元組變成 U+FFFD），照這份存回去就會把原檔弄壞——前端遇到這兩個旗標只給唯讀檢視。
 #[derive(Debug, Clone, Serialize)]
 pub struct SftpText {
     pub text: String,
     pub truncated: bool,
     pub size: u64,
+    /// 內容有無效的 UTF-8（已以 U+FFFD 取代）。截斷在多位元組字元中間不算。
+    pub lossy: bool,
+    /// 前 8 KiB 內有 NUL 位元組：幾乎可以確定不是文字檔。
+    pub binary: bool,
 }
+
+/// `write_text` 一次寫入的上限。編輯器只給 ≤ 1 MiB 的檔案編輯，這裡留一點貼上內容的餘裕。
+pub const WRITE_TEXT_MAX: usize = 2 * 1024 * 1024;
 
 /// 進度回呼：`(已完成位元組, 總大小)`。
 pub type ProgressFn = Box<dyn Fn(u64, Option<u64>) + Send + Sync>;
@@ -211,7 +221,40 @@ impl SftpClient {
             truncated = true;
         }
         let _ = f.close().await;
-        Ok(SftpText { text: String::from_utf8_lossy(&buf).into_owned(), truncated, size })
+        Ok(decode_text(buf, truncated, size))
+    }
+
+    /// 把編輯器的內容寫回遠端（Xftp 的「編輯」存檔）。
+    ///
+    /// 直接覆寫原檔（`WRITE | TRUNCATE`）而不是寫暫存檔再改名：改名會換掉 inode，
+    /// 檔案的擁有者 / 群組 / 權限都變成「目前這個使用者的預設值」，改一行 nginx.conf 就把
+    /// 權限弄亂。`create_new` = 新增檔案（已存在即失敗，不會蓋掉別人的檔）；否則檔案必須還在
+    /// （不帶 CREATE：編輯途中被刪掉就回錯，而不是默默重建一個）。回傳寫完後的屬性。
+    pub async fn write_text(&self, path: &str, content: &str, create_new: bool) -> AppResult<SftpEntry> {
+        if content.len() > WRITE_TEXT_MAX {
+            return Err(AppError::Sftp(tf!(
+                "內容太大，無法在編輯器存檔（上限 {max} MiB）",
+                max = WRITE_TEXT_MAX / (1024 * 1024)
+            )));
+        }
+        let flags = if create_new {
+            OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE
+        } else {
+            OpenFlags::WRITE | OpenFlags::TRUNCATE
+        };
+        let mut f = self.inner.open_with_flags(path.to_string(), flags).await.map_err(map_err)?;
+        f.write_all(content.as_bytes()).await.map_err(io_err)?;
+        // close 會等所有寫入的 ack：磁碟滿 / 權限這類錯誤在這裡才浮出來，不能吞掉。
+        f.close().await.map_err(io_err)?;
+        self.stat(path).await
+    }
+
+    /// 變更權限位元（chmod）。只送 `permissions` 一個屬性，擁有者與時間都不動；
+    /// 型別位元（目錄 / 檔案）由伺服器決定，這裡只收 `0o7777` 以內的部分。回傳變更後的屬性。
+    pub async fn chmod(&self, path: &str, mode: u32) -> AppResult<SftpEntry> {
+        let attrs = FileAttributes { permissions: Some(mode & 0o7777), ..FileAttributes::empty() };
+        self.inner.set_metadata(path.to_string(), attrs).await.map_err(map_err)?;
+        self.stat(path).await
     }
 
     /// 下載到本機。先寫 `<local>.part` 再 rename，取消 / 失敗不留半成品。
@@ -344,6 +387,22 @@ impl SftpClient {
 }
 
 // ---- 屬性 / 路徑工具（純函式，可測）----
+
+/// 讀到的位元組 → `SftpText`。截斷時若剛好切在多位元組字元中間，把那半個字元丟掉
+/// （那不是檔案壞掉，只是我們停在那裡），不要讓它變成 U+FFFD 又把 `lossy` 誤標成 true。
+fn decode_text(mut buf: Vec<u8>, truncated: bool, size: u64) -> SftpText {
+    let binary = buf.iter().take(8 * 1024).any(|&b| b == 0);
+    let lossy = match std::str::from_utf8(&buf) {
+        Ok(_) => false,
+        Err(e) if truncated && e.error_len().is_none() => {
+            let valid = e.valid_up_to();
+            buf.truncate(valid);
+            false
+        }
+        Err(_) => true,
+    };
+    SftpText { text: String::from_utf8_lossy(&buf).into_owned(), truncated, size, lossy, binary }
+}
 
 fn entry_from(name: String, path: String, md: &FileAttributes) -> SftpEntry {
     let permissions = md.permissions;
@@ -582,6 +641,38 @@ mod tests {
         assert_eq!(sanitize_local_filename(""), "_");
         assert_eq!(sanitize_local_filename("..."), "_");
         assert_eq!(sanitize_local_filename("正常.txt"), "正常.txt");
+    }
+
+    #[test]
+    fn decode_text_flags() {
+        let t = decode_text("hello\n世界".as_bytes().to_vec(), false, 12);
+        assert_eq!(t.text, "hello\n世界");
+        assert!(!t.lossy && !t.binary && !t.truncated);
+
+        // 截斷在「界」（3 bytes）中間：丟掉那半個字，不算 lossy。
+        let mut cut = "ab界".as_bytes().to_vec();
+        cut.truncate(4);
+        let t = decode_text(cut, true, 99);
+        assert_eq!(t.text, "ab");
+        assert!(!t.lossy, "截斷不是檔案壞掉");
+
+        // 同樣的半個字但沒有截斷 → 檔案本身就是壞的 UTF-8。
+        let mut bad = "ab界".as_bytes().to_vec();
+        bad.truncate(4);
+        let t = decode_text(bad, false, 4);
+        assert!(t.lossy);
+        assert!(t.text.contains('\u{FFFD}'));
+
+        // Big5 / Latin-1 這類非 UTF-8 → lossy。
+        let t = decode_text(vec![0xa7, 0x41, 0x61], false, 3);
+        assert!(t.lossy);
+
+        // NUL → binary（前 8 KiB 內才看）。
+        let t = decode_text(b"ELF\0\x01\x02".to_vec(), false, 6);
+        assert!(t.binary);
+        let mut late = vec![b'a'; 9000];
+        late.push(0);
+        assert!(!decode_text(late, false, 9001).binary, "8 KiB 之後的 NUL 不看");
     }
 
     #[test]

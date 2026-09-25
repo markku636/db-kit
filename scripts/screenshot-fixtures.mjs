@@ -526,3 +526,9 @@ export const AI_SHELL_CHUNKS = [
 export const AI_SHELL_DANGER_CHUNKS = [
   "這會**遞迴刪除** /tmp/cache 底下所有檔案，請先確認路徑沒錯：\n\n```bash\nrm -rf /tmp/cache\n```\n",
 ];
+// SFTP 編輯器開得起來的假檔案內容（路徑對得上 SFTP_LISTING）。
+export const SFTP_FILES = {
+  "/home/deploy/app/package.json": '{\n  "name": "web-01-app",\n  "version": "1.4.2",\n  "scripts": {\n    "start": "node server.js"\n  }\n}\n',
+  "/home/deploy/app/server.js": 'const http = require("http");\n\nhttp.createServer((req, res) => res.end("ok")).listen(8080);\n',
+  "/home/deploy/.bashrc": "# ~/.bashrc\nexport PATH=$HOME/bin:$PATH\n",
+};

@@ -388,6 +388,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "無效的 base64 輸入" => "Dữ liệu base64 không hợp lệ",
         "要求 sftp 子系統失敗：{e}" => "Yêu cầu hệ thống con sftp thất bại: {e}",
         "拒絕刪除根目錄或目前目錄" => "Từ chối xóa thư mục gốc hoặc thư mục hiện tại",
+        "內容太大，無法在編輯器存檔（上限 {max} MiB）" => "Nội dung quá lớn, không thể lưu từ trình soạn thảo (tối đa {max} MiB)",
         "伺服器回傳可疑的檔名，已中止刪除：{name}" => "Máy chủ trả về tên tệp đáng ngờ, đã dừng xóa: {name}",
         "本機檔案已存在：{path}" => "Tệp cục bộ đã tồn tại: {path}",
         "遠端檔案已存在：{path}" => "Tệp từ xa đã tồn tại: {path}",

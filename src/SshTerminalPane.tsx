@@ -252,7 +252,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     // 確認後再交給 term.paste（它會照 shell 的要求包 bracketed paste）。單行照舊不打擾。
     const onNativePaste = (ev: ClipboardEvent) => {
       const text = ev.clipboardData?.getData("text/plain") ?? "";
-      if (!prefsRef.current.warnMultilinePaste || multilineCount(text) <= 1) return;
+      if (!prefsRef.current.warnMultilinePaste || !pasteRunsImmediately(text)) return;
       ev.preventDefault();
       ev.stopPropagation();
       void confirmMultilinePaste(text).then((ok) => {
@@ -378,7 +378,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     let text = "";
     try { text = await navigator.clipboard.readText(); } catch { toast.error(t("無法讀取剪貼簿")); return; }
     if (!text) return;
-    if (multilineCount(text) > 1 && prefsRef.current.warnMultilinePaste && !(await confirmMultilinePaste(text))) return;
+    if (pasteRunsImmediately(text) && prefsRef.current.warnMultilinePaste && !(await confirmMultilinePaste(text))) return;
     termRef.current?.paste(text);
     termRef.current?.focus();
   };
@@ -386,6 +386,10 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
   const onKeyDownCapture = (e: ReactKeyboardEvent) => {
     const mod = e.ctrlKey || e.metaKey;
     if (!mod || !e.shiftKey) return;
+    // 只在焦點位於 xterm 本身時才當成終端機的複製 / 貼上 / 搜尋。這個分頁裡還有命令列輸入條、
+    // SFTP 面板與它的編輯器——在那裡按 Ctrl+Shift+V 是要貼進那個輸入框，被這裡攔走就會變成
+    // 「把剪貼簿貼進 shell」，而帶換行的單行內容貼進去就直接執行了。
+    if (!hostRef.current?.contains(e.target as Node)) return;
     const k = e.key.toLowerCase();
     if (k === "c") { e.preventDefault(); e.stopPropagation(); copySelection(); }
     else if (k === "v") { e.preventDefault(); e.stopPropagation(); void pasteFromClipboard(); }
@@ -580,12 +584,22 @@ function multilineCount(text: string): number {
   return text ? text.replace(/\r?\n$/, "").split(/\r?\n/).length : 0;
 }
 
-/** 多行貼上的確認框；Ctrl+V 與 Ctrl+Shift+V / 右鍵貼上共用同一句話。 */
+/**
+ * 貼上後會不會有東西「不按 Enter 就被執行」：內容裡只要有換行就會。
+ * 單行但結尾帶換行（網頁上三連擊選取指令常這樣）一樣會立刻跑——只算多行的話這種剛好漏掉。
+ * shell 有開 bracketed paste（bash 5.1+ / zsh 預設）時其實不會立刻執行，但前端看不出對方有沒有開，寧可多問。
+ */
+function pasteRunsImmediately(text: string): boolean {
+  return /[\r\n]/.test(text);
+}
+
+/** 會立刻執行的貼上的確認框；Ctrl+V 與 Ctrl+Shift+V / 右鍵貼上共用。 */
 function confirmMultilinePaste(text: string): Promise<boolean> {
-  return uiConfirm(t("貼上內容含 {n} 行，將逐行送出執行。確定？", { n: multilineCount(text) }), {
-    title: t("多行貼上"),
-    confirmText: t("貼上"),
-  });
+  const n = multilineCount(text);
+  const msg = n > 1
+    ? t("貼上內容含 {n} 行，將逐行送出執行。確定？", { n })
+    : t("貼上的內容結尾有換行，貼上後會立刻執行：{cmd}。確定？", { cmd: text.trim().slice(0, 120) });
+  return uiConfirm(msg, { title: t("多行貼上"), confirmText: t("貼上") });
 }
 
 /** POSIX 單引號包裹（路徑含空白 / 引號時 cd 仍正確）。 */

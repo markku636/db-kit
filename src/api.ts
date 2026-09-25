@@ -1939,6 +1939,11 @@ export const api = {
     invoke<void>("ssh_sftp_remove", { sftpId, path, recursive }),
   sshSftpReadText: (sftpId: string, path: string, maxBytes: number) =>
     invoke<SftpText>("ssh_sftp_read_text", { sftpId, path, maxBytes }),
+  // Xftp「編輯」存檔：直接覆寫原檔（保留權限 / 擁有者）；createNew = 新增檔案（已存在即失敗）。回傳寫完後的屬性。
+  sshSftpWriteText: (sftpId: string, path: string, content: string, createNew: boolean) =>
+    invoke<SftpEntry>("ssh_sftp_write_text", { sftpId, path, content, createNew }),
+  // chmod：只改權限位元（0o7777 以內），回傳變更後的屬性。
+  sshSftpChmod: (sftpId: string, path: string, mode: number) => invoke<SftpEntry>("ssh_sftp_chmod", { sftpId, path, mode }),
   // 上下傳立即回 transfer_id，進度走 onSftpProgress；取消後不留 .part。
   sshSftpDownload: (sftpId: string, remote: string, local: string, overwrite: boolean) =>
     invoke<string>("ssh_sftp_download", { sftpId, remote, local, overwrite }),
