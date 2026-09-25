@@ -1,6 +1,6 @@
-## v0.33.1
+## v0.34.0
 
-> v0.33.0 沒有對外發佈；它的內容連同之後補上的 SFTP App 內編輯 / 權限與三個誤觸修正，都在這一版。
+> 這是 SSH 功能第一個對外發佈的版本：開發過程中本機打過的 v0.33.0 / v0.33.1 都沒有推上 GitHub，內容全部併在這一版。
 
 **SSH 主機成為一等公民：多分頁終端機 + SFTP，參考 Xshell。** 以前 db-kit 只把 SSH 當成資料庫連線的跳板（port forward），要登進那台機器看 log、重啟服務，就得另開 Xshell / PuTTY；AI 助手看得到資料庫，卻看不到主機。現在側欄多了獨立的「SSH 主機」區塊，雙擊就開終端機分頁：
 
@@ -18,6 +18,18 @@
 - **直接改遠端檔案（Xftp 的「編輯」）**：改一行 `nginx.conf` 不必再下載、開本機編輯器、再上傳。CodeMirror 編輯器、Ctrl+S 存回。存檔直接覆寫原檔，不走「寫暫存檔再改名」——改名會換掉 inode，擁有者與權限都會變成目前使用者的預設值。存檔前再 stat 一次：開啟後被別人改過（修改時間或大小變了）就先問，檔案被刪了則問要不要重建。CRLF 的檔存回仍是 CRLF，不會改一個字就讓整份檔案 diff。內容不是乾淨的 UTF-8（例如 Big5）、看起來是二進位，或超過 1 MiB 被截斷時只給唯讀——照畫面存回去會把檔案弄壞。
 - **權限…**：3×3 勾選格與八進位輸入同步，只送 permissions 一個屬性（擁有者與時間不動），套用後清單就地更新。
 - 上下傳有進度條與取消；下載先寫 `.part` 再改名，取消或失敗都不留半個檔案。面板關掉再打開，會回到上次的資料夾。
+- **多選與批次傳輸（Xftp 式）**：單擊只選這一個、Ctrl 單擊切換、Shift 單擊選一段、Ctrl+A 全選、Shift+方向鍵延伸；右鍵點在選取裡就對整組操作。批次下載 / 上傳是**一個工作**：先把所有項目（含整個資料夾）規劃完、算出總量（超過 20,000 項直接擋下），再依序傳——不會同時開幾十個檔案，進度條與取消也只有一個。整個資料夾可以上傳、下載；上傳可一次選多個檔。
+- **同名先問一次**：部分同名時三選一「覆蓋 / 略過同名 / 取消」，全部同名時覆蓋或取消（單一資料夾說「合併」）。檢查用的是與實際下載同一套 Windows 檔名轉換；沒有衝突才開始的批次，若中途被別人建了同名項目，整批不會默默覆蓋。多選刪除確認一次，講明幾項、其中幾個資料夾。批次操作只算畫面上看得到的——篩選藏起來的項目不會被順手刪掉。
+- 修：socket 與區塊裝置以前會被當成資料夾（russh-sftp 的 `is_dir()` 是 bit-contains，`0o140000` / `0o060000` 都「包含」資料夾位元），列表顯示錯、遞迴刪除 / 整包下載還會對它 read_dir 而整批失敗（`~/.gnupg/S.gpg-agent` 就會中）。檔案型別一律只看 S_IFMT。
+
+**SSH 金鑰：各種格式都能用，支援 OpenSSH 憑證（參考 Xshell 的使用者金鑰管理員）。** 以前私鑰欄位只吃 russh 原生解得開的格式，其餘一律「讀取 SSH 私鑰失敗」：OpenSSL 產的 3DES 加密金鑰（`openssl genrsa -des3`）打不開，選到公鑰、X.509 憑證或 `.pfx` 也是同一句話。
+
+- **能用的私鑰格式**：OpenSSH、PuTTY `.ppk`（v2 / v3，含 Argon2 密語）、PKCS#8（含加密）、PEM 的 PKCS#1 RSA 與 SEC1 EC——**包括 OpenSSL 傳統加密**的 DES-EDE3-CBC / DES-CBC / AES-128/192/256-CBC——以及沒有 PEM 外殼的二進位 DER。
+- **認得但不能用的，講清楚怎麼辦**：DSA（OpenSSH 7.0 起停用）、SSH.COM 格式（附 `ssh-keygen -i` 指令）、公鑰、OpenSSH 憑證本身、X.509 憑證、PKCS#12（附 `openssl pkcs12` 指令）。要密語、密語不對也分開講；OpenSSH 與 PPK 還沒解開就先顯示指紋，認得出是哪一把。
+- **OpenSSH 使用者憑證**：私鑰旁邊的 `<私鑰>-cert.pub` 自動帶上（也可在主機設定指定憑證檔）；先用憑證登入，伺服器不收再用金鑰本身——順序與 OpenSSH 相同。ssh-agent 裡的憑證也會試。
+- **金鑰管理**（SSH 主機區塊標題列的鑰匙鈕）：匯入檔案（可多選）或直接貼上金鑰文字、產生 Ed25519 / ECDSA / RSA 新金鑰、複製公鑰（貼進伺服器的 `authorized_keys`）、掛上憑證、匯出 OpenSSH 私鑰、改名、刪除（有主機在用會先講是哪幾台）。匯入時一律轉存成 OpenSSH 格式，**原本有密語就用同一個密語重新加密**，絕不以明文落地；同一把不會重複收。
+- 主機設定與資料庫連線的私鑰欄位都多了「金鑰庫…」：選了之後以名稱顯示（存的是 `keystore:<id>`，原檔搬走也沒關係）。欄位底下即時顯示檢查結果：格式 · 類型 · 指紋、是否受密語保護、憑證的主體與到期日（過期、尚未生效、不是這把金鑰的憑證會標紅）。
+- 私鑰密語存的不對或沒存就問，最多三次；認證全失敗時也列出沒成行的步驟（例如「私鑰：密語不正確」），不再只看到「密碼被拒」。
 
 **AI 協助終端機，但 AI 碰不到 shell。** 助手依舊沒有任何能執行指令的工具（`agent.rs` 一行沒改）——它只能建議，按鈕在你手上：
 
@@ -34,7 +46,7 @@
 - 資料庫 tunnel 的 RSA 金鑰認證改用伺服器支援的 `rsa-sha2-512 / 256`：原本送的是 SHA-1 的 `ssh-rsa`，OpenSSH 8.8 以後預設拒絕。
 - 這一版的限制：非 UTF-8 的主機（GBK / Big5）還不轉碼，請在遠端設定 locale；主機清單還沒有加密匯出 / 匯入。
 
-> 驗證：vitest **1674 項全通過**，新增 479 項（其中 `shellGuard` 分級規則 310 項——`sudo rm -rf /` 要擋、`rm -rf ./dist` 只確認、`echo hi > /dev/null` 放行、引號裡的 `&&` 不算串接；`sftpText` 10 項：換行偵測與來回不變、權限位元、八進位解析、存檔衝突判斷）。`verify:ui` 全套 **177 項全通過**（新增 `ssh-terminal` 18 項、`sftp-edit-and-chmod` 10 項、`ssh-ai-suggest` 6 項）：開終端機、鍵入回聲、命令列送 `ls`、Ctrl+V 多行貼上先確認且取消後一個字都沒送出、單行但結尾帶換行也先確認、SFTP 開在家目錄並能進出資料夾、關掉重開回到原處、編輯器裡按 Backspace 不會跳上一層、Ctrl+S 存回且是覆寫、chmod 0755 後清單就地更新、AI 的 bash 區塊「送到終端機」只填進命令列、`rm -rf` 按「執行並回饋」先跳確認框且取消後一行都沒送出去；過程中抓到 SFTP 會開在 `/` 而不是家目錄的競態並修正。`cargo test --no-default-features --lib` **456 項全通過**；`ssh::` 34 項在 Windows（GNU 工具鏈，涵蓋 named pipe / Pageant 的 `cfg(windows)` 路徑）與 Linux Docker `--features gui`（涵蓋 Tauri 命令層）都通過；對 Docker OpenSSH 伺服器的**整合測試 4 項**通過：密碼認證 + PTY 回聲 / resize / 正常結束、SFTP 上傳下載逐位元組比對、中途取消不留 `.part`、App 內編輯與 chmod（新增檔不覆蓋既有檔、chmod 0640 讀回一致、覆寫後權限維持 0640、內容變短不留尾巴、被刪的檔不會被默默重建、Big5 標成不可編輯、含 NUL 標成二進位）。`tsc` / `eslint src` 0 error、`vite build` 綠燈（xterm 獨立成 chunk，開終端機才下載）；`i18n:scan` en / zh-CN 100%，Rust 五個語系表涵蓋全部新字串。**未實測的部分**：開發機沒有 MSVC，正式的桌面 App 沒有實際開過——WebView2 下的 xterm 渲染（WebGL / DOM 退路）、注音輸入法組字、Pageant 與 Windows OpenSSH agent、真實 PAM / OTP 的 keyboard-interactive、host key 對話框接上真後端的整條路徑（UI 只在假後端驗過），以及 macOS / Linux 上的實際操作。
+> 驗證：vitest **1690 項全通過**（其中 `shellGuard` 分級規則 310 項——`sudo rm -rf /` 要擋、`rm -rf ./dist` 只確認、`echo hi > /dev/null` 放行、引號裡的 `&&` 不算串接；另有 `sftpText`、`sftpSelection`、`sshKeys` 等）。`verify:ui` 全套 **207 項全通過**，SSH 相關六個情境：開終端機、鍵入回聲、命令列送 `ls`、多行貼上先確認且取消後一個字都沒送出、SFTP 開在家目錄並能進出資料夾、編輯器裡按 Backspace 不會跳上一層、Ctrl+S 存回且是覆寫、chmod 後清單就地更新、多選後批次下載是一個工作且帶齊路徑、同名三選一、多選刪除先確認、貼上公鑰給說明、加密私鑰要密語且錯的密語講明、主機設定從金鑰庫選金鑰、AI 的 bash 區塊「送到終端機」只填進命令列、`rm -rf` 按「執行並回饋」先跳確認框。`cargo test --no-default-features --lib` **475 項全通過**；`ssh::` 53 項在 Windows（GNU 工具鏈，涵蓋 named pipe / Pageant 的 `cfg(windows)` 路徑）與 Linux Docker `--features gui`（涵蓋 Tauri 命令層）都通過。對 Docker OpenSSH 伺服器的**整合測試 8 項**全通過：密碼認證 + PTY 回聲 / resize / 正常結束、SFTP 上傳下載逐位元組比對、中途取消不留 `.part`、App 內編輯與 chmod、資料夾樹上傳下載、多選批次與同名策略、**各種格式的私鑰都真的登得進去**（OpenSSH 加密、SEC1 的 3DES 傳統加密、加密 PKCS#8、金鑰庫參照）、**只靠 CA 簽的 OpenSSH 憑證登入**（主體不符被拒、不會退回金鑰意外成功）。另以 openssl 3.5 / ssh-keygen / puttygen 產生 25 個外部金鑰交叉驗證：全部載得起來，同一把金鑰在各種格式下指紋一致、且與 `ssh-keygen -lf` 相同。`tsc` / `eslint src` 0 error、`vite build` 綠燈（xterm 與金鑰管理都是開了才下載）；`i18n:scan` en / zh-CN 100%，Rust 五個語系表涵蓋全部新字串。**未實測的部分**：開發機沒有 MSVC，正式的桌面 App 沒有實際開過——WebView2 下的 xterm 渲染（WebGL / DOM 退路）、注音輸入法組字、Pageant 與 Windows OpenSSH agent、真實 PAM / OTP 的 keyboard-interactive、host key 對話框接上真後端的整條路徑（UI 只在假後端驗過）、金鑰管理接上真後端的檔案對話框，以及 macOS / Linux 上的實際操作。
 
 ## v0.32.1
 
