@@ -6,13 +6,15 @@
 - **四種認證**：密碼、私鑰 + 密語、keyboard-interactive（OTP / PAM 的提問逐項在對話框輸入）、ssh-agent（Unix 的 `SSH_AUTH_SOCK`；Windows 先找 OpenSSH agent，再退到 Pageant）。伺服器接受了金鑰但還要 OTP 時，會自動接著走 keyboard-interactive。沒存密碼就在連線當下詢問。
 - **host key 要你點頭**：終端機第一次連到某台主機、或指紋變了，會跳出對話框顯示指紋（接受並儲存 / 僅此次 / 拒絕；指紋變更時以警示樣式並列新舊指紋）。讀對話框的時間不算進 20 秒撥號逾時。資料庫 tunnel 維持原本不打擾的 TOFU 行為。
 - **終端機**：xterm.js，切走分頁不卸載（畫面與 shell 都還在）；配色跟著 App 主題、字級跟著 Ctrl+= / − / 0（主機設定可另外覆寫）；WebGL 渲染失敗自動退回 DOM，沒有 GPU 的遠端桌面 / VM 也可在設定頁直接指定 DOM。Ctrl+Shift+F 搜尋；右鍵有選取就複製、沒選取就貼上（Shift+右鍵開選單）。斷線後按 Enter 或點「重新連線」，畫面不清空。
-- **多行貼上一律先確認**：貼進終端機的每一行都會被當成 Enter 執行。Ctrl+V、Ctrl+Shift+V、右鍵貼上三條路都會先問一次（單行照舊不打擾），確認後照 shell 的要求包 bracketed paste 送出。
+- **多行貼上一律先確認**：貼進終端機的每一行都會被當成 Enter 執行。只要內容含換行——包括單行但結尾帶換行（網頁上三連擊選取常這樣，貼上就立刻執行）——Ctrl+V、Ctrl+Shift+V、右鍵貼上三條路都會先問一次；不含換行的單行照舊不打擾。確認後照 shell 的要求包 bracketed paste 送出。
 - **命令列輸入條**：終端機底下一行輸入框，打好再送、Shift+Enter 換行、↑↓ 翻歷史（跨主機保留 200 筆）。AI 建議的指令也是放進這裡，給你看過再送。
-- **快捷鍵不再打架**：焦點在終端機時，Ctrl+W / T / N / K / L / R 原樣送進 shell（刪字、清畫面、反向搜尋……），只有 Shift 組合、Ctrl+Tab 與縮放留給 App。Ctrl+Shift+T 開新終端機、Ctrl+Shift+W 關掉作用中的分頁；順手修掉 Ctrl+Shift+T 以前也會開查詢分頁的問題。
+- **快捷鍵不再打架**：焦點在終端機時，Ctrl+W / T / N / K / L / R 原樣送進 shell（刪字、清畫面、反向搜尋……），只有 Shift 組合、Ctrl+Tab 與縮放留給 App。Ctrl+Shift+T 開新終端機、Ctrl+Shift+W 關掉作用中的分頁；順手修掉 Ctrl+Shift+T 以前也會開查詢分頁的問題。Ctrl+Shift+C / V / F 只在焦點位於終端機畫面時作用——在命令列輸入條或 SFTP 編輯器裡按 Ctrl+Shift+V，貼進的是那個輸入框，不會跑進 shell。
 
 **SFTP 就在終端機旁邊。** 工具列一鍵在右側開檔案面板（WinSCP 式並排，而不是像 Xshell 另開 Xftp），走同一條連線，不會再問一次密碼 / OTP：
 
-- 麵包屑或直接輸入路徑；可依名稱 / 大小 / 修改時間排序，顯示權限與連結；隱藏檔可切換。雙擊資料夾進入、雙擊檔案下載；右鍵上傳到此 / 重新命名 / 刪除（資料夾連同內容，先確認）/ 建資料夾 / 複製路徑 / **在終端機 cd 到此**。
+- 麵包屑或直接輸入路徑；可依名稱 / 大小 / 修改時間排序，顯示權限與連結；隱藏檔可切換。雙擊資料夾進入；雙擊 1 MiB 以內的檔案在 App 內編輯，更大的才下載。右鍵上傳到此 / 重新命名（F2）/ 刪除（資料夾連同內容，先確認）/ 新增檔案 / 建資料夾 / 複製路徑 / **在終端機 cd 到此**；Ctrl+F 篩選這一層的名稱，底部顯示項目數與選取項目的大小、權限。
+- **直接改遠端檔案（Xftp 的「編輯」）**：改一行 `nginx.conf` 不必再下載、開本機編輯器、再上傳。CodeMirror 編輯器、Ctrl+S 存回。存檔直接覆寫原檔，不走「寫暫存檔再改名」——改名會換掉 inode，擁有者與權限都會變成目前使用者的預設值。存檔前再 stat 一次：開啟後被別人改過（修改時間或大小變了）就先問，檔案被刪了則問要不要重建。CRLF 的檔存回仍是 CRLF，不會改一個字就讓整份檔案 diff。內容不是乾淨的 UTF-8（例如 Big5）、看起來是二進位，或超過 1 MiB 被截斷時只給唯讀——照畫面存回去會把檔案弄壞。
+- **權限…**：3×3 勾選格與八進位輸入同步，只送 permissions 一個屬性（擁有者與時間不動），套用後清單就地更新。
 - 上下傳有進度條與取消；下載先寫 `.part` 再改名，取消或失敗都不留半個檔案。面板關掉再打開，會回到上次的資料夾。
 
 **AI 協助終端機，但 AI 碰不到 shell。** 助手依舊沒有任何能執行指令的工具（`agent.rs` 一行沒改）——它只能建議，按鈕在你手上：
@@ -30,7 +32,7 @@
 - 資料庫 tunnel 的 RSA 金鑰認證改用伺服器支援的 `rsa-sha2-512 / 256`：原本送的是 SHA-1 的 `ssh-rsa`，OpenSSH 8.8 以後預設拒絕。
 - 這一版的限制：非 UTF-8 的主機（GBK / Big5）還不轉碼，請在遠端設定 locale；主機清單還沒有加密匯出 / 匯入。
 
-> 驗證：vitest **1664 項全通過**，新增 469 項（其中 `shellGuard` 分級規則 310 項——`sudo rm -rf /` 要擋、`rm -rf ./dist` 只確認、`echo hi > /dev/null` 放行、引號裡的 `&&` 不算串接）。`verify:ui` 全套 **166 項全通過**（新增 `ssh-terminal` 17 項、`ssh-ai-suggest` 6 項）：開終端機、鍵入回聲、命令列送 `ls`、Ctrl+V 多行貼上先確認且取消後一個字都沒送出、SFTP 開在家目錄並能進出資料夾、關掉重開回到原處、AI 的 bash 區塊「送到終端機」只填進命令列、`rm -rf` 按「執行並回饋」先跳確認框且取消後一行都沒送出去；過程中抓到 SFTP 會開在 `/` 而不是家目錄的競態並修正。`cargo test --no-default-features --lib` 454 項通過（唯一失敗的 `it_tests::sqlite_crud_and_backup` 在高負載下偶發、單獨重跑即過，相關檔案本版未動）；`ssh::` 33 項在 Windows（GNU 工具鏈，涵蓋 named pipe / Pageant 的 `cfg(windows)` 路徑）與 Linux Docker `--features gui`（涵蓋 Tauri 命令層）都通過；對 Docker OpenSSH 伺服器的**整合測試 3 項**通過：密碼認證 + PTY 回聲 / resize / 正常結束、SFTP 上傳下載逐位元組比對、中途取消不留 `.part`。`tsc` / `eslint src` 0 error、`vite build` 綠燈（xterm 獨立成 chunk，開終端機才下載）；`i18n:scan` en / zh-CN 100%，Rust 五個語系表涵蓋全部新字串。**未實測的部分**：開發機沒有 MSVC，正式的桌面 App 沒有實際開過——WebView2 下的 xterm 渲染（WebGL / DOM 退路）、注音輸入法組字、Pageant 與 Windows OpenSSH agent、真實 PAM / OTP 的 keyboard-interactive、host key 對話框接上真後端的整條路徑（UI 只在假後端驗過），以及 macOS / Linux 上的實際操作。
+> 驗證：vitest **1674 項全通過**，新增 479 項（其中 `shellGuard` 分級規則 310 項——`sudo rm -rf /` 要擋、`rm -rf ./dist` 只確認、`echo hi > /dev/null` 放行、引號裡的 `&&` 不算串接；`sftpText` 10 項：換行偵測與來回不變、權限位元、八進位解析、存檔衝突判斷）。`verify:ui` 全套 **177 項全通過**（新增 `ssh-terminal` 18 項、`sftp-edit-and-chmod` 10 項、`ssh-ai-suggest` 6 項）：開終端機、鍵入回聲、命令列送 `ls`、Ctrl+V 多行貼上先確認且取消後一個字都沒送出、單行但結尾帶換行也先確認、SFTP 開在家目錄並能進出資料夾、關掉重開回到原處、編輯器裡按 Backspace 不會跳上一層、Ctrl+S 存回且是覆寫、chmod 0755 後清單就地更新、AI 的 bash 區塊「送到終端機」只填進命令列、`rm -rf` 按「執行並回饋」先跳確認框且取消後一行都沒送出去；過程中抓到 SFTP 會開在 `/` 而不是家目錄的競態並修正。`cargo test --no-default-features --lib` **456 項全通過**；`ssh::` 34 項在 Windows（GNU 工具鏈，涵蓋 named pipe / Pageant 的 `cfg(windows)` 路徑）與 Linux Docker `--features gui`（涵蓋 Tauri 命令層）都通過；對 Docker OpenSSH 伺服器的**整合測試 4 項**通過：密碼認證 + PTY 回聲 / resize / 正常結束、SFTP 上傳下載逐位元組比對、中途取消不留 `.part`、App 內編輯與 chmod（新增檔不覆蓋既有檔、chmod 0640 讀回一致、覆寫後權限維持 0640、內容變短不留尾巴、被刪的檔不會被默默重建、Big5 標成不可編輯、含 NUL 標成二進位）。`tsc` / `eslint src` 0 error、`vite build` 綠燈（xterm 獨立成 chunk，開終端機才下載）；`i18n:scan` en / zh-CN 100%，Rust 五個語系表涵蓋全部新字串。**未實測的部分**：開發機沒有 MSVC，正式的桌面 App 沒有實際開過——WebView2 下的 xterm 渲染（WebGL / DOM 退路）、注音輸入法組字、Pageant 與 Windows OpenSSH agent、真實 PAM / OTP 的 keyboard-interactive、host key 對話框接上真後端的整條路徑（UI 只在假後端驗過），以及 macOS / Linux 上的實際操作。
 
 ## v0.32.1
 
