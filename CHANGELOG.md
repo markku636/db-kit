@@ -1,3 +1,12 @@
+## v0.35.1
+
+**修正：SSH 終端機斷線後，提示列的「重新連線」「關閉分頁」按不下去**（[#7](https://github.com/markku636/db-kit/issues/7)）。預設的 WebGL 渲染器會在終端機上疊一層 canvas（`xterm-link-layer`），連同 scrollbar 等圖層都帶 z-index；終端機容器沒有自己的 stacking context，這些圖層就蓋過了旁邊的提示列——看得到、點不到。DOM 渲染器沒有這層 canvas，所以只在預設設定下發生。
+
+- 終端機容器改成獨立的 stacking context（`isolation: isolate`），裡面的 z-index 不會再蓋到外面。
+- 「連線中（取消）」與「連線已中斷」兩個疊層明確放在最上層。
+
+> 驗證：新增 `verify:ui` 情境 `ssh-disconnect-overlay`（DOM 渲染器）與 `ssh-disconnect-overlay-webgl`（預設渲染器，先確認真的有 canvas）：模擬斷線 → 提示列顯示原因 → 「重新連線」要點得到且真的重連 → 再斷一次 → 「關閉分頁」要點得到且分頁真的關掉。Playwright 的點擊會先確認沒有別的元素擋在上面：修正前 WebGL 那組兩顆按鈕都失敗，指出是 `canvas.xterm-link-layer` 攔下了點擊；修正後通過。vitest **1694 項全通過**；`verify:ui` 全套 **228 項全通過**；`tsc` / `eslint src` 0 error。後端沒有變動。**未實測的部分**：Windows 桌面 App（WebView2）上沒有實際點過，驗證用的是同一套前端在 Chrome 上的 WebGL 渲染。
+
 ## v0.35.0
 
 **一次匯入既有的 SSH 主機。** 以前 SSH 主機只能一台一台在對話框裡打。SSH 主機區塊標題列多了匯入鈕：從 `~/.ssh/config` 或 `.xsh` 工作階段檔的資料夾讀出主機，勾選後直接存成 SSH 主機。只讀來源、不動來源檔；密碼不匯入（第一次連線時再問）。
