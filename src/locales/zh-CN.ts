@@ -3653,6 +3653,18 @@ const zhCN: Catalog = {
   "點選切換；選多位就是會審": "点击切换；选多位就是会审",
   "（另有 {n} 個欄位未列出）": "（另有 {n} 个字段未列出）",
   "（描述這個技能要模型怎麼做）": "（描述这个技能要模型怎么做）",
+  "SFTP 起始資料夾": "SFTP 起始文件夹",
+  "可在「主機」直接貼上 ssh://、sftp:// 或 ssh 指令（ssh -p 2222 user@host）": "可在「主机」直接粘贴 ssh://、sftp:// 或 ssh 指令（ssh -p 2222 user@host）",
+  "切到終端機": "切到终端机",
+  "已依連線字串填入。找不到跳板機「{jump}」，請從清單選擇": "已依连接字符串填入。找不到跳板机「{jump}」，请从清单选择",
+  "已依連線字串填入，請確認後儲存": "已依连接字符串填入，请确认后保存",
+  "從 ~/.ssh/config、.xsh 匯入…": "从 ~/.ssh/config、.xsh 导入…",
+  "留空＝家目錄；~/ 開頭＝家目錄底下": "留空＝家目录；~/ 开头＝家目录底下",
+  "貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss:// ssh:// sftp://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql": "粘贴即自动解析。支持 URL（postgres:// mysql:// mongodb+srv:// rediss:// ssh:// sftp://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql",
+  "這是 SSH 主機的連線字串，請從「新增連線」加入": "这是 SSH 主机的连接字符串，请从「新增连接」加入",
+  "遠端主機": "远程主机",
+  "開啟時一併展開 SFTP 面板": "打开时一并展开 SFTP 面板",
+  "開啟終端機": "打开终端机",
 };
 
 export default zhCN;

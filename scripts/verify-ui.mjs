@@ -54,6 +54,10 @@ const CASE_FX = {
   "ssh-host-import": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-disconnect-overlay": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-jump-host": { STORAGE_SEED: SSH_STORAGE_SEED },
+  // 一台 SSH 主機都沒有：側欄區塊與分頁列按鈕都不該出現，從「新增連線」加第一台。
+  "ssh-from-conn-string": { STORAGE_SEED: SSH_STORAGE_SEED, SSH_SESSIONS: { version: 1, folders: [], sessions: [] } },
+  "ssh-host-paste": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ssh-host-quick-actions": { STORAGE_SEED: SSH_STORAGE_SEED },
   // 同一個情境換成預設的渲染器（WebGL，開不起來才退回 DOM）：issue #7 的使用者用的就是預設值。
   "ssh-disconnect-overlay-webgl": {},
 };
@@ -238,6 +242,125 @@ const CASES = {
     await page.waitForFunction(() => window.__DBKIT_SSH_SESSION_SAVES__.length > 1, null, { timeout: 5000 }).catch(() => {});
     saves = await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__);
     check("清掉跳板機就回到直連（null）", saves.at(-1)?.jump_session_id === null, JSON.stringify(saves.at(-1)?.jump_session_id));
+  },
+
+  // 沒有 SSH 主機的人看不到 SSH（側欄區塊、分頁列按鈕）；第一台從「新增連線」加：
+  // 類型選擇器有 SSH / SFTP 卡片，連線字串欄貼 sftp:// 就轉到 SSH 主機對話框並填好欄位。
+  async "ssh-from-conn-string"(page) {
+    check("沒有主機時側欄沒有 SSH 區塊", (await page.locator("[data-ssh-host-tree]").count()) === 0);
+    // 分頁列要有連線（或開著分頁）才會出現：先連一個資料庫，「沒有 SSH 按鈕」才有意義。
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await page.getByRole("button", { name: "新增查詢分頁", exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+    check("沒有主機時分頁列沒有 SSH 按鈕",
+      (await page.getByRole("button", { name: "新增查詢分頁", exact: true }).count()) === 1
+      && (await page.getByRole("button", { name: "新增 SSH 終端機", exact: true }).count()) === 0);
+
+    const newConn = async () => {
+      await page.getByRole("button", { name: "連線", exact: true }).first().click(); // 工具列「連線」＝新增連線
+      await page.getByRole("radiogroup", { name: "連線類型" }).waitFor({ timeout: 5000 }).catch(() => {});
+    };
+    await newConn();
+    const card = page.getByRole("radio", { name: "SSH / SFTP" });
+    check("類型選擇器有 SSH / SFTP", (await card.count()) === 1);
+    await card.click();
+    const sshTitle = page.getByText("新增 SSH 主機", { exact: true });
+    await sshTitle.first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("點 SSH / SFTP 改開 SSH 主機對話框", (await sshTitle.count()) > 0 && (await page.getByRole("radiogroup", { name: "連線類型" }).count()) === 0);
+    const importLink = page.getByRole("button", { name: "從 ~/.ssh/config、.xsh 匯入…", exact: true });
+    check("新增 SSH 主機對話框有匯入入口", (await importLink.count()) === 1);
+    await importLink.click();
+    await page.getByText("匯入 SSH 主機", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("匯入入口打得開匯入對話框", (await page.getByText("匯入 SSH 主機", { exact: true }).count()) > 0);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+
+    await newConn();
+    const url = page.getByPlaceholder("postgresql://user:pass@localhost:5432/dbname");
+    await url.fill("sftp://deploy@10.0.0.9:2022/~/logs");
+    await url.press("Enter");
+    await page.getByLabel("主機", { exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+    const vals = {
+      host: await page.getByLabel("主機", { exact: true }).inputValue().catch(() => null),
+      port: await page.getByLabel("埠", { exact: true }).inputValue().catch(() => null),
+      user: await page.getByLabel("使用者", { exact: true }).inputValue().catch(() => null),
+      sftp: await page.getByLabel("開啟時一併展開 SFTP 面板").isChecked().catch(() => null),
+      dir: await page.getByLabel("SFTP 起始資料夾", { exact: true }).inputValue().catch(() => null),
+    };
+    check("sftp:// 字串填好主機 / 埠 / 使用者 / SFTP 設定",
+      vals.host === "10.0.0.9" && vals.port === "2022" && vals.user === "deploy" && vals.sftp === true && vals.dir === "~/logs", JSON.stringify(vals));
+    check("顯示「已依連線字串填入」", (await page.getByText("已依連線字串填入，請確認後儲存").count()) > 0);
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_SSH_SESSION_SAVES__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const saved = (await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__)).at(-1);
+    check("存下去帶 SFTP 設定", saved?.options?.ui?.open_sftp === "1" && saved?.options?.ui?.sftp_dir === "~/logs", JSON.stringify(saved?.options?.ui));
+
+    const tree = page.locator("[data-ssh-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    check("有了第一台主機，側欄 SSH 區塊出現", (await tree.getByText("deploy@10.0.0.9", { exact: true }).count()) > 0);
+    const sshBtn = page.getByRole("button", { name: "新增 SSH 終端機", exact: true });
+    await sshBtn.waitFor({ timeout: 5000 }).catch(() => {});
+    check("分頁列 SSH 按鈕出現", (await sshBtn.count()) === 1, String(await sshBtn.count()));
+    await tree.getByText("deploy@10.0.0.9", { exact: true }).first().dblclick();
+    const panel = page.getByTestId("sftp-panel");
+    await panel.getByText("app.log", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    check("sftp:// 建的主機一開就展開 SFTP，停在起始資料夾", (await panel.getByText("app.log", { exact: true }).count()) > 0);
+  },
+
+  // SSH 主機對話框的主機欄：貼 ssh 指令 / user@host:port 會拆進各欄位（跳板機對到已存主機）。
+  async "ssh-host-paste"(page) {
+    const tree = page.locator("[data-ssh-host-tree]");
+    await tree.getByText("web-01", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    await tree.getByRole("button", { name: "新增 SSH 主機", exact: true }).first().click();
+    const host = page.getByLabel("主機", { exact: true });
+    await host.waitFor({ timeout: 5000 }).catch(() => {});
+    const paste = (text) => host.evaluate((el, s) => {
+      const dt = new DataTransfer();
+      dt.setData("text/plain", s);
+      el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, text);
+    const read = async () => ({
+      host: await host.inputValue(),
+      port: await page.getByLabel("埠", { exact: true }).inputValue(),
+      user: await page.getByLabel("使用者", { exact: true }).inputValue(),
+      jump: await page.getByLabel("跳板機", { exact: true }).inputValue(),
+    });
+    await paste("ssh -p 2200 -J web-01 root@10.1.2.3");
+    await sleep(200);
+    let v = await read();
+    check("貼 ssh 指令：主機 / 埠 / 使用者 / 跳板機", v.host === "10.1.2.3" && v.port === "2200" && v.user === "root" && v.jump === "ssh-web01", JSON.stringify(v));
+    await paste("ops@db.internal:2022");
+    await sleep(200);
+    v = await read();
+    check("貼 user@host:port：拆開，跳板機維持", v.host === "db.internal" && v.port === "2022" && v.user === "ops" && v.jump === "ssh-web01", JSON.stringify(v));
+    await paste("ssh -J nobody@nowhere a@b");
+    await sleep(200);
+    check("跳板機對不到已存主機時說明", (await page.getByText("找不到跳板機「nobody@nowhere」", { exact: false }).count()) > 0);
+  },
+
+  // 側欄主機列：沒連線是灰的、連上亮起；滑過有快速按鈕，已連線時按 SFTP 是切回那個分頁、不另開連線。
+  async "ssh-host-quick-actions"(page) {
+    const tree = page.locator("[data-ssh-host-tree]");
+    const row = tree.locator('[data-ssh-host="ssh-web01"]');
+    await row.waitFor({ timeout: 8000 }).catch(() => {});
+    check("還沒連線：沒有已連線標記", (await row.getAttribute("data-connected")) === null);
+    await row.hover();
+    check("滑過有快速按鈕", await row.getByRole("button", { name: "開啟終端機", exact: true }).isVisible()
+      && await row.getByRole("button", { name: "開啟 SFTP", exact: true }).isVisible()
+      && await row.getByRole("button", { name: "編輯 SSH 主機", exact: true }).isVisible());
+    await row.getByRole("button", { name: "開啟終端機", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[data-ssh-host="ssh-web01"]')?.hasAttribute("data-connected"), null, { timeout: 8000 }).catch(() => {});
+    check("連上後主機列亮起", (await row.getAttribute("data-connected")) === "");
+    const terms = await page.locator(".xterm").count();
+    await row.hover();
+    check("已連線時按鈕變成「切到終端機」", (await row.getByRole("button", { name: "切到終端機", exact: true }).count()) === 1);
+    await row.getByRole("button", { name: "開啟 SFTP", exact: true }).click();
+    await page.getByTestId("sftp-panel").waitFor({ timeout: 5000 }).catch(() => {});
+    check("已連線時按 SFTP：在原分頁展開，不另開連線", (await page.getByTestId("sftp-panel").count()) === 1 && (await page.locator(".xterm").count()) === terms,
+      JSON.stringify({ before: terms, after: await page.locator(".xterm").count() }));
+    await row.hover();
+    await row.getByRole("button", { name: "編輯 SSH 主機", exact: true }).click();
+    await page.getByText("編輯 SSH 主機", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("編輯按鈕打開這台的設定", (await page.getByLabel("主機", { exact: true }).inputValue().catch(() => "")) === "10.20.0.15");
   },
 
   // 斷線後終端機上方的提示列：兩顆按鈕必須真的點得到（issue #7：提示列被 xterm 的圖層蓋住，看得到按不到）。

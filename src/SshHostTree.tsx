@@ -1,10 +1,14 @@
 // 側欄的「SSH 主機」區塊：資料夾 + 主機清單（獨立於資料庫連線，不進 DbKind / selectedNode）。
 // 單擊只在本區高亮，雙擊 / Enter 開終端機分頁；右鍵有連線 / SFTP / 編輯 / 複製 / 刪除 / 移到資料夾。
-import { lazy, Suspense, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ChevronDown, ChevronRight, FileInput, Folder, FolderPlus, KeyRound, Plus, SquareTerminal } from "lucide-react";
+// 已連線（有分頁連著）的主機圖示亮起，滑過顯示快速按鈕（終端機 / SFTP / 編輯）。
+// 一台主機都沒有時整個區塊不顯示——不是每個人都用 SSH；新增走「新增連線 → SSH / SFTP」或貼 ssh:// 字串。
+import { lazy, Suspense, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { ChevronDown, ChevronRight, FileInput, Folder, FolderOpen, FolderPlus, KeyRound, Pencil, Plus, SquareTerminal, type LucideIcon } from "lucide-react";
 import { useT } from "./i18n";
 import { Icon, MenuPanel } from "./ui/index";
 import { toast, uiConfirm, uiPrompt } from "./ui";
+import { useStore } from "./store";
+import { useSshTerminals } from "./sshTerminals";
 import type { SshFolder, SshSession, SshTargetRef } from "./sshTypes";
 import { filterSessions, groupSessions, sessionLabel, uniqueFolderName, useSshSessions } from "./sshSessions";
 
@@ -47,6 +51,20 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
 
   useEffect(() => { if (!loaded) void useSshSessions.getState().load(); }, [loaded]);
 
+  // 已連線的主機 → 它的第一個連著的終端機分頁。選擇器回傳字串：rt 裡的標題 / cwd 更新時字串不變，
+  // 整棵樹就不會跟著重繪。
+  const sshTabs = useStore((s) => s.sshTabs);
+  const liveSig = useSshTerminals((st) =>
+    sshTabs.filter((x) => x.sessionId && st.rt[x.key]?.status === "connected").map((x) => `${x.sessionId}=${x.key}`).join("|"));
+  const live = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const pair of liveSig ? liveSig.split("|") : []) {
+      const [sid, key] = pair.split("=");
+      if (!m.has(sid)) m.set(sid, key);
+    }
+    return m;
+  }, [liveSig]);
+
   const filtered = useMemo(() => (q ? filterSessions(sessions, q) : sessions), [sessions, q]);
   const grouped = useMemo(() => groupSessions(folders, filtered), [folders, filtered]);
 
@@ -58,7 +76,16 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
   const toggleFolder = (id: string) =>
     setClosedFolders((s) => { const next = new Set(s); if (!next.delete(id)) next.add(id); saveSet(FOLDERS_KEY, next); return next; });
 
-  const open = (s: SshSession, sftp = false) => onOpen({ kind: "session", id: s.id }, sessionLabel(s), s.id, { sftp });
+  // 主機設了「開啟時一併展開 SFTP 面板」（sftp:// 字串建的主機預設開）就一起展開。
+  const open = (s: SshSession, sftp = false) =>
+    onOpen({ kind: "session", id: s.id }, sessionLabel(s), s.id, { sftp: sftp || s.options.ui?.open_sftp === "1" });
+  // 快速按鈕：已連線就切到那個分頁（SFTP 在那個分頁展開），不另開一條連線；沒連線才開新分頁。
+  const focusOrOpen = (s: SshSession, sftp: boolean) => {
+    const key = live.get(s.id);
+    if (!key) { open(s, sftp); return; }
+    useStore.getState().setActiveTab(key);
+    if (sftp) useSshTerminals.getState().patch(key, { sftpOpen: true });
+  };
 
   const addFolder = async () => {
     const name = await uiPrompt(t("資料夾名稱"), { title: t("新資料夾"), defaultValue: uniqueFolderName(folders, t("新資料夾")) });
@@ -86,27 +113,41 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
     if (e.key === "Enter") { e.preventDefault(); open(s); }
   };
 
-  const renderSession = (s: SshSession, depth: number) => (
-    <div
-      key={s.id}
-      tabIndex={0}
-      role="treeitem"
-      onClick={() => setSelected(s.id)}
-      onDoubleClick={() => open(s)}
-      onKeyDown={(e) => onRowKey(e, s)}
-      onContextMenu={(e) => { e.preventDefault(); setSelected(s.id); setMenu({ x: e.clientX, y: e.clientY, session: s }); }}
-      title={`${s.username}@${s.host}:${s.port}`}
-      style={{ paddingLeft: 12 + depth * 14 }}
-      className={`flex items-center gap-1.5 pr-2 py-1 cursor-pointer select-none outline-none ${selected === s.id ? "bg-accent/15" : "hover:bg-fg/5"}`}
-    >
-      <Icon icon={SquareTerminal} size={13} className="text-emerald-300/80 shrink-0" />
-      <span className="truncate flex-1">{sessionLabel(s)}</span>
-      {s.name && <span className="text-[10px] text-fg/30 truncate max-w-[110px] mono">{s.username}@{s.host}</span>}
-    </div>
-  );
+  const renderSession = (s: SshSession, depth: number) => {
+    const connected = live.has(s.id);
+    return (
+      <div
+        key={s.id}
+        tabIndex={0}
+        role="treeitem"
+        data-ssh-host={s.id}
+        data-connected={connected ? "" : undefined}
+        onClick={() => setSelected(s.id)}
+        onDoubleClick={() => open(s)}
+        onKeyDown={(e) => onRowKey(e, s)}
+        onContextMenu={(e) => { e.preventDefault(); setSelected(s.id); setMenu({ x: e.clientX, y: e.clientY, session: s }); }}
+        title={`${s.username}@${s.host}:${s.port}`}
+        style={{ paddingLeft: 12 + depth * 14 }}
+        className={`group flex items-center gap-1.5 pr-2 py-1 cursor-pointer select-none outline-none ${selected === s.id ? "bg-accent/15" : "hover:bg-fg/5"}`}
+      >
+        {/* 同資料庫連線：已連線＝亮色、未連線＝灰暗。 */}
+        <span className={`shrink-0 flex ${connected ? "text-emerald-400" : "text-fg/35"}`} title={connected ? t("已連線") : t("未連線")}>
+          <Icon icon={SquareTerminal} size={13} />
+        </span>
+        <span className="truncate flex-1">{sessionLabel(s)}</span>
+        {s.name && <span className="text-[10px] text-fg/30 truncate max-w-[110px] mono group-hover:hidden">{s.username}@{s.host}</span>}
+        <RowButton icon={SquareTerminal} label={connected ? t("切到終端機") : t("開啟終端機")} onClick={() => focusOrOpen(s, false)} />
+        <RowButton icon={FolderOpen} label={t("開啟 SFTP")} onClick={() => focusOrOpen(s, true)} />
+        <RowButton icon={Pencil} label={t("編輯 SSH 主機")} onClick={() => onEdit(s, s.folder_id)} />
+      </div>
+    );
+  };
 
   const total = sessions.length;
   const showBody = !collapsed || !!q;
+
+  // 一台都沒有（含還在載入）就整個不顯示；有了第一台才出現。
+  if (total === 0) return null;
 
   return (
     <div className="border-t border-fg/10 py-1" data-ssh-host-tree="">
@@ -157,12 +198,6 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
             );
           })}
           {grouped.loose.map((s) => renderSession(s, 0))}
-          {loaded && total === 0 && !q && (
-            <button type="button" onClick={() => onEdit(null, null)}
-              className="mx-3 my-1 text-[11px] text-fg/40 hover:text-fg/70 inline-flex items-center gap-1">
-              <Icon icon={Plus} size={11} />{t("新增 SSH 主機…")}
-            </button>
-          )}
         </div>
       )}
 
@@ -208,5 +243,18 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
         </Suspense>
       )}
     </div>
+  );
+}
+
+/** 主機列滑過才出現的小按鈕（樣式對齊資料庫連線列的編輯 / 刪除）。雙擊不往上冒，免得又觸發整列的「連線」。 */
+function RowButton({ icon, label, onClick }: { icon: LucideIcon; label: string; onClick: () => void }) {
+  const stop = (e: ReactMouseEvent) => e.stopPropagation();
+  return (
+    <button type="button" title={label} aria-label={label}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      onDoubleClick={stop}
+      className="w-5 h-5 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-fg/80 hidden group-hover:flex">
+      <Icon icon={icon} size={13} />
+    </button>
   );
 }

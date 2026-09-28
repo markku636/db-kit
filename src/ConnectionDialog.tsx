@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ConnectionConfig, DbKind, KIND_META, SshAuthMethod } from "./api";
 import { applyParsedToForm, ChangedField, ConnFormFields, looksLikeConnectionString } from "./connString";
+import { parseSshString, type ParsedSsh } from "./sshConnString";
 import { pickOpenFile } from "./ui";
 import { askOtpCode } from "./otpGate";
 import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
@@ -14,6 +15,11 @@ interface Props {
   onClose: () => void;
   onSaved: (c: ConnectionConfig) => void;
   initial?: ConnectionConfig | null;
+  /**
+   * 新增時選了「SSH / SFTP」或貼上 ssh:// / sftp:// 字串：呼叫端關掉這個對話框、改開 SSH 主機對話框
+   * （prefill = 解析好的字串；null = 空白新增）。SSH 主機另存一份清單，不是 DbKind。
+   */
+  onNewSsh?: (prefill: ParsedSsh | null) => void;
 }
 
 // 支援 ssl_mode 選項的類型（sqlx driver；MariaDB 與 MySQL 共用詞彙）。
@@ -64,7 +70,7 @@ function fmtSummaryVal(
   return v === "" ? t("（空）") : String(v);
 }
 
-export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
+export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }: Props) {
   const t = useT();
   const editing = !!initial;
   const [kind, setKind] = useState<DbKind>(initial?.kind ?? "mysql");
@@ -352,6 +358,16 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
     if (!url) return;
     setImportMsg(null);
     setImportChanged(null);
+    // ssh:// / sftp:// / ssh 指令：SSH 主機不是資料庫連線，轉交給 SSH 主機對話框（前端就認得，不必問後端）。
+    const ssh = parseSshString(url);
+    if (ssh) {
+      if (onNewSsh && !editing) onNewSsh(ssh);
+      else {
+        setImportUrl(url);
+        setImportMsg({ ok: false, text: t("這是 SSH 主機的連線字串，請從「新增連線」加入") });
+      }
+      return;
+    }
     try {
       // 傳當下選的類型當提示：Oracle EZConnect / 裸 host:port / sqlite 路徑都不帶類型資訊，
       // 沒提示的話後端只能報「無法解析」。後端對有提示的輸入會多做一道結構檢查（looks_structured），
@@ -389,7 +405,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
   // looksLikeConnectionString 刻意保守（見 connString.ts），不是連線字串就完全不介入。
   const onFieldPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     const text = e.clipboardData.getData("text");
-    if (!looksLikeConnectionString(text)) return;
+    // SSH 字串只在新增時攔（轉交 SSH 主機對話框）；編輯資料庫連線時照常貼進欄位。
+    const ssh = onNewSsh && !editing ? parseSshString(text) : null;
+    if (!ssh && !looksLikeConnectionString(text)) return;
     e.preventDefault();
     setImportUrl(text.trim());
     void doImport(text);
@@ -477,7 +495,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
           刻意不做「輸入中 debounce 自動解析」——每個按鍵都會重寫類型並清掉類型專屬欄位，會抖動。 */}
       <Field
         label={t("連線字串")}
-        hint={t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")}
+        hint={onNewSsh && !editing
+          ? t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss:// ssh:// sftp://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")
+          : t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")}
       >
         <div className="flex gap-2">
           <Input
@@ -547,6 +567,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial }: Props) {
         collapsed={!pickerOpen}
         onChange={(k) => { onKindChange(k); setPickerOpen(false); }}
         onExpand={() => setPickerOpen(true)}
+        onPickSsh={onNewSsh && !editing ? () => onNewSsh(null) : undefined}
       />
 
       {/* 兩步流程：先選類型（pickerOpen＝只顯示上方類型選擇器），選定後才展開表單，避免類型格與

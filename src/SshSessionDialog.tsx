@@ -7,6 +7,7 @@ import { useT } from "./i18n";
 import { SshAuthPromptDialog, SshHostKeyDialog } from "./SshPrompts";
 import SshKeyPathField from "./SshKeyPathField";
 import { jumpChoices, sessionLabel, useSshSessions } from "./sshSessions";
+import { applySshString, parseSshString, type ApplySshResult, type ParsedSsh, type SshFormFields } from "./sshConnString";
 import {
   blankSshSession,
   type SshAuthKind,
@@ -32,29 +33,50 @@ interface Props {
   onClose: () => void;
   /** 已寫入後端後回呼；呼叫端負責同步 useSshSessions（load() 或就地 upsert）。 */
   onSaved: (s: SshSession) => void;
+  /** 新增連線對話框轉交過來的 ssh:// / sftp:// 字串（已解析）：開啟時先套進欄位。 */
+  prefill?: ParsedSsh | null;
+  /** 新增時提供「從 ~/.ssh/config、.xsh 匯入」的入口（側欄 SSH 區塊沒有主機時不顯示，這裡是唯一入口）。 */
+  onImport?: () => void;
 }
 
 const TERM_TYPES = ["xterm-256color", "xterm", "vt100", "linux"];
 
-export default function SshSessionDialog({ open, initial, folders, defaultFolderId, onClose, onSaved }: Props) {
+export default function SshSessionDialog({ open, initial, folders, defaultFolderId, onClose, onSaved, prefill, onImport }: Props) {
   const t = useT();
   // 「編輯」= 這個 id 已經存在。側欄「複製」會帶一份新 id 的預填資料進來，那是新增，不是編輯
   // （標題、密碼欄提示、儲存後的提示都要跟著對）。
   const editing = !!initial && useSshSessions.getState().sessions.some((s) => s.id === initial.id);
   // 新主機的 id 在第一次 render 就定下來，測試連線與儲存用同一個。
   const [base] = useState<SshSession>(() => initial ?? blankSshSession(crypto.randomUUID(), defaultFolderId ?? null));
+  // 連線字串能填到的欄位先算好一份（帶了 prefill 就先套上去），下面各欄位從這份初始化。
+  const [init] = useState<ApplySshResult>(() => {
+    const fields: SshFormFields = {
+      host: base.host,
+      port: base.port || 22,
+      username: base.username,
+      auth: base.auth,
+      password: "",
+      keyPath: base.private_key_path,
+      jumpId: base.jump_session_id ?? "",
+      openSftp: base.options.ui?.open_sftp === "1",
+      sftpDir: base.options.ui?.sftp_dir ?? "",
+    };
+    return prefill
+      ? applySshString(prefill, fields, jumpChoices(useSshSessions.getState().sessions, base.id))
+      : { next: fields, jumpMissing: null };
+  });
   const [name, setName] = useState(base.name);
   const [folderId, setFolderId] = useState(base.folder_id ?? "");
-  const [host, setHost] = useState(base.host);
-  const [port, setPort] = useState(base.port || 22);
-  const [username, setUsername] = useState(base.username);
+  const [host, setHost] = useState(init.next.host);
+  const [port, setPort] = useState(init.next.port);
+  const [username, setUsername] = useState(init.next.username);
   // 跳板機（ProxyJump）：另一台已存主機；"" = 直連。
-  const [jumpId, setJumpId] = useState(base.jump_session_id ?? "");
+  const [jumpId, setJumpId] = useState(init.next.jumpId);
   const allSessions = useSshSessions((s) => s.sessions);
-  const [auth, setAuth] = useState<SshAuthKind>(base.auth);
-  const [password, setPassword] = useState("");
+  const [auth, setAuth] = useState<SshAuthKind>(init.next.auth);
+  const [password, setPassword] = useState(init.next.password);
   const [rememberPassword, setRememberPassword] = useState(true);
-  const [keyPath, setKeyPath] = useState(base.private_key_path);
+  const [keyPath, setKeyPath] = useState(init.next.keyPath);
   // OpenSSH 使用者憑證；空 = 找私鑰旁邊的 <私鑰>-cert.pub（舊存檔沒有這個欄位）。
   const [certPath, setCertPath] = useState(base.certificate_path ?? "");
   const [passphrase, setPassphrase] = useState("");
@@ -66,6 +88,18 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
   const [keepalive, setKeepalive] = useState(base.options.keepalive_secs ?? 30);
   // 字級覆寫存 options.ui.font_size（字串）；空 = 跟隨 app 的程式碼字級。
   const [fontSize, setFontSize] = useState(base.options.ui?.font_size ?? "");
+  // SFTP：開啟這台時一併展開 SFTP 面板（sftp:// 字串建的主機預設開），以及面板的起始資料夾。
+  // 存 options.ui（前端自己的設定，後端不解讀）。
+  const [openSftp, setOpenSftp] = useState(init.next.openSftp);
+  const [sftpDir, setSftpDir] = useState(init.next.sftpDir);
+  // 「已依連線字串填入」的提示；跳板機對不到已存主機時一併說明。
+  const fillNotice = (r: ApplySshResult) => ({
+    ok: !r.jumpMissing,
+    text: r.jumpMissing
+      ? t("已依連線字串填入。找不到跳板機「{jump}」，請從清單選擇", { jump: r.jumpMissing })
+      : t("已依連線字串填入，請確認後儲存"),
+  });
+  const [filled, setFilled] = useState<{ ok: boolean; text: string } | null>(() => (prefill ? fillNotice(init) : null));
   const [hasStoredPassword, setHasStoredPassword] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -117,6 +151,10 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
     const fs = Number(fontSize);
     if (fontSize.trim() && Number.isFinite(fs) && fs > 0) ui.font_size = String(Math.round(fs));
     else delete ui.font_size;
+    if (openSftp) ui.open_sftp = "1";
+    else delete ui.open_sftp;
+    if (sftpDir.trim()) ui.sftp_dir = sftpDir.trim();
+    else delete ui.sftp_dir;
     return {
       ...base,
       name: name.trim(),
@@ -215,6 +253,24 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
     }
   };
 
+  // 主機 / 名稱欄的貼上攔截：貼進來的是 SSH 字串就拆進各欄位，而不是整串倒進欄位。
+  // 主機欄另收沒有 scheme 的 user@host:port（那一欄只收主機，帶 @ 或埠號一定是想連這台）；
+  // 名稱欄只收明確的 ssh:// / sftp:// / ssh 指令——「deploy@web」當名稱是合理的。
+  const pasteInto = (bare: boolean) => (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const p = parseSshString(e.clipboardData.getData("text"), { bare });
+    if (!p) return;
+    e.preventDefault();
+    const r = applySshString(
+      p,
+      { host, port, username, auth, password, keyPath, jumpId, openSftp, sftpDir },
+      jumpChoices(allSessions, base.id),
+    );
+    const f = r.next;
+    setHost(f.host); setPort(f.port); setUsername(f.username); setAuth(f.auth); setPassword(f.password);
+    setKeyPath(f.keyPath); setJumpId(f.jumpId); setOpenSftp(f.openSftp); setSftpDir(f.sftpDir);
+    setFilled(fillNotice(r));
+  };
+
   const browseCert = async () => {
     const p = await pickOpenFile();
     if (p) setCertPath(p);
@@ -246,12 +302,23 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
           </>
         }
       >
+        {!editing && (
+          <div className="flex items-center gap-3 text-xs text-fg/45">
+            <span className="flex-1">{t("可在「主機」直接貼上 ssh://、sftp:// 或 ssh 指令（ssh -p 2222 user@host）")}</span>
+            {onImport && (
+              <button type="button" onClick={onImport} className="shrink-0 text-accent hover:underline">
+                {t("從 ~/.ssh/config、.xsh 匯入…")}
+              </button>
+            )}
+          </div>
+        )}
         <Field label={t("名稱")}>
           <Input
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={submitOnEnter}
+            onPaste={pasteInto(false)}
             placeholder={t("留空＝使用者@主機")}
           />
         </Field>
@@ -265,14 +332,22 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
         </Field>
         <div className="flex gap-3">
           <Field label={t("主機")} className="flex-1" required>
-            <Input value={host} onChange={(e) => setHost(e.target.value)} onKeyDown={submitOnEnter} placeholder="10.0.0.12" />
+            <Input
+              value={host}
+              onChange={(e) => { setHost(e.target.value); setFilled(null); }}
+              onKeyDown={submitOnEnter}
+              onPaste={pasteInto(true)}
+              aria-label={t("主機")}
+              placeholder="10.0.0.12"
+            />
           </Field>
           <Field label={t("埠")} className="w-24">
-            <Input type="number" min={1} max={65535} value={port} onChange={(e) => setPort(Number(e.target.value))} onKeyDown={submitOnEnter} />
+            <Input type="number" min={1} max={65535} value={port} onChange={(e) => setPort(Number(e.target.value))} onKeyDown={submitOnEnter} aria-label={t("埠")} />
           </Field>
         </div>
+        {filled && <div className={`text-xs ${filled.ok ? "text-success" : "text-warning"}`}>{filled.text}</div>}
         <Field label={t("使用者")} required>
-          <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} placeholder="deploy" />
+          <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} placeholder="deploy" aria-label={t("使用者")} />
         </Field>
         <Field label={t("跳板機")} hint={t("先連上這台，再經由它連到上面的主機（ProxyJump）。跳板機要允許 TCP 轉送。")}>
           <Select value={jumpId} onChange={(e) => setJumpId(e.target.value)} aria-label={t("跳板機")}>
@@ -345,6 +420,13 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
         {auth === "keyboard_interactive" && (
           <div className="text-xs text-fg/50">{t("連線時依伺服器的提問逐項輸入（OTP / 二階段驗證常用）。")}</div>
         )}
+
+        <Section title="SFTP">
+          <Checkbox checked={openSftp} onChange={setOpenSftp} label={t("開啟時一併展開 SFTP 面板")} />
+          <Field label={t("SFTP 起始資料夾")} hint={t("留空＝家目錄；~/ 開頭＝家目錄底下")}>
+            <Input value={sftpDir} onChange={(e) => setSftpDir(e.target.value)} onKeyDown={submitOnEnter} className="mono" placeholder="~" aria-label={t("SFTP 起始資料夾")} />
+          </Field>
+        </Section>
 
         <Section title={t("終端機")}>
           <Field label={t("啟動指令")} hint={t("連線成功後自動送出，例如 cd /var/www && ls")}>

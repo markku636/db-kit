@@ -277,7 +277,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
       focus: () => term.focus(),
       reconnect,
     });
-    useSshTerminals.setState((s) => ({ rt: { ...s.rt, [tab.key]: { ...DEFAULT_RUNTIME, connId: "", host: "", user: "" } } }));
+    useSshTerminals.setState((s) => ({ rt: { ...s.rt, [tab.key]: { ...DEFAULT_RUNTIME, connId: "", host: "", user: "", sftpOpen: !!tab.openSftp } } }));
     void connect();
 
     return () => {

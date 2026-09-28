@@ -7,6 +7,9 @@ import {
 import { api } from "./api";
 import type { SftpEntry, SftpOnConflict } from "./sshTypes";
 import { sftpLastPath, useSshTerminals } from "./sshTerminals";
+import { useStore } from "./store";
+import { useSshSessions } from "./sshSessions";
+import { resolveSftpDir } from "./sshConnString";
 import { ensureSftpProgressListener, useSshTransfers } from "./useSshTransfers";
 import { useT } from "./i18n";
 import { Icon, IconButton, MenuPanel, Spinner } from "./ui/index";
@@ -33,6 +36,12 @@ type SortCol = "name" | "size" | "mtime";
 
 /** 每個終端機分頁的 SFTP 目前路徑（面板卸載後仍記得；分頁關閉時由 teardownSshTab 清掉）。 */
 const lastPathByTab = sftpLastPath;
+
+/** 這個分頁連的主機設定的 SFTP 起始資料夾（options.ui.sftp_dir；資料庫連線的 tunnel 分頁沒有）。 */
+function startDirOf(tabKey: string): string | undefined {
+  const sid = useStore.getState().sshTabs.find((x) => x.key === tabKey)?.sessionId;
+  return sid ? useSshSessions.getState().sessions.find((s) => s.id === sid)?.options.ui?.sftp_dir : undefined;
+}
 
 function errMsg(e: unknown): string {
   if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
@@ -100,27 +109,31 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
   useEffect(() => { sftpIdRef.current = sftpId; }, [sftpId]);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
-  const list = useCallback(async (id: string, p: string) => {
+  /** 列目錄；回傳是否列成功（被較新的請求蓋過也算成功——那次結果本來就不要了）。 */
+  const list = useCallback(async (id: string, p: string): Promise<boolean> => {
     const seq = ++seqRef.current;
     setLoading(true);
     setError(null);
     try {
       const es = await api.sshSftpList(id, p);
-      if (seq !== seqRef.current) return;
+      if (seq !== seqRef.current) return true;
       setEntries(es);
       // 同一個資料夾重新整理（上傳完、刪除後）保留選取裡還在的項目；換資料夾才清空。
       setSel((cur) => (p === pathRef.current ? pruneSelection(cur, es.map((x) => x.name)) : EMPTY_SELECTION));
       pathRef.current = p;
       setPath(p);
       lastPathByTab.set(tabKey, p);
+      return true;
     } catch (e) {
       if (seq === seqRef.current) setError(errMsg(e));
+      return false;
     } finally {
       if (seq === seqRef.current) setLoading(false);
     }
   }, [tabKey]);
 
-  // 開啟 sftp subsystem：connId 換了（重連）就重開，從家目錄開始；已有 sftpId（面板關掉又打開）則回到上次的資料夾。
+  // 開啟 sftp subsystem：connId 換了（重連）就重開，從起始資料夾開始（主機設定的 SFTP 起始資料夾，
+  // 沒設就是家目錄）；已有 sftpId（面板關掉又打開）則回到上次的資料夾。
   useEffect(() => {
     void ensureSftpProgressListener();
     if (status !== "connected") return;
@@ -136,7 +149,10 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
         // 先標記再 patch：patch 會觸發這個 effect 重跑，那次要認得「這個 sftpId 已經在列了」。
         listedRef.current = info.sftp_id;
         patch(tabKey, { sftpId: info.sftp_id });
-        await list(info.sftp_id, info.home || "/");
+        const home = info.home || "/";
+        const start = resolveSftpDir(startDirOf(tabKey), home);
+        // 起始資料夾不存在 / 沒權限：退回家目錄，別讓面板一打開就是一片錯誤。
+        if (!(await list(info.sftp_id, start)) && start !== home) await list(info.sftp_id, home);
       } catch (e) {
         setError(errMsg(e));
       } finally {

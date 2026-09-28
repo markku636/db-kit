@@ -30,6 +30,7 @@ import { useResizable, Splitter } from "./ui/resizable";
 import { tabOrder, type SshTab } from "./sshTabs";
 import type { SshSession } from "./sshTypes";
 import { useSshSessions, sessionLabel } from "./sshSessions";
+import type { ParsedSsh } from "./sshConnString";
 import { useSshTerminals, termRegistry } from "./sshTerminals";
 import { inTerminal, isAppReserved } from "./ui/keyScope";
 import SshHostTree from "./SshHostTree";
@@ -160,6 +161,7 @@ const NlQueryBar = lazy(() => import("./NlQueryBar"));
 // SSH 終端機分頁：常駐掛載（切分頁只切 display），所以不能走 lazyOverlay，用 React.lazy + 一次 Suspense。
 const SshTerminalPane = lazy(() => import("./SshTerminalPane"));
 const SshSessionDialog = lazyOverlay(() => import("./SshSessionDialog"));
+const SshImportDialog = lazyOverlay(() => import("./SshImportDialog"));
 // AI 動作（解釋 / 最佳化 / 修正 / 加註解 / 轉方言 / 測試資料）：差異預覽與選單都只在用到時載入。
 const AiDiffDialog = lazyOverlay(() => import("./AiDiffDialog"));
 const AiActionMenu = lazyOverlay(() => import("./AiActionMenu"));
@@ -199,7 +201,10 @@ export default function App() {
   // null = 關閉；{ initial } = 開啟（initial 為 null 表新增、為連線表示編輯）
   const [dialog, setDialog] = useState<{ initial: ConnectionConfig | null } | null>(null);
   // SSH 主機對話框：initial null = 新增（folderId 為預設資料夾）、否則編輯。
-  const [sshDialog, setSshDialog] = useState<{ initial: SshSession | null; folderId: string | null } | null>(null);
+  // prefill = 新增連線對話框轉交過來的 ssh:// / sftp:// 字串。
+  const [sshDialog, setSshDialog] = useState<{ initial: SshSession | null; folderId: string | null; prefill?: ParsedSsh | null } | null>(null);
+  // 匯入 SSH 主機（~/.ssh/config、.xsh）：側欄 SSH 區塊沒有主機時不顯示，從新增 SSH 主機對話框進來。
+  const [sshImportOpen, setSshImportOpen] = useState(false);
   const sshFolders = useSshSessions((s) => s.folders);
   const [backupOpen, setBackupOpen] = useState(false);
   const [erOpen, setErOpen] = useState(false);
@@ -453,6 +458,8 @@ export default function App() {
           initial={sshDialog.initial}
           folders={sshFolders}
           defaultFolderId={sshDialog.folderId}
+          prefill={sshDialog.prefill}
+          onImport={() => { setSshDialog(null); setSshImportOpen(true); }}
           onClose={() => setSshDialog(null)}
           onSaved={(s) => {
             // 對話框自己已寫入後端（含 keychain），這裡只要重讀清單。
@@ -464,10 +471,12 @@ export default function App() {
           }}
         />
       )}
+      {sshImportOpen && <SshImportDialog open onClose={() => setSshImportOpen(false)} />}
       {dialog && (
         <ConnectionDialog
           initial={dialog.initial}
           onClose={() => setDialog(null)}
+          onNewSsh={(prefill) => { setDialog(null); setSshDialog({ initial: null, folderId: null, prefill }); }}
           onSaved={async (c) => {
             try {
               await api.saveConnection(c);
@@ -2975,8 +2984,7 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
       <SshHostTree
         q={q}
         onOpen={(target, title, sessionId, opts) => {
-          const key = useStore.getState().openSshTab({ target, title, sessionId });
-          if (opts?.sftp) useSshTerminals.getState().patch(key, { sftpOpen: true });
+          useStore.getState().openSshTab({ target, title, sessionId, openSftp: opts?.sftp || undefined });
         }}
         onEdit={onEditSsh}
       />
@@ -3731,17 +3739,19 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
           className="px-2 py-1.5 text-fg/40 hover:text-fg/80 hover:bg-fg/5 border-r border-fg/10 shrink-0">
           <Icon icon={Plus} size={14} />
         </button>
-        <button type="button" ref={sshPickerBtnRef}
-          onClick={(e) => {
-            if (sshSessions.length === 0) { onNewSshSession(); return; }
-            const r = e.currentTarget.getBoundingClientRect();
-            setSshPicker({ x: r.left, y: r.bottom + 4 });
-          }}
-          title={t("新增 SSH 終端機（Ctrl+Shift+T）")}
-          aria-label={t("新增 SSH 終端機")}
-          className="px-2 py-1.5 text-fg/40 hover:text-fg/80 hover:bg-fg/5 border-r border-fg/10 shrink-0">
-          <Icon icon={SquareTerminal} size={14} />
-        </button>
+        {/* 沒有 SSH 主機就不顯示：不是每個人都用 SSH（新增走「新增連線 → SSH / SFTP」，Ctrl+Shift+T 仍可用）。 */}
+        {sshSessions.length > 0 && (
+          <button type="button" ref={sshPickerBtnRef}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setSshPicker({ x: r.left, y: r.bottom + 4 });
+            }}
+            title={t("新增 SSH 終端機（Ctrl+Shift+T）")}
+            aria-label={t("新增 SSH 終端機")}
+            className="px-2 py-1.5 text-fg/40 hover:text-fg/80 hover:bg-fg/5 border-r border-fg/10 shrink-0">
+            <Icon icon={SquareTerminal} size={14} />
+          </button>
+        )}
       </div>
 
       {/* 內容：表分頁 → 資料格；否則 → 對應查詢分頁的編輯器（key 隨分頁 → 各自獨立狀態與草稿）。
@@ -3844,7 +3854,10 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
         <MenuPanel x={sshPicker.x} y={sshPicker.y} minW={200} onClose={() => setSshPicker(null)}>
           {sshSessions.map((s) => (
             <button key={s.id} type="button"
-              onClick={() => { setSshPicker(null); openSshTab({ target: { kind: "session", id: s.id }, title: sessionLabel(s), sessionId: s.id }); }}
+              onClick={() => {
+                setSshPicker(null);
+                openSshTab({ target: { kind: "session", id: s.id }, title: sessionLabel(s), sessionId: s.id, openSftp: s.options.ui?.open_sftp === "1" || undefined });
+              }}
               className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
               <Icon icon={SquareTerminal} size={12} className="text-emerald-300/80 shrink-0" />
               <span className="truncate">{sessionLabel(s)}</span>

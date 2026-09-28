@@ -3676,6 +3676,18 @@ const en: Catalog = {
   "點選切換；選多位就是會審": "Click to toggle; selecting several makes it a panel review",
   "（另有 {n} 個欄位未列出）": { one: "({n} more column not listed)", other: "({n} more columns not listed)" },
   "（描述這個技能要模型怎麼做）": "(Describe what this skill should make the model do)",
+  "SFTP 起始資料夾": "SFTP start folder",
+  "可在「主機」直接貼上 ssh://、sftp:// 或 ssh 指令（ssh -p 2222 user@host）": "You can paste ssh://, sftp:// or an ssh command (ssh -p 2222 user@host) straight into Host",
+  "切到終端機": "Switch to terminal",
+  "已依連線字串填入。找不到跳板機「{jump}」，請從清單選擇": "Filled in from the connection string. Jump host \"{jump}\" isn't in your saved hosts — pick one from the list",
+  "已依連線字串填入，請確認後儲存": "Filled in from the connection string — check it, then save",
+  "從 ~/.ssh/config、.xsh 匯入…": "Import from ~/.ssh/config or .xsh…",
+  "留空＝家目錄；~/ 開頭＝家目錄底下": "Empty = home folder; starting with ~/ = inside the home folder",
+  "貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss:// ssh:// sftp://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql": "Parsed as soon as you paste. Supports URLs (postgres:// mysql:// mongodb+srv:// rediss:// ssh:// sftp://), libpq (host=… port=…), JDBC, ADO.NET / Npgsql",
+  "這是 SSH 主機的連線字串，請從「新增連線」加入": "This is an SSH host connection string — add it from \"New connection\"",
+  "遠端主機": "Remote hosts",
+  "開啟時一併展開 SFTP 面板": "Open the SFTP panel when connecting",
+  "開啟終端機": "Open terminal",
 };
 
 export default en;

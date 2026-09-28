@@ -1,3 +1,4 @@
+import { SquareTerminal, type LucideIcon } from "lucide-react";
 import { KIND_META, KIND_CATEGORIES, type DbKind } from "./api";
 import { kindIcon } from "./kindIcons";
 import Icon from "./ui/Icon";
@@ -12,6 +13,8 @@ import { useT } from "./i18n";
 const CARD_W = 92;
 /** 單一分類一列最多幾張卡；超過就在該分類內換行。 */
 const MAX_COLS = 4;
+/** SSH 卡片的色標：與側欄 SSH 主機的終端機圖示同一個綠。 */
+const SSH_COLOR = "#10b981";
 
 interface Props {
   value: DbKind;
@@ -19,9 +22,14 @@ interface Props {
   onChange: (k: DbKind) => void;
   collapsed: boolean;
   onExpand: () => void;
+  /**
+   * 有給才多一個「遠端主機 → SSH / SFTP」分類（新增模式）。SSH 主機不是 DbKind：
+   * 點下去由呼叫端改開 SSH 主機對話框，這裡不會變成選取狀態。
+   */
+  onPickSsh?: () => void;
 }
 
-export default function KindPicker({ value, onChange, collapsed, onExpand }: Props) {
+export default function KindPicker({ value, onChange, collapsed, onExpand, onPickSsh }: Props) {
   const t = useT();
   if (collapsed) {
     const m = KIND_META[value];
@@ -61,42 +69,64 @@ export default function KindPicker({ value, onChange, collapsed, onExpand }: Pro
               className="grid gap-2.5"
               style={{ gridTemplateColumns: `repeat(${Math.min(kinds.length, MAX_COLS)}, ${CARD_W}px)` }}
             >
-              {kinds.map((k) => {
-                const active = value === k;
-                const color = KIND_META[k].color;
-                return (
-                  <button
-                    key={k}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    onClick={() => onChange(k)}
-                    className="group flex flex-col items-center justify-center gap-2 h-[76px] rounded-lg border transition-all hover:-translate-y-0.5 hover:shadow-sm"
-                    style={{
-                      borderColor: active ? color : "rgb(var(--c-fg) / 0.12)",
-                      background: active ? color + "1a" : "rgb(var(--c-fg) / 0.02)",
-                    }}
-                  >
-                    <span
-                      className="flex items-center justify-center w-9 h-9 rounded-md transition-colors"
-                      style={{ background: color + (active ? "33" : "1f"), color }}
-                    >
-                      <Icon icon={kindIcon(k)} size={18} />
-                    </span>
-                    <span
-                      className="text-xs font-medium whitespace-nowrap"
-                      style={{ color: active ? color : "rgb(var(--c-fg) / 0.72)" }}
-                    >
-                      {KIND_META[k].label}
-                    </span>
-                  </button>
-                );
-              })}
+              {kinds.map((k) => (
+                <KindCard
+                  key={k}
+                  label={KIND_META[k].label}
+                  icon={kindIcon(k)}
+                  color={KIND_META[k].color}
+                  active={value === k}
+                  onClick={() => onChange(k)}
+                />
+              ))}
             </div>
           </div>
         );
       })}
+      {onPickSsh && (
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-fg/40 mb-1.5">{t("遠端主機")}</div>
+          <div className="grid gap-2.5" style={{ gridTemplateColumns: `${CARD_W}px` }}>
+            <KindCard label="SSH / SFTP" icon={SquareTerminal} color={SSH_COLOR} active={false} onClick={onPickSsh} />
+          </div>
+        </div>
+      )}
       </div>
     </div>
+  );
+}
+
+function KindCard({ label, icon, color, active, onClick }: {
+  label: string;
+  icon: LucideIcon;
+  color: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={onClick}
+      className="group flex flex-col items-center justify-center gap-2 h-[76px] rounded-lg border transition-all hover:-translate-y-0.5 hover:shadow-sm"
+      style={{
+        borderColor: active ? color : "rgb(var(--c-fg) / 0.12)",
+        background: active ? color + "1a" : "rgb(var(--c-fg) / 0.02)",
+      }}
+    >
+      <span
+        className="flex items-center justify-center w-9 h-9 rounded-md transition-colors"
+        style={{ background: color + (active ? "33" : "1f"), color }}
+      >
+        <Icon icon={icon} size={18} />
+      </span>
+      <span
+        className="text-xs font-medium whitespace-nowrap"
+        style={{ color: active ? color : "rgb(var(--c-fg) / 0.72)" }}
+      >
+        {label}
+      </span>
+    </button>
   );
 }
