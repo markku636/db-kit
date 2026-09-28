@@ -480,9 +480,11 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
 
       <div className="flex-1 flex min-h-0 min-w-0">
         <div className="relative flex-1 min-w-0 min-h-0 bg-app">
-          <div ref={hostRef} className="absolute inset-0 pl-1 pt-1" onContextMenu={onContextMenu} />
+          {/* isolate：xterm 自己的圖層（WebGL 渲染器的 xterm-link-layer canvas、scrollbar、decoration…）都帶 z-index，
+              不關在這個 stacking context 裡就會蓋到下面的提示列上，看得到按不到（issue #7）。 */}
+          <div ref={hostRef} className="absolute inset-0 pl-1 pt-1 isolate" onContextMenu={onContextMenu} />
           {status === "connecting" && (
-            <div className="absolute inset-0 flex items-center justify-center bg-app/70">
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-app/70">
               <div className="flex items-center gap-3 px-4 py-2 rounded bg-elevated border border-fg/10 text-xs shadow-lg">
                 <Spinner size={14} />
                 <span>{t("連線中：{target}", { target: tab.title })}</span>
@@ -491,7 +493,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
             </div>
           )}
           {(status === "disconnected" || status === "error") && (
-            <div className="absolute top-2 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded bg-elevated border border-fg/10 text-xs shadow-lg max-w-[90%]">
+            <div data-testid="ssh-disconnected" className="absolute z-10 top-2 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded bg-elevated border border-fg/10 text-xs shadow-lg max-w-[90%]">
               <span className={`w-2 h-2 rounded-full shrink-0 ${status === "error" ? "bg-danger" : "bg-warning"}`} />
               <span className="truncate">{rt?.error || t("連線已中斷")}</span>
               <Button variant="primary" size="sm" icon={RefreshCw} onClick={reconnect}>{t("重新連線")}</Button>

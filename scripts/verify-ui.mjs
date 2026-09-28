@@ -52,6 +52,9 @@ const CASE_FX = {
   "sftp-multi-select": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-key-manager": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-host-import": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ssh-disconnect-overlay": { STORAGE_SEED: SSH_STORAGE_SEED },
+  // 同一個情境換成預設的渲染器（WebGL，開不起來才退回 DOM）：issue #7 的使用者用的就是預設值。
+  "ssh-disconnect-overlay-webgl": {},
 };
 
 // xterm 目前畫面（DOM renderer）的純文字。
@@ -204,6 +207,41 @@ const CASES = {
     check("清單的權限欄就地更新成 rwxr-xr-x", (await sftp.getByText("-rwxr-xr-x", { exact: true }).count()) > 0);
     check("沒有未實作的 SFTP command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // 斷線後終端機上方的提示列：兩顆按鈕必須真的點得到（issue #7：提示列被 xterm 的圖層蓋住，看得到按不到）。
+  // Playwright 的 click 會先確認沒有別的元素擋在上面，被擋住就失敗並說是誰擋的。
+  async "ssh-disconnect-overlay"(page, opts = {}) {
+    if (!opts.skipOpen) await openSshWeb01(page);
+    const first = await page.evaluate(() => window.__DBKIT_SSH_LAST_CONN__);
+    const closeConn = (id) => page.evaluate((c) => window.__DBKIT_EMIT__("ssh-conn-closed", { conn_id: c, reason: "遠端主機已強制關閉一個現存的連線。 (os error 10054)" }), id);
+    await closeConn(first);
+    const bar = page.getByTestId("ssh-disconnected");
+    await bar.waitFor({ timeout: 5000 }).catch(() => {});
+    check("斷線後顯示提示列與原因", /10054/.test(await bar.innerText().catch(() => "")));
+    let err = "";
+    await bar.getByRole("button", { name: "重新連線", exact: true }).click({ timeout: 3000 }).catch((e) => { err = String(e.message).split("\n").slice(0, 30).join(" | "); });
+    check("提示列的「重新連線」點得到", !err, err);
+    await page.waitForFunction((c) => window.__DBKIT_SSH_LAST_CONN__ && window.__DBKIT_SSH_LAST_CONN__ !== c, first, { timeout: 5000 }).catch(() => {});
+    const second = await page.evaluate(() => window.__DBKIT_SSH_LAST_CONN__);
+    check("按下去真的重新連線", !!second && second !== first);
+    await sleep(600);
+    await closeConn(second);
+    await bar.waitFor({ timeout: 5000 }).catch(() => {});
+    err = "";
+    await bar.getByRole("button", { name: "關閉分頁", exact: true }).click({ timeout: 3000 }).catch((e) => { err = String(e.message).split("\n").slice(0, 30).join(" | "); });
+    check("提示列的「關閉分頁」點得到", !err, err);
+    await sleep(300);
+    check("按下去分頁真的關掉", (await page.locator(".xterm").count()) === 0);
+  },
+  async "ssh-disconnect-overlay-webgl"(page) {
+    const tree = page.locator("[data-ssh-host-tree]");
+    await tree.getByText("web-01", { exact: true }).first().dblclick();
+    await page.locator(".xterm").first().waitFor({ timeout: 10000 }).catch(() => {});
+    await page.waitForFunction(() => !!window.__DBKIT_SSH_LAST_CONN__, null, { timeout: 10000 }).catch(() => {});
+    await sleep(800);
+    check("用的是 WebGL 渲染器（有 canvas）", (await page.locator(".xterm canvas").count()) > 0, String(await page.locator(".xterm canvas").count()));
+    await CASES["ssh-disconnect-overlay"].call(this, page, { skipOpen: true });
   },
 
   // 匯入主機：~/.ssh/config 讀出的主機，已經有的預設不勾、有提醒的列出來；私鑰與憑證跟著帶；

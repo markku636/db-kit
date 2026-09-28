@@ -299,6 +299,7 @@ export function installShim(fx) {
         : { host: "db-bastion.internal", port: 22, username: "tunnel" };
       const info = { conn_id: connId, host: s?.host ?? "web-01", port: s?.port ?? 22, username: s?.username ?? "deploy" };
       sshConns.set(connId, info);
+      window.__DBKIT_SSH_LAST_CONN__ = connId; // 測試用：模擬斷線要知道是哪條
       return info;
     },
     ssh_test: () => new Promise((r) => setTimeout(() => r(null), 200)),
