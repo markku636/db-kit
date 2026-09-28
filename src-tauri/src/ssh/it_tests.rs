@@ -8,6 +8,11 @@
 //! ```
 //! 環境變數 `DBKIT_SSH_IT_HOST` / `_PORT` / `_USER` / `_PASS` 可覆寫目標。
 //!
+//! 跳板機（ProxyJump）的測試要 sshd 允許 TCP 轉送（linuxserver 映像預設關閉；只需做一次）：
+//! ```text
+//! docker exec dbkit-ssh sh -c 'sed -i "s/^AllowTcpForwarding no/AllowTcpForwarding yes/" /config/sshd/sshd_config; kill -HUP $(cat /config/sshd.pid)'
+//! ```
+//!
 //! 憑證登入的測試另外要伺服器信任測試 CA（只需做一次；測試每次自己產生 CA 並寫進那個檔）：
 //! ```text
 //! docker exec dbkit-ssh sh -c 'echo "TrustedUserCAKeys /config/.ssh/dbkit_test_ca.pub" >> /config/sshd/sshd_config; kill -HUP $(cat /config/sshd.pid)'
@@ -44,6 +49,7 @@ fn target() -> SshTarget {
         private_key_path: String::new(),
         certificate_path: String::new(),
         passphrase: String::new(),
+        jump: None,
         term: SshTermOptions { keepalive_secs: 5, ..Default::default() },
         origin: TargetOrigin::AdHoc,
     }
@@ -639,4 +645,60 @@ async fn certificate_login() {
     sftp.close().await;
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = conn.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+}
+
+// ---- 跳板機（ProxyJump）----
+
+/// 在連線上跑一個指令、收齊輸出（exec channel，不開 PTY）。
+async fn exec_output(handle: &russh::client::Handle<super::auth::DbkHandler>, cmd: &str) -> String {
+    let mut ch = handle.channel_open_session().await.expect("session channel");
+    ch.exec(true, cmd).await.expect("exec");
+    let mut out = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), ch.wait()).await.expect("exec 逾時") {
+            Some(russh::ChannelMsg::Data { data }) => out.extend_from_slice(&data),
+            Some(russh::ChannelMsg::Eof) | Some(russh::ChannelMsg::Close) | None => break,
+            _ => {}
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 跳板機：先連上跳板機，經它的 direct-tcpip 通道再做目標的 SSH 交握（等同 `ssh -J`）。
+/// 容器裡 sshd 聽 2222，所以「目標 = 從跳板機看出去的 127.0.0.1:2222」，也就是同一台再進一次。
+/// 一層、兩層都要真的能跑指令；跳板機連不到目標時，錯誤訊息要講是跳板機那一段。
+#[tokio::test]
+#[ignore = "需要 Docker OpenSSH:2222（且 sshd AllowTcpForwarding yes，見檔頭）"]
+async fn jump_host_chain() {
+    let jump = target();
+    let mut t = target();
+    t.host = "127.0.0.1".into();
+    t.port = 2222;
+    t.jump = Some(Box::new(jump.clone()));
+    let c = connect_and_auth(&t, "it-jump", Arc::new(SilentUi), tmp_store()).await.expect("經跳板機連線");
+    assert!(c.jump.is_some(), "跳板機連線要跟著目標連線一起留著");
+    let out = exec_output(&c.handle, "echo via-jump-$((40+2))").await;
+    assert!(out.contains("via-jump-42"), "{out:?}");
+    let _ = c.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+
+    // 兩層：目標 ← 跳板機 ← 跳板機
+    let mut inner = target();
+    inner.host = "127.0.0.1".into();
+    inner.jump = Some(Box::new(jump.clone()));
+    let mut t2 = target();
+    t2.host = "127.0.0.1".into();
+    t2.jump = Some(Box::new(inner));
+    let c2 = connect_and_auth(&t2, "it-jump2", Arc::new(SilentUi), tmp_store()).await.expect("兩層跳板機連線");
+    assert!(c2.jump.as_ref().and_then(|j| j.jump.as_ref()).is_some());
+    assert!(exec_output(&c2.handle, "echo two-hops").await.contains("two-hops"));
+    let _ = c2.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+
+    // 跳板機連不到目標（沒有服務的埠）→ 錯誤講跳板機
+    let mut bad = target();
+    bad.host = "127.0.0.1".into();
+    bad.port = 1;
+    bad.jump = Some(Box::new(jump));
+    let err = connect_and_auth(&bad, "it-jump-bad", Arc::new(SilentUi), tmp_store()).await.err().expect("應該失敗");
+    let msg = err.message();
+    assert!(msg.contains("跳板機"), "{msg}");
 }

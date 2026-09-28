@@ -246,8 +246,15 @@ export function installShim(fx) {
     // ── SSH 終端機 / SFTP ──────────────────────────────────────────────
     // 假 shell：逐字回聲、Enter 跑幾個固定指令（ls / pwd / echo / systemctl status nginx），其餘回 command not found。
     // 輸出走 Channel（見 channelSender），與真後端一樣是 raw bytes → ArrayBuffer。
-    ssh_sessions_list: () => fx.SSH_SESSIONS ?? { version: 1, folders: [], sessions: [] },
-    ssh_session_save: ({ session }) => { window.__DBKIT_SSH_SESSION_SAVES__.push(session); return null; },
+    // 主機清單有狀態：存了再讀要讀得到（App 存檔後會重新載入清單，靜態 fixture 會把剛存的蓋回去）。
+    ssh_sessions_list: () => JSON.parse(JSON.stringify(sshSessionsState)),
+    ssh_session_save: ({ session }) => {
+      window.__DBKIT_SSH_SESSION_SAVES__.push(session);
+      const i = sshSessionsState.sessions.findIndex((x) => x.id === session.id);
+      if (i >= 0) sshSessionsState.sessions[i] = session;
+      else sshSessionsState.sessions.push(session);
+      return null;
+    },
     // ── SSH 金鑰庫（假的：內容看起來像加密的就要密語，密語 "wrong" 算錯；以 ssh- 開頭的是公鑰）──
     ssh_keys_list: () => sshKeys.map((k) => ({ ...k })),
     ssh_import_default_path: ({ kind }) => (kind === "xsh" ? fx.SSH_IMPORT_XSH?.path : fx.SSH_IMPORT_CONFIG?.path) ?? null,
@@ -289,8 +296,15 @@ export function installShim(fx) {
       if (k) k.has_cert = true;
       return { path: "", key_id: "demo", principals: ["deploy"], valid_after: 0, valid_before: 4102444800, cert_type: "user", ca_fingerprint: "SHA256:ca", matches_key: true, validity: "valid" };
     },
-    ssh_session_remove: () => null,
-    ssh_sessions_layout_save: () => null,
+    ssh_session_remove: ({ id }) => { sshSessionsState.sessions = sshSessionsState.sessions.filter((x) => x.id !== id); return null; },
+    ssh_sessions_layout_save: ({ folders, order }) => {
+      sshSessionsState.folders = folders ?? sshSessionsState.folders;
+      const pos = new Map((order ?? []).map((o, i) => [o.id, [i, o.folder_id]]));
+      sshSessionsState.sessions = sshSessionsState.sessions
+        .map((x) => (pos.has(x.id) ? { ...x, folder_id: pos.get(x.id)[1] } : x))
+        .sort((a, b) => (pos.get(a.id)?.[0] ?? 1e9) - (pos.get(b.id)?.[0] ?? 1e9));
+      return null;
+    },
     ssh_has_stored_password: () => true,
     ssh_connect: ({ connId, target }) => {
       const sessions = fx.SSH_SESSIONS?.sessions ?? [];
@@ -367,6 +381,7 @@ export function installShim(fx) {
   // ── SSH 假 shell 的狀態與工具 ──────────────────────────────────────────
   let sshSeq = 0;
   const sshKeys = (fx.SSH_KEYS ?? []).map((k) => ({ ...k }));
+  const sshSessionsState = JSON.parse(JSON.stringify(fx.SSH_SESSIONS ?? { version: 1, folders: [], sessions: [] }));
   function sshInspect(source, passphrase) {
     const text = source?.kind === "text" ? source.text : "";
     const path = source?.kind === "path" ? source.path : "";

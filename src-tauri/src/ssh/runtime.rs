@@ -48,6 +48,8 @@ pub struct SshConn {
     pub channels: AtomicUsize,
     /// 連線結束時變成 `Some(原因)`；sender 消失（session 任務結束）也代表已關。
     pub closed: watch::Receiver<Option<String>>,
+    /// 經跳板機連上時的跳板機連線（一路到最外層）：目標連線的 TCP 就是它上面的通道，必須一起活著、一起關。
+    pub jump: Option<Box<auth::Connected>>,
 }
 
 impl SshConn {
@@ -67,6 +69,7 @@ impl SshConn {
             handle: Arc::new(c.handle),
             channels: AtomicUsize::new(0),
             closed: c.closed,
+            jump: c.jump,
         }
     }
 
@@ -193,6 +196,12 @@ impl SshRuntime {
                 .handle
                 .disconnect(russh::Disconnect::ByApplication, "", "")
                 .await;
+            // 目標關了再關跳板機（由內而外）。
+            let mut hop = conn.jump.as_deref();
+            while let Some(j) = hop {
+                let _ = j.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+                hop = j.jump.as_deref();
+            }
         }
     }
 

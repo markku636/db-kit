@@ -28,6 +28,8 @@ export interface SshSession {
   private_key_path: string;
   /** OpenSSH 使用者憑證；空 = 自動找私鑰旁邊的 `<私鑰>-cert.pub`。 */
   certificate_path: string;
+  /** 跳板機（ProxyJump）：另一台已存主機的 id；null = 直連。舊存檔沒有這個欄位。 */
+  jump_session_id?: string | null;
   folder_id: string | null;
   options: SshTermOptions;
 }
@@ -228,6 +230,8 @@ export interface SshImportCandidate {
   certificate_file: string | null;
   /** .xsh 參照的金鑰名稱（在原軟體的金鑰庫裡，不是檔案） */
   xshell_key: string | null;
+  /** ProxyJump 的跳板機（別名，或 user@host:port）；多層時是最靠近目標的那一台 */
+  proxy_jump: string | null;
   term: string | null;
   notes: string[];
 }
@@ -266,6 +270,7 @@ export function blankSshSession(id: string, folderId: string | null = null): Ssh
     auth: "password",
     private_key_path: "",
     certificate_path: "",
+    jump_session_id: null,
     folder_id: folderId,
     options: defaultSshTermOptions(),
   };

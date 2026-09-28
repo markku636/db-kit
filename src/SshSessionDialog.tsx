@@ -6,7 +6,7 @@ import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
 import { useT } from "./i18n";
 import { SshAuthPromptDialog, SshHostKeyDialog } from "./SshPrompts";
 import SshKeyPathField from "./SshKeyPathField";
-import { useSshSessions } from "./sshSessions";
+import { jumpChoices, sessionLabel, useSshSessions } from "./sshSessions";
 import {
   blankSshSession,
   type SshAuthKind,
@@ -48,6 +48,9 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
   const [host, setHost] = useState(base.host);
   const [port, setPort] = useState(base.port || 22);
   const [username, setUsername] = useState(base.username);
+  // 跳板機（ProxyJump）：另一台已存主機；"" = 直連。
+  const [jumpId, setJumpId] = useState(base.jump_session_id ?? "");
+  const allSessions = useSshSessions((s) => s.sessions);
   const [auth, setAuth] = useState<SshAuthKind>(base.auth);
   const [password, setPassword] = useState("");
   const [rememberPassword, setRememberPassword] = useState(true);
@@ -91,7 +94,7 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
   // 任一連線欄位變動就清掉上次測試結果（同 ConnectionDialog：別讓舊的「連線成功」誤導）。
   useEffect(() => {
     setMsg(null);
-  }, [host, port, username, auth, password, keyPath, certPath, passphrase, term, keepalive]);
+  }, [host, port, username, auth, password, keyPath, certPath, passphrase, term, keepalive, jumpId]);
 
   // 卸載時把事件訂閱收掉，並取消還在跑的測試（測試進行中被關掉對話框的情況）。
   useEffect(
@@ -124,6 +127,7 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
       // 非私鑰認證不留路徑：後端 plan_auth 看到路徑就會先試 key，白白多一輪失敗。
       private_key_path: auth === "key" ? keyPath.trim() : "",
       certificate_path: auth === "key" ? certPath.trim() : "",
+      jump_session_id: jumpId || null,
       folder_id: folderId || null,
       options: {
         ...base.options,
@@ -269,6 +273,15 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
         </div>
         <Field label={t("使用者")} required>
           <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} placeholder="deploy" />
+        </Field>
+        <Field label={t("跳板機")} hint={t("先連上這台，再經由它連到上面的主機（ProxyJump）。跳板機要允許 TCP 轉送。")}>
+          <Select value={jumpId} onChange={(e) => setJumpId(e.target.value)} aria-label={t("跳板機")}>
+            <option value="">{t("不經跳板機（直連）")}</option>
+            {jumpChoices(allSessions, base.id).map((s) => (
+              <option key={s.id} value={s.id}>{sessionLabel(s)}{s.name ? `（${s.username}@${s.host}）` : ""}</option>
+            ))}
+            {jumpId && !allSessions.some((s) => s.id === jumpId) && <option value={jumpId}>{t("（已刪除的主機）")}</option>}
+          </Select>
         </Field>
         <Field label={t("認證方式")}>
           <Segmented

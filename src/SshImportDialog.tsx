@@ -8,7 +8,7 @@ import { useT } from "./i18n";
 import { Badge, Button, Field, Input, Modal, Segmented, Select, Spinner } from "./ui/index";
 import { pickDirectory, pickOpenFile, toast } from "./ui";
 import { useSshSessions } from "./sshSessions";
-import { candidateToSession, existingIndexes, folderLabel } from "./sshHostImport";
+import { candidateToSession, existingIndexes, folderLabel, resolveJumpRef } from "./sshHostImport";
 import type { SshHostImportKind, SshImportScan } from "./sshTypes";
 
 const NEW_FOLDER = "__new__";
@@ -103,8 +103,16 @@ function Inner({ open, onClose }: { open: boolean; onClose: () => void }) {
     const fallbackName = kind === "ssh_config" ? t("匯入：ssh config") : t("匯入：.xsh");
     let ok = 0;
     const failed: string[] = [];
+    const noJump: string[] = [];
+    // 先給每台要匯入的主機 id：ProxyJump 可以指到這次一起匯入的主機（或清單裡已有的）。
+    const picked = [...checked].sort((a, b) => a - b);
+    const ids = new Map(picked.map((i) => [i, crypto.randomUUID()]));
+    const jumpTargets = [
+      ...picked.map((i) => ({ id: ids.get(i)!, name: scan.hosts[i].name, host: scan.hosts[i].host, username: scan.hosts[i].username, port: scan.hosts[i].port })),
+      ...useSshSessions.getState().sessions.map((s) => ({ id: s.id, name: s.name, host: s.host, username: s.username, port: s.port })),
+    ];
     try {
-      for (const i of [...checked].sort((a, b) => a - b)) {
+      for (const i of picked) {
         const c = scan.hosts[i];
         let folderId: string | null;
         const src = useSourceFolders ? folderLabel(c.folder) : null;
@@ -112,7 +120,9 @@ function Inner({ open, onClose }: { open: boolean; onClose: () => void }) {
         else if (target === NEW_FOLDER) folderId = await ensureFolder(fallbackName);
         else folderId = target || null;
         try {
-          await store.save(candidateToSession(c, crypto.randomUUID(), folderId, keys), null, null);
+          const jump = resolveJumpRef(c.proxy_jump, jumpTargets.filter((h) => h.id !== ids.get(i)));
+          if (c.proxy_jump && !jump) noJump.push(c.name);
+          await store.save(candidateToSession(c, ids.get(i)!, folderId, keys, jump), null, null);
           ok++;
         } catch {
           failed.push(c.name);
@@ -120,6 +130,9 @@ function Inner({ open, onClose }: { open: boolean; onClose: () => void }) {
       }
       if (ok) toast.success(t("已匯入 {n} 台主機", { n: ok }));
       if (failed.length) toast.error(t("{n} 台匯入失敗：{names}", { n: failed.length, names: failed.slice(0, 5).join(t("、")) }));
+      if (noJump.length) {
+        toast.info(t("{n} 台的跳板機（ProxyJump）找不到對應的主機，請到主機設定選擇：{names}", { n: noJump.length, names: noJump.slice(0, 5).join(t("、")) }));
+      }
       if (ok) onClose();
     } catch (e) {
       toast.error(errMsg(e));
@@ -187,6 +200,7 @@ function Inner({ open, onClose }: { open: boolean; onClose: () => void }) {
                         {c.identity_file ? ` · ${t("私鑰 {name}", { name: baseName(c.identity_file) })}` : ""}
                         {c.certificate_file ? ` · ${t("憑證")}` : ""}
                         {c.xshell_key ? ` · ${t("金鑰 {name}", { name: c.xshell_key })}` : ""}
+                        {c.proxy_jump ? ` · ${t("經 {via}", { via: c.proxy_jump })}` : ""}
                       </div>
                       {c.notes.map((n) => <div key={n} className="text-xs text-warning">{n}</div>)}
                     </div>

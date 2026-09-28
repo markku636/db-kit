@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sessionLabel, groupSessions, filterSessions, uniqueFolderName, sessionsToPlacements } from "./sshSessions";
+import { sessionLabel, groupSessions, filterSessions, uniqueFolderName, sessionsToPlacements, jumpChoices } from "./sshSessions";
 import { blankSshSession, type SshFolder, type SshSession } from "./sshTypes";
 
 const mk = (id: string, patch: Partial<SshSession>): SshSession => ({ ...blankSshSession(id), ...patch });
@@ -91,5 +91,21 @@ describe("sessionsToPlacements", () => {
       { id: "a", folder_id: "f1" },
       { id: "b", folder_id: null },
     ]);
+  });
+});
+
+describe("jumpChoices", () => {
+  it("排除自己與會繞回自己的；別人之間的迴圈不影響", () => {
+    const list = [
+      mk("self", { name: "self", jump_session_id: "b" }),
+      mk("a", { name: "a" }),
+      mk("b", { name: "b", jump_session_id: "a" }),
+      mk("c", { name: "c", jump_session_id: "self" }), // c 經 self → 選 c 會繞回來
+      mk("d", { name: "d", jump_session_id: "e" }),
+      mk("e", { name: "e", jump_session_id: "d" }), // d ↔ e 自己繞，與 self 無關
+      mk("f", { name: "f", jump_session_id: "gone" }), // 指到已刪除的
+    ];
+    expect(jumpChoices(list, "self").map((s) => s.id)).toEqual(["a", "b", "d", "e", "f"]);
+    expect(jumpChoices(list, "new-host").map((s) => s.id)).toContain("self");
   });
 });

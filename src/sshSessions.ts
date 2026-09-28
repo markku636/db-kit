@@ -44,6 +44,26 @@ export function groupSessions(folders: SshFolder[], sessions: SshSession[]): Gro
   };
 }
 
+/**
+ * 主機設定裡可選的跳板機：排除自己，以及跳板機鏈最後會繞回自己的（A 經 B、B 又經 A）。
+ * 鏈上指到已刪除的主機就當作到此為止。依顯示名稱排序。
+ */
+export function jumpChoices(sessions: readonly SshSession[], selfId: string): SshSession[] {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const leadsToSelf = (start: SshSession): boolean => {
+    const seen = new Set<string>();
+    let cur: SshSession | undefined = start;
+    while (cur) {
+      if (cur.id === selfId) return true;
+      if (seen.has(cur.id)) return false; // 別人之間的迴圈，與自己無關
+      seen.add(cur.id);
+      cur = cur.jump_session_id ? byId.get(cur.jump_session_id) : undefined;
+    }
+    return false;
+  };
+  return sessions.filter((s) => s.id !== selfId && !leadsToSelf(s)).sort(byLabel);
+}
+
 /** 側欄搜尋：比對名稱 / 主機 / 使用者（不分大小寫、前後空白忽略）；空字串回原陣列。 */
 export function filterSessions(sessions: SshSession[], q: string): SshSession[] {
   const needle = q.trim().toLowerCase();

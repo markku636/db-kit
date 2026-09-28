@@ -3639,6 +3639,13 @@ const en: Catalog = {
   "這裡沒有可以匯入的主機。": "No hosts to import here.",
   "連同子資料夾一起讀；子資料夾會變成主機資料夾": "Subfolders are read too and become host folders",
   "金鑰 {name}": "key {name}",
+  // ---- 跳板機 ----
+  "{n} 台的跳板機（ProxyJump）找不到對應的主機，請到主機設定選擇：{names}": "No matching host for the jump host (ProxyJump) of {n} imported hosts; pick one in their host settings: {names}",
+  "不經跳板機（直連）": "No jump host (connect directly)",
+  "先連上這台，再經由它連到上面的主機（ProxyJump）。跳板機要允許 TCP 轉送。": "Connect to this host first, then reach the host above through it (ProxyJump). The jump host must allow TCP forwarding.",
+  "經 {via}": "via {via}",
+  "跳板機": "Jump host",
+  "（已刪除的主機）": "(deleted host)",
 };
 
 export default en;

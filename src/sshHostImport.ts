@@ -15,6 +15,28 @@ export function existingIndexes(cands: readonly SshImportCandidate[], sessions: 
   return out;
 }
 
+/**
+ * ProxyJump 的值（別名，或 `[user@]host[:port]`）對到主機：先比名稱（這次一起匯入的、或清單裡已有的），
+ * 再比主機位址（有寫使用者 / 埠就一起比）。找不到回 null。
+ */
+export function resolveJumpRef(
+  ref: string | null | undefined,
+  hosts: readonly { id: string; name: string; host: string; username: string; port: number }[],
+): string | null {
+  const v = (ref ?? "").trim();
+  if (!v) return null;
+  const byName = hosts.find((h) => h.name.trim().toLowerCase() === v.toLowerCase());
+  if (byName) return byName.id;
+  const m = /^(?:([^@]+)@)?([^:@]+)(?::(\d+))?$/.exec(v);
+  if (!m) return null;
+  const [, user, host, port] = m;
+  const hit = hosts.find((h) =>
+    h.host.trim().toLowerCase() === host.toLowerCase()
+    && (!user || h.username.trim().toLowerCase() === user.toLowerCase())
+    && (!port || (h.port || 22) === Number(port)));
+  return hit?.id ?? null;
+}
+
 /** 來源的子資料夾（`PROD/web`）→ 主機資料夾名稱（資料夾不巢狀，用 ` / ` 接起來）。 */
 export function folderLabel(folder: string | null | undefined): string | null {
   const parts = (folder ?? "").split("/").map((p) => p.trim()).filter(Boolean);
@@ -32,6 +54,7 @@ export function candidateToSession(
   id: string,
   folderId: string | null,
   keys: readonly SshStoredKey[] = [],
+  jumpId: string | null = null,
 ): SshSession {
   const s = blankSshSession(id, folderId);
   const stored = c.xshell_key
@@ -47,6 +70,7 @@ export function candidateToSession(
     auth: keyPath ? "key" : "password",
     private_key_path: keyPath ?? "",
     certificate_path: keyPath ? (c.certificate_file ?? "") : "",
+    jump_session_id: jumpId,
     options: { ...s.options, term: c.term && TERM_TYPES.has(c.term) ? c.term : s.options.term },
   };
 }

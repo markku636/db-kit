@@ -5,7 +5,8 @@
 //! **~/.ssh/config**：照 OpenSSH 的規則算出每個具體別名（`Host` 裡沒有萬用字元、不是 `!` 否定的那些）
 //! 的有效設定——每個參數**第一個取得的值為準**（所以 `Host *` 放最後就是預設值），`IdentityFile` /
 //! `CertificateFile` 可累加；`Include` 相對路徑以 `~/.ssh` 為基準、支援 `*`；`Match` 區塊略過。
-//! `%d` `%u` `%h` `%r` `%%` 與 `~` 會展開。ProxyJump / ProxyCommand / 連接埠轉送目前不支援，列成提醒。
+//! `%d` `%u` `%h` `%r` `%%` 與 `~` 會展開。ProxyJump 記下跳板機的名稱（前端對到同名主機就接上）；
+//! ProxyCommand / 連接埠轉送目前不支援，列成提醒。
 //!
 //! **Xshell**：`.xsh` 是 INI（新版是 UTF-16LE），`[CONNECTION]` 的 Host / Port / Protocol、
 //! `[CONNECTION:AUTHENTICATION]` 的 UserName / UserKey、`[TERMINAL]` 的 Type。子資料夾對應成主機資料夾。
@@ -32,6 +33,8 @@ pub struct ImportCandidate {
     pub certificate_file: Option<String>,
     /// Xshell 使用者金鑰的名稱（在 Xshell 的金鑰庫裡，不是檔案）。
     pub xshell_key: Option<String>,
+    /// ProxyJump 的跳板機（別名，或 `user@host:port`）；多層時是最靠近目標的那一台。
+    pub proxy_jump: Option<String>,
     pub term: Option<String>,
     /// 匯入時要提醒的事（不支援的設定等），已本地化。
     pub notes: Vec<String>,
@@ -279,6 +282,7 @@ pub fn parse_ssh_config(fs: &dyn ConfigFs, text: &str, ssh_dir: &Path, local_use
         let mut port: Option<String> = None;
         let mut identity: Vec<String> = Vec::new();
         let mut cert: Vec<String> = Vec::new();
+        let mut jump: Option<String> = None;
         let mut notes: Vec<String> = Vec::new();
         let note_once = |n: String, notes: &mut Vec<String>| {
             if !notes.contains(&n) {
@@ -298,8 +302,17 @@ pub fn parse_ssh_config(fs: &dyn ConfigFs, text: &str, ssh_dir: &Path, local_use
                     "port" if port.is_none() => port = Some(first),
                     "identityfile" if !first.eq_ignore_ascii_case("none") => identity.push(first),
                     "certificatefile" if !first.eq_ignore_ascii_case("none") => cert.push(first),
-                    "proxyjump" if !first.eq_ignore_ascii_case("none") => {
-                        note_once(tf!("有 ProxyJump（{via}）：跳板機目前還不支援，匯入後直連可能連不上", via = first), &mut notes)
+                    "proxyjump" if jump.is_none() && !first.eq_ignore_ascii_case("none") => {
+                        // 多層（a,b）：最靠近目標的是最後一台；更外層要在那台自己的設定裡接
+                        let all = args.join("");
+                        let hops: Vec<&str> = all.split(',').map(str::trim).filter(|h| !h.is_empty()).collect();
+                        if hops.len() > 1 {
+                            note_once(
+                                tf!("多層跳板機（{via}）：只接最後一台，前面幾層請到那台主機的設定裡設跳板機", via = all),
+                                &mut notes,
+                            );
+                        }
+                        jump = hops.last().map(|h| h.to_string());
                     }
                     "proxycommand" if !first.eq_ignore_ascii_case("none") => {
                         note_once(t!("有 ProxyCommand：目前還不支援，匯入後直連可能連不上").to_string(), &mut notes)
@@ -337,6 +350,7 @@ pub fn parse_ssh_config(fs: &dyn ConfigFs, text: &str, ssh_dir: &Path, local_use
             port,
             username: user,
             xshell_key: None,
+            proxy_jump: jump,
             term: None,
             notes,
         });
@@ -428,6 +442,7 @@ pub fn parse_xsh(bytes: &[u8], name: &str, folder: Option<String>) -> Option<Imp
         identity_file: None,
         certificate_file: None,
         xshell_key,
+        proxy_jump: None,
         term: get("terminal", "type"),
         notes,
     })
@@ -574,11 +589,15 @@ Host *
         let cfg = "Host app.internal bastion.internal\n  HostName %h\nHost *.internal !bastion.internal\n  ProxyJump bastion\n  LocalForward 8080 localhost:80\n";
         let (hs, _) = parse_ssh_config(&MemFs(HashMap::new()), cfg, Path::new("/h/.ssh"), "me");
         let app = find(&hs, "app.internal");
-        assert!(app.notes.iter().any(|n| n.contains("ProxyJump")), "{:?}", app.notes);
+        assert_eq!(app.proxy_jump.as_deref(), Some("bastion"));
         assert!(app.notes.iter().any(|n| n.contains("轉送")), "{:?}", app.notes);
         assert_eq!(app.username, "me", "沒設 User 用本機帳號");
         let b = find(&hs, "bastion.internal");
-        assert!(!b.notes.iter().any(|n| n.contains("ProxyJump")), "!bastion.internal 排除：{:?}", b.notes);
+        assert_eq!(b.proxy_jump, None, "!bastion.internal 排除");
+        // 多層：接最後一台並提醒
+        let (hs, _) = parse_ssh_config(&MemFs(HashMap::new()), "Host deep\n  ProxyJump edge,bastion\n", Path::new("/h/.ssh"), "me");
+        assert_eq!(hs[0].proxy_jump.as_deref(), Some("bastion"));
+        assert!(hs[0].notes.iter().any(|n| n.contains("edge,bastion")), "{:?}", hs[0].notes);
     }
 
     #[test]

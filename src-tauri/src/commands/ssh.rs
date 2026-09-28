@@ -168,6 +168,14 @@ impl AuthUi for TauriUi {
 
 // ---- 目標解析 ----
 
+/// 跳板機的密碼 / 密語從 keychain 取（與主機本身同一組帳號名）。
+fn keychain_secrets(id: &str) -> (Option<String>, Option<String>) {
+    (
+        store::kc_get(&sessions::session_password_account(id)),
+        store::kc_get(&sessions::session_passphrase_account(id)),
+    )
+}
+
 /// 前端的 `SshTargetRef` → 帶憑證的 `SshTarget`（憑證從 keychain 補；不回傳前端）。
 async fn resolve_target(app: &AppHandle, r: SshTargetRef) -> AppResult<SshTarget> {
     match r {
@@ -176,12 +184,15 @@ async fn resolve_target(app: &AppHandle, r: SshTargetRef) -> AppResult<SshTarget
             let file = sessions::load_in(&dir).await?;
             let s = file
                 .sessions
-                .into_iter()
+                .iter()
                 .find(|s| s.id == id)
+                .cloned()
                 .ok_or_else(|| AppError::Ssh(tf!("找不到 SSH 主機：{id}", id = id)))?;
             let pw = store::kc_get(&sessions::session_password_account(&id));
             let pp = store::kc_get(&sessions::session_passphrase_account(&id));
-            Ok(SshTarget::from_session(&s, pw, pp))
+            let mut t = SshTarget::from_session(&s, pw, pp);
+            t.jump = crate::ssh::auth::resolve_jump_chain(&file, &s.id, s.jump_session_id.as_deref(), keychain_secrets)?;
+            Ok(t)
         }
         SshTargetRef::Connection { id } => {
             let cfg = store::load_connection(app, &id).await?;
@@ -197,6 +208,10 @@ async fn resolve_target(app: &AppHandle, r: SshTargetRef) -> AppResult<SshTarget
                 .or_else(|| store::kc_get(&sessions::session_passphrase_account(&session.id)));
             let mut t = SshTarget::from_session(&session, pw, pp);
             t.origin = TargetOrigin::AdHoc;
+            if session.jump_session_id.as_deref().is_some_and(|j| !j.is_empty()) {
+                let file = sessions::load_in(&store::app_config_dir(app)?).await?;
+                t.jump = crate::ssh::auth::resolve_jump_chain(&file, &session.id, session.jump_session_id.as_deref(), keychain_secrets)?;
+            }
             Ok(t)
         }
     }

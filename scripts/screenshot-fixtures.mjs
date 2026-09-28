@@ -510,14 +510,14 @@ export const SSH_KEYS = [
   },
 ];
 // 匯入主機：~/.ssh/config 讀出的三台（web-01 與既有的主機同一台）與 .xsh 資料夾讀出的兩台。
-const imp = (p) => ({ folder: null, port: 22, identity_file: null, certificate_file: null, xshell_key: null, term: null, notes: [], ...p });
+const imp = (p) => ({ folder: null, port: 22, identity_file: null, certificate_file: null, xshell_key: null, proxy_jump: null, term: null, notes: [], ...p });
 export const SSH_IMPORT_CONFIG = {
   path: "C:\\Users\\demo\\.ssh\\config",
   skipped: 1,
   hosts: [
     imp({ name: "web-01", host: "10.20.0.15", username: "deploy", identity_file: "C:\\Users\\demo\\.ssh\\id_ed25519" }),
     imp({ name: "db-prod", host: "10.20.0.30", username: "dba", identity_file: "C:\\Users\\demo\\.ssh\\id_db", certificate_file: "C:\\Users\\demo\\.ssh\\id_db-cert.pub" }),
-    imp({ name: "app.internal", host: "app.internal", username: "ops", notes: ["有 ProxyJump（bastion）：跳板機目前還不支援，匯入後直連可能連不上"] }),
+    imp({ name: "app.internal", host: "app.internal", username: "ops", proxy_jump: "db-prod", notes: ["有 ProxyCommand：目前還不支援，匯入後直連可能連不上"] }),
   ],
 };
 export const SSH_IMPORT_XSH = {

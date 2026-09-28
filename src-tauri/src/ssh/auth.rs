@@ -63,6 +63,9 @@ pub struct SshTarget {
     /// OpenSSH 使用者憑證；空 = 找私鑰旁邊的 `<私鑰>-cert.pub`。
     pub certificate_path: String,
     pub passphrase: String,
+    /// 跳板機（ProxyJump）：先連上它，再經它的 direct-tcpip 通道連這台。由呼叫端解析（見
+    /// `commands/ssh.rs` 的 `resolve_jumps`）；`from_session` / `from_connection` 一律給 None。
+    pub jump: Option<Box<SshTarget>>,
     pub term: SshTermOptions,
     pub origin: TargetOrigin,
 }
@@ -79,6 +82,7 @@ impl SshTarget {
             private_key_path: s.private_key_path.clone(),
             certificate_path: s.certificate_path.clone(),
             passphrase: passphrase.unwrap_or_default(),
+            jump: None,
             term: s.options.clone(),
             origin: TargetOrigin::Session(s.id.clone()),
         }
@@ -105,6 +109,7 @@ impl SshTarget {
             private_key_path: cfg.ssh_private_key_path.clone(),
             certificate_path: String::new(),
             passphrase: cfg.ssh_passphrase.clone(),
+            jump: None,
             term: SshTermOptions::default(),
             origin: TargetOrigin::Connection(cfg.id.clone()),
         })
@@ -401,6 +406,49 @@ pub fn plan_auth(t: &SshTarget, agent_available: bool) -> Vec<AuthStep> {
 pub struct Connected {
     pub handle: client::Handle<DbkHandler>,
     pub closed: watch::Receiver<Option<String>>,
+    /// 經跳板機連上時的跳板機連線：這條必須活著，目標連線才活著（它的 TCP 就是跳板機上的通道）。
+    pub jump: Option<Box<Connected>>,
+}
+
+/// 跳板機最多幾層（A → B → C → 目標 = 3 層）。擋設定錯誤造成的無限遞迴。
+pub const MAX_JUMPS: usize = 4;
+
+/// 已存主機的跳板機鏈：`first` 是這台（`self_id`）設定的跳板機 id，逐層往外找；每台的密碼 / 密語
+/// 由 `secrets(id)` 給（GUI 從 keychain 取）。回傳的 `SshTarget` 已經把更外層的跳板機掛在 `jump` 上。
+/// 互相跳轉、層數過多、指到已刪除的主機都回錯，不會無限遞迴。
+pub fn resolve_jump_chain(
+    file: &super::sessions::SshSessionsFile,
+    self_id: &str,
+    first: Option<&str>,
+    secrets: impl Fn(&str) -> (Option<String>, Option<String>),
+) -> AppResult<Option<Box<SshTarget>>> {
+    let mut chain: Vec<SshTarget> = Vec::new();
+    let mut seen: Vec<String> = vec![self_id.to_string()];
+    let mut next = first.map(str::to_string).filter(|s| !s.is_empty());
+    while let Some(id) = next {
+        if seen.contains(&id) {
+            return Err(AppError::Ssh(t!("跳板機設定形成迴圈（A 經 B、B 又經 A），請檢查主機設定").into()));
+        }
+        if chain.len() >= MAX_JUMPS {
+            return Err(AppError::Ssh(tf!("跳板機超過 {n} 層（可能設定成互相跳轉）", n = MAX_JUMPS)));
+        }
+        let s = file
+            .sessions
+            .iter()
+            .find(|s| s.id == id)
+            .ok_or_else(|| AppError::Ssh(t!("找不到設定的跳板機（可能已刪除），請到主機設定重新選擇").into()))?;
+        let (pw, pp) = secrets(&s.id);
+        chain.push(SshTarget::from_session(s, pw, pp));
+        seen.push(id);
+        next = s.jump_session_id.clone().filter(|v| !v.is_empty());
+    }
+    // chain[0] 最靠近目標，它的 jump 是 chain[1]……從最外層往內組回去。
+    let mut out: Option<Box<SshTarget>> = None;
+    while let Some(mut t) = chain.pop() {
+        t.jump = out;
+        out = Some(Box::new(t));
+    }
+    Ok(out)
 }
 
 /// 一個步驟的結果。
@@ -413,11 +461,44 @@ enum StepOutcome {
 }
 
 /// 撥號 + host key + 認證。`conn_id` 只用來標記發給 UI 的提示。
+///
+/// 有跳板機（`t.jump`）時先遞迴連上跳板機，在它上面開 direct-tcpip 通道到目標的 `host:port`，
+/// SSH 交握直接跑在這條通道上（等同 `ssh -J`）。host key 仍以目標的 `host:port` 比對；跳板機
+/// 與目標的提問（host key / 密碼 / OTP）都走同一個 `conn_id`，依序出現。
 pub async fn connect_and_auth(
     t: &SshTarget,
     conn_id: &str,
     ui: Arc<dyn AuthUi>,
     store: KnownHostsStore,
+) -> AppResult<Connected> {
+    connect_hop(t, conn_id, ui, store, 0).await
+}
+
+fn connect_hop<'a>(
+    t: &'a SshTarget,
+    conn_id: &'a str,
+    ui: Arc<dyn AuthUi>,
+    store: KnownHostsStore,
+    depth: usize,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<Connected>> + Send + 'a>> {
+    Box::pin(async move {
+        if depth > MAX_JUMPS {
+            return Err(AppError::Ssh(tf!("跳板機超過 {n} 層（可能設定成互相跳轉）", n = MAX_JUMPS)));
+        }
+        let jump = match &t.jump {
+            Some(j) => Some(Box::new(connect_hop(j, conn_id, ui.clone(), store.clone(), depth + 1).await?)),
+            None => None,
+        };
+        connect_direct(t, conn_id, ui, store, jump).await
+    })
+}
+
+async fn connect_direct(
+    t: &SshTarget,
+    conn_id: &str,
+    ui: Arc<dyn AuthUi>,
+    store: KnownHostsStore,
+    jump: Option<Box<Connected>>,
 ) -> AppResult<Connected> {
     if t.host.trim().is_empty() {
         return Err(AppError::Ssh(t!("未填寫 SSH 主機").into()));
@@ -448,7 +529,30 @@ pub async fn connect_and_auth(
 
     // 1. 撥號（TCP + banner + KEX + host key）。預算只計「沒在等對話框」的時間：
     //    host key 提示擋在 russh 的 event loop 裡，使用者想多久都不該被算成逾時。
-    let connect = client::connect(config, (t.host.as_str(), t.port), handler);
+    type Dial = std::pin::Pin<Box<dyn std::future::Future<Output = Result<client::Handle<DbkHandler>, russh::Error>> + Send>>;
+    let connect: Dial = match &jump {
+        Some(j) => {
+            let via = j.handle.channel_open_direct_tcpip(t.host.clone(), u32::from(t.port), "127.0.0.1", 0);
+            let ch = match tokio::time::timeout(t.connect_timeout(), via).await {
+                Ok(Ok(ch)) => ch,
+                Ok(Err(e)) => {
+                    let _ = j.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+                    return Err(AppError::Ssh(tf!(
+                        "跳板機無法轉送到 {host}:{port}（跳板機可能不允許 TCP 轉送，或連不到目標）：{e}",
+                        host = t.host,
+                        port = t.port,
+                        e = e
+                    )));
+                }
+                Err(_) => return Err(AppError::Ssh(t!("經跳板機連線逾時").into())),
+            };
+            Box::pin(client::connect_stream(config, ch.into_stream(), handler))
+        }
+        None => {
+            let addr = (t.host.clone(), t.port);
+            Box::pin(async move { client::connect(config, addr, handler).await })
+        }
+    };
     tokio::pin!(connect);
     let budget = t.connect_timeout();
     let mut spent = Duration::ZERO;
@@ -516,7 +620,7 @@ pub async fn connect_and_auth(
             }
         };
         match outcome {
-            StepOutcome::Success => return Ok(Connected { handle, closed: closed_rx }),
+            StepOutcome::Success => return Ok(Connected { handle, closed: closed_rx, jump }),
             StepOutcome::Skipped(reason) => {
                 eprintln!("[ssh] 略過 {} 認證：{reason}", step.label());
                 skipped.push(format!("{}：{reason}", step.label()));
@@ -854,9 +958,50 @@ mod tests {
             private_key_path: key.into(),
             certificate_path: String::new(),
             passphrase: String::new(),
+            jump: None,
             term: SshTermOptions::default(),
             origin: TargetOrigin::AdHoc,
         }
+    }
+
+    fn jump_file(pairs: &[(&str, Option<&str>)]) -> super::super::sessions::SshSessionsFile {
+        let sessions = pairs
+            .iter()
+            .map(|(id, j)| {
+                let mut s: SshSession = serde_json::from_value(serde_json::json!({ "id": id, "host": format!("{id}.example") })).unwrap();
+                s.username = "u".into();
+                s.jump_session_id = j.map(str::to_string);
+                s
+            })
+            .collect();
+        super::super::sessions::SshSessionsFile { version: 1, folders: vec![], sessions }
+    }
+
+    #[test]
+    fn jump_chain_orders_hops_and_rejects_cycles() {
+        let none = |_: &str| (None, None);
+        // web → bastion → edge
+        let f = jump_file(&[("web", Some("bastion")), ("bastion", Some("edge")), ("edge", None)]);
+        let j = resolve_jump_chain(&f, "web", Some("bastion"), |id| (Some(format!("pw-{id}")), None)).unwrap().unwrap();
+        assert_eq!(j.host, "bastion.example");
+        assert_eq!(j.password, "pw-bastion", "每一層的密碼由 secrets 依 id 給");
+        let outer = j.jump.as_ref().unwrap();
+        assert_eq!((outer.host.as_str(), outer.jump.is_none()), ("edge.example", true));
+        // 沒設跳板機
+        assert!(resolve_jump_chain(&f, "edge", None, none).unwrap().is_none());
+        assert!(resolve_jump_chain(&f, "edge", Some(""), none).unwrap().is_none());
+        // 迴圈：a → b → a；自己跳自己
+        let f = jump_file(&[("a", Some("b")), ("b", Some("a"))]);
+        assert!(resolve_jump_chain(&f, "a", Some("b"), none).is_err());
+        assert!(resolve_jump_chain(&f, "a", Some("a"), none).is_err());
+        // 指到已刪除的主機
+        assert!(resolve_jump_chain(&f, "a", Some("gone"), none).is_err());
+        // 層數上限
+        let ids: Vec<String> = (0..=MAX_JUMPS + 1).map(|i| format!("h{i}")).collect();
+        let pairs: Vec<(&str, Option<&str>)> =
+            ids.iter().enumerate().map(|(i, id)| (id.as_str(), ids.get(i + 1).map(String::as_str))).collect();
+        let f = jump_file(&pairs);
+        assert!(resolve_jump_chain(&f, "h0", Some("h1"), none).is_err());
     }
 
     #[test]
@@ -943,6 +1088,7 @@ mod tests {
             auth: SshAuthKind::Password,
             private_key_path: String::new(),
             certificate_path: String::new(),
+            jump_session_id: None,
             folder_id: None,
             options: SshTermOptions::default(),
         };

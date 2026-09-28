@@ -96,6 +96,10 @@ pub struct SshSession {
     /// OpenSSH 使用者憑證（`*-cert.pub`）。空 = 找私鑰旁邊的 `<私鑰>-cert.pub`（OpenSSH 的慣例）。
     #[serde(default)]
     pub certificate_path: String,
+    /// 跳板機：另一台已存主機的 id（ProxyJump）。先連上它、經它的 direct-tcpip 通道再連這台；
+    /// 跳板機自己也可以再有跳板機（多層），深度上限見 `auth::MAX_JUMPS`。
+    #[serde(default)]
+    pub jump_session_id: Option<String>,
     /// 所屬資料夾（`SshFolder::id`）；`None` = 未分類。
     #[serde(default)]
     pub folder_id: Option<String>,
@@ -258,6 +262,7 @@ mod tests {
             auth: SshAuthKind::Key,
             private_key_path: "C:/keys/id_ed25519".into(),
             certificate_path: String::new(),
+            jump_session_id: None,
             folder_id: None,
             options: SshTermOptions::default(),
         }

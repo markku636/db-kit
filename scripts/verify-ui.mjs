@@ -53,6 +53,7 @@ const CASE_FX = {
   "ssh-key-manager": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-host-import": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-disconnect-overlay": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ssh-jump-host": { STORAGE_SEED: SSH_STORAGE_SEED },
   // 同一個情境換成預設的渲染器（WebGL，開不起來才退回 DOM）：issue #7 的使用者用的就是預設值。
   "ssh-disconnect-overlay-webgl": {},
 };
@@ -209,6 +210,36 @@ const CASES = {
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 
+  // 跳板機：主機設定可選另一台已存主機當跳板機（不能選自己），存下去的是那台的 id；清掉就回到直連。
+  async "ssh-jump-host"(page) {
+    const tree = page.locator("[data-ssh-host-tree]");
+    await tree.getByText("web-01", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    const edit = async () => {
+      await tree.getByText("web-01", { exact: true }).first().click({ button: "right" });
+      await sleep(150);
+      await page.locator('div.fixed.z-\\[90\\] button', { hasText: "編輯…" }).first().click();
+    };
+    await edit();
+    const sel = page.getByLabel("跳板機", { exact: true });
+    await sel.waitFor({ timeout: 5000 }).catch(() => {});
+    const opts = await sel.locator("option").allTextContents();
+    check("跳板機清單不含自己", !opts.some((o) => o.startsWith("web-01")) && opts.some((o) => o.includes("bastion.example.com")), JSON.stringify(opts));
+    await sel.selectOption("ssh-bastion");
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_SSH_SESSION_SAVES__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    let saves = await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__);
+    check("存下去的是跳板機那台的 id", saves.at(-1)?.jump_session_id === "ssh-bastion", JSON.stringify(saves.at(-1)?.jump_session_id));
+    await edit();
+    await sel.waitFor({ timeout: 5000 }).catch(() => {});
+    const reopened = await sel.inputValue().catch((e) => "ERR " + e.message.slice(0, 80));
+    check("再打開時帶出已選的跳板機", reopened === "ssh-bastion", JSON.stringify({ reopened, selects: await sel.count(), sessions: await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__.length) }));
+    await sel.selectOption("");
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_SSH_SESSION_SAVES__.length > 1, null, { timeout: 5000 }).catch(() => {});
+    saves = await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__);
+    check("清掉跳板機就回到直連（null）", saves.at(-1)?.jump_session_id === null, JSON.stringify(saves.at(-1)?.jump_session_id));
+  },
+
   // 斷線後終端機上方的提示列：兩顆按鈕必須真的點得到（issue #7：提示列被 xterm 的圖層蓋住，看得到按不到）。
   // Playwright 的 click 會先確認沒有別的元素擋在上面，被擋住就失敗並說是誰擋的。
   async "ssh-disconnect-overlay"(page, opts = {}) {
@@ -255,7 +286,8 @@ const CASES = {
     check("開啟就讀預設的 ~/.ssh/config", (await dlg.locator("[data-import-index]").count()) === 3);
     const box = (name) => dlg.getByRole("checkbox", { name, exact: true });
     check("已經在清單裡的主機預設不勾", !(await box("web-01").isChecked()) && (await box("db-prod").isChecked()));
-    check("列出不支援設定的提醒（ProxyJump）", /ProxyJump/.test(await dlg.innerText().catch(() => "")));
+    const dlgText = await dlg.innerText().catch(() => "");
+    check("列出跳板機與不支援設定的提醒", /經 db-prod/.test(dlgText) && /ProxyCommand/.test(dlgText), dlgText.slice(0, 300));
     await page.getByRole("button", { name: "匯入 2 台", exact: true }).click();
     await page.waitForFunction(() => window.__DBKIT_SSH_SESSION_SAVES__.length >= 2, null, { timeout: 5000 }).catch(() => {});
     const saves = await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__);
@@ -264,6 +296,7 @@ const CASES = {
       db?.auth === "key" && /id_db$/.test(db?.private_key_path ?? "") && /id_db-cert\.pub$/.test(db?.certificate_path ?? ""), JSON.stringify(db));
     const app = saves.find((s) => s.name === "app.internal");
     check("沒有私鑰的先設成密碼認證", app?.auth === "password" && app?.private_key_path === "", JSON.stringify(app));
+    check("ProxyJump 接到同一批匯入的主機", !!db?.id && app?.jump_session_id === db?.id, JSON.stringify({ app: app?.jump_session_id, db: db?.id }));
     await tree.getByText("db-prod", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
     check("匯入後側欄看得到新主機", (await tree.getByText("db-prod", { exact: true }).count()) > 0);
 
