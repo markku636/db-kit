@@ -2,7 +2,7 @@
 
 > 這是 SSH 功能第一個對外發佈的版本：開發過程中本機打過的 v0.33.0 / v0.33.1 都沒有推上 GitHub，內容全部併在這一版。
 
-**SSH 主機成為一等公民：多分頁終端機 + SFTP，參考 Xshell。** 以前 db-kit 只把 SSH 當成資料庫連線的跳板（port forward），要登進那台機器看 log、重啟服務，就得另開 Xshell / PuTTY；AI 助手看得到資料庫，卻看不到主機。現在側欄多了獨立的「SSH 主機」區塊，雙擊就開終端機分頁：
+**SSH 主機成為一等公民：多分頁終端機 + SFTP。** 以前 db-kit 只把 SSH 當成資料庫連線的跳板（port forward），要登進那台機器看 log、重啟服務，就得另開一套 SSH 工具；AI 助手看得到資料庫，卻看不到主機。現在側欄多了獨立的「SSH 主機」區塊，雙擊就開終端機分頁：
 
 - **主機清單**：可分資料夾、跟著側欄搜尋，右鍵連線 / 開 SFTP / 編輯 / 複製 / 刪除 / 移到資料夾。存在 `ssh_sessions.json`，型別上就沒有密碼欄位——密碼與私鑰密語只進 OS keychain，與資料庫連線同一套規則。**已設 SSH Tunnel 的資料庫連線**右鍵多了「開啟 SSH 終端機」，直接沿用那組跳板憑證，不必再建一次。
 - **四種認證**：密碼、私鑰 + 密語、keyboard-interactive（OTP / PAM 的提問逐項在對話框輸入）、ssh-agent（Unix 的 `SSH_AUTH_SOCK`；Windows 先找 OpenSSH agent，再退到 Pageant）。伺服器接受了金鑰但還要 OTP 時，會自動接著走 keyboard-interactive。沒存密碼就在連線當下詢問。
@@ -12,19 +12,19 @@
 - **命令列輸入條**：終端機底下一行輸入框，打好再送、Shift+Enter 換行、↑↓ 翻歷史（跨主機保留 200 筆）。AI 建議的指令也是放進這裡，給你看過再送。
 - **快捷鍵不再打架**：焦點在終端機時，Ctrl+W / T / N / K / L / R 原樣送進 shell（刪字、清畫面、反向搜尋……），只有 Shift 組合、Ctrl+Tab 與縮放留給 App。Ctrl+Shift+T 開新終端機、Ctrl+Shift+W 關掉作用中的分頁；順手修掉 Ctrl+Shift+T 以前也會開查詢分頁的問題。Ctrl+Shift+C / V / F 只在焦點位於終端機畫面時作用——在命令列輸入條或 SFTP 編輯器裡按 Ctrl+Shift+V，貼進的是那個輸入框，不會跑進 shell。
 
-**SFTP 就在終端機旁邊。** 工具列一鍵在右側開檔案面板（WinSCP 式並排，而不是像 Xshell 另開 Xftp），走同一條連線，不會再問一次密碼 / OTP：
+**SFTP 就在終端機旁邊。** 工具列一鍵在右側開檔案面板（與終端機並排，不必另開程式），走同一條連線，不會再問一次密碼 / OTP：
 
 - 麵包屑或直接輸入路徑；可依名稱 / 大小 / 修改時間排序，顯示權限與連結；隱藏檔可切換。雙擊資料夾進入；雙擊 1 MiB 以內的檔案在 App 內編輯，更大的才下載。右鍵上傳到此 / 重新命名（F2）/ 刪除（資料夾連同內容，先確認）/ 新增檔案 / 建資料夾 / 複製路徑 / **在終端機 cd 到此**；Ctrl+F 篩選這一層的名稱，底部顯示項目數與選取項目的大小、權限。
-- **直接改遠端檔案（Xftp 的「編輯」）**：改一行 `nginx.conf` 不必再下載、開本機編輯器、再上傳。CodeMirror 編輯器、Ctrl+S 存回。存檔直接覆寫原檔，不走「寫暫存檔再改名」——改名會換掉 inode，擁有者與權限都會變成目前使用者的預設值。存檔前再 stat 一次：開啟後被別人改過（修改時間或大小變了）就先問，檔案被刪了則問要不要重建。CRLF 的檔存回仍是 CRLF，不會改一個字就讓整份檔案 diff。內容不是乾淨的 UTF-8（例如 Big5）、看起來是二進位，或超過 1 MiB 被截斷時只給唯讀——照畫面存回去會把檔案弄壞。
+- **直接改遠端檔案**：改一行 `nginx.conf` 不必再下載、開本機編輯器、再上傳。CodeMirror 編輯器、Ctrl+S 存回。存檔直接覆寫原檔，不走「寫暫存檔再改名」——改名會換掉 inode，擁有者與權限都會變成目前使用者的預設值。存檔前再 stat 一次：開啟後被別人改過（修改時間或大小變了）就先問，檔案被刪了則問要不要重建。CRLF 的檔存回仍是 CRLF，不會改一個字就讓整份檔案 diff。內容不是乾淨的 UTF-8（例如 Big5）、看起來是二進位，或超過 1 MiB 被截斷時只給唯讀——照畫面存回去會把檔案弄壞。
 - **權限…**：3×3 勾選格與八進位輸入同步，只送 permissions 一個屬性（擁有者與時間不動），套用後清單就地更新。
 - 上下傳有進度條與取消；下載先寫 `.part` 再改名，取消或失敗都不留半個檔案。面板關掉再打開，會回到上次的資料夾。
-- **多選與批次傳輸（Xftp 式）**：單擊只選這一個、Ctrl 單擊切換、Shift 單擊選一段、Ctrl+A 全選、Shift+方向鍵延伸；右鍵點在選取裡就對整組操作。批次下載 / 上傳是**一個工作**：先把所有項目（含整個資料夾）規劃完、算出總量（超過 20,000 項直接擋下），再依序傳——不會同時開幾十個檔案，進度條與取消也只有一個。整個資料夾可以上傳、下載；上傳可一次選多個檔。
+- **多選與批次傳輸**：單擊只選這一個、Ctrl 單擊切換、Shift 單擊選一段、Ctrl+A 全選、Shift+方向鍵延伸；右鍵點在選取裡就對整組操作。批次下載 / 上傳是**一個工作**：先把所有項目（含整個資料夾）規劃完、算出總量（超過 20,000 項直接擋下），再依序傳——不會同時開幾十個檔案，進度條與取消也只有一個。整個資料夾可以上傳、下載；上傳可一次選多個檔。
 - **同名先問一次**：部分同名時三選一「覆蓋 / 略過同名 / 取消」，全部同名時覆蓋或取消（單一資料夾說「合併」）。檢查用的是與實際下載同一套 Windows 檔名轉換；沒有衝突才開始的批次，若中途被別人建了同名項目，整批不會默默覆蓋。多選刪除確認一次，講明幾項、其中幾個資料夾。批次操作只算畫面上看得到的——篩選藏起來的項目不會被順手刪掉。
 - 修：socket 與區塊裝置以前會被當成資料夾（russh-sftp 的 `is_dir()` 是 bit-contains，`0o140000` / `0o060000` 都「包含」資料夾位元），列表顯示錯、遞迴刪除 / 整包下載還會對它 read_dir 而整批失敗（`~/.gnupg/S.gpg-agent` 就會中）。檔案型別一律只看 S_IFMT。
 
-**SSH 金鑰：各種格式都能用，支援 OpenSSH 憑證（參考 Xshell 的使用者金鑰管理員）。** 以前私鑰欄位只吃 russh 原生解得開的格式，其餘一律「讀取 SSH 私鑰失敗」：OpenSSL 產的 3DES 加密金鑰（`openssl genrsa -des3`）打不開，選到公鑰、X.509 憑證或 `.pfx` 也是同一句話。
+**SSH 金鑰：各種格式都能用，支援 OpenSSH 憑證，App 內管理金鑰。** 以前私鑰欄位只吃 russh 原生解得開的格式，其餘一律「讀取 SSH 私鑰失敗」：OpenSSL 產的 3DES 加密金鑰（`openssl genrsa -des3`）打不開，選到公鑰、X.509 憑證或 `.pfx` 也是同一句話。
 
-- **能用的私鑰格式**：OpenSSH、PuTTY `.ppk`（v2 / v3，含 Argon2 密語）、PKCS#8（含加密）、PEM 的 PKCS#1 RSA 與 SEC1 EC——**包括 OpenSSL 傳統加密**的 DES-EDE3-CBC / DES-CBC / AES-128/192/256-CBC——以及沒有 PEM 外殼的二進位 DER。
+- **能用的私鑰格式**：OpenSSH、`.ppk`（v2 / v3，含 Argon2 密語）、PKCS#8（含加密）、PEM 的 PKCS#1 RSA 與 SEC1 EC——**包括 OpenSSL 傳統加密**的 DES-EDE3-CBC / DES-CBC / AES-128/192/256-CBC——以及沒有 PEM 外殼的二進位 DER。
 - **認得但不能用的，講清楚怎麼辦**：DSA（OpenSSH 7.0 起停用）、SSH.COM 格式（附 `ssh-keygen -i` 指令）、公鑰、OpenSSH 憑證本身、X.509 憑證、PKCS#12（附 `openssl pkcs12` 指令）。要密語、密語不對也分開講；OpenSSH 與 PPK 還沒解開就先顯示指紋，認得出是哪一把。
 - **OpenSSH 使用者憑證**：私鑰旁邊的 `<私鑰>-cert.pub` 自動帶上（也可在主機設定指定憑證檔）；先用憑證登入，伺服器不收再用金鑰本身——順序與 OpenSSH 相同。ssh-agent 裡的憑證也會試。
 - **金鑰管理**（SSH 主機區塊標題列的鑰匙鈕）：匯入檔案（可多選）或直接貼上金鑰文字、產生 Ed25519 / ECDSA / RSA 新金鑰、複製公鑰（貼進伺服器的 `authorized_keys`）、掛上憑證、匯出 OpenSSH 私鑰、改名、刪除（有主機在用會先講是哪幾台）。匯入時一律轉存成 OpenSSH 格式，**原本有密語就用同一個密語重新加密**，絕不以明文落地；同一把不會重複收。
@@ -46,7 +46,7 @@
 - 資料庫 tunnel 的 RSA 金鑰認證改用伺服器支援的 `rsa-sha2-512 / 256`：原本送的是 SHA-1 的 `ssh-rsa`，OpenSSH 8.8 以後預設拒絕。
 - 這一版的限制：非 UTF-8 的主機（GBK / Big5）還不轉碼，請在遠端設定 locale；主機清單還沒有加密匯出 / 匯入。
 
-> 驗證：vitest **1690 項全通過**（其中 `shellGuard` 分級規則 310 項——`sudo rm -rf /` 要擋、`rm -rf ./dist` 只確認、`echo hi > /dev/null` 放行、引號裡的 `&&` 不算串接；另有 `sftpText`、`sftpSelection`、`sshKeys` 等）。`verify:ui` 全套 **207 項全通過**，SSH 相關六個情境：開終端機、鍵入回聲、命令列送 `ls`、多行貼上先確認且取消後一個字都沒送出、SFTP 開在家目錄並能進出資料夾、編輯器裡按 Backspace 不會跳上一層、Ctrl+S 存回且是覆寫、chmod 後清單就地更新、多選後批次下載是一個工作且帶齊路徑、同名三選一、多選刪除先確認、貼上公鑰給說明、加密私鑰要密語且錯的密語講明、主機設定從金鑰庫選金鑰、AI 的 bash 區塊「送到終端機」只填進命令列、`rm -rf` 按「執行並回饋」先跳確認框。`cargo test --no-default-features --lib` **475 項全通過**；`ssh::` 53 項在 Windows（GNU 工具鏈，涵蓋 named pipe / Pageant 的 `cfg(windows)` 路徑）與 Linux Docker `--features gui`（涵蓋 Tauri 命令層）都通過。對 Docker OpenSSH 伺服器的**整合測試 8 項**全通過：密碼認證 + PTY 回聲 / resize / 正常結束、SFTP 上傳下載逐位元組比對、中途取消不留 `.part`、App 內編輯與 chmod、資料夾樹上傳下載、多選批次與同名策略、**各種格式的私鑰都真的登得進去**（OpenSSH 加密、SEC1 的 3DES 傳統加密、加密 PKCS#8、金鑰庫參照）、**只靠 CA 簽的 OpenSSH 憑證登入**（主體不符被拒、不會退回金鑰意外成功）。另以 openssl 3.5 / ssh-keygen / puttygen 產生 25 個外部金鑰交叉驗證：全部載得起來，同一把金鑰在各種格式下指紋一致、且與 `ssh-keygen -lf` 相同。`tsc` / `eslint src` 0 error、`vite build` 綠燈（xterm 與金鑰管理都是開了才下載）；`i18n:scan` en / zh-CN 100%，Rust 五個語系表涵蓋全部新字串。**未實測的部分**：開發機沒有 MSVC，正式的桌面 App 沒有實際開過——WebView2 下的 xterm 渲染（WebGL / DOM 退路）、注音輸入法組字、Pageant 與 Windows OpenSSH agent、真實 PAM / OTP 的 keyboard-interactive、host key 對話框接上真後端的整條路徑（UI 只在假後端驗過）、金鑰管理接上真後端的檔案對話框，以及 macOS / Linux 上的實際操作。
+> 驗證：vitest **1690 項全通過**（其中 `shellGuard` 分級規則 310 項——`sudo rm -rf /` 要擋、`rm -rf ./dist` 只確認、`echo hi > /dev/null` 放行、引號裡的 `&&` 不算串接；另有 `sftpText`、`sftpSelection`、`sshKeys` 等）。`verify:ui` 全套 **207 項全通過**，SSH 相關六個情境：開終端機、鍵入回聲、命令列送 `ls`、多行貼上先確認且取消後一個字都沒送出、SFTP 開在家目錄並能進出資料夾、編輯器裡按 Backspace 不會跳上一層、Ctrl+S 存回且是覆寫、chmod 後清單就地更新、多選後批次下載是一個工作且帶齊路徑、同名三選一、多選刪除先確認、貼上公鑰給說明、加密私鑰要密語且錯的密語講明、主機設定從金鑰庫選金鑰、AI 的 bash 區塊「送到終端機」只填進命令列、`rm -rf` 按「執行並回饋」先跳確認框。`cargo test --no-default-features --lib` **475 項全通過**；`ssh::` 53 項在 Windows（GNU 工具鏈，涵蓋 named pipe / Pageant 的 `cfg(windows)` 路徑）與 Linux Docker `--features gui`（涵蓋 Tauri 命令層）都通過。對 Docker OpenSSH 伺服器的**整合測試 8 項**全通過：密碼認證 + PTY 回聲 / resize / 正常結束、SFTP 上傳下載逐位元組比對、中途取消不留 `.part`、App 內編輯與 chmod、資料夾樹上傳下載、多選批次與同名策略、**各種格式的私鑰都真的登得進去**（OpenSSH 加密、SEC1 的 3DES 傳統加密、加密 PKCS#8、金鑰庫參照）、**只靠 CA 簽的 OpenSSH 憑證登入**（主體不符被拒、不會退回金鑰意外成功）。另以 openssl 3.5、ssh-keygen 等工具產生 25 個外部金鑰交叉驗證：全部載得起來，同一把金鑰在各種格式下指紋一致、且與 `ssh-keygen -lf` 相同。`tsc` / `eslint src` 0 error、`vite build` 綠燈（xterm 與金鑰管理都是開了才下載）；`i18n:scan` en / zh-CN 100%，Rust 五個語系表涵蓋全部新字串。**未實測的部分**：開發機沒有 MSVC，正式的桌面 App 沒有實際開過——WebView2 下的 xterm 渲染（WebGL / DOM 退路）、注音輸入法組字、Pageant 與 Windows OpenSSH agent、真實 PAM / OTP 的 keyboard-interactive、host key 對話框接上真後端的整條路徑（UI 只在假後端驗過）、金鑰管理接上真後端的檔案對話框，以及 macOS / Linux 上的實際操作。
 
 ## v0.32.1
 
@@ -89,7 +89,7 @@
 - **回滾依前後像比對產生**（`review_run/rollback.rs`）：同一句內固定 DELETE → UPDATE → INSERT（先騰出唯一鍵再寫回），只寫回實際改過的欄位；計算欄、rowversion 不寫回；PostgreSQL 的 GENERATED ALWAYS identity 加 `OVERRIDING SYSTEM VALUE`；SQL Server 的 identity 包成一個中間不放分號的 `SET IDENTITY_INSERT ON … OFF` 批次——IDENTITY_INSERT 是 session 層級，而查詢分頁逐句走連線池送出，拆開送的話 ON 與 INSERT 會落在不同連線上。沒有主鍵的表改找全 NOT NULL 的唯一索引，都沒有時以整列多重集合比對（重複列逐筆計數），只自動還原被刪的列。「UPDATE 之後依原鍵找不到的列」「自動編號 INSERT 找到的列數與語句回報的新增列數不符」這類不確定的情況一律註解掉。
 - **DDL 的回滾沿用結構比對的同步 DDL 產生器**：擷取物件結構前後像，讓「執行後」變回「執行前」；DROP TABLE、刪欄、改型別另抓整表資料，建回結構後寫回。RENAME 則直接產生反向語句——結構 diff 會把改名看成「刪一個、加一個」，那樣產出的回滾會丟資料。
 - **會被整份擋下、一句都不執行的語句**：`BEGIN` / `COMMIT` / `ROLLBACK`（本流程逐句自動提交，交易控制會落在連線池的不同連線上，留下一條開著交易的連線）、`USE` / `SET` / `DECLARE` / 暫存表 / `LOCK TABLES`（session 狀態不保證帶到下一句）、非 PostgreSQL 的程序 / 觸發器本體（BEGIN … END 裡的分號讓逐句切分失準）、`DROP DATABASE`、未代入的 `:name`。例外是回滾腳本檔頭那幾句與 db-kit 連線設定相同的 `SET`，以及 SQL Server 的 identity 批次——所以**回滾腳本本身可以再走一次審查並執行**，還原之前先備份現況。
-- **語句分析**（`review_run/analyze.rs`）是 `impact.ts` 的思路移到 Rust 並擴充：不寫完整 parser，只回答「目標是誰、頂層 WHERE 在哪、尾巴砍到哪」，涵蓋 MySQL 多表 UPDATE / `DELETE a FROM a JOIN b` / `DELETE FROM a USING`、PG `UPDATE … FROM` / `DELETE … USING`、T-SQL `UPDATE o SET … FROM t o JOIN …` / `DELETE FROM o FROM …` / `OUTPUT` / `TOP (n)`、Oracle 省略 FROM、upsert（ON DUPLICATE KEY / ON CONFLICT / REPLACE）、MERGE、`INSERT … SET`、SSMS 的 `GO` 批次分隔。答不出來就明確標「無回滾」，不猜。所有擷取查詢送出前都過 `cli::guard` 的嚴格唯讀檢查。
+- **語句分析**（`review_run/analyze.rs`）是 `impact.ts` 的思路移到 Rust 並擴充：不寫完整 parser，只回答「目標是誰、頂層 WHERE 在哪、尾巴砍到哪」，涵蓋 MySQL 多表 UPDATE / `DELETE a FROM a JOIN b` / `DELETE FROM a USING`、PG `UPDATE … FROM` / `DELETE … USING`、T-SQL `UPDATE o SET … FROM t o JOIN …` / `DELETE FROM o FROM …` / `OUTPUT` / `TOP (n)`、Oracle 省略 FROM、upsert（ON DUPLICATE KEY / ON CONFLICT / REPLACE）、MERGE、`INSERT … SET`、T-SQL 的 `GO` 批次分隔。答不出來就明確標「無回滾」，不猜。所有擷取查詢送出前都過 `cli::guard` 的嚴格唯讀檢查。
 - **AI 審查**：提示在後端組（GUI 與 `dbk run --review-cmd` 拿到同一份），內容是腳本、逐句分析、目標表結構與估算列數，要求第一行給 `VERDICT: GO / CAUTION / STOP`，對話框顯示成徽章。**預設不送任何資料列**，「附前像樣本給 AI」要自己開。新增 AI 模式 `review`（零工具、單回合、8192 token）。順帶：**一次性模式（generate / edit / review）的 API 供應商不再把對話歷史落地**——它們沒有 session 可以續，每呼叫一次就在設定目錄堆一個檔，而審查提示可能夾帶樣本資料。
 - **確認**：有語句是「部分回滾 / 無回滾」時要勾「我了解有 N 句沒有完整回滾」；正式環境連線再勾一次；唯讀連線不能執行（可以只產生備份）；AI 審查進行中兩個動作鈕都停用；AI 判「不建議執行」時確認框另外寫明。
 - **AI 助手**：對話裡 SQL 區塊的「執行」遇到寫入語句時改開審查並執行，結束後把影響列數掛回那則訊息（「執行並回饋」照舊把結果交回模型）；唯讀查詢照舊直接執行。external gateway 不在支援範圍，仍走原本的確認框。
@@ -116,7 +116,7 @@
 
 **SQL Server 的預存程序看起來全被叫成「函式」**。側欄樹從來只有一個資料夾放 routine，而那個資料夾的名字就叫「函式」——程序與函式一起倒進去。MySQL / PostgreSQL 的使用者兩種都有，還看得出來是混在一起；SQL Server 這邊手上多半只有預存程序，於是整批物件就這樣頂著「函式」的標題。追這條線的時候，同一條路徑上還有幾個真的會送錯 SQL 的地方。
 
-- **程序與函式拆成兩個資料夾**（對標 SSMS / DBeaver）：「預存程序」用齒輪、琥珀色，「函式」用 fx、綠色，跟樹節點自己的圖示與 tooltip 一致。兩個資料夾都預設收合，數量各自計算，每庫篩選框照舊同時吃兩邊。
+- **程序與函式拆成兩個資料夾**：「預存程序」用齒輪、琥珀色，「函式」用 fx、綠色，跟樹節點自己的圖示與 tooltip 一致。兩個資料夾都預設收合，數量各自計算，每庫篩選框照舊同時吃兩邊。
 - **刪除 SQL Server 的預存程序會送出 `DROP TRIGGER`**。`buildDropRoutine` 少了 mssql 分支，程序 / 函式 / 觸發器一律掉到結尾那行 trigger fallback。補上分支：T-SQL 的 `DROP PROCEDURE / FUNCTION / TRIGGER` 不收三部式名稱，所以同批次先 `USE [db];` 再以 `[schema].[name]` 刪——非 dbo 的物件（後端回的是 `sales.sp_x`）以前會被整串當成一個識別字包進 `[sales.sp_x]`。存檔時的「先刪後建」走同一支，所以編輯既有程序也一起修好了。
 - **執行預存程序送的是 `CALL`**，T-SQL 沒有這個關鍵字。改成 `EXEC [db].[schema].[p] 引數`（EXEC 的引數不加括號），函式維持 `SELECT`。
 - **`CREATE` 會建到登入的預設資料庫**（通常是 master），因為 DDL 直接送出、沒有帶資料庫脈絡。SQL Server 的 `CREATE PROCEDURE` 必須是批次的第一句，不能像 DROP 那樣加 `USE` 前綴，改用資料庫限定的 `sp_executesql` 包起來執行。
@@ -350,7 +350,7 @@
 
 **資料格最後一欄拖寬一次之後就再也調不動**。欄寬拖曳只改寬度，不管被拖的那條界線還在不在看得到的地方。中間欄沒事——它們的右緣永遠夾在格子裡；最後一欄不同：一旦拉到表格總寬超過格子可視寬度，它的右緣（連著那條 6px 把手）就被推到格子外，落在右側面板底下，而拖曳過程中格子又不會自動水平捲動（`scrollLeft` 全程沒動），於是把手再也抓不到——該欄等於只能調整一次。
 
-- **拖曳中自動把被拖的界線捲回可視範圍**（`useLayoutEffect` 監看寬度變更，界線超出 `clientWidth` 就補等量 `scrollLeft`），與 Excel / Navicat 拖到邊緣自動捲動一致：界線釘在格子右緣、游標繼續往右就繼續變寬，放手時把手仍在可抓範圍內。
+- **拖曳中自動把被拖的界線捲回可視範圍**（`useLayoutEffect` 監看寬度變更，界線超出 `clientWidth` 就補等量 `scrollLeft`）：界線釘在格子右緣、游標繼續往右就繼續變寬，放手時把手仍在可抓範圍內。
 - **最後一欄的界線在「操作欄」那一側多一個把手**。原本只有欄內側 6px，而它右邊緊貼 32px 的刪除鈕欄——視覺上的「表格右緣」其實不是那條界線，本來就難瞄準；兩側各 6px 之後等效 12px。刪除鈕不受影響（把手只加在表頭格）。
 - **共用的 `useColWidths` 一併補上同一段**：查詢結果、處理程序、伺服器查詢、Routine 執行結果、Kafka 訊息表共用這支 hook，同樣的死路也在。它沒有格容器的 ref，改成往上找最近的水平捲動祖先。
 
@@ -456,7 +456,7 @@ barTier 1 → 標籤收掉 → 右組多拿約 66px → 不再換行 → 升回 
 
 - **修正：MySQL / SQL Server / Oracle / gateway 連線的預存程序一律顯示「無引數」**。`RoutineInfo.signature` 只有 PostgreSQL 驅動有填，其餘四個驅動全部寫死 `None`——所以「執行預存程序」的提示不是查不到引數，是**從來沒查過**，每一支有參數的程序都被講成沒參數。MySQL 與 qland 驅動改為從 `information_schema.PARAMETERS` 取回 `IN p_id int(11)` 這樣的完整簽章（`ORDINAL_POSITION > 0` 排除函式回傳型別；同名的 procedure 與 function 可並存，故以「名稱 + 類型」為鍵）。SQL Server 與 Oracle 仍是 `None`，尚未處理。
 - **修正：右鍵「設計」會先看到一整頁清單載入中**。對話框固定從清單模式開場，要等 `routine_definition` 回來才翻到編輯器；本機 MySQL 快到看不出來，但 gateway 型連線（qland）那是好幾秒的 HTTP 往返，畫面會先鋪一頁清單再忽然跳掉，像是點錯了東西。改成掛載當下就依帶入的動作決定模式，編輯器自己顯示「載入定義中…」。同時清單改為**真的要顯示才查**——直接進設計 / 執行的路徑用不到它，而那是兩趟（routines + triggers）白花的往返。
-- **執行預存程序改用引數表單**（對標 Navicat 的「執行函式」視窗）。原本是單行 prompt 要使用者自己記得引數順序、自己判斷哪些要加引號。現在一格一引數，方向（IN / OUT / INOUT）、名稱、型別由畫面給，引號由型別決定（數值裸值、其餘走既有的方言跳脫），留空即 `NULL`。
+- **執行預存程序改用引數表單**。原本是單行 prompt 要使用者自己記得引數順序、自己判斷哪些要加引號。現在一格一引數，方向（IN / OUT / INOUT）、名稱、型別由畫面給，引號由型別決定（數值裸值、其餘走既有的方言跳脫），留空即 `NULL`。
   - **OUT / INOUT 真的接得到回值**：走 `SET` → `CALL` → `SELECT @var` 三段式，且**必須同一次送出**——分開送對 gateway 是分開的 HTTP 請求，session 變數不保證還在。PostgreSQL 沒有 `@var`，不會硬套。
   - 產生的 SQL 一律攤在下方；勾「編輯 SQL」可直接改，這是運算式（`NOW()`、子查詢）這種表單表達不了的東西的逃生口。
   - 簽章解析**不能用 `split(",")`**：型別本身就含逗號（`decimal(10,2)`、`enum('a','b')`），一刀切下去會多長出不存在的欄位。改為括號 / 引號感知的掃描（29 個單元測試）。
@@ -571,7 +571,7 @@ barTier 1 → 標籤收掉 → 右組多拿約 66px → 不再換行 → 升回 
 ## v0.17.3
 
 - **新增連線對話框改為兩步式**：開啟「新增連線」時先只顯示連線類型選擇器，選定類型後才展開下方的主機 / 帳密等輸入欄位，避免類型格與十餘個欄位同屏擠壓、逼使用者捲動。選類型階段底部只留「取消」（此時測試 / 儲存尚無意義）；已填內容在收合類型選擇器時不會遺失（編輯連線維持直達表單，不受影響）。
-- **類型選擇器改卡片式**：類型改為圖示在上、標籤在下的卡片（Navicat / TablePlus 風），帶品牌色圖示底與 hover 微浮起，視覺較原本的橫向小按鈕清爽。
+- **類型選擇器改卡片式**：類型改為圖示在上、標籤在下的卡片，帶品牌色圖示底與 hover 微浮起，視覺較原本的橫向小按鈕清爽。
 
 ## v0.17.2
 
@@ -724,7 +724,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **External（gateway）查詢分頁改用 CodeMirror SQL 編輯器**：external kind 原本 fallback 到 Redis 用的純 `<textarea>`，導致「設定 → 編輯器主題」不生效、無語法高亮 / 行號 / 自動完成。新增 `supportsSqlEditor` flag（`supportsExplain || external`）把「編輯器選擇」與「EXPLAIN 能力」兩個關注點分離——external 分頁現與其他 SQL 連線一致：主題即時生效、行號、片段、格式化、SQL 轉換、`:name` 參數 badge、Ctrl+Enter 游標語句、反白選取段執行、失敗語句定位。前端多語句切分維持不動（external 仍整段送 gateway、多結果集不受影響）；建構器與「分析（EXPLAIN 表格）」維持原 gate（external 無 schema 自動完成 / EXPLAIN 表格）。
 - package-lock.json 版號補同步（0.7.1 → 0.7.3；v0.7.2 bump 時漏掉，避免 CI `npm ci` 再踩 lockfile 驗證）。
 
-- **右鍵「產生 SQL」一律向右開新查詢分頁（對標 SSMS）**：側欄「新增查詢」（含 USE / search_path 起手；SQLite 開空白分頁）、「查詢前 100 筆（含明列欄位）」、SELECT COUNT(*)、INSERT / GRANT 範本、複製資料表、Mongo 範本，與查詢建構器 / 結構同步 / 資料產生對話框的「送到編輯器」——原本會覆蓋目前查詢分頁的草稿，現改為向右開新分頁並自動切換，原分頁內容不動。AI 助手「貼到查詢編輯器」與常用查詢雙擊維持「貼進目前分頁」語意。
+- **右鍵「產生 SQL」一律向右開新查詢分頁**：側欄「新增查詢」（含 USE / search_path 起手；SQLite 開空白分頁）、「查詢前 100 筆（含明列欄位）」、SELECT COUNT(*)、INSERT / GRANT 範本、複製資料表、Mongo 範本，與查詢建構器 / 結構同步 / 資料產生對話框的「送到編輯器」——原本會覆蓋目前查詢分頁的草稿，現改為向右開新分頁並自動切換，原分頁內容不動。AI 助手「貼到查詢編輯器」與常用查詢雙擊維持「貼進目前分頁」語意。
 - 版本號同步 0.7.2（v0.6.0 / v0.7.0 釋出時 package.json / tauri.conf.json / Cargo.toml 未跟上、App 內顯示 0.5.0，本次補齊；v0.7.1 因 CI 未修復完成未發佈）。
 - **CI（release workflow）修復**：v0.6.0 起歷次 release 全平台掛在 `npm ci`——lockfile 由 npm 11 產生、CI Node 20 內建 npm 10 驗證 optional peerDependencies 不相容（Missing: esbuild from lock file），setup-node 升 Node 24（npm 11）；macOS Intel 的 macos-13 runner 已退役（job 永遠 queued 卡住整條 run），改在 macos-latest（Apple Silicon）交叉編譯 x86_64。
 
@@ -808,19 +808,19 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 
 
-- 版本號 0.2.5 → 0.2.6（package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock 同步）；重打安裝檔。本版內容見下方「『關於 DB Kit』對話框」與「多結果集同時顯示（SSMS 風格）」。
+- 版本號 0.2.5 → 0.2.6（package.json / package-lock.json / tauri.conf.json / Cargo.toml / Cargo.lock 同步）；重打安裝檔。本版內容見下方「『關於 DB Kit』對話框」與「多結果集同時顯示」。
 
 ## 「關於 DB Kit」對話框
 
 - 新增：工具列「關於」按鈕（標題列版本號也可直接點擊）開啟關於對話框，顯示 App 圖示、版本號（附「複製版本資訊」方便回報問題時附上）、支援的資料庫清單（由 KIND_META 導出，新增類型自動跟上）、GitHub 專案 / 變更紀錄 / 回報問題連結（沿用 `open_external` 以系統瀏覽器開啟）、MIT 授權。
 - 新增：關於對話框內可**手動檢查更新**——`checkForUpdate` 增加 `force` 參數略過每日快取直打 GitHub API（使用者主動點的就真的去查），結果顯示「有新版 vX.Y.Z，點擊前往下載 / 已是最新版本 / 檢查失敗」三態；啟動時的自動檢查行為不變。
 
-## 多結果集同時顯示（SSMS 風格）
+## 多結果集同時顯示
 
-- 一次執行多條 SQL（F6 整段 / 執行鈕）時，每條有回傳結果集的語句現在**各佔一格、堆疊同時顯示**（致敬 SSMS / MySQL Workbench），不再只顯示最後一個結果集。每格標頭顯示「結果 N、對應語句、列數、耗時」，各格獨立捲動、排序、篩選、框選複製。
+- 一次執行多條 SQL（F6 整段 / 執行鈕）時，每條有回傳結果集的語句現在**各佔一格、堆疊同時顯示**，不再只顯示最後一個結果集。每格標頭顯示「結果 N、對應語句、列數、耗時」，各格獨立捲動、排序、篩選、框選複製。
 - 點任一格（含表格內部）設為「作用中」（框線高亮 + 右上角「結果 N」指示），右上的複製 CSV/TSV/JSON/MD、匯出、問 AI 即對該結果集生效；「問 AI」並改帶該格對應的單條語句，讓查詢與結果一一對應。
 - 狀態列多結果集時顯示「N 個結果集 · 共 M 列」。單語句 / 純 DML / 分析（EXPLAIN）行為與先前完全一致。
-- 中途某條語句失敗時，失敗前已取回的結果集照樣顯示（錯誤橫幅在上、部分結果在下，SSMS 同款），不必重跑前面的 SELECT。
+- 中途某條語句失敗時，失敗前已取回的結果集照樣顯示（錯誤橫幅在上、部分結果在下），不必重跑前面的 SELECT。
 - 效能與操作細節：ResultTable 加 `React.memo`（作用中表格篩選打字不再連帶重渲染其餘大表格）、每格渲染列數上限按格數均分（總 DOM 列數有預算，複製 / 匯出仍取全部）、畫面外的格以 `content-visibility:auto` 跳過排版繪製、各格可摺疊（保留排序 / 篩選狀態）、鍵盤聚焦（Tab 進表格）也會切換作用中結果集、重跑批次時各格捲動位置重置、點右上「結果 N」指示可捲至該格。
 
 ## v0.2.5
@@ -843,7 +843,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 ## 多查詢分頁（Tab）
 
-- 仿 Navicat：可同時開多個查詢分頁，各自獨立的編輯器內容與草稿（每連線 × 每分頁分開持久化）。分頁列上的「＋」新增、額外分頁可關閉（中鍵或關閉鈕）；預設「查詢」home 分頁不可關。Ctrl+T 新增、Ctrl+W 關閉、Ctrl+Tab / Ctrl+1..9 在所有表分頁與查詢分頁間循環/跳轉。
+- 可同時開多個查詢分頁，各自獨立的編輯器內容與草稿（每連線 × 每分頁分開持久化）。分頁列上的「＋」新增、額外分頁可關閉（中鍵或關閉鈕）；預設「查詢」home 分頁不可關。Ctrl+T 新增、Ctrl+W 關閉、Ctrl+Tab / Ctrl+1..9 在所有表分頁與查詢分頁間循環/跳轉。
 - 向後相容：home 分頁沿用原本的儲存鍵，既有草稿不受影響；不開額外分頁時行為與先前完全一致。
 
 ## v0.2.0
@@ -856,7 +856,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 ## 資料列右鍵：複製為 SELECT（定位此列）
 
-- 仿 Navicat「Copy as SELECT」：在資料格右鍵新增「複製為 SELECT（定位此列）」，以主鍵組出 SELECT * FROM 表 WHERE pk=… 方便精準重查 / 分享單列。屬唯讀動作，readonly 連線也提供（不像 UPDATE/DELETE 需可寫）。+1 前端測試。
+- 「複製為 SELECT」：在資料格右鍵新增「複製為 SELECT（定位此列）」，以主鍵組出 SELECT * FROM 表 WHERE pk=… 方便精準重查 / 分享單列。屬唯讀動作，readonly 連線也提供（不像 UPDATE/DELETE 需可寫）。+1 前端測試。
 
 ## 查詢工具列精簡 ＋ 單擊開表 ＋ 新查詢回饋
 
@@ -882,7 +882,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 # Changelog
 
-## 匯入預覽（致敬 Navicat 匯入精靈）
+## 匯入預覽
 
 匯入 CSV / Excel 改為「**選檔 → 預覽 → 匯入**」：選好檔即顯示**欄名與前 20 列**和約略總列數，確認無誤再匯入；調整分隔字元 / 表頭設定會即時重新預覽，搭配「重新指定欄名」對齊欄位更直覺。
 
@@ -912,7 +912,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 ## 匯入欄位對應：重新指定欄名（覆蓋檔案表頭）
 
-匯入 CSV / Excel 時，檔案表頭若與目標表欄位不一致，可勾選「重新指定欄名」**把檔案欄位對齊到目標欄位**（致敬 Navicat 匯入精靈的欄位對應），不必先改檔案。
+匯入 CSV / Excel 時，檔案表頭若與目標表欄位不一致，可勾選「重新指定欄名」**把檔案欄位對齊到目標欄位**，不必先改檔案。
 
 > 驗證：後端 `import_rows` 改為「has_header 先吃表頭、`columns` 覆蓋優先」（向後相容）+ 1 項 SQLite 端到端測試（表頭 x,y 覆蓋成 id,name）；import 測試 17 項全通過、`cargo clippy` 零警告；前端 `tsc` + `eslint` + `vite build` 綠燈。
 
@@ -939,7 +939,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 > 驗證：沿用 `quoteIdent` / `qualifiedName` 組查詢、`requestQuery` 帶入編輯器；前端 `tsc` + `eslint` + `vite build` 綠燈、vitest 176 項全通過。
 
-## 資料比對 / 同步（致敬 Navicat Data Synchronization）
+## 資料比對 / 同步
 
 資料表右鍵新增「**資料比對 / 同步…**」：以主鍵比對來源與目標兩表的資料，算出讓目標與來源一致所需的 **INSERT / UPDATE / DELETE**，產生同步 DML 供檢視後執行（跨連線 / 跨庫）。
 
@@ -957,7 +957,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 - 程式碼段內多重空白 / 換行收斂為單一空白；**字串內容與 `/* 區塊註解 */`、`$$` 原樣保留**；**行註解（`-- …`）移除**（單行化會吃掉後續）。
 
-## 參數化查詢（`:name`，致敬 Navicat 參數查詢）
+## 參數化查詢（`:name`）
 
 在 SQL 寫 `:name` 佔位符，執行時**逐一提示輸入值並安全代入**——同一條查詢換參數重跑，不必每次手改 WHERE，也避免手動拼字串的跳脫風險。
 
@@ -973,7 +973,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 > 驗證：以 `readonlyConns[connId]` 旗標條件式排除選單項；前端 `tsc` + `eslint` + `vite build` 綠燈、vitest 166 項全通過。
 
-## 連線唯讀模式（致敬 Navicat / DataGrip read-only connection）
+## 連線唯讀模式
 
 把連線標為**唯讀**，擋掉誤改正式環境資料的兩大途徑——搭配連線色標（紅＝正式）更安全。
 
@@ -1004,11 +1004,11 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 ## Excel 匯出品質提升：凍結表頭 + 自動欄寬
 
-匯出的 .xlsx 現在**凍結首列表頭**（捲動時標題常駐）並**自動依內容調整欄寬**，開檔即一目了然，更貼近 Navicat 的 Excel 輸出品質。
+匯出的 .xlsx 現在**凍結首列表頭**（捲動時標題常駐）並**自動依內容調整欄寬**，開檔即一目了然。
 
 > 驗證：`render_xlsx` 加 `set_freeze_panes` / `autofit`（rust_xlsxwriter）；`cargo test export::` 13 項全通過、`cargo clippy` 零警告。
 
-## 整庫資料庫文件（致敬 Navicat HTML 文件 / 模型報表）
+## 整庫資料庫文件
 
 資料庫節點右鍵新增「**資料庫文件…**」：一次彙整整個資料庫所有資料表的欄位 / 索引 / 外鍵成一份**含目錄**的文件，可複製或另存 **Markdown / HTML**（HTML 帶錨點目錄，適合放 wiki / 交付）。
 
@@ -1018,7 +1018,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - Markdown / HTML 兩種格式即時切換預覽；表名 / 內容皆做跳脫（`|`、`<`、`&`）。
 - 沿用既有 `table_columns` / `table_indexes` / `list_foreign_keys`，無需新增後端。
 
-## SQL 關鍵字大小寫轉換（致敬 Navicat 編輯器）
+## SQL 關鍵字大小寫轉換
 
 查詢工具列新增 **ABC / abc** 兩鈕：把 SQL 關鍵字一鍵統一轉大寫 / 小寫，符合團隊風格。
 
@@ -1037,7 +1037,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - 點選時才抓 `er_model` 並快取於本分頁；找出 `to_table = 本表 ∧ to_column = 此欄` 的關係。
 - **0 個** → 提示無人參照；**1 個** → 直接開啟並過濾；**多個** → 跳出小選單列出各來源表.欄供挑選。
 
-## 複製整欄為 IN 子句（致敬 Navicat「Copy as IN」）
+## 複製整欄為 IN 子句
 
 資料表欄位標題右鍵新增「**複製整欄為 IN(...)（本頁）**」：把本頁該欄的值組成 `col IN ('a', 'b', …)`，直接貼進別處 WHERE 即可篩選那批值。
 
@@ -1046,7 +1046,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **去重**、方言感知識別字 / 字面值跳脫（單引號加倍）、純數字原樣（數值比較）。
 - **NULL 處理**：以 `OR col IS NULL` 並聯（`IN` 不含 NULL，避免漏掉 NULL 列）；整欄全為 NULL 時輸出 `col IS NULL`。
 
-## 釘選 / 常用資料表（致敬 Navicat Favorites）
+## 釘選 / 常用資料表
 
 把常開的表釘到側欄頂部「**★ 常用**」區，跨連線一鍵開啟——不必每次層層展開連線 → 資料庫 → 找表。
 
@@ -1067,7 +1067,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - 索引涵蓋所有連線、已載入的資料庫與資料表（已展開者）；選資料表自動切到該連線並開分頁。
 - F1 快捷鍵說明新增「全域 · Ctrl+K」。
 
-## 外鍵導覽：跳至參照的列（致敬 Navicat / TablePlus）
+## 外鍵導覽：跳至參照的列
 
 瀏覽資料時，**外鍵欄位的儲存格右鍵新增「跳至 <參照表>（<參照欄> = 值）」**——一鍵開啟被參照的資料表並過濾到對應那一列，沿著關聯快速鑽研資料，不必手動切表打 WHERE。
 
@@ -1077,7 +1077,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - 開啟被參照表後自動套用 `參照欄 = 值` 篩選並展開篩選列；若該表分頁已開啟則切換並重新過濾。
 - 僅關聯式（MySQL / PostgreSQL / SQLite）資料分頁載入外鍵資訊。
 
-## 整庫資料傳輸（多表一次傳，致敬 Navicat Data Transfer）
+## 整庫資料傳輸（多表一次傳）
 
 資料庫節點右鍵新增「**資料傳輸（整庫）…**」：勾選多張來源表，一次傳到另一連線 / 資料庫的同名表，常用於「把某庫整批複製到測試環境」。
 
@@ -1098,7 +1098,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 ## 視覺化查詢建構器：結果預覽 + 欄位全選 / 清空
 
-讓查詢建構器更接近 Navicat SQL Builder 的「邊建邊看」手感。
+讓查詢建構器可以「邊建邊看」。
 
 > 驗證：沿用既有 `buildSelectQuery` / `run_query`，無新增後端；前端 `tsc` + `eslint` + `vite build` 綠燈、vitest 138 項全通過。
 
@@ -1106,7 +1106,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **每張表「全選 / 清空」欄位**：表卡標頭新增快捷，寬表不必逐欄點選。
 - 切換資料庫時一併清掉預覽結果，避免殘留。
 
-## 連線色標（Connection Color，致敬 Navicat）
+## 連線色標（Connection Color）
 
 給連線標上顏色以一眼區分 **正式 / 測試 / 開發** 等環境，降低「在正式環境誤操作」的風險。
 
@@ -1118,7 +1118,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 ## 視覺化查詢建構器：HAVING 群組後篩選
 
-查詢建構器補上 **HAVING** 子句——以聚合結果篩選分組（如 `COUNT(id) > 1`、`SUM(total) >= 100`），補齊「分組統計 → 篩出符合門檻的群組」這條 Navicat 常見路徑。
+查詢建構器補上 **HAVING** 子句——以聚合結果篩選分組（如 `COUNT(id) > 1`、`SUM(total) >= 100`），補齊「分組統計 → 篩出符合門檻的群組」這條常見路徑。
 
 > 驗證：`buildSelectQuery` 加 HAVING 支援並把聚合表達式抽成共用 `qbAggExpr`（SELECT / HAVING 共用）；+2 項 vitest（共 136 項全通過）；前端 `tsc` + `eslint` + `vite build` 綠燈。
 
@@ -1135,7 +1135,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **DDL 改寫**：定位 `CREATE TABLE … (` 把舊表名（含 schema / 各式引號寫法）整段換成目標限定名（`db.table`，SQLite 不加 schema），保留 `IF NOT EXISTS` 與欄位定義原樣——對 MySQL `SHOW CREATE TABLE`、PostgreSQL 重建式、SQLite 原始 DDL 皆穩健。
 - **同種類守衛**：跨資料庫種類（如 MySQL → PostgreSQL）不沿用 DDL，明確要求先手動建表；後端 `ConnectionManager::kind` 提供連線種類判斷。
 
-## 資料傳輸（Data Transfer，致敬 Navicat）
+## 資料傳輸（Data Transfer）
 
 把一張表的資料複製到**另一個連線 / 資料庫 / 表**——跨連線搬資料、把正式環境的表灌進測試庫、同庫複製到另一張表，都不必再手動匯出再匯入。資料表右鍵新增「資料傳輸…」（關聯式：MySQL / PostgreSQL / SQLite）。
 
@@ -1147,7 +1147,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **可選「傳輸前清空目標表」**（DELETE 全表）；主鍵衝突等失敗的列逐筆計數並回報前 20 筆錯誤。
 - **防呆**：來源與目標為同一張表時拒絕（避免邊讀邊寫無限增長）。
 
-## SQL 片段庫（Snippets，致敬 Navicat 程式碼片段）
+## SQL 片段庫（Snippets）
 
 把常用 SQL 骨架收進可重用的片段庫：**編輯器內輸入片段名即自動完成展開**，或從工具列「片段」下拉一鍵插入游標處。內建 11 個常用片段（前 100 筆 / 計數 / 找重複 / 分組 Top N / 各種 JOIN / CRUD 骨架…），使用者可新增 / 覆蓋 / 刪除。
 
@@ -1158,7 +1158,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **持久化**：只存「與內建不同」的片段（使用者新增 / 覆蓋），內建未改不入存檔；同名以使用者為準，重載後合併回內建。
 - 片段陣列以 `useMemo` 穩定 identity，避免每次 render 重建編輯器 extensions。
 
-## Excel（.xlsx/.xls）匯入（致敬 Navicat 匯入精靈的 Excel 來源）
+## Excel（.xlsx/.xls）匯入
 
 匯入對話框現在能直接吃 Excel 檔，不必先轉存 CSV。與 CSV 匯入共用同一套逐列寫入邏輯（型別轉型 / 空→NULL / 遇錯即停 / 錯誤回報）。
 
@@ -1179,7 +1179,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - 匯出來源沿用目前所見（含前端排序 / 篩選後的可視列）。
 - 「複製 CSV / TSV / JSON / MD」剪貼簿按鈕維持前端即時序列化不變。
 
-## Excel（.xlsx）匯出（致敬 Navicat「匯出至 Excel」）
+## Excel（.xlsx）匯出
 
 匯出資料對話框新增 **Excel (.xlsx)** 格式，直接產生原生 Excel 活頁簿，不再只能用 CSV 繞道。
 
@@ -1191,9 +1191,9 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **上限保護**：欄數 > 16384 或列數 > 1048576 直接回報錯誤，不靜默截斷。
 - 後端共用 `render()`，CLI（`dbk`）匯出亦自動支援 xlsx。
 
-## 視覺化查詢建構器（Visual Query Builder，致敬 Navicat SQL Builder）
+## 視覺化查詢建構器（Visual Query Builder）
 
-對標 Navicat 旗艦的 SQL Builder：不寫 SQL，靠勾選與下拉即可組出 SELECT 查詢，再一鍵帶入查詢編輯器執行 / 微調。僅關聯式（MySQL / PostgreSQL / SQLite）。
+不寫 SQL，靠勾選與下拉即可組出 SELECT 查詢，再一鍵帶入查詢編輯器執行 / 微調。僅關聯式（MySQL / PostgreSQL / SQLite）。
 
 > 驗證：前端 `tsc --noEmit` + `eslint` + `vite build` 綠燈；新增 `buildSelectQuery` 純函式與 8 項 vitest（共 119 項全通過）。
 
@@ -1203,7 +1203,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **表卡欄位勾選**：每張已選表一張卡，逐欄勾選是否顯示（不勾＝`SELECT *`），標示 PK（琥珀）/ FK（連結圖示）/ 資料型別；首張為「基底表」。
 - **視覺化 JOIN**：選 2 張以上表時，**由外鍵自動推斷 JOIN**（加入新表即試建、或按「由外鍵自動連接」整批補齊）；可手動改 JOIN 型別（INNER / LEFT / RIGHT / FULL，MySQL 隱藏 FULL）與左右連接欄位。
 - **WHERE 條件**：表.欄 + 運算子（`= <> > >= < <= LIKE NOT LIKE IN NOT IN IS NULL IS NOT NULL`）+ 值；多條以各自 AND / OR 串接；數字值原樣比較、字串自動加引號（方言感知，MySQL 反斜線加倍）、`IN` 拆逗號、`IS NULL` 免值。
-- **聚合 / 分組**：每個顯示欄位可設 `COUNT / COUNT DISTINCT / SUM / AVG / MIN / MAX` 與別名；**有聚合時自動以其餘欄位 GROUP BY**（Navicat 風）。
+- **聚合 / 分組**：每個顯示欄位可設 `COUNT / COUNT DISTINCT / SUM / AVG / MIN / MAX` 與別名；**有聚合時自動以其餘欄位 GROUP BY**。
 - **ORDER BY**（多欄 ASC / DESC）、**DISTINCT**、**LIMIT**。
 - **右欄即時 SQL 預覽**（經 `formatSql` 美化），可**複製 SQL**或**帶入查詢編輯器**（沿用 per-連線 持久化）。
 
@@ -1242,7 +1242,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 ## 跨五大資料庫功能強化 + 正確性修正 + 資料格 / 查詢編輯器 / UI/UX 打磨
 
-致敬 DBeaver / TablePlus / DataGrip / Navicat 的日常手感與功能廣度：補強資料呈現正確性、跨資料庫功能對齊與操作效率。
+著重日常手感與功能廣度：補強資料呈現正確性、跨資料庫功能對齊與操作效率。
 本批重點包含 **PostgreSQL 嚴格型別寫入修正**（整數 / 複合主鍵的列終於可編輯 / 刪除）、**MongoDB 完整查詢 + CRUD-via-JSON**（find / 聚合 / insert / update / delete）+ 索引管理、**CSV 匯入**、**整庫結構轉儲**、**欄位資料剖析**、**Ping 連線延遲**、`RETURNING` 顯示，以及多項由對抗式自我審查找出的細節修正（Excel BOM、多欄排序鍵序、空 filter 批次操作防護等）。
 
 > 驗證：前端 `tsc` + `vite build` 綠燈、`cargo clippy` 新增程式碼零警告；後端 `cargo test --lib --include-ignored` **49/49 通過**（45 純函式 / SQLite 端到端 + 4 Docker 真實資料庫 MySQL 8 / PostgreSQL 16 / MongoDB 7 / Redis 7）。前端 **vitest 26 項全通過**（純函式邏輯抽至 `src/sql.ts`：SQL 多語句切分含 PG dollar-quoting / MySQL 雙反引號、CSV 跳脫、查詢歷史 / 收藏持久化守衛、跨資料庫識別字與字面值跳脫含 MySQL 反斜線方言）。後端測試涵蓋五大資料庫的連線 / `ping` / CRUD（含整數·複合主鍵 / set-NULL）/ 全 9 種篩選運算子 + AND·OR / DDL 欄位編輯 / 索引建刪 / EXPLAIN / RETURNING / ER 外鍵探索 / Mongo 聚合·CRUD-via-JSON / 匯出·匯入往返 / 欄位剖析 / 結構轉儲 / 備份還原（含非法檔被拒）/ 無主鍵編輯防護 / 注入安全 / `<unrenderable>` 型別呈現（含 BOOLEAN·UUID·NUMERIC·DECIMAL）等所有路徑。
@@ -1260,15 +1260,15 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **鍵盤導覽**：方向鍵 / Tab 移動選取格、Enter / F2 進入編輯、Ctrl+C 複製、Esc 取消；單擊選取並高亮（藍框）。
 - 共用剪貼簿 helper `copyToClipboard`（`navigator.clipboard` + textarea fallback）。
 - **多欄排序**：Shift+點擊欄標題附加 / 切換排序欄，徽章顯示排序次序（單擊仍為單欄循環）。
-- **重新整理**鈕（重讀目前頁）；**雙擊欄分隔線自動符合內容寬度**（canvas 量測，致敬 Navicat / TablePlus）。
+- **重新整理**鈕（重讀目前頁）；**雙擊欄分隔線自動符合內容寬度**（canvas 量測）。
 - **每頁列數選擇器**（100 / 200 / 500 / 1000）；底部顯示「顯示 X–Y · 共 N 列」的範圍資訊。
 
-- **依儲存格值篩選**：右鍵選單新增「篩選此值 / 排除此值」（NULL 自動轉 is null / is not null），即時帶入篩選列（致敬 TablePlus / DBeaver「Filter by value」）。
+- **依儲存格值篩選**：右鍵選單新增「篩選此值 / 排除此值」（NULL 自動轉 is null / is not null），即時帶入篩選列。
 - **欄位標題右鍵選單**：升冪 / 降冪 / 清除排序、自動符合寬度、複製欄名、**複製整欄值（本頁）**、**隱藏此欄 / 顯示所有欄**（隱藏狀態 per-table 持久化，至少保留一欄）。
 - 底部顯示**選取儲存格資訊**（欄名＝值，Excel 名稱框手感）。
 - **即時尋找**（Ctrl+F 或「🔍 尋找」）：在目前頁就地標示符合片段並顯示符合格數（client-side，與伺服器端篩選互補）。
 - **未套用變更保護**：有待套用編輯時，重新整理 / 切換頁面前先確認，避免靜默丟失。
-- **整列表單檢視**：點列號開啟，逐欄檢視 / 編輯一列（寬表友善），可上下切換列（致敬 DBeaver 記錄檢視）。
+- **整列表單檢視**：點列號開啟，逐欄檢視 / 編輯一列（寬表友善），可上下切換列。
 
 ### 查詢編輯器（補強）
 - 編輯器內 **Tab 鍵插入兩個空格**（不再跳離）、**Ctrl+/ 切換行註解**，符合 SQL 編寫習慣。
@@ -1278,7 +1278,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **查詢結果格複製**：點選儲存格高亮、Ctrl+C 複製、右鍵選單（複製值 / 整列 TSV / 整列 JSON / 整欄）。
 - **匯出查詢結果到檔案**：原生另存對話框，依副檔名輸出 CSV（RFC4180 跳脫）/ JSON / TSV（後端 `save_text_file`）。
 
-### 結構：複製建表 SQL（致敬 Navicat「Copy CREATE statement」）
+### 結構：複製建表 SQL
 - 後端新增 `table_ddl` command + driver 方法：MySQL `SHOW CREATE TABLE`、SQLite 取 `sqlite_master.sql`、PostgreSQL 以 information_schema 欄位 + 主鍵重建（盡力而為）。
 - 結構分頁新增「📋 建表 SQL」，於唯讀檢視器顯示完整 CREATE 語句，可一鍵複製。
 
@@ -1287,7 +1287,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - 結構分頁於欄位下方新增「索引」區，顯示名稱 / 欄位 / UNIQUE / PK 標記。
 - **新增 / 刪除索引**（`create_index` / `drop_index`，關聯式）：索引區「＋ 新增索引」表單（名稱、欄位多選依點選順序組複合索引、唯一）；索引列尾「−」刪除非主鍵索引（含確認）。MySQL / PostgreSQL / SQLite 各以自身語法組 `CREATE [UNIQUE] INDEX` / `DROP INDEX`，皆以真實資料庫測試驗證（建立後讀回、刪除後確認消失）。
 
-### ER 圖（致敬 Navicat / DBeaver 的 ER 工具）
+### ER 圖
 - **縮放控制**（－ / ＋ / 百分比 / 適配視窗 / 重置）；表卡拖曳位移依縮放校正。
 - **佈局持久化**：拖曳後的表卡位置存 localStorage（per 連線 / DB），重開沿用。
 - **關聯高亮**：hover 表卡時，相關外鍵連線加亮、其餘淡出。
@@ -1300,7 +1300,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 ### 連線
 - **狀態列連線池監控**：已連線時每 4 秒輪詢 `pool_status`，顯示「使用中 / 總數 · 閒置」與類型色標連線點（呼應規劃 3.5）。
-- **Ping 既有連線**：點擊狀態列連線池徽章即送出一次輕量往返（`ping_connection` → 各 driver `SELECT 1` / `PING`），回報「連線正常 · 延遲 N ms」，可確認長閒置連線（含 SSH 通道）是否仍有效——致敬 DBeaver / TablePlus 的 Ping。Mongo / Redis 未公開連線池統計，徽章顯示「⚡ Ping」而非誤導的「池 0/0」。
+- **Ping 既有連線**：點擊狀態列連線池徽章即送出一次輕量往返（`ping_connection` → 各 driver `SELECT 1` / `PING`），回報「連線正常 · 延遲 N ms」，可確認長閒置連線（含 SSH 通道）是否仍有效。Mongo / Redis 未公開連線池統計，徽章顯示「⚡ Ping」而非誤導的「池 0/0」。
 - 連線對話框：**測試連線顯示延遲（ms）**、Esc 關閉。
 
 ### 查詢編輯器（致敬商用 SQL 工具）
@@ -1360,10 +1360,10 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 - **MongoDB 聚合管線（aggregate）**：查詢 JSON 提供 `"pipeline": [ {…stage…}, … ]` 時改走 `aggregate`，支援 `$match` / `$group` / `$sum` / `$project` 等全部聚合階段（Mongo 旗艦功能）；查詢編輯器 placeholder 同時提示 find 與 aggregate 兩種格式。結果收集設 5000 筆安全上限（呼應 find 路徑，避免未收斂管線把整個集合拉進記憶體；要完整結果請在管線尾自加 `$limit`）。加真實 Mongo 回歸測試（`$match`+`$group`+`$sum`）。
 - **MongoDB 索引管理**：補上 `create_index` / `drop_index`（先前僅有列出），與關聯式 driver 對齊；結構分頁的「＋ 新增索引 / − 刪除」對 Mongo 一併啟用（依點選順序組複合索引、可設唯一；預設 `_id_` 索引受保護不可刪）。欄位 / DDL 編輯仍僅限 SQL。加真實 Mongo 回歸測試（建立後讀回、刪除後消失）。
 - **MongoDB 批次寫入（CRUD-via-JSON）**：查詢 JSON 除 find / aggregate 外，新增 `insert`（`insert_many`，貼上文件陣列即可匯入 JSON）、`update`（`{filter,set}` → `update_many` `$set`）、`delete`（`delete_many`，回報筆數）。**`update` 與 `delete` 的 filter 皆不可為空**——一致的安全防護，避免一個遺漏 filter 就誤改 / 誤刪整個集合（真要全集合操作請用明確條件如 `{"_id":{"$exists":true}}`）。讓 Mongo 查詢編輯器具備完整 CRUD 能力（致敬商用 Mongo 工具的 shell）。加真實 Mongo 回歸測試（insert 2 / update 2 / delete 2 / 空 filter 刪除被拒）。
-- **查詢編輯器顯示 `RETURNING` 結果**（PostgreSQL / SQLite 3.35+）：`INSERT/UPDATE/DELETE … RETURNING …` 原本被當寫入語句、只回影響筆數而吞掉回傳列；改為偵測到 `RETURNING` 時走 `fetch_all` 取回並顯示回傳列（致敬 DataGrip / DBeaver）。加真實資料庫回歸測試。
-- **欄位資料剖析**（致敬 Navicat / DataGrip）：資料格欄位標題右鍵「欄位統計」→ 後端 `column_stats`（`COUNT(*)` / `COUNT(欄)` / `COUNT(DISTINCT 欄)` + best-effort `MIN`/`MAX`）→ toast 顯示「總列數 · 非空 · 相異值 · 範圍 [min, max]」。MIN/MAX 重用各 driver 的儲存格渲染（型別正確），不支援的型別（如 JSON）自動略過範圍。關聯式三庫適用；加 SQLite（含 NULL / 重複值 / 範圍）與真實 MySQL 回歸測試。
-- **轉儲整庫結構 SQL**（致敬 Navicat / DBeaver 的「轉儲結構」）：側欄資料庫節點右鍵「匯出結構 SQL…」→ 串接該庫所有表的建表 SQL（重用 `table_ddl`）→ 另存 `.sql`。關聯式資料庫適用（Mongo 集合無建表 SQL 會略過）；資料庫右鍵選單改為依連線種類顯示對應項目（Redis 維持新增鍵 / FLUSHDB，SQL 顯示轉儲結構）。加端到端測試（SQLite：含每表建表語句）。
-- **CSV 資料匯入**（致敬 Navicat / DBeaver 匯入精靈，匯出的對稱功能）：資料格工具列「⬆ 匯入」開啟對話框 → 選 CSV/TSV 檔 → 逐列寫入目標表。RFC4180 解析器（引號欄位可含分隔符 / 換行 / `""` 轉義，**去除開頭 UTF-8 BOM**——Excel 匯出的 CSV 常帶 BOM，否則第一欄欄名被前置 `﻿` 對不上欄位、整批失敗；11 個純函式單元測試）；後端讀檔避免大檔過 JS bridge（含 100 MB 上限防 OOM；非 UTF-8 檔給明確指引而非難懂錯誤）；逐列走 driver 的 `insert_row`（沿用 PostgreSQL 嚴格型別的參數轉型修正，整數 / 時間欄位也能匯入）；選項：分隔字元（, / Tab / ;）、第一列為欄名（或自填欄名）、空欄位視為 NULL、遇錯即停 / 盡量匯入；回報成功 / 失敗列數與前 20 筆錯誤（含列號）。加端到端測試（SQLite，免 Docker：引號含逗號、空欄→NULL、整數欄匯入）。
+- **查詢編輯器顯示 `RETURNING` 結果**（PostgreSQL / SQLite 3.35+）：`INSERT/UPDATE/DELETE … RETURNING …` 原本被當寫入語句、只回影響筆數而吞掉回傳列；改為偵測到 `RETURNING` 時走 `fetch_all` 取回並顯示回傳列。加真實資料庫回歸測試。
+- **欄位資料剖析**：資料格欄位標題右鍵「欄位統計」→ 後端 `column_stats`（`COUNT(*)` / `COUNT(欄)` / `COUNT(DISTINCT 欄)` + best-effort `MIN`/`MAX`）→ toast 顯示「總列數 · 非空 · 相異值 · 範圍 [min, max]」。MIN/MAX 重用各 driver 的儲存格渲染（型別正確），不支援的型別（如 JSON）自動略過範圍。關聯式三庫適用；加 SQLite（含 NULL / 重複值 / 範圍）與真實 MySQL 回歸測試。
+- **轉儲整庫結構 SQL**：側欄資料庫節點右鍵「匯出結構 SQL…」→ 串接該庫所有表的建表 SQL（重用 `table_ddl`）→ 另存 `.sql`。關聯式資料庫適用（Mongo 集合無建表 SQL 會略過）；資料庫右鍵選單改為依連線種類顯示對應項目（Redis 維持新增鍵 / FLUSHDB，SQL 顯示轉儲結構）。加端到端測試（SQLite：含每表建表語句）。
+- **CSV 資料匯入**（匯出的對稱功能）：資料格工具列「⬆ 匯入」開啟對話框 → 選 CSV/TSV 檔 → 逐列寫入目標表。RFC4180 解析器（引號欄位可含分隔符 / 換行 / `""` 轉義，**去除開頭 UTF-8 BOM**——Excel 匯出的 CSV 常帶 BOM，否則第一欄欄名被前置 `﻿` 對不上欄位、整批失敗；11 個純函式單元測試）；後端讀檔避免大檔過 JS bridge（含 100 MB 上限防 OOM；非 UTF-8 檔給明確指引而非難懂錯誤）；逐列走 driver 的 `insert_row`（沿用 PostgreSQL 嚴格型別的參數轉型修正，整數 / 時間欄位也能匯入）；選項：分隔字元（, / Tab / ;）、第一列為欄名（或自填欄名）、空欄位視為 NULL、遇錯即停 / 盡量匯入；回報成功 / 失敗列數與前 20 筆錯誤（含列號）。加端到端測試（SQLite，免 Docker：引號含逗號、空欄→NULL、整數欄匯入）。
 
 ### 全域 UI/UX 打磨（`styles.css`）
 - 細捲軸融入深色主題、藍調文字選取色、鍵盤焦點環（focus-visible）、互動微過渡。
@@ -1387,7 +1387,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 
 ## 資料匯出 + 多欄 OR 篩選（本次）
 
-### 資料匯出（Navicat 風格多格式，`export.rs`）
+### 資料匯出（多格式，`export.rs`）
 - 新增 `export_table` command：尊重目前的篩選 / 排序 / AND·OR，將表格資料匯出成 **CSV / TSV / JSON / SQL INSERT / Markdown**。
 - 選項：含/不含欄位標題、自訂分隔字元、NULL 呈現字串、UTF-8 BOM（方便 Excel 開 CSV）、SQL 目標表名、**匯出全部符合列 vs 只匯目前頁**。
 - 逐頁（每批 2000 列）向 driver 取資料，安全上限 100 萬列；CSV 欄位/SQL 值/Markdown 儲存格皆做跳脫。
@@ -1478,7 +1478,7 @@ Kafka 管理補完（參考 Conduktor Console 的第一波擴充；rdkafka 升�
 ## MongoDB 支援（本次）
 
 ### 新增
-- **MongoDB driver**（`db/mongo.rs`）：文件型資料庫，沿用統一 `DatabaseDriver` trait 與 Navicat 表格手感。
+- **MongoDB driver**（`db/mongo.rs`）：文件型資料庫，沿用統一 `DatabaseDriver` trait 與同一套表格操作。
   - `list_databases` → Mongo 資料庫；`list_tables` → 集合（kind=collection）。
   - `table_data` → 取一批文件，**聯集頂層欄位攤平成表格**（`_id` 固定第一欄），巢狀物件/陣列以 JSON 字串呈現。
   - `table_columns` → 抽樣 50 份文件推斷頂層欄位與 BSON 型別（「結構」分頁）。
