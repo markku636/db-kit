@@ -85,15 +85,22 @@ import {
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
   ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, FolderPlus, ExternalLink, Gauge,
-  Type, AArrowDown, AArrowUp, ShieldCheck,
+  Type, AArrowDown, AArrowUp, ShieldCheck, Library,
   type LucideIcon,
 } from "lucide-react";
 import { supportsReviewRun } from "./reviewRun";
+import { bootAiLibrary } from "./aiLibraryBoot";
+import { reviewersFor } from "./dbaReview";
+import type { DbaPrepared } from "./DbaReviewPane";
+
+const DbaReviewPane = lazyOverlay(() => import("./DbaReviewPane"));
+const SchemaReviewDialog = lazyOverlay(() => import("./SchemaReviewDialog"));
 
 // ---- Lazy 載入（code splitting）：對話框 / 工具面板全部條件掛載，開啟時才抓 chunk，
 //      首包只留 App shell + TableView + InfoPanel/AssistantPanel。CodeMirror 全家桶
 //      隨 SqlEditor / MongoQueryEditor 的 chunk 延後載入（manualChunks 見 vite.config.ts）。----
 const ConnectionDialog = lazyOverlay(() => import("./ConnectionDialog"));
+const AiLibraryDialog = lazyOverlay(() => import("./AiLibraryDialog"));
 const ExportConnectionsDialog = lazyOverlay(() => import("./ExportConnectionsDialog"));
 const BackupDialog = lazyOverlay(() => import("./BackupDialog"));
 const ErDiagram = lazyOverlay(() => import("./ErDiagram"));
@@ -250,6 +257,9 @@ export default function App() {
     const el = document.getElementById("boot-splash");
     if (el) requestAnimationFrame(() => el.remove());
   }, []);
+
+  // AI 資源庫（人設 / 技能 / 提示範本）：啟動時載入後端快照，視窗取得焦點時重讀（團隊資料夾 git pull 後即生效）。
+  useEffect(() => bootAiLibrary(), []);
 
   // 查詢防護（row cap / 逾時）：啟動時把 localStorage 設定同步到後端（後端內建預設 1000 / 關閉）。
   useEffect(() => {
@@ -589,6 +599,7 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
   const setLang = useLang((s) => s.setLang);
   const [guard, setGuard] = useState<QueryGuard>(loadQueryGuard);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(autoCheckEnabled);
+  const [aiLibOpen, setAiLibOpen] = useState(false);
   const themeId = useTheme((s) => s.themeId);
   const setThemeId = useTheme((s) => s.setThemeId);
   const uiFontSize = useUiFont((s) => s.size);
@@ -740,9 +751,21 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
             {t("每天最多向 GitHub 查一次最新版本（延後於啟動 10 秒後進行）；離線 / 內網環境可關閉。\r\n            「關於」對話框的手動檢查不受影響。")}
           </p>
         </div>
+        <div className="pt-4 border-t border-fg/10 space-y-2">
+          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+            <Icon icon={Library} size={15} /> {t("AI 資源庫")}
+          </div>
+          <p className="text-xs text-fg/50 leading-relaxed">
+            {t("AI 助手與 DBA 審查用的人設、技能與提示範本都是可編輯的 Markdown 檔，格式相容 Claude Code / Codex；可覆蓋內建版本、加入團隊資料夾，並一鍵同步過去。")}
+          </p>
+          <Button variant="secondary" icon={Library} onClick={() => setAiLibOpen(true)}>
+            {t("開啟 AI 資源庫…")}
+          </Button>
+        </div>
         <SchemaCacheSettings />
         <SshPrefsSettings />
       </div>
+      {aiLibOpen && <AiLibraryDialog open onClose={() => setAiLibOpen(false)} />}
     </Modal>
   );
 }
@@ -1378,6 +1401,8 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
   const [exportTbl, setExportTbl] = useState<{ connId: string; db: string; table: string } | null>(null);
   const [transferTbl, setTransferTbl] = useState<{ connId: string; db: string; table: string } | null>(null);
   const [builderTbl, setBuilderTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
+  // 右鍵「DBA 審查結構」：開一個審查對話框（DDL / 索引 / 外鍵 / 表資訊交給 DBA 人設）。
+  const [schemaReview, setSchemaReview] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [syncTbl, setSyncTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [dbTransfer, setDbTransfer] = useState<{ connId: string; db: string } | null>(null);
   const [dbDict, setDbDict] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
@@ -2316,6 +2341,8 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
         it(t("解釋這張表"), () => askAiTable(m, t("請解釋資料表 {db}.{table} 的用途，以及每個欄位代表什麼。", { db: m.db, table: m.table }))),
         it(t("寫常用查詢"), () => askAiTable(m, t("針對資料表 {db}.{table}，寫出 5 個實用的 SQL 查詢，每個都加上中文註解說明用途。", { db: m.db, table: m.table }))),
         it(t("最佳化建議"), () => askAiTable(m, t("檢視資料表 {db}.{table} 的結構與索引，給我效能與設計上的最佳化建議。", { db: m.db, table: m.table }))),
+        sep,
+        it(t("DBA 審查結構…"), () => setSchemaReview({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })),
       ],
     });
     // 匯入 / 匯出 / 傾印 / 文件 / 資料產生
@@ -3439,6 +3466,9 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
           onClose={() => setTransferTbl(null)} />
       )}
 
+      {schemaReview && (
+        <SchemaReviewDialog {...schemaReview} onClose={() => setSchemaReview(null)} />
+      )}
       {builderTbl && (
         <QueryBuilder connId={builderTbl.connId} kind={builderTbl.kind} initialDb={builderTbl.db} initialTable={builderTbl.table}
           onClose={() => setBuilderTbl(null)}
@@ -4303,7 +4333,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     /** 送出當下的整份文件：接受前用它確認那段文字還在原位（見 AiDiffDialog.isStale）。 */
     baseDoc: string;
     prompt: string;
+    /** 已有的改寫（DBA 審查回覆裡的修正 SQL）：直接做差異預覽，不再呼叫模型。 */
+    proposal?: string | null;
   } | null>(null);
+  // DBA 審查：值一變就讓審查面板送出一次；審查當下的目標範圍留著給「套用修正」用。
+  const [dbaKey, setDbaKey] = useState<number | null>(null);
+  const dbaTargetRef = useRef<AiTarget | null>(null);
   // Mongo 執行計畫（與 SQL 的 plan 分開：階段指標與成本模型不同，各自渲染器）。
   const [mongoPlan, setMongoPlan] = useState<{ model: MongoExplainModel; raw: string } | null>(() => restored?.mongoPlan ?? null);
   // 結果區狀態同步進快取：切走時 QueryPane 被卸載，來不及在 unmount 時收集，故隨改隨寫。
@@ -5176,7 +5211,35 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       setAiBusy(false);
     }
   };
-  const askAiReview = () => void askAiSql("review");
+  // 「AI 審查 SQL」改成 DBA 審查：切到下方「審查」分頁，由 DbaReviewPane 用選定的 DBA 人設送出
+  // （可以選多位會審、DBA 會自己查資料庫驗證），結果留在分頁裡而不是丟進助手對話。
+  const askAiReview = () => {
+    if (!(editorSel?.trim() ? editorSel : sql).trim()) { toast.info(t("沒有可審查的 SQL")); return; }
+    setBottomTab("review");
+    setDbaKey(Date.now());
+  };
+  /** DBA 審查面板要的提示：與舊的「AI 審查」同一份上下文（規則引擎發現 + 相關表結構 + 已跑過的計畫）。 */
+  const prepareDbaReview = async (names: string[]): Promise<DbaPrepared | null> => {
+    if (!activeId || !kind) return null;
+    const target = (editorSel?.trim() ? editorSel : sql).trim();
+    if (!target) { toast.info(t("沒有可審查的 SQL")); return null; }
+    // 記下這次審查的範圍：有選取就是選取，否則整份文件——「套用修正」要取代的就是這一段。
+    const ed = editorRef.current;
+    const doc = ed?.getDoc() ?? sql;
+    const s = ed?.getSelection();
+    dbaTargetRef.current = s && s.to > s.from && doc.slice(s.from, s.to).trim()
+      ? { from: s.from, to: s.to, text: doc.slice(s.from, s.to), scope: "selection" }
+      : { from: 0, to: doc.length, text: doc, scope: "document" };
+    const picked = useStore.getState().selectedNode;
+    const schema = await collectSchemaContext(activeId, schemaTargetDb, target, picked?.type === "table" ? picked.table : null);
+    const prompt = buildReviewPrompt({ kind, db: schemaTargetDb, sql: target, findings, schema, planJson: planRaw, uiLang: useLang.getState().lang });
+    return { prompt, reviewers: reviewersFor(names) };
+  };
+  const applyDbaFix = (code: string) => {
+    const target = dbaTargetRef.current;
+    if (!target) return;
+    setAiEdit({ title: t("套用 DBA 建議的修正"), target, baseDoc: editorRef.current?.getDoc() ?? "", prompt: "", proposal: code });
+  };
   const askAiTune = () => void askAiSql("tune");
 
   // ---- 編輯器 AI 動作（解釋 / 最佳化 / 修正 / 加註解 / 轉方言 / 測試資料 / 白話計畫 / 就地指示）----
@@ -5757,10 +5820,10 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                             </span>
                           )}
                         </button>
-                        <button type="button" onClick={() => { setShowMore(false); askAiReview(); }} disabled={aiBusy || !sql.trim()}
-                          title={t("把規則引擎的發現、相關表結構與索引一起交給 AI 助手做深入審查")}
+                        <button type="button" onClick={() => { setShowMore(false); askAiReview(); }} disabled={!sql.trim()}
+                          title={t("用選定的 DBA 人設審查這段 SQL（可多位會審；DBA 會自己查資料庫驗證）")}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
-                          <Icon icon={Sparkles} size={13} className="text-fg/45" />{t("AI 審查 SQL")}
+                          <Icon icon={Sparkles} size={13} className="text-fg/45" />{t("DBA 審查")}
                         </button>
                       </>
                     )}
@@ -6197,9 +6260,24 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               skipped={lintSkipped}
               hasSql={!!sql.trim()}
               onJump={(f) => editorRef.current?.selectRange(f.from, f.to)}
-              onAskAi={askAiReview}
-              busy={aiBusy}
             />
+          )}
+          {/* DBA 審查一直掛著（切到別的分頁只是隱藏）：串流中的審查與查過的資料庫紀錄不該因為看一下結果就消失。 */}
+          {supportsSqlEditor && activeId && (
+            <div className={bottomTab === "review" && sql.trim() && !lintSkipped ? "px-3 pb-3" : "hidden"}>
+              <div className="rounded border border-fg/10 p-2 min-h-[14rem]">
+                <DbaReviewPane
+                  prepare={prepareDbaReview}
+                  connId={connectedIds.has(activeId) ? activeId : null}
+                  database={schemaTargetDb || null}
+                  kind={kind ?? null}
+                  prod={connections.some((c) => c.id === activeId && isProdConn(c))}
+                  autoStartKey={dbaKey}
+                  onApplySql={applyDbaFix}
+                  disabled={!sql.trim()}
+                />
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -6245,6 +6323,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           scopeLabel={scopeLabel(aiEdit.target)}
           original={aiEdit.target.text}
           prompt={aiEdit.prompt}
+          proposal={aiEdit.proposal ?? null}
           // 過期判斷：那段文字是否還原封不動待在原位。整份文件比對太嚴（改了別處也會擋），
           // 只比對目標範圍才是「能不能安全就地替換」真正的判準。
           isStale={() => editorRef.current?.getDoc().slice(aiEdit.target.from, aiEdit.target.to) !== aiEdit.target.text}
@@ -6288,13 +6367,11 @@ const SEVERITY_STYLE: Record<LintSeverity, { dot: string; label: string }> = {
   info: { dot: "bg-sky-400", label: "建議" },
 };
 
-function ReviewPanel({ findings, skipped, hasSql, onJump, onAskAi, busy }: {
+function ReviewPanel({ findings, skipped, hasSql, onJump }: {
   findings: LintFinding[];
   skipped: boolean;
   hasSql: boolean;
   onJump: (f: LintFinding) => void;
-  onAskAi: () => void;
-  busy: boolean;
 }) {
   const t = useT();
   const counts = { error: 0, warn: 0, info: 0 };
@@ -6330,17 +6407,11 @@ function ReviewPanel({ findings, skipped, hasSql, onJump, onAskAi, busy }: {
               </span>
             ))
         )}
-        <button type="button" onClick={onAskAi} disabled={busy}
-          title={t("把規則引擎的發現、相關表結構與索引一起交給 AI 助手做深入審查")}
-          className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">
-          <Icon icon={busy ? Loader2 : Sparkles} size={12} className={busy ? "animate-spin" : ""} />
-          {t("AI 深入審查")}
-        </button>
       </div>
-      {/* 規則引擎只認得出「樣式層級」的問題，語意與索引選擇度要靠 AI 那一層 ——
+      {/* 規則引擎只認得出「樣式層級」的問題，語意與索引選擇度要靠 DBA 那一層 ——
           講清楚免得使用者把「沒有發現問題」讀成「這段 SQL 沒問題」。 */}
       <div className="text-[11px] text-fg/35">
-        {t("規則引擎只檢查寫法樣式（不執行查詢、不看資料分布）。語意、索引選擇度與鎖的範圍請用「AI 深入審查」。")}
+        {t("規則引擎只檢查寫法樣式（不執行查詢、不看資料分布）。語意、索引選擇度與鎖的範圍請用下方的「DBA 審查」。")}
       </div>
       {findings.map((f, i) => (
         <button key={`${f.id}:${f.from}:${i}`} type="button" onClick={() => onJump(f)}

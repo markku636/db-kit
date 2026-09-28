@@ -34,11 +34,24 @@ pub struct McpServer {
     mgr: Arc<ConnectionManager>,
     /// 第一次 tools/call 才連線；連線失敗不快取（下次再試），成功後重用。
     ctx: tokio::sync::Mutex<Option<DbToolCtx>>,
+    /// `--tools` 限定的工具子集（DBA agent 審查依人設與隱私設定傳入）；None = 全部。
+    allow: Option<Vec<String>>,
 }
 
 impl McpServer {
     pub fn new(conn: ConnArgs) -> McpServer {
-        McpServer { conn, mgr: Arc::new(ConnectionManager::new()), ctx: tokio::sync::Mutex::new(None) }
+        McpServer { conn, mgr: Arc::new(ConnectionManager::new()), ctx: tokio::sync::Mutex::new(None), allow: None }
+    }
+
+    /// 限定可用工具（空清單 = 不限定，與 CLI 旗標「沒給」同義）。
+    pub fn with_tools(mut self, tools: Vec<String>) -> McpServer {
+        let t: Vec<String> = tools.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        self.allow = if t.is_empty() { None } else { Some(t) };
+        self
+    }
+
+    fn allows(&self, name: &str) -> bool {
+        self.allow.as_ref().is_none_or(|a| a.iter().any(|n| n == name))
     }
 
     /// 取得（必要時建立）連線上下文。
@@ -52,7 +65,7 @@ impl McpServer {
         // `-d` 是「要檢視的命名空間」，優先於連線自帶的預設庫（PG 例外已在 resolve 處理）。
         let db = self.conn.database.clone().or_else(|| cfg.database.clone());
         self.mgr.connect(cfg).await.map_err(|e| e.message())?;
-        let c = DbToolCtx::from_manager(self.mgr.clone(), &id, db.as_deref())?;
+        let c = DbToolCtx::from_manager(self.mgr.clone(), &id, db.as_deref())?.with_allow(self.allow.clone());
         *g = Some(c.clone());
         Ok(c)
     }
@@ -121,6 +134,7 @@ impl McpServer {
                 Ok((kind, prod)) => {
                     let tools: Vec<Value> = dbtools::tool_defs(kind, prod)
                         .into_iter()
+                        .filter(|d| self.allows(d.name))
                         .map(|d| json!({ "name": d.name, "description": d.description, "inputSchema": d.input_schema }))
                         .collect();
                     Ok(json!({ "tools": tools }))
@@ -134,6 +148,9 @@ impl McpServer {
                 let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
                 if !dbtools::is_db_tool(name) {
                     return Some(rpc_ok(&id, tool_result(&tf!("未知的工具：{name}", name = name), true)));
+                }
+                if !self.allows(name) {
+                    return Some(rpc_ok(&id, tool_result(&tf!("這次審查不允許使用 {name}（DBA 人設或隱私設定限制了可用的工具）", name = name), true)));
                 }
                 // 唯讀守門搬到連線**之前**。`dbtools::call` 裡本來就有一份（真正的防線），
                 // 但那要先連上才跑得到：模型送 `DROP TABLE` 過來時會先撥一次連線、再收到一句
@@ -190,8 +207,8 @@ fn rpc_err(id: &Value, code: i64, message: &str) -> Value {
 }
 
 /// stdio 主迴圈：逐行讀 stdin → 處理 → 一行一則 JSON 回 stdout。stdin 關閉即結束。
-pub async fn serve(conn: &ConnArgs) -> AppResult<()> {
-    let server = McpServer::new(conn.clone());
+pub async fn serve(conn: &ConnArgs, tools: Vec<String>) -> AppResult<()> {
+    let server = McpServer::new(conn.clone()).with_tools(tools);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut out = tokio::io::stdout();
     eprintln!("[dbk mcp] {}", t!("MCP 伺服器已啟動（stdio）；等待用戶端 initialize…"));

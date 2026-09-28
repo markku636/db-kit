@@ -1,65 +1,59 @@
 import { create } from "zustand";
+import {
+  entriesOf,
+  findEntry,
+  libSettings,
+  personaSystemPrompt,
+  personas,
+  saveLibraryEntry,
+  skillInfo,
+  updateLibrarySettings,
+  useAiLibrary,
+  type LibEntry,
+} from "./aiLibrary";
 import { t } from "./i18n";
 
-// AI 助手的「人設」與「技能」。
+// AI 助手的「人設」與「技能」——現在是 AI 資源庫（ai-library/）的轉接層。
 //
-// - 人設 = 系統提示詞：語氣、規矩、輸出格式。留白就用內建的預設人設。
-// - 技能 = 可重複套用的提示詞範本：勾起來才會附在人設後面，可同時勾多個。
+// - 人設 = 資源庫 agents/ 裡 `dbkit-role: assistant` 的那一份（預設內建 `assistant`），由
+//   ai-library.json 的 `assistant_persona` 決定用哪一個。
+// - 技能 = 資源庫 skills/（Agent Skills 標準的 SKILL.md）；助手對話勾選的清單存在 `active_skills`。
 //
-// 四種供應商共用同一份設定：CLI 走 `--append-system-prompt`（codex 沒有這個旗標，
-// 由後端併進提示本文），API 供應商走 `system` 欄位 / `messages[0]`。
-//
-// 內建技能不可刪、也不可就地編輯（要改就「複製為自訂」）——這樣升級時內建內容才能跟著更新，
-// 而使用者改過的那份不會被蓋掉。
+// 早期版本把人設與自訂技能存在 localStorage。第一次拿到後端快照時 `migrateLegacySkills` 會把它們
+// 寫成個人層的檔案（agents/my-assistant.md、skills/<名>/SKILL.md）並設好選取；舊鍵保留一個版本，
+// 萬一要退版還拿得回來。
 const PERSONA_KEY = "db-kit:aiPersona";
 const SKILLS_KEY = "db-kit:aiSkills";
 const SELECTED_KEY = "db-kit:aiSkillsOn";
 
 export interface AiSkill {
+  /** 資源庫裡的技能名稱（`name`）。 */
   id: string;
+  /** 顯示名稱（`dbkit-title`）。 */
   name: string;
   body: string;
-  /** 內建範本：唯讀，只能勾選或複製。 */
+  /** 內建技能（唯讀；要改就在資源庫「複製為自訂」）。 */
   builtin?: boolean;
 }
 
-/** 內建人設。字面值即翻譯 key（`t()` 查不到就回中文原文）。 */
-export const DEFAULT_PERSONA_ZH =
-  "你是 db-kit 內建的資料庫助手。回答簡潔、直接給結論與可執行的語句；不確定的地方要說不確定，不要編造欄位或資料表名稱。牽涉寫入或結構變更時，一律提醒風險並附上回滾方式。";
+/** 舊 id（localStorage 時代的內建技能）→ 資源庫名稱。 */
+const LEGACY_IDS: Record<string, string> = {
+  "builtin:perf": "sql-perf",
+  "builtin:model-review": "model-review",
+  "builtin:readonly": "readonly-first",
+  "builtin:migration": "migration",
+};
 
-export function defaultPersona(): string {
-  return t(DEFAULT_PERSONA_ZH);
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
-/** 內建技能（`name` / `body` 都走 `t()`）。 */
-export const BUILTIN_SKILLS: readonly AiSkill[] = [
-  {
-    id: "builtin:perf",
-    name: "SQL 效能診斷",
-    body: "先看執行計畫再下結論：指出瓶頸在哪一步、缺哪個索引、預估改善幅度，並附上建立索引的語句。沒有執行計畫時，明講你需要哪些資訊。",
-    builtin: true,
-  },
-  {
-    id: "builtin:model-review",
-    name: "資料模型審查",
-    body: "從正規化、鍵值設計、型別選用、索引與命名一致性五個面向檢視結構，指出問題與影響，並給出修改後的 DDL。",
-    builtin: true,
-  },
-  {
-    id: "builtin:readonly",
-    name: "唯讀安全至上",
-    body: "只提供查詢語句。不要產生 INSERT / UPDATE / DELETE / DDL；使用者要求寫入時，改為說明風險並提供對應的查詢來驗證影響範圍。",
-    builtin: true,
-  },
-  {
-    id: "builtin:migration",
-    name: "遷移腳本",
-    body: "產生可回滾的遷移：up 與 down 各一段，標註是否會鎖表、資料量大時的分批做法，以及執行前的備份指令。",
-    builtin: true,
-  },
-];
-
-function readPersona(): string {
+function readLegacyPersona(): string {
   try {
     return localStorage.getItem(PERSONA_KEY) ?? "";
   } catch {
@@ -67,118 +61,133 @@ function readPersona(): string {
   }
 }
 
-function readCustom(): AiSkill[] {
-  try {
-    const raw = localStorage.getItem(SKILLS_KEY);
-    if (!raw) return [];
-    const v = JSON.parse(raw);
-    if (!Array.isArray(v)) return [];
-    return v
-      .filter((x) => x && typeof x.id === "string" && typeof x.name === "string" && typeof x.body === "string")
-      .map((x) => ({ id: x.id as string, name: x.name as string, body: x.body as string }));
-  } catch {
-    return [];
-  }
+function readLegacyCustom(): { id: string; name: string; body: string }[] {
+  const v = readJson<unknown>(SKILLS_KEY, []);
+  if (!Array.isArray(v)) return [];
+  return v.filter((x) => x && typeof x.id === "string" && typeof x.name === "string" && typeof x.body === "string");
 }
 
-function readSelected(): string[] {
-  try {
-    const raw = localStorage.getItem(SELECTED_KEY);
-    if (!raw) return [];
-    const v = JSON.parse(raw);
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
+function readLegacySelected(): string[] {
+  const v = readJson<unknown>(SELECTED_KEY, []);
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-function write(key: string, value: unknown): void {
-  try {
-    localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value));
-  } catch {
-    /* 忽略寫入失敗 */
-  }
+function toSkill(e: LibEntry): AiSkill {
+  const info = skillInfo(e);
+  return { id: e.name, name: info.title, body: info.body, builtin: e.layer === "builtin" };
 }
 
-/**
- * 組出要送給模型的系統提示詞。
- *
- * `generate` 模式（NL→SQL）只吃人設不吃技能：技能是給對話用的工作方式，
- * 套在「只回一句 SQL」的情境會把輸出帶偏。
- */
-export function composeSystemPrompt(persona: string, skills: AiSkill[], withSkills = true): string {
-  const parts: string[] = [];
-  const p = persona.trim() || defaultPersona();
-  parts.push(p);
-  if (withSkills) {
-    for (const s of skills) {
-      const name = s.builtin ? t(s.name) : s.name;
-      const body = s.builtin ? t(s.body) : s.body;
-      if (body.trim()) parts.push(`[${t("技能")}：${name}]\n${body.trim()}`);
-    }
-  }
-  return parts.join("\n\n");
+/** 目前勾選中的技能名稱：已遷移讀設定檔，否則沿用舊 localStorage 的選取（對應成新名稱）。 */
+function selectedNow(): string[] {
+  const s = libSettings().active_skills;
+  if (s) return s;
+  return readLegacySelected().map((id) => LEGACY_IDS[id] ?? id);
 }
 
 interface AiSkillsStore {
-  persona: string;
-  setPersona: (v: string) => void;
-  /** 使用者自訂的技能（內建的不存進來）。 */
-  custom: AiSkill[];
-  /** 勾選中的技能 id。 */
+  /** 助手對話勾選中的技能名稱。 */
   selected: string[];
   toggle: (id: string) => void;
-  add: (name: string, body: string) => string;
-  update: (id: string, patch: Partial<Pick<AiSkill, "name" | "body">>) => void;
-  remove: (id: string) => void;
-  /** 全部技能 = 內建 + 自訂。 */
+  /** 全部技能（資源庫勝出的版本）。 */
   all: () => AiSkill[];
-  /** 勾選中的技能物件（依 all() 的順序）。 */
+  /** 勾選中的技能（依 all() 的順序）。 */
   activeSkills: () => AiSkill[];
 }
 
 export const useAiSkills = create<AiSkillsStore>((set, get) => ({
-  persona: readPersona(),
-  setPersona: (v) => {
-    write(PERSONA_KEY, v);
-    set({ persona: v });
-  },
-  custom: readCustom(),
-  selected: readSelected(),
+  selected: selectedNow(),
   toggle: (id) => {
     const cur = get().selected;
     const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-    write(SELECTED_KEY, next);
     set({ selected: next });
+    // 樂觀更新：寫檔失敗就退回（store 的 error 會顯示在資源庫對話框）。
+    void updateLibrarySettings({ active_skills: next }).catch(() => set({ selected: cur }));
   },
-  add: (name, body) => {
-    const id = `skill:${Date.now().toString(36)}`;
-    const next = [...get().custom, { id, name, body }];
-    write(SKILLS_KEY, next);
-    set({ custom: next });
-    return id;
-  },
-  update: (id, patch) => {
-    const next = get().custom.map((s) => (s.id === id ? { ...s, ...patch } : s));
-    write(SKILLS_KEY, next);
-    set({ custom: next });
-  },
-  remove: (id) => {
-    const next = get().custom.filter((s) => s.id !== id);
-    const sel = get().selected.filter((x) => x !== id);
-    write(SKILLS_KEY, next);
-    write(SELECTED_KEY, sel);
-    set({ custom: next, selected: sel });
-  },
-  all: () => [...BUILTIN_SKILLS, ...get().custom],
+  all: () => entriesOf("skill").map(toSkill),
   activeSkills: () => {
     const sel = get().selected;
     return get().all().filter((s) => sel.includes(s.id));
   },
 }));
 
-/** 供元件外呼叫（送出前組提示詞）。 */
+// 資源庫快照換了（載入 / 其他視窗改了設定）→ 選取跟著設定檔走。
+useAiLibrary.subscribe((s, prev) => {
+  if (s.snapshot.settings.active_skills !== prev.snapshot.settings.active_skills) {
+    useAiSkills.setState({ selected: selectedNow() });
+  }
+});
+
+/** 助手（對話 / 一次性生成）目前的人設名稱。 */
+export function assistantPersonaName(): string {
+  const n = libSettings().assistant_persona?.trim();
+  return n && findEntry("agent", n) ? n : "assistant";
+}
+
+/**
+ * 組出要送給模型的系統提示詞（助手人設 + 勾選的技能）。
+ *
+ * 一次性模式（NL→SQL、編輯器改寫）只吃人設不吃技能：技能是給對話用的工作方式，
+ * 套在「只回一句 SQL」的情境會把輸出帶偏。
+ */
 export function currentSystemPrompt(withSkills = true): string {
-  const s = useAiSkills.getState();
-  return composeSystemPrompt(s.persona, withSkills ? s.activeSkills() : [], withSkills);
+  return personaSystemPrompt(assistantPersonaName(), { extraSkills: withSkills ? useAiSkills.getState().selected : [] });
+}
+
+/** 助手人設的候選（資源庫裡 dbkit-role: assistant 的人設）。 */
+export function assistantPersonas(): LibEntry[] {
+  return personas("assistant");
+}
+
+// ---------------------------------------------------------------------------
+// 舊版 localStorage → 資源庫
+// ---------------------------------------------------------------------------
+
+function slugify(name: string, taken: Set<string>): string {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "my-skill";
+  let s = base;
+  for (let i = 2; taken.has(s) || findEntry("skill", s); i++) s = `${base}-${i}`;
+  taken.add(s);
+  return s;
+}
+
+/**
+ * 一次性遷移：舊人設（非空才搬）→ `agents/my-assistant.md`；自訂技能 → `skills/<名>/SKILL.md`；
+ * 勾選 → `active_skills`。最後寫入 `migrated_local_v1`，之後不再執行。
+ * 任何一步失敗都不寫旗標——下次啟動再試，不會半途而廢地把使用者的東西弄丟。
+ */
+export async function migrateLegacySkills(): Promise<void> {
+  const { loaded, snapshot } = useAiLibrary.getState();
+  if (!loaded || snapshot.settings.migrated_local_v1) return;
+  const persona = readLegacyPersona().trim();
+  const custom = readLegacyCustom();
+  const idMap: Record<string, string> = { ...LEGACY_IDS };
+  const taken = new Set<string>();
+  let assistant = snapshot.settings.assistant_persona;
+  if (persona && !findEntry("agent", "my-assistant")) {
+    await saveLibraryEntry({
+      kind: "agent",
+      name: "my-assistant",
+      layer: "personal",
+      fields: {
+        description: t("從舊版 AI 設定搬過來的助手人設。"),
+        "dbkit-title": t("我的助手人設"),
+        "dbkit-role": "assistant",
+      },
+      body: persona,
+    });
+    assistant = "my-assistant";
+  }
+  for (const s of custom) {
+    const slug = slugify(s.name, taken);
+    await saveLibraryEntry({
+      kind: "skill",
+      name: slug,
+      layer: "personal",
+      fields: { description: s.name, "dbkit-title": s.name },
+      body: s.body,
+    });
+    idMap[s.id] = slug;
+  }
+  const active = readLegacySelected().map((id) => idMap[id] ?? id).filter((n) => !!findEntry("skill", n));
+  await updateLibrarySettings({ migrated_local_v1: true, assistant_persona: assistant, active_skills: active });
 }

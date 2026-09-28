@@ -24,7 +24,11 @@ const MAX_LIST: usize = 500;
 const MAX_HITS: usize = 200;
 
 /// 依助手模式與連線給出可用工具。`agent` 模式才有寫檔；有連線才有資料庫工具。
+/// `dba` 模式（DBA agent 審查）只給資料庫工具：審查者不該去翻助手的工作資料夾。
 pub fn specs(mode: &str, db: Option<&DbToolCtx>) -> Vec<ToolSpec> {
+    if mode == "dba" {
+        return db.map(db_specs).unwrap_or_default();
+    }
     let mut v = vec![
         ToolSpec {
             name: "read_file".into(),
@@ -68,13 +72,16 @@ pub fn specs(mode: &str, db: Option<&DbToolCtx>) -> Vec<ToolSpec> {
         });
     }
     if let Some(ctx) = db {
-        v.extend(dbtools::tool_defs(ctx.kind, ctx.prod).into_iter().map(|d| ToolSpec {
-            name: d.name.to_string(),
-            description: d.description,
-            schema: d.input_schema,
-        }));
+        v.extend(db_specs(ctx));
     }
     v
+}
+
+fn db_specs(ctx: &DbToolCtx) -> Vec<ToolSpec> {
+    dbtools::tool_defs_for(ctx)
+        .into_iter()
+        .map(|d| ToolSpec { name: d.name.to_string(), description: d.description, schema: d.input_schema })
+        .collect()
 }
 
 /// 把相對路徑接到工作資料夾底下；任何逃逸寫法都回 Err。
@@ -285,7 +292,7 @@ mod tests {
     }
 
     fn ctx(kind: DbKind) -> DbToolCtx {
-        DbToolCtx { manager: Arc::new(ConnectionManager::new()), conn_id: "c".into(), kind, database: None, prod: false }
+        DbToolCtx { manager: Arc::new(ConnectionManager::new()), conn_id: "c".into(), kind, database: None, prod: false, allow: None }
     }
 
     #[test]

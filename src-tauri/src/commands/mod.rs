@@ -1,3 +1,5 @@
+// AI 資源庫（人設 / 技能 / 提示範本）的 command。
+pub mod ai_library;
 // SSH 終端機 / SFTP / 已存主機的 command（含 TauriUi）。
 pub mod ssh;
 
@@ -1451,8 +1453,11 @@ pub async fn compare_data_cancel(run_id: String) -> AppResult<()> {
 // ---- 審查並執行（review_run/）----
 
 /// 分析 + 探測 + AI 審查提示。只送唯讀查詢；`sample_rows` > 0 時附上前像樣本給 AI。
+/// `personas` 為 DBA 人設清單（多位 = 會審）；空 = 依連線是否為正式環境取資源庫設定的預設人設。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn review_run_prepare(
+    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
     conn_label: String,
@@ -1460,7 +1465,10 @@ pub async fn review_run_prepare(
     script: String,
     max_capture_rows: Option<usize>,
     sample_rows: Option<usize>,
+    personas: Option<Vec<String>>,
 ) -> AppResult<crate::review_run::run::ReviewPrepared> {
+    let dir = store::app_config_dir(&app)?;
+    let (lib, lib_settings) = crate::ai_library::settings::load_library(&dir);
     crate::review_run::run::prepare_review(
         &state.manager,
         &id,
@@ -1469,6 +1477,9 @@ pub async fn review_run_prepare(
         &script,
         max_capture_rows.unwrap_or(0),
         sample_rows.unwrap_or(0),
+        &lib,
+        &lib_settings,
+        &personas.unwrap_or_default(),
     )
     .await
 }

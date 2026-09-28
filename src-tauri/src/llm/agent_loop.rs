@@ -38,6 +38,8 @@ fn params_for_mode(mode: &str) -> (u32, Option<f32>, bool) {
         "generate" => (1024, Some(0.0), false),
         "edit" => (4096, Some(0.0), false),
         "review" => (8192, Some(0.0), false),
+        // DBA agent 審查：要查資料庫（工具開），但結論要穩定（temperature 0）。
+        "dba" => (8192, Some(0.0), true),
         "agent" => (8192, None, true),
         _ => (8192, None, true),
     }
@@ -76,6 +78,7 @@ pub async fn run(
     prompt: String,
     system: Option<&str>,
     sink: Sink<'_>,
+    max_turns: Option<usize>,
 ) -> LlmResult<String> {
     if cfg.model.trim().is_empty() {
         return Err(t!("尚未指定模型").to_string());
@@ -91,7 +94,13 @@ pub async fn run(
     let mut last_sig: Option<String> = None;
     let mut repeat = 0usize;
 
-    for turn in 0..MAX_TURNS {
+    // 回合上限：呼叫端可收窄（DBA 人設的 maxTurns），但不超過全域上限。
+    // 收窄過的（limited）多給一個收尾回合：額度用完時在最後一筆工具結果後面附上「請直接下結論」，
+    // 讓模型拿已查到的資料交出審查，而不是整段作廢。不能改成「最後一回合不帶工具定義」——
+    // 歷史裡有 tool_use 卻沒有 tools，Anthropic 相容端點會直接回 400。
+    let limited = max_turns.is_some();
+    let turns = max_turns.map(|n| n.clamp(1, MAX_TURNS)).unwrap_or(MAX_TURNS);
+    for turn in 0..turns + usize::from(limited) {
         let req = TurnRequest { system, messages: history, tools: &specs, max_tokens, temperature };
         let out = stream_turn(http, cfg, &req, sink).await?;
 
@@ -106,6 +115,11 @@ pub async fn run(
                     answer.push_str(&format!("\n\n{}", t!("（回應長度達上限，內容可能不完整）")));
                 }
             }
+            return Ok(answer);
+        }
+        if turn >= turns {
+            // 收尾回合模型仍要呼叫工具：不再執行，交出目前的回答。
+            answer.push_str(&format!("\n\n{}", t!("（已達工具呼叫回合上限，內容可能不完整）")));
             return Ok(answer);
         }
 
@@ -162,10 +176,15 @@ pub async fn run(
             sink(StreamEvent::ToolDone(trace));
             results.push(ToolOutput { id: call.id.clone(), name: call.name.clone(), content, is_error });
         }
+        if limited && turn + 1 == turns {
+            if let Some(last) = results.last_mut() {
+                last.content.push_str(&format!("\n\n{}", t!("【系統】已用完這次的工具呼叫額度：請根據目前取得的資訊直接給出結論，不要再呼叫工具。")));
+            }
+        }
         history.push(Message::ToolResults(results));
         trim_history(history);
 
-        if turn == MAX_TURNS - 1 {
+        if !limited && turn == MAX_TURNS - 1 {
             return Err(tf!("超過 {n} 回合仍未收斂，已中止", n = MAX_TURNS));
         }
     }

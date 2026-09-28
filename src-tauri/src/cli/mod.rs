@@ -6,6 +6,7 @@
 //! 寫入類指令（`exec` / `db create·drop` / `table drop·truncate` / `redis` 的修改刪除）
 //! 一律要 `--yes`，高破壞動作再要 `--force`，避免在腳本裡手滑一行毀掉整個庫。
 
+mod ai;
 mod args;
 // 結構 / 資料比對：要同時開兩條連線，與 dispatch 的單連線流程分開放。
 mod compare;

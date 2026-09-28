@@ -1420,7 +1420,7 @@ interface ShellHandlers {
  * 為什麼一定要露出來：模型能自己對使用者的正式資料庫下查詢之後，「它到底查了什麼」
  * 就不再是實作細節而是稽核需求。只顯示一個工具名稱的徽章，等於要使用者盲信一段看不見的 SQL。
  */
-function ToolCalls({ calls, kind }: { calls: ToolCallView[]; kind: DbKind | null }) {
+export function ToolCalls({ calls, kind }: { calls: ToolCallView[]; kind: DbKind | null }) {
   const t = useT();
   const themeId = useTheme((s) => s.themeId);
   const appTheme = useTheme((s) => s.theme);

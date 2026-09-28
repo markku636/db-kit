@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
-import { Bot, Check, Plus, RotateCcw, Trash2, Wand2 } from "lucide-react";
+import { Bot, Check, Library, Trash2 } from "lucide-react";
 import { api, type AgentProvider } from "./api";
 import { useT } from "./i18n";
-import { Button, Field, Icon, Input, Modal, Select, Textarea } from "./ui/index";
+import { Button, Field, Icon, Input, Modal, Select } from "./ui/index";
+import lazyOverlay from "./ui/lazyOverlay";
 import { baseUrlOf, DEFAULT_BASE_URL, isApiProvider, presetsFor, PROVIDERS, useAiProvider } from "./aiProvider";
-import { BUILTIN_SKILLS, defaultPersona, useAiSkills } from "./aiSkills";
+import { assistantPersonaName, assistantPersonas, useAiSkills } from "./aiSkills";
+import { entryTitle, updateLibrarySettings, useAiLibrary } from "./aiLibrary";
 
-// AI 設定：API 供應商的連線（Base URL / 金鑰 / 模型）＋ 人設 ＋ 技能範本。
+const AiLibraryDialog = lazyOverlay(() => import("./AiLibraryDialog"));
+
+// AI 設定：API 供應商的連線（Base URL / 金鑰 / 模型）＋ 助手人設與技能的選擇（內容在 AI 資源庫）。
 //
 // 金鑰只寫進 OS keychain，前端拿不到明文 —— 所以輸入框永遠是空的，
 // 旁邊用「已設定 / 未設定」表示狀態，要換就直接覆寫、要刪就按清除。
@@ -19,14 +23,11 @@ export default function AiSettingsDialog({ open, onClose }: { open: boolean; onC
   const models = useAiProvider((s) => s.models);
   const setModel = useAiProvider((s) => s.setModel);
 
-  const persona = useAiSkills((s) => s.persona);
-  const setPersona = useAiSkills((s) => s.setPersona);
-  const custom = useAiSkills((s) => s.custom);
   const selected = useAiSkills((s) => s.selected);
   const toggle = useAiSkills((s) => s.toggle);
-  const addSkill = useAiSkills((s) => s.add);
-  const updateSkill = useAiSkills((s) => s.update);
-  const removeSkill = useAiSkills((s) => s.remove);
+  // 訂閱快照：資源庫改了（新增技能 / 換人設）清單要跟著更新。
+  const snapshot = useAiLibrary((s) => s.snapshot);
+  const [libOpen, setLibOpen] = useState(false);
 
   // 設定畫面獨立於「目前使用中的供應商」：可以先設定好 API，之後再切過去。
   const [target, setTarget] = useState<AgentProvider>(isApiProvider(provider) ? provider : "openai-api");
@@ -67,7 +68,11 @@ export default function AiSettingsDialog({ open, onClose }: { open: boolean; onC
     }
   };
 
-  const skills = [...BUILTIN_SKILLS, ...custom];
+  // snapshot 是刻意的依賴：assistantPersonas / all() 讀的是 store 的即時快照。
+  void snapshot;
+  const skills = useAiSkills.getState().all();
+  const assistantList = assistantPersonas();
+  const assistantName = assistantPersonaName();
 
   return (
     <Modal open={open} onClose={onClose} title={t("AI 設定")} icon={Bot} size="lg">
@@ -177,90 +182,48 @@ export default function AiSettingsDialog({ open, onClose }: { open: boolean; onC
         </section>
 
         <section className="space-y-3 border-t border-fg/10 pt-4">
-          <div className="text-xs font-medium text-fg/70">{t("人設")}</div>
-          <Field hint={t("四種供應商共用。留白就用內建的預設人設。")}>
-            <Textarea
-              rows={4}
-              value={persona}
-              placeholder={defaultPersona()}
-              onChange={(e) => setPersona(e.target.value)}
-            />
-          </Field>
-          {persona.trim() !== "" && (
-            <Button variant="ghost" icon={RotateCcw} onClick={() => setPersona("")}>
-              {t("還原預設人設")}
-            </Button>
-          )}
-        </section>
-
-        <section className="space-y-3 border-t border-fg/10 pt-4">
           <div className="flex items-center gap-2">
-            <div className="text-xs font-medium text-fg/70">{t("技能")}</div>
-            <span className="text-[11px] text-fg/40">{t("勾起來的會附在人設後面，可複選")}</span>
-            <Button
-              className="ml-auto"
-              variant="ghost"
-              icon={Plus}
-              onClick={() => addSkill(t("新技能"), "")}
-            >
-              {t("新增")}
+            <div className="text-xs font-medium text-fg/70">{t("人設與技能")}</div>
+            <Button className="ml-auto" variant="ghost" icon={Library} onClick={() => setLibOpen(true)}>
+              {t("開啟 AI 資源庫…")}
             </Button>
           </div>
-
-          <div className="space-y-2">
-            {skills.map((s) => {
-              const on = selected.includes(s.id);
-              const name = s.builtin ? t(s.name) : s.name;
-              const body = s.builtin ? t(s.body) : s.body;
-              return (
-                <div key={s.id} className="rounded border border-fg/10 bg-inset/40 p-2 space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => toggle(s.id)}
-                      title={on ? t("停用") : t("啟用")}
-                      className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 ${
-                        on ? "bg-accent border-accent text-white" : "border-fg/25 text-transparent"
-                      }`}
-                    >
-                      <Icon icon={Check} size={11} />
-                    </button>
-                    {s.builtin ? (
-                      <span className="text-xs text-fg/80">{name}</span>
-                    ) : (
-                      <Input
-                        inputSize="sm"
-                        className="flex-1"
-                        value={s.name}
-                        onChange={(e) => updateSkill(s.id, { name: e.target.value })}
-                      />
-                    )}
-                    {s.builtin ? (
-                      <Button
-                        className="ml-auto"
-                        variant="ghost"
-                        icon={Wand2}
-                        onClick={() => addSkill(`${name}（${t("自訂")}）`, body)}
-                      >
-                        {t("複製為自訂")}
-                      </Button>
-                    ) : (
-                      <Button className="ml-auto" variant="ghost" icon={Trash2} onClick={() => removeSkill(s.id)}>
-                        {t("刪除")}
-                      </Button>
-                    )}
-                  </div>
-                  {s.builtin ? (
-                    <div className="text-[11px] text-fg/50 leading-relaxed pl-6">{body}</div>
-                  ) : (
-                    <Textarea rows={3} value={s.body} onChange={(e) => updateSkill(s.id, { body: e.target.value })} />
-                  )}
-                </div>
-              );
-            })}
+          <div className="text-[11px] text-fg/45 leading-relaxed">
+            {t("人設、技能與所有提示範本都是 AI 資源庫裡的 Markdown 檔（格式相容 Claude Code / Codex）：可以在資源庫編輯、覆蓋內建版本，或加入團隊共用的資料夾。")}
           </div>
+          <Field label={t("助手人設")} hint={t("對話、NL→SQL 與編輯器 AI 動作共用；四種供應商都吃同一份。")}>
+            <Select value={assistantName} onChange={(e) => void updateLibrarySettings({ assistant_persona: e.target.value }).catch(() => {})}>
+              {assistantList.map((e) => (
+                <option key={e.name} value={e.name}>
+                  {entryTitle(e)} · {e.layerLabel}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={t("助手對話勾選的技能")} hint={t("勾起來的會附在人設後面，可複選；一次性生成（NL→SQL、改寫）不帶技能。")}>
+            <div className="flex flex-wrap gap-1.5">
+              {skills.map((s) => {
+                const on = selected.includes(s.id);
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => toggle(s.id)}
+                    title={on ? t("停用") : t("啟用")}
+                    className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] ${
+                      on ? "border-accent bg-accent/15 text-fg" : "border-fg/15 text-fg/60 hover:border-fg/30"
+                    }`}
+                  >
+                    {on && <Icon icon={Check} size={11} />}
+                    {s.name}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
         </section>
       </div>
+      {libOpen && <AiLibraryDialog open onClose={() => setLibOpen(false)} />}
     </Modal>
   );
 }

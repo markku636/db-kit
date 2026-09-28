@@ -728,6 +728,9 @@ fn claude_flags_for_mode(mode: &str) -> (&'static str, &'static str) {
         // 一次性語句生成 / 改寫（NL→SQL / NL→ES DSL / 編輯器改寫）：零工具、單回合，回覆即語句。
         // 空 allowedTools + dontAsk → 清單外一律自動拒絕（見下方 agent_send 略過旗標）。
         "generate" | "edit" | "review" => ("dontAsk", ""),
+        // DBA agent 審查：只放行掛上的 dbkit MCP 工具（claude_args 依 tool_names 補上），
+        // 不給 Read / Grep / Web——審查者要看的是資料庫，不是工作資料夾或網路。
+        "dba" => ("dontAsk", ""),
         // 純問答 / 產生腳本文字（預設）：只放行唯讀與查資料工具。
         _ => ("dontAsk", "Read,Glob,Grep,WebSearch,WebFetch"),
     }
@@ -748,6 +751,7 @@ fn claude_args(
     model: Option<&str>,
     system_prompt: Option<&str>,
     mcp: Option<&McpAttach>,
+    max_turns: Option<u32>,
 ) -> Vec<String> {
     let (perm, allowed) = claude_flags_for_mode(mode);
     let mut a: Vec<String> = vec![
@@ -782,6 +786,10 @@ fn claude_args(
     if is_one_shot_mode(mode) {
         a.push("--max-turns".into());
         a.push("1".into());
+    } else if let Some(n) = max_turns.filter(|n| *n > 0) {
+        // DBA agent：回合數由人設的 maxTurns 決定（查幾次資料庫、再下結論）。
+        a.push("--max-turns".into());
+        a.push(n.to_string());
     }
     if let Some(sid) = session_id {
         a.push("--resume".into());
@@ -867,27 +875,32 @@ fn db_ctx(state: &AppState, mode: &str, connection_id: Option<&str>, database: O
     DbToolCtx::from_manager(state.manager.clone(), id, database).ok()
 }
 
-/// 給模型的工具使用指引（接在人設 / 技能之後）。不含主機 / 帳密，只講「有哪些工具、怎麼用」。
-fn db_tools_guidance(ctx: &DbToolCtx, via_mcp: bool) -> String {
-    let names = crate::dbtools::tool_defs(ctx.kind, ctx.prod)
+/// 給模型的工具使用指引（接在人設 / 技能之後），範本是資源庫的 `prompts/tool-guidance.md`（可覆蓋）。
+/// 不含主機 / 帳密，只講「有哪些工具、怎麼用」；DBA agent 模式另加「先驗證再下結論」那段。
+fn db_tools_guidance(lib: &crate::ai_library::Library, ctx: &DbToolCtx, via_mcp: bool, dba: bool) -> String {
+    let names = crate::dbtools::tool_defs_for(ctx)
         .into_iter()
         .map(|d| if via_mcp { format!("mcp__{MCP_SERVER_NAME}__{}", d.name) } else { d.name.to_string() })
         .collect::<Vec<_>>()
         .join(" / ");
-    let target = match &ctx.database {
-        Some(db) => tf!("{kind} 連線，目前資料庫：{db}", kind = ctx.kind.as_str(), db = db),
-        None => tf!("{kind} 連線", kind = ctx.kind.as_str()),
-    };
-    let mut s = tf!(
-        "【資料庫工具】你可以用這些工具直接讀取使用者目前在 db-kit 的 {target}：{names}。全部唯讀。寫查詢前先用 describe_table 確認欄名與型別；查詢一律加 LIMIT；不要猜測不存在的表或欄位，先 list_tables。需要看資料時直接呼叫工具，不要請使用者代跑；回答時附上你實際執行的查詢。",
-        target = target,
-        names = names
-    );
-    if ctx.prod {
-        s.push(' ');
-        s.push_str(&t!("此連線是正式環境：查詢保持輕量（小 LIMIT、避免全表掃描、不要重複同一條查詢）。"));
+    if names.is_empty() {
+        return String::new();
     }
-    s
+    let mut vars = crate::ai_library::render::Vars::new();
+    vars.insert("kind".into(), ctx.kind.as_str().into());
+    vars.insert("database".into(), ctx.database.clone().unwrap_or_default());
+    vars.insert("tools".into(), names);
+    vars.insert("production".into(), if ctx.prod { "1".into() } else { String::new() });
+    vars.insert("dba".into(), if dba { "1".into() } else { String::new() });
+    lib.render_task("tool-guidance", &vars, crate::i18n::current().as_code()).map(|r| r.text).unwrap_or_default()
+}
+
+/// 目前設定目錄的資源庫（每次送出都重讀：團隊資料夾 git pull 之後不必重開 App）。
+fn load_library(app: &AppHandle) -> crate::ai_library::Library {
+    match crate::store::app_config_dir(app) {
+        Ok(dir) => crate::ai_library::settings::load_library(&dir).0,
+        Err(_) => crate::ai_library::Library::builtin_only(),
+    }
 }
 
 /// 人設 / 技能 + 工具指引合成系統提示（兩者都可能沒有）。
@@ -942,6 +955,12 @@ fn dbk_mcp_args(ctx: &DbToolCtx) -> Vec<String> {
     }
     a.push("--lang".to_string());
     a.push(crate::i18n::current().as_code().to_string());
+    // 工具白名單交給 dbk mcp 自己擋（Codex 沒有 allowedTools，只能在伺服器端限制）。
+    if let Some(allow) = &ctx.allow {
+        a.push("--tools".to_string());
+        // 空清單也要表達「一個都不給」：傳一個不存在的名稱讓伺服器端過濾成空。
+        a.push(if allow.is_empty() { "none".to_string() } else { allow.join(",") });
+    }
     a
 }
 
@@ -963,7 +982,7 @@ async fn mcp_attach(app: &AppHandle, ctx: &DbToolCtx, req_id: &str) -> Option<Mc
     let config_path = dir.join(format!("{}.json", crate::schema_cache::sanitize_id(req_id)));
     let body = serde_json::to_vec_pretty(&mcp_config_json(&command, &args)).ok()?;
     tokio::fs::write(&config_path, body).await.ok()?;
-    let tool_names = crate::dbtools::tool_defs(ctx.kind, ctx.prod).into_iter().map(|d| d.name).collect();
+    let tool_names = crate::dbtools::tool_defs_for(ctx).into_iter().map(|d| d.name).collect();
     Some(McpAttach { config_path, command, args, tool_names })
 }
 
@@ -1060,6 +1079,8 @@ pub async fn agent_send(
     system_prompt: Option<String>,
     connection_id: Option<String>,
     database: Option<String>,
+    max_turns: Option<u32>,
+    db_tools: Option<Vec<String>>,
 ) -> AppResult<()> {
     let p = Provider::parse(provider.as_deref());
     let workspace = workspace_dir(&app).await?;
@@ -1071,13 +1092,20 @@ pub async fn agent_send(
     let model = model.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let sys = system_prompt.as_deref().map(str::trim).filter(|s| !s.is_empty());
     // 前端附帶的連線 → 資料庫工具上下文（一次性模式 / 未連線時為 None）。
-    let db = db_ctx(&state, &mode, connection_id.as_deref(), database.as_deref());
+    // DBA agent 模式的工具可再由人設 / 隱私設定收窄（db_tools）。
+    let db = db_ctx(&state, &mode, connection_id.as_deref(), database.as_deref()).map(|c| c.with_allow(db_tools));
+    let dba = mode == "dba";
+    if dba && db.is_none() {
+        return Err(AppError::Query(t!("DBA agent 審查需要已連線的資料庫連線；請先連線，或改用一次性審查").into()));
+    }
+    let lib = load_library(&app);
 
     // ---- HTTP 供應商：不開子程序，直接跑工具迴圈 ----
     if let Some(kind) = p.llm_kind() {
-        let guidance = db.as_ref().map(|c| db_tools_guidance(c, false));
+        let guidance = db.as_ref().map(|c| db_tools_guidance(&lib, c, false, dba));
         let sys = compose_system(sys, guidance.as_deref());
-        return llm_send(app, state, req_id, prompt, sid, model, &mode, kind, base_url.as_deref(), sys.as_deref(), workspace, db).await;
+        let turns = max_turns.map(|n| n.clamp(1, 40) as usize);
+        return llm_send(app, state, req_id, prompt, sid, model, &mode, kind, base_url.as_deref(), sys.as_deref(), workspace, db, turns).await;
     }
 
     let bin = resolve_bin(p).await.ok_or_else(|| {
@@ -1093,7 +1121,7 @@ pub async fn agent_send(
         None => None,
     };
     let guidance = match (&db, &mcp) {
-        (Some(c), Some(_)) => Some(db_tools_guidance(c, matches!(p, Provider::Claude))),
+        (Some(c), Some(_)) => Some(db_tools_guidance(&lib, c, matches!(p, Provider::Claude), dba)),
         _ => None,
     };
     let sys_full = compose_system(sys, guidance.as_deref());
@@ -1106,7 +1134,7 @@ pub async fn agent_send(
     };
 
     let args = match p {
-        Provider::Claude => claude_args(&mode, sid, model, sys, mcp.as_ref()),
+        Provider::Claude => claude_args(&mode, sid, model, sys, mcp.as_ref(), max_turns.map(|n| n.clamp(1, 40))),
         Provider::Codex => codex_args(&mode, &workspace, sid, model, mcp.as_ref()),
         // 上面已提前 return，這裡到不了。
         Provider::AnthropicApi | Provider::OpenAiApi => unreachable!(),
@@ -1246,6 +1274,7 @@ async fn llm_send(
     system_prompt: Option<&str>,
     workspace: PathBuf,
     db: Option<DbToolCtx>,
+    max_turns: Option<usize>,
 ) -> AppResult<()> {
     let cfg = crate::llm::LlmConfig::resolve(kind, base_url, model);
     if cfg.base.is_empty() {
@@ -1290,7 +1319,8 @@ async fn llm_send(
     let system_prompt = system_prompt.map(String::from);
     // 一次性模式沒有 session 可以續（前端每次都帶 sessionId = null），落地只會堆出一次一檔的歷史；
     // 而審查提示可能夾帶前像樣本資料，更不該留在設定目錄裡。
-    let persist_dir = if is_one_shot_mode(&mode) { None } else { config_dir.clone() };
+    // DBA agent 審查同理：審查中查到的資料不該落地成對話歷史。
+    let persist_dir = if is_one_shot_mode(&mode) || mode == "dba" { None } else { config_dir.clone() };
     let persist_provider = match cfg.kind {
         crate::llm::LlmKind::Anthropic => "anthropic-api",
         crate::llm::LlmKind::OpenAi => "openai-api",
@@ -1337,6 +1367,7 @@ async fn llm_send(
             prompt,
             system_prompt.as_deref(),
             &sink,
+            max_turns,
         )
         .await;
 
@@ -1567,7 +1598,7 @@ mod tests {
     #[test]
     fn claude_args_attach_mcp_only_in_conversational_modes() {
         let m = attach();
-        let a = claude_args("advise", None, None, None, Some(&m));
+        let a = claude_args("advise", None, None, None, Some(&m), None);
         let allowed = a[a.iter().position(|x| x == "--allowedTools").unwrap() + 1].clone();
         assert!(allowed.contains("Read,Glob,Grep"));
         assert!(allowed.contains("mcp__dbkit__list_tables"));
@@ -1580,13 +1611,13 @@ mod tests {
 
         // generate / edit：不掛 MCP、單回合、無 allowedTools。
         for mode in ["generate", "edit", "review"] {
-            let g = claude_args(mode, None, None, None, Some(&m));
+            let g = claude_args(mode, None, None, None, Some(&m), None);
             assert!(!g.contains(&"--mcp-config".to_string()), "{mode}");
             assert!(!g.contains(&"--allowedTools".to_string()), "{mode}");
             assert!(g.contains(&"--max-turns".to_string()), "{mode}");
         }
         // 沒有 MCP 時與舊行為相同。
-        let plain = claude_args("agent", Some("s1"), Some("opus"), Some("persona"), None);
+        let plain = claude_args("agent", Some("s1"), Some("opus"), Some("persona"), None, None);
         assert!(!plain.contains(&"--mcp-config".to_string()));
         assert!(plain.windows(2).any(|w| w[0] == "--resume" && w[1] == "s1"));
         assert!(plain.windows(2).any(|w| w[0] == "--append-system-prompt" && w[1] == "persona"));

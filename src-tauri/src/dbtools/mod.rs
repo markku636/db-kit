@@ -64,6 +64,9 @@ pub struct DbToolCtx {
     pub database: Option<String>,
     /// 連線標記為正式環境（`options.prod == "1"`）：工具說明會多提醒模型保持查詢輕量。
     pub prod: bool,
+    /// 這次對話允許的工具子集（DBA 人設的 `tools`、執行前審查的隱私限制）；None = 全部。
+    /// 工具清單與 `call` 都依它過濾——模型硬叫清單外的工具也會被擋下，不只是「沒列出來」。
+    pub allow: Option<Vec<String>>,
 }
 
 impl DbToolCtx {
@@ -81,8 +84,24 @@ impl DbToolCtx {
             kind,
             database: database.map(str::trim).filter(|s| !s.is_empty()).map(String::from),
             prod,
+            allow: None,
         })
     }
+
+    /// 限定可用工具（空清單 = 一個都不給；未知名稱忽略）。
+    pub fn with_allow(mut self, allow: Option<Vec<String>>) -> DbToolCtx {
+        self.allow = allow.map(|a| a.into_iter().filter(|n| is_db_tool(n)).collect());
+        self
+    }
+
+    pub fn allows(&self, name: &str) -> bool {
+        self.allow.as_ref().is_none_or(|a| a.iter().any(|n| n == name))
+    }
+}
+
+/// 這個上下文實際可用的工具（依種類、正式環境與 `allow` 過濾）。
+pub fn tool_defs_for(ctx: &DbToolCtx) -> Vec<ToolDef> {
+    tool_defs(ctx.kind, ctx.prod).into_iter().filter(|d| ctx.allows(d.name)).collect()
 }
 
 /// 供應商中立的工具定義；`llm::ToolSpec` 與 MCP `inputSchema` 都由此映射。
@@ -585,6 +604,9 @@ fn mongo_inject_db(query: &str, db: &str) -> String {
 
 /// 執行一支工具。Err 為給模型看的錯誤文字（迴圈會標成 is_error 回傳，讓模型自行修正）。
 pub async fn call(ctx: &DbToolCtx, name: &str, args: &Value) -> Result<ToolOutcome, String> {
+    if is_db_tool(name) && !ctx.allows(name) {
+        return Err(tf!("這次審查不允許使用 {name}（DBA 人設或隱私設定限制了可用的工具）", name = name));
+    }
     let started = Instant::now();
     let m = &ctx.manager;
     let id = ctx.conn_id.as_str();
@@ -847,6 +869,7 @@ mod tests {
             kind: DbKind::Mysql,
             database: Some("db".into()),
             prod: false,
+            allow: None,
         };
         assert!(call(&ctx, "list_tables", &json!({})).await.is_err());
         assert!(call(&ctx, "bogus", &json!({})).await.unwrap_err().contains("未知的工具"));
@@ -860,6 +883,26 @@ mod tests {
         assert!(call(&k, "run_query", &json!({ "query": "x" })).await.is_err());
     }
 
+    #[tokio::test]
+    async fn allow_list_filters_defs_and_blocks_calls() {
+        let ctx = DbToolCtx {
+            manager: Arc::new(ConnectionManager::new()),
+            conn_id: "nope".into(),
+            kind: DbKind::Mysql,
+            database: None,
+            prod: false,
+            allow: None,
+        }
+        .with_allow(Some(vec!["describe_table".into(), "explain_query".into(), "bogus".into()]));
+        let names: Vec<_> = tool_defs_for(&ctx).into_iter().map(|d| d.name).collect();
+        assert_eq!(names, ["describe_table", "explain_query"]);
+        let e = call(&ctx, "run_query", &json!({ "query": "select 1" })).await.unwrap_err();
+        assert!(e.contains("run_query"), "{e}");
+        // 允許的工具照常往下走（這裡因為沒連線而失敗，但不是被白名單擋下）。
+        let e2 = call(&ctx, "describe_table", &json!({ "table": "t" })).await.unwrap_err();
+        assert!(!e2.contains("不允許"), "{e2}");
+    }
+
     #[test]
     fn resolve_db_precedence() {
         let ctx = DbToolCtx {
@@ -868,6 +911,7 @@ mod tests {
             kind: DbKind::Mysql,
             database: Some("dflt".into()),
             prod: false,
+            allow: None,
         };
         assert_eq!(resolve_db(&ctx, &json!({ "database": "  other " })).unwrap(), "other");
         assert_eq!(resolve_db(&ctx, &json!({})).unwrap(), "dflt");

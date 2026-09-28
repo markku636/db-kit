@@ -37,6 +37,11 @@ export interface AiDiffDialogProps {
   /** 送給模型的提示；「重新生成」會再送一次同一份。 */
   prompt: string;
   /**
+   * 已經有的改寫（DBA 審查回覆裡的修正 SQL）：給了就不再呼叫模型，直接拿它當提案做差異預覽，
+   * 也不顯示「重新生成」（重新生成的是審查，不是這段 SQL）。
+   */
+  proposal?: string | null;
+  /**
    * 編輯器內容是否已經變動到無法就地套用。父層比對「當初那段文字是否還在原位」，
    * 變了就只能另開分頁——直接照舊位移覆蓋會砍掉使用者自己新打的字。
    */
@@ -47,14 +52,14 @@ export interface AiDiffDialogProps {
 }
 
 export default function AiDiffDialog({
-  title, kind, scopeLabel, original, prompt, isStale, onAccept, onOpenInNewTab, onClose,
+  title, kind, scopeLabel, original, prompt, proposal = null, isStale, onAccept, onOpenInNewTab, onClose,
 }: AiDiffDialogProps) {
   const t = useT();
   const themeId = useTheme((s) => s.themeId);
   const appTheme = useTheme((s) => s.theme);
   const { text, running, error, run, cancel } = useOneShotGenerate({ mode: "edit" });
   // 使用者在 merge 視圖裡的最終文字（逐塊拒絕 / 手動微調之後）。
-  const [draft, setDraft] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string | null>(proposal);
   const [noStatement, setNoStatement] = useState(false);
   const startedRef = useRef(false);
 
@@ -62,7 +67,7 @@ export default function AiDiffDialog({
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    void run(prompt);
+    if (proposal == null) void run(prompt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -157,7 +162,7 @@ export default function AiDiffDialog({
           )}
           <Button variant="ghost" icon={X} onClick={onClose}>{t("拒絕")}</Button>
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="ghost" icon={RotateCw} onClick={regenerate} disabled={running}>{t("重新生成")}</Button>
+            {proposal == null && <Button variant="ghost" icon={RotateCw} onClick={regenerate} disabled={running}>{t("重新生成")}</Button>}
             <Button variant="ghost" icon={ClipboardCopy} onClick={() => void copyToClipboard(final)} disabled={!draft}>{t("複製")}</Button>
             <Button variant="secondary" icon={ExternalLink} onClick={() => { onOpenInNewTab(final); onClose(); }} disabled={!draft}>
               {t("在新分頁開啟")}

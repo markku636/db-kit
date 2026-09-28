@@ -18,6 +18,8 @@ use super::capture::{self, ExecContext, TableSnapshot};
 use super::plan::{self, clamp_cap, NoteLevel, Prepared, RollbackLevel, SchemaGroup, StatementProbe, Strategy};
 use super::report::{self, DiffSummary, RunManifest, RunStatus, StatementRecord, StmtStatus};
 use super::rollback::{self, Fragment, Line, PreOp, RowOp, TableDiff};
+use crate::ai_library::settings::AiLibrarySettings;
+use crate::ai_library::Library;
 use crate::compare::ddl::SyncOptions;
 use crate::compare::diff::DiffOptions;
 use crate::compare::schema::DbSchema;
@@ -79,16 +81,65 @@ pub struct RunOutcome {
     pub diff_preview: String,
 }
 
+/// 一位 DBA 審查者：人設的系統提示 + agent 參數。會審時 user 提示共用，system 各一份。
+#[derive(Debug, Clone, Serialize)]
+pub struct PersonaReview {
+    pub persona: String,
+    pub title: String,
+    pub system: String,
+    pub max_turns: u32,
+    /// 這次審查允許的唯讀資料庫工具；None = 不給工具（人設關閉、或 CLI 外部指令）。
+    pub db_tools: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ReviewPrepared {
     pub prepared: Prepared,
+    /// 使用者訊息（任務範本 + 上下文 + 結論契約）。
     pub prompt: String,
+    pub reviews: Vec<PersonaReview>,
 }
 
 const PREVIEW_BYTES: usize = 64 * 1024;
 const MAX_SAMPLE_ROWS: usize = 20;
 
+/// 執行前審查可用的唯讀工具。預設不送任何資料給 AI（與「附前像樣本」同一個開關）：
+/// 樣本列數為 0 時只給看結構與計畫的工具，不給會撈出實際資料的 `sample_rows` / `run_query`。
+fn pre_exec_tools(allow: Option<&[String]>, sample_rows: usize) -> Vec<String> {
+    let all = crate::dbtools::TOOL_NAMES.iter().map(|s| s.to_string());
+    let mut v: Vec<String> = match allow {
+        Some(a) => all.filter(|t| a.contains(t)).collect(),
+        None => all.collect(),
+    };
+    if sample_rows == 0 {
+        v.retain(|t| t != "sample_rows" && t != "run_query");
+    }
+    v
+}
+
+/// 依人設清單（空 = 依連線是否為正式環境取設定的預設人設）組各審查者的系統提示。
+pub fn persona_reviews(lib: &Library, settings: &AiLibrarySettings, personas: &[String], prod: bool, sample_rows: usize) -> Vec<PersonaReview> {
+    let lang = crate::i18n::current().as_code();
+    let names: Vec<String> = if personas.iter().any(|p| !p.trim().is_empty()) {
+        personas.iter().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()
+    } else {
+        vec![settings.dba_persona_for(prod)]
+    };
+    let mut out = Vec::new();
+    for n in names {
+        let info = lib.persona(&n, lang);
+        let system = lib.persona_system(Some(&n), lang, &[], &[]);
+        let (title, max_turns, db_tools) = match &info {
+            Some(i) => (i.title.clone(), i.max_turns, i.db_tools.then(|| pre_exec_tools(i.tool_allow.as_deref(), sample_rows))),
+            None => (n.clone(), 10, None),
+        };
+        out.push(PersonaReview { persona: n, title, system, max_turns, db_tools });
+    }
+    out
+}
+
 /// 分析 + 探測 + AI 審查提示（可附前像樣本）。
+#[allow(clippy::too_many_arguments)]
 pub async fn prepare_review(
     mgr: &ConnectionManager,
     id: &str,
@@ -97,6 +148,9 @@ pub async fn prepare_review(
     script: &str,
     cap: usize,
     sample_rows: usize,
+    lib: &Library,
+    settings: &AiLibrarySettings,
+    personas: &[String],
 ) -> AppResult<ReviewPrepared> {
     let prep = plan::prepare(mgr, id, database, script, cap).await?;
     let sample_rows = sample_rows.min(MAX_SAMPLE_ROWS);
@@ -125,8 +179,9 @@ pub async fn prepare_review(
         }
     }
     let samples: Vec<report::Sample<'_>> = snaps.iter().map(|(i, s)| report::Sample { index: *i, snapshot: s }).collect();
-    let prompt = report::build_review_prompt(&prep, conn_label, script, &samples, crate::i18n::current());
-    Ok(ReviewPrepared { prepared: prep, prompt })
+    let prompt = report::build_review_prompt(lib, &prep, conn_label, script, &samples, crate::i18n::current());
+    let reviews = persona_reviews(lib, settings, personas, prep.prod, sample_rows);
+    Ok(ReviewPrepared { prepared: prep, prompt, reviews })
 }
 
 // ---------------------------------------------------------------------------

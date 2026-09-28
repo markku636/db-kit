@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Copy, FileCode2, FolderOpen, Info, Loader2, Play,
-  RefreshCw, RotateCcw, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, XCircle,
+  RefreshCw, RotateCcw, Settings2, ShieldAlert, ShieldCheck, Square, XCircle,
 } from "lucide-react";
 import {
   api, onReviewRunProgress,
@@ -12,13 +12,14 @@ import { useStore, type ReviewRunRequest } from "./store";
 import { copyToClipboard, pickDirectory, toast, uiConfirm } from "./ui";
 import { Badge, Button, Icon, Modal, Segmented } from "./ui/index";
 import type { BadgeTone } from "./ui/index";
-import { useOneShotGenerate } from "./useOneShotGenerate";
 import { parseBlocks, TextBlock } from "./MarkdownLite";
 import AiSettingsDialog from "./AiSettingsDialog";
+import DbaReviewPane, { type DbaPrepared, type DbaReviewState } from "./DbaReviewPane";
+import { reviewersFor } from "./dbaReview";
 import {
   backupBlockReason, executeBlockReason, incompleteCount, joinPath, loadReviewRunPrefs, MAX_CAPTURE_ROWS,
-  MAX_SAMPLE_ROWS, opLabel, parseVerdict, saveReviewRunPrefs, stripVerdictLine, summarizeStatements,
-  type ExecuteBlockReason, type ReviewRunPrefs, type Verdict,
+  MAX_SAMPLE_ROWS, opLabel, saveReviewRunPrefs, summarizeStatements,
+  type ExecuteBlockReason, type ReviewRunPrefs,
 } from "./reviewRun";
 import { useT } from "./i18n";
 
@@ -54,9 +55,11 @@ export default function ReviewRunDialog({ request, onClose }: { request: ReviewR
   // 分析時用的選項：改了擷取上限 / 樣本列數之後要重新分析，按鈕才亮。
   const [analyzedWith, setAnalyzedWith] = useState<{ maxRows: number; sampleRows: number } | null>(null);
 
-  const ai = useOneShotGenerate({ mode: "review" });
+  // DBA 審查（可多位會審）的狀態由 DbaReviewPane 回報：結論、全文（寫進 review.md）、是否還在跑。
+  const [ai, setAi] = useState<DbaReviewState>({ text: "", verdict: null, running: false });
+  const [autoKey, setAutoKey] = useState<number | null>(null);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
-  const verdict = useMemo(() => parseVerdict(ai.text), [ai.text]);
+  const verdict = ai.verdict;
 
   const [tab, setTab] = useState<Tab>("review");
   const [ackIncomplete, setAckIncomplete] = useState(false);
@@ -72,15 +75,14 @@ export default function ReviewRunDialog({ request, onClose }: { request: ReviewR
     setLoading(true);
     setPrepErr(null);
     setAckIncomplete(false);
-    ai.cancel();
-    ai.reset();
+    setAutoKey(null);
     try {
       const res = await api.reviewRunPrepare(request.connId, connLabel, request.database, request.sql, prefs.maxRows, prefs.sampleRows);
       setPrep(res);
       setAnalyzedWith({ maxRows: prefs.maxRows, sampleRows: prefs.sampleRows });
       // 有問題的語句預設展開：使用者第一眼就該看到理由，不是一排綠勾。
       setExpanded(new Set(res.prepared.statements.filter((s) => s.notes.some((n) => n.level !== "info")).map((s) => s.index)));
-      if (withAi && res.prepared.has_writes && res.prepared.blockers.length === 0) void ai.run(res.prompt);
+      if (withAi && res.prepared.has_writes && res.prepared.blockers.length === 0) setAutoKey(Date.now());
     } catch (e: any) {
       setPrep(null);
       setPrepErr(e?.message ?? String(e));
@@ -96,6 +98,20 @@ export default function ReviewRunDialog({ request, onClose }: { request: ReviewR
   }, []);
 
   const p = prep?.prepared ?? null;
+
+  // 人設 → 審查者。user 提示用後端組好的那一份（與 `dbk run` 相同）；系統提示由資源庫的人設組（與後端同一套規則）。
+  // 前像樣本為 0 時不給會撈出實際資料的工具——與「預設不送任何資料給 AI」同一個承諾。
+  const preparePersonas = async (names: string[]): Promise<DbaPrepared | null> => {
+    if (!prep) return null;
+    const samples = analyzedWith?.sampleRows ?? prefs.sampleRows;
+    return {
+      prompt: prep.prompt,
+      reviewers: reviewersFor(names).map((r) => ({
+        ...r,
+        dbTools: r.dbTools && (samples > 0 ? r.dbTools : r.dbTools.filter((x) => x !== "sample_rows" && x !== "run_query")),
+      })),
+    };
+  };
   const summary = useMemo(() => summarizeStatements(p?.statements ?? []), [p]);
   const optionsStale = !!analyzedWith && (analyzedWith.maxRows !== prefs.maxRows || analyzedWith.sampleRows !== prefs.sampleRows);
 
@@ -365,28 +381,33 @@ export default function ReviewRunDialog({ request, onClose }: { request: ReviewR
         <div className="flex-1 min-w-0 min-h-0 flex flex-col">
           <div className="flex items-center gap-2 px-3 py-2 border-b border-fg/10">
             <Segmented options={tabs} value={tab} onChange={setTab} size="sm" />
-            {tab === "review" && (
-              <div className="ml-auto flex items-center gap-2">
-                {verdict && <VerdictBadge verdict={verdict} />}
-                {ai.running ? (
-                  <Button size="sm" variant="danger" icon={Square} onClick={ai.cancel}>{t("停止")}</Button>
-                ) : (
-                  <Button size="sm" icon={Sparkles} disabled={!prep || loading || running !== null || !p?.has_writes}
-                    onClick={() => prep && void ai.run(prep.prompt)}>
-                    {ai.text ? t("重新審查") : t("AI 審查")}
-                  </Button>
-                )}
-              </div>
-            )}
           </div>
           <div className="flex-1 min-h-0 overflow-auto p-4">
             {runErr && (
               <div className="mb-3 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300 whitespace-pre-wrap">{runErr}</div>
             )}
-            {tab === "review" && (
-              <ReviewPane text={ai.text} running={ai.running} error={ai.error} hasWrites={!!p?.has_writes}
-                onOpenSettings={() => setAiSettingsOpen(true)} />
-            )}
+            {/* 審查面板一直掛著（只是切走時隱藏）：切到「腳本」分頁再回來，串流中的審查不該被中斷。 */}
+            <div className={tab === "review" ? "h-full" : "hidden"}>
+              <DbaReviewPane
+                prepare={preparePersonas}
+                connId={request.connId}
+                database={request.database || null}
+                kind={p?.kind ?? null}
+                prod={!!p?.prod}
+                autoStartKey={autoKey}
+                disabled={!prep || loading || running !== null || !p?.has_writes}
+                onChange={setAi}
+                emptyHint={
+                  <>
+                    <p>{p?.has_writes
+                      ? t("按「DBA 審查」讓 DBA 檢查這份腳本：預期的前後差異、風險、修正建議，以及回滾腳本沒涵蓋到的部分。")
+                      : t("這份腳本沒有寫入語句。")}</p>
+                    <p className="text-fg/40">{t("送出的內容：腳本、語句分析、目標表結構與估算列數；前像樣本預設不送（可在左側「選項」開啟）。樣本列數為 0 時，DBA 也只能查結構與執行計畫，不能撈資料。")}</p>
+                    <button type="button" onClick={() => setAiSettingsOpen(true)} className="underline text-fg/45 hover:text-fg/70">{t("開啟 AI 設定")}</button>
+                  </>
+                }
+              />
+            </div>
             {tab === "script" && (
               <pre className="mono text-[12px] leading-relaxed whitespace-pre-wrap break-words bg-well rounded border border-fg/10 p-3">{request.sql}</pre>
             )}
@@ -409,16 +430,6 @@ export default function ReviewRunDialog({ request, onClose }: { request: ReviewR
       {aiSettingsOpen && <AiSettingsDialog open onClose={() => setAiSettingsOpen(false)} />}
     </Modal>
   );
-}
-
-function VerdictBadge({ verdict }: { verdict: Verdict }) {
-  const t = useT();
-  const map: Record<Verdict, { tone: BadgeTone; label: string }> = {
-    go: { tone: "success", label: t("可以執行") },
-    caution: { tone: "warning", label: t("注意風險後再執行") },
-    stop: { tone: "danger", label: t("不建議執行") },
-  };
-  return <Badge tone={map[verdict].tone} dot>{t("AI：{label}", { label: map[verdict].label })}</Badge>;
 }
 
 function LevelBadge({ level }: { level: ReviewRollbackLevel }) {
@@ -486,63 +497,6 @@ function StatementRow({ st, open, onToggle, record }: {
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function ReviewPane({ text, running, error, hasWrites, onOpenSettings }: {
-  text: string;
-  running: boolean;
-  error: string | null;
-  hasWrites: boolean;
-  onOpenSettings: () => void;
-}) {
-  const t = useT();
-  const body = stripVerdictLine(text);
-  const blocks = useMemo(() => parseBlocks(body), [body]);
-  let content: ReactNode;
-  if (!text && running) {
-    content = <div className="flex items-center gap-2 text-xs text-fg/55"><Icon icon={Loader2} size={13} className="animate-spin" />{t("AI 審查中…")}</div>;
-  } else if (!text) {
-    content = (
-      <div className="text-xs text-fg/50 space-y-2 max-w-xl">
-        <p>{hasWrites
-          ? t("按「AI 審查」讓 AI 檢查這份腳本：預期的前後差異、風險、修正建議，以及回滾腳本沒涵蓋到的部分。")
-          : t("這份腳本沒有寫入語句。")}</p>
-        <p className="text-fg/40">{t("送出的內容：腳本、語句分析、目標表結構與估算列數；前像樣本預設不送（可在左側「選項」開啟）。")}</p>
-      </div>
-    );
-  } else {
-    content = (
-      <div className="space-y-2 max-w-4xl">
-        {blocks.map((b, i) => b.type === "code"
-          ? (
-            <div key={i} className="rounded border border-fg/10 overflow-hidden bg-well">
-              <div className="flex items-center px-2 py-1 bg-fg/5 text-[10px] text-fg/45">
-                <span className="uppercase tracking-wide">{b.lang || "code"}</span>
-                <button type="button" className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-fg/10 hover:text-fg"
-                  onClick={() => { copyToClipboard(b.code); toast.success(t("已複製")); }}>
-                  <Icon icon={Copy} size={11} />{t("複製")}
-                </button>
-              </div>
-              <pre className="p-2 overflow-auto text-[12px] mono leading-relaxed">{b.code}</pre>
-            </div>
-          )
-          : <TextBlock key={i} text={b.text} />)}
-        {running && <Icon icon={Loader2} size={13} className="animate-spin text-fg/40" />}
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-3">
-      {error && (
-        <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-          <div className="whitespace-pre-wrap">{error}</div>
-          <button type="button" onClick={onOpenSettings} className="mt-1 underline hover:text-red-200">{t("開啟 AI 設定")}</button>
-          <div className="mt-1 text-red-300/70">{t("沒有 AI 審查也可以繼續：備份、回滾腳本與差異報告不受影響。")}</div>
-        </div>
-      )}
-      {content}
     </div>
   );
 }

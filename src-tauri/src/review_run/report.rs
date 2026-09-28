@@ -8,6 +8,8 @@ use serde::Serialize;
 use super::capture::TableSnapshot;
 use super::plan::{Prepared, RollbackLevel, Strategy};
 use super::rollback::TableDiff;
+use crate::ai_library::render::Vars;
+use crate::ai_library::Library;
 use crate::db::DbKind;
 use crate::i18n::Lang;
 
@@ -88,45 +90,24 @@ pub struct Sample<'a> {
     pub snapshot: &'a TableSnapshot,
 }
 
-/// AI 審查提示。模型面向的指令用英文（不是使用者可見文字，免翻譯），回覆語言另外指定。
-pub fn build_review_prompt(prep: &Prepared, conn_label: &str, script: &str, samples: &[Sample<'_>], lang: Lang) -> String {
+//// 執行前審查範本（`ai-library/prompts/review-pre-exec.md`）的變數。模型面向的範本是英文（不是使用者可見文字），
+/// 回覆語言另外指定；結論契約（`VERDICT: …`）由資源庫附上，`parse_verdict` 依賴它。
+pub fn review_vars(prep: &Prepared, conn_label: &str, script: &str, samples: &[Sample<'_>], lang: Lang) -> Vars {
+    let mut v = Vars::new();
+    v.insert("engine".into(), kind_label(prep.kind).into());
+    v.insert("connection".into(), conn_label.into());
+    v.insert("database".into(), prep.database.clone());
+    v.insert("production".into(), if prep.prod { "1".into() } else { String::new() });
+    v.insert("reply_language_name".into(), reply_language(lang).into());
+    v.insert("capture_limit".into(), prep.max_capture_rows.to_string());
+
+    let mut sc = fence("sql", &clip_chars(script, MAX_SCRIPT_CHARS));
+    if script.chars().count() > MAX_SCRIPT_CHARS {
+        sc.push_str("\n(Script truncated for length.)");
+    }
+    v.insert("script".into(), sc);
+
     let mut s = String::new();
-    s.push_str(&format!(
-        "You are a senior database administrator reviewing a SQL script BEFORE it is executed against a {} database.\n",
-        kind_label(prep.kind)
-    ));
-    if prep.prod {
-        s.push_str("This is a PRODUCTION connection. Be strict.\n");
-    }
-    s.push_str(&format!("Reply in {}. Be concise and concrete; refer to statements by number (#1, #2, …).\n\n", reply_language(lang)));
-    s.push_str("The FIRST line of your reply must be exactly one of:\n");
-    s.push_str("VERDICT: GO\nVERDICT: CAUTION\nVERDICT: STOP\n");
-    s.push_str("(GO = safe as written; CAUTION = can run, but read the risks first; STOP = should not run as written.)\n\n");
-    s.push_str("Then write these Markdown sections:\n");
-    s.push_str("## Summary\n## Expected changes (before → after)\nFor every write statement: which rows or objects change and how, using the row estimates below.\n");
-    s.push_str("## Risks\nLocks and long-running operations, missing or overly broad WHERE clauses, constraint / trigger / cascade side effects, data loss, ordering problems between statements.\n");
-    s.push_str("## Suggested fixes\nOnly if needed. Put corrected SQL in fenced code blocks.\n");
-    s.push_str("## Rollback check\nThe tool will capture before-images and generate a rollback script as described per statement below. Point out what that rollback does NOT cover.\n\n");
-    s.push_str("Do not invent tables or columns that are not listed. If information is missing, say what is missing instead of guessing.\n\n");
-
-    s.push_str("# Context\n");
-    s.push_str(&format!("- Engine: {}\n", kind_label(prep.kind)));
-    s.push_str(&format!("- Connection: {conn_label}\n"));
-    s.push_str(&format!("- Current database / schema: {}\n", prep.database));
-    s.push_str(&format!("- Production: {}\n", if prep.prod { "yes" } else { "no" }));
-    s.push_str("- Execution: statements run one at a time with autocommit (no wrapping transaction); execution stops at the first error.\n");
-    s.push_str(&format!("- Before-image capture limit: {} rows per statement.\n\n", prep.max_capture_rows));
-
-    s.push_str("# Script\n");
-    let clipped = script.chars().count() > MAX_SCRIPT_CHARS;
-    s.push_str(&fence("sql", &clip_chars(script, MAX_SCRIPT_CHARS)));
-    s.push('\n');
-    if clipped {
-        s.push_str("(Script truncated for length.)\n");
-    }
-    s.push('\n');
-
-    s.push_str("# Static analysis\n");
     for st in &prep.statements {
         let target = if st.targets.is_empty() { String::new() } else { format!(" on {}", st.targets.join(", ")) };
         s.push_str(&format!("- #{} {:?}{}", st.index + 1, st.op, target));
@@ -152,7 +133,7 @@ pub fn build_review_prompt(prep: &Prepared, conn_label: &str, script: &str, samp
     for b in &prep.blockers {
         s.push_str(&format!("- BLOCKED #{}: {}\n", b.index + 1, b.message));
     }
-    s.push('\n');
+    v.insert("static_analysis".into(), s.trim_end().to_string());
 
     // 目標表結構（去重）。
     let mut seen: Vec<String> = Vec::new();
@@ -185,37 +166,42 @@ pub fn build_review_prompt(prep: &Prepared, conn_label: &str, script: &str, samp
             }
         }
     }
-    if !tables.is_empty() {
-        s.push_str("# Tables\n");
-        s.push_str(&clip_chars(&tables, 8000));
-        s.push_str("\n\n");
-    }
+    v.insert("tables".into(), clip_chars(&tables, 8000).trim_end().to_string());
 
-    if !samples.is_empty() {
-        s.push_str("# Sample rows (current state, before execution)\n");
-        for smp in samples {
-            let snap = smp.snapshot;
-            s.push_str(&format!("## #{} {}\n", smp.index + 1, snap.meta.qualified(prep.kind)));
-            let cols: Vec<&str> = snap.meta.columns.iter().map(|c| c.name.as_str()).collect();
-            s.push_str(&format!("| {} |\n", cols.join(" | ")));
-            s.push_str(&format!("|{}\n", "---|".repeat(cols.len())));
-            for r in snap.rows.iter().take(MAX_SAMPLE_ROWS) {
-                let cells: Vec<String> = r
-                    .iter()
-                    .map(|v| match v {
-                        None => "NULL".to_string(),
-                        Some(x) => clip_chars(x, MAX_CELL_CHARS).replace('|', "\\|").replace('\n', " "),
-                    })
-                    .collect();
-                s.push_str(&format!("| {} |\n", cells.join(" | ")));
-            }
-            s.push('\n');
+    let mut sm = String::new();
+    for smp in samples {
+        let snap = smp.snapshot;
+        sm.push_str(&format!("## #{} {}\n", smp.index + 1, snap.meta.qualified(prep.kind)));
+        let cols: Vec<&str> = snap.meta.columns.iter().map(|c| c.name.as_str()).collect();
+        sm.push_str(&format!("| {} |\n", cols.join(" | ")));
+        sm.push_str(&format!("|{}\n", "---|".repeat(cols.len())));
+        for r in snap.rows.iter().take(MAX_SAMPLE_ROWS) {
+            let cells: Vec<String> = r
+                .iter()
+                .map(|v| match v {
+                    None => "NULL".to_string(),
+                    Some(x) => clip_chars(x, MAX_CELL_CHARS).replace('|', "\\|").replace('\n', " "),
+                })
+                .collect();
+            sm.push_str(&format!("| {} |\n", cells.join(" | ")));
         }
+        sm.push('\n');
     }
-    s
+    v.insert("samples".into(), sm.trim_end().to_string());
+    v
 }
 
-/// 從 AI 回覆的第一個非空行解析結論。
+/// AI 審查提示（使用者訊息部分）。GUI 與 `dbk run` 都走這裡，拿到的是同一份；範本可在資源庫覆蓋。
+pub fn build_review_prompt(lib: &Library, prep: &Prepared, conn_label: &str, script: &str, samples: &[Sample<'_>], lang: Lang) -> String {
+    let vars = review_vars(prep, conn_label, script, samples, lang);
+    match lib.render_task("review-pre-exec", &vars, lang.as_code()) {
+        Ok(r) => r.text,
+        // 內建範本一定在（嵌入二進位）；走到這裡代表建置有問題，至少別回空提示。
+        Err(e) => format!("{e}\n\n{}\n\n{}", vars["script"], vars["static_analysis"]),
+    }
+}
+
+// 從 AI 回覆的第一個非空行解析結論。
 pub fn parse_verdict(text: &str) -> Option<&'static str> {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
     let up = line.trim_start_matches(['*', '#', ' ']).to_ascii_uppercase();

@@ -1,6 +1,7 @@
 // 結構 / 資料比對對話框的純函式（列狀態、語句分組、腳本組裝、DDL 並排）。
 // 抽離自 CompareDialog / TableCompareView 以便單元測試（見 compareModel.test.ts），不依賴 React / Tauri。
 import type { DbKind, DbSchema, SchemaDiff, SyncStatement, TableDiff } from "./api";
+import { renderTask } from "./aiLibrary";
 import type { DiffLine } from "./diff";
 
 /** 比對的目標側：即時連線或結構快照檔。 */
@@ -195,17 +196,10 @@ export function describeDiffForAi(diff: SchemaDiff, srcLabel: string, dstLabel: 
   return L.join("\n");
 }
 
-/** 組 AI 摘要的提示詞：要的是「風險與執行順序」，不是把差異再唸一遍。 */
+/**
+ * 組 AI 摘要的提示詞（ai-library/prompts/compare-summary.md）：要的是「風險與執行順序」，
+ * 不是把差異再唸一遍。
+ */
 export function buildAiSummaryPrompt(digest: string): string {
-  return [
-    "你是資料庫結構同步的審查者。以下是一次結構比對的差異摘要（方向：讓『目標』變成『來源』）。",
-    "請用繁體中文寫一份簡短總結給準備執行同步的人看，控制在 200 字內，用條列：",
-    "1. 這次同步的整體性質（例如：純新增、含破壞性變更、跨引擎無法自動同步）。",
-    "2. 最需要注意的風險，特別是會遺失資料或鎖表的操作（DROP、改型別、改 NOT NULL、卸唯一索引）。",
-    "3. 建議的執行順序或前置動作（例如先備份哪些表、是否該在離峰時段執行）。",
-    "只講判斷與建議，不要把差異清單重述一遍，也不要輸出 SQL。",
-    "",
-    "--- 差異摘要 ---",
-    digest,
-  ].join("\n");
+  return renderTask("compare-summary", { digest });
 }

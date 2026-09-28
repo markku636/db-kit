@@ -648,7 +648,11 @@ export interface AgentStatus {
 // edit：編輯器內的一次性 SQL 改寫（同樣零工具 / 單回合，但額度放寬到 4096 token——
 //       改寫要回傳整段語句，generate 的 1024 對長 SQL 不夠）。
 // review：審查並執行的執行前審查（零工具 / 單回合、8192 token、API 供應商不落地對話歷史）。
-export type AgentMode = "advise" | "agent" | "generate" | "edit" | "review";
+/**
+ * 助手模式。`dba` = DBA agent 審查：只給唯讀資料庫工具（可再由人設收窄）、回合有上限、temperature 0、
+ * 不落地對話歷史；需要已連線的連線。
+ */
+export type AgentMode = "advise" | "agent" | "generate" | "edit" | "review" | "dba";
 
 // 後端 `agent-stream` 事件 payload（依 kind 取用欄位）。
 // 註：Claude 的 text 是 token 級增量、Codex 是整段一次到齊，前端一律「附加」即可。
@@ -1159,6 +1163,17 @@ export interface ReviewPrepared {
   };
   /** 送給 AI 的審查提示（後端組，與 `dbk run --review-cmd` 同一份）。 */
   prompt: string;
+  /** 各 DBA 審查者（會審時多位）：人設的系統提示 + agent 參數。user 提示共用 `prompt`。 */
+  reviews: PersonaReview[];
+}
+
+export interface PersonaReview {
+  persona: string;
+  title: string;
+  system: string;
+  max_turns: number;
+  /** 這次允許的唯讀資料庫工具；null = 不給工具（人設關閉）。 */
+  db_tools: string[] | null;
 }
 
 export type ReviewRunMode = "backup" | "execute";
@@ -1641,8 +1656,8 @@ export const api = {
     invoke<DataDiffDbReport>("compare_data_database", { runId, src, dst, options }),
   compareDataCancel: (runId: string) => invoke<void>("compare_data_cancel", { runId }),
   // 審查並執行：prepare 只送唯讀查詢；start 的進度走 onReviewRunProgress、取消走 reviewRunCancel。
-  reviewRunPrepare: (id: string, connLabel: string, database: string, script: string, maxCaptureRows?: number, sampleRows?: number) =>
-    invoke<ReviewPrepared>("review_run_prepare", { id, connLabel, database, script, maxCaptureRows, sampleRows }),
+  reviewRunPrepare: (id: string, connLabel: string, database: string, script: string, maxCaptureRows?: number, sampleRows?: number, personas?: string[]) =>
+    invoke<ReviewPrepared>("review_run_prepare", { id, connLabel, database, script, maxCaptureRows, sampleRows, personas: personas ?? null }),
   reviewRunStart: (args: {
     runId: string; id: string; connLabel: string; database: string; script: string; outDir: string;
     mode: ReviewRunMode; options?: ReviewRunOptions; review?: string | null;
@@ -1871,6 +1886,10 @@ export const api = {
     systemPrompt?: string | null;
     connectionId?: string | null;
     database?: string | null;
+    /** DBA agent 模式的回合上限（人設的 maxTurns）。 */
+    maxTurns?: number | null;
+    /** 允許的唯讀資料庫工具（DBA 人設 / 隱私設定）；null = 全部。 */
+    dbTools?: string[] | null;
   }) =>
     invoke<void>("agent_send", {
       reqId: args.reqId,
@@ -1883,8 +1902,24 @@ export const api = {
       systemPrompt: args.systemPrompt ?? null,
       connectionId: args.connectionId ?? null,
       database: args.database ?? null,
+      maxTurns: args.maxTurns ?? null,
+      dbTools: args.dbTools ?? null,
     }),
   agentCancel: (reqId: string) => invoke<void>("agent_cancel", { reqId }),
+
+  // ---- AI 資源庫（人設 / 技能 / 提示範本）：分層、覆蓋與 lint 都在後端，這裡只拿快照 ----
+  aiLibraryLoad: () => invoke<import("./aiLibrary").LibrarySnapshot>("ai_library_load"),
+  aiLibrarySave: (req: import("./aiLibrary").LibSaveRequest) =>
+    invoke<import("./aiLibrary").LibrarySnapshot>("ai_library_save", { req }),
+  aiLibraryCopy: (kind: import("./aiLibrary").LibKind, name: string, newName: string, layer: string) =>
+    invoke<import("./aiLibrary").LibrarySnapshot>("ai_library_copy", { kind, name, newName, layer }),
+  aiLibraryDelete: (kind: import("./aiLibrary").LibKind, name: string, layer: string, lang?: string | null) =>
+    invoke<import("./aiLibrary").LibrarySnapshot>("ai_library_delete", { kind, name, layer, lang: lang ?? null }),
+  aiLibrarySettingsSet: (settingsValue: import("./aiLibrary").AiLibrarySettings) =>
+    invoke<import("./aiLibrary").LibrarySnapshot>("ai_library_settings_set", { settingsValue }),
+  aiLibraryReveal: (path?: string | null) => invoke<void>("ai_library_reveal", { path: path ?? null }),
+  aiLibrarySyncPlan: () => invoke<import("./aiLibrary").SyncPlan>("ai_library_sync_plan"),
+  aiLibrarySyncApply: () => invoke<import("./aiLibrary").SyncReport>("ai_library_sync_apply"),
 
   // API 金鑰：只進 OS keychain，前端永遠拿不到明文（只能問「有沒有」）。
   // kind 是供應商 id（"anthropic-api" / "openai-api"）；key 傳空字串 = 刪除。

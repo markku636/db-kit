@@ -14,7 +14,7 @@
 //   2. OpenCC `twp → cn` —— 其餘部分做字形＋通用 IT 用語轉換（軟體→软件、檔案→文件…）。
 //   哨兵是控制字元，OpenCC 不會動它，最後再換回譯文，因此 GLOSSARY 的結果不會被二次轉換。
 import { createRequire } from "node:module";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
@@ -208,6 +208,48 @@ ${body}
   return keys.length;
 }
 
+/**
+ * AI 資源庫（ai-library/）：每個繁中基底檔旁產生 `<名>.zh-CN.md`（技能是 `SKILL.zh-CN.md`）。
+ *
+ * 逐行轉換，與 locale 表同一個 toSimplified —— 範本的一行通常就是原本的一條 t() key，整句覆寫
+ * （SENTENCE）因此照樣命中。frontmatter 只帶 name / description / dbkit-title：其餘欄位（任務登錄、
+ * 工具、技能清單）一律取自基底檔，變體不該有自己的一份。`dbkit-lang` 不是繁中的基底（英文範本）跳過。
+ */
+function emitAiLibrary() {
+  const root = "ai-library";
+  const LANG_SUFFIX = /\.(zh-TW|zh-CN|en|ja|ko|vi)\.md$/;
+  let n = 0;
+  (function walk(dir) {
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      const p = `${dir}/${ent.name}`;
+      if (ent.isDirectory()) {
+        walk(p);
+        continue;
+      }
+      if (!ent.name.endsWith(".md") || LANG_SUFFIX.test(ent.name)) continue;
+      const text = readFileSync(p, "utf8").replace(/\r\n?/g, "\n");
+      const lines = text.split("\n");
+      if (lines[0].trim() !== "---") continue;
+      const end = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+      if (end < 0) continue;
+      const fm = lines.slice(1, end);
+      const lang = fm.map((l) => /^dbkit-lang:\s*(\S+)/.exec(l)?.[1]).find(Boolean);
+      if (lang && lang !== "zh-TW") continue;
+      const keep = fm.filter((l) => /^(name|description|dbkit-title):/.test(l));
+      const out = [
+        "---",
+        "# 由 scripts/i18n-gen-zhcn.mjs 從繁中基底檔產生，請勿手改（要修正用詞請改產生器的 GLOSSARY / SENTENCE）。",
+        ...keep.map((l) => (l.startsWith("name:") ? l : toSimplified(l))),
+        "---",
+        ...lines.slice(end + 1).map((l) => (l.trim() ? toSimplified(l) : l)),
+      ].join("\n");
+      writeFileSync(p.replace(/\.md$/, ".zh-CN.md"), out.replace(/\n*$/, "\n"), "utf8");
+      n++;
+    }
+  })(root);
+  return n;
+}
+
 const auditAt = process.argv.indexOf("--audit");
 if (auditAt >= 0) {
   const needle = process.argv[auditAt + 1] ?? "";
@@ -222,3 +264,4 @@ if (auditAt >= 0) {
 
 console.log(`src/locales/zh-CN.ts：${emitFrontend()} 條`);
 console.log(`src-tauri/src/locales/zh_cn.rs：${emitBackend()} 條`);
+console.log(`ai-library/*.zh-CN.md：${emitAiLibrary()} 個`);

@@ -8,6 +8,8 @@ mod i18n;
 mod locales;
 
 // 核心層（GUI 與 CLI 共用，不依賴 Tauri）。
+// AI 資源庫（人設 / 技能 / 提示範本 / 輸出契約的靜態檔）：GUI 與 dbk 共用，不依賴 Tauri 與 reqwest。
+mod ai_library;
 mod backup;
 // 結構 / 資料比對核心：不依賴 Tauri（進度以 callback 注入），GUI 與 dbk CLI 共用。
 mod compare;
@@ -229,6 +231,14 @@ pub fn run() {
             commands::compare_data_database,
             commands::compare_data_cancel,
             commands::review_run_prepare,
+            commands::ai_library::ai_library_load,
+            commands::ai_library::ai_library_save,
+            commands::ai_library::ai_library_copy,
+            commands::ai_library::ai_library_delete,
+            commands::ai_library::ai_library_settings_set,
+            commands::ai_library::ai_library_reveal,
+            commands::ai_library::ai_library_sync_plan,
+            commands::ai_library::ai_library_sync_apply,
             commands::review_run_start,
             commands::review_run_cancel,
             commands::review_run_reveal,

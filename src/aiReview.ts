@@ -1,10 +1,11 @@
 // AI 輔助的 SQL 審查 / 調校 / 壓測分析：把「方言 + 資料表結構 + 規則引擎發現 + 執行計畫」
-// 組裝成可直接餵給本機助手（useAssistant.ask）的 prompt。
+// 整理成範本變數，交給 AI 資源庫的範本（ai-library/prompts/review-sql、tune-sql、stress-analysis）渲染。
 //
-// 本模組只負責「組字串」，不呼叫助手、不碰 Tauri command——三種情境的措辭是效果的來源，
-// 抽成純函式後才能用單元測試釘住（見 aiReview.test.ts）；UI 只負責蒐集輸入與送出。
-// 唯一的例外是 collectSchemaContext（要抓結構），它把所有 api 失敗都吞成「該段留白」。
+// 分工：措辭（段落標題、指示、「某段為空時要怎麼說」）全在範本檔，使用者可以改；本模組只做
+// 「上下文提供者」——截斷、圍籬、逐項格式——這些是正確性的來源，留在程式碼裡用單元測試釘住。
+// 唯一碰 api 的是 collectSchemaContext（要抓結構），它把所有 api 失敗都吞成「該段留白」。
 import { api, KIND_META, type ColumnInfo, type DbKind, type IndexInfo } from "./api";
+import { renderTask } from "./aiLibrary";
 import { replyLanguageLine, t } from "./i18n";
 import { rankTables } from "./nlPrompt";
 import { statementTables } from "./sqlContextComplete";
@@ -118,28 +119,28 @@ export function joinLines(parts: (string | null | undefined)[]): string {
   return parts.filter((p): p is string => p != null).join("\n");
 }
 
-// 三支 prompt 共用的抬頭：先講身分再講方言，模型才不會拿 PostgreSQL 的語法去改 MySQL 的查詢。
-// db 為 null 表示該情境沒有資料庫名（壓測分析只帶 kind）。
-export function headerLines(role: string, kind: DbKind, db: string | null, uiLang: string): (string | null)[] {
-  const label = KIND_META[kind].label;
-  const name = (db ?? "").trim();
-  return [
-    role,
-    name
-      ? t("方言：{label}；資料庫：{db}", { label, db: name })
-      : t("方言：{label}", { label }),
+/**
+ * 範本共用的抬頭變數：方言、資料庫、回覆語言。
+ * 先講身分再講方言，模型才不會拿 PostgreSQL 的語法去改 MySQL 的查詢（身分那行在範本裡）。
+ * db 為 null 表示該情境沒有資料庫名（壓測分析只帶 kind）。
+ */
+export function headerVars(kind: DbKind, db: string | null, uiLang: string): Record<string, string> {
+  return {
+    dialect: KIND_META[kind].label,
+    database: (db ?? "").trim(),
     // 非繁中語系時要求整段回覆用該語言（比照 nlPrompt.ts 的 commentLangLine；差別在這裡是
-    // 整段回覆而非只有 SQL 註解，因為三支 prompt 的產出主體都是散文分析）。
-    replyLanguageLine(uiLang),
-  ];
+    // 整段回覆而非只有 SQL 註解，因為這幾支 prompt 的產出主體都是散文分析）。
+    reply_language: replyLanguageLine(uiLang) ?? "",
+  };
 }
 
-export function findingsSection(findings: LintFinding[]): string {
-  // 空清單若留成空區段，模型會讀成「規則引擎的結果沒附上」而自行腦補一份；
-  // 必須明講「檢查過但沒發現」，順便把「所以請找規則以外的問題」講明。
-  if (findings.length === 0) {
-    return t("規則引擎已檢查，沒有發現問題（不是沒有執行）。請把重點放在規則涵蓋不到的問題。");
-  }
+/**
+ * 規則引擎發現的逐條清單；空清單回空字串。
+ * 空清單若留成空區段，模型會讀成「規則引擎的結果沒附上」而自行腦補一份——範本在變數為空時
+ * 明講「檢查過但沒發現」，順便把「所以請找規則以外的問題」講明。
+ */
+export function findingsVar(findings: LintFinding[]): string {
+  if (findings.length === 0) return "";
   const rows = findings.slice(0, MAX_FINDINGS).map((f) =>
     t("- [{severity}] {id}（第 {line} 行第 {col} 欄）：{message}　建議：{hint}", {
       severity: f.severity,
@@ -155,34 +156,34 @@ export function findingsSection(findings: LintFinding[]): string {
   return rows.join("\n");
 }
 
-export function planSection(planJson: string | null | undefined): string {
+/**
+ * 執行計畫區塊（```json 圍籬，夾上限）；沒有計畫回空字串。
+ * 沒有計畫時範本會明講「沒有」並禁止杜撰：模型很願意編出 cost 數字，而編出來的熱點會直接誤導調校。
+ */
+export function planVar(planJson: string | null | undefined): string {
   const raw = (planJson ?? "").trim();
-  // 沒有計畫時明講「沒有」並禁止杜撰：模型很願意編出 cost 數字，而編出來的熱點會直接誤導調校。
-  if (!raw) {
-    return t("(未取得執行計畫。需要計畫才能判斷時，請直接說還缺什麼，不要杜撰節點與成本。)");
-  }
-  return fencedClipBlock("json", raw, MAX_PLAN_CHARS);
+  return raw ? fencedClipBlock("json", raw, MAX_PLAN_CHARS) : "";
 }
 
 // collectSchemaContext 附加註記後會略超過 MAX_SCHEMA_CHARS，外層再夾時留這點餘裕，
 // 免得剛好把「另有 N 張表未列出」那行切掉。
 const SCHEMA_SLACK = 256;
 
-export function schemaSections(schema: SchemaContext | null | undefined): (string | null)[] {
+/** 結構與索引兩段（抓不到為空字串，範本會說明「無法取得」並禁止假設索引存在）。 */
+export function schemaVars(schema: SchemaContext | null | undefined): { schema: string; indexes: string } {
   // 這裡再夾一次上限：SchemaContext 不保證出自 collectSchemaContext（主線可能改餵結構快取），
   // 而一張 5000 欄的寬表就足以把後面的執行計畫擠出模型的上下文，計畫才是調校最關鍵的輸入。
   const bound = (s: string, max: number): string =>
     s.length <= max ? s : clipTableLines(s.split("\n"), max);
-  const tables = bound(schema?.tables ?? "", MAX_SCHEMA_CHARS + SCHEMA_SLACK);
-  const indexes = bound(schema?.indexes ?? "", MAX_INDEX_CHARS + SCHEMA_SLACK);
-  return [
-    "",
-    t("【相關資料表結構】"),
-    tables || t("(無法取得欄位資訊，請依查詢內容推斷。)"),
-    "",
-    t("【現有索引】"),
-    indexes || t("(無法取得索引資訊。請勿假設任何索引存在。)"),
-  ];
+  return {
+    schema: bound(schema?.tables ?? "", MAX_SCHEMA_CHARS + SCHEMA_SLACK),
+    indexes: bound(schema?.indexes ?? "", MAX_INDEX_CHARS + SCHEMA_SLACK),
+  };
+}
+
+/** 待審 / 待改的 SQL：夾上限後包 ```sql 圍籬（截斷提示在圍籬外）。 */
+export function sqlVar(sql: string): string {
+  return fencedClipBlock("sql", sql, MAX_SQL_CHARS);
 }
 
 // ---- 上下文蒐集（本模組唯一會碰 api 的地方）----
@@ -328,31 +329,25 @@ export interface ReviewInput {
   uiLang: string;
 }
 
+/** 審查範本的變數（DBA 審查面板也用它，好讓「編輯本次提示」看到的是同一份上下文）。 */
+export function reviewVars(input: ReviewInput): Record<string, string> {
+  const { kind, db, sql, findings, schema, planJson, uiLang } = input;
+  return {
+    ...headerVars(kind, db, uiLang),
+    sql: sqlVar(sql),
+    lint_findings: findingsVar(findings),
+    ...schemaVars(schema),
+    plan: planVar(planJson),
+  };
+}
+
 /**
- * SQL 審查：規則引擎的發現 + 結構 + （可選）計畫 → 逐條點評 ＋ 一段可直接執行的改寫。
- * 刻意要求「同意 / 不同意都要講理由」——規則引擎有誤報，讓模型無條件附和只會放大誤報。
+ * SQL 審查（DBA 審查）：規則引擎的發現 + 結構 + （可選）計畫 → 第一行結論 + 逐條點評 + 一段可直接執行的改寫。
+ * 範本刻意要求「同意 / 不同意都要講理由」——規則引擎有誤報，讓模型無條件附和只會放大誤報。
+ * 審查者的身分由系統提示裡的 DBA 人設決定，範本只講任務。
  */
 export function buildReviewPrompt(input: ReviewInput): string {
-  const { kind, db, sql, findings, schema, planJson, uiLang } = input;
-  return joinLines([
-    ...headerLines(t("你是資深資料庫工程師，請審查下面這段 SQL。"), kind, db, uiLang),
-    "",
-    t("【輸出格式】"),
-    t("1. 逐條點評，分成兩段："),
-    t("   a.「規則引擎已標出的問題」：逐條回應。同意就補上實際風險與會踩到的情境；不同意就講清楚為什麼在這段 SQL 裡是安全的。"),
-    t("   b.「規則引擎看不出來的問題」：語意錯誤、索引用不上（欄位加工、隱式型別轉換、前綴萬用字元）、NULL 與三值邏輯、JOIN 造成的列數放大、交易與鎖的範圍、深分頁、字元集與定序不一致等。"),
-    t("2. 最後給一段改寫後、可直接執行的 SQL，放進單一 ```sql 區塊：保持原本語意，不要留佔位符或省略號。若沒有需要改的地方，就附上原樣並說明理由。"),
-    "",
-    t("【待審 SQL】"),
-    fencedClipBlock("sql", sql, MAX_SQL_CHARS),
-    "",
-    t("【規則引擎發現】"),
-    findingsSection(findings),
-    ...schemaSections(schema),
-    "",
-    t("【執行計畫】"),
-    planSection(planJson),
-  ]);
+  return renderTask("review-sql", reviewVars(input));
 }
 
 // ---- ② 調校 ----
@@ -365,17 +360,23 @@ export interface TuneInput extends ReviewInput {
 }
 
 // 大數字加千分位：模型判斷「這張表值不值得建索引」時，1200000 與 1,200,000 的可讀性差很多。
-function fmtInt(n: number): string {
+export function fmtInt(n: number): string {
   return Number.isFinite(n) ? n.toLocaleString("en-US") : String(n);
 }
 
-function summaryLine(s: TuneInput["planSummary"]): string {
-  if (!s) return t("(無計畫摘要)");
+/** 計畫摘要一行；沒有摘要回空字串（範本會寫「(無計畫摘要)」）。 */
+export function planSummaryVar(s: TuneInput["planSummary"]): string {
+  if (!s) return "";
   return t("節點數 {nodes}、資料表 {tables}、最大單點成本 {cost}", {
     nodes: s.nodes,
     tables: s.tables,
     cost: s.maxCost == null ? t("(未知)") : fmtInt(s.maxCost),
   });
+}
+
+/** 熱點節點清單；沒有回空字串（範本會寫「(未標出熱點節點)」）。 */
+export function hotNodesVar(hotNodes: string[]): string {
+  return hotNodes.slice(0, MAX_HOT_NODES).map((h) => `- ${h}`).join("\n");
 }
 
 /**
@@ -384,40 +385,20 @@ function summaryLine(s: TuneInput["planSummary"]): string {
  */
 export function buildTunePrompt(input: TuneInput): string {
   const { kind, db, sql, findings, schema, planJson, uiLang, planSummary, hotNodes, rowCounts } = input;
-
-  const hot = hotNodes.length
-    ? hotNodes.slice(0, MAX_HOT_NODES).map((h) => `- ${h}`).join("\n")
-    : t("(未標出熱點節點)");
   const counts = Object.entries(rowCounts ?? {}).slice(0, MAX_ROW_COUNTS);
-
-  return joinLines([
-    ...headerLines(t("你是資料庫效能調校專家，請針對下面這段 SQL 的執行計畫做調校。"), kind, db, uiLang),
-    "",
-    t("【輸出格式】"),
-    t("1. 瓶頸診斷：直接讀下面的執行計畫來講。指名節點（操作或表名）與它的成本、估計列數，說明它為什麼貴（全表掃描、索引選擇度差、排序或雜湊落磁碟、巢狀迴圈把列數放大等）。不要給「建議加索引」這種沒有依據的泛論。"),
-    t("2. 建議索引：完整 DDL 放進一個 ```sql 區塊。先對照【現有索引】，不要重複建已存在的組合；複合索引要說明欄位順序的理由（等值條件在前、範圍條件在後、覆蓋欄位最後）。"),
-    t("3. 改寫後的 SQL：放進另一個 ```sql 區塊，與原查詢語意等價。"),
-    t("4. 預期效益與風險：估計掃描列數或成本的改善幅度；並說明代價——新索引在每次 INSERT / UPDATE / DELETE 的維護成本、額外佔用的磁碟空間、建立索引期間的鎖與回填時間。"),
-    "",
-    t("【待調校 SQL】"),
-    fencedClipBlock("sql", sql, MAX_SQL_CHARS),
-    "",
-    t("【計畫摘要】"),
-    summaryLine(planSummary),
-    "",
-    t("【計畫熱點】"),
-    hot,
-    counts.length ? "" : null,
-    counts.length ? t("【資料表列數估計】") : null,
-    counts.length ? counts.map(([name, n]) => `- ${name}: ${fmtInt(n)}`).join("\n") : null,
-    "",
-    t("【規則引擎發現】"),
-    findingsSection(findings),
-    ...schemaSections(schema),
-    "",
-    t("【執行計畫】"),
-    planSection(planJson),
-  ]);
+  return renderTask(
+    "tune-sql",
+    {
+      ...headerVars(kind, db, uiLang),
+      sql: sqlVar(sql),
+      plan_summary: planSummaryVar(planSummary),
+      hot_nodes: hotNodesVar(hotNodes),
+      row_counts: counts.map(([name, n]) => `- ${name}: ${fmtInt(n)}`).join("\n"),
+      lint_findings: findingsVar(findings),
+      ...schemaVars(schema),
+      plan: planVar(planJson),
+    },
+  );
 }
 
 // ---- ③ 壓測分析 ----
@@ -436,26 +417,18 @@ export interface StressInput {
  * 壓測報告分析：重點是「從百分位的形狀反推瓶頸類型」，而不是把報告數字複誦一次。
  * 報告本身是 Markdown，直接原樣嵌入（不再包 fence）——它有標題與表格，包起來反而更難讀；
  * 而它內部已經有一個 ```sql 區塊，包起來還得再算一次圍籬。
+ * 報告內雖然通常已含語句，範本仍另列一段：reportMarkdown 由呼叫端組裝，不保證含 SQL。
  */
 export function buildStressAnalysisPrompt(input: StressInput): string {
   const { kind, sql, reportMarkdown, planJson, schema, uiLang } = input;
-  return joinLines([
-    ...headerLines(t("你是效能測試分析師，請解讀下面這份壓力測試報告。"), kind, null, uiLang),
-    "",
-    t("【輸出格式】"),
-    t("1. 瓶頸類型判讀：從延遲百分位的「形狀」推論，並明講你依據哪幾個數字。p99 遠大於 p50 → 排隊、鎖競爭或連線池不足（少數請求在等資源）；整體平坦但偏高 → 單次查詢成本就高（掃描列數多、缺索引、回傳資料量大）；最大值遠離 p99 → 偶發事件（checkpoint、GC、網路重試）。"),
-    t("2. 錯誤分組的意義：逐組說明最可能的成因（連線耗盡、逾時、死鎖、語法或權限），以及這些錯誤會不會扭曲延遲統計（失敗得快的請求會把平均拉低）。"),
-    t("3. 下一步該量什麼：列出 2 到 4 個可執行的下一步，指名要看的指標或工具（例如伺服器端的等待事件、鎖等待、慢查詢日誌、連線數上限、單執行緒基準線），並說明各自能區分開哪兩種假設。"),
-    "",
-    t("【壓力測試報告】"),
-    clipMarkdown(reportMarkdown.trim(), MAX_REPORT_CHARS),
-    "",
-    // 報告內雖然通常已含語句，仍另列一段：reportMarkdown 由呼叫端組裝，不保證含 SQL。
-    t("【受測語句】"),
-    fencedClipBlock("sql", sql, MAX_SQL_CHARS),
-    ...schemaSections(schema),
-    "",
-    t("【執行計畫】"),
-    planSection(planJson),
-  ]);
+  return renderTask(
+    "stress-analysis",
+    {
+      ...headerVars(kind, null, uiLang),
+      report: clipMarkdown(reportMarkdown.trim(), MAX_REPORT_CHARS),
+      sql: sqlVar(sql),
+      ...schemaVars(schema),
+      plan: planVar(planJson),
+    },
+  );
 }

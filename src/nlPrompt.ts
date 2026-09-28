@@ -2,6 +2,7 @@
 // 純函式 + 少量 async schema 抓取，供 NlQueryBar 使用；核心邏輯以 nlPrompt.test.ts 覆蓋。
 import { api, KIND_META, type DbKind, type TableInfo } from "./api";
 import { fuzzyScore } from "./fuzzy";
+import { renderTask } from "./aiLibrary";
 import { promptLanguageName } from "./i18n";
 
 // ---- 輸出截取 ----
@@ -152,27 +153,21 @@ export async function buildSqlNlPrompt(opts: SqlPromptOpts): Promise<string> {
   const schema = detailed.filter(Boolean).join("\n").slice(0, MAX_SCHEMA_CHARS);
 
   // 只有真的有跨庫的表可用時才提這條規則：沒有的話，它只會誘導模型去猜一個不存在的庫名。
-  const crossRule = cross.some((c) => c.tables.length)
-    ? `\n可跨資料庫查詢：清單中帶 \`庫.表\` 的項目要原樣以限定名參照（可用的庫：${cross.map((c) => c.db).join("、")}）；`
-    : "";
+  const crossList = cross.some((c) => c.tables.length) ? cross.map((c) => c.db).join("、") : "";
 
-  return [
-    `你是 SQL 產生器。只輸出一個 \`\`\`sql 程式碼區塊，區塊外不得有任何文字；`,
-    `需要說明或標註假設時，用 SQL 註解（--）寫在語句上方。`,
-    `規則：方言為 ${label}；優先使用下方結構中存在的表與欄位；${crossRule}`,
-    `SELECT 無明確筆數需求時加 LIMIT 200；除非使用者明確要求，不產生 DDL。${commentLangLine(uiLang)}`,
-    ``,
-    `【資料庫環境】`,
-    `類型：${label}`,
-    `資料庫：${db || "(預設)"}`,
-    `全部資料表（${allCands.length} 張）：${listed || "(無法取得，請依需求推斷)"}`,
-    ``,
-    `【最相關資料表結構】`,
-    schema || "(無法取得欄位，請依表名與需求推斷)",
-    ``,
-    `【使用者需求】`,
-    nl,
-  ].join("\n");
+  return renderTask(
+    "nl-sql",
+    {
+      dialect: label,
+      database: db,
+      cross_dbs: crossList,
+      comment_language: commentLangLine(uiLang).trim(),
+      table_count: String(allCands.length),
+      table_list: listed,
+      schema,
+      request: nl,
+    },
+  );
 }
 
 export interface EsPromptOpts {
@@ -208,20 +203,15 @@ export async function buildEsNlPrompt(opts: EsPromptOpts): Promise<string> {
     }
   }
 
-  return [
-    `你是 Elasticsearch Query DSL 產生器。只輸出一個 \`\`\`json 程式碼區塊，區塊外不得有任何文字。`,
-    `輸出格式（查詢 envelope）：頂層必含 "index"（字串，可萬用字元），其餘鍵為 _search 的 body`,
-    `（query / aggs / size / from / sort / _source 等）。純計數用 { "index":"..", "count":true, "query":{...} }。`,
-    `規則：日期範圍用 range + ISO8601；聚合放 aggs 且以「單層」為限（勿巢狀）；未指定筆數時 size 用 200。${commentLangLine(uiLang)}`,
-    ``,
-    `【叢集環境】`,
-    `全部索引（${indices.length} 個）：${listed || "(無法取得，請依需求推斷)"}`,
-    idx ? `目標索引：${idx}` : `目標索引：(未指定，請於 "index" 填入最合適者)`,
-    ``,
-    `【目標索引 mapping】`,
-    mapping || "(無法取得 mapping，請依索引名與需求推斷欄位)",
-    ``,
-    `【使用者需求】`,
-    nl,
-  ].join("\n");
+  return renderTask(
+    "nl-es",
+    {
+      comment_language: commentLangLine(uiLang).trim(),
+      index_count: String(indices.length),
+      index_list: listed,
+      target_index: idx ?? "",
+      mapping,
+      request: nl,
+    },
+  );
 }

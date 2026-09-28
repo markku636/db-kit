@@ -1,0 +1,401 @@
+{
+  "//": "AI 資源庫範本引擎的共用案例：src/promptTemplate.test.ts 與 src-tauri/src/ai_library/render.rs 的測試都跑這份，兩個實作必須逐字元一致。改規格時兩邊一起改，再重跑兩邊測試。",
+  "render": [
+    {
+      "name": "plain var",
+      "tpl": "Hello {{name}}!",
+      "vars": {
+        "name": "db-kit"
+      },
+      "out": "Hello db-kit!"
+    },
+    {
+      "name": "unknown var is empty",
+      "tpl": "a{{nope}}b",
+      "vars": {},
+      "out": "ab"
+    },
+    {
+      "name": "spaces inside tag",
+      "tpl": "{{ name }}|{{# on }}Y{{/ on }}",
+      "vars": {
+        "name": "x",
+        "on": "1"
+      },
+      "out": "x|Y"
+    },
+    {
+      "name": "section true",
+      "tpl": "{{#x}}yes{{/x}}",
+      "vars": {
+        "x": "1"
+      },
+      "out": "yes"
+    },
+    {
+      "name": "section false",
+      "tpl": "[{{#x}}yes{{/x}}]",
+      "vars": {
+        "x": ""
+      },
+      "out": "[]"
+    },
+    {
+      "name": "whitespace-only is falsy",
+      "tpl": "[{{#x}}yes{{/x}}{{^x}}no{{/x}}]",
+      "vars": {
+        "x": "  \n "
+      },
+      "out": "[no]"
+    },
+    {
+      "name": "inverted",
+      "tpl": "{{^x}}empty{{/x}}",
+      "vars": {},
+      "out": "empty"
+    },
+    {
+      "name": "standalone lines removed",
+      "tpl": "a\n{{#x}}\nb\n{{/x}}\nc",
+      "vars": {
+        "x": "1"
+      },
+      "out": "a\nb\nc"
+    },
+    {
+      "name": "standalone false removes block",
+      "tpl": "a\n{{#x}}\nb\n{{/x}}\nc",
+      "vars": {},
+      "out": "a\nc"
+    },
+    {
+      "name": "indented standalone",
+      "tpl": "a\n  {{#x}}  \n\tb\n\t{{/x}}\nc",
+      "vars": {
+        "x": "1"
+      },
+      "out": "a\n\tb\nc"
+    },
+    {
+      "name": "non-standalone keeps newline",
+      "tpl": "a {{#x}}\nb\n{{/x}} c",
+      "vars": {
+        "x": "1"
+      },
+      "out": "a \nb\n c"
+    },
+    {
+      "name": "nested sections",
+      "tpl": "{{#a}}\nA\n{{#b}}\nB\n{{/b}}\n{{^b}}\nnotB\n{{/b}}\n{{/a}}\nend",
+      "vars": {
+        "a": "1"
+      },
+      "out": "A\nnotB\nend"
+    },
+    {
+      "name": "comment inline and standalone",
+      "tpl": "x{{! hidden }}y\n{{! whole line }}\nz",
+      "vars": {},
+      "out": "xy\nz"
+    },
+    {
+      "name": "mismatched close ignored",
+      "tpl": "{{#a}}A{{/b}}B{{/a}}C",
+      "vars": {
+        "a": ""
+      },
+      "out": "C"
+    },
+    {
+      "name": "unclosed section runs to end",
+      "tpl": "x{{#a}}y\nz",
+      "vars": {},
+      "out": "x"
+    },
+    {
+      "name": "trailing newlines trimmed",
+      "tpl": "a\n{{#x}}\nb\n{{/x}}\n",
+      "vars": {},
+      "out": "a"
+    },
+    {
+      "name": "value trailing newline trimmed at end",
+      "tpl": "{{v}}",
+      "vars": {
+        "v": "keep\n\n"
+      },
+      "out": "keep"
+    },
+    {
+      "name": "value newlines kept in middle",
+      "tpl": "{{v}}\nend",
+      "vars": {
+        "v": "l1\nl2\n"
+      },
+      "out": "l1\nl2\n\nend"
+    },
+    {
+      "name": "triple brace is literal plus var",
+      "tpl": "{{{x}}}",
+      "vars": {
+        "x": "v"
+      },
+      "out": "{v}"
+    },
+    {
+      "name": "broken tags are literal",
+      "tpl": "{{ }} {{#}} {{x y}} {{! unterminated",
+      "vars": {
+        "x": "1"
+      },
+      "out": "{{ }} {{#}} {{x y}} {{! unterminated"
+    },
+    {
+      "name": "crlf and bom normalized",
+      "tpl": "﻿a\r\n{{#x}}\r\nb\r\n{{/x}}\r\nc",
+      "vars": {
+        "x": "1"
+      },
+      "out": "a\nb\nc"
+    },
+    {
+      "name": "cjk text untouched",
+      "tpl": "方言：{{dialect}}{{#database}}；資料庫：{{database}}{{/database}}",
+      "vars": {
+        "dialect": "MySQL",
+        "database": "shop"
+      },
+      "out": "方言：MySQL；資料庫：shop"
+    },
+    {
+      "name": "dotted and dashed names",
+      "tpl": "{{a.b}}-{{c-d}}",
+      "vars": {
+        "a.b": "1",
+        "c-d": "2"
+      },
+      "out": "1-2"
+    },
+    {
+      "name": "two tags on a line are not standalone",
+      "tpl": "a\n{{#x}}{{/x}}\nb",
+      "vars": {
+        "x": "1"
+      },
+      "out": "a\n\nb"
+    }
+  ],
+  "compose": [
+    {
+      "name": "contract placed",
+      "body": "head\n{{contract}}\nbody {{sql}}",
+      "vars": {
+        "sql": "S"
+      },
+      "contract": "C {{sql}}",
+      "required": [
+        "sql"
+      ],
+      "out": "head\nC S\nbody S",
+      "missing": []
+    },
+    {
+      "name": "contract appended when missing",
+      "body": "only {{sql}}",
+      "vars": {
+        "sql": "S"
+      },
+      "contract": "C",
+      "required": [
+        "sql"
+      ],
+      "out": "only S\n\nC",
+      "missing": []
+    },
+    {
+      "name": "required var appended",
+      "body": "no sql here",
+      "vars": {
+        "sql": "```sql\nSELECT 1\n```"
+      },
+      "contract": null,
+      "required": [
+        "sql"
+      ],
+      "out": "no sql here\n\n```sql\nSELECT 1\n```",
+      "missing": [
+        "sql"
+      ]
+    },
+    {
+      "name": "required var inside section only still appended",
+      "body": "{{#sql}}has sql{{/sql}}",
+      "vars": {
+        "sql": "S"
+      },
+      "contract": null,
+      "required": [
+        "sql"
+      ],
+      "out": "has sql\n\nS",
+      "missing": [
+        "sql"
+      ]
+    },
+    {
+      "name": "empty required var not appended",
+      "body": "x",
+      "vars": {
+        "sql": ""
+      },
+      "contract": null,
+      "required": [
+        "sql"
+      ],
+      "out": "x",
+      "missing": [
+        "sql"
+      ]
+    },
+    {
+      "name": "required then contract order",
+      "body": "x",
+      "vars": {
+        "a": "A"
+      },
+      "contract": "C",
+      "required": [
+        "a"
+      ],
+      "out": "x\n\nA\n\nC",
+      "missing": [
+        "a"
+      ]
+    },
+    {
+      "name": "empty body",
+      "body": "",
+      "vars": {
+        "a": "A"
+      },
+      "contract": "C",
+      "required": [
+        "a"
+      ],
+      "out": "A\n\nC",
+      "missing": [
+        "a"
+      ]
+    }
+  ],
+  "frontmatter": [
+    {
+      "name": "basic",
+      "text": "---\nname: fix\ndescription: 修正錯誤\n---\nbody line\n",
+      "fields": {
+        "name": "fix",
+        "description": "修正錯誤"
+      },
+      "body": "body line",
+      "has_frontmatter": true
+    },
+    {
+      "name": "no frontmatter",
+      "text": "just body\n",
+      "fields": {},
+      "body": "just body",
+      "has_frontmatter": false
+    },
+    {
+      "name": "unterminated frontmatter is body",
+      "text": "---\nname: x\nbody\n",
+      "fields": {},
+      "body": "---\nname: x\nbody",
+      "has_frontmatter": false
+    },
+    {
+      "name": "lists inline block comma",
+      "text": "---\ntools: Read, Grep, \"a,b\"\nskills: [lock-risk, 'online-ddl']\nitems:\n  - one\n  - \"two # not comment\"\n\n  - three\nafter: v\n---\nb",
+      "fields": {
+        "tools": "Read, Grep, \"a,b\"",
+        "skills": [
+          "lock-risk",
+          "online-ddl"
+        ],
+        "items": [
+          "one",
+          "two # not comment",
+          "three"
+        ],
+        "after": "v"
+      },
+      "body": "b",
+      "has_frontmatter": true
+    },
+    {
+      "name": "quotes comments and colons",
+      "text": "---\n# comment line\ntitle: \"a: b\"\nsingle: 'it''s'\nplain: value # trailing comment\nurl: http://x/y\nempty:\n---\n\n\nbody after blank lines\n\n",
+      "fields": {
+        "title": "a: b",
+        "single": "it's",
+        "plain": "value",
+        "url": "http://x/y"
+      },
+      "body": "body after blank lines",
+      "has_frontmatter": true
+    },
+    {
+      "name": "block scalars and nested maps skipped",
+      "text": "---\nname: n\nlong: |\n  line1\n  line2\nfolded: >\n  a\n  b\nhooks:\n  PreToolUse:\n    - matcher: Bash\nlast: z\n---\nbody",
+      "fields": {
+        "name": "n",
+        "long": "line1\nline2",
+        "folded": "a b",
+        "last": "z"
+      },
+      "body": "body",
+      "has_frontmatter": true
+    },
+    {
+      "name": "crlf bom",
+      "text": "﻿---\r\nname: w\r\n---\r\nb1\r\nb2\r\n",
+      "fields": {
+        "name": "w"
+      },
+      "body": "b1\nb2",
+      "has_frontmatter": true
+    }
+  ],
+  "system": [
+    {
+      "name": "persona skills fragments",
+      "persona": " 你是 DBA。 ",
+      "skills": [
+        {
+          "title": "鎖",
+          "body": "看鎖\n"
+        },
+        {
+          "title": "空",
+          "body": "  "
+        }
+      ],
+      "fragments": [
+        "",
+        "【工具】x"
+      ],
+      "label": "技能",
+      "out": "你是 DBA。\n\n[技能：鎖]\n看鎖\n\n【工具】x"
+    },
+    {
+      "name": "no persona",
+      "persona": "",
+      "skills": [],
+      "fragments": [
+        "only fragment"
+      ],
+      "label": "Skills",
+      "out": "only fragment"
+    }
+  ]
+}

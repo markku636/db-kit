@@ -387,7 +387,8 @@ dbk --conn prod-mysql -d shop run D:/db-backups/20260916-210000_prod-mysql_shop/
 | 旗標 | 說明 |
 |---|---|
 | `--out`, `-o` | 輸出目錄（必填；每次建立 `時間_連線_資料庫` 子目錄） |
-| `--review-cmd <CMD>` | AI 審查指令（Windows 走 `cmd /C`、其餘走 `sh -c`） |
+| `--review-cmd <CMD>` | AI 審查指令（Windows 走 `cmd /C`、其餘走 `sh -c`）；提示 = DBA 人設 + 任務，從 stdin 餵入 |
+| `--persona <NAME,…>` | DBA 審查人設（AI 資源庫 `agents/` 的名稱）；逗號分隔多位 = 會審，逐位跑審查指令、結論取最嚴格。省略時依連線是否為正式環境取 `ai-library.json` 的預設 |
 | `--ignore-verdict` | AI 結論為 STOP 仍執行 |
 | `--review-samples <N>` | 附給 AI 的前像樣本列數（預設 0，不送資料） |
 | `--print-prompt` | 只印出審查提示後結束 |
@@ -468,7 +469,26 @@ claude mcp add dbkit -- dbk --conn shop -d shop mcp
 - 工具失敗回的是 `isError` 的**結果**而非協定錯誤，讓模型看得到原因並自行修正。
 - 連線延遲到第一次 `tools/call` 才建立，所以資料庫暫時連不上不會讓用戶端整個握手失敗。
 
+`--tools a,b` 只提供指定的工具（清單外的連呼叫都會被擋下）。DBA agent 審查透過它套用人設的工具白名單與「不送資料」的隱私設定。
+
 > GUI 的 AI 助手會自動使用它：選 Claude / Codex 供應商時，db-kit 會找到 `dbk` 並以目前連線把它掛上去（找不到就退回沒有資料庫工具，面板會提示）。用 `DB_KIT_DBK_BIN` 可指定路徑。
+
+### `ai` — AI 資源庫（人設 / 技能 / 提示範本）
+
+與 GUI 讀同一個設定目錄（`<設定目錄>/ai-library/` 與 `ai-library.json`）。格式、分層與範本語法見 **[AI 資源庫使用指南](./ai-library.md)**。
+
+```bash
+dbk ai path                          # 個人層、團隊資料夾與設定檔的位置
+dbk ai list [agent|skill|prompt]     # 目前生效的項目與來源層
+dbk ai show agent/dba-senior         # 印出本文；--raw 印整份檔案，--variant en 看語言變體
+dbk ai lint                          # 檢查整個資源庫；有錯誤時結束碼非零
+dbk ai lint --dir ./dba-rules        # 只檢查一個資料夾（團隊 repo 的 CI 用）
+dbk ai sync                          # 列出同步到 Claude Code / Codex 的計畫
+dbk ai sync --claude --yes           # 只同步到 Claude Code 並寫入
+dbk ai sync --project . --yes        # 同步到專案資料夾的 .claude / .agents / .codex
+```
+
+同步只覆寫 db-kit 自己寫過、之後沒被手動改過的檔案；其他同名檔列為衝突並略過。
 
 ---
 

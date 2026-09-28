@@ -37,6 +37,26 @@ async fn read_script(path: &str) -> AppResult<String> {
         .map_err(|e| AppError::Storage(tf!("讀取腳本 {path} 失敗：{e}", path = path, e = e.to_string())))
 }
 
+/// 餵給外部審查指令的提示：外部指令沒有「系統提示」這個管道，人設併進 stdin 最前面
+/// （與 GUI 對 Codex CLI 的做法一致）。
+fn external_prompt(system: &str, prompt: &str) -> String {
+    if system.trim().is_empty() {
+        return prompt.to_string();
+    }
+    format!("[{}]\n{}\n\n[{}]\n{prompt}", t!("人設與技能"), system.trim(), t!("任務"))
+}
+
+/// 兩個結論取較嚴格者。
+fn stricter(a: Option<&'static str>, b: Option<&'static str>) -> Option<&'static str> {
+    let rank = |v: Option<&str>| match v {
+        Some("stop") => 3,
+        Some("caution") => 2,
+        Some("go") => 1,
+        _ => 0,
+    };
+    if rank(b) > rank(a) { b } else { a }
+}
+
 /// 以系統 shell 執行審查指令：提示走 stdin、回覆取 stdout。
 async fn run_review_cmd(cmd: &str, prompt: &str) -> AppResult<String> {
     #[cfg(windows)]
@@ -119,9 +139,20 @@ async fn run(mgr: &ConnectionManager, conn_name: &str, id: &str, db: &str, fmt: 
     let script = read_script(&a.file).await?;
     // 資料庫另有欄位記錄（報告、輸出目錄名都會帶），標籤只放連線名，免得目錄名重複出現庫名。
     let label = conn_name.to_string();
-    let rp = run::prepare_review(mgr, id, &label, db, &script, a.max_capture_rows, a.review_samples).await?;
+    // AI 資源庫（人設 / 範本）與 GUI 讀同一個設定目錄；讀不到就只用內建的。
+    let (lib, lib_settings) = match crate::store::headless_config_dir() {
+        Ok(dir) => crate::ai_library::settings::load_library(&dir),
+        Err(_) => (crate::ai_library::Library::builtin_only(), Default::default()),
+    };
+    let rp = run::prepare_review(mgr, id, &label, db, &script, a.max_capture_rows, a.review_samples, &lib, &lib_settings, &a.persona).await?;
     if a.print_prompt {
-        println!("{}", rp.prompt);
+        // 外部指令只收得到 stdin，所以印出的就是實際會餵進去的那一份（人設 + 任務）。
+        for (i, r) in rp.reviews.iter().enumerate() {
+            if i > 0 {
+                println!("\n{}\n", "=".repeat(72));
+            }
+            println!("{}", external_prompt(&r.system, &rp.prompt));
+        }
         return Ok(());
     }
     let prep = &rp.prepared;
@@ -130,22 +161,38 @@ async fn run(mgr: &ConnectionManager, conn_name: &str, id: &str, db: &str, fmt: 
         return Err(AppError::Query(t!("腳本含本流程不支援的語句，未執行任何動作").into()));
     }
 
-    // AI 審查（選用）。
-    let mut review: Option<String> = None;
+    // AI 審查（選用）。多位 DBA 會審時逐位跑，結論取最嚴格（STOP > CAUTION > GO）。
+    let mut sections: Vec<(String, String)> = Vec::new();
+    let mut verdict: Option<&'static str> = None;
     if let Some(cmd) = a.review_cmd.as_deref().filter(|c| !c.trim().is_empty()) {
-        eprintln!("{}", t!("AI 審查中…"));
-        match run_review_cmd(cmd, &rp.prompt).await {
-            Ok(text) if !text.is_empty() => {
-                if let Some(v) = report::parse_verdict(&text) {
-                    eprintln!("{}", tf!("AI 審查結論：{v}", v = v.to_uppercase()));
+        for r in &rp.reviews {
+            eprintln!("{}", tf!("AI 審查中（{who}）…", who = r.title));
+            match run_review_cmd(cmd, &external_prompt(&r.system, &rp.prompt)).await {
+                Ok(text) if !text.is_empty() => {
+                    let v = report::parse_verdict(&text);
+                    if let Some(v) = v {
+                        eprintln!("{}", tf!("{who} 的結論：{v}", who = r.title, v = v.to_uppercase()));
+                    }
+                    verdict = stricter(verdict, v.or(Some("caution")));
+                    sections.push((r.title.clone(), text));
                 }
-                review = Some(text);
+                Ok(_) => eprintln!("warning: {}", t!("審查指令沒有輸出任何內容")),
+                Err(e) => eprintln!("warning: {}", e.message()),
             }
-            Ok(_) => eprintln!("warning: {}", t!("審查指令沒有輸出任何內容")),
-            Err(e) => eprintln!("warning: {}", e.message()),
         }
     }
-    let verdict = review.as_deref().and_then(report::parse_verdict);
+    let review: Option<String> = match sections.len() {
+        0 => None,
+        1 => Some(sections.remove(0).1),
+        _ => Some(
+            sections.iter().map(|(who, text)| format!("# {who}\n\n{text}")).collect::<Vec<_>>().join("\n\n---\n\n"),
+        ),
+    };
+    if sections.len() > 1 {
+        if let Some(v) = verdict {
+            eprintln!("{}", tf!("會審結論（取最嚴格）：{v}", v = v.to_uppercase()));
+        }
+    }
 
     // 執行與否：沿用 --yes / --force 的兩段確認；AI 判 STOP 時預設只產生備份。
     let destructive = prep.statements.iter().any(|s| s.destructive);

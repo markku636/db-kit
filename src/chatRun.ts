@@ -8,6 +8,7 @@
 // 全模組為純函式（不碰 React / DOM / Tauri），判斷規則一律轉呼 sql.ts 既有的偵測器：
 // 守門邏輯若在這裡另寫一份，漂移的那天不會有人發現，只會有人少一張表。
 import type { DbKind, QueryResult, ReviewRunOutcome } from "./api";
+import { renderTask } from "./aiLibrary";
 import { clipMarkdown, fencedBlock, fencedClipBlock, joinLines } from "./aiReview";
 import type { ChatRunResult } from "./chatTypes";
 import { t } from "./i18n";
@@ -203,24 +204,15 @@ function resultSection(r: ChatRunResult): string {
  */
 export function runFeedbackPrompt(r: ChatRunResult): string {
   const failed = r.error != null;
-  return joinLines([
-    t("以下是剛才在 MAGIDB CONNECT 直接執行這段 SQL 的結果，請接續分析。"),
-    "",
-    t("【已執行的 SQL】"),
+  return renderTask("run-feedback", {
     // 這段不夾上限：它是「實際送出去的那條語句」，被截斷的話模型改出來的修正版就會漏掉尾巴，
     // 而使用者會直接把那段漏了尾巴的 SQL 按下去執行。
-    fencedBlock("sql", r.sql),
-    "",
-    failed ? t("【錯誤訊息】") : t("【執行結果】"),
-    failed ? fencedClipBlock("text", r.error ?? "", MAX_ERROR_CHARS) : resultSection(r),
-    "",
-    t("耗時：{ms}", { ms: fmtElapsed(r.ms) }),
-    "",
-    t("【接下來】"),
-    failed
-      ? t("請先說明這段 SQL 為什麼失敗（指出是語法、物件不存在、型別、權限還是資料問題），再給一段修正後、可直接執行的 SQL，放進單一 ```sql 區塊：保持原本意圖，不要留佔位符或省略號。")
-      : t("請根據這份結果接續分析：資料代表什麼、有沒有異常或值得注意的趨勢。若需要更多資料才能下結論，請直接給出下一段可執行的 SQL，放進單一 ```sql 區塊，並說明那段查詢要驗證什麼。"),
-  ]);
+    sql: fencedBlock("sql", r.sql),
+    failed: failed ? "1" : "",
+    error: failed ? fencedClipBlock("text", r.error ?? "", MAX_ERROR_CHARS) : "",
+    result: failed ? "" : resultSection(r),
+    elapsed: fmtElapsed(r.ms),
+  });
 }
 
 /**

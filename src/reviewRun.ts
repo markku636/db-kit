@@ -70,25 +70,8 @@ export function saveReviewRunPrefs(p: ReviewRunPrefs): void {
 
 // ---- AI 審查結論 ----
 
-export type Verdict = "go" | "caution" | "stop";
-
-// 與後端 report::parse_verdict 同一套規則：第一個非空行，容許 Markdown 粗體 / 標題記號與全形冒號。
-const VERDICT_RE = /^[*#\s]*VERDICT\s*[:：]?\s*\**\s*(GO|CAUTION|STOP)\b/i;
-
-export function parseVerdict(text: string): Verdict | null {
-  const first = text.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
-  if (!first) return null;
-  const m = VERDICT_RE.exec(first);
-  return m ? (m[1].toLowerCase() as Verdict) : null;
-}
-
-/** 顯示用：去掉開頭的 VERDICT 行（結論另外以徽章呈現）。 */
-export function stripVerdictLine(text: string): string {
-  const lines = text.split("\n");
-  const idx = lines.findIndex((l) => l.trim().length > 0);
-  if (idx < 0 || !VERDICT_RE.test(lines[idx].trim())) return text;
-  return lines.slice(idx + 1).join("\n").replace(/^\n+/, "");
-}
+// 解析規則搬到 verdict.ts（DBA 審查面板與審查並執行共用）；這裡轉出以維持既有匯入點。
+export { parseVerdict, stripVerdictLine, type Verdict } from "./verdict";
 
 // ---- 摘要 ----
 

@@ -190,7 +190,50 @@ pub enum Command {
     Redis(RedisCmd),
 
     /// 以 MCP（stdio JSON-RPC）伺服器模式啟動，把唯讀資料庫工具提供給 AI 用戶端（Claude Code / Codex）
-    Mcp,
+    Mcp {
+        /// 只提供這些工具（逗號分隔，例如 describe_table,explain_query）；省略 = 全部
+        #[arg(long, value_delimiter = ',', value_name = "NAMES")]
+        tools: Vec<String>,
+    },
+
+    /// AI 資源庫（人設 / 技能 / 提示範本）：列出、檢視、檢查，同步到 Claude Code / Codex
+    #[command(subcommand)]
+    Ai(AiCmd),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AiCmd {
+    /// 列出資源（agent | skill | prompt | contract；省略 = 全部）
+    List { kind: Option<String> },
+    /// 顯示一筆資源（例：agent/dba-senior、prompt/review-sql）
+    Show {
+        target: String,
+        /// 語言變體（預設跟著 --lang / 介面語言）
+        #[arg(long = "variant", value_name = "LANG")]
+        variant: Option<String>,
+        /// 印出檔案原文（含 frontmatter）
+        #[arg(long)]
+        raw: bool,
+    },
+    /// 檢查資源庫；有錯誤時結束碼非零。--dir 只檢查指定資料夾（團隊 repo 的 CI 用）
+    Lint {
+        #[arg(long, value_name = "DIR")]
+        dir: Option<String>,
+    },
+    /// 同步人設與技能到 Claude Code / Codex。未加 --yes 只列出計畫
+    Sync {
+        /// 只同步到 Claude Code（~/.claude）
+        #[arg(long)]
+        claude: bool,
+        /// 只同步到 Codex（~/.agents/skills、~/.codex/agents）
+        #[arg(long)]
+        codex: bool,
+        /// 另外同步到專案資料夾（<dir>/.claude、<dir>/.agents、<dir>/.codex；可重複）
+        #[arg(long, value_name = "DIR")]
+        project: Vec<String>,
+    },
+    /// 印出資源庫資料夾（個人層與團隊資料夾）
+    Path,
 }
 
 #[derive(Subcommand, Debug)]
@@ -492,6 +535,10 @@ pub struct RunArgs {
     /// AI 審查結論為 STOP 時仍執行（預設只產生備份）
     #[arg(long)]
     pub ignore_verdict: bool,
+    /// DBA 審查人設（AI 資源庫 agents/ 的名稱）。逗號分隔多位 = 會審，結論取最嚴格；
+    /// 省略時依連線是否為正式環境取 ai-library.json 的預設（dba_persona / dba_persona_prod）
+    #[arg(long, value_delimiter = ',', value_name = "NAME")]
+    pub persona: Vec<String>,
 }
 
 #[derive(Args, Debug)]
