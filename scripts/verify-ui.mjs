@@ -295,6 +295,8 @@ const CASES = {
     const mgr = page.getByTestId("ssh-key-manager");
     await mgr.waitFor({ timeout: 5000 }).catch(() => {});
     check("側欄「SSH 主機」標題列開得出金鑰管理", (await mgr.count()) > 0);
+    // 清單是非同步載入的（先顯示「載入中…」）：等到第一列出現再比對內容，別在忙碌的機器上讀到載入中的畫面。
+    await mgr.locator("[data-key-id]").first().waitFor({ timeout: 5000 }).catch(() => {});
     check("列出金鑰庫裡的金鑰（名稱 / 類型 / 密語 / 憑證）",
       /prod-deploy/.test(await mgr.innerText().catch(() => "")) && /Ed25519/.test(await mgr.innerText().catch(() => "")));
 
