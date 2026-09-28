@@ -250,6 +250,8 @@ export function installShim(fx) {
     ssh_session_save: ({ session }) => { window.__DBKIT_SSH_SESSION_SAVES__.push(session); return null; },
     // ── SSH 金鑰庫（假的：內容看起來像加密的就要密語，密語 "wrong" 算錯；以 ssh- 開頭的是公鑰）──
     ssh_keys_list: () => sshKeys.map((k) => ({ ...k })),
+    ssh_import_default_path: ({ kind }) => (kind === "xsh" ? fx.SSH_IMPORT_XSH?.path : fx.SSH_IMPORT_CONFIG?.path) ?? null,
+    ssh_import_scan: ({ kind }) => (kind === "xsh" ? fx.SSH_IMPORT_XSH : fx.SSH_IMPORT_CONFIG) ?? { path: "", hosts: [], skipped: 0 },
     ssh_key_inspect: ({ source, passphrase }) => sshInspect(source, passphrase),
     ssh_key_import: ({ source, passphrase, newPassphrase, name }) => {
       const r = sshInspect(source, passphrase);

@@ -459,6 +459,8 @@ pub fn run() {
             commands::ssh::ssh_sftp_download_many,
             commands::ssh::ssh_sftp_upload_many,
             commands::ssh::ssh_sftp_local_conflicts,
+            commands::ssh::ssh_import_scan,
+            commands::ssh::ssh_import_default_path,
             commands::ssh::ssh_key_inspect,
             commands::ssh::ssh_keys_list,
             commands::ssh::ssh_key_import,

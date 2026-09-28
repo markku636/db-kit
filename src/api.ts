@@ -4,6 +4,7 @@ import type {
   SshSessionsFile, SshSession, SshFolder, SshPlacement, SshTargetRef, SshConnInfo, SshHostKeyDecision,
   SshHostKeyPrompt, SshAuthPrompt, SshTermExit, SshConnClosed, SftpEntry, SftpOnConflict, SftpOpenInfo, SftpProgress, SftpText,
   SshKeyInspect, SshKeySource, SshStoredKey, SshKeyImportOutcome, SshKeyGenAlgorithm, SshCertInfo,
+  SshHostImportKind, SshImportScan,
 } from "./sshTypes";
 
 export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "external";
@@ -1973,4 +1974,7 @@ export const api = {
   sshKeyPublic: (id: string) => invoke<string>("ssh_key_public", { id }),
   sshKeyExport: (id: string, dest: string) => invoke<void>("ssh_key_export", { id, dest }),
   sshKeyAttachCert: (id: string, source: SshKeySource) => invoke<SshCertInfo>("ssh_key_attach_cert", { id, source }),
+  // 匯入主機：只讀出候選主機（~/.ssh/config 或 .xsh 資料夾），勾選後走一般的 sshSessionSave。
+  sshImportScan: (kind: SshHostImportKind, path: string | null) => invoke<SshImportScan>("ssh_import_scan", { kind, path }),
+  sshImportDefaultPath: (kind: SshHostImportKind) => invoke<string | null>("ssh_import_default_path", { kind }),
 };

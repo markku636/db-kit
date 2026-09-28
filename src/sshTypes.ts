@@ -212,6 +212,32 @@ export type SshKeySource = { kind: "path"; path: string } | { kind: "text"; text
 
 export type SshKeyGenAlgorithm = "ed25519" | "ecdsa-p256" | "ecdsa-p384" | "rsa-3072" | "rsa-4096";
 
+// ---- 匯入主機（後端 ssh/host_import.rs） ----
+
+/** 來源：OpenSSH 設定檔，或 .xsh 工作階段檔所在的資料夾。 */
+export type SshHostImportKind = "ssh_config" | "xsh";
+
+export interface SshImportCandidate {
+  name: string;
+  /** 來源裡的資料夾（.xsh 的子資料夾，以 / 分隔） */
+  folder: string | null;
+  host: string;
+  port: number;
+  username: string;
+  identity_file: string | null;
+  certificate_file: string | null;
+  /** .xsh 參照的金鑰名稱（在原軟體的金鑰庫裡，不是檔案） */
+  xshell_key: string | null;
+  term: string | null;
+  notes: string[];
+}
+
+export interface SshImportScan {
+  path: string;
+  hosts: SshImportCandidate[];
+  skipped: number;
+}
+
 /** 前端執行期的連線狀態（不進後端）。 */
 export type SshStatus = "connecting" | "connected" | "disconnected" | "error";
 

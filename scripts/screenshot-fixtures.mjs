@@ -509,6 +509,25 @@ export const SSH_KEYS = [
     encrypted: true, source_format: "PuTTY PPK v3", created_at: 1790000000, has_cert: true,
   },
 ];
+// 匯入主機：~/.ssh/config 讀出的三台（web-01 與既有的主機同一台）與 .xsh 資料夾讀出的兩台。
+const imp = (p) => ({ folder: null, port: 22, identity_file: null, certificate_file: null, xshell_key: null, term: null, notes: [], ...p });
+export const SSH_IMPORT_CONFIG = {
+  path: "C:\\Users\\demo\\.ssh\\config",
+  skipped: 1,
+  hosts: [
+    imp({ name: "web-01", host: "10.20.0.15", username: "deploy", identity_file: "C:\\Users\\demo\\.ssh\\id_ed25519" }),
+    imp({ name: "db-prod", host: "10.20.0.30", username: "dba", identity_file: "C:\\Users\\demo\\.ssh\\id_db", certificate_file: "C:\\Users\\demo\\.ssh\\id_db-cert.pub" }),
+    imp({ name: "app.internal", host: "app.internal", username: "ops", notes: ["有 ProxyJump（bastion）：跳板機目前還不支援，匯入後直連可能連不上"] }),
+  ],
+};
+export const SSH_IMPORT_XSH = {
+  path: "C:\\Users\\demo\\Documents\\Sessions",
+  skipped: 0,
+  hosts: [
+    imp({ name: "api-01", folder: "PROD/api", host: "10.30.0.11", port: 2200, username: "deploy", xshell_key: "prod-deploy", term: "xterm" }),
+    imp({ name: "jump", host: "jump.example.com", username: "ops" }),
+  ],
+};
 const sftpEntry = (dir, name, extra = {}) => ({
   name, path: dir === "/" ? `/${name}` : `${dir}/${name}`, is_dir: false, is_symlink: false, link_target_is_dir: null,
   size: 0, mtime: Math.floor((Date.now() - 3 * 86_400_000) / 1000), permissions: 0o644, mode: "-rw-r--r--", uid: 1000, gid: 1000, owner: "deploy", group: "deploy", ...extra,

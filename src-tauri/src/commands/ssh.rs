@@ -26,6 +26,7 @@ use crate::ssh::auth::{
 use crate::ssh::known_hosts::{HostKeyStatus, KnownHostsStore};
 use crate::ssh::runtime::{PromptAnswer, SshConn, SshConnInfo, SshRuntime};
 use crate::ssh::sessions::{self, SshFolder, SshSession, SshSessionsFile};
+use crate::ssh::host_import;
 use crate::ssh::keys;
 use crate::ssh::sftp::{self as sftp_mod, OnConflict, ProgressFn, SftpClient, SftpEntry, SftpText};
 use crate::ssh::terminal::{decode_b64_input, TermEvent, TermHandle, TermOpen, TermSink};
@@ -726,6 +727,38 @@ pub async fn ssh_sftp_upload_many(
 #[tauri::command]
 pub async fn ssh_sftp_local_conflicts(local_dir: String, names: Vec<String>) -> AppResult<Vec<String>> {
     Ok(sftp_mod::local_conflicts(Path::new(&local_dir), &names).await)
+}
+
+// ---- 匯入主機 ----
+
+/// 匯入主機的來源。
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostImportKind {
+    /// OpenSSH 的 `~/.ssh/config`（或指定的檔案）。
+    SshConfig,
+    /// `.xsh` 工作階段檔所在的資料夾（遞迴）。
+    Xsh,
+}
+
+/// 讀出可匯入的主機（只讀，不寫入任何東西；`path` 空 = 預設位置）。
+#[tauri::command]
+pub async fn ssh_import_scan(kind: HostImportKind, path: Option<String>) -> AppResult<host_import::ImportScan> {
+    let r = tauri::async_runtime::spawn_blocking(move || match kind {
+        HostImportKind::SshConfig => host_import::scan_ssh_config(path.as_deref()),
+        HostImportKind::Xsh => host_import::scan_xshell_dir(path.as_deref()),
+    })
+    .await;
+    r.map_err(|e| AppError::Ssh(e.to_string()))?
+}
+
+/// 各來源的預設位置（對話框預填用；找不到回 None）。
+#[tauri::command]
+pub fn ssh_import_default_path(kind: HostImportKind) -> Option<String> {
+    match kind {
+        HostImportKind::SshConfig => Some(host_import::default_ssh_config_path().display().to_string()),
+        HostImportKind::Xsh => host_import::default_xshell_dir().map(|p| p.display().to_string()),
+    }
 }
 
 // ---- 使用者金鑰（Xshell 的「使用者金鑰管理員」）----

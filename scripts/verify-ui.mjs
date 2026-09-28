@@ -51,6 +51,7 @@ const CASE_FX = {
   "sftp-edit-and-chmod": { STORAGE_SEED: SSH_STORAGE_SEED },
   "sftp-multi-select": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-key-manager": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ssh-host-import": { STORAGE_SEED: SSH_STORAGE_SEED },
 };
 
 // xterm 目前畫面（DOM renderer）的純文字。
@@ -202,6 +203,48 @@ const CASES = {
     await sleep(300);
     check("清單的權限欄就地更新成 rwxr-xr-x", (await sftp.getByText("-rwxr-xr-x", { exact: true }).count()) > 0);
     check("沒有未實作的 SFTP command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // 匯入主機：~/.ssh/config 讀出的主機，已經有的預設不勾、有提醒的列出來；私鑰與憑證跟著帶；
+  // .xsh 資料夾的子資料夾變成主機資料夾，參照的金鑰在金鑰庫有同名的就直接接上。
+  async "ssh-host-import"(page) {
+    const tree = page.locator("[data-ssh-host-tree]");
+    await tree.getByText("web-01", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    await tree.getByRole("button", { name: "匯入 SSH 主機", exact: true }).first().click();
+    const dlg = page.getByTestId("ssh-import");
+    await dlg.locator("[data-import-index]").first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("開啟就讀預設的 ~/.ssh/config", (await dlg.locator("[data-import-index]").count()) === 3);
+    const box = (name) => dlg.getByRole("checkbox", { name, exact: true });
+    check("已經在清單裡的主機預設不勾", !(await box("web-01").isChecked()) && (await box("db-prod").isChecked()));
+    check("列出不支援設定的提醒（ProxyJump）", /ProxyJump/.test(await dlg.innerText().catch(() => "")));
+    await page.getByRole("button", { name: "匯入 2 台", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_SSH_SESSION_SAVES__.length >= 2, null, { timeout: 5000 }).catch(() => {});
+    const saves = await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__);
+    const db = saves.find((s) => s.name === "db-prod");
+    check("私鑰與憑證跟著帶進主機設定",
+      db?.auth === "key" && /id_db$/.test(db?.private_key_path ?? "") && /id_db-cert\.pub$/.test(db?.certificate_path ?? ""), JSON.stringify(db));
+    const app = saves.find((s) => s.name === "app.internal");
+    check("沒有私鑰的先設成密碼認證", app?.auth === "password" && app?.private_key_path === "", JSON.stringify(app));
+    await tree.getByText("db-prod", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("匯入後側欄看得到新主機", (await tree.getByText("db-prod", { exact: true }).count()) > 0);
+
+    // .xsh 資料夾
+    await tree.getByRole("button", { name: "匯入 SSH 主機", exact: true }).first().click();
+    await dlg.getByRole("radio", { name: ".xsh 工作階段檔" }).click().catch(async () => {
+      await dlg.getByText(".xsh 工作階段檔", { exact: true }).click();
+    });
+    await dlg.getByRole("checkbox", { name: "api-01", exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+    check("讀 .xsh 資料夾，子資料夾顯示出來", /PROD \/ api/.test(await dlg.innerText().catch(() => "")));
+    const before = await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__.length);
+    await page.getByRole("button", { name: "匯入 2 台", exact: true }).click();
+    await page.waitForFunction((n) => window.__DBKIT_SSH_SESSION_SAVES__.length >= n + 2, before, { timeout: 5000 }).catch(() => {});
+    const api01 = (await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__)).find((s) => s.name === "api-01");
+    check(".xsh 參照的金鑰在金鑰庫有同名的就直接接上", api01?.auth === "key" && api01?.private_key_path === "keystore:key-prod" && api01?.port === 2200,
+      JSON.stringify(api01));
+    await tree.getByText("PROD / api", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("子資料夾變成主機資料夾", (await tree.getByText("PROD / api", { exact: true }).count()) > 0);
+    check("沒有未實作的 SSH command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 
