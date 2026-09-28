@@ -793,7 +793,8 @@ const CASES = {
     check("審查列出無 WHERE 的 UPDATE（error）", body.includes("沒有 WHERE 條件"), body.slice(0, 400));
     check("審查列出前綴萬用字元 LIKE（warn）", body.includes("萬用字元開頭"));
     check("審查顯示規則代號", body.includes("no-where-dml"));
-    check("審查面板有「AI 深入審查」入口", (await page.getByRole("button", { name: /AI 深入審查/ }).count()) > 0);
+    check("審查面板有「DBA 審查」入口", (await page.getByRole("button", { name: "DBA 審查", exact: true }).count()) > 0);
+    check("審查面板列出 DBA 人設", body.includes("資深 DBA") && body.includes("正式環境守門員"));
     check("審查面板標明規則引擎的侷限", body.includes("規則引擎只檢查寫法樣式"));
 
     // 點一筆 finding 應在編輯器選取對應範圍（不丟例外、選取非空）。
@@ -1097,12 +1098,14 @@ const CASES = {
     check("輸出目錄沿用上次設定", (await page.locator('input[value="C:\\\\Users\\\\demo\\\\db-kit-backups"]').count()) > 0);
 
     // 開啟時自動審查：串流完成後出現結論徽章。
-    await page.waitForFunction(() => document.body.innerText.includes("AI：注意風險後再執行"), null, { timeout: 15_000 }).catch(() => {});
+    await page.waitForFunction(() => document.body.innerText.includes("注意風險後再執行"), null, { timeout: 15_000 }).catch(() => {});
     // 結論在串流第一段就出現；串流結束（出現「重新審查」）前兩個動作鈕都該是停用的。
     check("AI 串流中不能產生備份", !(await page.getByRole("button", { name: "只產生備份", exact: true }).first().isEnabled()));
     await page.getByRole("button", { name: "重新審查", exact: true }).first().waitFor({ timeout: 15_000 }).catch(() => {});
     body = await page.locator("#root").innerText();
-    check("AI 審查串流並顯示結論徽章", body.includes("AI：注意風險後再執行"));
+    check("AI 審查串流並顯示結論徽章", body.includes("注意風險後再執行"));
+    check("正式環境連線預設用守門員人設", (await page.getByRole("button", { name: /正式環境守門員/ }).count()) > 0);
+    check("DBA 查資料庫的紀錄列在結果裡", body.includes("工具呼叫（1）"));
     check("結論那一行不重複出現在內文", !body.includes("VERDICT: CAUTION"));
 
     const exec = page.getByRole("button", { name: "執行（含備份）", exact: true });
@@ -1116,6 +1119,72 @@ const CASES = {
     check("產生備份後切到結果分頁", body.includes("已產生審查與備份（未執行）"), body.replace(/\s+/g, " ").slice(0, 300));
     check("結果列出輸出檔案", body.includes("rollback.sql") && body.includes("snapshots/01-before-orders.json"));
     check("結果可以回滾分頁查看腳本", (await page.getByText("回滾腳本", { exact: true }).count()) > 0);
+  },
+
+  // 編輯器 DBA 審查：下方「審查」分頁 → 選人設 → DBA 審查（agent 模式先查一次資料庫）→ 結論徽章 →
+  // 回覆裡的修正 SQL 一鍵走差異預覽（直接用那段 SQL，不再呼叫模型）。
+  async "dba-review-editor"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await sleep(900);
+    const editor = page.locator(".cm-content").first();
+    await editor.click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.type("UPDATE orders SET status = 'cancelled' WHERE status = 'pending';");
+    await sleep(600);
+    await page.getByRole("button", { name: /^審查(?!並執行)/ }).first().click();
+    await sleep(500);
+    const run = page.getByRole("button", { name: "DBA 審查", exact: true });
+    check("審查分頁有 DBA 審查鈕", (await run.count()) > 0);
+    await run.first().click();
+    await page.waitForFunction(() => document.body.innerText.includes("注意風險後再執行"), null, { timeout: 15_000 }).catch(() => {});
+    await page.getByRole("button", { name: "重新審查", exact: true }).first().waitFor({ timeout: 15_000 }).catch(() => {});
+    const body = await page.locator("#root").innerText();
+    check("DBA 審查顯示結論徽章", body.includes("注意風險後再執行"), body.replace(/\s+/g, " ").slice(0, 300));
+    check("DBA 審查列出工具呼叫", body.includes("工具呼叫（1）"));
+    check("DBA 審查有「在助手中追問」", (await page.getByRole("button", { name: "在助手中追問" }).count()) > 0);
+    const apply = page.getByRole("button", { name: /套用到編輯器/ });
+    check("修正 SQL 有「套用到編輯器」", (await apply.count()) > 0);
+    await apply.first().click();
+    await sleep(800);
+    const diff = await page.locator("body").innerText();
+    check("套用走差異預覽", diff.includes("套用 DBA 建議的修正"), diff.replace(/\s+/g, " ").slice(0, 200));
+    check("差異預覽不再呼叫模型（沒有重新生成）", (await page.getByRole("button", { name: "重新生成" }).count()) === 0);
+  },
+
+  // AI 資源庫：設定 → 開啟 AI 資源庫 → 人設 / 技能 / 提示範本三個分頁都有內建項目 → 範本預覽帶出鎖定的契約 →
+  // 來源與同步分頁列出同步計畫。
+  async "ai-library-dialog"(page) {
+    await page.getByRole("button", { name: /設定/ }).first().click();
+    await sleep(600);
+    await page.getByRole("button", { name: /開啟 AI 資源庫/ }).first().click();
+    await page.waitForFunction(() => document.body.innerText.includes("正式環境守門員"), null, { timeout: 8000 }).catch(() => {});
+    let body = await page.locator("body").innerText();
+    check("資源庫列出內建 DBA 人設", body.includes("正式環境守門員") && body.includes("資料模型架構師"), body.replace(/\s+/g, " ").slice(0, 300));
+    check("內建項目標示唯讀與複製為自訂", body.includes("唯讀") && (await page.getByRole("button", { name: "複製為自訂" }).count()) > 0);
+    await page.getByRole("radio", { name: "技能" }).first().click().catch(() => page.getByText("技能", { exact: true }).first().click());
+    await sleep(400);
+    body = await page.locator("body").innerText();
+    check("技能分頁列出內建技能", body.includes("線上 DDL") && body.includes("鎖與併發風險"));
+    await page.getByRole("radio", { name: "提示範本" }).first().click().catch(() => page.getByText("提示範本", { exact: true }).first().click());
+    await sleep(400);
+    await page.getByText("DBA 審查 SQL", { exact: true }).first().click();
+    await sleep(400);
+    body = await page.locator("body").innerText();
+    check("範本顯示可用變數", body.includes("{{sql}}") && body.includes("{{lint_findings}}"));
+    check("範本顯示鎖定的輸出契約", body.includes("輸出契約（鎖定，不可修改）") && body.includes("VERDICT: STOP"));
+    await page.getByRole("button", { name: "預覽", exact: true }).first().click();
+    await sleep(400);
+    body = await page.locator("body").innerText();
+    check("預覽以範例資料渲染", body.includes("預覽（以範例資料渲染）") && body.includes("SELECT o.id, o.status FROM orders"));
+    await page.getByRole("radio", { name: "來源與同步" }).first().click().catch(() => page.getByText("來源與同步", { exact: true }).first().click());
+    await sleep(400);
+    await page.getByRole("button", { name: "預覽同步計畫" }).first().click();
+    await sleep(500);
+    body = await page.locator("body").innerText();
+    check("同步計畫列出新增與衝突", body.includes("dba-senior.md") && body.includes("衝突（略過）"));
+    check("同步計畫附上 MCP 註冊提示", body.includes("claude mcp add dbkit"));
   },
 
   async "compare-dialogs-open"(page) {

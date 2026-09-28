@@ -216,6 +216,20 @@ export function installShim(fx) {
     review_run_cancel: () => null,
     review_run_reveal: () => null,
 
+    // ── AI 資源庫 ────────────────────────────────────────────────────────
+    // 讀取刻意失敗：前端會退回打包進 bundle 的內建資源庫（與後端讀不到設定目錄時同一條路徑）。
+    ai_library_load: () => Promise.reject(new Error("screenshot shim: 資源庫用內建 fallback")),
+    ai_library_settings_set: () => Promise.reject(new Error("screenshot shim: 不寫設定")),
+    ai_library_reveal: () => null,
+    ai_library_sync_plan: () => ({
+      items: [
+        { target: "Claude Code", path: "C:\\Users\\demo\\.claude\\agents\\dba-senior.md", action: "create", source: "agent:dba-senior" },
+        { target: "Codex", path: "C:\\Users\\demo\\.codex\\agents\\dba-senior.toml", action: "conflict", source: "agent:dba-senior" },
+      ],
+      mcp_hint: "claude mcp add dbkit -- dbk --conn <連線名稱> mcp",
+    }),
+    ai_library_sync_apply: () => ({ written: 1, deleted: 0, skipped: 1, errors: [] }),
+
     // ── AI 助手 ──────────────────────────────────────────────────────────
     app_lock_status: () => ({ locked: false, has_password: false, idle_minutes: 0 }),
     agent_detect: () => ({ available: true, provider: "claude", version: "2.0.0", path: "claude", models: [], note: null }),
@@ -227,10 +241,16 @@ export function installShim(fx) {
       // 審查並執行的審查（mode = review）回一份帶 VERDICT 的審查；SSH 終端機情境（prompt 帶終端機上下文）
       // 回 bash 建議——提到「刪除」就回危險版（rm -rf，驗確認框）；其餘沿用比對報告的總結。
       const p = String(prompt ?? "");
-      const chunks = mode === "review" && fx.AI_REVIEW_CHUNKS ? fx.AI_REVIEW_CHUNKS
+      const reviewing = mode === "review" || mode === "dba";
+      const chunks = reviewing && fx.AI_REVIEW_CHUNKS ? fx.AI_REVIEW_CHUNKS
         : /SSH 終端機/.test(p) && /刪除/.test(p) && fx.AI_SHELL_DANGER_CHUNKS ? fx.AI_SHELL_DANGER_CHUNKS
         : /SSH 終端機/.test(p) && fx.AI_SHELL_CHUNKS ? fx.AI_SHELL_CHUNKS
         : fx.AI_SUMMARY_CHUNKS;
+      // DBA agent 模式：先「查一次資料庫」（工具呼叫稽核清單要看得到），再開始回覆。
+      if (mode === "dba") {
+        setTimeout(() => emit("agent-stream", { req_id: reqId, kind: "tool", tool: "mcp__dbkit__explain_query", tool_id: "t1", tool_input: '{"query":"EXPLAIN UPDATE orders SET status = \'cancelled\' WHERE status = \'pending\'"}' }), 20);
+        setTimeout(() => emit("agent-stream", { req_id: reqId, kind: "tool_result", tool: "mcp__dbkit__explain_query", tool_id: "t1", tool_output_preview: "type=ALL rows≈120000", tool_rows: 1, tool_ms: 12 }), 40);
+      }
       const tick = () => {
         if (aiCancelled || i >= chunks.length) {
           emit("agent-stream", { req_id: reqId, kind: "done", text: null });
