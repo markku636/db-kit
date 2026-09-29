@@ -7,14 +7,30 @@
 // 任何尺寸出現 wrap（短標籤被擠成多行）或 cut（按鈕被外層裁掉）就算失敗；hscroll / clipped 只列出。
 // 非預設尺寸下，少數功能檢查本來就綁尺寸（例如「對話框不必捲動」），那些只列出、不影響結果。
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+// 每一輪各拿一個當下空著的 port：同一台機器常有好幾個 session 同時在跑 verify-ui，寫死的 port 會撞。
+// 三個先同時佔住再一起放掉，才不會拿到同一個。
+const freePorts = async (n) => {
+  const servers = await Promise.all(Array.from({ length: n }, () => new Promise((ok, fail) => {
+    const srv = createServer();
+    srv.once("error", fail);
+    srv.listen(0, "127.0.0.1", () => ok(srv));
+  })));
+  const ports = servers.map((s) => String(s.address().port));
+  await Promise.all(servers.map((s) => new Promise((ok) => s.close(ok))));
+  return ports;
+};
+const [p1, p2, p3] = await freePorts(3);
+
 const RUNS = [
-  { name: "1280×800", env: { DBKIT_VIEWPORT: "1280x800", DBKIT_PORT: "4191" } },
-  { name: "900×640", env: { DBKIT_VIEWPORT: "900x640", DBKIT_PORT: "4192" } },
-  { name: "1280×800 · 字級 20px", env: { DBKIT_VIEWPORT: "1280x800", DBKIT_UI_FONT: "20", DBKIT_PORT: "4193" } },
+  { name: "1280×800", env: { DBKIT_VIEWPORT: "1280x800", DBKIT_PORT: p1 } },
+  { name: "900×640", env: { DBKIT_VIEWPORT: "900x640", DBKIT_PORT: p2 } },
+  { name: "1280×800 · 字級 20px", env: { DBKIT_VIEWPORT: "1280x800", DBKIT_UI_FONT: "20", DBKIT_PORT: p3 } },
 ];
 
 const run = ({ name, env }) => new Promise((done) => {
