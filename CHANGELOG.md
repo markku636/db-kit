@@ -1,6 +1,30 @@
-## 未發佈
+## v0.39.0
 
-**支援 FTP / FTPS 主機：跟 SFTP 同一個檔案面板，上傳下載一樣可以斷點續傳。**
+**Docker、Docker Registry 與 Harbor 可以直接在 db-kit 裡管理了：看容器、看 log、進 shell、把資料庫容器一鍵建成連線；另外支援 FTP / FTPS 主機，跟 SFTP 同一個檔案面板。**
+
+**Docker**
+
+- **新增 Docker 連線**：新增連線多了「容器與映像」分類。連線方式有三種——**本機**（Docker Desktop 的 named pipe 或 Linux 的 `/var/run/docker.sock`，留空就用預設）、**TCP**（預設 2375）、**TLS**（預設 2376）。TLS 可以只給 CA（單向），也可以再加用戶端憑證與私鑰（雙向 TLS）；按「從憑證目錄填入…」選 `DOCKER_CERT_PATH` 那個資料夾，`ca.pem` / `cert.pem` / `key.pem` 一次填好。自簽憑證可勾「略過伺服器憑證驗證」；舊版 daemon 回「client version too new」時可以固定 API 版本。也能貼 `unix://`、`npipe://`、`tcp://` 字串。
+- **連線樹**：展開後分成容器、映像、Volume、網路四類；容器依狀態上色（執行中綠、暫停黃、停止灰）。右鍵可以啟動 / 停止 / 重新啟動 / 暫停 / 強制終止 / 改名 / 刪除，映像可以加 tag、重新拉取、刪除（被容器用著會再問要不要強制），Volume 與自訂網路也能刪除。
+- **容器分頁**：點容器開出分頁，上方是啟停與刪除按鈕，下面分成——
+  - **資訊**：映像、指令、埠映射、網路、掛載、健康檢查、標籤與完整 inspect JSON；環境變數裡的密碼 / token 類預設遮起來，按眼睛才顯示。
+  - **Log**：最近 N 行加持續跟隨，stderr 以紅色顯示，可搜尋、開關時間戳。
+  - **Shell**：直接進容器的互動終端（有 bash 用 bash，否則 sh），可指定指令與使用者；shell 結束後按 Enter 重新連線。切到別的子頁再回來，log 與 shell 都還在。
+  - **資源 / 行程**：CPU、記憶體走勢圖，網路與磁碟讀寫量，以及容器內的行程清單。
+- **資料庫容器一鍵建連線**：在 PostgreSQL、MySQL、MariaDB、SQL Server、MongoDB、Redis、RabbitMQ、Elasticsearch / OpenSearch、Kafka、Oracle 容器上按右鍵「建立資料庫連線…」，會依映像判斷類型，用發布的埠與容器環境變數（如 `POSTGRES_USER` / `POSTGRES_PASSWORD`）填好新增連線對話框，確認後存檔即可。Docker 走 SSH 通道時，新連線也會沿用同一組 SSH 設定。
+- **總覽**：連線右鍵「總覽…」看引擎版本、容器數、映像 / 容器 / Volume / 建置快取各佔多少磁碟、依 compose 專案分組的容器清單（可直接啟停），以及各種清理（刪掉已停止的容器、懸空映像、沒人用的 Volume 與網路、建置快取；會刪資料的清理要輸入 `prune` 確認）。也可以從這裡或映像分類右鍵「拉取映像…」，逐層顯示下載進度。
+
+**Docker Registry / Harbor**
+
+- **Registry**：連到任何相容 Registry v2 的服務（自架 registry、Docker Hub、GHCR…）。需要 token 的服務會自動用帳密換發權杖；帳密可留空匿名瀏覽。不開放 repository 清單的服務（Docker Hub、GHCR 等）在連線設定填「Repository 清單」即可。點 tag 可以看 digest、大小、多平台清單（點平台再看該平台的映像）、各層與映像設定，複製 `docker pull` 指令，或依 tag 刪除（registry 需開啟刪除功能）。
+- **Harbor**：連線樹依專案列出 repository；點 repository 看 artifact 表（tag、平台、大小、推送時間、弱點掃描摘要），可以觸發掃描（跑完自動刷新）、看弱點明細（嚴重度、套件、修正版本，CVE 可點開說明）、移除 tag、刪除 artifact 或整個 repository（要輸入名稱確認）。專案右鍵看公開與否、配額、自動掃描設定；連線右鍵看 Harbor 版本與各元件健康狀態。建議用 robot 帳號連線。
+- **拉到 Docker**：Registry 的 tag 與 Harbor 的 artifact 都能「拉到 Docker…」，直接拉進已連線的 Docker；密碼留空就用該 Registry / Harbor 連線存在系統鑰匙圈的密碼，不必再輸入一次。
+
+**其他**
+
+- 設為唯讀的 Docker / Registry / Harbor 連線，所有會改東西的動作（啟停、刪除、清理、拉取、容器 shell）都會隱藏。
+- 側欄與連線資訊的主機欄，埠寫在網址裡的連線不再顯示多餘的「:0」。
+- 簡體中文介面把「映像」改用「镜像」、「弱點」改用「漏洞」。
 
 **FTP / FTPS**
 
