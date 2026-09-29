@@ -97,13 +97,24 @@ const FALLBACK_DEF: EditorThemeDef = {
 };
 
 /**
+ * 終端機文字往主題 accent 靠的比例（ANSI 彩色 / 預設前景）。
+ * 深色變體共用同一組語意色（danger / success / warning / info）與 fg、keyword、number，
+ * 不染色的話切換深色主題時終端機文字一模一樣，只有底色在變。30% / 12% 下每個變體都明顯帶自家色調，
+ * 而染色不會讓任何一個顏色更難讀：原本對底色 ≥ 4.5:1 的仍 ≥ 4.5:1，不到的也不再往下掉
+ * （accent 偏亮，多數還會變好讀；見 sshTerminalTheme.test.ts）。
+ */
+export const TERM_TINT = { ansi: 0.3, fg: 0.12 } as const;
+
+/**
  * app 變體 → xterm ITheme。def 為空（主題 id 對不上）就用內建深色預設，呼叫端可直接餵 getEditorThemeDef(id)。
  * - background = app 表面（mix(colors.bg → app.top, SURFACE_STEPS.app)，與 --c-app / 查詢編輯器同色）；
- *   fg / caret → foreground / cursor；selection 加 40% alpha 當選取底色。
+ *   foreground = fg 往 accent 染 12%；cursor = accent；selection 加 40% alpha 當選取底色。
  * - ANSI 16 色：black=activeLine、red=danger、green=success、yellow=warning、blue=number、
- *   magenta=keyword、cyan=info、white=fg；bright 系列深色主題往白提 15%、淺色主題往黑壓 10%。
- *   white=fg 的用意是「程式印白字時在淺色主題仍看得到」（多數 CLI 假設深底），代價是淺色主題下
- *   顯式的 ANSI black 會很淡——實務上幾乎沒有程式主動印黑字。
+ *   magenta=keyword、cyan=info，六個彩色各往 accent 染 30%；white=前景；brightBlack=comment
+ *   （變體自家色調的灰，也是 app 自己印的 \x1b[90m 提示用色）；其餘 bright 系列深色主題往白提 15%、
+ *   淺色主題往黑壓 10%。white=前景的用意是「程式印白字時在淺色主題仍看得到」（多數 CLI 假設深底），
+ *   代價是淺色主題下顯式的 ANSI black 會很淡——實務上幾乎沒有程式主動印黑字。
+ * - accent 壞掉時 mixHex 回原色，等於不染色；游標退回前景。
  */
 export function xtermThemeFor(def: EditorThemeDef | null | undefined): ITheme {
   const { colors, app, dark } = def ?? FALLBACK_DEF;
@@ -114,28 +125,29 @@ export function xtermThemeFor(def: EditorThemeDef | null | undefined): ITheme {
     return p ? toHex(p) : fallback;
   };
   const bright = (c: string) => (dark ? lightenHex(c, 0.15) : darkenHex(c, 0.1));
+  const tint = (c: string, k: number) => mixHex(c, app.accent, k);
   const well = norm(colors.bg, fbBg);
   const bg = mixHex(well, norm(app.top, well), SURFACE_STEPS.app);
-  const fg = norm(colors.fg, fbFg);
+  const fg = tint(norm(colors.fg, fbFg), TERM_TINT.fg);
   const base = {
     black: norm(colors.activeLine, dark ? "#444444" : "#bbbbbb"),
-    red: norm(app.danger, "#ff5555"),
-    green: norm(app.success, "#50fa7b"),
-    yellow: norm(app.warning, "#f1fa8c"),
-    blue: norm(colors.number, "#8be9fd"),
-    magenta: norm(colors.keyword, "#ff79c6"),
-    cyan: norm(app.info, "#8be9fd"),
+    red: tint(norm(app.danger, "#ff5555"), TERM_TINT.ansi),
+    green: tint(norm(app.success, "#50fa7b"), TERM_TINT.ansi),
+    yellow: tint(norm(app.warning, "#f1fa8c"), TERM_TINT.ansi),
+    blue: tint(norm(colors.number, "#8be9fd"), TERM_TINT.ansi),
+    magenta: tint(norm(colors.keyword, "#ff79c6"), TERM_TINT.ansi),
+    cyan: tint(norm(app.info, "#8be9fd"), TERM_TINT.ansi),
     white: fg,
   };
   return {
     background: bg,
     foreground: fg,
-    cursor: norm(colors.caret, fg),
+    cursor: norm(app.accent, fg),
     cursorAccent: bg,
     selectionBackground: withAlpha(colors.selection, "66"),
     selectionInactiveBackground: withAlpha(colors.selection, "40"),
     ...base,
-    brightBlack: bright(base.black),
+    brightBlack: norm(colors.comment, bright(base.black)),
     brightRed: bright(base.red),
     brightGreen: bright(base.green),
     brightYellow: bright(base.yellow),

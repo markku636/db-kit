@@ -54,6 +54,7 @@ const CASE_FX = {
   "ssh-host-import": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-disconnect-overlay": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-jump-host": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ssh-terminal-theme": { STORAGE_SEED: SSH_STORAGE_SEED },
   // 一台 SSH 主機都沒有：側欄區塊與分頁列按鈕都不該出現，從「新增連線」加第一台。
   "ssh-from-conn-string": { STORAGE_SEED: SSH_STORAGE_SEED, SSH_SESSIONS: { version: 1, folders: [], sessions: [] } },
   "ssh-host-paste": { STORAGE_SEED: SSH_STORAGE_SEED },
@@ -216,6 +217,29 @@ const CASES = {
     check("清單的權限欄就地更新成 rwxr-xr-x", (await sftp.getByText("-rwxr-xr-x", { exact: true }).count()) > 0);
     check("沒有未實作的 SFTP command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // 終端機配色跟著主題：xterm 四周內距透出的外框底色＝xterm 自己的底色（不會框出一圈高一階的畫布色）；
+  // 文字色也隨主題換（深色變體的 fg 與語意色都一樣，沒往 accent 染色的話切主題文字不會變）。
+  async "ssh-terminal-theme"(page) {
+    await openSshWeb01(page);
+    const probe = () => page.evaluate(() => {
+      const xterm = document.querySelector(".xterm");
+      const frame = xterm?.parentElement?.parentElement; // .xterm → hostRef（pl-1 pt-1）→ 外框
+      const bg = (el) => (el ? getComputedStyle(el).backgroundColor : null);
+      // xterm 6 的 .xterm 本身透明，主題底色畫在捲動容器上。
+      return { frame: bg(frame), xterm: bg(xterm?.querySelector(".xterm-scrollable-element")), fg: getComputedStyle(document.querySelector(".xterm-rows")).color };
+    });
+    const pickTheme = (id) => page.locator("select").filter({ has: page.locator(`option[value="${id}"]`) }).first().selectOption(id);
+    const fgs = new Set();
+    for (const id of ["amethyst", "jade", "moonstone"]) {
+      await pickTheme(id);
+      await sleep(300);
+      const p = await probe();
+      check(`${id}：終端機外框底色＝xterm 底色`, p.frame === p.xterm, JSON.stringify(p));
+      fgs.add(p.fg);
+    }
+    check("切換主題時終端機文字色跟著變", fgs.size === 3, JSON.stringify([...fgs]));
   },
 
   // 跳板機：主機設定可選另一台已存主機當跳板機（不能選自己），存下去的是那台的 id；清掉就回到直連。

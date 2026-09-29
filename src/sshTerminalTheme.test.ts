@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { EDITOR_THEMES, buildAppVars, type EditorThemeDef } from "./editorThemes";
 import { SURFACE_STEPS } from "./themeSurfaces";
-import { xtermThemeFor, mixHex, lightenHex, darkenHex, isDarkHex, parseHex, withAlpha } from "./sshTerminalTheme";
+import { xtermThemeFor, mixHex, lightenHex, darkenHex, isDarkHex, parseHex, withAlpha, TERM_TINT } from "./sshTerminalTheme";
 
 const HEX = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i;
 /** buildAppVars 的 --c-app（"R G B"）→ #rrggbb：查詢編輯器跟隨 App 時透出的就是這個顏色。 */
@@ -21,8 +21,10 @@ describe("xtermThemeFor", () => {
       }
       // 底色 = app 表面（--c-app），終端機才會跟四周與查詢編輯器同色，而不是暗一截的 colors.bg。
       expect(th.background!.toLowerCase(), def.id).toBe(appSurface(def));
-      expect(th.foreground!.toLowerCase()).toBe(def.colors.fg.toLowerCase());
-      expect(th.cursor!.toLowerCase()).toBe(def.colors.caret.toLowerCase());
+      expect(th.foreground).toBe(mixHex(def.colors.fg, def.app.accent, TERM_TINT.fg));
+      expect(th.cursor!.toLowerCase()).toBe(def.app.accent.toLowerCase());
+      expect(th.red).toBe(mixHex(def.app.danger, def.app.accent, TERM_TINT.ansi));
+      expect(th.brightBlack!.toLowerCase()).toBe(def.colors.comment.toLowerCase());
       // 選取底色帶 alpha（#rrggbbaa）
       expect(th.selectionBackground).toMatch(/^#[0-9a-f]{8}$/i);
       // 深淺判定與變體宣告一致（主題定義打錯底色會在這裡露餡）
@@ -53,8 +55,56 @@ describe("xtermThemeFor", () => {
     const th = xtermThemeFor(def);
     // 底色壞掉退回黑，再照常往 app.top 混出表面色。
     expect(th.background).toBe(mixHex("#000000", def.app.top, SURFACE_STEPS.app));
-    expect(th.red).toBe("#ff5555");
+    expect(th.red).toBe(mixHex("#ff5555", def.app.accent, TERM_TINT.ansi));
     expect(th.selectionBackground).toBe("#00000066");
+    // accent 壞掉 → 不染色，游標退回前景
+    def.app.accent = "nope";
+    const plain = xtermThemeFor(def);
+    expect(plain.red).toBe("#ff5555");
+    expect(plain.foreground).toBe(def.colors.fg.toLowerCase());
+    expect(plain.cursor).toBe(plain.foreground);
+  });
+
+  // 深色變體的 fg 與語意色全都一樣，沒有往 accent 染色的話，切換主題時終端機文字色不會跟著變。
+  it("每個變體的終端機文字色都不一樣（跟著主題連動）", () => {
+    const keys = ["foreground", "red", "green", "blue", "magenta", "brightBlack"] as const;
+    const themes = EDITOR_THEMES.map((d) => ({ id: d.id, th: xtermThemeFor(d) }));
+    for (const k of keys) {
+      const seen = new Map<string, string>();
+      for (const { id, th } of themes) {
+        const v = th[k]!.toLowerCase();
+        expect(seen.get(v), `${k}: ${id} 與 ${seen.get(v)} 同色`).toBeUndefined();
+        seen.set(v, id);
+      }
+    }
+  });
+
+  // 底色（app 表面）本身比 well 亮，少數變體的語意色不染色就不到 4.5:1（如 Amethyst 的 blue 4.24）——
+  // 染色不能是讓它更差的那一步：原本 ≥ 4.5 的不掉到 4.5 以下，原本不到的不再往下掉。
+  it("染色不降低可讀性；brightBlack 改用 comment 比原本的 activeLine 提亮更好讀", () => {
+    const lum = (hex: string) => {
+      const c = parseHex(hex)!;
+      const lin = (v: number) => {
+        const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+    };
+    const ratio = (a: string, b: string) => {
+      const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    for (const def of EDITOR_THEMES) {
+      const th = xtermThemeFor(def) as Record<string, string>;
+      // accent 壞掉 = 不染色；底色與 ANSI 來源都相同，只差染色這一步。
+      const raw = xtermThemeFor({ ...def, app: { ...def.app, accent: "nope" } }) as Record<string, string>;
+      for (const k of ["foreground", "red", "green", "yellow", "blue", "magenta", "cyan"]) {
+        const floor = Math.min(4.5, ratio(raw[k], th.background)) - 1e-9;
+        expect(ratio(th[k], th.background), `${def.id}.${k}`).toBeGreaterThanOrEqual(floor);
+      }
+      const oldDim = def.dark ? lightenHex(th.black, 0.15) : darkenHex(th.black, 0.1);
+      expect(ratio(th.brightBlack, th.background), `${def.id}.brightBlack`).toBeGreaterThan(ratio(oldDim, th.background));
+    }
   });
 });
 
