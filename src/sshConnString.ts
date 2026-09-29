@@ -1,5 +1,6 @@
 // SSH / SFTP 連線字串：`ssh://` `sftp://` URL、從文件或終端機複製來的 `ssh …` / `sftp …` 指令，
-// 以及 SSH 主機欄裡的 `user@host:port`。純函式（可單測），兩個地方用：
+// 以及 SSH 主機欄裡的 `user@host:port`。另收 FTP 的 URL：`ftp://`（不加密）、`ftpes://`（explicit TLS）、
+// `ftps://`（implicit TLS）——與常見 FTP 客戶端的慣例相同。純函式（可單測），兩個地方用：
 //   - 新增連線對話框：連線字串欄 / 主機欄貼上的是 SSH 字串 → 轉交給 SSH 主機對話框（資料庫表單不收 SSH）。
 //   - SSH 主機對話框：主機欄貼上 → 拆成主機 / 埠 / 使用者 / 認證等欄位。
 //
@@ -7,13 +8,16 @@
 // 誤攔的代價（使用者的輸入被吃掉、欄位被改寫）比沒有這個功能更糟。
 
 import { resolveJumpRef } from "./sshHostImport";
-import type { SshAuthKind, SshSession } from "./sshTypes";
+import { defaultPortFor, type FtpTls, type HostProtocol, type SshAuthKind, type SshSession } from "./sshTypes";
 
-export type SshProtocol = "ssh" | "sftp";
+export type SshProtocol = "ssh" | "sftp" | "ftp" | "ftpes" | "ftps";
+type CommandProtocol = "ssh" | "sftp";
 
 export interface ParsedSsh {
-  /** sftp:// 或 `sftp` 指令：存成同一種 SSH 主機，但開啟時一併展開 SFTP 面板。 */
+  /** sftp:// 或 `sftp` 指令：存成同一種 SSH 主機，但開啟時一併展開 SFTP 面板。ftp / ftpes / ftps：FTP 主機。 */
   protocol: SshProtocol;
+  /** 主機欄的 `user@host:port`（沒有 scheme）：看不出協定，套用時不改表單的協定。 */
+  schemeless?: boolean;
   host: string;
   port: number | null;
   username: string | null;
@@ -86,7 +90,7 @@ function splitUser(s: string): { user: string | null; rest: string } {
   return { user: s.slice(0, at) || null, rest: s.slice(at + 1) };
 }
 
-/** URL 路徑 → SFTP 起始資料夾。`/` 與 `/~` 是家目錄（null）；`/~/x` 是家目錄下的 x。 */
+/** URL 路徑 → 起始資料夾（SFTP / FTP 共用）。`/` 與 `/~` 是家目錄（null）；`/~/x` 是家目錄下的 x。 */
 function urlPathToDir(raw: string): string | null {
   const p = decode(raw);
   if (p === "" || p === "/" || p === "/~" || p === "/~/") return null;
@@ -103,7 +107,7 @@ function empty(protocol: SshProtocol, host: string, port: number | null): Parsed
  * （draft-ietf-secsh-scp-sftp-ssh-uri 的形式；`;` 之後的連線參數略過）。
  */
 function parseUrl(scheme: string, rest: string): ParsedSsh | null {
-  const protocol: SshProtocol = scheme === "ssh" ? "ssh" : "sftp";
+  const protocol: SshProtocol = scheme === "ssh" ? "ssh" : scheme === "ftp" || scheme === "ftpes" || scheme === "ftps" ? scheme : "sftp";
   const cut = rest.search(/[/?#]/);
   const authority = cut < 0 ? rest : rest.slice(0, cut);
   const tail = cut < 0 ? "" : rest.slice(cut);
@@ -118,7 +122,7 @@ function parseUrl(scheme: string, rest: string): ParsedSsh | null {
     out.username = userPart ? decode(userPart) : null;
     if (colon >= 0) out.password = decode(userinfo.slice(colon + 1));
   }
-  if (protocol === "sftp" && tail.startsWith("/")) out.path = urlPathToDir(tail.replace(/[?#].*$/s, ""));
+  if (protocol !== "ssh" && tail.startsWith("/")) out.path = urlPathToDir(tail.replace(/[?#].*$/s, ""));
   return out;
 }
 
@@ -152,13 +156,13 @@ function tokenize(s: string): string[] | null {
 
 // 帶參數的選項（其餘單字母旗標如 -A -X -t -v 不帶參數，略過）。兩支程式的字母不完全一樣：
 // ssh 的 -p 是埠、-l 是帳號；sftp 的 -P 才是埠，-l 是頻寬上限、-p 是保留時間戳（不帶參數）。
-const ARG_OPTS: Record<SshProtocol, string> = {
+const ARG_OPTS: Record<CommandProtocol, string> = {
   ssh: "BbcDEeFIiJLlmOopQRSWw",
   sftp: "BbcDFiJloPRSs",
 };
 
 /** `ssh [選項] destination [指令]` / `sftp [選項] destination`。 */
-function parseCommand(protocol: SshProtocol, args: string[]): ParsedSsh | null {
+function parseCommand(protocol: CommandProtocol, args: string[]): ParsedSsh | null {
   const o: { port: number | null; user: string | null; identity: string | null; jump: string | null } =
     { port: null, user: null, identity: null, jump: null };
   let dest: string | null = null;
@@ -238,20 +242,20 @@ function parseCommand(protocol: SshProtocol, args: string[]): ParsedSsh | null {
 /**
  * 解析 SSH / SFTP 字串；認不出來回 null。
  *
- * 認得：`ssh://` `sftp://` `scp://` URL；`ssh …` / `sftp …` 指令（-p/-P、-l、-i、-J、-o Port/User/
+ * 認得：`ssh://` `sftp://` `scp://` `ftp://` `ftpes://` `ftps://` URL；`ssh …` / `sftp …` 指令（-p/-P、-l、-i、-J、-o Port/User/
  * IdentityFile/ProxyJump）；`bare` 時另收 `user@host[:port]` 與 `host:port`。
  */
 export function parseSshString(text: string, opts: ParseSshOptions = {}): ParsedSsh | null {
   const s = stripNoise(text);
   if (!s || s.includes("\n")) return null;
 
-  const url = /^(ssh|sftp|scp):\/\/(.*)$/is.exec(s);
+  const url = /^(ssh|sftp|scp|ftp|ftpes|ftps):\/\/(.*)$/is.exec(s);
   if (url) return parseUrl(url[1].toLowerCase(), url[2]);
 
   const cmd = /^(ssh|sftp)(?:\.exe)?\s+(.+)$/is.exec(s);
   if (cmd) {
     const toks = tokenize(cmd[2]);
-    return toks ? parseCommand(cmd[1].toLowerCase() as SshProtocol, toks) : null;
+    return toks ? parseCommand(cmd[1].toLowerCase() as CommandProtocol, toks) : null;
   }
 
   if (!opts.bare || /\s/.test(s)) return null;
@@ -263,7 +267,16 @@ export function parseSshString(text: string, opts: ParseSshOptions = {}): Parsed
   if (!hp || (user == null && hp.port == null)) return null;
   const out = empty("ssh", hp.host, hp.port);
   out.username = user;
+  out.schemeless = true;
   return out;
+}
+
+/** 字串的協定 → 主機的協定與 FTP 加密方式。 */
+export function hostProtocolOf(p: SshProtocol): { protocol: HostProtocol; ftpTls: FtpTls } {
+  if (p === "ftps") return { protocol: "ftp", ftpTls: "implicit" };
+  if (p === "ftpes") return { protocol: "ftp", ftpTls: "explicit" };
+  if (p === "ftp") return { protocol: "ftp", ftpTls: "none" };
+  return { protocol: "ssh", ftpTls: "explicit" };
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +285,8 @@ export function parseSshString(text: string, opts: ParseSshOptions = {}): Parsed
 
 /** SSH 主機對話框裡「字串可能填到」的欄位。 */
 export interface SshFormFields {
+  protocol: HostProtocol;
+  ftpTls: FtpTls;
   host: string;
   port: number;
   username: string;
@@ -293,7 +308,8 @@ export interface ApplySshResult {
 /**
  * 解析結果套進 SSH 主機表單（純函式）。語意同 connString.applyParsedToForm：
  * **字串沒提到的欄位保留現值**。帶了密碼 → 密碼認證；帶了私鑰檔 → 私鑰認證；
- * sftp → 開啟時一併展開 SFTP 面板（ssh 不會反過來把它關掉）。
+ * sftp → 開啟時一併展開 SFTP 面板（ssh 不會反過來把它關掉）。有 scheme 的字串決定協定（ftp:// → FTP 主機），
+ * 協定變了而字串沒帶埠號時，埠換成新協定的預設值。
  */
 export function applySshString(
   p: ParsedSsh,
@@ -301,7 +317,15 @@ export function applySshString(
   sessions: readonly Pick<SshSession, "id" | "name" | "host" | "username" | "port">[],
 ): ApplySshResult {
   const next: SshFormFields = { ...cur, host: p.host };
+  if (!p.schemeless) {
+    const hp = hostProtocolOf(p.protocol);
+    next.protocol = hp.protocol;
+    if (hp.protocol === "ftp") next.ftpTls = hp.ftpTls;
+  }
   if (p.port != null) next.port = p.port;
+  else if (next.protocol !== cur.protocol || (next.protocol === "ftp" && next.ftpTls !== cur.ftpTls)) {
+    next.port = defaultPortFor(next.protocol, next.ftpTls);
+  }
   if (p.username != null) next.username = p.username;
   if (p.password != null) { next.auth = "password"; next.password = p.password; }
   if (p.identityFile) { next.auth = "key"; next.keyPath = p.identityFile; }

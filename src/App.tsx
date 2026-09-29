@@ -28,7 +28,7 @@ import { kindIcon } from "./kindIcons";
 import { SquareTerminal } from "lucide-react";
 import { useResizable, Splitter } from "./ui/resizable";
 import { tabOrder, type SshTab } from "./sshTabs";
-import type { SshSession } from "./sshTypes";
+import { isFtpHost, type SshSession } from "./sshTypes";
 import { useSshSessions, sessionLabel } from "./sshSessions";
 import type { ParsedSsh } from "./sshConnString";
 import { useSshTerminals, termRegistry } from "./sshTerminals";
@@ -161,6 +161,7 @@ const ElasticQueryEditor = lazy(() => import("./ElasticQueryEditor"));
 const NlQueryBar = lazy(() => import("./NlQueryBar"));
 // SSH 終端機分頁：常駐掛載（切分頁只切 display），所以不能走 lazyOverlay，用 React.lazy + 一次 Suspense。
 const SshTerminalPane = lazy(() => import("./SshTerminalPane"));
+const FtpPane = lazy(() => import("./FtpPane"));
 const SshSessionDialog = lazyOverlay(() => import("./SshSessionDialog"));
 const SshImportDialog = lazyOverlay(() => import("./SshImportDialog"));
 // AI 動作（解釋 / 最佳化 / 修正 / 加註解 / 轉方言 / 測試資料）：差異預覽與選單都只在用到時載入。
@@ -3010,7 +3011,7 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
       <SshHostTree
         q={q}
         onOpen={(target, title, sessionId, opts) => {
-          useStore.getState().openSshTab({ target, title, sessionId, openSftp: opts?.sftp || undefined, openSftpWin: opts?.sftpWin || undefined });
+          useStore.getState().openSshTab({ target, title, sessionId, openSftp: opts?.sftp || undefined, openSftpWin: opts?.sftpWin || undefined, ftp: opts?.ftp });
         }}
         onEdit={onEditSsh}
       />
@@ -3566,7 +3567,9 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
     }
     return m;
   }, [sshStatusKey]);
-  const sshSessions = useSshSessions((s) => s.sessions);
+  // 「新增 SSH 終端機」只列 SSH 主機（FTP 主機沒有終端機）。
+  const allSshSessions = useSshSessions((s) => s.sessions);
+  const sshSessions = useMemo(() => allSshSessions.filter((s) => !isFtpHost(s)), [allSshSessions]);
   const activeTabRef = useRef<HTMLDivElement>(null);
   const queryTabRef = useRef<HTMLButtonElement>(null);
 
@@ -3742,12 +3745,12 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
               onClick={() => setActiveTab(tab.key)}
               onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeSshTab(tab.key); } }}
               onContextMenu={(e) => { e.preventDefault(); setActiveTab(tab.key); setSshTabMenu({ key: tab.key, x: e.clientX, y: e.clientY }); }}
-              title={t("{title}（SSH 終端機，中鍵關閉）", { title: tab.title })}
+              title={tab.ftp ? t("{title}（{protocol}，中鍵關閉）", { title: tab.title, protocol: tab.ftp.label }) : t("{title}（SSH 終端機，中鍵關閉）", { title: tab.title })}
               className={`flex items-center gap-2 pl-3 pr-2 py-1.5 text-xs border-r border-fg/10 cursor-pointer whitespace-nowrap ${
                 isActive ? "bg-app text-fg shadow-[inset_0_-2px_0_rgb(var(--c-accent))]" : "text-fg/50 hover:bg-fg/5"
               }`}
             >
-              <Icon icon={SquareTerminal} size={13} className="shrink-0 text-emerald-300/80" />
+              <Icon icon={tab.ftp ? FolderOpen : SquareTerminal} size={13} className="shrink-0 text-emerald-300/80" />
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} aria-hidden />
               <span className="mono">{tab.title}</span>
               <button
@@ -3805,7 +3808,9 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
       {/* SSH 終端機：全部常駐掛載、只有作用中的那個顯示 —— xterm buffer 與 shell 不因切分頁消失。 */}
       <Suspense fallback={null}>
         {sshTabs.map((tab) => (
-          <SshTerminalPane key={tab.key} tab={tab} active={tab.key === activeTabKey} />
+          tab.ftp
+            ? <FtpPane key={tab.key} tab={tab} active={tab.key === activeTabKey} />
+            : <SshTerminalPane key={tab.key} tab={tab} active={tab.key === activeTabKey} />
         ))}
       </Suspense>
 
@@ -3862,12 +3867,12 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
             const tab = sshTabs.find((x) => x.key === key);
             const st = sshStatusOf.get(key);
             const items: [string, () => void][] = [];
-            if (st === "disconnected" || st === "error") items.push([t("重新連線"), () => useSshTerminals.getState().rt[key] && termReconnect(key)]);
-            if (tab) items.push([t("複製分頁"), () => openSshTab({ target: tab.target, title: tab.title, connId: tab.connId, sessionId: tab.sessionId })]);
+            if (!tab?.ftp && (st === "disconnected" || st === "error")) items.push([t("重新連線"), () => useSshTerminals.getState().rt[key] && termReconnect(key)]);
+            if (tab) items.push([t("複製分頁"), () => openSshTab({ target: tab.target, title: tab.title, connId: tab.connId, sessionId: tab.sessionId, ftp: tab.ftp })]);
             items.push([t("重新命名…"), () => {
               void uiPrompt(t("分頁名稱"), { title: t("重新命名分頁"), defaultValue: tab?.title ?? "" }).then((v) => { if (v?.trim()) renameSshTab(key, v.trim()); });
             }]);
-            items.push([t("開啟 SFTP"), () => useSshTerminals.getState().patch(key, { sftpOpen: true })]);
+            if (!tab?.ftp) items.push([t("開啟 SFTP"), () => useSshTerminals.getState().patch(key, { sftpOpen: true })]);
             items.push([t("關閉"), () => closeSshTab(key)]);
             if (sshTabs.length > 1) {
               items.push([t("關閉其他終端機"), () => closeOtherSshTabs(key)]);

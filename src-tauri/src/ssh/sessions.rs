@@ -27,6 +27,36 @@ pub enum SshAuthKind {
     KeyboardInteractive,
 }
 
+/// 主機的協定。`ssh` = 終端機 + SFTP；`ftp` = 只有檔案面板（FTP / FTPS，見 `FtpOptions`）。
+/// 舊檔沒有這個欄位 → `ssh`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HostProtocol {
+    #[default]
+    Ssh,
+    Ftp,
+}
+
+/// FTP 的加密方式。`explicit` = 連上 21 埠後 `AUTH TLS`；`implicit` = 990 埠一連上就走 TLS（舊式）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FtpTls {
+    #[default]
+    None,
+    Explicit,
+    Implicit,
+}
+
+/// FTP 主機的連線選項（`protocol == ftp` 才用）。全部 `#[serde(default)]`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct FtpOptions {
+    #[serde(default)]
+    pub tls: FtpTls,
+    /// 主動模式（`PORT`：伺服器連回本機）。預設被動模式（`PASV` / `EPSV`），NAT / 防火牆後面也能用。
+    #[serde(default)]
+    pub active: bool,
+}
+
 /// 終端機選項。全部 `#[serde(default)]`：舊檔 / 前端漏欄位都能讀。
 ///
 /// `ui` 是字型 / 配色 / scrollback 這類純前端偏好，後端只負責存，不解讀。
@@ -105,6 +135,10 @@ pub struct SshSession {
     pub folder_id: Option<String>,
     #[serde(default)]
     pub options: SshTermOptions,
+    #[serde(default)]
+    pub protocol: HostProtocol,
+    #[serde(default)]
+    pub ftp: FtpOptions,
 }
 
 fn default_port() -> u16 {
@@ -265,6 +299,8 @@ mod tests {
             jump_session_id: None,
             folder_id: None,
             options: SshTermOptions::default(),
+            protocol: Default::default(),
+            ftp: Default::default(),
         }
     }
 

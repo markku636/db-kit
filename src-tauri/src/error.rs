@@ -46,6 +46,10 @@ pub enum AppError {
     #[error("sftp error: {0}")]
     Sftp(String),
 
+    /// FTP / FTPS 操作失敗（detail 已本地化，或是伺服器回的那一行訊息）。
+    #[error("ftp error: {0}")]
+    Ftp(String),
+
     /// 查詢超過全域逾時（毫秒）。注意：伺服器端查詢可能仍在執行，
     /// 前端錯誤文案應引導使用者以行程清單（ProcessList）手動 KILL。
     #[error("query timed out after {0} ms")]
@@ -73,6 +77,7 @@ impl AppError {
             AppError::SshHostKey(_) => "ssh_hostkey",
             AppError::SshCancelled => "ssh_cancelled",
             AppError::Sftp(_) => "sftp",
+            AppError::Ftp(_) => "ftp",
             AppError::Timeout(_) => "timeout",
             AppError::NeedsConfirm(_) => "needs_confirm",
         }
@@ -92,6 +97,7 @@ impl AppError {
             AppError::SshHostKey(_) => "ERR_SSH_HOSTKEY",
             AppError::SshCancelled => "ERR_SSH_CANCELLED",
             AppError::Sftp(_) => "ERR_SFTP",
+            AppError::Ftp(_) => "ERR_FTP",
             AppError::Timeout(_) => "ERR_TIMEOUT",
             AppError::NeedsConfirm(_) => "ERR_NEEDS_CONFIRM",
         }
@@ -112,6 +118,7 @@ impl AppError {
             AppError::SshHostKey(s) => tf!("SSH 主機金鑰驗證失敗：{detail}", detail = s),
             AppError::SshCancelled => t!("使用者已取消 SSH 連線").to_string(),
             AppError::Sftp(s) => tf!("SFTP 錯誤：{detail}", detail = s),
+            AppError::Ftp(s) => tf!("FTP 錯誤：{detail}", detail = s),
             AppError::Timeout(ms) => tf!(
                 "查詢逾時（{ms} ms）；伺服器端查詢可能仍在執行，可從行程清單手動終止",
                 ms = ms

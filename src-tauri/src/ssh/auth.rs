@@ -1091,6 +1091,8 @@ mod tests {
             jump_session_id: None,
             folder_id: None,
             options: SshTermOptions::default(),
+            protocol: Default::default(),
+            ftp: Default::default(),
         };
         s.options.connect_timeout_secs = 5;
         let t = SshTarget::from_session(&s, Some("pw".into()), None);

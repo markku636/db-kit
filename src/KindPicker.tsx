@@ -1,4 +1,4 @@
-import { SquareTerminal, type LucideIcon } from "lucide-react";
+import { FolderOpen, SquareTerminal, type LucideIcon } from "lucide-react";
 import { KIND_META, KIND_CATEGORIES, type DbKind } from "./api";
 import { kindIcon } from "./kindIcons";
 import Icon from "./ui/Icon";
@@ -27,9 +27,11 @@ interface Props {
    * 點下去由呼叫端改開 SSH 主機對話框，這裡不會變成選取狀態。
    */
   onPickSsh?: () => void;
+  /** 「遠端主機 → FTP / FTPS」：同樣開主機對話框，預選 FTP。 */
+  onPickFtp?: () => void;
 }
 
-export default function KindPicker({ value, onChange, collapsed, onExpand, onPickSsh }: Props) {
+export default function KindPicker({ value, onChange, collapsed, onExpand, onPickSsh, onPickFtp }: Props) {
   const t = useT();
   if (collapsed) {
     const m = KIND_META[value];
@@ -86,8 +88,9 @@ export default function KindPicker({ value, onChange, collapsed, onExpand, onPic
       {onPickSsh && (
         <div>
           <div className="text-[11px] uppercase tracking-wide text-fg/40 mb-1.5">{t("遠端主機")}</div>
-          <div className="grid gap-2.5" style={{ gridTemplateColumns: `${CARD_W}px` }}>
+          <div className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(${onPickFtp ? 2 : 1}, ${CARD_W}px)` }}>
             <KindCard label="SSH / SFTP" icon={SquareTerminal} color={SSH_COLOR} active={false} onClick={onPickSsh} />
+            {onPickFtp && <KindCard label="FTP / FTPS" icon={FolderOpen} color={SSH_COLOR} active={false} onClick={onPickFtp} />}
           </div>
         </div>
       )}

@@ -1,7 +1,7 @@
 // SSH 終端機分頁的純邏輯：鍵的形狀、分頁列鍵序、關閉後的落點。
 // 抽出 store 之外是為了能在 node 下單元測試，也讓 App.tsx 的鍵盤切換（Ctrl+Tab / Ctrl+1..9）
 // 與 store 的落點計算共用同一份順序定義，不會一邊算「表 → 查詢 → SSH」、另一邊算成別的。
-import type { SshTargetRef } from "./sshTypes";
+import { fileProtocolLabel, isFtpHost, type SshSession, type SshTargetRef } from "./sshTypes";
 
 /** SSH 分頁鍵前綴；後面接 uuid（分頁可重複開同一台主機，不能拿 session id 當鍵）。 */
 export const SSH_TAB_PREFIX = "__ssh__:";
@@ -23,6 +23,16 @@ export interface SshTab {
   openSftp?: boolean;
   /** 連上後用獨立視窗開 SFTP（側欄主機的「開啟 SFTP」）。放在分頁上的理由同 `openSftp`。 */
   openSftpWin?: boolean;
+  /**
+   * FTP 主機的分頁：只有檔案面板，沒有終端機。開分頁時照主機的協定決定、之後不變（主機改成別的協定，
+   * 已經開著的分頁照舊，重新開才換）。檔案面板標題（FTP / FTPS）也在這時定下來。
+   */
+  ftp?: { label: string };
+}
+
+/** 開某台已存主機的分頁時帶的 `ftp` 旗標（SSH 主機回 undefined）。 */
+export function ftpTabOf(s: Pick<SshSession, "protocol" | "ftp">): SshTab["ftp"] {
+  return isFtpHost(s) ? { label: fileProtocolLabel(s) } : undefined;
 }
 
 export function isSshTabKey(v: unknown): v is string {

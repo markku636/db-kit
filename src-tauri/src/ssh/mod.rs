@@ -1,4 +1,4 @@
-//! SSH：DB 連線的 port-forward tunnel、Xshell 風格的終端機（PTY shell）與 SFTP。
+//! SSH：DB 連線的 port-forward tunnel、Xshell 風格的終端機（PTY shell）與 SFTP；以及共用檔案面板的 FTP / FTPS。
 //!
 //! 整個 `ssh/` **不依賴 Tauri**（`--no-default-features` 可編可測）；GUI 事件 / IPC channel 只在
 //! `commands/ssh.rs` 出現。模組分工：
@@ -15,8 +15,12 @@
 //! - `keys`：使用者金鑰——各種私鑰格式的辨識與載入、OpenSSH 憑證、App 內金鑰庫（`keystore:<id>`）。
 //! - `runtime`：`SshRuntime`——活著的連線 / 終端 / SFTP / 待答提示 / 傳輸旗標的登記簿。
 //! - `sftp_window`：SFTP 獨立視窗的視窗標籤與網址。
+//! - `ftp`：FTP / FTPS 客戶端（檔案面板的 FTP 主機；斷點續傳走 REST / APPE）。
+//! - `files`：`FileClient`——檔案面板的後端（SFTP 或 FTP），`ssh_sftp_*` 命令照協定分派。
 
 pub mod auth;
+pub mod files;
+pub mod ftp;
 pub mod host_import;
 pub mod keys;
 pub mod known_hosts;
@@ -28,6 +32,8 @@ pub mod sftp_window;
 pub mod terminal;
 mod tunnel;
 
+#[cfg(test)]
+mod ftp_it_tests;
 #[cfg(test)]
 mod it_tests;
 

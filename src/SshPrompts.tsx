@@ -96,17 +96,19 @@ export interface SshHostKeyDialogProps {
 /**
  * 主機金鑰確認。new = 首次連線（TOFU，預設鈕「接受並儲存」）；
  * changed = 指紋與 ssh_known_hosts.json 不符 → danger 樣式、列出新舊指紋，「接受並更新」用危險色。
- * Esc / 關閉 = 拒絕。
+ * Esc / 關閉 = 拒絕。FTPS 的伺服器憑證（不在信任鏈上時）走同一個對話框，`host_id` 是 `ftps://host:port`，
+ * 用「憑證」的說法。
  */
 export function SshHostKeyDialog({ info, onReply }: SshHostKeyDialogProps) {
   const t = useT();
   const changed = info.status === "changed";
-  const host = info.host_id;
+  const cert = info.host_id.startsWith("ftps://");
+  const host = cert ? info.host_id.slice("ftps://".length) : info.host_id;
   return (
     <Modal
       open
       onClose={() => onReply("reject")}
-      title={changed ? t("主機金鑰已變更") : t("首次連線")}
+      title={changed ? (cert ? t("伺服器憑證已變更") : t("主機金鑰已變更")) : cert ? t("無法驗證伺服器憑證") : t("首次連線")}
       icon={changed ? ShieldAlert : ShieldCheck}
       danger={changed}
       size="md"
@@ -127,21 +129,39 @@ export function SshHostKeyDialog({ info, onReply }: SshHostKeyDialogProps) {
       {changed ? (
         <>
           <div className="text-sm font-medium text-danger break-words">
-            {t("{host} 的主機金鑰已變更！可能遭到中間人攻擊", { host })}
+            {cert
+              ? t("{host} 的 TLS 憑證與上次信任的不同！可能遭到中間人攻擊", { host })
+              : t("{host} 的主機金鑰已變更！可能遭到中間人攻擊", { host })}
           </div>
           <div className="text-sm text-fg/70">
-            {t("若這台主機最近重裝或更換過金鑰，這是正常的；否則請先向管理者確認，不要接受。")}
+            {cert
+              ? t("若伺服器最近更新過憑證，這是正常的；否則請先向管理者確認，不要接受。")
+              : t("若這台主機最近重裝或更換過金鑰，這是正常的；否則請先向管理者確認，不要接受。")}
           </div>
           <FingerprintRow label={t("舊指紋")} value={info.old_fingerprint || t("（未知）")} />
           <FingerprintRow label={t("新指紋")} value={`${info.key_type} ${info.fingerprint}`} />
         </>
       ) : (
         <>
-          <div className="text-sm break-words">{t("首次連線到 {host}，指紋：{fp}", { host, fp: info.fingerprint })}</div>
-          <FingerprintRow label={t("金鑰類型")} value={info.key_type} />
-          <div className="text-xs text-fg/50">
-            {t("請與主機管理者核對指紋後再接受。「接受並儲存」會記住這把金鑰，之後指紋變更時會警告。")}
-          </div>
+          {cert ? (
+            <>
+              <div className="text-sm break-words">
+                {t("{host} 的 TLS 憑證不是受信任的憑證機構簽發的（常見於自簽憑證、內網伺服器，或用 IP 連線）。", { host })}
+              </div>
+              <FingerprintRow label={t("憑證指紋")} value={info.fingerprint} />
+              <div className="text-xs text-fg/50">
+                {t("請與伺服器管理者核對指紋後再接受。「接受並儲存」會記住這張憑證，之後憑證變更時會警告。")}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-sm break-words">{t("首次連線到 {host}，指紋：{fp}", { host, fp: info.fingerprint })}</div>
+              <FingerprintRow label={t("金鑰類型")} value={info.key_type} />
+              <div className="text-xs text-fg/50">
+                {t("請與主機管理者核對指紋後再接受。「接受並儲存」會記住這把金鑰，之後指紋變更時會警告。")}
+              </div>
+            </>
+          )}
         </>
       )}
     </Modal>

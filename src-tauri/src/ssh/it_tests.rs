@@ -459,8 +459,7 @@ async fn sftp_tree_upload_download_roundtrip() {
     let no_cancel = AtomicBool::new(false);
     let last = Arc::new(std::sync::Mutex::new((0u64, None::<u64>)));
     let l2 = last.clone();
-    let r = sftp
-        .upload_tree(&src, &remote_root, OnConflict::Fail, Box::new(move |d, t| *l2.lock().unwrap() = (d, t)), &no_cancel)
+    let r = super::sftp::upload_tree(&sftp, &src, &remote_root, OnConflict::Fail, Box::new(move |d, t| *l2.lock().unwrap() = (d, t)), &no_cancel)
         .await
         .expect("upload_tree");
     assert_eq!(r, remote_root);
@@ -473,26 +472,25 @@ async fn sftp_tree_upload_download_roundtrip() {
     assert_eq!(sftp.stat(&format!("{remote_root}/js/vendor/lib.js")).await.unwrap().size, 200_000);
 
     // 已存在、未允許覆蓋 → 失敗；允許覆蓋 → 合併成功
-    assert!(sftp.upload_tree(&src, &remote_root, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.is_err());
-    sftp.upload_tree(&src, &remote_root, OnConflict::Overwrite, Box::new(|_, _| {}), &no_cancel).await.expect("merge");
+    assert!(super::sftp::upload_tree(&sftp, &src, &remote_root, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.is_err());
+    super::sftp::upload_tree(&sftp, &src, &remote_root, OnConflict::Overwrite, Box::new(|_, _| {}), &no_cancel).await.expect("merge");
 
     // 整棵下載到另一個本機資料夾（給既有資料夾 → 放進去成 <dst>/<遠端資料夾名>）
     let dst = tmp.join("dl");
     std::fs::create_dir_all(&dst).unwrap();
-    let got = sftp.download_tree(&remote_root, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.expect("download_tree");
+    let got = super::sftp::download_tree(&sftp, &remote_root, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.expect("download_tree");
     assert_eq!(got, dst.join(super::sftp::basename(&remote_root)));
     for rel in ["index.html", "css/app.css", "js/vendor/lib.js", "中文檔名.txt"] {
         assert_eq!(std::fs::read(got.join(rel)).unwrap(), std::fs::read(src.join(rel)).unwrap(), "{rel} 內容不一致");
     }
     assert!(got.join("empty").is_dir(), "空資料夾也要建");
     // 再下載一次、未允許覆蓋 → 失敗（本機已有同名資料夾）
-    assert!(sftp.download_tree(&remote_root, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.is_err());
+    assert!(super::sftp::download_tree(&sftp, &remote_root, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.is_err());
 
     // 中途取消
     let cancel = Arc::new(AtomicBool::new(false));
     let c2 = cancel.clone();
-    let err = sftp
-        .download_tree(&remote_root, &tmp.join("dl2"), OnConflict::Fail, Box::new(move |d, _| if d > 0 { c2.store(true, Ordering::Relaxed) }), &cancel)
+    let err = super::sftp::download_tree(&sftp, &remote_root, &tmp.join("dl2"), OnConflict::Fail, Box::new(move |d, _| if d > 0 { c2.store(true, Ordering::Relaxed) }), &cancel)
         .await
         .unwrap_err();
     assert!(matches!(err, AppError::SshCancelled), "{err:?}");
@@ -525,8 +523,7 @@ async fn sftp_batch_many_with_conflicts() {
     let locals = vec![src.join("a.txt"), src.join("b.log"), src.join("conf.d")];
     let last = Arc::new(std::sync::Mutex::new((0u64, None::<u64>)));
     let l2 = last.clone();
-    let sum = sftp
-        .upload_many(&locals, &remote_dir, OnConflict::Fail, Box::new(move |d, t| *l2.lock().unwrap() = (d, t)), &no_cancel)
+    let sum = super::sftp::upload_many(&sftp, &locals, &remote_dir, OnConflict::Fail, Box::new(move |d, t| *l2.lock().unwrap() = (d, t)), &no_cancel)
         .await
         .expect("upload_many");
     assert_eq!(sum.files, 4);
@@ -536,13 +533,13 @@ async fn sftp_batch_many_with_conflicts() {
     assert_eq!(sftp.stat(&format!("{remote_dir}/conf.d/extra/x.conf")).await.unwrap().size, 4);
 
     // 再傳一次：Fail 整批不開始、Skip 全部略過、Overwrite 合併
-    let err = sftp.upload_many(&locals, &remote_dir, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.unwrap_err();
+    let err = super::sftp::upload_many(&sftp, &locals, &remote_dir, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.unwrap_err();
     assert!(matches!(err, AppError::Sftp(_)), "{err:?}");
-    let sum = sftp.upload_many(&locals, &remote_dir, OnConflict::Skip, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+    let sum = super::sftp::upload_many(&sftp, &locals, &remote_dir, OnConflict::Skip, Box::new(|_, _| {}), &no_cancel).await.unwrap();
     assert_eq!((sum.files, sum.skipped_existing), (0, 3));
     assert!(sum.message().is_some());
     std::fs::write(src.join("a.txt"), b"alpha v2\n").unwrap();
-    let sum = sftp.upload_many(&locals, &remote_dir, OnConflict::Overwrite, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+    let sum = super::sftp::upload_many(&sftp, &locals, &remote_dir, OnConflict::Overwrite, Box::new(|_, _| {}), &no_cancel).await.unwrap();
     assert_eq!((sum.files, sum.skipped_existing), (4, 0));
 
     // 批次下載回本機
@@ -551,7 +548,7 @@ async fn sftp_batch_many_with_conflicts() {
     let remotes: Vec<String> = ["a.txt", "b.log", "conf.d"].iter().map(|n| format!("{remote_dir}/{n}")).collect();
     let names: Vec<String> = ["a.txt", "b.log", "conf.d"].iter().map(|n| n.to_string()).collect();
     assert!(local_conflicts(&dst, &names).await.is_empty());
-    let sum = sftp.download_many(&remotes, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.expect("download_many");
+    let sum = super::sftp::download_many(&sftp, &remotes, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.expect("download_many");
     assert_eq!(sum.files, 4);
     for rel in ["a.txt", "b.log", "conf.d/site.conf", "conf.d/extra/x.conf"] {
         assert_eq!(std::fs::read(dst.join(rel)).unwrap(), std::fs::read(src.join(rel)).unwrap(), "{rel} 內容不一致");
@@ -561,17 +558,16 @@ async fn sftp_batch_many_with_conflicts() {
     // 本機已有其中兩項：同名檢查列得出來；Fail 不動、Skip 只傳剩下的
     std::fs::remove_file(dst.join("b.log")).unwrap();
     assert_eq!(local_conflicts(&dst, &names).await, vec!["a.txt".to_string(), "conf.d".to_string()]);
-    assert!(sftp.download_many(&remotes, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.is_err());
+    assert!(super::sftp::download_many(&sftp, &remotes, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.is_err());
     assert!(!dst.join("b.log").exists(), "Fail 時一個檔都不能傳");
-    let sum = sftp.download_many(&remotes, &dst, OnConflict::Skip, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+    let sum = super::sftp::download_many(&sftp, &remotes, &dst, OnConflict::Skip, Box::new(|_, _| {}), &no_cancel).await.unwrap();
     assert_eq!((sum.files, sum.skipped_existing), (1, 2));
     assert_eq!(std::fs::read(dst.join("b.log")).unwrap().len(), 150_000);
 
     // 中途取消
     let cancel = Arc::new(AtomicBool::new(false));
     let c2 = cancel.clone();
-    let err = sftp
-        .download_many(&remotes, &tmp.join("dst2"), OnConflict::Fail, Box::new(move |d, _| if d > 0 { c2.store(true, Ordering::Relaxed) }), &cancel)
+    let err = super::sftp::download_many(&sftp, &remotes, &tmp.join("dst2"), OnConflict::Fail, Box::new(move |d, _| if d > 0 { c2.store(true, Ordering::Relaxed) }), &cancel)
         .await
         .unwrap_err();
     assert!(matches!(err, AppError::SshCancelled), "{err:?}");

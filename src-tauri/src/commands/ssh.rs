@@ -1,4 +1,4 @@
-//! SSH 終端機 / SFTP / 已存主機的 Tauri command（薄包裝）+ `TauriUi`。
+//! SSH 終端機 / SFTP（與共用檔案面板的 FTP）/ 已存主機的 Tauri command（薄包裝）+ `TauriUi`。
 //!
 //! 這是整個 SSH 功能唯一碰 Tauri 的地方：`AppHandle::emit` 發生命週期事件、`ipc::Channel` 串流終端輸出、
 //! `State<AppState>` 拿 `SshRuntime`。邏輯都在 `crate::ssh`。
@@ -25,10 +25,12 @@ use crate::ssh::auth::{
 };
 use crate::ssh::known_hosts::{HostKeyStatus, KnownHostsStore};
 use crate::ssh::runtime::{PromptAnswer, SshConn, SshConnInfo, SshRuntime};
-use crate::ssh::sessions::{self, SshFolder, SshSession, SshSessionsFile};
+use crate::ssh::files::FileClient;
+use crate::ssh::ftp::{self, FtpClient, FtpConn, FtpTarget};
+use crate::ssh::sessions::{self, HostProtocol, SshFolder, SshSession, SshSessionsFile};
 use crate::ssh::host_import;
 use crate::ssh::keys;
-use crate::ssh::sftp::{self as sftp_mod, OnConflict, ProgressFn, SftpClient, SftpEntry, SftpText};
+use crate::ssh::sftp::{self as sftp_mod, Kind, OnConflict, ProgressFn, SftpClient, SftpEntry, SftpText};
 use crate::ssh::sftp_window;
 use crate::ssh::terminal::{decode_b64_input, TermEvent, TermHandle, TermOpen, TermSink};
 use crate::store;
@@ -177,8 +179,14 @@ fn keychain_secrets(id: &str) -> (Option<String>, Option<String>) {
     )
 }
 
-/// 前端的 `SshTargetRef` → 帶憑證的 `SshTarget`（憑證從 keychain 補；不回傳前端）。
-async fn resolve_target(app: &AppHandle, r: SshTargetRef) -> AppResult<SshTarget> {
+/// 解析好的連線目標：SSH 主機或 FTP 主機（已存主機的 `protocol` 決定）。
+enum Resolved {
+    Ssh(SshTarget),
+    Ftp(FtpTarget),
+}
+
+/// 前端的 `SshTargetRef` → 帶憑證的目標（憑證從 keychain 補；不回傳前端）。
+async fn resolve_target(app: &AppHandle, r: SshTargetRef) -> AppResult<Resolved> {
     match r {
         SshTargetRef::Session { id } => {
             let dir = store::app_config_dir(app)?;
@@ -190,20 +198,28 @@ async fn resolve_target(app: &AppHandle, r: SshTargetRef) -> AppResult<SshTarget
                 .cloned()
                 .ok_or_else(|| AppError::Ssh(tf!("找不到 SSH 主機：{id}", id = id)))?;
             let pw = store::kc_get(&sessions::session_password_account(&id));
+            if s.protocol == HostProtocol::Ftp {
+                return Ok(Resolved::Ftp(FtpTarget::from_session(&s, pw)));
+            }
             let pp = store::kc_get(&sessions::session_passphrase_account(&id));
             let mut t = SshTarget::from_session(&s, pw, pp);
             t.jump = crate::ssh::auth::resolve_jump_chain(&file, &s.id, s.jump_session_id.as_deref(), keychain_secrets)?;
-            Ok(t)
+            Ok(Resolved::Ssh(t))
         }
         SshTargetRef::Connection { id } => {
             let cfg = store::load_connection(app, &id).await?;
-            SshTarget::from_connection(&cfg)
+            SshTarget::from_connection(&cfg).map(Resolved::Ssh)
         }
         SshTargetRef::AdHoc { session, password, passphrase } => {
             // 對話框「測試連線」：留空 = 用 keychain 裡存的（與連線對話框「留空 = 不變更」同語意）。
             let pw = password
                 .filter(|p| !p.is_empty())
                 .or_else(|| store::kc_get(&sessions::session_password_account(&session.id)));
+            if session.protocol == HostProtocol::Ftp {
+                let mut t = FtpTarget::from_session(&session, pw);
+                t.origin = TargetOrigin::AdHoc;
+                return Ok(Resolved::Ftp(t));
+            }
             let pp = passphrase
                 .filter(|p| !p.is_empty())
                 .or_else(|| store::kc_get(&sessions::session_passphrase_account(&session.id)));
@@ -213,7 +229,7 @@ async fn resolve_target(app: &AppHandle, r: SshTargetRef) -> AppResult<SshTarget
                 let file = sessions::load_in(&store::app_config_dir(app)?).await?;
                 t.jump = crate::ssh::auth::resolve_jump_chain(&file, &session.id, session.jump_session_id.as_deref(), keychain_secrets)?;
             }
-            Ok(t)
+            Ok(Resolved::Ssh(t))
         }
     }
 }
@@ -290,6 +306,8 @@ pub fn ssh_has_stored_password(id: String) -> bool {
 
 /// 建立連線並認證。`conn_id` 由前端產生（uuid），這樣 prompt 事件在回傳前就能被對上。
 /// 期間的 host key / 密碼 / OTP 提示走事件，由 `ssh_hostkey_answer` / `ssh_auth_answer` 回答。
+/// FTP 主機也走這裡：登入（需要時問密碼、問要不要信任 FTPS 憑證）後登記成 `FtpConn`，
+/// 之後用同一個 `conn_id` 開檔案面板（`ssh_sftp_open`）。
 #[tauri::command]
 pub async fn ssh_connect(
     app: AppHandle,
@@ -300,7 +318,17 @@ pub async fn ssh_connect(
     let rt = state.ssh.clone();
     // 同 id 已存在（前端沿用 id 重連）→ 先關舊的。
     rt.disconnect(&conn_id).await;
-    let t = resolve_target(&app, target).await?;
+    let t = match resolve_target(&app, target).await? {
+        Resolved::Ssh(t) => t,
+        Resolved::Ftp(t) => {
+            let ui = TauriUi { app: app.clone(), rt: rt.clone(), conn_id: conn_id.clone() };
+            let (t, initial) = ftp::connect_and_login(&t, &conn_id, &ui, &KnownHostsStore::default_path()).await?;
+            let conn = Arc::new(FtpConn::new(conn_id, t, initial));
+            let info = conn.info.clone();
+            rt.insert_ftp_conn(conn)?;
+            return Ok(info);
+        }
+    };
     let ui = Arc::new(TauriUi { app: app.clone(), rt: rt.clone(), conn_id: conn_id.clone() });
     let connected = connect_and_auth(&t, &conn_id, ui, KnownHostsStore::default_path()).await?;
     let conn = Arc::new(SshConn::new(conn_id.clone(), &t, connected));
@@ -333,7 +361,15 @@ pub async fn ssh_test(
     target: SshTargetRef,
 ) -> AppResult<()> {
     let rt = state.ssh.clone();
-    let t = resolve_target(&app, target).await?;
+    let t = match resolve_target(&app, target).await? {
+        Resolved::Ssh(t) => t,
+        Resolved::Ftp(t) => {
+            let ui = TauriUi { app: app.clone(), rt, conn_id: conn_id.clone() };
+            let (_, initial) = ftp::connect_and_login(&t, &conn_id, &ui, &KnownHostsStore::default_path()).await?;
+            drop(initial);
+            return Ok(());
+        }
+    };
     let ui = Arc::new(TauriUi { app: app.clone(), rt, conn_id: conn_id.clone() });
     let c = connect_and_auth(&t, &conn_id, ui, KnownHostsStore::default_path()).await?;
     let _ = c.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
@@ -464,13 +500,20 @@ pub struct SftpOpened {
 }
 
 /// 同一條連線開 sftp subsystem（不再問密碼）。SFTP 獨立視窗開的通道記在那個視窗名下，視窗關掉時一併收掉。
+/// FTP 主機（`conn_id` 是 `FtpConn`）開的是一條 FTP 瀏覽連線，其餘相同。
 #[tauri::command]
 pub async fn ssh_sftp_open(window: tauri::Window, state: State<'_, AppState>, conn_id: String) -> AppResult<SftpOpened> {
     let rt = state.ssh.clone();
-    let conn = rt.conn(&conn_id)?;
-    let (client, home) = SftpClient::open(&conn).await?;
+    let (client, home) = if let Some(fc) = rt.ftp_conn(&conn_id) {
+        let (client, home) = FtpClient::open(&fc).await?;
+        (FileClient::Ftp(Arc::new(client)), home)
+    } else {
+        let conn = rt.conn(&conn_id)?;
+        let (client, home) = SftpClient::open(&conn).await?;
+        conn.channel_opened();
+        (FileClient::Sftp(Arc::new(client)), home)
+    };
     let sftp_id = uuid::Uuid::new_v4().to_string();
-    conn.channel_opened();
     rt.insert_sftp(sftp_id.clone(), Arc::new(client));
     if sftp_window::is_label(window.label()) {
         rt.set_sftp_owner(&sftp_id, window.label());
@@ -485,12 +528,13 @@ pub async fn ssh_sftp_close(state: State<'_, AppState>, sftp_id: String) -> AppR
 }
 
 /// 關一條 SFTP 通道；那條連線一條 channel 都不剩就斷線（同 `ssh_term_close`）。
+/// FTP 主機不自動斷線：分頁關掉時前端會 `ssh_disconnect`，面板收起來再打開不必重新登入。
 async fn close_sftp(rt: &SshRuntime, sftp_id: &str) {
     let Some(sftp) = rt.remove_sftp(sftp_id) else {
         return;
     };
     sftp.close().await;
-    if let Ok(conn) = rt.conn(&sftp.conn_id) {
+    if let Ok(conn) = rt.conn(sftp.conn_id()) {
         if conn.channel_closed() {
             rt.disconnect(&conn.id).await;
         }
@@ -702,23 +746,23 @@ pub async fn ssh_sftp_download(
 ) -> AppResult<String> {
     let rt = state.ssh.clone();
     let sftp = rt.sftp(&sftp_id)?;
-    let (transfer_id, cancel) = rt.register_transfer(&sftp.conn_id);
+    let (transfer_id, cancel) = rt.register_transfer(sftp.conn_id());
     let reporter = TransferReporter::new(app, transfer_id.clone());
     let tid = transfer_id.clone();
     let mode = single_mode(overwrite, resume);
     tauri::async_runtime::spawn(async move {
         let progress = reporter.progress_fn();
-        // 資料夾（或指向資料夾的 symlink）整棵下載；其餘照單檔。前端不必分兩條命令。
-        let is_dir = sftp
-            .stat(&remote)
-            .await
-            .map(|e| (e.is_dir && !e.is_symlink) || e.link_target_is_dir == Some(true))
-            .unwrap_or(false);
-        let r = if is_dir {
-            sftp.download_tree(&remote, Path::new(&local), mode, progress, &cancel).await
-        } else {
-            sftp.download(&remote, Path::new(&local), mode, progress, &cancel).await
+        let r = async {
+            let fs = sftp.transfer_fs(&cancel).await?;
+            // 資料夾（或指向資料夾的 symlink）整棵下載；其餘照單檔。前端不必分兩條命令。
+            let is_dir = matches!(fs.kind_follow(&remote).await, Ok((Kind::Dir, _)));
+            if is_dir {
+                sftp_mod::download_tree(&*fs, &remote, Path::new(&local), mode, progress, &cancel).await
+            } else {
+                fs.download(&remote, Path::new(&local), mode, progress, &cancel).await
+            }
         }
+        .await
         .map(|p| Some(p.display().to_string()));
         reporter.finish(r);
         rt.finish_transfer(&tid);
@@ -739,19 +783,23 @@ pub async fn ssh_sftp_upload(
 ) -> AppResult<String> {
     let rt = state.ssh.clone();
     let sftp = rt.sftp(&sftp_id)?;
-    let (transfer_id, cancel) = rt.register_transfer(&sftp.conn_id);
+    let (transfer_id, cancel) = rt.register_transfer(sftp.conn_id());
     let reporter = TransferReporter::new(app, transfer_id.clone());
     let tid = transfer_id.clone();
     let mode = single_mode(overwrite, resume);
     tauri::async_runtime::spawn(async move {
         let progress = reporter.progress_fn();
-        // 本機資料夾 → 整棵上傳到 `remote`（遠端新資料夾的完整路徑）；其餘照單檔。
-        let is_dir = tokio::fs::metadata(&local).await.map(|m| m.is_dir()).unwrap_or(false);
-        let r = if is_dir {
-            sftp.upload_tree(Path::new(&local), &remote, mode, progress, &cancel).await
-        } else {
-            sftp.upload(Path::new(&local), &remote, mode, progress, &cancel).await.map(|_| remote.clone())
+        let r = async {
+            let fs = sftp.transfer_fs(&cancel).await?;
+            // 本機資料夾 → 整棵上傳到 `remote`（遠端新資料夾的完整路徑）；其餘照單檔。
+            let is_dir = tokio::fs::metadata(&local).await.map(|m| m.is_dir()).unwrap_or(false);
+            if is_dir {
+                sftp_mod::upload_tree(&*fs, Path::new(&local), &remote, mode, progress, &cancel).await
+            } else {
+                fs.upload(Path::new(&local), &remote, mode, progress, &cancel).await.map(|_| remote.clone())
+            }
         }
+        .await
         .map(Some);
         reporter.finish(r);
         rt.finish_transfer(&tid);
@@ -773,14 +821,17 @@ pub async fn ssh_sftp_download_many(
 ) -> AppResult<String> {
     let rt = state.ssh.clone();
     let sftp = rt.sftp(&sftp_id)?;
-    let (transfer_id, cancel) = rt.register_transfer(&sftp.conn_id);
+    let (transfer_id, cancel) = rt.register_transfer(sftp.conn_id());
     let reporter = TransferReporter::new(app, transfer_id.clone());
     let tid = transfer_id.clone();
     tauri::async_runtime::spawn(async move {
-        let r = sftp
-            .download_many(&remotes, Path::new(&local_dir), on_conflict, reporter.progress_fn(), &cancel)
-            .await
-            .map(|s| s.message());
+        let r = async {
+            let fs = sftp.transfer_fs(&cancel).await?;
+            sftp_mod::download_many(&*fs, &remotes, Path::new(&local_dir), on_conflict, reporter.progress_fn(), &cancel)
+                .await
+        }
+        .await
+        .map(|s| s.message());
         reporter.finish(r);
         rt.finish_transfer(&tid);
     });
@@ -799,15 +850,17 @@ pub async fn ssh_sftp_upload_many(
 ) -> AppResult<String> {
     let rt = state.ssh.clone();
     let sftp = rt.sftp(&sftp_id)?;
-    let (transfer_id, cancel) = rt.register_transfer(&sftp.conn_id);
+    let (transfer_id, cancel) = rt.register_transfer(sftp.conn_id());
     let reporter = TransferReporter::new(app, transfer_id.clone());
     let tid = transfer_id.clone();
     tauri::async_runtime::spawn(async move {
         let locals: Vec<std::path::PathBuf> = locals.into_iter().map(Into::into).collect();
-        let r = sftp
-            .upload_many(&locals, &remote_dir, on_conflict, reporter.progress_fn(), &cancel)
-            .await
-            .map(|s| s.message());
+        let r = async {
+            let fs = sftp.transfer_fs(&cancel).await?;
+            sftp_mod::upload_many(&*fs, &locals, &remote_dir, on_conflict, reporter.progress_fn(), &cancel).await
+        }
+        .await
+        .map(|s| s.message());
         reporter.finish(r);
         rt.finish_transfer(&tid);
     });

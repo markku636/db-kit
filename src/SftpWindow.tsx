@@ -49,7 +49,8 @@ export default function SftpWindow({ tabKey }: { tabKey: string }) {
   }, [tabKey]);
 
   const label = host ? (host.user && host.host ? `${host.user}@${host.host}` : host.title ?? "") : "";
-  useEffect(() => { document.title = label ? `${label} — SFTP` : "SFTP"; }, [label]);
+  const protocol = host?.ftpLabel ?? "SFTP";
+  useEffect(() => { document.title = label ? `${label} — ${protocol}` : protocol; }, [label, protocol]);
 
   // 鎖定時遮罩蓋住畫面，inert 讓焦點與按鍵也進不去（不然 Delete 之類的快捷鍵照樣作用在清單上）。
   const locked = !!host?.locked;
@@ -93,7 +94,8 @@ export default function SftpWindow({ tabKey }: { tabKey: string }) {
   const status = host?.status;
   const banner = !host || !host.connId ? null
     : status === "connecting" ? t("正在重新連線…")
-    : status === "disconnected" || status === "error" ? t("SSH 連線已中斷：到主視窗重新連線，這裡會自動接上。")
+    : status === "disconnected" || status === "error"
+      ? host.ftpLabel ? t("連線已中斷：到主視窗重新連線，這裡會自動接上。") : t("SSH 連線已中斷：到主視窗重新連線，這裡會自動接上。")
     : null;
 
   return (
@@ -110,8 +112,9 @@ export default function SftpWindow({ tabKey }: { tabKey: string }) {
           <SftpPanel
             tabKey={tabKey}
             connId={host.connId}
-            onCd={onCd}
+            onCd={host.ftpLabel ? undefined : onCd}
             onClose={() => void closeWindow()}
+            title={protocol}
             startDir={host.startDir ?? undefined}
             initialDir={initialDir}
             nativeDrop
@@ -119,7 +122,7 @@ export default function SftpWindow({ tabKey }: { tabKey: string }) {
         ) : (
           <div data-testid="sftp-window-waiting" className="flex-1 flex items-center justify-center p-6 text-xs">
             {host && !host.connId ? (
-              <span className="text-fg/55">{t("這個終端機分頁已經關閉。")}</span>
+              <span className="text-fg/55">{host.ftpLabel ? t("這個分頁已經關閉。") : t("這個終端機分頁已經關閉。")}</span>
             ) : noReply ? (
               <div className="max-w-sm text-center space-y-3">
                 <Icon icon={Unplug} size={22} className="mx-auto text-warning" />

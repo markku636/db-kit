@@ -55,6 +55,12 @@ const MANY_CONNECTIONS = Array.from({ length: 40 }, (_, i) => ({
 // SSH 終端機情境改用 xterm 的 DOM renderer：無頭 Chrome 的 WebGL 不保證可用，
 // 而且只有 DOM 渲染的文字才在 .xterm-rows 讀得到（WebGL 畫在 canvas 上）。
 const SSH_STORAGE_SEED = { ...FX.STORAGE_SEED, "dbkit:ssh.prefs": { renderer: "dom" } };
+// 側欄多一台 FTP 主機（explicit FTPS）：只有檔案面板的分頁。
+const FTP_SESSION = {
+  ...FX.SSH_SESSIONS.sessions[1], id: "ftp-files", name: "files", host: "ftp.example.com", port: 21, username: "deploy",
+  auth: "password", protocol: "ftp", ftp: { tls: "explicit", active: false },
+};
+const FTP_SESSIONS = { ...FX.SSH_SESSIONS, sessions: [...FX.SSH_SESSIONS.sessions, FTP_SESSION] };
 const CASE_FX = {
   "sidebar-scroll-reaches-last": { CONNECTIONS: MANY_CONNECTIONS, CONN_GROUPS: MANY_GROUPS },
   "ssh-terminal": { STORAGE_SEED: SSH_STORAGE_SEED },
@@ -79,6 +85,7 @@ const CASE_FX = {
   "info-panel-ssh-details": { STORAGE_SEED: SSH_STORAGE_SEED },
   "sftp-window-host": { STORAGE_SEED: SSH_STORAGE_SEED },
   "sftp-window-view": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ftp-host": { STORAGE_SEED: SSH_STORAGE_SEED, SSH_SESSIONS: FTP_SESSIONS },
   // 同一個情境換成預設的渲染器（WebGL，開不起來才退回 DOM）：issue #7 的使用者用的就是預設值。
   "ssh-disconnect-overlay-webgl": {},
 };
@@ -538,6 +545,93 @@ const CASES = {
   },
 
   // 側欄主機列：沒連線是灰的、連上亮起；滑過有快速按鈕，已連線時按 SFTP 是切回那個分頁、不另開連線。
+  async "ftp-host"(page) {
+    const tree = page.locator("[data-ssh-host-tree]");
+    const row = tree.locator('[data-ssh-host="ftp-files"]');
+    await row.waitFor({ timeout: 8000 }).catch(() => {});
+    await row.hover();
+    check("FTP 主機的快速按鈕是「開啟」「在獨立視窗開啟」，沒有終端機",
+      await row.getByRole("button", { name: "開啟", exact: true }).isVisible().catch(() => false)
+      && await row.getByRole("button", { name: "在獨立視窗開啟", exact: true }).isVisible().catch(() => false)
+      && await row.getByRole("button", { name: "編輯 FTP 主機", exact: true }).isVisible().catch(() => false)
+      && (await row.getByRole("button", { name: "開啟終端機", exact: true }).count()) === 0);
+    await row.dblclick();
+    const pane = page.getByTestId("ftp-pane");
+    const panel = pane.getByTestId("sftp-panel");
+    await panel.getByText("backup.tar.gz", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    check("雙擊開出只有檔案面板的分頁，列得出登入後的資料夾", (await panel.getByText("backup.tar.gz", { exact: true }).count()) > 0);
+    check("沒有終端機", (await page.locator(".xterm-rows").count()) === 0);
+    check("面板標題是 FTPS", (await panel.getByText("FTPS", { exact: true }).count()) > 0);
+    check("沒有跟終端機有關的按鈕、也不能把面板關掉",
+      (await panel.getByRole("button", { name: /跟隨終端機/ }).count()) === 0
+      && (await panel.getByRole("button", { name: /到終端機目前的資料夾|看不出終端機/ }).count()) === 0
+      && (await panel.getByRole("button", { name: "關閉 SFTP", exact: true }).count()) === 0);
+    await panel.getByText("backup.tar.gz", { exact: true }).first().click({ button: "right" });
+    const items = await menuItems(page);
+    check("右鍵選單有下載、沒有「在終端機 cd 到此」",
+      items.some((x) => x.startsWith("下載")) && !items.some((x) => x.includes("在終端機 cd 到此")), items.join(" | "));
+    await closeMenu(page);
+    check("分頁列標出 FTPS", (await page.getByTitle("files（FTPS，中鍵關閉）", { exact: true }).count()) === 1);
+    await row.hover();
+    check("連上之後快速按鈕變成「切到分頁」", await row.getByRole("button", { name: "切到分頁", exact: true }).isVisible().catch(() => false));
+
+    await page.getByRole("button", { name: "新增 SSH 終端機", exact: true }).click();
+    await sleep(200);
+    const picker = await menuItems(page);
+    check("「新增 SSH 終端機」只列 SSH 主機", picker.some((x) => x.includes("web-01")) && !picker.some((x) => x.includes("files")), picker.join(" | "));
+    await closeMenu(page);
+
+    // 編輯：協定是 FTP，沒有 SSH 專屬欄位；切協定時埠跟著換預設值
+    await row.hover();
+    await row.getByRole("button", { name: "編輯 FTP 主機", exact: true }).click();
+    await page.getByText("編輯 FTP 主機", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    const proto = page.getByRole("radiogroup", { name: "協定" });
+    check("編輯對話框：協定選 FTP、加密是 explicit、沒有認證方式與跳板機",
+      (await proto.getByRole("radio", { name: "FTP / FTPS（只有檔案）" }).getAttribute("aria-checked")) === "true"
+      && (await page.getByLabel("加密", { exact: true }).inputValue().catch(() => null)) === "explicit"
+      && (await page.getByRole("radiogroup", { name: "認證方式" }).count()) === 0
+      && (await page.getByLabel("跳板機", { exact: true }).count()) === 0);
+    const port = page.getByLabel("埠", { exact: true });
+    await page.getByLabel("加密", { exact: true }).selectOption("implicit");
+    const implicitPort = await port.inputValue();
+    await proto.getByRole("radio", { name: "SSH / SFTP（終端機與檔案）" }).click();
+    const sshPort = await port.inputValue();
+    const sshFields = (await page.getByRole("radiogroup", { name: "認證方式" }).count()) === 1;
+    check("加密換成 implicit → 990；切成 SSH → 22，出現認證方式", implicitPort === "990" && sshPort === "22" && sshFields, `${implicitPort} / ${sshPort}`);
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+    await sleep(300);
+
+    // 新增連線 → FTP / FTPS 卡片
+    await page.getByRole("button", { name: "連線", exact: true }).first().click();
+    await page.getByRole("radiogroup", { name: "連線類型" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByRole("radio", { name: "FTP / FTPS" }).click();
+    await page.getByText("新增 FTP 主機", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("「FTP / FTPS」卡片開出新增 FTP 主機、預設 21 埠與 explicit TLS",
+      (await page.getByText("新增 FTP 主機", { exact: true }).count()) > 0
+      && (await port.inputValue().catch(() => null)) === "21"
+      && (await page.getByLabel("加密", { exact: true }).inputValue().catch(() => null)) === "explicit"
+      && (await page.getByText("已依連線字串填入，請確認後儲存").count()) === 0);
+    const host = page.getByLabel("主機", { exact: true });
+    await host.evaluate((el, text) => {
+      const dt = new DataTransfer();
+      dt.setData("text/plain", text);
+      el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, "ftps://anon@files.example.org/pub");
+    await sleep(200);
+    check("主機欄貼上 ftps:// 拆進欄位（implicit、990）",
+      (await host.inputValue()) === "files.example.org" && (await port.inputValue()) === "990"
+      && (await page.getByLabel("加密", { exact: true }).inputValue()) === "implicit"
+      && (await page.getByLabel("使用者", { exact: true }).inputValue()) === "anon");
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_SSH_SESSION_SAVES__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const saved = (await page.evaluate(() => window.__DBKIT_SSH_SESSION_SAVES__)).at(-1);
+    check("存下去是 FTP 主機、帶加密方式與起始資料夾",
+      saved?.protocol === "ftp" && saved?.ftp?.tls === "implicit" && saved?.port === 990 && saved?.options?.ui?.sftp_dir === "/pub" && !saved?.options?.ui?.open_sftp,
+      JSON.stringify({ protocol: saved?.protocol, ftp: saved?.ftp, port: saved?.port, ui: saved?.options?.ui }));
+    check("沒有未實作的 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
   async "ssh-host-quick-actions"(page) {
     const tree = page.locator("[data-ssh-host-tree]");
     const row = tree.locator('[data-ssh-host="ssh-web01"]');

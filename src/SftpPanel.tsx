@@ -32,9 +32,12 @@ const SftpPermsDialog = lazy(() => import("./SftpPermsDialog"));
 export interface SftpPanelProps {
   tabKey: string;
   connId: string;
-  /** 「在終端機 cd 到此」：由宿主送 `cd '<path>'` 進 shell。 */
-  onCd: (path: string) => void;
-  onClose: () => void;
+  /** 「在終端機 cd 到此」：由宿主送 `cd '<path>'` 進 shell。沒給 = 沒有終端機（FTP 主機），跟終端機有關的按鈕都不顯示。 */
+  onCd?: (path: string) => void;
+  /** 沒給 = 不能關（FTP 分頁整個就是這個面板）。 */
+  onClose?: () => void;
+  /** 標題列的協定名稱（SFTP / FTP / FTPS）。 */
+  title?: string;
   /** 放大成整個分頁（宿主暫時收起終端機）。 */
   maximized?: boolean;
   onToggleMaximize?: () => void;
@@ -96,7 +99,7 @@ function isDirEntry(e: SftpEntry): boolean {
 }
 
 export default function SftpPanel({
-  tabKey, connId, onCd, onClose, maximized = false, onToggleMaximize, onPopOut, startDir, initialDir, nativeDrop = false,
+  tabKey, connId, onCd, onClose, title = "SFTP", maximized = false, onToggleMaximize, onPopOut, startDir, initialDir, nativeDrop = false,
 }: SftpPanelProps) {
   const t = useT();
   const sftpId = useSshTerminals((s) => s.rt[tabKey]?.sftpId ?? null);
@@ -630,7 +633,7 @@ export default function SftpPanel({
         [t("權限…"), () => setPermsFor(entry)],
         [t("刪除"), () => void remove(entry)],
         [t("複製路徑"), () => copyPaths([entry])],
-        [t("在終端機 cd 到此"), () => onCd(entry.is_dir ? entry.path : parentOf(entry.path))],
+        ...(onCd ? ([[t("在終端機 cd 到此"), () => onCd(entry.is_dir ? entry.path : parentOf(entry.path))]] as [string, () => void][]) : []),
       ];
     }
     return [
@@ -642,7 +645,7 @@ export default function SftpPanel({
       [t("全選（Ctrl+A）"), () => setSel(selectAll(order))],
       [t("重新整理"), refresh],
       [t("複製路徑"), () => void copyToClipboard(path)],
-      [t("在終端機 cd 到此"), () => onCd(path)],
+      ...(onCd ? ([[t("在終端機 cd 到此"), () => onCd(path)]] as [string, () => void][]) : []),
     ];
   };
 
@@ -650,7 +653,7 @@ export default function SftpPanel({
     <div data-testid="sftp-panel" className="flex-1 flex flex-col min-h-0 min-w-0 text-xs" tabIndex={0} onKeyDown={onKeyDown} {...htmlDragProps}>
       {/* 標題列：對檔案的動作 */}
       <div className="h-8 shrink-0 flex items-center gap-1 px-2 border-b border-fg/10">
-        <span className="font-medium text-fg/70">SFTP</span>
+        <span className="font-medium text-fg/70">{title}</span>
         <div className="ml-auto flex items-center gap-0.5">
           <IconButton icon={FilePlus} label={t("新增檔案")} onClick={() => void newFile()} disabled={!sftpId} />
           <IconButton icon={FolderPlus} label={t("新資料夾")} onClick={() => void mkdir()} disabled={!sftpId} />
@@ -664,7 +667,7 @@ export default function SftpPanel({
             <IconButton icon={maximized ? Minimize2 : Maximize2} label={maximized ? t("還原 SFTP 面板大小") : t("放大 SFTP 面板")}
               active={maximized} onClick={onToggleMaximize} />
           )}
-          <IconButton icon={X} label={t("關閉 SFTP")} onClick={onClose} />
+          {onClose && <IconButton icon={X} label={t("關閉 SFTP")} onClick={onClose} />}
         </div>
       </div>
       {/* 導覽：上一層 / 重新整理 / 麵包屑（可輸入路徑）/ 跳到終端機所在的資料夾 / 跟隨終端機 */}
@@ -702,12 +705,16 @@ export default function SftpPanel({
         {editingPath == null && (
           <IconButton icon={Pencil} label={t("輸入路徑")} box="w-5 h-5" iconSize={11} className="shrink-0" onClick={() => setEditingPath(path)} />
         )}
-        <IconButton icon={SquareTerminal} box="w-6 h-6" iconSize={14} disabled={!sftpId || !termDir}
-          label={termDir ? t("到終端機目前的資料夾：{dir}", { dir: termDir }) : t("看不出終端機目前在哪個資料夾（shell 沒有回報）")}
-          onClick={goToTerminalDir} />
-        <IconButton icon={FolderSync} box="w-6 h-6" iconSize={14} active={follow} aria-pressed={follow}
-          label={follow ? t("跟隨終端機切換資料夾：開（再按一下關閉）") : t("跟隨終端機切換資料夾：在終端機 cd，這裡就跟著換")}
-          onClick={toggleFollow} />
+        {onCd && (
+          <>
+            <IconButton icon={SquareTerminal} box="w-6 h-6" iconSize={14} disabled={!sftpId || !termDir}
+              label={termDir ? t("到終端機目前的資料夾：{dir}", { dir: termDir }) : t("看不出終端機目前在哪個資料夾（shell 沒有回報）")}
+              onClick={goToTerminalDir} />
+            <IconButton icon={FolderSync} box="w-6 h-6" iconSize={14} active={follow} aria-pressed={follow}
+              label={follow ? t("跟隨終端機切換資料夾：開（再按一下關閉）") : t("跟隨終端機切換資料夾：在終端機 cd，這裡就跟著換")}
+              onClick={toggleFollow} />
+          </>
+        )}
       </div>
       {/* 篩選：只過濾這一層的名稱（Ctrl+F 聚焦、Esc 清除） */}
       <div className="shrink-0 flex items-center gap-1 px-2 py-1 border-b border-fg/10">

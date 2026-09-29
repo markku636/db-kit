@@ -16,6 +16,19 @@ export interface SshTermOptions {
   ui: Record<string, string>;
 }
 
+/** 主機的協定；對映 Rust `HostProtocol`。`ftp` 的主機只有檔案面板（沒有終端機）。舊存檔沒有這欄 = ssh。 */
+export type HostProtocol = "ssh" | "ftp";
+
+/** FTP 的加密方式：`explicit` = 連上後 AUTH TLS（常見，21 埠）、`implicit` = 一連上就是 TLS（舊式，990 埠）。 */
+export type FtpTls = "none" | "explicit" | "implicit";
+
+/** FTP 主機的連線選項；對映 Rust `FtpOptions`。 */
+export interface FtpOptions {
+  tls: FtpTls;
+  /** 主動模式（伺服器連回本機）；預設被動模式。 */
+  active: boolean;
+}
+
 /** 已儲存的 SSH 主機。刻意沒有 password / passphrase 欄位——秘密只進 OS keychain，永不落地、永不回前端。 */
 export interface SshSession {
   id: string;
@@ -32,6 +45,10 @@ export interface SshSession {
   jump_session_id?: string | null;
   folder_id: string | null;
   options: SshTermOptions;
+  /** 舊存檔沒有 = `ssh`。 */
+  protocol?: HostProtocol;
+  /** `protocol === "ftp"` 才用。 */
+  ftp?: FtpOptions;
 }
 
 export interface SshFolder {
@@ -260,6 +277,28 @@ export function defaultSshTermOptions(): SshTermOptions {
     env: {},
     ui: {},
   };
+}
+
+export const FTP_TLS_MODES: readonly FtpTls[] = ["explicit", "none", "implicit"];
+
+export function defaultFtpOptions(): FtpOptions {
+  return { tls: "explicit", active: false };
+}
+
+export function isFtpHost(s: Pick<SshSession, "protocol"> | null | undefined): boolean {
+  return s?.protocol === "ftp";
+}
+
+/** 協定的預設埠。 */
+export function defaultPortFor(protocol: HostProtocol, tls: FtpTls = "explicit"): number {
+  if (protocol === "ssh") return 22;
+  return tls === "implicit" ? 990 : 21;
+}
+
+/** 檔案面板標題用的協定名稱：SFTP / FTP / FTPS。 */
+export function fileProtocolLabel(s: Pick<SshSession, "protocol" | "ftp"> | null | undefined): string {
+  if (!isFtpHost(s)) return "SFTP";
+  return (s?.ftp?.tls ?? "none") === "none" ? "FTP" : "FTPS";
 }
 
 /** 新主機的空白骨架（對話框「新增」用）；id 由呼叫端決定（通常 `crypto.randomUUID()`）。 */

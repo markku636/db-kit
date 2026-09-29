@@ -71,6 +71,14 @@ russh = { version = "0.61", default-features = false, features = ["ring", "flate
 # SFTP 子系統（SSH 終端機分頁的檔案瀏覽 / 上下傳）：純 Rust、與 russh 版本無耦合，套在 russh channel 的
 # `into_stream()` 上即可。核心層即用（`ssh/sftp.rs` 不依賴 Tauri），故不藏在 gui feature 後。
 russh-sftp = { version = "3.0", default-features = false }
+# FTP / FTPS（檔案面板的 FTP 主機；斷點續傳用 REST / APPE）：tokio + rustls/ring，延續全案避開 OpenSSL、aws-lc 的原則。
+# `deprecated`：implicit FTPS（990 埠一連上就走 TLS）在 suppaftp 藏在這個 feature 後面。
+suppaftp = { version = "12.1", default-features = false, features = ["tokio-rustls-ring", "deprecated"] }
+# FTPS 的 TLS 設定：信任根 = OS 憑證庫（rustls-native-certs），不在信任鏈上的（自簽 / 內網）以憑證 SHA-256
+# 指紋 TOFU，記在 known_hosts。版本對齊 suppaftp 用的 tokio-rustls 0.26（rustls 0.23，ring）。
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-native-certs = "0.8"
+sha2 = "0.10"
 # 舊式 OpenSSL 加密的 PEM 私鑰（Proc-Type: 4,ENCRYPTED；openssl genrsa -des3 之類）：russh 只解 AES-128，
 # 3DES / DES / AES-192/256-CBC 與 EVP_BytesToKey(MD5) 在 ssh/keys.rs 補。版本對齊依賴樹裡既有的
 # （aes-gcm 0.10 → aes 0.8 / cipher 0.4），不另外多拉一套。

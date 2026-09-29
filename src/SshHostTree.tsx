@@ -2,14 +2,16 @@
 // 單擊只在本區高亮，雙擊 / Enter 開終端機分頁；右鍵有連線 / SFTP / 編輯 / 複製 / 刪除 / 移到資料夾。
 // 已連線（有分頁連著）的主機圖示亮起，滑過顯示快速按鈕（終端機 / SFTP / 編輯）。
 // 一台主機都沒有時整個區塊不顯示——不是每個人都用 SSH；新增走「新增連線 → SSH / SFTP」或貼 ssh:// 字串。
+// FTP 主機也列在這裡（資料夾圖示）：沒有終端機，開啟就是只有檔案面板的分頁。
 import { lazy, Suspense, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { ChevronDown, ChevronRight, FileInput, Folder, FolderOpen, FolderPlus, KeyRound, Pencil, Plus, SquareTerminal, type LucideIcon } from "lucide-react";
+import { AppWindow, ChevronDown, ChevronRight, FileInput, Folder, FolderOpen, FolderPlus, KeyRound, Pencil, Plus, SquareTerminal, type LucideIcon } from "lucide-react";
 import { useT } from "./i18n";
 import { Icon, MenuPanel } from "./ui/index";
 import { toast, uiConfirm, uiPrompt } from "./ui";
 import { useStore } from "./store";
 import { useSshTerminals } from "./sshTerminals";
-import type { SshFolder, SshSession, SshTargetRef } from "./sshTypes";
+import { isFtpHost, type SshFolder, type SshSession, type SshTargetRef } from "./sshTypes";
+import { ftpTabOf, type SshTab } from "./sshTabs";
 import { filterSessions, groupSessions, sessionLabel, uniqueFolderName, useSshSessions } from "./sshSessions";
 
 // 金鑰管理用得少：第一次打開才下載。
@@ -33,7 +35,7 @@ function saveSet(key: string, s: Set<string>) {
 export interface SshHostTreeProps {
   /** 側欄搜尋字（已 trim + lowercase）；非空時全展開、只顯示命中的主機。 */
   q: string;
-  onOpen: (target: SshTargetRef, title: string, sessionId?: string, opts?: { sftp?: boolean; sftpWin?: boolean }) => void;
+  onOpen: (target: SshTargetRef, title: string, sessionId?: string, opts?: { sftp?: boolean; sftpWin?: boolean; ftp?: SshTab["ftp"] }) => void;
   onEdit: (s: SshSession | null, folderId?: string | null) => void;
 }
 
@@ -83,12 +85,12 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
 
   // 主機設了「開啟時一併展開 SFTP 面板」（sftp:// 字串建的主機預設開）就一起展開。
   const open = (s: SshSession) =>
-    onOpen({ kind: "session", id: s.id }, sessionLabel(s), s.id, { sftp: s.options.ui?.open_sftp === "1" });
+    onOpen({ kind: "session", id: s.id }, sessionLabel(s), s.id, { sftp: s.options.ui?.open_sftp === "1", ftp: ftpTabOf(s) });
   // 「開啟 SFTP」（右鍵 / 快速按鈕）開獨立視窗。已連線就沿用那個分頁的連線、不另開一條；
   // 沒連線才開終端機分頁，連上後自動開視窗（這時就不再展開側邊面板）。
   const openSftp = (s: SshSession) => {
     const key = live.get(s.id);
-    if (!key) { onOpen({ kind: "session", id: s.id }, sessionLabel(s), s.id, { sftpWin: true }); return; }
+    if (!key) { onOpen({ kind: "session", id: s.id }, sessionLabel(s), s.id, { sftpWin: true, ftp: ftpTabOf(s) }); return; }
     useStore.getState().setActiveTab(key);
     useSshTerminals.getState().patch(key, { sftpWinRequest: true });
   };
@@ -127,6 +129,7 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
 
   const renderSession = (s: SshSession, depth: number) => {
     const connected = live.has(s.id);
+    const ftp = isFtpHost(s);
     return (
       <div
         key={s.id}
@@ -138,19 +141,28 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
         onDoubleClick={() => open(s)}
         onKeyDown={(e) => onRowKey(e, s)}
         onContextMenu={(e) => { e.preventDefault(); setSelected(s.id); setMenu({ x: e.clientX, y: e.clientY, session: s }); }}
-        title={`${s.username}@${s.host}:${s.port}`}
+        title={ftp ? `ftp://${s.username ? `${s.username}@` : ""}${s.host}:${s.port}` : `${s.username}@${s.host}:${s.port}`}
         style={{ paddingLeft: 12 + depth * 14 }}
         className={`group flex items-center gap-1.5 pr-2 py-1 cursor-pointer select-none outline-none ${selected === s.id ? "bg-accent/15" : "hover:bg-fg/5"}`}
       >
         {/* 同資料庫連線：已連線＝亮色、未連線＝灰暗。 */}
         <span className={`shrink-0 flex ${connected ? "text-emerald-400" : "text-fg/35"}`} title={connected ? t("已連線") : t("未連線")}>
-          <Icon icon={SquareTerminal} size={13} />
+          <Icon icon={ftp ? FolderOpen : SquareTerminal} size={13} />
         </span>
         <span className="truncate flex-1">{sessionLabel(s)}</span>
         {s.name && <span className="text-[10px] text-fg/30 truncate max-w-[110px] mono group-hover:hidden">{s.username}@{s.host}</span>}
-        <RowButton icon={SquareTerminal} label={connected ? t("切到終端機") : t("開啟終端機")} onClick={() => focusOrOpen(s)} />
-        <RowButton icon={FolderOpen} label={t("開啟 SFTP")} onClick={() => openSftp(s)} />
-        <RowButton icon={Pencil} label={t("編輯 SSH 主機")} onClick={() => onEdit(s, s.folder_id)} />
+        {ftp ? (
+          <>
+            <RowButton icon={FolderOpen} label={connected ? t("切到分頁") : t("開啟")} onClick={() => focusOrOpen(s)} />
+            <RowButton icon={AppWindow} label={t("在獨立視窗開啟")} onClick={() => openSftp(s)} />
+          </>
+        ) : (
+          <>
+            <RowButton icon={SquareTerminal} label={connected ? t("切到終端機") : t("開啟終端機")} onClick={() => focusOrOpen(s)} />
+            <RowButton icon={FolderOpen} label={t("開啟 SFTP")} onClick={() => openSftp(s)} />
+          </>
+        )}
+        <RowButton icon={Pencil} label={ftp ? t("編輯 FTP 主機") : t("編輯 SSH 主機")} onClick={() => onEdit(s, s.folder_id)} />
       </div>
     );
   };
@@ -218,7 +230,7 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
           {(menu.session
             ? ([
                 [t("連線"), () => open(menu.session!), false],
-                [t("開啟 SFTP"), () => openSftp(menu.session!), false],
+                [isFtpHost(menu.session) ? t("在獨立視窗開啟") : t("開啟 SFTP"), () => openSftp(menu.session!), false],
                 [t("編輯…"), () => onEdit(menu.session!, menu.session!.folder_id), false],
                 [t("複製"), () => duplicate(menu.session!), false],
                 ...(folders.length

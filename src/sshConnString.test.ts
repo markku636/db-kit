@@ -108,6 +108,13 @@ describe("parseSshString：沒有 scheme 的主機字串", () => {
     }
   });
 
+  it("ftp:// 不加密、ftpes:// explicit TLS、ftps:// implicit TLS；都帶路徑", () => {
+    expect(pick(parseSshString("ftp://anonymous@ftp.example.com/pub"))).toMatchObject({ protocol: "ftp", host: "ftp.example.com", username: "anonymous", path: "/pub" });
+    expect(pick(parseSshString("FTPES://u:p%40ss@h:2121"))).toMatchObject({ protocol: "ftpes", password: "p@ss", port: 2121, path: null });
+    expect(pick(parseSshString("ftps://h/"))).toMatchObject({ protocol: "ftps", port: null, path: null });
+    expect(parseSshString("ftp://")).toBeNull();
+  });
+
   it("資料庫連線字串不是 SSH", () => {
     for (const s of ["postgres://u:p@h/db", "mysql://u@h:3306", "host=h port=5432", "Server=h;Database=d"]) {
       expect(parseSshString(s)).toBeNull();
@@ -118,7 +125,7 @@ describe("parseSshString：沒有 scheme 的主機字串", () => {
 
 describe("applySshString", () => {
   const cur: SshFormFields = {
-    host: "", port: 2222, username: "keep", auth: "agent", password: "", keyPath: "", jumpId: "", openSftp: false, sftpDir: "",
+    protocol: "ssh", ftpTls: "explicit", host: "", port: 2222, username: "keep", auth: "agent", password: "", keyPath: "", jumpId: "", openSftp: false, sftpDir: "",
   };
   const hosts = [{ id: "j1", name: "bastion", host: "10.0.0.1", username: "ops", port: 22 }];
 
@@ -141,6 +148,27 @@ describe("applySshString", () => {
   it("sftp → 開啟時展開 SFTP，帶路徑就當起始資料夾；ssh 不會把 SFTP 關掉", () => {
     expect(applySshString(parseSshString("sftp://u@h/srv")!, cur, []).next).toMatchObject({ openSftp: true, sftpDir: "/srv" });
     expect(applySshString(parseSshString("ssh://u@h")!, { ...cur, openSftp: true }, []).next.openSftp).toBe(true);
+  });
+});
+
+describe("applySshString：FTP", () => {
+  const ssh: SshFormFields = {
+    protocol: "ssh", ftpTls: "explicit", host: "", port: 22, username: "", auth: "password", password: "", keyPath: "", jumpId: "", openSftp: false, sftpDir: "",
+  };
+
+  it("有 scheme 的字串決定協定；沒帶埠號就換成新協定的預設埠", () => {
+    expect(applySshString(parseSshString("ftp://h")!, ssh, []).next).toMatchObject({ protocol: "ftp", ftpTls: "none", port: 21 });
+    expect(applySshString(parseSshString("ftps://h")!, ssh, []).next).toMatchObject({ protocol: "ftp", ftpTls: "implicit", port: 990 });
+    expect(applySshString(parseSshString("ftpes://h:2121/srv")!, ssh, []).next).toMatchObject({ protocol: "ftp", ftpTls: "explicit", port: 2121, sftpDir: "/srv" });
+    const ftp = { ...ssh, protocol: "ftp" as const, port: 21 };
+    expect(applySshString(parseSshString("ssh://h")!, ftp, []).next).toMatchObject({ protocol: "ssh", port: 22 });
+    expect(applySshString(parseSshString("ftpes://h")!, ftp, []).next.port, "協定與加密都沒變 → 埠不動").toBe(21);
+  });
+
+  it("主機欄的 user@host:port 看不出協定：不改協定", () => {
+    const ftp = { ...ssh, protocol: "ftp" as const, ftpTls: "none" as const, port: 21 };
+    expect(applySshString(parseSshString("u@h:2121", { bare: true })!, ftp, []).next).toMatchObject({ protocol: "ftp", ftpTls: "none", port: 2121, username: "u" });
+    expect(applySshString(parseSshString("u@h", { bare: true })!, ftp, []).next.protocol).toBe("ftp");
   });
 });
 

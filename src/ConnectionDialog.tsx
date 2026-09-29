@@ -70,6 +70,9 @@ function fmtSummaryVal(
   return v === "" ? t("（空）") : String(v);
 }
 
+/** 「FTP / FTPS」卡片：開主機對話框並預選 FTP（explicit TLS）；沒有主機，不算「依連線字串填入」。 */
+const BLANK_FTP: ParsedSsh = { protocol: "ftpes", host: "", port: null, username: null, password: null, identityFile: null, jump: null, path: null };
+
 export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }: Props) {
   const t = useT();
   const editing = !!initial;
@@ -496,7 +499,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
       <Field
         label={t("連線字串")}
         hint={onNewSsh && !editing
-          ? t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss:// ssh:// sftp://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")
+          ? t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss:// ssh:// sftp:// ftp://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")
           : t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")}
       >
         <div className="flex gap-2">
@@ -568,6 +571,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
         onChange={(k) => { onKindChange(k); setPickerOpen(false); }}
         onExpand={() => setPickerOpen(true)}
         onPickSsh={onNewSsh && !editing ? () => onNewSsh(null) : undefined}
+        onPickFtp={onNewSsh && !editing ? () => onNewSsh(BLANK_FTP) : undefined}
       />
 
       {/* 兩步流程：先選類型（pickerOpen＝只顯示上方類型選擇器），選定後才展開表單，避免類型格與

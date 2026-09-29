@@ -3,6 +3,9 @@
 //! 連線語意同 Xshell：每個 `ssh_connect` 一條 `Handle`（新分頁 = 新連線）；同分頁的 SFTP 與額外
 //! channel 從同一條 `Arc<Handle>` 開，不再問密碼 / OTP。
 //!
+//! FTP 主機另外登記在 `ftp_conns`（`FtpConn`：重新撥號需要的資料；控制連線由各工作階段自己開）。
+//! 它的檔案面板工作階段與 SFTP 放在同一張 `sftps` 表（`FileClient`），前端不必分。
+//!
 //! 鎖都是 `parking_lot::Mutex`，**絕不跨 `.await`**：拿到 `Arc` 就放鎖，IO 在鎖外做。
 
 use std::collections::HashMap;
@@ -16,7 +19,8 @@ use tokio::task::JoinHandle;
 
 use super::auth::{self, HostKeyDecision, TargetOrigin};
 use super::sessions::SshTermOptions;
-use super::sftp::SftpClient;
+use super::files::FileClient;
+use super::ftp::FtpConn;
 use super::terminal::TermHandle;
 use crate::error::{AppError, AppResult};
 
@@ -107,7 +111,9 @@ struct Transfer {
 pub struct SshRuntime {
     conns: Mutex<HashMap<String, Arc<SshConn>>>,
     terms: Mutex<HashMap<String, Arc<TermHandle>>>,
-    sftps: Mutex<HashMap<String, Arc<SftpClient>>>,
+    /// 已登入的 FTP 主機（conn_id 與 `conns` 同一個命名空間，前端產的 uuid）。
+    ftp_conns: Mutex<HashMap<String, Arc<FtpConn>>>,
+    sftps: Mutex<HashMap<String, Arc<FileClient>>>,
     /// sftp_id → 開它的 SFTP 獨立視窗標籤（主視窗開的不記）。視窗關掉時收掉它開的通道。
     sftp_owners: Mutex<HashMap<String, String>>,
     prompts: Mutex<HashMap<String, PendingPrompt>>,
@@ -159,14 +165,27 @@ impl SshRuntime {
             .ok_or_else(|| AppError::Ssh(t!("SSH 連線不存在或已關閉").into()))
     }
 
-    /// 某來源（已存主機 / DB 連線）目前開著的連線 id。
+    /// 某來源（已存主機 / DB 連線）目前開著的連線 id（SSH 與 FTP）。
     pub fn conn_ids_for(&self, origin: &TargetOrigin) -> Vec<String> {
-        self.conns
-            .lock()
-            .values()
-            .filter(|c| &c.origin == origin)
-            .map(|c| c.id.clone())
-            .collect()
+        let mut ids: Vec<String> =
+            self.conns.lock().values().filter(|c| &c.origin == origin).map(|c| c.id.clone()).collect();
+        ids.extend(self.ftp_conns.lock().values().filter(|c| &c.origin == origin).map(|c| c.id.clone()));
+        ids
+    }
+
+    /// 登記一台已登入的 FTP 主機（與 SSH 連線共用上限）。
+    pub fn insert_ftp_conn(&self, conn: Arc<FtpConn>) -> AppResult<()> {
+        let open = self.conns.lock().len();
+        let mut g = self.ftp_conns.lock();
+        if open + g.len() >= MAX_CONNS && !g.contains_key(&conn.id) {
+            return Err(AppError::Ftp(tf!("同時開啟的連線已達上限（{n}）", n = MAX_CONNS)));
+        }
+        g.insert(conn.id.clone(), conn);
+        Ok(())
+    }
+
+    pub fn ftp_conn(&self, id: &str) -> Option<Arc<FtpConn>> {
+        self.ftp_conns.lock().get(id).cloned()
     }
 
     /// 連線結束了（watcher 通知）：從登記簿拿掉。只在登記的還是**同一條**時才拿——
@@ -184,6 +203,8 @@ impl SshRuntime {
     pub async fn disconnect(&self, id: &str) {
         self.cancel_prompts_for(id);
         let conn = self.conns.lock().remove(id);
+        // FTP：沒有可以送 disconnect 的連線，關掉工作階段（各自的控制連線）就是斷線。
+        self.ftp_conns.lock().remove(id);
         for t in self.take_transfers_for(id) {
             t.store(true, Ordering::Relaxed);
         }
@@ -209,7 +230,8 @@ impl SshRuntime {
 
     /// App 關閉：全部斷線。
     pub async fn shutdown_all(&self) {
-        let ids: Vec<String> = self.conns.lock().keys().cloned().collect();
+        let mut ids: Vec<String> = self.conns.lock().keys().cloned().collect();
+        ids.extend(self.ftp_conns.lock().keys().cloned());
         for id in ids {
             self.disconnect(&id).await;
         }
@@ -250,11 +272,11 @@ impl SshRuntime {
 
     // ---- SFTP ----
 
-    pub fn insert_sftp(&self, id: String, sftp: Arc<SftpClient>) {
+    pub fn insert_sftp(&self, id: String, sftp: Arc<FileClient>) {
         self.sftps.lock().insert(id, sftp);
     }
 
-    pub fn sftp(&self, id: &str) -> AppResult<Arc<SftpClient>> {
+    pub fn sftp(&self, id: &str) -> AppResult<Arc<FileClient>> {
         self.sftps
             .lock()
             .get(id)
@@ -262,7 +284,7 @@ impl SshRuntime {
             .ok_or_else(|| AppError::Sftp(t!("SFTP 工作階段不存在或已關閉").into()))
     }
 
-    pub fn remove_sftp(&self, id: &str) -> Option<Arc<SftpClient>> {
+    pub fn remove_sftp(&self, id: &str) -> Option<Arc<FileClient>> {
         self.sftp_owners.lock().remove(id);
         self.sftps.lock().remove(id)
     }
@@ -282,11 +304,11 @@ impl SshRuntime {
             .collect()
     }
 
-    fn take_sftps_for(&self, conn_id: &str) -> Vec<Arc<SftpClient>> {
+    fn take_sftps_for(&self, conn_id: &str) -> Vec<Arc<FileClient>> {
         let mut g = self.sftps.lock();
         let ids: Vec<String> = g
             .iter()
-            .filter(|(_, s)| s.conn_id == conn_id)
+            .filter(|(_, s)| s.conn_id() == conn_id)
             .map(|(k, _)| k.clone())
             .collect();
         let taken = ids.iter().filter_map(|k| g.remove(k)).collect();

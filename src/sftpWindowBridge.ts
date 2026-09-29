@@ -38,6 +38,8 @@ export interface SftpWinState {
   initialDir: string | null;
   /** App 閒置自動鎖定了：視窗蓋上遮罩，到主視窗解鎖後才能用。 */
   locked: boolean;
+  /** FTP 主機的分頁：協定名稱（FTP / FTPS）；沒有終端機，視窗不顯示跟終端機有關的功能。null = SFTP。 */
+  ftpLabel: string | null;
 }
 
 // ---- 主視窗這一側 ----
@@ -61,7 +63,8 @@ let hostReady: Promise<void> | null = null;
 
 function snapshot(tabKey: string): Omit<SftpWinState, "initialDir"> {
   const rt = useSshTerminals.getState().rt[tabKey];
-  const sid = useStore.getState().sshTabs.find((x) => x.key === tabKey)?.sessionId;
+  const tab = useStore.getState().sshTabs.find((x) => x.key === tabKey);
+  const sid = tab?.sessionId;
   const startDir = sid ? useSshSessions.getState().sessions.find((s) => s.id === sid)?.options.ui?.sftp_dir ?? null : null;
   return {
     tabKey,
@@ -73,6 +76,7 @@ function snapshot(tabKey: string): Omit<SftpWinState, "initialDir"> {
     user: rt?.user ?? "",
     startDir,
     locked,
+    ftpLabel: tab?.ftp?.label ?? null,
   };
 }
 
@@ -127,12 +131,12 @@ function ensureHost(): Promise<void> {
  * 用獨立視窗開這個分頁的 SFTP（已經開著就叫到最前面）。`initialDir`：從側邊面板移過去時，
  * 視窗從面板所在的資料夾開始；沒給就跟側邊面板一樣——終端機所在的資料夾、主機設定的起始資料夾、家目錄。
  */
-export async function openSftpWindow(tabKey: string, opts: { title: string; initialDir?: string }): Promise<void> {
+export async function openSftpWindow(tabKey: string, opts: { title: string; initialDir?: string; protocol?: string }): Promise<void> {
   await ensureHost();
   if (opts.initialDir) pendingInitialDir.set(tabKey, opts.initialDir);
   setOpen(tabKey, true);
   try {
-    const created = await api.sshSftpWindowOpen(tabKey, `${opts.title} — SFTP`);
+    const created = await api.sshSftpWindowOpen(tabKey, `${opts.title} — ${opts.protocol ?? "SFTP"}`);
     // 叫到前面的是已經開著的視窗：它不會再打招呼，起始資料夾也用不到了。
     if (!created) pendingInitialDir.delete(tabKey);
   } catch (e) {
