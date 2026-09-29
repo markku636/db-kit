@@ -119,6 +119,9 @@ export interface SshSessionsStore {
   removeFolder: (id: string) => Promise<void>;
   moveToFolder: (sessionId: string, folderId: string | null) => Promise<void>;
   saveLayout: () => Promise<void>;
+  /** 側欄單擊選取的主機（右側「詳細資料」面板顯示它）；與資料庫樹的 selectedNode 互斥，由側欄兩邊各自清掉對方。 */
+  selectedId: string | null;
+  select: (id: string | null) => void;
 }
 
 /**
@@ -137,6 +140,8 @@ export const useSshSessions = create<SshSessionsStore>((set, get) => {
     loaded: false,
     loading: false,
     error: null,
+    selectedId: null,
+    select: (id) => set({ selectedId: id }),
 
     load: async () => {
       set({ loading: true });

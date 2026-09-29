@@ -44,7 +44,12 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
   const loaded = useSshSessions((s) => s.loaded);
   const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem(SECTION_KEY) === "1");
   const [closedFolders, setClosedFolders] = useState<Set<string>>(() => loadSet(FOLDERS_KEY));
-  const [selected, setSelected] = useState<string | null>(null);
+  // 選取放在 useSshSessions（右側「詳細資料」面板讀得到）。與資料庫樹的 selectedNode 互斥：
+  // 點主機時清掉資料庫節點，資料庫那邊選了東西時清掉主機——面板永遠顯示最後點的那個。
+  const selected = useSshSessions((s) => s.selectedId);
+  const setSelected = (id: string) => { useSshSessions.getState().select(id); useStore.getState().selectNode(null); };
+  const dbNode = useStore((s) => s.selectedNode);
+  useEffect(() => { if (dbNode) useSshSessions.getState().select(null); }, [dbNode]);
   const [menu, setMenu] = useState<{ x: number; y: number; session?: SshSession; folder?: SshFolder } | null>(null);
   const [keysOpen, setKeysOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);

@@ -3734,6 +3734,14 @@ const en: Catalog = {
   "連不到主機": "Host unreachable",
   "在終端機按 Enter 也能重新連線": "or press Enter in the terminal",
   "還沒有其他主機可當跳板機：先把跳板機新增成一台主機，這裡就能選它。": "No other hosts to jump through yet: add the jump host as a host first, then pick it here.",
+  // ---- 詳細資料面板：SSH 主機 ----
+  "點選左側的連線、資料庫、資料表或 SSH 主機，這裡會顯示其詳細資料。": "Select a connection, database, table or SSH host on the left to see its details here.",
+  "金鑰庫：{name}": "Key store: {name}",
+  "方式": "Method",
+  "終端機類型": "Terminal type",
+  "SFTP 起始目錄": "SFTP start folder",
+  "開著的分頁": "Open tabs",
+  "{n} 個（{live} 個連線中）": "{n} ({live} connected)",
 };
 
 export default en;

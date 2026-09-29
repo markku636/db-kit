@@ -6,10 +6,16 @@ import { IconButton } from "./ui/index";
 import { useStore } from "./store";
 import { databaseOptionsSql } from "./sql";
 import { useT } from "./i18n";
+import { sessionLabel, useSshSessions } from "./sshSessions";
+import { useSshTerminals } from "./sshTerminals";
+import { keystoreId } from "./sshKeys";
+import type { SshSession } from "./sshTypes";
 
-// 右側「詳細資料」面板：單擊左側樹節點（連線 / 資料庫 / 資料表）即時顯示其唯讀摘要。
-// 對標 Navicat 物件資訊面板；編輯仍走右鍵「屬性…」對話框，本面板僅檢視，避免誤改。
-const PANEL_KEY = "db-kit:infoPanelOpen";
+// 右側「詳細資料」面板：單擊左側樹節點（連線 / 資料庫 / 資料表 / SSH 主機）即時顯示其唯讀摘要。
+// 編輯仍走右鍵「屬性…」/「編輯」對話框，本面板僅檢視，避免誤改。
+// 預設收合（只留窄邊條）：開著查詢或終端機時它多半只是佔寬度；展開 / 收合的選擇會記住。
+// 換了 key（舊的 db-kit:infoPanelOpen 沒存過就等於展開），讓所有人都先回到收合一次。
+const PANEL_KEY = "db-kit:infoPanel";
 // 面板寬度持久化（px）；可拖曳左緣調整，夾在合理範圍內。
 const WIDTH_KEY = "db-kit:infoPanelWidth";
 const WIDTH_MIN = 240;
@@ -21,13 +27,14 @@ export default function InfoPanel() {
   const node = useStore((s) => s.selectedNode);
   const connections = useStore((s) => s.connections);
   const connectedIds = useStore((s) => s.connectedIds);
+  const sshHost = useSshSessions((s) => (s.selectedId ? s.sessions.find((x) => x.id === s.selectedId) ?? null : null));
   const [open, setOpen] = useState(() => {
-    try { return localStorage.getItem(PANEL_KEY) !== "0"; } catch { return true; }
+    try { return localStorage.getItem(PANEL_KEY) === "open"; } catch { return false; }
   });
   const toggle = () =>
     setOpen((v) => {
       const next = !v;
-      try { localStorage.setItem(PANEL_KEY, next ? "1" : "0"); } catch { /* 忽略 */ }
+      try { localStorage.setItem(PANEL_KEY, next ? "open" : "closed"); } catch { /* 忽略 */ }
       return next;
     });
 
@@ -65,7 +72,7 @@ export default function InfoPanel() {
   // 收合狀態：僅留一條可點擊的窄邊條（保留垂直標題）。
   if (!open) {
     return (
-      <div className="w-7 shrink-0 bg-panel border-l border-fg/10 flex flex-col items-center pt-2">
+      <div data-testid="info-panel" data-open="false" className="w-7 shrink-0 bg-panel border-l border-fg/10 flex flex-col items-center pt-2">
         <IconButton icon={ChevronLeft} label={t("顯示詳細資料面板")} iconSize={16} box="w-6 h-6"
           onClick={toggle} />
         <div className="mt-3 text-[10px] text-fg/30 tracking-wide [writing-mode:vertical-rl]">{t("詳細資料")}</div>
@@ -77,7 +84,7 @@ export default function InfoPanel() {
   const connected = !!conn && connectedIds.has(conn.id);
 
   return (
-    <div className="shrink-0 bg-panel border-l border-fg/10 flex flex-col text-sm relative" style={{ width }}>
+    <div data-testid="info-panel" data-open="true" className="shrink min-w-[240px] bg-panel border-l border-fg/10 flex flex-col text-sm relative" style={{ width }}>
       <div onPointerDown={startResize} title={t("拖曳調整寬度")}
         className="absolute left-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent/40 z-10" />
       <div className="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-fg/10">
@@ -86,9 +93,11 @@ export default function InfoPanel() {
           onClick={toggle} className="ml-auto" />
       </div>
       <div className="flex-1 overflow-auto">
-        {!node || !conn ? (
+        {sshHost ? (
+          <SshHostInfo key={sshHost.id} host={sshHost} />
+        ) : !node || !conn ? (
           <div className="p-4 text-fg/30 text-xs leading-relaxed">
-            {t("點選左側的連線、資料庫或資料表節點，這裡會顯示其詳細資料。")}
+            {t("點選左側的連線、資料庫、資料表或 SSH 主機，這裡會顯示其詳細資料。")}
           </div>
         ) : node.type === "connection" ? (
           <ConnectionInfo key={conn.id} conn={conn} connected={connected} />
@@ -105,6 +114,68 @@ export default function InfoPanel() {
           />
         )}
       </div>
+    </div>
+  );
+}
+
+// ---- SSH 主機摘要（側欄「SSH 主機」單擊）----
+// 只顯示存下來的設定與目前開著的分頁；秘密（密碼 / 密語）本來就不回前端。
+function SshHostInfo({ host }: { host: SshSession }) {
+  const t = useT();
+  const sessions = useSshSessions((s) => s.sessions);
+  const folders = useSshSessions((s) => s.folders);
+  const tabs = useStore((s) => s.sshTabs);
+  const rt = useSshTerminals((s) => s.rt);
+  const mine = tabs.filter((tb) => tb.sessionId === host.id);
+  const live = mine.filter((tb) => rt[tb.key]?.status === "connected").length;
+  const jump = host.jump_session_id ? sessions.find((x) => x.id === host.jump_session_id) ?? null : null;
+  const folder = host.folder_id ? folders.find((f) => f.id === host.folder_id) ?? null : null;
+
+  // 金鑰庫的金鑰顯示名稱（參照存的是 keystore:<id>）。
+  const keyId = host.auth === "key" ? keystoreId(host.private_key_path) : null;
+  const [keyName, setKeyName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!keyId) { setKeyName(null); return; }
+    let alive = true;
+    api.sshKeysList()
+      .then((ks) => { if (alive) setKeyName(ks.find((k) => k.id === keyId)?.name ?? null); })
+      .catch(() => { if (alive) setKeyName(null); });
+    return () => { alive = false; };
+  }, [keyId]);
+
+  const authLabel = host.auth === "password" ? t("密碼")
+    : host.auth === "key" ? t("私鑰")
+    : host.auth === "agent" ? "ssh-agent"
+    : t("鍵盤互動");
+  const keyText = keyId ? t("金鑰庫：{name}", { name: keyName ?? keyId }) : host.private_key_path || "—";
+  const jumpText = jump ? sessionLabel(jump) : host.jump_session_id ? t("（已刪除的主機）") : t("不經跳板機（直連）");
+  const ui = host.options.ui ?? {};
+
+  return (
+    <div className="p-3 space-y-3">
+      <Header dotColor={live ? "#22c55e" : "#888"} title={sessionLabel(host)}
+        sub={host.name ? `${host.username}@${host.host}` : undefined}
+        badge={live ? t("已連線") : t("未連線")} badgeOk={live > 0} />
+
+      <Section title={t("連線")}>
+        <Row k={t("主機")} v={`${host.host}:${host.port}`} />
+        <Row k={t("使用者")} v={host.username || "—"} />
+        <Row k={t("跳板機")} v={jumpText} />
+        <Row k={t("資料夾")} v={folder?.name ?? t("未分類")} />
+      </Section>
+
+      <Section title={t("認證方式")}>
+        <Row k={t("方式")} v={authLabel} />
+        {host.auth === "key" && <Row k={t("私鑰")} v={keyText} />}
+        {host.auth === "key" && host.certificate_path && <Row k={t("憑證")} v={host.certificate_path} />}
+      </Section>
+
+      <Section title={t("終端機")}>
+        <Row k={t("終端機類型")} v={host.options.term || "xterm-256color"} />
+        {host.options.startup_command && <Row k={t("啟動指令")} v={host.options.startup_command} />}
+        {ui.sftp_dir && <Row k={t("SFTP 起始目錄")} v={ui.sftp_dir} />}
+        <Row k={t("開著的分頁")} v={mine.length ? t("{n} 個（{live} 個連線中）", { n: mine.length, live }) : "—"} />
+      </Section>
     </div>
   );
 }
