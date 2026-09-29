@@ -22,6 +22,13 @@ import { collectLayoutIssues, installLayoutLint } from "./layout-lint.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// App 畫面的文字：#root 再加上掛在 body 上的對話框（ui/Modal 用 portal 掛到 body，不在 #root 裡），但不含通知 toast。
+const appText = (page) =>
+  page.evaluate(() => {
+    const root = document.querySelector("#root");
+    const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter((d) => !root?.contains(d));
+    return [root, ...dialogs].map((el) => el?.innerText ?? "").join("\n");
+  });
 
 let passed = 0;
 const failures = [];
@@ -1190,7 +1197,7 @@ const CASES = {
     await input.press("Enter");
     await page.waitForFunction(() => (document.querySelector("#root")?.innerText ?? "").includes("systemctl status nginx"), null, { timeout: 8000 }).catch(() => {});
     const sendBtn = page.getByRole("button", { name: "送到終端機" });
-    check("bash 區塊有「送到終端機」", (await sendBtn.count()) > 0, (await page.locator("#root").innerText()).slice(-500));
+    check("bash 區塊有「送到終端機」", (await sendBtn.count()) > 0, (await appText(page)).slice(-500));
     if ((await sendBtn.count()) > 0) {
       await sendBtn.first().click();
       await sleep(300);
@@ -1205,11 +1212,11 @@ const CASES = {
     await input.press("Enter");
     await page.waitForFunction(() => (document.querySelector("#root")?.innerText ?? "").includes("rm -rf /tmp/cache"), null, { timeout: 8000 }).catch(() => {});
     const runBtn = page.getByRole("button", { name: "執行並回饋" });
-    check("危險 bash 區塊也有「執行並回饋」", (await runBtn.count()) > 0, (await page.locator("#root").innerText()).slice(-500));
+    check("危險 bash 區塊也有「執行並回饋」", (await runBtn.count()) > 0, (await appText(page)).slice(-500));
     if ((await runBtn.count()) > 0) {
       await runBtn.last().click();
       await sleep(500);
-      check("危險指令先跳確認框（標出遞迴刪除）", (await page.getByText(/遞迴刪除/).count()) > 0, (await page.locator("#root").innerText()).slice(-400));
+      check("危險指令先跳確認框（標出遞迴刪除）", (await page.getByText(/遞迴刪除/).count()) > 0, (await appText(page)).slice(-400));
       const cancel = page.getByRole("button", { name: "取消", exact: true });
       if ((await cancel.count()) > 0) await cancel.last().click();
       await sleep(300);
@@ -1226,7 +1233,7 @@ const CASES = {
     await sleep(900);
     const badge = page.getByRole("button", { name: /^結構/ });
     const shown = (await badge.count()) > 0;
-    check("MySQL 查詢分頁顯示結構快取徽章", shown, shown ? "" : await page.locator("#root").innerText());
+    check("MySQL 查詢分頁顯示結構快取徽章", shown, shown ? "" : await appText(page));
     if (shown) {
       check("徽章顯示快取時間（固定年齡 → 2 小時前）", /2 小時前/.test(await badge.first().innerText()));
       const title = await badge.first().getAttribute("title");
@@ -1335,7 +1342,7 @@ const CASES = {
     await sleep(1200);
     await page.getByText("查詢", { exact: true }).first().click();
     await sleep(600);
-    const body = await page.locator("#root").innerText();
+    const body = await appText(page);
     check("Kafka 查詢分頁不再顯示 Redis 指令提示", !body.includes("Redis 指令"));
     check("Kafka 查詢分頁顯示導引卡", body.includes("Kafka 連線不使用 SQL 查詢"));
     check("Kafka 查詢分頁沒有「執行」鈕", (await page.getByRole("button", { name: /執行 \(F6\)/ }).count()) === 0);
@@ -1349,11 +1356,11 @@ const CASES = {
     check("第一個查詢分頁有關閉鈕", (await closeBtn.count()) > 0);
     await closeBtn.first().click();
     await sleep(500);
-    const body = await page.locator("#root").innerText();
+    const body = await appText(page);
     check("關光查詢分頁後顯示空狀態", body.includes("已關閉所有查詢分頁"), body.slice(0, 120));
     await page.getByRole("button", { name: /新增查詢分頁/ }).first().click();
     await sleep(500);
-    check("按「+」後回到查詢分頁", !(await page.locator("#root").innerText()).includes("已關閉所有查詢分頁"));
+    check("按「+」後回到查詢分頁", !(await appText(page)).includes("已關閉所有查詢分頁"));
   },
 
   // Redis 側欄右鍵：連線層與 DB 層都能直達維運面板 / Pub/Sub（不必先開資料分頁）
@@ -1478,7 +1485,7 @@ const CASES = {
     await tab.first().click();
     await sleep(500);
 
-    const body = await page.locator("#root").innerText();
+    const body = await appText(page);
     check("審查列出無 WHERE 的 UPDATE（error）", body.includes("沒有 WHERE 條件"), body.slice(0, 400));
     check("審查列出前綴萬用字元 LIKE（warn）", body.includes("萬用字元開頭"));
     check("審查顯示規則代號", body.includes("no-where-dml"));
@@ -1497,7 +1504,7 @@ const CASES = {
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Delete");
     await sleep(600);
-    check("清空後顯示空狀態", (await page.locator("#root").innerText()).includes("尚無可審查的 SQL"));
+    check("清空後顯示空狀態", (await appText(page)).includes("尚無可審查的 SQL"));
   },
 
   // 側欄連線滿出頁面時，最後一筆必須滾得到（回歸：外殼曾經同時是 column flex 與捲動容器，
@@ -1717,7 +1724,7 @@ const CASES = {
     check("清單列出已命名那串", await page.getByText("庫存盤點", { exact: true }).first().isVisible());
 
     // 清單要標出每串是哪個供應商 —— 切過去模型換了，沒標的話無從得知。
-    const listText = await page.locator("#root").innerText();
+    const listText = await appText(page);
     check("清單標出各串的供應商", /Claude Code/.test(listText) && /OpenAI Codex/.test(listText),
       listText.slice(0, 200));
 
@@ -1758,7 +1765,7 @@ const CASES = {
     // 刪掉作用中的空白那串 → 接手清單上的下一串，而不是留下指不到的 activeId（會整頁白掉）。
     await page.getByRole("button", { name: "刪除對話" }).first().click();
     await sleep(600);
-    const stillThere = await page.locator("#root").innerText();
+    const stillThere = await appText(page);
     check("刪除作用中那串後面板仍可用", stillThere.includes("AI 助手"));
     check("刪除後落地存檔剩兩串", await page.evaluate(() =>
       JSON.parse(localStorage.getItem("db-kit:assistantSessions")).conversations.length === 2));
@@ -1783,7 +1790,7 @@ const CASES = {
     check("查詢分頁工具列有「審查並執行」", (await open.count()) > 0);
     await open.first().click();
     await page.waitForFunction(() => document.body.innerText.includes("完整回滾"), null, { timeout: 8000 }).catch(() => {});
-    let body = await page.locator("#root").innerText();
+    let body = await appText(page);
     check("對話框列出語句與回滾等級", body.includes("完整回滾") && body.includes("部分回滾"), body.replace(/\s+/g, " ").slice(0, 300));
     check("部分回滾的語句自動展開注意事項", body.includes("attachment"));
     check("需要確認時出現勾選框", body.includes("我了解有 1 句沒有完整回滾"));
@@ -1794,7 +1801,7 @@ const CASES = {
     // 結論在串流第一段就出現；串流結束（出現「重新審查」）前兩個動作鈕都該是停用的。
     check("AI 串流中不能產生備份", !(await page.getByRole("button", { name: "只產生備份", exact: true }).first().isEnabled()));
     await page.getByRole("button", { name: "重新審查", exact: true }).first().waitFor({ timeout: 15_000 }).catch(() => {});
-    body = await page.locator("#root").innerText();
+    body = await appText(page);
     check("AI 審查串流並顯示結論徽章", body.includes("注意風險後再執行"));
     check("正式環境連線預設用守門員人設", (await page.getByRole("button", { name: /正式環境守門員/ }).count()) > 0);
     check("DBA 查資料庫的紀錄列在結果裡", body.includes("工具呼叫（1）"));
@@ -1807,7 +1814,7 @@ const CASES = {
     check("唯讀連線仍可只產生備份", (await backup.count()) > 0 && (await backup.first().isEnabled()));
     await backup.first().click();
     await page.waitForFunction(() => document.body.innerText.includes("已產生審查與備份（未執行）"), null, { timeout: 8000 }).catch(() => {});
-    body = await page.locator("#root").innerText();
+    body = await appText(page);
     check("產生備份後切到結果分頁", body.includes("已產生審查與備份（未執行）"), body.replace(/\s+/g, " ").slice(0, 300));
     check("結果列出輸出檔案", body.includes("rollback.sql") && body.includes("snapshots/01-before-orders.json"));
     check("結果可以回滾分頁查看腳本", (await page.getByText("回滾腳本", { exact: true }).count()) > 0);
@@ -1832,7 +1839,7 @@ const CASES = {
     await run.first().click();
     await page.waitForFunction(() => document.body.innerText.includes("注意風險後再執行"), null, { timeout: 15_000 }).catch(() => {});
     await page.getByRole("button", { name: "重新審查", exact: true }).first().waitFor({ timeout: 15_000 }).catch(() => {});
-    const body = await page.locator("#root").innerText();
+    const body = await appText(page);
     check("DBA 審查顯示結論徽章", body.includes("注意風險後再執行"), body.replace(/\s+/g, " ").slice(0, 300));
     check("DBA 審查列出工具呼叫", body.includes("工具呼叫（1）"));
     check("DBA 審查有「在助手中追問」", (await page.getByRole("button", { name: "在助手中追問" }).count()) > 0);
@@ -1893,9 +1900,15 @@ const CASES = {
     // 以前 shell 進場動畫用 forwards、終點的 transform 留在 shell 上，裡面再開的對話框會以外層 shell 為定位基準、
     // 右半截出界。等進場動畫跑完再量。
     await sleep(300);
+    // 外層 shell 帶著 transform（動畫中途、或日後任何會建立定位基準的樣式）時也不能偏掉：對話框掛在 body 上（issue #8）。
+    await page.locator('[role="dialog"]').first().evaluate((el) => { el.style.transform = "translateY(0.5px)"; });
+    await sleep(100);
     const box = await lib.boundingBox();
     const vw = page.viewportSize()?.width ?? 0;
     check("從設定裡開的資源庫整個在視窗內", !!box && box.x >= 0 && box.x + box.width <= vw + 1, JSON.stringify({ box, vw }));
+    const libClose = await lib.getByRole("button", { name: "關閉", exact: true }).first().boundingBox();
+    check("資源庫的關閉鈕看得到", !!libClose && libClose.x + libClose.width <= vw + 1, JSON.stringify({ libClose, vw }));
+    await page.locator('[role="dialog"]').first().evaluate((el) => { el.style.transform = ""; });
     const persona = lib.locator("textarea").first();
     check("內建人設可以直接編輯", await persona.isEditable());
     check("內建項目的存檔鈕說明會存成自訂版本", (await lib.getByRole("button", { name: "儲存為自訂版本" }).count()) === 1);
@@ -1952,6 +1965,12 @@ const CASES = {
     body = await page.locator("body").innerText();
     check("同步計畫列出新增與衝突", body.includes("dba-senior.md") && body.includes("衝突（略過）"));
     check("同步計畫附上 MCP 註冊提示", body.includes("claude mcp add dbkit"));
+    // 點資源庫外面的空白處：關掉的是資源庫本身，設定對話框留著。
+    await page.mouse.click(4, Math.round((page.viewportSize()?.height ?? 600) / 2));
+    await sleep(300);
+    body = await page.locator("body").innerText();
+    check("點空白處只關掉資源庫、設定還在",
+      !body.includes("AI 扮演誰") && (await page.getByRole("button", { name: /開啟 AI 資源庫/ }).count()) > 0);
   },
 
   // 助手的技能收成工具列上的一顆按鈕（帶啟用數），點了才開 AI 資源庫的「技能」分頁：勾選框在列表上，
@@ -1969,7 +1988,7 @@ const CASES = {
     const label = (await btn.first().innerText().catch(() => "")).replace(/\s+/g, "");
     check("技能按鈕顯示啟用數", label === "技能1", label);
     check("技能按鈕提示列出啟用的技能", ((await btn.first().getAttribute("title")) ?? "").includes("SQL 效能診斷"));
-    const panel = await page.locator("#root").innerText();
+    const panel = await appText(page);
     check("輸入區不再平鋪技能清單", !panel.includes("線上 DDL") && !panel.includes("鎖與併發風險"));
     await btn.first().click();
     await page.waitForFunction(() => document.body.innerText.includes("線上 DDL"), null, { timeout: 8000 }).catch(() => {});
@@ -2000,15 +2019,15 @@ const CASES = {
     await page.getByText("結構比對…", { exact: true }).click();
     await sleep(900);
     check("單表比對對話框開啟", (await page.getByText("比對目標", { exact: true }).count()) > 0);
-    check("單表比對只談結構，沒有資料分頁", !(await page.locator("#root").innerText()).includes("含 DELETE"));
+    check("單表比對只談結構，沒有資料分頁", !(await appText(page)).includes("含 DELETE"));
     // 一開就要是可按的狀態：目標庫預設挑「非來源」的庫，而不是把來源自己填進去。
     check("單表比對預設目標不是來源自己",
-      !(await page.locator("#root").innerText()).includes("來源與目標是同一張表"));
+      !(await appText(page)).includes("來源與目標是同一張表"));
     const cmpBtn = page.getByRole("button", { name: "比對", exact: true }).first();
     check("單表比對「比對」鈕開啟即可按", await cmpBtn.isEnabled());
     await cmpBtn.click();
     await sleep(1500);
-    const body = await page.locator("#root").innerText();
+    const body = await appText(page);
     check("單表比對顯示結構結果", /有差異|結構相同|僅來源有|僅目標有/.test(body), body.replace(/\s+/g, " ").slice(0, 200));
     check("單表比對列出同步語句", body.includes("同步語句"));
     await page.keyboard.press("Escape");
@@ -2024,7 +2043,7 @@ const CASES = {
     check("整庫比對對話框開啟", (await page.getByRole("button", { name: /比對選取的/ }).count()) > 0);
     check("整庫比對列出來源資料表", (await page.getByText("資料表（", { exact: false }).count()) > 0);
     check("整庫比對預設目標不是來源庫",
-      !(await page.locator("#root").innerText()).includes("目標與來源是同一個資料庫"));
+      !(await appText(page)).includes("目標與來源是同一個資料庫"));
 
     // 跨連線：目標連線下拉要列出同族的另一條連線（prod-mysql 之外還有 external 家族的…這裡只驗有下拉）
     await page.locator("select").filter({ has: page.locator('option[value="shop_archive"]') })
@@ -2032,7 +2051,7 @@ const CASES = {
     await sleep(400);
     await page.getByRole("button", { name: /比對選取的/ }).click();
     await sleep(2500);
-    const after = await page.locator("#root").innerText();
+    const after = await appText(page);
     check("整庫比對跑出結果與同步腳本", after.includes("同步語句"), after.replace(/\s+/g, " ").slice(0, 200));
     check("整庫比對有 AI 總結區塊", after.includes("AI 總結"));
     check("整庫比對不再出現資料比對選項", !after.includes("快速預檢") && !after.includes("兩者"));
@@ -2044,7 +2063,7 @@ const CASES = {
       await page.waitForFunction(() => document.body.innerText.includes("建議順序"), null, { timeout: 15_000 });
       streamed = true;
     } catch { /* 下面的 check 會報 */ }
-    check("AI 總結串流回填", streamed, (await page.locator("#root").innerText()).replace(/\s+/g, " ").slice(0, 200));
+    check("AI 總結串流回填", streamed, (await appText(page)).replace(/\s+/g, " ").slice(0, 200));
     check("AI 總結完成後可重新產生", (await page.getByRole("button", { name: "重新產生", exact: true }).count()) > 0);
   },
 };

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import Icon from "./Icon";
@@ -139,7 +140,10 @@ export default function Modal({
 
   if (!open) return null;
 
-  return (
+  // 掛到 body：從對話框裡再開的對話框（設定 → 開啟 AI 資源庫）若留在外層 shell 的 DOM 裡，外層只要帶上
+  // transform / filter 等就會變成 position: fixed 的定位基準——內層被夾在外層的框裡、右半截連同關閉鈕被切掉，
+  // 背板也只蓋住外層，點空白處關掉的是外層。React 事件仍沿元件樹冒泡，所以外層 shell 的 stopPropagation 照舊有效。
+  return createPortal(
     <div
       className={`fixed inset-0 ${zClass} grid place-items-center bg-black/40 backdrop-blur-sm modal-backdrop-in`}
       onClick={dismissOnBackdrop ? onClose : undefined}
@@ -178,6 +182,7 @@ export default function Modal({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -612,6 +612,10 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
   const [guard, setGuard] = useState<QueryGuard>(loadQueryGuard);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(autoCheckEnabled);
   const [aiLibOpen, setAiLibOpen] = useState(false);
+  // 設定對話框常駐不卸載：關掉設定時一併收起資源庫，否則下次開設定會直接跳出上次沒關的資源庫。
+  useEffect(() => {
+    if (!open) setAiLibOpen(false);
+  }, [open]);
   const themeId = useTheme((s) => s.themeId);
   const setThemeId = useTheme((s) => s.setThemeId);
   const uiFontSize = useUiFont((s) => s.size);
