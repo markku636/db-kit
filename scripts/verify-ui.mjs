@@ -1838,7 +1838,18 @@ const CASES = {
     check("分頁排成組合流程並各附一句用途",
       body.includes("AI 扮演誰") && body.includes("附加的專業知識") && body.includes("每個 AI 動作的指令") && body.includes("送給 AI"));
     check("運作方式說明各功能用到哪些部分",
-      body.includes("系統提示：AI 是誰、懂什麼") && body.includes("DBA 審查 / 會審") && body.includes("助手人設 ＋ 勾選的技能"));
+      body.includes("請誰來做") && body.includes("讓它多懂什麼") && body.includes("這次要做什麼") &&
+      body.includes("DBA 審查 / 會審") && body.includes("你在「技能」分頁勾選的"));
+    // 運作方式的「DBA 審查」那一列有 ? 鈕：點了跳出三個入口的教學，關掉回到資源庫。
+    await page.getByRole("button", { name: "DBA 審查怎麼用" }).first().click();
+    await sleep(300);
+    body = await page.locator("body").innerText();
+    check("點 ? 跳出 DBA 審查教學、列出三個入口",
+      body.includes("從哪裡開始（三個入口）") && body.includes("審查並執行") && body.includes("DBA 審查結構…") && body.includes("review-pre-exec"));
+    await page.getByRole("button", { name: "知道了", exact: true }).click();
+    await sleep(300);
+    body = await page.locator("body").innerText();
+    check("關掉教學後資源庫還在", !body.includes("從哪裡開始（三個入口）") && body.includes("AI 扮演誰"));
     check("人設分成 DBA 審查者 / 助手兩群，使用中的有標示", body.includes("DBA 審查者") && body.includes("使用中"));
     // 從設定開的：資源庫疊在設定對話框上面，取最後一個 dialog。
     const lib = page.locator('[role="dialog"]').last();
@@ -1869,6 +1880,7 @@ const CASES = {
     body = await page.locator("body").innerText();
     check("捨棄後換分頁不再問", !body.includes("有未儲存的修改，要捨棄嗎？"));
     check("技能分頁列出內建技能", body.includes("線上 DDL") && body.includes("鎖與併發風險"));
+    check("技能列表直接標出被人設預載的技能", body.includes("預載 ×"));
     await page.getByText("鎖與併發風險", { exact: true }).first().click();
     await sleep(300);
     body = await lib.innerText();
@@ -1888,6 +1900,14 @@ const CASES = {
     await sleep(400);
     body = await page.locator("body").innerText();
     check("預覽以範例資料渲染", body.includes("預覽（以範例資料渲染）") && body.includes("SELECT o.id, o.status FROM orders"));
+    // review-* 範本的標頭也有 ? 鈕：教學標出目前這個範本的入口，點別的範本名稱就跳過去。
+    await page.getByRole("button", { name: "DBA 審查怎麼用" }).last().click();
+    await sleep(300);
+    check("從範本開的教學標出目前這個範本", (await page.locator("body").innerText()).includes("目前這個範本"));
+    await page.getByRole("button", { name: "review-pre-exec", exact: true }).click();
+    await sleep(400);
+    body = await page.locator("body").innerText();
+    check("點教學裡的範本名稱跳到那個範本", !body.includes("從哪裡開始（三個入口）") && body.includes("DBA review before execution"));
     await page.getByRole("radio", { name: "來源與同步" }).first().click().catch(() => page.getByText("來源與同步", { exact: true }).first().click());
     await sleep(400);
     await page.getByRole("button", { name: "預覽同步計畫" }).first().click();
@@ -1919,7 +1939,7 @@ const CASES = {
     const body = await page.locator("body").innerText();
     check("點技能按鈕開啟 AI 資源庫的技能分頁", body.includes("AI 資源庫") && body.includes("線上 DDL") && body.includes("鎖與併發風險"),
       body.replace(/\s+/g, " ").slice(0, 300));
-    check("技能分頁說明勾選的用途與數量", body.includes("已選 1 個"));
+    check("技能分頁說明勾選的用途與數量", body.includes("已勾 1 個"));
     check("技能分頁右側就是編輯器", body.includes("技能內容（SKILL.md 本文）"));
     const perf = page.getByRole("checkbox", { name: "在助手對話啟用 SQL 效能診斷" });
     check("已啟用的技能勾選框是勾起的", (await perf.count()) === 1 && (await perf.isChecked()));

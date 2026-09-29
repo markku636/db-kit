@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Bot,
   Check,
+  CircleHelp,
   Copy,
   Eye,
   FileText,
@@ -46,9 +47,10 @@ import {
 import { assistantPersonaName, useAiSkills } from "./aiSkills";
 import { sampleVars, varLabel } from "./aiTaskVars";
 import { defaultDbaPersona } from "./dbaReview";
+import DbaReviewHelp, { isDbaReviewTemplate } from "./DbaReviewHelp";
 import { useT } from "./i18n";
 import { fieldBool, fieldList, fieldStr } from "./promptTemplate";
-import { Badge, Button, EmptyState, Field, Icon, Input, Modal, Select, Textarea } from "./ui/index";
+import { Badge, Button, EmptyState, Field, Icon, Input, MenuPanel, Modal, Select, Textarea } from "./ui/index";
 import { pickDirectory, toast, uiConfirm, uiPrompt } from "./ui";
 
 // AI 資源庫：人設 / 技能 / 提示範本全部是 Markdown + frontmatter 的靜態檔（相容 Claude Code 與 Codex），
@@ -103,6 +105,40 @@ function personaUses(e: LibEntry, snap: LibrarySnapshot, t: (s: string) => strin
     out.push(t("AI 助手"));
   }
   return out;
+}
+
+/** 人設列的右鍵選單：把這位設成 DBA 審查 / 正式環境 / 助手的預設，或加進 / 移出會審陣容。 */
+function PersonaMenu({ x, y, entry, snap, onClose }: { x: number; y: number; entry: LibEntry; snap: LibrarySnapshot; onClose: () => void }) {
+  const t = useT();
+  const name = entry.name;
+  const upd = (patch: Partial<LibrarySnapshot["settings"]>) => {
+    onClose();
+    void updateLibrarySettings(patch).catch((e) => toast.error(e?.message ?? String(e)));
+  };
+  const inPanel = snap.settings.panel_personas.includes(name);
+  const items: [string, boolean, () => void][] =
+    roleOf(entry) === "dba"
+      ? [
+          [t("設為 DBA 審查預設"), defaultDbaPersona(false) === name, () => upd({ dba_persona: name })],
+          [t("設為正式環境 DBA 審查預設"), defaultDbaPersona(true) === name, () => upd({ dba_persona_prod: name })],
+          [
+            inPanel ? t("移出多位 DBA 會審") : t("加入多位 DBA 會審"),
+            inPanel,
+            () => upd({ panel_personas: inPanel ? snap.settings.panel_personas.filter((n) => n !== name) : [...snap.settings.panel_personas, name] }),
+          ],
+        ]
+      : [[t("設為 AI 助手人設"), assistantPersonaName() === name, () => upd({ assistant_persona: name })]];
+  return (
+    <MenuPanel x={x} y={y} minW={200} onClose={onClose}>
+      {items.map(([label, on, fn]) => (
+        <button key={label} type="button" onClick={fn}
+          className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs hover:bg-fg/10 text-fg/80">
+          <span className="w-3 shrink-0">{on && <Icon icon={Check} size={12} className="text-success" />}</span>
+          {label}
+        </button>
+      ))}
+    </MenuPanel>
+  );
 }
 
 function issuesOf(snap: LibrarySnapshot, e: LibEntry): LibIssue[] {
@@ -206,63 +242,104 @@ function FlowTabs({ tabs, value, onChange }: { tabs: TabDef[]; value: Tab; onCha
   );
 }
 
-function HowItWorks({ onJump }: { onJump: (tab: Tab) => void }) {
+/** 「DBA 審查怎麼用」的 ? 鈕（運作方式那一列、review-* 範本的標頭）。 */
+function HelpButton({ onClick }: { onClick: () => void }) {
   const t = useT();
-  const part = (label: string, tab: Tab | null) =>
-    tab ? (
-      <button type="button" onClick={() => onJump(tab)} className={`${chipCls} border-accent/40 bg-accent/10 text-fg/85 hover:border-accent`}>
-        {label}
-      </button>
-    ) : (
-      <span className={`${chipCls} border-warning/40 bg-warning/5 text-fg/70`}>
-        <Icon icon={Lock} size={10} />
-        {label}
-      </span>
-    );
-  const plus = <span className="text-fg/35">＋</span>;
-  const uses: [string, string][] = [
-    [t("DBA 審查 / 會審"), t("DBA 人設 ＋ 它預載的技能 ＋ 審查範本（review-*）")],
-    [t("AI 助手對話"), t("助手人設 ＋ 勾選的技能")],
-    [t("編輯器 AI 動作、自然語言轉 SQL"), t("助手人設（不帶技能）＋ 對應的提示範本")],
-  ];
+  const label = t("DBA 審查怎麼用");
   return (
-    // 左：一次送出的提示怎麼組；右：各功能用到哪些。兩欄並排，別把下面的編輯區擠掉太多高度。
-    <div className="rounded-md border border-fg/10 bg-inset/40 p-2.5 flex items-center gap-x-5 gap-y-2 flex-wrap">
-      <div className="flex items-stretch gap-2 shrink-0">
-        <div className="rounded border border-fg/10 bg-elevated px-2.5 py-2 space-y-1.5">
-          <div className="text-[10px] text-fg/50">{t("系統提示：AI 是誰、懂什麼")}</div>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {part(t("人設"), "agent")}
-            {plus}
-            {part(t("預載的技能"), "skill")}
-            {plus}
-            {part(t("勾選的技能"), "skill")}
-            <span className="text-[10px] text-fg/40">{t("（只有 AI 助手對話）")}</span>
-          </div>
-        </div>
-        <span className="self-center text-fg/35">＋</span>
-        <div className="rounded border border-fg/10 bg-elevated px-2.5 py-2 space-y-1.5">
-          <div className="text-[10px] text-fg/50">{t("使用者訊息：這次要做什麼")}</div>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {part(t("提示範本"), "prompt")}
-            {plus}
-            {part(t("輸出契約（鎖定）"), null)}
-          </div>
-        </div>
-        <span className="self-center flex items-center gap-1 text-[11px] text-fg/50">
-          <Icon icon={ArrowRight} size={12} />
-          {t("模型")}
-        </span>
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="w-5 h-5 grid place-items-center rounded shrink-0 text-accent/80 hover:text-accent hover:bg-accent/10 transition-colors"
+    >
+      <Icon icon={CircleHelp} size={13} />
+    </button>
+  );
+}
+
+function HowItWorks({ onJump }: { onJump: (tab: Tab, name?: string) => void }) {
+  const t = useT();
+  const [helpOpen, setHelpOpen] = useState(false);
+  // 白話版：不講「系統提示 / 使用者訊息」，講「誰來做、多懂什麼、做什麼」。每一格點了就到那個分頁。
+  const step = (n: string, tab: Tab, label: string, what: string, eg: string) => (
+    <button
+      type="button"
+      onClick={() => onJump(tab)}
+      className="text-left rounded border border-fg/10 bg-elevated px-2 py-1 hover:border-accent/60 transition-colors whitespace-nowrap"
+    >
+      <div className="text-[10px] text-fg/45">
+        {n} {what}
+        <span className="ml-1.5 text-[12px] font-medium text-accent">{label}</span>
       </div>
-      <div className="flex-1 min-w-[18rem] space-y-0.5 text-[11px] leading-relaxed">
-        {uses.map(([what, how]) => (
-          <div key={what}>
-            <span className="text-fg/75 font-medium">{what}</span>
-            <span className="text-fg/30 mx-1.5">·</span>
-            <span className="text-fg/50">{how}</span>
-          </div>
-        ))}
+      <div className="text-[10px] text-fg/50">{eg}</div>
+    </button>
+  );
+  const plus = <span className="text-fg/35">＋</span>;
+  const rows: { what: string; who: string; knows: string; does: string; help?: () => void }[] = [
+    {
+      what: t("DBA 審查 / 會審"),
+      who: t("你選的 DBA 人設（選多位＝會審）"),
+      knows: t("那位人設「預載」的技能"),
+      does: t("審查範本 review-*"),
+      help: () => setHelpOpen(true),
+    },
+    { what: t("AI 助手對話"), who: t("助手人設"), knows: t("你在「技能」分頁勾選的"), does: t("你在對話框打的字") },
+    { what: t("編輯器 AI 動作、自然語言轉 SQL"), who: t("助手人設"), knows: t("不帶技能"), does: t("該動作的提示範本（加上註解 → comment…）") },
+  ];
+  const th = "text-left font-normal text-fg/40 whitespace-nowrap pr-4";
+  const td = "pr-4 text-fg/55";
+  return (
+    // 上：每次按 AI 功能時送出的三樣東西；下：各功能分別用哪幾樣。上下排（並排時表格太窄、每格都換行反而更高），
+    // 有高度上限（小視窗捲動），別把下面的編輯區擠掉。
+    <div className="rounded-md border border-fg/10 bg-inset/40 px-2.5 py-2 space-y-2 max-h-[30vh] overflow-y-auto">
+      <div className="space-y-1">
+        <div className="text-[11px] text-fg/60">{t("每按一次 AI 功能，db-kit 會把這三樣拼在一起送給 AI：")}</div>
+        <div className="flex items-center gap-1.5">
+          {step("①", "agent", t("人設"), t("請誰來做"), t("例：資深 DBA、資料庫助手"))}
+          {plus}
+          {step("②", "skill", t("技能"), t("讓它多懂什麼"), t("例：鎖與併發風險、團隊規範"))}
+          {plus}
+          {step("③", "prompt", t("提示範本"), t("這次要做什麼"), t("例：加上註解、解釋、DBA 審查"))}
+          <span className="flex items-center gap-1 text-[11px] text-fg/50 whitespace-nowrap">
+            <Icon icon={ArrowRight} size={12} />
+            {t("AI")}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 text-[10px] text-fg/45">
+          <Icon icon={Lock} size={9} className="text-warning/80 shrink-0" />
+          {t("範本裡的 {{sql}} 會換成你當下的 SQL；有些範本最後附有鎖定的回覆格式，db-kit 靠它讀回結果，所以不能改。")}
+        </div>
       </div>
+      <div className="text-[11px] leading-[1.15rem] border-t border-fg/10 pt-1.5">
+        <table>
+          <thead>
+            <tr>
+              <th className={th}>{t("各功能用到哪幾樣")}</th>
+              <th className={th}>{t("① 誰來做")}</th>
+              <th className={th}>{t("② 多懂什麼")}</th>
+              <th className={th}>{t("③ 做什麼")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.what} className="align-top">
+                <td className="pr-4 text-fg/80 font-medium whitespace-nowrap">
+                  <span className="inline-flex items-center gap-1">
+                    {r.what}
+                    {r.help && <HelpButton onClick={r.help} />}
+                  </span>
+                </td>
+                <td className={td}>{r.who}</td>
+                <td className={td}>{r.knows}</td>
+                <td className="text-fg/55">{r.does}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {helpOpen && <DbaReviewHelp onClose={() => setHelpOpen(false)} onOpenTemplate={(name) => onJump("prompt", name)} />}
     </div>
   );
 }
@@ -288,7 +365,7 @@ function UsageRow({ entry, snap, onJump }: { entry: LibEntry; snap: LibrarySnaps
             </span>
           ))
         ) : (
-          <span className="text-fg/40">{t("目前沒有功能使用這位人設")}</span>
+          <span className="text-fg/40">{t("目前沒有功能使用這位人設（在左側列表按右鍵就能設為使用中）")}</span>
         )}
         <button type="button" className="text-accent hover:underline ml-1" onClick={() => onJump("sources")}>
           {t("到「來源與同步」調整")}
@@ -381,6 +458,7 @@ function EntryEditor({
   const source = `${entry.layer}\n${v.path}\n${v.raw}\n${base.raw}`;
   const [draft, setDraft] = useState(init);
   const [preview, setPreview] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   // 共用的 Textarea 不轉發 ref：從外層容器找到 textarea，才拿得到游標位置插入變數。
   const bodyWrap = useRef<HTMLDivElement | null>(null);
@@ -526,6 +604,7 @@ function EntryEditor({
         <div className="flex items-center gap-2 flex-wrap">
           <div className="text-sm font-medium text-fg/90">{entryTitle(entry)}</div>
           <span className="font-mono text-[11px] text-fg/50">{entry.name}</span>
+          {entry.kind === "prompt" && isDbaReviewTemplate(entry.name) && <HelpButton onClick={() => setHelpOpen(true)} />}
           {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : <Badge tone="neutral">{entry.layerLabel}</Badge>}
           {entry.shadowed.length > 0 && !entry.builtin && (
             <Badge tone="warning">{t("覆蓋了 {layers}", { layers: entry.shadowed.map((s) => s.layerLabel).join(" / ") })}</Badge>
@@ -570,6 +649,7 @@ function EntryEditor({
           </div>
         </div>
         <UsageRow entry={entry} snap={snap} onJump={onJump} />
+        {helpOpen && <DbaReviewHelp focus={entry.name} onClose={() => setHelpOpen(false)} onOpenTemplate={(name) => onJump("prompt", name)} />}
         {/* 語言變體 */}
         <div className="flex items-center gap-1 flex-wrap">
           {langs.map((l) => (
@@ -1019,11 +1099,14 @@ export default function AiLibraryDialog({
   const [tab, setTab] = useState<Tab>(initialTab);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(initialName);
+  // 人設列右鍵：直接設成預設 / 加入會審，不必繞去「來源與同步」。
+  const [personaMenu, setPersonaMenu] = useState<{ x: number; y: number; e: LibEntry } | null>(null);
   const [howOpen, setHowOpen] = useState(readHowOpen);
   const activeSkills = useAiSkills((s) => s.selected);
   const toggleSkill = useAiSkills((s) => s.toggle);
   // 只數還存在的技能：勾選清單裡可能留著已刪除技能的名稱。
   const activeCount = entriesOf("skill", snap).filter((e) => activeSkills.includes(e.name)).length;
+  const personaEntries = entriesOf("agent", snap);
 
   // 編輯器回報有沒有沒存的修改；換項目、換分頁、關對話框前先問一聲。
   const dirtyRef = useRef(false);
@@ -1125,7 +1208,7 @@ export default function AiLibraryDialog({
               {howOpen ? t("收起運作方式") : t("運作方式")}
             </Button>
           </div>
-          {howOpen && <HowItWorks onJump={(v) => void go(v)} />}
+          {howOpen && <HowItWorks onJump={(v, name) => void go(v, name ?? null)} />}
         </div>
         <div className="flex flex-1 min-h-0">
           {kind && (
@@ -1140,7 +1223,7 @@ export default function AiLibraryDialog({
                 </div>
                 {kind === "skill" && (
                   <div className="text-[10px] text-fg/45 leading-relaxed px-0.5">
-                    {t("勾選的技能會附在助手對話的人設後面（已選 {n} 個）", { n: activeCount })}
+                    {t("打勾＝AI 助手對話會帶上（已勾 {n} 個）；標「預載」＝人設預載，那位 DBA 審查時自動帶上。", { n: activeCount })}
                   </div>
                 )}
               </div>
@@ -1159,9 +1242,12 @@ export default function AiLibraryDialog({
                       const active = e.kind === "skill" && activeSkills.includes(e.name);
                       const badge = statusBadge(e, t);
                       const inUse = e.kind === "agent" && personaUses(e, snap, t).length > 0;
+                      // 哪些人設預載這個技能（那位 DBA 審查時一定帶上）：直接標在列表上，不必點進去才看得到。
+                      const preloadBy = e.kind === "skill" ? personaEntries.filter((a) => fieldList(a.variants[""].fields, "skills").includes(e.name)) : [];
                       return (
                         <div
                           key={`${e.kind}:${e.name}`}
+                          onContextMenu={e.kind === "agent" ? (ev) => { ev.preventDefault(); setPersonaMenu({ x: ev.clientX, y: ev.clientY, e }); } : undefined}
                           className={`flex items-stretch border-b border-fg/5 ${current?.name === e.name ? "bg-accent/10" : "hover:bg-fg/5"}`}
                         >
                           {/* 技能列前的勾選框 = 助手對話要不要附帶它；點其餘部分才是選取來編輯。 */}
@@ -1189,6 +1275,11 @@ export default function AiLibraryDialog({
                               <span className="font-mono text-[10px] text-fg/40 truncate">{e.name}</span>
                               <span className="ml-auto flex items-center gap-1">
                                 {inUse && <Badge tone="success">{t("使用中")}</Badge>}
+                                {preloadBy.length > 0 && (
+                                  <span title={t("預載它的人設：{names}（那位 DBA 審查時一定帶上）", { names: preloadBy.map((a) => entryTitle(a)).join("、") })}>
+                                    <Badge tone="accent">{t("預載 ×{n}", { n: preloadBy.length })}</Badge>
+                                  </span>
+                                )}
                                 {badge && <Badge tone={badge.tone}>{badge.label}</Badge>}
                               </span>
                             </div>
@@ -1199,6 +1290,15 @@ export default function AiLibraryDialog({
                   </div>
                 ))}
               </div>
+              {personaMenu && (
+                <PersonaMenu
+                  x={personaMenu.x}
+                  y={personaMenu.y}
+                  entry={personaMenu.e}
+                  snap={snap}
+                  onClose={() => setPersonaMenu(null)}
+                />
+              )}
             </div>
           )}
           <div className="flex-1 min-w-0 min-h-0">
