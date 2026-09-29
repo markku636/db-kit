@@ -166,13 +166,13 @@ async fn sftp_roundtrip_with_byte_compare() {
     let remote = format!("{dir}/blob.bin");
     let progressed = Arc::new(AtomicBool::new(false));
     let p2 = progressed.clone();
-    sftp.upload(&src, &remote, false, Box::new(move |_, _| p2.store(true, Ordering::Relaxed)), &AtomicBool::new(false))
+    sftp.upload(&src, &remote, OnConflict::Fail, Box::new(move |_, _| p2.store(true, Ordering::Relaxed)), &AtomicBool::new(false))
         .await
         .expect("upload");
     assert!(progressed.load(Ordering::Relaxed));
     // !overwrite 再傳一次 → 失敗
     let err = sftp
-        .upload(&src, &remote, false, Box::new(|_, _| {}), &AtomicBool::new(false))
+        .upload(&src, &remote, OnConflict::Fail, Box::new(|_, _| {}), &AtomicBool::new(false))
         .await
         .unwrap_err();
     assert!(matches!(err, AppError::Sftp(_)), "{err:?}");
@@ -185,7 +185,7 @@ async fn sftp_roundtrip_with_byte_compare() {
 
     let dst = local_dir.join("dst.bin");
     let out = sftp
-        .download(&remote, &dst, false, Box::new(|_, _| {}), &AtomicBool::new(false))
+        .download(&remote, &dst, OnConflict::Fail, Box::new(|_, _| {}), &AtomicBool::new(false))
         .await
         .expect("download");
     assert_eq!(out, dst);
@@ -194,7 +194,7 @@ async fn sftp_roundtrip_with_byte_compare() {
 
     // 下載到目錄 → 用遠端檔名
     let out = sftp
-        .download(&remote, &local_dir, true, Box::new(|_, _| {}), &AtomicBool::new(false))
+        .download(&remote, &local_dir, OnConflict::Overwrite, Box::new(|_, _| {}), &AtomicBool::new(false))
         .await
         .unwrap();
     assert_eq!(out, local_dir.join("blob.bin"));
@@ -210,7 +210,7 @@ async fn sftp_roundtrip_with_byte_compare() {
     let sub = format!("{dir}/sub/deeper");
     sftp.mkdir(&format!("{dir}/sub")).await.unwrap();
     sftp.mkdir(&sub).await.unwrap();
-    sftp.upload(&src, &format!("{sub}/x.bin"), true, Box::new(|_, _| {}), &AtomicBool::new(false))
+    sftp.upload(&src, &format!("{sub}/x.bin"), OnConflict::Overwrite, Box::new(|_, _| {}), &AtomicBool::new(false))
         .await
         .unwrap();
     let err = sftp.remove(&dir, false).await.unwrap_err();
@@ -236,14 +236,14 @@ async fn cancelled_download_leaves_no_part_file() {
     let src = local_dir.join("big.bin");
     std::fs::write(&src, vec![7u8; 8 * 1024 * 1024]).unwrap();
     let remote = format!("{dir}/big.bin");
-    sftp.upload(&src, &remote, true, Box::new(|_, _| {}), &AtomicBool::new(false)).await.unwrap();
+    sftp.upload(&src, &remote, OnConflict::Overwrite, Box::new(|_, _| {}), &AtomicBool::new(false)).await.unwrap();
 
     // 第一次進度回報後就取消
     let cancel = Arc::new(AtomicBool::new(false));
     let c2 = cancel.clone();
     let dst = local_dir.join("big.copy");
     let err = sftp
-        .download(&remote, &dst, true, Box::new(move |done, _| {
+        .download(&remote, &dst, OnConflict::Overwrite, Box::new(move |done, _| {
             if done > 0 {
                 c2.store(true, Ordering::Relaxed);
             }
@@ -259,7 +259,7 @@ async fn cancelled_download_leaves_no_part_file() {
     let c2 = cancel.clone();
     let remote2 = format!("{dir}/big2.bin");
     let err = sftp
-        .upload(&src, &remote2, true, Box::new(move |done, _| {
+        .upload(&src, &remote2, OnConflict::Overwrite, Box::new(move |done, _| {
             if done > 0 {
                 c2.store(true, Ordering::Relaxed);
             }
@@ -268,6 +268,109 @@ async fn cancelled_download_leaves_no_part_file() {
         .unwrap_err();
     assert!(matches!(err, AppError::SshCancelled), "{err:?}");
     assert!(sftp.stat(&remote2).await.is_err(), "取消上傳不該留下遠端檔");
+
+    sftp.remove(&dir, true).await.unwrap();
+    sftp.close().await;
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = conn.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+}
+
+/// 斷點續傳。下載：途中斷線 → `.part` 留著 → 重新連線再下載同一個檔，從 `.part` 的結尾接著傳、內容一致；
+/// `.part` 被換掉（不是這個檔的前半段）就從頭。上傳（`Resume`）：遠端留著前半段 → 接著寫；
+/// 已經一樣 → 略過；遠端內容對不上 → 從頭重寫。
+#[tokio::test]
+#[ignore = "需要 Docker OpenSSH:2222"]
+async fn sftp_resume_after_disconnect() {
+    let conn = connect().await;
+    let (sftp, home) = SftpClient::open(&conn).await.unwrap();
+    let dir = format!("{home}/dbkit-it-resume-{}", uuid::Uuid::new_v4());
+    sftp.mkdir(&dir).await.unwrap();
+    let local_dir = std::env::temp_dir().join(format!("dbkit-sftp-resume-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&local_dir).unwrap();
+    // 夠大，第一次進度回報（100 ms 一次）時還沒傳完
+    let mut data = vec![0u8; 48 * 1024 * 1024];
+    let mut x: u32 = 0x0bad_f00d;
+    for b in data.iter_mut() {
+        x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        *b = (x >> 24) as u8;
+    }
+    let src = local_dir.join("src.bin");
+    std::fs::write(&src, &data).unwrap();
+    let remote = format!("{dir}/big.bin");
+    let no_cancel = AtomicBool::new(false);
+    sftp.upload(&src, &remote, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+
+    // 第一次有進度就把連線切掉
+    let dst = local_dir.join("dst.bin");
+    let part = local_dir.join("dst.bin.part");
+    let fired = Arc::new(AtomicBool::new(false));
+    let (c, f) = (conn.clone(), fired.clone());
+    let err = sftp
+        .download(&remote, &dst, OnConflict::Fail, Box::new(move |done, _| {
+            if done > 0 && !f.swap(true, Ordering::Relaxed) {
+                let c = c.clone();
+                tokio::spawn(async move {
+                    let _ = c.handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+                });
+            }
+        }), &no_cancel)
+        .await
+        .unwrap_err();
+    assert!(!matches!(err, AppError::SshCancelled), "{err:?}");
+    assert!(!dst.exists(), "沒傳完不該出現在正式檔名上");
+    let have = std::fs::metadata(&part).expect("斷線後 .part 要留著").len();
+    assert!(have > 0 && have < data.len() as u64, "{have}");
+
+    let conn = connect().await;
+    let (sftp, _) = SftpClient::open(&conn).await.unwrap();
+    let first_progress = || {
+        let first = Arc::new(std::sync::Mutex::new(None::<u64>));
+        let f2 = first.clone();
+        let p: super::sftp::ProgressFn = Box::new(move |d, _| {
+            f2.lock().unwrap().get_or_insert(d);
+        });
+        (first, p)
+    };
+    let (first, p) = first_progress();
+    sftp.download(&remote, &dst, OnConflict::Fail, p, &no_cancel).await.expect("續傳下載");
+    assert_eq!(*first.lock().unwrap(), Some(have), "從 .part 的結尾接著傳");
+    assert!(std::fs::read(&dst).unwrap() == data, "續傳後內容要與遠端一致");
+    assert!(!part.exists());
+
+    // .part 不是這個檔的前半段 → 從頭
+    std::fs::remove_file(&dst).unwrap();
+    std::fs::write(&part, vec![0xaau8; 1024 * 1024]).unwrap();
+    let (first, p) = first_progress();
+    sftp.download(&remote, &dst, OnConflict::Fail, p, &no_cancel).await.unwrap();
+    assert_eq!(*first.lock().unwrap(), Some(0));
+    assert!(std::fs::read(&dst).unwrap() == data);
+
+    // 上傳：遠端留著前半段（等同上傳到一半斷線）→ Resume 接著寫
+    let up = format!("{dir}/up.bin");
+    let half = local_dir.join("half.bin");
+    std::fs::write(&half, &data[..5 * 1024 * 1024]).unwrap();
+    sftp.upload(&half, &up, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+    let (first, p) = first_progress();
+    sftp.upload(&src, &up, OnConflict::Resume, p, &no_cancel).await.expect("續傳上傳");
+    assert_eq!(*first.lock().unwrap(), Some(5 * 1024 * 1024));
+    let back = local_dir.join("up.back");
+    sftp.download(&up, &back, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+    assert!(std::fs::read(&back).unwrap() == data, "續傳上傳後遠端內容要一致");
+
+    // 已經一樣 → 略過（進度直接到底）
+    let (first, p) = first_progress();
+    sftp.upload(&src, &up, OnConflict::Resume, p, &no_cancel).await.unwrap();
+    assert_eq!(*first.lock().unwrap(), Some(data.len() as u64));
+
+    // 遠端內容對不上（別的檔、比較小）→ 從頭重寫，而不是接在別人的內容後面
+    std::fs::write(&half, vec![0x55u8; 1024 * 1024]).unwrap();
+    sftp.upload(&half, &up, OnConflict::Overwrite, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+    let (first, p) = first_progress();
+    sftp.upload(&src, &up, OnConflict::Resume, p, &no_cancel).await.unwrap();
+    assert_eq!(*first.lock().unwrap(), Some(0));
+    std::fs::remove_file(&back).unwrap();
+    sftp.download(&up, &back, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.unwrap();
+    assert!(std::fs::read(&back).unwrap() == data);
 
     sftp.remove(&dir, true).await.unwrap();
     sftp.close().await;
@@ -318,13 +421,13 @@ async fn sftp_edit_text_and_chmod() {
     };
     let no_cancel = AtomicBool::new(false);
     let big5 = format!("{dir}/big5.txt");
-    sftp.upload(&put("big5.txt", &[0xa4, 0xa4, b'\n']), &big5, true, Box::new(|_, _| {}), &no_cancel)
+    sftp.upload(&put("big5.txt", &[0xa4, 0xa4, b'\n']), &big5, OnConflict::Overwrite, Box::new(|_, _| {}), &no_cancel)
         .await
         .unwrap();
     let t = sftp.read_small(&big5, 0).await.unwrap();
     assert!(t.lossy, "Big5 內容要標 lossy，前端才會只給唯讀");
     let bin = format!("{dir}/blob.bin");
-    sftp.upload(&put("blob.bin", b"\x7fELF\0\x02\x01"), &bin, true, Box::new(|_, _| {}), &no_cancel)
+    sftp.upload(&put("blob.bin", b"\x7fELF\0\x02\x01"), &bin, OnConflict::Overwrite, Box::new(|_, _| {}), &no_cancel)
         .await
         .unwrap();
     assert!(sftp.read_small(&bin, 0).await.unwrap().binary);
@@ -357,7 +460,7 @@ async fn sftp_tree_upload_download_roundtrip() {
     let last = Arc::new(std::sync::Mutex::new((0u64, None::<u64>)));
     let l2 = last.clone();
     let r = sftp
-        .upload_tree(&src, &remote_root, false, Box::new(move |d, t| *l2.lock().unwrap() = (d, t)), &no_cancel)
+        .upload_tree(&src, &remote_root, OnConflict::Fail, Box::new(move |d, t| *l2.lock().unwrap() = (d, t)), &no_cancel)
         .await
         .expect("upload_tree");
     assert_eq!(r, remote_root);
@@ -370,26 +473,26 @@ async fn sftp_tree_upload_download_roundtrip() {
     assert_eq!(sftp.stat(&format!("{remote_root}/js/vendor/lib.js")).await.unwrap().size, 200_000);
 
     // 已存在、未允許覆蓋 → 失敗；允許覆蓋 → 合併成功
-    assert!(sftp.upload_tree(&src, &remote_root, false, Box::new(|_, _| {}), &no_cancel).await.is_err());
-    sftp.upload_tree(&src, &remote_root, true, Box::new(|_, _| {}), &no_cancel).await.expect("merge");
+    assert!(sftp.upload_tree(&src, &remote_root, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.is_err());
+    sftp.upload_tree(&src, &remote_root, OnConflict::Overwrite, Box::new(|_, _| {}), &no_cancel).await.expect("merge");
 
     // 整棵下載到另一個本機資料夾（給既有資料夾 → 放進去成 <dst>/<遠端資料夾名>）
     let dst = tmp.join("dl");
     std::fs::create_dir_all(&dst).unwrap();
-    let got = sftp.download_tree(&remote_root, &dst, false, Box::new(|_, _| {}), &no_cancel).await.expect("download_tree");
+    let got = sftp.download_tree(&remote_root, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.expect("download_tree");
     assert_eq!(got, dst.join(super::sftp::basename(&remote_root)));
     for rel in ["index.html", "css/app.css", "js/vendor/lib.js", "中文檔名.txt"] {
         assert_eq!(std::fs::read(got.join(rel)).unwrap(), std::fs::read(src.join(rel)).unwrap(), "{rel} 內容不一致");
     }
     assert!(got.join("empty").is_dir(), "空資料夾也要建");
     // 再下載一次、未允許覆蓋 → 失敗（本機已有同名資料夾）
-    assert!(sftp.download_tree(&remote_root, &dst, false, Box::new(|_, _| {}), &no_cancel).await.is_err());
+    assert!(sftp.download_tree(&remote_root, &dst, OnConflict::Fail, Box::new(|_, _| {}), &no_cancel).await.is_err());
 
     // 中途取消
     let cancel = Arc::new(AtomicBool::new(false));
     let c2 = cancel.clone();
     let err = sftp
-        .download_tree(&remote_root, &tmp.join("dl2"), false, Box::new(move |d, _| if d > 0 { c2.store(true, Ordering::Relaxed) }), &cancel)
+        .download_tree(&remote_root, &tmp.join("dl2"), OnConflict::Fail, Box::new(move |d, _| if d > 0 { c2.store(true, Ordering::Relaxed) }), &cancel)
         .await
         .unwrap_err();
     assert!(matches!(err, AppError::SshCancelled), "{err:?}");

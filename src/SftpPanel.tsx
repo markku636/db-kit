@@ -2,14 +2,17 @@
 // 用同一條 SSH 連線開 sftp subsystem，不會再問一次密碼 / OTP；「在終端機 cd 到此」也因此指向同一個 shell。
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
-  ArrowUp, ChevronRight, Download, EyeOff, File, FilePlus, Folder, FolderPlus, FolderUp, Link2, ListFilter, Pencil, RefreshCw, Upload, X, Eye,
+  ArrowUp, ChevronRight, Download, EyeOff, File, FilePlus, Folder, FolderPlus, FolderSync, FolderUp, Link2, ListFilter,
+  Maximize2, Minimize2, Pencil, RefreshCw, RotateCw, SquareTerminal, Upload, X, Eye,
 } from "lucide-react";
 import { api } from "./api";
 import type { SftpEntry, SftpOnConflict } from "./sshTypes";
-import { sftpLastPath, useSshTerminals } from "./sshTerminals";
+import { sftpFollowedDir, sftpHome, sftpLastPath, useSshTerminals } from "./sshTerminals";
 import { useStore } from "./store";
 import { useSshSessions } from "./sshSessions";
+import { useSshPrefs } from "./sshPrefs";
 import { resolveSftpDir } from "./sshConnString";
+import { absTerminalDir, terminalDir } from "./sshCwd";
 import { ensureSftpProgressListener, useSshTransfers } from "./useSshTransfers";
 import { useT } from "./i18n";
 import { Icon, IconButton, MenuPanel, Spinner } from "./ui/index";
@@ -31,6 +34,9 @@ export interface SftpPanelProps {
   /** 「在終端機 cd 到此」：由宿主送 `cd '<path>'` 進 shell。 */
   onCd: (path: string) => void;
   onClose: () => void;
+  /** 放大成整個分頁（宿主暫時收起終端機）。 */
+  maximized?: boolean;
+  onToggleMaximize?: () => void;
 }
 
 type SortCol = "name" | "size" | "mtime";
@@ -70,12 +76,18 @@ function isDirEntry(e: SftpEntry): boolean {
   return e.is_dir || e.link_target_is_dir === true;
 }
 
-export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelProps) {
+export default function SftpPanel({ tabKey, connId, onCd, onClose, maximized = false, onToggleMaximize }: SftpPanelProps) {
   const t = useT();
   const sftpId = useSshTerminals((s) => s.rt[tabKey]?.sftpId ?? null);
   const status = useSshTerminals((s) => s.rt[tabKey]?.status);
   const patch = useSshTerminals((s) => s.patch);
   const jobs = useSshTransfers((s) => s.jobs);
+  // 終端機現在所在的資料夾（OSC 7 或視窗標題）。標題裡的 `~` 要有家目錄才解得開：家目錄在開 sftp 通道時拿到。
+  const termDirRaw = useSshTerminals((s) => terminalDir(s.rt[tabKey]));
+  const [home, setHome] = useState<string | null>(() => sftpHome.get(tabKey) ?? null);
+  const termDir = absTerminalDir(termDirRaw, home);
+  const follow = useSshPrefs((s) => s.sftpFollowTerminal);
+  const setSshPrefs = useSshPrefs((s) => s.set);
   // 關掉面板再打開要回到原本的資料夾：路徑記在模組層（以分頁為鍵），不隨元件卸載消失。
   const [path, setPath] = useState<string>(() => lastPathByTab.get(tabKey) ?? "/");
   const [entries, setEntries] = useState<SftpEntry[]>([]);
@@ -93,6 +105,8 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
   const [permsFor, setPermsFor] = useState<SftpEntry | null>(null);
   // 清單篩選（只過濾目前這一層的名稱，不遞迴搜尋）。
   const [filter, setFilter] = useState("");
+  // 剪下的項目（到別的資料夾貼上 = 移動）。`dir` = 剪下時所在的資料夾，回到那裡時把它們畫淡。
+  const [clip, setClip] = useState<{ dir: string; items: SftpEntry[] } | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
   const pathInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -139,13 +153,27 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
     }
   }, [tabKey]);
 
-  // 開啟 sftp subsystem：connId 換了（重連）就重開，從起始資料夾開始（主機設定的 SFTP 起始資料夾，
-  // 沒設就是家目錄）；已有 sftpId（面板關掉又打開）則回到上次的資料夾。
+  /** 此刻終端機所在的資料夾（絕對路徑；effect 裡用，不等 re-render）。 */
+  const termDirNow = (h = sftpHome.get(tabKey)) => absTerminalDir(terminalDir(useSshTerminals.getState().rt[tabKey]), h);
+
+  // 開啟 sftp subsystem：connId 換了（重連）就重開。起點依序是：終端機所在的資料夾（已經 cd 離開家目錄的話）、
+  // 主機設定的 SFTP 起始資料夾、家目錄。已有 sftpId（面板關掉又打開）：終端機這段時間換了資料夾就跳去那裡，
+  // 否則回到上次在面板裡逛到的地方。
   useEffect(() => {
     void ensureSftpProgressListener();
     if (status !== "connected") return;
     if (sftpId) {
-      if (listedRef.current !== sftpId) { listedRef.current = sftpId; void list(sftpId, path); }
+      if (listedRef.current !== sftpId) {
+        listedRef.current = sftpId;
+        const td = termDirNow();
+        if (td && td !== sftpFollowedDir.get(tabKey)) {
+          sftpFollowedDir.set(tabKey, td);
+          const back = path;
+          void list(sftpId, td).then((ok) => { if (!ok) void list(sftpId, back); });
+        } else {
+          void list(sftpId, path);
+        }
+      }
       return;
     }
     if (openingRef.current === connId) return;
@@ -153,13 +181,18 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
     (async () => {
       try {
         const info = await api.sshSftpOpen(connId);
+        const h = info.home || "/";
+        sftpHome.set(tabKey, h);
+        const td = termDirNow(h);
+        // 跟隨終端機的 effect 看到「已經跟到這裡」就不會再列一次：要在 sftpId / home 生效前記好。
+        if (td) sftpFollowedDir.set(tabKey, td);
         // 先標記再 patch：patch 會觸發這個 effect 重跑，那次要認得「這個 sftpId 已經在列了」。
         listedRef.current = info.sftp_id;
+        setHome(h);
         patch(tabKey, { sftpId: info.sftp_id });
-        const home = info.home || "/";
-        const start = resolveSftpDir(startDirOf(tabKey), home);
+        const start = td && td !== h ? td : resolveSftpDir(startDirOf(tabKey), h);
         // 起始資料夾不存在 / 沒權限：退回家目錄，別讓面板一打開就是一片錯誤。
-        if (!(await list(info.sftp_id, start)) && start !== home) await list(info.sftp_id, home);
+        if (!(await list(info.sftp_id, start)) && start !== h) await list(info.sftp_id, h);
       } catch (e) {
         setError(errMsg(e));
       } finally {
@@ -170,7 +203,25 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connId, sftpId, status]);
 
+  // 跟隨終端機：在終端機 cd，面板就換到那個資料夾（開關記在 SSH 偏好裡）。
+  useEffect(() => {
+    if (!follow || !sftpId || !termDir || listedRef.current !== sftpId) return;
+    if (termDir === sftpFollowedDir.get(tabKey)) return;
+    sftpFollowedDir.set(tabKey, termDir);
+    void list(sftpId, termDir);
+  }, [follow, sftpId, termDir, tabKey, list]);
+
   const navigate = (p: string) => { if (sftpId) void list(sftpId, p || "/"); };
+  const goToTerminalDir = () => {
+    if (!sftpId || !termDir) return;
+    sftpFollowedDir.set(tabKey, termDir);
+    void list(sftpId, termDir);
+  };
+  const toggleFollow = () => {
+    const next = !follow;
+    setSshPrefs({ sftpFollowTerminal: next });
+    if (next) goToTerminalDir();
+  };
   const refresh = () => navigate(path);
   /** 傳輸結束後重列 `dir`——前提是面板還開著、而且還停在那個資料夾。 */
   const refreshIfStillIn = (dir: string) => () => {
@@ -213,8 +264,8 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
 
   /**
    * 目的地已有同名項目時問一次，回要用的策略；null = 使用者取消。
-   * 全部都撞名時「略過」等於什麼都不做，只給覆蓋 / 取消；部分撞名才給三選一。
-   * `mergeInto`：單一資料夾撞名時的說法（合併進去，而不是覆蓋）。
+   * 全部都撞名時「略過」等於什麼都不做，改給覆蓋 / 續傳（上次傳到一半、重新選同一批來傳）/ 取消；
+   * 部分撞名給覆蓋 / 略過同名 / 取消。`mergeInto`：單一資料夾撞名時的說法（合併進去，而不是覆蓋）。
    */
   const askConflict = async (clash: string[], total: number, mergeInto: "local" | "remote" | null): Promise<SftpOnConflict | null> => {
     if (!clash.length) return "fail";
@@ -228,8 +279,10 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
           : mergeInto === "remote"
             ? t("遠端已有資料夾「{name}」，要合併進去嗎？同名檔案會被取代。", { name })
             : t("遠端已有「{name}」，要覆蓋嗎？", { name });
-      const ok = await uiConfirm(msg, { title, danger: true, confirmText: total === 1 && mergeInto ? t("合併") : t("覆蓋") });
-      return ok ? "overwrite" : null;
+      const c = await uiChoose(`${msg}\n${t("「續傳」：已經傳完的檔案略過，傳到一半的從中斷的地方接著傳。")}`, {
+        title, danger: true, confirmText: total === 1 && mergeInto ? t("合併") : t("覆蓋"), altText: t("續傳"),
+      });
+      return c === "confirm" ? "overwrite" : c === "alt" ? "resume" : null;
     }
     const c = await uiChoose(
       t("目的地已有 {n} 個同名項目：{list}。\n「覆蓋」會取代同名檔案、合併同名資料夾；「略過同名」只傳其餘 {rest} 項。", {
@@ -259,14 +312,18 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
   // 編輯器存檔 / 權限變更後：就地更新這一列（大小、時間、權限），不必整個目錄重列。
   const patchEntry = (st: SftpEntry) =>
     setEntries((es) => es.map((x) => (x.path === st.path ? { ...st, name: x.name } : x)));
-  // 單一檔案：另存新檔對話框（可以改名；已有同名檔時系統對話框自己會問）。
+  // 單一檔案：另存新檔對話框（可以改名；已有同名檔時系統對話框自己會問）。上次存到同一處失敗留下的
+  // `.part`，後端比對過是這個檔的前半段就會接著傳。
   const downloadFile = async (e: SftpEntry) => {
     if (!sftpId) return;
     const local = await pickSaveFile(e.name);
     if (!local) return;
     try {
       const id = await api.sshSftpDownload(sftpId, e.path, local, true);
-      useSshTransfers.getState().track({ id, name: e.name, kind: "download", tabKey });
+      useSshTransfers.getState().track({
+        id, name: e.name, kind: "download", tabKey,
+        retry: (sid) => api.sshSftpDownload(sid, e.path, local, true, true),
+      });
     } catch (err) { toast.error(errMsg(err)); }
   };
   // 資料夾或多選：選一個本機資料夾，全部放進去（Xftp 多選拖到本機）。整批一個工作、依序傳。
@@ -278,8 +335,12 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
       const clash = await api.sshSftpLocalConflicts(dir, targets.map((x) => x.name));
       const onConflict = await askConflict(clash, targets.length, targets.length === 1 && isDirEntry(targets[0]) ? "local" : null);
       if (!onConflict) return;
-      const id = await api.sshSftpDownloadMany(sftpId, targets.map((x) => x.path), dir, onConflict);
-      useSshTransfers.getState().track({ id, name: batchName(targets.map((x) => x.name)), kind: "download", tabKey, batch: true });
+      const remotes = targets.map((x) => x.path);
+      const id = await api.sshSftpDownloadMany(sftpId, remotes, dir, onConflict);
+      useSshTransfers.getState().track({
+        id, name: batchName(targets.map((x) => x.name)), kind: "download", tabKey, batch: true,
+        retry: (sid) => api.sshSftpDownloadMany(sid, remotes, dir, "resume"),
+      });
     } catch (err) { toast.error(errMsg(err)); }
   };
   const download = (targets: SftpEntry[]) => {
@@ -294,9 +355,13 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
     const clash = names.filter((n) => existing.has(n));
     const onConflict = await askConflict(clash, locals.length, isFolder && locals.length === 1 ? "remote" : null);
     if (!onConflict) return;
+    const dest = path;
     try {
-      const id = await api.sshSftpUploadMany(sftpId, locals, path, onConflict);
-      useSshTransfers.getState().track({ id, name: batchName(names), kind: "upload", tabKey, batch: true, onDone: refreshIfStillIn(path) });
+      const id = await api.sshSftpUploadMany(sftpId, locals, dest, onConflict);
+      useSshTransfers.getState().track({
+        id, name: batchName(names), kind: "upload", tabKey, batch: true, onDone: refreshIfStillIn(dest),
+        retry: (sid) => api.sshSftpUploadMany(sid, locals, dest, "resume"),
+      });
     } catch (err) { toast.error(errMsg(err)); }
   };
   const uploadFiles = async () => {
@@ -357,6 +422,47 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
   const copyPaths = (targets: SftpEntry[]) =>
     void copyToClipboard(targets.map((x) => x.path).join("\n"), targets.length > 1 ? t("已複製 {n} 個路徑", { n: targets.length }) : undefined);
 
+  // ---- 移動（剪下 → 到別的資料夾貼上，或「移動到…」直接輸入目的資料夾）----
+  // SFTP 沒有伺服器端的複製，貼上一律是搬過去（rename），同一台機器上大檔也是瞬間完成。
+  const cut = (targets: SftpEntry[]) => { if (targets.length) setClip({ dir: path, items: targets }); };
+  /** 搬進 `destDir`；回 false = 檢查沒過、什麼都沒動（剪下的內容留著讓使用者換個地方再貼）。 */
+  const moveInto = async (destDir: string, items: SftpEntry[]): Promise<boolean> => {
+    if (!sftpId || !items.length) return false;
+    const dest = destDir.trim().replace(/(.)\/+$/, "$1") || "/";
+    const inside = items.find((x) => dest === x.path || dest.startsWith(`${x.path}/`));
+    if (inside) { toast.error(t("不能把「{name}」移到它自己裡面", { name: inside.name })); return false; }
+    const moving = items.filter((x) => parentOf(x.path) !== dest);
+    if (!moving.length) { toast.info(t("已經在這個資料夾了")); return false; }
+    let there: SftpEntry[];
+    try { there = dest === path ? entries : await api.sshSftpList(sftpId, dest); }
+    catch (err) { toast.error(t("無法開啟目的資料夾 {dir}：{msg}", { dir: dest, msg: errMsg(err) })); return false; }
+    const names = new Set(there.map((x) => x.name));
+    const clash = moving.filter((x) => names.has(x.name)).map((x) => x.name);
+    if (clash.length) { toast.error(t("目的資料夾已有同名項目：{list}。請先改名再移動。", { list: nameList(clash) })); return false; }
+    const failed: string[] = [];
+    let firstErr = "";
+    for (const x of moving) {
+      try { await api.sshSftpRename(sftpId, x.path, joinRemote(dest, x.name)); } catch (err) {
+        failed.push(x.name);
+        if (!firstErr) firstErr = errMsg(err);
+      }
+    }
+    refresh();
+    if (failed.length) toast.error(t("{n} 項移動失敗（{name}）：{msg}", { n: failed.length, name: failed[0], msg: firstErr }));
+    else toast.success(t("已移動 {n} 項到 {dir}", { n: moving.length, dir: dest }));
+    return true;
+  };
+  const pasteHere = async () => {
+    if (clip && (await moveInto(path, clip.items))) setClip(null);
+  };
+  const moveToPrompt = async (targets: SftpEntry[]) => {
+    const dest = await uiPrompt(
+      targets.length > 1 ? t("把這 {n} 項移到哪個資料夾？", { n: targets.length }) : t("把「{name}」移到哪個資料夾？", { name: targets[0].name }),
+      { title: t("移動到"), defaultValue: path, confirmText: t("移動") },
+    );
+    if (dest?.trim()) await moveInto(dest, targets);
+  };
+
   const onKeyDown = (e: ReactKeyboardEvent) => {
     // 只接「焦點在面板本身 / 檔案清單」的按鍵。路徑、篩選框、權限對話框、編輯器（CodeMirror 是
     // contenteditable，而且對話框沒有走 portal、DOM 就在這個面板裡）的按鍵都會冒泡上來——
@@ -371,7 +477,10 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
       return;
     }
     if (mod && !e.shiftKey && (e.key === "a" || e.key === "A")) { e.preventDefault(); setSel(selectAll(order)); return; }
+    if (mod && !e.shiftKey && (e.key === "x" || e.key === "X") && selectedEntries.length) { e.preventDefault(); cut(selectedEntries); return; }
+    if (mod && !e.shiftKey && (e.key === "v" || e.key === "V") && clip) { e.preventDefault(); void pasteHere(); return; }
     if (e.key === "Escape" && sel.names.size) { e.preventDefault(); setSel(EMPTY_SELECTION); return; }
+    if (e.key === "Escape" && clip) { e.preventDefault(); setClip(null); return; }
     if (e.key === "Backspace") { e.preventDefault(); navigate(parentOf(path)); return; }
     if (e.key === "F5") { e.preventDefault(); refresh(); return; }
     if (e.key === "Enter" && single) { e.preventDefault(); openEntry(single); return; }
@@ -403,6 +512,7 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
   }, [path]);
 
   const myJobs = Object.values(jobs).filter((j) => j.tabKey === tabKey);
+  const cutHere = useMemo(() => new Set(clip && clip.dir === path ? clip.items.map((x) => x.name) : []), [clip, path]);
   const sortMark = (col: SortCol) => (sort.col === col ? (sort.dir === 1 ? " ▲" : " ▼") : "");
   const selectedBytes = selectedEntries.reduce((a, x) => a + (x.is_dir ? 0 : x.size), 0);
 
@@ -413,6 +523,8 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
       const n = targets.length;
       return [
         [t("下載 {n} 項…", { n }), () => void downloadMany(targets)],
+        [t("剪下 {n} 項（Ctrl+X）", { n }), () => cut(targets)],
+        [t("移動 {n} 項到…", { n }), () => void moveToPrompt(targets)],
         [t("刪除 {n} 項…", { n }), () => void removeMany(targets)],
         [t("複製 {n} 個路徑", { n }), () => copyPaths(targets)],
       ];
@@ -427,6 +539,8 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
               [t("下載…"), () => void downloadFile(entry)],
             ] as [string, () => void][])),
         [t("重新命名…（F2）"), () => void rename(entry)],
+        [t("剪下（Ctrl+X）"), () => cut([entry])],
+        [t("移動到…"), () => void moveToPrompt([entry])],
         [t("權限…"), () => setPermsFor(entry)],
         [t("刪除"), () => void remove(entry)],
         [t("複製路徑"), () => copyPaths([entry])],
@@ -434,6 +548,7 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
       ];
     }
     return [
+      ...(clip ? ([[t("貼上：把剪下的 {n} 項移到這裡（Ctrl+V）", { n: clip.items.length }), () => void pasteHere()]] as [string, () => void][]) : []),
       [t("上傳檔案…"), () => void uploadFiles()],
       [t("上傳資料夾…"), () => void uploadFolder()],
       [t("新增檔案…"), () => void newFile()],
@@ -447,48 +562,59 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
 
   return (
     <div data-testid="sftp-panel" className="flex-1 flex flex-col min-h-0 min-w-0 text-xs" tabIndex={0} onKeyDown={onKeyDown}>
-      {/* 標題列 */}
+      {/* 標題列：對檔案的動作 */}
       <div className="h-8 shrink-0 flex items-center gap-1 px-2 border-b border-fg/10">
         <span className="font-medium text-fg/70">SFTP</span>
         <div className="ml-auto flex items-center gap-0.5">
-          <IconButton icon={ArrowUp} label={t("上一層（Backspace）")} onClick={() => navigate(parentOf(path))} disabled={path === "/"} />
-          <IconButton icon={RefreshCw} label={t("重新整理（F5）")} onClick={refresh} disabled={!sftpId} />
-          <IconButton icon={showHidden ? Eye : EyeOff} label={showHidden ? t("隱藏隱藏檔") : t("顯示隱藏檔")} active={showHidden} onClick={() => setShowHidden((v) => !v)} />
           <IconButton icon={FilePlus} label={t("新增檔案")} onClick={() => void newFile()} disabled={!sftpId} />
           <IconButton icon={FolderPlus} label={t("新資料夾")} onClick={() => void mkdir()} disabled={!sftpId} />
           <IconButton icon={Download} label={t("下載選取的項目")} onClick={() => download(selectedEntries)} disabled={!sftpId || !selectedEntries.length} />
           <IconButton icon={Upload} label={t("上傳檔案")} onClick={() => void uploadFiles()} disabled={!sftpId} />
           <IconButton icon={FolderUp} label={t("上傳資料夾")} onClick={() => void uploadFolder()} disabled={!sftpId} />
+          {onToggleMaximize && (
+            <IconButton icon={maximized ? Minimize2 : Maximize2} label={maximized ? t("還原 SFTP 面板大小") : t("放大 SFTP 面板")}
+              active={maximized} onClick={onToggleMaximize} />
+          )}
           <IconButton icon={X} label={t("關閉 SFTP")} onClick={onClose} />
         </div>
       </div>
-      {/* 麵包屑 / 路徑輸入 */}
-      <div className="shrink-0 flex items-center gap-0.5 px-2 py-1 border-b border-fg/10 overflow-x-auto mono">
-        {editingPath != null ? (
-          <input
-            ref={pathInputRef}
-            autoFocus
-            value={editingPath}
-            onChange={(e) => setEditingPath(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") { e.preventDefault(); const p = editingPath.trim() || "/"; setEditingPath(null); navigate(p); }
-              else if (e.key === "Escape") { e.preventDefault(); setEditingPath(null); }
-            }}
-            onBlur={() => setEditingPath(null)}
-            className="flex-1 min-w-0 bg-inset border border-fg/10 rounded px-2 py-0.5 outline-none focus:border-accent/60"
-          />
-        ) : (
-          <>
-            {crumbs.map((c, i) => (
-              <span key={c.path} className="flex items-center shrink-0">
-                {i > 0 && <Icon icon={ChevronRight} size={11} className="text-fg/30" />}
-                <button type="button" onClick={() => navigate(c.path)}
-                  className={`px-1 rounded hover:bg-fg/10 ${i === crumbs.length - 1 ? "text-fg/90" : "text-fg/55"}`}>{c.label}</button>
-              </span>
-            ))}
-            <IconButton icon={Pencil} label={t("輸入路徑")} box="w-5 h-5" iconSize={11} className="ml-auto" onClick={() => setEditingPath(path)} />
-          </>
-        )}
+      {/* 導覽：上一層 / 重新整理 / 麵包屑（可輸入路徑）/ 跳到終端機所在的資料夾 / 跟隨終端機 */}
+      <div className="shrink-0 flex items-center gap-0.5 px-1 py-1 border-b border-fg/10">
+        <IconButton icon={ArrowUp} label={t("上一層（Backspace）")} box="w-6 h-6" iconSize={14} onClick={() => navigate(parentOf(path))} disabled={path === "/"} />
+        <IconButton icon={RefreshCw} label={t("重新整理（F5）")} box="w-6 h-6" iconSize={13} onClick={refresh} disabled={!sftpId} />
+        <div className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto mono">
+          {editingPath != null ? (
+            <input
+              ref={pathInputRef}
+              autoFocus
+              value={editingPath}
+              onChange={(e) => setEditingPath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); const p = editingPath.trim() || "/"; setEditingPath(null); navigate(p); }
+                else if (e.key === "Escape") { e.preventDefault(); setEditingPath(null); }
+              }}
+              onBlur={() => setEditingPath(null)}
+              className="flex-1 min-w-0 bg-inset border border-fg/10 rounded px-2 py-0.5 outline-none focus:border-accent/60"
+            />
+          ) : (
+            <>
+              {crumbs.map((c, i) => (
+                <span key={c.path} className="flex items-center shrink-0">
+                  {i > 0 && <Icon icon={ChevronRight} size={11} className="text-fg/30" />}
+                  <button type="button" onClick={() => navigate(c.path)}
+                    className={`px-1 rounded hover:bg-fg/10 ${i === crumbs.length - 1 ? "text-fg/90" : "text-fg/55"}`}>{c.label}</button>
+                </span>
+              ))}
+              <IconButton icon={Pencil} label={t("輸入路徑")} box="w-5 h-5" iconSize={11} className="ml-auto" onClick={() => setEditingPath(path)} />
+            </>
+          )}
+        </div>
+        <IconButton icon={SquareTerminal} box="w-6 h-6" iconSize={14} disabled={!sftpId || !termDir}
+          label={termDir ? t("到終端機目前的資料夾：{dir}", { dir: termDir }) : t("看不出終端機目前在哪個資料夾（shell 沒有回報）")}
+          onClick={goToTerminalDir} />
+        <IconButton icon={FolderSync} box="w-6 h-6" iconSize={14} active={follow} aria-pressed={follow}
+          label={follow ? t("跟隨終端機切換資料夾：開（再按一下關閉）") : t("跟隨終端機切換資料夾：在終端機 cd，這裡就跟著換")}
+          onClick={toggleFollow} />
       </div>
       {/* 篩選：只過濾這一層的名稱（Ctrl+F 聚焦、Esc 清除） */}
       <div className="shrink-0 flex items-center gap-1 px-2 py-1 border-b border-fg/10">
@@ -503,6 +629,8 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
           className="flex-1 min-w-0 bg-transparent outline-none placeholder:text-fg/30"
         />
         {filter && <IconButton icon={X} label={t("清除篩選")} box="w-5 h-5" iconSize={11} onClick={() => setFilter("")} />}
+        <IconButton icon={showHidden ? Eye : EyeOff} label={showHidden ? t("隱藏隱藏檔") : t("顯示隱藏檔")} box="w-6 h-6" iconSize={13}
+          active={showHidden} onClick={() => setShowHidden((v) => !v)} />
       </div>
       {/* 清單 */}
       <div ref={listRef} data-sftp-list="" className="flex-1 min-h-0 overflow-auto"
@@ -526,6 +654,7 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
             {visible.map((e) => {
               const dir = isDirEntry(e);
               const isSel = sel.names.has(e.name);
+              const isCut = cutHere.has(e.name);
               return (
                 <tr key={e.name} data-name={e.name} aria-selected={isSel}
                   onClick={(ev) => setSel((s) => clickSelect(s, e.name, { ctrl: ev.ctrlKey || ev.metaKey, shift: ev.shiftKey }, order))}
@@ -537,7 +666,7 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
                     setSel(next);
                     setMenu({ x: ev.clientX, y: ev.clientY, entry: e, targets: visible.filter((x) => next.names.has(x.name)) });
                   }}
-                  className={`cursor-default ${isSel ? "bg-accent/15" : "hover:bg-fg/5"}`}>
+                  className={`cursor-default ${isSel ? "bg-accent/15" : "hover:bg-fg/5"} ${isCut ? "opacity-50" : ""}`}>
                   <td className="px-2 py-0.5 whitespace-nowrap overflow-hidden">
                     <span className="flex items-center gap-1.5 min-w-0">
                       <Icon icon={e.is_symlink ? Link2 : dir ? Folder : File} size={13}
@@ -571,6 +700,12 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
             {single.name}{single.is_dir ? "" : ` · ${fmtBytes(single.size)}`}{single.permissions != null ? ` · ${toOctal(single.permissions)}` : ""}
           </span>
         ) : null}
+        {clip && (
+          <span data-testid="sftp-clip" className="ml-auto shrink-0 flex items-center gap-1 text-accent/80">
+            {t("已剪下 {n} 項 · 到目的資料夾貼上（Ctrl+V）", { n: clip.items.length })}
+            <IconButton icon={X} label={t("取消剪下")} box="w-4 h-4" iconSize={10} onClick={() => setClip(null)} />
+          </span>
+        )}
       </div>
       {/* 傳輸進度 */}
       {myJobs.length > 0 && (
@@ -578,14 +713,19 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
           {myJobs.map((j) => {
             const pct = j.total ? Math.min(100, Math.round((j.done / j.total) * 100)) : null;
             return (
-              <div key={j.id} className="px-2 py-1 flex items-center gap-2">
+              <div key={j.id} data-testid="sftp-job" data-state={j.state} className="px-2 py-1 flex items-center gap-2"
+                title={j.state === "error" && j.message ? j.message : undefined}>
                 <Icon icon={j.kind === "upload" ? Upload : Download} size={12} className="text-fg/50 shrink-0" />
-                <span className="truncate flex-1" title={j.name}>{j.name}</span>
+                <span className={`truncate flex-1 ${j.state === "error" ? "text-danger" : ""}`} title={j.name}>{j.name}</span>
                 <span className="text-fg/45 mono shrink-0">{fmtBytes(j.done)}{j.total != null ? ` / ${fmtBytes(j.total)}` : ""}</span>
                 <div className="w-20 h-1.5 bg-fg/10 rounded overflow-hidden shrink-0">
                   <div className={`h-full ${j.state === "error" ? "bg-danger" : j.state === "done" ? "bg-success" : "bg-accent"} ${pct == null && j.state === "running" ? "animate-pulse" : ""}`}
                     style={{ width: `${pct ?? 100}%` }} />
                 </div>
+                {j.state === "error" && j.retry && (
+                  <IconButton icon={RotateCw} label={t("續傳（從中斷的地方接著傳）")} box="w-5 h-5" iconSize={11} disabled={!sftpId}
+                    onClick={() => { if (sftpId) void useSshTransfers.getState().resume(j.id, sftpId); }} />
+                )}
                 {j.state === "running"
                   ? <IconButton icon={X} label={t("取消傳輸")} box="w-5 h-5" iconSize={11} onClick={() => void useSshTransfers.getState().cancel(j.id)} />
                   : <IconButton icon={X} label={t("關閉")} box="w-5 h-5" iconSize={11} onClick={() => useSshTransfers.getState().dismiss(j.id)} />}

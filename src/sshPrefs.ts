@@ -15,6 +15,8 @@ export interface SshPrefs {
   /** 回捲行數；常駐 N 個 xterm 時記憶體與它成正比，故設上限。 */
   scrollback: number;
   cursorBlink: boolean;
+  /** SFTP 面板跟著終端機切換資料夾（在終端機 cd，面板就列那個資料夾）。開關在 SFTP 面板上。 */
+  sftpFollowTerminal: boolean;
 }
 
 export const DEFAULT_SSH_PREFS: SshPrefs = {
@@ -24,6 +26,7 @@ export const DEFAULT_SSH_PREFS: SshPrefs = {
   renderer: "auto",
   scrollback: 5000,
   cursorBlink: true,
+  sftpFollowTerminal: false,
 };
 
 export const SCROLLBACK_MIN = 500;
@@ -52,6 +55,7 @@ export function normalizeSshPrefs(raw: unknown): SshPrefs {
     renderer: o.renderer === "dom" ? "dom" : "auto",
     scrollback,
     cursorBlink: bool(o.cursorBlink, DEFAULT_SSH_PREFS.cursorBlink),
+    sftpFollowTerminal: bool(o.sftpFollowTerminal, DEFAULT_SSH_PREFS.sftpFollowTerminal),
   };
 }
 
@@ -104,6 +108,7 @@ export function pickPrefs(s: SshPrefs): SshPrefs {
     renderer: s.renderer,
     scrollback: s.scrollback,
     cursorBlink: s.cursorBlink,
+    sftpFollowTerminal: s.sftpFollowTerminal,
   };
 }
 

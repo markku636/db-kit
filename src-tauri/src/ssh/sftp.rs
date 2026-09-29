@@ -5,7 +5,12 @@
 //!
 //! 路徑安全：伺服器回的檔名是**不可信資料**（惡意 / 壞掉的伺服器可以回 `..` 或含 `/` 的名字），
 //! 遞迴刪除與列表都經 `remote_join` 過濾；刪除另外拒絕根目錄 / 目前目錄這類「整台機器」的目標。
+//!
+//! 斷點續傳：傳到一半失敗（斷線、逾時…）時，已傳的部分留著——下載是本機的 `<檔名>.part`，
+//! 上傳是遠端那個寫到一半的檔。下次接著傳之前先比對已傳部分的最後一段（`RESUME_VERIFY`）與來源
+//! 同一段是否相同，確定是來源的前半段才從結尾接著傳，否則從頭來。取消則照舊清掉（使用者要的是停下來）。
 
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -15,7 +20,7 @@ use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWriteExt};
 
 use super::runtime::SshConn;
 use crate::error::{AppError, AppResult};
@@ -32,6 +37,8 @@ const CANCEL_TICK: Duration = Duration::from_millis(200);
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 /// 列目錄時同時查 symlink 目標的上限。
 const SYMLINK_STAT_CONCURRENCY: usize = 16;
+/// 續傳前比對的長度：已傳部分的最後這麼多位元組與來源同一段相同，才認定它是來源的前半段。
+pub const RESUME_VERIFY: u64 = 64 * 1024;
 
 /// 目錄項目 / stat 結果。`mtime` 為 epoch 秒；`mode` 是 `drwxr-xr-x` 字串。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -109,8 +116,8 @@ impl TreePlan {
     }
 }
 
-/// 批次傳輸時，目的地已有同名項目怎麼辦。只看最上層：資料夾一旦決定合併，裡面的同名檔一律覆蓋
-/// （Xftp 的「全部覆蓋」）。
+/// 目的地已有同名項目怎麼辦。批次傳輸只看最上層：資料夾一旦決定合併，裡面的同名檔一律覆蓋
+/// （Xftp 的「全部覆蓋」）——`Resume` 例外，裡面的檔一樣照續傳的規則。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnConflict {
@@ -122,6 +129,47 @@ pub enum OnConflict {
     Overwrite,
     /// 同名的項目整個略過，只傳其餘的。
     Skip,
+    /// 斷點續傳（重試失敗的傳輸）：同名資料夾合併；同名檔與來源一樣大、結尾也相同的當成上次已經
+    /// 傳完而略過，比較小而且確實是來源前半段的從結尾接著傳，其餘整個重傳。
+    Resume,
+}
+
+/// 目的地已有的部分與來源比較的結果（續傳用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeFrom {
+    /// 一樣大：上次已經傳完。
+    Done,
+    /// 比來源小：從這個位元組接著傳。
+    At(u64),
+    /// 空的、比來源大、或來源大小不明：從頭傳。
+    Start,
+}
+
+/// 只看大小的初判（`have` = 目的地已有的位元組數）；`Done` / `At` 還要再經 `same_tail` 比對內容。
+pub fn resume_from(have: u64, total: Option<u64>) -> ResumeFrom {
+    match total {
+        Some(t) if have == t => ResumeFrom::Done,
+        Some(t) if have > 0 && have < t => ResumeFrom::At(have),
+        _ => ResumeFrom::Start,
+    }
+}
+
+/// `a`、`b` 在 `[end - n, end)` 這一段是否相同（`n` = `RESUME_VERIFY` 與 `end` 取小）。
+/// 任一邊讀不到那麼多就當不相同。讀完兩邊的位置都停在 `end`，但呼叫端接著用之前一律自己 seek。
+pub async fn same_tail<A, B>(a: &mut A, b: &mut B, end: u64) -> bool
+where
+    A: AsyncRead + AsyncSeek + Unpin,
+    B: AsyncRead + AsyncSeek + Unpin,
+{
+    let n = end.min(RESUME_VERIFY);
+    let start = end - n;
+    let mut x = vec![0u8; n as usize];
+    let mut y = vec![0u8; n as usize];
+    async fn fill<R: AsyncRead + AsyncSeek + Unpin>(r: &mut R, start: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        r.seek(SeekFrom::Start(start)).await?;
+        r.read_exact(buf).await.map(|_| ())
+    }
+    fill(a, start, &mut x).await.is_ok() && fill(b, start, &mut y).await.is_ok() && x == y
 }
 
 /// 批次傳輸完成後的摘要（變成完成事件的訊息，前端接在「已下載 …」後面）。
@@ -344,33 +392,64 @@ impl SftpClient {
         self.stat(path).await
     }
 
-    /// 下載到本機。先寫 `<local>.part` 再 rename，取消 / 失敗不留半成品。
+    /// 下載到本機。先寫 `<local>.part` 再 rename，檔案不會以不完整的樣子出現在原本的名字上。
     /// `local` 若是既有目錄，檔名取遠端 basename（經 `sanitize_local_filename`）。
+    ///
+    /// 上次失敗留下的 `.part` 若確實是這個遠端檔的前半段，就從它的結尾接著下載（不必是 `Resume`：
+    /// `.part` 本來就是這裡留下的，比對過內容才接）。取消時清掉 `.part`；其他失敗留著給下次續傳。
+    /// `Resume` 另外把本機已有、與遠端一樣的檔當成上次已經傳完而略過。
     pub async fn download(
         &self,
         remote: &str,
         local: &Path,
-        overwrite: bool,
+        on_conflict: OnConflict,
         progress: ProgressFn,
         cancel: &AtomicBool,
     ) -> AppResult<PathBuf> {
         let local = resolve_local_target(local, remote).await;
-        if !overwrite && tokio::fs::try_exists(&local).await.unwrap_or(false) {
-            return Err(AppError::Sftp(tf!("本機檔案已存在：{path}", path = local.display())));
+        let existing = tokio::fs::metadata(&local).await.ok();
+        if existing.is_some() {
+            match on_conflict {
+                OnConflict::Fail => {
+                    return Err(AppError::Sftp(tf!("本機檔案已存在：{path}", path = local.display())));
+                }
+                OnConflict::Skip => return Ok(local),
+                OnConflict::Overwrite | OnConflict::Resume => {}
+            }
         }
         let mut rf = self.inner.open(remote.to_string()).await.map_err(map_err)?;
         let total = rf.metadata().await.ok().and_then(|m| m.size);
+        if on_conflict == OnConflict::Resume {
+            if let Some(m) = existing.as_ref().filter(|m| m.is_file()) {
+                if resume_from(m.len(), total) == ResumeFrom::Done {
+                    let same = match tokio::fs::File::open(&local).await {
+                        Ok(mut lf) => same_tail(&mut lf, &mut rf, m.len()).await,
+                        Err(_) => false,
+                    };
+                    if same {
+                        progress(m.len(), Some(m.len()));
+                        return Ok(local);
+                    }
+                }
+            }
+        }
         if let Some(dir) = local.parent() {
             if !dir.as_os_str().is_empty() {
                 tokio::fs::create_dir_all(dir).await.map_err(local_err)?;
             }
         }
         let part = part_path(&local);
-        let mut lf = tokio::fs::File::create(&part).await.map_err(local_err)?;
+        let offset = part_resume_offset(&part, &mut rf, total).await;
+        let mut lf = if offset > 0 {
+            tokio::fs::OpenOptions::new().append(true).open(&part).await.map_err(local_err)?
+        } else {
+            tokio::fs::File::create(&part).await.map_err(local_err)?
+        };
+        rf.seek(SeekFrom::Start(offset)).await.map_err(io_err)?;
         let mut buf = vec![0u8; CHUNK];
-        let mut done: u64 = 0;
+        let mut done: u64 = offset;
         let mut last = Instant::now();
-        progress(0, total);
+        progress(done, total);
         let result: AppResult<()> = async {
             loop {
                 if cancel.load(Ordering::Relaxed) {
@@ -396,7 +475,10 @@ impl SftpClient {
         .await;
         drop(lf);
         if let Err(e) = result {
-            let _ = tokio::fs::remove_file(&part).await;
+            // 取消 = 使用者要停下來；一個位元組都沒收到也沒有可以續傳的東西。其餘（斷線、逾時…）留著。
+            if matches!(e, AppError::SshCancelled) || done == 0 {
+                let _ = tokio::fs::remove_file(&part).await;
+            }
             return Err(e);
         }
         tokio::fs::rename(&part, &local).await.map_err(local_err)?;
@@ -404,31 +486,54 @@ impl SftpClient {
         Ok(local)
     }
 
-    /// 上傳本機檔。`!overwrite` 時遠端已存在即失敗（開檔加 `EXCLUDE` 防競態）。
-    /// 取消 / 失敗時刪掉寫到一半的遠端檔。
+    /// 上傳本機檔。`Fail` 時遠端已存在即失敗（開檔加 `EXCLUDE` 防競態），`Skip` 則什麼都不做。
+    /// 取消時刪掉寫到一半的遠端檔；其他失敗（斷線、逾時…）留著，`Resume` 時接著寫。
+    ///
+    /// 只有 `Resume` 才會把遠端已有的同名檔當成上次傳到一半的結果：遠端沒辦法像本機 `.part` 那樣
+    /// 用檔名認出「這是傳到一半的」，一般的覆蓋就是整個重寫。
     pub async fn upload(
         &self,
         local: &Path,
         remote: &str,
-        overwrite: bool,
+        on_conflict: OnConflict,
         progress: ProgressFn,
         cancel: &AtomicBool,
     ) -> AppResult<()> {
         let mut lf = tokio::fs::File::open(local).await.map_err(local_err)?;
         let total = lf.metadata().await.ok().map(|m| m.len());
-        if !overwrite && self.inner.try_exists(remote.to_string()).await.unwrap_or(false) {
+        let fresh_only = matches!(on_conflict, OnConflict::Fail | OnConflict::Skip);
+        if fresh_only && self.inner.try_exists(remote.to_string()).await.unwrap_or(false) {
+            if on_conflict == OnConflict::Skip {
+                return Ok(());
+            }
             return Err(AppError::Sftp(tf!("遠端檔案已存在：{path}", path = remote)));
         }
-        let flags = if overwrite {
-            OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE
-        } else {
+        let offset = match on_conflict {
+            OnConflict::Resume => match self.remote_resume_point(remote, &mut lf, total).await {
+                ResumeFrom::Done => {
+                    let t = total.unwrap_or(0);
+                    progress(t, Some(t));
+                    return Ok(());
+                }
+                ResumeFrom::At(o) => o,
+                ResumeFrom::Start => 0,
+            },
+            _ => 0,
+        };
+        let flags = if offset > 0 {
+            OpenFlags::WRITE // 接著寫：不截斷，也不建立（剛剛才比對過它還在）
+        } else if fresh_only {
             OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE
+        } else {
+            OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE
         };
         let mut rf = self.inner.open_with_flags(remote.to_string(), flags).await.map_err(map_err)?;
+        rf.seek(SeekFrom::Start(offset)).await.map_err(io_err)?;
+        lf.seek(SeekFrom::Start(offset)).await.map_err(local_err)?;
         let mut buf = vec![0u8; CHUNK];
-        let mut done: u64 = 0;
+        let mut done: u64 = offset;
         let mut last = Instant::now();
-        progress(0, total);
+        progress(done, total);
         let result: AppResult<()> = async {
             loop {
                 if cancel.load(Ordering::Relaxed) {
@@ -466,9 +571,38 @@ impl SftpClient {
             }
             Err(e) => {
                 drop(rf);
-                let _ = self.inner.remove_file(remote.to_string()).await;
+                // 同 `download`：取消或什麼都沒寫進去才刪；斷線時本來也刪不到，留著正好給續傳。
+                if matches!(e, AppError::SshCancelled) || done == 0 {
+                    let _ = self.inner.remove_file(remote.to_string()).await;
+                }
                 Err(e)
             }
+        }
+    }
+
+    /// 續傳上傳：遠端已有的同名檔（stat 跟著 symlink 走，寫入也是寫到它指的檔）與本機來源比，
+    /// 決定略過 / 接著寫 / 從頭。不是一般檔案、讀不到、內容對不上都從頭。
+    async fn remote_resume_point(&self, remote: &str, lf: &mut tokio::fs::File, total: Option<u64>) -> ResumeFrom {
+        let Ok(md) = self.inner.metadata(remote.to_string()).await else {
+            return ResumeFrom::Start;
+        };
+        if kind_of(&md) != Kind::File {
+            return ResumeFrom::Start;
+        }
+        let have = md.size.unwrap_or(0);
+        let r = resume_from(have, total);
+        if r == ResumeFrom::Start {
+            return r;
+        }
+        let Ok(mut rf) = self.inner.open(remote.to_string()).await else {
+            return ResumeFrom::Start;
+        };
+        let same = same_tail(lf, &mut rf, have).await;
+        let _ = rf.close().await;
+        if same {
+            r
+        } else {
+            ResumeFrom::Start
         }
     }
 
@@ -477,12 +611,13 @@ impl SftpClient {
     ///
     /// 先整棵掃完再傳：進度條才有總量；掃描超過 `TREE_MAX_ENTRIES` 直接擋下。指向資料夾的
     /// symlink 一律略過（可能繞回自己形成無限迴圈），指向檔案的照常下載目標內容。
-    /// 取消 / 失敗時已完成的檔案保留（與 Xftp 相同），進行中那個檔的 `.part` 由 `download` 清掉。
+    /// 取消 / 失敗時已完成的檔案保留（與 Xftp 相同），進行中那個檔的 `.part` 由 `download` 處理。
+    /// 已存在時：`Fail` 失敗、`Skip` 不動、`Overwrite` 合併、`Resume` 合併並照續傳規則處理裡面的檔。
     pub async fn download_tree(
         &self,
         remote_dir: &str,
         local: &Path,
-        overwrite: bool,
+        on_conflict: OnConflict,
         progress: ProgressFn,
         cancel: &AtomicBool,
     ) -> AppResult<PathBuf> {
@@ -490,31 +625,43 @@ impl SftpClient {
             Ok(m) if m.is_dir() => local.join(sanitize_local_filename(basename(remote_dir))),
             _ => local.to_path_buf(),
         };
-        if !overwrite && tokio::fs::try_exists(&local_root).await.unwrap_or(false) {
-            return Err(AppError::Sftp(tf!("本機已有同名資料夾：{path}", path = local_root.display())));
+        if tokio::fs::try_exists(&local_root).await.unwrap_or(false) {
+            match on_conflict {
+                OnConflict::Fail => {
+                    return Err(AppError::Sftp(tf!("本機已有同名資料夾：{path}", path = local_root.display())));
+                }
+                OnConflict::Skip => return Ok(local_root),
+                OnConflict::Overwrite | OnConflict::Resume => {}
+            }
         }
         let plan = self.plan_remote_tree(remote_dir, cancel).await?;
         tokio::fs::create_dir_all(&local_root).await.map_err(local_err)?;
-        self.run_download_plan(&plan, &local_root, progress, cancel).await?;
+        self.run_download_plan(&plan, &local_root, on_conflict == OnConflict::Resume, progress, cancel).await?;
         Ok(local_root)
     }
 
-    /// 整個本機資料夾上傳到 `remote_root`（遠端的新資料夾完整路徑）。已存在且 `!overwrite` 即失敗；
-    /// `overwrite` 時合併進去（同名檔覆蓋、既有資料夾沿用）。本機的 symlink 一律略過。
+    /// 整個本機資料夾上傳到 `remote_root`（遠端的新資料夾完整路徑）。已存在時同 `download_tree`：
+    /// 合併 = 同名檔覆蓋（`Resume` 則照續傳規則）、既有資料夾沿用。本機的 symlink 一律略過。
     pub async fn upload_tree(
         &self,
         local_dir: &Path,
         remote_root: &str,
-        overwrite: bool,
+        on_conflict: OnConflict,
         progress: ProgressFn,
         cancel: &AtomicBool,
     ) -> AppResult<String> {
-        if !overwrite && self.inner.try_exists(remote_root.to_string()).await.unwrap_or(false) {
-            return Err(AppError::Sftp(tf!("遠端已有同名項目：{path}", path = remote_root)));
+        if self.inner.try_exists(remote_root.to_string()).await.unwrap_or(false) {
+            match on_conflict {
+                OnConflict::Fail => {
+                    return Err(AppError::Sftp(tf!("遠端已有同名項目：{path}", path = remote_root)));
+                }
+                OnConflict::Skip => return Ok(remote_root.to_string()),
+                OnConflict::Overwrite | OnConflict::Resume => {}
+            }
         }
         let plan = plan_local_tree(local_dir, cancel).await?;
         self.ensure_remote_dir(remote_root).await?;
-        self.run_upload_plan(&plan, remote_root, progress, cancel).await?;
+        self.run_upload_plan(&plan, remote_root, on_conflict == OnConflict::Resume, progress, cancel).await?;
         Ok(remote_root.to_string())
     }
 
@@ -548,7 +695,7 @@ impl SftpClient {
                     OnConflict::Fail => {
                         return Err(AppError::Sftp(tf!("本機已有同名項目：{path}", path = target.display())));
                     }
-                    OnConflict::Overwrite => {}
+                    OnConflict::Overwrite | OnConflict::Resume => {}
                 }
             }
             let md = match self.inner.metadata(r.clone()).await {
@@ -583,7 +730,7 @@ impl SftpClient {
         sum.skipped_special += plan.skipped;
         sum.files = plan.files.len();
         tokio::fs::create_dir_all(local_dir).await.map_err(local_err)?;
-        self.run_download_plan(&plan, local_dir, progress, cancel).await?;
+        self.run_download_plan(&plan, local_dir, on_conflict == OnConflict::Resume, progress, cancel).await?;
         Ok(sum)
     }
 
@@ -618,7 +765,7 @@ impl SftpClient {
                     OnConflict::Fail => {
                         return Err(AppError::Sftp(tf!("遠端已有同名項目：{path}", path = target)));
                     }
-                    OnConflict::Overwrite => {}
+                    OnConflict::Overwrite | OnConflict::Resume => {}
                 }
             }
             let md = tokio::fs::metadata(l).await.map_err(local_err)?;
@@ -636,17 +783,18 @@ impl SftpClient {
         }
         sum.skipped_special += plan.skipped;
         sum.files = plan.files.len();
-        self.run_upload_plan(&plan, remote_dir, progress, cancel).await?;
+        self.run_upload_plan(&plan, remote_dir, on_conflict == OnConflict::Resume, progress, cancel).await?;
         Ok(sum)
     }
 
     /// 依計畫建本機資料夾、依序下載；進度合併成一條（每個檔的進度加上前面檔案的總量）。
-    /// 計畫裡的檔一律覆蓋：最上層的同名已由呼叫端處理過（`overwrite` / `OnConflict`）。
-    /// 取消 / 失敗時已完成的檔案保留（與 Xftp 相同），進行中那個檔的 `.part` 由 `download` 清掉。
+    /// 計畫裡的檔一律覆蓋（`resume` 時照續傳規則）：最上層的同名已由呼叫端處理過（`OnConflict`）。
+    /// 取消 / 失敗時已完成的檔案保留（與 Xftp 相同），進行中那個檔的 `.part` 由 `download` 處理。
     async fn run_download_plan(
         &self,
         plan: &TreePlan,
         local_root: &Path,
+        resume: bool,
         progress: ProgressFn,
         cancel: &AtomicBool,
     ) -> AppResult<()> {
@@ -663,7 +811,8 @@ impl SftpClient {
             }
             let p = progress.clone();
             let b = base;
-            self.download(remote, &join_segments(local_root, rel), true, Box::new(move |d, _| (*p)(b + d, Some(total))), cancel)
+            let mode = if resume { OnConflict::Resume } else { OnConflict::Overwrite };
+            self.download(remote, &join_segments(local_root, rel), mode, Box::new(move |d, _| (*p)(b + d, Some(total))), cancel)
                 .await?;
             base += size;
         }
@@ -676,6 +825,7 @@ impl SftpClient {
         &self,
         plan: &TreePlan,
         remote_root: &str,
+        resume: bool,
         progress: ProgressFn,
         cancel: &AtomicBool,
     ) -> AppResult<()> {
@@ -693,7 +843,8 @@ impl SftpClient {
             let p = progress.clone();
             let b = base;
             let remote = remote_join_segments(remote_root, rel)?;
-            self.upload(Path::new(local), &remote, true, Box::new(move |d, _| (*p)(b + d, Some(total))), cancel)
+            let mode = if resume { OnConflict::Resume } else { OnConflict::Overwrite };
+            self.upload(Path::new(local), &remote, mode, Box::new(move |d, _| (*p)(b + d, Some(total))), cancel)
                 .await?;
             base += size;
         }
@@ -1000,6 +1151,31 @@ fn part_path(local: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// 下載續傳：上次失敗留下的 `.part` 比遠端檔小、而且結尾與遠端同一段相同，回它的大小（從那裡接著傳）；
+/// 否則 0（從頭，`.part` 會被截斷重寫）。
+async fn part_resume_offset<R>(part: &Path, rf: &mut R, total: Option<u64>) -> u64
+where
+    R: AsyncRead + AsyncSeek + Unpin,
+{
+    let Ok(m) = tokio::fs::metadata(part).await else {
+        return 0;
+    };
+    let ResumeFrom::At(have) = resume_from(m.len(), total) else {
+        return 0;
+    };
+    if !m.is_file() {
+        return 0;
+    }
+    let Ok(mut pf) = tokio::fs::File::open(part).await else {
+        return 0;
+    };
+    if same_tail(&mut pf, rf, have).await {
+        have
+    } else {
+        0
+    }
+}
+
 /// `local` 是既有目錄 → 接上遠端檔名；否則原樣。
 async fn resolve_local_target(local: &Path, remote: &str) -> PathBuf {
     match tokio::fs::metadata(local).await {
@@ -1090,7 +1266,71 @@ mod tests {
         assert_eq!(serde_json::from_str::<OnConflict>("\"skip\"").unwrap(), OnConflict::Skip);
         assert_eq!(serde_json::from_str::<OnConflict>("\"overwrite\"").unwrap(), OnConflict::Overwrite);
         assert_eq!(serde_json::from_str::<OnConflict>("\"fail\"").unwrap(), OnConflict::Fail);
+        assert_eq!(serde_json::from_str::<OnConflict>("\"resume\"").unwrap(), OnConflict::Resume);
         assert!(serde_json::from_str::<OnConflict>("\"Skip\"").is_err());
+    }
+
+    #[test]
+    fn resume_from_sizes() {
+        assert_eq!(resume_from(100, Some(100)), ResumeFrom::Done);
+        assert_eq!(resume_from(0, Some(0)), ResumeFrom::Done, "空檔也算傳完");
+        assert_eq!(resume_from(40, Some(100)), ResumeFrom::At(40));
+        assert_eq!(resume_from(0, Some(100)), ResumeFrom::Start, "空的：沒有可以接的");
+        assert_eq!(resume_from(120, Some(100)), ResumeFrom::Start, "比來源大：不是它的前半段");
+        assert_eq!(resume_from(40, None), ResumeFrom::Start, "來源大小不明");
+    }
+
+    fn bytes(n: usize) -> Vec<u8> {
+        (0..n).map(|i| (i * 31 % 251) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn same_tail_compares_only_the_last_window() {
+        use std::io::Cursor;
+        let src = bytes(300 * 1024);
+        let mut a = Cursor::new(src[..200 * 1024].to_vec());
+        let mut b = Cursor::new(src.clone());
+        assert!(same_tail(&mut a, &mut b, 200 * 1024).await, "前半段");
+        assert!(same_tail(&mut Cursor::new(Vec::<u8>::new()), &mut Cursor::new(src.clone()), 0).await, "0 長度");
+
+        // 結尾那一段不同 → 不是前半段
+        let mut bad = src[..200 * 1024].to_vec();
+        *bad.last_mut().unwrap() ^= 0xff;
+        assert!(!same_tail(&mut Cursor::new(bad), &mut Cursor::new(src.clone()), 200 * 1024).await);
+
+        // 視窗之外的差異看不到（比對的代價固定，不必重讀整個檔）
+        let mut early = src[..200 * 1024].to_vec();
+        early[0] ^= 0xff;
+        assert!(same_tail(&mut Cursor::new(early), &mut Cursor::new(src.clone()), 200 * 1024).await);
+
+        // 任一邊不夠長 → 不相同
+        assert!(!same_tail(&mut Cursor::new(src[..10].to_vec()), &mut Cursor::new(src.clone()), 20).await);
+    }
+
+    #[tokio::test]
+    async fn part_resume_offset_checks_size_and_content() {
+        use std::io::Cursor;
+        let dir = std::env::temp_dir().join(format!("dbkit-part-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let part = dir.join("a.bin.part");
+        let remote = bytes(150 * 1024);
+        let total = Some(remote.len() as u64);
+
+        assert_eq!(part_resume_offset(&part, &mut Cursor::new(remote.clone()), total).await, 0, "沒有 .part");
+
+        std::fs::write(&part, &remote[..100 * 1024]).unwrap();
+        assert_eq!(part_resume_offset(&part, &mut Cursor::new(remote.clone()), total).await, 100 * 1024);
+
+        // 遠端改過（同一段內容不同）→ 從頭
+        let mut changed = remote.clone();
+        changed[100 * 1024 - 1] ^= 0xff;
+        assert_eq!(part_resume_offset(&part, &mut Cursor::new(changed), total).await, 0);
+
+        // 已經跟遠端一樣大（上次卡在 rename 之前）、或比遠端大 → 從頭
+        std::fs::write(&part, &remote).unwrap();
+        assert_eq!(part_resume_offset(&part, &mut Cursor::new(remote.clone()), total).await, 0);
+        assert_eq!(part_resume_offset(&part, &mut Cursor::new(remote.clone()), Some(10)).await, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

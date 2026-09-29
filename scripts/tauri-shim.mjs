@@ -25,6 +25,11 @@ export function installShim(fx) {
   // SFTP 刪除與多選批次傳輸的紀錄（驗「刪了哪些、批次帶了哪些路徑與同名策略」用）。
   window.__DBKIT_SFTP_REMOVES__ = [];
   window.__DBKIT_SFTP_BATCH__ = [];
+  // 單檔上下傳（驗「續傳有帶 resume」）與改名 / 移動的紀錄。
+  window.__DBKIT_SFTP_TRANSFERS__ = [];
+  window.__DBKIT_SFTP_RENAMES__ = [];
+  // 接下來幾個傳輸要失敗（傳到一半斷線）：情境設成 1，下一個傳輸就會回 error。
+  window.__DBKIT_SFTP_FAIL_NEXT__ = 0;
   // SSH 主機儲存與金鑰匯入 / 產生的紀錄（驗「存下去的是 keystore:<id>」「匯入帶了哪個密語」用）。
   window.__DBKIT_SSH_SESSION_SAVES__ = [];
   // 終端機工作階段記錄與「另存文字檔」的紀錄。
@@ -349,9 +354,10 @@ export function installShim(fx) {
       const named = (fx.SSH_SESSIONS?.sessions ?? []).find((x) => x.host === info?.host);
       const hostShort = named?.name || String(info?.host ?? "web-01").split(".")[0];
       const termId = `term-${++sshSeq}`;
-      const term = { send, prompt: `${user}@${hostShort}:~$ `, line: "" };
+      const term = { send, user, host: hostShort, home: `/home/${user}`, cwd: "", prompt: "", line: "" };
+      sshSetCwd(term, term.home);
       sshTerms.set(termId, term);
-      setTimeout(() => send(`Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-107-generic x86_64)\r\n\r\nLast login: Tue Sep 23 09:12:44 2026 from 10.0.0.8\r\n${term.prompt}`), 40);
+      setTimeout(() => send(`Welcome to Ubuntu 22.04.4 LTS (GNU/Linux 5.15.0-107-generic x86_64)\r\n\r\nLast login: Tue Sep 23 09:12:44 2026 from 10.0.0.8\r\n${sshTitle(term)}${term.prompt}`), 40);
       return termId;
     },
     ssh_term_write: ({ termId, dataB64 }) => { const t = sshTerms.get(termId); if (t) for (const ch of atob(dataB64)) sshFeed(t, ch); return null; },
@@ -371,7 +377,7 @@ export function installShim(fx) {
     ssh_sftp_list: ({ path }) => (fx.SFTP_LISTING?.[path] ?? []).map(sftpWithMeta),
     ssh_sftp_stat: ({ path }) => sftpFind(path) ?? Promise.reject(new Error("找不到檔案或目錄")),
     ssh_sftp_mkdir: () => null,
-    ssh_sftp_rename: () => null,
+    ssh_sftp_rename: ({ from, to }) => { window.__DBKIT_SFTP_RENAMES__.push({ from, to }); return null; },
     ssh_sftp_remove: ({ path, recursive }) => { window.__DBKIT_SFTP_REMOVES__.push({ path, recursive }); return null; },
     ssh_sftp_read_text: ({ path }) => { const text = sftpFiles.get(path) ?? ""; return { text, truncated: false, size: new TextEncoder().encode(text).length, lossy: false, binary: false }; },
     ssh_sftp_write_text: ({ path, content, createNew }) => {
@@ -387,8 +393,14 @@ export function installShim(fx) {
       sftpMeta.set(path, { ...(sftpMeta.get(path) ?? {}), permissions: type | mode });
       return sftpFind(path);
     },
-    ssh_sftp_download: ({ remote }) => sshTransfer(remote),
-    ssh_sftp_upload: ({ local }) => sshTransfer(local),
+    ssh_sftp_download: ({ remote, local, resume }) => {
+      window.__DBKIT_SFTP_TRANSFERS__.push({ kind: "download", remote, local, resume: !!resume });
+      return sshTransfer(remote);
+    },
+    ssh_sftp_upload: ({ local, remote, resume }) => {
+      window.__DBKIT_SFTP_TRANSFERS__.push({ kind: "upload", local, remote, resume: !!resume });
+      return sshTransfer(local);
+    },
     ssh_sftp_download_many: ({ remotes, localDir, onConflict }) => {
       window.__DBKIT_SFTP_BATCH__.push({ kind: "download", remotes, localDir, onConflict });
       return sshTransfer(remotes[0]);
@@ -428,7 +440,7 @@ export function installShim(fx) {
     return { status: "ok", format: info.format, info, message: null, cert };
   }
   const sshConns = new Map(); // connId → { host, port, username }
-  const sshTerms = new Map(); // termId → { send, prompt, line }
+  const sshTerms = new Map(); // termId → { send, user, host, home, cwd, prompt, line }
   // SFTP 假檔案：內容（read_text / write_text）與被改過的屬性（大小 / 時間 / 權限）疊在 fixtures 上。
   const sftpFiles = new Map(Object.entries(fx.SFTP_FILES ?? {}));
   const sftpMeta = new Map();
@@ -450,21 +462,48 @@ export function installShim(fx) {
     let index = 0;
     return (text) => { if (cb) cb({ message: new TextEncoder().encode(text).buffer, index: index++ }); };
   }
-  function sshRun(cmd) {
+  // Ubuntu 預設的 bash：提示符 `user@host:~/dir$ `，每個提示符前用 OSC 0 把視窗標題設成 `user@host: ~/dir`。
+  function sshSetCwd(t, dir) {
+    t.cwd = dir;
+    const shown = dir === t.home ? "~" : dir.startsWith(`${t.home}/`) ? `~${dir.slice(t.home.length)}` : dir;
+    t.shown = shown;
+    t.prompt = `${t.user}@${t.host}:${shown}$ `;
+  }
+  function sshTitle(t) {
+    return `\x1b]0;${t.user}@${t.host}: ${t.shown}\x07`;
+  }
+  // `cd` 只認得 fixtures 裡有的資料夾（SFTP_LISTING 的鍵，或列表裡的資料夾）。
+  function sshCd(t, arg) {
+    const a = arg.replace(/^'(.*)'$/s, "$1").replace(/'\\''/g, "'");
+    let dir = !a || a === "~" ? t.home : a.startsWith("~/") ? `${t.home}${a.slice(1)}` : a.startsWith("/") ? a : `${t.cwd}/${a}`;
+    const parts = [];
+    for (const seg of dir.split("/")) {
+      if (!seg || seg === ".") continue;
+      if (seg === "..") parts.pop(); else parts.push(seg);
+    }
+    dir = `/${parts.join("/")}`;
+    const listing = fx.SFTP_LISTING ?? {};
+    const known = dir in listing || Object.values(listing).some((es) => es.some((e) => e.path === dir && e.is_dir));
+    if (!known) return `bash: cd: ${a}: No such file or directory`;
+    sshSetCwd(t, dir);
+    return "";
+  }
+  function sshRun(t, cmd) {
     const c = cmd.trim();
     if (!c) return "";
     if (c === "ls" || c.startsWith("ls ")) return "app  backup.tar.gz  logs";
-    if (c === "pwd") return "/home/deploy";
+    if (c === "pwd") return t.cwd;
     if (c.startsWith("echo ")) return c.slice(5).replace(/^["']|["']$/g, "");
     if (/^systemctl status nginx/.test(c)) return "● nginx.service - A high performance web server\r\n     Active: active (running) since Mon 2026-09-22 08:00:11 UTC; 1 day 3h ago";
-    if (/^(cd\b|clear$)/.test(c)) return "";
+    if (/^cd\b/.test(c)) return sshCd(t, c.slice(2).trim());
+    if (c === "clear") return "";
     return `bash: ${c.split(/\s+/)[0]}: command not found`;
   }
   function sshFeed(t, ch) {
     if (ch === "\r" || ch === "\n") {
-      const out = sshRun(t.line);
+      const out = sshRun(t, t.line);
       t.line = "";
-      t.send(`\r\n${out ? `${out}\r\n` : ""}${t.prompt}`);
+      t.send(`\r\n${out ? `${out}\r\n` : ""}${sshTitle(t)}${t.prompt}`);
     } else if (ch === "\x7f" || ch === "\b") {
       if (t.line) { t.line = t.line.slice(0, -1); t.send("\b \b"); }
     } else if (ch === "\x03") {
@@ -478,8 +517,14 @@ export function installShim(fx) {
   function sshTransfer(name) {
     const id = `tr-${++sshSeq}`;
     const total = 4096;
-    [0.25, 0.6, 1].forEach((p, i) => setTimeout(() => emit("ssh-sftp-progress", {
-      transfer_id: id, done: Math.round(total * p), total, state: p === 1 ? "done" : "running", message: null,
+    // 情境要求「下一個傳輸失敗」：傳到六成時斷線（真的後端會留著已傳的部分給續傳）。
+    const fail = window.__DBKIT_SFTP_FAIL_NEXT__ > 0;
+    if (fail) window.__DBKIT_SFTP_FAIL_NEXT__ -= 1;
+    const steps = fail ? [0.25, 0.6] : [0.25, 0.6, 1];
+    steps.forEach((p, i) => setTimeout(() => emit("ssh-sftp-progress", {
+      transfer_id: id, done: Math.round(total * p), total,
+      state: fail && i === steps.length - 1 ? "error" : p === 1 ? "done" : "running",
+      message: fail && i === steps.length - 1 ? "SFTP 連線已中斷" : null,
     }), 80 + i * 90));
     void name;
     return id;

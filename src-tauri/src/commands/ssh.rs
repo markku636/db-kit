@@ -617,7 +617,19 @@ impl TransferReporter {
     }
 }
 
+/// 單檔 / 單一資料夾傳輸的 `overwrite` + `resume` 旗標 → `OnConflict`（`resume` 優先：續傳本來就會蓋掉對不上的檔）。
+fn single_mode(overwrite: bool, resume: Option<bool>) -> OnConflict {
+    if resume == Some(true) {
+        OnConflict::Resume
+    } else if overwrite {
+        OnConflict::Overwrite
+    } else {
+        OnConflict::Fail
+    }
+}
+
 /// 下載到本機（`local` 是既有目錄時用遠端檔名）。立即回 `transfer_id`，進度走 `ssh-sftp-progress`。
+/// `resume` = 重試失敗的傳輸（斷點續傳；已傳完的略過、傳到一半的接著傳）。
 #[tauri::command]
 pub async fn ssh_sftp_download(
     app: AppHandle,
@@ -626,12 +638,14 @@ pub async fn ssh_sftp_download(
     remote: String,
     local: String,
     overwrite: bool,
+    resume: Option<bool>,
 ) -> AppResult<String> {
     let rt = state.ssh.clone();
     let sftp = rt.sftp(&sftp_id)?;
     let (transfer_id, cancel) = rt.register_transfer(&sftp.conn_id);
     let reporter = TransferReporter::new(app, transfer_id.clone());
     let tid = transfer_id.clone();
+    let mode = single_mode(overwrite, resume);
     tauri::async_runtime::spawn(async move {
         let progress = reporter.progress_fn();
         // 資料夾（或指向資料夾的 symlink）整棵下載；其餘照單檔。前端不必分兩條命令。
@@ -641,9 +655,9 @@ pub async fn ssh_sftp_download(
             .map(|e| (e.is_dir && !e.is_symlink) || e.link_target_is_dir == Some(true))
             .unwrap_or(false);
         let r = if is_dir {
-            sftp.download_tree(&remote, Path::new(&local), overwrite, progress, &cancel).await
+            sftp.download_tree(&remote, Path::new(&local), mode, progress, &cancel).await
         } else {
-            sftp.download(&remote, Path::new(&local), overwrite, progress, &cancel).await
+            sftp.download(&remote, Path::new(&local), mode, progress, &cancel).await
         }
         .map(|p| Some(p.display().to_string()));
         reporter.finish(r);
@@ -652,7 +666,7 @@ pub async fn ssh_sftp_download(
     Ok(transfer_id)
 }
 
-/// 上傳本機檔。立即回 `transfer_id`，進度走 `ssh-sftp-progress`。
+/// 上傳本機檔。立即回 `transfer_id`，進度走 `ssh-sftp-progress`。`resume` 同 `ssh_sftp_download`。
 #[tauri::command]
 pub async fn ssh_sftp_upload(
     app: AppHandle,
@@ -661,20 +675,22 @@ pub async fn ssh_sftp_upload(
     local: String,
     remote: String,
     overwrite: bool,
+    resume: Option<bool>,
 ) -> AppResult<String> {
     let rt = state.ssh.clone();
     let sftp = rt.sftp(&sftp_id)?;
     let (transfer_id, cancel) = rt.register_transfer(&sftp.conn_id);
     let reporter = TransferReporter::new(app, transfer_id.clone());
     let tid = transfer_id.clone();
+    let mode = single_mode(overwrite, resume);
     tauri::async_runtime::spawn(async move {
         let progress = reporter.progress_fn();
         // 本機資料夾 → 整棵上傳到 `remote`（遠端新資料夾的完整路徑）；其餘照單檔。
         let is_dir = tokio::fs::metadata(&local).await.map(|m| m.is_dir()).unwrap_or(false);
         let r = if is_dir {
-            sftp.upload_tree(Path::new(&local), &remote, overwrite, progress, &cancel).await
+            sftp.upload_tree(Path::new(&local), &remote, mode, progress, &cancel).await
         } else {
-            sftp.upload(Path::new(&local), &remote, overwrite, progress, &cancel).await.map(|_| remote.clone())
+            sftp.upload(Path::new(&local), &remote, mode, progress, &cancel).await.map(|_| remote.clone())
         }
         .map(Some);
         reporter.finish(r);
@@ -684,7 +700,7 @@ pub async fn ssh_sftp_upload(
 }
 
 /// 多選下載（Xftp 多選拖到本機）：檔案 / 資料夾混合，全部放進 `local_dir`。整批一個 transfer、
-/// 依序傳、進度合併；`on_conflict` 決定本機已有同名項目時覆蓋 / 略過 / 整批不開始。
+/// 依序傳、進度合併；`on_conflict` 決定本機已有同名項目時覆蓋 / 略過 / 續傳 / 整批不開始。
 /// 完成事件的 `message` 是略過項目的摘要（沒有略過就是 null）。
 #[tauri::command]
 pub async fn ssh_sftp_download_many(

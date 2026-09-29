@@ -52,6 +52,13 @@ export const termRegistry = new Map<string, TermRegistryEntry>();
 
 /** SFTP 面板每個分頁上次停在哪個資料夾（面板關掉再打開要回到原處）。放這裡而不是 SftpPanel：那支是延遲載入的。 */
 export const sftpLastPath = new Map<string, string>();
+/** SFTP 面板每個分頁的家目錄（解開終端機標題裡的 `~` 用；面板關掉再打開不必重開 sftp 通道就拿得到）。 */
+export const sftpHome = new Map<string, string>();
+/**
+ * SFTP 面板上次跟到的終端機資料夾（已解開 `~`）。面板打開時終端機還在同一個資料夾，就回到使用者
+ * 上次在面板裡逛到的地方；終端機已經 cd 到別處，就跳去終端機那裡。
+ */
+export const sftpFollowedDir = new Map<string, string>();
 
 interface SshTerminalsStore {
   rt: Record<string, SshTermRuntime>;
@@ -179,6 +186,8 @@ export async function teardownSshTab(tabKey: string): Promise<void> {
   useSshTerminals.getState().remove(tabKey);
   termRegistry.delete(tabKey);
   sftpLastPath.delete(tabKey);
+  sftpHome.delete(tabKey);
+  sftpFollowedDir.delete(tabKey);
   if (!rt) return;
   // 順序：sftp → term → conn；任一失敗都繼續，後端 disconnect 會把殘留的 channel 一併收掉。
   if (rt.sftpId) await api.sshSftpClose(rt.sftpId).catch(() => undefined);

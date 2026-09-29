@@ -40,6 +40,12 @@ describe("normalizeSshPrefs", () => {
     });
     expect(normalizeSshPrefs({ copyOnSelect: true, cursorBlink: false })).toMatchObject({ copyOnSelect: true, cursorBlink: false });
   });
+
+  it("SFTP 跟隨終端機：預設關，舊存檔沒有這欄也補上", () => {
+    expect(normalizeSshPrefs({ copyOnSelect: true }).sftpFollowTerminal).toBe(false);
+    expect(normalizeSshPrefs({ sftpFollowTerminal: true }).sftpFollowTerminal).toBe(true);
+    expect(normalizeSshPrefs({ sftpFollowTerminal: "1" }).sftpFollowTerminal).toBe(false);
+  });
 });
 
 describe("useSshPrefs", () => {

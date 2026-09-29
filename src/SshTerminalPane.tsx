@@ -13,7 +13,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Channel } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 import {
-  ChevronDown, ChevronUp, Eraser, PanelRightClose, PanelRightOpen, RefreshCw, Search, Sparkles, Unplug, X,
+  ChevronDown, ChevronUp, Eraser, FolderOpen, RefreshCw, Search, Sparkles, Unplug, X,
 } from "lucide-react";
 import { api, onSshAuthPrompt, onSshConnClosed, onSshHostKeyPrompt, onSshTermExit } from "./api";
 import type { SshTab } from "./sshTabs";
@@ -105,6 +105,8 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [aiMenu, setAiMenu] = useState<{ x: number; y: number } | null>(null);
   const [nlOpen, setNlOpen] = useState(false);
+  // SFTP 面板放大成整個分頁（暫時收起終端機，檔案清單才有地方並排大小 / 時間 / 權限）。
+  const [sftpMax, setSftpMax] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // 狀態列：終端大小、連線時間；工作階段記錄（開著時每秒把去完 ANSI 的輸出追加進檔案）。
   const [termSize, setTermSize] = useState<{ cols: number; rows: number } | null>(null);
@@ -517,7 +519,11 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     useAssistant.getState().ask(q.display, { send: true, extraContext: q.extraContext, extraChips: q.chips });
   };
 
-  const toggleSftp = () => patch(tab.key, { sftpOpen: !rt?.sftpOpen });
+  const toggleSftp = () => { if (rt?.sftpOpen) setSftpMax(false); patch(tab.key, { sftpOpen: !rt?.sftpOpen }); };
+  const closeSftp = () => { setSftpMax(false); patch(tab.key, { sftpOpen: false }); termRef.current?.focus(); };
+  const sftpOpen = !!rt?.sftpOpen;
+  const sftpShown = sftpOpen && !!rt?.connId;
+  const maximized = sftpShown && sftpMax;
 
   const dot = status === "connected" ? "bg-success" : status === "connecting" ? "bg-warning animate-pulse" : "bg-danger";
   const label = rt?.title || (rt?.user && rt?.host ? `${rt.user}@${rt.host}` : tab.title);
@@ -529,6 +535,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     : endKind === "refused" ? t("連線被拒絕")
     : endKind === "unreachable" ? t("連不到主機")
     : status === "error" ? t("連線失敗") : t("連線已中斷");
+  const sftpLabel = sftpOpen ? t("關閉 SFTP") : t("開啟 SFTP");
 
   return (
     <div className={active ? "flex-1 flex flex-col min-w-0 min-h-0" : "hidden"} onKeyDownCapture={onKeyDownCapture}>
@@ -540,11 +547,18 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
         <div className="ml-auto flex items-center gap-0.5">
           <IconButton icon={Sparkles} label={t("AI 協助")} active={!!aiMenu || nlOpen}
             onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setAiMenu({ x: r.left, y: r.bottom + 4 }); }} />
+          {/* 帶字的按鈕：檔案瀏覽是終端機分頁的第二個主要功能，只有圖示時很容易被當成「收合側欄」。 */}
+          <button type="button" data-testid="ssh-sftp-toggle" aria-label={sftpLabel} aria-pressed={sftpOpen}
+            title={t("{label}：瀏覽、上傳下載與管理終端機所在資料夾的檔案", { label: sftpLabel })}
+            disabled={status !== "connected"} onClick={toggleSftp}
+            className={"h-7 px-2 inline-flex items-center gap-1 rounded shrink-0 transition-colors text-xs font-medium " +
+              "disabled:opacity-40 disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-accent/60 " +
+              (sftpOpen ? "bg-accent/12 text-accent" : "text-fg/60 hover:text-fg hover:bg-fg/10 active:bg-fg/[0.14]")}>
+            <Icon icon={FolderOpen} size={15} />SFTP
+          </button>
           <IconButton icon={Search} label={t("搜尋（Ctrl+Shift+F）")} active={searchOpen}
             onClick={() => { if (searchOpen) closeSearch(); else { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 0); } }} />
           <IconButton icon={Eraser} label={t("清空畫面")} onClick={() => { termRef.current?.clear(); termRef.current?.focus(); }} />
-          <IconButton icon={rt?.sftpOpen ? PanelRightClose : PanelRightOpen} label={rt?.sftpOpen ? t("關閉 SFTP") : t("開啟 SFTP")}
-            active={!!rt?.sftpOpen} disabled={status !== "connected"} onClick={toggleSftp} />
         </div>
       </div>
 
@@ -568,7 +582,8 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
       )}
 
       <div className="flex-1 flex min-h-0 min-w-0">
-        <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+        {/* 放大 SFTP 時只是藏起來（不卸載）：shell 與畫面都留著，縮回來時 ResizeObserver 會重新 fit。 */}
+        <div className={maximized ? "hidden" : "flex-1 min-w-0 min-h-0 flex flex-col"}>
           {ended && (
             // 斷線提示是終端機上緣佔版面的一條，不是浮層：不會蓋住畫面上的輸出，也不跟 xterm 的圖層搶 z-index（issue #7）。
             // 按鈕不換行、不被壓縮；原因太長就截斷，完整原文在 tooltip。
@@ -599,16 +614,24 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
             )}
           </div>
         </div>
-        {rt?.sftpOpen && rt.connId && (
+        {sftpShown && rt && (
           <>
-            <Splitter axis="x" onPointerDown={sftp.onPointerDown} />
-            <div style={{ width: sftp.size }} className="shrink-0 min-w-0 flex flex-col bg-panel">
+            {!maximized && <Splitter axis="x" onPointerDown={sftp.onPointerDown} />}
+            <div style={maximized ? undefined : { width: sftp.size }}
+              className={`${maximized ? "flex-1" : "shrink-0"} min-w-0 flex flex-col bg-panel`}>
               <Suspense fallback={<div className="p-3 text-xs text-fg/40">{t("載入中…")}</div>}>
                 <SftpPanel
                   tabKey={tab.key}
                   connId={rt.connId}
-                  onCd={(path) => { void termRegistry.get(tab.key)?.sendLine(`cd ${shellQuote(path)}`).catch(() => undefined); termRef.current?.focus(); }}
-                  onClose={() => patch(tab.key, { sftpOpen: false })}
+                  onCd={(path) => {
+                    void termRegistry.get(tab.key)?.sendLine(`cd ${shellQuote(path)}`).catch(() => undefined);
+                    // 放大時終端機是藏起來的：cd 過去就是要看它，縮回來。
+                    setSftpMax(false);
+                    termRef.current?.focus();
+                  }}
+                  onClose={closeSftp}
+                  maximized={maximized}
+                  onToggleMaximize={() => setSftpMax((v) => !v)}
                 />
               </Suspense>
             </div>

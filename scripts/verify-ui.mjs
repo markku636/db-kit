@@ -828,6 +828,147 @@ const CASES = {
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 
+  // SFTP 與終端機所在的資料夾：工具列上帶字的「SFTP」緊鄰「AI 協助」；在終端機 cd 之後打開面板就列那裡
+  // （假 shell 跟 Ubuntu 一樣用視窗標題回報 `user@host: ~/dir`）；關掉再開：終端機沒動 → 回到面板上次的位置，
+  // 終端機換了 → 跳過去；「跟隨終端機」開著時 cd 一下面板就跟著換；放大 / 還原面板時終端機藏起來再回來。
+  async "sftp-follow-terminal"(page) {
+    await openSshWeb01(page);
+    const toggle = page.getByTestId("ssh-sftp-toggle");
+    check("工具列有帶字的 SFTP 按鈕", (await toggle.innerText().catch(() => "")).includes("SFTP"));
+    const prev = await toggle.evaluate((el) => el.previousElementSibling?.getAttribute("aria-label") ?? "").catch(() => "");
+    check("SFTP 按鈕緊鄰「AI 協助」", prev === "AI 協助", prev);
+    const compose = page.getByTestId("ssh-compose");
+    const run = async (cmd) => { await compose.fill(cmd); await compose.press("Enter"); await sleep(400); };
+    await run("cd logs");
+    const label = await page.locator("span.mono", { hasText: "deploy@web-01" }).first().innerText().catch(() => "");
+    check("終端機的視窗標題回報目前的資料夾", label.includes("deploy@web-01: ~/logs"), label);
+
+    await toggle.click();
+    const sftp = page.getByTestId("sftp-panel");
+    const shows = async (name) => {
+      await sftp.getByText(name, { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+      return (await sftp.getByText(name, { exact: true }).count()) > 0;
+    };
+    check("在終端機 cd 之後打開 SFTP：直接列出那個資料夾", await shows("app.log"), (await sftp.innerText().catch(() => "")).slice(0, 200));
+
+    await sftp.getByRole("button", { name: "deploy", exact: true }).click();
+    await shows("backup.tar.gz");
+    await toggle.click();
+    await sleep(200);
+    await toggle.click();
+    check("終端機沒換資料夾：重開回到面板上次的位置", await shows("backup.tar.gz"));
+    await toggle.click();
+    await run("cd ../app");
+    await toggle.click();
+    check("終端機換了資料夾：重開跳到終端機那裡", await shows("server.js"));
+
+    await sftp.getByRole("button", { name: "/", exact: true }).click();
+    await shows("etc");
+    await sftp.getByRole("button", { name: /到終端機目前的資料夾/ }).click();
+    check("「到終端機目前的資料夾」跳回 ~/app", await shows("server.js"));
+
+    const follow = sftp.getByRole("button", { name: /跟隨終端機切換資料夾/ });
+    await follow.click();
+    check("跟隨終端機的開關變成開", (await follow.getAttribute("aria-pressed")) === "true");
+    await run("cd ~/logs");
+    check("跟隨開著：終端機 cd 之後面板跟著換", await shows("error.log"));
+    await follow.click();
+    await run("cd ~");
+    await sleep(300);
+    check("跟隨關掉：終端機 cd 面板不動", (await sftp.getByText("error.log", { exact: true }).count()) > 0);
+
+    await sftp.getByRole("button", { name: "放大 SFTP 面板" }).click();
+    await sleep(200);
+    check("放大 SFTP：終端機暫時收起", !(await page.locator(".xterm").first().isVisible()));
+    await sftp.getByRole("button", { name: "還原 SFTP 面板大小" }).click();
+    await sleep(200);
+    check("還原：終端機回來", await page.locator(".xterm").first().isVisible());
+    check("沒有未實作的 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // 移動：剪下（Ctrl+X）→ 到別的資料夾 Ctrl+V → rename 到那裡；「移動到…」輸入目的資料夾；搬進自己裡面擋下。
+  // 斷點續傳：下載傳到一半斷線 → 那一列變成失敗、有「續傳」→ 按下去以 resume 重新開始 → 完成。
+  // 上傳遇到遠端同名 → 可選「續傳」。
+  async "sftp-move-and-resume"(page) {
+    await openSshWeb01(page);
+    await page.getByTestId("ssh-sftp-toggle").click();
+    const sftp = page.getByTestId("sftp-panel");
+    await sftp.getByText("backup.tar.gz", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    const row = (n) => sftp.locator(`tr[data-name="${n}"]`);
+    const menuBtn = (text) => page.locator('div.fixed.z-\\[90\\] button', { hasText: text }).first();
+    const renames = () => page.evaluate(() => window.__DBKIT_SFTP_RENAMES__);
+
+    await row("logs").dblclick();
+    await row("app.log").waitFor({ timeout: 5000 }).catch(() => {});
+    await row("app.log").click();
+    await page.keyboard.press("Control+x");
+    await sleep(150);
+    check("Ctrl+X 剪下：狀態列有提示、那一列畫淡",
+      /已剪下 1 項/.test(await page.getByTestId("sftp-clip").innerText().catch(() => "")) && /opacity-50/.test((await row("app.log").getAttribute("class")) ?? ""));
+    await sftp.getByRole("button", { name: "deploy", exact: true }).click();
+    await row("backup.tar.gz").waitFor({ timeout: 5000 }).catch(() => {});
+    await row("backup.tar.gz").click();
+    await page.keyboard.press("Control+v");
+    await page.waitForFunction(() => window.__DBKIT_SFTP_RENAMES__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    check("到別的資料夾 Ctrl+V：搬過去",
+      JSON.stringify(await renames()) === JSON.stringify([{ from: "/home/deploy/logs/app.log", to: "/home/deploy/app.log" }]), JSON.stringify(await renames()));
+    check("貼上後剪下提示消失", (await page.getByTestId("sftp-clip").count()) === 0);
+
+    await row("backup.tar.gz").click({ button: "right" });
+    await sleep(150);
+    await menuBtn("移動到…").click();
+    await page.getByText("把「backup.tar.gz」移到哪個資料夾？").first().waitFor({ timeout: 5000 }).catch(() => {});
+    await page.keyboard.press("Control+a");
+    await page.keyboard.type("/home/deploy/app");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => window.__DBKIT_SFTP_RENAMES__.length > 1, null, { timeout: 5000 }).catch(() => {});
+    check("「移動到…」輸入目的資料夾",
+      JSON.stringify((await renames())[1]) === JSON.stringify({ from: "/home/deploy/backup.tar.gz", to: "/home/deploy/app/backup.tar.gz" }), JSON.stringify(await renames()));
+
+    await row("app").click({ button: "right" });
+    await sleep(150);
+    await menuBtn("移動到…").click();
+    await page.getByText("把「app」移到哪個資料夾？").first().waitFor({ timeout: 5000 }).catch(() => {});
+    await page.keyboard.press("Control+a");
+    await page.keyboard.type("/home/deploy/app/lib");
+    await page.keyboard.press("Enter");
+    await page.getByText("不能把「app」移到它自己裡面").first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("搬進自己裡面：擋下、不送 rename", (await page.getByText("不能把「app」移到它自己裡面").count()) > 0 && (await renames()).length === 2);
+
+    // 斷點續傳
+    await page.evaluate(() => { window.__DBKIT_SFTP_FAIL_NEXT__ = 1; });
+    await row("backup.tar.gz").click({ button: "right" });
+    await sleep(150);
+    await menuBtn("下載…").click();
+    const failed = sftp.locator('[data-testid="sftp-job"][data-state="error"]');
+    await failed.first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("傳到一半斷線：那一列標成失敗", (await failed.count()) === 1);
+    const resume = failed.getByRole("button", { name: /續傳/ });
+    check("失敗的傳輸有「續傳」", (await resume.count()) === 1);
+    await resume.click().catch(() => {});
+    await page.getByText("已下載 backup.tar.gz").first().waitFor({ timeout: 5000 }).catch(() => {});
+    const tr = await page.evaluate(() => window.__DBKIT_SFTP_TRANSFERS__);
+    check("「續傳」用同一個來源 / 目的地、帶 resume 重新開始",
+      tr.length === 2 && tr[1].remote === "/home/deploy/backup.tar.gz" && tr[1].local === tr[0].local && tr[1].resume === true && tr[0].resume === false,
+      JSON.stringify(tr));
+    check("續傳完成、失敗的那一列換掉", (await page.getByText("已下載 backup.tar.gz").count()) > 0 && (await failed.count()) === 0);
+
+    // 上傳一個遠端已有的檔 → 可選「續傳」
+    await page.evaluate(() => { window.__DBKIT_DIALOG_OPEN__ = ["C:\\tmp\\backup.tar.gz"]; });
+    await sftp.getByRole("button", { name: "上傳檔案", exact: true }).first().click();
+    const resumeChoice = page.getByRole("button", { name: "續傳", exact: true }).last();
+    await resumeChoice.waitFor({ timeout: 5000 }).catch(() => {});
+    check("上傳遇到遠端同名：可選「續傳」", (await page.getByText(/遠端已有「backup\.tar\.gz」/).count()) > 0 && (await resumeChoice.count()) > 0);
+    await resumeChoice.click().catch(() => {});
+    await page.waitForFunction(() => window.__DBKIT_SFTP_BATCH__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const up = (await page.evaluate(() => window.__DBKIT_SFTP_BATCH__))[0];
+    check("選「續傳」→ 批次上傳帶 resume", up?.kind === "upload" && up.onConflict === "resume" && up.remoteDir === "/home/deploy", JSON.stringify(up));
+    await page.evaluate(() => { delete window.__DBKIT_DIALOG_OPEN__; });
+    check("沒有未實作的 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
   // AI 協助（建議模式）：終端機開著時問 AI → 回覆的 bash 區塊有「送到終端機」→ 指令進命令列輸入條、不直接執行；
   // 危險指令（rm -rf）按「執行並回饋」先跳確認框，取消後假 shell 一行都沒收到。AI 本身沒有 shell 工具。
   async "ssh-ai-suggest"(page) {

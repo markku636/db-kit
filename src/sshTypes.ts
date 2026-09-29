@@ -147,8 +147,11 @@ export interface SftpProgress {
   message?: string | null;
 }
 
-/** 批次傳輸時目的地已有同名項目：整批不開始 / 覆蓋（資料夾合併）/ 略過同名。 */
-export type SftpOnConflict = "fail" | "overwrite" | "skip";
+/**
+ * 批次傳輸時目的地已有同名項目：整批不開始 / 覆蓋（資料夾合併）/ 略過同名 /
+ * 續傳（資料夾合併；已傳完的檔略過、傳到一半的從中斷處接著傳，比對不上的整個重傳）。
+ */
+export type SftpOnConflict = "fail" | "overwrite" | "skip" | "resume";
 
 // ---- 使用者金鑰（後端 ssh/keys.rs） ----
 

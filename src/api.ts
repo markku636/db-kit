@@ -1981,13 +1981,14 @@ export const api = {
     invoke<SftpEntry>("ssh_sftp_write_text", { sftpId, path, content, createNew }),
   // chmod：只改權限位元（0o7777 以內），回傳變更後的屬性。
   sshSftpChmod: (sftpId: string, path: string, mode: number) => invoke<SftpEntry>("ssh_sftp_chmod", { sftpId, path, mode }),
-  // 上下傳立即回 transfer_id，進度走 onSftpProgress；取消後不留 .part。
-  sshSftpDownload: (sftpId: string, remote: string, local: string, overwrite: boolean) =>
-    invoke<string>("ssh_sftp_download", { sftpId, remote, local, overwrite }),
-  sshSftpUpload: (sftpId: string, local: string, remote: string, overwrite: boolean) =>
-    invoke<string>("ssh_sftp_upload", { sftpId, local, remote, overwrite }),
+  // 上下傳立即回 transfer_id，進度走 onSftpProgress；取消後不留 .part，其他失敗留著給下次續傳。
+  // resume = 重試失敗的傳輸（斷點續傳：已傳完的略過、傳到一半的接著傳）。
+  sshSftpDownload: (sftpId: string, remote: string, local: string, overwrite: boolean, resume = false) =>
+    invoke<string>("ssh_sftp_download", { sftpId, remote, local, overwrite, resume }),
+  sshSftpUpload: (sftpId: string, local: string, remote: string, overwrite: boolean, resume = false) =>
+    invoke<string>("ssh_sftp_upload", { sftpId, local, remote, overwrite, resume }),
   // 多選批次（檔案 / 資料夾混合）：一個 transfer、依序傳、進度合併；onConflict 決定目的地已有同名時
-  // 整批不開始 / 覆蓋 / 略過。完成事件的 message 是略過項目的摘要。
+  // 整批不開始 / 覆蓋 / 略過 / 續傳。完成事件的 message 是略過項目的摘要。
   sshSftpDownloadMany: (sftpId: string, remotes: string[], localDir: string, onConflict: SftpOnConflict) =>
     invoke<string>("ssh_sftp_download_many", { sftpId, remotes, localDir, onConflict }),
   sshSftpUploadMany: (sftpId: string, locals: string[], remoteDir: string, onConflict: SftpOnConflict) =>
