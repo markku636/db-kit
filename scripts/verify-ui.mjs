@@ -63,6 +63,7 @@ const CASE_FX = {
   "tab-menu-close-others": { STORAGE_SEED: SSH_STORAGE_SEED },
   // 助手面板開到最窄（300px）：選項列要往下一行掉，不能把標籤擠成一字一行。
   "assistant-ssh-mode": { STORAGE_SEED: { ...SSH_STORAGE_SEED, "db-kit:assistantWidth": 300 } },
+  "ssh-status-and-log": { STORAGE_SEED: SSH_STORAGE_SEED },
   // 同一個情境換成預設的渲染器（WebGL，開不起來才退回 DOM）：issue #7 的使用者用的就是預設值。
   "ssh-disconnect-overlay-webgl": {},
 };
@@ -240,6 +241,39 @@ const CASES = {
       fgs.add(p.fg);
     }
     check("切換主題時終端機文字色跟著變", fgs.size === 3, JSON.stringify([...fgs]));
+  },
+
+  // 終端機狀態列 + 工作階段記錄 + 儲存畫面內容：記錄檔先清空寫標頭、之後追加去完色碼的輸出、停止時寫結束時間；
+  // 儲存畫面內容存的是整個捲動緩衝區的文字。
+  async "ssh-status-and-log"(page) {
+    await openSshWeb01(page);
+    const bar = page.getByTestId("ssh-status-bar");
+    await bar.waitFor({ timeout: 5000 }).catch(() => {});
+    const barText = await bar.innerText().catch(() => "");
+    check("狀態列顯示主機、終端大小、編碼", /deploy@/.test(barText) && /\d+×\d+/.test(barText) && /UTF-8/.test(barText), barText);
+    await bar.getByRole("button", { name: "開始記錄工作階段…" }).click();
+    await page.waitForFunction(() => window.__DBKIT_SSH_LOG__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    let log = await page.evaluate(() => window.__DBKIT_SSH_LOG__);
+    check("開始記錄：清空檔案並寫標頭", log[0]?.truncate === true && /工作階段記錄/.test(log[0]?.text ?? ""), JSON.stringify(log[0]));
+    check("記錄中有標示", /記錄中/.test(await bar.innerText().catch(() => "")));
+    await page.locator(".xterm-helper-textarea").first().focus();
+    await page.keyboard.type("echo log-me");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => window.__DBKIT_SSH_LOG__.some((e) => !e.truncate && e.text.includes("log-me")), null, { timeout: 5000 }).catch(() => {});
+    log = await page.evaluate(() => window.__DBKIT_SSH_LOG__);
+    const body = log.filter((e) => !e.truncate).map((e) => e.text).join("");
+    check("輸出每秒追加進記錄檔，而且沒有色碼", body.includes("log-me") && !body.includes("\x1b"), JSON.stringify(body.slice(0, 200)));
+    await bar.getByRole("button", { name: "停止記錄" }).click();
+    await sleep(300);
+    log = await page.evaluate(() => window.__DBKIT_SSH_LOG__);
+    check("停止時寫結束時間", /結束於/.test(log.at(-1)?.text ?? ""), JSON.stringify(log.at(-1)));
+    check("停止後不再標示記錄中", !/記錄中/.test(await bar.innerText().catch(() => "")));
+    await bar.getByRole("button", { name: "儲存畫面內容…" }).click();
+    await page.waitForFunction(() => window.__DBKIT_SAVED_FILES__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const saved = await page.evaluate(() => window.__DBKIT_SAVED_FILES__.at(-1));
+    check("儲存畫面內容：整個畫面的文字", /deploy@web-01/.test(saved?.content ?? "") && /log-me/.test(saved?.content ?? ""), JSON.stringify(saved).slice(0, 200));
+    check("沒有未實作的 SSH command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 
   // 跳板機：主機設定可選另一台已存主機當跳板機（不能選自己），存下去的是那台的 id；清掉就回到直連。

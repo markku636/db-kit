@@ -744,6 +744,14 @@ pub async fn ssh_sftp_local_conflicts(local_dir: String, names: Vec<String>) -> 
     Ok(sftp_mod::local_conflicts(Path::new(&local_dir), &names).await)
 }
 
+// ---- 工作階段記錄 ----
+
+/// 寫終端機記錄檔：`truncate` = 開始記錄（清空重寫），否則追加。內容由前端去完 ANSI 才送來。
+#[tauri::command]
+pub async fn ssh_session_log_write(path: String, text: String, truncate: bool) -> AppResult<()> {
+    crate::ssh::session_log::write(Path::new(&path), &text, truncate).await
+}
+
 // ---- 匯入主機 ----
 
 /// 匯入主機的來源。

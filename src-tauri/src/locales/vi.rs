@@ -392,6 +392,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "遠端已有同名檔案，無法建立資料夾：{path}" => "Máy từ xa có tệp cùng tên nên không thể tạo thư mục: {path}",
         "遠端已有同名項目：{path}" => "Máy từ xa đã có mục cùng tên: {path}",
         "本機已有同名資料夾：{path}" => "Đã có thư mục cục bộ cùng tên: {path}",
+        "寫入記錄檔 {path} 失敗：{e}" => "Ghi tệp nhật ký {path} thất bại: {e}",
         "跳板機設定形成迴圈（A 經 B、B 又經 A），請檢查主機設定" => "Cấu hình máy trung gian tạo thành vòng lặp (A qua B, B lại qua A); hãy kiểm tra cấu hình máy chủ",
         "跳板機超過 {n} 層（可能設定成互相跳轉）" => "Vượt quá {n} tầng máy trung gian (có thể chúng trỏ lẫn nhau)",
         "找不到設定的跳板機（可能已刪除），請到主機設定重新選擇" => "Không tìm thấy máy trung gian đã cấu hình (có thể đã bị xóa); hãy chọn lại trong cấu hình máy chủ",

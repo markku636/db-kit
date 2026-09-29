@@ -20,18 +20,20 @@ import type { SshTab } from "./sshTabs";
 import type { SshAuthPrompt, SshHostKeyPrompt, SshStatus } from "./sshTypes";
 import { DEFAULT_RUNTIME, sshTail, teardownSshTab, termRegistry, useSshTerminals } from "./sshTerminals";
 import { useSshPrefs } from "./sshPrefs";
-import { useSshSessions } from "./sshSessions";
+import { sessionLabel, useSshSessions } from "./sshSessions";
 import { xtermThemeFor } from "./sshTerminalTheme";
 import { guessOs, guessShell } from "./sshCapture";
 import { b64ToBytes, binaryToB64, utf8ToB64 } from "./sshBytes";
 import { isAppReserved } from "./ui/keyScope";
 import { SshAuthPromptDialog, SshHostKeyDialog } from "./SshPrompts";
 import SshComposeBar from "./SshComposeBar";
+import SshStatusBar from "./SshStatusBar";
+import { bufferLinesToText, createRecorder, defaultLogName, type SessionRecorder } from "./sshSessionLog";
 import { useTheme } from "./theme";
 import { EDITOR_THEMES, getEditorThemeDef } from "./editorThemes";
 import { t, useT } from "./i18n";
 import { Button, Icon, IconButton, MenuPanel, Spinner, useModalView } from "./ui/index";
-import { toast, uiConfirm } from "./ui";
+import { pickSaveFile, toast, uiConfirm } from "./ui";
 import { Splitter, useResizableReverse } from "./ui/resizable";
 import { useStore } from "./store";
 import { useAssistant } from "./assistant";
@@ -103,6 +105,16 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
   const [aiMenu, setAiMenu] = useState<{ x: number; y: number } | null>(null);
   const [nlOpen, setNlOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // 狀態列：終端大小、連線時間；工作階段記錄（開著時每秒把去完 ANSI 的輸出追加進檔案）。
+  const [termSize, setTermSize] = useState<{ cols: number; rows: number } | null>(null);
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  const [recording, setRecording] = useState<string | null>(null);
+  const recRef = useRef<{ path: string; rec: SessionRecorder; timer: number; untap: () => void } | null>(null);
+  const jumpLabel = useSshSessions((s) => {
+    const me = s.sessions.find((x) => x.id === tab.sessionId);
+    const j = me?.jump_session_id ? s.sessions.find((x) => x.id === me.jump_session_id) : undefined;
+    return j ? sessionLabel(j) : null;
+  });
 
   const sftp = useResizableReverse({ storageKey: "dbkit:sshSftpWidth", initial: 380, min: 280, max: () => Math.max(320, window.innerWidth * 0.6), axis: "x" });
 
@@ -229,7 +241,12 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
 
     term.onData((d) => { const id = termIdRef.current; if (id) void api.sshTermWrite(id, utf8ToB64(d)).catch(() => undefined); });
     term.onBinary((d) => { const id = termIdRef.current; if (id) void api.sshTermWrite(id, binaryToB64(d)).catch(() => undefined); });
-    term.onResize(({ cols, rows }) => { const id = termIdRef.current; if (id) void api.sshTermResize(id, cols, rows).catch(() => undefined); });
+    term.onResize(({ cols, rows }) => {
+      setTermSize({ cols, rows });
+      const id = termIdRef.current;
+      if (id) void api.sshTermResize(id, cols, rows).catch(() => undefined);
+    });
+    setTermSize({ cols: term.cols, rows: term.rows });
     term.onTitleChange((title) => patch(tab.key, { title }));
     // OSC 7（file://host/path）：bash / zsh 常見設定會在每次提示符回報 cwd。
     term.parser.registerOscHandler(7, (data) => {
@@ -366,6 +383,72 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     return () => { taps.delete(tap); window.clearTimeout(timer); };
     // 刻意不依賴整個 rt：OSC 標題每個提示符都會變，那不影響快照內容，卻會讓監聽整組重掛。
   }, [active, hasRt, tab.key, tab.title, tab.connId, rt?.status, rt?.cwd, rt?.lastCommand, rt?.lastOutput, rt?.termId]);
+
+  // ---- 狀態列：連線時間、儲存畫面內容、記錄工作階段 ----
+  const status0 = rt?.status;
+  useEffect(() => { setConnectedAt(status0 === "connected" ? Date.now() : null); }, [status0]);
+
+  const targetLabel = () => (rt?.user && rt?.host ? `${rt.user}@${rt.host}` : tab.title);
+  const flushRecording = () => {
+    const r = recRef.current;
+    if (!r) return;
+    const text = r.rec.take();
+    if (text) void api.sshSessionLogWrite(r.path, text, false).catch((e) => toast.error(errMsg(e)));
+  };
+  const stopRecording = (silent = false) => {
+    const r = recRef.current;
+    if (!r) return;
+    recRef.current = null;
+    r.untap();
+    window.clearInterval(r.timer);
+    const tail = r.rec.flush() + t("# 結束於 {time}", { time: new Date().toLocaleString(undefined, { hour12: false }) }) + "\n";
+    void api.sshSessionLogWrite(r.path, tail, false).catch(() => undefined);
+    setRecording(null);
+    if (!silent) toast.success(t("已停止記錄：{path}", { path: r.path }));
+  };
+  const startRecording = async () => {
+    if (recRef.current) return;
+    const label = targetLabel();
+    const path = await pickSaveFile(defaultLogName(label, new Date()), [{ name: t("記錄檔"), extensions: ["log", "txt"] }]);
+    if (!path) return;
+    const header = t("# db-kit SSH 工作階段記錄：{target} · 開始於 {time}", { target: label, time: new Date().toLocaleString(undefined, { hour12: false }) }) + "\n";
+    try {
+      await api.sshSessionLogWrite(path, header, true);
+    } catch (e) {
+      toast.error(errMsg(e));
+      return;
+    }
+    const rec = createRecorder();
+    const tap = (b: Uint8Array) => rec.push(b);
+    tapsRef.current.add(tap);
+    recRef.current = { path, rec, timer: window.setInterval(flushRecording, 1000), untap: () => { tapsRef.current.delete(tap); } };
+    setRecording(path);
+    toast.success(t("開始記錄到 {path}", { path }));
+  };
+  // 關分頁 / 卸載時把記錄收尾（寫進最後一段與結束時間）。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => stopRecording(true), []);
+
+  const saveScreen = async () => {
+    const term = termRef.current;
+    if (!term) return;
+    const buf = term.buffer.active;
+    const lines: { text: string; wrapped: boolean }[] = [];
+    for (let i = 0; i < buf.length; i++) {
+      const l = buf.getLine(i);
+      if (l) lines.push({ text: l.translateToString(true), wrapped: l.isWrapped });
+    }
+    const text = bufferLinesToText(lines);
+    if (!text) { toast.info(t("畫面是空的")); return; }
+    const path = await pickSaveFile(defaultLogName(targetLabel(), new Date(), "txt"), [{ name: t("文字檔"), extensions: ["txt", "log"] }]);
+    if (!path) return;
+    try {
+      await api.saveTextFile(path, text);
+      toast.success(t("已儲存畫面內容到 {path}", { path }));
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+  };
 
   // ---- 剪貼簿 ----
   const copySelection = () => {
@@ -527,6 +610,8 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
           />
         </Suspense>
       )}
+      <SshStatusBar label={label} jump={jumpLabel} size={termSize} status={status} connectedAt={connectedAt} recording={recording}
+        onSave={() => void saveScreen()} onToggleRecord={() => { if (recording) stopRecording(); else void startRecording(); }} />
       <SshComposeBar tabKey={tab.key} />
 
       {authPrompt && (

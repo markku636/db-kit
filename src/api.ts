@@ -2011,5 +2011,7 @@ export const api = {
   sshKeyAttachCert: (id: string, source: SshKeySource) => invoke<SshCertInfo>("ssh_key_attach_cert", { id, source }),
   // 匯入主機：只讀出候選主機（~/.ssh/config 或 .xsh 資料夾），勾選後走一般的 sshSessionSave。
   sshImportScan: (kind: SshHostImportKind, path: string | null) => invoke<SshImportScan>("ssh_import_scan", { kind, path }),
+  // 終端機工作階段記錄：truncate = 開始記錄（清空重寫），否則追加。
+  sshSessionLogWrite: (path: string, text: string, truncate: boolean) => invoke<void>("ssh_session_log_write", { path, text, truncate }),
   sshImportDefaultPath: (kind: SshHostImportKind) => invoke<string | null>("ssh_import_default_path", { kind }),
 };

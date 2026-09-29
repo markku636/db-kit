@@ -27,6 +27,9 @@ export function installShim(fx) {
   window.__DBKIT_SFTP_BATCH__ = [];
   // SSH 主機儲存與金鑰匯入 / 產生的紀錄（驗「存下去的是 keystore:<id>」「匯入帶了哪個密語」用）。
   window.__DBKIT_SSH_SESSION_SAVES__ = [];
+  // 終端機工作階段記錄與「另存文字檔」的紀錄。
+  window.__DBKIT_SSH_LOG__ = [];
+  window.__DBKIT_SAVED_FILES__ = [];
   window.__DBKIT_KEY_IMPORTS__ = [];
   const one = (columns, cells) => ({ columns, rows: [cells], rows_affected: 0 });
 
@@ -114,7 +117,7 @@ export function installShim(fx) {
     // DDL 執行（結構比對「直接執行」會打；早於 v0.30 就缺這個 handler）。
     exec_ddl: () => null,
     // 寫檔類：對話框 handler 會回假路徑，所以這些後續步驟也要有回應，否則匯出一按就是紅字。
-    save_text_file: () => null,
+    save_text_file: ({ path, content }) => { window.__DBKIT_SAVED_FILES__.push({ path, content }); return null; },
     export_rows: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
     export_rows_multi: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
     export_query: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
@@ -277,6 +280,7 @@ export function installShim(fx) {
     },
     // ── SSH 金鑰庫（假的：內容看起來像加密的就要密語，密語 "wrong" 算錯；以 ssh- 開頭的是公鑰）──
     ssh_keys_list: () => sshKeys.map((k) => ({ ...k })),
+    ssh_session_log_write: ({ path, text, truncate }) => { window.__DBKIT_SSH_LOG__.push({ path, text, truncate }); return null; },
     ssh_import_default_path: ({ kind }) => (kind === "xsh" ? fx.SSH_IMPORT_XSH?.path : fx.SSH_IMPORT_CONFIG?.path) ?? null,
     ssh_import_scan: ({ kind }) => (kind === "xsh" ? fx.SSH_IMPORT_XSH : fx.SSH_IMPORT_CONFIG) ?? { path: "", hosts: [], skipped: 0 },
     ssh_key_inspect: ({ source, passphrase }) => sshInspect(source, passphrase),

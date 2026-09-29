@@ -1245,6 +1245,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "遠端已有同名檔案，無法建立資料夾：{path}" => "A file with the same name exists on the remote, so the folder cannot be created: {path}",
         "遠端已有同名項目：{path}" => "An item with the same name already exists on the remote: {path}",
         "本機已有同名資料夾：{path}" => "A local folder with the same name already exists: {path}",
+        "寫入記錄檔 {path} 失敗：{e}" => "Failed to write the log file {path}: {e}",
         "跳板機設定形成迴圈（A 經 B、B 又經 A），請檢查主機設定" => "The jump host settings form a loop (A via B, B via A); check the host settings",
         "跳板機超過 {n} 層（可能設定成互相跳轉）" => "More than {n} levels of jump hosts (they may point at each other)",
         "找不到設定的跳板機（可能已刪除），請到主機設定重新選擇" => "The configured jump host was not found (it may have been deleted); choose it again in the host settings",

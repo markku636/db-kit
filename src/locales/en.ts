@@ -3712,6 +3712,21 @@ const en: Catalog = {
   "在助手對話啟用 {name}": "Enable {name} in assistant chat",
   "勾選的技能會附在助手對話的人設後面（已選 {n} 個）": "Checked skills are added after the assistant chat persona ({n} selected)",
   "SSH 模式只套用自訂技能（內建技能都是資料庫的）": "SSH mode applies only custom skills (the built-in ones are all about databases)",
+  // ---- 終端機狀態列 / 工作階段記錄 ----
+  "# db-kit SSH 工作階段記錄：{target} · 開始於 {time}": "# db-kit SSH session log: {target} · started {time}",
+  "# 結束於 {time}": "# ended {time}",
+  "停止記錄": "Stop recording",
+  "儲存畫面內容…": "Save terminal output…",
+  "已停止記錄：{path}": "Recording stopped: {path}",
+  "已儲存畫面內容到 {path}": "Terminal output saved to {path}",
+  "文字檔": "Text file",
+  "畫面是空的": "The terminal is empty",
+  "終端機大小（欄 × 列）": "Terminal size (columns × rows)",
+  "記錄中": "Recording",
+  "記錄檔": "Log file",
+  "連線時間": "Connected for",
+  "開始記錄到 {path}": "Recording to {path}",
+  "開始記錄工作階段…": "Record session…",
 };
 
 export default en;

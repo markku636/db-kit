@@ -111,6 +111,7 @@ src-tauri/src/
 ├── ssh/               SSH（russh；整個目錄不依賴 Tauri，GUI 與 dbk CLI 共用）
 │   ├── known_hosts.rs host key 指紋存讀（TOFU；`ssh_known_hosts.json`，路徑可注入）
 │   ├── auth.rs        SshTarget / AuthUi（SilentUi 不發問）/ DbkHandler / connect_and_auth / plan_auth / ssh-agent（含 agent 裡的 OpenSSH 憑證）；私鑰步驟有憑證就先試憑證、被拒再試金鑰本身；跳板機（ProxyJump）：先遞迴連上跳板機，在它上面開 direct-tcpip 通道，目標的 SSH 交握跑在通道上（`connect_stream`），跳板機連線跟著目標一起活著、一起關；`resolve_jump_chain` 解析已存主機的跳板機鏈（擋迴圈、上限 `MAX_JUMPS`）
+│   ├── session_log.rs 終端機工作階段記錄檔（開始時清空、之後追加；內容由前端 sshSessionLog.ts 去 ANSI、處理 \r 重寫後才送來）
 │   ├── host_import.rs 匯入主機（只讀）：~/.ssh/config（每個參數第一個值為準、Include 與萬用字元、Match 略過、%h %r %u %d 展開）與 .xsh 工作階段檔（UTF-16LE INI、子資料夾對應成主機資料夾）；ProxyJump 記下跳板機名稱由前端對到主機，ProxyCommand / 轉送列成提醒
 │   ├── keys.rs        使用者金鑰：格式辨識與載入（OpenSSH / PPK v2·v3 / PKCS#8 / PKCS#1 / SEC1 / DER，補上 OpenSSL 傳統 PEM 的 3DES·DES·AES-CBC 解密）、認得但不能用的格式給轉換說明、OpenSSH 憑證（`<私鑰>-cert.pub`）、金鑰庫（`ssh_keys/`，一律轉存 OpenSSH、原本有密語就用同一個重新加密，主機以 `keystore:<id>` 參照）
 │   ├── tunnel.rs      DB 連線的 direct-tcpip port forward（open_tunnel / TunnelGuard）
