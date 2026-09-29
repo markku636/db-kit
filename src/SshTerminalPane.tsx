@@ -299,7 +299,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
       focus: () => term.focus(),
       reconnect,
     });
-    useSshTerminals.setState((s) => ({ rt: { ...s.rt, [tab.key]: { ...DEFAULT_RUNTIME, connId: "", host: "", user: "", sftpOpen: !!tab.openSftp } } }));
+    useSshTerminals.setState((s) => ({ rt: { ...s.rt, [tab.key]: { ...DEFAULT_RUNTIME, connId: "", host: "", user: "", sftpOpen: !!tab.openSftp, sftpWinRequest: !!tab.openSftpWin } } }));
     void connect();
 
     return () => {
@@ -552,6 +552,15 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
       return false;
     }
   };
+  // 側欄「開啟 SFTP」要的是獨立視窗，但視窗用的是這個分頁的連線：等連上才開，開一次就清掉要求。
+  const sftpWinRequest = !!rt?.sftpWinRequest;
+  useEffect(() => {
+    if (!sftpWinRequest || status !== "connected") return;
+    patch(tab.key, { sftpWinRequest: false });
+    void openSftpWin();
+    // openSftpWin 每次 render 都是新的；只看要求與連線狀態。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sftpWinRequest, status]);
 
   return (
     <div className={active ? "flex-1 flex flex-col min-w-0 min-h-0" : "hidden"} onKeyDownCapture={onKeyDownCapture}>

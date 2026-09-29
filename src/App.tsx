@@ -3006,7 +3006,7 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
       <SshHostTree
         q={q}
         onOpen={(target, title, sessionId, opts) => {
-          useStore.getState().openSshTab({ target, title, sessionId, openSftp: opts?.sftp || undefined });
+          useStore.getState().openSshTab({ target, title, sessionId, openSftp: opts?.sftp || undefined, openSftpWin: opts?.sftpWin || undefined });
         }}
         onEdit={onEditSsh}
       />

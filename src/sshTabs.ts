@@ -17,10 +17,12 @@ export interface SshTab {
   /** target 為 `session` 時的主機 id（側欄高亮 / 重連時重讀設定）。 */
   sessionId?: string;
   /**
-   * 開好就展開 SFTP 面板（側欄「開啟 SFTP」、主機設了一併展開）。放在分頁上而不是開完再 patch：
+   * 開好就展開 SFTP 面板（主機設了一併展開）。放在分頁上而不是開完再 patch：
    * 那時分頁的執行期狀態還沒建立，patch 是空操作，終端機面板初始化時也會把它設回關閉。
    */
   openSftp?: boolean;
+  /** 連上後用獨立視窗開 SFTP（側欄主機的「開啟 SFTP」）。放在分頁上的理由同 `openSftp`。 */
+  openSftpWin?: boolean;
 }
 
 export function isSshTabKey(v: unknown): v is string {

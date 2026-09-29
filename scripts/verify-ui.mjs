@@ -63,6 +63,7 @@ const CASE_FX = {
   "ssh-from-conn-string": { STORAGE_SEED: SSH_STORAGE_SEED, SSH_SESSIONS: { version: 1, folders: [], sessions: [] } },
   "ssh-host-paste": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-host-quick-actions": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ssh-host-menu-sftp-window": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-host-dialog-fits": { STORAGE_SEED: SSH_STORAGE_SEED },
   "tab-menu-close-others": { STORAGE_SEED: SSH_STORAGE_SEED },
   // 助手面板開到最窄（300px）：選項列要往下一行掉，不能把標籤擠成一字一行。
@@ -144,7 +145,7 @@ const CASES = {
     await page.getByRole("button", { name: "取消", exact: true }).last().click();
     await sleep(200);
 
-    await page.getByRole("button", { name: "開啟 SFTP" }).first().click();
+    await page.getByTestId("ssh-sftp-toggle").click();
     const sftp = page.getByTestId("sftp-panel");
     await sftp.getByText("backup.tar.gz", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
     // 開在家目錄而不是根目錄：開啟後更新 sftpId 會觸發重列，曾經拿舊的 "/" 蓋掉家目錄。
@@ -160,7 +161,7 @@ const CASES = {
     // 關掉再打開：回到剛才的資料夾，不是重新從家目錄開始。
     await page.getByRole("button", { name: "關閉 SFTP" }).first().click();
     await sleep(300);
-    await page.getByRole("button", { name: "開啟 SFTP" }).first().click();
+    await page.getByTestId("ssh-sftp-toggle").click();
     await sftp.getByText("app.log", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
     check("SFTP 面板重開後回到上次的資料夾", (await sftp.getByText("app.log", { exact: true }).count()) > 0);
 
@@ -181,7 +182,7 @@ const CASES = {
   // 不擋的話就是「刪一個字，面板跳回上一層」。
   async "sftp-edit-and-chmod"(page) {
     await openSshWeb01(page);
-    await page.getByRole("button", { name: "開啟 SFTP" }).first().click();
+    await page.getByTestId("ssh-sftp-toggle").click();
     const sftp = page.getByTestId("sftp-panel");
     await sftp.getByText("app", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
     await sftp.getByText("app", { exact: true }).first().dblclick();
@@ -546,13 +547,32 @@ const CASES = {
     await row.hover();
     check("已連線時按鈕變成「切到終端機」", (await row.getByRole("button", { name: "切到終端機", exact: true }).count()) === 1);
     await row.getByRole("button", { name: "開啟 SFTP", exact: true }).click();
-    await page.getByTestId("sftp-panel").waitFor({ timeout: 5000 }).catch(() => {});
-    check("已連線時按 SFTP：在原分頁展開，不另開連線", (await page.getByTestId("sftp-panel").count()) === 1 && (await page.locator(".xterm").count()) === terms,
-      JSON.stringify({ before: terms, after: await page.locator(".xterm").count() }));
+    await page.waitForFunction(() => window.__DBKIT_SFTP_WINDOWS__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const wins = await page.evaluate(() => window.__DBKIT_SFTP_WINDOWS__);
+    check("已連線時按 SFTP：開獨立視窗、沿用原分頁的連線",
+      wins.length === 1 && wins[0].op === "open" && (await page.locator(".xterm").count()) === terms && (await page.getByTestId("sftp-panel").count()) === 0,
+      JSON.stringify({ wins, before: terms, after: await page.locator(".xterm").count() }));
     await row.hover();
     await row.getByRole("button", { name: "編輯 SSH 主機", exact: true }).click();
     await page.getByText("編輯 SSH 主機", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
     check("編輯按鈕打開這台的設定", (await page.getByLabel("主機", { exact: true }).inputValue().catch(() => "")) === "10.20.0.15");
+  },
+
+  // 側欄主機右鍵「開啟 SFTP」：開獨立視窗（跟終端機工具列的 SFTP 鈕一樣），不是展開側邊面板。
+  // 還沒連線的主機先開終端機分頁（視窗用它的連線），連上才開視窗。
+  async "ssh-host-menu-sftp-window"(page) {
+    const row = page.locator('[data-ssh-host-tree] [data-ssh-host="ssh-web01"]');
+    await row.waitFor({ timeout: 8000 }).catch(() => {});
+    await row.click({ button: "right" });
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: "開啟 SFTP" }).first().click();
+    await page.waitForFunction(() => window.__DBKIT_SFTP_WINDOWS__.length > 0, null, { timeout: 8000 }).catch(() => {});
+    const wins = await page.evaluate(() => window.__DBKIT_SFTP_WINDOWS__);
+    check("右鍵「開啟 SFTP」：連上後開獨立視窗",
+      wins.length === 1 && wins[0].op === "open" && wins[0].title === "web-01 · deploy@10.20.0.15 — SFTP", JSON.stringify(wins));
+    check("有開終端機分頁、沒有展開側邊面板",
+      (await page.locator(".xterm").count()) === 1 && (await page.getByTestId("sftp-panel").count()) === 0);
+    await sleep(300);
+    check("只開一次視窗", (await page.evaluate(() => window.__DBKIT_SFTP_WINDOWS__.length)) === 1);
   },
 
   // 斷線後終端機上方的提示列：兩顆按鈕必須真的點得到（issue #7：提示列被 xterm 的圖層蓋住，看得到按不到）。
@@ -750,7 +770,7 @@ const CASES = {
   // Delete 刪多項先確認、取消後一個都沒刪。
   async "sftp-multi-select"(page) {
     await openSshWeb01(page);
-    await page.getByRole("button", { name: "開啟 SFTP" }).first().click();
+    await page.getByTestId("ssh-sftp-toggle").click();
     const sftp = page.getByTestId("sftp-panel");
     await sftp.getByText("backup.tar.gz", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
     const row = (n) => sftp.locator(`tr[data-name="${n}"]`);

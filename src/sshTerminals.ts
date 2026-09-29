@@ -30,6 +30,8 @@ export interface SshTermRuntime {
   lastOutput: string | null;
   /** SFTP 分割面板是否展開。 */
   sftpOpen: boolean;
+  /** 要求開 SFTP 獨立視窗：連上（或已經連著）時由終端機面板開掉、清回 false。 */
+  sftpWinRequest: boolean;
 }
 
 export interface CaptureResult {
@@ -86,6 +88,7 @@ export const DEFAULT_RUNTIME: Omit<SshTermRuntime, "connId" | "host" | "user"> =
   lastCommand: null,
   lastOutput: null,
   sftpOpen: false,
+  sftpWinRequest: false,
 };
 
 export const useSshTerminals = create<SshTerminalsStore>((set, get) => ({
