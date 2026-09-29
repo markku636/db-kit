@@ -108,6 +108,8 @@ pub struct SshRuntime {
     conns: Mutex<HashMap<String, Arc<SshConn>>>,
     terms: Mutex<HashMap<String, Arc<TermHandle>>>,
     sftps: Mutex<HashMap<String, Arc<SftpClient>>>,
+    /// sftp_id → 開它的 SFTP 獨立視窗標籤（主視窗開的不記）。視窗關掉時收掉它開的通道。
+    sftp_owners: Mutex<HashMap<String, String>>,
     prompts: Mutex<HashMap<String, PendingPrompt>>,
     transfers: Mutex<HashMap<String, Transfer>>,
 }
@@ -261,7 +263,23 @@ impl SshRuntime {
     }
 
     pub fn remove_sftp(&self, id: &str) -> Option<Arc<SftpClient>> {
+        self.sftp_owners.lock().remove(id);
         self.sftps.lock().remove(id)
+    }
+
+    /// 記下這條 SFTP 通道是哪個 SFTP 獨立視窗開的。
+    pub fn set_sftp_owner(&self, sftp_id: &str, owner: &str) {
+        self.sftp_owners.lock().insert(sftp_id.to_string(), owner.to_string());
+    }
+
+    /// 某個視窗開的 SFTP 通道（還開著的）。
+    pub fn sftp_ids_owned_by(&self, owner: &str) -> Vec<String> {
+        self.sftp_owners
+            .lock()
+            .iter()
+            .filter(|(_, o)| o.as_str() == owner)
+            .map(|(k, _)| k.clone())
+            .collect()
     }
 
     fn take_sftps_for(&self, conn_id: &str) -> Vec<Arc<SftpClient>> {
@@ -271,7 +289,13 @@ impl SshRuntime {
             .filter(|(_, s)| s.conn_id == conn_id)
             .map(|(k, _)| k.clone())
             .collect();
-        ids.into_iter().filter_map(|k| g.remove(&k)).collect()
+        let taken = ids.iter().filter_map(|k| g.remove(k)).collect();
+        drop(g);
+        let mut owners = self.sftp_owners.lock();
+        for k in &ids {
+            owners.remove(k);
+        }
+        taken
     }
 
     // ---- 待答提示 ----
@@ -382,6 +406,20 @@ mod tests {
             f.store(true, Ordering::Relaxed);
         }
         assert!(f2.load(Ordering::Relaxed), "斷線時整條連線的傳輸都取消");
+    }
+
+    #[test]
+    fn sftp_owner_bookkeeping() {
+        let rt = SshRuntime::new();
+        rt.set_sftp_owner("s1", "sftp-a");
+        rt.set_sftp_owner("s2", "sftp-a");
+        rt.set_sftp_owner("s3", "sftp-b");
+        let mut a = rt.sftp_ids_owned_by("sftp-a");
+        a.sort();
+        assert_eq!(a, vec!["s1", "s2"]);
+        assert!(rt.sftp_ids_owned_by("main").is_empty());
+        rt.remove_sftp("s1");
+        assert_eq!(rt.sftp_ids_owned_by("sftp-a"), vec!["s2"], "關掉的通道不再算在視窗名下");
     }
 
     #[tokio::test]

@@ -1,10 +1,11 @@
-// SFTP 檔案瀏覽：掛在 SSH 終端機分頁右側的分割面板（WinSCP 式並排，而非 Xshell 另開 Xftp 視窗）。
+// SFTP 檔案瀏覽：掛在 SSH 終端機分頁右側的分割面板，也是 SFTP 獨立視窗（SftpWindow）的內容。
 // 用同一條 SSH 連線開 sftp subsystem，不會再問一次密碼 / OTP；「在終端機 cd 到此」也因此指向同一個 shell。
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
-  ArrowUp, ChevronRight, Download, EyeOff, File, FilePlus, Folder, FolderPlus, FolderSync, FolderUp, Link2, ListFilter,
+  AppWindow, ArrowUp, ChevronRight, Download, EyeOff, File, FilePlus, Folder, FolderPlus, FolderSync, FolderUp, Link2, ListFilter,
   Maximize2, Minimize2, Pencil, RefreshCw, RotateCw, SquareTerminal, Upload, X, Eye,
 } from "lucide-react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "./api";
 import type { SftpEntry, SftpOnConflict } from "./sshTypes";
 import { sftpFollowedDir, sftpHome, sftpLastPath, useSshTerminals } from "./sshTerminals";
@@ -37,7 +38,25 @@ export interface SftpPanelProps {
   /** 放大成整個分頁（宿主暫時收起終端機）。 */
   maximized?: boolean;
   onToggleMaximize?: () => void;
+  /** 側邊面板「移到獨立視窗」：帶著目前所在的資料夾。 */
+  onPopOut?: (path: string) => void;
+  /** 主機設定的 SFTP 起始資料夾。沒給就從主視窗的分頁 / 主機清單查（獨立視窗裡查不到，由宿主帶進來）。 */
+  startDir?: string;
+  /** 第一次開通道時從這個資料夾開始（優先於終端機所在的資料夾與起始資料夾）。 */
+  initialDir?: string;
+  /**
+   * 收系統的檔案拖放（Tauri 的 drag-drop 事件，拿得到本機路徑）→ 上傳。只有 SFTP 獨立視窗開得了：
+   * 主視窗為了分頁拖曳關掉了 WebView 的檔案拖放，拖進來只拿得到沒有路徑的 File。
+   */
+  nativeDrop?: boolean;
 }
+
+/** Tauri drag-drop 事件的 payload（只取用得到的欄位；position 是實體像素、相對於 WebView 左上角）。 */
+type NativeDrop =
+  | { type: "enter"; paths: string[]; position: { x: number; y: number } }
+  | { type: "over"; position: { x: number; y: number } }
+  | { type: "drop"; paths: string[]; position: { x: number; y: number } }
+  | { type: "leave" };
 
 type SortCol = "name" | "size" | "mtime";
 
@@ -76,7 +95,9 @@ function isDirEntry(e: SftpEntry): boolean {
   return e.is_dir || e.link_target_is_dir === true;
 }
 
-export default function SftpPanel({ tabKey, connId, onCd, onClose, maximized = false, onToggleMaximize }: SftpPanelProps) {
+export default function SftpPanel({
+  tabKey, connId, onCd, onClose, maximized = false, onToggleMaximize, onPopOut, startDir, initialDir, nativeDrop = false,
+}: SftpPanelProps) {
   const t = useT();
   const sftpId = useSshTerminals((s) => s.rt[tabKey]?.sftpId ?? null);
   const status = useSshTerminals((s) => s.rt[tabKey]?.status);
@@ -107,6 +128,10 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose, maximized = f
   const [filter, setFilter] = useState("");
   // 剪下的項目（到別的資料夾貼上 = 移動）。`dir` = 剪下時所在的資料夾，回到那裡時把它們畫淡。
   const [clip, setClip] = useState<{ dir: string; items: SftpEntry[] } | null>(null);
+  // 系統檔案拖進來時，放開會上傳到哪個遠端資料夾（游標停在資料夾那一列 = 那個資料夾，否則目前的資料夾）。
+  const [dropDir, setDropDir] = useState<string | null>(null);
+  // 側邊面板收不到拖放的路徑：拖著檔案經過時提示改用獨立視窗。
+  const [dragHint, setDragHint] = useState(false);
   const filterRef = useRef<HTMLInputElement>(null);
   const pathInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -190,7 +215,7 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose, maximized = f
         listedRef.current = info.sftp_id;
         setHome(h);
         patch(tabKey, { sftpId: info.sftp_id });
-        const start = td && td !== h ? td : resolveSftpDir(startDirOf(tabKey), h);
+        const start = initialDir || (td && td !== h ? td : resolveSftpDir(startDir ?? startDirOf(tabKey), h));
         // 起始資料夾不存在 / 沒權限：退回家目錄，別讓面板一打開就是一片錯誤。
         if (!(await list(info.sftp_id, start)) && start !== h) await list(info.sftp_id, h);
       } catch (e) {
@@ -347,15 +372,22 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose, maximized = f
     if (targets.length === 1 && !isDirEntry(targets[0])) void downloadFile(targets[0]);
     else void downloadMany(targets);
   };
-  // 上傳（多個檔案，或一個資料夾）到目前資料夾。同名用目前的清單判斷；後端開始前會再確認一次。
-  const uploadMany = async (locals: string[], isFolder: boolean) => {
+  // 上傳（多個檔案 / 資料夾，可混合）到 `dest`（預設目前資料夾）。同名用那個資料夾的清單判斷；後端開始前會再確認一次。
+  // `isFolder`：從「上傳資料夾」來的；拖放進來的分不出檔案或資料夾，單一項目撞到遠端資料夾就當成合併資料夾。
+  const uploadMany = async (locals: string[], isFolder: boolean, dest = path) => {
     if (!sftpId || !locals.length) return;
     const names = locals.map(baseName);
-    const existing = new Set(entries.map((x) => x.name));
+    let there = entries;
+    if (dest !== path) {
+      try { there = await api.sshSftpList(sftpId, dest); }
+      catch (err) { toast.error(t("無法開啟目的資料夾 {dir}：{msg}", { dir: dest, msg: errMsg(err) })); return; }
+    }
+    const existing = new Map(there.map((x) => [x.name, x]));
     const clash = names.filter((n) => existing.has(n));
-    const onConflict = await askConflict(clash, locals.length, isFolder && locals.length === 1 ? "remote" : null);
+    const single = locals.length === 1;
+    const folderClash = single && clash.length === 1 && isDirEntry(existing.get(clash[0])!);
+    const onConflict = await askConflict(clash, locals.length, single && (isFolder || folderClash) ? "remote" : null);
     if (!onConflict) return;
-    const dest = path;
     try {
       const id = await api.sshSftpUploadMany(sftpId, locals, dest, onConflict);
       useSshTransfers.getState().track({
@@ -372,6 +404,55 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose, maximized = f
     if (!sftpId) return;
     const dir = await pickDirectory();
     if (dir) await uploadMany([dir], true);
+  };
+
+  // ---- 拖放上傳（SFTP 獨立視窗：Tauri 的 drag-drop 事件帶本機路徑）----
+  /** 游標底下（實體像素）那一列是資料夾就放進那個資料夾，否則放進目前的資料夾。 */
+  const dropTargetAt = (pos: { x: number; y: number }): string => {
+    const dpr = window.devicePixelRatio || 1;
+    const row = document.elementFromPoint(pos.x / dpr, pos.y / dpr)?.closest?.("tr[data-name]");
+    const name = row?.getAttribute("data-name");
+    const hit = name != null ? visible.find((x) => x.name === name) : undefined;
+    return hit && isDirEntry(hit) ? hit.path : path;
+  };
+  const onNativeDrop = (p: NativeDrop) => {
+    if (p.type === "leave") { setDropDir(null); return; }
+    const dir = dropTargetAt(p.position);
+    if (p.type !== "drop") { setDropDir(dir); return; }
+    setDropDir(null);
+    if (!p.paths.length) return;
+    if (!sftpId) { toast.error(t("SFTP 還沒連上，等連線好再拖進來")); return; }
+    void uploadMany(p.paths, false, dir);
+  };
+  // 監聽只掛一次，事件進來時用最新的一版（目前資料夾、清單、sftpId 都會變）。
+  const nativeDropRef = useRef(onNativeDrop);
+  useEffect(() => { nativeDropRef.current = onNativeDrop; });
+  useEffect(() => {
+    if (!nativeDrop) return;
+    let alive = true;
+    let un: (() => void) | undefined;
+    getCurrentWebview().onDragDropEvent((e) => nativeDropRef.current(e.payload as NativeDrop))
+      .then((u) => { if (alive) un = u; else u(); })
+      .catch(() => undefined);
+    return () => { alive = false; un?.(); };
+  }, [nativeDrop]);
+  // 側邊面板：拖著檔案經過時提示改用獨立視窗（這裡的 drop 只拿得到沒有路徑的 File，傳不了）。
+  const draggingFiles = (e: ReactDragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  const htmlDragProps = nativeDrop || !onPopOut ? {} : {
+    onDragOver: (e: ReactDragEvent) => {
+      if (!draggingFiles(e)) return;
+      e.preventDefault();
+      setDragHint(true);
+    },
+    onDragLeave: (e: ReactDragEvent) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragHint(false);
+    },
+    onDrop: (e: ReactDragEvent) => {
+      if (!draggingFiles(e)) return;
+      e.preventDefault();
+      setDragHint(false);
+      toast.info(t("拖放上傳請在 SFTP 獨立視窗裡進行：按上方的「移到獨立視窗」，再把檔案拖進去"));
+    },
   };
   const mkdir = async () => {
     if (!sftpId) return;
@@ -561,7 +642,7 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose, maximized = f
   };
 
   return (
-    <div data-testid="sftp-panel" className="flex-1 flex flex-col min-h-0 min-w-0 text-xs" tabIndex={0} onKeyDown={onKeyDown}>
+    <div data-testid="sftp-panel" className="flex-1 flex flex-col min-h-0 min-w-0 text-xs" tabIndex={0} onKeyDown={onKeyDown} {...htmlDragProps}>
       {/* 標題列：對檔案的動作 */}
       <div className="h-8 shrink-0 flex items-center gap-1 px-2 border-b border-fg/10">
         <span className="font-medium text-fg/70">SFTP</span>
@@ -571,6 +652,9 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose, maximized = f
           <IconButton icon={Download} label={t("下載選取的項目")} onClick={() => download(selectedEntries)} disabled={!sftpId || !selectedEntries.length} />
           <IconButton icon={Upload} label={t("上傳檔案")} onClick={() => void uploadFiles()} disabled={!sftpId} />
           <IconButton icon={FolderUp} label={t("上傳資料夾")} onClick={() => void uploadFolder()} disabled={!sftpId} />
+          {onPopOut && (
+            <IconButton icon={AppWindow} label={t("移到獨立視窗（可拖放檔案上傳）")} onClick={() => onPopOut(path)} />
+          )}
           {onToggleMaximize && (
             <IconButton icon={maximized ? Minimize2 : Maximize2} label={maximized ? t("還原 SFTP 面板大小") : t("放大 SFTP 面板")}
               active={maximized} onClick={onToggleMaximize} />
@@ -632,61 +716,82 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose, maximized = f
         <IconButton icon={showHidden ? Eye : EyeOff} label={showHidden ? t("隱藏隱藏檔") : t("顯示隱藏檔")} box="w-6 h-6" iconSize={13}
           active={showHidden} onClick={() => setShowHidden((v) => !v)} />
       </div>
-      {/* 清單 */}
-      <div ref={listRef} data-sftp-list="" className="flex-1 min-h-0 overflow-auto"
-        onClick={(e) => {
-          // 點在空白處（不是任何一列、也不是欄位標題）→ 清除選取，與檔案總管一致。
-          const el = e.target as HTMLElement;
-          if (!el.closest("tr[data-name]") && !el.closest("thead")) setSel(EMPTY_SELECTION);
-        }}
-        onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, entry: null, targets: [] }); }}>
-        {/* table-fixed：固定欄寬照 <th> 的 w-*，名稱欄吃剩下的寬度、太長就省略號，整張表不會比面板寬。 */}
-        <table className="w-full table-fixed border-collapse select-none">
-          <thead className="sticky top-0 bg-panel text-fg/45 text-[10px] uppercase tracking-wide">
-            <tr>
-              <th className="text-left font-normal px-2 py-1 cursor-pointer whitespace-nowrap" onClick={() => toggleSort("name")}>{t("名稱")}{sortMark("name")}</th>
-              <th className="text-right font-normal px-2 py-1 cursor-pointer whitespace-nowrap w-16" onClick={() => toggleSort("size")}>{t("大小")}{sortMark("size")}</th>
-              {showMtime && <th className="text-left font-normal px-2 py-1 cursor-pointer whitespace-nowrap w-32" onClick={() => toggleSort("mtime")}>{t("修改時間")}{sortMark("mtime")}</th>}
-              {showMode && <th className="text-left font-normal px-1 py-1 whitespace-nowrap w-20 mono">{t("權限")}</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((e) => {
-              const dir = isDirEntry(e);
-              const isSel = sel.names.has(e.name);
-              const isCut = cutHere.has(e.name);
-              return (
-                <tr key={e.name} data-name={e.name} aria-selected={isSel}
-                  onClick={(ev) => setSel((s) => clickSelect(s, e.name, { ctrl: ev.ctrlKey || ev.metaKey, shift: ev.shiftKey }, order))}
-                  onDoubleClick={() => openEntry(e)}
-                  onContextMenu={(ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    const next = contextSelect(sel, e.name);
-                    setSel(next);
-                    setMenu({ x: ev.clientX, y: ev.clientY, entry: e, targets: visible.filter((x) => next.names.has(x.name)) });
-                  }}
-                  className={`cursor-default ${isSel ? "bg-accent/15" : "hover:bg-fg/5"} ${isCut ? "opacity-50" : ""}`}>
-                  <td className="px-2 py-0.5 whitespace-nowrap overflow-hidden">
-                    <span className="flex items-center gap-1.5 min-w-0">
-                      <Icon icon={e.is_symlink ? Link2 : dir ? Folder : File} size={13}
-                        className={`shrink-0 ${dir ? "text-amber-300/80" : e.is_symlink ? "text-sky-300/70" : "text-fg/40"}`} />
-                      <span className="truncate min-w-0" title={e.path}>{e.name}</span>
-                    </span>
-                  </td>
-                  <td className="px-2 py-0.5 text-right text-fg/60 mono whitespace-nowrap overflow-hidden text-ellipsis">{dir ? "" : fmtBytes(e.size)}</td>
-                  {showMtime && <td className="px-2 py-0.5 text-fg/50 whitespace-nowrap overflow-hidden text-ellipsis">{fmtMtime(e.mtime)}</td>}
-                  {showMode && <td className="px-1 py-0.5 text-fg/40 mono whitespace-nowrap overflow-hidden text-ellipsis">{e.mode}</td>}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {loading && <div className="flex items-center gap-2 p-3 text-fg/50"><Spinner size={12} />{t("載入中…")}</div>}
-        {!loading && error && <div className="p-3 text-danger">{error}</div>}
-        {!loading && !error && visible.length === 0 && (
-          <div className="p-3 text-fg/40">{filter.trim() ? t("沒有符合「{q}」的項目", { q: filter.trim() }) : t("（空資料夾）")}</div>
+      {/* 清單（拖放提示疊在上面，不跟著清單捲動） */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        {dropDir != null && (
+          <div data-testid="sftp-drop-target" data-dir={dropDir}
+            className={`absolute inset-0 z-10 pointer-events-none flex items-end justify-center p-3 rounded ${dropDir === path ? "border-2 border-dashed border-accent/70 bg-accent/5" : ""}`}>
+            <span className="px-3 py-1.5 rounded bg-elevated border border-accent/40 shadow-lg text-fg/90 flex items-center gap-1.5 max-w-full">
+              <Icon icon={Upload} size={13} className="text-accent shrink-0" />
+              <span className="truncate mono" title={dropDir}>{t("放開以上傳到 {dir}", { dir: dropDir })}</span>
+            </span>
+          </div>
         )}
+        {dragHint && (
+          <div data-testid="sftp-drag-hint" className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center p-4 bg-app/75">
+            <div className="max-w-xs text-center space-y-1.5 px-4 py-3 rounded bg-elevated border border-fg/15 shadow-lg">
+              <Icon icon={AppWindow} size={20} className="mx-auto text-accent" />
+              <div className="font-medium text-fg/90">{t("拖放上傳請用 SFTP 獨立視窗")}</div>
+              <div className="text-fg/55">{t("按上方的「移到獨立視窗」，再把檔案拖進去")}</div>
+            </div>
+          </div>
+        )}
+        <div ref={listRef} data-sftp-list="" className="flex-1 min-h-0 overflow-auto"
+          onClick={(e) => {
+            // 點在空白處（不是任何一列、也不是欄位標題）→ 清除選取，與檔案總管一致。
+            const el = e.target as HTMLElement;
+            if (!el.closest("tr[data-name]") && !el.closest("thead")) setSel(EMPTY_SELECTION);
+          }}
+          onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, entry: null, targets: [] }); }}>
+          {/* table-fixed：固定欄寬照 <th> 的 w-*，名稱欄吃剩下的寬度、太長就省略號，整張表不會比面板寬。 */}
+          <table className="w-full table-fixed border-collapse select-none">
+            <thead className="sticky top-0 bg-panel text-fg/45 text-[10px] uppercase tracking-wide">
+              <tr>
+                <th className="text-left font-normal px-2 py-1 cursor-pointer whitespace-nowrap" onClick={() => toggleSort("name")}>{t("名稱")}{sortMark("name")}</th>
+                <th className="text-right font-normal px-2 py-1 cursor-pointer whitespace-nowrap w-16" onClick={() => toggleSort("size")}>{t("大小")}{sortMark("size")}</th>
+                {showMtime && <th className="text-left font-normal px-2 py-1 cursor-pointer whitespace-nowrap w-32" onClick={() => toggleSort("mtime")}>{t("修改時間")}{sortMark("mtime")}</th>}
+                {showMode && <th className="text-left font-normal px-1 py-1 whitespace-nowrap w-20 mono">{t("權限")}</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((e) => {
+                const dir = isDirEntry(e);
+                const isSel = sel.names.has(e.name);
+                const isCut = cutHere.has(e.name);
+                const isDrop = dropDir != null && dropDir === e.path && dropDir !== path;
+                return (
+                  <tr key={e.name} data-name={e.name} aria-selected={isSel} data-drop={isDrop || undefined}
+                    onClick={(ev) => setSel((s) => clickSelect(s, e.name, { ctrl: ev.ctrlKey || ev.metaKey, shift: ev.shiftKey }, order))}
+                    onDoubleClick={() => openEntry(e)}
+                    onContextMenu={(ev) => {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      const next = contextSelect(sel, e.name);
+                      setSel(next);
+                      setMenu({ x: ev.clientX, y: ev.clientY, entry: e, targets: visible.filter((x) => next.names.has(x.name)) });
+                    }}
+                    className={`cursor-default ${isDrop ? "bg-accent/25 outline outline-1 -outline-offset-1 outline-accent/70" : isSel ? "bg-accent/15" : "hover:bg-fg/5"} ${isCut ? "opacity-50" : ""}`}>
+                    <td className="px-2 py-0.5 whitespace-nowrap overflow-hidden">
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <Icon icon={e.is_symlink ? Link2 : dir ? Folder : File} size={13}
+                          className={`shrink-0 ${dir ? "text-amber-300/80" : e.is_symlink ? "text-sky-300/70" : "text-fg/40"}`} />
+                        <span className="truncate min-w-0" title={e.path}>{e.name}</span>
+                      </span>
+                    </td>
+                    <td className="px-2 py-0.5 text-right text-fg/60 mono whitespace-nowrap overflow-hidden text-ellipsis">{dir ? "" : fmtBytes(e.size)}</td>
+                    {showMtime && <td className="px-2 py-0.5 text-fg/50 whitespace-nowrap overflow-hidden text-ellipsis">{fmtMtime(e.mtime)}</td>}
+                    {showMode && <td className="px-1 py-0.5 text-fg/40 mono whitespace-nowrap overflow-hidden text-ellipsis">{e.mode}</td>}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {loading && <div className="flex items-center gap-2 p-3 text-fg/50"><Spinner size={12} />{t("載入中…")}</div>}
+          {!loading && error && <div className="p-3 text-danger">{error}</div>}
+          {!loading && !error && visible.length === 0 && (
+            <div className="p-3 text-fg/40">{filter.trim() ? t("沒有符合「{q}」的項目", { q: filter.trim() }) : t("（空資料夾）")}</div>
+          )}
+        </div>
       </div>
       {/* 狀態列：項目數 / 選取摘要（Xftp 底部的摘要） */}
       <div data-testid="sftp-status" className="shrink-0 flex items-center gap-2 px-2 py-0.5 border-t border-fg/10 text-[10px] text-fg/45">
@@ -700,6 +805,11 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose, maximized = f
             {single.name}{single.is_dir ? "" : ` · ${fmtBytes(single.size)}`}{single.permissions != null ? ` · ${toOctal(single.permissions)}` : ""}
           </span>
         ) : null}
+        {nativeDrop && !clip && (
+          <span className="ml-auto min-w-0 truncate hidden sm:inline text-fg/35" title={t("可把檔案或資料夾拖進來上傳，拖到資料夾上就放進那個資料夾")}>
+            {t("可把檔案或資料夾拖進來上傳，拖到資料夾上就放進那個資料夾")}
+          </span>
+        )}
         {clip && (
           <span data-testid="sftp-clip" className="ml-auto shrink-0 flex items-center gap-1 text-accent/80">
             {t("已剪下 {n} 項 · 到目的資料夾貼上（Ctrl+V）", { n: clip.items.length })}

@@ -1997,6 +1997,9 @@ export const api = {
   sshSftpLocalConflicts: (localDir: string, names: string[]) =>
     invoke<string[]>("ssh_sftp_local_conflicts", { localDir, names }),
   sshSftpCancel: (transferId: string) => invoke<void>("ssh_sftp_cancel", { transferId }),
+  // SFTP 獨立視窗：一個終端機分頁一個，已經開著就叫到最前面（回 false）。分頁關閉時由主視窗收掉。
+  sshSftpWindowOpen: (tabKey: string, title: string) => invoke<boolean>("ssh_sftp_window_open", { tabKey, title }),
+  sshSftpWindowClose: (tabKey: string) => invoke<void>("ssh_sftp_window_close", { tabKey }),
   // 使用者金鑰（Xshell 的「使用者金鑰管理員」）：檢視任何格式的私鑰（含 keystore:<id>）、金鑰庫 CRUD、產生、匯出。
   sshKeyInspect: (source: SshKeySource, passphrase: string | null, certificatePath: string | null) =>
     invoke<SshKeyInspect>("ssh_key_inspect", { source, passphrase, certificatePath }),

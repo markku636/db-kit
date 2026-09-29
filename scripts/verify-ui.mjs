@@ -69,6 +69,8 @@ const CASE_FX = {
   "assistant-ssh-mode": { STORAGE_SEED: { ...SSH_STORAGE_SEED, "db-kit:assistantWidth": 300 } },
   "ssh-status-and-log": { STORAGE_SEED: SSH_STORAGE_SEED },
   "info-panel-ssh-details": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "sftp-window-host": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "sftp-window-view": { STORAGE_SEED: SSH_STORAGE_SEED },
   // 同一個情境換成預設的渲染器（WebGL，開不起來才退回 DOM）：issue #7 的使用者用的就是預設值。
   "ssh-disconnect-overlay-webgl": {},
 };
@@ -828,14 +830,15 @@ const CASES = {
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 
-  // SFTP 與終端機所在的資料夾：工具列上帶字的「SFTP」緊鄰「AI 協助」；在終端機 cd 之後打開面板就列那裡
+  // SFTP 與終端機所在的資料夾：工具列上帶字的「SFTP」（開獨立視窗）緊鄰「AI 協助」；在終端機 cd 之後打開側邊面板就列那裡
   // （假 shell 跟 Ubuntu 一樣用視窗標題回報 `user@host: ~/dir`）；關掉再開：終端機沒動 → 回到面板上次的位置，
   // 終端機換了 → 跳過去；「跟隨終端機」開著時 cd 一下面板就跟著換；放大 / 還原面板時終端機藏起來再回來。
   async "sftp-follow-terminal"(page) {
     await openSshWeb01(page);
     const toggle = page.getByTestId("ssh-sftp-toggle");
-    check("工具列有帶字的 SFTP 按鈕", (await toggle.innerText().catch(() => "")).includes("SFTP"));
-    const prev = await toggle.evaluate((el) => el.previousElementSibling?.getAttribute("aria-label") ?? "").catch(() => "");
+    const winBtn = page.getByTestId("ssh-sftp-window");
+    check("工具列有帶字的 SFTP 按鈕", (await winBtn.innerText().catch(() => "")).includes("SFTP"));
+    const prev = await winBtn.evaluate((el) => el.previousElementSibling?.getAttribute("aria-label") ?? "").catch(() => "");
     check("SFTP 按鈕緊鄰「AI 協助」", prev === "AI 協助", prev);
     const compose = page.getByTestId("ssh-compose");
     const run = async (cmd) => { await compose.fill(cmd); await compose.press("Enter"); await sleep(400); };
@@ -883,6 +886,191 @@ const CASES = {
     await sftp.getByRole("button", { name: "還原 SFTP 面板大小" }).click();
     await sleep(200);
     check("還原：終端機回來", await page.locator(".xterm").first().isVisible());
+    check("沒有未實作的 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // SFTP 獨立視窗（主視窗這一側）：工具列的「SFTP」開視窗、側邊面板鈕留在最右邊；視窗打招呼 → 推連線狀態，
+  // 終端機 cd → 推新的資料夾；視窗要求 cd → 送進 shell；側邊面板「移到獨立視窗」帶著所在資料夾、只帶一次；
+  // 側邊面板拖著檔案經過 → 提示改用獨立視窗；關分頁 → 收掉視窗。
+  async "sftp-window-host"(page) {
+    await openSshWeb01(page);
+    const winBtn = page.getByTestId("ssh-sftp-window");
+    const toggle = page.getByTestId("ssh-sftp-toggle");
+    check("SFTP 視窗鈕緊鄰「AI 協助」",
+      (await winBtn.evaluate((el) => el.previousElementSibling?.getAttribute("aria-label") ?? "").catch(() => "")) === "AI 協助");
+    check("側邊面板鈕在工具列最右邊", await toggle.evaluate((el) => el.nextElementSibling === null).catch(() => false));
+    const windows = () => page.evaluate(() => window.__DBKIT_SFTP_WINDOWS__);
+    await winBtn.click();
+    await page.waitForFunction(() => window.__DBKIT_SFTP_WINDOWS__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const opened = (await windows())[0];
+    check("按 SFTP：開獨立視窗（帶分頁鍵與主機）",
+      opened?.op === "open" && String(opened.tabKey).startsWith("__ssh__:") && opened.title === "web-01 · deploy@10.20.0.15 — SFTP", JSON.stringify(opened));
+    check("視窗開著：SFTP 鈕亮起", /text-accent/.test((await winBtn.getAttribute("class")) ?? ""));
+    check("開視窗不會順手打開側邊面板", (await page.getByTestId("sftp-panel").count()) === 0);
+    const tabKey = opened?.tabKey;
+    const emitTo = (event, extra = {}) => page.evaluate(([e, p]) => window.__DBKIT_EMIT__(e, p), [event, { tabKey, ...extra }]);
+    const lastState = () => page.evaluate((k) => window.__DBKIT_EMITTED__
+      .filter((e) => e.event === "sftp-win-state" && e.payload?.tabKey === k).map((e) => e.payload).at(-1) ?? null, tabKey);
+
+    await emitTo("sftp-win-hello");
+    await sleep(200);
+    let st = await lastState();
+    check("視窗打招呼 → 主視窗推連線狀態", st?.status === "connected" && !!st.connId && st.locked === false && st.initialDir === null, JSON.stringify(st));
+    const compose = page.getByTestId("ssh-compose");
+    await compose.fill("cd logs");
+    await compose.press("Enter");
+    await sleep(500);
+    st = await lastState();
+    check("終端機 cd 之後：新的資料夾推給視窗", /~\/logs/.test(st?.title ?? ""), JSON.stringify(st));
+    await emitTo("sftp-win-cd", { path: "/var/log/my app" });
+    await sleep(400);
+    const writes = await page.evaluate(() => window.__DBKIT_SSH_WRITES__);
+    check("視窗的「在終端機 cd 到此」送進 shell（路徑有空白也對）", writes.includes("cd '/var/log/my app'"), JSON.stringify(writes));
+    await emitTo("sftp-win-bye");
+    await sleep(150);
+    check("視窗關掉：SFTP 鈕不再亮", !/text-accent/.test((await winBtn.getAttribute("class")) ?? ""));
+
+    await toggle.click();
+    const sftp = page.getByTestId("sftp-panel");
+    await sftp.locator('tr[data-name="app.log"]').waitFor({ timeout: 5000 }).catch(() => {});
+    // 側邊面板收不到檔案路徑：拖著檔案經過要提示改用獨立視窗，放開也只是提示。
+    const dragFile = (type) => sftp.evaluate((el, ty) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(["x"], "a.txt"));
+      el.querySelector("[data-sftp-list]").dispatchEvent(new DragEvent(ty, { dataTransfer: dt, bubbles: true, cancelable: true }));
+    }, type);
+    await dragFile("dragover");
+    await sleep(100);
+    check("側邊面板拖著檔案經過：提示改用獨立視窗", (await page.getByTestId("sftp-drag-hint").count()) === 1);
+    await dragFile("drop");
+    await sleep(150);
+    check("放開：提示收起、說明怎麼拖放上傳", (await page.getByTestId("sftp-drag-hint").count()) === 0
+      && (await page.getByText(/拖放上傳請在 SFTP 獨立視窗裡進行/).count()) > 0);
+
+    await sftp.getByRole("button", { name: "移到獨立視窗（可拖放檔案上傳）" }).click();
+    await page.waitForFunction(() => window.__DBKIT_SFTP_WINDOWS__.length > 1, null, { timeout: 5000 }).catch(() => {});
+    await sleep(150);
+    check("「移到獨立視窗」：開視窗、收起側邊面板", (await windows())[1]?.op === "open" && (await sftp.count()) === 0, JSON.stringify(await windows()));
+    await emitTo("sftp-win-hello");
+    await sleep(200);
+    st = await lastState();
+    check("移過去的視窗從面板所在的資料夾開始", st?.initialDir === "/home/deploy/logs", JSON.stringify(st));
+    await emitTo("sftp-win-hello");
+    await sleep(200);
+    check("起始資料夾只帶一次（視窗重新載入就照一般規則）", (await lastState())?.initialDir === null);
+
+    await page.getByRole("button", { name: /^關閉分頁 web-01/ }).first().click();
+    await page.waitForFunction((k) => window.__DBKIT_SFTP_WINDOWS__.some((w) => w.op === "close" && w.tabKey === k), tabKey, { timeout: 5000 }).catch(() => {});
+    check("關掉終端機分頁：SFTP 視窗跟著收掉", (await windows()).some((w) => w.op === "close" && w.tabKey === tabKey), JSON.stringify(await windows()));
+    check("沒有未實作的 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // SFTP 獨立視窗（視窗這一側，直接開 sftp.html）：等主視窗推狀態才開面板、開在終端機所在的資料夾；
+  // 系統檔案拖進來（Tauri drag-drop 事件）→ 游標在資料夾那一列就上傳到那個資料夾、否則目前的資料夾，撞名照樣問；
+  // 「在終端機 cd 到此」推回主視窗；斷線提示、重新連線後在新連線上重開；鎖定遮罩；有傳輸在跑時關窗先問。
+  async "sftp-window-view"(page) {
+    const tabKey = "__ssh__:t-win";
+    await page.goto(new URL(`sftp.html?tab=${encodeURIComponent(tabKey)}`, page.url()).href, { waitUntil: "domcontentloaded" });
+    await page.getByTestId("sftp-window-waiting").waitFor({ timeout: 5000 }).catch(() => {});
+    const helloSent = () => page.evaluate((k) => window.__DBKIT_EMITTED__.some((e) => e.event === "sftp-win-hello" && e.payload?.tabKey === k), tabKey);
+    await page.waitForFunction((k) => window.__DBKIT_EMITTED__.some((e) => e.event === "sftp-win-hello" && e.payload?.tabKey === k), tabKey, { timeout: 5000 }).catch(() => {});
+    check("視窗一開就向主視窗打招呼", await helloSent());
+    check("還沒收到狀態：顯示等待中、不開 sftp 通道",
+      (await page.getByTestId("sftp-window-waiting").count()) === 1 && (await page.evaluate(() => window.__DBKIT_SFTP_OPENS__.length)) === 0);
+    const base = { tabKey, connId: "c-win-1", status: "connected", title: "deploy@web-01: ~", cwd: null, host: "web-01", user: "deploy", startDir: null, initialDir: null, locked: false };
+    const state = (p) => page.evaluate((s) => window.__DBKIT_EMIT__("sftp-win-state", s), { ...base, ...p });
+    await state({});
+    const sftp = page.getByTestId("sftp-panel");
+    const row = (n) => sftp.locator(`tr[data-name="${n}"]`);
+    await row("backup.tar.gz").waitFor({ timeout: 5000 }).catch(() => {});
+    const opens = () => page.evaluate(() => window.__DBKIT_SFTP_OPENS__);
+    check("收到狀態：在主視窗的連線上開 sftp、列出家目錄",
+      (await row("backup.tar.gz").count()) === 1 && JSON.stringify(await opens()) === JSON.stringify(["c-win-1"]), JSON.stringify(await opens()));
+    check("視窗標題帶主機", (await page.title()).includes("deploy@web-01"), await page.title());
+    check("狀態列提示可以拖檔案進來", (await page.getByText(/可把檔案或資料夾拖進來上傳/).count()) > 0);
+
+    // 系統拖放：position 是實體像素（headless 的 devicePixelRatio = 1）
+    const center = async (loc) => {
+      const b = await loc.boundingBox();
+      return b ? { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) } : { x: 0, y: 0 };
+    };
+    const drag = (event, payload) => page.evaluate(([e, p]) => window.__DBKIT_EMIT__(e, p), [event, payload]);
+    const batches = () => page.evaluate(() => window.__DBKIT_SFTP_BATCH__);
+    const onLogs = await center(row("logs"));
+    await drag("tauri://drag-enter", { paths: ["C:\\tmp\\report.csv"], position: onLogs });
+    await drag("tauri://drag-over", { position: onLogs });
+    await sleep(150);
+    check("拖到資料夾那一列：那一列亮起、提示放進那個資料夾",
+      (await row("logs").getAttribute("data-drop")) === "true"
+      && (await page.getByTestId("sftp-drop-target").getAttribute("data-dir").catch(() => "")) === "/home/deploy/logs");
+    await drag("tauri://drag-drop", { paths: ["C:\\tmp\\report.csv", "C:\\tmp\\photos"], position: onLogs });
+    await page.waitForFunction(() => window.__DBKIT_SFTP_BATCH__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const up1 = (await batches())[0];
+    check("放在資料夾上：整批上傳到那個資料夾",
+      up1?.kind === "upload" && up1.remoteDir === "/home/deploy/logs" && up1.onConflict === "fail"
+      && JSON.stringify(up1.locals) === JSON.stringify(["C:\\tmp\\report.csv", "C:\\tmp\\photos"]), JSON.stringify(up1));
+    check("放開後拖放提示收起", (await page.getByTestId("sftp-drop-target").count()) === 0);
+
+    const listBox = await sftp.locator("[data-sftp-list]").boundingBox();
+    const blank = { x: Math.round(listBox.x + listBox.width / 2), y: Math.round(listBox.y + listBox.height - 12) };
+    await drag("tauri://drag-enter", { paths: ["C:\\tmp\\backup.tar.gz"], position: blank });
+    await sleep(100);
+    check("拖到空白處：目標是目前的資料夾", (await page.getByTestId("sftp-drop-target").getAttribute("data-dir").catch(() => "")) === "/home/deploy");
+    await drag("tauri://drag-leave", {});
+    await sleep(100);
+    check("拖出視窗：提示收起", (await page.getByTestId("sftp-drop-target").count()) === 0);
+    await drag("tauri://drag-drop", { paths: ["C:\\tmp\\backup.tar.gz"], position: blank });
+    const resumeChoice = page.getByRole("button", { name: "續傳", exact: true }).last();
+    await resumeChoice.waitFor({ timeout: 5000 }).catch(() => {});
+    check("拖進來的檔案撞名：照樣先問（可選續傳）", (await page.getByText(/遠端已有「backup\.tar\.gz」/).count()) > 0);
+    await resumeChoice.click().catch(() => {});
+    await page.waitForFunction(() => window.__DBKIT_SFTP_BATCH__.length > 1, null, { timeout: 5000 }).catch(() => {});
+    const up2 = (await batches())[1];
+    check("選「續傳」→ 上傳到目前的資料夾、帶 resume", up2?.remoteDir === "/home/deploy" && up2.onConflict === "resume", JSON.stringify(up2));
+
+    await row("app").click({ button: "right" });
+    await sleep(150);
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: "在終端機 cd 到此" }).first().click();
+    await sleep(200);
+    check("「在終端機 cd 到此」推回主視窗", await page.evaluate((k) => window.__DBKIT_EMITTED__
+      .some((e) => e.event === "sftp-win-cd" && e.payload?.tabKey === k && e.payload.path === "/home/deploy/app"), tabKey));
+
+    await state({ status: "disconnected" });
+    await sleep(150);
+    check("主視窗斷線：顯示斷線提示", /連線已中斷/.test(await page.getByTestId("sftp-window-banner").innerText().catch(() => "")));
+    await state({ connId: "c-win-2", status: "connected" });
+    await page.waitForFunction(() => window.__DBKIT_SFTP_OPENS__.length > 1, null, { timeout: 5000 }).catch(() => {});
+    check("重新連線（新的連線 id）：提示收起、在新連線上重開 sftp",
+      (await page.getByTestId("sftp-window-banner").count()) === 0 && (await opens()).at(-1) === "c-win-2", JSON.stringify(await opens()));
+
+    await state({ connId: "c-win-2", locked: true });
+    await sleep(150);
+    check("App 鎖定：視窗蓋上遮罩、清單不能操作",
+      (await page.getByTestId("sftp-window-locked").count()) === 1 && await sftp.evaluate((el) => !!el.closest("[inert]")));
+    await state({ connId: "c-win-2", locked: false });
+    await sleep(150);
+    check("解鎖：遮罩拿掉", (await page.getByTestId("sftp-window-locked").count()) === 0 && await sftp.evaluate((el) => !el.closest("[inert]")));
+
+    // 有傳輸在跑時關窗：先問；取消就不關，確定才 destroy。
+    const destroyed = () => page.evaluate(() => window.__DBKIT_WINDOW_CALLS__.includes("plugin:window|destroy"));
+    await page.evaluate(() => { window.__DBKIT_SFTP_SLOW__ = true; });
+    await row("logs").waitFor({ timeout: 5000 }).catch(() => {});
+    await drag("tauri://drag-drop", { paths: ["C:\\tmp\\big.iso"], position: blank });
+    await sftp.locator('[data-testid="sftp-job"][data-state="running"]').first().waitFor({ timeout: 5000 }).catch(() => {});
+    await sftp.getByRole("button", { name: "關閉 SFTP", exact: true }).click();
+    const ask = page.getByText(/還有 1 個傳輸沒完成/);
+    await ask.first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("有傳輸在跑：關窗前先問", (await ask.count()) > 0);
+    await page.getByRole("button", { name: "取消", exact: true }).last().click().catch(() => {});
+    await sleep(200);
+    check("按取消：不關窗", !(await destroyed()));
+    await sftp.getByRole("button", { name: "關閉 SFTP", exact: true }).click();
+    await page.getByRole("button", { name: "關閉視窗", exact: true }).last().click({ timeout: 5000 }).catch(() => {});
+    await page.waitForFunction(() => window.__DBKIT_WINDOW_CALLS__.includes("plugin:window|destroy"), null, { timeout: 5000 }).catch(() => {});
+    check("確定關閉：跟主視窗說再見、銷毀視窗", await destroyed()
+      && await page.evaluate((k) => window.__DBKIT_EMITTED__.some((e) => e.event === "sftp-win-bye" && e.payload?.tabKey === k), tabKey));
     check("沒有未實作的 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },

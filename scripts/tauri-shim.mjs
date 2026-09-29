@@ -30,6 +30,14 @@ export function installShim(fx) {
   window.__DBKIT_SFTP_RENAMES__ = [];
   // 接下來幾個傳輸要失敗（傳到一半斷線）：情境設成 1，下一個傳輸就會回 error。
   window.__DBKIT_SFTP_FAIL_NEXT__ = 0;
+  // 設成 true：假傳輸慢慢跑（約 30 秒），「還有傳輸在跑」的情境才來得及操作。
+  window.__DBKIT_SFTP_SLOW__ = false;
+  // SFTP 獨立視窗：開 / 關視窗的呼叫、開過幾次 sftp 通道（重新連線後要在新連線上重開）、
+  // 前端 emit 的事件（主視窗 ↔ SFTP 視窗的橋）、視窗外掛命令（destroy 之類）。
+  window.__DBKIT_SFTP_WINDOWS__ = [];
+  window.__DBKIT_SFTP_OPENS__ = [];
+  window.__DBKIT_EMITTED__ = [];
+  window.__DBKIT_WINDOW_CALLS__ = [];
   // SSH 主機儲存與金鑰匯入 / 產生的紀錄（驗「存下去的是 keystore:<id>」「匯入帶了哪個密語」用）。
   window.__DBKIT_SSH_SESSION_SAVES__ = [];
   // 終端機工作階段記錄與「另存文字檔」的紀錄。
@@ -372,7 +380,7 @@ export function installShim(fx) {
     ssh_term_close: ({ termId }) => { sshTerms.delete(termId); return null; },
     ssh_hostkey_answer: () => null,
     ssh_auth_answer: () => null,
-    ssh_sftp_open: () => ({ sftp_id: `sftp-${++sshSeq}`, home: "/home/deploy" }),
+    ssh_sftp_open: ({ connId }) => { window.__DBKIT_SFTP_OPENS__.push(connId); return { sftp_id: `sftp-${++sshSeq}`, home: "/home/deploy" }; },
     ssh_sftp_close: () => null,
     ssh_sftp_list: ({ path }) => (fx.SFTP_LISTING?.[path] ?? []).map(sftpWithMeta),
     ssh_sftp_stat: ({ path }) => sftpFind(path) ?? Promise.reject(new Error("找不到檔案或目錄")),
@@ -412,6 +420,10 @@ export function installShim(fx) {
     // 本機「已經有」哪些名稱由情境自己設（window.__DBKIT_LOCAL_EXISTING__），預設都沒有。
     ssh_sftp_local_conflicts: ({ names }) => names.filter((n) => (window.__DBKIT_LOCAL_EXISTING__ ?? []).includes(n)),
     ssh_sftp_cancel: () => null,
+    // SFTP 獨立視窗：瀏覽器裡開不了第二個視窗，只記下呼叫（回 true = 新開的）。視窗那一側由情境直接開 sftp.html 驗。
+    ssh_sftp_window_open: ({ tabKey, title }) => { window.__DBKIT_SFTP_WINDOWS__.push({ op: "open", tabKey, title }); return true; },
+    ssh_sftp_window_close: ({ tabKey }) => { window.__DBKIT_SFTP_WINDOWS__.push({ op: "close", tabKey }); return null; },
+    show_main_window: () => null,
   };
 
   // ── SSH 假 shell 的狀態與工具 ──────────────────────────────────────────
@@ -521,11 +533,12 @@ export function installShim(fx) {
     const fail = window.__DBKIT_SFTP_FAIL_NEXT__ > 0;
     if (fail) window.__DBKIT_SFTP_FAIL_NEXT__ -= 1;
     const steps = fail ? [0.25, 0.6] : [0.25, 0.6, 1];
+    const slow = window.__DBKIT_SFTP_SLOW__ ? 100 : 1;
     steps.forEach((p, i) => setTimeout(() => emit("ssh-sftp-progress", {
       transfer_id: id, done: Math.round(total * p), total,
       state: fail && i === steps.length - 1 ? "error" : p === 1 ? "done" : "running",
       message: fail && i === steps.length - 1 ? "SFTP 連線已中斷" : null,
-    }), 80 + i * 90));
+    }), (80 + i * 90) * slow));
     void name;
     return id;
   }
@@ -557,6 +570,11 @@ export function installShim(fx) {
     transformCallback: (cb) => { const id = nextCb++; callbacks.set(id, cb); return id; },
     unregisterCallback: (id) => { callbacks.delete(id); },
     convertFileSrc: (p) => p,
+    // getCurrentWindow() / getCurrentWebview() 讀這裡：sftp.html 當成 SFTP 獨立視窗，其餘是主視窗。
+    metadata: (() => {
+      const label = location.pathname.endsWith("sftp.html") ? "sftp-test" : "main";
+      return { currentWindow: { label }, currentWebview: { windowLabel: label, label } };
+    })(),
     invoke(cmd, args) {
       if (cmd === "plugin:event|listen") {
         const fn = callbacks.get(args?.handler);
@@ -568,7 +586,14 @@ export function installShim(fx) {
         return Promise.resolve(args?.handler ?? 1);
       }
       if (cmd === "plugin:event|unlisten") return unregisterListener(args?.event, args?.eventId).then(() => null);
+      // emit：真的 Tauri 會送給所有監聽者（包含自己這個視窗），這裡照樣回送，並記下來給情境驗「推了什麼給另一個視窗」。
+      if (cmd === "plugin:event|emit" || cmd === "plugin:event|emit_to") {
+        window.__DBKIT_EMITTED__.push({ event: args?.event, payload: args?.payload });
+        setTimeout(() => emit(args?.event, args?.payload), 0);
+        return Promise.resolve(null);
+      }
       if (cmd.startsWith("plugin:event|")) return Promise.resolve(1);
+      if (cmd.startsWith("plugin:window|")) window.__DBKIT_WINDOW_CALLS__.push(cmd);
       // 檔案對話框：回一個假路徑，開 / 存檔的後續流程（載入快照、匯出報告）才走得完。
       // 回 null 等於「使用者按取消」，那條路徑在截圖與冒煙檢查裡都驗不到東西。
       // 情境可用 window.__DBKIT_DIALOG_OPEN__ 換掉「選到的東西」（例如 SFTP 批次下載要的是資料夾）。

@@ -13,7 +13,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Channel } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 import {
-  ChevronDown, ChevronUp, Eraser, FolderOpen, RefreshCw, Search, Sparkles, Unplug, X,
+  ChevronDown, ChevronUp, Eraser, ExternalLink, FolderOpen, PanelRightClose, PanelRightOpen, RefreshCw, Search, Sparkles, Unplug, X,
 } from "lucide-react";
 import { api, onSshAuthPrompt, onSshConnClosed, onSshHostKeyPrompt, onSshTermExit } from "./api";
 import type { SshTab } from "./sshTabs";
@@ -30,6 +30,8 @@ import SshComposeBar from "./SshComposeBar";
 import SshStatusBar from "./SshStatusBar";
 import { bufferLinesToText, createRecorder, defaultLogName, type SessionRecorder } from "./sshSessionLog";
 import { disconnectKind } from "./sshDisconnect";
+import { shellQuote } from "./sshCwd";
+import { openSftpWindow, useSftpWindows } from "./sftpWindowBridge";
 import { useTheme } from "./theme";
 import { EDITOR_THEMES, getEditorThemeDef } from "./editorThemes";
 import { t, useT } from "./i18n";
@@ -536,6 +538,20 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     : endKind === "unreachable" ? t("連不到主機")
     : status === "error" ? t("連線失敗") : t("連線已中斷");
   const sftpLabel = sftpOpen ? t("關閉 SFTP") : t("開啟 SFTP");
+  const sftpWinOpen = useSftpWindows((s) => !!s.open[tab.key]);
+  /** SFTP 獨立視窗；`initialDir` = 從側邊面板移過去時面板所在的資料夾。 */
+  const openSftpWin = async (initialDir?: string) => {
+    // 視窗標題：主機名稱（分頁上那個）加上實際連到哪裡，工作列上好認。
+    const who = rt?.user && rt?.host ? `${rt.user}@${rt.host}` : "";
+    const title = who && who !== tab.title ? `${tab.title} · ${who}` : tab.title || who;
+    try {
+      await openSftpWindow(tab.key, { title, initialDir });
+      return true;
+    } catch (e) {
+      toast.error(t("無法開啟 SFTP 視窗：{msg}", { msg: errMsg(e) }));
+      return false;
+    }
+  };
 
   return (
     <div className={active ? "flex-1 flex flex-col min-w-0 min-h-0" : "hidden"} onKeyDownCapture={onKeyDownCapture}>
@@ -547,18 +563,21 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
         <div className="ml-auto flex items-center gap-0.5">
           <IconButton icon={Sparkles} label={t("AI 協助")} active={!!aiMenu || nlOpen}
             onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setAiMenu({ x: r.left, y: r.bottom + 4 }); }} />
-          {/* 帶字的按鈕：檔案瀏覽是終端機分頁的第二個主要功能，只有圖示時很容易被當成「收合側欄」。 */}
-          <button type="button" data-testid="ssh-sftp-toggle" aria-label={sftpLabel} aria-pressed={sftpOpen}
-            title={t("{label}：瀏覽、上傳下載與管理終端機所在資料夾的檔案", { label: sftpLabel })}
-            disabled={status !== "connected"} onClick={toggleSftp}
+          {/* 帶字的按鈕：檔案瀏覽是終端機分頁的第二個主要功能。開的是獨立視窗（可以拖到另一個螢幕、
+              把檔案拖進去上傳）；要跟終端機並排，用最右邊的側邊面板鈕。 */}
+          <button type="button" data-testid="ssh-sftp-window" aria-label={t("SFTP 獨立視窗")}
+            title={t("在獨立視窗開 SFTP：瀏覽終端機所在的資料夾，把檔案拖進去就上傳，傳到一半中斷可以續傳")}
+            disabled={status !== "connected"} onClick={() => void openSftpWin()}
             className={"h-7 px-2 inline-flex items-center gap-1 rounded shrink-0 transition-colors text-xs font-medium " +
               "disabled:opacity-40 disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-accent/60 " +
-              (sftpOpen ? "bg-accent/12 text-accent" : "text-fg/60 hover:text-fg hover:bg-fg/10 active:bg-fg/[0.14]")}>
-            <Icon icon={FolderOpen} size={15} />SFTP
+              (sftpWinOpen ? "bg-accent/12 text-accent" : "text-fg/60 hover:text-fg hover:bg-fg/10 active:bg-fg/[0.14]")}>
+            <Icon icon={FolderOpen} size={15} />SFTP<Icon icon={ExternalLink} size={11} className="opacity-60" />
           </button>
           <IconButton icon={Search} label={t("搜尋（Ctrl+Shift+F）")} active={searchOpen}
             onClick={() => { if (searchOpen) closeSearch(); else { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 0); } }} />
           <IconButton icon={Eraser} label={t("清空畫面")} onClick={() => { termRef.current?.clear(); termRef.current?.focus(); }} />
+          <IconButton data-testid="ssh-sftp-toggle" icon={sftpOpen ? PanelRightClose : PanelRightOpen} label={sftpLabel}
+            aria-pressed={sftpOpen} active={sftpOpen} disabled={status !== "connected"} onClick={toggleSftp} />
         </div>
       </div>
 
@@ -632,6 +651,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
                   onClose={closeSftp}
                   maximized={maximized}
                   onToggleMaximize={() => setSftpMax((v) => !v)}
+                  onPopOut={(p) => { void openSftpWin(p).then((ok) => { if (ok) closeSftp(); }); }}
                 />
               </Suspense>
             </div>
@@ -725,9 +745,4 @@ function confirmMultilinePaste(text: string): Promise<boolean> {
     ? t("貼上內容含 {n} 行，將逐行送出執行。確定？", { n })
     : t("貼上的內容結尾有換行，貼上後會立刻執行：{cmd}。確定？", { cmd: text.trim().slice(0, 120) });
   return uiConfirm(msg, { title: t("多行貼上"), confirmText: t("貼上") });
-}
-
-/** POSIX 單引號包裹（路徑含空白 / 引號時 cd 仍正確）。 */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
 }

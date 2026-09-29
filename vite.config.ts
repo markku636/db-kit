@@ -21,6 +21,11 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
+      // 兩個頁面：主視窗（index.html）與 SFTP 獨立視窗（sftp.html，只載 SFTP 面板，不帶主介面）。
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        sftp: fileURLToPath(new URL("./sftp.html", import.meta.url)),
+      },
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;

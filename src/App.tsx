@@ -32,6 +32,7 @@ import type { SshSession } from "./sshTypes";
 import { useSshSessions, sessionLabel } from "./sshSessions";
 import type { ParsedSsh } from "./sshConnString";
 import { useSshTerminals, termRegistry } from "./sshTerminals";
+import { setSftpWindowsLocked } from "./sftpWindowBridge";
 import { inTerminal, isAppReserved } from "./ui/keyScope";
 import SshHostTree from "./SshHostTree";
 import SshPrefsSettings from "./SshPrefsSettings";
@@ -325,6 +326,8 @@ export default function App() {
       : 0,
     () => setRelocked(true),
   );
+  // SFTP 獨立視窗不在這個畫面裡，鎖定遮罩蓋不到：通知它們自己蓋上。
+  useEffect(() => { setSftpWindowsLocked(relocked); }, [relocked]);
 
   // 解鎖後才把連線清單寫入 store（僅清單，不自動連線；密碼留在 keychain）。
   useEffect(() => {

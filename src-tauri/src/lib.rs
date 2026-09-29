@@ -482,6 +482,8 @@ pub fn run() {
             commands::ssh::ssh_key_export,
             commands::ssh::ssh_key_attach_cert,
             commands::ssh::ssh_sftp_cancel,
+            commands::ssh::ssh_sftp_window_open,
+            commands::ssh::ssh_sftp_window_close,
             agent::agent_detect,
             agent::agent_setup_terminal,
             agent::agent_send,
@@ -496,9 +498,25 @@ pub fn run() {
             agent::open_agent_workspace,
             agent::open_external,
         ])
-        .on_window_event(|window, event| {
-            // 視窗關閉時，優雅釋放所有連線池（呼應規劃 3.5）。
-            if let WindowEvent::CloseRequested { .. } = event {
+        .on_window_event(|window, event| match event {
+            // 主視窗關閉時，優雅釋放所有連線池（呼應規劃 3.5）。只看主視窗：SFTP 獨立視窗關掉不能把連線全收了。
+            WindowEvent::CloseRequested { .. } if window.label() == "main" => {
+                // SFTP 視窗用的是主視窗的 SSH 連線，主視窗一關就跟著關（全部視窗都關了 App 才會結束）。
+                // 另開 task 做：在視窗事件回呼裡直接銷毀別的視窗有卡住事件迴圈的風險。
+                let others: Vec<_> = window
+                    .app_handle()
+                    .webview_windows()
+                    .into_iter()
+                    .filter(|(label, _)| ssh::sftp_window::is_label(label))
+                    .map(|(_, w)| w)
+                    .collect();
+                if !others.is_empty() {
+                    tauri::async_runtime::spawn(async move {
+                        for w in others {
+                            let _ = w.destroy();
+                        }
+                    });
+                }
                 let state = window.state::<AppState>();
                 // close_all 是 async；用 block 確保釋放完成才讓視窗關閉。SSH 終端 / SFTP 一併收掉
                 // （abort 讀端、取消傳輸、送 disconnect），否則 shell 會在遠端多活到 TCP 逾時。
@@ -507,6 +525,15 @@ pub fn run() {
                     state.ssh.shutdown_all().await;
                 });
             }
+            // SFTP 視窗不管是按標題列的 ×、面板上的關閉，還是分頁關閉時被主視窗收掉，都收掉它開的 sftp 通道。
+            WindowEvent::Destroyed if ssh::sftp_window::is_label(window.label()) => {
+                let rt = window.state::<AppState>().ssh.clone();
+                let label = window.label().to_string();
+                tauri::async_runtime::spawn(async move {
+                    commands::ssh::close_sftps_owned_by(&rt, &label).await;
+                });
+            }
+            _ => {}
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

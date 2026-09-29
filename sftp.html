@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" href="/favicon-32.png" sizes="32x32" />
+    <title>SFTP</title>
+  </head>
+  <body>
+    <!-- SFTP 獨立視窗（src-tauri 的 ssh_sftp_window_open 開的）。主題 / 字級 / 語言在 sftpMain.tsx 套用：
+         視窗先藏著，畫完第一幀才顯示，所以不需要 index.html 那段防閃爍腳本與骨架屏。 -->
+    <div id="root"></div>
+    <script type="module" src="/src/sftpMain.tsx"></script>
+  </body>
+</html>

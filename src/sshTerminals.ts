@@ -188,6 +188,8 @@ export async function teardownSshTab(tabKey: string): Promise<void> {
   sftpLastPath.delete(tabKey);
   sftpHome.delete(tabKey);
   sftpFollowedDir.delete(tabKey);
+  // 這個分頁的 SFTP 獨立視窗用的是這條連線，一起收掉（沒開就是 no-op）。
+  void api.sshSftpWindowClose(tabKey).catch(() => undefined);
   if (!rt) return;
   // 順序：sftp → term → conn；任一失敗都繼續，後端 disconnect 會把殘留的 channel 一併收掉。
   if (rt.sftpId) await api.sshSftpClose(rt.sftpId).catch(() => undefined);

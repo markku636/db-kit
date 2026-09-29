@@ -14,7 +14,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::oneshot;
 
 use super::AppState;
@@ -29,6 +29,7 @@ use crate::ssh::sessions::{self, SshFolder, SshSession, SshSessionsFile};
 use crate::ssh::host_import;
 use crate::ssh::keys;
 use crate::ssh::sftp::{self as sftp_mod, OnConflict, ProgressFn, SftpClient, SftpEntry, SftpText};
+use crate::ssh::sftp_window;
 use crate::ssh::terminal::{decode_b64_input, TermEvent, TermHandle, TermOpen, TermSink};
 use crate::store;
 
@@ -462,23 +463,31 @@ pub struct SftpOpened {
     pub home: String,
 }
 
-/// 同一條連線開 sftp subsystem（不再問密碼）。
+/// 同一條連線開 sftp subsystem（不再問密碼）。SFTP 獨立視窗開的通道記在那個視窗名下，視窗關掉時一併收掉。
 #[tauri::command]
-pub async fn ssh_sftp_open(state: State<'_, AppState>, conn_id: String) -> AppResult<SftpOpened> {
+pub async fn ssh_sftp_open(window: tauri::Window, state: State<'_, AppState>, conn_id: String) -> AppResult<SftpOpened> {
     let rt = state.ssh.clone();
     let conn = rt.conn(&conn_id)?;
     let (client, home) = SftpClient::open(&conn).await?;
     let sftp_id = uuid::Uuid::new_v4().to_string();
     conn.channel_opened();
     rt.insert_sftp(sftp_id.clone(), Arc::new(client));
+    if sftp_window::is_label(window.label()) {
+        rt.set_sftp_owner(&sftp_id, window.label());
+    }
     Ok(SftpOpened { sftp_id, home })
 }
 
 #[tauri::command]
 pub async fn ssh_sftp_close(state: State<'_, AppState>, sftp_id: String) -> AppResult<()> {
-    let rt = state.ssh.clone();
-    let Some(sftp) = rt.remove_sftp(&sftp_id) else {
-        return Ok(());
+    close_sftp(&state.ssh, &sftp_id).await;
+    Ok(())
+}
+
+/// 關一條 SFTP 通道；那條連線一條 channel 都不剩就斷線（同 `ssh_term_close`）。
+async fn close_sftp(rt: &SshRuntime, sftp_id: &str) {
+    let Some(sftp) = rt.remove_sftp(sftp_id) else {
+        return;
     };
     sftp.close().await;
     if let Ok(conn) = rt.conn(&sftp.conn_id) {
@@ -486,7 +495,58 @@ pub async fn ssh_sftp_close(state: State<'_, AppState>, sftp_id: String) -> AppR
             rt.disconnect(&conn.id).await;
         }
     }
-    Ok(())
+}
+
+// ---- SFTP 獨立視窗 ----
+
+/// 用獨立視窗開某個終端機分頁的 SFTP；那個分頁已經有視窗就叫到最前面。回 true = 新開的視窗。
+///
+/// 視窗載 `sftp.html`，自己開一條 sftp 通道（同一條 SSH 連線，不再問密碼）；連線狀態與終端機所在的
+/// 資料夾由主視窗用事件轉過去。檔案拖進這個視窗拿得到本機路徑——主視窗為了分頁拖曳關掉了 WebView
+/// 的檔案拖放，這個視窗沒有。必須是 async command：Windows 上在同步 command 裡建視窗會卡死。
+#[tauri::command]
+pub async fn ssh_sftp_window_open(app: AppHandle, tab_key: String, title: String) -> AppResult<bool> {
+    let label = sftp_window::label_for(&tab_key);
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(false);
+    }
+    let url = tauri::WebviewUrl::App(sftp_window::url_for(&tab_key).into());
+    let w = tauri::WebviewWindowBuilder::new(&app, &label, url)
+        .title(title)
+        .inner_size(960.0, 640.0)
+        .min_inner_size(520.0, 360.0)
+        // 同主視窗：先藏著，前端畫完第一幀才呼叫 show_main_window，免得 WebView2 初始化時閃白。
+        .visible(false)
+        .background_color(tauri::window::Color(18, 23, 33, 255))
+        .build()
+        .map_err(|e| AppError::Ssh(e.to_string()))?;
+    // 保險絲：前端 4 秒內沒叫出視窗（載入失敗 / JS 錯誤）就強制顯示，免得看起來像按了沒反應。
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(4));
+        if !w.is_visible().unwrap_or(true) {
+            let _ = w.show();
+        }
+    });
+    Ok(true)
+}
+
+/// 關掉某個終端機分頁的 SFTP 視窗（分頁關閉時由主視窗呼叫）。沒有就不做事。
+#[tauri::command]
+pub fn ssh_sftp_window_close(app: AppHandle, tab_key: String) {
+    if let Some(w) = app.get_webview_window(&sftp_window::label_for(&tab_key)) {
+        let _ = w.destroy();
+    }
+}
+
+/// SFTP 視窗被銷毀（不論怎麼關的）：收掉它開的 sftp 通道。還在傳的檔案會因通道關閉而失敗，
+/// 已傳的部分留著，之後重傳同一個檔可以接著傳。
+pub async fn close_sftps_owned_by(rt: &SshRuntime, window_label: &str) {
+    for id in rt.sftp_ids_owned_by(window_label) {
+        close_sftp(rt, &id).await;
+    }
 }
 
 #[tauri::command]

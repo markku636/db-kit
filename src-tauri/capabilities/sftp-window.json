@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "sftp-window",
+  "description": "SFTP standalone windows: events (bridge to the main window, transfer progress, file drops), file dialogs, and destroying itself after the close confirmation",
+  "windows": ["sftp-*"],
+  "permissions": ["core:default", "dialog:default", "core:window:allow-destroy"]
+}

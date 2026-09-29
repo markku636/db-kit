@@ -23,6 +23,11 @@ export function absTerminalDir(dir: string | null, home: string | null | undefin
   return home ? expandHome(dir, home) : null;
 }
 
+/** POSIX 單引號包裹（路徑含空白 / 引號時 cd 仍正確）。 */
+export function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 /** `~` / `~/x` 接上家目錄；其餘（已經是絕對路徑）原樣。 */
 export function expandHome(dir: string, home: string): string {
   if (dir === "~") return home || "/";

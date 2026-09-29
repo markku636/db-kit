@@ -14,6 +14,7 @@
 //! - `host_import`：從 ~/.ssh/config 與 .xsh 工作階段檔讀出可匯入的主機（只讀，不寫）。
 //! - `keys`：使用者金鑰——各種私鑰格式的辨識與載入、OpenSSH 憑證、App 內金鑰庫（`keystore:<id>`）。
 //! - `runtime`：`SshRuntime`——活著的連線 / 終端 / SFTP / 待答提示 / 傳輸旗標的登記簿。
+//! - `sftp_window`：SFTP 獨立視窗的視窗標籤與網址。
 
 pub mod auth;
 pub mod host_import;
@@ -23,6 +24,7 @@ pub mod runtime;
 pub mod session_log;
 pub mod sessions;
 pub mod sftp;
+pub mod sftp_window;
 pub mod terminal;
 mod tunnel;
 
