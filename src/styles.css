@@ -458,8 +458,11 @@ option {
 .modal-backdrop-in {
   animation: modal-backdrop-in 0.14s ease forwards;
 }
+/* 刻意不加 forwards：留在 shell 上的終點 transform（就算寫 none，Chrome 也會留下內插出的 matrix(1,0,0,1,0,0)）
+   會讓 shell 變成 position: fixed 子孫的定位基準——從對話框裡再開的對話框（設定 → 開啟 AI 資源庫）就以外層
+   shell 為準擺放，偏到一邊、右半截被切掉。動畫結束後回到 shell 本身的樣式，看起來和終點一樣。 */
 .modal-shell-in {
-  animation: modal-shell-in 0.16s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: modal-shell-in 0.16s cubic-bezier(0.22, 1, 0.36, 1);
 }
 @keyframes modal-backdrop-in {
   from { opacity: 0; }

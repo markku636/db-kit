@@ -1389,7 +1389,6 @@ const vi: Catalog = {
   "技能": "Kỹ năng",
   "勾起來的會附在人設後面，可複選": "Kỹ năng được tích sẽ nối sau phần nhân cách, có thể chọn nhiều",
   "新技能": "Kỹ năng mới",
-  "複製為自訂": "Sao chép thành bản tùy chỉnh",
   "尚未設定 {name} 的 Base URL。": "Chưa cấu hình Base URL cho {name}.",
   "{name} 還沒有 API 金鑰（地端端點可以不用）。": "{name} chưa có khóa API (điểm cuối nội bộ thì không cần).",
   "開啟 AI 設定": "Mở cài đặt AI",

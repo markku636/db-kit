@@ -1496,7 +1496,8 @@ const CASES = {
     check("差異預覽不再呼叫模型（沒有重新生成）", (await page.getByRole("button", { name: "重新生成" }).count()) === 0);
   },
 
-  // AI 資源庫：設定 → 開啟 AI 資源庫 → 人設 / 技能 / 提示範本三個分頁都有內建項目 → 範本預覽帶出鎖定的契約 →
+  // AI 資源庫：設定 → 開啟 AI 資源庫 → 分頁排成「人設 ＋ 技能 ＋ 提示範本 → 送給 AI」、運作方式說明誰用到什麼 →
+  // 內建項目直接可改（沒存就換分頁會先問）→ 技能標示用在哪裡、點預載它的人設會跳過去 → 範本預覽帶出鎖定的契約 →
   // 來源與同步分頁列出同步計畫。
   async "ai-library-dialog"(page) {
     await page.getByRole("button", { name: /設定/ }).first().click();
@@ -1505,11 +1506,48 @@ const CASES = {
     await page.waitForFunction(() => document.body.innerText.includes("正式環境守門員"), null, { timeout: 8000 }).catch(() => {});
     let body = await page.locator("body").innerText();
     check("資源庫列出內建 DBA 人設", body.includes("正式環境守門員") && body.includes("資料模型架構師"), body.replace(/\s+/g, " ").slice(0, 300));
-    check("內建項目標示唯讀與複製為自訂", body.includes("唯讀") && (await page.getByRole("button", { name: "複製為自訂" }).count()) > 0);
+    check("分頁排成組合流程並各附一句用途",
+      body.includes("AI 扮演誰") && body.includes("附加的專業知識") && body.includes("每個 AI 動作的指令") && body.includes("送給 AI"));
+    check("運作方式說明各功能用到哪些部分",
+      body.includes("系統提示：AI 是誰、懂什麼") && body.includes("DBA 審查 / 會審") && body.includes("助手人設 ＋ 勾選的技能"));
+    check("人設分成 DBA 審查者 / 助手兩群，使用中的有標示", body.includes("DBA 審查者") && body.includes("使用中"));
+    // 從設定開的：資源庫疊在設定對話框上面，取最後一個 dialog。
+    const lib = page.locator('[role="dialog"]').last();
+    // 以前 shell 進場動畫用 forwards、終點的 transform 留在 shell 上，裡面再開的對話框會以外層 shell 為定位基準、
+    // 右半截出界。等進場動畫跑完再量。
+    await sleep(300);
+    const box = await lib.boundingBox();
+    const vw = page.viewportSize()?.width ?? 0;
+    check("從設定裡開的資源庫整個在視窗內", !!box && box.x >= 0 && box.x + box.width <= vw + 1, JSON.stringify({ box, vw }));
+    const persona = lib.locator("textarea").first();
+    check("內建人設可以直接編輯", await persona.isEditable());
+    check("內建項目的存檔鈕說明會存成自訂版本", (await lib.getByRole("button", { name: "儲存為自訂版本" }).count()) === 1);
+    await persona.fill(`${await persona.inputValue()}\n（測試修改）`);
+    await sleep(200);
+    check("改了之後標示未儲存、存檔鈕可按",
+      (await lib.innerText()).includes("未儲存") && (await lib.getByRole("button", { name: "儲存為自訂版本" }).isEnabled()));
+    await page.getByRole("radio", { name: "技能" }).first().click();
+    await sleep(300);
+    check("有沒存的修改時換分頁先問", (await page.locator("body").innerText()).includes("有未儲存的修改，要捨棄嗎？"));
+    // 確認框在通知區旁邊渲染，DOM 順序比設定對話框的「取消」還前面：從訊息往上找它自己的按鈕。
+    await page.getByText("有未儲存的修改，要捨棄嗎？", { exact: true }).locator("..").getByRole("button", { name: "取消", exact: true }).click();
+    await sleep(300);
+    check("取消後留在原本的編輯內容", (await persona.inputValue()).includes("（測試修改）"));
+    await lib.getByRole("button", { name: "捨棄變更" }).click();
+    await sleep(200);
     await page.getByRole("radio", { name: "技能" }).first().click().catch(() => page.getByText("技能", { exact: true }).first().click());
     await sleep(400);
     body = await page.locator("body").innerText();
+    check("捨棄後換分頁不再問", !body.includes("有未儲存的修改，要捨棄嗎？"));
     check("技能分頁列出內建技能", body.includes("線上 DDL") && body.includes("鎖與併發風險"));
+    await page.getByText("鎖與併發風險", { exact: true }).first().click();
+    await sleep(300);
+    body = await lib.innerText();
+    check("技能標示助手對話有沒有啟用、哪些人設預載它", body.includes("AI 助手對話：") && body.includes("預載它的人設："));
+    await lib.getByRole("button", { name: "正式環境守門員" }).first().click();
+    await sleep(400);
+    check("點預載它的人設就跳到那位人設",
+      (await page.getByRole("radio", { name: "人設" }).first().getAttribute("aria-checked")) === "true" && (await lib.innerText()).includes("正式環境 DBA 審查"));
     await page.getByRole("radio", { name: "提示範本" }).first().click().catch(() => page.getByText("提示範本", { exact: true }).first().click());
     await sleep(400);
     await page.getByText("DBA 審查 SQL", { exact: true }).first().click();

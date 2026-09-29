@@ -32,7 +32,7 @@ export interface AiSkill {
   /** 顯示名稱（`dbkit-title`）。 */
   name: string;
   body: string;
-  /** 內建技能（唯讀；要改就在資源庫「複製為自訂」）。 */
+  /** 內建技能（含改過的內建：它還是資料庫審查用的，SSH 模式照樣略過）。 */
   builtin?: boolean;
 }
 
@@ -74,7 +74,7 @@ function readLegacySelected(): string[] {
 
 function toSkill(e: LibEntry): AiSkill {
   const info = skillInfo(e);
-  return { id: e.name, name: info.title, body: info.body, builtin: e.layer === "builtin" };
+  return { id: e.name, name: info.title, body: info.body, builtin: e.layer === "builtin" || !!e.builtin };
 }
 
 /** 目前勾選中的技能名稱：已遷移讀設定檔，否則沿用舊 localStorage 的選取（對應成新名稱）。 */

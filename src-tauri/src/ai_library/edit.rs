@@ -129,7 +129,7 @@ pub fn save(lib: &Library, layers: &[Layer], req: &SaveRequest) -> Result<PathBu
         None => {
             // 底稿：目標層那一份 > 勝出版本同語言的那一份 > 空白。
             let base_raw = existing.and_then(|e| e.variants.get(&req.lang)).map(|v| v.raw.clone()).unwrap_or_default();
-            let mut doc = frontmatter::parse(&base_raw);
+            let mut doc = own_copy(&base_raw, &target_name, &req.lang);
             if doc.fm.is_none() {
                 doc.fm = Some(Vec::new());
             }
@@ -142,6 +142,16 @@ pub fn save(lib: &Library, layers: &[Layer], req: &SaveRequest) -> Result<PathBu
         }
     };
     write_atomic(&path, &text)?;
+    // 在較低層（內建）之上第一次存同名覆蓋：覆蓋是整筆取代，其他語言變體也要一起帶上來，
+    // 不然只改了基底，英文 / 簡中使用者就會掉回基底檔。
+    if let Some(e) = existing.filter(|e| in_place.is_none() && e.layer != layer.id && e.name == target_name) {
+        for (lang, v) in e.variants.iter().filter(|(l, _)| **l != req.lang) {
+            let p = new_path(root, req.kind, &target_name, lang);
+            if !p.exists() {
+                write_atomic(&p, &own_copy(&v.raw, &target_name, lang).to_text())?;
+            }
+        }
+    }
     // 改名：刪掉同一層的舊檔（就地編輯的情況下舊檔就是新檔，不動）。
     if let Some(e) = existing.filter(|e| e.layer == layer.id && e.name != target_name) {
         if let Some(v) = e.variants.get(&req.lang) {
@@ -168,17 +178,21 @@ pub fn copy(lib: &Library, layers: &[Layer], kind: Kind, name: &str, new_name: &
         return Err(tf!("檔案已存在：{path}", path = base_path.display()));
     }
     for (lang, v) in &src.variants {
-        let mut doc = frontmatter::parse(&v.raw);
-        if doc.fm.is_some() || lang.is_empty() {
-            doc.set_str("name", new_name);
-        }
-        // 產生器寫的「請勿手改」註解對自訂副本不成立。
-        if let Some(fm) = &mut doc.fm {
-            fm.retain(|l| !l.contains("i18n-gen-zhcn.mjs"));
-        }
-        write_atomic(&new_path(root, kind, new_name, lang), &doc.to_text())?;
+        write_atomic(&new_path(root, kind, new_name, lang), &own_copy(&v.raw, new_name, lang).to_text())?;
     }
     Ok(base_path)
+}
+
+/// 把別層的一份檔案變成自己的副本：改掉 `name`，拿掉產生器寫的「請勿手改」註解（對自訂副本不成立）。
+fn own_copy(raw: &str, name: &str, lang: &str) -> frontmatter::Doc {
+    let mut doc = frontmatter::parse(raw);
+    if doc.fm.is_some() || lang.is_empty() {
+        doc.set_str("name", name);
+    }
+    if let Some(fm) = &mut doc.fm {
+        fm.retain(|l| !l.contains("i18n-gen-zhcn.mjs"));
+    }
+    doc
 }
 
 /// 刪除某一層裡的一筆（lang = None 刪全部語言變體；技能資料夾空了就一併移除）。
@@ -281,8 +295,21 @@ mod tests {
         };
         let p = save(&lib, &layers, &req).unwrap();
         assert_eq!(p, dir.join("prompts/review-sql.md"));
+        // 覆蓋是整筆取代：沒改到的語言變體要從內建帶上來，產生器的「請勿手改」註解要拿掉。
+        assert!(dir.join("prompts/review-sql.en.md").exists());
+        let zh_cn = std::fs::read_to_string(dir.join("prompts/review-sql.zh-CN.md")).unwrap();
+        assert!(!zh_cn.contains("i18n-gen-zhcn.mjs"), "{zh_cn}");
         let lib = Library::load(&layers);
-        assert_eq!(lib.find(Kind::Prompt, "review-sql").unwrap().layer, "personal");
+        let e = lib.find(Kind::Prompt, "review-sql").unwrap();
+        assert_eq!(e.layer, "personal");
+        assert!(e.variants[""].body.starts_with("自訂審查"));
+        assert_eq!(e.variants["en"].body, e.builtin.as_ref().unwrap()["en"].body);
+        // 已經有覆蓋之後再存另一個語言 → 就地，不再從內建補檔。
+        std::fs::remove_file(dir.join("prompts/review-sql.en.md")).unwrap();
+        let lib = Library::load(&layers);
+        let req_zh = SaveRequest { lang: "zh-CN".into(), body: Some("自订 {{sql}}\n{{contract}}".into()), ..req.clone() };
+        save(&lib, &layers, &req_zh).unwrap();
+        assert!(!dir.join("prompts/review-sql.en.md").exists());
         delete(&lib, &layers, Kind::Prompt, "review-sql", "personal", None).unwrap();
         let lib = Library::load(&layers);
         assert_eq!(lib.find(Kind::Prompt, "review-sql").unwrap().layer, "builtin");

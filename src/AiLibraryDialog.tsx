@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   AlertTriangle,
+  ArrowRight,
   Bot,
   Check,
   Copy,
@@ -8,6 +9,7 @@ import {
   FileText,
   FolderOpen,
   FolderPlus,
+  Info,
   Library,
   Lock,
   Plus,
@@ -17,6 +19,7 @@ import {
   Trash2,
   Users,
   Wand2,
+  type LucideIcon,
 } from "lucide-react";
 import { api } from "./api";
 import {
@@ -40,25 +43,66 @@ import {
   type LibrarySnapshot,
   type SyncPlan,
 } from "./aiLibrary";
-import { useAiSkills } from "./aiSkills";
+import { assistantPersonaName, useAiSkills } from "./aiSkills";
 import { sampleVars, varLabel } from "./aiTaskVars";
+import { defaultDbaPersona } from "./dbaReview";
 import { useT } from "./i18n";
 import { fieldBool, fieldList, fieldStr } from "./promptTemplate";
-import { Badge, Button, EmptyState, Field, Icon, Input, Modal, Segmented, Select, Textarea } from "./ui/index";
+import { Badge, Button, EmptyState, Field, Icon, Input, Modal, Select, Textarea } from "./ui/index";
 import { pickDirectory, toast, uiConfirm, uiPrompt } from "./ui";
 
 // AI 資源庫：人設 / 技能 / 提示範本全部是 Markdown + frontmatter 的靜態檔（相容 Claude Code 與 Codex），
-// 分成內建（唯讀、隨 App 升級）< 個人 < 團隊資料夾三層，同名時後者覆蓋前者。這個對話框只是檔案的
+// 分成內建（隨 App 升級）< 個人 < 團隊資料夾三層，同名時後者覆蓋前者。這個對話框只是檔案的
 // 編輯器與總覽：分層、覆蓋、lint 都由後端做，存檔後重新拿快照。
+//
+// 內建項目直接就能改：第一次存檔寫成個人層的同名覆蓋（後端連同其他語言變體一起帶上來），
+// 「還原預設」= 刪掉那份覆蓋。
 
 type Tab = "agent" | "skill" | "prompt" | "sources";
 
 const DB_TOOLS = ["list_databases", "list_tables", "describe_table", "explain_query", "run_query", "sample_rows"] as const;
 
-function layerTone(layer: string): "neutral" | "accent" | "info" {
-  if (layer === "builtin") return "neutral";
-  if (layer === "personal") return "accent";
-  return "info";
+const HOW_KEY = "db-kit:aiLibHowOpen";
+
+function readHowOpen(): boolean {
+  try {
+    return localStorage.getItem(HOW_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function writeHowOpen(open: boolean) {
+  try {
+    localStorage.setItem(HOW_KEY, open ? "1" : "0");
+  } catch {
+    // 無痕 / 封鎖網站資料：只是記不住收合狀態。
+  }
+}
+
+function roleOf(e: LibEntry): string {
+  return fieldStr(e.variants[""].fields, "dbkit-role") ?? "assistant";
+}
+
+/** 列表上的狀態標籤：內建原封不動就不標（滿版都是「內建」只是雜訊）。 */
+function statusBadge(e: LibEntry, t: (s: string) => string): { tone: "accent" | "info" | "warning"; label: string } | null {
+  if (e.layer === "builtin") return null;
+  if (e.builtin) return { tone: "warning", label: t("已修改") };
+  if (e.layer === "personal") return { tone: "accent", label: t("自訂") };
+  return { tone: "info", label: e.layerLabel };
+}
+
+/** 這位人設目前被哪些功能用到（和 dbaReview / aiSkills 挑預設的規則一致）。 */
+function personaUses(e: LibEntry, snap: LibrarySnapshot, t: (s: string) => string): string[] {
+  const out: string[] = [];
+  if (roleOf(e) === "dba") {
+    if (defaultDbaPersona(false) === e.name) out.push(t("DBA 審查預設"));
+    if (defaultDbaPersona(true) === e.name) out.push(t("正式環境 DBA 審查"));
+    if (snap.settings.panel_personas.includes(e.name)) out.push(t("多位 DBA 會審"));
+  } else if (assistantPersonaName() === e.name) {
+    out.push(t("AI 助手"));
+  }
+  return out;
 }
 
 function issuesOf(snap: LibrarySnapshot, e: LibEntry): LibIssue[] {
@@ -86,7 +130,7 @@ function IssueList({ issues }: { issues: LibIssue[] }) {
   );
 }
 
-/** 可寫的層（複製 / 新增的目標）。 */
+/** 可寫的層（複製 / 新增 / 覆蓋內建的目標）。 */
 function writableLayers(snap: LibrarySnapshot, t: (s: string) => string): { id: string; label: string }[] {
   const out = [{ id: "personal", label: t("個人") }];
   snap.settings.team_dirs.forEach((d, i) => {
@@ -95,20 +139,230 @@ function writableLayers(snap: LibrarySnapshot, t: (s: string) => string): { id: 
   return out;
 }
 
+const chipCls = "inline-flex items-center gap-1 px-2 h-6 rounded text-[11px] border transition-colors";
+
+// ---------------------------------------------------------------------------
+// 分頁列 + 運作方式：分頁本身排成「人設 ＋ 技能 ＋ 提示範本 → 送給 AI」，一眼看出三者怎麼組起來
+// ---------------------------------------------------------------------------
+
+interface TabDef {
+  value: Tab;
+  label: string;
+  sub: string;
+  icon: LucideIcon;
+  count?: number;
+}
+
+function TabButton({ tab, active, onClick }: { tab: TabDef; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      aria-label={tab.label}
+      title={tab.sub}
+      onClick={onClick}
+      className={`flex-1 min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-md border text-left transition-colors focus-visible:outline-2 focus-visible:outline-accent/60 ${
+        active ? "border-accent bg-accent/15" : "border-fg/10 hover:border-fg/25 hover:bg-fg/5"
+      }`}
+    >
+      <Icon icon={tab.icon} size={16} className={active ? "text-accent shrink-0" : "text-fg/45 shrink-0"} />
+      <span className="min-w-0">
+        <span className="flex items-center gap-1.5 text-[13px] font-medium text-fg/90 whitespace-nowrap">
+          {tab.label}
+          {tab.count != null && <span className="text-[10px] font-normal text-fg/40 tabular-nums">{tab.count}</span>}
+        </span>
+        <span className="block text-[11px] text-fg/50 truncate">{tab.sub}</span>
+      </span>
+    </button>
+  );
+}
+
+function FlowTabs({ tabs, value, onChange }: { tabs: TabDef[]; value: Tab; onChange: (v: Tab) => void }) {
+  const t = useT();
+  const flow = tabs.filter((x) => x.value !== "sources");
+  const sources = tabs.find((x) => x.value === "sources")!;
+  return (
+    <div role="radiogroup" aria-label={t("AI 資源庫")} className="flex items-stretch gap-1.5">
+      {flow.map((tb, i) => (
+        <Fragment key={tb.value}>
+          {i > 0 && (
+            <span aria-hidden className="self-center text-fg/30 text-sm">
+              ＋
+            </span>
+          )}
+          <TabButton tab={tb} active={value === tb.value} onClick={() => onChange(tb.value)} />
+        </Fragment>
+      ))}
+      <span aria-hidden className="self-center flex items-center gap-1 text-[11px] text-fg/40 whitespace-nowrap px-1">
+        <Icon icon={ArrowRight} size={12} />
+        {t("送給 AI")}
+      </span>
+      <div aria-hidden className="w-px bg-fg/10 mx-1 my-1" />
+      <div className="w-44 shrink-0 flex">
+        <TabButton tab={sources} active={value === "sources"} onClick={() => onChange("sources")} />
+      </div>
+    </div>
+  );
+}
+
+function HowItWorks({ onJump }: { onJump: (tab: Tab) => void }) {
+  const t = useT();
+  const part = (label: string, tab: Tab | null) =>
+    tab ? (
+      <button type="button" onClick={() => onJump(tab)} className={`${chipCls} border-accent/40 bg-accent/10 text-fg/85 hover:border-accent`}>
+        {label}
+      </button>
+    ) : (
+      <span className={`${chipCls} border-warning/40 bg-warning/5 text-fg/70`}>
+        <Icon icon={Lock} size={10} />
+        {label}
+      </span>
+    );
+  const plus = <span className="text-fg/35">＋</span>;
+  const uses: [string, string][] = [
+    [t("DBA 審查 / 會審"), t("DBA 人設 ＋ 它預載的技能 ＋ 審查範本（review-*）")],
+    [t("AI 助手對話"), t("助手人設 ＋ 勾選的技能")],
+    [t("編輯器 AI 動作、自然語言轉 SQL"), t("助手人設（不帶技能）＋ 對應的提示範本")],
+  ];
+  return (
+    // 左：一次送出的提示怎麼組；右：各功能用到哪些。兩欄並排，別把下面的編輯區擠掉太多高度。
+    <div className="rounded-md border border-fg/10 bg-inset/40 p-2.5 flex items-center gap-x-5 gap-y-2 flex-wrap">
+      <div className="flex items-stretch gap-2 shrink-0">
+        <div className="rounded border border-fg/10 bg-elevated px-2.5 py-2 space-y-1.5">
+          <div className="text-[10px] text-fg/50">{t("系統提示：AI 是誰、懂什麼")}</div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {part(t("人設"), "agent")}
+            {plus}
+            {part(t("預載的技能"), "skill")}
+            {plus}
+            {part(t("勾選的技能"), "skill")}
+            <span className="text-[10px] text-fg/40">{t("（只有 AI 助手對話）")}</span>
+          </div>
+        </div>
+        <span className="self-center text-fg/35">＋</span>
+        <div className="rounded border border-fg/10 bg-elevated px-2.5 py-2 space-y-1.5">
+          <div className="text-[10px] text-fg/50">{t("使用者訊息：這次要做什麼")}</div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {part(t("提示範本"), "prompt")}
+            {plus}
+            {part(t("輸出契約（鎖定）"), null)}
+          </div>
+        </div>
+        <span className="self-center flex items-center gap-1 text-[11px] text-fg/50">
+          <Icon icon={ArrowRight} size={12} />
+          {t("模型")}
+        </span>
+      </div>
+      <div className="flex-1 min-w-[18rem] space-y-0.5 text-[11px] leading-relaxed">
+        {uses.map(([what, how]) => (
+          <div key={what}>
+            <span className="text-fg/75 font-medium">{what}</span>
+            <span className="text-fg/30 mx-1.5">·</span>
+            <span className="text-fg/50">{how}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 「用在哪裡」：人設 → 哪些功能用它；技能 → 助手對話有沒有啟用、哪些人設預載它
+// ---------------------------------------------------------------------------
+
+function UsageRow({ entry, snap, onJump }: { entry: LibEntry; snap: LibrarySnapshot; onJump: (tab: Tab, name?: string) => void }) {
+  const t = useT();
+  const activeSkills = useAiSkills((s) => s.selected);
+  const toggleSkill = useAiSkills((s) => s.toggle);
+  if (entry.kind === "agent") {
+    const uses = personaUses(entry, snap, t);
+    return (
+      <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+        <span className="text-fg/45">{t("用在：")}</span>
+        {uses.length ? (
+          uses.map((u) => (
+            <span key={u} className={`${chipCls} border-accent/40 bg-accent/10 text-fg/80`}>
+              <Icon icon={Check} size={10} />
+              {u}
+            </span>
+          ))
+        ) : (
+          <span className="text-fg/40">{t("目前沒有功能使用這位人設")}</span>
+        )}
+        <button type="button" className="text-accent hover:underline ml-1" onClick={() => onJump("sources")}>
+          {t("到「來源與同步」調整")}
+        </button>
+      </div>
+    );
+  }
+  if (entry.kind === "skill") {
+    const on = activeSkills.includes(entry.name);
+    const by = entriesOf("agent", snap).filter((a) => fieldList(a.variants[""].fields, "skills").includes(entry.name));
+    return (
+      <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+        <span className="text-fg/45">{t("用在：")}</span>
+        <button
+          type="button"
+          onClick={() => toggleSkill(entry.name)}
+          title={on ? t("點一下停用") : t("點一下啟用")}
+          className={`${chipCls} ${on ? "border-accent/40 bg-accent/10 text-fg/80" : "border-fg/15 text-fg/50 hover:border-fg/30"}`}
+        >
+          {on && <Icon icon={Check} size={10} />}
+          {on ? t("AI 助手對話：已啟用") : t("AI 助手對話：未啟用")}
+        </button>
+        <span className="text-fg/45 ml-2">{t("預載它的人設：")}</span>
+        {by.length ? (
+          by.map((a) => (
+            <button
+              key={a.name}
+              type="button"
+              onClick={() => onJump("agent", a.name)}
+              className={`${chipCls} border-fg/15 text-fg/70 hover:border-accent/60`}
+            >
+              <Icon icon={roleOf(a) === "dba" ? Users : Bot} size={10} />
+              {entryTitle(a)}
+            </button>
+          ))
+        ) : (
+          <span className="text-fg/40">{t("沒有人設預載它")}</span>
+        )}
+      </div>
+    );
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // 單筆編輯器
 // ---------------------------------------------------------------------------
 
-function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }) {
+function EntryEditor({
+  entry,
+  snap,
+  onJump,
+  onDirtyChange,
+}: {
+  entry: LibEntry;
+  snap: LibrarySnapshot;
+  onJump: (tab: Tab, name?: string) => void;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
   const t = useT();
   const langs = useMemo(() => Object.keys(entry.variants).sort((a, b) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b))), [entry]);
   const [lang, setLang] = useState("");
   const v = entry.variants[lang] ?? entry.variants[""];
   const base = entry.variants[""];
   const isBase = lang === "";
-  const writable = entry.writable && entry.layer !== "builtin";
+  const isBuiltin = entry.layer === "builtin";
+  /** 就地可寫（這一層本身可寫）。 */
+  const writable = entry.writable && !isBuiltin;
+  /** 表單可以改：內建的存檔會寫成可寫層的同名覆蓋。 */
+  const editable = writable || isBuiltin;
   const targets = writableLayers(snap, t);
   const [copyTarget, setCopyTarget] = useState(targets[0]?.id ?? "personal");
+  const saveLayer = writable ? entry.layer : copyTarget;
+  const below = entry.shadowed[0] ?? null;
 
   // ---- 草稿 ----
   const init = () => ({
@@ -122,16 +376,25 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
     tools: fieldList(base.fields, "tools").filter((x) => x.startsWith("mcp__dbkit__")).map((x) => x.slice("mcp__dbkit__".length)),
     restrictTools: fieldList(base.fields, "tools").length > 0,
   });
+  // 視窗取得焦點時資源庫會重讀，快照物件每次都是新的；只在檔案內容真的變了才重設草稿，
+  // 不然切出去查個東西再回來，沒存的修改就不見了。
+  const source = `${entry.layer}\n${v.path}\n${v.raw}\n${base.raw}`;
   const [draft, setDraft] = useState(init);
   const [preview, setPreview] = useState(false);
   const [busy, setBusy] = useState(false);
   // 共用的 Textarea 不轉發 ref：從外層容器找到 textarea，才拿得到游標位置插入變數。
   const bodyWrap = useRef<HTMLDivElement | null>(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => setDraft(init()), [entry, lang]);
+  useEffect(() => setDraft(init()), [source, lang]);
   useEffect(() => setLang(""), [entry.kind, entry.name]);
-  const original = useMemo(init, [entry, lang]); // eslint-disable-line react-hooks/exhaustive-deps
-  const dirty = JSON.stringify(draft) !== JSON.stringify(original);
+  // 還原預設後，只存在於覆蓋版的語言變體就沒了：退回基底。
+  useEffect(() => {
+    if (!(lang in entry.variants)) setLang("");
+  }, [entry, lang]);
+  const original = useMemo(init, [source, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dirty = editable && JSON.stringify(draft) !== JSON.stringify(original);
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   const set = <K extends keyof typeof draft>(k: K, val: (typeof draft)[K]) => setDraft((d) => ({ ...d, [k]: val }));
 
   const skillNames = entriesOf("skill", snap).map((e) => e.name);
@@ -164,23 +427,34 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
         fields.skills = draft.skills;
         fields.tools = draft.restrictTools ? draft.tools.map((x) => `mcp__dbkit__${x}`) : null;
       }
-      await saveLibraryEntry({ kind: entry.kind, name: entry.name, lang, layer: entry.layer, fields, body: draft.body });
-    }, t("已儲存"));
+      await saveLibraryEntry({ kind: entry.kind, name: entry.name, lang, layer: saveLayer, fields, body: draft.body });
+    }, isBuiltin ? t("已存成自訂版本；隨時可以還原預設") : t("已儲存"));
 
-  const copyAs = async () => {
-    const hint = entry.layer === "builtin" ? t("用同一個名稱就是覆蓋內建版本；換個名稱則另存一份。") : t("輸入新名稱（英數與連字號）。");
-    const name = await uiPrompt(hint, { title: t("複製為自訂"), defaultValue: entry.name, confirmText: t("複製") });
-    if (!name?.trim()) return;
-    await run(() => copyLibraryEntry(entry.kind, entry.name, name.trim(), copyTarget), t("已複製；之後就可以直接編輯"));
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (dirty && !busy) void save();
+    }
+  };
+
+  const saveAsNew = async () => {
+    const name = await uiPrompt(t("輸入新名稱（英數與連字號）。"), { title: t("另存新項目"), defaultValue: `${entry.name}-copy`, confirmText: t("另存") });
+    const next = name?.trim();
+    if (!next) return;
+    await run(async () => {
+      await copyLibraryEntry(entry.kind, entry.name, next, copyTarget);
+      onJump(entry.kind as Tab, next);
+    }, t("已另存為 {name}", { name: next }));
   };
 
   const restore = async () => {
-    const ok = await uiConfirm(t("刪除「{layer}」裡的這份覆蓋，改回使用較低層（內建）的版本？", { layer: entry.layerLabel }), {
-      title: t("還原內建"),
-      danger: true,
-      confirmText: t("還原"),
-    });
-    if (ok) await run(() => deleteLibraryEntry(entry.kind, entry.name, entry.layer), t("已還原"));
+    const msg =
+      below?.layer === "builtin"
+        ? t("捨棄你對「{name}」的修改，改回內建預設？所有語言變體一起還原。", { name: entryTitle(entry) })
+        : t("刪除「{layer}」裡的這份覆蓋，改回使用「{below}」的版本？", { layer: entry.layerLabel, below: below?.layerLabel ?? "" });
+    const ok = await uiConfirm(msg, { title: t("還原預設"), danger: true, confirmText: t("還原") });
+    if (ok) await run(() => deleteLibraryEntry(entry.kind, entry.name, entry.layer), t("已還原預設"));
   };
 
   const remove = async () => {
@@ -202,7 +476,7 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
         kind: entry.kind,
         name: entry.name,
         lang: code,
-        layer: entry.layer,
+        layer: saveLayer,
         fields: { description: fieldStr(base.fields, "description") ?? null, "dbkit-title": fieldStr(base.fields, "dbkit-title") ?? null },
         body: base.body,
       });
@@ -234,19 +508,29 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
   }, [preview, entry, draft.body, tplLang, meta]);
 
   const issues = issuesOf(snap, entry);
+  const badge = statusBadge(entry, t);
+  const canRestore = writable && !!entry.builtin && !!below;
+  let note: ReactNode = null;
+  if (isBuiltin) {
+    note = t("內建版本：可以直接修改，儲存後存成你的自訂版本（App 升級不會蓋掉），之後隨時可以「還原預設」。");
+  } else if (!writable) {
+    note = t("這個團隊資料夾設定為唯讀；請在它的 git repo 裡修改，或複製一份到個人層。");
+  } else if (canRestore && below?.layer === "builtin") {
+    note = t("你修改過這個內建項目；App 升級帶來的內建更新不會套用到這裡。要改回請按「還原預設」。");
+  }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0" onKeyDown={onKeyDown}>
       {/* 標頭 */}
       <div className="px-4 py-3 border-b border-fg/10 space-y-2">
         <div className="flex items-center gap-2 flex-wrap">
           <div className="text-sm font-medium text-fg/90">{entryTitle(entry)}</div>
           <span className="font-mono text-[11px] text-fg/50">{entry.name}</span>
-          <Badge tone={layerTone(entry.layer)}>{entry.layerLabel}</Badge>
-          {entry.shadowed.length > 0 && (
+          {badge ? <Badge tone={badge.tone}>{badge.label}</Badge> : <Badge tone="neutral">{entry.layerLabel}</Badge>}
+          {entry.shadowed.length > 0 && !entry.builtin && (
             <Badge tone="warning">{t("覆蓋了 {layers}", { layers: entry.shadowed.map((s) => s.layerLabel).join(" / ") })}</Badge>
           )}
-          {!writable && (
+          {!editable && (
             <span className="inline-flex items-center gap-1 text-[11px] text-fg/45">
               <Icon icon={Lock} size={11} />
               {t("唯讀")}
@@ -258,8 +542,8 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
                 {t("在檔案總管顯示")}
               </Button>
             )}
-            {targets.length > 1 && (
-              <Select selectSize="sm" className="w-28" value={copyTarget} onChange={(e) => setCopyTarget(e.target.value)}>
+            {targets.length > 1 && (isBuiltin || entry.kind !== "prompt") && (
+              <Select selectSize="sm" className="w-28" value={copyTarget} onChange={(e) => setCopyTarget(e.target.value)} title={t("存到哪一層")}>
                 {targets.map((x) => (
                   <option key={x.id} value={x.id}>
                     {x.label}
@@ -267,12 +551,15 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
                 ))}
               </Select>
             )}
-            <Button variant="ghost" size="sm" icon={Copy} disabled={busy} onClick={() => void copyAs()}>
-              {t("複製為自訂")}
-            </Button>
-            {writable && entry.builtin && (
+            {/* 範本名稱固定對應功能，另存一份新名稱的範本沒有人會用到。 */}
+            {entry.kind !== "prompt" && (
+              <Button variant="ghost" size="sm" icon={Copy} disabled={busy} onClick={() => void saveAsNew()}>
+                {t("另存新項目")}
+              </Button>
+            )}
+            {canRestore && (
               <Button variant="ghost" size="sm" icon={RotateCcw} disabled={busy} onClick={() => void restore()}>
-                {t("還原內建")}
+                {t("還原預設")}
               </Button>
             )}
             {writable && (!entry.builtin || !isBase) && (
@@ -282,6 +569,7 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
             )}
           </div>
         </div>
+        <UsageRow entry={entry} snap={snap} onJump={onJump} />
         {/* 語言變體 */}
         <div className="flex items-center gap-1 flex-wrap">
           {langs.map((l) => (
@@ -294,7 +582,7 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
               {l || t("基底（{lang}）", { lang: fieldStr(base.fields, "dbkit-lang") ?? "zh-TW" })}
             </button>
           ))}
-          {writable && (
+          {editable && (
             <Button variant="ghost" size="sm" icon={Plus} onClick={() => void addVariant()}>
               {t("語言變體")}
             </Button>
@@ -305,21 +593,20 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
 
       {/* 內容 */}
       <div className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-3">
-        {!writable && (
-          <div className="text-[11px] text-fg/55 bg-fg/5 rounded px-2 py-1.5 leading-relaxed">
-            {entry.layer === "builtin"
-              ? t("內建版本唯讀，隨 App 升級更新。要修改請「複製為自訂」：同名就是覆蓋內建，之後升級也不會蓋掉你的版本。")
-              : t("這個團隊資料夾設定為唯讀；請在它的 git repo 裡修改，或複製一份到個人層。")}
+        {note && (
+          <div className="flex items-start gap-2 text-[11px] text-fg/55 bg-fg/5 rounded px-2 py-1.5 leading-relaxed">
+            <Icon icon={Info} size={12} className="mt-0.5 shrink-0 text-fg/40" />
+            <span className="flex-1">{note}</span>
           </div>
         )}
         <IssueList issues={issues} />
 
         <div className="grid grid-cols-2 gap-3">
           <Field label={t("顯示名稱（dbkit-title）")}>
-            <Input value={draft.title} disabled={!writable} onChange={(e) => set("title", e.target.value)} />
+            <Input value={draft.title} disabled={!editable} onChange={(e) => set("title", e.target.value)} />
           </Field>
           <Field label={t("說明（description）")} hint={entry.kind !== "prompt" ? t("Claude Code / Codex 用它決定何時使用；必填。") : undefined}>
-            <Input value={draft.description} disabled={!writable} onChange={(e) => set("description", e.target.value)} />
+            <Input value={draft.description} disabled={!editable} onChange={(e) => set("description", e.target.value)} />
           </Field>
         </div>
 
@@ -327,17 +614,17 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
           <div className="rounded border border-fg/10 p-3 space-y-3">
             <div className="grid grid-cols-3 gap-3">
               <Field label={t("角色")}>
-                <Select value={draft.role} disabled={!writable} onChange={(e) => set("role", e.target.value)}>
+                <Select value={draft.role} disabled={!editable} onChange={(e) => set("role", e.target.value)}>
                   <option value="dba">{t("DBA 審查者")}</option>
                   <option value="assistant">{t("助手")}</option>
                 </Select>
               </Field>
               <Field label={t("回合上限（maxTurns）")} hint={t("DBA agent 最多查幾輪資料庫再下結論")}>
-                <Input value={draft.maxTurns} disabled={!writable} placeholder="10" onChange={(e) => set("maxTurns", e.target.value.replace(/[^\d]/g, ""))} />
+                <Input value={draft.maxTurns} disabled={!editable} placeholder="10" onChange={(e) => set("maxTurns", e.target.value.replace(/[^\d]/g, ""))} />
               </Field>
               <Field label={t("可查資料庫")}>
                 <label className="flex items-center gap-2 h-8 text-xs">
-                  <input type="checkbox" checked={draft.dbTools} disabled={!writable} onChange={(e) => set("dbTools", e.target.checked)} />
+                  <input type="checkbox" checked={draft.dbTools} disabled={!editable} onChange={(e) => set("dbTools", e.target.checked)} />
                   {t("允許 DBA 自己呼叫唯讀資料庫工具")}
                 </label>
               </Field>
@@ -346,7 +633,7 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
               <Field label={t("允許的工具（tools）")} hint={t("同步到 Claude Code 時也用這份清單；不限定 = 全部唯讀工具。")}>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <label className="flex items-center gap-1 text-[11px] mr-2">
-                    <input type="checkbox" checked={draft.restrictTools} disabled={!writable} onChange={(e) => set("restrictTools", e.target.checked)} />
+                    <input type="checkbox" checked={draft.restrictTools} disabled={!editable} onChange={(e) => set("restrictTools", e.target.checked)} />
                     {t("限定")}
                   </label>
                   {draft.restrictTools &&
@@ -356,7 +643,7 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
                         <button
                           key={tool}
                           type="button"
-                          disabled={!writable}
+                          disabled={!editable}
                           onClick={() => set("tools", on ? draft.tools.filter((x) => x !== tool) : [...draft.tools, tool])}
                           className={`font-mono px-1.5 h-6 rounded text-[11px] border ${on ? "border-accent bg-accent/15" : "border-fg/10 text-fg/45"}`}
                         >
@@ -367,7 +654,7 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
                 </div>
               </Field>
             )}
-            <Field label={t("預載技能（skills）")}>
+            <Field label={t("預載技能（skills）")} hint={t("這位人設每次都會帶上的技能，內容在「技能」分頁編輯。")}>
               <div className="flex flex-wrap gap-1.5">
                 {skillNames.map((s) => {
                   const on = draft.skills.includes(s);
@@ -376,7 +663,7 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
                     <button
                       key={s}
                       type="button"
-                      disabled={!writable}
+                      disabled={!editable}
                       onClick={() => set("skills", on ? draft.skills.filter((x) => x !== s) : [...draft.skills, s])}
                       title={se ? entryDescription(se) : s}
                       className={`inline-flex items-center gap-1 px-2 h-6 rounded text-[11px] border ${on ? "border-accent bg-accent/15 text-fg" : "border-fg/10 text-fg/55"}`}
@@ -398,7 +685,7 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
               <button
                 key={name}
                 type="button"
-                disabled={!writable}
+                disabled={!editable}
                 title={varLabel(name)}
                 onClick={() => insertVar(name)}
                 className={`font-mono px-1.5 h-5 rounded text-[10px] border ${meta.required.includes(name) ? "border-accent/60 text-accent" : "border-fg/15 text-fg/60"} hover:border-fg/40`}
@@ -424,7 +711,7 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
               rows={18}
               className="font-mono text-[12px] leading-relaxed"
               value={draft.body}
-              disabled={!writable}
+              disabled={!editable}
               onChange={(e) => set("body", e.target.value)}
             />
             </div>
@@ -459,14 +746,15 @@ function EntryEditor({ entry, snap }: { entry: LibEntry; snap: LibrarySnapshot }
           </Button>
         )}
         <span className="text-[11px] text-fg/40 truncate font-mono">{v.path}</span>
-        <div className="ml-auto flex gap-2">
-          {dirty && writable && (
+        <div className="ml-auto flex items-center gap-2">
+          {dirty && <span className="text-[11px] text-warning">{t("未儲存")}</span>}
+          {dirty && (
             <Button variant="ghost" onClick={() => setDraft(original)}>
               {t("捨棄變更")}
             </Button>
           )}
-          <Button variant="primary" icon={Save} disabled={!writable || !dirty || busy} onClick={() => void save()}>
-            {t("儲存")}
+          <Button variant="primary" icon={Save} disabled={!dirty || busy} onClick={() => void save()} title="Ctrl+S">
+            {isBuiltin ? t("儲存為自訂版本") : t("儲存")}
           </Button>
         </div>
       </div>
@@ -731,10 +1019,23 @@ export default function AiLibraryDialog({
   const [tab, setTab] = useState<Tab>(initialTab);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(initialName);
+  const [howOpen, setHowOpen] = useState(readHowOpen);
   const activeSkills = useAiSkills((s) => s.selected);
   const toggleSkill = useAiSkills((s) => s.toggle);
   // 只數還存在的技能：勾選清單裡可能留著已刪除技能的名稱。
   const activeCount = entriesOf("skill", snap).filter((e) => activeSkills.includes(e.name)).length;
+
+  // 編輯器回報有沒有沒存的修改；換項目、換分頁、關對話框前先問一聲。
+  const dirtyRef = useRef(false);
+  const onDirtyChange = useCallback((d: boolean) => {
+    dirtyRef.current = d;
+  }, []);
+  const confirmLeave = async () =>
+    !dirtyRef.current ||
+    (await uiConfirm(t("有未儲存的修改，要捨棄嗎？"), { title: t("未儲存的修改"), danger: true, confirmText: t("捨棄") }));
+  const close = async () => {
+    if (await confirmLeave()) onClose();
+  };
 
   useEffect(() => {
     if (open) void loadAiLibrary();
@@ -748,10 +1049,30 @@ export default function AiLibraryDialog({
       (e) => !needle || e.name.toLowerCase().includes(needle) || entryTitle(e).toLowerCase().includes(needle),
     );
   }, [kind, snap, q]);
-  const current = kind ? (list.find((e) => e.name === sel) ?? list[0] ?? null) : null;
+  // 人設分兩群：DBA 審查者 / 助手——兩種用在不同功能，混在一起看不出誰是誰。
+  const groups = useMemo(() => {
+    if (kind !== "agent") return [{ key: "all", label: null as string | null, items: list }];
+    return [
+      { key: "dba", label: t("DBA 審查者"), items: list.filter((e) => roleOf(e) === "dba") },
+      { key: "assistant", label: t("助手"), items: list.filter((e) => roleOf(e) !== "dba") },
+    ].filter((g) => g.items.length > 0);
+  }, [kind, list, t]);
+  const ordered = groups.flatMap((g) => g.items);
+  const current = kind ? (ordered.find((e) => e.name === sel) ?? ordered[0] ?? null) : null;
+
+  const go = async (nextTab: Tab, name: string | null = null) => {
+    // 點的就是正在編輯的那一筆（還沒選過時預設選第一筆）→ 什麼都不用做。
+    if (nextTab === tab && (name === sel || (name !== null && name === current?.name))) return;
+    if (!(await confirmLeave())) return;
+    dirtyRef.current = false;
+    if (nextTab !== tab) setQ("");
+    setTab(nextTab);
+    setSel(name);
+  };
 
   const create = async () => {
     if (!kind || kind === "prompt") return;
+    if (!(await confirmLeave())) return;
     const name = await uiPrompt(t("名稱（小寫英數與連字號，例如 dba-team）："), { title: kind === "agent" ? t("新增人設") : t("新增技能") });
     if (!name?.trim()) return;
     try {
@@ -765,106 +1086,143 @@ export default function AiLibraryDialog({
             : { description: t("自訂技能"), "dbkit-title": name.trim() },
         body: kind === "agent" ? t("你是……（描述這位 DBA 的專長、審查重點與結論分寸：什麼情況 STOP、什麼情況 CAUTION）") : t("（描述這個技能要模型怎麼做）"),
       });
+      dirtyRef.current = false;
+      setQ("");
       setSel(name.trim());
     } catch (e: any) {
       toast.error(e?.message ?? String(e));
     }
   };
 
-  const tabs = [
-    { value: "agent" as const, label: t("人設"), icon: Users },
-    { value: "skill" as const, label: t("技能"), icon: Wand2 },
-    { value: "prompt" as const, label: t("提示範本"), icon: FileText },
-    { value: "sources" as const, label: t("來源與同步"), icon: FolderOpen },
+  const tabs: TabDef[] = [
+    { value: "agent", label: t("人設"), sub: t("AI 扮演誰"), icon: Users, count: entriesOf("agent", snap).length },
+    { value: "skill", label: t("技能"), sub: t("附加的專業知識"), icon: Wand2, count: entriesOf("skill", snap).length },
+    { value: "prompt", label: t("提示範本"), sub: t("每個 AI 動作的指令"), icon: FileText, count: entriesOf("prompt", snap).length },
+    { value: "sources", label: t("來源與同步"), sub: t("資料夾、預設與同步"), icon: FolderOpen },
   ];
+  const intro: Record<Tab, string> = {
+    agent: t("人設是系統提示的開頭，決定 AI 以什麼身分、什麼標準回答。DBA 審查者用在 DBA 審查與多位 DBA 會審，助手人設用在 AI 助手；誰是預設在「來源與同步」指定。"),
+    skill: t("技能是一段可重複使用的專業知識（SKILL.md），接在人設後面送出。兩種帶法：在這裡勾選 → AI 助手對話會帶上；在人設裡「預載」→ 那位 DBA 審查時一定帶上。"),
+    prompt: t("提示範本是每個 AI 動作（解釋、加註解、修正、DBA 審查、自然語言轉 SQL…）送出的指令，裡面的變數會換成當下的 SQL、方言與 schema。名稱固定對應功能，所以只能修改、不能新增。"),
+    sources: t("檔案放在哪裡（內建 < 個人 < 團隊，同名時後者覆蓋前者）、各功能預設用哪位人設，以及同步到 Claude Code / Codex。"),
+  };
   const errCount = snap.issues.filter((i) => i.level === "error").length;
+  const toggleHow = () => {
+    setHowOpen((o) => {
+      writeHowOpen(!o);
+      return !o;
+    });
+  };
 
   return (
-    <Modal open={open} onClose={onClose} title={t("AI 資源庫")} icon={Library} size="full" bodyClassName="p-0" className="h-[82vh]">
+    <Modal open={open} onClose={() => void close()} title={t("AI 資源庫")} icon={Library} size="full" bodyClassName="p-0" className="h-[82vh]">
       <div className="flex flex-col h-full min-h-0">
-        {/* 分頁放在整個對話框上方一列：左欄只有 w-72，四個分頁連圖示塞不下（以前被擠成「人 / 設」「來源 / 與同 / 步」）。 */}
-        <div className="shrink-0 px-3 py-2 border-b border-fg/10">
-          <Segmented options={tabs} value={tab} onChange={(v) => { setTab(v); setSel(null); }} ariaLabel={t("AI 資源庫")} />
+        <div className="px-3 pt-3 pb-2 space-y-2 border-b border-fg/10">
+          <FlowTabs tabs={tabs} value={tab} onChange={(v) => void go(v)} />
+          <div className="flex items-start gap-2">
+            <p className="flex-1 text-[11px] text-fg/55 leading-relaxed pt-1">{intro[tab]}</p>
+            <Button variant="ghost" size="sm" icon={Info} onClick={toggleHow} aria-expanded={howOpen}>
+              {howOpen ? t("收起運作方式") : t("運作方式")}
+            </Button>
+          </div>
+          {howOpen && <HowItWorks onJump={(v) => void go(v)} />}
         </div>
         <div className="flex flex-1 min-h-0">
-        <div className="w-72 shrink-0 border-r border-fg/10 flex flex-col min-h-0">
           {kind && (
-            <div className="p-2 space-y-2 border-b border-fg/10">
-              <div className="flex gap-1">
-                <Input inputSize="sm" className="flex-1 min-w-0" value={q} placeholder={t("搜尋…")} onChange={(e) => setQ(e.target.value)} />
-                {kind !== "prompt" && (
-                  <Button variant="ghost" size="sm" icon={Plus} onClick={() => void create()} title={t("新增到個人層")} />
-                )}
-                <Button variant="ghost" size="sm" icon={RefreshCw} onClick={() => void loadAiLibrary()} title={t("重新載入")} />
-              </div>
-              {kind === "skill" && (
-                <div className="text-[10px] text-fg/45 leading-relaxed px-0.5">
-                  {t("勾選的技能會附在助手對話的人設後面（已選 {n} 個）", { n: activeCount })}
+            <div className="w-72 shrink-0 border-r border-fg/10 flex flex-col min-h-0">
+              <div className="p-2 space-y-2 border-b border-fg/10">
+                <div className="flex gap-1">
+                  <Input inputSize="sm" className="flex-1 min-w-0" value={q} placeholder={t("搜尋…")} onChange={(e) => setQ(e.target.value)} />
+                  {kind !== "prompt" && (
+                    <Button variant="ghost" size="sm" icon={Plus} onClick={() => void create()} title={t("新增到個人層")} />
+                  )}
+                  <Button variant="ghost" size="sm" icon={RefreshCw} onClick={() => void loadAiLibrary()} title={t("重新載入")} />
                 </div>
-              )}
+                {kind === "skill" && (
+                  <div className="text-[10px] text-fg/45 leading-relaxed px-0.5">
+                    {t("勾選的技能會附在助手對話的人設後面（已選 {n} 個）", { n: activeCount })}
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 overflow-auto">
+                {ordered.length === 0 && <div className="p-3 text-[11px] text-fg/45">{t("沒有符合的項目")}</div>}
+                {groups.map((g) => (
+                  <div key={g.key}>
+                    {g.label && (
+                      <div className="px-3 pt-2.5 pb-1 text-[10px] font-medium text-fg/40 border-b border-fg/5">
+                        {g.label}
+                        <span className="ml-1 tabular-nums">{g.items.length}</span>
+                      </div>
+                    )}
+                    {g.items.map((e) => {
+                      const iss = issuesOf(snap, e);
+                      const active = e.kind === "skill" && activeSkills.includes(e.name);
+                      const badge = statusBadge(e, t);
+                      const inUse = e.kind === "agent" && personaUses(e, snap, t).length > 0;
+                      return (
+                        <div
+                          key={`${e.kind}:${e.name}`}
+                          className={`flex items-stretch border-b border-fg/5 ${current?.name === e.name ? "bg-accent/10" : "hover:bg-fg/5"}`}
+                        >
+                          {/* 技能列前的勾選框 = 助手對話要不要附帶它；點其餘部分才是選取來編輯。 */}
+                          {e.kind === "skill" && (
+                            <label
+                              className="flex items-center pl-3 cursor-pointer"
+                              title={active ? t("已在助手對話啟用（點擊停用）") : t("在助手對話啟用")}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={active}
+                                onChange={() => toggleSkill(e.name)}
+                                aria-label={t("在助手對話啟用 {name}", { name: entryTitle(e) })}
+                                className="accent-blue-500"
+                              />
+                            </label>
+                          )}
+                          <button type="button" onClick={() => void go(tab, e.name)} className="flex-1 min-w-0 text-left px-3 py-2">
+                            <div className="flex items-center gap-1.5">
+                              {e.kind === "agent" && <Icon icon={roleOf(e) === "dba" ? Users : Bot} size={12} className="text-fg/45" />}
+                              <span className="text-[12px] text-fg/90 truncate">{entryTitle(e)}</span>
+                              {iss.some((i) => i.level !== "info") && <Icon icon={AlertTriangle} size={11} className="text-warning" />}
+                            </div>
+                            <div className="flex items-center gap-1 mt-0.5">
+                              <span className="font-mono text-[10px] text-fg/40 truncate">{e.name}</span>
+                              <span className="ml-auto flex items-center gap-1">
+                                {inUse && <Badge tone="success">{t("使用中")}</Badge>}
+                                {badge && <Badge tone={badge.tone}>{badge.label}</Badge>}
+                              </span>
+                            </div>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
-          <div className="flex-1 overflow-auto">
-            {kind ? (
-              list.map((e) => {
-                const iss = issuesOf(snap, e);
-                const role = e.kind === "agent" ? fieldStr(e.variants[""].fields, "dbkit-role") : null;
-                const active = e.kind === "skill" && activeSkills.includes(e.name);
-                return (
-                  <div
-                    key={`${e.kind}:${e.name}`}
-                    className={`flex items-stretch border-b border-fg/5 ${current?.name === e.name ? "bg-accent/10" : "hover:bg-fg/5"}`}
-                  >
-                    {/* 技能列前的勾選框 = 助手對話要不要附帶它；點其餘部分才是選取來編輯。 */}
-                    {e.kind === "skill" && (
-                      <label
-                        className="flex items-center pl-3 cursor-pointer"
-                        title={active ? t("已在助手對話啟用（點擊停用）") : t("在助手對話啟用")}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={active}
-                          onChange={() => toggleSkill(e.name)}
-                          aria-label={t("在助手對話啟用 {name}", { name: entryTitle(e) })}
-                          className="accent-blue-500"
-                        />
-                      </label>
-                    )}
-                    <button type="button" onClick={() => setSel(e.name)} className="flex-1 min-w-0 text-left px-3 py-2">
-                      <div className="flex items-center gap-1.5">
-                        {e.kind === "agent" && <Icon icon={role === "dba" ? Users : Bot} size={12} className="text-fg/45" />}
-                        <span className="text-[12px] text-fg/90 truncate">{entryTitle(e)}</span>
-                        {iss.some((i) => i.level !== "info") && <Icon icon={AlertTriangle} size={11} className="text-warning" />}
-                      </div>
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <span className="font-mono text-[10px] text-fg/40 truncate">{e.name}</span>
-                        <Badge tone={layerTone(e.layer)} className="ml-auto">
-                          {e.layerLabel}
-                        </Badge>
-                        {e.shadowed.length > 0 && <Badge tone="warning">{t("覆蓋")}</Badge>}
-                      </div>
-                    </button>
-                  </div>
-                );
-              })
+          <div className="flex-1 min-w-0 min-h-0">
+            {tab === "sources" ? (
+              <SourcesPanel snap={snap} />
+            ) : current ? (
+              <EntryEditor
+                key={`${current.kind}:${current.name}`}
+                entry={current}
+                snap={snap}
+                onJump={(v, name) => void go(v, name ?? null)}
+                onDirtyChange={onDirtyChange}
+              />
             ) : (
-              <div className="p-3 text-[11px] text-fg/50 leading-relaxed">
-                {loaded ? t("資源庫已載入。") : t("正在使用內建資源庫（尚未讀到設定目錄）。")}
-                {errCount > 0 && <div className="text-danger mt-1">{t("{n} 個錯誤，見右側檢查結果。", { n: errCount })}</div>}
-              </div>
+              <EmptyState icon={Library} title={t("沒有項目")} />
             )}
           </div>
         </div>
-        <div className="flex-1 min-w-0 min-h-0">
-          {tab === "sources" ? (
-            <SourcesPanel snap={snap} />
-          ) : current ? (
-            <EntryEditor key={`${current.kind}:${current.name}:${current.layer}`} entry={current} snap={snap} />
-          ) : (
-            <EmptyState icon={Library} title={t("沒有項目")} />
-          )}
-        </div>
-        </div>
+        {tab === "sources" && !loaded && (
+          <div className="px-3 py-1.5 border-t border-fg/10 text-[11px] text-fg/50">{t("正在使用內建資源庫（尚未讀到設定目錄）。")}</div>
+        )}
+        {tab === "sources" && errCount > 0 && (
+          <div className="px-3 py-1.5 border-t border-fg/10 text-[11px] text-danger">{t("{n} 個錯誤，見下方「檢查結果」。", { n: errCount })}</div>
+        )}
       </div>
     </Modal>
   );
