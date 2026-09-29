@@ -843,6 +843,8 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
 }) {
   const t = useT();
   const assistantOpen = useAssistant((s) => s.open);
+  // 右側主題下拉依「目前選到的主題名」撐寬（見 MENU_BOX），換主題＝右側組寬度變了，要重新量 compact。
+  const themeId = useTheme((s) => s.themeId);
   // 到 GitHub 查最新 Release（每天最多一次，失敗安靜略過）；比目前版本新才顯示標記。
   // 延後 10 秒發出：啟動最忙的時間窗（載入連線 / 首屏渲染）完全讓路；可於設定關閉自動檢查。
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
@@ -880,8 +882,9 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
   const barRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const neededRef = useRef(0);
-  // 換語言 → 標籤長度變了，先前記住的 neededRef 失效，重新從展開狀態量一次。
-  useLayoutEffect(() => { neededRef.current = 0; setCompact(false); }, [t]);
+  // 換語言 → 標籤長度變了；換主題 → 右側下拉寬度變了。兩者都讓先前記住的 neededRef 失效，
+  // 重新從展開狀態量一次（layout effect 內同步重算，畫面不會閃一幀展開態）。
+  useLayoutEffect(() => { neededRef.current = 0; setCompact(false); }, [t, themeId]);
   useLayoutEffect(() => {
     const bar = barRef.current;
     if (!bar) return;
@@ -896,10 +899,13 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
       }
     };
     measure();
+    // 除了 bar 本身（視窗縮放），也盯它的直接子元素：字型載入完成、右側下拉依所選主題撐寬、
+    // 「有新版」提示出現 —— 這些只會讓**內容**變寬，bar 的尺寸不動，光看 bar 會漏掉而留下溢出。
     const ro = new ResizeObserver(measure);
     ro.observe(bar);
+    for (const child of bar.children) ro.observe(child);
     return () => ro.disconnect();
-  }, [compact, t]);
+  }, [compact, t, themeId]);
 
   return (
     <div ref={barRef} className="h-16 bg-bar border-b border-fg/10 flex items-center px-3 gap-1">
@@ -939,7 +945,7 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
           disabled={tool.disabled}
           title={tool.disabled && tool.hint ? tool.hint : tool.label}
           {...(tool.active !== undefined ? { "aria-pressed": tool.active } : {})}
-          className={`${compact ? "w-11" : "min-w-16 px-2"} shrink-0 h-12 flex flex-col items-center justify-center rounded hover:bg-fg/5 disabled:opacity-40 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-accent/60 ${
+          className={`${compact ? "w-10" : "min-w-16 px-2"} shrink-0 h-12 flex flex-col items-center justify-center rounded hover:bg-fg/5 disabled:opacity-40 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-accent/60 ${
             tool.active ? "bg-accent/12 text-accent" : ""
           }`}
         >
@@ -947,8 +953,9 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
           {!compact && <span className="text-[11px] text-fg/60 mt-1 whitespace-nowrap">{tool.label}</span>}
         </button>
       ))}
-      {/* 主題 + 語言靠右成組；compact 時一併收窄並收起圖示，否則 900px（視窗最小寬）仍塞不下。 */}
-      <div className="ml-auto shrink-0 flex items-center gap-3 pl-3">
+      {/* 主題 + 語言靠右成組；compact 時收起圖示。下拉寬度跟著所選項目走（見 MENU_BOX），
+          最長的「Obsidian 黑曜石」搭 compact 的 40px 按鈕，在 900px（視窗最小寬）仍放得下。 */}
+      <div className="ml-auto shrink-0 flex items-center gap-2 pl-2">
         <LanguageMenu compact={compact} />
         <ThemeMenu compact={compact} />
       </div>
@@ -956,9 +963,13 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
   );
 }
 
-// 工具列右側的兩個下拉共用外框：compact 時收起圖示並收窄，讓 900px 的最小視窗仍放得下。
-const MENU_BOX = (compact: boolean) =>
-  `shrink-0 flex items-center gap-1.5 ${compact ? "w-24" : "w-32"}`;
+// 工具列右側的兩個下拉共用外框：compact 時收起圖示，讓 900px 的最小視窗仍放得下。
+//
+// 寬度不寫死：原本 w-32 / w-24 的固定框會把「Obsidian 黑曜石」這類長選項裁成「Obsidian 黑」，
+// compact 時連「繁體中文」都被切。改成由 <select> 自己撐 —— 搭配 .field-sizing-content
+// 讓寬度跟著**目前選到的那一項**走（預設的「暗黑」/「光亮」比舊的固定框還窄），
+// 不支援 field-sizing 的 WebView 則退回原生行為「依最寬選項」，一樣不裁字、只是略寬。
+const MENU_BOX = "shrink-0 flex items-center gap-1.5";
 
 // ---- 主題選擇（配色 + 深淺整併）：工具列右側；所有配色平鋪為單層清單，取代原深淺滑桿 ----
 function ThemeMenu({ compact = false }: { compact?: boolean }) {
@@ -966,9 +977,9 @@ function ThemeMenu({ compact = false }: { compact?: boolean }) {
   const themeId = useTheme((s) => s.themeId);
   const setThemeId = useTheme((s) => s.setThemeId);
   return (
-    <div className={MENU_BOX(compact)} title={t("主題（配色 + 深淺）")}>
+    <div className={MENU_BOX} title={t("主題（配色 + 深淺）")}>
       {!compact && <Icon icon={Palette} size={16} className="text-fg/55 shrink-0" />}
-      <Select selectSize="sm" value={themeId}
+      <Select selectSize="sm" className="field-sizing-content" value={themeId}
         onChange={(e) => setThemeId(e.target.value as EditorThemeId)}>
         <option value="moonstone">{t("光亮")}</option>
         <option value="amethyst">{t("暗黑")}</option>
@@ -988,9 +999,9 @@ function LanguageMenu({ compact = false }: { compact?: boolean }) {
   const lang = useLang((s) => s.lang);
   const setLang = useLang((s) => s.setLang);
   return (
-    <div className={MENU_BOX(compact)} title={t("語言")}>
+    <div className={MENU_BOX} title={t("語言")}>
       {!compact && <Icon icon={Globe} size={16} className="text-fg/55 shrink-0" />}
-      <Select selectSize="sm" value={lang}
+      <Select selectSize="sm" className="field-sizing-content" value={lang}
         onChange={(e) => { void setLang(e.target.value as Lang); }}>
         {LANGUAGES.map((l) => (
           <option key={l.id} value={l.id}>{l.label}</option>

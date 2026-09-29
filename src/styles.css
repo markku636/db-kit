@@ -136,6 +136,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* <select> 寬度跟著「目前選到的那一項」走，而不是最寬選項或外框寫死的寬度。
+   工具列右側的主題 / 語言下拉用它：預設的「暗黑」窄、選到「Obsidian 黑曜石」就自己撐開，
+   不會再被固定框裁字。Tailwind 3 沒有這個 utility（v4 才有 field-sizing-content）；
+   不支援 field-sizing 的 WebView（舊 WebKit）忽略此宣告，退回原生「依最寬選項」—— 一樣不裁字。 */
+.field-sizing-content {
+  field-sizing: content;
+}
+
 /* Tailwind 的任意值字級（text-[11px] 這類小標籤，全案 200+ 處）會編成固定 px，
    不跟著 --ui-font-size 走 —— 而那些正是放大介面時最需要一起長大的字。
    這裡以同名、同特異性的規則改寫為 rem；本檔在 @tailwind utilities 之後，
