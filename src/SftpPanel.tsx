@@ -134,6 +134,7 @@ export default function SftpPanel({
   const [dragHint, setDragHint] = useState(false);
   const filterRef = useRef<HTMLInputElement>(null);
   const pathInputRef = useRef<HTMLInputElement>(null);
+  const crumbsRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   // 欄位跟著清單寬度收：名稱至少留 6rem；先收「權限」（5rem），再收「修改時間」（8rem），「大小」（4rem）一定在。
   // 用 rem 算，介面字級放大時會提早收，不會出現橫向捲軸。
@@ -591,6 +592,10 @@ export default function SftpPanel({
     for (const p of parts) { cur += `/${p}`; acc.push({ label: p, path: cur }); }
     return acc;
   }, [path]);
+  useEffect(() => {
+    const el = crumbsRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [path, editingPath]);
 
   const myJobs = Object.values(jobs).filter((j) => j.tabKey === tabKey);
   const cutHere = useMemo(() => new Set(clip && clip.dir === path ? clip.items.map((x) => x.name) : []), [clip, path]);
@@ -666,7 +671,8 @@ export default function SftpPanel({
       <div className="shrink-0 flex items-center gap-0.5 px-1 py-1 border-b border-fg/10">
         <IconButton icon={ArrowUp} label={t("上一層（Backspace）")} box="w-6 h-6" iconSize={14} onClick={() => navigate(parentOf(path))} disabled={path === "/"} />
         <IconButton icon={RefreshCw} label={t("重新整理（F5）")} box="w-6 h-6" iconSize={13} onClick={refresh} disabled={!sftpId} />
-        <div className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto mono">
+        {/* 路徑太長（或介面字級放大）時麵包屑橫向捲動，換資料夾時捲到最右邊：目前所在的那一層一定看得到。 */}
+        <div ref={crumbsRef} data-hscroll-ok="" className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto mono">
           {editingPath != null ? (
             <input
               ref={pathInputRef}
@@ -689,10 +695,13 @@ export default function SftpPanel({
                     className={`px-1 rounded hover:bg-fg/10 ${i === crumbs.length - 1 ? "text-fg/90" : "text-fg/55"}`}>{c.label}</button>
                 </span>
               ))}
-              <IconButton icon={Pencil} label={t("輸入路徑")} box="w-5 h-5" iconSize={11} className="ml-auto" onClick={() => setEditingPath(path)} />
             </>
           )}
         </div>
+        {/* 放在可捲動的麵包屑外面，不會被擠出去裁掉。 */}
+        {editingPath == null && (
+          <IconButton icon={Pencil} label={t("輸入路徑")} box="w-5 h-5" iconSize={11} className="shrink-0" onClick={() => setEditingPath(path)} />
+        )}
         <IconButton icon={SquareTerminal} box="w-6 h-6" iconSize={14} disabled={!sftpId || !termDir}
           label={termDir ? t("到終端機目前的資料夾：{dir}", { dir: termDir }) : t("看不出終端機目前在哪個資料夾（shell 沒有回報）")}
           onClick={goToTerminalDir} />
