@@ -3727,6 +3727,13 @@ const en: Catalog = {
   "連線時間": "Connected for",
   "開始記錄到 {path}": "Recording to {path}",
   "開始記錄工作階段…": "Record session…",
+  // ---- 終端機斷線提示列 / 跳板機空清單 ----
+  "遠端主機中斷了連線": "The remote host closed the connection",
+  "連線逾時": "Connection timed out",
+  "連線被拒絕": "Connection refused",
+  "連不到主機": "Host unreachable",
+  "在終端機按 Enter 也能重新連線": "or press Enter in the terminal",
+  "還沒有其他主機可當跳板機：先把跳板機新增成一台主機，這裡就能選它。": "No other hosts to jump through yet: add the jump host as a host first, then pick it here.",
 };
 
 export default en;

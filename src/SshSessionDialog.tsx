@@ -73,6 +73,7 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
   // 跳板機（ProxyJump）：另一台已存主機；"" = 直連。
   const [jumpId, setJumpId] = useState(init.next.jumpId);
   const allSessions = useSshSessions((s) => s.sessions);
+  const jumpOptions = jumpChoices(allSessions, base.id);
   const [auth, setAuth] = useState<SshAuthKind>(init.next.auth);
   const [password, setPassword] = useState(init.next.password);
   const [rememberPassword, setRememberPassword] = useState(true);
@@ -272,7 +273,7 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
     const r = applySshString(
       p,
       { host, port, username, auth, password, keyPath, jumpId, openSftp, sftpDir },
-      jumpChoices(allSessions, base.id),
+      jumpOptions,
     );
     const f = r.next;
     setHost(f.host); setPort(f.port); setUsername(f.username); setAuth(f.auth); setPassword(f.password);
@@ -364,10 +365,16 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
           <Field label={t("使用者")} className="flex-[2] min-w-[10rem]" required>
             <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} placeholder="deploy" aria-label={t("使用者")} />
           </Field>
-          <Field label={t("跳板機")} className="flex-[3] min-w-[14rem]" hint={t("先連上這台，再經由它連到目標主機（ProxyJump）。跳板機要允許 TCP 轉送。")}>
-            <Select value={jumpId} onChange={(e) => setJumpId(e.target.value)} aria-label={t("跳板機")}>
+          {/* 跳板機只能選「已存的另一台主機」。一台都沒有（例如正在新增第一台）時，清單只剩「直連」，
+              看起來像功能沒做——這時停用下拉，提示改成告訴使用者該怎麼做。 */}
+          <Field label={t("跳板機")} className="flex-[3] min-w-[14rem]"
+            hint={jumpOptions.length || jumpId
+              ? t("先連上這台，再經由它連到目標主機（ProxyJump）。跳板機要允許 TCP 轉送。")
+              : t("還沒有其他主機可當跳板機：先把跳板機新增成一台主機，這裡就能選它。")}>
+            <Select value={jumpId} onChange={(e) => setJumpId(e.target.value)} aria-label={t("跳板機")}
+              disabled={!jumpOptions.length && !jumpId}>
               <option value="">{t("不經跳板機（直連）")}</option>
-              {jumpChoices(allSessions, base.id).map((s) => (
+              {jumpOptions.map((s) => (
                 <option key={s.id} value={s.id}>{sessionLabel(s)}{s.name ? `（${s.username}@${s.host}）` : ""}</option>
               ))}
               {jumpId && !allSessions.some((s) => s.id === jumpId) && <option value={jumpId}>{t("（已刪除的主機）")}</option>}

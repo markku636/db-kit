@@ -288,6 +288,7 @@ const CASES = {
     await edit();
     const sel = page.getByLabel("跳板機", { exact: true });
     await sel.waitFor({ timeout: 5000 }).catch(() => {});
+    check("有其他主機時跳板機下拉可以選", await sel.isEnabled().catch(() => false));
     const opts = await sel.locator("option").allTextContents();
     check("跳板機清單不含自己", !opts.some((o) => o.startsWith("web-01")) && opts.some((o) => o.includes("bastion.example.com")), JSON.stringify(opts));
     await sel.selectOption("ssh-bastion");
@@ -328,6 +329,10 @@ const CASES = {
     const sshTitle = page.getByText("新增 SSH 主機", { exact: true });
     await sshTitle.first().waitFor({ timeout: 5000 }).catch(() => {});
     check("點 SSH / SFTP 改開 SSH 主機對話框", (await sshTitle.count()) > 0 && (await page.getByRole("radiogroup", { name: "連線類型" }).count()) === 0);
+    // 第一台主機：沒有別台可當跳板機——下拉停用、提示講怎麼做，而不是只剩一個「直連」選項像沒做完。
+    const jumpSel = page.getByLabel("跳板機", { exact: true });
+    check("一台主機都沒有時跳板機下拉停用並說明怎麼做",
+      (await jumpSel.isDisabled().catch(() => false)) && (await page.getByText(/還沒有其他主機可當跳板機/).count()) > 0);
     const importLink = page.getByRole("button", { name: "從 ~/.ssh/config、.xsh 匯入…", exact: true });
     check("新增 SSH 主機對話框有匯入入口", (await importLink.count()) === 1);
     await importLink.click();
@@ -525,11 +530,13 @@ const CASES = {
   async "ssh-disconnect-overlay"(page, opts = {}) {
     if (!opts.skipOpen) await openSshWeb01(page);
     const first = await page.evaluate(() => window.__DBKIT_SSH_LAST_CONN__);
-    const closeConn = (id) => page.evaluate((c) => window.__DBKIT_EMIT__("ssh-conn-closed", { conn_id: c, reason: "遠端主機已強制關閉一個現存的連線。 (os error 10054)" }), id);
+    const closeConn = (id, reason = "遠端主機已強制關閉一個現存的連線。 (os error 10054)") =>
+      page.evaluate(([c, r]) => window.__DBKIT_EMIT__("ssh-conn-closed", { conn_id: c, reason: r }), [id, reason]);
     await closeConn(first);
     const bar = page.getByTestId("ssh-disconnected");
     await bar.waitFor({ timeout: 5000 }).catch(() => {});
     check("斷線後顯示提示列與原因", /10054/.test(await bar.innerText().catch(() => "")));
+    check("提示列標題講人話（os error 10054 → 遠端主機中斷了連線）", /遠端主機中斷了連線/.test(await bar.innerText().catch(() => "")));
     let err = "";
     await bar.getByRole("button", { name: "重新連線", exact: true }).click({ timeout: 3000 }).catch((e) => { err = String(e.message).split("\n").slice(0, 30).join(" | "); });
     check("提示列的「重新連線」點得到", !err, err);
@@ -537,8 +544,32 @@ const CASES = {
     const second = await page.evaluate(() => window.__DBKIT_SSH_LAST_CONN__);
     check("按下去真的重新連線", !!second && second !== first);
     await sleep(600);
-    await closeConn(second);
+    // 第二次用很長的英文原因（英文系統語系的 Windows 就是這樣）：以前按鈕被擠成「重新連 / 線」兩行、提示蓋在輸出上。
+    await closeConn(second, "An existing connection was forcibly closed by the remote host. ".repeat(4) + "(os error 10054)");
     await bar.waitFor({ timeout: 5000 }).catch(() => {});
+    await sleep(200);
+    const layout = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="ssh-disconnected"]');
+      const screen = document.querySelector(".xterm-screen");
+      // 按鈕裡文字排成幾行：各文字節點的行框頂端，差超過 4px 就算另一行。
+      const lines = (btn) => {
+        const tops = [];
+        const walk = document.createTreeWalker(btn, NodeFilter.SHOW_TEXT);
+        for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+          const r = document.createRange();
+          r.selectNodeContents(n);
+          for (const rect of r.getClientRects()) if (!tops.some((t) => Math.abs(t - rect.top) <= 4)) tops.push(rect.top);
+        }
+        return tops.length;
+      };
+      return {
+        barBottom: el?.getBoundingClientRect().bottom ?? 0,
+        screenTop: screen?.getBoundingClientRect().top ?? -1,
+        buttons: [...(el?.querySelectorAll("button") ?? [])].map((b) => ({ text: b.textContent, lines: lines(b) })),
+      };
+    });
+    check("斷線提示列不蓋住終端機畫面", layout.barBottom > 0 && layout.barBottom <= layout.screenTop + 0.5, JSON.stringify(layout));
+    check("原因很長時按鈕的字仍然不換行", layout.buttons.length === 2 && layout.buttons.every((b) => b.lines === 1), JSON.stringify(layout.buttons));
     err = "";
     await bar.getByRole("button", { name: "關閉分頁", exact: true }).click({ timeout: 3000 }).catch((e) => { err = String(e.message).split("\n").slice(0, 30).join(" | "); });
     check("提示列的「關閉分頁」點得到", !err, err);

@@ -13,7 +13,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Channel } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 import {
-  ChevronDown, ChevronUp, Eraser, PanelRightClose, PanelRightOpen, RefreshCw, Search, Sparkles, X,
+  ChevronDown, ChevronUp, Eraser, PanelRightClose, PanelRightOpen, RefreshCw, Search, Sparkles, Unplug, X,
 } from "lucide-react";
 import { api, onSshAuthPrompt, onSshConnClosed, onSshHostKeyPrompt, onSshTermExit } from "./api";
 import type { SshTab } from "./sshTabs";
@@ -29,6 +29,7 @@ import { SshAuthPromptDialog, SshHostKeyDialog } from "./SshPrompts";
 import SshComposeBar from "./SshComposeBar";
 import SshStatusBar from "./SshStatusBar";
 import { bufferLinesToText, createRecorder, defaultLogName, type SessionRecorder } from "./sshSessionLog";
+import { disconnectKind } from "./sshDisconnect";
 import { useTheme } from "./theme";
 import { EDITOR_THEMES, getEditorThemeDef } from "./editorThemes";
 import { t, useT } from "./i18n";
@@ -520,6 +521,14 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
 
   const dot = status === "connected" ? "bg-success" : status === "connecting" ? "bg-warning animate-pulse" : "bg-danger";
   const label = rt?.title || (rt?.user && rt?.host ? `${rt.user}@${rt.host}` : tab.title);
+  // 斷線提示列的標題：認得的 OS 錯誤講人話（原文照樣放第二行），其餘依狀態。
+  const ended = status === "disconnected" || status === "error";
+  const endKind = disconnectKind(rt?.error);
+  const endTitle = endKind === "reset" ? t("遠端主機中斷了連線")
+    : endKind === "timeout" ? t("連線逾時")
+    : endKind === "refused" ? t("連線被拒絕")
+    : endKind === "unreachable" ? t("連不到主機")
+    : status === "error" ? t("連線失敗") : t("連線已中斷");
 
   return (
     <div className={active ? "flex-1 flex flex-col min-w-0 min-h-0" : "hidden"} onKeyDownCapture={onKeyDownCapture}>
@@ -529,9 +538,6 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
         <span className="truncate text-fg/80 mono" title={label}>{label}</span>
         {rt?.cwd && <span className="truncate text-fg/35 mono hidden md:inline" title={rt.cwd}>{rt.cwd}</span>}
         <div className="ml-auto flex items-center gap-0.5">
-          {(status === "disconnected" || status === "error") && (
-            <Button variant="primary" size="sm" icon={RefreshCw} onClick={reconnect}>{t("重新連線")}</Button>
-          )}
           <IconButton icon={Sparkles} label={t("AI 協助")} active={!!aiMenu || nlOpen}
             onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setAiMenu({ x: r.left, y: r.bottom + 4 }); }} />
           <IconButton icon={Search} label={t("搜尋（Ctrl+Shift+F）")} active={searchOpen}
@@ -562,27 +568,36 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
       )}
 
       <div className="flex-1 flex min-h-0 min-w-0">
-        <div className="relative flex-1 min-w-0 min-h-0 bg-app">
-          {/* isolate：xterm 自己的圖層（WebGL 渲染器的 xterm-link-layer canvas、scrollbar、decoration…）都帶 z-index，
-              不關在這個 stacking context 裡就會蓋到下面的提示列上，看得到按不到（issue #7）。 */}
-          <div ref={hostRef} className="absolute inset-0 pl-1 pt-1 isolate" onContextMenu={onContextMenu} />
-          {status === "connecting" && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-app/70">
-              <div className="flex items-center gap-3 px-4 py-2 rounded bg-elevated border border-fg/10 text-xs shadow-lg">
-                <Spinner size={14} />
-                <span>{t("連線中：{target}", { target: tab.title })}</span>
-                <Button size="sm" onClick={cancelConnect}>{t("取消")}</Button>
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+          {ended && (
+            // 斷線提示是終端機上緣佔版面的一條，不是浮層：不會蓋住畫面上的輸出，也不跟 xterm 的圖層搶 z-index（issue #7）。
+            // 按鈕不換行、不被壓縮；原因太長就截斷，完整原文在 tooltip。
+            <div data-testid="ssh-disconnected" role="alert"
+              className={`shrink-0 flex items-center gap-3 px-3 py-2 border-b text-xs ${status === "error" ? "bg-danger/10 border-danger/25" : "bg-warning/10 border-warning/25"}`}>
+              <Icon icon={Unplug} size={16} className={`shrink-0 ${status === "error" ? "text-danger" : "text-warning"}`} />
+              <div className="min-w-0 flex-1 leading-snug">
+                <div className="font-medium text-fg/90 truncate">{endTitle}</div>
+                {rt?.error && <div className="truncate text-fg/50 mono text-[11px]" title={rt.error}>{rt.error}</div>}
               </div>
+              <span className="hidden lg:inline shrink-0 whitespace-nowrap text-fg/40">{t("在終端機按 Enter 也能重新連線")}</span>
+              <Button variant="primary" size="sm" icon={RefreshCw} className="shrink-0 whitespace-nowrap" onClick={reconnect}>{t("重新連線")}</Button>
+              <Button size="sm" className="shrink-0 whitespace-nowrap" onClick={() => closeSshTab(tab.key)}>{t("關閉分頁")}</Button>
             </div>
           )}
-          {(status === "disconnected" || status === "error") && (
-            <div data-testid="ssh-disconnected" className="absolute z-10 top-2 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded bg-elevated border border-fg/10 text-xs shadow-lg max-w-[90%]">
-              <span className={`w-2 h-2 rounded-full shrink-0 ${status === "error" ? "bg-danger" : "bg-warning"}`} />
-              <span className="truncate">{rt?.error || t("連線已中斷")}</span>
-              <Button variant="primary" size="sm" icon={RefreshCw} onClick={reconnect}>{t("重新連線")}</Button>
-              <Button size="sm" onClick={() => closeSshTab(tab.key)}>{t("關閉分頁")}</Button>
-            </div>
-          )}
+          <div className="relative flex-1 min-w-0 min-h-0 bg-app">
+            {/* isolate：xterm 自己的圖層（WebGL 渲染器的 xterm-link-layer canvas、scrollbar、decoration…）都帶 z-index，
+                不關在這個 stacking context 裡就會蓋到疊在上面的「連線中」提示，看得到按不到（issue #7）。 */}
+            <div ref={hostRef} className="absolute inset-0 pl-1 pt-1 isolate" onContextMenu={onContextMenu} />
+            {status === "connecting" && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-app/70">
+                <div className="flex items-center gap-3 px-4 py-2 rounded bg-elevated border border-fg/10 text-xs shadow-lg">
+                  <Spinner size={14} />
+                  <span>{t("連線中：{target}", { target: tab.title })}</span>
+                  <Button size="sm" onClick={cancelConnect}>{t("取消")}</Button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         {rt?.sftpOpen && rt.connId && (
           <>
