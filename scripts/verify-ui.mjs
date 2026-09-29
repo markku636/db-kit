@@ -8,13 +8,17 @@
 //   npm run build
 //   node scripts/verify-ui.mjs
 //   DBKIT_PLAYWRIGHT=<某處>/node_modules/playwright-core DBKIT_CHROME=<某處>/chrome.exe node scripts/verify-ui.mjs
-import { existsSync } from "node:fs";
+//
+// 版面巡檢（跑版：字被擠成直排、按鈕被裁、不該有的橫向捲軸）：npm run verify:layout 在三種尺寸各跑一次，
+// 細節見 layout-lint.mjs 與下方 DBKIT_LAYOUT_LINT / DBKIT_VIEWPORT / DBKIT_UI_FONT。
+import { existsSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { preview } from "vite";
 import * as FX from "./screenshot-fixtures.mjs";
 import { installShim } from "./tauri-shim.mjs";
+import { collectLayoutIssues, installLayoutLint } from "./layout-lint.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -64,6 +68,7 @@ const CASE_FX = {
   // 助手面板開到最窄（300px）：選項列要往下一行掉，不能把標籤擠成一字一行。
   "assistant-ssh-mode": { STORAGE_SEED: { ...SSH_STORAGE_SEED, "db-kit:assistantWidth": 300 } },
   "ssh-status-and-log": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "info-panel-ssh-details": { STORAGE_SEED: SSH_STORAGE_SEED },
   // 同一個情境換成預設的渲染器（WebGL，開不起來才退回 DOM）：issue #7 的使用者用的就是預設值。
   "ssh-disconnect-overlay-webgl": {},
 };
@@ -241,6 +246,29 @@ const CASES = {
       fgs.add(p.fg);
     }
     check("切換主題時終端機文字色跟著變", fgs.size === 3, JSON.stringify([...fgs]));
+  },
+
+  // 詳細資料面板：預設收合（只留窄邊條）；展開後單擊 SSH 主機顯示它的設定；單擊資料庫節點換回資料庫摘要，
+  // 兩邊的選取互斥（主機那列不再亮著）。展開的選擇會記住。
+  async "info-panel-ssh-details"(page) {
+    const panel = page.getByTestId("info-panel");
+    check("詳細資料面板預設收合", (await panel.getAttribute("data-open").catch(() => null)) === "false");
+    await page.getByRole("button", { name: "顯示詳細資料面板", exact: true }).click();
+    await sleep(200);
+    check("按一下展開", (await panel.getAttribute("data-open").catch(() => null)) === "true");
+    check("展開的選擇會記住", await page.evaluate(() => localStorage.getItem("db-kit:infoPanel") === "open"));
+    const tree = page.locator("[data-ssh-host-tree]");
+    await tree.getByText("web-01", { exact: true }).first().click();
+    await sleep(300);
+    let txt = await panel.innerText().catch(() => "");
+    check("單擊 SSH 主機顯示主機、使用者、認證方式與跳板機",
+      /10\.20\.0\.15:22/.test(txt) && /deploy/.test(txt) && /私鑰/.test(txt) && /不經跳板機/.test(txt), txt.slice(0, 300));
+    await page.getByText("prod-mysql", { exact: true }).first().click();
+    await sleep(300);
+    txt = await panel.innerText().catch(() => "");
+    check("單擊資料庫連線換回資料庫摘要", /類型/.test(txt) && !/認證方式/.test(txt), txt.slice(0, 200));
+    const rowLit = await page.evaluate(() => document.querySelector('[data-ssh-host="ssh-web01"]')?.className.includes("bg-accent/15") ?? null);
+    check("選了資料庫節點後 SSH 主機那列不再亮著", rowLit === false, String(rowLit));
   },
 
   // 終端機狀態列 + 工作階段記錄 + 儲存畫面內容：記錄檔先清空寫標頭、之後追加去完色碼的輸出、停止時寫結束時間；
@@ -1213,6 +1241,9 @@ const CASES = {
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。
   async "query-toolbar-adapts-to-width"(page) {
+    // 門檻是在「右側詳細資料展開」的版面下量的；詳細資料改成預設收合後 1000px 的查詢區多出約 260px、
+    // 就不夠窄了。這裡先展開它，照原本的版面驗自適應本身（不是驗面板預設值）。
+    await page.getByRole("button", { name: "顯示詳細資料面板", exact: true }).click().catch(() => {});
     await page.getByText("prod-mysql", { exact: true }).first().dblclick();
     await sleep(1200);
     await page.getByText("查詢", { exact: true }).first().click();
@@ -1610,33 +1641,70 @@ catch {
 }
 
 const want = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(CASES);
-const server = await preview({ root, preview: { port: 4174, strictPort: true } });
+const server = await preview({ root, preview: { port: Number(process.env.DBKIT_PORT) || 4174, strictPort: true } });
 const url = server.resolvedUrls?.local?.[0] ?? "http://localhost:4174/";
 console.log(`preview → ${url}`);
 
 const browser = await chromium.launch({ executablePath: process.env.DBKIT_CHROME || undefined });
 const fx = { ...FX, now: Date.parse("2026-07-02T21:00:00Z") };
 
+// 版面巡檢（見 layout-lint.mjs）：DBKIT_LAYOUT_LINT=1 在每個情境裡持續掃跑版，最後彙整列出
+// （DBKIT_LAYOUT_OUT=<檔案> 另存 JSON）。DBKIT_VIEWPORT=900x640 換視窗大小（900 是 App 的最小寬度）、
+// DBKIT_UI_FONT=20 換介面字級——這兩個也可以不開巡檢、單純拿來在別的尺寸跑一般檢查。
+const LINT = process.env.DBKIT_LAYOUT_LINT === "1";
+const [VW, VH] = (process.env.DBKIT_VIEWPORT || "1280x800").split("x").map(Number);
+const UI_FONT = Number(process.env.DBKIT_UI_FONT) || null;
+const lintFound = new Map();
+
 for (const name of want) {
   if (!CASES[name]) { failures.push(`未知情境：${name}`); continue; }
   console.log(`→ ${name}`);
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "zh-TW", colorScheme: "dark" });
+  const ctx = await browser.newContext({ viewport: { width: VW || 1280, height: VH || 800 }, locale: "zh-TW", colorScheme: "dark" });
   const page = await ctx.newPage();
   const pageErrors = [];
   page.on("pageerror", (e) => pageErrors.push(String(e).slice(0, 200)));
   const caseFx = { ...fx, ...(CASE_FX[name] ?? {}) };
+  if (UI_FONT) caseFx.STORAGE_SEED = { ...(caseFx.STORAGE_SEED ?? {}), "dbkit:uiFontSize": UI_FONT };
   await page.addInitScript(installShim, caseFx);
+  if (LINT) await page.addInitScript(installLayoutLint);
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#root");
   await sleep(1200);
   try { await CASES[name](page, caseFx); }
   catch (e) { check(`${name} 執行`, false, String(e).split("\n")[0]); }
   if (pageErrors.length) check(`${name} 無前端例外`, false, pageErrors[0]);
+  if (LINT) {
+    for (const it of await collectLayoutIssues(page)) {
+      const key = `${it.kind}|${it.where}|${it.text}`;
+      const prev = lintFound.get(key);
+      if (prev) prev.cases.add(name);
+      else lintFound.set(key, { ...it, cases: new Set([name]) });
+    }
+  }
   await ctx.close();
+}
+
+if (LINT) {
+  const all = [...lintFound.values()].map((it) => ({ ...it, cases: [...it.cases] }));
+  console.log(`\n版面巡檢（${VW}×${VH}${UI_FONT ? `、介面字級 ${UI_FONT}px` : ""}）：${all.length} 筆`);
+  for (const kind of ["wrap", "cut", "clipped", "hscroll"]) {
+    const list = all.filter((it) => it.kind === kind);
+    if (!list.length) continue;
+    console.log(`  [${kind}] ${list.length}`);
+    for (const it of list) console.log(`    ${it.where} 「${it.text}」 w=${it.w}${it.lines ? ` 行=${it.lines}` : ""}${it.over ? ` 超出=${it.over}` : ""} ← ${it.cases.slice(0, 3).join(", ")}`);
+  }
+  if (process.env.DBKIT_LAYOUT_OUT) writeFileSync(process.env.DBKIT_LAYOUT_OUT, JSON.stringify(all, null, 2));
+  // wrap（字被擠成多行）與 cut（按鈕被裁掉）一律算失敗；hscroll / clipped 常有合理的例外，只列出。
+  for (const it of all.filter((x) => x.kind === "wrap" || x.kind === "cut")) {
+    failures.push(`版面 ${it.kind}：${it.where} 「${it.text}」 ← ${it.cases[0]}`);
+  }
 }
 
 await browser.close();
 await server.close();
-console.log(`\n通過 ${passed}、失敗 ${failures.length}`);
-if (failures.length) { for (const f of failures) console.log(`  ✗ ${f}`); }
-process.exit(failures.length ? 1 : 0);
+// 非預設尺寸下，少數功能檢查本來就綁尺寸（例如「對話框不必捲動」「預設字級 16px」），不拿來判定成敗。
+const sizeBound = LINT && ((VW || 1280) !== 1280 || (VH || 800) !== 800 || !!UI_FONT);
+const counted = sizeBound ? failures.filter((f) => f.startsWith("版面 ")) : failures;
+console.log(`\n通過 ${passed}、失敗 ${failures.length}${sizeBound ? `（非預設尺寸：只有 ${counted.length} 筆版面問題算數）` : ""}`);
+if (failures.length) { for (const f of failures) console.log(`  ${counted.includes(f) ? "✗" : "·"} ${f}`); }
+process.exit(counted.length ? 1 : 0);

@@ -144,6 +144,15 @@ body {
   field-sizing: content;
 }
 
+/* 可捲動但不畫捲軸（Tailwind 3 沒有這個 utility）：給「最後手段才會捲」的列用，例如工具列在
+   最小視窗 + 放大字級時的工具按鈕組——平常不會捲，真的放不下時用觸控板 / Shift+滾輪仍捲得動。 */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* Tailwind 的任意值字級（text-[11px] 這類小標籤，全案 200+ 處）會編成固定 px，
    不跟著 --ui-font-size 走 —— 而那些正是放大介面時最需要一起長大的字。
    這裡以同名、同特異性的規則改寫為 rem；本檔在 @tailwind utilities 之後，

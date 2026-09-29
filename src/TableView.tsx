@@ -1366,7 +1366,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* 動作列：重新整理 + 篩選切換 + 新增列 */}
-      <div className="flex items-center gap-1 px-2 py-1 bg-inset border-b border-fg/10 text-xs">
+      <div className="flex flex-wrap items-center gap-1 px-2 py-1 bg-inset border-b border-fg/10 text-xs">
         {isRedis && (
           <div className="flex items-center rounded border border-fg/10 overflow-hidden mr-1">
             {(["tree", "grid"] as const).map((v) => (
@@ -1375,7 +1375,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
                 type="button"
                 onClick={() => setRedisViewPersist(v)}
                 title={v === "tree" ? t("命名空間樹狀檢視（依 : 分組）") : t("鍵列表（網格）")}
-                className={`px-2 py-1 inline-flex items-center gap-1 ${redisView === v ? "bg-fg/15 text-fg" : "text-fg/50 hover:bg-fg/5"}`}
+                className={`px-2 py-1 inline-flex items-center gap-1 whitespace-nowrap ${redisView === v ? "bg-fg/15 text-fg" : "text-fg/50 hover:bg-fg/5"}`}
               >
                 {v === "tree"
                   ? <><Icon icon={ListTree} size={14} /> {t("樹狀")}</>
@@ -1388,16 +1388,16 @@ function DataPane({ tab }: { tab: OpenTab }) {
           <>
             {!readonly && (
               <button type="button" onClick={() => openNewKey()} title={t("新增鍵（String/List/Set/Hash/ZSet）")}
-                className="px-2 py-1 rounded hover:bg-fg/10 text-emerald-300 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增鍵")}</button>
+                className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-emerald-300 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增鍵")}</button>
             )}
             <button type="button" onClick={() => setShowStatus(true)} title={t("伺服器狀態（INFO，可自動刷新）")}
-              className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={BarChart3} size={14} /> {t("狀態")}</button>
+              className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={BarChart3} size={14} /> {t("狀態")}</button>
             <button type="button" onClick={() => setShowPubSub(true)} title={t("Pub/Sub 訂閱與發佈")}
-              className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Network} size={14} /> Pub/Sub</button>
+              className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Network} size={14} /> Pub/Sub</button>
             <button type="button" onClick={() => setShowOps(true)} title={t("維運：慢查詢 / 用戶端 / 大鍵")}
-              className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Settings} size={14} /> {t("維運")}</button>
+              className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Settings} size={14} /> {t("維運")}</button>
             <button type="button" onClick={() => setShowConsole(true)} title={t("Redis 命令列")}
-              className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Terminal} size={14} /> {t("命令列")}</button>
+              className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Terminal} size={14} /> {t("命令列")}</button>
             <div className="w-px h-4 bg-fg/10 mx-1" />
           </>
         )}
@@ -1410,20 +1410,20 @@ function DataPane({ tab }: { tab: OpenTab }) {
           }}
           disabled={loading}
           title={t("重新整理（重新讀取目前頁）")}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50 disabled:opacity-40 disabled:hover:bg-transparent inline-flex items-center gap-1"
+          className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/50 disabled:opacity-40 disabled:hover:bg-transparent inline-flex items-center gap-1"
         >
           <Icon icon={RefreshCw} size={14} className={loading ? "animate-spin" : ""} /> {loading ? t("讀取中…") : t("重新整理")}
         </button>
         <button
           onClick={() => setShowFind((s) => !s)}
           title={t("在目前頁即時尋找（Ctrl+F）")}
-          className={`px-2 py-1 rounded hover:bg-fg/10 inline-flex items-center gap-1 ${find ? "text-yellow-300" : "text-fg/50"}`}
+          className={`px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap inline-flex items-center gap-1 ${find ? "text-yellow-300" : "text-fg/50"}`}
         >
           <Icon icon={Search} size={14} /> {t("尋找")}
         </button>
         <button
           onClick={() => setShowFilter((s) => !s)}
-          className={`px-2 py-1 rounded hover:bg-fg/10 inline-flex items-center gap-1 ${
+          className={`px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap inline-flex items-center gap-1 ${
             filters.length ? "text-amber-300" : "text-fg/50"
           }`}
         >
@@ -1433,7 +1433,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onClick={() => insertable && setInserting(true)}
           disabled={!insertable}
           title={insertable ? t("新增列") : t("無欄位可新增")}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50 disabled:opacity-30 disabled:hover:bg-transparent inline-flex items-center gap-1"
+          className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/50 disabled:opacity-30 disabled:hover:bg-transparent inline-flex items-center gap-1"
         >
           <Icon icon={Plus} size={14} /> {t("新增列")}
         </button>
@@ -1441,7 +1441,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           <button
             onClick={exportMarked}
             title={t("匯出已勾選的列（CSV / Excel / JSON / SQL…）")}
-            className="px-2 py-1 rounded hover:bg-fg/10 text-fg/70 inline-flex items-center gap-1"
+            className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/70 inline-flex items-center gap-1"
           >
             <Icon icon={Upload} size={14} /> {t("匯出選取（")}{marked.size}）
           </button>
@@ -1450,7 +1450,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           <button
             onClick={copyMarkedInsert}
             title={t("複製已勾選的列為 INSERT 語句")}
-            className="px-2 py-1 rounded hover:bg-fg/10 text-fg/70 inline-flex items-center gap-1"
+            className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/70 inline-flex items-center gap-1"
           >
             {t("複製為 INSERT（")}{marked.size}）
           </button>
@@ -1469,7 +1469,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           <button
             type="button"
             onClick={async () => { if (await guardDiscard()) setSorts([]); }}
-            className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50 inline-flex items-center gap-1"
+            className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/50 inline-flex items-center gap-1"
           >
             <Icon icon={ArrowUpDown} size={14} /> {t("清除排序")}
           </button>
@@ -1478,7 +1478,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onClick={() => data && data.columns.length > 0 && setExporting(true)}
           disabled={!data || data.columns.length === 0}
           title={t("匯出資料（CSV / TSV / JSON / SQL / Markdown）")}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50 disabled:opacity-30 disabled:hover:bg-transparent inline-flex items-center gap-1"
+          className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/50 disabled:opacity-30 disabled:hover:bg-transparent inline-flex items-center gap-1"
         >
           <Icon icon={Download} size={14} /> {t("匯出")}
         </button>
@@ -1487,7 +1487,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
             type="button"
             onClick={() => setImporting(true)}
             title={t("從 CSV 匯入資料到此表")}
-            className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50 inline-flex items-center gap-1"
+            className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/50 inline-flex items-center gap-1"
           >
             <Icon icon={Upload} size={14} /> {t("匯入")}
           </button>
@@ -1497,7 +1497,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
             type="button"
             onClick={showAllColumns}
             title={t("已隱藏 {length} 欄，點此全部顯示", { length: hidden.length })}
-            className="ml-auto px-2 py-1 rounded hover:bg-fg/10 text-fg/50 inline-flex items-center gap-1"
+            className="ml-auto px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/50 inline-flex items-center gap-1"
           >
             <Icon icon={Columns3} size={14} /> {t("已隱藏 {length} 欄", { length: hidden.length })}
           </button>
@@ -1708,7 +1708,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onClick={applyEdits}
           disabled={dirtyCount === 0 || applying}
           title={t("套用變更")}
-          className="h-6 px-2 flex items-center gap-1 rounded text-xs bg-green-600/80 hover:bg-green-600 disabled:opacity-25 disabled:bg-transparent disabled:hover:bg-transparent"
+          className="h-6 px-2 flex items-center gap-1 whitespace-nowrap rounded text-xs bg-green-600/80 hover:bg-green-600 disabled:opacity-25 disabled:bg-transparent disabled:hover:bg-transparent"
         >
           <Icon icon={Check} size={14} /> {t("套用")}{dirtyCount > 0 ? `（${dirtyCount}）` : ""}
         </button>
@@ -1716,7 +1716,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onClick={() => { setEdits({}); setEditing(null); }}
           disabled={dirtyCount === 0 || applying}
           title={t("捨棄變更")}
-          className="h-6 px-2 flex items-center gap-1 rounded text-xs hover:bg-fg/10 disabled:opacity-25 disabled:hover:bg-transparent"
+          className="h-6 px-2 flex items-center gap-1 whitespace-nowrap rounded text-xs hover:bg-fg/10 disabled:opacity-25 disabled:hover:bg-transparent"
         >
           <Icon icon={X} size={14} /> {t("捨棄")}
         </button>
@@ -2974,11 +2974,11 @@ function FilterBar({ columns, filters, matchAny, onApply }: {
       ))}
       <div className="flex items-center gap-2 pt-0.5">
         <button onClick={addRow}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增條件")}</button>
+          className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增條件")}</button>
         <button onClick={apply}
           className="px-2 py-1 rounded bg-accent text-white hover:bg-accent/90">{t("套用")}</button>
         <button onClick={clear}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/50">{t("清除")}</button>
+          className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/50">{t("清除")}</button>
       </div>
     </div>
   );
@@ -3498,17 +3498,17 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       {isSql && (
         <div className="flex items-center gap-1 px-2 py-1 bg-inset border-b border-fg/10 text-xs">
           <button type="button" onClick={() => setAdding((s) => !s)} disabled={busy}
-            className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1">
+            className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 disabled:opacity-40 inline-flex items-center gap-1">
             <Icon icon={Plus} size={14} /> {t("新增欄位")}
           </button>
           <button type="button" onClick={viewDdl}
             title={t("檢視 / 複製建表 SQL（CREATE 語句）")}
-            className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1">
+            className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1">
             <Icon icon={Copy} size={14} /> {t("建表 SQL")}
           </button>
           <button type="button" onClick={() => setNonce((n) => n + 1)} disabled={busy}
             title={t("重新讀取結構（外部變更後同步）")}
-            className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1">
+            className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 disabled:opacity-40 inline-flex items-center gap-1">
             <Icon icon={RefreshCw} size={14} /> {t("重新整理")}
           </button>
           {busy && <span className="text-fg/40">{t("處理中…")}</span>}

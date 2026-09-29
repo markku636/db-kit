@@ -586,7 +586,7 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
 
       {/* 訊息表格 + 明細 */}
       <div className="flex-1 min-h-0 flex">
-        <div className="flex-1 min-w-0 overflow-auto">
+        <div className="flex-1 min-w-0 overflow-auto" data-hscroll-ok="">
           <table className="text-left mono" style={{ tableLayout: "fixed", width: tableWidth() }}>
             <thead className="sticky top-0 bg-app text-fg/40">
               <tr>

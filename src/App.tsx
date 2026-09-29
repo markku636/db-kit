@@ -880,6 +880,7 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
   // 遲滯（hysteresis）：收合後 scrollWidth 會縮小，若直接拿它判斷就會來回震盪。故在「展開狀態下」
   // 記住所需的完整寬度 neededRef，只有可用寬度重新超過它才展開回去。
   const barRef = useRef<HTMLDivElement>(null);
+  const toolsRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const neededRef = useRef(0);
   // 換語言 → 標籤長度變了；換主題 → 右側下拉寬度變了。兩者都讓先前記住的 neededRef 失效，
@@ -889,9 +890,12 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
     const bar = barRef.current;
     if (!bar) return;
     const measure = () => {
+      // 工具那組會自己縮並捲動，所以「放不下」要把它被壓掉的寬度一起算進去，不能只看 bar。
+      const tools = toolsRef.current;
+      const squeezed = tools ? Math.max(0, tools.scrollWidth - tools.clientWidth) : 0;
       if (!compact) {
-        if (bar.scrollWidth > bar.clientWidth) {
-          neededRef.current = bar.scrollWidth;
+        if (bar.scrollWidth > bar.clientWidth || squeezed > 0) {
+          neededRef.current = Math.max(bar.scrollWidth, bar.clientWidth + squeezed);
           setCompact(true);
         }
       } else if (neededRef.current && bar.clientWidth >= neededRef.current) {
@@ -936,7 +940,10 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
       </div>
       {/* 英文標籤約為中文的 1.6 倍寬（「匯入連線」4 字 vs "Import connections" 18 字），
           原本的 w-16 固定寬會把字裁掉，故改為 min-w-16 + 內距撐開、不換行。
-          放不下時整列改為純圖示（compact），文字退到 title —— 見 useLayoutEffect 的量測。 */}
+          放不下時整列改為純圖示（compact），文字退到 title —— 見 useLayoutEffect 的量測。
+          連純圖示都放不下（最小視窗 + 放大介面字級）時，這一組自己橫向捲動（捲軸隱藏），
+          右側的語言 / 主題永遠看得到，整頁也不會被撐出橫向捲軸。 */}
+      <div ref={toolsRef} data-hscroll-ok="" className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-none">
       {tools.map((tool) => (
         <button
           type="button"
@@ -953,6 +960,7 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
           {!compact && <span className="text-[11px] text-fg/60 mt-1 whitespace-nowrap">{tool.label}</span>}
         </button>
       ))}
+      </div>
       {/* 主題 + 語言靠右成組；compact 時收起圖示。下拉寬度跟著所選項目走（見 MENU_BOX），
           最長的「Obsidian 黑曜石」搭 compact 的 40px 按鈕，在 900px（視窗最小寬）仍放得下。 */}
       <div className="ml-auto shrink-0 flex items-center gap-2 pl-2">
@@ -2496,7 +2504,7 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
     // 外殼只負責排版（column flex）與裁切，捲動交給下方那層獨立的視窗 div。
     // 兩者曾經是同一個元素（既是 column flex 容器又是捲動容器），連線多到滿出頁面時
     // 子項會先被 flex-shrink 壓縮、捲動高度以壓縮後的盒計算 → 最後幾筆永遠滾不到。
-    <div style={{ width }} className="shrink-0 bg-panel text-sm flex flex-col min-h-0 overflow-hidden">
+    <div style={{ width }} className="shrink min-w-[180px] bg-panel text-sm flex flex-col min-h-0 overflow-hidden">
       {connections.length > 0 && (
         // 搜尋列改成 shrink-0 的固定列（原本靠 sticky 疊在捲動內容上）：對使用者一樣永遠可見，
         // 但不再參與捲動容器的 overflow 計算。
@@ -3654,8 +3662,10 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
     );
   }
 
+  // 主畫面至少留 20rem：視窗窄時讓側欄 / 詳細資料 / AI 助手先讓出寬度（它們是 shrink + 各自的 min-w），
+  // 而不是反過來把分頁列與編輯器擠到只剩幾十 px。寬度夠時各面板照使用者拖的寬度，行為不變。
   return (
-    <div className="flex-1 flex flex-col min-w-0">
+    <div className="flex-1 flex flex-col min-w-[20rem]">
       {/* 分頁列（中鍵關閉、右鍵選單） */}
       <div data-tab-bar="" className="flex items-stretch bg-panel border-b border-fg/10 overflow-x-auto">
         {tabs.map((tab) => (

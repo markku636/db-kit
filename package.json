@@ -17,6 +17,7 @@
     "make:splash": "node scripts/make-splash.mjs",
     "make:screenshots": "node scripts/capture-screenshots.mjs",
     "verify:ui": "node scripts/verify-ui.mjs",
+    "verify:layout": "node scripts/verify-layout.mjs",
     "i18n:scan": "node scripts/i18n-scan.mjs",
     "i18n:zhcn": "node scripts/i18n-gen-zhcn.mjs"
   },

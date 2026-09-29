@@ -13,6 +13,7 @@ import { resolveSftpDir } from "./sshConnString";
 import { ensureSftpProgressListener, useSshTransfers } from "./useSshTransfers";
 import { useT } from "./i18n";
 import { Icon, IconButton, MenuPanel, Spinner } from "./ui/index";
+import { remPx, useElementWidth } from "./ui/useElementWidth";
 import { copyToClipboard, pickDirectory, pickOpenFiles, pickSaveFile, toast, uiChoose, uiConfirm, uiPrompt } from "./ui";
 import { fmtBytes } from "./schemaCache";
 import { canOpenInEditor, toOctal } from "./sftpText";
@@ -95,6 +96,12 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
   const filterRef = useRef<HTMLInputElement>(null);
   const pathInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // 欄位跟著清單寬度收：名稱至少留 6rem；先收「權限」（5rem），再收「修改時間」（8rem），「大小」（4rem）一定在。
+  // 用 rem 算，介面字級放大時會提早收，不會出現橫向捲軸。
+  const listWidth = useElementWidth(listRef);
+  const rem = remPx();
+  const showMtime = listWidth === null || listWidth >= 18 * rem;
+  const showMode = listWidth === null || listWidth >= 23 * rem;
   const openingRef = useRef<string | null>(null);
   // 已經列過的 sftpId：自己剛開好的那個不要被 effect 再列一次（那次會拿舊的 path 蓋掉家目錄）。
   const listedRef = useRef<string | null>(null);
@@ -505,13 +512,14 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
           if (!el.closest("tr[data-name]") && !el.closest("thead")) setSel(EMPTY_SELECTION);
         }}
         onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, entry: null, targets: [] }); }}>
-        <table className="w-full border-collapse select-none">
+        {/* table-fixed：固定欄寬照 <th> 的 w-*，名稱欄吃剩下的寬度、太長就省略號，整張表不會比面板寬。 */}
+        <table className="w-full table-fixed border-collapse select-none">
           <thead className="sticky top-0 bg-panel text-fg/45 text-[10px] uppercase tracking-wide">
             <tr>
-              <th className="text-left font-normal px-2 py-1 cursor-pointer" onClick={() => toggleSort("name")}>{t("名稱")}{sortMark("name")}</th>
-              <th className="text-right font-normal px-2 py-1 cursor-pointer w-20" onClick={() => toggleSort("size")}>{t("大小")}{sortMark("size")}</th>
-              <th className="text-left font-normal px-2 py-1 cursor-pointer w-36" onClick={() => toggleSort("mtime")}>{t("修改時間")}{sortMark("mtime")}</th>
-              <th className="text-left font-normal px-2 py-1 w-24 mono">{t("權限")}</th>
+              <th className="text-left font-normal px-2 py-1 cursor-pointer whitespace-nowrap" onClick={() => toggleSort("name")}>{t("名稱")}{sortMark("name")}</th>
+              <th className="text-right font-normal px-2 py-1 cursor-pointer whitespace-nowrap w-16" onClick={() => toggleSort("size")}>{t("大小")}{sortMark("size")}</th>
+              {showMtime && <th className="text-left font-normal px-2 py-1 cursor-pointer whitespace-nowrap w-32" onClick={() => toggleSort("mtime")}>{t("修改時間")}{sortMark("mtime")}</th>}
+              {showMode && <th className="text-left font-normal px-1 py-1 whitespace-nowrap w-20 mono">{t("權限")}</th>}
             </tr>
           </thead>
           <tbody>
@@ -530,16 +538,16 @@ export default function SftpPanel({ tabKey, connId, onCd, onClose }: SftpPanelPr
                     setMenu({ x: ev.clientX, y: ev.clientY, entry: e, targets: visible.filter((x) => next.names.has(x.name)) });
                   }}
                   className={`cursor-default ${isSel ? "bg-accent/15" : "hover:bg-fg/5"}`}>
-                  <td className="px-2 py-0.5 whitespace-nowrap">
-                    <span className="inline-flex items-center gap-1.5">
+                  <td className="px-2 py-0.5 whitespace-nowrap overflow-hidden">
+                    <span className="flex items-center gap-1.5 min-w-0">
                       <Icon icon={e.is_symlink ? Link2 : dir ? Folder : File} size={13}
-                        className={dir ? "text-amber-300/80" : e.is_symlink ? "text-sky-300/70" : "text-fg/40"} />
-                      <span className="truncate max-w-[18rem]" title={e.path}>{e.name}</span>
+                        className={`shrink-0 ${dir ? "text-amber-300/80" : e.is_symlink ? "text-sky-300/70" : "text-fg/40"}`} />
+                      <span className="truncate min-w-0" title={e.path}>{e.name}</span>
                     </span>
                   </td>
-                  <td className="px-2 py-0.5 text-right text-fg/60 mono whitespace-nowrap">{dir ? "" : fmtBytes(e.size)}</td>
-                  <td className="px-2 py-0.5 text-fg/50 whitespace-nowrap">{fmtMtime(e.mtime)}</td>
-                  <td className="px-2 py-0.5 text-fg/40 mono whitespace-nowrap">{e.mode}</td>
+                  <td className="px-2 py-0.5 text-right text-fg/60 mono whitespace-nowrap overflow-hidden text-ellipsis">{dir ? "" : fmtBytes(e.size)}</td>
+                  {showMtime && <td className="px-2 py-0.5 text-fg/50 whitespace-nowrap overflow-hidden text-ellipsis">{fmtMtime(e.mtime)}</td>}
+                  {showMode && <td className="px-1 py-0.5 text-fg/40 mono whitespace-nowrap overflow-hidden text-ellipsis">{e.mode}</td>}
                 </tr>
               );
             })}

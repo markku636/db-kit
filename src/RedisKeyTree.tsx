@@ -158,7 +158,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* 工具列：MATCH 樣式 + 展開/收合 */}
-      <div className="flex items-center gap-1 px-2 py-1 bg-inset border-b border-fg/10 text-xs">
+      <div className="flex flex-wrap items-center gap-1 px-2 py-1 bg-inset border-b border-fg/10 text-xs">
         <input
           value={patternInput}
           onChange={(e) => setPatternInput(e.target.value)}
@@ -166,12 +166,12 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
           placeholder={t("MATCH 樣式，如 user:*")}
           className="w-48 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent"
         />
-        <button type="button" onClick={apply} className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60">{t("套用")}</button>
+        <button type="button" onClick={apply} className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60">{t("套用")}</button>
         <div className="w-px h-4 bg-fg/10 mx-1" />
         <button type="button" onClick={() => tree && setExpanded(new Set(allFolderPaths(tree)))}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60">{t("展開全部")}</button>
+          className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60">{t("展開全部")}</button>
         <button type="button" onClick={() => setExpanded(new Set())}
-          className="px-2 py-1 rounded hover:bg-fg/10 text-fg/60">{t("收合全部")}</button>
+          className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60">{t("收合全部")}</button>
         <span className="ml-auto text-fg/40">
           {loading ? t("讀取中…") : keys ? t("{count} 個鍵", { count: keys.length }) + (truncated ? t("（已達 {LIMIT} 上限）", { LIMIT }) : "") : ""}
         </span>

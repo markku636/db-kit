@@ -27,11 +27,11 @@ export default function ChatSqlResult({ run, onOpenInTab, onFeedback }: ChatSqlR
   const [open, setOpen] = useState(true);
 
   const shown = run.rows.slice(0, MAX_SHOWN);
-  const btn = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-fg/55 hover:text-fg hover:bg-fg/10";
+  const btn = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded whitespace-nowrap text-fg/55 hover:text-fg hover:bg-fg/10";
 
   return (
     <div className={`mt-1 rounded border ${run.error ? "border-danger/30" : "border-fg/10"} overflow-hidden`}>
-      <div className="flex items-center gap-1 px-2 py-1 bg-fg/5 text-[10px] text-fg/50">
+      <div className="flex flex-wrap items-center gap-1 px-2 py-1 bg-fg/5 text-[10px] text-fg/50">
         <button type="button" onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1 hover:text-fg">
           <Icon icon={open ? ChevronDown : ChevronRight} size={12} />
           {run.error ? (

@@ -1087,7 +1087,7 @@ export default function AssistantPanel() {
   const convList = sortedConversations(archive);
 
   return (
-    <div className="shrink-0 bg-panel border-l border-fg/10 flex flex-col text-sm relative" style={{ width }}>
+    <div className="shrink min-w-[300px] bg-panel border-l border-fg/10 flex flex-col text-sm relative" style={{ width }}>
       <div onMouseDown={startResize} title={t("拖曳調整寬度")}
         className="absolute left-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent/40 z-10" />
       <div className="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-fg/10">
@@ -1823,12 +1823,12 @@ function CodeBlock({ lang, code, run, onRun, shellRun, termOpen = false, onShell
     }
   };
 
-  const btn = "px-1.5 py-0.5 rounded text-fg/55 hover:text-fg hover:bg-fg/10";
+  const btn = "px-1.5 py-0.5 rounded whitespace-nowrap text-fg/55 hover:text-fg hover:bg-fg/10";
   return (
     <div className="rounded border border-fg/10 overflow-hidden bg-well">
-      <div className="flex items-center gap-1 px-2 py-1 bg-fg/5 text-[10px] text-fg/45">
+      <div className="flex flex-wrap items-center gap-1 px-2 py-1 bg-fg/5 text-[10px] text-fg/45">
         <span className="uppercase tracking-wide">{lang || t("程式碼")}</span>
-        <div className="ml-auto flex items-center gap-0.5">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-0.5">
           {isSql && onRun && (
             <>
               <button type="button" className={btn} title={t("在目前連線執行這段 SQL（寫入語句會先進入審查並執行：AI 審查與備份）")}

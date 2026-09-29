@@ -6,8 +6,10 @@ import Icon from "./Icon";
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "dangerSolid";
 export type ButtonSize = "sm" | "md" | "lg";
 
+// whitespace-nowrap：按鈕是固定高度的單行元件。中文沒有空白可斷，min-content 只有一個字寬，
+// 放在 flex 列裡一被擠就會變成「重新連 / 線」——寧可讓外層換行或捲動，也不讓字直排。
 const base =
-  "inline-flex items-center justify-center gap-1.5 font-medium rounded select-none " +
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap font-medium rounded select-none " +
   "transition-[background-color,box-shadow,transform,color,border-color] duration-100 " +
   "disabled:opacity-40 disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-accent/60";
 

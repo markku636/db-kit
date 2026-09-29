@@ -286,11 +286,11 @@ function RunView({ run, kind, onApplySql, verdictLabels }: { run: DbaRun; kind: 
       {blocks.map((b, i) =>
         b.type === "code" ? (
           <div key={i} className="rounded border border-fg/10 overflow-hidden bg-well">
-            <div className="flex items-center gap-1 px-2 py-1 bg-fg/5 text-[10px] text-fg/45">
+            <div className="flex flex-wrap items-center gap-1 px-2 py-1 bg-fg/5 text-[10px] text-fg/45">
               <span className="uppercase tracking-wide">{b.lang || "code"}</span>
               <span className="ml-auto" />
               {onApplySql && (!b.lang || b.lang.toLowerCase() === "sql") && (
-                <button type="button" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-fg/10 hover:text-fg" onClick={() => onApplySql(b.code)}>
+                <button type="button" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded whitespace-nowrap hover:bg-fg/10 hover:text-fg" onClick={() => onApplySql(b.code)}>
                   <Icon icon={ClipboardEdit} size={11} />
                   {t("套用到編輯器（差異預覽）")}
                 </button>
@@ -298,7 +298,7 @@ function RunView({ run, kind, onApplySql, verdictLabels }: { run: DbaRun; kind: 
               {(!b.lang || b.lang.toLowerCase() === "sql") && (
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-fg/10 hover:text-fg"
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded whitespace-nowrap hover:bg-fg/10 hover:text-fg"
                   onClick={() => {
                     useStore.getState().requestQuery(b.code);
                     toast.success(t("已在查詢分頁開啟"));
@@ -308,7 +308,7 @@ function RunView({ run, kind, onApplySql, verdictLabels }: { run: DbaRun; kind: 
                   {t("在查詢分頁開啟")}
                 </button>
               )}
-              <button type="button" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-fg/10 hover:text-fg" onClick={() => void copyToClipboard(b.code)}>
+              <button type="button" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded whitespace-nowrap hover:bg-fg/10 hover:text-fg" onClick={() => void copyToClipboard(b.code)}>
                 <Icon icon={Copy} size={11} />
                 {t("複製")}
               </button>

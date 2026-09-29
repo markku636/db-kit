@@ -55,10 +55,11 @@ export default function Segmented<T extends string>({
             role="radio"
             aria-checked={active}
             disabled={o.disabled}
-            title={o.title}
+            title={o.title ?? (typeof o.label === "string" ? o.label : undefined)}
             onClick={() => onChange(o.value)}
+            // 每段單行：寬度不夠時文字以省略號截斷（全名在 tooltip），不會被擠成一字一行。
             className={
-              `inline-flex items-center justify-center gap-1.5 px-3 rounded ${h} ` +
+              `inline-flex items-center justify-center gap-1.5 px-3 rounded whitespace-nowrap min-w-0 ${h} ` +
               (full ? "flex-1 " : "") +
               `font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none ` +
               `focus-visible:outline-2 focus-visible:outline-accent/60 ` +
@@ -67,8 +68,8 @@ export default function Segmented<T extends string>({
                 : "text-fg/60 hover:text-fg hover:bg-fg/10")
             }
           >
-            {o.icon && <Icon icon={o.icon} size={14} />}
-            {o.label}
+            {o.icon && <Icon icon={o.icon} size={14} className="shrink-0" />}
+            <span className="truncate min-w-0">{o.label}</span>
           </button>
         );
       })}

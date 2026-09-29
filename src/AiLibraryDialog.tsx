@@ -781,25 +781,29 @@ export default function AiLibraryDialog({
 
   return (
     <Modal open={open} onClose={onClose} title={t("AI 資源庫")} icon={Library} size="full" bodyClassName="p-0" className="h-[82vh]">
-      <div className="flex h-full min-h-0">
+      <div className="flex flex-col h-full min-h-0">
+        {/* 分頁放在整個對話框上方一列：左欄只有 w-72，四個分頁連圖示塞不下（以前被擠成「人 / 設」「來源 / 與同 / 步」）。 */}
+        <div className="shrink-0 px-3 py-2 border-b border-fg/10">
+          <Segmented options={tabs} value={tab} onChange={(v) => { setTab(v); setSel(null); }} ariaLabel={t("AI 資源庫")} />
+        </div>
+        <div className="flex flex-1 min-h-0">
         <div className="w-72 shrink-0 border-r border-fg/10 flex flex-col min-h-0">
-          <div className="p-2 space-y-2 border-b border-fg/10">
-            <Segmented options={tabs} value={tab} onChange={(v) => { setTab(v); setSel(null); }} full />
-            {kind && (
+          {kind && (
+            <div className="p-2 space-y-2 border-b border-fg/10">
               <div className="flex gap-1">
-                <Input inputSize="sm" className="flex-1" value={q} placeholder={t("搜尋…")} onChange={(e) => setQ(e.target.value)} />
+                <Input inputSize="sm" className="flex-1 min-w-0" value={q} placeholder={t("搜尋…")} onChange={(e) => setQ(e.target.value)} />
                 {kind !== "prompt" && (
                   <Button variant="ghost" size="sm" icon={Plus} onClick={() => void create()} title={t("新增到個人層")} />
                 )}
                 <Button variant="ghost" size="sm" icon={RefreshCw} onClick={() => void loadAiLibrary()} title={t("重新載入")} />
               </div>
-            )}
-            {kind === "skill" && (
-              <div className="text-[10px] text-fg/45 leading-relaxed px-0.5">
-                {t("勾選的技能會附在助手對話的人設後面（已選 {n} 個）", { n: activeCount })}
-              </div>
-            )}
-          </div>
+              {kind === "skill" && (
+                <div className="text-[10px] text-fg/45 leading-relaxed px-0.5">
+                  {t("勾選的技能會附在助手對話的人設後面（已選 {n} 個）", { n: activeCount })}
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex-1 overflow-auto">
             {kind ? (
               list.map((e) => {
@@ -859,6 +863,7 @@ export default function AiLibraryDialog({
           ) : (
             <EmptyState icon={Library} title={t("沒有項目")} />
           )}
+        </div>
         </div>
       </div>
     </Modal>
