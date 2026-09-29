@@ -37,6 +37,19 @@ pub mod rabbitmq;
 #[cfg(feature = "elastic")]
 pub mod elastic;
 
+/// 容器與映像（Docker Engine / Registry v2 / Harbor）。於 `docker` feature 開啟時編入。
+/// `http_tls` 為三者共用的 HTTP 端點解析 + reqwest TLS（含 mTLS）用戶端建構。
+#[cfg(feature = "docker")]
+pub mod container;
+#[cfg(feature = "docker")]
+pub mod docker;
+#[cfg(feature = "docker")]
+pub mod harbor;
+#[cfg(feature = "docker")]
+pub mod http_tls;
+#[cfg(feature = "docker")]
+pub mod registry;
+
 /// 資料庫範式。UI 與操作邏輯依此分流。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -63,6 +76,15 @@ pub enum DbKind {
     /// `rabbitmq` feature 開啟時編入 `db::rabbitmq`。UI 將 vhost→database、queue→table 做最小映射，
     /// 其餘能力（peek / publish / purge）走 `rabbitmq_*` 指令。
     RabbitMq,
+    /// Docker：容器引擎（Engine REST API；本機 socket / named pipe、TCP、TLS）。具體驅動於 `docker`
+    /// feature 開啟時編入 `db::docker`。UI 將 containers / images / volumes / networks 四個分類→database、
+    /// 各項目→table，其餘能力（啟停 / log / exec / pull / prune）走 `docker_*` 指令。
+    Docker,
+    /// Docker Registry（OCI Distribution / Registry HTTP API v2）：repository→database、tag→table。
+    /// 相容 Docker Hub、GHCR、自架 registry:2 等；Bearer token 認證自動換發。與 Docker 同屬 `docker` feature。
+    Registry,
+    /// Harbor（`/api/v2.0`）：project→database、repository→table；artifact / tag / 弱點掃描走 `harbor_*` 指令。
+    Harbor,
     /// 外部 web gateway（非真實連線；透過 HTTP 下 SQL）。實作見 `db::external`。
     External,
 }
@@ -82,6 +104,9 @@ impl DbKind {
             DbKind::Kafka => "kafka",
             DbKind::Elastic => "elastic",
             DbKind::RabbitMq => "rabbitmq",
+            DbKind::Docker => "docker",
+            DbKind::Registry => "registry",
+            DbKind::Harbor => "harbor",
             DbKind::External => "external",
         }
     }
@@ -98,6 +123,7 @@ impl DbKind {
             DbKind::Kafka => "", // Kafka 不支援備份
             DbKind::Elastic => "", // Elasticsearch 不支援備份
             DbKind::RabbitMq => "", // RabbitMQ 不支援備份
+            DbKind::Docker | DbKind::Registry | DbKind::Harbor => "", // 容器類不支援備份
             DbKind::External => "",
         }
     }

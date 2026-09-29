@@ -98,6 +98,8 @@ pub fn run() {
             kafka_metrics: Arc::new(Mutex::new(std::collections::HashMap::new())),
             #[cfg(feature = "kafka")]
             kafka_alert_rules: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(feature = "docker")]
+            docker_streams: Arc::new(db::docker::stream::DockerStreams::new()),
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -421,6 +423,80 @@ pub fn run() {
             commands::rabbitmq_purge,
             #[cfg(feature = "rabbitmq")]
             commands::rabbitmq_delete_queue,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_overview,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_disk_usage,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_prune,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_containers,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_container_inspect,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_container_action,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_container_remove,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_container_rename,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_container_stats,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_container_top,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_logs_open,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_exec_open,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_exec_write,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_exec_resize,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_stream_close,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_images,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_image_inspect,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_image_remove,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_image_tag,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_image_pull,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_volumes,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_volume_remove,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_networks,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_network_inspect,
+            #[cfg(feature = "docker")]
+            commands::docker::docker_network_remove,
+            #[cfg(feature = "docker")]
+            commands::docker::registry_info,
+            #[cfg(feature = "docker")]
+            commands::docker::registry_manifest,
+            #[cfg(feature = "docker")]
+            commands::docker::registry_delete,
+            #[cfg(feature = "docker")]
+            commands::docker::harbor_overview,
+            #[cfg(feature = "docker")]
+            commands::docker::harbor_project,
+            #[cfg(feature = "docker")]
+            commands::docker::harbor_repositories,
+            #[cfg(feature = "docker")]
+            commands::docker::harbor_artifacts,
+            #[cfg(feature = "docker")]
+            commands::docker::harbor_scan,
+            #[cfg(feature = "docker")]
+            commands::docker::harbor_vulnerabilities,
+            #[cfg(feature = "docker")]
+            commands::docker::harbor_delete_artifact,
+            #[cfg(feature = "docker")]
+            commands::docker::harbor_delete_tag,
+            #[cfg(feature = "docker")]
+            commands::docker::harbor_delete_repository,
             commands::stress_run,
             commands::stress_cancel,
             commands::backup_detect_cli,

@@ -126,6 +126,65 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
 
         "CLI 不支援 Kafka 連線（請用 GUI）" => "The CLI does not support Kafka connections (use the GUI)",
         "CLI 不支援 RabbitMQ 連線（請用 GUI）" => "The CLI does not support RabbitMQ connections (use the GUI)",
+        "CLI 不支援容器 / 映像倉庫連線（請用 GUI）" => {
+            "The CLI does not support container / image registry connections (use the GUI)"
+        }
+
+        // ---- db/http_tls.rs、db/docker、db/registry、db/harbor：容器與映像 ----
+        "CA 憑證" => "CA certificate",
+        "用戶端憑證" => "client certificate",
+        "用戶端私鑰" => "client key",
+        "讀取{what}失敗（{path}）：{e}" => "Failed to read the {what} ({path}): {e}",
+        "CA 憑證格式不正確：{e}" => "The CA certificate is not valid: {e}",
+        "CA 憑證檔裡沒有任何憑證" => "The CA certificate file contains no certificates",
+        "用戶端憑證或私鑰格式不正確：{e}" => "The client certificate or key is not valid: {e}",
+        "已指定用戶端憑證，但缺少私鑰" => "A client certificate was given but the key is missing",
+        "已指定用戶端私鑰，但缺少憑證" => "A client key was given but the certificate is missing",
+        "此作業系統不支援 unix socket；Windows 請用 npipe:// 或 TCP" => {
+            "Unix sockets are not supported on this OS; on Windows use npipe:// or TCP"
+        }
+        "named pipe 只在 Windows 可用；請改用 unix:// 或 TCP" => "Named pipes are only available on Windows; use unix:// or TCP",
+        "（Docker daemon 是否在執行？Docker Desktop 需先啟動）" => " (Is the Docker daemon running? Docker Desktop must be started first)",
+        "不支援的清理目標：{t}" => "Unsupported cleanup target: {t}",
+        "不支援的容器操作：{a}" => "Unsupported container action: {a}",
+        "Docker 沒有回傳 exec id" => "Docker did not return an exec ID",
+        "Docker 未切換成互動串流（HTTP {code}）" => "Docker did not switch to an interactive stream (HTTP {code})",
+        "同時開啟的 Docker 串流太多，請先關閉一些 log / 終端分頁" => {
+            "Too many Docker streams are open; close some log / terminal tabs first"
+        }
+        "Docker 連線不支援此操作（請從連線樹開啟容器 / 映像）" => {
+            "Docker connections do not support this operation (open a container / image from the connection tree)"
+        }
+        "本機 socket / named pipe 型的 Docker 連線不能走 SSH 通道；請改用 TCP（daemon 需監聽 TCP 埠）" => {
+            "Docker connections over a local socket / named pipe cannot use an SSH tunnel; use TCP instead (the daemon must listen on a TCP port)"
+        }
+        "此連線不是容器 / 映像倉庫連線" => "This connection is not a container / image registry connection",
+        "此連線不是 Docker" => "This connection is not a Docker connection",
+        "此連線不是 Registry" => "This connection is not a registry connection",
+        "此連線不是 Harbor" => "This connection is not a Harbor connection",
+        "此版本未編入容器 / 映像倉庫支援（請以 --features docker 建置）" => {
+            "This build does not include container / image registry support (build with --features docker)"
+        }
+        "容器 / 映像倉庫連線不支援備份" => "Container / image registry connections do not support backup",
+        "容器 / 映像倉庫連線不支援還原" => "Container / image registry connections do not support restore",
+        "此類連線不支援資料傳輸" => "This kind of connection does not support data transfer",
+        "此 registry 需要帳號密碼（Basic 認證）" => "This registry requires a username and password (Basic auth)",
+        "向 token 服務換發權杖失敗（HTTP {code}）：{body}" => "Failed to get a token from the token service (HTTP {code}): {body}",
+        "token 服務沒有回傳權杖" => "The token service did not return a token",
+        "registry 沒有回傳 digest，無法依 tag 刪除" => "The registry did not return a digest, so the tag cannot be deleted",
+        "此 registry 未啟用刪除（registry:2 需設 REGISTRY_STORAGE_DELETE_ENABLED=true）" => {
+            "Deletion is not enabled on this registry (registry:2 needs REGISTRY_STORAGE_DELETE_ENABLED=true)"
+        }
+        "此 registry 不開放 repository 清單（_catalog）：{m}\n請在連線設定的「Repository 清單」填入要瀏覽的 repository" => {
+            "This registry does not list its repositories (_catalog): {m}\nFill in the repositories to browse under “Repository list” in the connection settings"
+        }
+        "Registry 連線不支援此操作（請從連線樹開啟 tag）" => {
+            "Registry connections do not support this operation (open a tag from the connection tree)"
+        }
+        "Harbor 帳號或密碼錯誤：{m}" => "Wrong Harbor username or password: {m}",
+        "Harbor 連線不支援此操作（請從連線樹開啟 repository）" => {
+            "Harbor connections do not support this operation (open a repository from the connection tree)"
+        }
 
         // ---- cli/guard.rs、cli/dispatch.rs：寫入確認與寫入結果 ----
         "此為寫入指令，未執行：{action}。確認無誤請加 --yes{extra}" => {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ConnectionConfig, KIND_META, PoolStatus } from "./api";
+import { api, hostLabel, ConnectionConfig, KIND_META, PoolStatus } from "./api";
 import { Modal, Button } from "./ui/index";
 import { useT } from "./i18n";
 
@@ -38,7 +38,7 @@ export default function ConnectionProperties({ conn, connected, onClose }: {
   const connRows: [string, string][] = meta?.fileBased
     ? [[t("檔案路徑"), conn.host || "—"]]
     : [
-        [t("主機"), `${conn.host}:${conn.port}`],
+        [t("主機"), hostLabel(conn)],
         [t("使用者"), conn.username || "—"],
       ];
   connRows.unshift([t("類型"), meta?.label ?? conn.kind]);

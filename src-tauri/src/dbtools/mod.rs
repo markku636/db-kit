@@ -152,7 +152,10 @@ fn supports_explain(kind: DbKind) -> bool {
 
 /// 「database」參數可空的種類：SQLite（檔案即庫）、訊息 / 搜尋引擎（list_tables 不看它）。
 fn database_optional(kind: DbKind) -> bool {
-    matches!(kind, DbKind::Sqlite | DbKind::Kafka | DbKind::Elastic | DbKind::RabbitMq)
+    matches!(
+        kind,
+        DbKind::Sqlite | DbKind::Kafka | DbKind::Elastic | DbKind::RabbitMq | DbKind::Docker | DbKind::Registry | DbKind::Harbor
+    )
 }
 
 /// 種類對應的「表」名詞（工具說明用）。
@@ -163,6 +166,9 @@ fn table_noun(kind: DbKind) -> &'static str {
         DbKind::Kafka => "topic",
         DbKind::Elastic => "index",
         DbKind::RabbitMq => "queue",
+        DbKind::Docker => "container",
+        DbKind::Registry => "tag",
+        DbKind::Harbor => "repository",
         _ => "table",
     }
 }

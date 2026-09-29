@@ -167,7 +167,7 @@ block2 = { version = "0.6", optional = true }
 keyring = { version = "3", features = ["sync-secret-service"] }
 
 [features]
-default = ["gui", "kafka", "kafka-js", "elastic", "rabbitmq"]
+default = ["gui", "kafka", "kafka-js", "elastic", "rabbitmq", "docker"]
 # gui：啟用 Tauri 桌面程式（commands / agent / scheduler / run()）。預設開啟。
 # 生物辨識解鎖的平台綁定一併掛在此：兩組 dep 都宣告在 per-target 區塊內，
 # 於非該平台編譯時 Cargo 直接忽略，不需要再寫一層 cfg。
@@ -200,6 +200,10 @@ elastic = ["dep:reqwest"]
 # 走既有 reqwest（overview/queues/exchanges/purge）。lapin 以 rustls--ring 鎖 provider，純 Rust 無 NASM 相依。
 # 隨 gui 預設開啟；slim CLI（--no-default-features）排除。
 rabbitmq = ["dep:lapin", "dep:reqwest"]
+# docker：容器與映像管理（Docker Engine API / Docker Registry v2 / Harbor）。全走既有 reqwest：
+# 本機 unix socket / Windows named pipe、TCP、TLS（含用戶端憑證 mTLS）皆由 reqwest 內建支援，
+# 不引入 bollard（其 ssl feature 會拉進 aws-lc / NASM）。隨 gui 預設開啟；slim CLI（--no-default-features）排除。
+docker = ["dep:reqwest"]
 
 # Release 瘦身（保守版）：
 # - lto="thin"：跨 codegen unit 最佳化但平行執行，連結期記憶體峰值遠低於 fat LTO

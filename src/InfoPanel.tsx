@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, KeyRound } from "lucide-react";
-import { api, ColumnInfo, ConnectionConfig, DbKind, IndexInfo, KIND_META, PoolStatus } from "./api";
+import { api, hostLabel, ColumnInfo, ConnectionConfig, DbKind, IndexInfo, KIND_META, PoolStatus } from "./api";
 import Icon from "./ui/Icon";
 import { IconButton } from "./ui/index";
 import { useStore } from "./store";
@@ -254,7 +254,7 @@ function ConnectionInfo({ conn, connected }: { conn: ConnectionConfig; connected
 
   const cfgRows: [string, string][] = meta?.fileBased
     ? [[t("檔案路徑"), conn.host || "—"]]
-    : [[t("主機"), `${conn.host}:${conn.port}`], [t("使用者"), conn.username || "—"]];
+    : [[t("主機"), hostLabel(conn)], [t("使用者"), conn.username || "—"]];
   cfgRows.unshift([t("類型"), meta?.label ?? conn.kind]);
   cfgRows.push([t("預設資料庫"), conn.database || "—"]);
   if (!meta?.fileBased) cfgRows.push([t("連線池上限"), String(conn.max_connections ?? "—")]);

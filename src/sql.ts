@@ -19,12 +19,16 @@ export const supportsRoutines = (kind: DbKind | null | undefined): boolean =>
 export const supportsSchemaCompare = (kind: DbKind | null | undefined): boolean =>
   isMysqlFamily(kind) || kind === "postgres" || kind === "sqlite" || kind === "mssql" || kind === "oracle";
 
-// 有查詢編輯器可用的 kind：Kafka / RabbitMQ 沒有查詢語言（driver 的 query() 一律回 Unsupported），
+// 有查詢編輯器可用的 kind：Kafka / RabbitMQ / 容器類（Docker / Registry / Harbor）沒有查詢語言
+// （driver 的 query() 一律回 Unsupported），
 // 其餘（含 Mongo 的 DSL、Redis 的指令、Elasticsearch 的 Query DSL）都有可打字的編輯器。
 // 單一落點：查詢面板的編輯器 gate 與側欄右鍵「新增查詢」共用 —— 兩處曾各寫一份白名單，
 // 側欄那份漏了 mssql / oracle / external / mongo / redis / elastic，右鍵選單因此看不到「新增查詢」。
 export const supportsQueryEditorKind = (kind: DbKind | null | undefined): boolean =>
-  !!kind && kind !== "kafka" && kind !== "rabbitmq";
+  !!kind && !NO_QUERY_KINDS.includes(kind);
+
+// 沒有查詢語言的 kind（supportsQueryEditorKind 的反面；側欄選單 / 查詢窗格空狀態共用）。
+const NO_QUERY_KINDS: DbKind[] = ["kafka", "rabbitmq", "docker", "registry", "harbor"];
 
 // ---- 跨資料庫識別字 / 字面值跳脫（MySQL / PostgreSQL / SQLite 一致性關鍵）----
 // 識別字：PostgreSQL 用雙引號，SQL Server 用 [方括號]（] 加倍），其餘（MySQL / MariaDB / SQLite）用反引號；內部引號加倍轉義。
@@ -89,6 +93,9 @@ export const TYPE_PRESETS: Record<DbKind, string[]> = {
   kafka: [],
   elastic: [],
   rabbitmq: [],
+  docker: [],
+  registry: [],
+  harbor: [],
   external: [], // 外部 gateway 唯讀，不建表
 };
 

@@ -559,3 +559,104 @@ export const SFTP_FILES = {
   "/home/deploy/app/server.js": 'const http = require("http");\n\nhttp.createServer((req, res) => res.end("ok")).listen(8080);\n',
   "/home/deploy/.bashrc": "# ~/.bashrc\nexport PATH=$HOME/bin:$PATH\n",
 };
+
+// ---- 容器與映像（Docker / Registry / Harbor）----
+// 刻意不併進上面的 CONNECTIONS：文件截圖的側欄維持原樣；verify-ui 的容器情境以 CASE_FX 另外合併。
+export const CONTAINER_CONNECTIONS = [
+  { id: "c-docker", name: "local-docker", kind: "docker", host: "", port: 0, username: "", password: "", max_connections: 1 },
+  { id: "c-registry", name: "team-registry", kind: "registry", host: "https://registry.example.test", port: 0, username: "ci", password: "", max_connections: 1 },
+  { id: "c-harbor", name: "corp-harbor", kind: "harbor", host: "https://harbor.example.test", port: 0, username: "robot$ci", password: "", max_connections: 1 },
+];
+
+const port = (priv, pub) => ({ private_port: priv, public_port: pub, ip: pub == null ? "" : "0.0.0.0", proto: "tcp" });
+export const DOCKER_CONTAINERS = [
+  { id: "a1b2c3d4e5f6a1b2", name: "shop-db", image: "postgres:16", command: "docker-entrypoint.sh postgres", created: 1782900000, state: "running", status: "Up 3 hours (healthy)", ports: [port(5432, 15432)], compose_project: "shop", compose_service: "db" },
+  { id: "b2c3d4e5f6a1b2c3", name: "shop-redis", image: "redis:7", command: "redis-server", created: 1782900100, state: "running", status: "Up 3 hours", ports: [port(6379, 16379)], compose_project: "shop", compose_service: "cache" },
+  { id: "c3d4e5f6a1b2c3d4", name: "shop-api", image: "registry.example.test/acme/shop-api:1.4.2", command: "node server.js", created: 1782900200, state: "exited", status: "Exited (1) 20 minutes ago", ports: [port(8080, null)], compose_project: "shop", compose_service: "api" },
+  { id: "d4e5f6a1b2c3d4e5", name: "edge-nginx", image: "nginx:1.27", command: "nginx -g daemon-off", created: 1782800000, state: "paused", status: "Up 2 days (Paused)", ports: [port(80, 8088)], compose_project: "", compose_service: "" },
+];
+
+export const DOCKER_ENV = {
+  "shop-db": ["POSTGRES_USER=shop", "POSTGRES_PASSWORD=s3cret-demo", "POSTGRES_DB=shop", "PGDATA=/var/lib/postgresql/data"],
+  "shop-redis": ["REDIS_PASSWORD=demo-redis"],
+};
+
+export const DOCKER_IMAGES = [
+  { id: "sha256:1111aaaa2222bbbb", reference: "postgres:16", repo_tags: ["postgres:16"], repo_digests: [], created: 1782000000, size: 438000000, containers: 1, dangling: false },
+  { id: "sha256:3333cccc4444dddd", reference: "redis:7", repo_tags: ["redis:7"], repo_digests: [], created: 1781000000, size: 117000000, containers: 1, dangling: false },
+  { id: "sha256:5555eeee6666ffff", reference: "registry.example.test/acme/shop-api:1.4.2", repo_tags: ["registry.example.test/acme/shop-api:1.4.2"], repo_digests: [], created: 1782800000, size: 212000000, containers: 1, dangling: false },
+  { id: "sha256:7777aaaa8888bbbb", reference: "7777aaaa8888", repo_tags: [], repo_digests: [], created: 1780000000, size: 98000000, containers: 0, dangling: true },
+];
+
+export const DOCKER_VOLUMES = [
+  { name: "shop_pgdata", driver: "local", mountpoint: "/var/lib/docker/volumes/shop_pgdata/_data", created: "2026-06-01T08:00:00Z", scope: "local", labels: { "com.docker.compose.project": "shop" }, used_by: ["shop-db"], raw: "{}" },
+  { name: "scratch", driver: "local", mountpoint: "/var/lib/docker/volumes/scratch/_data", created: "2026-05-20T08:00:00Z", scope: "local", labels: {}, used_by: [], raw: "{}" },
+];
+
+export const DOCKER_NETWORKS = [
+  { id: "net0001", name: "bridge", driver: "bridge", scope: "local", internal: false, subnets: ["172.17.0.0/16"], gateways: ["172.17.0.1"], members: [], builtin: true, raw: "{}" },
+  { id: "net0002", name: "host", driver: "host", scope: "local", internal: false, subnets: [], gateways: [], members: [], builtin: true, raw: "{}" },
+  { id: "net0003", name: "shop_default", driver: "bridge", scope: "local", internal: false, subnets: ["172.20.0.0/16"], gateways: ["172.20.0.1"], members: [{ name: "shop-db", ipv4: "172.20.0.2/16", mac: "02:42:ac:14:00:02" }], builtin: false, raw: "{}" },
+];
+
+export const DOCKER_LOG_TEXT =
+  "2026-07-02 20:58:01.123 UTC [1] LOG:  starting PostgreSQL 16.4\n" +
+  "2026-07-02 20:58:01.130 UTC [1] LOG:  listening on IPv4 address 0.0.0.0, port 5432\n" +
+  "\u001b[91m2026-07-02 20:59:12.004 UTC [88] ERROR:  relation coupon does not exist\u001b[0m\n" +
+  "2026-07-02 21:00:00.000 UTC [1] LOG:  checkpoint complete\n";
+
+export const REGISTRY_REPOS = ["acme/shop-api", "library/nginx"];
+export const REGISTRY_TAGS = {
+  "acme/shop-api": ["latest", "1.4.2", "1.4.1", "1.3.0"],
+  "library/nginx": ["1.27", "1.26"],
+};
+export const REGISTRY_MANIFEST = {
+  repository: "acme/shop-api", reference: "1.4.2", digest: "sha256:9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0",
+  media_type: "application/vnd.oci.image.manifest.v1+json", size: 212004211, is_index: false,
+  layers: [
+    { digest: "sha256:aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff", size: 29150000, media_type: "application/vnd.oci.image.layer.v1.tar+gzip" },
+    { digest: "sha256:bbbb111122223333444455556666777788889999aaaabbbbccccddddeeeeffff", size: 182850000, media_type: "application/vnd.oci.image.layer.v1.tar+gzip" },
+  ],
+  platforms: [], config_digest: "sha256:cccc",
+  config: {
+    created: "2026-06-30T10:00:00Z", os: "linux", arch: "amd64", author: "", entrypoint: ["node"], cmd: ["server.js"],
+    env: ["NODE_ENV=production", "API_TOKEN=demo"], exposed_ports: ["8080/tcp"], working_dir: "/app", user: "node",
+    labels: { "org.opencontainers.image.source": "https://git.example.test/acme/shop-api" }, history: ["ADD rootfs.tar.gz /", "COPY . /app"],
+  },
+  raw: "{\n  \"schemaVersion\": 2\n}",
+};
+
+export const HARBOR_PROJECTS = ["acme", "library"];
+export const HARBOR_REPOS = {
+  acme: [
+    { name: "shop-api", full_name: "acme/shop-api", artifact_count: 3, pull_count: 120, creation_time: "2026-03-01T00:00:00Z", update_time: "2026-06-30T10:00:00Z", description: "" },
+    { name: "team/worker", full_name: "acme/team/worker", artifact_count: 1, pull_count: 8, creation_time: "2026-04-01T00:00:00Z", update_time: "2026-06-01T00:00:00Z", description: "" },
+  ],
+  library: [
+    { name: "nginx", full_name: "library/nginx", artifact_count: 2, pull_count: 300, creation_time: "2026-01-01T00:00:00Z", update_time: "2026-05-01T00:00:00Z", description: "" },
+  ],
+};
+export const HARBOR_ARTIFACTS = [
+  {
+    digest: "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", kind: "IMAGE",
+    media_type: "application/vnd.oci.image.manifest.v1+json", size: 212004211, push_time: "2026-06-30T10:00:00Z", pull_time: "2026-07-02T08:00:00Z",
+    os: "linux", arch: "amd64",
+    tags: [{ name: "1.4.2", push_time: "2026-06-30T10:00:00Z", pull_time: "", immutable: false }, { name: "latest", push_time: "2026-06-30T10:00:00Z", pull_time: "", immutable: false }],
+    labels: [{ name: "prod", color: "#16a34a" }],
+    scan: { status: "Success", severity: "High", total: 7, fixable: 5, critical: 0, high: 2, medium: 3, low: 2, unknown: 0, end_time: "2026-06-30T10:05:00Z", complete_percent: 100, scanner: "Trivy" },
+    references: 0,
+  },
+  {
+    digest: "sha256:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd", kind: "IMAGE",
+    media_type: "application/vnd.oci.image.manifest.v1+json", size: 209000000, push_time: "2026-06-10T10:00:00Z", pull_time: "",
+    os: "linux", arch: "amd64", tags: [{ name: "1.4.1", push_time: "2026-06-10T10:00:00Z", pull_time: "", immutable: true }],
+    labels: [], scan: null, references: 0,
+  },
+];
+export const HARBOR_VULNS = {
+  scanner: "Trivy 0.50", generated_at: "2026-06-30T10:05:00Z", severity: "High",
+  items: [
+    { id: "CVE-2026-1111", package: "openssl", version: "3.0.13", fix_version: "3.0.14", severity: "High", description: "Demo vulnerability", links: ["https://avd.example.test/CVE-2026-1111"], cvss: 7.5 },
+    { id: "CVE-2026-2222", package: "zlib", version: "1.2.13", fix_version: "", severity: "Medium", description: "Demo vulnerability", links: [], cvss: 5.3 },
+  ],
+};

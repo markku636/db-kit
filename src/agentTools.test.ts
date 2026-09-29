@@ -274,7 +274,7 @@ describe("isSqlToolCall", () => {
   });
 
   it("沒有查詢語言的類型一律為假", () => {
-    for (const kind of ["kafka", "elastic", "rabbitmq"] as const) {
+    for (const kind of ["kafka", "elastic", "rabbitmq", "docker", "registry", "harbor"] as const) {
       expect(isSqlToolCall(view({ name: "run_query" }), kind)).toBe(false);
     }
   });

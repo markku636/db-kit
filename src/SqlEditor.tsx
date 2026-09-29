@@ -74,6 +74,9 @@ export const DIALECT: Record<DbKind, SQLDialect> = {
   kafka: StandardSQL, // Kafka 不開 SQL 編輯器；此值僅滿足 Record 完整性
   elastic: StandardSQL, // Elastic 走 ElasticQueryEditor（JSON DSL），此值僅滿足 Record 完整性
   rabbitmq: StandardSQL, // RabbitMQ 無查詢編輯器；此值僅滿足 Record 完整性
+  docker: StandardSQL, // 容器類無查詢編輯器；以下三個僅滿足 Record 完整性
+  registry: StandardSQL,
+  harbor: StandardSQL,
   external: MySQLLoose, // 外部 gateway 講 MySQL
 };
 

@@ -1,5 +1,5 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { api, hostLabel, isContainerKind, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
 import { LANGUAGES, useLang, useT, type Lang } from "./i18n";
@@ -25,6 +25,12 @@ import {
   sectionize, toPlacements, uniqueGroupName, UNGROUPED_KEY,
 } from "./connGroups";
 import { kindIcon } from "./kindIcons";
+import { containerDbNode, containerObjIcon, containerObjTitle } from "./containerTree";
+import { dockerItemMenu, harborItemMenu, registryItemMenu } from "./dockerMenus";
+import { useConnPrefill, useDockerPullRequest } from "./connPrefill";
+import type {
+  RegistryInfoPanel as RegistryInfoPanelT, HarborOverviewPanel as HarborOverviewPanelT, HarborProjectPanel as HarborProjectPanelT,
+} from "./RegistryPanels";
 import { SquareTerminal } from "lucide-react";
 import { useResizable, Splitter } from "./ui/resizable";
 import { tabOrder, type SshTab } from "./sshTabs";
@@ -124,6 +130,12 @@ const EsClusterOverview = lazyOverlay(() => import("./EsClusterOverview"));
 const EsMappingViewer = lazyOverlay(() => import("./EsMappingViewer"));
 const RabbitMqOverview = lazyOverlay(() => import("./RabbitMqOverview"));
 const RabbitMqPublishDialog = lazyOverlay(() => import("./RabbitMqPublishDialog"));
+const DockerOverview = lazyOverlay(() => import("./DockerOverview"));
+const DockerPullDialog = lazyOverlay(() => import("./DockerPullDialog"));
+// 具名匯出的面板：型別另外取（type-only import 不會把 chunk 拉進首包）。
+const RegistryInfoPanel = lazyOverlay<ComponentProps<typeof RegistryInfoPanelT>>(() => import("./RegistryPanels").then((m) => ({ default: m.RegistryInfoPanel })));
+const HarborOverviewPanel = lazyOverlay<ComponentProps<typeof HarborOverviewPanelT>>(() => import("./RegistryPanels").then((m) => ({ default: m.HarborOverviewPanel })));
+const HarborProjectPanel = lazyOverlay<ComponentProps<typeof HarborProjectPanelT>>(() => import("./RegistryPanels").then((m) => ({ default: m.HarborProjectPanel })));
 const NewKeyDialog = lazyOverlay(() => import("./NewKeyDialog"));
 const CreateTableDialog = lazyOverlay(() => import("./CreateTableDialog"));
 const ConnectionProperties = lazyOverlay(() => import("./ConnectionProperties"));
@@ -185,7 +197,7 @@ function buildScopedSql(node: SelectedNode | null): string | undefined {
   if (node.kind === "elastic") {
     return JSON.stringify({ index: node.table, query: { match_all: {} }, size: 200 }, null, 2);
   }
-  if (node.kind === "redis" || node.kind === "kafka") return undefined;
+  if (node.kind === "redis" || node.kind === "kafka" || isContainerKind(node.kind)) return undefined;
   const select = `SELECT *\nFROM ${qualifiedName(node.kind, node.db, node.table)}\nLIMIT 100;`;
   return use ? `${use};\n\n${select}` : select;
 }
@@ -201,7 +213,14 @@ function openNodeScopedQueryTab() {
 export default function App() {
   const t = useT();
   // null = 關閉；{ initial } = 開啟（initial 為 null 表新增、為連線表示編輯）
-  const [dialog, setDialog] = useState<{ initial: ConnectionConfig | null } | null>(null);
+  const [dialog, setDialog] = useState<{ initial: ConnectionConfig | null; prefill?: Partial<ConnectionConfig> } | null>(null);
+  // 其他地方（Docker 容器右鍵 / 容器分頁）請求開一個預填好的新增連線對話框。
+  const connPrefill = useConnPrefill((s) => s.prefill);
+  useEffect(() => {
+    if (!connPrefill) return;
+    setDialog({ initial: null, prefill: connPrefill });
+    useConnPrefill.getState().clear();
+  }, [connPrefill]);
   // SSH 主機對話框：initial null = 新增（folderId 為預設資料夾）、否則編輯。
   // prefill = 新增連線對話框轉交過來的 ssh:// / sftp:// 字串。
   const [sshDialog, setSshDialog] = useState<{ initial: SshSession | null; folderId: string | null; prefill?: ParsedSsh | null } | null>(null);
@@ -479,6 +498,7 @@ export default function App() {
       {dialog && (
         <ConnectionDialog
           initial={dialog.initial}
+          prefill={dialog.prefill}
           onClose={() => setDialog(null)}
           onNewSsh={(prefill) => { setDialog(null); setSshDialog({ initial: null, folderId: null, prefill }); }}
           onSaved={async (c) => {
@@ -542,7 +562,7 @@ export default function App() {
         {active && (
           <span
             className="flex items-center gap-1.5 min-w-0"
-            title={`${KIND_META[active.kind].label} · ${active.host}:${active.port}${isConnected ? t(" · 已連線") : t(" · 未連線")}`}
+            title={`${KIND_META[active.kind].label} · ${hostLabel(active)}${isConnected ? t(" · 已連線") : t(" · 未連線")}`}
           >
             <span
               className={`shrink-0 flex ${isConnected ? "" : "text-fg/35"}`}
@@ -1389,6 +1409,37 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
   const [rabbitOverview, setRabbitOverview] = useState<{ id: string; name: string } | null>(null);
   // RabbitMQ 發布訊息對話框（從連線 / db 層開啟時 routingKey 空；從佇列開啟時預填佇列名）。
   const [rabbitPublish, setRabbitPublish] = useState<{ connId: string; routingKey?: string } | null>(null);
+  // Docker 總覽 / 拉取映像（image 預填：從映像右鍵「重新拉取」）。
+  const [dockerOverview, setDockerOverview] = useState<{ id: string; name: string } | null>(null);
+  const [dockerPull, setDockerPull] = useState<{
+    connId: string; image?: string; user?: string;
+    credConn?: { id: string; name: string } | null; targets?: { id: string; name: string }[];
+  } | null>(null);
+  // Registry 端點資訊 / Harbor 總覽 / Harbor 專案資訊。
+  const [registryInfo, setRegistryInfo] = useState<{ id: string; name: string } | null>(null);
+  const [harborOverview, setHarborOverview] = useState<{ id: string; name: string } | null>(null);
+  const [harborProject, setHarborProject] = useState<{ connId: string; project: string } | null>(null);
+  // Registry / Harbor 的 tag「拉到 Docker」：挑一個已連線的 Docker（優先作用中的那個）。
+  const pullReq = useDockerPullRequest((s) => s.req);
+  useEffect(() => {
+    if (!pullReq) return;
+    useDockerPullRequest.getState().clear();
+    const { connections: cs, connectedIds: ids, activeId } = useStore.getState();
+    const dockers = cs.filter((c) => c.kind === "docker" && ids.has(c.id));
+    if (dockers.length === 0) {
+      toast.info(t("請先連線到一個 Docker 連線，才能把映像拉下來"));
+      return;
+    }
+    const first = dockers.find((c) => c.id === activeId) ?? dockers[0];
+    setDockerPull({
+      connId: first.id,
+      image: pullReq.image,
+      user: pullReq.user,
+      credConn: pullReq.credConn,
+      targets: dockers.map((c) => ({ id: c.id, name: c.name })),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pullReq]);
   // 新增 Redis 鍵對話框
   const [newKey, setNewKey] = useState<{ connId: string; db: string } | null>(null);
   // 設計表結構（CREATE TABLE）對話框：帶連線 / 資料庫 / 種類。
@@ -1787,6 +1838,15 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
 
   // 強制重載某資料庫的表 / 集合清單（新增 / 刪除表 / 集合後刷新樹狀）。
   // 註：折疊中的節點會被展開以呈現剛建立的項目（刻意，符合「建立後即見」預期）。
+  // 分頁內的操作（Docker 刪容器 / 拉映像…）改變了樹的內容：只重抓已展開的節點。
+  const treeReload = useStore((s) => s.treeReload);
+  useEffect(() => {
+    if (!treeReload) return;
+    if (expandedDbs[`${treeReload.connId}:${treeReload.db}`]) void refreshTables(treeReload.connId, treeReload.db);
+    // 只對新的請求反應（nonce）；expandedDbs 的變動不該重觸發。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [treeReload?.nonce]);
+
   const refreshTables = async (connId: string, db: string) => {
     const cfg = connections.find((c) => c.id === connId);
     if (!cfg) return;
@@ -2173,6 +2233,33 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
   const tableMenuNodes = (m: NonNullable<typeof tableMenu>): MenuNode[] => {
     const it = (label: string, onClick: () => void, danger?: boolean): MenuNode => ({ kind: "item", label, onClick, danger });
     const sep: MenuNode = { kind: "sep" };
+    if (m.kind === "docker") {
+      const conn = connections.find((c) => c.id === m.connId);
+      if (!conn) return [];
+      return dockerItemMenu({
+        conn,
+        db: m.db,
+        name: m.table,
+        objKind: m.objKind ?? "",
+        readonly: readonlyConns[m.connId] === true,
+        open: () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind),
+        refresh: () => refreshTables(m.connId, m.db),
+        pull: (image) => setDockerPull({ connId: m.connId, image }),
+      });
+    }
+    if (m.kind === "registry" || m.kind === "harbor") {
+      const conn = connections.find((c) => c.id === m.connId);
+      if (!conn) return [];
+      const common = {
+        conn,
+        readonly: readonlyConns[m.connId] === true,
+        open: () => useStore.getState().openTable(m.connId, m.db, m.table, "data", m.objKind),
+        refresh: () => refreshTables(m.connId, m.db),
+      };
+      return m.kind === "registry"
+        ? registryItemMenu({ ...common, repo: m.db, tag: m.table })
+        : harborItemMenu({ ...common, project: m.db, repo: m.table });
+    }
     if (m.kind === "mongo") {
       return [
         it(t("開啟集合"), () => useStore.getState().openTable(m.connId, m.db, m.table)),
@@ -2812,7 +2899,7 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
                   <Icon icon={kindIcon(c.kind)} size={14} />
                 </span>
               )}
-              <span className="truncate flex-1" title={`${c.name} · ${KIND_META[c.kind].label} · ${c.host}:${c.port}`}>{c.name}</span>
+              <span className="truncate flex-1" title={`${c.name} · ${KIND_META[c.kind].label} · ${hostLabel(c)}`}>{c.name}</span>
               {isProdConn(c) && <span className="shrink-0 text-[9px] px-1 rounded bg-red-500/25 text-red-300/90" title={t("正式環境：執行查詢前會跳確認")}>PROD</span>}
               {readonlyConns[c.id] && <span className="shrink-0 text-[9px] px-1 rounded bg-amber-400/20 text-amber-300/90" title={t("唯讀模式：擋寫入 / DDL 與資料格編輯")}>{t("唯讀")}</span>}
               <button type="button" title={t("編輯連線")}
@@ -2867,12 +2954,18 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
                       selectedNode.db === db && selectedNode.table === obj.name
                         ? "relative bg-accent/12 before:content-[''] before:absolute before:left-0 before:inset-y-0 before:w-[2px] before:bg-accent" : "hover:bg-fg/5"
                     }`}
-                    title={t("單擊開啟資料；右鍵可產生 SELECT / 更多動作")}
+                    title={containerObjTitle(c.kind, obj.kind) ?? t("單擊開啟資料；右鍵可產生 SELECT / 更多動作")}
                   >
-                    <Icon icon={obj.kind === "view" ? Eye : obj.kind === "data_view" ? Layers : Table2} size={14}
-                      className={`shrink-0 ${
-                        obj.kind === "view" ? "text-purple-300/80" : obj.kind === "data_view" ? "text-teal-300/80" : "text-sky-300/70"
-                      }`} />
+                    {(() => {
+                      const ci = containerObjIcon(c.kind, obj.kind);
+                      if (ci) return <Icon icon={ci.icon} size={14} className={`shrink-0 ${ci.cls}`} />;
+                      return (
+                        <Icon icon={obj.kind === "view" ? Eye : obj.kind === "data_view" ? Layers : Table2} size={14}
+                          className={`shrink-0 ${
+                            obj.kind === "view" ? "text-purple-300/80" : obj.kind === "data_view" ? "text-teal-300/80" : "text-sky-300/70"
+                          }`} />
+                      );
+                    })()}
                     <span className="truncate">{obj.name}</span>
                   </div>
                 );
@@ -2934,7 +3027,7 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
                         setActive(c.id);
                         selectNode({ type: "database", connId: c.id, db, kind: c.kind });
                       }}
-                      onContextMenu={(isRedis || isSqlKind || c.kind === "mongo" || c.kind === "kafka" || c.kind === "elastic" || c.kind === "rabbitmq") ? (e) => {
+                      onContextMenu={(isRedis || isSqlKind || c.kind === "mongo" || c.kind === "kafka" || c.kind === "elastic" || c.kind === "rabbitmq" || isContainerKind(c.kind)) ? (e) => {
                         e.preventDefault();
                         setActive(c.id);
                         selectNode({ type: "database", connId: c.id, db, kind: c.kind });
@@ -2950,8 +3043,8 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
                           ? <Icon icon={Loader2} size={13} className="text-fg/40 animate-spin" />
                           : <Icon icon={ChevronRight} size={13} className={`text-fg/35 transition-transform ${objs ? "rotate-90" : ""}`} />}
                       </span>
-                      <span className="shrink-0 flex" style={{ color: meta.color }}><Icon icon={Database} size={14} /></span>
-                      <span className="truncate">{db}</span>
+                      <span className="shrink-0 flex" style={{ color: meta.color }}><Icon icon={containerDbNode(c.kind, db)?.icon ?? Database} size={14} /></span>
+                      <span className="truncate">{containerDbNode(c.kind, db)?.label ?? db}</span>
                     </div>
 
                     {objs && isSqlKind && (() => {
@@ -2994,7 +3087,7 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
                       <>
                         {objs.tables.filter((o) => tableVisible(c.name, o.name)).map((o) => objNode(o, "pl-12"))}
                         {objs.tables.length === 0 && (
-                          <div className="pl-12 pr-3 py-1 text-fg/25 text-xs">{t("無表")}</div>
+                          <div className="pl-12 pr-3 py-1 text-fg/25 text-xs">{isContainerKind(c.kind) ? t("（空）") : t("無表")}</div>
                         )}
                       </>
                     )}
@@ -3101,10 +3194,24 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
                       : [[t("發布訊息…"), () => setRabbitPublish({ connId: menuConn.id }), false] as [string, () => void, boolean]]),
                   ]
                 : []),
-              ...(connectedIds.has(menu.id)
+              ...(connectedIds.has(menu.id) && menuConn.kind === "docker"
+                ? [
+                    [t("總覽…"), () => setDockerOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
+                    ...(readonlyConns[menu.id]
+                      ? []
+                      : [[t("拉取映像…"), () => setDockerPull({ connId: menuConn.id }), false] as [string, () => void, boolean]]),
+                  ]
+                : []),
+              ...(connectedIds.has(menu.id) && menuConn.kind === "registry"
+                ? [[t("端點資訊…"), () => setRegistryInfo({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
+                : []),
+              ...(connectedIds.has(menu.id) && menuConn.kind === "harbor"
+                ? [[t("總覽…"), () => setHarborOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
+                : []),
+              ...(connectedIds.has(menu.id) && !isContainerKind(menuConn.kind)
                 ? [["SQL Search…", () => setSearchObjs({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
                 : []),
-              ...(connectedIds.has(menu.id)
+              ...(connectedIds.has(menu.id) && !isContainerKind(menuConn.kind)
                 ? [[t("進階搜尋…"), () => onAdvSearch(menuConn.id, menuConn.kind), false] as [string, () => void, boolean]]
                 : []),
               // 有設 SSH tunnel 的連線：沿用同一組跳板憑證直接開終端機（不論資料庫是否已連線）。
@@ -3199,6 +3306,27 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
                 : dbConn?.kind === "elastic"
                 ? [
                     [t("叢集總覽…"), () => { if (dbConn) setEsOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                    [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
+                  ]
+                : dbConn?.kind === "docker"
+                ? [
+                    [t("重新整理"), () => refreshTables(dbMenu.connId, dbMenu.db), false] as [string, () => void, boolean],
+                    [t("總覽…"), () => { if (dbConn) setDockerOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
+                    ...(readonlyConns[dbMenu.connId] || dbMenu.db !== "images"
+                      ? []
+                      : [[t("拉取映像…"), () => setDockerPull({ connId: dbMenu.connId }), false] as [string, () => void, boolean]]),
+                    [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
+                  ]
+                : dbConn?.kind === "registry"
+                ? [
+                    [t("重新整理"), () => refreshTables(dbMenu.connId, dbMenu.db), false] as [string, () => void, boolean],
+                    [t("複製 repository 名稱"), () => copyToClipboard(dbMenu.db, t("已複製")), false] as [string, () => void, boolean],
+                    [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
+                  ]
+                : dbConn?.kind === "harbor"
+                ? [
+                    [t("專案資訊…"), () => setHarborProject({ connId: dbMenu.connId, project: dbMenu.db }), false] as [string, () => void, boolean],
+                    [t("重新整理"), () => refreshTables(dbMenu.connId, dbMenu.db), false] as [string, () => void, boolean],
                     [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
                   ]
                 : dbConn?.kind === "rabbitmq"
@@ -3320,6 +3448,36 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
 
       {rabbitOverview && (
         <RabbitMqOverview connId={rabbitOverview.id} connName={rabbitOverview.name} onClose={() => setRabbitOverview(null)} />
+      )}
+
+      {dockerOverview && (
+        <DockerOverview
+          connId={dockerOverview.id}
+          connName={dockerOverview.name}
+          onClose={() => setDockerOverview(null)}
+          onPull={() => setDockerPull({ connId: dockerOverview.id })}
+        />
+      )}
+
+      {dockerPull && (
+        <DockerPullDialog
+          connId={dockerPull.connId}
+          initialImage={dockerPull.image}
+          initialUser={dockerPull.user}
+          credConn={dockerPull.credConn}
+          targets={dockerPull.targets}
+          onClose={() => setDockerPull(null)}
+        />
+      )}
+
+      {registryInfo && (
+        <RegistryInfoPanel connId={registryInfo.id} connName={registryInfo.name} onClose={() => setRegistryInfo(null)} />
+      )}
+      {harborOverview && (
+        <HarborOverviewPanel connId={harborOverview.id} connName={harborOverview.name} onClose={() => setHarborOverview(null)} />
+      )}
+      {harborProject && (
+        <HarborProjectPanel connId={harborProject.connId} project={harborProject.project} onClose={() => setHarborProject(null)} />
       )}
 
       {rabbitPublish && (
@@ -3981,6 +4139,9 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
   kafka: "", // Kafka 無查詢編輯器
   elastic: '{ "index": "", "query": { "match_all": {} }, "size": 200 }',
   rabbitmq: "", // RabbitMQ 無查詢編輯器（走專屬佇列瀏覽 / 發布面板）
+  docker: "", // 容器類無查詢編輯器（走專屬容器 / 映像面板）
+  registry: "",
+  harbor: "",
   external: "SELECT 1",
 };
 // 僅關聯式資料庫支援 EXPLAIN 查詢計畫分析（MSSQL 回 SHOWPLAN XML，於結果格顯示、不走 JSON 視覺樹）。
@@ -6025,12 +6186,20 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           <div style={{ height: editor.size }} className="overflow-auto bg-app border-t border-fg/10">
             <EmptyState
               compact
-              icon={kind === "kafka" ? Radio : Inbox}
-              title={kind === "kafka" ? t("Kafka 連線不使用 SQL 查詢") : t("RabbitMQ 連線不使用 SQL 查詢")}
+              icon={kind === "kafka" ? Radio : kind ? kindIcon(kind) : Inbox}
+              title={
+                kind === "kafka" ? t("Kafka 連線不使用 SQL 查詢")
+                : kind === "rabbitmq" ? t("RabbitMQ 連線不使用 SQL 查詢")
+                : t("{kind} 連線不使用 SQL 查詢", { kind: kind ? KIND_META[kind].label : "" })
+              }
               hint={
                 kind === "kafka"
                   ? t("點左側主題可開啟訊息瀏覽器（消費 / 過濾 / 即時追尾 / 發佈）；對主題按右鍵可發佈訊息、改設定、加分割區、清空或刪除；對連線按右鍵有叢集總覽、消費者群組與新增主題。")
-                  : t("點左側佇列可開啟訊息瀏覽；對佇列按右鍵可發布訊息、清空或刪除佇列；對連線按右鍵有總覽與發布訊息。")
+                  : kind === "rabbitmq"
+                  ? t("點左側佇列可開啟訊息瀏覽；對佇列按右鍵可發布訊息、清空或刪除佇列；對連線按右鍵有總覽與發布訊息。")
+                  : kind === "docker"
+                  ? t("點左側容器可看資訊、Log、進 Shell；對容器按右鍵可啟停、刪除或建立資料庫連線；對連線按右鍵有總覽（磁碟用量 / 清理）與拉取映像。")
+                  : t("點左側項目可開啟詳情；對項目按右鍵有更多動作。")
               }
             />
           </div>

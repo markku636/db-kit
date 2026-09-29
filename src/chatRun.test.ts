@@ -48,7 +48,7 @@ describe("classifyForRun：支援的連線類型", () => {
   });
 
   it("非 SQL 方言一律 unsupported（守門器掃不到它們的關鍵字，放行等於沒有守門）", () => {
-    for (const kind of ["mongo", "redis", "kafka", "elastic", "rabbitmq"] as DbKind[]) {
+    for (const kind of ["mongo", "redis", "kafka", "elastic", "rabbitmq", "docker", "registry", "harbor"] as DbKind[]) {
       expect(classifyForRun("db.users.find({})", kind, safe)).toEqual({ ok: false, reason: "unsupported" });
     }
   });

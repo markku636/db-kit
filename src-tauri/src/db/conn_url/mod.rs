@@ -122,6 +122,8 @@ fn scheme_kind(s: &str) -> Option<DbKind> {
         "kafka" => Some(DbKind::Kafka),
         "elasticsearch" | "opensearch" | "elastic" => Some(DbKind::Elastic),
         "amqp" | "amqps" => Some(DbKind::RabbitMq),
+        // Docker daemon 位址（DOCKER_HOST 慣例）：tcp:// / unix:// / npipe://，外加本 app 的 docker://。
+        "docker" | "tcp" | "unix" | "npipe" => Some(DbKind::Docker),
         "sqlite" => Some(DbKind::Sqlite),
         _ => None,
     }
@@ -317,10 +319,18 @@ pub fn parse_url(input: &str, kind_hint: Option<DbKind>) -> AppResult<Parsed> {
     // http(s)：整段 URL 要留在 host 欄（Elastic 的慣例，見 vendor::parse_elastic_url），
     // 不能走 standard 的 host/port/db 切割。
     if flags.http {
-        return Ok(vendor::parse_elastic_url(
-            scheme.as_deref().unwrap_or("https"),
-            &rest,
-        ));
+        let scheme = scheme.as_deref().unwrap_or("https");
+        // Registry / Harbor / Docker 也是 http(s) 端點：對話框已選這三類時沿用其類型，
+        // 帳密照樣從 userinfo 取出（不帶 es_auth）。
+        if let Some(k @ (DbKind::Registry | DbKind::Harbor | DbKind::Docker)) = kind_hint {
+            return Ok(vendor::parse_http_endpoint(k, scheme, &rest));
+        }
+        return Ok(vendor::parse_elastic_url(scheme, &rest));
+    }
+
+    // Docker：unix:// / npipe:// 整段保留在 host（socket 路徑）；tcp:// 走 host / port。
+    if matches!(kind, Some(DbKind::Docker)) {
+        return Ok(vendor::parse_docker_url(scheme.as_deref().unwrap_or("tcp"), &rest, flags.tls));
     }
 
     // sqlite：去掉 scheme 後整段當檔案路徑（路徑可含 ? / #，不做 query 切割）。

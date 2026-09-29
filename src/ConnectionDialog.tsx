@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ConnectionConfig, DbKind, KIND_META, SshAuthMethod } from "./api";
 import { applyParsedToForm, ChangedField, ConnFormFields, looksLikeConnectionString } from "./connString";
+import { defaultDockerSocket, isLocalDockerHost } from "./dockerModel";
 import { parseSshString, type ParsedSsh } from "./sshConnString";
-import { pickOpenFile } from "./ui";
+import { pickDirectory, pickOpenFile } from "./ui";
 import { askOtpCode } from "./otpGate";
-import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
+import { Modal, Field, Input, Button, Segmented, Select, Textarea } from "./ui/index";
 import { Plug, FolderOpen, ClipboardPaste } from "lucide-react";
 import { useT } from "./i18n";
 import KindPicker from "./KindPicker";
@@ -15,6 +16,8 @@ interface Props {
   onClose: () => void;
   onSaved: (c: ConnectionConfig) => void;
   initial?: ConnectionConfig | null;
+  /** 新增模式的預填值（不算編輯：存檔產生新 id）。從 Docker 容器建資料庫連線時用。 */
+  prefill?: Partial<ConnectionConfig> | null;
   /**
    * 新增時選了「SSH / SFTP」或貼上 ssh:// / sftp:// 字串：呼叫端關掉這個對話框、改開 SSH 主機對話框
    * （prefill = 解析好的字串；null = 空白新增）。SSH 主機另存一份清單，不是 DbKind。
@@ -73,20 +76,22 @@ function fmtSummaryVal(
 /** 「FTP / FTPS」卡片：開主機對話框並預選 FTP（explicit TLS）；沒有主機，不算「依連線字串填入」。 */
 const BLANK_FTP: ParsedSsh = { protocol: "ftpes", host: "", port: null, username: null, password: null, identityFile: null, jump: null, path: null };
 
-export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }: Props) {
+export default function ConnectionDialog({ onClose, onSaved, initial, prefill, onNewSsh }: Props) {
   const t = useT();
   const editing = !!initial;
-  const [kind, setKind] = useState<DbKind>(initial?.kind ?? "mysql");
-  const [name, setName] = useState(initial?.name ?? "");
-  const [host, setHost] = useState(initial?.host ?? "127.0.0.1");
-  const [port, setPort] = useState(initial?.port ?? KIND_META.mysql.defaultPort);
-  const [username, setUsername] = useState(initial?.username ?? "root");
-  const [password, setPassword] = useState("");
-  const [database, setDatabase] = useState(initial?.database ?? "");
+  // 表單初始值來源：編輯＝既有連線；新增時可帶 prefill（例：從 Docker 容器一鍵建資料庫連線）。
+  const seed: Partial<ConnectionConfig> | null | undefined = initial ?? prefill;
+  const [kind, setKind] = useState<DbKind>(seed?.kind ?? "mysql");
+  const [name, setName] = useState(seed?.name ?? "");
+  const [host, setHost] = useState(seed?.host ?? "127.0.0.1");
+  const [port, setPort] = useState(seed?.port ?? KIND_META.mysql.defaultPort);
+  const [username, setUsername] = useState(seed?.username ?? "root");
+  const [password, setPassword] = useState(initial ? "" : prefill?.password ?? "");
+  const [database, setDatabase] = useState(seed?.database ?? "");
   const [testing, setTesting] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // 類型選擇器展開狀態：新增模式先選類型（展開）；編輯模式直達表單（收合成 chip）。
-  const [pickerOpen, setPickerOpen] = useState(!editing);
+  const [pickerOpen, setPickerOpen] = useState(!editing && !prefill);
   // 連線字串欄（常駐；貼上即解析）。
   const [importUrl, setImportUrl] = useState("");
   // 匯入結果與測試結果分開存：套用解析結果會改欄位並觸發 msg 清除 effect，共用會讓成功訊息立刻消失。
@@ -97,27 +102,27 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
   // 只在按下復原時被讀一次，放進 state 只會多一輪無意義的重繪。
   const undoRef = useRef<ConnFormFields | null>(null);
   // SSH Tunnel
-  const [sshEnabled, setSshEnabled] = useState(initial?.ssh_enabled ?? false);
-  const [sshHost, setSshHost] = useState(initial?.ssh_host ?? "");
-  const [sshPort, setSshPort] = useState(initial?.ssh_port || 22);
-  const [sshUsername, setSshUsername] = useState(initial?.ssh_username ?? "");
-  const [sshAuthMethod, setSshAuthMethod] = useState<SshAuthMethod>(initial?.ssh_auth_method ?? "password");
+  const [sshEnabled, setSshEnabled] = useState(seed?.ssh_enabled ?? false);
+  const [sshHost, setSshHost] = useState(seed?.ssh_host ?? "");
+  const [sshPort, setSshPort] = useState(seed?.ssh_port || 22);
+  const [sshUsername, setSshUsername] = useState(seed?.ssh_username ?? "");
+  const [sshAuthMethod, setSshAuthMethod] = useState<SshAuthMethod>(seed?.ssh_auth_method ?? "password");
   const [sshPassword, setSshPassword] = useState("");
-  const [sshKeyPath, setSshKeyPath] = useState(initial?.ssh_private_key_path ?? "");
+  const [sshKeyPath, setSshKeyPath] = useState(seed?.ssh_private_key_path ?? "");
   const [sshPassphrase, setSshPassphrase] = useState("");
   // 外部 gateway（kind === "external"）：driver / base_url 等存於 options map。
   // driver 不再讓使用者填：目前唯一的外部驅動就是 qland（見後端 db::external::connect_external），
   // 選了「QLand」類型卻還要手打 driver 名稱只會打錯。日後有第二個外部驅動再把選擇 UI 加回來。
-  const driver = initial?.options?.driver || "qland";
-  const [baseUrl, setBaseUrl] = useState(initial?.options?.base_url ?? "");
-  const [insecure, setInsecure] = useState(initial?.options?.insecure === "1");
+  const driver = seed?.options?.driver || "qland";
+  const [baseUrl, setBaseUrl] = useState(seed?.options?.base_url ?? "");
+  const [insecure, setInsecure] = useState(seed?.options?.insecure === "1");
   const [otpSecret, setOtpSecret] = useState("");
   // 每次連線跳窗手動輸入 OTP（不儲存 TOTP secret）。新連線預設開啟：
   // gateway 帳號多半有 2FA，而把 secret 存在本機等於 2FA 只剩一道密碼。
   const [otpPrompt, setOtpPrompt] = useState(editing ? initial?.options?.otp_prompt === "1" : true);
   // 正式環境標記（所有類型共用，存 options.prod）：不改變連線 / 查詢行為，
   // 只影響防呆 UI —— 側欄掛 PROD 標記 + 執行查詢前跳確認。
-  const [prod, setProd] = useState(initial?.options?.prod === "1");
+  const [prod, setProd] = useState(seed?.options?.prod === "1");
   // 唯讀連線（與側欄右鍵「設為唯讀模式」同一份狀態，存 localStorage 而非連線設定檔）：
   // 擋查詢編輯器的寫入 / DDL 與資料格編輯。放進表單是因為「新增連線的當下」才是決定它能不能寫的時機，
   // 存好之後再去右鍵補設定，中間那段空窗期就是誤改正式資料的機會。
@@ -126,53 +131,67 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
   // 使用者自己動過勾選之後就別再自動改：換類型的自動預設只在「還沒表態」時生效。
   const [readonlyTouched, setReadonlyTouched] = useState(false);
   // Redis 連線選項（存於 options map）
-  const [redisTls, setRedisTls] = useState(initial?.options?.redis_tls === "true");
-  const [redisTlsInsecure, setRedisTlsInsecure] = useState(initial?.options?.redis_tls_insecure === "true");
+  const [redisTls, setRedisTls] = useState(seed?.options?.redis_tls === "true");
+  const [redisTlsInsecure, setRedisTlsInsecure] = useState(seed?.options?.redis_tls_insecure === "true");
   // Mongo 連線選項（存於 options map）
-  const [mongoSrv, setMongoSrv] = useState(initial?.options?.mongo_srv === "1");
-  const [mongoAuthSource, setMongoAuthSource] = useState(initial?.options?.mongo_auth_source ?? "");
-  const [mongoTls, setMongoTls] = useState(initial?.options?.mongo_tls === "1");
-  const [mongoReplicaSet, setMongoReplicaSet] = useState(initial?.options?.mongo_replica_set ?? "");
-  const [mongoDirect, setMongoDirect] = useState(initial?.options?.mongo_direct === "1");
+  const [mongoSrv, setMongoSrv] = useState(seed?.options?.mongo_srv === "1");
+  const [mongoAuthSource, setMongoAuthSource] = useState(seed?.options?.mongo_auth_source ?? "");
+  const [mongoTls, setMongoTls] = useState(seed?.options?.mongo_tls === "1");
+  const [mongoReplicaSet, setMongoReplicaSet] = useState(seed?.options?.mongo_replica_set ?? "");
+  const [mongoDirect, setMongoDirect] = useState(seed?.options?.mongo_direct === "1");
   // Mongo TLS 進階（AWS DocumentDB 等需自訂 CA；值格式沿 mongo 系 "1"）。
-  const [mongoTlsCa, setMongoTlsCa] = useState(initial?.options?.mongo_tls_ca ?? "");
-  const [mongoTlsInsecure, setMongoTlsInsecure] = useState(initial?.options?.mongo_tls_insecure === "1");
+  const [mongoTlsCa, setMongoTlsCa] = useState(seed?.options?.mongo_tls_ca ?? "");
+  const [mongoTlsInsecure, setMongoTlsInsecure] = useState(seed?.options?.mongo_tls_insecure === "1");
   // MSSQL 連線選項（存於 options map）；加密預設開啟。
-  const [mssqlEncrypt, setMssqlEncrypt] = useState(initial?.options?.encrypt !== "false");
-  const [mssqlTrust, setMssqlTrust] = useState(initial?.options?.trust_server_certificate === "true");
-  const [mssqlCaPath, setMssqlCaPath] = useState(initial?.options?.trust_cert_ca ?? "");
+  const [mssqlEncrypt, setMssqlEncrypt] = useState(seed?.options?.encrypt !== "false");
+  const [mssqlTrust, setMssqlTrust] = useState(seed?.options?.trust_server_certificate === "true");
+  const [mssqlCaPath, setMssqlCaPath] = useState(seed?.options?.trust_cert_ca ?? "");
   // MySQL / PostgreSQL SSL 模式（存於 options map；空值＝沿用 driver 預設 prefer/preferred）。
-  const [sslMode, setSslMode] = useState(initial?.options?.ssl_mode ?? "");
+  const [sslMode, setSslMode] = useState(seed?.options?.ssl_mode ?? "");
   // verify-* 模式的 CA 憑證檔（AWS RDS 等雲端服務的 CA bundle）。
-  const [sslCa, setSslCa] = useState(initial?.options?.ssl_ca ?? "");
+  const [sslCa, setSslCa] = useState(seed?.options?.ssl_ca ?? "");
   // Oracle 連線選項（存於 options map）：database 欄的解讀方式 + Instant Client 目錄。
-  const [oracleConnectType, setOracleConnectType] = useState(initial?.options?.connect_type ?? "service");
-  const [oracleClientDir, setOracleClientDir] = useState(initial?.options?.client_dir ?? "");
+  const [oracleConnectType, setOracleConnectType] = useState(seed?.options?.connect_type ?? "service");
+  const [oracleClientDir, setOracleClientDir] = useState(seed?.options?.client_dir ?? "");
   // Kafka 連線選項（存於 options map；SASL 帳密沿用 username/password；SR 帳密亦存 options）。
-  const [kafkaProtocol, setKafkaProtocol] = useState(initial?.options?.kafka_security_protocol ?? "PLAINTEXT");
-  const [kafkaSaslMech, setKafkaSaslMech] = useState(initial?.options?.kafka_sasl_mechanism ?? "PLAIN");
-  const [kafkaCaPath, setKafkaCaPath] = useState(initial?.options?.kafka_ssl_ca ?? "");
-  const [kafkaSkipVerify, setKafkaSkipVerify] = useState(initial?.options?.kafka_ssl_insecure === "1");
-  const [srUrl, setSrUrl] = useState(initial?.options?.kafka_sr_url ?? "");
-  const [srUser, setSrUser] = useState(initial?.options?.kafka_sr_user ?? "");
-  const [srPass, setSrPass] = useState(initial?.options?.kafka_sr_password ?? "");
-  const [connectUrl, setConnectUrl] = useState(initial?.options?.kafka_connect_url ?? "");
-  const [connectUser, setConnectUser] = useState(initial?.options?.kafka_connect_user ?? "");
-  const [connectPass, setConnectPass] = useState(initial?.options?.kafka_connect_password ?? "");
+  const [kafkaProtocol, setKafkaProtocol] = useState(seed?.options?.kafka_security_protocol ?? "PLAINTEXT");
+  const [kafkaSaslMech, setKafkaSaslMech] = useState(seed?.options?.kafka_sasl_mechanism ?? "PLAIN");
+  const [kafkaCaPath, setKafkaCaPath] = useState(seed?.options?.kafka_ssl_ca ?? "");
+  const [kafkaSkipVerify, setKafkaSkipVerify] = useState(seed?.options?.kafka_ssl_insecure === "1");
+  const [srUrl, setSrUrl] = useState(seed?.options?.kafka_sr_url ?? "");
+  const [srUser, setSrUser] = useState(seed?.options?.kafka_sr_user ?? "");
+  const [srPass, setSrPass] = useState(seed?.options?.kafka_sr_password ?? "");
+  const [connectUrl, setConnectUrl] = useState(seed?.options?.kafka_connect_url ?? "");
+  const [connectUser, setConnectUser] = useState(seed?.options?.kafka_connect_user ?? "");
+  const [connectPass, setConnectPass] = useState(seed?.options?.kafka_connect_password ?? "");
   // Elasticsearch / OpenSearch 連線選項（存於 options map）。認證方式：none（無）/ basic（帳密）/ apikey（password 存 API key）。
-  const [esAuth, setEsAuth] = useState(initial?.options?.es_auth ?? (initial?.username ? "basic" : "none"));
-  const [esTls, setEsTls] = useState(initial?.options?.es_tls === "1");
-  const [esSslCa, setEsSslCa] = useState(initial?.options?.es_ssl_ca ?? "");
-  const [esSslInsecure, setEsSslInsecure] = useState(initial?.options?.es_ssl_insecure === "1");
-  const [esShowHidden, setEsShowHidden] = useState(initial?.options?.es_show_hidden === "1");
+  const [esAuth, setEsAuth] = useState(seed?.options?.es_auth ?? (initial?.username ? "basic" : "none"));
+  const [esTls, setEsTls] = useState(seed?.options?.es_tls === "1");
+  const [esSslCa, setEsSslCa] = useState(seed?.options?.es_ssl_ca ?? "");
+  const [esSslInsecure, setEsSslInsecure] = useState(seed?.options?.es_ssl_insecure === "1");
+  const [esShowHidden, setEsShowHidden] = useState(seed?.options?.es_show_hidden === "1");
   const [esCloudId, setEsCloudId] = useState("");
   // Kibana Discover 連結：根網址 + 時間欄位。認證沿用同一份 ES 設定，不另外填。
-  const [esKibanaUrl, setEsKibanaUrl] = useState(initial?.options?.es_kibana_url ?? "");
-  const [esTimeField, setEsTimeField] = useState(initial?.options?.es_time_field ?? "");
+  const [esKibanaUrl, setEsKibanaUrl] = useState(seed?.options?.es_kibana_url ?? "");
+  const [esTimeField, setEsTimeField] = useState(seed?.options?.es_time_field ?? "");
   // RabbitMQ 連線選項（存於 options map）；帳密沿用 username/password（預設 guest/guest）。
-  const [rabbitVhost, setRabbitVhost] = useState(initial?.options?.rabbitmq_vhost ?? "/");
-  const [rabbitTls, setRabbitTls] = useState(initial?.options?.rabbitmq_tls === "1");
-  const [rabbitMgmtUrl, setRabbitMgmtUrl] = useState(initial?.options?.rabbitmq_mgmt_url ?? "");
+  const [rabbitVhost, setRabbitVhost] = useState(seed?.options?.rabbitmq_vhost ?? "/");
+  const [rabbitTls, setRabbitTls] = useState(seed?.options?.rabbitmq_tls === "1");
+  const [rabbitMgmtUrl, setRabbitMgmtUrl] = useState(seed?.options?.rabbitmq_mgmt_url ?? "");
+  // Docker 連線選項（存於 options map）：連線方式由 host 形式推得（socket / pipe 路徑＝本機），
+  // TCP 時勾 TLS 走 https（可帶用戶端憑證 = mTLS）。憑證只存檔案路徑，不存內容。
+  const [dockerTls, setDockerTls] = useState(seed?.options?.docker_tls === "1");
+  const [dockerTlsCa, setDockerTlsCa] = useState(seed?.options?.docker_tls_ca ?? "");
+  const [dockerTlsCert, setDockerTlsCert] = useState(seed?.options?.docker_tls_cert ?? "");
+  const [dockerTlsKey, setDockerTlsKey] = useState(seed?.options?.docker_tls_key ?? "");
+  const [dockerTlsInsecure, setDockerTlsInsecure] = useState(seed?.options?.docker_tls_insecure === "1");
+  const [dockerApiVersion, setDockerApiVersion] = useState(seed?.options?.docker_api_version ?? "");
+  // Registry / Harbor 的自訂 CA 與略過驗證（兩者共用 state，存檔時依 kind 用 registry_ / harbor_ 前綴）。
+  const [regTlsCa, setRegTlsCa] = useState(seed?.options?.registry_tls_ca ?? seed?.options?.harbor_tls_ca ?? "");
+  const [regTlsInsecure, setRegTlsInsecure] = useState(
+    seed?.options?.registry_tls_insecure === "1" || seed?.options?.harbor_tls_insecure === "1");
+  // Registry：不開放 _catalog 的服務（Docker Hub / GHCR…）要手動列出想瀏覽的 repository。
+  const [regRepos, setRegRepos] = useState(seed?.options?.registry_repos ?? "");
 
   // 任一連線欄位變動就清掉上次測試結果，避免「連線成功」殘留成誤導的假成功訊號（改了 host 卻仍顯示舊成功）。
   useEffect(() => {
@@ -183,16 +202,34 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
       oracleConnectType, oracleClientDir,
       kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass, connectUrl, connectUser, connectPass,
       esAuth, esTls, esSslCa, esSslInsecure, esShowHidden,
-      rabbitVhost, rabbitTls, rabbitMgmtUrl]);
+      rabbitVhost, rabbitTls, rabbitMgmtUrl,
+      dockerTls, dockerTlsCa, dockerTlsCert, dockerTlsKey, dockerTlsInsecure, dockerApiVersion, regTlsCa, regTlsInsecure, regRepos]);
 
   // Elastic：host 為完整 URL 時 TLS 由 URL 決定（勾選不顯示/停用）。
   const esHostIsUrl = /^https?:\/\//i.test(host.trim());
+  // Docker：本機 socket / pipe（不用埠、不能走 SSH 通道）或 TCP（可 TLS）。
+  const dockerMode: "local" | "tcp" | "tls" = isLocalDockerHost(host) ? "local" : dockerTls ? "tls" : "tcp";
+  const isWindows = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+  // Registry / Harbor：埠一律寫在網址 / 主機裡（localhost:5000），不顯示埠欄。
+  const regKind = kind === "registry" || kind === "harbor";
+  const setDockerMode = (m: "local" | "tcp" | "tls") => {
+    if (m === "local") {
+      setHost("");
+      setDockerTls(false);
+      return;
+    }
+    if (dockerMode === "local") setHost("127.0.0.1");
+    setDockerTls(m === "tls");
+    // 埠仍是另一模式的慣例值時跟著換（2375 明文 / 2376 TLS）。
+    setPort((p) => (m === "tls" ? (p === 2375 || !p ? 2376 : p) : (p === 2376 || !p ? 2375 : p)));
+  };
 
   // 帳密使用情境依 kind：Kafka 僅 SASL 協定；Elastic 依認證方式（none 不用）；其餘一律使用。
   // 非使用情境存檔時清空 username/password，避免把預設 root / 舊密碼誤存進設定與 keychain。
   const usesAuth =
     kind === "kafka" ? kafkaProtocol.startsWith("SASL")
     : kind === "elastic" ? esAuth !== "none"
+    : kind === "docker" ? false
     : true;
   // Elastic API Key 模式：password 存 API key，username 不使用（存檔清空）。
   const usesUsername = usesAuth && !(kind === "elastic" && esAuth === "apikey");
@@ -203,15 +240,18 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
       name ||
       (KIND_META[kind].fileBased
         ? `${KIND_META[kind].label}:${database || "memory"}`
+        : kind === "docker" && dockerMode === "local"
+        ? `${KIND_META[kind].label}@local`
         : `${KIND_META[kind].label}@${host}`),
     kind,
     host,
-    port,
+    // Docker 本機走 socket；Registry / Harbor 的埠寫在網址裡。
+    port: (kind === "docker" && dockerMode === "local") || regKind ? 0 : port,
     username: usesUsername ? username : "",
     password: usesAuth ? password : "",
     database: KIND_META[kind].noDatabase ? null : database || null,
     max_connections: 5,
-    ssh_enabled: !KIND_META[kind].fileBased && sshEnabled,
+    ssh_enabled: !KIND_META[kind].fileBased && !(kind === "docker" && dockerMode === "local") && sshEnabled,
     ssh_host: sshHost,
     ssh_port: sshPort,
     ssh_username: sshUsername,
@@ -291,6 +331,19 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
       if (rabbitVhost.trim() && rabbitVhost.trim() !== "/") o.rabbitmq_vhost = rabbitVhost.trim();
       if (rabbitTls) o.rabbitmq_tls = "1";
       if (rabbitMgmtUrl.trim()) o.rabbitmq_mgmt_url = rabbitMgmtUrl.trim();
+    } else if (kind === "docker") {
+      if (dockerMode === "tls") {
+        o.docker_tls = "1";
+        if (dockerTlsCa.trim()) o.docker_tls_ca = dockerTlsCa.trim();
+        if (dockerTlsCert.trim()) o.docker_tls_cert = dockerTlsCert.trim();
+        if (dockerTlsKey.trim()) o.docker_tls_key = dockerTlsKey.trim();
+        if (dockerTlsInsecure) o.docker_tls_insecure = "1";
+      }
+      if (dockerApiVersion.trim()) o.docker_api_version = dockerApiVersion.trim();
+    } else if (regKind) {
+      if (regTlsCa.trim()) o[`${kind}_tls_ca`] = regTlsCa.trim();
+      if (regTlsInsecure) o[`${kind}_tls_insecure`] = "1";
+      if (kind === "registry" && regRepos.trim()) o.registry_repos = regRepos.trim();
     } else if (sslKinds.includes(kind)) {
       if (sslMode) o.ssl_mode = sslMode;
       // CA 只在 verify-* 模式生效（require/required 不驗證憑證，sqlx 會忽略）。
@@ -302,7 +355,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
   };
 
   // 無 root 帳號慣例的類型（Kafka / Elastic）：切入時清掉預設 root、切出且留空時補回。
-  const noRootKind = (k: DbKind) => k === "kafka" || k === "elastic";
+  const noRootKind = (k: DbKind) =>
+    k === "kafka" || k === "elastic" || k === "docker" || k === "registry" || k === "harbor";
+  // host 欄以 socket 路徑 / URL 為主的類型：切入時清掉預設的 127.0.0.1，切出且留空時補回。
+  const urlHostKind = (k: DbKind) => k === "docker" || k === "registry" || k === "harbor";
 
   const onKindChange = (k: DbKind) => {
     // 僅在使用者尚未自訂埠（仍等於前一個 kind 的預設埠）時，才覆寫為新 kind 的預設埠
@@ -314,6 +370,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
     else if (noRootKind(kind) && !noRootKind(k) && username === "") setUsername("root");
     // ssl_mode 詞彙 PG（require）與 MySQL 系（required）不同，跨 kind 不可沿用；CA 路徑一併清除。
     if (k !== kind) { setSslMode(""); setSslCa(""); }
+    if (urlHostKind(k) && !urlHostKind(kind) && (host === "127.0.0.1" || host === "localhost")) setHost("");
+    else if (!urlHostKind(k) && urlHostKind(kind) && host.trim() === "") setHost("127.0.0.1");
+    if (k === "docker" && kind !== "docker") setDockerTls(false);
     // 新連線的「唯讀」預設跟著類型走：external（QLand gateway）指到的是共用的 UAT / PROD，
     // 預設鎖起來，真要改的人得自己來取消勾選。編輯既有連線不動它（那是使用者已經決定過的事）。
     if (!editing && !readonlyTouched) setReadonlyConn(KIND_META[k].external === true);
@@ -333,6 +392,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
     kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify,
     esAuth, esTls, esSslCa, esSslInsecure, esKibanaUrl,
     rabbitVhost, rabbitTls, rabbitMgmtUrl,
+    dockerTls,
   });
 
   const restoreForm = (f: ConnFormFields) => {
@@ -350,6 +410,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
     setEsAuth(f.esAuth); setEsTls(f.esTls); setEsSslCa(f.esSslCa);
     setEsSslInsecure(f.esSslInsecure); setEsKibanaUrl(f.esKibanaUrl);
     setRabbitVhost(f.rabbitVhost); setRabbitTls(f.rabbitTls); setRabbitMgmtUrl(f.rabbitMgmtUrl);
+    setDockerTls(f.dockerTls);
   };
 
   // 解析連線字串並填表。後端 parse_connection_url（與 dbk --url 同一套邏輯）負責解析，
@@ -456,7 +517,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
   const fileBased = KIND_META[kind].fileBased;
   const external = KIND_META[kind].external;
   // 檔案型路徑可留空；外部 gateway 需 base URL；伺服器型至少需要主機。
-  const valid = external ? baseUrl.trim() !== "" : fileBased || host.trim() !== "";
+  // Docker 本機模式可留空（＝本機預設 socket / pipe）。
+  const valid = external ? baseUrl.trim() !== "" : fileBased || host.trim() !== "" || (kind === "docker" && dockerMode === "local");
   const handleSave = () => {
     if (!valid) return;
     const cfg = build();
@@ -646,22 +708,52 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
         </Field>
       ) : (
         <>
+          {kind === "docker" && (
+            <Field label={t("連線方式")}>
+              <Segmented
+                full
+                ariaLabel={t("Docker 連線方式")}
+                value={dockerMode}
+                onChange={setDockerMode}
+                options={[
+                  { value: "local", label: t("本機"), title: t("本機 Docker（unix socket / Windows named pipe）") },
+                  { value: "tcp", label: "TCP", title: t("daemon 監聽的 TCP 埠（未加密，預設 2375）") },
+                  { value: "tls", label: "TLS", title: t("TCP + TLS（預設 2376，可帶用戶端憑證）") },
+                ]}
+              />
+            </Field>
+          )}
           <div className="flex gap-3">
-            <Field label={kind === "mongo" && mongoSrv ? t("主機（SRV 域名）") : kind === "kafka" ? t("Bootstrap servers") : kind === "elastic" ? t("節點 URL / 主機") : t("主機")} className="flex-1">
+            <Field label={
+              kind === "mongo" && mongoSrv ? t("主機（SRV 域名）")
+              : kind === "kafka" ? t("Bootstrap servers")
+              : kind === "elastic" ? t("節點 URL / 主機")
+              : kind === "docker" && dockerMode === "local" ? t("Socket / Pipe 路徑（選填）")
+              : kind === "registry" ? t("Registry 網址 / 主機")
+              : kind === "harbor" ? t("Harbor 網址")
+              : t("主機")} className="flex-1">
               {/* 貼上攔截：直覺動作是把整串連線字串貼進「主機」，原本會把整串倒進欄位。 */}
               <Input value={host} onChange={(e) => setHost(e.target.value)} onKeyDown={submitOnEnter}
                 onPaste={onFieldPaste}
-                placeholder={kind === "mongo" && mongoSrv ? t("例如 cluster0.abcd.mongodb.net") : kind === "kafka" ? t("host1:9092,host2:9092") : kind === "elastic" ? t("https://es.example.com:9243 或 localhost") : ""} />
+                placeholder={
+                  kind === "mongo" && mongoSrv ? t("例如 cluster0.abcd.mongodb.net")
+                  : kind === "kafka" ? t("host1:9092,host2:9092")
+                  : kind === "elastic" ? t("https://es.example.com:9243 或 localhost")
+                  : kind === "docker" && dockerMode === "local" ? defaultDockerSocket(isWindows)
+                  : kind === "registry" ? t("https://registry.example.com 或 localhost:5000")
+                  : kind === "harbor" ? "https://harbor.example.com"
+                  : ""} />
             </Field>
             {/* SRV 連線由 DNS 記錄決定 port；Elastic 貼完整 URL 時 port 內含於 URL，皆不顯示埠欄位。 */}
-            {!(kind === "mongo" && mongoSrv) && !(kind === "elastic" && esHostIsUrl) && (
+            {!(kind === "mongo" && mongoSrv) && !(kind === "elastic" && esHostIsUrl) &&
+              !(kind === "docker" && dockerMode === "local") && !regKind && (
               <Field label={t("埠")} className="w-24">
                 <Input type="number" value={port} onChange={(e) => setPort(Number(e.target.value))} onKeyDown={submitOnEnter} />
               </Field>
             )}
           </div>
           {/* Kafka / Elastic 無共用帳密（各有專屬認證區塊），不顯示這排。 */}
-          {kind !== "kafka" && kind !== "elastic" && (
+          {kind !== "kafka" && kind !== "elastic" && kind !== "docker" && (
             <div className="flex gap-3">
               <Field label={t("使用者")} className="flex-1">
                 <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} />
@@ -983,10 +1075,71 @@ export default function ConnectionDialog({ onClose, onSaved, initial, onNewSsh }
               </Field>
             </Section>
           )}
+
+          {kind === "docker" && dockerMode === "local" && (
+            <div className="text-xs text-fg/40">
+              {t("留空＝本機預設（{path}）。Docker Desktop 需先啟動；Linux 使用者需有 docker 群組權限。", { path: defaultDockerSocket(isWindows) })}
+            </div>
+          )}
+
+          {kind === "docker" && dockerMode === "tls" && (
+            <Section title={t("TLS 憑證")}>
+              <div className="text-xs text-fg/40">
+                {t("對應 DOCKER_CERT_PATH 目錄裡的 ca.pem / cert.pem / key.pem；只填 CA＝單向 TLS，再加憑證與私鑰＝雙向 TLS（mTLS）。")}
+              </div>
+              <Button variant="secondary" icon={FolderOpen} className="self-start"
+                onClick={async () => {
+                  const dir = await pickDirectory();
+                  if (!dir) return;
+                  const sep = dir.includes("\\") ? "\\" : "/";
+                  setDockerTlsCa(`${dir}${sep}ca.pem`);
+                  setDockerTlsCert(`${dir}${sep}cert.pem`);
+                  setDockerTlsKey(`${dir}${sep}key.pem`);
+                }}>
+                {t("從憑證目錄填入…")}
+              </Button>
+              <CaPathField value={dockerTlsCa} onChange={setDockerTlsCa} onKeyDown={submitOnEnter} />
+              <PemPathField label={t("用戶端憑證（cert.pem，選填）")} value={dockerTlsCert} onChange={setDockerTlsCert} onKeyDown={submitOnEnter} />
+              <PemPathField label={t("用戶端私鑰（key.pem，選填）")} value={dockerTlsKey} onChange={setDockerTlsKey} onKeyDown={submitOnEnter}
+                extensions={["pem", "key"]} />
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={dockerTlsInsecure} onChange={(e) => setDockerTlsInsecure(e.target.checked)} />
+                <span>{t("略過伺服器憑證驗證（自簽憑證、主機名不符時用）")}</span>
+              </label>
+            </Section>
+          )}
+
+          {kind === "docker" && dockerMode !== "local" && (
+            <Field label={t("API 版本（選填）")} hint={t("留空＝由 daemon 決定；舊版 daemon 回「client version too new」時填，如 1.41")}>
+              <Input value={dockerApiVersion} onChange={(e) => setDockerApiVersion(e.target.value)} onKeyDown={submitOnEnter} placeholder="1.43" />
+            </Field>
+          )}
+
+          {regKind && (
+            <Section>
+              <div className="text-xs text-fg/40">
+                {kind === "harbor"
+                  ? t("帳密可留空（只看公開專案）；建議用 robot 帳號（robot$名稱）而非管理員帳號。")
+                  : t("帳密可留空（匿名）；Docker Hub / GHCR 等需要 token 的 registry 會自動以帳密換發 Bearer token。")}
+              </div>
+              {kind === "registry" && (
+                <Field label={t("Repository 清單（選填）")}
+                  hint={t("留空＝用 registry 的 _catalog 列出全部；Docker Hub / GHCR 等不開放清單的服務請填，逗號或換行分隔")}>
+                  <Textarea value={regRepos} onChange={(e) => setRegRepos(e.target.value)} rows={2}
+                    placeholder="library/nginx, myorg/api" />
+                </Field>
+              )}
+              <CaPathField value={regTlsCa} onChange={setRegTlsCa} onKeyDown={submitOnEnter} />
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={regTlsInsecure} onChange={(e) => setRegTlsInsecure(e.target.checked)} />
+                <span>{t("略過伺服器憑證驗證（自簽憑證、主機名不符時用）")}</span>
+              </label>
+            </Section>
+          )}
         </>
       )}
 
-      {!fileBased && !external && (
+      {!fileBased && !external && !(kind === "docker" && dockerMode === "local") && (
         <Section>
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={sshEnabled} onChange={(e) => setSshEnabled(e.target.checked)} />
@@ -1084,13 +1237,32 @@ function CaPathField({
   hint?: ReactNode;
 }) {
   const t = useT();
+  return <PemPathField label={t("CA 憑證路徑（選填）")} value={value} onChange={onChange} onKeyDown={onKeyDown} hint={hint} />;
+}
+
+// PEM 檔路徑欄（CA / 用戶端憑證 / 私鑰共用）。
+function PemPathField({
+  label,
+  value,
+  onChange,
+  onKeyDown,
+  hint,
+  extensions = ["pem", "crt", "cer"],
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  onKeyDown?: React.KeyboardEventHandler;
+  hint?: ReactNode;
+  extensions?: string[];
+}) {
   return (
-    <Field label={t("CA 憑證路徑（選填）")} hint={hint}>
+    <Field label={label} hint={hint}>
       <div className="flex gap-2">
         <Input value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
         <BrowseButton
           onPick={async () => {
-            const p = await pickOpenFile([{ name: "PEM", extensions: ["pem", "crt", "cer"] }]);
+            const p = await pickOpenFile([{ name: "PEM", extensions }]);
             if (p) onChange(p);
           }}
         />

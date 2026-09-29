@@ -49,7 +49,7 @@ function prepared(over: Partial<ReviewPrepared["prepared"]> = {}): ReviewPrepare
 describe("supportsReviewRun", () => {
   it("只收六種內建 SQL 引擎", () => {
     for (const k of ["mysql", "mariadb", "postgres", "sqlite", "mssql", "oracle"] as const) expect(supportsReviewRun(k)).toBe(true);
-    for (const k of ["external", "mongo", "redis", "kafka", "elastic", "rabbitmq"] as const) expect(supportsReviewRun(k)).toBe(false);
+    for (const k of ["external", "mongo", "redis", "kafka", "elastic", "rabbitmq", "docker", "registry", "harbor"] as const) expect(supportsReviewRun(k)).toBe(false);
     expect(supportsReviewRun(null)).toBe(false);
   });
 });

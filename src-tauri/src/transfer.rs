@@ -99,6 +99,12 @@ pub async fn transfer_table(
         return Err(AppError::Unsupported(t!("搜尋引擎類連線不支援資料傳輸").into()));
     }
 
+    // 訊息佇列與容器 / 映像倉庫類連線沒有可傳輸的資料表。
+    let non_tabular = |k: DbKind| matches!(k, DbKind::RabbitMq | DbKind::Docker | DbKind::Registry | DbKind::Harbor);
+    if non_tabular(manager.kind(src_id)?) || non_tabular(manager.kind(dst_id)?) {
+        return Err(AppError::Unsupported(t!("此類連線不支援資料傳輸").into()));
+    }
+
     // 0. 目標表不存在且要求自動建表：沿用來源 DDL 建立（限同種類）。
     let mut created = false;
     if opts.create_table {

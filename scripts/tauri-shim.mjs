@@ -75,7 +75,7 @@ export function installShim(fx) {
     disconnect: () => null,
     test_connection: () => null,
     clear_cache: () => null,
-    save_connection: () => null,
+    save_connection: ({ config }) => { (window.__DBKIT_CONN_SAVES__ ||= []).push(config); return null; },
     open_external: () => null,
     claude_detect: () => ({ installed: true, version: "2.1.0", logged_in: true, path: "/usr/local/bin/claude" }),
     pool_status: () => ({ size: 3, idle: 2, in_use: 1 }),
@@ -122,6 +122,96 @@ export function installShim(fx) {
     kafka_topic_partitions: () => fx.KAFKA_PARTITIONS,
     kafka_consume: () => fx.KAFKA_CONSUME,
     kafka_tail_stop: () => null,
+    // ---- 容器與映像（Docker / Registry / Harbor）：資料在 fixtures 的 DOCKER_* / REGISTRY_* / HARBOR_* ----
+    docker_overview: () => ({
+      endpoint: "npipe:////./pipe/docker_engine", server_version: "27.3.1", api_version: "1.47", os: "Docker Desktop", os_type: "linux",
+      arch: "x86_64", kernel: "6.6.32-linuxkit", name: "docker-desktop", ncpu: 8, mem_total: 16 * 1024 ** 3, driver: "overlayfs",
+      root_dir: "/var/lib/docker", containers: 4, running: 2, paused: 1, stopped: 1, images: 4, warnings: [],
+    }),
+    docker_disk_usage: () => ({
+      images_count: 4, images_size: 865000000, images_reclaimable: 98000000, containers_count: 4, containers_size: 12000000,
+      volumes_count: 2, volumes_size: 310000000, volumes_reclaimable: 4000000, build_cache_count: 12, build_cache_size: 540000000,
+    }),
+    docker_prune: ({ target }) => { window.__DBKIT_DOCKER_ACTIONS__.push(`prune:${target}`); return { deleted: 1, space_reclaimed: 98000000 }; },
+    docker_containers: () => fx.DOCKER_CONTAINERS ?? [],
+    docker_container_inspect: ({ container }) => dockerDetail(container),
+    docker_container_action: ({ container, action }) => { window.__DBKIT_DOCKER_ACTIONS__.push(`${action}:${container}`); return null; },
+    docker_container_remove: ({ container }) => { window.__DBKIT_DOCKER_ACTIONS__.push(`remove:${container}`); return null; },
+    docker_container_rename: () => null,
+    docker_container_stats: () => ({
+      cpu_percent: 3.2, online_cpus: 8, mem_usage: 96 * 1024 ** 2, mem_limit: 16 * 1024 ** 3, mem_percent: 0.6,
+      net_rx: 1200000, net_tx: 800000, blk_read: 40000000, blk_write: 12000000, pids: 9,
+    }),
+    docker_container_top: () => ({ titles: ["PID", "USER", "CMD"], processes: [["1", "postgres", "postgres"], ["57", "postgres", "postgres: checkpointer"]] }),
+    docker_logs_open: ({ onOutput }) => {
+      const send = channelSender(onOutput);
+      setTimeout(() => send(fx.DOCKER_LOG_TEXT ?? ""), 30);
+      return `log-${++dockerSeq}`;
+    },
+    docker_exec_open: ({ container, onOutput }) => {
+      const send = channelSender(onOutput);
+      const id = `exec-${++dockerSeq}`;
+      dockerExecs.set(id, { send, line: "", host: container });
+      setTimeout(() => send("/ # "), 30);
+      return id;
+    },
+    // 假 shell：回顯輸入；Enter 後 hostname 回容器名，其餘回 not found。
+    docker_exec_write: ({ streamId, dataB64 }) => {
+      const e = dockerExecs.get(streamId);
+      if (!e) return null;
+      for (const ch of atob(dataB64)) {
+        if (ch === "\r") {
+          const out = e.line === "hostname" ? e.host : e.line ? `sh: ${e.line}: not found` : "";
+          e.send(`\r\n${out ? `${out}\r\n` : ""}/ # `);
+          e.line = "";
+        } else {
+          e.line += ch;
+          e.send(ch);
+        }
+      }
+      return null;
+    },
+    docker_exec_resize: () => null,
+    docker_stream_close: ({ streamId }) => { dockerExecs.delete(streamId); return null; },
+    docker_images: () => fx.DOCKER_IMAGES ?? [],
+    docker_image_inspect: ({ image }) => {
+      const i = (fx.DOCKER_IMAGES ?? []).find((x) => x.reference === image);
+      if (!i) return Promise.reject(new Error(`Docker 404：No such image: ${image}`));
+      return {
+        id: i.id, repo_tags: i.repo_tags, repo_digests: i.repo_digests, created: "2026-06-30T10:00:00Z", arch: "amd64", os: "linux",
+        size: i.size, author: "", entrypoint: ["docker-entrypoint.sh"], cmd: ["postgres"], env: ["PATH=/usr/local/bin:/usr/bin"],
+        exposed_ports: ["5432/tcp"], working_dir: "", user: "", labels: {}, layers: 12,
+        history: [{ created: 1782000000, created_by: "/bin/sh -c #(nop)  CMD [\"postgres\"]", size: 0, comment: "" }], raw: "{}",
+      };
+    },
+    docker_image_remove: ({ image }) => { window.__DBKIT_DOCKER_ACTIONS__.push(`rmi:${image}`); return []; },
+    docker_image_tag: () => null,
+    docker_image_pull: ({ id, image, credConn }) => { window.__DBKIT_DOCKER_PULLS__.push({ id, image, credConn }); return null; },
+    docker_volumes: () => fx.DOCKER_VOLUMES ?? [],
+    docker_volume_remove: () => null,
+    docker_networks: () => fx.DOCKER_NETWORKS ?? [],
+    docker_network_inspect: ({ network }) =>
+      (fx.DOCKER_NETWORKS ?? []).find((n) => n.name === network) ?? Promise.reject(new Error(`Docker 404：network ${network} not found`)),
+    docker_network_remove: () => null,
+    registry_info: () => ({ base_url: "https://registry.example.test:443", api_version: "registry/2.0", auth: "bearer", catalog: true }),
+    registry_manifest: ({ repo, reference }) => ({ ...fx.REGISTRY_MANIFEST, repository: repo, reference }),
+    registry_delete: ({ repo, reference }) => { window.__DBKIT_DOCKER_ACTIONS__.push(`registry-delete:${repo}:${reference}`); return null; },
+    harbor_overview: () => ({
+      base_url: "https://harbor.example.test:443", harbor_version: "v2.11.1", auth_mode: "db_auth", registry_url: "harbor.example.test",
+      health: "healthy", components: [{ name: "core", status: "healthy", error: "" }, { name: "trivy", status: "healthy", error: "" }],
+      private_projects: 1, public_projects: 1, private_repos: 2, public_repos: 1, storage_used: -1, user: "robot$ci", is_admin: false,
+    }),
+    harbor_project: ({ project }) => ({
+      name: project, project_id: 2, public: project === "library", repo_count: (fx.HARBOR_REPOS?.[project] ?? []).length, owner: "admin",
+      creation_time: "2026-01-01T00:00:00Z", auto_scan: true, prevent_vul: false, severity: "", quota_hard: 10 * 1024 ** 3, quota_used: 2 * 1024 ** 3, registry_name: "",
+    }),
+    harbor_repositories: ({ project }) => fx.HARBOR_REPOS?.[project] ?? [],
+    harbor_artifacts: () => ({ items: fx.HARBOR_ARTIFACTS ?? [], total: (fx.HARBOR_ARTIFACTS ?? []).length }),
+    harbor_scan: ({ digest }) => { window.__DBKIT_DOCKER_ACTIONS__.push(`harbor-scan:${digest}`); return null; },
+    harbor_vulnerabilities: () => fx.HARBOR_VULNS,
+    harbor_delete_artifact: () => null,
+    harbor_delete_tag: () => null,
+    harbor_delete_repository: () => null,
     server_info: () => fx.REDIS_INFO,
     redis_slowlog: () => [],
     redis_clients: () => [],
@@ -428,6 +518,27 @@ export function installShim(fx) {
     ssh_sftp_window_close: ({ tabKey }) => { window.__DBKIT_SFTP_WINDOWS__.push({ op: "close", tabKey }); return null; },
     show_main_window: () => null,
   };
+
+  // ── Docker 假容器 / exec 的狀態 ──────────────────────────────────────────
+  let dockerSeq = 0;
+  const dockerExecs = new Map(); // streamId → { send, line, host }
+  window.__DBKIT_DOCKER_ACTIONS__ = [];
+  window.__DBKIT_DOCKER_PULLS__ = [];
+  function dockerDetail(name) {
+    const c = (fx.DOCKER_CONTAINERS ?? []).find((x) => x.name === name);
+    if (!c) return Promise.reject(new Error(`Docker 404：No such container: ${name}`));
+    const up = c.state === "running" || c.state === "paused";
+    return {
+      id: c.id, name: c.name, image: c.image, image_id: "sha256:1111aaaa2222bbbb", created: "2026-07-02T18:00:00Z", state: c.state,
+      running: up, paused: c.state === "paused", restarting: false, oom_killed: false, pid: up ? 42 : 0, exit_code: c.state === "exited" ? 1 : 0,
+      error: "", started_at: "2026-07-02T18:00:00Z", finished_at: "0001-01-01T00:00:00Z", restart_count: 0, restart_policy: "unless-stopped",
+      health: c.status.includes("healthy") ? "healthy" : "", health_log: [], tty: false, hostname: c.id.slice(0, 12), user: "", working_dir: "",
+      entrypoint: ["docker-entrypoint.sh"], cmd: c.command.split(" ").slice(1), env: fx.DOCKER_ENV?.[c.name] ?? [],
+      labels: c.compose_project ? { "com.docker.compose.project": c.compose_project } : {}, ports: c.ports, mounts: [],
+      networks: [{ name: "shop_default", ip: "172.20.0.2", gateway: "172.20.0.1", mac: "02:42:ac:14:00:02", aliases: [c.compose_service].filter(Boolean) }],
+      network_mode: "shop_default", raw: JSON.stringify({ Id: c.id, Name: `/${c.name}` }, null, 2),
+    };
+  }
 
   // ── SSH 假 shell 的狀態與工具 ──────────────────────────────────────────
   let sshSeq = 0;

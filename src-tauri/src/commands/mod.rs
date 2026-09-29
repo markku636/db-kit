@@ -2,6 +2,9 @@
 pub mod ai_library;
 // SSH 終端機 / SFTP / 已存主機的 command（含 TauriUi）。
 pub mod ssh;
+// Docker（容器 / 映像 / volume / network、log 與 exec 串流）的 command。
+#[cfg(feature = "docker")]
+pub mod docker;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -74,6 +77,9 @@ pub struct AppState {
     /// Kafka 告警規則的執行時權威副本（取樣 tick 評估；命令變更後持久化）。
     #[cfg(feature = "kafka")]
     pub kafka_alert_rules: Arc<Mutex<Vec<crate::db::kafka::dto::KafkaAlertRule>>>,
+    /// Docker log / exec 串流登記簿（斷線 / 移除連線時依連線 id 收掉）。
+    #[cfg(feature = "docker")]
+    pub docker_streams: Arc<crate::db::docker::stream::DockerStreams>,
 }
 
 /// 若前端送來的 secret 為空（存檔但未重新輸入的連線），從 keychain 補回。
@@ -278,6 +284,8 @@ pub async fn remove_saved_connection(
         }
         cancel_kafka_jobs(&state, &id);
     }
+    #[cfg(feature = "docker")]
+    state.docker_streams.close_conn(&id).await;
     state.manager.disconnect(&id).await;
     store::remove(&app, &id).await?;
     store::kc_delete(&id);
@@ -299,6 +307,8 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> AppResult<()>
         }
         cancel_kafka_jobs(&state, &id);
     }
+    #[cfg(feature = "docker")]
+    state.docker_streams.close_conn(&id).await;
     state.manager.disconnect(&id).await;
     Ok(())
 }

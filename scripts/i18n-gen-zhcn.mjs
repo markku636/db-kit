@@ -89,6 +89,10 @@ const GLOSSARY = {
   位元: "位",
   字級: "字号", // font size；OpenCC → 字级，大陸慣用「字号」
   新增: "新增", // 大陸同樣通用，擋掉 OpenCC 的「添加」以免與「附加」混用
+
+  // 容器與映像（Docker / Registry / Harbor）
+  映像: "镜像", // container image；大陸慣用「镜像」，OpenCC 原樣保留
+  弱點: "漏洞", // vulnerability（CVE）；OpenCC → 弱点
 };
 
 /** 整句覆寫：同一個詞在不同句子裡語意不同，只能逐句指定。 */

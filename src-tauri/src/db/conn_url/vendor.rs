@@ -185,6 +185,37 @@ pub(super) fn parse_elastic_url(scheme: &str, rest: &str) -> Parsed {
     p
 }
 
+/// Registry / Harbor / Docker 的 http(s) URL：整段（去掉 userinfo）留在 host，帳密放 username / password。
+pub(super) fn parse_http_endpoint(kind: DbKind, scheme: &str, rest: &str) -> Parsed {
+    let mut p = parse_elastic_url(scheme, rest);
+    p.kind = Some(kind);
+    p.options.remove("es_auth");
+    if kind == DbKind::Docker && scheme == "https" {
+        p.options.insert("docker_tls".into(), "1".into());
+    }
+    p
+}
+
+/// Docker daemon 位址（`DOCKER_HOST` 慣例）。`unix:///var/run/docker.sock` / `npipe:////./pipe/docker_engine`
+/// 整段當 host（driver 認得）；`tcp://h:2376` 拆成 host / port；`tcp+tls://` 或 `docker+tls://` 加 docker_tls。
+pub(super) fn parse_docker_url(scheme: &str, rest: &str, tls: bool) -> Parsed {
+    let mut p = Parsed {
+        kind: Some(DbKind::Docker),
+        ..Default::default()
+    };
+    let base = scheme.split('+').next().unwrap_or(scheme);
+    if matches!(base, "unix" | "npipe") {
+        p.host = Some(format!("{base}://{rest}"));
+        return p;
+    }
+    let hostport = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    set_host_port(&mut p, hostport);
+    if tls {
+        p.options.insert("docker_tls".into(), "1".into());
+    }
+    p
+}
+
 /// Elastic Cloud ID：`deployment-name:base64(host$es_uuid$kibana_uuid)`。
 ///
 /// 判別依據是「右半段 base64 解得開、且解出來含 `$`」——一般的 `name:value` 解不開

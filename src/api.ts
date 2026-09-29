@@ -6,8 +6,16 @@ import type {
   SshKeyInspect, SshKeySource, SshStoredKey, SshKeyImportOutcome, SshKeyGenAlgorithm, SshCertInfo,
   SshHostImportKind, SshImportScan,
 } from "./sshTypes";
+import type {
+  DockerOverview, DockerDiskUsage, DockerPruneResult, DockerPruneTarget, DockerContainer, DockerContainerDetail,
+  DockerContainerAction, DockerStats, DockerTop, DockerImage, DockerImageDetail, DockerPullProgress, DockerVolume,
+  DockerNetwork, DockerStreamEnd,
+} from "./dockerTypes";
+import type {
+  RegistryInfo, RegistryManifest, HarborOverview, HarborProject, HarborRepository, HarborArtifactPage, HarborVulnReport,
+} from "./registryTypes";
 
-export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "external";
+export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "docker" | "registry" | "harbor" | "external";
 
 export type SshAuthMethod = "password" | "key";
 
@@ -1091,6 +1099,13 @@ export interface KafkaSchema {
   schema: string;
 }
 
+// Docker log / exec 串流結束（輸出本身走 Channel；此事件只帶結束原因與 exec 結束碼）。
+export function onDockerStreamEnd(streamId: string, cb: (p: DockerStreamEnd) => void): Promise<UnlistenFn> {
+  return listen<DockerStreamEnd>("docker-stream-end", (e) => {
+    if (e.payload.stream_id === streamId) cb(e.payload);
+  });
+}
+
 // 訂閱 live-tail 訊息（僅回呼符合 connId 者）。回傳取消監聽函式。
 export function onKafkaMessage(connId: string, cb: (m: KafkaMessage) => void): Promise<UnlistenFn> {
   return listen<KafkaMessage>("kafka-message", (e) => {
@@ -1270,7 +1285,7 @@ export function onKafkaAlert(cb: (e: KafkaAlertEvent) => void): Promise<Unlisten
 }
 
 // 連線類型分類（新增連線對話框的分組選擇器用；種類將達 12+，靠分類維持可掃視性）。
-export type KindCategory = "relational" | "document" | "kv" | "queue" | "search" | "other";
+export type KindCategory = "relational" | "document" | "kv" | "queue" | "search" | "container" | "other";
 
 // 分類顯示順序與標籤（繁中字串即 i18n key，渲染時過 t()）。
 export const KIND_CATEGORIES: { id: KindCategory; label: string }[] = [
@@ -1279,6 +1294,7 @@ export const KIND_CATEGORIES: { id: KindCategory; label: string }[] = [
   { id: "kv", label: "鍵值" },
   { id: "queue", label: "訊息佇列" },
   { id: "search", label: "搜尋引擎" },
+  { id: "container", label: "容器與映像" },
   { id: "other", label: "其他" },
 ];
 
@@ -1302,8 +1318,29 @@ export const KIND_META: Record<DbKind, { label: string; color: string; defaultPo
   elastic: { label: "Elasticsearch", color: "#eab308", defaultPort: 9200, category: "search", noDatabase: true },
   // RabbitMQ：pink-500（現有色相唯一空缺；品牌橘與 oracle #f97316 撞色不用）。
   rabbitmq: { label: "RabbitMQ", color: "#ec4899", defaultPort: 5672, category: "queue", noDatabase: true },
+  // 容器與映像：Docker 用品牌藍（圖示與 MySQL 不同，靠圖示區分）；Registry 中性 slate；Harbor lime（品牌綠系、避開 mongo green）。
+  // defaultPort：Docker 本機走 socket / pipe 用不到埠，TCP 才用（TLS 時對話框改 2376）。
+  docker: { label: "Docker", color: "#2496ed", defaultPort: 2375, category: "container", noDatabase: true },
+  // Registry / Harbor 的埠一律寫在網址裡（對話框不顯示埠欄），defaultPort 0 = 由網址決定。
+  registry: { label: "Registry", color: "#64748b", defaultPort: 0, category: "container", noDatabase: true },
+  harbor: { label: "Harbor", color: "#65a30d", defaultPort: 0, category: "container", noDatabase: true },
   external: { label: "External", color: "#8b5cf6", defaultPort: 0, category: "other", external: true },
 };
+
+/**
+ * 顯示用的「主機:埠」。埠為 0（Registry / Harbor 的埠寫在網址裡、Docker 走本機 socket）時只顯示主機；
+ * 本機 Docker 的 host 留空＝預設 socket / pipe，顯示 local。
+ */
+export function hostLabel(c: Pick<ConnectionConfig, "kind" | "host" | "port">): string {
+  const h = c.host.trim();
+  if (c.kind === "docker" && h === "") return "local";
+  return c.port ? `${h}:${c.port}` : h;
+}
+
+/** 容器類（Docker / Registry / Harbor）：沒有 SQL / 資料格，UI 走各自的專屬面板。 */
+export function isContainerKind(kind: DbKind | null | undefined): boolean {
+  return kind === "docker" || kind === "registry" || kind === "harbor";
+}
 
 // parse_connection_url 的回傳：連線字串解析結果（欄位皆可缺；options 為 per-kind 映射後的鍵值）。
 export interface ParsedUrl {
@@ -1858,6 +1895,71 @@ export const api = {
     invoke<RabbitPublishResult>("rabbitmq_publish", { id, exchange, routingKey, payload, persistent }),
   rabbitmqPurge: (id: string, queue: string) => invoke<void>("rabbitmq_purge", { id, queue }),
   rabbitmqDeleteQueue: (id: string, queue: string) => invoke<void>("rabbitmq_delete_queue", { id, queue }),
+
+  // Docker：引擎總覽 / 磁碟用量 / 清理、容器 / 映像 / volume / network 的清單與操作。
+  dockerOverview: (id: string) => invoke<DockerOverview>("docker_overview", { id }),
+  dockerDiskUsage: (id: string) => invoke<DockerDiskUsage>("docker_disk_usage", { id }),
+  /** all：images 連同未使用的具名映像、volumes 連同具名 volume、build 連同全部快取。 */
+  dockerPrune: (id: string, target: DockerPruneTarget, all: boolean) =>
+    invoke<DockerPruneResult>("docker_prune", { id, target, all }),
+  dockerContainers: (id: string, all: boolean) => invoke<DockerContainer[]>("docker_containers", { id, all }),
+  dockerContainerInspect: (id: string, container: string) =>
+    invoke<DockerContainerDetail>("docker_container_inspect", { id, container }),
+  dockerContainerAction: (id: string, container: string, action: DockerContainerAction) =>
+    invoke<void>("docker_container_action", { id, container, action }),
+  dockerContainerRemove: (id: string, container: string, force: boolean, volumes: boolean) =>
+    invoke<void>("docker_container_remove", { id, container, force, volumes }),
+  dockerContainerRename: (id: string, container: string, name: string) =>
+    invoke<void>("docker_container_rename", { id, container, name }),
+  dockerContainerStats: (id: string, container: string) => invoke<DockerStats>("docker_container_stats", { id, container }),
+  dockerContainerTop: (id: string, container: string) => invoke<DockerTop>("docker_container_top", { id, container }),
+  // log / exec 串流：輸出走 Channel（raw bytes → ArrayBuffer），結束看 onDockerStreamEnd；回傳 stream id。
+  dockerLogsOpen: (id: string, container: string, tail: number, timestamps: boolean, follow: boolean, onOutput: Channel<ArrayBuffer>) =>
+    invoke<string>("docker_logs_open", { id, container, tail, timestamps, follow, onOutput }),
+  /** cmd 空陣列 → 後端自動挑 bash / ash / sh。 */
+  dockerExecOpen: (id: string, container: string, cmd: string[], user: string, cols: number, rows: number, onOutput: Channel<ArrayBuffer>) =>
+    invoke<string>("docker_exec_open", { id, container, cmd, user, cols, rows, onOutput }),
+  dockerExecWrite: (streamId: string, dataB64: string) => invoke<void>("docker_exec_write", { streamId, dataB64 }),
+  dockerExecResize: (streamId: string, cols: number, rows: number) => invoke<void>("docker_exec_resize", { streamId, cols, rows }),
+  dockerStreamClose: (streamId: string) => invoke<void>("docker_stream_close", { streamId }),
+  dockerImages: (id: string) => invoke<DockerImage[]>("docker_images", { id }),
+  dockerImageInspect: (id: string, image: string) => invoke<DockerImageDetail>("docker_image_inspect", { id, image }),
+  dockerImageRemove: (id: string, image: string, force: boolean) => invoke<string[]>("docker_image_remove", { id, image, force }),
+  dockerImageTag: (id: string, source: string, repo: string, tag: string) =>
+    invoke<void>("docker_image_tag", { id, source, repo, tag }),
+  /**
+   * 拉取完成才 resolve；進度逐筆送到 onProgress。帳密空白 = 匿名。
+   * credConn：密碼留空時改用這個已存連線（Registry / Harbor）存在 keychain 的密碼（不經前端）。
+   */
+  dockerImagePull: (id: string, image: string, tag: string, username: string, password: string, onProgress: Channel<DockerPullProgress>, credConn: string | null = null) =>
+    invoke<void>("docker_image_pull", { id, image, tag, username, password, onProgress, credConn }),
+  dockerVolumes: (id: string) => invoke<DockerVolume[]>("docker_volumes", { id }),
+  dockerVolumeRemove: (id: string, name: string, force: boolean) => invoke<void>("docker_volume_remove", { id, name, force }),
+  dockerNetworks: (id: string) => invoke<DockerNetwork[]>("docker_networks", { id }),
+  dockerNetworkInspect: (id: string, network: string) => invoke<DockerNetwork>("docker_network_inspect", { id, network }),
+  dockerNetworkRemove: (id: string, network: string) => invoke<void>("docker_network_remove", { id, network }),
+
+  // Registry v2：端點資訊、manifest（含 config）、刪除（需 registry 開啟刪除）。
+  registryInfo: (id: string) => invoke<RegistryInfo>("registry_info", { id }),
+  registryManifest: (id: string, repo: string, reference: string) =>
+    invoke<RegistryManifest>("registry_manifest", { id, repo, reference }),
+  registryDelete: (id: string, repo: string, reference: string) => invoke<void>("registry_delete", { id, repo, reference }),
+
+  // Harbor：總覽、專案、repository、artifact（分頁）、掃描 / 弱點、刪除。repo 為去掉專案前綴的名稱。
+  harborOverview: (id: string) => invoke<HarborOverview>("harbor_overview", { id }),
+  harborProject: (id: string, project: string) => invoke<HarborProject>("harbor_project", { id, project }),
+  harborRepositories: (id: string, project: string) => invoke<HarborRepository[]>("harbor_repositories", { id, project }),
+  harborArtifacts: (id: string, project: string, repo: string, page: number, pageSize: number) =>
+    invoke<HarborArtifactPage>("harbor_artifacts", { id, project, repo, page, pageSize }),
+  harborScan: (id: string, project: string, repo: string, digest: string) => invoke<void>("harbor_scan", { id, project, repo, digest }),
+  harborVulnerabilities: (id: string, project: string, repo: string, digest: string) =>
+    invoke<HarborVulnReport>("harbor_vulnerabilities", { id, project, repo, digest }),
+  harborDeleteArtifact: (id: string, project: string, repo: string, digest: string) =>
+    invoke<void>("harbor_delete_artifact", { id, project, repo, digest }),
+  harborDeleteTag: (id: string, project: string, repo: string, digest: string, tag: string) =>
+    invoke<void>("harbor_delete_tag", { id, project, repo, digest, tag }),
+  harborDeleteRepository: (id: string, project: string, repo: string) =>
+    invoke<void>("harbor_delete_repository", { id, project, repo }),
 
   // 壓力測試：後端另建一個 max_connections = threads 的專屬連線池（不佔用互動池），
   // 跑完即釋放。故傳的是 ConnectionConfig 而非連線 id（同 backupRun / testConnection 的路徑）。

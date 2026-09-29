@@ -94,6 +94,9 @@ interface AppStore {
   pendingFilter: { key: string; column: string; value: string } | null;
   // 資料重載信號：key（connId:db:table）→ nonce，外部操作（如 TRUNCATE）後遞增以強制開啟中的資料頁重載。
   dataReload: Record<string, number>;
+  // 側欄某個 database 節點的物件清單要重抓（分頁內的操作——例如 Docker 刪容器——改變了樹的內容）。
+  // Sidebar 監看 nonce 變化後呼叫自己的 refreshTables；未展開的節點忽略。
+  treeReload: { connId: string; db: string; nonce: number } | null;
   // 右側詳細資料面板目前選取的節點（單擊樹節點即更新）。
   selectedNode: SelectedNode | null;
   // 收藏查詢（全域，localStorage）：反應式 slice，側欄與各查詢分頁編輯器共用單一來源。
@@ -164,6 +167,7 @@ interface AppStore {
   clearPendingFilter: () => void;
   // 遞增某表的資料重載 nonce（TRUNCATE 後呼叫，使開啟中的資料頁重新查詢）。
   bumpDataReload: (connId: string, database: string, table: string) => void;
+  requestTreeReload: (connId: string, db: string) => void;
   // 設定詳細資料面板選取的節點（null 清空）。
   selectNode: (node: SelectedNode | null) => void;
   // 「在物件總管中選取」：發出一次性 reveal 請求（側欄 effect 消費）。
@@ -218,6 +222,7 @@ export const useStore = create<AppStore>((set) => ({
   pendingInsert: null,
   pendingFilter: null,
   dataReload: {},
+  treeReload: null,
   selectedNode: null,
   revealRequest: null,
   savedQueries: loadSavedQueries(),
@@ -426,6 +431,8 @@ export const useStore = create<AppStore>((set) => ({
       // 作用中分頁若被關閉，走共用落點（最後一個表分頁 → 第一個查詢分頁 → SSH），不再硬寫 __query__。
       return { tabs, activeTabKey: landingKey(tabs, s.queryTabs, s.sshTabs, s.activeTabKey) };
     }),
+  requestTreeReload: (connId, db) =>
+    set((s) => ({ treeReload: { connId, db, nonce: (s.treeReload?.nonce ?? 0) + 1 } })),
   bumpDataReload: (connId, database, table) =>
     set((s) => {
       const key = `${connId}:${database}:${table}`;

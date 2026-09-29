@@ -61,6 +61,27 @@ const FTP_SESSION = {
   auth: "password", protocol: "ftp", ftp: { tls: "explicit", active: false },
 };
 const FTP_SESSIONS = { ...FX.SSH_SESSIONS, sessions: [...FX.SSH_SESSIONS.sessions, FTP_SESSION] };
+// 容器與映像情境的 fixtures：在共用那份上加 Docker / Registry / Harbor 三個連線與它們的樹。
+// xterm 用 DOM renderer（WebGL 畫布讀不到文字）。
+const CONTAINER_FX = {
+  STORAGE_SEED: SSH_STORAGE_SEED,
+  CONNECTIONS: [...FX.CONNECTIONS, ...FX.CONTAINER_CONNECTIONS],
+  DATABASES: {
+    ...FX.DATABASES,
+    "c-docker": ["containers", "images", "volumes", "networks"],
+    "c-registry": FX.REGISTRY_REPOS,
+    "c-harbor": FX.HARBOR_PROJECTS,
+  },
+  TABLES: {
+    ...FX.TABLES,
+    "c-docker:containers": FX.DOCKER_CONTAINERS.map((c) => ({ name: c.name, kind: `container-${c.state}` })),
+    "c-docker:images": FX.DOCKER_IMAGES.map((i) => ({ name: i.reference, kind: i.dangling ? "image-dangling" : "image" })),
+    "c-docker:volumes": FX.DOCKER_VOLUMES.map((v) => ({ name: v.name, kind: "volume" })),
+    "c-docker:networks": FX.DOCKER_NETWORKS.map((n) => ({ name: n.name, kind: "network" })),
+    ...Object.fromEntries(Object.entries(FX.REGISTRY_TAGS).map(([r, tags]) => [`c-registry:${r}`, tags.map((name) => ({ name, kind: "tag" }))])),
+    ...Object.fromEntries(Object.entries(FX.HARBOR_REPOS).map(([p, rs]) => [`c-harbor:${p}`, rs.map((r) => ({ name: r.name, kind: "repository" }))])),
+  },
+};
 const CASE_FX = {
   "sidebar-scroll-reaches-last": { CONNECTIONS: MANY_CONNECTIONS, CONN_GROUPS: MANY_GROUPS },
   "ssh-terminal": { STORAGE_SEED: SSH_STORAGE_SEED },
@@ -88,8 +109,21 @@ const CASE_FX = {
   "ftp-host": { STORAGE_SEED: SSH_STORAGE_SEED, SSH_SESSIONS: FTP_SESSIONS },
   // 同一個情境換成預設的渲染器（WebGL，開不起來才退回 DOM）：issue #7 的使用者用的就是預設值。
   "ssh-disconnect-overlay-webgl": {},
+  // 容器與映像：連線 / 樹資料另外合併（文件截圖用的 CONNECTIONS 不含這三個）。
+  "docker-tree-menu": CONTAINER_FX,
+  "docker-container-tab": CONTAINER_FX,
+  "docker-create-db-conn": CONTAINER_FX,
+  "docker-readonly-hides-writes": CONTAINER_FX,
+  "docker-conn-dialog-tls": CONTAINER_FX,
+  "docker-overview": CONTAINER_FX,
+  "registry-tag-view": CONTAINER_FX,
+  "harbor-artifacts": CONTAINER_FX,
 };
 
+// ui/Field 的 <label> 沒有 htmlFor（沒和 input 綁定），getByLabel 找不到：改以「標籤文字所在的欄位」取第一個輸入框。
+const fieldInput = (page, label) =>
+  page.locator("label").filter({ hasText: new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\*?$`) })
+    .first().locator("xpath=..").locator("input, textarea").first();
 // xterm 目前畫面（DOM renderer）的純文字。
 const termText = (page) => page.evaluate(() => document.querySelector(".xterm-rows")?.innerText ?? "");
 async function openSshWeb01(page) {
@@ -112,6 +146,213 @@ async function closeMenu(page) {
 
 // ── 情境 ───────────────────────────────────────────────────────────────
 const CASES = {
+  // ---- 容器與映像（Docker / Registry / Harbor）----
+  async "docker-tree-menu"(page) {
+    await page.getByText("local-docker", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("容器", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="shop-db"]', { timeout: 8000 });
+    check("Docker 樹：四個分類", (await page.getByText("映像", { exact: true }).count()) > 0 && (await page.getByText("網路", { exact: true }).count()) > 0);
+    await page.locator('[data-tree-table="shop-db"]').first().click({ button: "right" });
+    await sleep(300);
+    let items = await menuItems(page);
+    const has = (s) => items.some((i) => i === s || i.includes(s));
+    check("執行中容器右鍵：Log / Shell / 停止 / 重新啟動", has("Log…") && has("Shell…") && has("停止") && has("重新啟動"), items.join(" | "));
+    check("執行中容器右鍵：建立資料庫連線 / 刪除", has("建立資料庫連線…") && has("刪除…"));
+    check("執行中容器右鍵沒有「啟動」", !items.includes("啟動"));
+    await closeMenu(page);
+    await page.locator('[data-tree-table="shop-api"]').first().click({ button: "right" });
+    await sleep(300);
+    items = await menuItems(page);
+    check("已停止容器右鍵：有啟動、沒有 Shell", items.includes("啟動") && !items.some((i) => i.includes("Shell")), items.join(" | "));
+    await closeMenu(page);
+    await page.getByText("local-docker", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    items = await menuItems(page);
+    check("Docker 連線右鍵：總覽 / 拉取映像", items.some((i) => i.includes("總覽")) && items.some((i) => i.includes("拉取映像")), items.join(" | "));
+    check("Docker 連線右鍵：沒有 SQL 搜尋 / 新增查詢", !items.some((i) => i.includes("SQL Search") || i.includes("新增查詢") || i.includes("進階搜尋")));
+    await closeMenu(page);
+  },
+
+  async "docker-container-tab"(page) {
+    await page.getByText("local-docker", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("容器", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="shop-db"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="shop-db"]').first().click();
+    await page.getByText("POSTGRES_PASSWORD", { exact: true }).first().waitFor({ timeout: 6000 }).catch(() => {});
+    const text = await appText(page);
+    check("容器資訊：埠映射 15432", text.includes("15432"), text.slice(0, 300));
+    check("容器資訊：機密環境變數預設遮罩", text.includes("POSTGRES_PASSWORD") && !text.includes("s3cret-demo"));
+    check("容器資訊：一般環境變數照常顯示", text.includes("/var/lib/postgresql/data"));
+    const allTerm = () => page.evaluate(() => [...document.querySelectorAll(".xterm-rows")].map((e) => e.innerText).join("\n"));
+    await page.getByRole("radio", { name: "Log" }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll(".xterm-rows")].some((e) => e.innerText.includes("starting PostgreSQL")), null, { timeout: 6000 }).catch(() => {});
+    check("Log 子頁串流出 log", (await allTerm()).includes("starting PostgreSQL"), (await allTerm()).slice(0, 200));
+    await page.getByRole("radio", { name: "Shell" }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll(".xterm-rows")].some((e) => e.innerText.includes("/ #")), null, { timeout: 6000 }).catch(() => {});
+    check("Shell 子頁連上並出現提示符", (await allTerm()).includes("/ #"));
+    await page.locator(".xterm-helper-textarea").last().focus();
+    await page.keyboard.type("hostname");
+    await page.keyboard.press("Enter");
+    await sleep(400);
+    check("Shell 輸入送到容器並回顯輸出", /hostname[\s\S]*shop-db/.test(await allTerm()), (await allTerm()).slice(-200));
+    await page.getByRole("radio", { name: "Log" }).click();
+    await sleep(200);
+    check("切回 Log 時 log 還在（子頁不卸載）", (await allTerm()).includes("starting PostgreSQL"));
+    await page.getByRole("radio", { name: "資源" }).click();
+    await page.getByText("3.2%", { exact: true }).first().waitFor({ timeout: 6000 }).catch(() => {});
+    check("資源子頁顯示 CPU", (await page.getByText("3.2%", { exact: true }).count()) > 0);
+    await page.getByRole("radio", { name: "資訊" }).click();
+    await page.getByRole("button", { name: "停止", exact: true }).first().click();
+    await page.getByRole("button", { name: "停止", exact: true }).last().click(); // 確認對話框
+    await sleep(400);
+    const acts = await page.evaluate(() => window.__DBKIT_DOCKER_ACTIONS__);
+    check("動作列「停止」確認後送出", acts.includes("stop:shop-db"), JSON.stringify(acts));
+  },
+
+  async "docker-create-db-conn"(page) {
+    await page.getByText("local-docker", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("容器", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="shop-db"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="shop-db"]').first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("建立資料庫連線…", { exact: true }).click();
+    await fieldInput(page, "主機").waitFor({ timeout: 6000 }).catch(() => {});
+    const vals = {
+      title: await page.getByText("新增連線", { exact: true }).count(),
+      host: await fieldInput(page, "主機").inputValue().catch(() => null),
+      port: await fieldInput(page, "埠").inputValue().catch(() => null),
+      user: await fieldInput(page, "使用者").inputValue().catch(() => null),
+      db: await fieldInput(page, "資料庫（選填）").inputValue().catch(() => null),
+      name: await fieldInput(page, "名稱").inputValue().catch(() => null),
+    };
+    check("從 postgres 容器預填新增連線：127.0.0.1:15432 / shop / shop",
+      vals.title > 0 && vals.host === "127.0.0.1" && vals.port === "15432" && vals.user === "shop" && vals.db === "shop" && vals.name === "shop-db",
+      JSON.stringify(vals));
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await sleep(400);
+    const saved = (await page.evaluate(() => window.__DBKIT_CONN_SAVES__ ?? [])).at(-1);
+    check("存成 PostgreSQL 連線（新 id、帶容器 env 的密碼）", saved?.kind === "postgres" && saved?.password === "s3cret-demo" && saved?.id !== "c-docker", JSON.stringify(saved));
+  },
+
+  async "docker-readonly-hides-writes"(page) {
+    await page.getByText("local-docker", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("local-docker", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("設為唯讀模式（擋寫入 / DDL）", { exact: true }).click();
+    await sleep(400);
+    await page.getByText("容器", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="shop-db"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="shop-db"]').first().click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("唯讀：容器右鍵沒有啟停 / 刪除 / Shell", !items.some((i) => ["停止", "重新啟動", "刪除…", "Shell…", "重新命名…"].includes(i)), items.join(" | "));
+    check("唯讀：仍可看 Log", items.includes("Log…"));
+    await closeMenu(page);
+    await page.locator('[data-tree-table="shop-db"]').first().click();
+    await page.getByText("POSTGRES_PASSWORD", { exact: true }).first().waitFor({ timeout: 6000 }).catch(() => {});
+    check("唯讀：容器分頁沒有停止 / 刪除按鈕",
+      (await page.getByRole("button", { name: "停止", exact: true }).count()) === 0 && (await page.getByRole("button", { name: "刪除", exact: true }).count()) === 0);
+  },
+
+  async "docker-conn-dialog-tls"(page) {
+    await page.getByRole("button", { name: "連線", exact: true }).first().click();
+    await page.getByRole("radiogroup", { name: "連線類型" }).waitFor({ timeout: 5000 }).catch(() => {});
+    check("類型選擇器有「容器與映像」三種", (await page.getByRole("radio", { name: "Docker" }).count()) === 1
+      && (await page.getByRole("radio", { name: "Registry" }).count()) === 1 && (await page.getByRole("radio", { name: "Harbor" }).count()) === 1);
+    await page.getByRole("radio", { name: "Docker" }).click();
+    await fieldInput(page, "Socket / Pipe 路徑（選填）").waitFor({ timeout: 5000 }).catch(() => {});
+    check("Docker 預設本機：socket 路徑欄、沒有埠 / 帳密 / SSH",
+      (await fieldInput(page, "Socket / Pipe 路徑（選填）").count()) === 1
+      && (await fieldInput(page, "埠").count()) === 0
+      && (await fieldInput(page, "使用者").count()) === 0
+      && (await page.getByText("透過 SSH Tunnel 連線", { exact: true }).count()) === 0);
+    await page.getByRole("radio", { name: "TLS" }).click();
+    await sleep(200);
+    check("切到 TLS：埠 2376、CA / 用戶端憑證 / 私鑰欄出現",
+      (await fieldInput(page, "埠").inputValue().catch(() => "")) === "2376"
+      && (await fieldInput(page, "CA 憑證路徑（選填）").count()) === 1
+      && (await fieldInput(page, "用戶端憑證（cert.pem，選填）").count()) === 1
+      && (await fieldInput(page, "用戶端私鑰（key.pem，選填）").count()) === 1);
+    await fieldInput(page, "主機").fill("docker.lan");
+    await fieldInput(page, "CA 憑證路徑（選填）").fill("C:/certs/ca.pem");
+    await fieldInput(page, "用戶端憑證（cert.pem，選填）").fill("C:/certs/cert.pem");
+    await fieldInput(page, "用戶端私鑰（key.pem，選填）").fill("C:/certs/key.pem");
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await sleep(400);
+    const saved = (await page.evaluate(() => window.__DBKIT_CONN_SAVES__ ?? [])).at(-1);
+    const o = saved?.options ?? {};
+    check("存下 TLS 設定（docker_tls / ca / cert / key，不存帳密）",
+      saved?.kind === "docker" && saved?.host === "docker.lan" && saved?.port === 2376 && o.docker_tls === "1"
+      && o.docker_tls_ca === "C:/certs/ca.pem" && o.docker_tls_cert === "C:/certs/cert.pem" && o.docker_tls_key === "C:/certs/key.pem"
+      && saved?.username === "" && saved?.password === "", JSON.stringify(saved));
+  },
+
+  async "docker-overview"(page) {
+    await page.getByText("local-docker", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("local-docker", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("總覽…", { exact: true }).click();
+    await page.getByText("Docker 27.3.1 · API 1.47", { exact: true }).waitFor({ timeout: 6000 }).catch(() => {});
+    const text = await appText(page);
+    check("總覽：引擎版本與容器分組", text.includes("Docker 27.3.1") && text.includes("shop") && text.includes("edge-nginx"), text.slice(0, 300));
+    check("總覽：磁碟用量與清理", text.includes("建置快取") && text.includes("刪除所有已停止的容器"));
+  },
+
+  async "registry-tag-view"(page) {
+    await page.getByText("team-registry", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("acme/shop-api", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="1.4.2"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="1.4.2"]').first().click();
+    await page.getByText("Layers（2）", { exact: true }).first().waitFor({ timeout: 6000 }).catch(() => {});
+    const text = await appText(page);
+    check("tag 分頁：digest / layers / 映像設定", text.includes("sha256:9f8e7d6c") && /layers（2）/i.test(text) && text.includes("8080/tcp"), text.slice(0, 300));
+    check("tag 分頁：pull 參照去掉預設埠", text.includes("registry.example.test/acme/shop-api:1.4.2"));
+    await page.getByRole("button", { name: "拉到 Docker…", exact: true }).click();
+    await sleep(400);
+    check("沒連 Docker 時提示先連線", (await page.getByText("請先連線到一個 Docker 連線，才能把映像拉下來", { exact: true }).count()) > 0);
+    await page.getByText("local-docker", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.locator('[data-tree-table="1.4.2"]').first().click();
+    await page.getByRole("button", { name: "拉到 Docker…", exact: true }).click();
+    await page.getByRole("button", { name: "拉取", exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+    const img = await fieldInput(page, "映像").inputValue().catch(() => null);
+    check("拉取對話框預填映像與 registry 帳號", img === "registry.example.test/acme/shop-api:1.4.2"
+      && (await fieldInput(page, "Registry 使用者（選填）").inputValue().catch(() => null)) === "ci", String(img));
+    await page.getByRole("button", { name: "拉取", exact: true }).click();
+    await sleep(400);
+    const pulls = await page.evaluate(() => window.__DBKIT_DOCKER_PULLS__);
+    check("拉取用 registry 連線的已存密碼（credConn）", pulls.at(-1)?.credConn === "c-registry" && pulls.at(-1)?.id === "c-docker", JSON.stringify(pulls));
+  },
+
+  async "harbor-artifacts"(page) {
+    await page.getByText("corp-harbor", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("acme", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="team/worker"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="shop-api"]').first().click();
+    await page.getByText("H2 M3 L2", { exact: true }).first().waitFor({ timeout: 6000 }).catch(() => {});
+    const text = await appText(page);
+    check("artifact 表：tag / 平台 / 掃描摘要", text.includes("1.4.2") && text.includes("latest") && text.includes("linux/amd64") && text.includes("H2 M3 L2"), text.slice(0, 300));
+    check("未掃描的 artifact 標示「未掃描」", text.includes("未掃描"));
+    await page.getByText("H2 M3 L2", { exact: true }).first().click();
+    await page.getByText("CVE-2026-1111", { exact: true }).first().waitFor({ timeout: 6000 }).catch(() => {});
+    check("點掃描摘要看弱點明細", (await page.getByText("CVE-2026-1111", { exact: true }).count()) > 0 && (await page.getByText("3.0.14", { exact: true }).count()) > 0);
+    await page.getByRole("button", { name: "掃描弱點" }).first().click();
+    await sleep(300);
+    const acts = await page.evaluate(() => window.__DBKIT_DOCKER_ACTIONS__);
+    check("「掃描弱點」送出掃描", acts.some((a) => a.startsWith("harbor-scan:sha256:1234")), JSON.stringify(acts));
+    await page.getByText("acme", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("專案資訊…", { exact: true }).click();
+    await page.getByText("推送時自動掃描", { exact: true }).first().waitFor({ timeout: 6000 }).catch(() => {});
+    check("專案資訊面板", (await page.getByText("推送時自動掃描", { exact: true }).count()) > 0 && (await appText(page)).includes("10.0 GB"));
+  },
   // SSH 終端機：側欄「SSH 主機」雙擊開分頁 → xterm 印 banner → 鍵入有回聲 → 指令列送 ls → SFTP 列出檔案 → 分頁右鍵。
   async "ssh-terminal"(page) {
     check("側欄有「SSH 主機」區塊", (await page.locator("[data-ssh-host-tree]").count()) > 0);

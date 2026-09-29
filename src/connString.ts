@@ -23,6 +23,8 @@ const KNOWN_SCHEMES = new Set([
   "mssql", "sqlserver", "oracle", "kafka",
   "elasticsearch", "opensearch", "elastic",
   "amqp", "amqps", "sqlite",
+  // Docker daemon 位址（DOCKER_HOST 慣例）。
+  "docker", "tcp", "unix", "npipe",
 ]);
 
 // libpq 專屬鍵（與後端 LIBPQ_MARKERS 一致）：與 ADO.NET 的識別鍵不重疊，故可當判別依據。
@@ -159,6 +161,8 @@ export interface ConnFormFields {
   rabbitVhost: string;
   rabbitTls: boolean;
   rabbitMgmtUrl: string;
+  // Docker（連線方式由 host 形式 + 此旗標推得：socket / pipe 路徑＝本機；否則 TCP，勾了即 TLS）
+  dockerTls: boolean;
 }
 
 /** 單一欄位的變動（供「已填入」摘要渲染；label 與遮罩由呼叫端決定）。 */
@@ -205,6 +209,7 @@ const KIND_SCOPED_DEFAULTS: Omit<ConnFormFields, "kind" | "host" | "port" | "use
   rabbitVhost: "/",
   rabbitTls: false,
   rabbitMgmtUrl: "",
+  dockerTls: false,
 };
 
 /**
@@ -214,6 +219,7 @@ const KIND_SCOPED_DEFAULTS: Omit<ConnFormFields, "kind" | "host" | "port" | "use
  */
 function defaultUsername(kind: DbKind): string {
   if (kind === "kafka" || kind === "elastic" || kind === "redis") return "";
+  if (kind === "docker" || kind === "registry" || kind === "harbor") return "";
   if (kind === "rabbitmq") return "guest";
   return "root";
 }
@@ -289,6 +295,7 @@ export function applyParsedToForm(p: ParsedUrl, cur: ConnFormFields): ApplyResul
   if (o.rabbitmq_vhost != null) next.rabbitVhost = o.rabbitmq_vhost;
   if (o.rabbitmq_tls != null) next.rabbitTls = optBool(o.rabbitmq_tls);
   if (o.rabbitmq_mgmt_url != null) next.rabbitMgmtUrl = o.rabbitmq_mgmt_url;
+  if (o.docker_tls != null) next.dockerTls = optBool(o.docker_tls);
 
   return { next, changed: diffFields(cur, next) };
 }

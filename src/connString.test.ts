@@ -38,6 +38,7 @@ const base = (over: Partial<ConnFormFields> = {}): ConnFormFields => ({
   rabbitVhost: "/",
   rabbitTls: false,
   rabbitMgmtUrl: "",
+  dockerTls: false,
   ...over,
 });
 
@@ -283,5 +284,21 @@ describe("applyParsedToForm", () => {
     );
     expect(next.rabbitVhost).toBe("myvhost");
     expect(next.rabbitTls).toBe(true);
+  });
+
+  it("Docker：tcp+tls 帶出 TLS、清掉 MySQL 的 root 帳號", () => {
+    const { next } = applyParsedToForm(
+      parsed({ kind: "docker", host: "docker.internal", port: 2376, options: { docker_tls: "1" } }),
+      base(),
+    );
+    expect(next.kind).toBe("docker");
+    expect(next.dockerTls).toBe(true);
+    expect(next.port).toBe(2376);
+    expect(next.username).toBe("");
+  });
+
+  it("Docker 的 unix:// / tcp:// 算連線字串", () => {
+    expect(looksLikeConnectionString("unix:///var/run/docker.sock")).toBe(true);
+    expect(looksLikeConnectionString("tcp://10.0.0.5:2375")).toBe(true);
   });
 });

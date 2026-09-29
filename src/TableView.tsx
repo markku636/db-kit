@@ -16,6 +16,9 @@ import KafkaMessageBrowser from "./KafkaMessageBrowser";
 import KafkaTopicConfig from "./KafkaTopicConfig";
 import RabbitMqQueueBrowser from "./RabbitMqQueueBrowser";
 import RabbitMqQueueDetail from "./RabbitMqQueueDetail";
+import DockerObjectView from "./DockerObjectView";
+import RegistryTagView from "./RegistryTagView";
+import HarborRepoView from "./HarborRepoView";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { invalidateSchemaCache } from "./useSqlSchema";
@@ -67,6 +70,29 @@ export default function TableView({ tab }: { tab: OpenTab }) {
   const connKind = useStore((s) => s.connections.find((c) => c.id === tab.connId)?.kind);
   const isKafka = connKind === "kafka";
   const isRabbit = connKind === "rabbitmq";
+
+  // 容器類：分頁內容自帶子頁切換（資訊 / Log / Shell…），不用資料 / 結構切換列。
+  if (connKind === "docker") {
+    return (
+      <div className="flex-1 flex flex-col min-h-0">
+        <DockerObjectView connId={tab.connId} category={tab.database} name={tab.table} />
+      </div>
+    );
+  }
+  if (connKind === "registry") {
+    return (
+      <div className="flex-1 flex flex-col min-h-0">
+        <RegistryTagView connId={tab.connId} repo={tab.database} tag={tab.table} />
+      </div>
+    );
+  }
+  if (connKind === "harbor") {
+    return (
+      <div className="flex-1 flex flex-col min-h-0">
+        <HarborRepoView connId={tab.connId} project={tab.database} repo={tab.table} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col min-h-0">

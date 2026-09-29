@@ -40,7 +40,7 @@ describe("shouldCacheKind", () => {
   // 這是政策測試，不是實作細節測試：它存在的目的是擋住「順手把十一種引擎都做進去」，
   // 那只會產生一份塞滿過期 Redis 鍵名前綴的快取。
   it("拒絕沒有欄位結構的種類", () => {
-    for (const k of ["mongo", "redis", "kafka", "elastic", "rabbitmq"] as const) {
+    for (const k of ["mongo", "redis", "kafka", "elastic", "rabbitmq", "docker", "registry", "harbor"] as const) {
       expect(shouldCacheKind(k)).toBe(false);
     }
   });
