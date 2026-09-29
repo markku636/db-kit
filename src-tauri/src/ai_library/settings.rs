@@ -171,11 +171,11 @@ mod tests {
     fn unknown_fields_and_partial_json_are_tolerated() {
         let dir = std::env::temp_dir().join(format!("dbkit-ailib-settings2-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(SETTINGS_FILE), r#"{"dba_persona":"dba-mentor","future":1}"#).unwrap();
+        std::fs::write(dir.join(SETTINGS_FILE), r#"{"dba_persona":"dba-security","future":1}"#).unwrap();
         let s = load(&dir);
-        assert_eq!(s.dba_persona.as_deref(), Some("dba-mentor"));
+        assert_eq!(s.dba_persona.as_deref(), Some("dba-security"));
         assert_eq!(s.dba_persona_prod.as_deref(), Some("dba-prod-gatekeeper"));
-        assert_eq!(s.dba_persona_for(false), "dba-mentor");
+        assert_eq!(s.dba_persona_for(false), "dba-security");
         assert_eq!(s.dba_persona_for(true), "dba-prod-gatekeeper");
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -69,7 +69,7 @@ skills: [lock-risk, online-ddl]                                   # 預載技能
 
 - `name` 請用小寫英數與連字號（Claude Code / Agent Skills 的慣例），`description` 必填（Claude Code / Codex 用它決定何時使用）。
 - `tools` 同時決定 db-kit 裡這位 DBA 能用哪些工具，以及同步到 Claude Code 後的工具白名單。清單外的工具連呼叫都會被擋下，不只是「沒列出來」。
-- **結論分寸寫在本文裡**：什麼情況 STOP、什麼情況 CAUTION。內建的六位 DBA 各有不同的分寸，可以參考。
+- **結論分寸寫在本文裡**：什麼情況 STOP、什麼情況 CAUTION。內建的四位 DBA 各有不同的分寸，可以參考。
 - 檔案裡其他 Claude Code 欄位（`model`、`hooks`、`permissionMode`…）db-kit 不會動，存檔時原樣保留。
 
 內建人設：
@@ -80,9 +80,7 @@ skills: [lock-risk, online-ddl]                                   # 預載技能
 | `dba-senior` | 資深 DBA：一般連線的預設審查者 |
 | `dba-prod-gatekeeper` | 正式環境守門員：標記為正式環境的連線預設用它；只看結構與計畫，不撈資料 |
 | `dba-performance` | 效能調校：以執行計畫為依據 |
-| `dba-data-architect` | 資料模型架構師：結構審查的預設 |
 | `dba-security` | 資安稽核：權限、注入、個資 |
-| `dba-mentor` | 導師：解釋為什麼，結論較寬鬆 |
 
 ## 技能（skills/）
 

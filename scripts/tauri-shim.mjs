@@ -38,6 +38,8 @@ export function installShim(fx) {
   window.__DBKIT_SFTP_OPENS__ = [];
   window.__DBKIT_EMITTED__ = [];
   window.__DBKIT_WINDOW_CALLS__ = [];
+  // AI 資源庫設定的寫入（ai_library_settings_set 送出的完整設定）。
+  window.__DBKIT_AI_SETTINGS_SET__ = [];
   // SSH 主機儲存與金鑰匯入 / 產生的紀錄（驗「存下去的是 keystore:<id>」「匯入帶了哪個密語」用）。
   window.__DBKIT_SSH_SESSION_SAVES__ = [];
   // 終端機工作階段記錄與「另存文字檔」的紀錄。
@@ -235,7 +237,8 @@ export function installShim(fx) {
     // ── AI 資源庫 ────────────────────────────────────────────────────────
     // 讀取刻意失敗：前端會退回打包進 bundle 的內建資源庫（與後端讀不到設定目錄時同一條路徑）。
     ai_library_load: () => Promise.reject(new Error("screenshot shim: 資源庫用內建 fallback")),
-    ai_library_settings_set: () => Promise.reject(new Error("screenshot shim: 不寫設定")),
+    // 不真的寫設定（快照仍用內建 fallback），但記下送出的內容給 verify-ui 檢查。
+    ai_library_settings_set: ({ settingsValue }) => { window.__DBKIT_AI_SETTINGS_SET__.push(settingsValue); return Promise.reject(new Error("screenshot shim: 不寫設定")); },
     ai_library_reveal: () => null,
     ai_library_sync_plan: () => ({
       items: [

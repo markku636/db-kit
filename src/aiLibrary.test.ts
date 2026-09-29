@@ -86,7 +86,7 @@ describe("renderTaskWith", () => {
 describe("人設", () => {
   it("DBA 人設清單與預設值對得上", () => {
     const names = personas("dba").map((e) => e.name);
-    expect(names).toEqual(expect.arrayContaining(["dba-senior", "dba-prod-gatekeeper", "dba-performance", "dba-data-architect", "dba-security", "dba-mentor"]));
+    expect(names).toEqual(expect.arrayContaining(["dba-senior", "dba-prod-gatekeeper", "dba-performance", "dba-security"]));
     expect(personas("assistant").map((e) => e.name)).toContain("assistant");
   });
 

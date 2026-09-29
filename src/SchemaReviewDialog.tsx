@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import { isProdConn, type DbKind } from "./api";
-import { findEntry } from "./aiLibrary";
 import { buildSchemaReviewPrompt, reviewersFor } from "./dbaReview";
 import DbaReviewPane from "./DbaReviewPane";
 import { useLang, useT } from "./i18n";
@@ -24,7 +23,6 @@ export default function SchemaReviewDialog({ connId, db, table, kind, onClose }:
   const connected = useStore((s) => s.connectedIds.has(connId));
   // 開啟即審查一次（key 固定在掛載當下）。
   const [autoKey] = useState(() => Date.now());
-  const initial = findEntry("agent", "dba-data-architect") ? ["dba-data-architect"] : undefined;
 
   const prepare = async (names: string[]) => ({
     prompt: await buildSchemaReviewPrompt({ connId, kind, db, table, uiLang: useLang.getState().lang }),
@@ -49,7 +47,6 @@ export default function SchemaReviewDialog({ connId, db, table, kind, onClose }:
         kind={kind}
         prod={prod}
         autoStartKey={autoKey}
-        initialPersonas={initial}
         verdictLabels={{ go: t("結構良好"), caution: t("建議修正"), stop: t("有嚴重問題") }}
         followUpLabel={t("我對這張表的 DBA 結構審查有後續問題。請先用三句話總結最重要的設計問題，再等我追問。")}
         emptyHint={<p>{t("審查這張表的鍵與約束、型別、索引、正規化與命名，並給出修改用的 DDL。")}</p>}

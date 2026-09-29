@@ -156,7 +156,7 @@ export default function DbaReviewHelp({
                 {t("在側欄的資料表上按右鍵 →")}
                 <Ui>{t("問 AI")}</Ui>→<Ui>{t("DBA 審查結構…")}</Ui>
               </>,
-              t("開啟後自動送出，預設由「資料模型架構師」審查。"),
+              t("開啟後自動送出，由預設的 DBA 人設審查（正式環境連線用正式環境的預設）。"),
             ]}
             sends={t("建表 DDL、欄位、索引、外鍵、列數與大小。")}
             onOpenTemplate={open}

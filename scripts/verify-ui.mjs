@@ -1854,7 +1854,8 @@ const CASES = {
     await page.getByRole("button", { name: /開啟 AI 資源庫/ }).first().click();
     await page.waitForFunction(() => document.body.innerText.includes("正式環境守門員"), null, { timeout: 8000 }).catch(() => {});
     let body = await page.locator("body").innerText();
-    check("資源庫列出內建 DBA 人設", body.includes("正式環境守門員") && body.includes("資料模型架構師"), body.replace(/\s+/g, " ").slice(0, 300));
+    check("資源庫列出內建 DBA 人設", body.includes("正式環境守門員") && body.includes("效能調校 DBA"), body.replace(/\s+/g, " ").slice(0, 300));
+    check("資料模型架構師、DBA 導師已不內建", !body.includes("資料模型架構師") && !body.includes("dba-mentor"));
     check("分頁排成組合流程並各附一句用途",
       body.includes("AI 扮演誰") && body.includes("附加的專業知識") && body.includes("每個 AI 動作的指令") && body.includes("送給 AI"));
     check("運作方式說明各功能用到哪些部分",
@@ -1871,6 +1872,22 @@ const CASES = {
     body = await page.locator("body").innerText();
     check("關掉教學後資源庫還在", !body.includes("從哪裡開始（三個入口）") && body.includes("AI 扮演誰"));
     check("人設分成 DBA 審查者 / 助手兩群，使用中的有標示", body.includes("DBA 審查者") && body.includes("使用中"));
+    // 人設列右鍵：直接設成預設 / 加入會審（寫進資源庫設定），不必繞去「來源與同步」。
+    await page.getByText("dba-security", { exact: true }).first().click({ button: "right" });
+    await sleep(200);
+    const pItems = await menuItems(page);
+    check("人設右鍵選單：設為預設 / 正式環境預設 / 會審",
+      ["設為 DBA 審查預設", "設為正式環境 DBA 審查預設", "移出多位 DBA 會審"].every((s) => pItems.some((i) => i.includes(s))), pItems.join(" | "));
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: "設為 DBA 審查預設" }).first().click();
+    await sleep(300);
+    const sets = await page.evaluate(() => window.__DBKIT_AI_SETTINGS_SET__);
+    check("點「設為 DBA 審查預設」寫進設定", sets.length === 1 && sets[0].dba_persona === "dba-security", JSON.stringify(sets));
+    await page.getByText("assistant", { exact: true }).first().click({ button: "right" });
+    await sleep(200);
+    check("助手人設的右鍵選單：設為 AI 助手人設", (await menuItems(page)).some((i) => i.includes("設為 AI 助手人設")));
+    // 不按 Esc（會連資源庫一起關掉）：點選單的背板收掉。
+    await page.locator(String.raw`div.fixed.inset-0.z-\[89\]`).last().click({ position: { x: 5, y: 5 } });
+    await sleep(150);
     // 從設定開的：資源庫疊在設定對話框上面，取最後一個 dialog。
     const lib = page.locator('[role="dialog"]').last();
     // 以前 shell 進場動畫用 forwards、終點的 transform 留在 shell 上，裡面再開的對話框會以外層 shell 為定位基準、
