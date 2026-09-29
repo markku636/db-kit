@@ -3705,6 +3705,13 @@ const en: Catalog = {
   "進階設定（SFTP、終端機）": "Advanced (SFTP, terminal)",
   "關閉其他分頁": "Close other tabs",
   "附帶終端機畫面": "Attach terminal screen",
+  "已啟用的技能：{list}（點擊勾選 / 編輯技能）": "Enabled skills: {list} (click to choose or edit skills)",
+  "沒有啟用技能（點擊勾選 / 編輯技能）": "No skills enabled (click to choose or edit skills)",
+  "已在助手對話啟用（點擊停用）": "Enabled in assistant chat (click to turn off)",
+  "在助手對話啟用": "Enable in assistant chat",
+  "在助手對話啟用 {name}": "Enable {name} in assistant chat",
+  "勾選的技能會附在助手對話的人設後面（已選 {n} 個）": "Checked skills are added after the assistant chat persona ({n} selected)",
+  "SSH 模式只套用自訂技能（內建技能都是資料庫的）": "SSH mode applies only custom skills (the built-in ones are all about databases)",
 };
 
 export default en;

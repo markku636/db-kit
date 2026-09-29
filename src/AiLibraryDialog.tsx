@@ -40,6 +40,7 @@ import {
   type LibrarySnapshot,
   type SyncPlan,
 } from "./aiLibrary";
+import { useAiSkills } from "./aiSkills";
 import { sampleVars, varLabel } from "./aiTaskVars";
 import { useT } from "./i18n";
 import { fieldBool, fieldList, fieldStr } from "./promptTemplate";
@@ -730,6 +731,10 @@ export default function AiLibraryDialog({
   const [tab, setTab] = useState<Tab>(initialTab);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<string | null>(initialName);
+  const activeSkills = useAiSkills((s) => s.selected);
+  const toggleSkill = useAiSkills((s) => s.toggle);
+  // 只數還存在的技能：勾選清單裡可能留著已刪除技能的名稱。
+  const activeCount = entriesOf("skill", snap).filter((e) => activeSkills.includes(e.name)).length;
 
   useEffect(() => {
     if (open) void loadAiLibrary();
@@ -789,32 +794,53 @@ export default function AiLibraryDialog({
                 <Button variant="ghost" size="sm" icon={RefreshCw} onClick={() => void loadAiLibrary()} title={t("重新載入")} />
               </div>
             )}
+            {kind === "skill" && (
+              <div className="text-[10px] text-fg/45 leading-relaxed px-0.5">
+                {t("勾選的技能會附在助手對話的人設後面（已選 {n} 個）", { n: activeCount })}
+              </div>
+            )}
           </div>
           <div className="flex-1 overflow-auto">
             {kind ? (
               list.map((e) => {
                 const iss = issuesOf(snap, e);
                 const role = e.kind === "agent" ? fieldStr(e.variants[""].fields, "dbkit-role") : null;
+                const active = e.kind === "skill" && activeSkills.includes(e.name);
                 return (
-                  <button
+                  <div
                     key={`${e.kind}:${e.name}`}
-                    type="button"
-                    onClick={() => setSel(e.name)}
-                    className={`w-full text-left px-3 py-2 border-b border-fg/5 ${current?.name === e.name ? "bg-accent/10" : "hover:bg-fg/5"}`}
+                    className={`flex items-stretch border-b border-fg/5 ${current?.name === e.name ? "bg-accent/10" : "hover:bg-fg/5"}`}
                   >
-                    <div className="flex items-center gap-1.5">
-                      {e.kind === "agent" && <Icon icon={role === "dba" ? Users : Bot} size={12} className="text-fg/45" />}
-                      <span className="text-[12px] text-fg/90 truncate">{entryTitle(e)}</span>
-                      {iss.some((i) => i.level !== "info") && <Icon icon={AlertTriangle} size={11} className="text-warning" />}
-                    </div>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <span className="font-mono text-[10px] text-fg/40 truncate">{e.name}</span>
-                      <Badge tone={layerTone(e.layer)} className="ml-auto">
-                        {e.layerLabel}
-                      </Badge>
-                      {e.shadowed.length > 0 && <Badge tone="warning">{t("覆蓋")}</Badge>}
-                    </div>
-                  </button>
+                    {/* 技能列前的勾選框 = 助手對話要不要附帶它；點其餘部分才是選取來編輯。 */}
+                    {e.kind === "skill" && (
+                      <label
+                        className="flex items-center pl-3 cursor-pointer"
+                        title={active ? t("已在助手對話啟用（點擊停用）") : t("在助手對話啟用")}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={active}
+                          onChange={() => toggleSkill(e.name)}
+                          aria-label={t("在助手對話啟用 {name}", { name: entryTitle(e) })}
+                          className="accent-blue-500"
+                        />
+                      </label>
+                    )}
+                    <button type="button" onClick={() => setSel(e.name)} className="flex-1 min-w-0 text-left px-3 py-2">
+                      <div className="flex items-center gap-1.5">
+                        {e.kind === "agent" && <Icon icon={role === "dba" ? Users : Bot} size={12} className="text-fg/45" />}
+                        <span className="text-[12px] text-fg/90 truncate">{entryTitle(e)}</span>
+                        {iss.some((i) => i.level !== "info") && <Icon icon={AlertTriangle} size={11} className="text-warning" />}
+                      </div>
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <span className="font-mono text-[10px] text-fg/40 truncate">{e.name}</span>
+                        <Badge tone={layerTone(e.layer)} className="ml-auto">
+                          {e.layerLabel}
+                        </Badge>
+                        {e.shadowed.length > 0 && <Badge tone="warning">{t("覆蓋")}</Badge>}
+                      </div>
+                    </button>
+                  </div>
                 );
               })
             ) : (

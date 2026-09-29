@@ -403,6 +403,11 @@ const CASES = {
   // 助手面板的 SSH 模式：停在終端機上時說明、建議、附帶內容都以主機為主，資料庫工具與內建技能收起來；
   // 切回資料庫分頁就恢復。面板最窄時選項列往下一行掉，標籤不能被擠成一字一行。
   async "assistant-ssh-mode"(page) {
+    // 勾一個內建技能：SSH 模式下它不算數（技能按鈕不帶數字），切回資料庫分頁才算。
+    await page.evaluate(() => localStorage.setItem("db-kit:aiSkillsOn", JSON.stringify(["sql-perf"])));
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#root");
+    await sleep(1200);
     await openSshWeb01(page);
     await page.getByRole("button", { name: "AI 助手", exact: true }).first().click();
     const opts = page.getByTestId("assistant-options");
@@ -413,10 +418,13 @@ const CASES = {
     check("SSH 模式：附帶的是終端機畫面、沒有資料庫工具", optText.includes("附帶終端機畫面") && !optText.includes("資料庫工具"), optText);
     check("SSH 模式：建議換成主機相關的", (await page.getByRole("button", { name: "檢查主機資源用量" }).count()) === 1
       && (await page.getByRole("button", { name: "最佳化一段 SQL" }).count()) === 0);
-    check("SSH 模式：內建（資料庫）技能不列", (await page.getByRole("button", { name: "SQL 效能診斷" }).count()) === 0);
+    const skillsBtn = opts.locator('button[title*="點擊勾選 / 編輯技能"]');
+    const skillsLabel = async () => (await skillsBtn.innerText()).replace(/\s+/g, "");
+    check("SSH 模式：勾著的內建（資料庫）技能不算數", (await skillsLabel()) === "技能"
+      && ((await skillsBtn.getAttribute("title")) ?? "").includes("SSH 模式只套用自訂技能"), await skillsLabel());
     // 每個選項都是單行（高度 < 26px）：流動排版往下掉，而不是把字壓扁。
     const tall = async () => opts.evaluate((el) =>
-      [...el.querySelectorAll("label, select, input:not([type=checkbox])")].map((x) => Math.round(x.getBoundingClientRect().height)).filter((h) => h >= 26));
+      [...el.querySelectorAll("label, select, input:not([type=checkbox]), button")].map((x) => Math.round(x.getBoundingClientRect().height)).filter((h) => h >= 26));
     check("面板最窄時選項沒有被擠成多行（SSH 模式）", (await tall()).length === 0, JSON.stringify(await tall()));
 
     await page.locator("[data-tab-bar]").getByText("查詢", { exact: true }).first().click();
@@ -424,7 +432,7 @@ const CASES = {
     const dbText = await opts.innerText();
     check("切回查詢分頁：資料庫工具回來、徽章消失", dbText.includes("資料庫工具") && (await badge.count()) === 0, dbText);
     check("切回查詢分頁：資料庫建議回來", (await page.getByRole("button", { name: "最佳化一段 SQL" }).count()) === 1);
-    check("切回查詢分頁：內建技能列回來", (await page.getByRole("button", { name: "SQL 效能診斷" }).count()) === 1);
+    check("切回查詢分頁：勾著的內建技能又算數", (await skillsLabel()) === "技能1", await skillsLabel());
     check("面板最窄時選項沒有被擠成多行（資料庫模式）", (await tall()).length === 0, JSON.stringify(await tall()));
   },
 
@@ -1400,6 +1408,35 @@ const CASES = {
     body = await page.locator("body").innerText();
     check("同步計畫列出新增與衝突", body.includes("dba-senior.md") && body.includes("衝突（略過）"));
     check("同步計畫附上 MCP 註冊提示", body.includes("claude mcp add dbkit"));
+  },
+
+  // 助手的技能收成工具列上的一顆按鈕（帶啟用數），點了才開 AI 資源庫的「技能」分頁：勾選框在列表上，
+  // 右側就是編輯器。以前八個技能平鋪在輸入區上方，佔掉兩三行。
+  async "assistant-skills-collapsed"(page) {
+    // shim 的資源庫是內建 fallback（active_skills = null），選取會沿用舊版的 localStorage 鍵。
+    await page.evaluate(() => localStorage.setItem("db-kit:aiSkillsOn", JSON.stringify(["sql-perf"])));
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#root");
+    await sleep(1200);
+    await page.getByRole("button", { name: "AI 助手" }).first().click();
+    await sleep(600);
+    const btn = page.locator('button[title*="點擊勾選 / 編輯技能"]');
+    check("助手工具列有技能按鈕", (await btn.count()) === 1);
+    const label = (await btn.first().innerText().catch(() => "")).replace(/\s+/g, "");
+    check("技能按鈕顯示啟用數", label === "技能1", label);
+    check("技能按鈕提示列出啟用的技能", ((await btn.first().getAttribute("title")) ?? "").includes("SQL 效能診斷"));
+    const panel = await page.locator("#root").innerText();
+    check("輸入區不再平鋪技能清單", !panel.includes("線上 DDL") && !panel.includes("鎖與併發風險"));
+    await btn.first().click();
+    await page.waitForFunction(() => document.body.innerText.includes("線上 DDL"), null, { timeout: 8000 }).catch(() => {});
+    const body = await page.locator("body").innerText();
+    check("點技能按鈕開啟 AI 資源庫的技能分頁", body.includes("AI 資源庫") && body.includes("線上 DDL") && body.includes("鎖與併發風險"),
+      body.replace(/\s+/g, " ").slice(0, 300));
+    check("技能分頁說明勾選的用途與數量", body.includes("已選 1 個"));
+    check("技能分頁右側就是編輯器", body.includes("技能內容（SKILL.md 本文）"));
+    const perf = page.getByRole("checkbox", { name: "在助手對話啟用 SQL 效能診斷" });
+    check("已啟用的技能勾選框是勾起的", (await perf.count()) === 1 && (await perf.isChecked()));
+    check("沒啟用的技能勾選框沒勾", !(await page.getByRole("checkbox", { name: "在助手對話啟用 線上 DDL" }).isChecked()));
   },
 
   async "compare-dialogs-open"(page) {

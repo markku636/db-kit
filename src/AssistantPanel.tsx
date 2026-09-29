@@ -11,7 +11,9 @@ import {
 import { useStore } from "./store";
 import { asAgentProvider, baseUrlOf, CLAUDE_MODELS, isApiProvider, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
 import { currentSystemPrompt, selectedCustomSkillIds, useAiSkills } from "./aiSkills";
+import { useAiLibrary } from "./aiLibrary";
 import AiSettingsDialog from "./AiSettingsDialog";
+import lazyOverlay from "./ui/lazyOverlay";
 import CliSetupHint from "./CliSetupHint";
 import { useTheme } from "./theme";
 import { resolveHighlightColors, type ThemeColors } from "./editorThemes";
@@ -19,7 +21,7 @@ import { useAssistant } from "./assistant";
 import { toast, copyToClipboard, pickSaveFile, uiConfirm, uiPrompt } from "./ui";
 import Icon from "./ui/Icon";
 import { IconButton } from "./ui/index";
-import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Settings2, Sparkles, Send, Square, Database, Play, ChevronDown, ChevronRight, GitBranch, ListFilter, AlertTriangle, MessageSquarePlus, MessagesSquare, Pencil } from "lucide-react";
+import { Folder, Download, Trash2, PanelRightClose, RefreshCw, Settings, Settings2, Sparkles, Send, Square, Database, Play, ChevronDown, ChevronRight, GitBranch, ListFilter, AlertTriangle, MessageSquarePlus, MessagesSquare, Pencil, Wand2 } from "lucide-react";
 import { useT, useLang } from "./i18n";
 import type { DbKind } from "./api";
 import type { ChatMsg, ChatRun, ChatRunResult, MentionChip, MentionRef } from "./chatTypes";
@@ -44,6 +46,8 @@ import { SquareTerminal } from "lucide-react";
 import type { ChatShellRun } from "./chatTypes";
 import { parseBlocks, TextBlock } from "./MarkdownLite";
 import { isProdConn } from "./api";
+
+const AiLibraryDialog = lazyOverlay(() => import("./AiLibraryDialog"));
 
 // 右側「AI 助手」面板：驅動本機 claude 或 codex CLI（皆用訂閱登入，不需 API key），
 // 串流回答問題與撰寫腳本。對標右側詳細資料面板的版面與主題用色。
@@ -111,9 +115,12 @@ export default function AssistantPanel() {
   const setModel = (v: string) => setModels(provider, v);
   const baseUrl = baseUrlOf(provider, baseUrls);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  // 技能收成輸入區上方的一顆按鈕：勾選 / 編輯都在 AI 資源庫的「技能」分頁（列表前的勾選框）。
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  // 訂閱資源庫快照：技能被新增 / 刪除 / 改名時按鈕上的數字與提示跟著更新（all() 讀的是它的即時快照）。
+  useAiLibrary((s) => s.snapshot);
   const skills = useAiSkills((s) => s.all());
   const selectedSkills = useAiSkills((s) => s.selected);
-  const toggleSkill = useAiSkills((s) => s.toggle);
   // SSH 模式：停在 SSH 終端機分頁上時，說明 / 建議 / 附帶內容都以這台主機為主；資料庫工具與內建技能
   // （全是資料庫的）收起來——除非這個終端機是從作用中那條連線的 tunnel 開的（見 assistantSshMode）。
   const sshMode = assistantSshMode(
@@ -122,8 +129,9 @@ export default function AssistantPanel() {
     useStore((s) => s.activeId),
   );
   const dbHidden = sshMode.on && !sshMode.related;
-  // 技能列：SSH 模式只列自訂技能（勾著的內建技能保留勾選，回到資料庫分頁照常生效）。
-  const shownSkills = dbHidden ? skills.filter((sk) => !sk.builtin) : skills;
+  // 技能按鈕上的數字 = 這次送出真的會套用的技能：SSH 模式只算自訂技能（勾著的內建技能保留勾選，
+  // 回到資料庫分頁照常生效）；也只數還存在的——勾選清單裡可能留著已刪除技能的名稱。
+  const activeSkills = (dbHidden ? skills.filter((sk) => !sk.builtin) : skills).filter((sk) => selectedSkills.includes(sk.id));
   /** 送出當下的 SSH 模式（讀即時狀態：send 可能在 render 之後才跑到這裡）。 */
   const dbHiddenNow = () => {
     const s = useStore.getState();
@@ -1220,6 +1228,20 @@ export default function AssistantPanel() {
               {t("資料庫工具")}
             </label>
           )}
+          <button type="button" onClick={() => setSkillsOpen(true)}
+            title={[
+              activeSkills.length > 0
+                ? t("已啟用的技能：{list}（點擊勾選 / 編輯技能）", { list: activeSkills.map((sk) => (sk.builtin ? t(sk.name) : sk.name)).join("、") })
+                : t("沒有啟用技能（點擊勾選 / 編輯技能）"),
+              dbHidden ? t("SSH 模式只套用自訂技能（內建技能都是資料庫的）") : "",
+            ].filter(Boolean).join("\n")}
+            className={`shrink-0 inline-flex items-center gap-1 whitespace-nowrap ${activeSkills.length > 0 ? "text-accent" : "hover:text-fg/80"}`}>
+            <Icon icon={Wand2} size={11} />
+            {t("技能")}
+            {activeSkills.length > 0 && (
+              <span className="min-w-[14px] px-1 rounded-full bg-accent/15 text-[10px] leading-[14px] text-center">{activeSkills.length}</span>
+            )}
+          </button>
           <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5">
           <select value={provider} onChange={(e) => setProvider(e.target.value as AgentProvider)}
             title={t("要用哪個供應商回答（CLI 走你的訂閱登入，API 走你自己的端點與金鑰）")}
@@ -1252,23 +1274,6 @@ export default function AssistantPanel() {
           </div>
         </div>
 
-        {shownSkills.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1">
-            <span className="text-[10px] text-fg/35 mr-0.5">{t("技能")}</span>
-            {shownSkills.map((sk) => {
-              const on = selectedSkills.includes(sk.id);
-              return (
-                <button key={sk.id} type="button" onClick={() => toggleSkill(sk.id)}
-                  title={sk.builtin ? t(sk.body) : sk.body}
-                  className={`px-1.5 py-0.5 rounded-full border text-[10px] ${
-                    on ? "border-accent/60 bg-accent/15 text-accent" : "border-fg/10 text-fg/45 hover:text-fg/70 hover:bg-fg/5"
-                  }`}>
-                  {sk.builtin ? t(sk.name) : sk.name}
-                </button>
-              );
-            })}
-          </div>
-        )}
         {/* 輸入框裡目前的 @ 提及：送出前就看得到「這則會帶什麼」，而不是送出後才知道。 */}
         {inputRefs.length > 0 && (
           <div className="flex flex-wrap items-center gap-1">
@@ -1352,6 +1357,7 @@ export default function AssistantPanel() {
       </div>
 
       {aiSettingsOpen && <AiSettingsDialog open onClose={() => setAiSettingsOpen(false)} />}
+      {skillsOpen && <AiLibraryDialog open initialTab="skill" onClose={() => setSkillsOpen(false)} />}
     </div>
   );
 }
