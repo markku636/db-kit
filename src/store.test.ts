@@ -338,3 +338,38 @@ describe("SSH 終端機分頁：第三種分頁與其他兩種的落點互動", 
     expect(s().activeTabKey).toBe("__query__");
   });
 });
+
+describe("closeAllTabsExcept — 分頁右鍵的「關閉其他 / 全部關閉」三種分頁一起算", () => {
+  beforeEach(() => {
+    useStore.setState({ tabs: [], activeTabKey: "__query__", queryTabs: ["__query__", "__query__:2"], sshTabs: [] });
+  });
+
+  it("在表分頁上關閉其他：查詢分頁與終端機也一起關", () => {
+    openTwoTables();
+    s().openSshTab({ target: { kind: "session", id: "h1" }, title: "a" });
+    s().closeAllTabsExcept("c1:db:t2");
+    expect(s().tabs.map((t) => t.key)).toEqual(["c1:db:t2"]);
+    expect(s().queryTabs).toEqual([]);
+    expect(s().sshTabs).toEqual([]);
+    expect(s().activeTabKey).toBe("c1:db:t2");
+  });
+
+  it("留下查詢分頁或終端機也行", () => {
+    openTwoTables();
+    const k1 = s().openSshTab({ target: { kind: "session", id: "h1" }, title: "a" });
+    s().closeAllTabsExcept("__query__:2");
+    expect([s().tabs.length, s().queryTabs, s().sshTabs.length, s().activeTabKey]).toEqual([0, ["__query__:2"], 0, "__query__:2"]);
+    s().openSshTab({ target: { kind: "session", id: "h2" }, title: "b" });
+    s().closeAllTabsExcept(s().sshTabs[0].key);
+    expect(s().queryTabs).toEqual([]);
+    expect(s().sshTabs.map((t) => t.target)).toEqual([{ kind: "session", id: "h2" }]);
+    expect(s().sshTabs[0].key).not.toBe(k1);
+  });
+
+  it("null = 全部關閉 → 沒有作用中分頁", () => {
+    openTwoTables();
+    s().openSshTab({ target: { kind: "session", id: "h1" }, title: "a" });
+    s().closeAllTabsExcept(null);
+    expect([s().tabs, s().queryTabs, s().sshTabs, s().activeTabKey]).toEqual([[], [], [], null]);
+  });
+});

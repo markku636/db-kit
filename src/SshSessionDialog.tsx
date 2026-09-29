@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { FolderOpen, SquareTerminal } from "lucide-react";
+import { ChevronDown, ChevronRight, FolderOpen, SquareTerminal } from "lucide-react";
 import { api, onSshAuthPrompt, onSshHostKeyPrompt } from "./api";
 import { pickOpenFile, toast } from "./ui";
-import { Modal, Field, Input, Button, Segmented, Select } from "./ui/index";
+import { Modal, Field, Input, Button, Icon, Segmented, Select } from "./ui/index";
 import { useT } from "./i18n";
 import { SshAuthPromptDialog, SshHostKeyDialog } from "./SshPrompts";
 import SshKeyPathField from "./SshKeyPathField";
@@ -92,6 +92,15 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
   // 存 options.ui（前端自己的設定，後端不解讀）。
   const [openSftp, setOpenSftp] = useState(init.next.openSftp);
   const [sftpDir, setSftpDir] = useState(init.next.sftpDir);
+  // 進階設定（SFTP、終端機）預設收起，常用欄位一個畫面就看得完；有任何非預設值（或從 sftp:// 字串來）就先展開，
+  // 免得設過的東西藏起來看不到。
+  const [advOpen, setAdvOpen] = useState(() =>
+    init.next.openSftp
+    || !!init.next.sftpDir
+    || !!base.options.startup_command
+    || (base.options.term || "xterm-256color") !== "xterm-256color"
+    || (base.options.keepalive_secs ?? 30) !== 30
+    || !!base.options.ui?.font_size);
   // 「已依連線字串填入」的提示；跳板機對不到已存主機時一併說明。
   const fillNotice = (r: ApplySshResult) => ({
     ok: !r.jumpMissing,
@@ -268,6 +277,7 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
     const f = r.next;
     setHost(f.host); setPort(f.port); setUsername(f.username); setAuth(f.auth); setPassword(f.password);
     setKeyPath(f.keyPath); setJumpId(f.jumpId); setOpenSftp(f.openSftp); setSftpDir(f.sftpDir);
+    if (f.openSftp || f.sftpDir) setAdvOpen(true); // 字串帶了 SFTP 設定：展開給使用者看見
     setFilled(fillNotice(r));
   };
 
@@ -302,9 +312,11 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
           </>
         }
       >
+        {/* 流動排版：一列放兩三個欄位，對話框窄時自動往下一行掉（各欄位有最小寬度）。
+            常用欄位一個畫面看得完；SFTP / 終端機設定收在「進階設定」。 */}
         {!editing && (
-          <div className="flex items-center gap-3 text-xs text-fg/45">
-            <span className="flex-1">{t("可在「主機」直接貼上 ssh://、sftp:// 或 ssh 指令（ssh -p 2222 user@host）")}</span>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg/45">
+            <span className="min-w-0 flex-1 basis-64">{t("可在「主機」直接貼上 ssh://、sftp:// 或 ssh 指令（ssh -p 2222 user@host）")}</span>
             {onImport && (
               <button type="button" onClick={onImport} className="shrink-0 text-accent hover:underline">
                 {t("從 ~/.ssh/config、.xsh 匯入…")}
@@ -312,26 +324,28 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
             )}
           </div>
         )}
-        <Field label={t("名稱")}>
-          <Input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={submitOnEnter}
-            onPaste={pasteInto(false)}
-            placeholder={t("留空＝使用者@主機")}
-          />
-        </Field>
-        <Field label={t("資料夾")}>
-          <Select value={folderId} onChange={(e) => setFolderId(e.target.value)}>
-            <option value="">{t("未分類")}</option>
-            {folders.map((f) => (
-              <option key={f.id} value={f.id}>{f.name}</option>
-            ))}
-          </Select>
-        </Field>
-        <div className="flex gap-3">
-          <Field label={t("主機")} className="flex-1" required>
+        <div className="flex flex-wrap gap-x-3 gap-y-3">
+          <Field label={t("名稱")} className="flex-[3] min-w-[14rem]">
+            <Input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={submitOnEnter}
+              onPaste={pasteInto(false)}
+              placeholder={t("留空＝使用者@主機")}
+            />
+          </Field>
+          <Field label={t("資料夾")} className="flex-[2] min-w-[10rem]">
+            <Select value={folderId} onChange={(e) => setFolderId(e.target.value)}>
+              <option value="">{t("未分類")}</option>
+              {folders.map((f) => (
+                <option key={f.id} value={f.id}>{f.name}</option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <div className="flex flex-wrap gap-x-3 gap-y-3">
+          <Field label={t("主機")} className="flex-1 min-w-[14rem]" required>
             <Input
               value={host}
               onChange={(e) => { setHost(e.target.value); setFilled(null); }}
@@ -346,18 +360,20 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
           </Field>
         </div>
         {filled && <div className={`text-xs ${filled.ok ? "text-success" : "text-warning"}`}>{filled.text}</div>}
-        <Field label={t("使用者")} required>
-          <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} placeholder="deploy" aria-label={t("使用者")} />
-        </Field>
-        <Field label={t("跳板機")} hint={t("先連上這台，再經由它連到上面的主機（ProxyJump）。跳板機要允許 TCP 轉送。")}>
-          <Select value={jumpId} onChange={(e) => setJumpId(e.target.value)} aria-label={t("跳板機")}>
-            <option value="">{t("不經跳板機（直連）")}</option>
-            {jumpChoices(allSessions, base.id).map((s) => (
-              <option key={s.id} value={s.id}>{sessionLabel(s)}{s.name ? `（${s.username}@${s.host}）` : ""}</option>
-            ))}
-            {jumpId && !allSessions.some((s) => s.id === jumpId) && <option value={jumpId}>{t("（已刪除的主機）")}</option>}
-          </Select>
-        </Field>
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-3">
+          <Field label={t("使用者")} className="flex-[2] min-w-[10rem]" required>
+            <Input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={submitOnEnter} placeholder="deploy" aria-label={t("使用者")} />
+          </Field>
+          <Field label={t("跳板機")} className="flex-[3] min-w-[14rem]" hint={t("先連上這台，再經由它連到目標主機（ProxyJump）。跳板機要允許 TCP 轉送。")}>
+            <Select value={jumpId} onChange={(e) => setJumpId(e.target.value)} aria-label={t("跳板機")}>
+              <option value="">{t("不經跳板機（直連）")}</option>
+              {jumpChoices(allSessions, base.id).map((s) => (
+                <option key={s.id} value={s.id}>{sessionLabel(s)}{s.name ? `（${s.username}@${s.host}）` : ""}</option>
+              ))}
+              {jumpId && !allSessions.some((s) => s.id === jumpId) && <option value={jumpId}>{t("（已刪除的主機）")}</option>}
+            </Select>
+          </Field>
+        </div>
         <Field label={t("認證方式")}>
           <Segmented
             full
@@ -421,48 +437,62 @@ export default function SshSessionDialog({ open, initial, folders, defaultFolder
           <div className="text-xs text-fg/50">{t("連線時依伺服器的提問逐項輸入（OTP / 二階段驗證常用）。")}</div>
         )}
 
-        <Section title="SFTP">
-          <Checkbox checked={openSftp} onChange={setOpenSftp} label={t("開啟時一併展開 SFTP 面板")} />
-          <Field label={t("SFTP 起始資料夾")} hint={t("留空＝家目錄；~/ 開頭＝家目錄底下")}>
-            <Input value={sftpDir} onChange={(e) => setSftpDir(e.target.value)} onKeyDown={submitOnEnter} className="mono" placeholder="~" aria-label={t("SFTP 起始資料夾")} />
-          </Field>
-        </Section>
+        <div className="border-t border-fg/10 pt-2">
+          <button type="button" onClick={() => setAdvOpen((v) => !v)} aria-expanded={advOpen}
+            className="flex items-center gap-1 text-xs font-medium text-fg/50 hover:text-fg/80">
+            <Icon icon={advOpen ? ChevronDown : ChevronRight} size={13} />
+            {t("進階設定（SFTP、終端機）")}
+          </button>
+        </div>
+        {advOpen && (
+          <>
+            <Section title="SFTP">
+              <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
+                <Field label={t("SFTP 起始資料夾")} className="flex-1 min-w-[14rem]" hint={t("留空＝家目錄；~/ 開頭＝家目錄底下")}>
+                  <Input value={sftpDir} onChange={(e) => setSftpDir(e.target.value)} onKeyDown={submitOnEnter} className="mono" placeholder="~" aria-label={t("SFTP 起始資料夾")} />
+                </Field>
+                {/* 與輸入框同一條基準線（Field 的提示字在下面，所以往上墊一點）。 */}
+                <div className="pb-6">
+                  <Checkbox checked={openSftp} onChange={setOpenSftp} label={t("開啟時一併展開 SFTP 面板")} />
+                </div>
+              </div>
+            </Section>
 
-        <Section title={t("終端機")}>
-          <Field label={t("啟動指令")} hint={t("連線成功後自動送出，例如 cd /var/www && ls")}>
-            <Input value={startupCommand} onChange={(e) => setStartupCommand(e.target.value)} onKeyDown={submitOnEnter} className="mono" />
-          </Field>
-          <div className="flex gap-3">
-            <Field label={t("終端類型")} className="flex-1">
-              <Select value={term} onChange={(e) => setTerm(e.target.value)}>
-                {TERM_TYPES.map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </Select>
-            </Field>
-            <Field label={t("編碼")} className="flex-1" hint={t("目前僅支援 UTF-8；非 UTF-8 主機請在遠端設定 locale")}>
-              <Select value="utf-8" disabled>
-                <option value="utf-8">UTF-8</option>
-              </Select>
-            </Field>
-          </div>
-          <div className="flex gap-3">
-            <Field label={t("Keepalive（秒）")} className="flex-1" hint={t("0＝停用")}>
-              <Input type="number" min={0} value={keepalive} onChange={(e) => setKeepalive(Number(e.target.value))} onKeyDown={submitOnEnter} />
-            </Field>
-            <Field label={t("字級覆寫")} className="flex-1" hint={t("留空＝跟隨 app 的程式碼字級")}>
-              <Input
-                type="number"
-                min={8}
-                max={40}
-                value={fontSize}
-                onChange={(e) => setFontSize(e.target.value)}
-                onKeyDown={submitOnEnter}
-                placeholder={t("跟隨 app")}
-              />
-            </Field>
-          </div>
-        </Section>
+            <Section title={t("終端機")}>
+              <Field label={t("啟動指令")} hint={t("連線成功後自動送出，例如 cd /var/www && ls")}>
+                <Input value={startupCommand} onChange={(e) => setStartupCommand(e.target.value)} onKeyDown={submitOnEnter} className="mono" />
+              </Field>
+              <div className="flex flex-wrap items-start gap-x-3 gap-y-3">
+                <Field label={t("終端類型")} className="flex-1 min-w-[9rem]">
+                  <Select value={term} onChange={(e) => setTerm(e.target.value)}>
+                    {TERM_TYPES.map((v) => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label={t("編碼")} className="flex-1 min-w-[9rem]" hint={t("目前僅支援 UTF-8；非 UTF-8 主機請在遠端設定 locale")}>
+                  <Select value="utf-8" disabled>
+                    <option value="utf-8">UTF-8</option>
+                  </Select>
+                </Field>
+                <Field label={t("Keepalive（秒）")} className="flex-1 min-w-[9rem]" hint={t("0＝停用")}>
+                  <Input type="number" min={0} value={keepalive} onChange={(e) => setKeepalive(Number(e.target.value))} onKeyDown={submitOnEnter} />
+                </Field>
+                <Field label={t("字級覆寫")} className="flex-1 min-w-[9rem]" hint={t("留空＝跟隨 app 的程式碼字級")}>
+                  <Input
+                    type="number"
+                    min={8}
+                    max={40}
+                    value={fontSize}
+                    onChange={(e) => setFontSize(e.target.value)}
+                    onKeyDown={submitOnEnter}
+                    placeholder={t("跟隨 app")}
+                  />
+                </Field>
+              </div>
+            </Section>
+          </>
+        )}
 
         {msg && <div className={`text-sm ${msg.ok ? "text-success" : "text-danger"}`}>{msg.text}</div>}
       </Modal>

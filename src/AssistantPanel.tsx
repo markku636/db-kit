@@ -10,7 +10,7 @@ import {
 } from "./api";
 import { useStore } from "./store";
 import { asAgentProvider, baseUrlOf, CLAUDE_MODELS, isApiProvider, PROVIDERS, providerMeta, useAiProvider } from "./aiProvider";
-import { currentSystemPrompt, useAiSkills } from "./aiSkills";
+import { currentSystemPrompt, selectedCustomSkillIds, useAiSkills } from "./aiSkills";
 import AiSettingsDialog from "./AiSettingsDialog";
 import CliSetupHint from "./CliSetupHint";
 import { useTheme } from "./theme";
@@ -38,7 +38,7 @@ import { isShellRun, persistableShellRun, SHELL_LANGS, normalizeShellCode, toCha
 import ChatSqlResult from "./ChatSqlResult";
 import ChatShellResult from "./ChatShellResult";
 import { classifyShell } from "./shellGuard";
-import { explainOutputAsk, sshTerminalGuidance, summarizeSessionAsk, type QuickAsk } from "./sshAiPrompts";
+import { assistantSshMode, explainOutputAsk, fixLastErrorAsk, sshTerminalGuidance, summarizeSessionAsk, type QuickAsk } from "./sshAiPrompts";
 import { activeSshTabKey, connectedSshTabKeys, useSshTerminals } from "./sshTerminals";
 import { SquareTerminal } from "lucide-react";
 import type { ChatShellRun } from "./chatTypes";
@@ -114,6 +114,22 @@ export default function AssistantPanel() {
   const skills = useAiSkills((s) => s.all());
   const selectedSkills = useAiSkills((s) => s.selected);
   const toggleSkill = useAiSkills((s) => s.toggle);
+  // SSH 模式：停在 SSH 終端機分頁上時，說明 / 建議 / 附帶內容都以這台主機為主；資料庫工具與內建技能
+  // （全是資料庫的）收起來——除非這個終端機是從作用中那條連線的 tunnel 開的（見 assistantSshMode）。
+  const sshMode = assistantSshMode(
+    useStore((s) => s.activeTabKey),
+    useAssistant((s) => s.terminal),
+    useStore((s) => s.activeId),
+  );
+  const dbHidden = sshMode.on && !sshMode.related;
+  // 技能列：SSH 模式只列自訂技能（勾著的內建技能保留勾選，回到資料庫分頁照常生效）。
+  const shownSkills = dbHidden ? skills.filter((sk) => !sk.builtin) : skills;
+  /** 送出當下的 SSH 模式（讀即時狀態：send 可能在 render 之後才跑到這裡）。 */
+  const dbHiddenNow = () => {
+    const s = useStore.getState();
+    const m = assistantSshMode(s.activeTabKey, useAssistant.getState().terminal, s.activeId);
+    return m.on && !m.related;
+  };
   const [width, setWidth] = useState<number>(() => {
     const v = Number(localStorage.getItem("db-kit:assistantWidth"));
     return v >= 300 && v <= 900 ? v : 384;
@@ -492,7 +508,9 @@ export default function AssistantPanel() {
     // 資料庫工具要附帶哪條連線（未連線 / 關閉時為 null，後端就不給工具）。
     // 也要看 status.db_tools：CLI 供應商找不到 dbk 時工具根本掛不上去，
     // 這時還跳一次「要讓 AI 查正式環境嗎」只是在問一件做不到的事。
-    const toolsUsable = dbToolsOn && !!status?.db_tools && turnMode !== "generate" && turnMode !== "edit";
+    // SSH 模式（終端機跟作用中連線無關）不給資料庫工具：模型會跑去查一個跟話題無關的庫。
+    const sshOnly = dbHiddenNow();
+    const toolsUsable = dbToolsOn && !sshOnly && !!status?.db_tools && turnMode !== "generate" && turnMode !== "edit";
     let target = toolsUsable ? dbTarget(useStore.getState()) : null;
     // 正式環境連線：第一次要讓助手能對它下查詢時先問一聲。工具雖是唯讀，
     // 但「模型自己決定跑什麼」與「使用者自己按執行」是兩件事，正式庫上值得多一道確認。
@@ -600,7 +618,7 @@ export default function AssistantPanel() {
         // 有 SSH 終端機開著就附上「你沒有 shell、只能建議」那段守則（四種供應商都吃 systemPrompt；
         // Codex 是前置到 prompt，效果相同）。一次性 generate 回合（/shell）也要，它決定輸出格式。
         systemPrompt: [
-          currentSystemPrompt(turnMode === "advise" || turnMode === "agent"),
+          currentSystemPrompt(turnMode === "advise" || turnMode === "agent", sshOnly ? selectedCustomSkillIds() : undefined),
           mentionEnv().terminalOpen ? sshTerminalGuidance() : "",
         ].filter(Boolean).join("\n\n"),
         connectionId: target?.connectionId ?? null,
@@ -1066,7 +1084,14 @@ export default function AssistantPanel() {
         className="absolute left-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent/40 z-10" />
       <div className="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-fg/10">
         <Icon icon={Sparkles} size={14} className="text-accent shrink-0" />
-        <span className="text-xs text-fg/45 uppercase tracking-wide">{t("AI 助手")}</span>
+        <span className="text-xs text-fg/45 uppercase tracking-wide shrink-0">{t("AI 助手")}</span>
+        {sshMode.on && (
+          <span className="min-w-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300"
+            title={t("正在看 SSH 終端機：建議與附帶內容都以這台主機為主")}>
+            <Icon icon={SquareTerminal} size={11} className="shrink-0" />
+            <span className="truncate">{sshMode.label}</span>
+          </span>
+        )}
         {sessionIdRef.current && <span className="text-[10px] text-fg/30">{t("· 對話中")}</span>}
         <div className="ml-auto flex items-center gap-1">
           <IconButton icon={MessageSquarePlus} label={t("開新對話（目前這串會留在清單裡）")} box="w-6 h-6"
@@ -1173,25 +1198,32 @@ export default function AssistantPanel() {
         <div onMouseDown={startInputResize} onDoubleClick={() => setInputH(0)}
           title={t("拖曳調整輸入區高度（雙擊還原自動高度）")}
           className="absolute left-0 -top-0.5 w-full h-1.5 cursor-row-resize hover:bg-accent/40 z-10" />
-        <div className="flex items-center gap-2 text-[11px] text-fg/50">
-          <label className="flex items-center gap-1 cursor-pointer select-none"
-            title={termOpen ? t("送出時附帶目前連線 / 資料表結構，以及作用中的 SSH 終端機畫面") : t("送出時附帶目前連線 / 選取資料表的結構")}>
+        {/* 流動排版：面板窄時整組往下一行掉（以前擠在同一行，標籤被壓成一字一行）。
+            左邊是「附帶什麼」，右邊一組是供應商 / 模式 / 模型，各自不拆字。 */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-fg/50" data-testid="assistant-options">
+          <label className="flex items-center gap-1 cursor-pointer select-none whitespace-nowrap"
+            title={sshMode.on
+              ? t("送出時附帶作用中 SSH 終端機的畫面（最近的輸出、目前目錄、最近一次指令）")
+              : termOpen ? t("送出時附帶目前連線 / 資料表結構，以及作用中的 SSH 終端機畫面") : t("送出時附帶目前連線 / 選取資料表的結構")}>
             <input type="checkbox" checked={ctxOn} onChange={(e) => setCtxOn(e.target.checked)} className="accent-blue-500" />
             {termOpen && <Icon icon={SquareTerminal} size={11} />}
-            {termOpen ? t("附帶目前環境") : t("附帶資料庫內容")}
+            {sshMode.on && !sshMode.related ? t("附帶終端機畫面") : termOpen ? t("附帶目前環境") : t("附帶資料庫內容")}
           </label>
-          <label className={`flex items-center gap-1 select-none ${dbToolsReady ? "cursor-pointer" : "opacity-40 cursor-not-allowed"}`}
-            title={dbToolsReady
-              ? t("讓助手自己對目前連線下唯讀查詢（列表 / 看結構 / 取樣 / SELECT）。它跑了哪些查詢會顯示在回應裡。")
-              : t("需要 dbk 執行檔才能讓 CLI 供應商使用資料庫工具；可改用 API 供應商，或設定 DB_KIT_DBK_BIN。")}>
-            <input type="checkbox" checked={dbToolsOn && dbToolsReady} disabled={!dbToolsReady}
-              onChange={(e) => setDbToolsOn(e.target.checked)} className="accent-blue-500" />
-            <Icon icon={Database} size={11} />
-            {t("資料庫工具")}
-          </label>
+          {!dbHidden && (
+            <label className={`flex items-center gap-1 select-none whitespace-nowrap ${dbToolsReady ? "cursor-pointer" : "opacity-40 cursor-not-allowed"}`}
+              title={dbToolsReady
+                ? t("讓助手自己對目前連線下唯讀查詢（列表 / 看結構 / 取樣 / SELECT）。它跑了哪些查詢會顯示在回應裡。")
+                : t("需要 dbk 執行檔才能讓 CLI 供應商使用資料庫工具；可改用 API 供應商，或設定 DB_KIT_DBK_BIN。")}>
+              <input type="checkbox" checked={dbToolsOn && dbToolsReady} disabled={!dbToolsReady}
+                onChange={(e) => setDbToolsOn(e.target.checked)} className="accent-blue-500" />
+              <Icon icon={Database} size={11} />
+              {t("資料庫工具")}
+            </label>
+          )}
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5">
           <select value={provider} onChange={(e) => setProvider(e.target.value as AgentProvider)}
             title={t("要用哪個供應商回答（CLI 走你的訂閱登入，API 走你自己的端點與金鑰）")}
-            className="ml-auto bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70">
+            className="bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/70">
             {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
           <select value={mode} onChange={(e) => setMode(e.target.value as AgentMode)}
@@ -1217,12 +1249,13 @@ export default function AssistantPanel() {
             className="shrink-0 text-fg/45 hover:text-fg/80">
             <Icon icon={Settings2} size={13} />
           </button>
+          </div>
         </div>
 
-        {skills.length > 0 && (
+        {shownSkills.length > 0 && (
           <div className="flex flex-wrap items-center gap-1">
             <span className="text-[10px] text-fg/35 mr-0.5">{t("技能")}</span>
-            {skills.map((sk) => {
+            {shownSkills.map((sk) => {
               const on = selectedSkills.includes(sk.id);
               return (
                 <button key={sk.id} type="button" onClick={() => toggleSkill(sk.id)}
@@ -1303,7 +1336,9 @@ export default function AssistantPanel() {
               }
             }}
             rows={2}
-            placeholder={t("輸入問題，@ 附帶資料表、/ 用指令，Enter 送出、Shift+Enter 換行")}
+            placeholder={sshMode.on && !sshMode.related
+              ? t("問這台主機的事，@output 附帶指令輸出、/ 用指令，Enter 送出、Shift+Enter 換行")
+              : t("輸入問題，@ 附帶資料表、/ 用指令，Enter 送出、Shift+Enter 換行")}
             className="flex-1 resize-none bg-inset border border-fg/10 rounded px-2 py-1.5 text-fg/90 placeholder:text-fg/30 outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 min-h-[2.5rem] overflow-auto"
           />
           {streaming ? (
@@ -1337,26 +1372,45 @@ function EmptyState({ onPick, onFill, onAsk, disabled }: {
   const termActive = !!term && term.tabKey === activeTabKey;
 
   const quick: { label: string; prompt: string; fill?: boolean; ask?: QuickAsk }[] = [];
+  // SSH 模式（停在終端機上、終端機跟作用中連線無關）：整組換成主機相關的建議，資料庫的不列。
+  const sshOnly = termActive && !!term && !(term.connId && term.connId === conn?.id);
   if (termActive && term) {
     quick.push({ label: t("解釋目前終端機畫面"), prompt: "", ask: explainOutputAsk(term, null) });
+    const fix = fixLastErrorAsk(term);
+    if (fix) quick.push({ label: t("修正最近一次指令的錯誤"), prompt: "", ask: fix });
     quick.push({ label: t("摘要這個 session"), prompt: "", ask: summarizeSessionAsk(term) });
   }
-  if (node?.type === "table") {
+  if (sshOnly) {
+    quick.push({ label: t("檢查主機資源用量"), prompt: t("幫我寫一組指令，檢查這台主機的 CPU、記憶體、磁碟用量與負載，並說明怎麼判讀結果。") });
+    quick.push({ label: t("找出佔空間最多的目錄"), prompt: t("幫我找出這台主機上佔用磁碟空間最多的目錄與檔案（排除 /proc、/sys 這類虛擬檔案系統），列出前 20 名。") });
+    quick.push({ label: t("查看最近的錯誤日誌"), prompt: t("幫我寫指令查看這台主機最近一小時的系統錯誤日誌（systemd journal 或 /var/log），並說明怎麼縮小範圍。") });
+    quick.push({ label: t("寫一個 Shell 腳本"), prompt: t("幫我寫一個 Bash 腳本：\n\n"), fill: true });
+  } else if (node?.type === "table") {
     quick.push({ label: t("解釋資料表 {table}", { table: node.table }), prompt: t("請解釋資料表 {db}.{table} 的用途，以及每個欄位代表什麼。", { db: node.db, table: node.table }) });
     quick.push({ label: t("為 {table} 寫常用查詢", { table: node.table }), prompt: t("針對資料表 {db}.{table}，寫出 5 個實用的 SQL 查詢，每個都加上中文註解說明用途。", { db: node.db, table: node.table }) });
   } else if (conn) {
     quick.push({ label: t("從哪開始探索這個資料庫"), prompt: t("我想了解目前連線的這個資料庫，建議我從哪些資料表 / 查詢開始探索？") });
   }
-  quick.push({ label: t("最佳化一段 SQL"), prompt: t("幫我最佳化這段 SQL（保留語意、說明改了什麼）：\n\n"), fill: true });
-  quick.push({ label: t("寫一個備份腳本"), prompt: t("幫我寫一個可重複執行的資料庫備份腳本，並說明怎麼設定排程。") });
+  if (!sshOnly) {
+    quick.push({ label: t("最佳化一段 SQL"), prompt: t("幫我最佳化這段 SQL（保留語意、說明改了什麼）：\n\n"), fill: true });
+    quick.push({ label: t("寫一個備份腳本"), prompt: t("幫我寫一個可重複執行的資料庫備份腳本，並說明怎麼設定排程。") });
+  }
 
   return (
     <div className="text-fg/40 text-xs leading-relaxed p-1 space-y-3">
-      <div>
-        {t("問我問題或請我撰寫腳本（SQL / Shell / Python…）。")}
-        <br />{t("勾選「附帶資料庫內容」時，我會看到你目前選取的連線與資料表結構，寫出貼合的查詢。")}
-        <br />{t("程式碼區塊可一鍵「複製 / 另存」，SQL 還能「貼到查詢編輯器」。")}
-      </div>
+      {sshOnly ? (
+        <div>
+          {t("問我這台主機的事，或請我寫 Shell 指令 / 腳本。")}
+          <br />{t("勾選「附帶終端機畫面」時，我會看到這個終端機最近的輸出、目前目錄與最近一次指令。")}
+          <br />{t("指令區塊可一鍵「送到終端機」——放進指令列，由你確認後才執行。")}
+        </div>
+      ) : (
+        <div>
+          {t("問我問題或請我撰寫腳本（SQL / Shell / Python…）。")}
+          <br />{t("勾選「附帶資料庫內容」時，我會看到你目前選取的連線與資料表結構，寫出貼合的查詢。")}
+          <br />{t("程式碼區塊可一鍵「複製 / 另存」，SQL 還能「貼到查詢編輯器」。")}
+        </div>
+      )}
       <div className="flex flex-wrap gap-1.5">
         {quick.map((q) => (
           <button

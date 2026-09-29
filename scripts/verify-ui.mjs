@@ -58,6 +58,10 @@ const CASE_FX = {
   "ssh-from-conn-string": { STORAGE_SEED: SSH_STORAGE_SEED, SSH_SESSIONS: { version: 1, folders: [], sessions: [] } },
   "ssh-host-paste": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-host-quick-actions": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ssh-host-dialog-fits": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "tab-menu-close-others": { STORAGE_SEED: SSH_STORAGE_SEED },
+  // 助手面板開到最窄（300px）：選項列要往下一行掉，不能把標籤擠成一字一行。
+  "assistant-ssh-mode": { STORAGE_SEED: { ...SSH_STORAGE_SEED, "db-kit:assistantWidth": 300 } },
   // 同一個情境換成預設的渲染器（WebGL，開不起來才退回 DOM）：issue #7 的使用者用的就是預設值。
   "ssh-disconnect-overlay-webgl": {},
 };
@@ -335,6 +339,93 @@ const CASES = {
     await paste("ssh -J nobody@nowhere a@b");
     await sleep(200);
     check("跳板機對不到已存主機時說明", (await page.getByText("找不到跳板機「nobody@nowhere」", { exact: false }).count()) > 0);
+  },
+
+  // SSH 主機對話框：常用欄位一個畫面看得完（不必捲動）；SFTP / 終端機設定收在「進階設定」。
+  async "ssh-host-dialog-fits"(page) {
+    const tree = page.locator("[data-ssh-host-tree]");
+    await tree.getByText("web-01", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    await tree.getByRole("button", { name: "新增 SSH 主機", exact: true }).first().click();
+    await page.getByLabel("主機", { exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+    const body = () => page.evaluate(() => {
+      const b = document.querySelector('[role="dialog"]')?.children[1];
+      return b ? { scroll: b.scrollHeight, client: b.clientHeight } : null;
+    });
+    const m = await body();
+    check("新增 SSH 主機對話框不必捲動", !!m && m.scroll <= m.client + 1, JSON.stringify(m));
+    check("進階設定預設收起", (await page.getByLabel("SFTP 起始資料夾", { exact: true }).count()) === 0);
+    await page.getByRole("button", { name: "進階設定（SFTP、終端機）" }).click();
+    check("展開進階設定看得到 SFTP 與終端機設定",
+      (await page.getByLabel("SFTP 起始資料夾", { exact: true }).count()) === 1 && (await page.getByText("啟動指令", { exact: true }).count()) === 1);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+    // 編輯一台全是預設值的主機：進階設定維持收起（有非預設值才自己展開，見 ssh-from-conn-string 的 sftp:// 主機）。
+    await tree.getByText("web-01", { exact: true }).first().click({ button: "right" });
+    await sleep(150);
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: "編輯…" }).first().click();
+    await page.getByLabel("主機", { exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+    check("預設值的主機編輯時進階設定仍收起", (await page.getByLabel("SFTP 起始資料夾", { exact: true }).count()) === 0);
+  },
+
+  // 分頁右鍵的「關閉其他 / 全部關閉」：表、查詢、終端機三種分頁一起算（以前只關表分頁 = 按了沒反應）。
+  async "tab-menu-close-others"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click();
+    await sleep(700);
+    await page.getByText("資料表", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="orders"]', { timeout: 8000 }).catch(() => {});
+    await page.locator('[data-tree-table="orders"]').first().click();
+    await sleep(600);
+    await openSshWeb01(page);
+    const bar = page.locator("[data-tab-bar]");
+    const tabTexts = async () => (await bar.innerText()).replace(/\s+/g, " ");
+    const before = await tabTexts();
+    check("三種分頁都開著", /orders/.test(before) && before.includes("查詢") && before.includes("web-01"), before);
+    await bar.getByText(/orders/).first().click({ button: "right" });
+    await sleep(200);
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: /^關閉其他$/ }).first().click();
+    await sleep(500);
+    const after = await tabTexts();
+    check("表分頁的「關閉其他」連查詢與終端機一起關", /orders/.test(after) && !after.includes("查詢") && !after.includes("web-01") && (await page.locator(".xterm").count()) === 0, after);
+    await page.getByRole("button", { name: "新增查詢分頁", exact: true }).click();
+    await sleep(300);
+    await bar.getByText("查詢", { exact: true }).first().click({ button: "right" });
+    await sleep(200);
+    const items = await menuItems(page);
+    check("查詢分頁右鍵也有三種一起算的「全部關閉」", items.includes("全部關閉"), items.join(" | "));
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: /^全部關閉$/ }).first().click();
+    await sleep(500);
+    const none = await tabTexts();
+    check("全部關閉 → 一個分頁都不剩", !/orders/.test(none) && !none.includes("查詢"), none);
+  },
+
+  // 助手面板的 SSH 模式：停在終端機上時說明、建議、附帶內容都以主機為主，資料庫工具與內建技能收起來；
+  // 切回資料庫分頁就恢復。面板最窄時選項列往下一行掉，標籤不能被擠成一字一行。
+  async "assistant-ssh-mode"(page) {
+    await openSshWeb01(page);
+    await page.getByRole("button", { name: "AI 助手", exact: true }).first().click();
+    const opts = page.getByTestId("assistant-options");
+    await opts.waitFor({ timeout: 5000 }).catch(() => {});
+    const badge = page.getByTitle("正在看 SSH 終端機：建議與附帶內容都以這台主機為主");
+    check("標題列標出正在看哪台主機", (await badge.count()) === 1 && (await badge.innerText()).includes("web-01"));
+    const optText = await opts.innerText();
+    check("SSH 模式：附帶的是終端機畫面、沒有資料庫工具", optText.includes("附帶終端機畫面") && !optText.includes("資料庫工具"), optText);
+    check("SSH 模式：建議換成主機相關的", (await page.getByRole("button", { name: "檢查主機資源用量" }).count()) === 1
+      && (await page.getByRole("button", { name: "最佳化一段 SQL" }).count()) === 0);
+    check("SSH 模式：內建（資料庫）技能不列", (await page.getByRole("button", { name: "SQL 效能診斷" }).count()) === 0);
+    // 每個選項都是單行（高度 < 26px）：流動排版往下掉，而不是把字壓扁。
+    const tall = async () => opts.evaluate((el) =>
+      [...el.querySelectorAll("label, select, input:not([type=checkbox])")].map((x) => Math.round(x.getBoundingClientRect().height)).filter((h) => h >= 26));
+    check("面板最窄時選項沒有被擠成多行（SSH 模式）", (await tall()).length === 0, JSON.stringify(await tall()));
+
+    await page.locator("[data-tab-bar]").getByText("查詢", { exact: true }).first().click();
+    await sleep(500);
+    const dbText = await opts.innerText();
+    check("切回查詢分頁：資料庫工具回來、徽章消失", dbText.includes("資料庫工具") && (await badge.count()) === 0, dbText);
+    check("切回查詢分頁：資料庫建議回來", (await page.getByRole("button", { name: "最佳化一段 SQL" }).count()) === 1);
+    check("切回查詢分頁：內建技能列回來", (await page.getByRole("button", { name: "SQL 效能診斷" }).count()) === 1);
+    check("面板最窄時選項沒有被擠成多行（資料庫模式）", (await tall()).length === 0, JSON.stringify(await tall()));
   },
 
   // 側欄主機列：沒連線是灰的、連上亮起；滑過有快速按鈕，已連線時按 SFTP 是切回那個分頁、不另開連線。
@@ -618,7 +709,8 @@ const CASES = {
     await openSshWeb01(page);
     await page.getByRole("button", { name: "AI 助手" }).first().click();
     await sleep(600);
-    const input = page.getByPlaceholder(/輸入問題/).first();
+    // 停在終端機上：助手是 SSH 模式，輸入框提示也換成問主機的。
+    const input = page.getByPlaceholder(/問這台主機的事/).first();
     check("AI 面板有輸入框", (await input.count()) > 0);
     await input.fill("列出 nginx 狀態");
     await input.press("Enter");

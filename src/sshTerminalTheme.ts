@@ -1,7 +1,9 @@
 import type { ITheme } from "@xterm/xterm";
 import type { EditorThemeDef } from "./editorThemes";
+import { SURFACE_STEPS } from "./themeSurfaces";
 
 // xterm 主題由 app 變體（editorThemes）推導，跟隨 useTheme 切換，不另外維護一套終端配色。
+// 底色取 app 表面（--c-app），不是 colors.bg：後者是最深的 well 階，終端機會比四周與查詢編輯器暗一截。
 // 只 `import type`：這支被純邏輯測試載入，不能把 xterm 本體拖進來。
 // 所有 hex 處理都走 parseHex 做退路——主題定義是人手抄的，一個打錯的色值不該讓終端機開不起來。
 
@@ -96,7 +98,8 @@ const FALLBACK_DEF: EditorThemeDef = {
 
 /**
  * app 變體 → xterm ITheme。def 為空（主題 id 對不上）就用內建深色預設，呼叫端可直接餵 getEditorThemeDef(id)。
- * - bg / fg / caret → background / foreground / cursor；selection 加 40% alpha 當選取底色。
+ * - background = app 表面（mix(colors.bg → app.top, SURFACE_STEPS.app)，與 --c-app / 查詢編輯器同色）；
+ *   fg / caret → foreground / cursor；selection 加 40% alpha 當選取底色。
  * - ANSI 16 色：black=activeLine、red=danger、green=success、yellow=warning、blue=number、
  *   magenta=keyword、cyan=info、white=fg；bright 系列深色主題往白提 15%、淺色主題往黑壓 10%。
  *   white=fg 的用意是「程式印白字時在淺色主題仍看得到」（多數 CLI 假設深底），代價是淺色主題下
@@ -111,7 +114,8 @@ export function xtermThemeFor(def: EditorThemeDef | null | undefined): ITheme {
     return p ? toHex(p) : fallback;
   };
   const bright = (c: string) => (dark ? lightenHex(c, 0.15) : darkenHex(c, 0.1));
-  const bg = norm(colors.bg, fbBg);
+  const well = norm(colors.bg, fbBg);
+  const bg = mixHex(well, norm(app.top, well), SURFACE_STEPS.app);
   const fg = norm(colors.fg, fbFg);
   const base = {
     black: norm(colors.activeLine, dark ? "#444444" : "#bbbbbb"),

@@ -3,6 +3,7 @@ import type { Extension } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 // 別名為 tg 而非 t：i18n 的翻譯函式叫 t()，同名會在頂層互相遮蔽。
 import { tags as tg } from "@lezer/highlight";
+import { SURFACE_STEPS } from "./themeSurfaces";
 
 // 編輯器語法高亮主題。配色由本機 Notepad++ theme XML
 // （GlobalStyles + SQL lexer 色值，規劃期一次抽取定稿）取樣，名稱一律採寶石系。
@@ -226,8 +227,9 @@ function relLuminance(hex: string): number {
 // on-accent 依 accent 亮度自動取對比（修「亮 accent + 白字」問題）。
 export function buildAppVars(def: EditorThemeDef): Record<string, string> {
   const { colors, app } = def;
-  const steps = [0, 0.22, 0.42, 0.6, 0.8, 1].map((item) => mixHex(colors.bg, app.top, item));
-  const [well, inset, appc, panel, bar, elevated] = steps;
+  const [well, inset, appc, panel, bar, elevated] = (
+    [SURFACE_STEPS.well, SURFACE_STEPS.inset, SURFACE_STEPS.app, SURFACE_STEPS.panel, SURFACE_STEPS.bar, SURFACE_STEPS.elevated]
+  ).map((item) => mixHex(colors.bg, app.top, item));
   // 實心 accent 上的文字：選與 accent 對比較高者（避免亮 accent 配白字看不清，如紫 #9580FF）。
   const contrast = (bg: string, fg: string) => {
     const a = relLuminance(bg) + 0.05;

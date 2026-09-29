@@ -3486,7 +3486,7 @@ const en: Catalog = {
   // ---- 跳板機 ----
   "{n} 台的跳板機（ProxyJump）找不到對應的主機，請到主機設定選擇：{names}": "No matching host for the jump host (ProxyJump) of {n} imported hosts; pick one in their host settings: {names}",
   "不經跳板機（直連）": "No jump host (connect directly)",
-  "先連上這台，再經由它連到上面的主機（ProxyJump）。跳板機要允許 TCP 轉送。": "Connect to this host first, then reach the host above through it (ProxyJump). The jump host must allow TCP forwarding.",
+  "先連上這台，再經由它連到目標主機（ProxyJump）。跳板機要允許 TCP 轉送。": "Connect to this host first, then reach the target host through it (ProxyJump). The jump host must allow TCP forwarding.",
   "經 {via}": "via {via}",
   "跳板機": "Jump host",
   "（已刪除的主機）": "(deleted host)",
@@ -3688,6 +3688,23 @@ const en: Catalog = {
   "遠端主機": "Remote hosts",
   "開啟時一併展開 SFTP 面板": "Open the SFTP panel when connecting",
   "開啟終端機": "Open terminal",
+  "勾選「附帶終端機畫面」時，我會看到這個終端機最近的輸出、目前目錄與最近一次指令。": "With \"Attach terminal screen\" checked, I can see this terminal's recent output, current directory and last command.",
+  "問我這台主機的事，或請我寫 Shell 指令 / 腳本。": "Ask me about this host, or have me write shell commands / scripts.",
+  "問這台主機的事，@output 附帶指令輸出、/ 用指令，Enter 送出、Shift+Enter 換行": "Ask about this host, @output attaches command output, / for commands, Enter to send, Shift+Enter for a new line",
+  "寫一個 Shell 腳本": "Write a shell script",
+  "幫我寫一個 Bash 腳本：\n\n": "Write me a Bash script:\n\n",
+  "幫我寫一組指令，檢查這台主機的 CPU、記憶體、磁碟用量與負載，並說明怎麼判讀結果。": "Write me a set of commands to check this host's CPU, memory, disk usage and load, and explain how to read the results.",
+  "幫我寫指令查看這台主機最近一小時的系統錯誤日誌（systemd journal 或 /var/log），並說明怎麼縮小範圍。": "Write me commands to view this host's system error logs from the last hour (systemd journal or /var/log), and explain how to narrow them down.",
+  "幫我找出這台主機上佔用磁碟空間最多的目錄與檔案（排除 /proc、/sys 這類虛擬檔案系統），列出前 20 名。": "Find the directories and files taking up the most disk space on this host (excluding virtual file systems like /proc and /sys) and list the top 20.",
+  "找出佔空間最多的目錄": "Find the largest directories",
+  "指令區塊可一鍵「送到終端機」——放進指令列，由你確認後才執行。": "Command blocks have a one-click \"Send to terminal\" — it goes into the command bar and runs only after you confirm.",
+  "查看最近的錯誤日誌": "View recent error logs",
+  "檢查主機資源用量": "Check resource usage",
+  "正在看 SSH 終端機：建議與附帶內容都以這台主機為主": "Looking at an SSH terminal: suggestions and attached context focus on this host",
+  "送出時附帶作用中 SSH 終端機的畫面（最近的輸出、目前目錄、最近一次指令）": "Attach the active SSH terminal's screen when sending (recent output, current directory, last command)",
+  "進階設定（SFTP、終端機）": "Advanced (SFTP, terminal)",
+  "關閉其他分頁": "Close other tabs",
+  "附帶終端機畫面": "Attach terminal screen",
 };
 
 export default en;

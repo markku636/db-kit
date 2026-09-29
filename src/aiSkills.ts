@@ -127,10 +127,18 @@ export function assistantPersonaName(): string {
  * 組出要送給模型的系統提示詞（助手人設 + 勾選的技能）。
  *
  * 一次性模式（NL→SQL、編輯器改寫）只吃人設不吃技能：技能是給對話用的工作方式，
- * 套在「只回一句 SQL」的情境會把輸出帶偏。
+ * 套在「只回一句 SQL」的情境會把輸出帶偏。skillIds 給了就用它取代勾選清單
+ * （助手在 SSH 模式下只套自訂技能——內建技能全是資料庫的）。
  */
-export function currentSystemPrompt(withSkills = true): string {
-  return personaSystemPrompt(assistantPersonaName(), { extraSkills: withSkills ? useAiSkills.getState().selected : [] });
+export function currentSystemPrompt(withSkills = true, skillIds?: readonly string[]): string {
+  return personaSystemPrompt(assistantPersonaName(), { extraSkills: withSkills ? skillIds ?? useAiSkills.getState().selected : [] });
+}
+
+/** 勾選中的技能去掉內建的（內建技能全是資料庫審查的工作方式；SSH 模式用）。 */
+export function selectedCustomSkillIds(): string[] {
+  const st = useAiSkills.getState();
+  const builtin = new Set(st.all().filter((s) => s.builtin).map((s) => s.id));
+  return st.selected.filter((id) => !builtin.has(id));
 }
 
 /** 助手人設的候選（資源庫裡 dbkit-role: assistant 的人設）。 */

@@ -121,6 +121,11 @@ interface AppStore {
   closeTab: (key: string) => void;
   closeOtherTabs: (key: string) => void;
   closeAllTabs: () => void;
+  /**
+   * 分頁右鍵的「關閉其他 / 全部關閉」：表、查詢、SSH 三種分頁一起算，只留 key（null = 全部關掉）。
+   * 上面兩支只動表分頁，查詢分頁與終端機會留著——從使用者看就是「按了沒反應」。
+   */
+  closeAllTabsExcept: (key: string | null) => void;
   setActiveTab: (key: string) => void;
   // 多查詢分頁：新增一個查詢分頁並切過去 / 關閉某查詢分頁（任一皆可關，含第一個 home 分頁）。
   addQueryTab: () => void;
@@ -292,6 +297,14 @@ export const useStore = create<AppStore>((set) => ({
       return { tabs, activeTabKey: landingKey(tabs, s.queryTabs, s.sshTabs, key) };
     }),
   closeAllTabs: () => set((s) => ({ tabs: [], activeTabKey: landingKey([], s.queryTabs, s.sshTabs, null) })),
+  // 移出 sshTabs 的終端機會卸載 SshTerminalPane，由它的清理斷線（與 closeAllSshTabs 同一條路）。
+  closeAllTabsExcept: (key) =>
+    set((s) => {
+      const tabs = s.tabs.filter((t) => t.key === key);
+      const queryTabs = s.queryTabs.filter((q) => q === key);
+      const sshTabs = s.sshTabs.filter((t) => t.key === key);
+      return { tabs, queryTabs, sshTabs, activeTabKey: landingKey(tabs, queryTabs, sshTabs, key) };
+    }),
   // 新增查詢分頁：產生不重複 id（無 home 時補 home，否則 __query__:N）並切過去。
   addQueryTab: () =>
     set((s) => {

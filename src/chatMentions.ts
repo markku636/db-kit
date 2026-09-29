@@ -666,11 +666,12 @@ export async function buildAutoContext(
   const reply = replyLanguageLine(env.uiLang);
 
   // 作用中的分頁是 SSH 終端機：終端機是此刻的工作區，先附它。資料庫區塊只在「這個終端機是從
-  // 該連線的 tunnel 開出來的」或「側欄選取的節點屬於該連線」時才跟著附——否則 schema 只是雜訊。
+  // 該連線的 tunnel 開出來的」時才跟著附——否則 schema 只是雜訊。以前「側欄選取的節點屬於該連線」
+  // 也算，但側欄幾乎永遠選著某條連線的東西，等於停在終端機上照樣附一整份結構。
   const term = env.terminalActive ? usableTerminal(env) : null;
   if (term) {
     const termBlock = buildTerminalContext(term, { now: Date.now() });
-    const related = !!conn && (term.connId === conn.id || s.selectedNode?.connId === conn.id);
+    const related = !!conn && term.connId === conn.id;
     if (!related) return termBlock + (reply ? `\n${reply}` : "");
     const dbBlock = await dbContext(opts, conn, s);
     return [termBlock, dbBlock].filter(Boolean).join("\n\n") + (reply ? `\n${reply}` : "");

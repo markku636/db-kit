@@ -633,6 +633,13 @@ describe("SSH 終端機提及與自動上下文", () => {
       expect(ctx).toContain("【目前資料庫環境】");
     });
 
+    it("側欄選著這條連線的資料表，但終端機跟它無關 → 仍只附終端機", async () => {
+      useStore.setState({ selectedNode: { type: "table", connId: "c1", db: "sakila", table: "orders", kind: "mysql", objKind: "table" } });
+      const ctx = await buildAutoContext(env({ terminal: term(), terminalOpen: true, terminalActive: true }));
+      expect(ctx).toContain("【目前 SSH 終端機】");
+      expect(ctx).not.toContain("【目前資料庫環境】");
+    });
+
     it("終端機開著但不在前景 → 照舊只附資料庫", async () => {
       const ctx = await buildAutoContext(env({ terminal: term(), terminalOpen: true, terminalActive: false }));
       expect(ctx).not.toContain("【目前 SSH 終端機】");

@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { EDITOR_THEMES } from "./editorThemes";
+import { EDITOR_THEMES, buildAppVars, type EditorThemeDef } from "./editorThemes";
+import { SURFACE_STEPS } from "./themeSurfaces";
 import { xtermThemeFor, mixHex, lightenHex, darkenHex, isDarkHex, parseHex, withAlpha } from "./sshTerminalTheme";
 
 const HEX = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i;
+/** buildAppVars 的 --c-app（"R G B"）→ #rrggbb：查詢編輯器跟隨 App 時透出的就是這個顏色。 */
+const appSurface = (def: EditorThemeDef) =>
+  "#" + buildAppVars(def)["--c-app"].split(" ").map((n) => Number(n).toString(16).padStart(2, "0")).join("");
 const ANSI = [
   "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
   "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite",
@@ -15,7 +19,8 @@ describe("xtermThemeFor", () => {
       for (const k of [...ANSI, "background", "foreground", "cursor"]) {
         expect(th[k], `${def.id}.${k}`).toMatch(HEX);
       }
-      expect(th.background!.toLowerCase()).toBe(def.colors.bg.toLowerCase());
+      // 底色 = app 表面（--c-app），終端機才會跟四周與查詢編輯器同色，而不是暗一截的 colors.bg。
+      expect(th.background!.toLowerCase(), def.id).toBe(appSurface(def));
       expect(th.foreground!.toLowerCase()).toBe(def.colors.fg.toLowerCase());
       expect(th.cursor!.toLowerCase()).toBe(def.colors.caret.toLowerCase());
       // 選取底色帶 alpha（#rrggbbaa）
@@ -35,7 +40,7 @@ describe("xtermThemeFor", () => {
 
   it("沒有變體（主題 id 找不到）時退回內建深色預設", () => {
     const th = xtermThemeFor(undefined);
-    expect(th.background).toBe("#22212c");
+    expect(th.background).toBe(appSurface(EDITOR_THEMES.find((d) => d.id === "amethyst")!));
     for (const k of ANSI) expect((th as Record<string, string | undefined>)[k]).toMatch(HEX);
   });
 
@@ -46,7 +51,8 @@ describe("xtermThemeFor", () => {
     def.app.danger = "#12";
     expect(() => xtermThemeFor(def)).not.toThrow();
     const th = xtermThemeFor(def);
-    expect(th.background).toBe("#000000");
+    // 底色壞掉退回黑，再照常往 app.top 混出表面色。
+    expect(th.background).toBe(mixHex("#000000", def.app.top, SURFACE_STEPS.app));
     expect(th.red).toBe("#ff5555");
     expect(th.selectionBackground).toBe("#00000066");
   });

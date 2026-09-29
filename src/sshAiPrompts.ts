@@ -177,6 +177,34 @@ export function summarizeSessionAsk(s: TerminalSnapshot): QuickAsk {
   };
 }
 
+// ---- 助手面板的 SSH 模式 ----
+
+export interface AssistantSshMode {
+  /** 停在 SSH 終端機分頁上（助手的終端機快照就是這個分頁）。 */
+  on: boolean;
+  /**
+   * 這個終端機是從作用中那條資料庫連線的 SSH tunnel 開的：資料庫仍是話題的一部分，
+   * 資料庫工具、資料庫技能與結構照常附；否則在 SSH 模式下全部收起來（只是雜訊）。
+   */
+  related: boolean;
+  /** 標題列顯示的主機（分頁標題，沒有就 user@host）。 */
+  label: string;
+}
+
+/** 助手面板要不要換成 SSH 模式（說明、建議、附帶內容都以這台主機為主）。 */
+export function assistantSshMode(
+  activeTabKey: string | null,
+  term: Pick<TerminalSnapshot, "tabKey" | "title" | "user" | "host" | "connId"> | null,
+  activeConnId: string | null,
+): AssistantSshMode {
+  const on = !!term && !!activeTabKey && term.tabKey === activeTabKey;
+  return {
+    on,
+    related: on && !!term!.connId && term!.connId === activeConnId,
+    label: on ? term!.title || (term!.user ? `${term!.user}@${term!.host}` : term!.host) : "",
+  };
+}
+
 // ---- 4.7 自然語言 → 指令列 ----
 
 export interface NlShellPromptOpts {

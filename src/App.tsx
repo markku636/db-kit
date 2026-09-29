@@ -3521,7 +3521,7 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
 // ---- 中央主工作區：分頁式（表分頁 + 查詢） ----
 function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () => void; onNewSshSession: () => void }) {
   const t = useT();
-  const { connections, activeId, connectedIds, tabs, activeTabKey, setActiveTab, closeTab, closeOtherTabs, closeAllTabs,
+  const { connections, activeId, connectedIds, tabs, activeTabKey, setActiveTab, closeTab, closeAllTabsExcept,
     queryTabs, addQueryTab, closeQueryTab, closeOtherQueryTabs, closeAllQueryTabs,
     sshTabs, openSshTab, closeSshTab, closeOtherSshTabs, closeAllSshTabs, renameSshTab } = useStore();
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
@@ -3646,7 +3646,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
   return (
     <div className="flex-1 flex flex-col min-w-0">
       {/* 分頁列（中鍵關閉、右鍵選單） */}
-      <div className="flex items-stretch bg-panel border-b border-fg/10 overflow-x-auto">
+      <div data-tab-bar="" className="flex items-stretch bg-panel border-b border-fg/10 overflow-x-auto">
         {tabs.map((tab) => (
           <div
             key={tab.key}
@@ -3786,8 +3786,9 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
           {(
             [
               [t("關閉"), () => closeTab(tabMenu.key)],
-              [t("關閉其他"), () => closeOtherTabs(tabMenu.key)],
-              [t("全部關閉"), () => closeAllTabs()],
+              // 「其他 / 全部」= 表、查詢、終端機三種分頁一起算（以前只關表分頁，看起來像按了沒反應）。
+              [t("關閉其他"), () => closeAllTabsExcept(tabMenu.key)],
+              [t("全部關閉"), () => closeAllTabsExcept(null)],
             ] as [string, () => void][]
           ).map(([label, fn]) => (
             <button key={label} type="button"
@@ -3809,6 +3810,11 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
             if (queryTabs.length > 1) {
               items.push([t("關閉其他查詢"), () => closeOtherQueryTabs(qid)]);
               items.push([t("全部關閉查詢"), () => closeAllQueryTabs()]);
+            }
+            // 還開著表分頁或終端機：另給一組三種分頁一起算的（上面兩項只動查詢分頁）。
+            if (tabs.length + sshTabs.length > 0) {
+              items.push([t("關閉其他分頁"), () => closeAllTabsExcept(qid)]);
+              items.push([t("全部關閉"), () => closeAllTabsExcept(null)]);
             }
             return items.map(([label, fn]) => (
               <button key={label} type="button"
@@ -3838,6 +3844,10 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
             if (sshTabs.length > 1) {
               items.push([t("關閉其他終端機"), () => closeOtherSshTabs(key)]);
               items.push([t("全部關閉終端機"), () => closeAllSshTabs()]);
+            }
+            if (tabs.length + queryTabs.length > 0) {
+              items.push([t("關閉其他分頁"), () => closeAllTabsExcept(key)]);
+              items.push([t("全部關閉"), () => closeAllTabsExcept(null)]);
             }
             return items.map(([label, fn]) => (
               <button key={label} type="button"

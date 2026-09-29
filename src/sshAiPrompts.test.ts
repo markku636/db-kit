@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  assistantSshMode,
   buildNlShellPrompt,
   buildTerminalContext,
   explainOutputAsk,
@@ -243,6 +244,22 @@ describe("summarizeSessionAsk", () => {
     expect(q.extraContext).toContain(`199:${"x".repeat(100)}\n\`\`\``);
     const body = /```text\n([\s\S]*?)\n```/.exec(q.extraContext)?.[1] ?? "";
     expect(body.length).toBeLessThanOrEqual(8192);
+  });
+});
+
+describe("assistantSshMode", () => {
+  it("停在快照那個分頁上才是 SSH 模式；標題優先，沒有就 user@host", () => {
+    expect(assistantSshMode("__ssh__:1", snap(), "c1")).toEqual({ on: true, related: false, label: "prod-web" });
+    expect(assistantSshMode("__ssh__:1", snap({ title: "" }), null).label).toBe("deploy@10.0.0.12");
+    expect(assistantSshMode("__query__", snap(), "c1")).toEqual({ on: false, related: false, label: "" });
+    expect(assistantSshMode(null, snap(), null).on).toBe(false);
+    expect(assistantSshMode("__ssh__:1", null, null).on).toBe(false);
+  });
+
+  it("只有從作用中那條連線的 tunnel 開的終端機才算跟資料庫有關", () => {
+    expect(assistantSshMode("__ssh__:1", snap({ connId: "c1" }), "c1").related).toBe(true);
+    expect(assistantSshMode("__ssh__:1", snap({ connId: "c2" }), "c1").related).toBe(false);
+    expect(assistantSshMode("__ssh__:1", snap({ connId: null }), null).related).toBe(false);
   });
 });
 
