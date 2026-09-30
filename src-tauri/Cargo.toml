@@ -67,7 +67,8 @@ bigdecimal = "0.4"
 # CLI 參數解析（derive 指令樹；env 讓 --password 可吃環境變數 DBKIT_PASSWORD）。CLI 必備，不放在 gui feature 後。
 clap = { version = "4", features = ["derive", "env"] }
 # SSH Tunnel：純 Rust。用 ring 當 crypto backend（避免 aws-lc-sys 需要 NASM 才能在 Windows 編譯）。
-russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
+# 0.62：與 IronRDP（經 vendor/ironrdp-connector 升到 picky rc.26）共用同一套正式版 RustCrypto（見檔尾 [patch]）。
+russh = { version = "0.62", default-features = false, features = ["ring", "flate2", "rsa"] }
 # SFTP 子系統（SSH 終端機分頁的檔案瀏覽 / 上下傳）：純 Rust、與 russh 版本無耦合，套在 russh channel 的
 # `into_stream()` 上即可。核心層即用（`ssh/sftp.rs` 不依賴 Tauri），故不藏在 gui feature 後。
 russh-sftp = { version = "3.0", default-features = false }
@@ -97,6 +98,25 @@ dirs = "6"
 aes-gcm = "0.10"
 argon2 = "0.5"
 rand = "0.8"
+# 遠端桌面 RDP：IronRDP（純 Rust，MIT/Apache）逐 crate 挑用。**絕不**開 ironrdp 的 `client*` / `rustls`
+# 或 ironrdp-tls 的 `rustls`——那些都指向 aws-lc-rs（要 NASM）；TLS 走 `rustls-ring`，延續全案 ring 決定。
+# ironrdp-tokio 不開 `reqwest`（Kerberos KDC 用；NLA 只做 NTLM）。藏在 `rdp` feature 後（隨 default 開）。
+ironrdp = { version = "0.17", default-features = false, optional = true, features = [
+  "core", "pdu", "connector", "session", "graphics", "input", "svc", "dvc", "displaycontrol", "cliprdr",
+] }
+ironrdp-tokio = { version = "0.10", default-features = false, optional = true }
+ironrdp-tls = { version = "0.2.2", default-features = false, features = ["rustls-ring"], optional = true }
+# RDP 伺服器憑證（TOFU 指紋）：`ironrdp_tls::upgrade` 回傳的型別；版本對齊 ironrdp-tls。
+x509-cert = { version = "0.2", default-features = false, features = ["std"], optional = true }
+# 啟動時把 ring 裝成 rustls 的程序預設 provider（保險：依賴樹裡只有 ring，但別讓 `builder()` 靠運氣）。
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+# 遠端桌面的剪貼簿同步：由後端讀寫系統剪貼簿（webview 的 navigator.clipboard.readText 會跳權限詢問、搶走焦點）。
+# 純 Rust（Windows 走 clipboard-win、macOS 走 objc2、Linux 走 x11rb）。只有 GUI 用，藏在 gui feature 後。
+arboard = { version = "3", default-features = false, optional = true }
+# 遠端桌面 VNC：macOS 螢幕共享的 ARD 認證（Diffie-Hellman）要大數運算；其餘（DES / AES / MD5）沿用上面既有的 crate。
+num-bigint = { version = "0.4", optional = true }
+# RDP fast-path 事件容器（ironrdp-input 的回傳型別）。
+smallvec = { version = "1", optional = true }
 # Excel (.xlsx) 匯出：純 Rust（內含 zip + miniz_oxide，無 C / 系統相依），跨平台可打包。
 rust_xlsxwriter = "0.79"
 # Excel (.xlsx/.xls) 匯入讀取：純 Rust，dates 特性讓日期欄解析為日期而非序號。
@@ -145,6 +165,10 @@ windows = { version = "0.61", optional = true, features = [
   "Win32_System_WinRT",
   "Win32_Foundation",
   "Win32_System_Com",
+  # 遠端桌面全螢幕時攔 Win / Alt+Tab / Alt+F4 / Ctrl+Esc（WH_KEYBOARD_LL，見 rd/keygrab.rs）。
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_Threading",
 ] }
 # IAsyncOperation。windows 0.61 配 windows-future 0.2（阻塞取值是 .get()；0.3 才改名 .join()）。
 windows-future = { version = "0.2", optional = true }
@@ -167,12 +191,13 @@ block2 = { version = "0.6", optional = true }
 keyring = { version = "3", features = ["sync-secret-service"] }
 
 [features]
-default = ["gui", "kafka", "kafka-js", "elastic", "rabbitmq", "docker"]
+default = ["gui", "kafka", "kafka-js", "elastic", "rabbitmq", "docker", "remote-desktop"]
 # gui：啟用 Tauri 桌面程式（commands / agent / scheduler / run()）。預設開啟。
 # 生物辨識解鎖的平台綁定一併掛在此：兩組 dep 都宣告在 per-target 區塊內，
 # 於非該平台編譯時 Cargo 直接忽略，不需要再寫一層 cfg。
 gui = [
   "dep:tauri",
+  "dep:arboard",
   # AI 助手的 HTTP 供應商（Anthropic / OpenAI 相容）需要 reqwest；slim CLI 不含 AI，故掛在 gui 後。
   "dep:reqwest",
   "dep:tauri-plugin-dialog",
@@ -204,6 +229,11 @@ rabbitmq = ["dep:lapin", "dep:reqwest"]
 # 本機 unix socket / Windows named pipe、TCP、TLS（含用戶端憑證 mTLS）皆由 reqwest 內建支援，
 # 不引入 bollard（其 ssl feature 會拉進 aws-lc / NASM）。隨 gui 預設開啟；slim CLI（--no-default-features）排除。
 docker = ["dep:reqwest"]
+# remote-desktop：分頁內嵌的 RDP（IronRDP）與 VNC（前端 noVNC，後端代做 RFB 認證）。純 Rust、無 NASM 相依
+# （winscard 會以 cc 編 bundled zlib，MinGW gcc 即可）。隨 default 開；slim CLI 排除。
+rdp = ["dep:ironrdp", "dep:ironrdp-tokio", "dep:ironrdp-tls", "dep:x509-cert", "dep:rustls", "dep:smallvec"]
+vnc = ["dep:num-bigint"]
+remote-desktop = ["rdp", "vnc"]
 
 # Release 瘦身（保守版）：
 # - lto="thin"：跨 codegen unit 最佳化但平行執行，連結期記憶體峰值遠低於 fat LTO
@@ -213,3 +243,9 @@ docker = ["dep:reqwest"]
 [profile.release]
 lto = "thin"
 strip = "symbols"
+
+# ironrdp-connector 0.10.0 原樣（MIT / Apache-2.0，© Devolutions）只改依賴：picky =7.0.0-rc.25 → rc.26、sspi 0.21 → 0.22。
+# rc.25 把 RustCrypto 一整串（ecdsa / curve25519-dalek / p256…）釘在預發布版，跟 russh 0.62（正式版）在同一個
+# semver 相容區間撞車、Cargo 無法並存；rc.26 起改用正式版。上游（IronRDP master）也還釘 rc.25，等它升級就拿掉。
+[patch.crates-io]
+ironrdp-connector = { path = "vendor/ironrdp-connector" }

@@ -89,13 +89,18 @@ struct SftpProgress {
 
 /// 把 `AuthUi` 的兩個問題變成事件 + `oneshot`：產 `prompt_id`、發事件、等 `ssh_hostkey_answer` /
 /// `ssh_auth_answer` 回填。逾時、或 `ssh_disconnect` 把待答提示丟掉 → 視為使用者取消。
-struct TauriUi {
+pub(crate) struct TauriUi {
     app: AppHandle,
     rt: Arc<SshRuntime>,
     conn_id: String,
 }
 
 impl TauriUi {
+    /// 遠端桌面「經 SSH 主機連線」也用這套提示（`conn_id` 用遠端桌面自己的，前端同一個分頁接）。
+    pub(crate) fn new(app: AppHandle, rt: Arc<SshRuntime>, conn_id: String) -> Self {
+        Self { app, rt, conn_id }
+    }
+
     async fn ask<F>(&self, emit: F) -> Option<PromptAnswer>
     where
         F: FnOnce(&str) -> tauri::Result<()>,
@@ -180,13 +185,13 @@ fn keychain_secrets(id: &str) -> (Option<String>, Option<String>) {
 }
 
 /// 解析好的連線目標：SSH 主機或 FTP 主機（已存主機的 `protocol` 決定）。
-enum Resolved {
+pub(crate) enum Resolved {
     Ssh(SshTarget),
     Ftp(FtpTarget),
 }
 
 /// 前端的 `SshTargetRef` → 帶憑證的目標（憑證從 keychain 補；不回傳前端）。
-async fn resolve_target(app: &AppHandle, r: SshTargetRef) -> AppResult<Resolved> {
+pub(crate) async fn resolve_target(app: &AppHandle, r: SshTargetRef) -> AppResult<Resolved> {
     match r {
         SshTargetRef::Session { id } => {
             let dir = store::app_config_dir(app)?;

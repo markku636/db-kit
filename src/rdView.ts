@@ -1,0 +1,34 @@
+// RdPane 驅動協定畫面（RdpView / VncView）的共同介面。
+import type { RdConnInfo } from "./rdTypes";
+
+export interface RdViewHandle {
+  /** 撥號前：換成這次的 conn id，丟掉上一條連線的畫面 / 輸入狀態。 */
+  reset(connId: string): void;
+  /** 後端 Channel 送來的一則訊息（RDP = rdFrames record；VNC = RFB 位元組）。 */
+  output(buf: ArrayBuffer): void;
+  /** `rd_connect` 成功回來。 */
+  connected(info: RdConnInfo): void;
+  /** 連線結束（後端 `rd-conn-closed` 或使用者斷線）。 */
+  disconnected(): void;
+  /** 工具列組合鍵：`ctrl_alt_del` / `win` / `alt_tab` / `ctrl_esc` / `print_screen`。 */
+  combo(name: string): void;
+  /** 把本機剪貼簿文字交給遠端。 */
+  paste(text: string): void;
+  focus(): void;
+  /** 整張重畫（RDP 請後端重送；VNC 不需要）。 */
+  refresh(): void;
+  desktopSize(): { w: number; h: number };
+  /** 後端鍵盤 hook 攔到的系統鍵（set-1 掃描碼；擴充鍵 OR 0xE000）。 */
+  rawKey(scancode: number, down: boolean): void;
+}
+
+/** Tauri Channel 的 raw 訊息在真 App 是 ArrayBuffer；verify-ui 的假後端可能送 Uint8Array / number[]。 */
+export function toArrayBuffer(buf: unknown): ArrayBuffer {
+  if (buf instanceof ArrayBuffer) return buf;
+  if (ArrayBuffer.isView(buf)) {
+    const v = buf as ArrayBufferView;
+    return v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) as ArrayBuffer;
+  }
+  if (Array.isArray(buf)) return new Uint8Array(buf as number[]).buffer;
+  return new ArrayBuffer(0);
+}

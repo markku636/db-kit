@@ -1,5 +1,7 @@
 // AI 資源庫（人設 / 技能 / 提示範本）的 command。
 pub mod ai_library;
+// 遠端桌面（RDP / VNC）的 command。
+pub mod rd;
 // SSH 終端機 / SFTP / 已存主機的 command（含 TauriUi）。
 pub mod ssh;
 // Docker（容器 / 映像 / volume / network、log 與 exec 串流）的 command。
@@ -61,6 +63,8 @@ pub struct AppState {
     /// SSH 終端機 / SFTP 的登記簿：活著的連線、終端、SFTP、待答提示、傳輸取消旗標。
     /// 包 `Arc`：傳輸背景任務與斷線 watcher 都要 `'static` 地拿著它。
     pub ssh: Arc<crate::ssh::SshRuntime>,
+    /// 遠端桌面（RDP / VNC）的登記簿：活著的連線與待答提示。
+    pub rd: Arc<crate::rd::RdRuntime>,
     /// Kafka live-tail 的取消旗標（key = 連線 id；每連線一個 tail）。停止 / 斷線時設 true，
     /// poll 執行緒下一輪見到即退出並釋放 consumer（BaseConsumer drop 快速）。
     #[cfg(feature = "kafka")]

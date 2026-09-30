@@ -49,6 +49,17 @@ pub enum AppError {
     /// FTP / FTPS 操作失敗（detail 已本地化，或是伺服器回的那一行訊息）。
     #[error("ftp error: {0}")]
     Ftp(String),
+    /// 遠端桌面（RDP / VNC / RustDesk）傳輸或協定錯誤。
+    #[error("remote desktop error: {0}")]
+    Rd(String),
+
+    /// 遠端桌面認證被拒（帳號 / 密碼 / NLA）。
+    #[error("remote desktop auth failed: {0}")]
+    RdAuth(String),
+
+    /// 使用者在憑證 / 認證對話框按了取消，或連線中途被 `rd_disconnect`。前端收到此碼不該 toast。
+    #[error("remote desktop cancelled by user")]
+    RdCancelled,
 
     /// 查詢超過全域逾時（毫秒）。注意：伺服器端查詢可能仍在執行，
     /// 前端錯誤文案應引導使用者以行程清單（ProcessList）手動 KILL。
@@ -78,6 +89,9 @@ impl AppError {
             AppError::SshCancelled => "ssh_cancelled",
             AppError::Sftp(_) => "sftp",
             AppError::Ftp(_) => "ftp",
+            AppError::Rd(_) => "rd",
+            AppError::RdAuth(_) => "rd_auth",
+            AppError::RdCancelled => "rd_cancelled",
             AppError::Timeout(_) => "timeout",
             AppError::NeedsConfirm(_) => "needs_confirm",
         }
@@ -98,6 +112,9 @@ impl AppError {
             AppError::SshCancelled => "ERR_SSH_CANCELLED",
             AppError::Sftp(_) => "ERR_SFTP",
             AppError::Ftp(_) => "ERR_FTP",
+            AppError::Rd(_) => "ERR_RD",
+            AppError::RdAuth(_) => "ERR_RD_AUTH",
+            AppError::RdCancelled => "ERR_RD_CANCELLED",
             AppError::Timeout(_) => "ERR_TIMEOUT",
             AppError::NeedsConfirm(_) => "ERR_NEEDS_CONFIRM",
         }
@@ -119,6 +136,9 @@ impl AppError {
             AppError::SshCancelled => t!("使用者已取消 SSH 連線").to_string(),
             AppError::Sftp(s) => tf!("SFTP 錯誤：{detail}", detail = s),
             AppError::Ftp(s) => tf!("FTP 錯誤：{detail}", detail = s),
+            AppError::Rd(s) => tf!("遠端桌面錯誤：{detail}", detail = s),
+            AppError::RdAuth(s) => tf!("遠端桌面認證失敗：{detail}", detail = s),
+            AppError::RdCancelled => t!("使用者已取消遠端桌面連線").to_string(),
             AppError::Timeout(ms) => tf!(
                 "查詢逾時（{ms} ms）；伺服器端查詢可能仍在執行，可從行程清單手動終止",
                 ms = ms

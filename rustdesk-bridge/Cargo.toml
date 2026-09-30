@@ -1,0 +1,28 @@
+[package]
+name = "dbk-rustdesk-bridge"
+version = "0.1.0"
+edition = "2021"
+# 這個程式跟 db-kit（MIT）分開發行：它取用了 RustDesk 的協定定義與連線邏輯（AGPL-3.0），
+# 所以本身是 AGPL-3.0。db-kit 只透過 stdin / stdout 跟它對話，不連結它的程式碼。見 README.md。
+license = "AGPL-3.0-only"
+description = "RustDesk-compatible connection helper for db-kit (AGPL-3.0, separate program)"
+publish = false
+
+[[bin]]
+name = "dbk-rustdesk-bridge"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "io-std", "time", "sync"] }
+bytes = "1"
+protobuf = { version = "3.7", features = ["with-bytes"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[build-dependencies]
+protobuf-codegen = "3.7"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

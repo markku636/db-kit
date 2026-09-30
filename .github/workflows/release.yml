@@ -86,7 +86,24 @@ jobs:
       - name: Cache cargo build
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            rustdesk-bridge
+
+      # RustDesk 相容連線的輔助程式（rustdesk-bridge/，AGPL-3.0，獨立程式）：先依 target 編好，
+      # 放到 Tauri externalBin 要的位置（binaries/<名稱>-<target triple>[.exe]），下面 tauri build
+      # 帶 --config src-tauri/tauri.bridge.conf.json 才會把它打包進去。只在這裡合併這份設定：
+      # 平常開發（tauri dev / cargo check）不必先編它。
+      - name: Build RustDesk bridge (AGPL sidecar)
+        shell: bash
+        run: |
+          TRIPLE="${{ matrix.target }}"
+          if [ -z "$TRIPLE" ]; then TRIPLE=$(rustc -vV | sed -n 's/^host: //p'); fi
+          cargo build --release --manifest-path rustdesk-bridge/Cargo.toml --target "$TRIPLE"
+          EXT=""
+          case "$TRIPLE" in *windows*) EXT=".exe";; esac
+          mkdir -p src-tauri/binaries
+          cp "rustdesk-bridge/target/$TRIPLE/release/dbk-rustdesk-bridge$EXT" "src-tauri/binaries/dbk-rustdesk-bridge-$TRIPLE$EXT"
 
       - name: Install frontend deps
         run: npm ci
@@ -119,4 +136,4 @@ jobs:
           releaseBody: ${{ env.RELEASE_NOTES }}
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --config src-tauri/tauri.bridge.conf.json

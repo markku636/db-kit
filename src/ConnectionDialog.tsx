@@ -4,6 +4,8 @@ import { applyParsedToForm, ChangedField, ConnFormFields, looksLikeConnectionStr
 import { defaultDockerSocket, isLocalDockerHost } from "./dockerModel";
 import { parseSshString, type ParsedSsh } from "./sshConnString";
 import { pickDirectory, pickOpenFile } from "./ui";
+import { parseRdString, type ParsedRd } from "./rdConnString";
+import type { RdProtocol } from "./rdTypes";
 import { askOtpCode } from "./otpGate";
 import { Modal, Field, Input, Button, Segmented, Select, Textarea } from "./ui/index";
 import { Plug, FolderOpen, ClipboardPaste } from "lucide-react";
@@ -23,6 +25,11 @@ interface Props {
    * （prefill = 解析好的字串；null = 空白新增）。SSH 主機另存一份清單，不是 DbKind。
    */
   onNewSsh?: (prefill: ParsedSsh | null) => void;
+  /**
+   * 同上，遠端桌面（RDP / VNC / RustDesk）：選了卡片（prefill = null、帶協定）或貼上 rdp:// vnc:// rustdesk:// mstsc 字串
+   * （prefill = 解析結果）→ 呼叫端改開遠端桌面主機對話框。
+   */
+  onNewRemoteDesktop?: (prefill: ParsedRd | null, protocol?: RdProtocol) => void;
 }
 
 // 支援 ssl_mode 選項的類型（sqlx driver；MariaDB 與 MySQL 共用詞彙）。
@@ -76,7 +83,7 @@ function fmtSummaryVal(
 /** 「FTP / FTPS」卡片：開主機對話框並預選 FTP（explicit TLS）；沒有主機，不算「依連線字串填入」。 */
 const BLANK_FTP: ParsedSsh = { protocol: "ftpes", host: "", port: null, username: null, password: null, identityFile: null, jump: null, path: null };
 
-export default function ConnectionDialog({ onClose, onSaved, initial, prefill, onNewSsh }: Props) {
+export default function ConnectionDialog({ onClose, onSaved, initial, prefill, onNewSsh, onNewRemoteDesktop }: Props) {
   const t = useT();
   const editing = !!initial;
   // 表單初始值來源：編輯＝既有連線；新增時可帶 prefill（例：從 Docker 容器一鍵建資料庫連線）。
@@ -432,6 +439,16 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, o
       }
       return;
     }
+    // rdp:// vnc:// rustdesk:// mstsc：遠端桌面主機，同樣轉交給它自己的對話框。
+    const rd = parseRdString(url);
+    if (rd) {
+      if (onNewRemoteDesktop && !editing) onNewRemoteDesktop(rd);
+      else {
+        setImportUrl(url);
+        setImportMsg({ ok: false, text: t("這是遠端桌面的連線字串，請從「新增連線」加入") });
+      }
+      return;
+    }
     try {
       // 傳當下選的類型當提示：Oracle EZConnect / 裸 host:port / sqlite 路徑都不帶類型資訊，
       // 沒提示的話後端只能報「無法解析」。後端對有提示的輸入會多做一道結構檢查（looks_structured），
@@ -471,7 +488,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, o
     const text = e.clipboardData.getData("text");
     // SSH 字串只在新增時攔（轉交 SSH 主機對話框）；編輯資料庫連線時照常貼進欄位。
     const ssh = onNewSsh && !editing ? parseSshString(text) : null;
-    if (!ssh && !looksLikeConnectionString(text)) return;
+    const rd = onNewRemoteDesktop && !editing ? parseRdString(text) : null;
+    if (!ssh && !rd && !looksLikeConnectionString(text)) return;
     e.preventDefault();
     setImportUrl(text.trim());
     void doImport(text);
@@ -561,7 +579,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, o
       <Field
         label={t("連線字串")}
         hint={onNewSsh && !editing
-          ? t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss:// ssh:// sftp:// ftp://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")
+          ? t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss:// ssh:// sftp:// ftp:// rdp:// vnc:// rustdesk://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")
           : t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")}
       >
         <div className="flex gap-2">
@@ -634,6 +652,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, o
         onExpand={() => setPickerOpen(true)}
         onPickSsh={onNewSsh && !editing ? () => onNewSsh(null) : undefined}
         onPickFtp={onNewSsh && !editing ? () => onNewSsh(BLANK_FTP) : undefined}
+        onPickRemoteDesktop={onNewRemoteDesktop && !editing ? (p) => onNewRemoteDesktop(null, p) : undefined}
       />
 
       {/* 兩步流程：先選類型（pickerOpen＝只顯示上方類型選擇器），選定後才展開表單，避免類型格與

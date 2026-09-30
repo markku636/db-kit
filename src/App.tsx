@@ -2,7 +2,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo,
 import { api, hostLabel, isContainerKind, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useTheme } from "./theme";
-import { LANGUAGES, useLang, useT, type Lang } from "./i18n";
+import { LANGUAGES, t, useLang, useT, type Lang } from "./i18n";
 import { APP_NAME } from "./brand";
 import { EDITOR_THEMES, getEditorThemeDef, type EditorThemeId } from "./editorThemes";
 import { createPortal } from "react-dom";
@@ -41,6 +41,13 @@ import { useSshTerminals, termRegistry } from "./sshTerminals";
 import { setSftpWindowsLocked } from "./sftpWindowBridge";
 import { inTerminal, isAppReserved } from "./ui/keyScope";
 import SshHostTree from "./SshHostTree";
+import RdHostTree from "./RdHostTree";
+import type { RdProtocol, RdSession } from "./rdTypes";
+import type { RdTab } from "./rdTabs";
+import { rdSessionLabel, useRdSessions } from "./rdSessions";
+import { RD_META, useRdStatus } from "./rdStatus";
+import type { ParsedRd } from "./rdConnString";
+import { decodeRdpFileBytes, parseRdpFile } from "./rdpFile";
 import SshPrefsSettings from "./SshPrefsSettings";
 import { friendlyDbError } from "./dbErrors";
 import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, type UpdateInfo } from "./updateCheck";
@@ -175,6 +182,9 @@ const NlQueryBar = lazy(() => import("./NlQueryBar"));
 const SshTerminalPane = lazy(() => import("./SshTerminalPane"));
 const FtpPane = lazy(() => import("./FtpPane"));
 const SshSessionDialog = lazyOverlay(() => import("./SshSessionDialog"));
+// 遠端桌面分頁同 SSH：常駐掛載，用 React.lazy（第一次開分頁才下載 RDP / VNC 畫面元件）。
+const RdPane = lazy(() => import("./RdPane"));
+const RdSessionDialog = lazyOverlay(() => import("./RdSessionDialog"));
 const SshImportDialog = lazyOverlay(() => import("./SshImportDialog"));
 // AI 動作（解釋 / 最佳化 / 修正 / 加註解 / 轉方言 / 測試資料）：差異預覽與選單都只在用到時載入。
 const AiDiffDialog = lazyOverlay(() => import("./AiDiffDialog"));
@@ -227,6 +237,9 @@ export default function App() {
   // 匯入 SSH 主機（~/.ssh/config、.xsh）：側欄 SSH 區塊沒有主機時不顯示，從新增 SSH 主機對話框進來。
   const [sshImportOpen, setSshImportOpen] = useState(false);
   const sshFolders = useSshSessions((s) => s.folders);
+  // 遠端桌面主機對話框：同 sshDialog；protocol = 新增時預選的協定（KindPicker 點的卡片），prefill = 連線字串 / .rdp 檔。
+  const [rdDialog, setRdDialog] = useState<{ initial: RdSession | null; folderId: string | null; protocol?: RdProtocol; prefill?: ParsedRd | null } | null>(null);
+  const rdFolders = useRdSessions((s) => s.folders);
   const [backupOpen, setBackupOpen] = useState(false);
   const [erOpen, setErOpen] = useState(false);
   // 進階物件搜尋（全螢幕 Modal）：null = 關閉。放 App 級以便工具列 / 側欄 / 快捷鍵共用。
@@ -366,6 +379,8 @@ export default function App() {
       .catch(() => {});
     // SSH 主機清單另一份檔（ssh_sessions.json），同樣解鎖後才載、失敗不影響資料庫連線。
     void useSshSessions.getState().load();
+    // 遠端桌面主機（remote_desktops.json）同理。
+    void useRdSessions.getState().load();
   }, [lockState]);
 
   // 啟動時套用目前變體的整套 --c-* CSS 變數（與 index.html 防閃爍腳本的 .light 類別互補）。
@@ -466,6 +481,8 @@ export default function App() {
           width={sidebar.size}
           onEdit={(c) => setDialog({ initial: c })}
           onEditSsh={(s, folderId) => setSshDialog({ initial: s, folderId: folderId ?? null })}
+          onEditRd={(s, folderId) => setRdDialog({ initial: s, folderId: folderId ?? null })}
+          onImportRdp={() => void importRdpFile((prefill) => setRdDialog({ initial: null, folderId: null, prefill }))}
           onAdvSearch={(id, k) => setAdvSearch({ connId: id, kind: k })}
           onLockNow={lockStatus?.password || lockStatus?.biometric ? () => setRelocked(true) : null}
         />
@@ -495,12 +512,30 @@ export default function App() {
         />
       )}
       {sshImportOpen && <SshImportDialog open onClose={() => setSshImportOpen(false)} />}
+      {rdDialog && (
+        <RdSessionDialog
+          open
+          initial={rdDialog.initial}
+          folders={rdFolders}
+          defaultFolderId={rdDialog.folderId}
+          defaultProtocol={rdDialog.protocol}
+          prefill={rdDialog.prefill}
+          onClose={() => setRdDialog(null)}
+          onSaved={(s, connect) => {
+            // 對話框已經透過 useRdSessions.save 寫入後端並更新清單。
+            setRdDialog(null);
+            toast.success(t("遠端桌面已儲存"));
+            if (connect) openRdSessionTab(s);
+          }}
+        />
+      )}
       {dialog && (
         <ConnectionDialog
           initial={dialog.initial}
           prefill={dialog.prefill}
           onClose={() => setDialog(null)}
           onNewSsh={(prefill) => { setDialog(null); setSshDialog({ initial: null, folderId: null, prefill }); }}
+          onNewRemoteDesktop={(prefill, protocol) => { setDialog(null); setRdDialog({ initial: null, folderId: null, protocol, prefill }); }}
           onSaved={async (c) => {
             try {
               await api.saveConnection(c);
@@ -1202,7 +1237,7 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 }
 
 // ---- 左側連線/物件樹 ----
-function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; onEditSsh: (s: SshSession | null, folderId?: string | null) => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
+function Sidebar({ onEdit, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; onEditSsh: (s: SshSession | null, folderId?: string | null) => void; onEditRd: (s: RdSession | null, folderId?: string | null) => void; onImportRdp: () => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
   const t = useT();
   const { connections, connGroups, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
   // ---- 連線群組（側欄排版）----
@@ -3108,6 +3143,13 @@ function Sidebar({ onEdit, onEditSsh, width, onAdvSearch, onLockNow }: { onEdit:
         }}
         onEdit={onEditSsh}
       />
+      {/* 遠端桌面（RDP / VNC / RustDesk）：同 SSH，一台都沒有時不顯示；雙擊開遠端桌面分頁。 */}
+      <RdHostTree
+        q={q}
+        onOpen={(s, opts) => openRdSessionTab(s, opts?.fullscreen)}
+        onEdit={onEditRd}
+        onImportRdp={onImportRdp}
+      />
       </div>
 
       {/* 以下皆為 fixed 定位的選單 / 對話框：放在捲動視窗之外，不受其 overflow 影響，
@@ -3708,10 +3750,15 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
   const t = useT();
   const { connections, activeId, connectedIds, tabs, activeTabKey, setActiveTab, closeTab, closeAllTabsExcept,
     queryTabs, addQueryTab, closeQueryTab, closeOtherQueryTabs, closeAllQueryTabs,
-    sshTabs, openSshTab, closeSshTab, closeOtherSshTabs, closeAllSshTabs, renameSshTab } = useStore();
+    sshTabs, openSshTab, closeSshTab, closeOtherSshTabs, closeAllSshTabs, renameSshTab,
+    rdTabs, openRdTab, closeRdTab, closeOtherRdTabs, closeAllRdTabs, renameRdTab } = useStore();
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   const [queryTabMenu, setQueryTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [sshTabMenu, setSshTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
+  const [rdTabMenu, setRdTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
+  // 遠端桌面分頁的狀態點：同 SSH，只訂閱狀態字串。
+  const rdStatusKey = useRdStatus((s) => rdTabs.map((tb) => `${tb.key}=${s.rt[tb.key]?.status ?? ""}`).join("|"));
+  const rdStatusOf = useMemo(() => new Map(rdStatusKey.split("|").filter(Boolean).map((p) => { const i = p.lastIndexOf("="); return [p.slice(0, i), p.slice(i + 1)] as [string, string]; })), [rdStatusKey]);
   // 分頁列的「新終端機」浮層（列出已存的 SSH 主機）。
   const [sshPicker, setSshPicker] = useState<{ x: number; y: number } | null>(null);
   // 只訂閱「各分頁的連線狀態」：rt 裡的標題 / cwd 每個提示符都會變，訂閱整包會讓整個主區跟著重繪。
@@ -3737,9 +3784,10 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
   const canUse = activeId && connectedIds.has(activeId);
   const activeTab = tabs.find((tab) => tab.key === activeTabKey) ?? null;
   const activeSsh: SshTab | null = sshTabs.find((tab) => tab.key === activeTabKey) ?? null;
+  const activeRd: RdTab | null = rdTabs.find((tab) => tab.key === activeTabKey) ?? null;
   // 作用中的查詢分頁 id（非表 / SSH 分頁時）：解析未知 / null → 第一個查詢分頁（home 可被關掉，不能寫死 __query__）。
   // 查詢分頁可全部關光 → undefined，此時主區顯示空狀態（見下方 render）。
-  const activeQueryId: string | undefined = activeSsh ? undefined : activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : queryTabs[0];
+  const activeQueryId: string | undefined = activeSsh || activeRd ? undefined : activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : queryTabs[0];
 
   // 分頁鍵盤操作：Ctrl/Cmd+N 開新查詢、Ctrl/Cmd+Shift+N 新增連線、Ctrl/Cmd+W 關閉、
   // Ctrl+Tab / Ctrl+Shift+Tab 循環、Ctrl+1..9 跳轉（9=最後一個，含查詢分頁）。
@@ -3766,6 +3814,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
         if (activeTabKey && tabs.some((tab) => tab.key === activeTabKey)) { e.preventDefault(); closeTab(activeTabKey); return; }
         if (activeTabKey && queryTabs.includes(activeTabKey)) { e.preventDefault(); closeQueryTab(activeTabKey); return; }
         if (activeTabKey && sshTabs.some((tab) => tab.key === activeTabKey)) { e.preventDefault(); closeSshTab(activeTabKey); return; }
+        if (activeTabKey && rdTabs.some((tab) => tab.key === activeTabKey)) { e.preventDefault(); closeRdTab(activeTabKey); return; }
         return;
       }
       if (e.key === "t" || e.key === "T") {
@@ -3778,7 +3827,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
         return;
       }
       // 所有表分頁後接所有查詢分頁、再接 SSH 分頁，組成可循環 / 跳轉的鍵序列。
-      const keys = tabOrder(tabs, queryTabs, sshTabs);
+      const keys = tabOrder(tabs, queryTabs, [...sshTabs, ...rdTabs]);
       if (e.key === "Tab") {
         e.preventDefault();
         const cur = keys.indexOf(activeTabKey ?? "");
@@ -3796,7 +3845,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tabs, activeTabKey, setActiveTab, closeTab, onNewConnection, queryTabs, addQueryTab, closeQueryTab, sshTabs, closeSshTab, onNewSshSession]);
+  }, [tabs, activeTabKey, setActiveTab, closeTab, onNewConnection, queryTabs, addQueryTab, closeQueryTab, sshTabs, closeSshTab, rdTabs, closeRdTab, onNewSshSession]);
   const sshPickerBtnRef = useRef<HTMLButtonElement>(null);
 
   // 作用中分頁捲入可視範圍（Ctrl+W / Ctrl+Tab 切換後不會被擠到畫面外；含查詢分頁）。
@@ -3806,7 +3855,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [activeTabKey, queryTabs]);
 
-  if (!canUse && tabs.length === 0 && sshTabs.length === 0) {
+  if (!canUse && tabs.length === 0 && sshTabs.length === 0 && rdTabs.length === 0) {
     const noConns = connections.length === 0;
     return (
       <div className="flex-1 flex items-center justify-center min-w-0">
@@ -3923,6 +3972,38 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
             </div>
           );
         })}
+        {rdTabs.map((tab) => {
+          const st = rdStatusOf.get(tab.key);
+          const dot = st === "connected" ? "bg-success" : st === "connecting" ? "bg-warning animate-pulse" : "bg-danger";
+          const isActive = tab.key === activeTabKey;
+          const meta = RD_META[tab.protocol];
+          return (
+            <div
+              key={tab.key}
+              data-rd-tab={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeRdTab(tab.key); } }}
+              onContextMenu={(e) => { e.preventDefault(); setActiveTab(tab.key); setRdTabMenu({ key: tab.key, x: e.clientX, y: e.clientY }); }}
+              title={t("{title}（遠端桌面，中鍵關閉）", { title: tab.title })}
+              className={`flex items-center gap-2 pl-3 pr-2 py-1.5 text-xs border-r border-fg/10 cursor-pointer whitespace-nowrap ${
+                isActive ? "bg-app text-fg shadow-[inset_0_-2px_0_rgb(var(--c-accent))]" : "text-fg/50 hover:bg-fg/5"
+              }`}
+            >
+              <Icon icon={meta.icon} size={13} className="shrink-0" style={{ color: meta.color }} />
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} aria-hidden />
+              <span>{tab.title}</span>
+              <button
+                type="button"
+                aria-label={t("關閉分頁 {table}", { table: tab.title })}
+                title={t("關閉分頁")}
+                onClick={(e) => { e.stopPropagation(); closeRdTab(tab.key); }}
+                className="w-5 h-5 flex items-center justify-center rounded hover:bg-fg/15 text-fg/40 hover:text-fg/80"
+              >
+                <Icon icon={X} size={12} />
+              </button>
+            </div>
+          );
+        })}
         <button type="button" onClick={addQueryTab} title={t("新增查詢分頁（Ctrl+T）")}
           aria-label={t("新增查詢分頁")}
           className="px-2 py-1.5 text-fg/40 hover:text-fg/80 hover:bg-fg/5 border-r border-fg/10 shrink-0">
@@ -3947,7 +4028,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
           查詢分頁全部關光且無表分頁在前景 → 空狀態（分頁列的「+」仍可開新查詢）。 */}
       {activeTab ? (
         <TableView tab={activeTab} />
-      ) : activeSsh ? null : activeQueryId ? (
+      ) : activeSsh || activeRd ? null : activeQueryId ? (
         <QueryPane key={activeQueryId} tabId={activeQueryId} />
       ) : (
         <div className="flex-1 flex items-center justify-center min-w-0">
@@ -3970,7 +4051,41 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
             ? <FtpPane key={tab.key} tab={tab} active={tab.key === activeTabKey} />
             : <SshTerminalPane key={tab.key} tab={tab} active={tab.key === activeTabKey} />
         ))}
+        {/* 遠端桌面同理：常駐掛載，切分頁不斷線。 */}
+        {rdTabs.map((tab) => (
+          <RdPane key={tab.key} tab={tab} active={tab.key === activeTabKey} />
+        ))}
       </Suspense>
+
+      {rdTabMenu && (
+        <MenuPanel x={rdTabMenu.x} y={rdTabMenu.y} minW={160} onClose={() => setRdTabMenu(null)}>
+          {(() => {
+            const key = rdTabMenu.key;
+            const tab = rdTabs.find((x) => x.key === key);
+            const items: [string, () => void][] = [];
+            if (tab) items.push([t("複製分頁"), () => openRdTab({ target: tab.target, protocol: tab.protocol, title: tab.title, sessionId: tab.sessionId })]);
+            items.push([t("重新命名…"), () => {
+              void uiPrompt(t("分頁名稱"), { title: t("重新命名分頁"), defaultValue: tab?.title ?? "" }).then((v) => { if (v?.trim()) renameRdTab(key, v.trim()); });
+            }]);
+            items.push([t("關閉"), () => closeRdTab(key)]);
+            if (rdTabs.length > 1) {
+              items.push([t("關閉其他遠端桌面"), () => closeOtherRdTabs(key)]);
+              items.push([t("全部關閉遠端桌面"), () => closeAllRdTabs()]);
+            }
+            if (tabs.length + queryTabs.length + sshTabs.length > 0) {
+              items.push([t("關閉其他分頁"), () => closeAllTabsExcept(key)]);
+              items.push([t("全部關閉"), () => closeAllTabsExcept(null)]);
+            }
+            return items.map(([label, fn]) => (
+              <button key={label} type="button"
+                onClick={() => { setRdTabMenu(null); fn(); }}
+                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+                {label}
+              </button>
+            ));
+          })()}
+        </MenuPanel>
+      )}
 
       {tabMenu && (
         <MenuPanel x={tabMenu.x} y={tabMenu.y} minW={140} onClose={() => setTabMenu(null)}>
@@ -4074,6 +4189,34 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
       )}
     </div>
   );
+}
+
+/** 開一個已存遠端桌面主機的分頁（側欄雙擊、對話框「儲存並連線」、分頁列選單）。 */
+function openRdSessionTab(s: RdSession, fullscreen?: boolean) {
+  useStore.getState().openRdTab({
+    target: { kind: "session", id: s.id },
+    protocol: s.protocol,
+    title: rdSessionLabel(s),
+    sessionId: s.id,
+    fullscreen: fullscreen || s.options.ui?.fullscreen === "1" || undefined,
+  });
+}
+
+/** 匯入 .rdp 連線檔：選檔 → 後端讀位元組（mstsc 存成 UTF-16LE）→ 前端解析 → 帶進遠端桌面主機對話框。 */
+async function importRdpFile(open: (prefill: ParsedRd) => void) {
+  const path = await pickOpenFile([{ name: t("遠端桌面連線檔"), extensions: ["rdp"] }]);
+  if (!path) return;
+  try {
+    const bytes = await api.rdReadRdpFile(path);
+    const parsed = parseRdpFile(decodeRdpFileBytes(new Uint8Array(bytes)));
+    if (!parsed) {
+      toast.error(t("這不是可以匯入的 .rdp 連線檔（找不到 full address）"));
+      return;
+    }
+    open(parsed);
+  } catch (e) {
+    toast.error((e as Error)?.message ?? String(e));
+  }
 }
 
 /** 分頁右鍵「重新連線」：透過 termRegistry 叫該分頁的 pane 重連（pane 自己持有 xterm 與連線）。 */

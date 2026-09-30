@@ -22,6 +22,8 @@ mod error;
 mod export;
 mod import;
 mod manager;
+// 遠端桌面（RDP / VNC）：不依賴 Tauri；GUI 的 command 在 commands/rd.rs。
+mod rd;
 // 審查並執行：逐句前後像 + 回滾腳本 + 輸出目錄。不依賴 Tauri，GUI 與 `dbk run` 共用。
 mod review_run;
 mod schema_cache;
@@ -77,6 +79,9 @@ use tauri::{Manager, RunEvent, WindowEvent};
 #[cfg(feature = "gui")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // RDP 的 TLS 用 `ClientConfig::builder()`（取程序預設 provider）：明確裝 ring，別讓它靠依賴樹剛好只有 ring。
+    #[cfg(feature = "rdp")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -88,6 +93,7 @@ pub fn run() {
             agent_jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             llm_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
             ssh: Arc::new(ssh::SshRuntime::new()),
+            rd: Arc::new(rd::RdRuntime::new()),
             #[cfg(feature = "kafka")]
             kafka_tails: Arc::new(Mutex::new(std::collections::HashMap::new())),
             #[cfg(feature = "kafka")]
@@ -560,6 +566,27 @@ pub fn run() {
             commands::ssh::ssh_sftp_cancel,
             commands::ssh::ssh_sftp_window_open,
             commands::ssh::ssh_sftp_window_close,
+            commands::rd::rd_sessions_list,
+            commands::rd::rd_session_save,
+            commands::rd::rd_session_remove,
+            commands::rd::rd_sessions_layout_save,
+            commands::rd::rd_has_stored_password,
+            commands::rd::rd_read_rdp_file,
+            commands::rd::rd_connect,
+            commands::rd::rd_disconnect,
+            commands::rd::rd_cert_answer,
+            commands::rd::rd_auth_answer,
+            commands::rd::rd_write,
+            commands::rd::rd_input,
+            commands::rd::rd_frame_ack,
+            commands::rd::rd_resize,
+            commands::rd::rd_refresh,
+            commands::rd::rd_send_keys,
+            commands::rd::rd_clipboard_set,
+            commands::rd::rd_keyboard_grab,
+            commands::rd::rd_clipboard_read,
+            commands::rd::rd_clipboard_write,
+            commands::rd::rd_set_fullscreen,
             agent::agent_detect,
             agent::agent_setup_terminal,
             agent::agent_send,
@@ -599,6 +626,7 @@ pub fn run() {
                 tauri::async_runtime::block_on(async {
                     state.manager.close_all().await;
                     state.ssh.shutdown_all().await;
+                    state.rd.shutdown_all().await;
                 });
             }
             // SFTP 視窗不管是按標題列的 ×、面板上的關閉，還是分頁關閉時被主視窗收掉，都收掉它開的 sftp 通道。
@@ -620,6 +648,7 @@ pub fn run() {
                 tauri::async_runtime::block_on(async {
                     state.manager.close_all().await;
                     state.ssh.shutdown_all().await;
+                    state.rd.shutdown_all().await;
                 });
             }
         });

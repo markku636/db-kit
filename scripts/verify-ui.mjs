@@ -118,6 +118,12 @@ const CASE_FX = {
   "docker-overview": CONTAINER_FX,
   "registry-tag-view": CONTAINER_FX,
   "harbor-artifacts": CONTAINER_FX,
+  // 遠端桌面：有一台 RDP、一台 VNC（Mac）主機（rd-from-conn-string 用預設的「一台都沒有」）。
+  "rd-rdp-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-vnc-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-cert-prompt": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-rdp-file-import": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-rustdesk-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
 };
 
 // ui/Field 的 <label> 沒有 htmlFor（沒和 input 綁定），getByLabel 找不到：改以「標籤文字所在的欄位」取第一個輸入框。
@@ -657,6 +663,234 @@ const CASES = {
     const panel = page.getByTestId("sftp-panel");
     await panel.getByText("app.log", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
     check("sftp:// 建的主機一開就展開 SFTP，停在起始資料夾", (await panel.getByText("app.log", { exact: true }).count()) > 0);
+  },
+
+  // 遠端桌面：沒有主機時側欄不顯示；新增連線有 RDP / VNC / RustDesk 卡片；貼 vnc:// 字串轉交遠端桌面對話框並拆好欄位。
+  async "rd-from-conn-string"(page) {
+    check("沒有遠端桌面主機時側欄沒有該區塊", (await page.locator("[data-rd-host-tree]").count()) === 0);
+    const newConn = async () => {
+      await page.getByRole("button", { name: "連線", exact: true }).first().click();
+      await page.getByRole("radiogroup", { name: "連線類型" }).waitFor({ timeout: 5000 }).catch(() => {});
+    };
+    await newConn();
+    for (const name of ["RDP", "VNC / Mac", "RustDesk"]) {
+      check(`類型選擇器有「${name}」`, (await page.getByRole("radio", { name, exact: true }).count()) === 1);
+    }
+    await page.getByRole("radio", { name: "VNC / Mac", exact: true }).click();
+    const title = page.getByText("新增遠端桌面", { exact: true });
+    await title.first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("點 VNC 卡片改開遠端桌面對話框", (await title.count()) > 0 && (await page.getByRole("radiogroup", { name: "連線類型" }).count()) === 0);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+
+    await newConn();
+    const url = page.getByPlaceholder("postgresql://user:pass@localhost:5432/dbname");
+    await url.fill("vnc://demo@mac-mini.local:1?ViewOnly=1");
+    await url.press("Enter");
+    await page.getByLabel("主機", { exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+    const vals = {
+      host: await page.getByLabel("主機", { exact: true }).inputValue().catch(() => null),
+      port: await page.getByLabel("埠", { exact: true }).inputValue().catch(() => null),
+      user: await page.getByLabel("使用者", { exact: true }).inputValue().catch(() => null),
+    };
+    check("vnc:// 字串拆好主機 / 顯示編號轉埠 / 使用者", vals.host === "mac-mini.local" && vals.port === "5901" && vals.user === "demo", JSON.stringify(vals));
+    check("顯示「已依連線字串填入」", (await page.getByText("已依連線字串填入，請確認後儲存").count()) > 0);
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_RD_SESSION_SAVES__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const saved = (await page.evaluate(() => window.__DBKIT_RD_SESSION_SAVES__)).at(-1)?.session;
+    check("存下去是 VNC、只看不控制", saved?.protocol === "vnc" && saved?.port === 5901 && saved?.options?.view_only === true, JSON.stringify(saved));
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    check("有了第一台主機，側欄遠端桌面區塊出現", (await tree.getByText("demo@mac-mini.local", { exact: true }).count()) > 0);
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // RDP 分頁：畫出後端送的差異區塊、ack、鍵盤送掃描碼且 Ctrl+W 進遠端、工具列組合鍵、全螢幕切換、斷線覆蓋層。
+  async "rd-rdp-session"(page) {
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    check("側欄有「遠端桌面」區塊", (await tree.count()) > 0);
+    await tree.getByText("win-srv01", { exact: true }).first().dblclick();
+    const canvas = page.locator("[data-rd-rdp] canvas");
+    await page.waitForFunction(() => document.querySelector("[data-rd-rdp] canvas")?.dataset.rdSize === "320x200", null, { timeout: 8000 }).catch(() => {});
+    check("畫布是遠端桌面的尺寸", (await canvas.getAttribute("data-rd-size").catch(() => null)) === "320x200");
+    const px = await page.evaluate(() => {
+      const c = document.querySelector("[data-rd-rdp] canvas");
+      const g = c?.getContext("2d");
+      return g ? [Array.from(g.getImageData(10, 10, 1, 1).data), Array.from(g.getImageData(300, 10, 1, 1).data)] : null;
+    });
+    check("畫出後端送的像素（左藍右橘）", !!px && px[0][2] === 200 && px[1][0] === 240, JSON.stringify(px));
+    await page.waitForFunction(() => window.__DBKIT_RD_ACKS__.includes(1), null, { timeout: 3000 }).catch(() => {});
+    check("畫完回 ack", await page.evaluate(() => window.__DBKIT_RD_ACKS__.includes(1)));
+
+    // 剪貼簿：本機剛複製的文字，畫面取得焦點時交給遠端；遠端複製的文字寫進本機剪貼簿。
+    // 連上時畫面已經拿到焦點：先移開（模擬切去別的程式複製），再點回來才會觸發 focus。
+    await canvas.blur();
+    await page.evaluate(() => { window.__DBKIT_RD_LOCAL_CLIP__ = "本機複製的文字"; });
+    await canvas.click({ position: { x: 20, y: 20 } });
+    await page.waitForFunction(() => window.__DBKIT_RD_CLIPBOARD__.length > 0, null, { timeout: 3000 }).catch(() => {});
+    check("畫面取得焦點時把本機剪貼簿交給遠端", await page.evaluate(() => window.__DBKIT_RD_CLIPBOARD__.at(-1) === "本機複製的文字"));
+    await page.evaluate(() => {
+      const t = new TextEncoder().encode("遠端複製的文字");
+      const h = new Uint8Array(16);
+      h[0] = 7; h[4] = t.length & 0xff; h[5] = t.length >> 8;
+      window.__DBKIT_RD_PUSH__([...h, ...t]);
+    });
+    await page.waitForFunction(() => window.__DBKIT_RD_CLIP_WRITES__.length > 0, null, { timeout: 3000 }).catch(() => {});
+    check("遠端複製的文字寫進本機剪貼簿", await page.evaluate(() => window.__DBKIT_RD_CLIP_WRITES__.at(-1) === "遠端複製的文字"));
+    await page.evaluate(() => { window.__DBKIT_RD_LOCAL_CLIP__ = "遠端複製的文字"; });
+    await canvas.blur();
+    await canvas.click({ position: { x: 22, y: 22 } });
+    await sleep(300);
+    check("剛從遠端拿到的文字不會又送回遠端", await page.evaluate(() => window.__DBKIT_RD_CLIPBOARD__.length === 1));
+
+    await canvas.click({ position: { x: 20, y: 20 } });
+    await page.keyboard.press("a");
+    await page.keyboard.press("Control+w");
+    // 等到 Ctrl+W 的 W（0x11）也送到了才讀（前面的滑鼠紀錄早就在了，不能只等「有東西」）。
+    await page.waitForFunction(() => {
+      for (const b of window.__DBKIT_RD_INPUTS__) for (let i = 0; i + 8 <= b.length; i += 8) if (b[i] === 1 && b[i + 2] === 0x11) return true;
+      return false;
+    }, null, { timeout: 3000 }).catch(() => {});
+    const recs = await page.evaluate(() => {
+      const out = [];
+      for (const b of window.__DBKIT_RD_INPUTS__) for (let i = 0; i + 8 <= b.length; i += 8) out.push(b.slice(i, i + 8));
+      return out;
+    });
+    check("按 A 送出掃描碼 0x1E", recs.some((r) => r[0] === 1 && r[2] === 0x1e), JSON.stringify(recs.slice(0, 6)));
+    check("滑鼠點擊送出按鍵紀錄", recs.some((r) => r[0] === 4));
+    check("Ctrl+W 進遠端、不關分頁", (await page.locator("[data-rd-tab]").count()) === 1 && recs.some((r) => r[0] === 1 && r[2] === 0x11));
+
+    await page.getByRole("button", { name: "送出按鍵", exact: true }).click();
+    await page.locator('[data-rd-combo="ctrl_alt_del"]').click();
+    await page.waitForFunction(() => window.__DBKIT_RD_KEYS__.length > 0, null, { timeout: 3000 }).catch(() => {});
+    check("工具列送 Ctrl+Alt+Del", await page.evaluate(() => window.__DBKIT_RD_KEYS__.includes("ctrl_alt_del")));
+
+    await page.getByTestId("rd-fullscreen").click();
+    await sleep(200);
+    check("全螢幕：分頁蓋住整個 app 並切視窗全螢幕",
+      (await page.locator("[data-rd-immersive]").count()) === 1 && (await page.evaluate(() => window.__DBKIT_RD_FULLSCREEN__.at(-1))) === true);
+    check("全螢幕時有浮動工具列", (await page.locator("[data-rd-floatbar]").count()) === 1);
+    await page.waitForFunction(() => window.__DBKIT_RD_GRAB__.at(-1) === window.__DBKIT_RD_LAST_CONN__, null, { timeout: 3000 }).catch(() => {});
+    check("全螢幕時請後端攔系統鍵", await page.evaluate(() => window.__DBKIT_RD_GRAB__.at(-1) === window.__DBKIT_RD_LAST_CONN__));
+    const before = await page.evaluate(() => window.__DBKIT_RD_INPUTS__.length);
+    await page.evaluate(() => window.__DBKIT_EMIT__("rd-grab-key", { conn_id: window.__DBKIT_RD_LAST_CONN__, scancode: 0xe05b, down: true }));
+    await page.waitForFunction((n) => window.__DBKIT_RD_INPUTS__.length > n, before, { timeout: 3000 }).catch(() => {});
+    const winRec = await page.evaluate((n) => window.__DBKIT_RD_INPUTS__.slice(n).flat(), before);
+    check("攔到的 Win 鍵以掃描碼 0xE05B 送到遠端", winRec[0] === 1 && winRec[2] === 0x5b && winRec[3] === 0xe0, JSON.stringify(winRec.slice(0, 8)));
+    await canvas.click({ position: { x: 40, y: 40 } });
+    await page.keyboard.press("Control+Alt+Enter");
+    await sleep(200);
+    check("Ctrl+Alt+Enter 離開全螢幕",
+      (await page.locator("[data-rd-immersive]").count()) === 0 && (await page.evaluate(() => window.__DBKIT_RD_FULLSCREEN__.at(-1))) === false);
+    check("離開全螢幕就不再攔系統鍵", await page.evaluate(() => window.__DBKIT_RD_GRAB__.at(-1) === null));
+
+    await page.evaluate(() => window.__DBKIT_EMIT__("rd-conn-closed", { conn_id: window.__DBKIT_RD_LAST_CONN__, reason: "遠端主機結束了工作階段" }));
+    const overlay = page.locator('[data-rd-overlay="disconnected"]');
+    await overlay.waitFor({ timeout: 3000 }).catch(() => {});
+    check("斷線顯示覆蓋層與原因", (await overlay.getByText("遠端主機結束了工作階段").count()) > 0);
+    await overlay.getByRole("button", { name: "重新連線", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_RD_CONNECTS__.length >= 2, null, { timeout: 3000 }).catch(() => {});
+    check("按「重新連線」重撥", await page.evaluate(() => window.__DBKIT_RD_CONNECTS__.length >= 2));
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // VNC 分頁（Mac 螢幕共享）：真的 noVNC 經 VncChannel 走完假伺服器的握手並畫出畫面；未加密徽章；鍵盤 / 組合鍵走 rd_write。
+  async "rd-vnc-session"(page) {
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("mac-mini", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => {
+      const c = document.querySelector("[data-rd-vnc] canvas");
+      return !!c && c.width === 64 && c.height === 48;
+    }, null, { timeout: 10000 }).catch(() => {});
+    const size = await page.evaluate(() => { const c = document.querySelector("[data-rd-vnc] canvas"); return c ? `${c.width}x${c.height}` : null; });
+    check("noVNC 畫布是伺服器的桌面尺寸", size === "64x48", String(size));
+    await sleep(400);
+    const px = await page.evaluate(() => {
+      const c = document.querySelector("[data-rd-vnc] canvas");
+      return c ? Array.from(c.getContext("2d").getImageData(5, 5, 1, 1).data) : null;
+    });
+    check("畫出伺服器送的畫面（綠）", !!px && px[1] > 150 && px[0] < 80, JSON.stringify(px));
+    check("未加密的連線有徽章", (await page.locator("[data-rd-unencrypted]").count()) > 0);
+    const first = await page.evaluate(() => window.__DBKIT_RD_WRITES__[0]);
+    check("noVNC 的第一筆是 RFB 版本字串（走假握手）", !!first && String.fromCharCode(...first).startsWith("RFB 003.008"), JSON.stringify(first));
+    await page.locator("[data-rd-vnc] canvas").click({ position: { x: 10, y: 10 } });
+    await page.keyboard.press("b");
+    await page.getByRole("button", { name: "送出按鍵", exact: true }).click();
+    await page.locator('[data-rd-combo="ctrl_alt_del"]').click();
+    await sleep(300);
+    const writes = await page.evaluate(() => window.__DBKIT_RD_WRITES__);
+    const keyEvents = writes.flatMap((w) => {
+      const out = [];
+      for (let i = 0; i + 8 <= w.length; i++) if (w[i] === 4 && (w[i + 1] === 0 || w[i + 1] === 1) && w[i + 2] === 0 && w[i + 3] === 0) out.push(w.slice(i, i + 8));
+      return out;
+    });
+    const sym = (k) => ((k[4] << 24) | (k[5] << 16) | (k[6] << 8) | k[7]) >>> 0;
+    check("按鍵經 rd_write 送出 KeyEvent（b）", keyEvents.some((k) => sym(k) === 0x62), JSON.stringify(keyEvents.slice(0, 4)));
+    check("Ctrl+Alt+Del 經 noVNC 送出", keyEvents.some((k) => sym(k) === 0xffff));
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // RDP 憑證 TOFU：首次連線問指紋，接受後才連上。
+  async "rd-cert-prompt"(page) {
+    await page.evaluate(() => { window.__DBKIT_RD_PROMPT__ = "cert"; });
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("win-srv01", { exact: true }).first().dblclick();
+    const fp = page.getByText("SHA256:0Rd3mOCertFpXq1zW9vB7nK5jH3gF1dS8aP6oI4uY2t");
+    await fp.first().waitFor({ timeout: 5000 }).catch(() => {});
+    check("首次連線顯示伺服器憑證指紋", (await fp.count()) > 0);
+    check("連上之前畫面是「正在連線」", (await page.locator('[data-rd-overlay="connecting"]').count()) === 1);
+    await page.getByRole("button", { name: "接受並儲存", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("[data-rd-rdp] canvas")?.dataset.rdSize === "320x200", null, { timeout: 5000 }).catch(() => {});
+    check("接受後連上", (await page.locator("[data-rd-overlay]").count()) === 0 && (await page.evaluate(() => window.__DBKIT_RD_ANSWERS__.includes("accept_save"))));
+  },
+
+  // RustDesk：真的 RustDesk 錄下來的 VP9 關鍵畫面經 WebCodecs 解出來；未加密徽章；鍵盤 / 滑鼠 / Ctrl+Alt+Del 走對的路。
+  async "rd-rustdesk-session"(page) {
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("office-pc", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "1024x768", null, { timeout: 10000 }).catch(() => {});
+    const size = await page.evaluate(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize ?? null);
+    check("WebCodecs 解出 RustDesk 的 VP9 畫面（1024×768）", size === "1024x768", String(size));
+    check("Direct IP 標示未加密", (await page.locator("[data-rd-unencrypted]").count()) > 0);
+    const canvas = page.locator("[data-rd-rustdesk] canvas");
+    await canvas.click({ position: { x: 50, y: 50 } });
+    await page.keyboard.press("a");
+    await page.getByRole("button", { name: "送出按鍵", exact: true }).click();
+    await page.locator('[data-rd-combo="ctrl_alt_del"]').click();
+    await sleep(400);
+    const cmds = await page.evaluate(() => window.__DBKIT_RD_WRITES__.map((b) => { try { return JSON.parse(String.fromCharCode(...b)); } catch { return null; } }).filter(Boolean));
+    check("滑鼠點擊送出 RustDesk 的 mouse 指令（左鍵按下 mask 9）", cmds.some((c) => c.t === "mouse" && c.mask === 9), JSON.stringify(cmds.slice(0, 4)));
+    check("按 A 送出掃描碼 0x1E", cmds.some((c) => c.t === "key" && c.down === true && c.scancode === 0x1e));
+    check("Ctrl+Alt+Del 經後端送（不是拆成三個鍵）", await page.evaluate(() => window.__DBKIT_RD_KEYS__.includes("ctrl_alt_del")));
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // 匯入 .rdp（mstsc 存的 UTF-16LE）：帶進對話框，網域拆開、全螢幕 / 解析度進進階設定。
+  async "rd-rdp-file-import"(page) {
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.hover();
+    await page.getByRole("button", { name: "匯入 .rdp 連線檔", exact: true }).click();
+    await page.getByLabel("主機", { exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+    const vals = {
+      host: await page.getByLabel("主機", { exact: true }).inputValue().catch(() => null),
+      port: await page.getByLabel("埠", { exact: true }).inputValue().catch(() => null),
+      user: await page.getByLabel("使用者", { exact: true }).inputValue().catch(() => null),
+      domain: await page.getByLabel("網域", { exact: true }).inputValue().catch(() => null),
+      fs: await page.getByLabel("連線後直接全螢幕").isChecked().catch(() => null),
+      w: await page.getByLabel("寬", { exact: true }).inputValue().catch(() => null),
+    };
+    check(".rdp 檔帶入主機 / 埠 / 帳號 / 網域 / 全螢幕 / 解析度",
+      vals.host === "rdp.example.com" && vals.port === "3390" && vals.user === "alice" && vals.domain === "CORP" && vals.fs === true && vals.w === "1600",
+      JSON.stringify(vals));
   },
 
   // SSH 主機對話框的主機欄：貼 ssh 指令 / user@host:port 會拆進各欄位（跳板機對到已存主機）。

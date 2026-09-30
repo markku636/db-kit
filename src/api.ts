@@ -14,6 +14,10 @@ import type {
 import type {
   RegistryInfo, RegistryManifest, HarborOverview, HarborProject, HarborRepository, HarborArtifactPage, HarborVulnReport,
 } from "./registryTypes";
+import type {
+  RdSessionsFile, RdSession, RdFolder, RdPlacement, RdTargetRef, RdConnInfo, RdCertDecision, RdCertPrompt,
+  RdAuthPrompt, RdAuthAnswer, RdConnClosed,
+} from "./rdTypes";
 
 export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "docker" | "registry" | "harbor" | "external";
 
@@ -625,6 +629,31 @@ export function onSshConnClosed(connId: string, cb: (p: SshConnClosed) => void):
 // SFTP 傳輸進度：全域一個監聽，由呼叫端依 transfer_id 分派（同時可能有多個上下傳）。
 export function onSftpProgress(cb: (p: SftpProgress) => void): Promise<UnlistenFn> {
   return listen<SftpProgress>("ssh-sftp-progress", (e) => cb(e.payload));
+}
+
+// ---- 遠端桌面（RDP / VNC）事件（DTO 見 rdTypes.ts）----
+// 憑證 / 帳密提問：conn_id 同 SSH，由前端在 rdConnect 前就產好。經 SSH 主機連線時，SSH 那段的提問
+// 仍走 onSshHostKeyPrompt / onSshAuthPrompt（conn_id 相同）。
+export function onRdCertPrompt(connId: string, cb: (p: RdCertPrompt) => void): Promise<UnlistenFn> {
+  return listen<RdCertPrompt>("rd-cert-prompt", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload);
+  });
+}
+export function onRdAuthPrompt(connId: string, cb: (p: RdAuthPrompt) => void): Promise<UnlistenFn> {
+  return listen<RdAuthPrompt>("rd-auth-prompt", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload);
+  });
+}
+/** 後端鍵盤 hook 攔到的系統鍵（只有全螢幕、且 rdKeyboardGrab 指到這條連線時才會來）。 */
+export function onRdGrabKey(connId: string, cb: (p: { conn_id: string; scancode: number; down: boolean }) => void): Promise<UnlistenFn> {
+  return listen<{ conn_id: string; scancode: number; down: boolean }>("rd-grab-key", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload);
+  });
+}
+export function onRdConnClosed(connId: string, cb: (p: RdConnClosed) => void): Promise<UnlistenFn> {
+  return listen<RdConnClosed>("rd-conn-closed", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload);
+  });
 }
 
 // ---- AI 助手（本機 claude / codex CLI，或 Anthropic / OpenAI 相容 API）----
@@ -2120,4 +2149,41 @@ export const api = {
   // 終端機工作階段記錄：truncate = 開始記錄（清空重寫），否則追加。
   sshSessionLogWrite: (path: string, text: string, truncate: boolean) => invoke<void>("ssh_session_log_write", { path, text, truncate }),
   sshImportDefaultPath: (kind: SshHostImportKind) => invoke<string | null>("ssh_import_default_path", { kind }),
+
+  // ---- 遠端桌面（RDP / VNC；DTO 見 rdTypes.ts）----
+  // 主機清單：永不含密碼。存檔時密碼另帶，非空才寫 keychain、空 = 保留原值。
+  rdSessionsList: () => invoke<RdSessionsFile>("rd_sessions_list"),
+  rdSessionSave: (session: RdSession, password?: string | null) =>
+    invoke<void>("rd_session_save", { session, password: password ?? null }),
+  rdSessionRemove: (id: string) => invoke<void>("rd_session_remove", { id }),
+  rdSessionsLayoutSave: (folders: RdFolder[], order: RdPlacement[]) =>
+    invoke<void>("rd_sessions_layout_save", { folders, order }),
+  rdHasStoredPassword: (id: string) => invoke<boolean>("rd_has_stored_password", { id }),
+  // .rdp 檔原始位元組（mstsc 存成 UTF-16LE；解碼 / 解析在 rdpFile.ts）。
+  rdReadRdpFile: (path: string) => invoke<number[]>("rd_read_rdp_file", { path }),
+  // 連線：等到認證完成（含使用者回答提問）才 resolve；輸出走 onOutput（VNC = RFB 位元組、RDP = rdFrames 的 record）。
+  // width / height = 分頁可用像素（RDP 初始解析度），scale = devicePixelRatio × 100。
+  rdConnect: (connId: string, target: RdTargetRef, width: number, height: number, scale: number, onOutput: Channel<ArrayBuffer>) =>
+    invoke<RdConnInfo>("rd_connect", { connId, target, width, height, scale, onOutput }),
+  rdDisconnect: (connId: string) => invoke<void>("rd_disconnect", { connId }),
+  rdCertAnswer: (promptId: string, decision: RdCertDecision) => invoke<void>("rd_cert_answer", { promptId, decision }),
+  // answer = null 代表取消（連線以 RdCancelled 失敗）。
+  rdAuthAnswer: (promptId: string, answer: RdAuthAnswer | null) => invoke<void>("rd_auth_answer", { promptId, answer }),
+  // 前端 → 後端的高頻資料走 raw body（不經 JSON / base64），conn id 放 header。
+  rdWrite: (connId: string, bytes: Uint8Array) => invoke<void>("rd_write", bytes, { headers: { "x-rd-conn": connId } }),
+  rdInput: (connId: string, bytes: Uint8Array) => invoke<void>("rd_input", bytes, { headers: { "x-rd-conn": connId } }),
+  rdFrameAck: (connId: string, seq: number) => invoke<void>("rd_frame_ack", { connId, seq }),
+  rdResize: (connId: string, width: number, height: number, scale: number) =>
+    invoke<void>("rd_resize", { connId, width, height, scale }),
+  rdRefresh: (connId: string) => invoke<void>("rd_refresh", { connId }),
+  rdSendKeys: (connId: string, combo: string) => invoke<void>("rd_send_keys", { connId, combo }),
+  // 本機剪貼簿文字交給遠端（RDP；VNC 由 noVNC 自己同步）。
+  rdClipboardSet: (connId: string, text: string) => invoke<void>("rd_clipboard_set", { connId, text }),
+  // 本機系統剪貼簿（後端讀寫：webview 的 navigator.clipboard.readText 會跳權限詢問、搶走遠端畫面的焦點）。
+  rdClipboardRead: () => invoke<string | null>("rd_clipboard_read"),
+  rdClipboardWrite: (text: string) => invoke<void>("rd_clipboard_write", { text }),
+  // 視窗層級全螢幕（WebView2 的 HTML Fullscreen API 只填滿 webview）。
+  rdSetFullscreen: (on: boolean) => invoke<void>("rd_set_fullscreen", { on }),
+  // 全螢幕時攔 Win / Alt+Tab / Alt+F4 / Ctrl+Esc 轉給這條連線（null = 停止）；攔到的鍵走 onRdGrabKey。
+  rdKeyboardGrab: (connId: string | null) => invoke<void>("rd_keyboard_grab", { connId }),
 };

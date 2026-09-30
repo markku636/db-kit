@@ -19,7 +19,11 @@ export default defineConfig({
     // 提供私有 gateway 驅動的下游打包可設 DBKIT_EXTERNAL=1 於建置期開啟。
     __EXTERNAL__: JSON.stringify(process.env.DBKIT_EXTERNAL === "1"),
   },
+  // noVNC 1.7（遠端桌面 VNC 分頁）的 core/util/browser.js 有 top-level await（偵測 WebCodecs H.264），
+  // Vite 預設的建置目標不吃；es2022 起支援。WebView2（Chromium）與 macOS 12+ 的 WKWebView 都在範圍內。
+  optimizeDeps: { esbuildOptions: { target: "es2022" } },
   build: {
+    target: "es2022",
     rollupOptions: {
       // 兩個頁面：主視窗（index.html）與 SFTP 獨立視窗（sftp.html，只載 SFTP 面板，不帶主介面）。
       input: {
@@ -34,6 +38,8 @@ export default defineConfig({
           if (/@codemirror|@uiw|@lezer|[\\/]node_modules[\\/]codemirror/.test(id)) return "codemirror";
           // xterm.js 全家桶獨立一包：只有 lazy 的 SshTerminalPane 依賴它，沒開終端機就不下載。
           if (/[\\/]node_modules[\\/]@xterm[\\/]/.test(id)) return "xterm";
+          // noVNC 獨立一包：只有 lazy 的 VncView 依賴它，沒開 VNC 分頁就不下載。
+          if (/[\\/]node_modules[\\/]@novnc[\\/]/.test(id)) return "novnc";
           // React 核心獨立一包：快取穩定（App 改版時 vendor chunk hash 不變）。
           if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return "react-vendor";
         },

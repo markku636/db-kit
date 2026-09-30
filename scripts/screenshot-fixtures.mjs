@@ -660,3 +660,28 @@ export const HARBOR_VULNS = {
     { id: "CVE-2026-2222", package: "zlib", version: "1.2.13", fix_version: "", severity: "Medium", description: "Demo vulnerability", links: [], cvss: 5.3 },
   ],
 };
+
+// 遠端桌面主機（預設情境不帶：一台都沒有時側欄不顯示「遠端桌面」區塊，截圖維持原樣；RD 情境用 CASE_FX 換成這份）。
+// DTO 形狀與 src/rdTypes.ts 的 RdSession 一致。
+const RD_OPTS = {
+  resize_mode: "scale", color_depth: 32, width: 0, height: 0, nla: true, view_only: false, clipboard: true,
+  vnc_security: "auto", vnc_shared: true, rustdesk_server: "", rustdesk_key: "", rustdesk_relay: false,
+  connect_timeout_secs: 0, ui: {},
+};
+export const RD_SESSIONS = { version: 1, folders: [], sessions: [] };
+export const RD_SESSIONS_DEMO = {
+  version: 1,
+  folders: [{ id: "rf-office", name: "OFFICE", parent_id: null }],
+  sessions: [
+    { id: "rd-win01", name: "win-srv01", protocol: "rdp", host: "10.20.0.30", port: 0, username: "administrator", domain: "CORP", via_ssh_session_id: null, folder_id: "rf-office", options: RD_OPTS },
+    { id: "rd-mac", name: "mac-mini", protocol: "vnc", host: "mac-mini.local", port: 0, username: "demo", domain: "", via_ssh_session_id: null, folder_id: null, options: RD_OPTS },
+    { id: "rd-desk", name: "office-pc", protocol: "rustdesk", host: "192.168.1.50", port: 0, username: "", domain: "", via_ssh_session_id: null, folder_id: null, options: RD_OPTS },
+  ],
+};
+// 匯入 .rdp 用的檔案內容：mstsc 存成 UTF-16LE + BOM（rd_read_rdp_file 回原始位元組）。
+const RDP_TEXT = "screen mode id:i:2\r\ndesktopwidth:i:1600\r\ndesktopheight:i:900\r\nfull address:s:rdp.example.com:3390\r\nusername:s:CORP\\alice\r\n";
+export const RDP_FILE_BYTES = [0xff, 0xfe, ...[...RDP_TEXT].flatMap((c) => [c.charCodeAt(0) & 0xff, c.charCodeAt(0) >> 8])];
+
+// RustDesk 的一則影像訊息（輔助程式轉給前端的原樣：[2][codec=1 VP9][key=1][display][rsv][pts i64] + VP9 關鍵畫面），
+// 從 Docker 裡真的 RustDesk 1.4.9 被控端（Xvfb 1024×768 + xterm）錄下來：假後端送它，驗 WebCodecs 真的解得出畫面。
+export const RUSTDESK_VP9_KEYFRAME_B64 = "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";

@@ -24,6 +24,11 @@
 | — | 資料匯出（CSV / TSV / JSON / SQL / Markdown，多選項） | ✅ 完成 |
 | — | SSH host key 驗證（TOFU） | ✅ 完成 |
 | — | **SSH 終端機 + SFTP**（參考 Xshell）：側欄獨立「SSH 主機」清單（資料夾；有主機才出現）、可從「新增連線」貼 ssh:// / sftp:// 連線字串加入、多分頁 xterm.js 終端機（密碼 / 私鑰 / keyboard-interactive / ssh-agent · Pageant；私鑰可匯入 OpenSSH、PuTTY PPK、PKCS#8、PEM（含 OpenSSL 3DES / AES 加密）、DER，支援 OpenSSH 使用者憑證，App 內金鑰庫可匯入 / 產生 / 匯出；主機可從 ~/.ssh/config 與 .xsh 工作階段檔匯入；跳板機 ProxyJump（可多層）；終端機狀態列、工作階段記錄與畫面內容存檔）、host key 首次 / 變更確認、命令列輸入條、SFTP 分割面板（瀏覽 / 上下傳 / 改名 / 刪除；Xftp 式 App 內編輯、權限、篩選；多選與資料夾批次上傳下載；斷點續傳；開在終端機所在的資料夾、可跟隨 cd；剪下 / 貼上搬檔；可開成獨立視窗、拖放檔案上傳）、已設 SSH tunnel 的資料庫連線可直接開終端機；AI 只建議指令、由使用者按鈕送出（危險指令分級確認） | ✅ 完成 |
+| — | **遠端桌面（RDP / VNC / Mac 螢幕共享）**：側欄獨立「遠端桌面」清單（資料夾；有主機才出現）、分頁內嵌畫面（RDP 走 IronRDP，TLS / NLA、憑證首次確認、差異區塊 + 反壓；VNC 走 noVNC，後端代做認證含 Apple ARD，密碼不進前端）、全螢幕（Ctrl+Alt+Enter，浮動工具列送 Ctrl+Alt+Del / Win / Alt+Tab）、動態解析度 / 縮放 / 原始大小、可經已存 SSH 主機轉接、連線字串（rdp:// 兩種寫法、mstsc /v:、vnc://、rustdesk://）與 .rdp 檔匯入 | ✅ 完成 |
+| — | 遠端桌面第二階段：RDP / VNC 剪貼簿文字同步（系統剪貼簿由後端讀寫）、Windows 低階鍵盤攔截（全螢幕時 Win / Alt+Tab / Alt+F4 / Ctrl+Esc 直接進遠端） | ✅ 完成 |
+| — | 遠端桌面第三階段：VeNCrypt TLS、RDP 剪貼簿圖片 / 檔案、macOS 全螢幕按鍵攔截（需輔助使用權限） | ⏳ 規劃中 |
+| — | RustDesk 相容連線第一階段：獨立 AGPL 輔助程式 `rustdesk-bridge/`（stdin / stdout 與 db-kit 對話）、Direct IP、密碼登入 / 對方按接受、VP9 / VP8 影像原封不動交給 WebView 的 WebCodecs 解碼、鍵盤滑鼠、可經 SSH 主機轉接 | ✅ 完成 |
+| — | RustDesk 第二階段：ID 伺服器（hbbs）→ 中繼（hbbr）→ 加密連線（簽章 ID、box / secretbox 金鑰交換）、剪貼簿、游標圖 | ⏳ 規劃中 |
 | — | 查詢效能分析（EXPLAIN） | ✅ 完成 |
 | — | 結構編輯（DDL：新增/刪除/改名欄位） | ✅ 完成 |
 | — | ER 圖（表 + 外鍵關係） | ✅ 完成 |

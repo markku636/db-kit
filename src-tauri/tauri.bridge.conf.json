@@ -1,0 +1,6 @@
+{
+  "$comment": "只在發版時合併（release.yml：tauri build --config src-tauri/tauri.bridge.conf.json）。把 RustDesk 相容連線的 AGPL 輔助程式（repo 的 rustdesk-bridge/，獨立程式）打包成 sidecar；執行時 db-kit 在主程式旁邊找它。",
+  "bundle": {
+    "externalBin": ["binaries/dbk-rustdesk-bridge"]
+  }
+}

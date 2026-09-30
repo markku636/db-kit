@@ -34,6 +34,11 @@ impl KnownHostsStore {
         }
     }
 
+    /// 設定目錄下的另一份同格式清單（遠端桌面的 RDP 憑證指紋 `rd_known_certs.json`）。
+    pub fn config_file(name: &str) -> Self {
+        Self { path: dirs::config_dir().map(|d| d.join("dev.dbkit.app").join(name)) }
+    }
+
     /// 指定檔案（測試用）。
     pub fn at(path: PathBuf) -> Self {
         Self { path: Some(path) }

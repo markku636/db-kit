@@ -1,0 +1,51 @@
+# dbk-rustdesk-bridge
+
+db-kit 的 RustDesk 相容連線輔助程式。
+
+## 為什麼是獨立的程式
+
+RustDesk 的協定定義（`protos/message.proto`）與連線邏輯以 **AGPL-3.0** 授權；db-kit 本體是 **MIT**。
+為了讓 db-kit 維持 MIT，所有取自 RustDesk 的東西都放在這個獨立的執行檔裡，並以 AGPL-3.0 發行
+（授權全文見 `LICENSE`，原始碼即本資料夾）。db-kit 只把它當成子程序啟動、透過 stdin / stdout
+交換訊息，兩者之間沒有程式碼連結。
+
+「RustDesk」是 RustDesk 專案的名稱；這個程式是與其相容的第三方實作，不是官方用戶端。
+
+## 取自 RustDesk 的部分
+
+| 檔案 | 來源 |
+|---|---|
+| `protos/message.proto` | `rustdesk/rustdesk` 的 `libs/base/protos/message.proto`（原樣） |
+| `src/codec.rs` | `rustdesk/hbb_common` 的 `src/bytes_codec.rs`（封包長度標頭的編解碼） |
+| `src/session.rs` 的登入流程 | `rustdesk/rustdesk` 的 `src/client.rs`（`handle_hash` 的密碼雜湊、`create_login_msg`）與 `src/client/io_loop.rs` |
+
+## 目前支援
+
+- **Direct IP**：直接連對方電腦的 21118 埠（對方要在 RustDesk 設定裡開啟「允許 IP 直接存取」）。
+  這個模式跟 RustDesk 官方用戶端一樣**不加密**（沒有 ID 伺服器可以驗證對方的金鑰），適合區網或搭配 SSH 轉接。
+- 密碼登入（`sha256(sha256(密碼 + salt) + challenge)`）；不帶密碼時由對方在畫面上按「接受」。
+- 影像：只協商 VP9 / VP8 / AV1，**不解碼**，把編碼後的畫面原封不動交給 db-kit，由 WebView 的 WebCodecs 解碼
+  （所以不需要 libvpx / aom / ffmpeg 這些 C 函式庫）。
+- 滑鼠、鍵盤（送 PC 掃描碼，`KeyboardMode::Map`）、Ctrl+Alt+Del、要求重送畫面。
+
+尚未支援：ID 伺服器（hbbs）與中繼（hbbr）、加密連線、剪貼簿、音訊、檔案傳輸。
+
+## 與 db-kit 的訊息格式（stdin / stdout）
+
+每則訊息：`[u32 長度（little-endian，不含這 4 bytes）][u8 型別][內容]`。
+
+| 方向 | 型別 | 內容 |
+|---|---|---|
+| db-kit → bridge | 1 | JSON 指令：`connect` / `mouse` / `key` / `ctrl_alt_del` / `refresh` |
+| bridge → db-kit | 1 | JSON 事件：`connected` / `login_error` / `error` / `closed` |
+| bridge → db-kit | 2 | 影像：`[u8 codec][u8 key][u8 display][u8 保留][i64 pts]` + 編碼後的資料 |
+
+stdin 關閉（db-kit 結束或斷線）時程式自己結束。密碼只經 stdin 傳，不放在命令列（命令列別的程式看得到）。
+
+## 建置
+
+```
+cargo build --release
+```
+
+db-kit 打包時把產出的執行檔放到 `src-tauri/binaries/dbk-rustdesk-bridge-<target-triple>[.exe]`（Tauri 的 `externalBin`）。

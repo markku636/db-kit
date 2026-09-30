@@ -45,6 +45,20 @@ export function installShim(fx) {
   // 終端機工作階段記錄與「另存文字檔」的紀錄。
   window.__DBKIT_SSH_LOG__ = [];
   window.__DBKIT_SAVED_FILES__ = [];
+  // 遠端桌面：存檔、連線 / 斷線、送出的位元組 / 輸入紀錄 / ack / resize / 組合鍵 / 全螢幕切換、提示的答案。
+  window.__DBKIT_RD_SESSION_SAVES__ = [];
+  window.__DBKIT_RD_CONNECTS__ = [];
+  window.__DBKIT_RD_DISCONNECTS__ = [];
+  window.__DBKIT_RD_WRITES__ = [];
+  window.__DBKIT_RD_INPUTS__ = [];
+  window.__DBKIT_RD_ACKS__ = [];
+  window.__DBKIT_RD_RESIZES__ = [];
+  window.__DBKIT_RD_KEYS__ = [];
+  window.__DBKIT_RD_FULLSCREEN__ = [];
+  window.__DBKIT_RD_ANSWERS__ = [];
+  window.__DBKIT_RD_CLIPBOARD__ = [];
+  window.__DBKIT_RD_GRAB__ = [];
+  window.__DBKIT_RD_CLIP_WRITES__ = [];
   window.__DBKIT_KEY_IMPORTS__ = [];
   const one = (columns, cells) => ({ columns, rows: [cells], rows_affected: 0 });
 
@@ -372,6 +386,96 @@ export function installShim(fx) {
       return null;
     },
 
+    // ── 遠端桌面（RDP / VNC）─────────────────────────────────────────────
+    // 主機清單有狀態（同 SSH）。連線：RDP 送一張合成畫面（rdFrames 的 record），VNC 起一台假 RFB 伺服器（見 rdVncServer），
+    // 讓真的 noVNC 走完握手、畫出像素。高頻命令（rd_write / rd_input）是 raw body + x-rd-conn header。
+    rd_sessions_list: () => JSON.parse(JSON.stringify(rdSessionsState)),
+    rd_session_save: ({ session, password }) => {
+      window.__DBKIT_RD_SESSION_SAVES__.push({ session, password });
+      const i = rdSessionsState.sessions.findIndex((x) => x.id === session.id);
+      if (i >= 0) rdSessionsState.sessions[i] = session;
+      else rdSessionsState.sessions.push(session);
+      return null;
+    },
+    rd_session_remove: ({ id }) => { rdSessionsState.sessions = rdSessionsState.sessions.filter((x) => x.id !== id); return null; },
+    rd_sessions_layout_save: ({ folders, order }) => {
+      rdSessionsState.folders = folders;
+      const pos = new Map(order.map((p, i) => [p.id, [i, p.folder_id]]));
+      rdSessionsState.sessions = rdSessionsState.sessions
+        .map((s) => (pos.has(s.id) ? { ...s, folder_id: pos.get(s.id)[1] } : s))
+        .sort((a, b) => (pos.get(a.id)?.[0] ?? 1e9) - (pos.get(b.id)?.[0] ?? 1e9));
+      return null;
+    },
+    rd_has_stored_password: () => false,
+    rd_read_rdp_file: () => fx.RDP_FILE_BYTES ?? [],
+    rd_connect: ({ connId, target, onOutput }) => {
+      const sessions = rdSessionsState.sessions;
+      const s = target?.kind === "session" ? sessions.find((x) => x.id === target.id) : target?.session;
+      const protocol = s?.protocol ?? "rdp";
+      window.__DBKIT_RD_LAST_CONN__ = connId;
+      window.__DBKIT_RD_CONNECTS__.push({ connId, target });
+      const send = channelBytes(onOutput);
+      const finish = () => {
+        if (protocol === "vnc") {
+          rdVnc.set(connId, rdVncServer(send));
+          return { conn_id: connId, protocol, width: 0, height: 0, security: "vnc-auth", encrypted: false };
+        }
+        if (protocol === "rustdesk") {
+          // 輔助程式的「登入成功」事件（[型別 1][JSON]）；影像是 VP9 位元流，假後端做不出來，不送。
+          const hello = new TextEncoder().encode(JSON.stringify({
+            type: "connected",
+            peer: { hostname: "office-pc", displays: [{ x: 0, y: 0, width: 1280, height: 720, name: "" }], current_display: 0 },
+          }));
+          setTimeout(() => send(new Uint8Array([1, ...hello])), 20);
+          // 真的 RustDesk 錄下來的 VP9 關鍵畫面（見 screenshot-fixtures.mjs）：前端要用 WebCodecs 解出 1024×768。
+          if (fx.RUSTDESK_VP9_KEYFRAME_B64) {
+            const bin = atob(fx.RUSTDESK_VP9_KEYFRAME_B64);
+            const frame = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) frame[i] = bin.charCodeAt(i);
+            setTimeout(() => send(frame), 60);
+          }
+          return { conn_id: connId, protocol, width: 1280, height: 720, security: "rustdesk-direct", encrypted: false };
+        }
+        setTimeout(() => send(rdpDemoFrame(320, 200, 1)), 30);
+        window.__DBKIT_RD_PUSH__ = (bytes) => send(new Uint8Array(bytes)); // 情境直接塞後端訊息（例如遠端剪貼簿）
+        return { conn_id: connId, protocol, width: 320, height: 200, security: "nla", encrypted: true };
+      };
+      // 情境可要求先問憑證（window.__DBKIT_RD_PROMPT__ = "cert"）：等使用者回答才回來，拒絕 = 取消。
+      if (window.__DBKIT_RD_PROMPT__ === "cert") {
+        return new Promise((resolve, reject) => {
+          const promptId = `rdp-${++sshSeq}`;
+          rdPrompts.set(promptId, (d) => (d === "reject" ? reject({ kind: "rd_cancelled", code: "ERR_RD_CANCELLED", message: "cancelled" }) : resolve(finish())));
+          setTimeout(() => emit("rd-cert-prompt", {
+            prompt_id: promptId, conn_id: connId, host_id: `${s?.host ?? "host"}:3389`,
+            fingerprint: "SHA256:0Rd3mOCertFpXq1zW9vB7nK5jH3gF1dS8aP6oI4uY2t", subject: "CN=WIN-SRV01", status: "new", old_fingerprint: null,
+          }), 20);
+        });
+      }
+      if (window.__DBKIT_RD_FAIL__) return Promise.reject({ kind: "rd", code: "ERR_RD", message: window.__DBKIT_RD_FAIL__ });
+      return finish();
+    },
+    rd_disconnect: ({ connId }) => { window.__DBKIT_RD_DISCONNECTS__.push(connId); rdVnc.delete(connId); return null; },
+    rd_cert_answer: ({ promptId, decision }) => { window.__DBKIT_RD_ANSWERS__.push(decision); rdPrompts.get(promptId)?.(decision); rdPrompts.delete(promptId); return null; },
+    rd_auth_answer: ({ promptId, answer }) => { window.__DBKIT_RD_ANSWERS__.push(answer); rdPrompts.get(promptId)?.(answer); rdPrompts.delete(promptId); return null; },
+    rd_write: (bytes, opts) => {
+      const id = opts?.headers?.["x-rd-conn"];
+      const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
+      window.__DBKIT_RD_WRITES__.push(Array.from(u8));
+      rdVnc.get(id)?.(u8);
+      return null;
+    },
+    rd_input: (bytes) => { window.__DBKIT_RD_INPUTS__.push(Array.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []))); return null; },
+    rd_frame_ack: ({ seq }) => { window.__DBKIT_RD_ACKS__.push(seq); return null; },
+    rd_resize: ({ width, height }) => { window.__DBKIT_RD_RESIZES__.push([width, height]); return null; },
+    rd_refresh: () => null,
+    rd_send_keys: ({ combo }) => { window.__DBKIT_RD_KEYS__.push(combo); return null; },
+    rd_clipboard_set: ({ text }) => { window.__DBKIT_RD_CLIPBOARD__.push(text); return null; },
+    rd_keyboard_grab: ({ connId }) => { window.__DBKIT_RD_GRAB__.push(connId); return null; },
+    // 本機系統剪貼簿：情境可設 window.__DBKIT_RD_LOCAL_CLIP__ 模擬「本機剛複製了文字」。
+    rd_clipboard_read: () => window.__DBKIT_RD_LOCAL_CLIP__ ?? null,
+    rd_clipboard_write: ({ text }) => { window.__DBKIT_RD_CLIP_WRITES__.push(text); return null; },
+    rd_set_fullscreen: ({ on }) => { window.__DBKIT_RD_FULLSCREEN__.push(on); return null; },
+
     // ── SSH 終端機 / SFTP ──────────────────────────────────────────────
     // 假 shell：逐字回聲、Enter 跑幾個固定指令（ls / pwd / echo / systemctl status nginx），其餘回 command not found。
     // 輸出走 Channel（見 channelSender），與真後端一樣是 raw bytes → ArrayBuffer。
@@ -657,6 +761,86 @@ export function installShim(fx) {
     return id;
   }
 
+  // ── 遠端桌面的假後端 ───────────────────────────────────────────────────
+  const rdSessionsState = JSON.parse(JSON.stringify(fx.RD_SESSIONS ?? { version: 1, folders: [], sessions: [] }));
+  const rdVnc = new Map(); // connId → (clientBytes: Uint8Array) => void
+  const rdPrompts = new Map(); // promptId → (answer) => void
+  // 同 channelSender，但送原始位元組（RDP record / RFB）。
+  function channelBytes(ch) {
+    const cb = callbacks.get(ch?.id);
+    let index = 0;
+    return (u8) => { if (cb) cb({ message: u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength), index: index++ }); };
+  }
+  // RDP：RESIZE + 一整塊 RECT（左半藍、右半橘，驗像素用）+ FRAME_END（格式見 src/rdFrames.ts）。
+  function rdpDemoFrame(w, h, seq) {
+    const hdr = (ty, a, b, c, d, s) => {
+      const v = new DataView(new ArrayBuffer(16));
+      v.setUint8(0, ty); v.setUint16(4, a, true); v.setUint16(6, b, true); v.setUint16(8, c, true); v.setUint16(10, d, true); v.setUint32(12, s, true);
+      return new Uint8Array(v.buffer);
+    };
+    const px = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const left = x < w / 2;
+      px[i] = left ? 30 : 240; px[i + 1] = left ? 90 : 140; px[i + 2] = left ? 200 : 20; px[i + 3] = 255;
+    }
+    const parts = [hdr(2, w, h, 0, 0, 0), hdr(1, 0, 0, w, h, seq), px, hdr(6, 0, 0, 0, 0, seq)];
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  }
+  // VNC：假 RFB 3.8 伺服器（None 認證 → 64×48 桌面 → 第一次 FramebufferUpdateRequest 回一塊 Raw 綠色畫面）。
+  // 跟後端的假握手（rd::vnc::synth）送的位元組一樣，所以 noVNC 走的是跟真 App 同一條路。
+  function rdVncServer(send) {
+    const W = 64, H = 48;
+    let state = "version";
+    let buf = new Uint8Array(0);
+    let sentFrame = false;
+    setTimeout(() => send(new TextEncoder().encode("RFB 003.008\n")), 10);
+    const take = (n) => { const out = buf.slice(0, n); buf = buf.slice(n); return out; };
+    const serverInit = () => {
+      const name = new TextEncoder().encode("demo-mac");
+      const v = new DataView(new ArrayBuffer(24 + name.length));
+      v.setUint16(0, W); v.setUint16(2, H);
+      v.setUint8(4, 32); v.setUint8(5, 24); v.setUint8(6, 0); v.setUint8(7, 1);
+      v.setUint16(8, 255); v.setUint16(10, 255); v.setUint16(12, 255);
+      v.setUint8(14, 16); v.setUint8(15, 8); v.setUint8(16, 0);
+      v.setUint32(20, name.length);
+      const out = new Uint8Array(v.buffer);
+      out.set(name, 24);
+      return out;
+    };
+    const frame = () => {
+      const v = new DataView(new ArrayBuffer(4 + 12 + W * H * 4));
+      v.setUint8(0, 0); v.setUint16(2, 1);
+      v.setUint16(4, 0); v.setUint16(6, 0); v.setUint16(8, W); v.setUint16(10, H); v.setInt32(12, 0);
+      const out = new Uint8Array(v.buffer);
+      // noVNC 設的像素格式是 32bpp little-endian、red shift 0 / green 8 / blue 16 → 記憶體順序 R G B X。
+      for (let i = 0; i < W * H; i++) { out[16 + i * 4] = 20; out[16 + i * 4 + 1] = 200; out[16 + i * 4 + 2] = 60; }
+      return out;
+    };
+    const LEN = { 0: 20, 3: 10, 4: 8, 5: 6, 150: 10 };
+    return (u8) => {
+      const next = new Uint8Array(buf.length + u8.length);
+      next.set(buf); next.set(u8, buf.length); buf = next;
+      for (;;) {
+        if (state === "version") { if (buf.length < 12) return; take(12); send(new Uint8Array([1, 1])); state = "sec"; continue; }
+        if (state === "sec") { if (buf.length < 1) return; take(1); send(new Uint8Array([0, 0, 0, 0])); state = "init"; continue; }
+        if (state === "init") { if (buf.length < 1) return; take(1); send(serverInit()); state = "normal"; continue; }
+        if (!buf.length) return;
+        const type = buf[0];
+        let n = LEN[type];
+        if (type === 2) { if (buf.length < 4) return; n = 4 + 4 * ((buf[2] << 8) | buf[3]); }
+        else if (type === 6) { if (buf.length < 8) return; n = 8 + new DataView(buf.buffer, buf.byteOffset + 4, 4).getUint32(0); }
+        else if (n === undefined) { buf = new Uint8Array(0); return; } // 不認得的擴充訊息：丟掉
+        if (buf.length < n) return;
+        take(n);
+        if (type === 3 && !sentFrame) { sentFrame = true; setTimeout(() => send(frame()), 10); }
+      }
+    };
+  }
+
   // ── 事件投遞 ───────────────────────────────────────────────────────────
   // 真的 Tauri 會把 handler 存起來、由 Rust 端呼叫；這裡自己記一份，
   // 好讓 agent-stream / compare-progress 這類「命令觸發事件」的路徑在瀏覽器裡也能跑。
@@ -689,7 +873,7 @@ export function installShim(fx) {
       const label = location.pathname.endsWith("sftp.html") ? "sftp-test" : "main";
       return { currentWindow: { label }, currentWebview: { windowLabel: label, label } };
     })(),
-    invoke(cmd, args) {
+    invoke(cmd, args, options) {
       if (cmd === "plugin:event|listen") {
         const fn = callbacks.get(args?.handler);
         if (fn) {
@@ -717,7 +901,10 @@ export function installShim(fx) {
       const h = handlers[cmd];
       if (!h) { unknown.push(cmd); return Promise.reject(new Error(`screenshot shim: 未實作的 command ${cmd}`)); }
       // 給一點延遲，loading 狀態才不會閃成空白
-      return new Promise((res) => setTimeout(() => res(h(args ?? {})), 30));
+      // options：raw body 的命令（rd_write / rd_input）把 conn id 放在 headers。
+      return new Promise((res, rej) => setTimeout(() => {
+        try { Promise.resolve(h(args ?? {}, options)).then(res, rej); } catch (e) { rej(e); }
+      }, 30));
     },
   };
 }

@@ -12,27 +12,36 @@ export function sessionLabel(s: Pick<SshSession, "name" | "username" | "host">):
   return s.username ? `${s.username}@${s.host}` : s.host;
 }
 
-function byLabel(a: SshSession, b: SshSession): number {
+/** 分組 / 搜尋 / 版面只看這幾個欄位：遠端桌面主機（rdSessions.ts）共用同一套。 */
+export interface HostLike {
+  id: string;
+  name: string;
+  host: string;
+  username: string;
+  folder_id: string | null;
+}
+
+function byLabel(a: HostLike, b: HostLike): number {
   return sessionLabel(a).localeCompare(sessionLabel(b), undefined, { sensitivity: "base", numeric: true });
 }
 
-export interface SshSessionGroup {
-  folder: SshFolder;
-  sessions: SshSession[];
+export interface SshSessionGroup<S extends HostLike = SshSession, F extends { id: string } = SshFolder> {
+  folder: F;
+  sessions: S[];
 }
 
-export interface GroupedSshSessions {
+export interface GroupedSshSessions<S extends HostLike = SshSession, F extends { id: string } = SshFolder> {
   /** 依 folders 原順序；空資料夾也保留（使用者剛建好還沒放東西）。 */
-  groups: SshSessionGroup[];
+  groups: SshSessionGroup<S, F>[];
   /** 未分類（folder_id 為 null 或指到不存在的資料夾）。 */
-  loose: SshSession[];
+  loose: S[];
 }
 
 /** 把 sessions 依資料夾分組；各組內依顯示名稱排序（不分大小寫、數字自然序）。v1 不做巢狀資料夾。 */
-export function groupSessions(folders: SshFolder[], sessions: SshSession[]): GroupedSshSessions {
-  const byFolder = new Map<string, SshSession[]>();
+export function groupSessions<S extends HostLike, F extends { id: string }>(folders: F[], sessions: S[]): GroupedSshSessions<S, F> {
+  const byFolder = new Map<string, S[]>();
   for (const f of folders) byFolder.set(f.id, []);
-  const loose: SshSession[] = [];
+  const loose: S[] = [];
   for (const s of sessions) {
     const bucket = s.folder_id ? byFolder.get(s.folder_id) : undefined;
     if (bucket) bucket.push(s);
@@ -65,7 +74,7 @@ export function jumpChoices(sessions: readonly SshSession[], selfId: string): Ss
 }
 
 /** 側欄搜尋：比對名稱 / 主機 / 使用者（不分大小寫、前後空白忽略）；空字串回原陣列。 */
-export function filterSessions(sessions: SshSession[], q: string): SshSession[] {
+export function filterSessions<S extends HostLike>(sessions: S[], q: string): S[] {
   const needle = q.trim().toLowerCase();
   if (!needle) return sessions;
   return sessions.filter(
@@ -88,7 +97,7 @@ export function uniqueFolderName(folders: Pick<SshFolder, "name">[], base: strin
 }
 
 /** 回存版面用：每個 session 落在哪個資料夾。 */
-export function sessionsToPlacements(sessions: SshSession[]): SshPlacement[] {
+export function sessionsToPlacements(sessions: HostLike[]): SshPlacement[] {
   return sessions.map((s) => ({ id: s.id, folder_id: s.folder_id ?? null }));
 }
 

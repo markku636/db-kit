@@ -1,4 +1,6 @@
 import { FolderOpen, SquareTerminal, type LucideIcon } from "lucide-react";
+import type { RdProtocol } from "./rdTypes";
+import { RD_META } from "./rdStatus";
 import { KIND_META, KIND_CATEGORIES, type DbKind } from "./api";
 import { kindIcon } from "./kindIcons";
 import Icon from "./ui/Icon";
@@ -29,9 +31,17 @@ interface Props {
   onPickSsh?: () => void;
   /** 「遠端主機 → FTP / FTPS」：同樣開主機對話框，預選 FTP。 */
   onPickFtp?: () => void;
+  /** 同上，「遠端主機 → RDP / VNC / RustDesk」：呼叫端改開遠端桌面主機對話框（預選協定）。 */
+  onPickRemoteDesktop?: (p: RdProtocol) => void;
 }
 
-export default function KindPicker({ value, onChange, collapsed, onExpand, onPickSsh, onPickFtp }: Props) {
+const RD_CARDS: { p: RdProtocol; label: string }[] = [
+  { p: "rdp", label: "RDP" },
+  { p: "vnc", label: "VNC / Mac" },
+  { p: "rustdesk", label: "RustDesk" },
+];
+
+export default function KindPicker({ value, onChange, collapsed, onExpand, onPickSsh, onPickFtp, onPickRemoteDesktop }: Props) {
   const t = useT();
   if (collapsed) {
     const m = KIND_META[value];
@@ -85,12 +95,16 @@ export default function KindPicker({ value, onChange, collapsed, onExpand, onPic
           </div>
         );
       })}
-      {onPickSsh && (
+      {(onPickSsh || onPickFtp || onPickRemoteDesktop) && (
         <div>
           <div className="text-[11px] uppercase tracking-wide text-fg/40 mb-1.5">{t("遠端主機")}</div>
-          <div className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(${onPickFtp ? 2 : 1}, ${CARD_W}px)` }}>
-            <KindCard label="SSH / SFTP" icon={SquareTerminal} color={SSH_COLOR} active={false} onClick={onPickSsh} />
+          <div className="grid gap-2.5"
+            style={{ gridTemplateColumns: `repeat(${Math.min((onPickSsh ? 1 : 0) + (onPickFtp ? 1 : 0) + (onPickRemoteDesktop ? RD_CARDS.length : 0), MAX_COLS)}, ${CARD_W}px)` }}>
+            {onPickSsh && <KindCard label="SSH / SFTP" icon={SquareTerminal} color={SSH_COLOR} active={false} onClick={onPickSsh} />}
             {onPickFtp && <KindCard label="FTP / FTPS" icon={FolderOpen} color={SSH_COLOR} active={false} onClick={onPickFtp} />}
+            {onPickRemoteDesktop && RD_CARDS.map(({ p, label }) => (
+              <KindCard key={p} label={label} icon={RD_META[p].icon} color={RD_META[p].color} active={false} onClick={() => onPickRemoteDesktop(p)} />
+            ))}
           </div>
         </div>
       )}

@@ -4,6 +4,7 @@ import { loadReadonly, persistReadonly, setReadonlyFlag, type ReadonlyMap } from
 import { loadSession, saveQueryTabSession } from "./session";
 import { pruneQueryDrafts } from "./queryDrafts";
 import { landingKey, neighborSshKey, newSshTabKey, type SshTab } from "./sshTabs";
+import { newRdTabKey, type RdTab } from "./rdTabs";
 import {
   loadQueryHistory,
   pushQueryHistory,
@@ -41,8 +42,14 @@ export function nextQueryTabId(queryTabs: string[]): string {
   return `__query__:${n}`;
 }
 
-// 關閉分頁後的落點見 sshTabs.ts 的 landingKey（表 → 查詢 → SSH 三種分頁共用一套順序）。
+// 關閉分頁後的落點見 sshTabs.ts 的 landingKey（表 → 查詢 → SSH → 遠端桌面，共用一套順序）。
 export type { SshTab } from "./sshTabs";
+export type { RdTab } from "./rdTabs";
+
+/** landingKey / tabOrder 的「工作區分頁」段：SSH 終端機在前、遠端桌面在後（與分頁列渲染順序一致）。 */
+export function wsTabs(s: { sshTabs: readonly { key: string }[]; rdTabs: readonly { key: string }[] }): { key: string }[] {
+  return [...s.sshTabs, ...s.rdTabs];
+}
 
 // 右側「詳細資料」面板目前選取的樹節點（單擊即選；對標 Navicat 物件資訊面板）。
 export type SelectedNode =
@@ -81,6 +88,8 @@ interface AppStore {
   // SSH 終端機分頁（鍵 __ssh__:<uuid>）。不進工作階段還原：啟動時刻意不自動連線（同表分頁）。
   // xterm 實例、termId、連線狀態不放這裡（見 sshTerminals.ts），這裡只有「要連去哪」與標題。
   sshTabs: SshTab[];
+  // 遠端桌面分頁（鍵 __rd__:<uuid>）。同 SSH：不進工作階段還原、畫面與連線狀態在 RdPane 裡。
+  rdTabs: RdTab[];
   // 由側欄「產生 SQL」送往查詢編輯器的待載入語句（消費後清空）。
   pendingSql: string | null;
   // 由側欄「查詢 log」設定；開新查詢分頁後由該分頁的 QueryPane 消費一次（自動展開 NlQueryBar）。
@@ -150,6 +159,12 @@ interface AppStore {
   closeOtherSshTabs: (key: string) => void;
   closeAllSshTabs: () => void;
   renameSshTab: (key: string, title: string) => void;
+  // 遠端桌面分頁：同 SSH 分頁的一組操作。
+  openRdTab: (tab: Omit<RdTab, "key">) => string;
+  closeRdTab: (key: string) => void;
+  closeOtherRdTabs: (key: string) => void;
+  closeAllRdTabs: () => void;
+  renameRdTab: (key: string, title: string) => void;
   // 將一段 SQL 載入查詢編輯器並切到查詢分頁。
   requestQuery: (sql: string) => void;
   clearPendingSql: () => void;
@@ -216,6 +231,7 @@ export const useStore = create<AppStore>((set) => ({
   activeTabKey: session.activeQueryTab,
   queryTabs: session.queryTabs,
   sshTabs: [],
+  rdTabs: [],
   pendingSql: null,
   pendingNlOpen: false,
   pendingAiAction: null,
@@ -272,7 +288,7 @@ export const useStore = create<AppStore>((set) => ({
         // 查詢分頁的 id 從不在 tabs 內；它們屬於仍連線的連線，
         // 中斷其他連線時應保留，不該把使用者踢離查詢編輯器。
         // SSH 分頁也不關：就算是從這條連線的 tunnel 設定開出來的，shell 由後端獨立持有，斷 DB 不該斷 shell。
-        activeTabKey: landingKey(tabs, s.queryTabs, s.sshTabs, s.activeTabKey),
+        activeTabKey: landingKey(tabs, s.queryTabs, wsTabs(s), s.activeTabKey),
       };
     }),
 
@@ -292,23 +308,24 @@ export const useStore = create<AppStore>((set) => ({
       return {
         tabs,
         // 沒有表分頁時退回第一個查詢分頁；查詢分頁也全關光則為 null（主區顯示空狀態）。
-        activeTabKey: landingKey(tabs, s.queryTabs, s.sshTabs, s.activeTabKey === key ? null : s.activeTabKey),
+        activeTabKey: landingKey(tabs, s.queryTabs, wsTabs(s), s.activeTabKey === key ? null : s.activeTabKey),
       };
     }),
   // 關閉除 key 以外的所有表分頁；保留 key 並設為作用中。
   closeOtherTabs: (key) =>
     set((s) => {
       const tabs = s.tabs.filter((t) => t.key === key);
-      return { tabs, activeTabKey: landingKey(tabs, s.queryTabs, s.sshTabs, key) };
+      return { tabs, activeTabKey: landingKey(tabs, s.queryTabs, wsTabs(s), key) };
     }),
-  closeAllTabs: () => set((s) => ({ tabs: [], activeTabKey: landingKey([], s.queryTabs, s.sshTabs, null) })),
+  closeAllTabs: () => set((s) => ({ tabs: [], activeTabKey: landingKey([], s.queryTabs, wsTabs(s), null) })),
   // 移出 sshTabs 的終端機會卸載 SshTerminalPane，由它的清理斷線（與 closeAllSshTabs 同一條路）。
   closeAllTabsExcept: (key) =>
     set((s) => {
       const tabs = s.tabs.filter((t) => t.key === key);
       const queryTabs = s.queryTabs.filter((q) => q === key);
       const sshTabs = s.sshTabs.filter((t) => t.key === key);
-      return { tabs, queryTabs, sshTabs, activeTabKey: landingKey(tabs, queryTabs, sshTabs, key) };
+      const rdTabs = s.rdTabs.filter((t) => t.key === key);
+      return { tabs, queryTabs, sshTabs, rdTabs, activeTabKey: landingKey(tabs, queryTabs, [...sshTabs, ...rdTabs], key) };
     }),
   // 新增查詢分頁：產生不重複 id（無 home 時補 home，否則 __query__:N）並切過去。
   addQueryTab: () =>
@@ -336,7 +353,7 @@ export const useStore = create<AppStore>((set) => ({
       if (!s.queryTabs.includes(id)) return {};
       const queryTabs = s.queryTabs.filter((t) => t !== id);
       const preferred = s.activeTabKey === id ? (queryTabs[queryTabs.length - 1] ?? null) : s.activeTabKey;
-      return { queryTabs, activeTabKey: landingKey(s.tabs, queryTabs, s.sshTabs, preferred) };
+      return { queryTabs, activeTabKey: landingKey(s.tabs, queryTabs, wsTabs(s), preferred) };
     }),
   // 關閉「其他」查詢分頁：只留指定 id（home 若非 id 亦一併關掉）。
   closeOtherQueryTabs: (id) =>
@@ -349,7 +366,7 @@ export const useStore = create<AppStore>((set) => ({
   closeAllQueryTabs: () =>
     set((s) => {
       const onQueryTab = s.queryTabs.includes(s.activeTabKey ?? "");
-      return { queryTabs: [], activeTabKey: onQueryTab ? landingKey(s.tabs, [], s.sshTabs, null) : s.activeTabKey };
+      return { queryTabs: [], activeTabKey: onQueryTab ? landingKey(s.tabs, [], wsTabs(s), null) : s.activeTabKey };
     }),
   // ---- SSH 終端機分頁 ----
   openSshTab: (tab) => {
@@ -363,7 +380,7 @@ export const useStore = create<AppStore>((set) => ({
       if (!s.sshTabs.some((t) => t.key === key)) return {};
       const sshTabs = s.sshTabs.filter((t) => t.key !== key);
       const preferred = s.activeTabKey === key ? neighborSshKey(s.sshTabs, key) : s.activeTabKey;
-      return { sshTabs, activeTabKey: landingKey(s.tabs, s.queryTabs, sshTabs, preferred) };
+      return { sshTabs, activeTabKey: landingKey(s.tabs, s.queryTabs, [...sshTabs, ...s.rdTabs], preferred) };
     }),
   closeOtherSshTabs: (key) =>
     set((s) => {
@@ -374,10 +391,36 @@ export const useStore = create<AppStore>((set) => ({
   closeAllSshTabs: () =>
     set((s) => {
       const onSsh = s.sshTabs.some((t) => t.key === s.activeTabKey);
-      return { sshTabs: [], activeTabKey: onSsh ? landingKey(s.tabs, s.queryTabs, [], null) : s.activeTabKey };
+      return { sshTabs: [], activeTabKey: onSsh ? landingKey(s.tabs, s.queryTabs, s.rdTabs, null) : s.activeTabKey };
     }),
   renameSshTab: (key, title) =>
     set((s) => ({ sshTabs: s.sshTabs.map((t) => (t.key === key ? { ...t, title } : t)) })),
+  // ---- 遠端桌面分頁 ----（移出 rdTabs 的分頁會卸載 RdPane，由它的清理斷線）
+  openRdTab: (tab) => {
+    const key = newRdTabKey();
+    set((s) => ({ rdTabs: [...s.rdTabs, { ...tab, key }], activeTabKey: key }));
+    return key;
+  },
+  closeRdTab: (key) =>
+    set((s) => {
+      if (!s.rdTabs.some((t) => t.key === key)) return {};
+      const rdTabs = s.rdTabs.filter((t) => t.key !== key);
+      const preferred = s.activeTabKey === key ? neighborSshKey(s.rdTabs, key) : s.activeTabKey;
+      return { rdTabs, activeTabKey: landingKey(s.tabs, s.queryTabs, [...s.sshTabs, ...rdTabs], preferred) };
+    }),
+  closeOtherRdTabs: (key) =>
+    set((s) => {
+      const rdTabs = s.rdTabs.filter((t) => t.key === key);
+      const onRd = s.rdTabs.some((t) => t.key === s.activeTabKey);
+      return { rdTabs, activeTabKey: onRd ? key : s.activeTabKey };
+    }),
+  closeAllRdTabs: () =>
+    set((s) => {
+      const onRd = s.rdTabs.some((t) => t.key === s.activeTabKey);
+      return { rdTabs: [], activeTabKey: onRd ? landingKey(s.tabs, s.queryTabs, s.sshTabs, null) : s.activeTabKey };
+    }),
+  renameRdTab: (key, title) =>
+    set((s) => ({ rdTabs: s.rdTabs.map((t) => (t.key === key ? { ...t, title } : t)) })),
   // 設定待載入 SQL 並切到查詢分頁（QueryPane 掛載後消費）。作用中已是某查詢分頁則留在原分頁，
   // 否則（在表分頁）切到第一個查詢分頁；查詢分頁已全關光則現開一個承接。
   requestQuery: (sql) =>
@@ -422,14 +465,14 @@ export const useStore = create<AppStore>((set) => ({
       const tabs = s.tabs.filter((t) => t.key !== key);
       return {
         tabs,
-        activeTabKey: landingKey(tabs, s.queryTabs, s.sshTabs, s.activeTabKey === key ? null : s.activeTabKey),
+        activeTabKey: landingKey(tabs, s.queryTabs, wsTabs(s), s.activeTabKey === key ? null : s.activeTabKey),
       };
     }),
   closeTablesUnder: (connId, database) =>
     set((s) => {
       const tabs = s.tabs.filter((t) => !(t.connId === connId && t.database === database));
       // 作用中分頁若被關閉，走共用落點（最後一個表分頁 → 第一個查詢分頁 → SSH），不再硬寫 __query__。
-      return { tabs, activeTabKey: landingKey(tabs, s.queryTabs, s.sshTabs, s.activeTabKey) };
+      return { tabs, activeTabKey: landingKey(tabs, s.queryTabs, wsTabs(s), s.activeTabKey) };
     }),
   requestTreeReload: (connId, db) =>
     set((s) => ({ treeReload: { connId, db, nonce: (s.treeReload?.nonce ?? 0) + 1 } })),

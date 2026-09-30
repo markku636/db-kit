@@ -121,6 +121,15 @@ src-tauri/src/
 │   ├── runtime.rs     SshRuntime：活著的連線 / 終端 / SFTP / 待答提示 / 傳輸旗標（AppState.ssh）；SFTP 通道記著是哪個 SFTP 獨立視窗開的，視窗銷毀時一併收掉
 │   ├── sftp_window.rs SFTP 獨立視窗的標籤（`sftp-<分頁鍵>`，一個終端機分頁一個）與網址（`sftp.html?tab=…`）；capabilities/sftp-window.json 對 `sftp-*` 開事件、檔案對話框與 destroy。主視窗為了分頁拖曳關掉 WebView 的檔案拖放，這種視窗沒關，拖進來拿得到本機路徑；連線狀態由主視窗經 `sftp-win-*` 事件轉過去（src/sftpWindowBridge.ts）
 │   └── it_tests.rs    Docker OpenSSH 整合測試（#[ignore]）
+├── rd/                遠端桌面（RDP / VNC；整個目錄不依賴 Tauri，GUI 事件 / Channel 只在 commands/rd.rs）
+│   ├── sessions.rs    側欄「遠端桌面」持久化（`remote_desktops.json`）+ keychain 帳號名（`{id}.rdsess`）；不含密碼欄位
+│   ├── runtime.rs     RdRuntime：活著的連線 / 待答提示（AppState.rd）；連線任務只收 RdCtl（輸入 / ack / resize / 組合鍵 / 關閉）
+│   ├── transport.rs   撥號：直連 TCP，或經已存 SSH 主機的 direct-tcpip（中間墊 duplex，讓 IronRDP 拿到 Sync stream）
+│   ├── keygrab.rs     全螢幕時攔 Win / Alt+Tab / Alt+F4 / Ctrl+Esc（Windows WH_KEYBOARD_LL；只在前景是自己、且有目標連線時才吞鍵）
+│   ├── vnc/           RFB：auth.rs 代做認證（None / VNC 密碼 / Apple ARD / VeNCrypt Plain，密碼不進 JS）、synth.rs 對前端 noVNC 的假握手、pump.rs 位元組轉送
+│   ├── rdp/           IronRDP：mod.rs 握手（TLS → 憑證 TOFU `rd_known_certs.json` → CredSSP / NTLM）與工作階段迴圈（專屬執行緒 + current-thread runtime：ironrdp-async 的 future 不是 Send）；frames.rs 差異區塊合併 + ack 反壓；input.rs 8-byte 輸入紀錄 → fast-path；clipboard.rs CLIPRDR 文字剪貼簿（backend 回呼排動作、迴圈執行）
+│   ├── rustdesk.rs    RustDesk 相容連線：啟動獨立的 AGPL 輔助程式 dbk-rustdesk-bridge（repo 的 rustdesk-bridge/，Tauri externalBin；發版才合併 tauri.bridge.conf.json），stdin / stdout 轉送；不連結它的程式碼，本體維持 MIT
+│   └── it_tests.rs    Docker TigerVNC / xrdp / RustDesk 整合測試（#[ignore]；映像在 tests/docker/ 與 rustdesk-bridge/tests/docker/）
 ├── scheduler.rs       排程備份
 ├── backup.rs          備份 / 還原（各 DB 外部工具分派）
 ├── export.rs          資料匯出（CSV / TSV / Excel / JSON / SQL / Markdown）
@@ -159,6 +168,7 @@ src-tauri/src/
 ├── it_tests.rs        Docker 真實資料庫整合測試
 ├── commands/mod.rs    Tauri command（薄包裝）
 ├── commands/ssh.rs    SSH 終端機 / SFTP / 已存主機的 command + TauriUi（host key / 密碼提示走事件 + oneshot；終端輸出走 ipc::Channel）
+├── commands/rd.rs     遠端桌面的 command + RdUi（憑證 / 帳密提示）；畫面走 ipc::Channel raw，輸入走 raw body（rd_write / rd_input）
 ├── cli/               dbk CLI（args / dispatch / guard / mcp / render / resolve / run_script）
 ├── bin/dbk.rs         CLI binary 進入點（不連 Tauri）
 └── db/
