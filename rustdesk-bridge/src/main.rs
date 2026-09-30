@@ -552,6 +552,54 @@ mod tests {
         expect_login_and_key_frame(est.stream, login, want_secure).await;
     }
 
+    /// 只走到登入前：經 ID 伺服器接上、加密握手、收到對方的登入挑戰（Hash）就斷線，不送登入請求——
+    /// 對方畫面不會跳出連線請求。用來確認 ID 伺服器 / Key / 打洞或中繼 / 加密都通，又不打擾對方。
+    /// 環境變數同 `real_id_server_login_and_first_frame`（不需要密碼）。
+    #[tokio::test]
+    #[ignore]
+    async fn real_id_server_until_login_challenge() {
+        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        let id = std::env::var("DBKIT_RUSTDESK_IT_ID").expect("DBKIT_RUSTDESK_IT_ID");
+        let rp = rendezvous::Params {
+            server: env("DBKIT_RUSTDESK_IT_SERVER", "127.0.0.1"),
+            relay: env("DBKIT_RUSTDESK_IT_RELAY_SERVER", ""),
+            key: env("DBKIT_RUSTDESK_IT_KEY", ""),
+            force_relay: env("DBKIT_RUSTDESK_IT_RELAY", "") == "1",
+        };
+        let t0 = tokio::time::Instant::now();
+        let est = match rendezvous::connect(&id, &rp).await {
+            Ok(e) => e,
+            Err(f) => panic!("{}: {}", f.code, f.message),
+        };
+        eprintln!("route = {}, signed pk = {} bytes, {:?}", est.route, est.signed_id_pk.len(), t0.elapsed());
+        let mut login = direct(&id, "", Decoders::default(), "it");
+        login.signed_id_pk = est.signed_id_pk;
+        login.server_key = rp.key();
+        let (pr, mut pw) = tokio::io::split(est.stream);
+        let mut pr = FrameReader::new(pr);
+        let (tx, mut rx, pending) = secure_handshake(&mut pr, &mut pw, &login).await.expect("加密握手");
+        eprintln!("secure = {}, {:?}", tx.is_some(), t0.elapsed());
+        let first = match pending {
+            Some(p) => p,
+            None => tokio::time::timeout(std::time::Duration::from_secs(20), pr.next())
+                .await
+                .expect("20 秒內要收到對方的第一則訊息")
+                .expect("讀取")
+                .expect("對方關了連線"),
+        };
+        let first = match rx.as_mut() {
+            Some(c) => c.open(first).expect("解密（金鑰 / 序號對得上）"),
+            None => first,
+        };
+        match session::classify(&first) {
+            Incoming::Hash { salt, challenge } => {
+                eprintln!("login challenge: salt {} chars, challenge {} chars, {:?}", salt.len(), challenge.len(), t0.elapsed())
+            }
+            x => panic!("第一則要是登入挑戰（Hash）：{x:?}"),
+        }
+        assert_eq!(tx.is_some(), !rp.key().is_empty(), "有 Key 就要加密");
+    }
+
     async fn expect_login_and_key_frame(tcp: TcpStream, login: Login, want_secure: bool) {
         let (_host_in_w, host_in_r) = tokio::io::duplex(1 << 16);
         let (mut host_out_w, mut host_out_r) = tokio::io::duplex(8 << 20);
