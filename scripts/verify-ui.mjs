@@ -82,7 +82,14 @@ const CONTAINER_FX = {
     ...Object.fromEntries(Object.entries(FX.HARBOR_REPOS).map(([p, rs]) => [`c-harbor:${p}`, rs.map((r) => ({ name: r.name, kind: "repository" }))])),
   },
 };
+// 分組一致性情境：prod-mysql 與 analytics-pg 在同一個沒有 kind 的舊群組裡（升級要拆開），另加一條未分組的 PostgreSQL。
+const GROUPING_CONNECTIONS = [
+  ...FX.CONNECTIONS.map((c) => (c.id === "c-mysql" || c.id === "c-pg" ? { ...c, group_id: "g-legacy" } : c)),
+  { ...FX.CONNECTIONS.find((c) => c.id === "c-pg"), id: "c-pg2", name: "local-pg", host: "127.0.0.1", group_id: null },
+];
+const GROUPING_GROUPS = [{ id: "g-legacy", name: "正式環境" }];
 const CASE_FX = {
+  "sidebar-grouping-consistent": { CONNECTIONS: GROUPING_CONNECTIONS, CONN_GROUPS: GROUPING_GROUPS, RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "sidebar-scroll-reaches-last": { CONNECTIONS: MANY_CONNECTIONS, CONN_GROUPS: MANY_GROUPS },
   "ssh-terminal": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-ai-suggest": { STORAGE_SEED: SSH_STORAGE_SEED },
@@ -2078,6 +2085,123 @@ const CASES = {
 
   // 側欄連線滿出頁面時，最後一筆必須滾得到（回歸：外殼曾經同時是 column flex 與捲動容器，
   // 子項被 flex-shrink 壓縮後捲動高度算不出來，最底下幾筆永遠碰不到）。
+  // 側欄分組一致：資料庫依種類分區、SSH 主機、遠端桌面三區用同一套群組行為
+  //（區塊標題新增群組 + inline 命名、右鍵移到群組、拖曳排序 / 換群組 / 群組換位、刪群組先確認、搜尋時群組展開）。
+  // 舊版沒有 kind 的跨種類群組要依成員種類拆開並落地。
+  async "sidebar-grouping-consistent"(page) {
+    const kinds = [...new Set(GROUPING_CONNECTIONS.map((c) => c.kind))];
+    const kindSections = page.locator("[data-conn-kind]");
+    check("資料庫連線依種類各一區", (await kindSections.count()) === kinds.length, `${await kindSections.count()} vs ${kinds.length}`);
+    const pg = page.locator('[data-conn-kind="postgres"]');
+    const my = page.locator('[data-conn-kind="mysql"]');
+    const ssh = page.locator("[data-ssh-host-tree]");
+    const rd = page.locator("[data-rd-host-tree]");
+    const headerOf = (section) => section.locator(":scope > div").first();
+    // 區塊標題是 CSS uppercase，innerText 會變大寫。
+    check("種類區塊標題帶數量", /postgresql \(2\)/i.test(await headerOf(pg).innerText()), await headerOf(pg).innerText());
+
+    await sleep(300);
+    const layout = await page.evaluate(() => window.__DBKIT_CONN_LAYOUT__);
+    const legacy = (layout?.groups ?? []).filter((g) => g.name === "正式環境");
+    check("舊的跨種類群組依成員種類拆開並落地",
+      legacy.length === 2 && new Set(legacy.map((g) => g.kind)).size === 2 && legacy.every((g) => g.kind),
+      JSON.stringify(layout?.groups ?? null));
+    check("拆開後分別出現在 MySQL / PostgreSQL 區塊",
+      (await my.locator("[data-group-row]", { hasText: "正式環境" }).count()) === 1
+      && (await pg.locator("[data-group-row]", { hasText: "正式環境" }).count()) === 1);
+
+    const groupOf = (loc) => loc.evaluate((el) => el.closest("[data-group-section]")?.getAttribute("data-group-section") ?? null);
+    const newGroup = async (section, name) => {
+      await headerOf(section).hover();
+      await headerOf(section).getByRole("button", { name: "新增群組", exact: true }).click();
+      const input = section.getByLabel("群組名稱", { exact: true });
+      if (!(await input.count())) return null;
+      await input.fill(name);
+      await input.press("Enter");
+      await sleep(200);
+      const row = section.locator("[data-group-row]", { hasText: name });
+      return (await row.count()) === 1 ? row.getAttribute("data-group-row") : null;
+    };
+    const moveViaMenu = async (item, name) => {
+      await item.click({ button: "right" });
+      const btn = page.getByRole("button", { name: `移到「${name}」`, exact: true });
+      if (!(await btn.count())) return false;
+      await btn.click();
+      await sleep(200);
+      return true;
+    };
+
+    // HTML5 拖曳：按下 → 在目標上移兩次（第一次 dragover 可能早於 React 把拖曳狀態畫上去）→ 放開。
+    const dragOnto = async (src, dst, position) => {
+      await src.hover();
+      await page.mouse.down();
+      await dst.hover({ position });
+      await sleep(50);
+      await dst.hover({ position });
+      await page.mouse.up();
+      await sleep(250);
+    };
+    const items = {
+      pg: pg.getByText("local-pg", { exact: true }),
+      ssh: ssh.locator('[data-ssh-host="ssh-bastion"]'),
+      rd: rd.locator('[data-rd-host="rd-mac"]'),
+    };
+    const gids = {};
+    for (const [key, label, section] of [["pg", "資料庫（PostgreSQL）", pg], ["ssh", "SSH 主機", ssh], ["rd", "遠端桌面", rd]]) {
+      const gid = await newGroup(section, "QA");
+      gids[key] = gid;
+      check(`${label}：區塊標題「新增群組」→ 直接輸入名稱建立群組`, !!gid);
+      if (!gid) continue;
+      const moved = await moveViaMenu(items[key], "QA");
+      check(`${label}：右鍵有「移到「QA」」`, moved);
+      check(`${label}：移到群組後出現在該群組底下`, (await groupOf(items[key])) === gid, String(await groupOf(items[key])));
+    }
+
+    // 拖曳：SSH 主機拖到另一台的上半部 → 進同一個群組、排在它前面。
+    const web = ssh.locator('[data-ssh-host="ssh-web01"]');
+    await dragOnto(items.ssh, web, { x: 30, y: 3 });
+    const prodIds = await ssh.locator('[data-group-section="sf-prod"] [data-ssh-host]')
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-ssh-host")));
+    check("拖曳：主機拖到另一台上方 → 進同一群組、排在它前面", JSON.stringify(prodIds) === JSON.stringify(["ssh-bastion", "ssh-web01"]), JSON.stringify(prodIds));
+
+    // 拖曳：連線拖到種類區塊標題 → 移出群組。
+    const pm = my.getByText("prod-mysql", { exact: true });
+    await dragOnto(pm, headerOf(my), { x: 60, y: 8 });
+    check("拖曳：連線拖到區塊標題上 → 移出群組", (await groupOf(pm)) === "", String(await groupOf(pm)));
+
+    // 拖曳群組列：QA 拖到「正式環境」上方 → 群組換位。
+    if (gids.pg) {
+      const legacyRow = pg.locator("[data-group-row]", { hasText: "正式環境" });
+      await dragOnto(pg.locator(`[data-group-row="${gids.pg}"]`), legacyRow, { x: 30, y: 2 });
+      const order = await pg.locator("[data-group-row]").evaluateAll((els) => els.map((e) => e.textContent?.trim() ?? ""));
+      check("拖曳群組列 → 群組換位", order.length === 2 && order[0].startsWith("QA"), JSON.stringify(order));
+    }
+
+    // 刪有成員的群組：先確認，成員回到未分組。
+    if (gids.rd) {
+      const row = rd.locator(`[data-group-row="${gids.rd}"]`);
+      await row.hover();
+      await row.getByRole("button", { name: "刪除群組", exact: true }).click();
+      // uiConfirm 的確認框不在 Modal 堆疊裡（沒有 role="dialog"），用訊息文字找它所在的那一層。
+      const msg = page.getByText(/群組「QA」底下還有 1 個項目/);
+      await msg.first().waitFor({ timeout: 3000 }).catch(() => {});
+      check("刪除有成員的群組會先確認", (await msg.count()) > 0);
+      const dlg = page.locator("div").filter({ has: msg }).filter({ has: page.getByRole("button", { name: "刪除群組", exact: true }) }).last();
+      await dlg.getByRole("button", { name: "刪除群組", exact: true }).click();
+      await sleep(250);
+      check("刪除群組後成員回到未分組", (await rd.locator("[data-group-row]", { hasText: "QA" }).count()) === 0 && (await groupOf(items.rd)) === "");
+    }
+
+    // 搜尋時摺起來的群組照樣展開。
+    await ssh.locator('[data-group-row="sf-prod"]').click();
+    await sleep(150);
+    check("點群組列 → 摺疊", (await web.count()) === 0);
+    await page.getByPlaceholder("搜尋連線 / 表…").fill("web-01");
+    await sleep(250);
+    check("搜尋時摺起來的群組照樣展開", (await web.count()) === 1);
+    await page.getByPlaceholder("搜尋連線 / 表…").fill("");
+  },
+
   async "sidebar-scroll-reaches-last"(page, caseFx) {
     // 40 筆連線（見 CASE_FX），在一般視窗高度下就會滿出側欄 —— 使用者回報的正是這個情境。
     const box = page.locator("[data-sidebar-scroll]").first();
@@ -2095,9 +2219,13 @@ const CASES = {
     const after = await box.evaluate((el) => ({ top: el.scrollTop, max: el.scrollHeight - el.clientHeight }));
     check("滑鼠滾輪可把側欄捲到底", after.top >= after.max - 2, `scrollTop=${after.top} max=${after.max}`);
 
-    // 最後一筆連線捲到底後必須完整落在捲動視窗內。
-    const conns = caseFx.CONNECTIONS;
-    const lastName = conns[conns.length - 1].name;
+    // 畫面上最後一筆連線（側欄依種類分區，所以不是 fixture 陣列的最後一筆）捲到底後必須完整落在捲動視窗內。
+    const lastName = await box.evaluate((el) => {
+      const sections = el.querySelectorAll("[data-conn-kind]");
+      const rows = sections[sections.length - 1]?.querySelectorAll("[draggable=\"true\"]:not([data-group-row])") ?? [];
+      return rows[rows.length - 1]?.querySelector("span.truncate")?.textContent ?? "";
+    });
+    check("捲到底後找得到畫面上最後一筆連線", lastName !== "" && caseFx.CONNECTIONS.some((c) => c.name === lastName), lastName);
     const last = page.getByText(lastName, { exact: true }).first();
     const rects = await box.evaluate((el, name) => {
       const c = el.getBoundingClientRect();

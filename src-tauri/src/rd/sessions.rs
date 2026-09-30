@@ -177,7 +177,8 @@ fn schema_v1() -> u32 {
     1
 }
 
-const SCHEMA_VERSION: u32 = 1;
+/// v2：側欄照陣列順序顯示（可拖曳排序）；v1 固定依名稱排序顯示。
+const SCHEMA_VERSION: u32 = 2;
 
 impl Default for RdSessionsFile {
     fn default() -> Self {
@@ -194,7 +195,23 @@ pub fn session_password_account(id: &str) -> String {
 
 /// 讀整份檔。不存在 → 預設空表；損毀 → Err（不要默默當成空表，下次存檔會把使用者的清單蓋掉）。
 pub async fn load_in(dir: &Path) -> AppResult<RdSessionsFile> {
-    store::read_json_in(dir, SESSIONS_FILE).await
+    let mut file: RdSessionsFile = store::read_json_in(dir, SESSIONS_FILE).await?;
+    migrate(&mut file);
+    Ok(file)
+}
+
+/// v1 → v2：v1 的側欄固定依名稱排序顯示，v2 起照陣列順序（使用者拖曳排序）。第一次讀到 v1 就先依
+/// 名稱排好（穩定排序），升級後畫面上的順序不變；下一次寫檔時一併寫成 v2。
+fn migrate(file: &mut RdSessionsFile) {
+    if file.version < 2 {
+        file.sessions.sort_by(|a, b| {
+            store::natural_label_cmp(
+                &store::host_label(&a.name, &a.username, &a.host),
+                &store::host_label(&b.name, &b.username, &b.host),
+            )
+        });
+        file.version = SCHEMA_VERSION;
+    }
 }
 
 async fn save_in(dir: &Path, file: &RdSessionsFile) -> AppResult<()> {
@@ -384,5 +401,26 @@ mod tests {
         assert_eq!(session_password_account("x"), "x.rdsess");
         assert_ne!(session_password_account("x"), crate::ssh::sessions::session_password_account("x"));
         assert_ne!(session_password_account("x"), store::ssh_account("x"));
+    }
+
+    /// 同 SSH：v1 檔先依名稱排好一次，之後照存檔順序。
+    #[tokio::test]
+    async fn v1_file_sorted_by_label_then_manual_order_sticks() {
+        let dir = tmpdir();
+        let (mut b, mut a) = (sess("b", RdProtocol::Rdp), sess("a", RdProtocol::Vnc));
+        b.name = "office-10".into();
+        a.name = "Office-9".into();
+        let v1 = serde_json::json!({ "version": 1, "folders": [], "sessions": [b, a] });
+        std::fs::write(dir.join(SESSIONS_FILE), v1.to_string()).unwrap();
+
+        let f = load_in(&dir).await.unwrap();
+        let ids: Vec<&str> = f.sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+        assert_eq!(f.version, SCHEMA_VERSION);
+
+        let order: Vec<(String, Option<String>)> = ["b", "a"].iter().map(|i| (i.to_string(), None)).collect();
+        save_layout_in(&dir, vec![], &order).await.unwrap();
+        let ids: Vec<String> = load_in(&dir).await.unwrap().sessions.into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["b", "a"]);
     }
 }

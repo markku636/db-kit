@@ -83,7 +83,16 @@ export function installShim(fx) {
     list_saved_connections: () => fx.CONNECTIONS,
     // 側欄分組（v0.20 起）。預設無群組＝扁平清單，與截圖情境一致；情境可用 fx 覆寫。
     list_connection_groups: () => fx.CONN_GROUPS ?? [],
-    save_connection_layout: () => null,
+    // 側欄排版（群組 + 連線順序 / 歸屬）：寫回記憶體裡的假資料，並留一份最後的呼叫給情境斷言。
+    save_connection_layout: ({ groups, order }) => {
+      window.__DBKIT_CONN_LAYOUT__ = { groups, order };
+      fx.CONN_GROUPS = groups ?? [];
+      const pos = new Map((order ?? []).map((o, i) => [o.id, [i, o.group_id]]));
+      fx.CONNECTIONS = fx.CONNECTIONS
+        .map((c) => (pos.has(c.id) ? { ...c, group_id: pos.get(c.id)[1] } : c))
+        .sort((x, y) => (pos.get(x.id)?.[0] ?? 1e9) - (pos.get(y.id)?.[0] ?? 1e9));
+      return null;
+    },
     set_query_guard: () => null,
     connect: () => null,
     disconnect: () => null,

@@ -60,6 +60,11 @@ pub struct AppSettings {
 pub struct ConnGroup {
     pub id: String,
     pub name: String,
+    /// 群組屬於哪個連線種類（側欄「種類 > 群組」，值同 `DbKind` 的序列化字串）。
+    /// 舊檔沒有這欄 → None，由前端依成員種類補上後經 `save_layout` 寫回。用字串而非 `DbKind`：
+    /// 較新版本寫入、這版不認得的種類不能讓整份連線檔讀不出來。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// 連線設定檔（磁碟格式）。
@@ -373,6 +378,60 @@ pub async fn save_layout_in(
 }
 
 /// 讀取設定目錄下的 JSON 檔。檔案不存在回 `T::default()`。
+/// 側欄主機的顯示名稱排序（SSH / 遠端桌面 v1→v2 遷移用）：不分大小寫、連續數字依數值比
+///（「web-2」排在「web-10」前面），對齊前端 `localeCompare(…, { sensitivity: "base", numeric: true })`。
+pub fn natural_label_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    use std::iter::Peekable;
+    use std::str::Chars;
+
+    fn take_digits(it: &mut Peekable<Chars<'_>>) -> String {
+        let mut n = String::new();
+        while let Some(c) = it.peek().copied().filter(char::is_ascii_digit) {
+            n.push(c);
+            it.next();
+        }
+        n
+    }
+
+    let (a, b) = (a.to_lowercase(), b.to_lowercase());
+    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (x.peek().copied(), y.peek().copied()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(p), Some(q)) if p.is_ascii_digit() && q.is_ascii_digit() => {
+                let (m, n) = (take_digits(&mut x), take_digits(&mut y));
+                let (m, n) = (m.trim_start_matches('0'), n.trim_start_matches('0'));
+                let ord = m.len().cmp(&n.len()).then_with(|| m.cmp(n));
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            (Some(p), Some(q)) => {
+                if p != q {
+                    return p.cmp(&q);
+                }
+                x.next();
+                y.next();
+            }
+        }
+    }
+}
+
+/// 側欄主機的顯示名稱：有名稱用名稱，否則 `user@host`（沒有帳號就只有 host）。同前端的 sessionLabel。
+pub fn host_label(name: &str, username: &str, host: &str) -> String {
+    let name = name.trim();
+    if !name.is_empty() {
+        name.to_string()
+    } else if username.is_empty() {
+        host.to_string()
+    } else {
+        format!("{username}@{host}")
+    }
+}
+
 pub async fn read_json_in<T: DeserializeOwned + Default>(dir: &Path, file: &str) -> AppResult<T> {
     let path = dir.join(file);
     match tokio::fs::read(&path).await {
@@ -581,7 +640,7 @@ mod tests {
     }
 
     fn group(id: &str) -> ConnGroup {
-        ConnGroup { id: id.into(), name: id.to_uppercase() }
+        ConnGroup { id: id.into(), name: id.to_uppercase(), kind: None }
     }
 
     fn tmpdir() -> PathBuf {
@@ -596,14 +655,14 @@ mod tests {
         let dir = tmpdir();
         save_layout_in(
             &dir,
-            vec![group("g1"), ConnGroup { id: "local-prod".into(), name: "PROD".into() }],
+            vec![group("g1"), ConnGroup { id: "local-prod".into(), name: "PROD".into(), kind: None }],
             &[],
         )
         .await
         .unwrap();
         let incoming = vec![
             group("g1"),                                                 // 同 id
-            ConnGroup { id: "remote-prod".into(), name: "prod".into() }, // 同名（不分大小寫）
+            ConnGroup { id: "remote-prod".into(), name: "prod".into(), kind: None }, // 同名（不分大小寫）
             group("g9"),                                                 // 全新
         ];
         let conns = vec![
@@ -803,5 +862,28 @@ mod tests {
         assert!(s.startup_password_hash.is_none());
         assert!(!s.biometric_unlock);
         assert_eq!(s.auto_lock_minutes, 0);
+    }
+
+    #[test]
+    fn natural_label_cmp_ignores_case_and_compares_numbers() {
+        use std::cmp::Ordering::*;
+        assert_eq!(natural_label_cmp("web-2", "Web-10"), Less);
+        assert_eq!(natural_label_cmp("web-010", "web-9"), Greater);
+        assert_eq!(natural_label_cmp("PROD", "prod"), Equal);
+        assert_eq!(natural_label_cmp("a", "ab"), Less);
+        assert_eq!(host_label("  ", "deploy", "h"), "deploy@h");
+        assert_eq!(host_label("", "", "h"), "h");
+        assert_eq!(host_label(" api ", "deploy", "h"), "api");
+    }
+
+    /// 群組的 kind：舊檔沒有 → None；有值原樣來回；None 不寫出欄位（舊版讀新檔也不受影響）。
+    #[test]
+    fn conn_group_kind_is_optional_and_roundtrips() {
+        let legacy: ConnGroup = serde_json::from_str(r#"{"id":"g","name":"G"}"#).unwrap();
+        assert_eq!(legacy.kind, None);
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), r#"{"id":"g","name":"G"}"#);
+        let g: ConnGroup = serde_json::from_str(r#"{"id":"g","name":"G","kind":"postgres"}"#).unwrap();
+        assert_eq!(g.kind.as_deref(), Some("postgres"));
+        assert!(serde_json::to_string(&g).unwrap().contains(r#""kind":"postgres""#));
     }
 }

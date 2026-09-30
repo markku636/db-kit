@@ -158,7 +158,7 @@ function Inner({ open, onClose }: { open: boolean; onClose: () => void }) {
           { value: "xsh", label: t(".xsh 工作階段檔") },
         ]} />
         <Field label={kind === "ssh_config" ? t("設定檔") : t("工作階段資料夾")}
-          hint={kind === "ssh_config" ? t("含 Include 引入的檔案；萬用字元的 Host 與 Match 區塊不會變成主機") : t("連同子資料夾一起讀；子資料夾會變成主機資料夾")}>
+          hint={kind === "ssh_config" ? t("含 Include 引入的檔案；萬用字元的 Host 與 Match 區塊不會變成主機") : t("連同子資料夾一起讀；子資料夾會變成主機群組")}>
           <div className="flex gap-2">
             <Input value={path} onChange={(e) => setPath(e.target.value)} aria-label={t("來源路徑")}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); void runScan(kind, path); } }} />
@@ -212,13 +212,13 @@ function Inner({ open, onClose }: { open: boolean; onClose: () => void }) {
               {kind === "xsh" && (
                 <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                   <input type="checkbox" checked={keepFolders} onChange={(e) => setKeepFolders(e.target.checked)} />
-                  {t("照原本的子資料夾分資料夾")}
+                  {t("照原本的子資料夾分群組")}
                 </label>
               )}
-              <Field label={useSourceFolders ? t("沒有子資料夾的放到") : t("放到資料夾")} className="min-w-[14rem]">
+              <Field label={useSourceFolders ? t("沒有子資料夾的放到") : t("放到群組")} className="min-w-[14rem]">
                 <Select value={target} onChange={(e) => setTarget(e.target.value)}>
-                  <option value={NEW_FOLDER}>{kind === "ssh_config" ? t("新資料夾「匯入：ssh config」") : t("新資料夾「匯入：.xsh」")}</option>
-                  <option value="">{t("未分類")}</option>
+                  <option value={NEW_FOLDER}>{kind === "ssh_config" ? t("新群組「匯入：ssh config」") : t("新群組「匯入：.xsh」")}</option>
+                  <option value="">{t("未分組")}</option>
                   {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
                 </Select>
               </Field>

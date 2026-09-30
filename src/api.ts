@@ -54,6 +54,8 @@ export interface ConnectionConfig {
 export interface ConnGroup {
   id: string;
   name: string;
+  /** 群組屬於哪個連線種類（側欄「種類 > 群組」）。舊版存檔沒有，載入後由 splitGroupsByKind 補上。 */
+  kind?: DbKind;
 }
 
 /// 側欄排版中一筆連線的擺放位置。

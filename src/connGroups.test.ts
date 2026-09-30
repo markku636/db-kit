@@ -4,6 +4,8 @@ import {
   deleteGroup,
   flatten,
   groupSize,
+  mergeKindLayout,
+  splitGroupsByKind,
   moveConnection,
   moveGroup,
   sectionize,
@@ -141,5 +143,48 @@ describe("flatten / toPlacements / groupSize", () => {
     const conns = [c("a", "g1"), c("b", "g1"), c("x", "g2"), c("y")];
     expect(groupSize(conns, "g1")).toBe(2);
     expect(groupSize(conns, "none")).toBe(0);
+  });
+});
+
+describe("splitGroupsByKind（舊群組依成員種類拆開）", () => {
+  const k = (id: string, kind: ConnectionConfig["kind"], group_id: string | null = null) => ({ ...c(id, group_id), kind });
+  let n = 0;
+  const newId = () => `new-${++n}`;
+
+  it("全部都有 kind → null（不必落地）", () => {
+    expect(splitGroupsByKind([k("a", "mysql", "g")], [{ id: "g", name: "G", kind: "mysql" }], newId)).toBeNull();
+  });
+
+  it("只有一種成員 → 補 kind；多種 → 第一個成員的種類沿用原 id、其他種類各生同名新群組並搬過去", () => {
+    n = 0;
+    const conns = [k("m1", "mysql", "prod"), k("p1", "postgres", "prod"), k("m2", "mysql", "prod"), k("p2", "postgres", "dev")];
+    const r = splitGroupsByKind(conns, [{ id: "prod", name: "PROD" }, { id: "dev", name: "DEV" }], newId)!;
+    expect(r.groups).toEqual([
+      { id: "prod", name: "PROD", kind: "mysql" },
+      { id: "new-1", name: "PROD", kind: "postgres" },
+      { id: "dev", name: "DEV", kind: "postgres" },
+    ]);
+    expect(r.conns.map((x) => [x.id, x.group_id])).toEqual([["m1", "prod"], ["p1", "new-1"], ["m2", "prod"], ["p2", "dev"]]);
+    expect(r.copied).toEqual([["new-1", "prod"]]);
+  });
+
+  it("空的舊群組歸到連線最多的種類；沒有任何連線就先不動", () => {
+    const conns = [k("a", "redis"), k("b", "postgres"), k("c", "postgres")];
+    expect(splitGroupsByKind(conns, [{ id: "e", name: "E" }], newId)!.groups).toEqual([{ id: "e", name: "E", kind: "postgres" }]);
+    expect(splitGroupsByKind([], [{ id: "e", name: "E" }], newId)).toBeNull();
+  });
+});
+
+describe("mergeKindLayout（某種類區塊的排版合併回全域）", () => {
+  const k = (id: string, kind: ConnectionConfig["kind"], group_id: string | null = null) => ({ ...c(id, group_id), kind });
+
+  it("只重排該種類、放回它原本佔的位置；其他種類與群組原封不動", () => {
+    const conns = [k("p1", "postgres"), k("m1", "mysql", "gm"), k("p2", "postgres", "gp")];
+    const groups: ConnGroup[] = [{ id: "gm", name: "M", kind: "mysql" }, { id: "gp", name: "P", kind: "postgres" }];
+    const r = mergeKindLayout(conns, groups, "postgres", [{ id: "p2", groupId: null }, { id: "p1", groupId: "gp" }], [
+      { id: "gp", name: "P2" },
+    ]);
+    expect(r.conns.map((x) => [x.id, x.group_id ?? null])).toEqual([["p2", null], ["m1", "gm"], ["p1", "gp"]]);
+    expect(r.groups).toEqual([{ id: "gm", name: "M", kind: "mysql" }, { id: "gp", name: "P2", kind: "postgres" }]);
   });
 });

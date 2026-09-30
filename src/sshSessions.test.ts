@@ -24,17 +24,17 @@ describe("groupSessions", () => {
     mk("s6", { name: "alpha", folder_id: null }),
   ];
 
-  it("資料夾順序照 folders；組內依顯示名稱不分大小寫、數字自然序；空資料夾保留", () => {
+  it("群組順序照 folders；組內維持陣列順序（使用者拖曳排出來的）；空群組保留", () => {
     const g = groupSessions(folders, sessions);
     expect(g.groups.map((x) => x.folder.id)).toEqual(["f2", "f1", "empty"]);
-    expect(g.groups[1].sessions.map((s) => s.name)).toEqual(["web-2", "web-10"]);
+    expect(g.groups[1].sessions.map((s) => s.name)).toEqual(["web-10", "web-2"]);
     expect(g.groups[0].sessions.map((s) => s.id)).toEqual(["s4"]);
     expect(g.groups[2].sessions).toEqual([]);
   });
 
-  it("folder_id 為 null 或指到不存在的資料夾 → 未分類", () => {
+  it("folder_id 為 null 或指到不存在的群組 → 未分組（維持陣列順序）", () => {
     const g = groupSessions(folders, sessions);
-    expect(g.loose.map((s) => s.id)).toEqual(["s6", "s3", "s5"]);
+    expect(g.loose.map((s) => s.id)).toEqual(["s3", "s5", "s6"]);
   });
 
   it("不改動輸入陣列", () => {
@@ -79,7 +79,7 @@ describe("uniqueFolderName", () => {
   });
 
   it("空名稱給預設", () => {
-    expect(uniqueFolderName(folders, "  ")).toBe("新資料夾");
+    expect(uniqueFolderName(folders, "  ")).toBe("新群組");
   });
 });
 

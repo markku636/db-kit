@@ -21,9 +21,10 @@ import { useColWidths, ColResizer } from "./ui/useColWidths";
 import { buildDiscoverUrl, countRawClauses } from "./kibanaUrl";
 import { loadConnColors, persistConnColors, setConnColor, CONN_COLOR_PALETTE } from "./connColors";
 import {
-  deleteGroup, groupSize, loadCollapsed, moveConnection, moveGroup, persistCollapsed,
-  sectionize, toPlacements, uniqueGroupName, UNGROUPED_KEY,
+  COLLAPSED_KEY, connPlacements, groupsOfKind, mergeKindLayout, splitGroupsByKind, toPlacements,
 } from "./connGroups";
+import { loadSet, moveItem, saveSet, type Placement } from "./sidebarGroups";
+import GroupedSection, { HeaderButton, moveTargets, type ItemDnd } from "./sidebar/GroupedSection";
 import { kindIcon } from "./kindIcons";
 import { containerDbNode, containerObjIcon, containerObjTitle } from "./containerTree";
 import { dockerItemMenu, harborItemMenu, registryItemMenu } from "./dockerMenus";
@@ -99,8 +100,8 @@ import {
   Search, Loader2, Pencil, Trash2, X, Play, Clock, ArrowUp, ArrowDown,
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
-  ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, FolderPlus, ExternalLink, Gauge,
-  Type, AArrowDown, AArrowUp, ShieldCheck, Library, Folder, Unplug,
+  ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, ExternalLink, Gauge,
+  Type, AArrowDown, AArrowUp, ShieldCheck, Library, Unplug,
   type LucideIcon,
 } from "lucide-react";
 import { supportsReviewRun } from "./reviewRun";
@@ -223,7 +224,8 @@ function openNodeScopedQueryTab() {
 export default function App() {
   const t = useT();
   // null = 關閉；{ initial } = 開啟（initial 為 null 表新增、為連線表示編輯）
-  const [dialog, setDialog] = useState<{ initial: ConnectionConfig | null; prefill?: Partial<ConnectionConfig> } | null>(null);
+  // initialKind / groupId：從側欄某種類區塊（或它的群組右鍵選單）新增——直接選好類型，存檔後放進該群組。
+  const [dialog, setDialog] = useState<{ initial: ConnectionConfig | null; prefill?: Partial<ConnectionConfig>; initialKind?: DbKind; groupId?: string | null } | null>(null);
   // 其他地方（Docker 容器右鍵 / 容器分頁）請求開一個預填好的新增連線對話框。
   const connPrefill = useConnPrefill((s) => s.prefill);
   useEffect(() => {
@@ -480,7 +482,7 @@ export default function App() {
         <Sidebar
           width={sidebar.size}
           onEdit={(c) => setDialog({ initial: c })}
-          onNewConnection={() => setDialog({ initial: null })}
+          onNewConnection={(kind, groupId) => setDialog({ initial: null, initialKind: kind, groupId })}
           onEditSsh={(s, folderId) => setSshDialog({ initial: s, folderId: folderId ?? null })}
           onEditRd={(s, folderId) => setRdDialog({ initial: s, folderId: folderId ?? null })}
           onImportRdp={() => void importRdpFile((prefill) => setRdDialog({ initial: null, folderId: null, prefill }))}
@@ -534,6 +536,7 @@ export default function App() {
         <ConnectionDialog
           initial={dialog.initial}
           prefill={dialog.prefill}
+          initialKind={dialog.initialKind}
           onClose={() => setDialog(null)}
           onNewSsh={(prefill) => { setDialog(null); setSshDialog({ initial: null, folderId: null, prefill }); }}
           onNewRemoteDesktop={(prefill, protocol) => { setDialog(null); setRdDialog({ initial: null, folderId: null, protocol, prefill }); }}
@@ -546,6 +549,17 @@ export default function App() {
             }
             useStore.getState().addConnection(c);
             useStore.getState().setActive(c.id);
+            // 從群組右鍵選單新增：放進那個群組（類型在對話框裡被改掉、群組不屬於這個類型就留在未分組）。
+            const gid = dialog.groupId;
+            if (!dialog.initial && gid) {
+              const st = useStore.getState();
+              if (st.connGroups.some((g) => g.id === gid && g.kind === c.kind)) {
+                const conns = st.connections.map((x) => (x.id === c.id ? { ...x, group_id: gid } : x));
+                st.setConnections(conns);
+                api.saveConnectionLayout(st.connGroups, toPlacements(conns))
+                  .catch((e) => toast.error(t("儲存群組排版失敗：{e}", { e: String(e) })));
+              }
+            }
             setDialog(null);
           }}
         />
@@ -1238,47 +1252,15 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 }
 
 // ---- 左側連線/物件樹 ----
-const DB_SECTION_KEY = "db-kit:dbSectionCollapsed";
+/** 側欄某個資料庫種類區塊的摺疊鍵（每個種類各一個）。 */
+const kindSectionKey = (k: DbKind) => `db-kit:connKindCollapsed:${k}`;
 
-function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; onNewConnection: () => void; onEditSsh: (s: SshSession | null, folderId?: string | null) => void; onEditRd: (s: RdSession | null, folderId?: string | null) => void; onImportRdp: () => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
+function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; onNewConnection: (kind?: DbKind, groupId?: string | null) => void; onEditSsh: (s: SshSession | null, folderId?: string | null) => void; onEditRd: (s: RdSession | null, folderId?: string | null) => void; onImportRdp: () => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
   const t = useT();
   const { connections, connGroups, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
-  // ---- 連線群組（側欄排版）----
-  // 摺疊狀態純 UI，走 localStorage；群組本身與歸屬順序則持久化在 connections.json。
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed);
-  // 整個「資料庫連線」區塊的摺疊（同 SSH 主機區塊標題）。
-  const [dbSectionCollapsed, setDbSectionCollapsed] = useState<boolean>(() => {
-    try { return localStorage.getItem(DB_SECTION_KEY) === "1"; } catch { return false; }
-  });
-  const toggleDbSection = () => {
-    const v = !dbSectionCollapsed;
-    setDbSectionCollapsed(v);
-    try { localStorage.setItem(DB_SECTION_KEY, v ? "1" : "0"); } catch { /* 忽略 */ }
-  };
-  // 進行中的拖曳：連線或群組。null = 沒在拖。
-  //
-  // ⚠️ 這裡的 HTML5 拖曳依賴 tauri.conf.json 的 `app.windows[].dragDropEnabled: false`。
-  // Tauri v2 預設為 true，webview 會攔截原生 drag-drop（用來接「從檔案總管拖檔進來」），
-  // 副作用是頁面內完全收不到 dragover / drop —— Tauri 官方 schema 明載
-  // 「Disabling it is required to use HTML5 drag and drop on the frontend on Windows」。
-  // 本 app 開檔一律走 pickOpenFile / pickSaveFile 對話框，沒用到原生檔案拖放，關掉無損失。
-  const [drag, setDrag] = useState<{ kind: "conn" | "group"; id: string } | null>(null);
-  // 目前的落點提示。conn/group = 插在該列前 / 後；into = 丟進某群組末端（拖到群組標題上）。
-  const [dropAt, setDropAt] = useState<
-    { kind: "conn" | "group"; id: string; before: boolean } | { kind: "into"; id: string | null } | null
-  >(null);
-  // 重新命名中的群組（id → 編輯中的名稱）；null = 沒有在改名。
-  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
-  // 群組標題的右鍵選單。
-  const [groupMenu, setGroupMenu] = useState<{ id: string; x: number; y: number } | null>(null);
-
-  const toggleGroupCollapsed = (id: string) =>
-    setCollapsedGroups((s) => {
-      const next = new Set(s);
-      if (!next.delete(id)) next.add(id);
-      persistCollapsed(next);
-      return next;
-    });
+  // ---- 連線群組（側欄「種類 > 群組」排版）----
+  // 分組 UI（區塊標題、群組列、拖曳、改名、刪除、摺疊）在 sidebar/GroupedSection，與 SSH / 遠端桌面共用；
+  // 這裡只負責把某個種類的排版變更合併回全域陣列並落地（群組與歸屬順序持久化在 connections.json）。
 
   // ---- 已連線節點的收合狀態 ----
   // 收合 ≠ 中斷連線：只把資料庫子樹折起來，連線與後端 session 原封不動
@@ -1314,84 +1296,36 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
     }
   };
 
-  const addGroup = () => {
-    const g: ConnGroup = { id: crypto.randomUUID(), name: uniqueGroupName(connGroups, t("新群組")) };
-    void applyLayout(connections, [...connGroups, g]);
-    // 建完直接進入改名，省一次右鍵：新群組的預設名字幾乎一定要改。
-    setRenaming({ id: g.id, name: g.name });
-  };
-
-  const commitRename = () => {
-    if (!renaming) return;
-    const name = renaming.name.trim();
-    const target = connGroups.find((g) => g.id === renaming.id);
-    setRenaming(null);
-    if (!target || !name || name === target.name) return;
-    const unique = uniqueGroupName(connGroups, name, renaming.id);
-    void applyLayout(
-      connections,
-      connGroups.map((g) => (g.id === renaming.id ? { ...g, name: unique } : g))
-    );
-  };
-
-  /** 刪群組：底下有連線就先問過（連線只會移到未分組，不會被刪）。空群組直接刪，不囉嗦。 */
-  const removeGroup = async (id: string) => {
-    const g = connGroups.find((x) => x.id === id);
-    if (!g) return;
-    const count = groupSize(connections, id);
-    if (count > 0) {
-      const ok = await uiConfirm(
-        t("群組「{name}」底下還有 {count} 個連線，刪除群組後它們會移到「未分組」。連線本身與已儲存的密碼都不會被刪除。", {
-          name: g.name,
-          count,
-        }),
-        { title: t("刪除群組"), danger: true, confirmText: t("刪除群組") }
-      );
-      if (!ok) return;
-    }
-    const next = deleteGroup(connections, connGroups, id);
+  /** 某個種類區塊的排版變更（GroupedSection.onLayout）：合併回全域陣列再落地。 */
+  const applyKindLayout = (kind: DbKind, placements: Placement[], kindGroups: ConnGroup[]) => {
+    const next = mergeKindLayout(connections, connGroups, kind, placements, kindGroups);
     void applyLayout(next.conns, next.groups);
   };
-
-  /** 放開滑鼠：把 drag + dropAt 換算成一次排版更新。 */
-  const commitDrop = () => {
-    const d = drag;
-    const at = dropAt;
-    setDrag(null);
-    setDropAt(null);
-    if (!d || !at) return;
-
-    if (d.kind === "group") {
-      // 群組只跟群組換位；拖到連線或群組內容上不做事。
-      if (at.kind === "group") void applyLayout(connections, moveGroup(connGroups, d.id, at.id, at.before));
-      return;
-    }
-
-    // 拖到群組標題上 → 接在該群組末端，並展開它（不然看不到東西跑哪去了）。
-    if (at.kind === "into") {
-      if (at.id) setCollapsedGroups((s) => { const n = new Set(s); n.delete(at.id!); persistCollapsed(n); return n; });
-      void applyLayout(moveConnection(connections, connGroups, d.id, at.id, Number.MAX_SAFE_INTEGER), connGroups);
-      return;
-    }
-
-    // 拖到某條連線上 → 插在它前 / 後，落在該連線所屬的群組。
-    const target = connections.find((c) => c.id === at.id);
-    if (!target || target.id === d.id) return;
-    const raw = target.group_id ?? null;
-    const gid = raw && connGroups.some((g) => g.id === raw) ? raw : null;
-    const list = sectionize(connections, connGroups)
-      .find((s) => (s.group?.id ?? null) === gid)!
-      .conns.filter((c) => c.id !== d.id);
-    const found = list.findIndex((c) => c.id === at.id);
-    const index = found < 0 ? list.length : found + (at.before ? 0 : 1);
-    void applyLayout(moveConnection(connections, connGroups, d.id, gid, index), connGroups);
+  /** 右鍵「移到「X」/ 移出群組」：接在目標群組最後（只在同一個種類裡搬）。 */
+  const moveConnTo = (c: ConnectionConfig, groupId: string | null) => {
+    const kindGroups = groupsOfKind(connGroups, c.kind);
+    const placements = connPlacements(connections.filter((x) => x.kind === c.kind));
+    applyKindLayout(c.kind, moveItem(placements, kindGroups, c.id, groupId, Number.MAX_SAFE_INTEGER), kindGroups);
   };
 
-  /** 依游標落在列的上半 / 下半決定插在前面還是後面。 */
-  const dropHalf = (e: React.DragEvent) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    return e.clientY < r.top + r.height / 2;
-  };
+  // 舊版群組沒有 kind（一個群組可以混放不同種類的連線）：載入後依成員種類拆開並落地一次。
+  // 以「待遷移群組 id」當簽章，同一批只試一次——落地失敗會回滾，不能因此每次重繪都重試、一直跳錯誤。
+  const migratedSig = useRef("");
+  useEffect(() => {
+    if (connections.length === 0) return;
+    const sig = connGroups.filter((g) => !g.kind).map((g) => g.id).join(",");
+    if (!sig || sig === migratedSig.current) return;
+    migratedSig.current = sig;
+    const split = splitGroupsByKind(connections, connGroups, () => crypto.randomUUID());
+    if (!split) return;
+    // 拆出來的同名群組沿用原群組的摺疊狀態。
+    if (split.copied.length > 0) {
+      const closed = loadSet(COLLAPSED_KEY);
+      for (const [nid, oid] of split.copied) if (closed.has(oid)) closed.add(nid);
+      saveSet(COLLAPSED_KEY, closed);
+    }
+    void applyLayout(split.conns, split.groups);
+  }, [connections, connGroups]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [databases, setDatabases] = useState<Record<string, string[]>>({});
   // 已展開的資料庫: 鍵為 connId:db，值為樹狀分組（資料表 / 檢視 / 函式）
@@ -2635,12 +2569,266 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
   const tableVisible = (connName: string, tName: string) =>
     !q || connName.toLowerCase().includes(q) || tName.toLowerCase().includes(q);
   const visibleConns = connections.filter(connVisible);
-  // 側欄分區（群組順序 → 未分組）。搜尋過濾在各區段內做，讓命中的連線留在原本的群組底下。
-  const sections = sectionize(connections, connGroups);
+  // 側欄的資料庫種類區塊：有連線的種類，依 KIND_META 的順序。
+  const connKinds = (Object.keys(KIND_META) as DbKind[]).filter((k) => connections.some((c) => c.kind === k));
   // 跨庫搜尋 / 全資料庫搜尋的目標連線：目前 active 且已連線者，否則第一個已連線者。
   const searchTarget =
     connections.find((c) => c.id === activeId && connectedIds.has(c.id)) ??
     connections.find((c) => connectedIds.has(c.id)) ?? null;
+
+  /** 側欄一條資料庫連線：連線列（拖曳接線由 GroupedSection 給）+ 展開後的資料庫 / 物件樹。 */
+  const renderConn = (c: ConnectionConfig, dnd: ItemDnd) => {
+    const meta = KIND_META[c.kind];
+    const connected = connectedIds.has(c.id);
+    const busy = connecting.has(c.id);
+    const treeCollapsed = collapsedConns.has(c.id);
+    return (
+      <div>
+        <div
+          // 拖曳掛在「連線這一列」而不是外層容器：容器包含展開後的整棵資料庫樹，
+          // 掛在容器上會讓落點指示線橫跨整棵樹，上/下半判斷也會以整棵樹的高度計算。
+          {...dnd.rowProps}
+          onClick={() => { setActive(c.id); selectNode({ type: "connection", connId: c.id }); }}
+          // 雙擊：未連線＝連線；已連線＝收合 / 展開資料庫樹，**不中斷連線**。
+          // 斷線是明確動作，只走右鍵選單的「中斷連線」——把樹收起來不該把 session
+          // （以及走 OTP 的 gateway 那次驗證）一起丟掉。
+          onDoubleClick={() => (connected ? toggleConnCollapsed(c.id) : doConnect(c.id))}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setActive(c.id);
+            selectNode({ type: "connection", connId: c.id });
+            setMenu({ id: c.id, x: e.clientX, y: e.clientY });
+          }}
+          style={connColors[c.id] ? { boxShadow: `inset 3px 0 0 ${connColors[c.id]}` } : undefined}
+          className={`group flex items-center gap-2 px-3 py-1.5 cursor-pointer ${
+            activeId === c.id ? "relative bg-accent/12 before:content-[''] before:absolute before:left-0 before:inset-y-0 before:w-[2px] before:bg-accent" : "hover:bg-fg/5"
+          } ${dnd.rowClass}`}
+        >
+          {/* 收合 / 展開箭頭（樣式對齊資料庫節點）。只在已連線時可按——未連線沒有樹可收，
+              但仍佔位，讓連線名稱在連線前後維持同一條垂直對齊線。 */}
+          {connected ? (
+            <button type="button"
+              title={treeCollapsed ? t("展開資料庫清單") : t("收合資料庫清單（不會中斷連線）")}
+              aria-label={treeCollapsed ? t("展開資料庫清單") : t("收合資料庫清單（不會中斷連線）")}
+              onClick={(e) => { e.stopPropagation(); toggleConnCollapsed(c.id); }}
+              className="w-3 flex items-center justify-center shrink-0 text-fg/35 hover:text-fg/80">
+              <Icon icon={ChevronRight} size={13} className={`transition-transform ${treeCollapsed ? "" : "rotate-90"}`} />
+            </button>
+          ) : (
+            <span className="w-3 shrink-0" />
+          )}
+          {busy ? (
+            <span className="w-3.5 h-3.5 shrink-0 grid place-items-center">
+              <Icon icon={Loader2} size={14} className="text-fg/50 animate-spin" />
+            </span>
+          ) : (
+            // 依資料庫類型顯示圖示（取代原狀態圓點）：已連線=亮色（kind 色）、未連線=灰暗。
+            <span
+              className={`shrink-0 flex ${connected ? "" : "text-fg/35"}`}
+              style={connected ? { color: meta.color } : undefined}
+              title={connected ? `${meta.label}${t(" · 已連線")}` : `${meta.label}${t(" · 未連線")}`}
+            >
+              <Icon icon={kindIcon(c.kind)} size={14} />
+            </span>
+          )}
+          <span className="truncate flex-1" title={`${c.name} · ${KIND_META[c.kind].label} · ${hostLabel(c)}`}>{c.name}</span>
+          {isProdConn(c) && <span className="shrink-0 text-[9px] px-1 rounded bg-red-500/25 text-red-300/90" title={t("正式環境：執行查詢前會跳確認")}>PROD</span>}
+          {readonlyConns[c.id] && <span className="shrink-0 text-[9px] px-1 rounded bg-amber-400/20 text-amber-300/90" title={t("唯讀模式：擋寫入 / DDL 與資料格編輯")}>{t("唯讀")}</span>}
+          <button type="button" title={t("編輯連線")}
+            onClick={(e) => { e.stopPropagation(); onEdit(c); }}
+            className="w-5 h-5 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-fg/80 hidden group-hover:flex">
+            <Icon icon={Pencil} size={13} />
+          </button>
+          <button type="button" title={t("刪除連線")}
+            onClick={(e) => { e.stopPropagation(); deleteConn(c.id, c.name); }}
+            className="w-5 h-5 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-red-300 hidden group-hover:flex">
+            <Icon icon={Trash2} size={13} />
+          </button>
+        </div>
+        {connected && !treeCollapsed && databases[c.id] && databases[c.id].length === 0 && (
+          <div className="pl-7 pr-3 py-1 text-fg/25 text-xs">{t("（無資料庫）")}</div>
+        )}
+        {connected && !treeCollapsed &&
+          (databases[c.id] ?? []).map((db) => {
+            const dbKey = `${c.id}:${db}`;
+            const objs = expandedDbs[dbKey];
+            const loading = loadingDbs.has(dbKey);
+            const isRedis = c.kind === "redis";
+            // external（gateway）走 SQL 分支：用資料夾 + 每庫篩選框（適合大量表），右鍵亦可新增查詢。
+            const isSqlKind = isMysqlFamily(c.kind) || c.kind === "postgres" || c.kind === "sqlite" || c.kind === "external" || c.kind === "mssql" || c.kind === "oracle";
+            const canRoutines = supportsRoutines(c.kind);
+
+            // 樹中的單一資料表 / 視圖節點（沿用選取 / 雙擊開啟 / 右鍵產生 SQL）。indent 控制縮排深度。
+            const objNode = (obj: TableInfo, indent: string) => (
+              <div
+                key={`${obj.kind}:${obj.name}`}
+                data-tree-conn={c.id}
+                data-tree-db={db}
+                data-tree-table={obj.name}
+                onClick={() => {
+                  setActive(c.id);
+                  selectNode({ type: "table", connId: c.id, db, table: obj.name, kind: c.kind, objKind: obj.kind });
+                  // 單擊即開啟資料分頁（openTable 會去重：已開的表只切換、不重複開）。
+                  useStore.getState().openTable(c.id, db, obj.name, "data", obj.kind);
+                }}
+                onContextMenu={
+                  c.kind !== "redis"
+                    ? (e) => {
+                        e.preventDefault();
+                        setActive(c.id);
+                        selectNode({ type: "table", connId: c.id, db, table: obj.name, kind: c.kind, objKind: obj.kind });
+                        setTableMenu({ connId: c.id, db, table: obj.name, kind: c.kind, objKind: obj.kind, x: e.clientX, y: e.clientY });
+                      }
+                    : undefined
+                }
+                className={`${indent} pr-3 py-1.5 text-fg/55 cursor-pointer truncate flex items-center gap-1.5 ${
+                  selectedNode?.type === "table" && selectedNode.connId === c.id &&
+                  selectedNode.db === db && selectedNode.table === obj.name
+                    ? "relative bg-accent/12 before:content-[''] before:absolute before:left-0 before:inset-y-0 before:w-[2px] before:bg-accent" : "hover:bg-fg/5"
+                }`}
+                title={containerObjTitle(c.kind, obj.kind) ?? t("單擊開啟資料；右鍵可產生 SELECT / 更多動作")}
+              >
+                {(() => {
+                  const ci = containerObjIcon(c.kind, obj.kind);
+                  if (ci) return <Icon icon={ci.icon} size={14} className={`shrink-0 ${ci.cls}`} />;
+                  return (
+                    <Icon icon={obj.kind === "view" ? Eye : obj.kind === "data_view" ? Layers : Table2} size={14}
+                      className={`shrink-0 ${
+                        obj.kind === "view" ? "text-purple-300/80" : obj.kind === "data_view" ? "text-teal-300/80" : "text-sky-300/70"
+                      }`} />
+                  );
+                })()}
+                <span className="truncate">{obj.name}</span>
+              </div>
+            );
+
+            // 樹中的單一函式 / 預存程序節點（雙擊開定義編輯器；圖示 + tooltip 區分種類）。
+            const routineNode = (r: RoutineInfo) => {
+              const isProc = r.routine_type === "procedure";
+              return (
+                <div
+                  key={`${r.routine_type}:${r.name}:${r.signature ?? ""}`}
+                  onDoubleClick={() => setRoutines({ connId: c.id, db, kind: c.kind, initial: r })}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setActive(c.id);
+                    setRoutineMenu({ connId: c.id, db, kind: c.kind, routine: r, x: e.clientX, y: e.clientY });
+                  }}
+                  className="pl-16 pr-3 py-1 text-fg/55 hover:bg-fg/5 cursor-pointer truncate flex items-center gap-1.5"
+                  title={t("{type}「{name}」（雙擊設計 / 編輯；右鍵更多）", { type: isProc ? t("預存程序") : t("函式"), name: r.name })}
+                >
+                  <Icon icon={isProc ? Cog : FunctionSquare} size={14}
+                    className={`shrink-0 ${isProc ? "text-amber-300/90" : "text-emerald-300/80"}`} />
+                  <span className="truncate">{r.name}</span>
+                </div>
+              );
+            };
+
+            // 物件分組資料夾（資料表 / 檢視 / 函式）。收藏查詢已移至側欄頂層「收藏查詢」區。
+            const folderNode = (type: string, glyphIcon: LucideIcon, color: string, label: string, count: number, body: ReactNode) => {
+              // 搜尋/篩選命中時自動展開：使用者手動/預設展開，或（全域搜尋或本庫篩選中且此資料夾有命中）。
+              // 清除搜尋後 filtering=false，open 回落到手動/預設狀態，不寫入 folderOpen、不殘留。
+              const filtering = !!q || !!(dbFilter[dbKey] ?? "").trim();
+              const open = isFolderOpen(dbKey, type) || (filtering && count > 0);
+              return (
+                <div key={type}>
+                  <div
+                    onClick={() => toggleFolder(dbKey, type)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setActive(c.id);
+                      setFolderMenu({ connId: c.id, db, kind: c.kind, type, x: e.clientX, y: e.clientY });
+                    }}
+                    className="pl-11 pr-3 py-1.5 hover:bg-fg/5 cursor-pointer flex items-center gap-1.5 select-none"
+                  >
+                    <Icon icon={ChevronRight} size={13} className={`shrink-0 text-fg/35 transition-transform ${open ? "rotate-90" : ""}`} />
+                    <Icon icon={glyphIcon} size={14} className={`shrink-0 ${color}`} />
+                    <span className="text-fg/70 truncate flex-1">{label}</span>
+                    <span className="text-fg/30 text-[11px] tabular-nums">{count}</span>
+                  </div>
+                  {open && (count > 0 ? body : <div className="pl-16 pr-3 py-1 text-fg/25 text-xs">{t("（無）")}</div>)}
+                </div>
+              );
+            };
+
+            return (
+              <div key={db}>
+                <div
+                  onClick={() => {
+                    toggleDb(c.id, db);
+                    setActive(c.id);
+                    selectNode({ type: "database", connId: c.id, db, kind: c.kind });
+                  }}
+                  onContextMenu={(isRedis || isSqlKind || c.kind === "mongo" || c.kind === "kafka" || c.kind === "elastic" || c.kind === "rabbitmq" || isContainerKind(c.kind)) ? (e) => {
+                    e.preventDefault();
+                    setActive(c.id);
+                    selectNode({ type: "database", connId: c.id, db, kind: c.kind });
+                    setDbMenu({ connId: c.id, db, x: e.clientX, y: e.clientY });
+                  } : undefined}
+                  className={`pl-7 pr-3 py-1.5 text-fg/70 cursor-pointer truncate flex items-center gap-1.5 ${
+                    selectedNode?.type === "database" && selectedNode.connId === c.id && selectedNode.db === db
+                      ? "relative bg-accent/12 before:content-[''] before:absolute before:left-0 before:inset-y-0 before:w-[2px] before:bg-accent" : "hover:bg-fg/5"
+                  }`}
+                >
+                  <span className="w-3 flex items-center justify-center shrink-0">
+                    {loading
+                      ? <Icon icon={Loader2} size={13} className="text-fg/40 animate-spin" />
+                      : <Icon icon={ChevronRight} size={13} className={`text-fg/35 transition-transform ${objs ? "rotate-90" : ""}`} />}
+                  </span>
+                  <span className="shrink-0 flex" style={{ color: meta.color }}><Icon icon={containerDbNode(c.kind, db)?.icon ?? Database} size={14} /></span>
+                  <span className="truncate">{containerDbNode(c.kind, db)?.label ?? db}</span>
+                </div>
+
+                {objs && isSqlKind && (() => {
+                  // 每庫獨立篩選（與全域搜尋 AND）；套用後再算數量，使資料夾徽章與顯示列數一致。
+                  const dq = (dbFilter[dbKey] ?? "").trim().toLowerCase();
+                  const dbMatch = (name: string) => !dq || name.toLowerCase().includes(dq);
+                  const vTables = objs.tables.filter((o) => tableVisible(c.name, o.name) && dbMatch(o.name));
+                  const vViews = objs.views.filter((o) => tableVisible(c.name, o.name) && dbMatch(o.name));
+                  const vProcs = objs.procedures.filter((r) => tableVisible(c.name, r.name) && dbMatch(r.name));
+                  const vFns = objs.functions.filter((r) => tableVisible(c.name, r.name) && dbMatch(r.name));
+                  return (
+                    <>
+                      <div className="pl-11 pr-3 py-1">
+                        <div className="relative">
+                          <Icon icon={Search} size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-fg/30" />
+                          <input
+                            value={dbFilter[dbKey] ?? ""}
+                            onChange={(e) => setDbFilter((m) => ({ ...m, [dbKey]: e.target.value }))}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => { if (e.key === "Escape" && (dbFilter[dbKey] ?? "")) { e.stopPropagation(); setDbFilter((m) => ({ ...m, [dbKey]: "" })); } }}
+                            placeholder={t("篩選 {db} 表名…", { db })}
+                            title={t("只篩選此資料庫的表 / 檢視 / 程序 / 函式名稱")}
+                            className="w-full bg-inset border border-fg/10 rounded pl-6 pr-2 py-0.5 text-[11px] outline-none focus:border-accent"
+                          />
+                        </div>
+                      </div>
+                      {folderNode("tables", Table2, "text-sky-300/80", t("資料表"), vTables.length,
+                        <>{vTables.map((o) => objNode(o, "pl-16"))}</>)}
+                      {folderNode("views", Eye, "text-purple-300/80", t("檢視"), vViews.length,
+                        <>{vViews.map((o) => objNode(o, "pl-16"))}</>)}
+                      {canRoutines && folderNode("procedures", Cog, "text-amber-300/90", t("預存程序"), vProcs.length,
+                        <>{vProcs.map(routineNode)}</>)}
+                      {canRoutines && folderNode("functions", FunctionSquare, "text-emerald-300/80", t("函式"), vFns.length,
+                        <>{vFns.map(routineNode)}</>)}
+                    </>
+                  );
+                })()}
+
+                {objs && !isSqlKind && (
+                  <>
+                    {objs.tables.filter((o) => tableVisible(c.name, o.name)).map((o) => objNode(o, "pl-12"))}
+                    {objs.tables.length === 0 && (
+                      <div className="pl-12 pr-3 py-1 text-fg/25 text-xs">{isContainerKind(c.kind) ? t("（空）") : t("無表")}</div>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
+      </div>
+    );
+  };
 
   return (
     // 外殼只負責排版（column flex）與裁切，捲動交給下方那層獨立的視窗 div。
@@ -2773,418 +2961,37 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
           )}
         </div>
       )}
-      {connections.length > 0 && (
-      // 「資料庫連線」區塊：排版比照 SSH 主機區塊——可摺疊的區塊標題（滑過出現新增群組 / 新增連線 /
-      // 全部中斷），群組是資料夾列、成員縮一層，未分組的連線直接列在最後，不另立「未分組」標題。
-      <div className="py-1" data-db-conn-tree="">
-        <div
-          className={`group px-2 py-1 text-[10px] uppercase tracking-wide text-fg/35 flex items-center gap-1 cursor-pointer select-none ${
-            dropAt?.kind === "into" && dropAt.id === null ? "bg-accent/15 outline outline-1 outline-accent/40" : ""
-          }`}
-          onClick={toggleDbSection}
-          // 拖連線到區塊標題上 → 移出群組（未分組區沒有自己的標題，這裡就是它的落點）。
-          onDragOver={(e) => {
-            if (drag?.kind !== "conn") return;
-            e.preventDefault();
-            setDropAt({ kind: "into", id: null });
-          }}
-          onDrop={(e) => { e.preventDefault(); commitDrop(); }}
-          title={t("點擊摺疊 / 展開；把連線拖到這裡可移出群組")}
-        >
-          <Icon icon={!dbSectionCollapsed || q ? ChevronDown : ChevronRight} size={11} className="text-fg/40" />
-          <span>{t("資料庫連線")} ({connections.length})</span>
-          <span className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
-            {connectedIds.size > 1 && (
-              <button type="button"
-                onClick={(e) => { e.stopPropagation(); connections.filter((c) => connectedIds.has(c.id)).forEach((c) => doDisconnect(c.id)); }}
-                title={`${t("中斷所有已連線的連線")} (${connectedIds.size})`} aria-label={t("中斷所有已連線的連線")}
-                className="w-5 h-5 grid place-items-center rounded text-fg/40 hover:text-fg/80 hover:bg-fg/10">
-                <Icon icon={Unplug} size={12} />
-              </button>
-            )}
-            <button type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                // 區塊摺著就先打開，不然新群組的改名框看不到。
-                if (dbSectionCollapsed) toggleDbSection();
-                addGroup();
-              }}
-              title={t("建立群組後，把連線拖進來即可分類")} aria-label={t("新增群組")}
-              className="w-5 h-5 grid place-items-center rounded text-fg/40 hover:text-fg/80 hover:bg-fg/10">
-              <Icon icon={FolderPlus} size={12} />
-            </button>
-            <button type="button" onClick={(e) => { e.stopPropagation(); onNewConnection(); }}
-              title={t("新增連線")} aria-label={t("新增連線")}
-              className="w-5 h-5 grid place-items-center rounded text-fg/40 hover:text-fg/80 hover:bg-fg/10">
-              <Icon icon={Plus} size={12} />
-            </button>
-          </span>
-        </div>
-      {(!dbSectionCollapsed || !!q) && sections.map((section) => {
-        const gid = section.group?.id ?? null;
-        const key = gid ?? UNGROUPED_KEY;
-        const shown = section.conns.filter(connVisible);
-        // 空的具名群組要留著（它是拖放目標）；搜尋無命中的區段、以及空的未分組區則不佔版面。
-        if (shown.length === 0 && (q || !section.group)) return null;
-        // 只有具名群組有標題列；未分組的連線直接排在所有群組之後（同 SSH 主機區塊）。
-        const headed = section.group !== null;
-        // 搜尋中一律展開，否則命中的連線被摺疊藏住，搜尋等於失效。
-        // 未分組區已經沒有標題可以點開，舊版存下的「未分組已摺疊」一律不理。
-        const collapsed = !q && !!section.group && collapsedGroups.has(key);
-        const dragOverInto = dropAt?.kind === "into" && dropAt.id === gid;
-        const groupLine = dropAt?.kind === "group" && dropAt.id === gid ? dropAt.before : null;
+      {/* 資料庫連線：依種類各一區（PostgreSQL、MySQL…，沒有連線的種類不顯示），區內是該種類自己的群組。
+          分組行為與下面的 SSH 主機 / 遠端桌面共用 GroupedSection；搜尋過濾在各群組內做，命中的連線留在原本的群組底下。 */}
+      {connKinds.map((kind) => {
+        const conns = connections.filter((c) => c.kind === kind);
+        const meta = KIND_META[kind];
+        const live = conns.filter((c) => connectedIds.has(c.id));
         return (
-          <div
-            key={`g:${key}`}
-            onDragOver={(e) => {
-              // 區段空白處：接受連線 → 丟進這一組。
-              if (drag?.kind !== "conn") return;
-              e.preventDefault();
-              setDropAt({ kind: "into", id: gid });
-            }}
-            onDrop={(e) => { e.preventDefault(); commitDrop(); }}
-          >
-            {headed && (
-              <div
-                draggable={!!section.group && !renaming}
-                onDragStart={(e) => {
-                  if (!section.group) return;
-                  e.stopPropagation();
-                  setDrag({ kind: "group", id: section.group.id });
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragEnd={() => { setDrag(null); setDropAt(null); }}
-                onDragOver={(e) => {
-                  if (!drag) return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  // 拖群組 → 換位（未分組區不是群組，不能當換位目標）；拖連線 → 丟進這組。
-                  if (drag.kind === "group") {
-                    if (section.group && drag.id !== section.group.id) {
-                      setDropAt({ kind: "group", id: section.group.id, before: dropHalf(e) });
-                    }
-                  } else setDropAt({ kind: "into", id: gid });
-                }}
-                onDrop={(e) => { e.preventDefault(); e.stopPropagation(); commitDrop(); }}
-                onClick={() => toggleGroupCollapsed(key)}
-                onContextMenu={(e) => {
-                  if (!section.group) return;
-                  e.preventDefault();
-                  setGroupMenu({ id: section.group.id, x: e.clientX, y: e.clientY });
-                }}
-                title={section.group ? t("點擊摺疊 / 展開；拖曳可調整群組順序；右鍵可重新命名或刪除") : t("點擊摺疊 / 展開")}
-                className={`group/hdr flex items-center gap-1.5 px-3 py-1 cursor-pointer select-none text-fg/70 hover:bg-fg/5 ${
-                  dragOverInto ? "bg-accent/15 outline outline-1 outline-accent/40" : ""
-                } ${groupLine === true ? "border-t-2 border-accent" : ""} ${groupLine === false ? "border-b-2 border-accent" : ""}`}
-              >
-                <Icon icon={collapsed ? ChevronRight : ChevronDown} size={11} className="shrink-0 text-fg/40" />
-                <Icon icon={Folder} size={13} className="shrink-0 text-amber-300/70" />
-                {/* 注意要先確認 section.group 存在：未分組區的 id 是 undefined，
-                    只寫 renaming?.id === section.group?.id 會在沒改名時 undefined === undefined 而誤判。 */}
-                {renaming && section.group && renaming.id === section.group.id ? (
-                  <input
-                    autoFocus
-                    value={renaming.name}
-                    onChange={(e) => setRenaming({ id: renaming.id, name: e.target.value })}
-                    onClick={(e) => e.stopPropagation()}
-                    onBlur={commitRename}
-                    onKeyDown={(e) => {
-                      e.stopPropagation();
-                      if (e.key === "Enter") commitRename();
-                      if (e.key === "Escape") setRenaming(null);
-                    }}
-                    className="flex-1 min-w-0 bg-inset border border-accent rounded px-1 py-0 text-xs outline-none"
-                  />
-                ) : (
-                  <span className="truncate flex-1">{section.group ? section.group.name : t("未分組")}</span>
-                )}
-                <span className="shrink-0 text-[10px] text-fg/30 tabular-nums">{section.conns.length}</span>
-                {section.group && !renaming && (
-                  <button type="button" title={t("刪除群組")}
-                    onClick={(e) => { e.stopPropagation(); removeGroup(section.group!.id); }}
-                    className="w-4 h-4 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-red-300 hidden group-hover/hdr:flex">
-                    <Icon icon={Trash2} size={11} />
-                  </button>
-                )}
-              </div>
+          <GroupedSection<ConnectionConfig, ConnGroup>
+            key={kind}
+            title={meta.label}
+            icon={<Icon icon={kindIcon(kind)} size={11} className="shrink-0" style={{ color: meta.color }} />}
+            collapseKey={kindSectionKey(kind)}
+            groupCollapseKey={COLLAPSED_KEY}
+            dataAttrs={{ "data-conn-kind": kind }}
+            actions={live.length > 1 && (
+              <HeaderButton icon={Unplug} label={t("中斷所有已連線的連線")} title={`${t("中斷所有已連線的連線")} (${live.length})`}
+                onClick={() => live.forEach((c) => doDisconnect(c.id))} />
             )}
-            {/* 群組成員縮一層（同 SSH 資料夾裡的主機）；未分組的直接排在區塊底下。 */}
-            {!collapsed && (<div style={section.group ? { paddingLeft: 14 } : undefined}>{shown.map((c) => {
-        const meta = KIND_META[c.kind];
-        const connected = connectedIds.has(c.id);
-        const busy = connecting.has(c.id);
-        const treeCollapsed = collapsedConns.has(c.id);
-        const dragLine = dropAt?.kind === "conn" && dropAt.id === c.id ? dropAt.before : null;
-        return (
-          <div key={c.id}>
-            <div
-              // 拖曳掛在「連線這一列」而不是外層容器：容器包含展開後的整棵資料庫樹，
-              // 掛在容器上會讓落點指示線橫跨整棵樹，上/下半判斷也會以整棵樹的高度計算。
-              draggable={!renaming}
-              onDragStart={(e) => {
-                setDrag({ kind: "conn", id: c.id });
-                e.dataTransfer.effectAllowed = "move";
-                // 某些瀏覽器沒有 setData 就不會真的啟動拖曳。
-                e.dataTransfer.setData("text/plain", c.id);
-              }}
-              onDragEnd={() => { setDrag(null); setDropAt(null); }}
-              onDragOver={(e) => {
-                if (drag?.kind !== "conn") return;
-                e.preventDefault();
-                e.stopPropagation();
-                e.dataTransfer.dropEffect = "move";
-                // 停在自己身上＝不動作：不攔掉的話會冒泡到區段容器，變成「丟到本群組末端」。
-                setDropAt(drag.id === c.id ? null : { kind: "conn", id: c.id, before: dropHalf(e) });
-              }}
-              onDrop={(e) => { e.preventDefault(); e.stopPropagation(); commitDrop(); }}
-              onClick={() => { setActive(c.id); selectNode({ type: "connection", connId: c.id }); }}
-              // 雙擊：未連線＝連線；已連線＝收合 / 展開資料庫樹，**不中斷連線**。
-              // 斷線是明確動作，只走右鍵選單的「中斷連線」——把樹收起來不該把 session
-              // （以及走 OTP 的 gateway 那次驗證）一起丟掉。
-              onDoubleClick={() => (connected ? toggleConnCollapsed(c.id) : doConnect(c.id))}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setActive(c.id);
-                selectNode({ type: "connection", connId: c.id });
-                setMenu({ id: c.id, x: e.clientX, y: e.clientY });
-              }}
-              style={connColors[c.id] ? { boxShadow: `inset 3px 0 0 ${connColors[c.id]}` } : undefined}
-              className={`group flex items-center gap-2 px-3 py-1.5 cursor-pointer ${
-                activeId === c.id ? "relative bg-accent/12 before:content-[''] before:absolute before:left-0 before:inset-y-0 before:w-[2px] before:bg-accent" : "hover:bg-fg/5"
-              } ${dragLine === true ? "border-t-2 border-accent" : ""} ${dragLine === false ? "border-b-2 border-accent" : ""} ${
-                drag?.kind === "conn" && drag.id === c.id ? "opacity-40" : ""
-              }`}
-            >
-              {/* 收合 / 展開箭頭（樣式對齊資料庫節點）。只在已連線時可按——未連線沒有樹可收，
-                  但仍佔位，讓連線名稱在連線前後維持同一條垂直對齊線。 */}
-              {connected ? (
-                <button type="button"
-                  title={treeCollapsed ? t("展開資料庫清單") : t("收合資料庫清單（不會中斷連線）")}
-                  aria-label={treeCollapsed ? t("展開資料庫清單") : t("收合資料庫清單（不會中斷連線）")}
-                  onClick={(e) => { e.stopPropagation(); toggleConnCollapsed(c.id); }}
-                  className="w-3 flex items-center justify-center shrink-0 text-fg/35 hover:text-fg/80">
-                  <Icon icon={ChevronRight} size={13} className={`transition-transform ${treeCollapsed ? "" : "rotate-90"}`} />
-                </button>
-              ) : (
-                <span className="w-3 shrink-0" />
-              )}
-              {busy ? (
-                <span className="w-3.5 h-3.5 shrink-0 grid place-items-center">
-                  <Icon icon={Loader2} size={14} className="text-fg/50 animate-spin" />
-                </span>
-              ) : (
-                // 依資料庫類型顯示圖示（取代原狀態圓點）：已連線=亮色（kind 色）、未連線=灰暗。
-                <span
-                  className={`shrink-0 flex ${connected ? "" : "text-fg/35"}`}
-                  style={connected ? { color: meta.color } : undefined}
-                  title={connected ? `${meta.label}${t(" · 已連線")}` : `${meta.label}${t(" · 未連線")}`}
-                >
-                  <Icon icon={kindIcon(c.kind)} size={14} />
-                </span>
-              )}
-              <span className="truncate flex-1" title={`${c.name} · ${KIND_META[c.kind].label} · ${hostLabel(c)}`}>{c.name}</span>
-              {isProdConn(c) && <span className="shrink-0 text-[9px] px-1 rounded bg-red-500/25 text-red-300/90" title={t("正式環境：執行查詢前會跳確認")}>PROD</span>}
-              {readonlyConns[c.id] && <span className="shrink-0 text-[9px] px-1 rounded bg-amber-400/20 text-amber-300/90" title={t("唯讀模式：擋寫入 / DDL 與資料格編輯")}>{t("唯讀")}</span>}
-              <button type="button" title={t("編輯連線")}
-                onClick={(e) => { e.stopPropagation(); onEdit(c); }}
-                className="w-5 h-5 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-fg/80 hidden group-hover:flex">
-                <Icon icon={Pencil} size={13} />
-              </button>
-              <button type="button" title={t("刪除連線")}
-                onClick={(e) => { e.stopPropagation(); deleteConn(c.id, c.name); }}
-                className="w-5 h-5 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-red-300 hidden group-hover:flex">
-                <Icon icon={Trash2} size={13} />
-              </button>
-            </div>
-            {connected && !treeCollapsed && databases[c.id] && databases[c.id].length === 0 && (
-              <div className="pl-7 pr-3 py-1 text-fg/25 text-xs">{t("（無資料庫）")}</div>
-            )}
-            {connected && !treeCollapsed &&
-              (databases[c.id] ?? []).map((db) => {
-                const dbKey = `${c.id}:${db}`;
-                const objs = expandedDbs[dbKey];
-                const loading = loadingDbs.has(dbKey);
-                const isRedis = c.kind === "redis";
-                // external（gateway）走 SQL 分支：用資料夾 + 每庫篩選框（適合大量表），右鍵亦可新增查詢。
-                const isSqlKind = isMysqlFamily(c.kind) || c.kind === "postgres" || c.kind === "sqlite" || c.kind === "external" || c.kind === "mssql" || c.kind === "oracle";
-                const canRoutines = supportsRoutines(c.kind);
-
-                // 樹中的單一資料表 / 視圖節點（沿用選取 / 雙擊開啟 / 右鍵產生 SQL）。indent 控制縮排深度。
-                const objNode = (obj: TableInfo, indent: string) => (
-                  <div
-                    key={`${obj.kind}:${obj.name}`}
-                    data-tree-conn={c.id}
-                    data-tree-db={db}
-                    data-tree-table={obj.name}
-                    onClick={() => {
-                      setActive(c.id);
-                      selectNode({ type: "table", connId: c.id, db, table: obj.name, kind: c.kind, objKind: obj.kind });
-                      // 單擊即開啟資料分頁（openTable 會去重：已開的表只切換、不重複開）。
-                      useStore.getState().openTable(c.id, db, obj.name, "data", obj.kind);
-                    }}
-                    onContextMenu={
-                      c.kind !== "redis"
-                        ? (e) => {
-                            e.preventDefault();
-                            setActive(c.id);
-                            selectNode({ type: "table", connId: c.id, db, table: obj.name, kind: c.kind, objKind: obj.kind });
-                            setTableMenu({ connId: c.id, db, table: obj.name, kind: c.kind, objKind: obj.kind, x: e.clientX, y: e.clientY });
-                          }
-                        : undefined
-                    }
-                    className={`${indent} pr-3 py-1.5 text-fg/55 cursor-pointer truncate flex items-center gap-1.5 ${
-                      selectedNode?.type === "table" && selectedNode.connId === c.id &&
-                      selectedNode.db === db && selectedNode.table === obj.name
-                        ? "relative bg-accent/12 before:content-[''] before:absolute before:left-0 before:inset-y-0 before:w-[2px] before:bg-accent" : "hover:bg-fg/5"
-                    }`}
-                    title={containerObjTitle(c.kind, obj.kind) ?? t("單擊開啟資料；右鍵可產生 SELECT / 更多動作")}
-                  >
-                    {(() => {
-                      const ci = containerObjIcon(c.kind, obj.kind);
-                      if (ci) return <Icon icon={ci.icon} size={14} className={`shrink-0 ${ci.cls}`} />;
-                      return (
-                        <Icon icon={obj.kind === "view" ? Eye : obj.kind === "data_view" ? Layers : Table2} size={14}
-                          className={`shrink-0 ${
-                            obj.kind === "view" ? "text-purple-300/80" : obj.kind === "data_view" ? "text-teal-300/80" : "text-sky-300/70"
-                          }`} />
-                      );
-                    })()}
-                    <span className="truncate">{obj.name}</span>
-                  </div>
-                );
-
-                // 樹中的單一函式 / 預存程序節點（雙擊開定義編輯器；圖示 + tooltip 區分種類）。
-                const routineNode = (r: RoutineInfo) => {
-                  const isProc = r.routine_type === "procedure";
-                  return (
-                    <div
-                      key={`${r.routine_type}:${r.name}:${r.signature ?? ""}`}
-                      onDoubleClick={() => setRoutines({ connId: c.id, db, kind: c.kind, initial: r })}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setActive(c.id);
-                        setRoutineMenu({ connId: c.id, db, kind: c.kind, routine: r, x: e.clientX, y: e.clientY });
-                      }}
-                      className="pl-16 pr-3 py-1 text-fg/55 hover:bg-fg/5 cursor-pointer truncate flex items-center gap-1.5"
-                      title={t("{type}「{name}」（雙擊設計 / 編輯；右鍵更多）", { type: isProc ? t("預存程序") : t("函式"), name: r.name })}
-                    >
-                      <Icon icon={isProc ? Cog : FunctionSquare} size={14}
-                        className={`shrink-0 ${isProc ? "text-amber-300/90" : "text-emerald-300/80"}`} />
-                      <span className="truncate">{r.name}</span>
-                    </div>
-                  );
-                };
-
-                // 物件分組資料夾（資料表 / 檢視 / 函式）。收藏查詢已移至側欄頂層「收藏查詢」區。
-                const folderNode = (type: string, glyphIcon: LucideIcon, color: string, label: string, count: number, body: ReactNode) => {
-                  // 搜尋/篩選命中時自動展開：使用者手動/預設展開，或（全域搜尋或本庫篩選中且此資料夾有命中）。
-                  // 清除搜尋後 filtering=false，open 回落到手動/預設狀態，不寫入 folderOpen、不殘留。
-                  const filtering = !!q || !!(dbFilter[dbKey] ?? "").trim();
-                  const open = isFolderOpen(dbKey, type) || (filtering && count > 0);
-                  return (
-                    <div key={type}>
-                      <div
-                        onClick={() => toggleFolder(dbKey, type)}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setActive(c.id);
-                          setFolderMenu({ connId: c.id, db, kind: c.kind, type, x: e.clientX, y: e.clientY });
-                        }}
-                        className="pl-11 pr-3 py-1.5 hover:bg-fg/5 cursor-pointer flex items-center gap-1.5 select-none"
-                      >
-                        <Icon icon={ChevronRight} size={13} className={`shrink-0 text-fg/35 transition-transform ${open ? "rotate-90" : ""}`} />
-                        <Icon icon={glyphIcon} size={14} className={`shrink-0 ${color}`} />
-                        <span className="text-fg/70 truncate flex-1">{label}</span>
-                        <span className="text-fg/30 text-[11px] tabular-nums">{count}</span>
-                      </div>
-                      {open && (count > 0 ? body : <div className="pl-16 pr-3 py-1 text-fg/25 text-xs">{t("（無）")}</div>)}
-                    </div>
-                  );
-                };
-
-                return (
-                  <div key={db}>
-                    <div
-                      onClick={() => {
-                        toggleDb(c.id, db);
-                        setActive(c.id);
-                        selectNode({ type: "database", connId: c.id, db, kind: c.kind });
-                      }}
-                      onContextMenu={(isRedis || isSqlKind || c.kind === "mongo" || c.kind === "kafka" || c.kind === "elastic" || c.kind === "rabbitmq" || isContainerKind(c.kind)) ? (e) => {
-                        e.preventDefault();
-                        setActive(c.id);
-                        selectNode({ type: "database", connId: c.id, db, kind: c.kind });
-                        setDbMenu({ connId: c.id, db, x: e.clientX, y: e.clientY });
-                      } : undefined}
-                      className={`pl-7 pr-3 py-1.5 text-fg/70 cursor-pointer truncate flex items-center gap-1.5 ${
-                        selectedNode?.type === "database" && selectedNode.connId === c.id && selectedNode.db === db
-                          ? "relative bg-accent/12 before:content-[''] before:absolute before:left-0 before:inset-y-0 before:w-[2px] before:bg-accent" : "hover:bg-fg/5"
-                      }`}
-                    >
-                      <span className="w-3 flex items-center justify-center shrink-0">
-                        {loading
-                          ? <Icon icon={Loader2} size={13} className="text-fg/40 animate-spin" />
-                          : <Icon icon={ChevronRight} size={13} className={`text-fg/35 transition-transform ${objs ? "rotate-90" : ""}`} />}
-                      </span>
-                      <span className="shrink-0 flex" style={{ color: meta.color }}><Icon icon={containerDbNode(c.kind, db)?.icon ?? Database} size={14} /></span>
-                      <span className="truncate">{containerDbNode(c.kind, db)?.label ?? db}</span>
-                    </div>
-
-                    {objs && isSqlKind && (() => {
-                      // 每庫獨立篩選（與全域搜尋 AND）；套用後再算數量，使資料夾徽章與顯示列數一致。
-                      const dq = (dbFilter[dbKey] ?? "").trim().toLowerCase();
-                      const dbMatch = (name: string) => !dq || name.toLowerCase().includes(dq);
-                      const vTables = objs.tables.filter((o) => tableVisible(c.name, o.name) && dbMatch(o.name));
-                      const vViews = objs.views.filter((o) => tableVisible(c.name, o.name) && dbMatch(o.name));
-                      const vProcs = objs.procedures.filter((r) => tableVisible(c.name, r.name) && dbMatch(r.name));
-                      const vFns = objs.functions.filter((r) => tableVisible(c.name, r.name) && dbMatch(r.name));
-                      return (
-                        <>
-                          <div className="pl-11 pr-3 py-1">
-                            <div className="relative">
-                              <Icon icon={Search} size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-fg/30" />
-                              <input
-                                value={dbFilter[dbKey] ?? ""}
-                                onChange={(e) => setDbFilter((m) => ({ ...m, [dbKey]: e.target.value }))}
-                                onClick={(e) => e.stopPropagation()}
-                                onKeyDown={(e) => { if (e.key === "Escape" && (dbFilter[dbKey] ?? "")) { e.stopPropagation(); setDbFilter((m) => ({ ...m, [dbKey]: "" })); } }}
-                                placeholder={t("篩選 {db} 表名…", { db })}
-                                title={t("只篩選此資料庫的表 / 檢視 / 程序 / 函式名稱")}
-                                className="w-full bg-inset border border-fg/10 rounded pl-6 pr-2 py-0.5 text-[11px] outline-none focus:border-accent"
-                              />
-                            </div>
-                          </div>
-                          {folderNode("tables", Table2, "text-sky-300/80", t("資料表"), vTables.length,
-                            <>{vTables.map((o) => objNode(o, "pl-16"))}</>)}
-                          {folderNode("views", Eye, "text-purple-300/80", t("檢視"), vViews.length,
-                            <>{vViews.map((o) => objNode(o, "pl-16"))}</>)}
-                          {canRoutines && folderNode("procedures", Cog, "text-amber-300/90", t("預存程序"), vProcs.length,
-                            <>{vProcs.map(routineNode)}</>)}
-                          {canRoutines && folderNode("functions", FunctionSquare, "text-emerald-300/80", t("函式"), vFns.length,
-                            <>{vFns.map(routineNode)}</>)}
-                        </>
-                      );
-                    })()}
-
-                    {objs && !isSqlKind && (
-                      <>
-                        {objs.tables.filter((o) => tableVisible(c.name, o.name)).map((o) => objNode(o, "pl-12"))}
-                        {objs.tables.length === 0 && (
-                          <div className="pl-12 pr-3 py-1 text-fg/25 text-xs">{isContainerKind(c.kind) ? t("（空）") : t("無表")}</div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                );
-              })}
-          </div>
-        );
-            })}</div>)}
-          </div>
+            newItemLabel={t("新增 {kind} 連線", { kind: meta.label })}
+            onNewItem={(gid) => onNewConnection(kind, gid)}
+            groups={groupsOfKind(connGroups, kind)}
+            items={conns}
+            groupOf={(c) => c.group_id}
+            visible={connVisible}
+            q={q}
+            renderItem={renderConn}
+            makeGroup={(id, name) => ({ id, name, kind })}
+            onLayout={(placements, kindGroups) => applyKindLayout(kind, placements, kindGroups)}
+          />
         );
       })}
-      </div>
-      )}
       {/* SSH 主機：獨立於資料庫連線的區塊（不進 DbKind / selectedNode）；雙擊開終端機分頁。 */}
       <SshHostTree
         q={q}
@@ -3204,26 +3011,6 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
 
       {/* 以下皆為 fixed 定位的選單 / 對話框：放在捲動視窗之外，不受其 overflow 影響，
           也不會被算進捲動高度。 */}
-      {groupMenu && (
-        <MenuPanel x={groupMenu.x} y={groupMenu.y} onClose={() => setGroupMenu(null)}>
-          <MenuItems
-            nodes={[
-              {
-                kind: "item",
-                label: t("重新命名"),
-                onClick: () => {
-                  const g = connGroups.find((x) => x.id === groupMenu.id);
-                  if (g) setRenaming({ id: g.id, name: g.name });
-                },
-              },
-              { kind: "sep" },
-              { kind: "item", label: t("刪除群組"), danger: true, onClick: () => void removeGroup(groupMenu.id) },
-            ]}
-            onClose={() => setGroupMenu(null)}
-          />
-        </MenuPanel>
-      )}
-
       {menu && menuConn && (
         <MenuPanel x={menu.x} y={menu.y} minW={150} onClose={() => setMenu(null)}>
           {(
@@ -3337,6 +3124,9 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
               [t("屬性…"), () => setConnProps(menuConn), false],
               [t("編輯…"), () => onEdit(menuConn), false],
               [t("複製連線…"), () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: t("{name} 複本", { name: menuConn.name }), password: "" }), false],
+              // 移到同種類的其他群組 / 移出群組（同 SSH 主機、遠端桌面的右鍵選單）。
+              ...moveTargets(groupsOfKind(connGroups, menuConn.kind), menuConn.group_id, t)
+                .map(([label, gid]) => [label, () => moveConnTo(menuConn, gid), false] as [string, () => void, boolean]),
               [t("刪除"), () => deleteConn(menuConn.id, menuConn.name), true],
             ] as [string, () => void, boolean][]
           ).map(([label, fn, danger]) => (

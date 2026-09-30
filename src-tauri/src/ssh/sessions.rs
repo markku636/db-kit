@@ -169,7 +169,8 @@ fn schema_v1() -> u32 {
     1
 }
 
-const SCHEMA_VERSION: u32 = 1;
+/// v2：側欄照陣列順序顯示（可拖曳排序）；v1 固定依名稱排序顯示。
+const SCHEMA_VERSION: u32 = 2;
 
 impl Default for SshSessionsFile {
     fn default() -> Self {
@@ -193,7 +194,23 @@ pub fn session_passphrase_account(id: &str) -> String {
 
 /// 讀整份檔。不存在 → 預設空表；損毀 → Err（不要默默當成空表，下次存檔會把使用者的清單蓋掉）。
 pub async fn load_in(dir: &Path) -> AppResult<SshSessionsFile> {
-    store::read_json_in(dir, SESSIONS_FILE).await
+    let mut file: SshSessionsFile = store::read_json_in(dir, SESSIONS_FILE).await?;
+    migrate(&mut file);
+    Ok(file)
+}
+
+/// v1 → v2：v1 的側欄固定依名稱排序顯示，v2 起照陣列順序（使用者拖曳排序）。第一次讀到 v1 就先依
+/// 名稱排好（穩定排序），升級後畫面上的順序不變；下一次寫檔時一併寫成 v2。
+fn migrate(file: &mut SshSessionsFile) {
+    if file.version < 2 {
+        file.sessions.sort_by(|a, b| {
+            store::natural_label_cmp(
+                &store::host_label(&a.name, &a.username, &a.host),
+                &store::host_label(&b.name, &b.username, &b.host),
+            )
+        });
+        file.version = SCHEMA_VERSION;
+    }
 }
 
 async fn save_in(dir: &Path, file: &SshSessionsFile) -> AppResult<()> {
@@ -318,7 +335,7 @@ mod tests {
         upsert_in(&dir, s.clone()).await.unwrap();
         let f = load_in(&dir).await.unwrap();
         assert_eq!(f.sessions, vec![s]);
-        assert_eq!(f.version, 1);
+        assert_eq!(f.version, SCHEMA_VERSION);
 
         // 序列化結果不可含任何密碼 / 密語鍵（型別上根本沒有這些欄位，這裡是防止未來有人加）。
         let json = serde_json::to_string(&f).unwrap();
@@ -429,5 +446,28 @@ mod tests {
         assert_eq!(session_passphrase_account("x"), "x.sshsess-passphrase");
         assert_ne!(session_password_account("x"), store::ssh_account("x"));
         assert_ne!(session_passphrase_account("x"), store::ssh_passphrase_account("x"));
+    }
+
+    /// v1 檔（側欄依名稱排序顯示）讀進來先依名稱排好，升級後畫面順序不變；之後照拖曳順序、不再重排。
+    #[tokio::test]
+    async fn v1_file_sorted_by_label_then_manual_order_sticks() {
+        let dir = tmpdir();
+        let mut unnamed = sess("z");
+        unnamed.name = String::new(); // 顯示為 deploy@z.example
+        let (mut w10, mut w2) = (sess("w10"), sess("w2"));
+        w10.name = "web-10".into();
+        w2.name = "Web-2".into();
+        let v1 = serde_json::json!({ "version": 1, "folders": [], "sessions": [w10, unnamed, w2] });
+        std::fs::write(dir.join(SESSIONS_FILE), v1.to_string()).unwrap();
+
+        let f = load_in(&dir).await.unwrap();
+        let ids: Vec<&str> = f.sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["z", "w2", "w10"], "deploy@… < web-2 < web-10（不分大小寫、數字依數值）");
+        assert_eq!(f.version, SCHEMA_VERSION);
+
+        let order: Vec<(String, Option<String>)> = ["w10", "z", "w2"].iter().map(|i| (i.to_string(), None)).collect();
+        save_layout_in(&dir, vec![], &order).await.unwrap();
+        let ids: Vec<String> = load_in(&dir).await.unwrap().sessions.into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["w10", "z", "w2"], "v2 起照存檔順序，不再依名稱重排");
     }
 }

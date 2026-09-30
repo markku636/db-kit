@@ -161,7 +161,7 @@ function SshHostInfo({ host }: { host: SshSession }) {
         <Row k={t("主機")} v={`${host.host}:${host.port}`} />
         <Row k={t("使用者")} v={host.username || "—"} />
         <Row k={t("跳板機")} v={jumpText} />
-        <Row k={t("資料夾")} v={folder?.name ?? t("未分類")} />
+        <Row k={t("群組")} v={folder?.name ?? t("未分組")} />
       </Section>
 
       <Section title={t("認證方式")}>

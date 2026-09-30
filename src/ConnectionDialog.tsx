@@ -20,6 +20,8 @@ interface Props {
   initial?: ConnectionConfig | null;
   /** 新增模式的預填值（不算編輯：存檔產生新 id）。從 Docker 容器建資料庫連線時用。 */
   prefill?: Partial<ConnectionConfig> | null;
+  /** 新增模式直接選好類型（側欄某種類區塊的「新增 … 連線」）：跳過類型選擇器，埠 / 帳號等預設值照切換類型的規則帶入。 */
+  initialKind?: DbKind;
   /**
    * 新增時選了「SSH / SFTP」或貼上 ssh:// / sftp:// 字串：呼叫端關掉這個對話框、改開 SSH 主機對話框
    * （prefill = 解析好的字串；null = 空白新增）。SSH 主機另存一份清單，不是 DbKind。
@@ -83,7 +85,7 @@ function fmtSummaryVal(
 /** 「FTP / FTPS」卡片：開主機對話框並預選 FTP（explicit TLS）；沒有主機，不算「依連線字串填入」。 */
 const BLANK_FTP: ParsedSsh = { protocol: "ftpes", host: "", port: null, username: null, password: null, identityFile: null, jump: null, path: null };
 
-export default function ConnectionDialog({ onClose, onSaved, initial, prefill, onNewSsh, onNewRemoteDesktop }: Props) {
+export default function ConnectionDialog({ onClose, onSaved, initial, prefill, initialKind, onNewSsh, onNewRemoteDesktop }: Props) {
   const t = useT();
   const editing = !!initial;
   // 表單初始值來源：編輯＝既有連線；新增時可帶 prefill（例：從 Docker 容器一鍵建資料庫連線）。
@@ -385,6 +387,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, o
     if (!editing && !readonlyTouched) setReadonlyConn(KIND_META[k].external === true);
     setKind(k);
   };
+
+  // 從側欄某種類區塊新增：開啟時就切到那個類型，不再先顯示類型選擇器。
+  useEffect(() => {
+    if (editing || prefill || !initialKind) return;
+    onKindChange(initialKind);
+    setPickerOpen(false);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 匯入的快照 / 還原。本元件有約 40 個 useState，改寫成單一 reducer 動到的範圍太大、風險遠大於
   // 收益；改以一份 ConnFormFields 型別同時服務三件事：快照（復原用）、純映射的輸入與輸出、

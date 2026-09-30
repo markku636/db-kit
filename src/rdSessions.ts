@@ -3,6 +3,7 @@ import { api } from "./api";
 import type { RdFolder, RdProtocol, RdSession } from "./rdTypes";
 import { effectiveRdPort } from "./rdTypes";
 import { groupSessions, filterSessions, sessionsToPlacements, uniqueFolderName } from "./sshSessions";
+import { applyPlacementsTo, type Placement } from "./sidebarGroups";
 
 // 遠端桌面主機清單：側欄「遠端桌面」區塊與主機對話框共用的資料 store。
 // 分組 / 搜尋 / 資料夾命名直接沿用 sshSessions 的純函式（它們只看 name / host / username / folder_id）。
@@ -54,6 +55,8 @@ export interface RdSessionsStore {
   removeFolder: (id: string) => Promise<void>;
   moveToFolder: (sessionId: string, folderId: string | null) => Promise<void>;
   saveLayout: () => Promise<void>;
+  /** 側欄拖曳 / 搬移 / 群組增刪改：一次換掉群組清單與主機順序（先更新畫面再落地，失敗就重新載入並把錯誤丟回）。 */
+  applyLayout: (folders: RdFolder[], placements: Placement[]) => Promise<void>;
 }
 
 /** 樂觀更新：先改本地 state 再呼叫後端；失敗就重新 load() 拉回真相，並把錯誤丟給呼叫端 toast。 */
@@ -128,6 +131,11 @@ export const useRdSessions = create<RdSessionsStore>((set, get) => {
 
     moveToFolder: async (sessionId, folderId) => {
       set({ sessions: get().sessions.map((s) => (s.id === sessionId ? { ...s, folder_id: folderId } : s)) });
+      await get().saveLayout();
+    },
+
+    applyLayout: async (folders, placements) => {
+      set({ folders, sessions: applyPlacementsTo(get().sessions, placements, (s, folder_id) => ({ ...s, folder_id })) });
       await get().saveLayout();
     },
 

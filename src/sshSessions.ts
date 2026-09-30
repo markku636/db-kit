@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api } from "./api";
 import type { SshFolder, SshPlacement, SshSession } from "./sshTypes";
+import { applyPlacementsTo, type Placement } from "./sidebarGroups";
 
 // SSH 主機清單：側欄「SSH 主機」區塊與主機對話框共用的資料 store，加上幾支可單測的純函式。
 // 純函式放前面、store 放後面；測試只碰純函式（store 一呼叫就會 invoke Tauri）。
@@ -37,7 +38,10 @@ export interface GroupedSshSessions<S extends HostLike = SshSession, F extends {
   loose: S[];
 }
 
-/** 把 sessions 依資料夾分組；各組內依顯示名稱排序（不分大小寫、數字自然序）。v1 不做巢狀資料夾。 */
+/**
+ * 把 sessions 依群組（folder_id）分組；組內維持陣列順序（＝使用者拖曳排出來的順序）。不做巢狀群組。
+ * 舊版存檔是依名稱排序顯示的，後端第一次讀到舊檔時會先依名稱排好寫回（ssh/sessions.rs 的 v2 遷移）。
+ */
 export function groupSessions<S extends HostLike, F extends { id: string }>(folders: F[], sessions: S[]): GroupedSshSessions<S, F> {
   const byFolder = new Map<string, S[]>();
   for (const f of folders) byFolder.set(f.id, []);
@@ -48,8 +52,8 @@ export function groupSessions<S extends HostLike, F extends { id: string }>(fold
     else loose.push(s);
   }
   return {
-    groups: folders.map((folder) => ({ folder, sessions: (byFolder.get(folder.id) ?? []).sort(byLabel) })),
-    loose: loose.sort(byLabel),
+    groups: folders.map((folder) => ({ folder, sessions: byFolder.get(folder.id) ?? [] })),
+    loose,
   };
 }
 
@@ -85,9 +89,9 @@ export function filterSessions<S extends HostLike>(sessions: S[], q: string): S[
   );
 }
 
-/** 避免同名資料夾："base" 已存在就 "base 2"、"base 3"…（不分大小寫）。空名稱給「新資料夾」。 */
+/** 避免同名資料夾："base" 已存在就 "base 2"、"base 3"…（不分大小寫）。空名稱給「新群組」。 */
 export function uniqueFolderName(folders: Pick<SshFolder, "name">[], base: string): string {
-  const b = base.trim() || "新資料夾";
+  const b = base.trim() || "新群組";
   const taken = new Set(folders.map((f) => f.name.trim().toLowerCase()));
   if (!taken.has(b.toLowerCase())) return b;
   for (let i = 2; ; i++) {
@@ -128,6 +132,8 @@ export interface SshSessionsStore {
   removeFolder: (id: string) => Promise<void>;
   moveToFolder: (sessionId: string, folderId: string | null) => Promise<void>;
   saveLayout: () => Promise<void>;
+  /** 側欄拖曳 / 搬移 / 群組增刪改：一次換掉群組清單與主機順序（先更新畫面再落地，失敗就重新載入並把錯誤丟回）。 */
+  applyLayout: (folders: SshFolder[], placements: Placement[]) => Promise<void>;
   /** 側欄單擊選取的主機（右側「詳細資料」面板顯示它）；與資料庫樹的 selectedNode 互斥，由側欄兩邊各自清掉對方。 */
   selectedId: string | null;
   select: (id: string | null) => void;
@@ -210,6 +216,11 @@ export const useSshSessions = create<SshSessionsStore>((set, get) => {
 
     moveToFolder: async (sessionId, folderId) => {
       set({ sessions: get().sessions.map((s) => (s.id === sessionId ? { ...s, folder_id: folderId } : s)) });
+      await get().saveLayout();
+    },
+
+    applyLayout: async (folders, placements) => {
+      set({ folders, sessions: applyPlacementsTo(get().sessions, placements, (s, folder_id) => ({ ...s, folder_id })) });
       await get().saveLayout();
     },
 

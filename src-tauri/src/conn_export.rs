@@ -222,7 +222,7 @@ mod tests {
     }
 
     fn group(id: &str) -> ConnGroup {
-        ConnGroup { id: id.into(), name: id.to_uppercase() }
+        ConnGroup { id: id.into(), name: id.to_uppercase(), kind: None }
     }
 
     #[test]

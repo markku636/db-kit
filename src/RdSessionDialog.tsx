@@ -216,9 +216,9 @@ export default function RdSessionDialog({ open, initial, folders, defaultFolderI
           <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={submitOnEnter} onPaste={onPaste}
             placeholder={t("留空＝使用者@主機")} />
         </Field>
-        <Field label={t("資料夾")} className="flex-[2] min-w-[10rem]">
+        <Field label={t("群組")} className="flex-[2] min-w-[10rem]">
           <Select value={folderId} onChange={(e) => setFolderId(e.target.value)}>
-            <option value="">{t("未分類")}</option>
+            <option value="">{t("未分組")}</option>
             {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
           </Select>
         </Field>
