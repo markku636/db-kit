@@ -1,3 +1,37 @@
+## v0.41.0
+
+**支援 Kubernetes：在 db-kit 裡瀏覽叢集資源、看 Pod log、進 Pod shell，還能經由 port-forward 直接連叢集裡的資料庫。**
+
+**連線**
+
+- **新增 Kubernetes 連線**：在「容器與映像」分類。兩種連線方式——**kubeconfig**（預設讀 `KUBECONFIG` 或 `~/.kube/config`，也可以指定檔案；按「讀取」列出所有 context，選一個即可）和**手動填寫**（API server 網址 + Bearer token，或 CA / 用戶端憑證）。token 存在系統鑰匙圈。
+- **各種登入方式都能用**：token、token 檔、用戶端憑證、帳密，以及 EKS / GKE / AKS 常用的外部登入指令（`aws eks get-token`、`gke-gcloud-auth-plugin`、`kubelogin`…）。db-kit 會在背景執行這些指令取得 token，快到期或伺服器拒絕時自動重新取得；Windows 上不會閃出黑色視窗。
+- **限定 namespace**：帳號沒有「列出 namespace」權限時，填入能存取的 namespace 就能用；也可以用來只顯示關心的幾個。
+- API server 在內網時，可以勾「透過 SSH Tunnel 連線」。
+
+**連線樹與資源分頁**
+
+- 展開後是 namespace → 資源種類（Pods、Deployments、StatefulSets、DaemonSets、Jobs、CronJobs、Services、Ingresses、ConfigMaps、Secrets、PVC、HPA）→ 各個資源，依狀態上色（執行中綠、未就緒黃、出錯紅）。另有「叢集資源」放 Nodes、PV、StorageClass、CRD。沒權限的種類會自動略過。
+- 點資源開分頁：**概要**依種類挑重點（Pod 的容器狀態與重啟次數、workload 的副本數、Service 的埠、節點容量與用量…），Secret 的值預設遮罩、點了才解開；另有**事件**與 **YAML**（可以直接編輯，先「試套用」確認 API server 接受再「套用」；別人先改過會擋下來提示重新載入）。
+- **Pod**：**Log**（選容器、看重啟前的 log、持續跟隨、搜尋）、**Shell**（互動終端機，視窗大小跟著調整，結束時顯示結束碼）、**資源**（CPU / 記憶體用量圖，需要叢集裝 metrics-server）。Pod 的環境變數會把從 Secret / ConfigMap 帶進來的值一併列出（機密值遮罩）。
+- Deployment、StatefulSet、Service、Job、節點都有 **Pods** 清單，點名稱就開那個 Pod。
+- **動作**：調整副本數、重新啟動（逐步替換 Pod）、CronJob 立即執行 / 暫停排程、節點停止排程（cordon）、刪除。刪除 namespace 要輸入名稱確認；卡在 Terminating 的 Pod 可以強制刪除。唯讀連線會隱藏所有寫入動作與 Pod shell。
+
+**port-forward 與資料庫連線**
+
+- **轉發埠**：Pod、Service、Deployment、StatefulSet 右鍵「轉發埠…」，把叢集裡的埠轉到本機（本機埠可自訂或自動挑）。轉 Service 時會找一個就緒的後端 Pod；Pod 重建後下一條連線會自動改轉到新的 Pod。進行中的轉發在「叢集總覽」可以看到並停止。
+- **建立資料庫連線**：對跑著 PostgreSQL / MySQL / MariaDB / SQL Server / MongoDB / Redis 等的 Pod、Service 或 StatefulSet 按「建立資料庫連線…」，會依映像判斷資料庫種類，帳號、密碼、資料庫名從環境變數（包含放在 Secret 裡的密碼）自動填好，連線方式設成「經由 Kubernetes port-forward」。之後連線 / 測試連線時會自動開轉發，不必自己先跑 kubectl。
+- 一般的資料庫連線也可以手動勾「經由 Kubernetes port-forward 連線」，選 Kubernetes 連線、namespace、目標（`svc/名稱`、`pod/名稱`、`deploy/名稱`、`sts/名稱`）與遠端埠，按「檢查目標」先看會轉到哪個 Pod。
+
+**其他**
+
+- **資源瀏覽器**：資料夾右鍵「以表格瀏覽…」或連線右鍵「瀏覽所有資源…」，可看叢集支援的任何資源種類（含 CRD），欄位跟 `kubectl get` 一樣，可切「更多欄位」、全部 namespace、label selector 篩選。
+- **套用 YAML**：貼上一份或多份 YAML（用 `---` 分隔）建立或更新資源，可先試套用；遇到其他工具管理的欄位可選擇強制接管。
+- **叢集總覽**：版本、節點（CPU / 記憶體用量）、Pod 狀態分布、最近的警告事件、進行中的轉發。
+- 狀態列的主機顯示修正：網址已含埠的連線（Docker、Registry、Harbor、Kubernetes）不再多顯示 `:0`。
+
+> 驗證：Rust 單元測試 27 項；對本機 k3s 叢集整合測試 6 項（連線樹 / 表格 / 總覽、YAML 編輯與套用、Pod shell 的輸入 / 視窗大小 / 結束碼、log、Service 轉發到 PostgreSQL、經 port-forward 連上 PostgreSQL、調整副本 / 重新啟動 / CronJob / cordon）全部通過；前端 1991 項；介面冒煙檢查新增 6 個情境，全套 551 項通過（含最小視窗與大字級的版面檢查）。沒測到：真的 EKS / GKE / AKS 外部登入指令（只驗了解析與呼叫流程）、打包後的 App。
+
 ## v0.40.3
 
 **macOS 版不會再被說「已損毀」；側欄三個區塊改用同一套分組。**
