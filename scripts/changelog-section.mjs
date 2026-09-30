@@ -24,7 +24,7 @@ const DOWNLOAD = `## 下載
 | macOS | \`.dmg\` —— Apple Silicon 選 \`aarch64\`、Intel 選 \`x64\` |
 | Linux | \`.AppImage\`（免安裝）、\`.deb\`（Debian / Ubuntu）或 \`.rpm\`（Fedora / RHEL）|
 
-安裝檔皆未付費簽章：macOS 首次開啟請在 Finder 對 App **右鍵 → 開啟**；Windows SmartScreen 出現時選「其他資訊 → 仍要執行」。
+安裝檔皆未付費簽章：macOS 首次開啟被擋時到「系統設定 → 隱私權與安全性」按**強制打開**（若顯示「已損毀」，在終端機執行 \`xattr -cr "/Applications/DB Kit.app"\`）；Windows SmartScreen 出現時選「其他資訊 → 仍要執行」。
 
 完整版本紀錄見 [CHANGELOG.md](https://github.com/markku636/db-kit/blob/main/CHANGELOG.md)。`;
 

@@ -143,8 +143,8 @@ Head to the **[Releases page and grab the latest version ⬇️](https://github.
 
 1. Download the `.dmg` matching your chip: `aarch64` for Apple Silicon (M1/M2/M3…), `x64` for Intel.
 2. Open the .dmg and drag **DB Kit** into the "Applications" folder.
-3. On first launch, because the app is **not Apple-signed / notarized**, macOS shows "cannot verify the developer": **right-click the app icon → "Open" → "Open"** (needed only once).
-   - If it's still blocked, run in Terminal: `xattr -dr com.apple.quarantine "/Applications/DB Kit.app"`.
+3. On first launch, because the app is **not notarized by Apple**, macOS shows "cannot verify the developer / cannot verify it is free of malware": click "Done", then go to **System Settings → Privacy & Security**, scroll down and click "**Open Anyway**" (on macOS 14 and earlier, right-clicking the app icon → "Open" also works). Needed only once.
+   - If macOS says the app "**is damaged and can't be opened. You should move it to the Trash**" (versions up to v0.40.2 do this), the app is fine — the download quarantine flag is blocking it. Run `xattr -cr "/Applications/DB Kit.app"` in Terminal, then open it again.
 
 **Linux install steps**
 
