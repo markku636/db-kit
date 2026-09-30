@@ -196,6 +196,78 @@ export function installShim(fx) {
     },
     docker_exec_resize: () => null,
     docker_stream_close: ({ streamId }) => { dockerExecs.delete(streamId); return null; },
+    // ── Kubernetes ──
+    k8s_kubeconfig_contexts: () => fx.K8S_CONTEXTS ?? { files: [], current_context: "", contexts: [] },
+    k8s_default_kubeconfig: () => ["C:/Users/dev/.kube/config"],
+    k8s_overview: () => ({
+      label: "dev", server: "https://127.0.0.1:6443", version: "v1.33.4+k3s1", platform: "linux/amd64", namespaces: 3, pods: 2,
+      pod_phases: { Running: 2 }, metrics_available: true, errors: [],
+      nodes: [{ name: "node-1", state: "ready", roles: ["control-plane"], version: "v1.33.4+k3s1", os_image: "K3s", arch: "amd64", internal_ip: "172.18.0.2",
+        cpu_capacity_milli: 8000, memory_capacity_bytes: 17179869184, cpu_usage_milli: 412, memory_usage_bytes: 1610612736, pods: 2, created: "2026-09-20T08:00:00Z" }],
+      warnings: [{ namespace: "demo", kind: "Warning", reason: "BackOff", message: "Back-off restarting failed container", count: 3, first: "2026-09-29T08:00:00Z", last: "2026-09-29T08:05:00Z", object_kind: "Pod", object_name: "redis-7c9d8-abcde", source: "kubelet" }],
+    }),
+    k8s_namespaces: () => (fx.K8S_NAMESPACES ?? []).filter((n) => n !== "(cluster)"),
+    k8s_discovery: () => [
+      { group: "", version: "v1", plural: "pods", kind: "Pod", namespaced: true, verbs: ["get", "list", "delete"], short_names: ["po"] },
+      { group: "apps", version: "v1", plural: "deployments", kind: "Deployment", namespaced: true, verbs: ["get", "list"], short_names: ["deploy"] },
+      { group: "", version: "v1", plural: "nodes", kind: "Node", namespaced: false, verbs: ["get", "list"], short_names: ["no"] },
+    ],
+    k8s_events: () => [{ namespace: "demo", kind: "Normal", reason: "Pulled", message: "Container image already present on machine", count: 1, first: "2026-09-29T08:00:00Z", last: "2026-09-29T08:00:30Z", object_kind: "Pod", object_name: "pg-0", source: "kubelet" }],
+    k8s_pod_metrics: ({ name }) => [{ namespace: "demo", name: name ?? "pg-0", cpu_milli: 3.2, memory_bytes: 41943040, containers: [{ name: "pg", cpu_milli: 3.2, memory_bytes: 41943040 }] }],
+    k8s_node_metrics: () => [{ name: "node-1", cpu_milli: 412, memory_bytes: 1610612736 }],
+    k8s_table: ({ res }) => ({
+      columns: [{ name: "Name", kind: "string", priority: 0, description: "" }, { name: "Status", kind: "string", priority: 0, description: "" }, { name: "Age", kind: "string", priority: 0, description: "" }],
+      rows: Object.entries(fx.K8S_OBJECTS ?? {}).filter(([k]) => k.startsWith(res.plural + "/")).map(([, o]) => ({ name: o.metadata.name, namespace: o.metadata.namespace ?? "", cells: [o.metadata.name, o.status?.phase ?? "", "1d"] })),
+    }),
+    k8s_list: ({ res, labelSelector }) => Object.entries(fx.K8S_OBJECTS ?? {})
+      .filter(([k, o]) => k.startsWith(res.plural + "/") && (!labelSelector || labelSelector.split(",").every((kv) => { const [a, b] = kv.split("="); return o.metadata.labels?.[a] === b; })))
+      .map(([, o]) => o),
+    k8s_get: ({ res, name }) => fx.K8S_OBJECTS?.[`${res.plural}/${name}`] ?? Promise.reject(new Error(`Kubernetes 404：${res.plural} "${name}" not found`)),
+    k8s_get_yaml: ({ res, name }) => {
+      const o = fx.K8S_OBJECTS?.[`${res.plural}/${name}`];
+      if (!o) return Promise.reject(new Error("Kubernetes 404"));
+      return `apiVersion: ${o.apiVersion}
+kind: ${o.kind}
+metadata:
+  name: ${o.metadata.name}
+  namespace: ${o.metadata.namespace ?? ""}
+`;
+    },
+    k8s_replace_yaml: ({ res, name, dryRun }) => { window.__DBKIT_K8S_ACTIONS__.push(`${dryRun ? "dry-replace" : "replace"}:${res.plural}/${name}`); return fx.K8S_OBJECTS?.[`${res.plural}/${name}`] ?? {}; },
+    k8s_apply_yaml: ({ yaml, dryRun }) => { window.__DBKIT_K8S_ACTIONS__.push(`${dryRun ? "dry-apply" : "apply"}`); return [{ kind: "ConfigMap", name: (/name:s*(S+)/.exec(yaml) ?? [])[1] ?? "x", namespace: "demo", action: "created", error: null }]; },
+    k8s_delete: ({ res, name }) => { window.__DBKIT_K8S_ACTIONS__.push(`delete:${res.plural}/${name}`); return null; },
+    k8s_scale: ({ name, replicas }) => { window.__DBKIT_K8S_ACTIONS__.push(`scale:${name}:${replicas}`); return null; },
+    k8s_restart: ({ name }) => { window.__DBKIT_K8S_ACTIONS__.push(`restart:${name}`); return null; },
+    k8s_cronjob_suspend: ({ name, suspend }) => { window.__DBKIT_K8S_ACTIONS__.push(`suspend:${name}:${suspend}`); return null; },
+    k8s_cronjob_trigger: ({ name }) => { window.__DBKIT_K8S_ACTIONS__.push(`trigger:${name}`); return `${name}-manual-abcde`; },
+    k8s_node_cordon: ({ name, cordon }) => { window.__DBKIT_K8S_ACTIONS__.push(`cordon:${name}:${cordon}`); return null; },
+    k8s_secret_data: () => ({ DB_PASSWORD: "secret", API_KEY: "abc123" }),
+    k8s_pod_env: ({ pod }) => (pod === "pg-0"
+      ? [{ container: "pg", name: "POSTGRES_USER", value: "app", secret: false }, { container: "pg", name: "POSTGRES_DB", value: "appdb", secret: false }, { container: "pg", name: "POSTGRES_PASSWORD", value: "secret", secret: true }]
+      : []),
+    k8s_resolve_target: ({ target, port }) => [target.includes("pg") ? "pg-0" : "redis-7c9d8-abcde", target.startsWith("svc/") ? 5432 : port],
+    k8s_logs_open: ({ onOutput }) => {
+      const send = channelSender(onOutput);
+      setTimeout(() => send(fx.K8S_LOG_TEXT ?? ""), 30);
+      return `k8s-log-${++dockerSeq}`;
+    },
+    k8s_exec_open: ({ pod, onOutput }) => {
+      const send = channelSender(onOutput);
+      const id = `k8s-exec-${++dockerSeq}`;
+      dockerExecs.set(id, { send, line: "", host: pod });
+      setTimeout(() => send("/ # "), 30);
+      return id;
+    },
+    k8s_exec_write: (a) => handlers.docker_exec_write(a),
+    k8s_exec_resize: () => null,
+    k8s_stream_close: ({ streamId }) => { dockerExecs.delete(streamId); return null; },
+    k8s_forward_open: ({ id, ns, target, remotePort, localPort }) => {
+      const f = { id: `fwd-${++dockerSeq}`, conn_id: id, namespace: ns, target, pod: "pg-0", remote_port: remotePort, local_port: localPort || 54321, active: 0, started: new Date().toISOString(), last_error: null };
+      window.__DBKIT_K8S_FORWARDS__.push(f);
+      return f;
+    },
+    k8s_forward_list: () => window.__DBKIT_K8S_FORWARDS__,
+    k8s_forward_close: ({ forwardId }) => { window.__DBKIT_K8S_FORWARDS__ = window.__DBKIT_K8S_FORWARDS__.filter((f) => f.id !== forwardId); return null; },
     docker_images: () => fx.DOCKER_IMAGES ?? [],
     docker_image_inspect: ({ image }) => {
       const i = (fx.DOCKER_IMAGES ?? []).find((x) => x.reference === image);
@@ -636,6 +708,8 @@ export function installShim(fx) {
   let dockerSeq = 0;
   const dockerExecs = new Map(); // streamId → { send, line, host }
   window.__DBKIT_DOCKER_ACTIONS__ = [];
+  window.__DBKIT_K8S_ACTIONS__ = [];
+  window.__DBKIT_K8S_FORWARDS__ = [];
   window.__DBKIT_DOCKER_PULLS__ = [];
   function dockerDetail(name) {
     const c = (fx.DOCKER_CONTAINERS ?? []).find((x) => x.name === name);

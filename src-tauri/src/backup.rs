@@ -46,7 +46,7 @@ fn cli_tool_name(kind: DbKind) -> &'static str {
         DbKind::Kafka => "", // Kafka 不支援備份
         DbKind::Elastic => "", // Elasticsearch 不支援備份
         DbKind::RabbitMq => "", // RabbitMQ 不支援備份
-        DbKind::Docker | DbKind::Registry | DbKind::Harbor => "", // 容器類不支援備份
+        DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes => "", // 容器類不支援備份
         DbKind::External => "", // 外部 gateway 不支援備份
     }
 }
@@ -80,7 +80,7 @@ pub async fn backup(
     if matches!(config.kind, DbKind::RabbitMq) {
         return Err(AppError::Query(t!("RabbitMQ 連線不支援備份").into()));
     }
-    if matches!(config.kind, DbKind::Docker | DbKind::Registry | DbKind::Harbor) {
+    if matches!(config.kind, DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes) {
         return Err(AppError::Query(t!("容器 / 映像倉庫連線不支援備份").into()));
     }
     // SQL Server 備份規劃以 sqlpackage 匯出 .bacpac，尚未接上。
@@ -128,7 +128,7 @@ pub async fn backup(
         DbKind::Kafka => unreachable!(), // 上方已 early-return
         DbKind::Elastic => unreachable!(), // 上方已 early-return
         DbKind::RabbitMq => unreachable!(), // 上方已 early-return
-        DbKind::Docker | DbKind::Registry | DbKind::Harbor => unreachable!(), // 上方已 early-return
+        DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes => unreachable!(), // 上方已 early-return
         DbKind::External => unreachable!(), // 上方已 early-return
     };
 
@@ -203,7 +203,7 @@ pub async fn restore(
         DbKind::Kafka => Err(AppError::Query(t!("Kafka 連線不支援還原").to_string())),
         DbKind::Elastic => Err(AppError::Query(t!("Elasticsearch 連線不支援還原").to_string())),
         DbKind::RabbitMq => Err(AppError::Query(t!("RabbitMQ 連線不支援還原").to_string())),
-        DbKind::Docker | DbKind::Registry | DbKind::Harbor => {
+        DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes => {
             Err(AppError::Query(t!("容器 / 映像倉庫連線不支援還原").to_string()))
         }
         DbKind::External => Err(AppError::Query(t!("外部 gateway 連線不支援還原").to_string())),

@@ -77,6 +77,7 @@ export const DIALECT: Record<DbKind, SQLDialect> = {
   docker: StandardSQL, // 容器類無查詢編輯器；以下三個僅滿足 Record 完整性
   registry: StandardSQL,
   harbor: StandardSQL,
+  kubernetes: StandardSQL,
   external: MySQLLoose, // 外部 gateway 講 MySQL
 };
 

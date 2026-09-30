@@ -86,7 +86,7 @@ fn ensure_cli_kind(kind: DbKind) -> AppResult<()> {
         DbKind::Kafka => t!("CLI 不支援 Kafka 連線（請用 GUI）"),
         DbKind::Elastic => t!("CLI 不支援 Elasticsearch 連線（請用 GUI）"),
         DbKind::RabbitMq => t!("CLI 不支援 RabbitMQ 連線（請用 GUI）"),
-        DbKind::Docker | DbKind::Registry | DbKind::Harbor => t!("CLI 不支援容器 / 映像倉庫連線（請用 GUI）"),
+        DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes => t!("CLI 不支援容器 / 映像倉庫連線（請用 GUI）"),
         _ => return Ok(()),
     };
     Err(AppError::Unsupported(msg.into()))
@@ -121,7 +121,7 @@ fn default_port(kind: DbKind) -> u16 {
         DbKind::RabbitMq => 5672,
         DbKind::Docker => 2375,
         DbKind::Registry => 5000,
-        DbKind::Harbor => 443,
+        DbKind::Harbor | DbKind::Kubernetes => 443,
         DbKind::Sqlite | DbKind::External => 0,
     }
 }

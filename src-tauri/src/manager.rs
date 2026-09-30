@@ -953,15 +953,8 @@ impl ConnectionManager {
 
         let mut cfg = config;
 
-        // SSH tunnel（SQLite 不適用）。
-        let mut tunnel: Option<TunnelGuard> = None;
-        if cfg.ssh_enabled && !matches!(cfg.kind, DbKind::Sqlite | DbKind::External) {
-            Self::prepare_tunnel(&mut cfg)?;
-            let guard = crate::ssh::open_tunnel(&cfg).await?;
-            cfg.host = "127.0.0.1".to_string();
-            cfg.port = guard.local_port();
-            tunnel = Some(guard);
-        }
+        // SSH tunnel（SQLite 不適用）或 Kubernetes port-forward。
+        let tunnel = Self::open_tunnel(&mut cfg).await?;
 
         let built = match cfg.kind {
             // MariaDB 線協定相容，共用 MysqlDriver（Active::Mysql；kind() 塌陷成 mysql 正合
@@ -999,11 +992,11 @@ impl ConnectionManager {
                 t!("此版本未編入 RabbitMQ 支援（請以 --features rabbitmq 建置）").into(),
             )),
             #[cfg(feature = "docker")]
-            DbKind::Docker | DbKind::Registry | DbKind::Harbor => {
+            DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes => {
                 ContainerDriver::connect(&cfg).await.map(|d| Active::Container(Arc::new(d)))
             }
             #[cfg(not(feature = "docker"))]
-            DbKind::Docker | DbKind::Registry | DbKind::Harbor => Err(AppError::Unsupported(
+            DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes => Err(AppError::Unsupported(
                 t!("此版本未編入容器 / 映像倉庫支援（請以 --features docker 建置）").into(),
             )),
             DbKind::External => crate::db::external::connect_external(&cfg).await.map(Active::Dyn),
@@ -1042,14 +1035,7 @@ impl ConnectionManager {
     /// 僅測試連線是否成功，不保留。SSH 則臨時開 tunnel 測完即關。
     pub async fn test(&self, config: &ConnectionConfig) -> AppResult<()> {
         let mut cfg = config.clone();
-        let mut tunnel: Option<TunnelGuard> = None;
-        if cfg.ssh_enabled && !matches!(cfg.kind, DbKind::Sqlite | DbKind::External) {
-            Self::prepare_tunnel(&mut cfg)?;
-            let guard = crate::ssh::open_tunnel(&cfg).await?;
-            cfg.host = "127.0.0.1".to_string();
-            cfg.port = guard.local_port();
-            tunnel = Some(guard);
-        }
+        let tunnel = Self::open_tunnel(&mut cfg).await?;
         let result = Self::test_inner(&cfg).await;
         // 不論成敗都收掉 tunnel。
         if let Some(g) = tunnel {
@@ -1136,14 +1122,14 @@ impl ConnectionManager {
                 t!("此版本未編入 RabbitMQ 支援（請以 --features rabbitmq 建置）").into(),
             )),
             #[cfg(feature = "docker")]
-            DbKind::Docker | DbKind::Registry | DbKind::Harbor => {
+            DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes => {
                 let driver = ContainerDriver::connect(config).await?;
                 driver.ping().await?;
                 driver.close().await;
                 Ok(())
             }
             #[cfg(not(feature = "docker"))]
-            DbKind::Docker | DbKind::Registry | DbKind::Harbor => Err(AppError::Unsupported(
+            DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes => Err(AppError::Unsupported(
                 t!("此版本未編入容器 / 映像倉庫支援（請以 --features docker 建置）").into(),
             )),
             DbKind::External => {
@@ -1153,6 +1139,30 @@ impl ConnectionManager {
                 Ok(())
             }
         }
+    }
+
+    /// 依設定開 SSH 通道或 Kubernetes port-forward，並把 host / port 改寫成本地轉發埠。
+    /// port-forward 優先（兩者同時勾選時 SSH 設定屬於父連線那一側，由 port-forward 自己處理）。
+    async fn open_tunnel(cfg: &mut ConnectionConfig) -> AppResult<Option<TunnelGuard>> {
+        #[cfg(feature = "docker")]
+        if crate::db::k8s::forward::wants_forward(cfg) && !matches!(cfg.kind, DbKind::Sqlite | DbKind::External) {
+            if ContainerDriver::is_container_kind(cfg.kind) {
+                return Err(AppError::Connect(t!("容器類連線不能經由 Kubernetes port-forward").into()));
+            }
+            let guard = crate::db::k8s::forward::open_db_forward(cfg).await?;
+            cfg.host = "127.0.0.1".to_string();
+            cfg.port = guard.local_port();
+            cfg.ssh_enabled = false;
+            return Ok(Some(guard));
+        }
+        if cfg.ssh_enabled && !matches!(cfg.kind, DbKind::Sqlite | DbKind::External) {
+            Self::prepare_tunnel(cfg)?;
+            let guard = crate::ssh::open_tunnel(cfg).await?;
+            cfg.host = "127.0.0.1".to_string();
+            cfg.port = guard.local_port();
+            return Ok(Some(guard));
+        }
+        Ok(None)
     }
 
     /// 開 SSH 通道前的 kind 專屬前處理，並記下原主機名（HTTPS 類驅動據此保留 SNI / 憑證主機名驗證）。

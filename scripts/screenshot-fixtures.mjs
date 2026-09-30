@@ -685,3 +685,82 @@ export const RDP_FILE_BYTES = [0xff, 0xfe, ...[...RDP_TEXT].flatMap((c) => [c.ch
 // RustDesk 的一則影像訊息（輔助程式轉給前端的原樣：[2][codec=1 VP9][key=1][display][rsv][pts i64] + VP9 關鍵畫面），
 // 從 Docker 裡真的 RustDesk 1.4.9 被控端（Xvfb 1024×768 + xterm）錄下來：假後端送它，驗 WebCodecs 真的解得出畫面。
 export const RUSTDESK_VP9_KEYFRAME_B64 = "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";
+
+// ---- Kubernetes ----
+// 同容器類：不併進 CONNECTIONS（文件截圖的側欄不變），verify-ui 的 k8s 情境以 CASE_FX 合併。
+export const K8S_CONNECTIONS = [
+  { id: "c-k8s", name: "dev-cluster", kind: "kubernetes", host: "https://127.0.0.1:6443", port: 0, username: "", password: "", max_connections: 1,
+    options: { k8s_context: "dev" } },
+];
+export const K8S_NAMESPACES = ["(cluster)", "default", "demo", "kube-system"];
+const k8sPod = (name, app, image, env = [], phase = "Running", ready = true, extra = {}) => ({
+  apiVersion: "v1", kind: "Pod",
+  metadata: { name, namespace: "demo", uid: `uid-${name}`, creationTimestamp: "2026-09-29T08:00:00Z", labels: { app } },
+  spec: { nodeName: "node-1", serviceAccountName: "default", restartPolicy: "Always",
+    containers: [{ name: app, image, env, ports: app === "pg" ? [{ name: "pg", containerPort: 5432 }] : [{ containerPort: 6379 }] }] },
+  status: { phase, podIP: "10.42.0.12", qosClass: "BestEffort",
+    conditions: [{ type: "Ready", status: ready ? "True" : "False", lastTransitionTime: "2026-09-29T08:01:00Z" }],
+    containerStatuses: [{ name: app, ready, restartCount: 0, image, state: { running: { startedAt: "2026-09-29T08:01:00Z" } } }] },
+  ...extra,
+});
+export const K8S_OBJECTS = {
+  "pods/pg-0": k8sPod("pg-0", "pg", "postgres:16-alpine", [
+    { name: "POSTGRES_USER", value: "app" },
+    { name: "POSTGRES_DB", value: "appdb" },
+    { name: "POSTGRES_PASSWORD", valueFrom: { secretKeyRef: { name: "app-secret", key: "DB_PASSWORD" } } },
+  ]),
+  "pods/redis-7c9d8-abcde": k8sPod("redis-7c9d8-abcde", "redis", "redis:7-alpine"),
+  "statefulsets/pg": {
+    apiVersion: "apps/v1", kind: "StatefulSet", metadata: { name: "pg", namespace: "demo", creationTimestamp: "2026-09-29T08:00:00Z", generation: 1 },
+    spec: { replicas: 1, serviceName: "pg", selector: { matchLabels: { app: "pg" } }, updateStrategy: { type: "RollingUpdate" },
+      template: { spec: { containers: [{ name: "postgres", image: "postgres:16-alpine", ports: [{ name: "pg", containerPort: 5432 }] }] } } },
+    status: { replicas: 1, readyReplicas: 1, updatedReplicas: 1, availableReplicas: 1, observedGeneration: 1 },
+  },
+  "deployments/redis": {
+    apiVersion: "apps/v1", kind: "Deployment", metadata: { name: "redis", namespace: "demo", creationTimestamp: "2026-09-29T08:00:00Z", generation: 2 },
+    spec: { replicas: 2, selector: { matchLabels: { app: "redis" } }, strategy: { type: "RollingUpdate" },
+      template: { spec: { containers: [{ name: "redis", image: "redis:7-alpine", ports: [{ containerPort: 6379 }] }] } } },
+    status: { replicas: 2, readyReplicas: 1, updatedReplicas: 2, availableReplicas: 1, observedGeneration: 2 },
+  },
+  "services/pg": {
+    apiVersion: "v1", kind: "Service", metadata: { name: "pg", namespace: "demo", creationTimestamp: "2026-09-29T08:00:00Z" },
+    spec: { type: "ClusterIP", clusterIP: "10.43.12.34", selector: { app: "pg" }, ports: [{ name: "postgres", port: 15432, targetPort: "pg", protocol: "TCP" }] },
+  },
+  "configmaps/app-config": { apiVersion: "v1", kind: "ConfigMap", metadata: { name: "app-config", namespace: "demo", creationTimestamp: "2026-09-29T08:00:00Z" }, data: { LOG_LEVEL: "debug" } },
+  "secrets/app-secret": { apiVersion: "v1", kind: "Secret", type: "Opaque", metadata: { name: "app-secret", namespace: "demo", creationTimestamp: "2026-09-29T08:00:00Z" }, data: { DB_PASSWORD: "c2VjcmV0", API_KEY: "YWJjMTIz" } },
+  "cronjobs/ticker": {
+    apiVersion: "batch/v1", kind: "CronJob", metadata: { name: "ticker", namespace: "demo", creationTimestamp: "2026-09-29T08:00:00Z" },
+    spec: { schedule: "*/5 * * * *", suspend: false, jobTemplate: { spec: { template: { spec: { containers: [{ name: "t", image: "busybox" }] } } } } },
+    status: {},
+  },
+  "nodes/node-1": {
+    apiVersion: "v1", kind: "Node", metadata: { name: "node-1", creationTimestamp: "2026-09-20T08:00:00Z", labels: { "node-role.kubernetes.io/control-plane": "true" } },
+    spec: {}, status: { conditions: [{ type: "Ready", status: "True" }], addresses: [{ type: "InternalIP", address: "172.18.0.2" }],
+      nodeInfo: { kubeletVersion: "v1.33.4+k3s1", osImage: "K3s v1.33.4+k3s1", kernelVersion: "6.6.87", architecture: "amd64", containerRuntimeVersion: "containerd://2.0.5" },
+      capacity: { cpu: "8", memory: "16Gi", pods: "110" }, allocatable: { cpu: "8", memory: "16Gi", pods: "110" } },
+  },
+};
+export const K8S_TREE = {
+  "c-k8s:demo": [
+    { name: "pods/pg-0", kind: "k8s:pods:running" },
+    { name: "pods/redis-7c9d8-abcde", kind: "k8s:pods:running" },
+    { name: "deployments/redis", kind: "k8s:deployments:warn" },
+    { name: "statefulsets/pg", kind: "k8s:statefulsets:ok" },
+    { name: "cronjobs/ticker", kind: "k8s:cronjobs:active" },
+    { name: "services/pg", kind: "k8s:services:clusterip" },
+    { name: "configmaps/app-config", kind: "k8s:configmaps:" },
+    { name: "secrets/app-secret", kind: "k8s:secrets:Opaque" },
+  ],
+  "c-k8s:default": [],
+  "c-k8s:kube-system": [],
+  "c-k8s:(cluster)": [{ name: "nodes/node-1", kind: "k8s:nodes:ready" }],
+};
+export const K8S_CONTEXTS = {
+  files: ["C:/Users/dev/.kube/config"],
+  current_context: "dev",
+  contexts: [
+    { name: "dev", cluster: "k3s", user: "admin", namespace: "demo", server: "https://127.0.0.1:6443", current: true, auth: "cert" },
+    { name: "prod-eks", cluster: "eks", user: "aws", namespace: "", server: "https://ABC.gr7.us-east-1.eks.amazonaws.com", current: false, auth: "exec:aws" },
+  ],
+};
+export const K8S_LOG_TEXT = "1:C 29 Sep 2026 08:01:00.000 # Redis version=7.4.1\n1:M 29 Sep 2026 08:01:00.010 * Ready to accept connections tcp\n";

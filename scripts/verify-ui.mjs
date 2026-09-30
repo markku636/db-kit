@@ -82,6 +82,13 @@ const CONTAINER_FX = {
     ...Object.fromEntries(Object.entries(FX.HARBOR_REPOS).map(([p, rs]) => [`c-harbor:${p}`, rs.map((r) => ({ name: r.name, kind: "repository" }))])),
   },
 };
+// Kubernetes 情境：多一個 kubeconfig 型的 Kubernetes 連線（namespace demo 有 Pod / StatefulSet / Service…）。
+const K8S_FX = {
+  STORAGE_SEED: SSH_STORAGE_SEED,
+  CONNECTIONS: [...FX.CONNECTIONS, ...FX.K8S_CONNECTIONS],
+  DATABASES: { ...FX.DATABASES, "c-k8s": FX.K8S_NAMESPACES },
+  TABLES: { ...FX.TABLES, ...FX.K8S_TREE },
+};
 // 分組一致性情境：prod-mysql 與 analytics-pg 在同一個沒有 kind 的舊群組裡（升級要拆開），另加一條未分組的 PostgreSQL。
 const GROUPING_CONNECTIONS = [
   ...FX.CONNECTIONS.map((c) => (c.id === "c-mysql" || c.id === "c-pg" ? { ...c, group_id: "g-legacy" } : c)),
@@ -125,6 +132,12 @@ const CASE_FX = {
   "docker-overview": CONTAINER_FX,
   "registry-tag-view": CONTAINER_FX,
   "harbor-artifacts": CONTAINER_FX,
+  "k8s-tree-menu": K8S_FX,
+  "k8s-pod-tab": K8S_FX,
+  "k8s-create-db-conn": K8S_FX,
+  "k8s-readonly-hides-writes": K8S_FX,
+  "k8s-conn-dialog": K8S_FX,
+  "k8s-overview-apply": K8S_FX,
   // 遠端桌面：有一台 RDP、一台 VNC（Mac）主機（rd-from-conn-string 用預設的「一台都沒有」）。
   "rd-rdp-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-vnc-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
@@ -158,7 +171,144 @@ async function closeMenu(page) {
 }
 
 // ── 情境 ───────────────────────────────────────────────────────────────
+// 連上 dev-cluster、展開 namespace demo 與指定的種類資料夾。
+async function openK8sFolder(page, folder) {
+  await page.getByText("dev-cluster", { exact: true }).first().dblclick();
+  await sleep(900);
+  await page.getByText("demo", { exact: true }).first().click();
+  await page.getByText(folder, { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+  await page.getByText(folder, { exact: true }).first().click();
+  await sleep(300);
+}
+
 const CASES = {
+  // ---- Kubernetes ----
+  async "k8s-tree-menu"(page) {
+    await openK8sFolder(page, "Pods");
+    check("k8s 樹：namespace 下有種類資料夾", (await page.getByText("StatefulSets", { exact: true }).count()) > 0 && (await page.getByText("Services", { exact: true }).count()) > 0);
+    const pod = page.locator('[data-tree-table="pods/pg-0"]').first();
+    await pod.waitFor({ timeout: 6000 }).catch(() => {});
+    check("Pod 節點只顯示名稱（不帶 pods/ 前綴）", (await pod.innerText().catch(() => "")).trim() === "pg-0");
+    await pod.click({ button: "right" });
+    await sleep(300);
+    let items = await menuItems(page);
+    const has = (x) => items.some((i) => i === x || i.includes(x));
+    check("Pod 右鍵：Log / Shell / YAML / 轉發埠 / 建立資料庫連線 / 刪除", has("Log…") && has("Shell…") && has("YAML…") && has("轉發埠…") && has("建立資料庫連線…") && has("刪除 Pod"), items.join(" | "));
+    await closeMenu(page);
+    await page.getByText("dev-cluster", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    items = await menuItems(page);
+    check("k8s 連線右鍵：叢集總覽 / 套用 YAML，沒有 SQL 搜尋", has("叢集總覽…") && has("套用 YAML…") && !items.some((i) => i.includes("SQL Search") || i.includes("新增查詢")), items.join(" | "));
+    await closeMenu(page);
+  },
+
+  async "k8s-pod-tab"(page) {
+    await openK8sFolder(page, "Pods");
+    await page.locator('[data-tree-table="pods/redis-7c9d8-abcde"]').first().click();
+    await page.getByText("redis:7-alpine", { exact: true }).first().waitFor({ timeout: 6000 }).catch(() => {});
+    const info = await appText(page);
+    check("Pod 概要：容器映像與節點", info.includes("redis:7-alpine") && info.includes("node-1"), info.slice(0, 300));
+    const allTerm = () => page.evaluate(() => [...document.querySelectorAll(".xterm-rows")].map((e) => e.innerText).join("\n"));
+    await page.getByRole("radio", { name: "Log" }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll(".xterm-rows")].some((e) => e.innerText.includes("Ready to accept")), null, { timeout: 6000 }).catch(() => {});
+    check("Log 子頁串流出 log", (await allTerm()).includes("Ready to accept connections"));
+    await page.getByRole("radio", { name: "Shell" }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll(".xterm-rows")].some((e) => e.innerText.includes("/ #")), null, { timeout: 6000 }).catch(() => {});
+    await page.locator(".xterm-helper-textarea").last().focus();
+    await page.keyboard.type("hostname");
+    await page.keyboard.press("Enter");
+    await sleep(400);
+    check("Shell 輸入送到 Pod 並回顯", /hostname[\s\S]*redis-7c9d8-abcde/.test(await allTerm()), (await allTerm()).slice(-200));
+    await page.getByRole("radio", { name: "YAML" }).click();
+    await page.getByText("kind: Pod").first().waitFor({ timeout: 6000 }).catch(() => {});
+    check("YAML 子頁顯示物件", (await page.locator('[data-testid="k8s-yaml"]').innerText().catch(() => "")).includes("kind: Pod"));
+    await page.getByRole("radio", { name: "資源" }).click();
+    await page.getByText("3m", { exact: true }).first().waitFor({ timeout: 6000 }).catch(() => {});
+    check("資源子頁顯示 CPU 用量", (await page.getByText("3m", { exact: true }).count()) > 0);
+  },
+
+  async "k8s-create-db-conn"(page) {
+    await openK8sFolder(page, "StatefulSets");
+    await page.locator('[data-tree-table="statefulsets/pg"]').first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("建立資料庫連線…", { exact: true }).click();
+    await page.getByText("經由 Kubernetes port-forward 連線", { exact: true }).waitFor({ timeout: 6000 }).catch(() => {});
+    const vals = {
+      user: await fieldInput(page, "使用者").inputValue().catch(() => null),
+      target: await fieldInput(page, "目標").inputValue().catch(() => null),
+      port: await fieldInput(page, "遠端埠").inputValue().catch(() => null),
+      ns: await fieldInput(page, "Namespace").inputValue().catch(() => null),
+      ssh: await page.getByText("透過 SSH Tunnel 連線", { exact: true }).count(),
+    };
+    check("從 StatefulSet 預填：app / sts/pg / 5432 / demo，SSH 區塊收起", vals.user === "app" && vals.target === "sts/pg" && vals.port === "5432" && vals.ns === "demo" && vals.ssh === 0, JSON.stringify(vals));
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await sleep(400);
+    const saved = (await page.evaluate(() => window.__DBKIT_CONN_SAVES__ ?? [])).at(-1);
+    const o = saved?.options ?? {};
+    check("存成經由 port-forward 的 PostgreSQL（密碼取自 Secret）",
+      saved?.kind === "postgres" && saved?.password === "secret" && o.k8s_conn === "c-k8s" && o.k8s_target === "sts/pg" && o.k8s_port === "5432" && o.k8s_ns === "demo" && !saved?.ssh_enabled,
+      JSON.stringify(saved));
+  },
+
+  async "k8s-readonly-hides-writes"(page) {
+    await page.getByText("dev-cluster", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("dev-cluster", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("設為唯讀模式（擋寫入 / DDL）", { exact: true }).click();
+    await sleep(400);
+    await page.getByText("demo", { exact: true }).first().click();
+    await page.getByText("Deployments", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    await page.getByText("Deployments", { exact: true }).first().click();
+    await page.locator('[data-tree-table="deployments/redis"]').first().click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("唯讀：Deployment 右鍵沒有調整副本 / 重新啟動 / 刪除", !items.some((i) => i.includes("調整副本數") || i === "重新啟動" || i.startsWith("刪除")), items.join(" | "));
+    check("唯讀：仍可看 YAML / 事件", items.includes("YAML…") && items.includes("事件…"));
+    await closeMenu(page);
+    await page.locator('[data-tree-table="deployments/redis"]').first().click();
+    await page.getByText("RollingUpdate").first().waitFor({ timeout: 6000 }).catch(() => {});
+    check("唯讀：分頁沒有調整副本 / 刪除按鈕",
+      (await page.getByRole("button", { name: "調整副本數", exact: true }).count()) === 0 && (await page.getByRole("button", { name: "刪除", exact: true }).count()) === 0);
+  },
+
+  async "k8s-conn-dialog"(page) {
+    await page.getByRole("button", { name: "連線", exact: true }).first().click();
+    await page.getByRole("radiogroup", { name: "連線類型" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByRole("radio", { name: "Kubernetes" }).click();
+    await page.getByText("Context", { exact: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
+    await sleep(400);
+    const opts = await page.locator("select").evaluateAll((els) => els.flatMap((e) => [...e.options].map((o) => o.textContent)));
+    check("kubeconfig 模式：列出 context（current 標★）", opts.includes("dev ★") && opts.includes("prod-eks"), opts.join(" | "));
+    check("kubeconfig 模式：沒有使用者 / 密碼欄", (await fieldInput(page, "使用者").count()) === 0 && (await fieldInput(page, "密碼").count()) === 0);
+    await page.locator("select").filter({ hasText: "prod-eks" }).selectOption("prod-eks");
+    await sleep(200);
+    check("選 exec plugin 的 context 顯示說明", (await appText(page)).includes("exec plugin（aws）"));
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await sleep(400);
+    const saved = (await page.evaluate(() => window.__DBKIT_CONN_SAVES__ ?? [])).at(-1);
+    check("存下 context（host 為 server、不存帳密）",
+      saved?.kind === "kubernetes" && saved?.options?.k8s_context === "prod-eks" && (saved?.host ?? "").includes("eks.amazonaws.com") && saved?.password === "" && saved?.port === 0,
+      JSON.stringify(saved));
+  },
+
+  async "k8s-overview-apply"(page) {
+    await page.getByText("dev-cluster", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("dev-cluster", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("叢集總覽…", { exact: true }).click();
+    await page.getByText("v1.33.4+k3s1").first().waitFor({ timeout: 6000 }).catch(() => {});
+    const text = await appText(page);
+    check("總覽：版本 / 節點 / 警告事件", text.includes("v1.33.4+k3s1") && text.includes("node-1") && text.includes("BackOff"), text.slice(0, 300));
+    await page.getByRole("button", { name: "套用 YAML…", exact: true }).click();
+    await page.locator('[data-testid="k8s-apply-editor"]').waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByRole("button", { name: "試套用", exact: true }).click();
+    await page.getByText("可套用（created）").first().waitFor({ timeout: 5000 }).catch(() => {});
+    const acts = await page.evaluate(() => window.__DBKIT_K8S_ACTIONS__);
+    check("套用 YAML：試套用送出 dryRun 並顯示結果", acts.includes("dry-apply") && (await page.getByText("可套用（created）").count()) > 0, JSON.stringify(acts));
+  },
+
   // ---- 容器與映像（Docker / Registry / Harbor）----
   async "docker-tree-menu"(page) {
     await page.getByText("local-docker", { exact: true }).first().dblclick();

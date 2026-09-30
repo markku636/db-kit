@@ -19,6 +19,7 @@ import RabbitMqQueueDetail from "./RabbitMqQueueDetail";
 import DockerObjectView from "./DockerObjectView";
 import RegistryTagView from "./RegistryTagView";
 import HarborRepoView from "./HarborRepoView";
+import K8sObjectView from "./K8sObjectView";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { invalidateSchemaCache } from "./useSqlSchema";
@@ -83,6 +84,13 @@ export default function TableView({ tab }: { tab: OpenTab }) {
     return (
       <div className="flex-1 flex flex-col min-h-0">
         <RegistryTagView connId={tab.connId} repo={tab.database} tag={tab.table} />
+      </div>
+    );
+  }
+  if (connKind === "kubernetes") {
+    return (
+      <div className="flex-1 flex flex-col min-h-0">
+        <K8sObjectView connId={tab.connId} ns={tab.database} table={tab.table} />
       </div>
     );
   }

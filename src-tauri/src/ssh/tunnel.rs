@@ -30,6 +30,13 @@ pub struct TunnelGuard {
 }
 
 impl TunnelGuard {
+    /// 由其他轉發機制（Kubernetes port-forward）組成 guard：manager 對兩者一視同仁。
+    /// `task` 須在 `shutdown` 送出 true 後自行收尾結束。
+    #[allow(dead_code)] // 只有 docker feature（Kubernetes）用到
+    pub(crate) fn from_parts(local_addr: SocketAddr, shutdown: watch::Sender<bool>, task: JoinHandle<()>) -> Self {
+        TunnelGuard { local_addr, shutdown, task }
+    }
+
     /// 本地轉發埠（driver 改連此埠）。
     pub fn local_port(&self) -> u16 {
         self.local_addr.port()

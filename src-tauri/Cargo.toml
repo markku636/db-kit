@@ -136,6 +136,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-
 # 沒有 feature gate，精簡 CLI 也依賴它）。純 Rust 無相依的小 crate，精簡版多連它不痛。
 base64 = "0.22"
 apache-avro = { version = "0.17", optional = true }
+# Kubernetes：kubeconfig 讀取與資源 YAML 往返（檢視 / 編輯 / 套用）。純 Rust（unsafe-libyaml 是 libyaml 的 Rust 轉譯，無 C 編譯）。
+# sha1：exec / port-forward 的 WebSocket 交握驗證 Sec-WebSocket-Accept（依賴樹裡本來就有 0.10）。皆藏在 docker feature 後。
+serde_yaml = { version = "0.9", optional = true }
+sha1 = { version = "0.10", optional = true }
 # Protobuf 動態解碼：protox 由 .proto 文字編出 FileDescriptorSet，prost-reflect 依 descriptor
 # 動態解 protobuf binary → JSON。皆純 Rust，藏在 kafka feature 後。
 protox = { version = "0.9", optional = true }
@@ -228,7 +232,9 @@ rabbitmq = ["dep:lapin", "dep:reqwest"]
 # docker：容器與映像管理（Docker Engine API / Docker Registry v2 / Harbor）。全走既有 reqwest：
 # 本機 unix socket / Windows named pipe、TCP、TLS（含用戶端憑證 mTLS）皆由 reqwest 內建支援，
 # 不引入 bollard（其 ssl feature 會拉進 aws-lc / NASM）。隨 gui 預設開啟；slim CLI（--no-default-features）排除。
-docker = ["dep:reqwest"]
+# Kubernetes 也掛在這裡（同屬「容器」類、同一個 ContainerDriver）：一樣走 reqwest，exec / port-forward 的
+# WebSocket 在 reqwest 的 upgrade 連線上自己收發幀，不引入 kube-rs / tungstenite。
+docker = ["dep:reqwest", "dep:serde_yaml", "dep:sha1"]
 # remote-desktop：分頁內嵌的 RDP（IronRDP）與 VNC（前端 noVNC，後端代做 RFB 認證）。純 Rust、無 NASM 相依
 # （winscard 會以 cc 編 bundled zlib，MinGW gcc 即可）。隨 default 開；slim CLI 排除。
 rdp = ["dep:ironrdp", "dep:ironrdp-tokio", "dep:ironrdp-tls", "dep:x509-cert", "dep:rustls", "dep:smallvec"]

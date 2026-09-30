@@ -26,7 +26,11 @@ import {
 import { loadSet, moveItem, saveSet, type Placement } from "./sidebarGroups";
 import GroupedSection, { HeaderButton, moveTargets, type ItemDnd } from "./sidebar/GroupedSection";
 import { kindIcon } from "./kindIcons";
-import { containerDbNode, containerObjIcon, containerObjTitle } from "./containerTree";
+import { containerDbNode, containerObjIcon, containerObjTitle, k8sKindIcon } from "./containerTree";
+import { k8sFolderMenu, k8sItemMenu, k8sNamespaceMenu, type K8sMenuNode } from "./k8sMenus";
+import { useK8sUi } from "./k8sActions";
+import K8sDialogs from "./K8sDialogs";
+import { CLUSTER_DB as K8S_CLUSTER_DB, CLUSTER_TREE_KINDS as K8S_CLUSTER_TREE_KINDS, FOLDER_LABEL as K8S_FOLDER_LABEL, TREE_KINDS as K8S_TREE_KINDS, splitTreeName } from "./k8sModel";
 import { dockerItemMenu, harborItemMenu, registryItemMenu } from "./dockerMenus";
 import { useConnPrefill, useDockerPullRequest } from "./connPrefill";
 import type {
@@ -621,7 +625,7 @@ export default function App() {
               <Icon icon={kindIcon(active.kind)} size={13} />
             </span>
             <span className="truncate">
-              {KIND_META[active.kind].label} · {active.host}:{active.port}
+              {KIND_META[active.kind].label} · {hostLabel(active)}
               {isConnected ? t(" · 已連線") : t(" · 未連線")}
             </span>
           </span>
@@ -2199,6 +2203,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
     const it = (label: string, onClick: () => void, danger?: boolean): MenuNode => ({ kind: "item", label, onClick, danger });
     const sep: MenuNode = { kind: "sep" };
     const ro = readonlyConns[m.connId] === true;
+    if (m.kind === "kubernetes") return k8sFolderMenu({ connId: m.connId, db: m.db, plural: m.type, readonly: ro, refresh: () => refreshTables(m.connId, m.db) });
     const nodes: MenuNode[] = [it(t("新增查詢"), () => newQueryForDb(m.connId, m.db, m.kind))];
     if (m.type === "tables" && !ro)
       nodes.push(it(t("新增資料表…"), () => setDesignTable({ connId: m.connId, db: m.db, kind: m.kind })));
@@ -2214,6 +2219,18 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
   const tableMenuNodes = (m: NonNullable<typeof tableMenu>): MenuNode[] => {
     const it = (label: string, onClick: () => void, danger?: boolean): MenuNode => ({ kind: "item", label, onClick, danger });
     const sep: MenuNode = { kind: "sep" };
+    if (m.kind === "kubernetes") {
+      const conn = connections.find((c) => c.id === m.connId);
+      if (!conn) return [];
+      return k8sItemMenu({
+        conn,
+        db: m.db,
+        table: m.table,
+        objKind: m.objKind ?? "",
+        readonly: readonlyConns[m.connId] === true,
+        refresh: () => refreshTables(m.connId, m.db),
+      });
+    }
     if (m.kind === "docker") {
       const conn = connections.find((c) => c.id === m.connId);
       if (!conn) return [];
@@ -2659,7 +2676,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
             const canRoutines = supportsRoutines(c.kind);
 
             // 樹中的單一資料表 / 視圖節點（沿用選取 / 雙擊開啟 / 右鍵產生 SQL）。indent 控制縮排深度。
-            const objNode = (obj: TableInfo, indent: string) => (
+            const objNode = (obj: TableInfo, indent: string, label?: string) => (
               <div
                 key={`${obj.kind}:${obj.name}`}
                 data-tree-conn={c.id}
@@ -2698,7 +2715,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                       }`} />
                   );
                 })()}
-                <span className="truncate">{obj.name}</span>
+                <span className="truncate">{label ?? obj.name}</span>
               </div>
             );
 
@@ -2815,7 +2832,29 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                   );
                 })()}
 
-                {objs && !isSqlKind && (
+                {objs && c.kind === "kubernetes" && (() => {
+                  // Kubernetes：依種類分資料夾（table 名稱是 `種類/名稱`）；資料夾預設收合，Pod 多時也不會一展開就淹沒側欄。
+                  const visible = objs.tables.filter((o) => tableVisible(c.name, o.name));
+                  const kinds = db === K8S_CLUSTER_DB ? K8S_CLUSTER_TREE_KINDS : K8S_TREE_KINDS;
+                  const groups = new Map<string, TableInfo[]>();
+                  for (const o of visible) {
+                    const p = splitTreeName(o.name).plural;
+                    const g = groups.get(p);
+                    if (g) g.push(o); else groups.set(p, [o]);
+                  }
+                  return (
+                    <>
+                      {kinds.map((plural) => {
+                        const items = groups.get(plural) ?? [];
+                        if (items.length === 0 && (plural === "horizontalpodautoscalers" || plural === "ingresses" || plural === "customresourcedefinitions")) return null;
+                        return folderNode(plural, k8sKindIcon(plural), "text-sky-300/80", K8S_FOLDER_LABEL[plural] ?? plural, items.length,
+                          <>{items.map((o) => objNode(o, "pl-16", splitTreeName(o.name).name))}</>);
+                      })}
+                    </>
+                  );
+                })()}
+
+                {objs && !isSqlKind && c.kind !== "kubernetes" && (
                   <>
                     {objs.tables.filter((o) => tableVisible(c.name, o.name)).map((o) => objNode(o, "pl-12"))}
                     {objs.tables.length === 0 && (
@@ -3081,6 +3120,15 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                       : [[t("拉取映像…"), () => setDockerPull({ connId: menuConn.id }), false] as [string, () => void, boolean]]),
                   ]
                 : []),
+              ...(connectedIds.has(menu.id) && menuConn.kind === "kubernetes"
+                ? [
+                    [t("叢集總覽…"), () => useK8sUi.getState().openOverview(menuConn.id), false] as [string, () => void, boolean],
+                    [t("瀏覽所有資源…"), () => useStore.getState().openTable(menuConn.id, "(cluster)", "@browse:pods", "data"), false] as [string, () => void, boolean],
+                    ...(readonlyConns[menu.id]
+                      ? []
+                      : [[t("套用 YAML…"), () => useK8sUi.getState().openApply({ connId: menuConn.id, ns: null }), false] as [string, () => void, boolean]]),
+                  ]
+                : []),
               ...(connectedIds.has(menu.id) && menuConn.kind === "registry"
                 ? [[t("端點資訊…"), () => setRegistryInfo({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]
                 : []),
@@ -3199,6 +3247,17 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                       : [[t("拉取映像…"), () => setDockerPull({ connId: dbMenu.connId }), false] as [string, () => void, boolean]]),
                     [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
                   ]
+                : dbConn?.kind === "kubernetes"
+                ? k8sNamespaceMenu({
+                    conn: dbConn,
+                    db: dbMenu.db,
+                    readonly: readonlyConns[dbMenu.connId] === true,
+                    refresh: () => refreshTables(dbMenu.connId, dbMenu.db),
+                    refreshDbs: () => void refreshDbs(dbMenu.connId),
+                    editConn,
+                  })
+                    .filter((n): n is Extract<K8sMenuNode, { kind: "item" }> => n.kind === "item")
+                    .map((n) => [n.label, n.onClick, !!n.danger] as [string, () => void, boolean])
                 : dbConn?.kind === "registry"
                 ? [
                     [t("重新整理"), () => refreshTables(dbMenu.connId, dbMenu.db), false] as [string, () => void, boolean],
@@ -3331,6 +3390,8 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
       {rabbitOverview && (
         <RabbitMqOverview connId={rabbitOverview.id} connName={rabbitOverview.name} onClose={() => setRabbitOverview(null)} />
       )}
+
+      <K8sDialogs />
 
       {dockerOverview && (
         <DockerOverview
@@ -4125,6 +4186,7 @@ const QUERY_DEFAULTS: Record<DbKind, string> = {
   docker: "", // 容器類無查詢編輯器（走專屬容器 / 映像面板）
   registry: "",
   harbor: "",
+  kubernetes: "",
   external: "SELECT 1",
 };
 // 僅關聯式資料庫支援 EXPLAIN 查詢計畫分析（MSSQL 回 SHOWPLAN XML，於結果格顯示、不走 JSON 視覺樹）。

@@ -195,3 +195,17 @@ export function looksLikeDbImage(image: string): boolean {
   const repo = imageRepo(image);
   return RULES.some((r) => r.match.test(repo));
 }
+
+/**
+ * 只依映像與環境變數推測（Kubernetes 用：沒有「發布埠」，連線走 port-forward）。
+ * 回傳 DB 類型、慣用埠、帳密與 kind 專屬 options；認不得回 null。
+ */
+export function guessDbFromImage(
+  image: string,
+  env: Record<string, string>,
+): { kind: DbKind; port: number; username: string; password: string; database: string; options?: Record<string, string> } | null {
+  const repo = imageRepo(image);
+  const rule = RULES.find((r) => r.match.test(repo));
+  if (!rule) return null;
+  return { kind: rule.kind, port: rule.port, ...rule.creds(env, repo), options: rule.options ? { ...rule.options } : undefined };
+}

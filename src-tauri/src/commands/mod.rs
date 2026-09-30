@@ -7,6 +7,9 @@ pub mod ssh;
 // Docker（容器 / 映像 / volume / network、log 與 exec 串流）的 command。
 #[cfg(feature = "docker")]
 pub mod docker;
+// Kubernetes（資源 / YAML / 事件 / 指標、log 與 exec 串流、port-forward）的 command。
+#[cfg(feature = "docker")]
+pub mod k8s;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -84,6 +87,12 @@ pub struct AppState {
     /// Docker log / exec 串流登記簿（斷線 / 移除連線時依連線 id 收掉）。
     #[cfg(feature = "docker")]
     pub docker_streams: Arc<crate::db::docker::stream::DockerStreams>,
+    /// Kubernetes log / exec 串流登記簿。
+    #[cfg(feature = "docker")]
+    pub k8s_streams: Arc<crate::db::k8s::stream::K8sStreams>,
+    /// 使用者開的 Kubernetes port-forward（斷線 / 移除連線時收掉）。
+    #[cfg(feature = "docker")]
+    pub k8s_forwards: Arc<crate::db::k8s::forward::K8sForwards>,
 }
 
 /// 若前端送來的 secret 為空（存檔但未重新輸入的連線），從 keychain 補回。
@@ -173,8 +182,27 @@ fn inject_otp_code(config: &mut ConnectionConfig, otp_code: Option<String>) {
     }
 }
 
+/// 資料庫連線經由 Kubernetes port-forward 時，把父連線（Kubernetes）的完整設定（含 keychain 裡的 token）
+/// 放進記憶體內的 options，manager 開轉發時直接用，不必再讀設定檔。
+#[cfg(feature = "docker")]
+async fn inject_k8s_parent(app: &AppHandle, config: &mut ConnectionConfig) -> AppResult<()> {
+    use crate::db::k8s::forward::{wants_forward, OPT_CONN, OPT_PARENT};
+    if !wants_forward(config) {
+        return Ok(());
+    }
+    let pid = config.options.get(OPT_CONN).cloned().unwrap_or_default();
+    let parent = store::load_connection(app, pid.trim()).await.map_err(|e| match e {
+        AppError::NotFound(_) => AppError::Connect(t!("找不到這個連線指定的 Kubernetes 連線（可能已被刪除）").into()),
+        other => other,
+    })?;
+    let json = serde_json::to_string(&parent).map_err(|e| AppError::Connect(e.to_string()))?;
+    config.options.insert(OPT_PARENT.to_string(), json);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn test_connection(
+    app: AppHandle,
     state: State<'_, AppState>,
     config: ConnectionConfig,
     otp_code: Option<String>,
@@ -182,6 +210,9 @@ pub async fn test_connection(
     let mut config = config;
     hydrate_secrets(&mut config);
     inject_otp_code(&mut config, otp_code);
+    #[cfg(feature = "docker")]
+    inject_k8s_parent(&app, &mut config).await?;
+    let _ = &app;
     state.manager.test(&config).await
 }
 
@@ -195,6 +226,8 @@ pub async fn connect(
     let mut config = config;
     hydrate_secrets(&mut config);
     inject_otp_code(&mut config, otp_code);
+    #[cfg(feature = "docker")]
+    inject_k8s_parent(&app, &mut config).await?;
     let id = config.id.clone();
     #[cfg(feature = "kafka")]
     let is_kafka = matches!(config.kind, crate::db::DbKind::Kafka);
@@ -289,7 +322,11 @@ pub async fn remove_saved_connection(
         cancel_kafka_jobs(&state, &id);
     }
     #[cfg(feature = "docker")]
-    state.docker_streams.close_conn(&id).await;
+    {
+        state.docker_streams.close_conn(&id).await;
+        state.k8s_streams.close_conn(&id).await;
+        state.k8s_forwards.close_conn(&id).await;
+    }
     state.manager.disconnect(&id).await;
     store::remove(&app, &id).await?;
     store::kc_delete(&id);
@@ -312,7 +349,11 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> AppResult<()>
         cancel_kafka_jobs(&state, &id);
     }
     #[cfg(feature = "docker")]
-    state.docker_streams.close_conn(&id).await;
+    {
+        state.docker_streams.close_conn(&id).await;
+        state.k8s_streams.close_conn(&id).await;
+        state.k8s_forwards.close_conn(&id).await;
+    }
     state.manager.disconnect(&id).await;
     Ok(())
 }

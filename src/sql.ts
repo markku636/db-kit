@@ -28,7 +28,7 @@ export const supportsQueryEditorKind = (kind: DbKind | null | undefined): boolea
   !!kind && !NO_QUERY_KINDS.includes(kind);
 
 // 沒有查詢語言的 kind（supportsQueryEditorKind 的反面；側欄選單 / 查詢窗格空狀態共用）。
-const NO_QUERY_KINDS: DbKind[] = ["kafka", "rabbitmq", "docker", "registry", "harbor"];
+const NO_QUERY_KINDS: DbKind[] = ["kafka", "rabbitmq", "docker", "registry", "harbor", "kubernetes"];
 
 // ---- 跨資料庫識別字 / 字面值跳脫（MySQL / PostgreSQL / SQLite 一致性關鍵）----
 // 識別字：PostgreSQL 用雙引號，SQL Server 用 [方括號]（] 加倍），其餘（MySQL / MariaDB / SQLite）用反引號；內部引號加倍轉義。
@@ -96,6 +96,7 @@ export const TYPE_PRESETS: Record<DbKind, string[]> = {
   docker: [],
   registry: [],
   harbor: [],
+  kubernetes: [],
   external: [], // 外部 gateway 唯讀，不建表
 };
 

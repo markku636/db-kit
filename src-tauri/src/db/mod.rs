@@ -47,6 +47,9 @@ pub mod docker;
 pub mod harbor;
 #[cfg(feature = "docker")]
 pub mod http_tls;
+/// Kubernetes（API server REST + WebSocket exec / port-forward），與 Docker 同屬 `docker` feature。
+#[cfg(feature = "docker")]
+pub mod k8s;
 #[cfg(feature = "docker")]
 pub mod registry;
 
@@ -85,6 +88,9 @@ pub enum DbKind {
     Registry,
     /// Harbor（`/api/v2.0`）：project→database、repository→table；artifact / tag / 弱點掃描走 `harbor_*` 指令。
     Harbor,
+    /// Kubernetes：namespace→database（另有「叢集」節點）、`種類/名稱`→table；資源詳情 / YAML / log / exec /
+    /// port-forward 走 `k8s_*` 指令。kubeconfig（含 exec plugin）或手填 API server + token / 憑證。與 Docker 同屬 `docker` feature。
+    Kubernetes,
     /// 外部 web gateway（非真實連線；透過 HTTP 下 SQL）。實作見 `db::external`。
     External,
 }
@@ -107,6 +113,7 @@ impl DbKind {
             DbKind::Docker => "docker",
             DbKind::Registry => "registry",
             DbKind::Harbor => "harbor",
+            DbKind::Kubernetes => "kubernetes",
             DbKind::External => "external",
         }
     }
@@ -123,7 +130,7 @@ impl DbKind {
             DbKind::Kafka => "", // Kafka 不支援備份
             DbKind::Elastic => "", // Elasticsearch 不支援備份
             DbKind::RabbitMq => "", // RabbitMQ 不支援備份
-            DbKind::Docker | DbKind::Registry | DbKind::Harbor => "", // 容器類不支援備份
+            DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes => "", // 容器類不支援備份
             DbKind::External => "",
         }
     }

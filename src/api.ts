@@ -15,11 +15,15 @@ import type {
   RegistryInfo, RegistryManifest, HarborOverview, HarborProject, HarborRepository, HarborArtifactPage, HarborVulnReport,
 } from "./registryTypes";
 import type {
+  K8sApiResource, K8sApplyResult, K8sEnvVar, K8sEvent, K8sForwardInfo, K8sKubeconfigInfo, K8sLogOptions, K8sNodeMetrics,
+  K8sObject, K8sOverview, K8sPodMetrics, K8sResRef, K8sStreamEnd, K8sTable,
+} from "./k8sTypes";
+import type {
   RdSessionsFile, RdSession, RdFolder, RdPlacement, RdTargetRef, RdConnInfo, RdCertDecision, RdCertPrompt,
   RdAuthPrompt, RdAuthAnswer, RdConnClosed,
 } from "./rdTypes";
 
-export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "docker" | "registry" | "harbor" | "external";
+export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "docker" | "registry" | "harbor" | "kubernetes" | "external";
 
 export type SshAuthMethod = "password" | "key";
 
@@ -1137,6 +1141,13 @@ export function onDockerStreamEnd(streamId: string, cb: (p: DockerStreamEnd) => 
   });
 }
 
+// Kubernetes log / exec 串流結束（同 Docker：輸出走 Channel，此事件只帶結束原因與 exec 結束碼）。
+export function onK8sStreamEnd(streamId: string, cb: (p: K8sStreamEnd) => void): Promise<UnlistenFn> {
+  return listen<K8sStreamEnd>("k8s-stream-end", (e) => {
+    if (e.payload.stream_id === streamId) cb(e.payload);
+  });
+}
+
 // 訂閱 live-tail 訊息（僅回呼符合 connId 者）。回傳取消監聽函式。
 export function onKafkaMessage(connId: string, cb: (m: KafkaMessage) => void): Promise<UnlistenFn> {
   return listen<KafkaMessage>("kafka-message", (e) => {
@@ -1355,6 +1366,8 @@ export const KIND_META: Record<DbKind, { label: string; color: string; defaultPo
   // Registry / Harbor 的埠一律寫在網址裡（對話框不顯示埠欄），defaultPort 0 = 由網址決定。
   registry: { label: "Registry", color: "#64748b", defaultPort: 0, category: "container", noDatabase: true },
   harbor: { label: "Harbor", color: "#65a30d", defaultPort: 0, category: "container", noDatabase: true },
+  // Kubernetes：品牌藍 #326ce5（與 Docker #2496ed 同色系但更深，圖示也不同）。埠寫在 API server 網址裡（kubeconfig 模式用不到）。
+  kubernetes: { label: "Kubernetes", color: "#326ce5", defaultPort: 0, category: "container", noDatabase: true },
   external: { label: "External", color: "#8b5cf6", defaultPort: 0, category: "other", external: true },
 };
 
@@ -1365,12 +1378,13 @@ export const KIND_META: Record<DbKind, { label: string; color: string; defaultPo
 export function hostLabel(c: Pick<ConnectionConfig, "kind" | "host" | "port">): string {
   const h = c.host.trim();
   if (c.kind === "docker" && h === "") return "local";
+  if (c.kind === "kubernetes" && h === "") return "kubeconfig";
   return c.port ? `${h}:${c.port}` : h;
 }
 
-/** 容器類（Docker / Registry / Harbor）：沒有 SQL / 資料格，UI 走各自的專屬面板。 */
+/** 容器類（Docker / Registry / Harbor / Kubernetes）：沒有 SQL / 資料格，UI 走各自的專屬面板。 */
 export function isContainerKind(kind: DbKind | null | undefined): boolean {
-  return kind === "docker" || kind === "registry" || kind === "harbor";
+  return kind === "docker" || kind === "registry" || kind === "harbor" || kind === "kubernetes";
 }
 
 // parse_connection_url 的回傳：連線字串解析結果（欄位皆可缺；options 為 per-kind 映射後的鍵值）。
@@ -1991,6 +2005,57 @@ export const api = {
     invoke<void>("harbor_delete_tag", { id, project, repo, digest, tag }),
   harborDeleteRepository: (id: string, project: string, repo: string) =>
     invoke<void>("harbor_delete_repository", { id, project, repo }),
+
+  // Kubernetes：kubeconfig（不需連線）、叢集總覽、資源（原始 JSON / 表格 / YAML）、事件 / 指標、log / exec 串流、port-forward。
+  // ns 傳 null = 全部 namespace（或 cluster 範圍資源）。
+  k8sKubeconfigContexts: (path: string | null) => invoke<K8sKubeconfigInfo>("k8s_kubeconfig_contexts", { path }),
+  k8sDefaultKubeconfig: () => invoke<string[]>("k8s_default_kubeconfig"),
+  k8sOverview: (id: string) => invoke<K8sOverview>("k8s_overview", { id }),
+  k8sNamespaces: (id: string) => invoke<string[]>("k8s_namespaces", { id }),
+  k8sDiscovery: (id: string, refresh = false) => invoke<K8sApiResource[]>("k8s_discovery", { id, refresh }),
+  k8sEvents: (id: string, ns: string | null, kind: string | null, name: string | null, warningsOnly = false) =>
+    invoke<K8sEvent[]>("k8s_events", { id, ns, kind, name, warningsOnly }),
+  /** null = 叢集沒裝 metrics-server。 */
+  k8sPodMetrics: (id: string, ns: string | null, name: string | null) =>
+    invoke<K8sPodMetrics[] | null>("k8s_pod_metrics", { id, ns, name }),
+  k8sNodeMetrics: (id: string) => invoke<K8sNodeMetrics[] | null>("k8s_node_metrics", { id }),
+  k8sTable: (id: string, res: K8sResRef, ns: string | null, selector: string | null = null) =>
+    invoke<K8sTable>("k8s_table", { id, res, ns, selector }),
+  k8sList: (id: string, res: K8sResRef, ns: string | null, labelSelector: string | null = null, fieldSelector: string | null = null) =>
+    invoke<K8sObject[]>("k8s_list", { id, res, ns, labelSelector, fieldSelector }),
+  k8sGet: (id: string, res: K8sResRef, ns: string | null, name: string) => invoke<K8sObject>("k8s_get", { id, res, ns, name }),
+  k8sGetYaml: (id: string, res: K8sResRef, ns: string | null, name: string) => invoke<string>("k8s_get_yaml", { id, res, ns, name }),
+  k8sReplaceYaml: (id: string, res: K8sResRef, ns: string | null, name: string, yaml: string, dryRun: boolean) =>
+    invoke<K8sObject>("k8s_replace_yaml", { id, res, ns, name, yaml, dryRun }),
+  k8sApplyYaml: (id: string, yaml: string, ns: string | null, dryRun: boolean, force: boolean) =>
+    invoke<K8sApplyResult[]>("k8s_apply_yaml", { id, yaml, ns, dryRun, force }),
+  k8sDelete: (id: string, res: K8sResRef, ns: string | null, name: string, force = false) =>
+    invoke<void>("k8s_delete", { id, res, ns, name, force }),
+  k8sScale: (id: string, res: K8sResRef, ns: string, name: string, replicas: number) =>
+    invoke<void>("k8s_scale", { id, res, ns, name, replicas }),
+  k8sRestart: (id: string, res: K8sResRef, ns: string, name: string) => invoke<void>("k8s_restart", { id, res, ns, name }),
+  k8sCronjobSuspend: (id: string, ns: string, name: string, suspend: boolean) =>
+    invoke<void>("k8s_cronjob_suspend", { id, ns, name, suspend }),
+  k8sCronjobTrigger: (id: string, ns: string, name: string) => invoke<string>("k8s_cronjob_trigger", { id, ns, name }),
+  k8sNodeCordon: (id: string, name: string, cordon: boolean) => invoke<void>("k8s_node_cordon", { id, name, cordon }),
+  k8sSecretData: (id: string, ns: string, name: string) => invoke<Record<string, string>>("k8s_secret_data", { id, ns, name }),
+  k8sPodEnv: (id: string, ns: string, pod: string) => invoke<K8sEnvVar[]>("k8s_pod_env", { id, ns, pod }),
+  /** 轉發目標實際落在哪個 Pod / 埠。 */
+  k8sResolveTarget: (id: string, ns: string, target: string, port: number) =>
+    invoke<[string, number]>("k8s_resolve_target", { id, ns, target, port }),
+  k8sLogsOpen: (id: string, ns: string, pod: string, opts: K8sLogOptions, onOutput: Channel<ArrayBuffer>) =>
+    invoke<string>("k8s_logs_open", { id, ns, pod, opts, onOutput }),
+  /** cmd 空陣列 → 後端自動挑 bash / ash / sh。 */
+  k8sExecOpen: (id: string, ns: string, pod: string, container: string, cmd: string[], cols: number, rows: number, onOutput: Channel<ArrayBuffer>) =>
+    invoke<string>("k8s_exec_open", { id, ns, pod, container, cmd, cols, rows, onOutput }),
+  k8sExecWrite: (streamId: string, dataB64: string) => invoke<void>("k8s_exec_write", { streamId, dataB64 }),
+  k8sExecResize: (streamId: string, cols: number, rows: number) => invoke<void>("k8s_exec_resize", { streamId, cols, rows }),
+  k8sStreamClose: (streamId: string) => invoke<void>("k8s_stream_close", { streamId }),
+  /** localPort 0 = 由系統挑。 */
+  k8sForwardOpen: (id: string, ns: string, target: string, remotePort: number, localPort: number) =>
+    invoke<K8sForwardInfo>("k8s_forward_open", { id, ns, target, remotePort, localPort }),
+  k8sForwardList: (id: string | null) => invoke<K8sForwardInfo[]>("k8s_forward_list", { id }),
+  k8sForwardClose: (forwardId: string) => invoke<void>("k8s_forward_close", { forwardId }),
 
   // 壓力測試：後端另建一個 max_connections = threads 的專屬連線池（不佔用互動池），
   // 跑完即釋放。故傳的是 ConnectionConfig 而非連線 id（同 backupRun / testConnection 的路徑）。

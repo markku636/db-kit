@@ -1,4 +1,4 @@
-//! 容器類連線（Docker / Registry / Harbor）的統一包裝。
+//! 容器類連線（Docker / Registry / Harbor / Kubernetes）的統一包裝。
 //!
 //! manager 的 `Active` 只多一個 `Container` 變體，內部再依 kind 分派——三種 kind 共用
 //! `docker` feature 與同一組 SSH 通道前處理，不必在 manager 的 40 多個委派 match 各加三條分支。
@@ -10,6 +10,8 @@ use crate::db::docker::DockerDriver;
 use crate::db::harbor::api::HarborApi;
 use crate::db::harbor::HarborDriver;
 use crate::db::http_tls::normalize_target;
+use crate::db::k8s::api::K8sApi;
+use crate::db::k8s::K8sDriver;
 use crate::db::registry::RegistryDriver;
 use crate::db::{
     CellEdit, ColumnInfo, ConnectionConfig, DataQuery, DatabaseDriver, DbKind, PagedData, PoolStatus,
@@ -21,6 +23,7 @@ pub enum ContainerDriver {
     Docker(DockerDriver),
     Registry(RegistryDriver),
     Harbor(HarborDriver),
+    Kubernetes(K8sDriver),
 }
 
 impl ContainerDriver {
@@ -29,11 +32,12 @@ impl ContainerDriver {
             ContainerDriver::Docker(_) => DbKind::Docker,
             ContainerDriver::Registry(_) => DbKind::Registry,
             ContainerDriver::Harbor(_) => DbKind::Harbor,
+            ContainerDriver::Kubernetes(_) => DbKind::Kubernetes,
         }
     }
 
     pub fn is_container_kind(kind: DbKind) -> bool {
-        matches!(kind, DbKind::Docker | DbKind::Registry | DbKind::Harbor)
+        matches!(kind, DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes)
     }
 
     /// Docker Engine API 用戶端（非 Docker 連線回 Unsupported）。
@@ -55,6 +59,14 @@ impl ContainerDriver {
         match self {
             ContainerDriver::Harbor(d) => Ok(d.api.clone()),
             _ => Err(AppError::Unsupported(t!("此連線不是 Harbor").into())),
+        }
+    }
+
+    /// Kubernetes API 用戶端（非 Kubernetes 連線回 Unsupported）。
+    pub fn k8s(&self) -> AppResult<Arc<K8sApi>> {
+        match self {
+            ContainerDriver::Kubernetes(d) => Ok(d.api.clone()),
+            _ => Err(AppError::Unsupported(t!("此連線不是 Kubernetes").into())),
         }
     }
 }
@@ -83,6 +95,7 @@ pub fn prepare_tunnel(cfg: &mut ConnectionConfig) -> AppResult<()> {
             let t = crate::db::http_tls::reg_target(cfg, kind);
             normalize_target(cfg, t.tls, (80, 443), &format!("{kind}_tls"), &format!("{kind}_prefix"));
         }
+        DbKind::Kubernetes => crate::db::k8s::prepare_tunnel(cfg)?,
         _ => {}
     }
     Ok(())
@@ -94,6 +107,7 @@ macro_rules! delegate {
             ContainerDriver::Docker($d) => $e,
             ContainerDriver::Registry($d) => $e,
             ContainerDriver::Harbor($d) => $e,
+            ContainerDriver::Kubernetes($d) => $e,
         }
     };
 }
@@ -105,6 +119,7 @@ impl DatabaseDriver for ContainerDriver {
             DbKind::Docker => DockerDriver::connect(config).await.map(ContainerDriver::Docker),
             DbKind::Registry => RegistryDriver::connect(config).await.map(ContainerDriver::Registry),
             DbKind::Harbor => HarborDriver::connect(config).await.map(ContainerDriver::Harbor),
+            DbKind::Kubernetes => K8sDriver::connect(config).await.map(ContainerDriver::Kubernetes),
             other => Err(AppError::Unsupported(format!("{other:?}"))),
         }
     }

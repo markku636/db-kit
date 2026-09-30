@@ -106,6 +106,10 @@ pub fn run() {
             kafka_alert_rules: Arc::new(Mutex::new(Vec::new())),
             #[cfg(feature = "docker")]
             docker_streams: Arc::new(db::docker::stream::DockerStreams::new()),
+            #[cfg(feature = "docker")]
+            k8s_streams: Arc::new(db::k8s::stream::K8sStreams::new()),
+            #[cfg(feature = "docker")]
+            k8s_forwards: Arc::new(db::k8s::forward::K8sForwards::new()),
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -429,6 +433,68 @@ pub fn run() {
             commands::rabbitmq_purge,
             #[cfg(feature = "rabbitmq")]
             commands::rabbitmq_delete_queue,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_kubeconfig_contexts,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_default_kubeconfig,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_overview,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_namespaces,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_discovery,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_events,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_pod_metrics,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_node_metrics,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_table,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_list,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_get,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_get_yaml,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_replace_yaml,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_apply_yaml,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_delete,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_scale,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_restart,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_cronjob_suspend,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_cronjob_trigger,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_node_cordon,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_secret_data,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_pod_env,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_resolve_target,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_logs_open,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_exec_open,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_exec_write,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_exec_resize,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_stream_close,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_forward_open,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_forward_list,
+            #[cfg(feature = "docker")]
+            commands::k8s::k8s_forward_close,
             #[cfg(feature = "docker")]
             commands::docker::docker_overview,
             #[cfg(feature = "docker")]

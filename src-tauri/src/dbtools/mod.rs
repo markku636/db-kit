@@ -154,7 +154,7 @@ fn supports_explain(kind: DbKind) -> bool {
 fn database_optional(kind: DbKind) -> bool {
     matches!(
         kind,
-        DbKind::Sqlite | DbKind::Kafka | DbKind::Elastic | DbKind::RabbitMq | DbKind::Docker | DbKind::Registry | DbKind::Harbor
+        DbKind::Sqlite | DbKind::Kafka | DbKind::Elastic | DbKind::RabbitMq | DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes
     )
 }
 

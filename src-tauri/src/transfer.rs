@@ -100,7 +100,7 @@ pub async fn transfer_table(
     }
 
     // 訊息佇列與容器 / 映像倉庫類連線沒有可傳輸的資料表。
-    let non_tabular = |k: DbKind| matches!(k, DbKind::RabbitMq | DbKind::Docker | DbKind::Registry | DbKind::Harbor);
+    let non_tabular = |k: DbKind| matches!(k, DbKind::RabbitMq | DbKind::Docker | DbKind::Registry | DbKind::Harbor | DbKind::Kubernetes);
     if non_tabular(manager.kind(src_id)?) || non_tabular(manager.kind(dst_id)?) {
         return Err(AppError::Unsupported(t!("此類連線不支援資料傳輸").into()));
     }

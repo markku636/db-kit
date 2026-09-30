@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { api, ConnectionConfig, DbKind, KIND_META, SshAuthMethod } from "./api";
+import { api, ConnectionConfig, DbKind, isContainerKind, KIND_META, SshAuthMethod } from "./api";
 import { applyParsedToForm, ChangedField, ConnFormFields, looksLikeConnectionString } from "./connString";
 import { defaultDockerSocket, isLocalDockerHost } from "./dockerModel";
 import { parseSshString, type ParsedSsh } from "./sshConnString";
@@ -12,6 +12,7 @@ import { Plug, FolderOpen, ClipboardPaste } from "lucide-react";
 import { useT } from "./i18n";
 import KindPicker from "./KindPicker";
 import SshKeyPathField from "./SshKeyPathField";
+import { K8sClusterFields, K8sForwardFields, k8sForwardEnabled, k8sOptionsFor, pickK8sOpts, type K8sOpts } from "./K8sConnFields";
 import { useStore } from "./store";
 
 interface Props {
@@ -201,6 +202,12 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     seed?.options?.registry_tls_insecure === "1" || seed?.options?.harbor_tls_insecure === "1");
   // Registry：不開放 _catalog 的服務（Docker Hub / GHCR…）要手動列出想瀏覽的 repository。
   const [regRepos, setRegRepos] = useState(seed?.options?.registry_repos ?? "");
+  // Kubernetes：叢集連線本身的設定，以及一般 DB 連線「經由 port-forward」的設定（都存 options 的 k8s_* 鍵）。
+  const [k8sOpts, setK8sOpts] = useState<K8sOpts>(() => pickK8sOpts(seed?.options));
+  const setK8sOpt = (k: string, v: string) => setK8sOpts((o) => ({ ...o, [k]: v }));
+  const k8sForward = kind !== "kubernetes" && k8sForwardEnabled(k8sOpts);
+  const k8sManual = k8sOpts.k8s_source === "manual";
+  const hasK8sConns = useStore((s) => s.connections.some((c) => c.kind === "kubernetes"));
 
   // 任一連線欄位變動就清掉上次測試結果，避免「連線成功」殘留成誤導的假成功訊號（改了 host 卻仍顯示舊成功）。
   useEffect(() => {
@@ -212,7 +219,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
       kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass, connectUrl, connectUser, connectPass,
       esAuth, esTls, esSslCa, esSslInsecure, esShowHidden,
       rabbitVhost, rabbitTls, rabbitMgmtUrl,
-      dockerTls, dockerTlsCa, dockerTlsCert, dockerTlsKey, dockerTlsInsecure, dockerApiVersion, regTlsCa, regTlsInsecure, regRepos]);
+      dockerTls, dockerTlsCa, dockerTlsCert, dockerTlsKey, dockerTlsInsecure, dockerApiVersion, regTlsCa, regTlsInsecure, regRepos, k8sOpts]);
 
   // Elastic：host 為完整 URL 時 TLS 由 URL 決定（勾選不顯示/停用）。
   const esHostIsUrl = /^https?:\/\//i.test(host.trim());
@@ -239,9 +246,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     kind === "kafka" ? kafkaProtocol.startsWith("SASL")
     : kind === "elastic" ? esAuth !== "none"
     : kind === "docker" ? false
+    : kind === "kubernetes" ? k8sManual
     : true;
   // Elastic API Key 模式：password 存 API key，username 不使用（存檔清空）。
-  const usesUsername = usesAuth && !(kind === "elastic" && esAuth === "apikey");
+  const usesUsername = usesAuth && !(kind === "elastic" && esAuth === "apikey") && kind !== "kubernetes";
 
   const build = (): ConnectionConfig => ({
     id: initial?.id ?? crypto.randomUUID(),
@@ -251,16 +259,18 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
         ? `${KIND_META[kind].label}:${database || "memory"}`
         : kind === "docker" && dockerMode === "local"
         ? `${KIND_META[kind].label}@local`
+        : kind === "kubernetes" && !k8sManual
+        ? `${KIND_META[kind].label}@${k8sOpts.k8s_context || "kubeconfig"}`
         : `${KIND_META[kind].label}@${host}`),
     kind,
     host,
     // Docker 本機走 socket；Registry / Harbor 的埠寫在網址裡。
-    port: (kind === "docker" && dockerMode === "local") || regKind ? 0 : port,
+    port: (kind === "docker" && dockerMode === "local") || regKind || kind === "kubernetes" ? 0 : port,
     username: usesUsername ? username : "",
     password: usesAuth ? password : "",
     database: KIND_META[kind].noDatabase ? null : database || null,
     max_connections: 5,
-    ssh_enabled: !KIND_META[kind].fileBased && !(kind === "docker" && dockerMode === "local") && sshEnabled,
+    ssh_enabled: !KIND_META[kind].fileBased && !(kind === "docker" && dockerMode === "local") && !k8sForward && sshEnabled,
     ssh_host: sshHost,
     ssh_port: sshPort,
     ssh_username: sshUsername,
@@ -358,6 +368,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
       // CA 只在 verify-* 模式生效（require/required 不驗證憑證，sqlx 會忽略）。
       if (VERIFY_SSL_MODES.includes(sslMode) && sslCa.trim()) o.ssl_ca = sslCa.trim();
     }
+    // Kubernetes：叢集設定（kubernetes）或經由 port-forward（其他 kind）。
+    Object.assign(o, k8sOptionsFor(kind, k8sOpts));
     // 正式環境標記與 kind 無關（每種 DB 都可能是 prod），故放在各 kind 分支之外。
     if (prod) o.prod = "1";
     return Object.keys(o).length ? o : undefined;
@@ -365,9 +377,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
 
   // 無 root 帳號慣例的類型（Kafka / Elastic）：切入時清掉預設 root、切出且留空時補回。
   const noRootKind = (k: DbKind) =>
-    k === "kafka" || k === "elastic" || k === "docker" || k === "registry" || k === "harbor";
+    k === "kafka" || k === "elastic" || k === "docker" || k === "registry" || k === "harbor" || k === "kubernetes";
   // host 欄以 socket 路徑 / URL 為主的類型：切入時清掉預設的 127.0.0.1，切出且留空時補回。
-  const urlHostKind = (k: DbKind) => k === "docker" || k === "registry" || k === "harbor";
+  const urlHostKind = (k: DbKind) => k === "docker" || k === "registry" || k === "harbor" || k === "kubernetes";
 
   const onKindChange = (k: DbKind) => {
     // 僅在使用者尚未自訂埠（仍等於前一個 kind 的預設埠）時，才覆寫為新 kind 的預設埠
@@ -545,7 +557,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
   const external = KIND_META[kind].external;
   // 檔案型路徑可留空；外部 gateway 需 base URL；伺服器型至少需要主機。
   // Docker 本機模式可留空（＝本機預設 socket / pipe）。
-  const valid = external ? baseUrl.trim() !== "" : fileBased || host.trim() !== "" || (kind === "docker" && dockerMode === "local");
+  const valid = external ? baseUrl.trim() !== ""
+    : kind === "kubernetes" ? !k8sManual || host.trim() !== ""
+    : k8sForward ? !!k8sOpts.k8s_target?.trim()
+    : fileBased || host.trim() !== "" || (kind === "docker" && dockerMode === "local");
   const handleSave = () => {
     if (!valid) return;
     const cfg = build();
@@ -735,7 +750,9 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
           </div>
         </Field>
       ) : (
-        <>
+        kind === "kubernetes" ? (
+          <K8sClusterFields opts={k8sOpts} setOpt={setK8sOpt} host={host} setHost={setHost} password={password} setPassword={setPassword} editing={editing} />
+        ) : <>
           {kind === "docker" && (
             <Field label={t("連線方式")}>
               <Segmented
@@ -1167,7 +1184,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
         </>
       )}
 
-      {!fileBased && !external && !(kind === "docker" && dockerMode === "local") && (
+      {!fileBased && !external && !isContainerKind(kind) && (hasK8sConns || k8sForward) && (
+        <Section>
+          <K8sForwardFields opts={k8sOpts} setOpt={setK8sOpt} defaultPort={KIND_META[kind].defaultPort} />
+        </Section>
+      )}
+
+      {!fileBased && !external && !(kind === "docker" && dockerMode === "local") && !k8sForward && (
         <Section>
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={sshEnabled} onChange={(e) => setSshEnabled(e.target.checked)} />
