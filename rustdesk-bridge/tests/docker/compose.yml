@@ -1,0 +1,32 @@
+# 整合測試：自架的 ID 伺服器（hbbs）+ 中繼伺服器（hbbr）+ 用它們的 RustDesk 被控端。
+#   docker compose -f rustdesk-bridge/tests/docker/compose.yml up -d --build
+#   docker compose -f rustdesk-bridge/tests/docker/compose.yml exec peer rustdesk --get-id      # 對方 ID
+#   docker compose -f rustdesk-bridge/tests/docker/compose.yml exec hbbs cat /root/id_ed25519.pub  # 伺服器公鑰
+# 然後在 rustdesk-bridge/ 跑（見 main.rs 的 real_id_server_login_and_first_frame）：
+#   DBKIT_RUSTDESK_IT_ID=<ID> DBKIT_RUSTDESK_IT_KEY=<公鑰> cargo test -- --ignored real_id_server
+# 主機上的 bridge 與容器裡的被控端都用 host.docker.internal 找伺服器（Docker Desktop 會把它指到主機），
+# 所以 hbbs 告訴兩邊的中繼位址兩邊都連得到；主機的 hosts 檔裡 host.docker.internal 過時（指到舊 IP）時，
+# 用 DBKIT_HOST_IP=<主機 IP> 指定。hbbs 預設（-k -）就會要求用戶端帶正確的 Key。
+name: dbkit-rustdesk-id
+services:
+  hbbs:
+    image: rustdesk/rustdesk-server:latest
+    command: hbbs -r ${DBKIT_HOST_IP:-host.docker.internal}:21117
+    ports: ["21115:21115", "21116:21116", "21116:21116/udp"]
+    volumes: ["server:/root"]
+  hbbr:
+    image: rustdesk/rustdesk-server:latest
+    command: hbbr
+    ports: ["21117:21117"]
+    volumes: ["server:/root"]
+  peer:
+    build: .
+    image: dbkit-rustdesk-it
+    environment:
+      RD_SERVER: host.docker.internal
+      RD_RELAY: ${DBKIT_HOST_IP:-host.docker.internal}
+      RD_KEY_FILE: /srv/rd/id_ed25519.pub
+    volumes: ["server:/srv/rd:ro"]
+    depends_on: [hbbs, hbbr]
+volumes:
+  server:

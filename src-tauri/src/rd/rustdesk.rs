@@ -40,18 +40,65 @@ pub fn bridge_path() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
+/// 經 ID 伺服器連線的設定（輔助程式 `connect` 指令的 `rendezvous` 欄位）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Rendezvous {
+    /// ID 伺服器（`host[:port]`，預設埠 21116）；空 = RustDesk 公開伺服器。
+    pub server: String,
+    /// 中繼伺服器；空 = 用 ID 伺服器告知的（再沒有就是 ID 伺服器的主機 + 21117）。
+    pub relay: String,
+    /// ID 伺服器的公鑰（base64）。
+    pub key: String,
+    pub force_relay: bool,
+}
+
 /// 連線參數（密碼經 stdin 傳，不放命令列）。
 #[derive(Clone)]
 pub struct RustdeskParams {
     pub host: String,
     pub port: u16,
     pub password: String,
+    /// 有值 = `host` 是對方的 RustDesk ID，經 ID 伺服器找人；None = Direct IP（直接連 `host:port`）。
+    pub rendezvous: Option<Rendezvous>,
 }
 
 impl std::fmt::Debug for RustdeskParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RustdeskParams").field("host", &self.host).field("port", &self.port).finish()
+        f.debug_struct("RustdeskParams")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("rendezvous", &self.rendezvous)
+            .finish()
     }
+}
+
+/// 對方欄填的是 RustDesk ID（要經 ID 伺服器）還是位址（Direct IP）。照官方用戶端：IP 位址與網域是
+/// Direct IP，其他都是 ID（數字 ID，或自訂的英數 ID）；db-kit 的埠另有欄位，所以有 `.` / `:` 就算位址。
+pub fn is_rustdesk_id(host: &str) -> bool {
+    let h = normalize_id(host);
+    !h.is_empty() && !h.contains('.') && !h.contains(':') && !h.eq_ignore_ascii_case("localhost")
+}
+
+/// ID 常被寫成 `123 456 789`：去掉空白。
+pub fn normalize_id(host: &str) -> String {
+    host.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// 給輔助程式的第一則指令。
+fn connect_command(p: &RustdeskParams) -> serde_json::Value {
+    let mut v = json!({
+        "t": "connect",
+        "host": p.host,
+        "port": p.port,
+        "password": p.password,
+        "decoders": { "vp9": true, "vp8": true, "av1": false },
+        "my_name": std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_default(),
+    });
+    if let Some(r) = &p.rendezvous {
+        v["peer"] = json!(p.host);
+        v["rendezvous"] = json!(r);
+    }
+    v
 }
 
 pub async fn read_msg<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<Option<Vec<u8>>> {
@@ -97,6 +144,10 @@ pub struct Connected {
     pub hello: Vec<u8>,
     /// 目前螢幕的大小（沒有資訊時 0）。
     pub size: (u16, u16),
+    /// 跟對方之間有加密（經 ID 伺服器、驗過對方公鑰時）。
+    pub secure: bool,
+    /// `ip`（Direct IP）/ `direct`（打洞直連）/ `lan` / `relay`（經中繼伺服器）。
+    pub route: String,
 }
 
 /// 啟動輔助程式並登入。密碼錯 → `RdAuth`（呼叫端重問密碼再來）。
@@ -113,19 +164,9 @@ pub async fn connect(p: &RustdeskParams, timeout: Duration) -> AppResult<Connect
         .map_err(|e| AppError::Rd(tf!("無法啟動 RustDesk 連線元件：{e}", e = e)))?;
     let mut stdin = child.stdin.take().ok_or_else(|| AppError::Rd("bridge stdin".into()))?;
     let mut stdout = child.stdout.take().ok_or_else(|| AppError::Rd("bridge stdout".into()))?;
-    write_json(
-        &mut stdin,
-        &json!({
-            "t": "connect",
-            "host": p.host,
-            "port": p.port,
-            "password": p.password,
-            "decoders": { "vp9": true, "vp8": true, "av1": false },
-            "my_name": std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_default(),
-        }),
-    )
-    .await
-    .map_err(|e| AppError::Rd(tf!("RustDesk 連線元件沒有回應：{e}", e = e)))?;
+    write_json(&mut stdin, &connect_command(p))
+        .await
+        .map_err(|e| AppError::Rd(tf!("RustDesk 連線元件沒有回應：{e}", e = e)))?;
 
     // 等登入結果（對方可能要在畫面上按「接受」，所以時間給長一點）。
     let wait = async {
@@ -139,22 +180,24 @@ pub async fn connect(p: &RustdeskParams, timeout: Duration) -> AppResult<Connect
                     let cur = v["peer"]["current_display"].as_u64().unwrap_or(0) as usize;
                     let d = &v["peer"]["displays"][cur];
                     let size = (d["width"].as_u64().unwrap_or(0) as u16, d["height"].as_u64().unwrap_or(0) as u16);
-                    return Ok((msg, size));
+                    let secure = v["secure"].as_bool().unwrap_or(false);
+                    let route = v["route"].as_str().unwrap_or("ip").to_string();
+                    return Ok((msg, size, secure, route));
                 }
                 Some("login_error") => {
                     let m = v["message"].as_str().unwrap_or_default().to_string();
                     return Err(AppError::RdAuth(login_error_text(&m)));
                 }
                 Some("error") | Some("closed") => {
-                    let m = v["message"].as_str().or(v["reason"].as_str()).unwrap_or_default().to_string();
-                    return Err(AppError::Rd(m));
+                    let m = v["message"].as_str().or(v["reason"].as_str()).unwrap_or_default();
+                    return Err(AppError::Rd(bridge_error_text(v["code"].as_str(), m)));
                 }
                 _ => {}
             }
         }
     };
     match tokio::time::timeout(timeout, wait).await {
-        Ok(Ok((hello, size))) => Ok(Connected { child, stdin, stdout, hello, size }),
+        Ok(Ok((hello, size, secure, route))) => Ok(Connected { child, stdin, stdout, hello, size, secure, route }),
         Ok(Err(e)) => {
             let _ = child.kill().await;
             Err(e)
@@ -172,6 +215,22 @@ fn login_error_text(m: &str) -> String {
         "Wrong Password" => t!("RustDesk 密碼錯誤").into(),
         "No Password Access" | "Password Required" => t!("對方要求輸入密碼").into(),
         _ if m.contains("denied") || m.contains("Denied") => tf!("對方拒絕了連線：{m}", m = m),
+        _ => m.to_string(),
+    }
+}
+
+/// 輔助程式的錯誤（`code` 見 rustdesk-bridge/src/rendezvous.rs）→ 使用者看得懂的句子；沒有 code = 原文。
+fn bridge_error_text(code: Option<&str>, m: &str) -> String {
+    match code {
+        Some("id_not_exist") => t!("找不到這個 RustDesk ID：請確認 ID 沒有打錯，而且這裡的 ID 伺服器跟對方 RustDesk 設定的是同一台").into(),
+        Some("offline") => t!("對方不在線上：對方電腦沒開 RustDesk，或它連不到 ID 伺服器").into(),
+        Some("key_mismatch") => t!("ID 伺服器拒絕連線：Key 不符。請在連線設定填入 ID 伺服器的公鑰（跟對方 RustDesk 設定的 Key 相同）").into(),
+        Some("key_overuse") => t!("ID 伺服器拒絕連線：這個 Key 的使用量已達上限").into(),
+        Some("rendezvous_connect") => tf!("連不到 ID 伺服器：{m}", m = m),
+        Some("rendezvous_timeout") => t!("ID 伺服器沒有回應（對方可能剛離線，稍後再試）").into(),
+        Some("relay_connect") => tf!("連不到中繼伺服器：{m}", m = m),
+        Some("relay_refused") => tf!("中繼伺服器拒絕連線：{m}", m = m),
+        Some("relay_failed") => tf!("經中繼伺服器連線失敗：{m}", m = m),
         _ => m.to_string(),
     }
 }
@@ -242,6 +301,35 @@ mod tests {
     fn login_errors_are_readable() {
         assert_eq!(login_error_text("Wrong Password"), "RustDesk 密碼錯誤");
         assert_eq!(login_error_text("weird"), "weird");
+        assert!(bridge_error_text(Some("key_mismatch"), "Key mismatch").contains("Key"));
+        assert!(bridge_error_text(Some("relay_connect"), "connect x: timed out").ends_with("connect x: timed out"));
+        assert_eq!(bridge_error_text(None, "raw"), "raw");
+        assert_eq!(bridge_error_text(Some("future_code"), "raw"), "raw", "不認得的 code → 原文");
+    }
+
+    #[test]
+    fn id_or_address() {
+        for id in ["216830407", "216 830 407", "my_office-pc"] {
+            assert!(is_rustdesk_id(id), "{id}");
+        }
+        for addr in ["192.168.1.5", "rd.example.com", "::1", "fe80::1", "localhost", "LOCALHOST", "", "  "] {
+            assert!(!is_rustdesk_id(addr), "{addr}");
+        }
+        assert_eq!(normalize_id(" 216 830 407 "), "216830407");
+    }
+
+    #[test]
+    fn connect_command_carries_rendezvous_only_for_ids() {
+        let mut p = RustdeskParams { host: "10.0.0.5".into(), port: 21118, password: "pw".into(), rendezvous: None };
+        let v = connect_command(&p);
+        assert_eq!((v["host"].as_str(), v["port"].as_u64()), (Some("10.0.0.5"), Some(21118)));
+        assert!(v.get("rendezvous").is_none() && v.get("peer").is_none(), "Direct IP：沒有 rendezvous");
+        p.host = "216830407".into();
+        p.rendezvous = Some(Rendezvous { server: "proxy.example.com".into(), key: "K=".into(), force_relay: true, ..Default::default() });
+        let v = connect_command(&p);
+        assert_eq!(v["peer"], "216830407");
+        assert_eq!(v["rendezvous"], json!({ "server": "proxy.example.com", "relay": "", "key": "K=", "force_relay": true }));
+        assert!(!format!("{p:?}").contains("pw"), "Debug 不印密碼");
     }
 
     #[test]

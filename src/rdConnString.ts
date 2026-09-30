@@ -552,3 +552,52 @@ export function applyRdString(base: RdSession, p: ParsedRd): RdSession {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// RustDesk 的「ID / 中繼伺服器」設定字串
+// ---------------------------------------------------------------------------
+
+export interface RustdeskServerConfig {
+  /** ID 伺服器（hbbs）。 */
+  host: string;
+  /** 中繼伺服器（hbbr）。 */
+  relay: string;
+  /** API 伺服器（帳號 / 通訊錄用；連線用不到）。 */
+  api: string;
+  /** ID 伺服器的公鑰。 */
+  key: string;
+}
+
+/**
+ * RustDesk「ID / 中繼伺服器」對話框的匯出字串 → 各欄位；認不出來回 null。
+ * 格式：`{"host":…,"relay":…,"api":…,"key":…}` 的 JSON 本身，或它的 base64（URL-safe、可省略 `=`）整串倒過來寫。
+ */
+export function parseRustdeskServerConfig(input: string): RustdeskServerConfig | null {
+  const s = input.trim();
+  if (!s || /\s/.test(s)) return null;
+  const tryJson = (text: string): RustdeskServerConfig | null => {
+    try {
+      const v: unknown = JSON.parse(text);
+      if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+      const o = v as Record<string, unknown>;
+      const str = (k: string) => (typeof o[k] === "string" ? (o[k] as string).trim() : "");
+      const c = { host: str("host"), relay: str("relay"), api: str("api"), key: str("key") };
+      // 至少要有 ID 伺服器或 Key，才算是伺服器設定（避免把隨便一段 JSON 當成設定）。
+      return "host" in o && (c.host || c.key) ? c : null;
+    } catch {
+      return null;
+    }
+  };
+  if (s.startsWith("{")) return tryJson(s);
+  const b64 = [...s].reverse().join("").replace(/-/g, "+").replace(/_/g, "/");
+  if (!/^[A-Za-z0-9+/]+=*$/.test(b64)) return null;
+  const padded = b64.replace(/=+$/, "") + "=".repeat((4 - (b64.replace(/=+$/, "").length % 4)) % 4);
+  let text: string;
+  try {
+    const bin = atob(padded);
+    text = new TextDecoder().decode(Uint8Array.from(bin, (ch) => ch.charCodeAt(0)));
+  } catch {
+    return null;
+  }
+  return tryJson(text);
+}

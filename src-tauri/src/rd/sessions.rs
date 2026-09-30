@@ -74,9 +74,14 @@ pub struct RdOptions {
     pub clipboard: bool,
     pub vnc_security: VncSecurity,
     pub vnc_shared: bool,
+    /// RustDesk ID 伺服器（hbbs，`host[:port]`）；空 = 公開伺服器。
     pub rustdesk_server: String,
+    /// RustDesk ID 伺服器的公鑰（base64）。
     pub rustdesk_key: String,
+    /// 強制走中繼伺服器。
     pub rustdesk_relay: bool,
+    /// RustDesk 中繼伺服器（hbbr）；空 = 用 ID 伺服器告知的。
+    pub rustdesk_relay_server: String,
     /// 0 → 20 秒。
     pub connect_timeout_secs: u32,
     pub ui: BTreeMap<String, String>,
@@ -97,6 +102,7 @@ impl Default for RdOptions {
             rustdesk_server: String::new(),
             rustdesk_key: String::new(),
             rustdesk_relay: false,
+            rustdesk_relay_server: String::new(),
             connect_timeout_secs: 0,
             ui: BTreeMap::new(),
         }

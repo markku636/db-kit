@@ -245,7 +245,9 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
     <>
       {unencrypted && (
         <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded bg-warning/15 text-warning text-[11px] shrink-0"
-          title={t("這條連線的畫面與鍵盤內容沒有加密；建議在主機設定改成「經 SSH 主機連線」。")} data-rd-unencrypted="">
+          title={info?.security === "rustdesk-id"
+            ? t("這條連線的畫面與鍵盤內容沒有加密：沒有填 ID 伺服器的 Key（或填錯），無法驗證對方的身分。在主機設定填入正確的 Key 就會加密。")
+            : t("這條連線的畫面與鍵盤內容沒有加密；建議在主機設定改成「經 SSH 主機連線」。")} data-rd-unencrypted="">
           <Icon icon={ShieldAlert} size={11} />{t("未加密")}
         </span>
       )}

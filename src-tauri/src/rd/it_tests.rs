@@ -205,13 +205,16 @@ mod rdp {
 // docker run -d --name dbkit-rustdesk -p 21118:21118 dbkit-rustdesk-it          # Direct IP、密碼 dbkit123
 // cargo build --manifest-path rustdesk-bridge/Cargo.toml
 // DBKIT_RUSTDESK_BRIDGE=rustdesk-bridge/target/debug/dbk-rustdesk-bridge(.exe) cargo test ... rd::it_tests::rustdesk -- --ignored
+//
+// 用 ID 經自架的 ID / 中繼伺服器（rustdesk-bridge/tests/docker/compose.yml，對方 ID 與公鑰的取法見該檔）：
+// DBKIT_RUSTDESK_IT_ID=<ID> DBKIT_RUSTDESK_IT_KEY=<公鑰> DBKIT_RUSTDESK_BRIDGE=... cargo test ... rd::it_tests::rustdesk::rustdesk_id -- --ignored
 // ```
 mod rustdesk {
     use super::*;
     use crate::rd::rustdesk::{self as r, RustdeskParams};
 
     fn params(password: &str) -> RustdeskParams {
-        RustdeskParams { host: host("DBKIT_RUSTDESK_IT_HOST"), port: 21118, password: password.into() }
+        RustdeskParams { host: host("DBKIT_RUSTDESK_IT_HOST"), port: 21118, password: password.into(), rendezvous: None }
     }
 
     /// 啟動輔助程式 → 登入 → 工作階段迴圈把影像轉給 sink → 使用者斷線。
@@ -246,6 +249,37 @@ mod rustdesk {
         tokio::time::sleep(Duration::from_millis(300)).await;
         ctl_tx.send(RdCtl::Close).unwrap();
         assert_eq!(tokio::time::timeout(T, task).await.unwrap().unwrap(), None, "使用者斷線 = 沒有原因");
+    }
+
+    fn id_params(key: &str) -> RustdeskParams {
+        RustdeskParams {
+            host: std::env::var("DBKIT_RUSTDESK_IT_ID").expect("DBKIT_RUSTDESK_IT_ID"),
+            port: 0,
+            password: "dbkit123".into(),
+            rendezvous: Some(r::Rendezvous { server: host("DBKIT_RUSTDESK_IT_SERVER"), key: key.into(), ..Default::default() }),
+        }
+    }
+
+    /// 用 RustDesk ID：經 ID 伺服器找到對方、接上、驗過公鑰後加密。
+    #[tokio::test]
+    #[ignore]
+    async fn rustdesk_id_via_rendezvous_is_encrypted() {
+        let key = std::env::var("DBKIT_RUSTDESK_IT_KEY").expect("DBKIT_RUSTDESK_IT_KEY");
+        let c = r::connect(&id_params(&key), Duration::from_secs(60)).await.expect("登入");
+        assert!(c.secure, "驗過對方公鑰 → 加密");
+        assert!(["relay", "direct", "lan"].contains(&c.route.as_str()), "{}", c.route);
+        assert!(c.size.0 > 0 && c.size.1 > 0, "{:?}", c.size);
+    }
+
+    /// Key 填錯：ID 伺服器直接拒絕，錯誤是看得懂的句子（是一般錯誤，不會被當成密碼錯而一直重問密碼）。
+    #[tokio::test]
+    #[ignore]
+    async fn rustdesk_id_wrong_key_is_readable() {
+        let bad = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        match r::connect(&id_params(bad), Duration::from_secs(60)).await.err().unwrap() {
+            AppError::Rd(m) => assert!(m.contains("Key"), "{m}"),
+            e => panic!("{e:?}"),
+        }
     }
 
     #[tokio::test]

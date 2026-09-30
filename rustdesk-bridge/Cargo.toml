@@ -19,6 +19,11 @@ protobuf = { version = "3.7", features = ["with-bytes"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# ID 伺服器 / 中繼連線的金鑰交換（照 RustDesk 用的 libsodium：Ed25519 簽章、crypto_box、crypto_secretbox），全部純 Rust。
+ed25519-dalek = "2"
+crypto_box = "0.9"
+crypto_secretbox = "0.1"
+base64 = "0.22"
 
 [build-dependencies]
 protobuf-codegen = "3.7"

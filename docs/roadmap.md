@@ -28,7 +28,8 @@
 | — | 遠端桌面第二階段：RDP / VNC 剪貼簿文字同步（系統剪貼簿由後端讀寫）、Windows 低階鍵盤攔截（全螢幕時 Win / Alt+Tab / Alt+F4 / Ctrl+Esc 直接進遠端） | ✅ 完成 |
 | — | 遠端桌面第三階段：VeNCrypt TLS、RDP 剪貼簿圖片 / 檔案、macOS 全螢幕按鍵攔截（需輔助使用權限） | ⏳ 規劃中 |
 | — | RustDesk 相容連線第一階段：獨立 AGPL 輔助程式 `rustdesk-bridge/`（stdin / stdout 與 db-kit 對話）、Direct IP、密碼登入 / 對方按接受、VP9 / VP8 影像原封不動交給 WebView 的 WebCodecs 解碼、鍵盤滑鼠、可經 SSH 主機轉接 | ✅ 完成 |
-| — | RustDesk 第二階段：ID 伺服器（hbbs）→ 中繼（hbbr）→ 加密連線（簽章 ID、box / secretbox 金鑰交換）、剪貼簿、游標圖 | ⏳ 規劃中 |
+| — | RustDesk 第二階段：用 RustDesk ID 連線——ID 伺服器（hbbs，公開或自架 + Key）→ TCP 打洞直連，不行就經中繼（hbbr）→ 驗過簽章的端到端加密（box / secretbox 金鑰交換）；可貼上 RustDesk 匯出的伺服器設定字串 | ✅ 完成 |
+| — | RustDesk 第三階段：剪貼簿、游標圖、UDP / IPv6 打洞 | ⏳ 規劃中 |
 | — | 查詢效能分析（EXPLAIN） | ✅ 完成 |
 | — | 結構編輯（DDL：新增/刪除/改名欄位） | ✅ 完成 |
 | — | ER 圖（表 + 外鍵關係） | ✅ 完成 |

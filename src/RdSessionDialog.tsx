@@ -6,7 +6,7 @@ import { Modal, Field, Input, Button, Icon, Segmented, Select } from "./ui/index
 import { useT } from "./i18n";
 import { sessionLabel, useSshSessions } from "./sshSessions";
 import { useRdSessions } from "./rdSessions";
-import { applyRdString, parseRdString, type ParsedRd } from "./rdConnString";
+import { applyRdString, parseRdString, parseRustdeskServerConfig, type ParsedRd } from "./rdConnString";
 import {
   blankRdSession, defaultRdPort,
   type RdFolder, type RdProtocol, type RdResizeMode, type RdSession, type VncSecurity,
@@ -80,13 +80,15 @@ export default function RdSessionDialog({ open, initial, folders, defaultFolderI
   const [rdServer, setRdServer] = useState(o.rustdesk_server);
   const [rdKey, setRdKey] = useState(o.rustdesk_key);
   const [rdRelay, setRdRelay] = useState(o.rustdesk_relay);
+  const [rdRelayServer, setRdRelayServer] = useState(o.rustdesk_relay_server ?? "");
+  const [rdServerFilled, setRdServerFilled] = useState(false);
   const [fullscreen, setFullscreen] = useState(o.ui?.fullscreen === "1");
   const [filled, setFilled] = useState(init.notice);
   const [hasStoredPassword, setHasStoredPassword] = useState(false);
   const [saving, setSaving] = useState(false);
   const [advOpen, setAdvOpen] = useState(() =>
     o.resize_mode !== "scale" || !o.nla || o.view_only || !o.clipboard || o.vnc_security !== "auto"
-    || !!o.width || !!o.rustdesk_server || o.ui?.fullscreen === "1");
+    || !!o.width || o.ui?.fullscreen === "1");
 
   useEffect(() => {
     if (!open || !initial || !editing) return;
@@ -123,6 +125,7 @@ export default function RdSessionDialog({ open, initial, folders, defaultFolderI
         rustdesk_server: rdServer.trim(),
         rustdesk_key: rdKey.trim(),
         rustdesk_relay: rdRelay,
+        rustdesk_relay_server: rdRelayServer.trim(),
         ui,
       },
     };
@@ -162,13 +165,22 @@ export default function RdSessionDialog({ open, initial, folders, defaultFolderI
     const no = next.options;
     setResizeMode(no.resize_mode); setColorDepth(no.color_depth); setWidth(no.width); setHeight(no.height); setNla(no.nla);
     setViewOnly(no.view_only); setVncSecurity(no.vnc_security); setRdServer(no.rustdesk_server); setRdKey(no.rustdesk_key);
-    setRdRelay(no.rustdesk_relay); setFullscreen(no.ui?.fullscreen === "1");
+    setRdRelay(no.rustdesk_relay); setRdRelayServer(no.rustdesk_relay_server ?? ""); setFullscreen(no.ui?.fullscreen === "1");
     if (p.password) setPassword(p.password);
     const ssh = matchSsh(sshSessions, p.viaSsh);
     if (ssh) setViaSsh(ssh.id);
     const warn = [...p.warnings];
     if (p.viaSsh && !ssh) warn.push(t("找不到 SSH 主機 {host}，請先新增它，再從「經 SSH 主機連線」選擇", { host: p.viaSsh.host }));
     setFilled(warn.length ? { ok: false, text: warn.join("；") } : { ok: true, text: t("已依連線字串填入，請確認後儲存") });
+  };
+
+  // RustDesk 伺服器欄貼上「ID / 中繼伺服器」對話框匯出的設定字串：一次填好 ID 伺服器、中繼伺服器、Key。
+  const onPasteRdServer = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const c = parseRustdeskServerConfig(e.clipboardData.getData("text"));
+    if (!c) return;
+    e.preventDefault();
+    setRdServer(c.host); setRdRelayServer(c.relay); setRdKey(c.key);
+    setRdServerFilled(true);
   };
 
   const isRd = protocol === "rustdesk";
@@ -225,7 +237,7 @@ export default function RdSessionDialog({ open, initial, folders, defaultFolderI
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-3">
         <Field label={hostLabel} className="flex-1 min-w-[14rem]" required
-          hint={isRd ? t("對方電腦的 IP 位址（Direct IP）；用 RustDesk ID 連線會在之後的版本支援") : undefined}>
+          hint={isRd ? t("對方的 RustDesk ID；或對方電腦的 IP 位址（Direct IP，對方要開啟「允許 IP 直接存取」）") : undefined}>
           <Input value={host} onChange={(e) => { setHost(e.target.value); setFilled(null); }} onKeyDown={submitOnEnter} onPaste={onPaste}
             aria-label={hostLabel} placeholder={hostPlaceholder} />
         </Field>
@@ -252,6 +264,28 @@ export default function RdSessionDialog({ open, initial, folders, defaultFolderI
           placeholder={editing && hasStoredPassword ? t("已儲存，留空則不變更") : t("留空＝連線時詢問")} />
       </Field>
       <Checkbox checked={remember} onChange={setRemember} label={t("記住密碼")} hint={t("存進系統鑰匙圈，不寫入設定檔")} />
+      {isRd && (
+        <Section title={t("ID / 中繼伺服器")}>
+          <div className="text-xs text-fg/45">
+            {t("跟對方 RustDesk「設定 → 網路 → ID / 中繼伺服器」填一樣的；也可以直接貼上那裡複製的設定字串")}
+          </div>
+          <div className="flex flex-wrap items-start gap-x-3 gap-y-3">
+            <Field label={t("ID 伺服器")} className="flex-1 min-w-[14rem]" hint={t("留空＝RustDesk 公開伺服器；自架的填 hbbs 位址")}>
+              <Input value={rdServer} onChange={(e) => { setRdServer(e.target.value); setRdServerFilled(false); }} onPaste={onPasteRdServer}
+                placeholder="rustdesk.example.com" aria-label={t("ID 伺服器")} />
+            </Field>
+            <Field label={t("中繼伺服器")} className="flex-1 min-w-[14rem]" hint={t("留空＝用 ID 伺服器告知的")}>
+              <Input value={rdRelayServer} onChange={(e) => setRdRelayServer(e.target.value)} onPaste={onPasteRdServer}
+                aria-label={t("中繼伺服器")} />
+            </Field>
+          </div>
+          <Field label="Key" hint={t("ID 伺服器的公鑰；自架的伺服器通常一定要填")}>
+            <Input value={rdKey} onChange={(e) => setRdKey(e.target.value)} onPaste={onPasteRdServer} className="mono" aria-label="Key" />
+          </Field>
+          {rdServerFilled && <div className="text-xs text-success" data-rd-server-filled="">{t("已依設定字串填入 ID 伺服器、中繼伺服器與 Key")}</div>}
+          <Checkbox checked={rdRelay} onChange={setRdRelay} label={t("強制走中繼伺服器")} />
+        </Section>
+      )}
       {!isRd && (
         <Field label={t("經 SSH 主機連線")}
           hint={sshSessions.length || viaSsh
@@ -330,19 +364,6 @@ export default function RdSessionDialog({ open, initial, folders, defaultFolderI
                 </Select>
               </Field>
               <Checkbox checked={vncShared} onChange={setVncShared} label={t("共享連線（不踢掉其他正在看的人）")} />
-            </Section>
-          )}
-          {isRd && (
-            <Section title="RustDesk">
-              <div className="flex flex-wrap items-start gap-x-3 gap-y-3">
-                <Field label={t("ID / 中繼伺服器")} className="flex-1 min-w-[14rem]" hint={t("留空＝RustDesk 公開伺服器；自架的填 hbbs 位址")}>
-                  <Input value={rdServer} onChange={(e) => setRdServer(e.target.value)} placeholder="rustdesk.example.com" />
-                </Field>
-                <Field label={t("伺服器公鑰")} className="flex-1 min-w-[14rem]">
-                  <Input value={rdKey} onChange={(e) => setRdKey(e.target.value)} className="mono" />
-                </Field>
-              </div>
-              <Checkbox checked={rdRelay} onChange={setRdRelay} label={t("強制走中繼伺服器")} />
             </Section>
           )}
         </>

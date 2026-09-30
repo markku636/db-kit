@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyRdString, looksLikeRdString, parseRdString, splitDomainUser, type ParsedRd } from "./rdConnString";
+import { applyRdString, looksLikeRdString, parseRdString, parseRustdeskServerConfig, splitDomainUser, type ParsedRd } from "./rdConnString";
 import { blankRdSession } from "./rdTypes";
 
 const GATEWAY = "不支援 RD 閘道（gatewayhostname），已略過";
@@ -281,5 +281,29 @@ describe("applyRdString", () => {
     const next = applyRdString(base(), parseRdString("rustdesk://123456789/r@srv?key=K")!);
     expect(next).toMatchObject({ protocol: "rustdesk", host: "123456789", username: "", domain: "" });
     expect(next.options).toMatchObject({ rustdesk_relay: true, rustdesk_server: "srv", rustdesk_key: "K" });
+  });
+});
+
+describe("parseRustdeskServerConfig", () => {
+  // 照 RustDesk 的 ServerConfig.encode：base64Url(JSON)，再整串倒過來。
+  const encode = (o: object) => [...btoa(JSON.stringify(o)).replace(/\+/g, "-").replace(/\//g, "_")].reverse().join("");
+  const cfg = { host: "proxy.example.com", relay: "relay.example.com:21117", api: "", key: "mpTh+jqLYRIiUxay7yPv9Mo+1eB7MIxHRbyRSe0000=" };
+
+  it("解開匯出字串（倒過來的 base64，含 URL-safe 字元與 =）", () => {
+    const s = encode(cfg);
+    expect(s.endsWith("Jye")).toBe(true); // 倒過來的 `{"` = eyJ
+    expect(parseRustdeskServerConfig(s)).toEqual(cfg);
+    expect(parseRustdeskServerConfig(`  ${s}\n`)).toEqual(cfg);
+    expect(parseRustdeskServerConfig(s.replace(/^=+/, ""))).toEqual(cfg);
+  });
+
+  it("也收 JSON 本身（舊版格式）", () => {
+    expect(parseRustdeskServerConfig(JSON.stringify({ host: "h", key: "k" }))).toEqual({ host: "h", relay: "", api: "", key: "k" });
+  });
+
+  it("不是設定就回 null（一般主機名、ID、亂碼、沒有 host 的 JSON）", () => {
+    for (const s of ["proxy.example.com", "123456789", "", "!!!", "abc def", encode({ foo: 1 }), JSON.stringify({ host: "", key: "" }), "[1]"]) {
+      expect(parseRustdeskServerConfig(s)).toBeNull();
+    }
   });
 });

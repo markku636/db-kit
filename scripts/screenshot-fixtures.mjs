@@ -665,7 +665,7 @@ export const HARBOR_VULNS = {
 // DTO 形狀與 src/rdTypes.ts 的 RdSession 一致。
 const RD_OPTS = {
   resize_mode: "scale", color_depth: 32, width: 0, height: 0, nla: true, view_only: false, clipboard: true,
-  vnc_security: "auto", vnc_shared: true, rustdesk_server: "", rustdesk_key: "", rustdesk_relay: false,
+  vnc_security: "auto", vnc_shared: true, rustdesk_server: "", rustdesk_key: "", rustdesk_relay: false, rustdesk_relay_server: "",
   connect_timeout_secs: 0, ui: {},
 };
 export const RD_SESSIONS = { version: 1, folders: [], sessions: [] };

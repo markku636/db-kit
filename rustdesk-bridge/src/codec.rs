@@ -69,9 +69,90 @@ pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Option<Ve
     Ok(Some(data))
 }
 
+/// 可以放在 `select!` 裡的讀取端：讀到一半被取消時，已經收到的 bytes 留在緩衝區，下次接著讀
+/// （`read_frame` 的 `read_exact` 被取消會把讀到一半的封包丟掉，之後整條串流就錯位了）。
+pub struct FrameReader<R> {
+    r: R,
+    buf: bytes::BytesMut,
+}
+
+impl<R: AsyncRead + Unpin> FrameReader<R> {
+    pub fn new(r: R) -> Self {
+        Self { r, buf: bytes::BytesMut::with_capacity(64 * 1024) }
+    }
+
+    fn take_frame(&mut self) -> io::Result<Option<Vec<u8>>> {
+        let Some(&first) = self.buf.first() else { return Ok(None) };
+        let head_len = ((first & 0x3) + 1) as usize;
+        if self.buf.len() < head_len {
+            return Ok(None);
+        }
+        let mut head = [0u8; 4];
+        head[..head_len].copy_from_slice(&self.buf[..head_len]);
+        let n = (u32::from_le_bytes(head) >> 2) as usize;
+        if n > MAX_PACKET {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "packet too big"));
+        }
+        if self.buf.len() < head_len + n {
+            // 大封包：先把空間要夠，但不超過防呆上限。
+            self.buf.reserve((head_len + n - self.buf.len()).min(MAX_PREALLOC * 16));
+            return Ok(None);
+        }
+        let _ = self.buf.split_to(head_len);
+        Ok(Some(self.buf.split_to(n).to_vec()))
+    }
+
+    /// 下一個封包；對方正常關閉 → `Ok(None)`。取消安全。
+    pub async fn next(&mut self) -> io::Result<Option<Vec<u8>>> {
+        loop {
+            if let Some(f) = self.take_frame()? {
+                return Ok(Some(f));
+            }
+            if self.buf.capacity() - self.buf.len() < 16 * 1024 {
+                self.buf.reserve(64 * 1024);
+            }
+            if self.r.read_buf(&mut self.buf).await? == 0 {
+                return if self.buf.is_empty() {
+                    Ok(None)
+                } else {
+                    Err(io::Error::new(io::ErrorKind::UnexpectedEof, "connection closed mid-packet"))
+                };
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 一次只給幾個 bytes、中途還被取消：封包照樣完整、依序讀出。
+    #[tokio::test]
+    async fn frame_reader_survives_cancellation() {
+        let mut wire = Vec::new();
+        for len in [0usize, 5, 0x40, 0x5000] {
+            write_frame(&mut wire, &vec![len as u8; len]).await.unwrap();
+        }
+        let (mut tx, rx) = tokio::io::duplex(64);
+        let feeder = tokio::spawn(async move {
+            for chunk in wire.chunks(7) {
+                tx.write_all(chunk).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        });
+        let mut r = FrameReader::new(rx);
+        let mut got = Vec::new();
+        while got.len() < 4 {
+            // 很短的逾時 = 不斷在讀到一半時取消
+            if let Ok(f) = tokio::time::timeout(std::time::Duration::from_micros(50), r.next()).await {
+                got.push(f.unwrap().unwrap());
+            }
+        }
+        feeder.await.unwrap();
+        assert_eq!(got.iter().map(|f| f.len()).collect::<Vec<_>>(), vec![0, 5, 0x40, 0x5000]);
+        assert!(got[3].iter().all(|b| *b == 0x5000u16 as u8));
+        assert!(r.next().await.unwrap().is_none(), "EOF");
+    }
 
     #[tokio::test]
     async fn roundtrip_all_header_sizes() {

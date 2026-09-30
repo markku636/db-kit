@@ -1,4 +1,4 @@
-// 從 protos/message.proto 產生 Rust 型別（純 Rust 的 protobuf parser，不需要 protoc）。
+// 從 protos/message.proto、protos/rendezvous.proto 產生 Rust 型別（純 Rust 的 protobuf parser，不需要 protoc）。
 // 設定同 RustDesk 的 libs/base/build.rs。
 fn main() {
     let out_dir = format!("{}/protos", std::env::var("OUT_DIR").unwrap());
@@ -6,10 +6,11 @@ fn main() {
     protobuf_codegen::Codegen::new()
         .pure()
         .out_dir(out_dir)
-        .inputs(["protos/message.proto"])
+        .inputs(["protos/message.proto", "protos/rendezvous.proto"])
         .include("protos")
         .customize(protobuf_codegen::Customize::default().tokio_bytes(true))
         .run()
         .expect("Codegen failed.");
     println!("cargo:rerun-if-changed=protos/message.proto");
+    println!("cargo:rerun-if-changed=protos/rendezvous.proto");
 }

@@ -863,6 +863,38 @@ const CASES = {
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 
+  // RustDesk 用 ID 連線：ID / 中繼伺服器欄位不用展開進階設定就看得到；貼上 RustDesk 匯出的伺服器設定字串一次填好三欄；存下去帶著走。
+  async "rd-rustdesk-id-dialog"(page) {
+    await page.getByRole("button", { name: "連線", exact: true }).first().click();
+    await page.getByRole("radiogroup", { name: "連線類型" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByRole("radio", { name: "RustDesk", exact: true }).click();
+    const idServer = page.getByLabel("ID 伺服器", { exact: true });
+    await idServer.waitFor({ timeout: 5000 }).catch(() => {});
+    check("RustDesk 的 ID 伺服器欄位直接看得到（不在進階設定裡）", (await idServer.count()) === 1 && (await page.getByLabel("中繼伺服器", { exact: true }).count()) === 1);
+    // 照 RustDesk 的匯出格式：base64Url(JSON) 整串倒過來。
+    const cfg = { host: "proxy.example.com", relay: "relay.example.com", api: "", key: "mpTh+jqLYRIiUxay7yPv9Mo+1eB7MIxHRbyRSe0000=" };
+    const exported = [...Buffer.from(JSON.stringify(cfg)).toString("base64url")].reverse().join("");
+    await idServer.evaluate((el, text) => {
+      const dt = new DataTransfer();
+      dt.setData("text/plain", text);
+      el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, exported);
+    const vals = {
+      id: await idServer.inputValue().catch(() => null),
+      relay: await page.getByLabel("中繼伺服器", { exact: true }).inputValue().catch(() => null),
+      key: await page.getByLabel("Key", { exact: true }).inputValue().catch(() => null),
+    };
+    check("貼上設定字串填好 ID 伺服器 / 中繼伺服器 / Key", vals.id === cfg.host && vals.relay === cfg.relay && vals.key === cfg.key, JSON.stringify(vals));
+    check("顯示「已依設定字串填入」", (await page.locator("[data-rd-server-filled]").count()) === 1);
+    await page.getByLabel("對方 ID", { exact: true }).fill("216 830 407");
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_RD_SESSION_SAVES__.length > 0, null, { timeout: 5000 }).catch(() => {});
+    const saved = (await page.evaluate(() => window.__DBKIT_RD_SESSION_SAVES__)).at(-1)?.session;
+    check("存下去：ID 去掉空白、伺服器設定都在", saved?.protocol === "rustdesk" && saved?.host === "216830407"
+      && saved?.options?.rustdesk_server === cfg.host && saved?.options?.rustdesk_relay_server === cfg.relay && saved?.options?.rustdesk_key === cfg.key,
+      JSON.stringify(saved?.options));
+  },
+
   // RDP 分頁：畫出後端送的差異區塊、ack、鍵盤送掃描碼且 Ctrl+W 進遠端、工具列組合鍵、全螢幕切換、斷線覆蓋層。
   async "rd-rdp-session"(page) {
     const tree = page.locator("[data-rd-host-tree]");

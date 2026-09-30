@@ -1,8 +1,9 @@
-// 一條 RustDesk 連線（目前只有 Direct IP）：握手、登入、之後把畫面轉給 db-kit、把輸入轉給對方。
+// 一條 RustDesk 連線的封包：登入、之後把畫面轉給 db-kit、把輸入轉給對方。
 //
 // 流程照 RustDesk 官方用戶端（rustdesk/rustdesk 的 src/client.rs、src/client/io_loop.rs，AGPL-3.0）：
-// 1. TCP 連 `host:21118`。Direct IP 沒有 ID 伺服器可以驗對方的公鑰，官方用戶端此時送一則空訊息、以不加密的方式繼續
-//    （`secure_connection` 的 no-sign 分支），這裡一樣。
+// 1. 接上對方：Direct IP 是 TCP 連 `host:21118`，沒有 ID 伺服器可以驗對方的公鑰，官方用戶端此時送一則空訊息、
+//    以不加密的方式繼續（`secure_connection` 的 no-sign 分支）；經 ID 伺服器時見 rendezvous.rs 與 main.rs 的
+//    `secure_handshake`（驗過對方的公鑰就加密）。
 // 2. 對方送 `Hash { salt, challenge }` → 回 `LoginRequest`，密碼欄是 `sha256(sha256(密碼 + salt) + challenge)`
 //    （`handle_hash`）；沒有密碼就送空的，由對方在畫面上按「接受」。
 // 3. `LoginResponse`：`peer_info`（成功，帶螢幕清單）或 `error`（密碼錯等）。
@@ -15,9 +16,9 @@ use std::time::Duration;
 
 use protobuf::{EnumOrUnknown, Message as _, MessageField};
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::AsyncWrite;
 
-use crate::codec::{read_frame, write_frame};
+use crate::codec::write_frame;
 use crate::proto::message::{
     key_event, login_response, message, misc, video_frame, ControlKey, EncodedVideoFrames, KeyEvent, KeyboardMode,
     LoginRequest, Message, Misc, MouseEvent, OptionMessage, SupportedDecoding,
@@ -246,8 +247,17 @@ pub async fn send<W: AsyncWrite + Unpin>(w: &mut W, m: &Message) -> std::io::Res
     write_frame(w, &bytes).await
 }
 
-pub async fn recv<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<Option<Vec<u8>>> {
-    read_frame(r).await
+/// 加密握手完成後（`tx` 有值）每個封包先 secretbox 再加長度標頭。
+pub async fn send_sealed<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    m: &Message,
+    tx: &mut Option<crate::crypto::Cipher>,
+) -> std::io::Result<()> {
+    let bytes = m.write_to_bytes().map_err(std::io::Error::other)?;
+    match tx {
+        Some(c) => write_frame(w, &c.seal(&bytes)).await,
+        None => write_frame(w, &bytes).await,
+    }
 }
 
 #[cfg(test)]

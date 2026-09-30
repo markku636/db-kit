@@ -575,7 +575,8 @@ async fn connect_vnc(_: &AppHandle, _: &AppState, _: &RdUi, _: &Resolved, _: &st
     Err(AppError::Rd(t!("這個版本未內建 VNC").into()))
 }
 
-/// RustDesk（Direct IP）：啟動 AGPL 輔助程式登入；經 SSH 時先開一個本機轉送埠給它撥。
+/// RustDesk：啟動 AGPL 輔助程式登入。對方欄是 RustDesk ID → 經 ID 伺服器（直連打洞或中繼）；
+/// 是位址 → Direct IP，經 SSH 時先開一個本機轉送埠給它撥。
 async fn connect_rustdesk(
     app: &AppHandle,
     state: &AppState,
@@ -589,10 +590,16 @@ async fn connect_rustdesk(
     if s.host.trim().is_empty() {
         return Err(AppError::Rd(t!("未填寫遠端主機").into()));
     }
-    // ID（純數字、沒有點或冒號）要經 ID 伺服器找人；這一版只做 Direct IP。
-    if !s.host.contains('.') && !s.host.contains(':') && s.host.chars().all(|c| c.is_ascii_digit()) {
+    let rendezvous = rustdesk::is_rustdesk_id(&s.host).then(|| rustdesk::Rendezvous {
+        server: s.options.rustdesk_server.trim().to_string(),
+        relay: s.options.rustdesk_relay_server.trim().to_string(),
+        key: s.options.rustdesk_key.trim().to_string(),
+        force_relay: s.options.rustdesk_relay,
+    });
+    // ID 連線要連 ID 伺服器、再連它指定的中繼伺服器或對方，沒辦法只轉接一條連線。
+    if rendezvous.is_some() && s.via_ssh().is_some() {
         return Err(AppError::Rd(
-            t!("這一版只支援 RustDesk 的 Direct IP：請填對方電腦的 IP 位址（對方要在 RustDesk 設定開啟「允許 IP 直接存取」）").into(),
+            t!("用 RustDesk ID 連線不能經 SSH 主機轉接：請改填對方電腦的 IP 位址（Direct IP），或取消「經 SSH 主機連線」").into(),
         ));
     }
     let mut password = r.password.clone().unwrap_or_default();
@@ -603,25 +610,33 @@ async fn connect_rustdesk(
             remember(&r.origin, &a);
             password = a.password;
         }
-        let (host, port, fwd) = match s.via_ssh() {
-            Some(_) => {
+        let (host, port, fwd) = match (&rendezvous, s.via_ssh()) {
+            (Some(_), _) => (rustdesk::normalize_id(&s.host), 0, None),
+            (None, Some(_)) => {
                 let d = dial(app, state, conn_id, s).await?;
                 let (port, task) = crate::rd::transport::local_forward(d).await?;
                 ("127.0.0.1".to_string(), port, Some(task))
             }
-            None => (s.host.clone(), s.effective_port(), None),
+            (None, None) => (s.host.clone(), s.effective_port(), None),
         };
-        let p = rustdesk::RustdeskParams { host, port, password: password.clone() };
+        let p = rustdesk::RustdeskParams { host, port, password: password.clone(), rendezvous: rendezvous.clone() };
         match rustdesk::connect(&p, s.options.connect_timeout() + PROMPT_TIMEOUT).await {
             Ok(c) => {
+                // Direct IP 跟官方用戶端一樣不加密（沒有 ID 伺服器可以驗對方的金鑰）；經 SSH 時外層加密。
+                // 經 ID 伺服器時，驗得過對方公鑰（有填對 ID 伺服器的 Key）就是端到端加密。
+                let (security, encrypted) = match (&rendezvous, fwd.is_some()) {
+                    (Some(_), _) if c.secure => ("rustdesk-secure", true),
+                    (Some(_), _) => ("rustdesk-id", false),
+                    (None, true) => ("rustdesk-ssh", true),
+                    (None, false) => ("rustdesk-direct", false),
+                };
                 let info = RdConnInfo {
                     conn_id: conn_id.to_string(),
                     protocol: RdProtocol::Rustdesk,
                     width: c.size.0,
                     height: c.size.1,
-                    // Direct IP 跟官方用戶端一樣不加密（沒有 ID 伺服器可以驗對方的金鑰）；經 SSH 時外層加密。
-                    security: if fwd.is_some() { "rustdesk-ssh".into() } else { "rustdesk-direct".into() },
-                    encrypted: fwd.is_some(),
+                    security: security.into(),
+                    encrypted,
                 };
                 let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
                 let (closed_tx, closed_rx) = watch::channel(None);

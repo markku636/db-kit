@@ -21,6 +21,8 @@ pub enum HostMsg {
     Other,
 }
 
+/// 測試用（扮演 db-kit 讀 bridge 的輸出）；正式路徑用 `MsgReader`。
+#[cfg(test)]
 pub async fn read_raw<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Option<Vec<u8>>> {
     let mut len = [0u8; 4];
     match r.read_exact(&mut len).await {
@@ -37,6 +39,7 @@ pub async fn read_raw<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Option<Vec<
     Ok(Some(buf))
 }
 
+#[cfg(test)]
 pub async fn read_msg<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Option<HostMsg>> {
     let Some(buf) = read_raw(r).await? else { return Ok(None) };
     if buf.len() > MAX_IN {
@@ -46,6 +49,43 @@ pub async fn read_msg<R: AsyncRead + Unpin>(r: &mut R) -> io::Result<Option<Host
         IN_JSON => serde_json::from_slice(&buf[1..]).map(HostMsg::Json).unwrap_or(HostMsg::Other),
         _ => HostMsg::Other,
     }))
+}
+
+/// db-kit 的指令，取消安全版（放在 `select!` 裡跟對方的封包一起等；見 `codec::FrameReader`）。
+pub struct MsgReader<R> {
+    r: R,
+    buf: bytes::BytesMut,
+}
+
+impl<R: AsyncRead + Unpin> MsgReader<R> {
+    pub fn new(r: R) -> Self {
+        Self { r, buf: bytes::BytesMut::with_capacity(4096) }
+    }
+
+    pub async fn next(&mut self) -> io::Result<Option<HostMsg>> {
+        loop {
+            if self.buf.len() >= 4 {
+                let n = u32::from_le_bytes(self.buf[..4].try_into().unwrap()) as usize;
+                if n == 0 || n > MAX_IN {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "bad message length"));
+                }
+                if self.buf.len() >= 4 + n {
+                    let _ = self.buf.split_to(4);
+                    let body = self.buf.split_to(n);
+                    return Ok(Some(match body[0] {
+                        IN_JSON => serde_json::from_slice(&body[1..]).map(HostMsg::Json).unwrap_or(HostMsg::Other),
+                        _ => HostMsg::Other,
+                    }));
+                }
+                self.buf.reserve(4 + n - self.buf.len());
+            } else {
+                self.buf.reserve(4096);
+            }
+            if self.r.read_buf(&mut self.buf).await? == 0 {
+                return Ok(None);
+            }
+        }
+    }
 }
 
 async fn write_msg<W: AsyncWrite + Unpin>(w: &mut W, ty: u8, parts: &[&[u8]]) -> io::Result<()> {

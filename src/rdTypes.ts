@@ -36,10 +36,11 @@ export interface RdOptions {
   vnc_security: VncSecurity;
   /** VNC 共享模式（ClientInit shared-flag）：true = 不踢掉其他檢視者。 */
   vnc_shared: boolean;
-  /** RustDesk：ID / 中繼伺服器（空 = 公開伺服器）、伺服器公鑰、強制走中繼。 */
+  /** RustDesk：ID 伺服器（空 = 公開伺服器）、伺服器公鑰（Key）、強制走中繼、中繼伺服器（空 = 用 ID 伺服器告知的）。 */
   rustdesk_server: string;
   rustdesk_key: string;
   rustdesk_relay: boolean;
+  rustdesk_relay_server: string;
   /** 連線逾時秒數；0 → 20 秒。 */
   connect_timeout_secs: number;
   ui: Record<string, string>;
@@ -47,7 +48,7 @@ export interface RdOptions {
 
 /**
  * 已儲存的遠端桌面主機。刻意沒有密碼欄位——秘密只進 OS keychain（`{id}.rdsess`），永不落地、永不回前端。
- * RustDesk 的 `host` 放對方的 ID（或 Direct IP 位址）。
+ * RustDesk 的 `host` 放對方的 ID（經 ID 伺服器）或位址（Direct IP；有 `.` / `:` 的就是位址）。
  */
 export interface RdSession {
   id: string;
@@ -93,7 +94,7 @@ export interface RdConnInfo {
   protocol: RdProtocol;
   width: number;
   height: number;
-  /** 實際採用的安全層：`nla` / `tls` / `rdp` / `vnc-none` / `vnc-auth` / `ard` / `vencrypt-plain` / `rustdesk-direct` / `rustdesk-secure`。 */
+  /** 實際採用的安全層：`nla` / `tls` / `rdp` / `vnc-none` / `vnc-auth` / `ard` / `vencrypt-plain` / `rustdesk-direct`（Direct IP）/ `rustdesk-ssh` / `rustdesk-secure`（經 ID 伺服器、已加密）/ `rustdesk-id`（經 ID 伺服器、未加密）。 */
   security: string;
   /** 畫面內容是否加密（VNC 除了 TLS 類型外都是明文）。 */
   encrypted: boolean;
@@ -168,6 +169,7 @@ export function defaultRdOptions(): RdOptions {
     rustdesk_server: "",
     rustdesk_key: "",
     rustdesk_relay: false,
+    rustdesk_relay_server: "",
     connect_timeout_secs: 0,
     ui: {},
   };

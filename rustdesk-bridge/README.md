@@ -16,11 +16,17 @@ RustDesk 的協定定義（`protos/message.proto`）與連線邏輯以 **AGPL-3.
 | 檔案 | 來源 |
 |---|---|
 | `protos/message.proto` | `rustdesk/rustdesk` 的 `libs/base/protos/message.proto`（原樣） |
+| `protos/rendezvous.proto` | `rustdesk/hbb_common` 的 `protos/rendezvous.proto`（原樣） |
 | `src/codec.rs` | `rustdesk/hbb_common` 的 `src/bytes_codec.rs`（封包長度標頭的編解碼） |
 | `src/session.rs` 的登入流程 | `rustdesk/rustdesk` 的 `src/client.rs`（`handle_hash` 的密碼雜湊、`create_login_msg`）與 `src/client/io_loop.rs` |
+| `src/rendezvous.rs` | `rustdesk/rustdesk` 的 `src/client.rs`（`_start_inner`、`connect`、`request_relay`、`create_relay`）；位址編碼取自 `hbb_common` 的 `AddrMangle` |
+| `src/crypto.rs`、`main.rs` 的 `secure_handshake` | `rustdesk/rustdesk` 的 `src/common.rs`（`create_symmetric_key_msg`、`decode_id_pk`）、`src/client.rs`（`secure_connection`）與 `hbb_common` 的 `src/tcp.rs`（`Encrypt`）；原本用 libsodium，這裡換成同演算法的純 Rust 實作 |
 
 ## 目前支援
 
+- **用 RustDesk ID 連線**：經 ID 伺服器（hbbs，預設公開伺服器，或自架的 + Key）找到對方，先試 TCP 打洞直連，
+  不行就經中繼伺服器（hbbr）。ID 伺服器簽過名的對方公鑰驗得過時，跟對方做金鑰交換（crypto_box 封 secretbox 金鑰），
+  之後每個封包都加密；驗不過（沒填 Key、Key 不對）就跟官方用戶端一樣退回不加密。
 - **Direct IP**：直接連對方電腦的 21118 埠（對方要在 RustDesk 設定裡開啟「允許 IP 直接存取」）。
   這個模式跟 RustDesk 官方用戶端一樣**不加密**（沒有 ID 伺服器可以驗證對方的金鑰），適合區網或搭配 SSH 轉接。
 - 密碼登入（`sha256(sha256(密碼 + salt) + challenge)`）；不帶密碼時由對方在畫面上按「接受」。
@@ -28,7 +34,7 @@ RustDesk 的協定定義（`protos/message.proto`）與連線邏輯以 **AGPL-3.
   （所以不需要 libvpx / aom / ffmpeg 這些 C 函式庫）。
 - 滑鼠、鍵盤（送 PC 掃描碼，`KeyboardMode::Map`）、Ctrl+Alt+Del、要求重送畫面。
 
-尚未支援：ID 伺服器（hbbs）與中繼（hbbr）、加密連線、剪貼簿、音訊、檔案傳輸。
+尚未支援：UDP / IPv6 打洞（TCP 打洞不通就走中繼）、登入帳號（token）、剪貼簿、音訊、檔案傳輸。
 
 ## 與 db-kit 的訊息格式（stdin / stdout）
 
@@ -36,8 +42,8 @@ RustDesk 的協定定義（`protos/message.proto`）與連線邏輯以 **AGPL-3.
 
 | 方向 | 型別 | 內容 |
 |---|---|---|
-| db-kit → bridge | 1 | JSON 指令：`connect` / `mouse` / `key` / `ctrl_alt_del` / `refresh` |
-| bridge → db-kit | 1 | JSON 事件：`connected` / `login_error` / `error` / `closed` |
+| db-kit → bridge | 1 | JSON 指令：`connect`（有 `rendezvous: { server, relay, key, force_relay }` = 用 `peer` 這個 ID 經 ID 伺服器連）/ `mouse` / `key` / `ctrl_alt_del` / `refresh` |
+| bridge → db-kit | 1 | JSON 事件：`connected`（帶 `secure`、`route` = `ip` / `direct` / `lan` / `relay`）/ `waiting_accept` / `login_error` / `error`（帶 `code`，如 `id_not_exist` / `offline` / `key_mismatch`）/ `closed` |
 | bridge → db-kit | 2 | 影像：`[u8 codec][u8 key][u8 display][u8 保留][i64 pts]` + 編碼後的資料 |
 
 stdin 關閉（db-kit 結束或斷線）時程式自己結束。密碼只經 stdin 傳，不放在命令列（命令列別的程式看得到）。
