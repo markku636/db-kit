@@ -100,7 +100,7 @@ import {
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
   ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, FolderPlus, ExternalLink, Gauge,
-  Type, AArrowDown, AArrowUp, ShieldCheck, Library,
+  Type, AArrowDown, AArrowUp, ShieldCheck, Library, Folder, Unplug,
   type LucideIcon,
 } from "lucide-react";
 import { supportsReviewRun } from "./reviewRun";
@@ -480,6 +480,7 @@ export default function App() {
         <Sidebar
           width={sidebar.size}
           onEdit={(c) => setDialog({ initial: c })}
+          onNewConnection={() => setDialog({ initial: null })}
           onEditSsh={(s, folderId) => setSshDialog({ initial: s, folderId: folderId ?? null })}
           onEditRd={(s, folderId) => setRdDialog({ initial: s, folderId: folderId ?? null })}
           onImportRdp={() => void importRdpFile((prefill) => setRdDialog({ initial: null, folderId: null, prefill }))}
@@ -1237,12 +1238,23 @@ function MenuItems({ nodes, onClose }: { nodes: MenuNode[]; onClose: () => void 
 }
 
 // ---- 左側連線/物件樹 ----
-function Sidebar({ onEdit, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; onEditSsh: (s: SshSession | null, folderId?: string | null) => void; onEditRd: (s: RdSession | null, folderId?: string | null) => void; onImportRdp: () => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
+const DB_SECTION_KEY = "db-kit:dbSectionCollapsed";
+
+function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; onNewConnection: () => void; onEditSsh: (s: SshSession | null, folderId?: string | null) => void; onEditRd: (s: RdSession | null, folderId?: string | null) => void; onImportRdp: () => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
   const t = useT();
   const { connections, connGroups, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
   // ---- 連線群組（側欄排版）----
   // 摺疊狀態純 UI，走 localStorage；群組本身與歸屬順序則持久化在 connections.json。
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed);
+  // 整個「資料庫連線」區塊的摺疊（同 SSH 主機區塊標題）。
+  const [dbSectionCollapsed, setDbSectionCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(DB_SECTION_KEY) === "1"; } catch { return false; }
+  });
+  const toggleDbSection = () => {
+    const v = !dbSectionCollapsed;
+    setDbSectionCollapsed(v);
+    try { localStorage.setItem(DB_SECTION_KEY, v ? "1" : "0"); } catch { /* 忽略 */ }
+  };
   // 進行中的拖曳：連線或群組。null = 沒在拖。
   //
   // ⚠️ 這裡的 HTML5 拖曳依賴 tauri.conf.json 的 `app.windows[].dragDropEnabled: false`。
@@ -2659,20 +2671,6 @@ function Sidebar({ onEdit, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch,
               </button>
             )}
           </div>
-          <div className="flex items-center justify-between mt-1">
-            <button type="button" onClick={addGroup}
-              title={t("建立群組後，把連線拖進來即可分類")}
-              className="text-[11px] text-fg/40 hover:text-fg/70 inline-flex items-center gap-1">
-              <Icon icon={FolderPlus} size={11} />{t("新增群組")}
-            </button>
-            {connectedIds.size > 1 && (
-              <button type="button" onClick={() => { connections.filter((c) => connectedIds.has(c.id)).forEach((c) => doDisconnect(c.id)); }}
-                title={t("中斷所有已連線的連線")}
-                className="text-[11px] text-fg/40 hover:text-fg/70 inline-flex items-center gap-1">
-                <Icon icon={Plug} size={11} />{t("全部中斷（")}{connectedIds.size}）
-              </button>
-            )}
-          </div>
         </div>
       )}
       {/* 捲動視窗：普通 block（非 flex），高度由 flex-1 + min-h-0 給定，
@@ -2775,16 +2773,64 @@ function Sidebar({ onEdit, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch,
           )}
         </div>
       )}
-      {sections.map((section) => {
+      {connections.length > 0 && (
+      // 「資料庫連線」區塊：排版比照 SSH 主機區塊——可摺疊的區塊標題（滑過出現新增群組 / 新增連線 /
+      // 全部中斷），群組是資料夾列、成員縮一層，未分組的連線直接列在最後，不另立「未分組」標題。
+      <div className="py-1" data-db-conn-tree="">
+        <div
+          className={`group px-2 py-1 text-[10px] uppercase tracking-wide text-fg/35 flex items-center gap-1 cursor-pointer select-none ${
+            dropAt?.kind === "into" && dropAt.id === null ? "bg-accent/15 outline outline-1 outline-accent/40" : ""
+          }`}
+          onClick={toggleDbSection}
+          // 拖連線到區塊標題上 → 移出群組（未分組區沒有自己的標題，這裡就是它的落點）。
+          onDragOver={(e) => {
+            if (drag?.kind !== "conn") return;
+            e.preventDefault();
+            setDropAt({ kind: "into", id: null });
+          }}
+          onDrop={(e) => { e.preventDefault(); commitDrop(); }}
+          title={t("點擊摺疊 / 展開；把連線拖到這裡可移出群組")}
+        >
+          <Icon icon={!dbSectionCollapsed || q ? ChevronDown : ChevronRight} size={11} className="text-fg/40" />
+          <span>{t("資料庫連線")} ({connections.length})</span>
+          <span className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
+            {connectedIds.size > 1 && (
+              <button type="button"
+                onClick={(e) => { e.stopPropagation(); connections.filter((c) => connectedIds.has(c.id)).forEach((c) => doDisconnect(c.id)); }}
+                title={`${t("中斷所有已連線的連線")} (${connectedIds.size})`} aria-label={t("中斷所有已連線的連線")}
+                className="w-5 h-5 grid place-items-center rounded text-fg/40 hover:text-fg/80 hover:bg-fg/10">
+                <Icon icon={Unplug} size={12} />
+              </button>
+            )}
+            <button type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                // 區塊摺著就先打開，不然新群組的改名框看不到。
+                if (dbSectionCollapsed) toggleDbSection();
+                addGroup();
+              }}
+              title={t("建立群組後，把連線拖進來即可分類")} aria-label={t("新增群組")}
+              className="w-5 h-5 grid place-items-center rounded text-fg/40 hover:text-fg/80 hover:bg-fg/10">
+              <Icon icon={FolderPlus} size={12} />
+            </button>
+            <button type="button" onClick={(e) => { e.stopPropagation(); onNewConnection(); }}
+              title={t("新增連線")} aria-label={t("新增連線")}
+              className="w-5 h-5 grid place-items-center rounded text-fg/40 hover:text-fg/80 hover:bg-fg/10">
+              <Icon icon={Plus} size={12} />
+            </button>
+          </span>
+        </div>
+      {(!dbSectionCollapsed || !!q) && sections.map((section) => {
         const gid = section.group?.id ?? null;
         const key = gid ?? UNGROUPED_KEY;
         const shown = section.conns.filter(connVisible);
         // 空的具名群組要留著（它是拖放目標）；搜尋無命中的區段、以及空的未分組區則不佔版面。
         if (shown.length === 0 && (q || !section.group)) return null;
-        // 沒有任何群組時，側欄維持原本的扁平清單——不為了一個「未分組」標題就多一層。
-        const headed = section.group !== null || connGroups.length > 0;
+        // 只有具名群組有標題列；未分組的連線直接排在所有群組之後（同 SSH 主機區塊）。
+        const headed = section.group !== null;
         // 搜尋中一律展開，否則命中的連線被摺疊藏住，搜尋等於失效。
-        const collapsed = !q && collapsedGroups.has(key);
+        // 未分組區已經沒有標題可以點開，舊版存下的「未分組已摺疊」一律不理。
+        const collapsed = !q && !!section.group && collapsedGroups.has(key);
         const dragOverInto = dropAt?.kind === "into" && dropAt.id === gid;
         const groupLine = dropAt?.kind === "group" && dropAt.id === gid ? dropAt.before : null;
         return (
@@ -2827,11 +2873,12 @@ function Sidebar({ onEdit, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch,
                   setGroupMenu({ id: section.group.id, x: e.clientX, y: e.clientY });
                 }}
                 title={section.group ? t("點擊摺疊 / 展開；拖曳可調整群組順序；右鍵可重新命名或刪除") : t("點擊摺疊 / 展開")}
-                className={`group/hdr flex items-center gap-1 px-2 py-1 cursor-pointer select-none text-[11px] uppercase tracking-wide text-fg/40 hover:text-fg/70 hover:bg-fg/5 ${
+                className={`group/hdr flex items-center gap-1.5 px-3 py-1 cursor-pointer select-none text-fg/70 hover:bg-fg/5 ${
                   dragOverInto ? "bg-accent/15 outline outline-1 outline-accent/40" : ""
                 } ${groupLine === true ? "border-t-2 border-accent" : ""} ${groupLine === false ? "border-b-2 border-accent" : ""}`}
               >
-                <Icon icon={collapsed ? ChevronRight : ChevronDown} size={12} className="shrink-0" />
+                <Icon icon={collapsed ? ChevronRight : ChevronDown} size={11} className="shrink-0 text-fg/40" />
+                <Icon icon={Folder} size={13} className="shrink-0 text-amber-300/70" />
                 {/* 注意要先確認 section.group 存在：未分組區的 id 是 undefined，
                     只寫 renaming?.id === section.group?.id 會在沒改名時 undefined === undefined 而誤判。 */}
                 {renaming && section.group && renaming.id === section.group.id ? (
@@ -2846,12 +2893,12 @@ function Sidebar({ onEdit, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch,
                       if (e.key === "Enter") commitRename();
                       if (e.key === "Escape") setRenaming(null);
                     }}
-                    className="flex-1 min-w-0 bg-inset border border-accent rounded px-1 py-0 text-[11px] outline-none normal-case tracking-normal"
+                    className="flex-1 min-w-0 bg-inset border border-accent rounded px-1 py-0 text-xs outline-none"
                   />
                 ) : (
                   <span className="truncate flex-1">{section.group ? section.group.name : t("未分組")}</span>
                 )}
-                <span className="shrink-0 text-fg/30 tabular-nums">{section.conns.length}</span>
+                <span className="shrink-0 text-[10px] text-fg/30 tabular-nums">{section.conns.length}</span>
                 {section.group && !renaming && (
                   <button type="button" title={t("刪除群組")}
                     onClick={(e) => { e.stopPropagation(); removeGroup(section.group!.id); }}
@@ -2861,7 +2908,8 @@ function Sidebar({ onEdit, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch,
                 )}
               </div>
             )}
-            {!collapsed && shown.map((c) => {
+            {/* 群組成員縮一層（同 SSH 資料夾裡的主機）；未分組的直接排在區塊底下。 */}
+            {!collapsed && (<div style={section.group ? { paddingLeft: 14 } : undefined}>{shown.map((c) => {
         const meta = KIND_META[c.kind];
         const connected = connectedIds.has(c.id);
         const busy = connecting.has(c.id);
@@ -3131,10 +3179,12 @@ function Sidebar({ onEdit, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch,
               })}
           </div>
         );
-            })}
+            })}</div>)}
           </div>
         );
       })}
+      </div>
+      )}
       {/* SSH 主機：獨立於資料庫連線的區塊（不進 DbKind / selectedNode）；雙擊開終端機分頁。 */}
       <SshHostTree
         q={q}
