@@ -1,5 +1,7 @@
 // AI 資源庫（人設 / 技能 / 提示範本）的 command。
 pub mod ai_library;
+// 檔案 / 資料夾 / 二進位比對的 command。
+pub mod filecmp;
 // 遠端桌面（RDP / VNC）的 command。
 pub mod rd;
 // SSH 終端機 / SFTP / 已存主機的 command（含 TauriUi）。

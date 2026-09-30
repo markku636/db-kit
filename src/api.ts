@@ -12,6 +12,10 @@ import type {
   DockerNetwork, DockerStreamEnd,
 } from "./dockerTypes";
 import type {
+  BinDiff, CmpFetched, CmpStat, CmpText, ContentPair, ContentResult, FcmpProgress, FolderDiff, FolderOpts, SideSpec,
+  SyncOp, SyncReport,
+} from "./compareTypes";
+import type {
   RegistryInfo, RegistryManifest, HarborOverview, HarborProject, HarborRepository, HarborArtifactPage, HarborVulnReport,
 } from "./registryTypes";
 import type {
@@ -635,6 +639,12 @@ export function onSshConnClosed(connId: string, cb: (p: SshConnClosed) => void):
 // SFTP 傳輸進度：全域一個監聽，由呼叫端依 transfer_id 分派（同時可能有多個上下傳）。
 export function onSftpProgress(cb: (p: SftpProgress) => void): Promise<UnlistenFn> {
   return listen<SftpProgress>("ssh-sftp-progress", (e) => cb(e.payload));
+}
+// 比對工作（掃描 / 內容比對 / 同步）的進度：只轉給同一個 jobId。
+export function onFcmpProgress(jobId: string, cb: (p: FcmpProgress) => void): Promise<UnlistenFn> {
+  return listen<FcmpProgress>("fcmp-progress", (e) => {
+    if (e.payload.job_id === jobId) cb(e.payload);
+  });
 }
 
 // ---- 遠端桌面（RDP / VNC）事件（DTO 見 rdTypes.ts）----
@@ -2198,6 +2208,30 @@ export const api = {
   // SFTP 獨立視窗：一個終端機分頁一個，已經開著就叫到最前面（回 false）。分頁關閉時由主視窗收掉。
   sshSftpWindowOpen: (tabKey: string, title: string) => invoke<boolean>("ssh_sftp_window_open", { tabKey, title }),
   sshSftpWindowClose: (tabKey: string) => invoke<void>("ssh_sftp_window_close", { tabKey }),
+  // ---- 檔案 / 資料夾 / 二進位比對（後端 commands/filecmp.rs；型別見 compareTypes.ts）----
+  // 長工作帶前端產生的 jobId：進度走 onFcmpProgress，fcmpCancel(jobId) 取消（reject 的 code 是 ERR_COMPARE_CANCELLED）。
+  fcmpScan: (jobId: string, left: SideSpec, right: SideSpec, opts: FolderOpts) =>
+    invoke<FolderDiff>("fcmp_scan", { jobId, left, right, opts }),
+  fcmpContentCheck: (jobId: string, scope: string, left: SideSpec, right: SideSpec, pairs: ContentPair[]) =>
+    invoke<ContentResult[]>("fcmp_content_check", { jobId, scope, left, right, pairs }),
+  fcmpSync: (jobId: string, scope: string, left: SideSpec, right: SideSpec, excludes: string[], ops: SyncOp[]) =>
+    invoke<SyncReport>("fcmp_sync", { jobId, scope, left, right, excludes, ops }),
+  fcmpCancel: (jobId: string) => invoke<void>("fcmp_cancel", { jobId }),
+  fcmpBinaryDiff: (jobId: string, a: string, b: string) => invoke<BinDiff>("fcmp_binary_diff", { jobId, a, b }),
+  // 回傳原始 bytes（ArrayBuffer），十六進位視圖分頁讀取用。
+  fcmpReadBytes: (path: string, offset: number, len: number) =>
+    invoke<ArrayBuffer>("fcmp_read_bytes", { path, offset, len }).then((b) => new Uint8Array(b)),
+  cmpLocalStat: (path: string) => invoke<CmpStat>("cmp_local_stat", { path }),
+  cmpLocalReadText: (path: string, maxBytes = 0) => invoke<CmpText>("cmp_local_read_text", { path, maxBytes }),
+  // expectedMtime 給了而檔案已被別人改過 → reject（code ERR_COMPARE_CONFLICT）；不帶就直接覆蓋。
+  cmpLocalWriteText: (path: string, content: string, expectedMtime: number | null) =>
+    invoke<CmpStat>("cmp_local_write_text", { path, content, expectedMtime }),
+  // 遠端檔 → 這個比對分頁的暫存資料夾（scope = 分頁鍵），回傳本機副本路徑與遠端當下的屬性。
+  cmpFetch: (jobId: string, scope: string, sftpId: string, remote: string) =>
+    invoke<CmpFetched>("cmp_fetch", { jobId, scope, sftpId, remote }),
+  cmpPut: (jobId: string, sftpId: string, local: string, remote: string, expectedMtime: number | null, expectedSize: number | null) =>
+    invoke<CmpStat>("cmp_put", { jobId, sftpId, local, remote, expectedMtime, expectedSize }),
+  cmpRelease: (scope: string) => invoke<void>("cmp_release", { scope }),
   // 使用者金鑰（Xshell 的「使用者金鑰管理員」）：檢視任何格式的私鑰（含 keystore:<id>）、金鑰庫 CRUD、產生、匯出。
   sshKeyInspect: (source: SshKeySource, passphrase: string | null, certificatePath: string | null) =>
     invoke<SshKeyInspect>("ssh_key_inspect", { source, passphrase, certificatePath }),

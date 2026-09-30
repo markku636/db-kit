@@ -20,6 +20,8 @@ mod db;
 mod dbtools;
 mod error;
 mod export;
+// 檔案 / 資料夾 / 二進位比對核心（本機與 SFTP / FTP 兩邊任意組合）：不依賴 Tauri，command 在 commands/filecmp.rs。
+mod filecmp;
 mod import;
 mod manager;
 // 遠端桌面（RDP / VNC）：不依賴 Tauri；GUI 的 command 在 commands/rd.rs。
@@ -632,6 +634,20 @@ pub fn run() {
             commands::ssh::ssh_sftp_cancel,
             commands::ssh::ssh_sftp_window_open,
             commands::ssh::ssh_sftp_window_close,
+            commands::filecmp::fcmp_scan,
+            commands::filecmp::fcmp_content_check,
+            commands::filecmp::fcmp_sync,
+            commands::filecmp::fcmp_cancel,
+            commands::filecmp::fcmp_binary_diff,
+            commands::filecmp::fcmp_read_bytes,
+            commands::filecmp::cmp_local_stat,
+            commands::filecmp::cmp_local_read_text,
+            commands::filecmp::cmp_local_write_text,
+            commands::filecmp::cmp_fetch,
+            commands::filecmp::cmp_put,
+            commands::filecmp::cmp_release,
+            commands::filecmp::cmp_sessions_load,
+            commands::filecmp::cmp_sessions_save,
             commands::rd::rd_sessions_list,
             commands::rd::rd_session_save,
             commands::rd::rd_session_remove,

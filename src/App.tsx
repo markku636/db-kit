@@ -36,7 +36,8 @@ import { useConnPrefill, useDockerPullRequest } from "./connPrefill";
 import type {
   RegistryInfoPanel as RegistryInfoPanelT, HarborOverviewPanel as HarborOverviewPanelT, HarborProjectPanel as HarborProjectPanelT,
 } from "./RegistryPanels";
-import { SquareTerminal } from "lucide-react";
+import { SquareTerminal, GitCompareArrows, FileDiff as FileDiffIcon, FolderTree as FolderTreeIcon, Binary as BinaryIcon } from "lucide-react";
+import type { CompareMode, CompareTab } from "./compareTabs";
 import { useResizable, Splitter } from "./ui/resizable";
 import { tabOrder, type SshTab } from "./sshTabs";
 import { isFtpHost, type SshSession } from "./sshTypes";
@@ -186,6 +187,8 @@ const NlQueryBar = lazy(() => import("./NlQueryBar"));
 // SSH 終端機分頁：常駐掛載（切分頁只切 display），所以不能走 lazyOverlay，用 React.lazy + 一次 Suspense。
 const SshTerminalPane = lazy(() => import("./SshTerminalPane"));
 const FtpPane = lazy(() => import("./FtpPane"));
+const ComparePane = lazy(() => import("./ComparePane"));
+const CMP_TAB_ICON: Record<CompareMode, typeof FileDiffIcon> = { text: FileDiffIcon, folder: FolderTreeIcon, binary: BinaryIcon };
 const SshSessionDialog = lazyOverlay(() => import("./SshSessionDialog"));
 // 遠端桌面分頁同 SSH：常駐掛載，用 React.lazy（第一次開分頁才下載 RDP / VNC 畫面元件）。
 const RdPane = lazy(() => import("./RdPane"));
@@ -1445,6 +1448,13 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
   const [viewDesign, setViewDesign] = useState<{ connId: string; db: string; view: string; kind: DbKind } | null>(null);
   const [dbProps, setDbProps] = useState<{ connId: string; db: string } | null>(null);
   const [schemaCompare, setSchemaCompare] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
+  // 比對分頁的啟動畫面要開資料庫結構 / 資料比對：對話框在這裡，接住一次性請求。
+  const dbCompareRequest = useStore((s) => s.dbCompareRequest);
+  useEffect(() => {
+    if (!dbCompareRequest) return;
+    setSchemaCompare({ connId: dbCompareRequest.connId, db: dbCompareRequest.db, kind: dbCompareRequest.kind });
+    useStore.getState().clearDbCompareRequest();
+  }, [dbCompareRequest]);
   // SQL Search（全資料庫物件搜尋：名稱 / 定義內文 / 註解）。
   const [searchObjs, setSearchObjs] = useState<{ connId: string; kind: DbKind } | null>(null);
   // 連線 / 表 搜尋過濾字串
@@ -1656,6 +1666,17 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
         else toast.info(t("請先選取並連線一個連線"));
       },
     });
+    // 比對：開一個比對分頁（啟動畫面選來源）。
+    for (const [mode, label, icon] of [
+      ["text", t("比較文字 / 檔案…"), FileDiffIcon],
+      ["folder", t("比較資料夾…"), FolderTreeIcon],
+      ["binary", t("比較二進位檔…"), BinaryIcon],
+    ] as const) {
+      items.push({
+        id: `act:compare:${mode}`, label, group: "action", icon,
+        run: () => { useStore.getState().openCompareTab({ mode, left: null, right: null, title: t("新比對") }); },
+      });
+    }
     items.push({ id: "act:theme", label: t("切換深淺色主題"), group: "action", icon: Moon, run: () => useTheme.getState().toggle() });
     // 編輯器 AI 動作：只有關聯式連線才列（Mongo / Redis / Kafka 沒有可改寫的 SQL）。
     // 真正的可用性（有沒有錯誤可修、有沒有計畫可解釋）由查詢分頁在消費時判斷——
@@ -3652,7 +3673,9 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
   const { connections, activeId, connectedIds, tabs, activeTabKey, setActiveTab, closeTab, closeAllTabsExcept,
     queryTabs, addQueryTab, closeQueryTab, closeOtherQueryTabs, closeAllQueryTabs,
     sshTabs, openSshTab, closeSshTab, closeOtherSshTabs, closeAllSshTabs, renameSshTab,
-    rdTabs, openRdTab, closeRdTab, closeOtherRdTabs, closeAllRdTabs, renameRdTab } = useStore();
+    rdTabs, openRdTab, closeRdTab, closeOtherRdTabs, closeAllRdTabs, renameRdTab,
+    compareTabs, openCompareTab, updateCompareTab, closeCompareTab, closeOtherCompareTabs, closeAllCompareTabs } = useStore();
+  const [cmpTabMenu, setCmpTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   const [queryTabMenu, setQueryTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [sshTabMenu, setSshTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
@@ -3686,9 +3709,10 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
   const activeTab = tabs.find((tab) => tab.key === activeTabKey) ?? null;
   const activeSsh: SshTab | null = sshTabs.find((tab) => tab.key === activeTabKey) ?? null;
   const activeRd: RdTab | null = rdTabs.find((tab) => tab.key === activeTabKey) ?? null;
+  const activeCmp: CompareTab | null = compareTabs.find((tab) => tab.key === activeTabKey) ?? null;
   // 作用中的查詢分頁 id（非表 / SSH 分頁時）：解析未知 / null → 第一個查詢分頁（home 可被關掉，不能寫死 __query__）。
   // 查詢分頁可全部關光 → undefined，此時主區顯示空狀態（見下方 render）。
-  const activeQueryId: string | undefined = activeSsh || activeRd ? undefined : activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : queryTabs[0];
+  const activeQueryId: string | undefined = activeSsh || activeRd || activeCmp ? undefined : activeTabKey && queryTabs.includes(activeTabKey) ? activeTabKey : queryTabs[0];
 
   // 分頁鍵盤操作：Ctrl/Cmd+N 開新查詢、Ctrl/Cmd+Shift+N 新增連線、Ctrl/Cmd+W 關閉、
   // Ctrl+Tab / Ctrl+Shift+Tab 循環、Ctrl+1..9 跳轉（9=最後一個，含查詢分頁）。
@@ -3716,6 +3740,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
         if (activeTabKey && queryTabs.includes(activeTabKey)) { e.preventDefault(); closeQueryTab(activeTabKey); return; }
         if (activeTabKey && sshTabs.some((tab) => tab.key === activeTabKey)) { e.preventDefault(); closeSshTab(activeTabKey); return; }
         if (activeTabKey && rdTabs.some((tab) => tab.key === activeTabKey)) { e.preventDefault(); closeRdTab(activeTabKey); return; }
+        if (activeTabKey && compareTabs.some((tab) => tab.key === activeTabKey)) { e.preventDefault(); closeCompareTab(activeTabKey); return; }
         return;
       }
       if (e.key === "t" || e.key === "T") {
@@ -3728,7 +3753,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
         return;
       }
       // 所有表分頁後接所有查詢分頁、再接 SSH 分頁，組成可循環 / 跳轉的鍵序列。
-      const keys = tabOrder(tabs, queryTabs, [...sshTabs, ...rdTabs]);
+      const keys = tabOrder(tabs, queryTabs, [...sshTabs, ...rdTabs, ...compareTabs]);
       if (e.key === "Tab") {
         e.preventDefault();
         const cur = keys.indexOf(activeTabKey ?? "");
@@ -3746,7 +3771,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tabs, activeTabKey, setActiveTab, closeTab, onNewConnection, queryTabs, addQueryTab, closeQueryTab, sshTabs, closeSshTab, rdTabs, closeRdTab, onNewSshSession]);
+  }, [tabs, activeTabKey, setActiveTab, closeTab, onNewConnection, queryTabs, addQueryTab, closeQueryTab, sshTabs, closeSshTab, rdTabs, closeRdTab, compareTabs, closeCompareTab, onNewSshSession]);
   const sshPickerBtnRef = useRef<HTMLButtonElement>(null);
 
   // 作用中分頁捲入可視範圍（Ctrl+W / Ctrl+Tab 切換後不會被擠到畫面外；含查詢分頁）。
@@ -3756,7 +3781,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [activeTabKey, queryTabs]);
 
-  if (!canUse && tabs.length === 0 && sshTabs.length === 0 && rdTabs.length === 0) {
+  if (!canUse && tabs.length === 0 && sshTabs.length === 0 && rdTabs.length === 0 && compareTabs.length === 0) {
     const noConns = connections.length === 0;
     return (
       <div className="flex-1 flex items-center justify-center min-w-0">
@@ -3769,11 +3794,18 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
               : t("雙擊左側的連線以建立連線，再單擊資料表即可在此開啟。")
           }
           action={
-            noConns ? (
-              <Button variant="primary" size="md" icon={Plus} onClick={onNewConnection}>
-                {t("新增連線")}
+            // 比對不需要資料庫連線：沒連線時分頁列不出現，入口放在這裡。
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {noConns && (
+                <Button variant="primary" size="md" icon={Plus} onClick={onNewConnection}>
+                  {t("新增連線")}
+                </Button>
+              )}
+              <Button size="md" icon={GitCompareArrows} data-testid="new-compare-empty"
+                onClick={() => openCompareTab({ mode: "text", left: null, right: null, title: t("新比對") })}>
+                {t("比對檔案 / 資料夾")}
               </Button>
-            ) : undefined
+            </div>
           }
         />
       </div>
@@ -3905,6 +3937,34 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
             </div>
           );
         })}
+        {compareTabs.map((tab) => {
+          const isActive = tab.key === activeTabKey;
+          return (
+            <div
+              key={tab.key}
+              data-cmp-tab={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeCompareTab(tab.key); } }}
+              onContextMenu={(e) => { e.preventDefault(); setActiveTab(tab.key); setCmpTabMenu({ key: tab.key, x: e.clientX, y: e.clientY }); }}
+              title={t("{title}（比對，中鍵關閉）", { title: tab.title })}
+              className={`flex items-center gap-2 pl-3 pr-2 py-1.5 text-xs border-r border-fg/10 cursor-pointer whitespace-nowrap ${
+                isActive ? "bg-app text-fg shadow-[inset_0_-2px_0_rgb(var(--c-accent))]" : "text-fg/50 hover:bg-fg/5"
+              }`}
+            >
+              <Icon icon={CMP_TAB_ICON[tab.mode]} size={13} className="shrink-0 text-orange-300/80" />
+              <span className="mono max-w-[16rem] truncate">{tab.title}</span>
+              <button
+                type="button"
+                aria-label={t("關閉分頁 {table}", { table: tab.title })}
+                title={t("關閉分頁")}
+                onClick={(e) => { e.stopPropagation(); closeCompareTab(tab.key); }}
+                className="w-5 h-5 flex items-center justify-center rounded hover:bg-fg/15 text-fg/40 hover:text-fg/80"
+              >
+                <Icon icon={X} size={12} />
+              </button>
+            </div>
+          );
+        })}
         <button type="button" onClick={addQueryTab} title={t("新增查詢分頁（Ctrl+T）")}
           aria-label={t("新增查詢分頁")}
           className="px-2 py-1.5 text-fg/40 hover:text-fg/80 hover:bg-fg/5 border-r border-fg/10 shrink-0">
@@ -3923,13 +3983,20 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
             <Icon icon={SquareTerminal} size={14} />
           </button>
         )}
+        <button type="button" data-testid="new-compare-tab"
+          onClick={() => openCompareTab({ mode: "text", left: null, right: null, title: t("新比對") })}
+          title={t("新比對：文字、資料夾或二進位檔")}
+          aria-label={t("新比對")}
+          className="px-2 py-1.5 text-fg/40 hover:text-fg/80 hover:bg-fg/5 border-r border-fg/10 shrink-0">
+          <Icon icon={GitCompareArrows} size={14} />
+        </button>
       </div>
 
       {/* 內容：表分頁 → 資料格；否則 → 對應查詢分頁的編輯器（key 隨分頁 → 各自獨立狀態與草稿）。
           查詢分頁全部關光且無表分頁在前景 → 空狀態（分頁列的「+」仍可開新查詢）。 */}
       {activeTab ? (
         <TableView tab={activeTab} />
-      ) : activeSsh || activeRd ? null : activeQueryId ? (
+      ) : activeSsh || activeRd || activeCmp ? null : activeQueryId ? (
         <QueryPane key={activeQueryId} tabId={activeQueryId} />
       ) : (
         <div className="flex-1 flex items-center justify-center min-w-0">
@@ -3956,7 +4023,41 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
         {rdTabs.map((tab) => (
           <RdPane key={tab.key} tab={tab} active={tab.key === activeTabKey} />
         ))}
+        {/* 比對分頁同理：常駐掛載，切分頁不丟比對結果與未存的編輯。 */}
+        {compareTabs.map((tab) => (
+          <ComparePane key={tab.key} tab={tab} active={tab.key === activeTabKey} />
+        ))}
       </Suspense>
+
+      {cmpTabMenu && (
+        <MenuPanel x={cmpTabMenu.x} y={cmpTabMenu.y} minW={160} onClose={() => setCmpTabMenu(null)}>
+          {(() => {
+            const key = cmpTabMenu.key;
+            const tab = compareTabs.find((x) => x.key === key);
+            const items: [string, () => void][] = [];
+            if (tab) items.push([t("複製分頁"), () => openCompareTab({ mode: tab.mode, left: tab.left, right: tab.right, title: tab.title, folder: tab.folder, savedId: tab.savedId })]);
+            items.push([t("重新命名…"), () => {
+              void uiPrompt(t("分頁名稱"), { title: t("重新命名分頁"), defaultValue: tab?.title ?? "" }).then((v) => { if (v?.trim()) updateCompareTab(key, { title: v.trim() }); });
+            }]);
+            items.push([t("關閉"), () => closeCompareTab(key)]);
+            if (compareTabs.length > 1) {
+              items.push([t("關閉其他比對"), () => closeOtherCompareTabs(key)]);
+              items.push([t("全部關閉比對"), () => closeAllCompareTabs()]);
+            }
+            if (tabs.length + queryTabs.length + sshTabs.length + rdTabs.length > 0) {
+              items.push([t("關閉其他分頁"), () => closeAllTabsExcept(key)]);
+              items.push([t("全部關閉"), () => closeAllTabsExcept(null)]);
+            }
+            return items.map(([label, fn]) => (
+              <button key={label} type="button"
+                onClick={() => { setCmpTabMenu(null); fn(); }}
+                className="block w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+                {label}
+              </button>
+            ));
+          })()}
+        </MenuPanel>
+      )}
 
       {rdTabMenu && (
         <MenuPanel x={rdTabMenu.x} y={rdTabMenu.y} minW={160} onClose={() => setRdTabMenu(null)}>
@@ -3973,7 +4074,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
               items.push([t("關閉其他遠端桌面"), () => closeOtherRdTabs(key)]);
               items.push([t("全部關閉遠端桌面"), () => closeAllRdTabs()]);
             }
-            if (tabs.length + queryTabs.length + sshTabs.length > 0) {
+            if (tabs.length + queryTabs.length + sshTabs.length + compareTabs.length > 0) {
               items.push([t("關閉其他分頁"), () => closeAllTabsExcept(key)]);
               items.push([t("全部關閉"), () => closeAllTabsExcept(null)]);
             }
@@ -4052,7 +4153,7 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
               items.push([t("關閉其他終端機"), () => closeOtherSshTabs(key)]);
               items.push([t("全部關閉終端機"), () => closeAllSshTabs()]);
             }
-            if (tabs.length + queryTabs.length > 0) {
+            if (tabs.length + queryTabs.length + rdTabs.length + compareTabs.length > 0) {
               items.push([t("關閉其他分頁"), () => closeAllTabsExcept(key)]);
               items.push([t("全部關閉"), () => closeAllTabsExcept(null)]);
             }

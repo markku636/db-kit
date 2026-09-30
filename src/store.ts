@@ -5,6 +5,7 @@ import { loadSession, saveQueryTabSession } from "./session";
 import { pruneQueryDrafts } from "./queryDrafts";
 import { landingKey, neighborSshKey, newSshTabKey, type SshTab } from "./sshTabs";
 import { newRdTabKey, type RdTab } from "./rdTabs";
+import { newCompareTabKey, type CompareTab } from "./compareTabs";
 import {
   loadQueryHistory,
   pushQueryHistory,
@@ -45,10 +46,13 @@ export function nextQueryTabId(queryTabs: string[]): string {
 // 關閉分頁後的落點見 sshTabs.ts 的 landingKey（表 → 查詢 → SSH → 遠端桌面，共用一套順序）。
 export type { SshTab } from "./sshTabs";
 export type { RdTab } from "./rdTabs";
+export type { CompareTab } from "./compareTabs";
 
-/** landingKey / tabOrder 的「工作區分頁」段：SSH 終端機在前、遠端桌面在後（與分頁列渲染順序一致）。 */
-export function wsTabs(s: { sshTabs: readonly { key: string }[]; rdTabs: readonly { key: string }[] }): { key: string }[] {
-  return [...s.sshTabs, ...s.rdTabs];
+type Keyed = readonly { key: string }[];
+
+/** landingKey / tabOrder 的「工作區分頁」段：SSH 終端機 → 遠端桌面 → 比對（與分頁列渲染順序一致）。 */
+export function wsTabs(s: { sshTabs: Keyed; rdTabs: Keyed; compareTabs: Keyed }): { key: string }[] {
+  return [...s.sshTabs, ...s.rdTabs, ...s.compareTabs];
 }
 
 // 右側「詳細資料」面板目前選取的樹節點（單擊即選；對標 Navicat 物件資訊面板）。
@@ -90,6 +94,8 @@ interface AppStore {
   sshTabs: SshTab[];
   // 遠端桌面分頁（鍵 __rd__:<uuid>）。同 SSH：不進工作階段還原、畫面與連線狀態在 RdPane 裡。
   rdTabs: RdTab[];
+  // 檔案 / 資料夾 / 二進位比對分頁（鍵 __cmp__:<uuid>）。不進工作階段還原；比對結果與連線在 ComparePane 裡。
+  compareTabs: CompareTab[];
   // 由側欄「產生 SQL」送往查詢編輯器的待載入語句（消費後清空）。
   pendingSql: string | null;
   // 由側欄「查詢 log」設定；開新查詢分頁後由該分頁的 QueryPane 消費一次（自動展開 NlQueryBar）。
@@ -165,6 +171,16 @@ interface AppStore {
   closeOtherRdTabs: (key: string) => void;
   closeAllRdTabs: () => void;
   renameRdTab: (key: string, title: string) => void;
+  // 比對分頁：同一組操作，另加 update（啟動畫面選好兩邊 / 交換兩邊時改分頁內容）。
+  openCompareTab: (tab: Omit<CompareTab, "key">) => string;
+  updateCompareTab: (key: string, patch: Partial<Omit<CompareTab, "key">>) => void;
+  closeCompareTab: (key: string) => void;
+  closeOtherCompareTabs: (key: string) => void;
+  closeAllCompareTabs: () => void;
+  // 比對分頁的啟動畫面要開資料庫的結構 / 資料比對：對話框住在側欄，用一次性請求轉過去（nonce 讓同一個目標也重新觸發）。
+  dbCompareRequest: { connId: string; db: string; kind: DbKind; nonce: number } | null;
+  requestDbCompare: (req: { connId: string; db: string; kind: DbKind }) => void;
+  clearDbCompareRequest: () => void;
   // 將一段 SQL 載入查詢編輯器並切到查詢分頁。
   requestQuery: (sql: string) => void;
   clearPendingSql: () => void;
@@ -232,6 +248,8 @@ export const useStore = create<AppStore>((set) => ({
   queryTabs: session.queryTabs,
   sshTabs: [],
   rdTabs: [],
+  compareTabs: [],
+  dbCompareRequest: null,
   pendingSql: null,
   pendingNlOpen: false,
   pendingAiAction: null,
@@ -325,7 +343,11 @@ export const useStore = create<AppStore>((set) => ({
       const queryTabs = s.queryTabs.filter((q) => q === key);
       const sshTabs = s.sshTabs.filter((t) => t.key === key);
       const rdTabs = s.rdTabs.filter((t) => t.key === key);
-      return { tabs, queryTabs, sshTabs, rdTabs, activeTabKey: landingKey(tabs, queryTabs, [...sshTabs, ...rdTabs], key) };
+      const compareTabs = s.compareTabs.filter((t) => t.key === key);
+      return {
+        tabs, queryTabs, sshTabs, rdTabs, compareTabs,
+        activeTabKey: landingKey(tabs, queryTabs, wsTabs({ sshTabs, rdTabs, compareTabs }), key),
+      };
     }),
   // 新增查詢分頁：產生不重複 id（無 home 時補 home，否則 __query__:N）並切過去。
   addQueryTab: () =>
@@ -380,7 +402,7 @@ export const useStore = create<AppStore>((set) => ({
       if (!s.sshTabs.some((t) => t.key === key)) return {};
       const sshTabs = s.sshTabs.filter((t) => t.key !== key);
       const preferred = s.activeTabKey === key ? neighborSshKey(s.sshTabs, key) : s.activeTabKey;
-      return { sshTabs, activeTabKey: landingKey(s.tabs, s.queryTabs, [...sshTabs, ...s.rdTabs], preferred) };
+      return { sshTabs, activeTabKey: landingKey(s.tabs, s.queryTabs, wsTabs({ ...s, sshTabs }), preferred) };
     }),
   closeOtherSshTabs: (key) =>
     set((s) => {
@@ -391,7 +413,7 @@ export const useStore = create<AppStore>((set) => ({
   closeAllSshTabs: () =>
     set((s) => {
       const onSsh = s.sshTabs.some((t) => t.key === s.activeTabKey);
-      return { sshTabs: [], activeTabKey: onSsh ? landingKey(s.tabs, s.queryTabs, s.rdTabs, null) : s.activeTabKey };
+      return { sshTabs: [], activeTabKey: onSsh ? landingKey(s.tabs, s.queryTabs, wsTabs({ ...s, sshTabs: [] }), null) : s.activeTabKey };
     }),
   renameSshTab: (key, title) =>
     set((s) => ({ sshTabs: s.sshTabs.map((t) => (t.key === key ? { ...t, title } : t)) })),
@@ -406,7 +428,7 @@ export const useStore = create<AppStore>((set) => ({
       if (!s.rdTabs.some((t) => t.key === key)) return {};
       const rdTabs = s.rdTabs.filter((t) => t.key !== key);
       const preferred = s.activeTabKey === key ? neighborSshKey(s.rdTabs, key) : s.activeTabKey;
-      return { rdTabs, activeTabKey: landingKey(s.tabs, s.queryTabs, [...s.sshTabs, ...rdTabs], preferred) };
+      return { rdTabs, activeTabKey: landingKey(s.tabs, s.queryTabs, wsTabs({ ...s, rdTabs }), preferred) };
     }),
   closeOtherRdTabs: (key) =>
     set((s) => {
@@ -417,10 +439,38 @@ export const useStore = create<AppStore>((set) => ({
   closeAllRdTabs: () =>
     set((s) => {
       const onRd = s.rdTabs.some((t) => t.key === s.activeTabKey);
-      return { rdTabs: [], activeTabKey: onRd ? landingKey(s.tabs, s.queryTabs, s.sshTabs, null) : s.activeTabKey };
+      return { rdTabs: [], activeTabKey: onRd ? landingKey(s.tabs, s.queryTabs, wsTabs({ ...s, rdTabs: [] }), null) : s.activeTabKey };
     }),
   renameRdTab: (key, title) =>
     set((s) => ({ rdTabs: s.rdTabs.map((t) => (t.key === key ? { ...t, title } : t)) })),
+  // ---- 比對分頁 ----（移出 compareTabs 的分頁會卸載 ComparePane，由它的清理斷線、刪暫存檔）
+  openCompareTab: (tab) => {
+    const key = newCompareTabKey();
+    set((s) => ({ compareTabs: [...s.compareTabs, { ...tab, key }], activeTabKey: key }));
+    return key;
+  },
+  updateCompareTab: (key, patch) =>
+    set((s) => ({ compareTabs: s.compareTabs.map((t) => (t.key === key ? { ...t, ...patch } : t)) })),
+  closeCompareTab: (key) =>
+    set((s) => {
+      if (!s.compareTabs.some((t) => t.key === key)) return {};
+      const compareTabs = s.compareTabs.filter((t) => t.key !== key);
+      const preferred = s.activeTabKey === key ? neighborSshKey(s.compareTabs, key) : s.activeTabKey;
+      return { compareTabs, activeTabKey: landingKey(s.tabs, s.queryTabs, wsTabs({ ...s, compareTabs }), preferred) };
+    }),
+  closeOtherCompareTabs: (key) =>
+    set((s) => {
+      const compareTabs = s.compareTabs.filter((t) => t.key === key);
+      const onCmp = s.compareTabs.some((t) => t.key === s.activeTabKey);
+      return { compareTabs, activeTabKey: onCmp ? key : s.activeTabKey };
+    }),
+  closeAllCompareTabs: () =>
+    set((s) => {
+      const onCmp = s.compareTabs.some((t) => t.key === s.activeTabKey);
+      return { compareTabs: [], activeTabKey: onCmp ? landingKey(s.tabs, s.queryTabs, wsTabs({ ...s, compareTabs: [] }), null) : s.activeTabKey };
+    }),
+  requestDbCompare: (req) => set((s) => ({ dbCompareRequest: { ...req, nonce: (s.dbCompareRequest?.nonce ?? 0) + 1 } })),
+  clearDbCompareRequest: () => set({ dbCompareRequest: null }),
   // 設定待載入 SQL 並切到查詢分頁（QueryPane 掛載後消費）。作用中已是某查詢分頁則留在原分頁，
   // 否則（在表分頁）切到第一個查詢分頁；查詢分頁已全關光則現開一個承接。
   requestQuery: (sql) =>

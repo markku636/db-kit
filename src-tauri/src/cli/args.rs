@@ -199,6 +199,121 @@ pub enum Command {
     /// AI 資源庫（人設 / 技能 / 提示範本）：列出、檢視、檢查，同步到 Claude Code / Codex
     #[command(subcommand)]
     Ai(AiCmd),
+
+    /// 比對兩個檔案或資料夾（本機路徑，或 ssh://<已存主機>/<路徑>）；檔案輸出 unified diff，資料夾列出不同的項目
+    Diff(FileDiffArgs),
+
+    /// 依規則同步兩個資料夾（鏡像 / 更新）。未加 --yes 只列出將執行的動作；會刪除檔案時另需 --force
+    Sync(FileSyncArgs),
+}
+
+/// 資料夾比對判斷「相同」的準則。
+#[derive(ValueEnum, Clone, Copy, Debug)]
+pub enum CriteriaArg {
+    /// 大小與修改時間（預設）
+    SizeMtime,
+    /// 只看大小
+    Size,
+    /// 內容（逐位元組；遠端檔會先下載）
+    Content,
+}
+
+impl From<CriteriaArg> for crate::filecmp::diff::Criteria {
+    fn from(c: CriteriaArg) -> Self {
+        match c {
+            CriteriaArg::SizeMtime => Self::SizeMtime,
+            CriteriaArg::Size => Self::Size,
+            CriteriaArg::Content => Self::Content,
+        }
+    }
+}
+
+/// 同步規則。
+#[derive(ValueEnum, Clone, Copy, Debug)]
+pub enum SyncRuleArg {
+    /// 鏡像：讓右邊跟左邊一模一樣（覆蓋不同的、刪除只在右邊的）
+    MirrorLr,
+    /// 鏡像：讓左邊跟右邊一模一樣
+    MirrorRl,
+    /// 把左邊較新或右邊沒有的檔複製到右邊，不刪除
+    UpdateLr,
+    /// 把右邊較新或左邊沒有的檔複製到左邊，不刪除
+    UpdateRl,
+    /// 兩邊互相補齊，不同的以較新的一邊為準
+    UpdateBoth,
+}
+
+impl From<SyncRuleArg> for crate::filecmp::sessions::SyncRule {
+    fn from(r: SyncRuleArg) -> Self {
+        match r {
+            SyncRuleArg::MirrorLr => Self::MirrorLr,
+            SyncRuleArg::MirrorRl => Self::MirrorRl,
+            SyncRuleArg::UpdateLr => Self::UpdateLr,
+            SyncRuleArg::UpdateRl => Self::UpdateRl,
+            SyncRuleArg::UpdateBoth => Self::UpdateBoth,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct FileDiffArgs {
+    /// 左邊：本機路徑，或 ssh://<已存主機>/<路徑>（FTP 主機也用這個寫法；~ = 家目錄）
+    pub left: Option<String>,
+    /// 右邊（同上）
+    pub right: Option<String>,
+    /// 使用 GUI 已存的比對（名稱或 id）；兩邊與比對規則從那筆帶，命令列參數優先
+    #[arg(long)]
+    pub session: Option<String>,
+    /// 比對方式（text / binary / folder；省略 = 依兩邊自動判斷）
+    #[arg(long, value_parser = ["text", "binary", "folder"])]
+    pub mode: Option<String>,
+    /// 資料夾比對判斷相同的準則
+    #[arg(long, value_enum)]
+    pub criteria: Option<CriteriaArg>,
+    /// 排除的名稱或路徑（可重複；支援 * 與 ?；給了就取代預設的 .git、node_modules）
+    #[arg(long)]
+    pub exclude: Vec<String>,
+    /// 忽略整小時的時間差（時區 / 夏令時間）
+    #[arg(long = "ignore-hour-offset")]
+    pub ignore_hour_offset: bool,
+    /// 名稱不分大小寫對齊
+    #[arg(long = "ignore-case")]
+    pub ignore_case: bool,
+    /// 資料夾比對：連相同的項目也列出
+    #[arg(long)]
+    pub all: bool,
+    /// 文字比對的上下文行數
+    #[arg(long, default_value_t = 3)]
+    pub context: usize,
+    /// 有差異時以非零結束碼結束（腳本 / CI 用）
+    #[arg(long = "exit-code")]
+    pub exit_code: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct FileSyncArgs {
+    /// 左邊資料夾：本機路徑，或 ssh://<已存主機>/<路徑>
+    pub left: Option<String>,
+    /// 右邊資料夾（同上）
+    pub right: Option<String>,
+    /// 使用 GUI 已存的比對（名稱或 id）；兩邊、排除規則與同步規則從那筆帶
+    #[arg(long)]
+    pub session: Option<String>,
+    /// 同步規則（已存的比對有設定時可省略）
+    #[arg(long, value_enum)]
+    pub rule: Option<SyncRuleArg>,
+    /// 判斷相同的準則
+    #[arg(long, value_enum)]
+    pub criteria: Option<CriteriaArg>,
+    /// 排除的名稱或路徑（可重複；支援 * 與 ?）
+    #[arg(long)]
+    pub exclude: Vec<String>,
+    /// 忽略整小時的時間差
+    #[arg(long = "ignore-hour-offset")]
+    pub ignore_hour_offset: bool,
+    /// 名稱不分大小寫對齊
+    #[arg(long = "ignore-case")]
+    pub ignore_case: bool,
 }
 
 #[derive(Subcommand, Debug)]

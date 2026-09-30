@@ -11,6 +11,8 @@ mod args;
 // 結構 / 資料比對：要同時開兩條連線，與 dispatch 的單連線流程分開放。
 mod compare;
 mod dispatch;
+// `dbk diff` / `dbk sync`：檔案 / 資料夾比對與同步（核心在 crate::filecmp，與 GUI 的比對分頁同一套）。
+mod filecmp;
 // 唯讀 / 高破壞語句守門不只 CLI 用：壓力測試（stress.rs）會反覆重放語句，
 // 開跑前要走同一道判準——判準只能有一份，兩份必然漂移成「這裡擋、那裡不擋」。
 pub(crate) mod guard;

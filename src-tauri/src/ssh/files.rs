@@ -96,4 +96,12 @@ impl FileClient {
             FileClient::Ftp(c) => c.chmod(path, mode).await,
         }
     }
+
+    /// 設定修改時間。FTP 沒有通用的做法（MFMT 不是每台伺服器都有），回 `false` 表示沒設。
+    pub async fn set_mtime(&self, path: &str, mtime: u64) -> AppResult<bool> {
+        match self {
+            FileClient::Sftp(c) => c.set_mtime(path, mtime).await.map(|_| true),
+            FileClient::Ftp(_) => Ok(false),
+        }
+    }
 }

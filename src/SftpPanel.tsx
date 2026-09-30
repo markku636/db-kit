@@ -18,7 +18,8 @@ import { ensureSftpProgressListener, useSshTransfers } from "./useSshTransfers";
 import { useT } from "./i18n";
 import { Icon, IconButton, MenuPanel, Spinner } from "./ui/index";
 import { remPx, useElementWidth } from "./ui/useElementWidth";
-import { copyToClipboard, pickDirectory, pickOpenFiles, pickSaveFile, toast, uiChoose, uiConfirm, uiPrompt } from "./ui";
+import { copyToClipboard, pickDirectory, pickOpenFile, pickOpenFiles, pickSaveFile, toast, uiChoose, uiConfirm, uiPrompt } from "./ui";
+import { compareTitle, type CompareMode, type Endpoint } from "./compareTabs";
 import { fmtBytes } from "./schemaCache";
 import { canOpenInEditor, toOctal } from "./sftpText";
 import {
@@ -605,12 +606,35 @@ export default function SftpPanel({
   const sortMark = (col: SortCol) => (sort.col === col ? (sort.dir === 1 ? " ▲" : " ▼") : "");
   const selectedBytes = selectedEntries.reduce((a, x) => a + (x.is_dir ? 0 : x.size), 0);
 
+  // 比對：遠端這一邊用分頁的主機（比對分頁自己另開連線）。獨立 SFTP 視窗裡沒有主視窗的分頁清單 → 不提供。
+  const remoteEp = (p: string): Endpoint | null => {
+    const tab = useStore.getState().sshTabs.find((x) => x.key === tabKey);
+    return tab ? { side: "remote", target: tab.target, sessionId: tab.sessionId, label: tab.title, path: p } : null;
+  };
+  const openCompare = (mode: CompareMode, left: Endpoint, right: Endpoint) =>
+    useStore.getState().openCompareTab({ mode, left, right, title: compareTitle(left, right, t("貼上的文字")) });
+  const compareWithLocal = async (entry: SftpEntry) => {
+    const dir = isDirEntry(entry);
+    const ep = remoteEp(entry.path);
+    const local = dir ? await pickDirectory() : await pickOpenFile();
+    if (ep && local) openCompare(dir ? "folder" : "text", ep, { side: "local", path: local });
+  };
+  const compareItems = (targets: SftpEntry[]): [string, () => void][] => {
+    if (!remoteEp("")) return [];
+    if (targets.length === 2 && targets.every((x) => !isDirEntry(x))) {
+      return [[t("比較這兩個檔案"), () => openCompare("text", remoteEp(targets[0].path)!, remoteEp(targets[1].path)!)]];
+    }
+    if (targets.length === 1) return [[isDirEntry(targets[0]) ? t("與本機資料夾比較…") : t("與本機檔案比較…"), () => void compareWithLocal(targets[0])]];
+    return [];
+  };
+
   const menuItems = (): [string, () => void][] => {
     if (!menu) return [];
     const { entry, targets } = menu;
     if (entry && targets.length > 1) {
       const n = targets.length;
       return [
+        ...compareItems(targets),
         [t("下載 {n} 項…", { n }), () => void downloadMany(targets)],
         [t("剪下 {n} 項（Ctrl+X）", { n }), () => cut(targets)],
         [t("移動 {n} 項到…", { n }), () => void moveToPrompt(targets)],
@@ -633,6 +657,7 @@ export default function SftpPanel({
         [t("權限…"), () => setPermsFor(entry)],
         [t("刪除"), () => void remove(entry)],
         [t("複製路徑"), () => copyPaths([entry])],
+        ...compareItems([entry]),
         ...(onCd ? ([[t("在終端機 cd 到此"), () => onCd(entry.is_dir ? entry.path : parentOf(entry.path))]] as [string, () => void][]) : []),
       ];
     }

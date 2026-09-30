@@ -393,6 +393,14 @@ impl SftpClient {
         self.stat(path).await
     }
 
+    /// 設定修改時間（比對同步複製完保留來源的時間，重新比對才不會因時間不同而又標成不同）。
+    /// SFTP v3 的時間屬性是 atime + mtime 一組，只給 mtime 會被伺服器忽略，所以兩個都填同一個值。
+    pub async fn set_mtime(&self, path: &str, mtime: u64) -> AppResult<()> {
+        let t = u32::try_from(mtime).unwrap_or(u32::MAX);
+        let attrs = FileAttributes { atime: Some(t), mtime: Some(t), ..FileAttributes::empty() };
+        self.inner.set_metadata(path.to_string(), attrs).await.map_err(map_err)
+    }
+
     /// 下載到本機。先寫 `<local>.part` 再 rename，檔案不會以不完整的樣子出現在原本的名字上。
     /// `local` 若是既有目錄，檔名取遠端 basename（經 `sanitize_local_filename`）。
     ///

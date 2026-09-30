@@ -2913,7 +2913,120 @@ const CASES = {
     check("AI 總結串流回填", streamed, (await appText(page)).replace(/\s+/g, " ").slice(0, 200));
     check("AI 總結完成後可重新產生", (await page.getByRole("button", { name: "重新產生", exact: true }).count()) > 0);
   },
+
+  // ---- 檔案 / 資料夾 / 二進位比對 ----
+  async "compare-text"(page) {
+    await startCompare(page, "文字比對", "C:\\work\\old\\app.conf", "C:\\work\\new\\app.conf");
+    await page.waitForSelector('[data-testid="text-compare"] .cm-mergeView', { timeout: 8000 });
+    await sleep(400);
+    const summary = await page.locator('[data-testid="cmp-summary"]').innerText();
+    check("文字比對：列出差異數", /處不同/.test(summary), summary);
+    check("文字比對：分頁標題是兩邊檔名（同名只寫一次）", (await page.locator("[data-cmp-tab]").first().innerText()).includes("app.conf"));
+    const ctl = page.locator(".dbk-merge-ctl").first();
+    check("文字比對：每一塊有 → / ← 兩顆套用鈕", (await ctl.locator("button").count()) === 2);
+    // 第一塊（port）套到右邊：右邊的 port 變回 5432，右邊標成已修改。
+    await ctl.locator("button").first().dispatchEvent("mousedown");
+    await sleep(300);
+    const right = await page.locator(".cm-mergeView .cm-editor").nth(1).innerText();
+    check("文字比對：→ 把這一塊套到右邊", right.includes("port = 5432") && !right.includes("port = 6432"), right.slice(0, 200));
+    const saveB = page.locator('[data-testid="cmp-save-b"]');
+    check("文字比對：右邊修改後「存右邊」可按", await saveB.isEnabled());
+    await saveB.click();
+    await sleep(400);
+    const writes = await page.evaluate(() => window.__DBKIT_CMP_WRITES__);
+    check("文字比對：存回右邊的檔案", writes.length === 1 && writes[0].path === "C:\\work\\new\\app.conf" && writes[0].content.includes("port = 5432"), JSON.stringify(writes));
+    check("文字比對：存檔帶開檔時的 mtime（衝突偵測）", writes[0]?.expectedMtime != null);
+    await noUnknownCommands(page, "文字比對");
+  },
+
+  async "compare-folder"(page) {
+    await startCompare(page, "資料夾比對", "C:\\work\\site", "C:\\deploy\\site");
+    await page.waitForSelector('[data-testid="fcmp-summary"]', { timeout: 8000 });
+    const summary = await page.locator('[data-testid="fcmp-summary"]').innerText();
+    check("資料夾比對：統計", summary.includes("只在左 1") && summary.includes("只在右 1") && summary.includes("不同 1"), summary);
+    const scans = await page.evaluate(() => window.__DBKIT_FCMP_SCANS__);
+    check("資料夾比對：預設排除 .git / node_modules", JSON.stringify(scans[0]?.opts?.excludes) === JSON.stringify([".git", "node_modules"]), JSON.stringify(scans[0]?.opts));
+    const list = page.locator('[data-testid="fcmp-list"]');
+    check("資料夾比對：子資料夾有差異就自動展開", (await list.getByText("app.conf", { exact: true }).count()) > 0);
+
+    await page.locator('[data-testid="fcmp-filter"]').getByRole("radio", { name: /只在左/ }).click();
+    await sleep(200);
+    const rowsLeftOnly = await list.locator("[data-key]").evaluateAll((els) => els.map((e) => e.getAttribute("data-key")));
+    check("資料夾比對：「只在左」篩選", JSON.stringify(rowsLeftOnly) === JSON.stringify(["new.txt"]), JSON.stringify(rowsLeftOnly));
+    await list.locator('[data-key="new.txt"]').click();
+    await page.locator('[data-testid="fcmp-copy-lr"]').click();
+    await page.getByRole("button", { name: "執行", exact: true }).click();
+    await sleep(500);
+    let syncs = await page.evaluate(() => window.__DBKIT_FCMP_SYNCS__);
+    check("資料夾比對：選取項目複製到右邊", JSON.stringify(syncs[0]) === JSON.stringify([{ kind: "copy_lr", src: "new.txt", dst: "new.txt", is_dir: false }]), JSON.stringify(syncs));
+    check("資料夾比對：同步後重新掃描", (await page.evaluate(() => window.__DBKIT_FCMP_SCANS__.length)) === 2);
+
+    await page.locator('[data-testid="fcmp-filter"]').getByRole("radio", { name: "全部", exact: true }).click();
+    await page.locator('[data-testid="fcmp-sync"]').click();
+    await page.getByText("鏡像：左 → 右", { exact: true }).click();
+    const preview = await page.locator('[data-testid="fcmp-sync-preview"]').innerText();
+    check("同步：鏡像預覽列出覆蓋與刪除", preview.includes("conf/app.conf") && preview.includes("new.txt") && preview.includes("old.log") && preview.includes("刪右"), preview);
+    await page.locator('[data-testid="fcmp-sync-run"]').click();
+    await page.getByRole("button", { name: "執行", exact: true }).click();
+    await sleep(500);
+    syncs = await page.evaluate(() => window.__DBKIT_FCMP_SYNCS__);
+    const kinds = (syncs[1] ?? []).map((o) => `${o.kind}:${o.src}`).sort();
+    check("同步：鏡像的操作清單", JSON.stringify(kinds) === JSON.stringify(["copy_lr:conf/app.conf", "copy_lr:new.txt", "delete_right:old.log"]), JSON.stringify(syncs[1]));
+    await noUnknownCommands(page, "資料夾比對");
+  },
+
+  async "compare-binary"(page) {
+    await startCompare(page, "二進位比對", "C:\\work\\old\\app.conf", "C:\\work\\new\\app.conf");
+    await page.waitForSelector('[data-testid="bin-summary"]', { timeout: 8000 });
+    await sleep(300);
+    const s = await page.locator('[data-testid="bin-summary"]').innerText();
+    check("二進位比對：列出不同的區段", /段不同/.test(s), s);
+    check("二進位比對：十六進位位移欄", (await appText(page)).includes("00000000"));
+    // 同一個分頁可切回文字比對。
+    await page.locator('[data-testid="compare-pane"]').getByRole("radio", { name: "文字", exact: true }).click();
+    await page.waitForSelector('[data-testid="text-compare"]', { timeout: 8000 });
+    check("二進位 → 文字比對切換", true);
+    await noUnknownCommands(page, "二進位比對");
+  },
+
+  async "compare-saved-session"(page) {
+    await openNewCompare(page);
+    const launcher = page.locator('[data-testid="compare-launcher"]');
+    await launcher.locator('[data-testid="cmp-left"] input').first().fill("C:\\work\\old\\app.conf");
+    await launcher.locator('[data-testid="cmp-right"] input').first().fill("C:\\work\\new\\app.conf");
+    await launcher.getByRole("button", { name: "存成比對…", exact: true }).click();
+    await page.getByRole("button", { name: "確定", exact: true }).click().catch(() => {});
+    await sleep(400);
+    const saves = await page.evaluate(() => window.__DBKIT_CMP_SESSION_SAVES__);
+    const s = saves.at(-1)?.sessions?.[0];
+    check("已存的比對：寫進 compare_sessions.json 的格式", !!s && s.mode === "text" && s.left.side === "local" && s.left.path === "C:\\work\\old\\app.conf" && Array.isArray(s.folder?.excludes), JSON.stringify(saves));
+    check("已存的比對：出現在啟動畫面", (await launcher.getByText("已存的比對", { exact: true }).count()) > 0);
+    await noUnknownCommands(page, "已存的比對");
+  },
 };
+
+/** 開新比對分頁：有分頁列就按分頁列的鈕，沒有（沒連任何資料庫）就按空狀態的鈕。 */
+async function openNewCompare(page) {
+  const bar = page.locator('[data-testid="new-compare-tab"]');
+  if (await bar.count()) await bar.click();
+  else await page.locator('[data-testid="new-compare-empty"]').click();
+}
+
+/** 開一個新比對分頁、選模式、填左右兩邊的本機路徑、開始比對。 */
+async function startCompare(page, modeLabel, left, right) {
+  await openNewCompare(page);
+  const launcher = page.locator('[data-testid="compare-launcher"]');
+  await launcher.waitFor({ timeout: 6000 });
+  await launcher.getByRole("radio", { name: modeLabel, exact: true }).click();
+  await launcher.locator('[data-testid="cmp-left"] input').first().fill(left);
+  await launcher.locator('[data-testid="cmp-right"] input').first().fill(right);
+  await launcher.locator('[data-testid="cmp-start"]').click();
+}
+
+async function noUnknownCommands(page, what) {
+  const unknown = await page.evaluate(() => window.__DBKIT_UNKNOWN__);
+  check(`${what}：沒有未實作的 command`, unknown.length === 0, unknown.join(", "));
+}
 
 // ── main ───────────────────────────────────────────────────────────────
 if (!existsSync(resolve(root, "dist/index.html"))) {

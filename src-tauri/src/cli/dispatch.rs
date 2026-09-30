@@ -68,6 +68,9 @@ pub async fn dispatch(cli: Cli) -> AppResult<()> {
         Command::Run(a) => super::run_script::run_cli(&conn, fmt, a).await,
         // AI 資源庫：只讀寫設定目錄，不連資料庫。
         Command::Ai(c) => super::ai::run(fmt, conn.yes, c),
+        // 檔案 / 資料夾比對與同步：不連資料庫（遠端那一邊自己開 SSH / FTP）。
+        Command::Diff(a) => super::filecmp::diff(fmt, a).await,
+        Command::Sync(a) => super::filecmp::sync(fmt, conn.yes, conn.force, a).await,
         // ---- 其餘需建立連線 ----
         other => run_connected(&conn, fmt, other).await,
     }
@@ -330,6 +333,7 @@ async fn exec(
         Command::Mcp { .. } => unreachable!("mcp 在連線前已處理"),
         Command::Run(_) => unreachable!("run 在連線前已處理"),
         Command::Ai(_) => unreachable!("ai 在連線前已處理"),
+        Command::Diff(_) | Command::Sync(_) => unreachable!("diff / sync 在連線前已處理"),
     }
     Ok(())
 }

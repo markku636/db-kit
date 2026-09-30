@@ -74,6 +74,35 @@ export function installShim(fx) {
     return [one(["result"], ["ok"])];
   };
 
+  // ── 比對的假本機檔案系統與資料夾比對結果 ──
+  window.__DBKIT_CMP_WRITES__ = [];
+  window.__DBKIT_CMP_SESSION_SAVES__ = [];
+  window.__DBKIT_FCMP_SCANS__ = [];
+  window.__DBKIT_FCMP_SYNCS__ = [];
+  const enc = (s) => new TextEncoder().encode(s ?? "");
+  const CMP_MTIME = 1_790_000_000;
+  const cmpFiles = () => {
+    if (!(window.__DBKIT_CMP_FILES__ instanceof Map)) {
+      window.__DBKIT_CMP_FILES__ = new Map(Object.entries({
+        "C:\\work\\old\\app.conf": "host = db.internal\nport = 5432\npool = 10\ntimeout = 30\nlog = info\n",
+        "C:\\work\\new\\app.conf": "host = db.internal\nport = 6432\npool = 10\ntimeout = 30\nlog = debug\nretry = 3\n",
+        ...(window.__DBKIT_CMP_FILES__ ?? {}),
+      }));
+    }
+    return window.__DBKIT_CMP_FILES__;
+  };
+  const cm = (rel, is_dir, size, mtime) => ({ rel, name: rel.split("/").pop(), is_dir, size, mtime });
+  const CMP_FOLDER_DIFF = {
+    rows: [
+      { key: "conf", left: cm("conf", true, 0, CMP_MTIME), right: cm("conf", true, 0, CMP_MTIME), status: "same", newer: null },
+      { key: "conf/app.conf", left: cm("conf/app.conf", false, 120, CMP_MTIME + 60), right: cm("conf/app.conf", false, 98, CMP_MTIME), status: "diff", newer: "left" },
+      { key: "conf/db.conf", left: cm("conf/db.conf", false, 40, CMP_MTIME), right: cm("conf/db.conf", false, 40, CMP_MTIME), status: "same", newer: null },
+      { key: "README.md", left: cm("README.md", false, 900, CMP_MTIME), right: cm("README.md", false, 900, CMP_MTIME), status: "same", newer: null },
+      { key: "new.txt", left: cm("new.txt", false, 12, CMP_MTIME), right: null, status: "left_only", newer: null },
+      { key: "old.log", left: null, right: cm("old.log", false, 3000, CMP_MTIME), status: "right_only", newer: null },
+    ],
+    left_count: 5, right_count: 5, skipped: 0, errors: [],
+  };
   const isMysql = ({ id }) => id === "c-mysql";
   const cachedAt = () => Date.now() - fx.SCHEMA_CACHE_AGE_MS;
   const handlers = {
@@ -701,6 +730,53 @@ metadata:
     // SFTP 獨立視窗：瀏覽器裡開不了第二個視窗，只記下呼叫（回 true = 新開的）。視窗那一側由情境直接開 sftp.html 驗。
     ssh_sftp_window_open: ({ tabKey, title }) => { window.__DBKIT_SFTP_WINDOWS__.push({ op: "open", tabKey, title }); return true; },
     ssh_sftp_window_close: ({ tabKey }) => { window.__DBKIT_SFTP_WINDOWS__.push({ op: "close", tabKey }); return null; },
+    // ── 檔案 / 資料夾 / 二進位比對（commands/filecmp.rs）──
+    // 本機檔案系統是 cmpFiles（路徑 → 文字）；情境可先改 window.__DBKIT_CMP_FILES__ 再開比對。
+    cmp_local_stat: ({ path }) => { const s = cmpFiles().get(path); return s == null ? { exists: false, is_dir: false, size: 0, mtime: null } : { exists: true, is_dir: false, size: enc(s).length, mtime: CMP_MTIME }; },
+    cmp_local_read_text: ({ path }) => {
+      const text = cmpFiles().get(path);
+      if (text == null) return Promise.reject({ kind: "compare", code: "ERR_COMPARE", message: `找不到檔案：${path}` });
+      return { text, truncated: false, size: enc(text).length, mtime: CMP_MTIME, lossy: false, binary: text.includes("\u0000") };
+    },
+    cmp_local_write_text: ({ path, content, expectedMtime }) => {
+      window.__DBKIT_CMP_WRITES__.push({ path, content, expectedMtime });
+      cmpFiles().set(path, content);
+      return { exists: true, is_dir: false, size: enc(content).length, mtime: CMP_MTIME };
+    },
+    cmp_fetch: ({ remote }) => {
+      const local = `tmp:${remote}`;
+      cmpFiles().set(local, sftpFiles.get(remote) ?? cmpFiles().get(remote) ?? "");
+      return { local, size: enc(cmpFiles().get(local)).length, mtime: CMP_MTIME };
+    },
+    cmp_put: ({ local, remote }) => {
+      const content = cmpFiles().get(local) ?? "";
+      window.__DBKIT_CMP_WRITES__.push({ path: remote, content, remote: true });
+      sftpFiles.set(remote, content);
+      return { exists: true, is_dir: false, size: enc(content).length, mtime: CMP_MTIME };
+    },
+    cmp_release: () => null,
+    cmp_sessions_load: () => ({ version: 1, sessions: window.__DBKIT_CMP_SESSIONS__ ?? [] }),
+    cmp_sessions_save: ({ file }) => { window.__DBKIT_CMP_SESSIONS__ = file.sessions; window.__DBKIT_CMP_SESSION_SAVES__.push(file); return null; },
+    fcmp_scan: ({ left, right, opts }) => { window.__DBKIT_FCMP_SCANS__.push({ left, right, opts }); return window.__DBKIT_FCMP_DIFF__ ?? CMP_FOLDER_DIFF; },
+    fcmp_content_check: ({ pairs }) => pairs.map((p) => ({ key: p.key, equal: !(window.__DBKIT_FCMP_CONTENT_DIFF__ ?? []).includes(p.key), error: null })),
+    fcmp_sync: ({ ops }) => {
+      window.__DBKIT_FCMP_SYNCS__.push(ops);
+      const copied = ops.filter((o) => o.kind.startsWith("copy")).length;
+      return { copied, deleted: ops.length - copied, failed: [], mtime_not_kept: 0 };
+    },
+    fcmp_cancel: () => null,
+    fcmp_binary_diff: ({ a, b }) => {
+      const x = enc(cmpFiles().get(a) ?? ""), y = enc(cmpFiles().get(b) ?? "");
+      const ranges = [];
+      let open = -1, diffBytes = 0;
+      const n = Math.max(x.length, y.length);
+      for (let i = 0; i <= n; i++) {
+        const d = i < n && x[i] !== y[i];
+        if (d) { diffBytes++; if (open < 0) open = i; } else if (open >= 0) { ranges.push([open, i - open]); open = -1; }
+      }
+      return { size_a: x.length, size_b: y.length, ranges, diff_bytes: diffBytes, truncated: false };
+    },
+    fcmp_read_bytes: ({ path, offset, len }) => enc(cmpFiles().get(path) ?? "").slice(offset, offset + len).buffer,
     show_main_window: () => null,
   };
 

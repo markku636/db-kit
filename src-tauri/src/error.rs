@@ -61,6 +61,18 @@ pub enum AppError {
     #[error("remote desktop cancelled by user")]
     RdCancelled,
 
+    /// 檔案 / 資料夾 / 二進位比對（掃描、讀檔、同步）失敗。detail 已本地化。
+    #[error("compare error: {0}")]
+    Compare(String),
+
+    /// 比對視窗存檔時，檔案在開啟之後已被別人改過（mtime / 大小對不上）。detail 是完整句子。
+    #[error("compare save conflict: {0}")]
+    CompareConflict(String),
+
+    /// 使用者取消了比對 / 同步工作。前端收到此碼不該 toast。
+    #[error("compare cancelled by user")]
+    CompareCancelled,
+
     /// 查詢超過全域逾時（毫秒）。注意：伺服器端查詢可能仍在執行，
     /// 前端錯誤文案應引導使用者以行程清單（ProcessList）手動 KILL。
     #[error("query timed out after {0} ms")]
@@ -92,6 +104,9 @@ impl AppError {
             AppError::Rd(_) => "rd",
             AppError::RdAuth(_) => "rd_auth",
             AppError::RdCancelled => "rd_cancelled",
+            AppError::Compare(_) => "compare",
+            AppError::CompareConflict(_) => "compare_conflict",
+            AppError::CompareCancelled => "compare_cancelled",
             AppError::Timeout(_) => "timeout",
             AppError::NeedsConfirm(_) => "needs_confirm",
         }
@@ -115,6 +130,9 @@ impl AppError {
             AppError::Rd(_) => "ERR_RD",
             AppError::RdAuth(_) => "ERR_RD_AUTH",
             AppError::RdCancelled => "ERR_RD_CANCELLED",
+            AppError::Compare(_) => "ERR_COMPARE",
+            AppError::CompareConflict(_) => "ERR_COMPARE_CONFLICT",
+            AppError::CompareCancelled => "ERR_COMPARE_CANCELLED",
             AppError::Timeout(_) => "ERR_TIMEOUT",
             AppError::NeedsConfirm(_) => "ERR_NEEDS_CONFIRM",
         }
@@ -139,6 +157,9 @@ impl AppError {
             AppError::Rd(s) => tf!("遠端桌面錯誤：{detail}", detail = s),
             AppError::RdAuth(s) => tf!("遠端桌面認證失敗：{detail}", detail = s),
             AppError::RdCancelled => t!("使用者已取消遠端桌面連線").to_string(),
+            AppError::Compare(s) => tf!("比對錯誤：{detail}", detail = s),
+            AppError::CompareConflict(s) => s.clone(),
+            AppError::CompareCancelled => t!("已取消比對").to_string(),
             AppError::Timeout(ms) => tf!(
                 "查詢逾時（{ms} ms）；伺服器端查詢可能仍在執行，可從行程清單手動終止",
                 ms = ms

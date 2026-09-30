@@ -486,3 +486,19 @@ option {
     transform: none;
   }
 }
+
+/* 比對分頁（TextComparePane）：MergeView 撐滿高度；中間那欄是自己畫的逐塊套用按鈕（→ / ←）。
+   選擇器多疊一層 .cm-merge-revert：@codemirror/merge 的預設主題把按鈕設成 absolute + 100% 寬。 */
+.dbk-merge .cm-mergeView,
+.dbk-merge .cm-mergeViewEditors { min-height: 100%; }
+.dbk-merge .cm-merge-revert { width: 2.9rem; }
+.dbk-merge .cm-merge-revert .dbk-merge-ctl {
+  position: absolute; left: 0; right: 0;
+  display: flex; justify-content: center; gap: 2px;
+}
+.dbk-merge .cm-merge-revert .dbk-merge-ctl button {
+  position: static; width: auto; padding: 0 4px; line-height: 1.25;
+  border-radius: 3px; font-size: 11px;
+  color: rgb(var(--c-accent)); background: rgb(var(--c-accent) / 0.08);
+}
+.dbk-merge .cm-merge-revert .dbk-merge-ctl button:hover { background: rgb(var(--c-accent) / 0.22); }
