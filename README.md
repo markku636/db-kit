@@ -294,7 +294,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 審查並執行 | 執行前 **AI 審查**（結論徽章：可以執行 / 注意風險 / 不建議執行，預設不送資料列）→ **逐句擷取前像 → 回滾語句先落地 → 執行 → 擷取後像比對**；回滾等級逐句標示（完整 / 部分 / 無），不完整或正式環境要勾選確認；輸出 `script.sql` / `review.md` / `rollback.sql` / `diff.md` / `report.md` / `manifest.json` / `snapshots/`；「只產生備份」不執行（唯讀連線可用）；回滾腳本可再走一次審查並執行；AI 助手寫入語句與 `dbk run` 共用；支援 MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite |
 | AI 動作（編輯器） | 選一段 SQL → 右鍵 / `Ctrl+Shift+E` / 工具列「AI 動作」：解釋、最佳化、修正、加註解、**轉換方言**、產生測試資料、白話解釋執行計畫；`Ctrl+I` 用一句話描述要怎麼改。改寫類一律先走**差異預覽**（逐塊可拒絕、可手改），接受後進 undo 歷史 |
 | 多語系 | **繁體中文 · 简体中文 · English · 日本語 · 한국어 · Tiếng Việt**，工具列或設定頁即時切換、不需重啟；前端 / Rust 後端錯誤訊息 / `dbk` CLI（`--lang`、`DBKIT_LANG`）三處同步。各語言的譯文表由 vite 各切一個 chunk，只下載自己那包 |
-| 運維 | 連線設定持久化、加密匯出 / 匯入連線（逐筆選連線與機密類別；PROD 連線一律不含帳密）、排程備份 + 備份歷史、連線池監控 + Ping、啟動時檢查新版、跨平台桌面 App |
+| 運維 | 連線設定持久化、加密匯出 / 匯入連線（逐筆選連線與機密類別；PROD 連線一律不含帳密）、排程備份 + 備份歷史、連線池監控 + Ping、**App 內更新**（有新版跳出更新視窗並列出這一版的更新內容；Windows 按「立即更新」下載安裝檔、比對 SHA-256、裝完自動重開，macOS / Linux 前往下載頁）、跨平台桌面 App |
 
 > 目前進度：**八大資料庫 + Kafka 全部可連線**；關聯式完整 CRUD / DDL 欄位編輯 / 索引管理 / EXPLAIN / RETURNING 顯示、多欄複合篩選（9 種運算子 + AND·OR）排序、**CSV 匯入** + 多格式匯出 + **轉儲整庫結構 SQL**
 > SQL Server（tiberius + bb8 連線池）：CRUD、結構分頁（索引 / 外鍵 / DDL）、routines（預存程序 / 函式）、執行計畫（SET SHOWPLAN_XML）、ER 圖、欄位統計；備份 / 還原規劃以 sqlpackage 匯出 `.bacpac`（尚未接上）
@@ -398,7 +398,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] **SQL 編輯器補全**：表 / 欄自動完成（**整庫一次批次載入、無張數上限**）、**結構快取**（落地磁碟，開檔即用 / 離線可用，工具列徽章顯示更新時間並可一鍵重抓）、`@` 使用者變數提示
 - [x] **進階物件搜尋**（`Ctrl+Shift+G`）：表格化結果（可排序）、名稱 / 定義 / 註解三種命中、整字比對 + 萬用字元、定義預覽高亮、在物件總管中選取
 - [x] 側欄搜尋 / 篩選命中時自動展開資料夾；資料表格表頭 hover 顯示欄位 comment
-- [x] 「關於 DB Kit」對話框 + 啟動時檢查 GitHub 新版（可於設定關閉）
+- [x] 「關於 DB Kit」對話框 + 自動檢查 GitHub 新版（可於設定關閉）；**App 內更新**（Windows：下載、比對 SHA-256、安裝後自動重開；可續傳）
 - [x] **多語系（i18n）**：繁體中文 / 简体中文 / English / 日本語 / 한국어 / Tiếng Việt，即時切換不需重啟；前端、Rust 後端與 `dbk` CLI（`--lang`、`DBKIT_LANG`）全部在地化。日 / 韓 / 越譯文缺漏時退回英文而非中文，簡中對照表由 `scripts/i18n-gen-zhcn.mjs` 產生（OpenCC + 資料庫用語詞表）
 - [x] **FTP / FTPS 主機**：與 SFTP 共用檔案面板；explicit / implicit TLS、自簽憑證指紋確認、斷點續傳（`REST` / `APPE`）、被動 / 主動模式、傳輸各用自己的連線
 - [x] **Docker / Docker Registry / Harbor**：容器 / 映像 / Volume / 網路樹，容器資訊 / Log / Shell / 資源 / 行程，資料庫容器一鍵建連線，總覽與清理；Registry tag 與多平台清單、Harbor artifact 與弱點掃描、拉到 Docker
