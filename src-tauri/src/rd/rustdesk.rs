@@ -183,10 +183,19 @@ pub struct Connected {
 /// 沒給密碼時輔助程式先送空密碼的登入、回 `waiting_accept`（對方畫面跳出「接受」）：這時跟官方用戶端一樣
 /// 同時問密碼（`ask_password`），兩邊誰先好就用誰——對方按了接受，問到一半的對話框就收掉；先問到密碼就
 /// 用同一條連線補送登入。在對話框按取消 = 不連了。
-pub async fn connect<F, Fut>(p: &RustdeskParams, timeout: Duration, ask_password: F) -> AppResult<Connected>
+///
+/// 對方開了雙重驗證（`need_2fa`）：問驗證碼（`ask_2fa(上一個錯了)`），在同一條連線送出；錯了再問。
+pub async fn connect<F, Fut, G, GFut>(
+    p: &RustdeskParams,
+    timeout: Duration,
+    ask_password: F,
+    ask_2fa: G,
+) -> AppResult<Connected>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Option<AuthAnswer>>,
+    G: FnMut(bool) -> GFut,
+    GFut: Future<Output = Option<String>>,
 {
     let path = bridge_path().ok_or_else(|| {
         AppError::Rd(t!("找不到 RustDesk 連線元件（dbk-rustdesk-bridge），請重新安裝 db-kit").into())
@@ -206,9 +215,8 @@ where
         .map_err(|e| AppError::Rd(tf!("RustDesk 連線元件沒有回應：{e}", e = e)))?;
 
     // 等登入結果（對方可能要在畫面上按「接受」，所以時間給長一點）。
-    let wait = wait_login(&mut out, &mut stdin, ask_password);
-    match tokio::time::timeout(timeout, wait).await {
-        Ok(Ok(l)) => Ok(Connected {
+    match wait_login(&mut out, &mut stdin, timeout, ask_password, ask_2fa).await {
+        Ok(l) => Ok(Connected {
             child,
             stdin,
             out,
@@ -218,13 +226,9 @@ where
             secure: l.secure,
             route: l.route,
         }),
-        Ok(Err(e)) => {
+        Err(e) => {
             let _ = child.kill().await;
             Err(e)
-        }
-        Err(_) => {
-            let _ = child.kill().await;
-            Err(AppError::Rd(t!("RustDesk 連線逾時（對方沒有回應，或沒有在畫面上按接受）").into()))
         }
     }
 }
@@ -238,19 +242,37 @@ struct LoggedIn {
     answered: Option<AuthAnswer>,
 }
 
-/// 讀輔助程式的事件直到登入有結果；`waiting_accept` 時問密碼（見 `connect`）。
-async fn wait_login<W, F, Fut>(out: &mut Output, stdin: &mut W, ask_password: F) -> AppResult<LoggedIn>
+/// 讀輔助程式的事件直到登入有結果；`waiting_accept` 時問密碼、`need_2fa` 時問驗證碼（見 `connect`）。
+/// `timeout` 從開始等、以及每次要驗證碼時重新起算（使用者要去翻驗證器 App）。
+async fn wait_login<W, F, Fut, G, GFut>(
+    out: &mut Output,
+    stdin: &mut W,
+    timeout: Duration,
+    ask_password: F,
+    mut ask_2fa: G,
+) -> AppResult<LoggedIn>
 where
     W: AsyncWrite + Unpin,
     F: FnOnce() -> Fut,
     Fut: Future<Output = Option<AuthAnswer>>,
+    G: FnMut(bool) -> GFut,
+    GFut: Future<Output = Option<String>>,
 {
     let mut ask = Some(ask_password);
     let mut asking: Option<Pin<Box<Fut>>> = None;
+    let mut asking_2fa: Option<Pin<Box<GFut>>> = None;
     let mut answered = None;
+    let mut deadline = tokio::time::Instant::now() + timeout;
+    let gone = || AppError::Rd(t!("RustDesk 連線元件意外結束").into());
     loop {
         let answer = async {
             match asking.as_mut() {
+                Some(f) => f.await,
+                None => std::future::pending().await,
+            }
+        };
+        let code = async {
+            match asking_2fa.as_mut() {
                 Some(f) => f.await,
                 None => std::future::pending().await,
             }
@@ -262,18 +284,29 @@ where
                 let Some(a) = a else { return Err(AppError::RdCancelled) };
                 // 空密碼 = 繼續等對方按接受。
                 if !a.password.is_empty() {
-                    write_json(stdin, &json!({ "t": "login", "password": a.password }))
-                        .await
-                        .map_err(|_| AppError::Rd(t!("RustDesk 連線元件意外結束").into()))?;
+                    write_json(stdin, &json!({ "t": "login", "password": a.password })).await.map_err(|_| gone())?;
                     answered = Some(a);
                 }
                 continue;
+            }
+            c = code => {
+                asking_2fa = None;
+                let Some(c) = c else { return Err(AppError::RdCancelled) };
+                if c.trim().is_empty() {
+                    asking_2fa = Some(Box::pin(ask_2fa(false)));
+                } else {
+                    write_json(stdin, &json!({ "t": "2fa", "code": c })).await.map_err(|_| gone())?;
+                }
+                continue;
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                return Err(AppError::Rd(t!("RustDesk 連線逾時（對方沒有回應，或沒有在畫面上按接受）").into()));
             }
         };
         let msg = match msg {
             Some(Ok(m)) => m,
             Some(Err(e)) => return Err(AppError::Rd(e.to_string())),
-            None => return Err(AppError::Rd(t!("RustDesk 連線元件意外結束").into())),
+            None => return Err(gone()),
         };
         let Some(v) = json_of(&msg) else { continue };
         match v["type"].as_str() {
@@ -290,9 +323,21 @@ where
                     asking = Some(Box::pin(f()));
                 }
             }
+            Some("need_2fa") => {
+                // 密碼已過（或對方按了接受）：還開著的密碼對話框收掉，改問驗證碼。
+                asking = None;
+                ask = None;
+                asking_2fa = Some(Box::pin(ask_2fa(v["wrong"].as_bool().unwrap_or(false))));
+                deadline = tokio::time::Instant::now() + timeout;
+            }
             Some("login_error") => {
-                let m = v["message"].as_str().unwrap_or_default().to_string();
-                return Err(AppError::RdAuth(login_error_text(&m)));
+                let m = v["message"].as_str().unwrap_or_default();
+                // 錯太多次被對方暫時封鎖：再問密碼也沒用。
+                return Err(if is_locked_out(m) {
+                    AppError::Rd(login_error_text(m))
+                } else {
+                    AppError::RdAuth(login_error_text(m))
+                });
             }
             Some("error") | Some("closed") => {
                 let m = v["message"].as_str().or(v["reason"].as_str()).unwrap_or_default();
@@ -303,11 +348,23 @@ where
     }
 }
 
+/// 對方的防暴力破解（官方 `check_failure`）：一分鐘內錯超過 6 次、或累計超過 30 次。
+fn is_locked_out(m: &str) -> bool {
+    m.starts_with("Too many wrong attempts") || m == "Please try 1 minute later"
+}
+
 /// 對方回的登入錯誤 → 使用者看得懂的句子（原文附在後面，方便查）。
 fn login_error_text(m: &str) -> String {
     match m {
         "Wrong Password" => t!("RustDesk 密碼錯誤").into(),
         "No Password Access" | "Password Required" => t!("對方要求輸入密碼").into(),
+        // 輔助程式會把這兩個轉成 `need_2fa`；舊版輔助程式才會當成登入錯誤送來。
+        "2FA Required" => t!("對方的 RustDesk 開啟了雙重驗證（2FA），需要輸入驗證碼").into(),
+        "Wrong 2FA Code" => t!("雙重驗證碼錯誤").into(),
+        "Please try 1 minute later" => t!("密碼或驗證碼錯誤次數太多，對方暫時拒絕登入：請一分鐘後再試").into(),
+        _ if m.starts_with("Too many wrong attempts") => {
+            t!("密碼或驗證碼錯誤次數太多，對方的 RustDesk 已封鎖這台電腦的登入：請對方重新啟動 RustDesk 後再試").into()
+        }
         // 輔助程式自己的登入逾時（session.rs `LOGIN_TIMEOUT`）。
         "login timed out" => t!("對方一直沒有回應登入：沒有人在對方畫面上按「接受」。請輸入對方的 RustDesk 密碼").into(),
         _ if m.contains("denied") || m.contains("Denied") => tf!("對方拒絕了連線：{m}", m = m),
@@ -403,6 +460,12 @@ mod tests {
         AuthAnswer { username: String::new(), password: pw.into(), remember: true }
     }
 
+    const T: Duration = Duration::from_secs(5);
+
+    fn no_2fa(_: bool) -> std::future::Ready<Option<String>> {
+        panic!("不該問驗證碼")
+    }
+
     /// 等對方按接受時問到密碼 → 同一條連線補送 `login`；登入成功帶回輸入的密碼（給「記住密碼」）。
     #[tokio::test]
     async fn password_asked_while_waiting_for_accept() {
@@ -416,10 +479,10 @@ mod tests {
             tx.send(event(json!({ "type": "connected", "peer": { "current_display": 0, "displays": [{ "width": 1920, "height": 1080 }] }, "secure": true, "route": "relay" }))).await.unwrap();
         });
         let asked = std::sync::atomic::AtomicUsize::new(0);
-        let l = wait_login(&mut out, &mut stdin, || {
+        let l = wait_login(&mut out, &mut stdin, T, || {
             asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             async { Some(answer("pw")) }
-        })
+        }, no_2fa)
         .await
         .unwrap_or_else(|e| panic!("{e}"));
         bridge.await.unwrap();
@@ -435,7 +498,7 @@ mod tests {
         let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
         tx.send(event(json!({ "type": "waiting_accept" }))).await.unwrap();
         tx.send(event(json!({ "type": "connected", "peer": {}, "route": "lan" }))).await.unwrap();
-        let l = wait_login(&mut out, &mut stdin, || std::future::pending::<Option<AuthAnswer>>()).await.unwrap_or_else(|e| panic!("{e}"));
+        let l = wait_login(&mut out, &mut stdin, T, || std::future::pending::<Option<AuthAnswer>>(), no_2fa).await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(l.route, "lan");
         assert!(l.answered.is_none());
     }
@@ -445,7 +508,7 @@ mod tests {
         let (tx, mut out) = mpsc::channel(8);
         let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
         tx.send(event(json!({ "type": "waiting_accept" }))).await.unwrap();
-        let r = wait_login(&mut out, &mut stdin, || async { None }).await;
+        let r = wait_login(&mut out, &mut stdin, T, || async { None }, no_2fa).await;
         assert!(matches!(r, Err(AppError::RdCancelled)));
         drop(tx);
     }
@@ -456,11 +519,57 @@ mod tests {
         let (tx, mut out) = mpsc::channel(8);
         let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
         tx.send(event(json!({ "type": "login_error", "message": "login timed out" }))).await.unwrap();
-        let r = wait_login(&mut out, &mut stdin, || async { panic!("不該問密碼") }).await;
+        let r = wait_login(&mut out, &mut stdin, T, || async { panic!("不該問密碼") }, no_2fa).await;
         assert!(matches!(r, Err(AppError::RdAuth(ref m)) if m.contains("接受")), "{:?}", r.err());
         drop(tx);
-        let r = wait_login(&mut out, &mut stdin, || async { None }).await;
+        let r = wait_login(&mut out, &mut stdin, T, || async { None }, no_2fa).await;
         assert!(matches!(r, Err(AppError::Rd(_))));
+    }
+
+    /// 對方開了雙重驗證：還開著的密碼對話框收掉、改問驗證碼，送到同一條連線；錯了帶「錯了」再問一次。
+    #[tokio::test]
+    async fn two_factor_code_asked_and_resent_when_wrong() {
+        let (tx, mut out) = mpsc::channel(8);
+        let (mut stdin, mut bridge_in) = tokio::io::duplex(1 << 16);
+        tx.send(event(json!({ "type": "waiting_accept" }))).await.unwrap();
+        tx.send(event(json!({ "type": "need_2fa", "wrong": false }))).await.unwrap();
+        let bridge = tokio::spawn(async move {
+            for (code, reply) in [("111111", json!({ "type": "need_2fa", "wrong": true })), ("222222", json!({ "type": "connected", "peer": {} }))] {
+                let v = json_of(&read_msg(&mut bridge_in).await.unwrap().unwrap()).unwrap();
+                assert_eq!((v["t"].as_str(), v["code"].as_str()), (Some("2fa"), Some(code)));
+                tx.send(event(reply)).await.unwrap();
+            }
+        });
+        let asked = std::sync::Mutex::new(Vec::new());
+        let l = wait_login(&mut out, &mut stdin, T, || std::future::pending::<Option<AuthAnswer>>(), |wrong| {
+            let mut a = asked.lock().unwrap();
+            a.push(wrong);
+            std::future::ready(Some(if a.len() == 1 { "111111" } else { "222222" }.to_string()))
+        })
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+        bridge.await.unwrap();
+        assert_eq!(*asked.lock().unwrap(), [false, true]);
+        assert!(l.answered.is_none(), "驗證碼不是密碼，不記住");
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_2fa_prompt_cancels_the_connection() {
+        let (tx, mut out) = mpsc::channel(8);
+        let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
+        tx.send(event(json!({ "type": "need_2fa", "wrong": false }))).await.unwrap();
+        let r = wait_login(&mut out, &mut stdin, T, || async { None }, |_| async { None }).await;
+        assert!(matches!(r, Err(AppError::RdCancelled)), "{:?}", r.err());
+    }
+
+    /// 錯太多次被對方暫時封鎖：一般錯誤（不再重問密碼），說清楚要等多久。
+    #[tokio::test]
+    async fn lockout_is_not_a_password_retry() {
+        let (tx, mut out) = mpsc::channel(8);
+        let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
+        tx.send(event(json!({ "type": "login_error", "message": "Please try 1 minute later" }))).await.unwrap();
+        let r = wait_login(&mut out, &mut stdin, T, || async { None }, no_2fa).await;
+        assert!(matches!(r, Err(AppError::Rd(ref m)) if m.contains("一分鐘")), "{:?}", r.err());
     }
 
     /// 讀取 task：每則訊息原樣轉、結束時關掉 channel（也驗證讀到一半不會因為接收端在 select! 裡被取消而掉資料）。
@@ -497,6 +606,9 @@ mod tests {
     fn login_errors_are_readable() {
         assert_eq!(login_error_text("Wrong Password"), "RustDesk 密碼錯誤");
         assert_eq!(login_error_text("weird"), "weird");
+        assert!(login_error_text("2FA Required").contains("雙重驗證"));
+        assert!(is_locked_out("Too many wrong attempts for IPv6 prefix /64") && !is_locked_out("Wrong Password"));
+        assert!(login_error_text("Too many wrong attempts").contains("封鎖"));
         assert!(bridge_error_text(Some("key_mismatch"), "Key mismatch").contains("Key"));
         assert!(bridge_error_text(Some("relay_connect"), "connect x: timed out").ends_with("connect x: timed out"));
         assert_eq!(bridge_error_text(None, "raw"), "raw");

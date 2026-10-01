@@ -57,6 +57,8 @@ struct AuthPromptEvent {
     error: Option<String>,
     /// 不是錯誤的說明（RustDesk 等對方按接受時）。
     notice: Option<String>,
+    /// 問的是雙重驗證碼（RustDesk 對方開了 2FA），不是密碼：答案放在 `password`。
+    otp: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -106,6 +108,22 @@ impl RdUi {
         error: Option<String>,
         notice: Option<String>,
     ) -> Option<AuthAnswer> {
+        self.prompt(need_username, username, error, notice, false).await
+    }
+
+    /// 雙重驗證碼對話框。`None` = 取消。
+    async fn otp(&self, error: Option<String>, notice: String) -> Option<String> {
+        self.prompt(false, "", error, Some(notice), true).await.map(|a| a.password)
+    }
+
+    async fn prompt(
+        &self,
+        need_username: bool,
+        username: &str,
+        error: Option<String>,
+        notice: Option<String>,
+        otp: bool,
+    ) -> Option<AuthAnswer> {
         let a = self
             .ask(|prompt_id| {
                 self.app.emit(
@@ -117,6 +135,7 @@ impl RdUi {
                         username: username.to_string(),
                         error: error.clone(),
                         notice: notice.clone(),
+                        otp,
                     },
                 )
             })
@@ -638,7 +657,13 @@ async fn connect_rustdesk(
             let notice = t!("已請對方在畫面上按「接受」，對方按了就會連上；也可以直接輸入對方的 RustDesk 密碼。");
             ui.auth_prompt(false, "", None, Some(notice.into()))
         };
-        match rustdesk::connect(&p, s.options.connect_timeout() + PROMPT_TIMEOUT, ask).await {
+        // 對方開了雙重驗證：驗證碼在對方那台電腦綁定的驗證器 App 上（設了 Telegram 機器人的也會收到）。
+        let ask_2fa = |wrong: bool| {
+            let error = wrong.then(|| t!("驗證碼錯誤：請輸入驗證器 App 上目前顯示的那組（每 30 秒會換一組）").to_string());
+            let notice = t!("對方的 RustDesk 開啟了雙重驗證（2FA）：請輸入對方綁定的驗證器 App（如 Google Authenticator）上顯示的 6 位數驗證碼。");
+            ui.otp(error, notice.into())
+        };
+        match rustdesk::connect(&p, s.options.connect_timeout() + PROMPT_TIMEOUT, ask, ask_2fa).await {
             Ok(c) => {
                 if let Some(a) = &c.answered {
                     remember(&r.origin, a);

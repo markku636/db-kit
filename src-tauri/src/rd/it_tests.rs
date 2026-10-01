@@ -223,6 +223,11 @@ mod rustdesk {
         std::future::ready(None)
     }
 
+    /// 測試用的被控端沒開雙重驗證：不會問驗證碼。
+    fn no_2fa(_: bool) -> std::future::Ready<Option<String>> {
+        std::future::ready(None)
+    }
+
     /// 沒給密碼：對方畫面跳出「接受」、db-kit 問密碼；答了密碼就在同一條連線補送登入（真的被控端認不認）。
     #[tokio::test]
     #[ignore]
@@ -231,7 +236,7 @@ mod rustdesk {
         let c = r::connect(&params(""), Duration::from_secs(30), || {
             asked.store(true, std::sync::atomic::Ordering::SeqCst);
             std::future::ready(Some(AuthAnswer { username: String::new(), password: "dbkit123".into(), remember: false }))
-        })
+        }, no_2fa)
         .await
         .expect("登入");
         assert!(asked.load(std::sync::atomic::Ordering::SeqCst), "沒密碼要問");
@@ -243,7 +248,7 @@ mod rustdesk {
     #[tokio::test]
     #[ignore]
     async fn rustdesk_login_and_video_via_bridge() {
-        let c = r::connect(&params("dbkit123"), Duration::from_secs(30), no_ask).await.expect("登入");
+        let c = r::connect(&params("dbkit123"), Duration::from_secs(30), no_ask, no_2fa).await.expect("登入");
         assert!(c.size.0 > 0 && c.size.1 > 0, "{:?}", c.size);
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
         let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -287,7 +292,7 @@ mod rustdesk {
     #[ignore]
     async fn rustdesk_id_via_rendezvous_is_encrypted() {
         let key = std::env::var("DBKIT_RUSTDESK_IT_KEY").expect("DBKIT_RUSTDESK_IT_KEY");
-        let c = r::connect(&id_params(&key), Duration::from_secs(60), no_ask).await.expect("登入");
+        let c = r::connect(&id_params(&key), Duration::from_secs(60), no_ask, no_2fa).await.expect("登入");
         assert!(c.secure, "驗過對方公鑰 → 加密");
         assert!(["relay", "direct", "lan"].contains(&c.route.as_str()), "{}", c.route);
         assert!(c.size.0 > 0 && c.size.1 > 0, "{:?}", c.size);
@@ -298,7 +303,7 @@ mod rustdesk {
     #[ignore]
     async fn rustdesk_id_wrong_key_is_readable() {
         let bad = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-        match r::connect(&id_params(bad), Duration::from_secs(60), no_ask).await.err().unwrap() {
+        match r::connect(&id_params(bad), Duration::from_secs(60), no_ask, no_2fa).await.err().unwrap() {
             AppError::Rd(m) => assert!(m.contains("Key"), "{m}"),
             e => panic!("{e:?}"),
         }
@@ -307,7 +312,7 @@ mod rustdesk {
     #[tokio::test]
     #[ignore]
     async fn rustdesk_wrong_password_is_auth_error() {
-        let e = r::connect(&params("nope"), Duration::from_secs(30), no_ask).await.err().unwrap();
+        let e = r::connect(&params("nope"), Duration::from_secs(30), no_ask, no_2fa).await.err().unwrap();
         assert!(matches!(e, AppError::RdAuth(_)), "{e:?}");
     }
 }

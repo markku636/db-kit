@@ -1555,6 +1555,8 @@ const vi: Catalog = {
   "留空＝RustDesk 公開伺服器；自架的填 hbbs 位址": "Để trống = máy chủ công khai của RustDesk; nếu tự dựng, nhập địa chỉ hbbs",
   "記住密碼": "Nhớ mật khẩu",
   "記住密碼（存在系統鑰匙圈）": "Nhớ mật khẩu (lưu trong kho khóa của hệ thống)",
+  "雙重驗證": "Xác thực hai lớp",
+  "驗證碼": "Mã xác minh",
   "送出按鍵": "Gửi phím",
   "剪貼簿沒有文字": "Bộ nhớ tạm không có văn bản",
   "帳號": "Tên đăng nhập",

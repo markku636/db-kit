@@ -144,6 +144,7 @@ const CASE_FX = {
   "rd-cert-prompt": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rdp-file-import": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-rustdesk-2fa": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
 };
 
 // ui/Field 的 <label> 沒有 htmlFor（沒和 input 綁定），getByLabel 找不到：改以「標籤文字所在的欄位」取第一個輸入框。
@@ -1072,6 +1073,31 @@ const CASES = {
     check("Ctrl+Alt+Del 經後端送（不是拆成三個鍵）", await page.evaluate(() => window.__DBKIT_RD_KEYS__.includes("ctrl_alt_del")));
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // RustDesk 對方開了雙重驗證：問的是驗證碼（不是密碼、不能記住），錯了顯示原因再問，對了就連上。
+  async "rd-rustdesk-2fa"(page) {
+    await page.evaluate(() => { window.__DBKIT_RD_PROMPT__ = "otp"; });
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("office-pc", { exact: true }).first().dblclick();
+    const otp = page.locator("[data-rd-otp]");
+    await otp.waitFor({ timeout: 5000 }).catch(() => {});
+    check("對話框問驗證碼", (await otp.count()) === 1 && (await page.getByText("雙重驗證", { exact: true }).count()) > 0);
+    check("說明驗證碼從哪裡來", (await page.locator("[data-rd-auth-notice]").textContent().catch(() => ""))?.includes("驗證器 App"));
+    check("驗證碼欄不是密碼欄、沒有「記住密碼」", (await otp.getAttribute("type")) !== "password"
+      && (await otp.getAttribute("inputmode")) === "numeric" && (await page.getByText("記住密碼（存在系統鑰匙圈）").count()) === 0);
+    await otp.fill("111111");
+    await otp.press("Enter");
+    const err = page.locator("[data-rd-auth-error]");
+    await err.waitFor({ timeout: 5000 }).catch(() => {});
+    check("驗證碼錯：顯示原因、再問一次", (await err.textContent().catch(() => ""))?.includes("驗證碼錯誤") && (await otp.inputValue().catch(() => "x")) === "");
+    await otp.fill("123 456");
+    await otp.press("Enter");
+    await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "1024x768", null, { timeout: 10000 }).catch(() => {});
+    const answers = await page.evaluate(() => window.__DBKIT_RD_ANSWERS__);
+    check("驗證碼對了就連上", (await page.locator("[data-rd-overlay]").count()) === 0, JSON.stringify(answers));
+    check("驗證碼不記住", answers.length === 2 && answers.every((a) => a && a.remember === false), JSON.stringify(answers));
   },
 
   // 匯入 .rdp（mstsc 存的 UTF-16LE）：帶進對話框，網域拆開、全螢幕 / 解析度進進階設定。

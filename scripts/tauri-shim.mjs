@@ -561,6 +561,24 @@ metadata:
           }), 20);
         });
       }
+      // 情境可要求 RustDesk 對方的雙重驗證碼（window.__DBKIT_RD_PROMPT__ = "otp"）：123456 才對，錯了帶錯誤再問。
+      if (window.__DBKIT_RD_PROMPT__ === "otp") {
+        return new Promise((resolve, reject) => {
+          const ask = (error) => {
+            const promptId = `rd-otp-${++sshSeq}`;
+            rdPrompts.set(promptId, (a) => {
+              if (!a) reject({ kind: "rd_cancelled", code: "ERR_RD_CANCELLED", message: "cancelled" });
+              else if (a.password.replace(/\s/g, "") === "123456") resolve(finish());
+              else ask("驗證碼錯誤：請輸入驗證器 App 上目前顯示的那組（每 30 秒會換一組）");
+            });
+            setTimeout(() => emit("rd-auth-prompt", {
+              prompt_id: promptId, conn_id: connId, need_username: false, username: "", error, otp: true,
+              notice: "對方的 RustDesk 開啟了雙重驗證（2FA）：請輸入對方綁定的驗證器 App（如 Google Authenticator）上顯示的 6 位數驗證碼。",
+            }), 20);
+          };
+          ask(null);
+        });
+      }
       if (window.__DBKIT_RD_FAIL__) return Promise.reject({ kind: "rd", code: "ERR_RD", message: window.__DBKIT_RD_FAIL__ });
       return finish();
     },

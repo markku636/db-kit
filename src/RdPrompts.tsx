@@ -17,9 +17,13 @@ export interface RdAuthPromptDialogProps {
   onCancel: () => void;
 }
 
-/** 帳號 / 密碼。`need_username` 時多一格帳號（RDP 沒存帳號、macOS 螢幕共享的 ARD 認證）。 */
+/**
+ * 帳號 / 密碼。`need_username` 時多一格帳號（RDP 沒存帳號、macOS 螢幕共享的 ARD 認證）。
+ * `otp` = 問 RustDesk 對方的雙重驗證碼：欄位改成驗證碼、不顯示「記住密碼」（驗證碼每 30 秒換一組）。
+ */
 export function RdAuthPromptDialog({ prompt, canRemember, onReply, onCancel }: RdAuthPromptDialogProps) {
   const t = useT();
+  const otp = !!prompt.otp;
   const [username, setUsername] = useState(prompt.username);
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
@@ -28,7 +32,7 @@ export function RdAuthPromptDialog({ prompt, canRemember, onReply, onCancel }: R
     setPassword("");
   }, [prompt]);
 
-  const submit = () => onReply({ username: username.trim(), password, remember: canRemember && remember });
+  const submit = () => onReply({ username: username.trim(), password, remember: !otp && canRemember && remember });
   const onEnter = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.nativeEvent.isComposing) {
       e.preventDefault();
@@ -40,8 +44,8 @@ export function RdAuthPromptDialog({ prompt, canRemember, onReply, onCancel }: R
     <Modal
       open
       onClose={onCancel}
-      title={t("遠端桌面登入")}
-      icon={KeyRound}
+      title={otp ? t("雙重驗證") : t("遠端桌面登入")}
+      icon={otp ? ShieldCheck : KeyRound}
       size="sm"
       zClass={PROMPT_Z}
       noMaximize
@@ -61,17 +65,34 @@ export function RdAuthPromptDialog({ prompt, canRemember, onReply, onCancel }: R
           <Input autoFocus autoComplete="off" spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={onEnter} />
         </Field>
       )}
-      <Field label={t("密碼")}>
-        <Input
-          type="password"
-          autoFocus={!prompt.need_username}
-          autoComplete="off"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={onEnter}
-        />
-      </Field>
-      {canRemember && (
+      {otp ? (
+        <Field label={t("驗證碼")}>
+          <Input
+            data-rd-otp=""
+            autoFocus
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            spellCheck={false}
+            placeholder="123456"
+            className="mono tracking-widest"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={onEnter}
+          />
+        </Field>
+      ) : (
+        <Field label={t("密碼")}>
+          <Input
+            type="password"
+            autoFocus={!prompt.need_username}
+            autoComplete="off"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={onEnter}
+          />
+        </Field>
+      )}
+      {canRemember && !otp && (
         <label className="flex items-center gap-2 text-sm text-fg/70 select-none">
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
           {t("記住密碼（存在系統鑰匙圈）")}

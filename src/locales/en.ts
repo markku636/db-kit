@@ -4206,6 +4206,8 @@ const en: Catalog = {
   "留空＝跟分頁大小": "Leave blank = match the tab size",
   "留空＝RustDesk 公開伺服器；自架的填 hbbs 位址": "Leave blank = RustDesk public server; for a self-hosted one, enter the hbbs address",
   "記住密碼（存在系統鑰匙圈）": "Remember password (stored in the system keychain)",
+  "雙重驗證": "Two-factor authentication",
+  "驗證碼": "Verification code",
   "送出按鍵": "Send keys",
   "剪貼簿沒有文字": "The clipboard has no text",
   "帳號": "Username",

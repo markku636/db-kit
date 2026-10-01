@@ -236,6 +236,8 @@ where
     let mut login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
     // 對方的登入挑戰：沒密碼先送空的等對方按接受，期間 db-kit 問到密碼再用同一題重送登入（官方 `handle_login_from_ui`）。
     let mut hash: Option<(String, String)> = None;
+    // 對方回了 `2FA Required`：連線留著，等 db-kit 問到驗證碼（`{"t":"2fa"}`）再送。
+    let mut awaiting_2fa = false;
 
     loop {
         // 兩個讀取端都是取消安全的（select! 另一邊先好時，讀到一半的封包不會掉）。
@@ -262,6 +264,13 @@ where
                                 let proof = session::password_proof(password, salt, challenge);
                                 let m = session::login_request(&login.peer_id, proof, login.decoders, session_id, &login.my_name);
                                 session::send_sealed(&mut pw, &m, &mut tx).await.map_err(|e| e.to_string())?;
+                                login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
+                            }
+                        }
+                        Ok(Some(ipc::HostMsg::Json(v))) if v["t"] == "2fa" => {
+                            let code = v["code"].as_str().unwrap_or_default();
+                            if awaiting_2fa && !logged_in && !code.trim().is_empty() {
+                                session::send_sealed(&mut pw, &session::auth_2fa(code), &mut tx).await.map_err(|e| e.to_string())?;
                                 login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
                             }
                         }
@@ -319,6 +328,12 @@ where
             Incoming::LoginError(e) => {
                 emit(stdout, json!({ "type": "login_error", "message": e })).await?;
                 return Ok(());
+            }
+            Incoming::Need2fa(e) => {
+                awaiting_2fa = true;
+                // 使用者要去翻驗證器 App：從現在起重新計時。
+                login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
+                emit(stdout, json!({ "type": "need_2fa", "wrong": e == session::WRONG_2FA })).await?;
             }
             Incoming::Frames(frames) => {
                 for f in frames {
@@ -563,6 +578,54 @@ mod tests {
         ipc::write_host_json(&mut host_in_w, &json!({ "t": "refresh" })).await.unwrap();
         let m = Message::parse_from_bytes(&codec::read_frame(&mut theirs).await.unwrap().unwrap()).unwrap();
         assert!(matches!(m.union, Some(message::Union::Misc(_))), "下一則是 refresh，不是登入：{m:?}");
+        drop(host_in_w);
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    fn login_error_msg(e: &str) -> Message {
+        let mut m = Message::new();
+        let mut resp = LoginResponse::new();
+        resp.set_error(e.into());
+        m.set_login_response(resp);
+        m
+    }
+
+    /// 對方開了雙重驗證：密碼對了回 `2FA Required`，連線不斷；db-kit 送驗證碼 → `Auth2FA`，錯了可以再送。
+    #[tokio::test]
+    async fn two_factor_code_on_the_same_connection() {
+        let (ours, mut theirs) = tokio::io::duplex(1 << 16);
+        let (mut host_in_w, host_in_r) = tokio::io::duplex(1 << 16);
+        let (mut host_out_w, mut host_out_r) = tokio::io::duplex(1 << 16);
+        let task = tokio::spawn(async move {
+            let mut stdin = ipc::MsgReader::new(host_in_r);
+            drive(ours, &mut stdin, &mut host_out_w, &direct("h", "pw", Decoders::default(), "pc")).await
+        });
+        let _ = codec::read_frame(&mut theirs).await.unwrap();
+        send_peer(&mut theirs, &hash_msg("s", "c")).await;
+        let m = Message::parse_from_bytes(&codec::read_frame(&mut theirs).await.unwrap().unwrap()).unwrap();
+        assert!(matches!(m.union, Some(message::Union::LoginRequest(_))), "{m:?}");
+        send_peer(&mut theirs, &login_error_msg(session::REQUIRE_2FA)).await;
+        match ipc::read_msg(&mut host_out_r).await.unwrap() {
+            Some(ipc::HostMsg::Json(v)) => assert_eq!((v["type"].as_str(), v["wrong"].as_bool()), (Some("need_2fa"), Some(false))),
+            x => panic!("{x:?}"),
+        }
+        for (code, reply) in [("111 111", login_error_msg(session::WRONG_2FA)), ("123456", logged_in_msg("pc"))] {
+            ipc::write_host_json(&mut host_in_w, &json!({ "t": "2fa", "code": code })).await.unwrap();
+            let m = Message::parse_from_bytes(&codec::read_frame(&mut theirs).await.unwrap().unwrap()).unwrap();
+            let Some(message::Union::Auth2fa(a)) = m.union else { panic!("expect Auth2FA: {m:?}") };
+            assert_eq!(a.code, code.replace(' ', ""));
+            send_peer(&mut theirs, &reply).await;
+            match ipc::read_msg(&mut host_out_r).await.unwrap() {
+                Some(ipc::HostMsg::Json(v)) if code == "123456" => assert_eq!(v["type"], "connected"),
+                Some(ipc::HostMsg::Json(v)) => assert_eq!((v["type"].as_str(), v["wrong"].as_bool()), (Some("need_2fa"), Some(true))),
+                x => panic!("{x:?}"),
+            }
+        }
+        // 登入後再送 2fa：不送出去
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "2fa", "code": "000000" })).await.unwrap();
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "refresh" })).await.unwrap();
+        let m = Message::parse_from_bytes(&codec::read_frame(&mut theirs).await.unwrap().unwrap()).unwrap();
+        assert!(matches!(m.union, Some(message::Union::Misc(_))), "下一則是 refresh：{m:?}");
         drop(host_in_w);
         assert!(task.await.unwrap().is_ok());
     }

@@ -122,6 +122,8 @@ export interface RdAuthPrompt {
   error?: string | null;
   /** 不是錯誤的說明（RustDesk 等對方按接受時）。 */
   notice?: string | null;
+  /** 問的是雙重驗證碼（RustDesk 對方開了 2FA）：答案放 `password`，不顯示「記住密碼」。 */
+  otp?: boolean;
 }
 
 export interface RdAuthAnswer {

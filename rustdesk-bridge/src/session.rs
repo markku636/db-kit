@@ -6,7 +6,8 @@
 //    `secure_handshake`（驗過對方的公鑰就加密）。
 // 2. 對方送 `Hash { salt, challenge }` → 回 `LoginRequest`，密碼欄是 `sha256(sha256(密碼 + salt) + challenge)`
 //    （`handle_hash`）；沒有密碼就送空的，由對方在畫面上按「接受」。
-// 3. `LoginResponse`：`peer_info`（成功，帶螢幕清單）或 `error`（密碼錯等）。
+// 3. `LoginResponse`：`peer_info`（成功，帶螢幕清單）或 `error`（密碼錯等）。對方開了雙重驗證時 error 是
+//    `2FA Required`，連線不斷：在同一條連線送 `Auth2FA { code }`（官方 `send2fa`），錯了回 `Wrong 2FA Code`。
 // 4. 之後對方持續送 `VideoFrame`（VP9 / VP8 / AV1 其一，由我們在 `OptionMessage.supported_decoding` 宣告能解的），
 //    `TestDelay` 要原樣回（不回對方會以為斷線）。
 //
@@ -20,14 +21,18 @@ use tokio::io::AsyncWrite;
 
 use crate::codec::write_frame;
 use crate::proto::message::{
-    key_event, login_response, message, misc, video_frame, ControlKey, EncodedVideoFrames, KeyEvent, KeyboardMode,
-    LoginRequest, Message, Misc, MouseEvent, OptionMessage, SupportedDecoding,
+    key_event, login_response, message, misc, video_frame, Auth2FA, ControlKey, EncodedVideoFrames, KeyEvent,
+    KeyboardMode, LoginRequest, Message, Misc, MouseEvent, OptionMessage, SupportedDecoding,
 };
 use crate::proto::message::option_message::BoolOption;
 use crate::proto::message::supported_decoding::PreferCodec;
 
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// 對方要雙重驗證碼 / 驗證碼錯（官方 `REQUIRE_2FA` / `LOGIN_MSG_2FA_WRONG`）。
+pub const REQUIRE_2FA: &str = "2FA Required";
+pub const WRONG_2FA: &str = "Wrong 2FA Code";
 
 /// 影像編碼（送給 db-kit 的代碼）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +145,14 @@ pub fn login_request(peer: &str, proof: Vec<u8>, dec: Decoders, session_id: u64,
     m
 }
 
+/// 雙重驗證碼（驗證器 App 常顯示成 `123 456`，空白拿掉；`hwid` 不填 = 不要對方「信任這台裝置」）。
+pub fn auth_2fa(code: &str) -> Message {
+    let code = code.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut m = Message::new();
+    m.set_auth_2fa(Auth2FA { code, ..Default::default() });
+    m
+}
+
 /// 解出畫面（一則 VideoFrame 可能帶好幾張）。未宣告的編碼（RGB / YUV / H.26x）略過。
 pub fn frames_of(vf: &crate::proto::message::VideoFrame) -> Vec<Frame> {
     let display = vf.display.clamp(0, 255) as u8;
@@ -164,6 +177,8 @@ pub enum Incoming {
     Hash { salt: String, challenge: String },
     LoggedIn(PeerInfo),
     LoginError(String),
+    /// 要雙重驗證碼（`REQUIRE_2FA` / `WRONG_2FA` 原文）：連線還在，等 `Auth2FA`。
+    Need2fa(String),
     Frames(Vec<Frame>),
     /// 要原樣回的封包（TestDelay）。
     Echo(Message),
@@ -188,6 +203,7 @@ pub fn classify(data: &[u8]) -> Incoming {
                     .map(|d| Display { x: d.x, y: d.y, width: d.width, height: d.height, name: d.name.clone() })
                     .collect(),
             }),
+            Some(login_response::Union::Error(e)) if e == REQUIRE_2FA || e == WRONG_2FA => Incoming::Need2fa(e),
             Some(login_response::Union::Error(e)) => Incoming::LoginError(e),
             _ => Incoming::Ignore,
         },
@@ -302,6 +318,14 @@ mod tests {
         m.set_login_response(lr);
         assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::LoginError(ref e) if e == "Wrong Password"));
 
+        for e in [REQUIRE_2FA, WRONG_2FA] {
+            let mut m = Message::new();
+            let mut lr = LoginResponse::new();
+            lr.set_error(e.into());
+            m.set_login_response(lr);
+            assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Need2fa(ref x) if x == e), "{e}：不是登入失敗");
+        }
+
         let mut m = Message::new();
         let mut vf = VideoFrame { display: 1, ..Default::default() };
         vf.set_vp9s(EncodedVideoFrames {
@@ -331,5 +355,7 @@ mod tests {
         assert!(matches!(m.union, Some(message::Union::MouseEvent(ref e)) if e.mask == 9 && e.x == 10));
         let m = command_message(&Command::Refresh);
         assert!(matches!(m.union, Some(message::Union::Misc(_))));
+        let m = auth_2fa(" 123 456 ");
+        assert!(matches!(m.union, Some(message::Union::Auth2fa(ref a)) if a.code == "123456" && a.hwid.is_empty()));
     }
 }
