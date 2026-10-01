@@ -8,7 +8,8 @@
 
 <p align="center">
 一站式跨平台桌面資料庫工具，以單一一致的介面管理<br>
-<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka · Elasticsearch · RabbitMQ</strong>。
+<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka · Elasticsearch · RabbitMQ</strong>，<br>
+也把 <strong>SSH / SFTP / FTP · Docker · Kubernetes · 遠端桌面（RDP / VNC / RustDesk）· 檔案比對</strong> 收進同一個視窗。
 </p>
 
 <p align="center">
@@ -34,6 +35,8 @@
 ## 這是什麼
 
 工程師與 DBA 的日常往往要在 MySQL、MariaDB、PostgreSQL、SQL Server、Oracle、MongoDB、Redis… 之間來回切換，桌面上散落著好幾個各有脾氣的管理工具。**db-kit** 把它們收進同一套介面、同一套連線管理、同一套主題——關聯式、文件型、鍵值型三種資料範式都有貼合各自手感的瀏覽與編輯體驗，且日常操作（資料格、查詢、ER 圖、匯入匯出、備份）跨資料庫對齊。
+
+資料庫之外，查問題時常要跟著開的工具也在同一個側欄裡：**SSH 終端機與 SFTP / FTP 檔案面板**、**Docker / Registry / Harbor 容器與映像**、**Kubernetes 叢集**、**遠端桌面（RDP / VNC / Mac 螢幕共享 / RustDesk）**，以及**檔案 / 資料夾比對與同步**。跑在 Docker 或 Kubernetes 裡的資料庫可以一鍵建成連線（Kubernetes 自動走 port-forward），帳密一律只存 OS keychain。
 
 採用 **Tauri 2（Rust 後端 + Web 前端）**，安裝檔小、記憶體佔用約為 Electron 同類產品的十分之一；資料庫連線一律收在 Rust 後端、前端透過 Tauri command 呼叫，不直連、兼顧安全與效能。
 
@@ -62,8 +65,16 @@
 
 ## 畫面預覽
 
-> App 實際畫面截圖（production build，預設的 **Amethyst 紫水晶**深色主題）；畫面中的連線與資料皆為虛構的示範電商 schema。
+> App 實際畫面截圖（production build，預設的 **Amethyst 紫水晶**深色主題，v0.43）；畫面中的連線、主機與資料皆為虛構的示範資料。
 > 隨程式碼演進可用 `npm run make:screenshots` 重拍（Playwright 實拍，見 [`scripts/capture-screenshots.mjs`](./scripts/capture-screenshots.mjs)）。
+
+**一個入口連所有東西** — 「新增連線」把資料庫、訊息佇列、搜尋引擎、容器與映像、遠端主機放在同一個選擇器裡；也可以直接貼連線字串（`postgres://`、`mongodb+srv://`、`ssh://`、`rdp://`、`rustdesk://`、JDBC、ADO.NET…），類型與欄位自動判斷填好：
+
+<p align="center">
+  <img src="docs/screenshots/21-new-connection.png" alt="新增連線：資料庫、訊息佇列、搜尋引擎、容器、遠端主機在同一個選擇器" width="860">
+</p>
+
+### 資料庫
 
 | 資料表檢視 — 連線樹 · 分頁 · 可編輯資料格 | 查詢編輯器 — 多語句 · 結果集堆疊（SSMS 風格） |
 |:---:|:---:|
@@ -129,6 +140,30 @@
   <img src="docs/screenshots/11-db-docs.png" alt="整庫資料字典" width="860">
 </p>
 
+### SSH、容器、遠端桌面與檔案比對
+
+**SSH 終端機 + SFTP** — 多分頁終端機（密碼 / 各種格式的私鑰 / ssh-agent，跳板機可多層），底部命令列輸入條與狀態列；SFTP 面板可並排、可開成獨立視窗，拖進去就上傳、斷線可續傳，遠端文字檔直接在 App 裡編輯。主機可從 `~/.ssh/config` 或 `.xsh` 工作階段檔一次匯入；FTP / FTPS 主機用同一個檔案面板：
+
+<p align="center">
+  <img src="docs/screenshots/15-ssh-terminal.png" alt="SSH 終端機與 SFTP 檔案面板" width="860">
+</p>
+
+| **Docker** — 容器依狀態上色 · 資訊 / Log / Shell / 資源 · 資料庫容器一鍵建連線 | **Kubernetes** — namespace → 資源種類 · Pod log / shell · port-forward 連叢集內資料庫 |
+|:---:|:---:|
+| ![Docker 容器分頁](docs/screenshots/16-docker.png) | ![Kubernetes Pod 分頁](docs/screenshots/17-kubernetes.png) |
+
+**遠端桌面** — RDP（含 NLA、憑證指紋確認）、VNC / Mac 螢幕共享、RustDesk（Direct IP 或 RustDesk ID，經 ID / 中繼伺服器、填 Key 即端到端加密）直接開在分頁裡；可全螢幕、剪貼簿文字雙向同步，也能指定一台 SSH 主機當跳板加密轉接：
+
+<p align="center">
+  <img src="docs/screenshots/18-remote-desktop.png" alt="分頁內嵌的 RDP 遠端桌面" width="860">
+</p>
+
+| **文字比對** — 左右並排 · 行內差異 · 逐塊 → / ← 套用 · 存回原檔 | **資料夾比對** — 相同 / 不同 / 只在一邊 · 篩選 · 鏡像或雙向同步 |
+|:---:|:---:|
+| ![文字比對](docs/screenshots/19-file-compare.png) | ![資料夾比對](docs/screenshots/20-folder-compare.png) |
+
+> 兩邊可以是本機或任何已存的 SSH / SFTP / FTP 主機，另有二進位逐位元組比對；命令列對應 `dbk diff` / `dbk sync`，可以放進排程。
+
 ## 下載安裝
 
 <p align="center">
@@ -175,7 +210,7 @@
 
 安裝後第一次使用，三步驟即可連上資料庫：
 
-1. **新增連線** — 左上角點 **「＋ 新增連線」**，選擇資料庫類型（MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis / Kafka）。
+1. **新增連線** — 工具列點 **「連線」**，選擇類型：資料庫（MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis）、訊息佇列（Kafka / RabbitMQ）、搜尋引擎（Elasticsearch / OpenSearch），或容器與映像（Docker / Registry / Harbor / Kubernetes）、遠端主機（SSH / SFTP、FTP / FTPS、RDP、VNC / Mac、RustDesk）。手上有連線字串的話直接貼在最上面那一欄，類型與欄位會自動填好。
 2. **填入連線資訊** — 輸入主機、連接埠、帳號、密碼（或選 SQLite 檔案）。需要時可在 **SSH Tunnel** 分頁設定跳板。先按 **「測試連線」** 確認可連，再 **儲存**。
 3. **開始操作** — 連線會出現在左側樹狀清單，展開資料庫 → 雙擊資料表即可瀏覽 / 編輯資料；上方分頁可開查詢編輯器、ER 圖等。
 
@@ -206,10 +241,15 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 調字級 | 設定 → 字級：**介面字級**讓整個 App 的文字與間距等比縮放（最小 12px ～ 超大 22px）；**程式碼字級**只管查詢編輯器與程式碼區塊（也吃 **Ctrl** **+** / **−** / **0**） |
 | 問 AI | 右側面板（**Ctrl+L**）串接本機 Claude Code / OpenAI Codex CLI，或任何 Anthropic / OpenAI 相容 API（面板上可切換）。助手可自己下唯讀查詢；輸入 `@` 指定要附帶哪幾張表、`/` 用指令 |
 | 改 SQL | 在編輯器選一段 → 右鍵或 **Ctrl+Shift+E**：解釋 / 最佳化 / 修正 / 加註解 / 轉方言，改寫先看差異再套用（**Ctrl+I** 可直接用一句話下指示） |
+| 連容器裡的資料庫 | Docker 容器或 Kubernetes 的 Pod / Service 右鍵 →「**建立資料庫連線…**」：依映像判斷種類、帳密從環境變數帶好；Kubernetes 連線時自動開 port-forward |
+| 開終端機 / 傳檔 | 「新增連線」選 SSH / SFTP 或 FTP / FTPS（或直接貼 `ssh://user@host`），雙擊主機開終端機；工具列「SFTP」開檔案面板，檔案拖進去就上傳 |
+| 遠端桌面 | 「新增連線」選 RDP、VNC / Mac 或 RustDesk（可貼 `rdp://`、`vnc://`、`rustdesk://<ID>`），雙擊主機在分頁裡連線，**Ctrl+Alt+Enter** 全螢幕 |
+| 比對檔案 / 資料夾 | 分頁列的比對鈕或 **Ctrl+K**「比較文字 / 檔案…」「比較資料夾…」；兩邊可以是本機或已存的 SSH / FTP 主機 |
 
 ## ✨ 亮點
 
 - **一站式八大資料庫 + Kafka** — MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka，全部可實際連線，共用同一套連線樹、資料格與快捷鍵。
+- **查問題要開的其他工具也在同一個側欄** — SSH 終端機與 SFTP / FTP 檔案面板、Docker / Registry / Harbor、Kubernetes、遠端桌面（RDP / VNC / Mac 螢幕共享 / RustDesk），以及檔案 / 資料夾比對與同步。這些類型平常不佔版面：側欄只在有主機或連線時才出現對應區塊。跑在 Docker / Kubernetes 裡的資料庫可以一鍵建成連線，帳密一律只存 OS keychain。
 - **跨平台桌面 App** — 同一份程式碼產出 Windows / macOS / Linux 三平台原生安裝檔，介面、快捷鍵、連線管理與 keychain 完全一致；`dbk` CLI 亦跨平台（見 [跨平台](#跨平台)）。
 - **輕量高效** — Tauri 2 架構，用系統內建 WebView、比 Electron 輕約 10×；啟動走骨架屏（零白屏）、首包 JS 約 470 KB，CodeMirror 延後到開查詢分頁才載。
 - **一次跑多條、結果各自成格** — 多語句批次執行時每個結果集**堆疊同時顯示**（致敬 SSMS / MySQL Workbench），各格獨立捲動 / 排序 / 篩選，可單格或「全部匯出」；中途失敗仍保留先前已取回的結果集。
@@ -226,7 +266,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - **一個資料庫一串對話** — 對話面板可以並存多串、隨時切換，各自保有自己的歷史與上下文。以前整個助手只有一串：換個庫接著問，模型手上還握著上一個庫的表結構與結果，答案就串了庫；想乾淨開始只能「清空」，而清空是不可逆的。現在標題列的「開新對話」另起一串（舊的原封不動留在清單裡），清單顯示每串的標題（取自第一則提問，可改名）、開串時的連線與最後更新時間，切走再切回來歷史都還在。
 - **人設與技能** — 助手的系統提示詞（人設）可以改，並可存多組具名的「技能」（如「SQL 效能診斷」「唯讀安全至上」）；面板工具列的「技能」按鈕顯示目前啟用幾個，點開就在 AI 資源庫勾選要附帶的技能、直接編輯或新增；內建的人設、技能與提示範本也能直接改（存成你的自訂版本，隨時「還原預設」），資源庫上方畫出三者怎麼組成送給 AI 的提示；四種供應商共用同一份設定。
 - **附命令列工具 `dbk`** — 查詢 / 瀏覽 / 匯出 / 備份 + **寫入（修改 · 刪除，需 `--yes`，高破壞再要 `--force`）** 的 CLI，重用同一套連線與 keychain，可 `--no-default-features` 編成不連 Tauri 的精簡 binary，適合伺服器與 script 場景（見 [命令列工具](#命令列工具dbk-cli)）。
-- **完整工程實踐** — 後端以 Docker 真實資料庫（MySQL / PostgreSQL / SQLite / MongoDB / Redis）做整合測試、Rust 單元測試覆蓋各方言 SQL 生成（含 MariaDB / Oracle）、前端 vitest 覆蓋（329 項），另有 **`npm run verify:ui` UI 冒煙檢查**（production build + Tauri invoke shim 驗右鍵選單與分頁行為，免 Docker / 免真實資料庫），經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
+- **完整工程實踐** — 後端以 Docker 裡的真實服務做整合測試（MySQL / PostgreSQL / SQL Server / SQLite / MongoDB / Redis，以及 OpenSSH、FTP、VNC、RDP、RustDesk、k3s），Rust 單元測試覆蓋各方言 SQL 生成（含 MariaDB / Oracle）、前端 vitest 2,000 項以上，另有 **`npm run verify:ui` UI 冒煙檢查**（production build + Tauri invoke shim，500 多個情境驗右鍵選單、分頁與對話框行為，免 Docker / 免真實資料庫）與 `npm run verify:layout`（最小視窗、大字級下檢查按鈕不折行、不被裁切），經多輪對抗式自我審查修正安全與正確性問題（見 [CHANGELOG](./CHANGELOG.md)）。
 
 ## 功能特色
 
@@ -243,8 +283,12 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 效能 | **SQL 壓力測試**（致敬 SQLQueryStress）：多執行緒重複執行、固定迭代或持續時間 + 爬升、暖機、**p50/p90/p95/p99 延遲百分位** + TPS 即時折線、**錯誤指紋化分組**、`:name` 參數 CSV 替換、報表一鍵複製為 Markdown；走**專屬連線池**不佔用互動連線，寫入與高破壞語句預設擋下；亦可用 `dbk stress` 在腳本中跑 |
 | 外觀 | **7 套寶石系主題**（Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian）驅動整個 App + 編輯器語法高亮，工具列一鍵切換光亮 / 暗黑 / 變體；**全域介面字級**（6 段，整個 App 等比縮放）與**程式碼字級**分開設定 |
 | 安全 | 密碼存 OS keychain、SSH Tunnel（密碼 / 私鑰）+ host key TOFU、全參數化綁定防注入、**連線唯讀模式**（擋寫入 / DDL）、**連線色標**（區分正式 / 測試）、**啟動鎖定**（Windows Hello / Touch ID 或 Argon2id 密碼、閒置自動鎖定）、**結果列數上限 / 查詢逾時**、釘選常用表 |
-| SSH 終端機 | 參考 Xshell：側欄獨立「SSH 主機」清單（可分資料夾、搜尋；有主機才出現，已連線的亮起，滑過有終端機 / SFTP / 編輯快速鈕），從「新增連線」選 SSH / SFTP 或貼 `ssh://` / `sftp://` / `ssh -p … user@host` 連線字串加入，**多分頁 xterm.js 終端機**（密碼 / 私鑰 + 密語 / keyboard-interactive / ssh-agent · Pageant，密碼只進 OS keychain；私鑰**各種格式都能用**：OpenSSH、PuTTY .ppk（v2 / v3）、PKCS#8、PEM（PKCS#1 RSA / SEC1 EC，含 OpenSSL 的 3DES / AES 加密）、DER，認不得的格式會講清楚怎麼轉；支援 **OpenSSH 使用者憑證**（`<私鑰>-cert.pub` 自動帶上）；**金鑰管理**：匯入檔案或貼上、產生 Ed25519 / ECDSA / RSA、複製公鑰、掛憑證、匯出；主機可從 **~/.ssh/config**（含 Include）與 **.xsh 工作階段檔**一次匯入，私鑰與憑證一起帶上；支援**跳板機**（ProxyJump，可多層，匯入時自動接上）），host key 首次連線 / 指紋變更時明確確認，斷線一鍵或按 Enter 重連，搜尋、字級縮放、主題跟隨 App、右鍵複製貼上（多行貼上先確認）；底部**狀態列**（主機 / 跳板機、終端大小、連線時間），可**記錄工作階段**到檔案（去色碼的純文字）或把整個畫面內容存成文字檔；**命令列輸入條**（打好再送、↑↓ 歷史）；**SFTP 分割面板**（瀏覽 / 上傳 / 下載 / 改名 / 刪除 / 建資料夾 / 在終端機 cd 到此，同一條連線不再問密碼；Xftp 式**在 App 內直接編輯遠端檔案**、改權限、篩選；**多選**（Ctrl / Shift 單擊、Ctrl+A）後批次下載 / 刪除，整個資料夾上傳下載，同名時選覆蓋、略過或續傳；**斷點續傳**：傳到一半斷線時已傳的部分留著，按「續傳」從中斷處接著傳（先比對已傳部分的結尾，確定是同一個檔才接）；工具列「SFTP」開**獨立視窗**（可拖到另一個螢幕；把檔案 / 資料夾**拖進視窗就上傳**，拖到某個資料夾上就放進那個資料夾），開在**終端機目前的資料夾**，最右邊的側邊面板鈕則與終端機並排，可開「跟隨終端機」讓面板隨 cd 切換；剪下 / 貼上或「移動到…」搬檔，面板可放大成整個分頁）；已設 SSH Tunnel 的資料庫連線右鍵即可**開啟終端機** |
+| SSH 終端機 | 側欄獨立「SSH 主機」清單（可分資料夾、搜尋；有主機才出現，已連線的亮起，滑過有終端機 / SFTP / 編輯快速鈕），從「新增連線」選 SSH / SFTP 或貼 `ssh://` / `sftp://` / `ssh -p … user@host` 連線字串加入，**多分頁 xterm.js 終端機**（密碼 / 私鑰 + 密語 / keyboard-interactive / ssh-agent · Pageant，密碼只進 OS keychain；私鑰**各種格式都能用**：OpenSSH、PuTTY .ppk（v2 / v3）、PKCS#8、PEM（PKCS#1 RSA / SEC1 EC，含 OpenSSL 的 3DES / AES 加密）、DER，認不得的格式會講清楚怎麼轉；支援 **OpenSSH 使用者憑證**（`<私鑰>-cert.pub` 自動帶上）；**金鑰管理**：匯入檔案或貼上、產生 Ed25519 / ECDSA / RSA、複製公鑰、掛憑證、匯出；主機可從 **~/.ssh/config**（含 Include）與 **.xsh 工作階段檔**一次匯入，私鑰與憑證一起帶上；支援**跳板機**（ProxyJump，可多層，匯入時自動接上）），host key 首次連線 / 指紋變更時明確確認，斷線一鍵或按 Enter 重連，搜尋、字級縮放、配色跟著 App 主題（每套主題有配套的終端機色盤，淺色主題換成適合淺底的一組）、右鍵複製貼上（多行貼上先確認）；底部**狀態列**（主機 / 跳板機、終端大小、連線時間），可**記錄工作階段**到檔案（去色碼的純文字）或把整個畫面內容存成文字檔；**命令列輸入條**（打好再送、↑↓ 歷史）；**SFTP 分割面板**（瀏覽 / 上傳 / 下載 / 改名 / 刪除 / 建資料夾 / 在終端機 cd 到此，同一條連線不再問密碼；**在 App 內直接編輯遠端檔案**、改權限、篩選；**多選**（Ctrl / Shift 單擊、Ctrl+A）後批次下載 / 刪除，整個資料夾上傳下載，同名時選覆蓋、略過或續傳；**斷點續傳**：傳到一半斷線時已傳的部分留著，按「續傳」從中斷處接著傳（先比對已傳部分的結尾，確定是同一個檔才接）；工具列「SFTP」開**獨立視窗**（可拖到另一個螢幕；把檔案 / 資料夾**拖進視窗就上傳**，拖到某個資料夾上就放進那個資料夾），開在**終端機目前的資料夾**，最右邊的側邊面板鈕則與終端機並排，可開「跟隨終端機」讓面板隨 cd 切換；剪下 / 貼上或「移動到…」搬檔，面板可放大成整個分頁）；已設 SSH Tunnel 的資料庫連線右鍵即可**開啟終端機** |
 | FTP / FTPS | 側欄「SSH 主機」也收 FTP 主機（「新增連線 → FTP / FTPS」或貼 `ftp://` / `ftpes://` / `ftps://`），開啟就是只有檔案面板的分頁，功能與 SFTP 面板相同（瀏覽、上傳下載、拖放、編輯、改權限、獨立視窗）；**斷點續傳**（`REST` / `APPE`，續傳前比對已傳部分的結尾）；explicit / implicit FTPS，自簽憑證以指紋確認並記住；被動 / 主動模式；每個傳輸用自己的連線（同時最多兩條，其餘排隊），傳大檔時照樣可以瀏覽 |
+| 容器（Docker / Registry / Harbor） | **Docker**：本機（named pipe / `docker.sock`）、TCP、TLS / 雙向 TLS，或經 SSH Tunnel；連線樹分容器 / 映像 / Volume / 網路，容器依狀態上色、右鍵啟停 / 暫停 / 強制終止 / 改名 / 刪除；容器分頁有**資訊**（埠映射、網路、掛載、健康檢查，環境變數裡的密碼預設遮罩）、**Log**（持續跟隨、stderr 紅字、搜尋）、**Shell**（互動終端）、**資源**（CPU / 記憶體走勢）與**行程**；**資料庫容器一鍵建連線**（依映像判斷種類，埠與 `POSTGRES_PASSWORD` 之類的環境變數自動帶入）；總覽看磁碟用量、依 compose 專案分組、各種清理（會刪資料的要輸入 `prune` 確認）、拉取映像逐層進度。**Registry v2**（自架、Docker Hub、GHCR…，token 自動換發）：tag 的 digest / 大小 / 多平台清單 / 各層、複製 `docker pull`、刪除。**Harbor**：artifact 表、觸發弱點掃描與看 CVE 明細、刪除 tag / artifact / repository、專案配額與元件健康；Registry / Harbor 的映像可直接「拉到 Docker」。唯讀連線隱藏所有寫入動作 |
+| Kubernetes | 連線用 kubeconfig（選 context）或手動填 API server + token / 憑證；token、token 檔、用戶端憑證與 EKS / GKE / AKS 的外部登入指令都能用，可限定 namespace、可經 SSH Tunnel。連線樹是 namespace → 資源種類（Pods、Deployments、StatefulSets、Services、Ingresses、ConfigMaps、Secrets、PVC、HPA…）→ 資源，依狀態上色，另有叢集資源（Nodes、PV、StorageClass、CRD）；資源分頁有**概要**、**事件**、**YAML**（先試套用再套用，別人先改過會擋下）；Pod 有 **Log**（選容器、重啟前的 log、跟隨、搜尋）、**Shell**、**資源**用量。調整副本、重新啟動、CronJob 立即執行、cordon、刪除；**port-forward** 到本機，Pod / Service / StatefulSet 右鍵「**建立資料庫連線…**」之後連線時自動開轉發；資源瀏覽器可看任何種類（含 CRD）、貼 YAML 套用、叢集總覽 |
+| 遠端桌面 | 側欄獨立「遠端桌面」清單（可分群組；有主機才出現），從「新增連線」或貼 `rdp://`、`mstsc /v:`、`vnc://`、`rustdesk://<ID>` 加入，也可匯入 `.rdp` 檔。**RDP**（NLA、伺服器憑證指紋首次確認、縮放 / 遠端跟著調整解析度 / 原始大小）、**VNC 與 Mac 螢幕共享**（Mac 用登入帳密，認證由 App 代做、密碼不進網頁層）、**RustDesk**（Direct IP，或用 RustDesk ID 經公開 / 自架的 ID 與中繼伺服器連線，填 Key 即端到端加密；對方開了雙重驗證會改問驗證碼；不帶密碼時等對方按接受）；全部畫在分頁裡、可多開，**全螢幕**時 Win / Alt+Tab / Alt+F4 直接交給遠端（Windows），工具列送 Ctrl+Alt+Del；剪貼簿文字雙向同步；可指定一台 SSH 主機當跳板加密轉接。RustDesk 連線功能是獨立的 AGPL 小程式（`rustdesk-bridge/`），隨安裝檔附上，db-kit 本身維持 MIT |
+| 檔案比對 | 分頁內的**文字比對**（左右並排、行內差異、捲動對齊、兩邊都可直接編輯，逐塊 → / ← 套用、Alt+↑ / ↓ 跳差異，存回原檔前檢查是否被別人改過）、**資料夾比對**（相同 / 不同 / 只在一邊各有顏色、篩選；判斷準則可選大小 + 修改時間、只看大小或逐位元組；排除規則支援 `*` `?`；複製保留修改時間）與**同步**（鏡像、單向更新、雙向更新，執行前列出每一項動作）、**二進位比對**（十六進位並排、差異區段）。兩邊可以是本機或任何已存的 SSH / SFTP / FTP 主機，常用的比對可以存起來；命令列 `dbk diff` / `dbk sync` 可放進排程 |
 | SQL 審查 | **靜態規則引擎**（對標 Redgate SQL Prompt / SonarQube SQL rules）：15 條規則、三級嚴重度，打字當下即時列出無 WHERE 的 DML、笛卡兒積、欄位套函式讓索引失效、前綴萬用字元 LIKE、`NOT IN` 的 NULL 陷阱、UNION vs UNION ALL、NOLOCK 髒讀、游標逐列處理…；方言感知、**不執行查詢也不需要 AI**，點一筆即跳到編輯器對應位置 |
 | AI 助手 | 右側面板串接本機 **Claude Code 或 OpenAI Codex** CLI（下拉即切、各自記住模型）或任何 Anthropic / OpenAI 相容 API：串流問答、撰寫 / 優化 SQL；程式碼區塊套用目前主題的語法高亮。**助手可自己下唯讀查詢**（列表 / 看結構 / 取樣 / SELECT / EXPLAIN；跑過的 SQL 全列在回應裡）；輸入框支援 **`@` 指定範圍**與 **`/` 指令**；回應裡的 SQL 可直接執行並把結果回饋給模型。另有三個一鍵入口——**AI 審查 SQL**（帶規則引擎發現 + 結構 + 索引 + 計畫）、**AI 調校建議**（帶計畫熱點，要求索引 DDL / 改寫 / 代價評估）、**AI 分析壓測結果**（從延遲百分位的形狀反推瓶頸類型）。在 **SSH 終端機分頁**可「解釋這段輸出 / 修正這個錯誤 / 摘要 session / 用自然語言產生指令」，回覆裡的 bash 區塊有「送到終端機」「執行並回饋」——**AI 只建議，指令一律由你按鈕送出**，危險指令（rm -rf、dd、mkfs…）先確認、致命指令直接擋下 |
 | 審查並執行 | 執行前 **AI 審查**（結論徽章：可以執行 / 注意風險 / 不建議執行，預設不送資料列）→ **逐句擷取前像 → 回滾語句先落地 → 執行 → 擷取後像比對**；回滾等級逐句標示（完整 / 部分 / 無），不完整或正式環境要勾選確認；輸出 `script.sql` / `review.md` / `rollback.sql` / `diff.md` / `report.md` / `manifest.json` / `snapshots/`；「只產生備份」不執行（唯讀連線可用）；回滾腳本可再走一次審查並執行；AI 助手寫入語句與 `dbk run` 共用；支援 MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite |
@@ -262,12 +306,13 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 > 連線設定持久化（密碼存 OS keychain）、SSH Tunnel、排程備份 + 備份歷史、Ping 連線延遲、ER 圖、欄寬可拖曳、AI 助手
 > 查詢工作區：多語句 → **多結果集堆疊顯示**（SSMS 風格）、失敗語句定位、查詢歷史 200 筆、收藏查詢分組管理、`@` 使用者變數與表 / 欄自動完成
 > 外觀：**7 套寶石系主題整體驅動 App + 編輯器**（工具列切換，設定頁亦可）；**進階物件搜尋**（跨庫 / 定義內文 / 整字 / 萬用字元）
+> 資料庫以外：**SSH 終端機 + SFTP / FTP**、**Docker / Registry / Harbor**、**Kubernetes**（資源瀏覽、Pod log / shell、port-forward 連叢集內資料庫）、**遠端桌面**（RDP / VNC / Mac 螢幕共享 / RustDesk）、**檔案 / 資料夾 / 二進位比對與同步**
 
-完整規劃文件見 [`docs/`](./docs/)：[規劃](./docs/planning.md) · [架構](./docs/architecture.md) · [連線生命週期](./docs/connection-lifecycle.md) · [資料表操作習慣](./docs/navicat-ux.md) · [路線圖](./docs/roadmap.md)。變更紀錄見 [CHANGELOG](./CHANGELOG.md)。
+使用指南：[結構比對](./docs/compare.md) · [審查並執行](./docs/review-run.md) · [DBA 審查](./docs/dba-review.md) · [AI 資源庫](./docs/ai-library.md) · [`dbk` CLI](./docs/cli.md)。規劃文件見 [`docs/`](./docs/)：[規劃](./docs/planning.md) · [架構](./docs/architecture.md) · [連線生命週期](./docs/connection-lifecycle.md) · [資料表操作習慣](./docs/navicat-ux.md) · [路線圖](./docs/roadmap.md)。變更紀錄見 [CHANGELOG](./CHANGELOG.md)。
 
 ## 功能藍圖
 
-核心功能皆已完成（50+ 項），點開檢視完整清單：
+核心功能皆已完成（60+ 項），點開檢視完整清單：
 
 <details>
 <summary><strong>展開完整功能清單</strong></summary>
@@ -310,7 +355,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] 欄位資料剖析（欄位標題右鍵「欄位統計」：總列數 / 非空 / 相異值）
 - [x] 操作體驗：原生檔案選擇器、編輯連線、Toast 通知、連線樹右鍵選單
 - [x] SSH host key 驗證（TOFU：首次記憶指紋、之後比對）
-- [x] **SSH 終端機 + SFTP**（參考 Xshell）：側欄「SSH 主機」清單（資料夾 / 搜尋 / 右鍵）、多分頁 xterm.js 終端機（四種認證、host key 確認、重連、搜尋、命令列輸入條）、SFTP 分割面板、資料庫連線右鍵「開啟 SSH 終端機」；AI 建議指令由使用者按鈕送出（`shellGuard` 三級分類）
+- [x] **SSH 終端機 + SFTP**：側欄「SSH 主機」清單（資料夾 / 搜尋 / 右鍵）、多分頁 xterm.js 終端機（四種認證、host key 確認、重連、搜尋、命令列輸入條）、SFTP 分割面板、資料庫連線右鍵「開啟 SSH 終端機」；AI 建議指令由使用者按鈕送出（`shellGuard` 三級分類）
 - [x] 查詢效能分析（EXPLAIN）
 - [x] 結構編輯（DDL：新增 / 刪除 / 改名欄位）
 - [x] ER 圖（表 + 外鍵關係，表卡可拖曳、縮放、佈局記憶、關聯高亮）
@@ -355,6 +400,13 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 - [x] 側欄搜尋 / 篩選命中時自動展開資料夾；資料表格表頭 hover 顯示欄位 comment
 - [x] 「關於 DB Kit」對話框 + 啟動時檢查 GitHub 新版（可於設定關閉）
 - [x] **多語系（i18n）**：繁體中文 / 简体中文 / English / 日本語 / 한국어 / Tiếng Việt，即時切換不需重啟；前端、Rust 後端與 `dbk` CLI（`--lang`、`DBKIT_LANG`）全部在地化。日 / 韓 / 越譯文缺漏時退回英文而非中文，簡中對照表由 `scripts/i18n-gen-zhcn.mjs` 產生（OpenCC + 資料庫用語詞表）
+- [x] **FTP / FTPS 主機**：與 SFTP 共用檔案面板；explicit / implicit TLS、自簽憑證指紋確認、斷點續傳（`REST` / `APPE`）、被動 / 主動模式、傳輸各用自己的連線
+- [x] **Docker / Docker Registry / Harbor**：容器 / 映像 / Volume / 網路樹，容器資訊 / Log / Shell / 資源 / 行程，資料庫容器一鍵建連線，總覽與清理；Registry tag 與多平台清單、Harbor artifact 與弱點掃描、拉到 Docker
+- [x] **遠端桌面**：RDP（IronRDP，NLA、憑證 TOFU、動態解析度）、VNC / Mac 螢幕共享（noVNC，認證在後端）、RustDesk Direct IP；全螢幕與系統鍵攔截、剪貼簿文字同步、可經 SSH 主機轉接、`.rdp` 匯入
+- [x] **RustDesk ID 連線**：公開或自架的 ID / 中繼伺服器、打洞不通自動走中繼、填 Key 驗證對方公鑰後端到端加密、可貼上伺服器設定字串；等對方按接受時可補密碼、對方開雙重驗證時改問驗證碼
+- [x] **Kubernetes**：kubeconfig / token / 憑證 / 外部登入指令（EKS / GKE / AKS），namespace → 資源樹、概要 / 事件 / YAML 編輯與套用、Pod log / shell / 資源用量、調整副本 / 重新啟動 / cordon、port-forward 與「建立資料庫連線」自動轉發、資源瀏覽器（含 CRD）
+- [x] **檔案 / 資料夾 / 二進位比對**：文字逐塊套用並存回、資料夾比對與鏡像 / 更新同步、十六進位比對；本機與 SSH / FTP 主機任意組合；已存的比對；`dbk diff` / `dbk sync`
+- [x] **側欄分組一致化**：資料庫連線依種類分區，SSH 主機、遠端桌面各一區，三區都可摺疊、建群組、拖曳排序與拖進拖出
 
 </details>
 
@@ -369,6 +421,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 | 狀態 | Zustand |
 | 後端 | Rust：sqlx (MySQL / MariaDB / PostgreSQL / SQLite)、tiberius + bb8 (SQL Server)、rust-oracle / ODPI-C (Oracle，需 Instant Client)、mongodb、redis |
 | 安全 | OS keychain（keyring）、SSH Tunnel（russh）+ host key TOFU |
+| 遠端與容器 | SSH / SFTP：russh + russh-sftp，終端機 xterm.js；FTP / FTPS：suppaftp（rustls）；RDP：IronRDP；VNC：noVNC（認證在 Rust 端代做）；RustDesk：獨立的 AGPL 輔助程式 `dbk-rustdesk-bridge`，影像交給 WebView 的 WebCodecs 解碼；Docker / Registry / Harbor / Kubernetes：直接打 REST API，exec / port-forward 的 WebSocket 自己收發幀（不引入 kube-rs） |
+| 檔案比對 | Rust `filecmp` 模組（掃描、對齊、同步，GUI 與 `dbk diff` / `dbk sync` 共用）、`@codemirror/merge` 並排編輯器 |
 | AI 助手 | 本機 Claude Code / OpenAI Codex CLI（訂閱登入，串流），或 Anthropic / OpenAI 相容 API（金鑰存 OS keychain）；唯讀資料庫工具（CLI 供應商經 `dbk mcp`）、`@codemirror/merge` 差異預覽 |
 
 ## 連線生命週期設計
@@ -468,13 +522,15 @@ dbk --conn cache redis del-prefix session: --yes --force   # 先 SCAN 出鍵名�
 
 > `del-prefix` 不會把前綴丟給 Redis 當 pattern：先 `SCAN MATCH <prefix>*` 取出實際鍵名（上限 `--limit`，預設 10,000）再分批 `DEL`，確認訊息會先告訴你會刪掉幾個鍵。
 
-其餘子指令：`conn`（list / test / ping / 加密 export）、`db`（list / create / drop）、`table`（list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate）、`routine`、`search`（`--whole-word` 整字比對、`--wildcards` 啟用 `*` `?`）、`column-stats`、`er-model`、`server-info`、`exec`、`run`（審查並執行腳本）、`stress`、`redis`（keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db）。逐項說明與實例見 **[docs/cli.md](./docs/cli.md)**，或 `dbk --help` / `dbk <子指令> --help`。
+其餘子指令：`conn`（list / test / ping / 加密 export）、`db`（list / create / drop）、`table`（list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate）、`routine`、`search`（`--whole-word` 整字比對、`--wildcards` 啟用 `*` `?`）、`column-stats`、`er-model`、`server-info`、`exec`、`run`（審查並執行腳本）、`stress`、`redis`（keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db）、`compare` / `schema`（結構 / 資料比對與快照）、`diff` / `sync`（檔案 / 資料夾比對與同步）、`mcp`（給 AI 用戶端的唯讀資料庫工具）、`ai`（AI 資源庫）。逐項說明與實例見 **[docs/cli.md](./docs/cli.md)**，或 `dbk --help` / `dbk <子指令> --help`。
 
 > **審查並執行腳本**：`dbk run migrate.sql --out <目錄>` 逐句備份前後像並產生回滾腳本（沒帶 `--yes` 只產生審查與備份，`--review-cmd "claude -p"` 接外部 AI 審查），見 [docs/cli.md](./docs/cli.md#run--審查並執行-sql-腳本) 與 [審查並執行使用指南](./docs/review-run.md)。
 
 > `stress` 一律唯讀（不提供 `--allow-writes`）。它會另開一條 `max_connections = --threads` 的專屬連線，跑完釋放——所以 `--threads 64` 就是對目標打 64 條連線，先確認伺服器撐得住。
 
-> Kafka / Elasticsearch / RabbitMQ 連線 CLI 不支援（沒有可在終端機表達的通用查詢語言，且精簡 binary 未編入其驅動），指定時會直接回明確錯誤，請改用 GUI。
+> **比對與同步檔案**：`dbk diff <左> <右>` 檔案輸出 unified diff、資料夾列出不同的項目（`--exit-code` 有差異時回非零）；`dbk sync <左> <右> --rule mirror-lr` 依規則同步資料夾，沒帶 `--yes` 只列出將執行的動作，會刪檔時另需 `--force`。一邊可以寫本機路徑或 `ssh://<已存主機>/<路徑>`（FTP 主機同樣寫法），`--session <名稱>` 直接跑 GUI 裡存好的比對，見 [docs/cli.md](./docs/cli.md#diff--sync--檔案--資料夾比對與同步)。
+
+> Kafka / Elasticsearch / RabbitMQ 與容器類（Docker / Registry / Harbor / Kubernetes）連線 CLI 不支援（沒有可在終端機表達的通用查詢語言，且精簡 binary 未編入其驅動），指定時會直接回明確錯誤，請改用 GUI。
 
 > 架構上 `tauri` / `tauri-plugin-dialog` 已改為 optional，藏在預設的 `gui` feature 後；GUI binary（`db-kit`）需要 `gui` feature，CLI binary（`dbk`）不需要。
 

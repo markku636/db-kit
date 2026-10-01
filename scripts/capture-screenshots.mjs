@@ -63,6 +63,12 @@ async function openOrders(page) {
   await sleep(1000);
 }
 
+// 右側「詳細資料」面板 v0.38.5 起預設收合；01 / 04 要拍的就是它（表的統計 / Redis INFO），先展開。
+async function openInfoPanel(page) {
+  const btn = page.getByRole("button", { name: "顯示詳細資料面板" });
+  if (await btn.count()) { await btn.first().click(); await sleep(500); }
+}
+
 // 連線 prod-mysql → 資料庫 shop 右鍵 →「結構比對…」（整庫）
 async function openCompareDialog(page) {
   // .first()：連線開起來之後「prod-mysql」在分頁列與常用區也會出現，嚴格模式會抱怨多個命中。
@@ -88,9 +94,97 @@ async function runCompare(page) {
   await sleep(2400);
 }
 
+// ── 個別截圖的假資料 ──────────────────────────────────────────────────
+// 共用那份（screenshot-fixtures.mjs）只有資料庫連線 + SSH 主機；容器、Kubernetes、遠端桌面那幾張
+// 另外合併進側欄。xterm 改用 DOM renderer：無頭 Chrome 的 WebGL 不保證開得起來。
+const TERM_SEED = { ...FX.STORAGE_SEED, "dbkit:ssh.prefs": { renderer: "dom" } };
+const CONTAINER_FX = {
+  STORAGE_SEED: TERM_SEED,
+  CONNECTIONS: [...FX.CONNECTIONS, ...FX.CONTAINER_CONNECTIONS],
+  DATABASES: { ...FX.DATABASES, "c-docker": ["containers", "images", "volumes", "networks"], "c-registry": FX.REGISTRY_REPOS, "c-harbor": FX.HARBOR_PROJECTS },
+  TABLES: {
+    ...FX.TABLES,
+    "c-docker:containers": FX.DOCKER_CONTAINERS.map((c) => ({ name: c.name, kind: `container-${c.state}` })),
+    "c-docker:images": FX.DOCKER_IMAGES.map((i) => ({ name: i.reference, kind: i.dangling ? "image-dangling" : "image" })),
+    "c-docker:volumes": FX.DOCKER_VOLUMES.map((v) => ({ name: v.name, kind: "volume" })),
+    "c-docker:networks": FX.DOCKER_NETWORKS.map((n) => ({ name: n.name, kind: "network" })),
+  },
+};
+const K8S_FX = {
+  STORAGE_SEED: TERM_SEED,
+  CONNECTIONS: [...FX.CONNECTIONS, ...FX.K8S_CONNECTIONS],
+  DATABASES: { ...FX.DATABASES, "c-k8s": FX.K8S_NAMESPACES },
+  TABLES: { ...FX.TABLES, ...FX.K8S_TREE },
+};
+// 遠端桌面那張的遠端畫面：一張示範用的伺服器桌面（桌布 + 一個列出 SQL Server 服務的 PowerShell 視窗），
+// 用 sharp 把 SVG 畫成 RGBA，假後端當成 RDP 的第一張畫面送出（見 tauri-shim.mjs 的 rdpDemoFrame）。
+async function demoDesktopFrame(width = 1280, height = 720) {
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const ps = "PS C:\\Users\\Administrator>";
+  const lines = [
+    `${ps} Get-Service MSSQL*, SQLAgent* | Format-Table -AutoSize`,
+    "",
+    "Status   Name               DisplayName",
+    "------   ----               -----------",
+    "Running  MSSQLSERVER        SQL Server (MSSQLSERVER)",
+    "Stopped  MSSQL$REPORTING    SQL Server (REPORTING)",
+    "Running  SQLSERVERAGENT     SQL Server Agent (MSSQLSERVER)",
+    "",
+    `${ps} Get-Volume D | Select DriveLetter, SizeRemaining, Size`,
+    "",
+    "DriveLetter  SizeRemaining          Size",
+    "-----------  -------------          ----",
+    "          D   412316860416  536870912000",
+    "",
+    `${ps} Test-NetConnection 10.20.0.15 -Port 3306 | Select TcpTestSucceeded`,
+    "",
+    "TcpTestSucceeded",
+    "----------------",
+    "            True",
+    "",
+    `${ps} _`,
+  ];
+  const wx = 200, wy = 70, ww = 880, wh = 540;
+  const text = lines.map((l, i) =>
+    `<text x="${wx + 18}" y="${wy + 62 + i * 21}" fill="${l.startsWith("PS ") ? "#f5f5f5" : "#cfd8e6"}">${esc(l)}</text>`).join("");
+  const icon = (y, label, color) =>
+    `<rect x="34" y="${y}" width="46" height="38" rx="6" fill="${color}"/><rect x="34" y="${y}" width="20" height="8" rx="3" fill="${color}" opacity="0.7" transform="translate(0,-5)"/>` +
+    `<text x="57" y="${y + 60}" fill="#f1f5f9" font-size="13" text-anchor="middle">${label}</text>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" font-family="Segoe UI, Arial, sans-serif">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0b2545"/><stop offset="0.55" stop-color="#13597a"/><stop offset="1" stop-color="#1f8a8a"/></linearGradient>
+      <radialGradient id="glow" cx="0.78" cy="0.25" r="0.6"><stop offset="0" stop-color="#7dd3fc" stop-opacity="0.35"/><stop offset="1" stop-color="#7dd3fc" stop-opacity="0"/></radialGradient>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#bg)"/><rect width="100%" height="100%" fill="url(#glow)"/>
+    ${icon(28, "Backups", "#f59e0b")}${icon(118, "Scripts", "#f59e0b")}${icon(208, "Logs", "#f59e0b")}
+    <rect x="${wx + 6}" y="${wy + 8}" width="${ww}" height="${wh}" rx="8" fill="#000" opacity="0.35"/>
+    <rect x="${wx}" y="${wy}" width="${ww}" height="${wh}" rx="8" fill="#012456"/>
+    <rect x="${wx}" y="${wy}" width="${ww}" height="34" rx="8" fill="#1f2937"/><rect x="${wx}" y="${wy + 20}" width="${ww}" height="14" fill="#1f2937"/>
+    <text x="${wx + 16}" y="${wy + 22}" fill="#e5e7eb" font-size="14">Administrator: PowerShell</text>
+    <text x="${wx + ww - 96}" y="${wy + 23}" fill="#9ca3af" font-size="15" letter-spacing="22">–▢✕</text>
+    <g font-family="Consolas, Cascadia Mono, Courier New, monospace" font-size="15" xml:space="preserve">${text}</g>
+    <rect x="0" y="${height - 44}" width="${width}" height="44" fill="#0f172a" opacity="0.88"/>
+    <circle cx="28" cy="${height - 22}" r="11" fill="#38bdf8"/>
+    <rect x="60" y="${height - 34}" width="200" height="24" rx="5" fill="#1e293b"/><text x="72" y="${height - 17}" fill="#94a3b8" font-size="13">Search</text>
+    <rect x="280" y="${height - 36}" width="34" height="28" rx="5" fill="#1e3a8a"/><text x="289" y="${height - 16}" fill="#e0f2fe" font-size="14" font-family="Consolas, monospace">&gt;_</text>
+    <text x="${width - 20}" y="${height - 25}" fill="#e2e8f0" font-size="13" text-anchor="end">09:14</text>
+    <text x="${width - 20}" y="${height - 9}" fill="#94a3b8" font-size="11" text-anchor="end">2026/9/23</text>
+  </svg>`;
+  const raw = await sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer();
+  return { width, height, rgba_b64: raw.toString("base64") };
+}
+
+const SHOT_FX = {
+  "15-ssh-terminal": { STORAGE_SEED: TERM_SEED },
+  "16-docker": { ...CONTAINER_FX, CONNECTIONS: [...FX.CONNECTIONS.slice(0, 2), ...FX.CONTAINER_CONNECTIONS] },
+  "17-kubernetes": K8S_FX,
+  "18-remote-desktop": { RD_SESSIONS: FX.RD_SESSIONS_DEMO, RDP_DEMO_FRAME: null }, // 畫面在 main 裡才產生（要 await）
+};
+
 const SHOTS = {
   async "01-data-grid"(page) {
     await openOrders(page);
+    await openInfoPanel(page);
     await sleep(700);
     await shot(page, "01-data-grid");
   },
@@ -127,6 +221,7 @@ const SHOTS = {
     await sleep(1200);
     // 不點鍵：值編輯器是 modal，會把整棵鍵樹壓在遮罩下。改選連線節點，右側顯示 Redis 連線資訊。
     await page.getByText("cache-redis", { exact: true }).click();
+    await openInfoPanel(page);
     await sleep(1200);
     await shot(page, "04-redis");
   },
@@ -149,7 +244,7 @@ const SHOTS = {
   // 走右鍵而非雙擊——雙擊進的是設計編輯器，那只是一個 SQL 編輯器，沒什麼好拍的。
   async "09-routine-exec"(page) {
     await openOrders(page);
-    await page.getByText("函式", { exact: true }).first().click(); // 展開 routines 資料夾
+    await page.getByText("預存程序", { exact: true }).first().click(); // 展開 routines 資料夾
     await sleep(700);
     await page.getByText("sp_close_order", { exact: true }).first().click({ button: "right" });
     await sleep(500);
@@ -293,7 +388,143 @@ const SHOTS = {
     await sleep(2600);
     await shot(page, "11-db-docs");
   },
+
+  // 壓力測試：查詢分頁「更多 → 壓力測試…」，帶 :cid / :status 兩個參數與 CSV，跑完後捲到報表。
+  async "07-stress-test"(page) {
+    await openQueryTab(page, FX.STRESS_SQL);
+    await page.getByRole("button", { name: "更多", exact: true }).first().click();
+    await sleep(300);
+    await page.getByText("壓力測試…", { exact: true }).click();
+    await sleep(700);
+    await page.locator("textarea.mono").last().fill(FX.STRESS_CSV);
+    await page.getByRole("radio", { name: "持續時間", exact: true }).click().catch(() => {});
+    await sleep(300);
+    await page.getByRole("button", { name: "開始壓測", exact: true }).click();
+    await page.getByText("測試結果", { exact: true }).first().waitFor({ timeout: 8000 });
+    await sleep(500);
+    // 捲到報表最底（錯誤分組），畫面從折線圖排到百分位表。
+    await page.getByText(/Lock wait timeout/).first().evaluate((el) => el.scrollIntoView({ block: "end" }));
+    await sleep(400);
+    await shot(page, "07-stress-test");
+  },
+
+  // SQL 審查：打字當下由規則引擎列出問題，不執行查詢。
+  async "08-sql-review"(page) {
+    await openQueryTab(page,
+      "UPDATE orders SET status = 'cancelled';\n" +
+      "SELECT * FROM orders o, customers c WHERE o.total_amount > 100 ORDER BY o.placed_at;\n" +
+      "SELECT * FROM order_notes WHERE body LIKE '%refund%' AND YEAR(created_at) = 2026;");
+    await sleep(700);
+    await page.getByRole("button", { name: /^審查(?!並執行)/ }).first().click();
+    await sleep(700);
+    await shot(page, "08-sql-review");
+  },
+
+  // SSH 終端機 + SFTP 側邊面板：雙擊側欄的主機，用命令列輸入條送幾個指令，再打開 SFTP。
+  async "15-ssh-terminal"(page) {
+    await page.locator("[data-ssh-host-tree]").getByText("web-01", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => (document.querySelector(".xterm-rows")?.innerText ?? "").includes("deploy@web-01"), null, { timeout: 10000 });
+    const compose = page.getByTestId("ssh-compose");
+    for (const cmd of ["uptime", "ls -la", "df -h /", "tail -n 4 logs/app.log"]) {
+      await compose.fill(cmd);
+      await compose.press("Enter");
+      await sleep(350);
+    }
+    await page.getByTestId("ssh-sftp-toggle").click();
+    await page.getByTestId("sftp-panel").getByText("backup.tar.gz", { exact: true }).first().waitFor({ timeout: 8000 });
+    await sleep(500);
+    await shot(page, "15-ssh-terminal");
+  },
+
+  // Docker：容器分頁的「資訊」子頁（埠映射、環境變數遮罩、掛載…），側欄是依狀態上色的容器清單。
+  async "16-docker"(page) {
+    await page.getByText("local-docker", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("容器", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="shop-db"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="shop-db"]').first().click();
+    await page.getByText("POSTGRES_PASSWORD", { exact: true }).first().waitFor({ timeout: 6000 });
+    await sleep(600);
+    await shot(page, "16-docker");
+  },
+
+  // Kubernetes：namespace → 種類 → Pod，Pod 分頁的概要（容器狀態、節點、環境變數含 Secret 帶入的值）。
+  async "17-kubernetes"(page) {
+    await page.getByText("dev-cluster", { exact: true }).first().dblclick();
+    await sleep(900);
+    await page.getByText("demo", { exact: true }).first().click();
+    await page.getByText("Pods", { exact: true }).first().waitFor({ timeout: 8000 });
+    await page.getByText("Pods", { exact: true }).first().click();
+    await sleep(300);
+    await page.getByText("StatefulSets", { exact: true }).first().click().catch(() => {});
+    await sleep(300);
+    await page.locator('[data-tree-table="pods/pg-0"]').first().click();
+    await page.getByText("postgres:16-alpine", { exact: true }).first().waitFor({ timeout: 6000 });
+    await sleep(600);
+    await shot(page, "17-kubernetes");
+  },
+
+  // 遠端桌面：RDP 分頁（縮放到分頁大小），遠端畫面是 demoDesktopFrame 畫的示範桌面。
+  async "18-remote-desktop"(page) {
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 });
+    await tree.getByText("win-srv01", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => document.querySelector("[data-rd-rdp] canvas")?.dataset.rdSize === "1280x720", null, { timeout: 10000 });
+    await sleep(800);
+    await shot(page, "18-remote-desktop");
+  },
+
+  // 文字比對：左右並排、行內差異、每塊中間的 → / ← 套用鈕。
+  async "19-file-compare"(page) {
+    await startCompare(page, "文字比對", "C:\\work\\old\\app.conf", "C:\\work\\new\\app.conf");
+    await page.waitForSelector('[data-testid="text-compare"] .cm-mergeView', { timeout: 8000 });
+    await sleep(700);
+    await shot(page, "19-file-compare");
+  },
+
+  // 資料夾比對：兩邊的樹並排，相同 / 不同 / 只在一邊各有顏色，底部統計。
+  async "20-folder-compare"(page) {
+    await startCompare(page, "資料夾比對", "C:\\work\\site", "C:\\deploy\\site");
+    await page.waitForSelector('[data-testid="fcmp-summary"]', { timeout: 8000 });
+    await sleep(700);
+    await shot(page, "20-folder-compare");
+  },
+
+  // 新增連線：資料庫、訊息佇列、搜尋引擎、容器與映像、遠端主機全部在同一個選擇器裡。
+  async "21-new-connection"(page) {
+    await page.getByRole("button", { name: "連線", exact: true }).first().click();
+    await page.getByRole("radiogroup", { name: "連線類型" }).waitFor({ timeout: 5000 });
+    // 標題列的最大化鈕（關閉鈕左邊那顆）：一般大小時最底下的「遠端主機」一列會被切掉。
+    await page.locator('[role="dialog"] .h-11 button').first().click();
+    await sleep(600);
+    await shot(page, "21-new-connection");
+  },
 };
+
+// 連上 prod-mysql、開查詢分頁、貼上一段 SQL（insertText：不觸發自動完成與自動括號）。
+async function openQueryTab(page, sql) {
+  await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+  await sleep(1200);
+  await page.getByText("查詢", { exact: true }).first().click();
+  await sleep(900);
+  await page.locator(".cm-content").first().click();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.insertText(sql);
+  await sleep(500);
+}
+
+// 開新比對分頁、選模式、填左右兩邊的本機路徑、開始比對（與 verify-ui 的 startCompare 同一套步驟）。
+async function startCompare(page, modeLabel, left, right) {
+  const bar = page.locator('[data-testid="new-compare-tab"]');
+  if (await bar.count()) await bar.click();
+  else await page.locator('[data-testid="new-compare-empty"]').click();
+  const launcher = page.locator('[data-testid="compare-launcher"]');
+  await launcher.waitFor({ timeout: 6000 });
+  await launcher.getByRole("radio", { name: modeLabel, exact: true }).click();
+  await launcher.locator('[data-testid="cmp-left"] input').first().fill(left);
+  await launcher.locator('[data-testid="cmp-right"] input').first().fill(right);
+  await launcher.locator('[data-testid="cmp-start"]').click();
+}
 
 // 審查並執行：關唯讀 → 開查詢分頁 → 貼腳本 → 按盾牌鈕 → 等 AI 審查串流完。
 const REVIEW_SQL =
@@ -347,8 +578,10 @@ catch {
 
 const want = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(SHOTS);
 await mkdir(OUT, { recursive: true });
+if (want.includes("18-remote-desktop")) SHOT_FX["18-remote-desktop"].RDP_DEMO_FRAME = await demoDesktopFrame();
 
-const server = await preview({ root, preview: { port: 4173, strictPort: true } });
+// DBKIT_PORT：別的 session 正在用 4173 時換一個埠（strictPort：撞到就直接失敗，不悄悄換埠）。
+const server = await preview({ root, preview: { port: Number(process.env.DBKIT_PORT) || 4173, strictPort: true } });
 const url = server.resolvedUrls?.local?.[0] ?? "http://localhost:4173/";
 console.log(`preview → ${url}`);
 
@@ -369,7 +602,7 @@ for (const name of want) {
   });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => console.log("  [pageerror]", String(e).slice(0, 160)));
-  await page.addInitScript(installShim, fx);
+  await page.addInitScript(installShim, { ...fx, ...(SHOT_FX[name] ?? {}) });
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#root");
   await sleep(1200);

@@ -484,6 +484,30 @@ export const REVIEW_OUTCOME_EXECUTED = {
   ].join("\n"),
 };
 
+// ── 壓力測試 ───────────────────────────────────────────────────────────
+// 8 執行緒跑滿 30 秒（前 5 秒逐步上線）：TPS 先爬升再持平、中段一次鎖等待讓 p95 跳一下，
+// 12 筆錯誤歸成同一組。取樣用固定的偽隨機序列，每次產圖都一樣。
+export const STRESS_SQL = "SELECT order_id, status, total_amount\nFROM orders\nWHERE customer_id = :cid AND status = :status\nORDER BY placed_at DESC LIMIT 20;";
+export const STRESS_CSV = "cid,status\n10427,paid\n10502,shipped\n10611,paid\n10745,delivered";
+const jitter = (i) => ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1; // 0..1，決定性
+export const STRESS_REPORT = {
+  elapsed_ms: 30_040, completed: 83_460, errors: 12, rows_total: 1_402_118, rps: 2_778,
+  avg_ms: 1.42, min_ms: 0.81, max_ms: 48.6, stddev_ms: 0.97,
+  p50_ms: 1.21, p90_ms: 1.88, p95_ms: 2.34, p99_ms: 7.12,
+  error_groups: [{ message: "Lock wait timeout exceeded; try restarting transaction", count: 12 }],
+  series: Array.from({ length: 30 }, (_, i) => {
+    const ramp = Math.min(1, (i + 1) / 5);
+    const spike = i === 17 || i === 18;
+    return {
+      t_ms: (i + 1) * 1000,
+      rps: Math.round((2_650 + jitter(i) * 260) * ramp - (spike ? 620 : 0)),
+      p95_ms: Number((1.9 + jitter(i + 40) * 0.7 + (spike ? 4.8 : 0)).toFixed(2)),
+      errors: spike ? 6 : 0,
+    };
+  }),
+  threads: 8, mode: "duration", warmup_iterations: 10, cancelled: false,
+};
+
 export const DEMO_SQL =
   "SELECT status, COUNT(*) AS orders, SUM(total_amount) AS revenue,\n" +
   "ROUND(AVG(total_amount), 2) AS avg_ticket\nFROM orders\nWHERE placed_at >= '2026-01-01'\nGROUP BY status ORDER BY revenue DESC;\n\n" +

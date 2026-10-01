@@ -462,6 +462,16 @@ metadata:
     review_run_cancel: () => null,
     review_run_reveal: () => null,
 
+    // ── 壓力測試 ─────────────────────────────────────────────────────────
+    // 先打一筆進度事件再回整份報表（fx.STRESS_REPORT），報表區、折線圖、錯誤分組都畫得出來。
+    stress_run: ({ runId }) => {
+      const r = fx.STRESS_REPORT;
+      if (!r) return Promise.reject(new Error("screenshot shim: 沒有壓測假資料"));
+      emit("stress-progress", { run_id: runId, elapsed_ms: r.elapsed_ms, completed: r.completed, errors: r.errors, rps: r.rps, avg_ms: r.avg_ms, p95_ms: r.p95_ms, in_flight: 0 });
+      return new Promise((res) => setTimeout(() => res(r), 200));
+    },
+    stress_cancel: () => null,
+
     // ── AI 資源庫 ────────────────────────────────────────────────────────
     // 讀取刻意失敗：前端會退回打包進 bundle 的內建資源庫（與後端讀不到設定目錄時同一條路徑）。
     ai_library_load: () => Promise.reject(new Error("screenshot shim: 資源庫用內建 fallback")),
@@ -560,9 +570,10 @@ metadata:
           }
           return { conn_id: connId, protocol, width: 1280, height: 720, security: "rustdesk-direct", encrypted: false };
         }
-        setTimeout(() => send(rdpDemoFrame(320, 200, 1)), 30);
+        const fw = fx.RDP_DEMO_FRAME?.width ?? 320, fh = fx.RDP_DEMO_FRAME?.height ?? 200;
+        setTimeout(() => send(rdpDemoFrame(fw, fh, 1)), 30);
         window.__DBKIT_RD_PUSH__ = (bytes) => send(new Uint8Array(bytes)); // 情境直接塞後端訊息（例如遠端剪貼簿）
-        return { conn_id: connId, protocol, width: 320, height: 200, security: "nla", encrypted: true };
+        return { conn_id: connId, protocol, width: fw, height: fh, security: "nla", encrypted: true };
       };
       // 情境可要求先問憑證（window.__DBKIT_RD_PROMPT__ = "cert"）：等使用者回答才回來，拒絕 = 取消。
       if (window.__DBKIT_RD_PROMPT__ === "cert") {
@@ -912,7 +923,27 @@ metadata:
   function sshRun(t, cmd) {
     const c = cmd.trim();
     if (!c) return "";
+    // 截圖用：長格式清單與幾個常見的唯讀指令，讓終端機畫面像一段真的工作階段。
+    if (c === "ls -l" || c === "ls -la") {
+      const dir = (n) => `\x1b[1;34m${n}\x1b[0m`;
+      return [
+        "total 47108",
+        `drwxr-xr-x 4 deploy deploy     4096 Sep 22 08:00 ${dir("app")}`,
+        "-rw-r--r-- 1 deploy deploy 48213120 Sep 21 23:10 \x1b[1;31mbackup.tar.gz\x1b[0m",
+        `drwxr-xr-x 2 deploy deploy     4096 Sep 23 09:12 ${dir("logs")}`,
+      ].join("\r\n");
+    }
     if (c === "ls" || c.startsWith("ls ")) return "app  backup.tar.gz  logs";
+    if (c === "uptime") return " 09:14:02 up 27 days,  3:41,  1 user,  load average: 0.21, 0.18, 0.12";
+    if (c === "df -h /") return "Filesystem      Size  Used Avail Use% Mounted on\r\n/dev/sda1        80G   31G   46G  41% /";
+    if (/^tail\b.*app\.log/.test(c)) {
+      return [
+        "2026-09-23 09:13:41 INFO  GET /api/orders?page=2 200 18ms",
+        "2026-09-23 09:13:44 INFO  POST /api/cart 201 42ms",
+        "\x1b[33m2026-09-23 09:13:52 WARN  slow query 812ms: SELECT * FROM orders WHERE note LIKE '%gift%'\x1b[0m",
+        "2026-09-23 09:13:58 INFO  GET /healthz 200 1ms",
+      ].join("\r\n");
+    }
     if (c === "pwd") return t.cwd;
     if (c.startsWith("echo ")) return c.slice(5).replace(/^["']|["']$/g, "");
     if (/^systemctl status nginx/.test(c)) return "● nginx.service - A high performance web server\r\n     Active: active (running) since Mon 2026-09-22 08:00:11 UTC; 1 day 3h ago";
@@ -969,11 +1000,19 @@ metadata:
       v.setUint8(0, ty); v.setUint16(4, a, true); v.setUint16(6, b, true); v.setUint16(8, c, true); v.setUint16(10, d, true); v.setUint32(12, s, true);
       return new Uint8Array(v.buffer);
     };
-    const px = new Uint8Array(w * h * 4);
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      const left = x < w / 2;
-      px[i] = left ? 30 : 240; px[i + 1] = left ? 90 : 140; px[i + 2] = left ? 200 : 20; px[i + 3] = 255;
+    let px;
+    if (fx.RDP_DEMO_FRAME) {
+      // 截圖用：capture-screenshots.mjs 先畫好一張示範桌面（RGBA，base64）。
+      const bin = atob(fx.RDP_DEMO_FRAME.rgba_b64);
+      px = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) px[i] = bin.charCodeAt(i);
+    } else {
+      px = new Uint8Array(w * h * 4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const left = x < w / 2;
+        px[i] = left ? 30 : 240; px[i + 1] = left ? 90 : 140; px[i + 2] = left ? 200 : 20; px[i + 3] = 255;
+      }
     }
     const parts = [hdr(2, w, h, 0, 0, 0), hdr(1, 0, 0, w, h, seq), px, hdr(6, 0, 0, 0, 0, seq)];
     const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));

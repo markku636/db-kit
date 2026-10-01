@@ -119,6 +119,8 @@ src-tauri/src/
 │   ├── terminal.rs    PTY shell channel：輸出合併（16 KiB / 8 ms）、write / send_line / resize / close
 │   ├── sftp.rs        SFTP 子系統（russh-sftp）：列表 / stat / mkdir / rename / 遞迴刪除 / 上下傳 + 取消、路徑安全；App 內編輯（read / write text，覆寫原檔保留權限）、chmod；資料夾與多選批次傳輸（先整批規劃再依序傳、一條進度、同名策略 fail / overwrite / skip / resume）；斷點續傳（失敗時保留已傳部分——本機 `.part`、遠端寫到一半的檔；接著傳之前比對最後 64 KiB 是否與來源相同）；檔案型別只看 S_IFMT（不用 russh-sftp 的 bit-contains `is_dir()`）
 │   ├── runtime.rs     SshRuntime：活著的連線 / 終端 / SFTP / 待答提示 / 傳輸旗標（AppState.ssh）；SFTP 通道記著是哪個 SFTP 獨立視窗開的，視窗銷毀時一併收掉
+│   ├── ftp.rs         FTP / FTPS 客戶端（suppaftp 12，tokio + rustls/ring）：一條瀏覽控制連線 + 每個傳輸各自的連線（每台主機最多兩條、其餘排隊）、閒置被踢自動重連、被動 / 主動模式、FTPS 自簽憑證指紋 TOFU、斷點續傳（`REST` / `APPE`）
+│   ├── files.rs       FileClient：檔案面板的協定分派——前端只認 `sftp_id` 與 `ssh_sftp_*` 命令，照協定轉給 SftpClient / FtpClient；資料夾與多選傳輸的規劃在 sftp.rs 對 RemoteFs 的泛型函式裡，兩種協定共用
 │   ├── sftp_window.rs SFTP 獨立視窗的標籤（`sftp-<分頁鍵>`，一個終端機分頁一個）與網址（`sftp.html?tab=…`）；capabilities/sftp-window.json 對 `sftp-*` 開事件、檔案對話框與 destroy。主視窗為了分頁拖曳關掉 WebView 的檔案拖放，這種視窗沒關，拖進來拿得到本機路徑；連線狀態由主視窗經 `sftp-win-*` 事件轉過去（src/sftpWindowBridge.ts）
 │   └── it_tests.rs    Docker OpenSSH 整合測試（#[ignore]）
 ├── rd/                遠端桌面（RDP / VNC；整個目錄不依賴 Tauri，GUI 事件 / Channel 只在 commands/rd.rs）
@@ -144,6 +146,17 @@ src-tauri/src/
 │   ├── rowstream.rs   主鍵排序分頁串流（keyset / offset）
 │   ├── merge.rs       merge-join（順序守衛）/ hash_diff
 │   └── data.rs        單表 / 整庫資料比對編排、DML spool 與分批交易套用
+├── filecmp/           檔案 / 資料夾 / 二進位比對（與資料庫的 compare/ 無關；GUI 比對分頁與 dbk diff / sync 共用，不依賴 Tauri）
+│   ├── side.rs        比對的一邊：本機檔案系統，或一條已開的檔案工作階段（SFTP / FTP，經 ssh::files::FileClient）
+│   ├── scan.rs        把一邊的資料夾樹掃成扁平清單（先整棵掃完再對齊）
+│   ├── diff.rs        依相對路徑對齊兩邊、給每個項目狀態（大小 + 時間，容許誤差與整小時時差 / 只看大小 / 內容）
+│   ├── glob.rs        排除規則（`*` / `?`，大小寫不敏感）
+│   ├── content.rs     內容比對與遠端檔下載到暫存資料夾
+│   ├── text.rs        文字比對的本機檔讀寫；linediff.rs Myers 行 diff 與 unified 輸出；binary.rs 逐位元組比對
+│   ├── plan.rs        同步規則 → 操作清單（與前端 folderCompareModel.ts 的 planSync 一致）
+│   ├── sync.rs        依操作清單複製 / 刪除，保留修改時間；遠端 ↔ 遠端經本機暫存轉接
+│   ├── remote.rs      不經 GUI 開一條檔案工作階段（dbk 的遠端那一邊，含跳板機鏈）
+│   └── sessions.rs    已存的比對（兩邊來源、模式、資料夾規則與同步規則）
 ├── review_run/        審查並執行（GUI 與 dbk run 共用，不依賴 Tauri）
 │   ├── scan.rs        位移保留式 SQL 遮罩 + 語句切分（含 SQL Server GO）
 │   ├── names.rs       表參照解析（引號 / 大小寫折疊 / 別名）
@@ -169,7 +182,10 @@ src-tauri/src/
 ├── commands/mod.rs    Tauri command（薄包裝）
 ├── commands/ssh.rs    SSH 終端機 / SFTP / 已存主機的 command + TauriUi（host key / 密碼提示走事件 + oneshot；終端輸出走 ipc::Channel）
 ├── commands/rd.rs     遠端桌面的 command + RdUi（憑證 / 帳密提示）；畫面走 ipc::Channel raw，輸入走 raw body（rd_write / rd_input）
-├── cli/               dbk CLI（args / dispatch / guard / mcp / render / resolve / run_script）
+├── commands/docker.rs Docker / Registry / Harbor 的 command（容器操作、log / exec 串流接到 ipc::Channel、拉取進度）
+├── commands/k8s.rs    Kubernetes 的 command（資源詳情 / YAML / log / exec / port-forward）
+├── commands/filecmp.rs 比對分頁的 command（掃描、內容比對、存檔、同步、已存的比對）
+├── cli/               dbk CLI（args / dispatch / guard / mcp / render / resolve / run_script / compare / filecmp / ai）
 ├── bin/dbk.rs         CLI binary 進入點（不連 Tauri）
 └── db/
     ├── mod.rs         DbKind、共用型別、DatabaseDriver trait
@@ -181,5 +197,10 @@ src-tauri/src/
     ├── oracle.rs      Oracle driver（rust-oracle / ODPI-C；Instant Client 執行期偵測 + spawn_blocking）
     ├── mongo.rs       MongoDB driver（mongodb）
     ├── redis.rs       Redis driver（redis）
+    ├── container.rs   容器類連線（Docker / Registry / Harbor / Kubernetes）的統一包裝：manager 的 Active 只多一個 Container 變體，內部再依 kind 分派，共用 `docker` feature 與 SSH 通道前處理
+    ├── docker/        Docker Engine REST API（本機 socket / named pipe、TCP、TLS / mTLS）：四個固定分類當 database、各項目當 table；stream.rs 是 log follow 與 exec 互動終端（輸出經 StreamSink，與 Tauri 無關）
+    ├── registry/      Docker Registry HTTP API v2：repository → database、tag → table；auth.rs 換發 token
+    ├── harbor/        Harbor `/api/v2.0`：project → database、repository → table；artifact / 弱點掃描 / 刪除走 commands::harbor_*
+    ├── k8s/           Kubernetes（API server REST，不引入 kube-rs）：namespace → database、`種類複數/名稱` → table；kubeconfig.rs、auth.rs（exec 外部登入指令：aws eks get-token、gke-gcloud-auth-plugin、kubelogin…）、ws.rs（精簡 WebSocket 用戶端，交握走 reqwest upgrade）、stream.rs（Pod log follow 與 exec）、forward.rs（port-forward，`svc/` `deploy/` `sts/` 解析成就緒的 Pod）
     └── external.rs    外部 web gateway 分派層（泛用擴充點）
 ```

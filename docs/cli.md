@@ -25,6 +25,8 @@
   - [`run` — 審查並執行 SQL 腳本](#run--審查並執行-sql-腳本)
   - [`redis` — Redis 操作](#redis--redis-操作)
   - [`mcp` — MCP 伺服器（給 AI 用戶端）](#mcp--mcp-伺服器給-ai-用戶端)
+  - [`ai` — AI 資源庫（人設 / 技能 / 提示範本）](#ai--ai-資源庫人設--技能--提示範本)
+  - [`diff` / `sync` — 檔案 / 資料夾比對與同步](#diff--sync--檔案--資料夾比對與同步)
 - [常見情境](#常見情境)
 - [結束碼與錯誤處理](#結束碼與錯誤處理)
 - [限制](#限制)
@@ -490,6 +492,57 @@ dbk ai sync --project . --yes        # 同步到專案資料夾的 .claude / .ag
 
 同步只覆寫 db-kit 自己寫過、之後沒被手動改過的檔案；其他同名檔列為衝突並略過。
 
+### `diff` / `sync` — 檔案 / 資料夾比對與同步
+
+與 GUI 的檔案比對分頁共用同一套 Rust 核心（`src-tauri/src/filecmp/`）。這兩個指令**不用資料庫連線**，`--conn` / `--url` 會被忽略。每一邊可以是：
+
+- 本機路徑（檔案或資料夾）；
+- `ssh://<已存主機>/<路徑>`：主機寫 GUI「SSH 主機」清單裡的名稱或 id，FTP / FTPS 主機也用這個寫法（`sftp://`、`ftp://`、`ftps://` 開頭同樣接受）；`~` 是遠端家目錄，例如 `ssh://web-01/~/app`。帳密照主機設定從 OS keychain 取，跳板機也照設定走。
+
+```bash
+# 檔案：輸出 unified diff（--context 調上下文行數）；內容相同時 stderr 印「內容相同」
+dbk diff ./conf/app.conf ssh://web-01/etc/app/app.conf
+dbk diff old.bin new.bin --mode binary                 # 二進位：列出不同的區段（offset / length）
+
+# 資料夾：預設只列不同的項目（status / path / 兩邊大小與修改時間 / 哪邊比較新），--all 連相同的一起列
+dbk diff ./site ssh://web-01/var/www/site
+dbk diff ./site ssh://web-01/var/www/site --criteria content --exclude "*.log" --exclude .cache
+dbk --format json diff ./site ssh://web-01/var/www/site > diff.json
+dbk diff ./site ssh://web-01/var/www/site --exit-code   # CI / 排程：有差異回非零
+
+# 同步：先預演（沒帶 --yes 只列出每一項動作並回非零），確認後再執行；會刪檔時另需 --force
+dbk sync ./site ssh://web-01/var/www/site --rule update-lr
+dbk sync ./site ssh://web-01/var/www/site --rule mirror-lr --yes --force
+
+# 直接跑 GUI 裡存好的比對：兩邊、排除規則、判斷準則、同步規則都從那筆帶，命令列參數優先
+dbk diff --session "網站部署檢查"
+dbk sync --session "網站部署檢查" --yes
+```
+
+**比對模式**（`--mode`）：省略時依兩邊自動判斷——兩邊都是資料夾就比資料夾；都是檔案時，看起來不是 UTF-8 文字的改用二進位比對。一邊檔案一邊資料夾會直接報錯。檔案太大或兩邊差太多無法逐行比對時，會提示改用 `--mode binary`。
+
+**資料夾判斷相同的準則**（`--criteria`）：
+
+| 值 | 意義 |
+|---|---|
+| `size-mtime`（預設） | 大小與修改時間都相同（容許 2 秒誤差；`--ignore-hour-offset` 再忽略整小時的時差，處理時區 / 夏令時間） |
+| `size` | 只看大小 |
+| `content` | 逐位元組比內容（遠端檔會先下載到暫存資料夾，結束時刪掉） |
+
+`--ignore-case` 讓名稱不分大小寫對齊；`--exclude` 可重複、支援 `*` 與 `?`，給了就取代預設的排除（`.git`、`node_modules`）。
+
+**同步規則**（`--rule`，已存的比對有設定時可省略）：
+
+| 值 | 做什麼 |
+|---|---|
+| `mirror-lr` / `mirror-rl` | 鏡像：讓右邊（/ 左邊）變得跟另一邊一模一樣——覆蓋不同的檔，**刪除**只在目的地的項目 |
+| `update-lr` / `update-rl` | 只把較新或對方沒有的檔複製過去，不刪任何東西 |
+| `update-both` | 兩邊互相補齊，不同的以較新的一邊為準；分不出新舊的列為衝突，不處理 |
+
+- 複製會保留來源的修改時間，所以同步完再比一次就是「相同」；FTP 主機設不了修改時間，會在結尾提示有幾個檔沒保留。
+- 遠端 ↔ 遠端也能同步（經本機暫存資料夾轉接）。
+- 有任何一項失敗時，其他項目照常處理，最後列出失敗清單並回非零結束碼。
+
 ---
 
 ## 常見情境
@@ -544,6 +597,13 @@ dbk --conn prod -d shop run release-42.sql --out /backup/releases --yes --allow-
 dbk --conn prod -d shop run /backup/releases/<子目錄>/rollback.sql --out /backup/releases --yes --allow-prod
 ```
 
+**排程檢查：正式機上的網站檔案有沒有被人手動改過**
+
+```bash
+# 與部署來源比內容；有差異時回非零，交給排程 / 監控發通知
+dbk --format json diff ./release/site ssh://web-01/var/www/site --criteria content --exit-code > drift.json
+```
+
 **稽核：找出所有引用某欄位的預存程序**
 
 ```bash
@@ -567,7 +627,7 @@ dbk --conn prod --format json search "customer_id" --definitions --type procedur
 
 ## 限制
 
-- **Kafka / Elasticsearch / RabbitMQ 連線 CLI 不支援**。沒有可在終端機表達的通用查詢語言，且精簡 binary 未編入其驅動；指定時會回明確錯誤，請改用 GUI。
+- **Kafka / Elasticsearch / RabbitMQ 與容器類（Docker / Registry / Harbor / Kubernetes）連線 CLI 不支援**。沒有可在終端機表達的通用查詢語言，且精簡 binary 未編入其驅動；指定時會回明確錯誤，請改用 GUI。SSH 主機只有 `diff` / `sync` 會用到（當作檔案比對的一邊），CLI 不開終端機。
 - **`mcp` 逐一處理請求**，不併發。資料庫工具本來就該一條一條跑，而且共用同一條連線。
 - **`GO` 批次分隔只有 `run` 支援**。`exec` 收到 SSMS 貼出來的腳本時，`GO` 之後的語句不會被切成獨立批次。
 - **`run` 不包交易、逐句提交**；含 `BEGIN` / `COMMIT`、`USE` / `SET` 或非 PostgreSQL 程序本體的腳本整份擋下。**Oracle 尚未實測**。
