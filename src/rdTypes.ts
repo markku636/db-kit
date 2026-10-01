@@ -120,6 +120,8 @@ export interface RdAuthPrompt {
   username: string;
   /** 前一次失敗的原因（重試時顯示）。 */
   error?: string | null;
+  /** 不是錯誤的說明（RustDesk 等對方按接受時）。 */
+  notice?: string | null;
 }
 
 export interface RdAuthAnswer {

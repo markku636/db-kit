@@ -211,17 +211,39 @@ mod rdp {
 // ```
 mod rustdesk {
     use super::*;
+    use crate::rd::runtime::AuthAnswer;
     use crate::rd::rustdesk::{self as r, RustdeskParams};
 
     fn params(password: &str) -> RustdeskParams {
         RustdeskParams { host: host("DBKIT_RUSTDESK_IT_HOST"), port: 21118, password: password.into(), rendezvous: None }
     }
 
+    /// 有給密碼的連線不會問（沒有 `waiting_accept`）。
+    fn no_ask() -> std::future::Ready<Option<AuthAnswer>> {
+        std::future::ready(None)
+    }
+
+    /// 沒給密碼：對方畫面跳出「接受」、db-kit 問密碼；答了密碼就在同一條連線補送登入（真的被控端認不認）。
+    #[tokio::test]
+    #[ignore]
+    async fn rustdesk_password_entered_while_waiting_for_accept() {
+        let asked = std::sync::atomic::AtomicBool::new(false);
+        let c = r::connect(&params(""), Duration::from_secs(30), || {
+            asked.store(true, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(Some(AuthAnswer { username: String::new(), password: "dbkit123".into(), remember: false }))
+        })
+        .await
+        .expect("登入");
+        assert!(asked.load(std::sync::atomic::Ordering::SeqCst), "沒密碼要問");
+        assert_eq!(c.answered.as_ref().map(|a| a.password.as_str()), Some("dbkit123"));
+        assert!(c.size.0 > 0 && c.size.1 > 0, "{:?}", c.size);
+    }
+
     /// 啟動輔助程式 → 登入 → 工作階段迴圈把影像轉給 sink → 使用者斷線。
     #[tokio::test]
     #[ignore]
     async fn rustdesk_login_and_video_via_bridge() {
-        let c = r::connect(&params("dbkit123"), Duration::from_secs(30)).await.expect("登入");
+        let c = r::connect(&params("dbkit123"), Duration::from_secs(30), no_ask).await.expect("登入");
         assert!(c.size.0 > 0 && c.size.1 > 0, "{:?}", c.size);
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
         let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -265,7 +287,7 @@ mod rustdesk {
     #[ignore]
     async fn rustdesk_id_via_rendezvous_is_encrypted() {
         let key = std::env::var("DBKIT_RUSTDESK_IT_KEY").expect("DBKIT_RUSTDESK_IT_KEY");
-        let c = r::connect(&id_params(&key), Duration::from_secs(60)).await.expect("登入");
+        let c = r::connect(&id_params(&key), Duration::from_secs(60), no_ask).await.expect("登入");
         assert!(c.secure, "驗過對方公鑰 → 加密");
         assert!(["relay", "direct", "lan"].contains(&c.route.as_str()), "{}", c.route);
         assert!(c.size.0 > 0 && c.size.1 > 0, "{:?}", c.size);
@@ -276,7 +298,7 @@ mod rustdesk {
     #[ignore]
     async fn rustdesk_id_wrong_key_is_readable() {
         let bad = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-        match r::connect(&id_params(bad), Duration::from_secs(60)).await.err().unwrap() {
+        match r::connect(&id_params(bad), Duration::from_secs(60), no_ask).await.err().unwrap() {
             AppError::Rd(m) => assert!(m.contains("Key"), "{m}"),
             e => panic!("{e:?}"),
         }
@@ -285,7 +307,7 @@ mod rustdesk {
     #[tokio::test]
     #[ignore]
     async fn rustdesk_wrong_password_is_auth_error() {
-        let e = r::connect(&params("nope"), Duration::from_secs(30)).await.err().unwrap();
+        let e = r::connect(&params("nope"), Duration::from_secs(30), no_ask).await.err().unwrap();
         assert!(matches!(e, AppError::RdAuth(_)), "{e:?}");
     }
 }

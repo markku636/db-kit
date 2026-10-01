@@ -1583,6 +1583,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "RustDesk 密碼錯誤" => "Wrong RustDesk password",
         "對方要求輸入密碼" => "The other side requires a password",
         "對方拒絕了連線：{m}" => "The other side refused the connection: {m}",
+        "對方一直沒有回應登入：沒有人在對方畫面上按「接受」。請輸入對方的 RustDesk 密碼" => "The other side never answered the login: nobody clicked \"Accept\" on their screen. Enter the other side's RustDesk password",
+        "已請對方在畫面上按「接受」，對方按了就會連上；也可以直接輸入對方的 RustDesk 密碼。" => "The other side has been asked to click \"Accept\" on their screen, and you'll be connected once they do. You can also enter the other side's RustDesk password.",
         "找不到這個 RustDesk ID：請確認 ID 沒有打錯，而且這裡的 ID 伺服器跟對方 RustDesk 設定的是同一台" => "RustDesk ID not found: check the ID, and make sure this ID server is the same one set in the other side's RustDesk",
         "對方不在線上：對方電腦沒開 RustDesk，或它連不到 ID 伺服器" => "The other side is offline: RustDesk isn't running on that computer, or it can't reach the ID server",
         "ID 伺服器拒絕連線：Key 不符。請在連線設定填入 ID 伺服器的公鑰（跟對方 RustDesk 設定的 Key 相同）" => "The ID server refused the connection: key mismatch. Enter the ID server's public key in the connection settings (the same Key set in the other side's RustDesk)",

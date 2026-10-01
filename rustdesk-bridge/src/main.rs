@@ -233,24 +233,38 @@ where
         h.finish()
     };
     let mut logged_in = false;
-    let login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
+    let mut login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
+    // 對方的登入挑戰：沒密碼先送空的等對方按接受，期間 db-kit 問到密碼再用同一題重送登入（官方 `handle_login_from_ui`）。
+    let mut hash: Option<(String, String)> = None;
 
     loop {
         // 兩個讀取端都是取消安全的（select! 另一邊先好時，讀到一半的封包不會掉）。
         let data = if let Some(p) = pending.take() {
             Ok(Some(p))
         } else {
-            let wait_login = async {
-                if logged_in {
-                    std::future::pending::<()>().await
-                } else {
-                    tokio::time::sleep_until(login_deadline).await
+            let wait_login = {
+                let (logged_in, deadline) = (logged_in, login_deadline);
+                async move {
+                    if logged_in {
+                        std::future::pending::<()>().await
+                    } else {
+                        tokio::time::sleep_until(deadline).await
+                    }
                 }
             };
             tokio::select! {
                 data = pr.next() => data,
                 msg = stdin.next() => {
                     match msg {
+                        Ok(Some(ipc::HostMsg::Json(v))) if v["t"] == "login" => {
+                            let password = v["password"].as_str().unwrap_or_default();
+                            if let (Some((salt, challenge)), false) = (&hash, logged_in || password.is_empty()) {
+                                let proof = session::password_proof(password, salt, challenge);
+                                let m = session::login_request(&login.peer_id, proof, login.decoders, session_id, &login.my_name);
+                                session::send_sealed(&mut pw, &m, &mut tx).await.map_err(|e| e.to_string())?;
+                                login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
+                            }
+                        }
                         Ok(Some(ipc::HostMsg::Json(v))) => {
                             // 格式不對的指令略過（db-kit 的 bug 不該讓連線斷掉）。
                             if let Ok(c) = serde_json::from_value::<Command>(v) {
@@ -296,6 +310,7 @@ where
                 if login.password.is_empty() {
                     emit(stdout, json!({ "type": "waiting_accept" })).await?;
                 }
+                hash = Some((salt, challenge));
             }
             Incoming::LoggedIn(pi) => {
                 logged_in = true;
@@ -512,6 +527,44 @@ mod tests {
             x => panic!("{x:?}"),
         }
         task.abort();
+    }
+
+    /// 沒密碼：先送空的登入（對方畫面跳出「接受」）、告訴 db-kit 在等；db-kit 問到密碼後用同一題重送登入。
+    #[tokio::test]
+    async fn password_entered_while_waiting_for_accept() {
+        let (ours, mut theirs) = tokio::io::duplex(1 << 16);
+        let (mut host_in_w, host_in_r) = tokio::io::duplex(1 << 16);
+        let (mut host_out_w, mut host_out_r) = tokio::io::duplex(1 << 16);
+        let task = tokio::spawn(async move {
+            let mut stdin = ipc::MsgReader::new(host_in_r);
+            drive(ours, &mut stdin, &mut host_out_w, &direct("123456789", "", Decoders::default(), "pc")).await
+        });
+        let _ = codec::read_frame(&mut theirs).await.unwrap();
+        send_peer(&mut theirs, &hash_msg("s", "c")).await;
+        let lr = Message::parse_from_bytes(&codec::read_frame(&mut theirs).await.unwrap().unwrap()).unwrap();
+        let Some(message::Union::LoginRequest(first)) = lr.union else { panic!("expect login") };
+        assert!(first.password.is_empty(), "先送空密碼，讓對方按接受");
+        match ipc::read_msg(&mut host_out_r).await.unwrap() {
+            Some(ipc::HostMsg::Json(v)) => assert_eq!(v["type"], "waiting_accept"),
+            x => panic!("{x:?}"),
+        }
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "login", "password": "pw" })).await.unwrap();
+        let lr = Message::parse_from_bytes(&codec::read_frame(&mut theirs).await.unwrap().unwrap()).unwrap();
+        let Some(message::Union::LoginRequest(second)) = lr.union else { panic!("expect login") };
+        assert_eq!(&second.password[..], &session::password_proof("pw", "s", "c")[..], "同一題的密碼證明");
+        assert_eq!((second.session_id, second.username.as_str()), (first.session_id, "123456789"), "同一個工作階段");
+        send_peer(&mut theirs, &logged_in_msg("home-pc")).await;
+        match ipc::read_msg(&mut host_out_r).await.unwrap() {
+            Some(ipc::HostMsg::Json(v)) => assert_eq!(v["type"], "connected"),
+            x => panic!("{x:?}"),
+        }
+        // 登入後再送 login：不再重送登入
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "login", "password": "pw" })).await.unwrap();
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "refresh" })).await.unwrap();
+        let m = Message::parse_from_bytes(&codec::read_frame(&mut theirs).await.unwrap().unwrap()).unwrap();
+        assert!(matches!(m.union, Some(message::Union::Misc(_))), "下一則是 refresh，不是登入：{m:?}");
+        drop(host_in_w);
+        assert!(task.await.unwrap().is_ok());
     }
 
     /// 對真的 RustDesk 被控端（tests/docker，Direct IP、密碼 dbkit123）：登入、收到 VP9 關鍵畫面。

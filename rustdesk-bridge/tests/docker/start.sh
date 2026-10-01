@@ -10,6 +10,8 @@ if [ -n "$RD_SERVER" ]; then
   fi
   printf "custom-rendezvous-server = '%s'\nrelay-server = '%s'\nkey = '%s'\n" "$RD_SERVER" "${RD_RELAY:-$RD_SERVER}" "$RD_KEY" >> "$CFG"
 fi
+# docker restart 會直接殺掉 Xvfb，留下的鎖檔讓下次起不來（Server is already active for display 0）。
+rm -f /tmp/.X0-lock
 Xvfb :0 -screen 0 1024x768x24 &
 export DISPLAY=:0
 sleep 1

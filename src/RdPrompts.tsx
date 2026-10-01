@@ -55,6 +55,7 @@ export function RdAuthPromptDialog({ prompt, canRemember, onReply, onCancel }: R
       }
     >
       {prompt.error && <div className="text-sm text-danger break-words" data-rd-auth-error="">{prompt.error}</div>}
+      {prompt.notice && <div className="text-sm text-fg/70 break-words" data-rd-auth-notice="">{prompt.notice}</div>}
       {prompt.need_username && (
         <Field label={t("帳號")} hint={t("RDP 網域帳號可寫成 DOMAIN\\user")}>
           <Input autoFocus autoComplete="off" spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={onEnter} />

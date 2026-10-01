@@ -9,16 +9,18 @@
 //!
 //! 給前端的 Channel 訊息 = `[u8 型別][內容]`（拿掉長度）：影像在 WebView 裡用 WebCodecs 解，JSON 事件照轉。
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::time::Duration;
 
 use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 
-use super::runtime::RdCtl;
+use super::runtime::{AuthAnswer, RdCtl};
 use crate::error::{AppError, AppResult};
 
 pub const BRIDGE_NAME: &str = "dbk-rustdesk-bridge";
@@ -135,11 +137,37 @@ fn json_of(msg: &[u8]) -> Option<serde_json::Value> {
     (msg.first() == Some(&TYPE_JSON)).then(|| serde_json::from_slice(&msg[1..]).ok()).flatten()
 }
 
+/// 輔助程式的輸出（`None` = 結束了）。
+type Output = mpsc::Receiver<std::io::Result<Vec<u8>>>;
+
+/// 輔助程式的輸出交給專門的 task 讀：`read_msg` 不是取消安全的，直接放進 `select!` 跟前端的輸入一起等，
+/// 輸入先到時讀到一半的訊息會掉，後面的長度標頭就全錯了。
+fn spawn_reader<R: AsyncRead + Unpin + Send + 'static>(mut r: R) -> Output {
+    let (tx, rx) = mpsc::channel(64);
+    tokio::spawn(async move {
+        loop {
+            let m = read_msg(&mut r).await;
+            let end = !matches!(m, Ok(Some(_)));
+            if let Some(m) = m.transpose() {
+                if tx.send(m).await.is_err() {
+                    break;
+                }
+            }
+            if end {
+                break;
+            }
+        }
+    });
+    rx
+}
+
 /// 已連上（登入完成）的輔助程式。
 pub struct Connected {
     child: Child,
     stdin: ChildStdin,
-    stdout: ChildStdout,
+    out: Output,
+    /// 等對方按接受的期間使用者輸入、登入成功的密碼（呼叫端決定要不要記住）。
+    pub answered: Option<AuthAnswer>,
     /// 登入成功的那則事件（前端要從裡面拿螢幕清單）。
     pub hello: Vec<u8>,
     /// 目前螢幕的大小（沒有資訊時 0）。
@@ -151,7 +179,15 @@ pub struct Connected {
 }
 
 /// 啟動輔助程式並登入。密碼錯 → `RdAuth`（呼叫端重問密碼再來）。
-pub async fn connect(p: &RustdeskParams, timeout: Duration) -> AppResult<Connected> {
+///
+/// 沒給密碼時輔助程式先送空密碼的登入、回 `waiting_accept`（對方畫面跳出「接受」）：這時跟官方用戶端一樣
+/// 同時問密碼（`ask_password`），兩邊誰先好就用誰——對方按了接受，問到一半的對話框就收掉；先問到密碼就
+/// 用同一條連線補送登入。在對話框按取消 = 不連了。
+pub async fn connect<F, Fut>(p: &RustdeskParams, timeout: Duration, ask_password: F) -> AppResult<Connected>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Option<AuthAnswer>>,
+{
     let path = bridge_path().ok_or_else(|| {
         AppError::Rd(t!("找不到 RustDesk 連線元件（dbk-rustdesk-bridge），請重新安裝 db-kit").into())
     })?;
@@ -163,41 +199,25 @@ pub async fn connect(p: &RustdeskParams, timeout: Duration) -> AppResult<Connect
         .spawn()
         .map_err(|e| AppError::Rd(tf!("無法啟動 RustDesk 連線元件：{e}", e = e)))?;
     let mut stdin = child.stdin.take().ok_or_else(|| AppError::Rd("bridge stdin".into()))?;
-    let mut stdout = child.stdout.take().ok_or_else(|| AppError::Rd("bridge stdout".into()))?;
+    let stdout = child.stdout.take().ok_or_else(|| AppError::Rd("bridge stdout".into()))?;
+    let mut out = spawn_reader(stdout);
     write_json(&mut stdin, &connect_command(p))
         .await
         .map_err(|e| AppError::Rd(tf!("RustDesk 連線元件沒有回應：{e}", e = e)))?;
 
     // 等登入結果（對方可能要在畫面上按「接受」，所以時間給長一點）。
-    let wait = async {
-        loop {
-            let Some(msg) = read_msg(&mut stdout).await.map_err(|e| AppError::Rd(e.to_string()))? else {
-                return Err(AppError::Rd(t!("RustDesk 連線元件意外結束").into()));
-            };
-            let Some(v) = json_of(&msg) else { continue };
-            match v["type"].as_str() {
-                Some("connected") => {
-                    let cur = v["peer"]["current_display"].as_u64().unwrap_or(0) as usize;
-                    let d = &v["peer"]["displays"][cur];
-                    let size = (d["width"].as_u64().unwrap_or(0) as u16, d["height"].as_u64().unwrap_or(0) as u16);
-                    let secure = v["secure"].as_bool().unwrap_or(false);
-                    let route = v["route"].as_str().unwrap_or("ip").to_string();
-                    return Ok((msg, size, secure, route));
-                }
-                Some("login_error") => {
-                    let m = v["message"].as_str().unwrap_or_default().to_string();
-                    return Err(AppError::RdAuth(login_error_text(&m)));
-                }
-                Some("error") | Some("closed") => {
-                    let m = v["message"].as_str().or(v["reason"].as_str()).unwrap_or_default();
-                    return Err(AppError::Rd(bridge_error_text(v["code"].as_str(), m)));
-                }
-                _ => {}
-            }
-        }
-    };
+    let wait = wait_login(&mut out, &mut stdin, ask_password);
     match tokio::time::timeout(timeout, wait).await {
-        Ok(Ok((hello, size, secure, route))) => Ok(Connected { child, stdin, stdout, hello, size, secure, route }),
+        Ok(Ok(l)) => Ok(Connected {
+            child,
+            stdin,
+            out,
+            answered: l.answered,
+            hello: l.hello,
+            size: l.size,
+            secure: l.secure,
+            route: l.route,
+        }),
         Ok(Err(e)) => {
             let _ = child.kill().await;
             Err(e)
@@ -209,11 +229,87 @@ pub async fn connect(p: &RustdeskParams, timeout: Duration) -> AppResult<Connect
     }
 }
 
+/// 登入成功（`connected` 事件）。
+struct LoggedIn {
+    hello: Vec<u8>,
+    size: (u16, u16),
+    secure: bool,
+    route: String,
+    answered: Option<AuthAnswer>,
+}
+
+/// 讀輔助程式的事件直到登入有結果；`waiting_accept` 時問密碼（見 `connect`）。
+async fn wait_login<W, F, Fut>(out: &mut Output, stdin: &mut W, ask_password: F) -> AppResult<LoggedIn>
+where
+    W: AsyncWrite + Unpin,
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Option<AuthAnswer>>,
+{
+    let mut ask = Some(ask_password);
+    let mut asking: Option<Pin<Box<Fut>>> = None;
+    let mut answered = None;
+    loop {
+        let answer = async {
+            match asking.as_mut() {
+                Some(f) => f.await,
+                None => std::future::pending().await,
+            }
+        };
+        let msg = tokio::select! {
+            m = out.recv() => m,
+            a = answer => {
+                asking = None;
+                let Some(a) = a else { return Err(AppError::RdCancelled) };
+                // 空密碼 = 繼續等對方按接受。
+                if !a.password.is_empty() {
+                    write_json(stdin, &json!({ "t": "login", "password": a.password }))
+                        .await
+                        .map_err(|_| AppError::Rd(t!("RustDesk 連線元件意外結束").into()))?;
+                    answered = Some(a);
+                }
+                continue;
+            }
+        };
+        let msg = match msg {
+            Some(Ok(m)) => m,
+            Some(Err(e)) => return Err(AppError::Rd(e.to_string())),
+            None => return Err(AppError::Rd(t!("RustDesk 連線元件意外結束").into())),
+        };
+        let Some(v) = json_of(&msg) else { continue };
+        match v["type"].as_str() {
+            Some("connected") => {
+                let cur = v["peer"]["current_display"].as_u64().unwrap_or(0) as usize;
+                let d = &v["peer"]["displays"][cur];
+                let size = (d["width"].as_u64().unwrap_or(0) as u16, d["height"].as_u64().unwrap_or(0) as u16);
+                let secure = v["secure"].as_bool().unwrap_or(false);
+                let route = v["route"].as_str().unwrap_or("ip").to_string();
+                return Ok(LoggedIn { hello: msg, size, secure, route, answered });
+            }
+            Some("waiting_accept") => {
+                if let Some(f) = ask.take() {
+                    asking = Some(Box::pin(f()));
+                }
+            }
+            Some("login_error") => {
+                let m = v["message"].as_str().unwrap_or_default().to_string();
+                return Err(AppError::RdAuth(login_error_text(&m)));
+            }
+            Some("error") | Some("closed") => {
+                let m = v["message"].as_str().or(v["reason"].as_str()).unwrap_or_default();
+                return Err(AppError::Rd(bridge_error_text(v["code"].as_str(), m)));
+            }
+            _ => {}
+        }
+    }
+}
+
 /// 對方回的登入錯誤 → 使用者看得懂的句子（原文附在後面，方便查）。
 fn login_error_text(m: &str) -> String {
     match m {
         "Wrong Password" => t!("RustDesk 密碼錯誤").into(),
         "No Password Access" | "Password Required" => t!("對方要求輸入密碼").into(),
+        // 輔助程式自己的登入逾時（session.rs `LOGIN_TIMEOUT`）。
+        "login timed out" => t!("對方一直沒有回應登入：沒有人在對方畫面上按「接受」。請輸入對方的 RustDesk 密碼").into(),
         _ if m.contains("denied") || m.contains("Denied") => tf!("對方拒絕了連線：{m}", m = m),
         _ => m.to_string(),
     }
@@ -238,12 +334,12 @@ fn bridge_error_text(code: Option<&str>, m: &str) -> String {
 /// 工作階段：輔助程式的輸出轉給前端；前端的輸入（`rd_write` 的 JSON）轉給輔助程式。
 /// 回傳結束原因（`None` = 使用者自己斷的）。
 pub async fn run(c: Connected, mut ctl: mpsc::UnboundedReceiver<RdCtl>, sink: Sink) -> Option<String> {
-    let Connected { mut child, mut stdin, mut stdout, hello, .. } = c;
+    let Connected { mut child, mut stdin, mut out, hello, .. } = c;
     sink(hello);
     let reason = loop {
         tokio::select! {
-            msg = read_msg(&mut stdout) => match msg {
-                Ok(Some(m)) => {
+            msg = out.recv() => match msg {
+                Some(Ok(m)) => {
                     if let Some(v) = json_of(&m) {
                         if v["type"] == "closed" || v["type"] == "error" {
                             let r = v["reason"].as_str().or(v["message"].as_str()).unwrap_or_default().to_string();
@@ -252,7 +348,7 @@ pub async fn run(c: Connected, mut ctl: mpsc::UnboundedReceiver<RdCtl>, sink: Si
                     }
                     sink(m);
                 }
-                Ok(None) | Err(_) => break Some(t!("RustDesk 連線元件意外結束").to_string()),
+                Some(Err(_)) | None => break Some(t!("RustDesk 連線元件意外結束").to_string()),
             },
             m = ctl.recv() => {
                 let cmd = match m {
@@ -295,6 +391,106 @@ mod tests {
         let m = read_msg(&mut r).await.unwrap().unwrap();
         assert_eq!(json_of(&m).unwrap()["t"], "refresh");
         assert!(read_msg(&mut r).await.unwrap().is_none());
+    }
+
+    fn event(v: serde_json::Value) -> std::io::Result<Vec<u8>> {
+        let mut m = vec![TYPE_JSON];
+        m.extend(serde_json::to_vec(&v).unwrap());
+        Ok(m)
+    }
+
+    fn answer(pw: &str) -> AuthAnswer {
+        AuthAnswer { username: String::new(), password: pw.into(), remember: true }
+    }
+
+    /// 等對方按接受時問到密碼 → 同一條連線補送 `login`；登入成功帶回輸入的密碼（給「記住密碼」）。
+    #[tokio::test]
+    async fn password_asked_while_waiting_for_accept() {
+        let (tx, mut out) = mpsc::channel(8);
+        let (mut stdin, mut bridge_in) = tokio::io::duplex(1 << 16);
+        tx.send(event(json!({ "type": "waiting_accept" }))).await.unwrap();
+        let bridge = tokio::spawn(async move {
+            let m = read_msg(&mut bridge_in).await.unwrap().unwrap();
+            let v = json_of(&m).unwrap();
+            assert_eq!((v["t"].as_str(), v["password"].as_str()), (Some("login"), Some("pw")));
+            tx.send(event(json!({ "type": "connected", "peer": { "current_display": 0, "displays": [{ "width": 1920, "height": 1080 }] }, "secure": true, "route": "relay" }))).await.unwrap();
+        });
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let l = wait_login(&mut out, &mut stdin, || {
+            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { Some(answer("pw")) }
+        })
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+        bridge.await.unwrap();
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!((l.size, l.secure, l.route.as_str()), ((1920, 1080), true, "relay"));
+        assert_eq!(l.answered.map(|a| a.password).as_deref(), Some("pw"));
+    }
+
+    /// 對方先按了接受：問到一半的密碼對話框收掉，照樣連上；沒有輸入密碼 → 不記住任何東西。
+    #[tokio::test]
+    async fn accepted_before_password_entered() {
+        let (tx, mut out) = mpsc::channel(8);
+        let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
+        tx.send(event(json!({ "type": "waiting_accept" }))).await.unwrap();
+        tx.send(event(json!({ "type": "connected", "peer": {}, "route": "lan" }))).await.unwrap();
+        let l = wait_login(&mut out, &mut stdin, || std::future::pending::<Option<AuthAnswer>>()).await.unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(l.route, "lan");
+        assert!(l.answered.is_none());
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_password_prompt_cancels_the_connection() {
+        let (tx, mut out) = mpsc::channel(8);
+        let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
+        tx.send(event(json!({ "type": "waiting_accept" }))).await.unwrap();
+        let r = wait_login(&mut out, &mut stdin, || async { None }).await;
+        assert!(matches!(r, Err(AppError::RdCancelled)));
+        drop(tx);
+    }
+
+    /// 有給密碼（沒有 `waiting_accept`）就不問；輔助程式的輸出結束 → 錯誤而不是卡住。
+    #[tokio::test]
+    async fn no_prompt_without_waiting_accept() {
+        let (tx, mut out) = mpsc::channel(8);
+        let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
+        tx.send(event(json!({ "type": "login_error", "message": "login timed out" }))).await.unwrap();
+        let r = wait_login(&mut out, &mut stdin, || async { panic!("不該問密碼") }).await;
+        assert!(matches!(r, Err(AppError::RdAuth(ref m)) if m.contains("接受")), "{:?}", r.err());
+        drop(tx);
+        let r = wait_login(&mut out, &mut stdin, || async { None }).await;
+        assert!(matches!(r, Err(AppError::Rd(_))));
+    }
+
+    /// 讀取 task：每則訊息原樣轉、結束時關掉 channel（也驗證讀到一半不會因為接收端在 select! 裡被取消而掉資料）。
+    #[tokio::test]
+    async fn reader_task_forwards_whole_messages() {
+        let (mut w, r) = tokio::io::duplex(64);
+        let mut out = spawn_reader(r);
+        let big = json!({ "t": "x".repeat(1000) });
+        let writer = tokio::spawn(async move {
+            for _ in 0..20 {
+                write_json(&mut w, &big).await.unwrap();
+            }
+        });
+        let mut got = 0;
+        loop {
+            tokio::select! {
+                m = out.recv() => match m {
+                    Some(Ok(m)) => {
+                        assert_eq!(json_of(&m).unwrap()["t"].as_str().map(str::len), Some(1000));
+                        got += 1;
+                    }
+                    Some(Err(e)) => panic!("{e}"),
+                    None => break,
+                },
+                // 一直有另一邊先好、把 recv 取消掉
+                _ = tokio::task::yield_now() => {}
+            }
+        }
+        writer.await.unwrap();
+        assert_eq!(got, 20);
     }
 
     #[test]

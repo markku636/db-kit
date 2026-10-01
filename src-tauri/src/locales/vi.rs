@@ -517,6 +517,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "RustDesk 密碼錯誤" => "Mật khẩu RustDesk không đúng",
         "對方要求輸入密碼" => "Máy bên kia yêu cầu mật khẩu",
         "對方拒絕了連線：{m}" => "Máy bên kia đã từ chối kết nối: {m}",
+        "對方一直沒有回應登入：沒有人在對方畫面上按「接受」。請輸入對方的 RustDesk 密碼" => "Máy bên kia không phản hồi đăng nhập: không ai nhấn “Chấp nhận” trên màn hình bên đó. Hãy nhập mật khẩu RustDesk của máy bên kia",
+        "已請對方在畫面上按「接受」，對方按了就會連上；也可以直接輸入對方的 RustDesk 密碼。" => "Đã yêu cầu máy bên kia nhấn “Chấp nhận” trên màn hình; khi họ nhấn là kết nối. Bạn cũng có thể nhập mật khẩu RustDesk của máy bên kia.",
         "找不到這個 RustDesk ID：請確認 ID 沒有打錯，而且這裡的 ID 伺服器跟對方 RustDesk 設定的是同一台" => "Không tìm thấy ID RustDesk: hãy kiểm tra lại ID, và chắc chắn máy chủ ID ở đây trùng với máy chủ đã đặt trong RustDesk bên kia",
         "對方不在線上：對方電腦沒開 RustDesk，或它連不到 ID 伺服器" => "Máy bên kia đang ngoại tuyến: RustDesk chưa chạy trên máy đó, hoặc máy đó không kết nối được tới máy chủ ID",
         "ID 伺服器拒絕連線：Key 不符。請在連線設定填入 ID 伺服器的公鑰（跟對方 RustDesk 設定的 Key 相同）" => "Máy chủ ID từ chối kết nối: Key không khớp. Hãy nhập khóa công khai của máy chủ ID trong cài đặt kết nối (giống Key đã đặt trong RustDesk bên kia)",

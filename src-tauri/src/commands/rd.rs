@@ -55,6 +55,8 @@ struct AuthPromptEvent {
     need_username: bool,
     username: String,
     error: Option<String>,
+    /// 不是錯誤的說明（RustDesk 等對方按接受時）。
+    notice: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -77,23 +79,33 @@ impl RdUi {
     where
         F: FnOnce(&str) -> tauri::Result<()>,
     {
-        let (tx, rx) = oneshot::channel();
-        let prompt_id = self.rt.register_prompt(&self.conn_id, tx);
-        if emit(&prompt_id).is_err() {
-            self.rt.drop_prompt(&prompt_id);
-            return None;
-        }
-        match tokio::time::timeout(PROMPT_TIMEOUT, rx).await {
-            Ok(Ok(a)) => Some(a),
-            _ => {
-                self.rt.drop_prompt(&prompt_id);
-                None
+        /// 不管是答了、逾時，還是等待端被丟掉（RustDesk 對方先按了接受），都從待答清單拿掉。
+        struct Pending<'a>(&'a RdRuntime, String);
+        impl Drop for Pending<'_> {
+            fn drop(&mut self) {
+                self.0.drop_prompt(&self.1);
             }
         }
+        let (tx, rx) = oneshot::channel();
+        let pending = Pending(&self.rt, self.rt.register_prompt(&self.conn_id, tx));
+        if emit(&pending.1).is_err() {
+            return None;
+        }
+        tokio::time::timeout(PROMPT_TIMEOUT, rx).await.ok()?.ok()
     }
 
     /// 帳號 / 密碼對話框。`None` = 取消。
     async fn creds(&self, need_username: bool, username: &str, error: Option<String>) -> Option<AuthAnswer> {
+        self.auth_prompt(need_username, username, error, None).await
+    }
+
+    async fn auth_prompt(
+        &self,
+        need_username: bool,
+        username: &str,
+        error: Option<String>,
+        notice: Option<String>,
+    ) -> Option<AuthAnswer> {
         let a = self
             .ask(|prompt_id| {
                 self.app.emit(
@@ -104,6 +116,7 @@ impl RdUi {
                         need_username,
                         username: username.to_string(),
                         error: error.clone(),
+                        notice: notice.clone(),
                     },
                 )
             })
@@ -620,8 +633,16 @@ async fn connect_rustdesk(
             (None, None) => (s.host.clone(), s.effective_port(), None),
         };
         let p = rustdesk::RustdeskParams { host, port, password: password.clone(), rendezvous: rendezvous.clone() };
-        match rustdesk::connect(&p, s.options.connect_timeout() + PROMPT_TIMEOUT).await {
+        // 沒密碼：對方畫面正跳出連線請求，同時讓使用者可以改輸入密碼。
+        let ask = || {
+            let notice = t!("已請對方在畫面上按「接受」，對方按了就會連上；也可以直接輸入對方的 RustDesk 密碼。");
+            ui.auth_prompt(false, "", None, Some(notice.into()))
+        };
+        match rustdesk::connect(&p, s.options.connect_timeout() + PROMPT_TIMEOUT, ask).await {
             Ok(c) => {
+                if let Some(a) = &c.answered {
+                    remember(&r.origin, a);
+                }
                 // Direct IP 跟官方用戶端一樣不加密（沒有 ID 伺服器可以驗對方的金鑰）；經 SSH 時外層加密。
                 // 經 ID 伺服器時，驗得過對方公鑰（有填對 ID 伺服器的 Key）就是端到端加密。
                 let (security, encrypted) = match (&rendezvous, fwd.is_some()) {
