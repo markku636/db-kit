@@ -31,6 +31,14 @@ export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sql
 
 export type SshAuthMethod = "password" | "key";
 
+/** 這份 App 的安裝方式（自動更新下載對應的安裝檔）：NSIS（目前使用者）/ MSI（Program Files）。 */
+export type UpdateInstallKind = "nsis" | "msi";
+/** 下載安裝檔的進度（total 0 = 不知道大小）。 */
+export interface UpdateProgress {
+  downloaded: number;
+  total: number;
+}
+
 export interface ConnectionConfig {
   id: string;
   name: string;
@@ -2146,6 +2154,12 @@ export const api = {
   agentWorkspaceRead: (path: string) => invoke<string>("agent_workspace_read", { path }),
   openAgentWorkspace: () => invoke<void>("open_agent_workspace"),
   openExternal: (url: string) => invoke<void>("open_external", { url }),
+
+  // ---- 自動更新（後端從 GitHub Release 下載安裝檔、驗 SHA-256、啟動安裝程式後關閉 App）----
+  // null = 這份 App 不支援自動安裝（macOS / Linux / 開發版 / 免安裝版）：改開 Release 頁面。
+  updateSupport: () => invoke<UpdateInstallKind | null>("update_support"),
+  updateInstall: (version: string, onProgress: Channel<UpdateProgress>) =>
+    invoke<void>("update_install", { version, onProgress }),
 
   // ---- SSH 終端機 / SFTP（DTO 見 sshTypes.ts；命令 / 事件契約見計畫）----
   // 主機清單：永不含密碼。存檔時密碼 / 密語另帶，非空才寫 keychain、空 = 保留原值（同 saveConnection 語意）。

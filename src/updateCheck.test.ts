@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isNewer } from "./updateCheck";
+import { isNewer, releaseNotes } from "./updateCheck";
 
 describe("版本比較（isNewer）", () => {
   it("數值比較而非字典序：0.2.10 比 0.2.9 新", () => {
@@ -41,5 +41,20 @@ describe("版本比較（isNewer）", () => {
   it("無法解析的段以 0 計，不丟例外", () => {
     expect(isNewer("", "0.0.0")).toBe(false);
     expect(isNewer("0.2.x", "0.2.0")).toBe(false);
+  });
+});
+
+describe("更新對話框的 Release 說明（releaseNotes）", () => {
+  it("只留該版段落，砍掉「## 下載」起的安裝指引", () => {
+    const body = "**修好了。**\r\n\r\n- 修正 A\r\n\r\n> 驗證：…\r\n\r\n## 下載\r\n\r\n| 平台 | 檔案 |\r\n|------|------|";
+    expect(releaseNotes(body)).toBe("**修好了。**\n\n- 修正 A\n\n> 驗證：…");
+  });
+
+  it("### 小標題不算，沒有 ## 標題就整段保留", () => {
+    expect(releaseNotes("- A\n\n### 細節\n\n- B\n")).toBe("- A\n\n### 細節\n\n- B");
+  });
+
+  it("CHANGELOG 沒寫這版（只有下載指引）→ 空字串", () => {
+    expect(releaseNotes("## 下載\n\n| 平台 | 檔案 |")).toBe("");
   });
 });

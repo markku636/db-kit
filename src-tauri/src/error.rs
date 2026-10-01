@@ -73,6 +73,10 @@ pub enum AppError {
     #[error("compare cancelled by user")]
     CompareCancelled,
 
+    /// 自動更新（查 Release、下載 / 驗證安裝檔、啟動安裝程式）失敗。detail 已本地化。
+    #[error("update failed: {0}")]
+    Update(String),
+
     /// 查詢超過全域逾時（毫秒）。注意：伺服器端查詢可能仍在執行，
     /// 前端錯誤文案應引導使用者以行程清單（ProcessList）手動 KILL。
     #[error("query timed out after {0} ms")]
@@ -107,6 +111,7 @@ impl AppError {
             AppError::Compare(_) => "compare",
             AppError::CompareConflict(_) => "compare_conflict",
             AppError::CompareCancelled => "compare_cancelled",
+            AppError::Update(_) => "update",
             AppError::Timeout(_) => "timeout",
             AppError::NeedsConfirm(_) => "needs_confirm",
         }
@@ -133,6 +138,7 @@ impl AppError {
             AppError::Compare(_) => "ERR_COMPARE",
             AppError::CompareConflict(_) => "ERR_COMPARE_CONFLICT",
             AppError::CompareCancelled => "ERR_COMPARE_CANCELLED",
+            AppError::Update(_) => "ERR_UPDATE",
             AppError::Timeout(_) => "ERR_TIMEOUT",
             AppError::NeedsConfirm(_) => "ERR_NEEDS_CONFIRM",
         }
@@ -160,6 +166,7 @@ impl AppError {
             AppError::Compare(s) => tf!("比對錯誤：{detail}", detail = s),
             AppError::CompareConflict(s) => s.clone(),
             AppError::CompareCancelled => t!("已取消比對").to_string(),
+            AppError::Update(s) => tf!("更新失敗：{detail}", detail = s),
             AppError::Timeout(ms) => tf!(
                 "查詢逾時（{ms} ms）；伺服器端查詢可能仍在執行，可從行程清單手動終止",
                 ms = ms

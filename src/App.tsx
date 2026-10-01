@@ -56,7 +56,7 @@ import type { ParsedRd } from "./rdConnString";
 import { decodeRdpFileBytes, parseRdpFile } from "./rdpFile";
 import SshPrefsSettings from "./SshPrefsSettings";
 import { friendlyDbError } from "./dbErrors";
-import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, type UpdateInfo } from "./updateCheck";
+import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, isDismissed, useUpdateDialog, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
 import { sqlStoreKey } from "./queryDrafts";
 import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile } from "./ui";
@@ -175,6 +175,7 @@ const TransferDialog = lazyOverlay(() => import("./TransferDialog"));
 const DbTransferDialog = lazyOverlay(() => import("./DbTransferDialog"));
 const CommandPalette = lazyOverlay(() => import("./CommandPalette"));
 const AboutDialog = lazyOverlay(() => import("./AboutDialog"));
+const UpdateDialog = lazyOverlay(() => import("./UpdateDialog"));
 const DbDataDictionary = lazyOverlay(() => import("./DbDataDictionary"));
 const TableCompareDialog = lazyOverlay(() => import("./TableCompareDialog"));
 const ExplainPlan = lazyOverlay(() => import("./ExplainPlan"));
@@ -255,6 +256,7 @@ export default function App() {
   const [advSearch, setAdvSearch] = useState<{ connId: string; kind: DbKind } | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const updateDialogOpen = useUpdateDialog((s) => s.info !== null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 進階匯出連線（逐筆選連線 + 逐類選機密）。每次開啟都是全新狀態：路徑不記憶，
   // 必須現選 —— 見 ExportConnectionsDialog 檔頭。
@@ -593,6 +595,7 @@ export default function App() {
       )}
       {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
+      {updateDialogOpen && <UpdateDialog />}
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       {savedMgr && (
         <SavedQueriesDialog
@@ -839,10 +842,10 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
           <label className="flex items-center gap-2 text-sm text-fg/80 cursor-pointer select-none">
             <input type="checkbox" checked={autoUpdate}
               onChange={(e) => { setAutoUpdate(e.target.checked); setAutoCheckEnabled(e.target.checked); }} />
-            {t("啟動時自動檢查更新")}
+            {t("自動檢查更新")}
           </label>
           <p className="text-xs text-fg/50 leading-relaxed">
-            {t("每天最多向 GitHub 查一次最新版本（延後於啟動 10 秒後進行）；離線 / 內網環境可關閉。\r\n            「關於」對話框的手動檢查不受影響。")}
+            {t("每天最多向 GitHub 查一次最新版本（啟動 10 秒後開始，App 開著時也會定期檢查）。有新版會跳出更新視窗，按「立即更新」就會下載、安裝並自動重新開啟。離線 / 內網環境可關閉；「關於」對話框的手動檢查不受影響。")}
           </p>
         </div>
         <div className="pt-4 border-t border-fg/10 space-y-2">
@@ -930,17 +933,25 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
   const assistantOpen = useAssistant((s) => s.open);
   // 右側主題下拉依「目前選到的主題名」撐寬（見 MENU_BOX），換主題＝右側組寬度變了，要重新量 compact。
   const themeId = useTheme((s) => s.themeId);
-  // 到 GitHub 查最新 Release（每天最多一次，失敗安靜略過）；比目前版本新才顯示標記。
-  // 延後 10 秒發出：啟動最忙的時間窗（載入連線 / 首屏渲染）完全讓路；可於設定關閉自動檢查。
+  // 到 GitHub 查最新 Release（每天最多一次，失敗安靜略過）；比目前版本新才顯示標記，並自動跳出更新對話框
+  // （每個版本只自動跳一次：按過「稍後」就只留標記）。延後 10 秒發出：啟動最忙的時間窗（載入連線 /
+  // 首屏渲染）完全讓路；之後每 6 小時再查（App 常開好幾天）。可於設定關閉自動檢查。
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   useEffect(() => {
     if (!autoCheckEnabled()) return;
-    const timer = window.setTimeout(() => {
+    const run = () => {
       checkForUpdate()
-        .then((r) => { if (r && isNewer(r.version, __APP_VERSION__)) setUpdate(r); })
+        .then((r) => {
+          if (!r || !isNewer(r.version, __APP_VERSION__)) return;
+          setUpdate(r);
+          const dlg = useUpdateDialog.getState();
+          if (!dlg.info && !isDismissed(r.version)) dlg.open(r, true);
+        })
         .catch(() => {});
-    }, 10_000);
-    return () => window.clearTimeout(timer);
+    };
+    const timer = window.setTimeout(run, 10_000);
+    const every = window.setInterval(run, 6 * 60 * 60 * 1000);
+    return () => { window.clearTimeout(timer); window.clearInterval(every); };
   }, []);
   const tools: { icon: ReactNode; label: string; onClick: () => void; disabled: boolean; active?: boolean; hint?: string }[] = [
     { icon: <Icon icon={Plug} size={20} />, label: t("連線"), onClick: onNewConnection, disabled: false },
@@ -1014,8 +1025,8 @@ function Toolbar({ onNewConnection, onBackup, canBackup, onEr, canEr, onAdvSearc
         {update && (
           <button
             type="button"
-            onClick={() => api.openExternal(update.url).catch(() => {})}
-            title={t("點擊前往下載 v{version}", { version: update.version })}
+            onClick={() => useUpdateDialog.getState().open(update)}
+            title={t("點擊更新到 v{version}", { version: update.version })}
             className="mt-0.5 self-start text-[11px] font-medium text-accent hover:underline inline-flex items-center gap-1 focus-visible:outline-2 focus-visible:outline-accent/60 rounded"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-accent" aria-hidden />

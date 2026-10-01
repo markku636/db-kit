@@ -2,7 +2,7 @@ import { useState } from "react";
 import { BookOpen, Bug, Copy, ExternalLink, FileText, Heart, Info, RefreshCw } from "lucide-react";
 import { Button, Icon, Modal } from "./ui/index";
 import { api, KIND_META } from "./api";
-import { checkForUpdate, isNewer, REPO, type UpdateInfo } from "./updateCheck";
+import { checkForUpdate, isNewer, REPO, useUpdateDialog, type UpdateInfo } from "./updateCheck";
 import { copyToClipboard } from "./ui";
 import { useT } from "./i18n";
 import { APP_NAME, BLOG_URL } from "./brand";
@@ -64,11 +64,11 @@ export default function AboutDialog({ onClose }: { onClose: () => void }) {
           {check.phase === "update" && (
             <button
               type="button"
-              onClick={() => openUrl(check.info.url)}
+              onClick={() => { useUpdateDialog.getState().open(check.info); onClose(); }}
               className="text-sm font-medium text-accent hover:underline inline-flex items-center gap-1.5"
             >
               <span className="w-1.5 h-1.5 rounded-full bg-accent" aria-hidden />
-              {t("有新版 v{version}，點擊前往下載", { version: check.info.version })}
+              {t("有新版 v{version}，點擊更新", { version: check.info.version })}
             </button>
           )}
           {check.phase === "latest" && <div className="text-sm text-success">{t("已是最新版本")}</div>}

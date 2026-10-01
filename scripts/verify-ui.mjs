@@ -52,6 +52,13 @@ const MANY_CONNECTIONS = Array.from({ length: 40 }, (_, i) => ({
   // 前 30 筆分三組、後 10 筆留未分組 —— 兩種區段都在畫面上。
   group_id: i < 30 ? MANY_GROUPS[i % 3].id : null,
 }));
+// GitHub 最新 Release（updateCheck 直打 api.github.com；情境沒給就回 404，不打真的 GitHub）。
+const FX_RELEASE = {
+  tag_name: "v9.9.9",
+  html_url: "https://github.com/markku636/db-kit/releases/tag/v9.9.9",
+  // 跟 scripts/changelog-section.mjs 組的一樣：該版段落（沒有標題）+「## 下載」安裝指引。
+  body: "**更好用了。**\n\n- 新功能 A\n- 修正 B\n\n## 下載\n\n| 平台 | 檔案 |\n|------|------|\n| Windows | `.exe` |",
+};
 // SSH 終端機情境改用 xterm 的 DOM renderer：無頭 Chrome 的 WebGL 不保證可用，
 // 而且只有 DOM 渲染的文字才在 .xterm-rows 讀得到（WebGL 畫在 canvas 上）。
 const SSH_STORAGE_SEED = { ...FX.STORAGE_SEED, "dbkit:ssh.prefs": { renderer: "dom" } };
@@ -145,6 +152,10 @@ const CASE_FX = {
   "rd-rdp-file-import": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-2fa": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "update-dialog-install": { GITHUB_RELEASE: FX_RELEASE },
+  "update-dialog-manual": { GITHUB_RELEASE: FX_RELEASE },
+  "update-dialog-error": { GITHUB_RELEASE: FX_RELEASE },
+  "update-auto-popup": { GITHUB_RELEASE: FX_RELEASE },
 };
 
 // ui/Field 的 <label> 沒有 htmlFor（沒和 input 綁定），getByLabel 找不到：改以「標籤文字所在的欄位」取第一個輸入框。
@@ -1098,6 +1109,96 @@ const CASES = {
     const answers = await page.evaluate(() => window.__DBKIT_RD_ANSWERS__);
     check("驗證碼對了就連上", (await page.locator("[data-rd-overlay]").count()) === 0, JSON.stringify(answers));
     check("驗證碼不記住", answers.length === 2 && answers.every((a) => a && a.remember === false), JSON.stringify(answers));
+  },
+
+  // 自動更新（NSIS 安裝的 Windows 版）：「關於」檢查到新版 → 更新對話框列出更新內容 →「立即更新」顯示下載進度、
+  // 後端拿到的是那個版本 → 告知 App 會關閉並在裝完後重開。
+  async "update-dialog-install"(page) {
+    await page.evaluate(() => { window.__DBKIT_UPDATE_SUPPORT__ = "nsis"; });
+    await page.getByRole("button", { name: "關於", exact: true }).click();
+    await page.getByRole("button", { name: "檢查更新", exact: true }).click();
+    const found = page.getByText("有新版 v9.9.9，點擊更新", { exact: true });
+    await found.waitFor({ timeout: 5000 }).catch(() => {});
+    check("「關於」查到新版", (await found.count()) === 1);
+    await found.click();
+    const notes = page.locator("[data-update-notes]");
+    await notes.waitFor({ timeout: 5000 }).catch(() => {});
+    const notesText = (await notes.textContent().catch(() => "")) ?? "";
+    check("更新對話框：標題是新版本、列出更新內容", (await page.getByText("有新版 v9.9.9", { exact: true }).count()) > 0
+      && notesText.includes("新功能 A"), notesText);
+    check("不列 Release 頁的下載指引", !notesText.includes("平台") && !notesText.includes("下載"), notesText);
+    check("「關於」對話框收起來了", (await page.getByRole("button", { name: "檢查更新", exact: true }).count()) === 0);
+    const cur = (await page.locator("[data-update-current]").textContent().catch(() => "")) ?? "";
+    check("寫出目前版本與最新版本", cur.includes("v9.9.9") && /目前版本 v\d+\.\d+\.\d+/.test(cur), cur);
+    const install = page.locator("[data-update-install]");
+    await install.click();
+    const progress = page.locator("[data-update-progress]");
+    await progress.waitFor({ timeout: 3000 }).catch(() => {});
+    check("下載時顯示進度（MB）", ((await progress.textContent().catch(() => "")) ?? "").includes("MB"));
+    check("下載中不能按「稍後」", await page.getByRole("button", { name: "稍後", exact: true }).isDisabled().catch(() => false));
+    const done = page.locator("[data-update-launching]");
+    await done.waitFor({ timeout: 5000 }).catch(() => {});
+    check("裝好前告知 App 會關閉、裝完自動重開", ((await done.textContent().catch(() => "")) ?? "").includes("重新開啟"));
+    check("後端拿到的是新版本號", await page.evaluate(() => JSON.stringify(window.__DBKIT_UPDATE_INSTALLS__) === "[\"9.9.9\"]"));
+    check("沒有未實作的 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0), await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // 不支援自動安裝（macOS / Linux / 免安裝版）：只給「前往下載」，開的是 Release 頁面；失敗訊息看得到。
+  async "update-dialog-manual"(page) {
+    await page.getByRole("button", { name: "關於", exact: true }).click();
+    await page.getByRole("button", { name: "檢查更新", exact: true }).click();
+    const found = page.getByText("有新版 v9.9.9，點擊更新", { exact: true });
+    await found.waitFor({ timeout: 5000 }).catch(() => {});
+    await found.click();
+    const manual = page.locator("[data-update-manual]");
+    await manual.waitFor({ timeout: 5000 }).catch(() => {});
+    check("說明這個版本不能自動安裝", (await manual.count()) === 1 && (await page.locator("[data-update-install]").count()) === 0);
+    await page.getByRole("button", { name: "前往下載", exact: true }).click();
+    await sleep(200);
+    check("「前往下載」開 Release 頁面", await page.evaluate(() => window.__DBKIT_EXTERNAL_OPENS__.includes("https://github.com/markku636/db-kit/releases/tag/v9.9.9")));
+    await page.getByRole("button", { name: "稍後", exact: true }).click();
+    await sleep(200);
+    check("「稍後」關閉對話框", (await manual.count()) === 0);
+  },
+
+  // 下載失敗：錯誤原因寫在對話框裡，按鈕變「重試」。
+  async "update-dialog-error"(page) {
+    await page.evaluate(() => { window.__DBKIT_UPDATE_SUPPORT__ = "msi"; window.__DBKIT_UPDATE_FAIL__ = "更新失敗：下載的安裝檔 SHA-256 對不上"; });
+    await page.getByRole("button", { name: "關於", exact: true }).click();
+    await page.getByRole("button", { name: "檢查更新", exact: true }).click();
+    const found = page.getByText("有新版 v9.9.9，點擊更新", { exact: true });
+    await found.waitFor({ timeout: 5000 }).catch(() => {});
+    await found.click();
+    await page.locator("[data-update-install]").click();
+    const err = page.locator("[data-update-error]");
+    await err.waitFor({ timeout: 5000 }).catch(() => {});
+    check("失敗原因顯示在對話框", ((await err.textContent().catch(() => "")) ?? "").includes("SHA-256"));
+    check("按鈕變「重試」", ((await page.locator("[data-update-install]").textContent().catch(() => "")) ?? "").includes("重試"));
+  },
+
+  // 啟動 10 秒後自動查：有新版就自動跳出更新對話框；按「稍後」後同一版不再自動跳，但標題列仍有「有新版」可點開。
+  async "update-auto-popup"(page) {
+    await page.clock.install();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#root");
+    await page.clock.runFor(1500);
+    await page.clock.runFor(11_000);
+    const dlg = page.locator("[data-update-current]");
+    await dlg.waitFor({ timeout: 5000 }).catch(() => {});
+    check("啟動後自動跳出更新對話框", (await dlg.count()) === 1);
+    await page.getByRole("button", { name: "稍後", exact: true }).click();
+    await page.clock.runFor(500);
+    check("按「稍後」記住這一版", await page.evaluate(() => localStorage.getItem("db-kit:updateDismissed") === "9.9.9"));
+    const badge = page.getByRole("button", { name: /有新版 v9\.9\.9/ });
+    check("標題列仍顯示「有新版」", (await badge.count()) === 1);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#root");
+    await page.clock.runFor(12_000);
+    await page.getByRole("button", { name: /有新版 v9\.9\.9/ }).waitFor({ timeout: 5000 }).catch(() => {});
+    check("同一版重開不再自動跳", (await dlg.count()) === 0 && (await page.getByRole("button", { name: /有新版 v9\.9\.9/ }).count()) === 1);
+    await page.getByRole("button", { name: /有新版 v9\.9\.9/ }).click();
+    await dlg.waitFor({ timeout: 5000 }).catch(() => {});
+    check("點標題列的「有新版」開啟更新對話框", (await dlg.count()) === 1);
   },
 
   // 匯入 .rdp（mstsc 存的 UTF-16LE）：帶進對話框，網域拆開、全螢幕 / 解析度進進階設定。
@@ -3139,6 +3240,8 @@ for (const name of want) {
   const caseFx = { ...fx, ...(CASE_FX[name] ?? {}) };
   if (UI_FONT) caseFx.STORAGE_SEED = { ...(caseFx.STORAGE_SEED ?? {}), "dbkit:uiFontSize": UI_FONT };
   await page.addInitScript(installShim, caseFx);
+  await page.route("https://api.github.com/**", (r) =>
+    caseFx.GITHUB_RELEASE ? r.fulfill({ json: caseFx.GITHUB_RELEASE }) : r.fulfill({ status: 404, json: { message: "Not Found" } }));
   if (LINT) await page.addInitScript(installLayoutLint);
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#root");

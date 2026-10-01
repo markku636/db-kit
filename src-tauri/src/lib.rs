@@ -634,6 +634,8 @@ pub fn run() {
             commands::ssh::ssh_sftp_cancel,
             commands::ssh::ssh_sftp_window_open,
             commands::ssh::ssh_sftp_window_close,
+            commands::update::update_support,
+            commands::update::update_install,
             commands::filecmp::fcmp_scan,
             commands::filecmp::fcmp_content_check,
             commands::filecmp::fcmp_sync,

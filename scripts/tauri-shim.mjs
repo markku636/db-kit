@@ -56,6 +56,8 @@ export function installShim(fx) {
   window.__DBKIT_RD_KEYS__ = [];
   window.__DBKIT_RD_FULLSCREEN__ = [];
   window.__DBKIT_RD_ANSWERS__ = [];
+  window.__DBKIT_UPDATE_INSTALLS__ = [];
+  window.__DBKIT_EXTERNAL_OPENS__ = [];
   window.__DBKIT_RD_CLIPBOARD__ = [];
   window.__DBKIT_RD_GRAB__ = [];
   window.__DBKIT_RD_CLIP_WRITES__ = [];
@@ -128,7 +130,19 @@ export function installShim(fx) {
     test_connection: () => null,
     clear_cache: () => null,
     save_connection: ({ config }) => { (window.__DBKIT_CONN_SAVES__ ||= []).push(config); return null; },
-    open_external: () => null,
+    open_external: ({ url }) => { window.__DBKIT_EXTERNAL_OPENS__.push(url); return null; },
+    // 自動更新：情境用 window.__DBKIT_UPDATE_SUPPORT__ 指定安裝方式（預設 null = 不支援自動安裝）；
+    // 安裝時照真後端送兩則下載進度，再回成功（真後端此時已啟動安裝程式、準備關閉 App）。
+    update_support: () => window.__DBKIT_UPDATE_SUPPORT__ ?? null,
+    update_install: ({ version, onProgress }) => {
+      window.__DBKIT_UPDATE_INSTALLS__.push(version);
+      if (window.__DBKIT_UPDATE_FAIL__) return Promise.reject({ kind: "update", code: "ERR_UPDATE", message: window.__DBKIT_UPDATE_FAIL__ });
+      const cb = callbacks.get(onProgress?.id);
+      const total = 37 * 1024 * 1024;
+      cb?.({ message: { downloaded: 0, total }, index: 0 });
+      cb?.({ message: { downloaded: total / 2, total }, index: 1 });
+      return new Promise((resolve) => setTimeout(() => { cb?.({ message: { downloaded: total, total }, index: 2 }); resolve(null); }, 300));
+    },
     claude_detect: () => ({ installed: true, version: "2.1.0", logged_in: true, path: "/usr/local/bin/claude" }),
     pool_status: () => ({ size: 3, idle: 2, in_use: 1 }),
     ping_connection: () => 12,

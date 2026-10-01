@@ -6,6 +6,8 @@ pub mod filecmp;
 pub mod rd;
 // SSH 終端機 / SFTP / 已存主機的 command（含 TauriUi）。
 pub mod ssh;
+// 自動更新（從 GitHub Release 下載安裝檔、驗證後交給安裝程式）的 command。
+pub mod update;
 // Docker（容器 / 映像 / volume / network、log 與 exec 串流）的 command。
 #[cfg(feature = "docker")]
 pub mod docker;
