@@ -154,6 +154,7 @@ const CASE_FX = {
   "rd-rustdesk-2fa": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-2fa-trust": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-wait-accept": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-rustdesk-monitors": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "update-dialog-install": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-manual": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-error": { GITHUB_RELEASE: FX_RELEASE },
@@ -1084,8 +1085,76 @@ const CASES = {
     check("滑鼠點擊送出 RustDesk 的 mouse 指令（左鍵按下 mask 9）", cmds.some((c) => c.t === "mouse" && c.mask === 9), JSON.stringify(cmds.slice(0, 4)));
     check("按 A 送出掃描碼 0x1E", cmds.some((c) => c.t === "key" && c.down === true && c.scancode === 0x1e));
     check("Ctrl+Alt+Del 經後端送（不是拆成三個鍵）", await page.evaluate(() => window.__DBKIT_RD_KEYS__.includes("ctrl_alt_del")));
+    check("只有一個螢幕：工具列沒有切換螢幕", (await page.locator("[data-rd-monitors]").count()) === 0);
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // RustDesk 多螢幕：工具列每個螢幕一顆（目前的標亮）+「所有螢幕」；切過去送 displays 指令、滑鼠座標換成那個螢幕的；
+  // 所有螢幕 = 照排列拼成一張；對方拔掉螢幕剩一個 → 按鈕收起、退回單一螢幕。
+  async "rd-rustdesk-monitors"(page) {
+    await page.evaluate(() => {
+      window.__DBKIT_RD_DISPLAYS__ = [
+        { x: 0, y: 0, width: 1024, height: 768, name: "\\\\.\\DISPLAY1" },
+        { x: 1024, y: 0, width: 1024, height: 768, name: "\\\\.\\DISPLAY2" },
+      ];
+    });
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("office-pc", { exact: true }).first().dblclick();
+    const canvasSize = () => page.evaluate(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize ?? null);
+    await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "1024x768", null, { timeout: 10000 }).catch(() => {});
+    const bar = page.locator("[data-rd-monitors]");
+    const mon = (id) => page.locator(`[data-rd-monitor="${id}"]`);
+    check("兩個螢幕：工具列有螢幕 1、2 和「所有螢幕」", (await bar.count()) === 1 && (await mon(0).count()) === 1 && (await mon(1).count()) === 1 && (await mon("all").count()) === 1);
+    check("螢幕按鈕的說明有編號與解析度", (await mon(1).getAttribute("title")) === "螢幕 2（1024×768）", await mon(1).getAttribute("title"));
+    check("一開始看的是螢幕 1", (await mon(0).getAttribute("aria-pressed")) === "true" && (await mon(1).getAttribute("aria-pressed")) === "false");
+
+    const cmds = () => page.evaluate(() => window.__DBKIT_RD_WRITES__.map((b) => { try { return JSON.parse(new TextDecoder().decode(new Uint8Array(b))); } catch { return null; } }).filter(Boolean));
+    await mon(1).click();
+    await sleep(200);
+    check("切到螢幕 2：送 displays [1]", (await cmds()).some((c) => c.t === "displays" && JSON.stringify(c.set) === "[1]"), JSON.stringify((await cmds()).slice(-3)));
+    check("螢幕 2 標亮", (await mon(1).getAttribute("aria-pressed")) === "true" && (await mon(0).getAttribute("aria-pressed")) === "false");
+    await page.evaluate(() => window.__DBKIT_RD_KEYFRAME__(1));
+    await sleep(300);
+    const canvas = page.locator("[data-rd-rustdesk] canvas");
+    const clickAt = async (fx) => {
+      const b = await canvas.boundingBox();
+      await page.mouse.click(b.x + b.width * fx, b.y + b.height / 2);
+      await sleep(200);
+      return (await cmds()).filter((c) => c.t === "mouse" && c.mask === 9).pop();
+    };
+    let m = await clickAt(0.5);
+    check("點螢幕 2 的正中央 → 座標在螢幕 2（x ≈ 1024 + 512）", m && Math.abs(m.x - 1536) <= 8 && Math.abs(m.y - 384) <= 8, JSON.stringify(m));
+
+    await mon("all").click();
+    await sleep(200);
+    check("所有螢幕：送 displays [0,1]", (await cmds()).some((c) => c.t === "displays" && JSON.stringify(c.set) === "[0,1]"));
+    await page.evaluate(() => { window.__DBKIT_RD_KEYFRAME__(0); window.__DBKIT_RD_KEYFRAME__(1); });
+    await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "2048x768", null, { timeout: 5000 }).catch(() => {});
+    check("兩個螢幕照排列拼成一張（2048×768）", (await canvasSize()) === "2048x768", String(await canvasSize()));
+    check("「所有螢幕」標亮、個別螢幕不亮", (await mon("all").getAttribute("aria-pressed")) === "true" && (await mon(0).getAttribute("aria-pressed")) === "false");
+    m = await clickAt(0.25);
+    check("拼圖左半 → 螢幕 1 的座標", m && Math.abs(m.x - 512) <= 12, JSON.stringify(m));
+    m = await clickAt(0.75);
+    check("拼圖右半 → 螢幕 2 的座標", m && Math.abs(m.x - 1536) <= 12, JSON.stringify(m));
+
+    // 全螢幕的浮動工具列也有切換螢幕
+    await page.getByTestId("rd-fullscreen").click();
+    await sleep(200);
+    check("全螢幕的浮動工具列也有切換螢幕", (await page.locator("[data-rd-floatbar] [data-rd-monitors]").count()) === 1);
+    await page.getByTestId("rd-fullscreen").click().catch(() => {});
+    await sleep(200);
+
+    // 對方拔掉第二個螢幕：送新的清單 → 按鈕收起、退回螢幕 1
+    await page.evaluate(() => {
+      const ev = new TextEncoder().encode(JSON.stringify({ type: "displays", displays: [{ x: 0, y: 0, width: 1024, height: 768, name: "" }] }));
+      window.__DBKIT_RD_PUSH__([1, ...ev]);
+    });
+    await sleep(300);
+    check("剩一個螢幕：切換螢幕收起", (await bar.count()) === 0);
+    check("退回螢幕 1：送 displays [0]", JSON.stringify((await cmds()).filter((c) => c.t === "displays").pop()?.set) === "[0]");
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0));
   },
 
   // RustDesk 對方開了雙重驗證：問的是驗證碼（不是密碼、不能記住），錯了顯示原因再問，對了就連上。

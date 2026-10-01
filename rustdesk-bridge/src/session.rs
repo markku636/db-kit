@@ -13,6 +13,9 @@
 //    對方按了接受就直接回 `peer_info`。
 // 4. 之後對方持續送 `VideoFrame`（VP9 / VP8 / AV1 其一，由我們在 `OptionMessage.supported_decoding` 宣告能解的），
 //    `TestDelay` 要原樣回（不回對方會以為斷線）。
+// 5. 多螢幕：切到某個螢幕 = `SwitchDisplay` + `CaptureDisplays { set: [它] }` + 要那個螢幕的關鍵畫面；
+//    看全部 = `CaptureDisplays { set: [全部] }`，之後每張 `VideoFrame.display` 標明是哪個螢幕的（官方
+//    `session_switch_display`）。對方換了螢幕 / 解析度回 `Misc.SwitchDisplay`，插拔螢幕送新的 `PeerInfo`。
 //
 // SPDX-License-Identifier: AGPL-3.0-only
 
@@ -24,8 +27,9 @@ use tokio::io::AsyncWrite;
 
 use crate::codec::write_frame;
 use crate::proto::message::{
-    key_event, login_response, message, misc, video_frame, Auth2FA, ControlKey, EncodedVideoFrames, KeyEvent,
-    KeyboardMode, LoginRequest, Message, Misc, MouseEvent, OptionMessage, SupportedDecoding,
+    key_event, login_response, message, misc, video_frame, Auth2FA, CaptureDisplays, ControlKey, DisplayInfo,
+    EncodedVideoFrames, KeyEvent, KeyboardMode, LoginRequest, Message, Misc, MouseEvent, OptionMessage,
+    SupportedDecoding, SwitchDisplay,
 };
 use crate::proto::message::option_message::BoolOption;
 use crate::proto::message::supported_decoding::PreferCodec;
@@ -79,6 +83,25 @@ pub struct Display {
     pub height: i32,
     pub name: String,
 }
+
+impl From<&DisplayInfo> for Display {
+    fn from(d: &DisplayInfo) -> Self {
+        Self { x: d.x, y: d.y, width: d.width, height: d.height, name: d.name.clone() }
+    }
+}
+
+/// 對方告知某個螢幕現在的位置與大小（切過去之後、或那個螢幕換了解析度）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DisplayChanged {
+    pub display: i32,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// 一次最多看幾個螢幕（防呆：db-kit 的 bug 不該讓對方開一堆擷取）。
+const MAX_DISPLAYS: usize = 16;
 
 /// 能解哪些編碼（db-kit 依 WebView 的 `VideoDecoder.isConfigSupported` 決定後告訴我們）。
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
@@ -191,6 +214,10 @@ pub enum Incoming {
     /// 對方只接受按「接受」（`NO_PASSWORD_ACCESS`）：連線還在，等對方按。
     NoPasswordAccess,
     Frames(Vec<Frame>),
+    /// 對方的螢幕清單變了（插拔螢幕、改排列）：登入後另送的 `PeerInfo`。
+    Displays(Vec<Display>),
+    /// 對方換了螢幕 / 那個螢幕換了解析度（`Misc.SwitchDisplay`）。
+    DisplayChanged(DisplayChanged),
     /// 要原樣回的封包（TestDelay）。
     Echo(Message),
     Closed(String),
@@ -208,11 +235,7 @@ pub fn classify(data: &[u8]) -> Incoming {
                 platform: pi.platform.clone(),
                 version: pi.version.clone(),
                 current_display: pi.current_display,
-                displays: pi
-                    .displays
-                    .iter()
-                    .map(|d| Display { x: d.x, y: d.y, width: d.width, height: d.height, name: d.name.clone() })
-                    .collect(),
+                displays: pi.displays.iter().map(Display::from).collect(),
             }),
             Some(login_response::Union::Error(e)) if e == REQUIRE_2FA || e == WRONG_2FA => {
                 Incoming::Need2fa { wrong: e == WRONG_2FA, trust: lr.enable_trusted_devices }
@@ -222,6 +245,7 @@ pub fn classify(data: &[u8]) -> Incoming {
             _ => Incoming::Ignore,
         },
         Some(message::Union::VideoFrame(vf)) => Incoming::Frames(frames_of(&vf)),
+        Some(message::Union::PeerInfo(pi)) => Incoming::Displays(pi.displays.iter().map(Display::from).collect()),
         Some(message::Union::TestDelay(t)) if !t.from_client => {
             let mut out = Message::new();
             out.set_test_delay(t);
@@ -229,6 +253,13 @@ pub fn classify(data: &[u8]) -> Incoming {
         }
         Some(message::Union::Misc(ms)) => match ms.union {
             Some(misc::Union::CloseReason(r)) => Incoming::Closed(r),
+            Some(misc::Union::SwitchDisplay(sd)) => Incoming::DisplayChanged(DisplayChanged {
+                display: sd.display,
+                x: sd.x,
+                y: sd.y,
+                width: sd.width,
+                height: sd.height,
+            }),
             _ => Incoming::Ignore,
         },
         _ => Incoming::Ignore,
@@ -245,9 +276,45 @@ pub enum Command {
     Key { down: bool, scancode: u32 },
     CtrlAltDel,
     Refresh,
+    /// 要看哪些螢幕（`PeerInfo.displays` 的索引）：一個 = 切到那個螢幕；多個 = 同時看（每張畫面帶 display）。
+    Displays { set: Vec<i32> },
 }
 
-pub fn command_message(c: &Command) -> Message {
+fn misc_message(f: impl FnOnce(&mut Misc)) -> Message {
+    let mut misc = Misc::new();
+    f(&mut misc);
+    let mut m = Message::new();
+    m.set_misc(misc);
+    m
+}
+
+/// 換螢幕的封包（照官方 `session_switch_display`）：
+/// - 一個：`SwitchDisplay`（對方把「目前螢幕」換過去、回一則 `SwitchDisplay` 帶位置大小）
+///   + `CaptureDisplays { set }`（我們自稱 1.2.4 以上，對方不會自己停掉舊螢幕的擷取，要我們說）；
+/// - 多個：只有 `CaptureDisplays { set }`；
+/// - 再對每個螢幕要一張關鍵畫面（那個螢幕本來就在擷取時對方不會重送，畫面會停在舊的）。
+fn display_messages(wanted: &[i32]) -> Vec<Message> {
+    let mut set: Vec<i32> = Vec::new();
+    for &d in wanted {
+        if d >= 0 && !set.contains(&d) && set.len() < MAX_DISPLAYS {
+            set.push(d);
+        }
+    }
+    let mut out = Vec::new();
+    if let [one] = set[..] {
+        out.push(misc_message(|m| m.set_switch_display(SwitchDisplay { display: one, ..Default::default() })));
+    }
+    if !set.is_empty() {
+        out.push(misc_message(|m| m.set_capture_displays(CaptureDisplays { set: set.clone(), ..Default::default() })));
+    }
+    for d in set {
+        out.push(misc_message(|m| m.set_refresh_video_display(d)));
+    }
+    out
+}
+
+/// db-kit 的一個指令 → 要送給對方的封包（換螢幕要好幾則）。
+pub fn command_messages(c: &Command) -> Vec<Message> {
     let mut m = Message::new();
     match c {
         Command::Mouse { mask, x, y } => {
@@ -263,13 +330,10 @@ pub fn command_message(c: &Command) -> Message {
             k.union = Some(key_event::Union::ControlKey(EnumOrUnknown::new(ControlKey::CtrlAltDel)));
             m.set_key_event(k);
         }
-        Command::Refresh => {
-            let mut misc = Misc::new();
-            misc.set_refresh_video(true);
-            m.set_misc(misc);
-        }
+        Command::Refresh => m = misc_message(|misc| misc.set_refresh_video(true)),
+        Command::Displays { set } => return display_messages(set),
     }
-    m
+    vec![m]
 }
 
 pub async fn send<W: AsyncWrite + Unpin>(w: &mut W, m: &Message) -> std::io::Result<()> {
@@ -374,20 +438,90 @@ mod tests {
         assert!(matches!(classify(b"\xff\xff\xff"), Incoming::Ignore), "壞封包不致命");
     }
 
+    fn one(c: &Command) -> Message {
+        let mut v = command_messages(c);
+        assert_eq!(v.len(), 1, "{c:?}");
+        v.remove(0)
+    }
+
     #[test]
     fn commands_encode() {
-        let m = command_message(&Command::Key { down: true, scancode: 0xE05B });
+        let m = one(&Command::Key { down: true, scancode: 0xE05B });
         let Some(message::Union::KeyEvent(k)) = m.union else { panic!() };
         assert_eq!(k.union, Some(key_event::Union::Chr(0xE05B)));
         assert_eq!(k.mode.enum_value(), Ok(KeyboardMode::Map));
         let c: Command = serde_json::from_str(r#"{"t":"mouse","mask":9,"x":10,"y":20}"#).unwrap();
-        let m = command_message(&c);
+        let m = one(&c);
         assert!(matches!(m.union, Some(message::Union::MouseEvent(ref e)) if e.mask == 9 && e.x == 10));
-        let m = command_message(&Command::Refresh);
-        assert!(matches!(m.union, Some(message::Union::Misc(_))));
+        let m = one(&Command::Refresh);
+        assert!(matches!(m.union, Some(message::Union::Misc(ref ms)) if ms.refresh_video()));
         let m = auth_2fa(" 123 456 ", &[]);
         assert!(matches!(m.union, Some(message::Union::Auth2fa(ref a)) if a.code == "123456" && a.hwid.is_empty()));
         let m = auth_2fa("123456", &[1, 2, 3]);
         assert!(matches!(m.union, Some(message::Union::Auth2fa(ref a)) if a.hwid[..] == [1, 2, 3]), "信任這台裝置 → 帶 hwid");
+    }
+
+    fn miscs(c: &str) -> Vec<misc::Union> {
+        let c: Command = serde_json::from_str(c).unwrap();
+        command_messages(&c)
+            .into_iter()
+            .map(|m| {
+                // 每則都要能序列化（真的會送出去）
+                let m = Message::parse_from_bytes(&m.write_to_bytes().unwrap()).unwrap();
+                match m.union {
+                    Some(message::Union::Misc(ms)) => ms.union.unwrap(),
+                    x => panic!("{x:?}"),
+                }
+            })
+            .collect()
+    }
+
+    /// 切到一個螢幕：SwitchDisplay + 只擷取它 + 要它的關鍵畫面（官方 `session_switch_display` 的順序）。
+    #[test]
+    fn switching_to_one_display() {
+        let v = miscs(r#"{"t":"displays","set":[1]}"#);
+        assert_eq!(v.len(), 3, "{v:?}");
+        assert!(matches!(&v[0], misc::Union::SwitchDisplay(s) if s.display == 1 && s.width == 0 && s.height == 0), "不要求改解析度");
+        assert!(matches!(&v[1], misc::Union::CaptureDisplays(c) if c.set == [1] && c.add.is_empty() && c.sub.is_empty()));
+        assert!(matches!(&v[2], misc::Union::RefreshVideoDisplay(1)));
+    }
+
+    /// 看全部：只有 CaptureDisplays（不換「目前螢幕」），每個都要一張關鍵畫面；重複 / 負數丟掉。
+    #[test]
+    fn showing_all_displays() {
+        let v = miscs(r#"{"t":"displays","set":[0,1,1,-1,2]}"#);
+        assert_eq!(v.len(), 4, "{v:?}");
+        assert!(matches!(&v[0], misc::Union::CaptureDisplays(c) if c.set == [0, 1, 2]));
+        assert!(matches!(&v[1..], [misc::Union::RefreshVideoDisplay(0), misc::Union::RefreshVideoDisplay(1), misc::Union::RefreshVideoDisplay(2)]));
+        assert!(miscs(r#"{"t":"displays","set":[]}"#).is_empty(), "空的 = 什麼都不送（對方會把擷取全停掉）");
+        let many = (0..40).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        assert_eq!(miscs(&format!(r#"{{"t":"displays","set":[{many}]}}"#)).len(), 1 + MAX_DISPLAYS);
+    }
+
+    /// 對方的螢幕變動：插拔螢幕送 PeerInfo（新清單）、換螢幕 / 換解析度送 Misc.SwitchDisplay。
+    #[test]
+    fn classify_display_changes() {
+        let mut m = Message::new();
+        let mut pi = crate::proto::message::PeerInfo::new();
+        pi.displays = vec![
+            DisplayInfo { x: 0, y: 0, width: 1920, height: 1080, name: "\\\\.\\DISPLAY1".into(), ..Default::default() },
+            DisplayInfo { x: -1280, y: 0, width: 1280, height: 1024, name: "\\\\.\\DISPLAY2".into(), ..Default::default() },
+        ];
+        m.set_peer_info(pi);
+        match classify(&m.write_to_bytes().unwrap()) {
+            Incoming::Displays(d) => {
+                assert_eq!(d.len(), 2);
+                assert_eq!((d[1].x, d[1].width, d[1].height), (-1280, 1280, 1024), "左邊的螢幕 x 是負的");
+            }
+            x => panic!("{x:?}"),
+        }
+        let mut m = Message::new();
+        let mut misc = Misc::new();
+        misc.set_switch_display(SwitchDisplay { display: 1, x: -1280, y: 0, width: 1280, height: 1024, ..Default::default() });
+        m.set_misc(misc);
+        match classify(&m.write_to_bytes().unwrap()) {
+            Incoming::DisplayChanged(c) => assert_eq!(c, DisplayChanged { display: 1, x: -1280, y: 0, width: 1280, height: 1024 }),
+            x => panic!("{x:?}"),
+        }
     }
 }

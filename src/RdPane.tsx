@@ -4,6 +4,7 @@
 // 分頁本身改成 fixed 蓋住整個 app（側欄、分頁列都藏起來）。WebView2 的 HTML Fullscreen API 只會填滿 webview，
 // 所以不用它。Ctrl+Alt+Enter 切換（遠端桌面客戶端的慣例）；工具列在全螢幕時縮成頂端中央的浮動條，滑到頂端才出現。
 // Ctrl+Alt+Del、Win、Alt+Tab 這些本機 OS 會先吃掉的鍵走工具列的「送出按鍵」。
+// RustDesk 對方有好幾個螢幕時，工具列多一排切換螢幕的按鈕（RdMonitorBar）。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import {
@@ -26,6 +27,8 @@ import RdpView from "./RdpView";
 // 靜態載入：view 必須在第一次 connect 之前就掛好（輸出在 rdConnect 回來前就會開始送）；noVNC 本體在 VncView 裡才 lazy。
 import VncView from "./VncView";
 import RustDeskView from "./RustDeskView";
+import RdMonitorBar from "./RdMonitorBar";
+import type { RdMonitors } from "./rdMonitors";
 
 
 function errMsg(e: unknown): string {
@@ -77,6 +80,7 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   const immersiveRef = useRef(false);
   const [barShown, setBarShown] = useState(true);
   const [keysMenu, setKeysMenu] = useState<{ x: number; y: number } | null>(null);
+  const [monitors, setMonitors] = useState<RdMonitors | null>(null);
   const wantFullscreen = useRef(!!tab.fullscreen || opts.ui?.fullscreen === "1");
 
   const setStatus = (s: RdStatus, extra: { error?: string | null; info?: RdConnInfo | null } = {}) => {
@@ -243,6 +247,9 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
 
   const toolbarButtons = (
     <>
+      {status === "connected" && monitors && monitors.displays.length > 1 && (
+        <RdMonitorBar monitors={monitors} onPick={(set) => viewRef.current?.showDisplays?.(set)} />
+      )}
       {unencrypted && (
         <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded bg-warning/15 text-warning text-[11px] shrink-0"
           title={info?.security === "rustdesk-id"
@@ -306,7 +313,7 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
         ) : protocol === "rdp" ? (
           <RdpView ref={viewRef} resizeMode={opts.resize_mode} viewOnly={opts.view_only} clipboard={opts.clipboard} isPaneShortcut={isFullscreenShortcut} />
         ) : (
-          <RustDeskView ref={viewRef} viewOnly={opts.view_only} isPaneShortcut={isFullscreenShortcut} />
+          <RustDeskView ref={viewRef} viewOnly={opts.view_only} isPaneShortcut={isFullscreenShortcut} onMonitors={setMonitors} />
         )}
         {status !== "connected" && (
           <div className="absolute inset-0 flex items-center justify-center bg-app/80" data-rd-overlay={status}>

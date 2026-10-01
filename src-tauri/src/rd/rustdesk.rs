@@ -4,7 +4,8 @@
 //! db-kit 這邊只啟動子程序、轉送訊息，不連結它的程式碼，所以本體維持 MIT。
 //!
 //! 訊息格式（兩個方向相同）：`[u32 長度（LE，不含這 4 bytes）][u8 型別][內容]`。
-//! - 型別 1：JSON（db-kit → bridge：`connect` / `mouse` / `key` / `ctrl_alt_del` / `refresh`；bridge → db-kit：事件）。
+//! - 型別 1：JSON（db-kit → bridge：`connect` / `mouse` / `key` / `ctrl_alt_del` / `refresh` / `displays`（切換螢幕）；
+//!   bridge → db-kit：事件）。
 //! - 型別 2（bridge → db-kit）：影像 `[u8 codec][u8 key][u8 display][u8 保留][i64 pts]` + 仍是 VP9 / VP8 / AV1 的位元流。
 //!
 //! 給前端的 Channel 訊息 = `[u8 型別][內容]`（拿掉長度）：影像在 WebView 裡用 WebCodecs 解，JSON 事件照轉。

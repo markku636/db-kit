@@ -20,6 +20,8 @@ export interface RdViewHandle {
   desktopSize(): { w: number; h: number };
   /** 後端鍵盤 hook 攔到的系統鍵（set-1 掃描碼；擴充鍵 OR 0xE000）。 */
   rawKey(scancode: number, down: boolean): void;
+  /** 多螢幕：換成看這幾個螢幕（RustDesk；一個 = 切過去，多個 = 一起看）。 */
+  showDisplays?(set: number[]): void;
 }
 
 /** Tauri Channel 的 raw 訊息在真 App 是 ArrayBuffer；verify-ui 的假後端可能送 Uint8Array / number[]。 */

@@ -556,16 +556,21 @@ metadata:
         }
         if (protocol === "rustdesk") {
           // 輔助程式的「登入成功」事件（[型別 1][JSON]）；影像是 VP9 位元流，假後端做不出來，不送。
+          // 情境可給對方好幾個螢幕（window.__DBKIT_RD_DISPLAYS__）。
+          const displays = window.__DBKIT_RD_DISPLAYS__ ?? [{ x: 0, y: 0, width: 1280, height: 720, name: "" }];
           const hello = new TextEncoder().encode(JSON.stringify({
             type: "connected",
-            peer: { hostname: "office-pc", displays: [{ x: 0, y: 0, width: 1280, height: 720, name: "" }], current_display: 0 },
+            peer: { hostname: "office-pc", version: "1.4.9", displays, current_display: 0 },
           }));
           setTimeout(() => send(new Uint8Array([1, ...hello])), 20);
           // 真的 RustDesk 錄下來的 VP9 關鍵畫面（見 screenshot-fixtures.mjs）：前端要用 WebCodecs 解出 1024×768。
+          // 情境可再塞事件 / 畫面：__DBKIT_RD_PUSH__(bytes)；__DBKIT_RD_KEYFRAME__(display) = 那個螢幕的關鍵畫面。
+          window.__DBKIT_RD_PUSH__ = (bytes) => send(new Uint8Array(bytes));
           if (fx.RUSTDESK_VP9_KEYFRAME_B64) {
             const bin = atob(fx.RUSTDESK_VP9_KEYFRAME_B64);
             const frame = new Uint8Array(bin.length);
             for (let i = 0; i < bin.length; i++) frame[i] = bin.charCodeAt(i);
+            window.__DBKIT_RD_KEYFRAME__ = (display) => { const f = frame.slice(); f[3] = display; send(f); };
             setTimeout(() => send(frame), 60);
           }
           return { conn_id: connId, protocol, width: 1280, height: 720, security: "rustdesk-direct", encrypted: false };

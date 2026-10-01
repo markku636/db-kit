@@ -309,9 +309,9 @@ where
                             // 格式不對的指令略過（db-kit 的 bug 不該讓連線斷掉）。
                             if let Ok(c) = serde_json::from_value::<Command>(v) {
                                 if logged_in {
-                                    session::send_sealed(&mut pw, &session::command_message(&c), &mut tx)
-                                        .await
-                                        .map_err(|e| e.to_string())?;
+                                    for m in session::command_messages(&c) {
+                                        session::send_sealed(&mut pw, &m, &mut tx).await.map_err(|e| e.to_string())?;
+                                    }
                                 }
                             }
                         }
@@ -380,6 +380,15 @@ where
                     ipc::write_video(stdout, &f).await.map_err(|e| e.to_string())?;
                 }
             }
+            Incoming::Displays(displays) if logged_in => {
+                emit(stdout, json!({ "type": "displays", "displays": displays })).await?;
+            }
+            Incoming::DisplayChanged(d) if logged_in => {
+                let mut v = json!(d);
+                v["type"] = json!("switch_display");
+                emit(stdout, v).await?;
+            }
+            Incoming::Displays(_) | Incoming::DisplayChanged(_) => {}
             Incoming::Echo(m) => {
                 session::send_sealed(&mut pw, &m, &mut tx).await.map_err(|e| e.to_string())?;
             }
@@ -477,6 +486,45 @@ mod tests {
         ipc::write_host_json(&mut host_in_w, &json!({ "t": "key", "down": true, "scancode": 30 })).await.unwrap();
         let k = Message::parse_from_bytes(&codec::read_frame(&mut theirs).await.unwrap().unwrap()).unwrap();
         assert!(matches!(k.union, Some(message::Union::KeyEvent(_))));
+        // 切到第 2 個螢幕 → 對方依序收到 SwitchDisplay / CaptureDisplays / RefreshVideoDisplay
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "displays", "set": [1] })).await.unwrap();
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let m = Message::parse_from_bytes(&codec::read_frame(&mut theirs).await.unwrap().unwrap()).unwrap();
+            let Some(message::Union::Misc(ms)) = m.union else { panic!("expect misc") };
+            got.push(ms.union.unwrap());
+        }
+        assert!(matches!(&got[..], [
+            proto::message::misc::Union::SwitchDisplay(s),
+            proto::message::misc::Union::CaptureDisplays(c),
+            proto::message::misc::Union::RefreshVideoDisplay(1),
+        ] if s.display == 1 && c.set == [1]), "{got:?}");
+        // 對方回報切過去的螢幕位置大小 → 事件 switch_display
+        let mut m = Message::new();
+        let mut misc = proto::message::Misc::new();
+        misc.set_switch_display(proto::message::SwitchDisplay { display: 1, x: 1920, y: 0, width: 1280, height: 1024, ..Default::default() });
+        m.set_misc(misc);
+        send_peer(&mut theirs, &m).await;
+        match ipc::read_msg(&mut host_out_r).await.unwrap() {
+            Some(ipc::HostMsg::Json(v)) => {
+                assert_eq!(v, json!({ "type": "switch_display", "display": 1, "x": 1920, "y": 0, "width": 1280, "height": 1024 }));
+            }
+            x => panic!("{x:?}"),
+        }
+        // 插拔螢幕：對方送新的 PeerInfo → 事件 displays
+        let mut m = Message::new();
+        let mut pi = PeerInfo::new();
+        pi.displays = vec![proto::message::DisplayInfo { width: 1920, height: 1080, ..Default::default() }];
+        m.set_peer_info(pi);
+        send_peer(&mut theirs, &m).await;
+        match ipc::read_msg(&mut host_out_r).await.unwrap() {
+            Some(ipc::HostMsg::Json(v)) => {
+                assert_eq!(v["type"], "displays");
+                assert_eq!(v["displays"].as_array().map(Vec::len), Some(1));
+                assert_eq!(v["displays"][0]["width"], 1920);
+            }
+            x => panic!("{x:?}"),
+        }
         // stdin 關閉 → 結束
         drop(host_in_w);
         assert!(task.await.unwrap().is_ok());
@@ -753,6 +801,96 @@ mod tests {
         let tcp = TcpStream::connect((host.as_str(), 21118)).await.expect("connect peer");
         let login = direct(&host, "dbkit123", Decoders { vp9: true, vp8: true, av1: false }, "it");
         expect_login_and_key_frame(tcp, login, false).await;
+    }
+
+    /// 對真的兩個螢幕的 RustDesk 被控端（Xvfb 2048×768 用 `xrandr --setmonitor` 切成左右兩個 1024×768）：
+    /// 切到螢幕 2 → 對方回報螢幕 2 的位置、送螢幕 2 的關鍵畫面；所有螢幕 → 兩個螢幕都送；再切回螢幕 1。
+    /// `cargo test -- --ignored real_peer_switch`；`DBKIT_RUSTDESK_IT_HOST` / `DBKIT_RUSTDESK_IT_PORT` 改目標。
+    #[tokio::test]
+    #[ignore]
+    async fn real_peer_switch_displays() {
+        use std::collections::BTreeSet;
+        let host = std::env::var("DBKIT_RUSTDESK_IT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+        let port: u16 = std::env::var("DBKIT_RUSTDESK_IT_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(21118);
+        let tcp = TcpStream::connect((host.as_str(), port)).await.expect("connect peer");
+        let login = direct(&host, "dbkit123", Decoders { vp9: true, vp8: true, av1: false }, "it");
+        let (mut host_in_w, host_in_r) = tokio::io::duplex(1 << 16);
+        let (mut host_out_w, mut host_out_r) = tokio::io::duplex(8 << 20);
+        let task = tokio::spawn(async move {
+            let mut stdin = ipc::MsgReader::new(host_in_r);
+            drive(tcp, &mut stdin, &mut host_out_w, &login).await
+        });
+        // 讀到 `done` 說好為止（逾時 = None）；順便記下每個螢幕收到的關鍵畫面。
+        async fn until<R: AsyncRead + Unpin>(
+            r: &mut R,
+            keys: &mut BTreeSet<u8>,
+            mut done: impl FnMut(&serde_json::Value, &BTreeSet<u8>) -> bool,
+        ) -> Option<serde_json::Value> {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let Ok(Ok(Some(raw))) = tokio::time::timeout(left, ipc::read_raw(r)).await else { return None };
+                let v = if raw[0] == ipc::OUT_JSON {
+                    let v: serde_json::Value = serde_json::from_slice(&raw[1..]).unwrap();
+                    eprintln!("event: {v}");
+                    assert!(v["type"] != "closed" && v["type"] != "login_error", "{v}");
+                    v
+                } else {
+                    if raw[2] == 1 && keys.insert(raw[3]) {
+                        eprintln!("key frame from display {}", raw[3]);
+                    }
+                    serde_json::Value::Null
+                };
+                if done(&v, keys) {
+                    return Some(v);
+                }
+            }
+        }
+        let mut keys = BTreeSet::new();
+        let mut hello = None;
+        until(&mut host_out_r, &mut keys, |v, k| {
+            if v["type"] == "connected" {
+                hello = Some(v.clone());
+            }
+            hello.is_some() && !k.is_empty()
+        })
+        .await
+        .expect("時限內要登入並收到第一張畫面");
+        let hello = hello.unwrap();
+        let displays = hello["peer"]["displays"].as_array().cloned().unwrap_or_default();
+        assert!(displays.len() >= 2, "對方要有兩個螢幕：{hello}");
+        let current = hello["peer"]["current_display"].as_u64().unwrap_or(0) as u8;
+        assert_eq!(keys.iter().copied().collect::<Vec<_>>(), [current], "一開始只送目前的螢幕");
+
+        keys.clear();
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "displays", "set": [1] })).await.unwrap();
+        let mut moved = None;
+        until(&mut host_out_r, &mut keys, |v, k| {
+            if v["type"] == "switch_display" {
+                moved = Some(v.clone());
+            }
+            moved.is_some() && k.contains(&1)
+        })
+        .await
+        .expect("切到螢幕 2：要收到位置大小與它的關鍵畫面");
+        let moved = moved.unwrap();
+        assert_eq!(moved["display"], 1, "{moved}");
+        assert_eq!((&moved["x"], &moved["y"], &moved["width"], &moved["height"]), (&displays[1]["x"], &displays[1]["y"], &displays[1]["width"], &displays[1]["height"]), "位置大小跟清單裡的螢幕 2 一樣：{moved}");
+
+        keys.clear();
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "displays", "set": [0, 1] })).await.unwrap();
+        until(&mut host_out_r, &mut keys, |_, k| k.contains(&0) && k.contains(&1))
+            .await
+            .expect("所有螢幕：兩個螢幕都要送關鍵畫面");
+
+        keys.clear();
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "displays", "set": [0] })).await.unwrap();
+        until(&mut host_out_r, &mut keys, |_, k| k.contains(&0)).await.expect("切回螢幕 1");
+        // 只看螢幕 1 之後，對方不該再送螢幕 2 的畫面（讓螢幕 2 動起來也一樣）。
+        let mut late = BTreeSet::new();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), until(&mut host_out_r, &mut late, |_, _| false)).await;
+        assert!(!late.contains(&1), "切回螢幕 1 後還收到螢幕 2 的關鍵畫面");
+        task.abort();
     }
 
     /// 對真的 ID 伺服器 + 中繼伺服器 + 被控端（tests/docker/compose.yml）：用 ID 連、加密、收到關鍵畫面。
