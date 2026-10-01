@@ -647,26 +647,38 @@ const CASES = {
   },
 
   // 終端機配色跟著主題：xterm 四周內距透出的外框底色＝xterm 自己的底色（不會框出一圈高一階的畫布色）；
-  // 文字色也隨主題換（深色變體的 fg 與語意色都一樣，沒往 accent 染色的話切主題文字不會變）。
+  // 文字色照各變體配套的終端機配色（TERM_PALETTES）：深色變體共用一組文字色、淺色另一組，淡字灰各變體不同。
   async "ssh-terminal-theme"(page) {
     await openSshWeb01(page);
     const probe = () => page.evaluate(() => {
       const xterm = document.querySelector(".xterm");
       const frame = xterm?.parentElement?.parentElement; // .xterm → hostRef（pl-1 pt-1）→ 外框
       const bg = (el) => (el ? getComputedStyle(el).backgroundColor : null);
+      // DOM renderer 把 ANSI 色寫成 .xterm-fg-N { color: … } 規則（1 = red、8 = brightBlack）。
+      const css = [...document.querySelectorAll("style")].map((s) => s.textContent).join("\n");
+      const ansi = (n) => css.match(new RegExp(`\\.xterm-fg-${n}\\s*\\{\\s*color:\\s*([^;}]+)`))?.[1]?.trim().toLowerCase() ?? null;
       // xterm 6 的 .xterm 本身透明，主題底色畫在捲動容器上。
-      return { frame: bg(frame), xterm: bg(xterm?.querySelector(".xterm-scrollable-element")), fg: getComputedStyle(document.querySelector(".xterm-rows")).color };
+      return {
+        frame: bg(frame), xterm: bg(xterm?.querySelector(".xterm-scrollable-element")),
+        fg: getComputedStyle(document.querySelector(".xterm-rows")).color, red: ansi(1), dim: ansi(8),
+      };
     });
     const pickTheme = (id) => page.locator("select").filter({ has: page.locator(`option[value="${id}"]`) }).first().selectOption(id);
-    const fgs = new Set();
-    for (const id of ["amethyst", "jade", "moonstone"]) {
+    const expected = {
+      amethyst: { fg: "rgb(248, 248, 242)", red: "#ff9580", dim: "#7970a9" },
+      jade: { fg: "rgb(248, 248, 242)", red: "#ff9580", dim: "#70a99f" },
+      moonstone: { fg: "rgb(31, 31, 31)", red: "#cb3a2a", dim: "#635d97" },
+    };
+    const bgs = new Set();
+    for (const [id, want] of Object.entries(expected)) {
       await pickTheme(id);
       await sleep(300);
       const p = await probe();
       check(`${id}：終端機外框底色＝xterm 底色`, p.frame === p.xterm, JSON.stringify(p));
-      fgs.add(p.fg);
+      check(`${id}：前景 / red / 淡字灰＝該變體的終端機配色`, p.fg === want.fg && p.red === want.red && p.dim === want.dim, JSON.stringify(p));
+      bgs.add(p.xterm);
     }
-    check("切換主題時終端機文字色跟著變", fgs.size === 3, JSON.stringify([...fgs]));
+    check("切換主題時終端機底色跟著變", bgs.size === 3, JSON.stringify([...bgs]));
   },
 
   // 詳細資料面板：預設收合（只留窄邊條）；展開後單擊 SSH 主機顯示它的設定；單擊資料庫節點換回資料庫摘要，

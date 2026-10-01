@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { EDITOR_THEMES, buildAppVars, type EditorThemeDef } from "./editorThemes";
 import { SURFACE_STEPS } from "./themeSurfaces";
-import { xtermThemeFor, mixHex, lightenHex, darkenHex, isDarkHex, parseHex, withAlpha, TERM_TINT } from "./sshTerminalTheme";
+import { xtermThemeFor, mixHex, lightenHex, darkenHex, isDarkHex, parseHex, withAlpha, TERM_PALETTES } from "./sshTerminalTheme";
 
 const HEX = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i;
 /** buildAppVars 的 --c-app（"R G B"）→ #rrggbb：查詢編輯器跟隨 App 時透出的就是這個顏色。 */
@@ -11,63 +11,44 @@ const ANSI = [
   "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
   "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite",
 ] as const;
+const def = (id: string) => EDITOR_THEMES.find((d) => d.id === id)!;
 
 describe("xtermThemeFor", () => {
   it("每個內建變體都產出 16 色 ANSI + background/foreground/cursor，且都是合法 hex", () => {
-    for (const def of EDITOR_THEMES) {
-      const th = xtermThemeFor(def) as Record<string, string | undefined>;
+    for (const d of EDITOR_THEMES) {
+      const th = xtermThemeFor(d) as Record<string, string | undefined>;
       for (const k of [...ANSI, "background", "foreground", "cursor"]) {
-        expect(th[k], `${def.id}.${k}`).toMatch(HEX);
+        expect(th[k], `${d.id}.${k}`).toMatch(HEX);
       }
       // 底色 = app 表面（--c-app），終端機才會跟四周與查詢編輯器同色，而不是暗一截的 colors.bg。
-      expect(th.background!.toLowerCase(), def.id).toBe(appSurface(def));
-      expect(th.foreground).toBe(mixHex(def.colors.fg, def.app.accent, TERM_TINT.fg));
-      expect(th.cursor!.toLowerCase()).toBe(def.app.accent.toLowerCase());
-      expect(th.red).toBe(mixHex(def.app.danger, def.app.accent, TERM_TINT.ansi));
-      expect(th.brightBlack!.toLowerCase()).toBe(def.colors.comment.toLowerCase());
+      expect(th.background!.toLowerCase(), d.id).toBe(appSurface(d));
+      expect(th.cursor!.toLowerCase()).toBe(d.app.accent.toLowerCase());
+      expect(th.black!.toLowerCase()).toBe(d.colors.bg.toLowerCase());
+      expect(th.brightBlack!.toLowerCase()).toBe(d.colors.comment.toLowerCase());
       // 選取底色帶 alpha（#rrggbbaa）
       expect(th.selectionBackground).toMatch(/^#[0-9a-f]{8}$/i);
       // 深淺判定與變體宣告一致（主題定義打錯底色會在這裡露餡）
-      expect(isDarkHex(th.background!), def.id).toBe(def.dark);
+      expect(isDarkHex(th.background!), d.id).toBe(d.dark);
     }
   });
 
-  it("bright 系列與基本色不同：深色主題提亮、淺色主題壓暗", () => {
-    const dark = xtermThemeFor(EDITOR_THEMES.find((d) => d.id === "amethyst")!);
-    expect(dark.brightRed).not.toBe(dark.red);
-    expect(dark.brightRed).toBe(lightenHex(dark.red!, 0.15));
-    const light = xtermThemeFor(EDITOR_THEMES.find((d) => d.id === "moonstone")!);
-    expect(light.brightRed).toBe(darkenHex(light.red!, 0.1));
+  it("文字色照抄該變體的終端機配色，不自行推導", () => {
+    for (const d of EDITOR_THEMES) {
+      const th = xtermThemeFor(d) as Record<string, string | undefined>;
+      const pal = TERM_PALETTES[d.id];
+      for (const [k, v] of Object.entries(pal)) {
+        expect(v, `${d.id}.${k}`).toMatch(HEX);
+        expect(th[k], `${d.id}.${k}`).toBe(v);
+      }
+      // 配色表的前景與 white 跟主題本身的前景一致（淺色那組的 white 是深色前景）。
+      expect(pal.foreground.toLowerCase(), d.id).toBe(d.colors.fg.toLowerCase());
+      expect(pal.white, d.id).toBe(pal.foreground);
+    }
   });
 
-  it("沒有變體（主題 id 找不到）時退回內建深色預設", () => {
-    const th = xtermThemeFor(undefined);
-    expect(th.background).toBe(appSurface(EDITOR_THEMES.find((d) => d.id === "amethyst")!));
-    for (const k of ANSI) expect((th as Record<string, string | undefined>)[k]).toMatch(HEX);
-  });
-
-  it("色值壞掉時退回預設，不丟例外", () => {
-    const def = structuredClone(EDITOR_THEMES[0]);
-    def.colors.bg = "nope";
-    def.colors.selection = "";
-    def.app.danger = "#12";
-    expect(() => xtermThemeFor(def)).not.toThrow();
-    const th = xtermThemeFor(def);
-    // 底色壞掉退回黑，再照常往 app.top 混出表面色。
-    expect(th.background).toBe(mixHex("#000000", def.app.top, SURFACE_STEPS.app));
-    expect(th.red).toBe(mixHex("#ff5555", def.app.accent, TERM_TINT.ansi));
-    expect(th.selectionBackground).toBe("#00000066");
-    // accent 壞掉 → 不染色，游標退回前景
-    def.app.accent = "nope";
-    const plain = xtermThemeFor(def);
-    expect(plain.red).toBe("#ff5555");
-    expect(plain.foreground).toBe(def.colors.fg.toLowerCase());
-    expect(plain.cursor).toBe(plain.foreground);
-  });
-
-  // 深色變體的 fg 與語意色全都一樣，沒有往 accent 染色的話，切換主題時終端機文字色不會跟著變。
-  it("每個變體的終端機文字色都不一樣（跟著主題連動）", () => {
-    const keys = ["foreground", "red", "green", "blue", "magenta", "brightBlack"] as const;
+  // 深色變體的文字色是同一組，切換時跟著換的是底色、淡字灰、black 與游標；淺色變體整組文字色都不同。
+  it("切換主題時終端機配色跟著變", () => {
+    const keys = ["background", "black", "brightBlack"] as const;
     const themes = EDITOR_THEMES.map((d) => ({ id: d.id, th: xtermThemeFor(d) }));
     for (const k of keys) {
       const seen = new Map<string, string>();
@@ -77,11 +58,45 @@ describe("xtermThemeFor", () => {
         seen.set(v, id);
       }
     }
+    const dark = xtermThemeFor(def("amethyst"));
+    const light = xtermThemeFor(def("moonstone"));
+    for (const k of ["foreground", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "brightWhite"] as const) {
+      expect(light[k], k).not.toBe(dark[k]);
+    }
   });
 
-  // 底色（app 表面）本身比 well 亮，少數變體的語意色不染色就不到 4.5:1（如 Amethyst 的 blue 4.24）——
-  // 染色不能是讓它更差的那一步：原本 ≥ 4.5 的不掉到 4.5 以下，原本不到的不再往下掉。
-  it("染色不降低可讀性；brightBlack 改用 comment 比原本的 activeLine 提亮更好讀", () => {
+  it("沒有變體（主題 id 找不到）時退回內建深色預設；配色表沒有的 id 依深淺取同類那組", () => {
+    const th = xtermThemeFor(undefined);
+    expect(th.background).toBe(appSurface(def("amethyst")));
+    expect(th.red).toBe(TERM_PALETTES.amethyst.red);
+    for (const k of ANSI) expect((th as Record<string, string | undefined>)[k]).toMatch(HEX);
+    const custom = { ...def("moonstone"), id: "nope" } as unknown as EditorThemeDef;
+    expect(xtermThemeFor(custom).red).toBe(TERM_PALETTES.moonstone.red);
+    const customDark = { ...def("jade"), id: "nope" } as unknown as EditorThemeDef;
+    expect(xtermThemeFor(customDark).red).toBe(TERM_PALETTES.jade.red);
+  });
+
+  it("色值壞掉時退回預設，不丟例外", () => {
+    const d = structuredClone(EDITOR_THEMES[0]);
+    d.colors.bg = "nope";
+    d.colors.selection = "";
+    d.colors.comment = "#12";
+    expect(() => xtermThemeFor(d)).not.toThrow();
+    const th = xtermThemeFor(d);
+    // 底色壞掉退回黑，再照常往 app.top 混出表面色。
+    expect(th.background).toBe(mixHex("#000000", d.app.top, SURFACE_STEPS.app));
+    expect(th.black).toBe("#000000");
+    expect(th.selectionBackground).toBe("#00000066");
+    // comment 壞掉 → 淡字灰取前景與底色的中間值
+    expect(th.brightBlack).toBe(mixHex(th.foreground!, th.background!, 0.5));
+    // accent 壞掉 → 游標退回前景
+    d.app.accent = "nope";
+    expect(xtermThemeFor(d).cursor).toBe(th.foreground);
+  });
+
+  // 底色（app 表面）比配色檔原本的底色亮一階，所以這裡在實際底色上量：
+  // 每個文字色至少 3:1；淡字灰（app 自己的 \x1b[90m 提示）用 comment，至少 2.5:1。
+  it("文字色在終端機底色上讀得出來", () => {
     const lum = (hex: string) => {
       const c = parseHex(hex)!;
       const lin = (v: number) => {
@@ -94,16 +109,12 @@ describe("xtermThemeFor", () => {
       const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
       return (hi + 0.05) / (lo + 0.05);
     };
-    for (const def of EDITOR_THEMES) {
-      const th = xtermThemeFor(def) as Record<string, string>;
-      // accent 壞掉 = 不染色；底色與 ANSI 來源都相同，只差染色這一步。
-      const raw = xtermThemeFor({ ...def, app: { ...def.app, accent: "nope" } }) as Record<string, string>;
-      for (const k of ["foreground", "red", "green", "yellow", "blue", "magenta", "cyan"]) {
-        const floor = Math.min(4.5, ratio(raw[k], th.background)) - 1e-9;
-        expect(ratio(th[k], th.background), `${def.id}.${k}`).toBeGreaterThanOrEqual(floor);
+    for (const d of EDITOR_THEMES) {
+      const th = xtermThemeFor(d) as Record<string, string>;
+      for (const k of Object.keys(TERM_PALETTES[d.id])) {
+        expect(ratio(th[k], th.background), `${d.id}.${k}`).toBeGreaterThanOrEqual(3);
       }
-      const oldDim = def.dark ? lightenHex(th.black, 0.15) : darkenHex(th.black, 0.1);
-      expect(ratio(th.brightBlack, th.background), `${def.id}.brightBlack`).toBeGreaterThan(ratio(oldDim, th.background));
+      expect(ratio(th.brightBlack, th.background), `${d.id}.brightBlack`).toBeGreaterThanOrEqual(2.5);
     }
   });
 });
