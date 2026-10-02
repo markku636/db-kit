@@ -1,7 +1,7 @@
-//! 檔案面板的後端：SFTP（SSH 連線上的子系統）或 FTP / FTPS。
+//! 檔案面板的後端：SFTP（SSH 連線上的子系統）、FTP / FTPS，或 RustDesk 的傳檔連線。
 //!
 //! 前端的檔案面板、傳輸清單、續傳重試都只認 `sftp_id` 與 `ssh_sftp_*` 命令；登記簿裡存的是
-//! `FileClient`，命令照協定分派到 `SftpClient` / `FtpClient`。資料夾 / 多選傳輸的規劃與進度合併在
+//! `FileClient`，命令照協定分派到 `SftpClient` / `FtpClient` / `RdFileClient`。資料夾 / 多選傳輸的規劃與進度合併在
 //! `sftp` 模組對 `RemoteFs` 的泛型函式裡，兩種協定共用。
 
 use std::sync::atomic::AtomicBool;
@@ -9,11 +9,14 @@ use std::sync::Arc;
 
 use super::ftp::FtpClient;
 use super::sftp::{RemoteFs, SftpClient, SftpEntry, SftpText};
+use crate::rd::rustdesk_files::RdFileClient;
 use crate::error::AppResult;
 
 pub enum FileClient {
     Sftp(Arc<SftpClient>),
     Ftp(Arc<FtpClient>),
+    /// RustDesk 傳檔連線（rd/rustdesk_files.rs）。
+    Rustdesk(Arc<RdFileClient>),
 }
 
 impl FileClient {
@@ -22,6 +25,7 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => &c.conn_id,
             FileClient::Ftp(c) => &c.conn_id,
+            FileClient::Rustdesk(c) => &c.conn_id,
         }
     }
 
@@ -29,6 +33,8 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => c.close().await,
             FileClient::Ftp(c) => c.close().await,
+            // 傳檔連線不跟著面板關：面板收起來再打開不必重連（分頁 / 面板真的關掉時前端會 `rd_files_disconnect`）。
+            FileClient::Rustdesk(_) => {}
         }
     }
 
@@ -38,6 +44,8 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => Ok(c.clone()),
             FileClient::Ftp(c) => Ok(Arc::new(c.transfer_session(cancel).await?)),
+            // 同一條傳檔連線：輔助程式自己排隊處理多個工作。
+            FileClient::Rustdesk(c) => Ok(c.clone()),
         }
     }
 
@@ -45,6 +53,7 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => c.list_dir(path).await,
             FileClient::Ftp(c) => c.list_dir(path).await,
+            FileClient::Rustdesk(c) => c.list_dir(path).await,
         }
     }
 
@@ -52,6 +61,7 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => c.stat(path).await,
             FileClient::Ftp(c) => c.stat(path).await,
+            FileClient::Rustdesk(c) => c.stat(path).await,
         }
     }
 
@@ -59,6 +69,7 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => c.mkdir(path).await,
             FileClient::Ftp(c) => c.mkdir(path).await,
+            FileClient::Rustdesk(c) => c.mkdir(path).await,
         }
     }
 
@@ -66,6 +77,7 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => c.rename(from, to).await,
             FileClient::Ftp(c) => c.rename(from, to).await,
+            FileClient::Rustdesk(c) => c.rename(from, to).await,
         }
     }
 
@@ -73,6 +85,7 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => c.remove(path, recursive).await,
             FileClient::Ftp(c) => c.remove(path, recursive).await,
+            FileClient::Rustdesk(c) => c.remove(path, recursive).await,
         }
     }
 
@@ -80,6 +93,7 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => c.read_small(path, max).await,
             FileClient::Ftp(c) => c.read_small(path, max).await,
+            FileClient::Rustdesk(c) => c.read_small(path, max).await,
         }
     }
 
@@ -87,6 +101,7 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => c.write_text(path, content, create_new).await,
             FileClient::Ftp(c) => c.write_text(path, content, create_new).await,
+            FileClient::Rustdesk(c) => c.write_text(path, content, create_new).await,
         }
     }
 
@@ -94,6 +109,7 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => c.chmod(path, mode).await,
             FileClient::Ftp(c) => c.chmod(path, mode).await,
+            FileClient::Rustdesk(_) => Err(crate::error::AppError::Rd(t!("RustDesk 傳檔不能改權限").into())),
         }
     }
 
@@ -102,6 +118,8 @@ impl FileClient {
         match self {
             FileClient::Sftp(c) => c.set_mtime(path, mtime).await.map(|_| true),
             FileClient::Ftp(_) => Ok(false),
+            // 下載時輔助程式已照對方的修改時間設好；上傳時對方用自己的時間。
+            FileClient::Rustdesk(_) => Ok(false),
         }
     }
 }

@@ -512,6 +512,10 @@ pub async fn ssh_sftp_open(window: tauri::Window, state: State<'_, AppState>, co
     let (client, home) = if let Some(fc) = rt.ftp_conn(&conn_id) {
         let (client, home) = FtpClient::open(&fc).await?;
         (FileClient::Ftp(Arc::new(client)), home)
+    } else if let Some(rc) = state.rd.files(&conn_id) {
+        // RustDesk 傳檔連線（rd_files_connect 開的）：家目錄在連上時就問好了。
+        let home = rc.home.clone();
+        (FileClient::Rustdesk(rc), home)
     } else {
         let conn = rt.conn(&conn_id)?;
         let (client, home) = SftpClient::open(&conn).await?;

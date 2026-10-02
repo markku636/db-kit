@@ -1,8 +1,8 @@
 // RustDesk 連線的工具列（照官方用戶端的工具列）：切換螢幕、「顯示」選單（檢視方式 / 畫質 / 編碼 / 連線品質 /
 // 剪貼簿 / 結束後鎖定 / 鍵盤模式）、「動作」選單（Ctrl+Alt+Del / 鎖定畫面 / 封鎖輸入 / 重新啟動 / 輸入作業系統密碼 /
-// 重新整理）、聊天、錄影。依對方給的權限與對方的系統決定哪些項目出現（跟官方一樣：例如封鎖輸入只有 Windows 對方才有）。
+// 重新整理）、檔案傳輸、聊天、錄影。依對方給的權限與對方的系統決定哪些項目出現（跟官方一樣：例如封鎖輸入只有 Windows 對方才有）。
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
-import { Check, Circle, MessageSquare, MonitorCog, Square, Zap } from "lucide-react";
+import { Check, Circle, FolderSync, MessageSquare, MonitorCog, Square, Zap } from "lucide-react";
 import { api } from "./api";
 import { useT } from "./i18n";
 import { Icon, IconButton, MenuPanel } from "./ui/index";
@@ -59,6 +59,9 @@ export interface RustDeskToolbarProps {
   chatOpen: boolean;
   unread: number;
   onChat: () => void;
+  /** 檔案傳輸面板開著沒。 */
+  filesOpen: boolean;
+  onFiles: () => void;
   /** 主機名稱（錄影檔名用）。 */
   hostName: string;
   /** 已存主機的 id（作業系統密碼存在它底下）；快速連線 = null（每次問）。 */
@@ -66,7 +69,7 @@ export interface RustDeskToolbarProps {
 }
 
 export default function RustDeskToolbar({
-  state, prefs, onPrefs, clipboard, onClipboard, viewOnly, view, chatOpen, unread, onChat, hostName, sessionId,
+  state, prefs, onPrefs, clipboard, onClipboard, viewOnly, view, chatOpen, unread, onChat, hostName, sessionId, filesOpen, onFiles,
 }: RustDeskToolbarProps) {
   const t = useT();
   const [menu, setMenu] = useState<{ which: "display" | "actions"; x: number; y: number } | null>(null);
@@ -172,6 +175,9 @@ export default function RustDeskToolbar({
       )}
       <IconButton icon={MonitorCog} label={t("顯示設定")} data-rd-menu="display" active={menu?.which === "display"} onClick={open("display")} />
       <IconButton icon={Zap} label={t("動作")} data-rd-menu="actions" active={menu?.which === "actions"} onClick={open("actions")} />
+      {p.file && (
+        <IconButton icon={FolderSync} label={t("檔案傳輸")} data-rd-files-toggle="" active={filesOpen} onClick={onFiles} />
+      )}
       <span className="relative inline-flex">
         <IconButton icon={MessageSquare} label={t("聊天")} data-rd-chat-toggle="" active={chatOpen} onClick={onChat} />
         {unread > 0 && !chatOpen && (

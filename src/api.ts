@@ -23,7 +23,7 @@ import type {
   K8sObject, K8sOverview, K8sPodMetrics, K8sResRef, K8sStreamEnd, K8sTable,
 } from "./k8sTypes";
 import type {
-  RdSessionsFile, RdSession, RdFolder, RdPlacement, RdTargetRef, RdConnInfo, RdCertDecision, RdCertPrompt,
+  RdSessionsFile, RdSession, RdFolder, RdPlacement, RdTargetRef, RdConnInfo, RdCertDecision, RdCertPrompt, LocalListing,
   RdAuthPrompt, RdAuthAnswer, RdConnClosed,
 } from "./rdTypes";
 
@@ -2293,6 +2293,15 @@ export const api = {
   rdOsPasswordSet: (id: string, password: string | null) => invoke<void>("rd_os_password_set", { id, password }),
   rdInputOsPassword: (connId: string, password?: string) =>
     invoke<void>("rd_input_os_password", { connId, password: password ?? null }),
+  /**
+   * RustDesk 檔案傳輸：另開一條傳檔連線（`connId` 由前端產生，登入提示的事件對得上；之後檔案面板拿它 `sshSftpOpen`）。
+   * `via` = 同一台的畫面連線，借它登入成功的密碼。回傳對方的家目錄。
+   */
+  rdFilesConnect: (connId: string, target: RdTargetRef, via?: string) =>
+    invoke<string>("rd_files_connect", { connId, target, via: via ?? null }),
+  rdFilesDisconnect: (connId: string) => invoke<void>("rd_files_disconnect", { connId }),
+  /** 列本機資料夾（檔案傳輸的左窗格）。沒給 = 家目錄；Windows 上空字串 = 磁碟機清單。 */
+  localListDir: (path?: string | null) => invoke<LocalListing>("local_list_dir", { path: path ?? null }),
   // .rdp 檔原始位元組（mstsc 存成 UTF-16LE；解碼 / 解析在 rdpFile.ts）。
   rdReadRdpFile: (path: string) => invoke<number[]>("rd_read_rdp_file", { path }),
   // 連線：等到認證完成（含使用者回答提問）才 resolve；輸出走 onOutput（VNC = RFB 位元組、RDP = rdFrames 的 record）。

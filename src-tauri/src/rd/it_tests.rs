@@ -215,7 +215,7 @@ mod rustdesk {
     use crate::rd::rustdesk::{self as r, RustdeskParams, TwoFactorAnswer};
 
     fn params(password: &str) -> RustdeskParams {
-        RustdeskParams { host: host("DBKIT_RUSTDESK_IT_HOST"), port: 21118, password: password.into(), rendezvous: None, hwid: String::new(), trusted: false }
+        RustdeskParams { host: host("DBKIT_RUSTDESK_IT_HOST"), port: 21118, password: password.into(), rendezvous: None, hwid: String::new(), trusted: false, file_transfer: false }
     }
 
     /// 有給密碼的連線不會問（沒有 `waiting_accept`）。
@@ -226,6 +226,68 @@ mod rustdesk {
     /// 測試用的被控端沒開雙重驗證：不會問驗證碼。
     fn no_2fa(_: bool, _: bool) -> std::future::Ready<Option<TwoFactorAnswer>> {
         std::future::ready(None)
+    }
+
+    /// 傳檔連線（`file_transfer`）經 db-kit 的 `RdFileClient`——檔案面板實際走的那一層：家目錄、建資料夾、上傳（含同名處理）、
+    /// 列目錄 / stat、下載、小檔讀寫、改名（跨資料夾要拒絕）、遞迴刪除。`DBKIT_RUSTDESK_IT_PORT` 可改埠（預設 21118）。
+    /// 被控端要有連線管理程式（`rustdesk --cm` / `--cm-no-ui`）而且不是停在登入畫面，檔案動作才會被處理。
+    #[tokio::test]
+    #[ignore]
+    async fn rustdesk_file_transfer() {
+        use crate::rd::rustdesk_files::RdFileClient;
+        use crate::ssh::sftp::{OnConflict, RemoteFs};
+        use std::sync::atomic::AtomicBool;
+        let mut p = params("dbkit123");
+        p.port = std::env::var("DBKIT_RUSTDESK_IT_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(21118);
+        p.file_transfer = true;
+        let c = r::connect(&p, Duration::from_secs(30), no_ask, no_2fa).await.expect("登入");
+        let fc = RdFileClient::start("it-ft".into(), c, None).await.expect("開傳檔連線");
+        assert!(fc.home.starts_with('/'), "{}", fc.home);
+        let base = "/tmp/dbk-ft-be";
+        let _ = fc.remove(base, true).await;
+        fc.mkdir(base).await.expect("mkdir");
+        let noop = || -> crate::ssh::sftp::ProgressFn { Box::new(|_, _| {}) };
+        let no = AtomicBool::new(false);
+
+        let local = std::env::temp_dir().join(format!("dbk-ft-be-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&local);
+        std::fs::create_dir_all(local.join("down")).unwrap();
+        let src = local.join("a.bin");
+        let data: Vec<u8> = (0..200_000u32).map(|i| (i % 253) as u8).collect();
+        std::fs::write(&src, &data).unwrap();
+        let remote = format!("{base}/a.bin");
+        fc.upload(&src, &remote, OnConflict::Fail, noop(), &no).await.expect("upload");
+        assert!(fc.upload(&src, &remote, OnConflict::Fail, noop(), &no).await.is_err(), "已有同名：Fail 要報錯");
+        fc.upload(&src, &remote, OnConflict::Skip, noop(), &no).await.expect("Skip 不動");
+        let st = fc.stat(&remote).await.expect("stat");
+        assert_eq!((st.is_dir, st.size), (false, data.len() as u64));
+        let names: Vec<String> = fc.list_dir(base).await.unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["a.bin"]);
+
+        // 下載到既有資料夾 → 放進去、用遠端檔名
+        let got = fc.download(&remote, &local.join("down"), OnConflict::Fail, noop(), &no).await.expect("download");
+        assert_eq!(got, local.join("down").join("a.bin"));
+        assert_eq!(std::fs::read(&got).unwrap(), data);
+        assert!(fc.download(&remote, &local.join("down"), OnConflict::Fail, noop(), &no).await.is_err(), "本機已有：Fail 要報錯");
+
+        // 小檔讀寫（檔案面板的檢視 / 編輯器）
+        let note = format!("{base}/note.txt");
+        fc.write_text(&note, "hello 你好\n", true).await.expect("write_text");
+        assert!(fc.write_text(&note, "x", true).await.is_err(), "新檔：已有同名要報錯");
+        let txt = fc.read_small(&note, 1024).await.expect("read_small");
+        assert_eq!((txt.text.as_str(), txt.truncated), ("hello 你好\n", false));
+
+        // 改名：同一層可以、跨資料夾拒絕
+        fc.mkdir(&format!("{base}/sub")).await.unwrap();
+        fc.rename(&remote, &format!("{base}/b.bin")).await.expect("rename");
+        assert!(fc.rename(&format!("{base}/b.bin"), &format!("{base}/sub/b.bin")).await.is_err());
+        fc.upload(&src, &format!("{base}/sub/c.bin"), OnConflict::Fail, noop(), &no).await.unwrap();
+
+        // 遞迴刪除：裡面有檔案、有子資料夾
+        fc.remove(base, true).await.expect("remove recursive");
+        assert!(fc.stat(base).await.is_err(), "刪掉了");
+        fc.shutdown().await;
+        let _ = std::fs::remove_dir_all(&local);
     }
 
     /// 沒給密碼：對方畫面跳出「接受」、db-kit 問密碼；答了密碼就在同一條連線補送登入（真的被控端認不認）。
@@ -286,6 +348,7 @@ mod rustdesk {
             rendezvous: Some(r::Rendezvous { server: host("DBKIT_RUSTDESK_IT_SERVER"), key: key.into(), ..Default::default() }),
             hwid: String::new(),
             trusted: false,
+            file_transfer: false,
         }
     }
 

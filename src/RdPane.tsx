@@ -4,9 +4,9 @@
 // 分頁本身改成 fixed 蓋住整個 app（側欄、分頁列都藏起來）。WebView2 的 HTML Fullscreen API 只會填滿 webview，
 // 所以不用它。Ctrl+Alt+Enter 切換（遠端桌面客戶端的慣例）；工具列在全螢幕時縮成頂端中央的浮動條，滑到頂端才出現。
 // Ctrl+Alt+Del、Win、Alt+Tab 這些本機 OS 會先吃掉的鍵走工具列的「送出按鍵」。
-// RustDesk 的工具列另外多了切換螢幕、顯示設定、動作與聊天（RustDeskToolbar）；顯示偏好與「同步剪貼簿」
+// RustDesk 的工具列另外多了切換螢幕、顯示設定、動作、檔案傳輸（RdFilesPanel）與聊天（RustDeskToolbar）；顯示偏好與「同步剪貼簿」
 // 存回已存主機的設定（下次連同一台照舊），快速連線的只記在這個分頁。RustDesk 連線被對方中斷時自動重連（rdRetry.ts）。
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import {
   Check, ClipboardPaste, Expand, Keyboard, Loader2, PlugZap, RefreshCw, Shrink, ShieldAlert, Unplug,
@@ -31,6 +31,9 @@ import RustDeskView from "./RustDeskView";
 import RustDeskToolbar from "./RustDeskToolbar";
 import RustDeskChat from "./RustDeskChat";
 import VirtualKeyboard from "./VirtualKeyboard";
+
+// 檔案傳輸帶檔案面板（SftpPanel）與本機窗格：第一次打開時才下載。
+const RdFilesPanel = lazy(() => import("./RdFilesPanel"));
 import { prefsFromUi, prefsToUi, type RdChatMsg, type RustDeskPrefs, type RustDeskState } from "./rustdeskState";
 import { useAssistant } from "./assistant";
 import { useInfoPanel } from "./infoPanelState";
@@ -96,6 +99,8 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   const [chat, setChat] = useState<RdChatMsg[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatSeen, setChatSeen] = useState(0);
+  /** RustDesk 檔案傳輸面板（另一條傳檔連線，蓋在畫面上）。 */
+  const [filesOpen, setFilesOpen] = useState(false);
   const saveRdSession = useRdSessions((s) => s.save);
   const saved = tab.target.kind === "session" && session != null;
   const [localPrefs, setLocalPrefs] = useState<RustDeskPrefs>(() => prefsFromUi(opts.ui));
@@ -358,7 +363,8 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
         <RustDeskToolbar state={rdState} prefs={rdPrefs} onPrefs={setRdPrefs} clipboard={rdClipboard} onClipboard={setRdClipboard}
           viewOnly={opts.view_only} view={viewRef} chatOpen={chatOpen} unread={unread}
           onChat={() => { setChatOpen((o) => !o); viewRef.current?.focus(); }} hostName={label}
-          sessionId={saved ? session?.id ?? null : null} />
+          sessionId={saved ? session?.id ?? null : null}
+          filesOpen={filesOpen} onFiles={() => setFilesOpen((o) => !o)} />
       )}
       {unencrypted && (
         <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded bg-warning/15 text-warning text-[11px] shrink-0"
@@ -425,6 +431,12 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
         ) : (
           <RustDeskView ref={viewRef} viewOnly={opts.view_only} isPaneShortcut={isFullscreenShortcut}
             clipboard={rdClipboard} prefs={rdPrefs} onState={onRdState} />
+        )}
+        {protocol === "rustdesk" && filesOpen && (
+          <Suspense fallback={null}>
+            <RdFilesPanel tab={tab} viaConnId={connIdRef.current} label={label}
+              onClose={() => { setFilesOpen(false); viewRef.current?.focus(); }} />
+          </Suspense>
         )}
         {protocol === "rustdesk" && chatOpen && (
           <RustDeskChat messages={chat} peerName={label} connected={status === "connected"}

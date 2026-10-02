@@ -13,7 +13,7 @@ name = "dbk-rustdesk-bridge"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "io-std", "time", "sync"] }
+tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "io-std", "time", "sync", "fs"] }
 bytes = "1"
 protobuf = { version = "3.7", features = ["with-bytes"] }
 serde = { version = "1", features = ["derive"] }

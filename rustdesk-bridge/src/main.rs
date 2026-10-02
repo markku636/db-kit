@@ -12,6 +12,7 @@
 
 mod codec;
 mod crypto;
+mod files;
 mod ipc;
 mod keymap;
 mod rendezvous;
@@ -58,6 +59,9 @@ struct Connect {
     /// 之前對這台勾過「信任這台裝置」：登入時就帶 hwid，對方認得就不再問驗證碼。
     #[serde(default)]
     trusted: bool,
+    /// 傳檔連線（另一條連線，不收畫面；指令見 files.rs）。
+    #[serde(default)]
+    file_transfer: bool,
 }
 
 fn default_port() -> u16 {
@@ -82,6 +86,8 @@ struct Login {
     /// 見 `Connect.hwid` / `Connect.trusted`。
     hwid: Vec<u8>,
     trusted: bool,
+    /// 見 `Connect.file_transfer`。
+    file_transfer: bool,
 }
 
 impl Login {
@@ -96,12 +102,17 @@ impl Login {
             route: "ip",
             hwid: Vec::new(),
             trusted: false,
+            file_transfer: false,
         }
     }
 
     fn request(&self, proof: Vec<u8>, session_id: u64) -> Message {
         let hwid = if self.trusted { &self.hwid[..] } else { &[] };
-        session::login_request(&self.peer_id, proof, self.decoders, session_id, &self.my_name, hwid)
+        let mut m = session::login_request(&self.peer_id, proof, self.decoders, session_id, &self.my_name, hwid);
+        if self.file_transfer {
+            session::as_file_transfer(&mut m);
+        }
+        m
     }
 }
 
@@ -152,6 +163,7 @@ where
     // 格式不對就當沒有（只是少了「信任這台裝置」，不該讓連線失敗）。
     login.hwid = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, c.hwid.trim()).unwrap_or_default();
     login.trusted = c.trusted && !login.hwid.is_empty();
+    login.file_transfer = c.file_transfer;
     let tcp = match &c.rendezvous {
         Some(rp) => {
             let est = rendezvous::connect(&login.peer_id, rp).await?;
@@ -270,6 +282,8 @@ where
     let mut trust_offered = false;
     // 登入後才知道的對方資訊（送 Ctrl+Alt+Del 要看對方是不是 Windows）。
     let mut peer = session::PeerCtx::default();
+    // 傳檔連線的工作（列目錄 / 上傳 / 下載…，見 files.rs）。
+    let mut files = login.file_transfer.then(files::Files::new);
 
     loop {
         // 兩個讀取端都是取消安全的（select! 另一邊先好時，讀到一半的封包不會掉）。
@@ -308,6 +322,12 @@ where
                                 login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
                             }
                         }
+                        Ok(Some(ipc::HostMsg::Json(v))) if files.is_some() && v["t"].as_str().is_some_and(|t| t.starts_with("fs_")) => {
+                            if let (Ok(c), true, Some(f)) = (serde_json::from_value::<files::FsCommand>(v), logged_in, files.as_mut()) {
+                                let out = f.command(c).await;
+                                flush_files(out, &mut pw, &mut tx, stdout).await?;
+                            }
+                        }
                         Ok(Some(ipc::HostMsg::Json(v))) => {
                             // 格式不對的指令略過（db-kit 的 bug 不該讓連線斷掉）。
                             if let Ok(c) = serde_json::from_value::<Command>(v) {
@@ -320,7 +340,20 @@ where
                         }
                         Ok(Some(ipc::HostMsg::Other)) => {}
                         // stdin 關了：db-kit 要斷線。
-                        Ok(None) | Err(_) => return Ok(()),
+                        Ok(None) | Err(_) => {
+                            if let Some(f) = files.as_mut() {
+                                f.close().await;
+                            }
+                            return Ok(());
+                        }
+                    }
+                    continue;
+                }
+                // 上傳：每輪送一塊（送完才回來收對方的封包，對方的確認 / 錯誤不會被擋住太久）。
+                _ = std::future::ready(()), if logged_in && files.as_ref().is_some_and(|f| f.has_upload_work()) => {
+                    if let Some(f) = files.as_mut() {
+                        let out = f.upload_step().await;
+                        flush_files(out, &mut pw, &mut tx, stdout).await?;
                     }
                     continue;
                 }
@@ -419,9 +452,25 @@ where
             }
             Incoming::Clipboard(_) | Incoming::Chat(_) | Incoming::MsgBox(_) => {}
             Incoming::Closed(reason) => {
+                if let Some(f) = files.as_mut() {
+                    f.close().await;
+                }
                 emit(stdout, json!({ "type": "closed", "reason": reason })).await?;
                 return Ok(());
             }
+            Incoming::FileResponse(fr) if logged_in => {
+                if let Some(f) = files.as_mut() {
+                    let out = f.on_response(fr).await;
+                    flush_files(out, &mut pw, &mut tx, stdout).await?;
+                }
+            }
+            Incoming::FileAction(fa) if logged_in => {
+                if let Some(f) = files.as_mut() {
+                    let out = f.on_action(fa).await;
+                    flush_files(out, &mut pw, &mut tx, stdout).await?;
+                }
+            }
+            Incoming::FileResponse(_) | Incoming::FileAction(_) => {}
             Incoming::Ignore => {}
         }
     }
@@ -429,6 +478,21 @@ where
 
 async fn emit<O: AsyncWrite + Unpin>(stdout: &mut O, v: serde_json::Value) -> Result<(), String> {
     ipc::write_json(stdout, &v).await.map_err(|e| e.to_string())
+}
+
+/// 傳檔這一步的結果：封包送給對方、事件交給 db-kit。
+async fn flush_files<W, O>(out: files::Out, pw: &mut W, tx: &mut Option<crypto::Cipher>, stdout: &mut O) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+    O: AsyncWrite + Unpin,
+{
+    for m in &out.send {
+        session::send_sealed(pw, m, tx).await.map_err(|e| e.to_string())?;
+    }
+    for v in out.events {
+        emit(stdout, v).await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1217,6 +1281,153 @@ mod tests {
 
         task.abort();
         reader.abort();
+    }
+
+    /// 對真的 Linux 被控端開傳檔連線（`file_transfer`）：列家目錄、建資料夾、上傳、下載、改名、覆蓋、刪除，
+    /// 內容用 `docker exec … sha256sum` 與本機比對。`DBKIT_RUSTDESK_IT_PORT`、`DBKIT_RUSTDESK_IT_CONTAINER`（必填）。
+    /// `cargo test -- --ignored real_peer_file_transfer --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn real_peer_file_transfer() {
+        let host = std::env::var("DBKIT_RUSTDESK_IT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+        let port: u16 = std::env::var("DBKIT_RUSTDESK_IT_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(21118);
+        let container = std::env::var("DBKIT_RUSTDESK_IT_CONTAINER").expect("DBKIT_RUSTDESK_IT_CONTAINER");
+        let tcp = TcpStream::connect((host.as_str(), port)).await.expect("connect peer");
+        let mut login = direct(&host, "dbkit123", Decoders::default(), "it");
+        login.file_transfer = true;
+        let (mut w, host_in_r) = tokio::io::duplex(1 << 16);
+        let (mut host_out_w, mut out) = tokio::io::duplex(8 << 20);
+        let task = tokio::spawn(async move {
+            let mut stdin = ipc::MsgReader::new(host_in_r);
+            drive(tcp, &mut stdin, &mut host_out_w, &login).await
+        });
+        let docker = |cmd: &str| {
+            let o = std::process::Command::new("docker").args(["exec", &container, "sh", "-c", cmd]).output().expect("docker");
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        };
+        /// 等某個 req 的結果（fs_dir / fs_done / fs_err）；中間的 fs_progress 算數量。
+        async fn wait<R: AsyncRead + Unpin>(r: &mut R, req: u64) -> (serde_json::Value, usize) {
+            let mut progress = 0;
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+            loop {
+                let raw = tokio::time::timeout_at(deadline, ipc::read_raw(r))
+                    .await
+                    .unwrap_or_else(|_| panic!("等 req {req} 的結果逾時"))
+                    .unwrap()
+                    .expect("連線結束");
+                if raw[0] != ipc::OUT_JSON {
+                    continue;
+                }
+                let v: serde_json::Value = serde_json::from_slice(&raw[1..]).unwrap();
+                assert!(v["type"] != "closed" && v["type"] != "login_error", "{v}");
+                if v["type"] != "delay" && v["type"] != "fs_progress" {
+                    eprintln!("event: {}", v.to_string().chars().take(200).collect::<String>());
+                }
+                if v["req"] == req {
+                    if v["type"] == "fs_progress" {
+                        progress += 1;
+                        continue;
+                    }
+                    return (v, progress);
+                }
+            }
+        }
+        // 登入
+        loop {
+            let raw = tokio::time::timeout(std::time::Duration::from_secs(40), ipc::read_raw(&mut out)).await.expect("登入逾時").unwrap().unwrap();
+            if raw[0] == ipc::OUT_JSON {
+                let v: serde_json::Value = serde_json::from_slice(&raw[1..]).unwrap();
+                assert!(v["type"] != "login_error", "{v}");
+                if v["type"] == "connected" {
+                    eprintln!("connected: platform {}", v["peer"]["platform"]);
+                    break;
+                }
+            }
+        }
+        async fn send<W: AsyncWrite + Unpin>(w: &mut W, v: serde_json::Value) {
+            ipc::write_host_json(w, &v).await.unwrap();
+        }
+        docker("rm -rf /tmp/dbk-ft");
+
+        // 家目錄
+        send(&mut w, json!({ "t": "fs_ls", "req": 1, "path": "" })).await;
+        let (v, _) = wait(&mut out, 1).await;
+        assert_eq!(v["type"], "fs_dir", "{v}");
+        eprintln!("home = {}", v["path"]);
+        assert!(v["path"].as_str().is_some_and(|p| p.starts_with('/')), "{v}");
+        // （不存在的資料夾：RustDesk 1.4.9 不回應——沒有 fs_dir 也沒有 fs_err，db-kit 後端用逾時處理。）
+        // 建資料夾
+        send(&mut w, json!({ "t": "fs_mkdir", "req": 3, "path": "/tmp/dbk-ft" })).await;
+        assert_eq!(wait(&mut out, 3).await.0["type"], "fs_done");
+        assert_eq!(docker("test -d /tmp/dbk-ft && echo yes"), "yes");
+
+        // 上傳 300 KB（跨好幾塊）
+        let local_dir = std::env::temp_dir().join(format!("dbk-ft-it-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&local_dir);
+        std::fs::create_dir_all(&local_dir).unwrap();
+        let src = local_dir.join("up.bin");
+        let data: Vec<u8> = (0..300_000u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+        std::fs::write(&src, &data).unwrap();
+        let sha = |b: &[u8]| {
+            use sha2::Digest;
+            sha2::Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect::<String>()
+        };
+        send(&mut w, json!({ "t": "fs_upload", "req": 4, "local": src.to_string_lossy(), "remote": "/tmp/dbk-ft/up.bin" })).await;
+        let (v, prog) = wait(&mut out, 4).await;
+        assert_eq!(v["type"], "fs_done", "{v}");
+        eprintln!("upload progress events: {prog}");
+        assert_eq!(docker("sha256sum /tmp/dbk-ft/up.bin | cut -d' ' -f1"), sha(&data), "對方收到的內容要一樣");
+
+        // 列出來看得到大小
+        send(&mut w, json!({ "t": "fs_ls", "req": 5, "path": "/tmp/dbk-ft" })).await;
+        let (v, _) = wait(&mut out, 5).await;
+        let e = v["entries"].as_array().unwrap().iter().find(|e| e["name"] == "up.bin").cloned().expect("up.bin");
+        assert_eq!((e["kind"].as_str(), e["size"].as_u64()), (Some("file"), Some(data.len() as u64)));
+
+        // 下載回來
+        let dst = local_dir.join("down.bin");
+        send(&mut w, json!({ "t": "fs_download", "req": 6, "remote": "/tmp/dbk-ft/up.bin", "local": dst.to_string_lossy() })).await;
+        let (v, _) = wait(&mut out, 6).await;
+        assert_eq!(v["type"], "fs_done", "{v}");
+        assert_eq!(std::fs::read(&dst).unwrap(), data, "下載回來的內容要一樣");
+        assert!(!local_dir.join("down.bin.part").exists());
+
+        // 改名、覆蓋上傳（對方已有不一樣的同名檔）
+        send(&mut w, json!({ "t": "fs_rename", "req": 7, "path": "/tmp/dbk-ft/up.bin", "new_name": "up2.bin" })).await;
+        assert_eq!(wait(&mut out, 7).await.0["type"], "fs_done");
+        assert_eq!(docker("ls /tmp/dbk-ft"), "up2.bin");
+        let small = local_dir.join("small.txt");
+        std::fs::write(&small, b"overwritten\n").unwrap();
+        send(&mut w, json!({ "t": "fs_upload", "req": 8, "local": small.to_string_lossy(), "remote": "/tmp/dbk-ft/up2.bin" })).await;
+        assert_eq!(wait(&mut out, 8).await.0["type"], "fs_done");
+        assert_eq!(docker("cat /tmp/dbk-ft/up2.bin"), "overwritten", "覆蓋對方已有的檔案");
+        // 空檔案
+        let empty = local_dir.join("empty.txt");
+        std::fs::write(&empty, b"").unwrap();
+        send(&mut w, json!({ "t": "fs_upload", "req": 9, "local": empty.to_string_lossy(), "remote": "/tmp/dbk-ft/empty.txt" })).await;
+        assert_eq!(wait(&mut out, 9).await.0["type"], "fs_done");
+        assert_eq!(docker("stat -c %s /tmp/dbk-ft/empty.txt"), "0");
+        let dst_empty = local_dir.join("empty-down.txt");
+        send(&mut w, json!({ "t": "fs_download", "req": 10, "remote": "/tmp/dbk-ft/empty.txt", "local": dst_empty.to_string_lossy() })).await;
+        assert_eq!(wait(&mut out, 10).await.0["type"], "fs_done");
+        assert_eq!(std::fs::metadata(&dst_empty).unwrap().len(), 0);
+
+        // 整棵列出 → 刪檔 → 刪資料夾
+        send(&mut w, json!({ "t": "fs_all", "req": 11, "path": "/tmp/dbk-ft" })).await;
+        let (v, _) = wait(&mut out, 11).await;
+        let mut names: Vec<String> = v["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap().to_string()).collect();
+        names.sort();
+        assert_eq!(names, vec!["empty.txt", "up2.bin"], "{v}");
+        for (i, n) in names.iter().enumerate() {
+            send(&mut w, json!({ "t": "fs_rm", "req": 20 + i as u64, "path": format!("/tmp/dbk-ft/{n}") })).await;
+            assert_eq!(wait(&mut out, 20 + i as u64).await.0["type"], "fs_done");
+        }
+        send(&mut w, json!({ "t": "fs_rmdir", "req": 30, "path": "/tmp/dbk-ft" })).await;
+        assert_eq!(wait(&mut out, 30).await.0["type"], "fs_done");
+        assert_eq!(docker("test -e /tmp/dbk-ft && echo still || echo gone"), "gone");
+
+        let _ = std::fs::remove_dir_all(&local_dir);
+        task.abort();
     }
 
     /// 對真的 ID 伺服器 + 中繼伺服器 + 被控端（tests/docker/compose.yml）：用 ID 連、加密、收到關鍵畫面。

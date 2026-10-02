@@ -411,6 +411,8 @@ struct Started {
     ctl: mpsc::UnboundedSender<RdCtl>,
     closed: watch::Receiver<Option<String>>,
     task: tokio::task::JoinHandle<()>,
+    /// RustDesk：登入成功用的密碼（記在記憶體，開傳檔連線時不必再問）。
+    password: Option<String>,
 }
 
 /// 建立連線並認證，成功後起工作階段任務。`conn_id` 由前端產生，這樣提示事件在回傳前就對得上。
@@ -444,7 +446,7 @@ pub async fn rd_connect(
         RdProtocol::Rustdesk => connect_rustdesk(&app, &state, &ui, &r, &conn_id, sink).await?,
     };
 
-    let Started { info, ctl, closed, task } = started;
+    let Started { info, ctl, closed, task, password } = started;
     let conn = Arc::new(RdConn::new(conn_id.clone(), r.origin, info.clone(), ctl, closed, task));
     let on_closed = {
         let app = app.clone();
@@ -459,6 +461,9 @@ pub async fn rd_connect(
     if let Err(e) = rt.insert_conn(conn.clone(), on_closed) {
         let _ = conn.send(RdCtl::Close);
         return Err(e);
+    }
+    if let Some(p) = password.filter(|p| !p.is_empty()) {
+        rt.cache_password(&conn_id, p);
     }
     Ok(info)
 }
@@ -569,7 +574,7 @@ async fn connect_rdp(
             let _ = done.await;
         });
         match res_rx.await {
-            Ok(Ok(info)) => return Ok(Started { info, ctl: ctl_tx, closed: closed_rx, task }),
+            Ok(Ok(info)) => return Ok(Started { info, ctl: ctl_tx, closed: closed_rx, task, password: None }),
             Ok(Err(AppError::RdAuth(e))) if attempt + 1 < MAX_AUTH_TRIES => error = Some(e),
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err(AppError::Rd(t!("RDP 連線執行緒意外結束").into())),
@@ -656,7 +661,7 @@ async fn connect_vnc(
                     let reason = pump::run(stream, ssh, ctl_rx, sink).await;
                     finish(closed_tx, reason);
                 });
-                return Ok(Started { info, ctl: ctl_tx, closed: closed_rx, task });
+                return Ok(Started { info, ctl: ctl_tx, closed: closed_rx, task, password: None });
             }
             Err(e) => {
                 if let Some(h) = ssh {
@@ -679,6 +684,15 @@ async fn connect_vnc(_: &AppHandle, _: &AppState, _: &RdUi, _: &Resolved, _: &st
 
 /// RustDesk：啟動 AGPL 輔助程式登入。對方欄是 RustDesk ID → 經 ID 伺服器（直連打洞或中繼）；
 /// 是位址 → Direct IP，經 SSH 時先開一個本機轉送埠給它撥。
+/// RustDesk 登入成功：輔助程式 + 經 SSH 時的本地轉發任務 + 安全層 + 登入用的密碼。
+struct RustdeskLogin {
+    c: crate::rd::rustdesk::Connected,
+    fwd: Option<tokio::task::JoinHandle<()>>,
+    security: &'static str,
+    encrypted: bool,
+    password: String,
+}
+
 async fn connect_rustdesk(
     app: &AppHandle,
     state: &AppState,
@@ -687,6 +701,75 @@ async fn connect_rustdesk(
     conn_id: &str,
     sink: SinkFn,
 ) -> AppResult<Started> {
+    use crate::rd::rustdesk;
+    let RustdeskLogin { c, fwd, security, encrypted, password } = login_rustdesk(app, state, ui, r, conn_id, false).await?;
+    let info = RdConnInfo {
+        conn_id: conn_id.to_string(),
+        protocol: RdProtocol::Rustdesk,
+        width: c.size.0,
+        height: c.size.1,
+        security: security.into(),
+        encrypted,
+    };
+    let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
+    let (closed_tx, closed_rx) = watch::channel(None);
+    let task = tokio::spawn(async move {
+        let reason = rustdesk::run(c, ctl_rx, sink).await;
+        if let Some(f) = fwd {
+            f.abort();
+        }
+        finish(closed_tx, reason);
+    });
+    Ok(Started { info, ctl: ctl_tx, closed: closed_rx, task, password: Some(password) })
+}
+
+/// 開 RustDesk 傳檔連線（另一條連線，對方不送畫面）。檔案面板拿 `conn_id` 開 `ssh_sftp_open`；
+/// `via` = 同一台的畫面連線，借它登入成功的密碼（不必再問一次）。回傳對方的家目錄。
+#[tauri::command]
+pub async fn rd_files_connect(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    conn_id: String,
+    target: RdTargetRef,
+    via: Option<String>,
+) -> AppResult<String> {
+    let rt = state.rd.clone();
+    if let Some(old) = rt.remove_files(&conn_id) {
+        old.shutdown().await;
+    }
+    let mut r = resolve(&app, target).await?;
+    if r.session.protocol != RdProtocol::Rustdesk {
+        return Err(AppError::Rd(t!("只有 RustDesk 連線能傳檔").into()));
+    }
+    if let Some(p) = via.and_then(|v| rt.cached_password(&v)) {
+        r.password = Some(p);
+    }
+    let ui = RdUi { app: app.clone(), rt: rt.clone(), conn_id: conn_id.clone() };
+    let l = login_rustdesk(&app, &state, &ui, &r, &conn_id, true).await?;
+    let client = crate::rd::rustdesk_files::RdFileClient::start(conn_id.clone(), l.c, l.fwd).await?;
+    let home = client.home.clone();
+    rt.insert_files(conn_id, client);
+    Ok(home)
+}
+
+/// 關 RustDesk 傳檔連線（檔案面板 / 分頁關掉時）。已經沒了就 no-op。
+#[tauri::command]
+pub async fn rd_files_disconnect(state: State<'_, AppState>, conn_id: String) -> AppResult<()> {
+    if let Some(c) = state.rd.remove_files(&conn_id) {
+        c.shutdown().await;
+    }
+    Ok(())
+}
+
+/// RustDesk 登入（畫面連線與傳檔連線共用）：ID 伺服器 / Direct IP / 經 SSH、密碼、對方按接受、雙重驗證與信任裝置。
+async fn login_rustdesk(
+    app: &AppHandle,
+    state: &AppState,
+    ui: &RdUi,
+    r: &Resolved,
+    conn_id: &str,
+    file_transfer: bool,
+) -> AppResult<RustdeskLogin> {
     use crate::rd::rustdesk;
     let s = &r.session;
     if s.host.trim().is_empty() {
@@ -734,6 +817,7 @@ async fn connect_rustdesk(
             rendezvous: rendezvous.clone(),
             hwid: hwid.clone(),
             trusted,
+            file_transfer,
         };
         // 沒密碼：對方畫面正跳出連線請求，同時讓使用者可以改輸入密碼。對方只能按接受（不收密碼）時改成單純等待。
         let ask = |click_only: bool| {
@@ -767,24 +851,9 @@ async fn connect_rustdesk(
                     (None, true) => ("rustdesk-ssh", true),
                     (None, false) => ("rustdesk-direct", false),
                 };
-                let info = RdConnInfo {
-                    conn_id: conn_id.to_string(),
-                    protocol: RdProtocol::Rustdesk,
-                    width: c.size.0,
-                    height: c.size.1,
-                    security: security.into(),
-                    encrypted,
-                };
-                let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
-                let (closed_tx, closed_rx) = watch::channel(None);
-                let task = tokio::spawn(async move {
-                    let reason = rustdesk::run(c, ctl_rx, sink).await;
-                    if let Some(f) = fwd {
-                        f.abort();
-                    }
-                    finish(closed_tx, reason);
-                });
-                return Ok(Started { info, ctl: ctl_tx, closed: closed_rx, task });
+                // 等對方按接受期間輸入的密碼也算（之後開傳檔連線用同一組）。
+                let password = c.answered.as_ref().map(|a| a.password.clone()).filter(|p| !p.is_empty()).unwrap_or(password);
+                return Ok(RustdeskLogin { c, fwd, security, encrypted, password });
             }
             Err(e) => {
                 if let Some(f) = fwd {
@@ -935,6 +1004,73 @@ pub async fn rd_record_reveal(path: String) -> AppResult<()> {
     let dir = crate::rd::recording::reveal_target(&crate::rd::recording::dir()?, &path)?;
     crate::agent::open_path(&dir);
     Ok(())
+}
+
+// ---- RustDesk 檔案傳輸的本機窗格 ----
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LocalEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub mtime: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalListing {
+    /// 實際列的資料夾；空字串 = 「本機」（Windows 的磁碟機清單）。
+    pub path: String,
+    /// 上一層；`None` = 已經在最上層。
+    pub parent: Option<String>,
+    pub entries: Vec<LocalEntry>,
+}
+
+/// 列本機資料夾（檔案傳輸的左窗格）。`path` 沒給 = 家目錄；Windows 上空字串 = 磁碟機清單。
+/// 資料夾在前、名稱排序；讀不到的項目略過（沒權限的系統檔）。
+#[tauri::command]
+pub async fn local_list_dir(path: Option<String>) -> AppResult<LocalListing> {
+    tokio::task::spawn_blocking(move || list_local(path.as_deref())).await.map_err(join_err)?
+}
+
+fn list_local(path: Option<&str>) -> AppResult<LocalListing> {
+    let path = match path {
+        Some(p) => p.to_string(),
+        None => dirs::home_dir().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default(),
+    };
+    #[cfg(windows)]
+    if path.is_empty() {
+        let entries = (b'A'..=b'Z')
+            .map(|c| format!("{}:\\", c as char))
+            .filter(|d| std::path::Path::new(d).exists())
+            .map(|d| LocalEntry { name: d.trim_end_matches('\\').to_string(), path: d, is_dir: true, size: 0, mtime: None })
+            .collect();
+        return Ok(LocalListing { path: String::new(), parent: None, entries });
+    }
+    let dir = std::path::PathBuf::from(if path.is_empty() { "/" } else { &path });
+    let rd = std::fs::read_dir(&dir).map_err(|e| AppError::Rd(tf!("無法讀取資料夾 {path}：{e}", path = dir.display(), e = e)))?;
+    let mut entries: Vec<LocalEntry> = rd
+        .flatten()
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
+            Some(LocalEntry {
+                name: e.file_name().to_string_lossy().into_owned(),
+                path: e.path().to_string_lossy().into_owned(),
+                is_dir: meta.is_dir(),
+                size: if meta.is_dir() { 0 } else { meta.len() },
+                mtime,
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    // Windows 的磁碟機根目錄（C:\）上一層是磁碟機清單。
+    let parent = match dir.parent() {
+        Some(p) => Some(p.to_string_lossy().into_owned()),
+        None if cfg!(windows) => Some(String::new()),
+        None => None,
+    };
+    Ok(LocalListing { path: dir.to_string_lossy().into_owned(), parent, entries })
 }
 
 #[derive(Clone, Serialize)]

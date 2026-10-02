@@ -53,6 +53,12 @@ export interface SftpPanelProps {
    * 主視窗為了分頁拖曳關掉了 WebView 的檔案拖放，拖進來只拿得到沒有路徑的 File。
    */
   nativeDrop?: boolean;
+  /** 雙窗格（RustDesk 檔案傳輸）：下載直接放進左邊本機窗格目前的資料夾，不另外問要存到哪。 */
+  localDir?: string | null;
+  /** 雙窗格：左邊本機窗格按「上傳」→ 上傳這些本機路徑到目前的資料夾（`seq` 變了才做）。 */
+  uploadRequest?: { seq: number; paths: string[] } | null;
+  /** 下載完成（雙窗格：左邊本機窗格重新整理）。 */
+  onDownloaded?: () => void;
 }
 
 /** Tauri drag-drop 事件的 payload（只取用得到的欄位；position 是實體像素、相對於 WebView 左上角）。 */
@@ -101,6 +107,7 @@ function isDirEntry(e: SftpEntry): boolean {
 
 export default function SftpPanel({
   tabKey, connId, onCd, onClose, title = "SFTP", maximized = false, onToggleMaximize, onPopOut, startDir, initialDir, nativeDrop = false,
+  localDir, uploadRequest, onDownloaded,
 }: SftpPanelProps) {
   const t = useT();
   const sftpId = useSshTerminals((s) => s.rt[tabKey]?.sftpId ?? null);
@@ -346,12 +353,14 @@ export default function SftpPanel({
   // `.part`，後端比對過是這個檔的前半段就會接著傳。
   const downloadFile = async (e: SftpEntry) => {
     if (!sftpId) return;
+    // 雙窗格：直接放進左邊本機窗格的資料夾（同名照批次的規則問）。
+    if (localDir) { void downloadMany([e]); return; }
     const local = await pickSaveFile(e.name);
     if (!local) return;
     try {
       const id = await api.sshSftpDownload(sftpId, e.path, local, true);
       useSshTransfers.getState().track({
-        id, name: e.name, kind: "download", tabKey,
+        id, name: e.name, kind: "download", tabKey, onDone: onDownloaded,
         retry: (sid) => api.sshSftpDownload(sid, e.path, local, true, true),
       });
     } catch (err) { toast.error(errMsg(err)); }
@@ -359,7 +368,7 @@ export default function SftpPanel({
   // 資料夾或多選：選一個本機資料夾，全部放進去（Xftp 多選拖到本機）。整批一個工作、依序傳。
   const downloadMany = async (targets: SftpEntry[]) => {
     if (!sftpId || !targets.length) return;
-    const dir = await pickDirectory();
+    const dir = localDir || await pickDirectory();
     if (!dir) return;
     try {
       const clash = await api.sshSftpLocalConflicts(dir, targets.map((x) => x.name));
@@ -368,7 +377,7 @@ export default function SftpPanel({
       const remotes = targets.map((x) => x.path);
       const id = await api.sshSftpDownloadMany(sftpId, remotes, dir, onConflict);
       useSshTransfers.getState().track({
-        id, name: batchName(targets.map((x) => x.name)), kind: "download", tabKey, batch: true,
+        id, name: batchName(targets.map((x) => x.name)), kind: "download", tabKey, batch: true, onDone: onDownloaded,
         retry: (sid) => api.sshSftpDownloadMany(sid, remotes, dir, "resume"),
       });
     } catch (err) { toast.error(errMsg(err)); }
@@ -410,6 +419,14 @@ export default function SftpPanel({
     const dir = await pickDirectory();
     if (dir) await uploadMany([dir], true);
   };
+  // 雙窗格：左邊本機窗格要上傳的東西（`seq` 變了才做一次）。
+  const uploadSeq = useRef(0);
+  useEffect(() => {
+    if (!uploadRequest || !sftpId || uploadRequest.seq === uploadSeq.current) return;
+    uploadSeq.current = uploadRequest.seq;
+    void uploadMany(uploadRequest.paths, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadRequest, sftpId]);
 
   // ---- 拖放上傳（SFTP 獨立視窗：Tauri 的 drag-drop 事件帶本機路徑）----
   /** 游標底下（實體像素）那一列是資料夾就放進那個資料夾，否則放進目前的資料夾。 */

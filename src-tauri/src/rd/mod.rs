@@ -15,6 +15,7 @@ pub mod keygrab;
 pub mod recording;
 pub mod runtime;
 pub mod rustdesk;
+pub mod rustdesk_files;
 pub mod sessions;
 pub mod transport;
 

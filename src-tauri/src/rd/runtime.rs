@@ -133,11 +133,37 @@ struct PendingPrompt {
 pub struct RdRuntime {
     conns: Mutex<HashMap<String, Arc<RdConn>>>,
     prompts: Mutex<HashMap<String, PendingPrompt>>,
+    /// RustDesk 傳檔連線（檔案面板經 `ssh_sftp_open` 拿它開）。
+    files: Mutex<HashMap<String, Arc<super::rustdesk_files::RdFileClient>>>,
+    /// RustDesk 畫面連線登入成功時用的密碼（只在記憶體）：開傳檔連線時不必再問一次。連線結束就丟掉。
+    passwords: Mutex<HashMap<String, String>>,
 }
 
 impl RdRuntime {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    // ---- RustDesk 傳檔 ----
+
+    pub fn insert_files(&self, id: String, c: Arc<super::rustdesk_files::RdFileClient>) {
+        self.files.lock().insert(id, c);
+    }
+
+    pub fn files(&self, id: &str) -> Option<Arc<super::rustdesk_files::RdFileClient>> {
+        self.files.lock().get(id).cloned()
+    }
+
+    pub fn remove_files(&self, id: &str) -> Option<Arc<super::rustdesk_files::RdFileClient>> {
+        self.files.lock().remove(id)
+    }
+
+    pub fn cache_password(&self, conn_id: &str, password: String) {
+        self.passwords.lock().insert(conn_id.to_string(), password);
+    }
+
+    pub fn cached_password(&self, conn_id: &str) -> Option<String> {
+        self.passwords.lock().get(conn_id).cloned()
     }
 
     // ---- 連線 ----
@@ -198,6 +224,7 @@ impl RdRuntime {
         let mut g = self.conns.lock();
         if g.get(&conn.id).is_some_and(|c| Arc::ptr_eq(c, conn)) {
             g.remove(&conn.id);
+            self.passwords.lock().remove(&conn.id);
         }
     }
 
@@ -205,6 +232,7 @@ impl RdRuntime {
     pub async fn disconnect(&self, id: &str) {
         self.cancel_prompts_for(id);
         let conn = self.conns.lock().remove(id);
+        self.passwords.lock().remove(id);
         let Some(conn) = conn else { return };
         let _ = conn.ctl.send(RdCtl::Close);
         let task = conn.task.lock().take();

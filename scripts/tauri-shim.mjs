@@ -57,6 +57,17 @@ export function installShim(fx) {
   // RustDesk「輸入作業系統密碼」：存的密碼（主機 id → 密碼）與打過去的紀錄（{ connId, password }；用存的時 password 是存的那組）。
   window.__DBKIT_RD_OS_PASSWORDS__ = {};
   window.__DBKIT_RD_OS_INPUTS__ = [];
+  // RustDesk 檔案傳輸：rd_files_connect / rd_files_disconnect 的紀錄（{ op, connId, via }）。之後的檔案操作走 ssh_sftp_*（同一套假檔案）。
+  window.__DBKIT_RD_FILES__ = [];
+  // 檔案傳輸的本機窗格（local_list_dir）：路徑 → 項目；情境可換。
+  window.__DBKIT_LOCAL_FS__ = {
+    "C:\\Users\\me": [
+      { name: "Documents", is_dir: true, size: 0, mtime: 1790000000 },
+      { name: "report.pdf", is_dir: false, size: 245760, mtime: 1790000100 },
+      { name: "notes.txt", is_dir: false, size: 512, mtime: 1790000200 },
+    ],
+    "C:\\Users\\me\\Documents": [{ name: "plan.docx", is_dir: false, size: 40960, mtime: 1790000300 }],
+  };
   window.__DBKIT_RD_FULLSCREEN__ = [];
   window.__DBKIT_RD_ANSWERS__ = [];
   window.__DBKIT_UPDATE_INSTALLS__ = [];
@@ -561,6 +572,24 @@ metadata:
       return null;
     },
     rd_has_stored_password: () => false,
+    // 傳檔連線：情境可設 window.__DBKIT_RD_FILES_FAIL__（錯誤訊息）讓它連不上。家目錄同假 SFTP。
+    rd_files_connect: ({ connId, via }) => {
+      window.__DBKIT_RD_FILES__.push({ op: "connect", connId, via });
+      if (window.__DBKIT_RD_FILES_FAIL__) return Promise.reject({ kind: "rd", code: "ERR_RD", message: window.__DBKIT_RD_FILES_FAIL__ });
+      return "/home/deploy";
+    },
+    rd_files_disconnect: ({ connId }) => { window.__DBKIT_RD_FILES__.push({ op: "disconnect", connId }); return null; },
+    local_list_dir: ({ path }) => {
+      const p = path ?? "C:\\Users\\me";
+      const items = window.__DBKIT_LOCAL_FS__[p];
+      if (!items) return Promise.reject({ kind: "rd", code: "ERR_RD", message: `無法讀取資料夾 ${p}` });
+      const i = p.lastIndexOf("\\");
+      return {
+        path: p,
+        parent: i > 2 ? p.slice(0, i) : "",
+        entries: items.map((e) => ({ ...e, path: `${p}\\${e.name}` })),
+      };
+    },
     rd_has_os_password: ({ id }) => !!window.__DBKIT_RD_OS_PASSWORDS__[id],
     rd_os_password_set: ({ id, password }) => {
       if (password) window.__DBKIT_RD_OS_PASSWORDS__[id] = password;

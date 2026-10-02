@@ -225,6 +225,13 @@ pub fn login_request(peer: &str, proof: Vec<u8>, dec: Decoders, session_id: u64,
     m
 }
 
+/// 改成傳檔連線（官方 `ConnType::FILE_TRANSFER`：`LoginRequest.file_transfer`）：對方不送畫面，只處理檔案動作。
+pub fn as_file_transfer(m: &mut Message) {
+    if let Some(message::Union::LoginRequest(lr)) = m.union.as_mut() {
+        lr.set_file_transfer(crate::proto::message::FileTransfer { dir: String::new(), show_hidden: false, ..Default::default() });
+    }
+}
+
 /// 雙重驗證碼（驗證器 App 常顯示成 `123 456`，空白拿掉）。`hwid` 空 = 不要對方「信任這台裝置」；
 /// 有值 = 請對方記住這台（對方的 `add_trusted_device`，認的是 hwid + `my_id` / `my_name` / `my_platform`）。
 pub fn auth_2fa(code: &str, hwid: &[u8]) -> Message {
@@ -279,6 +286,10 @@ pub enum Incoming {
     BlockInput { on: bool, ok: bool },
     MsgBox(MsgBox),
     Closed(String),
+    /// 傳檔連線上對方的回覆（files.rs 處理）。
+    FileResponse(crate::proto::message::FileResponse),
+    /// 傳檔：上傳時對方回的 `send_confirm`。
+    FileAction(crate::proto::message::FileAction),
     Ignore,
 }
 
@@ -303,6 +314,8 @@ pub fn classify(data: &[u8]) -> Incoming {
             _ => Incoming::Ignore,
         },
         Some(message::Union::VideoFrame(vf)) => Incoming::Frames(frames_of(&vf)),
+        Some(message::Union::FileResponse(fr)) => Incoming::FileResponse(fr),
+        Some(message::Union::FileAction(fa)) => Incoming::FileAction(fa),
         Some(message::Union::PeerInfo(pi)) => Incoming::Displays(pi.displays.iter().map(Display::from).collect()),
         Some(message::Union::TestDelay(t)) if !t.from_client => {
             let (delay, bitrate) = (t.last_delay, t.target_bitrate);

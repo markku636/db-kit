@@ -169,6 +169,7 @@ const CASE_FX = {
   "rd-rustdesk-monitors": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-toolbar": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-keyboard": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-rustdesk-files": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "update-dialog-install": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-manual": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-error": { GITHUB_RELEASE: FX_RELEASE },
@@ -1514,6 +1515,71 @@ const CASES = {
     await sleep(200);
     got = (await since(n)).filter((c) => c.t === "key").map((c) => `${c.scancode.toString(16)}${c.down ? "↓" : "↑"}`);
     check("關掉虛擬鍵盤：按住的 Win、Ctrl 放開", (await vk.count()) === 0 && got.slice(-2).join(" ") === "1d↑ e05b↑", got.join(" "));
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // RustDesk 檔案傳輸：工具列打開雙窗格（左本機、右對方；另開傳檔連線、借畫面連線的密碼），
+  // 左邊選了按「上傳 →」傳到右邊目前的資料夾，右邊下載直接放進左邊目前的資料夾；對方關掉傳檔權限時按鈕不出現；關掉就斷傳檔連線。
+  async "rd-rustdesk-files"(page) {
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("office-pc", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "1024x768", null, { timeout: 10000 }).catch(() => {});
+    const toggle = page.locator("[data-rd-files-toggle]");
+    check("工具列有「檔案傳輸」", (await toggle.count()) === 1);
+    const rdConn = await page.evaluate(() => window.__DBKIT_RD_LAST_CONN__);
+    await toggle.click();
+    const panel = page.locator('[data-rd-files="connected"]');
+    await panel.waitFor({ timeout: 5000 }).catch(() => {});
+    const files = () => page.evaluate(() => window.__DBKIT_RD_FILES__);
+    const first = (await files())[0];
+    check("另開傳檔連線、借畫面連線登入成功的密碼", (await panel.count()) === 1 && first?.op === "connect" && first?.via === rdConn && first?.connId !== rdConn,
+      JSON.stringify(await files()));
+    const local = page.locator("[data-local-pane]");
+    const remote = panel.locator("[data-testid=sftp-panel]");
+    await remote.locator('tr[data-name="backup.tar.gz"]').waitFor({ timeout: 5000 }).catch(() => {});
+    check("左邊列出本機（家目錄）、右邊列出對方的家目錄",
+      (await local.locator('tr[data-name="report.pdf"]').count()) === 1 && (await remote.locator('tr[data-name="backup.tar.gz"]').count()) === 1
+      && (await local.locator("[data-local-path]").getAttribute("data-local-path")) === "C:\\Users\\me");
+    // 上傳：左邊選兩個檔案 → 上傳 → 右邊目前資料夾
+    await local.locator('tr[data-name="report.pdf"]').click();
+    await local.locator('tr[data-name="notes.txt"]').click({ modifiers: ["Control"] });
+    await local.locator("[data-local-upload]").click();
+    await page.waitForFunction(() => window.__DBKIT_SFTP_BATCH__.some((b) => b.kind === "upload"), null, { timeout: 5000 }).catch(() => {});
+    const up = (await page.evaluate(() => window.__DBKIT_SFTP_BATCH__)).find((b) => b.kind === "upload");
+    check("左邊選了按「上傳 →」：上傳到右邊目前的資料夾", up?.remoteDir === "/home/deploy"
+      && JSON.stringify(up?.locals) === JSON.stringify(["C:\\Users\\me\\report.pdf", "C:\\Users\\me\\notes.txt"]), JSON.stringify(up));
+    // 下載：先在左邊進 Documents，右邊選檔案按下載 → 直接放進 Documents（不另外問存到哪）
+    await local.locator('tr[data-name="Documents"]').dblclick();
+    await local.locator('tr[data-name="plan.docx"]').waitFor({ timeout: 3000 }).catch(() => {});
+    await remote.locator('tr[data-name="backup.tar.gz"]').click();
+    await remote.getByRole("button", { name: "下載選取的項目", exact: true }).click();
+    await page.waitForFunction(() => window.__DBKIT_SFTP_BATCH__.some((b) => b.kind === "download"), null, { timeout: 5000 }).catch(() => {});
+    const down = (await page.evaluate(() => window.__DBKIT_SFTP_BATCH__)).find((b) => b.kind === "download");
+    check("右邊下載：直接放進左邊目前的資料夾", down?.localDir === "C:\\Users\\me\\Documents"
+      && JSON.stringify(down?.remotes) === JSON.stringify(["/home/deploy/backup.tar.gz"]), JSON.stringify(down));
+    // 關掉：斷傳檔連線、畫面還在
+    await page.locator("[data-rd-files-close]").click();
+    await sleep(300);
+    const ops = (await files()).map((f) => f.op);
+    check("關掉檔案傳輸：斷傳檔連線，遠端畫面還連著", (await page.locator("[data-rd-files]").count()) === 0 && ops.at(-1) === "disconnect"
+      && (await page.locator("[data-rd-overlay]").count()) === 0, JSON.stringify(ops));
+    // 連不上：顯示原因、可以重試
+    await page.evaluate(() => { window.__DBKIT_RD_FILES_FAIL__ = "對方的 RustDesk 沒有回應（資料夾可能不存在或沒有權限）"; });
+    await toggle.click();
+    await page.locator('[data-rd-files="error"]').waitFor({ timeout: 3000 }).catch(() => {});
+    check("連不上：顯示原因與「重新連線」", (await page.locator("[data-rd-files-error]").innerText().catch(() => "")).includes("沒有回應")
+      && (await page.locator('[data-rd-files="error"]').getByRole("button", { name: "重新連線", exact: true }).count()) === 1);
+    await page.evaluate(() => { window.__DBKIT_RD_FILES_FAIL__ = null; });
+    await page.locator('[data-rd-files="error"]').getByRole("button", { name: "重新連線", exact: true }).click();
+    await panel.waitFor({ timeout: 3000 }).catch(() => {});
+    check("重新連線 → 連上", (await panel.count()) === 1);
+    await page.locator("[data-rd-files-close]").click();
+    // 對方關掉傳檔權限：按鈕不出現
+    await page.evaluate(() => window.__DBKIT_RD_PUSH__([1, ...new TextEncoder().encode(JSON.stringify({ type: "permission", name: "file", enabled: false }))]));
+    await sleep(300);
+    check("對方關掉傳檔權限：沒有「檔案傳輸」", (await toggle.count()) === 0);
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },

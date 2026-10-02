@@ -88,6 +88,22 @@ export type RdTargetRef =
   | { kind: "session"; id: string }
   | { kind: "ad_hoc"; session: RdSession; password?: string | null };
 
+/** `local_list_dir` 的一項（檔案傳輸的本機窗格）。 */
+export interface LocalEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  mtime: number | null;
+}
+
+/** `local_list_dir` 的回傳：`path` 空字串 = Windows 的磁碟機清單；`parent` null = 最上層。 */
+export interface LocalListing {
+  path: string;
+  parent: string | null;
+  entries: LocalEntry[];
+}
+
 /** `rd_connect` 的回傳。 */
 export interface RdConnInfo {
   conn_id: string;

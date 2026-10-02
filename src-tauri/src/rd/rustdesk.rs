@@ -67,6 +67,8 @@ pub struct RustdeskParams {
     pub hwid: String,
     /// 之前對這台勾過「信任這台裝置」：登入時就帶 `hwid`，對方認得就不再問驗證碼。
     pub trusted: bool,
+    /// 傳檔連線（另一條連線，不收畫面；見 rustdesk_files.rs）。
+    pub file_transfer: bool,
 }
 
 impl std::fmt::Debug for RustdeskParams {
@@ -102,6 +104,7 @@ fn connect_command(p: &RustdeskParams) -> serde_json::Value {
         "my_name": std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_default(),
         "hwid": p.hwid,
         "trusted": p.trusted,
+        "file_transfer": p.file_transfer,
     });
     if let Some(r) = &p.rendezvous {
         v["peer"] = json!(p.host);
@@ -198,12 +201,12 @@ async fn write_typed<W: AsyncWrite + Unpin>(w: &mut W, ty: u8, body: &[u8]) -> s
     w.flush().await
 }
 
-fn json_of(msg: &[u8]) -> Option<serde_json::Value> {
+pub(crate) fn json_of(msg: &[u8]) -> Option<serde_json::Value> {
     (msg.first() == Some(&TYPE_JSON)).then(|| serde_json::from_slice(&msg[1..]).ok()).flatten()
 }
 
 /// 輔助程式的輸出（`None` = 結束了）。
-type Output = mpsc::Receiver<std::io::Result<Vec<u8>>>;
+pub(crate) type Output = mpsc::Receiver<std::io::Result<Vec<u8>>>;
 
 /// 輔助程式的輸出交給專門的 task 讀：`read_msg` 不是取消安全的，直接放進 `select!` 跟前端的輸入一起等，
 /// 輸入先到時讀到一半的訊息會掉，後面的長度標頭就全錯了。
@@ -243,6 +246,13 @@ pub struct Connected {
     pub route: String,
     /// 有問雙重驗證碼時，最後送出的那個有沒有勾「信任這台裝置」（呼叫端照這個記下 / 拿掉）；沒問 = None。
     pub trusted_2fa: Option<bool>,
+}
+
+impl Connected {
+    /// 交出輔助程式本身（傳檔連線自己收送指令，不走畫面的 `run`）。
+    pub(crate) fn into_io(self) -> (Child, ChildStdin, Output, Vec<u8>) {
+        (self.child, self.stdin, self.out, self.hello)
+    }
 }
 
 /// 雙重驗證碼對話框的答案。
@@ -819,6 +829,7 @@ mod tests {
             rendezvous: None,
             hwid: "aHdpZA==".into(),
             trusted: true,
+            file_transfer: false,
         };
         let v = connect_command(&p);
         assert_eq!((v["host"].as_str(), v["port"].as_u64()), (Some("10.0.0.5"), Some(21118)));
