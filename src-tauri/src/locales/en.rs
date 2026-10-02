@@ -103,6 +103,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         }
         "沒有可匯出的連線" => "There are no connections to export",
         "含 {n} 個側欄群組" => "Including {n} sidebar groups",
+        "含 {ssh} 台 SSH 主機、{rd} 台遠端桌面" => "Including {ssh} SSH hosts and {rd} remote desktops",
         "篩選格式錯誤（應為 col:op[:value]）：{spec}" => "Invalid filter format (expected col:op[:value]): {spec}",
         "不支援的篩選運算子：{op}" => "Unsupported filter operator: {op}",
         "排序格式錯誤（應為 col:asc|desc）：{spec}" => "Invalid sort format (expected col:asc|desc): {spec}",

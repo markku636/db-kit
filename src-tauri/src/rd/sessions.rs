@@ -292,6 +292,32 @@ pub async fn save_layout_in(
     save_in(dir, &file).await
 }
 
+/// 匯入主機 + 資料夾（加密匯入檔）。語意同 `ssh::sessions::import_in`；密碼由呼叫端寫 keychain。
+pub async fn import_in(dir: &Path, folders: Vec<RdFolder>, sessions: Vec<RdSession>) -> AppResult<usize> {
+    let mut file = load_in(dir).await?;
+    let before = file.folders.len();
+    let remap = store::merge_groups(&mut file.folders, folders, |f| f.id.as_str(), |a, b| {
+        store::same_group_name(&a.name, &b.name)
+    });
+    for f in &mut file.folders[before..] {
+        f.parent_id = f.parent_id.as_ref().and_then(|p| remap.get(p)).filter(|p| **p != f.id).cloned();
+    }
+    for s in sessions {
+        let imported = s.folder_id.as_ref().and_then(|f| remap.get(f).cloned());
+        match file.sessions.iter().position(|x| x.id == s.id) {
+            Some(i) => {
+                let folder_id = imported.or_else(|| file.sessions[i].folder_id.clone());
+                file.sessions[i] = RdSession { folder_id, ..s };
+            }
+            None => file.sessions.push(RdSession { folder_id: imported, ..s }),
+        }
+    }
+    file.version = SCHEMA_VERSION;
+    let added = file.folders.len() - before;
+    save_in(dir, &file).await?;
+    Ok(added)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

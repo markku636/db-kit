@@ -70,6 +70,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "其中 {n} 筆是 PROD 連線，一律不含帳號與密碼" => "其中 {n} 笔是 PROD 连接，一律不含账号与密码",
         "沒有可匯出的連線" => "没有可导出的连接",
         "含 {n} 個側欄群組" => "含 {n} 个侧边栏群组",
+        "含 {ssh} 台 SSH 主機、{rd} 台遠端桌面" => "含 {ssh} 台 SSH 主机、{rd} 台远程桌面",
         "篩選格式錯誤（應為 col:op[:value]）：{spec}" => "筛选格式错误（应为 col:op[:value]）：{spec}",
         "不支援的篩選運算子：{op}" => "不支持的筛选操作符：{op}",
         "排序格式錯誤（應為 col:asc|desc）：{spec}" => "排序格式错误（应为 col:asc|desc）：{spec}",

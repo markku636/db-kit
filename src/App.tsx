@@ -424,7 +424,10 @@ export default function App() {
   // 加密匯出連線：範圍（哪些連線）、機密類別、passphrase、輸出路徑全部在 ExportConnectionsDialog
   // 內決定 —— 這裡只做「有沒有東西可匯出」的前置檢查。
   const exportConnections = () => {
-    if (useStore.getState().connections.length === 0) { toast.info(t("沒有可匯出的連線")); return; }
+    const empty = useStore.getState().connections.length === 0
+      && useSshSessions.getState().sessions.length === 0
+      && useRdSessions.getState().sessions.length === 0;
+    if (empty) { toast.info(t("沒有可匯出的連線")); return; }
     setExportConnsOpen(true);
   };
   // 從加密檔匯入連線：輸入 passphrase 解密，機密寫回 keychain、設定 upsert，再重載連線清單。
@@ -439,8 +442,12 @@ export default function App() {
       useStore.getState().setConnections(saved.map((c) => ({ ...c, password: c.password ?? "" } as ConnectionConfig)));
       // 群組跟連線一起進來，側欄分區要一起刷新（否則新群組的連線會先落在「未分組」直到重啟）。
       api.listConnectionGroups().then((gs) => useStore.getState().setConnGroups(gs)).catch(() => {});
-      if (res.count === 0) { toast.info(t("檔案內沒有連線")); return; }
-      let msg = t("已匯入 {n} 個連線", { n: res.count });
+      // SSH 主機 / 遠端桌面（連同資料夾）也在同一份檔裡：兩個側欄區塊一起重載。
+      if (res.ssh > 0) void useSshSessions.getState().load();
+      if (res.rd > 0) void useRdSessions.getState().load();
+      const total = res.count + res.ssh + res.rd;
+      if (total === 0) { toast.info(t("檔案內沒有連線")); return; }
+      let msg = t("已匯入 {n} 個連線", { n: total });
       if (res.groups_added > 0) msg += t("，新增 {g} 個群組", { g: res.groups_added });
       if (res.prod_without_credentials > 0) {
         msg += t("；{p} 個 PROD 連線尚無帳密，連線前請先輸入帳號及密碼", { p: res.prod_without_credentials });

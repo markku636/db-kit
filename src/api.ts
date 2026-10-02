@@ -1418,37 +1418,51 @@ export interface ParsedUrl {
 
 /**
  * 加密匯出連線的範圍與機密政策（「進階匯出」對話框 → 後端 `conn_export::ExportScope`）。
- * 欄位皆可省略；省略＝全部連線 + 全部機密。
+ * 欄位皆可省略；省略＝全部（資料庫連線 + SSH 主機 + 遠端桌面）+ 全部機密。
  *
  * 注意：PROD 連線（`options.prod === "1"`）不受這裡的勾選影響 —— 後端一律抹掉它的
  * 帳號與所有機密。匯出檔是可攜的密文，正式環境帳密不該進去。
  */
 export interface ConnExportScope {
-  /** 只匯出這些連線 id；省略 / 空陣列＝全部。 */
+  /** 只匯出這些資料庫連線 id；省略＝全部，空陣列＝一筆都不要。 */
   ids?: string[];
+  /** 只匯出這些 SSH 主機 id；省略＝全部，空陣列＝一台都不要。 */
+  ssh_ids?: string[];
+  /** 只匯出這些遠端桌面 id；省略＝全部，空陣列＝一台都不要。 */
+  rd_ids?: string[];
   include_password?: boolean;
-  /** SSH 密碼與私鑰 passphrase。 */
+  /** SSH 密碼與私鑰 passphrase（資料庫連線的 SSH 通道與 SSH 主機都算）。 */
   include_ssh?: boolean;
   include_otp?: boolean;
-  /** 側欄群組歸屬；false＝匯入端視為未分組。 */
+  /** 遠端桌面密碼。 */
+  include_rd?: boolean;
+  /** 側欄群組 / 資料夾歸屬；false＝匯入端視為未分組。 */
   include_groups?: boolean;
 }
 
-/** 匯出結果：`redacted` = 其中因 PROD 規則被抹掉帳密的筆數；`groups` = 一併帶出的群組數。 */
+/**
+ * 匯出結果：`count` = 資料庫連線數、`ssh` / `rd` = SSH 主機與遠端桌面數；
+ * `redacted` = 其中因 PROD 規則被抹掉帳密的筆數；`groups` = 一併帶出的群組 / 資料夾數。
+ */
 export interface ConnExportSummary {
   count: number;
   redacted: number;
   groups: number;
+  ssh: number;
+  rd: number;
 }
 
 /**
- * 匯入結果：`groups_added` = 本機新增的群組數（同 id / 同名的群組會合併、不算新增）；
+ * 匯入結果：`count` = 資料庫連線數、`ssh` / `rd` = SSH 主機與遠端桌面數；
+ * `groups_added` = 本機新增的群組 / 資料夾數（同 id / 同名的會合併、不算新增）；
  * `prod_without_credentials` = 匯入後仍沒有帳號的 PROD 連線數（連線前得先補帳密）。
  */
 export interface ConnImportSummary {
   count: number;
   groups_added: number;
   prod_without_credentials: number;
+  ssh: number;
+  rd: number;
 }
 
 /** 連線前需要哪些登入資訊：`both` 帳號 + 密碼、`password` 只要密碼（Elastic API key）、`none` 不需要。 */

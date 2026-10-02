@@ -627,8 +627,9 @@ async fn conn_list(fmt: Format) -> AppResult<()> {
     Ok(())
 }
 
-/// 加密匯出全部連線。檔格式與機密政策都走 `conn_export`（與 GUI「進階匯出」同一份），
-/// 所以 PROD 連線在 CLI 這條路徑同樣不帶帳號密碼 —— 不會出現「GUI 擋住、CLI 繞過」。
+/// 加密匯出全部連線（含側欄的 SSH 主機與遠端桌面）。檔格式與機密政策都走 `conn_export`
+/// （與 GUI「進階匯出」同一份），所以 PROD 連線在 CLI 這條路徑同樣不帶帳號密碼 ——
+/// 不會出現「GUI 擋住、CLI 繞過」。
 async fn conn_export(path: &str, passphrase: &str) -> AppResult<()> {
     if passphrase.is_empty() {
         return Err(AppError::Storage(t!("請提供 --passphrase").into()));
@@ -636,10 +637,14 @@ async fn conn_export(path: &str, passphrase: &str) -> AppResult<()> {
     let dir = store::headless_config_dir()?;
     let file = store::load_file_in(&dir).await?;
     let (exported, summary) =
-        crate::conn_export::build(file.connections, file.groups, &Default::default());
+        crate::conn_export::build_all(&dir, file.connections, file.groups, &Default::default()).await?;
     crate::conn_export::write_encrypted(path, passphrase, &exported).await?;
     let count = summary.count;
     println!("{}", tf!("已加密匯出 {count} 筆連線到 {path}", count = count, path = path));
+    if summary.ssh + summary.rd > 0 {
+        let (ssh, rd) = (summary.ssh, summary.rd);
+        println!("{}", tf!("含 {ssh} 台 SSH 主機、{rd} 台遠端桌面", ssh = ssh, rd = rd));
+    }
     if summary.groups > 0 {
         let n = summary.groups;
         println!("{}", tf!("含 {n} 個側欄群組", n = n));

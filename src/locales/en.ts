@@ -2431,6 +2431,7 @@ const en: Catalog = {
   "資料庫文件…": "Database documentation…",
   "資料庫名稱": "Database name",
   "資料庫密碼": "Database password",
+  "遠端桌面密碼": "Remote desktop password",
   "資料庫統計": "Database stats",
   "資料庫數": "Databases",
   "資料庫檔案路徑": "Database file path",

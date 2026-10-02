@@ -691,11 +691,11 @@ pub async fn clear_startup_password(app: AppHandle, current: String) -> AppResul
     store::write_json(&app, store::APP_SETTINGS_FILE, &s).await
 }
 
-/// 加密匯出連線（可選範圍與機密政策，見 `conn_export::ExportScope`）：從 keychain 取出勾選的
-/// 機密，以 passphrase 派生金鑰用 AES-256-GCM 加密整包寫入 path。回傳匯出筆數與
-/// 「因 PROD 規則被抹掉帳密」的筆數。
+/// 加密匯出連線（可選範圍與機密政策，見 `conn_export::ExportScope`）：資料庫連線 + 側欄的
+/// SSH 主機與遠端桌面（連同群組 / 資料夾），從 keychain 取出勾選的機密，以 passphrase 派生金鑰
+/// 用 AES-256-GCM 加密整包寫入 path。回傳各類筆數與「因 PROD 規則被抹掉帳密」的筆數。
 ///
-/// `scope` 省略 = 全部連線 + 全部機密（改版前的行為）。PROD 連線的帳密永遠不會被帶出，
+/// `scope` 省略 = 全部 + 全部機密（改版前的行為）。PROD 連線的帳密永遠不會被帶出，
 /// 這條規則在 `conn_export` 而不在此處——CLI 走同一份。
 #[tauri::command]
 pub async fn export_connections_encrypted(
@@ -710,16 +710,17 @@ pub async fn export_connections_encrypted(
     let scope = scope.unwrap_or_default();
     let conns = store::load_all(&app).await?;
     let groups = store::load_groups(&app).await?;
-    let (file, summary) = crate::conn_export::build(conns, groups, &scope);
-    if summary.count == 0 {
+    let dir = store::app_config_dir(&app)?;
+    let (file, summary) = crate::conn_export::build_all(&dir, conns, groups, &scope).await?;
+    if summary.total() == 0 {
         return Err(AppError::Storage(t!("沒有可匯出的連線").into()));
     }
     crate::conn_export::write_encrypted(&path, &passphrase, &file).await?;
     Ok(summary)
 }
 
-/// 從加密檔匯入連線與群組：以 passphrase 解密後，機密寫回 keychain、連線與群組合併寫入
-/// （群組合併規則見 `store::import_in`）。
+/// 從加密檔匯入連線與群組（含 SSH 主機 / 遠端桌面與其資料夾）：以 passphrase 解密後，機密寫回
+/// keychain、項目與群組合併寫入（群組合併規則見 `store::merge_groups`）。
 #[tauri::command]
 pub async fn import_connections_encrypted(
     app: AppHandle,
@@ -767,8 +768,21 @@ pub async fn import_connections_encrypted(
         }
         conns.push(e.base);
     }
-    let groups_added = store::import_connections(&app, file.groups, conns).await?;
-    Ok(crate::conn_export::ImportSummary { count, groups_added, prod_without_credentials })
+    let mut groups_added = 0;
+    // 只帶 SSH 主機 / 遠端桌面的檔：連線檔不必重寫。
+    if !conns.is_empty() || !file.groups.is_empty() {
+        groups_added += store::import_connections(&app, file.groups, conns).await?;
+    }
+    let (ssh, rd) = (file.ssh_hosts.len(), file.rd_hosts.len());
+    groups_added += crate::conn_export::import_hosts(
+        &store::app_config_dir(&app)?,
+        file.ssh_folders,
+        file.ssh_hosts,
+        file.rd_folders,
+        file.rd_hosts,
+    )
+    .await?;
+    Ok(crate::conn_export::ImportSummary { count, groups_added, prod_without_credentials, ssh, rd })
 }
 
 /// 此連線在 keychain 是否已存有資料庫密碼（前端連線前的帳密檢查用；不回傳密碼本身）。

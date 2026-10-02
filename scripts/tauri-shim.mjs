@@ -111,6 +111,11 @@ export function installShim(fx) {
     has_startup_password: () => false,
     // 假資料的連線不帶明文密碼；回 true＝keychain 裡有，連線前的「缺帳密」防呆才不會擋住
     has_stored_password: () => true,
+    // 進階匯出：留下對話框送出的範圍給情境斷言，回報的筆數照範圍算。
+    export_connections_encrypted: ({ path, scope }) => {
+      window.__DBKIT_CONN_EXPORT__ = { path, scope };
+      return { count: scope?.ids?.length ?? 0, redacted: 0, groups: 0, ssh: scope?.ssh_ids?.length ?? 0, rd: scope?.rd_ids?.length ?? 0 };
+    },
     list_saved_connections: () => fx.CONNECTIONS,
     // 側欄分組（v0.20 起）。預設無群組＝扁平清單，與截圖情境一致；情境可用 fx 覆寫。
     list_connection_groups: () => fx.CONN_GROUPS ?? [],

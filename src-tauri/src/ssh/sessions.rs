@@ -292,6 +292,36 @@ pub async fn save_layout_in(
     save_in(dir, &file).await
 }
 
+/// 匯入主機 + 資料夾（加密匯入檔）。單次讀寫；回傳新增的資料夾數。機密由呼叫端寫 keychain。
+///
+/// 資料夾合併規則同資料庫連線群組（`store::merge_groups`：id → 名稱）；新加入資料夾的上層也對回
+/// 本機 id，對不到就掛回根層。主機依 id upsert：匯入檔有給資料夾就套用，沒給（匯出時沒勾群組）→
+/// 既有主機維持原資料夾、新主機未分類。
+pub async fn import_in(dir: &Path, folders: Vec<SshFolder>, sessions: Vec<SshSession>) -> AppResult<usize> {
+    let mut file = load_in(dir).await?;
+    let before = file.folders.len();
+    let remap = store::merge_groups(&mut file.folders, folders, |f| f.id.as_str(), |a, b| {
+        store::same_group_name(&a.name, &b.name)
+    });
+    for f in &mut file.folders[before..] {
+        f.parent_id = f.parent_id.as_ref().and_then(|p| remap.get(p)).filter(|p| **p != f.id).cloned();
+    }
+    for s in sessions {
+        let imported = s.folder_id.as_ref().and_then(|f| remap.get(f).cloned());
+        match file.sessions.iter().position(|x| x.id == s.id) {
+            Some(i) => {
+                let folder_id = imported.or_else(|| file.sessions[i].folder_id.clone());
+                file.sessions[i] = SshSession { folder_id, ..s };
+            }
+            None => file.sessions.push(SshSession { folder_id: imported, ..s }),
+        }
+    }
+    file.version = SCHEMA_VERSION;
+    let added = file.folders.len() - before;
+    save_in(dir, &file).await?;
+    Ok(added)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,5 +499,40 @@ mod tests {
         save_layout_in(&dir, vec![], &order).await.unwrap();
         let ids: Vec<String> = load_in(&dir).await.unwrap().sessions.into_iter().map(|s| s.id).collect();
         assert_eq!(ids, ["w10", "z", "w2"], "v2 起照存檔順序，不再依名稱重排");
+    }
+
+    /// 匯入：資料夾依 id → 名稱合併、全新的接尾端（上層對回本機 id）；主機依 id upsert，
+    /// 沒帶資料夾的既有主機維持原資料夾，指向匯入檔裡不存在資料夾的歸零。
+    #[tokio::test]
+    async fn import_merges_folders_and_upserts_hosts() {
+        let dir = tmpdir();
+        let local_ops = SshFolder { id: "local-ops".into(), name: "OPS".into(), parent_id: None };
+        upsert_in(&dir, sess("a")).await.unwrap();
+        save_layout_in(&dir, vec![local_ops], &[("a".into(), Some("local-ops".into()))]).await.unwrap();
+
+        let remote_ops = SshFolder { id: "remote-ops".into(), name: "ops".into(), parent_id: None };
+        let child = SshFolder { id: "child".into(), name: "CHILD".into(), parent_id: Some("remote-ops".into()) };
+        let added = import_in(
+            &dir,
+            vec![remote_ops, child],
+            vec![
+                sess("a"),                                                    // 沒帶資料夾 → 維持
+                SshSession { folder_id: Some("remote-ops".into()), ..sess("b") }, // 同名資料夾 → 對回本機
+                SshSession { folder_id: Some("child".into()), ..sess("c") },
+                SshSession { folder_id: Some("ghost".into()), ..sess("d") },
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(added, 1, "只有 CHILD 是新資料夾");
+        let f = load_in(&dir).await.unwrap();
+        assert_eq!(f.folders.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["local-ops", "child"]);
+        assert_eq!(f.folders[1].parent_id.as_deref(), Some("local-ops"), "上層對回本機 id");
+        let fid = |id: &str| f.sessions.iter().find(|s| s.id == id).unwrap().folder_id.clone();
+        assert_eq!(fid("a").as_deref(), Some("local-ops"));
+        assert_eq!(fid("b").as_deref(), Some("local-ops"));
+        assert_eq!(fid("c").as_deref(), Some("child"));
+        assert_eq!(fid("d"), None);
+        assert_eq!(f.sessions.len(), 4, "同 id 不重複新增");
     }
 }

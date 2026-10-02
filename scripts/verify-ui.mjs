@@ -102,8 +102,20 @@ const GROUPING_CONNECTIONS = [
   { ...FX.CONNECTIONS.find((c) => c.id === "c-pg"), id: "c-pg2", name: "local-pg", host: "127.0.0.1", group_id: null },
 ];
 const GROUPING_GROUPS = [{ id: "g-legacy", name: "正式環境" }];
+// 進階匯出情境：PostgreSQL 有一個有成員的群組 + 一個空群組 + 一條未分組；prod-mysql 標成 PROD；
+// SSH 主機（PROD 資料夾）與遠端桌面（OFFICE 資料夾）沿用共用 fixtures。
+const EXPORT_CONNECTIONS = [
+  ...FX.CONNECTIONS.map((c) =>
+    c.id === "c-pg" ? { ...c, group_id: "g-pg-new" } : c.id === "c-mysql" ? { ...c, options: { prod: "1" } } : c),
+  { ...FX.CONNECTIONS.find((c) => c.id === "c-pg"), id: "c-pg2", name: "local-pg", host: "127.0.0.1", group_id: null },
+];
+const EXPORT_GROUPS = [
+  { id: "g-pg-new", name: "新群組", kind: "postgres" },
+  { id: "g-pg-empty", name: "空群組", kind: "postgres" },
+];
 const CASE_FX = {
   "sidebar-grouping-consistent": { CONNECTIONS: GROUPING_CONNECTIONS, CONN_GROUPS: GROUPING_GROUPS, RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "export-dialog-by-group": { CONNECTIONS: EXPORT_CONNECTIONS, CONN_GROUPS: EXPORT_GROUPS, RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "sidebar-scroll-reaches-last": { CONNECTIONS: MANY_CONNECTIONS, CONN_GROUPS: MANY_GROUPS },
   "ssh-terminal": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-ai-suggest": { STORAGE_SEED: SSH_STORAGE_SEED },
@@ -198,6 +210,56 @@ async function openK8sFolder(page, folder) {
 }
 
 const CASES = {
+  // ---- 進階匯出連線：照側欄分段 / 群組列出，含 SSH 主機與遠端桌面 ----
+  async "export-dialog-by-group"(page) {
+    // 用按鈕名稱找：視窗窄時工具列收成純圖示，標籤只剩 title。
+    await page.getByRole("button", { name: "匯出連線", exact: true }).first().click();
+    const dlg = page.locator('[role="dialog"]').filter({ hasText: "進階匯出連線" });
+    await dlg.waitFor({ timeout: 4000 });
+    const blocks = await dlg.locator("[data-export-block]").evaluateAll((els) => els.map((e) => e.getAttribute("data-export-block")));
+    check("匯出清單照側欄分段：資料庫各種類在前，接著 SSH 主機、遠端桌面",
+      blocks[0] === "db:mysql" && blocks.includes("db:postgres") && blocks.at(-2) === "ssh" && blocks.at(-1) === "rd", blocks.join(" | "));
+    const pgBlock = dlg.locator('[data-export-block="db:postgres"]');
+    const pgGroup = pgBlock.locator('[data-export-group="新群組"]');
+    check("PostgreSQL 段裡有「新群組」，成員在群組底下", (await pgGroup.innerText()).includes("analytics-pg"));
+    check("空群組不列出", (await dlg.locator('[data-export-group="空群組"]').count()) === 0);
+    check("SSH 主機照資料夾分組", (await dlg.locator('[data-export-block="ssh"] [data-export-group="PROD"]').innerText()).includes("web-01"));
+    check("遠端桌面照資料夾分組", (await dlg.locator('[data-export-block="rd"] [data-export-group="OFFICE"]').innerText()).includes("win-srv01"));
+    const footer = async () => (await dlg.innerText()).match(/將匯出 (\d+) \/ (\d+) 個連線/)?.slice(1).map(Number) ?? [];
+    const total = EXPORT_CONNECTIONS.length + FX.SSH_SESSIONS.sessions.length + FX.RD_SESSIONS_DEMO.sessions.length;
+    check("預設全選（資料庫 + SSH + 遠端桌面）", String(await footer()) === `${total},${total}`, String(await footer()));
+
+    // 取消整個群組 → 該段變半勾；取消整段 SSH → 兩台都不選。
+    await pgGroup.locator("label input").first().click();
+    const pgHead = pgBlock.locator("label input").first();
+    check("取消群組：PostgreSQL 段變半勾", await pgHead.evaluate((el) => el.indeterminate && !el.checked));
+    await dlg.locator('[data-export-block="ssh"] label input').first().click();
+    check("取消群組 + 整段 SSH 後的計數", (await footer())[0] === total - 1 - FX.SSH_SESSIONS.sessions.length, String(await footer()));
+    await pgHead.click(); // 半勾 → 整段勾回來
+    check("半勾的段再按一下 = 整段全選", await pgHead.evaluate((el) => el.checked && !el.indeterminate));
+
+    // 篩選群組名：只留那一組。
+    await dlg.getByPlaceholder("以名稱 / 主機 / 類型篩選").fill("office");
+    const shown = await dlg.locator("[data-export-block]").evaluateAll((els) => els.map((e) => e.getAttribute("data-export-block")));
+    check("篩選「office」：只留遠端桌面段（OFFICE 資料夾 + office-pc）",
+      shown.join() === "rd" && (await dlg.locator('[data-export-group="OFFICE"]').innerText()).includes("win-srv01"), shown.join());
+    await dlg.getByPlaceholder("以名稱 / 主機 / 類型篩選").fill("");
+
+    // 只勾 SSH 主機匯出：資料庫連線送空陣列（不是「全部」）。
+    await dlg.getByRole("button", { name: "全不選" }).click();
+    await dlg.locator('[data-export-block="ssh"] label input').first().click();
+    const pw = dlg.locator('input[type="password"]');
+    await pw.nth(0).fill("passphrase-1");
+    await pw.nth(1).fill("passphrase-1");
+    await dlg.getByRole("button", { name: "選擇位置並匯出" }).click();
+    await sleep(500);
+    const sent = await page.evaluate(() => window.__DBKIT_CONN_EXPORT__?.scope ?? null);
+    check("只勾 SSH 主機：ids / rd_ids 送空陣列、ssh_ids 送兩台",
+      !!sent && sent.ids.length === 0 && sent.rd_ids.length === 0 && sent.ssh_ids.length === FX.SSH_SESSIONS.sessions.length && sent.include_rd === true,
+      JSON.stringify(sent));
+    check("匯出完關閉對話框", (await page.locator('[role="dialog"]').filter({ hasText: "進階匯出連線" }).count()) === 0);
+  },
+
   // ---- Kubernetes ----
   async "k8s-tree-menu"(page) {
     await openK8sFolder(page, "Pods");

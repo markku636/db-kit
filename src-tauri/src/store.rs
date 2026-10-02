@@ -292,9 +292,8 @@ pub async fn upsert_in(dir: &Path, conn: PersistedConnection) -> AppResult<()> {
 
 /// 匯入連線 + 群組（加密匯入檔）。單次讀寫；回傳新增的群組數。
 ///
-/// 群組合併規則（依序）：id 相同 → 同一個群組（保留本機名稱）；否則名稱相同（不分大小寫）
-/// → 視為同一個群組、把匯入連線改掛到本機那個 id（避免側欄出現兩個「PROD」）；
-/// 都沒有 → 新群組接在尾端。
+/// 群組合併規則見 `merge_groups`；同名只認同一個連線種類的群組（側欄是「種類 > 群組」，
+/// PostgreSQL 的連線掛到 MySQL 的同名群組底下，側欄會找不到它、整筆落到「未分組」）。
 ///
 /// 連線的群組：匯入檔有給（`Some`）就套用（對回本機 id）；沒給（`None`，匯出時沒勾群組、
 /// 或 v1 檔）→ 既有連線維持原群組、新連線未分組。指向匯入檔裡不存在群組的 `group_id`
@@ -305,27 +304,14 @@ pub async fn import_in(
     conns: Vec<PersistedConnection>,
 ) -> AppResult<usize> {
     let mut file = load_file_in(dir).await?;
-    let mut remap: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut added = 0usize;
-    for g in groups {
-        let name = g.name.trim().to_lowercase();
-        let local_id = file
-            .groups
-            .iter()
-            .find(|x| x.id == g.id)
-            .or_else(|| file.groups.iter().find(|x| x.name.trim().to_lowercase() == name))
-            .map(|x| x.id.clone());
-        match local_id {
-            Some(id) => {
-                remap.insert(g.id.clone(), id);
-            }
-            None => {
-                remap.insert(g.id.clone(), g.id.clone());
-                file.groups.push(g);
-                added += 1;
-            }
-        }
-    }
+    let before = file.groups.len();
+    let remap = merge_groups(
+        &mut file.groups,
+        groups,
+        |g| g.id.as_str(),
+        |local, incoming| local.kind == incoming.kind && same_group_name(&local.name, &incoming.name),
+    );
+    let added = file.groups.len() - before;
     for conn in conns {
         let imported = conn.group_id.as_ref().and_then(|g| remap.get(g).cloned());
         match file.connections.iter().position(|c| c.id == conn.id) {
@@ -339,6 +325,43 @@ pub async fn import_in(
     file.version = SCHEMA_VERSION;
     save_file_in(dir, &file).await?;
     Ok(added)
+}
+
+/// 匯入時把匯入檔的群組 / 資料夾併進本機清單（資料庫連線、SSH 主機、遠端桌面三種側欄共用）。
+///
+/// 規則（依序）：id 相同 → 同一個群組（保留本機名稱）；否則 `same` 認定相同（同名、不分大小寫）
+/// → 視為同一個群組，匯入的成員改掛到本機那個 id（避免側欄出現兩個「PROD」）；都沒有 → 新群組
+/// 接在尾端。回傳「匯入檔 id → 本機 id」對照表；不在表裡的 id 就是匯入檔裡沒有的群組（孤兒）。
+pub fn merge_groups<G>(
+    local: &mut Vec<G>,
+    incoming: Vec<G>,
+    id_of: impl Fn(&G) -> &str,
+    same: impl Fn(&G, &G) -> bool,
+) -> std::collections::HashMap<String, String> {
+    let mut remap = std::collections::HashMap::new();
+    for g in incoming {
+        let gid = id_of(&g).to_string();
+        let local_id = local
+            .iter()
+            .find(|x| id_of(x) == gid)
+            .or_else(|| local.iter().find(|x| same(x, &g)))
+            .map(|x| id_of(x).to_string());
+        match local_id {
+            Some(id) => {
+                remap.insert(gid, id);
+            }
+            None => {
+                remap.insert(gid.clone(), gid);
+                local.push(g);
+            }
+        }
+    }
+    remap
+}
+
+/// 群組名稱比對：去頭尾空白、不分大小寫。
+pub fn same_group_name(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
 }
 
 /// 套用側欄排版：群組清單（順序＝顯示順序）+ 連線順序與歸屬，單次原子寫入。
@@ -711,6 +734,29 @@ mod tests {
         assert_eq!(f.connections[0].group_id.as_deref(), Some("g1"), "None → 維持原群組");
         assert_eq!(f.connections[1].group_id.as_deref(), Some("g2"), "Some → 套用");
         assert_eq!(f.groups.len(), 2);
+    }
+
+    /// 同名但不同種類的群組不合併：PostgreSQL 的連線若掛到 MySQL 的「新群組」，側欄就找不到它。
+    #[tokio::test]
+    async fn import_matches_group_name_within_same_kind_only() {
+        let dir = tmpdir();
+        let kinded = |id: &str, kind: &str| ConnGroup { id: id.into(), name: "新群組".into(), kind: Some(kind.into()) };
+        save_layout_in(&dir, vec![kinded("local-my", "mysql")], &[]).await.unwrap();
+        let added = import_in(
+            &dir,
+            vec![kinded("remote-pg", "postgres"), kinded("remote-my", "mysql")],
+            vec![
+                PersistedConnection { group_id: Some("remote-pg".into()), ..conn("a") },
+                PersistedConnection { group_id: Some("remote-my".into()), ..conn("b") },
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(added, 1, "只有 postgres 的那個是新群組");
+        let f = load_file_in(&dir).await.unwrap();
+        let gid = |id: &str| f.connections.iter().find(|c| c.id == id).unwrap().group_id.clone();
+        assert_eq!(gid("a").as_deref(), Some("remote-pg"));
+        assert_eq!(gid("b").as_deref(), Some("local-my"), "同種類同名 → 對回本機");
     }
 
     /// v1 舊檔（無 groups / group_id）要能照讀，全部視為未分組。
