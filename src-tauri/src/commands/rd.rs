@@ -998,10 +998,12 @@ pub async fn rd_record_stop(id: String) -> AppResult<Option<String>> {
     Ok(p.map(|p| p.to_string_lossy().into_owned()))
 }
 
-/// 在檔案總管開啟錄影資料夾（只接受錄影資料夾裡的檔案）。
+/// 在檔案總管開啟錄影 / 截圖資料夾（只接受這兩個資料夾裡的檔案）。
 #[tauri::command]
 pub async fn rd_record_reveal(path: String) -> AppResult<()> {
-    let dir = crate::rd::recording::reveal_target(&crate::rd::recording::dir()?, &path)?;
+    use crate::rd::recording;
+    let dirs: Vec<_> = [recording::dir(), recording::shots_dir()].into_iter().flatten().collect();
+    let dir = recording::reveal_target(&dirs, &path)?;
     crate::agent::open_path(&dir);
     Ok(())
 }
@@ -1071,6 +1073,23 @@ fn list_local(path: Option<&str>) -> AppResult<LocalListing> {
         None => None,
     };
     Ok(LocalListing { path: dir.to_string_lossy().into_owned(), parent, entries })
+}
+
+/// 存一張截圖（raw body = PNG；header `x-shot-name` = encodeURIComponent 過的主機名稱，只用來取檔名）。回傳路徑。
+#[tauri::command]
+pub async fn rd_screenshot_save(request: Request<'_>) -> AppResult<String> {
+    let name = request
+        .headers()
+        .get("x-shot-name")
+        .and_then(|v| v.to_str().ok())
+        .map(crate::rd::recording::decode_header_name)
+        .unwrap_or_default();
+    let bytes = match request.body() {
+        InvokeBody::Raw(b) => b.clone(),
+        InvokeBody::Json(_) => return Err(AppError::Rd("expected a raw body".into())),
+    };
+    let p = tokio::task::spawn_blocking(move || crate::rd::recording::save_shot(&name, &bytes)).await.map_err(join_err)??;
+    Ok(p.to_string_lossy().into_owned())
 }
 
 #[derive(Clone, Serialize)]

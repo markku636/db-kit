@@ -736,6 +736,14 @@ metadata:
       return r.bytes ? r.path : null;
     },
     rd_record_reveal: ({ path }) => { (window.__DBKIT_RD_REVEALS__ ??= []).push(path); return null; },
+    // 截圖：記下主機名稱（header 是 encodeURIComponent 過的）與 PNG 檔頭，回傳路徑。
+    rd_screenshot_save: (bytes, opts) => {
+      const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
+      const name = decodeURIComponent(opts?.headers?.["x-shot-name"] ?? "");
+      const path = `C:\\Users\\demo\\Pictures\\db-kit\\${name}_20261002-120000.png`;
+      (window.__DBKIT_RD_SHOTS__ ??= []).push({ name, path, bytes: u8.length, head: Array.from(u8.slice(0, 8)) });
+      return path;
+    },
     rd_set_fullscreen: ({ on }) => { window.__DBKIT_RD_FULLSCREEN__.push(on); return null; },
 
     // ── SSH 終端機 / SFTP ──────────────────────────────────────────────
@@ -1150,16 +1158,21 @@ metadata:
       out.set(name, 24);
       return out;
     };
-    const frame = () => {
+    const frame = ([r, g, b] = [20, 200, 60]) => {
       const v = new DataView(new ArrayBuffer(4 + 12 + W * H * 4));
       v.setUint8(0, 0); v.setUint16(2, 1);
       v.setUint16(4, 0); v.setUint16(6, 0); v.setUint16(8, W); v.setUint16(10, H); v.setInt32(12, 0);
       const out = new Uint8Array(v.buffer);
       // noVNC 設的像素格式是 32bpp little-endian、red shift 0 / green 8 / blue 16 → 記憶體順序 R G B X。
-      for (let i = 0; i < W * H; i++) { out[16 + i * 4] = 20; out[16 + i * 4 + 1] = 200; out[16 + i * 4 + 2] = 60; }
+      for (let i = 0; i < W * H; i++) { out[16 + i * 4] = r; out[16 + i * 4 + 1] = g; out[16 + i * 4 + 2] = b; }
       return out;
     };
-    const LEN = { 0: 20, 3: 10, 4: 8, 5: 6, 150: 10 };
+    // 情境可再塞一張整片同色的畫面（錄影期間要有畫面更新）：__DBKIT_RD_VNC_FRAME__([r, g, b])。
+    window.__DBKIT_RD_VNC_FRAME__ = (rgb) => send(frame(rgb));
+    // 250 = XVP（電源操作：[250, 0, 版本, 操作]）。
+    const LEN = { 0: 20, 3: 10, 4: 8, 5: 6, 150: 10, 250: 4 };
+    // 收到的用戶端訊息照順序記下來（SetEncodings / FramebufferUpdateRequest / XVP…），情境用來驗畫質、重新整理、電源。
+    const msgs = (window.__DBKIT_RD_VNC_MSGS__ = []);
     return (u8) => {
       const next = new Uint8Array(buf.length + u8.length);
       next.set(buf); next.set(u8, buf.length); buf = next;
@@ -1174,8 +1187,12 @@ metadata:
         else if (type === 6) { if (buf.length < 8) return; n = 8 + new DataView(buf.buffer, buf.byteOffset + 4, 4).getUint32(0); }
         else if (n === undefined) { buf = new Uint8Array(0); return; } // 不認得的擴充訊息：丟掉
         if (buf.length < n) return;
-        take(n);
-        if (type === 3 && !sentFrame) { sentFrame = true; setTimeout(() => send(frame()), 10); }
+        const m = take(n);
+        msgs.push(Array.from(m));
+        // 第一個請求、以及之後的非增量請求（工具列的「重新整理畫面」）回一張完整畫面。
+        if (type === 3 && (!sentFrame || m[1] === 0)) { sentFrame = true; setTimeout(() => send(frame()), 10); }
+        // 情境要伺服器支援電源操作（window.__DBKIT_RD_VNC_XVP__）：收到 SetEncodings 後回 XVP_INIT。
+        if (type === 2 && window.__DBKIT_RD_VNC_XVP__) send(new Uint8Array([250, 0, 1, 1]));
       }
     };
   }

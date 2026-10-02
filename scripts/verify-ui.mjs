@@ -160,6 +160,8 @@ const CASE_FX = {
   // 遠端桌面：有一台 RDP、一台 VNC（Mac）主機（rd-from-conn-string 用預設的「一台都沒有」）。
   "rd-rdp-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-vnc-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-vnc-toolbar": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-vnc-keyboard": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-cert-prompt": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rdp-file-import": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
@@ -1112,6 +1114,199 @@ const CASES = {
     const sym = (k) => ((k[4] << 24) | (k[5] << 16) | (k[6] << 8) | k[7]) >>> 0;
     check("按鍵經 rd_write 送出 KeyEvent（b）", keyEvents.some((k) => sym(k) === 0x62), JSON.stringify(keyEvents.slice(0, 4)));
     check("Ctrl+Alt+Del 經 noVNC 送出", keyEvents.some((k) => sym(k) === 0xffff));
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // VNC 工具列：顯示設定（檢視方式 / 畫質 → SetEncodings / 只看不控制 / 游標點，都存回主機）、動作（重新整理 →
+  // 非增量的畫面請求、伺服器支援 XVP 才有電源，先問過才送）、截圖（PNG 存檔）、錄影（WebM）、桌面名稱。
+  async "rd-vnc-toolbar"(page) {
+    await page.evaluate(() => { window.__DBKIT_RD_VNC_XVP__ = true; });
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("mac-mini", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => document.querySelector("[data-rd-vnc] canvas")?.width === 64, null, { timeout: 10000 }).catch(() => {});
+    await sleep(300);
+    const msgs = () => page.evaluate(() => window.__DBKIT_RD_VNC_MSGS__ ?? []);
+    const i32s = (m) => { const out = []; for (let i = 4; i + 4 <= m.length; i += 4) out.push((m[i] << 24) | (m[i + 1] << 16) | (m[i + 2] << 8) | m[i + 3]); return out; };
+    const lastEncodings = async () => i32s((await msgs()).filter((m) => m[0] === 2).at(-1) ?? []);
+    const menu = (which) => page.locator(`[data-rd-menu="${which}"]`);
+    const opt = (id) => page.locator(`[data-rd-opt="${id}"]`);
+    const action = (id) => page.locator(`[data-rd-action="${id}"]`);
+    const lastSave = () => page.evaluate(() => window.__DBKIT_RD_SESSION_SAVES__.at(-1)?.session);
+    check("工具列有顯示設定、動作、截圖、錄影", (await menu("display").count()) === 1 && (await menu("actions").count()) === 1
+      && (await page.locator("[data-rd-screenshot]").count()) === 1 && (await page.locator("[data-rd-record]").count()) === 1);
+    check("標題列帶伺服器報的桌面名稱", ((await page.locator("[data-rd-desktop-name]").textContent().catch(() => "")) ?? "").includes("demo-mac"));
+    let enc = await lastEncodings();
+    check("預設畫質平衡：JPEG 品質 6、壓縮 2", enc.includes(-32 + 6) && enc.includes(-256 + 2), JSON.stringify(enc.filter((e) => e < -20)));
+
+    // ---- 顯示設定 ----
+    await menu("display").click();
+    check("顯示設定：預設縮放、平衡、可控制、同步剪貼簿、不畫游標點",
+      (await opt("view-scale").getAttribute("aria-checked")) === "true" && (await opt("quality-balanced").getAttribute("aria-checked")) === "true"
+      && (await opt("view-only").getAttribute("aria-checked")) === "false" && (await opt("clipboard").getAttribute("aria-checked")) === "true"
+      && (await opt("dot-cursor").getAttribute("aria-checked")) === "false");
+    await opt("quality-best").click();
+    await sleep(300);
+    enc = await lastEncodings();
+    check("選最佳畫質 → 重送 SetEncodings（品質 9、壓縮 1）", enc.includes(-32 + 9) && enc.includes(-256 + 1), JSON.stringify(enc.filter((e) => e < -20)));
+    check("畫質存回主機設定", (await lastSave())?.options?.ui?.vnc_quality === "best", JSON.stringify((await lastSave())?.options?.ui));
+    await menu("display").click();
+    await opt("view-none").click();
+    await sleep(300);
+    check("原始大小存回主機設定", (await lastSave())?.options?.resize_mode === "none");
+    await menu("display").click();
+    check("選單跟著勾原始大小", (await opt("view-none").getAttribute("aria-checked")) === "true");
+    await opt("dot-cursor").click();
+    await sleep(200);
+    check("游標點存回主機設定", (await lastSave())?.options?.ui?.vnc_dot_cursor === "1");
+    await menu("display").click();
+    await opt("view-only").click();
+    await sleep(300);
+    check("只看不控制存回主機設定、送出按鍵變灰", (await lastSave())?.options?.view_only === true
+      && (await page.getByRole("button", { name: "送出按鍵", exact: true }).isDisabled()));
+    const keysBefore = (await msgs()).filter((m) => m[0] === 4).length;
+    await page.locator("[data-rd-vnc] canvas").click({ position: { x: 10, y: 10 } });
+    await page.keyboard.press("x");
+    await sleep(200);
+    check("只看不控制時按鍵不送出", (await msgs()).filter((m) => m[0] === 4).length === keysBefore);
+    await menu("display").click();
+    await opt("view-only").click();
+    await sleep(300);
+    await menu("display").click();
+    await opt("view-scale").click();
+    await sleep(300);
+
+    // ---- 動作 ----
+    const fullReqs = async () => (await msgs()).filter((m) => m[0] === 3 && m[1] === 0).length;
+    const before = await fullReqs();
+    await menu("actions").click();
+    check("伺服器支援 XVP：動作有重新開機 / 關機 / 強制重設", (await action("power_reboot").count()) === 1
+      && (await action("power_shutdown").count()) === 1 && (await action("power_reset").count()) === 1);
+    await action("refresh").click();
+    await sleep(300);
+    check("重新整理畫面 → 送非增量的 FramebufferUpdateRequest", (await fullReqs()) === before + 1, `${before} → ${await fullReqs()}`);
+    await menu("actions").click();
+    await action("power_reboot").click();
+    const confirmBtn = page.getByRole("button", { name: "重新開機", exact: true });
+    await confirmBtn.waitFor({ timeout: 3000 }).catch(() => {});
+    const xvp = async () => (await msgs()).filter((m) => m[0] === 250);
+    check("重新開機先問過", (await page.getByText(/要讓這台機器重新開機嗎/).count()) === 1 && (await xvp()).length === 0);
+    await confirmBtn.click();
+    await sleep(300);
+    check("確認後送 XVP 重新開機（版本 1、操作 3）", JSON.stringify((await xvp()).at(-1)) === JSON.stringify([250, 0, 1, 3]), JSON.stringify(await xvp()));
+
+    // ---- 截圖 ----
+    await page.locator("[data-rd-screenshot]").click();
+    await page.waitForFunction(() => (window.__DBKIT_RD_SHOTS__ ?? []).length > 0, null, { timeout: 5000 }).catch(() => {});
+    const shot = await page.evaluate(() => (window.__DBKIT_RD_SHOTS__ ?? [])[0]);
+    check("截圖存成 PNG、檔名用主機名稱", !!shot && shot.name === "mac-mini" && JSON.stringify(shot.head) === JSON.stringify([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+      && shot.bytes > 50, JSON.stringify(shot));
+    check("提示截圖存到哪裡", (await page.getByText(/截圖已存到/).count()) > 0);
+    await menu("actions").click();
+    await action("reveal_shot").click();
+    await sleep(200);
+    check("動作選單「開啟截圖資料夾」", (await page.evaluate(() => window.__DBKIT_RD_REVEALS__ ?? [])).at(-1) === shot?.path);
+
+    // ---- 錄影 ----
+    const rec = page.locator("[data-rd-record]");
+    await rec.click();
+    await page.waitForFunction(() => document.querySelector("[data-rd-record]")?.getAttribute("data-rd-record") === "on", null, { timeout: 5000 }).catch(() => {});
+    check("開始錄影 → 按鈕變停止", (await rec.getAttribute("data-rd-record")) === "on");
+    for (const rgb of [[200, 40, 40], [40, 40, 200], [200, 200, 40], [20, 200, 60]]) {
+      await page.evaluate((c) => window.__DBKIT_RD_VNC_FRAME__(c), rgb);
+      await sleep(450);
+    }
+    await rec.click();
+    await page.waitForFunction(() => document.querySelector("[data-rd-record]")?.getAttribute("data-rd-record") === "off", null, { timeout: 5000 }).catch(() => {});
+    await sleep(500);
+    const r0 = Object.values(await page.evaluate(() => window.__DBKIT_RD_RECORDINGS__ ?? {}))[0];
+    check("停止錄影 → 寫了 WebM、檔名用主機名稱", !!r0 && r0.stopped && r0.name === "mac-mini" && r0.bytes > 200
+      && JSON.stringify(r0.head) === JSON.stringify([0x1a, 0x45, 0xdf, 0xa3]), JSON.stringify(r0));
+    await menu("actions").click();
+    check("動作選單有「開啟錄影資料夾」", (await action("reveal_recording").count()) === 1);
+    await page.keyboard.press("Escape");
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // VNC 鍵盤與重連：「把剪貼簿文字送到遠端」逐字打過去；虛擬鍵盤（Shift 按住時送大寫 / 符號 keysym、放開送同一個）；
+  // 對方斷線自動重連；使用者叫對方關機後的斷線不重連。
+  async "rd-vnc-keyboard"(page) {
+    await page.evaluate(() => { window.__DBKIT_RD_VNC_XVP__ = true; });
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("mac-mini", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => document.querySelector("[data-rd-vnc] canvas")?.width === 64, null, { timeout: 10000 }).catch(() => {});
+    await sleep(300);
+    const keys = async (from = 0) => (await page.evaluate(() => window.__DBKIT_RD_VNC_MSGS__ ?? []))
+      .filter((m) => m[0] === 4).slice(from)
+      .map((m) => [m[1] === 1 ? "d" : "u", ((m[4] << 24) | (m[5] << 16) | (m[6] << 8) | m[7]) >>> 0]);
+    const syms = (ks) => ks.filter((k) => k[0] === "d").map((k) => k[1]);
+
+    // ---- 把剪貼簿文字送到遠端 ----
+    await page.evaluate(() => { window.__DBKIT_RD_LOCAL_CLIP__ = "Hi!\n中"; });
+    let n = (await keys()).length;
+    await page.getByRole("button", { name: "把剪貼簿文字送到遠端", exact: true }).click();
+    await sleep(400);
+    let got = await keys(n);
+    check("剪貼簿文字逐字打過去：大寫與 ! 包一層 Shift（照實體鍵盤打字的順序）", JSON.stringify(got) === JSON.stringify([
+      ["d", 0xffe1], ["d", 0x48], ["u", 0x48], ["u", 0xffe1], ["d", 0x69], ["u", 0x69],
+      ["d", 0xffe1], ["d", 0x21], ["u", 0x21], ["u", 0xffe1], ["d", 0xff0d], ["u", 0xff0d], ["d", 0x01004e2d], ["u", 0x01004e2d]]), JSON.stringify(got));
+
+    // ---- 虛擬鍵盤 ----
+    await page.getByRole("button", { name: "送出按鍵", exact: true }).click();
+    await page.locator("[data-rd-vk-toggle]").click();
+    const vk = page.locator("[data-rd-vk]");
+    await vk.waitFor({ timeout: 3000 }).catch(() => {});
+    check("VNC 也有虛擬鍵盤", (await vk.count()) === 1);
+    const vkKey = (sc) => vk.locator(`[data-vk-key="${sc}"]`).first();
+    n = (await keys()).length;
+    await vkKey(0x1e).click();
+    await sleep(200);
+    got = await keys(n);
+    check("虛擬鍵盤 A → 送小寫 a 按下放開", JSON.stringify(got) === JSON.stringify([["d", 0x61], ["u", 0x61]]), JSON.stringify(got));
+    n = (await keys()).length;
+    await vkKey(0x2a).click();
+    await vkKey(0x1e).click();
+    await sleep(200);
+    got = await keys(n);
+    check("Shift 按住再按 A → Shift、大寫 A，按完 Shift 自動放開", JSON.stringify(got) === JSON.stringify([["d", 0xffe1], ["d", 0x41], ["u", 0x41], ["u", 0xffe1]]), JSON.stringify(got));
+    n = (await keys()).length;
+    await vkKey(0x2a).click();
+    await vkKey(0x02).click();
+    await vkKey(0xe053).click();
+    await sleep(200);
+    got = await keys(n);
+    check("Shift + 1 → !；Delete 照送", JSON.stringify(syms(got)) === JSON.stringify([0xffe1, 0x21, 0xffff]), JSON.stringify(got));
+    await page.getByRole("button", { name: "關閉虛擬鍵盤", exact: true }).click();
+
+    // ---- 對方斷線：自動重連 ----
+    const connects = () => page.evaluate(() => window.__DBKIT_RD_CONNECTS__.length);
+    const c0 = await connects();
+    const connId = await page.evaluate(() => window.__DBKIT_RD_LAST_CONN__);
+    await page.evaluate((id) => window.__DBKIT_EMIT__("rd-conn-closed", { conn_id: id, reason: "遠端主機關閉了連線" }), connId);
+    await page.locator("[data-rd-retry]").waitFor({ timeout: 3000 }).catch(() => {});
+    check("對方斷線 → 顯示倒數自動重連", (await page.locator("[data-rd-retry]").count()) === 1);
+    await page.waitForFunction((c) => window.__DBKIT_RD_CONNECTS__.length > c, c0, { timeout: 5000 }).catch(() => {});
+    await page.waitForFunction(() => !document.querySelector("[data-rd-overlay]") && document.querySelector("[data-rd-vnc] canvas")?.width === 64, null, { timeout: 8000 }).catch(() => {});
+    check("自動重連上、畫面回來", (await connects()) === c0 + 1 && (await page.locator("[data-rd-overlay]").count()) === 0);
+
+    // ---- 叫對方關機之後斷線：不重連 ----
+    await sleep(300);
+    await page.locator('[data-rd-menu="actions"]').click();
+    await page.locator('[data-rd-action="power_shutdown"]').click();
+    const okBtn = page.getByRole("button", { name: "關機", exact: true });
+    await okBtn.waitFor({ timeout: 3000 }).catch(() => {});
+    await okBtn.click();
+    await sleep(300);
+    check("確認後送 XVP 關機（操作 2）", JSON.stringify((await page.evaluate(() => window.__DBKIT_RD_VNC_MSGS__)).filter((m) => m[0] === 250).at(-1)) === JSON.stringify([250, 0, 1, 2]));
+    const c1 = await connects();
+    const id2 = await page.evaluate(() => window.__DBKIT_RD_LAST_CONN__);
+    await page.evaluate((id) => window.__DBKIT_EMIT__("rd-conn-closed", { conn_id: id, reason: "遠端主機關閉了連線" }), id2);
+    await sleep(2500);
+    check("關機後的斷線不自動重連", (await connects()) === c1 && (await page.locator("[data-rd-retry]").count()) === 0
+      && (await page.locator('[data-rd-overlay="disconnected"]').count()) === 1);
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },

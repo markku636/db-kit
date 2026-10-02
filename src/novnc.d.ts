@@ -31,5 +31,13 @@ declare module "@novnc/novnc" {
     sendCtrlAltDel(): void;
     sendKey(keysym: number, code: string | null, down?: boolean): void;
     toDataURL(type?: string, encoderOptions?: number): string;
+    toBlob(callback: (blob: Blob | null) => void, type?: string, quality?: number): void;
+    machineShutdown(): void;
+    machineReboot(): void;
+    machineReset(): void;
+    /** 協定訊息的編碼器（RFB.messages.*，第一個參數是內部的 Websock）。 */
+    static messages: {
+      fbUpdateRequest(sock: unknown, incremental: boolean, x: number, y: number, w: number, h: number): void;
+    };
   }
 }

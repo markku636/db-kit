@@ -15,7 +15,7 @@ export interface RdViewHandle {
   /** 把本機剪貼簿文字交給遠端。 */
   paste(text: string): void;
   focus(): void;
-  /** 整張重畫（RDP 請後端重送；VNC 不需要）。 */
+  /** 整張重畫（RDP 請後端重送；VNC 向伺服器要一張完整畫面）。 */
   refresh(): void;
   desktopSize(): { w: number; h: number };
   /** 後端鍵盤 hook 攔到的系統鍵（set-1 掃描碼；擴充鍵 OR 0xE000）。 */
@@ -31,6 +31,10 @@ export interface RdViewHandle {
   /** 錄影（錄這端看到的畫面；`name` 是主機名稱，只用來取檔名）。 */
   startRecording?(name: string): Promise<void>;
   stopRecording?(): Promise<void>;
+  /** 截圖存成 PNG（`name` 只用來取檔名）；回傳存檔路徑，畫面還沒出來 → null。 */
+  screenshot?(name: string): Promise<string | null>;
+  /** VNC 的電源操作（XVP：QEMU / Proxmox / XenServer 這類虛擬機主控台才有）。 */
+  power?(op: "shutdown" | "reboot" | "reset"): void;
   /** RustDesk「輸入作業系統密碼」：叫出密碼框、打過去再按 Enter；`password` 不給 = 用這台主機存的。 */
   inputOsPassword?(password?: string): Promise<void>;
 }

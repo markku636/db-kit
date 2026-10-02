@@ -690,6 +690,7 @@ pub fn run() {
             commands::rd::rd_record_write,
             commands::rd::rd_record_stop,
             commands::rd::rd_record_reveal,
+            commands::rd::rd_screenshot_save,
             commands::rd::rd_set_fullscreen,
             agent::agent_detect,
             agent::agent_setup_terminal,

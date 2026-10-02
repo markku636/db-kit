@@ -2329,7 +2329,11 @@ export const api = {
   rdRecordStart: (name: string) => invoke<{ id: string; path: string }>("rd_record_start", { name }),
   rdRecordWrite: (id: string, bytes: Uint8Array) => invoke<void>("rd_record_write", bytes, { headers: { "x-rec-id": id } }),
   rdRecordStop: (id: string) => invoke<string | null>("rd_record_stop", { id }),
+  /** 在檔案總管開啟錄影 / 截圖資料夾（只收這兩個資料夾裡的檔案）。 */
   rdRecordReveal: (path: string) => invoke<void>("rd_record_reveal", { path }),
+  // 截圖：PNG 當 raw body，後端存進截圖資料夾（主機名稱只用來取檔名；header 只收 ASCII 所以先編碼）。回傳路徑。
+  rdScreenshotSave: (name: string, png: Uint8Array) =>
+    invoke<string>("rd_screenshot_save", png, { headers: { "x-shot-name": encodeURIComponent(name) } }),
   // 視窗層級全螢幕（WebView2 的 HTML Fullscreen API 只填滿 webview）。
   rdSetFullscreen: (on: boolean) => invoke<void>("rd_set_fullscreen", { on }),
   // 全螢幕時攔 Win / Alt+Tab / Alt+F4 / Ctrl+Esc 轉給這條連線（null = 停止）；攔到的鍵走 onRdGrabKey。

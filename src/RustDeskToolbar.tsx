@@ -1,51 +1,17 @@
 // RustDesk 連線的工具列（照官方用戶端的工具列）：切換螢幕、「顯示」選單（檢視方式 / 畫質 / 編碼 / 連線品質 /
 // 剪貼簿 / 結束後鎖定 / 鍵盤模式）、「動作」選單（Ctrl+Alt+Del / 鎖定畫面 / 封鎖輸入 / 重新啟動 / 輸入作業系統密碼 /
 // 重新整理）、檔案傳輸、聊天、錄影。依對方給的權限與對方的系統決定哪些項目出現（跟官方一樣：例如封鎖輸入只有 Windows 對方才有）。
-import { useEffect, useState, type ReactNode, type RefObject } from "react";
-import { Check, Circle, FolderSync, MessageSquare, MonitorCog, Square, Zap } from "lucide-react";
+import { useEffect, useState, type RefObject } from "react";
+import { Circle, FolderSync, MessageSquare, MonitorCog, Square, Zap } from "lucide-react";
 import { api } from "./api";
 import { useT } from "./i18n";
-import { Icon, IconButton, MenuPanel } from "./ui/index";
+import { IconButton, MenuPanel } from "./ui/index";
 import { toast, uiConfirm } from "./ui";
+import { MenuAction, MenuHeading, MenuOption, MenuSep } from "./RdMenu";
 import RdMonitorBar from "./RdMonitorBar";
 import RdOsPasswordDialog from "./RdOsPasswordDialog";
 import type { RdViewHandle } from "./rdView";
 import { canRestart, isWindowsPeer, type RdCodecPref, type RdQuality, type RustDeskPrefs, type RustDeskState } from "./rustdeskState";
-
-function MenuHeading({ children }: { children: ReactNode }) {
-  return <div className="px-3 pt-2 pb-1 text-[11px] text-fg/40 select-none">{children}</div>;
-}
-
-function MenuSep() {
-  return <div className="my-1 border-t border-fg/10" />;
-}
-
-/** 單選 / 勾選項：左邊一格放勾。 */
-function MenuOption({ checked, onClick, children, disabled, testid, role = "menuitemradio" }: {
-  checked: boolean;
-  onClick: () => void;
-  children: ReactNode;
-  disabled?: boolean;
-  testid?: string;
-  role?: "menuitemradio" | "menuitemcheckbox";
-}) {
-  return (
-    <button type="button" role={role} aria-checked={checked} disabled={disabled} data-rd-opt={testid} onClick={onClick}
-      className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80 disabled:opacity-40 disabled:pointer-events-none">
-      <span className="w-3.5 shrink-0 text-accent">{checked && <Icon icon={Check} size={13} />}</span>
-      <span className="truncate">{children}</span>
-    </button>
-  );
-}
-
-function MenuAction({ onClick, children, testid, danger }: { onClick: () => void; children: ReactNode; testid?: string; danger?: boolean }) {
-  return (
-    <button type="button" role="menuitem" data-rd-action={testid} onClick={onClick}
-      className={`block w-full text-left pl-8 pr-3 py-1.5 hover:bg-fg/10 truncate ${danger ? "text-danger" : "text-fg/80"}`}>
-      {children}
-    </button>
-  );
-}
 
 export interface RustDeskToolbarProps {
   state: RustDeskState;

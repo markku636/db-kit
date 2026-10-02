@@ -4,8 +4,9 @@
 // 分頁本身改成 fixed 蓋住整個 app（側欄、分頁列都藏起來）。WebView2 的 HTML Fullscreen API 只會填滿 webview，
 // 所以不用它。Ctrl+Alt+Enter 切換（遠端桌面客戶端的慣例）；工具列在全螢幕時縮成頂端中央的浮動條，滑到頂端才出現。
 // Ctrl+Alt+Del、Win、Alt+Tab 這些本機 OS 會先吃掉的鍵走工具列的「送出按鍵」。
-// RustDesk 的工具列另外多了切換螢幕、顯示設定、動作、檔案傳輸（RdFilesPanel）與聊天（RustDeskToolbar）；顯示偏好與「同步剪貼簿」
-// 存回已存主機的設定（下次連同一台照舊），快速連線的只記在這個分頁。RustDesk 連線被對方中斷時自動重連（rdRetry.ts）。
+// RustDesk 的工具列另外多了切換螢幕、顯示設定、動作、檔案傳輸（RdFilesPanel）與聊天（RustDeskToolbar），VNC 多了顯示設定、
+// 動作、截圖與錄影（VncToolbar）；顯示偏好與「同步剪貼簿」存回已存主機的設定（下次連同一台照舊），快速連線的只記在這個分頁。
+// RustDesk / VNC 連線被對方中斷時自動重連（rdRetry.ts）。
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import {
@@ -30,6 +31,9 @@ import VncView from "./VncView";
 import RustDeskView from "./RustDeskView";
 import RustDeskToolbar from "./RustDeskToolbar";
 import RustDeskChat from "./RustDeskChat";
+import VncToolbar from "./VncToolbar";
+import type { VncState } from "./VncView";
+import { vncPrefsFrom, vncPrefsTo, type VncPrefs } from "./vncPrefs";
 import VirtualKeyboard from "./VirtualKeyboard";
 
 // 檔案傳輸帶檔案面板（SftpPanel）與本機窗格：第一次打開時才下載。
@@ -37,7 +41,7 @@ const RdFilesPanel = lazy(() => import("./RdFilesPanel"));
 import { prefsFromUi, prefsToUi, type RdChatMsg, type RustDeskPrefs, type RustDeskState } from "./rustdeskState";
 import { useAssistant } from "./assistant";
 import { useInfoPanel } from "./infoPanelState";
-import { isRetryableClose, nextRetryDelay, RETRY_WINDOW_MS } from "./rdRetry";
+import { nextRetryDelay, RETRY_WINDOW_MS, shouldAutoRetry } from "./rdRetry";
 
 
 function errMsg(e: unknown): string {
@@ -89,9 +93,8 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   const immersiveRef = useRef(false);
   const [barShown, setBarShown] = useState(true);
   const [keysMenu, setKeysMenu] = useState<{ x: number; y: number } | null>(null);
-  // 虛擬鍵盤：RustDesk / RDP 收得了任意掃描碼（VNC 的 rawKey 只認得少數系統鍵）。
+  // 虛擬鍵盤：三種協定的 rawKey 都收 set-1 掃描碼（VNC 在 VncView 換成 keysym）。
   const [vkOpen, setVkOpen] = useState(false);
-  const vkSupported = protocol === "rustdesk" || protocol === "rdp";
   const wantFullscreen = useRef(!!tab.fullscreen || opts.ui?.fullscreen === "1");
 
   // ---- RustDesk：工具列狀態、顯示偏好、聊天 ----
@@ -116,6 +119,17 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
     if (saved && session) void saveRdSession({ ...session, options: { ...session.options, clipboard: on } });
     else setLocalClipboard(on);
   };
+  // ---- VNC：工具列狀態與顯示偏好（檢視方式 / 只看不控制 / 剪貼簿就是主機設定的那幾欄） ----
+  const [vncState, setVncState] = useState<VncState | null>(null);
+  const [localVnc, setLocalVnc] = useState<VncPrefs>(() => vncPrefsFrom(opts));
+  const savedVnc = useMemo(() => vncPrefsFrom(opts), [opts]);
+  const vncPrefs = saved ? savedVnc : localVnc;
+  const setVncPrefs = (p: VncPrefs) => {
+    if (saved && session) void saveRdSession({ ...session, options: vncPrefsTo(p, session.options) });
+    else setLocalVnc(p);
+  };
+  const viewOnly = protocol === "vnc" ? vncPrefs.viewOnly : opts.view_only;
+
   const onRdState = (s: RustDeskState | null) => {
     setRdState(s);
     if (s) setChat(s.chat);
@@ -185,8 +199,10 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   // 切到別的分頁 / 關掉分頁時離開全螢幕（視窗全螢幕是整個 app 共用的狀態）。
   useEffect(() => { if (!active && immersiveRef.current) setFullscreen(false); }, [active]);
 
-  // ---- RustDesk 斷線自動重連（rdRetry.ts；對方登入 / 登出作業系統、重新開機時連線一定會斷一下） ----
+  // ---- RustDesk / VNC 斷線自動重連（rdRetry.ts；對方登入 / 登出作業系統、重新開機時連線一定會斷一下） ----
   const retryRef = useRef<{ since: number; delay: number; timer: number } | null>(null);
+  /** 使用者從工具列叫對方關機了：這條連線斷了不自動重連。 */
+  const noRetryRef = useRef(false);
   const [retrying, setRetrying] = useState(false);
   /** 下一次自動重連的時間（倒數用）；正在撥號時 null。 */
   const [retryAt, setRetryAt] = useState<number | null>(null);
@@ -227,12 +243,13 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
     if (connIdRef.current !== connId) return;
     viewRef.current?.disconnected();
     setStatus("disconnected", { error: reason, info: null });
-    if (protocol === "rustdesk" && isRetryableClose(reason)) scheduleRetry();
+    if (!noRetryRef.current && shouldAutoRetry(protocol, reason, opts.vnc_shared)) scheduleRetry();
   };
 
   const connect = async () => {
     const connId = crypto.randomUUID();
     connIdRef.current = connId;
+    noRetryRef.current = false;
     setStatus("connecting", { error: null, info: null });
     viewRef.current?.reset(connId);
     // 提問事件在 invoke 之前就掛上（憑證 / 密碼可能在 rdConnect 回來前就要答）。經 SSH 時 SSH 那段的提問同一個 conn id。
@@ -355,6 +372,8 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   const label = session ? rdSessionLabel(session) : tab.title;
   const endpoint = session ? rdEndpoint(session) : "";
   const unencrypted = status === "connected" && info && !info.encrypted;
+  const desktopName = protocol === "vnc" && status === "connected" && vncState?.desktopName && vncState.desktopName !== label
+    ? vncState.desktopName : "";
   const dot = status === "connected" ? "bg-success" : status === "connecting" ? "bg-warning animate-pulse" : "bg-danger";
 
   const toolbarButtons = (
@@ -366,6 +385,10 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
           sessionId={saved ? session?.id ?? null : null}
           filesOpen={filesOpen} onFiles={() => setFilesOpen((o) => !o)} />
       )}
+      {protocol === "vnc" && status === "connected" && vncState && (
+        <VncToolbar state={vncState} prefs={vncPrefs} onPrefs={setVncPrefs} view={viewRef} hostName={label}
+          onShutdown={() => { noRetryRef.current = true; }} />
+      )}
       {unencrypted && (
         <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded bg-warning/15 text-warning text-[11px] shrink-0"
           title={info?.security === "rustdesk-id"
@@ -374,9 +397,9 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
           <Icon icon={ShieldAlert} size={11} />{t("未加密")}
         </span>
       )}
-      <IconButton icon={Keyboard} label={t("送出按鍵")} disabled={status !== "connected" || opts.view_only}
+      <IconButton icon={Keyboard} label={t("送出按鍵")} disabled={status !== "connected" || viewOnly}
         onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setKeysMenu({ x: r.left, y: r.bottom + 4 }); }} />
-      <IconButton icon={ClipboardPaste} label={t("把剪貼簿文字送到遠端")} disabled={status !== "connected" || opts.view_only}
+      <IconButton icon={ClipboardPaste} label={t("把剪貼簿文字送到遠端")} disabled={status !== "connected" || viewOnly}
         onClick={() => void pasteClipboard()} />
       {protocol === "rdp" && (
         <IconButton icon={RefreshCw} label={t("重新整理畫面")} disabled={status !== "connected"} onClick={() => viewRef.current?.refresh()} />
@@ -407,6 +430,7 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
           <span className={`w-2 h-2 rounded-full shrink-0 ${dot}`} aria-hidden />
           <span className="truncate text-fg/80" title={label}>{label}</span>
           <span className="text-fg/35 shrink-0">{rdProtocolLabel(protocol)}{endpoint ? ` · ${endpoint}` : ""}</span>
+          {desktopName && <span className="text-fg/35 truncate min-w-0" title={desktopName} data-rd-desktop-name="">· {desktopName}</span>}
           <div className="ml-auto flex items-center gap-0.5">{toolbarButtons}</div>
         </div>
       )}
@@ -424,8 +448,8 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
 
       <div className="relative flex-1 min-h-0 flex">
         {protocol === "vnc" ? (
-          <VncView ref={viewRef} resizeMode={opts.resize_mode} viewOnly={opts.view_only} shared={opts.vnc_shared}
-            clipboard={opts.clipboard} />
+          <VncView ref={viewRef} resizeMode={vncPrefs.view} viewOnly={vncPrefs.viewOnly} shared={opts.vnc_shared}
+            clipboard={vncPrefs.clipboard} quality={vncPrefs.quality} dotCursor={vncPrefs.dotCursor} onState={setVncState} />
         ) : protocol === "rdp" ? (
           <RdpView ref={viewRef} resizeMode={opts.resize_mode} viewOnly={opts.view_only} clipboard={opts.clipboard} isPaneShortcut={isFullscreenShortcut} />
         ) : (
@@ -458,7 +482,9 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
               </div>
               {error && <div className="text-xs text-danger break-words whitespace-pre-wrap" data-rd-error="">{error}</div>}
               {retrying && (
-                <div className="text-xs text-fg/50">{t("對方登入、登出作業系統或重新開機時，RustDesk 連線會中斷一下，會自動連回來。")}</div>
+                <div className="text-xs text-fg/50">{protocol === "rustdesk"
+                  ? t("對方登入、登出作業系統或重新開機時，RustDesk 連線會中斷一下，會自動連回來。")
+                  : t("對方重新開機或網路斷了一下時會自動連回來。")}</div>
               )}
               {status === "error" && protocol === "vnc" && (
                 <div className="text-xs text-fg/50">{t("連 Mac 時若畫面一直是黑的，請到 Mac 的「系統設定 → 一般 → 共享 → 螢幕共享」確認已開啟，並允許這個帳號。")}</div>
@@ -480,24 +506,20 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
         )}
       </div>
 
-      {vkOpen && vkSupported && status === "connected" && !opts.view_only && (
+      {vkOpen && status === "connected" && !viewOnly && (
         <VirtualKeyboard rustdesk={protocol === "rustdesk"} onKey={(sc, down) => viewRef.current?.rawKey(sc, down)}
           onClose={() => { setVkOpen(false); viewRef.current?.focus(); }} />
       )}
 
       {keysMenu && (
         <MenuPanel x={keysMenu.x} y={keysMenu.y} minW={160} onClose={() => setKeysMenu(null)}>
-          {vkSupported && (
-            <>
-              <button type="button" data-rd-vk-toggle="" aria-pressed={vkOpen}
-                onClick={() => { setKeysMenu(null); setVkOpen((o) => !o); viewRef.current?.focus(); }}
-                className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
-                <span className="w-3.5 shrink-0 text-accent">{vkOpen && <Icon icon={Check} size={13} />}</span>
-                {t("虛擬鍵盤")}
-              </button>
-              <div className="my-1 border-t border-fg/10" />
-            </>
-          )}
+          <button type="button" data-rd-vk-toggle="" aria-pressed={vkOpen}
+            onClick={() => { setKeysMenu(null); setVkOpen((o) => !o); viewRef.current?.focus(); }}
+            className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+            <span className="w-3.5 shrink-0 text-accent">{vkOpen && <Icon icon={Check} size={13} />}</span>
+            {t("虛擬鍵盤")}
+          </button>
+          <div className="my-1 border-t border-fg/10" />
           {COMBOS.map((c) => (
             <button key={c.id} type="button" data-rd-combo={c.id}
               onClick={() => { setKeysMenu(null); viewRef.current?.combo(c.id); viewRef.current?.focus(); }}
