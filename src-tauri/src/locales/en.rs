@@ -1712,6 +1712,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "經中繼伺服器連線失敗：{m}" => "Connecting through the relay server failed: {m}",
         "用 RustDesk ID 連線不能經 SSH 主機轉接：請改填對方電腦的 IP 位址（Direct IP），或取消「經 SSH 主機連線」" => "A RustDesk ID connection can't go through an SSH host: enter the other computer's IP address instead (Direct IP), or turn off \"Connect through SSH host\"",
         "VNC 握手逾時" => "The VNC handshake timed out",
+        "VNC 伺服器無法建立 TLS 連線" => "The VNC server could not set up the TLS connection",
+        "伺服器的 VeNCrypt 沒有支援的子型別（{list}）；可以在主機設定把認證方式改成「VNC 密碼」" => "The server's VeNCrypt offers no supported subtype ({list}); you can set the authentication method to “VNC password” in the host settings",
         "無法切換全螢幕：{e}" => "Could not toggle full screen: {e}",
         "遠端桌面連線已關閉" => "The remote desktop connection is closed",
         "同時開啟的遠端桌面連線已達上限（{n}）" => "Too many remote desktop connections open at once (limit {n})",

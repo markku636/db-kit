@@ -620,7 +620,9 @@ metadata:
       const finish = () => {
         if (protocol === "vnc") {
           rdVnc.set(connId, rdVncServer(send));
-          return { conn_id: connId, protocol, width: 0, height: 0, security: "vnc-auth", encrypted: false };
+          // 情境可改後端報的安全層（window.__DBKIT_RD_VNC_SEC__ = { security, encrypted }，例如 VeNCrypt 匿名 TLS）。
+          const sec = window.__DBKIT_RD_VNC_SEC__ ?? { security: "vnc-auth", encrypted: false };
+          return { conn_id: connId, protocol, width: 0, height: 0, ...sec };
         }
         if (protocol === "rustdesk") {
           // 輔助程式的「登入成功」事件（[型別 1][JSON]）；影像是 VP9 位元流，假後端做不出來，不送。

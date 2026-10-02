@@ -569,6 +569,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "經中繼伺服器連線失敗：{m}" => "Kết nối qua máy chủ chuyển tiếp thất bại: {m}",
         "用 RustDesk ID 連線不能經 SSH 主機轉接：請改填對方電腦的 IP 位址（Direct IP），或取消「經 SSH 主機連線」" => "Kết nối bằng ID RustDesk không thể đi qua máy chủ SSH: hãy nhập địa chỉ IP của máy bên kia (Direct IP), hoặc bỏ chọn “Kết nối qua máy chủ SSH”",
         "VNC 握手逾時" => "Bắt tay VNC quá thời gian chờ",
+        "VNC 伺服器無法建立 TLS 連線" => "Máy chủ VNC không thiết lập được kết nối TLS",
+        "伺服器的 VeNCrypt 沒有支援的子型別（{list}）；可以在主機設定把認證方式改成「VNC 密碼」" => "VeNCrypt của máy chủ không có kiểu con nào được hỗ trợ ({list}); có thể đổi phương thức xác thực thành “mật khẩu VNC” trong cài đặt máy",
         "無法切換全螢幕：{e}" => "Không chuyển được chế độ toàn màn hình: {e}",
         "遠端桌面連線已關閉" => "Kết nối máy tính từ xa đã đóng",
         "同時開啟的遠端桌面連線已達上限（{n}）" => "Đã đạt giới hạn số kết nối máy tính từ xa mở cùng lúc ({n})",

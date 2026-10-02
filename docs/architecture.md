@@ -128,8 +128,9 @@ src-tauri/src/
 │   ├── runtime.rs     RdRuntime：活著的連線 / 待答提示（AppState.rd）；連線任務只收 RdCtl（輸入 / ack / resize / 組合鍵 / 關閉）
 │   ├── transport.rs   撥號：直連 TCP，或經已存 SSH 主機的 direct-tcpip（中間墊 duplex，讓 IronRDP 拿到 Sync stream）
 │   ├── keygrab.rs     全螢幕時攔 Win / Alt+Tab / Alt+F4 / Ctrl+Esc（Windows WH_KEYBOARD_LL；只在前景是自己、且有目標連線時才吞鍵）
-│   ├── vnc/           RFB：auth.rs 代做認證（None / VNC 密碼 / Apple ARD / VeNCrypt Plain，密碼不進 JS）、synth.rs 對前端 noVNC 的假握手、pump.rs 位元組轉送
-│   ├── rdp/           IronRDP：mod.rs 握手（TLS → 憑證 TOFU `rd_known_certs.json` → CredSSP / NTLM）與工作階段迴圈（專屬執行緒 + current-thread runtime：ironrdp-async 的 future 不是 Send）；frames.rs 差異區塊合併 + ack 反壓；input.rs 8-byte 輸入紀錄 → fast-path；clipboard.rs CLIPRDR 文字剪貼簿（backend 回呼排動作、迴圈執行）
+│   ├── cert.rs        伺服器憑證 TOFU（`rd_known_certs.json`，RDP 與 VNC 的 X509 共用）：第一次問、記住 SHA-256 指紋、之後比對
+│   ├── vnc/           RFB：auth.rs 代做認證（None / VNC 密碼 / Apple ARD / VeNCrypt，密碼不進 JS）；VeNCrypt 的 TLS 子型別換掉底下的串流——tls_anon.rs 自己做的最小 TLS 1.2 用戶端（ECDH_anon + X25519 + AES-CBC，rustls 不支援匿名 TLS）、tls_x509.rs rustls + 驗握手簽章 + 憑證 TOFU；synth.rs 對前端 noVNC 的假握手、pump.rs 位元組轉送
+│   ├── rdp/           IronRDP：mod.rs 握手（TLS → 憑證 TOFU（rd/cert.rs）→ CredSSP / NTLM）與工作階段迴圈（專屬執行緒 + current-thread runtime：ironrdp-async 的 future 不是 Send）；frames.rs 差異區塊合併 + ack 反壓；input.rs 8-byte 輸入紀錄 → fast-path；clipboard.rs CLIPRDR 文字剪貼簿（backend 回呼排動作、迴圈執行）
 │   ├── rustdesk.rs    RustDesk 相容連線：啟動獨立的 AGPL 輔助程式 dbk-rustdesk-bridge（repo 的 rustdesk-bridge/，Tauri externalBin；發版才合併 tauri.bridge.conf.json），stdin / stdout 轉送；不連結它的程式碼，本體維持 MIT
 │   └── it_tests.rs    Docker TigerVNC / xrdp / RustDesk 整合測試（#[ignore]；映像在 tests/docker/ 與 rustdesk-bridge/tests/docker/）
 ├── scheduler.rs       排程備份

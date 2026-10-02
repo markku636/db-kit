@@ -13,6 +13,8 @@ import type { Catalog } from "../i18n";
 const vi: Catalog = {
   // ---- Giao diện chung (nút, nhãn, thông báo) ----
   "## AI 總結": "## Tóm tắt AI",
+  "未驗證伺服器": "Chưa xác minh máy chủ",
+  "自動：有帳號時優先用 macOS 的 Apple 認證（ARD）；伺服器支援 VeNCrypt 時走 TLS 加密；否則 VNC 密碼": "Tự động: có tài khoản thì ưu tiên xác thực Apple của macOS (ARD); máy chủ hỗ trợ VeNCrypt thì mã hóa TLS; nếu không thì dùng mật khẩu VNC",
   "要強制重設這台機器嗎？就像按下實體的重設鍵，還沒存的資料會不見。": "Buộc đặt lại máy này? Giống như nhấn nút reset trên máy — dữ liệu chưa lưu sẽ bị mất.",
   "要讓這台機器重新開機嗎？連線會中斷。": "Khởi động lại máy này? Kết nối sẽ bị ngắt.",
   "要讓這台機器關機嗎？連線會中斷。": "Tắt máy này? Kết nối sẽ bị ngắt.",
@@ -20,6 +22,7 @@ const vi: Catalog = {
   "重新開機…": "Khởi động lại…",
   "強制重設": "Buộc đặt lại",
   "強制重設…": "Buộc đặt lại…",
+  "畫面與鍵盤內容有加密，但這種加密（匿名 TLS）沒辦法確認對方就是那台主機。要防中間人攻擊，請在 VNC 伺服器設定 X509 憑證，或改成「經 SSH 主機連線」。": "Nội dung màn hình và bàn phím đã được mã hóa, nhưng kiểu mã hóa này (TLS ẩn danh) không xác nhận được bên kia đúng là máy đó. Để chống tấn công xen giữa, hãy cấu hình chứng chỉ X509 trên máy chủ VNC hoặc chuyển sang “kết nối qua máy SSH”.",
   "畫質（伺服器支援 Tight / JPEG 編碼時）": "Chất lượng (khi máy chủ hỗ trợ Tight / JPEG)",
   "開啟截圖資料夾": "Mở thư mục ảnh chụp màn hình",
   "電源": "Nguồn",
@@ -1634,7 +1637,6 @@ const vi: Catalog = {
   "同步剪貼簿": "Đồng bộ bộ nhớ tạm",
   "存進系統鑰匙圈，不寫入設定檔": "Lưu trong kho khóa của hệ thống, không ghi vào tệp cấu hình",
   "安全性": "Bảo mật",
-  "自動：有帳號時優先用 macOS 的 Apple 認證（ARD），否則 VNC 密碼": "Tự động: có tài khoản thì ưu tiên xác thực Apple của macOS (ARD), nếu không thì dùng mật khẩu VNC",
   "色深": "Độ sâu màu",
   "刪除遠端桌面": "Xóa máy tính từ xa",
   "刪除遠端桌面「{name}」？儲存的密碼也會一併移除。": "Xóa máy tính từ xa \"{name}\"? Mật khẩu đã lưu cũng sẽ bị xóa.",
@@ -1735,6 +1737,7 @@ const vi: Catalog = {
   "RDP（Windows 遠端桌面）": "RDP (Máy tính từ xa của Windows)",
   "RustDesk 密碼": "Mật khẩu RustDesk",
   "這個環境的瀏覽器元件不支援 {what}，無法顯示 RustDesk 畫面。": "Thành phần trình duyệt trong môi trường này không hỗ trợ {what}, nên không thể hiển thị màn hình RustDesk.",
+  "VeNCrypt 加密（TLS）": "Mã hóa VeNCrypt (TLS)",
   "VeNCrypt 帳號 + 密碼": "Tài khoản + mật khẩu VeNCrypt",
   "VNC / Mac 螢幕共享": "VNC / Chia sẻ màn hình của Mac",
   "VNC 密碼": "Mật khẩu VNC",

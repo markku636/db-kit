@@ -10,7 +10,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import {
-  Check, ClipboardPaste, Expand, Keyboard, Loader2, PlugZap, RefreshCw, Shrink, ShieldAlert, Unplug,
+  Check, ClipboardPaste, Expand, Keyboard, Loader2, PlugZap, RefreshCw, Shrink, ShieldAlert, ShieldQuestion, Unplug,
 } from "lucide-react";
 import { api, onRdAuthPrompt, onRdCertPrompt, onRdConnClosed, onRdGrabKey, onSshAuthPrompt, onSshHostKeyPrompt } from "./api";
 import { useT } from "./i18n";
@@ -372,6 +372,8 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   const label = session ? rdSessionLabel(session) : tab.title;
   const endpoint = session ? rdEndpoint(session) : "";
   const unencrypted = status === "connected" && info && !info.encrypted;
+  // VNC 匿名 TLS：有加密，但沒有憑證可以確認對方身分（擋得住竊聽、擋不住中間人）。
+  const anonTls = status === "connected" && !!info?.encrypted && info.security.startsWith("vencrypt-tls-");
   const desktopName = protocol === "vnc" && status === "connected" && vncState?.desktopName && vncState.desktopName !== label
     ? vncState.desktopName : "";
   const dot = status === "connected" ? "bg-success" : status === "connecting" ? "bg-warning animate-pulse" : "bg-danger";
@@ -395,6 +397,13 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
             ? t("這條連線的畫面與鍵盤內容沒有加密：沒有填 ID 伺服器的 Key（或填錯），無法驗證對方的身分。在主機設定填入正確的 Key 就會加密。")
             : t("這條連線的畫面與鍵盤內容沒有加密；建議在主機設定改成「經 SSH 主機連線」。")} data-rd-unencrypted="">
           <Icon icon={ShieldAlert} size={11} />{t("未加密")}
+        </span>
+      )}
+      {anonTls && (
+        <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded bg-fg/10 text-fg/60 text-[11px] shrink-0"
+          title={t("畫面與鍵盤內容有加密，但這種加密（匿名 TLS）沒辦法確認對方就是那台主機。要防中間人攻擊，請在 VNC 伺服器設定 X509 憑證，或改成「經 SSH 主機連線」。")}
+          data-rd-anon-tls="">
+          <Icon icon={ShieldQuestion} size={11} />{t("未驗證伺服器")}
         </span>
       )}
       <IconButton icon={Keyboard} label={t("送出按鍵")} disabled={status !== "connected" || viewOnly}

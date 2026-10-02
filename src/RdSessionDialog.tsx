@@ -354,10 +354,11 @@ export default function RdSessionDialog({ open, initial, folders, defaultFolderI
           )}
           {protocol === "vnc" && (
             <Section title={t("安全性")}>
-              <Field label={t("認證方式")} hint={t("自動：有帳號時優先用 macOS 的 Apple 認證（ARD），否則 VNC 密碼")}>
+              <Field label={t("認證方式")} hint={t("自動：有帳號時優先用 macOS 的 Apple 認證（ARD）；伺服器支援 VeNCrypt 時走 TLS 加密；否則 VNC 密碼")}>
                 <Select value={vncSecurity} onChange={(e) => setVncSecurity(e.target.value as VncSecurity)}>
                   <option value="auto">{t("自動")}</option>
                   <option value="ard">{t("Apple 螢幕共享（帳號 + 密碼）")}</option>
+                  <option value="tls">{t("VeNCrypt 加密（TLS）")}</option>
                   <option value="vnc">{t("VNC 密碼")}</option>
                   <option value="plain">{t("VeNCrypt 帳號 + 密碼")}</option>
                   <option value="none">{t("不需認證")}</option>

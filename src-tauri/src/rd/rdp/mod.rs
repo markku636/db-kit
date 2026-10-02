@@ -8,7 +8,9 @@
 //! 握手：TCP → X.224 協商（`connect_begin`）→ TLS（`ironrdp_tls::upgrade`）→ 憑證 TOFU →
 //! CredSSP / NLA（`connect_finalize`，只做 NTLM；Kerberos 需要 KDC，`NoKdc` 直接回錯）→ 進入 ActiveStage。
 
-pub mod cert;
+/// 憑證 TOFU 跟 VNC 共用（`rd::cert`）；舊路徑 `rdp::cert` 保留。
+pub use super::cert;
+pub use super::cert::CertUi;
 pub mod clipboard;
 pub mod frames;
 pub mod input;
@@ -16,7 +18,6 @@ pub mod input;
 use std::sync::Arc;
 use std::time::Instant;
 
-use async_trait::async_trait;
 use ironrdp::connector::connection_activation::ConnectionActivationState;
 use ironrdp::connector::sspi::generator::NetworkRequest;
 use ironrdp::connector::{self as connector, ConnectionResult, ConnectorError, ConnectorErrorKind, ConnectorResult};
@@ -34,10 +35,9 @@ use tokio::sync::mpsc;
 use self::cert::{CertQuestion, CertStore};
 use self::frames::{DirtyRegion, FramePacer, Rect};
 use self::input::InputState;
-use super::runtime::{CertDecision, RdCtl};
+use super::runtime::RdCtl;
 use super::transport::{BoxStream, Dialed};
 use crate::error::{AppError, AppResult};
-use crate::ssh::known_hosts::HostKeyStatus;
 
 /// 一次 RDP 連線需要的參數（憑證已從 keychain / 對話框補好）。
 #[derive(Clone)]
@@ -71,12 +71,6 @@ impl std::fmt::Debug for RdpParams {
             .field("nla", &self.nla)
             .finish()
     }
-}
-
-/// 憑證對話框（GUI 發事件等回答；測試用固定答案）。
-#[async_trait]
-pub trait CertUi: Send + Sync {
-    async fn ask(&self, q: CertQuestion) -> CertDecision;
 }
 
 type Framed = TokioFramed<BoxStream>;
@@ -226,19 +220,7 @@ async fn handshake(
         .map_err(|e| AppError::Rd(tf!("TLS 握手失敗：{e}", e = e)))?;
 
     // 憑證 TOFU：在 CredSSP 之前。拒絕就直接斷，NTLM 回應不會送給冒牌伺服器。
-    let q = CertQuestion::from_cert(&p.host, p.port, &cert);
-    let status = store.check(&q.host_id, &q.fingerprint).map_err(|e| {
-        AppError::Rd(tf!("無法讀取已信任的遠端桌面憑證清單：{e}", e = e))
-    })?;
-    if status != HostKeyStatus::Known {
-        match ui.ask(CertQuestion { status: status.clone(), ..q.clone() }).await {
-            CertDecision::AcceptSave => store
-                .record(&q.host_id, &q.fingerprint)
-                .map_err(|e| AppError::Rd(tf!("無法記住憑證：{e}", e = e)))?,
-            CertDecision::AcceptOnce => {}
-            CertDecision::Reject => return Err(AppError::RdCancelled),
-        }
-    }
+    cert::check_tofu(store, ui, CertQuestion::from_cert(&p.host, p.port, &cert)).await?;
 
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut conn);
     let security = if conn.should_perform_credssp() { "nla" } else { "tls" };

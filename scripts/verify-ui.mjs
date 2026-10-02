@@ -161,6 +161,7 @@ const CASE_FX = {
   "rd-rdp-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-vnc-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-vnc-toolbar": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-vnc-encryption": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-vnc-keyboard": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-cert-prompt": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rdp-file-import": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
@@ -1172,6 +1173,44 @@ const CASES = {
     await overlay.getByRole("button", { name: "重新連線", exact: true }).click();
     await page.waitForFunction(() => window.__DBKIT_RD_CONNECTS__.length >= 2, null, { timeout: 3000 }).catch(() => {});
     check("按「重新連線」重撥", await page.evaluate(() => window.__DBKIT_RD_CONNECTS__.length >= 2));
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // VNC 加密：主機設定可以指定「VeNCrypt 加密（TLS）」；連上後依後端報的安全層顯示徽章——
+  // 匿名 TLS 標「未驗證伺服器」（有加密、沒驗身分），X509 不標，明文標「未加密」。
+  async "rd-vnc-encryption"(page) {
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("mac-mini", { exact: true }).first().click({ button: "right" });
+    await page.getByRole("button", { name: "編輯…", exact: true }).click();
+    await page.getByRole("button", { name: /進階設定/ }).click();
+    const sel = page.locator("select").filter({ has: page.locator('option[value="tls"]') });
+    check("認證方式有「VeNCrypt 加密（TLS）」", (await sel.count()) === 1
+      && ((await sel.locator('option[value="tls"]').textContent()) ?? "").includes("VeNCrypt 加密"));
+    await sel.selectOption("tls");
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await sleep(300);
+    check("存成 vnc_security = tls", (await page.evaluate(() => window.__DBKIT_RD_SESSION_SAVES__.at(-1)?.session?.options?.vnc_security)) === "tls");
+
+    const open = async (sec) => {
+      await page.evaluate((s) => { window.__DBKIT_RD_VNC_SEC__ = s; }, sec);
+      await tree.getByText("mac-mini", { exact: true }).first().dblclick();
+      await page.waitForFunction(() => document.querySelector("[data-rd-vnc] canvas")?.width === 64, null, { timeout: 10000 }).catch(() => {});
+      await sleep(200);
+      const r = { anon: await page.locator("[data-rd-anon-tls]").count(), plain: await page.locator("[data-rd-unencrypted]").count() };
+      await page.getByRole("button", { name: "中斷連線", exact: true }).first().click();
+      await sleep(200);
+      return r;
+    };
+    let r = await open({ security: "vencrypt-tls-vnc", encrypted: true });
+    check("匿名 TLS：標「未驗證伺服器」、不標未加密", r.anon === 1 && r.plain === 0, JSON.stringify(r));
+    await page.evaluate(() => { window.__DBKIT_RD_VNC_SEC__ = { security: "vencrypt-x509-vnc", encrypted: true }; });
+    await page.getByRole("button", { name: "重新連線", exact: true }).first().click().catch(() => {});
+    await page.waitForFunction(() => document.querySelector("[data-rd-vnc] canvas")?.width === 64 && !document.querySelector("[data-rd-overlay]"), null, { timeout: 10000 }).catch(() => {});
+    await sleep(200);
+    r = { anon: await page.locator("[data-rd-anon-tls]").count(), plain: await page.locator("[data-rd-unencrypted]").count() };
+    check("X509：兩種徽章都沒有", r.anon === 0 && r.plain === 0, JSON.stringify(r));
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },

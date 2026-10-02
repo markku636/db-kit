@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! docker build -t dbkit-vnc-it src-tauri/tests/docker/vnc
-//! docker run -d --name dbkit-vnc -p 5901:5901 -p 5902:5902 dbkit-vnc-it       # TigerVNC：5901 VNC 密碼、5902 免認證
+//! docker run -d --name dbkit-vnc -p 5901-5905:5901-5905 dbkit-vnc-it          # TigerVNC：5901 VNC 密碼、5902 免認證、
+//!                                                                              # 5903 匿名 TLS + 密碼、5904 X509、5905 匿名 TLS 免認證
 //! docker build -t dbkit-xrdp-it src-tauri/tests/docker/xrdp
 //! docker run -d --name dbkit-xrdp -p 3390:3389 dbkit-xrdp-it                  # xrdp（TLS，帳號 dbkit / dbkit123）
 //! cargo test --no-default-features --features remote-desktop --lib rd::it_tests -- --ignored
@@ -118,6 +119,168 @@ mod vnc {
         }
         let si = &got[18..];
         assert_eq!((u16::from_be_bytes([si[0], si[1]]), u16::from_be_bytes([si[2], si[3]])), (800, 600));
+        ctl_tx.send(RdCtl::Close).unwrap();
+        assert_eq!(task.await.unwrap(), None);
+    }
+
+    // ---- VeNCrypt TLS ----
+
+    use crate::rd::cert::{CertQuestion, CertStore, CertUi};
+    use crate::rd::runtime::CertDecision;
+    use crate::rd::vnc::auth::{negotiate, TlsTrust, VncAuthOutcome};
+    use crate::ssh::known_hosts::{HostKeyStatus, KnownHostsStore};
+
+    /// 憑證對話框：固定回答，記下被問了哪些。
+    struct CertAnswer {
+        decision: CertDecision,
+        asked: parking_lot::Mutex<Vec<CertQuestion>>,
+    }
+    #[async_trait]
+    impl CertUi for CertAnswer {
+        async fn ask(&self, q: CertQuestion) -> CertDecision {
+            self.asked.lock().push(q);
+            self.decision
+        }
+    }
+    fn answer(decision: CertDecision) -> CertAnswer {
+        CertAnswer { decision, asked: parking_lot::Mutex::new(Vec::new()) }
+    }
+    fn temp_store() -> CertStore {
+        let d = std::env::temp_dir().join(format!("dbkit-vnc-it-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        KnownHostsStore::at(d.join("rd_known_certs.json"))
+    }
+
+    async fn tls(
+        port: u16,
+        pref: VncSecurityPref,
+        c: Option<VncCreds>,
+        store: &CertStore,
+        ui: &dyn CertUi,
+    ) -> crate::error::AppResult<(crate::rd::transport::BoxStream, VncAuthOutcome)> {
+        let h = host("DBKIT_VNC_IT_HOST");
+        let d = dial_direct(&h, port, T).await.unwrap();
+        let trust = TlsTrust { host: h, port, store, ui };
+        tokio::time::timeout(T, negotiate(d.stream, pref, c, &NoAsk, &trust)).await.expect("握手逾時").map_err(|f| f.error)
+    }
+
+    /// TigerVNC 預設（TLSVnc + VncAuth）：自動挑加密的那條，TLS 裡面做 VNC 密碼，之後的 RFB 照常走。
+    #[tokio::test]
+    #[ignore]
+    async fn vnc_auto_prefers_anonymous_tls() {
+        let store = temp_store();
+        let ui = answer(CertDecision::Reject);
+        let (mut s, out) = tls(5903, VncSecurityPref::Auto, creds("dbkit123"), &store, &ui).await.unwrap();
+        assert_eq!(out.security, "vencrypt-tls-vnc");
+        assert!(out.encrypted);
+        assert_eq!(server_init_size(&mut s).await, (720, 400));
+        assert!(ui.asked.lock().is_empty(), "匿名 TLS 沒有憑證可問");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn vnc_tls_wrong_password_is_auth_error() {
+        let store = temp_store();
+        let ui = answer(CertDecision::Reject);
+        let e = tls(5903, VncSecurityPref::Tls, creds("nope"), &store, &ui).await.err().unwrap();
+        assert!(matches!(e, AppError::RdAuth(_)), "{e:?}");
+    }
+
+    /// 指定「VNC 密碼」：伺服器同時給 VncAuth 時照指定的走明文（使用者的退路）。
+    #[tokio::test]
+    #[ignore]
+    async fn vnc_explicit_password_skips_tls() {
+        let store = temp_store();
+        let ui = answer(CertDecision::Reject);
+        let (_, out) = tls(5903, VncSecurityPref::Vnc, creds("dbkit123"), &store, &ui).await.unwrap();
+        assert_eq!(out.security, "vnc-auth");
+        assert!(!out.encrypted);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn vnc_tls_none_without_password() {
+        let store = temp_store();
+        let ui = answer(CertDecision::Reject);
+        let (mut s, out) = tls(5905, VncSecurityPref::Auto, None, &store, &ui).await.unwrap();
+        assert_eq!(out.security, "vencrypt-tls-none");
+        assert_eq!(server_init_size(&mut s).await, (600, 400));
+    }
+
+    /// X509：第一次問憑證（記住）、第二次不問、指紋變了問「已變更」、拒絕就取消（密碼沒送出去）。
+    #[tokio::test]
+    #[ignore]
+    async fn vnc_x509_trust_on_first_use() {
+        let store = temp_store();
+        let save = answer(CertDecision::AcceptSave);
+        let (mut s, out) = tls(5904, VncSecurityPref::Auto, creds("dbkit123"), &store, &save).await.unwrap();
+        assert_eq!(out.security, "vencrypt-x509-vnc");
+        assert!(out.encrypted);
+        assert_eq!(server_init_size(&mut s).await, (720, 480));
+        let asked = save.asked.lock().clone();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].status, HostKeyStatus::New);
+        assert!(asked[0].subject.contains("dbkit-vnc-it"), "{}", asked[0].subject);
+        assert!(asked[0].fingerprint.starts_with("SHA256:"));
+        let fp = asked[0].fingerprint.clone();
+        drop(s);
+
+        let again = answer(CertDecision::Reject);
+        tls(5904, VncSecurityPref::Auto, creds("dbkit123"), &store, &again).await.unwrap();
+        assert!(again.asked.lock().is_empty(), "記住的憑證不再問");
+
+        let other = temp_store();
+        other.record(&format!("{}:5904", host("DBKIT_VNC_IT_HOST")), "SHA256:not-this-one").unwrap();
+        let reject = answer(CertDecision::Reject);
+        let e = tls(5904, VncSecurityPref::Auto, creds("dbkit123"), &other, &reject).await.err().unwrap();
+        assert!(matches!(e, AppError::RdCancelled), "{e:?}");
+        let asked = reject.asked.lock().clone();
+        assert!(matches!(&asked[0].status, HostKeyStatus::Changed { .. }));
+        assert_eq!(asked[0].fingerprint, fp);
+    }
+
+    /// 完整路徑經匿名 TLS：pump 對前端假握手，前端收到的是 TLS 裡面的真 ServerInit，之後再要畫面也拿得到。
+    #[tokio::test]
+    #[ignore]
+    async fn vnc_pump_relays_over_tls() {
+        let store = temp_store();
+        let ui = answer(CertDecision::Reject);
+        let (stream, _) = tls(5903, VncSecurityPref::Auto, creds("dbkit123"), &store, &ui).await.unwrap();
+        let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
+        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let sink: pump::Sink = Arc::new(move |b| {
+            let _ = out_tx.send(b);
+        });
+        let task = tokio::spawn(pump::run(stream, None, ctl_rx, sink));
+        let mut got = Vec::new();
+        while got.len() < 12 {
+            got.extend(recv(&mut out_rx).await);
+        }
+        ctl_tx.send(RdCtl::Write(b"RFB 003.008\n".to_vec())).unwrap();
+        while got.len() < 14 {
+            got.extend(recv(&mut out_rx).await);
+        }
+        ctl_tx.send(RdCtl::Write(vec![1])).unwrap();
+        while got.len() < 18 {
+            got.extend(recv(&mut out_rx).await);
+        }
+        ctl_tx.send(RdCtl::Write(vec![1])).unwrap(); // ClientInit（shared）
+        while got.len() < 18 + 24 {
+            got.extend(recv(&mut out_rx).await);
+        }
+        let si = got[18..].to_vec();
+        assert_eq!((u16::from_be_bytes([si[0], si[1]]), u16::from_be_bytes([si[2], si[3]])), (720, 400));
+        let name_len = u32::from_be_bytes([si[20], si[21], si[22], si[23]]) as usize;
+        while got.len() < 18 + 24 + name_len {
+            got.extend(recv(&mut out_rx).await);
+        }
+        // 要一小塊完整畫面：伺服器在 TLS 裡回 FramebufferUpdate（type 0）。
+        let before = got.len();
+        ctl_tx.send(RdCtl::Write(vec![3, 0, 0, 0, 0, 0, 0, 16, 0, 16])).unwrap();
+        while got.len() == before {
+            got.extend(recv(&mut out_rx).await);
+        }
+        assert_eq!(got[before], 0, "FramebufferUpdate");
         ctl_tx.send(RdCtl::Close).unwrap();
         assert_eq!(task.await.unwrap(), None);
     }

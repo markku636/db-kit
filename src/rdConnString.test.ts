@@ -144,6 +144,9 @@ describe("parseRdString：VNC（RFC 7869）", () => {
     expect(sec("30")).toBe("ard");
     expect(sec("19")).toBe("plain");
     expect(sec("VeNCrypt")).toBe("plain");
+    expect(sec("TLSVnc")).toBe("tls");
+    expect(sec("X509None")).toBe("tls");
+    expect(sec("TLSPlain")).toBe("plain");
     const p = parseRdString("vnc://h?SecurityType=16")!;
     expect(p.options.vnc_security).toBeUndefined();
     expect(p.warnings).toEqual(["不支援的 VNC 安全類型（SecurityType=16），改用自動"]);

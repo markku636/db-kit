@@ -14,10 +14,11 @@ export type RdProtocol = "rdp" | "vnc" | "rustdesk";
 export type RdResizeMode = "scale" | "remote" | "none";
 
 /**
- * VNC 認證偏好。`auto` = 依伺服器提供的類型挑最好的（有帳號優先 ARD，其次 VeNCrypt Plain、VNC 密碼、None）。
+ * VNC 認證偏好。`auto` = 依伺服器提供的類型挑最好的（有帳號優先 ARD；伺服器有 VeNCrypt 就走 TLS 加密；其次 VNC 密碼、None）。
  * `ard` 是 macOS 螢幕共享（Apple Remote Desktop，type 30，需要 Mac 帳號 + 密碼）。
+ * `tls` = 一定要 VeNCrypt 加密（匿名 TLS 或 X509 憑證）；`plain` = VeNCrypt 帳號 + 密碼（有 TLS 就套 TLS）。
  */
-export type VncSecurity = "auto" | "none" | "vnc" | "ard" | "plain";
+export type VncSecurity = "auto" | "none" | "vnc" | "ard" | "plain" | "tls";
 
 /** 連線選項。全部有預設值（舊檔 / 前端漏欄位都能讀）；`ui` 是前端自己的偏好，後端只存。 */
 export interface RdOptions {
@@ -110,9 +111,9 @@ export interface RdConnInfo {
   protocol: RdProtocol;
   width: number;
   height: number;
-  /** 實際採用的安全層：`nla` / `tls` / `rdp` / `vnc-none` / `vnc-auth` / `ard` / `vencrypt-plain` / `rustdesk-direct`（Direct IP）/ `rustdesk-ssh` / `rustdesk-secure`（經 ID 伺服器、已加密）/ `rustdesk-id`（經 ID 伺服器、未加密）。 */
+  /** 實際採用的安全層：`nla` / `tls` / `rdp` / `vnc-none` / `vnc-auth` / `ard` / `vencrypt-plain` / `vencrypt-tls-*`（VNC 匿名 TLS）/ `vencrypt-x509-*`（VNC 憑證 TLS）/ `rustdesk-direct`（Direct IP）/ `rustdesk-ssh` / `rustdesk-secure`（經 ID 伺服器、已加密）/ `rustdesk-id`（經 ID 伺服器、未加密）。 */
   security: string;
-  /** 畫面內容是否加密（VNC 除了 TLS 類型外都是明文）。 */
+  /** 畫面內容是否加密（VNC 只有 VeNCrypt 的 TLS / X509 子型別有加密）。 */
   encrypted: boolean;
 }
 

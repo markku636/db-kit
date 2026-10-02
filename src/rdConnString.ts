@@ -340,7 +340,9 @@ function vncSecurity(v: string): VncSecurity | null {
     case "1": case "none": return "none";
     case "2": case "vnc": case "vncauth": return "vnc";
     case "30": case "ard": return "ard";
-    case "19": case "vencrypt": case "plain": return "plain";
+    case "19": case "vencrypt": case "plain": case "tlsplain": case "x509plain": return "plain";
+    // TigerVNC 的 SecurityTypes 名稱：VeNCrypt 的 TLS / X509 子型別 → 一定要加密。
+    case "tls": case "x509": case "tlsvnc": case "tlsnone": case "x509vnc": case "x509none": return "tls";
     default: return null;
   }
 }

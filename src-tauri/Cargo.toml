@@ -115,6 +115,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 arboard = { version = "3", default-features = false, optional = true }
 # 遠端桌面 VNC：macOS 螢幕共享的 ARD 認證（Diffie-Hellman）要大數運算；其餘（DES / AES / MD5）沿用上面既有的 crate。
 num-bigint = { version = "0.4", optional = true }
+# VNC 的 VeNCrypt 匿名 TLS（rd/vnc/tls_anon.rs，自己實作的 TLS 1.2 ECDH_anon）：X25519 金鑰交換、HMAC（PRF 與紀錄層 MAC）。
+# 兩個都已在依賴樹裡（russh / RustCrypto），不會多下載。X509 子型別走上面的 rustls（ring）。
+curve25519-dalek = { version = "5", optional = true }
+hmac = { version = "0.12", optional = true }
 # RDP fast-path 事件容器（ironrdp-input 的回傳型別）。
 smallvec = { version = "1", optional = true }
 # Excel (.xlsx) 匯出：純 Rust（內含 zip + miniz_oxide，無 C / 系統相依），跨平台可打包。
@@ -238,7 +242,7 @@ docker = ["dep:reqwest", "dep:serde_yaml", "dep:sha1"]
 # remote-desktop：分頁內嵌的 RDP（IronRDP）與 VNC（前端 noVNC，後端代做 RFB 認證）。純 Rust、無 NASM 相依
 # （winscard 會以 cc 編 bundled zlib，MinGW gcc 即可）。隨 default 開；slim CLI 排除。
 rdp = ["dep:ironrdp", "dep:ironrdp-tokio", "dep:ironrdp-tls", "dep:x509-cert", "dep:rustls", "dep:smallvec"]
-vnc = ["dep:num-bigint"]
+vnc = ["dep:num-bigint", "dep:curve25519-dalek", "dep:hmac", "dep:sha1", "dep:rustls", "dep:x509-cert"]
 remote-desktop = ["rdp", "vnc"]
 
 # Release 瘦身（保守版）：

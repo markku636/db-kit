@@ -165,10 +165,10 @@ impl RdUi {
     }
 }
 
-#[cfg(feature = "rdp")]
+#[cfg(any(feature = "rdp", feature = "vnc"))]
 #[async_trait]
-impl crate::rd::rdp::CertUi for RdUi {
-    async fn ask(&self, q: crate::rd::rdp::cert::CertQuestion) -> CertDecision {
+impl crate::rd::cert::CertUi for RdUi {
+    async fn ask(&self, q: crate::rd::cert::CertQuestion) -> CertDecision {
         let (status, old) = match &q.status {
             HostKeyStatus::Changed { old } => ("changed", Some(old.clone())),
             _ => ("new", None),
@@ -610,19 +610,23 @@ async fn connect_vnc(
 ) -> AppResult<Started> {
     use crate::rd::vnc::{auth, pump};
     let s = &r.session;
-    let pref = match s.options.vnc_security {
+    let mut pref = match s.options.vnc_security {
         VncSecurity::Auto => auth::VncSecurityPref::Auto,
         VncSecurity::None => auth::VncSecurityPref::None,
         VncSecurity::Vnc => auth::VncSecurityPref::Vnc,
         VncSecurity::Ard => auth::VncSecurityPref::Ard,
         VncSecurity::Plain => auth::VncSecurityPref::Plain,
+        VncSecurity::Tls => auth::VncSecurityPref::Tls,
     };
     let mut creds = r
         .password
         .clone()
         .map(|p| auth::VncCreds { username: s.username.clone(), password: p });
     let mut error: Option<String> = None;
-    for attempt in 0..MAX_AUTH_TRIES {
+    // 「自動」的匿名 TLS 跟伺服器談不攏（舊的伺服器）：改走不加密的再連一次（不算一次認證失敗）；那次也不行就回這個錯。
+    let mut tls_failure: Option<AppError> = None;
+    let mut attempt = 0;
+    while attempt < MAX_AUTH_TRIES {
         if let Some(e) = error.take() {
             // 上一次被拒：重問（帶錯誤訊息；有帳號的就再要帳號）。
             let need_user = !s.username.is_empty() || creds.as_ref().is_some_and(|c| !c.username.is_empty());
@@ -632,20 +636,23 @@ async fn connect_vnc(
             remember(&r.origin, &a);
             creds = Some(auth::VncCreds { username: a.username, password: a.password });
         }
-        let Dialed { mut stream, ssh, .. } = dial(app, state, conn_id, s).await?;
+        let Dialed { stream, ssh, .. } = dial(app, state, conn_id, s).await?;
         let ask = VncAsk { ui, username: s.username.clone(), answered: parking_lot::Mutex::new(None) };
+        // VeNCrypt X509：伺服器憑證跟 RDP 一樣 TOFU（同一個已信任清單，記在 host:port 底下）。
+        let store = crate::rd::cert::default_store();
+        let trust = auth::TlsTrust { host: s.host.clone(), port: s.effective_port(), store: &store, ui };
         let res = tokio::time::timeout(
             s.options.connect_timeout() + PROMPT_TIMEOUT,
-            auth::client_handshake(&mut stream, pref, creds.clone(), &ask),
+            auth::negotiate(stream, pref, creds.clone(), &ask, &trust),
         )
         .await
-        .unwrap_or_else(|_| Err(AppError::Rd(t!("VNC 握手逾時").into())));
+        .unwrap_or_else(|_| Err(AppError::Rd(t!("VNC 握手逾時").into()).into()));
         if let Some(a) = ask.answered.lock().take() {
             remember(&r.origin, &a);
             creds = Some(auth::VncCreds { username: a.username, password: a.password });
         }
         match res {
-            Ok(out) => {
+            Ok((stream, out)) => {
                 let info = RdConnInfo {
                     conn_id: conn_id.to_string(),
                     protocol: RdProtocol::Vnc,
@@ -663,12 +670,22 @@ async fn connect_vnc(
                 });
                 return Ok(Started { info, ctl: ctl_tx, closed: closed_rx, task, password: None });
             }
-            Err(e) => {
+            Err(f) => {
                 if let Some(h) = ssh {
                     h.close().await;
                 }
-                match e {
-                    AppError::RdAuth(msg) if attempt + 1 < MAX_AUTH_TRIES => error = Some(msg),
+                if f.anon_tls_failed && pref == auth::VncSecurityPref::Auto {
+                    tls_failure = Some(f.error);
+                    pref = auth::VncSecurityPref::AutoWithoutTls;
+                    continue;
+                }
+                match f.error {
+                    AppError::RdAuth(msg) if attempt + 1 < MAX_AUTH_TRIES => {
+                        error = Some(msg);
+                        attempt += 1;
+                    }
+                    // 不加密的那條也走不通（伺服器只給 TLS）：回報原本的 TLS 錯誤，比較看得出是怎麼回事。
+                    AppError::Rd(_) if tls_failure.is_some() => return Err(tls_failure.unwrap()),
                     e => return Err(e),
                 }
             }

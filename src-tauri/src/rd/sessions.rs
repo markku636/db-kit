@@ -56,6 +56,8 @@ pub enum VncSecurity {
     Vnc,
     Ard,
     Plain,
+    /// VeNCrypt 加密（TLS / X509 子型別）。
+    Tls,
 }
 
 /// 連線選項。全部 `#[serde(default)]`：舊檔 / 前端漏欄位都能讀。`ui` 是前端偏好，後端只存。

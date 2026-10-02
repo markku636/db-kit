@@ -1,14 +1,17 @@
 //! 對真正 VNC（RFB）伺服器的 client 側握手 + 認證。
 //!
-//! 支援四種認證：
+//! 支援的認證：
 //! - **None**（RFB security type 1）：不需要憑證。
 //! - **VNC Authentication**（type 2）：DES challenge-response。密碼截 / 補到 8 bytes、
 //!   每個 byte 位元反轉後當 DES 金鑰，加密 16 bytes 挑戰後送回。
 //! - **Apple Remote Desktop**（type 30）：Diffie-Hellman 交換出共享密鑰，取其 MD5 當
 //!   AES-128 金鑰，把「帳號 + 密碼」各 64 bytes 的 128-byte 區塊以 AES-128-ECB 加密後，
 //!   連同 client 公鑰一起送出。
-//! - **VeNCrypt-Plain**（type 19 + subtype 256）：明文帳密（外層應套 TLS，但本模組只做
-//!   Plain 子型別，`encrypted` 一律回 `false`，是否加密由上層傳輸決定）。
+//! - **VeNCrypt**（type 19）：先協商子型別——
+//!   - TLSNone / TLSVnc / TLSPlain（257–259）：匿名 TLS（[`super::tls_anon`]），TLS 裡面再做 None / VNC 密碼 / 帳密；
+//!   - X509None / X509Vnc / X509Plain（260–262）：憑證 TLS（[`super::tls_x509`]，憑證 TOFU），同上；
+//!   - Plain（256）：明文帳密、None（1）/ VNC 密碼（2）：沒有 TLS。
+//!   這些都要換掉底下的串流，所以對外入口是吃下串流、回傳（可能套了 TLS 的）串流的 [`negotiate`]。
 //!
 //! 版本協商：讀伺服器 `RFB xxx.yyy\n` 後取 `min(server, 3.8)`；Apple 的 `3.889` 視為 `3.8`。
 //! - `3.3`：伺服器直接以 u32 指定唯一 security type（無清單）。
@@ -25,7 +28,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::{tls_anon, tls_x509};
 use crate::error::{AppError, AppResult};
+use crate::rd::cert::{CertStore, CertUi};
+use crate::rd::transport::BoxStream;
 
 // ---- 對外型別 ----
 
@@ -33,7 +39,7 @@ use crate::error::{AppError, AppResult};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VncSecurityPref {
-    /// 自動：依是否有帳號決定優先序（見 [`client_handshake`]）。
+    /// 自動：依是否有帳號決定優先序（見 `choose_security` / `choose_subtype`）；伺服器有 VeNCrypt 就優先走 TLS。
     Auto,
     /// 強制 None（type 1）。
     None,
@@ -41,8 +47,13 @@ pub enum VncSecurityPref {
     Vnc,
     /// 強制 Apple Remote Desktop（type 30）。
     Ard,
-    /// 強制 VeNCrypt-Plain（type 19 / subtype 256）。
+    /// 強制 VeNCrypt 帳號 + 密碼（type 19；有 X509Plain / TLSPlain 就套 TLS，沒有才用不加密的 Plain 256）。
     Plain,
+    /// 強制 VeNCrypt 加密（type 19，只接受 TLS / X509 子型別）。
+    Tls,
+    /// 內部用：「自動」的匿名 TLS 握手失敗後重連用——跟舊版的「自動」一樣不優先 VeNCrypt。不會出現在設定檔裡。
+    #[serde(skip)]
+    AutoWithoutTls,
 }
 
 /// 一組帳密。密碼只活在記憶體。
@@ -65,9 +76,10 @@ pub trait VncCredSource: Send + Sync {
 /// 握手 + 認證成功後的結果摘要。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VncAuthOutcome {
-    /// 實際成功的認證方式：`"vnc-none"` / `"vnc-auth"` / `"ard"` / `"vencrypt-plain"`。
+    /// 實際成功的認證方式：`"vnc-none"` / `"vnc-auth"` / `"ard"` / `"vencrypt-plain"`，
+    /// 或套了 TLS 的 `"vencrypt-tls-none|vnc|plain"`（匿名 TLS）/ `"vencrypt-x509-none|vnc|plain"`（憑證 TLS）。
     pub security: &'static str,
-    /// 這條連線本身是否加密。以上四種在本模組層級皆為 `false`。
+    /// 這條連線本身是否加密：只有 TLS / X509 子型別是 `true`。
     pub encrypted: bool,
     /// 伺服器回報的 RFB 版本（未經 clamp 的原始值，例如 Apple 為 `(3, 889)`）。
     pub server_version: (u32, u32),
@@ -80,20 +92,115 @@ const SEC_VNC: u8 = 2;
 const SEC_VENCRYPT: u8 = 19;
 const SEC_ARD: u8 = 30;
 
-/// VeNCrypt 的 Plain 子型別。
+/// VeNCrypt 子型別（TigerVNC `rfb/Security.h`）。1 / 2 是 VeNCrypt 清單裡也會出現的 None / VNC 密碼。
+const VE_NONE: u32 = 1;
+const VE_VNC: u32 = 2;
 const VENCRYPT_PLAIN: u32 = 256;
+const VE_TLS_NONE: u32 = 257;
+const VE_TLS_VNC: u32 = 258;
+const VE_TLS_PLAIN: u32 = 259;
+const VE_X509_NONE: u32 = 260;
+const VE_X509_VNC: u32 = 261;
+const VE_X509_PLAIN: u32 = 262;
+
+/// TLS 裡面接著做的認證。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubAuth {
+    None,
+    Vnc,
+    Plain,
+}
+
+/// 握手走到哪：已經完成，或 VeNCrypt 選了 TLS 子型別、要先把串流換成 TLS 再做 TLS 裡面的認證。
+enum Stage {
+    Done(VncAuthOutcome),
+    Tls { x509: bool, auth: SubAuth, minor: u32, server_version: (u32, u32), security: &'static str },
+}
+
+/// [`negotiate`] 的失敗：多帶一個「匿名 TLS 握手本身失敗」的旗標。
+/// 舊的伺服器（例如沒有 X25519 的 GnuTLS）跟我們的匿名 TLS 談不攏時，「自動」可以改走 VNC 密碼再連一次
+/// （以前「自動」本來就走 VNC 密碼）；指定了加密的就不退。
+#[derive(Debug)]
+pub struct NegotiateError {
+    pub error: AppError,
+    pub anon_tls_failed: bool,
+}
+
+impl From<AppError> for NegotiateError {
+    fn from(error: AppError) -> Self {
+        Self { error, anon_tls_failed: false }
+    }
+}
+
+/// X509 子型別的憑證 TOFU 要的東西（`host` / `port` = 使用者設定的目標，指紋記在 `host:port` 底下）。
+pub struct TlsTrust<'a> {
+    pub host: String,
+    pub port: u16,
+    pub store: &'a CertStore,
+    pub ui: &'a dyn CertUi,
+}
 
 // ---- 對外主流程 ----
 
-/// 對真正的 RFB 伺服器完成 client 側握手 + 認證。
+/// 對真正的 RFB 伺服器完成 client 側握手 + 認證，回傳之後要用的串流（VeNCrypt 選了 TLS 子型別時已套好 TLS）。
 ///
 /// `initial` 為上層預先提供的帳密（可能只有密碼、或都沒有）；缺少必要憑證時才會呼叫 `ask`。
+pub async fn negotiate(
+    mut s: BoxStream,
+    pref: VncSecurityPref,
+    initial: Option<VncCreds>,
+    ask: &dyn VncCredSource,
+    trust: &TlsTrust<'_>,
+) -> Result<(BoxStream, VncAuthOutcome), NegotiateError> {
+    match handshake_stage(&mut s, pref, &initial, ask).await? {
+        Stage::Done(out) => Ok((s, out)),
+        Stage::Tls { x509, auth, minor, server_version, security } => {
+            let mut t = if x509 {
+                tls_x509::connect(s, &trust.host, trust.port, trust.store, trust.ui).await?
+            } else {
+                tls_anon::connect(s)
+                    .await
+                    .map_err(|error| NegotiateError { error, anon_tls_failed: true })?
+                    .0
+            };
+            match auth {
+                SubAuth::None => {}
+                SubAuth::Vnc => {
+                    let c = ensure_creds(&initial, ask, false).await?;
+                    do_vnc_auth(&mut t, &c.password).await?;
+                }
+                SubAuth::Plain => {
+                    let c = ensure_creds(&initial, ask, true).await?;
+                    send_plain(&mut t, &c).await?;
+                }
+            }
+            read_security_result(&mut t, minor).await?;
+            Ok((t, VncAuthOutcome { security, encrypted: true, server_version }))
+        }
+    }
+}
+
+/// 不會用到 TLS 的握手（單元測試用：假伺服器只提供明文的認證方式）。
+#[cfg(test)]
 pub async fn client_handshake<S: AsyncRead + AsyncWrite + Unpin + Send>(
     s: &mut S,
     pref: VncSecurityPref,
     initial: Option<VncCreds>,
     ask: &dyn VncCredSource,
 ) -> AppResult<VncAuthOutcome> {
+    match handshake_stage(s, pref, &initial, ask).await? {
+        Stage::Done(out) => Ok(out),
+        Stage::Tls { .. } => Err(AppError::Rd("TLS subtype needs negotiate()".into())),
+    }
+}
+
+/// 握手到「完成」或「要開始 TLS」為止。
+async fn handshake_stage<S: AsyncRead + AsyncWrite + Unpin + Send>(
+    s: &mut S,
+    pref: VncSecurityPref,
+    initial: &Option<VncCreds>,
+    ask: &dyn VncCredSource,
+) -> AppResult<Stage> {
     // 1) 版本協商。
     let server_version = read_server_version(s).await?;
     let minor = negotiated_minor(server_version);
@@ -111,31 +218,63 @@ pub async fn client_handshake<S: AsyncRead + AsyncWrite + Unpin + Send>(
     }
 
     // 5) 依選定型別執行認證，並在需要時讀 SecurityResult。
+    let done = |sec| Ok(Stage::Done(outcome(sec, server_version)));
     match chosen {
         SEC_NONE => {
             // None：3.8 仍會送 SecurityResult；3.3 / 3.7 不送。
             if minor >= 8 {
                 read_security_result(s, minor).await?;
             }
-            Ok(outcome("vnc-none", server_version))
+            done("vnc-none")
         }
         SEC_VNC => {
-            let creds = ensure_creds(&initial, ask, false).await?;
+            let creds = ensure_creds(initial, ask, false).await?;
             do_vnc_auth(s, &creds.password).await?;
             // VNC Auth 在 3.3 / 3.7 / 3.8 皆送 SecurityResult。
             read_security_result(s, minor).await?;
-            Ok(outcome("vnc-auth", server_version))
+            done("vnc-auth")
         }
         SEC_ARD => {
-            let creds = ensure_creds(&initial, ask, true).await?;
+            let creds = ensure_creds(initial, ask, true).await?;
             do_ard_auth(s, &creds).await?;
             read_security_result(s, minor).await?;
-            Ok(outcome("ard", server_version))
+            done("ard")
         }
         SEC_VENCRYPT => {
-            let creds = ensure_creds(&initial, ask, true).await?;
-            do_vencrypt_plain(s, &creds, minor).await?;
-            Ok(outcome("vencrypt-plain", server_version))
+            let sub = vencrypt_choose(s, pref, initial.as_ref()).await?;
+            let tls = |x509, auth, security| {
+                Ok(Stage::Tls { x509, auth, minor, server_version, security })
+            };
+            let stage = match sub {
+                VE_TLS_NONE => tls(false, SubAuth::None, "vencrypt-tls-none"),
+                VE_TLS_VNC => tls(false, SubAuth::Vnc, "vencrypt-tls-vnc"),
+                VE_TLS_PLAIN => tls(false, SubAuth::Plain, "vencrypt-tls-plain"),
+                VE_X509_NONE => tls(true, SubAuth::None, "vencrypt-x509-none"),
+                VE_X509_VNC => tls(true, SubAuth::Vnc, "vencrypt-x509-vnc"),
+                VE_X509_PLAIN => tls(true, SubAuth::Plain, "vencrypt-x509-plain"),
+                VENCRYPT_PLAIN => {
+                    let creds = ensure_creds(initial, ask, true).await?;
+                    send_plain(s, &creds).await?;
+                    read_security_result(s, minor).await?;
+                    return done("vencrypt-plain");
+                }
+                VE_VNC => {
+                    let creds = ensure_creds(initial, ask, false).await?;
+                    do_vnc_auth(s, &creds.password).await?;
+                    read_security_result(s, minor).await?;
+                    return done("vnc-auth");
+                }
+                _ => {
+                    // VE_NONE
+                    read_security_result(s, minor).await?;
+                    return done("vnc-none");
+                }
+            };
+            // TLS / X509：伺服器先回一個 byte（1 = 可以開始 TLS 握手）。
+            if read_u8(s).await? != 1 {
+                return Err(AppError::Rd(t!("VNC 伺服器無法建立 TLS 連線").to_string()));
+            }
+            stage
         }
         // choose_security 只會回上述四種。
         other => Err(AppError::Rd(tf!(
@@ -241,14 +380,18 @@ fn choose_security(
         VncSecurityPref::Vnc => require(SEC_VNC, "VNC Authentication"),
         VncSecurityPref::Ard => require(SEC_ARD, "Apple Remote Desktop"),
         VncSecurityPref::Plain => require(SEC_VENCRYPT, "VeNCrypt-Plain"),
-        VncSecurityPref::Auto => {
+        VncSecurityPref::Tls => require(SEC_VENCRYPT, "VeNCrypt TLS"),
+        VncSecurityPref::Auto | VncSecurityPref::AutoWithoutTls => {
             let has_username = initial.map_or(false, |c| !c.username.is_empty());
-            // 有帳號：ARD → VeNCrypt-Plain → VNC → None。
-            // 無帳號：VNC → None → ARD（ARD 之後再向使用者要帳號）。
-            let order: &[u8] = if has_username {
-                &[SEC_ARD, SEC_VENCRYPT, SEC_VNC, SEC_NONE]
-            } else {
-                &[SEC_VNC, SEC_NONE, SEC_ARD]
+            // 有帳號：ARD → VeNCrypt → VNC → None。
+            // 無帳號：VeNCrypt → VNC → None → ARD（ARD 之後再向使用者要帳號）。
+            // VeNCrypt 排在 VNC 密碼前面：伺服器兩種都給時（TigerVNC 預設 TLSVnc + VncAuth）走加密的那條。
+            // 匿名 TLS 談不攏之後的重連（AutoWithoutTls）：VeNCrypt 排最後，只有它可選時才用。
+            let order: &[u8] = match (pref, has_username) {
+                (VncSecurityPref::Auto, true) => &[SEC_ARD, SEC_VENCRYPT, SEC_VNC, SEC_NONE],
+                (VncSecurityPref::Auto, false) => &[SEC_VENCRYPT, SEC_VNC, SEC_NONE, SEC_ARD],
+                (_, true) => &[SEC_ARD, SEC_VNC, SEC_NONE, SEC_VENCRYPT],
+                (_, false) => &[SEC_VNC, SEC_NONE, SEC_ARD, SEC_VENCRYPT],
             };
             order
                 .iter()
@@ -262,6 +405,63 @@ fn choose_security(
                 })
         }
     }
+}
+
+/// 從 VeNCrypt 子型別清單挑一個。加密的優先，X509（驗得到伺服器身分）優先於匿名 TLS；
+/// 同一層裡看手上有什麼：有帳號 → 帳密（Plain），有密碼 → VNC 密碼，都沒有 → 不需認證的（免得白問一次密碼）。
+fn choose_subtype(pref: VncSecurityPref, offered: &[u32], initial: Option<&VncCreds>) -> Option<u32> {
+    let has_user = initial.is_some_and(|c| !c.username.is_empty());
+    let has_pw = initial.is_some_and(|c| !c.password.is_empty());
+    let encrypted: &[u32] = if has_user {
+        &[VE_X509_PLAIN, VE_TLS_PLAIN, VE_X509_VNC, VE_TLS_VNC, VE_X509_NONE, VE_TLS_NONE]
+    } else if has_pw {
+        &[VE_X509_VNC, VE_TLS_VNC, VE_X509_NONE, VE_TLS_NONE, VE_X509_PLAIN, VE_TLS_PLAIN]
+    } else {
+        &[VE_X509_NONE, VE_TLS_NONE, VE_X509_VNC, VE_TLS_VNC, VE_X509_PLAIN, VE_TLS_PLAIN]
+    };
+    let plain: &[u32] = if has_user { &[VENCRYPT_PLAIN, VE_VNC, VE_NONE] } else { &[VE_VNC, VE_NONE, VENCRYPT_PLAIN] };
+    let anon = [VE_TLS_NONE, VE_TLS_VNC, VE_TLS_PLAIN];
+    let order: Vec<u32> = match pref {
+        VncSecurityPref::Plain => vec![VE_X509_PLAIN, VE_TLS_PLAIN, VENCRYPT_PLAIN],
+        VncSecurityPref::Tls => encrypted.to_vec(),
+        VncSecurityPref::AutoWithoutTls => {
+            encrypted.iter().filter(|t| !anon.contains(t)).chain(plain).copied().collect()
+        }
+        _ => encrypted.iter().chain(plain).copied().collect(),
+    };
+    order.into_iter().find(|t| offered.contains(t))
+}
+
+/// VeNCrypt：版本 0.2 → 子型別清單 → 送出選定的子型別。回傳選了哪個。
+async fn vencrypt_choose<S: AsyncRead + AsyncWrite + Unpin>(
+    s: &mut S,
+    pref: VncSecurityPref,
+    initial: Option<&VncCreds>,
+) -> AppResult<u32> {
+    // 伺服器送 VeNCrypt 版本 [major, minor]；我們回應要用的版本 0.2。
+    let mut ver = [0u8; 2];
+    read_exact(s, &mut ver).await?;
+    write_all(s, &[0, 2]).await?;
+    // 版本 ack：0 = OK。
+    if read_u8(s).await? != 0 {
+        return Err(AppError::Rd(t!("伺服器不接受 VeNCrypt 0.2").to_string()));
+    }
+    // 子型別清單：u8 數量 + N × u32。
+    let count = read_u8(s).await?;
+    let mut subtypes = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        subtypes.push(read_u32(s).await?);
+    }
+    let Some(sub) = choose_subtype(pref, &subtypes, initial) else {
+        let list = subtypes.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+        return Err(AppError::Rd(if pref == VncSecurityPref::Plain {
+            t!("伺服器未提供 VeNCrypt-Plain 子型別").to_string()
+        } else {
+            tf!("伺服器的 VeNCrypt 沒有支援的子型別（{list}）；可以在主機設定把認證方式改成「VNC 密碼」", list = list)
+        }));
+    };
+    write_all(s, &sub.to_be_bytes()).await?;
+    Ok(sub)
 }
 
 fn fmt_types(offered: &[u8]) -> String {
@@ -434,54 +634,24 @@ fn left_pad_be(bytes: &[u8], len: usize) -> Vec<u8> {
 }
 
 /// 以 rand（Cargo.toml 內以 `rand010` 引入的 rand 0.10）填入亂數。
-fn fill_random(buf: &mut [u8]) {
+pub(super) fn fill_random(buf: &mut [u8]) {
     use rand010::Rng;
     let mut rng = rand010::rng();
     rng.fill_bytes(buf);
 }
 
-// ---- VeNCrypt-Plain ----
+// ---- VeNCrypt 的帳號 + 密碼（Plain / TLSPlain / X509Plain 共用；後兩者是在 TLS 裡面送） ----
 
-async fn do_vencrypt_plain<S: AsyncRead + AsyncWrite + Unpin>(
-    s: &mut S,
-    creds: &VncCreds,
-    minor: u32,
-) -> AppResult<()> {
-    // 伺服器送 VeNCrypt 版本 [major, minor]；我們回應要用的版本 0.2。
-    let mut ver = [0u8; 2];
-    read_exact(s, &mut ver).await?;
-    write_all(s, &[0, 2]).await?;
-
-    // 版本 ack：0 = OK。
-    let ack = read_u8(s).await?;
-    if ack != 0 {
-        return Err(AppError::Rd(t!("伺服器不接受 VeNCrypt 0.2").to_string()));
-    }
-
-    // 子型別清單：u8 數量 + N × u32。
-    let count = read_u8(s).await?;
-    let mut subtypes = Vec::with_capacity(count as usize);
-    for _ in 0..count {
-        subtypes.push(read_u32(s).await?);
-    }
-    if !subtypes.contains(&VENCRYPT_PLAIN) {
-        return Err(AppError::Rd(t!("伺服器未提供 VeNCrypt-Plain 子型別").to_string()));
-    }
-
-    // 選 Plain。
-    write_all(s, &VENCRYPT_PLAIN.to_be_bytes()).await?;
-
-    // 送帳密：u32 帳號長度、u32 密碼長度、帳號、密碼。
+/// u32 帳號長度、u32 密碼長度、帳號、密碼。之後由呼叫端讀 SecurityResult。
+async fn send_plain<S: AsyncWrite + Unpin>(s: &mut S, creds: &VncCreds) -> AppResult<()> {
     let u = creds.username.as_bytes();
     let p = creds.password.as_bytes();
-    write_all(s, &(u.len() as u32).to_be_bytes()).await?;
-    write_all(s, &(p.len() as u32).to_be_bytes()).await?;
-    write_all(s, u).await?;
-    write_all(s, p).await?;
-
-    // SecurityResult（VeNCrypt 一律回報；原因字串只有 3.8 有）。
-    read_security_result(s, minor).await?;
-    Ok(())
+    let mut msg = Vec::with_capacity(8 + u.len() + p.len());
+    msg.extend_from_slice(&(u.len() as u32).to_be_bytes());
+    msg.extend_from_slice(&(p.len() as u32).to_be_bytes());
+    msg.extend_from_slice(u);
+    msg.extend_from_slice(p);
+    write_all(s, &msg).await
 }
 
 // ---- SecurityResult / 原因字串 ----
@@ -934,6 +1104,108 @@ FFFFFFFFFFFFFFFF";
             .unwrap(),
             SEC_VNC
         );
+        // 無帳號、伺服器同時給 VeNCrypt 與 VNC 密碼（TigerVNC 預設）：走 VeNCrypt（之後挑 TLS 子型別）。
+        assert_eq!(
+            choose_security(VncSecurityPref::Auto, &[SEC_VENCRYPT, SEC_VNC], Some(&creds("", "pw"))).unwrap(),
+            SEC_VENCRYPT
+        );
+        // 指定 TLS：一定要 VeNCrypt。
+        assert_eq!(choose_security(VncSecurityPref::Tls, &[SEC_VNC, SEC_VENCRYPT], None).unwrap(), SEC_VENCRYPT);
+        assert!(choose_security(VncSecurityPref::Tls, &[SEC_VNC], None).is_err());
+        // 匿名 TLS 談不攏之後的重連：VNC 密碼優先，只剩 VeNCrypt 才用它。
+        assert_eq!(choose_security(VncSecurityPref::AutoWithoutTls, &[SEC_VENCRYPT, SEC_VNC], None).unwrap(), SEC_VNC);
+        assert_eq!(choose_security(VncSecurityPref::AutoWithoutTls, &[SEC_VENCRYPT], None).unwrap(), SEC_VENCRYPT);
+        assert_eq!(choose_subtype(VncSecurityPref::AutoWithoutTls, &[VE_TLS_VNC, VE_VNC], None), Some(VE_VNC));
+        assert_eq!(choose_subtype(VncSecurityPref::AutoWithoutTls, &[VE_TLS_VNC], None), None);
+        assert_eq!(choose_subtype(VncSecurityPref::AutoWithoutTls, &[VE_TLS_VNC, VE_X509_VNC], Some(&creds("", "pw"))), Some(VE_X509_VNC));
+    }
+
+    #[test]
+    fn subtype_rules_prefer_encryption_and_what_we_have() {
+        let tiger = [VE_TLS_VNC, VE_TLS_NONE, VE_TLS_PLAIN, VE_VNC];
+        // 有密碼：TLS 裡做 VNC 密碼。
+        assert_eq!(choose_subtype(VncSecurityPref::Auto, &tiger, Some(&creds("", "pw"))), Some(VE_TLS_VNC));
+        // 什麼都沒有：不需認證的 TLS（免得白問一次密碼）。
+        assert_eq!(choose_subtype(VncSecurityPref::Auto, &tiger, None), Some(VE_TLS_NONE));
+        // 有帳號：TLS 裡送帳密。
+        assert_eq!(choose_subtype(VncSecurityPref::Auto, &tiger, Some(&creds("bob", "pw"))), Some(VE_TLS_PLAIN));
+        // X509 優先於匿名 TLS。
+        assert_eq!(
+            choose_subtype(VncSecurityPref::Auto, &[VE_TLS_VNC, VE_X509_VNC], Some(&creds("", "pw"))),
+            Some(VE_X509_VNC)
+        );
+        // 只有明文的子型別：自動照樣接受，指定 TLS 不接受。
+        assert_eq!(choose_subtype(VncSecurityPref::Auto, &[VE_VNC, VENCRYPT_PLAIN], None), Some(VE_VNC));
+        assert_eq!(choose_subtype(VncSecurityPref::Tls, &[VE_VNC, VENCRYPT_PLAIN], None), None);
+        // 指定帳密：有 TLS 就套 TLS，沒有才用明文 Plain。
+        assert_eq!(choose_subtype(VncSecurityPref::Plain, &[VENCRYPT_PLAIN, VE_TLS_PLAIN], None), Some(VE_TLS_PLAIN));
+        assert_eq!(choose_subtype(VncSecurityPref::Plain, &[VENCRYPT_PLAIN, VE_TLS_VNC], None), Some(VENCRYPT_PLAIN));
+        // 不認得的（SASL 263 / 264）：挑不到。
+        assert_eq!(choose_subtype(VncSecurityPref::Auto, &[263, 264], None), None);
+    }
+
+    /// VeNCrypt 清單裡的舊式 VNC 密碼子型別（2）：不套 TLS，直接做 DES 挑戰。
+    #[tokio::test]
+    async fn vencrypt_legacy_vnc_subtype() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let srv = tokio::spawn(async move {
+            srv_write_version(&mut server, "RFB 003.008\n").await;
+            srv_read_client_version(&mut server).await;
+            server.write_all(&[1u8, SEC_VENCRYPT]).await.unwrap();
+            assert_eq!(srv_read_u8(&mut server).await, SEC_VENCRYPT);
+            server.write_all(&[0, 2]).await.unwrap();
+            let mut cv = [0u8; 2];
+            server.read_exact(&mut cv).await.unwrap();
+            server.write_all(&[0u8, 1u8]).await.unwrap(); // ack OK、1 個子型別
+            srv_write_u32(&mut server, VE_VNC).await;
+            assert_eq!(srv_read_u32(&mut server).await, VE_VNC);
+            let challenge = [3u8; 16];
+            server.write_all(&challenge).await.unwrap();
+            let mut resp = [0u8; 16];
+            server.read_exact(&mut resp).await.unwrap();
+            assert_eq!(resp, vnc_des_response(b"pw", &challenge));
+            srv_write_u32(&mut server, 0).await;
+        });
+        let out = client_handshake(&mut client, VncSecurityPref::Auto, Some(creds("", "pw")), &FixedCreds(None))
+            .await
+            .unwrap();
+        srv.await.unwrap();
+        assert_eq!(out.security, "vnc-auth");
+        assert!(!out.encrypted);
+    }
+
+    /// 選了 TLS 子型別：讀到伺服器的「可以開始 TLS」(1) 才交給 TLS；伺服器回 0 → 錯誤。
+    #[tokio::test]
+    async fn vencrypt_tls_subtype_waits_for_server_ack() {
+        for (ack, ok) in [(1u8, true), (0u8, false)] {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let srv = tokio::spawn(async move {
+                srv_write_version(&mut server, "RFB 003.008\n").await;
+                srv_read_client_version(&mut server).await;
+                server.write_all(&[2u8, SEC_VENCRYPT, SEC_VNC]).await.unwrap();
+                srv_read_u8(&mut server).await;
+                server.write_all(&[0, 2]).await.unwrap();
+                let mut cv = [0u8; 2];
+                server.read_exact(&mut cv).await.unwrap();
+                server.write_all(&[0u8, 2u8]).await.unwrap();
+                srv_write_u32(&mut server, VE_TLS_VNC).await;
+                srv_write_u32(&mut server, VE_VNC).await;
+                assert_eq!(srv_read_u32(&mut server).await, VE_TLS_VNC);
+                server.write_all(&[ack]).await.unwrap();
+            });
+            let stage = handshake_stage(&mut client, VncSecurityPref::Auto, &Some(creds("", "pw")), &FixedCreds(None)).await;
+            srv.await.unwrap();
+            match stage {
+                Ok(Stage::Tls { x509, auth, security, .. }) => {
+                    assert!(ok);
+                    assert!(!x509);
+                    assert_eq!(auth, SubAuth::Vnc);
+                    assert_eq!(security, "vencrypt-tls-vnc");
+                }
+                Ok(Stage::Done(_)) => panic!("TLS 子型別不該直接完成"),
+                Err(e) => assert!(!ok, "{e:?}"),
+            }
+        }
     }
 
     // ---- 指定型別但伺服器未提供 → 錯誤 ----
@@ -1079,6 +1351,7 @@ FFFFFFFFFFFFFFFF";
             (VncSecurityPref::Vnc, "\"vnc\""),
             (VncSecurityPref::Ard, "\"ard\""),
             (VncSecurityPref::Plain, "\"plain\""),
+            (VncSecurityPref::Tls, "\"tls\""),
         ] {
             assert_eq!(serde_json::to_string(&v).unwrap(), s);
             let back: VncSecurityPref = serde_json::from_str(s).unwrap();
