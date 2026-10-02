@@ -62,6 +62,10 @@ pub struct RustdeskParams {
     pub password: String,
     /// 有值 = `host` 是對方的 RustDesk ID，經 ID 伺服器找人；None = Direct IP（直接連 `host:port`）。
     pub rendezvous: Option<Rendezvous>,
+    /// 本機識別碼（base64，見 `TrustStore`）：對方開了雙重驗證、使用者勾「信任這台裝置」時送給對方記住。
+    pub hwid: String,
+    /// 之前對這台勾過「信任這台裝置」：登入時就帶 `hwid`，對方認得就不再問驗證碼。
+    pub trusted: bool,
 }
 
 impl std::fmt::Debug for RustdeskParams {
@@ -95,12 +99,72 @@ fn connect_command(p: &RustdeskParams) -> serde_json::Value {
         "password": p.password,
         "decoders": { "vp9": true, "vp8": true, "av1": false },
         "my_name": std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_default(),
+        "hwid": p.hwid,
+        "trusted": p.trusted,
     });
     if let Some(r) = &p.rendezvous {
         v["peer"] = json!(p.host);
         v["rendezvous"] = json!(r);
     }
     v
+}
+
+/// 「信任這台裝置」的對方記在哪：Direct IP 是 `位址:埠`，ID 連線是 ID（不分經哪台 ID 伺服器，跟官方一樣以 ID 認人）。
+pub fn trust_key(host: &str, port: u16, by_id: bool) -> String {
+    if by_id {
+        normalize_id(host)
+    } else {
+        format!("{}:{port}", host.trim().to_ascii_lowercase())
+    }
+}
+
+/// RustDesk「信任這台裝置」（官方 `trust-this-device` + `get_hwid`）：本機識別碼 + 勾過信任的對方。
+/// 對方那邊記的是識別碼 + `my_id` / `my_name` / `my_platform`，所以識別碼要固定：第一次用時隨機產生、存起來。
+/// 識別碼是隨機的（不是硬體序號），而且只送給勾過信任的對方。
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrustStore {
+    #[serde(default)]
+    device_id: String,
+    #[serde(default)]
+    peers: Vec<String>,
+}
+
+pub const TRUST_FILE: &str = "rustdesk_trust.json";
+
+impl TrustStore {
+    /// 讀檔；還沒有識別碼就產生一個並寫回。
+    pub async fn load_in(dir: &std::path::Path) -> AppResult<TrustStore> {
+        let mut s: TrustStore = crate::store::read_json_in(dir, TRUST_FILE).await?;
+        if s.device_id.is_empty() {
+            use base64::Engine as _;
+            let raw: [u8; 32] = rand::random();
+            s.device_id = base64::engine::general_purpose::STANDARD.encode(raw);
+            crate::store::write_json_in(dir, TRUST_FILE, &s).await?;
+        }
+        Ok(s)
+    }
+
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    pub fn is_trusted(&self, key: &str) -> bool {
+        self.peers.iter().any(|p| p == key)
+    }
+
+    /// 記下 / 拿掉一台；有變才寫檔。
+    pub async fn set_in(dir: &std::path::Path, key: &str, trusted: bool) -> AppResult<()> {
+        let mut s = Self::load_in(dir).await?;
+        if s.is_trusted(key) == trusted {
+            return Ok(());
+        }
+        if trusted {
+            s.peers.push(key.to_string());
+        } else {
+            s.peers.retain(|p| p != key);
+        }
+        crate::store::write_json_in(dir, TRUST_FILE, &s).await
+    }
 }
 
 pub async fn read_msg<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<Option<Vec<u8>>> {
@@ -176,15 +240,28 @@ pub struct Connected {
     pub secure: bool,
     /// `ip`（Direct IP）/ `direct`（打洞直連）/ `lan` / `relay`（經中繼伺服器）。
     pub route: String,
+    /// 有問雙重驗證碼時，最後送出的那個有沒有勾「信任這台裝置」（呼叫端照這個記下 / 拿掉）；沒問 = None。
+    pub trusted_2fa: Option<bool>,
+}
+
+/// 雙重驗證碼對話框的答案。
+#[derive(Debug, Clone)]
+pub struct TwoFactorAnswer {
+    pub code: String,
+    /// 勾了「信任這台裝置」。
+    pub trust: bool,
 }
 
 /// 啟動輔助程式並登入。密碼錯 → `RdAuth`（呼叫端重問密碼再來）。
 ///
 /// 沒給密碼時輔助程式先送空密碼的登入、回 `waiting_accept`（對方畫面跳出「接受」）：這時跟官方用戶端一樣
-/// 同時問密碼（`ask_password`），兩邊誰先好就用誰——對方按了接受，問到一半的對話框就收掉；先問到密碼就
+/// 同時問密碼（`ask_password(false)`），兩邊誰先好就用誰——對方按了接受，問到一半的對話框就收掉；先問到密碼就
 /// 用同一條連線補送登入。在對話框按取消 = 不連了。
 ///
-/// 對方開了雙重驗證（`need_2fa`）：問驗證碼（`ask_2fa(上一個錯了)`），在同一條連線送出；錯了再問。
+/// 對方設成只能按「接受」（`waiting_accept` 帶 `click_only`，官方 `No Password Access`）：密碼沒用，改顯示
+/// 「等對方接受」（`ask_password(true)`，只能取消）。
+///
+/// 對方開了雙重驗證（`need_2fa`）：問驗證碼（`ask_2fa(上一個錯了, 對方允許信任這台裝置)`），在同一條連線送出；錯了再問。
 pub async fn connect<F, Fut, G, GFut>(
     p: &RustdeskParams,
     timeout: Duration,
@@ -192,10 +269,10 @@ pub async fn connect<F, Fut, G, GFut>(
     ask_2fa: G,
 ) -> AppResult<Connected>
 where
-    F: FnOnce() -> Fut,
+    F: FnMut(bool) -> Fut,
     Fut: Future<Output = Option<AuthAnswer>>,
-    G: FnMut(bool) -> GFut,
-    GFut: Future<Output = Option<String>>,
+    G: FnMut(bool, bool) -> GFut,
+    GFut: Future<Output = Option<TwoFactorAnswer>>,
 {
     let path = bridge_path().ok_or_else(|| {
         AppError::Rd(t!("找不到 RustDesk 連線元件（dbk-rustdesk-bridge），請重新安裝 db-kit").into())
@@ -225,6 +302,7 @@ where
             size: l.size,
             secure: l.secure,
             route: l.route,
+            trusted_2fa: l.trusted_2fa,
         }),
         Err(e) => {
             let _ = child.kill().await;
@@ -240,25 +318,30 @@ struct LoggedIn {
     secure: bool,
     route: String,
     answered: Option<AuthAnswer>,
+    trusted_2fa: Option<bool>,
 }
 
-/// 讀輔助程式的事件直到登入有結果；`waiting_accept` 時問密碼、`need_2fa` 時問驗證碼（見 `connect`）。
-/// `timeout` 從開始等、以及每次要驗證碼時重新起算（使用者要去翻驗證器 App）。
+/// 讀輔助程式的事件直到登入有結果；`waiting_accept` 時問密碼（或等對方接受）、`need_2fa` 時問驗證碼（見 `connect`）。
+/// `timeout` 從開始等、以及每次要驗證碼 / 改成等對方接受時重新起算。
 async fn wait_login<W, F, Fut, G, GFut>(
     out: &mut Output,
     stdin: &mut W,
     timeout: Duration,
-    ask_password: F,
+    mut ask_password: F,
     mut ask_2fa: G,
 ) -> AppResult<LoggedIn>
 where
     W: AsyncWrite + Unpin,
-    F: FnOnce() -> Fut,
+    F: FnMut(bool) -> Fut,
     Fut: Future<Output = Option<AuthAnswer>>,
-    G: FnMut(bool) -> GFut,
-    GFut: Future<Output = Option<String>>,
+    G: FnMut(bool, bool) -> GFut,
+    GFut: Future<Output = Option<TwoFactorAnswer>>,
 {
-    let mut ask = Some(ask_password);
+    // 密碼只問一次；之後要驗證碼（密碼已過）或對方只能按接受時，就不再問密碼。
+    let mut may_ask_password = true;
+    let mut click_only = false;
+    let mut can_trust = false;
+    let mut trusted_2fa = None;
     let mut asking: Option<Pin<Box<Fut>>> = None;
     let mut asking_2fa: Option<Pin<Box<GFut>>> = None;
     let mut answered = None;
@@ -282,8 +365,8 @@ where
             a = answer => {
                 asking = None;
                 let Some(a) = a else { return Err(AppError::RdCancelled) };
-                // 空密碼 = 繼續等對方按接受。
-                if !a.password.is_empty() {
+                // 空密碼 = 繼續等對方按接受；只能按接受的對方不收密碼。
+                if !a.password.is_empty() && !click_only {
                     write_json(stdin, &json!({ "t": "login", "password": a.password })).await.map_err(|_| gone())?;
                     answered = Some(a);
                 }
@@ -292,10 +375,12 @@ where
             c = code => {
                 asking_2fa = None;
                 let Some(c) = c else { return Err(AppError::RdCancelled) };
-                if c.trim().is_empty() {
-                    asking_2fa = Some(Box::pin(ask_2fa(false)));
+                if c.code.trim().is_empty() {
+                    asking_2fa = Some(Box::pin(ask_2fa(false, can_trust)));
                 } else {
-                    write_json(stdin, &json!({ "t": "2fa", "code": c })).await.map_err(|_| gone())?;
+                    let trust = can_trust && c.trust;
+                    write_json(stdin, &json!({ "t": "2fa", "code": c.code, "trust": trust })).await.map_err(|_| gone())?;
+                    trusted_2fa = Some(trust);
                 }
                 continue;
             }
@@ -316,22 +401,40 @@ where
                 let size = (d["width"].as_u64().unwrap_or(0) as u16, d["height"].as_u64().unwrap_or(0) as u16);
                 let secure = v["secure"].as_bool().unwrap_or(false);
                 let route = v["route"].as_str().unwrap_or("ip").to_string();
-                return Ok(LoggedIn { hello: msg, size, secure, route, answered });
+                return Ok(LoggedIn { hello: msg, size, secure, route, answered, trusted_2fa });
+            }
+            Some("waiting_accept") if v["click_only"] == true => {
+                // 對方只能按接受：還開著的密碼對話框換成「等對方接受」（只能取消）。
+                if !click_only {
+                    click_only = true;
+                    may_ask_password = false;
+                    asking = Some(Box::pin(ask_password(true)));
+                }
+                deadline = tokio::time::Instant::now() + timeout;
             }
             Some("waiting_accept") => {
-                if let Some(f) = ask.take() {
-                    asking = Some(Box::pin(f()));
+                if may_ask_password {
+                    may_ask_password = false;
+                    asking = Some(Box::pin(ask_password(false)));
                 }
             }
             Some("need_2fa") => {
-                // 密碼已過（或對方按了接受）：還開著的密碼對話框收掉，改問驗證碼。
+                // 密碼已過（或對方按了接受）：還開著的密碼 / 等待對話框收掉，改問驗證碼。
                 asking = None;
-                ask = None;
-                asking_2fa = Some(Box::pin(ask_2fa(v["wrong"].as_bool().unwrap_or(false))));
+                may_ask_password = false;
+                // 錯了那則不帶 `trust`，輔助程式已沿用 `2FA Required` 那則的。
+                can_trust = v["trust"].as_bool().unwrap_or(false);
+                asking_2fa = Some(Box::pin(ask_2fa(v["wrong"].as_bool().unwrap_or(false), can_trust)));
                 deadline = tokio::time::Instant::now() + timeout;
             }
             Some("login_error") => {
                 let m = v["message"].as_str().unwrap_or_default();
+                // 只能按接受的對方一直沒按：再問密碼也沒用。
+                if click_only && m == "login timed out" {
+                    return Err(AppError::Rd(
+                        t!("對方一直沒有在畫面上按「接受」（對方的 RustDesk 設定為只能按接受、不能用密碼登入）").into(),
+                    ));
+                }
                 // 錯太多次被對方暫時封鎖：再問密碼也沒用。
                 return Err(if is_locked_out(m) {
                     AppError::Rd(login_error_text(m))
@@ -462,7 +565,7 @@ mod tests {
 
     const T: Duration = Duration::from_secs(5);
 
-    fn no_2fa(_: bool) -> std::future::Ready<Option<String>> {
+    fn no_2fa(_: bool, _: bool) -> std::future::Ready<Option<TwoFactorAnswer>> {
         panic!("不該問驗證碼")
     }
 
@@ -479,7 +582,7 @@ mod tests {
             tx.send(event(json!({ "type": "connected", "peer": { "current_display": 0, "displays": [{ "width": 1920, "height": 1080 }] }, "secure": true, "route": "relay" }))).await.unwrap();
         });
         let asked = std::sync::atomic::AtomicUsize::new(0);
-        let l = wait_login(&mut out, &mut stdin, T, || {
+        let l = wait_login(&mut out, &mut stdin, T, |_| {
             asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             async { Some(answer("pw")) }
         }, no_2fa)
@@ -498,7 +601,7 @@ mod tests {
         let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
         tx.send(event(json!({ "type": "waiting_accept" }))).await.unwrap();
         tx.send(event(json!({ "type": "connected", "peer": {}, "route": "lan" }))).await.unwrap();
-        let l = wait_login(&mut out, &mut stdin, T, || std::future::pending::<Option<AuthAnswer>>(), no_2fa).await.unwrap_or_else(|e| panic!("{e}"));
+        let l = wait_login(&mut out, &mut stdin, T, |_| std::future::pending::<Option<AuthAnswer>>(), no_2fa).await.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(l.route, "lan");
         assert!(l.answered.is_none());
     }
@@ -508,7 +611,7 @@ mod tests {
         let (tx, mut out) = mpsc::channel(8);
         let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
         tx.send(event(json!({ "type": "waiting_accept" }))).await.unwrap();
-        let r = wait_login(&mut out, &mut stdin, T, || async { None }, no_2fa).await;
+        let r = wait_login(&mut out, &mut stdin, T, |_| async { None }, no_2fa).await;
         assert!(matches!(r, Err(AppError::RdCancelled)));
         drop(tx);
     }
@@ -519,10 +622,10 @@ mod tests {
         let (tx, mut out) = mpsc::channel(8);
         let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
         tx.send(event(json!({ "type": "login_error", "message": "login timed out" }))).await.unwrap();
-        let r = wait_login(&mut out, &mut stdin, T, || async { panic!("不該問密碼") }, no_2fa).await;
+        let r = wait_login(&mut out, &mut stdin, T, |_| async { panic!("不該問密碼") }, no_2fa).await;
         assert!(matches!(r, Err(AppError::RdAuth(ref m)) if m.contains("接受")), "{:?}", r.err());
         drop(tx);
-        let r = wait_login(&mut out, &mut stdin, T, || async { None }, no_2fa).await;
+        let r = wait_login(&mut out, &mut stdin, T, |_| async { None }, no_2fa).await;
         assert!(matches!(r, Err(AppError::Rd(_))));
     }
 
@@ -536,21 +639,23 @@ mod tests {
         let bridge = tokio::spawn(async move {
             for (code, reply) in [("111111", json!({ "type": "need_2fa", "wrong": true })), ("222222", json!({ "type": "connected", "peer": {} }))] {
                 let v = json_of(&read_msg(&mut bridge_in).await.unwrap().unwrap()).unwrap();
-                assert_eq!((v["t"].as_str(), v["code"].as_str()), (Some("2fa"), Some(code)));
+                assert_eq!((v["t"].as_str(), v["code"].as_str(), v["trust"].as_bool()), (Some("2fa"), Some(code), Some(false)), "對方沒允許信任：勾了也不送");
                 tx.send(event(reply)).await.unwrap();
             }
         });
         let asked = std::sync::Mutex::new(Vec::new());
-        let l = wait_login(&mut out, &mut stdin, T, || std::future::pending::<Option<AuthAnswer>>(), |wrong| {
+        let l = wait_login(&mut out, &mut stdin, T, |_| std::future::pending::<Option<AuthAnswer>>(), |wrong, _| {
             let mut a = asked.lock().unwrap();
             a.push(wrong);
-            std::future::ready(Some(if a.len() == 1 { "111111" } else { "222222" }.to_string()))
+            let code = if a.len() == 1 { "111111" } else { "222222" };
+            std::future::ready(Some(TwoFactorAnswer { code: code.into(), trust: true }))
         })
         .await
         .unwrap_or_else(|e| panic!("{e}"));
         bridge.await.unwrap();
         assert_eq!(*asked.lock().unwrap(), [false, true]);
         assert!(l.answered.is_none(), "驗證碼不是密碼，不記住");
+        assert_eq!(l.trusted_2fa, Some(false));
     }
 
     #[tokio::test]
@@ -558,8 +663,86 @@ mod tests {
         let (tx, mut out) = mpsc::channel(8);
         let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
         tx.send(event(json!({ "type": "need_2fa", "wrong": false }))).await.unwrap();
-        let r = wait_login(&mut out, &mut stdin, T, || async { None }, |_| async { None }).await;
+        let r = wait_login(&mut out, &mut stdin, T, |_| async { None }, |_, _| async { None }).await;
         assert!(matches!(r, Err(AppError::RdCancelled)), "{:?}", r.err());
+    }
+
+    /// 對方允許「信任這台裝置」：對話框有勾選項，勾了就送 `trust`，登入成功帶回（呼叫端記下這台）。
+    #[tokio::test]
+    async fn trust_this_device_is_sent_and_reported() {
+        let (tx, mut out) = mpsc::channel(8);
+        let (mut stdin, mut bridge_in) = tokio::io::duplex(1 << 16);
+        tx.send(event(json!({ "type": "need_2fa", "wrong": false, "trust": true }))).await.unwrap();
+        let bridge = tokio::spawn(async move {
+            let v = json_of(&read_msg(&mut bridge_in).await.unwrap().unwrap()).unwrap();
+            assert_eq!((v["code"].as_str(), v["trust"].as_bool()), (Some("123456"), Some(true)));
+            tx.send(event(json!({ "type": "connected", "peer": {} }))).await.unwrap();
+        });
+        let offered = std::sync::Mutex::new(Vec::new());
+        let l = wait_login(&mut out, &mut stdin, T, |_| async { None }, |_, can_trust| {
+            offered.lock().unwrap().push(can_trust);
+            std::future::ready(Some(TwoFactorAnswer { code: "123456".into(), trust: true }))
+        })
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+        bridge.await.unwrap();
+        assert_eq!(*offered.lock().unwrap(), [true]);
+        assert_eq!(l.trusted_2fa, Some(true));
+    }
+
+    /// 對方只能按接受（`click_only`）：還開著的密碼對話框換成「等對方接受」；對方按了就連上，不記任何密碼。
+    #[tokio::test]
+    async fn click_only_peer_shows_wait_instead_of_password() {
+        let (tx, mut out) = mpsc::channel(8);
+        let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
+        tx.send(event(json!({ "type": "waiting_accept" }))).await.unwrap();
+        tx.send(event(json!({ "type": "waiting_accept", "click_only": true }))).await.unwrap();
+        tx.send(event(json!({ "type": "connected", "peer": {} }))).await.unwrap();
+        let asked = std::sync::Mutex::new(Vec::new());
+        let l = wait_login(&mut out, &mut stdin, T, |click_only| {
+            asked.lock().unwrap().push(click_only);
+            std::future::pending::<Option<AuthAnswer>>()
+        }, no_2fa)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(*asked.lock().unwrap(), [false, true], "先問密碼，再改成等對方接受");
+        assert!(l.answered.is_none());
+    }
+
+    /// 只能按接受的對方：取消 = 不連；一直沒按 → 一般錯誤（不再重問密碼，密碼對它沒用）。
+    #[tokio::test]
+    async fn click_only_cancel_and_timeout() {
+        let (tx, mut out) = mpsc::channel(8);
+        let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
+        tx.send(event(json!({ "type": "waiting_accept", "click_only": true }))).await.unwrap();
+        let r = wait_login(&mut out, &mut stdin, T, |_| async { None }, no_2fa).await;
+        assert!(matches!(r, Err(AppError::RdCancelled)), "{:?}", r.err());
+
+        tx.send(event(json!({ "type": "waiting_accept", "click_only": true }))).await.unwrap();
+        tx.send(event(json!({ "type": "login_error", "message": "login timed out" }))).await.unwrap();
+        let r = wait_login(&mut out, &mut stdin, T, |_| std::future::pending::<Option<AuthAnswer>>(), no_2fa).await;
+        assert!(matches!(r, Err(AppError::Rd(ref m)) if m.contains("只能按接受")), "{:?}", r.err());
+    }
+
+    /// 「信任這台裝置」的本機識別碼：第一次產生後固定；勾過的對方記下 / 拿掉。
+    #[tokio::test]
+    async fn trust_store_keeps_device_id_and_peers() {
+        let dir = std::env::temp_dir().join(format!("dbkit-rd-trust-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let a = TrustStore::load_in(&dir).await.unwrap();
+        use base64::Engine as _;
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(a.device_id()).unwrap().len(), 32);
+        assert_eq!(TrustStore::load_in(&dir).await.unwrap().device_id(), a.device_id(), "識別碼固定");
+        let key = trust_key(" 216 830 407 ", 0, true);
+        assert_eq!(key, "216830407");
+        TrustStore::set_in(&dir, &key, true).await.unwrap();
+        TrustStore::set_in(&dir, &key, true).await.unwrap();
+        let s = TrustStore::load_in(&dir).await.unwrap();
+        assert!(s.is_trusted(&key) && s.peers.len() == 1 && s.device_id() == a.device_id());
+        TrustStore::set_in(&dir, &key, false).await.unwrap();
+        assert!(!TrustStore::load_in(&dir).await.unwrap().is_trusted(&key));
+        assert_eq!(trust_key("PC.Example.com", 21118, false), "pc.example.com:21118");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
     /// 錯太多次被對方暫時封鎖：一般錯誤（不再重問密碼），說清楚要等多久。
@@ -568,7 +751,7 @@ mod tests {
         let (tx, mut out) = mpsc::channel(8);
         let (mut stdin, _bridge_in) = tokio::io::duplex(1 << 16);
         tx.send(event(json!({ "type": "login_error", "message": "Please try 1 minute later" }))).await.unwrap();
-        let r = wait_login(&mut out, &mut stdin, T, || async { None }, no_2fa).await;
+        let r = wait_login(&mut out, &mut stdin, T, |_| async { None }, no_2fa).await;
         assert!(matches!(r, Err(AppError::Rd(ref m)) if m.contains("一分鐘")), "{:?}", r.err());
     }
 
@@ -628,9 +811,17 @@ mod tests {
 
     #[test]
     fn connect_command_carries_rendezvous_only_for_ids() {
-        let mut p = RustdeskParams { host: "10.0.0.5".into(), port: 21118, password: "pw".into(), rendezvous: None };
+        let mut p = RustdeskParams {
+            host: "10.0.0.5".into(),
+            port: 21118,
+            password: "pw".into(),
+            rendezvous: None,
+            hwid: "aHdpZA==".into(),
+            trusted: true,
+        };
         let v = connect_command(&p);
         assert_eq!((v["host"].as_str(), v["port"].as_u64()), (Some("10.0.0.5"), Some(21118)));
+        assert_eq!((v["hwid"].as_str(), v["trusted"].as_bool()), (Some("aHdpZA=="), Some(true)));
         assert!(v.get("rendezvous").is_none() && v.get("peer").is_none(), "Direct IP：沒有 rendezvous");
         p.host = "216830407".into();
         p.rendezvous = Some(Rendezvous { server: "proxy.example.com".into(), key: "K=".into(), force_relay: true, ..Default::default() });

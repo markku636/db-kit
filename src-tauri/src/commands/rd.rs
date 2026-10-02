@@ -59,6 +59,21 @@ struct AuthPromptEvent {
     notice: Option<String>,
     /// 問的是雙重驗證碼（RustDesk 對方開了 2FA），不是密碼：答案放在 `password`。
     otp: bool,
+    /// 驗證碼對話框可勾「信任這台裝置」（對方允許時）：答案放在 `remember`。
+    can_trust: bool,
+    /// 沒有欄位、只能取消：等 RustDesk 對方按「接受」（對方不收密碼）。
+    wait: bool,
+}
+
+/// 對話框問什麼。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AskKind {
+    /// 帳號 / 密碼。
+    Password,
+    /// RustDesk 對方的雙重驗證碼；`can_trust` = 對方允許「信任這台裝置」。
+    Otp { can_trust: bool },
+    /// 只能等 RustDesk 對方按「接受」：沒有欄位，答案只會是取消。
+    WaitAccept,
 }
 
 #[derive(Clone, Serialize)]
@@ -108,12 +123,13 @@ impl RdUi {
         error: Option<String>,
         notice: Option<String>,
     ) -> Option<AuthAnswer> {
-        self.prompt(need_username, username, error, notice, false).await
+        self.prompt(need_username, username, error, notice, AskKind::Password).await
     }
 
     /// 雙重驗證碼對話框。`None` = 取消。
-    async fn otp(&self, error: Option<String>, notice: String) -> Option<String> {
-        self.prompt(false, "", error, Some(notice), true).await.map(|a| a.password)
+    async fn otp(&self, error: Option<String>, notice: String, can_trust: bool) -> Option<crate::rd::rustdesk::TwoFactorAnswer> {
+        let a = self.prompt(false, "", error, Some(notice), AskKind::Otp { can_trust }).await?;
+        Some(crate::rd::rustdesk::TwoFactorAnswer { code: a.password, trust: can_trust && a.remember })
     }
 
     async fn prompt(
@@ -122,7 +138,7 @@ impl RdUi {
         username: &str,
         error: Option<String>,
         notice: Option<String>,
-        otp: bool,
+        kind: AskKind,
     ) -> Option<AuthAnswer> {
         let a = self
             .ask(|prompt_id| {
@@ -135,7 +151,9 @@ impl RdUi {
                         username: username.to_string(),
                         error: error.clone(),
                         notice: notice.clone(),
-                        otp,
+                        otp: matches!(kind, AskKind::Otp { .. }),
+                        can_trust: kind == AskKind::Otp { can_trust: true },
+                        wait: kind == AskKind::WaitAccept,
                     },
                 )
             })
@@ -634,6 +652,12 @@ async fn connect_rustdesk(
             t!("用 RustDesk ID 連線不能經 SSH 主機轉接：請改填對方電腦的 IP 位址（Direct IP），或取消「經 SSH 主機連線」").into(),
         ));
     }
+    // 「信任這台裝置」：讀不到記錄只是少了這個功能（每次都問驗證碼），不擋連線。
+    let config_dir = store::app_config_dir(app)?;
+    let trust_key = rustdesk::trust_key(&s.host, s.effective_port(), rendezvous.is_some());
+    let trust = rustdesk::TrustStore::load_in(&config_dir).await.ok();
+    let hwid = trust.as_ref().map(|t| t.device_id().to_string()).unwrap_or_default();
+    let trusted = trust.as_ref().is_some_and(|t| t.is_trusted(&trust_key));
     let mut password = r.password.clone().unwrap_or_default();
     let mut error: Option<String> = None;
     for attempt in 0..MAX_AUTH_TRIES {
@@ -651,22 +675,37 @@ async fn connect_rustdesk(
             }
             (None, None) => (s.host.clone(), s.effective_port(), None),
         };
-        let p = rustdesk::RustdeskParams { host, port, password: password.clone(), rendezvous: rendezvous.clone() };
-        // 沒密碼：對方畫面正跳出連線請求，同時讓使用者可以改輸入密碼。
-        let ask = || {
-            let notice = t!("已請對方在畫面上按「接受」，對方按了就會連上；也可以直接輸入對方的 RustDesk 密碼。");
-            ui.auth_prompt(false, "", None, Some(notice.into()))
+        let p = rustdesk::RustdeskParams {
+            host,
+            port,
+            password: password.clone(),
+            rendezvous: rendezvous.clone(),
+            hwid: hwid.clone(),
+            trusted,
+        };
+        // 沒密碼：對方畫面正跳出連線請求，同時讓使用者可以改輸入密碼。對方只能按接受（不收密碼）時改成單純等待。
+        let ask = |click_only: bool| {
+            let (notice, kind) = if click_only {
+                (t!("對方的 RustDesk 設定為只能在畫面上按「接受」，不能用密碼登入：已請對方按接受，按了就會連上。"), AskKind::WaitAccept)
+            } else {
+                (t!("已請對方在畫面上按「接受」，對方按了就會連上；也可以直接輸入對方的 RustDesk 密碼。"), AskKind::Password)
+            };
+            ui.prompt(false, "", None, Some(notice.into()), kind)
         };
         // 對方開了雙重驗證：驗證碼在對方那台電腦綁定的驗證器 App 上（設了 Telegram 機器人的也會收到）。
-        let ask_2fa = |wrong: bool| {
+        let ask_2fa = |wrong: bool, can_trust: bool| {
             let error = wrong.then(|| t!("驗證碼錯誤：請輸入驗證器 App 上目前顯示的那組（每 30 秒會換一組）").to_string());
             let notice = t!("對方的 RustDesk 開啟了雙重驗證（2FA）：請輸入對方綁定的驗證器 App（如 Google Authenticator）上顯示的 6 位數驗證碼。");
-            ui.otp(error, notice.into())
+            ui.otp(error, notice.into(), can_trust)
         };
         match rustdesk::connect(&p, s.options.connect_timeout() + PROMPT_TIMEOUT, ask, ask_2fa).await {
             Ok(c) => {
                 if let Some(a) = &c.answered {
                     remember(&r.origin, a);
+                }
+                // 有問驗證碼：照最後那次有沒有勾「信任這台裝置」記下 / 拿掉（官方 `trust-this-device` 也是跟著勾選走）。
+                if let (Some(t), false) = (c.trusted_2fa, hwid.is_empty()) {
+                    let _ = rustdesk::TrustStore::set_in(&config_dir, &trust_key, t).await;
                 }
                 // Direct IP 跟官方用戶端一樣不加密（沒有 ID 伺服器可以驗對方的金鑰）；經 SSH 時外層加密。
                 // 經 ID 伺服器時，驗得過對方公鑰（有填對 ID 伺服器的 Key）就是端到端加密。

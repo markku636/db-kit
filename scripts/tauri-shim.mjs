@@ -586,7 +586,21 @@ metadata:
           }), 20);
         });
       }
+      // 情境可要求「只能等 RustDesk 對方按接受」（window.__DBKIT_RD_PROMPT__ = "wait"）：只能取消；
+      // 情境呼叫 window.__DBKIT_RD_ACCEPT__() = 對方按了接受（連上）。
+      if (window.__DBKIT_RD_PROMPT__ === "wait") {
+        return new Promise((resolve, reject) => {
+          const promptId = `rd-wait-${++sshSeq}`;
+          rdPrompts.set(promptId, (a) => { if (!a) reject({ kind: "rd_cancelled", code: "ERR_RD_CANCELLED", message: "cancelled" }); });
+          window.__DBKIT_RD_ACCEPT__ = () => { rdPrompts.delete(promptId); resolve(finish()); };
+          setTimeout(() => emit("rd-auth-prompt", {
+            prompt_id: promptId, conn_id: connId, need_username: false, username: "", error: null, otp: false, can_trust: false, wait: true,
+            notice: "對方的 RustDesk 設定為只能在畫面上按「接受」，不能用密碼登入：已請對方按接受，按了就會連上。",
+          }), 20);
+        });
+      }
       // 情境可要求 RustDesk 對方的雙重驗證碼（window.__DBKIT_RD_PROMPT__ = "otp"）：123456 才對，錯了帶錯誤再問。
+      // window.__DBKIT_RD_TRUST__ = true → 對方允許「信任這台裝置」。
       if (window.__DBKIT_RD_PROMPT__ === "otp") {
         return new Promise((resolve, reject) => {
           const ask = (error) => {
@@ -598,6 +612,7 @@ metadata:
             });
             setTimeout(() => emit("rd-auth-prompt", {
               prompt_id: promptId, conn_id: connId, need_username: false, username: "", error, otp: true,
+              can_trust: !!window.__DBKIT_RD_TRUST__, wait: false,
               notice: "對方的 RustDesk 開啟了雙重驗證（2FA）：請輸入對方綁定的驗證器 App（如 Google Authenticator）上顯示的 6 位數驗證碼。",
             }), 20);
           };

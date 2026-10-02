@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { KeyRound, ShieldAlert, ShieldCheck } from "lucide-react";
-import { Modal, Field, Input, Button } from "./ui/index";
+import { Hourglass, KeyRound, Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Modal, Field, Input, Button, Icon } from "./ui/index";
 import { useT } from "./i18n";
 import type { RdAuthAnswer, RdAuthPrompt, RdCertDecision, RdCertPrompt } from "./rdTypes";
 
@@ -19,26 +19,57 @@ export interface RdAuthPromptDialogProps {
 
 /**
  * 帳號 / 密碼。`need_username` 時多一格帳號（RDP 沒存帳號、macOS 螢幕共享的 ARD 認證）。
- * `otp` = 問 RustDesk 對方的雙重驗證碼：欄位改成驗證碼、不顯示「記住密碼」（驗證碼每 30 秒換一組）。
+ * `otp` = 問 RustDesk 對方的雙重驗證碼：欄位改成驗證碼（只收數字，滿 6 位才能送，同官方用戶端）、
+ * 不顯示「記住密碼」（驗證碼每 30 秒換一組）；對方允許時（`can_trust`）可勾「信任這台裝置」，答案放 `remember`。
+ * `wait` = 只能等 RustDesk 對方按「接受」（對方不收密碼）：沒有欄位，只能取消。
  */
 export function RdAuthPromptDialog({ prompt, canRemember, onReply, onCancel }: RdAuthPromptDialogProps) {
   const t = useT();
   const otp = !!prompt.otp;
+  const wait = !!prompt.wait;
   const [username, setUsername] = useState(prompt.username);
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
+  const [trust, setTrust] = useState(false);
   useEffect(() => {
     setUsername(prompt.username);
     setPassword("");
   }, [prompt]);
 
-  const submit = () => onReply({ username: username.trim(), password, remember: !otp && canRemember && remember });
+  const ready = !otp || /^\d{6}$/.test(password);
+  const submit = () => {
+    if (!ready) return;
+    const keep = otp ? !!prompt.can_trust && trust : canRemember && remember;
+    onReply({ username: username.trim(), password, remember: keep });
+  };
   const onEnter = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit();
     }
   };
+
+  if (wait) {
+    return (
+      <Modal
+        open
+        onClose={onCancel}
+        title={t("等待對方接受")}
+        icon={Hourglass}
+        size="sm"
+        zClass={PROMPT_Z}
+        noMaximize
+        dismissOnBackdrop={false}
+        bodyClassName="p-5 space-y-3 overflow-auto"
+        footer={<Button variant="secondary" onClick={onCancel}>{t("取消")}</Button>}
+      >
+        <div className="flex items-start gap-2 text-sm text-fg/70 break-words" data-rd-auth-notice="" data-rd-wait-accept="">
+          <Icon icon={Loader2} size={16} className="animate-spin shrink-0 mt-0.5" />
+          <span>{prompt.notice}</span>
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal
@@ -54,7 +85,7 @@ export function RdAuthPromptDialog({ prompt, canRemember, onReply, onCancel }: R
       footer={
         <>
           <Button variant="secondary" onClick={onCancel}>{t("取消")}</Button>
-          <Button variant="primary" onClick={submit}>{t("連線")}</Button>
+          <Button variant="primary" onClick={submit} disabled={!ready}>{t("連線")}</Button>
         </>
       }
     >
@@ -76,7 +107,8 @@ export function RdAuthPromptDialog({ prompt, canRemember, onReply, onCancel }: R
             placeholder="123456"
             className="mono tracking-widest"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            // 驗證器 App 常顯示成「123 456」：貼上時空白等非數字拿掉，最多 6 位。
+            onChange={(e) => setPassword(e.target.value.replace(/\D/g, "").slice(0, 6))}
             onKeyDown={onEnter}
           />
         </Field>
@@ -96,6 +128,12 @@ export function RdAuthPromptDialog({ prompt, canRemember, onReply, onCancel }: R
         <label className="flex items-center gap-2 text-sm text-fg/70 select-none">
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
           {t("記住密碼（存在系統鑰匙圈）")}
+        </label>
+      )}
+      {otp && prompt.can_trust && (
+        <label className="flex items-center gap-2 text-sm text-fg/70 select-none">
+          <input type="checkbox" data-rd-trust="" checked={trust} onChange={(e) => setTrust(e.target.checked)} />
+          {t("信任這台裝置（之後連這台不用再輸入驗證碼）")}
         </label>
       )}
     </Modal>

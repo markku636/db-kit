@@ -4218,6 +4218,8 @@ const en: Catalog = {
   "已啟動安裝程式：{app} 即將關閉，更新完成後會自動重新開啟。": "Installer started: {app} will close now and reopen automatically when the update is done.",
   "雙重驗證": "Two-factor authentication",
   "驗證碼": "Verification code",
+  "等待對方接受": "Waiting for the other side to accept",
+  "信任這台裝置（之後連這台不用再輸入驗證碼）": "Trust this device (no verification code next time you connect to it)",
   "送出按鍵": "Send keys",
   "剪貼簿沒有文字": "The clipboard has no text",
   "帳號": "Username",

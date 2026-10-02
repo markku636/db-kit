@@ -51,6 +51,12 @@ struct Connect {
     /// 有值 = 用 `peer`（RustDesk ID）經 ID 伺服器連線。
     #[serde(default)]
     rendezvous: Option<rendezvous::Params>,
+    /// 本機識別碼（base64，db-kit 第一次用時隨機產生）：使用者勾「信任這台裝置」時送給對方記住。空 = 不提供。
+    #[serde(default)]
+    hwid: String,
+    /// 之前對這台勾過「信任這台裝置」：登入時就帶 hwid，對方認得就不再問驗證碼。
+    #[serde(default)]
+    trusted: bool,
 }
 
 fn default_port() -> u16 {
@@ -72,11 +78,29 @@ struct Login {
     server_key: String,
     /// `ip` / `direct` / `lan` / `relay`。
     route: &'static str,
+    /// 見 `Connect.hwid` / `Connect.trusted`。
+    hwid: Vec<u8>,
+    trusted: bool,
 }
 
 impl Login {
     fn new(peer_id: String, password: String, decoders: Decoders, my_name: String) -> Self {
-        Self { peer_id, password, decoders, my_name, signed_id_pk: Vec::new(), server_key: String::new(), route: "ip" }
+        Self {
+            peer_id,
+            password,
+            decoders,
+            my_name,
+            signed_id_pk: Vec::new(),
+            server_key: String::new(),
+            route: "ip",
+            hwid: Vec::new(),
+            trusted: false,
+        }
+    }
+
+    fn request(&self, proof: Vec<u8>, session_id: u64) -> Message {
+        let hwid = if self.trusted { &self.hwid[..] } else { &[] };
+        session::login_request(&self.peer_id, proof, self.decoders, session_id, &self.my_name, hwid)
     }
 }
 
@@ -124,6 +148,9 @@ where
     let c: Connect = serde_json::from_value(v).map_err(|e| format!("bad connect: {e}"))?;
     let peer_id = if c.peer.is_empty() { c.host.clone() } else { c.peer.clone() };
     let mut login = Login::new(peer_id, c.password, c.decoders, c.my_name);
+    // 格式不對就當沒有（只是少了「信任這台裝置」，不該讓連線失敗）。
+    login.hwid = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, c.hwid.trim()).unwrap_or_default();
+    login.trusted = c.trusted && !login.hwid.is_empty();
     let tcp = match &c.rendezvous {
         Some(rp) => {
             let est = rendezvous::connect(&login.peer_id, rp).await?;
@@ -238,6 +265,8 @@ where
     let mut hash: Option<(String, String)> = None;
     // 對方回了 `2FA Required`：連線留著，等 db-kit 問到驗證碼（`{"t":"2fa"}`）再送。
     let mut awaiting_2fa = false;
+    // 對方允許「信任這台裝置」（`2FA Required` 那則帶的；`Wrong 2FA Code` 不帶，沿用）。
+    let mut trust_offered = false;
 
     loop {
         // 兩個讀取端都是取消安全的（select! 另一邊先好時，讀到一半的封包不會掉）。
@@ -262,7 +291,7 @@ where
                             let password = v["password"].as_str().unwrap_or_default();
                             if let (Some((salt, challenge)), false) = (&hash, logged_in || password.is_empty()) {
                                 let proof = session::password_proof(password, salt, challenge);
-                                let m = session::login_request(&login.peer_id, proof, login.decoders, session_id, &login.my_name);
+                                let m = login.request(proof, session_id);
                                 session::send_sealed(&mut pw, &m, &mut tx).await.map_err(|e| e.to_string())?;
                                 login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
                             }
@@ -270,7 +299,9 @@ where
                         Ok(Some(ipc::HostMsg::Json(v))) if v["t"] == "2fa" => {
                             let code = v["code"].as_str().unwrap_or_default();
                             if awaiting_2fa && !logged_in && !code.trim().is_empty() {
-                                session::send_sealed(&mut pw, &session::auth_2fa(code), &mut tx).await.map_err(|e| e.to_string())?;
+                                // `trust` = 使用者勾了「信任這台裝置」（官方 `send2fa(code, trust_this_device)`）。
+                                let hwid = if v["trust"] == true { &login.hwid[..] } else { &[] };
+                                session::send_sealed(&mut pw, &session::auth_2fa(code, hwid), &mut tx).await.map_err(|e| e.to_string())?;
                                 login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
                             }
                         }
@@ -314,7 +345,7 @@ where
         match session::classify(&data) {
             Incoming::Hash { salt, challenge } => {
                 let proof = session::password_proof(&login.password, &salt, &challenge);
-                let m = session::login_request(&login.peer_id, proof, login.decoders, session_id, &login.my_name);
+                let m = login.request(proof, session_id);
                 session::send_sealed(&mut pw, &m, &mut tx).await.map_err(|e| e.to_string())?;
                 if login.password.is_empty() {
                     emit(stdout, json!({ "type": "waiting_accept" })).await?;
@@ -329,11 +360,20 @@ where
                 emit(stdout, json!({ "type": "login_error", "message": e })).await?;
                 return Ok(());
             }
-            Incoming::Need2fa(e) => {
+            Incoming::Need2fa { wrong, trust } => {
                 awaiting_2fa = true;
+                if !wrong {
+                    trust_offered = trust;
+                }
                 // 使用者要去翻驗證器 App：從現在起重新計時。
                 login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
-                emit(stdout, json!({ "type": "need_2fa", "wrong": e == session::WRONG_2FA })).await?;
+                let trust = trust_offered && !login.hwid.is_empty();
+                emit(stdout, json!({ "type": "need_2fa", "wrong": wrong, "trust": trust })).await?;
+            }
+            Incoming::NoPasswordAccess => {
+                // 密碼對這台沒用：對方畫面已跳出連線請求，按了接受就會回 peer_info（或要驗證碼）。
+                login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
+                emit(stdout, json!({ "type": "waiting_accept", "click_only": true })).await?;
             }
             Incoming::Frames(frames) => {
                 for f in frames {
@@ -626,6 +666,80 @@ mod tests {
         ipc::write_host_json(&mut host_in_w, &json!({ "t": "refresh" })).await.unwrap();
         let m = Message::parse_from_bytes(&codec::read_frame(&mut theirs).await.unwrap().unwrap()).unwrap();
         assert!(matches!(m.union, Some(message::Union::Misc(_))), "下一則是 refresh：{m:?}");
+        drop(host_in_w);
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    async fn next_json<R: AsyncRead + Unpin>(r: &mut R) -> serde_json::Value {
+        match ipc::read_msg(r).await.unwrap() {
+            Some(ipc::HostMsg::Json(v)) => v,
+            x => panic!("{x:?}"),
+        }
+    }
+
+    async fn next_peer_msg<R: AsyncRead + Unpin>(r: &mut R) -> Message {
+        Message::parse_from_bytes(&codec::read_frame(r).await.unwrap().unwrap()).unwrap()
+    }
+
+    /// 信任這台裝置（官方 `send2fa(code, trust_this_device)`）：對方允許時 `need_2fa` 帶 `trust`（驗證碼錯了那則
+    /// 不帶也沿用）；沒勾 → `Auth2FA` 不帶 hwid，勾了才帶。之前信任過（`trusted`）→ 登入時就帶 hwid。
+    #[tokio::test]
+    async fn trust_this_device_sends_hwid() {
+        for trusted in [false, true] {
+            let (ours, mut theirs) = tokio::io::duplex(1 << 16);
+            let (mut host_in_w, host_in_r) = tokio::io::duplex(1 << 16);
+            let (mut host_out_w, mut host_out_r) = tokio::io::duplex(1 << 16);
+            let task = tokio::spawn(async move {
+                let mut stdin = ipc::MsgReader::new(host_in_r);
+                let mut login = direct("h", "pw", Decoders::default(), "pc");
+                login.hwid = vec![7; 32];
+                login.trusted = trusted;
+                drive(ours, &mut stdin, &mut host_out_w, &login).await
+            });
+            let _ = codec::read_frame(&mut theirs).await.unwrap();
+            send_peer(&mut theirs, &hash_msg("s", "c")).await;
+            let Some(message::Union::LoginRequest(lr)) = next_peer_msg(&mut theirs).await.union else { panic!() };
+            assert_eq!(lr.hwid.is_empty(), !trusted, "信任過才在登入帶 hwid");
+            let mut need = login_error_msg(session::REQUIRE_2FA);
+            need.mut_login_response().enable_trusted_devices = true;
+            send_peer(&mut theirs, &need).await;
+            let v = next_json(&mut host_out_r).await;
+            assert_eq!((v["type"].as_str(), v["trust"].as_bool()), (Some("need_2fa"), Some(true)));
+            for (code, trust, reply) in [("111111", false, login_error_msg(session::WRONG_2FA)), ("123456", true, logged_in_msg("pc"))] {
+                ipc::write_host_json(&mut host_in_w, &json!({ "t": "2fa", "code": code, "trust": trust })).await.unwrap();
+                let Some(message::Union::Auth2fa(a)) = next_peer_msg(&mut theirs).await.union else { panic!("expect Auth2FA") };
+                assert_eq!((a.code.as_str(), a.hwid.is_empty()), (code, !trust), "勾了才帶 hwid");
+                send_peer(&mut theirs, &reply).await;
+                let v = next_json(&mut host_out_r).await;
+                if trust {
+                    assert_eq!(v["type"], "connected");
+                } else {
+                    assert_eq!((v["wrong"].as_bool(), v["trust"].as_bool()), (Some(true), Some(true)), "錯了那則沿用 trust");
+                }
+            }
+            drop(host_in_w);
+            assert!(task.await.unwrap().is_ok());
+        }
+    }
+
+    /// 對方設成只能按「接受」（`No Password Access`）：不是登入失敗，連線留著等對方按；按了就連上。
+    #[tokio::test]
+    async fn no_password_access_waits_for_accept() {
+        let (ours, mut theirs) = tokio::io::duplex(1 << 16);
+        let (host_in_w, host_in_r) = tokio::io::duplex(1 << 16);
+        let (mut host_out_w, mut host_out_r) = tokio::io::duplex(1 << 16);
+        let task = tokio::spawn(async move {
+            let mut stdin = ipc::MsgReader::new(host_in_r);
+            drive(ours, &mut stdin, &mut host_out_w, &direct("h", "pw", Decoders::default(), "pc")).await
+        });
+        let _ = codec::read_frame(&mut theirs).await.unwrap();
+        send_peer(&mut theirs, &hash_msg("s", "c")).await;
+        let _ = next_peer_msg(&mut theirs).await;
+        send_peer(&mut theirs, &login_error_msg(session::NO_PASSWORD_ACCESS)).await;
+        let v = next_json(&mut host_out_r).await;
+        assert_eq!((v["type"].as_str(), v["click_only"].as_bool()), (Some("waiting_accept"), Some(true)));
+        send_peer(&mut theirs, &logged_in_msg("pc")).await;
+        assert_eq!(next_json(&mut host_out_r).await["type"], "connected");
         drop(host_in_w);
         assert!(task.await.unwrap().is_ok());
     }

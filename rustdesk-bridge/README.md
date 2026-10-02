@@ -42,8 +42,8 @@ RustDesk 的協定定義（`protos/message.proto`）與連線邏輯以 **AGPL-3.
 
 | 方向 | 型別 | 內容 |
 |---|---|---|
-| db-kit → bridge | 1 | JSON 指令：`connect`（有 `rendezvous: { server, relay, key, force_relay }` = 用 `peer` 這個 ID 經 ID 伺服器連）/ `login`（`password`：`waiting_accept` 期間補上密碼，用同一個登入挑戰重送登入）/ `2fa`（`code`：`need_2fa` 之後送雙重驗證碼）/ `mouse` / `key` / `ctrl_alt_del` / `refresh` |
-| bridge → db-kit | 1 | JSON 事件：`connected`（帶 `secure`、`route` = `ip` / `direct` / `lan` / `relay`）/ `waiting_accept`（沒給密碼：已送空密碼的登入，等對方在畫面上按接受）/ `need_2fa`（對方開了雙重驗證，連線還在、等驗證碼；`wrong: true` = 上一個驗證碼錯了）/ `login_error` / `error`（帶 `code`，如 `id_not_exist` / `offline` / `key_mismatch`）/ `closed` |
+| db-kit → bridge | 1 | JSON 指令：`connect`（有 `rendezvous: { server, relay, key, force_relay }` = 用 `peer` 這個 ID 經 ID 伺服器連；`hwid`（base64）= 本機識別碼，`trusted: true` = 之前對這台勾過「信任這台裝置」，登入就帶 hwid）/ `login`（`password`：`waiting_accept` 期間補上密碼，用同一個登入挑戰重送登入）/ `2fa`（`code`：`need_2fa` 之後送雙重驗證碼；`trust: true` = 請對方信任這台裝置，`Auth2FA` 帶 hwid）/ `mouse` / `key` / `ctrl_alt_del` / `refresh` |
+| bridge → db-kit | 1 | JSON 事件：`connected`（帶 `secure`、`route` = `ip` / `direct` / `lan` / `relay`）/ `waiting_accept`（沒給密碼：已送空密碼的登入，等對方在畫面上按接受；`click_only: true` = 對方回 `No Password Access`，只能按接受、密碼沒用，連線還在）/ `need_2fa`（對方開了雙重驗證，連線還在、等驗證碼；`wrong: true` = 上一個驗證碼錯了；`trust: true` = 對方允許信任這台裝置）/ `login_error` / `error`（帶 `code`，如 `id_not_exist` / `offline` / `key_mismatch`）/ `closed` |
 | bridge → db-kit | 2 | 影像：`[u8 codec][u8 key][u8 display][u8 保留][i64 pts]` + 編碼後的資料 |
 
 stdin 關閉（db-kit 結束或斷線）時程式自己結束。密碼只經 stdin 傳，不放在命令列（命令列別的程式看得到）。

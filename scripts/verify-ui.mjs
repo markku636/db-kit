@@ -152,6 +152,8 @@ const CASE_FX = {
   "rd-rdp-file-import": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-session": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-2fa": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-rustdesk-2fa-trust": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-rustdesk-wait-accept": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "update-dialog-install": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-manual": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-error": { GITHUB_RELEASE: FX_RELEASE },
@@ -1109,6 +1111,50 @@ const CASES = {
     const answers = await page.evaluate(() => window.__DBKIT_RD_ANSWERS__);
     check("驗證碼對了就連上", (await page.locator("[data-rd-overlay]").count()) === 0, JSON.stringify(answers));
     check("驗證碼不記住", answers.length === 2 && answers.every((a) => a && a.remember === false), JSON.stringify(answers));
+  },
+
+  // 對方允許「信任這台裝置」：驗證碼對話框多一個勾選項，勾了答案帶 remember；驗證碼只收數字、滿 6 位才能送。
+  async "rd-rustdesk-2fa-trust"(page) {
+    await page.evaluate(() => { window.__DBKIT_RD_PROMPT__ = "otp"; window.__DBKIT_RD_TRUST__ = true; });
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("office-pc", { exact: true }).first().dblclick();
+    const otp = page.locator("[data-rd-otp]");
+    await otp.waitFor({ timeout: 5000 }).catch(() => {});
+    const trust = page.locator("[data-rd-trust]");
+    check("有「信任這台裝置」勾選項", (await trust.count()) === 1 && (await page.getByText("信任這台裝置（之後連這台不用再輸入驗證碼）").count()) === 1);
+    const connect = page.getByRole("dialog").filter({ has: otp }).getByRole("button", { name: "連線", exact: true });
+    await otp.fill("12a3");
+    check("驗證碼只收數字、不滿 6 位不能送", (await otp.inputValue()) === "123" && (await connect.isDisabled()));
+    await otp.press("Enter");
+    check("不滿 6 位按 Enter 不送出", (await page.evaluate(() => window.__DBKIT_RD_ANSWERS__.length)) === 0);
+    await trust.check();
+    await otp.fill("123 4567");
+    check("貼上帶空白的驗證碼：拿掉空白、最多 6 位", (await otp.inputValue()) === "123456" && !(await connect.isDisabled()));
+    await connect.click();
+    await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "1024x768", null, { timeout: 10000 }).catch(() => {});
+    const answers = await page.evaluate(() => window.__DBKIT_RD_ANSWERS__);
+    check("勾了信任 → 答案帶 remember、連上", (await page.locator("[data-rd-overlay]").count()) === 0
+      && answers.length === 1 && answers[0]?.password === "123456" && answers[0]?.remember === true, JSON.stringify(answers));
+  },
+
+  // 對方只能按「接受」（不收密碼）：只顯示「等待對方接受」、沒有密碼欄，只能取消；對方按了就連上。
+  async "rd-rustdesk-wait-accept"(page) {
+    await page.evaluate(() => { window.__DBKIT_RD_PROMPT__ = "wait"; });
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("office-pc", { exact: true }).first().dblclick();
+    const waiting = page.locator("[data-rd-wait-accept]");
+    await waiting.waitFor({ timeout: 5000 }).catch(() => {});
+    check("顯示等待對方接受", (await waiting.count()) === 1 && (await page.getByText("等待對方接受", { exact: true }).count()) > 0
+      && ((await waiting.textContent()) ?? "").includes("不能用密碼登入"));
+    const dlg = page.getByRole("dialog").filter({ has: waiting });
+    check("沒有密碼欄、沒有「連線」鈕，只能取消", (await dlg.locator("input").count()) === 0
+      && (await dlg.getByRole("button", { name: "連線", exact: true }).count()) === 0
+      && (await dlg.getByRole("button", { name: "取消", exact: true }).count()) === 1);
+    await page.evaluate(() => window.__DBKIT_RD_ACCEPT__());
+    await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "1024x768", null, { timeout: 10000 }).catch(() => {});
+    check("對方按了接受 → 連上、等待對話框收掉", (await page.locator("[data-rd-overlay]").count()) === 0 && (await waiting.count()) === 0);
   },
 
   // 自動更新（NSIS 安裝的 Windows 版）：「關於」檢查到新版 → 更新對話框列出更新內容 →「立即更新」顯示下載進度、

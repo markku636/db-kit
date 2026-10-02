@@ -212,19 +212,19 @@ mod rdp {
 mod rustdesk {
     use super::*;
     use crate::rd::runtime::AuthAnswer;
-    use crate::rd::rustdesk::{self as r, RustdeskParams};
+    use crate::rd::rustdesk::{self as r, RustdeskParams, TwoFactorAnswer};
 
     fn params(password: &str) -> RustdeskParams {
-        RustdeskParams { host: host("DBKIT_RUSTDESK_IT_HOST"), port: 21118, password: password.into(), rendezvous: None }
+        RustdeskParams { host: host("DBKIT_RUSTDESK_IT_HOST"), port: 21118, password: password.into(), rendezvous: None, hwid: String::new(), trusted: false }
     }
 
     /// 有給密碼的連線不會問（沒有 `waiting_accept`）。
-    fn no_ask() -> std::future::Ready<Option<AuthAnswer>> {
+    fn no_ask(_: bool) -> std::future::Ready<Option<AuthAnswer>> {
         std::future::ready(None)
     }
 
     /// 測試用的被控端沒開雙重驗證：不會問驗證碼。
-    fn no_2fa(_: bool) -> std::future::Ready<Option<String>> {
+    fn no_2fa(_: bool, _: bool) -> std::future::Ready<Option<TwoFactorAnswer>> {
         std::future::ready(None)
     }
 
@@ -233,7 +233,7 @@ mod rustdesk {
     #[ignore]
     async fn rustdesk_password_entered_while_waiting_for_accept() {
         let asked = std::sync::atomic::AtomicBool::new(false);
-        let c = r::connect(&params(""), Duration::from_secs(30), || {
+        let c = r::connect(&params(""), Duration::from_secs(30), |_| {
             asked.store(true, std::sync::atomic::Ordering::SeqCst);
             std::future::ready(Some(AuthAnswer { username: String::new(), password: "dbkit123".into(), remember: false }))
         }, no_2fa)
@@ -284,6 +284,8 @@ mod rustdesk {
             port: 0,
             password: "dbkit123".into(),
             rendezvous: Some(r::Rendezvous { server: host("DBKIT_RUSTDESK_IT_SERVER"), key: key.into(), ..Default::default() }),
+            hwid: String::new(),
+            trusted: false,
         }
     }
 

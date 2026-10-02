@@ -523,6 +523,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "密碼或驗證碼錯誤次數太多，對方暫時拒絕登入：請一分鐘後再試" => "Nhập sai mật khẩu hoặc mã xác minh quá nhiều lần, máy bên kia tạm thời từ chối đăng nhập. Hãy thử lại sau một phút",
         "密碼或驗證碼錯誤次數太多，對方的 RustDesk 已封鎖這台電腦的登入：請對方重新啟動 RustDesk 後再試" => "Nhập sai mật khẩu hoặc mã xác minh quá nhiều lần, RustDesk của máy bên kia đã chặn đăng nhập từ máy tính này. Hãy nhờ họ khởi động lại RustDesk rồi thử lại",
         "驗證碼錯誤：請輸入驗證器 App 上目前顯示的那組（每 30 秒會換一組）" => "Mã xác minh không đúng: hãy nhập mã ứng dụng xác thực đang hiển thị (mã đổi sau mỗi 30 giây)",
+        "對方一直沒有在畫面上按「接受」（對方的 RustDesk 設定為只能按接受、不能用密碼登入）" => "Không ai nhấn “Chấp nhận” trên màn hình máy bên kia (RustDesk bên đó chỉ cho phép chấp nhận trên màn hình, không đăng nhập bằng mật khẩu)",
+        "對方的 RustDesk 設定為只能在畫面上按「接受」，不能用密碼登入：已請對方按接受，按了就會連上。" => "RustDesk của máy bên kia chỉ cho phép chấp nhận kết nối trên màn hình, không đăng nhập bằng mật khẩu. Đã yêu cầu họ nhấn “Chấp nhận”; khi họ nhấn là kết nối.",
         "對方的 RustDesk 開啟了雙重驗證（2FA）：請輸入對方綁定的驗證器 App（如 Google Authenticator）上顯示的 6 位數驗證碼。" => "RustDesk của máy bên kia đã bật xác thực hai lớp (2FA): hãy nhập mã 6 chữ số hiển thị trong ứng dụng xác thực (ví dụ Google Authenticator) mà họ đã liên kết.",
         "更新失敗：{detail}" => "Cập nhật thất bại: {detail}",
         "這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔" => "Kiểu cài đặt này không hỗ trợ tự động cập nhật; hãy tải bộ cài từ GitHub",

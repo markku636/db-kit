@@ -124,12 +124,16 @@ export interface RdAuthPrompt {
   notice?: string | null;
   /** 問的是雙重驗證碼（RustDesk 對方開了 2FA）：答案放 `password`，不顯示「記住密碼」。 */
   otp?: boolean;
+  /** 驗證碼對話框可勾「信任這台裝置」（對方允許時）：答案放 `remember`。 */
+  can_trust?: boolean;
+  /** 沒有欄位、只能取消：等 RustDesk 對方按「接受」（對方設成不收密碼）。 */
+  wait?: boolean;
 }
 
 export interface RdAuthAnswer {
   username: string;
   password: string;
-  /** 記住密碼（寫進 keychain；只有已存主機才有意義）。 */
+  /** 記住密碼（寫進 keychain；只有已存主機才有意義）。驗證碼對話框時 = 信任這台裝置。 */
   remember: boolean;
 }
 

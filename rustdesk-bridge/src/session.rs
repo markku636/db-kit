@@ -8,6 +8,9 @@
 //    （`handle_hash`）；沒有密碼就送空的，由對方在畫面上按「接受」。
 // 3. `LoginResponse`：`peer_info`（成功，帶螢幕清單）或 `error`（密碼錯等）。對方開了雙重驗證時 error 是
 //    `2FA Required`，連線不斷：在同一條連線送 `Auth2FA { code }`（官方 `send2fa`），錯了回 `Wrong 2FA Code`。
+//    對方允許「信任這台裝置」時（`enable_trusted_devices`）`Auth2FA.hwid` 帶本機識別碼，對方記下來；之後
+//    `LoginRequest.hwid` 帶同一個就不再問驗證碼。對方設成只能按「接受」時回 `No Password Access`，連線也不斷，
+//    對方按了接受就直接回 `peer_info`。
 // 4. 之後對方持續送 `VideoFrame`（VP9 / VP8 / AV1 其一，由我們在 `OptionMessage.supported_decoding` 宣告能解的），
 //    `TestDelay` 要原樣回（不回對方會以為斷線）。
 //
@@ -33,6 +36,8 @@ pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(120);
 /// 對方要雙重驗證碼 / 驗證碼錯（官方 `REQUIRE_2FA` / `LOGIN_MSG_2FA_WRONG`）。
 pub const REQUIRE_2FA: &str = "2FA Required";
 pub const WRONG_2FA: &str = "Wrong 2FA Code";
+/// 對方只接受在畫面上按「接受」、不收密碼（官方 `LOGIN_MSG_NO_PASSWORD_ACCESS`）：連線不斷，等對方按。
+pub const NO_PASSWORD_ACCESS: &str = "No Password Access";
 
 /// 影像編碼（送給 db-kit 的代碼）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,7 +116,8 @@ pub fn password_proof(password: &str, salt: &str, challenge: &str) -> Vec<u8> {
     h.finalize().to_vec()
 }
 
-pub fn login_request(peer: &str, proof: Vec<u8>, dec: Decoders, session_id: u64, my_name: &str) -> Message {
+/// `hwid`：之前對這台勾過「信任這台裝置」才帶（官方只在 `trust-this-device` 開著時帶）；空 = 不帶。
+pub fn login_request(peer: &str, proof: Vec<u8>, dec: Decoders, session_id: u64, my_name: &str, hwid: &[u8]) -> Message {
     let decoding = SupportedDecoding {
         ability_vp9: i32::from(dec.vp9),
         ability_vp8: i32::from(dec.vp8),
@@ -138,6 +144,7 @@ pub fn login_request(peer: &str, proof: Vec<u8>, dec: Decoders, session_id: u64,
         option: MessageField::some(option),
         session_id,
         version: "1.4.2".into(),
+        hwid: hwid.to_vec().into(),
         ..Default::default()
     };
     let mut m = Message::new();
@@ -145,11 +152,12 @@ pub fn login_request(peer: &str, proof: Vec<u8>, dec: Decoders, session_id: u64,
     m
 }
 
-/// 雙重驗證碼（驗證器 App 常顯示成 `123 456`，空白拿掉；`hwid` 不填 = 不要對方「信任這台裝置」）。
-pub fn auth_2fa(code: &str) -> Message {
+/// 雙重驗證碼（驗證器 App 常顯示成 `123 456`，空白拿掉）。`hwid` 空 = 不要對方「信任這台裝置」；
+/// 有值 = 請對方記住這台（對方的 `add_trusted_device`，認的是 hwid + `my_id` / `my_name` / `my_platform`）。
+pub fn auth_2fa(code: &str, hwid: &[u8]) -> Message {
     let code = code.chars().filter(|c| !c.is_whitespace()).collect();
     let mut m = Message::new();
-    m.set_auth_2fa(Auth2FA { code, ..Default::default() });
+    m.set_auth_2fa(Auth2FA { code, hwid: hwid.to_vec().into(), ..Default::default() });
     m
 }
 
@@ -177,8 +185,11 @@ pub enum Incoming {
     Hash { salt: String, challenge: String },
     LoggedIn(PeerInfo),
     LoginError(String),
-    /// 要雙重驗證碼（`REQUIRE_2FA` / `WRONG_2FA` 原文）：連線還在，等 `Auth2FA`。
-    Need2fa(String),
+    /// 要雙重驗證碼：連線還在，等 `Auth2FA`。`wrong` = 上一個驗證碼錯了（`WRONG_2FA`）；`trust` = 對方允許
+    /// 「信任這台裝置」（只有 `REQUIRE_2FA` 那則會帶，官方用戶端也只在那時更新）。
+    Need2fa { wrong: bool, trust: bool },
+    /// 對方只接受按「接受」（`NO_PASSWORD_ACCESS`）：連線還在，等對方按。
+    NoPasswordAccess,
     Frames(Vec<Frame>),
     /// 要原樣回的封包（TestDelay）。
     Echo(Message),
@@ -203,7 +214,10 @@ pub fn classify(data: &[u8]) -> Incoming {
                     .map(|d| Display { x: d.x, y: d.y, width: d.width, height: d.height, name: d.name.clone() })
                     .collect(),
             }),
-            Some(login_response::Union::Error(e)) if e == REQUIRE_2FA || e == WRONG_2FA => Incoming::Need2fa(e),
+            Some(login_response::Union::Error(e)) if e == REQUIRE_2FA || e == WRONG_2FA => {
+                Incoming::Need2fa { wrong: e == WRONG_2FA, trust: lr.enable_trusted_devices }
+            }
+            Some(login_response::Union::Error(e)) if e == NO_PASSWORD_ACCESS => Incoming::NoPasswordAccess,
             Some(login_response::Union::Error(e)) => Incoming::LoginError(e),
             _ => Incoming::Ignore,
         },
@@ -294,13 +308,16 @@ mod tests {
 
     #[test]
     fn login_request_declares_decoders_and_platform() {
-        let m = login_request("192.168.1.5", vec![1, 2], Decoders { vp9: true, vp8: false, av1: true }, 7, "pc");
+        let m = login_request("192.168.1.5", vec![1, 2], Decoders { vp9: true, vp8: false, av1: true }, 7, "pc", &[]);
         let bytes = m.write_to_bytes().unwrap();
         assert!(Message::parse_from_bytes(&bytes).is_ok(), "序列化再解回來");
         let Some(message::Union::LoginRequest(lr)) = m.union else { panic!() };
         assert_eq!(lr.username, "192.168.1.5");
         assert_eq!(&lr.password[..], &[1, 2]);
         assert_eq!(lr.my_platform, "Windows");
+        assert!(lr.hwid.is_empty(), "沒信任過 → 不帶 hwid");
+        let m = login_request("h", vec![], Decoders::default(), 7, "pc", &[7; 32]);
+        assert!(matches!(m.union, Some(message::Union::LoginRequest(ref lr)) if lr.hwid[..] == [7; 32]));
         let d = lr.option.supported_decoding.clone().unwrap();
         assert_eq!((d.ability_vp9, d.ability_vp8, d.ability_av1, d.ability_h264), (1, 0, 1, 0));
         assert_eq!(d.prefer.enum_value(), Ok(PreferCodec::VP9));
@@ -318,13 +335,26 @@ mod tests {
         m.set_login_response(lr);
         assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::LoginError(ref e) if e == "Wrong Password"));
 
-        for e in [REQUIRE_2FA, WRONG_2FA] {
+        for (e, trust, want) in [
+            (REQUIRE_2FA, true, (false, true)),
+            (REQUIRE_2FA, false, (false, false)),
+            (WRONG_2FA, false, (true, false)),
+        ] {
             let mut m = Message::new();
-            let mut lr = LoginResponse::new();
+            let mut lr = LoginResponse { enable_trusted_devices: trust, ..Default::default() };
             lr.set_error(e.into());
             m.set_login_response(lr);
-            assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Need2fa(ref x) if x == e), "{e}：不是登入失敗");
+            match classify(&m.write_to_bytes().unwrap()) {
+                Incoming::Need2fa { wrong, trust } => assert_eq!((wrong, trust), want, "{e}"),
+                x => panic!("{e}：不是登入失敗 {x:?}"),
+            }
         }
+
+        let mut m = Message::new();
+        let mut lr = LoginResponse::new();
+        lr.set_error(NO_PASSWORD_ACCESS.into());
+        m.set_login_response(lr);
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::NoPasswordAccess), "只能按接受：不是登入失敗");
 
         let mut m = Message::new();
         let mut vf = VideoFrame { display: 1, ..Default::default() };
@@ -355,7 +385,9 @@ mod tests {
         assert!(matches!(m.union, Some(message::Union::MouseEvent(ref e)) if e.mask == 9 && e.x == 10));
         let m = command_message(&Command::Refresh);
         assert!(matches!(m.union, Some(message::Union::Misc(_))));
-        let m = auth_2fa(" 123 456 ");
+        let m = auth_2fa(" 123 456 ", &[]);
         assert!(matches!(m.union, Some(message::Union::Auth2fa(ref a)) if a.code == "123456" && a.hwid.is_empty()));
+        let m = auth_2fa("123456", &[1, 2, 3]);
+        assert!(matches!(m.union, Some(message::Union::Auth2fa(ref a)) if a.hwid[..] == [1, 2, 3]), "信任這台裝置 → 帶 hwid");
     }
 }

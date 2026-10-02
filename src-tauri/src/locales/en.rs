@@ -1589,6 +1589,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "密碼或驗證碼錯誤次數太多，對方暫時拒絕登入：請一分鐘後再試" => "Too many wrong passwords or verification codes; the other side is refusing logins for now. Try again in a minute",
         "密碼或驗證碼錯誤次數太多，對方的 RustDesk 已封鎖這台電腦的登入：請對方重新啟動 RustDesk 後再試" => "Too many wrong passwords or verification codes; the other side's RustDesk has blocked logins from this computer. Ask them to restart RustDesk, then try again",
         "驗證碼錯誤：請輸入驗證器 App 上目前顯示的那組（每 30 秒會換一組）" => "Wrong verification code: enter the code the authenticator app shows right now (it changes every 30 seconds)",
+        "對方一直沒有在畫面上按「接受」（對方的 RustDesk 設定為只能按接受、不能用密碼登入）" => "Nobody clicked \"Accept\" on the other side's screen (its RustDesk only allows accepting on screen, not password login)",
+        "對方的 RustDesk 設定為只能在畫面上按「接受」，不能用密碼登入：已請對方按接受，按了就會連上。" => "The other side's RustDesk only allows accepting the connection on its screen, not password login. They have been asked to click \"Accept\"; you'll be connected once they do.",
         "對方的 RustDesk 開啟了雙重驗證（2FA）：請輸入對方綁定的驗證器 App（如 Google Authenticator）上顯示的 6 位數驗證碼。" => "The other side's RustDesk has two-factor authentication (2FA) turned on: enter the 6-digit code shown in the authenticator app (e.g. Google Authenticator) it is linked to.",
         "更新失敗：{detail}" => "Update failed: {detail}",
         "這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔" => "This installation doesn't support automatic updates; download the installer from GitHub",

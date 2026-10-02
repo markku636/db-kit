@@ -1571,6 +1571,8 @@ const vi: Catalog = {
   "已啟動安裝程式：{app} 即將關閉，更新完成後會自動重新開啟。": "Đã khởi động bộ cài: {app} sẽ đóng ngay và tự mở lại khi cập nhật xong.",
   "雙重驗證": "Xác thực hai lớp",
   "驗證碼": "Mã xác minh",
+  "等待對方接受": "Đang chờ máy bên kia chấp nhận",
+  "信任這台裝置（之後連這台不用再輸入驗證碼）": "Tin cậy thiết bị này (lần sau kết nối tới máy này không cần mã xác minh)",
   "送出按鍵": "Gửi phím",
   "剪貼簿沒有文字": "Bộ nhớ tạm không có văn bản",
   "帳號": "Tên đăng nhập",
