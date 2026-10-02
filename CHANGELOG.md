@@ -1,3 +1,19 @@
+## v0.54.0
+
+**VNC 支援 VeNCrypt 加密：伺服器（TigerVNC、QEMU、libvirt）有提供時改走 TLS，畫面、鍵盤與 VNC 密碼不再明文傳送。**
+
+- 匿名 TLS（TLSNone / TLSVnc / TLSPlain，TigerVNC 的預設）：有加密，但沒有憑證可以確認伺服器身分，分頁會標「未驗證伺服器」。
+- X509 憑證 TLS（X509None / X509Vnc / X509Plain）：憑證跟 RDP 一樣第一次連線時確認並記住，之後變了會警告——都在送出密碼之前。
+- 「自動」：伺服器同時提供 VeNCrypt 和 VNC 密碼時優先走加密，X509 優先於匿名 TLS；匿名 TLS 跟舊伺服器談不攏時，改用不加密的方式再連一次。
+- 主機設定多了「VeNCrypt 加密（TLS）」，選了就一定要加密；「VeNCrypt 帳號 + 密碼」在伺服器有 TLS 時也會套用。
+- 連線字串裡的 `SecurityType=TLSVnc`、`X509None` 這類寫法會對應到「VeNCrypt 加密（TLS）」。
+
+> 驗證：
+> - Rust 遠端桌面單元測試 103 項（新增 TLS 金鑰推導的公開測試向量、加解密往返與竄改 / 重送偵測、握手訊息解析、子型別挑選與重連規則）；對 Docker 裡的 TigerVNC 跑整合測試 10 項（匿名 TLS + 密碼、免認證、密碼錯誤、指定 VNC 密碼時不走 TLS、X509 首次記住 / 再連不問 / 變更警告 / 拒絕後取消、經 TLS 轉送畫面），另外測過只開 AES-128 的伺服器。
+> - 前端單元測試 2143 項、tsc、vite build 通過；介面測試新增 rd-vnc-encryption，遠端桌面介面情境 16 個（201 項檢查）全部通過。
+>
+> 沒測到：打包後的 App 實機、QEMU / libvirt 的 VeNCrypt TLS。
+
 ## v0.53.0
 
 **RustDesk 連線的畫面與游標：游標會變成對方電腦上的形狀，可以自訂縮放比例，真彩模式讓細字不再糊，還能截圖、跟著對方切換螢幕。**
