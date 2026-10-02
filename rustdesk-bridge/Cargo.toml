@@ -24,6 +24,8 @@ ed25519-dalek = "2"
 crypto_box = "0.9"
 crypto_secretbox = "0.1"
 base64 = "0.22"
+# 對方剪貼簿的 zstd 壓縮（官方用 libzstd；這裡用純 Rust 的解碼器，維持不需要 C 函式庫）。
+ruzstd = "0.8"
 
 [build-dependencies]
 protobuf-codegen = "3.7"

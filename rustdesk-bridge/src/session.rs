@@ -16,6 +16,11 @@
 // 5. 多螢幕：切到某個螢幕 = `SwitchDisplay` + `CaptureDisplays { set: [它] }` + 要那個螢幕的關鍵畫面；
 //    看全部 = `CaptureDisplays { set: [全部] }`，之後每張 `VideoFrame.display` 標明是哪個螢幕的（官方
 //    `session_switch_display`）。對方換了螢幕 / 解析度回 `Misc.SwitchDisplay`，插拔螢幕送新的 `PeerInfo`。
+// 6. 工具列的其他功能（官方 `src/client.rs` / `ui_session_interface.rs`）：畫質（`OptionMessage.image_quality`）、
+//    偏好的編碼（`supported_decoding.prefer`）、封鎖對方輸入 / 停用剪貼簿 / 結束後鎖定（`OptionMessage` 的開關）、
+//    鎖定畫面（`ControlKey::LockScreen`）、重新啟動對方（`Misc.restart_remote_device`）、剪貼簿（`Clipboard`，
+//    對方送來的可能是 zstd 壓縮的）、把文字打過去（`KeyEvent.seq`）、聊天（`Misc.chat_message`）、
+//    告知對方正在錄影（`Misc.client_record_status`）。對方的權限（`Misc.permission_info`）一開始只送被關掉的。
 //
 // SPDX-License-Identifier: AGPL-3.0-only
 
@@ -27,9 +32,10 @@ use tokio::io::AsyncWrite;
 
 use crate::codec::write_frame;
 use crate::proto::message::{
-    key_event, login_response, message, misc, video_frame, Auth2FA, CaptureDisplays, ControlKey, DisplayInfo,
-    EncodedVideoFrames, KeyEvent, KeyboardMode, LoginRequest, Message, Misc, MouseEvent, OptionMessage,
-    SupportedDecoding, SwitchDisplay,
+    back_notification, key_event, login_response, message, misc, permission_info, video_frame, Auth2FA,
+    CaptureDisplays, ChatMessage, Clipboard, ClipboardFormat, ControlKey, DisplayInfo, EncodedVideoFrames,
+    ImageQuality, KeyEvent, KeyboardMode, LoginRequest, Message, Misc, MouseEvent, OptionMessage, SupportedDecoding,
+    SwitchDisplay,
 };
 use crate::proto::message::option_message::BoolOption;
 use crate::proto::message::supported_decoding::PreferCodec;
@@ -102,6 +108,49 @@ pub struct DisplayChanged {
 
 /// 一次最多看幾個螢幕（防呆：db-kit 的 bug 不該讓對方開一堆擷取）。
 const MAX_DISPLAYS: usize = 16;
+/// 對方剪貼簿解壓縮後的上限（官方 `MAX_DECOMPRESSED_SIZE` 是 256 MB；這裡只收文字，16 MB 很夠）。
+const MAX_CLIPBOARD: usize = 16 * 1024 * 1024;
+
+/// 對方的訊息框（官方 `MessageBox`：`msgtype` 如 `info` / `error` / `nook-nocancel-hasclose`；`text` 是英文）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MsgBox {
+    pub msgtype: String,
+    pub title: String,
+    pub text: String,
+}
+
+fn permission_name(p: permission_info::Permission) -> &'static str {
+    use permission_info::Permission as P;
+    match p {
+        P::Keyboard => "keyboard",
+        P::Clipboard => "clipboard",
+        P::Audio => "audio",
+        P::File => "file",
+        P::Restart => "restart",
+        P::Recording => "recording",
+        P::BlockInput => "block_input",
+        P::PrivacyMode => "privacy_mode",
+    }
+}
+
+/// zstd 解壓縮（官方 `hbb_common::compress::decompress`；純 Rust 的解碼器，不需要 libzstd）。
+fn zstd_decompress(data: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut src = data;
+    let dec = ruzstd::decoding::StreamingDecoder::new(&mut src).ok()?;
+    let mut out = Vec::new();
+    dec.take(MAX_CLIPBOARD as u64 + 1).read_to_end(&mut out).ok()?;
+    (out.len() <= MAX_CLIPBOARD).then_some(out)
+}
+
+/// 剪貼簿裡的文字（只收 `Text` 格式；RTF / HTML / 圖片略過）。
+fn clipboard_text(cb: &Clipboard) -> Option<String> {
+    if cb.format.enum_value() != Ok(ClipboardFormat::Text) {
+        return None;
+    }
+    let raw = if cb.compress { zstd_decompress(&cb.content)? } else { cb.content.to_vec() };
+    String::from_utf8(raw).ok().filter(|s| !s.is_empty())
+}
 
 /// 能解哪些編碼（db-kit 依 WebView 的 `VideoDecoder.isConfigSupported` 決定後告訴我們）。
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
@@ -218,8 +267,16 @@ pub enum Incoming {
     Displays(Vec<Display>),
     /// 對方換了螢幕 / 那個螢幕換了解析度（`Misc.SwitchDisplay`）。
     DisplayChanged(DisplayChanged),
-    /// 要原樣回的封包（TestDelay）。
-    Echo(Message),
+    /// 要原樣回的封包（TestDelay）；`delay` = 對方量到的上一次來回延遲（毫秒），`bitrate` = 對方目前的目標位元率。
+    Echo { msg: Message, delay: u32, bitrate: u32 },
+    /// 對方給這條連線的權限變了（一開始只送被關掉的）。
+    Permission { name: &'static str, enabled: bool },
+    /// 對方複製了文字。
+    Clipboard(String),
+    Chat(String),
+    /// 封鎖 / 解除封鎖對方輸入的結果。
+    BlockInput { on: bool, ok: bool },
+    MsgBox(MsgBox),
     Closed(String),
     Ignore,
 }
@@ -247,9 +304,17 @@ pub fn classify(data: &[u8]) -> Incoming {
         Some(message::Union::VideoFrame(vf)) => Incoming::Frames(frames_of(&vf)),
         Some(message::Union::PeerInfo(pi)) => Incoming::Displays(pi.displays.iter().map(Display::from).collect()),
         Some(message::Union::TestDelay(t)) if !t.from_client => {
-            let mut out = Message::new();
-            out.set_test_delay(t);
-            Incoming::Echo(out)
+            let (delay, bitrate) = (t.last_delay, t.target_bitrate);
+            let mut msg = Message::new();
+            msg.set_test_delay(t);
+            Incoming::Echo { msg, delay, bitrate }
+        }
+        Some(message::Union::Clipboard(cb)) => clipboard_text(&cb).map_or(Incoming::Ignore, Incoming::Clipboard),
+        Some(message::Union::MultiClipboards(mc)) => {
+            mc.clipboards.iter().find_map(clipboard_text).map_or(Incoming::Ignore, Incoming::Clipboard)
+        }
+        Some(message::Union::MessageBox(mb)) => {
+            Incoming::MsgBox(MsgBox { msgtype: mb.msgtype, title: mb.title, text: mb.text })
         }
         Some(message::Union::Misc(ms)) => match ms.union {
             Some(misc::Union::CloseReason(r)) => Incoming::Closed(r),
@@ -260,6 +325,24 @@ pub fn classify(data: &[u8]) -> Incoming {
                 width: sd.width,
                 height: sd.height,
             }),
+            Some(misc::Union::PermissionInfo(p)) => match p.permission.enum_value() {
+                Ok(perm) => Incoming::Permission { name: permission_name(perm), enabled: p.enabled },
+                Err(_) => Incoming::Ignore,
+            },
+            Some(misc::Union::ChatMessage(c)) if !c.text.is_empty() => Incoming::Chat(c.text),
+            Some(misc::Union::BackNotification(n)) => match n.union {
+                Some(back_notification::Union::BlockInputState(s)) => {
+                    use back_notification::BlockInputState as B;
+                    match s.enum_value() {
+                        Ok(B::BlkOnSucceeded) => Incoming::BlockInput { on: true, ok: true },
+                        Ok(B::BlkOnFailed) => Incoming::BlockInput { on: true, ok: false },
+                        Ok(B::BlkOffSucceeded) => Incoming::BlockInput { on: false, ok: true },
+                        Ok(B::BlkOffFailed) => Incoming::BlockInput { on: false, ok: false },
+                        _ => Incoming::Ignore,
+                    }
+                }
+                _ => Incoming::Ignore,
+            },
             _ => Incoming::Ignore,
         },
         _ => Incoming::Ignore,
@@ -278,7 +361,66 @@ pub enum Command {
     Refresh,
     /// 要看哪些螢幕（`PeerInfo.displays` 的索引）：一個 = 切到那個螢幕；多個 = 同時看（每張畫面帶 display）。
     Displays { set: Vec<i32> },
+    /// 畫質：`best`（最佳畫質）/ `balanced`（平衡）/ `low`（最佳反應）。
+    Quality { level: String },
+    /// 偏好的編碼（`auto` / `vp9` / `vp8` / `av1`）+ 這端能解哪些。
+    Codec {
+        prefer: String,
+        #[serde(flatten)]
+        decoders: Decoders,
+    },
+    /// 連線中的開關：`block_input`（封鎖對方的鍵盤滑鼠）/ `disable_clipboard` / `lock_after_session_end`。
+    Toggle { name: String, on: bool },
+    /// 鎖定對方的畫面（Win+L）。
+    LockScreen,
+    /// 重新啟動對方的電腦。
+    Restart,
+    /// 本機複製的文字 → 對方的剪貼簿。
+    Clipboard { text: String },
+    /// 把文字直接打過去（對方的登入畫面這類不能貼上的地方也行）。
+    TypeText { text: String },
+    Chat { text: String },
+    /// 告知對方：這端開始 / 停止錄影（對方畫面會顯示正在錄影）。
+    Record { on: bool },
 }
+
+/// 送指令時要知道的對方資訊。
+#[derive(Debug, Clone, Default)]
+pub struct PeerCtx {
+    /// `Windows` / `Linux` / `Mac OS` / `Android`（`PeerInfo.platform`）。
+    pub platform: String,
+}
+
+fn option_message(o: OptionMessage) -> Message {
+    misc_message(|m| m.set_option(o))
+}
+
+fn bool_option(on: bool) -> EnumOrUnknown<BoolOption> {
+    EnumOrUnknown::new(if on { BoolOption::Yes } else { BoolOption::No })
+}
+
+/// 能解的編碼 + 偏好（官方 `update_supported_decodings`）。偏好的那個解不了就用自動。
+pub fn supported_decoding(dec: Decoders, prefer: &str) -> SupportedDecoding {
+    let prefer = match prefer {
+        "vp9" if dec.vp9 => PreferCodec::VP9,
+        "vp8" if dec.vp8 => PreferCodec::VP8,
+        "av1" if dec.av1 => PreferCodec::AV1,
+        _ => PreferCodec::Auto,
+    };
+    SupportedDecoding {
+        ability_vp9: i32::from(dec.vp9),
+        ability_vp8: i32::from(dec.vp8),
+        ability_av1: i32::from(dec.av1),
+        // H.264 / H.265 要對方有硬體編碼器，而且 WebView 解 H.265 不一定行：不宣告。
+        ability_h264: 0,
+        ability_h265: 0,
+        prefer: EnumOrUnknown::new(prefer),
+        ..Default::default()
+    }
+}
+
+/// 送一段字串的上限（`KeyEvent.seq` / 剪貼簿）：太長的貼上對方要打很久，剪貼簿則是防呆。
+const MAX_TEXT: usize = 1024 * 1024;
 
 fn misc_message(f: impl FnOnce(&mut Misc)) -> Message {
     let mut misc = Misc::new();
@@ -313,8 +455,8 @@ fn display_messages(wanted: &[i32]) -> Vec<Message> {
     out
 }
 
-/// db-kit 的一個指令 → 要送給對方的封包（換螢幕要好幾則）。
-pub fn command_messages(c: &Command) -> Vec<Message> {
+/// db-kit 的一個指令 → 要送給對方的封包（換螢幕要好幾則；不認得的開關 / 畫質 → 不送）。
+pub fn command_messages(c: &Command, peer: &PeerCtx) -> Vec<Message> {
     let mut m = Message::new();
     match c {
         Command::Mouse { mask, x, y } => {
@@ -325,13 +467,69 @@ pub fn command_messages(c: &Command) -> Vec<Message> {
             k.union = Some(key_event::Union::Chr(*scancode));
             m.set_key_event(k);
         }
-        Command::CtrlAltDel => {
+        // 官方 `event_ctrl_alt_del`：Windows 用 CtrlAltDel 控制鍵（對方走 SAS）；其他系統送 Ctrl+Alt+Delete 組合。
+        Command::CtrlAltDel if peer.platform.is_empty() || peer.platform == "Windows" => {
             let mut k = KeyEvent { down: true, press: true, mode: EnumOrUnknown::new(KeyboardMode::Legacy), ..Default::default() };
             k.union = Some(key_event::Union::ControlKey(EnumOrUnknown::new(ControlKey::CtrlAltDel)));
             m.set_key_event(k);
         }
+        Command::CtrlAltDel => {
+            let mut k = KeyEvent { press: true, mode: EnumOrUnknown::new(KeyboardMode::Legacy), ..Default::default() };
+            k.union = Some(key_event::Union::ControlKey(EnumOrUnknown::new(ControlKey::Delete)));
+            k.modifiers = vec![EnumOrUnknown::new(ControlKey::Alt), EnumOrUnknown::new(ControlKey::Control)];
+            m.set_key_event(k);
+        }
         Command::Refresh => m = misc_message(|misc| misc.set_refresh_video(true)),
         Command::Displays { set } => return display_messages(set),
+        Command::Quality { level } => {
+            let q = match level.as_str() {
+                "best" => ImageQuality::Best,
+                "balanced" => ImageQuality::Balanced,
+                "low" => ImageQuality::Low,
+                _ => return Vec::new(),
+            };
+            m = option_message(OptionMessage { image_quality: EnumOrUnknown::new(q), ..Default::default() });
+        }
+        Command::Codec { prefer, decoders } => {
+            m = option_message(OptionMessage {
+                supported_decoding: MessageField::some(supported_decoding(*decoders, prefer)),
+                ..Default::default()
+            });
+        }
+        Command::Toggle { name, on } => {
+            let mut o = OptionMessage::new();
+            match name.as_str() {
+                "block_input" => o.block_input = bool_option(*on),
+                "disable_clipboard" => o.disable_clipboard = bool_option(*on),
+                "lock_after_session_end" => o.lock_after_session_end = bool_option(*on),
+                _ => return Vec::new(),
+            }
+            m = option_message(o);
+        }
+        Command::LockScreen => {
+            let mut k = KeyEvent { down: true, mode: EnumOrUnknown::new(KeyboardMode::Legacy), ..Default::default() };
+            k.union = Some(key_event::Union::ControlKey(EnumOrUnknown::new(ControlKey::LockScreen)));
+            m.set_key_event(k);
+        }
+        Command::Restart => m = misc_message(|misc| misc.set_restart_remote_device(true)),
+        Command::Clipboard { text } if !text.is_empty() && text.len() <= MAX_TEXT => {
+            m.set_clipboard(Clipboard {
+                compress: false,
+                content: text.as_bytes().to_vec().into(),
+                format: EnumOrUnknown::new(ClipboardFormat::Text),
+                ..Default::default()
+            });
+        }
+        Command::TypeText { text } if !text.is_empty() && text.len() <= MAX_TEXT => {
+            let mut k = KeyEvent::new();
+            k.set_seq(text.clone());
+            m.set_key_event(k);
+        }
+        Command::Chat { text } if !text.is_empty() && text.len() <= MAX_TEXT => {
+            m = misc_message(|misc| misc.set_chat_message(ChatMessage { text: text.clone(), ..Default::default() }));
+        }
+        Command::Clipboard { .. } | Command::TypeText { .. } | Command::Chat { .. } => return Vec::new(),
+        Command::Record { on } => m = misc_message(|misc| misc.set_client_record_status(*on)),
     }
     vec![m]
 }
@@ -434,12 +632,12 @@ mod tests {
 
         let mut m = Message::new();
         m.set_test_delay(TestDelay { time: 5, from_client: false, ..Default::default() });
-        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Echo(_)));
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Echo { .. }));
         assert!(matches!(classify(b"\xff\xff\xff"), Incoming::Ignore), "壞封包不致命");
     }
 
     fn one(c: &Command) -> Message {
-        let mut v = command_messages(c);
+        let mut v = command_messages(c, &PeerCtx::default());
         assert_eq!(v.len(), 1, "{c:?}");
         v.remove(0)
     }
@@ -463,7 +661,7 @@ mod tests {
 
     fn miscs(c: &str) -> Vec<misc::Union> {
         let c: Command = serde_json::from_str(c).unwrap();
-        command_messages(&c)
+        command_messages(&c, &PeerCtx::default())
             .into_iter()
             .map(|m| {
                 // 每則都要能序列化（真的會送出去）
@@ -474,6 +672,170 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    fn key_event(c: &str, platform: &str) -> KeyEvent {
+        let c: Command = serde_json::from_str(c).unwrap();
+        let mut v = command_messages(&c, &PeerCtx { platform: platform.into() });
+        assert_eq!(v.len(), 1);
+        match v.remove(0).union {
+            Some(message::Union::KeyEvent(k)) => k,
+            x => panic!("{x:?}"),
+        }
+    }
+
+    /// 官方 `event_ctrl_alt_del`：Windows → CtrlAltDel 控制鍵；Linux / macOS → Delete + Ctrl / Alt。
+    #[test]
+    fn ctrl_alt_del_depends_on_peer_platform() {
+        for p in ["Windows", ""] {
+            let k = key_event(r#"{"t":"ctrl_alt_del"}"#, p);
+            assert_eq!(k.control_key(), ControlKey::CtrlAltDel, "{p}");
+            assert!(k.modifiers.is_empty());
+        }
+        let k = key_event(r#"{"t":"ctrl_alt_del"}"#, "Linux");
+        assert_eq!(k.control_key(), ControlKey::Delete);
+        assert!(k.press && !k.down);
+        let mods: Vec<_> = k.modifiers.iter().map(|m| m.enum_value().unwrap()).collect();
+        assert!(mods.contains(&ControlKey::Control) && mods.contains(&ControlKey::Alt), "{mods:?}");
+        let k = key_event(r#"{"t":"lock_screen"}"#, "Windows");
+        assert_eq!((k.control_key(), k.down, k.mode.enum_value()), (ControlKey::LockScreen, true, Ok(KeyboardMode::Legacy)));
+        let k = key_event(r#"{"t":"type_text","text":"P@ss 密碼"}"#, "Windows");
+        assert_eq!(k.seq(), "P@ss 密碼", "整段字串交給對方打（官方 `input_string`）");
+    }
+
+    fn option_of(c: &str) -> Option<OptionMessage> {
+        match miscs(c).pop()? {
+            misc::Union::Option(o) => Some(o),
+            x => panic!("{x:?}"),
+        }
+    }
+
+    /// 畫質 / 編碼 / 開關都是 Misc.option；不認得的值什麼都不送。
+    #[test]
+    fn options_encode() {
+        let o = option_of(r#"{"t":"quality","level":"low"}"#).unwrap();
+        assert_eq!(o.image_quality.enum_value(), Ok(ImageQuality::Low));
+        assert_eq!(option_of(r#"{"t":"quality","level":"best"}"#).unwrap().image_quality.enum_value(), Ok(ImageQuality::Best));
+        assert!(option_of(r#"{"t":"quality","level":"ultra"}"#).is_none());
+
+        let o = option_of(r#"{"t":"codec","prefer":"vp8","vp9":true,"vp8":true,"av1":false}"#).unwrap();
+        let d = o.supported_decoding.unwrap();
+        assert_eq!((d.ability_vp9, d.ability_vp8, d.ability_av1, d.prefer.enum_value()), (1, 1, 0, Ok(PreferCodec::VP8)));
+        let d = option_of(r#"{"t":"codec","prefer":"av1","vp9":true}"#).unwrap().supported_decoding.unwrap();
+        assert_eq!(d.prefer.enum_value(), Ok(PreferCodec::Auto), "偏好的解不了 → 自動");
+
+        let o = option_of(r#"{"t":"toggle","name":"block_input","on":true}"#).unwrap();
+        assert_eq!(o.block_input.enum_value(), Ok(BoolOption::Yes));
+        let o = option_of(r#"{"t":"toggle","name":"disable_clipboard","on":false}"#).unwrap();
+        assert_eq!((o.disable_clipboard.enum_value(), o.block_input.enum_value()), (Ok(BoolOption::No), Ok(BoolOption::NotSet)));
+        let o = option_of(r#"{"t":"toggle","name":"lock_after_session_end","on":true}"#).unwrap();
+        assert_eq!(o.lock_after_session_end.enum_value(), Ok(BoolOption::Yes));
+        assert!(option_of(r#"{"t":"toggle","name":"privacy_mode","on":true}"#).is_none(), "沒做的開關不送");
+
+        assert!(matches!(miscs(r#"{"t":"restart"}"#)[..], [misc::Union::RestartRemoteDevice(true)]));
+        assert!(matches!(&miscs(r#"{"t":"chat","text":"hi"}"#)[..], [misc::Union::ChatMessage(c)] if c.text == "hi"));
+        assert!(miscs(r#"{"t":"chat","text":""}"#).is_empty());
+        assert!(matches!(miscs(r#"{"t":"record","on":true}"#)[..], [misc::Union::ClientRecordStatus(true)]));
+    }
+
+    /// 本機的剪貼簿文字 → `Clipboard`（不壓縮；對方看 `compress` 決定要不要解）。
+    #[test]
+    fn clipboard_to_peer() {
+        let c: Command = serde_json::from_str(r#"{"t":"clipboard","text":"複製的 text"}"#).unwrap();
+        let v = command_messages(&c, &PeerCtx::default());
+        let Some(message::Union::Clipboard(cb)) = v[0].union.clone() else { panic!("{v:?}") };
+        assert!(!cb.compress);
+        assert_eq!(cb.format.enum_value(), Ok(ClipboardFormat::Text));
+        assert_eq!(std::str::from_utf8(&cb.content).unwrap(), "複製的 text");
+        let c = Command::Clipboard { text: String::new() };
+        assert!(command_messages(&c, &PeerCtx::default()).is_empty(), "空的不送");
+        let c = Command::Clipboard { text: "x".repeat(MAX_TEXT + 1) };
+        assert!(command_messages(&c, &PeerCtx::default()).is_empty(), "太大的不送");
+    }
+
+    /// 對方的剪貼簿：官方用 zstd 壓縮（壓得比較小才壓）；MultiClipboards 取第一個文字；圖片略過。
+    #[test]
+    fn clipboard_from_peer() {
+        let text = "對方複製的一段文字 ".repeat(50);
+        let packed = ruzstd::encoding::compress_to_vec(text.as_bytes(), ruzstd::encoding::CompressionLevel::Fastest);
+        assert!(packed.len() < text.len());
+        let cb = |compress: bool, content: Vec<u8>, format: ClipboardFormat| Clipboard {
+            compress,
+            content: content.into(),
+            format: EnumOrUnknown::new(format),
+            ..Default::default()
+        };
+        let mut m = Message::new();
+        m.set_clipboard(cb(true, packed.clone(), ClipboardFormat::Text));
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Clipboard(ref t) if *t == text));
+        let mut m = Message::new();
+        m.set_clipboard(cb(false, b"plain".to_vec(), ClipboardFormat::Text));
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Clipboard(ref t) if t == "plain"));
+
+        let mut m = Message::new();
+        m.set_multi_clipboards(crate::proto::message::MultiClipboards {
+            clipboards: vec![cb(false, vec![1, 2, 3], ClipboardFormat::ImageRgba), cb(true, packed, ClipboardFormat::Text)],
+            ..Default::default()
+        });
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Clipboard(ref t) if *t == text));
+
+        let mut m = Message::new();
+        m.set_clipboard(cb(true, b"not zstd".to_vec(), ClipboardFormat::Text));
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Ignore), "壞的壓縮資料不致命");
+        let mut m = Message::new();
+        m.set_clipboard(cb(false, vec![0xff, 0xfe], ClipboardFormat::Text));
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Ignore), "不是 UTF-8 → 略過");
+    }
+
+    /// 權限、聊天、封鎖輸入的結果、訊息框、延遲。
+    #[test]
+    fn classify_session_events() {
+        use crate::proto::message::{BackNotification, PermissionInfo};
+        let msg = |f: &dyn Fn(&mut Misc)| {
+            let mut misc = Misc::new();
+            f(&mut misc);
+            let mut m = Message::new();
+            m.set_misc(misc);
+            m.write_to_bytes().unwrap()
+        };
+        let p = msg(&|m| {
+            m.set_permission_info(PermissionInfo {
+                permission: EnumOrUnknown::new(permission_info::Permission::BlockInput),
+                enabled: false,
+                ..Default::default()
+            })
+        });
+        assert!(matches!(classify(&p), Incoming::Permission { name: "block_input", enabled: false }));
+        let c = msg(&|m| m.set_chat_message(ChatMessage { text: "在嗎".into(), ..Default::default() }));
+        assert!(matches!(classify(&c), Incoming::Chat(ref t) if t == "在嗎"));
+        let b = msg(&|m| {
+            let mut n = BackNotification::new();
+            n.set_block_input_state(back_notification::BlockInputState::BlkOnFailed);
+            m.set_back_notification(n)
+        });
+        assert!(matches!(classify(&b), Incoming::BlockInput { on: true, ok: false }));
+
+        let mut m = Message::new();
+        m.set_message_box(crate::proto::message::MessageBox {
+            msgtype: "error".into(),
+            title: "Restart".into(),
+            text: "No permission".into(),
+            ..Default::default()
+        });
+        match classify(&m.write_to_bytes().unwrap()) {
+            Incoming::MsgBox(b) => assert_eq!((b.msgtype.as_str(), b.text.as_str()), ("error", "No permission")),
+            x => panic!("{x:?}"),
+        }
+
+        let mut m = Message::new();
+        m.set_test_delay(TestDelay { time: 5, from_client: false, last_delay: 42, target_bitrate: 3000, ..Default::default() });
+        match classify(&m.write_to_bytes().unwrap()) {
+            Incoming::Echo { msg, delay, bitrate } => {
+                assert_eq!((delay, bitrate), (42, 3000));
+                assert!(matches!(msg.union, Some(message::Union::TestDelay(ref t)) if t.time == 5), "原樣回");
+            }
+            x => panic!("{x:?}"),
+        }
     }
 
     /// 切到一個螢幕：SwitchDisplay + 只擷取它 + 要它的關鍵畫面（官方 `session_switch_display` 的順序）。

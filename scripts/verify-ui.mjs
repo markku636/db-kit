@@ -155,6 +155,7 @@ const CASE_FX = {
   "rd-rustdesk-2fa-trust": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-wait-accept": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-monitors": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-rustdesk-toolbar": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "update-dialog-install": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-manual": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-error": { GITHUB_RELEASE: FX_RELEASE },
@@ -1086,6 +1087,128 @@ const CASES = {
     check("按 A 送出掃描碼 0x1E", cmds.some((c) => c.t === "key" && c.down === true && c.scancode === 0x1e));
     check("Ctrl+Alt+Del 經後端送（不是拆成三個鍵）", await page.evaluate(() => window.__DBKIT_RD_KEYS__.includes("ctrl_alt_del")));
     check("只有一個螢幕：工具列沒有切換螢幕", (await page.locator("[data-rd-monitors]").count()) === 0);
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // RustDesk 工具列：顯示設定（檢視方式 / 畫質 / 編碼 / 連線品質 / 同步剪貼簿）存回主機設定並送給對方；
+  // 動作（Ctrl+Alt+Del / 鎖定畫面 / 封鎖輸入 / 重新啟動要先確認 / 重新整理）依對方權限出現；剪貼簿雙向；聊天。
+  async "rd-rustdesk-toolbar"(page) {
+    await page.evaluate(() => { window.__DBKIT_RD_PEER__ = { platform: "Windows" }; });
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("office-pc", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "1024x768", null, { timeout: 10000 }).catch(() => {});
+    const cmds = () => page.evaluate(() => window.__DBKIT_RD_WRITES__.map((b) => { try { return JSON.parse(new TextDecoder().decode(new Uint8Array(b))); } catch { return null; } }).filter(Boolean));
+    const lastCmd = async (t) => (await cmds()).filter((c) => c.t === t).pop();
+    const push = (ev) => page.evaluate((e) => window.__DBKIT_RD_PUSH__([1, ...new TextEncoder().encode(JSON.stringify(e))]), ev);
+    const menu = (which) => page.locator(`[data-rd-menu="${which}"]`);
+    const opt = (id) => page.locator(`[data-rd-opt="${id}"]`);
+    const action = (id) => page.locator(`[data-rd-action="${id}"]`);
+    const saves = () => page.evaluate(() => window.__DBKIT_RD_SESSION_SAVES__.map((s) => s.session));
+    check("工具列有顯示設定、動作、聊天", (await menu("display").count()) === 1 && (await menu("actions").count()) === 1
+      && (await page.locator("[data-rd-chat-toggle]").count()) === 1);
+
+    // ---- 顯示設定 ----
+    await menu("display").click();
+    check("顯示設定：預設適應視窗、畫質平衡、編碼自動", (await opt("view-adaptive").getAttribute("aria-checked")) === "true"
+      && (await opt("quality-balanced").getAttribute("aria-checked")) === "true" && (await opt("codec-auto").getAttribute("aria-checked")) === "true");
+    check("編碼只列這個瀏覽器解得了的（VP9 / VP8 一定有）", (await opt("codec-vp9").count()) === 1 && (await opt("codec-vp8").count()) === 1);
+    await opt("quality-low").click();
+    await sleep(300);
+    check("選「最佳反應速度」→ 送 quality low", (await lastCmd("quality"))?.level === "low", JSON.stringify(await lastCmd("quality")));
+    check("畫質存回主機設定", (await saves()).at(-1)?.options?.ui?.rustdesk_quality === "low", JSON.stringify((await saves()).at(-1)?.options?.ui));
+    await menu("display").click();
+    await opt("codec-vp8").click();
+    await sleep(300);
+    const codec = await lastCmd("codec");
+    check("選 VP8 → 送 codec（偏好 vp8 + 能解哪些）", codec?.prefer === "vp8" && codec?.vp9 === true && codec?.vp8 === true, JSON.stringify(codec));
+    await menu("display").click();
+    await opt("view-original").click();
+    await sleep(300);
+    const view = await page.evaluate(() => {
+      const w = document.querySelector("[data-rd-rustdesk]");
+      const c = w?.querySelector("canvas");
+      return { mode: w?.dataset.rdView, width: c?.style.width ?? "", overflow: w ? getComputedStyle(w).overflow : "" };
+    });
+    check("原始大小：畫面 1:1、超出可捲動", view.mode === "original" && view.width === "" && view.overflow === "auto", JSON.stringify(view));
+    await menu("display").click();
+    await opt("stats").click();
+    const stats = page.locator("[data-rd-stats]");
+    await stats.waitFor({ timeout: 3000 }).catch(() => {});
+    await push({ type: "delay", ms: 23, bitrate: 2000 });
+    await sleep(1300);
+    const statsText = await stats.textContent().catch(() => "");
+    check("顯示連線品質：FPS / 延遲 / 編碼與解析度", /FPS/.test(statsText) && statsText.includes("23 ms") && statsText.includes("1024×768"), statsText);
+    await menu("display").click();
+    await opt("clipboard").click();
+    await sleep(300);
+    const tog = await lastCmd("toggle");
+    check("關掉同步剪貼簿 → 告訴對方停用剪貼簿，並存回主機設定", tog?.name === "disable_clipboard" && tog?.on === true
+      && (await saves()).at(-1)?.options?.clipboard === false, JSON.stringify(tog));
+    await menu("display").click();
+    await opt("clipboard").click();
+    await sleep(300);
+
+    // ---- 動作 ----
+    await menu("actions").click();
+    check("Windows 對方：動作有 Ctrl+Alt+Del / 鎖定畫面 / 封鎖輸入 / 重新啟動 / 重新整理",
+      (await action("ctrl_alt_del").count()) === 1 && (await action("lock_screen").count()) === 1 && (await action("block_input").count()) === 1
+      && (await action("restart").count()) === 1 && (await action("refresh").count()) === 1);
+    await action("lock_screen").click();
+    await sleep(200);
+    check("鎖定對方畫面 → 送 lock_screen", !!(await lastCmd("lock_screen")));
+    await menu("actions").click();
+    await action("block_input").click();
+    await sleep(200);
+    check("封鎖輸入 → 送 toggle block_input on", (await cmds()).some((c) => c.t === "toggle" && c.name === "block_input" && c.on === true));
+    await push({ type: "block_input", on: true, ok: true });
+    await sleep(200);
+    await menu("actions").click();
+    check("對方回成功 → 選項改成解除封鎖", (await action("block_input").textContent()).includes("解除封鎖"));
+    await action("restart").click();
+    const confirmBtn = page.getByRole("button", { name: "重新啟動", exact: true });
+    await confirmBtn.waitFor({ timeout: 3000 }).catch(() => {});
+    check("重新啟動先問過", (await page.getByText(/要重新啟動對方的電腦嗎/).count()) === 1 && !(await lastCmd("restart")));
+    await confirmBtn.click();
+    await sleep(200);
+    check("確認後送 restart", !!(await lastCmd("restart")));
+    // 對方關掉重新啟動 / 封鎖輸入的權限 → 選單裡就沒有
+    await push({ type: "permission", name: "restart", enabled: false });
+    await push({ type: "permission", name: "block_input", enabled: false });
+    await sleep(200);
+    await menu("actions").click();
+    check("對方關掉權限 → 重新啟動、封鎖輸入不再出現", (await action("restart").count()) === 0 && (await action("block_input").count()) === 0);
+    await page.keyboard.press("Escape");
+
+    // ---- 剪貼簿 ----
+    await push({ type: "clipboard", text: "對方複製的文字" });
+    await sleep(300);
+    check("對方複製 → 寫進本機剪貼簿", (await page.evaluate(() => window.__DBKIT_RD_CLIP_WRITES__)).includes("對方複製的文字"));
+    await page.evaluate(() => { window.__DBKIT_RD_LOCAL_CLIP__ = "本機複製的文字"; });
+    await page.locator("[data-rd-rustdesk] canvas").click({ position: { x: 20, y: 20 } });
+    await sleep(400);
+    check("回到畫面時把本機剪貼簿送給對方", (await lastCmd("clipboard"))?.text === "本機複製的文字", JSON.stringify(await lastCmd("clipboard")));
+    await page.getByRole("button", { name: "把剪貼簿文字送到遠端", exact: true }).click();
+    await sleep(300);
+    check("「把剪貼簿文字送到遠端」→ 整段打過去（type_text）", (await lastCmd("type_text"))?.text === "本機複製的文字");
+
+    // ---- 聊天 ----
+    await push({ type: "chat", text: "你好，我是對方" });
+    const chat = page.locator("[data-rd-chat]");
+    await chat.waitFor({ timeout: 3000 }).catch(() => {});
+    check("對方傳訊息 → 聊天面板自己打開並顯示", (await chat.count()) === 1
+      && (await page.locator('[data-rd-chat-msg="peer"]').textContent().catch(() => "")).includes("你好，我是對方"));
+    const input = page.locator("[data-rd-chat-input]");
+    await input.fill("收到");
+    await input.press("Enter");
+    await sleep(300);
+    check("輸入後 Enter → 送 chat、面板顯示自己的訊息", (await lastCmd("chat"))?.text === "收到"
+      && (await page.locator('[data-rd-chat-msg="me"]').count()) === 1 && (await input.inputValue()) === "");
+    await page.getByRole("button", { name: "關閉聊天", exact: true }).click();
+    await push({ type: "chat", text: "再一則" });
+    await sleep(300);
+    check("關掉後對方再傳 → 再打開", (await chat.count()) === 1 && (await page.locator('[data-rd-chat-msg="peer"]').count()) === 2);
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },

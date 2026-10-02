@@ -3,34 +3,46 @@
 // 輸入（滑鼠 / 鍵盤）轉成 JSON 指令，經 `rd_write` → 後端 → 輔助程式 → 對方。
 //
 // Channel 訊息 = `[u8 型別][內容]`：1 = JSON 事件（第一則是 `connected`，帶螢幕清單與偏移；之後可能有
-// `displays`（插拔螢幕）/ `switch_display`（某個螢幕的位置大小變了）），
-// 2 = 影像 `[u8 codec][u8 key][u8 display][u8 保留][i64 pts LE]` + 資料。
+// `displays`（插拔螢幕）/ `switch_display`（某個螢幕的位置大小變了）/ `permission` / `clipboard` / `chat` /
+// `block_input` / `msgbox` / `delay`），2 = 影像 `[u8 codec][u8 key][u8 display][u8 保留][i64 pts LE]` + 資料。
 //
 // 多螢幕（照 RustDesk 官方用戶端）：一次看一個螢幕，或「所有螢幕」照實際排列拼成一張。每個螢幕各自一條
 // 影像串流、各自一個解碼器；不在看的螢幕的畫面（切換那一刻還在路上的）直接丟掉。
+//
+// 工具列要的狀態（螢幕、權限、聊天、連線品質）整包經 `onState` 交給 RdPane；顯示偏好（畫質 / 編碼 / 檢視方式…）
+// 由 RdPane 從主機設定讀出來經 `prefs` 傳進來，連上時與改變時送給對方。
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { api } from "./api";
 import type { RdConnInfo } from "./rdTypes";
 import { mouseButtonFromDom, scancodeForCode } from "./rdInput";
 import { useT } from "./i18n";
+import { toast } from "./ui";
 import type { RdViewHandle } from "./rdView";
 import { displayBounds, versionAtLeast, type RdDisplay, type RdMonitors } from "./rdMonitors";
+import {
+  addMyChat, applyEvent, DEFAULT_PREFS, initialState, probeCodecs, WEBCODECS,
+  type RustDeskPrefs, type RustDeskState,
+} from "./rustdeskState";
 
 export interface RustDeskViewProps {
   viewOnly: boolean;
   isPaneShortcut: (e: KeyboardEvent | React.KeyboardEvent) => boolean;
-  /** 對方的螢幕清單 / 正在看哪幾個變了（工具列的切換螢幕按鈕用）；null = 沒有連線。 */
-  onMonitors?: (m: RdMonitors | null) => void;
+  /** 主機設定的「同步剪貼簿」。 */
+  clipboard: boolean;
+  prefs: RustDeskPrefs;
+  /** 工具列要的狀態變了；null = 沒有連線。 */
+  onState?: (s: RustDeskState | null) => void;
 }
 
 /** codec 代碼（跟 bridge 的 session::Codec 一致）→ WebCodecs 的 codec 字串。 */
 const CODEC: Record<number, string> = {
-  1: "vp09.00.10.08",
-  2: "vp8",
-  3: "av01.0.08M.08",
+  1: WEBCODECS.vp9,
+  2: WEBCODECS.vp8,
+  3: WEBCODECS.av1,
   4: "avc1.42E01F",
   5: "hvc1.1.6.L93.B0",
 };
+const CODEC_NAME: Record<number, string> = { 1: "VP9", 2: "VP8", 3: "AV1", 4: "H.264", 5: "H.265" };
 
 // RustDesk 的滑鼠 mask：低 3 bits 型別、其上是按鍵（見 hbb_common 的 input 常數）。
 const MOUSE = { MOVE: 0, DOWN: 1, UP: 2, WHEEL: 3 } as const;
@@ -43,6 +55,9 @@ const MULTI_DISPLAY_VERSION = "1.2.4";
 const KEYFRAME_ASK_MS = 1500;
 /** `keyAskRef` 裡代表「全部螢幕」的鍵。 */
 const ALL = -1;
+
+/** 工具列「動作」選單送給對方的。 */
+export type RustDeskAction = "ctrl_alt_del" | "lock_screen" | "restart" | "refresh";
 
 /** 解析影像訊息的標頭（純函式，單元測試用）。 */
 export function parseRustDeskVideo(buf: ArrayBuffer): { codec: number; key: boolean; display: number; pts: number; data: Uint8Array } | null {
@@ -71,7 +86,9 @@ function sameSet(a: number[], b: number[]): boolean {
 
 type Decoder = { dec: VideoDecoder | null; codec: number; needKey: boolean };
 
-const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDeskView({ viewOnly, isPaneShortcut, onMonitors }, ref) {
+const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDeskView(
+  { viewOnly, isPaneShortcut, clipboard, prefs, onState }, ref,
+) {
   const t = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const connIdRef = useRef("");
@@ -80,27 +97,52 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
   const decodersRef = useRef(new Map<number, Decoder>());
   /** 上次請對方重送關鍵畫面的時間（每個螢幕；`ALL` = 全部）。 */
   const keyAskRef = useRef(new Map<number, number>());
-  const monRef = useRef<RdMonitors>({ displays: [], shown: [0], multi: true });
+  const stRef = useRef<RustDeskState>(initialState());
   /** 使用者選的螢幕：斷線重連後套回去。 */
   const wantedRef = useRef<number[] | null>(null);
-  const onMonitorsRef = useRef(onMonitors);
-  useEffect(() => { onMonitorsRef.current = onMonitors; }, [onMonitors]);
+  const onStateRef = useRef(onState);
+  useEffect(() => { onStateRef.current = onState; }, [onState]);
+  const optsRef = useRef({ viewOnly, clipboard, prefs });
+  useEffect(() => { optsRef.current = { viewOnly, clipboard, prefs }; }, [viewOnly, clipboard, prefs]);
+  // 剪貼簿來回：記住最後從對方拿到的與最後送出的，免得同一段文字在兩邊來回彈。
+  const lastRemoteClipRef = useRef<string | null>(null);
+  const lastSentClipRef = useRef<string | null>(null);
+  /** 連線品質：這一秒收到幾張畫面、多少資料。 */
+  const meterRef = useRef({ frames: 0, bytes: 0, codec: 0 });
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [unsupported, setUnsupported] = useState<string | null>(null);
+  const [stats, setStats] = useState<RustDeskState["stats"]>(null);
 
-  const publish = (m: RdMonitors | null) => {
-    if (m) monRef.current = m;
-    onMonitorsRef.current?.(m && { ...m, displays: [...m.displays], shown: [...m.shown] });
+  const publish = (s: RustDeskState | null) => {
+    if (s) stRef.current = s;
+    if (s) setStats(s.stats);
+    onStateRef.current?.(s && { ...s, monitors: { ...s.monitors, displays: [...s.monitors.displays], shown: [...s.monitors.shown] } });
   };
+  const setMonitors = (m: RdMonitors) => publish({ ...stRef.current, monitors: m });
 
-  /** 送指令給對方（換螢幕、要關鍵畫面：只看不控時也要能用）。 */
+  /** 送指令給對方（換螢幕、要關鍵畫面、畫質…：只看不控時也要能用）。 */
   const write = (cmd: object) => {
     if (!liveRef.current) return;
     void api.rdWrite(connIdRef.current, new TextEncoder().encode(JSON.stringify(cmd))).catch(() => undefined);
   };
-  /** 輸入（滑鼠 / 鍵盤）：只看不控時不送。 */
+  /** 輸入（滑鼠 / 鍵盤 / 打字）：只看不控時不送。 */
   const send = (cmd: object) => {
-    if (!viewOnly) write(cmd);
+    if (!optsRef.current.viewOnly) write(cmd);
+  };
+
+  /** 剪貼簿同步開著：主機設定開、不是只看不控、對方也允許。 */
+  const clipboardOn = () => optsRef.current.clipboard && !optsRef.current.viewOnly && stRef.current.perms.clipboard;
+
+  /** 本機剪貼簿有新文字 → 送給對方（畫面拿到焦點時檢查，跟 RDP 一樣）。 */
+  const syncLocalClipboard = async () => {
+    if (!liveRef.current || !clipboardOn()) return;
+    try {
+      // 後端讀系統剪貼簿（navigator.clipboard.readText 會跳權限詢問、搶走畫面焦點）。
+      const text = await api.rdClipboardRead();
+      if (!text || text === lastRemoteClipRef.current || text === lastSentClipRef.current) return;
+      lastSentClipRef.current = text;
+      write({ t: "clipboard", text });
+    } catch { /* 讀不到剪貼簿：略過 */ }
   };
 
   /** 請對方重送關鍵畫面（同一個螢幕一段時間內只問一次）。 */
@@ -122,11 +164,20 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
   };
   useEffect(() => closeAll, []);
 
+  // 這個 WebView 能解哪些編碼（工具列的「編碼」選單只列解得了的）。
+  useEffect(() => {
+    let alive = true;
+    void probeCodecs().then((codecs) => {
+      if (alive) publish({ ...stRef.current, codecs });
+    });
+    return () => { alive = false; };
+  }, []);
+
   /** 解出來的一張畫面：一個螢幕 = 畫布就是那張的大小；所有螢幕 = 畫布是外框，各自畫到自己的位置。 */
   const draw = (display: number, frame: VideoFrame) => {
     const c = canvasRef.current;
     const ctx = c?.getContext("2d");
-    const { displays, shown } = monRef.current;
+    const { displays, shown } = stRef.current.monitors;
     if (c && ctx && shown.includes(display)) {
       const box = shown.length > 1 ? displayBounds(displays, shown) : null;
       const w = box ? box.w : frame.displayWidth;
@@ -141,6 +192,7 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
       const d = displays[display];
       if (box && d) ctx.drawImage(frame, d.x - box.x, d.y - box.y, d.width, d.height);
       else ctx.drawImage(frame, 0, 0);
+      meterRef.current.frames++;
     }
     frame.close();
   };
@@ -170,7 +222,7 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
 
   /** 換成看這幾個螢幕（一個 = 切過去；多個 = 拼起來一起看）。`remember` = 使用者選的（重連後套回去）。 */
   const showDisplays = (set: number[], remember = true) => {
-    const m = monRef.current;
+    const m = stRef.current.monitors;
     const valid = [...new Set(set)].filter((i) => Number.isInteger(i) && i >= 0 && i < Math.max(1, m.displays.length));
     if (!valid.length) return;
     if (valid.length > 1 && !(m.multi && displayBounds(m.displays, valid))) return;
@@ -180,48 +232,99 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     // 指令本身就會要每個螢幕的關鍵畫面：短時間內不必再問。
     const now = performance.now();
     for (const k of [ALL, ...valid]) keyAskRef.current.set(k, now);
-    publish({ ...m, shown: valid });
+    setMonitors({ ...m, shown: valid });
     write({ t: "displays", set: valid });
   };
 
   /** 對方送來新的螢幕清單（插拔螢幕 / 改排列）。 */
   const onDisplays = (list: RdDisplay[]) => {
-    const m = monRef.current;
+    const m = stRef.current.monitors;
     const was = m.shown;
     let next: number[];
     if (was.length > 1) next = list.length > 1 && m.multi ? list.map((_, i) => i) : [0];
     else next = was.filter((i) => i < list.length);
     if (!next.length) next = [0];
-    monRef.current = { ...m, displays: list };
-    if (sameSet(next, was)) publish(monRef.current);
+    stRef.current = { ...stRef.current, monitors: { ...m, displays: list } };
+    if (sameSet(next, was)) publish(stRef.current);
     else showDisplays(next, false);
   };
 
   /** 對方說某個螢幕的位置大小（切過去之後 / 換了解析度）。 */
   const onSwitchDisplay = (ev: Record<string, unknown>) => {
     const i = ev.display;
-    const m = monRef.current;
+    const m = stRef.current.monitors;
     if (typeof i !== "number" || !Number.isInteger(i) || i < 0) return;
     const d = toDisplay(ev);
     const displays = [...m.displays];
     if (d.width > 0 && d.height > 0 && i < displays.length) displays[i] = { ...displays[i], x: d.x, y: d.y, width: d.width, height: d.height };
     // 舊版對方的畫面不帶螢幕編號：它說換了就跟著換。
     const shown = !m.multi && m.shown[0] !== i && i < Math.max(1, displays.length) ? [i] : m.shown;
-    publish({ ...m, displays, shown });
+    setMonitors({ ...m, displays, shown });
   };
 
-  /** client 座標 → 遠端螢幕座標（object-fit: contain + 目前螢幕 / 拼圖外框的偏移）。 */
+  // ---- 偏好：連上時整組送一次（`applyAll`），之後改哪個送哪個 ----
+  const sendQuality = (q: RustDeskPrefs["quality"]) => write({ t: "quality", level: q });
+  const sendCodec = (c: RustDeskPrefs["codec"]) => write({ t: "codec", prefer: c, ...stRef.current.codecs });
+  const sendClipboardToggle = () => write({ t: "toggle", name: "disable_clipboard", on: !(optsRef.current.clipboard && !optsRef.current.viewOnly) });
+  const applyAll = () => {
+    const p = optsRef.current.prefs;
+    // 對方預設就是「平衡」、編碼照登入時宣告的：跟預設一樣就不送。
+    if (p.quality !== DEFAULT_PREFS.quality) sendQuality(p.quality);
+    if (p.codec !== DEFAULT_PREFS.codec) sendCodec(p.codec);
+    if (p.lockAfterEnd) write({ t: "toggle", name: "lock_after_session_end", on: true });
+    if (!optsRef.current.clipboard || optsRef.current.viewOnly) sendClipboardToggle();
+  };
+  useEffect(() => { sendQuality(prefs.quality); }, [prefs.quality]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { sendCodec(prefs.codec); }, [prefs.codec]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { write({ t: "toggle", name: "lock_after_session_end", on: prefs.lockAfterEnd }); }, [prefs.lockAfterEnd]);
+  useEffect(() => { sendClipboardToggle(); }, [clipboard, viewOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- 連線品質：每秒算一次 FPS / 速率（只在打開時） ----
+  useEffect(() => {
+    if (!prefs.stats) {
+      if (stRef.current.stats) publish({ ...stRef.current, stats: null });
+      return;
+    }
+    meterRef.current.frames = 0;
+    meterRef.current.bytes = 0;
+    const id = window.setInterval(() => {
+      if (!liveRef.current) return;
+      const m = meterRef.current;
+      const c = canvasRef.current;
+      publish({
+        ...stRef.current,
+        stats: {
+          fps: m.frames,
+          kbps: Math.round(m.bytes / 1024),
+          delay: stRef.current.stats?.delay ?? null,
+          codec: CODEC_NAME[m.codec] ?? "",
+          width: c?.width ?? 0,
+          height: c?.height ?? 0,
+        },
+      });
+      m.frames = 0;
+      m.bytes = 0;
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [prefs.stats]);
+
+  /** client 座標 → 遠端螢幕座標（適應視窗：object-fit: contain；原始大小：1:1）+ 目前螢幕 / 拼圖外框的偏移。 */
   const toRemote = (clientX: number, clientY: number): [number, number] | null => {
     const c = canvasRef.current;
     if (!c || !c.width || !c.height) return null;
     const r = c.getBoundingClientRect();
-    const scale = Math.min(r.width / c.width, r.height / c.height);
+    let scale = r.width / c.width;
+    let ox = 0;
+    let oy = 0;
+    if (optsRef.current.prefs.view !== "original") {
+      scale = Math.min(r.width / c.width, r.height / c.height);
+      ox = (r.width - c.width * scale) / 2;
+      oy = (r.height - c.height * scale) / 2;
+    }
     if (!scale) return null;
-    const ox = (r.width - c.width * scale) / 2;
-    const oy = (r.height - c.height * scale) / 2;
     const x = Math.max(0, Math.min(c.width - 1, Math.floor((clientX - r.left - ox) / scale)));
     const y = Math.max(0, Math.min(c.height - 1, Math.floor((clientY - r.top - oy) / scale)));
-    const { displays, shown } = monRef.current;
+    const { displays, shown } = stRef.current.monitors;
     const origin = (shown.length > 1 ? displayBounds(displays, shown) : null) ?? displays[shown[0]] ?? { x: 0, y: 0 };
     return [x + origin.x, y + origin.y];
   };
@@ -252,6 +355,11 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     const c = canvasRef.current;
     if (!c) return;
     const onWheel = (e: WheelEvent) => {
+      // 原始大小時滾輪留給本機捲動（畫面比分頁大）；按住 Shift 則照樣送給對方。
+      if (optsRef.current.prefs.view === "original" && !e.shiftKey) {
+        const wrap = c.parentElement;
+        if (wrap && (wrap.scrollHeight > wrap.clientHeight || wrap.scrollWidth > wrap.clientWidth)) return;
+      }
       e.preventDefault();
       // RustDesk 的滾輪：x / y 是格數的正負號（官方用戶端每格送 ±1）。
       const y = e.deltaY === 0 ? 0 : e.deltaY > 0 ? -1 : 1;
@@ -261,7 +369,7 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     c.addEventListener("wheel", onWheel, { passive: false });
     return () => c.removeEventListener("wheel", onWheel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewOnly]);
+  }, []);
 
   const onKey = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
     if (isPaneShortcut(e)) return;
@@ -272,39 +380,67 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     send({ t: "key", down: e.type === "keydown", scancode: sc });
   };
 
+  /** 對方的事件（影像以外）。 */
+  const onEvent = (ev: Record<string, unknown>) => {
+    if (ev.type === "connected") {
+      const peer = (ev.peer ?? {}) as Record<string, unknown>;
+      const displays = Array.isArray(peer.displays) ? peer.displays.map(toDisplay) : [];
+      const cur = typeof peer.current_display === "number" && peer.current_display >= 0 ? peer.current_display : 0;
+      const multi = versionAtLeast(typeof peer.version === "string" ? peer.version : "", MULTI_DISPLAY_VERSION);
+      const next = applyEvent(stRef.current, ev).state;
+      publish({ ...next, monitors: { displays, shown: [cur], multi } });
+      return;
+    }
+    if (ev.type === "displays" && Array.isArray(ev.displays)) return onDisplays(ev.displays.map(toDisplay));
+    if (ev.type === "switch_display") return onSwitchDisplay(ev);
+    if (ev.type === "clipboard" && typeof ev.text === "string") {
+      if (clipboardOn()) {
+        lastRemoteClipRef.current = ev.text;
+        void api.rdClipboardWrite(ev.text).catch(() => undefined);
+      }
+      return;
+    }
+    if (ev.type === "msgbox") {
+      // 對方的訊息框（英文原文，例如重新啟動沒有權限）。
+      const text = [ev.title, ev.text].filter((x) => typeof x === "string" && x).join("：");
+      if (text) (String(ev.msgtype).includes("error") ? toast.error : toast.info)(t("對方：{text}", { text }));
+      return;
+    }
+    const { state, notice } = applyEvent(stRef.current, ev);
+    if (notice === "block_on_failed") toast.error(t("對方沒有封鎖輸入（需要對方的 RustDesk 已安裝並允許封鎖輸入）"));
+    if (notice === "block_off_failed") toast.error(t("對方沒有解除封鎖輸入"));
+    if (state !== stRef.current) publish(state);
+  };
+
   useImperativeHandle(ref, () => ({
     reset(connId: string) {
       connIdRef.current = connId;
       liveRef.current = false;
       closeAll();
       keyAskRef.current.clear();
-      monRef.current = { displays: [], shown: [0], multi: true };
+      lastRemoteClipRef.current = null;
+      lastSentClipRef.current = null;
+      // 聊天記錄跨重連保留（同一個分頁）；其他都重來。
+      const fresh = initialState();
+      stRef.current = { ...fresh, codecs: stRef.current.codecs, chat: stRef.current.chat };
       publish(null);
     },
     output(buf: ArrayBuffer) {
       const u8 = new Uint8Array(buf);
       if (u8[0] === 1) {
         try {
-          const ev = JSON.parse(new TextDecoder().decode(u8.subarray(1)));
-          if (ev.type === "connected") {
-            const peer = ev.peer ?? {};
-            const displays = Array.isArray(peer.displays) ? peer.displays.map(toDisplay) : [];
-            const cur = typeof peer.current_display === "number" && peer.current_display >= 0 ? peer.current_display : 0;
-            publish({ displays, shown: [cur], multi: versionAtLeast(peer.version, MULTI_DISPLAY_VERSION) });
-          } else if (ev.type === "displays" && Array.isArray(ev.displays)) {
-            onDisplays(ev.displays.map(toDisplay));
-          } else if (ev.type === "switch_display") {
-            onSwitchDisplay(ev);
-          }
+          onEvent(JSON.parse(new TextDecoder().decode(u8.subarray(1))));
         } catch { /* 壞的 JSON：略過 */ }
         return;
       }
       const v = parseRustDeskVideo(buf);
       if (!v) return;
-      const { shown, multi } = monRef.current;
+      const { shown, multi } = stRef.current.monitors;
       // 舊版對方的畫面都標 0：就是正在看的那個。
       const display = multi ? v.display : shown[0];
       if (!shown.includes(display)) return; // 換螢幕那一刻還在路上的舊畫面
+      meterRef.current.bytes += v.data.byteLength;
+      meterRef.current.codec = v.codec;
       const d = ensureDecoder(display, v.codec);
       if (!d?.dec) return;
       if (d.needKey && !v.key) {
@@ -322,10 +458,12 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     },
     connected(_info: RdConnInfo) {
       liveRef.current = true;
+      applyAll();
       // 斷線重連：套回使用者上次選的螢幕。
       const want = wantedRef.current;
       if (want) showDisplays(want, false);
       canvasRef.current?.focus();
+      void syncLocalClipboard();
     },
     disconnected() {
       liveRef.current = false;
@@ -343,7 +481,8 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
       for (const k of keys) send({ t: "key", down: true, scancode: k });
       for (const k of [...keys].reverse()) send({ t: "key", down: false, scancode: k });
     },
-    paste() { /* 這一版的 RustDesk 還沒接剪貼簿 */ },
+    // 「把剪貼簿文字送到遠端」：整段交給對方打出來（對方的登入畫面這類不能貼上的地方也行）。
+    paste(text: string) { if (text) send({ t: "type_text", text }); },
     focus() { canvasRef.current?.focus(); },
     refresh() { write({ t: "refresh" }); },
     desktopSize: () => size,
@@ -352,15 +491,36 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
       showDisplays(set);
       canvasRef.current?.focus();
     },
+    action(name: RustDeskAction) {
+      if (name === "refresh") write({ t: "refresh" });
+      else if (name === "restart") write({ t: "restart" });
+      else if (name === "ctrl_alt_del") {
+        // 經後端的 RdCtl::Keys（跟「送出按鍵」選單同一條路；連線元件依對方系統決定怎麼送）。
+        if (liveRef.current && !viewOnly) void api.rdSendKeys(connIdRef.current, "ctrl_alt_del").catch(() => undefined);
+      } else if (name === "lock_screen") send({ t: "lock_screen" });
+      canvasRef.current?.focus();
+    },
+    setBlockInput(on: boolean) {
+      // 結果（成功 / 失敗）由對方的 back_notification 回來再更新狀態。
+      send({ t: "toggle", name: "block_input", on });
+    },
+    sendChat(text: string) {
+      const s = text.trim();
+      if (!s || !liveRef.current) return;
+      write({ t: "chat", text: s });
+      publish(addMyChat(stRef.current, s));
+    },
   }), [viewOnly, size]);
 
+  const original = prefs.view === "original";
   return (
-    <div className="flex-1 min-h-0 min-w-0 bg-black overflow-hidden relative" data-rd-rustdesk="">
+    <div className={`flex-1 min-h-0 min-w-0 bg-black relative ${original ? "overflow-auto" : "overflow-hidden"}`} data-rd-rustdesk=""
+      data-rd-view={prefs.view}>
       <canvas
         ref={canvasRef}
         tabIndex={0}
         className="rd-surface outline-none block"
-        style={{ width: "100%", height: "100%", objectFit: "contain" }}
+        style={original ? undefined : { width: "100%", height: "100%", objectFit: "contain" }}
         data-rd-size={size.w ? `${size.w}x${size.h}` : undefined}
         onPointerMove={onPointer}
         onPointerDown={onPointer}
@@ -368,7 +528,16 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
         onContextMenu={(e) => e.preventDefault()}
         onKeyDown={onKey}
         onKeyUp={onKey}
+        onFocus={() => void syncLocalClipboard()}
       />
+      {stats && (
+        <div className="absolute top-2 left-2 px-2 py-1 rounded bg-black/85 text-white/90 text-[11px] mono leading-4 pointer-events-none select-none"
+          data-rd-stats="">
+          <div>{t("畫面 {fps} FPS · {kbps} KB/s", { fps: stats.fps, kbps: stats.kbps })}</div>
+          <div>{t("延遲 {ms}", { ms: stats.delay == null ? "—" : `${stats.delay} ms` })}</div>
+          <div>{[stats.codec, stats.width ? `${stats.width}×${stats.height}` : ""].filter(Boolean).join(" · ")}</div>
+        </div>
+      )}
       {unsupported && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-fg/70 p-6 text-center">
           {t("這個環境的瀏覽器元件不支援 {what}，無法顯示 RustDesk 畫面。", { what: unsupported })}

@@ -568,11 +568,11 @@ metadata:
         }
         if (protocol === "rustdesk") {
           // 輔助程式的「登入成功」事件（[型別 1][JSON]）；影像是 VP9 位元流，假後端做不出來，不送。
-          // 情境可給對方好幾個螢幕（window.__DBKIT_RD_DISPLAYS__）。
+          // 情境可給對方好幾個螢幕（window.__DBKIT_RD_DISPLAYS__）、改對方資訊（window.__DBKIT_RD_PEER__，例如 platform）。
           const displays = window.__DBKIT_RD_DISPLAYS__ ?? [{ x: 0, y: 0, width: 1280, height: 720, name: "" }];
           const hello = new TextEncoder().encode(JSON.stringify({
             type: "connected",
-            peer: { hostname: "office-pc", version: "1.4.9", displays, current_display: 0 },
+            peer: { hostname: "office-pc", version: "1.4.9", displays, current_display: 0, ...(window.__DBKIT_RD_PEER__ ?? {}) },
           }));
           setTimeout(() => send(new Uint8Array([1, ...hello])), 20);
           // 真的 RustDesk 錄下來的 VP9 關鍵畫面（見 screenshot-fixtures.mjs）：前端要用 WebCodecs 解出 1024×768。

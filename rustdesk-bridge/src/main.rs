@@ -267,6 +267,8 @@ where
     let mut awaiting_2fa = false;
     // 對方允許「信任這台裝置」（`2FA Required` 那則帶的；`Wrong 2FA Code` 不帶，沿用）。
     let mut trust_offered = false;
+    // 登入後才知道的對方資訊（送 Ctrl+Alt+Del 要看對方是不是 Windows）。
+    let mut peer = session::PeerCtx::default();
 
     loop {
         // 兩個讀取端都是取消安全的（select! 另一邊先好時，讀到一半的封包不會掉）。
@@ -309,7 +311,7 @@ where
                             // 格式不對的指令略過（db-kit 的 bug 不該讓連線斷掉）。
                             if let Ok(c) = serde_json::from_value::<Command>(v) {
                                 if logged_in {
-                                    for m in session::command_messages(&c) {
+                                    for m in session::command_messages(&c, &peer) {
                                         session::send_sealed(&mut pw, &m, &mut tx).await.map_err(|e| e.to_string())?;
                                     }
                                 }
@@ -354,6 +356,7 @@ where
             }
             Incoming::LoggedIn(pi) => {
                 logged_in = true;
+                peer.platform = pi.platform.clone();
                 emit(stdout, json!({ "type": "connected", "peer": pi, "secure": secure, "route": login.route })).await?;
             }
             Incoming::LoginError(e) => {
@@ -389,9 +392,31 @@ where
                 emit(stdout, v).await?;
             }
             Incoming::Displays(_) | Incoming::DisplayChanged(_) => {}
-            Incoming::Echo(m) => {
-                session::send_sealed(&mut pw, &m, &mut tx).await.map_err(|e| e.to_string())?;
+            Incoming::Echo { msg, delay, bitrate } => {
+                session::send_sealed(&mut pw, &msg, &mut tx).await.map_err(|e| e.to_string())?;
+                if logged_in {
+                    emit(stdout, json!({ "type": "delay", "ms": delay, "bitrate": bitrate })).await?;
+                }
             }
+            // 權限一開始（登入回覆之後）就會送，這時已經登入了。
+            Incoming::Permission { name, enabled } => {
+                emit(stdout, json!({ "type": "permission", "name": name, "enabled": enabled })).await?;
+            }
+            Incoming::Clipboard(text) if logged_in => {
+                emit(stdout, json!({ "type": "clipboard", "text": text })).await?;
+            }
+            Incoming::Chat(text) if logged_in => {
+                emit(stdout, json!({ "type": "chat", "text": text })).await?;
+            }
+            Incoming::BlockInput { on, ok } => {
+                emit(stdout, json!({ "type": "block_input", "on": on, "ok": ok })).await?;
+            }
+            Incoming::MsgBox(mb) if logged_in => {
+                let mut v = json!(mb);
+                v["type"] = json!("msgbox");
+                emit(stdout, v).await?;
+            }
+            Incoming::Clipboard(_) | Incoming::Chat(_) | Incoming::MsgBox(_) => {}
             Incoming::Closed(reason) => {
                 emit(stdout, json!({ "type": "closed", "reason": reason })).await?;
                 return Ok(());
@@ -890,6 +915,129 @@ mod tests {
         let mut late = BTreeSet::new();
         let _ = tokio::time::timeout(std::time::Duration::from_secs(3), until(&mut host_out_r, &mut late, |_, _| false)).await;
         assert!(!late.contains(&1), "切回螢幕 1 後還收到螢幕 2 的關鍵畫面");
+        task.abort();
+    }
+
+    /// 對真的 RustDesk 被控端（Linux，Direct IP、密碼 dbkit123）驗工具列的功能：
+    /// - 換編碼成 VP8 → 之後的畫面是 VP8；
+    /// - 對方定時量延遲 → `delay` 事件；
+    /// - 封鎖輸入（Linux 對方不支援）→ `block_input` 事件帶失敗；
+    /// - 剪貼簿：本機 → 對方（用 `docker exec … xclip -o` 讀對方的剪貼簿）、對方 → 本機（`xclip -i` 寫進去 → `clipboard` 事件）；
+    /// - 聊天送得出去、連線不斷。
+    ///
+    /// `DBKIT_RUSTDESK_IT_PORT`（預設 21118）、`DBKIT_RUSTDESK_IT_CONTAINER`（被控端容器名，要裝 xclip；沒給就不驗剪貼簿）。
+    /// `cargo test -- --ignored real_peer_toolbar --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn real_peer_toolbar_features() {
+        let host = std::env::var("DBKIT_RUSTDESK_IT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+        let port: u16 = std::env::var("DBKIT_RUSTDESK_IT_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(21118);
+        let container = std::env::var("DBKIT_RUSTDESK_IT_CONTAINER").ok().filter(|c| !c.is_empty());
+        let tcp = TcpStream::connect((host.as_str(), port)).await.expect("connect peer");
+        let login = direct(&host, "dbkit123", Decoders { vp9: true, vp8: true, av1: false }, "it");
+        let (mut host_in_w, host_in_r) = tokio::io::duplex(1 << 16);
+        let (mut host_out_w, mut host_out_r) = tokio::io::duplex(8 << 20);
+        let task = tokio::spawn(async move {
+            let mut stdin = ipc::MsgReader::new(host_in_r);
+            drive(tcp, &mut stdin, &mut host_out_w, &login).await
+        });
+        /// 讀到 `done` 說好為止（逾時 = None）。`v` 是事件（影像時是 Null），`codec` 是影像的編碼（事件時 0）。
+        async fn until<R: AsyncRead + Unpin>(
+            r: &mut R,
+            secs: u64,
+            mut done: impl FnMut(&serde_json::Value, u8) -> bool,
+        ) -> Option<serde_json::Value> {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(secs);
+            loop {
+                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let Ok(Ok(Some(raw))) = tokio::time::timeout(left, ipc::read_raw(r)).await else { return None };
+                let (v, codec) = if raw[0] == ipc::OUT_JSON {
+                    let v: serde_json::Value = serde_json::from_slice(&raw[1..]).unwrap();
+                    if v["type"] != "delay" {
+                        eprintln!("event: {v}");
+                    }
+                    assert!(v["type"] != "closed" && v["type"] != "login_error", "{v}");
+                    (v, 0)
+                } else {
+                    (serde_json::Value::Null, raw[1])
+                };
+                if done(&v, codec) {
+                    return Some(v);
+                }
+            }
+        }
+        let docker = |args: &[&str], stdin: Option<&str>| {
+            let mut c = std::process::Command::new("docker");
+            c.args(args).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+            let mut child = c.spawn().expect("docker");
+            if let Some(s) = stdin {
+                use std::io::Write;
+                child.stdin.take().unwrap().write_all(s.as_bytes()).unwrap();
+            }
+            let out = child.wait_with_output().expect("docker");
+            String::from_utf8_lossy(&out.stdout).to_string()
+        };
+
+        let mut platform = String::new();
+        until(&mut host_out_r, 40, |v, codec| {
+            if v["type"] == "connected" {
+                platform = v["peer"]["platform"].as_str().unwrap_or_default().to_string();
+            }
+            !platform.is_empty() && codec != 0
+        })
+        .await
+        .expect("時限內要登入並收到畫面");
+        eprintln!("peer platform = {platform}");
+
+        // 換成 VP8：對方重設編碼器，之後的畫面是 VP8（codec 2）。讓畫面動起來才會有新畫面。
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "codec", "prefer": "vp8", "vp9": true, "vp8": true, "av1": false })).await.unwrap();
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "refresh" })).await.unwrap();
+        until(&mut host_out_r, 20, |_, codec| codec == 2).await.expect("換成 VP8 後要收到 VP8 畫面");
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "quality", "level": "low" })).await.unwrap();
+
+        // 對方每隔一陣子量一次延遲
+        let d = until(&mut host_out_r, 20, |v, _| v["type"] == "delay").await.expect("要收到 delay");
+        assert!(d["ms"].is_u64(), "{d}");
+
+        // 封鎖輸入：Linux 對方做不到 → 回失敗；Windows 對方成功後再解除
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "toggle", "name": "block_input", "on": true })).await.unwrap();
+        let b = until(&mut host_out_r, 10, |v, _| v["type"] == "block_input").await;
+        eprintln!("block_input → {b:?}");
+        if platform == "Windows" {
+            assert_eq!(b.as_ref().map(|b| &b["ok"]), Some(&json!(true)));
+            ipc::write_host_json(&mut host_in_w, &json!({ "t": "toggle", "name": "block_input", "on": false })).await.unwrap();
+        } else if let Some(b) = b {
+            assert_eq!(b["ok"], false, "{b}");
+        }
+
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "chat", "text": "db-kit 整合測試" })).await.unwrap();
+
+        if let Some(c) = container.as_deref() {
+            // 本機 → 對方
+            let text = format!("db-kit 剪貼簿 {}", std::process::id());
+            ipc::write_host_json(&mut host_in_w, &json!({ "t": "clipboard", "text": text })).await.unwrap();
+            let mut got = String::new();
+            for _ in 0..20 {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                got = docker(&["exec", "-e", "DISPLAY=:0", c, "xclip", "-o", "-selection", "clipboard"], None);
+                if got == text {
+                    break;
+                }
+            }
+            assert_eq!(got, text, "對方的剪貼簿要是送過去的文字");
+            // 對方 → 本機
+            let theirs = format!("對方複製 {}", std::process::id());
+            // 先存檔再交給 xclip（背景工作的 stdin 會被 sh 接到 /dev/null）；xclip 自己會留在背景提供剪貼簿。
+            docker(&["exec", "-i", "-e", "DISPLAY=:0", c, "sh", "-c", "cat > /tmp/clip.txt && xclip -i -selection clipboard /tmp/clip.txt >/dev/null 2>&1"], Some(&theirs));
+            let v = until(&mut host_out_r, 15, |v, _| v["type"] == "clipboard").await.expect("對方複製 → 要收到 clipboard 事件");
+            assert_eq!(v["text"], theirs.as_str());
+        } else {
+            eprintln!("沒有 DBKIT_RUSTDESK_IT_CONTAINER：略過剪貼簿");
+        }
+
+        // 還連著：再要一張畫面收得到
+        ipc::write_host_json(&mut host_in_w, &json!({ "t": "refresh" })).await.unwrap();
+        until(&mut host_out_r, 15, |_, codec| codec != 0).await.expect("連線還在");
         task.abort();
     }
 

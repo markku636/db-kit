@@ -4,7 +4,8 @@
 // 分頁本身改成 fixed 蓋住整個 app（側欄、分頁列都藏起來）。WebView2 的 HTML Fullscreen API 只會填滿 webview，
 // 所以不用它。Ctrl+Alt+Enter 切換（遠端桌面客戶端的慣例）；工具列在全螢幕時縮成頂端中央的浮動條，滑到頂端才出現。
 // Ctrl+Alt+Del、Win、Alt+Tab 這些本機 OS 會先吃掉的鍵走工具列的「送出按鍵」。
-// RustDesk 對方有好幾個螢幕時，工具列多一排切換螢幕的按鈕（RdMonitorBar）。
+// RustDesk 的工具列另外多了切換螢幕、顯示設定、動作與聊天（RustDeskToolbar）；顯示偏好與「同步剪貼簿」
+// 存回已存主機的設定（下次連同一台照舊），快速連線的只記在這個分頁。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import {
@@ -27,8 +28,9 @@ import RdpView from "./RdpView";
 // 靜態載入：view 必須在第一次 connect 之前就掛好（輸出在 rdConnect 回來前就會開始送）；noVNC 本體在 VncView 裡才 lazy。
 import VncView from "./VncView";
 import RustDeskView from "./RustDeskView";
-import RdMonitorBar from "./RdMonitorBar";
-import type { RdMonitors } from "./rdMonitors";
+import RustDeskToolbar from "./RustDeskToolbar";
+import RustDeskChat from "./RustDeskChat";
+import { prefsFromUi, prefsToUi, type RdChatMsg, type RustDeskPrefs, type RustDeskState } from "./rustdeskState";
 
 
 function errMsg(e: unknown): string {
@@ -80,8 +82,41 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   const immersiveRef = useRef(false);
   const [barShown, setBarShown] = useState(true);
   const [keysMenu, setKeysMenu] = useState<{ x: number; y: number } | null>(null);
-  const [monitors, setMonitors] = useState<RdMonitors | null>(null);
   const wantFullscreen = useRef(!!tab.fullscreen || opts.ui?.fullscreen === "1");
+
+  // ---- RustDesk：工具列狀態、顯示偏好、聊天 ----
+  const [rdState, setRdState] = useState<RustDeskState | null>(null);
+  const [chat, setChat] = useState<RdChatMsg[]>([]);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatSeen, setChatSeen] = useState(0);
+  const saveRdSession = useRdSessions((s) => s.save);
+  const saved = tab.target.kind === "session" && session != null;
+  const [localPrefs, setLocalPrefs] = useState<RustDeskPrefs>(() => prefsFromUi(opts.ui));
+  const [localClipboard, setLocalClipboard] = useState(opts.clipboard);
+  const savedPrefs = useMemo(() => prefsFromUi(opts.ui), [opts.ui]);
+  const rdPrefs = saved ? savedPrefs : localPrefs;
+  const rdClipboard = saved ? opts.clipboard : localClipboard;
+  const setRdPrefs = (p: RustDeskPrefs) => {
+    if (saved && session) void saveRdSession({ ...session, options: { ...session.options, ui: prefsToUi(p, session.options.ui) } });
+    else setLocalPrefs(p);
+  };
+  const setRdClipboard = (on: boolean) => {
+    if (saved && session) void saveRdSession({ ...session, options: { ...session.options, clipboard: on } });
+    else setLocalClipboard(on);
+  };
+  const onRdState = (s: RustDeskState | null) => {
+    setRdState(s);
+    if (s) setChat(s.chat);
+  };
+  const peerMsgs = chat.filter((m) => m.from === "peer").length;
+  const unread = chatOpen ? 0 : Math.max(0, peerMsgs - chatSeen);
+  // 對方傳訊息來：打開聊天（官方用戶端也會跳出來），但不搶走畫面的鍵盤焦點。
+  const lastPeerMsgs = useRef(0);
+  useEffect(() => {
+    if (peerMsgs > lastPeerMsgs.current) setChatOpen(true);
+    lastPeerMsgs.current = peerMsgs;
+  }, [peerMsgs]);
+  useEffect(() => { if (chatOpen) setChatSeen(peerMsgs); }, [chatOpen, peerMsgs]);
 
   const setStatus = (s: RdStatus, extra: { error?: string | null; info?: RdConnInfo | null } = {}) => {
     statusRef.current = s;
@@ -247,8 +282,10 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
 
   const toolbarButtons = (
     <>
-      {status === "connected" && monitors && monitors.displays.length > 1 && (
-        <RdMonitorBar monitors={monitors} onPick={(set) => viewRef.current?.showDisplays?.(set)} />
+      {protocol === "rustdesk" && status === "connected" && rdState && (
+        <RustDeskToolbar state={rdState} prefs={rdPrefs} onPrefs={setRdPrefs} clipboard={rdClipboard} onClipboard={setRdClipboard}
+          viewOnly={opts.view_only} view={viewRef} chatOpen={chatOpen} unread={unread}
+          onChat={() => { setChatOpen((o) => !o); viewRef.current?.focus(); }} />
       )}
       {unencrypted && (
         <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded bg-warning/15 text-warning text-[11px] shrink-0"
@@ -313,7 +350,13 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
         ) : protocol === "rdp" ? (
           <RdpView ref={viewRef} resizeMode={opts.resize_mode} viewOnly={opts.view_only} clipboard={opts.clipboard} isPaneShortcut={isFullscreenShortcut} />
         ) : (
-          <RustDeskView ref={viewRef} viewOnly={opts.view_only} isPaneShortcut={isFullscreenShortcut} onMonitors={setMonitors} />
+          <RustDeskView ref={viewRef} viewOnly={opts.view_only} isPaneShortcut={isFullscreenShortcut}
+            clipboard={rdClipboard} prefs={rdPrefs} onState={onRdState} />
+        )}
+        {protocol === "rustdesk" && chatOpen && (
+          <RustDeskChat messages={chat} peerName={label} connected={status === "connected"}
+            onSend={(s) => viewRef.current?.sendChat?.(s)}
+            onClose={() => { setChatOpen(false); viewRef.current?.focus(); }} />
         )}
         {status !== "connected" && (
           <div className="absolute inset-0 flex items-center justify-center bg-app/80" data-rd-overlay={status}>

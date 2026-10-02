@@ -22,6 +22,12 @@ export interface RdViewHandle {
   rawKey(scancode: number, down: boolean): void;
   /** 多螢幕：換成看這幾個螢幕（RustDesk；一個 = 切過去，多個 = 一起看）。 */
   showDisplays?(set: number[]): void;
+  /** RustDesk 工具列的「動作」：`ctrl_alt_del` / `lock_screen` / `restart` / `refresh`。 */
+  action?(name: "ctrl_alt_del" | "lock_screen" | "restart" | "refresh"): void;
+  /** RustDesk：封鎖 / 解除封鎖對方的鍵盤滑鼠。 */
+  setBlockInput?(on: boolean): void;
+  /** RustDesk：傳聊天訊息給對方。 */
+  sendChat?(text: string): void;
 }
 
 /** Tauri Channel 的 raw 訊息在真 App 是 ArrayBuffer；verify-ui 的假後端可能送 Uint8Array / number[]。 */
