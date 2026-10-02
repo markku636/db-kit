@@ -35,7 +35,8 @@
 | — | RustDesk 相容連線第一階段：獨立 AGPL 輔助程式 `rustdesk-bridge/`（stdin / stdout 與 db-kit 對話）、Direct IP、密碼登入 / 對方按接受、VP9 / VP8 影像原封不動交給 WebView 的 WebCodecs 解碼、鍵盤滑鼠、可經 SSH 主機轉接 | ✅ 完成 |
 | — | RustDesk 第二階段：用 RustDesk ID 連線——ID 伺服器（hbbs，公開或自架 + Key）→ TCP 打洞直連，不行就經中繼（hbbr）→ 驗過簽章的端到端加密（box / secretbox 金鑰交換）；可貼上 RustDesk 匯出的伺服器設定字串 | ✅ 完成 |
 | — | RustDesk 多螢幕：工具列每個螢幕一顆按鈕切換、「所有螢幕」照排列拼成一張；對方插拔螢幕 / 換解析度時跟著更新 | ✅ 完成 |
-| — | RustDesk 第三階段：剪貼簿、游標圖、UDP / IPv6 打洞 | ⏳ 規劃中 |
+| — | RustDesk 工具列：顯示設定（檢視方式 / 畫質 / 編碼 / 連線品質）、動作（Ctrl+Alt+Del / 鎖定 / 封鎖輸入 / 重新啟動）、剪貼簿文字同步、聊天、錄影；鍵盤依對方系統換算鍵碼並帶鎖定鍵狀態 | ✅ 完成 |
+| — | RustDesk 第三階段：檔案傳輸、游標圖、音訊、UDP / IPv6 打洞 | ⏳ 規劃中 |
 | — | 查詢效能分析（EXPLAIN） | ✅ 完成 |
 | — | 結構編輯（DDL：新增/刪除/改名欄位） | ✅ 完成 |
 | — | ER 圖（表 + 外鍵關係） | ✅ 完成 |
