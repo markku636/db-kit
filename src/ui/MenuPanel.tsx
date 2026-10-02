@@ -68,6 +68,7 @@ export default function MenuPanel({ x, y, onClose, minW = 180, className = "", c
       />
       <div
         ref={ref}
+        data-menu-panel=""
         className={`fixed z-[90] bg-elevated border border-fg/10 rounded shadow-2xl py-1 text-sm ${className}`}
         style={{
           left: pos.left,

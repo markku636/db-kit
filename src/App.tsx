@@ -51,7 +51,7 @@ import RdHostTree from "./RdHostTree";
 import type { RdProtocol, RdSession } from "./rdTypes";
 import type { RdTab } from "./rdTabs";
 import { rdSessionLabel, useRdSessions } from "./rdSessions";
-import { RD_META, useRdStatus } from "./rdStatus";
+import { RD_META, rdIsLive, sendRdCommand, useRdStatus } from "./rdStatus";
 import type { ParsedRd } from "./rdConnString";
 import { decodeRdpFileBytes, parseRdpFile } from "./rdpFile";
 import SshPrefsSettings from "./SshPrefsSettings";
@@ -4096,6 +4096,8 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
             const key = rdTabMenu.key;
             const tab = rdTabs.find((x) => x.key === key);
             const items: [string, () => void][] = [];
+            if (rdIsLive(useRdStatus.getState().rt[key])) items.push([t("中斷連線"), () => sendRdCommand(key, "disconnect")]);
+            else items.push([t("重新連線"), () => sendRdCommand(key, "reconnect")]);
             if (tab) items.push([t("複製分頁"), () => openRdTab({ target: tab.target, protocol: tab.protocol, title: tab.title, sessionId: tab.sessionId })]);
             items.push([t("重新命名…"), () => {
               void uiPrompt(t("分頁名稱"), { title: t("重新命名分頁"), defaultValue: tab?.title ?? "" }).then((v) => { if (v?.trim()) renameRdTab(key, v.trim()); });

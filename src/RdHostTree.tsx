@@ -1,6 +1,6 @@
 // 側欄的「遠端桌面」區塊：群組 + RDP / VNC / RustDesk 主機（與 SSH 主機分開存、分開顯示）。
 // 分組行為（區塊標題、群組、拖曳排序、搬移）與資料庫連線、SSH 主機共用 sidebar/GroupedSection。
-// 單擊高亮、雙擊 / Enter 開遠端桌面分頁；右鍵有連線 / 全螢幕連線 / 編輯 / 複製 / 移到群組 / 刪除。
+// 單擊高亮、雙擊 / Enter 開遠端桌面分頁；右鍵有連線 / 全螢幕連線 / 中斷連線（連著時）/ 編輯 / 複製 / 移到群組 / 刪除。
 // 一台都沒有時整個區塊不顯示（同 SSH）：新增走「新增連線 → 遠端主機」、貼 rdp:// vnc:// rustdesk:// 字串或匯入 .rdp。
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Expand, FileInput, Pencil } from "lucide-react";
@@ -10,7 +10,7 @@ import { toast, uiConfirm } from "./ui";
 import { useStore } from "./store";
 import type { RdFolder, RdSession } from "./rdTypes";
 import { filterRdSessions, rdEndpoint, rdProtocolLabel, rdSessionLabel, useRdSessions } from "./rdSessions";
-import { RD_META, useRdStatus } from "./rdStatus";
+import { RD_META, rdIsLive, sendRdCommand, useRdStatus } from "./rdStatus";
 import GroupedSection, { HeaderButton, RowButton, moveTargets, type ItemDnd } from "./sidebar/GroupedSection";
 import { moveItem, type Placement } from "./sidebarGroups";
 
@@ -52,6 +52,12 @@ export default function RdHostTree({ q, onOpen, onEdit, onImportRdp }: RdHostTre
   }, [liveSig]);
 
   const matched = useMemo(() => (q ? new Set(filterRdSessions(sessions, q).map((s) => s.id)) : null), [sessions, q]);
+
+  /** 這台主機還連著（或正在撥號 / 等自動重連）的分頁（右鍵「中斷連線」用）。 */
+  const liveTabsOf = (id: string) => {
+    const rt = useRdStatus.getState().rt;
+    return useStore.getState().rdTabs.filter((x) => x.sessionId === id && rdIsLive(rt[x.key])).map((x) => x.key);
+  };
 
   // 已連線就切到那個分頁，不另開一條；沒連線才開新分頁。
   const focusOrOpen = (s: RdSession, fullscreen = false) => {
@@ -133,6 +139,9 @@ export default function RdHostTree({ q, onOpen, onEdit, onImportRdp }: RdHostTre
           {([
             [t("連線"), () => focusOrOpen(menu.session), false],
             [t("全螢幕連線"), () => focusOrOpen(menu.session, true), false],
+            ...(liveTabsOf(menu.session.id).length
+              ? [[t("中斷連線"), () => { for (const k of liveTabsOf(menu.session.id)) sendRdCommand(k, "disconnect"); }, false]]
+              : []),
             [t("編輯…"), () => onEdit(menu.session, menu.session.folder_id), false],
             [t("複製"), () => duplicate(menu.session), false],
             ...moveTargets(folders, menu.session.folder_id, t).map(([label, gid]) => [label, () => moveTo(menu.session, gid), false]),

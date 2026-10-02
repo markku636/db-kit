@@ -1213,6 +1213,40 @@ const CASES = {
     await sleep(1600);
     check("對方手動中斷 → 不自動重連，只留「重新連線」", (await retry.count()) === 0 && (await connects()) === n0 + 2
       && (await page.locator('[data-rd-overlay="disconnected"]').getByRole("button", { name: "重新連線", exact: true }).count()) === 1);
+
+    // 右鍵選單：分頁 / 側欄主機都能「中斷連線」，斷了之後分頁右鍵變成「重新連線」
+    const tabMenu = async () => {
+      await page.locator("[data-rd-tab]").first().click({ button: "right" });
+      await sleep(150);
+    };
+    const menuItem = (name) => page.locator("[data-menu-panel]").getByRole("button", { name, exact: true });
+    const overlayOf = (st) => page.locator(`[data-rd-overlay="${st}"]`);
+    await tabMenu();
+    check("斷線中：分頁右鍵有「重新連線」、沒有「中斷連線」", (await menuItem("重新連線").count()) >= 1 && (await menuItem("中斷連線").count()) === 0);
+    await menuItem("重新連線").last().click();
+    await overlayOf("connecting").waitFor({ state: "detached", timeout: 3000 }).catch(() => {});
+    await sleep(200);
+    check("分頁右鍵「重新連線」→ 重撥並連上", (await connects()) === n0 + 3 && (await page.locator("[data-rd-overlay]").count()) === 0);
+    const hostRow = page.locator("[data-rd-host-tree]").getByText("office-pc", { exact: true }).first();
+    await hostRow.click({ button: "right" });
+    await sleep(150);
+    check("連著：側欄主機右鍵有「中斷連線」", (await menuItem("中斷連線").count()) === 1);
+    await menuItem("中斷連線").click();
+    await overlayOf("disconnected").waitFor({ timeout: 3000 }).catch(() => {});
+    check("側欄右鍵「中斷連線」→ 分頁斷線", (await overlayOf("disconnected").count()) === 1
+      && (await page.evaluate(() => window.__DBKIT_RD_CONNECTS__.length)) === n0 + 3);
+    await hostRow.click({ button: "right" });
+    await sleep(150);
+    check("斷了之後側欄主機右鍵就沒有「中斷連線」", (await menuItem("中斷連線").count()) === 0);
+    await page.keyboard.press("Escape");
+    await tabMenu();
+    await menuItem("重新連線").last().click();
+    await overlayOf("connecting").waitFor({ state: "detached", timeout: 3000 }).catch(() => {});
+    await sleep(200);
+    await tabMenu();
+    await menuItem("中斷連線").click();
+    await overlayOf("disconnected").waitFor({ timeout: 3000 }).catch(() => {});
+    check("分頁右鍵「中斷連線」→ 斷線", (await overlayOf("disconnected").count()) === 1);
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },

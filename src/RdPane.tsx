@@ -20,7 +20,7 @@ import type { RdAuthPrompt, RdCertPrompt, RdConnInfo, RdSession, RdStatus } from
 import { defaultRdOptions } from "./rdTypes";
 import type { SshAuthPrompt, SshHostKeyPrompt } from "./sshTypes";
 import { rdEndpoint, rdProtocolLabel, rdSessionLabel, useRdSessions } from "./rdSessions";
-import { RD_META, useRdStatus } from "./rdStatus";
+import { onRdCommand, RD_META, useRdStatus } from "./rdStatus";
 import { toArrayBuffer, type RdViewHandle } from "./rdView";
 import { RdAuthPromptDialog, RdCertDialog } from "./RdPrompts";
 import { SshAuthPromptDialog, SshHostKeyDialog } from "./SshPrompts";
@@ -289,6 +289,12 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
     stopRetry();
     redial();
   };
+
+  // 側欄 / 分頁列右鍵選單的「中斷連線」/「重新連線」；側欄靠 retrying 判斷要不要給「中斷連線」。
+  const commandRef = useRef({ disconnect, reconnect });
+  commandRef.current = { disconnect, reconnect };
+  useEffect(() => onRdCommand(tab.key, (c) => commandRef.current[c]()), [tab.key]);
+  useEffect(() => { useRdStatus.getState().patch(tab.key, { retrying }); }, [tab.key, retrying]);
 
   useEffect(() => {
     // RustDesk 分頁：把 AI 助手與詳細資料面板收起來，遠端畫面拿到整個寬度（要用再自己打開，不會一直被收）。

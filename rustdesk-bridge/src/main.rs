@@ -1140,6 +1140,20 @@ mod tests {
         pause(800).await;
         assert_eq!(docker("cat /tmp/kb.txt").trim_end(), "Ab1-X", "打出來的字要對（Linux 鍵碼）");
 
+        // 1b. 編輯鍵：打 "echo abcd"，← ← 回到 c 前面，Delete 刪掉 c、Backspace 刪掉 b → "ad"
+        docker("rm -f /tmp/edit.txt");
+        type_str(&mut w, "echo abcd").await;
+        for sc in [0xE04B, 0xE04B, 0xE053, 0x0E] {
+            key(&mut w, sc, true, false, false).await;
+            key(&mut w, sc, false, false, false).await;
+            pause(30).await;
+        }
+        key(&mut w, 0xE04F, true, false, false).await; // End
+        key(&mut w, 0xE04F, false, false, false).await;
+        type_str(&mut w, " >/tmp/edit.txt\n").await;
+        pause(800).await;
+        assert_eq!(docker("cat /tmp/edit.txt").trim_end(), "ad", "←、Delete、Backspace、End 都要有作用");
+
         // 2. CapsLock：本機開著 → 字母是大寫（對方先開 CapsLock 再按、按完還原）
         type_str(&mut w, "echo ").await;
         for sc in [0x10, 0x11] {

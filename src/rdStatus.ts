@@ -11,6 +11,29 @@ export interface RdRuntime {
   security?: string;
   encrypted?: boolean;
   error?: string | null;
+  /** 斷線後正在等自動重連（RustDesk）。 */
+  retrying?: boolean;
+}
+
+/** 這個分頁現在有沒有東西可以「中斷」：連著、正在撥號，或在等自動重連。 */
+export function rdIsLive(r: RdRuntime | undefined): boolean {
+  return !!r && (r.status === "connected" || r.status === "connecting" || !!r.retrying);
+}
+
+// 側欄 / 分頁列的右鍵選單要某個分頁「中斷連線」/「重新連線」：連線狀態在 RdPane 裡，由它登記處理函式。
+export type RdCommand = "disconnect" | "reconnect";
+const commandHandlers = new Map<string, (c: RdCommand) => void>();
+
+/** RdPane 登記自己的處理函式；回傳取消登記。 */
+export function onRdCommand(key: string, fn: (c: RdCommand) => void): () => void {
+  commandHandlers.set(key, fn);
+  return () => {
+    if (commandHandlers.get(key) === fn) commandHandlers.delete(key);
+  };
+}
+
+export function sendRdCommand(key: string, c: RdCommand): void {
+  commandHandlers.get(key)?.(c);
 }
 
 interface RdStatusStore {
