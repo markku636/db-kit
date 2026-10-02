@@ -67,8 +67,7 @@ pub enum RdOrigin {
 pub struct RdConn {
     pub id: String,
     pub origin: RdOrigin,
-    /// 連線資訊（除錯 / 之後的狀態查詢用）。
-    #[allow(dead_code)]
+    /// 連線資訊（協定：輸入作業系統密碼只給 RustDesk 連線）。
     pub info: RdConnInfo,
     pub ctl: mpsc::UnboundedSender<RdCtl>,
     /// 任務結束時變成 `Some(原因)`；sender 消失也代表已關。

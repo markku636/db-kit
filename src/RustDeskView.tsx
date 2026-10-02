@@ -15,7 +15,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { api } from "./api";
 import type { RdConnInfo } from "./rdTypes";
 import { mouseButtonFromDom, scancodeForCode } from "./rdInput";
-import { chordedChange, HeldKeys, lockModes, mouseModifiers } from "./rustdeskInput";
+import { chordedChange, HeldKeys, lockModes, mouseModifiers, translatedChar } from "./rustdeskInput";
 import { useT } from "./i18n";
 import { toast } from "./ui";
 import type { RdViewHandle } from "./rdView";
@@ -459,8 +459,17 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     e.preventDefault();
     e.stopPropagation();
     const sc = scancodeForCode(e.code);
-    if (sc == null) return;
     locksRef.current = lockModes(e);
+    // 翻譯模式：打得出字的鍵送那個字（只送按下）；之前照位置按下去的鍵（例如按著 Ctrl 時）放開照樣照位置送。
+    if (optsRef.current.prefs.keyboard === "translate" && !(e.type === "keyup" && sc != null && held.has(sc))) {
+      if (e.key === "Dead") return; // 重音之類的組字鍵：等下一個鍵組出字再送（官方也略過）
+      const ch = translatedChar(e);
+      if (ch != null) {
+        if (e.type === "keydown") send({ t: "char", text: ch });
+        return;
+      }
+    }
+    if (sc == null) return;
     sendKey(sc, e.type === "keydown");
   };
 
@@ -596,6 +605,10 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     },
     startRecording(name: string) { return startRecordingNow(name); },
     stopRecording() { return stopRecording(); },
+    async inputOsPassword(password?: string) {
+      if (!liveRef.current || optsRef.current.viewOnly) return;
+      await api.rdInputOsPassword(connIdRef.current, password);
+    },
     sendChat(text: string) {
       const s = text.trim();
       if (!s || !liveRef.current) return;

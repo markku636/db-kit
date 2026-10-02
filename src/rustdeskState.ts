@@ -7,6 +7,8 @@ import type { RdMonitors } from "./rdMonitors";
 export type RdViewMode = "adaptive" | "original";
 export type RdQuality = "best" | "balanced" | "low";
 export type RdCodecPref = "auto" | "vp9" | "vp8" | "av1";
+/** 鍵盤模式（官方 Map / Translate）：對應 = 照鍵盤位置送、對方用它自己的配置解讀；翻譯 = 送本機鍵盤配置打出的字。 */
+export type RdKeyboardMode = "map" | "translate";
 
 /** 每台主機記住的顯示偏好（官方用戶端也是每台各記各的）。 */
 export interface RustDeskPrefs {
@@ -17,10 +19,13 @@ export interface RustDeskPrefs {
   stats: boolean;
   /** 連線結束後鎖定對方的畫面。 */
   lockAfterEnd: boolean;
+  keyboard: RdKeyboardMode;
 }
 
-/** 對方的預設：畫質「平衡」、編碼由登入時宣告的決定。 */
-export const DEFAULT_PREFS: RustDeskPrefs = { view: "adaptive", quality: "balanced", codec: "auto", stats: false, lockAfterEnd: false };
+/** 對方的預設：畫質「平衡」、編碼由登入時宣告的決定；鍵盤照官方預設用對應模式。 */
+export const DEFAULT_PREFS: RustDeskPrefs = {
+  view: "adaptive", quality: "balanced", codec: "auto", stats: false, lockAfterEnd: false, keyboard: "map",
+};
 
 const UI_KEYS: Record<keyof RustDeskPrefs, string> = {
   view: "rustdesk_view",
@@ -28,6 +33,7 @@ const UI_KEYS: Record<keyof RustDeskPrefs, string> = {
   codec: "rustdesk_codec",
   stats: "rustdesk_stats",
   lockAfterEnd: "rustdesk_lock_after_end",
+  keyboard: "rustdesk_keyboard",
 };
 
 function pick<T extends string>(v: string | undefined, allowed: readonly T[], d: T): T {
@@ -42,6 +48,7 @@ export function prefsFromUi(ui: Record<string, string> | undefined): RustDeskPre
     codec: pick(u[UI_KEYS.codec], ["auto", "vp9", "vp8", "av1"] as const, DEFAULT_PREFS.codec),
     stats: u[UI_KEYS.stats] === "1",
     lockAfterEnd: u[UI_KEYS.lockAfterEnd] === "1",
+    keyboard: pick(u[UI_KEYS.keyboard], ["map", "translate"] as const, DEFAULT_PREFS.keyboard),
   };
 }
 

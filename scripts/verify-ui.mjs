@@ -168,6 +168,7 @@ const CASE_FX = {
   "rd-rustdesk-wait-accept": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-monitors": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-toolbar": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-rustdesk-keyboard": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "update-dialog-install": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-manual": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-error": { GITHUB_RELEASE: FX_RELEASE },
@@ -1409,6 +1410,110 @@ const CASES = {
     await action("reveal_recording").click();
     await sleep(200);
     check("動作選單「開啟錄影資料夾」", (await page.evaluate(() => window.__DBKIT_RD_REVEALS__ ?? [])).at(-1) === r0?.path);
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
+  // RustDesk 鍵盤：翻譯模式（打得出字的鍵送字、快捷鍵照位置）、輸入作業系統密碼（沒存先問、勾記住之後直接打、可清除）、
+  // 虛擬鍵盤（修飾鍵按住到下一個鍵、按著 Shift 顯示符號、CapsLock、焦點留在遠端畫面、關掉時放開修飾鍵）。
+  async "rd-rustdesk-keyboard"(page) {
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("office-pc", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "1024x768", null, { timeout: 10000 }).catch(() => {});
+    const cmds = () => page.evaluate(() => window.__DBKIT_RD_WRITES__.map((b) => { try { return JSON.parse(new TextDecoder().decode(new Uint8Array(b))); } catch { return null; } }).filter(Boolean));
+    const since = async (n) => (await cmds()).slice(n);
+    const menu = (which) => page.locator(`[data-rd-menu="${which}"]`);
+    const opt = (id) => page.locator(`[data-rd-opt="${id}"]`);
+    const action = (id) => page.locator(`[data-rd-action="${id}"]`);
+    const canvas = page.locator("[data-rd-rustdesk] canvas");
+    const sessionId = await page.evaluate(() => window.__DBKIT_RD_CONNECTS__.at(-1)?.target?.id);
+
+    // ---- 鍵盤模式 ----
+    await menu("display").click();
+    check("鍵盤模式：預設「對應」", (await opt("keyboard-map").getAttribute("aria-checked")) === "true");
+    await opt("keyboard-translate").click();
+    await sleep(300);
+    check("選「翻譯」存回主機設定", (await page.evaluate(() => window.__DBKIT_RD_SESSION_SAVES__.at(-1)?.session?.options?.ui?.rustdesk_keyboard)) === "translate");
+    await canvas.click({ position: { x: 30, y: 30 } });
+    let n = (await cmds()).length;
+    await page.keyboard.press("a");
+    await page.keyboard.press("Shift+B");
+    await page.keyboard.press("Control+c");
+    await sleep(300);
+    let got = await since(n);
+    const chars = got.filter((c) => c.t === "char").map((c) => c.text).join("");
+    check("翻譯模式：a、Shift+B 送字（a、B），不送 A / B 的位置", chars === "aB"
+      && !got.some((c) => c.t === "key" && (c.scancode === 0x1e || c.scancode === 0x30)), JSON.stringify(got));
+    check("翻譯模式：Ctrl+C 照位置送（Ctrl、C 的掃描碼按下放開）",
+      got.some((c) => c.t === "key" && c.scancode === 0x2e && c.down) && got.some((c) => c.t === "key" && c.scancode === 0x2e && !c.down)
+      && got.some((c) => c.t === "key" && c.scancode === 0x1d && c.down));
+    await menu("display").click();
+    await opt("keyboard-map").click();
+    await sleep(200);
+    await canvas.click({ position: { x: 30, y: 30 } });
+    n = (await cmds()).length;
+    await page.keyboard.press("a");
+    await sleep(200);
+    got = await since(n);
+    check("換回「對應」：a 照位置送 0x1E", got.some((c) => c.t === "key" && c.scancode === 0x1e && c.down) && !got.some((c) => c.t === "char"));
+
+    // ---- 輸入作業系統密碼 ----
+    const osInputs = () => page.evaluate(() => window.__DBKIT_RD_OS_INPUTS__);
+    await menu("actions").click();
+    await action("os_password").click();
+    const dlg = page.locator("[data-rd-os-password]");
+    await dlg.waitFor({ timeout: 3000 }).catch(() => {});
+    check("沒存過：問作業系統密碼（預設勾記住）", (await dlg.count()) === 1 && (await page.locator("[data-rd-os-remember]").isChecked()));
+    await dlg.fill("Ubuntu#123");
+    await page.locator("[data-rd-os-submit]").click();
+    await sleep(300);
+    check("打過去：送出輸入的密碼", (await osInputs()).at(-1)?.password === "Ubuntu#123", JSON.stringify(await osInputs()));
+    check("勾了記住：存進這台主機", (await page.evaluate((id) => window.__DBKIT_RD_OS_PASSWORDS__[id], sessionId)) === "Ubuntu#123");
+    await menu("actions").click();
+    await action("os_password").click();
+    await sleep(300);
+    check("存過之後：直接打，不再問", (await dlg.count()) === 0 && (await osInputs()).length === 2);
+    await menu("actions").click();
+    await action("os_password_set").click();
+    await page.locator("[data-rd-os-clear]").waitFor({ timeout: 3000 }).catch(() => {});
+    check("設定作業系統密碼：有存時可以清除", (await page.locator("[data-rd-os-clear]").count()) === 1);
+    await page.locator("[data-rd-os-clear]").click();
+    await sleep(300);
+    check("清除後就不存了", (await page.evaluate((id) => window.__DBKIT_RD_OS_PASSWORDS__[id], sessionId)) === undefined
+      && (await dlg.count()) === 0);
+
+    // ---- 虛擬鍵盤 ----
+    await page.getByRole("button", { name: "送出按鍵", exact: true }).click();
+    await page.locator("[data-rd-vk-toggle]").click();
+    const vk = page.locator("[data-rd-vk]");
+    await vk.waitFor({ timeout: 3000 }).catch(() => {});
+    check("「送出按鍵」選單打開虛擬鍵盤", (await vk.count()) === 1);
+    const vkey = (sc) => vk.locator(`[data-vk-key="${sc}"]`).first();
+    await canvas.click({ position: { x: 30, y: 30 } });
+    n = (await cmds()).length;
+    await vkey(0x2a).click();
+    await sleep(150);
+    check("按 Shift：標成按住、送出 Shift 按下", (await vkey(0x2a).getAttribute("data-vk-held")) === "" &&
+      (await since(n)).some((c) => c.t === "key" && c.scancode === 0x2a && c.down));
+    check("按住 Shift 時數字鍵顯示符號（1 → !）", (await vkey(0x02).textContent()) === "!");
+    await vkey(0x1e).click();
+    await sleep(150);
+    got = (await since(n)).filter((c) => c.t === "key").map((c) => `${c.scancode.toString(16)}${c.down ? "↓" : "↑"}`);
+    check("Shift + A：Shift↓ A↓ A↑ Shift↑，之後 Shift 自動放開", got.join(" ") === "2a↓ 1e↓ 1e↑ 2a↑"
+      && (await vkey(0x2a).getAttribute("data-vk-held")) === null, got.join(" "));
+    check("點虛擬鍵盤不會搶走遠端畫面的焦點", await page.evaluate(() => document.activeElement?.tagName === "CANVAS"));
+    n = (await cmds()).length;
+    await vkey(0x3a).click();
+    await vkey(0xe05b).click();
+    await vkey(0x1d).click();
+    await sleep(150);
+    got = (await since(n)).filter((c) => c.t === "key").map((c) => `${c.scancode.toString(16)}${c.down ? "↓" : "↑"}`);
+    check("CapsLock 送按下放開（校正對方指示燈）；Win、Ctrl 都按住", got.join(" ") === "3a↓ 3a↑ e05b↓ 1d↓", got.join(" "));
+    await vk.getByRole("button", { name: "關閉虛擬鍵盤", exact: true }).click();
+    await sleep(200);
+    got = (await since(n)).filter((c) => c.t === "key").map((c) => `${c.scancode.toString(16)}${c.down ? "↓" : "↑"}`);
+    check("關掉虛擬鍵盤：按住的 Win、Ctrl 放開", (await vk.count()) === 0 && got.slice(-2).join(" ") === "1d↑ e05b↑", got.join(" "));
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },

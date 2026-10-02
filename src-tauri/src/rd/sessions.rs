@@ -197,6 +197,11 @@ pub fn session_password_account(id: &str) -> String {
     format!("{id}.rdsess")
 }
 
+/// 對方電腦的作業系統密碼（RustDesk「輸入作業系統密碼」用；跟連線密碼分開存）。
+pub fn os_password_account(id: &str) -> String {
+    format!("{id}.rdos")
+}
+
 // ---- 持久化 ----
 
 /// 讀整份檔。不存在 → 預設空表；損毀 → Err（不要默默當成空表，下次存檔會把使用者的清單蓋掉）。

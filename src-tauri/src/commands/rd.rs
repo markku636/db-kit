@@ -313,6 +313,7 @@ pub async fn rd_session_remove(app: AppHandle, state: State<'_, AppState>, id: S
     }
     sessions::remove_in(&store::app_config_dir(&app)?, &id).await?;
     store::kc_delete(&sessions::session_password_account(&id));
+    store::kc_delete(&sessions::os_password_account(&id));
     Ok(())
 }
 
@@ -332,6 +333,57 @@ pub async fn rd_sessions_layout_save(app: AppHandle, folders: Vec<RdFolder>, ord
 #[tauri::command]
 pub fn rd_has_stored_password(id: String) -> bool {
     store::kc_get(&sessions::session_password_account(&id)).is_some_and(|p| !p.is_empty())
+}
+
+/// 這台主機有沒有存對方電腦的作業系統密碼（RustDesk「輸入作業系統密碼」）。
+#[tauri::command]
+pub fn rd_has_os_password(id: String) -> bool {
+    store::kc_get(&sessions::os_password_account(&id)).is_some_and(|p| !p.is_empty())
+}
+
+/// 存 / 清除這台主機的作業系統密碼（空 / null = 清除）。
+#[tauri::command]
+pub fn rd_os_password_set(id: String, password: Option<String>) -> AppResult<()> {
+    match password.filter(|p| !p.is_empty()) {
+        Some(p) => store::kc_set(&sessions::os_password_account(&id), &p),
+        None => {
+            store::kc_delete(&sessions::os_password_account(&id));
+            Ok(())
+        }
+    }
+}
+
+/// 「輸入作業系統密碼」（官方 `input_os_password(p, activate = true)`）：先點一下對方畫面叫出密碼框
+/// （`activate_os`：游標移到左上角再按一下左鍵），等 1.2 秒，整段打過去再按 Enter。
+/// `password` 沒給 = 用這台主機存的（密碼不經過前端）。只有 RustDesk 連線有。
+#[tauri::command]
+pub async fn rd_input_os_password(state: State<'_, AppState>, conn_id: String, password: Option<String>) -> AppResult<()> {
+    let conn = state.rd.conn(&conn_id)?;
+    if conn.info.protocol != RdProtocol::Rustdesk {
+        return Err(AppError::Rd(t!("只有 RustDesk 連線能輸入作業系統密碼").into()));
+    }
+    let password = match password.filter(|p| !p.is_empty()) {
+        Some(p) => p,
+        None => match &conn.origin {
+            RdOrigin::Session(id) => store::kc_get(&sessions::os_password_account(id)).filter(|p| !p.is_empty()),
+            _ => None,
+        }
+        .ok_or_else(|| AppError::Rd(t!("這台主機沒有存作業系統密碼").into()))?,
+    };
+    let send = |v: serde_json::Value| conn.send(RdCtl::Write(serde_json::to_vec(&v).unwrap_or_default()));
+    let pause = |ms: u64| tokio::time::sleep(Duration::from_millis(ms));
+    // RustDesk 滑鼠 mask：型別（0 移動、1 按下、2 放開）| 按鍵 << 3（1 = 左鍵）。
+    let (left_down, left_up) = (1 | (1 << 3), 2 | (1 << 3));
+    send(serde_json::json!({ "t": "mouse", "mask": left_up, "x": 0, "y": 0 }))?;
+    pause(50).await;
+    send(serde_json::json!({ "t": "mouse", "mask": 0, "x": 0, "y": 0 }))?;
+    pause(50).await;
+    send(serde_json::json!({ "t": "mouse", "mask": 0, "x": 3, "y": 3 }))?;
+    pause(50).await;
+    send(serde_json::json!({ "t": "mouse", "mask": left_down, "x": 0, "y": 0 }))?;
+    send(serde_json::json!({ "t": "mouse", "mask": left_up, "x": 0, "y": 0 }))?;
+    pause(1200).await;
+    send(serde_json::json!({ "t": "os_password", "text": password }))
 }
 
 /// 讀 `.rdp` 檔的原始位元組（mstsc 存成 UTF-16LE，解碼在前端 `rdpFile.ts`）。

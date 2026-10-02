@@ -405,6 +405,10 @@ pub enum Command {
     Chat { text: String },
     /// 告知對方：這端開始 / 停止錄影（對方畫面會顯示正在錄影）。
     Record { on: bool },
+    /// 翻譯模式的一個字（本機鍵盤配置打出來的字，`KeyboardMode::Translate` + `seq`；對方先放開 Shift 再打）。
+    Char { text: String },
+    /// 輸入作業系統密碼：整段打過去再按 Enter（官方 `_input_os_password`；叫出密碼框的點擊由 db-kit 先送）。
+    OsPassword { text: String },
 }
 
 /// 送指令時要知道的對方資訊。
@@ -577,7 +581,25 @@ pub fn command_messages(c: &Command, peer: &PeerCtx) -> Vec<Message> {
         Command::Chat { text } if !text.is_empty() && text.len() <= MAX_TEXT => {
             m = misc_message(|misc| misc.set_chat_message(ChatMessage { text: text.clone(), ..Default::default() }));
         }
-        Command::Clipboard { .. } | Command::TypeText { .. } | Command::Chat { .. } => return Vec::new(),
+        // 官方 `try_fill_unicode`：翻譯模式下打得出字的鍵送那個字（只送按下）。
+        Command::Char { text } if !text.is_empty() && text.chars().count() <= 8 => {
+            let mut k = KeyEvent { down: true, mode: EnumOrUnknown::new(KeyboardMode::Translate), ..Default::default() };
+            k.set_seq(text.clone());
+            m.set_key_event(k);
+        }
+        Command::OsPassword { text } if !text.is_empty() && text.len() <= MAX_TEXT => {
+            let mut k = KeyEvent { press: true, mode: EnumOrUnknown::new(KeyboardMode::Legacy), ..Default::default() };
+            k.set_seq(text.clone());
+            let mut enter = KeyEvent { press: true, mode: EnumOrUnknown::new(KeyboardMode::Legacy), ..Default::default() };
+            enter.set_control_key(ControlKey::Return);
+            let mut m2 = Message::new();
+            m.set_key_event(k);
+            m2.set_key_event(enter);
+            return vec![m, m2];
+        }
+        Command::Clipboard { .. } | Command::TypeText { .. } | Command::Chat { .. } | Command::Char { .. } | Command::OsPassword { .. } => {
+            return Vec::new()
+        }
         Command::Record { on } => m = misc_message(|misc| misc.set_client_record_status(*on)),
     }
     vec![m]
@@ -767,6 +789,30 @@ mod tests {
         // 對方系統沒有的鍵：不送
         let c: Command = serde_json::from_str(r#"{"t":"key","down":true,"scancode":70}"#).unwrap();
         assert!(command_messages(&c, &PeerCtx { platform: "Mac OS".into() }).is_empty(), "macOS 沒有 ScrollLock");
+    }
+
+    /// 翻譯模式的字（官方 `try_fill_unicode`）與輸入作業系統密碼（官方 `_input_os_password`：seq + Enter）。
+    #[test]
+    fn translate_char_and_os_password() {
+        let k = key_event(r#"{"t":"char","text":"é"}"#, "Linux");
+        assert_eq!((k.seq(), k.down, k.mode.enum_value()), ("é", true, Ok(KeyboardMode::Translate)));
+        let c: Command = serde_json::from_str(r#"{"t":"char","text":""}"#).unwrap();
+        assert!(command_messages(&c, &PeerCtx::default()).is_empty(), "空字不送");
+
+        let c: Command = serde_json::from_str(r#"{"t":"os_password","text":"P@ss 1"}"#).unwrap();
+        let msgs = command_messages(&c, &PeerCtx { platform: "Linux".into() });
+        let keys: Vec<KeyEvent> = msgs
+            .into_iter()
+            .map(|m| match Message::parse_from_bytes(&m.write_to_bytes().unwrap()).unwrap().union {
+                Some(message::Union::KeyEvent(k)) => k,
+                x => panic!("{x:?}"),
+            })
+            .collect();
+        assert_eq!(keys.len(), 2);
+        assert_eq!((keys[0].seq(), keys[0].press, keys[0].mode.enum_value()), ("P@ss 1", true, Ok(KeyboardMode::Legacy)));
+        assert_eq!((keys[1].control_key(), keys[1].press), (ControlKey::Return, true), "打完按 Enter");
+        let c: Command = serde_json::from_str(r#"{"t":"os_password","text":""}"#).unwrap();
+        assert!(command_messages(&c, &PeerCtx::default()).is_empty());
     }
 
     /// 官方 `send_mouse`：滑鼠事件帶著按住的修飾鍵（對方按下前照這個整理修飾鍵）。

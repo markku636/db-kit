@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chordedChange, HeldKeys, lockModes, mouseModifiers } from "./rustdeskInput";
+import { chordedChange, HeldKeys, lockModes, mouseModifiers, translatedChar } from "./rustdeskInput";
 
 describe("rustdeskInput", () => {
   it("帶本機的 CapsLock / NumLock 狀態", () => {
@@ -22,6 +22,22 @@ describe("rustdeskInput", () => {
     expect(chordedChange(1, 4)).toBe("down"); // 中鍵是 buttons 的 4
     expect(chordedChange(0, 0)).toBe("up");
     expect(chordedChange(5, 32)).toBeNull();
+  });
+
+  it("翻譯模式：打得出字的鍵送字，快捷鍵 / 功能鍵照位置送", () => {
+    const ev = (key: string, mods: { ctrl?: boolean; alt?: boolean; meta?: boolean; altGr?: boolean } = {}) => ({
+      key, ctrlKey: !!mods.ctrl, altKey: !!mods.alt, metaKey: !!mods.meta,
+      getModifierState: (k: string) => k === "AltGraph" && !!mods.altGr,
+    });
+    expect(translatedChar(ev("a"))).toBe("a");
+    expect(translatedChar(ev("A"))).toBe("A"); // Shift 已經算進去
+    expect(translatedChar(ev("é"))).toBe("é");
+    expect(translatedChar(ev(" "))).toBe(" ");
+    expect(translatedChar(ev("😀"))).toBe("😀"); // 一個字（兩個 UTF-16）
+    expect(translatedChar(ev("c", { ctrl: true }))).toBeNull(); // Ctrl+C
+    expect(translatedChar(ev("Tab", { alt: true }))).toBeNull();
+    expect(translatedChar(ev("@", { ctrl: true, alt: true, altGr: true }))).toBe("@"); // AltGr+Q（德文鍵盤）
+    for (const k of ["Enter", "ArrowLeft", "F1", "Dead", "Process", "Shift"]) expect(translatedChar(ev(k))).toBeNull();
   });
 
   it("失去焦點：放開還按著的鍵，Alt 再補按一下", () => {

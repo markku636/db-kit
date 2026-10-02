@@ -1,13 +1,14 @@
 // RustDesk 連線的工具列（照官方用戶端的工具列）：切換螢幕、「顯示」選單（檢視方式 / 畫質 / 編碼 / 連線品質 /
-// 剪貼簿 / 結束後鎖定）、「動作」選單（Ctrl+Alt+Del / 鎖定畫面 / 封鎖輸入 / 重新啟動 / 重新整理）、聊天、錄影。
-// 依對方給的權限與對方的系統決定哪些項目出現（跟官方一樣：例如封鎖輸入只有 Windows 對方才有）。
-import { useState, type ReactNode, type RefObject } from "react";
+// 剪貼簿 / 結束後鎖定 / 鍵盤模式）、「動作」選單（Ctrl+Alt+Del / 鎖定畫面 / 封鎖輸入 / 重新啟動 / 輸入作業系統密碼 /
+// 重新整理）、聊天、錄影。依對方給的權限與對方的系統決定哪些項目出現（跟官方一樣：例如封鎖輸入只有 Windows 對方才有）。
+import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import { Check, Circle, MessageSquare, MonitorCog, Square, Zap } from "lucide-react";
 import { api } from "./api";
 import { useT } from "./i18n";
 import { Icon, IconButton, MenuPanel } from "./ui/index";
 import { toast, uiConfirm } from "./ui";
 import RdMonitorBar from "./RdMonitorBar";
+import RdOsPasswordDialog from "./RdOsPasswordDialog";
 import type { RdViewHandle } from "./rdView";
 import { canRestart, isWindowsPeer, type RdCodecPref, type RdQuality, type RustDeskPrefs, type RustDeskState } from "./rustdeskState";
 
@@ -60,9 +61,13 @@ export interface RustDeskToolbarProps {
   onChat: () => void;
   /** 主機名稱（錄影檔名用）。 */
   hostName: string;
+  /** 已存主機的 id（作業系統密碼存在它底下）；快速連線 = null（每次問）。 */
+  sessionId: string | null;
 }
 
-export default function RustDeskToolbar({ state, prefs, onPrefs, clipboard, onClipboard, viewOnly, view, chatOpen, unread, onChat, hostName }: RustDeskToolbarProps) {
+export default function RustDeskToolbar({
+  state, prefs, onPrefs, clipboard, onClipboard, viewOnly, view, chatOpen, unread, onChat, hostName, sessionId,
+}: RustDeskToolbarProps) {
   const t = useT();
   const [menu, setMenu] = useState<{ which: "display" | "actions"; x: number; y: number } | null>(null);
   const open = (which: "display" | "actions") => (e: React.MouseEvent) => {
@@ -103,6 +108,48 @@ export default function RustDeskToolbar({ state, prefs, onPrefs, clipboard, onCl
     close();
     if (state.lastRecording) void api.rdRecordReveal(state.lastRecording).catch((e) => toast.error(String(e?.message ?? e)));
   };
+
+  // ---- 輸入作業系統密碼（官方 OS Password）：有存就直接打，沒存就問 ----
+  const [osDialog, setOsDialog] = useState<"input" | "set" | null>(null);
+  const [hasOs, setHasOs] = useState(false);
+  const errText = (e: unknown) => String((e as { message?: unknown })?.message ?? e);
+  const sendOsPassword = async (pw?: string) => {
+    try {
+      await view.current?.inputOsPassword?.(pw);
+    } catch (e) {
+      toast.error(t("無法輸入作業系統密碼：{e}", { e: errText(e) }));
+    }
+    view.current?.focus();
+  };
+  const typeOsPassword = async () => {
+    close();
+    const stored = sessionId ? await api.rdHasOsPassword(sessionId).catch(() => false) : false;
+    setHasOs(stored);
+    if (stored) await sendOsPassword();
+    else setOsDialog("input");
+  };
+  /** 存 / 清除（null）這台主機的作業系統密碼；`closeDialog` = 存完把對話框關掉並提示。 */
+  const saveOsPassword = async (pw: string | null, closeDialog = true) => {
+    if (!sessionId) return;
+    try {
+      await api.rdOsPasswordSet(sessionId, pw);
+      setHasOs(!!pw);
+      if (closeDialog) {
+        setOsDialog(null);
+        toast.success(pw ? t("已記住這台主機的作業系統密碼") : t("已清除這台主機的作業系統密碼"));
+        view.current?.focus();
+      }
+    } catch (e) {
+      toast.error(errText(e));
+    }
+  };
+  // 開「設定作業系統密碼」時查一下有沒有存（決定要不要給「清除」）。
+  useEffect(() => {
+    if (osDialog !== "set" || !sessionId) return;
+    let alive = true;
+    void api.rdHasOsPassword(sessionId).then((v) => { if (alive) setHasOs(v); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [osDialog, sessionId]);
 
   const p = state.perms;
   const control = !viewOnly && p.keyboard;
@@ -165,6 +212,18 @@ export default function RustDeskToolbar({ state, prefs, onPrefs, clipboard, onCl
               <MenuOption role="menuitemcheckbox" checked={prefs.lockAfterEnd} disabled={viewOnly} testid="lock-after-end"
                 onClick={() => set({ lockAfterEnd: !prefs.lockAfterEnd })}>{t("連線結束後鎖定對方畫面")}</MenuOption>
             )}
+            {control && (
+              <>
+                <MenuSep />
+                <MenuHeading>{t("鍵盤模式")}</MenuHeading>
+                <MenuOption checked={prefs.keyboard === "map"} testid="keyboard-map" onClick={() => set({ keyboard: "map" })}>
+                  {t("對應（照按鍵位置，對方用自己的鍵盤配置）")}
+                </MenuOption>
+                <MenuOption checked={prefs.keyboard === "translate"} testid="keyboard-translate" onClick={() => set({ keyboard: "translate" })}>
+                  {t("翻譯（送本機打出的字）")}
+                </MenuOption>
+              </>
+            )}
           </div>
         </MenuPanel>
       )}
@@ -180,11 +239,32 @@ export default function RustDeskToolbar({ state, prefs, onPrefs, clipboard, onCl
               </MenuAction>
             )}
             {canRestart(state) && <MenuAction testid="restart" danger onClick={() => void restart()}>{t("重新啟動對方電腦…")}</MenuAction>}
+            {control && (
+              <>
+                <MenuSep />
+                <MenuAction testid="os_password" onClick={() => void typeOsPassword()}>{t("輸入作業系統密碼")}</MenuAction>
+                {sessionId && <MenuAction testid="os_password_set" onClick={() => { close(); setOsDialog("set"); }}>{t("設定作業系統密碼…")}</MenuAction>}
+              </>
+            )}
             {(control || canRestart(state)) && <MenuSep />}
             <MenuAction testid="refresh" onClick={() => act("refresh")}>{t("重新整理畫面")}</MenuAction>
             {state.lastRecording && <MenuAction testid="reveal_recording" onClick={revealRecording}>{t("開啟錄影資料夾")}</MenuAction>}
           </div>
         </MenuPanel>
+      )}
+
+      {osDialog && (
+        <RdOsPasswordDialog mode={osDialog} canRemember={!!sessionId} hasStored={hasOs}
+          onClose={() => { setOsDialog(null); view.current?.focus(); }}
+          onClear={() => void saveOsPassword(null)}
+          onSubmit={(pw, remember) => {
+            if (osDialog === "set") { void saveOsPassword(pw); return; }
+            setOsDialog(null);
+            void (async () => {
+              if (remember && sessionId) await saveOsPassword(pw, false);
+              await sendOsPassword(pw);
+            })();
+          }} />
       )}
     </>
   );

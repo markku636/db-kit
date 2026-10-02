@@ -2288,6 +2288,11 @@ export const api = {
   rdSessionsLayoutSave: (folders: RdFolder[], order: RdPlacement[]) =>
     invoke<void>("rd_sessions_layout_save", { folders, order }),
   rdHasStoredPassword: (id: string) => invoke<boolean>("rd_has_stored_password", { id }),
+  /** RustDesk「輸入作業系統密碼」：這台主機有沒有存、存 / 清除（null = 清除）、打過去（不給 = 用存的）。 */
+  rdHasOsPassword: (id: string) => invoke<boolean>("rd_has_os_password", { id }),
+  rdOsPasswordSet: (id: string, password: string | null) => invoke<void>("rd_os_password_set", { id, password }),
+  rdInputOsPassword: (connId: string, password?: string) =>
+    invoke<void>("rd_input_os_password", { connId, password: password ?? null }),
   // .rdp 檔原始位元組（mstsc 存成 UTF-16LE；解碼 / 解析在 rdpFile.ts）。
   rdReadRdpFile: (path: string) => invoke<number[]>("rd_read_rdp_file", { path }),
   // 連線：等到認證完成（含使用者回答提問）才 resolve；輸出走 onOutput（VNC = RFB 位元組、RDP = rdFrames 的 record）。

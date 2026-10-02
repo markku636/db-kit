@@ -9,11 +9,11 @@ describe("prefs（存在主機的 options.ui）", () => {
     expect(prefsFromUi({ rustdesk_quality: "ultra", rustdesk_view: "zoom", rustdesk_codec: "h264" })).toEqual(DEFAULT_PREFS);
   });
   it("來回一樣；跟預設一樣的不寫進檔案；別的鍵保留", () => {
-    const p = { view: "original", quality: "low", codec: "vp8", stats: true, lockAfterEnd: true } as const;
+    const p = { view: "original", quality: "low", codec: "vp8", stats: true, lockAfterEnd: true, keyboard: "translate" } as const;
     const ui = prefsToUi(p, { fullscreen: "1" });
     expect(ui).toEqual({
       fullscreen: "1", rustdesk_view: "original", rustdesk_quality: "low", rustdesk_codec: "vp8",
-      rustdesk_stats: "1", rustdesk_lock_after_end: "1",
+      rustdesk_stats: "1", rustdesk_lock_after_end: "1", rustdesk_keyboard: "translate",
     });
     expect(prefsFromUi(ui)).toEqual(p);
     expect(prefsToUi(DEFAULT_PREFS, ui)).toEqual({ fullscreen: "1" });

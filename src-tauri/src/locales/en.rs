@@ -1651,6 +1651,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "RDP 連線執行緒意外結束" => "The RDP connection thread ended unexpectedly",
         "認證失敗次數過多" => "Too many failed authentication attempts",
         "無法寫入剪貼簿：{e}" => "Could not write to the clipboard: {e}",
+        "只有 RustDesk 連線能輸入作業系統密碼" => "Only RustDesk connections can type the OS password",
+        "這台主機沒有存作業系統密碼" => "No OS password is saved for this host",
         "找不到可以存放錄影的資料夾" => "No folder is available to store recordings",
         "無法建立錄影資料夾：{e}" => "Could not create the recordings folder: {e}",
         "無法建立錄影檔：{e}" => "Could not create the recording file: {e}",

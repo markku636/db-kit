@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import {
-  ClipboardPaste, Expand, Keyboard, Loader2, PlugZap, RefreshCw, Shrink, ShieldAlert, Unplug,
+  Check, ClipboardPaste, Expand, Keyboard, Loader2, PlugZap, RefreshCw, Shrink, ShieldAlert, Unplug,
 } from "lucide-react";
 import { api, onRdAuthPrompt, onRdCertPrompt, onRdConnClosed, onRdGrabKey, onSshAuthPrompt, onSshHostKeyPrompt } from "./api";
 import { useT } from "./i18n";
@@ -30,6 +30,7 @@ import VncView from "./VncView";
 import RustDeskView from "./RustDeskView";
 import RustDeskToolbar from "./RustDeskToolbar";
 import RustDeskChat from "./RustDeskChat";
+import VirtualKeyboard from "./VirtualKeyboard";
 import { prefsFromUi, prefsToUi, type RdChatMsg, type RustDeskPrefs, type RustDeskState } from "./rustdeskState";
 import { useAssistant } from "./assistant";
 import { useInfoPanel } from "./infoPanelState";
@@ -85,6 +86,9 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   const immersiveRef = useRef(false);
   const [barShown, setBarShown] = useState(true);
   const [keysMenu, setKeysMenu] = useState<{ x: number; y: number } | null>(null);
+  // 虛擬鍵盤：RustDesk / RDP 收得了任意掃描碼（VNC 的 rawKey 只認得少數系統鍵）。
+  const [vkOpen, setVkOpen] = useState(false);
+  const vkSupported = protocol === "rustdesk" || protocol === "rdp";
   const wantFullscreen = useRef(!!tab.fullscreen || opts.ui?.fullscreen === "1");
 
   // ---- RustDesk：工具列狀態、顯示偏好、聊天 ----
@@ -353,7 +357,8 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
       {protocol === "rustdesk" && status === "connected" && rdState && (
         <RustDeskToolbar state={rdState} prefs={rdPrefs} onPrefs={setRdPrefs} clipboard={rdClipboard} onClipboard={setRdClipboard}
           viewOnly={opts.view_only} view={viewRef} chatOpen={chatOpen} unread={unread}
-          onChat={() => { setChatOpen((o) => !o); viewRef.current?.focus(); }} hostName={label} />
+          onChat={() => { setChatOpen((o) => !o); viewRef.current?.focus(); }} hostName={label}
+          sessionId={saved ? session?.id ?? null : null} />
       )}
       {unencrypted && (
         <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded bg-warning/15 text-warning text-[11px] shrink-0"
@@ -463,8 +468,24 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
         )}
       </div>
 
+      {vkOpen && vkSupported && status === "connected" && !opts.view_only && (
+        <VirtualKeyboard rustdesk={protocol === "rustdesk"} onKey={(sc, down) => viewRef.current?.rawKey(sc, down)}
+          onClose={() => { setVkOpen(false); viewRef.current?.focus(); }} />
+      )}
+
       {keysMenu && (
         <MenuPanel x={keysMenu.x} y={keysMenu.y} minW={160} onClose={() => setKeysMenu(null)}>
+          {vkSupported && (
+            <>
+              <button type="button" data-rd-vk-toggle="" aria-pressed={vkOpen}
+                onClick={() => { setKeysMenu(null); setVkOpen((o) => !o); viewRef.current?.focus(); }}
+                className="flex items-center gap-2 w-full text-left px-3 py-1.5 hover:bg-fg/10 text-fg/80">
+                <span className="w-3.5 shrink-0 text-accent">{vkOpen && <Icon icon={Check} size={13} />}</span>
+                {t("虛擬鍵盤")}
+              </button>
+              <div className="my-1 border-t border-fg/10" />
+            </>
+          )}
           {COMBOS.map((c) => (
             <button key={c.id} type="button" data-rd-combo={c.id}
               onClick={() => { setKeysMenu(null); viewRef.current?.combo(c.id); viewRef.current?.focus(); }}

@@ -1135,10 +1135,10 @@ mod tests {
         pause(300).await;
         docker("rm -f /tmp/kb.txt /tmp/caps.txt /tmp/num.txt /tmp/nonum.txt");
 
-        // 1. 打字（含 Shift）
-        type_str(&mut w, "echo Ab1-X >/tmp/kb.txt\n").await;
+        // 1. 打字（含 Shift：大寫字母與 Shift + 數字的符號；單引號裡 bash 不展開 !）
+        type_str(&mut w, "echo 'Ab1-X!@#$%' >/tmp/kb.txt\n").await;
         pause(800).await;
-        assert_eq!(docker("cat /tmp/kb.txt").trim_end(), "Ab1-X", "打出來的字要對（Linux 鍵碼）");
+        assert_eq!(docker("cat /tmp/kb.txt").trim_end(), "Ab1-X!@#$%", "打出來的字要對（Linux 鍵碼、Shift）");
 
         // 1b. 編輯鍵：打 "echo abcd"，← ← 回到 c 前面，Delete 刪掉 c、Backspace 刪掉 b → "ad"
         docker("rm -f /tmp/edit.txt");
@@ -1153,6 +1153,22 @@ mod tests {
         type_str(&mut w, " >/tmp/edit.txt\n").await;
         pause(800).await;
         assert_eq!(docker("cat /tmp/edit.txt").trim_end(), "ad", "←、Delete、Backspace、End 都要有作用");
+
+        // 1c. 翻譯模式：一個一個字送（seq），按著 Shift 也照字打；輸入作業系統密碼：整段打完自動按 Enter。
+        docker("rm -f /tmp/tr.txt /tmp/os.txt");
+        type_str(&mut w, "echo ").await;
+        key(&mut w, 0x2A, true, false, false).await; // 按著 Shift：對方會先放開再打字，小寫的 r 不會變大寫
+        for c in ["T", "r", "1", "@"] {
+            ipc::write_host_json(&mut w, &json!({ "t": "char", "text": c })).await.unwrap();
+            pause(30).await;
+        }
+        key(&mut w, 0x2A, false, false, false).await;
+        type_str(&mut w, " >/tmp/tr.txt\n").await;
+        pause(800).await;
+        assert_eq!(docker("cat /tmp/tr.txt").trim_end(), "Tr1@", "翻譯模式照字打");
+        ipc::write_host_json(&mut w, &json!({ "t": "os_password", "text": "echo osok >/tmp/os.txt" })).await.unwrap();
+        pause(1000).await;
+        assert_eq!(docker("cat /tmp/os.txt").trim_end(), "osok", "輸入作業系統密碼：打完要按 Enter");
 
         // 2. CapsLock：本機開著 → 字母是大寫（對方先開 CapsLock 再按、按完還原）
         type_str(&mut w, "echo ").await;

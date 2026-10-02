@@ -31,6 +31,8 @@ export interface RdViewHandle {
   /** 錄影（錄這端看到的畫面；`name` 是主機名稱，只用來取檔名）。 */
   startRecording?(name: string): Promise<void>;
   stopRecording?(): Promise<void>;
+  /** RustDesk「輸入作業系統密碼」：叫出密碼框、打過去再按 Enter；`password` 不給 = 用這台主機存的。 */
+  inputOsPassword?(password?: string): Promise<void>;
 }
 
 /** Tauri Channel 的 raw 訊息在真 App 是 ArrayBuffer；verify-ui 的假後端可能送 Uint8Array / number[]。 */

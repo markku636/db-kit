@@ -54,6 +54,9 @@ export function installShim(fx) {
   window.__DBKIT_RD_ACKS__ = [];
   window.__DBKIT_RD_RESIZES__ = [];
   window.__DBKIT_RD_KEYS__ = [];
+  // RustDesk「輸入作業系統密碼」：存的密碼（主機 id → 密碼）與打過去的紀錄（{ connId, password }；用存的時 password 是存的那組）。
+  window.__DBKIT_RD_OS_PASSWORDS__ = {};
+  window.__DBKIT_RD_OS_INPUTS__ = [];
   window.__DBKIT_RD_FULLSCREEN__ = [];
   window.__DBKIT_RD_ANSWERS__ = [];
   window.__DBKIT_UPDATE_INSTALLS__ = [];
@@ -558,6 +561,20 @@ metadata:
       return null;
     },
     rd_has_stored_password: () => false,
+    rd_has_os_password: ({ id }) => !!window.__DBKIT_RD_OS_PASSWORDS__[id],
+    rd_os_password_set: ({ id, password }) => {
+      if (password) window.__DBKIT_RD_OS_PASSWORDS__[id] = password;
+      else delete window.__DBKIT_RD_OS_PASSWORDS__[id];
+      return null;
+    },
+    rd_input_os_password: ({ connId, password }) => {
+      const conn = window.__DBKIT_RD_CONNECTS__.find((c) => c.connId === connId);
+      const saved = conn?.target?.kind === "session" ? window.__DBKIT_RD_OS_PASSWORDS__[conn.target.id] : undefined;
+      const p = password || saved;
+      if (!p) return Promise.reject({ kind: "rd", code: "ERR_RD", message: "這台主機沒有存作業系統密碼" });
+      window.__DBKIT_RD_OS_INPUTS__.push({ connId, password: p });
+      return null;
+    },
     rd_read_rdp_file: () => fx.RDP_FILE_BYTES ?? [],
     rd_connect: ({ connId, target, onOutput }) => {
       const sessions = rdSessionsState.sessions;

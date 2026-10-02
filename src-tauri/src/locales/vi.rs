@@ -509,6 +509,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "RDP 連線執行緒意外結束" => "Luồng kết nối RDP kết thúc bất ngờ",
         "認證失敗次數過多" => "Xác thực thất bại quá nhiều lần",
         "無法寫入剪貼簿：{e}" => "Không thể ghi vào bảng tạm: {e}",
+        "只有 RustDesk 連線能輸入作業系統密碼" => "Chỉ kết nối RustDesk mới nhập được mật khẩu hệ điều hành",
+        "這台主機沒有存作業系統密碼" => "Máy này chưa lưu mật khẩu hệ điều hành",
         "找不到可以存放錄影的資料夾" => "Không tìm thấy thư mục để lưu bản ghi",
         "無法建立錄影資料夾：{e}" => "Không thể tạo thư mục bản ghi: {e}",
         "無法建立錄影檔：{e}" => "Không thể tạo tệp bản ghi: {e}",

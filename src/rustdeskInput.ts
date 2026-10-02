@@ -23,6 +23,18 @@ export function mouseModifiers(e: { altKey: boolean; ctrlKey: boolean; shiftKey:
   return m;
 }
 
+/**
+ * 翻譯模式（官方 `translate_keyboard_mode` / `try_fill_unicode`）：這個按鍵打得出字 → 送那個字（本機鍵盤配置的結果，
+ * 對方照字打、不管它自己的配置）；方向鍵、Enter、F1、Ctrl+C 這類 → null（照位置送）。AltGr 組出的字（歐洲鍵盤的 @ €）也算字。
+ */
+export function translatedChar(e: {
+  key: string; ctrlKey: boolean; altKey: boolean; metaKey: boolean; getModifierState(key: string): boolean;
+}): string | null {
+  if ([...e.key].length !== 1) return null; // "Enter" / "ArrowLeft" / "Dead" / "Process"（輸入法）
+  if (!e.getModifierState("AltGraph") && (e.ctrlKey || e.altKey || e.metaKey)) return null;
+  return e.key;
+}
+
 /** DOM 的 `button`（0 左 1 中 2 右 3 上一頁 4 下一頁）在 `buttons` 裡的位元。 */
 const DOM_BUTTONS_BIT = [1, 4, 2, 8, 16];
 
@@ -37,11 +49,15 @@ const ALT_GR = 0xe038;
 
 /** 送給對方、還沒放開的鍵（掃描碼）。 */
 export class HeldKeys {
-  private held = new Set<number>();
+  private readonly held = new Set<number>();
 
   update(scancode: number, down: boolean): void {
     if (down) this.held.add(scancode);
     else this.held.delete(scancode);
+  }
+
+  has(scancode: number): boolean {
+    return this.held.has(scancode);
   }
 
   clear(): void {
