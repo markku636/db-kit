@@ -1053,7 +1053,7 @@ export default function AssistantPanel() {
     useStore.getState().setActiveTab(key);
     let result: ChatShellRun;
     try {
-      const r = await useSshTerminals.getState().sendCommand(key, cmd);
+      const r = await useSshTerminals.getState().sendCommand(key, cmd, { source: "ai" });
       result = toChatShellRun(cmd, r, { tabKey: key, host }, null);
     } catch (e: any) {
       result = toChatShellRun(cmd, null, { tabKey: key, host }, e?.message ?? String(e));

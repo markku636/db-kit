@@ -1,9 +1,63 @@
 // 設定對話框的「SSH 終端機」小節：剪貼簿習慣、渲染器、scrollback。全部是前端偏好（localStorage，見 sshPrefs.ts），
 // 改了立刻套到所有開著的終端機（SshTerminalPane 訂閱同一個 store）。
-import { SquareTerminal } from "lucide-react";
+// 最後是「操作紀錄」的開關與保留天數——那份設定存在後端（檔案動作與連線是後端自己記的）。
+import { useEffect, useState } from "react";
+import { FolderOpen, History, SquareTerminal } from "lucide-react";
+import { api } from "./api";
 import { useT } from "./i18n";
-import { Field, Icon, Select } from "./ui/index";
+import { Button, Field, Icon, Select } from "./ui/index";
+import { toast } from "./ui";
 import { SCROLLBACK_MAX, SCROLLBACK_MIN, useSshPrefs } from "./sshPrefs";
+import { useSshOpLog } from "./sshOpLogStore";
+import type { SshOpLogInfo } from "./sshOpLog";
+
+const RETENTION_DAYS = [30, 90, 180, 365, 0];
+
+function SshOpLogSettings() {
+  const t = useT();
+  const [info, setInfo] = useState<SshOpLogInfo | null>(null);
+  useEffect(() => {
+    void api.sshOplogConfig().then(setInfo).catch(() => setInfo(null));
+  }, []);
+  if (!info) return null;
+  // 先改畫面再存（勾選框是受控的，等後端回來才變會像點了沒反應）；存失敗就改回去。
+  const save = (patch: Partial<SshOpLogInfo["config"]>) => {
+    const prev = info;
+    setInfo({ ...info, config: { ...info.config, ...patch } });
+    void api.sshOplogConfigSet({ ...info.config, ...patch }).then(setInfo).catch((e) => {
+      setInfo(prev);
+      toast.error(String((e as Error)?.message ?? e));
+    });
+  };
+  const days = info.config.retention_days;
+  return (
+    <div className="space-y-2" data-testid="ssh-oplog-settings">
+      <label className="flex items-start gap-2 text-sm text-fg/80 cursor-pointer select-none">
+        <input type="checkbox" className="mt-1" checked={info.config.enabled} onChange={(e) => save({ enabled: e.target.checked })} />
+        <span>
+          {t("記錄 SSH 操作")}
+          <span className="block text-xs text-fg/45 leading-relaxed">
+            {t("執行的指令、SFTP / FTP 的檔案動作（上傳、下載、刪除、改名、權限、存檔）與連線都記下來。密碼不會被記：指令是從畫面上讀的，密碼提示下打的字不會出現；指令裡的 -p密碼、--password=、網址中的帳密會換成 ***。以空白開頭的指令不記。")}
+          </span>
+        </span>
+      </label>
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label={t("保留")} className="w-40">
+          <Select selectSize="md" value={String(days)} onChange={(e) => save({ retention_days: Number(e.target.value) })}>
+            {(RETENTION_DAYS.includes(days) ? RETENTION_DAYS : [...RETENTION_DAYS, days]).map((n) => (
+              <option key={n} value={String(n)}>{n === 0 ? t("永久保留") : t("{n} 天", { n })}</option>
+            ))}
+          </Select>
+        </Field>
+        <Button variant="secondary" icon={History} onClick={() => useSshOpLog.getState().show()}>{t("開啟操作紀錄…")}</Button>
+        <Button variant="ghost" icon={FolderOpen} onClick={() => void api.sshOplogReveal().catch((e) => toast.error(String((e as Error)?.message ?? e)))}>
+          {t("開啟資料夾")}
+        </Button>
+      </div>
+      <div className="text-[11px] text-fg/35 mono break-all">{info.dir}</div>
+    </div>
+  );
+}
 
 export default function SshPrefsSettings() {
   const t = useT();
@@ -44,6 +98,7 @@ export default function SshPrefsSettings() {
           </Select>
         </Field>
       </div>
+      <SshOpLogSettings />
     </div>
   );
 }

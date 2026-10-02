@@ -111,7 +111,7 @@ impl FtpTarget {
     }
 
     /// 登入用的帳號：沒填 = 匿名。
-    fn user(&self) -> &str {
+    pub fn user(&self) -> &str {
         if self.username.is_empty() {
             "anonymous"
         } else {

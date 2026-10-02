@@ -1,6 +1,7 @@
 // SSH 終端機的記錄與狀態列用的純函式：把收到的原始位元組變成可讀的文字記錄（去 ANSI、處理 \r 重寫、
-// UTF-8 切在封包邊界）、連線時間、記錄檔預設檔名、把 xterm 的畫面內容攤成文字。
+// UTF-8 切在封包邊界、密碼換成 ***）、連線時間、記錄檔預設檔名、把 xterm 的畫面內容攤成文字。
 import { normalizeLines, stripAnsiChunk } from "./sshCapture";
+import { redactSecrets } from "./sshOpLog";
 
 export interface SessionRecorder {
   /** 收到一段輸出（原始位元組）。 */
@@ -14,6 +15,8 @@ export interface SessionRecorder {
 /**
  * 串流的記錄器。逐段去掉 ANSI（色碼被切在封包邊界時帶到下一段）、\r\n → \n、同一行的 \r 重寫（進度條）
  * 只留最後一次的內容；最後一行要等換行才寫出，不然進度條的每一格都會各自變成一行。
+ * 寫出前逐行套 `redactSecrets`：回顯出來的 `mysql -pXXX`、cat 出來的 `password=…` 不會進記錄檔
+ * （密碼提示下打的字本來就不回顯，不會出現在輸出裡）。
  */
 export function createRecorder(): SessionRecorder {
   const dec = new TextDecoder("utf-8");
@@ -39,7 +42,7 @@ export function createRecorder(): SessionRecorder {
     take() {
       const out = ready;
       ready = "";
-      return out;
+      return redactSecrets(out);
     },
     flush() {
       absorb(dec.decode());
@@ -49,7 +52,7 @@ export function createRecorder(): SessionRecorder {
       ready = "";
       pending = "";
       carry = "";
-      return out;
+      return redactSecrets(out);
     },
   };
 }

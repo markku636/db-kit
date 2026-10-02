@@ -45,6 +45,9 @@ export function installShim(fx) {
   // 終端機工作階段記錄與「另存文字檔」的紀錄。
   window.__DBKIT_SSH_LOG__ = [];
   window.__DBKIT_SAVED_FILES__ = [];
+  // SSH 操作紀錄（假後端存的全部紀錄）與假 shell 在 sudo 密碼提示下收到的字（驗「密碼沒有進紀錄」用）。
+  window.__DBKIT_SSH_OPLOG__ = [];
+  window.__DBKIT_SSH_SECRETS__ = [];
   // 遠端桌面：存檔、連線 / 斷線、送出的位元組 / 輸入紀錄 / ack / resize / 組合鍵 / 全螢幕切換、提示的答案。
   window.__DBKIT_RD_SESSION_SAVES__ = [];
   window.__DBKIT_RD_CONNECTS__ = [];
@@ -520,6 +523,8 @@ metadata:
 
     // ── AI 助手 ──────────────────────────────────────────────────────────
     app_lock_status: () => ({ locked: false, has_password: false, idle_minutes: 0 }),
+    // 設定對話框的 App 鎖定小節會問；瀏覽器裡沒有 Windows Hello / Touch ID（與前端讀不到時的退路相同）。
+    biometric_status: () => ({ available: false, kind: "none", reason: "unsupported_platform" }),
     agent_detect: () => ({ available: true, provider: "claude", version: "2.0.0", path: "claude", models: [], note: null }),
     agent_cancel: () => { aiCancelled = true; return null; },
     // 串流回覆：一小段一小段 emit，讓截圖 / 冒煙檢查看到的是真的串流渲染路徑。
@@ -761,6 +766,30 @@ metadata:
     // ── SSH 金鑰庫（假的：內容看起來像加密的就要密語，密語 "wrong" 算錯；以 ssh- 開頭的是公鑰）──
     ssh_keys_list: () => sshKeys.map((k) => ({ ...k })),
     ssh_session_log_write: ({ path, text, truncate }) => { window.__DBKIT_SSH_LOG__.push({ path, text, truncate }); return null; },
+    ssh_oplog_command: ({ entry }) => {
+      if (!entry?.detail?.trim()) return null;
+      sshOplogPush(entry.conn_id, "command", { detail: entry.detail, ts: entry.ts ?? Date.now(), cwd: entry.cwd ?? null, source: entry.source ?? null });
+      return null;
+    },
+    ssh_oplog_query: ({ query }) => {
+      const q = query ?? {};
+      const host = (q.host ?? "").trim().toLowerCase();
+      const text = (q.text ?? "").trim().toLowerCase();
+      const hits = sshOplog.filter((e) => (q.from == null || e.ts >= q.from) && (q.to == null || e.ts < q.to)
+        && (!q.kinds?.length || q.kinds.includes(e.kind)) && (!q.session_id || e.session_id === q.session_id)
+        && (!host || `${e.user}@${e.host}:${e.port}`.toLowerCase().includes(host))
+        && (!text || [e.detail, e.target, e.cwd, e.message].some((s) => s && s.toLowerCase().includes(text))))
+        .sort((a, b) => b.ts - a.ts);
+      const limit = q.limit || 1000;
+      return { entries: hits.slice(0, limit).map((e) => ({ ...e })), more: hits.length > limit };
+    },
+    ssh_oplog_config: () => ({ config: { ...sshOplogConfig }, dir: SSH_OPLOG_DIR }),
+    ssh_oplog_config_set: ({ config }) => {
+      sshOplogConfig = { enabled: !!config.enabled, retention_days: Math.min(3650, config.retention_days ?? 90) };
+      return { config: { ...sshOplogConfig }, dir: SSH_OPLOG_DIR };
+    },
+    ssh_oplog_clear: () => { sshOplog.length = 0; return null; },
+    ssh_oplog_reveal: () => null,
     ssh_import_default_path: ({ kind }) => (kind === "xsh" ? fx.SSH_IMPORT_XSH?.path : fx.SSH_IMPORT_CONFIG?.path) ?? null,
     ssh_import_scan: ({ kind }) => (kind === "xsh" ? fx.SSH_IMPORT_XSH : fx.SSH_IMPORT_CONFIG) ?? { path: "", hosts: [], skipped: 0 },
     ssh_key_inspect: ({ source, passphrase }) => sshInspect(source, passphrase),
@@ -817,11 +846,16 @@ metadata:
         : { host: "db-bastion.internal", port: 22, username: "tunnel" };
       const info = { conn_id: connId, host: s?.host ?? "web-01", port: s?.port ?? 22, username: s?.username ?? "deploy" };
       sshConns.set(connId, info);
+      sshOplogWho.set(connId, {
+        proto: s?.protocol === "ftp" ? "ftp" : "ssh", host: info.host, port: info.port, user: info.username,
+        session_id: target?.kind === "session" ? target.id : undefined,
+      });
+      sshOplogPush(connId, "connect");
       window.__DBKIT_SSH_LAST_CONN__ = connId; // 測試用：模擬斷線要知道是哪條
       return info;
     },
     ssh_test: () => new Promise((r) => setTimeout(() => r(null), 200)),
-    ssh_disconnect: ({ connId }) => { sshConns.delete(connId); return null; },
+    ssh_disconnect: ({ connId }) => { if (sshConns.delete(connId)) sshOplogPush(connId, "disconnect"); return null; },
     ssh_term_open: ({ connId, onOutput }) => {
       const send = channelSender(onOutput);
       const info = sshConns.get(connId);
@@ -847,41 +881,52 @@ metadata:
     ssh_term_close: ({ termId }) => { sshTerms.delete(termId); return null; },
     ssh_hostkey_answer: () => null,
     ssh_auth_answer: () => null,
-    ssh_sftp_open: ({ connId }) => { window.__DBKIT_SFTP_OPENS__.push(connId); return { sftp_id: `sftp-${++sshSeq}`, home: "/home/deploy" }; },
+    ssh_sftp_open: ({ connId }) => {
+      window.__DBKIT_SFTP_OPENS__.push(connId);
+      const sftpId = `sftp-${++sshSeq}`;
+      sftpConnOf.set(sftpId, connId);
+      return { sftp_id: sftpId, home: "/home/deploy" };
+    },
     ssh_sftp_close: () => null,
     ssh_sftp_list: ({ path }) => (fx.SFTP_LISTING?.[path] ?? []).map(sftpWithMeta),
     ssh_sftp_stat: ({ path }) => sftpFind(path) ?? Promise.reject(new Error("找不到檔案或目錄")),
-    ssh_sftp_mkdir: () => null,
-    ssh_sftp_rename: ({ from, to }) => { window.__DBKIT_SFTP_RENAMES__.push({ from, to }); return null; },
-    ssh_sftp_remove: ({ path, recursive }) => { window.__DBKIT_SFTP_REMOVES__.push({ path, recursive }); return null; },
+    ssh_sftp_mkdir: ({ sftpId, path }) => { sftpOp(sftpId, "mkdir", { detail: path }); return null; },
+    ssh_sftp_rename: ({ sftpId, from, to }) => { window.__DBKIT_SFTP_RENAMES__.push({ from, to }); sftpOp(sftpId, "rename", { detail: from, target: to }); return null; },
+    ssh_sftp_remove: ({ sftpId, path, recursive }) => { window.__DBKIT_SFTP_REMOVES__.push({ path, recursive }); sftpOp(sftpId, "delete", { detail: path }); return null; },
     ssh_sftp_read_text: ({ path }) => { const text = sftpFiles.get(path) ?? ""; return { text, truncated: false, size: new TextEncoder().encode(text).length, lossy: false, binary: false }; },
-    ssh_sftp_write_text: ({ path, content, createNew }) => {
+    ssh_sftp_write_text: ({ sftpId, path, content, createNew }) => {
       window.__DBKIT_SFTP_WRITES__.push({ path, content, createNew });
+      sftpOp(sftpId, createNew ? "create" : "save", { detail: path });
       sftpFiles.set(path, content);
       sftpMeta.set(path, { ...(sftpMeta.get(path) ?? {}), size: new TextEncoder().encode(content).length, mtime: Math.floor(Date.now() / 1000) });
       return sftpFind(path) ?? { name: path.split("/").pop(), path, is_dir: false, is_symlink: false, link_target_is_dir: null, size: content.length, mtime: Math.floor(Date.now() / 1000), permissions: 0o100644, mode: "-rw-r--r--", uid: 1000, gid: 1000, owner: "deploy", group: "deploy" };
     },
-    ssh_sftp_chmod: ({ path, mode }) => {
+    ssh_sftp_chmod: ({ sftpId, path, mode }) => {
       window.__DBKIT_SFTP_CHMOD__.push({ path, mode });
+      sftpOp(sftpId, "chmod", { detail: path, target: (mode & 0o7777).toString(8).padStart(4, "0") });
       const base = sftpFind(path);
       const type = base?.is_dir ? 0o40000 : 0o100000;
       sftpMeta.set(path, { ...(sftpMeta.get(path) ?? {}), permissions: type | mode });
       return sftpFind(path);
     },
-    ssh_sftp_download: ({ remote, local, resume }) => {
+    ssh_sftp_download: ({ sftpId, remote, local, resume }) => {
       window.__DBKIT_SFTP_TRANSFERS__.push({ kind: "download", remote, local, resume: !!resume });
+      sftpOp(sftpId, "download", { detail: remote, target: local });
       return sshTransfer(remote);
     },
-    ssh_sftp_upload: ({ local, remote, resume }) => {
+    ssh_sftp_upload: ({ sftpId, local, remote, resume }) => {
       window.__DBKIT_SFTP_TRANSFERS__.push({ kind: "upload", local, remote, resume: !!resume });
+      sftpOp(sftpId, "upload", { detail: local, target: remote });
       return sshTransfer(local);
     },
-    ssh_sftp_download_many: ({ remotes, localDir, onConflict }) => {
+    ssh_sftp_download_many: ({ sftpId, remotes, localDir, onConflict }) => {
       window.__DBKIT_SFTP_BATCH__.push({ kind: "download", remotes, localDir, onConflict });
+      sftpOp(sftpId, "download", { detail: remotes.join("\n"), target: localDir });
       return sshTransfer(remotes[0]);
     },
-    ssh_sftp_upload_many: ({ locals, remoteDir, onConflict }) => {
+    ssh_sftp_upload_many: ({ sftpId, locals, remoteDir, onConflict }) => {
       window.__DBKIT_SFTP_BATCH__.push({ kind: "upload", locals, remoteDir, onConflict });
+      sftpOp(sftpId, "upload", { detail: locals.join("\n"), target: remoteDir });
       return sshTransfer(locals[0]);
     },
     // 本機「已經有」哪些名稱由情境自己設（window.__DBKIT_LOCAL_EXISTING__），預設都沒有。
@@ -990,6 +1035,22 @@ metadata:
   }
   const sshConns = new Map(); // connId → { host, port, username }
   const sshTerms = new Map(); // termId → { send, user, host, home, cwd, prompt, line }
+  // SSH 操作紀錄（假後端）：連線 / 檔案動作在這裡自己記（同真的後端），指令由前端送來。
+  const sshOplog = window.__DBKIT_SSH_OPLOG__;
+  for (const e of fx.SSH_OPLOG ?? []) sshOplog.push({ ...e });
+  const sshOplogWho = new Map(); // connId → { proto, host, port, user, session_id }
+  const sftpConnOf = new Map(); // sftpId → connId
+  let sshOplogConfig = { enabled: true, retention_days: 90 };
+  const SSH_OPLOG_DIR = "C:\\Users\\demo\\AppData\\Roaming\\com.dbkit.app\\ssh-oplog";
+  function sshOplogPush(connId, kind, fields = {}, fileOp = false) {
+    const w = sshOplogWho.get(connId);
+    if (!w || !sshOplogConfig.enabled) return;
+    sshOplog.push({
+      ts: Date.now(), kind, proto: fileOp && w.proto === "ssh" ? "sftp" : w.proto, conn_id: connId, host: w.host, port: w.port,
+      user: w.user, session_id: w.session_id, detail: "", result: "ok", ...fields,
+    });
+  }
+  const sftpOp = (sftpId, kind, fields) => sshOplogPush(sftpConnOf.get(sftpId), kind, fields, true);
   // SFTP 假檔案：內容（read_text / write_text）與被改過的屬性（大小 / 時間 / 權限）疊在 fixtures 上。
   const sftpFiles = new Map(Object.entries(fx.SFTP_FILES ?? {}));
   const sftpMeta = new Map();
@@ -1070,17 +1131,35 @@ metadata:
   }
   function sshFeed(t, ch) {
     if (ch === "\r" || ch === "\n") {
+      if (t.sudo) {
+        // 回答 sudo 的密碼提示：跟真的一樣不回顯，Enter 之後才跑那條指令。
+        window.__DBKIT_SSH_SECRETS__.push(t.line);
+        const cmd = t.sudo;
+        t.sudo = null;
+        t.line = "";
+        const out = sshRun(t, cmd);
+        t.send(`\r\n${out ? `${out}\r\n` : ""}${sshTitle(t)}${t.prompt}`);
+        return;
+      }
+      const sudo = /^sudo\s+(.+)$/.exec(t.line.trim());
+      if (sudo) {
+        t.sudo = sudo[1];
+        t.line = "";
+        t.send(`\r\n[sudo] password for ${t.user}: `);
+        return;
+      }
       const out = sshRun(t, t.line);
       t.line = "";
       t.send(`\r\n${out ? `${out}\r\n` : ""}${sshTitle(t)}${t.prompt}`);
     } else if (ch === "\x7f" || ch === "\b") {
-      if (t.line) { t.line = t.line.slice(0, -1); t.send("\b \b"); }
+      if (t.line) { t.line = t.line.slice(0, -1); if (!t.sudo) t.send("\b \b"); }
     } else if (ch === "\x03") {
       t.line = "";
+      t.sudo = null;
       t.send(`^C\r\n${t.prompt}`);
     } else if (ch >= " ") {
       t.line += ch;
-      t.send(ch);
+      if (!t.sudo) t.send(ch);
     }
   }
   function sshTransfer(name) {

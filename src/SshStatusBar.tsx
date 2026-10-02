@@ -1,7 +1,7 @@
 // 終端機底部的狀態列：連到哪裡（經哪台跳板機）、終端大小、編碼、連線時間；右邊是「儲存畫面內容」與
-// 「記錄工作階段」（記錄中顯示紅點）。
+// 「記錄工作階段」（記錄中顯示紅點），以及這台主機的「操作紀錄」。
 import { useEffect, useState } from "react";
-import { Circle, FileDown, Square } from "lucide-react";
+import { Circle, FileDown, History, Square } from "lucide-react";
 import { useT } from "./i18n";
 import { IconButton } from "./ui/index";
 import { fmtDuration } from "./sshSessionLog";
@@ -17,9 +17,11 @@ export interface SshStatusBarProps {
   recording: string | null;
   onSave: () => void;
   onToggleRecord: () => void;
+  /** 開這台主機的 SSH 操作紀錄。 */
+  onOpLog: () => void;
 }
 
-export default function SshStatusBar({ label, jump, size, status, connectedAt, recording, onSave, onToggleRecord }: SshStatusBarProps) {
+export default function SshStatusBar({ label, jump, size, status, connectedAt, recording, onSave, onToggleRecord, onOpLog }: SshStatusBarProps) {
   const t = useT();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -41,6 +43,7 @@ export default function SshStatusBar({ label, jump, size, status, connectedAt, r
             {t("記錄中")}
           </span>
         )}
+        <IconButton icon={History} label={t("這台主機的操作紀錄")} box="w-5 h-5" iconSize={12} onClick={onOpLog} />
         <IconButton icon={FileDown} label={t("儲存畫面內容…")} box="w-5 h-5" iconSize={12} onClick={onSave} />
         <IconButton icon={recording ? Square : Circle} label={recording ? t("停止記錄") : t("開始記錄工作階段…")} box="w-5 h-5" iconSize={12}
           active={!!recording} onClick={onToggleRecord} />

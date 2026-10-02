@@ -1,11 +1,11 @@
 // 側欄的「SSH 主機」區塊：群組 + 主機清單（獨立於資料庫連線，不進 DbKind / selectedNode）。
 // 分組行為（區塊標題、群組、拖曳排序、搬移）與資料庫連線、遠端桌面共用 sidebar/GroupedSection。
-// 單擊只在本區高亮，雙擊 / Enter 開終端機分頁；右鍵有連線 / SFTP / 編輯 / 複製 / 移到群組 / 刪除。
+// 單擊只在本區高亮，雙擊 / Enter 開終端機分頁；右鍵有連線 / SFTP / 操作紀錄 / 編輯 / 複製 / 移到群組 / 刪除。
 // 已連線（有分頁連著）的主機圖示亮起，滑過顯示快速按鈕（終端機 / SFTP / 編輯）。
 // 一台主機都沒有時整個區塊不顯示——不是每個人都用 SSH；新增走「新增連線 → SSH / SFTP」或貼 ssh:// 字串。
 // FTP 主機也列在這裡（資料夾圖示）：沒有終端機，開啟就是只有檔案面板的分頁。
 import { lazy, Suspense, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { AppWindow, FileInput, FolderOpen, KeyRound, Pencil, SquareTerminal } from "lucide-react";
+import { AppWindow, FileInput, FolderOpen, History, KeyRound, Pencil, SquareTerminal } from "lucide-react";
 import { useT } from "./i18n";
 import { Icon, MenuPanel } from "./ui/index";
 import { toast, uiConfirm } from "./ui";
@@ -14,6 +14,7 @@ import { useSshTerminals } from "./sshTerminals";
 import { isFtpHost, type SshFolder, type SshSession, type SshTargetRef } from "./sshTypes";
 import { ftpTabOf, type SshTab } from "./sshTabs";
 import { filterSessions, sessionLabel, useSshSessions } from "./sshSessions";
+import { useSshOpLog } from "./sshOpLogStore";
 import GroupedSection, { HeaderButton, RowButton, moveTargets, type ItemDnd } from "./sidebar/GroupedSection";
 import { moveItem, type Placement } from "./sidebarGroups";
 
@@ -154,6 +155,7 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
           <>
             <HeaderButton icon={FileInput} label={t("匯入 SSH 主機")} title={t("匯入主機（~/.ssh/config、.xsh 工作階段）")} onClick={() => setImportOpen(true)} />
             <HeaderButton icon={KeyRound} label={t("SSH 金鑰")} title={t("SSH 金鑰（匯入 / 產生 / 憑證）")} onClick={() => setKeysOpen(true)} />
+            <HeaderButton icon={History} label={t("SSH 操作紀錄")} title={t("SSH 操作紀錄（執行的指令、檔案動作、連線）")} onClick={() => useSshOpLog.getState().show()} />
           </>
         }
         newItemLabel={t("新增 SSH 主機")}
@@ -173,6 +175,7 @@ export default function SshHostTree({ q, onOpen, onEdit }: SshHostTreeProps) {
           {([
             [t("連線"), () => open(menu.session), false],
             [isFtpHost(menu.session) ? t("在獨立視窗開啟") : t("開啟 SFTP"), () => openSftp(menu.session), false],
+            [t("操作紀錄…"), () => useSshOpLog.getState().show({ sessionId: menu.session.id, label: sessionLabel(menu.session) }), false],
             [t("編輯…"), () => onEdit(menu.session, menu.session.folder_id), false],
             [t("複製"), () => duplicate(menu.session), false],
             ...moveTargets(folders, menu.session.folder_id, t).map(([label, gid]) => [label, () => moveTo(menu.session, gid), false]),

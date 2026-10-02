@@ -6,6 +6,7 @@ import type {
   SshKeyInspect, SshKeySource, SshStoredKey, SshKeyImportOutcome, SshKeyGenAlgorithm, SshCertInfo,
   SshHostImportKind, SshImportScan,
 } from "./sshTypes";
+import type { SshOpLogConfig, SshOpLogInfo, SshOpPage, SshOpQuery } from "./sshOpLog";
 import type {
   DockerOverview, DockerDiskUsage, DockerPruneResult, DockerPruneTarget, DockerContainer, DockerContainerDetail,
   DockerContainerAction, DockerStats, DockerTop, DockerImage, DockerImageDetail, DockerPullProgress, DockerVolume,
@@ -2277,6 +2278,14 @@ export const api = {
   sshImportScan: (kind: SshHostImportKind, path: string | null) => invoke<SshImportScan>("ssh_import_scan", { kind, path }),
   // 終端機工作階段記錄：truncate = 開始記錄（清空重寫），否則追加。
   sshSessionLogWrite: (path: string, text: string, truncate: boolean) => invoke<void>("ssh_session_log_write", { path, text, truncate }),
+  // SSH 操作紀錄（指令 / 檔案動作 / 連線）。檔案動作與連線由後端自己記，前端只送指令。
+  sshOplogCommand: (entry: { conn_id: string; detail: string; ts?: number; cwd?: string | null; source?: string }) =>
+    invoke<void>("ssh_oplog_command", { entry }),
+  sshOplogQuery: (query: SshOpQuery) => invoke<SshOpPage>("ssh_oplog_query", { query }),
+  sshOplogConfig: () => invoke<SshOpLogInfo>("ssh_oplog_config"),
+  sshOplogConfigSet: (config: SshOpLogConfig) => invoke<SshOpLogInfo>("ssh_oplog_config_set", { config }),
+  sshOplogClear: () => invoke<void>("ssh_oplog_clear"),
+  sshOplogReveal: () => invoke<void>("ssh_oplog_reveal"),
   sshImportDefaultPath: (kind: SshHostImportKind) => invoke<string | null>("ssh_import_default_path", { kind }),
 
   // ---- 遠端桌面（RDP / VNC；DTO 見 rdTypes.ts）----

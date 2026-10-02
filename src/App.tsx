@@ -42,6 +42,7 @@ import { useResizable, Splitter } from "./ui/resizable";
 import { tabOrder, type SshTab } from "./sshTabs";
 import { isFtpHost, type SshSession } from "./sshTypes";
 import { useSshSessions, sessionLabel } from "./sshSessions";
+import { useSshOpLog } from "./sshOpLogStore";
 import type { ParsedSsh } from "./sshConnString";
 import { useSshTerminals, termRegistry } from "./sshTerminals";
 import { setSftpWindowsLocked } from "./sftpWindowBridge";
@@ -198,6 +199,7 @@ const SshSessionDialog = lazyOverlay(() => import("./SshSessionDialog"));
 const RdPane = lazy(() => import("./RdPane"));
 const RdSessionDialog = lazyOverlay(() => import("./RdSessionDialog"));
 const SshImportDialog = lazyOverlay(() => import("./SshImportDialog"));
+const SshOpLogDialog = lazyOverlay(() => import("./SshOpLogDialog"));
 // AI 動作（解釋 / 最佳化 / 修正 / 加註解 / 轉方言 / 測試資料）：差異預覽與選單都只在用到時載入。
 const AiDiffDialog = lazyOverlay(() => import("./AiDiffDialog"));
 const AiActionMenu = lazyOverlay(() => import("./AiActionMenu"));
@@ -249,6 +251,8 @@ export default function App() {
   const [sshDialog, setSshDialog] = useState<{ initial: SshSession | null; folderId: string | null; prefill?: ParsedSsh | null } | null>(null);
   // 匯入 SSH 主機（~/.ssh/config、.xsh）：側欄 SSH 區塊沒有主機時不顯示，從新增 SSH 主機對話框進來。
   const [sshImportOpen, setSshImportOpen] = useState(false);
+  // SSH 操作紀錄：終端機狀態列、側欄主機右鍵、設定都開得到，開關放在 useSshOpLog。
+  const sshOpLogOpen = useSshOpLog((s) => s.open);
   const sshFolders = useSshSessions((s) => s.folders);
   // 遠端桌面主機對話框：同 sshDialog；protocol = 新增時預選的協定（KindPicker 點的卡片），prefill = 連線字串 / .rdp 檔。
   const [rdDialog, setRdDialog] = useState<{ initial: RdSession | null; folderId: string | null; protocol?: RdProtocol; prefill?: ParsedRd | null } | null>(null);
@@ -535,6 +539,7 @@ export default function App() {
         />
       )}
       {sshImportOpen && <SshImportDialog open onClose={() => setSshImportOpen(false)} />}
+      {sshOpLogOpen && <SshOpLogDialog />}
       {rdDialog && (
         <RdSessionDialog
           open

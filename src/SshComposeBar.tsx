@@ -36,7 +36,8 @@ export default function SshComposeBar({ tabKey, extra }: { tabKey: string; extra
     if (!connected) { toast.info(t("終端機尚未連線")); return; }
     setCompose(tabKey, "");
     setHistIdx(-1);
-    historyRef.current = pushComposeHistory(text);
+    // 終端機正在問密碼時，送出去的就是密碼：不進歷史（不然按 ↑ 就看得到，還會存在本機）。
+    if (!termRegistry.get(tabKey)?.atSecretPrompt()) historyRef.current = pushComposeHistory(text);
     // 不等擷取結束（那是給 AI 回饋用的）；失敗才提示。
     sendCommand(tabKey, text).catch((e) => toast.error(String((e as Error)?.message ?? e)));
     termRegistry.get(tabKey)?.focus();

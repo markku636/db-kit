@@ -11,6 +11,7 @@ import { useStore } from "./store";
 import { isSshTabKey } from "./sshTabs";
 import type { SshStatus } from "./sshTypes";
 import { createOutputCapture } from "./sshCapture";
+import type { SshOpSource } from "./sshOpLog";
 
 export interface SshTermRuntime {
   /** 前端產生的連線 id（每次重連換一個）。 */
@@ -43,8 +44,10 @@ export interface CaptureResult {
 /** xterm 實例與資料流的非反應式登錄（key = tabKey）。由 SshTerminalPane 掛載 / 卸載時維護。 */
 export interface TermRegistryEntry {
   term: Terminal;
-  /** 送一整行（後端補 Enter）。未連線時 reject。 */
-  sendLine: (line: string) => Promise<void>;
+  /** 送一整行（後端補 Enter）。未連線時 reject。`source` 記進 SSH 操作紀錄（預設 app：App 自己送的，例如 cd）。 */
+  sendLine: (line: string, source?: SshOpSource) => Promise<void>;
+  /** 游標是不是停在密碼提示上（命令列輸入條據此不把送出的內容記進歷史）。 */
+  atSecretPrompt: () => boolean;
   /** 監聽從後端來的原始 bytes（AI「執行並回饋」擷取輸出用）；回傳取消函式。 */
   tapData: (fn: (bytes: Uint8Array) => void) => () => void;
   focus: () => void;
@@ -75,7 +78,11 @@ interface SshTerminalsStore {
    * 送一行指令並擷取輸出直到閒置（預設 300 ms）／上限（8 s / 8 KB）。
    * 多行以 \r 隔開一次送出（PTY 把 CR 當 Enter）。未連線時 reject，不會掛住。
    */
-  sendCommand: (tabKey: string, line: string, opts?: { idleMs?: number; maxMs?: number; maxBytes?: number }) => Promise<CaptureResult>;
+  sendCommand: (
+    tabKey: string,
+    line: string,
+    opts?: { idleMs?: number; maxMs?: number; maxBytes?: number; source?: SshOpSource },
+  ) => Promise<CaptureResult>;
 }
 
 export const DEFAULT_RUNTIME: Omit<SshTermRuntime, "connId" | "host" | "user"> = {
@@ -132,7 +139,7 @@ export const useSshTerminals = create<SshTerminalsStore>((set, get) => ({
     });
     const untap = reg.tapData((b) => cap.push(b));
     try {
-      await reg.sendLine(normalized);
+      await reg.sendLine(normalized, opts?.source ?? "compose");
       const r = await cap.promise;
       get().patch(tabKey, { lastCommand: line, lastOutput: r.output });
       return r;
@@ -204,11 +211,13 @@ export async function teardownSshTab(tabKey: string): Promise<void> {
  * 從 `api.sshTermSendLine` 送出前先把多行正規化成 CR 分隔；命令列輸入條與 AI 走同一條路。
  * 回傳 false 代表沒送（未連線）。
  */
-export async function sendLineToTab(tabKey: string, line: string): Promise<boolean> {
+export async function sendLineToTab(tabKey: string, line: string, source: SshOpSource = "compose"): Promise<boolean> {
   const rt = useSshTerminals.getState().rt[tabKey];
-  if (!rt?.termId || rt.status !== "connected") return false;
+  const reg = termRegistry.get(tabKey);
+  if (!reg || !rt?.termId || rt.status !== "connected") return false;
   const normalized = line.replace(/\r\n?/g, "\n").replace(/\n+$/, "").replace(/\n/g, "\r");
-  await api.sshTermSendLine(rt.termId, normalized);
+  // 走登錄的 sendLine（而不是直接呼叫後端），送出的指令才會記進操作紀錄。
+  await reg.sendLine(normalized, source);
   useSshTerminals.getState().patch(tabKey, { lastCommand: line });
   return true;
 }

@@ -4,6 +4,13 @@ import { bufferLinesToText, createRecorder, defaultLogName, fmtDuration } from "
 const enc = (s: string) => new TextEncoder().encode(s);
 
 describe("createRecorder", () => {
+  it("回顯出來的密碼換成 ***（收尾的最後一行也是）", () => {
+    const r = createRecorder();
+    r.push(enc("$ mysql -uroot -pS3cr3t shop\r\n[sudo] password for mark: \r\nok\r\n$ export DB_PASSWORD=abc"));
+    expect(r.take()).toBe("$ mysql -uroot -p*** shop\n[sudo] password for mark: \nok\n");
+    expect(r.flush()).toBe("$ export DB_PASSWORD=***\n");
+  });
+
   it("去 ANSI，色碼切在封包邊界也不漏", () => {
     const r = createRecorder();
     r.push(enc("\x1b[3"));

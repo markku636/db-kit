@@ -30,7 +30,10 @@ import SshComposeBar from "./SshComposeBar";
 import SshStatusBar from "./SshStatusBar";
 import { bufferLinesToText, createRecorder, defaultLogName, type SessionRecorder } from "./sshSessionLog";
 import { disconnectKind } from "./sshDisconnect";
-import { shellQuote } from "./sshCwd";
+import { shellQuote, terminalDir } from "./sshCwd";
+import { CommandTracker, type TrackedCommand } from "./sshCommandTracker";
+import { redactSecrets } from "./sshOpLog";
+import { useSshOpLog } from "./sshOpLogStore";
 import { openSftpWindow, useSftpWindows } from "./sftpWindowBridge";
 import { useTheme } from "./theme";
 import { EDITOR_THEMES, getEditorThemeDef } from "./editorThemes";
@@ -65,6 +68,13 @@ function themeDef(id: string) {
 function errMsg(e: unknown): string {
   if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
   return String(e);
+}
+
+/** 執行的指令記進 SSH 操作紀錄（密碼參數先換成 ***；關掉紀錄時後端不寫）。 */
+function logCommand(c: TrackedCommand<{ connId: string; cwd: string | null }>) {
+  if (!c.ctx.connId) return;
+  void api.sshOplogCommand({ conn_id: c.ctx.connId, detail: redactSecrets(c.text), ts: c.ts, cwd: c.ctx.cwd, source: c.source })
+    .catch(() => undefined);
 }
 function errCode(e: unknown): string | null {
   if (e && typeof e === "object" && "code" in e) return String((e as { code: unknown }).code);
@@ -244,7 +254,17 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     }
     fit.fit();
 
-    term.onData((d) => { const id = termIdRef.current; if (id) void api.sshTermWrite(id, utf8ToB64(d)).catch(() => undefined); });
+    // 操作紀錄：Enter 時從畫面讀出執行的指令（不記鍵盤，密碼提示下打的字不會回顯，所以讀不到）。
+    const tracker = new CommandTracker(term, logCommand, () => ({
+      connId: connIdRef.current,
+      cwd: terminalDir(useSshTerminals.getState().rt[tab.key]),
+    }));
+    term.onData((d) => {
+      const id = termIdRef.current;
+      if (!id) return;
+      tracker.onInput(d);
+      void api.sshTermWrite(id, utf8ToB64(d)).catch(() => undefined);
+    });
     term.onBinary((d) => { const id = termIdRef.current; if (id) void api.sshTermWrite(id, binaryToB64(d)).catch(() => undefined); });
     term.onResize(({ cols, rows }) => {
       setTermSize({ cols, rows });
@@ -290,11 +310,14 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     searchRef.current = search;
     termRegistry.set(tab.key, {
       term,
-      sendLine: async (line) => {
+      sendLine: async (line, source = "app") => {
         const id = termIdRef.current;
         if (!id || statusRef.current !== "connected") throw new Error(t("終端機尚未連線"));
+        // 送出前先看游標停在哪：在密碼提示上送的是密碼，不記。
+        tracker.noteSent(line, source);
         await api.sshTermSendLine(id, line);
       },
+      atSecretPrompt: () => tracker.atSecretPrompt(),
       tapData: (fn) => { tapsRef.current.add(fn); return () => { tapsRef.current.delete(fn); }; },
       focus: () => term.focus(),
       reconnect,
@@ -305,6 +328,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     return () => {
       host.removeEventListener("paste", onNativePaste, true);
       dropListeners();
+      tracker.dispose();
       void teardownSshTab(tab.key);
       term.dispose();
       termRef.current = null;
@@ -678,7 +702,10 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
         </Suspense>
       )}
       <SshStatusBar label={label} jump={jumpLabel} size={termSize} status={status} connectedAt={connectedAt} recording={recording}
-        onSave={() => void saveScreen()} onToggleRecord={() => { if (recording) stopRecording(); else void startRecording(); }} />
+        onSave={() => void saveScreen()} onToggleRecord={() => { if (recording) stopRecording(); else void startRecording(); }}
+        onOpLog={() => useSshOpLog.getState().show(tab.sessionId
+          ? { sessionId: tab.sessionId, label: tab.title }
+          : { host: rt?.user && rt?.host ? `${rt.user}@${rt.host}` : "", label: targetLabel() })} />
       <SshComposeBar tabKey={tab.key} />
 
       {authPrompt && (

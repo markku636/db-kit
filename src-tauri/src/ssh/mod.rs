@@ -11,6 +11,7 @@
 //! - `terminal`：PTY shell channel、輸出合併、resize / close。
 //! - `sftp`：SFTP 子系統（russh-sftp）、路徑安全、上下傳與取消。
 //! - `session_log`：終端機工作階段記錄檔（開始時清空、之後追加）。
+//! - `oplog`：SSH 操作紀錄（指令 / 檔案動作 / 連線，一天一個 JSONL 檔；密碼不進來）。
 //! - `host_import`：從 ~/.ssh/config 與 .xsh 工作階段檔讀出可匯入的主機（只讀，不寫）。
 //! - `keys`：使用者金鑰——各種私鑰格式的辨識與載入、OpenSSH 憑證、App 內金鑰庫（`keystore:<id>`）。
 //! - `runtime`：`SshRuntime`——活著的連線 / 終端 / SFTP / 待答提示 / 傳輸旗標的登記簿。
@@ -24,6 +25,7 @@ pub mod ftp;
 pub mod host_import;
 pub mod keys;
 pub mod known_hosts;
+pub mod oplog;
 pub mod runtime;
 pub mod session_log;
 pub mod sessions;

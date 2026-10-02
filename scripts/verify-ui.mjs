@@ -819,6 +819,101 @@ const CASES = {
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 
+  // SSH 操作紀錄：Enter 執行的指令從畫面讀（不記鍵盤），所以 sudo 密碼提示下打的字、命令列輸入條在密碼提示上送的字
+  // 都不會進紀錄（也不進命令列歷史）；指令裡的 -p密碼換成 ***；以空白開頭的不記。狀態列開的紀錄視窗只列這台主機。
+  async "ssh-oplog"(page) {
+    await openSshWeb01(page);
+    const oplog = () => page.evaluate(() => window.__DBKIT_SSH_OPLOG__.map((e) => ({ ...e })));
+    const commands = async () => (await oplog()).filter((e) => e.kind === "command").map((e) => e.detail);
+    const waitCmd = (text) => page.waitForFunction(
+      (s) => window.__DBKIT_SSH_OPLOG__.some((e) => e.kind === "command" && e.detail === s), text, { timeout: 6000 },
+    ).catch(() => {});
+    const typeLine = async (s) => {
+      await page.locator(".xterm-helper-textarea").first().focus();
+      await page.keyboard.type(s);
+      await page.keyboard.press("Enter");
+    };
+    check("連線有記下來（帶這台主機的 id）", (await oplog()).some((e) => e.kind === "connect" && e.session_id === "ssh-web01" && e.user === "deploy"),
+      JSON.stringify(await oplog()).slice(0, 300));
+
+    await typeLine("echo audit-1");
+    await waitCmd("echo audit-1");
+    const first = (await oplog()).find((e) => e.detail === "echo audit-1");
+    check("鍵盤打的指令記下來（不含提示符、來源是鍵盤）", first?.source === "keyboard", JSON.stringify(first));
+
+    // sudo：假 shell 跟真的一樣，密碼提示下不回顯
+    await typeLine("sudo systemctl restart nginx");
+    await page.waitForFunction(() => (document.querySelector(".xterm-rows")?.innerText ?? "").includes("[sudo] password for deploy:"), null, { timeout: 5000 }).catch(() => {});
+    await typeLine("Hunter2Secret");
+    await waitCmd("sudo systemctl restart nginx");
+    await sleep(2300); // 等過回顯等待時間：密碼那一行若會被記，這時一定已經記了
+    check("假 shell 確實收到了密碼（測試本身有效）", (await page.evaluate(() => window.__DBKIT_SSH_SECRETS__)).includes("Hunter2Secret"));
+    check("sudo 指令有記", (await commands()).includes("sudo systemctl restart nginx"), JSON.stringify(await commands()));
+    check("密碼提示下打的密碼沒有進紀錄", !JSON.stringify(await oplog()).includes("Hunter2Secret"), JSON.stringify(await commands()));
+
+    // 命令列輸入條在密碼提示上送出：是密碼，不記紀錄也不進歷史
+    await typeLine("sudo uptime");
+    await page.waitForFunction(() => window.__DBKIT_SSH_OPLOG__.some((e) => e.detail === "sudo uptime"), null, { timeout: 6000 }).catch(() => {});
+    const compose = page.getByTestId("ssh-compose");
+    await compose.fill("ComposePw9");
+    await compose.press("Enter");
+    await page.waitForFunction(() => window.__DBKIT_SSH_SECRETS__.includes("ComposePw9"), null, { timeout: 5000 }).catch(() => {});
+    await sleep(400);
+    check("輸入條在密碼提示上送的字沒有進紀錄", !JSON.stringify(await oplog()).includes("ComposePw9"));
+    const history = await page.evaluate(() => localStorage.getItem("dbkit:ssh.composeHistory") ?? "");
+    check("也沒有進命令列歷史", !history.includes("ComposePw9"), history);
+    await compose.fill("ls");
+    await compose.press("Enter");
+    await waitCmd("ls");
+    check("輸入條送的一般指令有記（來源是命令列）", (await oplog()).some((e) => e.detail === "ls" && e.source === "compose"));
+
+    await typeLine("mysql -uroot -pS3cr3t shop");
+    await waitCmd("mysql -uroot -p*** shop");
+    check("指令裡的密碼換成 ***", (await commands()).includes("mysql -uroot -p*** shop") && !JSON.stringify(await oplog()).includes("S3cr3t"),
+      JSON.stringify(await commands()));
+
+    await typeLine(" echo hidden");
+    await typeLine("pwd");
+    await waitCmd("pwd");
+    check("以空白開頭的指令不記", !(await commands()).some((c) => c.includes("echo hidden")), JSON.stringify(await commands()));
+
+    // 紀錄視窗：狀態列開的只列這台；可依種類、關鍵字篩
+    await page.getByTestId("ssh-status-bar").getByRole("button", { name: "這台主機的操作紀錄" }).click();
+    const dlg = page.getByTestId("ssh-oplog");
+    await dlg.waitFor({ timeout: 5000 }).catch(() => {});
+    await sleep(400);
+    const rows = dlg.getByTestId("ssh-oplog-row");
+    const text = await dlg.innerText().catch(() => "");
+    check("紀錄視窗列出指令與連線", text.includes("echo audit-1") && text.includes("sudo systemctl restart nginx") && /連線/.test(text), text.slice(0, 400));
+    check("視窗裡也看不到密碼", !text.includes("Hunter2Secret") && !text.includes("ComposePw9") && !text.includes("S3cr3t"));
+    await dlg.getByRole("radio", { name: "指令" }).click();
+    await sleep(400);
+    const kinds = await rows.evaluateAll((els) => els.map((e) => e.getAttribute("data-kind")));
+    check("篩「指令」只剩指令", kinds.length >= 5 && kinds.every((k) => k === "command"), JSON.stringify(kinds));
+    await dlg.getByRole("textbox", { name: "搜尋" }).fill("audit");
+    await sleep(700);
+    check("關鍵字篩選", (await rows.count()) === 1 && /echo audit-1/.test(await rows.first().innerText()), String(await rows.count()));
+    await page.getByRole("button", { name: "關閉", exact: true }).last().click();
+    await sleep(300);
+    check("關閉紀錄視窗", (await dlg.count()) === 0);
+
+    // 設定裡的開關：關掉之後不記
+    await page.locator('button[title="設定"]').first().click();
+    const st = page.getByTestId("ssh-oplog-settings");
+    await st.waitFor({ timeout: 5000 }).catch(() => {});
+    await st.scrollIntoViewIfNeeded().catch(() => {});
+    check("設定裡有操作紀錄的開關與資料夾", (await st.count()) === 1 && /ssh-oplog/.test(await st.innerText().catch(() => "")));
+    await st.getByRole("checkbox").uncheck();
+    await sleep(300);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+    await typeLine("echo while-off");
+    await sleep(2500);
+    check("關掉後不再記", !(await commands()).includes("echo while-off"), JSON.stringify(await commands()));
+    check("沒有未實作的 SSH command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
   // 跳板機：主機設定可選另一台已存主機當跳板機（不能選自己），存下去的是那台的 id；清掉就回到直連。
   async "ssh-jump-host"(page) {
     const tree = page.locator("[data-ssh-host-tree]");

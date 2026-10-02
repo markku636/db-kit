@@ -30,6 +30,7 @@ use crate::ssh::ftp::{self, FtpClient, FtpConn, FtpTarget};
 use crate::ssh::sessions::{self, HostProtocol, SshFolder, SshSession, SshSessionsFile};
 use crate::ssh::host_import;
 use crate::ssh::keys;
+use crate::ssh::oplog::{OpEntry, OpLog, OpLogConfig, OpPage, OpQuery, OpTarget};
 use crate::ssh::sftp::{self as sftp_mod, Kind, OnConflict, ProgressFn, SftpClient, SftpEntry, SftpText};
 use crate::ssh::sftp_window;
 use crate::ssh::terminal::{decode_b64_input, TermEvent, TermHandle, TermOpen, TermSink};
@@ -309,6 +310,81 @@ pub fn ssh_has_stored_password(id: String) -> bool {
 
 // ---- 連線 ----
 
+// ---- 操作紀錄（指令 / 檔案動作 / 連線，見 `ssh::oplog`）----
+
+static OPLOG: std::sync::OnceLock<Option<OpLog>> = std::sync::OnceLock::new();
+
+/// `<設定目錄>/ssh-oplog`。取不到設定目錄就是 `None`：不記，也不擋住任何動作。
+fn oplog(app: &AppHandle) -> Option<&'static OpLog> {
+    OPLOG
+        .get_or_init(|| store::app_config_dir(app).ok().map(|d| OpLog::open(d.join("ssh-oplog"))))
+        .as_ref()
+}
+
+fn oplog_required(app: &AppHandle) -> AppResult<&'static OpLog> {
+    oplog(app).ok_or_else(|| AppError::Storage(t!("無法取得使用者設定目錄").to_string()))
+}
+
+fn origin_session(o: &TargetOrigin) -> Option<String> {
+    match o {
+        TargetOrigin::Session(id) => Some(id.clone()),
+        _ => None,
+    }
+}
+
+/// 動作結果 → 紀錄的 `result` / `message`。
+fn outcome<T>(r: &AppResult<T>) -> (&'static str, Option<String>) {
+    match r {
+        Ok(_) => ("ok", None),
+        Err(AppError::SshCancelled) => ("cancelled", None),
+        Err(e) => ("error", Some(e.message())),
+    }
+}
+
+/// 背景寫一筆：不拖慢動作本身，寫失敗也不影響它。
+fn log_op(app: &AppHandle, e: OpEntry) {
+    if let Some(log) = oplog(app) {
+        tauri::async_runtime::spawn(async move {
+            let _ = log.append(e).await;
+        });
+    }
+}
+
+/// 連線結果：登記這條連線是誰（之後的指令 / 檔案動作用 conn_id 查），再記一筆「連線」。按取消的不記。
+fn log_connect<T>(app: &AppHandle, conn_id: &str, who: OpTarget, r: &AppResult<T>) {
+    let Some(log) = oplog(app) else { return };
+    let (result, message) = outcome(r);
+    if result == "cancelled" {
+        return;
+    }
+    log.remember(conn_id, who);
+    if let Some(mut e) = log.entry(conn_id, "connect", false) {
+        e.result = result.into();
+        e.message = message;
+        log_op(app, e);
+    }
+}
+
+/// 檔案面板的動作。RustDesk 的傳檔連線沒有登記過，不記（那不是 SSH 的操作）。
+fn log_file_op<T>(app: &AppHandle, fc: &FileClient, kind: &str, detail: String, target: Option<String>, r: &AppResult<T>) {
+    let Some(mut e) = oplog(app).and_then(|l| l.entry(fc.conn_id(), kind, true)) else { return };
+    let (result, message) = outcome(r);
+    e.detail = detail;
+    e.target = target;
+    e.result = result.into();
+    e.message = message;
+    log_op(app, e);
+}
+
+/// 傳輸收尾：`base` 是開始傳的時候起的紀錄（時間記開始的那一刻），這裡補上結果。
+fn log_transfer(app: &AppHandle, base: Option<OpEntry>, r: &AppResult<Option<String>>, summary: Option<String>) {
+    let Some(mut e) = base else { return };
+    let (result, message) = outcome(r);
+    e.result = result.into();
+    e.message = message.or(summary);
+    log_op(app, e);
+}
+
 /// 建立連線並認證。`conn_id` 由前端產生（uuid），這樣 prompt 事件在回傳前就能被對上。
 /// 期間的 host key / 密碼 / OTP 提示走事件，由 `ssh_hostkey_answer` / `ssh_auth_answer` 回答。
 /// FTP 主機也走這裡：登入（需要時問密碼、問要不要信任 FTPS 憑證）後登記成 `FtpConn`，
@@ -326,16 +402,34 @@ pub async fn ssh_connect(
     let t = match resolve_target(&app, target).await? {
         Resolved::Ssh(t) => t,
         Resolved::Ftp(t) => {
+            let who = OpTarget {
+                proto: "ftp",
+                host: t.host.clone(),
+                port: t.port,
+                user: t.user().to_string(),
+                session_id: origin_session(&t.origin),
+            };
             let ui = TauriUi { app: app.clone(), rt: rt.clone(), conn_id: conn_id.clone() };
-            let (t, initial) = ftp::connect_and_login(&t, &conn_id, &ui, &KnownHostsStore::default_path()).await?;
+            let r = ftp::connect_and_login(&t, &conn_id, &ui, &KnownHostsStore::default_path()).await;
+            log_connect(&app, &conn_id, who, &r);
+            let (t, initial) = r?;
             let conn = Arc::new(FtpConn::new(conn_id, t, initial));
             let info = conn.info.clone();
             rt.insert_ftp_conn(conn)?;
             return Ok(info);
         }
     };
+    let who = OpTarget {
+        proto: "ssh",
+        host: t.host.clone(),
+        port: t.port,
+        user: t.username.clone(),
+        session_id: origin_session(&t.origin),
+    };
     let ui = Arc::new(TauriUi { app: app.clone(), rt: rt.clone(), conn_id: conn_id.clone() });
-    let connected = connect_and_auth(&t, &conn_id, ui, KnownHostsStore::default_path()).await?;
+    let r = connect_and_auth(&t, &conn_id, ui, KnownHostsStore::default_path()).await;
+    log_connect(&app, &conn_id, who, &r);
+    let connected = r?;
     let conn = Arc::new(SshConn::new(conn_id.clone(), &t, connected));
     let info = conn.info.clone();
     let on_closed = {
@@ -344,6 +438,10 @@ pub async fn ssh_connect(
         let conn = conn.clone();
         Box::new(move |reason: Option<String>| {
             rt.forget_conn(&conn);
+            if let Some(mut e) = oplog(&app).and_then(|l| l.entry(&conn.id, "disconnect", false)) {
+                e.message = reason.clone();
+                log_op(&app, e);
+            }
             let _ = app.emit(
                 "ssh-conn-closed",
                 ConnClosed { conn_id: conn.id.clone(), reason },
@@ -383,8 +481,15 @@ pub async fn ssh_test(
 
 /// 關閉所有終端 / SFTP 後斷線。連線中（待答提示）呼叫 → 提示被丟掉，`ssh_connect` 以 `SshCancelled` 結束。
 #[tauri::command]
-pub async fn ssh_disconnect(state: State<'_, AppState>, conn_id: String) -> AppResult<()> {
+pub async fn ssh_disconnect(app: AppHandle, state: State<'_, AppState>, conn_id: String) -> AppResult<()> {
+    // SSH 連線的斷線由 `ssh_connect` 掛的 watcher 記；FTP 沒有 watcher，在這裡記。
+    let ftp = state.ssh.ftp_conn(&conn_id).is_some();
     state.ssh.disconnect(&conn_id).await;
+    if ftp {
+        if let Some(e) = oplog(&app).and_then(|l| l.entry(&conn_id, "disconnect", false)) {
+            log_op(&app, e);
+        }
+    }
     Ok(())
 }
 
@@ -615,26 +720,39 @@ pub async fn ssh_sftp_stat(state: State<'_, AppState>, sftp_id: String, path: St
 }
 
 #[tauri::command]
-pub async fn ssh_sftp_mkdir(state: State<'_, AppState>, sftp_id: String, path: String) -> AppResult<()> {
+pub async fn ssh_sftp_mkdir(app: AppHandle, state: State<'_, AppState>, sftp_id: String, path: String) -> AppResult<()> {
     let sftp = state.ssh.sftp(&sftp_id)?;
-    sftp.mkdir(&path).await
+    let r = sftp.mkdir(&path).await;
+    log_file_op(&app, &sftp, "mkdir", path, None, &r);
+    r
 }
 
 #[tauri::command]
-pub async fn ssh_sftp_rename(state: State<'_, AppState>, sftp_id: String, from: String, to: String) -> AppResult<()> {
+pub async fn ssh_sftp_rename(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    sftp_id: String,
+    from: String,
+    to: String,
+) -> AppResult<()> {
     let sftp = state.ssh.sftp(&sftp_id)?;
-    sftp.rename(&from, &to).await
+    let r = sftp.rename(&from, &to).await;
+    log_file_op(&app, &sftp, "rename", from, Some(to), &r);
+    r
 }
 
 #[tauri::command]
 pub async fn ssh_sftp_remove(
+    app: AppHandle,
     state: State<'_, AppState>,
     sftp_id: String,
     path: String,
     recursive: bool,
 ) -> AppResult<()> {
     let sftp = state.ssh.sftp(&sftp_id)?;
-    sftp.remove(&path, recursive).await
+    let r = sftp.remove(&path, recursive).await;
+    log_file_op(&app, &sftp, "delete", path, None, &r);
+    r
 }
 
 /// 讀小檔預覽：最多 `max_bytes`（上限 1 MiB；0 = 上限），超過標 `truncated`。
@@ -653,6 +771,7 @@ pub async fn ssh_sftp_read_text(
 /// 回傳寫完後的屬性，前端拿 mtime / size 當下一次存檔的衝突基準。
 #[tauri::command]
 pub async fn ssh_sftp_write_text(
+    app: AppHandle,
     state: State<'_, AppState>,
     sftp_id: String,
     path: String,
@@ -660,19 +779,24 @@ pub async fn ssh_sftp_write_text(
     create_new: bool,
 ) -> AppResult<SftpEntry> {
     let sftp = state.ssh.sftp(&sftp_id)?;
-    sftp.write_text(&path, &content, create_new).await
+    let r = sftp.write_text(&path, &content, create_new).await;
+    log_file_op(&app, &sftp, if create_new { "create" } else { "save" }, path, None, &r);
+    r
 }
 
 /// chmod：只改權限位元（`0o7777` 以內）。回傳變更後的屬性。
 #[tauri::command]
 pub async fn ssh_sftp_chmod(
+    app: AppHandle,
     state: State<'_, AppState>,
     sftp_id: String,
     path: String,
     mode: u32,
 ) -> AppResult<SftpEntry> {
     let sftp = state.ssh.sftp(&sftp_id)?;
-    sftp.chmod(&path, mode).await
+    let r = sftp.chmod(&path, mode).await;
+    log_file_op(&app, &sftp, "chmod", path, Some(format!("{:04o}", mode & 0o7777)), &r);
+    r
 }
 
 /// 進度追蹤 + 收尾事件，上下傳共用。
@@ -756,9 +880,10 @@ pub async fn ssh_sftp_download(
     let rt = state.ssh.clone();
     let sftp = rt.sftp(&sftp_id)?;
     let (transfer_id, cancel) = rt.register_transfer(sftp.conn_id());
-    let reporter = TransferReporter::new(app, transfer_id.clone());
+    let reporter = TransferReporter::new(app.clone(), transfer_id.clone());
     let tid = transfer_id.clone();
     let mode = single_mode(overwrite, resume);
+    let mut op = oplog(&app).and_then(|l| l.entry(sftp.conn_id(), "download", true));
     tauri::async_runtime::spawn(async move {
         let progress = reporter.progress_fn();
         let r = async {
@@ -773,6 +898,12 @@ pub async fn ssh_sftp_download(
         }
         .await
         .map(|p| Some(p.display().to_string()));
+        if let Some(e) = op.as_mut() {
+            // 記實際落地的本機路徑（`local` 是資料夾時會接上遠端檔名）。
+            e.target = Some(r.as_ref().ok().cloned().flatten().unwrap_or_else(|| local.clone()));
+            e.detail = remote.clone();
+        }
+        log_transfer(&app, op, &r, None);
         reporter.finish(r);
         rt.finish_transfer(&tid);
     });
@@ -793,9 +924,14 @@ pub async fn ssh_sftp_upload(
     let rt = state.ssh.clone();
     let sftp = rt.sftp(&sftp_id)?;
     let (transfer_id, cancel) = rt.register_transfer(sftp.conn_id());
-    let reporter = TransferReporter::new(app, transfer_id.clone());
+    let reporter = TransferReporter::new(app.clone(), transfer_id.clone());
     let tid = transfer_id.clone();
     let mode = single_mode(overwrite, resume);
+    let mut op = oplog(&app).and_then(|l| l.entry(sftp.conn_id(), "upload", true));
+    if let Some(e) = op.as_mut() {
+        e.detail = local.clone();
+        e.target = Some(remote.clone());
+    }
     tauri::async_runtime::spawn(async move {
         let progress = reporter.progress_fn();
         let r = async {
@@ -810,6 +946,7 @@ pub async fn ssh_sftp_upload(
         }
         .await
         .map(Some);
+        log_transfer(&app, op, &r, None);
         reporter.finish(r);
         rt.finish_transfer(&tid);
     });
@@ -831,8 +968,13 @@ pub async fn ssh_sftp_download_many(
     let rt = state.ssh.clone();
     let sftp = rt.sftp(&sftp_id)?;
     let (transfer_id, cancel) = rt.register_transfer(sftp.conn_id());
-    let reporter = TransferReporter::new(app, transfer_id.clone());
+    let reporter = TransferReporter::new(app.clone(), transfer_id.clone());
     let tid = transfer_id.clone();
+    let mut op = oplog(&app).and_then(|l| l.entry(sftp.conn_id(), "download", true));
+    if let Some(e) = op.as_mut() {
+        e.detail = remotes.join("\n");
+        e.target = Some(local_dir.clone());
+    }
     tauri::async_runtime::spawn(async move {
         let r = async {
             let fs = sftp.transfer_fs(&cancel).await?;
@@ -841,6 +983,8 @@ pub async fn ssh_sftp_download_many(
         }
         .await
         .map(|s| s.message());
+        // 完成時的 message 是「略過了哪些」的摘要，一併記下。
+        log_transfer(&app, op, &r, r.as_ref().ok().cloned().flatten());
         reporter.finish(r);
         rt.finish_transfer(&tid);
     });
@@ -860,8 +1004,13 @@ pub async fn ssh_sftp_upload_many(
     let rt = state.ssh.clone();
     let sftp = rt.sftp(&sftp_id)?;
     let (transfer_id, cancel) = rt.register_transfer(sftp.conn_id());
-    let reporter = TransferReporter::new(app, transfer_id.clone());
+    let reporter = TransferReporter::new(app.clone(), transfer_id.clone());
     let tid = transfer_id.clone();
+    let mut op = oplog(&app).and_then(|l| l.entry(sftp.conn_id(), "upload", true));
+    if let Some(e) = op.as_mut() {
+        e.detail = locals.join("\n");
+        e.target = Some(remote_dir.clone());
+    }
     tauri::async_runtime::spawn(async move {
         let locals: Vec<std::path::PathBuf> = locals.into_iter().map(Into::into).collect();
         let r = async {
@@ -870,6 +1019,7 @@ pub async fn ssh_sftp_upload_many(
         }
         .await
         .map(|s| s.message());
+        log_transfer(&app, op, &r, r.as_ref().ok().cloned().flatten());
         reporter.finish(r);
         rt.finish_transfer(&tid);
     });
@@ -888,6 +1038,84 @@ pub async fn ssh_sftp_local_conflicts(local_dir: String, names: Vec<String>) -> 
 #[tauri::command]
 pub async fn ssh_session_log_write(path: String, text: String, truncate: bool) -> AppResult<()> {
     crate::ssh::session_log::write(Path::new(&path), &text, truncate).await
+}
+
+// ---- 操作紀錄 ----
+
+/// 前端送來的一條指令（終端機 Enter、命令列輸入條、AI、App 自己送的 `cd`）。對象由 conn_id 查。
+#[derive(Debug, Deserialize)]
+pub struct OpCommandInput {
+    pub conn_id: String,
+    pub detail: String,
+    /// 按下 Enter 的時間（毫秒 epoch）。前端要等畫面回顯完才讀得到整行，晚個一兩秒才送來。
+    #[serde(default)]
+    pub ts: Option<i64>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// 記一條指令。關掉操作紀錄、或這條連線沒登記過（已經不在了很久）時什麼都不做。
+#[tauri::command]
+pub async fn ssh_oplog_command(app: AppHandle, entry: OpCommandInput) -> AppResult<()> {
+    let detail = entry.detail.trim_end();
+    if detail.trim().is_empty() {
+        return Ok(());
+    }
+    let Some(log) = oplog(&app) else { return Ok(()) };
+    let Some(mut e) = log.entry(&entry.conn_id, "command", false) else { return Ok(()) };
+    // 前端給的時間只接受最近一天內的（防呆：時鐘亂掉時別寫到別天的檔案去）。
+    if let Some(ts) = entry.ts.filter(|t| (e.ts - t).abs() < 86_400_000) {
+        e.ts = ts;
+    }
+    e.detail = detail.to_string();
+    e.cwd = entry.cwd.filter(|s| !s.trim().is_empty());
+    e.source = entry.source.filter(|s| !s.is_empty());
+    log.append(e).await
+}
+
+#[tauri::command]
+pub async fn ssh_oplog_query(app: AppHandle, query: OpQuery) -> AppResult<OpPage> {
+    oplog_required(&app)?.query(&query).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpLogInfo {
+    pub config: OpLogConfig,
+    /// 紀錄所在的資料夾（設定畫面顯示用）。
+    pub dir: String,
+}
+
+fn oplog_info(log: &OpLog) -> OpLogInfo {
+    OpLogInfo { config: log.config(), dir: log.dir().display().to_string() }
+}
+
+#[tauri::command]
+pub fn ssh_oplog_config(app: AppHandle) -> AppResult<OpLogInfo> {
+    Ok(oplog_info(oplog_required(&app)?))
+}
+
+/// 存設定（開關 / 保留天數），存完馬上照新的保留天數刪舊檔。
+#[tauri::command]
+pub async fn ssh_oplog_config_set(app: AppHandle, config: OpLogConfig) -> AppResult<OpLogInfo> {
+    let log = oplog_required(&app)?;
+    log.set_config(config).await?;
+    Ok(oplog_info(log))
+}
+
+#[tauri::command]
+pub async fn ssh_oplog_clear(app: AppHandle) -> AppResult<()> {
+    oplog_required(&app)?.clear().await
+}
+
+/// 在檔案總管打開紀錄所在的資料夾（還沒有就先建）。
+#[tauri::command]
+pub async fn ssh_oplog_reveal(app: AppHandle) -> AppResult<()> {
+    let log = oplog_required(&app)?;
+    std::fs::create_dir_all(log.dir()).map_err(|e| AppError::Storage(tf!("建立資料夾失敗：{e}", e = e)))?;
+    crate::agent::open_path(log.dir());
+    Ok(())
 }
 
 // ---- 匯入主機 ----
