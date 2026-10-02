@@ -2297,6 +2297,11 @@ export const api = {
   // 本機系統剪貼簿（後端讀寫：webview 的 navigator.clipboard.readText 會跳權限詢問、搶走遠端畫面的焦點）。
   rdClipboardRead: () => invoke<string | null>("rd_clipboard_read"),
   rdClipboardWrite: (text: string) => invoke<void>("rd_clipboard_write", { text }),
+  // 錄影：MediaRecorder 每秒一段（raw body），後端依序寫進錄影資料夾的檔案；結束回傳路徑（沒錄到東西 → null）。
+  rdRecordStart: (name: string) => invoke<{ id: string; path: string }>("rd_record_start", { name }),
+  rdRecordWrite: (id: string, bytes: Uint8Array) => invoke<void>("rd_record_write", bytes, { headers: { "x-rec-id": id } }),
+  rdRecordStop: (id: string) => invoke<string | null>("rd_record_stop", { id }),
+  rdRecordReveal: (path: string) => invoke<void>("rd_record_reveal", { path }),
   // 視窗層級全螢幕（WebView2 的 HTML Fullscreen API 只填滿 webview）。
   rdSetFullscreen: (on: boolean) => invoke<void>("rd_set_fullscreen", { on }),
   // 全螢幕時攔 Win / Alt+Tab / Alt+F4 / Ctrl+Esc 轉給這條連線（null = 停止）；攔到的鍵走 onRdGrabKey。

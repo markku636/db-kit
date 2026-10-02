@@ -659,6 +659,32 @@ metadata:
     // 本機系統剪貼簿：情境可設 window.__DBKIT_RD_LOCAL_CLIP__ 模擬「本機剛複製了文字」。
     rd_clipboard_read: () => window.__DBKIT_RD_LOCAL_CLIP__ ?? null,
     rd_clipboard_write: ({ text }) => { window.__DBKIT_RD_CLIP_WRITES__.push(text); return null; },
+    // 錄影：記下開了哪些檔、每段多大；結束回傳路徑（一段都沒寫 → null，跟後端一樣）。
+    rd_record_start: ({ name }) => {
+      const id = `rec-${++sshSeq}`;
+      const path = `C:\\Users\\demo\\Videos\\db-kit\\${name}_20261002-120000.webm`;
+      (window.__DBKIT_RD_RECORDINGS__ ??= {})[id] = { name, path, bytes: 0, chunks: 0, stopped: false };
+      return { id, path };
+    },
+    rd_record_write: (bytes, opts) => {
+      const r = window.__DBKIT_RD_RECORDINGS__?.[opts?.headers?.["x-rec-id"]];
+      if (!r || r.stopped) return Promise.reject({ kind: "rd", code: "ERR_RD", message: "錄影已經結束" });
+      const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
+      // 檔頭前 4 bytes（WebM 的 EBML 開頭 1A 45 DF A3；MediaRecorder 的第一段可能只有 1 byte，跨段接起來）
+      r.head = [...(r.head ?? []), ...Array.from(u8.slice(0, Math.max(0, 4 - (r.head?.length ?? 0))))];
+      r.bytes += u8.length;
+      r.chunks++;
+      // 情境要驗「錄出來的檔播得動」時（window.__DBKIT_RD_KEEP_REC__）把每段留下來
+      if (window.__DBKIT_RD_KEEP_REC__) (r.data ??= []).push(u8.slice());
+      return null;
+    },
+    rd_record_stop: ({ id }) => {
+      const r = window.__DBKIT_RD_RECORDINGS__?.[id];
+      if (!r) return null;
+      r.stopped = true;
+      return r.bytes ? r.path : null;
+    },
+    rd_record_reveal: ({ path }) => { (window.__DBKIT_RD_REVEALS__ ??= []).push(path); return null; },
     rd_set_fullscreen: ({ on }) => { window.__DBKIT_RD_FULLSCREEN__.push(on); return null; },
 
     // ── SSH 終端機 / SFTP ──────────────────────────────────────────────

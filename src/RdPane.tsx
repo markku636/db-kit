@@ -31,6 +31,8 @@ import RustDeskView from "./RustDeskView";
 import RustDeskToolbar from "./RustDeskToolbar";
 import RustDeskChat from "./RustDeskChat";
 import { prefsFromUi, prefsToUi, type RdChatMsg, type RustDeskPrefs, type RustDeskState } from "./rustdeskState";
+import { useAssistant } from "./assistant";
+import { useInfoPanel } from "./infoPanelState";
 
 
 function errMsg(e: unknown): string {
@@ -236,6 +238,11 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   };
 
   useEffect(() => {
+    // RustDesk 分頁：把 AI 助手與詳細資料面板收起來，遠端畫面拿到整個寬度（要用再自己打開，不會一直被收）。
+    if (protocol === "rustdesk") {
+      useAssistant.getState().setOpen(false);
+      useInfoPanel.getState().setOpen(false);
+    }
     void connect();
     return () => {
       const id = connIdRef.current;
@@ -285,7 +292,7 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
       {protocol === "rustdesk" && status === "connected" && rdState && (
         <RustDeskToolbar state={rdState} prefs={rdPrefs} onPrefs={setRdPrefs} clipboard={rdClipboard} onClipboard={setRdClipboard}
           viewOnly={opts.view_only} view={viewRef} chatOpen={chatOpen} unread={unread}
-          onChat={() => { setChatOpen((o) => !o); viewRef.current?.focus(); }} />
+          onChat={() => { setChatOpen((o) => !o); viewRef.current?.focus(); }} hostName={label} />
       )}
       {unencrypted && (
         <span className="inline-flex items-center gap-1 px-1.5 h-5 rounded bg-warning/15 text-warning text-[11px] shrink-0"

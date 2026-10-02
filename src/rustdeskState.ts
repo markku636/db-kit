@@ -92,6 +92,8 @@ export interface RustDeskState {
   chat: RdChatMsg[];
   stats: RdStats | null;
   recording: boolean;
+  /** 這個分頁最近一次錄影存的檔案（「開啟錄影資料夾」用）。 */
+  lastRecording: string | null;
 }
 
 export function initialState(): RustDeskState {
@@ -105,6 +107,7 @@ export function initialState(): RustDeskState {
     chat: [],
     stats: null,
     recording: false,
+    lastRecording: null,
   };
 }
 

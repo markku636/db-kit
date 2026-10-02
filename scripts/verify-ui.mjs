@@ -1069,9 +1069,24 @@ const CASES = {
 
   // RustDesk：真的 RustDesk 錄下來的 VP9 關鍵畫面經 WebCodecs 解出來；未加密徽章；鍵盤 / 滑鼠 / Ctrl+Alt+Del 走對的路。
   async "rd-rustdesk-session"(page) {
+    // 先把 AI 助手與詳細資料面板打開：開 RustDesk 分頁時要自動收起來
+    await page.getByRole("button", { name: "AI 助手", exact: true }).first().click();
+    await page.getByRole("button", { name: "顯示詳細資料面板", exact: true }).click();
+    await sleep(300);
+    const panels = () => page.evaluate(() => ({
+      info: document.querySelector('[data-testid="info-panel"]')?.getAttribute("data-open"),
+      assistant: document.querySelectorAll('[data-testid="assistant-options"]').length,
+      saved: [localStorage.getItem("db-kit:infoPanel"), localStorage.getItem("db-kit:assistantOpen")],
+    }));
+    const before = await panels();
+    check("（前提）AI 助手與詳細資料面板是開著的", before.info === "true" && before.assistant > 0, JSON.stringify(before));
     const tree = page.locator("[data-rd-host-tree]");
     await tree.waitFor({ timeout: 5000 }).catch(() => {});
     await tree.getByText("office-pc", { exact: true }).first().dblclick();
+    await sleep(300);
+    const after = await panels();
+    check("開 RustDesk 分頁 → AI 助手與詳細資料面板收起來（並記住）", after.info === "false" && after.assistant === 0
+      && after.saved[0] === "closed" && after.saved[1] === "0", JSON.stringify(after));
     await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "1024x768", null, { timeout: 10000 }).catch(() => {});
     const size = await page.evaluate(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize ?? null);
     check("WebCodecs 解出 RustDesk 的 VP9 畫面（1024×768）", size === "1024x768", String(size));
@@ -1209,6 +1224,46 @@ const CASES = {
     await push({ type: "chat", text: "再一則" });
     await sleep(300);
     check("關掉後對方再傳 → 再打開", (await chat.count()) === 1 && (await page.locator('[data-rd-chat-msg="peer"]').count()) === 2);
+    await page.getByRole("button", { name: "關閉聊天", exact: true }).click();
+
+    // ---- 錄影 ----
+    await page.evaluate(() => { window.__DBKIT_RD_KEEP_REC__ = true; });
+    const rec = page.locator("[data-rd-record]");
+    check("工具列有錄影按鈕", (await rec.getAttribute("data-rd-record")) === "off");
+    await rec.click();
+    await page.waitForFunction(() => document.querySelector("[data-rd-record]")?.getAttribute("data-rd-record") === "on", null, { timeout: 5000 }).catch(() => {});
+    await sleep(200); // 假後端每個 command 晚 30ms 才收到
+    check("開始錄影 → 按鈕變停止、告訴對方正在錄影", (await rec.getAttribute("data-rd-record")) === "on" && (await lastCmd("record"))?.on === true);
+    // 錄影期間畫面有更新（MediaRecorder 才有東西錄）
+    for (let i = 0; i < 4; i++) { await page.evaluate(() => window.__DBKIT_RD_KEYFRAME__(0)); await sleep(500); }
+    await rec.click();
+    await page.waitForFunction(() => document.querySelector("[data-rd-record]")?.getAttribute("data-rd-record") === "off", null, { timeout: 5000 }).catch(() => {});
+    await sleep(500);
+    const recs = Object.values(await page.evaluate(() => window.__DBKIT_RD_RECORDINGS__ ?? {}));
+    const r0 = recs[0];
+    check("停止錄影 → 告訴對方停止、檔案寫了好幾段 WebM", (await lastCmd("record"))?.on === false && recs.length === 1 && r0.stopped
+      && r0.chunks >= 2 && r0.bytes > 1000 && JSON.stringify(r0.head) === JSON.stringify([0x1a, 0x45, 0xdf, 0xa3]), JSON.stringify(r0));
+    check("錄影檔名用主機名稱", r0?.name === "office-pc", r0?.name);
+    // 把寫出去的每一段接回來，交給 <video> 播：讀得出畫面大小 = 檔案是完整可播的 WebM
+    const played = await page.evaluate(async () => {
+      const r = Object.values(window.__DBKIT_RD_RECORDINGS__)[0];
+      const url = URL.createObjectURL(new Blob(r.data, { type: "video/webm" }));
+      const v = document.createElement("video");
+      v.muted = true;
+      const ok = await new Promise((res) => {
+        v.onloadedmetadata = () => res(true);
+        v.onerror = () => res(false);
+        setTimeout(() => res(false), 5000);
+        v.src = url;
+      });
+      return { ok, w: v.videoWidth, h: v.videoHeight };
+    });
+    check("錄出來的 WebM 播得動、畫面大小跟遠端畫面一樣", played.ok && played.w === 1024 && played.h === 768, JSON.stringify(played));
+    check("提示存到哪裡", (await page.getByText(/錄影已存到/).count()) > 0);
+    await menu("actions").click();
+    await action("reveal_recording").click();
+    await sleep(200);
+    check("動作選單「開啟錄影資料夾」", (await page.evaluate(() => window.__DBKIT_RD_REVEALS__ ?? [])).at(-1) === r0?.path);
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },

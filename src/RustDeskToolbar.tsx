@@ -1,11 +1,12 @@
 // RustDesk 連線的工具列（照官方用戶端的工具列）：切換螢幕、「顯示」選單（檢視方式 / 畫質 / 編碼 / 連線品質 /
-// 剪貼簿 / 結束後鎖定）、「動作」選單（Ctrl+Alt+Del / 鎖定畫面 / 封鎖輸入 / 重新啟動 / 重新整理）、聊天。
+// 剪貼簿 / 結束後鎖定）、「動作」選單（Ctrl+Alt+Del / 鎖定畫面 / 封鎖輸入 / 重新啟動 / 重新整理）、聊天、錄影。
 // 依對方給的權限與對方的系統決定哪些項目出現（跟官方一樣：例如封鎖輸入只有 Windows 對方才有）。
 import { useState, type ReactNode, type RefObject } from "react";
-import { Check, MessageSquare, MonitorCog, Zap } from "lucide-react";
+import { Check, Circle, MessageSquare, MonitorCog, Square, Zap } from "lucide-react";
+import { api } from "./api";
 import { useT } from "./i18n";
 import { Icon, IconButton, MenuPanel } from "./ui/index";
-import { uiConfirm } from "./ui";
+import { toast, uiConfirm } from "./ui";
 import RdMonitorBar from "./RdMonitorBar";
 import type { RdViewHandle } from "./rdView";
 import { canRestart, isWindowsPeer, type RdCodecPref, type RdQuality, type RustDeskPrefs, type RustDeskState } from "./rustdeskState";
@@ -57,9 +58,11 @@ export interface RustDeskToolbarProps {
   chatOpen: boolean;
   unread: number;
   onChat: () => void;
+  /** 主機名稱（錄影檔名用）。 */
+  hostName: string;
 }
 
-export default function RustDeskToolbar({ state, prefs, onPrefs, clipboard, onClipboard, viewOnly, view, chatOpen, unread, onChat }: RustDeskToolbarProps) {
+export default function RustDeskToolbar({ state, prefs, onPrefs, clipboard, onClipboard, viewOnly, view, chatOpen, unread, onChat, hostName }: RustDeskToolbarProps) {
   const t = useT();
   const [menu, setMenu] = useState<{ which: "display" | "actions"; x: number; y: number } | null>(null);
   const open = (which: "display" | "actions") => (e: React.MouseEvent) => {
@@ -82,6 +85,23 @@ export default function RustDeskToolbar({ state, prefs, onPrefs, clipboard, onCl
       { title: t("重新啟動對方電腦"), danger: true, confirmText: t("重新啟動") });
     if (ok) view.current?.action?.("restart");
     else view.current?.focus();
+  };
+
+  const [recBusy, setRecBusy] = useState(false);
+  const toggleRecording = async () => {
+    if (recBusy) return;
+    setRecBusy(true);
+    try {
+      if (state.recording) await view.current?.stopRecording?.();
+      else await view.current?.startRecording?.(hostName);
+    } finally {
+      setRecBusy(false);
+      view.current?.focus();
+    }
+  };
+  const revealRecording = () => {
+    close();
+    if (state.lastRecording) void api.rdRecordReveal(state.lastRecording).catch((e) => toast.error(String(e?.message ?? e)));
   };
 
   const p = state.perms;
@@ -112,6 +132,12 @@ export default function RustDeskToolbar({ state, prefs, onPrefs, clipboard, onCl
             data-rd-chat-unread={unread}>{unread > 9 ? "9+" : unread}</span>
         )}
       </span>
+      {(p.recording || state.recording) && (
+        <IconButton icon={state.recording ? Square : Circle} data-rd-record={state.recording ? "on" : "off"} disabled={recBusy}
+          label={state.recording ? t("停止錄影") : t("開始錄影（存到「影片 / db-kit」）")}
+          active={state.recording} className={state.recording ? "!text-danger animate-pulse" : ""}
+          onClick={() => void toggleRecording()} />
+      )}
 
       {menu?.which === "display" && (
         <MenuPanel x={menu.x} y={menu.y} minW={220} onClose={close}>
@@ -156,6 +182,7 @@ export default function RustDeskToolbar({ state, prefs, onPrefs, clipboard, onCl
             {canRestart(state) && <MenuAction testid="restart" danger onClick={() => void restart()}>{t("重新啟動對方電腦…")}</MenuAction>}
             {(control || canRestart(state)) && <MenuSep />}
             <MenuAction testid="refresh" onClick={() => act("refresh")}>{t("重新整理畫面")}</MenuAction>
+            {state.lastRecording && <MenuAction testid="reveal_recording" onClick={revealRecording}>{t("開啟錄影資料夾")}</MenuAction>}
           </div>
         </MenuPanel>
       )}

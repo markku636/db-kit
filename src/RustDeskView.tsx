@@ -19,6 +19,7 @@ import { useT } from "./i18n";
 import { toast } from "./ui";
 import type { RdViewHandle } from "./rdView";
 import { displayBounds, versionAtLeast, type RdDisplay, type RdMonitors } from "./rdMonitors";
+import { startRecording as beginRecording, type RdRecording } from "./rdRecorder";
 import {
   addMyChat, applyEvent, DEFAULT_PREFS, initialState, probeCodecs, WEBCODECS,
   type RustDeskPrefs, type RustDeskState,
@@ -163,6 +164,46 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     for (const k of [...decodersRef.current.keys()]) closeDecoder(k);
   };
   useEffect(() => closeAll, []);
+
+  // ---- 錄影（官方用戶端的「錄影」：錄這端看到的畫面；開始 / 停止時告訴對方） ----
+  const recRef = useRef<RdRecording | null>(null);
+  const stopRecording = async () => {
+    const r = recRef.current;
+    if (!r) return;
+    recRef.current = null;
+    publish({ ...stRef.current, recording: false });
+    write({ t: "record", on: false });
+    try {
+      const path = await r.stop();
+      if (path) {
+        stRef.current = { ...stRef.current, lastRecording: path };
+        if (liveRef.current) publish(stRef.current);
+        toast.success(t("錄影已存到 {path}", { path }));
+      }
+    } catch (e) {
+      toast.error(t("錄影存檔失敗：{e}", { e: e instanceof Error ? e.message : String((e as { message?: unknown })?.message ?? e) }));
+    }
+  };
+  const startRecordingNow = async (name: string) => {
+    const c = canvasRef.current;
+    if (recRef.current || !c || !liveRef.current) return;
+    try {
+      recRef.current = await beginRecording(c, name, (e) => {
+        toast.error(t("錄影寫入失敗，已停止：{e}", { e: String((e as { message?: unknown })?.message ?? e) }));
+        void stopRecording();
+      });
+    } catch (e) {
+      const msg = e instanceof Error && e.message === "MediaRecorder"
+        ? t("這個環境的瀏覽器元件不支援錄影")
+        : String((e as { message?: unknown })?.message ?? e);
+      toast.error(t("無法開始錄影：{e}", { e: msg }));
+      return;
+    }
+    publish({ ...stRef.current, recording: true });
+    write({ t: "record", on: true });
+  };
+  // 分頁關掉：把錄到的部分存好。
+  useEffect(() => () => { void stopRecording(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 這個 WebView 能解哪些編碼（工具列的「編碼」選單只列解得了的）。
   useEffect(() => {
@@ -414,15 +455,16 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
 
   useImperativeHandle(ref, () => ({
     reset(connId: string) {
+      void stopRecording();
       connIdRef.current = connId;
       liveRef.current = false;
       closeAll();
       keyAskRef.current.clear();
       lastRemoteClipRef.current = null;
       lastSentClipRef.current = null;
-      // 聊天記錄跨重連保留（同一個分頁）；其他都重來。
-      const fresh = initialState();
-      stRef.current = { ...fresh, codecs: stRef.current.codecs, chat: stRef.current.chat };
+      // 聊天記錄、最近一次錄影跨重連保留（同一個分頁）；其他都重來。
+      const prev = stRef.current;
+      stRef.current = { ...initialState(), codecs: prev.codecs, chat: prev.chat, lastRecording: prev.lastRecording };
       publish(null);
     },
     output(buf: ArrayBuffer) {
@@ -466,6 +508,8 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
       void syncLocalClipboard();
     },
     disconnected() {
+      // 斷線：錄到的部分存起來（對方已經不在，不必通知）。
+      void stopRecording();
       liveRef.current = false;
       closeAll();
       publish(null);
@@ -504,6 +548,8 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
       // 結果（成功 / 失敗）由對方的 back_notification 回來再更新狀態。
       send({ t: "toggle", name: "block_input", on });
     },
+    startRecording(name: string) { return startRecordingNow(name); },
+    stopRecording() { return stopRecording(); },
     sendChat(text: string) {
       const s = text.trim();
       if (!s || !liveRef.current) return;

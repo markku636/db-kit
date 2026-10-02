@@ -10,12 +10,11 @@ import { sessionLabel, useSshSessions } from "./sshSessions";
 import { useSshTerminals } from "./sshTerminals";
 import { keystoreId } from "./sshKeys";
 import type { SshSession } from "./sshTypes";
+import { useInfoPanel } from "./infoPanelState";
 
 // 右側「詳細資料」面板：單擊左側樹節點（連線 / 資料庫 / 資料表 / SSH 主機）即時顯示其唯讀摘要。
 // 編輯仍走右鍵「屬性…」/「編輯」對話框，本面板僅檢視，避免誤改。
-// 預設收合（只留窄邊條）：開著查詢或終端機時它多半只是佔寬度；展開 / 收合的選擇會記住。
-// 換了 key（舊的 db-kit:infoPanelOpen 沒存過就等於展開），讓所有人都先回到收合一次。
-const PANEL_KEY = "db-kit:infoPanel";
+// 展開 / 收合的狀態在 infoPanelState（預設收合、記住選擇）。
 // 面板寬度持久化（px）；可拖曳左緣調整，夾在合理範圍內。
 const WIDTH_KEY = "db-kit:infoPanelWidth";
 const WIDTH_MIN = 240;
@@ -28,15 +27,8 @@ export default function InfoPanel() {
   const connections = useStore((s) => s.connections);
   const connectedIds = useStore((s) => s.connectedIds);
   const sshHost = useSshSessions((s) => (s.selectedId ? s.sessions.find((x) => x.id === s.selectedId) ?? null : null));
-  const [open, setOpen] = useState(() => {
-    try { return localStorage.getItem(PANEL_KEY) === "open"; } catch { return false; }
-  });
-  const toggle = () =>
-    setOpen((v) => {
-      const next = !v;
-      try { localStorage.setItem(PANEL_KEY, next ? "open" : "closed"); } catch { /* 忽略 */ }
-      return next;
-    });
+  const open = useInfoPanel((s) => s.open);
+  const toggle = useInfoPanel((s) => s.toggle);
 
   const [width, setWidth] = useState<number>(() => {
     try {

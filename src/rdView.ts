@@ -28,6 +28,9 @@ export interface RdViewHandle {
   setBlockInput?(on: boolean): void;
   /** RustDesk：傳聊天訊息給對方。 */
   sendChat?(text: string): void;
+  /** 錄影（錄這端看到的畫面；`name` 是主機名稱，只用來取檔名）。 */
+  startRecording?(name: string): Promise<void>;
+  stopRecording?(): Promise<void>;
 }
 
 /** Tauri Channel 的 raw 訊息在真 App 是 ArrayBuffer；verify-ui 的假後端可能送 Uint8Array / number[]。 */

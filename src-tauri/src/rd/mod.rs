@@ -7,10 +7,12 @@
 //! - `keygrab`：全螢幕時攔 Win / Alt+Tab / Alt+F4 / Ctrl+Esc 轉給遠端（Windows 低階鍵盤 hook）。
 //! - `rustdesk`：RustDesk 相容連線——啟動獨立的 AGPL 輔助程式 `dbk-rustdesk-bridge`，經 stdin / stdout 轉送。
 //! - `transport`：撥號（直連 TCP，或經已存 SSH 主機的 direct-tcpip）。
+//! - `recording`：錄影的檔案端（前端 MediaRecorder 錄分頁畫面，一段一段交過來寫檔）。
 //! - `vnc`：RFB 認證（None / VNC 密碼 / Apple ARD / VeNCrypt Plain）與對 noVNC 的假握手；認證完就是純位元組轉送。
 //! - `rdp`：IronRDP 連線（TLS → 憑證 TOFU → CredSSP）、工作階段迴圈、畫面差異區塊的打包與輸入轉換。
 
 pub mod keygrab;
+pub mod recording;
 pub mod runtime;
 pub mod rustdesk;
 pub mod sessions;

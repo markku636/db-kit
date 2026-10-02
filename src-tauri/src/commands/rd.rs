@@ -835,6 +835,56 @@ pub fn rd_clipboard_write(text: String) -> AppResult<()> {
         .map_err(|e| AppError::Rd(tf!("無法寫入剪貼簿：{e}", e = e)))
 }
 
+// ---- 錄影：前端 MediaRecorder 錄分頁畫面，每秒交一段；檔案端見 `rd::recording` ----
+
+#[derive(Serialize)]
+pub struct RecordingStarted {
+    id: String,
+    path: String,
+}
+
+fn join_err(e: tokio::task::JoinError) -> AppError {
+    AppError::Rd(e.to_string())
+}
+
+/// 開始錄影：在錄影資料夾開一個新檔（`name` 是主機名稱，只用來取檔名）。
+#[tauri::command]
+pub async fn rd_record_start(name: String) -> AppResult<RecordingStarted> {
+    let (id, path) = tokio::task::spawn_blocking(move || crate::rd::recording::start(&name)).await.map_err(join_err)??;
+    Ok(RecordingStarted { id, path: path.to_string_lossy().into_owned() })
+}
+
+/// 錄影的一段（raw body；header `x-rec-id`）。
+#[tauri::command]
+pub async fn rd_record_write(request: Request<'_>) -> AppResult<()> {
+    let id = request
+        .headers()
+        .get("x-rec-id")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AppError::Rd("missing x-rec-id header".into()))?
+        .to_string();
+    let bytes = match request.body() {
+        InvokeBody::Raw(b) => b.clone(),
+        InvokeBody::Json(_) => return Err(AppError::Rd("expected a raw body".into())),
+    };
+    tokio::task::spawn_blocking(move || crate::rd::recording::write(&id, &bytes)).await.map_err(join_err)?
+}
+
+/// 結束錄影：回傳檔案路徑（什麼都沒錄到 → null，檔案已刪）。
+#[tauri::command]
+pub async fn rd_record_stop(id: String) -> AppResult<Option<String>> {
+    let p = tokio::task::spawn_blocking(move || crate::rd::recording::stop(&id)).await.map_err(join_err)??;
+    Ok(p.map(|p| p.to_string_lossy().into_owned()))
+}
+
+/// 在檔案總管開啟錄影資料夾（只接受錄影資料夾裡的檔案）。
+#[tauri::command]
+pub async fn rd_record_reveal(path: String) -> AppResult<()> {
+    let dir = crate::rd::recording::reveal_target(&crate::rd::recording::dir()?, &path)?;
+    crate::agent::open_path(&dir);
+    Ok(())
+}
+
 #[derive(Clone, Serialize)]
 struct GrabKeyEvent {
     conn_id: String,
