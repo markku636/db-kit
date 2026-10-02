@@ -5,7 +5,7 @@
 // 所以不用它。Ctrl+Alt+Enter 切換（遠端桌面客戶端的慣例）；工具列在全螢幕時縮成頂端中央的浮動條，滑到頂端才出現。
 // Ctrl+Alt+Del、Win、Alt+Tab 這些本機 OS 會先吃掉的鍵走工具列的「送出按鍵」。
 // RustDesk 的工具列另外多了切換螢幕、顯示設定、動作與聊天（RustDeskToolbar）；顯示偏好與「同步剪貼簿」
-// 存回已存主機的設定（下次連同一台照舊），快速連線的只記在這個分頁。
+// 存回已存主機的設定（下次連同一台照舊），快速連線的只記在這個分頁。RustDesk 連線被對方中斷時自動重連（rdRetry.ts）。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import {
@@ -33,6 +33,7 @@ import RustDeskChat from "./RustDeskChat";
 import { prefsFromUi, prefsToUi, type RdChatMsg, type RustDeskPrefs, type RustDeskState } from "./rustdeskState";
 import { useAssistant } from "./assistant";
 import { useInfoPanel } from "./infoPanelState";
+import { isRetryableClose, nextRetryDelay, RETRY_WINDOW_MS } from "./rdRetry";
 
 
 function errMsg(e: unknown): string {
@@ -175,11 +176,49 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   // 切到別的分頁 / 關掉分頁時離開全螢幕（視窗全螢幕是整個 app 共用的狀態）。
   useEffect(() => { if (!active && immersiveRef.current) setFullscreen(false); }, [active]);
 
+  // ---- RustDesk 斷線自動重連（rdRetry.ts；對方登入 / 登出作業系統、重新開機時連線一定會斷一下） ----
+  const retryRef = useRef<{ since: number; delay: number; timer: number } | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  /** 下一次自動重連的時間（倒數用）；正在撥號時 null。 */
+  const [retryAt, setRetryAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (retryAt == null) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [retryAt]);
+  const stopRetry = () => {
+    if (retryRef.current) window.clearTimeout(retryRef.current.timer);
+    retryRef.current = null;
+    setRetrying(false);
+    setRetryAt(null);
+  };
+  /** 排下一次自動重連；超過時限 → false（停止，留給使用者按「重新連線」）。 */
+  const scheduleRetry = (): boolean => {
+    const r = retryRef.current ?? { since: Date.now(), delay: 0, timer: 0 };
+    if (Date.now() - r.since > RETRY_WINDOW_MS) {
+      stopRetry();
+      return false;
+    }
+    r.delay = nextRetryDelay(r.delay);
+    window.clearTimeout(r.timer);
+    r.timer = window.setTimeout(() => {
+      setRetryAt(null);
+      redial();
+    }, r.delay * 1000);
+    retryRef.current = r;
+    setRetrying(true);
+    setRetryAt(Date.now() + r.delay * 1000);
+    return true;
+  };
+
   // ---- 連線 ----
   const onEnded = (connId: string, reason: string | null) => {
     if (connIdRef.current !== connId) return;
     viewRef.current?.disconnected();
     setStatus("disconnected", { error: reason, info: null });
+    if (protocol === "rustdesk" && isRetryableClose(reason)) scheduleRetry();
   };
 
   const connect = async () => {
@@ -205,6 +244,7 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
       if (connIdRef.current !== connId) { void api.rdDisconnect(connId).catch(() => undefined); return; }
       viewRef.current?.connected(got);
       setStatus("connected", { error: null, info: got });
+      stopRetry();
       if (wantFullscreen.current) {
         wantFullscreen.current = false;
         if (active) setFullscreen(true);
@@ -212,8 +252,14 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
     } catch (e) {
       if (connIdRef.current !== connId) return;
       const code = errCode(e);
-      if (code === "ERR_RD_CANCELLED" || code === "ERR_SSH_CANCELLED") setStatus("disconnected", { error: null });
-      else setStatus("error", { error: errMsg(e) });
+      if (code === "ERR_RD_CANCELLED" || code === "ERR_SSH_CANCELLED") {
+        stopRetry();
+        setStatus("disconnected", { error: null });
+      } else {
+        setStatus("error", { error: errMsg(e) });
+        // 自動重連中（對方的服務還沒起來 / 還沒回到線上）：再排下一次；密碼錯就停。
+        if (retryRef.current && (code === "ERR_RD_AUTH" || !scheduleRetry())) stopRetry();
+      }
     } finally {
       unCert(); unAuth(); unHost(); unSsh();
       setCert(null); setAuth(null); setSshKey(null); setSshAuth(null);
@@ -221,6 +267,7 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
   };
 
   const disconnect = () => {
+    stopRetry();
     const id = connIdRef.current;
     connIdRef.current = "";
     dropListeners();
@@ -229,12 +276,18 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
     if (id) void api.rdDisconnect(id).catch(() => undefined);
   };
 
-  const reconnect = () => {
-    if (statusRef.current === "connecting") return;
+  /** 丟掉舊連線再撥一次（自動重連也走這裡）。 */
+  const redial = () => {
     const old = connIdRef.current;
     dropListeners();
     if (old) void api.rdDisconnect(old).catch(() => undefined);
     void connect();
+  };
+
+  const reconnect = () => {
+    if (statusRef.current === "connecting") return;
+    stopRetry();
+    redial();
   };
 
   useEffect(() => {
@@ -245,6 +298,8 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
     }
     void connect();
     return () => {
+      if (retryRef.current) window.clearTimeout(retryRef.current.timer);
+      retryRef.current = null;
       const id = connIdRef.current;
       connIdRef.current = "";
       dropListeners();
@@ -372,17 +427,27 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
                 {status === "connecting" ? <Icon icon={Loader2} size={16} className="animate-spin" /> : <Icon icon={meta.icon} size={16} style={{ color: meta.color }} />}
                 <span>
                   {status === "connecting"
-                    ? t("正在連線到 {host}…", { host: endpoint || label })
-                    : status === "error" ? t("連線失敗") : t("已中斷連線")}
+                    ? (retrying ? t("正在重新連線到 {host}…", { host: endpoint || label }) : t("正在連線到 {host}…", { host: endpoint || label }))
+                    : retryAt != null
+                      ? <span data-rd-retry="">{t("連線中斷，{n} 秒後自動重新連線…", { n: Math.max(0, Math.ceil((retryAt - now) / 1000)) })}</span>
+                      : status === "error" ? t("連線失敗") : t("已中斷連線")}
                 </span>
               </div>
               {error && <div className="text-xs text-danger break-words whitespace-pre-wrap" data-rd-error="">{error}</div>}
+              {retrying && (
+                <div className="text-xs text-fg/50">{t("對方登入、登出作業系統或重新開機時，RustDesk 連線會中斷一下，會自動連回來。")}</div>
+              )}
               {status === "error" && protocol === "vnc" && (
                 <div className="text-xs text-fg/50">{t("連 Mac 時若畫面一直是黑的，請到 Mac 的「系統設定 → 一般 → 共享 → 螢幕共享」確認已開啟，並允許這個帳號。")}</div>
               )}
               <div className="flex justify-center gap-2">
                 {status === "connecting" ? (
                   <Button variant="secondary" onClick={disconnect}>{t("取消")}</Button>
+                ) : retryAt != null ? (
+                  <>
+                    <Button variant="primary" icon={PlugZap} onClick={reconnect}>{t("立即重新連線")}</Button>
+                    <Button variant="secondary" onClick={stopRetry}>{t("取消")}</Button>
+                  </>
                 ) : (
                   <Button variant="primary" icon={PlugZap} onClick={reconnect}>{t("重新連線")}</Button>
                 )}

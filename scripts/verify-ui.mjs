@@ -1125,6 +1125,32 @@ const CASES = {
       JSON.stringify(cmds2.slice(Math.max(0, shiftDown))));
     check("Ctrl+Alt+Del 經後端送（不是拆成三個鍵）", await page.evaluate(() => window.__DBKIT_RD_KEYS__.includes("ctrl_alt_del")));
     check("只有一個螢幕：工具列沒有切換螢幕", (await page.locator("[data-rd-monitors]").count()) === 0);
+
+    // 對方中斷（對方登入 / 登出作業系統、重新開機時 RustDesk 服務會重啟）→ 倒數自動重連；重撥失敗就加倍再等，對方回來就連上。
+    const connects = () => page.evaluate(() => window.__DBKIT_RD_CONNECTS__.length);
+    const n0 = await connects();
+    await page.evaluate(() => {
+      window.__DBKIT_RD_FAIL__ = "對方不在線上：對方電腦沒開 RustDesk，或它連不到 ID 伺服器";
+      window.__DBKIT_EMIT__("rd-conn-closed", { conn_id: window.__DBKIT_RD_LAST_CONN__, reason: "remote closed the connection" });
+    });
+    const retry = page.locator("[data-rd-retry]");
+    await retry.waitFor({ timeout: 3000 }).catch(() => {});
+    check("對方中斷 → 顯示倒數自動重新連線", (await retry.count()) > 0, await page.locator("[data-rd-overlay]").innerText().catch(() => "（沒有覆蓋層）"));
+    await page.waitForFunction((n) => window.__DBKIT_RD_CONNECTS__.length > n, n0, { timeout: 4000 }).catch(() => {});
+    check("約 1 秒後自動重撥", (await connects()) === n0 + 1, String((await connects()) - n0));
+    await retry.waitFor({ timeout: 3000 }).catch(() => {});
+    check("重撥失敗（對方還沒回來）→ 繼續倒數、顯示原因", (await retry.count()) > 0
+      && (await page.locator("[data-rd-error]").innerText().catch(() => "")).includes("對方不在線上"));
+    await page.evaluate(() => { window.__DBKIT_RD_FAIL__ = null; });
+    await page.waitForFunction((n) => window.__DBKIT_RD_CONNECTS__.length > n + 1, n0, { timeout: 5000 }).catch(() => {});
+    await page.locator("[data-rd-overlay]").waitFor({ state: "detached", timeout: 3000 }).catch(() => {});
+    check("對方回來 → 自動連上（第 2 次重撥）", (await connects()) === n0 + 2 && (await page.locator("[data-rd-overlay]").count()) === 0,
+      `${(await connects()) - n0} 次`);
+    // 對方手動中斷：不自動重連（官方 check_if_retry）
+    await page.evaluate(() => window.__DBKIT_EMIT__("rd-conn-closed", { conn_id: window.__DBKIT_RD_LAST_CONN__, reason: "Closed manually by the peer" }));
+    await sleep(1600);
+    check("對方手動中斷 → 不自動重連，只留「重新連線」", (await retry.count()) === 0 && (await connects()) === n0 + 2
+      && (await page.locator('[data-rd-overlay="disconnected"]').getByRole("button", { name: "重新連線", exact: true }).count()) === 1);
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
       await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
