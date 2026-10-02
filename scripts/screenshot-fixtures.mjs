@@ -788,3 +788,70 @@ export const K8S_CONTEXTS = {
   ],
 };
 export const K8S_LOG_TEXT = "1:C 29 Sep 2026 08:01:00.000 # Redis version=7.4.1\n1:M 29 Sep 2026 08:01:00.010 * Ready to accept connections tcp\n";
+
+// ---- 預存程序整合測試（sp-test）----
+export const SP_TEST_FILES = [
+  {
+    name: "usp_place_order.json",
+    path: "C:/sptests/usp_place_order.json",
+    errors: [],
+    text: JSON.stringify({
+      version: 1,
+      target: { kind: "mysql", database: "shop" },
+      routine: "usp_place_order",
+      fixtures: { base: { steps: [
+        { insert: "customers", rows: [{ customer_id: ">>cid", name: "Ann", credit: "100.00", is_active: true }] },
+        { insert: "products", rows: [{ product_id: ">>pid", name: "Pen", price: "12.50", stock: 10 }] },
+      ] } },
+      scenarios: [
+        { id: "place_then_cancel", use: ["base"], steps: [
+          { call: "usp_place_order", params: { CustomerID: "<<cid", ProductID: "<<pid", Qty: 2 }, capture: { order_id: ">>oid" },
+            expect: { result_sets: [{ rows: [{ qty: 2, total: "25.00" }] }], effects: { orders: { inserted: 1 }, products: { updated: 1 } } } },
+          { query: "SELECT stock FROM products WHERE product_id = @pid", expect: [{ stock: 8 }] },
+          { call: "usp_cancel_order", params: { OrderID: "<<oid" } },
+          { call: "usp_cancel_order", params: { OrderID: "<<oid" }, expect_error: { class: "user_raised" } },
+        ] },
+        { id: "qty_cases", use: ["base"],
+          cases: [{ name: "two", vars: { qty: 2, total: "25.00" } }, { name: "zero", vars: { qty: 0 }, expect_error: { class: "user_raised" } }],
+          steps: [{ call: "usp_place_order", params: { CustomerID: "<<cid", ProductID: "<<pid", Qty: "<<qty" },
+            expect: { result_sets: [{ rows: [{ qty: "<<qty", total: "<<total" }] }] } }] },
+      ],
+    }, null, 2),
+  },
+];
+export const SP_TEST_INSPECT = {
+  routine: "usp_place_order", kind: "mysql", database: "shop",
+  signature: { schema: "shop", name: "usp_place_order", kind: "procedure", returns_set: false, return_type: null,
+    params: [
+      { name: "p_customer_id", data_type: "int", mode: "in", ordinal: 1 },
+      { name: "p_product_id", data_type: "int", mode: "in", ordinal: 2 },
+      { name: "p_qty", data_type: "int", mode: "in", ordinal: 3 },
+    ] },
+  write_targets: ["orders", "products"],
+  definition: "CREATE PROCEDURE usp_place_order(...) BEGIN ... END",
+  tables_ddl: {},
+  breaks_wrapping: false,
+};
+export const SP_TEST_REPORTS = [
+  {
+    file: "usp_place_order.json", mode: "assert", targets: ["mysql"], started_at: "2026-10-02T08:00:00Z",
+    scenarios: [
+      { id: "place_then_cancel", verdict: "pass", mode_used: "wrapped", elapsed_ms: 41, steps: [
+        { label: "#1 insert", kind: "insert", outcomes: {}, differences: [] },
+        { label: "#2 insert", kind: "insert", outcomes: {}, differences: [] },
+        { label: "#3 call", kind: "call", outcomes: {}, differences: [] },
+        { label: "#4 query", kind: "query", outcomes: {}, differences: [] },
+        { label: "#5 call", kind: "call", outcomes: {}, differences: [] },
+        { label: "#6 call", kind: "call", outcomes: {}, differences: [] },
+      ] },
+      { id: "qty_cases", case: "two", verdict: "pass", mode_used: "wrapped", elapsed_ms: 18, steps: [
+        { label: "#3 call", kind: "call", outcomes: {}, differences: [] },
+      ] },
+      { id: "qty_cases", case: "zero", verdict: "fail", mode_used: "wrapped", elapsed_ms: 17, steps: [
+        { label: "#3 call", kind: "call", outcomes: {}, differences: [
+          { kind: "error_class", where: "error", expected: "user_raised", actual: "other", note: "Division by zero" },
+        ] },
+      ] },
+    ],
+  },
+];

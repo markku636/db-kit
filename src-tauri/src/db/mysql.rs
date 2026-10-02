@@ -1535,6 +1535,13 @@ impl DatabaseDriver for MysqlDriver {
 }
 
 impl MysqlDriver {
+    /// 開一條**不經連線池**的專屬連線（acquire 後立刻 detach）：預存程序整合測試的一個情境要在同一條
+    /// 連線上從 START TRANSACTION 跑到 ROLLBACK（使用者變數 `@o` / SAVEPOINT 都是連線狀態），結束即丟棄。
+    pub(crate) async fn dedicated_connection(&self) -> AppResult<sqlx::MySqlConnection> {
+        let pooled = self.pool.acquire().await.map_err(|e| AppError::Connect(e.to_string()))?;
+        Ok(pooled.detach())
+    }
+
     /// 把工作階段 ID 登記為「執行中」，回傳的 guard drop 時自動撤銷登記。
     fn track(&self, id: u64) -> RunningGuard<'_> {
         self.running.lock().insert(id);
@@ -1788,7 +1795,7 @@ fn rows_to_result(rows: &[MySqlRow]) -> QueryResult {
 }
 
 /// 嘗試以常見型別讀取單一儲存格並轉成字串；NULL 回傳 None。
-fn cell_to_string(row: &MySqlRow, idx: usize) -> Option<String> {
+pub(crate) fn cell_to_string(row: &MySqlRow, idx: usize) -> Option<String> {
     // NULL 偵測
     if let Ok(raw) = row.try_get_raw(idx) {
         if raw.is_null() {

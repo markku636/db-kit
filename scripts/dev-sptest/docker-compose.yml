@@ -1,0 +1,53 @@
+# db-kit 預存程序整合測試（sptest）開發 / 整合測試環境：三個引擎各一台。
+#
+#   docker compose -f scripts/dev-sptest/docker-compose.yml up -d
+#
+# 主機埠刻意避開既有整合測試用的埠（compare 測試 11433/11434、it_tests 的 13306/15432）：
+#   SQL Server 2022  127.0.0.1:11435   sa / Test1234!
+#   PostgreSQL 16    127.0.0.1:15433   postgres / test1234
+#   MySQL 8.4        127.0.0.1:13307   root / test1234
+#
+# 樣本 schema 與 routine 在同目錄的 mssql/ pg/ mysql/ 子目錄；整合測試
+# （src-tauri/src/sptest/it_sptest.rs）以 include_str! 載入並逐批執行，不需要手動灌：
+#   cargo test --lib sptest::it_sptest -- --ignored --test-threads=1
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: dbkit-sptest-mssql
+    ports:
+      - "11435:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Test1234!"
+      MSSQL_PID: Developer
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Test1234!' -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+  pg:
+    image: postgres:16
+    container_name: dbkit-sptest-pg
+    ports:
+      - "15433:5432"
+    environment:
+      POSTGRES_PASSWORD: test1234
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  mysql:
+    image: mysql:8.4
+    container_name: dbkit-sptest-mysql
+    ports:
+      - "13307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: test1234
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ptest1234 --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 18

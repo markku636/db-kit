@@ -1,3 +1,19 @@
+## v0.46.0
+
+**預存程序可以做整合測試了：對真實資料庫跑多步驟情境、跑完自動 rollback、呼叫前後自動抓受影響的表；同一份情境在 SQL Server / MySQL 與 PostgreSQL 各跑一次互比，就是遷移驗證。**
+
+**預存程序整合測試**
+
+- **情境測試檔**：每支程序一個 JSON，一個情境就是一條業務流程——`insert` 灌 seed（寫 `">>sym"` 的欄由引擎回填自動值）→ `call` 呼叫程序 → `query` 斷言 → 下一步，全部在一個交易裡跑完 rollback，資料庫跑前跑後一樣乾淨。`fixtures` 共用前置步驟、`cases` 讓同一組步驟吃一張參數表、`tags` / `skip` 篩選與略過；符號 `>>name` 擷取、`<<name` 引用、SQL 內 `@name` 代入，自動產生的鍵不用寫死。
+- **副作用自動擷取**：呼叫前後自動快照程序會寫的表（從程序本文、被呼叫的程序與觸發器盤點；SQL Server 另走 `sys.dm_sql_referenced_entities`），算出新增 / 修改 / 刪除的列。`effects` 可以只比數量、也可以逐列比；`effects_strict` 讓沒列出的表不准動。
+- **斷言**：結果集只比列出的欄、預設不比列序、欄名後加 `?` 只比值不當 key，多出 / 缺少的列分開報；OUT 參數、return code；`expect_error` 比錯誤類別（約束違反 / NOT NULL / 轉型 / 除以零 / 使用者丟出 / 找不到 / 逾時），三個引擎的錯誤號與 SQLSTATE 已對應；`{"not": v}` 反向；`{"type": …}` 標記日期 / 小數 / UUID / bytes / JSON。值比對知道 `1.0` = `1`、bit = boolean、各家日期寫法，浮點與日期時間有容差，identity 與時間預設值欄自動遮罩。
+- **四種模式共用同一份檔案**：`assert` 比期望；`record` 把每一步的實際輸出錄成基線、`golden` 拿來比——改了程序就紅燈；`diff` 讓同一組情境在兩個連線各跑一次逐步互比（結果集、OUT、副作用、錯誤類別），兩邊都出錯時比的是類別而不是訊息，而且仍會比副作用。基線與差分比對會把擷取過的鍵換成符號名再比，各引擎、各次執行的 identity 值本來就不同也不會誤報。
+- **AI 產生情境**：程序右鍵「整合測試…」，按「AI 產生情境」就依簽名、寫入目標、本文與表結構產出一份測試檔（主路徑、邊界、NULL、每個錯誤分支、多步驟狀態流、不變量），放進編輯器讓你改過再存。資料庫右鍵「預存程序整合測試…」管理整個資料夾。
+- **命令列 `dbk sp-test`**：`validate` / `inspect` / `run`（`--mode assert|golden|record`）/ `diff`（`--dst` 第二個連線），`--junit` 出 JUnit XML、`--exit-code` 讓未通過的情境回非零，可直接進 CI；`--only` / `--tag` 篩選、`--format json` 出完整報表。
+- 支援 SQL Server、PostgreSQL、MySQL / MariaDB。程序內含 COMMIT / ROLLBACK（MySQL 還有 DDL 的隱式 commit）的目前不能包在交易裡跑，`inspect` 會標出來；PostgreSQL 的多結果集（refcursor）之後支援。
+- 順手修了跨引擎值比對的一個缺口：PostgreSQL / MySQL 的 timestamptz 渲染成「… UTC」時，資料比對會退回字串比對；現在認得這個格式。
+
+> 驗證：測試引擎單元測試 36 項（測試檔解析與驗證、三方言字面值 / 符號代入 / insert / call 語句、斷言：數值等價、布林、日期容差、遮罩、多列 / 缺列、反向、副作用、錯誤類別、跨引擎互比；盤點本文掃描、表名對應；報表 JUnit 與基線路徑）。對 Docker 裡的 SQL Server 2022、PostgreSQL 16、MySQL 8.4 整合測試 7 項：語句出錯後會話仍可用且收場乾淨（三引擎）、同一份情境在三引擎各自通過（含 fixtures / cases 展開、OUT 參數、預期錯誤，跑完三表計數不變）、期望寫錯判失敗、未預期錯誤判錯誤並停在該步、錄基線後重跑通過且竄改基線被抓到、SQL Server↔PostgreSQL 與 MySQL↔PostgreSQL 差分通過（identity / 時間欄不同仍通過，兩邊都出錯判「兩邊皆錯」）、漏掉庫存扣減的 PostgreSQL 版本被判不一致並指到 products、盤點找到寫入目標與簽名、JUnit 每個展開後的情境一個 testcase。介面測試新增 sp-test-dialog（資料庫右鍵開啟、列出測試檔、編輯器載入、執行後紅綠與差異表）7 項通過，既有 review-run-dialog 16 項仍通過；前端全套 2002 項、tsc、eslint 通過。沒測到：打包後的 App 實機、AI 產生情境對真實模型的端到端、使用者自己的資料庫。
 ## v0.45.0
 
 **RustDesk 可以切換對方的螢幕了：對方有好幾個螢幕時，工具列每個螢幕一顆按鈕，也可以選「所有螢幕」照實際排列一起看。**

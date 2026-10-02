@@ -2908,6 +2908,34 @@ const CASES = {
   // 且整段沒有前端例外——shim 少一個 command 就是 pageerror，這裡會抓到。
   // 審查並執行：查詢分頁工具列開對話框 → 分析結果（回滾等級 / 注意事項）→ AI 審查串流帶出結論徽章 →
   // 唯讀連線只能「只產生備份」→ 產生後切到結果分頁、列出輸出檔案。
+  // ---- 預存程序整合測試 ----
+  async "sp-test-dialog"(page) {
+    // 對話框讀 localStorage 的偏好決定資料夾；shim 的 sp_test_load_dir 回 fixture，先把資料夾塞好。
+    await page.evaluate(() => localStorage.setItem("dbkit.sptest.prefs", JSON.stringify({ dir: "C:/sptests", mode: "assert", goldenDir: "" })));
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("資料庫右鍵：預存程序整合測試…", items.some((i) => i.includes("預存程序整合測試")), items.join(" | "));
+    await page.getByText("預存程序整合測試…", { exact: true }).click();
+    await sleep(900);
+    check("對話框列出資料夾裡的測試檔", (await page.locator('[data-testid="sp-test-file"]').count()) === 1);
+    check("編輯器載入測試檔內容", ((await page.locator('[data-testid="sp-test-editor"]').inputValue()).includes("place_then_cancel")));
+    check("沒有從程序開啟時不能 AI 產生情境", !(await page.locator('[data-testid="sp-test-generate"]').isEnabled()));
+    await page.locator('[data-testid="sp-test-run"]').click();
+    await page.waitForFunction(() => document.body.innerText.includes("qty_cases / zero"), null, { timeout: 8000 }).catch(() => {});
+    const body = await appText(page);
+    check("結果列出每個展開後的情境", body.includes("place_then_cancel") && body.includes("qty_cases / two") && body.includes("qty_cases / zero"), body.replace(/\s+/g, " ").slice(0, 300));
+    check("失敗的情境標為失敗", body.includes("失敗"));
+    await page.getByText("qty_cases / zero", { exact: false }).first().click();
+    await sleep(300);
+    const after = await appText(page);
+    check("展開失敗情境顯示差異（類型 / 期望 / 實際）", after.includes("error_class") && after.includes("user_raised") && after.includes("Division by zero"), after.replace(/\s+/g, " ").slice(0, 300));
+    await page.keyboard.press("Escape");
+    await sleep(300);
+  },
+
   async "review-run-dialog"(page) {
     await page.getByText("prod-mysql", { exact: true }).first().dblclick();
     await sleep(1200);

@@ -21,6 +21,13 @@ pub struct MssqlDriver {
 }
 
 impl MssqlDriver {
+    /// 開一條**不經連線池**的專屬連線（bb8 `dedicated_connection`）。交易、變數、暫存表都是連線狀態：
+    /// 預存程序整合測試的一個情境要在同一條連線上從 BEGIN TRAN 跑到 ROLLBACK，結束即丟棄，
+    /// 不能也不該回池（池裡的連線每次 `get()` 都可能是另一條）。
+    pub(crate) async fn dedicated_client(&self) -> AppResult<bb8_tiberius::rt::Client> {
+        self.pool.dedicated_connection().await.map_err(|e| AppError::Connect(e.to_string()))
+    }
+
     /// 取回結果集所有列（第一個 result set）。
     async fn query_rows(&self, sql: &str) -> AppResult<Vec<tiberius::Row>> {
         let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
@@ -882,7 +889,7 @@ fn pk_where(cols: &[String], vals: &[Option<String>]) -> AppResult<String> {
 }
 
 /// tiberius 型別 → 顯示字串。依 ColumnType 精準分派 try_get。NULL / 取值失敗回 None。
-fn cell_to_string(row: &tiberius::Row, idx: usize) -> Option<String> {
+pub(crate) fn cell_to_string(row: &tiberius::Row, idx: usize) -> Option<String> {
     let col = row.columns().get(idx)?;
     match col.column_type() {
         ColumnType::Bit | ColumnType::Bitn => {

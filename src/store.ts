@@ -124,6 +124,8 @@ interface AppStore {
   // 審查並執行對話框（查詢分頁工具列 / AI 助手的 SQL 區塊觸發；null = 關閉）。
   // nonce 讓「以審查並執行回滾」在對話框已開啟時換一份腳本也會重新掛載。
   reviewRun: (ReviewRunRequest & { nonce: number }) | null;
+  /** 預存程序整合測試對話框的開啟請求（nonce 讓同一支程序再開一次也會重新掛載）。 */
+  spTest: (SpTestRequest & { nonce: number }) | null;
 
   setConnections: (cs: ConnectionConfig[]) => void;
   setConnGroups: (gs: ConnGroup[]) => void;
@@ -220,6 +222,8 @@ interface AppStore {
   closeSavedManager: () => void;
   openReviewRun: (req: ReviewRunRequest) => void;
   closeReviewRun: () => void;
+  openSpTest: (req: SpTestRequest) => void;
+  closeSpTest: () => void;
 }
 
 /** 開啟審查並執行的請求。sql 為已代入具名參數的腳本；database 空字串 = 由後端判斷目前資料庫。 */
@@ -230,6 +234,13 @@ export interface ReviewRunRequest {
   origin: "query" | "chat";
   /** 產生備份或執行結束後呼叫（聊天室用來把結果掛回訊息）。 */
   onDone?: (outcome: ReviewRunOutcome) => void;
+}
+
+/** 預存程序整合測試：從程序右鍵（帶 routine）或資料庫右鍵（不帶）開啟。 */
+export interface SpTestRequest {
+  connId: string;
+  database: string;
+  routine?: string;
 }
 
 // 上次關掉 app 時開著的查詢分頁（含停在哪一個）。各分頁的編輯器內容自己從 localStorage 讀
@@ -263,6 +274,7 @@ export const useStore = create<AppStore>((set) => ({
   snippets: loadSnippets(),
   savedMgr: null,
   reviewRun: null,
+  spTest: null,
 
   setConnReadonly: (id, ro) =>
     set((s) => {
@@ -598,6 +610,8 @@ export const useStore = create<AppStore>((set) => ({
   closeSavedManager: () => set({ savedMgr: null }),
   openReviewRun: (req) => set((s) => ({ reviewRun: { ...req, nonce: (s.reviewRun?.nonce ?? 0) + 1 } })),
   closeReviewRun: () => set({ reviewRun: null }),
+  openSpTest: (req) => set((s) => ({ spTest: { ...req, nonce: (s.spTest?.nonce ?? 0) + 1 } })),
+  closeSpTest: () => set({ spTest: null }),
 }));
 
 // 分頁清單 / 作用中分頁一有變動就寫回工作階段，下次啟動據此還原。

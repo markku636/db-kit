@@ -161,7 +161,7 @@ fn norm_f32(v: &str) -> Option<String> {
 }
 
 /// 各引擎常見的日期時間字串 → `YYYY-MM-DD HH:MM:SS[.fff]`（UTC；有時區資訊時先轉 UTC）。
-fn norm_datetime(v: &str) -> Option<String> {
+pub(crate) fn norm_datetime(v: &str) -> Option<String> {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
     let s = v.trim();
     let fmt_naive = |d: NaiveDateTime| {
@@ -180,7 +180,8 @@ fn norm_datetime(v: &str) -> Option<String> {
         }
     }
     // 不帶時區。
-    for f in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M"] {
+    // PG / MySQL driver 把 timestamptz 渲染成「… UTC」（已是 UTC，直接當 naive 讀）。
+    for f in ["%Y-%m-%d %H:%M:%S%.f UTC", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M"] {
         if let Ok(d) = NaiveDateTime::parse_from_str(s, f) {
             return Some(fmt_naive(d));
         }

@@ -1471,6 +1471,30 @@ impl ConnectionManager {
         }
     }
 
+    /// 取得 SQL Server driver 本體（預存程序整合測試要開專屬連線跑交易，不走 trait 的池化查詢）。
+    pub fn mssql_driver(&self, id: &str) -> AppResult<Arc<MssqlDriver>> {
+        match &self.get(id)?.active {
+            Active::Mssql(d) => Ok(d.clone()),
+            _ => Err(AppError::Unsupported(t!("此連線不是 SQL Server").into())),
+        }
+    }
+
+    /// 取得 PostgreSQL driver 本體（同上，專屬連線用）。
+    pub fn postgres_driver(&self, id: &str) -> AppResult<Arc<PostgresDriver>> {
+        match &self.get(id)?.active {
+            Active::Postgres(d) => Ok(d.clone()),
+            _ => Err(AppError::Unsupported(t!("此連線不是 PostgreSQL").into())),
+        }
+    }
+
+    /// 取得 MySQL / MariaDB driver 本體（同上，專屬連線用）。
+    pub fn mysql_driver(&self, id: &str) -> AppResult<Arc<MysqlDriver>> {
+        match &self.get(id)?.active {
+            Active::Mysql(d) => Ok(d.clone()),
+            _ => Err(AppError::Unsupported(t!("此連線不是 MySQL").into())),
+        }
+    }
+
     /// 取得 Kafka driver 本體，供 `kafka_*` 專屬命令呼叫其 inherent 方法
     /// （topics / consume / produce / groups / admin / schema），不必擴充 DatabaseDriver trait。
     /// 非 Kafka 連線回 Unsupported。

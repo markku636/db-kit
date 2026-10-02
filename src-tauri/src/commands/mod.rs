@@ -11,6 +11,8 @@ pub mod update;
 // Docker（容器 / 映像 / volume / network、log 與 exec 串流）的 command。
 #[cfg(feature = "docker")]
 pub mod docker;
+// 預存程序整合測試（核心在 crate::sptest）。
+pub mod sptest;
 // Kubernetes（資源 / YAML / 事件 / 指標、log 與 exec 串流、port-forward）的 command。
 #[cfg(feature = "docker")]
 pub mod k8s;

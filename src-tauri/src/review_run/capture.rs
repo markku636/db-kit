@@ -309,6 +309,12 @@ pub fn predicate_count_sql(source: &str, predicate: Option<&str>) -> String {
     }
 }
 
+
+/// 整表擷取的 SELECT 文字（不含 ORDER BY）。預存程序整合測試在專屬連線上自己執行它——
+/// 要看到的是**尚未提交**的交易內狀態，走池化查詢拿到的是另一條連線看不見的。
+pub fn whole_table_select_sql(kind: DbKind, meta: &TableMeta) -> String {
+    format!("SELECT {} FROM {}", select_list(kind, meta, None), meta.qualified(kind))
+}
 /// 整表擷取。
 pub async fn capture_whole(mgr: &ConnectionManager, id: &str, ctx: &ExecContext, meta: &TableMeta, cap: usize) -> AppResult<TableSnapshot> {
     let sql = format!("SELECT {} FROM {}", select_list(ctx.kind, meta, None), meta.qualified(ctx.kind));

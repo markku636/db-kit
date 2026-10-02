@@ -71,6 +71,8 @@ pub async fn dispatch(cli: Cli) -> AppResult<()> {
         // 檔案 / 資料夾比對與同步：不連資料庫（遠端那一邊自己開 SSH / FTP）。
         Command::Diff(a) => super::filecmp::diff(fmt, a).await,
         Command::Sync(a) => super::filecmp::sync(fmt, conn.yes, conn.force, a).await,
+        // 預存程序整合測試：可能同時開兩條連線（diff），自己管連線生命週期。
+        Command::SpTest(c) => super::sptest::run(&conn, fmt, c).await,
         // ---- 其餘需建立連線 ----
         other => run_connected(&conn, fmt, other).await,
     }
@@ -333,6 +335,7 @@ async fn exec(
         Command::Mcp { .. } => unreachable!("mcp 在連線前已處理"),
         Command::Run(_) => unreachable!("run 在連線前已處理"),
         Command::Ai(_) => unreachable!("ai 在連線前已處理"),
+        Command::SpTest(_) => unreachable!("sp-test 在連線前已處理"),
         Command::Diff(_) | Command::Sync(_) => unreachable!("diff / sync 在連線前已處理"),
     }
     Ok(())

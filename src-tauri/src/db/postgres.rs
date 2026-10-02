@@ -1307,6 +1307,13 @@ impl DatabaseDriver for PostgresDriver {
 }
 
 impl PostgresDriver {
+    /// 開一條**不經連線池**的專屬連線（acquire 後立刻 detach）：預存程序整合測試的一個情境要在同一條
+    /// 連線上從 BEGIN 跑到 ROLLBACK（SAVEPOINT / 暫存表 / 游標都是連線狀態），結束即丟棄，不回池。
+    pub(crate) async fn dedicated_connection(&self) -> AppResult<sqlx::postgres::PgConnection> {
+        let pooled = self.pool.acquire().await.map_err(|e| AppError::Connect(e.to_string()))?;
+        Ok(pooled.detach())
+    }
+
     /// 把後端 PID 登記為「執行中」，回傳的 guard drop 時自動撤銷登記。
     fn track(&self, pid: i32) -> RunningGuard<'_> {
         self.running.lock().insert(pid);
@@ -1637,7 +1644,7 @@ fn rows_to_result(rows: &[PgRow]) -> QueryResult {
     }
 }
 
-fn cell_to_string(row: &PgRow, idx: usize) -> Option<String> {
+pub(crate) fn cell_to_string(row: &PgRow, idx: usize) -> Option<String> {
     if let Ok(raw) = row.try_get_raw(idx) {
         if raw.is_null() {
             return None;

@@ -2302,3 +2302,44 @@ export const api = {
   // 全螢幕時攔 Win / Alt+Tab / Alt+F4 / Ctrl+Esc 轉給這條連線（null = 停止）；攔到的鍵走 onRdGrabKey。
   rdKeyboardGrab: (connId: string | null) => invoke<void>("rd_keyboard_grab", { connId }),
 };
+
+// ---------------------------------------------------------------------------
+// 預存程序整合測試（sp-test）：核心在 src-tauri/src/sptest，與 dbk sp-test 共用。
+// ---------------------------------------------------------------------------
+
+export interface SpTestEngineRef { conn_id: string; database: string }
+export type SpTestMode = "assert" | "record" | "golden" | "diff";
+export interface SpTestFileEntry { name: string; path: string; text: string; errors: string[] }
+export interface SpTestProgress {
+  run_id: string; file: string; scenario: string; case?: string; step?: string;
+  phase: string; engine?: string; verdict?: string; index: number; total: number;
+}
+export interface SpTestDifference { kind: string; where: string; expected?: string; actual?: string; note?: string }
+export interface SpTestStepReport { label: string; kind: string; outcomes: Record<string, unknown>; differences: SpTestDifference[] }
+export type SpTestVerdict =
+  | "pass" | "fail" | "error" | "seed_error" | "skipped" | "mismatch" | "error_on_one_side" | "both_error" | "perf_fail";
+export interface SpTestScenarioReport {
+  id: string; case?: string; verdict: SpTestVerdict; mode_used: string; elapsed_ms: number;
+  skipped?: string; error?: string; steps: SpTestStepReport[];
+}
+export interface SpTestFileReport { file: string; mode: string; targets: string[]; started_at: string; scenarios: SpTestScenarioReport[] }
+
+export const spTest = {
+  loadDir: (dir: string) => invoke<SpTestFileEntry[]>("sp_test_load_dir", { dir }),
+  saveFile: (path: string, text: string) => invoke<string[]>("sp_test_save_file", { path, text }),
+  validate: (text: string) => invoke<string[]>("sp_test_validate", { text }),
+  inspect: (id: string, database: string, routine: string) => invoke<unknown>("sp_test_inspect", { id, database, routine }),
+  testgenPrompt: (id: string, database: string, routine: string, lang: string | null) =>
+    invoke<string>("sp_test_testgen_prompt", { id, database, routine, lang }),
+  run: (args: {
+    runId: string; targets: SpTestEngineRef[]; files: { name: string; text: string }[]; mode: SpTestMode;
+    goldenDir?: string | null; only?: string[] | null; rowCap?: number | null;
+  }) => invoke<SpTestFileReport[]>("sp_test_run", args),
+  cancel: (runId: string) => invoke<void>("sp_test_cancel", { runId }),
+  export: (dir: string, reports: SpTestFileReport[]) => invoke<[string, string]>("sp_test_export", { dir, reports }),
+};
+export function onSpTestProgress(runId: string, cb: (p: SpTestProgress) => void): Promise<UnlistenFn> {
+  return listen<SpTestProgress>("sp-test-progress", (e) => {
+    if (e.payload.run_id === runId) cb(e.payload);
+  });
+}

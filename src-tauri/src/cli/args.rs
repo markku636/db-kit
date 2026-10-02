@@ -119,6 +119,10 @@ pub enum Command {
 
     /// 審查並執行 SQL 腳本：逐句擷取前後像、產生回滾腳本與差異報告到輸出目錄。未加 --yes 只產生審查與備份
     Run(RunArgs),
+    /// 預存程序整合測試：情境 / 斷言 / 基線回歸 / 跨引擎差分（JUnit 報表，可進 CI）
+    #[command(subcommand, name = "sp-test")]
+    SpTest(SpTestCmd),
+
 
     /// 查詢計畫（EXPLAIN）
     Explain { sql: String },
@@ -719,4 +723,87 @@ pub enum RedisCmd {
     Rename { key: String, new_key: String },
     /// 清空目前 DB 的所有鍵（FLUSHDB，不可復原）。需 --yes --force
     FlushDb,
+}
+
+// ---------------------------------------------------------------------------
+// dbk sp-test：預存程序整合測試
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand, Debug)]
+pub enum SpTestCmd {
+    /// 執行測試檔（assert：比對期望；golden：另比基線；record：錄製基線）
+    Run(SpTestRunArgs),
+    /// 跨引擎差分：同一組測試檔在 --dst 的第二個連線上再跑一次並逐步互比（遷移驗證）
+    Diff(SpTestDiffArgs),
+    /// 盤點預存程序：簽名、寫入目標與本文（JSON；給 AI 產生情境用）
+    Inspect {
+        /// 程序名（可帶 schema）
+        routine: String,
+    },
+    /// 檢查測試檔格式與引用（不連線）
+    Validate {
+        /// 測試檔或資料夾（資料夾 = 底下所有 *.json，略過 golden/ 與 runs/）
+        paths: Vec<String>,
+    },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpTestMode {
+    Assert,
+    Golden,
+    Record,
+}
+
+#[derive(Args, Debug)]
+pub struct SpTestRunArgs {
+    /// 測試檔或資料夾（資料夾 = 底下所有 *.json，略過 golden/ 與 runs/）
+    pub paths: Vec<String>,
+    /// 執行模式
+    #[arg(long, value_enum, default_value = "assert")]
+    pub mode: SpTestMode,
+    /// 基線資料夾（golden / record 模式必填）
+    #[arg(long)]
+    pub golden: Option<String>,
+    /// 只跑這些情境 id（逗號分隔）
+    #[arg(long, value_delimiter = ',')]
+    pub only: Vec<String>,
+    /// 只跑帶任一標籤的情境（逗號分隔）
+    #[arg(long, value_delimiter = ',')]
+    pub tag: Vec<String>,
+    /// 另寫 JUnit XML 報表到此路徑
+    #[arg(long)]
+    pub junit: Option<String>,
+    /// 任一情境未通過時以非零 exit code 結束（CI 用）
+    #[arg(long)]
+    pub exit_code: bool,
+    /// 每個結果集 / 快照的列數上限（0 = 不限）
+    #[arg(long, default_value_t = 10_000)]
+    pub max_rows: usize,
+}
+
+#[derive(Args, Debug)]
+pub struct SpTestDiffArgs {
+    /// 測試檔或資料夾（資料夾 = 底下所有 *.json，略過 golden/ 與 runs/）
+    pub paths: Vec<String>,
+    /// 第二個目標：已存連線名 / id 或連線字串
+    #[arg(long)]
+    pub dst: String,
+    /// 第二個目標的資料庫 / schema（省略 = 與 -d 相同）
+    #[arg(long = "dst-db")]
+    pub dst_db: Option<String>,
+    /// 只跑這些情境 id（逗號分隔）
+    #[arg(long, value_delimiter = ',')]
+    pub only: Vec<String>,
+    /// 只跑帶任一標籤的情境（逗號分隔）
+    #[arg(long, value_delimiter = ',')]
+    pub tag: Vec<String>,
+    /// 另寫 JUnit XML 報表到此路徑
+    #[arg(long)]
+    pub junit: Option<String>,
+    /// 任一情境未通過時以非零 exit code 結束（CI 用）
+    #[arg(long)]
+    pub exit_code: bool,
+    /// 每個結果集 / 快照的列數上限（0 = 不限）
+    #[arg(long, default_value_t = 10_000)]
+    pub max_rows: usize,
 }

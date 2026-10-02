@@ -1039,6 +1039,81 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "比對策略：auto（排序合併，失敗自動退雜湊）| merge | hash" => "Comparison strategy: auto (sort-merge, falls back to hash) | merge | hash",
         "套用時任一批失敗即中止（預設：該批改逐句重放，隔離壞列後繼續）" => "Stop when any batch fails while applying (default: replay that batch statement by statement, isolating bad rows, then continue)",
         "允許對標記為正式環境（prod）的目標連線套用" => "Allow applying to a target connection marked as production (prod)",
+        // ---- cli/args.rs：dbk sp-test ----
+        "預存程序整合測試：情境 / 斷言 / 基線回歸 / 跨引擎差分（JUnit 報表，可進 CI）" => {
+            "Stored-procedure integration tests: scenarios / assertions / golden regression / cross-engine diff (JUnit report for CI)"
+        }
+        "執行測試檔（assert：比對期望；golden：另比基線；record：錄製基線）" => {
+            "Run test files (assert: check expectations; golden: also compare with the baseline; record: capture the baseline)"
+        }
+        "跨引擎差分：同一組測試檔在 --dst 的第二個連線上再跑一次並逐步互比（遷移驗證）" => {
+            "Cross-engine diff: run the same test files on the second connection given by --dst and compare step by step (migration verification)"
+        }
+        "盤點預存程序：簽名、寫入目標與本文（JSON；給 AI 產生情境用）" => {
+            "Inspect a stored procedure: signature, write targets and body (JSON; feed it to AI to generate scenarios)"
+        }
+        "檢查測試檔格式與引用（不連線）" => "Validate test file format and references (no connection)",
+        "程序名（可帶 schema）" => "Routine name (schema prefix allowed)",
+        "測試檔或資料夾（資料夾 = 底下所有 *.json，略過 golden/ 與 runs/）" => {
+            "Test files or folders (folder = every *.json inside, skipping golden/ and runs/)"
+        }
+        "執行模式" => "Execution mode",
+        "基線資料夾（golden / record 模式必填）" => "Baseline folder (required for golden / record)",
+        "只跑這些情境 id（逗號分隔）" => "Run only these scenario ids (comma-separated)",
+        "只跑帶任一標籤的情境（逗號分隔）" => "Run only scenarios carrying any of these tags (comma-separated)",
+        "另寫 JUnit XML 報表到此路徑" => "Also write a JUnit XML report to this path",
+        "任一情境未通過時以非零 exit code 結束（CI 用）" => "Exit non-zero when any scenario does not pass (for CI)",
+        "每個結果集 / 快照的列數上限（0 = 不限）" => "Row cap per result set / snapshot (0 = unlimited)",
+        "第二個目標：已存連線名 / id 或連線字串" => "Second target: saved connection name / id or connection string",
+        "第二個目標的資料庫 / schema（省略 = 與 -d 相同）" => "Database / schema of the second target (default: same as -d)",
+        // ---- cli/sptest.rs ----
+        "沒有找到測試檔" => "No test files found",
+        "{file} 解析失敗：{e}" => "Failed to parse {file}: {e}",
+        "{file}：{errs}" => "{file}: {errs}",
+        "請以 -d 指定資料庫 / schema" => "Specify the database / schema with -d",
+        "差分的目標必須是連線，不能是快照檔" => "The diff target must be a connection, not a snapshot file",
+        "{n} 個情境未通過" => "{n} scenario(s) did not pass",
+        "已寫入 JUnit 報表：{path}" => "JUnit report written: {path}",
+        "測試檔路徑必須是絕對路徑且以 .json 結尾" => "The test file path must be absolute and end with .json",
+        "capture 的值必須是 >>符號（{v}）" => "capture values must be >>symbols (got {v})",
+        "結果集沒有欄位 {col}，無法擷取" => "The result set has no column {col} to capture",
+        "開場失敗：{e}" => "Opening the scenario failed: {e}",
+        "SAVEPOINT 失敗：{e}" => "SAVEPOINT failed: {e}",
+        "引擎沒回傳這個欄，無法擷取" => "The engine did not return this column, nothing to capture",
+        "compare 的兩個符號都必須是結果集" => "Both compare symbols must be result sets",
+        "沒有基線：{path}（先用 record 模式錄一次）" => "No baseline: {path} (record one with record mode first)",
+        "isolated 模式尚未支援（程序內含 COMMIT / ROLLBACK 的情境請先略過）" => "isolated mode is not supported yet (skip scenarios whose routine contains COMMIT / ROLLBACK)",
+        "只有一邊跑到這一步" => "Only one side reached this step",
+        "沒有這個 OUT 參數" => "No such OUT parameter",
+        "這張表不在快照清單裡（snapshot 設定或盤點沒抓到）" => "This table is not in the snapshot list (snapshot setting or inspection missed it)",
+        "effects_strict：這張表有變化但期望沒列出" => "effects_strict: this table changed but is not listed in the expectation",
+        "預期出錯但沒有錯誤" => "An error was expected but none occurred",
+        "{side} 沒有這個 OUT 參數" => "{side} has no such OUT parameter",
+        "{side} 沒有這張表的快照" => "{side} has no snapshot of this table",
+        "結果集沒有這個欄（有：{cols}）" => "The result set has no such column (has: {cols})",
+        "MySQL 的 insert 只能擷取一個自動產生欄（LAST_INSERT_ID）" => "A MySQL insert can capture only one generated column (LAST_INSERT_ID)",
+        "陣列不能當 SQL 字面值" => "An array cannot be used as a SQL literal",
+        "bytes 必須是 base64" => "bytes must be base64",
+        "未知的型別標記 {t}" => "Unknown type tag {t}",
+        "{v} 不是數字" => "{v} is not a number",
+        "參數 {name} 不是 OUT 參數，不能擷取" => "Parameter {name} is not an OUT parameter and cannot be captured",
+        "簽名裡沒有參數 {name}" => "The signature has no parameter {name}",
+        "符號 {name} 沒有欄位 {col}" => "Symbol {name} has no column {col}",
+        "符號 {name} 不是結果集，不能取欄位 {col}" => "Symbol {name} is not a result set; cannot take column {col}",
+        "找不到測試檔或資料夾：{path}" => "Test file or folder not found: {path}",
+        // ---- sptest 核心 ----
+        "預存程序測試尚不支援 {kind}" => "Stored-procedure tests do not support {kind} yet",
+        "找不到預存程序 {name}" => "Stored procedure {name} not found",
+        "未定義的符號 {name}" => "Undefined symbol {name}",
+        "沒有指定目標連線" => "No target connection given",
+        "diff 模式需要恰好兩個目標" => "diff mode needs exactly two targets",
+        "record / golden 模式需要基線資料夾" => "record / golden mode needs a baseline folder",
+        "測試檔有誤：{errs}" => "Invalid test file: {errs}",
+        "正式環境連線只能用 wrapped 模式" => "A production connection can only run in wrapped mode",
+        "此連線不是 SQL Server" => "This connection is not SQL Server",
+        "此連線不是 PostgreSQL" => "This connection is not PostgreSQL",
+        "此連線不是 MySQL" => "This connection is not MySQL",
+
         // ---- cli/args.rs：dbk mcp ----
         "以 MCP（stdio JSON-RPC）伺服器模式啟動，把唯讀資料庫工具提供給 AI 用戶端（Claude Code / Codex）" => {
             "Start as an MCP (stdio JSON-RPC) server exposing read-only database tools to AI clients (Claude Code / Codex)"

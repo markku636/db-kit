@@ -461,6 +461,18 @@ metadata:
     },
     review_run_cancel: () => null,
     review_run_reveal: () => null,
+    // 預存程序整合測試
+    sp_test_load_dir: () => fx.SP_TEST_FILES,
+    sp_test_save_file: () => [],
+    sp_test_validate: () => [],
+    sp_test_inspect: () => fx.SP_TEST_INSPECT,
+    sp_test_testgen_prompt: () => "generate scenarios",
+    sp_test_run: ({ runId }) => {
+      emit("sp-test-progress", { run_id: runId, file: "usp_place_order.json", scenario: "place_then_cancel", phase: "done", verdict: "pass", index: 0, total: 2 });
+      return new Promise((res) => setTimeout(() => res(fx.SP_TEST_REPORTS), 30));
+    },
+    sp_test_cancel: () => null,
+    sp_test_export: () => ["C:/sptests/reports/run.junit.xml", "C:/sptests/reports/run.md"],
 
     // ── 壓力測試 ─────────────────────────────────────────────────────────
     // 先打一筆進度事件再回整份報表（fx.STRESS_REPORT），報表區、折線圖、錯誤分組都畫得出來。

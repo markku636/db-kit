@@ -33,6 +33,8 @@ mod ssh;
 mod store;
 // 壓力測試核心：不依賴 Tauri（進度以 callback 注入），slim CLI build 也編得進來。
 mod stress;
+// 預存程序整合測試（情境 / 斷言 / 基線 / 跨引擎差分）核心：不依賴 Tauri，GUI 與 `dbk sp-test` 共用。
+mod sptest;
 mod transfer;
 
 // CLI（唯讀查詢 + 匯出）。一直編譯；不依賴 Tauri，直接呼叫 manager / store / export / backup。
@@ -256,6 +258,14 @@ pub fn run() {
             commands::review_run_start,
             commands::review_run_cancel,
             commands::review_run_reveal,
+            commands::sptest::sp_test_load_dir,
+            commands::sptest::sp_test_save_file,
+            commands::sptest::sp_test_validate,
+            commands::sptest::sp_test_inspect,
+            commands::sptest::sp_test_testgen_prompt,
+            commands::sptest::sp_test_run,
+            commands::sptest::sp_test_cancel,
+            commands::sptest::sp_test_export,
             commands::schema_dump,
             commands::explain_query,
             commands::column_stats,

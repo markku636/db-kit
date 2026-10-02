@@ -22,6 +22,8 @@ mod render;
 mod resolve;
 // `dbk run`：審查並執行（核心在 crate::review_run，與 GUI 共用）。
 mod run_script;
+// `dbk sp-test`：預存程序整合測試（核心在 crate::sptest，與 GUI 共用）。
+mod sptest;
 
 use std::process::ExitCode;
 

@@ -156,6 +156,9 @@ const TableProperties = lazyOverlay(() => import("./TableProperties"));
 const RoutinesDialog = lazyOverlay(() => import("./RoutinesDialog"));
 const SavedQueriesDialog = lazyOverlay(() => import("./SavedQueriesDialog"));
 const ReviewRunDialog = lazyOverlay(() => import("./ReviewRunDialog"));
+const SpTestDialog = lazyOverlay(() => import("./SpTestDialog"));
+/** 預存程序整合測試支援的引擎（核心 sptest::session 有實作的）。 */
+const SP_TEST_KINDS = new Set<string>(["mssql", "postgres", "mysql", "mariadb"]);
 const CreateViewDialog = lazyOverlay(() => import("./CreateViewDialog"));
 const ViewDesigner = lazyOverlay(() => import("./ViewDesigner"));
 const ProcessListDialog = lazyOverlay(() => import("./ProcessListDialog"));
@@ -285,6 +288,7 @@ export default function App() {
   const { connections, connGroups, connectedIds, activeId } = useStore();
   const savedMgr = useStore((s) => s.savedMgr);
   const reviewRun = useStore((s) => s.reviewRun);
+  const spTest = useStore((s) => s.spTest);
   const activeConn = connections.find((c) => c.id === activeId) ?? null;
   // 左側連線樹寬度：可拖曳分隔線調整，記憶於 localStorage。
   const sidebar = useResizable({
@@ -607,6 +611,10 @@ export default function App() {
       {reviewRun && (
         <ReviewRunDialog key={reviewRun.nonce} request={reviewRun}
           onClose={() => useStore.getState().closeReviewRun()} />
+      )}
+      {spTest && (
+        <SpTestDialog key={spTest.nonce} request={spTest}
+          onClose={() => useStore.getState().closeSpTest()} />
       )}
       <UiHost />
     </div>
@@ -2243,6 +2251,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
       nodes.push(it(t("新增視圖…"), () => setCreateView({ connId: m.connId, db: m.db, kind: m.kind })));
     if (m.type === "functions" && (isMysqlFamily(m.kind) || m.kind === "postgres" || m.kind === "external"))
       nodes.push(it(t("預存程序 / 觸發器…"), () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind })));
+      if (SP_TEST_KINDS.has(m.kind)) nodes.push(it(t("預存程序整合測試…"), () => useStore.getState().openSpTest({ connId: m.connId, database: m.db })));
     nodes.push(sep);
     nodes.push(it(t("重新整理"), () => refreshTables(m.connId, m.db)));
     return nodes;
@@ -2586,6 +2595,9 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
     return [
       it(t("設計{label}", { label }), () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, initial: r })),
       it(t("執行{label}…", { label }), () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, initial: r, initialAction: "exec" })),
+      ...(SP_TEST_KINDS.has(m.kind) && r.routine_type !== "trigger"
+        ? [it(t("整合測試…"), () => useStore.getState().openSpTest({ connId: m.connId, database: m.db, routine: r.name }))]
+        : []),
       ...(ro ? [] : [
         sep,
         it(t("新增函式…"), () => setRoutines({ connId: m.connId, db: m.db, kind: m.kind, newType: "function" })),
@@ -3334,6 +3346,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                     if (k !== "sqlite") arr.push([t("新增{noun}…", { noun }), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false]);
                     arr.push([t("新增視圖…"), () => { if (dbConn) setCreateView({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
                     arr.push([t("預存程序 / 觸發器…"), () => { if (dbConn) setRoutines({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
+                    if (SP_TEST_KINDS.has(k ?? "")) arr.push([t("預存程序整合測試…"), () => useStore.getState().openSpTest({ connId: dbMenu.connId, database: dbMenu.db }), false]);
                     arr.push([t("匯出結構 SQL…"), () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
                     if (isMysqlFamily(k)) arr.push([t("資料表大小報表…"), () => setServerQuery({
                       connId: dbMenu.connId, title: t("資料表大小：{db}", { db: dbMenu.db }), sql: tableSizesSql(dbMenu.db),
