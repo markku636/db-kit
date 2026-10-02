@@ -32,7 +32,8 @@ RustDesk 的協定定義（`protos/message.proto`）與連線邏輯以 **AGPL-3.
 - 密碼登入（`sha256(sha256(密碼 + salt) + challenge)`）；不帶密碼時由對方在畫面上按「接受」。
 - 影像：只協商 VP9 / VP8 / AV1，**不解碼**，把編碼後的畫面原封不動交給 db-kit，由 WebView 的 WebCodecs 解碼
   （所以不需要 libvpx / aom / ffmpeg 這些 C 函式庫）。
-- 滑鼠、鍵盤（送 PC 掃描碼，`KeyboardMode::Map`）、Ctrl+Alt+Del、要求重送畫面。
+- 滑鼠、鍵盤（`KeyboardMode::Map`：db-kit 送 PC 掃描碼，依對方系統換成 Windows / Linux / macOS / Android 的鍵碼，
+  對照表來自 rdev；每個按鍵帶本機 CapsLock / NumLock 狀態、滑鼠帶按著的修飾鍵，跟官方用戶端一樣）、Ctrl+Alt+Del、要求重送畫面。
 - 多螢幕：切到對方的某個螢幕（`SwitchDisplay` + `CaptureDisplays`），或所有螢幕一起送（每張畫面帶螢幕編號，由 db-kit
   照排列拼成一張）；對方插拔螢幕 / 換解析度時把新的清單 / 位置大小轉給 db-kit。
 - 工具列：畫質、偏好的編碼、封鎖對方輸入 / 停用剪貼簿 / 結束後鎖定（`OptionMessage`）、鎖定畫面、重新啟動對方、
@@ -47,7 +48,7 @@ RustDesk 的協定定義（`protos/message.proto`）與連線邏輯以 **AGPL-3.
 
 | 方向 | 型別 | 內容 |
 |---|---|---|
-| db-kit → bridge | 1 | JSON 指令：`connect`（有 `rendezvous: { server, relay, key, force_relay }` = 用 `peer` 這個 ID 經 ID 伺服器連；`hwid`（base64）= 本機識別碼，`trusted: true` = 之前對這台勾過「信任這台裝置」，登入就帶 hwid）/ `login`（`password`：`waiting_accept` 期間補上密碼，用同一個登入挑戰重送登入）/ `2fa`（`code`：`need_2fa` 之後送雙重驗證碼；`trust: true` = 請對方信任這台裝置，`Auth2FA` 帶 hwid）/ `mouse` / `key` / `ctrl_alt_del` / `refresh` / `displays`（`set`：要看的螢幕索引，一個 = 切到那個螢幕、多個 = 同時看）/ `quality`（`level`：`best` / `balanced` / `low`）/ `codec`（`prefer`：`auto` / `vp9` / `vp8` / `av1`，加上 `vp9` / `vp8` / `av1` 能不能解）/ `toggle`（`name`：`block_input` / `disable_clipboard` / `lock_after_session_end`，`on`）/ `lock_screen` / `restart` / `clipboard`（`text`）/ `type_text`（`text`）/ `chat`（`text`）/ `record`（`on`） |
+| db-kit → bridge | 1 | JSON 指令：`connect`（有 `rendezvous: { server, relay, key, force_relay }` = 用 `peer` 這個 ID 經 ID 伺服器連；`hwid`（base64）= 本機識別碼，`trusted: true` = 之前對這台勾過「信任這台裝置」，登入就帶 hwid）/ `login`（`password`：`waiting_accept` 期間補上密碼，用同一個登入挑戰重送登入）/ `2fa`（`code`：`need_2fa` 之後送雙重驗證碼；`trust: true` = 請對方信任這台裝置，`Auth2FA` 帶 hwid）/ `mouse`（`mask` / `x` / `y`，按著的修飾鍵 `alt` / `ctrl` / `shift` / `meta`）/ `key`（`down` / `scancode`，本機鎖定鍵 `caps` / `num`）/ `ctrl_alt_del` / `refresh` / `displays`（`set`：要看的螢幕索引，一個 = 切到那個螢幕、多個 = 同時看）/ `quality`（`level`：`best` / `balanced` / `low`）/ `codec`（`prefer`：`auto` / `vp9` / `vp8` / `av1`，加上 `vp9` / `vp8` / `av1` 能不能解）/ `toggle`（`name`：`block_input` / `disable_clipboard` / `lock_after_session_end`，`on`）/ `lock_screen` / `restart` / `clipboard`（`text`）/ `type_text`（`text`）/ `chat`（`text`）/ `record`（`on`） |
 | bridge → db-kit | 1 | JSON 事件：`connected`（帶 `secure`、`route` = `ip` / `direct` / `lan` / `relay`）/ `waiting_accept`（沒給密碼：已送空密碼的登入，等對方在畫面上按接受；`click_only: true` = 對方回 `No Password Access`，只能按接受、密碼沒用，連線還在）/ `need_2fa`（對方開了雙重驗證，連線還在、等驗證碼；`wrong: true` = 上一個驗證碼錯了；`trust: true` = 對方允許信任這台裝置）/ `login_error` / `error`（帶 `code`，如 `id_not_exist` / `offline` / `key_mismatch`）/ `closed` / `displays`（對方的螢幕清單變了）/ `switch_display`（`display`、`x`、`y`、`width`、`height`：切過去的螢幕、或換了解析度的螢幕）/ `permission`（`name`、`enabled`：對方開關某個權限，一開始只送被關掉的）/ `clipboard`（`text`）/ `chat`（`text`）/ `block_input`（`on`、`ok`）/ `msgbox`（`msgtype`、`title`、`text`）/ `delay`（`ms`、`bitrate`） |
 | bridge → db-kit | 2 | 影像：`[u8 codec][u8 key][u8 display][u8 保留][i64 pts]` + 編碼後的資料 |
 

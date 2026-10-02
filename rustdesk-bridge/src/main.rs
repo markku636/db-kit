@@ -13,6 +13,7 @@
 mod codec;
 mod crypto;
 mod ipc;
+mod keymap;
 mod rendezvous;
 mod session;
 
@@ -1039,6 +1040,153 @@ mod tests {
         ipc::write_host_json(&mut host_in_w, &json!({ "t": "refresh" })).await.unwrap();
         until(&mut host_out_r, 15, |_, codec| codec != 0).await.expect("連線還在");
         task.abort();
+    }
+
+    /// 對真的 Linux 被控端（Xvfb + 左上角一個 80x24 的 xterm、沒有視窗管理員）實際操作：
+    /// - 打字：db-kit 送的是 PC 掃描碼，要換成 Linux 的鍵碼才打得出對的字（Shift 也要對）；
+    /// - CapsLock / NumLock：帶著本機狀態，對方照著切（數字鍵盤要打得出數字）；
+    /// - 連點兩下：xterm 雙擊會選取一個字（PRIMARY 選取區），讀得到 = 對方收到的是雙擊。
+    ///
+    /// 結果用 `docker exec` 讀檔 / 讀選取區驗證：`DBKIT_RUSTDESK_IT_PORT`、`DBKIT_RUSTDESK_IT_CONTAINER`（必填，要有 xclip）。
+    /// `cargo test -- --ignored real_peer_keyboard_and_mouse --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn real_peer_keyboard_and_mouse() {
+        let host = std::env::var("DBKIT_RUSTDESK_IT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+        let port: u16 = std::env::var("DBKIT_RUSTDESK_IT_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(21118);
+        let container = std::env::var("DBKIT_RUSTDESK_IT_CONTAINER").expect("DBKIT_RUSTDESK_IT_CONTAINER");
+        let tcp = TcpStream::connect((host.as_str(), port)).await.expect("connect peer");
+        let login = direct(&host, "dbkit123", Decoders { vp9: true, vp8: true, av1: false }, "it");
+        let (mut w, host_in_r) = tokio::io::duplex(1 << 16);
+        let (mut host_out_w, mut out) = tokio::io::duplex(8 << 20);
+        let task = tokio::spawn(async move {
+            let mut stdin = ipc::MsgReader::new(host_in_r);
+            drive(tcp, &mut stdin, &mut host_out_w, &login).await
+        });
+        // 一直讀輸出（不讀的話 duplex 塞滿，連線元件就卡住）；登入後回報對方系統。
+        let (plat_tx, plat_rx) = tokio::sync::oneshot::channel::<String>();
+        let reader = tokio::spawn(async move {
+            let mut plat_tx = Some(plat_tx);
+            while let Ok(Some(raw)) = ipc::read_raw(&mut out).await {
+                if raw[0] != ipc::OUT_JSON {
+                    continue;
+                }
+                let v: serde_json::Value = serde_json::from_slice(&raw[1..]).unwrap();
+                assert!(v["type"] != "closed" && v["type"] != "login_error", "{v}");
+                if v["type"] == "connected" {
+                    if let Some(tx) = plat_tx.take() {
+                        let _ = tx.send(v["peer"]["platform"].as_str().unwrap_or_default().to_string());
+                    }
+                }
+            }
+        });
+        let platform = tokio::time::timeout(std::time::Duration::from_secs(40), plat_rx).await.expect("時限內要登入").unwrap();
+        eprintln!("peer platform = {platform}");
+        let docker = |cmd: &str| {
+            let out = std::process::Command::new("docker")
+                .args(["exec", "-e", "DISPLAY=:0", &container, "sh", "-c", cmd])
+                .output()
+                .expect("docker");
+            String::from_utf8_lossy(&out.stdout).to_string()
+        };
+        let pause = |ms: u64| tokio::time::sleep(std::time::Duration::from_millis(ms));
+
+        /// 一個字元 → (掃描碼, 要不要 Shift)；美式鍵盤。
+        fn scancode_of(c: char) -> (u32, bool) {
+            const ROWS: [(&str, u32); 4] = [("1234567890-=", 0x02), ("qwertyuiop[]", 0x10), ("asdfghjkl;'", 0x1E), ("zxcvbnm,./", 0x2C)];
+            const SHIFTED: [(&str, u32); 4] = [("!@#$%^&*()_+", 0x02), ("QWERTYUIOP{}", 0x10), ("ASDFGHJKL:\"", 0x1E), ("ZXCVBNM<>?", 0x2C)];
+            match c {
+                ' ' => return (0x39, false),
+                '\n' => return (0x1C, false),
+                _ => {}
+            }
+            for (shift, rows) in [(false, ROWS), (true, SHIFTED)] {
+                for (row, base) in rows {
+                    if let Some(i) = row.chars().position(|x| x == c) {
+                        return (base + i as u32, shift);
+                    }
+                }
+            }
+            panic!("{c:?}");
+        }
+        async fn key<W: AsyncWrite + Unpin>(w: &mut W, sc: u32, down: bool, caps: bool, num: bool) {
+            ipc::write_host_json(w, &json!({ "t": "key", "down": down, "scancode": sc, "caps": caps, "num": num })).await.unwrap();
+        }
+        async fn type_str<W: AsyncWrite + Unpin>(w: &mut W, s: &str) {
+            for c in s.chars() {
+                let (sc, shift) = scancode_of(c);
+                if shift {
+                    key(w, 0x2A, true, false, false).await;
+                }
+                key(w, sc, true, false, false).await;
+                key(w, sc, false, false, false).await;
+                if shift {
+                    key(w, 0x2A, false, false, false).await;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+            }
+        }
+        async fn mouse<W: AsyncWrite + Unpin>(w: &mut W, mask: i32, x: i32, y: i32) {
+            ipc::write_host_json(w, &json!({ "t": "mouse", "mask": mask, "x": x, "y": y })).await.unwrap();
+        }
+
+        // 沒有視窗管理員：鍵盤跟著游標，先把游標移進 xterm。
+        mouse(&mut w, 0, 200, 150).await;
+        pause(300).await;
+        docker("rm -f /tmp/kb.txt /tmp/caps.txt /tmp/num.txt /tmp/nonum.txt");
+
+        // 1. 打字（含 Shift）
+        type_str(&mut w, "echo Ab1-X >/tmp/kb.txt\n").await;
+        pause(800).await;
+        assert_eq!(docker("cat /tmp/kb.txt").trim_end(), "Ab1-X", "打出來的字要對（Linux 鍵碼）");
+
+        // 2. CapsLock：本機開著 → 字母是大寫（對方先開 CapsLock 再按、按完還原）
+        type_str(&mut w, "echo ").await;
+        for sc in [0x10, 0x11] {
+            // q w
+            key(&mut w, sc, true, true, false).await;
+            key(&mut w, sc, false, true, false).await;
+        }
+        type_str(&mut w, " >/tmp/caps.txt\n").await;
+        pause(800).await;
+        assert_eq!(docker("cat /tmp/caps.txt").trim_end(), "QW", "CapsLock 開著要打出大寫");
+
+        // 3. 數字鍵盤：本機 NumLock 開著 → 打出數字
+        type_str(&mut w, "echo ").await;
+        for sc in [0x4F, 0x50, 0x51] {
+            key(&mut w, sc, true, false, true).await;
+            key(&mut w, sc, false, false, true).await;
+        }
+        type_str(&mut w, " >/tmp/num.txt\n").await;
+        pause(800).await;
+        assert_eq!(docker("cat /tmp/num.txt").trim_end(), "123", "NumLock 開著，數字鍵盤要打出數字");
+        //    NumLock 關著 → 數字鍵盤是 End / ↓ / PgDn，不會打出數字（跟本機一樣）
+        type_str(&mut w, "echo x").await;
+        for sc in [0x4F, 0x50] {
+            key(&mut w, sc, true, false, false).await;
+            key(&mut w, sc, false, false, false).await;
+        }
+        type_str(&mut w, " >/tmp/nonum.txt\n").await;
+        pause(800).await;
+        assert_eq!(docker("cat /tmp/nonum.txt").trim_end(), "x", "NumLock 關著不該打出數字");
+
+        // 4. 連點兩下：畫面填滿同一個字，雙擊第 2 行第 4 欄（字型 6x13、內容從 (13,13) 開始）→ 選取那個字。
+        type_str(&mut w, "clear; printf 'dbkitword %.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16\n").await;
+        pause(800).await;
+        docker("printf '' | xclip -i -selection primary");
+        let (x, y) = (13 + 3 * 6 + 3, 13 + 13 + 6);
+        mouse(&mut w, 0, x, y).await;
+        pause(100).await;
+        for _ in 0..2 {
+            mouse(&mut w, 1 | (1 << 3), x, y).await;
+            mouse(&mut w, 2 | (1 << 3), x, y).await;
+            pause(60).await;
+        }
+        pause(600).await;
+        assert_eq!(docker("xclip -o -selection primary"), "dbkitword", "雙擊要選取一個字");
+
+        task.abort();
+        reader.abort();
     }
 
     /// 對真的 ID 伺服器 + 中繼伺服器 + 被控端（tests/docker/compose.yml）：用 ID 連、加密、收到關鍵畫面。

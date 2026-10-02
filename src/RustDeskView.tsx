@@ -15,6 +15,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { api } from "./api";
 import type { RdConnInfo } from "./rdTypes";
 import { mouseButtonFromDom, scancodeForCode } from "./rdInput";
+import { chordedChange, HeldKeys, lockModes, mouseModifiers } from "./rustdeskInput";
 import { useT } from "./i18n";
 import { toast } from "./ui";
 import type { RdViewHandle } from "./rdView";
@@ -370,26 +371,54 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     return [x + origin.x, y + origin.y];
   };
 
-  const lastMove = useRef(0);
+  // 滑鼠移動節流到 ~120 Hz（每筆都是一則 JSON）；被省掉的最後一筆稍後補送，按下 / 放開前也先補——
+  // 對方按鍵是按在「目前游標」上，不補的話點下去的位置會是幾毫秒前的（雙擊小圖示會點偏）。
+  const moveRef = useRef<{ at: number; sent: string; pending: { x: number; y: number; mods: object } | null; timer: number }>(
+    { at: 0, sent: "", pending: null, timer: 0 });
+  /** `force`：按下 / 放開前一定送（對方那邊的人可能動過游標）。 */
+  const sendMove = (x: number, y: number, mods: object, force = false) => {
+    const m = moveRef.current;
+    m.pending = null;
+    m.at = performance.now();
+    if (!force && m.sent === `${x},${y}`) return;
+    m.sent = `${x},${y}`;
+    send({ t: "mouse", mask: MOUSE.MOVE, x, y, ...mods });
+  };
+  useEffect(() => () => window.clearTimeout(moveRef.current.timer), []);
   const onPointer = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const p = toRemote(e.clientX, e.clientY);
     if (!p) return;
+    const mods = mouseModifiers(e);
+    let type: "down" | "up" | null = e.type === "pointerdown" ? "down" : e.type === "pointerup" ? "up" : null;
     if (e.type === "pointermove") {
-      // 滑鼠移動節流到 ~120 Hz：每筆都是一則 JSON，沒必要比螢幕更新還密。
-      const now = performance.now();
-      if (now - lastMove.current < 8) return;
-      lastMove.current = now;
-      send({ t: "mouse", mask: MOUSE.MOVE, x: p[0], y: p[1] });
-      return;
+      // 按著一顆再按 / 放另一顆：瀏覽器只給 pointermove。
+      type = chordedChange(e.button, e.buttons);
+      if (!type) {
+        const m = moveRef.current;
+        const wait = 8 - (performance.now() - m.at);
+        if (wait > 0) {
+          m.pending = { x: p[0], y: p[1], mods };
+          if (!m.timer) {
+            m.timer = window.setTimeout(() => {
+              m.timer = 0;
+              if (m.pending) sendMove(m.pending.x, m.pending.y, m.pending.mods);
+            }, wait);
+          }
+          return;
+        }
+        sendMove(p[0], p[1], mods);
+        return;
+      }
     }
     const b = mouseButtonFromDom(e.button);
-    if (b == null) return;
+    if (b == null || !type) return;
     if (e.type === "pointerdown") {
       e.currentTarget.focus();
       e.currentTarget.setPointerCapture(e.pointerId);
     }
     e.preventDefault();
-    send({ t: "mouse", mask: (e.type === "pointerdown" ? MOUSE.DOWN : MOUSE.UP) | (BUTTON_BIT[b] << 3), x: p[0], y: p[1] });
+    sendMove(p[0], p[1], mods, true);
+    send({ t: "mouse", mask: (type === "down" ? MOUSE.DOWN : MOUSE.UP) | (BUTTON_BIT[b] << 3), x: p[0], y: p[1], ...mods });
   };
 
   useEffect(() => {
@@ -412,13 +441,27 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ---- 鍵盤：帶鎖定鍵狀態；記住按著的鍵，畫面失去焦點時放開 ----
+  /** 最近一次知道的本機 CapsLock / NumLock（鍵盤 hook 攔到的鍵沒有事件物件可問）。 */
+  const locksRef = useRef({ caps: false, num: false });
+  const [held] = useState(() => new HeldKeys());
+  const sendKey = (scancode: number, down: boolean) => {
+    if (optsRef.current.viewOnly || !liveRef.current) return;
+    held.update(scancode, down);
+    send({ t: "key", down, scancode, ...locksRef.current });
+  };
+  const releaseKeys = () => {
+    for (const k of held.releaseAll()) send({ t: "key", ...k, ...locksRef.current });
+  };
+
   const onKey = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
     if (isPaneShortcut(e)) return;
     e.preventDefault();
     e.stopPropagation();
     const sc = scancodeForCode(e.code);
     if (sc == null) return;
-    send({ t: "key", down: e.type === "keydown", scancode: sc });
+    locksRef.current = lockModes(e);
+    sendKey(sc, e.type === "keydown");
   };
 
   /** 對方的事件（影像以外）。 */
@@ -460,6 +503,8 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
       liveRef.current = false;
       closeAll();
       keyAskRef.current.clear();
+      held.clear();
+      moveRef.current.sent = "";
       lastRemoteClipRef.current = null;
       lastSentClipRef.current = null;
       // 聊天記錄、最近一次錄影跨重連保留（同一個分頁）；其他都重來。
@@ -512,6 +557,7 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
       void stopRecording();
       liveRef.current = false;
       closeAll();
+      held.clear();
       publish(null);
     },
     combo(name: string) {
@@ -522,15 +568,15 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
       const seq: Record<string, number[]> = { win: [0xe05b], alt_tab: [0x38, 0x0f], ctrl_esc: [0x1d, 0x01], print_screen: [0xe037] };
       const keys = seq[name];
       if (!keys) return;
-      for (const k of keys) send({ t: "key", down: true, scancode: k });
-      for (const k of [...keys].reverse()) send({ t: "key", down: false, scancode: k });
+      for (const k of keys) sendKey(k, true);
+      for (const k of [...keys].reverse()) sendKey(k, false);
     },
     // 「把剪貼簿文字送到遠端」：整段交給對方打出來（對方的登入畫面這類不能貼上的地方也行）。
     paste(text: string) { if (text) send({ t: "type_text", text }); },
     focus() { canvasRef.current?.focus(); },
     refresh() { write({ t: "refresh" }); },
     desktopSize: () => size,
-    rawKey(sc: number, down: boolean) { send({ t: "key", down, scancode: sc }); },
+    rawKey(sc: number, down: boolean) { sendKey(sc, down); },
     showDisplays(set: number[]) {
       showDisplays(set);
       canvasRef.current?.focus();
@@ -575,6 +621,7 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
         onKeyDown={onKey}
         onKeyUp={onKey}
         onFocus={() => void syncLocalClipboard()}
+        onBlur={releaseKeys}
       />
       {stats && (
         <div className="absolute top-2 left-2 px-2 py-1 rounded bg-black/85 text-white/90 text-[11px] mono leading-4 pointer-events-none select-none"

@@ -1100,6 +1100,29 @@ const CASES = {
     const cmds = await page.evaluate(() => window.__DBKIT_RD_WRITES__.map((b) => { try { return JSON.parse(String.fromCharCode(...b)); } catch { return null; } }).filter(Boolean));
     check("滑鼠點擊送出 RustDesk 的 mouse 指令（左鍵按下 mask 9）", cmds.some((c) => c.t === "mouse" && c.mask === 9), JSON.stringify(cmds.slice(0, 4)));
     check("按 A 送出掃描碼 0x1E", cmds.some((c) => c.t === "key" && c.down === true && c.scancode === 0x1e));
+    // 對方按鍵是按在「目前游標」上：按下前一定先把游標移到同一點（節流省掉的最後一筆移動不會讓點擊點偏）。
+    const down9 = cmds.findIndex((c) => c.t === "mouse" && c.mask === 9);
+    const before9 = cmds[down9 - 1];
+    check("按下前先送游標移到同一點", down9 > 0 && before9.t === "mouse" && before9.mask === 0 && before9.x === cmds[down9].x && before9.y === cmds[down9].y,
+      JSON.stringify(cmds.slice(Math.max(0, down9 - 2), down9 + 1)));
+    const keyA = cmds.find((c) => c.t === "key" && c.scancode === 0x1e);
+    check("按鍵帶著本機的 CapsLock / NumLock 狀態（對方照著切）", typeof keyA?.caps === "boolean" && typeof keyA?.num === "boolean", JSON.stringify(keyA));
+    // Ctrl + 點選：滑鼠指令帶 ctrl（沒帶的話對方按下前會把 Ctrl 放開，變成單純的點選）
+    await canvas.click({ position: { x: 60, y: 60 } });
+    await page.keyboard.down("Control");
+    await canvas.click({ position: { x: 64, y: 64 } });
+    await page.keyboard.up("Control");
+    // 按著 Shift 時畫面失去焦點：對方的 Shift 要放開（不然一直按著）
+    await page.keyboard.down("Shift");
+    await page.getByRole("button", { name: "送出按鍵", exact: true }).focus();
+    await sleep(300);
+    await page.keyboard.up("Shift");
+    const cmds2 = await page.evaluate(() => window.__DBKIT_RD_WRITES__.map((b) => { try { return JSON.parse(String.fromCharCode(...b)); } catch { return null; } }).filter(Boolean));
+    check("Ctrl + 點選：mouse 指令帶 ctrl", cmds2.some((c) => c.t === "mouse" && c.mask === 9 && c.ctrl === true),
+      JSON.stringify(cmds2.filter((c) => c.t === "mouse" && c.mask === 9)));
+    const shiftDown = cmds2.findIndex((c) => c.t === "key" && c.scancode === 0x2a && c.down === true);
+    check("按著 Shift 離開畫面 → 送出 Shift 放開", shiftDown >= 0 && cmds2.slice(shiftDown + 1).some((c) => c.t === "key" && c.scancode === 0x2a && c.down === false),
+      JSON.stringify(cmds2.slice(Math.max(0, shiftDown))));
     check("Ctrl+Alt+Del 經後端送（不是拆成三個鍵）", await page.evaluate(() => window.__DBKIT_RD_KEYS__.includes("ctrl_alt_del")));
     check("只有一個螢幕：工具列沒有切換螢幕", (await page.locator("[data-rd-monitors]").count()) === 0);
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),

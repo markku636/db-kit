@@ -31,6 +31,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWrite;
 
 use crate::codec::write_frame;
+use crate::keymap;
 use crate::proto::message::{
     back_notification, key_event, login_response, message, misc, permission_info, video_frame, Auth2FA,
     CaptureDisplays, ChatMessage, Clipboard, ClipboardFormat, ControlKey, DisplayInfo, EncodedVideoFrames,
@@ -354,9 +355,31 @@ pub fn classify(data: &[u8]) -> Incoming {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Command {
     /// `mask` = 型別（0 移動、1 按下、2 放開、3 滾輪）| 按鍵 << 3（1 左、2 右、4 中）；滾輪時 x / y 是捲動量。
-    Mouse { mask: i32, x: i32, y: i32 },
-    /// PC 掃描碼（擴充鍵 OR 0xE000，跟 Windows 用戶端送的一樣）。
-    Key { down: bool, scancode: u32 },
+    /// `alt` / `ctrl` / `shift` / `meta` = 本機這時按著的修飾鍵（官方 `send_mouse` 的 modifiers）：對方按下滑鼠前
+    /// 會把修飾鍵整理成跟這個一樣（`fix_modifiers`），沒帶的會被放開——Ctrl / Shift + 點選就失效。
+    Mouse {
+        mask: i32,
+        x: i32,
+        y: i32,
+        #[serde(default)]
+        alt: bool,
+        #[serde(default)]
+        ctrl: bool,
+        #[serde(default)]
+        shift: bool,
+        #[serde(default)]
+        meta: bool,
+    },
+    /// PC 掃描碼（擴充鍵 OR 0xE000）；送出前換成對方系統的鍵碼（keymap.rs）。`caps` / `num` = 本機的
+    /// CapsLock / NumLock 開著沒（字母鍵帶 CapsLock、數字鍵盤帶 NumLock，對方照這個同步）。
+    Key {
+        down: bool,
+        scancode: u32,
+        #[serde(default)]
+        caps: bool,
+        #[serde(default)]
+        num: bool,
+    },
     CtrlAltDel,
     Refresh,
     /// 要看哪些螢幕（`PeerInfo.displays` 的索引）：一個 = 切到那個螢幕；多個 = 同時看（每張畫面帶 display）。
@@ -389,6 +412,11 @@ pub enum Command {
 pub struct PeerCtx {
     /// `Windows` / `Linux` / `Mac OS` / `Android`（`PeerInfo.platform`）。
     pub platform: String,
+}
+
+/// 對方是 Windows（還不知道時也當 Windows：db-kit 送的本來就是 Windows 的掃描碼）。
+fn is_windows(peer: &PeerCtx) -> bool {
+    peer.platform.is_empty() || peer.platform == "Windows"
 }
 
 fn option_message(o: OptionMessage) -> Message {
@@ -459,16 +487,37 @@ fn display_messages(wanted: &[i32]) -> Vec<Message> {
 pub fn command_messages(c: &Command, peer: &PeerCtx) -> Vec<Message> {
     let mut m = Message::new();
     match c {
-        Command::Mouse { mask, x, y } => {
-            m.set_mouse_event(MouseEvent { mask: *mask, x: *x, y: *y, ..Default::default() });
+        Command::Mouse { mask, x, y, alt, ctrl, shift, meta } => {
+            let mut e = MouseEvent { mask: *mask, x: *x, y: *y, ..Default::default() };
+            for (on, ck) in [(alt, ControlKey::Alt), (shift, ControlKey::Shift), (ctrl, ControlKey::Control), (meta, ControlKey::Meta)] {
+                if *on {
+                    e.modifiers.push(EnumOrUnknown::new(ck));
+                }
+            }
+            m.set_mouse_event(e);
         }
-        Command::Key { down, scancode } => {
+        // 官方 `windows_peer_special_key`：Windows 沒有 Pause 的掃描碼，改送舊式的 Pause 控制鍵。
+        Command::Key { down, scancode: keymap::SCANCODE_PAUSE, .. } if is_windows(peer) => {
+            let mut k = KeyEvent { down: *down, mode: EnumOrUnknown::new(KeyboardMode::Legacy), ..Default::default() };
+            k.union = Some(key_event::Union::ControlKey(EnumOrUnknown::new(ControlKey::Pause)));
+            m.set_key_event(k);
+        }
+        Command::Key { down, scancode, caps, num } => {
+            let sc = *scancode;
+            // 對方系統沒有這顆鍵：不送（送原碼會變成別的鍵）。
+            let Some(code) = keymap::peer_keycode(sc, &peer.platform) else { return Vec::new() };
             let mut k = KeyEvent { down: *down, mode: EnumOrUnknown::new(KeyboardMode::Map), ..Default::default() };
-            k.union = Some(key_event::Union::Chr(*scancode));
+            k.union = Some(key_event::Union::Chr(code));
+            if *caps && keymap::is_letter(sc) {
+                k.modifiers.push(EnumOrUnknown::new(ControlKey::CapsLock));
+            }
+            if *num && keymap::is_numpad(sc) {
+                k.modifiers.push(EnumOrUnknown::new(ControlKey::NumLock));
+            }
             m.set_key_event(k);
         }
         // 官方 `event_ctrl_alt_del`：Windows 用 CtrlAltDel 控制鍵（對方走 SAS）；其他系統送 Ctrl+Alt+Delete 組合。
-        Command::CtrlAltDel if peer.platform.is_empty() || peer.platform == "Windows" => {
+        Command::CtrlAltDel if is_windows(peer) => {
             let mut k = KeyEvent { down: true, press: true, mode: EnumOrUnknown::new(KeyboardMode::Legacy), ..Default::default() };
             k.union = Some(key_event::Union::ControlKey(EnumOrUnknown::new(ControlKey::CtrlAltDel)));
             m.set_key_event(k);
@@ -644,13 +693,15 @@ mod tests {
 
     #[test]
     fn commands_encode() {
-        let m = one(&Command::Key { down: true, scancode: 0xE05B });
+        let c: Command = serde_json::from_str(r#"{"t":"key","down":true,"scancode":57435}"#).unwrap();
+        let m = one(&c);
         let Some(message::Union::KeyEvent(k)) = m.union else { panic!() };
         assert_eq!(k.union, Some(key_event::Union::Chr(0xE05B)));
         assert_eq!(k.mode.enum_value(), Ok(KeyboardMode::Map));
+        assert!(k.modifiers.is_empty());
         let c: Command = serde_json::from_str(r#"{"t":"mouse","mask":9,"x":10,"y":20}"#).unwrap();
         let m = one(&c);
-        assert!(matches!(m.union, Some(message::Union::MouseEvent(ref e)) if e.mask == 9 && e.x == 10));
+        assert!(matches!(m.union, Some(message::Union::MouseEvent(ref e)) if e.mask == 9 && e.x == 10 && e.modifiers.is_empty()));
         let m = one(&Command::Refresh);
         assert!(matches!(m.union, Some(message::Union::Misc(ref ms)) if ms.refresh_video()));
         let m = auth_2fa(" 123 456 ", &[]);
@@ -682,6 +733,53 @@ mod tests {
             Some(message::Union::KeyEvent(k)) => k,
             x => panic!("{x:?}"),
         }
+    }
+
+    fn mods(k: &KeyEvent) -> Vec<ControlKey> {
+        k.modifiers.iter().map(|m| m.enum_value().unwrap()).collect()
+    }
+
+    /// 官方 `_map_keyboard_mode` + `add_lock_modes_modifiers`：鍵碼依對方系統換算；字母帶 CapsLock、數字鍵盤帶 NumLock。
+    #[test]
+    fn keys_follow_peer_platform_and_lock_modes() {
+        // A（0x1E = 30）
+        let k = key_event(r#"{"t":"key","down":true,"scancode":30,"caps":true,"num":true}"#, "Windows");
+        assert_eq!((k.chr(), mods(&k)), (0x1E, vec![ControlKey::CapsLock]), "字母只帶 CapsLock");
+        let k = key_event(r#"{"t":"key","down":true,"scancode":30,"caps":true}"#, "Linux");
+        assert_eq!((k.chr(), mods(&k)), (38, vec![ControlKey::CapsLock]), "Linux 的 A 是 38");
+        let k = key_event(r#"{"t":"key","down":false,"scancode":30}"#, "Mac OS");
+        assert_eq!((k.chr(), k.down, mods(&k)), (0, false, vec![]), "macOS 的 A 是 0；CapsLock 沒開不帶");
+        // 數字鍵盤 1（0x4F = 79）：NumLock 開著才帶，不帶 CapsLock
+        let k = key_event(r#"{"t":"key","down":true,"scancode":79,"caps":true,"num":true}"#, "Windows");
+        assert_eq!((k.chr(), mods(&k)), (0x4F, vec![ControlKey::NumLock]));
+        let k = key_event(r#"{"t":"key","down":true,"scancode":79,"num":false}"#, "Windows");
+        assert!(k.modifiers.is_empty(), "NumLock 關著 = 對方也關掉（數字鍵盤當方向鍵）");
+        // 主鍵盤的 1 / Enter：都不帶
+        for sc in [2, 28] {
+            let k = key_event(&format!(r#"{{"t":"key","down":true,"scancode":{sc},"caps":true,"num":true}}"#), "Windows");
+            assert!(k.modifiers.is_empty(), "{sc}");
+        }
+        // Pause：Windows 對方送舊式控制鍵；Linux 送 127
+        let k = key_event(r#"{"t":"key","down":true,"scancode":57629}"#, "Windows");
+        assert_eq!((k.control_key(), k.down, k.mode.enum_value()), (ControlKey::Pause, true, Ok(KeyboardMode::Legacy)));
+        let k = key_event(r#"{"t":"key","down":true,"scancode":57629}"#, "Linux");
+        assert_eq!(k.chr(), 127);
+        // 對方系統沒有的鍵：不送
+        let c: Command = serde_json::from_str(r#"{"t":"key","down":true,"scancode":70}"#).unwrap();
+        assert!(command_messages(&c, &PeerCtx { platform: "Mac OS".into() }).is_empty(), "macOS 沒有 ScrollLock");
+    }
+
+    /// 官方 `send_mouse`：滑鼠事件帶著按住的修飾鍵（對方按下前照這個整理修飾鍵）。
+    #[test]
+    fn mouse_carries_modifiers() {
+        let c: Command = serde_json::from_str(r#"{"t":"mouse","mask":9,"x":1,"y":2,"ctrl":true,"shift":true}"#).unwrap();
+        let Some(message::Union::MouseEvent(e)) = one(&c).union else { panic!() };
+        let got: Vec<ControlKey> = e.modifiers.iter().map(|m| m.enum_value().unwrap()).collect();
+        assert_eq!(got, vec![ControlKey::Shift, ControlKey::Control]);
+        let c: Command = serde_json::from_str(r#"{"t":"mouse","mask":10,"x":1,"y":2,"alt":true,"meta":true}"#).unwrap();
+        let Some(message::Union::MouseEvent(e)) = one(&c).union else { panic!() };
+        let got: Vec<ControlKey> = e.modifiers.iter().map(|m| m.enum_value().unwrap()).collect();
+        assert_eq!(got, vec![ControlKey::Alt, ControlKey::Meta]);
     }
 
     /// 官方 `event_ctrl_alt_del`：Windows → CtrlAltDel 控制鍵；Linux / macOS → Delete + Ctrl / Alt。
