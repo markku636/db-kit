@@ -284,6 +284,10 @@ where
     let mut peer = session::PeerCtx::default();
     // 傳檔連線的工作（列目錄 / 上傳 / 下載…，見 files.rs）。
     let mut files = login.file_transfer.then(files::Files::new);
+    // 截圖：我們送的編號 → 存檔路徑（對方回的編號不當路徑用：沒要過的截圖不寫檔）。
+    // 等對方回覆的截圖（session id）。
+    let mut shots: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut shot_seq: u32 = 0;
 
     loop {
         // 兩個讀取端都是取消安全的（select! 另一邊先好時，讀到一半的封包不會掉）。
@@ -320,6 +324,16 @@ where
                                 let hwid = if v["trust"] == true { &login.hwid[..] } else { &[] };
                                 session::send_sealed(&mut pw, &session::auth_2fa(code, hwid), &mut tx).await.map_err(|e| e.to_string())?;
                                 login_deadline = tokio::time::Instant::now() + session::LOGIN_TIMEOUT;
+                            }
+                        }
+                        Ok(Some(ipc::HostMsg::Json(v))) if v["t"] == "screenshot" => {
+                            // 官方 `ScreenshotRequest`：對方從那個螢幕的下一張畫面擷取、編成 PNG 回來（db-kit 存檔）。
+                            if logged_in {
+                                shot_seq += 1;
+                                let sid = format!("dbk-{shot_seq}");
+                                shots.insert(sid.clone());
+                                let display = v["display"].as_i64().unwrap_or(0) as i32;
+                                session::send_sealed(&mut pw, &session::screenshot_request(display, sid), &mut tx).await.map_err(|e| e.to_string())?;
                             }
                         }
                         Ok(Some(ipc::HostMsg::Json(v))) if files.is_some() && v["t"].as_str().is_some_and(|t| t.starts_with("fs_")) => {
@@ -471,6 +485,26 @@ where
                 }
             }
             Incoming::FileResponse(_) | Incoming::FileAction(_) => {}
+            Incoming::CursorData(c) if logged_in => {
+                let rgba = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &c.rgba);
+                emit(stdout, json!({ "type": "cursor_data", "id": c.id, "hotx": c.hotx, "hoty": c.hoty, "width": c.width, "height": c.height, "rgba": rgba })).await?;
+            }
+            Incoming::CursorId(id) if logged_in => emit(stdout, json!({ "type": "cursor_id", "id": id })).await?,
+            Incoming::CursorPosition { x, y } if logged_in => emit(stdout, json!({ "type": "cursor_position", "x": x, "y": y })).await?,
+            Incoming::FollowDisplay(d) if logged_in => emit(stdout, json!({ "type": "follow_display", "display": d })).await?,
+            Incoming::CursorData(_) | Incoming::CursorId(_) | Incoming::CursorPosition { .. } | Incoming::FollowDisplay(_) => {}
+            Incoming::Screenshot { sid, msg, data } => {
+                if shots.remove(&sid) {
+                    if !msg.is_empty() {
+                        emit(stdout, json!({ "type": "screenshot", "error": msg })).await?;
+                    } else if data.is_empty() {
+                        emit(stdout, json!({ "type": "screenshot", "error": "empty screenshot" })).await?;
+                    } else {
+                        let png = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+                        emit(stdout, json!({ "type": "screenshot", "png": png })).await?;
+                    }
+                }
+            }
             Incoming::Ignore => {}
         }
     }
@@ -1427,6 +1461,93 @@ mod tests {
         assert_eq!(docker("test -e /tmp/dbk-ft && echo still || echo gone"), "gone");
 
         let _ = std::fs::remove_dir_all(&local_dir);
+        task.abort();
+    }
+
+    /// 對真的 Linux 被控端：游標圖（`cursor_data`，RGBA 大小對得上）、截圖（PNG 寫到指定路徑）、
+    /// 真彩（要了 4:4:4 之後對方送的 VP9 關鍵畫面是 profile 1）。`DBKIT_IT_SAVE_444=<檔案>` 會把那張 4:4:4 關鍵畫面
+    /// 存下來（給前端用 WebCodecs 驗證解得出來）。`DBKIT_RUSTDESK_IT_PORT`（預設 21118）。
+    /// `cargo test -- --ignored real_peer_display_and_cursor --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn real_peer_display_and_cursor() {
+        let host = std::env::var("DBKIT_RUSTDESK_IT_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+        let port: u16 = std::env::var("DBKIT_RUSTDESK_IT_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(21118);
+        let tcp = TcpStream::connect((host.as_str(), port)).await.expect("connect peer");
+        let login = direct(&host, "dbkit123", Decoders { vp9: true, vp8: true, av1: false }, "it");
+        let (mut w, host_in_r) = tokio::io::duplex(1 << 16);
+        let (mut host_out_w, mut out) = tokio::io::duplex(32 << 20);
+        let task = tokio::spawn(async move {
+            let mut stdin = ipc::MsgReader::new(host_in_r);
+            drive(tcp, &mut stdin, &mut host_out_w, &login).await
+        });
+        /// 讀到 `done` 說好為止；`v` 是事件（影像時 Null），`raw` 是整則訊息。
+        async fn until<R: AsyncRead + Unpin>(
+            r: &mut R,
+            secs: u64,
+            mut done: impl FnMut(&serde_json::Value, &[u8]) -> bool,
+        ) -> Option<(serde_json::Value, Vec<u8>)> {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(secs);
+            loop {
+                let Ok(Ok(Some(raw))) = tokio::time::timeout_at(deadline, ipc::read_raw(r)).await else { return None };
+                let v = if raw[0] == ipc::OUT_JSON { serde_json::from_slice(&raw[1..]).unwrap() } else { serde_json::Value::Null };
+                assert!(v["type"] != "closed" && v["type"] != "login_error", "{v}");
+                if done(&v, &raw) {
+                    return Some((v, raw));
+                }
+            }
+        }
+        async fn send<W: AsyncWrite + Unpin>(w: &mut W, v: serde_json::Value) {
+            ipc::write_host_json(w, &v).await.unwrap();
+        }
+        until(&mut out, 40, |v, _| v["type"] == "connected").await.expect("登入");
+
+        // 游標圖：游標移到 xterm 上（I 形游標），對方送 cursor_data
+        send(&mut w, json!({ "t": "mouse", "mask": 0, "x": 5, "y": 700 })).await;
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        send(&mut w, json!({ "t": "mouse", "mask": 0, "x": 200, "y": 150 })).await;
+        let (c, _) = until(&mut out, 15, |v, _| v["type"] == "cursor_data").await.expect("要收到游標圖");
+        let (wd, ht) = (c["width"].as_u64().unwrap(), c["height"].as_u64().unwrap());
+        let rgba = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, c["rgba"].as_str().unwrap()).unwrap();
+        eprintln!("cursor {} {wd}x{ht} hot ({},{})", c["id"], c["hotx"], c["hoty"]);
+        assert_eq!(rgba.len() as u64, wd * ht * 4);
+        assert!(c["id"].is_string());
+
+        // 顯示對方游標：對方開始送游標位置
+        send(&mut w, json!({ "t": "toggle", "name": "show_remote_cursor", "on": true })).await;
+        send(&mut w, json!({ "t": "mouse", "mask": 0, "x": 300, "y": 200 })).await;
+        let pos = until(&mut out, 10, |v, _| v["type"] == "cursor_position").await;
+        eprintln!("cursor_position: {:?}", pos.as_ref().map(|p| p.0.clone()));
+
+        // 截圖
+        send(&mut w, json!({ "t": "screenshot", "display": 0 })).await;
+        let (s, _) = until(&mut out, 20, |v, _| v["type"] == "screenshot").await.expect("截圖結果");
+        assert!(s["error"].is_null(), "{s}");
+        let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s["png"].as_str().expect("png")).unwrap();
+        assert!(png.starts_with(b"\x89PNG"), "要是 PNG");
+        eprintln!("screenshot {} bytes", png.len());
+
+        // 真彩：要 4:4:4 → 對方的 VP9 關鍵畫面是 profile 1
+        send(&mut w, json!({ "t": "codec", "prefer": "vp9", "vp9": true, "vp8": true, "av1": false, "i444": true })).await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        send(&mut w, json!({ "t": "refresh" })).await;
+        let profile_of = |raw: &[u8]| -> Option<u8> {
+            // [2][codec][key][display][保留][pts 8][資料]：VP9 關鍵畫面的第一個位元組 = frame_marker(2) + profile 低位 / 高位
+            (raw[0] == ipc::OUT_VIDEO && raw[1] == 1 && raw[2] == 1 && raw.len() > 13).then(|| {
+                let b = raw[13];
+                ((b >> 5) & 1) | (((b >> 4) & 1) << 1)
+            })
+        };
+        let (_, key) = until(&mut out, 20, |_, raw| profile_of(raw) == Some(1)).await.expect("要收到 profile 1（4:4:4）的 VP9 關鍵畫面");
+        eprintln!("4:4:4 keyframe {} bytes", key.len() - 13);
+        if let Ok(p) = std::env::var("DBKIT_IT_SAVE_444") {
+            std::fs::write(&p, &key[13..]).unwrap();
+            eprintln!("saved to {p}");
+        }
+        // 換回 4:2:0
+        send(&mut w, json!({ "t": "codec", "prefer": "vp9", "vp9": true, "vp8": true, "av1": false })).await;
+        send(&mut w, json!({ "t": "refresh" })).await;
+        until(&mut out, 20, |_, raw| profile_of(raw) == Some(0)).await.expect("換回 profile 0");
         task.abort();
     }
 

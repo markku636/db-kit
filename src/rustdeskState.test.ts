@@ -1,22 +1,40 @@
 import { describe, expect, it } from "vitest";
 import {
-  addMyChat, applyEvent, canRestart, DEFAULT_PREFS, initialState, isWindowsPeer, MAX_CHAT, prefsFromUi, prefsToUi,
+  addMyChat, applyEvent, canRestart, canTrueColor, clampScale, DEFAULT_PREFS, initialState, isWindowsPeer, MAX_CHAT, prefsFromUi, prefsToUi,
 } from "./rustdeskState";
 
 describe("prefs（存在主機的 options.ui）", () => {
   it("沒存過 / 存了怪值 → 預設", () => {
     expect(prefsFromUi(undefined)).toEqual(DEFAULT_PREFS);
-    expect(prefsFromUi({ rustdesk_quality: "ultra", rustdesk_view: "zoom", rustdesk_codec: "h264" })).toEqual(DEFAULT_PREFS);
+    expect(prefsFromUi({ rustdesk_quality: "ultra", rustdesk_view: "zoom", rustdesk_codec: "h264", rustdesk_scale: "abc" })).toEqual(DEFAULT_PREFS);
   });
   it("來回一樣；跟預設一樣的不寫進檔案；別的鍵保留", () => {
-    const p = { view: "original", quality: "low", codec: "vp8", stats: true, lockAfterEnd: true, keyboard: "translate" } as const;
+    const p = {
+      view: "custom", quality: "low", codec: "vp8", stats: true, lockAfterEnd: true, keyboard: "translate",
+      scale: 75, showRemoteCursor: true, followRemoteCursor: true, followRemoteWindow: true, trueColor: true, reverseWheel: true,
+    } as const;
     const ui = prefsToUi(p, { fullscreen: "1" });
     expect(ui).toEqual({
-      fullscreen: "1", rustdesk_view: "original", rustdesk_quality: "low", rustdesk_codec: "vp8",
-      rustdesk_stats: "1", rustdesk_lock_after_end: "1", rustdesk_keyboard: "translate",
+      fullscreen: "1", rustdesk_view: "custom", rustdesk_quality: "low", rustdesk_codec: "vp8",
+      rustdesk_stats: "1", rustdesk_lock_after_end: "1", rustdesk_keyboard: "translate", rustdesk_scale: "75",
+      rustdesk_remote_cursor: "1", rustdesk_follow_cursor: "1", rustdesk_follow_window: "1", rustdesk_true_color: "1",
+      rustdesk_reverse_wheel: "1",
     });
     expect(prefsFromUi(ui)).toEqual(p);
     expect(prefsToUi(DEFAULT_PREFS, ui)).toEqual({ fullscreen: "1" });
+  });
+  it("自訂縮放限制在 10–400%", () => {
+    expect(clampScale(5)).toBe(10);
+    expect(clampScale(999)).toBe(400);
+    expect(clampScale(87.6)).toBe(88);
+    expect(clampScale(NaN)).toBe(100);
+    expect(prefsFromUi({ rustdesk_scale: "1000" }).scale).toBe(400);
+  });
+  it("真彩：對方那個編碼要解得了 4:4:4", () => {
+    const base = { vp9: true, vp8: true, av1: false, vp9_444: false, av1_444: false };
+    expect(canTrueColor(base)).toBe(false);
+    expect(canTrueColor({ ...base, vp9_444: true })).toBe(true);
+    expect(canTrueColor({ ...base, vp9: false, av1: true, av1_444: true })).toBe(true);
   });
 });
 

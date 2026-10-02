@@ -172,6 +172,7 @@ const CASE_FX = {
   "rd-rustdesk-toolbar": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-keyboard": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-files": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
+  "rd-rustdesk-display": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "update-dialog-install": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-manual": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-error": { GITHUB_RELEASE: FX_RELEASE },
@@ -1939,6 +1940,168 @@ const CASES = {
     check("剩一個螢幕：切換螢幕收起", (await bar.count()) === 0);
     check("退回螢幕 1：送 displays [0]", JSON.stringify((await cmds()).filter((c) => c.t === "displays").pop()?.set) === "[0]");
     check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0));
+  },
+
+  // RustDesk 畫面與游標：自訂縮放、對方游標形狀、顯示對方游標、跟著對方切螢幕、真彩、滾輪反向、截圖。
+  async "rd-rustdesk-display"(page) {
+    await page.evaluate(() => {
+      window.__DBKIT_RD_PEER__ = { platform: "Linux" };
+      window.__DBKIT_RD_DISPLAYS__ = [
+        { x: 0, y: 0, width: 1024, height: 768, name: "a" },
+        { x: 1024, y: 0, width: 1024, height: 768, name: "b" },
+      ];
+    });
+    const tree = page.locator("[data-rd-host-tree]");
+    await tree.waitFor({ timeout: 5000 }).catch(() => {});
+    await tree.getByText("office-pc", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => document.querySelector("[data-rd-rustdesk] canvas")?.dataset.rdSize === "1024x768", null, { timeout: 10000 }).catch(() => {});
+    const cmds = () => page.evaluate(() => window.__DBKIT_RD_WRITES__.map((b) => { try { return JSON.parse(new TextDecoder().decode(new Uint8Array(b))); } catch { return null; } }).filter(Boolean));
+    const lastCmd = async (t) => (await cmds()).filter((c) => c.t === t).pop();
+    const lastToggle = async (name) => (await cmds()).filter((c) => c.t === "toggle" && c.name === name).pop();
+    const push = (ev) => page.evaluate((e) => window.__DBKIT_RD_PUSH__([1, ...new TextEncoder().encode(JSON.stringify(e))]), ev);
+    const menu = (which) => page.locator(`[data-rd-menu="${which}"]`);
+    const opt = (id) => page.locator(`[data-rd-opt="${id}"]`);
+    const action = (id) => page.locator(`[data-rd-action="${id}"]`);
+    const ui = async () => (await page.evaluate(() => window.__DBKIT_RD_SESSION_SAVES__.map((s) => s.session))).at(-1)?.options?.ui ?? {};
+    const canvas = page.locator("[data-rd-rustdesk] canvas");
+    const cursorCss = () => canvas.evaluate((c) => c.style.cursor);
+
+    // ---- 自訂縮放 ----
+    await menu("display").click();
+    check("顯示設定有自訂縮放", (await opt("view-custom").count()) === 1);
+    await opt("view-custom").click();
+    await page.getByText(/縮放比例/).waitFor({ timeout: 3000 }).catch(() => {});
+    await page.keyboard.press("Control+A");
+    await page.keyboard.type("50");
+    await page.keyboard.press("Enter");
+    await sleep(300);
+    const custom = await page.evaluate(() => {
+      const w = document.querySelector("[data-rd-rustdesk]");
+      const c = w?.querySelector("canvas");
+      return { mode: w?.dataset.rdView, width: c?.style.width ?? "", height: c?.style.height ?? "", overflow: w ? getComputedStyle(w).overflow : "" };
+    });
+    check("自訂縮放 50% → 畫面 512×384、可捲動", custom.mode === "custom" && custom.width === "512px" && custom.height === "384px" && custom.overflow === "auto", JSON.stringify(custom));
+    check("縮放存回主機設定", (await ui()).rustdesk_view === "custom" && (await ui()).rustdesk_scale === "50", JSON.stringify(await ui()));
+    let b = await canvas.boundingBox();
+    await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+    await sleep(200);
+    let m = (await cmds()).filter((c) => c.t === "mouse" && c.mask === 9).pop();
+    check("縮放後點正中央 → 對方座標也是正中央", m && Math.abs(m.x - 512) <= 4 && Math.abs(m.y - 384) <= 4, JSON.stringify(m));
+    await menu("display").click();
+    check("選單顯示目前的比例", (await opt("view-custom").textContent()).includes("50%"), await opt("view-custom").textContent());
+    await page.keyboard.press("Escape");
+
+    // ---- 對方游標形狀 ----
+    const rgba = (w, h, rgb) => {
+      const u8 = new Uint8Array(w * h * 4);
+      for (let i = 0; i < w * h; i++) u8.set([...rgb, 255], i * 4);
+      return Buffer.from(u8).toString("base64");
+    };
+    await push({ type: "cursor_data", id: "42", hotx: 4, hoty: 6, width: 8, height: 12, rgba: rgba(8, 12, [255, 0, 0]) });
+    await sleep(200);
+    const c42 = await cursorCss();
+    check("對方送游標圖 → 畫面上的游標換成那個（照 50% 縮放，熱點 2 3）", /^url\("?data:image\/png/.test(c42) && / 2 3, default$/.test(c42), c42.slice(-40));
+    await push({ type: "cursor_data", id: "7", hotx: 0, hoty: 0, width: 16, height: 16, rgba: rgba(16, 16, [0, 0, 255]) });
+    await sleep(200);
+    const c7 = await cursorCss();
+    await push({ type: "cursor_id", id: "42" });
+    await sleep(200);
+    check("換游標、再用編號換回之前的游標", c7 !== c42 && / 0 0, default$/.test(c7) && (await cursorCss()) === c42);
+    await push({ type: "cursor_data", id: "bad", hotx: 0, hoty: 0, width: 4, height: 4, rgba: rgba(2, 2, [0, 0, 0]) });
+    await sleep(100);
+    check("大小不符的游標圖不理", (await cursorCss()) === c42);
+
+    // ---- 顯示對方游標 ----
+    await menu("display").click();
+    await opt("remote-cursor").click();
+    await sleep(300);
+    check("顯示對方游標 → 告訴對方、存回主機設定", (await lastToggle("show_remote_cursor"))?.on === true && (await ui()).rustdesk_remote_cursor === "1");
+    await push({ type: "cursor_position", x: 200, y: 100 });
+    await sleep(200);
+    const overlay = page.locator("[data-rd-remote-cursor]");
+    const ov = await overlay.evaluate((o) => ({ display: o.style.display, left: parseFloat(o.style.left), top: parseFloat(o.style.top) }));
+    const wrapBox = await page.locator("[data-rd-rustdesk]").boundingBox();
+    b = await canvas.boundingBox();
+    // 對方 (200, 100) × 50% → 畫面上 (100, 50)，減掉熱點 (2, 3)
+    const ex = b.x - wrapBox.x + 100 - 2;
+    const ey = b.y - wrapBox.y + 50 - 3;
+    check("對方那邊移動游標 → 畫在對方游標的位置、本機游標先藏起來", ov.display === "block" && Math.abs(ov.left - ex) <= 1 && Math.abs(ov.top - ey) <= 1
+      && (await cursorCss()) === "none", JSON.stringify({ ov, ex, ey }));
+    await page.mouse.move(b.x + 30, b.y + 30);
+    await page.mouse.move(b.x + 40, b.y + 40);
+    await sleep(200);
+    check("本機一動滑鼠 → 換回本機游標", (await overlay.evaluate((o) => o.style.display)) === "none" && (await cursorCss()) === c42);
+
+    // ---- 跟著對方切螢幕 ----
+    await menu("display").click();
+    check("兩個螢幕：有跟著對方游標 / 焦點視窗", (await opt("follow-cursor").count()) === 1 && (await opt("follow-window").count()) === 1);
+    await opt("follow-cursor").click();
+    await sleep(300);
+    check("跟著對方游標 → 告訴對方", (await lastToggle("follow_remote_cursor"))?.on === true && (await ui()).rustdesk_follow_cursor === "1");
+    await push({ type: "follow_display", display: 1 });
+    await sleep(300);
+    check("對方游標到螢幕 2 → 跟著切過去", JSON.stringify((await lastCmd("displays"))?.set) === "[1]"
+      && (await page.locator('[data-rd-monitor="1"]').getAttribute("aria-pressed")) === "true");
+    await page.locator('[data-rd-monitor="0"]').click();
+    await sleep(200);
+
+    // ---- 真彩 ----
+    await menu("display").click();
+    const canTrue = (await opt("true-color").count()) === 1;
+    if (canTrue) {
+      await opt("true-color").click();
+      await sleep(300);
+      const cc = await lastCmd("codec");
+      check("真彩 → 送 codec i444、存回主機設定", cc?.i444 === true && (await ui()).rustdesk_true_color === "1", JSON.stringify(cc));
+    } else {
+      await page.keyboard.press("Escape");
+      check("這個瀏覽器解不了 4:4:4 → 沒有真彩選項", true);
+    }
+
+    // ---- 滾輪反向 ----
+    await menu("display").click();
+    await opt("view-adaptive").click();
+    await sleep(200);
+    b = await canvas.boundingBox();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await page.mouse.wheel(0, 120);
+    await sleep(200);
+    const normal = (await cmds()).filter((c) => c.t === "mouse" && c.mask === 3).pop();
+    await menu("display").click();
+    await opt("reverse-wheel").click();
+    await sleep(200);
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await page.mouse.wheel(0, 120);
+    await sleep(200);
+    const rev = (await cmds()).filter((c) => c.t === "mouse" && c.mask === 3).pop();
+    check("滾輪反向：往下捲送的方向反過來", normal?.y === -1 && rev?.y === 1 && (await ui()).rustdesk_reverse_wheel === "1", JSON.stringify({ normal, rev }));
+
+    // ---- 截圖：請對方擷取（原始畫質），PNG 回來交給後端存進截圖資料夾 ----
+    await menu("actions").click();
+    await action("screenshot").click();
+    await sleep(300);
+    const shot = await lastCmd("screenshot");
+    await menu("actions").click();
+    check("截圖（動作選單）→ 請對方擷取正在看的螢幕；等回覆時不能再按", shot?.display === 0 && (await action("screenshot").count()) === 0, JSON.stringify(shot));
+    await page.keyboard.press("Escape");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]).toString("base64");
+    await push({ type: "screenshot", png });
+    await sleep(300);
+    const saved = (await page.evaluate(() => window.__DBKIT_RD_SHOTS__ ?? [])).at(-1);
+    check("對方回 PNG → 存檔（檔名用主機名稱）、提示存到哪裡", saved?.name === "office-pc" && saved?.bytes === 12 && saved?.head?.[1] === 0x50
+      && (await page.getByText(/截圖已存到/).count()) > 0, JSON.stringify(saved));
+    await menu("actions").click();
+    await action("reveal_screenshot").click();
+    await sleep(200);
+    check("動作選單「開啟截圖資料夾」", (await page.evaluate(() => window.__DBKIT_RD_REVEALS__ ?? [])).at(-1) === saved?.path);
+    await menu("actions").click();
+    await action("screenshot").click();
+    await sleep(300);
+    await push({ type: "screenshot", error: "Wayland 不支援" });
+    await sleep(300);
+    check("對方截圖失敗 → 顯示原因", (await page.getByText(/截圖存檔失敗：Wayland 不支援/).count()) > 0);
+    check("沒有未實作的遠端桌面 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0),
+      await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 
   // RustDesk 對方開了雙重驗證：問的是驗證碼（不是密碼、不能記住），錯了顯示原因再問，對了就連上。

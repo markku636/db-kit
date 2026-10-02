@@ -225,6 +225,13 @@ pub fn login_request(peer: &str, proof: Vec<u8>, dec: Decoders, session_id: u64,
     m
 }
 
+/// 截圖請求（官方 `ScreenshotRequest`）：對方從 `display` 的下一張畫面擷取，回 `ScreenshotResponse { sid, data: PNG }`。
+pub fn screenshot_request(display: i32, sid: String) -> Message {
+    let mut m = Message::new();
+    m.set_screenshot_request(crate::proto::message::ScreenshotRequest { display, sid, ..Default::default() });
+    m
+}
+
 /// 改成傳檔連線（官方 `ConnType::FILE_TRANSFER`：`LoginRequest.file_transfer`）：對方不送畫面，只處理檔案動作。
 pub fn as_file_transfer(m: &mut Message) {
     if let Some(message::Union::LoginRequest(lr)) = m.union.as_mut() {
@@ -290,7 +297,47 @@ pub enum Incoming {
     FileResponse(crate::proto::message::FileResponse),
     /// 傳檔：上傳時對方回的 `send_confirm`。
     FileAction(crate::proto::message::FileAction),
+    /// 對方的游標圖（RGBA，已解壓縮、驗過大小；官方 `decode_cursor_data`）。`id` 是字串（u64 在 JS 裡會失真）。
+    CursorData(Cursor),
+    /// 對方換成之前送過的那張游標圖。
+    CursorId(String),
+    /// 對方游標的位置（開了「顯示對方游標」才送）。
+    CursorPosition { x: i32, y: i32 },
+    /// 對方的游標 / 焦點視窗移到另一個螢幕（開了「跟著對方游標 / 視窗」時，官方 `follow_current_display`）。
+    FollowDisplay(i32),
+    /// 截圖的結果（`sid` 是我們送的編號；`msg` 非空 = 失敗原因；`data` 是 PNG）。
+    Screenshot { sid: String, msg: String, data: Vec<u8> },
     Ignore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cursor {
+    pub id: String,
+    pub hotx: i32,
+    pub hoty: i32,
+    pub width: i32,
+    pub height: i32,
+    pub rgba: Vec<u8>,
+}
+
+/// 游標圖最大邊長（官方 `MAX_CURSOR_SIZE`）。
+const MAX_CURSOR: i32 = 512;
+
+/// 解游標圖：大小、熱點要合理，RGBA 是 zstd 壓縮的（官方 `decode_cursor_data`）。不合理的丟掉。
+fn cursor_of(cd: &crate::proto::message::CursorData) -> Option<Cursor> {
+    use std::io::Read;
+    if !(1..=MAX_CURSOR).contains(&cd.width) || !(1..=MAX_CURSOR).contains(&cd.height) {
+        return None;
+    }
+    if !(0..cd.width).contains(&cd.hotx) || !(0..cd.height).contains(&cd.hoty) {
+        return None;
+    }
+    let expected = cd.width as usize * cd.height as usize * 4;
+    let mut src = &cd.colors[..];
+    let dec = ruzstd::decoding::StreamingDecoder::new(&mut src).ok()?;
+    let mut rgba = Vec::with_capacity(expected);
+    dec.take(expected as u64 + 1).read_to_end(&mut rgba).ok()?;
+    (rgba.len() == expected).then(|| Cursor { id: cd.id.to_string(), hotx: cd.hotx, hoty: cd.hoty, width: cd.width, height: cd.height, rgba })
 }
 
 pub fn classify(data: &[u8]) -> Incoming {
@@ -316,6 +363,10 @@ pub fn classify(data: &[u8]) -> Incoming {
         Some(message::Union::VideoFrame(vf)) => Incoming::Frames(frames_of(&vf)),
         Some(message::Union::FileResponse(fr)) => Incoming::FileResponse(fr),
         Some(message::Union::FileAction(fa)) => Incoming::FileAction(fa),
+        Some(message::Union::CursorData(cd)) => cursor_of(&cd).map_or(Incoming::Ignore, Incoming::CursorData),
+        Some(message::Union::CursorId(id)) => Incoming::CursorId(id.to_string()),
+        Some(message::Union::CursorPosition(p)) => Incoming::CursorPosition { x: p.x, y: p.y },
+        Some(message::Union::ScreenshotResponse(r)) => Incoming::Screenshot { sid: r.sid, msg: r.msg, data: r.data.to_vec() },
         Some(message::Union::PeerInfo(pi)) => Incoming::Displays(pi.displays.iter().map(Display::from).collect()),
         Some(message::Union::TestDelay(t)) if !t.from_client => {
             let (delay, bitrate) = (t.last_delay, t.target_bitrate);
@@ -332,6 +383,7 @@ pub fn classify(data: &[u8]) -> Incoming {
         }
         Some(message::Union::Misc(ms)) => match ms.union {
             Some(misc::Union::CloseReason(r)) => Incoming::Closed(r),
+            Some(misc::Union::FollowCurrentDisplay(d)) => Incoming::FollowDisplay(d),
             Some(misc::Union::SwitchDisplay(sd)) => Incoming::DisplayChanged(DisplayChanged {
                 display: sd.display,
                 x: sd.x,
@@ -399,13 +451,17 @@ pub enum Command {
     Displays { set: Vec<i32> },
     /// 畫質：`best`（最佳畫質）/ `balanced`（平衡）/ `low`（最佳反應）。
     Quality { level: String },
-    /// 偏好的編碼（`auto` / `vp9` / `vp8` / `av1`）+ 這端能解哪些。
+    /// 偏好的編碼（`auto` / `vp9` / `vp8` / `av1`）+ 這端能解哪些；`i444` = 要真彩（4:4:4，官方 `i444` + `prefer_chroma`），
+    /// 這端的 VP9 / AV1 解得了 4:4:4 時 db-kit 才會帶。
     Codec {
         prefer: String,
         #[serde(flatten)]
         decoders: Decoders,
+        #[serde(default)]
+        i444: bool,
     },
-    /// 連線中的開關：`block_input`（封鎖對方的鍵盤滑鼠）/ `disable_clipboard` / `lock_after_session_end`。
+    /// 連線中的開關：`block_input`（封鎖對方的鍵盤滑鼠）/ `disable_clipboard` / `lock_after_session_end` /
+    /// `show_remote_cursor`（對方送游標位置）/ `follow_remote_cursor` / `follow_remote_window`（對方游標 / 焦點換螢幕時通知）。
     Toggle { name: String, on: bool },
     /// 鎖定對方的畫面（Win+L）。
     LockScreen,
@@ -445,7 +501,8 @@ fn bool_option(on: bool) -> EnumOrUnknown<BoolOption> {
 }
 
 /// 能解的編碼 + 偏好（官方 `update_supported_decodings`）。偏好的那個解不了就用自動。
-pub fn supported_decoding(dec: Decoders, prefer: &str) -> SupportedDecoding {
+/// `i444` = 要真彩：宣告 VP9 / AV1 解得了 4:4:4、偏好 I444（對方編得出來才會用）。
+pub fn supported_decoding(dec: Decoders, prefer: &str, i444: bool) -> SupportedDecoding {
     let prefer = match prefer {
         "vp9" if dec.vp9 => PreferCodec::VP9,
         "vp8" if dec.vp8 => PreferCodec::VP8,
@@ -460,6 +517,8 @@ pub fn supported_decoding(dec: Decoders, prefer: &str) -> SupportedDecoding {
         ability_h264: 0,
         ability_h265: 0,
         prefer: EnumOrUnknown::new(prefer),
+        i444: MessageField::some(crate::proto::message::CodecAbility { vp9: i444 && dec.vp9, av1: i444 && dec.av1, ..Default::default() }),
+        prefer_chroma: EnumOrUnknown::new(if i444 { crate::proto::message::Chroma::I444 } else { crate::proto::message::Chroma::I420 }),
         ..Default::default()
     }
 }
@@ -556,9 +615,9 @@ pub fn command_messages(c: &Command, peer: &PeerCtx) -> Vec<Message> {
             };
             m = option_message(OptionMessage { image_quality: EnumOrUnknown::new(q), ..Default::default() });
         }
-        Command::Codec { prefer, decoders } => {
+        Command::Codec { prefer, decoders, i444 } => {
             m = option_message(OptionMessage {
-                supported_decoding: MessageField::some(supported_decoding(*decoders, prefer)),
+                supported_decoding: MessageField::some(supported_decoding(*decoders, prefer, *i444)),
                 ..Default::default()
             });
         }
@@ -568,6 +627,9 @@ pub fn command_messages(c: &Command, peer: &PeerCtx) -> Vec<Message> {
                 "block_input" => o.block_input = bool_option(*on),
                 "disable_clipboard" => o.disable_clipboard = bool_option(*on),
                 "lock_after_session_end" => o.lock_after_session_end = bool_option(*on),
+                "show_remote_cursor" => o.show_remote_cursor = bool_option(*on),
+                "follow_remote_cursor" => o.follow_remote_cursor = bool_option(*on),
+                "follow_remote_window" => o.follow_remote_window = bool_option(*on),
                 _ => return Vec::new(),
             }
             m = option_message(o);
@@ -942,6 +1004,66 @@ mod tests {
         let mut m = Message::new();
         m.set_clipboard(cb(false, vec![0xff, 0xfe], ClipboardFormat::Text));
         assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Ignore), "不是 UTF-8 → 略過");
+    }
+
+    /// 游標圖（zstd 壓縮的 RGBA；大小 / 熱點不合理的丟掉）、游標 id / 位置、跟著換螢幕、截圖回覆。
+    #[test]
+    fn classify_cursor_and_screenshot() {
+        use crate::proto::message::{CursorData, CursorPosition, ScreenshotResponse};
+        // ruzstd 只會解：用「原樣區塊」手做一個 zstd frame（magic + 單一 raw block）。
+        fn zstd_raw(data: &[u8]) -> Vec<u8> {
+            let mut f = vec![0x28, 0xB5, 0x2F, 0xFD, 0x20, data.len() as u8];
+            let n = data.len() as u32;
+            let hdr = (n << 3) | 1; // last block、raw
+            f.extend_from_slice(&hdr.to_le_bytes()[..3]);
+            f.extend_from_slice(data);
+            f
+        }
+        let rgba: Vec<u8> = (0..2 * 2 * 4).map(|i| i as u8).collect();
+        let mut m = Message::new();
+        m.set_cursor_data(CursorData { id: 18446744073709551615, hotx: 1, hoty: 0, width: 2, height: 2, colors: zstd_raw(&rgba).into(), ..Default::default() });
+        match classify(&m.write_to_bytes().unwrap()) {
+            Incoming::CursorData(c) => {
+                assert_eq!((c.id.as_str(), c.hotx, c.width, c.height), ("18446744073709551615", 1, 2, 2), "id 用字串：u64 在 JS 會失真");
+                assert_eq!(c.rgba, rgba);
+            }
+            x => panic!("{x:?}"),
+        }
+        // 熱點在圖外 / 太大 / 解出來長度不對：丟掉
+        for (w, h, hx, colors) in [(2, 2, 5, zstd_raw(&rgba)), (600, 2, 0, zstd_raw(&rgba)), (3, 3, 0, zstd_raw(&rgba))] {
+            let mut m = Message::new();
+            m.set_cursor_data(CursorData { id: 1, hotx: hx, width: w, height: h, colors: colors.into(), ..Default::default() });
+            assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Ignore), "{w}x{h} hot {hx}");
+        }
+        let mut m = Message::new();
+        m.set_cursor_id(42);
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::CursorId(ref id) if id == "42"));
+        let mut m = Message::new();
+        m.set_cursor_position(CursorPosition { x: -5, y: 9, ..Default::default() });
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::CursorPosition { x: -5, y: 9 }));
+        let m = misc_message(|ms| ms.set_follow_current_display(1));
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::FollowDisplay(1)));
+        let mut m = Message::new();
+        m.set_screenshot_response(ScreenshotResponse { sid: "dbk-1".into(), data: vec![0x89, b'P'].into(), ..Default::default() });
+        assert!(matches!(classify(&m.write_to_bytes().unwrap()), Incoming::Screenshot { ref sid, ref data, .. } if sid == "dbk-1" && data == &[0x89, b'P']));
+        assert!(matches!(screenshot_request(2, "s".into()).union, Some(message::Union::ScreenshotRequest(ref r)) if r.display == 2 && r.sid == "s"));
+    }
+
+    /// 真彩：宣告 VP9 / AV1 解得了 4:4:4、偏好 I444；新開關（顯示對方游標、跟著對方游標 / 視窗）。
+    #[test]
+    fn true_color_and_cursor_toggles() {
+        let o = option_of(r#"{"t":"codec","prefer":"auto","vp9":true,"vp8":true,"av1":false,"i444":true}"#).unwrap();
+        let d = o.supported_decoding.unwrap();
+        assert_eq!((d.i444.vp9, d.i444.av1, d.prefer_chroma.enum_value()), (true, false, Ok(crate::proto::message::Chroma::I444)));
+        let o = option_of(r#"{"t":"codec","prefer":"auto","vp9":true,"vp8":true,"av1":true}"#).unwrap();
+        let d = o.supported_decoding.unwrap();
+        assert_eq!((d.i444.vp9, d.prefer_chroma.enum_value()), (false, Ok(crate::proto::message::Chroma::I420)), "沒要真彩");
+        let o = option_of(r#"{"t":"toggle","name":"show_remote_cursor","on":true}"#).unwrap();
+        assert_eq!(o.show_remote_cursor.enum_value(), Ok(BoolOption::Yes));
+        let o = option_of(r#"{"t":"toggle","name":"follow_remote_cursor","on":true}"#).unwrap();
+        assert_eq!(o.follow_remote_cursor.enum_value(), Ok(BoolOption::Yes));
+        let o = option_of(r#"{"t":"toggle","name":"follow_remote_window","on":false}"#).unwrap();
+        assert_eq!(o.follow_remote_window.enum_value(), Ok(BoolOption::No));
     }
 
     /// 權限、聊天、封鎖輸入的結果、訊息框、延遲。

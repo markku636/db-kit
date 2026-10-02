@@ -1,17 +1,20 @@
-// RustDesk 連線的工具列（照官方用戶端的工具列）：切換螢幕、「顯示」選單（檢視方式 / 畫質 / 編碼 / 連線品質 /
-// 剪貼簿 / 結束後鎖定 / 鍵盤模式）、「動作」選單（Ctrl+Alt+Del / 鎖定畫面 / 封鎖輸入 / 重新啟動 / 輸入作業系統密碼 /
-// 重新整理）、檔案傳輸、聊天、錄影。依對方給的權限與對方的系統決定哪些項目出現（跟官方一樣：例如封鎖輸入只有 Windows 對方才有）。
+// RustDesk 連線的工具列（照官方用戶端的工具列）：切換螢幕、「顯示」選單（檢視方式 / 自訂縮放 / 畫質 / 編碼 / 真彩 /
+// 連線品質 / 對方游標 / 跟著對方的螢幕 / 滾輪反向 / 剪貼簿 / 結束後鎖定 / 鍵盤模式）、「動作」選單（Ctrl+Alt+Del /
+// 鎖定畫面 / 封鎖輸入 / 重新啟動 / 輸入作業系統密碼 / 重新整理 / 截圖）、檔案傳輸、聊天、錄影。依對方給的權限與對方的系統決定哪些項目出現（跟官方一樣：例如封鎖輸入只有 Windows 對方才有）。
 import { useEffect, useState, type RefObject } from "react";
 import { Circle, FolderSync, MessageSquare, MonitorCog, Square, Zap } from "lucide-react";
 import { api } from "./api";
 import { useT } from "./i18n";
 import { IconButton, MenuPanel } from "./ui/index";
-import { toast, uiConfirm } from "./ui";
+import { toast, uiConfirm, uiPrompt } from "./ui";
 import { MenuAction, MenuHeading, MenuOption, MenuSep } from "./RdMenu";
 import RdMonitorBar from "./RdMonitorBar";
 import RdOsPasswordDialog from "./RdOsPasswordDialog";
 import type { RdViewHandle } from "./rdView";
-import { canRestart, isWindowsPeer, type RdCodecPref, type RdQuality, type RustDeskPrefs, type RustDeskState } from "./rustdeskState";
+import {
+  canRestart, canTrueColor, clampScale, isWindowsPeer, MAX_SCALE, MIN_SCALE,
+  type RdCodecPref, type RdQuality, type RustDeskPrefs, type RustDeskState,
+} from "./rustdeskState";
 
 export interface RustDeskToolbarProps {
   state: RustDeskState;
@@ -76,6 +79,37 @@ export default function RustDeskToolbar({
   const revealRecording = () => {
     close();
     if (state.lastRecording) void api.rdRecordReveal(state.lastRecording).catch((e) => toast.error(String(e?.message ?? e)));
+  };
+  // 截圖：對方擷取原始畫質的畫面回來（等對方回覆期間按鈕停用）。
+  const [shotBusy, setShotBusy] = useState(false);
+  const screenshot = async () => {
+    if (shotBusy) return;
+    setShotBusy(true);
+    try {
+      const path = await view.current?.screenshot?.(hostName);
+      if (path) toast.success(t("截圖已存到 {path}", { path }));
+    } catch (e) {
+      toast.error(t("截圖存檔失敗：{e}", { e: String((e as { message?: unknown })?.message ?? e) }));
+    } finally {
+      setShotBusy(false);
+      view.current?.focus();
+    }
+  };
+  const revealScreenshot = () => {
+    close();
+    if (state.lastScreenshot) void api.rdRecordReveal(state.lastScreenshot).catch((e) => toast.error(String(e?.message ?? e)));
+  };
+  /** 自訂縮放：問百分比（官方也是輸入數字）。 */
+  const askScale = async () => {
+    close();
+    const v = await uiPrompt(t("縮放比例（{min}–{max}%）", { min: MIN_SCALE, max: MAX_SCALE }),
+      { title: t("自訂縮放"), defaultValue: String(prefs.scale) });
+    if (v != null && v.trim()) {
+      const n = Number(v.trim().replace(/%$/, ""));
+      if (Number.isFinite(n)) onPrefs({ ...prefs, view: "custom", scale: clampScale(n) });
+      else toast.error(t("請輸入數字"));
+    }
+    view.current?.focus();
   };
 
   // ---- 輸入作業系統密碼（官方 OS Password）：有存就直接打，沒存就問 ----
@@ -164,6 +198,9 @@ export default function RustDeskToolbar({
             <MenuHeading>{t("檢視方式")}</MenuHeading>
             <MenuOption checked={prefs.view === "adaptive"} testid="view-adaptive" onClick={() => set({ view: "adaptive" })}>{t("適應視窗")}</MenuOption>
             <MenuOption checked={prefs.view === "original"} testid="view-original" onClick={() => set({ view: "original" })}>{t("原始大小")}</MenuOption>
+            <MenuOption checked={prefs.view === "custom"} testid="view-custom" onClick={() => void askScale()}>
+              {prefs.view === "custom" ? t("自訂縮放（{n}%）…", { n: prefs.scale }) : t("自訂縮放…")}
+            </MenuOption>
             <MenuSep />
             <MenuHeading>{t("畫質")}</MenuHeading>
             {qualities.map((q) => (
@@ -174,8 +211,27 @@ export default function RustDeskToolbar({
             {codecs.filter((c) => c.ok).map((c) => (
               <MenuOption key={c.id} checked={prefs.codec === c.id} testid={`codec-${c.id}`} onClick={() => set({ codec: c.id })}>{c.label}</MenuOption>
             ))}
+            {canTrueColor(state.codecs) && (
+              <MenuOption role="menuitemcheckbox" checked={prefs.trueColor} testid="true-color" onClick={() => set({ trueColor: !prefs.trueColor })}>
+                {t("真彩（4:4:4，文字更清楚）")}
+              </MenuOption>
+            )}
             <MenuSep />
             <MenuOption role="menuitemcheckbox" checked={prefs.stats} testid="stats" onClick={() => set({ stats: !prefs.stats })}>{t("顯示連線品質")}</MenuOption>
+            <MenuOption role="menuitemcheckbox" checked={prefs.showRemoteCursor} testid="remote-cursor"
+              onClick={() => set({ showRemoteCursor: !prefs.showRemoteCursor })}>{t("顯示對方游標")}</MenuOption>
+            {state.monitors.displays.length > 1 && state.monitors.multi && (
+              <>
+                <MenuOption role="menuitemcheckbox" checked={prefs.followRemoteCursor} testid="follow-cursor"
+                  onClick={() => set({ followRemoteCursor: !prefs.followRemoteCursor })}>{t("跟著對方游標切換螢幕")}</MenuOption>
+                <MenuOption role="menuitemcheckbox" checked={prefs.followRemoteWindow} testid="follow-window"
+                  onClick={() => set({ followRemoteWindow: !prefs.followRemoteWindow })}>{t("跟著對方焦點視窗切換螢幕")}</MenuOption>
+              </>
+            )}
+            {control && (
+              <MenuOption role="menuitemcheckbox" checked={prefs.reverseWheel} testid="reverse-wheel"
+                onClick={() => set({ reverseWheel: !prefs.reverseWheel })}>{t("滑鼠滾輪反向")}</MenuOption>
+            )}
             {p.clipboard && (
               <MenuOption role="menuitemcheckbox" checked={clipboard && !viewOnly} disabled={viewOnly} testid="clipboard"
                 onClick={() => { onClipboard(!clipboard); close(); view.current?.focus(); }}>{t("同步剪貼簿")}</MenuOption>
@@ -220,6 +276,8 @@ export default function RustDeskToolbar({
             )}
             {(control || canRestart(state)) && <MenuSep />}
             <MenuAction testid="refresh" onClick={() => act("refresh")}>{t("重新整理畫面")}</MenuAction>
+            {!shotBusy && <MenuAction testid="screenshot" onClick={() => { close(); void screenshot(); }}>{t("截圖（存到「圖片 / db-kit」）")}</MenuAction>}
+            {state.lastScreenshot && <MenuAction testid="reveal_screenshot" onClick={revealScreenshot}>{t("開啟截圖資料夾")}</MenuAction>}
             {state.lastRecording && <MenuAction testid="reveal_recording" onClick={revealRecording}>{t("開啟錄影資料夾")}</MenuAction>}
           </div>
         </MenuPanel>
