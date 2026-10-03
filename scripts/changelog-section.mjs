@@ -24,7 +24,16 @@ const DOWNLOAD = `## 下載
 | macOS | \`.dmg\` —— Apple Silicon 選 \`aarch64\`、Intel 選 \`x64\` |
 | Linux | \`.AppImage\`（免安裝）、\`.deb\`（Debian / Ubuntu）或 \`.rpm\`（Fedora / RHEL）|
 
-安裝檔皆未付費簽章：macOS 首次開啟被擋時到「系統設定 → 隱私權與安全性」按**強制打開**（若顯示「已損毀」，在終端機執行 \`xattr -cr "/Applications/DB Kit.app"\`）；Windows SmartScreen 出現時選「其他資訊 → 仍要執行」。
+安裝檔皆未付費簽章，第一次開啟會被系統擋下：
+
+**macOS**（未經 Apple 公證）
+1. 開啟 .dmg，把 DB Kit 拖進「應用程式」，打開一次；出現「無法確認是否含有惡意軟體」時按**完成**（Done），不要丟到垃圾桶。
+2. 到「系統設定 → 隱私權與安全性」（Privacy & Security），往下捲到「安全性」，在「已阻擋『DB Kit』」那一列按**強制打開**（Open Anyway）。
+3. 輸入 Mac 管理員帳號的登入密碼（不是 Apple ID 密碼，也可用 Touch ID）→ 好，再按一次**強制打開**。之後就能直接開啟。
+
+或在終端機一步完成：\`xattr -dr com.apple.quarantine "/Applications/DB Kit.app"\`（若顯示「已損毀」，改用 \`xattr -cr "/Applications/DB Kit.app"\`）。
+
+**Windows**：SmartScreen 出現時選「其他資訊 → 仍要執行」。
 
 完整版本紀錄見 [CHANGELOG.md](https://github.com/markku636/db-kit/blob/main/CHANGELOG.md)。`;
 

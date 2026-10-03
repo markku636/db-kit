@@ -196,8 +196,21 @@ Head to the **[Releases page and grab the latest version ⬇️](https://github.
 
 1. Download the `.dmg` matching your chip: `aarch64` for Apple Silicon (M1/M2/M3…), `x64` for Intel.
 2. Open the .dmg and drag **DB Kit** into the "Applications" folder.
-3. On first launch, because the app is **not notarized by Apple**, macOS shows "cannot verify the developer / cannot verify it is free of malware": click "Done", then go to **System Settings → Privacy & Security**, scroll down and click "**Open Anyway**" (on macOS 14 and earlier, right-clicking the app icon → "Open" also works). Needed only once.
-   - If macOS says the app "**is damaged and can't be opened. You should move it to the Trash**" (versions up to v0.40.2 do this), the app is fine — the download quarantine flag is blocking it. Run `xattr -cr "/Applications/DB Kit.app"` in Terminal, then open it again.
+3. Open the app once. Because it is **not notarized by Apple**, macOS blocks it with "Apple could not verify "DB Kit" is free of malware": click "**Done**" — **not** "Move to Trash".
+4. Open **System Settings → Privacy & Security**, scroll down to **Security**, find ""DB Kit" was blocked to protect your Mac." and click "**Open Anyway**".
+   - The button only shows for about an hour after the app was blocked. If it's not there, try opening the app again, then come back.
+5. When asked "You are attempting to open an app that may cause harm to your Mac…", enter the **login password of a Mac administrator account** (not your Apple Account password; Touch ID also works) and click "OK".
+6. macOS asks once more whether to open DB Kit — click "**Open Anyway**". From then on it opens like any other app. This is needed only once; if a later update gets blocked again, repeat the same steps.
+
+> macOS 14 (Sonoma) and earlier: you can instead right-click DB Kit in Applications → "Open" → "Open", without going into System Settings.
+
+> **One-step Terminal alternative** (skips steps 3–6): after dragging the app into Applications, run
+> ```bash
+> xattr -dr com.apple.quarantine "/Applications/DB Kit.app"
+> ```
+> to remove the quarantine flag added on download; the app then opens directly.
+
+- If macOS says the app "**is damaged and can't be opened. You should move it to the Trash**" (versions up to v0.40.2 do this), the app is fine — the download quarantine flag is blocking it. Run `xattr -cr "/Applications/DB Kit.app"` in Terminal, then open it again.
 
 **Linux install steps**
 

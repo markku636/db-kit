@@ -195,8 +195,21 @@
 
 1. 依晶片下載對應 `.dmg`：Apple Silicon（M1/M2/M3…）選 `aarch64`，Intel 選 `x64`。
 2. 開啟 .dmg，把 **DB Kit** 拖進「應用程式」資料夾。
-3. 首次開啟因安裝檔**未經 Apple 公證**，會跳「無法驗證開發者 / 無法確認是否含有惡意軟體」：先按「完成」關掉，到**系統設定 → 隱私權與安全性**，往下捲按「**強制打開**」（macOS 14 以前也可對 App 圖示按右鍵 →「打開」），只需一次。
-   - 若出現「**已損毀，無法打開，應將它丟到垃圾桶**」（v0.40.2 以前的版本會這樣），App 本身沒壞，是下載隔離標記擋住的：在終端機執行 `xattr -cr "/Applications/DB Kit.app"` 後再開啟即可。
+3. 第一次開啟 App。因為安裝檔**未經 Apple 公證**，macOS 會擋下並顯示「無法確認『DB Kit』是否含有惡意軟體」（Apple could not verify "DB Kit" is free of malware）：按「**完成**」（Done）關掉，**不要**按「丟到垃圾桶」。
+4. 打開**系統設定 → 隱私權與安全性**（System Settings → Privacy & Security），往下捲到「安全性」（Security），會看到「已阻擋『DB Kit』以保護你的 Mac」（"DB Kit" was blocked to protect your Mac），按右邊的「**強制打開**」（Open Anyway）。
+   - 這個按鈕只在剛被擋下後約一小時內出現；沒看到的話，先回去再開一次 App，再回到這個畫面。
+5. 跳出「你正在嘗試打開可能傷害 Mac 的 App」時，輸入 **Mac 管理員帳號的登入密碼**（不是 Apple ID 密碼；也可以用 Touch ID），按「好」（OK）。
+6. 接著會再問一次是否打開 DB Kit，按「**強制打開**」（Open Anyway）。之後就能像一般 App 一樣直接開啟，這幾步只需要做一次；更新到新版後若又被擋，照同樣步驟再做一次。
+
+> macOS 14（Sonoma）以前：也可以在「應用程式」裡對 DB Kit 按右鍵 →「打開」→「打開」，就不必進系統設定。
+
+> **用終端機一步完成**（略過第 3～6 步）：拖進「應用程式」後執行
+> ```bash
+> xattr -dr com.apple.quarantine "/Applications/DB Kit.app"
+> ```
+> 移除下載時加上的隔離標記，之後就能直接打開。
+
+- 若出現「**已損毀，無法打開，應將它丟到垃圾桶**」（v0.40.2 以前的版本會這樣），App 本身沒壞，是下載隔離標記擋住的：在終端機執行 `xattr -cr "/Applications/DB Kit.app"` 後再開啟即可。
 
 **Linux 安裝步驟**
 
