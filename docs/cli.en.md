@@ -630,20 +630,25 @@ Error messages are printed to stderr in the form `error: <message>`, in the lang
 ## Stored procedure integration tests: `dbk sp-test`
 
 Runs scenario tests of stored procedures against a real database (multi-step, automatic rollback, automatic snapshots of side effects). Four modes share the same test files:
-`assert` (compare against expectations), `record` / `golden` (baseline regression), and `diff` (compare two connections against each other, for migration verification). For the test file format and how to write assertions, see [sp-test.en.md](./sp-test.en.md).
+`assert` (compare against expectations), `record` / `golden` (baseline regression), and `diff` (compare two connections against each other, for migration verification).
+For the full guide, the UI workflow and 8 runnable examples, see [sp-test.en.md](./sp-test.en.md).
 
 ```
-dbk sp-test validate tests/
+dbk sp-test init usp_place_order --conn mssql-test -d sales -o tests/          # skeleton from a routine (seed data, parameters, error-branch scenarios)
+dbk sp-test list tests/                                                        # list scenarios / cases / tags (no connection)
+dbk sp-test validate tests/                                                    # check format and references (no connection)
 dbk sp-test inspect dbo.usp_place_order --conn mssql-test -d sales            # signature, write targets, body (JSON)
 dbk sp-test run tests/ --conn mssql-test -d sales                              # assert
+dbk sp-test run tests/ --conn mssql-test -d sales --only qty_cases/zero       # run a single case
 dbk sp-test run tests/ --conn mssql-test -d sales --mode record --golden golden/
 dbk sp-test run tests/ --conn mssql-test -d sales --mode golden --golden golden/ --junit reports/mssql.xml --exit-code
 dbk sp-test diff tests/ --conn mssql-test -d sales --dst pg-test --dst-db public --junit reports/diff.xml --exit-code
 ```
 
-- `--only a,b` runs only the listed scenarios; `--tag smoke` filters by tag; `--format json` outputs the full report (stdout carries only the results; progress goes to stderr).
+- `--only a,b/c` runs only the listed scenarios (`id` or `id/case`); `--tag smoke` filters by tag; `--format json` outputs the full report (stdout carries only the results; progress goes to stderr).
 - `--junit` additionally writes JUnit XML; `--exit-code` returns non-zero if any scenario fails (for CI).
 - `--dst` accepts a saved connection name or a connection string; when `--dst-db` is omitted it is the same as `-d`.
+- `init -o` with a folder writes `<routine>.json`; add `--force` to overwrite an existing file; without `-o` it prints to stdout.
 
 ## Limitations
 

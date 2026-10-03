@@ -630,20 +630,25 @@ dbk --conn prod --format json search "customer_id" --definitions --type procedur
 ## 預存程序整合測試：`dbk sp-test`
 
 對真實資料庫跑預存程序的情境測試（多步驟、自動 rollback、自動快照副作用），四種模式共用同一份測試檔：
-`assert`（比期望）、`record` / `golden`（基線回歸）、`diff`（兩個連線互比，遷移驗證）。測試檔格式與斷言寫法見 [sp-test.md](sp-test.md)。
+`assert`（比期望）、`record` / `golden`（基線回歸）、`diff`（兩個連線互比，遷移驗證）。
+完整說明、UI 操作與 8 個可執行的範例見 [sp-test.md](sp-test.md)。
 
 ```
-dbk sp-test validate tests/
+dbk sp-test init usp_place_order --conn mssql-test -d sales -o tests/          # 從程序產生骨架（前置資料、參數、錯誤分支情境）
+dbk sp-test list tests/                                                        # 列出情境 / case / 標籤（不連線）
+dbk sp-test validate tests/                                                    # 檢查格式與引用（不連線）
 dbk sp-test inspect dbo.usp_place_order --conn mssql-test -d sales            # 簽名、寫入目標、本文（JSON）
 dbk sp-test run tests/ --conn mssql-test -d sales                              # assert
+dbk sp-test run tests/ --conn mssql-test -d sales --only qty_cases/zero       # 只跑某個 case
 dbk sp-test run tests/ --conn mssql-test -d sales --mode record --golden golden/
 dbk sp-test run tests/ --conn mssql-test -d sales --mode golden --golden golden/ --junit reports/mssql.xml --exit-code
 dbk sp-test diff tests/ --conn mssql-test -d sales --dst pg-test --dst-db public --junit reports/diff.xml --exit-code
 ```
 
-- `--only a,b` 只跑指定情境；`--tag smoke` 篩標籤；`--format json` 輸出完整報表（stdout 只有結果，進度在 stderr）。
+- `--only a,b/c` 只跑指定情境（`id` 或 `id/case`）；`--tag smoke` 篩標籤；`--format json` 輸出完整報表（stdout 只有結果，進度在 stderr）。
 - `--junit` 另寫 JUnit XML；`--exit-code` 讓任一未通過的情境回非零（CI 用）。
 - `--dst` 接受已存連線名或連線字串；`--dst-db` 省略時與 `-d` 相同。
+- `init -o` 給資料夾時寫成 `<程序名>.json`；檔案已存在要加 `--force`；省略 `-o` 印到 stdout。
 
 ## 限制
 
