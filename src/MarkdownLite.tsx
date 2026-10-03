@@ -152,5 +152,6 @@ export function TextBlock({ text }: { text: string }) {
       i++;
     }
   }
-  return <div className="text-[13px] space-y-0.5">{out}</div>;
+  // 全域 body 不可選取；AI 回應的文字要能用滑鼠框選複製（程式碼區塊本身是 .mono，已可選取）。
+  return <div className="text-[13px] space-y-0.5" data-selectable>{out}</div>;
 }

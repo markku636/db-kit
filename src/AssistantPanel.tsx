@@ -1563,7 +1563,7 @@ function MessageBubble({ msg, kind, onFork, onRun, ...shell }: {
   if (msg.role === "user") {
     return (
       <div className="flex flex-col items-end gap-1">
-        <div className="max-w-[85%] rounded-lg px-3 py-2 bg-accent/12 text-fg/90 whitespace-pre-wrap break-words">
+        <div className="max-w-[85%] rounded-lg px-3 py-2 bg-accent/12 text-fg/90 whitespace-pre-wrap break-words" data-selectable>
           {msg.text}
         </div>
         {!!msg.mentions?.length && <MentionChips chips={msg.mentions} bytes={msg.ctxBytes} />}
