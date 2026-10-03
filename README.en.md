@@ -7,10 +7,8 @@
 <p align="center"><strong>MAGIDB CONNECT — Making Data Connections Magical</strong></p>
 
 <p align="center">
-An all-in-one cross-platform desktop database tool that manages<br>
-<strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka · Elasticsearch · RabbitMQ</strong><br>
-through a single, consistent interface —<br>
-and brings <strong>SSH / SFTP / FTP · Docker · Kubernetes · Remote desktop (RDP / VNC / RustDesk) · File compare</strong> into the same window.
+One interface for <strong>MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis · Kafka · Elasticsearch · RabbitMQ</strong>,<br>
+with <strong>SSH / SFTP / FTP · Docker · Kubernetes · Remote desktop · File compare</strong> in the same window.
 </p>
 
 <p align="center">
@@ -22,561 +20,147 @@ and brings <strong>SSH / SFTP / FTP · Docker · Kubernetes · Remote desktop (R
 </p>
 
 <p align="center">
-  <strong>💚 100% Free & Open Source</strong>　·　MIT License　·　No paywall　·　No feature locks　·　No telemetry　·　Fork / self-host freely
+  <strong>💚 100% Free & Open Source</strong>　·　MIT License　·　No paywall　·　No telemetry
 </p>
 
 <p align="center">
   <a href="./README.md">繁體中文</a> · <strong>English</strong>
 </p>
 
-> ☕ Free and open source. If it helps, [buy me a coffee](#support-open-source).
-
 ---
 
 ## What is this
 
-Engineers and DBAs constantly juggle MySQL, MariaDB, PostgreSQL, SQL Server, Oracle, MongoDB, Redis… with a desktop full of separate management tools, each with its own quirks. **db-kit** brings them all into one interface, one connection manager, and one theme system — relational, document, and key-value paradigms each get a browsing and editing experience tailored to how they feel, while everyday operations (data grid, queries, ER diagrams, import/export, backup) stay aligned across databases.
+**db-kit** is a desktop database tool for Windows / macOS / Linux. Relational, document, key-value, message queue and search engine connections share one connection tree, data grid, query editor and set of shortcuts; the SSH, container and remote desktop tools you open while chasing a problem live in the same sidebar.
 
-Beyond databases, the tools you usually open alongside them while chasing a problem live in the same sidebar: an **SSH terminal with SFTP / FTP file panes**, **Docker / Registry / Harbor containers and images**, **Kubernetes clusters**, **remote desktop (RDP / VNC / Mac Screen Sharing / RustDesk)**, and **file / folder compare and sync**. A database running in Docker or Kubernetes becomes a saved connection in one click (Kubernetes connections go through port-forward automatically), and credentials only ever live in the OS keychain.
-
-Built on **Tauri 2 (Rust backend + web frontend)**: small installers and roughly one tenth the memory footprint of comparable Electron apps. All database connections live in the Rust backend and the frontend talks to them through Tauri commands — never connecting directly — for both security and performance.
-
-## Support open source
-
-This tool is free and open source. If it saved you time, buy me a coffee so the updates keep coming.
-
-[![PayPal $5](https://img.shields.io/badge/PayPal-%245-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8B7GRXA6UJH36)
-[![PayPal $10](https://img.shields.io/badge/PayPal-%2410-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8LBTFUBBF2CHS)
-[![PayPal $15](https://img.shields.io/badge/PayPal-%2415-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/A653DD46GEU4W)
-[![PayPal $25](https://img.shields.io/badge/PayPal-%2425-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/Y5WPSXVGH3YS4)
-
-For any other amount, use [PayPal.Me](https://paypal.me/226network).
-
-## Cross-platform
-
-One codebase, one consistent experience, shipping **native desktop apps for Windows / macOS / Linux**:
-
-- **One codebase, three native targets** — based on Tauri 2, `npm run tauri build` produces native installers on each platform: Windows `.msi` / `.exe` (NSIS), macOS `.dmg`, Linux `.AppImage` / `.deb` — all native windows, not browser tabs.
-- **Identical UI and feel everywhere** — the connection tree, editable data grid, query editor, ER diagram, keyboard shortcuts, and dark/light themes are exactly the same on all three platforms. Switching machines requires no re-learning.
-- **Passwords stored in each OS's native keychain** — via `keyring`, mapped to Windows Credential Manager, macOS Keychain, and Linux Secret Service (libsecret). Passwords never touch the disk.
-- **The `dbk` CLI is cross-platform too** — build a lean, Tauri-free binary with `--no-default-features` for Linux servers; SSH in and query / export / back up / write right there.
-- **Lightweight** — Tauri uses the system WebView (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux) instead of bundling Chromium: small installers, ~10× less memory than Electron equivalents.
-
-> GitHub Releases provides prebuilt installers for **Windows / macOS / Linux** (packaged automatically by GitHub Actions). macOS builds ship for both Apple Silicon and Intel. Installers are not code-signed with a paid certificate, so the first launch requires bypassing the OS warning (steps below). You can also build your own via [Build from source](#build-from-source).
+- **Lightweight**: Tauri 2 (Rust backend + system WebView), roughly one tenth the memory of comparable Electron apps.
+- **Safe**: passwords and API keys live only in the OS keychain; writes are fully parameterized and located by primary key; connections can be read-only and color-tagged per environment.
+- **Optional AI**: use a local Claude Code / Codex CLI or any Anthropic / OpenAI-compatible API. The assistant only ever reads from the database; writes go through Review & Run first.
+- **CLI included**: `dbk` reuses the same connections to query, export, back up and compare from a server.
 
 ## Screenshots
-
-> Real app screenshots (production build, default **Amethyst** dark theme, v0.55). Connections, hosts and data shown are fictional demo data.
-> Retake them anytime with `npm run make:screenshots` (real Playwright captures — see [`scripts/capture-screenshots.mjs`](./scripts/capture-screenshots.mjs)). The UI language in the screenshots is Traditional Chinese; English, 简体中文, 日本語, 한국어 and Tiếng Việt are one click away in the toolbar.
-
-**One entry point for everything** — "New connection" puts databases, message queues, search engines, containers and images, and remote hosts in a single picker. Or paste a connection string (`postgres://`, `mongodb+srv://`, `ssh://`, `rdp://`, `rustdesk://`, JDBC, ADO.NET…) and the type and fields are filled in for you:
 
 <p align="center">
   <img src="docs/screenshots/21-new-connection.png" alt="New connection: databases, message queues, search engines, containers and remote hosts in one picker" width="860">
 </p>
 
-### Databases
-
-| Table view — connection tree · tabs · editable data grid | Query editor — multi-statement · stacked result sets (SSMS style) |
+| Table view | Query editor (multiple result sets) |
 |:---:|:---:|
 | ![Table view](docs/screenshots/01-data-grid.png) | ![Query editor](docs/screenshots/02-query-editor.png) |
-| **ER diagram** — foreign-key relations · draggable table cards · layout memory | **Redis** — namespaced key tree · structure editing · INFO status |
+| **ER diagram** | **Redis** |
 | ![ER diagram](docs/screenshots/03-er-diagram.png) | ![Redis view](docs/screenshots/04-redis.png) |
+| **Schema compare & sync script** | **Review & Run (per-statement rollback)** |
+| ![Schema compare](docs/screenshots/10-schema-compare.png) | ![Review & Run](docs/screenshots/12-review-run.png) |
+| **SSH terminal + SFTP** | **Remote desktop** |
+| ![SSH terminal](docs/screenshots/15-ssh-terminal.png) | ![Remote desktop](docs/screenshots/18-remote-desktop.png) |
+| **Docker** | **Kubernetes** |
+| ![Docker](docs/screenshots/16-docker.png) | ![Kubernetes](docs/screenshots/17-kubernetes.png) |
 
-**Advanced object search** (`Ctrl+Shift+G`) — find tables / columns / indexes / stored procedures across databases, searching *definition bodies* and *comments* too, with whole-word matching and wildcards. Hits are highlighted, and one click "Select in object explorer" jumps back to the sidebar:
+> More screenshots (Kafka, SQL stress test, SQL review, folder compare…) are in [`docs/screenshots/`](./docs/screenshots/). All data shown is fictional demo data.
 
-<p align="center">
-  <img src="docs/screenshots/05-advanced-search.png" alt="Advanced object search" width="860">
-</p>
+## Features at a glance
 
-**Kafka message browser** — topic tree with partition / offset / key / value at a glance, JSON detail pane with headers; one-shot queries and live tail, plus cluster overview, consumer groups, monitoring & alerts, and Schema Registry / Connect / ACL panels:
+| Area | What you get |
+|------|--------------|
+| Databases | MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis: editable data grid, multi-column filter and sort, DDL and indexes, visual EXPLAIN, ER diagrams, stored procedures, import/export (CSV / Excel / JSON / SQL), backups and schedules |
+| Messaging & search | Kafka (message browser with live tail, consumer groups, Schema Registry, Connect, ACLs, monitoring and alerts), RabbitMQ, Elasticsearch / OpenSearch |
+| Query workspace | Autocomplete (including cross-database), stacked result sets, visual query builder, snippets, `:name` parameters, history and favorites, advanced object search (`Ctrl+Shift+G`), command palette (`Ctrl+K`) |
+| Schema & data | Schema compare and sync (across databases, connections or snapshots), data transfer, row-level data compare, database documentation |
+| Safety nets | **Review & Run** (AI review → per-statement before-image → rollback script → execute → diff report), static SQL review, DBA persona review, row limits and query timeouts, app lock |
+| Testing & performance | SQL stress test (TPS, p50–p99), stored procedure integration tests (auto rollback, golden baselines, cross-engine diff, JUnit) |
+| AI | Chat assistant (`@` scopes, `/` commands), in-editor AI actions (explain / optimize / fix / convert dialect, previewed as a diff), AI library (personas, skills and prompts are Markdown files) |
+| Remote & containers | SSH terminal + SFTP / FTP (resumable transfers, jump hosts, activity log), Docker / Registry / Harbor, Kubernetes (port-forward to in-cluster databases), remote desktop over RDP / VNC / RustDesk |
+| File compare | Text / folder / binary compare and sync between local paths and SSH / FTP hosts |
+| Interface | 7 themes, separate UI and code font sizes, six languages (繁中 / 简中 / English / 日本語 / 한국어 / Tiếng Việt), in-app updates |
 
-<p align="center">
-  <img src="docs/screenshots/06-kafka.png" alt="Kafka message browser" width="860">
-</p>
-
-**SQL stress test** — replay one statement across many threads and measure TPS and latency distribution. Fixed iterations or duration + ramp-up, per-thread warmup, and `:name` parameters substituted round-robin from pasted CSV (so the run does not hammer one key and sit entirely in cache). The report carries p50 / p90 / p95 / p99, per-second TPS and p95 charts, and fingerprinted error groups. Runs on its **own connection pool** so it never starves the interactive one; writes and highly destructive statements are refused by default:
-
-<p align="center">
-  <img src="docs/screenshots/07-stress-test.png" alt="SQL stress test" width="860">
-</p>
-
-**SQL review** — style and performance issues listed as you type, with **no query executed, no AI required, works offline**. Click a finding to select it in the editor; for the semantics and index selectivity the rules cannot see, hand it to "Deep review with AI" in one click:
-
-<p align="center">
-  <img src="docs/screenshots/08-sql-review.png" alt="SQL review" width="860">
-</p>
-
-**Run a stored procedure** — right-click a routine → "Run procedure…" for one field per argument: mode (IN / OUT / INOUT), name and type come from the screen, quoting follows the type, and a blank field means `NULL`. OUT arguments are wired through session variables and read back automatically. The SQL being sent is always shown below; tick "Edit SQL" to hand-edit it when you need an expression:
-
-<p align="center">
-  <img src="docs/screenshots/09-routine-exec.png" alt="Stored procedure argument form" width="860">
-</p>
-
-**Review & Run** — Before running a data-changing script against production, "Review & Run" on the query toolbar asks the AI to review it (expected before/after changes, risks, fixes), then works **statement by statement**: capture the rows it will touch → write the rollback statements → execute → capture again and diff. The script, AI review, `rollback.sql`, before/after snapshots and `diff.md` all go into a folder you choose. Before-images are captured with type-aware queries so values round-trip losslessly (BLOBs, time-zone offsets, float precision); rollback statements that cannot be proven safe are commented out with the reason. Transaction control and session-state statements, which are unreliable on a connection pool, block the whole script. Write statements run from the AI assistant and the `dbk run` CLI use the same pipeline.
-
-<p align="center">
-  <img src="docs/screenshots/12-review-run.png" alt="Review & Run: per-statement rollback level and AI verdict" width="860">
-</p>
-
-After running, the result tab lists column-by-column before / after differences; the rollback script runs from the last statement back to the first, and rows that cannot be restored safely are listed as comments with the reason:
-
-<p align="center">
-  <img src="docs/screenshots/13-review-run-diff.png" alt="Review & Run: before / after differences" width="860">
-</p>
-
-> How rollback levels are decided, what each file in the output folder is, and per-database restore details: see the **[Review & Run guide](./docs/review-run.md)** (in Chinese).
-
-**Schema compare** — compare a whole database or a single table. The target can be another database on the same connection, **another connection**, or a saved schema snapshot. Differences cover columns, indexes, foreign keys, views and routines; the sync DDL is ordered by dependency, destructive statements (DROP / type change / adding NOT NULL) are grouped separately and need an extra tick before they can run, and changes the engine cannot express are listed under "Skipped" instead of silently dropped. Every row in the result list has a checkbox — **untick a table and its statements leave the sync script**; status chips above the list (different / source only / target only / identical) filter it, each row shows a diff summary such as "cols +1 ~1", "CREATE" or "DROP", **⇄ swaps source and target** in one click, and compare options (ignore name case / comments / defaults…) sit right on the toolbar. Drill into an object and the side-by-side DDL has line numbers and **word-level highlighting** (`varchar(50)` → `varchar(200)` lights up only `50` / `200`), can fold identical lines, and jumps straight to the previous / next object. **AI summary** condenses the diff into risks and an execution order (only a structural summary is sent, never data); reports export to Markdown / HTML / JSON:
-
-<p align="center">
-  <img src="docs/screenshots/10-schema-compare.png" alt="Whole-database schema compare and sync script" width="860">
-</p>
-
-> Step-by-step usage, the four compare scenarios and per-database notes: **[Schema compare guide](./docs/compare.md)** (in Chinese).
-
-**Database documentation** — right-click a database → "Database documentation…" to turn every table's columns, types, nullability, keys, defaults and comments into a deliverable document, in Markdown and HTML, with anchored table of contents:
-
-<p align="center">
-  <img src="docs/screenshots/11-db-docs.png" alt="Whole-database data dictionary" width="860">
-</p>
-
-### SSH, containers, remote desktop and file compare
-
-**SSH terminal + SFTP** — multi-tab terminal (password / private keys in any common format / ssh-agent, multi-hop jump hosts) with a compose bar and status bar at the bottom; the SFTP pane can sit side by side or open as its own window — drop files on it to upload, resume interrupted transfers, and edit remote text files right in the app. Import hosts from `~/.ssh/config` or `.xsh` session files in one go; FTP / FTPS hosts use the same file pane:
-
-<p align="center">
-  <img src="docs/screenshots/15-ssh-terminal.png" alt="SSH terminal with the SFTP file pane" width="860">
-</p>
-
-| **Docker** — containers colored by state · info / logs / shell / resources · one-click connection for database containers | **Kubernetes** — namespace → resource kind · Pod logs / shell · port-forward to in-cluster databases |
-|:---:|:---:|
-| ![Docker container tab](docs/screenshots/16-docker.png) | ![Kubernetes Pod tab](docs/screenshots/17-kubernetes.png) |
-
-**Remote desktop** — RDP (with NLA and certificate fingerprint confirmation), VNC / Mac Screen Sharing, and RustDesk (Direct IP, or by RustDesk ID through ID / relay servers — end-to-end encrypted once you fill in the server key) open right inside a tab. Full screen, two-way clipboard text sync, and an SSH host can act as an encrypted jump box. RustDesk and VNC tabs each get a toolbar (screenshots, recording, virtual keyboard, automatic reconnect; RustDesk adds multiple screens, file transfer and chat), and VNC switches to TLS automatically when the server supports VeNCrypt:
-
-<p align="center">
-  <img src="docs/screenshots/18-remote-desktop.png" alt="RDP remote desktop embedded in a tab" width="860">
-</p>
-
-| **Text compare** — side by side · inline differences · apply each hunk → / ← · save back to the file | **Folder compare** — same / different / one side only · filters · mirror or two-way sync |
-|:---:|:---:|
-| ![Text compare](docs/screenshots/19-file-compare.png) | ![Folder compare](docs/screenshots/20-folder-compare.png) |
-
-> Either side can be local or any saved SSH / SFTP / FTP host, and there is a byte-by-byte binary compare as well; on the command line the same engine is `dbk diff` / `dbk sync`, ready for scheduled jobs.
+See the [CHANGELOG](./CHANGELOG.md) for everything else.
 
 ## Download & install
 
 <p align="center">
   <a href="https://github.com/markku636/db-kit/releases/latest">
-    <img alt="Download latest release" src="https://img.shields.io/github/v/release/markku636/db-kit?label=Download%20latest&style=for-the-badge&color=22c55e">
+    <img alt="Download latest" src="https://img.shields.io/github/v/release/markku636/db-kit?label=Download%20latest&style=for-the-badge&color=22c55e">
   </a>
 </p>
 
-Head to the **[Releases page and grab the latest version ⬇️](https://github.com/markku636/db-kit/releases/latest)**, then pick the installer for your OS:
+| Platform | Installer |
+|----------|-----------|
+| Windows 10 / 11 | `db-kit_x.y.z_x64-setup.exe` or `.msi` |
+| macOS Apple Silicon / Intel | `db-kit_x.y.z_aarch64.dmg` / `db-kit_x.y.z_x64.dmg` |
+| Linux | `.deb`, `.rpm` or the portable `.AppImage` |
 
-| Platform | Installer | How to install |
-|------|--------|----------|
-| **Windows** 10 / 11 | `db-kit_x.y.z_x64-setup.exe` (NSIS)<br>or `db-kit_x.y.z_x64_en-US.msi` (MSI) | Download, double-click, follow the wizard |
-| **macOS** Apple Silicon (M series) | `db-kit_x.y.z_aarch64.dmg` | Open the .dmg and drag DB Kit into "Applications" |
-| **macOS** Intel | `db-kit_x.y.z_x64.dmg` | Open the .dmg and drag DB Kit into "Applications" |
-| **Linux** Debian / Ubuntu | `db-kit_x.y.z_amd64.deb` | `sudo dpkg -i db-kit_*.deb` or use your software center |
-| **Linux** Fedora / RHEL | `db-kit-x.y.z-1.x86_64.rpm` | `sudo rpm -i db-kit-*.rpm` |
-| **Linux** portable | `db-kit_x.y.z_amd64.AppImage` | `chmod +x *.AppImage` and run it |
+The installers are not paid-signed, so the OS blocks the first launch:
 
-**Windows install steps**
+- **Windows**: in SmartScreen, click "More info" → "Run anyway". Requires WebView2 Runtime (built into Windows 11).
+- **macOS**: after dragging the app into Applications, run the line below once (run it again if a later update gets blocked):
+  ```bash
+  xattr -dr com.apple.quarantine "/Applications/DB Kit.app"
+  ```
+  Without the terminal: open the app once so it gets blocked → System Settings → Privacy & Security → "Open Anyway".
+- **Linux**: `sudo dpkg -i db-kit_*.deb`, `sudo rpm -i db-kit-*.rpm`, or `chmod +x *.AppImage` and run it.
 
-1. Download the `.exe` (recommended) or `.msi` from [Releases](https://github.com/markku636/db-kit/releases/latest).
-2. Double-click to run. If SmartScreen warns you, click "More info" → "Run anyway" (the installer has no paid code-signing certificate).
-3. When done, launch **db-kit** from the Start menu.
-
-> **WebView2 Runtime required**: built into Windows 11 and already present on most updated Windows 10 machines; if missing, the installer prompts you to download it.
-
-**macOS install steps**
-
-1. Download the `.dmg` matching your chip: `aarch64` for Apple Silicon (M1/M2/M3…), `x64` for Intel.
-2. Open the .dmg and drag **DB Kit** into the "Applications" folder.
-3. Open the app once. Because it is **not notarized by Apple**, macOS blocks it with "Apple could not verify "DB Kit" is free of malware": click "**Done**" — **not** "Move to Trash".
-4. Open **System Settings → Privacy & Security**, scroll down to **Security**, find ""DB Kit" was blocked to protect your Mac." and click "**Open Anyway**".
-   - The button only shows for about an hour after the app was blocked. If it's not there, try opening the app again, then come back.
-5. When asked "You are attempting to open an app that may cause harm to your Mac…", enter the **login password of a Mac administrator account** (not your Apple Account password; Touch ID also works) and click "OK".
-6. macOS asks once more whether to open DB Kit — click "**Open Anyway**". From then on it opens like any other app. This is needed only once; if a later update gets blocked again, repeat the same steps.
-
-> macOS 14 (Sonoma) and earlier: you can instead right-click DB Kit in Applications → "Open" → "Open", without going into System Settings.
-
-> **One-step Terminal alternative** (skips steps 3–6): after dragging the app into Applications, run
-> ```bash
-> xattr -dr com.apple.quarantine "/Applications/DB Kit.app"
-> ```
-> to remove the quarantine flag added on download; the app then opens directly.
-
-- If macOS says the app "**is damaged and can't be opened. You should move it to the Trash**" (versions up to v0.40.2 do this), the app is fine — the download quarantine flag is blocking it. Run `xattr -cr "/Applications/DB Kit.app"` in Terminal, then open it again.
-
-**Linux install steps**
-
-- Debian / Ubuntu: `sudo dpkg -i db-kit_*.deb` (fix missing dependencies with `sudo apt-get -f install`).
-- Fedora / RHEL: `sudo rpm -i db-kit-*.rpm`.
-- Any distro (portable): download the `.AppImage`, `chmod +x`, and run.
-
-To package installers yourself, see [Build from source](#build-from-source) below.
+> **Oracle** needs the 64-bit [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html) on your PATH (server 12c or later); no other database needs anything extra.
 
 ## Quick start
 
-First time after installing — three steps to connect:
+1. Click **Connect** in the toolbar and pick a type. If you have a connection string (`postgres://`, `mongodb+srv://`, `ssh://`, JDBC, ADO.NET…), paste it and the fields fill themselves.
+2. Enter host and credentials, set an SSH tunnel if needed, click **Test Connection**, then save.
+3. Expand the database in the left tree and double-click a table to browse and edit.
 
-1. **Add a connection** — click **"Connect"** in the toolbar and pick a type: databases (MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis), message queues (Kafka / RabbitMQ), search engines (Elasticsearch / OpenSearch), containers and images (Docker / Registry / Harbor / Kubernetes), or remote hosts (SSH / SFTP, FTP / FTPS, RDP, VNC / Mac, RustDesk). If you have a connection string, paste it into the field at the top and the type and fields are filled in for you.
-2. **Fill in connection details** — host, port, username, password (or pick a SQLite file). Configure a jump host on the **SSH Tunnel** tab if needed. Hit **"Test Connection"** first, then **Save**.
-3. **Start working** — the connection appears in the left tree; expand a database and double-click a table to browse / edit data. Open query editor, ER diagram, and more from the top tabs.
+| Common action | Shortcut |
+|---------------|----------|
+| Run statement at cursor / whole script | `Ctrl+Enter` / `F6` |
+| Command palette / advanced object search | `Ctrl+K` / `Ctrl+Shift+G` |
+| Toggle AI assistant / in-editor AI actions | `Ctrl+L` / `Ctrl+Shift+E` |
 
-> Passwords are stored in the OS keychain (never written to disk). Right-click a connection anytime to "Edit / Duplicate / Delete".
-
-> **Oracle prerequisite**: connecting to Oracle requires a **64-bit [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html)** (Basic or Basic Light) on your PATH (or set the client directory in the connection settings) — a native dependency of Oracle's official driver that db-kit does not bundle. Without it, only Oracle connections prompt for it; every other database is unaffected. Server must be Oracle 12c or newer.
-
-**No database handy?** Spin up a test MySQL with Docker:
+No database to try it on? Start one with Docker:
 
 ```bash
 docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mysql:8
-# Then add a connection in db-kit: host 127.0.0.1, port 3306, user root, password test1234
 ```
 
-Common operations at a glance:
+## Guides
 
-| To do this | Do this |
-|----------|--------|
-| Edit data | Double-click a cell to edit → hit **✓** to apply (written back keyed by primary key) |
-| Filter / sort | Click a column header to sort, Shift+click for multi-column; open multi-column compound filters from the toolbar |
-| Run SQL | Open a "Query Editor" tab: **Ctrl+Enter** runs the statement under the cursor, **F6** runs the whole script (or just the highlighted selection) |
-| Run several at once | Separate statements with `;` — each result set is shown **stacked** (SSMS style), individually sortable / filterable / exportable |
-| Query across databases | Just write `other_db.table` on the same connection (`schema.table` on PostgreSQL). Typing `other_db.` completes that database's tables; the toolbar's **Cross-DB** picker preloads the ones you use often |
-| Find where something lives | **Ctrl+Shift+G** advanced object search (tables / columns / indexes / procedure definitions across databases); **Ctrl+K** command palette for quick jumps |
-| Export / import | Export CSV / JSON / Excel / SQL… from the grid toolbar; import CSV / Excel into tables |
-| See table relations | Open the "ER Diagram" tab — drag table cards, layout is remembered |
-| Change the look | Theme menu at the top right: light / dark + 7 gemstone variants (the whole app and the editor switch together) |
-| Change text size | Settings → Text size: **interface text size** scales the whole app's text and spacing proportionally (extra small 12px – huge 22px); **code text size** covers only the query editor and code blocks (also **Ctrl** **+** / **−** / **0**) |
-| Ask AI | The right-hand panel (**Ctrl+L**) connects to your local Claude Code / OpenAI Codex CLI, or to any Anthropic / OpenAI-compatible API (switchable in the panel). The assistant can run read-only queries itself; type `@` to attach specific tables and `/` for commands |
-| Rewrite SQL | Select some SQL in the editor, then right-click or press **Ctrl+Shift+E**: explain / optimize / fix / comment / convert dialect. Rewrites show a diff before they are applied (**Ctrl+I** describes the change in a sentence) |
-| Connect to a database in a container | Right-click a Docker container, or a Kubernetes Pod / Service → "**Create database connection…**": the type is detected from the image and credentials come from the environment variables; Kubernetes connections open a port-forward automatically |
-| Open a terminal / move files | "New connection" → SSH / SFTP or FTP / FTPS (or just paste `ssh://user@host`), then double-click the host for a terminal; the "SFTP" toolbar button opens the file pane — drop files on it to upload |
-| Remote desktop | "New connection" → RDP, VNC / Mac or RustDesk (`rdp://`, `vnc://` and `rustdesk://<ID>` can be pasted), double-click the host to connect in a tab, **Ctrl+Alt+Enter** for full screen |
-| Compare files / folders | The compare button on the tab bar, or **Ctrl+K** "Compare text / files…" / "Compare folders…"; either side can be local or a saved SSH / FTP host |
+- [Schema compare](./docs/compare.md) · [Review & Run](./docs/review-run.md) · [DBA review](./docs/dba-review.md) · [AI library](./docs/ai-library.md) · [Stored procedure tests](./docs/sp-test.md)
+- [`dbk` CLI](./docs/cli.md) · [Architecture](./docs/architecture.md) · [Connection lifecycle](./docs/connection-lifecycle.md) · [Roadmap](./docs/roadmap.md)
 
-## ✨ Highlights
+## Command-line tool `dbk`
 
-- **Eleven data sources, one tool** — MySQL · MariaDB · PostgreSQL · SQL Server · Oracle · SQLite · MongoDB · Redis, plus Kafka · RabbitMQ message queues and Elasticsearch / OpenSearch search, all fully connectable, sharing one connection tree, data grid, and shortcut set.
-- **The other tools you open while chasing a problem, in the same sidebar** — SSH terminal with SFTP / FTP file panes, Docker / Registry / Harbor, Kubernetes, remote desktop (RDP / VNC / Mac Screen Sharing / RustDesk), and file / folder compare and sync. None of it takes up room until you use it: a sidebar section only appears once you have a host or connection of that kind. Databases running in Docker / Kubernetes become connections in one click, and credentials only ever live in the OS keychain.
-- **Cross-platform desktop app** — one codebase ships native installers for Windows / macOS / Linux with identical UI, shortcuts, connection management, and keychain integration; the `dbk` CLI is cross-platform too (see [Cross-platform](#cross-platform)).
-- **Light and fast** — Tauri 2 architecture using the system WebView, ~10× lighter than Electron; skeleton-screen startup (zero white flash), ~470 KB initial JS bundle, CodeMirror lazy-loaded only when you open a query tab.
-- **Multi-statement runs, stacked results** — batch execution shows every result set **stacked at once** (in the spirit of SSMS / MySQL Workbench), each pane independently scrollable / sortable / filterable, exportable per pane or "export all"; a mid-batch failure keeps the result sets already fetched.
-- **A full theme system** — 7 built-in gemstone palettes (Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian), switchable from the toolbar, **driving the entire app and SQL editor syntax highlighting together**; the AI assistant's code blocks recolor too.
-- **Secure and safe** — connection passwords in the OS keychain (never on disk), SSH Tunnel (password / private key) with host-key TOFU verification, all writes keyed by primary key with fully parameterized bindings against injection; plus **row-count caps** and **query timeouts** as two safety nets — an accidental `SELECT *` on a huge table won't blow up memory.
-- **Desktop-grade grid feel** — in-cell editing, context menus, keyboard navigation, multi-column sort, draggable column widths, filter-by-value, content viewer, instant find, column comments on header hover.
-- **Built-in AI assistant (four providers)** — the right panel drives either a **local CLI** (Claude Code / OpenAI Codex, signed in with your own subscription, no API key required) or **any Anthropic / OpenAI-compatible API** (the official APIs, OpenRouter / DeepSeek / Kimi / GLM / Groq, and local Ollama / LM Studio / vLLM — just a base URL and a model; local endpoints need no key): streaming answers to database questions, writing / optimizing SQL, and optionally attaching the current connection's schema as context. Switch provider from the panel at any time; the assistant and the "AI generate" query bar share the same choice. **API keys live only in the OS keychain** — neither the settings file nor the front end ever sees the plain text.
-- **The assistant can read your database (read-only)** — it is no longer limited to whatever schema the front end pre-baked into the prompt: it can call `list_tables` / `describe_table`, sample rows and run `SELECT` itself, so "what is this database for" and "how many orders last month" get real answers. **Read-only is enforced by construction, not by asking nicely** — even `EXPLAIN ANALYZE DELETE` is rejected (PostgreSQL really executes the inner statement); one statement per call; 200 rows / 8 KB / 30 s caps. **Every query it ran is listed in the reply** with its result summary, and can be pasted straight back into the editor for auditing. Production connections ask for confirmation the first time. API providers have this built in; the CLI providers (Claude Code / Codex) get the same tools through the bundled `dbk mcp` server.
-- **In-editor AI actions with a diff preview** — select some SQL (or just put the cursor on a statement) and use right-click, `Ctrl+Shift+E` or the toolbar: explain, optimize, fix the error, add comments, convert dialect (MySQL ↔ PostgreSQL ↔ SQL Server ↔ Oracle ↔ SQLite), generate test data, or narrate the execution plan in plain language. `Ctrl+I` lets you describe the change in a sentence. Rewrites **always show a diff first**: reject individual hunks, tweak the proposal by hand, and only "Accept" writes it back — as an undoable edit (`Ctrl+Z` restores it).
-- **Chat panel: @ scoping, / commands, run-in-place** — type `@` to attach specific tables (or `@query` / `@result` / `@error` to pull in the current editor state); before sending you can see "3 tables attached, about 4.2 KB". Anything that could **not** be attached is shown with the reason rather than silently dropped. `/explain`, `/fix`, `/optimize`, `/sql` and `/schema` save you typing the whole prompt. SQL blocks in a reply can be run directly, or "run and feed back" so the model continues from the result — guarded exactly like the query pane: read-only connections block writes, and **write statements go through Review & Run** (AI review + per-statement backup + rollback script) before they execute. HTTP providers persist conversation history, so reopening the app does not lose the thread.
-- **DBA agent review** — hand a statement, a pre-execution script or a whole table's structure to a **DBA persona**: four are built in (senior DBA, production gatekeeper, performance, security) and you can add your own. With a live connection the DBA **verifies with read-only tools itself** (EXPLAIN, structure, indexes) before concluding, and every lookup is listed in the result. Pick several for a **panel review**; the combined verdict is the strictest one, and suggested SQL fixes apply through the diff preview (see the [DBA review guide](./docs/dba-review.md), in Chinese).
-- **AI library: personas, skills and prompts are files** — every prompt an AI action sends, every persona and skill, is a Markdown file compatible with Claude Code and Codex. Override the built-in versions, add a shared team git folder (run `dbk ai lint` in CI), and sync them to Claude Code / Codex as agents and skills in one click. The output formats parsers depend on are locked, so editing a template cannot break a feature (see the [AI library guide](./docs/ai-library.md), in Chinese).
-- **Review & Run: a safety net before writes** — one click on the query toolbar: the AI reviews the script first (expected before/after changes, risks, fixes), then **statement by statement** the rows about to change are captured, rollback statements are written to disk, the statement runs, and the rows are captured again and diffed. The script, AI review, `rollback.sql`, `diff.md` and before/after snapshots all land in a folder you choose; values are captured losslessly by type (BLOBs, time zones, float precision), and rollback statements that cannot be proven safe are commented out with the reason. The `dbk run` CLI uses the same pipeline (see the [Review & Run guide](./docs/review-run.md), in Chinese).
-- **Stored-procedure integration tests: real database, automatic rollback, side effects captured for you** — one JSON test file per routine: `insert` seeds rows (`">>sym"` captures generated keys) → `call` runs the routine (result sets, OUT parameters and the inserted / updated / deleted rows of every affected table are captured automatically) → `query` asserts → next step, all inside one transaction that is rolled back. `fixtures` share setup steps, `cases` make a scenario data-driven, `expect_error` compares error classes (SQL Server / PostgreSQL / MySQL error numbers and SQLSTATEs are mapped). Four modes share the same file: `assert`, `record` / `golden` (baseline regression — a changed routine turns red), and `diff` (the same scenarios run on SQL Server / MySQL and on PostgreSQL and are compared step by step — migration verification). "Integration tests…" on a routine's context menu lets the AI generate scenarios from the signature, write targets and body; `dbk sp-test` emits JUnit for CI (see [sp-test.md](./docs/sp-test.md), in Chinese).
-- **One conversation per database** — the chat panel keeps several conversations side by side, each with its own history and context, and you switch between them at any time. Previously the assistant had exactly one thread: point it at another database and the model was still holding the previous one's schema and results, so answers bled across databases — and the only way to start clean was "Clear", which is irreversible. "New conversation" in the title bar now starts a fresh thread while the old one stays in the list, which shows each thread's title (taken from its first question, renameable), the connection it was started on, and when it was last touched. Switch away and back and the history is still there.
-- **Persona and skills** — the assistant's system prompt (persona) is editable, and you can save named "skills" (SQL performance diagnosis, read-only safety first, …) and pick them from the panel — the **Skills** button in the panel toolbar shows how many are on and opens the AI library, where you tick the ones to attach and edit or add skills. Built-in personas, skills and prompt templates can be edited directly too (saved as your custom version, with "Restore default" to go back), and the top of the library shows how the three combine into what is sent to the AI; all four providers share the same setting.
-- **Ships with the `dbk` CLI** — a query / browse / export / backup command-line tool that also **writes (modify · delete, gated behind `--yes`, destructive actions behind `--force`)**, reusing the same connections and keychain; compile it Tauri-free with `--no-default-features` for servers and scripts (see [Command-line tool](#command-line-tool-dbk-cli)).
-- **Solid engineering practice** — backend integration tests against real services in Docker (MySQL / PostgreSQL / SQL Server / SQLite / MongoDB / Redis, plus OpenSSH, FTP, VNC, RDP, RustDesk and k3s), Rust unit tests covering per-dialect SQL generation (including MariaDB / Oracle), 2,000+ frontend vitest tests, plus **`npm run verify:ui`** — a UI smoke check that drives the production build through a Tauri invoke shim across 500+ scenarios (context menus, tabs, dialogs; no Docker, no real database) — and `npm run verify:layout`, which checks that buttons neither wrap nor get clipped at the minimum window size and at large text sizes; hardened through multiple rounds of adversarial self-review for security and correctness (see [CHANGELOG](./CHANGELOG.md)).
+Reuses the connections and keychain entries saved in the GUI, and can be built as a lean binary without the GUI for servers:
 
-## Features
+```bash
+cargo build --release --no-default-features --bin dbk
 
-| Area | Key features |
-|------|----------|
-| Relational (MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite) | Full CRUD, DDL column editing, index / foreign-key management, EXPLAIN + visual execution plans (SHOWPLAN XML on SQL Server, DBMS_XPLAN on Oracle), routines (stored procedures / functions), RETURNING display, ER diagram, schema compare, SSL modes (MySQL family / PG) |
-| Document (MongoDB) | Documents flattened into a grid, find / aggregation pipelines, CRUD-via-JSON, **visual explain plans**, JSON query editor (syntax highlighting + field completion), advanced indexes (TTL / partial / text / $indexStats usage), **validation rules (JSON Schema)**, field statistics (type distribution / top values), **monitoring panel** (serverStatus / dbStats / currentOp / Profiler) |
-| Key-value (Redis) | Five structure views with editing, namespaced key tree (**right-click to add / rename / set TTL / copy value / bulk-delete a whole namespace**, or narrow the SCAN pattern in place), value formatting, Pub/Sub, **ops panel** (slow log / clients / big keys — scanned big keys can be selected and purged right there), command-line console |
-| Streaming (Kafka) | Message browse + live tail, **JS filter expressions** (embedded boa) + deserializer choice (string / JSON / hex / Avro) + **search-more** scanning + JSON field projection, produce (headers / **Avro serialization** / **flow mode + random templates** / CSV bulk; **right-click a topic to produce directly**), **cluster overview** (brokers / URP health), create / delete topics (double confirmation), topic config editing / add partitions / empty, full offset reset (with preview), consumer groups + lag (filterable list, right-click to delete), **monitoring & alerts** (background sampling / hand-rolled SVG charts / rules + OS notifications), **Schema Registry** (read-write / compatibility / version diff), **Protobuf decoding**, **Kafka Connect** (connector management / config validation), **ACL** management |
-| Universal data grid | Multi-column compound filters (9 operators + AND·OR), multi-column sort, filter by value, **two-way foreign-key navigation** (jump to referenced row / find referencing rows), **Excel + CSV import**, multi-format + **Excel export**, copy as INSERT/UPDATE/DELETE/IN, column profiling + distinct-value distribution, **column comments on header hover** |
-| Query workspace | Syntax highlighting + table/column autocomplete (incl. external gateway), **`@` user-variable suggestions**, **stacked multi-result sets** (SSMS style, collapsible, export one or all), **visual query builder** (JOIN / aggregates / HAVING / paging / live preview), **SQL snippet library**, **parameterized queries `:name`**, format / minify / keyword casing, query history (200 entries, filterable), **saved queries** (groups / edit / import-export), run selection only, failed-statement locating, multiple query tabs (right-click to close others), **reopening the app restores the tabs you left open** (including which one was active; contents were already remembered per connection x per tab) |
-| Search / navigation | **Advanced object search Ctrl+Shift+G** (search names / definition bodies / comments across databases, whole-word + wildcards `*` `?`, highlighted definition preview, select in object explorer), **command palette Ctrl+K**, sidebar search auto-expands matching folders |
-| Cross-database / cross-connection | **Cross-database autocomplete** (write `other_db.table` on the same connection and still get table / column / alias completion — typing `other_db.` loads that schema on demand), **data transfer** (single table / whole database / auto-create missing tables), **data compare / sync** (generates INSERT/UPDATE/DELETE), **whole-database documentation** (HTML / Markdown), **schema compare** (whole database or one table; **ticking objects decides which statements go into the script**, status chips, per-row diff summary, ⇄ swap source and target, compare options for name case / comments / defaults, word-level DDL diff with folded identical lines, automatic re-compare after applying) |
-| Performance | **SQL stress test** (in the spirit of SQLQueryStress): multi-threaded replay, fixed iterations or duration + ramp-up, warmup, **p50/p90/p95/p99 latency percentiles** plus a live TPS chart, **fingerprinted error grouping**, `:name` parameter substitution from pasted CSV, one-click Markdown report. Runs on its **own connection pool** so it never starves the interactive one; writes and highly destructive statements are refused by default. Also available as `dbk stress` for scripts |
-| Appearance | **7 gemstone themes** (Amethyst / Moonstone / Jade / Garnet / Amber / Ruby / Obsidian) driving the whole app + editor highlighting, one-click light / dark / variant switching from the toolbar; a **global interface text size** (6 steps, scales the whole app proportionally) set separately from the code text size |
-| Security | Passwords in the OS keychain, SSH Tunnel (password / private key) + host-key TOFU, fully parameterized bindings against injection, **read-only connection mode** (blocks writes / DDL), **connection color labels** (tell prod from test), **startup password** (Argon2id), **row cap / query timeout**, pinned favorite tables |
-| SSH terminal | A separate "SSH hosts" list in the sidebar (folders, search; shown once you have a host, connected hosts light up, hover for terminal / SFTP / edit buttons), added from "New connection" → SSH / SFTP or by pasting an `ssh://` / `sftp://` / `ssh -p … user@host` connection string, **multi-tab xterm.js terminals** (password / private key + passphrase / keyboard-interactive / ssh-agent · Pageant; secrets only in the OS keychain; private keys in **any common format**: OpenSSH, PuTTY .ppk (v2 / v3), PKCS#8, PEM (PKCS#1 RSA / SEC1 EC, including OpenSSL 3DES / AES encryption) and DER, with a clear explanation for formats that need converting; **OpenSSH user certificates** (`<key>-cert.pub` is picked up automatically); a **key manager**: import a file or paste, generate Ed25519 / ECDSA / RSA, copy the public key, attach a certificate, export; hosts can be imported in bulk from **~/.ssh/config** (with Include) and **.xsh session files**, keys and certificates included; **jump hosts** (ProxyJump, multi-hop, linked automatically on import)), explicit host-key prompts on first use and on fingerprint change, one-click or Enter-to-reconnect, search, font zoom, colours follow the app theme (every theme has a matching terminal palette, with a separate set tuned for light backgrounds), right-click copy / paste (multi-line paste asks first); a **status bar** (host / jump host, terminal size, connected time) with **session recording** to a file (plain text, colour codes stripped) and saving the whole terminal output as text; a **compose bar** (type, then send; ↑↓ history); an **SFTP split pane** (browse / upload / download / rename / delete / mkdir / cd the terminal here, on the same connection so no second password; **in-app editing of remote files**, permissions and filtering; **multi-select** (Ctrl / Shift click, Ctrl+A) for batch download / delete, whole-folder upload and download, overwrite / skip / resume on name clashes; **resumable transfers**: when a transfer drops midway the transferred part is kept and “Resume” continues from where it stopped (the tail of that part is compared first, so it only continues the same file); the toolbar’s “SFTP” button opens it in **its own window** (move it to another screen; **drag files or folders into the window to upload**, onto a folder row to put them there) at the **terminal’s current folder**, while the side-panel button at the far right docks it beside the terminal, and “Follow the terminal” keeps the list in step with `cd`; cut / paste or “Move to…” to move files, and the pane can be maximized); DB connections with an SSH tunnel get **Open SSH terminal** in their context menu. An **activity log** records the commands run in the terminal, SFTP / FTP file actions and connects / disconnects, searchable and exportable — passwords are never logged. The AI assistant only *suggests* commands — bash blocks get "Send to terminal" / "Run & feed back", you press the button, dangerous commands are confirmed first and fatal ones blocked |
-| FTP / FTPS | The sidebar "SSH hosts" list also holds FTP hosts ("New connection → FTP / FTPS", or paste `ftp://` / `ftpes://` / `ftps://`); opening one gives a files-only tab with the same features as the SFTP pane (browse, upload / download, drag and drop, editing, permissions, separate window); **resumable transfers** (`REST` / `APPE`, the tail of the transferred part is compared first); explicit / implicit FTPS, with self-signed certificates confirmed by fingerprint and remembered; passive / active mode; each transfer uses its own connection (up to two at a time, the rest queue) so you can keep browsing during large transfers |
-| Containers (Docker / Registry / Harbor) | **Docker**: local (named pipe / `docker.sock`), TCP, TLS / mutual TLS, or over an SSH tunnel; the tree splits into containers / images / volumes / networks, containers are colored by state, right-click to start / stop / pause / kill / rename / delete; a container tab has **Info** (port mappings, networks, mounts, health check; passwords in environment variables masked by default), **Logs** (follow, stderr in red, search), **Shell** (interactive terminal), **Resources** (CPU / memory charts) and **Processes**; **one-click connection for database containers** (type detected from the image, port and variables such as `POSTGRES_PASSWORD` filled in); an overview with disk usage, containers grouped by compose project, clean-ups (anything that deletes data asks you to type `prune`), and image pulls with per-layer progress. **Registry v2** (self-hosted, Docker Hub, GHCR…, tokens exchanged automatically): tag digest / size / multi-platform manifest / layers, copy the `docker pull` command, delete. **Harbor**: artifact table, trigger vulnerability scans and read the CVE details, delete tags / artifacts / repositories, project quotas and component health; images in Registry / Harbor can be "pulled to Docker" directly. Read-only connections hide every write action |
-| Kubernetes | Connect with a kubeconfig (pick a context) or by hand (API server + token / certificates); tokens, token files, client certificates and the EKS / GKE / AKS external login commands all work, namespaces can be restricted, and the API server can be reached over an SSH tunnel. The tree is namespace → resource kind (Pods, Deployments, StatefulSets, Services, Ingresses, ConfigMaps, Secrets, PVCs, HPAs…) → resource, colored by state, plus cluster resources (Nodes, PVs, StorageClasses, CRDs); resource tabs have **Overview**, **Events** and **YAML** (dry-run before apply; a concurrent edit by someone else is caught); Pods add **Logs** (pick a container, previous logs, follow, search), **Shell** and **Resources**. Scale, rollout restart, run a CronJob now, cordon, delete; **port-forward** to localhost, and "**Create database connection…**" on a Pod / Service / StatefulSet makes a connection that opens the forward by itself; a resource browser for any kind (CRDs included), apply pasted YAML, cluster overview |
-| Remote desktop | A separate "Remote desktop" list in the sidebar (groups; shown once you have a host), added from "New connection" or by pasting `rdp://`, `mstsc /v:`, `vnc://` or `rustdesk://<ID>`, or by importing `.rdp` files. **RDP** (NLA, server certificate fingerprint confirmed on first use, scale / resize the remote resolution / original size), **VNC and Mac Screen Sharing** (Mac login credentials; authentication happens in the app's backend, so the password never reaches the web layer), **RustDesk** (Direct IP, or by RustDesk ID through public or self-hosted ID and relay servers — end-to-end encrypted once you enter the server key; asks for the code when the other side uses two-factor authentication; without a password it waits for the other side to accept). All of them render inside a tab, several at once; in **full screen** Win / Alt+Tab / Alt+F4 go to the remote machine (Windows) and the toolbar sends Ctrl+Alt+Del; clipboard text syncs both ways; any saved SSH host can act as an encrypted jump box. **RustDesk toolbar**: quality and codec (including true color 4:4:4), custom zoom, switch between the remote screens or tile "all screens", the remote cursor shape, a virtual keyboard and one-click OS password entry, keyboard mode (map / translate), chat, connection quality, screenshots and **recording**, **file transfer** (two panes, local on the left and remote on the right, whole folders up and down), and **automatic reconnect** after the other side signs in / out or reboots. **VNC toolbar**: display settings, actions, screenshots, recording, a virtual keyboard, typing clipboard text into the remote character by character, and automatic reconnect; when the server offers **VeNCrypt** the session goes over TLS (anonymous TLS or X509 certificates, confirmed on first use and remembered), so the screen, keystrokes and password are no longer sent in the clear. Right-click a tab or sidebar host to disconnect / reconnect. The RustDesk connection lives in a separate AGPL helper (`rustdesk-bridge/`) shipped with the installer, so db-kit itself stays MIT |
-| File compare | In-tab **text compare** (side by side, inline differences, synced scrolling, both sides editable, apply each hunk → / ←, Alt+↑ / ↓ to jump between differences, and a check for outside changes before saving back), **folder compare** (same / different / one side only colored and filterable; match by size + modified time, size only, or byte-by-byte; exclude rules with `*` `?`; copies keep the modified time) with **sync** (mirror, one-way update, two-way update — every action is listed before it runs), and **binary compare** (hex side by side, difference ranges). Either side can be local or any saved SSH / SFTP / FTP host, and compares you use often can be saved; `dbk diff` / `dbk sync` bring the same engine to scheduled jobs |
-| SQL review | **Static rule engine** (in the spirit of Redgate SQL Prompt / SonarQube SQL rules): 15 rules across three severities, listing issues as you type — DML without WHERE, Cartesian products, functions on columns that defeat indexes, leading-wildcard LIKE, the `NOT IN` NULL trap, UNION vs UNION ALL, NOLOCK dirty reads, row-by-row cursors and more. Dialect-aware, **runs no query and needs no AI**; click a finding to select it in the editor |
-| Review & Run | **AI review** before execution (verdict badge: safe / caution / not recommended; no data rows sent by default) → **per statement: capture before-image → persist rollback → execute → capture after-image and diff**; rollback level per statement (full / partial / none), confirmations for incomplete rollback and production; outputs `script.sql` / `review.md` / `rollback.sql` / `diff.md` / `report.md` / `manifest.json` / `snapshots/`; "Backup only" mode (works on read-only connections); rollback scripts can themselves be reviewed and run; shared with AI assistant writes and `dbk run`; MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite |
-| Stored-procedure integration tests | Scenario files (`insert` / `call` / `query` / `sql` / `compare` / `snapshot`; `>>` / `<<` symbols pass values between steps; `fixtures` for shared setup, `cases` for data-driven runs); **affected tables are snapshotted automatically** around every call (write targets found from the routine body, callees and triggers); assertions on result sets (listed columns only, order-insensitive, `?` = value-only), OUT parameters, return code, side-effect counts or rows, `effects_strict`, error class; value comparison knows `1.0`=`1`, bit=boolean, datetime tolerance, and masks identity / time-default columns; modes `assert` / `record` / `golden` / `diff`; AI-generated scenarios; `dbk sp-test run|diff|inspect|validate` with JUnit and `--exit-code`; SQL Server / PostgreSQL / MySQL |
-| AI assistant | Right-hand panel wired to your local **Claude Code or OpenAI Codex** CLI (switch from a dropdown; each remembers its own model): streaming Q&A, write / optimize SQL, optionally attach the current schema; code blocks follow the active theme's highlighting. Three one-click entry points — **Review SQL with AI** (rule-engine findings + schema + indexes + plan), **Tuning advice** (plan hot spots; asks for index DDL, a rewrite and the cost of both), and **Analyse stress results** (infers the bottleneck from the shape of the latency percentiles) |
-| Operations | Persistent connection settings, encrypted connection export / import (passwords included; listed by the sidebar's sections and groups so a whole section or group can be ticked at once, with SSH hosts and remote desktops included), scheduled backups + backup history, connection-pool monitoring + ping, **in-app updates** (an update window lists what changed in the new version; on Windows "Update now" downloads the installer, checks its SHA-256 and relaunches after installing, while macOS / Linux open the download page), cross-platform desktop app |
+dbk --conn prod-mysql --format csv query "select id, name from users limit 20"
+dbk --conn prod-mysql export orders --to orders.xlsx --data-format xlsx
+dbk --conn prod-mysql exec "update users set status='active' where id=42" --yes
+```
 
-> Current status: **all eleven data sources (eight databases + Kafka · RabbitMQ · Elasticsearch) fully connectable**; relational databases have full CRUD / DDL column editing / index management / EXPLAIN / RETURNING display, multi-column compound filters (9 operators + AND·OR) and sorting, **CSV import** + multi-format export + **whole-database schema dump SQL**
-> SQL Server (tiberius + bb8 connection pool): CRUD, structure tabs (indexes / foreign keys / DDL), routines (stored procedures / functions), execution plans (SET SHOWPLAN_XML), ER diagram, column statistics; backup / restore planned via sqlpackage `.bacpac` export (not wired up yet)
-> MariaDB shares the MySQL driver (wire-protocol compatible): full MySQL feature parity + `INSERT/DELETE … RETURNING` result-set display
-> Oracle (rust-oracle / ODPI-C): CRUD, structure tabs (indexes / foreign keys / DDL via DBMS_METADATA), routines, execution plans (EXPLAIN PLAN + DBMS_XPLAN), ER diagram, column statistics; **requires a self-installed 64-bit Oracle Instant Client** (detected at runtime via PATH / ORACLE_HOME / custom directory, with download guidance if missing; server must be 12c+)
-> MongoDB: document flattening + full **CRUD-via-JSON** in the query editor (find / aggregate / insert / update / delete) + **explain plans** (stage tree, COLLSCAN warnings, scan ratios) + advanced indexes (TTL / partial / text / 2dsphere / hidden + $indexStats usage) + **validation rules** ($jsonSchema via collMod) + field statistics (BSON type distribution / Top-10 / sampling) + **monitoring panel** (serverStatus / dbStats / currentOp+kill / Profiler slow queries)
-> Redis, modeled on dedicated Redis desktop managers: five structure views with editing, **namespaced key tree** (folders grouped by `:`), value formatting (raw / JSON / Hex), **Pub/Sub** subscribe & publish, **ops panel** (slowlog / clients / big keys), **server status panel** (key INFO metrics + all sections, auto-refreshable), **command-line console** (command history, DB switching)
-> Kafka (rdkafka / librdkafka), inspired by **Conduktor Console**: message browse + live tail, **JS filter expressions** (embedded boa engine, with key / value / json / headers…), deserializer choice + "search more" scanning + JSON field projection, export CSV / JSON / xlsx, produce (headers / **Avro serialization** / **flow mode + random templates** / **CSV bulk**); **cluster overview** (brokers / URP / offline-partition health), topic config editing / add partitions / empty (DeleteRecords), full offset reset (to / timestamp / shift + **preview before apply**), consumer-group lag; **monitoring & alerts** (background sampling + hand-rolled SVG time-series charts + rules → OS notifications / alert history / health risk scan); **Schema Registry** (subjects / versions / diff / register / compatibility / delete), **Protobuf decoding** (protox + prost-reflect), **Kafka Connect** (connector management + config validation), **ACL** (grouped-by-principal management)
-> Persistent connection settings (passwords in the OS keychain), SSH Tunnel, scheduled backups + backup history, connection latency ping, ER diagram, draggable column widths, AI assistant
-> Query workspace: multi-statement → **stacked multi-result sets** (SSMS style), failed-statement locating, 200-entry query history, saved-query groups, `@` user variables and table/column autocomplete
-> Appearance: **7 gemstone themes driving the app + editor together** (switch from the toolbar or Settings); **advanced object search** (cross-database / definition bodies / whole-word / wildcards)
-> Beyond databases: **SSH terminal + SFTP / FTP**, **Docker / Registry / Harbor**, **Kubernetes** (resource browsing, Pod logs / shell, port-forward to in-cluster databases), **remote desktop** (RDP / VNC / Mac Screen Sharing / RustDesk), **file / folder / binary compare and sync**
-
-Guides (in Chinese): [Schema compare](./docs/compare.md) · [Review & Run](./docs/review-run.md) · [DBA review](./docs/dba-review.md) · [AI library](./docs/ai-library.md) · [`dbk` CLI](./docs/cli.md). Full planning docs live in [`docs/`](./docs/): [Planning](./docs/planning.md) · [Architecture](./docs/architecture.md) · [Connection lifecycle](./docs/connection-lifecycle.md) · [Roadmap](./docs/roadmap.md). Change history in the [CHANGELOG](./CHANGELOG.md).
-
-## Feature roadmap
-
-All core features are complete (60+ items). Expand for the full list:
-
-<details>
-<summary><strong>Show the full feature list</strong></summary>
-
-- [x] P0 skeleton: layout, large-icon toolbar, connection pool & release layer, MySQL connectivity
-- [x] P1/P2 double-click to open tables → grid view + bottom pagination + structure/data tab switching
-- [x] SQLite support (file-based, sharing the MySQL trait)
-- [x] PostgreSQL support
-- [x] Microsoft SQL Server support (tiberius + bb8 pool; structure tabs / routines / SHOWPLAN XML execution plans / ER diagram / column stats; backup planned via sqlpackage `.bacpac`, not wired yet)
-- [x] MariaDB support (shares the sqlx MySQL driver; distinct connection type + MariaSQL editor dialect + RETURNING result sets)
-- [x] Oracle support (rust-oracle / ODPI-C; runtime Instant Client detection, EZConnect / SID / TNS connection styles, structure tabs / routines / DBMS_XPLAN plans / ER diagram; server 12c+)
-- [x] MongoDB deep-dive: visual explain, JSON query editor (completion), advanced indexes + $indexStats, validation rules, field statistics, monitoring panel (currentOp / Profiler)
-- [x] MySQL / PostgreSQL SSL modes (sqlx rustls; typed connection params — special characters in passwords no longer need encoding)
-- [x] Cloud connection improvements: **import from connection string** (paste `mysql://` / `postgres://` / `mongodb+srv://` / `rediss://` / `sqlserver://` or Azure ADO.NET to auto-fill the form; the GUI and `dbk --url` share one parser) and custom CA certificates (MySQL / PostgreSQL / SQL Server / MongoDB — for AWS RDS / DocumentDB / Aiven / Supabase / Upstash, etc.)
-- [x] Add-connection dialog redesign: connection types **grouped by category** (relational / document / key-value / message queue / search) with an icon picker; collapses to a single row after selection with a "change type" action
-- [x] Elasticsearch / OpenSearch support (first-class; pure reqwest REST, no extra C dependency, `elastic` feature on by default with gui): cluster→index tree, **Query DSL editor** (JSON envelope `{ "index":"..", "query":{..} }` + lint + field completion), search / count / single-level aggregations (dual result sets), **cluster overview** (health / nodes / index status), mapping viewer, delete index; Basic / API Key / Elastic Cloud ID auth, TLS + custom CA; flavor (ES vs OpenSearch) auto-detected on connect
-- [x] **Natural-language query** (NL→SQL / NL→ES DSL): an "AI generate" bar in the query panel (Ctrl+Shift+A) — describe your intent in natural language and the local Claude Code / Codex CLI (reusing the AI assistant pipeline; subscription login, no API key) generates the query after injecting schema / mapping. The generated statement is **shown in a preview first** (view / copy / regenerate) and only runs when you "apply to editor" — never a black box; destructive statements (DROP/TRUNCATE, etc.) are flagged before applying; failed runs offer "retry with error". Single-turn, zero-tool (tools auto-denied, no side effects)
-- [x] RabbitMQ support (first-class; lapin AMQP 0-9-1 + Management REST dual-track, `rabbitmq` feature on by default with gui, rustls-ring pure Rust, no NASM): connection→vhost→queue tree, **queue message browsing** (non-destructive basic.get preview + requeue, with redelivered / quorum warnings; stream queues blocked), **publish** (publisher confirm), queue details, purge / delete queue (with confirmation), cluster overview (version / node / queues / message counts / rates); paste amqp(s):// to connect (CloudAMQP); vhost / TLS / Management URL configurable
-- [x] In-cell editing + ✓ apply (keyed by primary key, written back to the DB)
-- [x] Insert / delete rows (full CRUD)
-- [x] Filtering (single-column conditions), sorting (click column headers)
-- [x] MongoDB (documents flattened into the grid, same grid feel)
-- [x] Redis (key listing + five structure views)
-- [x] Redis deep-dive: namespaced key tree (`:` grouping), context menus on keys / DBs / connections, server status (INFO) panel, command-line console
-- [x] **Full create / edit / delete from the context menus (Redis & Kafka)**: Redis namespace bulk-delete / new key here / narrow the SCAN pattern, copy key value + TTL from the key menu, checkbox purge in the big-keys panel, ops panel & Pub/Sub reachable straight from the sidebar; Kafka topic right-click to produce / bulk-produce from CSV / create a topic, double-confirmed topic delete, filterable consumer-group list with right-click delete
-- [x] **`dbk` CLI writes**: `exec`, `db create/drop`, `table drop/truncate`, `redis set/del/del-prefix/expire/persist/rename/flush-db`; writes require `--yes`, destructive actions require `--force`, and without the flags the command only prints what it would do (built-in dry run)
-- [x] **UI smoke check** `npm run verify:ui`: production build + Tauri invoke shim, asserting context menus and tab behaviour (no Docker, no real database)
-- [x] Backup / restore (manual, CLI-driven + SQLite file copy)
-- [x] Persistent connection settings + passwords encrypted in the OS keychain
-- [x] SSH Tunnel (password / private-key auth)
-- [x] Scheduled backups + backup history management (list / run now / restore / retention count)
-- [x] Redis structure editing (List / Set / ZSet / Hash element add/remove/edit), multi-column compound filters, column resizing
-- [x] AND / OR toggle for multi-column filters
-- [x] Data export (CSV / TSV / JSON / SQL INSERT / Markdown, with header / delimiter / NULL / BOM / range options)
-- [x] Data import (CSV / TSV → table, RFC4180 parsing, empty-field→NULL, per-row success/failure reporting)
-- [x] Whole-database schema dump SQL (right-click a database in the sidebar → "Export schema SQL", concatenating every table's CREATE statement)
-- [x] Column profiling (right-click a column header → "Column statistics": total rows / non-null / distinct values)
-- [x] UX polish: native file pickers, connection editing, toast notifications, connection-tree context menus
-- [x] SSH host-key verification (TOFU: remember the fingerprint on first use, compare afterwards)
-- [x] **SSH terminal + SFTP**: sidebar "SSH hosts" list (folders / search / context menu), multi-tab xterm.js terminals (four auth methods, host-key prompts, reconnect, search, compose bar), SFTP split pane, "Open SSH terminal" on tunnelled DB connections; AI suggestions are sent only by your click (`shellGuard` three-level classification)
-- [x] Query performance analysis (EXPLAIN)
-- [x] Structure editing (DDL: add / drop / rename columns)
-- [x] ER diagram (tables + foreign-key relations; draggable cards, zoom, layout memory, relation highlighting)
-- [x] Grid feel: cell context menu (copy value / row as JSON·TSV / INSERT, set NULL, filter by value), content viewer, keyboard navigation, selection info
-- [x] Multi-column sort (Shift+click), rows per page, column hiding / auto-fit width, refresh
-- [x] Query editor: execution time / row counts, query history, run selection only, Ctrl+Enter, per-connection memory, result copy / export (CSV·JSON·TSV)
-- [x] Structure: copy CREATE TABLE SQL (SHOW CREATE TABLE etc.), index viewing + create / drop (MySQL / PostgreSQL / SQL Server / SQLite / MongoDB)
-- [x] MongoDB query upgrades: sort / projection / limit + **aggregation pipelines** (aggregate: `$match` / `$group` / `$sum`…)
-- [x] Sidebar: search filtering, right-click tables to generate queries (SQL SELECT/COUNT/INSERT, Mongo find templates), duplicate connections
-- [x] Tab management (middle-click / close others / close all / Ctrl+W), live connection-pool monitoring + **ping** (round-trip latency on existing connections, SSH tunnels included), global UI/UX polish
-- [x] Redis advanced: value formatting (raw / JSON / Hex) + cursor-based paging for large collections, **Pub/Sub** subscribe & publish, **ops panel** (slowlog / clients / big keys)
-- [x] AI assistant (right panel, wired to the local Claude Code / OpenAI Codex CLI): streaming Q&A, write / optimize SQL, optionally attach the current connection's schema as context
-- [x] Cross-database consistency: the above aligned across MySQL / PostgreSQL / SQL Server / SQLite / MongoDB (identifiers / filters / indexes mapped per database)
-- [x] **Visual query builder**: check off tables / columns, auto-JOIN from foreign keys, WHERE / aggregates / HAVING / ORDER BY / DISTINCT / LIMIT / OFFSET, live preview + count, send to editor; open from a table's context menu
-- [x] **Excel (.xlsx) export / import**: pure Rust (rust_xlsxwriter / calamine), numeric fidelity, frozen headers + auto column widths
-- [x] **Query-result export** through a unified backend pipeline (CSV / TSV / Excel / JSON / SQL / Markdown)
-- [x] **SQL snippet library** (editor autocomplete + toolbar management), **parameterized queries `:name`**, SQL **format / minify / keyword casing**
-- [x] **Data transfer** (cross-connection / cross-database; single table / whole database; auto-create missing target tables)
-- [x] **Review & Run** (AI review + per-statement before/after images + rollback script + diff report written to a chosen folder; lossless type-aware capture; DDL rollback via the schema-compare generator; transaction-control / session-state statements block the script; AI assistant writes use the same flow; `dbk run`)
-- [x] **Stored-procedure integration tests** (scenario JSON: seed → call → assert with automatic rollback; side-effect snapshots; golden regression; cross-engine diff for migrations; AI-generated scenarios; `dbk sp-test` + JUnit)
-- [x] **Data compare / sync** (compare two tables by primary key, generate INSERT / UPDATE / DELETE sync DML)
-- [x] **Whole-database documentation** (HTML / Markdown reports with table of contents)
-- [x] **Two-way foreign-key navigation** (jump to referenced row / find rows referencing this one), **Copy as IN**, **distinct-value distribution**
-- [x] **Command palette** (Ctrl/Cmd+K): fuzzy-search jumps to connections / databases / tables / actions
-- [x] **Read-only connection mode** (blocks writes / DDL from grid and sidebar), **connection color labels** (tell environments apart), **pinned favorite tables**
-- [x] Schema compare (table / column diffs between two databases on one connection + sync SQL)
-- [x] **Startup password** (Argon2id hash, gates app launch; does not affect the keychain or the `dbk` CLI)
-- [x] **Query safety nets**: row cap (default 1,000) + query timeout (DB-side + tokio fallback), large-table performance work (row-level memoization / parallel COUNT / per-database connection caching)
-- [x] **Startup speed**: skeleton screen kills the white flash, dialog & CodeMirror code splitting (initial bundle 1,139 KB → ~470 KB), asset and font-subset slimming
-- [x] **Multi-result sets** (SSMS-style stacking): each pane independently scrolls / sorts / filters / collapses; the active pane drives copy / export / ask-AI; "Export all" exports every result set at once
-- [x] **Editor themes**: 7 gemstone palettes (`src/editorThemes.ts`), upgraded in 0.8.0 into the unified theme system driving the whole app, switchable from the toolbar (light / dark / variants)
-- [x] **Saved queries**, complete: groups, edit / rename, import & export (SQL snippets included), managed from the top toolbar
-- [x] **SQL editor completion**: table / column autocomplete (**whole database loaded in one batch, no table-count cap**), **schema cache** (persisted to disk — instant on open, works offline; a toolbar badge shows how old it is and refreshes on click), `@` user-variable suggestions
-- [x] **Advanced object search** (`Ctrl+Shift+G`): sortable tabular results (name / database(schema) / type / matched-in / detail), name / definition / comment matches, whole-word + wildcards, highlighted definition preview, select in object explorer
-- [x] Sidebar search / filter auto-expands folders on match; grid headers show column comments on hover
-- [x] "About DB Kit" dialog + automatic GitHub update check (can be disabled in Settings); **in-app updates** (Windows: download with resume, SHA-256 check, relaunch after installing)
-- [x] **Internationalization (i18n)**: Traditional Chinese, Simplified Chinese, English, Japanese, Korean, and Vietnamese — live switching without restart; frontend, Rust backend, and the `dbk` CLI all localized (`--lang`, `DBKIT_LANG`); each translation table is code-split so you only download your own. Japanese/Korean/Vietnamese fall back to English (never Chinese) for any string not yet translated; the Simplified Chinese table is generated by `scripts/i18n-gen-zhcn.mjs` (OpenCC + a database-terminology glossary)
-- [x] **FTP / FTPS hosts**: share the SFTP file pane; explicit / implicit TLS, self-signed certificates confirmed by fingerprint, resumable transfers (`REST` / `APPE`), passive / active mode, a connection per transfer
-- [x] **Docker / Docker Registry / Harbor**: containers / images / volumes / networks tree, container info / logs / shell / resources / processes, one-click connections for database containers, overview and clean-ups; Registry tags and multi-platform manifests, Harbor artifacts and vulnerability scans, pull into Docker
-- [x] **Remote desktop**: RDP (IronRDP, NLA, certificate TOFU, dynamic resolution), VNC / Mac Screen Sharing (noVNC, authentication in the backend), RustDesk Direct IP; full screen with system-key capture, clipboard text sync, SSH host as jump box, `.rdp` import
-- [x] **RustDesk by ID**: public or self-hosted ID / relay servers, falls back to the relay when hole punching fails, end-to-end encryption after the peer key is verified against the server key, paste the server config string; type the password while waiting for the other side to accept, and a code prompt when the other side uses two-factor authentication
-- [x] **Kubernetes**: kubeconfig / token / certificates / external login commands (EKS / GKE / AKS), namespace → resource tree, overview / events / YAML edit and apply, Pod logs / shell / resource usage, scale / restart / cordon, port-forward and "Create database connection" with automatic forwarding, resource browser (CRDs included)
-- [x] **File / folder / binary compare**: apply text hunks and save back, folder compare with mirror / update sync, hex compare; any mix of local and SSH / FTP hosts; saved compares; `dbk diff` / `dbk sync`
-- [x] **Consistent sidebar grouping**: database connections in one section per type, SSH hosts and remote desktops in their own sections, all three collapsible with groups, drag to reorder and drag in / out of groups
-- [x] **RustDesk toolbar**: quality / codec / true color 4:4:4, custom zoom, screen switching and "all screens", remote cursor shape, virtual keyboard and OS password entry, keyboard mode, chat, connection quality, screenshots and recording, two-pane file transfer, automatic reconnect when the other side drops the session
-- [x] **VNC toolbar and VeNCrypt encryption**: display settings / actions / screenshots / recording, virtual keyboard, clipboard typed out character by character, automatic reconnect; anonymous TLS and X509 certificate TLS, with "Auto" preferring encryption
-- [x] **SSH activity log**: terminal commands, SFTP / FTP file actions and connection events, searchable and exportable, passwords never logged
-- [x] **Advanced connection export by sidebar group**: tick a whole section or group; SSH hosts and remote desktops export / import too
-- [x] **Schema compare workflow rework**: ticked objects drive the sync script, status chips, per-row diff summary, ⇄ swap source and target, compare options, DDL line numbers and word-level diff, fold identical lines, previous / next object, re-compare after applying
-
-</details>
-
-## Tech stack
-
-| Layer | Technology |
-|----|------|
-| App framework | Tauri 2 |
-| Frontend | React 18 + TypeScript + Vite |
-| UI | Tailwind CSS (shadcn/ui style); 12 semantic CSS variables (`--c-*`) carry the theme, 7 palettes derive surface depth via `buildAppVars` |
-| Editor | CodeMirror 6 (SQL / JSON syntax highlighting, lint, autocomplete) |
-| State | Zustand |
-| Backend | Rust: sqlx (MySQL / MariaDB / PostgreSQL / SQLite), tiberius + bb8 (SQL Server), rust-oracle / ODPI-C (Oracle, needs Instant Client), mongodb, redis |
-| Security | OS keychain (keyring), SSH Tunnel (russh) + host-key TOFU |
-| Remote & containers | SSH / SFTP: russh + russh-sftp, terminal on xterm.js; FTP / FTPS: suppaftp (rustls); RDP: IronRDP; VNC: noVNC (authentication done on the Rust side); RustDesk: a separate AGPL helper, `dbk-rustdesk-bridge`, with video decoded by the WebView's WebCodecs; Docker / Registry / Harbor / Kubernetes: their REST APIs directly, with a hand-rolled WebSocket client for exec / port-forward (no kube-rs) |
-| File compare | Rust `filecmp` module (scan, align, sync — shared by the GUI and `dbk diff` / `dbk sync`), `@codemirror/merge` side-by-side editor |
-| AI assistant | Local Claude Code / OpenAI Codex CLI (subscription sign-in, streaming), or an Anthropic / OpenAI-compatible API (keys in the OS keychain) |
-
-## Connection lifecycle design
-
-Connection release is where tools like this most often go wrong, so it was designed in from P0:
-
-- **Connection pooling**: sqlx's built-in pool with `max_connections` / `idle_timeout` / `max_lifetime`
-- **Health checks**: validate zombie connections with `SELECT 1` before handing one out
-- **Graceful shutdown**: drain every pool on app exit (RAII / Drop as the backstop)
-- **Connection monitoring**: per-connection in-use / idle reporting
+`query` only accepts read-only statements. Writes need `--yes`, and destructive ones (DROP / TRUNCATE / no WHERE) also need `--force`; without the flags it only shows what it would do. See [docs/cli.md](./docs/cli.md) for every subcommand.
 
 ## Build from source
 
-Build from source to modify, contribute, or run on macOS / Linux.
-
-**Requirements**
-
-- [Rust](https://rustup.rs/) (stable)
-- [Node.js](https://nodejs.org/) 18+
-- Tauri system dependencies: see <https://tauri.app/start/prerequisites/>
-
-**Develop & package**
+Requires [Rust](https://rustup.rs/) (stable), [Node.js](https://nodejs.org/) 18+ and the [Tauri system dependencies](https://tauri.app/start/prerequisites/).
 
 ```bash
-# Install frontend dependencies
 npm install
-
-# Dev mode (starts frontend + Tauri together, hot reload)
-npm run tauri dev
-
-# Package an installer for the current platform
-npm run tauri build
+npm run tauri dev     # dev mode
+npm run tauri build   # installer for the current platform → src-tauri/target/release/bundle/
 ```
 
-Build artifacts land in `src-tauri/target/release/bundle/` (`.msi` / `.exe` / `.dmg` / `.AppImage` / `.deb` depending on platform).
-
-## Command-line tool (`dbk` CLI)
-
-> 📖 **Full guide: [docs/cli.md](./docs/cli.md)** (written in Traditional Chinese) — every subcommand's flags, output formats, worked scenarios (scheduled backups / performance baselines / auditing), exit codes and limitations. What follows is a quick tour.
-
-Alongside the desktop GUI, db-kit ships a **`dbk` command-line tool** — **queries, export and writes (modify · delete)** — for SSH sessions, scripts, and scheduled jobs where opening a GUI makes no sense. It reuses the core layer directly (connection management / export / backup / crypto) and **does not go through Tauri**, so `--no-default-features` builds a **lean, Tauri-free binary**.
-
-```bash
-# Build the lean CLI (no GUI / Tauri)
-cargo build --release --no-default-features --bin dbk
-# Output: target/release/dbk(.exe)
-```
-
-**Two ways to connect**: reuse a connection saved in the GUI (`--conn <name or id>`, reading the same connections.json + OS keychain), or connect ad hoc with flags (`--kind mysql --host … --user …`; put the password in the `DBKIT_PASSWORD` environment variable to keep it out of argv). `--kind` accepts `mysql / mariadb / postgres / sqlite / mongo / redis / mssql / oracle`, or use a one-shot `--url` connection string like `oracle://user:pass@host:1521/SERVICE`. Output formats: `--format table|csv|json`.
-
-```bash
-# Use a GUI-saved connection, run a read-only query, output CSV
-dbk --conn prod-mysql --format csv query "select id,name from users limit 20"
-
-# Ad-hoc connection (password via env var), list tables
-DBKIT_PASSWORD=*** dbk --kind mysql --host 10.0.0.5 --user app db list
-dbk --conn prod-mysql table data orders --page 0 --page-size 50 --filter "status:=:paid" --sort "created_at:desc"
-
-# Export a table / dump the schema / back up (--data-format: csv | tsv | xlsx | json | sql | markdown)
-dbk --conn prod-mysql export orders --to orders.csv --data-format csv --bom
-dbk --conn prod-mysql export orders --to orders.xlsx --data-format xlsx
-dbk --conn prod-mysql schema-dump > schema.sql
-dbk --conn prod-mysql backup mydb --to mydb.dump
-```
-
-**Read-only guard**: `query` / `explain` only allow query-class statements (`select` / `with` / `show` / `describe` / `explain` / `pragma` / `use` / `values` / `table`); write statements (`insert` / `update` / `delete` / `drop`…) are rejected with a non-zero exit code (statements split per `;`, comments skipped). Use `exec` below to write; pairing it with a read-only DB account as a second line of defense is still recommended.
-
-**Row cap**: `query` defaults to the global setting (1,000 rows); override with `--max-rows N` (`--max-rows 0` fetches everything; truncation is reported on stderr).
-
-### Writes (modify / delete)
-
-Every write requires **`--yes`**; **highly destructive** actions (`DROP` / `TRUNCATE` / `FLUSHDB` / `UPDATE`·`DELETE` without a `WHERE`) additionally require **`--force`**. Without the flags nothing runs: the command prints what it *would* do and exits non-zero — a built-in dry run, so you can confirm which host and which table you are about to hit before wiring it into a script.
-
-```bash
-# Ordinary write: --yes
-dbk --conn prod-mysql exec "update users set status='active' where id=42" --yes
-
-# Destructive: --yes --force (missing either one blocks it)
-dbk --conn prod-mysql exec "delete from sessions" --yes --force
-dbk --conn prod-mysql table truncate audit_log --yes --force
-dbk --conn prod-mysql table drop tmp_import --yes --force
-dbk --conn prod-mysql db create staging --yes
-
-# Redis: set value / TTL / rename / delete / bulk delete by prefix
-dbk --conn cache redis set session:42 '{"uid":42}' --ttl 3600 --yes
-dbk --conn cache redis expire session:42 600 --yes
-dbk --conn cache redis persist session:42 --yes
-dbk --conn cache redis rename session:42 session:42:old --yes
-dbk --conn cache redis del session:42:old --yes
-dbk --conn cache redis del-prefix session: --yes --force   # SCAN for key names, then DEL
-```
-
-> `del-prefix` never hands the prefix to Redis as a pattern: it runs `SCAN MATCH <prefix>*` first (capped by `--limit`, default 10,000) and then deletes the resolved key names in batches — the confirmation message tells you how many keys are about to go.
-
-**Stress test** — multi-threaded replay of one query, sharing the same core as the GUI:
-
-```bash
-dbk --conn prod-mysql stress "select * from orders where status='paid' limit 100" \
-    --threads 8 --seconds 30 --ramp 5 --warmup 20
-dbk --conn prod-mysql --format json stress "select 1" --threads 16 --seconds 60 > bench.json
-```
-
-> `stress` is always read-only (there is no `--allow-writes`). It opens a dedicated connection with `max_connections = --threads` and releases it afterwards — so `--threads 64` really does open 64 connections to the target; make sure the server can take it.
-
-Other subcommands: `conn` (list / test / ping / encrypted export), `db` (list / create / drop), `table` (list / columns / data / info / ddl / indexes / foreign-keys / drop / truncate), `routine`, `search` (`--whole-word` exact-word matching, `--wildcards` enables `*` `?`), `column-stats`, `er-model`, `server-info`, `exec`, `run` (review & run a script), `stress`, `redis` (keys / key / slowlog / clients / big-keys / set / del / del-prefix / expire / persist / rename / flush-db), `compare` / `schema` (schema / data compare and snapshots), `diff` / `sync` (file / folder compare and sync), `mcp` (read-only database tools for AI clients), `ai` (AI library). Per-command detail and worked examples in **[docs/cli.md](./docs/cli.md)**, or `dbk --help` / `dbk <subcommand> --help`.
-
-> **Compare and sync files**: `dbk diff <left> <right>` prints a unified diff for files and lists the differing entries for folders (`--exit-code` exits non-zero when they differ); `dbk sync <left> <right> --rule mirror-lr` syncs folders by rule — without `--yes` it only lists what it would do, and deleting files also needs `--force`. Each side is a local path or `ssh://<saved host>/<path>` (FTP hosts use the same form), and `--session <name>` runs a compare saved in the GUI; see [docs/cli.md](./docs/cli.md#diff--sync--檔案--資料夾比對與同步).
-
-> Kafka / Elasticsearch / RabbitMQ and container (Docker / Registry / Harbor / Kubernetes) connections are not supported by the CLI (no general-purpose query language that makes sense in a terminal, and the lean binary does not compile their drivers in); specifying one fails fast with a clear message — use the GUI instead.
-
-> Architecturally, `tauri` / `tauri-plugin-dialog` are optional dependencies behind the default `gui` feature; the GUI binary (`db-kit`) needs the `gui` feature, the CLI binary (`dbk`) does not.
-
-## Packaging the Windows installer
-
-On **Windows**, run the bundled PowerShell script — it checks for and installs Rust and Node.js automatically, then produces the `.msi` and `.exe` installers:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build-installer.ps1
-```
-
-The installers land in `src-tauri\target\release\bundle\` (`msi\` and `nsis\` subdirectories).
-
-> Note: Tauri requires the WebView2 Runtime (built into Windows 11; most Windows 10 machines already have it).
-
-**Automated releases (GitHub Actions)**: pushing a version tag starting with `v` packages **Windows / macOS (Intel + Apple Silicon) / Linux** installers in the cloud and creates the matching [Release](https://github.com/markku636/db-kit/releases) (see [`.github/workflows/release.yml`](./.github/workflows/release.yml)):
-
-```bash
-git tag v0.1.6 && git push origin v0.1.6
-```
+On Windows you can also run `powershell -ExecutionPolicy Bypass -File .\build-installer.ps1`, which installs Rust and Node.js if missing. Pushing a `v*` tag makes [GitHub Actions](./.github/workflows/release.yml) build installers for all three platforms and create a Release.
 
 ## Support open source
 
-This tool is free and open source. If it saved you time, buy me a coffee so the updates keep coming.
+If db-kit saved you time, you can buy me a coffee:
 
 [![PayPal $5](https://img.shields.io/badge/PayPal-%245-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8B7GRXA6UJH36)
 [![PayPal $10](https://img.shields.io/badge/PayPal-%2410-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/8LBTFUBBF2CHS)
 [![PayPal $15](https://img.shields.io/badge/PayPal-%2415-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/A653DD46GEU4W)
 [![PayPal $25](https://img.shields.io/badge/PayPal-%2425-0070ba?logo=paypal&logoColor=white)](https://www.paypal.com/ncp/payment/Y5WPSXVGH3YS4)
 
-For any other amount, use [PayPal.Me](https://paypal.me/226network). The same buttons are in the in-app "About" dialog.
+For other amounts, use [PayPal.Me](https://paypal.me/226network).
 
-## Author
+## Author & license
 
-Built by [Mark.K](https://github.com/markku636). Development notes and technical write-ups live at **[blog.markkulab.net](https://blog.markkulab.net/)** — the same link is in the in-app "About DB Kit" dialog.
-
-## License
-
-[MIT](./LICENSE)
+Built by [Mark.K](https://github.com/markku636); dev notes at [blog.markkulab.net](https://blog.markkulab.net/). Released under the [MIT](./LICENSE) license; the RustDesk connector in `rustdesk-bridge/` is a separate AGPL program.
