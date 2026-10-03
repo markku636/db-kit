@@ -121,8 +121,8 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 
 ## Guides
 
-- [Schema compare](./docs/compare.md) · [Review & Run](./docs/review-run.md) · [DBA review](./docs/dba-review.md) · [AI library](./docs/ai-library.md) · [Stored procedure tests](./docs/sp-test.md)
-- [`dbk` CLI](./docs/cli.md) · [Architecture](./docs/architecture.md) · [Connection lifecycle](./docs/connection-lifecycle.md) · [Roadmap](./docs/roadmap.md)
+- [Schema compare](./docs/compare.en.md) · [Review & Run](./docs/review-run.en.md) · [DBA review](./docs/dba-review.en.md) · [AI library](./docs/ai-library.en.md) · [Stored procedure tests](./docs/sp-test.en.md)
+- [`dbk` CLI](./docs/cli.en.md) · [Architecture](./docs/architecture.en.md) · [Connection lifecycle](./docs/connection-lifecycle.en.md) · [Roadmap](./docs/roadmap.en.md)
 
 ## Command-line tool `dbk`
 
@@ -136,7 +136,7 @@ dbk --conn prod-mysql export orders --to orders.xlsx --data-format xlsx
 dbk --conn prod-mysql exec "update users set status='active' where id=42" --yes
 ```
 
-`query` only accepts read-only statements. Writes need `--yes`, and destructive ones (DROP / TRUNCATE / no WHERE) also need `--force`; without the flags it only shows what it would do. See [docs/cli.md](./docs/cli.md) for every subcommand.
+`query` only accepts read-only statements. Writes need `--yes`, and destructive ones (DROP / TRUNCATE / no WHERE) also need `--force`; without the flags it only shows what it would do. See [docs/cli.en.md](./docs/cli.en.md) for every subcommand.
 
 ## Build from source
 

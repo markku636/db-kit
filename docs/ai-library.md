@@ -1,5 +1,7 @@
 # AI 資源庫使用指南
 
+**繁體中文** · [English](./ai-library.en.md)
+
 db-kit 裡所有 AI 行為——助手的人設、DBA 審查者、技能、每一個動作送出的提示——都來自 **AI 資源庫**：一組 Markdown 檔。你可以直接改、用 git 在團隊間共用，也能一鍵同步給 Claude Code 與 Codex 使用。
 
 從哪裡開：**設定 →「開啟 AI 資源庫…」**，或 AI 設定、DBA 審查面板上的資源庫按鈕。命令列用 `dbk ai …`（見文末）。
