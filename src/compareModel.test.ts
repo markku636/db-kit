@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { SchemaDiff, SyncStatement, TableDiff } from "./api";
 import {
-  buildAiSummaryPrompt, buildCompareRows, buildSyncScript, describeDiffForAi, normalizeDdl, pairSideBySide,
-  renameTableInSchema, sameFamily, snapshotFileName, splitStatements, summarizeRows, tableHasDiff,
+  buildAiSummaryPrompt, buildCompareRows, buildSyncScript, countNonDefaultOptions, describeDiffForAi, filterRows, foldUnchanged, hunkStarts,
+  normalizeDdl, numberPairs, pairSideBySide, parseCompareOptions, parseStatusFilter, renameTableInSchema, sameFamily, snapshotFileName,
+  splitStatements, statementOwner, summarizeRows, tableDiffChanges, tableHasDiff, toCaptureOptions, toDiffOptions, toSyncOptions,
+  DEFAULT_COMPARE_OPTIONS, type RowStatus,
 } from "./compareModel";
 import { diffLines } from "./diff";
 
@@ -116,5 +118,116 @@ describe("ddl helpers", () => {
     expect(snapshotFileName("my db/x", new Date(2026, 8, 15, 9, 5))).toBe("my_db_x-schema-20260915-0905.json");
     const s = renameTableInSchema({ kind: "mysql", database: "d", captured_at_ms: 0, label: "", tables: [{ name: "old", kind: "table", columns: [], indexes: [], foreign_keys: [], ddl: null, ddl_synthesized: false, warnings: [] }], views: [], routines: [], warnings: [] }, "old", "new");
     expect(s.tables[0].name).toBe("new");
+  });
+});
+
+describe("差異摘要徽章 / 狀態篩選", () => {
+  const col = (name: string) => ({ name, data_type: "int", nullable: true, key: "", default: null, extra: "", comment: "" });
+  it("tableDiffChanges 數欄位 / 索引 / 外鍵的增刪改；只有 DDL 不同時標 ddlOnly", () => {
+    const c = tableDiffChanges(td("t", {
+      columns_added: [col("a")], columns_changed: [{ name: "b", src: col("b"), dst: col("b"), attrs: ["data_type"] }],
+      indexes_removed: [{ name: "ix", columns: ["a"], unique: false, primary: false }],
+    }));
+    expect(c.columns).toEqual({ add: 1, del: 0, chg: 1 });
+    expect(c.indexes).toEqual({ add: 0, del: 1, chg: 0 });
+    expect(c.fks).toEqual({ add: 0, del: 0, chg: 0 });
+    expect(c.ddlOnly).toBe(false);
+    expect(tableDiffChanges(td("u", { ddl_differs: true })).ddlOnly).toBe(true);
+  });
+
+  it("buildCompareRows 把 changes 掛在有差異的表上", () => {
+    const rows = buildCompareRows(schema({ tables_changed: [td("t", { columns_added: [col("a")] }), td("same")] }), null, null);
+    expect(rows.find((r) => r.name === "t")?.changes?.columns.add).toBe(1);
+    expect(rows.find((r) => r.name === "same")?.changes).toBeUndefined();
+  });
+
+  it("parseStatusFilter：預設只看三種差異；壞值 / 空陣列退回預設；合法值照收", () => {
+    expect([...parseStatusFilter(null)].sort()).toEqual(["differs", "source_only", "target_only"]);
+    expect([...parseStatusFilter("garbage")].sort()).toEqual(["differs", "source_only", "target_only"]);
+    expect([...parseStatusFilter("[]")].sort()).toEqual(["differs", "source_only", "target_only"]);
+    expect([...parseStatusFilter('["identical","bogus"]')]).toEqual(["identical"]);
+  });
+
+  it("filterRows：狀態晶片 + 搜尋字；進行中 / 未比對的列不受晶片影響", () => {
+    const rows = buildCompareRows(schema({ tables_identical: ["kept", "other"], tables_added: ["Added"] }), null, "kept");
+    const on = new Set<RowStatus>(["source_only"]);
+    expect(filterRows(rows, on, "").map((r) => r.name).sort()).toEqual(["Added", "kept"]); // kept 正在跑
+    expect(filterRows(rows, on, "add").map((r) => r.name)).toEqual(["Added"]);
+    expect(filterRows(rows, new Set(["identical"]), "").map((r) => r.name)).toEqual(["kept", "other"]);
+  });
+});
+
+describe("比對選項", () => {
+  it("parseCompareOptions：缺的補預設、非布林丟掉、壞 JSON 回預設", () => {
+    expect(parseCompareOptions(null)).toEqual(DEFAULT_COMPARE_OPTIONS);
+    expect(parseCompareOptions("{oops")).toEqual(DEFAULT_COMPARE_OPTIONS);
+    const o = parseCompareOptions('{"ignore_case":true,"match_by_content":"yes","unknown":1}');
+    expect(o.ignore_case).toBe(true);
+    expect(o.match_by_content).toBe(true); // 非布林 → 保留預設 true
+    expect((o as unknown as Record<string, unknown>).unknown).toBeUndefined();
+  });
+
+  it("轉成後端三種選項物件；countNonDefaultOptions 數與預設不同的欄位", () => {
+    const o = { ...DEFAULT_COMPARE_OPTIONS, ignore_comments: true, include_views: false };
+    expect(toDiffOptions(o)).toEqual({ ignore_case: false, ignore_comments: true, ignore_defaults: false, match_by_content: true });
+    expect(toCaptureOptions(o)).toEqual({ include_ddl: true, include_views: false, include_routines: true, tables: null });
+    expect(toCaptureOptions(o, ["a"]).tables).toEqual(["a"]);
+    expect(toSyncOptions(o).include_views).toBe(false);
+    expect(toSyncOptions(o).include_drops).toBe(true);
+    expect(countNonDefaultOptions(o)).toBe(2);
+    expect(countNonDefaultOptions(DEFAULT_COMPARE_OPTIONS)).toBe(0);
+  });
+});
+
+describe("statementOwner", () => {
+  const st = (kind: SyncStatement["kind"], object: string): SyncStatement => ({ sql: "", kind, object, destructive: false, note: null });
+  const rows = buildCompareRows(schema({
+    tables_changed: [td("orders", { columns_added: [{ name: "x", data_type: "int", nullable: true, key: "", default: null, extra: "", comment: "" }] }), td("sales.orders", { ddl_differs: true })],
+    tables_removed: ["legacy_log"], views_changed: [{ name: "orders", routine_type: null, src: "a", dst: "b" }],
+    routines_added: [{ name: "sp_x", routine_type: "procedure", src: "x", dst: null }],
+  }), null, null);
+
+  it("欄位 / 索引語句歸到所屬的表，整表語句歸到自己", () => {
+    expect(statementOwner(st("add_column", "orders.x"), rows)).toBe("table:orders");
+    expect(statementOwner(st("create_index", "orders.ix_a"), rows)).toBe("table:orders");
+    expect(statementOwner(st("drop_table", "legacy_log"), rows)).toBe("table:legacy_log");
+  });
+
+  it("SQL Server 帶 schema 的表名（sales.orders）取最長前綴，不會誤歸到 sales", () => {
+    expect(statementOwner(st("alter_column", "sales.orders.total"), rows)).toBe("table:sales.orders");
+  });
+
+  it("視圖 / 程序語句只在同類型的列裡找（同名的表與視圖分得開）", () => {
+    expect(statementOwner(st("create_view", "orders"), rows)).toBe("view:orders");
+    expect(statementOwner(st("create_routine", "sp_x"), rows)).toBe("routine:sp_x");
+    expect(statementOwner(st("drop_index", "unknown.ix"), rows)).toBeNull();
+  });
+});
+
+describe("並排 DDL：行號、差異段、摺疊", () => {
+  const pairs = numberPairs(pairSideBySide(diffLines("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk", "a\nB\nc\nd\ne\nf\ng\nh\ni\nJ\nk")));
+
+  it("numberPairs 兩側各自編號，缺的一側為 null，changed 標在 del / add 列", () => {
+    const p = numberPairs(pairSideBySide(diffLines("a\nb", "a\nb\nc")));
+    expect(p.map((x) => [x.ln, x.rn, x.changed])).toEqual([[1, 1, false], [2, 2, false], [null, 3, true]]);
+  });
+
+  it("hunkStarts 只記每段差異的第一列", () => {
+    expect(hunkStarts(pairs)).toEqual([1, 9]);
+    expect(hunkStarts([{ changed: true }, { changed: true }, { changed: false }, { changed: true }])).toEqual([0, 3]);
+  });
+
+  it("foldUnchanged 留差異前後各 context 行，其餘縮成摺疊；展開過的攤開", () => {
+    const items = foldUnchanged(pairs, 1, new Set());
+    expect(items).toEqual([
+      { kind: "row", index: 0 }, { kind: "row", index: 1 }, { kind: "row", index: 2 },
+      { kind: "fold", from: 3, to: 8 },
+      { kind: "row", index: 8 }, { kind: "row", index: 9 }, { kind: "row", index: 10 },
+    ]);
+    expect(foldUnchanged(pairs, 1, new Set([3])).filter((x) => x.kind === "fold")).toEqual([]);
+    // 只有 1–2 行相同時不值得摺
+    const short = [{ changed: true }, { changed: false }, { changed: false }, { changed: true }];
+    expect(foldUnchanged(short, 0, new Set()).every((x) => x.kind === "row")).toBe(true);
+    expect(foldUnchanged([{ changed: false }, { changed: false }, { changed: false }, { changed: false }], 1, new Set())).toEqual([{ kind: "fold", from: 0, to: 4 }]);
   });
 });

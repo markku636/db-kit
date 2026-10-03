@@ -12,8 +12,10 @@ export interface StatementOutcome { index: number; ok: boolean; error?: string }
 /**
  * 同步腳本面板：語句清單（安全 / 破壞性分組、可逐句排除）、複製 / 送到查詢編輯器 / 直接執行。
  * 直接執行前有巢狀確認框；含破壞性語句時必須另外勾「我了解」；目標連線為唯讀時停用。
+ * `objectOn` 由外層決定「這句所屬的物件有沒有被勾選」——整庫比對的左側清單勾掉一張表，
+ * 這裡屬於它的語句就一起熄掉，不必逐句找。
  */
-export default function SyncScriptPanel({ statements, skipped = [], header, dstConnId, dstLabel, onSend, onExecute, disabledReason }: {
+export default function SyncScriptPanel({ statements, skipped = [], header, dstConnId, dstLabel, onSend, onExecute, disabledReason, objectOn }: {
   statements: SyncStatement[];
   skipped?: string[];
   header: string;
@@ -24,6 +26,8 @@ export default function SyncScriptPanel({ statements, skipped = [], header, dstC
   /** 執行選取的語句；回每句結果。undefined → 隱藏「直接執行」。 */
   onExecute?: (stmts: SyncStatement[]) => Promise<StatementOutcome[]>;
   disabledReason?: string;
+  /** 語句所屬物件是否被包含（左側清單的勾選框）；沒給＝全部包含。 */
+  objectOn?: (s: SyncStatement) => boolean;
 }) {
   const t = useT();
   const readonly = useStore((s) => (dstConnId ? s.readonlyConns[dstConnId] === true : false));
@@ -39,9 +43,11 @@ export default function SyncScriptPanel({ statements, skipped = [], header, dstC
   useEffect(() => { setExcluded(new Set()); setOutcomes(null); }, [statements]);
 
   const { safe, destructive } = useMemo(() => splitStatements(statements), [statements]);
+  const objOff = (s: SyncStatement) => !!objectOn && !objectOn(s);
   const selected = useMemo(
-    () => statements.map((s, i) => ({ s, i })).filter(({ s, i }) => !excluded.has(i) && (includeDestructive || !s.destructive)),
-    [statements, excluded, includeDestructive],
+    () => statements.map((s, i) => ({ s, i })).filter(({ s, i }) => !objOff(s) && !excluded.has(i) && (includeDestructive || !s.destructive)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [statements, excluded, includeDestructive, objectOn],
   );
   const script = useMemo(() => buildSyncScript(selected.map((x) => x.s), header), [selected, header]);
   const hasDestructiveSelected = selected.some((x) => x.s.destructive);
@@ -68,13 +74,16 @@ export default function SyncScriptPanel({ statements, skipped = [], header, dstC
   const failCount = outcomes ? outcomes.length - okCount : 0;
 
   const Item = ({ s, i }: { s: SyncStatement; i: number }) => {
-    const on = !excluded.has(i) && (includeDestructive || !s.destructive);
+    const off = objOff(s);
+    const on = !off && !excluded.has(i) && (includeDestructive || !s.destructive);
     const o = outcomes?.find((x) => x.index === i);
     return (
-      <label className={`flex items-start gap-2 px-2 py-1 text-[11px] hover:bg-fg/5 cursor-pointer ${on ? "" : "opacity-50"}`}>
-        <input type="checkbox" className="mt-0.5" checked={on} disabled={s.destructive && !includeDestructive} onChange={() => toggle(i)} />
+      <label className={`flex items-start gap-2 px-2 py-1 text-[11px] hover:bg-fg/5 cursor-pointer ${on ? "" : "opacity-50"}`}
+        title={off ? t("所屬物件已在左側清單排除") : undefined}>
+        <input type="checkbox" className="mt-0.5" checked={on} disabled={off || (s.destructive && !includeDestructive)} onChange={() => toggle(i)} />
         <span className={`shrink-0 w-[7.5rem] truncate ${s.destructive ? "text-red-300" : "text-fg/50"}`} title={s.object}>{s.kind} · {s.object}</span>
         <span className="mono text-fg/75 whitespace-pre-wrap break-all flex-1">{s.sql}{s.note && <span className="block text-amber-300/80">-- {s.note}</span>}</span>
+        {off && <span className="shrink-0 text-[10px] text-fg/40">{t("已排除")}</span>}
         {o && <span className={`shrink-0 ${o.ok ? "text-emerald-400" : "text-red-400"}`} title={o.error}>{o.ok ? "✓" : "✗"}</span>}
       </label>
     );
@@ -85,9 +94,10 @@ export default function SyncScriptPanel({ statements, skipped = [], header, dstC
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-sync-panel>
       <div className="flex items-center gap-2 flex-wrap text-xs">
         <span className="text-fg/60">{t("同步語句 {n} 句", { n: statements.length })}</span>
+        <span className="text-fg/40 tabular-nums" data-sync-selected={selected.length}>{t("已選 {m} 句", { m: selected.length })}</span>
         {destructive.length > 0 && (
           <label className="inline-flex items-center gap-1.5 cursor-pointer select-none text-red-300">
             <input type="checkbox" checked={includeDestructive} onChange={(e) => setIncludeDestructive(e.target.checked)} />

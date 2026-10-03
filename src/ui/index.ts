@@ -27,4 +27,5 @@ export type { SpinnerProps } from "./Spinner";
 export { default as EmptyState } from "./EmptyState";
 export type { EmptyStateProps } from "./EmptyState";
 export { default as Segmented } from "./Segmented";
+export { Splitter, useResizable } from "./resizable";
 export type { SegmentedProps, SegmentedOption } from "./Segmented";

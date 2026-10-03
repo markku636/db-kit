@@ -1,6 +1,6 @@
 // 結構 / 資料比對對話框的純函式（列狀態、語句分組、腳本組裝、DDL 並排）。
 // 抽離自 CompareDialog / TableCompareView 以便單元測試（見 compareModel.test.ts），不依賴 React / Tauri。
-import type { DbKind, DbSchema, SchemaDiff, SyncStatement, TableDiff } from "./api";
+import type { CaptureOptions, DbKind, DbSchema, DiffOptions, SchemaDiff, SyncOptions, SyncStatement, TableDiff } from "./api";
 import { renderTask } from "./aiLibrary";
 import type { DiffLine } from "./diff";
 
@@ -21,7 +21,25 @@ export interface CompareRow {
   schema?: SchemaStatus;
   /** 補充說明。 */
   detail?: string;
+  /** 有差異的資料表：欄位 / 索引 / 外鍵各自的增刪改數（列表上的摘要徽章用）。 */
+  changes?: RowChanges;
 }
+
+/** 增 / 刪 / 改 三個計數。 */
+export interface ChangeCounts { add: number; del: number; chg: number }
+export interface RowChanges { columns: ChangeCounts; indexes: ChangeCounts; fks: ChangeCounts; ddlOnly: boolean }
+
+/** 一張表的差異摘要：不必點進去就知道「動了 2 個欄位、加了 1 個索引」。 */
+export function tableDiffChanges(td: TableDiff): RowChanges {
+  const columns = { add: td.columns_added.length, del: td.columns_removed.length, chg: td.columns_changed.length };
+  const indexes = { add: td.indexes_added.length, del: td.indexes_removed.length, chg: td.indexes_changed.length };
+  const fks = { add: td.fks_added.length, del: td.fks_removed.length, chg: td.fks_changed.length };
+  const any = [columns, indexes, fks].some((c) => c.add + c.del + c.chg > 0);
+  return { columns, indexes, fks, ddlOnly: td.ddl_differs && !any };
+}
+
+/** 列的唯一鍵（同名的表與視圖要分得開）。 */
+export const rowKey = (r: Pick<CompareRow, "objType" | "name">) => `${r.objType}:${r.name}`;
 
 // MariaDB 為 MySQL fork，DDL 相容：視為同族可互比 / 互產 DDL。
 const fam = (k: DbKind) => (k === "mariadb" ? "mysql" : k);
@@ -56,7 +74,11 @@ export function buildCompareRows(
   if (schema) {
     for (const n of schema.tables_added) get(n, "table").schema = "source_only";
     for (const n of schema.tables_removed) get(n, "table").schema = "target_only";
-    for (const td of schema.tables_changed) get(td.name, "table").schema = tableHasDiff(td) ? "changed" : "identical";
+    for (const td of schema.tables_changed) {
+      const r = get(td.name, "table");
+      r.schema = tableHasDiff(td) ? "changed" : "identical";
+      if (r.schema === "changed") r.changes = tableDiffChanges(td);
+    }
     for (const n of schema.tables_identical) get(n, "table").schema = "identical";
     for (const n of schema.views_added) get(n, "view").schema = "source_only";
     for (const n of schema.views_removed) get(n, "view").schema = "target_only";
@@ -202,4 +224,156 @@ export function describeDiffForAi(diff: SchemaDiff, srcLabel: string, dstLabel: 
  */
 export function buildAiSummaryPrompt(digest: string): string {
   return renderTask("compare-summary", { digest });
+}
+
+// ---- 狀態篩選（結果清單上方的晶片）----
+
+/** 「有差異」的三種狀態；預設只看這三種，相同的先藏起來。 */
+export const DIFF_STATUSES: readonly RowStatus[] = ["differs", "source_only", "target_only"];
+export const FILTERABLE_STATUSES: readonly RowStatus[] = ["differs", "source_only", "target_only", "identical"];
+export const STATUS_FILTER_KEY = "dbkit:compare:statusFilter";
+
+/** 從 localStorage 讀回的狀態篩選；壞值 / 空集合一律退回預設（全藏會讓清單看起來像比對失敗）。 */
+export function parseStatusFilter(raw: string | null | undefined): Set<RowStatus> {
+  try {
+    const arr = raw ? (JSON.parse(raw) as unknown) : null;
+    if (Array.isArray(arr)) {
+      const s = new Set<RowStatus>(arr.filter((x): x is RowStatus => FILTERABLE_STATUSES.includes(x as RowStatus)));
+      if (s.size > 0) return s;
+    }
+  } catch { /* 壞 JSON → 預設 */ }
+  return new Set(DIFF_STATUSES);
+}
+
+/**
+ * 依狀態晶片與搜尋字過濾。進行中 / 未比對的列不受狀態晶片影響（比對跑到一半就該看得到它在跑），
+ * 搜尋字不分大小寫、比對子字串。
+ */
+export function filterRows(rows: CompareRow[], statusOn: ReadonlySet<RowStatus>, text: string): CompareRow[] {
+  const f = text.trim().toLowerCase();
+  return rows.filter((r) =>
+    (r.status === "pending" || r.status === "running" || statusOn.has(r.status))
+    && (!f || r.name.toLowerCase().includes(f)));
+}
+
+// ---- 比對選項（對話框「選項」下拉；存 localStorage）----
+
+export interface CompareOptions {
+  /** 名稱比對忽略大小寫（MySQL 在 Linux 區分表名、Windows 不分）。 */
+  ignore_case: boolean;
+  ignore_comments: boolean;
+  ignore_defaults: boolean;
+  /** 索引 / 外鍵名稱不同但定義相同 → 視為改名而非一刪一增。 */
+  match_by_content: boolean;
+  include_views: boolean;
+  include_routines: boolean;
+}
+export const DEFAULT_COMPARE_OPTIONS: CompareOptions = {
+  ignore_case: false, ignore_comments: false, ignore_defaults: false, match_by_content: true,
+  include_views: true, include_routines: true,
+};
+export const COMPARE_OPTIONS_KEY = "dbkit:compare:options";
+
+/** 讀回選項：只接受布林欄位，缺的補預設，多的丟掉（舊版存的 key 不會把新版弄壞）。 */
+export function parseCompareOptions(raw: string | null | undefined): CompareOptions {
+  const out = { ...DEFAULT_COMPARE_OPTIONS };
+  try {
+    const o = raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+    if (o && typeof o === "object") {
+      for (const k of Object.keys(DEFAULT_COMPARE_OPTIONS) as (keyof CompareOptions)[]) {
+        if (typeof o[k] === "boolean") out[k] = o[k] as boolean;
+      }
+    }
+  } catch { /* 壞 JSON → 預設 */ }
+  return out;
+}
+
+export const toDiffOptions = (o: CompareOptions): DiffOptions =>
+  ({ ignore_case: o.ignore_case, ignore_comments: o.ignore_comments, ignore_defaults: o.ignore_defaults, match_by_content: o.match_by_content });
+export const toCaptureOptions = (o: CompareOptions, tables?: string[]): CaptureOptions =>
+  ({ include_ddl: true, include_views: o.include_views, include_routines: o.include_routines, tables: tables ?? null });
+export const toSyncOptions = (o: CompareOptions): SyncOptions =>
+  ({ include_drops: true, include_indexes: true, include_fks: true, include_views: o.include_views, include_routines: o.include_routines });
+
+/** 與預設不同的選項數（工具列上「選項」鈕的徽章）。 */
+export function countNonDefaultOptions(o: CompareOptions): number {
+  return (Object.keys(DEFAULT_COMPARE_OPTIONS) as (keyof CompareOptions)[]).filter((k) => o[k] !== DEFAULT_COMPARE_OPTIONS[k]).length;
+}
+
+// ---- 語句 ↔ 物件的歸屬（清單上的物件勾選框驅動同步腳本）----
+
+const VIEW_KINDS = new Set<SyncStatement["kind"]>(["create_view", "drop_view"]);
+const ROUTINE_KINDS = new Set<SyncStatement["kind"]>(["create_routine", "drop_routine"]);
+
+/**
+ * 一句同步語句屬於清單上的哪一列。語句的 `object` 是 `table` 或 `table.child`（欄位 / 索引 / 外鍵），
+ * 而 SQL Server 的表名本身可以帶 schema（`sales.orders`），所以不能切第一個點——
+ * 改成在同類型的列裡找「等於或以 `name.` 開頭」的最長者。找不到回 null（一律視為包含）。
+ */
+export function statementOwner(s: SyncStatement, rows: readonly CompareRow[]): string | null {
+  const type: CompareRow["objType"] = VIEW_KINDS.has(s.kind) ? "view" : ROUTINE_KINDS.has(s.kind) ? "routine" : "table";
+  let best: CompareRow | null = null;
+  for (const r of rows) {
+    if (r.objType !== type) continue;
+    if (s.object === r.name || s.object.startsWith(`${r.name}.`)) {
+      if (!best || r.name.length > best.name.length) best = r;
+    }
+  }
+  return best ? rowKey(best) : null;
+}
+
+// ---- 並排 DDL：行號、差異段落、摺疊相同行 ----
+
+export interface SidePair { left: DiffLine | null; right: DiffLine | null }
+export interface NumberedPair extends SidePair {
+  /** 來源 / 目標各自的行號（該側沒有這行時為 null）。 */
+  ln: number | null;
+  rn: number | null;
+  changed: boolean;
+}
+
+/** 補上兩側行號與「這一列是否為差異」。 */
+export function numberPairs(pairs: SidePair[]): NumberedPair[] {
+  let l = 0;
+  let r = 0;
+  return pairs.map((p) => {
+    const ln = p.left ? ++l : null;
+    const rn = p.right ? ++r : null;
+    const changed = !(p.left && p.right && p.left.type === "same");
+    return { ...p, ln, rn, changed };
+  });
+}
+
+/** 每一段連續差異的起始列索引（上一個 / 下一個差異用）。 */
+export function hunkStarts(pairs: readonly { changed: boolean }[]): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < pairs.length; i++) {
+    if (pairs[i].changed && (i === 0 || !pairs[i - 1].changed)) out.push(i);
+  }
+  return out;
+}
+
+export type FoldItem = { kind: "row"; index: number } | { kind: "fold"; from: number; to: number };
+
+/**
+ * 「只看差異」：差異前後各留 `context` 行，其餘相同行縮成一個可展開的摺疊。
+ * `expanded` 是使用者點開過的摺疊（以起始索引記）；短到不值得摺（≤ 2 行）的直接攤開。
+ */
+export function foldUnchanged(pairs: readonly { changed: boolean }[], context: number, expanded: ReadonlySet<number>): FoldItem[] {
+  const keep = new Array<boolean>(pairs.length).fill(false);
+  for (let i = 0; i < pairs.length; i++) {
+    if (!pairs[i].changed) continue;
+    for (let k = Math.max(0, i - context); k <= Math.min(pairs.length - 1, i + context); k++) keep[k] = true;
+  }
+  const out: FoldItem[] = [];
+  let i = 0;
+  while (i < pairs.length) {
+    if (keep[i]) { out.push({ kind: "row", index: i }); i++; continue; }
+    let j = i;
+    while (j < pairs.length && !keep[j]) j++;
+    if (j - i <= 2 || expanded.has(i)) for (let k = i; k < j; k++) out.push({ kind: "row", index: k });
+    else out.push({ kind: "fold", from: i, to: j });
+    i = j;
+  }
+  return out;
 }

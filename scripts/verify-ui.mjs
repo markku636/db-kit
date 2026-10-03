@@ -4164,7 +4164,8 @@ const CASES = {
     check("資料表右鍵：結構比對…", items.some((i) => i.includes("結構比對")), items.join(" | "));
     check("資料表右鍵：舊的「資料比對 / 同步」已移除", !items.some((i) => i.includes("資料比對 / 同步")));
     await page.getByText("結構比對…", { exact: true }).click();
-    await sleep(900);
+    // 整套跑時機器忙，固定 sleep 會偶發抓不到——等到對話框真的畫出來。
+    await page.getByText("比對目標", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
     check("單表比對對話框開啟", (await page.getByText("比對目標", { exact: true }).count()) > 0);
     check("單表比對只談結構，沒有資料分頁", !(await appText(page)).includes("含 DELETE"));
     // 一開就要是可按的狀態：目標庫預設挑「非來源」的庫，而不是把來源自己填進去。
@@ -4212,6 +4213,68 @@ const CASES = {
     } catch { /* 下面的 check 會報 */ }
     check("AI 總結串流回填", streamed, (await appText(page)).replace(/\s+/g, " ").slice(0, 200));
     check("AI 總結完成後可重新產生", (await page.getByRole("button", { name: "重新產生", exact: true }).count()) > 0);
+    // v0.31 操作改版（對標 Redgate / Navicat 的結構比對）：狀態晶片、物件勾選驅動腳本、差異摘要、
+    // drill-in 導覽、DDL 檢視器、換方向、比對選項。少一個 data-* 掛鉤就是這裡紅。
+    const chips = page.locator("[data-status-chip]");
+    check("結果清單有四顆狀態晶片", (await chips.count()) === 4, String(await chips.count()));
+    check("「相同」晶片預設關（相同的物件先藏起來）",
+      (await page.locator('[data-status-chip="identical"]').getAttribute("aria-checked")) === "false");
+    check("清單依類型分組，分組標題有三態勾選框", (await page.locator("[data-group-include]").count()) >= 1);
+    const selCount = async () => Number(await page.locator("[data-sync-selected]").first().getAttribute("data-sync-selected"));
+    const selBefore = await selCount();
+    await page.locator('[data-compare-include="orders"]').uncheck();
+    await sleep(300);
+    const selAfter = await selCount();
+    check("勾掉 orders 後，屬於它的語句退出同步腳本", selAfter < selBefore, `${selBefore} → ${selAfter}`);
+    check("被排除的語句標示「已排除」", (await page.getByText("已排除", { exact: true }).count()) > 0);
+    await page.locator('[data-compare-include="orders"]').check();
+    await sleep(300);
+    check("勾回 orders 語句回來", (await selCount()) === selBefore, `${await selCount()} vs ${selBefore}`);
+    const ordersRow = page.locator('[data-compare-row="table:orders"]');
+    const ordersText = (await ordersRow.innerText()).replace(/\s+/g, " ");
+    check("orders 列有差異摘要徽章（欄 +1 ~1、索引 +1）", /欄 ?\+1 ?~1/.test(ordersText) && /索引 ?\+1/.test(ordersText), ordersText);
+    check("legacy_log 列標 DROP", /DROP/.test(await page.locator('[data-compare-row="table:legacy_log"]').innerText()));
+
+    // drill-in：上一個 / 下一個物件不必回清單；DDL 檢視有只看差異與差異導覽。
+    await ordersRow.getByRole("button").first().click();
+    await sleep(900);
+    // 分組標題的「3 / 13」也長這樣，所以不能用文字找，要用 drill-in 標題自己的掛鉤。
+    const counter = page.locator("[data-drill-pos]").first();
+    check("drill-in 標題有「N / 總數」與上一個 / 下一個物件", (await counter.count()) > 0 && (await page.getByRole("button", { name: "下一個物件", exact: true }).count()) > 0);
+    const posBefore = (await counter.count()) ? await counter.innerText() : "";
+    await page.getByRole("radio", { name: "DDL", exact: true }).click();
+    await sleep(400);
+    check("DDL 並排檢視有「只看差異」與差異導覽", (await page.getByRole("button", { name: /只看差異/ }).count()) > 0
+      && (await page.getByRole("button", { name: "下一處差異", exact: true }).count()) > 0);
+    check("DDL 並排檢視掛載（含行號欄）", (await page.locator("[data-side-by-side]").count()) > 0);
+    await page.getByRole("button", { name: "下一個物件", exact: true }).click();
+    await sleep(700);
+    check("「下一個物件」真的跳到下一個", (await counter.innerText()) !== posBefore, `${posBefore} → ${await counter.innerText()}`);
+    await page.getByRole("button", { name: "回到彙總", exact: true }).click();
+    await sleep(300);
+
+    // 換方向：來源標籤換成原本的目標，結果作廢回到選表狀態。
+    const srcBefore = await page.locator("[data-compare-source]").first().innerText();
+    await page.getByRole("button", { name: "交換來源與目標", exact: true }).click();
+    await sleep(700);
+    const srcAfter = await page.locator("[data-compare-source]").first().innerText();
+    check("⇄ 把來源換成原本的目標（shop_archive）", srcAfter.includes("shop_archive") && !srcBefore.includes("shop_archive"), `${srcBefore} → ${srcAfter}`);
+    check("換方向後結果作廢，回到選表狀態", (await page.getByRole("button", { name: /比對選取的/ }).count()) > 0);
+
+    // 比對選項：面板開得起來、寫進 localStorage、Esc 只關面板不關對話框。
+    await page.getByRole("button", { name: /^選項/ }).click();
+    await sleep(300);
+    check("選項面板列出規則與範圍", (await page.locator('[data-compare-opt="ignore_comments"]').count()) === 1
+      && (await page.locator('[data-compare-opt="include_views"]').count()) === 1);
+    await page.locator('[data-compare-opt="ignore_comments"]').check();
+    await sleep(200);
+    check("比對選項寫進 localStorage", ((await page.evaluate(() => localStorage.getItem("dbkit:compare:options"))) ?? "").includes('"ignore_comments":true'));
+    await page.locator('[data-compare-opt="ignore_comments"]').uncheck();
+    await sleep(100);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+    check("Esc 只關選項面板，對話框還在", (await page.locator('[data-compare-opt="ignore_comments"]').count()) === 0
+      && (await page.getByRole("button", { name: /比對選取的/ }).count()) > 0);
   },
 
   // ---- 檔案 / 資料夾 / 二進位比對 ----
