@@ -555,6 +555,10 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
 
   const fileBased = KIND_META[kind].fileBased;
   const external = KIND_META[kind].external;
+  // 連線字串欄只給「字串比表單多帶資訊」的類型：Docker / Registry / Harbor 的「連線字串」就是
+  // 主機欄那一個位址（tcp:// npipe:// https://），外部 gateway 沒有對應格式——選定這些類型後
+  // 這欄只是重複又誤導（placeholder 還是 postgresql://）。選類型階段照常顯示：貼任何字串都能自動選類型。
+  const showConnString = pickerOpen || !(kind === "docker" || regKind || external);
   // 檔案型路徑可留空；外部 gateway 需 base URL；伺服器型至少需要主機。
   // Docker 本機模式可留空（＝本機預設 socket / pipe）。
   const valid = external ? baseUrl.trim() !== ""
@@ -600,7 +604,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
       {/* 連線字串：常駐欄位，不再藏在按鈕後面。貼雲端控制台給的 URI（Supabase / Atlas / Upstash /
           Confluent / Azure…）一次填完整張表。貼上即解析；手打則按 Enter 或右側按鈕。
           刻意不做「輸入中 debounce 自動解析」——每個按鍵都會重寫類型並清掉類型專屬欄位，會抖動。 */}
-      <Field
+      {showConnString && <Field
         label={t("連線字串")}
         hint={onNewSsh && !editing
           ? t("貼上即自動解析。支援 URL（postgres:// mysql:// mongodb+srv:// rediss:// ssh:// sftp:// ftp:// rdp:// vnc:// rustdesk://）、libpq（host=… port=…）、JDBC、ADO.NET / Npgsql")
@@ -633,7 +637,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
             {t("解析並填入")}
           </Button>
         </div>
-      </Field>
+      </Field>}
 
       {/* 匯入結果 + 變動摘要 + 復原。摘要只列使用者需要核對的主要欄位（密碼一律遮罩——
           這塊會留在畫面上，截圖與共享畫面都看得到），其餘類型專屬設定只報件數。 */}
