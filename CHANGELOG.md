@@ -1,3 +1,18 @@
+## v0.54.1
+
+**AI 對話的文字可以框選複製；Docker / Registry / Harbor 的新增連線不再出現多餘的連線字串欄；macOS 第一次開啟的步驟寫清楚了。**
+
+- **AI 對話可以選取文字**：自己送出的訊息和 AI 的回答都能用滑鼠框選、複製（以前只有程式碼區塊可以）。
+- **新增 / 編輯連線**：選定 Docker、Docker Registry、Harbor 或外部 gateway 之後，不再顯示「連線字串」欄——這些類型的位址就是主機欄那一個，多一欄只會重複又誤導（提示文字還寫著 postgresql://）。還在選類型時照常顯示，貼任何連線字串都能自動選好類型。
+- **macOS 安裝說明**（README 與 Release 頁面的下載說明）：
+  - 第一次開啟被擋時按「完成」，不要丟到垃圾桶；到「系統設定 → 隱私權與安全性」按「強制打開」，再輸入 Mac 管理員帳號的密碼（不是 Apple ID 密碼）。
+  - 「強制打開」只在被擋後約一小時內出現，沒看到就先再開一次 App。
+  - 也可以在終端機用一行 `xattr -dr com.apple.quarantine "/Applications/DB Kit.app"` 移除隔離標記。
+
+> 驗證：前端單元測試 2143 項、tsc、eslint、vite build 通過；介面測試 16 個情境（120 + 20 項檢查）通過：Docker / Kubernetes 連線對話框、Docker / Kubernetes 一鍵建資料庫連線、Registry / Harbor、SSH / FTP / 遠端桌面的連線字串貼上與跳板機、AI 助理與 AI 函式庫。
+>
+> 沒測到：打包後的 App 實機、macOS 上實際照新步驟操作一次。
+
 ## v0.54.0
 
 **VNC 支援 VeNCrypt 加密：伺服器（TigerVNC、QEMU、libvirt）有提供時改走 TLS，畫面、鍵盤與 VNC 密碼不再明文傳送。**
