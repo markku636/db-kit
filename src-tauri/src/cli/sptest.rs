@@ -19,7 +19,9 @@ use super::resolve::{self, SideRef};
 pub async fn run(conn: &ConnArgs, fmt: Format, cmd: SpTestCmd) -> AppResult<()> {
     match cmd {
         SpTestCmd::Validate { paths } => validate(&paths),
+        SpTestCmd::List { paths } => list(fmt, &paths),
         SpTestCmd::Inspect { routine } => inspect_cmd(conn, fmt, &routine).await,
+        SpTestCmd::Init { routine, out } => init(conn, &routine, out.as_deref()).await,
         SpTestCmd::Run(a) => {
             let mode = match a.mode {
                 SpTestMode::Assert => ExecMode::Assert,
@@ -85,8 +87,66 @@ fn validate(paths: &[String]) -> AppResult<()> {
         }
     }
     if bad > 0 {
-        return Err(AppError::Query(tf!("{n} 個情境未通過", n = bad)));
+        return Err(AppError::Query(tf!("{n} 個測試檔有誤", n = bad)));
     }
+    Ok(())
+}
+
+/// 一列一個「展開後」的情境（cases 各自一列）：`--only` 要填的名字就是第二欄。
+fn list(fmt: Format, paths: &[String]) -> AppResult<()> {
+    let columns: Vec<String> = ["file", "scenario", "steps", "tags", "skip", "description"].iter().map(|s| s.to_string()).collect();
+    let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+    for p in collect_files(paths)? {
+        let f = load(&p)?;
+        let file = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        for sc in &f.scenarios {
+            let fixture_steps: usize = sc.use_fixtures.iter().filter_map(|u| f.fixtures.get(u)).map(|fx| fx.steps.len()).sum();
+            let steps = if fixture_steps > 0 { format!("{}+{}", fixture_steps, sc.steps.len()) } else { sc.steps.len().to_string() };
+            let skip = sc.skip.as_ref().and_then(|s| s.reason()).map(|r| if r.is_empty() { "yes".to_string() } else { r });
+            let tags = (!sc.tags.is_empty()).then(|| sc.tags.join(","));
+            let names: Vec<String> = if sc.cases.is_empty() { vec![sc.id.clone()] } else { sc.cases.iter().map(|c| format!("{}/{}", sc.id, c.name)).collect() };
+            for n in names {
+                rows.push(vec![Some(file.clone()), Some(n), Some(steps.clone()), tags.clone(), skip.clone(), sc.description.clone()]);
+            }
+        }
+    }
+    render::emit(fmt, &columns, &rows);
+    Ok(())
+}
+
+/// `dbk sp-test init`：連線盤點 → 骨架。寫檔時印下一步提示到 stderr。
+async fn init(conn: &ConnArgs, routine: &str, out: Option<&str>) -> AppResult<()> {
+    let cfg = resolve::resolve(conn).await?;
+    let db = conn
+        .database
+        .clone()
+        .or_else(|| cfg.database.clone())
+        .ok_or_else(|| AppError::Query(t!("請以 -d 指定資料庫 / schema").into()))?;
+    let mgr = ConnectionManager::new();
+    let id = cfg.id.clone();
+    let kind = cfg.kind;
+    mgr.connect(cfg).await?;
+    let res = crate::sptest::scaffold::scaffold(&mgr, &id, kind, &db, routine).await;
+    mgr.disconnect(&id).await;
+    let text = serde_json::to_string_pretty(&res?).map_err(|e| AppError::Query(e.to_string()))?;
+    let Some(out) = out else {
+        println!("{text}");
+        return Ok(());
+    };
+    let mut path = PathBuf::from(out);
+    if path.is_dir() || out.ends_with('/') || out.ends_with('\\') {
+        let (_, name) = inspect::split_routine(kind, &db, routine);
+        path = path.join(format!("{}.json", name.replace(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-' || c == '.'), "_")));
+    }
+    if path.exists() && !conn.force {
+        return Err(AppError::Storage(tf!("{path} 已存在；要覆寫請加 --force", path = path.display().to_string())));
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| AppError::Storage(e.to_string()))?;
+    }
+    std::fs::write(&path, text.as_bytes()).map_err(|e| AppError::Storage(e.to_string()))?;
+    eprintln!("{}", tf!("已寫入測試檔骨架：{path}", path = path.display().to_string()));
+    eprintln!("{}", t!("下一步：執行一次看實際輸出 → 把期望寫進 expect（或 --mode record 錄成基線）→ 錯誤情境改好參數後拿掉 skip"));
     Ok(())
 }
 

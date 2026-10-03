@@ -1040,6 +1040,25 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "比對策略：auto（排序合併，失敗自動退雜湊）| merge | hash" => "Comparison strategy: auto (sort-merge, falls back to hash) | merge | hash",
         "套用時任一批失敗即中止（預設：該批改逐句重放，隔離壞列後繼續）" => "Stop when any batch fails while applying (default: replay that batch statement by statement, isolating bad rows, then continue)",
         "允許對標記為正式環境（prod）的目標連線套用" => "Allow applying to a target connection marked as production (prod)",
+        "DBA 審查人設（AI 資源庫 agents/ 的名稱）。逗號分隔多位 = 會審，結論取最嚴格； 省略時依連線是否為正式環境取 ai-library.json 的預設（dba_persona / dba_persona_prod）" => {
+            "DBA review persona (a name under agents/ in the AI library). Several, comma-separated = joint review, the strictest verdict wins; when omitted, the default from ai-library.json is used depending on whether the connection is production (dba_persona / dba_persona_prod)"
+        }
+        // ---- cli/args.rs：先前漏收的 help（--lang en 在 debug build 會 debug_assert 失敗）----
+        "只提供這些工具（逗號分隔，例如 describe_table,explain_query）；省略 = 全部" => "Expose only these tools (comma-separated, e.g. describe_table,explain_query); omit = all",
+        "AI 資源庫（人設 / 技能 / 提示範本）：列出、檢視、檢查，同步到 Claude Code / Codex" => "AI library (personas / skills / prompt templates): list, show, check, and sync to Claude Code / Codex",
+        "資料夾比對判斷「相同」的準則。" => "How a folder compare decides two files are the same.",
+        "同步規則。" => "Sync rule.",
+        "右邊資料夾（同上）" => "Right folder (same as above)",
+        "列出資源（agent | skill | prompt | contract；省略 = 全部）" => "List resources (agent | skill | prompt | contract; omit = all)",
+        "顯示一筆資源（例：agent/dba-senior、prompt/review-sql）" => "Show one resource (e.g. agent/dba-senior, prompt/review-sql)",
+        "語言變體（預設跟著 --lang / 介面語言）" => "Language variant (defaults to --lang / the UI language)",
+        "印出檔案原文（含 frontmatter）" => "Print the raw file (including frontmatter)",
+        "檢查資源庫；有錯誤時結束碼非零。--dir 只檢查指定資料夾（團隊 repo 的 CI 用）" => "Check the library; exits non-zero on errors. --dir checks only that folder (for CI in a team repo)",
+        "同步人設與技能到 Claude Code / Codex。未加 --yes 只列出計畫" => "Sync personas and skills to Claude Code / Codex. Without --yes it only lists the plan",
+        "只同步到 Claude Code（~/.claude）" => "Sync only to Claude Code (~/.claude)",
+        "只同步到 Codex（~/.agents/skills、~/.codex/agents）" => "Sync only to Codex (~/.agents/skills, ~/.codex/agents)",
+        "另外同步到專案資料夾（<dir>/.claude、<dir>/.agents、<dir>/.codex；可重複）" => "Also sync into a project folder (<dir>/.claude, <dir>/.agents, <dir>/.codex; repeatable)",
+        "印出資源庫資料夾（個人層與團隊資料夾）" => "Print the library folders (personal layer and team folders)",
         // ---- cli/args.rs：dbk sp-test ----
         "預存程序整合測試：情境 / 斷言 / 基線回歸 / 跨引擎差分（JUnit 報表，可進 CI）" => {
             "Stored-procedure integration tests: scenarios / assertions / golden regression / cross-engine diff (JUnit report for CI)"
@@ -1060,13 +1079,22 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         }
         "執行模式" => "Execution mode",
         "基線資料夾（golden / record 模式必填）" => "Baseline folder (required for golden / record)",
-        "只跑這些情境 id（逗號分隔）" => "Run only these scenario ids (comma-separated)",
         "只跑帶任一標籤的情境（逗號分隔）" => "Run only scenarios carrying any of these tags (comma-separated)",
         "另寫 JUnit XML 報表到此路徑" => "Also write a JUnit XML report to this path",
         "任一情境未通過時以非零 exit code 結束（CI 用）" => "Exit non-zero when any scenario does not pass (for CI)",
         "每個結果集 / 快照的列數上限（0 = 不限）" => "Row cap per result set / snapshot (0 = unlimited)",
         "第二個目標：已存連線名 / id 或連線字串" => "Second target: saved connection name / id or connection string",
         "第二個目標的資料庫 / schema（省略 = 與 -d 相同）" => "Database / schema of the second target (default: same as -d)",
+        "從程序產生測試檔骨架：前置資料、參數、每個錯誤分支一個情境（要連線）" => {
+            "Generate a test-file skeleton from a routine: seed data, parameters and one scenario per error branch (needs a connection)"
+        }
+        "寫到這個檔案或資料夾（資料夾 = <程序名>.json；已存在要加 --force）；省略 = 印到 stdout" => {
+            "Write to this file or folder (folder = <routine>.json; add --force to overwrite); omit to print to stdout"
+        }
+        "列出測試檔裡的情境、case、標籤與略過原因（不連線；挑 --only / --tag 用）" => {
+            "List the scenarios, cases, tags and skip reasons in test files (no connection; helps pick --only / --tag)"
+        }
+        "只跑這些情境（逗號分隔；`id` 或 `id/case`）" => "Run only these scenarios (comma-separated; `id` or `id/case`)",
         // ---- cli/sptest.rs ----
         "沒有找到測試檔" => "No test files found",
         "{file} 解析失敗：{e}" => "Failed to parse {file}: {e}",
@@ -1074,6 +1102,27 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "請以 -d 指定資料庫 / schema" => "Specify the database / schema with -d",
         "差分的目標必須是連線，不能是快照檔" => "The diff target must be a connection, not a snapshot file",
         "{n} 個情境未通過" => "{n} scenario(s) did not pass",
+        "{n} 個測試檔有誤" => "{n} test file(s) have errors",
+        "{path} 已存在；要覆寫請加 --force" => "{path} already exists; add --force to overwrite",
+        "已寫入測試檔骨架：{path}" => "Test-file skeleton written: {path}",
+        "下一步：執行一次看實際輸出 → 把期望寫進 expect（或 --mode record 錄成基線）→ 錯誤情境改好參數後拿掉 skip" => {
+            "Next: run it once to see the actual output → write the expectations into expect (or record a baseline with --mode record) → fix the parameters of the error scenarios and remove skip"
+        }
+        // ---- sptest/report.rs：Markdown 報表 ----
+        "錯誤：{e}" => "Error: {e}",
+        "預存程序整合測試報表" => "Stored-procedure integration test report",
+        "| 檔案 | 模式 | 目標 | 通過 | 失敗 | 錯誤 | 略過 |" => "| File | Mode | Targets | Pass | Fail | Error | Skipped |",
+        "| 類型 | 位置 | 期望 / A | 實際 / B | 備註 |" => "| Kind | Where | Expected / A | Actual / B | Note |",
+        // ---- sptest/scaffold.rs ----
+        "程序內含 COMMIT / ROLLBACK 或會隱式 commit 的 DDL，無法包在交易裡跑（見文件「限制」）" => {
+            "The routine contains COMMIT / ROLLBACK or DDL that commits implicitly, so it cannot run inside a transaction (see Limitations in the docs)"
+        }
+        "TODO：先按執行看實際輸出，再用「採用實際值」（或 --mode record）把期望定下來" => {
+            "TODO: run it once to see the actual output, then pin the expectations with “Use actual” (or --mode record)"
+        }
+        "TODO：調整參數或前置資料，讓程序走到「{msg}」這個分支" => "TODO: adjust the parameters or seed data so the routine reaches the “{msg}” branch",
+        "TODO：改好參數後拿掉 skip" => "TODO: remove skip once the parameters are fixed",
+        "自動產生：程序讀寫到的表與外鍵父表各一列" => "Generated: one row for each table the routine reads or writes, plus their foreign-key parents",
         "已寫入 JUnit 報表：{path}" => "JUnit report written: {path}",
         "測試檔路徑必須是絕對路徑且以 .json 結尾" => "The test file path must be absolute and end with .json",
         "capture 的值必須是 >>符號（{v}）" => "capture values must be >>symbols (got {v})",

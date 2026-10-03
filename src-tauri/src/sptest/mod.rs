@@ -7,6 +7,7 @@
 //! - `model`：測試檔 schema。`inspect`：簽名與寫入目標。`session`：專屬連線。`render`：各方言 SQL。
 //! - `snapshot`：呼叫前後整表快照 → 副作用。`assert`：期望 vs 實際、兩份輸出互比。`errclass`：錯誤分類。
 //! - `run`：情境執行器（模式 assert / record / golden / diff）。`report`：結果型別、基線、JUnit、Markdown。
+//! - `scaffold`：從盤點產生測試檔骨架（`dbk sp-test init` 與 GUI「新檔」共用）。
 
 // slim CLI build 只用到部分路徑；GUI build 仍正常檢查 dead_code。
 #![cfg_attr(not(feature = "gui"), allow(dead_code))]
@@ -26,6 +27,7 @@ pub mod model;
 pub mod render;
 pub mod report;
 pub mod run;
+pub mod scaffold;
 pub mod session;
 pub mod snapshot;
 

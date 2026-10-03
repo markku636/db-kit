@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "target": {"kind": "mssql", "database": "sptest"},
+  "routine": "usp_two_sets",
+  "fixtures": {
+    "two_orders": {
+      "description": "Ann with two orders (qty 1 then qty 2)",
+      "steps": [
+        {"insert": "customers", "rows": [{"customer_id": ">>cid", "name": "Ann", "credit": "100.00", "is_active": true}]},
+        {"insert": "products", "rows": [{"product_id": ">>pid", "name": "Pen", "price": "12.50", "stock": 10}]},
+        {"call": "usp_place_order", "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": 1}},
+        {"call": "usp_place_order", "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": 2}}
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "id": "both_sets",
+      "description": "Two result sets: the customer, then their orders in order_id order (ordered: true)",
+      "use": ["two_orders"],
+      "steps": [
+        {
+          "call": "usp_two_sets",
+          "params": {"CustomerID": "<<cid"},
+          "expect": {
+            "result_sets": [
+              {"rows": [{"customer_id": "<<cid", "name": "Ann", "credit": "100.00"}]},
+              {"ordered": true, "rows": [{"qty": 1, "total": "12.50"}, {"qty": 2, "total": "25.00"}]}
+            ],
+            "effects_strict": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "count_and_ignore",
+      "description": "Only the number of rows matters for the second set; the first set is not checked at all",
+      "use": ["two_orders"],
+      "steps": [
+        {"call": "usp_two_sets", "params": {"CustomerID": "<<cid"}, "expect": {"result_sets": ["ignore", {"count": 2}]}}
+      ]
+    }
+  ]
+}

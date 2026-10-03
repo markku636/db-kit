@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "target": {"kind": "mssql", "database": "sptest"},
+  "routine": "usp_cancel_order",
+  "fixtures": {
+    "base": {
+      "steps": [
+        {"insert": "customers", "rows": [{"customer_id": ">>cid", "name": "Ann", "credit": "100.00", "is_active": true}]},
+        {"insert": "products", "rows": [{"product_id": ">>pid", "name": "Pen", "price": "12.50", "stock": 10}]}
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "id": "units_are_conserved",
+      "description": "Invariant: stock on the shelf + units in open orders always equals 10, whatever happens in between",
+      "use": ["base"],
+      "steps": [
+        {"call": "usp_place_order", "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": 2}, "capture": {"order_id": ">>o1"}},
+        {"call": "usp_place_order", "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": 3}},
+        {"call": "usp_cancel_order", "params": {"OrderID": "<<o1"}},
+        {
+          "id": "invariant",
+          "query": "SELECT p.stock + COALESCE(SUM(o.qty), 0) AS units FROM products p LEFT JOIN orders o ON o.product_id = p.product_id AND o.status = 'NEW' WHERE p.product_id = @pid GROUP BY p.stock",
+          "expect": [{"units": 10}]
+        },
+        {
+          "id": "open_orders",
+          "query": "SELECT qty, total, status FROM orders WHERE customer_id = @cid ORDER BY order_id",
+          "ordered": true,
+          "expect": [{"qty": 2, "total?": "25.00", "status": "CANCELLED"}, {"qty": 3, "total?": "37.50", "status": {"not": "CANCELLED"}}]
+        }
+      ]
+    },
+    {
+      "id": "cancel_restores_snapshot",
+      "description": "Capture the product row before ordering, place + cancel, then compare the two captured result sets",
+      "use": ["base"],
+      "steps": [
+        {"query": "SELECT product_id, name, price, stock FROM products WHERE product_id = @pid", "expect": [{"stock": 10}], "capture": {"*": ">>before"}},
+        {"call": "usp_place_order", "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": 4}, "capture": {"order_id": ">>oid"}},
+        {"call": "usp_cancel_order", "params": {"OrderID": "<<oid"}},
+        {"query": "SELECT product_id, name, price, stock FROM products WHERE product_id = @pid", "expect": [{"stock": 10}], "capture": {"*": ">>after"}},
+        {"id": "same_as_before", "compare": ["<<before", "<<after"]}
+      ]
+    }
+  ]
+}

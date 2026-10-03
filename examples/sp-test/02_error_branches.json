@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "target": {"kind": "mssql", "database": "sptest"},
+  "routine": "usp_place_order",
+  "fixtures": {
+    "base": {
+      "steps": [
+        {"insert": "customers", "rows": [{"customer_id": ">>cid", "name": "Ann", "credit": "100.00", "is_active": true}]},
+        {"insert": "products", "rows": [{"product_id": ">>pid", "name": "Pen", "price": "12.50", "stock": 10}]}
+      ]
+    },
+    "inactive_customer": {
+      "steps": [
+        {"insert": "customers", "rows": [{"customer_id": ">>off", "name": "Bob", "credit": "0.00", "is_active": false}]}
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "id": "inactive_customer",
+      "description": "An inactive customer is rejected with the procedure's own error",
+      "use": ["base", "inactive_customer"],
+      "steps": [
+        {"call": "usp_place_order", "params": {"CustomerID": "<<off", "ProductID": "<<pid", "Qty": 1}, "expect_error": {"class": "user_raised", "message_contains": "inactive"}}
+      ]
+    },
+    {
+      "id": "unknown_product",
+      "use": ["base"],
+      "steps": [
+        {"call": "usp_place_order", "params": {"CustomerID": "<<cid", "ProductID": 999999, "Qty": 1}, "expect_error": {"class": "user_raised", "message_contains": "product not found"}}
+      ]
+    },
+    {
+      "id": "insufficient_stock_leaves_no_trace",
+      "description": "The failed call must not leave a half-written order or a reduced stock behind",
+      "use": ["base"],
+      "steps": [
+        {"call": "usp_place_order", "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": 11}, "expect_error": {"class": "user_raised", "message_contains": "insufficient stock"}},
+        {"query": "SELECT stock FROM products WHERE product_id = @pid", "expect": [{"stock": 10}]},
+        {"query": "SELECT COUNT(*) AS n FROM orders WHERE customer_id = @cid", "expect": [{"n": 0}]}
+      ]
+    },
+    {
+      "id": "database_constraints",
+      "description": "Errors raised by the database itself, not by the procedure: foreign key and NOT NULL",
+      "use": ["base"],
+      "steps": [
+        {"id": "fk_violation", "insert": "orders", "rows": [{"customer_id": 999999, "product_id": "<<pid", "qty": 1, "total": "1.00"}], "expect_error": {"class": "constraint_violation"}},
+        {"id": "missing_name", "insert": "customers", "rows": [{"credit": "1.00"}], "expect_error": {"class": "not_null"}}
+      ]
+    }
+  ]
+}

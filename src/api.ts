@@ -2375,11 +2375,13 @@ export const spTest = {
   saveFile: (path: string, text: string) => invoke<string[]>("sp_test_save_file", { path, text }),
   validate: (text: string) => invoke<string[]>("sp_test_validate", { text }),
   inspect: (id: string, database: string, routine: string) => invoke<unknown>("sp_test_inspect", { id, database, routine }),
+  /** 測試檔骨架（同 `dbk sp-test init`）：前置資料、參數、每個錯誤分支一個 skip 情境。 */
+  scaffold: (id: string, database: string, routine: string) => invoke<string>("sp_test_scaffold", { id, database, routine }),
   testgenPrompt: (id: string, database: string, routine: string, lang: string | null) =>
     invoke<string>("sp_test_testgen_prompt", { id, database, routine, lang }),
   run: (args: {
     runId: string; targets: SpTestEngineRef[]; files: { name: string; text: string }[]; mode: SpTestMode;
-    goldenDir?: string | null; only?: string[] | null; rowCap?: number | null;
+    goldenDir?: string | null; only?: string[] | null; tags?: string[] | null; rowCap?: number | null;
   }) => invoke<SpTestFileReport[]>("sp_test_run", args),
   cancel: (runId: string) => invoke<void>("sp_test_cancel", { runId }),
   export: (dir: string, reports: SpTestFileReport[]) => invoke<[string, string]>("sp_test_export", { dir, reports }),

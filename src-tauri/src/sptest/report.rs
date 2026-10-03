@@ -242,13 +242,13 @@ pub fn render_scenario_md(s: &ScenarioReport) -> String {
     let mut md = String::new();
     md.push_str(&format!("### {} — {}\n\n", s.display_name(), s.verdict.as_str()));
     if let Some(e) = &s.error {
-        md.push_str(&format!("錯誤：{e}\n\n"));
+        md.push_str(&format!("{}\n\n", tf!("錯誤：{e}", e = e)));
     }
     for st in &s.steps {
         if st.differences.is_empty() {
             continue;
         }
-        md.push_str(&format!("**{}**（{}）\n\n| 類型 | 位置 | 期望 / A | 實際 / B | 備註 |\n|---|---|---|---|---|\n", st.label, st.kind));
+        md.push_str(&format!("**{}** ({})\n\n{}\n|---|---|---|---|---|\n", st.label, st.kind, t!("| 類型 | 位置 | 期望 / A | 實際 / B | 備註 |")));
         for d in &st.differences {
             md.push_str(&format!(
                 "| {} | {} | {} | {} | {} |\n",
@@ -270,7 +270,7 @@ fn md_cell(s: &str) -> String {
 
 pub fn render_md(reports: &[FileReport]) -> String {
     let mut md = String::new();
-    md.push_str("# 預存程序整合測試報表\n\n| 檔案 | 模式 | 目標 | 通過 | 失敗 | 錯誤 | 略過 |\n|---|---|---|---|---|---|---|\n");
+    md.push_str(&format!("# {}\n\n{}\n|---|---|---|---|---|---|---|\n", t!("預存程序整合測試報表"), t!("| 檔案 | 模式 | 目標 | 通過 | 失敗 | 錯誤 | 略過 |")));
     for f in reports {
         let c = f.counts();
         let n = |k: &str| c.get(k).copied().unwrap_or(0);

@@ -832,26 +832,76 @@ export const SP_TEST_INSPECT = {
   tables_ddl: {},
   breaks_wrapping: false,
 };
+// 步驟的 outcomes 照後端 StepOutcome 的真實形狀（dbk sp-test run --format json 擷取後裁短）：
+// 結果分頁的逐步摘要、展開明細與「採用實際值」都吃這些欄位。
+const SP_OC = {
+  seedCustomer: { kind: "insert", elapsed_ms: 3, symbols: { cid: "25" }, symbol_cols: { cid: "customer_id" }, masked_cols: ["customer_id"] },
+  seedProduct: { kind: "insert", elapsed_ms: 2, symbols: { cid: "25", pid: "21" }, symbol_cols: { cid: "customer_id", pid: "product_id" }, masked_cols: ["customer_id", "product_id"] },
+  place: {
+    kind: "call", elapsed_ms: 36,
+    result_sets: [{ columns: ["order_id", "qty", "total", "status"], rows: [["516", "2", "25.00", "NEW"]], truncated: false }],
+    effects: [
+      { table: "orders", columns: ["order_id", "customer_id", "product_id", "qty", "total", "status", "created_at"], key: ["order_id"],
+        inserted: [["516", "25", "21", "2", "25.00", "NEW", "2026-10-03 03:14:00.532810"]], updated: [], deleted: [], incomplete: false, keyless: false, masked_cols: ["created_at", "order_id"] },
+      { table: "products", columns: ["product_id", "name", "price", "stock"], key: ["product_id"], inserted: [],
+        updated: [[["21", "Pen", "12.50", "10"], ["21", "Pen", "12.50", "8"]]], deleted: [], incomplete: false, keyless: false, masked_cols: ["product_id"] },
+    ],
+    symbols: { cid: "25", oid: "516", pid: "21" }, symbol_cols: { cid: "customer_id", oid: "order_id", pid: "product_id" }, masked_cols: ["created_at", "order_id", "product_id"],
+  },
+  stock8: { kind: "query", elapsed_ms: 2, result_sets: [{ columns: ["stock"], rows: [["8"]], truncated: false }], symbols: { cid: "25", oid: "516", pid: "21" } },
+  cancel: {
+    kind: "call", elapsed_ms: 14,
+    effects: [
+      { table: "orders", columns: ["order_id", "status"], key: ["order_id"], inserted: [], updated: [[["516", "NEW"], ["516", "CANCELLED"]]], deleted: [], incomplete: false, keyless: false, masked_cols: ["order_id"] },
+      { table: "products", columns: ["product_id", "stock"], key: ["product_id"], inserted: [], updated: [[["21", "8"], ["21", "10"]]], deleted: [], incomplete: false, keyless: false, masked_cols: ["product_id"] },
+    ],
+    symbols: { cid: "25", oid: "516", pid: "21" },
+  },
+  cancelAgain: { kind: "call", elapsed_ms: 4, error: { code: "50006", class: "user_raised", message: "order not cancellable" }, symbols: { cid: "25", oid: "516", pid: "21" } },
+  placeTwo: {
+    kind: "call", elapsed_ms: 18, result_sets: [{ columns: ["order_id", "qty", "total", "status"], rows: [["517", "2", "25.00", "NEW"]], truncated: false }],
+    effects: [{ table: "orders", columns: ["order_id"], key: ["order_id"], inserted: [["517"]], updated: [], deleted: [], incomplete: false, keyless: false, masked_cols: ["order_id"] }],
+  },
+  divZero: { kind: "call", elapsed_ms: 6, error: { code: "1365", class: "divide_by_zero", message: "Division by 0" } },
+};
+const spStep = (label, kind, oc, differences = []) => ({ label, kind, outcomes: { mysql: oc }, differences });
+const SP_SEED = [spStep("#1 insert", "insert", SP_OC.seedCustomer), spStep("#2 insert", "insert", SP_OC.seedProduct)];
 export const SP_TEST_REPORTS = [
   {
     file: "usp_place_order.json", mode: "assert", targets: ["mysql"], started_at: "2026-10-02T08:00:00Z",
     scenarios: [
       { id: "place_then_cancel", verdict: "pass", mode_used: "wrapped", elapsed_ms: 41, steps: [
-        { label: "#1 insert", kind: "insert", outcomes: {}, differences: [] },
-        { label: "#2 insert", kind: "insert", outcomes: {}, differences: [] },
-        { label: "#3 call", kind: "call", outcomes: {}, differences: [] },
-        { label: "#4 query", kind: "query", outcomes: {}, differences: [] },
-        { label: "#5 call", kind: "call", outcomes: {}, differences: [] },
-        { label: "#6 call", kind: "call", outcomes: {}, differences: [] },
+        ...SP_SEED,
+        spStep("#3 call", "call", SP_OC.place),
+        spStep("#4 query", "query", SP_OC.stock8),
+        spStep("#5 call", "call", SP_OC.cancel),
+        spStep("#6 call", "call", SP_OC.cancelAgain),
       ] },
-      { id: "qty_cases", case: "two", verdict: "pass", mode_used: "wrapped", elapsed_ms: 18, steps: [
-        { label: "#3 call", kind: "call", outcomes: {}, differences: [] },
-      ] },
+      { id: "qty_cases", case: "two", verdict: "pass", mode_used: "wrapped", elapsed_ms: 18, steps: [...SP_SEED, spStep("#3 call", "call", SP_OC.placeTwo)] },
       { id: "qty_cases", case: "zero", verdict: "fail", mode_used: "wrapped", elapsed_ms: 17, steps: [
-        { label: "#3 call", kind: "call", outcomes: {}, differences: [
-          { kind: "error_class", where: "error", expected: "user_raised", actual: "other", note: "Division by zero" },
-        ] },
+        ...SP_SEED,
+        spStep("#3 call", "call", SP_OC.divZero, [
+          { kind: "error_class", where: "error", expected: "user_raised", actual: "divide_by_zero", note: "Division by 0" },
+        ]),
       ] },
     ],
   },
 ];
+/** `sp_test_scaffold`：後端盤點產生的骨架長相（usp_place_order on MySQL）。 */
+export const SP_TEST_SCAFFOLD = JSON.stringify({
+  version: 1,
+  target: { kind: "mysql", database: "shop" },
+  routine: "sp_close_order",
+  fixtures: { base: { description: "自動產生：程序讀寫到的表與外鍵父表各一列", steps: [
+    { insert: "customers", rows: [{ customer_id: ">>customer_id", email: "test", name: "test" }] },
+    { insert: "orders", rows: [{ order_id: ">>order_id", customer_id: "<<customer_id", status: "test", total: "10.00" }] },
+  ] } },
+  scenarios: [
+    { id: "happy_path", description: "TODO：先按執行看實際輸出，再用「採用實際值」（或 --mode record）把期望定下來", use: ["base"],
+      steps: [{ call: "sp_close_order", params: { p_order_id: "<<order_id", p_note: "test", p_affected: ">>affected" } }] },
+    { id: "error_order_already_closed", description: "TODO：調整參數或前置資料，讓程序走到「order already closed」這個分支",
+      skip: "TODO：改好參數後拿掉 skip", use: ["base"],
+      steps: [{ call: "sp_close_order", params: { p_order_id: "<<order_id", p_note: "test", p_affected: ">>affected" },
+        expect_error: { class: "user_raised", code: 50010, message_contains: "order already closed" } }] },
+  ],
+}, null, 2);

@@ -484,14 +484,34 @@ metadata:
     review_run_cancel: () => null,
     review_run_reveal: () => null,
     // 預存程序整合測試
-    sp_test_load_dir: () => fx.SP_TEST_FILES,
-    sp_test_save_file: () => [],
+    // 存檔記在 window 上，下一次 load_dir 會列出來（「新檔」→ 重新載入 → 選到新檔 的流程才走得通）。
+    sp_test_load_dir: () => {
+      const saved = window.__DBKIT_SPTEST_SAVED__ ?? {};
+      const base = fx.SP_TEST_FILES.filter((f) => !(f.path in saved));
+      const extra = Object.entries(saved).map(([path, text]) => ({ name: path.split(/[\\/]/).pop(), path, text, errors: [] }));
+      return [...base, ...extra].sort((a, b) => a.name.localeCompare(b.name));
+    },
+    sp_test_save_file: ({ path, text }) => {
+      window.__DBKIT_SPTEST_SAVED__ = { ...(window.__DBKIT_SPTEST_SAVED__ ?? {}), [path]: text };
+      return [];
+    },
     sp_test_validate: () => [],
     sp_test_inspect: () => fx.SP_TEST_INSPECT,
     sp_test_testgen_prompt: () => "generate scenarios",
-    sp_test_run: ({ runId }) => {
+    sp_test_scaffold: () => fx.SP_TEST_SCAFFOLD,
+    sp_test_run: ({ runId, only }) => {
+      window.__DBKIT_SPTEST_RUNS__ = [...(window.__DBKIT_SPTEST_RUNS__ ?? []), { only: only ?? null }];
       emit("sp-test-progress", { run_id: runId, file: "usp_place_order.json", scenario: "place_then_cancel", phase: "done", verdict: "pass", index: 0, total: 2 });
-      return new Promise((res) => setTimeout(() => res(fx.SP_TEST_REPORTS), 30));
+      // 只重跑某些情境（only）：回那幾列且改成通過——模擬「改好程序後再跑一次就綠了」。
+      const out = only && only.length
+        ? fx.SP_TEST_REPORTS.map((r) => ({
+          ...r,
+          scenarios: r.scenarios
+            .filter((s) => only.includes(s.case ? `${s.id}/${s.case}` : s.id) || only.includes(s.id))
+            .map((s) => ({ ...s, verdict: "pass", steps: s.steps.map((st) => ({ ...st, differences: [] })) })),
+        }))
+        : fx.SP_TEST_REPORTS;
+      return new Promise((res) => setTimeout(() => res(out), 30));
     },
     sp_test_cancel: () => null,
     sp_test_export: () => ["C:/sptests/reports/run.junit.xml", "C:/sptests/reports/run.md"],

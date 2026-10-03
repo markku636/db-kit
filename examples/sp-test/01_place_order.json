@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "target": {"kind": "mssql", "database": "sptest"},
+  "routine": "usp_place_order",
+  "fixtures": {
+    "base": {
+      "description": "One active customer (credit 100) and one pen in stock (10 pcs, 12.50 each)",
+      "steps": [
+        {"insert": "customers", "rows": [{"customer_id": ">>cid", "name": "Ann", "credit": "100.00", "is_active": true}]},
+        {"insert": "products", "rows": [{"product_id": ">>pid", "name": "Pen", "price": "12.50", "stock": 10}]}
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "id": "happy_path",
+      "description": "Order 2 pens: returns the new order, adds one row to orders, stock 10 -> 8, and touches no other table",
+      "tags": ["smoke"],
+      "use": ["base"],
+      "steps": [
+        {
+          "id": "place",
+          "call": "usp_place_order",
+          "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": 2},
+          "capture": {"order_id": ">>oid"},
+          "expect": {
+            "result_sets": [{"rows": [{"qty": 2, "total": "25.00", "status": "NEW"}]}],
+            "effects": {
+              "orders": {"inserted": [{"customer_id": "<<cid", "product_id": "<<pid", "qty": 2, "total": "25.00", "status": "NEW"}]},
+              "products": {"updated": [{"before": {"stock": 10}, "after": {"product_id": "<<pid", "stock": 8}}]}
+            },
+            "effects_strict": true
+          }
+        },
+        {"id": "stock_after", "query": "SELECT stock FROM products WHERE product_id = @pid", "expect": [{"stock": 8}]},
+        {"id": "order_row", "query": "SELECT customer_id, qty, status FROM orders WHERE order_id = @oid", "expect": [{"customer_id": "<<cid", "qty": 2, "status": "NEW"}]}
+      ]
+    },
+    {
+      "id": "place_then_cancel",
+      "description": "Business flow: place -> cancel -> stock restored -> a second cancel is rejected",
+      "tags": ["smoke", "flow"],
+      "use": ["base"],
+      "steps": [
+        {"id": "place", "call": "usp_place_order", "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": 3}, "capture": {"order_id": ">>oid"}},
+        {
+          "id": "cancel",
+          "call": "usp_cancel_order",
+          "params": {"OrderID": "<<oid"},
+          "expect": {
+            "effects": {
+              "orders": {"updated": [{"before": {"status": "NEW"}, "after": {"order_id": "<<oid", "status": "CANCELLED"}}]},
+              "products": {"updated": [{"before": {"stock": 7}, "after": {"product_id": "<<pid", "stock": 10}}]}
+            },
+            "effects_strict": true
+          }
+        },
+        {"id": "status_after", "query": "SELECT status FROM orders WHERE order_id = @oid", "expect": [{"status": "CANCELLED"}]},
+        {"id": "cancel_again", "call": "usp_cancel_order", "params": {"OrderID": "<<oid"}, "expect_error": {"class": "user_raised", "message_contains": "cancellable"}}
+      ]
+    }
+  ]
+}

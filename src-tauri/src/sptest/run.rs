@@ -663,13 +663,20 @@ pub async fn run_file(
     }
     let mut expanded: Vec<Expanded> = Vec::new();
     for sc in &file.scenarios {
-        if !opts.only.is_empty() && !opts.only.iter().any(|o| o == &sc.id) {
+        // `--only` 可寫情境 id，或 `id/case` 只跑某個 case。
+        let whole = opts.only.iter().any(|o| o == &sc.id);
+        let cases: Vec<&str> = opts.only.iter().filter_map(|o| o.split_once('/')).filter(|(id, _)| *id == sc.id).map(|(_, c)| c).collect();
+        if !opts.only.is_empty() && !whole && cases.is_empty() {
             continue;
         }
         if !opts.tags.is_empty() && !sc.tags.iter().any(|t| opts.tags.contains(t)) {
             continue;
         }
-        expanded.extend(expand(file, sc).map_err(AppError::Query)?);
+        let mut ex = expand(file, sc).map_err(AppError::Query)?;
+        if !whole && !cases.is_empty() {
+            ex.retain(|e| e.case.as_deref().map(|c| cases.contains(&c)).unwrap_or(false));
+        }
+        expanded.extend(ex);
     }
     let total = expanded.len();
     let mut report = FileReport { file: file_name.to_string(), mode: opts.mode.as_str().into(), targets: ctxs.iter().map(|c| engine_label(c.kind)).collect(), started_at: now_iso(), scenarios: vec![] };

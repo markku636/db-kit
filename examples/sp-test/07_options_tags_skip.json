@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "target": {"kind": "mssql", "database": "sptest"},
+  "defaults": {
+    "case_insensitive_text": true,
+    "snapshot": ["orders", "products", "customers"],
+    "effects_strict": true
+  },
+  "fixtures": {
+    "base": {
+      "steps": [
+        {"insert": "customers", "rows": [{"customer_id": ">>cid", "name": "Ann", "credit": "100.00", "is_active": true}]},
+        {"insert": "products", "rows": [{"product_id": ">>pid", "name": "Pen", "price": "12.50", "stock": 10}]}
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "id": "case_insensitive_text",
+      "description": "defaults.case_insensitive_text lets 'new' match 'NEW'; defaults.effects_strict applies to every call",
+      "tags": ["smoke"],
+      "use": ["base"],
+      "steps": [
+        {
+          "call": "usp_place_order",
+          "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": 1},
+          "expect": {
+            "result_sets": [{"rows": [{"status": "new"}]}],
+            "effects": {"orders": {"inserted": 1}, "products": {"updated": 1}}
+          }
+        }
+      ]
+    },
+    {
+      "id": "seed_only_check",
+      "description": "A scenario does not have to call anything: check the seed itself with sql + expect",
+      "tags": ["smoke"],
+      "use": ["base"],
+      "steps": [
+        {"sql": "SELECT name, credit FROM customers WHERE customer_id = @cid", "expect": [{"name": "ann", "credit": "100"}]}
+      ]
+    },
+    {
+      "id": "commit_inside",
+      "description": "usp_commit_inside runs COMMIT itself, so it cannot be wrapped in the rollback transaction on every engine",
+      "tags": ["needs-isolated"],
+      "skip": "contains COMMIT; isolated mode is not supported yet",
+      "steps": [
+        {"call": "usp_commit_inside", "params": {"Note": "hello"}}
+      ]
+    }
+  ]
+}

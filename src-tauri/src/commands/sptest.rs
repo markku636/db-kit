@@ -81,6 +81,14 @@ pub async fn sp_test_inspect(state: State<'_, AppState>, id: String, database: S
     inspect_json(&state.manager, &id, &database, &routine).await
 }
 
+/// 測試檔骨架（同 `dbk sp-test init`）：前置資料、參數、每個錯誤分支一個 skip 情境。回排版好的 JSON 文字。
+#[tauri::command]
+pub async fn sp_test_scaffold(state: State<'_, AppState>, id: String, database: String, routine: String) -> AppResult<String> {
+    let kind = state.manager.kind(&id)?;
+    let v = crate::sptest::scaffold::scaffold(&state.manager, &id, kind, &database, &routine).await?;
+    serde_json::to_string_pretty(&v).map_err(|e| AppError::Query(e.to_string()))
+}
+
 async fn inspect_json(mgr: &crate::manager::ConnectionManager, id: &str, database: &str, routine: &str) -> AppResult<serde_json::Value> {
     let kind = mgr.kind(id)?;
     let sig = inspect::routine_sig(mgr, id, kind, database, routine).await?;
@@ -181,6 +189,7 @@ pub async fn sp_test_run(
     mode: ExecMode,
     golden_dir: Option<String>,
     only: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
     row_cap: Option<usize>,
 ) -> AppResult<Vec<FileReport>> {
     let opts = RunOptions {
@@ -188,7 +197,7 @@ pub async fn sp_test_run(
         golden_dir: golden_dir.filter(|s| !s.trim().is_empty()).map(PathBuf::from),
         row_cap: row_cap.unwrap_or(10_000),
         only: only.unwrap_or_default(),
-        tags: vec![],
+        tags: tags.unwrap_or_default(),
     };
     let emit = move |p: Progress| {
         let _ = app.emit("sp-test-progress", p);

@@ -148,3 +148,15 @@ fn tr_help(s: &str) -> Option<&'static str> {
     );
     crate::i18n::lookup_opt(s)
 }
+
+#[cfg(test)]
+mod help_tests {
+    use clap::CommandFactory;
+
+    /// `--lang en` 走 `localize_command`，裡面的 `tr_help` 在 debug build 對「有中文、en 表查無」的 help 會 debug_assert 失敗——
+    /// 平常只有真的用英文開某個子指令的 help 才炸得出來（曾漏 16 條，`dbk --lang en sp-test run` 直接 panic）。這裡整棵樹走一遍。
+    #[test]
+    fn every_clap_help_text_has_an_english_translation() {
+        let _ = super::localize_command(super::args::Cli::command());
+    }
+}

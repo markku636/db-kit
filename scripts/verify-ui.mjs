@@ -3917,7 +3917,91 @@ const CASES = {
     await page.getByText("qty_cases / zero", { exact: false }).first().click();
     await sleep(300);
     const after = await appText(page);
-    check("展開失敗情境顯示差異（類型 / 期望 / 實際）", after.includes("error_class") && after.includes("user_raised") && after.includes("Division by zero"), after.replace(/\s+/g, " ").slice(0, 300));
+    check("展開失敗情境顯示差異（類型 / 期望 / 實際）", after.includes("error_class") && after.includes("user_raised") && after.includes("Division by 0"), after.replace(/\s+/g, " ").slice(0, 300));
+
+    // v0.56：說明面板、摘要列、逐步輸出、採用實際值、只重跑單一情境、插入範例、CLI 指令
+    check("說明面板預設展開（三步上手 + CLI 指令）", await page.locator('[data-testid="sp-test-help"]').isVisible());
+    const cli = await page.locator('[data-testid="sp-test-cli"]').innerText();
+    check("說明面板的 CLI 指令對應目前設定", cli.startsWith("dbk sp-test run ") && cli.includes("--conn prod-mysql") && cli.includes("-d shop") && cli.includes("usp_place_order.json"), cli);
+    const summary = await page.locator('[data-testid="sp-test-summary"]').innerText();
+    check("摘要列依判定計數（失敗 1、通過 2）", summary.includes("失敗 1") && summary.includes("通過 2"), summary);
+    check("失敗情境的步驟清單：fixture 步驟標來源、call 有實際輸出摘要",
+      (await page.locator('[data-sp-scenario="qty_cases/zero"] [data-sp-step="#1 insert"]').innerText()).includes("[base] customers")
+      && (await page.locator('[data-sp-scenario="qty_cases/zero"] [data-sp-step="#3 call"]').innerText()).includes("divide_by_zero"));
+    check("cases 展開的情境不提供採用實際值（會蓋掉 <<qty 之類的變數）", (await page.locator('[data-sp-scenario="qty_cases/zero"] [data-sp-adopt]').count()) === 0);
+    await page.locator('[data-testid="sp-test-only-failed"]').check();
+    await sleep(200);
+    check("只看未通過：通過的情境藏起來", (await page.locator('[data-sp-scenario="place_then_cancel"]').count()) === 0 && (await page.locator('[data-sp-scenario="qty_cases/zero"]').count()) === 1);
+    await page.locator('[data-testid="sp-test-only-failed"]').uncheck();
+    await sleep(200);
+    await page.locator('[data-sp-scenario="place_then_cancel"] button').first().click();
+    await sleep(300);
+    const placeRow = await page.locator('[data-sp-scenario="place_then_cancel"] [data-sp-step="#3 call"]').innerText();
+    check("call 步驟摘要：程序名、副作用（orders +1、products ~1）", placeRow.includes("orders +1") && placeRow.includes("products ~1") && placeRow.includes("usp_place_order"), placeRow);
+    await page.locator('[data-sp-scenario="place_then_cancel"] [data-sp-step="#3 call"] > div').first().click();
+    await sleep(300);
+    const detail = await page.locator('[data-sp-scenario="place_then_cancel"] [data-sp-step-detail="#3 call"]').innerText();
+    check("點步驟展開實際輸出：結果集表格與副作用前後像", detail.includes("order_id") && detail.includes("516") && detail.includes("副作用 products") && detail.includes("前") && detail.includes("後"), detail.slice(0, 200));
+    check("預期中的錯誤步驟顯示錯誤類別", (await page.locator('[data-sp-scenario="place_then_cancel"] [data-sp-step="#6 call"]').innerText()).includes("user_raised"));
+    check("fixture 步驟沒有採用實際值", (await page.locator('[data-sp-scenario="place_then_cancel"] [data-sp-adopt="#1 insert"]').count()) === 0);
+    await page.locator('[data-sp-scenario="place_then_cancel"] [data-sp-adopt="#3 call"]').click();
+    await sleep(300);
+    await page.getByText("測試檔", { exact: true }).first().click();
+    await sleep(300);
+    const adopted = JSON.parse(await page.locator('[data-testid="sp-test-editor"]').inputValue());
+    const placeStep = adopted.scenarios[0].steps[0];
+    check("採用實際值：result_sets 換回符號、遮罩欄略過、副作用寫成數量",
+      JSON.stringify(placeStep.expect) === JSON.stringify({ result_sets: [{ rows: [{ order_id: "<<oid", qty: 2, total: "25.00", status: "NEW" }] }], effects: { orders: { inserted: 1 }, products: { updated: 1 } } }),
+      JSON.stringify(placeStep.expect));
+    await page.locator('[data-testid="sp-test-recipes"]').click();
+    await sleep(200);
+    check("插入範例選單列出 8 種", (await page.locator("[data-sp-recipe]").count()) === 8);
+    await page.locator('[data-sp-recipe="error"]').click();
+    await sleep(300);
+    const withRecipe = JSON.parse(await page.locator('[data-testid="sp-test-editor"]').inputValue());
+    const ins = withRecipe.scenarios.at(-1);
+    check("插入範例：情境接在最後、用既有 fixture、程序名取檔案的 routine",
+      ins.id === "rejects_bad_input" && ins.use[0] === "base" && ins.steps[0].call === "usp_place_order" && ins.steps[0].expect_error.class === "user_raised", JSON.stringify(ins));
+    await page.getByRole("radio", { name: "結果", exact: true }).last().click();
+    await sleep(200);
+    await page.locator('[data-sp-rerun="qty_cases/zero"]').click();
+    await page.waitForFunction(() => (window.__DBKIT_SPTEST_RUNS__ ?? []).length >= 2, null, { timeout: 5000 }).catch(() => {});
+    await sleep(400);
+    const runs = await page.evaluate(() => window.__DBKIT_SPTEST_RUNS__);
+    check("只重跑單一情境：送出 only = id/case", JSON.stringify(runs.at(-1).only) === JSON.stringify(["qty_cases/zero"]), JSON.stringify(runs));
+    const summary2 = await page.locator('[data-testid="sp-test-summary"]').innerText();
+    check("重跑結果併回原報表（3 個情境都在、失敗歸零）", summary2.includes("通過 3") && !summary2.includes("失敗"), summary2);
+    await page.locator('[data-testid="sp-test-help-toggle"]').click();
+    await sleep(200);
+    check("說明面板可收合", (await page.locator('[data-testid="sp-test-help"]').count()) === 0);
+    await page.locator('[data-testid="sp-test-help-toggle"]').click();
+    await page.keyboard.press("Escape");
+    await sleep(300);
+  },
+
+  // 從程序右鍵開：「新檔」走後端盤點產生骨架（前置資料、參數、錯誤分支情境），AI 產生情境可用。
+  async "sp-test-from-routine"(page) {
+    await page.evaluate(() => localStorage.setItem("dbkit.sptest.prefs", JSON.stringify({ dir: "C:/sptests", mode: "assert", goldenDir: "", help: true })));
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click();
+    await sleep(700);
+    await page.getByText("預存程序", { exact: true }).first().click();
+    await sleep(700);
+    await page.getByText("sp_close_order", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("程序右鍵：整合測試…", items.some((i) => i.includes("整合測試…")), items.join(" | "));
+    await page.getByText("整合測試…", { exact: true }).click();
+    await sleep(900);
+    check("從程序開啟時 AI 產生情境可用", await page.locator('[data-testid="sp-test-generate"]').isEnabled());
+    check("說明面板的第一步提到從程序產生骨架", (await page.locator('[data-testid="sp-test-help"]').innerText()).includes("sp_close_order"));
+    await page.locator('[data-testid="sp-test-new"]').click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="sp-test-file"]').length === 2, null, { timeout: 5000 }).catch(() => {});
+    await sleep(500);
+    check("新檔出現在檔案清單", (await page.locator('[data-testid="sp-test-file"]').allInnerTexts()).some((x) => x.includes("sp_close_order.json")));
+    const text = await page.locator('[data-testid="sp-test-editor"]').inputValue();
+    check("新檔內容是後端產生的骨架（fixture + happy_path + 錯誤分支情境）", text.includes("happy_path") && text.includes("error_order_already_closed") && text.includes("<<order_id"), text.slice(0, 200));
     await page.keyboard.press("Escape");
     await sleep(300);
   },

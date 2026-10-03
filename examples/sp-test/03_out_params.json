@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "target": {"kind": "mssql", "database": "sptest"},
+  "routine": "usp_adjust_credit",
+  "fixtures": {
+    "base": {
+      "steps": [
+        {"insert": "customers", "rows": [{"customer_id": ">>cid", "name": "Ann", "credit": "100.00", "is_active": true}]}
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "id": "top_up",
+      "description": "The OUT parameter returns the new balance; capture it and reuse it in a later query",
+      "use": ["base"],
+      "steps": [
+        {
+          "call": "usp_adjust_credit",
+          "params": {"CustomerID": "<<cid", "Delta": "12.5", "NewBalance": ">>bal"},
+          "expect": {
+            "out": {"NewBalance": "112.50"},
+            "effects": {"customers": {"updated": [{"before": {"credit": "100.00"}, "after": {"customer_id": "<<cid", "credit": "112.50"}}]}}
+          }
+        },
+        {"query": "SELECT credit FROM customers WHERE customer_id = @cid", "expect": [{"credit": "<<bal"}]}
+      ]
+    },
+    {
+      "id": "two_adjustments",
+      "description": "Two calls in one scenario see each other's writes (same transaction)",
+      "use": ["base"],
+      "steps": [
+        {"call": "usp_adjust_credit", "params": {"CustomerID": "<<cid", "Delta": "-30", "NewBalance": ">>b1"}, "expect": {"out": {"NewBalance": "70.00"}}},
+        {"call": "usp_adjust_credit", "params": {"CustomerID": "<<cid", "Delta": "5.25", "NewBalance": ">>b2"}, "expect": {"out": {"NewBalance": "75.25"}}}
+      ]
+    },
+    {
+      "id": "unknown_customer",
+      "steps": [
+        {"call": "usp_adjust_credit", "params": {"CustomerID": 999999, "Delta": "1", "NewBalance": ">>bal"}, "expect_error": {"class": "user_raised", "message_contains": "customer not found"}}
+      ]
+    }
+  ]
+}

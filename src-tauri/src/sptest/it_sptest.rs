@@ -438,3 +438,111 @@ async fn junit_has_one_testcase_per_expanded_scenario() {
     assert!(xml.contains("<skipped"));
     assert!(xml.contains("tests=\"6\""));
 }
+
+// ---------------------------------------------------------------------------
+// examples/sp-test：文件引用的範例檔，三引擎都要綠（多結果集那份 PG 不支援）；
+// 08 在 SQL Server ↔ PostgreSQL 差分時要抓到 products 的差異。
+// ---------------------------------------------------------------------------
+
+const EXAMPLES: &[(&str, &str)] = &[
+    ("01_place_order.json", include_str!("../../../examples/sp-test/01_place_order.json")),
+    ("02_error_branches.json", include_str!("../../../examples/sp-test/02_error_branches.json")),
+    ("03_out_params.json", include_str!("../../../examples/sp-test/03_out_params.json")),
+    ("04_data_driven.json", include_str!("../../../examples/sp-test/04_data_driven.json")),
+    ("05_result_set_shapes.json", include_str!("../../../examples/sp-test/05_result_set_shapes.json")),
+    ("06_invariants_and_compare.json", include_str!("../../../examples/sp-test/06_invariants_and_compare.json")),
+    ("07_options_tags_skip.json", include_str!("../../../examples/sp-test/07_options_tags_skip.json")),
+    ("08_migration_bug_demo.json", include_str!("../../../examples/sp-test/08_migration_bug_demo.json")),
+];
+
+/// PG 的函式只有一個結果集（多結果集要 refcursor，尚未支援）。
+fn example_runs_on(name: &str, kind: DbKind) -> bool {
+    !(name.starts_with("05_") && kind == DbKind::Postgres)
+}
+
+fn verdict_dump(rep: &super::report::FileReport) -> String {
+    rep.scenarios
+        .iter()
+        .map(|s| format!("{} {:?} err={:?} diffs={:?}", s.display_name(), s.verdict, s.error, s.steps.iter().flat_map(|st| st.differences.iter().map(|d| d.summary())).collect::<Vec<_>>()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn examples_parse_and_validate() {
+    for (name, text) in EXAMPLES {
+        let f: TestFile = serde_json::from_str(text).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let errs = super::model::validate(&f);
+        assert!(errs.is_empty(), "{name}: {errs:?}");
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn examples_pass_on_every_engine() {
+    let (mgr, targets) = setup().await;
+    for (name, text) in EXAMPLES {
+        let file: TestFile = serde_json::from_str(text).unwrap();
+        for t in &targets {
+            let kind = mgr.kind(&t.conn_id).unwrap();
+            if !example_runs_on(name, kind) {
+                continue;
+            }
+            let before = counts(&mgr, t).await;
+            let rep = run_file(&mgr, "it-ex", std::slice::from_ref(t), &file, name, &RunOptions::default(), &noop).await.unwrap();
+            assert!(rep.all_green(), "{name} on {kind:?}:\n{}", verdict_dump(&rep));
+            assert_eq!(counts(&mgr, t).await, before, "{name} on {kind:?}: 跑完應 rollback 乾淨");
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn examples_diff_across_engines() {
+    let (mgr, targets) = setup().await;
+    let opts = RunOptions { mode: ExecMode::Diff, ..Default::default() };
+    for (name, text) in EXAMPLES {
+        let file: TestFile = serde_json::from_str(text).unwrap();
+        for pair in [[0usize, 1], [2, 1], [0, 2]] {
+            let ts = vec![targets[pair[0]].clone(), targets[pair[1]].clone()];
+            let kinds: Vec<DbKind> = ts.iter().map(|t| mgr.kind(&t.conn_id).unwrap()).collect();
+            if kinds.iter().any(|k| !example_runs_on(name, *k)) {
+                continue;
+            }
+            let rep = run_file(&mgr, "it-exd", &ts, &file, name, &opts, &noop).await.unwrap();
+            let bad_port = name.starts_with("08_") && kinds.contains(&DbKind::Postgres);
+            if bad_port {
+                let s = &rep.scenarios[0];
+                assert_eq!(s.verdict, Verdict::Mismatch, "{name} {kinds:?}:\n{}", verdict_dump(&rep));
+                assert!(s.steps.iter().flat_map(|st| st.differences.iter()).any(|d| d.location.contains("products")), "{}", verdict_dump(&rep));
+            } else {
+                assert!(rep.all_green(), "{name} {kinds:?}:\n{}", verdict_dump(&rep));
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// scaffold：對真實引擎產生的骨架要能直接跑——前置資料灌得進去（外鍵順序、必填欄）、
+// happy path 綠、錯誤分支情境都在且是 skip。
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore]
+async fn scaffold_runs_as_generated() {
+    let (mgr, targets) = setup().await;
+    for t in &targets {
+        let kind = mgr.kind(&t.conn_id).unwrap();
+        for (routine, n_errors) in [("usp_place_order", 4usize), ("usp_cancel_order", 2), ("usp_adjust_credit", 1)] {
+            let v = super::scaffold::scaffold(&mgr, &t.conn_id, kind, &t.database, routine).await.unwrap();
+            let file: TestFile = serde_json::from_value(v.clone()).unwrap_or_else(|e| panic!("{kind:?} {routine}: {e}\n{v:#}"));
+            assert!(super::model::validate(&file).is_empty(), "{kind:?} {routine}: {:?}", super::model::validate(&file));
+            assert_eq!(file.scenarios.len(), 1 + n_errors, "{kind:?} {routine}: {v:#}");
+            let rep = run_file(&mgr, "it-sc", std::slice::from_ref(t), &file, &format!("{routine}.json"), &RunOptions::default(), &noop).await.unwrap();
+            let happy = &rep.scenarios[0];
+            // 取消訂單的 seed 有 orders（外鍵連到 customers / products），能灌進去就證明父表排在前面。
+            assert_eq!(happy.verdict, Verdict::Pass, "{kind:?} {routine}:\n{}\n{v:#}", verdict_dump(&rep));
+            assert!(rep.scenarios[1..].iter().all(|s| s.verdict == Verdict::Skipped), "{kind:?} {routine}:\n{}", verdict_dump(&rep));
+        }
+    }
+}

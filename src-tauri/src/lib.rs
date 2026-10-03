@@ -262,6 +262,7 @@ pub fn run() {
             commands::sptest::sp_test_save_file,
             commands::sptest::sp_test_validate,
             commands::sptest::sp_test_inspect,
+            commands::sptest::sp_test_scaffold,
             commands::sptest::sp_test_testgen_prompt,
             commands::sptest::sp_test_run,
             commands::sptest::sp_test_cancel,

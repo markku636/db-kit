@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "target": {"kind": "mssql", "database": "sptest"},
+  "routine": "usp_place_order",
+  "routines": [
+    {"name": "usp_place_order", "pg": "usp_place_order_bad"}
+  ],
+  "fixtures": {
+    "base": {
+      "steps": [
+        {"insert": "customers", "rows": [{"customer_id": ">>cid", "name": "Ann", "credit": "100.00", "is_active": true}]},
+        {"insert": "products", "rows": [{"product_id": ">>pid", "name": "Pen", "price": "12.50", "stock": 10}]}
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "id": "ported_version_forgets_stock",
+      "description": "Run with `dbk sp-test diff` (SQL Server -> PostgreSQL). On PostgreSQL the call goes to usp_place_order_bad, a port that forgot to decrement stock; the diff points at products.",
+      "use": ["base"],
+      "steps": [
+        {"call": "usp_place_order", "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": 2}},
+        {"query": "SELECT stock FROM products WHERE product_id = @pid", "expect": [{"stock": {"not": null}}]}
+      ]
+    }
+  ]
+}

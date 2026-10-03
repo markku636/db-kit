@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "target": {"kind": "mssql", "database": "sptest"},
+  "routine": "usp_place_order",
+  "fixtures": {
+    "base": {
+      "steps": [
+        {"insert": "customers", "rows": [{"customer_id": ">>cid", "name": "Ann", "credit": "100.00", "is_active": true}]},
+        {"insert": "products", "rows": [{"product_id": ">>pid", "name": "Pen", "price": "12.50", "stock": 10}]}
+      ]
+    }
+  },
+  "scenarios": [
+    {
+      "id": "qty_boundaries",
+      "description": "Same steps, different quantities. Each case is reported on its own (qty_boundaries/one, qty_boundaries/zero ...)",
+      "use": ["base"],
+      "cases": [
+        {"name": "one", "vars": {"qty": 1, "total": "12.50", "left": 9}},
+        {"name": "all_stock", "vars": {"qty": 10, "total": "125.00", "left": 0}},
+        {"name": "zero", "vars": {"qty": 0}, "expect_error": {"class": "user_raised", "message_contains": "positive"}},
+        {"name": "negative", "vars": {"qty": -1}, "expect_error": {"class": "user_raised", "message_contains": "positive"}},
+        {"name": "over_stock", "vars": {"qty": 11}, "expect_error": {"class": "user_raised", "message_contains": "insufficient"}}
+      ],
+      "steps": [
+        {
+          "call": "usp_place_order",
+          "params": {"CustomerID": "<<cid", "ProductID": "<<pid", "Qty": "<<qty"},
+          "expect": {
+            "result_sets": [{"rows": [{"qty": "<<qty", "total": "<<total"}]}],
+            "effects": {"products": {"updated": [{"after": {"product_id": "<<pid", "stock": "<<left"}}]}}
+          }
+        }
+      ]
+    }
+  ]
+}

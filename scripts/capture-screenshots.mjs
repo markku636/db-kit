@@ -63,6 +63,33 @@ async function openOrders(page) {
   await sleep(1000);
 }
 
+// 預存程序整合測試：對話框讀 localStorage 的偏好決定資料夾（shim 的 sp_test_load_dir 回 fixture）。
+async function seedSpTestPrefs(page) {
+  await page.evaluate(() => localStorage.setItem("dbkit.sptest.prefs", JSON.stringify({ dir: "C:/sptests", mode: "assert", goldenDir: "C:/sptests/golden", help: true })));
+}
+async function openSpTestDialog(page) {
+  await seedSpTestPrefs(page);
+  await page.getByText("prod-mysql", { exact: true }).dblclick();
+  await sleep(1200);
+  await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+  await sleep(400);
+  await page.getByText("預存程序整合測試…", { exact: true }).click();
+  await sleep(1000);
+}
+async function openSpTestFromRoutine(page) {
+  await seedSpTestPrefs(page);
+  await page.getByText("prod-mysql", { exact: true }).dblclick();
+  await sleep(1200);
+  await page.getByText("shop", { exact: true }).nth(1).click();
+  await sleep(700);
+  await page.getByText("預存程序", { exact: true }).first().click();
+  await sleep(700);
+  await page.getByText("sp_close_order", { exact: true }).first().click({ button: "right" });
+  await sleep(400);
+  await page.getByText("整合測試…", { exact: true }).click();
+  await sleep(1000);
+}
+
 // 右側「詳細資料」面板 v0.38.5 起預設收合；01 / 04 要拍的就是它（表的統計 / Redis INFO），先展開。
 async function openInfoPanel(page) {
   const btn = page.getByRole("button", { name: "顯示詳細資料面板" });
@@ -297,6 +324,53 @@ const SHOTS = {
     await openCompareDialog(page);
     await sleep(600);
     await shot(page, "compare-guide-02-setup");
+  },
+
+  // ---- 預存程序整合測試使用指南（docs/sp-test.md）----
+  // 1. 從程序右鍵開、按「新檔」：後端盤點產生的骨架（前置資料、參數、錯誤分支情境）。
+  async "sp-test-guide-01-scaffold"(page) {
+    await openSpTestFromRoutine(page);
+    await page.locator('[data-testid="sp-test-new"]').click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="sp-test-file"]').length === 2, null, { timeout: 5000 }).catch(() => {});
+    await page.locator('[data-testid="sp-test-help-toggle"]').click(); // 收起說明，讓骨架 JSON 露出來（說明面板在 04 拍）
+    await sleep(800);
+    await shot(page, "sp-test-guide-01-scaffold");
+  },
+
+  // 2. 執行後的結果：摘要列、情境紅綠、展開成功情境看逐步摘要。
+  async "sp-test-guide-02-results"(page) {
+    await openSpTestDialog(page);
+    await page.locator('[data-testid="sp-test-help-toggle"]').click();
+    await page.locator('[data-testid="sp-test-run"]').click();
+    await page.waitForSelector('[data-sp-scenario="qty_cases/zero"]', { timeout: 8000 });
+    await sleep(300);
+    await page.locator('[data-sp-scenario="place_then_cancel"] button').first().click();
+    await sleep(300);
+    await page.locator('[data-sp-scenario="qty_cases/zero"] button').first().click();
+    await sleep(500);
+    await shot(page, "sp-test-guide-02-results");
+  },
+
+  // 3. 點一步看實際輸出（結果集、副作用前後像），旁邊就是「採用實際值」。
+  async "sp-test-guide-03-step-detail"(page) {
+    await openSpTestDialog(page);
+    await page.locator('[data-testid="sp-test-help-toggle"]').click();
+    await page.locator('[data-testid="sp-test-run"]').click();
+    await page.waitForSelector('[data-sp-scenario="place_then_cancel"]', { timeout: 8000 });
+    await sleep(300);
+    await page.locator('[data-sp-scenario="place_then_cancel"] button').first().click();
+    await sleep(300);
+    await page.locator('[data-sp-scenario="place_then_cancel"] [data-sp-step="#3 call"] > div').first().click();
+    await sleep(600);
+    await shot(page, "sp-test-guide-03-step-detail");
+  },
+
+  // 4. 說明面板（三步上手 / 模式 / 符號 / 對應的 CLI 指令）＋插入範例選單（8 種情境骨架）。
+  async "sp-test-guide-04-recipes"(page) {
+    await openSpTestDialog(page);
+    await page.locator('[data-testid="sp-test-recipes"]').click();
+    await sleep(500);
+    await shot(page, "sp-test-guide-04-recipes");
   },
 
   // 單一資料表：多一個「資料表」下拉，可以比不同名字的兩張表。

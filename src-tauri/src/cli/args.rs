@@ -745,6 +745,19 @@ pub enum SpTestCmd {
         /// 測試檔或資料夾（資料夾 = 底下所有 *.json，略過 golden/ 與 runs/）
         paths: Vec<String>,
     },
+    /// 從程序產生測試檔骨架：前置資料、參數、每個錯誤分支一個情境（要連線）
+    Init {
+        /// 程序名（可帶 schema）
+        routine: String,
+        /// 寫到這個檔案或資料夾（資料夾 = <程序名>.json；已存在要加 --force）；省略 = 印到 stdout
+        #[arg(short = 'o', long = "out")]
+        out: Option<String>,
+    },
+    /// 列出測試檔裡的情境、case、標籤與略過原因（不連線；挑 --only / --tag 用）
+    List {
+        /// 測試檔或資料夾（資料夾 = 底下所有 *.json，略過 golden/ 與 runs/）
+        paths: Vec<String>,
+    },
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -764,7 +777,7 @@ pub struct SpTestRunArgs {
     /// 基線資料夾（golden / record 模式必填）
     #[arg(long)]
     pub golden: Option<String>,
-    /// 只跑這些情境 id（逗號分隔）
+    /// 只跑這些情境（逗號分隔；`id` 或 `id/case`）
     #[arg(long, value_delimiter = ',')]
     pub only: Vec<String>,
     /// 只跑帶任一標籤的情境（逗號分隔）
@@ -791,7 +804,7 @@ pub struct SpTestDiffArgs {
     /// 第二個目標的資料庫 / schema（省略 = 與 -d 相同）
     #[arg(long = "dst-db")]
     pub dst_db: Option<String>,
-    /// 只跑這些情境 id（逗號分隔）
+    /// 只跑這些情境（逗號分隔；`id` 或 `id/case`）
     #[arg(long, value_delimiter = ',')]
     pub only: Vec<String>,
     /// 只跑帶任一標籤的情境（逗號分隔）
