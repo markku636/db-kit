@@ -34,7 +34,7 @@
 | — | **側欄分組一致化**：資料庫連線依種類各一區，SSH 主機、遠端桌面各一區；三區共用可摺疊標題、群組、拖曳排序與拖進 / 拖出 | ✅ 完成 |
 | — | **遠端桌面（RDP / VNC / Mac 螢幕共享）**：側欄獨立「遠端桌面」清單（資料夾；有主機才出現）、分頁內嵌畫面（RDP 走 IronRDP，TLS / NLA、憑證首次確認、差異區塊 + 反壓；VNC 走 noVNC，後端代做認證含 Apple ARD，密碼不進前端）、全螢幕（Ctrl+Alt+Enter，浮動工具列送 Ctrl+Alt+Del / Win / Alt+Tab）、動態解析度 / 縮放 / 原始大小、可經已存 SSH 主機轉接、連線字串（rdp:// 兩種寫法、mstsc /v:、vnc://、rustdesk://）與 .rdp 檔匯入 | ✅ 完成 |
 | — | 遠端桌面第二階段：RDP / VNC 剪貼簿文字同步（系統剪貼簿由後端讀寫）、Windows 低階鍵盤攔截（全螢幕時 Win / Alt+Tab / Alt+F4 / Ctrl+Esc 直接進遠端） | ✅ 完成 |
-| — | 遠端桌面第三階段：VeNCrypt TLS、RDP 剪貼簿圖片 / 檔案、macOS 全螢幕按鍵攔截（需輔助使用權限） | ⏳ 規劃中 |
+| — | 遠端桌面第三階段：RDP 剪貼簿圖片 / 檔案、macOS 全螢幕按鍵攔截（需輔助使用權限） | ⏳ 規劃中 |
 | — | RustDesk 相容連線第一階段：獨立 AGPL 輔助程式 `rustdesk-bridge/`（stdin / stdout 與 db-kit 對話）、Direct IP、密碼登入 / 對方按接受、VP9 / VP8 影像原封不動交給 WebView 的 WebCodecs 解碼、鍵盤滑鼠、可經 SSH 主機轉接 | ✅ 完成 |
 | — | RustDesk 第二階段：用 RustDesk ID 連線——ID 伺服器（hbbs，公開或自架 + Key）→ TCP 打洞直連，不行就經中繼（hbbr）→ 驗過簽章的端到端加密（box / secretbox 金鑰交換）；可貼上 RustDesk 匯出的伺服器設定字串 | ✅ 完成 |
 | — | RustDesk 多螢幕：工具列每個螢幕一顆按鈕切換、「所有螢幕」照排列拼成一張；對方插拔螢幕 / 換解析度時跟著更新 | ✅ 完成 |
