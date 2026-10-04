@@ -1,3 +1,18 @@
+## v0.57.1
+
+**MCP 對真實資料庫與真實 AI 工具實測後的修正，並重拍全部文件截圖。**
+
+修正：
+
+- **PostgreSQL 指定 schema 時，`run_query` / `explain_query` 讀錯 schema**：工具的 `database` 對 PG 是 schema，但查詢走連線池預設的 `search_path`（只有 `public`），沒寫 schema 的表名會找不到；寫入工具（走審查並執行）卻有切 schema，造成「寫進 A、讀 public」。現在查詢與執行計畫一律在同一條連線先 `SET search_path TO "<schema>", public`（與 GUI 查詢編輯器同一招）。GUI 的 AI 助手共用同一份工具，一起修好。
+
+文件：
+
+- 全部文件截圖以 v0.57 介面重拍（資料格、查詢編輯器、結構比對、審查並執行、sp-test、MCP 等 33 張）。
+- MCP 使用指南（中英）補上實測過的用戶端，以及 `codex exec` 非互動模式下 MCP 工具呼叫需要核准的說明。
+
+> 驗證：MCP 對 docker 的 MySQL 8.4 / PostgreSQL 16 / SQL Server 2022 各跑 15 項（列表、DDL、程序、執行計畫、建表 → 插入 → 有 WHERE 的更新 → 讀回、無 WHERE 刪除被擋、`--allow-destructive` 才能 DROP、回滾腳本 12 份落地）全數通過；安裝包內的 `dbk.exe` 跑 stdio / HTTP / config·install 冒煙 20 項通過；真實 Claude Code（`claude -p`）經 MCP 答出表名、列數與主鍵定義，與資料庫一致；Codex 握手與工具呼叫正常；Rust `dbtools` 單元測試（新增 search_path 前綴）通過；本機 `tauri build` 打包成功。
+
 ## v0.57.0
 
 **日常 SQL 的手感補齊：大結果集、取消、預覽、執行 SQL 檔、更多引擎的計畫與監控，還有連線的網路路徑；`dbk mcp` 也長大成能直接交給 AI 工具的 MCP 伺服器。**
