@@ -317,7 +317,7 @@ export interface SchemaDiff {
 export type SyncKind =
   | "create_table" | "drop_table" | "add_column" | "alter_column" | "drop_column"
   | "create_index" | "drop_index" | "add_foreign_key" | "drop_foreign_key"
-  | "create_view" | "drop_view" | "create_routine" | "drop_routine" | "comment"
+  | "create_view" | "drop_view" | "create_routine" | "drop_routine" | "comment" | "rename_column"
   | "insert" | "update" | "delete";
 export interface SyncStatement { sql: string; kind: SyncKind; object: string; destructive: boolean; note: string | null }
 export interface SyncScript {
@@ -333,6 +333,8 @@ export interface SyncOptions {
   include_fks?: boolean;
   include_views?: boolean;
   include_routines?: boolean;
+  /** 一刪一增、型別相同且配對唯一 → RENAME COLUMN（推測，預設關）。 */
+  detect_renames?: boolean;
 }
 export interface SnapshotInfo { path: string; bytes: number; tables: number; views: number; routines: number; captured_at_ms: number }
 export interface CompareProgress {
@@ -1226,6 +1228,39 @@ export interface ReviewBlocker {
   message: string;
 }
 
+/** 執行 SQL 檔（sqlfile.rs）。 */
+export interface SqlFileProgress { run_id: string; done: number; total: number; failed: number; line: number; elapsed_ms: number }
+export interface SqlFileError { index: number; line: number; sql: string; message: string }
+export interface SqlFileReport {
+  total: number; executed: number; failed: number; skipped_meta: number;
+  cancelled: boolean; stopped_on_error: boolean;
+  errors: SqlFileError[]; errors_omitted: number; elapsed_ms: number;
+}
+export function onSqlFileProgress(runId: string, cb: (p: SqlFileProgress) => void): Promise<UnlistenFn> {
+  return listen<SqlFileProgress>("sql-file-progress", (e) => {
+    if (e.payload.run_id === runId) cb(e.payload);
+  });
+}
+
+/** 寫入語句的影響列預覽（review_run/preview.rs）：不執行、不送 AI。 */
+export interface DmlStatementPreview {
+  index: number;
+  sql: string;
+  op: string;
+  write: boolean;
+  targets: string[];
+  estimated_rows: number | null;
+  estimate_exact: boolean;
+  method: string;
+  table: string | null;
+  columns: string[];
+  rows: (string | null)[][];
+  truncated: boolean;
+  detail: string | null;
+  notes: ReviewNote[];
+}
+export interface DmlPreview { database: string; statements: DmlStatementPreview[]; blockers: ReviewBlocker[] }
+
 export interface ReviewPrepared {
   prepared: {
     kind: DbKind;
@@ -1693,6 +1728,8 @@ export const api = {
     invoke<void>("set_query_guard", { maxRows, timeoutMs }),
   saveTextFile: (path: string, content: string) =>
     invoke<void>("save_text_file", { path, content }),
+  saveBase64File: (path: string, data: string) =>
+    invoke<void>("save_base64_file", { path, data }),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   updateCell: (id: string, database: string, table: string, edit: CellEdit) =>
     invoke<number>("update_cell", { id, database, table, edit }),
@@ -1771,6 +1808,12 @@ export const api = {
     invoke<DataDiffDbReport>("compare_data_database", { runId, src, dst, options }),
   compareDataCancel: (runId: string) => invoke<void>("compare_data_cancel", { runId }),
   // 審查並執行：prepare 只送唯讀查詢；start 的進度走 onReviewRunProgress、取消走 reviewRunCancel。
+  runSqlFile: (runId: string, id: string, database: string, path: string, options: { continue_on_error: boolean }) =>
+    invoke<SqlFileReport>("run_sql_file", { runId, id, database, path, options }),
+  runSqlFileCancel: (runId: string) => invoke<void>("run_sql_file_cancel", { runId }),
+  mssqlShowplan: (id: string, sql: string) => invoke<string>("mssql_showplan", { id, sql }),
+  previewDml: (id: string, database: string, script: string) =>
+    invoke<DmlPreview>("preview_dml", { id, database, script }),
   reviewRunPrepare: (id: string, connLabel: string, database: string, script: string, maxCaptureRows?: number, sampleRows?: number, personas?: string[]) =>
     invoke<ReviewPrepared>("review_run_prepare", { id, connLabel, database, script, maxCaptureRows, sampleRows, personas: personas ?? null }),
   reviewRunStart: (args: {

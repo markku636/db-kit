@@ -10,6 +10,9 @@ import { DbKind } from "./api";
 import { useTheme } from "./theme";
 import { resolveEditorTheme } from "./editorThemes";
 import { lintSqlStructure } from "./sql";
+import { lintSqlSemantics } from "./sqlSemanticLint";
+import { joinOnCompletion } from "./sqlJoinComplete";
+import type { ErRelation } from "./api";
 import { sqlContextCompletion, type CrossDbOptions } from "./sqlContextComplete";
 
 // SQL 片段（供編輯器自動完成展開：輸入名稱 → 補入 body）。
@@ -138,6 +141,8 @@ interface SqlEditorProps {
   cross?: CrossDbOptions;
   /** SQL 片段，供自動完成展開（輸入名稱即補入內容）。 */
   snippets?: EditorSnippet[];
+  /** 外鍵關係（JOIN … ON 條件補全用）；呼叫端負責快取。沒給就只依欄名推測。 */
+  loadRelations?: () => Promise<ErRelation[]>;
   diagnostics?: SqlDiagnostic[];
   onSubmit?: (s: SqlSubmit) => void; // F6 / Ctrl+Enter 觸發（如「執行」）
   /** 選取文字變動時回呼（供呼叫端追蹤選取段，執行時只跑選取）。 */
@@ -159,6 +164,7 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
   schema,
   cross,
   snippets,
+  loadRelations,
   diagnostics,
   onSubmit,
   onSelectionChange,
@@ -265,6 +271,8 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
   // 跨庫設定：內容當相依鍵（物件本身每次 render 都是新的），回呼走 ref。
   const crossRef = useRef(cross);
   crossRef.current = cross;
+  const relRef = useRef(loadRelations);
+  relRef.current = loadRelations;
   const crossKey = cross
     ? `${(cross.databases ?? []).join("\0")}|${(cross.loaded ?? []).join("\0")}|${cross.currentDb ?? ""}`
     : "";
@@ -287,6 +295,10 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
             severity: m.severity,
             message: m.message,
           }));
+          // 語意檢查（找不到的表 / 限定欄位）：以已載入的結構為準，寧可漏報，所以只標 warning。
+          for (const m of lintSqlSemantics(doc, schema, crossRef.current?.currentDb ?? null)) {
+            out.push({ from: m.from, to: m.to, severity: "warning", message: m.message, source: "schema" });
+          }
           for (const d of diagnostics ?? []) {
             let from = d.from;
             let to = d.to;
@@ -327,6 +339,8 @@ const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor
         onNeedDatabase: (db) => crossRef.current?.onNeedDatabase?.(db) ?? Promise.resolve([]),
       };
       ext.push(lang.language.data.of({ autocomplete: sqlContextCompletion(schema, crossOpts) }));
+      // JOIN … ON 條件：外鍵優先、沒有外鍵就依欄名推測。loadRelations 走 ref（每次 render 都是新閉包）。
+      ext.push(lang.language.data.of({ autocomplete: joinOnCompletion(() => relRef.current?.() ?? Promise.resolve([]), schema) }));
     }
     // SQL 片段自動完成：把片段以 snippetCompletion 註冊為「此語言」的額外完成來源，
     // 與 schema 表/欄完成併存（CodeMirror 會合併語言資料的所有 autocomplete 來源）。

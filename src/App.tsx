@@ -1,6 +1,8 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
-import { api, hostLabel, isContainerKind, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
+import { api, hostLabel, isContainerKind, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit, type ErRelation } from "./api";
 import { useStore, type SelectedNode } from "./store";
+import { useVirtualRows } from "./useVirtualRows";
+import { formatRemaining } from "./connReadonly";
 import { useTheme } from "./theme";
 import { LANGUAGES, t, useLang, useT, type Lang } from "./i18n";
 import { APP_NAME } from "./brand";
@@ -60,7 +62,7 @@ import { friendlyDbError } from "./dbErrors";
 import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, isDismissed, useUpdateDialog, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
 import { sqlStoreKey } from "./queryDrafts";
-import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile } from "./ui";
+import { toast, uiChoose, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile } from "./ui";
 import { askOtpCode } from "./otpGate";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
@@ -71,12 +73,12 @@ import {
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
   formatSql, minifySql, transformKeywordCase, buildUseDatabase, hasExecutableSql,
-  extractNamedParams, substituteNamedParams, isInternalKafkaTopic, suggestQueryName, buildCellUpdate,
+  extractNamedParams, substituteNamedParams, paramLabel, isInternalKafkaTopic, suggestQueryName, buildCellUpdate,
 } from "./sql";
 import type { SavedQuery } from "./sql";
 import { snapshotFileName } from "./compareModel";
 import Select from "./ui/Select";
-import { buildExplainJsonSql, parseExplainPlan, planSummary, type PlanNode } from "./explain";
+import { buildExplainJsonSql, parseExplainPlan, parseMssqlShowplan, parseSqlitePlan, planSummary, type PlanNode } from "./explain";
 import { lintSql, MAX_SQL_CHARS as LINT_MAX_CHARS, type LintFinding, type LintSeverity } from "./sqlLint";
 import { buildReviewPrompt, buildTunePrompt, collectSchemaContext } from "./aiReview";
 import {
@@ -159,6 +161,9 @@ const TableProperties = lazyOverlay(() => import("./TableProperties"));
 const RoutinesDialog = lazyOverlay(() => import("./RoutinesDialog"));
 const SavedQueriesDialog = lazyOverlay(() => import("./SavedQueriesDialog"));
 const ReviewRunDialog = lazyOverlay(() => import("./ReviewRunDialog"));
+const DmlPreviewDialog = lazyOverlay(() => import("./DmlPreviewDialog"));
+const SqlFileDialog = lazyOverlay(() => import("./SqlFileDialog"));
+const ConnImportDialog = lazyOverlay(() => import("./ConnImportDialog"));
 const SpTestDialog = lazyOverlay(() => import("./SpTestDialog"));
 /** 預存程序整合測試支援的引擎（核心 sptest::session 有實作的）。 */
 const SP_TEST_KINDS = new Set<string>(["mssql", "postgres", "mysql", "mariadb"]);
@@ -184,6 +189,7 @@ const AboutDialog = lazyOverlay(() => import("./AboutDialog"));
 const UpdateDialog = lazyOverlay(() => import("./UpdateDialog"));
 const DbDataDictionary = lazyOverlay(() => import("./DbDataDictionary"));
 const TableCompareDialog = lazyOverlay(() => import("./TableCompareDialog"));
+const DataCompareDialog = lazyOverlay(() => import("./DataCompareDialog"));
 const ExplainPlan = lazyOverlay(() => import("./ExplainPlan"));
 const MongoExplainPlan = lazyOverlay(() => import("./MongoExplainPlan"));
 // 需要 ref 轉發的編輯器：直接 React.lazy（lazy 對 forwardRef 透明），使用處手動包 Suspense。
@@ -271,6 +277,7 @@ export default function App() {
   // 進階匯出連線（逐筆選連線 + 逐類選機密）。每次開啟都是全新狀態：路徑不記憶，
   // 必須現選 —— 見 ExportConnectionsDialog 檔頭。
   const [exportConnsOpen, setExportConnsOpen] = useState(false);
+  const [connImportOpen, setConnImportOpen] = useState(false);
   // 啟動鎖定閘門：checking（查詢中）→ locked（需驗證）/ open（已解鎖或未設鎖）。
   const [lockState, setLockState] = useState<"checking" | "locked" | "open">("checking");
   // 鎖定設定（密碼 / 生物辨識 / 閒置分鐘數）。鎖定畫面要據此決定顯示哪幾種解法。
@@ -439,6 +446,14 @@ export default function App() {
   };
   // 從加密檔匯入連線：輸入 passphrase 解密，機密寫回 keychain、設定 upsert，再重載連線清單。
   const importConnections = async () => {
+    // 兩種來源：db-kit 自己的加密匯出檔，或其他工具（DBeaver / DataGrip / .ncx）的連線設定。
+    const from = await uiChoose(t("要從哪裡匯入連線？"), {
+      title: t("匯入連線"),
+      confirmText: t("db-kit 加密匯出檔"),
+      altText: t("其他工具（DBeaver / DataGrip / .ncx）"),
+    });
+    if (from === null) return;
+    if (from === "alt") { setConnImportOpen(true); return; }
     const path = await pickOpenFile([{ name: t("db-kit 加密連線"), extensions: ["dbkitenc"] }]);
     if (!path) return;
     const passphrase = await uiPrompt(t("輸入匯入檔的加密密碼（passphrase）"), { title: t("解密匯入連線"), confirmText: t("匯入") });
@@ -605,6 +620,7 @@ export default function App() {
       {advSearch && (
         <AdvancedSearchDialog connId={advSearch.connId} kind={advSearch.kind} onClose={() => setAdvSearch(null)} />
       )}
+      {connImportOpen && <ConnImportDialog onClose={() => setConnImportOpen(false)} />}
       {exportConnsOpen && (
         <ExportConnectionsDialog
           connections={connections}
@@ -1310,7 +1326,7 @@ const kindSectionKey = (k: DbKind) => `db-kit:connKindCollapsed:${k}`;
 
 function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; onNewConnection: (kind?: DbKind, groupId?: string | null) => void; onEditSsh: (s: SshSession | null, folderId?: string | null) => void; onEditRd: (s: RdSession | null, folderId?: string | null) => void; onImportRdp: () => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
   const t = useT();
-  const { connections, connGroups, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
+  const { connections, connGroups, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns, tempUnlocks } = useStore();
   // ---- 連線群組（側欄「種類 > 群組」排版）----
   // 分組 UI（區塊標題、群組列、拖曳、改名、刪除、摺疊）在 sidebar/GroupedSection，與 SSH / 遠端桌面共用；
   // 這裡只負責把某個種類的排版變更合併回全域陣列並落地（群組與歸屬順序持久化在 connections.json）。
@@ -1532,7 +1548,9 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
   // 右鍵「DBA 審查結構」：開一個審查對話框（DDL / 索引 / 外鍵 / 表資訊交給 DBA 人設）。
   const [schemaReview, setSchemaReview] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [syncTbl, setSyncTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
+  const [dataCmpTbl, setDataCmpTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [dbTransfer, setDbTransfer] = useState<{ connId: string; db: string } | null>(null);
+  const [sqlFile, setSqlFile] = useState<{ connId: string; db: string } | null>(null);
   const [dbDict, setDbDict] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
   const [dataDict, setDataDict] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [dataGen, setDataGen] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
@@ -2544,6 +2562,8 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
       nodes.push(it(t("資料傳輸…"), () => setTransferTbl({ connId: m.connId, db: m.db, table: m.table })));
     if (supportsSchemaCompare(m.kind))
       nodes.push(it(t("結構比對…"), () => setSyncTbl({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
+    if (supportsSchemaCompare(m.kind) && !isView)
+      nodes.push(it(t("資料比對…"), () => setDataCmpTbl({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
     nodes.push({
       kind: "sub", label: t("傾印 SQL 檔案"), children: [
         it(t("結構"), () => dumpTableSql(m, false)),
@@ -2722,6 +2742,10 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
           <span className="truncate flex-1" title={`${c.name} · ${KIND_META[c.kind].label} · ${hostLabel(c)}`}>{c.name}</span>
           {isProdConn(c) && <span className="shrink-0 text-[9px] px-1 rounded bg-red-500/25 text-red-300/90" title={t("正式環境：執行查詢前會跳確認")}>PROD</span>}
           {readonlyConns[c.id] && <span className="shrink-0 text-[9px] px-1 rounded bg-amber-400/20 text-amber-300/90" title={t("唯讀模式：擋寫入 / DDL 與資料格編輯")}>{t("唯讀")}</span>}
+          {tempUnlocks[c.id] && (
+            <span className="shrink-0 text-[9px] px-1 rounded bg-orange-500/25 text-orange-200" data-temp-unlock={c.id}
+              title={t("唯讀連線暫時解鎖中，{time} 自動鎖回", { time: new Date(tempUnlocks[c.id]).toLocaleTimeString() })}>{t("暫時解鎖")}</span>
+          )}
           <button type="button" title={t("編輯連線")}
             onClick={(e) => { e.stopPropagation(); onEdit(c); }}
             className="w-5 h-5 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-fg/80 hidden group-hover:flex">
@@ -3220,9 +3244,11 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                     connId: menuConn.id,
                   }), false] as [string, () => void, boolean]]
                 : []),
+              ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres" || menuConn.kind === "mssql" || menuConn.kind === "oracle")
+                ? [[t("處理程序…"), () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
+                : []),
               ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres")
                 ? [
-                    [t("處理程序…"), () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
                     isMysqlFamily(menuConn.kind)
                       ? [t("使用者管理…"), () => setUserMgr({ connId: menuConn.id }), false] as [string, () => void, boolean]
                       : [t("使用者 / 角色…"), () => setServerQuery({
@@ -3239,7 +3265,17 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                     }), false] as [string, () => void, boolean],
                   ]
                 : []),
-              [readonlyConns[menu.id] ? t("關閉唯讀模式") : t("設為唯讀模式（擋寫入 / DDL）"), () => useStore.getState().setConnReadonly(menu.id, !readonlyConns[menu.id]), false],
+              // 唯讀連線可暫時解鎖 1 / 5 分鐘（只在記憶體，時間到自動鎖回；重開 App 也是唯讀）。
+              ...(tempUnlocks[menu.id]
+                ? [[t("立即恢復唯讀（剩 {left}）", { left: formatRemaining(tempUnlocks[menu.id] - Date.now()) }), () => useStore.getState().relockConn(menu.id), false] as [string, () => void, boolean]]
+                : readonlyConns[menu.id]
+                  ? [
+                      [t("暫時解鎖 1 分鐘"), () => useStore.getState().tempUnlockConn(menu.id, 60_000), false] as [string, () => void, boolean],
+                      [t("暫時解鎖 5 分鐘"), () => useStore.getState().tempUnlockConn(menu.id, 300_000), false] as [string, () => void, boolean],
+                    ]
+                  : []),
+              [readonlyConns[menu.id] || tempUnlocks[menu.id] ? t("關閉唯讀模式") : t("設為唯讀模式（擋寫入 / DDL）"),
+                () => useStore.getState().setConnReadonly(menu.id, !(readonlyConns[menu.id] || tempUnlocks[menu.id])), false],
               ...(isMcpKind(menuConn.kind)
                 ? [[t("接到 AI 工具（MCP）…"), () => useMcpDialog.getState().show(menuConn.id), false] as [string, () => void, boolean]]
                 : []),
@@ -3378,6 +3414,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                     arr.push([t("預存程序 / 觸發器…"), () => { if (dbConn) setRoutines({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
                     if (SP_TEST_KINDS.has(k ?? "")) arr.push([t("預存程序整合測試…"), () => useStore.getState().openSpTest({ connId: dbMenu.connId, database: dbMenu.db }), false]);
                     arr.push([t("匯出結構 SQL…"), () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
+                    if (supportsSchemaCompare(k)) arr.push([t("執行 SQL 檔…"), () => setSqlFile({ connId: dbMenu.connId, db: dbMenu.db }), false]);
                     if (isMysqlFamily(k)) arr.push([t("資料表大小報表…"), () => setServerQuery({
                       connId: dbMenu.connId, title: t("資料表大小：{db}", { db: dbMenu.db }), sql: tableSizesSql(dbMenu.db),
                     }), false]);
@@ -3691,7 +3728,17 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
           onClose={() => setSyncTbl(null)}
           onUse={(sql, targetConnId) => { sendQuery(targetConnId, sql); setSyncTbl(null); }} />
       )}
+      {dataCmpTbl && (
+        <DataCompareDialog connId={dataCmpTbl.connId} kind={dataCmpTbl.kind} database={dataCmpTbl.db} table={dataCmpTbl.table}
+          onClose={() => setDataCmpTbl(null)}
+          onUse={(sql, targetConnId) => { sendQuery(targetConnId, sql); setDataCmpTbl(null); }} />
+      )}
 
+      {sqlFile && (
+        <SqlFileDialog connId={sqlFile.connId} database={sqlFile.db}
+          onClose={() => setSqlFile(null)}
+          onDone={() => { void refreshTables(sqlFile.connId, sqlFile.db); }} />
+      )}
       {dbTransfer && (
         <DbTransferDialog connId={dbTransfer.connId} database={dbTransfer.db} onClose={() => setDbTransfer(null)} />
       )}
@@ -4420,6 +4467,27 @@ interface PaneResultState {
 const paneResults = new Map<string, PaneResultState>();
 // 分頁關閉後丟掉它的快取：分頁 id 會被回收（全部關光再開又是 __query__），
 // 留著會讓新開的分頁一掛上就掛著上一輪的結果。
+/** 視覺化解釋要送的語句：SQLite 是 EXPLAIN QUERY PLAN、SQL Server 是原查詢（交給後端 SHOWPLAN_XML），其餘是 JSON 計畫。 */
+function visualExplainSql(kind: DbKind, base: string): string | null {
+  const bare = base.replace(/;\s*$/, "");
+  if (kind === "sqlite") return `EXPLAIN QUERY PLAN ${bare}`;
+  if (kind === "mssql") return bare;
+  return buildExplainJsonSql(kind, base);
+}
+
+/** 依引擎取回並解析執行計畫；res 給「解析失敗時把原始輸出放到結果分頁」用。 */
+async function fetchVisualPlan(kind: DbKind, connId: string, explainSql: string, usePrefix: string | null):
+  Promise<{ node: PlanNode | null; raw: string | null; res?: QueryResult }> {
+  if (kind === "mssql") {
+    const xml = await api.mssqlShowplan(connId, explainSql);
+    return { node: parseMssqlShowplan(xml), raw: xml };
+  }
+  const res = await api.runQuery(connId, usePrefix ? `${usePrefix};\n${explainSql}` : explainSql);
+  if (kind === "sqlite") return { node: parseSqlitePlan(res.rows ?? []), raw: null, res };
+  const cell = res.rows?.[0]?.[0] ?? null;
+  return { node: cell ? parseExplainPlan(kind, cell) : null, raw: cell, res };
+}
+
 function pruneQueryPaneResults(liveTabIds: string[]) {
   for (const id of [...paneResults.keys()]) if (!liveTabIds.includes(id)) paneResults.delete(id);
 }
@@ -4486,7 +4554,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 改在編輯器位置放導引卡（開主題 / 佇列瀏覽器、叢集總覽、發布訊息），避免呈現一個按了必錯的輸入框。
   const supportsQueryEditor = supportsQueryEditorKind(kind);
   // 視覺化解釋（解釋分頁）支援的類型：能取得 JSON 執行計畫者（MySQL / PostgreSQL / 外部 gateway；SQLite 無）。
-  const supportsVisualExplain = !!kind && (isMysqlFamily(kind) || kind === "postgres" || kind === "external");
+  // SQLite 走 EXPLAIN QUERY PLAN（列 → 樹）；SQL Server 走 SHOWPLAN_XML（後端專屬連線，不執行查詢）。
+  const supportsVisualExplain = !!kind && (isMysqlFamily(kind) || kind === "postgres" || kind === "external" || kind === "sqlite" || kind === "mssql");
   // Mongo explain：獨立 gate —— 不可把 mongo 加進 EXPLAIN_KINDS（那同時 gate SQL 切割 / 參數 / 編輯器選擇）。
   const supportsMongoExplain = kind === "mongo";
   // 壓力測試：後端 runner 走 manager.query_capped，只對「SQL 家族」有意義（Mongo 的 DSL 與 Redis 的
@@ -4512,6 +4581,19 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const schema = schemaState.schema;
   // 交給編輯器的跨庫設定：dbList 用來認出 `xxx.` 的 xxx 是不是一個庫，
   // ensureDatabase 則在它還沒載入時當場抓進來（有磁碟快取就是零往返）。
+  // JOIN 條件補全用的外鍵：每個連線 + 庫只抓一次（er_model），抓不到就讓補全只靠欄名推測。
+  const relCacheRef = useRef(new Map<string, Promise<ErRelation[]>>());
+  const loadRelations = useCallback(() => {
+    if (!activeId || !kind || !schemaState.database) return Promise.resolve([] as ErRelation[]);
+    if (!(isMysqlFamily(kind) || kind === "postgres" || kind === "sqlite" || kind === "mssql" || kind === "oracle")) return Promise.resolve([] as ErRelation[]);
+    const key = `${activeId}:${schemaState.database}`;
+    let p = relCacheRef.current.get(key);
+    if (!p) {
+      p = api.erModel(activeId, schemaState.database).then((m) => m.relations).catch(() => [] as ErRelation[]);
+      relCacheRef.current.set(key, p);
+    }
+    return p;
+  }, [activeId, kind, schemaState.database]);
   const crossDb = useMemo(
     () => ({
       databases: dbList,
@@ -4539,7 +4621,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [editorSel, setEditorSel] = useState<string | null>(null);
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
-  const paramCount = useMemo(() => (supportsSqlEditor ? extractNamedParams(sql).length : 0), [supportsSqlEditor, sql]);
+  const paramCount = useMemo(() => (supportsSqlEditor ? extractNamedParams(sql, kind ?? undefined).length : 0), [supportsSqlEditor, sql, kind]);
   // 靜態審查（規則引擎）：純前端、不需執行查詢也不需要 AI，故隨打字即時更新。
   // 超過上限時 lintSql 會回空陣列（避免貼一份巨大腳本讓每次按鍵都卡住），
   // 但「沒問題」與「太長沒審」對使用者是兩件事，所以在這裡分開判並各自顯示。
@@ -4598,7 +4680,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 每個 await 之後比對——序號已被後續執行蓋掉（stale）就不再寫任何 state，
   // 避免「停止後馬上跑下一條」時舊查詢遲到的結果覆蓋新結果。
   const runSeqRef = useRef(0);
-  // 停止：① 請後端做伺服器端真取消（MySQL KILL QUERY / PG pg_cancel_backend）；
+  // 停止：① 請後端做伺服器端真取消（MySQL KILL QUERY / PG pg_cancel_backend / SQL Server KILL /
+  //   Oracle OCIBreak / SQLite progress handler 中斷）；
   // ② 不論後端支不支援，都立刻結束本端等待讓 UI 回到閒置。
   // 舊做法只設 cancelRef 旗標，而旗標只在多語句迴圈的語句邊界被檢查 —— 單條長查詢
   //（external gateway 更是不做前端切分、永遠只有一條）按下去完全沒有反應。
@@ -4613,7 +4696,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         else toast.info(t("已停止等待（查詢已結束或尚未送達伺服器）"));
       })
       .catch((e: any) => {
-        // ERR_UNSUPPORTED＝此驅動沒有旁路取消通道（SQLite / Redis / 外部 gateway…）。
+        // ERR_UNSUPPORTED＝此驅動沒有旁路取消通道（Redis / MongoDB / 外部 gateway…）。
         // 其他錯誤（如連線池被長查詢佔滿、取不到連線送 KILL）要照實說，別誤報成「不支援」。
         // 兩種情況本端都已停等，但伺服器端可能還在跑 → 導引使用者用行程清單手動終止。
         if (e?.code === "ERR_UNSUPPORTED") toast.info(t("已停止等待；此連線不支援伺服器端取消，查詢可能仍在執行（可用行程清單終止）"));
@@ -4646,6 +4729,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [showMore, setShowMore] = useState(false);
   // 壓力測試對話框（對標 SQLQueryStress）：帶目前編輯器內容進去，開窗後與查詢面板互不干擾。
   const [stressOpen, setStressOpen] = useState(false);
+  // 影響列預覽（不執行）：記下送出當下的連線 / 庫 / 語句，對話框開著時編輯器再改也不影響。
+  const [dmlPreview, setDmlPreview] = useState<{ connId: string; database: string; sql: string } | null>(null);
   // 工具列寬度自適應（三段）：0 圖示+文字 → 1 次要鈕只留圖示 → 2 無下拉的次要鈕整顆折進「更多」。
   //
   // 為何量測而非寫死斷點：標籤寬度取決於語言與連線種類（Kibana / AI 生成 等按鈕按 kind 出現），
@@ -5029,11 +5114,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 回傳 null = 使用者取消。執行與「審查並執行」共用，兩個入口代入的結果必須一致。
   const substituteParamsInteractively = async (q: string): Promise<string | null> => {
     if (!kind || !(EXPLAIN_KINDS.includes(kind) || kind === "external" || kind === "mssql")) return q;
-    const params = extractNamedParams(q);
+    const params = extractNamedParams(q, kind);
     if (!params.length) return q;
     const values: Record<string, string> = {};
     for (const p of params) {
-      const v = await uiPrompt(t("參數 :{p} 的值", { p }), { title: t("參數化查詢"), placeholder: `:${p}`, confirmText: t("確定") });
+      const v = await uiPrompt(t("參數 {p} 的值", { p: paramLabel(p) }), { title: t("參數化查詢"), placeholder: paramLabel(p), confirmText: t("確定") });
       if (v === null) return null; // 任一取消 → 中止整次執行
       values[p] = v;
     }
@@ -5052,6 +5137,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     if (q === null) return;
     // 與查詢分頁送出語句一致：有選擇目前資料庫才帶（MySQL / PG 以前綴切換）；其餘由後端依連線判斷。
     useStore.getState().openReviewRun({ connId: activeId, database: supportsDbSelect ? queryDb : "", sql: q, origin: "query" });
+  };
+  const openDmlPreview = async () => {
+    if (!activeId || !kind) return;
+    const raw = queryToRun();
+    if (!raw.trim()) {
+      toast.info(t("沒有可執行的語句。"));
+      return;
+    }
+    const q = await substituteParamsInteractively(raw);
+    if (q === null) return;
+    setDmlPreview({ connId: activeId, database: supportsDbSelect ? queryDb : "", sql: q });
   };
 
   // SQL 編輯器送出：有選取→跑選取；F6→整段；否則→跑游標所在語句（Ctrl+Enter）。
@@ -5293,7 +5389,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     if (stmts.length > 1) { toast.info(t("視覺化解釋一次只能解析一條語句，請反白要解釋的語句")); return; }
     const base = (stmts[0] ?? "").trim();
     if (!base) { toast.info(t("沒有可解釋的語句")); return; }
-    const explainSql = kind ? buildExplainJsonSql(kind, base) : null;
+    const explainSql = kind ? visualExplainSql(kind, base) : null;
     if (!explainSql) { toast.info(t("此查詢無法產生執行計畫")); return; }
     setRunning(true);
     setPlan(null); // 清掉舊計畫，讓「解釋中…」狀態顯示，避免誤讀前一次的計畫
@@ -5307,11 +5403,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         supportsDbSelect && queryDb && !hasLeadingDbSwitch(base)
           ? buildUseDatabase(kind!, queryDb)
           : null;
-      const res = await api.runQuery(activeId, usePrefix ? `${usePrefix};\n${explainSql}` : explainSql);
-      const cell = res.rows?.[0]?.[0] ?? null;
-      const node = cell ? parseExplainPlan(kind!, cell) : null;
-      if (node) { setPlan(node); setPlanRaw(cell); setPlanErr(null); }
-      else { setPlan(null); setPlanRaw(null); setPlanErr(t("無法解析執行計畫 JSON（原始輸出見「結果」分頁）")); setResult(res); setBottomTab("result"); }
+      const { node, raw, res } = await fetchVisualPlan(kind!, activeId, explainSql, usePrefix);
+      if (node) { setPlan(node); setPlanRaw(raw); setPlanErr(null); }
+      else {
+        setPlan(null); setPlanRaw(null);
+        setPlanErr(kind === "mssql" ? t("無法解析 SQL Server 執行計畫") : t("無法解析執行計畫（原始輸出見「結果」分頁）"));
+        if (res) { setResult(res); setBottomTab("result"); }
+      }
       setElapsed(performance.now() - t0);
     } catch (e: any) {
       setElapsed(performance.now() - t0);
@@ -6239,6 +6337,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                             </span>
                           )}
                         </button>
+                        {supportsReviewRun(kind) && (
+                          <button type="button" onClick={() => { setShowMore(false); void openDmlPreview(); }} disabled={running || !sql.trim()}
+                            data-testid="dml-preview-open"
+                            title={t("把 UPDATE / DELETE / INSERT 改成唯讀 SELECT，先看會改到哪些列（不執行、不送 AI；有選取時只處理選取段）")}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
+                            <Icon icon={Eye} size={13} className="text-fg/45" />{t("預覽影響列…")}
+                          </button>
+                        )}
                         <button type="button" onClick={() => { setShowMore(false); askAiReview(); }} disabled={!sql.trim()}
                           title={t("用選定的 DBA 人設審查這段 SQL（可多位會審；DBA 會自己查資料庫驗證）")}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
@@ -6281,7 +6387,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               )}
             </div>
             {paramCount > 0 && (
-              <span className="text-[11px] text-sky-300/80 px-1" title={t("偵測到具名參數 :name；執行時會逐一提示輸入並安全代入")}>
+              <span className="text-[11px] text-sky-300/80 px-1" title={t("偵測到查詢參數（:name、${name}、#{name}，PostgreSQL 以外也認 ?）；執行時會逐一提示輸入並安全代入")}>
                 ⟨{paramCount} {t("參數⟩")}
               </span>
             )}
@@ -6344,6 +6450,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 schema={schema}
                 cross={crossDb}
                 snippets={editorSnippets}
+                loadRelations={loadRelations}
                 onSubmit={onEditorSubmit}
                 onSelectionChange={setEditorSel}
                 onContextMenu={(p) => setAiMenu(p)}
@@ -6624,7 +6731,6 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                         {/* 摺疊用 display:none 而非卸載：保留該格排序 / 篩選 / 選取狀態 */}
                         <div style={collapsed ? { display: "none" } : undefined} className="max-h-[45vh] overflow-auto">
                           <ResultTable result={s.res}
-                            maxRender={Math.max(100, Math.floor(2000 / resultSets.length))}
                             conn={resultConn} writable={!activeReadonly} sql={s.sql}
                             onViewChange={i === activeIdx ? setResultView : undefined} />
                         </div>
@@ -6708,6 +6814,15 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           )}
         </div>
       </div>
+      {dmlPreview && (
+        <DmlPreviewDialog connId={dmlPreview.connId} database={dmlPreview.database} sql={dmlPreview.sql}
+          onClose={() => setDmlPreview(null)}
+          onReviewRun={() => {
+            const p = dmlPreview;
+            setDmlPreview(null);
+            useStore.getState().openReviewRun({ connId: p.connId, database: p.database, sql: p.sql, origin: "query" });
+          }} />
+      )}
       {stressOpen && activeId && (
         // 帶「要跑的那段」而非整個編輯器：有反白用反白，與執行鍵的語意一致。
         <StressDialog
@@ -6861,10 +6976,9 @@ function ReviewPanel({ findings, skipped, hasSql, onJump }: {
 
 // memo：多結果集堆疊時，父層（QueryPane）因作用中表格回報 resultView 而頻繁重渲染（每個篩選鍵擊 / 排序點擊），
 // 不 memo 會讓其餘 N-1 個大表格跟著全數 reconcile；props（result / onViewChange / maxRender）皆為穩定 identity。
-const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender = 2000, conn, writable = false, sql }: {
+const ResultTable = memo(function ResultTable({ result, onViewChange, conn, writable = false, sql }: {
   result: QueryResult;
   onViewChange?: (rows: (string | null)[][]) => void;
-  maxRender?: number;
   // 「這個結果集對得回哪張表」用的連線（驅動支援時才由 QueryPane 給；否則 undefined＝純檢視）。
   // 不含唯讀判斷：唯讀連線也要能產生 UPDATE 腳本，只是不能就地改（見 writable）。
   // 必須是 memo 過的穩定參考，否則下面解析目標表的 effect 每次 render 都重跑。
@@ -6997,10 +7111,10 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   // 新查詢結果到達時重置排序 / 篩選 / 選取（避免沿用上一個查詢的狀態，例如欄序失效或舊篩選字）。
   useEffect(() => { setSort(null); setRfilter(""); setSelected(null); setRangeEnd(null); setPatch({}); }, [result]);
 
-  // 大結果集只渲染前 N 列，避免數萬列 DOM 卡死 UI；複製 / 匯出仍取全部。
-  // 多結果集堆疊時由父層按格數縮小上限（總 DOM 列數有預算）。
-  const MAX_RENDER = maxRender;
-  const rendered = viewRows.length > MAX_RENDER ? viewRows.slice(0, MAX_RENDER) : viewRows;
+  // 大結果集用列虛擬化：全部已取回的列都能捲到，DOM 只放可視範圍（見 useVirtualRows）。
+  // 表頭上方還有 34px 的 sticky 工具列，鍵盤導覽捲動時要一起扣掉。
+  const rendered = viewRows;
+  const vr = useVirtualRows(viewRows.length, 34);
 
   // 欄寬：共用 useColWidths（依內容自動量測 + 拖曳表頭右緣調整 + 雙擊恢復自動寬）。
   // 結果集是暫態的，不做 localStorage 持久化；同一組欄位的重跑（F6）保留手動調過的寬度。
@@ -7059,6 +7173,11 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
     if (pkValues.some((v) => v === null)) { toast.error(t("這一列的主鍵是 NULL，無法定位，請改從資料表分頁編輯。")); return; }
     const newValue = setNull ? null : rawText;
     if ((row[c] ?? null) === newValue) return;
+    const prodConn = useStore.getState().connections.find((x) => x.id === editConn.connId);
+    if (prodConn && isProdConn(prodConn) && !(await uiConfirm(
+      t("這是正式環境連線。確定要{what}？", { what: t("把 {table}.{col} 寫回資料庫", { table: editTarget.table, col: result.columns[c] }) }),
+      { title: t("正式環境"), danger: true, confirmText: t("確定") },
+    ))) return;
     try {
       const n = await api.updateCell(editConn.connId, editTarget.db, editTarget.table, {
         column: result.columns[c],
@@ -7116,7 +7235,12 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   const activeCell = rangeEnd ?? selected;
   const activeCellRef = useRef<HTMLTableCellElement>(null);
   useEffect(() => {
-    activeCellRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!activeCell) return;
+    // 虛擬化時目標列可能還沒在 DOM 裡：先把列捲進範圍，下一格再讓儲存格處理水平方向。
+    vr.ensureVisible(activeCell.r);
+    const raf = requestAnimationFrame(() => activeCellRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" }));
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, rangeEnd]);
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -7253,7 +7377,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
           </span>
         )}
       </div>
-      <table className="text-sm border-collapse"
+      <table ref={vr.tableRef} className="text-sm border-collapse"
         style={{ tableLayout: "fixed", width: tableWidth(48) }}>
         <thead className="sticky top-[34px] bg-bar">
           <tr>
@@ -7274,7 +7398,9 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
           </tr>
         </thead>
         <tbody className="mono">
-          {rendered.map((row, i) => {
+          {vr.padTop > 0 && <tr aria-hidden style={{ height: vr.padTop }}><td colSpan={result.columns.length + 1} /></tr>}
+          {rendered.slice(vr.start, vr.end).map((row, k) => {
+            const i = vr.start + k;
             const rowSel = selected?.r === i;
             return (
             <tr key={i} className={rowSel ? "bg-accent/[0.06]" : "hover:bg-fg/5"}>
@@ -7318,14 +7444,9 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
               ))}
             </tr>
           )})}
+          {vr.padBottom > 0 && <tr aria-hidden style={{ height: vr.padBottom }}><td colSpan={result.columns.length + 1} /></tr>}
         </tbody>
       </table>
-
-      {viewRows.length > MAX_RENDER && (
-        <div className="px-3 py-2 text-xs text-amber-300/80 bg-amber-500/5 border-t border-fg/10">
-          {t("僅渲染前 {rendered} / 已取回 {fetched} 列（避免卡頓）；「複製 / 匯出」仍取全部已取回列。", { rendered: MAX_RENDER.toLocaleString(), fetched: viewRows.length.toLocaleString() })}
-        </div>
-      )}
 
       {/* 浮層一律 portal 到 body：多結果集的每一格 <section> 帶 content-visibility:auto，
           它隱含 contain:paint，會讓 position:fixed 的子元素改以該 section 為定位基準並被裁切 ——

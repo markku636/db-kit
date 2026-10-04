@@ -280,3 +280,95 @@ async fn backup_mode_writes_files_without_executing() {
     assert_eq!(e.dump("t").await, before);
     let _ = &e.db;
 }
+
+/// 影響列預覽：UPDATE / DELETE 列出會被改到的列（依 WHERE），帶鍵的 INSERT 列出會撞鍵的既有列，
+/// 而且預覽本身不改任何資料。
+#[tokio::test]
+async fn preview_lists_affected_rows_without_writing() {
+    let e = env("preview").await;
+    e.exec("CREATE TABLE acct (id INTEGER PRIMARY KEY, owner TEXT, balance INTEGER); \
+            INSERT INTO acct VALUES (1, 'amy', 10), (2, 'bob', 20), (3, 'cat', 30), (4, 'dan', 40);")
+        .await;
+    let script = "UPDATE acct SET balance = balance + 1 WHERE balance >= 30;\n\
+                  DELETE FROM acct WHERE owner = 'amy';\n\
+                  INSERT INTO acct (id, owner, balance) VALUES (2, 'dup', 0), (9, 'new', 0);\n\
+                  SELECT * FROM acct;";
+    let p = super::preview::preview(&e.mgr, &e.id, "", script).await.unwrap();
+    assert_eq!(p.statements.len(), 4);
+
+    let upd = &p.statements[0];
+    assert!(upd.write);
+    assert_eq!(upd.estimated_rows, Some(2));
+    let ids: Vec<_> = upd.rows.iter().map(|r| r[0].clone().unwrap()).collect();
+    assert_eq!(ids, vec!["3", "4"], "UPDATE 預覽的是 WHERE 命中的列");
+    assert_eq!(upd.columns, vec!["id", "owner", "balance"]);
+
+    let del = &p.statements[1];
+    assert_eq!(del.rows.len(), 1);
+    assert_eq!(del.rows[0][1].as_deref(), Some("amy"));
+
+    let ins = &p.statements[2];
+    assert_eq!(ins.rows.len(), 1, "只有 id=2 已存在：{:?}", ins.rows);
+    assert_eq!(ins.rows[0][0].as_deref(), Some("2"));
+
+    let sel = &p.statements[3];
+    assert!(!sel.write);
+    assert!(sel.rows.is_empty(), "讀取語句不擷取");
+
+    // 預覽不得改資料。
+    let q = e.mgr.query_capped(&e.id, "SELECT SUM(balance), COUNT(*) FROM acct", 0).await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("100"));
+    assert_eq!(q.rows[0][1].as_deref(), Some("4"));
+}
+
+/// 執行 SQL 檔（sqlfile.rs）：整份在同一條專屬連線上跑——暫存表與交易跨句仍有效；
+/// 遇錯即停 vs. 繼續執行兩種模式的計數與行號正確。
+#[tokio::test]
+async fn sql_file_runs_on_one_session() {
+    let e = env("sqlfile").await;
+    let path = e.dir.join("script.sql");
+    std::fs::write(
+        &path,
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);\n\
+         CREATE TEMP TABLE scratch (v TEXT);\n\
+         INSERT INTO scratch VALUES ('a'), ('b');\n\
+         BEGIN;\n\
+         INSERT INTO t (v) SELECT v FROM scratch;\n\
+         COMMIT;\n\
+         INSERT INTO nope VALUES (1);\n\
+         INSERT INTO t (v) VALUES ('c');\n",
+    )
+    .unwrap();
+    let p = path.display().to_string();
+    let noop = |_: crate::sqlfile::SqlFileProgress| {};
+
+    let stop = crate::sqlfile::run(&e.mgr, &e.id, "", &p, &Default::default(), "sf-1", &noop).await.unwrap();
+    assert_eq!((stop.total, stop.executed, stop.failed), (8, 6, 1));
+    assert!(stop.stopped_on_error);
+    assert_eq!(stop.errors[0].line, 7, "錯誤行號指到 INSERT INTO nope");
+    let q = e.mgr.query_capped(&e.id, "SELECT COUNT(*) FROM t", 0).await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("2"), "暫存表的列經交易寫進 t：證明整份在同一條連線上");
+
+    e.exec("DROP TABLE t").await;
+    let opts = crate::sqlfile::SqlFileOptions { continue_on_error: true };
+    let cont = crate::sqlfile::run(&e.mgr, &e.id, "", &p, &opts, "sf-2", &noop).await.unwrap();
+    assert_eq!((cont.executed, cont.failed), (7, 1));
+    assert!(!cont.stopped_on_error);
+    let q = e.mgr.query_capped(&e.id, "SELECT COUNT(*) FROM t", 0).await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("3"));
+}
+
+/// JSON 匯入（import.rs）：null / 缺鍵寫成 NULL、空字串在「空欄位視為 NULL」關閉時保留為空字串。
+#[tokio::test]
+async fn json_import_keeps_null_and_empty_string_apart() {
+    let e = env("jsonimport").await;
+    e.exec("CREATE TABLE p (id INTEGER PRIMARY KEY, name TEXT, note TEXT, active INTEGER);").await;
+    let opts: crate::import::ImportOptions = serde_json::from_value(serde_json::json!({ "empty_as_null": false })).unwrap();
+    let content = r#"[{"id": 1, "name": "a", "note": "", "active": true}, {"id": 2, "name": null, "active": false}]"#;
+    let r = crate::import::import_json(&e.mgr, &e.id, "", "p", content, &opts).await.unwrap();
+    assert_eq!((r.imported, r.failed), (2, 0), "{:?}", r.errors);
+    let q = e.mgr.query_capped(&e.id, "SELECT id, name IS NULL, note IS NULL, note = '', active FROM p ORDER BY id", 0).await.unwrap();
+    let v = |r: usize, c: usize| q.rows[r][c].clone().unwrap_or_default();
+    assert_eq!((v(0, 2), v(0, 3), v(0, 4)), ("0".into(), "1".into(), "1".into()), "空字串保留、true → 1");
+    assert_eq!((v(1, 1), v(1, 2), v(1, 4)), ("1".into(), "1".into(), "0".into()), "null 與缺鍵 → NULL、false → 0");
+}

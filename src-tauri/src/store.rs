@@ -159,7 +159,12 @@ impl From<&ConnectionConfig> for PersistedConnection {
             ssh_username: c.ssh_username.clone(),
             ssh_auth_method: c.ssh_auth_method,
             ssh_private_key_path: c.ssh_private_key_path.clone(),
-            options: c.options.clone(),
+            // proxy 密碼只在記憶體：存檔時抽掉（由 save_connection 寫進 keychain）。
+            options: {
+                let mut o = c.options.clone();
+                o.remove(crate::db::proxy::PROXY_PASSWORD_OPTION);
+                o
+            },
             // 群組不隨連線設定往返（見 group_id 欄位說明）；upsert_in 會補回既有值。
             group_id: None,
         }
@@ -520,6 +525,11 @@ pub async fn load_connection_in(dir: &Path, id: &str) -> AppResult<ConnectionCon
     let mut cfg = p.to_config();
     cfg.password = kc_get(id).unwrap_or_default();
     cfg.otp_secret = kc_get(&otp_account(id)).unwrap_or_default();
+    if cfg.options.contains_key(crate::db::proxy::PROXY_OPTION) {
+        if let Some(pw) = kc_get(&proxy_account(id)) {
+            cfg.options.insert(crate::db::proxy::PROXY_PASSWORD_OPTION.to_string(), pw);
+        }
+    }
     if cfg.ssh_enabled {
         cfg.ssh_password = kc_get(&ssh_account(id)).unwrap_or_default();
         cfg.ssh_passphrase = kc_get(&ssh_passphrase_account(id)).unwrap_or_default();
@@ -596,6 +606,11 @@ pub fn ssh_passphrase_account(id: &str) -> String {
 /// 外部 gateway 驅動的 OTP secret keychain account。
 pub fn otp_account(id: &str) -> String {
     format!("{id}.otp")
+}
+
+/// 連線經 SOCKS5 / HTTP proxy 時的 proxy 密碼（keychain 帳號）。
+pub fn proxy_account(id: &str) -> String {
+    format!("{id}.proxy")
 }
 
 /// 寫入 keychain。secret 為空字串時視為「刪除該項」。

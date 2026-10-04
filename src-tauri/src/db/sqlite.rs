@@ -15,6 +15,25 @@ use crate::error::{AppError, AppResult};
 /// - 只有單一資料庫（檔案本身），list_databases 回傳 "main"
 pub struct SqliteDriver {
     pool: SqlitePool,
+    /// 執行中互動查詢的取消旗標。SQLite 沒有旁路連線可送取消，改在該連線上掛 progress handler：
+    /// 每執行約 PROGRESS_OPS 個 VM 指令檢查一次旗標，設了就讓 SQLite 以 SQLITE_INTERRUPT 中止當前語句。
+    running: std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<u64, std::sync::Arc<std::sync::atomic::AtomicBool>>>>,
+}
+
+/// progress handler 的檢查間隔（VM 指令數）：夠密讓取消在毫秒內生效，又不拖慢一般查詢。
+const PROGRESS_OPS: i32 = 10_000;
+static RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// 查詢期間把旗標留在 `running`，drop 時移除。
+struct RunningGuard {
+    set: std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<u64, std::sync::Arc<std::sync::atomic::AtomicBool>>>>,
+    id: u64,
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        self.set.lock().remove(&self.id);
+    }
 }
 
 #[async_trait::async_trait]
@@ -43,7 +62,7 @@ impl DatabaseDriver for SqliteDriver {
             .await
             .map_err(|e| AppError::Connect(e.to_string()))?;
 
-        let driver = Self { pool };
+        let driver = Self { pool, running: Default::default() };
         driver.ping().await?;
         Ok(driver)
     }
@@ -389,39 +408,46 @@ impl DatabaseDriver for SqliteDriver {
     }
 
     async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
-        // 寫入語句若帶 RETURNING（SQLite 3.35+ 支援），改走 fetch 取回回傳列。
-        if is_read_sql(sql) {
-            use futures::TryStreamExt;
-            let mut stream = sqlx::query(sql).fetch(&self.pool);
-            let mut rows: Vec<SqliteRow> = Vec::new();
-            let mut truncated = false;
-            // 逐列取到 cap 即停（cap=0 不限）；SQLite 為本地檔，早停真的省 I/O。
-            while let Some(row) = stream
-                .try_next()
-                .await
-                .map_err(|e| AppError::Query(e.to_string()))?
-            {
-                if cap > 0 && rows.len() >= cap {
-                    truncated = true;
-                    break;
-                }
-                rows.push(row);
-            }
-            let mut result = rows_to_result(&rows);
-            result.truncated = truncated;
-            Ok(result)
-        } else {
-            let res = sqlx::query(sql)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| AppError::Query(e.to_string()))?;
-            Ok(QueryResult {
-                columns: vec![],
-                rows: vec![],
-                rows_affected: res.rows_affected(),
-                truncated: false,
-            })
+        // 取具名的一條連線並掛上取消用的 progress handler（cancel_query 設旗標 → 當前語句中止）。
+        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let f = std::sync::Arc::clone(&flag);
+            let mut h = conn.lock_handle().await.map_err(|e| AppError::Query(e.to_string()))?;
+            h.set_progress_handler(PROGRESS_OPS, move || !f.load(std::sync::atomic::Ordering::Relaxed));
         }
+        let id = RUN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.running.lock().insert(id, std::sync::Arc::clone(&flag));
+        let _guard = RunningGuard { set: std::sync::Arc::clone(&self.running), id };
+        let out = self.query_capped_on(&mut conn, sql, cap).await;
+        // 連線要回池：拆掉 handler，免得下一個借到它的查詢帶著這個（可能已設的）旗標而被誤中止。
+        // 拆不掉就不還池，直接關掉這條連線。
+        let removed = match conn.lock_handle().await {
+            Ok(mut h) => {
+                h.remove_progress_handler();
+                true
+            }
+            Err(_) => false,
+        };
+        if !removed {
+            drop(conn.detach());
+        }
+        if flag.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Err(AppError::Query(m)) = &out {
+                if m.contains("interrupt") {
+                    return Err(AppError::Query(t!("查詢已取消").into()));
+                }
+            }
+        }
+        out
+    }
+
+    async fn cancel_query(&self) -> AppResult<usize> {
+        let flags: Vec<_> = self.running.lock().values().cloned().collect();
+        for f in &flags {
+            f.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(flags.len())
     }
 
     fn pool_status(&self) -> PoolStatus {
@@ -750,6 +776,49 @@ impl DatabaseDriver for SqliteDriver {
 }
 
 impl SqliteDriver {
+    /// 開一條不經連線池的專屬連線（acquire 後 detach）：執行 SQL 檔時 BEGIN / 暫存表 / PRAGMA 要留在同一條連線。
+    pub(crate) async fn dedicated_connection(&self) -> AppResult<sqlx::SqliteConnection> {
+        let pooled = self.pool.acquire().await.map_err(|e| AppError::Connect(e.to_string()))?;
+        Ok(pooled.detach())
+    }
+
+    /// query_capped 的本體：在指定連線上執行（讀取逐列取到 cap，寫入回 rows_affected / RETURNING 列）。
+    async fn query_capped_on(&self, conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>, sql: &str, cap: usize) -> AppResult<QueryResult> {
+        // 寫入語句若帶 RETURNING（SQLite 3.35+ 支援），改走 fetch 取回回傳列。
+        if is_read_sql(sql) {
+            use futures::TryStreamExt;
+            let mut stream = sqlx::query(sql).fetch(&mut **conn);
+            let mut rows: Vec<SqliteRow> = Vec::new();
+            let mut truncated = false;
+            // 逐列取到 cap 即停（cap=0 不限）；SQLite 為本地檔，早停真的省 I/O。
+            while let Some(row) = stream
+                .try_next()
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?
+            {
+                if cap > 0 && rows.len() >= cap {
+                    truncated = true;
+                    break;
+                }
+                rows.push(row);
+            }
+            let mut result = rows_to_result(&rows);
+            result.truncated = truncated;
+            Ok(result)
+        } else {
+            let res = sqlx::query(sql)
+                .execute(&mut **conn)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?;
+            Ok(QueryResult {
+                columns: vec![],
+                rows: vec![],
+                rows_affected: res.rows_affected(),
+                truncated: false,
+            })
+        }
+    }
+
     /// 從 PRAGMA table_info 取主鍵欄位（pk > 0），依 pk 序號排列。
     async fn primary_key(&self, table: &str) -> AppResult<Vec<String>> {
         let sql = format!("PRAGMA table_info({})", quote_ident(table));

@@ -3712,6 +3712,341 @@ const CASES = {
     check("取消後回到未收藏狀態", (await page.locator('button[title*="一鍵收藏目前查詢"]').count()) > 0);
   },
 
+  // 大結果集列虛擬化：2 萬列全部捲得到，但 DOM 只放可視範圍；鍵盤 Ctrl+End 跳到最後一格也要捲過去。
+  async "result-grid-virtualized"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("SELECT * FROM big_rows");
+    await page.keyboard.press("Control+Enter");
+    await page.waitForFunction(() => document.body.innerText.includes("row-1"), null, { timeout: 10_000 }).catch(() => {});
+    const domRows = await page.evaluate(() => {
+      const tb = [...document.querySelectorAll("tbody.mono")].find((b) => b.textContent?.includes("row-1"));
+      return tb ? tb.querySelectorAll("tr").length : -1;
+    });
+    check("2 萬列結果只渲染可視範圍的列", domRows > 0 && domRows < 300, `dom rows=${domRows}`);
+    check("不再出現「僅渲染前 N 列」截斷提示", !(await appText(page)).includes("僅渲染前"));
+    // 點第一格後 Ctrl+End → 最後一列最後一格，必須被捲進來（虛擬化前它根本不存在於 DOM）。
+    // 點儲存格會開檢視窗（開窗後 300ms 內不收關閉），等一下再 Esc 關掉，焦點回到結果格。
+    await page.getByText("row-1", { exact: true }).first().click();
+    await sleep(500);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+    await page.keyboard.press("Control+End");
+    await page.waitForFunction(() => document.body.innerText.includes("row-20000"), null, { timeout: 5000 }).catch(() => {});
+    const dbg = await page.evaluate(() => {
+      const a = document.activeElement;
+      const tb = [...document.querySelectorAll("tbody.mono")].find((b) => b.querySelector("td"));
+      let p = tb?.parentElement; while (p && !/auto|scroll/.test(getComputedStyle(p).overflowY)) p = p.parentElement;
+      return `active=${a?.tagName}.${a?.className?.toString().slice(0, 40)} scroller=${p?.className?.toString().slice(0, 40)} st=${p?.scrollTop} sh=${p?.scrollHeight} ch=${p?.clientHeight}`;
+    });
+    check("Ctrl+End 捲到第 20000 列", (await appText(page)).includes("row-20000"), dbg);
+  },
+
+  // 影響列預覽：更多 → 預覽影響列… 只列出會被改到的列，不執行；可一鍵轉交審查並執行。
+  async "dml-preview"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("UPDATE orders SET status = 'shipped' WHERE order_id IN (1001, 1002)");
+    await page.locator('button[title*="更多工具"]').first().click();
+    await sleep(300);
+    const item = page.locator('[data-testid="dml-preview-open"]');
+    check("更多選單有「預覽影響列…」", (await item.count()) === 1);
+    await item.click();
+    await page.locator("[data-dml-preview-stmt]").first().waitFor({ timeout: 8000 }).catch(() => {});
+    const body = await appText(page);
+    check("列出影響列數", (await page.locator("[data-dml-preview-count]").first().innerText()).includes("2"), body.replace(/\s+/g, " ").slice(0, 200));
+    check("列出會被改到的列", body.includes("1001") && body.includes("1002"));
+    check("讀取語句不列出", (await page.locator("[data-dml-preview-stmt]").count()) === 1);
+    await page.getByRole("button", { name: "審查並執行…", exact: true }).click();
+    await sleep(800);
+    check("轉交審查並執行後預覽關閉", (await page.locator("[data-dml-preview-stmt]").count()) === 0);
+  },
+
+  // 執行 SQL 檔：資料庫右鍵 → 選檔 → 執行；遇錯即停時列出錯誤行號與沒執行到的句數。
+  async "sql-file-run"(page) {
+    // 唯讀連線：選單照樣有（與其他寫入項目一致），但對話框說明原因、執行鈕停用。
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("資料庫右鍵：執行 SQL 檔…", items.some((i) => i.includes("執行 SQL 檔")), items.join(" | "));
+    await page.getByText("執行 SQL 檔…", { exact: true }).click();
+    await page.locator("[data-sql-file-pick]").waitFor({ timeout: 8000 });
+    check("唯讀連線說明不能執行", (await appText(page)).includes("此連線為唯讀模式"));
+    check("未選檔時執行鈕停用", await page.locator("[data-sql-file-run]").isDisabled());
+    await page.keyboard.press("Escape");
+    await sleep(400);
+
+    await page.getByText("analytics-pg", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("warehouse", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("執行 SQL 檔…", { exact: true }).click();
+    await page.locator("[data-sql-file-pick]").waitFor({ timeout: 8000 });
+    await page.evaluate(() => { window.__DBKIT_DIALOG_OPEN__ = "C:\\work\\migrate_v2.sql"; });
+    await page.locator("[data-sql-file-pick]").click();
+    await sleep(300);
+    check("顯示選到的檔名", (await page.locator("[data-sql-file-path]").innerText()).includes("migrate_v2.sql"));
+    await page.locator("[data-sql-file-run]").click();
+    await page.locator("[data-sql-file-report]").waitFor({ timeout: 8000 }).catch(() => {});
+    const body = await appText(page);
+    check("報告列出成功 / 失敗", body.includes("成功 6") && body.includes("失敗 1"), body.replace(/\s+/g, " ").slice(0, 240));
+    check("錯誤帶行號", body.includes("第 18 行"));
+    check("遇錯即停時說明沒執行到的句數", body.includes("沒有執行到的語句：5 句"));
+  },
+
+  // JSON 匯入：選 .json 時改顯示 JSON 說明、收起 CSV 才有的分隔字元 / 表頭選項，匯入成功提示標 JSON。
+  async "import-json"(page) {
+    // prod-mysql 在 fixtures 是唯讀（右鍵沒有匯入），用可寫的 analytics-pg。
+    await page.getByText("analytics-pg", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("warehouse", { exact: true }).first().click();
+    await sleep(700);
+    await page.getByText("資料表", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="fact_orders"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="fact_orders"]').first().click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("資料表右鍵有匯入精靈", items.some((i) => i.includes("匯入精靈")), items.join(" | "));
+    await page.getByText("匯入精靈…", { exact: true }).click();
+    await sleep(500);
+    check("標題寫 CSV / Excel / JSON", (await appText(page)).includes("匯入 CSV / Excel / JSON"));
+    await page.evaluate(() => { window.__DBKIT_DIALOG_OPEN__ = "C:\\data\\orders.json"; });
+    await page.getByRole("button", { name: "選擇檔案…", exact: true }).click();
+    await sleep(600);
+    const body = await appText(page);
+    check("JSON 顯示欄名來源說明", body.includes("欄名取自物件的鍵"), body.replace(/\s+/g, " ").slice(0, 200));
+    check("JSON 收起分隔字元選項", !body.includes("分隔字元"));
+    check("預覽列出 JSON 的欄與列", body.includes("order_id") && body.includes("9003"));
+    await page.getByRole("button", { name: "匯入", exact: true }).click();
+    await sleep(600);
+    check("匯入成功提示標 JSON", (await appText(page)).includes("已匯入 3 列（JSON）"));
+  },
+
+  // SQL Server 也有處理程序清單；但 PG 專用的「使用者 / 角色」「伺服器變數」不能跟著出現，也沒有「只取消查詢」。
+  async "process-list-mssql"(page) {
+    await page.getByText("reporting-mssql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("reporting-mssql", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("SQL Server 連線右鍵有處理程序…", items.some((i) => i.includes("處理程序")), items.join(" | "));
+    check("SQL Server 不出現 PG / MySQL 專用項目", !items.some((i) => i.includes("使用者 / 角色") || i.includes("伺服器變數")));
+    await page.getByText("處理程序…", { exact: true }).click();
+    await page.getByText("處理程序 / 工作階段", { exact: true }).waitFor({ timeout: 8000 });
+    await sleep(500);
+    check("SQL Server 列只有「終止」沒有「取消」", (await page.getByRole("button", { name: "終止", exact: true }).count()) > 0
+      && (await page.getByRole("button", { name: "取消", exact: true }).count()) === 0);
+  },
+
+  // ER 圖匯出：SVG 是由模型組出的獨立向量圖（含表名、裁到內容），PNG 是同一份 SVG 光柵化。
+  async "er-export"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click();
+    await sleep(700);
+    await page.getByText("資料表", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="orders"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="orders"]').first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("逆向至模型…", { exact: true }).click();
+    await page.locator('[data-er-export="svg"]').waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => !document.querySelector('[data-er-export="svg"]')?.disabled, null, { timeout: 8000 }).catch(() => {});
+    await page.locator('[data-er-export="svg"]').click();
+    await sleep(500);
+    const svg = await page.evaluate(() => (window.__DBKIT_SAVED_FILES__ ?? []).filter((f) => typeof f.content === "string" && f.content.startsWith("<svg")).pop()?.content ?? "");
+    check("SVG 匯出寫出 <svg> 並含表名", svg.startsWith("<svg") && svg.includes(">orders<"), svg.slice(0, 120));
+    await page.locator('[data-er-export="png"]').click();
+    await page.waitForFunction(() => (window.__DBKIT_SAVED_FILES__ ?? []).some((f) => f.base64), null, { timeout: 8000 }).catch(() => {});
+    const png = await page.evaluate(() => (window.__DBKIT_SAVED_FILES__ ?? []).filter((f) => f.base64).pop()?.base64 ?? "");
+    // PNG 檔頭 \x89PNG 的 base64 是 iVBORw0KGgo。
+    check("PNG 匯出是真的 PNG", png.startsWith("iVBORw0KGgo") && png.length > 2000, `len=${png.length}`);
+  },
+
+  // 語意診斷 + JOIN 條件補全：打錯表名畫黃線；JOIN … ON 依 ER 模型的外鍵提示條件。
+  async "editor-semantic-lint-join"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("SELECT * FROM orderz");
+    await page.waitForSelector(".cm-lintRange-warning", { timeout: 4000 }).catch(() => {});
+    check("找不到的表畫黃線", (await page.locator(".cm-lintRange-warning").count()) > 0);
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("SELECT * FROM orders o JOIN customers c ON ");
+    await page.keyboard.press("Control+Space");
+    await page.waitForSelector(".cm-tooltip-autocomplete", { timeout: 4000 }).catch(() => {});
+    const opts = await page.locator(".cm-tooltip-autocomplete li").allTextContents();
+    check("JOIN … ON 提示外鍵條件", opts.some((o) => o.includes("c.customer_id = o.customer_id")), opts.slice(0, 5).join(" | "));
+    check("正確的表與欄位沒有黃線", (await page.locator(".cm-lintRange-warning").count()) === 0);
+  },
+
+  // 儲存格檢視器：JSON 有樹狀檢視（點節點複製 JSONPath），base64 圖片直接預覽，任何值都能看十六進位。
+  async "cell-viewers"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("SELECT * FROM cell_views");
+    await page.keyboard.press("Control+Enter");
+    await page.waitForFunction(() => document.body.innerText.includes("A-1"), null, { timeout: 8000 }).catch(() => {});
+    await page.getByText(/"order"/).first().click();
+    await page.locator("[data-cell-views]").waitFor({ timeout: 4000 }).catch(() => {});
+    check("JSON 儲存格有檢視切換", (await page.locator("[data-cell-views]").count()) === 1);
+    await page.locator("[data-cell-views]").getByRole("radio", { name: "JSON 樹" }).click();
+    await page.locator("[data-json-tree]").waitFor({ timeout: 4000 }).catch(() => {});
+    check("JSON 樹顯示巢狀鍵", (await page.locator("[data-json-tree]").innerText()).includes("items"));
+    await page.locator("[data-json-tree]").getByText('"A-1"').click();
+    await sleep(300);
+    check("點節點複製 JSONPath", (await appText(page)).includes("$.order.items[0].sku"));
+    await page.locator("[data-cell-views]").getByRole("radio", { name: "十六進位" }).click();
+    check("十六進位傾印", /^00000000 {2}7b 22 6f/.test(await page.locator("[data-cell-hex]").innerText()));
+    await page.keyboard.press("Escape");
+    await sleep(500);
+    await page.getByText(/^iVBORw0KGgo/).first().click();
+    await page.locator("[data-cell-image]").waitFor({ timeout: 4000 }).catch(() => {});
+    check("base64 圖片預設就開圖片檢視", (await page.locator("[data-cell-image]").count()) === 1);
+  },
+
+  // 唯讀連線暫時解鎖：右鍵「暫時解鎖 1 分鐘」→ 唯讀徽章換成「暫時解鎖」→「立即恢復唯讀」換回來。
+  async "readonly-temp-unlock"(page) {
+    const row = page.locator("[data-temp-unlock]");
+    await page.getByText("prod-mysql", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    let items = await menuItems(page);
+    check("唯讀連線右鍵有暫時解鎖 1 / 5 分鐘", items.includes("暫時解鎖 1 分鐘") && items.includes("暫時解鎖 5 分鐘"), items.join(" | "));
+    await page.getByText("暫時解鎖 1 分鐘", { exact: true }).click();
+    await sleep(300);
+    check("出現「暫時解鎖」徽章", (await row.count()) === 1);
+    check("存檔仍是唯讀", ((await page.evaluate(() => localStorage.getItem("db-kit:readonlyConns"))) ?? "").includes('"c-mysql":true'));
+    await page.getByText("prod-mysql", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    items = await menuItems(page);
+    const relock = items.find((i) => i.startsWith("立即恢復唯讀"));
+    check("解鎖中改成「立即恢復唯讀（剩 m:ss）」", !!relock && /剩 \d:\d\d/.test(relock), items.join(" | "));
+    await page.getByText(/^立即恢復唯讀/).click();
+    await sleep(300);
+    check("鎖回後徽章消失", (await row.count()) === 0);
+  },
+
+  // 結構比對 → 審查並執行（含回滾）：同步腳本交給審查並執行產生 rollback.sql；選項面板有「偵測欄位改名」。
+  async "compare-review-run-handoff"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+    await sleep(300);
+    await page.getByText("結構比對…", { exact: true }).click();
+    await page.getByRole("button", { name: /比對選取的/ }).waitFor({ timeout: 8000 });
+    await page.locator("select").filter({ has: page.locator('option[value="shop_archive"]') })
+      .filter({ hasNot: page.locator('option[value="information_schema"]') }).first().selectOption("shop_archive");
+    await sleep(400);
+    await page.getByRole("button", { name: /^選項/ }).first().click().catch(() => {});
+    await sleep(300);
+    check("選項面板有「偵測欄位改名」", (await page.locator('[data-compare-opt="detect_renames"]').count()) === 1);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+    await page.getByRole("button", { name: /比對選取的/ }).click();
+    await page.getByText("同步語句", { exact: false }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    const btn = page.locator("[data-sync-review-run]");
+    check("同步腳本面板有「審查並執行（含回滾）…」", (await btn.count()) === 1);
+    // prod-mysql 在 fixtures 是唯讀 → 按鈕停用（與「直接執行」一致）。
+    check("唯讀目標時停用", await btn.isDisabled());
+  },
+
+  // 視覺化解釋擴到 SQLite（EXPLAIN QUERY PLAN）與 SQL Server（SHOWPLAN_XML）。
+  async "visual-explain-sqlite-mssql"(page) {
+    const explainOn = async (conn, query) => {
+      await page.getByText(conn, { exact: true }).first().dblclick();
+      await sleep(1200);
+      await page.getByText("查詢", { exact: true }).first().click();
+      await page.waitForSelector(".cm-content", { timeout: 8000 });
+      await page.locator(".cm-content").first().click();
+      await page.keyboard.press("Control+a");
+      await page.keyboard.press("Delete");
+      await page.keyboard.type(query);
+      await page.locator('button[title*="更多工具"]').first().click();
+      await sleep(300);
+      await page.getByText("視覺化解釋", { exact: true }).click();
+      await sleep(1200);
+      return appText(page);
+    };
+    let body = await explainOn("local.sqlite", "SELECT * FROM orders o JOIN customers c ON c.id = o.customer_id");
+    check("SQLite：計畫列出表與全表掃描", body.includes("orders") && body.includes("全表掃描") && body.includes("customers"), body.replace(/\s+/g, " ").slice(-300));
+    body = await explainOn("reporting-mssql", "SELECT * FROM Sales s JOIN Regions r ON r.id = s.region_id");
+    check("SQL Server：SHOWPLAN 解析出 Nested Loops 與表名", body.includes("Nested Loops") && body.includes("Sales") && body.includes("Regions"), body.replace(/\s+/g, " ").slice(-300));
+  },
+
+  // 從其他工具匯入連線：工具列「匯入連線」→ 選「其他工具」→ 選 .ncx → 預覽 → 匯入（不帶密碼）。
+  async "conn-import-other-tools"(page) {
+    await page.evaluate(() => {
+      window.__DBKIT_TEXT_FILES__ = {
+        "C:\\exports\\team.ncx": '<?xml version="1.0"?><Connections Ver="1.5"><Connection ConnectionName="erp-mysql" ConnType="MYSQL" Host="erp.local" Port="3307" UserName="root" Password="X"/><Connection ConnectionName="prod-mysql" ConnType="MYSQL" Host="10.20.0.15" Port="3306" UserName="app"/><Connection ConnectionName="weird" ConnType="DB2" Host="h"/></Connections>',
+      };
+      window.__DBKIT_DIALOG_OPEN__ = ["C:\\exports\\team.ncx"];
+    });
+    await page.getByRole("button", { name: /匯入連線/ }).first().click();
+    await sleep(300);
+    await page.getByRole("button", { name: /其他工具/ }).click();
+    await page.locator("[data-conn-import-pick]").waitFor({ timeout: 8000 });
+    await page.locator("[data-conn-import-pick]").click();
+    await page.locator("[data-conn-import-list]").waitFor({ timeout: 8000 }).catch(() => {});
+    const body = await appText(page);
+    check("預覽列出 3 個連線與來源", body.includes("erp-mysql") && body.includes("weird") && body.includes(".ncx"), body.replace(/\s+/g, " ").slice(0, 300));
+    check("同名的標「可能已存在」", body.includes("可能已存在"));
+    check("不支援的種類標出來", body.includes("不支援"));
+    check("預設只勾可匯入且不重複的（1 個）", (await page.locator("[data-conn-import-go]").innerText()).includes("1"));
+    await page.locator("[data-conn-import-go]").click();
+    await sleep(600);
+    const saves = await page.evaluate(() => window.__DBKIT_CONN_SAVES__ ?? []);
+    const erp = saves.find((c) => c.name === "erp-mysql");
+    check("建成 db-kit 連線（主機 / 埠 / 帳號）", !!erp && erp.host === "erp.local" && erp.port === 3307 && erp.username === "root" && erp.kind === "mysql");
+    check("密碼不匯入", !!erp && erp.password === "");
+  },
+
+  // DB 連線的網路路徑：不用 SSH 時可填 SOCKS5 / HTTP Proxy；用 SSH 時可選已存的 SSH 主機當跳板機。兩者擇一。
+  async "conn-proxy-and-jump"(page) {
+    await page.getByRole("button", { name: "連線", exact: true }).first().click();
+    await page.getByRole("radiogroup", { name: "連線類型" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByRole("radio", { name: "PostgreSQL" }).first().click();
+    await sleep(300);
+    check("未勾 SSH 時有 Proxy 欄", (await page.locator("[data-conn-proxy]").count()) === 1);
+    await page.locator("[data-conn-proxy] input").first().fill("socks5://ops@proxy.corp:1080");
+    await sleep(200);
+    check("填了 Proxy 才出現密碼欄", (await page.getByText("Proxy 密碼", { exact: true }).count()) === 1);
+    await page.locator("[data-conn-proxy] input[type=password]").fill("s3cret");
+    await page.getByText("透過 SSH Tunnel 連線", { exact: true }).click();
+    await sleep(300);
+    check("勾 SSH 後 Proxy 欄收起（兩者擇一）", (await page.locator("[data-conn-proxy]").count()) === 0);
+    const jumpOpts = await page.locator("[data-conn-ssh-jump] option").allTextContents();
+    check("跳板主機下拉列出已存的 SSH 主機", jumpOpts.includes("直接連線") && jumpOpts.some((o) => o.includes("web-01")), jumpOpts.join(" | "));
+    // 改回不用 SSH，存檔：proxy 設定進 options（密碼由後端轉存 keychain）。
+    await page.getByText("透過 SSH Tunnel 連線", { exact: true }).click();
+    await sleep(200);
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await sleep(600);
+    const saved = await page.evaluate(() => (window.__DBKIT_CONN_SAVES__ ?? []).pop());
+    check("存檔帶 proxy_url 與 proxy_password", saved?.options?.proxy_url === "socks5://ops@proxy.corp:1080" && saved?.options?.proxy_password === "s3cret",
+      JSON.stringify(saved?.options ?? null));
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。
@@ -4247,6 +4582,7 @@ const CASES = {
     let items = await menuItems(page);
     check("資料表右鍵：結構比對…", items.some((i) => i.includes("結構比對")), items.join(" | "));
     check("資料表右鍵：舊的「資料比對 / 同步」已移除", !items.some((i) => i.includes("資料比對 / 同步")));
+    check("資料表右鍵：獨立的「資料比對…」", items.some((i) => i === "資料比對…" || i.startsWith("資料比對…")), items.join(" | "));
     await page.getByText("結構比對…", { exact: true }).click();
     // 整套跑時機器忙，固定 sleep 會偶發抓不到——等到對話框真的畫出來。
     await page.getByText("比對目標", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
@@ -4256,6 +4592,9 @@ const CASES = {
     check("單表比對預設目標不是來源自己",
       !(await appText(page)).includes("來源與目標是同一張表"));
     const cmpBtn = page.getByRole("button", { name: "比對", exact: true }).first();
+    // 目標庫清單非同步載入、載完才預設一個非來源的庫；整套跑時機器忙，等它就緒再判（不是要求「同步就亮」）。
+    await cmpBtn.waitFor({ timeout: 8000 }).catch(() => {});
+    for (let i = 0; i < 40 && !(await cmpBtn.isEnabled()); i++) await sleep(100);
     check("單表比對「比對」鈕開啟即可按", await cmpBtn.isEnabled());
     await cmpBtn.click();
     await sleep(1500);
@@ -4362,6 +4701,38 @@ const CASES = {
   },
 
   // ---- 檔案 / 資料夾 / 二進位比對 ----
+  // 資料比對獨立成一個對話框：只產生同步 SQL、送到目標的查詢編輯器，不在這裡直接套用。
+  async "data-compare-dialog"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click();
+    await sleep(700);
+    await page.getByText("資料表", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="orders"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="orders"]').first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("資料比對…", { exact: true }).click();
+    const runBtn = page.locator("[data-data-compare-run]");
+    await runBtn.waitFor({ timeout: 8000 });
+    // 目標庫清單非同步載入，載完才會預設一個非來源的庫、鈕才亮。
+    await page.waitForFunction(() => !document.querySelector("[data-data-compare-run]")?.disabled, null, { timeout: 5000 }).catch(() => {});
+    check("資料比對對話框開啟、預設目標可按", await runBtn.isEnabled());
+    check("對話框沒有「直接套用」", !(await appText(page)).includes("直接執行"));
+    await page.locator('[data-data-compare-opt="include_deletes"]').check();
+    await runBtn.click();
+    await page.locator("[data-data-compare-result]").waitFor({ timeout: 8000 });
+    const body = await appText(page);
+    check("摘要列出新增 / 更新 / 刪除", /新增 3/.test(body) && /更新 2/.test(body) && /刪除 1/.test(body), body.replace(/\s+/g, " ").slice(0, 240));
+    check("只在目標的欄位有提示", body.includes("legacy_flag"));
+    check("預設顯示更新樣本", (await page.locator('[data-data-compare-samples="updates"]').count()) === 1);
+    await page.getByRole("radio", { name: /新增 \(3\)/ }).click();
+    check("切到新增樣本", (await page.locator('[data-data-compare-samples="inserts"]').innerText()).includes("128735"));
+    check("同步 SQL 顯示", (await page.locator("[data-data-compare-sql]").innerText()).includes("UPDATE"));
+    await page.locator("[data-data-compare-send]").click();
+    await sleep(600);
+    check("送出後對話框關閉", (await page.locator("[data-data-compare-run]").count()) === 0);
+    check("SQL 送進查詢編輯器", (await appText(page)).includes("128735"));
+  },
   async "compare-text"(page) {
     await startCompare(page, "文字比對", "C:\\work\\old\\app.conf", "C:\\work\\new\\app.conf");
     await page.waitForSelector('[data-testid="text-compare"] .cm-mergeView', { timeout: 8000 });

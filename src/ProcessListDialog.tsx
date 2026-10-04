@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Activity } from "lucide-react";
 import { api, DbKind, QueryResult } from "./api";
+import { CAN_CANCEL_QUERY, LIST_SQL, killSql } from "./processList";
 import { toast, uiConfirm } from "./ui";
 import { Modal, Button } from "./ui/index";
 import { useColWidths, ColResizer, COL_FONT_XS } from "./ui/useColWidths";
@@ -9,16 +10,6 @@ import { useT } from "./i18n";
 // hooks 不能條件呼叫：res 尚未載入時以穩定的空陣列餵 useColWidths。
 const NO_COLS: string[] = [];
 const NO_ROWS: (string | null)[][] = [];
-
-// 列出目前連線 / 工作階段（致敬 Navicat 的伺服器監控）。沿用既有 runQuery（清單）+ execDdl（終止），免後端改動。
-const LIST_SQL: Partial<Record<DbKind, string>> = {
-  mysql: "SHOW FULL PROCESSLIST",
-  mariadb: "SHOW FULL PROCESSLIST",
-  postgres:
-    "SELECT pid, usename, client_addr::text, datname, state, " +
-    "EXTRACT(EPOCH FROM (now() - query_start))::int AS sec, query " +
-    "FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND state IS NOT NULL ORDER BY query_start NULLS LAST",
-};
 
 export default function ProcessListDialog({ connId, kind, onClose }: {
   connId: string;
@@ -61,14 +52,12 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
     useColWidths(res?.columns ?? NO_COLS, res?.rows ?? NO_ROWS, { font: COL_FONT_XS });
 
   const kill = async (row: (string | null)[], queryOnly: boolean) => {
-    const id = (row[0] ?? "").trim();
-    if (!/^\d+$/.test(id)) { toast.error(t("無法辨識工作階段 ID")); return; }
+    const k = killSql(kind, row, queryOnly);
+    if (!k) { toast.error(t("無法辨識工作階段 ID")); return; }
+    const { id, sql } = k;
     const verb = queryOnly ? t("取消查詢") : t("終止連線");
     const ok = await uiConfirm(t("{verb}（工作階段 {id}）？", { verb, id }), { title: verb, danger: true, confirmText: verb });
     if (!ok) return;
-    const sql = kind === "postgres"
-      ? `SELECT pg_${queryOnly ? "cancel" : "terminate"}_backend(${id})`
-      : `KILL ${queryOnly ? "QUERY " : ""}${id}`;
     try {
       await api.execDdl(connId, sql);
       toast.success(t("已送出{verb} {id}", { verb, id }));
@@ -124,8 +113,10 @@ export default function ProcessListDialog({ connId, kind, onClose }: {
                 {res.rows.map((row, i) => (
                   <tr key={i} className="border-t border-fg/5 hover:bg-fg/5">
                     <td className="px-2 py-1 text-center whitespace-nowrap">
-                      <button type="button" onClick={() => kill(row, true)} title={t("取消目前查詢（保留連線）")}
-                        className="text-[11px] px-1.5 py-0.5 rounded text-amber-300 hover:bg-amber-500/15">{t("取消")}</button>
+                      {CAN_CANCEL_QUERY[kind] && (
+                        <button type="button" onClick={() => kill(row, true)} title={t("取消目前查詢（保留連線）")}
+                          className="text-[11px] px-1.5 py-0.5 rounded text-amber-300 hover:bg-amber-500/15">{t("取消")}</button>
+                      )}
                       <button type="button" onClick={() => kill(row, false)} title={t("終止整個連線")}
                         className="text-[11px] px-1.5 py-0.5 rounded text-red-400 hover:bg-red-500/15">{t("終止")}</button>
                     </td>

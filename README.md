@@ -62,15 +62,15 @@
 
 | 範疇 | 內容 |
 |------|------|
-| 資料庫 | MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis：可編輯資料格、多欄篩選排序、DDL 與索引、EXPLAIN 視覺化、ER 圖、預存程序、匯入匯出（CSV / Excel / JSON / SQL）、備份與排程 |
+| 資料庫 | MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis：可編輯資料格（大結果集虛擬捲動；儲存格 JSON 樹 / 十六進位 / 圖片檢視）、多欄篩選排序、DDL 與索引、EXPLAIN 視覺化（含 SQLite / SQL Server）、ER 圖（匯出 SVG / PNG）、預存程序、匯入匯出（CSV / Excel / JSON）、執行 SQL 檔、處理程序清單、備份與排程 |
 | 訊息與搜尋 | Kafka（訊息瀏覽與即時 tail、消費者群組、Schema Registry、Connect、ACL、監控告警）、RabbitMQ、Elasticsearch / OpenSearch |
-| 查詢工作區 | 自動完成（含跨庫）、多結果集堆疊、視覺化查詢建構器、片段庫、`:name` 參數、查詢歷史與收藏、進階物件搜尋（`Ctrl+Shift+G`）、命令面板（`Ctrl+K`） |
-| 結構與資料 | 結構比對與同步（跨庫 / 跨連線 / 對快照）、資料傳輸、資料列比對、整庫文件 |
-| 安全網 | **審查並執行**（AI 審查 → 逐句前像 → 回滾腳本 → 執行 → 差異報告）、SQL 靜態審查、DBA 人設審查、結果列數上限與查詢逾時、啟動鎖定 |
+| 查詢工作區 | 自動完成（含跨庫、JOIN 外鍵條件）、找不到的表 / 欄位即時標示、多結果集堆疊、可取消執行中的查詢、視覺化查詢建構器、片段庫、參數（`:name`、`${name}`、`#{name}`、`?`）、查詢歷史與收藏、進階物件搜尋（`Ctrl+Shift+G`）、命令面板（`Ctrl+K`） |
+| 結構與資料 | 結構比對與同步（跨庫 / 跨連線 / 對快照、欄位改名偵測、交給審查並執行產生回滾腳本）、資料傳輸、資料列比對、整庫文件 |
+| 安全網 | **審查並執行**（AI 審查 → 逐句前像 → 回滾腳本 → 執行 → 差異報告）、寫入前預覽影響列、唯讀連線暫時解鎖、正式環境寫入確認、SQL 靜態審查、DBA 人設審查、結果列數上限與查詢逾時、啟動鎖定 |
 | 測試與效能 | SQL 壓力測試（TPS、p50–p99）、預存程序整合測試（自動 rollback、基線回歸、跨引擎比對、JUnit） |
 | AI 工具整合 | **MCP 伺服器**（`dbk mcp`）：Claude Code / Codex / Cursor / VS Code / Claude Desktop / Windsurf 一鍵寫入設定；單一或多連線、預設唯讀，可開放經預覽與核准的寫入（自動回滾腳本）；stdio 或本機 HTTP |
 | AI | 對話助手（`@` 指定範圍、`/` 指令）、編輯器 AI 動作（解釋 / 最佳化 / 修正 / 轉方言，先看差異再套用）、AI 資源庫（人設 / 技能 / 提示都是 Markdown 檔） |
-| 遠端與容器 | SSH 終端機 + SFTP / FTP（斷點續傳、跳板機、操作紀錄）、Docker / Registry / Harbor、Kubernetes（port-forward 連叢集內資料庫）、遠端桌面 RDP / VNC / RustDesk |
+| 遠端與容器 | SSH 終端機 + SFTP / FTP（斷點續傳、跳板機、操作紀錄）、資料庫連線經 SSH 跳板或 SOCKS5 / HTTP Proxy、Docker / Registry / Harbor、Kubernetes（port-forward 連叢集內資料庫）、遠端桌面 RDP / VNC / RustDesk |
 | 檔案比對 | 文字 / 資料夾 / 二進位比對與同步，兩邊可以是本機或 SSH / FTP 主機 |
 | 介面 | 7 套主題、介面與程式碼字級分開調、六種語言（繁中 / 简中 / English / 日本語 / 한국어 / Tiếng Việt）、App 內更新 |
 

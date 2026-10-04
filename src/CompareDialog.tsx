@@ -484,6 +484,11 @@ export default function CompareDialog({ connId, kind, sourceDb, onClose, onUse }
                 header={t("同步：{src} → {dst}", { src: srcLabel, dst: dstLabel })}
                 dstConnId={result.target.mode === "live" ? result.target.connId : null} dstLabel={dstLabel}
                 onSend={dstConnId ? (sql) => onUse(sql, dstConnId) : undefined}
+                onReviewRun={result.target.mode === "live" ? (sql) => {
+                  if (result.target.mode !== "live") return;
+                  useStore.getState().openReviewRun({ connId: result.target.connId, database: result.target.db, sql, origin: "compare" });
+                  onClose();
+                } : undefined}
                 onExecute={result.target.mode === "live" ? execute : undefined}
                 objectOn={objectOn} />
             </div>
@@ -564,6 +569,7 @@ function CompareOptionsForm({ value, onChange }: { value: CompareOptions; onChan
       {row("ignore_comments", t("忽略註解"), t("只差註解的欄位視為相同。"))}
       {row("ignore_defaults", t("忽略預設值"))}
       {row("match_by_content", t("索引 / 外鍵以定義配對"), t("名稱不同但定義相同時視為改名，而不是一刪一增。"))}
+      {row("detect_renames", t("偵測欄位改名"), t("同一張表刪一欄、增一欄且型別相同（配對唯一）時，產生 RENAME COLUMN 保留資料，而不是 DROP + ADD。是推測，請逐句確認。"))}
       <div className="px-1 pt-1.5 border-t border-fg/10 text-[10px] uppercase tracking-wide text-fg/40">{t("比對範圍")}</div>
       {row("include_views", t("視圖"))}
       {row("include_routines", t("預存程序 / 函式"))}

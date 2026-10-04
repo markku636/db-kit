@@ -10,7 +10,7 @@
 - 某次改版後，回頭比對**改版前存下的快照**，確認只動了該動的東西。
 - 接手一個環境時，拿它跟已知正確的環境比，先看清楚差在哪。
 
-> 這個功能只比**結構**，不比資料列的內容。要比資料列（產生 INSERT / UPDATE / DELETE）請用命令列的 `dbk compare data`，見 [CLI 指南](./cli.md#compare--schema--結構--資料比對與快照)。
+> 這個功能只比**結構**，不比資料列的內容。要比資料列（產生 INSERT / UPDATE / DELETE），單表可在資料表右鍵「**資料比對…**」：以主鍵比對兩表、列出新增 / 更新 / 刪除的樣本並產生同步 SQL，**只產生不套用**，按「送到目標的查詢編輯器」再執行；整庫或排程用命令列的 `dbk compare data`，見 [CLI 指南](./cli.md#compare--schema--結構--資料比對與快照)。
 
 支援 MySQL、MariaDB、PostgreSQL、SQL Server、Oracle、SQLite。
 

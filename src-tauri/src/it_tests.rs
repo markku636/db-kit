@@ -222,6 +222,198 @@ fn persisted_connection_drops_secrets() {
 
 /// 前導註解不得讓查詢改走 execute 路徑（issue #5）。
 ///
+/// 執行 SQL 檔（MySQL）：mysqldump 風格的 DELIMITER 觸發器段落、`USE` 與 SET 工作階段變數都在同一條連線上生效
+/// （容器：scripts/dev-sptest，埠 13307）。
+#[tokio::test]
+#[ignore]
+async fn mysql_sql_file_with_delimiter_trigger() {
+    let mgr = crate::manager::ConnectionManager::new();
+    let mut c = cfg(DbKind::Mysql, "127.0.0.1", 13307, "root", "test1234", None);
+    c.id = "it-sqlfile-my".into();
+    mgr.connect(c).await.expect("dev-sptest mysql 要先起來");
+    let dir = std::env::temp_dir().join(format!("dbkit-sqlfile-my-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dump.sql");
+    std::fs::write(
+        &path,
+        "DROP DATABASE IF EXISTS dbkit_sqlfile;
+         CREATE DATABASE dbkit_sqlfile;
+         USE dbkit_sqlfile;
+         SET @bump = 100;
+         CREATE TABLE t (id INT PRIMARY KEY, v INT);
+         DELIMITER ;;
+         CREATE TRIGGER trg BEFORE INSERT ON t FOR EACH ROW BEGIN SET NEW.v = NEW.v + 1; END ;;
+         DELIMITER ;
+         INSERT INTO t VALUES (1, @bump);
+",
+    )
+    .unwrap();
+    let noop = |_: crate::sqlfile::SqlFileProgress| {};
+    let r = crate::sqlfile::run(&mgr, "it-sqlfile-my", "", &path.display().to_string(), &Default::default(), "sf-my", &noop)
+        .await
+        .unwrap();
+    assert_eq!((r.total, r.executed, r.failed), (7, 7, 0), "{:?}", r.errors);
+    let q = mgr.query_capped("it-sqlfile-my", "SELECT v FROM dbkit_sqlfile.t WHERE id = 1", 0).await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("101"), "SET 的工作階段變數與觸發器都生效");
+    let _ = mgr.query("it-sqlfile-my", "DROP DATABASE dbkit_sqlfile").await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 經 SOCKS5 proxy 連 PostgreSQL：測試內起一個最小 SOCKS5 轉發器（免認證、只做 CONNECT），
+/// 連線 options 設 proxy_url 後由 manager 開本地轉發埠，查詢照常（容器：scripts/dev-sptest，埠 15433）。
+#[tokio::test]
+#[ignore]
+async fn postgres_via_socks5_proxy() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let proxy_port = l.local_addr().unwrap().port();
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let h2 = hits.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = l.accept().await.unwrap();
+            let hits = h2.clone();
+            tokio::spawn(async move {
+                let mut g = [0u8; 2];
+                s.read_exact(&mut g).await.unwrap();
+                let mut m = vec![0u8; g[1] as usize];
+                s.read_exact(&mut m).await.unwrap();
+                s.write_all(&[5, 0]).await.unwrap();
+                let mut head = [0u8; 5];
+                s.read_exact(&mut head).await.unwrap();
+                let mut name = vec![0u8; head[4] as usize];
+                s.read_exact(&mut name).await.unwrap();
+                let mut pb = [0u8; 2];
+                s.read_exact(&mut pb).await.unwrap();
+                let target = format!("{}:{}", String::from_utf8(name).unwrap(), u16::from_be_bytes(pb));
+                let mut up = tokio::net::TcpStream::connect(target).await.unwrap();
+                s.write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0]).await.unwrap();
+                hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let _ = tokio::io::copy_bidirectional(&mut s, &mut up).await;
+            });
+        }
+    });
+    let mgr = crate::manager::ConnectionManager::new();
+    let mut c = cfg(DbKind::Postgres, "127.0.0.1", 15433, "postgres", "test1234", Some("postgres"));
+    c.id = "it-proxy-pg".into();
+    c.options.insert(crate::db::proxy::PROXY_OPTION.into(), format!("socks5://127.0.0.1:{proxy_port}"));
+    mgr.connect(c).await.expect("經 proxy 連線");
+    let q = mgr.query("it-proxy-pg", "SELECT 42").await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("42"));
+    assert!(hits.load(std::sync::atomic::Ordering::Relaxed) >= 2, "試撥 + 至少一條 driver 連線都經過 proxy");
+    mgr.disconnect("it-proxy-pg").await;
+}
+
+/// SQL Server 估計執行計畫：SHOWPLAN_XML 在專屬連線上取得，不執行查詢；池裡的連線不受 SET 影響。
+#[tokio::test]
+#[ignore]
+async fn mssql_showplan_xml_estimated_plan() {
+    use crate::db::mssql::MssqlDriver;
+    let mut c = cfg(DbKind::Mssql, "127.0.0.1", 11435, "sa", "Test1234!", Some("master"));
+    c.options.insert("trust_server_certificate".into(), "true".into());
+    let d = MssqlDriver::connect(&c).await.expect("dev-sptest mssql 要先起來");
+    let xml = d.showplan_xml("SELECT o.name FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id WHERE o.object_id > 100").await.unwrap();
+    assert!(xml.contains("<ShowPlanXML") && xml.contains("<RelOp"), "{}", &xml[..xml.len().min(200)]);
+    // 池裡的連線照常回結果（SHOWPLAN 只開在那條專屬連線上）。
+    let q = d.query("SELECT 1 AS x").await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("1"));
+    d.close().await;
+}
+
+/// SQL Server 取消：`KILL <spid>` 中止長查詢（WAITFOR DELAY），被 KILL 的連線還池後
+/// 由 bb8 的 test_on_check_out 淘汰，接下來的查詢照常（容器：scripts/dev-sptest，埠 11435）。
+#[tokio::test]
+#[ignore]
+async fn mssql_cancel_kills_running_query() {
+    use crate::db::mssql::MssqlDriver;
+    let mut c = cfg(DbKind::Mssql, "127.0.0.1", 11435, "sa", "Test1234!", Some("master"));
+    c.options.insert("trust_server_certificate".into(), "true".into());
+    c.max_connections = 2;
+    let d = std::sync::Arc::new(MssqlDriver::connect(&c).await.expect("dev-sptest mssql 要先起來"));
+    for sql in ["WAITFOR DELAY '00:00:30'; SELECT 1 AS x", "WAITFOR DELAY '00:00:30'"] {
+        let d2 = std::sync::Arc::clone(&d);
+        let q = sql.to_string();
+        let t0 = std::time::Instant::now();
+        let h = tokio::spawn(async move { d2.query(&q).await });
+        let mut sent = 0;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            sent = d.cancel_query().await.unwrap();
+            if sent > 0 {
+                break;
+            }
+        }
+        assert!(sent > 0, "{sql}：應已登記為執行中");
+        let r = tokio::time::timeout(Duration::from_secs(10), h).await.expect("KILL 後應很快結束").unwrap();
+        assert!(r.is_err(), "{sql}：被 KILL 的查詢應回錯誤");
+        assert!(t0.elapsed() < Duration::from_secs(10), "{sql}：不該等滿 30 秒");
+        // 兩條池連線都借一輪：被 KILL 的那條必須被淘汰，不能讓下一個查詢撞到斷線。
+        for _ in 0..4 {
+            let ok = d.query("SELECT 1 AS x").await.expect("KILL 後池內其他查詢照常");
+            assert_eq!(ok.rows[0][0].as_deref(), Some("1"));
+        }
+    }
+    d.close().await;
+}
+
+/// SQLite 視覺化解釋：EXPLAIN QUERY PLAN 走讀取路徑、回 (id, parent, notused, detail) 四欄（前端 parseSqlitePlan 依此建樹）。
+#[tokio::test]
+async fn sqlite_explain_query_plan_returns_rows() {
+    let dbfile = format!("dbkit_it_eqp_{}.db", std::process::id());
+    let _ = std::fs::remove_file(&dbfile);
+    let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile.as_str()));
+    {
+        let d = SqliteDriver::connect(&c).await.unwrap();
+        d.query("CREATE TABLE o (id INTEGER PRIMARY KEY, c INTEGER)").await.unwrap();
+        d.query("CREATE TABLE cu (id INTEGER PRIMARY KEY)").await.unwrap();
+        let r = d.query("EXPLAIN QUERY PLAN SELECT * FROM o JOIN cu ON cu.id = o.c").await.unwrap();
+        assert_eq!(r.columns.len(), 4, "{:?}", r.columns);
+        let details: Vec<String> = r.rows.iter().map(|x| x[3].clone().unwrap_or_default()).collect();
+        assert!(details.iter().any(|d| d.starts_with("SCAN")), "{details:?}");
+        assert!(details.iter().any(|d| d.starts_with("SEARCH")), "{details:?}");
+        d.close().await;
+    }
+    let _ = std::fs::remove_file(&dbfile);
+}
+
+/// SQLite 取消：progress handler 讓執行中的長查詢（無窮遞迴 CTE）中止，
+/// 而且那條連線還池後，下一個查詢不會被殘留的取消旗標誤殺。
+#[tokio::test]
+async fn sqlite_cancel_interrupts_running_query() {
+    let dbfile = format!("dbkit_it_cancel_{}.db", std::process::id());
+    let _ = std::fs::remove_file(&dbfile);
+    let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile.as_str()));
+    {
+        let d = std::sync::Arc::new(SqliteDriver::connect(&c).await.unwrap());
+        assert_eq!(d.cancel_query().await.unwrap(), 0, "沒有執行中的查詢時回 0");
+        let d2 = std::sync::Arc::clone(&d);
+        let h = tokio::spawn(async move {
+            d2.query("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c").await
+        });
+        let mut sent = 0;
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            sent = d.cancel_query().await.unwrap();
+            if sent > 0 {
+                break;
+            }
+        }
+        assert!(sent > 0, "長查詢應已登記為執行中");
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), h)
+            .await
+            .expect("取消後應在 5 秒內結束")
+            .unwrap();
+        let msg = r.expect_err("被取消的查詢應回錯誤").to_string();
+        assert!(msg.contains("取消") || msg.contains("cancel"), "錯誤應是取消而不是別的：{msg}");
+        for _ in 0..4 {
+            let ok = d.query("SELECT 1").await.expect("取消後同池的下一個查詢不受影響");
+            assert_eq!(ok.rows[0][0].as_deref(), Some("1"));
+        }
+        d.close().await;
+    }
+    let _ = std::fs::remove_file(&dbfile);
+}
+
 /// 使用者在編輯器裡反白時常會多框到上一行的 `-- 說明`，之前 driver 以
 /// `sql.trim_start().starts_with("select")` 分流，開頭是 `--` 就比對不中，於是同一條 SELECT
 /// 走了 execute → 回空結果集。症狀是「單獨選 SQL 正常，連註解一起選就沒有輸出」。

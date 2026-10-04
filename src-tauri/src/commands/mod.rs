@@ -112,6 +112,13 @@ fn hydrate_secrets(config: &mut ConnectionConfig) {
     if config.otp_secret.is_empty() {
         config.otp_secret = store::kc_get(&store::otp_account(&config.id)).unwrap_or_default();
     }
+    if config.options.contains_key(crate::db::proxy::PROXY_OPTION)
+        && config.options.get(crate::db::proxy::PROXY_PASSWORD_OPTION).map_or(true, |p| p.is_empty())
+    {
+        if let Some(pw) = store::kc_get(&store::proxy_account(&config.id)) {
+            config.options.insert(crate::db::proxy::PROXY_PASSWORD_OPTION.to_string(), pw);
+        }
+    }
     if config.ssh_enabled {
         if config.ssh_password.is_empty() {
             config.ssh_password = store::kc_get(&store::ssh_account(&config.id)).unwrap_or_default();
@@ -299,6 +306,9 @@ pub async fn save_connection(app: AppHandle, config: ConnectionConfig) -> AppRes
     if !config.otp_secret.is_empty() {
         store::kc_set(&store::otp_account(&config.id), &config.otp_secret)?;
     }
+    if let Some(pw) = config.options.get(crate::db::proxy::PROXY_PASSWORD_OPTION).filter(|p| !p.is_empty()) {
+        store::kc_set(&store::proxy_account(&config.id), pw)?;
+    }
     if config.ssh_enabled {
         if !config.ssh_password.is_empty() {
             store::kc_set(&store::ssh_account(&config.id), &config.ssh_password)?;
@@ -339,6 +349,7 @@ pub async fn remove_saved_connection(
     store::remove(&app, &id).await?;
     store::kc_delete(&id);
     store::kc_delete(&store::otp_account(&id));
+    store::kc_delete(&store::proxy_account(&id));
     store::kc_delete(&store::ssh_account(&id));
     store::kc_delete(&store::ssh_passphrase_account(&id));
     Ok(())
@@ -890,6 +901,16 @@ pub async fn save_text_file(path: String, content: String) -> AppResult<()> {
     std::fs::write(&path, content).map_err(|e| AppError::Query(tf!("寫入失敗：{e}", e = e)))
 }
 
+/// 寫入二進位檔（內容以 base64 傳入）：前端產生的圖片（ER 圖 PNG）用。路徑來自原生存檔對話框。
+#[tauri::command]
+pub async fn save_base64_file(path: String, data: String) -> AppResult<()> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .map_err(|e| AppError::Query(tf!("寫入失敗：{e}", e = e)))?;
+    std::fs::write(&path, bytes).map_err(|e| AppError::Query(tf!("寫入失敗：{e}", e = e)))
+}
+
 /// 讀取使用者（透過原生開啟對話框）選定之文字檔內容。供查詢編輯器開啟 .sql 檔用。
 /// 上限 8 MiB，避免誤選巨大檔案塞爆編輯器 / 記憶體。
 #[tauri::command]
@@ -1333,6 +1354,10 @@ pub async fn import_csv(
             AppError::Query(tf!("讀取檔案失敗：{e}", e = e))
         }
     })?;
+    // .json / .jsonl / .ndjson 走同一個指令（同樣是文字檔、同樣的上限與編碼檢查），只換解析器。
+    if crate::import::is_json_path(&path) {
+        return crate::import::import_json(&state.manager, &id, &database, &table, &content, &options).await;
+    }
     crate::import::import_csv(&state.manager, &id, &database, &table, &content, &options).await
 }
 
@@ -1378,6 +1403,17 @@ pub async fn import_preview(
             .await
             .map_err(|e| AppError::Query(tf!("讀取檔案失敗：{e}", e = e)))?;
         crate::import::parse_xlsx(&bytes)?
+    } else if crate::import::is_json_path(&path) {
+        let content = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| AppError::Query(tf!("讀取檔案失敗：{e}", e = e)))?;
+        // 預覽以 NULL 字樣顯示 null / 缺鍵；JSON 的第一列一定是欄名。
+        let rows = crate::import::parse_json(&content)?
+            .into_iter()
+            .map(|r| r.into_iter().map(|c| c.unwrap_or_else(|| "NULL".into())).collect())
+            .collect();
+        let (columns, rows, total_rows) = crate::import::build_preview(rows, true, options.columns.clone(), PREVIEW_ROWS);
+        return Ok(crate::import::ImportPreview { columns, rows, total_rows });
     } else {
         let content = tokio::fs::read_to_string(&path)
             .await
@@ -1559,6 +1595,47 @@ pub async fn review_run_prepare(
         &personas.unwrap_or_default(),
     )
     .await
+}
+
+/// SQL Server 估計執行計畫（SHOWPLAN_XML，不執行查詢）。前端解析成計畫樹（explain.ts parseMssqlShowplan）。
+#[tauri::command]
+pub async fn mssql_showplan(state: State<'_, AppState>, id: String, sql: String) -> AppResult<String> {
+    state.manager.mssql_driver(&id)?.showplan_xml(&sql).await
+}
+
+/// 寫入語句的影響列預覽：只送唯讀 SELECT，不執行、不送 AI（見 review_run/preview.rs）。
+#[tauri::command]
+pub async fn preview_dml(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    script: String,
+) -> AppResult<crate::review_run::preview::DmlPreview> {
+    crate::review_run::preview::preview(&state.manager, &id, &database, &script).await
+}
+
+/// 執行 SQL 檔：專屬連線上逐句執行，進度以 `sql-file-progress` 事件回報（見 sqlfile.rs）。
+#[tauri::command]
+pub async fn run_sql_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: String,
+    id: String,
+    database: String,
+    path: String,
+    options: Option<crate::sqlfile::SqlFileOptions>,
+) -> AppResult<crate::sqlfile::SqlFileReport> {
+    let emit = move |p: crate::sqlfile::SqlFileProgress| {
+        let _ = app.emit("sql-file-progress", p);
+    };
+    crate::sqlfile::run(&state.manager, &id, &database, &path, &options.unwrap_or_default(), &run_id, &emit).await
+}
+
+/// 要求中止 SQL 檔執行：下一句開始前收手。
+#[tauri::command]
+pub async fn run_sql_file_cancel(run_id: String) -> AppResult<()> {
+    crate::compare::cancel(&run_id);
+    Ok(())
 }
 
 /// 只產生備份（mode = backup）或備份後執行（mode = execute），檔案寫進 `out_dir` 底下的新子目錄。

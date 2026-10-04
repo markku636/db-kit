@@ -267,10 +267,12 @@ export interface CompareOptions {
   match_by_content: boolean;
   include_views: boolean;
   include_routines: boolean;
+  /** 欄位一刪一增、型別相同且配對唯一 → 同步腳本用 RENAME COLUMN（推測，預設關）。 */
+  detect_renames: boolean;
 }
 export const DEFAULT_COMPARE_OPTIONS: CompareOptions = {
   ignore_case: false, ignore_comments: false, ignore_defaults: false, match_by_content: true,
-  include_views: true, include_routines: true,
+  include_views: true, include_routines: true, detect_renames: false,
 };
 export const COMPARE_OPTIONS_KEY = "dbkit:compare:options";
 
@@ -293,7 +295,7 @@ export const toDiffOptions = (o: CompareOptions): DiffOptions =>
 export const toCaptureOptions = (o: CompareOptions, tables?: string[]): CaptureOptions =>
   ({ include_ddl: true, include_views: o.include_views, include_routines: o.include_routines, tables: tables ?? null });
 export const toSyncOptions = (o: CompareOptions): SyncOptions =>
-  ({ include_drops: true, include_indexes: true, include_fks: true, include_views: o.include_views, include_routines: o.include_routines });
+  ({ include_drops: true, include_indexes: true, include_fks: true, include_views: o.include_views, include_routines: o.include_routines, detect_renames: o.detect_renames });
 
 /** 與預設不同的選項數（工具列上「選項」鈕的徽章）。 */
 export function countNonDefaultOptions(o: CompareOptions): number {

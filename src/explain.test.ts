@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildExplainJsonSql, parseExplainPlan, planSummary } from "./explain";
+import { buildExplainJsonSql, parseExplainPlan, parseMssqlShowplan, parseSqlitePlan, planSummary } from "./explain";
 
 describe("buildExplainJsonSql", () => {
   it("wraps per dialect and strips trailing semicolon", () => {
@@ -135,5 +135,57 @@ describe("planSummary", () => {
     expect(plan.selfCost).toBe(0); // 不為負
     expect(plan.children[0].selfCost).toBe(100);
     expect(planSummary(plan).maxCost).toBe(100); // 真正熱點＝掃描
+  });
+});
+
+describe("parseSqlitePlan", () => {
+  it("依 parent 建樹；SCAN 標全表掃描、SEARCH USING INDEX 不標", () => {
+    const rows = [
+      ["2", "0", "0", "SCAN o"],
+      ["5", "0", "0", "SEARCH c USING INTEGER PRIMARY KEY (rowid=?)"],
+      ["9", "0", "0", "USE TEMP B-TREE FOR ORDER BY"],
+    ];
+    const p = parseSqlitePlan(rows)!;
+    expect(p.children.map((c) => c.label)).toEqual(["o", "c", "USE TEMP B-TREE FOR ORDER BY"]);
+    expect(p.children[0].kind).toBe("table");
+    expect(p.children[0].detail).toContain("全表掃描");
+    expect(p.children[1].detail).not.toContain("全表掃描");
+    expect(p.children[2].kind).toBe("op");
+  });
+  it("巢狀（CO-ROUTINE 底下的 SCAN）", () => {
+    const p = parseSqlitePlan([["1", "0", "0", "CO-ROUTINE sub"], ["3", "1", "0", "SCAN t USING COVERING INDEX ix"], ["7", "0", "0", "SCAN sub"]])!;
+    expect(p.children[0].children[0].label).toBe("t");
+    expect(p.children[0].children[0].detail).not.toContain("全表掃描");
+  });
+});
+
+describe("parseMssqlShowplan", () => {
+  const xml = `<?xml version="1.0" encoding="utf-16"?><ShowPlanXML><BatchSequence><Batch><Statements>
+    <StmtSimple StatementText="SELECT ..." StatementSubTreeCost="0.0500">
+    <QueryPlan><RelOp NodeId="0" PhysicalOp="Nested Loops" LogicalOp="Inner Join" EstimateRows="10" EstimatedTotalSubtreeCost="0.0500">
+      <NestedLoops>
+        <RelOp NodeId="1" PhysicalOp="Clustered Index Scan" LogicalOp="Clustered Index Scan" EstimateRows="100" EstimatedTotalSubtreeCost="0.0300">
+          <IndexScan><Object Database="[shop]" Schema="[dbo]" Table="[orders]" Index="[PK_orders]" /></IndexScan>
+        </RelOp>
+        <RelOp NodeId="2" PhysicalOp="Clustered Index Seek" LogicalOp="Clustered Index Seek" EstimateRows="1" EstimatedTotalSubtreeCost="0.0100">
+          <IndexScan><Object Table="[customers]" Index="[PK_customers]" /><Object Table="[ignored]" /></IndexScan>
+        </RelOp>
+      </NestedLoops>
+    </RelOp></QueryPlan></StmtSimple></Statements></Batch></BatchSequence></ShowPlanXML>`;
+  it("RelOp 巢狀成樹、表名取 Object、自身成本扣掉子樹", () => {
+    const p = parseMssqlShowplan(xml)!;
+    expect(p.cost).toBeCloseTo(0.05);
+    const nl = p.children[0];
+    expect(nl.label).toBe("Nested Loops");
+    expect(nl.kind).toBe("join");
+    expect(nl.selfCost).toBeCloseTo(0.01);
+    expect(nl.children.map((c) => c.label)).toEqual(["orders", "customers"]);
+    expect(nl.children[0].detail).toContain("Clustered Index Scan");
+    expect(nl.children[0].detail).toContain("PK_orders");
+    expect(nl.children[0].rows).toBe(100);
+  });
+  it("不是 showplan 回 null", () => {
+    expect(parseMssqlShowplan("")).toBeNull();
+    expect(parseMssqlShowplan("<x/>")).toBeNull();
   });
 });

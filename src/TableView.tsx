@@ -6,7 +6,7 @@ import {
   Copy, Pencil, Columns3,
 } from "lucide-react";
 import Icon from "./ui/Icon";
-import { Button, EmptyState, MenuPanel, ModalViewControls, useModalView } from "./ui/index";
+import { Button, EmptyState, MenuPanel, ModalViewControls, Segmented, useModalView } from "./ui/index";
 import {
   api, ColumnInfo, ColumnStats, DbKind, ErRelation, Filter as FilterCond, ForeignKeyInfo, IndexInfo, KeyDetail, KeyEdit, KeyPage,
   MongoIndexOptions, MongoIndexStat, MongoValidation, PagedData, RowInsert, Sort, SortDir,
@@ -26,7 +26,12 @@ import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
 import ProgressBar from "./ui/ProgressBar";
-import { AlterOp } from "./api";
+import { useVirtualRows } from "./useVirtualRows";
+import JsonTreeView from "./JsonTreeView";
+import { detectImage, hexDump, parseHexValue, parseStructuredJson } from "./cellViews";
+
+type CellView = "text" | "tree" | "hex" | "image";
+import { AlterOp, isProdConn } from "./api";
 import { t, useT } from "./i18n";
 
 // 條件掛載的對話框 / 面板改 lazy（code splitting）：開啟時才抓 chunk，首包不含其程式碼。
@@ -515,9 +520,20 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total_rows / pageSize)) : 1;
   const startRow = data ? page * pageSize : 0;
+  // 列虛擬化：大頁（2,000 / 5,000 列）也只把可視範圍放進 DOM。
+  const vr = useVirtualRows(data?.rows.length ?? 0);
+  // 鍵盤移動選取格時把該列捲進可視範圍（虛擬化後列可能不在 DOM，不能靠 scrollIntoView）。
+  useEffect(() => {
+    if (selected) vr.ensureVisible(selected.r);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.r]);
   // 唯讀連線：資料格不可編輯（與寫入 / DDL 攔截一致），避免正式環境誤改。
   const readonly = useStore((s) => s.readonlyConns[tab.connId] === true);
   const editable = !!data && data.primary_key.length > 0 && !readonly;
+  // 正式環境連線：資料格寫入（套用編輯 / 新增列）比照查詢編輯器，先跳一次確認。刪除列本來就有確認框。
+  const prod = useStore((s) => { const c = s.connections.find((x) => x.id === tab.connId); return !!c && isProdConn(c); });
+  const confirmProdWrite = async (what: string) =>
+    !prod || (await uiConfirm(t("這是正式環境連線。確定要{what}？", { what }), { title: t("正式環境"), danger: true, confirmText: t("確定") }));
   // 新增列不需主鍵（INSERT 不依賴 PK）；只有更新 / 刪除個別列才需 PK 來定位。視圖不可插入。
   const insertable = !!data && data.columns.length > 0 && tab.objKind !== "view";
   const dirtyCount = Object.keys(edits).length;
@@ -690,6 +706,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   const applyEdits = async () => {
     if (!data || dirtyCount === 0) return;
+    if (!(await confirmProdWrite(t("寫入 {n} 筆儲存格變更", { n: dirtyCount })))) return;
     setApplying(true);
     setErr(null);
     let applied = 0;
@@ -844,6 +861,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   };
 
   const submitInsert = async (row: RowInsert) => {
+    if (!(await confirmProdWrite(t("新增這一列")))) return;
     setApplying(true);
     setErr(null);
     try {
@@ -1585,6 +1603,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         )}
         {data && data.columns.length > 0 && (
           <table
+            ref={vr.tableRef}
             className={`text-sm border-collapse transition-opacity ${loading || applying ? "opacity-50" : ""} ${applying ? "pointer-events-none" : ""}`}
             style={{
               tableLayout: "fixed",
@@ -1662,10 +1681,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
               </tr>
             </thead>
             <tbody className="mono">
-              {data.rows.map((row, i) => (
+              {vr.padTop > 0 && <tr aria-hidden style={{ height: vr.padTop }}><td colSpan={visibleCols.length + 1 + (editable ? 2 : 0)} /></tr>}
+              {Array.from({ length: vr.end - vr.start }, (_, k) => vr.start + k).map((i) => (
                 <DataRow
                   key={i}
-                  row={row}
+                  row={data.rows[i]}
                   i={i}
                   startRow={startRow}
                   visibleCols={visibleCols}
@@ -1683,6 +1703,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
                   h={rowHandlers}
                 />
               ))}
+              {vr.padBottom > 0 && <tr aria-hidden style={{ height: vr.padBottom }}><td colSpan={visibleCols.length + 1 + (editable ? 2 : 0)} /></tr>}
             </tbody>
           </table>
         )}
@@ -1732,7 +1753,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           title={t("每頁列數")}
           className="ml-2 bg-inset border border-fg/10 rounded px-1.5 py-0.5 text-xs outline-none focus:border-accent text-fg/60"
         >
-          {[100, 200, 500, 1000].map((n) => (
+          {[100, 200, 500, 1000, 2000, 5000].map((n) => (
             <option key={n} value={n}>{n} {t("/ 頁")}</option>
           ))}
         </select>
@@ -2262,6 +2283,32 @@ function RowField({ value, onSave }: { value: string | null; onSave: (raw: strin
   );
 }
 
+/** 儲存格檢視器的非文字檢視：JSON 樹 / 十六進位 / 圖片。 */
+function CellAltView({ view, column, jsonTree, hexBytes, rawHex, image }: {
+  view: CellView;
+  column: string;
+  jsonTree: object | null;
+  hexBytes: Uint8Array;
+  rawHex: boolean;
+  image: string | null;
+}) {
+  const t = useT();
+  if (view === "tree" && jsonTree) return <div className="p-4 flex-1 overflow-auto"><JsonTreeView value={jsonTree} /></div>;
+  if (view === "image" && image) {
+    return (
+      <div className="p-4 flex-1 overflow-auto flex items-center justify-center bg-[repeating-conic-gradient(#8881_0%_25%,transparent_0%_50%)] bg-[length:16px_16px]">
+        <img src={image} alt={column} className="max-w-full max-h-[60vh] object-contain" data-cell-image />
+      </div>
+    );
+  }
+  return (
+    <div className="p-4 flex-1 overflow-auto">
+      <pre className="mono text-xs leading-5 text-fg/80 whitespace-pre" data-cell-hex>{hexDump(hexBytes).join("\n")}</pre>
+      {!rawHex && <div className="text-[11px] text-fg/40 mt-2">{t("以 UTF-8 位元組顯示文字內容（看得到不可見字元、全形空白、BOM）。")}</div>}
+    </div>
+  );
+}
+
 // 儲存格內容檢視器：檢視 / 編輯長文字、JSON、二進位預覽。可切換 JSON 排版、複製、產生 UPDATE 腳本。
 export function CellInspector({ column, value, editable, onSave, onClose, onScript, showFormat = true }: {
   column: string;
@@ -2342,6 +2389,25 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
   }, [text]);
   // 雙向切換：縮排 ↔ 單行。兩個方向都以「目前內容」為準，所以編輯過的內容不會被丟掉
   // （切回原始 ≠ 還原編輯；要放棄編輯照舊按「關閉」）。
+  // 其他檢視：JSON 樹（結構化 JSON）、十六進位（0x 二進位原樣；文字則看 UTF-8 位元組）、圖片（偵測得到才出現）。
+  // 以「目前內容」為準，編輯後切過去看的是編輯後的樣子。
+  const jsonTree = useMemo(() => parseStructuredJson(text), [text]);
+  const rawHex = useMemo(() => parseHexValue(value), [value]);
+  // 沒編輯過就看資料庫裡的原值（文字檢視自動排版過的 JSON 不是存的樣子）；編輯後看編輯後的內容。
+  const hexBytes = useMemo(
+    () => rawHex ?? new TextEncoder().encode(text === initial ? (value ?? "") : text),
+    [rawHex, text, initial, value],
+  );
+  const image = useMemo(() => detectImage(value), [value]);
+  const views = useMemo(() => {
+    const v: CellView[] = ["text"];
+    if (jsonTree) v.push("tree");
+    if (image) v.push("image");
+    v.push("hex");
+    return v;
+  }, [jsonTree, image]);
+  const [view, setView] = useState<CellView>(() => (detectImage(value) ? "image" : "text"));
+  const VIEW_LABEL: Record<CellView, string> = { text: t("文字"), tree: t("JSON 樹"), hex: t("十六進位"), image: t("圖片") };
   const toggleJson = () => {
     try {
       const parsed: unknown = JSON.parse(text);
@@ -2363,6 +2429,15 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
           </span>
           <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
+        {views.length > 1 && (
+          <div className="px-4 pt-3" data-cell-views>
+            <Segmented size="sm" value={view} onChange={setView} ariaLabel={t("檢視方式")}
+              options={views.map((v) => ({ value: v, label: VIEW_LABEL[v] }))} />
+          </div>
+        )}
+        {view !== "text" ? (
+          <CellAltView view={view} column={column} jsonTree={jsonTree} hexBytes={hexBytes} rawHex={!!rawHex} image={image} />
+        ) : (
         <div className="p-4 flex-1 overflow-auto">
           <textarea autoFocus ref={taRef} value={text}
             onChange={(e) => { setText(e.target.value); syncSel(); }}
@@ -2374,6 +2449,7 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
             }}
             className="w-full h-72 bg-inset border border-fg/10 rounded p-3 mono code-scale outline-none focus:border-accent resize-none break-all" />
         </div>
+        )}
         <div className="px-5 py-3 border-t border-fg/10 flex items-center gap-2">
           {showFormat && (
             <button type="button" onClick={toggleJson}

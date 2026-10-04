@@ -88,9 +88,14 @@ export function installShim(fx) {
     if (s.includes("version()")) return [one(["VERSION()", "@@character_set_server", "@@collation_server"], ["8.0.36", "utf8mb4", "utf8mb4_0900_ai_ci"])];
     if (s.includes("default_character_set_name")) return [one(["cs", "coll"], ["utf8mb4", "utf8mb4_0900_ai_ci"])];
     if (s.includes("data_length + index_length")) return [one(["mb"], ["54.13"])];
+    if (s.includes("explain query plan")) return [{ columns: ["id", "parent", "notused", "detail"], rows: [["2", "0", "0", "SCAN orders"], ["5", "0", "0", "SEARCH customers USING INTEGER PRIMARY KEY (rowid=?)"]], rows_affected: 0 }];
     if (s.includes("explain")) return [fx.EXPLAIN_RESULT];
     if (s.includes("group by status")) return [fx.MULTI_RESULTS[0]];
     if (s.includes("order_items")) return [fx.MULTI_RESULTS[1]];
+    // 儲存格檢視器情境：一格 JSON、一格 base64 PNG（1×1）。
+    if (s.includes("cell_views")) return [{ columns: ["payload", "avatar"], rows: [['{"order":{"items":[{"sku":"A-1","qty":2}]},"paid":true}', "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="]], rows_affected: 0 }];
+    // 大結果集（列虛擬化情境）：2 萬列。
+    if (s.includes("big_rows")) return [{ columns: ["id", "name", "amount"], rows: Array.from({ length: 20_000 }, (_, i) => [String(i + 1), `row-${i + 1}`, (i * 1.5).toFixed(2)]), rows_affected: 0 }];
     if (s.startsWith("use ")) return [];
     return [one(["result"], ["ok"])];
   };
@@ -385,6 +390,7 @@ metadata:
     exec_ddl: () => null,
     // 寫檔類：對話框 handler 會回假路徑，所以這些後續步驟也要有回應，否則匯出一按就是紅字。
     save_text_file: ({ path, content }) => { window.__DBKIT_SAVED_FILES__.push({ path, content }); return null; },
+    save_base64_file: ({ path, data }) => { window.__DBKIT_SAVED_FILES__.push({ path, base64: data }); return null; },
     export_rows: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
     export_rows_multi: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
     export_query: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
@@ -471,6 +477,33 @@ metadata:
 
     // ── 審查並執行 ───────────────────────────────────────────────────────
     review_run_prepare: () => fx.REVIEW_PREPARED,
+    run_sql_file: ({ path, options }) => ({
+      total: 12, executed: options?.continue_on_error ? 11 : 6, failed: 1, skipped_meta: 0, cancelled: false,
+      stopped_on_error: !options?.continue_on_error, elapsed_ms: 840, errors_omitted: 0,
+      errors: [{ index: 6, line: 18, sql: "INSERT INTO missing_table VALUES (1)", message: `Table 'shop.missing_table' doesn't exist (${String(path).split(/[\\/]/).pop()})` }],
+    }),
+    run_sql_file_cancel: () => null,
+    // 從其他工具匯入連線：讀檔內容由情境放在 window.__DBKIT_TEXT_FILES__[path]。
+    read_text_file: ({ path }) => (window.__DBKIT_TEXT_FILES__ ?? {})[path] ?? "",
+    parse_connection_url: ({ url, kind }) => {
+      const m = /^jdbc:(\w+):\/\/([^:/;]+)(?::(\d+))?(?:\/([^?;]+))?/.exec(String(url));
+      return { kind: kind ?? null, host: m?.[2] ?? null, port: m?.[3] ? Number(m[3]) : null, username: null, password: null, database: m?.[4] ?? null, options: {} };
+    },
+    mssql_showplan: () => '<ShowPlanXML><StmtSimple StatementSubTreeCost="0.05"><RelOp PhysicalOp="Nested Loops" LogicalOp="Inner Join" EstimateRows="10" EstimatedTotalSubtreeCost="0.05"><RelOp PhysicalOp="Clustered Index Scan" LogicalOp="Clustered Index Scan" EstimateRows="1000" EstimatedTotalSubtreeCost="0.03"><IndexScan><Object Table="[Sales]" Index="[PK_Sales]" /></IndexScan></RelOp><RelOp PhysicalOp="Clustered Index Seek" LogicalOp="Clustered Index Seek" EstimateRows="1" EstimatedTotalSubtreeCost="0.01"><IndexScan><Object Table="[Regions]" Index="[PK_Regions]" /></IndexScan></RelOp></RelOp></StmtSimple></ShowPlanXML>',
+    import_preview: ({ path }) => (/\.(json|jsonl|ndjson)$/i.test(String(path))
+      ? { columns: ["order_id", "status", "total_amount"], rows: [["9001", "paid", "12.50"], ["9002", "NULL", "8.00"], ["9003", "pending", "NULL"]], total_rows: 3 }
+      : { columns: ["order_id", "status"], rows: [["9001", "paid"]], total_rows: 1 }),
+    import_csv: ({ path }) => ({ imported: /\.json/i.test(String(path)) ? 3 : 1, failed: 0, errors: [] }),
+    preview_dml: ({ script }) => ({
+      database: "shop",
+      blockers: [],
+      statements: [
+        { index: 0, sql: String(script).split(";")[0], op: "update", write: true, targets: ["shop.orders"], estimated_rows: 2, estimate_exact: true, method: "predicate",
+          table: "orders", columns: ["order_id", "status", "total_amount"], rows: [["1001", "paid", "560.00"], ["1002", null, "99.00"]], truncated: false, detail: null, notes: [] },
+        { index: 1, sql: "SELECT 1", op: "read", write: false, targets: [], estimated_rows: null, estimate_exact: true, method: "none",
+          table: null, columns: [], rows: [], truncated: false, detail: null, notes: [] },
+      ],
+    }),
     review_run_start: ({ runId, mode }) => {
       // 先打幾個進度事件，再回結果：對話框的進度列與結果分頁兩條路徑都跑得到。
       const outcome = mode === "execute" && fx.REVIEW_OUTCOME_EXECUTED ? fx.REVIEW_OUTCOME_EXECUTED : fx.REVIEW_OUTCOME;

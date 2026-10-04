@@ -377,7 +377,7 @@ fn pre_fragment(kind: DbKind, probe: &StatementProbe, cap: &Captured) -> Fragmen
 }
 
 fn sync_options() -> SyncOptions {
-    SyncOptions { include_drops: true, include_indexes: true, include_fks: true, include_views: true, include_routines: true }
+    SyncOptions { include_drops: true, include_indexes: true, include_fks: true, include_views: true, include_routines: true, detect_renames: false }
 }
 
 /// 反向 DDL：讓 `after` 變回 `before`。回傳可執行語句與無法表達的變更。

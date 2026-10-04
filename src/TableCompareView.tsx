@@ -12,7 +12,7 @@ import { useT } from "./i18n";
  * 單一資料表的結構比對本體（差異檢視 + 同步腳本）。
  * 單表對話框直接用；整庫對話框點某一列 drill-in 時，以已擷取好的兩側結構重用，不再重抓。
  */
-export default function TableCompareView({ srcConnId, srcDb, srcTable, target, dstTable, srcLabel, dstLabel, preloaded, onUse, autoRun }: {
+export default function TableCompareView({ srcConnId, srcDb, srcTable, target, dstTable, srcLabel, dstLabel, preloaded, onUse, onReviewRun, autoRun }: {
   srcConnId: string;
   srcDb: string;
   srcTable: string;
@@ -23,6 +23,8 @@ export default function TableCompareView({ srcConnId, srcDb, srcTable, target, d
   /** 整庫模式已擷取的兩側結構（避免重抓）。 */
   preloaded?: { src: DbSchema; dst: DbSchema } | null;
   onUse: (sql: string, targetConnId: string) => void;
+  /** 交給審查並執行（逐句備份 + 回滾腳本）。 */
+  onReviewRun?: (sql: string, targetConnId: string, targetDb: string) => void;
   /** 掛載時自動比對。 */
   autoRun?: boolean;
 }) {
@@ -127,6 +129,7 @@ export default function TableCompareView({ srcConnId, srcDb, srcTable, target, d
           header={t("同步：{src} → {dst}", { src: `${srcLabel} · ${srcTable}`, dst: `${dstLabel} · ${dstTable}` })}
           dstConnId={dstConnId} dstLabel={dstLabel}
           onSend={dstConnId ? (sql) => onUse(sql, dstConnId) : undefined}
+          onReviewRun={dstConnId && onReviewRun && target.mode === "live" ? (sql) => onReviewRun(sql, dstConnId, target.db) : undefined}
           onExecute={dstConnId ? execute : undefined} />
       )}
     </div>

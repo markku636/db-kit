@@ -1,6 +1,37 @@
-## 未發佈
+## v0.57.0
 
-**MCP 伺服器長大了：多連線、可寫入、HTTP、一鍵接到 AI 工具**。`dbk mcp` 原本只綁一條連線、一律唯讀、只走 stdio，而且要自己去各家 AI 工具的設定檔裡手打一行。這一版把它變成能直接交給 Claude Code / Codex / Cursor / VS Code 日常使用的伺服器。完整說明見 [`docs/mcp.md`](./docs/mcp.md)。
+**日常 SQL 的手感補齊：大結果集、取消、預覽、執行 SQL 檔、更多引擎的計畫與監控，還有連線的網路路徑；`dbk mcp` 也長大成能直接交給 AI 工具的 MCP 伺服器。**
+
+查詢與資料格
+
+- **列虛擬化**：查詢結果不再只畫前 2,000 列，已取回的列全部捲得到；資料表每頁可到 5,000 列。鍵盤導覽（Ctrl+End、PageDown…）會把目標列捲進來——資料表格原本按方向鍵不會捲動，一併補上。
+- **取消查詢擴到 SQL Server / Oracle / SQLite**：SQL Server 記下 `@@SPID`、用專屬連線送 `KILL`（被 KILL 的連線還池時由連線池的檢查淘汰）；Oracle 用 `OCIBreak`（連線保留）；SQLite 用 progress handler 中斷。原本只有 MySQL / PostgreSQL。
+- **預覽影響列**（查詢工具列「更多 → 預覽影響列…」）：UPDATE / DELETE / 帶鍵 INSERT 先改成唯讀 SELECT，列出影響列數與最多 200 列實際資料。不執行、不送 AI；與審查並執行共用同一套分析，看完可一鍵轉交。
+- **參數**：除了 `:name`，也認 `${name}`、`#{name}`（MyBatis，可帶 `,jdbcType=…`）與 `?` 位置參數（PostgreSQL 除外，`?` 是 JSONB 運算子）。`@name` 刻意不認——那是 SQL Server / MySQL 的變數。
+- **語意診斷**：DML 裡找不到的表、`別名.欄位` 不存在時畫黃線（依已載入的結構；CTE、暫存表、表函式、`EXTRACT(… FROM …)`、系統目錄等一律不判，寧可漏報）。
+- **JOIN 條件補全**：游標停在 `JOIN 表 別名 ON` 之後，依外鍵提示 `c.customer_id = o.customer_id`；沒有外鍵時依欄名推測並標明。
+- **儲存格檢視器**：JSON 樹（點節點複製 JSONPath）、十六進位傾印（看得到不可見字元、BOM）、圖片預覽（data URL、base64、完整 0x 二進位）。
+- **視覺化解釋**擴到 SQLite（`EXPLAIN QUERY PLAN`，標出全表掃描）與 SQL Server（`SHOWPLAN_XML` 估計計畫，不執行查詢）。
+
+資料與結構
+
+- **執行 SQL 檔**（資料庫右鍵）：整份檔案在同一條專屬連線上逐句執行，`USE` / `SET` / 交易 / 暫存表跨句有效；認 MySQL `DELIMITER` 與 SQL Server `GO`，略過 psql 指令行，pg_dump 的 `COPY … FROM stdin` 開跑前擋下並說明改用 `--inserts`。遇錯即停或繼續、錯誤附行號、可取消。
+- **匯入 JSON**：物件陣列、NDJSON、`{"data": [...]}` 都吃；null 與缺鍵一律寫 NULL（不受「空欄位視為 NULL」影響）。
+- **資料比對回到 GUI**（資料表右鍵「資料比對…」）：與 `dbk compare data` 同一個引擎，列出新增 / 更新 / 刪除樣本並產生同步 SQL；只產生不套用，送到目標的查詢編輯器再執行。
+- **結構比對**：選項「偵測欄位改名」把一刪一增、型別相同且配對唯一的欄位改成 `RENAME COLUMN`（SQL Server 用 `sp_rename`），保留資料；同步腳本可「審查並執行（含回滾）…」，交給審查並執行逐句備份、先寫好 `rollback.sql`。
+- **ER 圖匯出 SVG / PNG**：由模型與目前佈局組出獨立向量圖，裁到內容範圍、固定淺底。
+- **處理程序清單**擴到 SQL Server（附 `blocked_by`）與 Oracle（`sid,serial#`）。
+
+連線與安全
+
+- **從其他工具匯入連線**：DBeaver 的 `data-sources.json`、DataGrip 的 `dataSources.xml`（可連同 `.local.xml`）、`.ncx` 連線檔。只匯入位置、帳號與 SSH 通道，**不匯入密碼**。
+- **SSH 跳板主機**：資料庫連線的 SSH 通道可經由一台已存的 SSH 主機（帳密用那台存的，可多層）。
+- **SOCKS5 / HTTP Proxy**：不用 SSH 時可經 proxy 連資料庫（本地轉發埠，driver 不必改）；proxy 密碼存 keychain。
+- **唯讀連線暫時解鎖 1 / 5 分鐘**：只在記憶體，到時自動鎖回、重開 App 一律唯讀。**正式環境**連線的資料格寫入（套用變更、新增列、查詢結果就地編輯）也要確認。
+
+AI 工具整合（MCP）
+
+`dbk mcp` 原本只綁一條連線、一律唯讀、只走 stdio，而且要自己去各家 AI 工具的設定檔裡手打一行。這一版把它變成能直接交給 Claude Code / Codex / Cursor / VS Code 日常使用的伺服器。完整說明見 [`docs/mcp.md`](./docs/mcp.md)。
 
 - **多連線模式**：`dbk mcp` 不指定連線時開放全部已存連線（`--connections` 白名單），工具多一個 `connection` 參數，AI 先 `list_connections` 再挑；用到哪條才連哪條。只列 dbk 支援的種類，標出正式環境與可寫入的連線。
 - **寫入（`--allow-write`）走審查並執行**：`preview_write` 逐句估影響列數、回滾能力與風險，回一組審查代碼；`execute_write` 只收代碼、執行伺服器端保存的那份 SQL（模型不可能預覽一段、執行另一段），前像、`rollback.sql` 與報告寫到 `--out`。高破壞語句要 `--allow-destructive`、正式環境要 `--allow-prod`，無法完整回滾時模型必須明示 `acknowledge_incomplete`。代碼 15 分鐘失效、只能用一次。

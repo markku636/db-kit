@@ -10,6 +10,7 @@ import { askOtpCode } from "./otpGate";
 import { Modal, Field, Input, Button, Segmented, Select, Textarea } from "./ui/index";
 import { Plug, FolderOpen, ClipboardPaste } from "lucide-react";
 import { useT } from "./i18n";
+import { useSshSessions } from "./sshSessions";
 import KindPicker from "./KindPicker";
 import SshKeyPathField from "./SshKeyPathField";
 import { K8sClusterFields, K8sForwardFields, k8sForwardEnabled, k8sOptionsFor, pickK8sOpts, type K8sOpts } from "./K8sConnFields";
@@ -119,6 +120,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
   const [sshAuthMethod, setSshAuthMethod] = useState<SshAuthMethod>(seed?.ssh_auth_method ?? "password");
   const [sshPassword, setSshPassword] = useState("");
   const [sshKeyPath, setSshKeyPath] = useState(seed?.ssh_private_key_path ?? "");
+  // SSH 跳板：已存 SSH 主機的 id（帳密用那台主機存的）。Proxy：socks5:// 或 http:// 網址，密碼另欄（存 keychain）。
+  const [sshJump, setSshJump] = useState(seed?.options?.ssh_jump_host ?? "");
+  const [proxyUrl, setProxyUrl] = useState(seed?.options?.proxy_url ?? "");
+  const [proxyPassword, setProxyPassword] = useState("");
+  const sshHosts = useSshSessions((st) => st.sessions);
   const [sshPassphrase, setSshPassphrase] = useState("");
   // 外部 gateway（kind === "external"）：driver / base_url 等存於 options map。
   // driver 不再讓使用者填：目前唯一的外部驅動就是 qland（見後端 db::external::connect_external），
@@ -372,6 +378,13 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     Object.assign(o, k8sOptionsFor(kind, k8sOpts));
     // 正式環境標記與 kind 無關（每種 DB 都可能是 prod），故放在各 kind 分支之外。
     if (prod) o.prod = "1";
+    // 網路路徑：SSH 跳板機（只在啟用 SSH 時有意義）與 Proxy（與 SSH 擇一）。
+    if (sshEnabled && sshJump) o.ssh_jump_host = sshJump;
+    if (!sshEnabled && proxyUrl.trim()) {
+      o.proxy_url = proxyUrl.trim();
+      // 空白＝不變更（後端從 keychain 補）；有輸入才送，後端存進 keychain、不寫進設定檔。
+      if (proxyPassword) o.proxy_password = proxyPassword;
+    }
     return Object.keys(o).length ? o : undefined;
   };
 
@@ -1200,8 +1213,30 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
             <input type="checkbox" checked={sshEnabled} onChange={(e) => setSshEnabled(e.target.checked)} />
             <span>{t("透過 SSH Tunnel 連線")}</span>
           </label>
+          {!sshEnabled && (
+            <div className="flex gap-3" data-conn-proxy>
+              <Field label={t("Proxy（選填）")} className="flex-1" hint={t("socks5://主機:1080 或 http://主機:3128；帳號可寫成 socks5://帳號@主機:埠")}>
+                <Input value={proxyUrl} onChange={(e) => setProxyUrl(e.target.value)} placeholder="socks5://proxy.corp:1080" />
+              </Field>
+              {proxyUrl.trim() && (
+                <Field label={t("Proxy 密碼")} className="w-44">
+                  <Input type="password" value={proxyPassword} onChange={(e) => setProxyPassword(e.target.value)}
+                    placeholder={editing ? t("留空＝不變更") : ""} />
+                </Field>
+              )}
+            </div>
+          )}
           {sshEnabled && (
             <>
+              <Field label={t("經由跳板主機（選填）")} hint={t("先連上這台已存的 SSH 主機，再從它連到上面的 SSH 主機；跳板機的帳密用它自己存的。")}>
+                <select value={sshJump} onChange={(e) => setSshJump(e.target.value)} data-conn-ssh-jump
+                  className="w-full bg-inset border border-fg/10 rounded px-2 py-1.5 text-sm outline-none focus:border-accent">
+                  <option value="">{t("直接連線")}</option>
+                  {sshHosts.filter((h) => (h.protocol ?? "ssh") === "ssh").map((h) => (
+                    <option key={h.id} value={h.id}>{h.name || `${h.username}@${h.host}`}</option>
+                  ))}
+                </select>
+              </Field>
               <div className="flex gap-3">
                 <Field label={t("SSH 主機")} className="flex-1">
                   <Input value={sshHost} onChange={(e) => setSshHost(e.target.value)} />

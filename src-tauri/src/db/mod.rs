@@ -17,6 +17,7 @@ pub mod mssql;
 pub mod mysql;
 pub mod oracle;
 pub mod postgres;
+pub mod proxy;
 pub mod redis;
 pub mod sqlite;
 
@@ -1201,7 +1202,7 @@ pub trait DatabaseDriver: Send + Sync {
     /// 實作要點：取消訊號必須走「另一條」連線送（原連線正忙於該查詢），且只中止當前語句、
     /// 保留工作階段（MySQL `KILL QUERY` / PG `pg_cancel_backend`），否則交易與暫存狀態會一併沒了。
     ///
-    /// 預設回 Unsupported：沒有旁路取消通道的驅動（SQLite / Redis / 外部 gateway…）沿用之，
+    /// 預設回 Unsupported：沒有旁路取消通道的驅動（Redis / MongoDB / 外部 gateway…）沿用之，
     /// 前端據此退回「只停止本端等待」並提示伺服器端可能仍在跑。
     async fn cancel_query(&self) -> AppResult<usize> {
         Err(AppError::Unsupported(

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Copy, Play, Send, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Copy, Play, Send, ShieldAlert, ShieldCheck } from "lucide-react";
 import type { SyncStatement } from "./api";
 import { useStore } from "./store";
 import { copyToClipboard } from "./ui";
@@ -15,7 +15,7 @@ export interface StatementOutcome { index: number; ok: boolean; error?: string }
  * `objectOn` 由外層決定「這句所屬的物件有沒有被勾選」——整庫比對的左側清單勾掉一張表，
  * 這裡屬於它的語句就一起熄掉，不必逐句找。
  */
-export default function SyncScriptPanel({ statements, skipped = [], header, dstConnId, dstLabel, onSend, onExecute, disabledReason, objectOn }: {
+export default function SyncScriptPanel({ statements, skipped = [], header, dstConnId, dstLabel, onSend, onReviewRun, onExecute, disabledReason, objectOn }: {
   statements: SyncStatement[];
   skipped?: string[];
   header: string;
@@ -23,6 +23,8 @@ export default function SyncScriptPanel({ statements, skipped = [], header, dstC
   dstConnId: string | null;
   dstLabel: string;
   onSend?: (sql: string) => void;
+  /** 交給「審查並執行」：逐句擷取前像、寫好回滾腳本後才執行。undefined → 隱藏。 */
+  onReviewRun?: (sql: string) => void;
   /** 執行選取的語句；回每句結果。undefined → 隱藏「直接執行」。 */
   onExecute?: (stmts: SyncStatement[]) => Promise<StatementOutcome[]>;
   disabledReason?: string;
@@ -107,6 +109,12 @@ export default function SyncScriptPanel({ statements, skipped = [], header, dstC
         <span className="ml-auto flex items-center gap-1.5">
           <Button size="sm" icon={Copy} disabled={!selected.length} onClick={() => copyToClipboard(script, t("已複製同步 SQL"))}>{t("複製 SQL")}</Button>
           {onSend && <Button size="sm" icon={Send} disabled={!selected.length || !dstConnId} onClick={() => onSend(script)}>{t("送到查詢編輯器")}</Button>}
+          {onReviewRun && (
+            <Button size="sm" icon={ShieldCheck} disabled={!selected.length || !dstConnId || readonly} onClick={() => onReviewRun(script)}
+              title={t("交給審查並執行：逐句擷取結構前像、先寫好回滾腳本（rollback.sql）才執行")} data-sync-review-run>
+              {t("審查並執行（含回滾）…")}
+            </Button>
+          )}
           {onExecute && (
             <Button size="sm" variant={hasDestructiveSelected ? "danger" : "primary"} icon={Play} loading={busy}
               disabled={!selected.length || !!execReason || busy} title={execReason} onClick={() => { setAck(false); setConfirm(true); }}>

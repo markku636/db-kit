@@ -23,6 +23,10 @@ Supports MySQL, MariaDB, PostgreSQL, SQL Server, Oracle and SQLite. The desktop 
 | AI assistant | When you press "Run" on a SQL block in the conversation and it contains write statements, this dialog opens instead (read-only queries still run directly as before). |
 | Command line | `dbk run script.sql --out <directory>`; see "Command line" below. |
 
+**Just want to see which rows would change first?** In the query toolbar, "More → Preview affected rows…" uses the same analysis to rewrite each UPDATE / DELETE / INSERT as a read-only SELECT,
+and lists the affected row count and the actual rows (up to 200). Nothing runs, nothing is sent to AI, and no files are written. An INSERT with explicit keys lists the existing rows it would collide with;
+auto-numbered INSERTs and schema changes have no rows to show. When you're done, "Review & Run…" opens this dialog with the same SQL.
+
 ---
 
 ## Reading the dialog

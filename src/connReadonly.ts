@@ -37,3 +37,19 @@ export function persistReadonly(map: ReadonlyMap) {
     /* 忽略寫入失敗 */
   }
 }
+
+// ---- 暫時解鎖（致敬 dbx 的「唯讀連線暫時允許寫入 1 / 5 分鐘」）----
+// 解鎖只活在記憶體：持久化的唯讀旗標維持 true，到時自動鎖回；中途關掉 App 重開也一樣是唯讀。
+
+/** 要寫進 localStorage 的唯讀表：目前的表再補回暫時解鎖中的連線（它們「本質上」還是唯讀）。 */
+export function persistedReadonly(map: ReadonlyMap, tempUnlocks: Record<string, number>): ReadonlyMap {
+  const out = { ...map };
+  for (const id of Object.keys(tempUnlocks)) out[id] = true;
+  return out;
+}
+
+/** 剩餘時間顯示（m:ss）。 */
+export function formatRemaining(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}

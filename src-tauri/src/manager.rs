@@ -1155,6 +1155,16 @@ impl ConnectionManager {
             cfg.ssh_enabled = false;
             return Ok(Some(guard));
         }
+        let proxy = cfg.options.get(crate::db::proxy::PROXY_OPTION).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        if let Some(_url) = proxy.filter(|_| !matches!(cfg.kind, DbKind::Sqlite | DbKind::External)) {
+            if cfg.ssh_enabled {
+                return Err(AppError::Connect(t!("SSH 通道與 Proxy 不能同時使用，請擇一").into()));
+            }
+            let guard = crate::db::proxy::open_proxy_tunnel(cfg).await?;
+            cfg.host = "127.0.0.1".to_string();
+            cfg.port = guard.local_port();
+            return Ok(Some(guard));
+        }
         if cfg.ssh_enabled && !matches!(cfg.kind, DbKind::Sqlite | DbKind::External) {
             Self::prepare_tunnel(cfg)?;
             let guard = crate::ssh::open_tunnel(cfg).await?;
@@ -1484,6 +1494,14 @@ impl ConnectionManager {
         match &self.get(id)?.active {
             Active::Postgres(d) => Ok(d.clone()),
             _ => Err(AppError::Unsupported(t!("此連線不是 PostgreSQL").into())),
+        }
+    }
+
+    /// 取得 SQLite driver 本體（同上，專屬連線用）。
+    pub fn sqlite_driver(&self, id: &str) -> AppResult<Arc<SqliteDriver>> {
+        match &self.get(id)?.active {
+            Active::Sqlite(d) => Ok(d.clone()),
+            _ => Err(AppError::Unsupported(t!("此連線不是 SQLite").into())),
         }
     }
 

@@ -34,7 +34,7 @@
 | — | **側欄分組一致化**：資料庫連線依種類各一區，SSH 主機、遠端桌面各一區；三區共用可摺疊標題、群組、拖曳排序與拖進 / 拖出 | ✅ 完成 |
 | — | **遠端桌面（RDP / VNC / Mac 螢幕共享）**：側欄獨立「遠端桌面」清單（資料夾；有主機才出現）、分頁內嵌畫面（RDP 走 IronRDP，TLS / NLA、憑證首次確認、差異區塊 + 反壓；VNC 走 noVNC，後端代做認證含 Apple ARD，密碼不進前端）、全螢幕（Ctrl+Alt+Enter，浮動工具列送 Ctrl+Alt+Del / Win / Alt+Tab）、動態解析度 / 縮放 / 原始大小、可經已存 SSH 主機轉接、連線字串（rdp:// 兩種寫法、mstsc /v:、vnc://、rustdesk://）與 .rdp 檔匯入 | ✅ 完成 |
 | — | 遠端桌面第二階段：RDP / VNC 剪貼簿文字同步（系統剪貼簿由後端讀寫）、Windows 低階鍵盤攔截（全螢幕時 Win / Alt+Tab / Alt+F4 / Ctrl+Esc 直接進遠端） | ✅ 完成 |
-| — | 遠端桌面第三階段：VeNCrypt TLS、RDP 剪貼簿圖片 / 檔案、macOS 全螢幕按鍵攔截（需輔助使用權限） | ⏳ 規劃中 |
+| — | 遠端桌面第三階段：RDP 剪貼簿圖片 / 檔案、macOS 全螢幕按鍵攔截（需輔助使用權限） | ⏳ 規劃中 |
 | — | RustDesk 相容連線第一階段：獨立 AGPL 輔助程式 `rustdesk-bridge/`（stdin / stdout 與 db-kit 對話）、Direct IP、密碼登入 / 對方按接受、VP9 / VP8 影像原封不動交給 WebView 的 WebCodecs 解碼、鍵盤滑鼠、可經 SSH 主機轉接 | ✅ 完成 |
 | — | RustDesk 第二階段：用 RustDesk ID 連線——ID 伺服器（hbbs，公開或自架 + Key）→ TCP 打洞直連，不行就經中繼（hbbr）→ 驗過簽章的端到端加密（box / secretbox 金鑰交換）；可貼上 RustDesk 匯出的伺服器設定字串 | ✅ 完成 |
 | — | RustDesk 多螢幕：工具列每個螢幕一顆按鈕切換、「所有螢幕」照排列拼成一張；對方插拔螢幕 / 換解析度時跟著更新 | ✅ 完成 |
@@ -75,6 +75,11 @@
 | — | **DBA agent 審查 + AI 資源庫**：人設 / 技能 / 全部提示範本改成 Markdown 靜態檔（格式相容 Claude Code subagent 與 Agent Skills），內建 < 個人 < 團隊資料夾三層覆蓋、輸出契約鎖定、必要變數保底、前後端共用案例釘住同一套範本引擎；DBA 可自己用唯讀工具驗證（人設決定工具白名單與回合上限）、多位 DBA 會審取最嚴格結論；三個入口（編輯器 SQL、審查並執行、資料表結構）；一鍵同步到 Claude Code / Codex（不覆蓋使用者自己的檔）；`dbk ai list / show / lint / sync`、`dbk run --persona`、`dbk mcp --tools` | ✅ 完成 |
 | — | **審查並執行**（GUI 與 `dbk run` 共用）：AI 審查 → 逐句擷取前像 → 回滾語句先落地 → 執行 → 擷取後像比對；依型別無損取值（BLOB / 時區 / 浮點精度）；DDL 回滾沿用結構比對產生器；腳本、審查、`rollback.sql`、`diff.md`、快照寫入指定目錄；交易控制 / session 狀態語句整份擋下；AI 助手的寫入語句同走此流程；MySQL / PostgreSQL / SQL Server / SQLite 端到端還原驗證 | ✅ 完成 |
 | — | **對話面板增強**：`@` 指定附帶範圍（表 / 庫 / 檔案 / 查詢 / 結果 / 錯誤，含預算與「沒帶成」的交代）、`/` 斜線命令、SQL 區塊就地執行並回饋、HTTP 供應商對話歷史落地、`Ctrl+L` 聚焦 | ✅ 完成 |
+| — | **大結果集列虛擬化**（查詢結果不再截斷於 2,000 列；資料表每頁可到 5,000 列）、**取消查詢**擴到 SQL Server（KILL）/ Oracle（OCIBreak）/ SQLite（progress handler） | ✅ 完成 |
+| — | **預覽影響列**（寫入語句改唯讀 SELECT 列出會改到的列）、**執行 SQL 檔**（專屬連線、DELIMITER / GO、遇錯停或繼續）、**JSON 匯入**、資料比對回到 GUI（只產生同步 SQL） | ✅ 完成 |
+| — | **編輯器**：語意診斷（找不到的表 / 限定欄位）、JOIN … ON 外鍵條件補全、參數 `${name}` / `#{name}` / `?`；**儲存格檢視器** JSON 樹 / 十六進位 / 圖片；**視覺化解釋**擴到 SQLite / SQL Server | ✅ 完成 |
+| — | **結構比對**欄位改名偵測（RENAME COLUMN / sp_rename）與「審查並執行（含回滾）」交接；**ER 圖匯出 SVG / PNG**；**處理程序清單**擴到 SQL Server / Oracle | ✅ 完成 |
+| — | **連線**：從 DBeaver / DataGrip / .ncx 匯入（不含密碼）、SSH 跳板主機、SOCKS5 / HTTP Proxy（密碼存 keychain）；唯讀連線暫時解鎖 1 / 5 分鐘、正式環境資料格寫入確認 | ✅ 完成 |
 
 ## 各資料庫備份機制（規劃）
 

@@ -242,6 +242,7 @@ async fn cmpa_schema_deep_sync_is_idempotent() {
         include_fks: true,
         include_views: true,
         include_routines: true,
+        detect_renames: false,
     };
     let script = ddl::generate(&d, &sa, &sb, &sync).unwrap();
     assert!(script.skipped.is_empty(), "此案例全部可表達：{:?}", script.skipped);

@@ -99,6 +99,7 @@ import {
   minifySql,
   extractNamedParams,
   substituteNamedParams,
+  paramLabel,
   isWriteStatement,
   stripLeadingComments,
   hasLeadingDbSwitch,
@@ -1374,6 +1375,26 @@ describe("具名參數（extractNamedParams / substituteNamedParams）", () => {
     expect(substituteNamedParams("mysql", "SELECT ':id' WHERE id=:id", { id: "7" })).toBe("SELECT ':id' WHERE id=7");
     // zero-padded 代碼當字串（避免比錯）。
     expect(substituteNamedParams("mysql", "WHERE code = :c", { c: "007" })).toBe("WHERE code = '007'");
+  });
+  it("${name} / #{name}（含 MyBatis 屬性）與 :name 同名共用一個值", () => {
+    const sql = "SELECT * FROM t WHERE a = ${a} AND b = #{b,jdbcType=VARCHAR} AND c = :a";
+    expect(extractNamedParams(sql)).toEqual(["a", "b"]);
+    expect(substituteNamedParams("mysql", sql, { a: "1", b: "x" })).toBe("SELECT * FROM t WHERE a = 1 AND b = 'x' AND c = 1");
+  });
+  it("? 位置參數：依序命名 ?1 ?2；PostgreSQL 不認（JSONB 運算子）；沒給方言也不認", () => {
+    expect(extractNamedParams("SELECT * FROM t WHERE a = ? AND b = ?", "mysql")).toEqual(["?1", "?2"]);
+    expect(substituteNamedParams("mssql", "WHERE a = ? AND b = ?", { "?1": "5", "?2": "x" })).toBe("WHERE a = 5 AND b = N'x'");
+    expect(extractNamedParams("SELECT data ? 'k', data ?| array['a'] FROM t", "postgres")).toEqual([]);
+    expect(extractNamedParams("SELECT * FROM t WHERE a = ?")).toEqual([]);
+    expect(extractNamedParams("SELECT '?' FROM t -- ?\nWHERE a = ?", "sqlite")).toEqual(["?1"]);
+  });
+  it("MySQL 指派 := 與 SQL Server / MySQL 的 @變數 不是參數", () => {
+    expect(extractNamedParams("SET @x := 1; SELECT @x, @@version", "mysql")).toEqual([]);
+    expect(extractNamedParams("DECLARE @id INT = 1; SELECT * FROM t WHERE id = @id", "mssql")).toEqual([]);
+  });
+  it("paramLabel：具名加冒號、位置參數照原樣", () => {
+    expect(paramLabel("id")).toBe(":id");
+    expect(paramLabel("?2")).toBe("?2");
   });
 });
 
