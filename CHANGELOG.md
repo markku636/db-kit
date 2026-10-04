@@ -44,7 +44,7 @@ AI 工具整合（MCP）
 
 - PostgreSQL 連線在沒給 `-d` 時，`dbk mcp` 把連線的資料庫名當成 schema 用（工具的 `database` 對 PG 是 schema），列表會是空的。現在沒給 `-d` 就不預設，模型會先 `list_databases`。
 
-> 驗證：Rust `cargo test --no-default-features --lib` 全數通過（新增 MCP 協定 / 多連線 / 寫入 / HTTP / 設定合併共 34 項，含對 SQLite 實檔的預覽 → 執行 → 回滾腳本落地端到端），GUI 組態 `cargo check --lib` 通過；實際執行 `dbk` 對 stdio、HTTP（401 / 403 / 202 / session）、`config` / `install` 跑 20 項冒煙檢查；前端 vitest（新增 mcpSetup）、tsc、eslint、vite build 通過；介面測試 `mcp-setup` 15 項檢查、900×640 與 1280×800 版面巡檢 0 筆。
+> 驗證（合併後）：Rust `cargo test --no-default-features --lib` 693 項、GUI 組態 `cargo check --lib`、前端 vitest 2217 項、tsc、eslint、`i18n:scan` en / zh-CN 100% 通過；MCP 另以實際 `dbk` 對 stdio、HTTP（401 / 403 / 202 / session）、`config` / `install` 跑 20 項冒煙檢查（含對 SQLite 實檔的預覽 → 執行 → 回滾腳本落地），介面測試 `mcp-setup` 15 項、900×640 與 1280×800 版面巡檢 0 筆；本機 `tauri build` 打包成功。
 >
 > 沒測到：真實 AI 工具（Claude Code / Codex / Cursor…）實際連上、打包後的 App 實機背景 HTTP 伺服器、MySQL / PostgreSQL / SQL Server 上的寫入工具（核心與 `dbk run` 共用，已有各引擎整合測試）。
 
