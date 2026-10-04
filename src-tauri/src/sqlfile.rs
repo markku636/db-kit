@@ -9,6 +9,7 @@
 //! SQL Server `GO` 行為分隔），再補兩件傾印檔常見的事：
 //! - MySQL `DELIMITER xx`（mysqldump 的觸發器 / 程序段落）：切換分隔符，段落內以新分隔符切。
 //! - PostgreSQL 以 `\` 開頭的 psql 指令行（pg_dump 的 `\connect`、`\restrict`）：略過並計數。
+//!
 //! pg_dump 純文字格式的 `COPY … FROM stdin` 資料區塊不是 SQL，無法逐句執行——開跑前就擋下並說明替代做法。
 
 use std::time::Instant;

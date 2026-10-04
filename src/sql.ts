@@ -929,38 +929,58 @@ export function minifySql(sql: string): string {
   return out.trim();
 }
 
-// 具名參數（`:name`）萃取 / 代入（致敬 Navicat 的參數化查詢）。在「程式碼」段才認，
-// 字串 / 註解內的 `:name` 不算；PostgreSQL 型別轉換 `::type` 不誤判為參數。
-const PARAM_RE = /:{1,2}([a-zA-Z_]\w*)/g;
+// 查詢參數萃取 / 代入（致敬 Navicat 的參數化查詢）。只在「程式碼」段才認，字串 / 註解內的不算。支援：
+// - :name（PostgreSQL 型別轉換 ::type 不算；MySQL 指派 := 不算）
+// - ${name}、#{name}（MyBatis 寫法，可帶 ,jdbcType=… 屬性）——同名的不論寫法共用一個值
+// - ?（位置參數，依出現順序命名為 ?1、?2…）：PostgreSQL 不認，因為 ? / ?| / ?& 是 JSONB 運算子
+// 刻意不支援 @name：那是 SQL Server / MySQL 的變數，代掉會改壞合法腳本。
+const PARAM_RE = /::?([a-zA-Z_]\w*)|\$\{([a-zA-Z_][\w.]*)\}|#\{([a-zA-Z_][\w.]*)(?:,[^}]*)?\}|\?/g;
 
-// 取出 SQL 內所有具名參數（依出現順序、去重）。
-export function extractNamedParams(sql: string): string[] {
-  const names: string[] = [];
-  const seen = new Set<string>();
-  for (const seg of sqlCodeSegments(sql)) {
-    if (!seg.code) continue;
-    PARAM_RE.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = PARAM_RE.exec(seg.v))) {
-      if (m[0].startsWith("::")) continue; // PG 型別轉換，非參數
-      if (!seen.has(m[1])) { seen.add(m[1]); names.push(m[1]); }
-    }
-  }
-  return names;
-}
+/** 位置參數 ? 是否適用於此方言（未給方言 = 不認 ?，與舊行為相同）。 */
+const positionalOk = (kind?: DbKind) => !!kind && kind !== "postgres";
 
-// 將 SQL 內的具名參數代入值（數字原樣、其餘字串字面值；方言感知）。未提供值的參數保持原樣。
-export function substituteNamedParams(kind: DbKind, sql: string, values: Record<string, string>): string {
+/** 走過程式碼段的每個參數記號；cb 回傳字串則取代該記號。 */
+function walkParams(sql: string, kind: DbKind | undefined, cb: (name: string) => string | void): string {
+  let pos = 0;
   return sqlCodeSegments(sql)
     .map((seg) => {
       if (!seg.code) return seg.v;
-      return seg.v.replace(PARAM_RE, (full, name: string) => {
-        if (full.startsWith("::") || !(name in values)) return full;
-        const v = values[name];
-        return isNumericLiteral(v) ? v.trim() : sqlLiteral(kind, v);
+      return seg.v.replace(PARAM_RE, (full: string, colon?: string, dollar?: string, hash?: string) => {
+        if (full.startsWith("::")) return full; // PG 型別轉換，非參數
+        let name: string;
+        if (full === "?") {
+          if (!positionalOk(kind)) return full;
+          name = `?${++pos}`;
+        } else name = (colon ?? dollar ?? hash) as string;
+        const r = cb(name);
+        return typeof r === "string" ? r : full;
       });
     })
     .join("");
+}
+
+// 取出 SQL 內所有參數（依出現順序、去重）。位置參數以 ?1、?2… 回傳；給 kind 才認 ?。
+export function extractNamedParams(sql: string, kind?: DbKind): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  walkParams(sql, kind, (name) => {
+    if (!seen.has(name)) { seen.add(name); names.push(name); }
+  });
+  return names;
+}
+
+// 將 SQL 內的參數代入值（數字原樣、其餘字串字面值；方言感知）。未提供值的參數保持原樣。
+export function substituteNamedParams(kind: DbKind, sql: string, values: Record<string, string>): string {
+  return walkParams(sql, kind, (name) => {
+    if (!(name in values)) return;
+    const v = values[name];
+    return isNumericLiteral(v) ? v.trim() : sqlLiteral(kind, v);
+  });
+}
+
+/** 參數在提示框裡的顯示：位置參數照原樣（?1），具名參數加冒號（:id）。 */
+export function paramLabel(name: string): string {
+  return name.startsWith("?") ? name : `:${name}`;
 }
 
 // 去掉開頭的空白與註解（`-- 行`、`# 行`（MySQL）、`/* 區塊 */`），回傳語句真正的起點。

@@ -1956,7 +1956,6 @@ const en: Catalog = {
   "偵測中…": "Detecting…",
   "偵測到 {dangerCount} 條無 WHERE 的 UPDATE / DELETE 或 TRUNCATE，將影響整張表的所有資料列。確定執行？": "Detected {dangerCount} UPDATE / DELETE without WHERE or TRUNCATE statement(s) that will affect every row in the table. Execute?",
   "偵測到 {n} 個具名參數：{names}": { one: "Detected {n} named parameter: {names}", other: "Detected {n} named parameters: {names}" },
-  "偵測到具名參數 :name；執行時會逐一提示輸入並安全代入": "Named parameter :name detected; you'll be prompted for each at run time and it's safely bound",
   "副本": "Replicas",
   "區分大小寫": "Case sensitive",
   "參照": "References",
@@ -1964,7 +1963,6 @@ const en: Catalog = {
   "參照此列的資料表": "Tables referencing this row",
   "參照表": "Referenced table",
   "參照欄位": "Referenced column",
-  "參數 :{p} 的值": "Value for parameter :{p}",
   "參數⟩": "params⟩",
   "參數化查詢": "Parameterized query",
   "參數替換（CSV）": "Parameter substitution (CSV)",
@@ -4930,6 +4928,8 @@ const en: Catalog = {
   "匯出失敗：{msg}": "Export failed: {msg}",
   "匯出為 SVG（向量，可再編輯）": "Export as SVG (vector, editable)",
   "匯出為 PNG（2 倍解析度）": "Export as PNG (2x resolution)",
+  "參數 {p} 的值": "Value for parameter {p}",
+  "偵測到查詢參數（:name、${name}、#{name}，PostgreSQL 以外也認 ?）；執行時會逐一提示輸入並安全代入": "Query parameters detected (:name, ${name}, #{name}; also ? outside PostgreSQL); you'll be prompted for each one when running and values are substituted safely",
 };
 
 export default en;

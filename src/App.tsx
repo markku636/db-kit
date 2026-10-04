@@ -72,7 +72,7 @@ import {
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
   formatSql, minifySql, transformKeywordCase, buildUseDatabase, hasExecutableSql,
-  extractNamedParams, substituteNamedParams, isInternalKafkaTopic, suggestQueryName, buildCellUpdate,
+  extractNamedParams, substituteNamedParams, paramLabel, isInternalKafkaTopic, suggestQueryName, buildCellUpdate,
 } from "./sql";
 import type { SavedQuery } from "./sql";
 import { snapshotFileName } from "./compareModel";
@@ -4542,7 +4542,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [editorSel, setEditorSel] = useState<string | null>(null);
   const [sql, setSql] = useState(() => loadPersistedSql(activeId, kind, tabId));
   // 具名參數數量（記憶化，避免每次 render 重新 tokenize SQL）。
-  const paramCount = useMemo(() => (supportsSqlEditor ? extractNamedParams(sql).length : 0), [supportsSqlEditor, sql]);
+  const paramCount = useMemo(() => (supportsSqlEditor ? extractNamedParams(sql, kind ?? undefined).length : 0), [supportsSqlEditor, sql, kind]);
   // 靜態審查（規則引擎）：純前端、不需執行查詢也不需要 AI，故隨打字即時更新。
   // 超過上限時 lintSql 會回空陣列（避免貼一份巨大腳本讓每次按鍵都卡住），
   // 但「沒問題」與「太長沒審」對使用者是兩件事，所以在這裡分開判並各自顯示。
@@ -5035,11 +5035,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 回傳 null = 使用者取消。執行與「審查並執行」共用，兩個入口代入的結果必須一致。
   const substituteParamsInteractively = async (q: string): Promise<string | null> => {
     if (!kind || !(EXPLAIN_KINDS.includes(kind) || kind === "external" || kind === "mssql")) return q;
-    const params = extractNamedParams(q);
+    const params = extractNamedParams(q, kind);
     if (!params.length) return q;
     const values: Record<string, string> = {};
     for (const p of params) {
-      const v = await uiPrompt(t("參數 :{p} 的值", { p }), { title: t("參數化查詢"), placeholder: `:${p}`, confirmText: t("確定") });
+      const v = await uiPrompt(t("參數 {p} 的值", { p: paramLabel(p) }), { title: t("參數化查詢"), placeholder: paramLabel(p), confirmText: t("確定") });
       if (v === null) return null; // 任一取消 → 中止整次執行
       values[p] = v;
     }
@@ -6306,7 +6306,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
               )}
             </div>
             {paramCount > 0 && (
-              <span className="text-[11px] text-sky-300/80 px-1" title={t("偵測到具名參數 :name；執行時會逐一提示輸入並安全代入")}>
+              <span className="text-[11px] text-sky-300/80 px-1" title={t("偵測到查詢參數（:name、${name}、#{name}，PostgreSQL 以外也認 ?）；執行時會逐一提示輸入並安全代入")}>
                 ⟨{paramCount} {t("參數⟩")}
               </span>
             )}

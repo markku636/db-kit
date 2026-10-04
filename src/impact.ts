@@ -781,7 +781,7 @@ export function analyzeStatement(kind: DbKind, sql: string): ImpactItem {
   }
   // 未代入的具名參數：探測 SQL 送出去會直接語法錯誤（手動評估入口才會遇到，
   // execute() 走到這裡時參數已代入）。
-  if (item.write && item.probes.length && extractNamedParams(raw).length > 0) {
+  if (item.write && item.probes.length && extractNamedParams(raw, kind).length > 0) {
     item.probes = [];
     item.reason = "unresolvedParams";
   }
