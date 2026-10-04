@@ -471,6 +471,16 @@ metadata:
 
     // ── 審查並執行 ───────────────────────────────────────────────────────
     review_run_prepare: () => fx.REVIEW_PREPARED,
+    preview_dml: ({ script }) => ({
+      database: "shop",
+      blockers: [],
+      statements: [
+        { index: 0, sql: String(script).split(";")[0], op: "update", write: true, targets: ["shop.orders"], estimated_rows: 2, estimate_exact: true, method: "predicate",
+          table: "orders", columns: ["order_id", "status", "total_amount"], rows: [["1001", "paid", "560.00"], ["1002", null, "99.00"]], truncated: false, detail: null, notes: [] },
+        { index: 1, sql: "SELECT 1", op: "read", write: false, targets: [], estimated_rows: null, estimate_exact: true, method: "none",
+          table: null, columns: [], rows: [], truncated: false, detail: null, notes: [] },
+      ],
+    }),
     review_run_start: ({ runId, mode }) => {
       // 先打幾個進度事件，再回結果：對話框的進度列與結果分頁兩條路徑都跑得到。
       const outcome = mode === "execute" && fx.REVIEW_OUTCOME_EXECUTED ? fx.REVIEW_OUTCOME_EXECUTED : fx.REVIEW_OUTCOME;

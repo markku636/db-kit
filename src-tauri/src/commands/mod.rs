@@ -1559,6 +1559,17 @@ pub async fn review_run_prepare(
     .await
 }
 
+/// 寫入語句的影響列預覽：只送唯讀 SELECT，不執行、不送 AI（見 review_run/preview.rs）。
+#[tauri::command]
+pub async fn preview_dml(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    script: String,
+) -> AppResult<crate::review_run::preview::DmlPreview> {
+    crate::review_run::preview::preview(&state.manager, &id, &database, &script).await
+}
+
 /// 只產生備份（mode = backup）或備份後執行（mode = execute），檔案寫進 `out_dir` 底下的新子目錄。
 /// 進度以 `review-run-progress` 事件回報，`review_run_cancel` 於語句之間收手。
 #[tauri::command]

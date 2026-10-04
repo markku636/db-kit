@@ -3747,6 +3747,31 @@ const CASES = {
     check("Ctrl+End 捲到第 20000 列", (await appText(page)).includes("row-20000"), dbg);
   },
 
+  // 影響列預覽：更多 → 預覽影響列… 只列出會被改到的列，不執行；可一鍵轉交審查並執行。
+  async "dml-preview"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("UPDATE orders SET status = 'shipped' WHERE order_id IN (1001, 1002)");
+    await page.locator('button[title*="更多工具"]').first().click();
+    await sleep(300);
+    const item = page.locator('[data-testid="dml-preview-open"]');
+    check("更多選單有「預覽影響列…」", (await item.count()) === 1);
+    await item.click();
+    await page.locator("[data-dml-preview-stmt]").first().waitFor({ timeout: 8000 }).catch(() => {});
+    const body = await appText(page);
+    check("列出影響列數", (await page.locator("[data-dml-preview-count]").first().innerText()).includes("2"), body.replace(/\s+/g, " ").slice(0, 200));
+    check("列出會被改到的列", body.includes("1001") && body.includes("1002"));
+    check("讀取語句不列出", (await page.locator("[data-dml-preview-stmt]").count()) === 1);
+    await page.getByRole("button", { name: "審查並執行…", exact: true }).click();
+    await sleep(800);
+    check("轉交審查並執行後預覽關閉", (await page.locator("[data-dml-preview-stmt]").count()) === 0);
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

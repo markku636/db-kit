@@ -4896,6 +4896,16 @@ const en: Catalog = {
   "產生 DELETE（刪除目標多出的列）": "Generate DELETE (remove extra target rows)",
   "資料相同": "Data identical",
   "送到目標的查詢編輯器": "Send to target's query editor",
+  "只列出前 {n} 列。": "Only the first {n} rows are listed.",
+  "只執行唯讀 SELECT 找出每句寫入語句會碰到的列，不會改動資料。數字以目前狀態為準；同一份腳本前面的語句若改過同一張表，實際執行時可能不同。": "Runs read-only SELECTs to find the rows each write statement would touch; no data is changed. Counts reflect the current state; if an earlier statement in the same script changes the same table, the actual run may differ.",
+  "審查並執行…": "Review & Run…",
+  "最多影響 {n} 列": "Affects up to {n} rows",
+  "目前沒有符合條件的列：這句不會改到任何資料。": "No rows currently match: this statement would not change any data.",
+  "第 {n} 句：{msg}": "Statement {n}: {msg}",
+  "這段 SQL 沒有寫入語句，不需要預覽。": "This SQL has no write statements, so there is nothing to preview.",
+  "預覽影響列": "Preview affected rows",
+  "預覽影響列…": "Preview affected rows…",
+  "把 UPDATE / DELETE / INSERT 改成唯讀 SELECT，先看會改到哪些列（不執行、不送 AI；有選取時只處理選取段）": "Rewrite UPDATE / DELETE / INSERT as read-only SELECTs to see which rows would change first (nothing runs, nothing is sent to AI; only the selection when there is one)",
 };
 
 export default en;

@@ -1226,6 +1226,25 @@ export interface ReviewBlocker {
   message: string;
 }
 
+/** 寫入語句的影響列預覽（review_run/preview.rs）：不執行、不送 AI。 */
+export interface DmlStatementPreview {
+  index: number;
+  sql: string;
+  op: string;
+  write: boolean;
+  targets: string[];
+  estimated_rows: number | null;
+  estimate_exact: boolean;
+  method: string;
+  table: string | null;
+  columns: string[];
+  rows: (string | null)[][];
+  truncated: boolean;
+  detail: string | null;
+  notes: ReviewNote[];
+}
+export interface DmlPreview { database: string; statements: DmlStatementPreview[]; blockers: ReviewBlocker[] }
+
 export interface ReviewPrepared {
   prepared: {
     kind: DbKind;
@@ -1771,6 +1790,8 @@ export const api = {
     invoke<DataDiffDbReport>("compare_data_database", { runId, src, dst, options }),
   compareDataCancel: (runId: string) => invoke<void>("compare_data_cancel", { runId }),
   // 審查並執行：prepare 只送唯讀查詢；start 的進度走 onReviewRunProgress、取消走 reviewRunCancel。
+  previewDml: (id: string, database: string, script: string) =>
+    invoke<DmlPreview>("preview_dml", { id, database, script }),
   reviewRunPrepare: (id: string, connLabel: string, database: string, script: string, maxCaptureRows?: number, sampleRows?: number, personas?: string[]) =>
     invoke<ReviewPrepared>("review_run_prepare", { id, connLabel, database, script, maxCaptureRows, sampleRows, personas: personas ?? null }),
   reviewRunStart: (args: {

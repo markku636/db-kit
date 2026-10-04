@@ -12,6 +12,7 @@ mod it_sqlite;
 mod it_server;
 pub mod names;
 pub mod plan;
+pub mod preview;
 pub mod report;
 pub mod rollback;
 pub mod run;

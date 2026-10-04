@@ -247,6 +247,7 @@ pub fn run() {
             commands::compare_data_database,
             commands::compare_data_cancel,
             commands::review_run_prepare,
+            commands::preview_dml,
             commands::ai_library::ai_library_load,
             commands::ai_library::ai_library_save,
             commands::ai_library::ai_library_copy,

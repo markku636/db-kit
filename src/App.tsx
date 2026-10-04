@@ -158,6 +158,7 @@ const TableProperties = lazyOverlay(() => import("./TableProperties"));
 const RoutinesDialog = lazyOverlay(() => import("./RoutinesDialog"));
 const SavedQueriesDialog = lazyOverlay(() => import("./SavedQueriesDialog"));
 const ReviewRunDialog = lazyOverlay(() => import("./ReviewRunDialog"));
+const DmlPreviewDialog = lazyOverlay(() => import("./DmlPreviewDialog"));
 const SpTestDialog = lazyOverlay(() => import("./SpTestDialog"));
 /** 預存程序整合測試支援的引擎（核心 sptest::session 有實作的）。 */
 const SP_TEST_KINDS = new Set<string>(["mssql", "postgres", "mysql", "mariadb"]);
@@ -4639,6 +4640,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const [showMore, setShowMore] = useState(false);
   // 壓力測試對話框（對標 SQLQueryStress）：帶目前編輯器內容進去，開窗後與查詢面板互不干擾。
   const [stressOpen, setStressOpen] = useState(false);
+  // 影響列預覽（不執行）：記下送出當下的連線 / 庫 / 語句，對話框開著時編輯器再改也不影響。
+  const [dmlPreview, setDmlPreview] = useState<{ connId: string; database: string; sql: string } | null>(null);
   // 工具列寬度自適應（三段）：0 圖示+文字 → 1 次要鈕只留圖示 → 2 無下拉的次要鈕整顆折進「更多」。
   //
   // 為何量測而非寫死斷點：標籤寬度取決於語言與連線種類（Kibana / AI 生成 等按鈕按 kind 出現），
@@ -5045,6 +5048,17 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     if (q === null) return;
     // 與查詢分頁送出語句一致：有選擇目前資料庫才帶（MySQL / PG 以前綴切換）；其餘由後端依連線判斷。
     useStore.getState().openReviewRun({ connId: activeId, database: supportsDbSelect ? queryDb : "", sql: q, origin: "query" });
+  };
+  const openDmlPreview = async () => {
+    if (!activeId || !kind) return;
+    const raw = queryToRun();
+    if (!raw.trim()) {
+      toast.info(t("沒有可執行的語句。"));
+      return;
+    }
+    const q = await substituteParamsInteractively(raw);
+    if (q === null) return;
+    setDmlPreview({ connId: activeId, database: supportsDbSelect ? queryDb : "", sql: q });
   };
 
   // SQL 編輯器送出：有選取→跑選取；F6→整段；否則→跑游標所在語句（Ctrl+Enter）。
@@ -6232,6 +6246,14 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                             </span>
                           )}
                         </button>
+                        {supportsReviewRun(kind) && (
+                          <button type="button" onClick={() => { setShowMore(false); void openDmlPreview(); }} disabled={running || !sql.trim()}
+                            data-testid="dml-preview-open"
+                            title={t("把 UPDATE / DELETE / INSERT 改成唯讀 SELECT，先看會改到哪些列（不執行、不送 AI；有選取時只處理選取段）")}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
+                            <Icon icon={Eye} size={13} className="text-fg/45" />{t("預覽影響列…")}
+                          </button>
+                        )}
                         <button type="button" onClick={() => { setShowMore(false); askAiReview(); }} disabled={!sql.trim()}
                           title={t("用選定的 DBA 人設審查這段 SQL（可多位會審；DBA 會自己查資料庫驗證）")}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left text-fg/75 hover:bg-fg/10 disabled:opacity-40">
@@ -6700,6 +6722,15 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           )}
         </div>
       </div>
+      {dmlPreview && (
+        <DmlPreviewDialog connId={dmlPreview.connId} database={dmlPreview.database} sql={dmlPreview.sql}
+          onClose={() => setDmlPreview(null)}
+          onReviewRun={() => {
+            const p = dmlPreview;
+            setDmlPreview(null);
+            useStore.getState().openReviewRun({ connId: p.connId, database: p.database, sql: p.sql, origin: "query" });
+          }} />
+      )}
       {stressOpen && activeId && (
         // 帶「要跑的那段」而非整個編輯器：有反白用反白，與執行鍵的語意一致。
         <StressDialog

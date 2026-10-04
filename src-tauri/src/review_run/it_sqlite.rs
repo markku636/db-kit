@@ -280,3 +280,43 @@ async fn backup_mode_writes_files_without_executing() {
     assert_eq!(e.dump("t").await, before);
     let _ = &e.db;
 }
+
+/// 影響列預覽：UPDATE / DELETE 列出會被改到的列（依 WHERE），帶鍵的 INSERT 列出會撞鍵的既有列，
+/// 而且預覽本身不改任何資料。
+#[tokio::test]
+async fn preview_lists_affected_rows_without_writing() {
+    let e = env("preview").await;
+    e.exec("CREATE TABLE acct (id INTEGER PRIMARY KEY, owner TEXT, balance INTEGER); \
+            INSERT INTO acct VALUES (1, 'amy', 10), (2, 'bob', 20), (3, 'cat', 30), (4, 'dan', 40);")
+        .await;
+    let script = "UPDATE acct SET balance = balance + 1 WHERE balance >= 30;\n\
+                  DELETE FROM acct WHERE owner = 'amy';\n\
+                  INSERT INTO acct (id, owner, balance) VALUES (2, 'dup', 0), (9, 'new', 0);\n\
+                  SELECT * FROM acct;";
+    let p = super::preview::preview(&e.mgr, &e.id, "", script).await.unwrap();
+    assert_eq!(p.statements.len(), 4);
+
+    let upd = &p.statements[0];
+    assert!(upd.write);
+    assert_eq!(upd.estimated_rows, Some(2));
+    let ids: Vec<_> = upd.rows.iter().map(|r| r[0].clone().unwrap()).collect();
+    assert_eq!(ids, vec!["3", "4"], "UPDATE 預覽的是 WHERE 命中的列");
+    assert_eq!(upd.columns, vec!["id", "owner", "balance"]);
+
+    let del = &p.statements[1];
+    assert_eq!(del.rows.len(), 1);
+    assert_eq!(del.rows[0][1].as_deref(), Some("amy"));
+
+    let ins = &p.statements[2];
+    assert_eq!(ins.rows.len(), 1, "只有 id=2 已存在：{:?}", ins.rows);
+    assert_eq!(ins.rows[0][0].as_deref(), Some("2"));
+
+    let sel = &p.statements[3];
+    assert!(!sel.write);
+    assert!(sel.rows.is_empty(), "讀取語句不擷取");
+
+    // 預覽不得改資料。
+    let q = e.mgr.query_capped(&e.id, "SELECT SUM(balance), COUNT(*) FROM acct", 0).await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("100"));
+    assert_eq!(q.rows[0][1].as_deref(), Some("4"));
+}

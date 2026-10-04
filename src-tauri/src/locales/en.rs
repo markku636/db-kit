@@ -537,6 +537,11 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         // ---- db/mod.rs：trait 預設 Unsupported + 欄位驗證 ----
         "此連線不支援取消執行中的查詢" => "This connection does not support cancelling a running query",
         "查詢已取消" => "Query cancelled",
+        "這些鍵目前都不存在：全部是新增的列。" => "None of these keys exist yet: every row is new.",
+        "自動編號的新增：執行前沒有既有的列可預覽。" => "Auto-numbered insert: there are no existing rows to preview before it runs.",
+        "結構變更：沒有資料列可預覽，請用「審查並執行」檢視結構前後差異。" => "Schema change: there are no rows to preview; use Review & Run to see the schema before and after.",
+        "無法判斷這句會影響哪些列（例如呼叫程序或動態 SQL），無法預覽。" => "Cannot tell which rows this statement affects (e.g. a procedure call or dynamic SQL), so it cannot be previewed.",
+        "擷取影響列失敗：{e}" => "Failed to fetch affected rows: {e}",
         "此資料庫不支援鍵結構編輯" => "This database does not support key structure editing",
         "此資料庫不支援查詢計畫分析" => "This database does not support query plan analysis",
         "此資料庫不支援欄位統計" => "This database does not support column statistics",
