@@ -1331,6 +1331,10 @@ pub async fn import_csv(
             AppError::Query(tf!("讀取檔案失敗：{e}", e = e))
         }
     })?;
+    // .json / .jsonl / .ndjson 走同一個指令（同樣是文字檔、同樣的上限與編碼檢查），只換解析器。
+    if crate::import::is_json_path(&path) {
+        return crate::import::import_json(&state.manager, &id, &database, &table, &content, &options).await;
+    }
     crate::import::import_csv(&state.manager, &id, &database, &table, &content, &options).await
 }
 
@@ -1376,6 +1380,17 @@ pub async fn import_preview(
             .await
             .map_err(|e| AppError::Query(tf!("讀取檔案失敗：{e}", e = e)))?;
         crate::import::parse_xlsx(&bytes)?
+    } else if crate::import::is_json_path(&path) {
+        let content = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| AppError::Query(tf!("讀取檔案失敗：{e}", e = e)))?;
+        // 預覽以 NULL 字樣顯示 null / 缺鍵；JSON 的第一列一定是欄名。
+        let rows = crate::import::parse_json(&content)?
+            .into_iter()
+            .map(|r| r.into_iter().map(|c| c.unwrap_or_else(|| "NULL".into())).collect())
+            .collect();
+        let (columns, rows, total_rows) = crate::import::build_preview(rows, true, options.columns.clone(), PREVIEW_ROWS);
+        return Ok(crate::import::ImportPreview { columns, rows, total_rows });
     } else {
         let content = tokio::fs::read_to_string(&path)
             .await

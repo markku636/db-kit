@@ -2377,7 +2377,6 @@ const en: Catalog = {
   "匯入": "Import",
   "匯入 {imported} 列、失敗 {failed} 列": "Imported {imported} rows, {failed} failed",
   "匯入 {n} 列": { one: "Imported {n} row", other: "Imported {n} rows" },
-  "匯入 CSV / Excel ·": "Import CSV / Excel ·",
   "匯入 SQL 庫": "Import SQL library",
   "匯入失敗": "Import failed",
   "匯入失敗：{msg}": "Import failed: {msg}",
@@ -4924,6 +4923,9 @@ const en: Catalog = {
   "第 {line} 行：{msg}": "Line {line}: {msg}",
   "讀取檔案…": "Reading file…",
   "遇錯已停止": "Stopped on error",
+  "匯入 CSV / Excel / JSON ·": "Import CSV / Excel / JSON ·",
+  "已匯入 {n} 列（JSON）": "Imported {n} rows (JSON)",
+  "JSON：欄名取自物件的鍵；null 與缺少的鍵一律寫入 NULL，true / false 寫成 1 / 0，巢狀物件存成 JSON 字串。": "JSON: column names come from the object keys; null and missing keys are always written as NULL, true / false become 1 / 0, and nested objects are stored as JSON strings.",
 };
 
 export default en;

@@ -218,14 +218,115 @@ pub fn build_preview(
     (columns, preview, total)
 }
 
+/// 依副檔名判斷是不是 JSON 匯入（.json / .jsonl / .ndjson）。
+pub fn is_json_path(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    p.ends_with(".json") || p.ends_with(".jsonl") || p.ends_with(".ndjson")
+}
+
+fn json_cell(v: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    match v {
+        Value::Null => None,
+        Value::String(s) => Some(s.clone()),
+        // 布林寫成 1 / 0：MySQL 的 BOOLEAN 是 TINYINT（'true' 字串在嚴格模式會失敗），PG / SQL Server 也都收 1 / 0。
+        Value::Bool(b) => Some(if *b { "1" } else { "0" }.to_string()),
+        Value::Number(n) => Some(n.to_string()),
+        // 巢狀物件 / 陣列整段存成緊湊 JSON 字串（目標是 JSON / 文字欄）。
+        other => Some(other.to_string()),
+    }
+}
+
+/// JSON → 第一列是欄名（所有物件鍵的聯集，依首次出現順序），其後每筆一列；缺鍵與 null = NULL。接受：
+/// - 物件陣列 `[{…}, {…}]`
+/// - NDJSON（每行一個物件）
+/// - 外層物件只有一個欄位、其值是物件陣列（`{"data": [{…}]}`，常見的 API 回應形狀）
+/// - 單一物件（當成一筆）
+pub fn parse_json(content: &str) -> AppResult<Vec<Vec<Option<String>>>> {
+    use serde_json::Value;
+    let text = content.strip_prefix('\u{feff}').unwrap_or(content).trim();
+    let records: Vec<Value> = match serde_json::from_str::<Value>(text) {
+        Ok(Value::Array(a)) => a,
+        Ok(Value::Object(o)) => {
+            let only_array = if o.len() == 1 { o.values().next().and_then(|v| v.as_array()).cloned() } else { None };
+            match only_array {
+                Some(a) if a.iter().all(Value::is_object) => a,
+                _ => vec![Value::Object(o)],
+            }
+        }
+        Ok(_) => return Err(AppError::Query(t!("JSON 必須是物件陣列、每行一個物件（NDJSON），或包著物件陣列的物件").into())),
+        Err(_) => {
+            // 不是單一 JSON 值：當 NDJSON 逐行解析。
+            let mut v = Vec::new();
+            for (i, line) in text.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let rec = serde_json::from_str::<Value>(line)
+                    .map_err(|e| AppError::Query(tf!("JSON 第 {line} 行解析失敗：{e}", line = i + 1, e = e)))?;
+                v.push(rec);
+            }
+            v
+        }
+    };
+    let mut keys: Vec<String> = Vec::new();
+    for (i, r) in records.iter().enumerate() {
+        let Some(obj) = r.as_object() else {
+            return Err(AppError::Query(tf!("JSON 第 {n} 筆不是物件", n = i + 1)));
+        };
+        for k in obj.keys() {
+            if !keys.iter().any(|x| x == k) {
+                keys.push(k.clone());
+            }
+        }
+    }
+    let mut rows: Vec<Vec<Option<String>>> = Vec::with_capacity(records.len() + 1);
+    rows.push(keys.iter().cloned().map(Some).collect());
+    for r in &records {
+        if let Some(obj) = r.as_object() {
+            rows.push(keys.iter().map(|k| obj.get(k).and_then(json_cell)).collect());
+        }
+    }
+    Ok(rows)
+}
+
+/// JSON 匯入：第一列一定是欄名（物件鍵），可用 opts.columns 覆蓋；其餘與 CSV 共用寫入邏輯。
+pub async fn import_json(
+    manager: &ConnectionManager,
+    id: &str,
+    database: &str,
+    table: &str,
+    content: &str,
+    opts: &ImportOptions,
+) -> AppResult<ImportResult> {
+    let rows = parse_json(content)?;
+    import_cells(manager, id, database, table, rows, opts, true).await
+}
+
 /// 共用列寫入：由二維字串（含可選表頭）逐列 insert_row。CSV / Excel 匯入皆走此。
 async fn import_rows(
     manager: &ConnectionManager,
     id: &str,
     database: &str,
     table: &str,
-    mut rows: Vec<Vec<String>>,
+    rows: Vec<Vec<String>>,
     opts: &ImportOptions,
+) -> AppResult<ImportResult> {
+    let rows = rows.into_iter().map(|r| r.into_iter().map(Some).collect()).collect();
+    import_cells(manager, id, database, table, rows, opts, opts.has_header).await
+}
+
+/// 列寫入本體。格子為 `None` = 來源明確給了 NULL（JSON 的 null / 缺鍵），不論 empty_as_null 都寫 NULL；
+/// `Some("")` 才看 empty_as_null。CSV / Excel 沒有 NULL 的概念，一律是 Some。
+async fn import_cells(
+    manager: &ConnectionManager,
+    id: &str,
+    database: &str,
+    table: &str,
+    mut rows: Vec<Vec<Option<String>>>,
+    opts: &ImportOptions,
+    has_header: bool,
 ) -> AppResult<ImportResult> {
     if rows.is_empty() {
         return Err(AppError::Query(t!("沒有任何資料列").to_string()));
@@ -233,8 +334,8 @@ async fn import_rows(
 
     // 決定欄名。has_header 時先吃掉表頭列；欄名以 opts.columns 覆蓋為優先（致敬 Navicat 匯入欄位對應，
     // 可把不一致的檔案表頭對齊到目標欄位），否則用表頭列；無表頭又無覆蓋則報錯。
-    let header_row = if opts.has_header && !rows.is_empty() {
-        Some(rows.remove(0))
+    let header_row: Option<Vec<String>> = if has_header && !rows.is_empty() {
+        Some(rows.remove(0).into_iter().map(Option::unwrap_or_default).collect())
     } else {
         None
     };
@@ -253,12 +354,14 @@ async fn import_rows(
     let mut result = ImportResult::default();
     for (i, row) in rows.iter().enumerate() {
         // 行號（1-based，含表頭偏移）供錯誤訊息定位。
-        let line_no = if opts.has_header { i + 2 } else { i + 1 };
+        let line_no = if has_header { i + 2 } else { i + 1 };
         // 略過全空白列；trim 開啟時純空白（trim 後為空）亦視為空白列，
         // 否則會插入一整列 NULL（auto-PK 表更會無聲產生雜訊列）。
-        let blank = row
-            .iter()
-            .all(|c| if opts.trim { c.trim().is_empty() } else { c.is_empty() });
+        let blank = row.iter().all(|c| match c {
+            None => true,
+            Some(c) if opts.trim => c.trim().is_empty(),
+            Some(c) => c.is_empty(),
+        });
         if blank {
             continue;
         }
@@ -281,7 +384,8 @@ async fn import_rows(
         let values: Vec<Option<String>> = row
             .iter()
             .map(|v| {
-                let s = if opts.trim { v.trim() } else { v.as_str() };
+                let v = v.as_deref()?;
+                let s = if opts.trim { v.trim() } else { v };
                 if opts.empty_as_null && s.is_empty() {
                     None
                 } else {
@@ -455,5 +559,45 @@ mod tests {
         assert_eq!(cols2, vec!["x".to_string(), "y".to_string()]);
         assert_eq!(total2, 0, "唯一列被當表頭吃掉");
         assert!(prev2.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod json_tests {
+    use super::parse_json;
+
+    fn s(v: &str) -> Option<String> {
+        Some(v.to_string())
+    }
+
+    #[test]
+    fn array_of_objects_unions_keys_in_first_seen_order() {
+        let rows = parse_json(r#"[{"id": 1, "name": "a"}, {"id": 2, "extra": true, "name": null}]"#).unwrap();
+        assert_eq!(rows[0], vec![s("id"), s("name"), s("extra")]);
+        assert_eq!(rows[1], vec![s("1"), s("a"), None], "缺鍵 = NULL");
+        assert_eq!(rows[2], vec![s("2"), None, s("1")], "null = NULL、布林 = 1");
+    }
+
+    #[test]
+    fn ndjson_and_bom() {
+        let rows = parse_json("\u{feff}{\"a\": 1}\n\n{\"a\": 2, \"b\": {\"x\": [1, 2]}}\n").unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2], vec![s("2"), s(r#"{"x":[1,2]}"#)], "巢狀值存成緊湊 JSON");
+    }
+
+    #[test]
+    fn wrapped_api_response_and_single_object() {
+        let rows = parse_json(r#"{"data": [{"k": "v"}]}"#).unwrap();
+        assert_eq!(rows, vec![vec![s("k")], vec![s("v")]]);
+        let one = parse_json(r#"{"k": "v", "n": 3}"#).unwrap();
+        assert_eq!(one.len(), 2, "單一物件當成一筆");
+    }
+
+    #[test]
+    fn bad_shapes_are_explained() {
+        assert!(parse_json("[1, 2]").unwrap_err().to_string().contains("1"));
+        assert!(parse_json("42").is_err());
+        let e = parse_json("{\"a\":1}\n{oops}\n").unwrap_err().to_string();
+        assert!(e.contains("2"), "NDJSON 錯誤指出第 2 行：{e}");
     }
 }

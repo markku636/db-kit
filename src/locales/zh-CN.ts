@@ -2369,7 +2369,6 @@ const zhCN: Catalog = {
   "匯入": "导入",
   "匯入 {imported} 列、失敗 {failed} 列": "导入 {imported} 行、失败 {failed} 行",
   "匯入 {n} 列": "导入 {n} 行",
-  "匯入 CSV / Excel ·": "导入 CSV / Excel ·",
   "匯入 SQL 庫": "导入 SQL 库",
   "匯入失敗": "导入失败",
   "匯入失敗：{msg}": "导入失败：{msg}",
@@ -4887,6 +4886,9 @@ const zhCN: Catalog = {
   "第 {line} 行：{msg}": "第 {line} 行：{msg}",
   "讀取檔案…": "读取文件…",
   "遇錯已停止": "遇错已停止",
+  "匯入 CSV / Excel / JSON ·": "导入 CSV / Excel / JSON ·",
+  "已匯入 {n} 列（JSON）": "已导入 {n} 行（JSON）",
+  "JSON：欄名取自物件的鍵；null 與缺少的鍵一律寫入 NULL，true / false 寫成 1 / 0，巢狀物件存成 JSON 字串。": "JSON：字段名取自对象的键；null 与缺少的键一律写入 NULL，true / false 写成 1 / 0，嵌套对象存成 JSON 字符串。",
 };
 
 export default zhCN;

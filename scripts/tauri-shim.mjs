@@ -477,6 +477,10 @@ metadata:
       errors: [{ index: 6, line: 18, sql: "INSERT INTO missing_table VALUES (1)", message: `Table 'shop.missing_table' doesn't exist (${String(path).split(/[\\/]/).pop()})` }],
     }),
     run_sql_file_cancel: () => null,
+    import_preview: ({ path }) => (/\.(json|jsonl|ndjson)$/i.test(String(path))
+      ? { columns: ["order_id", "status", "total_amount"], rows: [["9001", "paid", "12.50"], ["9002", "NULL", "8.00"], ["9003", "pending", "NULL"]], total_rows: 3 }
+      : { columns: ["order_id", "status"], rows: [["9001", "paid"]], total_rows: 1 }),
+    import_csv: ({ path }) => ({ imported: /\.json/i.test(String(path)) ? 3 : 1, failed: 0, errors: [] }),
     preview_dml: ({ script }) => ({
       database: "shop",
       blockers: [],

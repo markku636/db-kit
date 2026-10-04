@@ -537,6 +537,9 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         // ---- db/mod.rs：trait 預設 Unsupported + 欄位驗證 ----
         "此連線不支援取消執行中的查詢" => "This connection does not support cancelling a running query",
         "查詢已取消" => "Query cancelled",
+        "JSON 必須是物件陣列、每行一個物件（NDJSON），或包著物件陣列的物件" => "JSON must be an array of objects, one object per line (NDJSON), or an object wrapping an array of objects",
+        "JSON 第 {line} 行解析失敗：{e}" => "Failed to parse JSON line {line}: {e}",
+        "JSON 第 {n} 筆不是物件" => "JSON record {n} is not an object",
         "此連線不是 SQLite" => "This connection is not SQLite",
         "此連線種類不支援執行 SQL 檔" => "This connection type does not support running SQL files",
         "無法讀取檔案：{e}" => "Unable to read the file: {e}",

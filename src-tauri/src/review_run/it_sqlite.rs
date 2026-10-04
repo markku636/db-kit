@@ -357,3 +357,18 @@ async fn sql_file_runs_on_one_session() {
     let q = e.mgr.query_capped(&e.id, "SELECT COUNT(*) FROM t", 0).await.unwrap();
     assert_eq!(q.rows[0][0].as_deref(), Some("3"));
 }
+
+/// JSON 匯入（import.rs）：null / 缺鍵寫成 NULL、空字串在「空欄位視為 NULL」關閉時保留為空字串。
+#[tokio::test]
+async fn json_import_keeps_null_and_empty_string_apart() {
+    let e = env("jsonimport").await;
+    e.exec("CREATE TABLE p (id INTEGER PRIMARY KEY, name TEXT, note TEXT, active INTEGER);").await;
+    let opts: crate::import::ImportOptions = serde_json::from_value(serde_json::json!({ "empty_as_null": false })).unwrap();
+    let content = r#"[{"id": 1, "name": "a", "note": "", "active": true}, {"id": 2, "name": null, "active": false}]"#;
+    let r = crate::import::import_json(&e.mgr, &e.id, "", "p", content, &opts).await.unwrap();
+    assert_eq!((r.imported, r.failed), (2, 0), "{:?}", r.errors);
+    let q = e.mgr.query_capped(&e.id, "SELECT id, name IS NULL, note IS NULL, note = '', active FROM p ORDER BY id", 0).await.unwrap();
+    let v = |r: usize, c: usize| q.rows[r][c].clone().unwrap_or_default();
+    assert_eq!((v(0, 2), v(0, 3), v(0, 4)), ("0".into(), "1".into(), "1".into()), "空字串保留、true → 1");
+    assert_eq!((v(1, 1), v(1, 2), v(1, 4)), ("1".into(), "1".into(), "0".into()), "null 與缺鍵 → NULL、false → 0");
+}

@@ -3806,6 +3806,34 @@ const CASES = {
     check("遇錯即停時說明沒執行到的句數", body.includes("沒有執行到的語句：5 句"));
   },
 
+  // JSON 匯入：選 .json 時改顯示 JSON 說明、收起 CSV 才有的分隔字元 / 表頭選項，匯入成功提示標 JSON。
+  async "import-json"(page) {
+    // prod-mysql 在 fixtures 是唯讀（右鍵沒有匯入），用可寫的 analytics-pg。
+    await page.getByText("analytics-pg", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("warehouse", { exact: true }).first().click();
+    await sleep(700);
+    await page.getByText("資料表", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="fact_orders"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="fact_orders"]').first().click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("資料表右鍵有匯入精靈", items.some((i) => i.includes("匯入精靈")), items.join(" | "));
+    await page.getByText("匯入精靈…", { exact: true }).click();
+    await sleep(500);
+    check("標題寫 CSV / Excel / JSON", (await appText(page)).includes("匯入 CSV / Excel / JSON"));
+    await page.evaluate(() => { window.__DBKIT_DIALOG_OPEN__ = "C:\\data\\orders.json"; });
+    await page.getByRole("button", { name: "選擇檔案…", exact: true }).click();
+    await sleep(600);
+    const body = await appText(page);
+    check("JSON 顯示欄名來源說明", body.includes("欄名取自物件的鍵"), body.replace(/\s+/g, " ").slice(0, 200));
+    check("JSON 收起分隔字元選項", !body.includes("分隔字元"));
+    check("預覽列出 JSON 的欄與列", body.includes("order_id") && body.includes("9003"));
+    await page.getByRole("button", { name: "匯入", exact: true }).click();
+    await sleep(600);
+    check("匯入成功提示標 JSON", (await appText(page)).includes("已匯入 3 列（JSON）"));
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

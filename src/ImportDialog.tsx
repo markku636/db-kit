@@ -29,6 +29,9 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [targetCols, setTargetCols] = useState<string[]>([]);
   const isExcel = !!filePath && /\.(xlsx|xls)$/i.test(filePath);
+  // JSON（陣列 / NDJSON）：欄名一定來自物件鍵，分隔字元與「第一列為欄名」都不適用。
+  const isJson = !!filePath && /\.(json|jsonl|ndjson)$/i.test(filePath);
+  const header = isJson || hasHeader;
 
   // 載入目標表欄位，供對照（避免欄位不符這個最常見的匯入錯誤）。
   useEffect(() => {
@@ -39,7 +42,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
 
   const pickFile = async () => {
     const path = await pickOpenFile([
-      { name: "CSV / TSV / Excel", extensions: ["csv", "tsv", "txt", "xlsx", "xls"] },
+      { name: "CSV / TSV / Excel / JSON", extensions: ["csv", "tsv", "txt", "xlsx", "xls", "json", "jsonl", "ndjson"] },
     ]);
     if (!path) return;
     setFilePath(path);
@@ -50,15 +53,15 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
   useEffect(() => {
     if (!filePath) { setPreview(null); return; }
     let alive = true;
-    api.importPreview(filePath, { delimiter, has_header: hasHeader, columns: null })
+    api.importPreview(filePath, { delimiter, has_header: header, columns: null })
       .then((pv) => { if (alive) setPreview(pv); })
       .catch((e: any) => { if (alive) { setPreview(null); toast.error(e?.message ?? t("預覽失敗")); } });
     return () => { alive = false; };
-  }, [filePath, delimiter, hasHeader]);
+  }, [filePath, delimiter, header]);
 
   const doImport = async () => {
     if (busy || !filePath) return;
-    const useCols = !hasHeader || overrideNames;
+    const useCols = !header || overrideNames;
     const cols = useCols ? columns.split(",").map((c) => c.trim()).filter(Boolean) : null;
     if (useCols && (!cols || cols.length === 0)) {
       toast.error(overrideNames ? t("請先填要套用的欄名（逗號分隔）") : t("無表頭時請先填欄名（逗號分隔）"));
@@ -67,13 +70,14 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
     setBusy(true);
     setResult(null);
     try {
-      const opts = { delimiter, has_header: hasHeader, empty_as_null: emptyAsNull, columns: cols, stop_on_error: stopOnError, trim };
+      const opts = { delimiter, has_header: header, empty_as_null: emptyAsNull, columns: cols, stop_on_error: stopOnError, trim };
       const res = isExcel
         ? await api.importExcel(connId, database, table, filePath, opts)
         : await api.importCsv(connId, database, table, filePath, opts);
       setResult(res);
       if (res.failed === 0) toast.success(isExcel
         ? t("已匯入 {n} 列（Excel）", { n: res.imported })
+        : isJson ? t("已匯入 {n} 列（JSON）", { n: res.imported })
         : t("已匯入 {n} 列", { n: res.imported }));
       else toast.error(t("匯入 {imported} 列、失敗 {failed} 列", { imported: res.imported, failed: res.failed }));
       onDone?.(); // 重新整理資料格以顯示已匯入的列
@@ -87,7 +91,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
   return (
     <Modal
       onClose={onClose}
-      title={<>{t("匯入 CSV / Excel ·")} <span className="mono text-fg/60">{table}</span></>}
+      title={<>{t("匯入 CSV / Excel / JSON ·")} <span className="mono text-fg/60">{table}</span></>}
       icon={Download}
       size="md"
       zClass="z-50"
@@ -129,6 +133,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
         </div>
       )}
 
+      {!isJson && (<>
       <div className="flex items-center gap-3">
             <span className="text-xs text-fg/50">{t("分隔字元")}</span>
             <Segmented
@@ -148,7 +153,11 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
             <input type="checkbox" checked={hasHeader} onChange={(e) => setHasHeader(e.target.checked)} />
             {t("第一列為欄名")}
           </label>
-          {hasHeader && (
+      </>)}
+          {isJson && (
+            <div className="text-[11px] text-fg/45">{t("JSON：欄名取自物件的鍵；null 與缺少的鍵一律寫入 NULL，true / false 寫成 1 / 0，巢狀物件存成 JSON 字串。")}</div>
+          )}
+          {header && (
             <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
               <input type="checkbox" checked={overrideNames}
                 onChange={(e) => {
@@ -159,7 +168,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
               {t("重新指定欄名（覆蓋檔案表頭，對齊到目標欄位）")}
             </label>
           )}
-          {(!hasHeader || overrideNames) && (
+          {(!header || overrideNames) && (
             <label className="block">
               <span className="text-xs text-fg/50 mb-1 block">{t("欄名（逗號分隔，依檔案欄序對應目標欄位）")}</span>
               <Input inputSize="md" value={columns} onChange={(e) => setColumns(e.target.value)}
