@@ -4933,6 +4933,12 @@ const en: Catalog = {
   "找不到資料表 {table}（依目前載入的結構；剛建立的表請重新整理結構）": "Table {table} not found (based on the loaded schema; refresh the schema for newly created tables)",
   "{table} 沒有欄位 {col}": "{table} has no column {col}",
   "依欄名推測": "Guessed from column names",
+  "JSON 樹": "JSON tree",
+  "十六進位": "Hex",
+  "圖片": "Image",
+  "以 UTF-8 位元組顯示文字內容（看得到不可見字元、全形空白、BOM）。": "Text shown as UTF-8 bytes (reveals invisible characters, full-width spaces, BOM).",
+  "已複製路徑 {path}": "Copied path {path}",
+  "… 另有 {n} 項未顯示": "… {n} more items not shown",
 };
 
 export default en;

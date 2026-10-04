@@ -6,7 +6,7 @@ import {
   Copy, Pencil, Columns3,
 } from "lucide-react";
 import Icon from "./ui/Icon";
-import { Button, EmptyState, MenuPanel, ModalViewControls, useModalView } from "./ui/index";
+import { Button, EmptyState, MenuPanel, ModalViewControls, Segmented, useModalView } from "./ui/index";
 import {
   api, ColumnInfo, ColumnStats, DbKind, ErRelation, Filter as FilterCond, ForeignKeyInfo, IndexInfo, KeyDetail, KeyEdit, KeyPage,
   MongoIndexOptions, MongoIndexStat, MongoValidation, PagedData, RowInsert, Sort, SortDir,
@@ -27,6 +27,10 @@ import RedisKeyTree from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
 import ProgressBar from "./ui/ProgressBar";
 import { useVirtualRows } from "./useVirtualRows";
+import JsonTreeView from "./JsonTreeView";
+import { detectImage, hexDump, parseHexValue, parseStructuredJson } from "./cellViews";
+
+type CellView = "text" | "tree" | "hex" | "image";
 import { AlterOp } from "./api";
 import { t, useT } from "./i18n";
 
@@ -2273,6 +2277,32 @@ function RowField({ value, onSave }: { value: string | null; onSave: (raw: strin
   );
 }
 
+/** 儲存格檢視器的非文字檢視：JSON 樹 / 十六進位 / 圖片。 */
+function CellAltView({ view, column, jsonTree, hexBytes, rawHex, image }: {
+  view: CellView;
+  column: string;
+  jsonTree: object | null;
+  hexBytes: Uint8Array;
+  rawHex: boolean;
+  image: string | null;
+}) {
+  const t = useT();
+  if (view === "tree" && jsonTree) return <div className="p-4 flex-1 overflow-auto"><JsonTreeView value={jsonTree} /></div>;
+  if (view === "image" && image) {
+    return (
+      <div className="p-4 flex-1 overflow-auto flex items-center justify-center bg-[repeating-conic-gradient(#8881_0%_25%,transparent_0%_50%)] bg-[length:16px_16px]">
+        <img src={image} alt={column} className="max-w-full max-h-[60vh] object-contain" data-cell-image />
+      </div>
+    );
+  }
+  return (
+    <div className="p-4 flex-1 overflow-auto">
+      <pre className="mono text-xs leading-5 text-fg/80 whitespace-pre" data-cell-hex>{hexDump(hexBytes).join("\n")}</pre>
+      {!rawHex && <div className="text-[11px] text-fg/40 mt-2">{t("以 UTF-8 位元組顯示文字內容（看得到不可見字元、全形空白、BOM）。")}</div>}
+    </div>
+  );
+}
+
 // 儲存格內容檢視器：檢視 / 編輯長文字、JSON、二進位預覽。可切換 JSON 排版、複製、產生 UPDATE 腳本。
 export function CellInspector({ column, value, editable, onSave, onClose, onScript, showFormat = true }: {
   column: string;
@@ -2353,6 +2383,25 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
   }, [text]);
   // 雙向切換：縮排 ↔ 單行。兩個方向都以「目前內容」為準，所以編輯過的內容不會被丟掉
   // （切回原始 ≠ 還原編輯；要放棄編輯照舊按「關閉」）。
+  // 其他檢視：JSON 樹（結構化 JSON）、十六進位（0x 二進位原樣；文字則看 UTF-8 位元組）、圖片（偵測得到才出現）。
+  // 以「目前內容」為準，編輯後切過去看的是編輯後的樣子。
+  const jsonTree = useMemo(() => parseStructuredJson(text), [text]);
+  const rawHex = useMemo(() => parseHexValue(value), [value]);
+  // 沒編輯過就看資料庫裡的原值（文字檢視自動排版過的 JSON 不是存的樣子）；編輯後看編輯後的內容。
+  const hexBytes = useMemo(
+    () => rawHex ?? new TextEncoder().encode(text === initial ? (value ?? "") : text),
+    [rawHex, text, initial, value],
+  );
+  const image = useMemo(() => detectImage(value), [value]);
+  const views = useMemo(() => {
+    const v: CellView[] = ["text"];
+    if (jsonTree) v.push("tree");
+    if (image) v.push("image");
+    v.push("hex");
+    return v;
+  }, [jsonTree, image]);
+  const [view, setView] = useState<CellView>(() => (detectImage(value) ? "image" : "text"));
+  const VIEW_LABEL: Record<CellView, string> = { text: t("文字"), tree: t("JSON 樹"), hex: t("十六進位"), image: t("圖片") };
   const toggleJson = () => {
     try {
       const parsed: unknown = JSON.parse(text);
@@ -2374,6 +2423,15 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
           </span>
           <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
+        {views.length > 1 && (
+          <div className="px-4 pt-3" data-cell-views>
+            <Segmented size="sm" value={view} onChange={setView} ariaLabel={t("檢視方式")}
+              options={views.map((v) => ({ value: v, label: VIEW_LABEL[v] }))} />
+          </div>
+        )}
+        {view !== "text" ? (
+          <CellAltView view={view} column={column} jsonTree={jsonTree} hexBytes={hexBytes} rawHex={!!rawHex} image={image} />
+        ) : (
         <div className="p-4 flex-1 overflow-auto">
           <textarea autoFocus ref={taRef} value={text}
             onChange={(e) => { setText(e.target.value); syncSel(); }}
@@ -2385,6 +2443,7 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
             }}
             className="w-full h-72 bg-inset border border-fg/10 rounded p-3 mono code-scale outline-none focus:border-accent resize-none break-all" />
         </div>
+        )}
         <div className="px-5 py-3 border-t border-fg/10 flex items-center gap-2">
           {showFormat && (
             <button type="button" onClick={toggleJson}

@@ -3896,6 +3896,36 @@ const CASES = {
     check("正確的表與欄位沒有黃線", (await page.locator(".cm-lintRange-warning").count()) === 0);
   },
 
+  // 儲存格檢視器：JSON 有樹狀檢視（點節點複製 JSONPath），base64 圖片直接預覽，任何值都能看十六進位。
+  async "cell-viewers"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("SELECT * FROM cell_views");
+    await page.keyboard.press("Control+Enter");
+    await page.waitForFunction(() => document.body.innerText.includes("A-1"), null, { timeout: 8000 }).catch(() => {});
+    await page.getByText(/"order"/).first().click();
+    await page.locator("[data-cell-views]").waitFor({ timeout: 4000 }).catch(() => {});
+    check("JSON 儲存格有檢視切換", (await page.locator("[data-cell-views]").count()) === 1);
+    await page.locator("[data-cell-views]").getByRole("radio", { name: "JSON 樹" }).click();
+    await page.locator("[data-json-tree]").waitFor({ timeout: 4000 }).catch(() => {});
+    check("JSON 樹顯示巢狀鍵", (await page.locator("[data-json-tree]").innerText()).includes("items"));
+    await page.locator("[data-json-tree]").getByText('"A-1"').click();
+    await sleep(300);
+    check("點節點複製 JSONPath", (await appText(page)).includes("$.order.items[0].sku"));
+    await page.locator("[data-cell-views]").getByRole("radio", { name: "十六進位" }).click();
+    check("十六進位傾印", /^00000000 {2}7b 22 6f/.test(await page.locator("[data-cell-hex]").innerText()));
+    await page.keyboard.press("Escape");
+    await sleep(500);
+    await page.getByText(/^iVBORw0KGgo/).first().click();
+    await page.locator("[data-cell-image]").waitFor({ timeout: 4000 }).catch(() => {});
+    check("base64 圖片預設就開圖片檢視", (await page.locator("[data-cell-image]").count()) === 1);
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。
