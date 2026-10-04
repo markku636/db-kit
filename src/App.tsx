@@ -3213,9 +3213,11 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                     connId: menuConn.id,
                   }), false] as [string, () => void, boolean]]
                 : []),
+              ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres" || menuConn.kind === "mssql" || menuConn.kind === "oracle")
+                ? [[t("處理程序…"), () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean]]
+                : []),
               ...(connectedIds.has(menu.id) && (isMysqlFamily(menuConn.kind) || menuConn.kind === "postgres")
                 ? [
-                    [t("處理程序…"), () => setProcList({ connId: menuConn.id, kind: menuConn.kind }), false] as [string, () => void, boolean],
                     isMysqlFamily(menuConn.kind)
                       ? [t("使用者管理…"), () => setUserMgr({ connId: menuConn.id }), false] as [string, () => void, boolean]
                       : [t("使用者 / 角色…"), () => setServerQuery({

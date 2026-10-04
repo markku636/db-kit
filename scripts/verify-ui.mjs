@@ -3834,6 +3834,22 @@ const CASES = {
     check("匯入成功提示標 JSON", (await appText(page)).includes("已匯入 3 列（JSON）"));
   },
 
+  // SQL Server 也有處理程序清單；但 PG 專用的「使用者 / 角色」「伺服器變數」不能跟著出現，也沒有「只取消查詢」。
+  async "process-list-mssql"(page) {
+    await page.getByText("reporting-mssql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("reporting-mssql", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("SQL Server 連線右鍵有處理程序…", items.some((i) => i.includes("處理程序")), items.join(" | "));
+    check("SQL Server 不出現 PG / MySQL 專用項目", !items.some((i) => i.includes("使用者 / 角色") || i.includes("伺服器變數")));
+    await page.getByText("處理程序…", { exact: true }).click();
+    await page.getByText("處理程序 / 工作階段", { exact: true }).waitFor({ timeout: 8000 });
+    await sleep(500);
+    check("SQL Server 列只有「終止」沒有「取消」", (await page.getByRole("button", { name: "終止", exact: true }).count()) > 0
+      && (await page.getByRole("button", { name: "取消", exact: true }).count()) === 0);
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。
