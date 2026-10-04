@@ -62,7 +62,7 @@ import { friendlyDbError } from "./dbErrors";
 import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, isDismissed, useUpdateDialog, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
 import { sqlStoreKey } from "./queryDrafts";
-import { toast, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile } from "./ui";
+import { toast, uiChoose, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile } from "./ui";
 import { askOtpCode } from "./otpGate";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
@@ -161,6 +161,7 @@ const SavedQueriesDialog = lazyOverlay(() => import("./SavedQueriesDialog"));
 const ReviewRunDialog = lazyOverlay(() => import("./ReviewRunDialog"));
 const DmlPreviewDialog = lazyOverlay(() => import("./DmlPreviewDialog"));
 const SqlFileDialog = lazyOverlay(() => import("./SqlFileDialog"));
+const ConnImportDialog = lazyOverlay(() => import("./ConnImportDialog"));
 const SpTestDialog = lazyOverlay(() => import("./SpTestDialog"));
 /** 預存程序整合測試支援的引擎（核心 sptest::session 有實作的）。 */
 const SP_TEST_KINDS = new Set<string>(["mssql", "postgres", "mysql", "mariadb"]);
@@ -273,6 +274,7 @@ export default function App() {
   // 進階匯出連線（逐筆選連線 + 逐類選機密）。每次開啟都是全新狀態：路徑不記憶，
   // 必須現選 —— 見 ExportConnectionsDialog 檔頭。
   const [exportConnsOpen, setExportConnsOpen] = useState(false);
+  const [connImportOpen, setConnImportOpen] = useState(false);
   // 啟動鎖定閘門：checking（查詢中）→ locked（需驗證）/ open（已解鎖或未設鎖）。
   const [lockState, setLockState] = useState<"checking" | "locked" | "open">("checking");
   // 鎖定設定（密碼 / 生物辨識 / 閒置分鐘數）。鎖定畫面要據此決定顯示哪幾種解法。
@@ -441,6 +443,14 @@ export default function App() {
   };
   // 從加密檔匯入連線：輸入 passphrase 解密，機密寫回 keychain、設定 upsert，再重載連線清單。
   const importConnections = async () => {
+    // 兩種來源：db-kit 自己的加密匯出檔，或其他工具（DBeaver / DataGrip / .ncx）的連線設定。
+    const from = await uiChoose(t("要從哪裡匯入連線？"), {
+      title: t("匯入連線"),
+      confirmText: t("db-kit 加密匯出檔"),
+      altText: t("其他工具（DBeaver / DataGrip / .ncx）"),
+    });
+    if (from === null) return;
+    if (from === "alt") { setConnImportOpen(true); return; }
     const path = await pickOpenFile([{ name: t("db-kit 加密連線"), extensions: ["dbkitenc"] }]);
     if (!path) return;
     const passphrase = await uiPrompt(t("輸入匯入檔的加密密碼（passphrase）"), { title: t("解密匯入連線"), confirmText: t("匯入") });
@@ -607,6 +617,7 @@ export default function App() {
       {advSearch && (
         <AdvancedSearchDialog connId={advSearch.connId} kind={advSearch.kind} onClose={() => setAdvSearch(null)} />
       )}
+      {connImportOpen && <ConnImportDialog onClose={() => setConnImportOpen(false)} />}
       {exportConnsOpen && (
         <ExportConnectionsDialog
           connections={connections}

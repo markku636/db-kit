@@ -4918,6 +4918,20 @@ const zhCN: Catalog = {
   "無法解析 SQL Server 執行計畫": "无法解析 SQL Server 执行计划",
   "無法解析執行計畫（原始輸出見「結果」分頁）": "无法解析执行计划（原始输出见「结果」分页）",
   "沒有取得執行計畫": "没有取得执行计划",
+  ".ncx 連線檔": ".ncx 连接文件",
+  "不支援": "不支持",
+  "來源：{src} · {n} 個連線": "来源：{src} · {n} 个连接",
+  "匯入 {n} 個": "导入 {n} 个",
+  "可能已存在": "可能已存在",
+  "已匯入 {n} 個連線；密碼沒有匯入，連線前請在「編輯」裡輸入。": "已导入 {n} 个连接；密码没有导入，连接前请在「编辑」里输入。",
+  "從其他工具匯入連線": "从其他工具导入连接",
+  "支援 DBeaver 的 data-sources.json、DataGrip 的 dataSources.xml（帳號在 dataSources.local.xml，可一起選）與 .ncx 連線檔。只匯入主機、埠、資料庫、帳號與 SSH 通道；密碼不會匯入（各工具用自己的金鑰加密），匯入後請在連線「編輯」裡輸入。": "支持 DBeaver 的 data-sources.json、DataGrip 的 dataSources.xml（账号在 dataSources.local.xml，可一起选）与 .ncx 连接文件。只导入主机、端口、数据库、账号与 SSH 通道；密码不会导入（各工具用自己的密钥加密），导入后请在连接「编辑」里输入。",
+  "檔案裡沒有連線": "文件里没有连接",
+  "看不懂這個檔案：請選 DBeaver 的 data-sources.json、DataGrip 的 dataSources.xml 或 .ncx 連線檔。{msg}": "看不懂这个文件：请选 DBeaver 的 data-sources.json、DataGrip 的 dataSources.xml 或 .ncx 连接文件。{msg}",
+  "連線設定檔": "连接配置文件",
+  "要從哪裡匯入連線？": "要从哪里导入连接？",
+  "db-kit 加密匯出檔": "db-kit 加密导出档",
+  "其他工具（DBeaver / DataGrip / .ncx）": "其他工具（DBeaver / DataGrip / .ncx）",
 };
 
 export default zhCN;

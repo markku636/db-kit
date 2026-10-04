@@ -3994,6 +3994,33 @@ const CASES = {
     check("SQL Server：SHOWPLAN 解析出 Nested Loops 與表名", body.includes("Nested Loops") && body.includes("Sales") && body.includes("Regions"), body.replace(/\s+/g, " ").slice(-300));
   },
 
+  // 從其他工具匯入連線：工具列「匯入連線」→ 選「其他工具」→ 選 .ncx → 預覽 → 匯入（不帶密碼）。
+  async "conn-import-other-tools"(page) {
+    await page.evaluate(() => {
+      window.__DBKIT_TEXT_FILES__ = {
+        "C:\\exports\\team.ncx": '<?xml version="1.0"?><Connections Ver="1.5"><Connection ConnectionName="erp-mysql" ConnType="MYSQL" Host="erp.local" Port="3307" UserName="root" Password="X"/><Connection ConnectionName="prod-mysql" ConnType="MYSQL" Host="10.20.0.15" Port="3306" UserName="app"/><Connection ConnectionName="weird" ConnType="DB2" Host="h"/></Connections>',
+      };
+      window.__DBKIT_DIALOG_OPEN__ = ["C:\\exports\\team.ncx"];
+    });
+    await page.getByRole("button", { name: /匯入連線/ }).first().click();
+    await sleep(300);
+    await page.getByRole("button", { name: /其他工具/ }).click();
+    await page.locator("[data-conn-import-pick]").waitFor({ timeout: 8000 });
+    await page.locator("[data-conn-import-pick]").click();
+    await page.locator("[data-conn-import-list]").waitFor({ timeout: 8000 }).catch(() => {});
+    const body = await appText(page);
+    check("預覽列出 3 個連線與來源", body.includes("erp-mysql") && body.includes("weird") && body.includes(".ncx"), body.replace(/\s+/g, " ").slice(0, 300));
+    check("同名的標「可能已存在」", body.includes("可能已存在"));
+    check("不支援的種類標出來", body.includes("不支援"));
+    check("預設只勾可匯入且不重複的（1 個）", (await page.locator("[data-conn-import-go]").innerText()).includes("1"));
+    await page.locator("[data-conn-import-go]").click();
+    await sleep(600);
+    const saves = await page.evaluate(() => window.__DBKIT_CONN_SAVES__ ?? []);
+    const erp = saves.find((c) => c.name === "erp-mysql");
+    check("建成 db-kit 連線（主機 / 埠 / 帳號）", !!erp && erp.host === "erp.local" && erp.port === 3307 && erp.username === "root" && erp.kind === "mysql");
+    check("密碼不匯入", !!erp && erp.password === "");
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

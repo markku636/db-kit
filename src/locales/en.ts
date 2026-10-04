@@ -4955,6 +4955,20 @@ const en: Catalog = {
   "無法解析 SQL Server 執行計畫": "Could not parse the SQL Server execution plan",
   "無法解析執行計畫（原始輸出見「結果」分頁）": "Could not parse the execution plan (see the Results tab for the raw output)",
   "沒有取得執行計畫": "No execution plan was returned",
+  ".ncx 連線檔": ".ncx connection file",
+  "不支援": "Not supported",
+  "來源：{src} · {n} 個連線": "Source: {src} · {n} connections",
+  "匯入 {n} 個": "Import {n}",
+  "可能已存在": "May already exist",
+  "已匯入 {n} 個連線；密碼沒有匯入，連線前請在「編輯」裡輸入。": "Imported {n} connections. Passwords were not imported; enter them under Edit before connecting.",
+  "從其他工具匯入連線": "Import connections from other tools",
+  "支援 DBeaver 的 data-sources.json、DataGrip 的 dataSources.xml（帳號在 dataSources.local.xml，可一起選）與 .ncx 連線檔。只匯入主機、埠、資料庫、帳號與 SSH 通道；密碼不會匯入（各工具用自己的金鑰加密），匯入後請在連線「編輯」裡輸入。": "Supports DBeaver's data-sources.json, DataGrip's dataSources.xml (user names are in dataSources.local.xml; select both) and .ncx connection files. Only host, port, database, user name and SSH tunnel are imported; passwords are not (each tool encrypts them with its own key), so enter them under Edit afterwards.",
+  "檔案裡沒有連線": "The file contains no connections",
+  "看不懂這個檔案：請選 DBeaver 的 data-sources.json、DataGrip 的 dataSources.xml 或 .ncx 連線檔。{msg}": "Couldn't read this file: choose DBeaver's data-sources.json, DataGrip's dataSources.xml or a .ncx connection file. {msg}",
+  "連線設定檔": "Connection settings file",
+  "要從哪裡匯入連線？": "Where do you want to import connections from?",
+  "db-kit 加密匯出檔": "db-kit encrypted export",
+  "其他工具（DBeaver / DataGrip / .ncx）": "Other tools (DBeaver / DataGrip / .ncx)",
 };
 
 export default en;

@@ -481,6 +481,12 @@ metadata:
       errors: [{ index: 6, line: 18, sql: "INSERT INTO missing_table VALUES (1)", message: `Table 'shop.missing_table' doesn't exist (${String(path).split(/[\\/]/).pop()})` }],
     }),
     run_sql_file_cancel: () => null,
+    // 從其他工具匯入連線：讀檔內容由情境放在 window.__DBKIT_TEXT_FILES__[path]。
+    read_text_file: ({ path }) => (window.__DBKIT_TEXT_FILES__ ?? {})[path] ?? "",
+    parse_connection_url: ({ url, kind }) => {
+      const m = /^jdbc:(\w+):\/\/([^:/;]+)(?::(\d+))?(?:\/([^?;]+))?/.exec(String(url));
+      return { kind: kind ?? null, host: m?.[2] ?? null, port: m?.[3] ? Number(m[3]) : null, username: null, password: null, database: m?.[4] ?? null, options: {} };
+    },
     mssql_showplan: () => '<ShowPlanXML><StmtSimple StatementSubTreeCost="0.05"><RelOp PhysicalOp="Nested Loops" LogicalOp="Inner Join" EstimateRows="10" EstimatedTotalSubtreeCost="0.05"><RelOp PhysicalOp="Clustered Index Scan" LogicalOp="Clustered Index Scan" EstimateRows="1000" EstimatedTotalSubtreeCost="0.03"><IndexScan><Object Table="[Sales]" Index="[PK_Sales]" /></IndexScan></RelOp><RelOp PhysicalOp="Clustered Index Seek" LogicalOp="Clustered Index Seek" EstimateRows="1" EstimatedTotalSubtreeCost="0.01"><IndexScan><Object Table="[Regions]" Index="[PK_Regions]" /></IndexScan></RelOp></RelOp></StmtSimple></ShowPlanXML>',
     import_preview: ({ path }) => (/\.(json|jsonl|ndjson)$/i.test(String(path))
       ? { columns: ["order_id", "status", "total_amount"], rows: [["9001", "paid", "12.50"], ["9002", "NULL", "8.00"], ["9003", "pending", "NULL"]], total_rows: 3 }
