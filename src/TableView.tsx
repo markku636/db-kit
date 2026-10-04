@@ -31,7 +31,7 @@ import JsonTreeView from "./JsonTreeView";
 import { detectImage, hexDump, parseHexValue, parseStructuredJson } from "./cellViews";
 
 type CellView = "text" | "tree" | "hex" | "image";
-import { AlterOp } from "./api";
+import { AlterOp, isProdConn } from "./api";
 import { t, useT } from "./i18n";
 
 // 條件掛載的對話框 / 面板改 lazy（code splitting）：開啟時才抓 chunk，首包不含其程式碼。
@@ -530,6 +530,10 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // 唯讀連線：資料格不可編輯（與寫入 / DDL 攔截一致），避免正式環境誤改。
   const readonly = useStore((s) => s.readonlyConns[tab.connId] === true);
   const editable = !!data && data.primary_key.length > 0 && !readonly;
+  // 正式環境連線：資料格寫入（套用編輯 / 新增列）比照查詢編輯器，先跳一次確認。刪除列本來就有確認框。
+  const prod = useStore((s) => { const c = s.connections.find((x) => x.id === tab.connId); return !!c && isProdConn(c); });
+  const confirmProdWrite = async (what: string) =>
+    !prod || (await uiConfirm(t("這是正式環境連線。確定要{what}？", { what }), { title: t("正式環境"), danger: true, confirmText: t("確定") }));
   // 新增列不需主鍵（INSERT 不依賴 PK）；只有更新 / 刪除個別列才需 PK 來定位。視圖不可插入。
   const insertable = !!data && data.columns.length > 0 && tab.objKind !== "view";
   const dirtyCount = Object.keys(edits).length;
@@ -702,6 +706,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   const applyEdits = async () => {
     if (!data || dirtyCount === 0) return;
+    if (!(await confirmProdWrite(t("寫入 {n} 筆儲存格變更", { n: dirtyCount })))) return;
     setApplying(true);
     setErr(null);
     let applied = 0;
@@ -856,6 +861,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   };
 
   const submitInsert = async (row: RowInsert) => {
+    if (!(await confirmProdWrite(t("新增這一列")))) return;
     setApplying(true);
     setErr(null);
     try {

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { ConnectionConfig, ConnGroup, DbKind, type ReviewRunOutcome } from "./api";
-import { loadReadonly, persistReadonly, setReadonlyFlag, type ReadonlyMap } from "./connReadonly";
+import { loadReadonly, persistedReadonly, persistReadonly, setReadonlyFlag, type ReadonlyMap } from "./connReadonly";
 import { loadSession, saveQueryTabSession } from "./session";
 import { pruneQueryDrafts } from "./queryDrafts";
 import { landingKey, neighborSshKey, newSshTabKey, type SshTab } from "./sshTabs";
@@ -81,6 +81,8 @@ interface AppStore {
   connectedIds: Set<string>;
   // 唯讀連線（connId → true）：擋查詢編輯器寫入 / DDL 與資料格編輯，避免正式環境誤改。
   readonlyConns: ReadonlyMap;
+  // 暫時解鎖中的唯讀連線（connId → 自動鎖回的 epoch ms）。不持久化：重開 App 一律是唯讀。
+  tempUnlocks: Record<string, number>;
   // 當前選取的連線
   activeId: string | null;
   // 已開啟的表分頁
@@ -136,6 +138,9 @@ interface AppStore {
   markDisconnected: (id: string) => void;
   // 切換連線唯讀（持久化）。
   setConnReadonly: (id: string, ro: boolean) => void;
+  // 唯讀連線暫時允許寫入 ms 毫秒，時間到自動鎖回；relockConn 立即鎖回。
+  tempUnlockConn: (id: string, ms: number) => void;
+  relockConn: (id: string) => void;
 
   openTable: (connId: string, database: string, table: string, view?: "data" | "structure", objKind?: string) => void;
   closeTab: (key: string) => void;
@@ -247,11 +252,20 @@ export interface SpTestRequest {
 // （見 App.tsx 的 loadPersistedSql），這裡只負責把「當時開著哪幾個分頁」擺回來。
 const session = loadSession();
 
+// 暫時解鎖的自動鎖回計時器（模組層，不進 store：計時器 handle 不該觸發 re-render）。
+const relockTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function clearRelockTimer(id: string) {
+  const h = relockTimers.get(id);
+  if (h) clearTimeout(h);
+  relockTimers.delete(id);
+}
+
 export const useStore = create<AppStore>((set) => ({
   connections: [],
   connGroups: [],
   connectedIds: new Set(),
   readonlyConns: loadReadonly(),
+  tempUnlocks: {},
   activeId: null,
   tabs: [],
   // 表分頁不還原（要有實際連線才開得起來），故啟動時作用中分頁落在還原回來的查詢分頁上。
@@ -278,9 +292,27 @@ export const useStore = create<AppStore>((set) => ({
 
   setConnReadonly: (id, ro) =>
     set((s) => {
+      // 明確切換會取代暫時解鎖（不論方向）。
+      clearRelockTimer(id);
+      const { [id]: _drop, ...tempUnlocks } = s.tempUnlocks;
       const next = setReadonlyFlag(s.readonlyConns, id, ro);
-      persistReadonly(next);
-      return { readonlyConns: next };
+      persistReadonly(persistedReadonly(next, tempUnlocks));
+      return { readonlyConns: next, tempUnlocks };
+    }),
+  tempUnlockConn: (id, ms) =>
+    set((s) => {
+      if (!s.readonlyConns[id] && !s.tempUnlocks[id]) return {};
+      clearRelockTimer(id);
+      relockTimers.set(id, setTimeout(() => useStore.getState().relockConn(id), ms));
+      // 不呼叫 persistReadonly：存檔裡它仍是唯讀。
+      return { readonlyConns: setReadonlyFlag(s.readonlyConns, id, false), tempUnlocks: { ...s.tempUnlocks, [id]: Date.now() + ms } };
+    }),
+  relockConn: (id) =>
+    set((s) => {
+      clearRelockTimer(id);
+      if (!s.tempUnlocks[id]) return {};
+      const { [id]: _drop, ...tempUnlocks } = s.tempUnlocks;
+      return { readonlyConns: setReadonlyFlag(s.readonlyConns, id, true), tempUnlocks };
     }),
   setConnections: (cs) => set({ connections: cs }),
   setConnGroups: (gs) => set({ connGroups: gs }),

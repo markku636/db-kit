@@ -2,6 +2,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo,
 import { api, hostLabel, isContainerKind, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit, type ErRelation } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useVirtualRows } from "./useVirtualRows";
+import { formatRemaining } from "./connReadonly";
 import { useTheme } from "./theme";
 import { LANGUAGES, t, useLang, useT, type Lang } from "./i18n";
 import { APP_NAME } from "./brand";
@@ -1299,7 +1300,7 @@ const kindSectionKey = (k: DbKind) => `db-kit:connKindCollapsed:${k}`;
 
 function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, width, onAdvSearch, onLockNow }: { onEdit: (c: ConnectionConfig) => void; onNewConnection: (kind?: DbKind, groupId?: string | null) => void; onEditSsh: (s: SshSession | null, folderId?: string | null) => void; onEditRd: (s: RdSession | null, folderId?: string | null) => void; onImportRdp: () => void; width: number; onAdvSearch: (connId: string, kind: DbKind) => void; onLockNow: (() => void) | null }) {
   const t = useT();
-  const { connections, connGroups, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns } = useStore();
+  const { connections, connGroups, connectedIds, activeId, setActive, selectedNode, selectNode, readonlyConns, tempUnlocks } = useStore();
   // ---- 連線群組（側欄「種類 > 群組」排版）----
   // 分組 UI（區塊標題、群組列、拖曳、改名、刪除、摺疊）在 sidebar/GroupedSection，與 SSH / 遠端桌面共用；
   // 這裡只負責把某個種類的排版變更合併回全域陣列並落地（群組與歸屬順序持久化在 connections.json）。
@@ -2715,6 +2716,10 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
           <span className="truncate flex-1" title={`${c.name} · ${KIND_META[c.kind].label} · ${hostLabel(c)}`}>{c.name}</span>
           {isProdConn(c) && <span className="shrink-0 text-[9px] px-1 rounded bg-red-500/25 text-red-300/90" title={t("正式環境：執行查詢前會跳確認")}>PROD</span>}
           {readonlyConns[c.id] && <span className="shrink-0 text-[9px] px-1 rounded bg-amber-400/20 text-amber-300/90" title={t("唯讀模式：擋寫入 / DDL 與資料格編輯")}>{t("唯讀")}</span>}
+          {tempUnlocks[c.id] && (
+            <span className="shrink-0 text-[9px] px-1 rounded bg-orange-500/25 text-orange-200" data-temp-unlock={c.id}
+              title={t("唯讀連線暫時解鎖中，{time} 自動鎖回", { time: new Date(tempUnlocks[c.id]).toLocaleTimeString() })}>{t("暫時解鎖")}</span>
+          )}
           <button type="button" title={t("編輯連線")}
             onClick={(e) => { e.stopPropagation(); onEdit(c); }}
             className="w-5 h-5 shrink-0 items-center justify-center rounded text-fg/40 hover:bg-fg/15 hover:text-fg/80 hidden group-hover:flex">
@@ -3234,7 +3239,17 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                     }), false] as [string, () => void, boolean],
                   ]
                 : []),
-              [readonlyConns[menu.id] ? t("關閉唯讀模式") : t("設為唯讀模式（擋寫入 / DDL）"), () => useStore.getState().setConnReadonly(menu.id, !readonlyConns[menu.id]), false],
+              // 唯讀連線可暫時解鎖 1 / 5 分鐘（只在記憶體，時間到自動鎖回；重開 App 也是唯讀）。
+              ...(tempUnlocks[menu.id]
+                ? [[t("立即恢復唯讀（剩 {left}）", { left: formatRemaining(tempUnlocks[menu.id] - Date.now()) }), () => useStore.getState().relockConn(menu.id), false] as [string, () => void, boolean]]
+                : readonlyConns[menu.id]
+                  ? [
+                      [t("暫時解鎖 1 分鐘"), () => useStore.getState().tempUnlockConn(menu.id, 60_000), false] as [string, () => void, boolean],
+                      [t("暫時解鎖 5 分鐘"), () => useStore.getState().tempUnlockConn(menu.id, 300_000), false] as [string, () => void, boolean],
+                    ]
+                  : []),
+              [readonlyConns[menu.id] || tempUnlocks[menu.id] ? t("關閉唯讀模式") : t("設為唯讀模式（擋寫入 / DDL）"),
+                () => useStore.getState().setConnReadonly(menu.id, !(readonlyConns[menu.id] || tempUnlocks[menu.id])), false],
               [t("屬性…"), () => setConnProps(menuConn), false],
               [t("編輯…"), () => onEdit(menuConn), false],
               [t("複製連線…"), () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: t("{name} 複本", { name: menuConn.name }), password: "" }), false],
@@ -7105,6 +7120,11 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, conn, writ
     if (pkValues.some((v) => v === null)) { toast.error(t("這一列的主鍵是 NULL，無法定位，請改從資料表分頁編輯。")); return; }
     const newValue = setNull ? null : rawText;
     if ((row[c] ?? null) === newValue) return;
+    const prodConn = useStore.getState().connections.find((x) => x.id === editConn.connId);
+    if (prodConn && isProdConn(prodConn) && !(await uiConfirm(
+      t("這是正式環境連線。確定要{what}？", { what: t("把 {table}.{col} 寫回資料庫", { table: editTarget.table, col: result.columns[c] }) }),
+      { title: t("正式環境"), danger: true, confirmText: t("確定") },
+    ))) return;
     try {
       const n = await api.updateCell(editConn.connId, editTarget.db, editTarget.table, {
         column: result.columns[c],

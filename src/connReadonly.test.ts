@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { isReadonly, setReadonlyFlag, loadReadonly, persistReadonly, READONLY_KEY, type ReadonlyMap } from "./connReadonly";
+import { isReadonly, setReadonlyFlag, loadReadonly, persistReadonly, persistedReadonly, formatRemaining, READONLY_KEY, type ReadonlyMap } from "./connReadonly";
 
 const __mem: Record<string, string> = {};
 globalThis.localStorage = {
@@ -34,5 +34,16 @@ describe("連線唯讀模式（connReadonly）", () => {
     expect(loadReadonly()).toEqual({});
     localStorage.setItem(READONLY_KEY, "{bad");
     expect(loadReadonly()).toEqual({});
+  });
+});
+
+describe("暫時解鎖", () => {
+  it("persistedReadonly：暫時解鎖中的連線在存檔裡仍是唯讀", () => {
+    expect(persistedReadonly({ a: true }, { b: Date.now() + 1000 })).toEqual({ a: true, b: true });
+  });
+  it("formatRemaining：m:ss、不出負數", () => {
+    expect(formatRemaining(299_001)).toBe("5:00");
+    expect(formatRemaining(61_000)).toBe("1:01");
+    expect(formatRemaining(-5)).toBe("0:00");
   });
 });

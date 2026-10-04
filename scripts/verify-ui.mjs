@@ -3926,6 +3926,27 @@ const CASES = {
     check("base64 圖片預設就開圖片檢視", (await page.locator("[data-cell-image]").count()) === 1);
   },
 
+  // 唯讀連線暫時解鎖：右鍵「暫時解鎖 1 分鐘」→ 唯讀徽章換成「暫時解鎖」→「立即恢復唯讀」換回來。
+  async "readonly-temp-unlock"(page) {
+    const row = page.locator("[data-temp-unlock]");
+    await page.getByText("prod-mysql", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    let items = await menuItems(page);
+    check("唯讀連線右鍵有暫時解鎖 1 / 5 分鐘", items.includes("暫時解鎖 1 分鐘") && items.includes("暫時解鎖 5 分鐘"), items.join(" | "));
+    await page.getByText("暫時解鎖 1 分鐘", { exact: true }).click();
+    await sleep(300);
+    check("出現「暫時解鎖」徽章", (await row.count()) === 1);
+    check("存檔仍是唯讀", ((await page.evaluate(() => localStorage.getItem("db-kit:readonlyConns"))) ?? "").includes('"c-mysql":true'));
+    await page.getByText("prod-mysql", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    items = await menuItems(page);
+    const relock = items.find((i) => i.startsWith("立即恢復唯讀"));
+    check("解鎖中改成「立即恢復唯讀（剩 m:ss）」", !!relock && /剩 \d:\d\d/.test(relock), items.join(" | "));
+    await page.getByText(/^立即恢復唯讀/).click();
+    await sleep(300);
+    check("鎖回後徽章消失", (await row.count()) === 0);
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

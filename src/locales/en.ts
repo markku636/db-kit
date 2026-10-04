@@ -4939,6 +4939,15 @@ const en: Catalog = {
   "以 UTF-8 位元組顯示文字內容（看得到不可見字元、全形空白、BOM）。": "Text shown as UTF-8 bytes (reveals invisible characters, full-width spaces, BOM).",
   "已複製路徑 {path}": "Copied path {path}",
   "… 另有 {n} 項未顯示": "… {n} more items not shown",
+  "這是正式環境連線。確定要{what}？": "This is a production connection. Are you sure you want to {what}?",
+  "寫入 {n} 筆儲存格變更": "write {n} cell changes",
+  "新增這一列": "insert this row",
+  "把 {table}.{col} 寫回資料庫": "write {table}.{col} back to the database",
+  "立即恢復唯讀（剩 {left}）": "Restore read-only now ({left} left)",
+  "暫時解鎖 1 分鐘": "Unlock for 1 minute",
+  "暫時解鎖 5 分鐘": "Unlock for 5 minutes",
+  "暫時解鎖": "Unlocked",
+  "唯讀連線暫時解鎖中，{time} 自動鎖回": "Read-only connection temporarily unlocked; locks again at {time}",
 };
 
 export default en;
