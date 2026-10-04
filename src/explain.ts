@@ -174,3 +174,88 @@ export function planSummary(node: PlanNode | null): { nodes: number; tables: num
   if (node) walk(node);
   return { nodes, tables, maxCost };
 }
+
+// ---- SQLite：EXPLAIN QUERY PLAN（id, parent, notused, detail）→ 依 parent 建樹 ----
+// 沒有成本與列數；SCAN / SEARCH 是表存取，其餘（USE TEMP B-TREE、CO-ROUTINE、COMPOUND…）是操作。
+// SCAN 整表掃描在 detail 標出來（最常見的效能問題），SEARCH … USING INDEX 則是走索引。
+export function parseSqlitePlan(rows: (string | null)[][]): PlanNode | null {
+  if (!rows.length) return null;
+  const byId = new Map<string, PlanNode>();
+  const root: PlanNode = { label: "QUERY PLAN", kind: "query_block", cost: null, rows: null, children: [] };
+  for (const r of rows) {
+    const [id, parent, , detail] = r.length >= 4 ? r : [r[0], r[1], null, r[2]];
+    const text = (detail ?? "").trim();
+    const m = /^(SCAN|SEARCH)\s+(?:TABLE\s+)?(\S+)(.*)$/i.exec(text);
+    const node: PlanNode = m
+      ? {
+          label: m[2],
+          kind: "table",
+          cost: null,
+          rows: null,
+          detail: m[1].toUpperCase() === "SCAN" && !/USING\s+(COVERING\s+)?INDEX/i.test(m[3]) ? `SCAN（全表掃描）${m[3]}`.trim() : `${m[1].toUpperCase()}${m[3]}`.trim(),
+          children: [],
+        }
+      : { label: text || "?", kind: "op", cost: null, rows: null, children: [] };
+    byId.set(String(id), node);
+    (byId.get(String(parent)) ?? root).children.push(node);
+  }
+  return root;
+}
+
+// ---- SQL Server：SHOWPLAN_XML ----
+// 不靠 DOMParser（單元測試在 node 跑）：掃標籤、以堆疊追蹤巢狀的 <RelOp>，
+// 每個 RelOp 的第一個 <Object Table="…"> 當表名（Index Scan / Seek 等存取操作）。
+// 成本用 EstimatedTotalSubtreeCost（子樹累積）；selfCost = 自身 − Σ子樹，供熱點判斷（同 PG 的作法）。
+function xmlAttrs(s: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of s.matchAll(/([\w:]+)\s*=\s*"([^"]*)"/g)) out[m[1]] = m[2].replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  return out;
+}
+const unbracket = (s: string) => s.replace(/^\[|\]$/g, "");
+
+export function parseMssqlShowplan(xml: string): PlanNode | null {
+  if (!xml || !xml.includes("<RelOp")) return null;
+  const root: PlanNode = { label: "Query", kind: "query_block", cost: null, rows: null, children: [] };
+  const stack: PlanNode[] = [];
+  const objectSeen = new Set<PlanNode>();
+  for (const m of xml.matchAll(/<(\/?)([\w:]+)([^>]*?)(\/?)>/g)) {
+    const [, close, tag, rest, selfClose] = m;
+    if (tag === "RelOp") {
+      if (close) { stack.pop(); continue; }
+      const a = xmlAttrs(rest);
+      const cost = a.EstimatedTotalSubtreeCost != null ? Number(a.EstimatedTotalSubtreeCost) : null;
+      const node: PlanNode = {
+        label: a.PhysicalOp ?? a.LogicalOp ?? "RelOp",
+        kind: /Join|Nested Loops|Merge|Hash Match/i.test(a.PhysicalOp ?? "") ? "join" : "op",
+        cost,
+        selfCost: cost,
+        rows: a.EstimateRows != null ? Number(a.EstimateRows) : null,
+        detail: a.LogicalOp && a.LogicalOp !== a.PhysicalOp ? a.LogicalOp : undefined,
+        children: [],
+      };
+      const parent = stack[stack.length - 1];
+      if (parent) {
+        parent.children.push(node);
+        if (parent.selfCost != null && cost != null) parent.selfCost = Math.max(0, parent.selfCost - cost);
+      } else root.children.push(node);
+      if (!selfClose) stack.push(node);
+      continue;
+    }
+    if (tag === "Object" && !close && stack.length) {
+      const cur = stack[stack.length - 1];
+      if (objectSeen.has(cur)) continue;
+      const a = xmlAttrs(rest);
+      if (!a.Table) continue;
+      objectSeen.add(cur);
+      cur.kind = "table";
+      const idx = a.Index ? ` · ${unbracket(a.Index)}` : "";
+      cur.detail = [cur.label, cur.detail].filter(Boolean).join(" / ") + idx;
+      cur.label = unbracket(a.Table);
+    }
+    if (tag === "StmtSimple" && !close) {
+      const a = xmlAttrs(rest);
+      if (a.StatementSubTreeCost) root.cost = Number(a.StatementSubTreeCost);
+    }
+  }
+  return root.children.length ? root : null;
+}

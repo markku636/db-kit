@@ -78,7 +78,7 @@ import {
 import type { SavedQuery } from "./sql";
 import { snapshotFileName } from "./compareModel";
 import Select from "./ui/Select";
-import { buildExplainJsonSql, parseExplainPlan, planSummary, type PlanNode } from "./explain";
+import { buildExplainJsonSql, parseExplainPlan, parseMssqlShowplan, parseSqlitePlan, planSummary, type PlanNode } from "./explain";
 import { lintSql, MAX_SQL_CHARS as LINT_MAX_CHARS, type LintFinding, type LintSeverity } from "./sqlLint";
 import { buildReviewPrompt, buildTunePrompt, collectSchemaContext } from "./aiReview";
 import {
@@ -4438,6 +4438,27 @@ interface PaneResultState {
 const paneResults = new Map<string, PaneResultState>();
 // 分頁關閉後丟掉它的快取：分頁 id 會被回收（全部關光再開又是 __query__），
 // 留著會讓新開的分頁一掛上就掛著上一輪的結果。
+/** 視覺化解釋要送的語句：SQLite 是 EXPLAIN QUERY PLAN、SQL Server 是原查詢（交給後端 SHOWPLAN_XML），其餘是 JSON 計畫。 */
+function visualExplainSql(kind: DbKind, base: string): string | null {
+  const bare = base.replace(/;\s*$/, "");
+  if (kind === "sqlite") return `EXPLAIN QUERY PLAN ${bare}`;
+  if (kind === "mssql") return bare;
+  return buildExplainJsonSql(kind, base);
+}
+
+/** 依引擎取回並解析執行計畫；res 給「解析失敗時把原始輸出放到結果分頁」用。 */
+async function fetchVisualPlan(kind: DbKind, connId: string, explainSql: string, usePrefix: string | null):
+  Promise<{ node: PlanNode | null; raw: string | null; res?: QueryResult }> {
+  if (kind === "mssql") {
+    const xml = await api.mssqlShowplan(connId, explainSql);
+    return { node: parseMssqlShowplan(xml), raw: xml };
+  }
+  const res = await api.runQuery(connId, usePrefix ? `${usePrefix};\n${explainSql}` : explainSql);
+  if (kind === "sqlite") return { node: parseSqlitePlan(res.rows ?? []), raw: null, res };
+  const cell = res.rows?.[0]?.[0] ?? null;
+  return { node: cell ? parseExplainPlan(kind, cell) : null, raw: cell, res };
+}
+
 function pruneQueryPaneResults(liveTabIds: string[]) {
   for (const id of [...paneResults.keys()]) if (!liveTabIds.includes(id)) paneResults.delete(id);
 }
@@ -4504,7 +4525,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 改在編輯器位置放導引卡（開主題 / 佇列瀏覽器、叢集總覽、發布訊息），避免呈現一個按了必錯的輸入框。
   const supportsQueryEditor = supportsQueryEditorKind(kind);
   // 視覺化解釋（解釋分頁）支援的類型：能取得 JSON 執行計畫者（MySQL / PostgreSQL / 外部 gateway；SQLite 無）。
-  const supportsVisualExplain = !!kind && (isMysqlFamily(kind) || kind === "postgres" || kind === "external");
+  // SQLite 走 EXPLAIN QUERY PLAN（列 → 樹）；SQL Server 走 SHOWPLAN_XML（後端專屬連線，不執行查詢）。
+  const supportsVisualExplain = !!kind && (isMysqlFamily(kind) || kind === "postgres" || kind === "external" || kind === "sqlite" || kind === "mssql");
   // Mongo explain：獨立 gate —— 不可把 mongo 加進 EXPLAIN_KINDS（那同時 gate SQL 切割 / 參數 / 編輯器選擇）。
   const supportsMongoExplain = kind === "mongo";
   // 壓力測試：後端 runner 走 manager.query_capped，只對「SQL 家族」有意義（Mongo 的 DSL 與 Redis 的
@@ -5338,7 +5360,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     if (stmts.length > 1) { toast.info(t("視覺化解釋一次只能解析一條語句，請反白要解釋的語句")); return; }
     const base = (stmts[0] ?? "").trim();
     if (!base) { toast.info(t("沒有可解釋的語句")); return; }
-    const explainSql = kind ? buildExplainJsonSql(kind, base) : null;
+    const explainSql = kind ? visualExplainSql(kind, base) : null;
     if (!explainSql) { toast.info(t("此查詢無法產生執行計畫")); return; }
     setRunning(true);
     setPlan(null); // 清掉舊計畫，讓「解釋中…」狀態顯示，避免誤讀前一次的計畫
@@ -5352,11 +5374,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         supportsDbSelect && queryDb && !hasLeadingDbSwitch(base)
           ? buildUseDatabase(kind!, queryDb)
           : null;
-      const res = await api.runQuery(activeId, usePrefix ? `${usePrefix};\n${explainSql}` : explainSql);
-      const cell = res.rows?.[0]?.[0] ?? null;
-      const node = cell ? parseExplainPlan(kind!, cell) : null;
-      if (node) { setPlan(node); setPlanRaw(cell); setPlanErr(null); }
-      else { setPlan(null); setPlanRaw(null); setPlanErr(t("無法解析執行計畫 JSON（原始輸出見「結果」分頁）")); setResult(res); setBottomTab("result"); }
+      const { node, raw, res } = await fetchVisualPlan(kind!, activeId, explainSql, usePrefix);
+      if (node) { setPlan(node); setPlanRaw(raw); setPlanErr(null); }
+      else {
+        setPlan(null); setPlanRaw(null);
+        setPlanErr(kind === "mssql" ? t("無法解析 SQL Server 執行計畫") : t("無法解析執行計畫（原始輸出見「結果」分頁）"));
+        if (res) { setResult(res); setBottomTab("result"); }
+      }
       setElapsed(performance.now() - t0);
     } catch (e: any) {
       setElapsed(performance.now() - t0);

@@ -259,6 +259,22 @@ async fn mysql_sql_file_with_delimiter_trigger() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// SQL Server 估計執行計畫：SHOWPLAN_XML 在專屬連線上取得，不執行查詢；池裡的連線不受 SET 影響。
+#[tokio::test]
+#[ignore]
+async fn mssql_showplan_xml_estimated_plan() {
+    use crate::db::mssql::MssqlDriver;
+    let mut c = cfg(DbKind::Mssql, "127.0.0.1", 11435, "sa", "Test1234!", Some("master"));
+    c.options.insert("trust_server_certificate".into(), "true".into());
+    let d = MssqlDriver::connect(&c).await.expect("dev-sptest mssql 要先起來");
+    let xml = d.showplan_xml("SELECT o.name FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id WHERE o.object_id > 100").await.unwrap();
+    assert!(xml.contains("<ShowPlanXML") && xml.contains("<RelOp"), "{}", &xml[..xml.len().min(200)]);
+    // 池裡的連線照常回結果（SHOWPLAN 只開在那條專屬連線上）。
+    let q = d.query("SELECT 1 AS x").await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("1"));
+    d.close().await;
+}
+
 /// SQL Server 取消：`KILL <spid>` 中止長查詢（WAITFOR DELAY），被 KILL 的連線還池後
 /// 由 bb8 的 test_on_check_out 淘汰，接下來的查詢照常（容器：scripts/dev-sptest，埠 11435）。
 #[tokio::test]
@@ -293,6 +309,26 @@ async fn mssql_cancel_kills_running_query() {
         }
     }
     d.close().await;
+}
+
+/// SQLite 視覺化解釋：EXPLAIN QUERY PLAN 走讀取路徑、回 (id, parent, notused, detail) 四欄（前端 parseSqlitePlan 依此建樹）。
+#[tokio::test]
+async fn sqlite_explain_query_plan_returns_rows() {
+    let dbfile = format!("dbkit_it_eqp_{}.db", std::process::id());
+    let _ = std::fs::remove_file(&dbfile);
+    let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile.as_str()));
+    {
+        let d = SqliteDriver::connect(&c).await.unwrap();
+        d.query("CREATE TABLE o (id INTEGER PRIMARY KEY, c INTEGER)").await.unwrap();
+        d.query("CREATE TABLE cu (id INTEGER PRIMARY KEY)").await.unwrap();
+        let r = d.query("EXPLAIN QUERY PLAN SELECT * FROM o JOIN cu ON cu.id = o.c").await.unwrap();
+        assert_eq!(r.columns.len(), 4, "{:?}", r.columns);
+        let details: Vec<String> = r.rows.iter().map(|x| x[3].clone().unwrap_or_default()).collect();
+        assert!(details.iter().any(|d| d.starts_with("SCAN")), "{details:?}");
+        assert!(details.iter().any(|d| d.starts_with("SEARCH")), "{details:?}");
+        d.close().await;
+    }
+    let _ = std::fs::remove_file(&dbfile);
 }
 
 /// SQLite 取消：progress handler 讓執行中的長查詢（無窮遞迴 CTE）中止，

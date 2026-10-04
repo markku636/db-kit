@@ -4952,6 +4952,9 @@ const en: Catalog = {
   "同一張表刪一欄、增一欄且型別相同（配對唯一）時，產生 RENAME COLUMN 保留資料，而不是 DROP + ADD。是推測，請逐句確認。": "When a table loses one column and gains another of the same type (a unique pair), generate RENAME COLUMN to keep the data instead of DROP + ADD. This is a guess; review each statement.",
   "交給審查並執行：逐句擷取結構前像、先寫好回滾腳本（rollback.sql）才執行": "Hand off to Review & Run: captures the schema before each statement and writes the rollback script (rollback.sql) before running",
   "審查並執行（含回滾）…": "Review & Run (with rollback)…",
+  "無法解析 SQL Server 執行計畫": "Could not parse the SQL Server execution plan",
+  "無法解析執行計畫（原始輸出見「結果」分頁）": "Could not parse the execution plan (see the Results tab for the raw output)",
+  "沒有取得執行計畫": "No execution plan was returned",
 };
 
 export default en;

@@ -250,6 +250,7 @@ pub fn run() {
             commands::compare_data_cancel,
             commands::review_run_prepare,
             commands::preview_dml,
+            commands::mssql_showplan,
             commands::run_sql_file,
             commands::run_sql_file_cancel,
             commands::ai_library::ai_library_load,

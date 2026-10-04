@@ -3971,6 +3971,29 @@ const CASES = {
     check("唯讀目標時停用", await btn.isDisabled());
   },
 
+  // 視覺化解釋擴到 SQLite（EXPLAIN QUERY PLAN）與 SQL Server（SHOWPLAN_XML）。
+  async "visual-explain-sqlite-mssql"(page) {
+    const explainOn = async (conn, query) => {
+      await page.getByText(conn, { exact: true }).first().dblclick();
+      await sleep(1200);
+      await page.getByText("查詢", { exact: true }).first().click();
+      await page.waitForSelector(".cm-content", { timeout: 8000 });
+      await page.locator(".cm-content").first().click();
+      await page.keyboard.press("Control+a");
+      await page.keyboard.press("Delete");
+      await page.keyboard.type(query);
+      await page.locator('button[title*="更多工具"]').first().click();
+      await sleep(300);
+      await page.getByText("視覺化解釋", { exact: true }).click();
+      await sleep(1200);
+      return appText(page);
+    };
+    let body = await explainOn("local.sqlite", "SELECT * FROM orders o JOIN customers c ON c.id = o.customer_id");
+    check("SQLite：計畫列出表與全表掃描", body.includes("orders") && body.includes("全表掃描") && body.includes("customers"), body.replace(/\s+/g, " ").slice(-300));
+    body = await explainOn("reporting-mssql", "SELECT * FROM Sales s JOIN Regions r ON r.id = s.region_id");
+    check("SQL Server：SHOWPLAN 解析出 Nested Loops 與表名", body.includes("Nested Loops") && body.includes("Sales") && body.includes("Regions"), body.replace(/\s+/g, " ").slice(-300));
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

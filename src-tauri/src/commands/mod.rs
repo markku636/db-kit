@@ -1584,6 +1584,12 @@ pub async fn review_run_prepare(
     .await
 }
 
+/// SQL Server 估計執行計畫（SHOWPLAN_XML，不執行查詢）。前端解析成計畫樹（explain.ts parseMssqlShowplan）。
+#[tauri::command]
+pub async fn mssql_showplan(state: State<'_, AppState>, id: String, sql: String) -> AppResult<String> {
+    state.manager.mssql_driver(&id)?.showplan_xml(&sql).await
+}
+
 /// 寫入語句的影響列預覽：只送唯讀 SELECT，不執行、不送 AI（見 review_run/preview.rs）。
 #[tauri::command]
 pub async fn preview_dml(

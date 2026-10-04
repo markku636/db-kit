@@ -60,6 +60,28 @@ impl MssqlDriver {
         self.pool.dedicated_connection().await.map_err(|e| AppError::Connect(e.to_string()))
     }
 
+    /// 估計執行計畫（SHOWPLAN_XML）：不實際執行查詢。SET SHOWPLAN_XML 是工作階段狀態、而且必須單獨成一個批次，
+    /// 所以開一條專屬連線：ON → 送查詢（回一列 XML）→ 連線用完即丟（不必再 OFF，也不會污染池）。
+    pub(crate) async fn showplan_xml(&self, sql: &str) -> AppResult<String> {
+        let mut c = self.dedicated_client().await?;
+        c.simple_query("SET SHOWPLAN_XML ON")
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+            .into_results()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let rows = c
+            .simple_query(sql)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+            .into_first_result()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        rows.first()
+            .and_then(|r| cell_to_string(r, 0))
+            .ok_or_else(|| AppError::Query(t!("沒有取得執行計畫").into()))
+    }
+
     /// 取回結果集所有列（第一個 result set）。
     async fn query_rows(&self, sql: &str) -> AppResult<Vec<tiberius::Row>> {
         let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
