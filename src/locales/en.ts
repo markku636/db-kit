@@ -2374,7 +2374,6 @@ const en: Catalog = {
   "僅目標有（來源缺少）": "Only in target (missing in source)",
   "僅含註解，無可執行語句": "Only comments, no executable statements",
   "僅記錄慢查詢（≥ slowms）": "Log slow queries only (≥ slowms)",
-  "僅渲染前 {rendered} / 已取回 {fetched} 列（避免卡頓）；「複製 / 匯出」仍取全部已取回列。": "Rendering only the first {rendered} of {fetched} fetched rows (to avoid lag); \"Copy / Export\" still use all fetched rows.",
   "匯入": "Import",
   "匯入 {imported} 列、失敗 {failed} 列": "Imported {imported} rows, {failed} failed",
   "匯入 {n} 列": { one: "Imported {n} row", other: "Imported {n} rows" },

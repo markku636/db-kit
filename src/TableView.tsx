@@ -26,6 +26,7 @@ import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
 import ProgressBar from "./ui/ProgressBar";
+import { useVirtualRows } from "./useVirtualRows";
 import { AlterOp } from "./api";
 import { t, useT } from "./i18n";
 
@@ -515,6 +516,13 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total_rows / pageSize)) : 1;
   const startRow = data ? page * pageSize : 0;
+  // 列虛擬化：大頁（2,000 / 5,000 列）也只把可視範圍放進 DOM。
+  const vr = useVirtualRows(data?.rows.length ?? 0);
+  // 鍵盤移動選取格時把該列捲進可視範圍（虛擬化後列可能不在 DOM，不能靠 scrollIntoView）。
+  useEffect(() => {
+    if (selected) vr.ensureVisible(selected.r);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.r]);
   // 唯讀連線：資料格不可編輯（與寫入 / DDL 攔截一致），避免正式環境誤改。
   const readonly = useStore((s) => s.readonlyConns[tab.connId] === true);
   const editable = !!data && data.primary_key.length > 0 && !readonly;
@@ -1585,6 +1593,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         )}
         {data && data.columns.length > 0 && (
           <table
+            ref={vr.tableRef}
             className={`text-sm border-collapse transition-opacity ${loading || applying ? "opacity-50" : ""} ${applying ? "pointer-events-none" : ""}`}
             style={{
               tableLayout: "fixed",
@@ -1662,10 +1671,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
               </tr>
             </thead>
             <tbody className="mono">
-              {data.rows.map((row, i) => (
+              {vr.padTop > 0 && <tr aria-hidden style={{ height: vr.padTop }}><td colSpan={visibleCols.length + 1 + (editable ? 2 : 0)} /></tr>}
+              {Array.from({ length: vr.end - vr.start }, (_, k) => vr.start + k).map((i) => (
                 <DataRow
                   key={i}
-                  row={row}
+                  row={data.rows[i]}
                   i={i}
                   startRow={startRow}
                   visibleCols={visibleCols}
@@ -1683,6 +1693,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
                   h={rowHandlers}
                 />
               ))}
+              {vr.padBottom > 0 && <tr aria-hidden style={{ height: vr.padBottom }}><td colSpan={visibleCols.length + 1 + (editable ? 2 : 0)} /></tr>}
             </tbody>
           </table>
         )}
@@ -1732,7 +1743,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           title={t("每頁列數")}
           className="ml-2 bg-inset border border-fg/10 rounded px-1.5 py-0.5 text-xs outline-none focus:border-accent text-fg/60"
         >
-          {[100, 200, 500, 1000].map((n) => (
+          {[100, 200, 500, 1000, 2000, 5000].map((n) => (
             <option key={n} value={n}>{n} {t("/ 頁")}</option>
           ))}
         </select>

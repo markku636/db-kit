@@ -89,6 +89,8 @@ export function installShim(fx) {
     if (s.includes("explain")) return [fx.EXPLAIN_RESULT];
     if (s.includes("group by status")) return [fx.MULTI_RESULTS[0]];
     if (s.includes("order_items")) return [fx.MULTI_RESULTS[1]];
+    // 大結果集（列虛擬化情境）：2 萬列。
+    if (s.includes("big_rows")) return [{ columns: ["id", "name", "amount"], rows: Array.from({ length: 20_000 }, (_, i) => [String(i + 1), `row-${i + 1}`, (i * 1.5).toFixed(2)]), rows_affected: 0 }];
     if (s.startsWith("use ")) return [];
     return [one(["result"], ["ok"])];
   };

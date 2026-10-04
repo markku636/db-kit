@@ -3712,6 +3712,41 @@ const CASES = {
     check("取消後回到未收藏狀態", (await page.locator('button[title*="一鍵收藏目前查詢"]').count()) > 0);
   },
 
+  // 大結果集列虛擬化：2 萬列全部捲得到，但 DOM 只放可視範圍；鍵盤 Ctrl+End 跳到最後一格也要捲過去。
+  async "result-grid-virtualized"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("SELECT * FROM big_rows");
+    await page.keyboard.press("Control+Enter");
+    await page.waitForFunction(() => document.body.innerText.includes("row-1"), null, { timeout: 10_000 }).catch(() => {});
+    const domRows = await page.evaluate(() => {
+      const tb = [...document.querySelectorAll("tbody.mono")].find((b) => b.textContent?.includes("row-1"));
+      return tb ? tb.querySelectorAll("tr").length : -1;
+    });
+    check("2 萬列結果只渲染可視範圍的列", domRows > 0 && domRows < 300, `dom rows=${domRows}`);
+    check("不再出現「僅渲染前 N 列」截斷提示", !(await appText(page)).includes("僅渲染前"));
+    // 點第一格後 Ctrl+End → 最後一列最後一格，必須被捲進來（虛擬化前它根本不存在於 DOM）。
+    // 點儲存格會開檢視窗（開窗後 300ms 內不收關閉），等一下再 Esc 關掉，焦點回到結果格。
+    await page.getByText("row-1", { exact: true }).first().click();
+    await sleep(500);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+    await page.keyboard.press("Control+End");
+    await page.waitForFunction(() => document.body.innerText.includes("row-20000"), null, { timeout: 5000 }).catch(() => {});
+    const dbg = await page.evaluate(() => {
+      const a = document.activeElement;
+      const tb = [...document.querySelectorAll("tbody.mono")].find((b) => b.querySelector("td"));
+      let p = tb?.parentElement; while (p && !/auto|scroll/.test(getComputedStyle(p).overflowY)) p = p.parentElement;
+      return `active=${a?.tagName}.${a?.className?.toString().slice(0, 40)} scroller=${p?.className?.toString().slice(0, 40)} st=${p?.scrollTop} sh=${p?.scrollHeight} ch=${p?.clientHeight}`;
+    });
+    check("Ctrl+End 捲到第 20000 列", (await appText(page)).includes("row-20000"), dbg);
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

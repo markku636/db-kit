@@ -1,6 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { api, hostLabel, isContainerKind, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
 import { useStore, type SelectedNode } from "./store";
+import { useVirtualRows } from "./useVirtualRows";
 import { useTheme } from "./theme";
 import { LANGUAGES, t, useLang, useT, type Lang } from "./i18n";
 import { APP_NAME } from "./brand";
@@ -4589,7 +4590,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 每個 await 之後比對——序號已被後續執行蓋掉（stale）就不再寫任何 state，
   // 避免「停止後馬上跑下一條」時舊查詢遲到的結果覆蓋新結果。
   const runSeqRef = useRef(0);
-  // 停止：① 請後端做伺服器端真取消（MySQL KILL QUERY / PG pg_cancel_backend）；
+  // 停止：① 請後端做伺服器端真取消（MySQL KILL QUERY / PG pg_cancel_backend / SQL Server KILL /
+  //   Oracle OCIBreak / SQLite progress handler 中斷）；
   // ② 不論後端支不支援，都立刻結束本端等待讓 UI 回到閒置。
   // 舊做法只設 cancelRef 旗標，而旗標只在多語句迴圈的語句邊界被檢查 —— 單條長查詢
   //（external gateway 更是不做前端切分、永遠只有一條）按下去完全沒有反應。
@@ -4604,7 +4606,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         else toast.info(t("已停止等待（查詢已結束或尚未送達伺服器）"));
       })
       .catch((e: any) => {
-        // ERR_UNSUPPORTED＝此驅動沒有旁路取消通道（SQLite / Redis / 外部 gateway…）。
+        // ERR_UNSUPPORTED＝此驅動沒有旁路取消通道（Redis / MongoDB / 外部 gateway…）。
         // 其他錯誤（如連線池被長查詢佔滿、取不到連線送 KILL）要照實說，別誤報成「不支援」。
         // 兩種情況本端都已停等，但伺服器端可能還在跑 → 導引使用者用行程清單手動終止。
         if (e?.code === "ERR_UNSUPPORTED") toast.info(t("已停止等待；此連線不支援伺服器端取消，查詢可能仍在執行（可用行程清單終止）"));
@@ -6615,7 +6617,6 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                         {/* 摺疊用 display:none 而非卸載：保留該格排序 / 篩選 / 選取狀態 */}
                         <div style={collapsed ? { display: "none" } : undefined} className="max-h-[45vh] overflow-auto">
                           <ResultTable result={s.res}
-                            maxRender={Math.max(100, Math.floor(2000 / resultSets.length))}
                             conn={resultConn} writable={!activeReadonly} sql={s.sql}
                             onViewChange={i === activeIdx ? setResultView : undefined} />
                         </div>
@@ -6852,10 +6853,9 @@ function ReviewPanel({ findings, skipped, hasSql, onJump }: {
 
 // memo：多結果集堆疊時，父層（QueryPane）因作用中表格回報 resultView 而頻繁重渲染（每個篩選鍵擊 / 排序點擊），
 // 不 memo 會讓其餘 N-1 個大表格跟著全數 reconcile；props（result / onViewChange / maxRender）皆為穩定 identity。
-const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender = 2000, conn, writable = false, sql }: {
+const ResultTable = memo(function ResultTable({ result, onViewChange, conn, writable = false, sql }: {
   result: QueryResult;
   onViewChange?: (rows: (string | null)[][]) => void;
-  maxRender?: number;
   // 「這個結果集對得回哪張表」用的連線（驅動支援時才由 QueryPane 給；否則 undefined＝純檢視）。
   // 不含唯讀判斷：唯讀連線也要能產生 UPDATE 腳本，只是不能就地改（見 writable）。
   // 必須是 memo 過的穩定參考，否則下面解析目標表的 effect 每次 render 都重跑。
@@ -6988,10 +6988,10 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   // 新查詢結果到達時重置排序 / 篩選 / 選取（避免沿用上一個查詢的狀態，例如欄序失效或舊篩選字）。
   useEffect(() => { setSort(null); setRfilter(""); setSelected(null); setRangeEnd(null); setPatch({}); }, [result]);
 
-  // 大結果集只渲染前 N 列，避免數萬列 DOM 卡死 UI；複製 / 匯出仍取全部。
-  // 多結果集堆疊時由父層按格數縮小上限（總 DOM 列數有預算）。
-  const MAX_RENDER = maxRender;
-  const rendered = viewRows.length > MAX_RENDER ? viewRows.slice(0, MAX_RENDER) : viewRows;
+  // 大結果集用列虛擬化：全部已取回的列都能捲到，DOM 只放可視範圍（見 useVirtualRows）。
+  // 表頭上方還有 34px 的 sticky 工具列，鍵盤導覽捲動時要一起扣掉。
+  const rendered = viewRows;
+  const vr = useVirtualRows(viewRows.length, 34);
 
   // 欄寬：共用 useColWidths（依內容自動量測 + 拖曳表頭右緣調整 + 雙擊恢復自動寬）。
   // 結果集是暫態的，不做 localStorage 持久化；同一組欄位的重跑（F6）保留手動調過的寬度。
@@ -7107,7 +7107,12 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
   const activeCell = rangeEnd ?? selected;
   const activeCellRef = useRef<HTMLTableCellElement>(null);
   useEffect(() => {
-    activeCellRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!activeCell) return;
+    // 虛擬化時目標列可能還沒在 DOM 裡：先把列捲進範圍，下一格再讓儲存格處理水平方向。
+    vr.ensureVisible(activeCell.r);
+    const raf = requestAnimationFrame(() => activeCellRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" }));
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, rangeEnd]);
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -7244,7 +7249,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
           </span>
         )}
       </div>
-      <table className="text-sm border-collapse"
+      <table ref={vr.tableRef} className="text-sm border-collapse"
         style={{ tableLayout: "fixed", width: tableWidth(48) }}>
         <thead className="sticky top-[34px] bg-bar">
           <tr>
@@ -7265,7 +7270,9 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
           </tr>
         </thead>
         <tbody className="mono">
-          {rendered.map((row, i) => {
+          {vr.padTop > 0 && <tr aria-hidden style={{ height: vr.padTop }}><td colSpan={result.columns.length + 1} /></tr>}
+          {rendered.slice(vr.start, vr.end).map((row, k) => {
+            const i = vr.start + k;
             const rowSel = selected?.r === i;
             return (
             <tr key={i} className={rowSel ? "bg-accent/[0.06]" : "hover:bg-fg/5"}>
@@ -7309,14 +7316,9 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, maxRender 
               ))}
             </tr>
           )})}
+          {vr.padBottom > 0 && <tr aria-hidden style={{ height: vr.padBottom }}><td colSpan={result.columns.length + 1} /></tr>}
         </tbody>
       </table>
-
-      {viewRows.length > MAX_RENDER && (
-        <div className="px-3 py-2 text-xs text-amber-300/80 bg-amber-500/5 border-t border-fg/10">
-          {t("僅渲染前 {rendered} / 已取回 {fetched} 列（避免卡頓）；「複製 / 匯出」仍取全部已取回列。", { rendered: MAX_RENDER.toLocaleString(), fetched: viewRows.length.toLocaleString() })}
-        </div>
-      )}
 
       {/* 浮層一律 portal 到 body：多結果集的每一格 <section> 帶 content-visibility:auto，
           它隱含 contain:paint，會讓 position:fixed 的子元素改以該 section 為定位基準並被裁切 ——
