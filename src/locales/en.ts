@@ -4926,6 +4926,10 @@ const en: Catalog = {
   "匯入 CSV / Excel / JSON ·": "Import CSV / Excel / JSON ·",
   "已匯入 {n} 列（JSON）": "Imported {n} rows (JSON)",
   "JSON：欄名取自物件的鍵；null 與缺少的鍵一律寫入 NULL，true / false 寫成 1 / 0，巢狀物件存成 JSON 字串。": "JSON: column names come from the object keys; null and missing keys are always written as NULL, true / false become 1 / 0, and nested objects are stored as JSON strings.",
+  "已匯出 {file}": "Exported {file}",
+  "匯出失敗：{msg}": "Export failed: {msg}",
+  "匯出為 SVG（向量，可再編輯）": "Export as SVG (vector, editable)",
+  "匯出為 PNG（2 倍解析度）": "Export as PNG (2x resolution)",
 };
 
 export default en;

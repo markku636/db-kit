@@ -385,6 +385,7 @@ metadata:
     exec_ddl: () => null,
     // 寫檔類：對話框 handler 會回假路徑，所以這些後續步驟也要有回應，否則匯出一按就是紅字。
     save_text_file: ({ path, content }) => { window.__DBKIT_SAVED_FILES__.push({ path, content }); return null; },
+    save_base64_file: ({ path, data }) => { window.__DBKIT_SAVED_FILES__.push({ path, base64: data }); return null; },
     export_rows: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
     export_rows_multi: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),
     export_query: ({ outPath }) => ({ path: outPath, rows: 3, bytes: 256 }),

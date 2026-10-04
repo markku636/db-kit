@@ -888,6 +888,16 @@ pub async fn save_text_file(path: String, content: String) -> AppResult<()> {
     std::fs::write(&path, content).map_err(|e| AppError::Query(tf!("寫入失敗：{e}", e = e)))
 }
 
+/// 寫入二進位檔（內容以 base64 傳入）：前端產生的圖片（ER 圖 PNG）用。路徑來自原生存檔對話框。
+#[tauri::command]
+pub async fn save_base64_file(path: String, data: String) -> AppResult<()> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .map_err(|e| AppError::Query(tf!("寫入失敗：{e}", e = e)))?;
+    std::fs::write(&path, bytes).map_err(|e| AppError::Query(tf!("寫入失敗：{e}", e = e)))
+}
+
 /// 讀取使用者（透過原生開啟對話框）選定之文字檔內容。供查詢編輯器開啟 .sql 檔用。
 /// 上限 8 MiB，避免誤選巨大檔案塞爆編輯器 / 記憶體。
 #[tauri::command]

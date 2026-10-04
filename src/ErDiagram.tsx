@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { KeyRound, Link2, Minus, Plus, X } from "lucide-react";
+import { ImageDown, KeyRound, Link2, Minus, Plus, X } from "lucide-react";
 import { api, ErModel, ErTable } from "./api";
 import Icon from "./ui/Icon";
 import { IconButton, ModalViewControls, useModalView } from "./ui/index";
-import { useModalOverlay } from "./ui";
+import { pickSaveFile, toast, useModalOverlay } from "./ui";
+import { erToSvg, svgToPngBase64 } from "./erExport";
 import { useT } from "./i18n";
 
 const CARD_W = 210;
@@ -170,6 +171,21 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
 
   const zbtn = "px-2 py-0.5 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 text-xs";
 
+  // 匯出目前佈局（拖過的位置照用）為 SVG / PNG；裁到內容範圍、固定淺底。
+  const exportImage = async (fmt: "svg" | "png") => {
+    if (!model || model.tables.length === 0) return;
+    const { svg, width, height } = erToSvg(model, pos, db);
+    const path = await pickSaveFile(`${db || "er"}-diagram.${fmt}`, [{ name: fmt.toUpperCase(), extensions: [fmt] }]);
+    if (!path) return;
+    try {
+      if (fmt === "svg") await api.saveTextFile(path, svg);
+      else await api.saveBase64File(path, await svgToPngBase64(svg, width, height));
+      toast.success(t("已匯出 {file}", { file: path.split(/[\\/]/).pop() ?? path }));
+    } catch (e) {
+      toast.error(t("匯出失敗：{msg}", { msg: String((e as { message?: string })?.message ?? e) }));
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
       <div className={`bg-panel w-[92vw] h-[88vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
@@ -191,6 +207,15 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
             <button type="button" className={zbtn} title={t("放大")} aria-label={t("放大")} onClick={() => bump(0.1)}><Icon icon={Plus} size={14} /></button>
             <button type="button" className={zbtn} title={t("符合視窗")} onClick={fit}>{t("適配")}</button>
             <button type="button" className={zbtn} title={t("重置佈局與縮放")} onClick={resetLayout}>{t("重置")}</button>
+            <span className="w-px h-4 bg-fg/10 mx-1" />
+            <button type="button" className={`${zbtn} inline-flex items-center gap-1`} title={t("匯出為 SVG（向量，可再編輯）")}
+              disabled={!model || model.tables.length === 0} onClick={() => void exportImage("svg")} data-er-export="svg">
+              <Icon icon={ImageDown} size={13} />SVG
+            </button>
+            <button type="button" className={`${zbtn} inline-flex items-center gap-1`} title={t("匯出為 PNG（2 倍解析度）")}
+              disabled={!model || model.tables.length === 0} onClick={() => void exportImage("png")} data-er-export="png">
+              <Icon icon={ImageDown} size={13} />PNG
+            </button>
           </div>
           <ModalViewControls />
           <IconButton icon={X} label={t("關閉")} onClick={onClose} className="text-fg/40 hover:text-fg" />

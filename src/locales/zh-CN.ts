@@ -4889,6 +4889,10 @@ const zhCN: Catalog = {
   "匯入 CSV / Excel / JSON ·": "导入 CSV / Excel / JSON ·",
   "已匯入 {n} 列（JSON）": "已导入 {n} 行（JSON）",
   "JSON：欄名取自物件的鍵；null 與缺少的鍵一律寫入 NULL，true / false 寫成 1 / 0，巢狀物件存成 JSON 字串。": "JSON：字段名取自对象的键；null 与缺少的键一律写入 NULL，true / false 写成 1 / 0，嵌套对象存成 JSON 字符串。",
+  "已匯出 {file}": "已导出 {file}",
+  "匯出失敗：{msg}": "导出失败：{msg}",
+  "匯出為 SVG（向量，可再編輯）": "导出为 SVG（矢量，可再编辑）",
+  "匯出為 PNG（2 倍解析度）": "导出为 PNG（2 倍分辨率）",
 };
 
 export default zhCN;

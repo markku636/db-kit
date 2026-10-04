@@ -3850,6 +3850,30 @@ const CASES = {
       && (await page.getByRole("button", { name: "取消", exact: true }).count()) === 0);
   },
 
+  // ER 圖匯出：SVG 是由模型組出的獨立向量圖（含表名、裁到內容），PNG 是同一份 SVG 光柵化。
+  async "er-export"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click();
+    await sleep(700);
+    await page.getByText("資料表", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="orders"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="orders"]').first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("逆向至模型…", { exact: true }).click();
+    await page.locator('[data-er-export="svg"]').waitFor({ timeout: 8000 });
+    await page.waitForFunction(() => !document.querySelector('[data-er-export="svg"]')?.disabled, null, { timeout: 8000 }).catch(() => {});
+    await page.locator('[data-er-export="svg"]').click();
+    await sleep(500);
+    const svg = await page.evaluate(() => (window.__DBKIT_SAVED_FILES__ ?? []).filter((f) => typeof f.content === "string" && f.content.startsWith("<svg")).pop()?.content ?? "");
+    check("SVG 匯出寫出 <svg> 並含表名", svg.startsWith("<svg") && svg.includes(">orders<"), svg.slice(0, 120));
+    await page.locator('[data-er-export="png"]').click();
+    await page.waitForFunction(() => (window.__DBKIT_SAVED_FILES__ ?? []).some((f) => f.base64), null, { timeout: 8000 }).catch(() => {});
+    const png = await page.evaluate(() => (window.__DBKIT_SAVED_FILES__ ?? []).filter((f) => f.base64).pop()?.base64 ?? "");
+    // PNG 檔頭 \x89PNG 的 base64 是 iVBORw0KGgo。
+    check("PNG 匯出是真的 PNG", png.startsWith("iVBORw0KGgo") && png.length > 2000, `len=${png.length}`);
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

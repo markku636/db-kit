@@ -223,6 +223,7 @@ pub fn run() {
             commands::run_query_multi,
             commands::cancel_query,
             commands::save_text_file,
+            commands::save_base64_file,
             commands::read_text_file,
             commands::update_cell,
             commands::insert_row,

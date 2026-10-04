@@ -1726,6 +1726,8 @@ export const api = {
     invoke<void>("set_query_guard", { maxRows, timeoutMs }),
   saveTextFile: (path: string, content: string) =>
     invoke<void>("save_text_file", { path, content }),
+  saveBase64File: (path: string, data: string) =>
+    invoke<void>("save_base64_file", { path, data }),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   updateCell: (id: string, database: string, table: string, edit: CellEdit) =>
     invoke<number>("update_cell", { id, database, table, edit }),
