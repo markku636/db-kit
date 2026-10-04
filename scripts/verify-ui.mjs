@@ -4021,6 +4021,32 @@ const CASES = {
     check("密碼不匯入", !!erp && erp.password === "");
   },
 
+  // DB 連線的網路路徑：不用 SSH 時可填 SOCKS5 / HTTP Proxy；用 SSH 時可選已存的 SSH 主機當跳板機。兩者擇一。
+  async "conn-proxy-and-jump"(page) {
+    await page.getByRole("button", { name: "連線", exact: true }).first().click();
+    await page.getByRole("radiogroup", { name: "連線類型" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByRole("radio", { name: "PostgreSQL" }).first().click();
+    await sleep(300);
+    check("未勾 SSH 時有 Proxy 欄", (await page.locator("[data-conn-proxy]").count()) === 1);
+    await page.locator("[data-conn-proxy] input").first().fill("socks5://ops@proxy.corp:1080");
+    await sleep(200);
+    check("填了 Proxy 才出現密碼欄", (await page.getByText("Proxy 密碼", { exact: true }).count()) === 1);
+    await page.locator("[data-conn-proxy] input[type=password]").fill("s3cret");
+    await page.getByText("透過 SSH Tunnel 連線", { exact: true }).click();
+    await sleep(300);
+    check("勾 SSH 後 Proxy 欄收起（兩者擇一）", (await page.locator("[data-conn-proxy]").count()) === 0);
+    const jumpOpts = await page.locator("[data-conn-ssh-jump] option").allTextContents();
+    check("跳板主機下拉列出已存的 SSH 主機", jumpOpts.includes("直接連線") && jumpOpts.some((o) => o.includes("web-01")), jumpOpts.join(" | "));
+    // 改回不用 SSH，存檔：proxy 設定進 options（密碼由後端轉存 keychain）。
+    await page.getByText("透過 SSH Tunnel 連線", { exact: true }).click();
+    await sleep(200);
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await sleep(600);
+    const saved = await page.evaluate(() => (window.__DBKIT_CONN_SAVES__ ?? []).pop());
+    check("存檔帶 proxy_url 與 proxy_password", saved?.options?.proxy_url === "socks5://ops@proxy.corp:1080" && saved?.options?.proxy_password === "s3cret",
+      JSON.stringify(saved?.options ?? null));
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

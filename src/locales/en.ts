@@ -4969,6 +4969,12 @@ const en: Catalog = {
   "要從哪裡匯入連線？": "Where do you want to import connections from?",
   "db-kit 加密匯出檔": "db-kit encrypted export",
   "其他工具（DBeaver / DataGrip / .ncx）": "Other tools (DBeaver / DataGrip / .ncx)",
+  "Proxy（選填）": "Proxy (optional)",
+  "socks5://主機:1080 或 http://主機:3128；帳號可寫成 socks5://帳號@主機:埠": "socks5://host:1080 or http://host:3128; add a user as socks5://user@host:port",
+  "Proxy 密碼": "Proxy password",
+  "經由跳板主機（選填）": "Via jump host (optional)",
+  "先連上這台已存的 SSH 主機，再從它連到上面的 SSH 主機；跳板機的帳密用它自己存的。": "Connects to this saved SSH host first, then through it to the SSH host above; the jump host uses its own saved credentials.",
+  "直接連線": "Direct",
 };
 
 export default en;

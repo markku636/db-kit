@@ -30,9 +30,8 @@ pub struct TunnelGuard {
 }
 
 impl TunnelGuard {
-    /// 由其他轉發機制（Kubernetes port-forward）組成 guard：manager 對兩者一視同仁。
+    /// 由其他轉發機制（Kubernetes port-forward、SOCKS5 / HTTP proxy）組成 guard：manager 對它們一視同仁。
     /// `task` 須在 `shutdown` 送出 true 後自行收尾結束。
-    #[allow(dead_code)] // 只有 docker feature（Kubernetes）用到
     pub(crate) fn from_parts(local_addr: SocketAddr, shutdown: watch::Sender<bool>, task: JoinHandle<()>) -> Self {
         TunnelGuard { local_addr, shutdown, task }
     }
@@ -49,17 +48,37 @@ impl TunnelGuard {
     }
 }
 
+/// DB 連線 options 裡「經由哪台已存 SSH 主機跳板」的鍵（值 = 已存主機 id）。
+pub const JUMP_OPTION: &str = "ssh_jump_host";
+
+/// DB 連線的 SSH 目標，連同跳板機鏈：`options.ssh_jump_host` 指向一台已存的 SSH 主機，
+/// 它的帳密從 keychain 取、它自己若還有跳板機也一併接上（與 SSH 主機的 ProxyJump 同一套 resolve_jump_chain）。
+pub async fn connection_target(cfg: &ConnectionConfig) -> AppResult<SshTarget> {
+    let mut target = SshTarget::from_connection(cfg)?;
+    if let Some(jump) = cfg.options.get(JUMP_OPTION).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        let file = super::sessions::load_in(&super::keys::config_root()?).await?;
+        target.jump = super::auth::resolve_jump_chain(&file, "", Some(jump), |id| {
+            (
+                crate::store::kc_get(&super::sessions::session_password_account(id)),
+                crate::store::kc_get(&super::sessions::session_passphrase_account(id)),
+            )
+        })?;
+    }
+    Ok(target)
+}
+
 /// 依連線設定開一條 SSH tunnel，回傳 guard。撥號目標為「原始」DB host:port。
 pub async fn open_tunnel(cfg: &ConnectionConfig) -> AppResult<TunnelGuard> {
     if matches!(cfg.kind, DbKind::Sqlite) {
         return Err(AppError::Ssh(t!("SQLite 不支援 SSH Tunnel").into()));
     }
-    let target = SshTarget::from_connection(cfg)?;
+    let target = connection_target(cfg).await?;
     let remote_host = cfg.host.clone();
     let remote_port = cfg.port as u32;
 
-    // 1. 連到 SSH bastion 並認證（不發問；TOFU 自動記住新主機）。
-    let Connected { handle: session, .. } = connect_and_auth(
+    // 1. 連到 SSH bastion 並認證（不發問；TOFU 自動記住新主機）。經跳板機時，跳板機那條連線（jump）
+    //    必須跟著 tunnel 活著——bastion 的 TCP 就是跳板機上的通道。
+    let Connected { handle: session, jump, .. } = connect_and_auth(
         &target,
         &format!("tunnel:{}", cfg.id),
         Arc::new(SilentUi),
@@ -118,8 +137,9 @@ pub async fn open_tunnel(cfg: &ConnectionConfig) -> AppResult<TunnelGuard> {
                 }
             }
         }
-        // 跳出迴圈後 session（Handle）隨任務結束 drop，russh 會關閉連線。
+        // 跳出迴圈後 session（Handle）隨任務結束 drop，russh 會關閉連線；之後才收掉跳板機。
         drop(session);
+        drop(jump);
     });
 
     Ok(TunnelGuard {

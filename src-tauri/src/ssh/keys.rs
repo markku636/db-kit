@@ -614,6 +614,11 @@ pub fn init_store_root(config_dir: &Path) {
     let _ = STORE_ROOT.set(config_dir.to_path_buf());
 }
 
+/// App 設定目錄（GUI 啟動時登記；CLI 退回 headless 設定目錄）。DB 連線的 SSH 跳板機要從這裡讀已存主機。
+pub fn config_root() -> AppResult<PathBuf> {
+    store_root()
+}
+
 fn store_root() -> AppResult<PathBuf> {
     match STORE_ROOT.get() {
         Some(p) => Ok(p.clone()),

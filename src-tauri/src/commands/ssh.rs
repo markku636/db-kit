@@ -214,7 +214,7 @@ pub(crate) async fn resolve_target(app: &AppHandle, r: SshTargetRef) -> AppResul
         }
         SshTargetRef::Connection { id } => {
             let cfg = store::load_connection(app, &id).await?;
-            SshTarget::from_connection(&cfg).map(Resolved::Ssh)
+            crate::ssh::connection_target(&cfg).await.map(Resolved::Ssh)
         }
         SshTargetRef::AdHoc { session, password, passphrase } => {
             // 對話框「測試連線」：留空 = 用 keychain 裡存的（與連線對話框「留空 = 不變更」同語意）。

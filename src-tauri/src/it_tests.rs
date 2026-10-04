@@ -259,6 +259,51 @@ async fn mysql_sql_file_with_delimiter_trigger() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 經 SOCKS5 proxy 連 PostgreSQL：測試內起一個最小 SOCKS5 轉發器（免認證、只做 CONNECT），
+/// 連線 options 設 proxy_url 後由 manager 開本地轉發埠，查詢照常（容器：scripts/dev-sptest，埠 15433）。
+#[tokio::test]
+#[ignore]
+async fn postgres_via_socks5_proxy() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let proxy_port = l.local_addr().unwrap().port();
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let h2 = hits.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = l.accept().await.unwrap();
+            let hits = h2.clone();
+            tokio::spawn(async move {
+                let mut g = [0u8; 2];
+                s.read_exact(&mut g).await.unwrap();
+                let mut m = vec![0u8; g[1] as usize];
+                s.read_exact(&mut m).await.unwrap();
+                s.write_all(&[5, 0]).await.unwrap();
+                let mut head = [0u8; 5];
+                s.read_exact(&mut head).await.unwrap();
+                let mut name = vec![0u8; head[4] as usize];
+                s.read_exact(&mut name).await.unwrap();
+                let mut pb = [0u8; 2];
+                s.read_exact(&mut pb).await.unwrap();
+                let target = format!("{}:{}", String::from_utf8(name).unwrap(), u16::from_be_bytes(pb));
+                let mut up = tokio::net::TcpStream::connect(target).await.unwrap();
+                s.write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0]).await.unwrap();
+                hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let _ = tokio::io::copy_bidirectional(&mut s, &mut up).await;
+            });
+        }
+    });
+    let mgr = crate::manager::ConnectionManager::new();
+    let mut c = cfg(DbKind::Postgres, "127.0.0.1", 15433, "postgres", "test1234", Some("postgres"));
+    c.id = "it-proxy-pg".into();
+    c.options.insert(crate::db::proxy::PROXY_OPTION.into(), format!("socks5://127.0.0.1:{proxy_port}"));
+    mgr.connect(c).await.expect("經 proxy 連線");
+    let q = mgr.query("it-proxy-pg", "SELECT 42").await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("42"));
+    assert!(hits.load(std::sync::atomic::Ordering::Relaxed) >= 2, "試撥 + 至少一條 driver 連線都經過 proxy");
+    mgr.disconnect("it-proxy-pg").await;
+}
+
 /// SQL Server 估計執行計畫：SHOWPLAN_XML 在專屬連線上取得，不執行查詢；池裡的連線不受 SET 影響。
 #[tokio::test]
 #[ignore]

@@ -537,6 +537,11 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         // ---- db/mod.rs：trait 預設 Unsupported + 欄位驗證 ----
         "此連線不支援取消執行中的查詢" => "This connection does not support cancelling a running query",
         "查詢已取消" => "Query cancelled",
+        "Proxy 網址格式不對：{url}（例：socks5://host:1080）" => "Invalid proxy URL: {url} (e.g. socks5://host:1080)",
+        "不支援的 Proxy 類型：{scheme}（支援 socks5、http）" => "Unsupported proxy type: {scheme} (supported: socks5, http)",
+        "經 Proxy 連線逾時（10 秒）" => "Connecting through the proxy timed out (10 s)",
+        "經 Proxy 連不到 {host}:{port}：{e}" => "Could not reach {host}:{port} through the proxy: {e}",
+        "SSH 通道與 Proxy 不能同時使用，請擇一" => "An SSH tunnel and a proxy cannot be used together; choose one",
         "沒有取得執行計畫" => "No execution plan was returned",
         "推測為改名：{old} → {new}（型別相同、一刪一增）；需 MySQL 8.0 / MariaDB 10.5+。不是改名就取消勾選" => "Guessed rename: {old} → {new} (same type, one dropped and one added); needs MySQL 8.0 / MariaDB 10.5+. Uncheck it if it is not a rename",
         "推測為改名：{old} → {new}（型別相同、一刪一增）；需 SQLite 3.25+。不是改名就取消勾選" => "Guessed rename: {old} → {new} (same type, one dropped and one added); needs SQLite 3.25+. Uncheck it if it is not a rename",

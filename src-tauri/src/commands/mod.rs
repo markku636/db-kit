@@ -110,6 +110,13 @@ fn hydrate_secrets(config: &mut ConnectionConfig) {
     if config.otp_secret.is_empty() {
         config.otp_secret = store::kc_get(&store::otp_account(&config.id)).unwrap_or_default();
     }
+    if config.options.contains_key(crate::db::proxy::PROXY_OPTION)
+        && config.options.get(crate::db::proxy::PROXY_PASSWORD_OPTION).map_or(true, |p| p.is_empty())
+    {
+        if let Some(pw) = store::kc_get(&store::proxy_account(&config.id)) {
+            config.options.insert(crate::db::proxy::PROXY_PASSWORD_OPTION.to_string(), pw);
+        }
+    }
     if config.ssh_enabled {
         if config.ssh_password.is_empty() {
             config.ssh_password = store::kc_get(&store::ssh_account(&config.id)).unwrap_or_default();
@@ -297,6 +304,9 @@ pub async fn save_connection(app: AppHandle, config: ConnectionConfig) -> AppRes
     if !config.otp_secret.is_empty() {
         store::kc_set(&store::otp_account(&config.id), &config.otp_secret)?;
     }
+    if let Some(pw) = config.options.get(crate::db::proxy::PROXY_PASSWORD_OPTION).filter(|p| !p.is_empty()) {
+        store::kc_set(&store::proxy_account(&config.id), pw)?;
+    }
     if config.ssh_enabled {
         if !config.ssh_password.is_empty() {
             store::kc_set(&store::ssh_account(&config.id), &config.ssh_password)?;
@@ -337,6 +347,7 @@ pub async fn remove_saved_connection(
     store::remove(&app, &id).await?;
     store::kc_delete(&id);
     store::kc_delete(&store::otp_account(&id));
+    store::kc_delete(&store::proxy_account(&id));
     store::kc_delete(&store::ssh_account(&id));
     store::kc_delete(&store::ssh_passphrase_account(&id));
     Ok(())

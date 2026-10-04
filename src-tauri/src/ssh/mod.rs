@@ -42,4 +42,4 @@ mod it_tests;
 // `SshRuntime` 只有 GUI 的 AppState 用；slim CLI build 不引用，別讓它變成 warning。
 #[cfg_attr(not(feature = "gui"), allow(unused_imports))]
 pub use runtime::SshRuntime;
-pub use tunnel::{open_tunnel, TunnelGuard};
+pub use tunnel::{connection_target, open_tunnel, TunnelGuard};

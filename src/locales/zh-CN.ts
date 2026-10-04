@@ -4932,6 +4932,12 @@ const zhCN: Catalog = {
   "要從哪裡匯入連線？": "要从哪里导入连接？",
   "db-kit 加密匯出檔": "db-kit 加密导出档",
   "其他工具（DBeaver / DataGrip / .ncx）": "其他工具（DBeaver / DataGrip / .ncx）",
+  "Proxy（選填）": "Proxy（选填）",
+  "socks5://主機:1080 或 http://主機:3128；帳號可寫成 socks5://帳號@主機:埠": "socks5://主机:1080 或 http://主机:3128；账号可写成 socks5://账号@主机:端口",
+  "Proxy 密碼": "Proxy 密码",
+  "經由跳板主機（選填）": "经由跳板主机（选填）",
+  "先連上這台已存的 SSH 主機，再從它連到上面的 SSH 主機；跳板機的帳密用它自己存的。": "先连上这台已存的 SSH 主机，再从它连到上面的 SSH 主机；跳板机的帐密用它自己存的。",
+  "直接連線": "直接连接",
 };
 
 export default zhCN;
