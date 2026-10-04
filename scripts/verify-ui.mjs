@@ -3874,6 +3874,28 @@ const CASES = {
     check("PNG 匯出是真的 PNG", png.startsWith("iVBORw0KGgo") && png.length > 2000, `len=${png.length}`);
   },
 
+  // 語意診斷 + JOIN 條件補全：打錯表名畫黃線；JOIN … ON 依 ER 模型的外鍵提示條件。
+  async "editor-semantic-lint-join"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("SELECT * FROM orderz");
+    await page.waitForSelector(".cm-lintRange-warning", { timeout: 4000 }).catch(() => {});
+    check("找不到的表畫黃線", (await page.locator(".cm-lintRange-warning").count()) > 0);
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("SELECT * FROM orders o JOIN customers c ON ");
+    await page.keyboard.press("Control+Space");
+    await page.waitForSelector(".cm-tooltip-autocomplete", { timeout: 4000 }).catch(() => {});
+    const opts = await page.locator(".cm-tooltip-autocomplete li").allTextContents();
+    check("JOIN … ON 提示外鍵條件", opts.some((o) => o.includes("c.customer_id = o.customer_id")), opts.slice(0, 5).join(" | "));
+    check("正確的表與欄位沒有黃線", (await page.locator(".cm-lintRange-warning").count()) === 0);
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

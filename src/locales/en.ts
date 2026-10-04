@@ -4930,6 +4930,9 @@ const en: Catalog = {
   "匯出為 PNG（2 倍解析度）": "Export as PNG (2x resolution)",
   "參數 {p} 的值": "Value for parameter {p}",
   "偵測到查詢參數（:name、${name}、#{name}，PostgreSQL 以外也認 ?）；執行時會逐一提示輸入並安全代入": "Query parameters detected (:name, ${name}, #{name}; also ? outside PostgreSQL); you'll be prompted for each one when running and values are substituted safely",
+  "找不到資料表 {table}（依目前載入的結構；剛建立的表請重新整理結構）": "Table {table} not found (based on the loaded schema; refresh the schema for newly created tables)",
+  "{table} 沒有欄位 {col}": "{table} has no column {col}",
+  "依欄名推測": "Guessed from column names",
 };
 
 export default en;

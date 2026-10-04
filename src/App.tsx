@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
-import { api, hostLabel, isContainerKind, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit } from "./api";
+import { api, hostLabel, isContainerKind, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit, type ErRelation } from "./api";
 import { useStore, type SelectedNode } from "./store";
 import { useVirtualRows } from "./useVirtualRows";
 import { useTheme } from "./theme";
@@ -4515,6 +4515,19 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   const schema = schemaState.schema;
   // 交給編輯器的跨庫設定：dbList 用來認出 `xxx.` 的 xxx 是不是一個庫，
   // ensureDatabase 則在它還沒載入時當場抓進來（有磁碟快取就是零往返）。
+  // JOIN 條件補全用的外鍵：每個連線 + 庫只抓一次（er_model），抓不到就讓補全只靠欄名推測。
+  const relCacheRef = useRef(new Map<string, Promise<ErRelation[]>>());
+  const loadRelations = useCallback(() => {
+    if (!activeId || !kind || !schemaState.database) return Promise.resolve([] as ErRelation[]);
+    if (!(isMysqlFamily(kind) || kind === "postgres" || kind === "sqlite" || kind === "mssql" || kind === "oracle")) return Promise.resolve([] as ErRelation[]);
+    const key = `${activeId}:${schemaState.database}`;
+    let p = relCacheRef.current.get(key);
+    if (!p) {
+      p = api.erModel(activeId, schemaState.database).then((m) => m.relations).catch(() => [] as ErRelation[]);
+      relCacheRef.current.set(key, p);
+    }
+    return p;
+  }, [activeId, kind, schemaState.database]);
   const crossDb = useMemo(
     () => ({
       databases: dbList,
@@ -6369,6 +6382,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 schema={schema}
                 cross={crossDb}
                 snippets={editorSnippets}
+                loadRelations={loadRelations}
                 onSubmit={onEditorSubmit}
                 onSelectionChange={setEditorSel}
                 onContextMenu={(p) => setAiMenu(p)}
