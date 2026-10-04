@@ -3947,6 +3947,30 @@ const CASES = {
     check("鎖回後徽章消失", (await row.count()) === 0);
   },
 
+  // 結構比對 → 審查並執行（含回滾）：同步腳本交給審查並執行產生 rollback.sql；選項面板有「偵測欄位改名」。
+  async "compare-review-run-handoff"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+    await sleep(300);
+    await page.getByText("結構比對…", { exact: true }).click();
+    await page.getByRole("button", { name: /比對選取的/ }).waitFor({ timeout: 8000 });
+    await page.locator("select").filter({ has: page.locator('option[value="shop_archive"]') })
+      .filter({ hasNot: page.locator('option[value="information_schema"]') }).first().selectOption("shop_archive");
+    await sleep(400);
+    await page.getByRole("button", { name: /^選項/ }).first().click().catch(() => {});
+    await sleep(300);
+    check("選項面板有「偵測欄位改名」", (await page.locator('[data-compare-opt="detect_renames"]').count()) === 1);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+    await page.getByRole("button", { name: /比對選取的/ }).click();
+    await page.getByText("同步語句", { exact: false }).first().waitFor({ timeout: 8000 }).catch(() => {});
+    const btn = page.locator("[data-sync-review-run]");
+    check("同步腳本面板有「審查並執行（含回滾）…」", (await btn.count()) === 1);
+    // prod-mysql 在 fixtures 是唯讀 → 按鈕停用（與「直接執行」一致）。
+    check("唯讀目標時停用", await btn.isDisabled());
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。
@@ -4492,6 +4516,9 @@ const CASES = {
     check("單表比對預設目標不是來源自己",
       !(await appText(page)).includes("來源與目標是同一張表"));
     const cmpBtn = page.getByRole("button", { name: "比對", exact: true }).first();
+    // 目標庫清單非同步載入、載完才預設一個非來源的庫；整套跑時機器忙，等它就緒再判（不是要求「同步就亮」）。
+    await cmpBtn.waitFor({ timeout: 8000 }).catch(() => {});
+    for (let i = 0; i < 40 && !(await cmpBtn.isEnabled()); i++) await sleep(100);
     check("單表比對「比對」鈕開啟即可按", await cmpBtn.isEnabled());
     await cmpBtn.click();
     await sleep(1500);

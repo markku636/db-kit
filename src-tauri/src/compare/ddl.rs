@@ -37,6 +37,7 @@ pub enum SyncKind {
     CreateRoutine,
     DropRoutine,
     Comment,
+    RenameColumn,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,12 +74,35 @@ pub struct SyncOptions {
     pub include_views: bool,
     #[serde(default)]
     pub include_routines: bool,
+    /// 同一張表「刪一欄、增一欄」且型別 / 可空性相同、配對唯一時，產生 RENAME COLUMN 取代 DROP + ADD（保留資料）。
+    /// 是推測，預設關。
+    #[serde(default)]
+    pub detect_renames: bool,
 }
 
 impl Default for SyncOptions {
     fn default() -> Self {
-        Self { include_drops: false, include_indexes: true, include_fks: true, include_views: true, include_routines: false }
+        Self { include_drops: false, include_indexes: true, include_fks: true, include_views: true, include_routines: false, detect_renames: false }
     }
+}
+
+/// 改名配對：目標多出的欄（removed，舊名）↔ 來源多出的欄（added，新名），型別（忽略大小寫與空白）與可空性相同。
+/// 只收「兩邊都恰好只有一個候選」的配對——有歧義就寧可不猜，照舊 DROP + ADD。
+pub fn rename_pairs<'a>(removed: &'a [ColumnInfo], added: &'a [ColumnInfo]) -> Vec<(&'a ColumnInfo, &'a ColumnInfo)> {
+    let norm = |t: &str| t.split_whitespace().collect::<String>().to_ascii_lowercase();
+    let same = |a: &ColumnInfo, b: &ColumnInfo| norm(&a.data_type) == norm(&b.data_type) && a.nullable == b.nullable;
+    removed
+        .iter()
+        .filter_map(|old| {
+            let cands: Vec<&ColumnInfo> = added.iter().filter(|n| same(old, n)).collect();
+            if cands.len() != 1 {
+                return None;
+            }
+            let new = cands[0];
+            // 反向也必須唯一：同型別的舊欄只有這一個。
+            (removed.iter().filter(|o| same(o, new)).count() == 1).then_some((old, new))
+        })
+        .collect()
 }
 
 /// 整份腳本文字：語句以 `;` 結尾、空行分隔；破壞性語句前加註解。
@@ -489,7 +513,13 @@ impl<'a> Gen<'a> {
                 }
             }
         }
-        for c in &td.columns_added {
+        let renames = if self.opts.detect_renames { rename_pairs(&td.columns_removed, &td.columns_added) } else { vec![] };
+        for (old, new) in &renames {
+            self.rename_column(name, old, new);
+        }
+        let renamed_to = |c: &ColumnInfo| renames.iter().any(|(_, n)| n.name == c.name);
+        let renamed_from = |c: &ColumnInfo| renames.iter().any(|(o, _)| o.name == c.name);
+        for c in td.columns_added.iter().filter(|c| !renamed_to(c)) {
             self.add_column(name, c);
         }
         for c in &td.columns_changed {
@@ -498,7 +528,7 @@ impl<'a> Gen<'a> {
             }
             self.alter_column(name, &c.src, &c.dst, &c.attrs);
         }
-        for c in &td.columns_removed {
+        for c in td.columns_removed.iter().filter(|c| !renamed_from(c)) {
             self.drop_column(name, c);
         }
         if self.opts.include_indexes {
@@ -654,6 +684,27 @@ impl<'a> Gen<'a> {
             }
             _ => self.skip(tf!("{obj}：此引擎不支援欄位變更", obj = obj)),
         }
+    }
+
+    /// 欄位改名（`detect_renames` 推測出的一刪一增配對）：保留資料，取代 DROP + ADD。
+    fn rename_column(&mut self, table: &str, old: &ColumnInfo, new: &ColumnInfo) {
+        let obj = format!("{table}.{}", new.name);
+        let sql = match self.kind {
+            DbKind::Mssql => {
+                // sp_rename 的物件名是 schema.table.column（不含資料庫），要在目標庫的環境下執行。
+                let (schema, tbl) = table.split_once('.').unwrap_or(("dbo", table));
+                let objname = format!("{}.{}.{}", quote_ident(self.kind, schema), quote_ident(self.kind, tbl), quote_ident(self.kind, &old.name));
+                let db = if self.db.is_empty() { String::new() } else { format!("{}.", quote_ident(self.kind, self.db)) };
+                format!("EXEC {db}sys.sp_rename N'{}', N'{}', N'COLUMN'", objname.replace('\'', "''"), new.name.replace('\'', "''"))
+            }
+            _ => format!("ALTER TABLE {} RENAME COLUMN {} TO {}", self.q(table), self.qi(&old.name), self.qi(&new.name)),
+        };
+        let note = match self.kind {
+            DbKind::Mysql | DbKind::Mariadb => tf!("推測為改名：{old} → {new}（型別相同、一刪一增）；需 MySQL 8.0 / MariaDB 10.5+。不是改名就取消勾選", old = old.name, new = new.name),
+            DbKind::Sqlite => tf!("推測為改名：{old} → {new}（型別相同、一刪一增）；需 SQLite 3.25+。不是改名就取消勾選", old = old.name, new = new.name),
+            _ => tf!("推測為改名：{old} → {new}（型別相同、一刪一增）。不是改名就取消勾選", old = old.name, new = new.name),
+        };
+        self.columns.push(with_note(st(SyncKind::RenameColumn, obj, sql, false), note));
     }
 
     fn drop_column(&mut self, table: &str, c: &ColumnInfo) {
@@ -933,6 +984,41 @@ mod tests {
         assert!(s.statements[1].destructive); // 改型別
         assert!(s.statements[2].destructive);
         assert_eq!(s.destructive_count, 2);
+    }
+
+    #[test]
+    fn detect_renames_turns_unique_drop_add_pair_into_rename() {
+        let id = col("id", "int", false);
+        let src = vec![table("t", vec![id.clone(), col("full_name", "varchar(50)", true)], vec![])];
+        let dst = vec![table("t", vec![id, col("name", "varchar(50)", true)], vec![])];
+        let on = SyncOptions { detect_renames: true, ..opts_all() };
+        let s = gen(DbKind::Mysql, src.clone(), dst.clone(), &on);
+        assert_eq!(sqls(&s), vec!["ALTER TABLE `tgt`.`t` RENAME COLUMN `name` TO `full_name`"]);
+        assert_eq!(s.statements[0].kind, SyncKind::RenameColumn);
+        assert!(!s.statements[0].destructive, "改名保留資料，不是破壞性");
+        assert!(s.statements[0].note.as_deref().unwrap_or("").contains("name"));
+        // 預設關：照舊 ADD + DROP。
+        let off = gen(DbKind::Mysql, src.clone(), dst.clone(), &opts_all());
+        assert_eq!(sqls(&off), vec!["ALTER TABLE `tgt`.`t` ADD COLUMN `full_name` varchar(50) NULL", "ALTER TABLE `tgt`.`t` DROP COLUMN `name`"]);
+        // SQL Server 走 sp_rename。
+        let ms = gen(DbKind::Mssql, src, dst, &on);
+        assert_eq!(sqls(&ms), vec!["EXEC [tgt].sys.sp_rename N'[dbo].[t].[name]', N'full_name', N'COLUMN'"]);
+    }
+
+    #[test]
+    fn detect_renames_refuses_ambiguous_or_type_mismatch() {
+        let id = col("id", "int", false);
+        // 兩個同型別的新欄 → 不知道是哪個改名，不猜。
+        let src = vec![table("t", vec![id.clone(), col("a", "int", true), col("b", "int", true)], vec![])];
+        let dst = vec![table("t", vec![id.clone(), col("old", "int", true)], vec![])];
+        let on = SyncOptions { detect_renames: true, ..opts_all() };
+        let s = gen(DbKind::Postgres, src, dst, &on);
+        assert!(s.statements.iter().all(|x| x.kind != SyncKind::RenameColumn));
+        // 型別不同 → 不是改名。
+        let src = vec![table("t", vec![id.clone(), col("a", "bigint", true)], vec![])];
+        let dst = vec![table("t", vec![id, col("old", "int", true)], vec![])];
+        let s = gen(DbKind::Postgres, src, dst, &on);
+        assert!(s.statements.iter().all(|x| x.kind != SyncKind::RenameColumn));
     }
 
     #[test]

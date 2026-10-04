@@ -236,7 +236,7 @@ export interface ReviewRunRequest {
   connId: string;
   database: string;
   sql: string;
-  origin: "query" | "chat";
+  origin: "query" | "chat" | "compare";
   /** 產生備份或執行結束後呼叫（聊天室用來把結果掛回訊息）。 */
   onDone?: (outcome: ReviewRunOutcome) => void;
 }

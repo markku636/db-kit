@@ -78,7 +78,8 @@ export default function TableCompareDialog({ connId, kind, database, table, onCl
         <TableCompareView key={committed.key} srcConnId={committed.source.connId} srcDb={committed.source.db} srcTable={committed.source.table}
           target={committed.target} dstTable={committed.target.mode === "live" ? committed.target.table ?? committed.source.table : committed.source.table}
           srcLabel={`${connections.find((c) => c.id === committed.source.connId)?.name ?? committed.source.connId} · ${committed.source.db}`}
-          dstLabel={dstLabel} onUse={onUse} autoRun />
+          dstLabel={dstLabel} onUse={onUse} autoRun
+          onReviewRun={(sql, connId, db) => { useStore.getState().openReviewRun({ connId, database: db, sql, origin: "compare" }); onClose(); }} />
       ) : (
         <div className="text-xs text-fg/40">
           {t("選擇目標後按「比對」。目標可以是另一條連線、同連線的其他資料庫，或一份結構快照檔；差異以來源為基準（讓目標變成來源）。按「⇄」可把來源與目標對調。")}

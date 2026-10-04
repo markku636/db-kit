@@ -317,7 +317,7 @@ export interface SchemaDiff {
 export type SyncKind =
   | "create_table" | "drop_table" | "add_column" | "alter_column" | "drop_column"
   | "create_index" | "drop_index" | "add_foreign_key" | "drop_foreign_key"
-  | "create_view" | "drop_view" | "create_routine" | "drop_routine" | "comment"
+  | "create_view" | "drop_view" | "create_routine" | "drop_routine" | "comment" | "rename_column"
   | "insert" | "update" | "delete";
 export interface SyncStatement { sql: string; kind: SyncKind; object: string; destructive: boolean; note: string | null }
 export interface SyncScript {
@@ -333,6 +333,8 @@ export interface SyncOptions {
   include_fks?: boolean;
   include_views?: boolean;
   include_routines?: boolean;
+  /** 一刪一增、型別相同且配對唯一 → RENAME COLUMN（推測，預設關）。 */
+  detect_renames?: boolean;
 }
 export interface SnapshotInfo { path: string; bytes: number; tables: number; views: number; routines: number; captured_at_ms: number }
 export interface CompareProgress {
@@ -1809,6 +1811,7 @@ export const api = {
   runSqlFile: (runId: string, id: string, database: string, path: string, options: { continue_on_error: boolean }) =>
     invoke<SqlFileReport>("run_sql_file", { runId, id, database, path, options }),
   runSqlFileCancel: (runId: string) => invoke<void>("run_sql_file_cancel", { runId }),
+  mssqlShowplan: (id: string, sql: string) => invoke<string>("mssql_showplan", { id, sql }),
   previewDml: (id: string, database: string, script: string) =>
     invoke<DmlPreview>("preview_dml", { id, database, script }),
   reviewRunPrepare: (id: string, connLabel: string, database: string, script: string, maxCaptureRows?: number, sampleRows?: number, personas?: string[]) =>

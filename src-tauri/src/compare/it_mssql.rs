@@ -174,6 +174,7 @@ fn sync_all() -> ddl::SyncOptions {
         include_fks: true,
         include_views: true,
         include_routines: true,
+        detect_renames: false,
     }
 }
 
