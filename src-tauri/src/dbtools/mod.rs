@@ -612,6 +612,23 @@ fn mongo_inject_db(query: &str, db: &str) -> String {
     }
 }
 
+/// PostgreSQL：工具的 database 是 **schema**，但連線池的 search_path 預設只有 public——
+/// 不加前綴的話，沒寫 schema 的表名會去 public 找（寫入工具走審查並執行有切 schema，讀寫就會不一致）。
+/// driver 認得開頭的 `SET search_path TO …;`，會與後面的查詢放在同一條連線執行（GUI 查詢編輯器同一招）。
+/// 保留 public 在後面，擴充套件的函式（pgcrypto 之類）照樣找得到。名稱含 `;` 時不加（driver 以第一個分號切開）。
+pub fn with_pg_namespace(kind: DbKind, ns: &str, sql: &str) -> String {
+    let ns = ns.trim();
+    if !matches!(kind, DbKind::Postgres) || ns.is_empty() || ns.contains(';') {
+        return sql.to_string();
+    }
+    let q = crate::db::sqlgen::quote_ident(DbKind::Postgres, ns);
+    if ns == "public" {
+        format!("SET search_path TO {q}; {sql}")
+    } else {
+        format!("SET search_path TO {q}, public; {sql}")
+    }
+}
+
 /// 執行一支工具。Err 為給模型看的錯誤文字（迴圈會標成 is_error 回傳，讓模型自行修正）。
 pub async fn call(ctx: &DbToolCtx, name: &str, args: &Value) -> Result<ToolOutcome, String> {
     if is_db_tool(name) && !ctx.allows(name) {
@@ -671,10 +688,10 @@ pub async fn call(ctx: &DbToolCtx, name: &str, args: &Value) -> Result<ToolOutco
                 let g = crate::db::limits::row_cap();
                 if g > 0 { limit.min(g) } else { limit }
             };
-            let effective = if matches!(ctx.kind, DbKind::Mongo) {
-                mongo_inject_db(query, &resolve_db(ctx, args).unwrap_or_default())
-            } else {
-                query.to_string()
+            let effective = match ctx.kind {
+                DbKind::Mongo => mongo_inject_db(query, &resolve_db(ctx, args).unwrap_or_default()),
+                DbKind::Postgres => with_pg_namespace(ctx.kind, &resolve_db(ctx, args).unwrap_or_default(), query),
+                _ => query.to_string(),
             };
             let res = with_timeout(async { m.query_capped(id, &effective, cap).await.map_err(|e| e.message()) }).await?;
             let (mut text, text_truncated) = format_result(&res, &opts);
@@ -697,7 +714,14 @@ pub async fn call(ctx: &DbToolCtx, name: &str, args: &Value) -> Result<ToolOutco
             } else {
                 query.to_string()
             };
-            let res = with_timeout(async { m.explain(id, &effective).await.map_err(|e| e.message()) }).await?;
+            // PostgreSQL 有指定 schema 時改走 query_capped：driver 的 explain 不認 SET search_path 前綴。
+            let pg_ns = if matches!(ctx.kind, DbKind::Postgres) { resolve_db(ctx, args).unwrap_or_default() } else { String::new() };
+            let pg_sql = with_pg_namespace(ctx.kind, &pg_ns, &format!("EXPLAIN {effective}"));
+            let res = if pg_sql.starts_with("SET search_path") {
+                with_timeout(async { m.query_capped(id, &pg_sql, 0).await.map_err(|e| e.message()) }).await?
+            } else {
+                with_timeout(async { m.explain(id, &effective).await.map_err(|e| e.message()) }).await?
+            };
             let (text, truncated) = format_result(&res, &opts);
             ToolOutcome { text, input_label: Some(query.to_string()), rows: Some(res.rows.len()), truncated, ..Default::default() }
         }
@@ -718,6 +742,15 @@ mod tests {
             rows_affected: 0,
             truncated: false,
         }
+    }
+
+    #[test]
+    fn pg_namespace_prefix() {
+        assert_eq!(with_pg_namespace(DbKind::Postgres, "sptest", "SELECT 1"), "SET search_path TO \"sptest\", public; SELECT 1");
+        assert_eq!(with_pg_namespace(DbKind::Postgres, "public", "SELECT 1"), "SET search_path TO \"public\"; SELECT 1");
+        assert_eq!(with_pg_namespace(DbKind::Postgres, "", "SELECT 1"), "SELECT 1");
+        assert_eq!(with_pg_namespace(DbKind::Postgres, "a;b", "SELECT 1"), "SELECT 1");
+        assert_eq!(with_pg_namespace(DbKind::Mysql, "shop", "SELECT 1"), "SELECT 1");
     }
 
     #[test]
