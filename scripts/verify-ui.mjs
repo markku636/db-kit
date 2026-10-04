@@ -3772,6 +3772,40 @@ const CASES = {
     check("轉交審查並執行後預覽關閉", (await page.locator("[data-dml-preview-stmt]").count()) === 0);
   },
 
+  // 執行 SQL 檔：資料庫右鍵 → 選檔 → 執行；遇錯即停時列出錯誤行號與沒執行到的句數。
+  async "sql-file-run"(page) {
+    // 唯讀連線：選單照樣有（與其他寫入項目一致），但對話框說明原因、執行鈕停用。
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("資料庫右鍵：執行 SQL 檔…", items.some((i) => i.includes("執行 SQL 檔")), items.join(" | "));
+    await page.getByText("執行 SQL 檔…", { exact: true }).click();
+    await page.locator("[data-sql-file-pick]").waitFor({ timeout: 8000 });
+    check("唯讀連線說明不能執行", (await appText(page)).includes("此連線為唯讀模式"));
+    check("未選檔時執行鈕停用", await page.locator("[data-sql-file-run]").isDisabled());
+    await page.keyboard.press("Escape");
+    await sleep(400);
+
+    await page.getByText("analytics-pg", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("warehouse", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("執行 SQL 檔…", { exact: true }).click();
+    await page.locator("[data-sql-file-pick]").waitFor({ timeout: 8000 });
+    await page.evaluate(() => { window.__DBKIT_DIALOG_OPEN__ = "C:\\work\\migrate_v2.sql"; });
+    await page.locator("[data-sql-file-pick]").click();
+    await sleep(300);
+    check("顯示選到的檔名", (await page.locator("[data-sql-file-path]").innerText()).includes("migrate_v2.sql"));
+    await page.locator("[data-sql-file-run]").click();
+    await page.locator("[data-sql-file-report]").waitFor({ timeout: 8000 }).catch(() => {});
+    const body = await appText(page);
+    check("報告列出成功 / 失敗", body.includes("成功 6") && body.includes("失敗 1"), body.replace(/\s+/g, " ").slice(0, 240));
+    check("錯誤帶行號", body.includes("第 18 行"));
+    check("遇錯即停時說明沒執行到的句數", body.includes("沒有執行到的語句：5 句"));
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

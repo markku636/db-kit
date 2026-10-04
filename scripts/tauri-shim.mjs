@@ -471,6 +471,12 @@ metadata:
 
     // ── 審查並執行 ───────────────────────────────────────────────────────
     review_run_prepare: () => fx.REVIEW_PREPARED,
+    run_sql_file: ({ path, options }) => ({
+      total: 12, executed: options?.continue_on_error ? 11 : 6, failed: 1, skipped_meta: 0, cancelled: false,
+      stopped_on_error: !options?.continue_on_error, elapsed_ms: 840, errors_omitted: 0,
+      errors: [{ index: 6, line: 18, sql: "INSERT INTO missing_table VALUES (1)", message: `Table 'shop.missing_table' doesn't exist (${String(path).split(/[\\/]/).pop()})` }],
+    }),
+    run_sql_file_cancel: () => null,
     preview_dml: ({ script }) => ({
       database: "shop",
       blockers: [],

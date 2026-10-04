@@ -537,6 +537,12 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         // ---- db/mod.rs：trait 預設 Unsupported + 欄位驗證 ----
         "此連線不支援取消執行中的查詢" => "This connection does not support cancelling a running query",
         "查詢已取消" => "Query cancelled",
+        "此連線不是 SQLite" => "This connection is not SQLite",
+        "此連線種類不支援執行 SQL 檔" => "This connection type does not support running SQL files",
+        "無法讀取檔案：{e}" => "Unable to read the file: {e}",
+        "檔案太大（{mb} MB，上限 {max} MB），請改用資料庫的命令列工具匯入。" => "The file is too large ({mb} MB, limit {max} MB); import it with the database's command-line tool instead.",
+        "檔案不是 UTF-8 編碼，請先轉成 UTF-8 再執行。" => "The file is not UTF-8 encoded; convert it to UTF-8 first.",
+        "第 {line} 行是 pg_dump 的 COPY … FROM stdin 資料區塊，無法逐句執行。請改用 `pg_dump --inserts`（或 --column-inserts）重新匯出，或用「備份 / 還原」交給 psql。" => "Line {line} is a pg_dump COPY … FROM stdin data block, which cannot run statement by statement. Re-export with `pg_dump --inserts` (or --column-inserts), or use Backup / Restore to hand it to psql.",
         "這些鍵目前都不存在：全部是新增的列。" => "None of these keys exist yet: every row is new.",
         "自動編號的新增：執行前沒有既有的列可預覽。" => "Auto-numbered insert: there are no existing rows to preview before it runs.",
         "結構變更：沒有資料列可預覽，請用「審查並執行」檢視結構前後差異。" => "Schema change: there are no rows to preview; use Review & Run to see the schema before and after.",

@@ -1487,6 +1487,14 @@ impl ConnectionManager {
         }
     }
 
+    /// 取得 SQLite driver 本體（同上，專屬連線用）。
+    pub fn sqlite_driver(&self, id: &str) -> AppResult<Arc<SqliteDriver>> {
+        match &self.get(id)?.active {
+            Active::Sqlite(d) => Ok(d.clone()),
+            _ => Err(AppError::Unsupported(t!("此連線不是 SQLite").into())),
+        }
+    }
+
     /// 取得 MySQL / MariaDB driver 本體（同上，專屬連線用）。
     pub fn mysql_driver(&self, id: &str) -> AppResult<Arc<MysqlDriver>> {
         match &self.get(id)?.active {

@@ -320,3 +320,40 @@ async fn preview_lists_affected_rows_without_writing() {
     assert_eq!(q.rows[0][0].as_deref(), Some("100"));
     assert_eq!(q.rows[0][1].as_deref(), Some("4"));
 }
+
+/// 執行 SQL 檔（sqlfile.rs）：整份在同一條專屬連線上跑——暫存表與交易跨句仍有效；
+/// 遇錯即停 vs. 繼續執行兩種模式的計數與行號正確。
+#[tokio::test]
+async fn sql_file_runs_on_one_session() {
+    let e = env("sqlfile").await;
+    let path = e.dir.join("script.sql");
+    std::fs::write(
+        &path,
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);\n\
+         CREATE TEMP TABLE scratch (v TEXT);\n\
+         INSERT INTO scratch VALUES ('a'), ('b');\n\
+         BEGIN;\n\
+         INSERT INTO t (v) SELECT v FROM scratch;\n\
+         COMMIT;\n\
+         INSERT INTO nope VALUES (1);\n\
+         INSERT INTO t (v) VALUES ('c');\n",
+    )
+    .unwrap();
+    let p = path.display().to_string();
+    let noop = |_: crate::sqlfile::SqlFileProgress| {};
+
+    let stop = crate::sqlfile::run(&e.mgr, &e.id, "", &p, &Default::default(), "sf-1", &noop).await.unwrap();
+    assert_eq!((stop.total, stop.executed, stop.failed), (8, 6, 1));
+    assert!(stop.stopped_on_error);
+    assert_eq!(stop.errors[0].line, 7, "錯誤行號指到 INSERT INTO nope");
+    let q = e.mgr.query_capped(&e.id, "SELECT COUNT(*) FROM t", 0).await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("2"), "暫存表的列經交易寫進 t：證明整份在同一條連線上");
+
+    e.exec("DROP TABLE t").await;
+    let opts = crate::sqlfile::SqlFileOptions { continue_on_error: true };
+    let cont = crate::sqlfile::run(&e.mgr, &e.id, "", &p, &opts, "sf-2", &noop).await.unwrap();
+    assert_eq!((cont.executed, cont.failed), (7, 1));
+    assert!(!cont.stopped_on_error);
+    let q = e.mgr.query_capped(&e.id, "SELECT COUNT(*) FROM t", 0).await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("3"));
+}

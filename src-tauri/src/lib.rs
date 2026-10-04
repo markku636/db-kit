@@ -35,6 +35,7 @@ mod store;
 mod stress;
 // 預存程序整合測試（情境 / 斷言 / 基線 / 跨引擎差分）核心：不依賴 Tauri，GUI 與 `dbk sp-test` 共用。
 mod sptest;
+mod sqlfile;
 mod transfer;
 
 // CLI（唯讀查詢 + 匯出）。一直編譯；不依賴 Tauri，直接呼叫 manager / store / export / backup。
@@ -248,6 +249,8 @@ pub fn run() {
             commands::compare_data_cancel,
             commands::review_run_prepare,
             commands::preview_dml,
+            commands::run_sql_file,
+            commands::run_sql_file_cancel,
             commands::ai_library::ai_library_load,
             commands::ai_library::ai_library_save,
             commands::ai_library::ai_library_copy,

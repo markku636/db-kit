@@ -159,6 +159,7 @@ const RoutinesDialog = lazyOverlay(() => import("./RoutinesDialog"));
 const SavedQueriesDialog = lazyOverlay(() => import("./SavedQueriesDialog"));
 const ReviewRunDialog = lazyOverlay(() => import("./ReviewRunDialog"));
 const DmlPreviewDialog = lazyOverlay(() => import("./DmlPreviewDialog"));
+const SqlFileDialog = lazyOverlay(() => import("./SqlFileDialog"));
 const SpTestDialog = lazyOverlay(() => import("./SpTestDialog"));
 /** 預存程序整合測試支援的引擎（核心 sptest::session 有實作的）。 */
 const SP_TEST_KINDS = new Set<string>(["mssql", "postgres", "mysql", "mariadb"]);
@@ -1522,6 +1523,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
   const [syncTbl, setSyncTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [dataCmpTbl, setDataCmpTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [dbTransfer, setDbTransfer] = useState<{ connId: string; db: string } | null>(null);
+  const [sqlFile, setSqlFile] = useState<{ connId: string; db: string } | null>(null);
   const [dbDict, setDbDict] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
   const [dataDict, setDataDict] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [dataGen, setDataGen] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
@@ -3366,6 +3368,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                     arr.push([t("預存程序 / 觸發器…"), () => { if (dbConn) setRoutines({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
                     if (SP_TEST_KINDS.has(k ?? "")) arr.push([t("預存程序整合測試…"), () => useStore.getState().openSpTest({ connId: dbMenu.connId, database: dbMenu.db }), false]);
                     arr.push([t("匯出結構 SQL…"), () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
+                    if (supportsSchemaCompare(k)) arr.push([t("執行 SQL 檔…"), () => setSqlFile({ connId: dbMenu.connId, db: dbMenu.db }), false]);
                     if (isMysqlFamily(k)) arr.push([t("資料表大小報表…"), () => setServerQuery({
                       connId: dbMenu.connId, title: t("資料表大小：{db}", { db: dbMenu.db }), sql: tableSizesSql(dbMenu.db),
                     }), false]);
@@ -3685,6 +3688,11 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
           onUse={(sql, targetConnId) => { sendQuery(targetConnId, sql); setDataCmpTbl(null); }} />
       )}
 
+      {sqlFile && (
+        <SqlFileDialog connId={sqlFile.connId} database={sqlFile.db}
+          onClose={() => setSqlFile(null)}
+          onDone={() => { void refreshTables(sqlFile.connId, sqlFile.db); }} />
+      )}
       {dbTransfer && (
         <DbTransferDialog connId={dbTransfer.connId} database={dbTransfer.db} onClose={() => setDbTransfer(null)} />
       )}

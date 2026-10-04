@@ -222,6 +222,43 @@ fn persisted_connection_drops_secrets() {
 
 /// 前導註解不得讓查詢改走 execute 路徑（issue #5）。
 ///
+/// 執行 SQL 檔（MySQL）：mysqldump 風格的 DELIMITER 觸發器段落、`USE` 與 SET 工作階段變數都在同一條連線上生效
+/// （容器：scripts/dev-sptest，埠 13307）。
+#[tokio::test]
+#[ignore]
+async fn mysql_sql_file_with_delimiter_trigger() {
+    let mgr = crate::manager::ConnectionManager::new();
+    let mut c = cfg(DbKind::Mysql, "127.0.0.1", 13307, "root", "test1234", None);
+    c.id = "it-sqlfile-my".into();
+    mgr.connect(c).await.expect("dev-sptest mysql 要先起來");
+    let dir = std::env::temp_dir().join(format!("dbkit-sqlfile-my-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dump.sql");
+    std::fs::write(
+        &path,
+        "DROP DATABASE IF EXISTS dbkit_sqlfile;
+         CREATE DATABASE dbkit_sqlfile;
+         USE dbkit_sqlfile;
+         SET @bump = 100;
+         CREATE TABLE t (id INT PRIMARY KEY, v INT);
+         DELIMITER ;;
+         CREATE TRIGGER trg BEFORE INSERT ON t FOR EACH ROW BEGIN SET NEW.v = NEW.v + 1; END ;;
+         DELIMITER ;
+         INSERT INTO t VALUES (1, @bump);
+",
+    )
+    .unwrap();
+    let noop = |_: crate::sqlfile::SqlFileProgress| {};
+    let r = crate::sqlfile::run(&mgr, "it-sqlfile-my", "", &path.display().to_string(), &Default::default(), "sf-my", &noop)
+        .await
+        .unwrap();
+    assert_eq!((r.total, r.executed, r.failed), (7, 7, 0), "{:?}", r.errors);
+    let q = mgr.query_capped("it-sqlfile-my", "SELECT v FROM dbkit_sqlfile.t WHERE id = 1", 0).await.unwrap();
+    assert_eq!(q.rows[0][0].as_deref(), Some("101"), "SET 的工作階段變數與觸發器都生效");
+    let _ = mgr.query("it-sqlfile-my", "DROP DATABASE dbkit_sqlfile").await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// SQL Server 取消：`KILL <spid>` 中止長查詢（WAITFOR DELAY），被 KILL 的連線還池後
 /// 由 bb8 的 test_on_check_out 淘汰，接下來的查詢照常（容器：scripts/dev-sptest，埠 11435）。
 #[tokio::test]

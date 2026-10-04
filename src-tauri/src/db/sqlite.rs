@@ -776,6 +776,12 @@ impl DatabaseDriver for SqliteDriver {
 }
 
 impl SqliteDriver {
+    /// 開一條不經連線池的專屬連線（acquire 後 detach）：執行 SQL 檔時 BEGIN / 暫存表 / PRAGMA 要留在同一條連線。
+    pub(crate) async fn dedicated_connection(&self) -> AppResult<sqlx::SqliteConnection> {
+        let pooled = self.pool.acquire().await.map_err(|e| AppError::Connect(e.to_string()))?;
+        Ok(pooled.detach())
+    }
+
     /// query_capped 的本體：在指定連線上執行（讀取逐列取到 cap，寫入回 rows_affected / RETURNING 列）。
     async fn query_capped_on(&self, conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>, sql: &str, cap: usize) -> AppResult<QueryResult> {
         // 寫入語句若帶 RETURNING（SQLite 3.35+ 支援），改走 fetch 取回回傳列。

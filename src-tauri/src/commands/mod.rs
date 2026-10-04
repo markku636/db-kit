@@ -1570,6 +1570,30 @@ pub async fn preview_dml(
     crate::review_run::preview::preview(&state.manager, &id, &database, &script).await
 }
 
+/// 執行 SQL 檔：專屬連線上逐句執行，進度以 `sql-file-progress` 事件回報（見 sqlfile.rs）。
+#[tauri::command]
+pub async fn run_sql_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: String,
+    id: String,
+    database: String,
+    path: String,
+    options: Option<crate::sqlfile::SqlFileOptions>,
+) -> AppResult<crate::sqlfile::SqlFileReport> {
+    let emit = move |p: crate::sqlfile::SqlFileProgress| {
+        let _ = app.emit("sql-file-progress", p);
+    };
+    crate::sqlfile::run(&state.manager, &id, &database, &path, &options.unwrap_or_default(), &run_id, &emit).await
+}
+
+/// 要求中止 SQL 檔執行：下一句開始前收手。
+#[tauri::command]
+pub async fn run_sql_file_cancel(run_id: String) -> AppResult<()> {
+    crate::compare::cancel(&run_id);
+    Ok(())
+}
+
 /// 只產生備份（mode = backup）或備份後執行（mode = execute），檔案寫進 `out_dir` 底下的新子目錄。
 /// 進度以 `review-run-progress` 事件回報，`review_run_cancel` 於語句之間收手。
 #[tauri::command]
