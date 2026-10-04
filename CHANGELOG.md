@@ -1,3 +1,34 @@
+## 未發佈
+
+**日常 SQL 的手感補齊：大結果集、取消、預覽、執行 SQL 檔、更多引擎的計畫與監控，還有連線的網路路徑。**
+
+查詢與資料格
+
+- **列虛擬化**：查詢結果不再只畫前 2,000 列，已取回的列全部捲得到；資料表每頁可到 5,000 列。鍵盤導覽（Ctrl+End、PageDown…）會把目標列捲進來——資料表格原本按方向鍵不會捲動，一併補上。
+- **取消查詢擴到 SQL Server / Oracle / SQLite**：SQL Server 記下 `@@SPID`、用專屬連線送 `KILL`（被 KILL 的連線還池時由連線池的檢查淘汰）；Oracle 用 `OCIBreak`（連線保留）；SQLite 用 progress handler 中斷。原本只有 MySQL / PostgreSQL。
+- **預覽影響列**（查詢工具列「更多 → 預覽影響列…」）：UPDATE / DELETE / 帶鍵 INSERT 先改成唯讀 SELECT，列出影響列數與最多 200 列實際資料。不執行、不送 AI；與審查並執行共用同一套分析，看完可一鍵轉交。
+- **參數**：除了 `:name`，也認 `${name}`、`#{name}`（MyBatis，可帶 `,jdbcType=…`）與 `?` 位置參數（PostgreSQL 除外，`?` 是 JSONB 運算子）。`@name` 刻意不認——那是 SQL Server / MySQL 的變數。
+- **語意診斷**：DML 裡找不到的表、`別名.欄位` 不存在時畫黃線（依已載入的結構；CTE、暫存表、表函式、`EXTRACT(… FROM …)`、系統目錄等一律不判，寧可漏報）。
+- **JOIN 條件補全**：游標停在 `JOIN 表 別名 ON` 之後，依外鍵提示 `c.customer_id = o.customer_id`；沒有外鍵時依欄名推測並標明。
+- **儲存格檢視器**：JSON 樹（點節點複製 JSONPath）、十六進位傾印（看得到不可見字元、BOM）、圖片預覽（data URL、base64、完整 0x 二進位）。
+- **視覺化解釋**擴到 SQLite（`EXPLAIN QUERY PLAN`，標出全表掃描）與 SQL Server（`SHOWPLAN_XML` 估計計畫，不執行查詢）。
+
+資料與結構
+
+- **執行 SQL 檔**（資料庫右鍵）：整份檔案在同一條專屬連線上逐句執行，`USE` / `SET` / 交易 / 暫存表跨句有效；認 MySQL `DELIMITER` 與 SQL Server `GO`，略過 psql 指令行，pg_dump 的 `COPY … FROM stdin` 開跑前擋下並說明改用 `--inserts`。遇錯即停或繼續、錯誤附行號、可取消。
+- **匯入 JSON**：物件陣列、NDJSON、`{"data": [...]}` 都吃；null 與缺鍵一律寫 NULL（不受「空欄位視為 NULL」影響）。
+- **資料比對回到 GUI**（資料表右鍵「資料比對…」）：與 `dbk compare data` 同一個引擎，列出新增 / 更新 / 刪除樣本並產生同步 SQL；只產生不套用，送到目標的查詢編輯器再執行。
+- **結構比對**：選項「偵測欄位改名」把一刪一增、型別相同且配對唯一的欄位改成 `RENAME COLUMN`（SQL Server 用 `sp_rename`），保留資料；同步腳本可「審查並執行（含回滾）…」，交給審查並執行逐句備份、先寫好 `rollback.sql`。
+- **ER 圖匯出 SVG / PNG**：由模型與目前佈局組出獨立向量圖，裁到內容範圍、固定淺底。
+- **處理程序清單**擴到 SQL Server（附 `blocked_by`）與 Oracle（`sid,serial#`）。
+
+連線與安全
+
+- **從其他工具匯入連線**：DBeaver 的 `data-sources.json`、DataGrip 的 `dataSources.xml`（可連同 `.local.xml`）、`.ncx` 連線檔。只匯入位置、帳號與 SSH 通道，**不匯入密碼**。
+- **SSH 跳板主機**：資料庫連線的 SSH 通道可經由一台已存的 SSH 主機（帳密用那台存的，可多層）。
+- **SOCKS5 / HTTP Proxy**：不用 SSH 時可經 proxy 連資料庫（本地轉發埠，driver 不必改）；proxy 密碼存 keychain。
+- **唯讀連線暫時解鎖 1 / 5 分鐘**：只在記憶體，到時自動鎖回、重開 App 一律唯讀。**正式環境**連線的資料格寫入（套用變更、新增列、查詢結果就地編輯）也要確認。
+
 ## v0.56.0
 
 **預存程序整合測試變得好上手**。v0.5x 的引擎（情境、自動 rollback、副作用快照、基線、跨引擎差分）早就齊了，但要用它得先手寫一份 JSON、跑完只看得到紅綠與差異表——看不到程序「實際回了什麼」，期望值只能自己猜；錯誤分支有哪些也要自己讀程序本文找。這一版把「從零到第一個綠燈」的路補起來，UI 與 CLI 兩邊都有。

@@ -62,14 +62,14 @@ with <strong>SSH / SFTP / FTP · Docker · Kubernetes · Remote desktop · File 
 
 | Area | What you get |
 |------|--------------|
-| Databases | MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis: editable data grid, multi-column filter and sort, DDL and indexes, visual EXPLAIN, ER diagrams, stored procedures, import/export (CSV / Excel / JSON / SQL), backups and schedules |
+| Databases | MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite / MongoDB / Redis: editable data grid (virtual scrolling for large results; JSON tree / hex / image cell viewers), multi-column filter and sort, DDL and indexes, visual EXPLAIN (including SQLite / SQL Server), ER diagrams (export to SVG / PNG), stored procedures, import/export (CSV / Excel / JSON), run SQL files, process list, backups and schedules |
 | Messaging & search | Kafka (message browser with live tail, consumer groups, Schema Registry, Connect, ACLs, monitoring and alerts), RabbitMQ, Elasticsearch / OpenSearch |
-| Query workspace | Autocomplete (including cross-database), stacked result sets, visual query builder, snippets, `:name` parameters, history and favorites, advanced object search (`Ctrl+Shift+G`), command palette (`Ctrl+K`) |
-| Schema & data | Schema compare and sync (across databases, connections or snapshots), data transfer, row-level data compare, database documentation |
-| Safety nets | **Review & Run** (AI review → per-statement before-image → rollback script → execute → diff report), static SQL review, DBA persona review, row limits and query timeouts, app lock |
+| Query workspace | Autocomplete (including cross-database and foreign-key JOIN conditions), live warnings for unknown tables / columns, stacked result sets, cancel running queries, visual query builder, snippets, parameters (`:name`, `${name}`, `#{name}`, `?`), history and favorites, advanced object search (`Ctrl+Shift+G`), command palette (`Ctrl+K`) |
+| Schema & data | Schema compare and sync (across databases, connections or snapshots; column-rename detection; hand off to Review & Run for a rollback script), data transfer, row-level data compare, database documentation |
+| Safety nets | **Review & Run** (AI review → per-statement before-image → rollback script → execute → diff report), preview affected rows before writing, temporary unlock for read-only connections, production write confirmations, static SQL review, DBA persona review, row limits and query timeouts, app lock |
 | Testing & performance | SQL stress test (TPS, p50–p99), stored procedure integration tests (auto rollback, golden baselines, cross-engine diff, JUnit) |
 | AI | Chat assistant (`@` scopes, `/` commands), in-editor AI actions (explain / optimize / fix / convert dialect, previewed as a diff), AI library (personas, skills and prompts are Markdown files) |
-| Remote & containers | SSH terminal + SFTP / FTP (resumable transfers, jump hosts, activity log), Docker / Registry / Harbor, Kubernetes (port-forward to in-cluster databases), remote desktop over RDP / VNC / RustDesk |
+| Remote & containers | SSH terminal + SFTP / FTP (resumable transfers, jump hosts, activity log), database connections via SSH jump hosts or SOCKS5 / HTTP proxies, Docker / Registry / Harbor, Kubernetes (port-forward to in-cluster databases), remote desktop over RDP / VNC / RustDesk |
 | File compare | Text / folder / binary compare and sync between local paths and SSH / FTP hosts |
 | Interface | 7 themes, separate UI and code font sizes, six languages (繁中 / 简中 / English / 日本語 / 한국어 / Tiếng Việt), in-app updates |
 
