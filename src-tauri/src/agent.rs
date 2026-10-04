@@ -916,7 +916,7 @@ fn compose_system(user: Option<&str>, guidance: Option<&str>) -> Option<String> 
 }
 
 /// 找 `dbk` 執行檔：env 覆寫 → 與 GUI 同目錄（打包 sidecar）→ PATH → 開發用 target 目錄。
-async fn resolve_dbk_bin() -> Option<String> {
+pub(crate) async fn resolve_dbk_bin() -> Option<String> {
     if let Ok(p) = std::env::var("DB_KIT_DBK_BIN") {
         let p = p.trim();
         if !p.is_empty() && Path::new(p).exists() {
@@ -982,7 +982,12 @@ async fn mcp_attach(app: &AppHandle, ctx: &DbToolCtx, req_id: &str) -> Option<Mc
     let config_path = dir.join(format!("{}.json", crate::schema_cache::sanitize_id(req_id)));
     let body = serde_json::to_vec_pretty(&mcp_config_json(&command, &args)).ok()?;
     tokio::fs::write(&config_path, body).await.ok()?;
-    let tool_names = crate::dbtools::tool_defs_for(ctx).into_iter().map(|d| d.name).collect();
+    let mut tool_names: Vec<&'static str> = crate::dbtools::tool_defs_for(ctx).into_iter().map(|d| d.name).collect();
+    // dbk mcp 對 SQL 連線另外提供 list_routines / get_ddl / compare_schema（唯讀）。有 --tools 白名單時伺服器端
+    // 已濾掉，這裡只在沒限定時放行——否則 Claude 看得到卻被拒，白白浪費回合。
+    if ctx.allow.is_none() && crate::review_run::analyze::supported_kind(ctx.kind) {
+        tool_names.extend_from_slice(crate::dbtools::MCP_EXTRA_TOOLS);
+    }
     Some(McpAttach { config_path, command, args, tool_names })
 }
 

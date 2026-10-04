@@ -1165,14 +1165,200 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "此連線不是 MySQL" => "This connection is not MySQL",
 
         // ---- cli/args.rs：dbk mcp ----
-        "以 MCP（stdio JSON-RPC）伺服器模式啟動，把唯讀資料庫工具提供給 AI 用戶端（Claude Code / Codex）" => {
-            "Start as an MCP (stdio JSON-RPC) server exposing read-only database tools to AI clients (Claude Code / Codex)"
+        "以 MCP 伺服器模式啟動（stdio 或 HTTP），把資料庫工具提供給 AI 用戶端（Claude Code / Codex / Cursor…）；config / install 產生或寫入用戶端設定" => {
+            "Run as an MCP server (stdio or HTTP) exposing database tools to AI clients (Claude Code / Codex / Cursor…); config / install print or write the client configuration"
         }
-        // ---- cli/mcp.rs ----
+        "多連線模式只開放這些已存連線（名稱或 id，逗號分隔）。未指定 --conn / --url 時才生效；省略 = 全部已存連線" => {
+            "In multi-connection mode, expose only these saved connections (names or ids, comma-separated). Applies only without --conn / --url; omit = all saved connections"
+        }
+        "開放寫入工具 preview_write / execute_write（走審查並執行：先預覽拿審查代碼、再執行，自動擷取前像並產生回滾腳本）" => {
+            "Enable the write tools preview_write / execute_write (review & run: preview first to get a review token, then execute; before-images and a rollback script are captured automatically)"
+        }
+        "允許高破壞語句（DROP / TRUNCATE / 無 WHERE 的 UPDATE·DELETE），需與 --allow-write 併用" => {
+            "Allow destructive statements (DROP / TRUNCATE / UPDATE·DELETE without WHERE); requires --allow-write"
+        }
+        "允許對標記為正式環境的連線寫入，需與 --allow-write 併用" => "Allow writes to connections marked as production; requires --allow-write",
+        "寫入的前像、回滾腳本與報告輸出目錄（預設 <設定目錄>/mcp-runs）" => {
+            "Output directory for before-images, rollback scripts and reports of writes (default <config dir>/mcp-runs)"
+        }
+        "改以 HTTP（MCP Streamable HTTP）監聽，例如 127.0.0.1:8765；省略 = stdio" => {
+            "Listen over HTTP (MCP Streamable HTTP) instead, e.g. 127.0.0.1:8765; omit = stdio"
+        }
+        "HTTP 模式的存取權杖：用戶端要帶 Authorization: Bearer <token>（亦可用環境變數 DBKIT_MCP_TOKEN）。監聽非本機位址時必填" => {
+            "Access token for HTTP mode: clients must send Authorization: Bearer <token> (or set DBKIT_MCP_TOKEN). Required when listening on a non-loopback address"
+        }
+        "印出 AI 用戶端的 MCP 設定片段（不寫檔）" => "Print the MCP configuration snippet for an AI client (writes nothing)",
+        "把 dbk 寫進 AI 用戶端的 MCP 設定檔（會先備份原檔）。未加 --yes 只印出將寫入的內容" => {
+            "Add dbk to an AI client's MCP configuration file (the original is backed up first). Without --yes, only prints what would be written"
+        }
+        "AI 用戶端" => "AI client",
+        "設定裡的伺服器名稱（預設 dbkit；單一連線時為 dbkit-<連線名>）" => {
+            "Server name in the configuration (default dbkit; dbkit-<connection name> for a single connection)"
+        }
+        "寫到專案資料夾（.mcp.json / .cursor / .vscode）而不是使用者層設定" => {
+            "Write to a project folder (.mcp.json / .cursor / .vscode) instead of the user-level configuration"
+        }
+        "dbk 執行檔路徑（預設為目前這支 dbk）" => "Path to the dbk executable (default: this dbk)",
+        "連到已在執行的 HTTP 伺服器（例如 http://127.0.0.1:8765/mcp），而不是讓用戶端自己啟動 dbk" => {
+            "Connect to an already running HTTP server (e.g. http://127.0.0.1:8765/mcp) instead of letting the client launch dbk"
+        }
+        "通用 mcpServers JSON" => "Generic mcpServers JSON",
+        // ---- cli/mcp/ ----
         "這些工具唯讀地存取使用者在 db-kit 選定的資料庫連線。寫查詢前先用 describe_table 確認欄名；查詢一律加 LIMIT；不要猜測不存在的表或欄位。" => {
             "These tools give read-only access to the database connection the user selected in db-kit. Call describe_table before writing a query; always add LIMIT; never guess tables or columns that you have not listed."
         }
+        "這些工具存取使用者在 db-kit 存好的資料庫連線。先呼叫 list_connections 看有哪些連線，其餘工具都要以 connection 參數指定連線名稱。" => {
+            "These tools access the database connections the user saved in db-kit. Call list_connections first; every other tool takes the connection name in its connection parameter."
+        }
+        "寫查詢前先用 describe_table 確認欄名；查詢一律加 LIMIT；不要猜測不存在的表或欄位。" => {
+            "Call describe_table before writing a query; always add LIMIT; never guess tables or columns that you have not listed."
+        }
+        "修改資料或結構一律先呼叫 preview_write，把影響列數與回滾能力給使用者看過、取得同意後，才以審查代碼呼叫 execute_write。不要用 run_query 嘗試寫入。" => {
+            "To change data or structure, always call preview_write first, show the user the affected rows and rollback coverage, and only after they agree call execute_write with the review token. Never try to write through run_query."
+        }
+        "MongoDB 連線的 query 改用 JSON（{\"collection\":\"..\",\"filter\":{}}），Redis 連線用命令列（如 GET k）；連線種類見 list_connections。" => {
+            "For MongoDB connections the query is JSON ({\"collection\":\"..\",\"filter\":{}}); for Redis it is a command line (e.g. GET k). See list_connections for each connection's kind."
+        }
+        "連線名稱（見 list_connections）" => "Connection name (see list_connections)",
+        "這個 MCP 伺服器只綁定一條連線，不需要 list_connections" => "This MCP server is bound to a single connection; list_connections is not needed",
+        "這個 MCP 伺服器沒有開放寫入（啟動時要加 --allow-write）" => "This MCP server does not allow writes (start it with --allow-write)",
+        "要修改資料請改用 preview_write。" => "To change data, use preview_write instead.",
+        "單一連線模式不能指定 target_connection；請改用 target_database" => {
+            "target_connection is not available in single-connection mode; use target_database"
+        }
+        "--connections 只用於多連線模式；已用 --conn / --url 指定單一連線時不要再給" => {
+            "--connections is for multi-connection mode only; do not combine it with --conn / --url"
+        }
+        "設定檔不放帳密：請先在 db-kit 把連線存起來，再以 --conn <名稱> 指定" => {
+            "Configuration files never contain credentials: save the connection in db-kit first, then pass --conn <name>"
+        }
+        "config / install 不用 --http；要連到已在執行的 HTTP 伺服器請用 --http-url" => {
+            "config / install do not take --http; to point at a running HTTP server use --http-url"
+        }
+        "設定檔：{path}" => "Config file: {path}",
+        "或執行：{cmd}" => "Or run: {cmd}",
+        "{verb} {client} 設定檔 {path} 的「{name}」" => "{verb} \"{name}\" in the {client} config file {path}",
+        "取代" => "Replace",
+        "新增到" => "Add",
+        "已寫入 {path}" => "Wrote {path}",
+        "原檔備份：{path}" => "Backup of the original: {path}",
+        "重新啟動 {client} 後即可使用。" => "Restart {client} to start using it.",
+        "找不到連線「{name}」。可用的連線：{list}（可先呼叫 list_connections）" => {
+            "Connection \"{name}\" not found. Available connections: {list} (call list_connections)"
+        }
+        "缺少 connection：請先呼叫 list_connections，再以 connection 參數指定連線名稱" => {
+            "Missing connection: call list_connections, then pass the connection name in the connection parameter"
+        }
+        "\n…（已截斷，超過 {kb} KB）" => "\n… (truncated; over {kb} KB)",
+        "列出資料庫裡的預存程序、函式與觸發器（SQL 資料庫）。" => "List the stored procedures, functions and triggers in a database (SQL databases).",
+        "取得物件的 DDL：資料表 / 視圖的 CREATE 語句，或程序 / 函式 / 觸發器的定義。改結構前先看現況用。" => {
+            "Get an object's DDL: the CREATE statement of a table / view, or the definition of a procedure / function / trigger. Use it to see the current state before changing structure."
+        }
+        "物件名稱" => "Object name",
+        "物件種類，預設 table" => "Object type, default table",
+        "比對兩個資料庫 / schema 的結構差異（表、欄、索引、外鍵、視圖），可附上讓目標追上來源的同步 DDL。只產生、不執行；要套用請把 SQL 交給 preview_write。" => {
+            "Compare the structure of two databases / schemas (tables, columns, indexes, foreign keys, views), optionally with the DDL that brings the target in line with the source. It only generates SQL and never runs it; to apply, pass the SQL to preview_write."
+        }
+        "來源資料庫 / schema；省略用目前的" => "Source database / schema; defaults to the current one",
+        "目標連線名稱（多連線模式；省略 = 與來源同一條連線）" => "Target connection name (multi-connection mode; omit = same connection as the source)",
+        "目標資料庫 / schema；省略 = 與來源同名" => "Target database / schema; omit = same name as the source",
+        "附上同步 DDL（預設 false）" => "Include the sync DDL (default false)",
+        "同步 DDL 含 DROP（刪除目標多出的物件；預設 false）" => "Include DROP in the sync DDL (removes objects that exist only in the target; default false)",
+        "列出可用的資料庫連線（名稱 / 種類 / 主機 / 預設資料庫 / 是否正式環境）。其他工具都要以 connection 參數指定其中一條。" => {
+            "List the available database connections (name / kind / host / default database / production flag). Every other tool takes one of them in its connection parameter."
+        }
+        "（沒有可用的連線：請先在 db-kit 新增連線，或檢查 --connections 白名單）" => {
+            "(No connections available: add one in db-kit first, or check the --connections allow-list)"
+        }
+        "可寫入" => "writable",
+        "此連線種類沒有預存程序" => "This kind of connection has no stored procedures",
+        "（此資料庫沒有程序 / 函式 / 觸發器）" => "(This database has no procedures / functions / triggers)",
+        "此連線種類沒有 DDL；請改用 describe_table" => "This kind of connection has no DDL; use describe_table instead",
+        "缺少 name" => "Missing name",
+        "不支援的物件種類：{ty}" => "Unsupported object type: {ty}",
+        "取不到 {name} 的定義（名稱或種類可能不對）" => "Could not get the definition of {name} (the name or type may be wrong)",
+        "來源與目標是同一個庫：請給 target_database 或 target_connection" => {
+            "Source and target are the same database: pass target_database or target_connection"
+        }
+        "擷取結構逾時（{s} 秒）" => "Capturing the structure timed out ({s} s)",
+        "共 {n} 項差異（來源 {src} → 目標 {dst}）：\n" => "{n} differences (source {src} → target {dst}):\n",
+        "\n\n-- 同步 DDL（{n} 句，{x} 句高破壞；尚未執行）\n" => "\n\n-- Sync DDL ({n} statements, {x} destructive; not executed)\n",
+        "預覽一段寫入 SQL（INSERT / UPDATE / DELETE / DDL，可多句）：逐句估算影響列數、能否完整回滾與風險提示，不會改動任何資料。通過後回傳審查代碼；請先把預覽內容給使用者確認，再呼叫 execute_write。" => {
+            "Preview a write script (INSERT / UPDATE / DELETE / DDL, multiple statements allowed): estimates affected rows, rollback coverage and risks per statement without changing any data. On success it returns a review token; show the preview to the user and get their confirmation before calling execute_write."
+        }
+        "要執行的 SQL 腳本" => "The SQL script to run",
+        "執行先前 preview_write 預覽過的 SQL（以審查代碼指定，不能改 SQL）。執行前自動擷取前像，完成後回傳每句影響列數與回滾腳本位置。" => {
+            "Run SQL previously previewed with preview_write (identified by its review token; the SQL cannot be changed). Before-images are captured automatically; returns rows affected per statement and where the rollback script is."
+        }
+        "preview_write 回傳的審查代碼" => "The review token returned by preview_write",
+        "預覽指出有語句無法完整回滾時，須徵得使用者同意後設為 true" => {
+            "When the preview says some statements cannot be fully rolled back, set to true only after the user agrees"
+        }
+        "{kind} 連線不支援寫入工具（只支援 SQL 資料庫）" => "{kind} connections do not support the write tools (SQL databases only)",
+        "連線「{name}」標記為正式環境，這個 MCP 伺服器不允許對它寫入（啟動時需加 --allow-prod）" => {
+            "Connection \"{name}\" is marked as production and this MCP server does not allow writing to it (start it with --allow-prod)"
+        }
+        "資料庫：{db}　語句：{n}" => "Database: {db}  Statements: {n}",
+        "高破壞" => "destructive",
+        "回滾：{level}" => "rollback: {level}",
+        "缺少 sql" => "Missing sql",
+        "腳本含本流程不支援的語句，無法執行。請拆開或改寫後再預覽。" => {
+            "The script contains statements this flow does not support and cannot be run. Split or rewrite it, then preview again."
+        }
+        "這段 SQL 沒有寫入語句；查詢請改用 run_query。" => "This SQL has no write statements; use run_query for queries.",
+        "有 {n} 句高破壞語句（DROP / TRUNCATE / 無 WHERE 的 UPDATE·DELETE），這個 MCP 伺服器不允許執行（啟動時需加 --allow-destructive）。" => {
+            "{n} destructive statements (DROP / TRUNCATE / UPDATE·DELETE without WHERE); this MCP server does not allow them (start it with --allow-destructive)."
+        }
+        "審查代碼：{token}（15 分鐘內有效、只能用一次）" => "Review token: {token} (valid for 15 minutes, single use)",
+        "注意：有 {n} 句無法完整回滾。執行時須帶 acknowledge_incomplete: true，而且要先徵得使用者同意。" => {
+            "Note: {n} statements cannot be fully rolled back. Executing requires acknowledge_incomplete: true, and the user's consent first."
+        }
+        "請先把上面的預覽給使用者確認，再以這個審查代碼呼叫 execute_write。" => {
+            "Show the preview above to the user for confirmation, then call execute_write with this review token."
+        }
+        "缺少 review_token：請先呼叫 preview_write" => "Missing review_token: call preview_write first",
+        "審查代碼無效或已過期（15 分鐘、只能用一次）：請重新呼叫 preview_write" => {
+            "The review token is invalid or expired (15 minutes, single use): call preview_write again"
+        }
+        "這次預覽有語句無法完整回滾：徵得使用者同意後，帶 acknowledge_incomplete: true 再呼叫一次。" => {
+            "Some statements in this preview cannot be fully rolled back: after the user agrees, call again with acknowledge_incomplete: true."
+        }
+        "結果：{status}" => "Result: {status}",
+        "影響 {n} 列" => "{n} rows affected",
+        "前像、回滾腳本與報告：{dir}" => "Before-images, rollback script and report: {dir}",
+        // ---- cli/mcp/http.rs ----
+        "無法監聽 {addr}：{e}" => "Cannot listen on {addr}: {e}",
+        "監聽非本機位址時必須設定權杖（--token 或環境變數 DBKIT_MCP_TOKEN），否則同網段任何人都能存取資料庫" => {
+            "A token is required when listening on a non-loopback address (--token or DBKIT_MCP_TOKEN); otherwise anyone on the network could reach your databases"
+        }
+        "權杖太短（少於 16 字元），建議用更長的隨機字串" => "The token is short (under 16 characters); use a longer random string",
+        "MCP 伺服器已啟動（HTTP）：http://{addr}/mcp　權杖：{auth}　按 Ctrl+C 結束" => {
+            "MCP server started (HTTP): http://{addr}/mcp  token: {auth}  press Ctrl+C to stop"
+        }
+        "已啟用" => "enabled",
+        "未設定（僅本機）" => "not set (loopback only)",
+        "收到中斷訊號，正在關閉…" => "Interrupted, shutting down…",
         "MCP 伺服器已啟動（stdio）；等待用戶端 initialize…" => "MCP server started (stdio); waiting for the client to initialize…",
+        // ---- mcp_setup.rs：AI 用戶端設定 ----
+        "{client} 不支援直接連 HTTP 伺服器，請改用 stdio" => "{client} cannot connect to an HTTP server directly; use stdio",
+        "Codex 從環境變數 DBKIT_MCP_TOKEN 讀取 HTTP 權杖，請先設定好再啟動 Codex。" => {
+            "Codex reads the HTTP token from the DBKIT_MCP_TOKEN environment variable; set it before starting Codex."
+        }
+        "設定裡含 HTTP 權杖，請勿把這個檔案提交到版本控制。" => "This configuration contains the HTTP token; do not commit the file to version control.",
+        "無法取得使用者家目錄" => "Unable to determine the user's home directory",
+        "{client} 沒有專案層設定檔" => "{client} has no project-level configuration file",
+        "通用 JSON 片段沒有固定的設定檔，請複製後自行貼上" => "The generic JSON snippet has no fixed config file; copy and paste it yourself",
+        "設定檔不是純 JSON（可能含註解或尾逗號），為免弄壞請複製片段手動貼上" => {
+            "The config file is not plain JSON (it may contain comments or trailing commas); to avoid breaking it, copy the snippet and paste it manually"
+        }
+        "設定檔最外層不是 JSON 物件" => "The config file's top level is not a JSON object",
+        "設定檔的 {key} 不是物件" => "{key} in the config file is not an object",
+        "設定檔不是純 JSON（可能含註解或尾逗號），為免弄壞請手動編輯" => {
+            "The config file is not plain JSON (it may contain comments or trailing commas); to avoid breaking it, edit it manually"
+        }
+        "備份原設定檔失敗：{e}" => "Failed to back up the config file: {e}",
+        "寫入設定檔失敗：{e}" => "Failed to write the config file: {e}",
+        "讀取設定檔失敗：{e}" => "Failed to read the config file: {e}",
 
         // ---- dbtools/mod.rs：AI 助手的唯讀資料庫工具 ----
         "資料庫 / schema 名稱；省略則用目前對話的資料庫" => "Database / schema name; defaults to the current database of this conversation",

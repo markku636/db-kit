@@ -4450,6 +4450,74 @@ const CASES = {
     check("已存的比對：出現在啟動畫面", (await launcher.getByText("已存的比對", { exact: true }).count()) > 0);
     await noUnknownCommands(page, "已存的比對");
   },
+
+  // MCP 設定：設定頁與連線右鍵兩個入口、片段跟著選項變、寫入送出的請求、背景 HTTP 伺服器與「選項改了要重啟」。
+  async "mcp-setup"(page) {
+    await page.getByRole("button", { name: "設定", exact: true }).first().click();
+    await sleep(400);
+    const fromSettings = page.getByRole("button", { name: "設定 MCP…", exact: true });
+    check("設定頁有「設定 MCP…」", (await fromSettings.count()) > 0);
+    await fromSettings.first().click();
+    let dlg = page.locator('[role="dialog"]').last();
+    await dlg.getByText("設定內容", { exact: true }).waitFor({ timeout: 6000 }).catch(() => {});
+    await sleep(400);
+    let snippet = await dlg.locator("pre").first().innerText();
+    check("從設定頁開：多連線模式，片段沒有 --conn", snippet.includes('"mcp"') && !snippet.includes("--conn"), snippet);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+
+    await page.getByText("prod-mysql", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    const items = await menuItems(page);
+    check("連線右鍵有「接到 AI 工具（MCP）…」", items.some((i) => i.includes("接到 AI 工具（MCP）…")), items.join(" | "));
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: "接到 AI 工具（MCP）…" }).first().click();
+    dlg = page.locator('[role="dialog"]').last();
+    await dlg.getByText("設定內容", { exact: true }).waitFor({ timeout: 6000 }).catch(() => {});
+    await sleep(400);
+    snippet = await dlg.locator("pre").first().innerText();
+    check("從右鍵開：預選該連線，片段以 id 指向連線、不含密碼", snippet.includes('"--conn"') && snippet.includes("c-mysql") && !/password/i.test(snippet), snippet);
+    check("預設唯讀：片段沒有 --allow-write", !snippet.includes("--allow-write"));
+
+    await dlg.getByRole("checkbox").first().check();
+    await sleep(500);
+    snippet = await dlg.locator("pre").first().innerText();
+    check("勾「允許 AI 修改資料」後片段帶 --allow-write", snippet.includes("--allow-write"), snippet);
+    check("寫入子選項出現（高破壞 / 正式環境）", (await dlg.getByRole("checkbox").count()) === 3);
+
+    await dlg.locator("select").filter({ has: page.locator('option[value="codex"]') }).selectOption("codex");
+    await sleep(500);
+    snippet = await dlg.locator("pre").first().innerText();
+    check("換成 Codex：片段變成 TOML 區塊", snippet.startsWith("[mcp_servers.dbkit-prod-mysql]"), snippet);
+
+    await dlg.getByRole("button", { name: "寫入設定檔", exact: true }).click();
+    await sleep(300);
+    const confirmBody = await appText(page);
+    check("寫入前確認：講明會備份、會讓 AI 改資料", confirmBody.includes(".dbkit-bak") && confirmBody.includes("每次都要先預覽"));
+    await page.getByRole("button", { name: "寫入", exact: true }).click();
+    await sleep(600);
+    let calls = await page.evaluate(() => window.__DBKIT_MCP_CALLS__);
+    const inst = calls.find((c) => c.op === "install");
+    check("寫入送出 Codex + 這條連線 + 允許寫入", !!inst && inst.req.client === "codex" && inst.req.server.conn === "c-mysql" && inst.req.server.allowWrite === true && inst.req.http === false, JSON.stringify(calls));
+    check("寫入後按鈕變「更新設定檔」", (await dlg.getByRole("button", { name: "更新設定檔", exact: true }).count()) > 0);
+
+    await dlg.getByRole("radio", { name: "HTTP", exact: true }).click();
+    await sleep(400);
+    await dlg.getByRole("button", { name: "在背景啟動", exact: true }).click();
+    await sleep(500);
+    calls = await page.evaluate(() => window.__DBKIT_MCP_CALLS__);
+    const start = calls.find((c) => c.op === "http_start");
+    check("背景啟動 HTTP：帶著目前的連線與權限", !!start && start.server.conn === "c-mysql" && start.server.allowWrite === true, JSON.stringify(calls));
+    check("HTTP 狀態變成執行中", (await dlg.getByText("執行中", { exact: true }).count()) > 0);
+    // 執行中把寫入關掉 → 提示要重啟才生效。
+    await dlg.getByRole("checkbox").first().uncheck();
+    await sleep(300);
+    check("選項改了：出現「套用選項並重啟」", (await dlg.getByRole("button", { name: "套用選項並重啟", exact: true }).count()) > 0);
+    await dlg.getByRole("button", { name: "停止", exact: true }).click();
+    await sleep(300);
+    await page.keyboard.press("Escape");
+    await sleep(300);
+    await noUnknownCommands(page, "MCP 設定");
+  },
 };
 
 /** 開新比對分頁：有分頁列就按分頁列的鈕，沒有（沒連任何資料庫）就按空狀態的鈕。 */

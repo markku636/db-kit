@@ -40,6 +40,8 @@ export function installShim(fx) {
   window.__DBKIT_WINDOW_CALLS__ = [];
   // AI 資源庫設定的寫入（ai_library_settings_set 送出的完整設定）。
   window.__DBKIT_AI_SETTINGS_SET__ = [];
+  // MCP 設定：寫入 / 移除 / HTTP 啟停送出的請求（驗「寫進去的是哪個用戶端、帶了哪些權限」用）。
+  window.__DBKIT_MCP_CALLS__ = [];
   // SSH 主機儲存與金鑰匯入 / 產生的紀錄（驗「存下去的是 keystore:<id>」「匯入帶了哪個密語」用）。
   window.__DBKIT_SSH_SESSION_SAVES__ = [];
   // 終端機工作階段記錄與「另存文字檔」的紀錄。
@@ -540,6 +542,48 @@ metadata:
       mcp_hint: "claude mcp add dbkit -- dbk --conn <連線名稱> mcp",
     }),
     ai_library_sync_apply: () => ({ written: 1, deleted: 0, skipped: 1, errors: [] }),
+
+    // ── MCP 設定 ─────────────────────────────────────────────────────────
+    // 片段只求「跟著選項變」：args 的組法對齊 mcp_setup::ServerArgs::to_args 的主要旗標。
+    mcp_setup_info: () => ({
+      dbkPath: "C:/Program Files/db-kit/dbk.exe",
+      clients: [
+        { id: "claude-code", label: "Claude Code", supportsProject: true, supportsHttp: true, format: "json" },
+        { id: "codex", label: "Codex", supportsProject: true, supportsHttp: true, format: "toml" },
+        { id: "cursor", label: "Cursor", supportsProject: true, supportsHttp: true, format: "json" },
+        { id: "vscode", label: "VS Code", supportsProject: true, supportsHttp: true, format: "json" },
+        { id: "claude-desktop", label: "Claude Desktop", supportsProject: false, supportsHttp: false, format: "json" },
+        { id: "windsurf", label: "Windsurf", supportsProject: false, supportsHttp: true, format: "json" },
+        { id: "json", label: "JSON", supportsProject: false, supportsHttp: true, format: "json" },
+      ],
+      http: { running: false, url: "http://127.0.0.1:8765/mcp", port: 8765, token: "demo-token-0123456789abcdef", server: null, log: [], error: null },
+    }),
+    mcp_setup_preview: ({ req }) => {
+      const sv = req.server ?? {};
+      const args = ["mcp"];
+      if (sv.conn) { args.push("--conn", sv.conn); if (sv.database) args.push("-d", sv.database); }
+      else if (sv.connections?.length) args.push("--connections", sv.connections.join(","));
+      if (sv.allowWrite) { args.push("--allow-write"); if (sv.allowDestructive) args.push("--allow-destructive"); if (sv.allowProd) args.push("--allow-prod"); }
+      const conn = sv.conn ? (fx.CONNECTIONS ?? []).find((c) => c.id === sv.conn) : null;
+      const name = conn ? `dbkit-${conn.name}` : "dbkit";
+      const cmd = "C:/Program Files/db-kit/dbk.exe";
+      const text = req.client === "codex"
+        ? [`[mcp_servers.${name}]`, `command = ${JSON.stringify(cmd)}`, `args = [${args.map((a) => JSON.stringify(a)).join(", ")}]`, ""].join("\n")
+        : JSON.stringify({ [req.client === "vscode" ? "servers" : "mcpServers"]: { [name]: req.http ? { type: "http", url: "http://127.0.0.1:8765/mcp" } : { command: cmd, args } } }, null, 2);
+      const installed = window.__DBKIT_MCP_CALLS__.some((c) => c.op === "install" && c.req.client === req.client);
+      return {
+        name,
+        snippet: { client: req.client, language: req.client === "codex" ? "toml" : "json", text, path: req.client === "json" ? null : "C:/Users/demo/.claude.json", cli: null, notes: [] },
+        installed,
+        dbkMissing: false,
+      };
+    },
+    mcp_setup_install: ({ req }) => { window.__DBKIT_MCP_CALLS__.push({ op: "install", req }); return { path: "C:/Users/demo/.codex/config.toml", backup: null, replaced: false, content: "" }; },
+    mcp_setup_uninstall: ({ req }) => { window.__DBKIT_MCP_CALLS__.push({ op: "uninstall", req }); return true; },
+    mcp_http_status: () => ({ running: false, url: "http://127.0.0.1:8765/mcp", port: 8765, token: "demo-token-0123456789abcdef", server: null, log: [], error: null }),
+    mcp_http_start: ({ server, port }) => { window.__DBKIT_MCP_CALLS__.push({ op: "http_start", server, port }); return { running: true, url: `http://127.0.0.1:${port ?? 8765}/mcp`, port: port ?? 8765, token: "demo-token-0123456789abcdef", server, log: ["[dbk mcp] MCP server started (HTTP)"], error: null }; },
+    mcp_http_stop: () => { window.__DBKIT_MCP_CALLS__.push({ op: "http_stop" }); return { running: false, url: "http://127.0.0.1:8765/mcp", port: 8765, token: "demo-token-0123456789abcdef", server: null, log: [], error: null }; },
+    mcp_http_rotate_token: () => ({ running: false, url: "http://127.0.0.1:8765/mcp", port: 8765, token: "rotated-token-0123456789", server: null, log: [], error: null }),
 
     // ── AI 助手 ──────────────────────────────────────────────────────────
     app_lock_status: () => ({ locked: false, has_password: false, idle_minutes: 0 }),

@@ -62,8 +62,8 @@ pub async fn dispatch(cli: Cli) -> AppResult<()> {
         Command::Schema(SchemaCmd::Show { path }) => super::compare::show_snapshot(&path, fmt).await,
         // 比對要同時開兩條連線（或連線 + 快照檔），自己管連線生命週期。
         Command::Compare(c) => super::compare::run(&conn, fmt, c).await,
-        // MCP 伺服器：連線延遲到第一次 tools/call，且由伺服器自己管生命週期。
-        Command::Mcp { tools } => super::mcp::serve(&conn, tools).await,
+        // MCP 伺服器（連線延遲到第一次工具呼叫，由伺服器自己管生命週期）與用戶端設定產生 / 寫入。
+        Command::Mcp(a) => super::mcp::run(&conn, a).await,
         // 審查並執行：命名空間要直接看 -d 旗標（PG 的 schema 與連線的 database 不同軸），自己管連線。
         Command::Run(a) => super::run_script::run_cli(&conn, fmt, a).await,
         // AI 資源庫：只讀寫設定目錄，不連資料庫。
@@ -332,7 +332,7 @@ async fn exec(
 
         // 連線前已處理。
         Command::Backup(_) => unreachable!("backup 在連線前已處理"),
-        Command::Mcp { .. } => unreachable!("mcp 在連線前已處理"),
+        Command::Mcp(_) => unreachable!("mcp 在連線前已處理"),
         Command::Run(_) => unreachable!("run 在連線前已處理"),
         Command::Ai(_) => unreachable!("ai 在連線前已處理"),
         Command::SpTest(_) => unreachable!("sp-test 在連線前已處理"),

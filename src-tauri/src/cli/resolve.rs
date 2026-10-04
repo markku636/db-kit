@@ -23,7 +23,8 @@ async fn resolve_saved(needle: &str, args: &ConnArgs) -> AppResult<ConnectionCon
     resolve_saved_by(needle, args.database.as_deref()).await
 }
 
-async fn resolve_saved_by(needle: &str, database: Option<&str>) -> AppResult<ConnectionConfig> {
+/// 以名稱（優先）或 id 找已存連線並 hydrate 機密；`database` 為要檢視的命名空間。`dbk mcp` 的多連線模式也用它。
+pub(crate) async fn resolve_saved_by(needle: &str, database: Option<&str>) -> AppResult<ConnectionConfig> {
     let dir = store::headless_config_dir()?;
     let all = store::load_all_in(&dir).await?;
     let found = all
@@ -80,7 +81,7 @@ pub async fn resolve_ref(s: &str, database: Option<&str>) -> AppResult<SideRef> 
 /// CLI 支援的連線種類守門。訊息 / 搜尋引擎類（Kafka / Elasticsearch / RabbitMQ）與 external gateway
 /// 沒有可在終端機表達的通用查詢語言，且 slim CLI（`--no-default-features`）根本沒編入其驅動，
 /// 故已存連線與臨時連線（`--kind` / `--url`）都在此擋下，而非讓使用者連上後每個指令才報錯。
-fn ensure_cli_kind(kind: DbKind) -> AppResult<()> {
+pub(crate) fn ensure_cli_kind(kind: DbKind) -> AppResult<()> {
     let msg = match kind {
         DbKind::External => t!("CLI 不支援外部 gateway（External）連線"),
         DbKind::Kafka => t!("CLI 不支援 Kafka 連線（請用 GUI）"),

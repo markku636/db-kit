@@ -51,6 +51,10 @@ pub const TOOL_NAMES: &[&str] = &[
     "explain_query",
 ];
 
+/// `dbk mcp` 另外提供的唯讀工具（只有 SQL 資料庫有；實作在 `cli::mcp::extra`，不在 GUI 的 HTTP 工具迴圈裡）。
+/// GUI 助手經 MCP 掛 dbk 時，Claude 的 `--allowedTools` 也要放行它們。
+pub const MCP_EXTRA_TOOLS: &[&str] = &["list_routines", "get_ddl", "compare_schema"];
+
 pub fn is_db_tool(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
 }

@@ -2,6 +2,8 @@
 pub mod ai_library;
 // 檔案 / 資料夾 / 二進位比對的 command。
 pub mod filecmp;
+// MCP 設定（AI 用戶端設定的產生 / 寫入、背景 HTTP 伺服器）的 command。
+pub mod mcp;
 // 遠端桌面（RDP / VNC）的 command。
 pub mod rd;
 // SSH 終端機 / SFTP / 已存主機的 command（含 TauriUi）。

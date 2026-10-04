@@ -1,3 +1,22 @@
+## 未發佈
+
+**MCP 伺服器長大了：多連線、可寫入、HTTP、一鍵接到 AI 工具**。`dbk mcp` 原本只綁一條連線、一律唯讀、只走 stdio，而且要自己去各家 AI 工具的設定檔裡手打一行。這一版把它變成能直接交給 Claude Code / Codex / Cursor / VS Code 日常使用的伺服器。完整說明見 [`docs/mcp.md`](./docs/mcp.md)。
+
+- **多連線模式**：`dbk mcp` 不指定連線時開放全部已存連線（`--connections` 白名單），工具多一個 `connection` 參數，AI 先 `list_connections` 再挑；用到哪條才連哪條。只列 dbk 支援的種類，標出正式環境與可寫入的連線。
+- **寫入（`--allow-write`）走審查並執行**：`preview_write` 逐句估影響列數、回滾能力與風險，回一組審查代碼；`execute_write` 只收代碼、執行伺服器端保存的那份 SQL（模型不可能預覽一段、執行另一段），前像、`rollback.sql` 與報告寫到 `--out`。高破壞語句要 `--allow-destructive`、正式環境要 `--allow-prod`，無法完整回滾時模型必須明示 `acknowledge_incomplete`。代碼 15 分鐘失效、只能用一次。
+- **更多唯讀工具**：`list_routines`、`get_ddl`（表 / 視圖 / 程序 / 函式 / 觸發器）、`compare_schema`（兩個庫、可跨連線，附同步 DDL，只產生不執行）。
+- **HTTP 傳輸**（`--http 127.0.0.1:8765`）：MCP Streamable HTTP，手刻不拉框架。Bearer 權杖（`--token` / `DBKIT_MCP_TOKEN`，常數時間比對）、聽非本機位址沒權杖拒絕啟動、`Origin` 只收本機來源且不回 CORS（擋 DNS rebinding）、`Mcp-Session-Id`、keep-alive、chunked 本文、只收 SSE 的用戶端回單一 SSE 事件。
+- **`dbk mcp config` / `install`**：產生或寫入 Claude Code、Codex、Cursor、VS Code、Claude Desktop、Windsurf 的設定（使用者層或 `--project` 專案層）。只動自己那一項、保留其他設定與鍵序，先備份成 `.dbkit-bak` 再整檔替換；含註解的 JSONC 不硬改。設定檔不放帳密：只接受已存連線（寫入連線 id）。
+- **GUI「MCP 設定」對話框**：連線右鍵「接到 AI 工具（MCP）…」或設定頁「設定 MCP…」。選連線範圍、權限、AI 工具與連線方式，即時預覽片段，一鍵寫入 / 更新 / 移除；也能在背景啟動本機 HTTP 伺服器（權杖以環境變數交給 dbk、App 結束時一起關閉，選項改了會提示重啟）。
+
+修正：
+
+- PostgreSQL 連線在沒給 `-d` 時，`dbk mcp` 把連線的資料庫名當成 schema 用（工具的 `database` 對 PG 是 schema），列表會是空的。現在沒給 `-d` 就不預設，模型會先 `list_databases`。
+
+> 驗證：Rust `cargo test --no-default-features --lib` 全數通過（新增 MCP 協定 / 多連線 / 寫入 / HTTP / 設定合併共 34 項，含對 SQLite 實檔的預覽 → 執行 → 回滾腳本落地端到端），GUI 組態 `cargo check --lib` 通過；實際執行 `dbk` 對 stdio、HTTP（401 / 403 / 202 / session）、`config` / `install` 跑 20 項冒煙檢查；前端 vitest（新增 mcpSetup）、tsc、eslint、vite build 通過；介面測試 `mcp-setup` 15 項檢查、900×640 與 1280×800 版面巡檢 0 筆。
+>
+> 沒測到：真實 AI 工具（Claude Code / Codex / Cursor…）實際連上、打包後的 App 實機背景 HTTP 伺服器、MySQL / PostgreSQL / SQL Server 上的寫入工具（核心與 `dbk run` 共用，已有各引擎整合測試）。
+
 ## v0.56.0
 
 **預存程序整合測試變得好上手**。v0.5x 的引擎（情境、自動 rollback、副作用快照、基線、跨引擎差分）早就齊了，但要用它得先手寫一份 JSON、跑完只看得到紅綠與差異表——看不到程序「實際回了什麼」，期望值只能自己猜；錯誤分支有哪些也要自己讀程序本文找。這一版把「從零到第一個綠燈」的路補起來，UI 與 CLI 兩邊都有。

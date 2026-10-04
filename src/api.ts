@@ -2152,6 +2152,20 @@ export const api = {
   aiLibrarySyncPlan: () => invoke<import("./aiLibrary").SyncPlan>("ai_library_sync_plan"),
   aiLibrarySyncApply: () => invoke<import("./aiLibrary").SyncReport>("ai_library_sync_apply"),
 
+  // ---- MCP 設定：把 dbk 接到 Claude Code / Codex / Cursor / VS Code…（核心在 mcp_setup.rs，與 `dbk mcp config|install` 共用）----
+  mcpSetupInfo: () => invoke<import("./mcpSetup").McpSetupInfo>("mcp_setup_info"),
+  mcpSetupPreview: (req: import("./mcpSetup").McpSetupReq) =>
+    invoke<import("./mcpSetup").McpPreview>("mcp_setup_preview", { req }),
+  mcpSetupInstall: (req: import("./mcpSetup").McpSetupReq) =>
+    invoke<import("./mcpSetup").McpInstallOutcome>("mcp_setup_install", { req }),
+  mcpSetupUninstall: (req: import("./mcpSetup").McpSetupReq) => invoke<boolean>("mcp_setup_uninstall", { req }),
+  // 背景 HTTP 伺服器（`dbk mcp --http`）：權杖只走環境變數；App 結束時自動關掉。
+  mcpHttpStatus: () => invoke<import("./mcpSetup").McpHttpStatus>("mcp_http_status"),
+  mcpHttpStart: (server: import("./mcpSetup").McpServerArgs, port?: number | null) =>
+    invoke<import("./mcpSetup").McpHttpStatus>("mcp_http_start", { server, port: port ?? null }),
+  mcpHttpStop: () => invoke<import("./mcpSetup").McpHttpStatus>("mcp_http_stop"),
+  mcpHttpRotateToken: () => invoke<import("./mcpSetup").McpHttpStatus>("mcp_http_rotate_token"),
+
   // API 金鑰：只進 OS keychain，前端永遠拿不到明文（只能問「有沒有」）。
   // kind 是供應商 id（"anthropic-api" / "openai-api"）；key 傳空字串 = 刪除。
   llmKeySet: (kind: AgentProvider, key: string) => invoke<void>("llm_key_set", { kind, key }),

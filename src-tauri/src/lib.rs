@@ -24,6 +24,8 @@ mod export;
 mod filecmp;
 mod import;
 mod manager;
+// MCP 用戶端設定（Claude Code / Codex / Cursor / VS Code…）的片段產生與合併寫入：`dbk mcp config|install` 與 GUI 共用。
+mod mcp_setup;
 // 遠端桌面（RDP / VNC）：不依賴 Tauri；GUI 的 command 在 commands/rd.rs。
 mod rd;
 // 審查並執行：逐句前後像 + 回滾腳本 + 輸出目錄。不依賴 Tauri，GUI 與 `dbk run` 共用。
@@ -247,6 +249,14 @@ pub fn run() {
             commands::compare_data_database,
             commands::compare_data_cancel,
             commands::review_run_prepare,
+            commands::mcp::mcp_setup_info,
+            commands::mcp::mcp_setup_preview,
+            commands::mcp::mcp_setup_install,
+            commands::mcp::mcp_setup_uninstall,
+            commands::mcp::mcp_http_status,
+            commands::mcp::mcp_http_start,
+            commands::mcp::mcp_http_stop,
+            commands::mcp::mcp_http_rotate_token,
             commands::ai_library::ai_library_load,
             commands::ai_library::ai_library_save,
             commands::ai_library::ai_library_copy,
@@ -756,6 +766,8 @@ pub fn run() {
         .run(|app_handle, event| {
             // 程序整體退出時再保險 drain 一次。
             if let RunEvent::Exit = event {
+                // 背景的 `dbk mcp --http` 是獨立行程，不關掉會一直佔著埠。
+                commands::mcp::shutdown_http();
                 let state = app_handle.state::<AppState>();
                 tauri::async_runtime::block_on(async {
                     state.manager.close_all().await;

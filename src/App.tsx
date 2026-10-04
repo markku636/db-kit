@@ -107,9 +107,10 @@ import {
   Wand2, FlaskConical, Plus, MousePointerClick, Zap, History, FolderOpen, Save, Star,
   GitBranch, FileText, Blocks, FilePlus2, MoreHorizontal, Info, Lock, Square, Palette,
   ScanSearch, Copy, ChevronDown, Globe, Layers, Radio, Inbox, ExternalLink, Gauge,
-  Type, AArrowDown, AArrowUp, ShieldCheck, Library, Unplug,
+  Type, AArrowDown, AArrowUp, ShieldCheck, Library, Unplug, PlugZap,
   type LucideIcon,
 } from "lucide-react";
+import { isMcpKind, useMcpDialog } from "./mcpSetup";
 import { supportsReviewRun } from "./reviewRun";
 import { bootAiLibrary } from "./aiLibraryBoot";
 import { reviewersFor } from "./dbaReview";
@@ -123,6 +124,7 @@ const SchemaReviewDialog = lazyOverlay(() => import("./SchemaReviewDialog"));
 //      隨 SqlEditor / MongoQueryEditor 的 chunk 延後載入（manualChunks 見 vite.config.ts）。----
 const ConnectionDialog = lazyOverlay(() => import("./ConnectionDialog"));
 const AiLibraryDialog = lazyOverlay(() => import("./AiLibraryDialog"));
+const McpSetupDialog = lazyOverlay(() => import("./McpSetupDialog"));
 const ExportConnectionsDialog = lazyOverlay(() => import("./ExportConnectionsDialog"));
 const BackupDialog = lazyOverlay(() => import("./BackupDialog"));
 const ErDiagram = lazyOverlay(() => import("./ErDiagram"));
@@ -264,6 +266,7 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const updateDialogOpen = useUpdateDialog((s) => s.info !== null);
+  const mcpOpen = useMcpDialog((s) => s.open);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 進階匯出連線（逐筆選連線 + 逐類選機密）。每次開啟都是全新狀態：路徑不記憶，
   // 必須現選 —— 見 ExportConnectionsDialog 檔頭。
@@ -613,6 +616,7 @@ export default function App() {
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
       {updateDialogOpen && <UpdateDialog />}
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {mcpOpen && <McpSetupDialog />}
       {savedMgr && (
         <SavedQueriesDialog
           seedSql={savedMgr.seedSql}
@@ -877,6 +881,17 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
           </p>
           <Button variant="secondary" icon={Library} onClick={() => setAiLibOpen(true)}>
             {t("開啟 AI 資源庫…")}
+          </Button>
+        </div>
+        <div className="pt-4 border-t border-fg/10 space-y-2">
+          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+            <Icon icon={PlugZap} size={15} /> {t("MCP 伺服器")}
+          </div>
+          <p className="text-xs text-fg/50 leading-relaxed">
+            {t("把資料庫接到 Claude Code、Codex、Cursor、VS Code 等 AI 工具：選連線與權限，一鍵寫進它們的設定，或在背景開一個本機 HTTP 伺服器。")}
+          </p>
+          <Button variant="secondary" icon={PlugZap} onClick={() => { onClose(); useMcpDialog.getState().show(null); }}>
+            {t("設定 MCP…")}
           </Button>
         </div>
         <SchemaCacheSettings />
@@ -3225,6 +3240,9 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                   ]
                 : []),
               [readonlyConns[menu.id] ? t("關閉唯讀模式") : t("設為唯讀模式（擋寫入 / DDL）"), () => useStore.getState().setConnReadonly(menu.id, !readonlyConns[menu.id]), false],
+              ...(isMcpKind(menuConn.kind)
+                ? [[t("接到 AI 工具（MCP）…"), () => useMcpDialog.getState().show(menuConn.id), false] as [string, () => void, boolean]]
+                : []),
               [t("屬性…"), () => setConnProps(menuConn), false],
               [t("編輯…"), () => onEdit(menuConn), false],
               [t("複製連線…"), () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: t("{name} 複本", { name: menuConn.name }), password: "" }), false],

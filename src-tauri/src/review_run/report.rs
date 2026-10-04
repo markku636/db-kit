@@ -314,7 +314,7 @@ pub struct RunManifest {
     pub files: Vec<String>,
 }
 
-fn status_text(s: RunStatus) -> &'static str {
+pub fn status_text(s: RunStatus) -> &'static str {
     match s {
         RunStatus::BackupOnly => t!("只產生備份（未執行）"),
         RunStatus::Completed => t!("已完成"),

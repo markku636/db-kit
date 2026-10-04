@@ -193,12 +193,8 @@ pub enum Command {
     #[command(subcommand)]
     Redis(RedisCmd),
 
-    /// 以 MCP（stdio JSON-RPC）伺服器模式啟動，把唯讀資料庫工具提供給 AI 用戶端（Claude Code / Codex）
-    Mcp {
-        /// 只提供這些工具（逗號分隔，例如 describe_table,explain_query）；省略 = 全部
-        #[arg(long, value_delimiter = ',', value_name = "NAMES")]
-        tools: Vec<String>,
-    },
+    /// 以 MCP 伺服器模式啟動（stdio 或 HTTP），把資料庫工具提供給 AI 用戶端（Claude Code / Codex / Cursor…）；config / install 產生或寫入用戶端設定
+    Mcp(McpArgs),
 
     /// AI 資源庫（人設 / 技能 / 提示範本）：列出、檢視、檢查，同步到 Claude Code / Codex
     #[command(subcommand)]
@@ -624,6 +620,87 @@ pub struct CompareSchemaArgs {
     /// 有差異時以非零結束碼結束（腳本 / CI 用）
     #[arg(long = "exit-code")]
     pub exit_code: bool,
+}
+
+// `dbk mcp`：不帶子指令＝啟動伺服器；`config` / `install` 產生 / 寫入 AI 用戶端設定。
+// 伺服器選項與子指令互斥（`dbk mcp --allow-write config …` 會被擋下，避免以為選項有生效）。
+#[derive(Args, Debug)]
+#[command(args_conflicts_with_subcommands = true)]
+pub struct McpArgs {
+    #[command(subcommand)]
+    pub action: Option<McpAction>,
+    #[command(flatten)]
+    pub serve: McpServeOpts,
+}
+
+// 伺服器選項。`config` / `install` 也收同一組，產生的設定會原樣帶上（不含任何帳密）。
+#[derive(Args, Debug, Clone, Default)]
+pub struct McpServeOpts {
+    /// 只提供這些工具（逗號分隔，例如 describe_table,explain_query）；省略 = 全部
+    #[arg(long, value_delimiter = ',', value_name = "NAMES")]
+    pub tools: Vec<String>,
+    /// 多連線模式只開放這些已存連線（名稱或 id，逗號分隔）。未指定 --conn / --url 時才生效；省略 = 全部已存連線
+    #[arg(long, value_delimiter = ',', value_name = "NAMES")]
+    pub connections: Vec<String>,
+    /// 開放寫入工具 preview_write / execute_write（走審查並執行：先預覽拿審查代碼、再執行，自動擷取前像並產生回滾腳本）
+    #[arg(long)]
+    pub allow_write: bool,
+    /// 允許高破壞語句（DROP / TRUNCATE / 無 WHERE 的 UPDATE·DELETE），需與 --allow-write 併用
+    #[arg(long, requires = "allow_write")]
+    pub allow_destructive: bool,
+    /// 允許對標記為正式環境的連線寫入，需與 --allow-write 併用
+    #[arg(long, requires = "allow_write")]
+    pub allow_prod: bool,
+    /// 寫入的前像、回滾腳本與報告輸出目錄（預設 <設定目錄>/mcp-runs）
+    #[arg(long, value_name = "DIR")]
+    pub out: Option<String>,
+    /// 改以 HTTP（MCP Streamable HTTP）監聽，例如 127.0.0.1:8765；省略 = stdio
+    #[arg(long, value_name = "ADDR")]
+    pub http: Option<String>,
+    /// HTTP 模式的存取權杖：用戶端要帶 Authorization: Bearer <token>（亦可用環境變數 DBKIT_MCP_TOKEN）。監聽非本機位址時必填
+    #[arg(long, env = "DBKIT_MCP_TOKEN", hide_env_values = true, value_name = "TOKEN")]
+    pub token: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum McpAction {
+    /// 印出 AI 用戶端的 MCP 設定片段（不寫檔）
+    Config(McpClientArgs),
+    /// 把 dbk 寫進 AI 用戶端的 MCP 設定檔（會先備份原檔）。未加 --yes 只印出將寫入的內容
+    Install(McpClientArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct McpClientArgs {
+    /// AI 用戶端
+    #[arg(long, value_enum)]
+    pub client: McpClientArg,
+    /// 設定裡的伺服器名稱（預設 dbkit；單一連線時為 dbkit-<連線名>）
+    #[arg(long)]
+    pub name: Option<String>,
+    /// 寫到專案資料夾（.mcp.json / .cursor / .vscode）而不是使用者層設定
+    #[arg(long, value_name = "DIR")]
+    pub project: Option<String>,
+    /// dbk 執行檔路徑（預設為目前這支 dbk）
+    #[arg(long, value_name = "PATH")]
+    pub bin: Option<String>,
+    /// 連到已在執行的 HTTP 伺服器（例如 http://127.0.0.1:8765/mcp），而不是讓用戶端自己啟動 dbk
+    #[arg(long = "http-url", value_name = "URL")]
+    pub http_url: Option<String>,
+    #[command(flatten)]
+    pub serve: McpServeOpts,
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpClientArg {
+    ClaudeCode,
+    Codex,
+    Cursor,
+    Vscode,
+    ClaudeDesktop,
+    Windsurf,
+    /// 通用 mcpServers JSON
+    Json,
 }
 
 #[derive(Args, Debug)]
