@@ -182,6 +182,10 @@ App 內建的 AI 助手（右側面板）用的也是 `dbk mcp`，但永遠是�
 
 **AI 工具說找不到工具 / 伺服器啟動失敗。** 先在終端機跑一次設定裡的那行指令（例如 `dbk mcp`）：它應該印出「MCP 伺服器已啟動（stdio）」然後停著等輸入（Ctrl+C 結束）。找不到 dbk 就用 `--bin` 指定完整路徑，或在 App 裡設環境變數 `DB_KIT_DBK_BIN`。
 
+**`codex exec` 呼叫工具失敗，說需要核准。** Codex 的非互動模式（`codex exec`）沒有核准畫面，MCP 工具呼叫會直接被拒；互動模式（直接執行 `codex`）會詢問，按允許即可。Claude Code 的 `claude -p` 則用 `--allowedTools mcp__dbkit__<工具>` 預先放行。
+
+**哪些用戶端實測過？** Claude Code（`claude -p` 經 MCP 列表、查列數、看 DDL，答案與資料庫一致）與 Codex（握手、工具清單、呼叫都正常，非互動模式受上述核准限制）。其他用戶端只驗證了設定檔格式。
+
 **`list_connections` 是空的。** 多連線模式只列 dbk 支援的種類（不含 Kafka / Elasticsearch / RabbitMQ / 容器類），也受 `--connections` 白名單限制。`dbk conn list` 可以看到全部已存連線。
 
 **`execute_write` 一直說要 `acknowledge_incomplete`。** 預覽指出有語句無法完整回滾（例如前像超過擷取上限、或 DDL 沒有反向語句）。確認可以接受後，告訴 AI「我同意，繼續」即可。

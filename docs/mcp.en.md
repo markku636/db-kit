@@ -182,6 +182,10 @@ The app's built-in AI assistant (the right-hand panel) uses `dbk mcp` as well, b
 
 **The AI tool says the tools are missing / the server failed to start.** Run the command from the config in a terminal first (e.g. `dbk mcp`): it should print "MCP server started (stdio)" and wait for input (Ctrl+C to quit). If dbk is not found, pass its full path with `--bin`, or set `DB_KIT_DBK_BIN` for the app.
 
+**`codex exec` fails a tool call saying approval is required.** Codex's non-interactive mode (`codex exec`) has no approval prompt, so MCP tool calls are rejected; interactive `codex` asks and you can allow it. For Claude Code's `claude -p`, pre-approve tools with `--allowedTools mcp__dbkit__<tool>`.
+
+**Which clients were tested end to end?** Claude Code (`claude -p` listed tables, counted rows and read DDL over MCP, matching the database) and Codex (handshake, tool listing and calls work; non-interactive mode is subject to the approval limit above). Other clients were verified for config-file format only.
+
 **`list_connections` is empty.** Multi-connection mode lists only kinds dbk supports (no Kafka / Elasticsearch / RabbitMQ / container connections) and honors the `--connections` allow-list. `dbk conn list` shows every saved connection.
 
 **`execute_write` keeps asking for `acknowledge_incomplete`.** The preview found statements that cannot be fully rolled back (e.g. before-images over the capture limit, or DDL with no reverse statement). If that is acceptable, tell the AI "I agree, go ahead".
