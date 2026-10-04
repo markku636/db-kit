@@ -536,6 +536,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
 
         // ---- db/mod.rs：trait 預設 Unsupported + 欄位驗證 ----
         "此連線不支援取消執行中的查詢" => "This connection does not support cancelling a running query",
+        "查詢已取消" => "Query cancelled",
         "此資料庫不支援鍵結構編輯" => "This database does not support key structure editing",
         "此資料庫不支援查詢計畫分析" => "This database does not support query plan analysis",
         "此資料庫不支援欄位統計" => "This database does not support column statistics",

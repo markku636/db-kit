@@ -18,9 +18,41 @@ pub struct MssqlDriver {
     pool: Pool<ConnectionManager>,
     #[allow(dead_code)]
     default_db: Option<String>,
+    /// 執行中互動查詢（query_capped / query_multi_capped）所在工作階段的 `@@SPID`。
+    /// cancel_query 據此以「另一條」連線送 `KILL <spid>`（比照 postgres.rs 的 running）。
+    running: parking_lot::Mutex<std::collections::HashSet<i16>>,
+}
+
+/// 查詢期間把 SPID 留在 `running` 內，drop 時自動移除（含失敗 / 被 KILL / 外層逾時丟棄 future）。
+struct RunningGuard<'a> {
+    set: &'a parking_lot::Mutex<std::collections::HashSet<i16>>,
+    spid: i16,
+}
+
+impl Drop for RunningGuard<'_> {
+    fn drop(&mut self) {
+        self.set.lock().remove(&self.spid);
+    }
+}
+
+/// 問出該連線的工作階段 ID（`@@SPID` 為 smallint）。
+async fn session_spid(conn: &mut bb8_tiberius::rt::Client) -> AppResult<i16> {
+    let row = conn
+        .simple_query("SELECT @@SPID")
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?
+        .into_row()
+        .await
+        .map_err(|e| AppError::Query(e.to_string()))?;
+    row.and_then(|r| r.get::<i16, _>(0)).ok_or_else(|| AppError::Query("@@SPID".into()))
 }
 
 impl MssqlDriver {
+    fn track(&self, spid: i16) -> RunningGuard<'_> {
+        self.running.lock().insert(spid);
+        RunningGuard { set: &self.running, spid }
+    }
+
     /// 開一條**不經連線池**的專屬連線（bb8 `dedicated_connection`）。交易、變數、暫存表都是連線狀態：
     /// 預存程序整合測試的一個情境要在同一條連線上從 BEGIN TRAN 跑到 ROLLBACK，結束即丟棄，
     /// 不能也不該回池（池裡的連線每次 `get()` 都可能是另一條）。
@@ -41,6 +73,9 @@ impl MssqlDriver {
     async fn query_rows_capped(&self, sql: &str, cap: usize) -> AppResult<(Vec<tiberius::Row>, bool)> {
         use futures::TryStreamExt;
         let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        // 只給互動查詢用：登記 SPID，cancel_query 才有目標可 KILL。
+        let spid = session_spid(&mut conn).await?;
+        let _guard = self.track(spid);
         let mut stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
         let mut rows: Vec<tiberius::Row> = Vec::new();
         let mut truncated = false;
@@ -66,6 +101,8 @@ impl MssqlDriver {
     async fn query_sets_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
         use futures::TryStreamExt;
         let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let spid = session_spid(&mut conn).await?;
+        let _guard = self.track(spid);
         let mut stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
         let mut sets: Vec<QueryResult> = Vec::new();
         while let Some(item) = stream.try_next().await.map_err(|e| AppError::Query(e.to_string()))? {
@@ -102,6 +139,15 @@ impl MssqlDriver {
     /// 執行寫入語句，回傳受影響列數。
     async fn exec(&self, sql: &str) -> AppResult<u64> {
         let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let res = conn.execute(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(res.rows_affected().iter().sum())
+    }
+
+    /// 互動查詢的寫入語句：同 exec，但登記 SPID 讓長時間的 UPDATE / DELETE 也能取消。
+    async fn exec_tracked(&self, sql: &str) -> AppResult<u64> {
+        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let spid = session_spid(&mut conn).await?;
+        let _guard = self.track(spid);
         let res = conn.execute(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
         Ok(res.rows_affected().iter().sum())
     }
@@ -157,6 +203,7 @@ impl DatabaseDriver for MssqlDriver {
         let driver = Self {
             pool,
             default_db: config.database.clone().filter(|d| !d.is_empty()),
+            running: Default::default(),
         };
         driver.ping().await?;
         Ok(driver)
@@ -331,14 +378,14 @@ impl DatabaseDriver for MssqlDriver {
                 .collect();
             Ok(QueryResult { columns, rows: data, rows_affected: 0, truncated })
         } else {
-            let n = self.exec(sql).await?;
+            let n = self.exec_tracked(sql).await?;
             Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: n, truncated: false })
         }
     }
 
     async fn query_multi_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
         if !is_read_sql(sql) {
-            let n = self.exec(sql).await?;
+            let n = self.exec_tracked(sql).await?;
             return Ok(vec![QueryResult { columns: vec![], rows: vec![], rows_affected: n, truncated: false }]);
         }
         let sets = self.query_sets_capped(sql, cap).await?;
@@ -347,6 +394,35 @@ impl DatabaseDriver for MssqlDriver {
             return Ok(vec![QueryResult::default()]);
         }
         Ok(sets)
+    }
+
+    /// SQL Server 沒有「只中止當前語句」的 T-SQL（MySQL `KILL QUERY` / PG `pg_cancel_backend` 的對應物是
+    /// TDS attention 封包，tiberius 不支援），只能 `KILL <spid>` 結束整個工作階段：未提交的交易會回滾。
+    /// 互動查詢本來就是每次從池裡借一條、不跨查詢保留交易，所以代價只是那條連線——
+    /// 被 KILL 的連線還池後，bb8 預設的 test_on_check_out（`SELECT 1`）會把它淘汰，不會污染下一個查詢。
+    /// 需要 `ALTER ANY CONNECTION` 權限；沒有時把伺服器的錯誤訊息原樣回給前端。
+    async fn cancel_query(&self) -> AppResult<usize> {
+        let spids: Vec<i16> = self.running.lock().iter().copied().collect();
+        if spids.is_empty() {
+            return Ok(0); // 查詢已結束或尚未送達 DB —— 不是錯誤
+        }
+        // 走不經池的專屬連線：池滿（max_connections 小、全卡在長查詢上）時從池裡借會一直等到逾時。
+        let mut conn = self.dedicated_client().await?;
+        let mut sent = 0usize;
+        for spid in spids {
+            // 送出前再確認一次：查詢可能剛好結束，SPID 已還池給別的查詢用。
+            if !self.running.lock().contains(&spid) {
+                continue;
+            }
+            conn.simple_query(format!("KILL {spid}"))
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?
+                .into_results()
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?;
+            sent += 1;
+        }
+        Ok(sent)
     }
 
     async fn update_cell(&self, database: &str, table: &str, edit: &CellEdit) -> AppResult<u64> {

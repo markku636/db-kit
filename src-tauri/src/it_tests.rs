@@ -222,6 +222,80 @@ fn persisted_connection_drops_secrets() {
 
 /// 前導註解不得讓查詢改走 execute 路徑（issue #5）。
 ///
+/// SQL Server 取消：`KILL <spid>` 中止長查詢（WAITFOR DELAY），被 KILL 的連線還池後
+/// 由 bb8 的 test_on_check_out 淘汰，接下來的查詢照常（容器：scripts/dev-sptest，埠 11435）。
+#[tokio::test]
+#[ignore]
+async fn mssql_cancel_kills_running_query() {
+    use crate::db::mssql::MssqlDriver;
+    let mut c = cfg(DbKind::Mssql, "127.0.0.1", 11435, "sa", "Test1234!", Some("master"));
+    c.options.insert("trust_server_certificate".into(), "true".into());
+    c.max_connections = 2;
+    let d = std::sync::Arc::new(MssqlDriver::connect(&c).await.expect("dev-sptest mssql 要先起來"));
+    for sql in ["WAITFOR DELAY '00:00:30'; SELECT 1 AS x", "WAITFOR DELAY '00:00:30'"] {
+        let d2 = std::sync::Arc::clone(&d);
+        let q = sql.to_string();
+        let t0 = std::time::Instant::now();
+        let h = tokio::spawn(async move { d2.query(&q).await });
+        let mut sent = 0;
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            sent = d.cancel_query().await.unwrap();
+            if sent > 0 {
+                break;
+            }
+        }
+        assert!(sent > 0, "{sql}：應已登記為執行中");
+        let r = tokio::time::timeout(Duration::from_secs(10), h).await.expect("KILL 後應很快結束").unwrap();
+        assert!(r.is_err(), "{sql}：被 KILL 的查詢應回錯誤");
+        assert!(t0.elapsed() < Duration::from_secs(10), "{sql}：不該等滿 30 秒");
+        // 兩條池連線都借一輪：被 KILL 的那條必須被淘汰，不能讓下一個查詢撞到斷線。
+        for _ in 0..4 {
+            let ok = d.query("SELECT 1 AS x").await.expect("KILL 後池內其他查詢照常");
+            assert_eq!(ok.rows[0][0].as_deref(), Some("1"));
+        }
+    }
+    d.close().await;
+}
+
+/// SQLite 取消：progress handler 讓執行中的長查詢（無窮遞迴 CTE）中止，
+/// 而且那條連線還池後，下一個查詢不會被殘留的取消旗標誤殺。
+#[tokio::test]
+async fn sqlite_cancel_interrupts_running_query() {
+    let dbfile = format!("dbkit_it_cancel_{}.db", std::process::id());
+    let _ = std::fs::remove_file(&dbfile);
+    let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile.as_str()));
+    {
+        let d = std::sync::Arc::new(SqliteDriver::connect(&c).await.unwrap());
+        assert_eq!(d.cancel_query().await.unwrap(), 0, "沒有執行中的查詢時回 0");
+        let d2 = std::sync::Arc::clone(&d);
+        let h = tokio::spawn(async move {
+            d2.query("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c").await
+        });
+        let mut sent = 0;
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            sent = d.cancel_query().await.unwrap();
+            if sent > 0 {
+                break;
+            }
+        }
+        assert!(sent > 0, "長查詢應已登記為執行中");
+        let r = tokio::time::timeout(std::time::Duration::from_secs(5), h)
+            .await
+            .expect("取消後應在 5 秒內結束")
+            .unwrap();
+        let msg = r.expect_err("被取消的查詢應回錯誤").to_string();
+        assert!(msg.contains("取消") || msg.contains("cancel"), "錯誤應是取消而不是別的：{msg}");
+        for _ in 0..4 {
+            let ok = d.query("SELECT 1").await.expect("取消後同池的下一個查詢不受影響");
+            assert_eq!(ok.rows[0][0].as_deref(), Some("1"));
+        }
+        d.close().await;
+    }
+    let _ = std::fs::remove_file(&dbfile);
+}
+
 /// 使用者在編輯器裡反白時常會多框到上一行的 `-- 說明`，之前 driver 以
 /// `sql.trim_start().starts_with("select")` 分流，開頭是 `--` 就比對不中，於是同一條 SELECT
 /// 走了 execute → 回空結果集。症狀是「單獨選 SQL 正常，連註解一起選就沒有輸出」。

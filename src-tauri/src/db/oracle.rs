@@ -27,6 +27,37 @@ pub struct OracleDriver {
     pool: Arc<Pool>,
     /// 登入帳號（大寫 = 預設 schema）；list_databases 保證包含。
     username: String,
+    /// 執行中互動查詢所用的連線。cancel_query 對它們呼叫 `break_execution()`（OCIBreak）：
+    /// 只中斷當前呼叫（ORA-01013），連線與工作階段保留，等同 PG 的 pg_cancel_backend。
+    running: Arc<parking_lot::Mutex<std::collections::HashMap<u64, Arc<oracle::Connection>>>>,
+}
+
+static RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// 查詢期間把連線留在 `running`，drop 時移除（含失敗 / panic）。
+struct RunningGuard {
+    set: Arc<parking_lot::Mutex<std::collections::HashMap<u64, Arc<oracle::Connection>>>>,
+    id: u64,
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        self.set.lock().remove(&self.id);
+    }
+}
+
+/// 取出的連線一律：autocommit on + DB 端逾時（with_conn / with_conn_tracked 共用）。
+fn prepare_conn(conn: &mut oracle::Connection) {
+    // autocommit：單語句工具語意（DML 立即生效；DDL 本就隱式 commit）。
+    conn.set_autocommit(true);
+    // DB 端查詢逾時（OCI_ATTR_CALL_TIMEOUT，需 Instant Client 18c+；舊 client 靜默無效）。
+    // Oracle 走 blocking thread，外層 tokio 逾時無法中止實際執行，此設定才是真正的保護。
+    let tms = crate::db::limits::timeout_ms();
+    let _ = conn.set_call_timeout(if tms > 0 {
+        Some(std::time::Duration::from_millis(tms))
+    } else {
+        None
+    });
 }
 
 // ---- Instant Client 偵測 / 初始化（process-wide，一次性）----
@@ -315,6 +346,27 @@ fn ora_q(e: oracle::Error) -> AppError {
 }
 
 impl OracleDriver {
+    /// 同 with_conn，但把連線登記到 `running`：互動查詢（query_capped）用，cancel_query 才能中斷它。
+    async fn with_conn_tracked<T, F>(&self, f: F) -> AppResult<T>
+    where
+        F: FnOnce(&oracle::Connection) -> AppResult<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let pool = Arc::clone(&self.pool);
+        let running = Arc::clone(&self.running);
+        tokio::task::spawn_blocking(move || {
+            let mut conn = pool.get().map_err(|e| AppError::Query(friendly_ora_error(&e)))?;
+            prepare_conn(&mut conn);
+            let conn = Arc::new(conn);
+            let id = RUN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            running.lock().insert(id, Arc::clone(&conn));
+            let _guard = RunningGuard { set: running, id };
+            f(&conn)
+        })
+        .await
+        .map_err(|e| AppError::Query(tf!("背景執行緒失敗：{e}", e = e)))?
+    }
+
     /// 所有 DB 呼叫的共用入口：blocking thread 上取連線（autocommit on）執行閉包。
     async fn with_conn<T, F>(&self, f: F) -> AppResult<T>
     where
@@ -324,16 +376,7 @@ impl OracleDriver {
         let pool = Arc::clone(&self.pool);
         tokio::task::spawn_blocking(move || {
             let mut conn = pool.get().map_err(|e| AppError::Query(friendly_ora_error(&e)))?;
-            // autocommit：單語句工具語意（DML 立即生效；DDL 本就隱式 commit）。
-            conn.set_autocommit(true);
-            // DB 端查詢逾時（OCI_ATTR_CALL_TIMEOUT，需 Instant Client 18c+；舊 client 靜默無效）。
-            // Oracle 走 blocking thread，外層 tokio 逾時無法中止實際執行，此設定才是真正的保護。
-            let tms = crate::db::limits::timeout_ms();
-            let _ = conn.set_call_timeout(if tms > 0 {
-                Some(std::time::Duration::from_millis(tms))
-            } else {
-                None
-            });
+            prepare_conn(&mut conn);
             f(&conn)
         })
         .await
@@ -392,7 +435,7 @@ impl DatabaseDriver for OracleDriver {
             Ok(Err(e)) => return Err(AppError::Connect(tf!("背景執行緒失敗：{e}", e = e))),
             Ok(Ok(r)) => r?,
         };
-        Ok(Self { pool: Arc::new(pool), username })
+        Ok(Self { pool: Arc::new(pool), username, running: Default::default() })
     }
 
     async fn ping(&self) -> AppResult<()> {
@@ -584,7 +627,7 @@ impl DatabaseDriver for OracleDriver {
     async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
         // Oracle 對一般 SQL 不接受尾端分號（PL/SQL 區塊除外——那類請走 exec_ddl / RoutinesDialog）。
         let sql = sql.trim().trim_end_matches(';').trim().to_string();
-        self.with_conn(move |conn| {
+        self.with_conn_tracked(move |conn| {
             if is_read_sql(&sql) {
                 rows_to_result_conn_capped(conn, &sql, cap)
             } else {
@@ -598,6 +641,25 @@ impl DatabaseDriver for OracleDriver {
             }
         })
         .await
+    }
+
+    /// 中斷執行中的互動查詢：OCIBreak 只打斷當前呼叫（查詢端收到 ORA-01013），連線保留。
+    async fn cancel_query(&self) -> AppResult<usize> {
+        let conns: Vec<Arc<oracle::Connection>> = self.running.lock().values().cloned().collect();
+        if conns.is_empty() {
+            return Ok(0);
+        }
+        tokio::task::spawn_blocking(move || {
+            let mut sent = 0usize;
+            for c in conns {
+                if c.break_execution().is_ok() {
+                    sent += 1;
+                }
+            }
+            sent
+        })
+        .await
+        .map_err(|e| AppError::Query(tf!("背景執行緒失敗：{e}", e = e)))
     }
 
     async fn update_cell(&self, database: &str, table: &str, edit: &CellEdit) -> AppResult<u64> {
