@@ -35,7 +35,7 @@ with <strong>SSH / SFTP / FTP · Docker · Kubernetes · Remote desktop · File 
 
 - **Lightweight**: Tauri 2 (Rust backend + system WebView), roughly one tenth the memory of comparable Electron apps.
 - **Safe**: passwords and API keys live only in the OS keychain; writes are fully parameterized and located by primary key; connections can be read-only and color-tagged per environment.
-- **Optional AI**: use a local Claude Code / Codex CLI or any Anthropic / OpenAI-compatible API. The assistant only ever reads from the database; writes go through Review & Run first.
+- **Optional AI**: use a local Claude Code / Codex CLI or any Anthropic / OpenAI-compatible API. The assistant only ever reads from the database; writes go through Review & Run first. It also works the other way round as an **MCP server**, so Claude Code / Codex / Cursor / VS Code can query your databases directly.
 - **CLI included**: `dbk` reuses the same connections to query, export, back up and compare from a server.
 
 ## Screenshots
@@ -68,6 +68,7 @@ with <strong>SSH / SFTP / FTP · Docker · Kubernetes · Remote desktop · File 
 | Schema & data | Schema compare and sync (across databases, connections or snapshots), data transfer, row-level data compare, database documentation |
 | Safety nets | **Review & Run** (AI review → per-statement before-image → rollback script → execute → diff report), static SQL review, DBA persona review, row limits and query timeouts, app lock |
 | Testing & performance | SQL stress test (TPS, p50–p99), stored procedure integration tests (auto rollback, golden baselines, cross-engine diff, JUnit) |
+| AI tool integration | **MCP server** (`dbk mcp`): one-click config for Claude Code / Codex / Cursor / VS Code / Claude Desktop / Windsurf; single or multiple connections, read-only by default, optional writes that are previewed and approved (with rollback scripts); stdio or local HTTP |
 | AI | Chat assistant (`@` scopes, `/` commands), in-editor AI actions (explain / optimize / fix / convert dialect, previewed as a diff), AI library (personas, skills and prompts are Markdown files) |
 | Remote & containers | SSH terminal + SFTP / FTP (resumable transfers, jump hosts, activity log), Docker / Registry / Harbor, Kubernetes (port-forward to in-cluster databases), remote desktop over RDP / VNC / RustDesk |
 | File compare | Text / folder / binary compare and sync between local paths and SSH / FTP hosts |
@@ -121,7 +122,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 
 ## Guides
 
-- [Schema compare](./docs/compare.en.md) · [Review & Run](./docs/review-run.en.md) · [DBA review](./docs/dba-review.en.md) · [AI library](./docs/ai-library.en.md) · [Stored procedure tests](./docs/sp-test.en.md)
+- [Schema compare](./docs/compare.en.md) · [Review & Run](./docs/review-run.en.md) · [DBA review](./docs/dba-review.en.md) · [AI library](./docs/ai-library.en.md) · [Stored procedure tests](./docs/sp-test.en.md) · [MCP server](./docs/mcp.en.md)
 - [`dbk` CLI](./docs/cli.en.md) · [Architecture](./docs/architecture.en.md) · [Connection lifecycle](./docs/connection-lifecycle.en.md) · [Roadmap](./docs/roadmap.en.md)
 
 ## Command-line tool `dbk`

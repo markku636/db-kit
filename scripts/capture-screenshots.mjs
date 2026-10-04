@@ -326,6 +326,32 @@ const SHOTS = {
     await shot(page, "compare-guide-02-setup");
   },
 
+  // ---- MCP 使用指南（docs/mcp.md）----
+  // 從連線右鍵開「接到 AI 工具（MCP）…」：預選該連線、勾允許修改，看到 Claude Code 的設定片段。
+  async "mcp-guide-01-setup"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: "接到 AI 工具（MCP）…" }).first().click();
+    const dlg = page.locator('[role="dialog"]').last();
+    await dlg.getByText("設定內容", { exact: true }).waitFor({ timeout: 6000 });
+    await dlg.getByRole("checkbox").first().check();
+    await sleep(800);
+    await shot(page, "mcp-guide-01-setup");
+  },
+  // 同一個對話框捲到底：產生的設定片段、設定檔位置、寫入鈕。
+  async "mcp-guide-02-snippet"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.locator('div.fixed.z-\\[90\\] button', { hasText: "接到 AI 工具（MCP）…" }).first().click();
+    const dlg = page.locator('[role="dialog"]').last();
+    await dlg.getByText("設定內容", { exact: true }).waitFor({ timeout: 6000 });
+    await dlg.getByRole("checkbox").first().check();
+    await sleep(600);
+    await dlg.locator("pre").first().scrollIntoViewIfNeeded();
+    await sleep(400);
+    await shot(page, "mcp-guide-02-snippet");
+  },
+
   // ---- 預存程序整合測試使用指南（docs/sp-test.md）----
   // 1. 從程序右鍵開、按「新檔」：後端盤點產生的骨架（前置資料、參數、錯誤分支情境）。
   async "sp-test-guide-01-scaffold"(page) {

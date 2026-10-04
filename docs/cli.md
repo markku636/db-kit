@@ -437,45 +437,38 @@ dbk --conn cache redis flush-db --yes --force
 
 ### `mcp` — MCP 伺服器（給 AI 用戶端）
 
-以 [Model Context Protocol](https://modelcontextprotocol.io) 的 stdio 模式啟動，把一組**唯讀**資料庫工具提供給 Claude Code、Codex 或任何支援 MCP 的 AI 用戶端。
+以 [Model Context Protocol](https://modelcontextprotocol.io) 伺服器啟動，把資料庫工具提供給 Claude Code、Codex、Cursor、VS Code 等 AI 用戶端。完整說明（GUI 一鍵設定、寫入流程、HTTP、各用戶端設定檔位置）見 **[MCP 使用指南](./mcp.md)**。
 
 ```bash
-dbk --conn shop -d shop mcp
+dbk --conn shop -d shop mcp                 # 單一連線、唯讀（stdio）
+dbk mcp                                     # 多連線：全部已存連線，工具多一個 connection 參數
+dbk mcp --connections shop,report           # 多連線白名單
+dbk --conn shop mcp --allow-write           # 開放 preview_write / execute_write（走審查並執行）
+dbk mcp --http 127.0.0.1:8765               # HTTP（Streamable HTTP）；權杖用 --token 或 DBKIT_MCP_TOKEN
+dbk mcp config --client cursor              # 印出 AI 用戶端的設定片段
+dbk --conn shop mcp install --client claude-code --yes   # 寫進用戶端設定檔（先備份原檔）
 ```
 
-它不是給人直接跑的——stdout 只走協定（一行一則 JSON-RPC 2.0），診斷訊息一律走 stderr。由用戶端當子程序啟動：
+stdio 模式不是給人直接跑的——stdout 只走協定（一行一則 JSON-RPC 2.0），診斷訊息一律走 stderr；由用戶端當子程序啟動。
 
-```bash
-# Claude Code
-claude mcp add dbkit -- dbk --conn shop -d shop mcp
-```
-
-```jsonc
-// 或寫進專案的 .mcp.json
-{ "mcpServers": { "dbkit": { "command": "dbk", "args": ["--conn", "shop", "-d", "shop", "mcp"] } } }
-```
-
-提供的工具：
-
-| 工具 | 作用 |
+| 選項 | 作用 |
 |------|------|
-| `list_databases` | 列出資料庫 / schema |
-| `list_tables` | 列出資料表（含視圖） |
-| `describe_table` | 欄位（型別 / 可空 / 主鍵 / 預設值 / 註解）＋ 索引 ＋ 外鍵 |
-| `sample_rows` | 前幾列樣本（上限 20 列） |
-| `run_query` | 執行唯讀查詢（上限 200 列 / 8 KB / 30 秒） |
-| `explain_query` | 取執行計畫 |
+| `--tools a,b` | 只提供指定的工具（清單外的連呼叫都會被擋下）。DBA agent 審查透過它套用人設的工具白名單與「不送資料」的隱私設定 |
+| `--connections a,b` | 多連線模式的白名單（名稱或 id）；與 `--conn` / `--url` 互斥 |
+| `--allow-write` | 開放寫入工具：`preview_write` 回審查代碼，`execute_write` 只收代碼、執行伺服器端保存的那份 SQL，前像與回滾腳本寫到 `--out`（預設 `<設定目錄>/mcp-runs`） |
+| `--allow-destructive` / `--allow-prod` | 另外允許高破壞語句 / 正式環境連線（需與 `--allow-write` 併用） |
+| `--http <addr>` / `--token` | 改走 HTTP；聽非本機位址時必須有權杖 |
 
-安全模型（與 GUI 內建助手同一份實作，見 [架構設計](./architecture.md#ai-助手的工具邊界)）：
+工具：`list_databases`、`list_tables`、`describe_table`、`sample_rows`、`run_query`、`explain_query`；SQL 資料庫另有 `list_routines`、`get_ddl`、`compare_schema`（只產生同步 DDL、不執行）；多連線模式有 `list_connections`；`--allow-write` 時有 `preview_write`、`execute_write`。
 
-- **一律唯讀**，沒有開關可以放寬。SQL 走與 `query` 同一道守門的嚴格版——連 `EXPLAIN ANALYZE DELETE …` 都擋（PostgreSQL 會真的執行內層語句）；MongoDB 拒絕 `$out` / `$merge`；Redis 只放行讀取類命令。
-- **一次一條語句**，多語句要拆成多次呼叫。
+安全模型（唯讀守門與 GUI 內建助手同一份實作，見 [架構設計](./architecture.md#ai-助手的工具邊界)）：
+
+- **預設唯讀**。SQL 走與 `query` 同一道守門的嚴格版——連 `EXPLAIN ANALYZE DELETE …` 都擋（PostgreSQL 會真的執行內層語句）；MongoDB 拒絕 `$out` / `$merge`；Redis 只放行讀取類命令。寫入只能經 `preview_write` → `execute_write`，旗標是模型改不了的上限。
+- **一次一條語句**，多語句要拆成多次呼叫（`preview_write` 例外，收整段腳本）。
 - 工具失敗回的是 `isError` 的**結果**而非協定錯誤，讓模型看得到原因並自行修正。
-- 連線延遲到第一次 `tools/call` 才建立，所以資料庫暫時連不上不會讓用戶端整個握手失敗。
+- 連線延遲到第一次工具呼叫才建立，所以資料庫暫時連不上不會讓用戶端整個握手失敗。
 
-`--tools a,b` 只提供指定的工具（清單外的連呼叫都會被擋下）。DBA agent 審查透過它套用人設的工具白名單與「不送資料」的隱私設定。
-
-> GUI 的 AI 助手會自動使用它：選 Claude / Codex 供應商時，db-kit 會找到 `dbk` 並以目前連線把它掛上去（找不到就退回沒有資料庫工具，面板會提示）。用 `DB_KIT_DBK_BIN` 可指定路徑。
+> GUI 的 AI 助手會自動使用它：選 Claude / Codex 供應商時，db-kit 會找到 `dbk` 並以目前連線把它掛上去（單一連線、唯讀；找不到就退回沒有資料庫工具，面板會提示）。用 `DB_KIT_DBK_BIN` 可指定路徑。
 
 ### `ai` — AI 資源庫（人設 / 技能 / 提示範本）
 

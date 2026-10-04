@@ -437,45 +437,38 @@ Use `-d` to pick the DB index: `dbk --conn cache -d 3 redis keys`.
 
 ### `mcp` — MCP server (for AI clients)
 
-Starts in [Model Context Protocol](https://modelcontextprotocol.io) stdio mode and exposes a set of **read-only** database tools to Claude Code, Codex, or any MCP-capable AI client.
+Runs a [Model Context Protocol](https://modelcontextprotocol.io) server that exposes database tools to AI clients such as Claude Code, Codex, Cursor and VS Code. The full story (one-click setup in the app, the write flow, HTTP, where each client keeps its config) is in the **[MCP guide](./mcp.en.md)**.
 
 ```bash
-dbk --conn shop -d shop mcp
+dbk --conn shop -d shop mcp                 # single connection, read-only (stdio)
+dbk mcp                                     # multiple connections: every saved connection; tools gain a connection argument
+dbk mcp --connections shop,report           # allow-list for multi-connection mode
+dbk --conn shop mcp --allow-write           # enable preview_write / execute_write (Review & Run)
+dbk mcp --http 127.0.0.1:8765               # HTTP (Streamable HTTP); token via --token or DBKIT_MCP_TOKEN
+dbk mcp config --client cursor              # print the client's configuration snippet
+dbk --conn shop mcp install --client claude-code --yes   # write it into the client's config file (original backed up)
 ```
 
-It is not meant to be run directly by a person: stdout carries only the protocol (one JSON-RPC 2.0 message per line), and diagnostics always go to stderr. The client launches it as a child process:
+stdio mode is not meant to be run by hand — stdout carries only the protocol (one JSON-RPC 2.0 message per line) and diagnostics go to stderr; the client starts it as a child process.
 
-```bash
-# Claude Code
-claude mcp add dbkit -- dbk --conn shop -d shop mcp
-```
+| Option | Effect |
+|--------|--------|
+| `--tools a,b` | Expose only the listed tools (calls to anything else are rejected). DBA agent reviews use it to apply a persona's tool allow-list and the "send no data" privacy setting |
+| `--connections a,b` | Allow-list for multi-connection mode (names or ids); cannot be combined with `--conn` / `--url` |
+| `--allow-write` | Enable the write tools: `preview_write` returns a review token, `execute_write` takes only the token and runs the SQL kept on the server; before-images and rollback scripts go to `--out` (default `<config dir>/mcp-runs`) |
+| `--allow-destructive` / `--allow-prod` | Additionally allow destructive statements / production connections (require `--allow-write`) |
+| `--http <addr>` / `--token` | Serve over HTTP; a token is required when listening on a non-loopback address |
 
-```jsonc
-// or put it in the project's .mcp.json
-{ "mcpServers": { "dbkit": { "command": "dbk", "args": ["--conn", "shop", "-d", "shop", "mcp"] } } }
-```
+Tools: `list_databases`, `list_tables`, `describe_table`, `sample_rows`, `run_query`, `explain_query`; SQL databases also get `list_routines`, `get_ddl` and `compare_schema` (generates sync DDL, never runs it); multi-connection mode adds `list_connections`; `--allow-write` adds `preview_write` and `execute_write`.
 
-Tools provided:
+Security model (the read-only guard is the same implementation as the GUI's built-in assistant, see [Architecture](./architecture.en.md#ai-assistant-tool-boundaries)):
 
-| Tool | Purpose |
-|------|------|
-| `list_databases` | List databases / schemas |
-| `list_tables` | List tables (including views) |
-| `describe_table` | Columns (type / nullability / primary key / default / comment) + indexes + foreign keys |
-| `sample_rows` | First few sample rows (up to 20) |
-| `run_query` | Run a read-only query (up to 200 rows / 8 KB / 30 seconds) |
-| `explain_query` | Get the execution plan |
+- **Read-only by default.** SQL goes through the strict variant of the `query` guard — even `EXPLAIN ANALYZE DELETE …` is blocked (PostgreSQL really executes the inner statement); MongoDB rejects `$out` / `$merge`; Redis allows read commands only. Writes are possible only through `preview_write` → `execute_write`, and the flags are limits the model cannot change.
+- **One statement per call**; split multiple statements into separate calls (except `preview_write`, which takes a whole script).
+- Tool failures come back as `isError` **results**, not protocol errors, so the model can see the reason and correct itself.
+- The connection is established lazily on the first tool call, so a database that is briefly unreachable does not fail the client's whole handshake.
 
-Safety model (the same implementation as the GUI's built-in assistant; see [Architecture](./architecture.en.md#ai-assistant-tool-boundaries)):
-
-- **Always read-only**, with no switch to relax it. SQL goes through a stricter version of the same guard as `query`; even `EXPLAIN ANALYZE DELETE …` is blocked (PostgreSQL would actually execute the inner statement). MongoDB rejects `$out` / `$merge`; Redis only allows read commands.
-- **One statement per call**; split multiple statements into multiple calls.
-- Tool failures come back as an `isError` **result** rather than a protocol error, so the model can see the reason and correct itself.
-- The connection is not established until the first `tools/call`, so a database that is temporarily unreachable does not make the whole client handshake fail.
-
-`--tools a,b` exposes only the listed tools (calls to anything outside the list are blocked). DBA agent reviews use this to apply a persona's tool allowlist and its "send no data" privacy setting.
-
-> The GUI's AI assistant uses it automatically: when the Claude / Codex provider is selected, db-kit finds `dbk` and attaches it with the current connection (if it cannot be found, it falls back to having no database tools and the panel shows a notice). Use `DB_KIT_DBK_BIN` to specify the path.
+> The GUI's AI assistant uses it automatically: when the Claude / Codex provider is selected, db-kit finds `dbk` and attaches it with the current connection (single connection, read-only; if it cannot be found, it falls back to having no database tools and the panel shows a notice). Use `DB_KIT_DBK_BIN` to specify the path.
 
 ### `ai` — AI library (personas / skills / prompt templates)
 

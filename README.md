@@ -35,7 +35,7 @@
 
 - **輕量**：Tauri 2（Rust 後端 + 系統 WebView），記憶體約為 Electron 同類工具的十分之一。
 - **安全**：密碼與 API 金鑰只存 OS keychain；寫入全參數化、以主鍵定位；可設唯讀連線與環境色標。
-- **AI 選配**：接本機 Claude Code / Codex CLI 或任何 Anthropic / OpenAI 相容 API；助手查資料庫一律唯讀，寫入先走「審查並執行」。
+- **AI 選配**：接本機 Claude Code / Codex CLI 或任何 Anthropic / OpenAI 相容 API；助手查資料庫一律唯讀，寫入先走「審查並執行」。也能反過來當 **MCP 伺服器**，讓 Claude Code / Codex / Cursor / VS Code 直接查你的資料庫。
 - **附 CLI**：`dbk` 重用同一套連線，可在伺服器上查詢、匯出、備份、比對。
 
 ## 畫面預覽
@@ -68,6 +68,7 @@
 | 結構與資料 | 結構比對與同步（跨庫 / 跨連線 / 對快照）、資料傳輸、資料列比對、整庫文件 |
 | 安全網 | **審查並執行**（AI 審查 → 逐句前像 → 回滾腳本 → 執行 → 差異報告）、SQL 靜態審查、DBA 人設審查、結果列數上限與查詢逾時、啟動鎖定 |
 | 測試與效能 | SQL 壓力測試（TPS、p50–p99）、預存程序整合測試（自動 rollback、基線回歸、跨引擎比對、JUnit） |
+| AI 工具整合 | **MCP 伺服器**（`dbk mcp`）：Claude Code / Codex / Cursor / VS Code / Claude Desktop / Windsurf 一鍵寫入設定；單一或多連線、預設唯讀，可開放經預覽與核准的寫入（自動回滾腳本）；stdio 或本機 HTTP |
 | AI | 對話助手（`@` 指定範圍、`/` 指令）、編輯器 AI 動作（解釋 / 最佳化 / 修正 / 轉方言，先看差異再套用）、AI 資源庫（人設 / 技能 / 提示都是 Markdown 檔） |
 | 遠端與容器 | SSH 終端機 + SFTP / FTP（斷點續傳、跳板機、操作紀錄）、Docker / Registry / Harbor、Kubernetes（port-forward 連叢集內資料庫）、遠端桌面 RDP / VNC / RustDesk |
 | 檔案比對 | 文字 / 資料夾 / 二進位比對與同步，兩邊可以是本機或 SSH / FTP 主機 |
@@ -121,7 +122,7 @@ docker run --name mysql-test -e MYSQL_ROOT_PASSWORD=test1234 -p 3306:3306 -d mys
 
 ## 使用指南
 
-- [結構比對](./docs/compare.md) · [審查並執行](./docs/review-run.md) · [DBA 審查](./docs/dba-review.md) · [AI 資源庫](./docs/ai-library.md) · [預存程序整合測試](./docs/sp-test.md)
+- [結構比對](./docs/compare.md) · [審查並執行](./docs/review-run.md) · [DBA 審查](./docs/dba-review.md) · [AI 資源庫](./docs/ai-library.md) · [預存程序整合測試](./docs/sp-test.md) · [MCP 伺服器](./docs/mcp.md)
 - [`dbk` CLI](./docs/cli.md) · [架構](./docs/architecture.md) · [連線生命週期](./docs/connection-lifecycle.md) · [路線圖](./docs/roadmap.md)
 
 ## 命令列工具 `dbk`
