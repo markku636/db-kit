@@ -10,7 +10,7 @@ import { useT } from "./i18n";
 
 /**
  * 單表結構比對：把「這張表」拿去跟另一個資料庫（可跨連線）或一份結構快照比。
- * 只比結構——欄位 / 索引 / 外鍵 / 定義；資料列比對請用 CLI 的 `dbk compare data`。
+ * 只比結構——欄位 / 索引 / 外鍵 / 定義；資料列比對是另一個對話框（DataCompareDialog）。
  * 來源是可交換的：按錯方向不必關掉重開，按「⇄」把兩邊對調即可。
  */
 export default function TableCompareDialog({ connId, kind, database, table, onClose, onUse }: {

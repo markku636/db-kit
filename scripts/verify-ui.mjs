@@ -4247,6 +4247,7 @@ const CASES = {
     let items = await menuItems(page);
     check("資料表右鍵：結構比對…", items.some((i) => i.includes("結構比對")), items.join(" | "));
     check("資料表右鍵：舊的「資料比對 / 同步」已移除", !items.some((i) => i.includes("資料比對 / 同步")));
+    check("資料表右鍵：獨立的「資料比對…」", items.some((i) => i === "資料比對…" || i.startsWith("資料比對…")), items.join(" | "));
     await page.getByText("結構比對…", { exact: true }).click();
     // 整套跑時機器忙，固定 sleep 會偶發抓不到——等到對話框真的畫出來。
     await page.getByText("比對目標", { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
@@ -4362,6 +4363,38 @@ const CASES = {
   },
 
   // ---- 檔案 / 資料夾 / 二進位比對 ----
+  // 資料比對獨立成一個對話框：只產生同步 SQL、送到目標的查詢編輯器，不在這裡直接套用。
+  async "data-compare-dialog"(page) {
+    await page.getByText("prod-mysql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("shop", { exact: true }).nth(1).click();
+    await sleep(700);
+    await page.getByText("資料表", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="orders"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="orders"]').first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("資料比對…", { exact: true }).click();
+    const runBtn = page.locator("[data-data-compare-run]");
+    await runBtn.waitFor({ timeout: 8000 });
+    // 目標庫清單非同步載入，載完才會預設一個非來源的庫、鈕才亮。
+    await page.waitForFunction(() => !document.querySelector("[data-data-compare-run]")?.disabled, null, { timeout: 5000 }).catch(() => {});
+    check("資料比對對話框開啟、預設目標可按", await runBtn.isEnabled());
+    check("對話框沒有「直接套用」", !(await appText(page)).includes("直接執行"));
+    await page.locator('[data-data-compare-opt="include_deletes"]').check();
+    await runBtn.click();
+    await page.locator("[data-data-compare-result]").waitFor({ timeout: 8000 });
+    const body = await appText(page);
+    check("摘要列出新增 / 更新 / 刪除", /新增 3/.test(body) && /更新 2/.test(body) && /刪除 1/.test(body), body.replace(/\s+/g, " ").slice(0, 240));
+    check("只在目標的欄位有提示", body.includes("legacy_flag"));
+    check("預設顯示更新樣本", (await page.locator('[data-data-compare-samples="updates"]').count()) === 1);
+    await page.getByRole("radio", { name: /新增 \(3\)/ }).click();
+    check("切到新增樣本", (await page.locator('[data-data-compare-samples="inserts"]').innerText()).includes("128735"));
+    check("同步 SQL 顯示", (await page.locator("[data-data-compare-sql]").innerText()).includes("UPDATE"));
+    await page.locator("[data-data-compare-send]").click();
+    await sleep(600);
+    check("送出後對話框關閉", (await page.locator("[data-data-compare-run]").count()) === 0);
+    check("SQL 送進查詢編輯器", (await appText(page)).includes("128735"));
+  },
   async "compare-text"(page) {
     await startCompare(page, "文字比對", "C:\\work\\old\\app.conf", "C:\\work\\new\\app.conf");
     await page.waitForSelector('[data-testid="text-compare"] .cm-mergeView', { timeout: 8000 });

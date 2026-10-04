@@ -182,6 +182,7 @@ const AboutDialog = lazyOverlay(() => import("./AboutDialog"));
 const UpdateDialog = lazyOverlay(() => import("./UpdateDialog"));
 const DbDataDictionary = lazyOverlay(() => import("./DbDataDictionary"));
 const TableCompareDialog = lazyOverlay(() => import("./TableCompareDialog"));
+const DataCompareDialog = lazyOverlay(() => import("./DataCompareDialog"));
 const ExplainPlan = lazyOverlay(() => import("./ExplainPlan"));
 const MongoExplainPlan = lazyOverlay(() => import("./MongoExplainPlan"));
 // 需要 ref 轉發的編輯器：直接 React.lazy（lazy 對 forwardRef 透明），使用處手動包 Suspense。
@@ -1517,6 +1518,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
   // 右鍵「DBA 審查結構」：開一個審查對話框（DDL / 索引 / 外鍵 / 表資訊交給 DBA 人設）。
   const [schemaReview, setSchemaReview] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [syncTbl, setSyncTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
+  const [dataCmpTbl, setDataCmpTbl] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
   const [dbTransfer, setDbTransfer] = useState<{ connId: string; db: string } | null>(null);
   const [dbDict, setDbDict] = useState<{ connId: string; db: string; kind: DbKind } | null>(null);
   const [dataDict, setDataDict] = useState<{ connId: string; db: string; table: string; kind: DbKind } | null>(null);
@@ -2529,6 +2531,8 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
       nodes.push(it(t("資料傳輸…"), () => setTransferTbl({ connId: m.connId, db: m.db, table: m.table })));
     if (supportsSchemaCompare(m.kind))
       nodes.push(it(t("結構比對…"), () => setSyncTbl({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
+    if (supportsSchemaCompare(m.kind) && !isView)
+      nodes.push(it(t("資料比對…"), () => setDataCmpTbl({ connId: m.connId, db: m.db, table: m.table, kind: m.kind })));
     nodes.push({
       kind: "sub", label: t("傾印 SQL 檔案"), children: [
         it(t("結構"), () => dumpTableSql(m, false)),
@@ -3672,6 +3676,11 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
         <TableCompareDialog connId={syncTbl.connId} kind={syncTbl.kind} database={syncTbl.db} table={syncTbl.table}
           onClose={() => setSyncTbl(null)}
           onUse={(sql, targetConnId) => { sendQuery(targetConnId, sql); setSyncTbl(null); }} />
+      )}
+      {dataCmpTbl && (
+        <DataCompareDialog connId={dataCmpTbl.connId} kind={dataCmpTbl.kind} database={dataCmpTbl.db} table={dataCmpTbl.table}
+          onClose={() => setDataCmpTbl(null)}
+          onUse={(sql, targetConnId) => { sendQuery(targetConnId, sql); setDataCmpTbl(null); }} />
       )}
 
       {dbTransfer && (

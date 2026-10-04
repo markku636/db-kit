@@ -10,7 +10,7 @@ Typical uses:
 - After a release, compare against the **snapshot saved before the release** to confirm that only the intended things changed.
 - When taking over an environment, compare it with a known-good environment to see exactly where they differ.
 
-> This feature compares **schema** only, not the contents of rows. To compare rows (and generate INSERT / UPDATE / DELETE), use `dbk compare data` on the command line; see the [CLI guide](./cli.en.md#compare--schema--schema--data-compare-and-snapshots).
+> This feature compares **schema** only, not the contents of rows. To compare rows (and generate INSERT / UPDATE / DELETE) for a single table, right-click it and choose "**Data compare…**": it compares the two tables by primary key, lists sample inserts / updates / deletes and generates sync SQL. It **only generates, never applies**; click "Send to target's query editor" to run it. For whole databases or scheduled runs, use `dbk compare data` on the command line; see the [CLI guide](./cli.en.md#compare--schema--schema--data-compare-and-snapshots).
 
 Supports MySQL, MariaDB, PostgreSQL, SQL Server, Oracle, and SQLite.
 
