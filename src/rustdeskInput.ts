@@ -47,6 +47,37 @@ export function chordedChange(button: number, buttons: number): "down" | "up" | 
 const ALT = 0x38;
 const ALT_GR = 0xe038;
 
+/** 修飾鍵：事件旗標 → 左右兩顆的掃描碼（第一顆 = 補按時送的）。 */
+const MODIFIERS: { flag: "shiftKey" | "ctrlKey" | "altKey" | "metaKey"; scancodes: number[] }[] = [
+  { flag: "shiftKey", scancodes: [0x2a, 0x36] },
+  { flag: "ctrlKey", scancodes: [0x1d, 0xe01d] },
+  { flag: "altKey", scancodes: [ALT, ALT_GR] },
+  { flag: "metaKey", scancodes: [0xe05b, 0xe05c] },
+];
+
+export function isModifierScancode(sc: number): boolean {
+  return MODIFIERS.some((m) => m.scancodes.includes(sc));
+}
+
+/**
+ * 一般鍵送出前，讓對方按著的修飾鍵跟這個按鍵事件的旗標一致：沒送過按下的補按、還按著但其實放開了的放開。
+ * 本機的注音 / 拼音輸入法會吃掉單獨按的 Shift（拿來切中英），畫面收不到 Shift 的 keydown / keyup，
+ * 下一個鍵的 shiftKey 卻是 true——不補的話 Shift+2 在對方變成 2、Shift+A 變成 a。
+ * （官方用戶端是用系統層的鍵盤 hook 收鍵，不經過輸入法。）
+ */
+export function modifierFixes(
+  held: HeldKeys,
+  e: { shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean },
+): { scancode: number; down: boolean }[] {
+  const out: { scancode: number; down: boolean }[] = [];
+  for (const m of MODIFIERS) {
+    const down = m.scancodes.filter((sc) => held.has(sc));
+    if (e[m.flag] && !down.length) out.push({ scancode: m.scancodes[0], down: true });
+    else if (!e[m.flag]) for (const sc of down) out.push({ scancode: sc, down: false });
+  }
+  return out;
+}
+
 /** 送給對方、還沒放開的鍵（掃描碼）。 */
 export class HeldKeys {
   private readonly held = new Set<number>();

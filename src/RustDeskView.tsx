@@ -15,7 +15,9 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { api } from "./api";
 import type { RdConnInfo } from "./rdTypes";
 import { mouseButtonFromDom, scancodeForCode } from "./rdInput";
-import { chordedChange, HeldKeys, lockModes, mouseModifiers, translatedChar } from "./rustdeskInput";
+import {
+  chordedChange, HeldKeys, isModifierScancode, lockModes, modifierFixes, mouseModifiers, translatedChar,
+} from "./rustdeskInput";
 import { useT } from "./i18n";
 import { toast } from "./ui";
 import type { RdViewHandle } from "./rdView";
@@ -664,7 +666,22 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
       }
     }
     if (sc == null) return;
+    if (!isModifierScancode(sc)) for (const k of modifierFixes(held, e)) sendKey(k.scancode, k.down);
     sendKey(sc, e.type === "keydown");
+  };
+
+  /** 虛擬鍵盤的 CapsLock：切換本機（作業系統）的 CapsLock，對方跟著；`wasOn` = 按之前開著沒。 */
+  const toggleCapsLock = async (wasOn: boolean) => {
+    if (optsRef.current.viewOnly || !liveRef.current) return;
+    const done = await api.rdToggleCapsLock().catch(() => false);
+    if (!done) {
+      // 切不了本機的（不是 Windows）：照舊只切對方的。
+      sendKey(0x3a, true);
+      sendKey(0x3a, false);
+      return;
+    }
+    // 系統送出的 CapsLock 會經畫面的 keydown 轉給對方；這裡先記新狀態，畫面沒焦點時之後的鍵也帶對。
+    locksRef.current = { ...locksRef.current, caps: !wasOn };
   };
 
   /** 對方的事件（影像以外）。 */
@@ -812,6 +829,7 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     refresh() { write({ t: "refresh" }); },
     desktopSize: () => size,
     rawKey(sc: number, down: boolean) { sendKey(sc, down); },
+    toggleCapsLock(wasOn: boolean) { void toggleCapsLock(wasOn); },
     showDisplays(set: number[]) {
       showDisplays(set);
       canvasRef.current?.focus();

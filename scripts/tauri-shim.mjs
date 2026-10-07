@@ -818,6 +818,8 @@ metadata:
     },
     // 剪貼簿變更序號（Windows 才有）：情境設 window.__DBKIT_RD_CLIP_SEQ__ 模擬；沒設 = null（其他平台，前端每秒讀一次）。
     rd_clipboard_seq: () => window.__DBKIT_RD_CLIP_SEQ__ ?? null,
+    // 切換本機 CapsLock（虛擬鍵盤連動）：數切了幾次；回 true = 跟 Windows 一樣切得了。
+    rd_toggle_caps_lock: () => { window.__DBKIT_RD_CAPS_TOGGLES__ = (window.__DBKIT_RD_CAPS_TOGGLES__ ?? 0) + 1; return true; },
     rd_clipboard_write: ({ text }) => { window.__DBKIT_RD_CLIP_WRITES__.push(text); return null; },
     // 錄影：記下開了哪些檔、每段多大；結束回傳路徑（一段都沒寫 → null，跟後端一樣）。
     rd_record_start: ({ name }) => {

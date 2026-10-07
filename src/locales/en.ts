@@ -4341,6 +4341,7 @@ const en: Catalog = {
   "無法開啟檔案傳輸": "Could not open file transfer",
   "關閉檔案傳輸": "Close file transfer",
   "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。": "Click Shift / Ctrl / Alt / Win to hold it; it releases after the next key.",
+  "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。CapsLock 跟本機連動：按這裡的 CapsLock 會切換本機的 CapsLock，對方跟著變。": "Click Shift / Ctrl / Alt / Win to hold it; it releases after the next key. CapsLock is linked to this computer: pressing CapsLock here toggles this computer's CapsLock, and the remote follows.",
   "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。打出來的大小寫跟著本機的 CapsLock；對方畫面的 CapsLock 指示燈跟本機不一樣時，按這裡的 CapsLock 校正。": "Click Shift / Ctrl / Alt / Win to hold it; it releases after the next key. Letter case follows this computer's CapsLock; if the remote CapsLock indicator doesn't match, press CapsLock here to fix it.",
   "作業系統密碼": "OS password",
   "對應（照按鍵位置，對方用自己的鍵盤配置）": "Map (by key position; the remote uses its own layout)",

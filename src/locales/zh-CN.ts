@@ -4307,6 +4307,7 @@ const zhCN: Catalog = {
   "無法開啟檔案傳輸": "无法打开文件传输",
   "關閉檔案傳輸": "关闭文件传输",
   "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。": "Shift / Ctrl / Alt / Win 按一下会按住，按了下一个键就放开。",
+  "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。CapsLock 跟本機連動：按這裡的 CapsLock 會切換本機的 CapsLock，對方跟著變。": "Shift / Ctrl / Alt / Win 按一下会按住，按了下一个键就放开。CapsLock 跟本机连动：按这里的 CapsLock 会切换本机的 CapsLock，对方跟着变。",
   "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。打出來的大小寫跟著本機的 CapsLock；對方畫面的 CapsLock 指示燈跟本機不一樣時，按這裡的 CapsLock 校正。": "Shift / Ctrl / Alt / Win 按一下会按住，按了下一个键就放开。打出来的大小写跟着本机的 CapsLock；对方画面的 CapsLock 指示灯跟本机不一样时，按这里的 CapsLock 校正。",
   "作業系統密碼": "操作系统密码",
   "對應（照按鍵位置，對方用自己的鍵盤配置）": "对应（照按键位置，对方用自己的键盘配置）",

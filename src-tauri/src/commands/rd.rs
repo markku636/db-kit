@@ -984,6 +984,28 @@ pub fn rd_clipboard_seq() -> Option<u32> {
     None
 }
 
+/// 切換本機的 CapsLock（RustDesk 虛擬鍵盤的 CapsLock 跟作業系統連動）：送一次 CapsLock 按下 / 放開給系統，
+/// 指示燈和之後打字的大小寫都跟著變；遠端畫面有焦點時，這顆鍵也照常經 keydown 轉給對方。
+/// 回傳有沒有切到：只有 Windows 做得到，其他平台 false（前端改成只切對方的）。
+#[tauri::command]
+pub fn rd_toggle_caps_lock() -> bool {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_CAPITAL,
+        };
+        let key = |flags: KEYBD_EVENT_FLAGS| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VK_CAPITAL, wScan: 0x3A, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+        };
+        let inputs = [key(KEYBD_EVENT_FLAGS(0)), key(KEYEVENTF_KEYUP)];
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+        sent as usize == inputs.len()
+    }
+    #[cfg(not(windows))]
+    false
+}
+
 /// 把遠端複製的文字寫進本機系統剪貼簿。
 #[tauri::command]
 pub fn rd_clipboard_write(text: String) -> AppResult<()> {

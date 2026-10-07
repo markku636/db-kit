@@ -1821,6 +1821,20 @@ const CASES = {
     await sleep(200);
     got = await since(n);
     check("換回「對應」：a 照位置送 0x1E", got.some((c) => c.t === "key" && c.scancode === 0x1e && c.down) && !got.some((c) => c.t === "char"));
+    // 注音 / 拼音輸入法吃掉單獨按的 Shift：畫面只收到 shiftKey = true 的 2 → 先補按 Shift（不然對方打出 2 不是 @）；
+    // Shift 的 keyup 也沒來 → 下一個沒按 Shift 的鍵之前放開。
+    n = (await cmds()).length;
+    await canvas.evaluate((el) => {
+      const fire = (type, key, code, shiftKey) => el.dispatchEvent(new KeyboardEvent(type, { key, code, shiftKey, bubbles: true, cancelable: true }));
+      fire("keydown", "@", "Digit2", true);
+      fire("keyup", "@", "Digit2", true);
+      fire("keydown", "a", "KeyA", false);
+      fire("keyup", "a", "KeyA", false);
+    });
+    await sleep(200);
+    got = (await since(n)).filter((c) => c.t === "key").map((c) => `${c.scancode.toString(16)}${c.down ? "↓" : "↑"}`);
+    check("Shift 的 keydown / keyup 被輸入法吃掉：照 shiftKey 補按、補放（2a↓ 3↓ 3↑ 2a↑ 1e↓ 1e↑）",
+      got.join(" ") === "2a↓ 3↓ 3↑ 2a↑ 1e↓ 1e↑", got.join(" "));
 
     // ---- 輸入作業系統密碼 ----
     const osInputs = () => page.evaluate(() => window.__DBKIT_RD_OS_INPUTS__);
@@ -1868,12 +1882,24 @@ const CASES = {
       && (await vkey(0x2a).getAttribute("data-vk-held")) === null, got.join(" "));
     check("點虛擬鍵盤不會搶走遠端畫面的焦點", await page.evaluate(() => document.activeElement?.tagName === "CANVAS"));
     n = (await cmds()).length;
-    await vkey(0x3a).click();
+    // Windows：CapsLock 跟本機連動——切換作業系統的 CapsLock（系統送出的那顆再經畫面轉給對方），不直接送掃描碼。
+    const osCaps = await page.evaluate(() => navigator.userAgent.includes("Windows"));
+    if (osCaps) {
+      check("CapsLock 關著：字母顯示小寫", (await vkey(0x1e).textContent()) === "a", await vkey(0x1e).textContent());
+      await vkey(0x3a).click();
+      await sleep(150);
+      check("按 CapsLock：切換本機的 CapsLock、這顆標亮、字母變大寫", (await page.evaluate(() => window.__DBKIT_RD_CAPS_TOGGLES__)) === 1
+        && (await vkey(0x3a).getAttribute("data-vk-held")) === "" && (await vkey(0x1e).textContent()) === "A",
+        `${await page.evaluate(() => window.__DBKIT_RD_CAPS_TOGGLES__)} ${await vkey(0x1e).textContent()}`);
+    } else {
+      await vkey(0x3a).click();
+    }
     await vkey(0xe05b).click();
     await vkey(0x1d).click();
     await sleep(150);
     got = (await since(n)).filter((c) => c.t === "key").map((c) => `${c.scancode.toString(16)}${c.down ? "↓" : "↑"}`);
-    check("CapsLock 送按下放開（校正對方指示燈）；Win、Ctrl 都按住", got.join(" ") === "3a↓ 3a↑ e05b↓ 1d↓", got.join(" "));
+    if (osCaps) check("虛擬鍵盤的 CapsLock 不直接送掃描碼；Win、Ctrl 都按住", got.join(" ") === "e05b↓ 1d↓", got.join(" "));
+    else check("CapsLock 送按下放開（校正對方指示燈）；Win、Ctrl 都按住", got.join(" ") === "3a↓ 3a↑ e05b↓ 1d↓", got.join(" "));
     await vk.getByRole("button", { name: "關閉虛擬鍵盤", exact: true }).click();
     await sleep(200);
     got = (await since(n)).filter((c) => c.t === "key").map((c) => `${c.scancode.toString(16)}${c.down ? "↓" : "↑"}`);

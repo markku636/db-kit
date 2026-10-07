@@ -20,6 +20,8 @@ export interface RdViewHandle {
   desktopSize(): { w: number; h: number };
   /** 後端鍵盤 hook 攔到的系統鍵（set-1 掃描碼；擴充鍵 OR 0xE000）。 */
   rawKey(scancode: number, down: boolean): void;
+  /** RustDesk 虛擬鍵盤的 CapsLock：切換本機（作業系統）的 CapsLock，對方跟著；`wasOn` = 按之前開著沒。 */
+  toggleCapsLock?(wasOn: boolean): void;
   /** 多螢幕：換成看這幾個螢幕（RustDesk；一個 = 切過去，多個 = 一起看）。 */
   showDisplays?(set: number[]): void;
   /** RustDesk 工具列的「動作」：`ctrl_alt_del` / `lock_screen` / `restart` / `refresh`。 */

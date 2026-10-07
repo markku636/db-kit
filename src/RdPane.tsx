@@ -53,6 +53,9 @@ function errCode(e: unknown): string | null {
   return null;
 }
 
+/** 後端切得了本機的 CapsLock（`rd_toggle_caps_lock`，只有 Windows）：RustDesk 虛擬鍵盤的 CapsLock 跟作業系統連動。 */
+const OS_CAPS_LOCK = navigator.userAgent.includes("Windows");
+
 /** Ctrl+Alt+Enter：切全螢幕（不送給遠端）。 */
 export function isFullscreenShortcut(e: { key: string; ctrlKey: boolean; altKey: boolean; metaKey?: boolean }): boolean {
   return e.key === "Enter" && e.ctrlKey && e.altKey;
@@ -517,6 +520,7 @@ export default function RdPane({ tab, active }: { tab: RdTab; active: boolean })
 
       {vkOpen && status === "connected" && !viewOnly && (
         <VirtualKeyboard rustdesk={protocol === "rustdesk"} onKey={(sc, down) => viewRef.current?.rawKey(sc, down)}
+          onCapsLock={protocol === "rustdesk" && OS_CAPS_LOCK ? (wasOn) => viewRef.current?.toggleCapsLock?.(wasOn) : undefined}
           onClose={() => { setVkOpen(false); viewRef.current?.focus(); }} />
       )}
 

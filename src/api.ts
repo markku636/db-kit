@@ -2392,6 +2392,8 @@ export const api = {
   rdClipboardRead: () => invoke<string | null>("rd_clipboard_read"),
   // 本機剪貼簿的變更序號（Windows；其他平台 null）：沒變就不必讀。
   rdClipboardSeq: () => invoke<number | null>("rd_clipboard_seq"),
+  // 切換本機的 CapsLock（RustDesk 虛擬鍵盤跟作業系統連動）；只有 Windows 切得了，其他平台回 false。
+  rdToggleCapsLock: () => invoke<boolean>("rd_toggle_caps_lock"),
   rdClipboardWrite: (text: string) => invoke<void>("rd_clipboard_write", { text }),
   // 錄影：MediaRecorder 每秒一段（raw body），後端依序寫進錄影資料夾的檔案；結束回傳路徑（沒錄到東西 → null）。
   rdRecordStart: (name: string) => invoke<{ id: string; path: string }>("rd_record_start", { name }),

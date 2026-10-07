@@ -1603,6 +1603,7 @@ const vi: Catalog = {
   "無法開啟檔案傳輸": "Không mở được truyền tệp",
   "關閉檔案傳輸": "Đóng truyền tệp",
   "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。": "Bấm Shift / Ctrl / Alt / Win để giữ; phím sẽ nhả sau phím tiếp theo.",
+  "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。CapsLock 跟本機連動：按這裡的 CapsLock 會切換本機的 CapsLock，對方跟著變。": "Bấm Shift / Ctrl / Alt / Win để giữ; phím sẽ nhả sau phím tiếp theo. CapsLock liên kết với máy này: bấm CapsLock ở đây sẽ bật / tắt CapsLock của máy này, bên kia đổi theo.",
   "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。打出來的大小寫跟著本機的 CapsLock；對方畫面的 CapsLock 指示燈跟本機不一樣時，按這裡的 CapsLock 校正。": "Bấm Shift / Ctrl / Alt / Win để giữ; phím sẽ nhả sau phím tiếp theo. Chữ hoa / thường theo CapsLock của máy này; nếu đèn CapsLock bên kia không khớp, bấm CapsLock ở đây để chỉnh.",
   "作業系統密碼": "Mật khẩu hệ điều hành",
   "對應（照按鍵位置，對方用自己的鍵盤配置）": "Ánh xạ (theo vị trí phím, máy bên kia dùng bố cục của nó)",

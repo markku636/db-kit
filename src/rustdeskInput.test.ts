@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { chordedChange, HeldKeys, lockModes, mouseModifiers, translatedChar } from "./rustdeskInput";
+import {
+  chordedChange, HeldKeys, isModifierScancode, lockModes, modifierFixes, mouseModifiers, translatedChar,
+} from "./rustdeskInput";
 
 describe("rustdeskInput", () => {
   it("帶本機的 CapsLock / NumLock 狀態", () => {
@@ -56,5 +58,35 @@ describe("rustdeskInput", () => {
     h.update(0xe038, true);
     h.clear();
     expect(h.releaseAll()).toEqual([]);
+  });
+
+  it("修飾鍵跟著按鍵事件的旗標：輸入法吃掉的 Shift 補按、沒收到放開的補放", () => {
+    const ev = (mods: { shift?: boolean; ctrl?: boolean; alt?: boolean; meta?: boolean } = {}) => ({
+      shiftKey: !!mods.shift, ctrlKey: !!mods.ctrl, altKey: !!mods.alt, metaKey: !!mods.meta,
+    });
+    const h = new HeldKeys();
+    // 注音輸入法吃掉 Shift 的 keydown：2 的事件 shiftKey 是 true → 先補按左 Shift
+    expect(modifierFixes(h, ev({ shift: true }))).toEqual([{ scancode: 0x2a, down: true }]);
+    h.update(0x2a, true);
+    expect(modifierFixes(h, ev({ shift: true }))).toEqual([]);
+    // Shift 的 keyup 也被吃掉：下一個鍵沒按 Shift → 放開
+    expect(modifierFixes(h, ev())).toEqual([{ scancode: 0x2a, down: false }]);
+    h.update(0x2a, false);
+    // 右 Shift 按著也算按著；放開時放開實際按著的那顆
+    h.update(0x36, true);
+    expect(modifierFixes(h, ev({ shift: true }))).toEqual([]);
+    expect(modifierFixes(h, ev())).toEqual([{ scancode: 0x36, down: false }]);
+    h.clear();
+    // AltGr（Windows 送 Ctrl + 右 Alt）：都按著就不動
+    h.update(0x1d, true);
+    h.update(0xe038, true);
+    expect(modifierFixes(h, ev({ ctrl: true, alt: true }))).toEqual([]);
+    h.clear();
+    expect(modifierFixes(h, ev({ ctrl: true, meta: true }))).toEqual([
+      { scancode: 0x1d, down: true },
+      { scancode: 0xe05b, down: true },
+    ]);
+    expect([0x2a, 0x36, 0x1d, 0xe01d, 0x38, 0xe038, 0xe05b, 0xe05c].every(isModifierScancode)).toBe(true);
+    expect([0x03, 0x1e, 0x3a, 0x1c].some(isModifierScancode)).toBe(false);
   });
 });

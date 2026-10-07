@@ -1611,6 +1611,7 @@ const ko: Catalog = {
   "無法開啟檔案傳輸": "파일 전송을 열 수 없습니다",
   "關閉檔案傳輸": "파일 전송 닫기",
   "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。": "Shift / Ctrl / Alt / Win은 한 번 누르면 눌린 상태가 되고, 다음 키를 누르면 떼어집니다.",
+  "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。CapsLock 跟本機連動：按這裡的 CapsLock 會切換本機的 CapsLock，對方跟著變。": "Shift / Ctrl / Alt / Win은 한 번 누르면 눌린 상태가 되고, 다음 키를 누르면 떼어집니다. CapsLock은 이 컴퓨터와 연동됩니다. 여기의 CapsLock을 누르면 이 컴퓨터의 CapsLock이 전환되고 상대도 따라 바뀝니다.",
   "Shift / Ctrl / Alt / Win 按一下會按住，按了下一個鍵就放開。打出來的大小寫跟著本機的 CapsLock；對方畫面的 CapsLock 指示燈跟本機不一樣時，按這裡的 CapsLock 校正。": "Shift / Ctrl / Alt / Win은 한 번 누르면 눌린 상태가 되고, 다음 키를 누르면 떼어집니다. 대소문자는 이 컴퓨터의 CapsLock을 따릅니다. 상대 화면의 CapsLock 표시가 다르면 여기의 CapsLock을 눌러 맞추세요.",
   "作業系統密碼": "OS 비밀번호",
   "對應（照按鍵位置，對方用自己的鍵盤配置）": "매핑 (키 위치대로, 상대는 자기 자판 배열 사용)",
