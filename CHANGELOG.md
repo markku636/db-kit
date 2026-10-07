@@ -1,3 +1,13 @@
+## v0.57.3
+
+**Linux AppImage 補上應用程式圖示 `.DirIcon`，讓 AppImage 目錄與 AppImage 管理工具能正確辨識。**
+
+修正：
+
+- **AppImage 缺 `.DirIcon`**：以前的 AppImage 裡，`.DirIcon` 與根目錄的 `.desktop` 都是指向打包機絕對路徑的連結，AppImage 在別台機器掛載後連結斷掉，AppImage 目錄（appimage.github.io）的收錄測試回報「.DirIcon is missing」，AppImage 管理工具也抓不到圖示。打包工具 Tauri CLI 從 2.11.3 升到 2.11.5（2.11.4 起改為相對連結），App 本身的程式沒有改動。
+
+> 驗證：Tauri CLI 2.11.4 的更新紀錄列有這項修正（tauri-apps/tauri#15596）；本機 `tauri --version` 為 2.11.5，在乾淨的 worktree 用 `npm ci` 從 lock 檔安裝成功。沒測到：這台 Windows 不能打包 Linux，新的 AppImage 裡有沒有 `.DirIcon` 要等這次 release 打包後由 AppImage 目錄的測試確認。
+
 ## v0.57.2
 
 **RustDesk 剪貼簿同步補齊：本機一複製就送到對方，不必先點回遠端畫面；也修好「再複製同一段文字卻沒送過去」。**
