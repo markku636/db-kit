@@ -30,3 +30,5 @@ src-tauri/dbkit_*.csv
 # Playwright MCP / UI 測試暫存產物
 .playwright-mcp/
 p3-connection-modal.png
+# Claude Code 執行時的鎖定檔（每個 session 自己產生）
+.claude/*.lock
