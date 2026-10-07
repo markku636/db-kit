@@ -708,6 +708,7 @@ pub fn run() {
             commands::rd::rd_clipboard_set,
             commands::rd::rd_keyboard_grab,
             commands::rd::rd_clipboard_read,
+            commands::rd::rd_clipboard_seq,
             commands::rd::rd_clipboard_write,
             commands::rd::rd_record_start,
             commands::rd::rd_record_write,

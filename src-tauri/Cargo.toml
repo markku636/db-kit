@@ -177,6 +177,8 @@ windows = { version = "0.61", optional = true, features = [
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_System_Threading",
+  # 遠端桌面的剪貼簿同步：看 GetClipboardSequenceNumber 知道本機剪貼簿變了，不必每次打開剪貼簿讀（見 commands/rd.rs）。
+  "Win32_System_DataExchange",
 ] }
 # IAsyncOperation。windows 0.61 配 windows-future 0.2（阻塞取值是 .get()；0.3 才改名 .join()）。
 windows-future = { version = "0.2", optional = true }

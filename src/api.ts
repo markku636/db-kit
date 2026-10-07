@@ -2390,6 +2390,8 @@ export const api = {
   rdClipboardSet: (connId: string, text: string) => invoke<void>("rd_clipboard_set", { connId, text }),
   // 本機系統剪貼簿（後端讀寫：webview 的 navigator.clipboard.readText 會跳權限詢問、搶走遠端畫面的焦點）。
   rdClipboardRead: () => invoke<string | null>("rd_clipboard_read"),
+  // 本機剪貼簿的變更序號（Windows；其他平台 null）：沒變就不必讀。
+  rdClipboardSeq: () => invoke<number | null>("rd_clipboard_seq"),
   rdClipboardWrite: (text: string) => invoke<void>("rd_clipboard_write", { text }),
   // 錄影：MediaRecorder 每秒一段（raw body），後端依序寫進錄影資料夾的檔案；結束回傳路徑（沒錄到東西 → null）。
   rdRecordStart: (name: string) => invoke<{ id: string; path: string }>("rd_record_start", { name }),

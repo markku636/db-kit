@@ -960,9 +960,28 @@ pub fn rd_clipboard_set(state: State<'_, AppState>, conn_id: String, text: Strin
 
 /// 讀本機系統剪貼簿的文字（沒有文字 / 讀不到 → null）。給遠端桌面的剪貼簿同步與「把剪貼簿文字送到遠端」用：
 /// 在後端讀，webview 的 `navigator.clipboard.readText()` 會跳權限詢問並搶走遠端畫面的焦點。
+/// 不在主執行緒讀：別的程式占著剪貼簿時 arboard 會重試，X11 也要等擁有者回應，介面不該跟著卡住。
 #[tauri::command]
-pub fn rd_clipboard_read() -> Option<String> {
-    arboard::Clipboard::new().ok()?.get_text().ok().filter(|t| !t.is_empty())
+pub async fn rd_clipboard_read() -> Option<String> {
+    tokio::task::spawn_blocking(|| arboard::Clipboard::new().ok()?.get_text().ok().filter(|t| !t.is_empty()))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// 本機剪貼簿的變更序號：RustDesk 的剪貼簿同步每半秒問一次，序號沒變就不必打開剪貼簿讀。
+/// Windows 是 `GetClipboardSequenceNumber`（不碰剪貼簿本身，不會擋到別的程式）；
+/// 其他平台沒有這麼便宜的作法 → null，前端改成每秒讀一次文字比對。
+#[tauri::command]
+pub fn rd_clipboard_seq() -> Option<u32> {
+    #[cfg(windows)]
+    {
+        // 0 = 這個視窗站讀不到剪貼簿（例如鎖定畫面）：當作沒有序號。
+        let n = unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() };
+        (n != 0).then_some(n)
+    }
+    #[cfg(not(windows))]
+    None
 }
 
 /// 把遠端複製的文字寫進本機系統剪貼簿。

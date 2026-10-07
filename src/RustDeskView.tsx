@@ -124,9 +124,10 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
   useEffect(() => { onStateRef.current = onState; }, [onState]);
   const optsRef = useRef({ viewOnly, clipboard, prefs });
   useEffect(() => { optsRef.current = { viewOnly, clipboard, prefs }; }, [viewOnly, clipboard, prefs]);
-  // 剪貼簿來回：記住最後從對方拿到的與最後送出的，免得同一段文字在兩邊來回彈。
-  const lastRemoteClipRef = useRef<string | null>(null);
-  const lastSentClipRef = useRef<string | null>(null);
+  // 剪貼簿來回：兩邊目前都是這段文字（最後送出的或最後從對方拿到的），本機剪貼簿跟它一樣就不送，
+  // 免得對方的文字寫進本機後又被送回去。只記一個：送過 A、對方複製了 B、本機再複製 A，A 還是要送。
+  const syncedClipRef = useRef<string | null>(null);
+  const clipReadingRef = useRef(false);
   /** 連線品質：這一秒收到幾張畫面、多少資料。 */
   const meterRef = useRef({ frames: 0, bytes: 0, codec: 0 });
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -153,17 +154,47 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
   /** 剪貼簿同步開著：主機設定開、不是只看不控、對方也允許。 */
   const clipboardOn = () => optsRef.current.clipboard && !optsRef.current.viewOnly && stRef.current.perms.clipboard;
 
-  /** 本機剪貼簿有新文字 → 送給對方（畫面拿到焦點時檢查，跟 RDP 一樣）。 */
-  const syncLocalClipboard = async () => {
-    if (!liveRef.current || !clipboardOn()) return;
+  /**
+   * 本機剪貼簿有新文字 → 送給對方（連上時、畫面拿到焦點時、下面的監看發現剪貼簿變了時）。
+   * 回傳這次有沒有讀（正在讀 / 讀失敗 → false，監看下一輪再試）。
+   */
+  const syncLocalClipboard = async (): Promise<boolean> => {
+    if (!liveRef.current || !clipboardOn() || clipReadingRef.current) return false;
+    clipReadingRef.current = true;
     try {
       // 後端讀系統剪貼簿（navigator.clipboard.readText 會跳權限詢問、搶走畫面焦點）。
       const text = await api.rdClipboardRead();
-      if (!text || text === lastRemoteClipRef.current || text === lastSentClipRef.current) return;
-      lastSentClipRef.current = text;
-      write({ t: "clipboard", text });
-    } catch { /* 讀不到剪貼簿：略過 */ }
+      if (text && text !== syncedClipRef.current && liveRef.current && clipboardOn()) {
+        syncedClipRef.current = text;
+        write({ t: "clipboard", text });
+      }
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clipReadingRef.current = false;
+    }
   };
+
+  // 本機一複製就送給對方（官方用戶端也是一變就送，不必先切回遠端畫面）。Windows 每半秒看一次剪貼簿的
+  // 變更序號，變了才讀；其他平台沒有序號，每秒讀一次文字比對。
+  useEffect(() => {
+    let alive = true;
+    let timer = 0;
+    let seq: number | null | undefined;
+    const tick = async () => {
+      if (liveRef.current && clipboardOn()) {
+        const s = await api.rdClipboardSeq().catch(() => null);
+        if ((s === null || s !== seq) && (await syncLocalClipboard())) seq = s;
+      }
+      if (alive) timer = window.setTimeout(() => void tick(), seq === null ? 1000 : 500);
+    };
+    void tick();
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** 請對方重送關鍵畫面（同一個螢幕一段時間內只問一次）。 */
   const askKeyframe = (display: number) => {
@@ -674,7 +705,7 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
     if (ev.type === "screenshot") return onScreenshot(ev);
     if (ev.type === "clipboard" && typeof ev.text === "string") {
       if (clipboardOn()) {
-        lastRemoteClipRef.current = ev.text;
+        syncedClipRef.current = ev.text;
         void api.rdClipboardWrite(ev.text).catch(() => undefined);
       }
       return;
@@ -700,8 +731,7 @@ const RustDeskView = forwardRef<RdViewHandle, RustDeskViewProps>(function RustDe
       keyAskRef.current.clear();
       held.clear();
       moveRef.current.sent = "";
-      lastRemoteClipRef.current = null;
-      lastSentClipRef.current = null;
+      syncedClipRef.current = null;
       // 對方重連會重送游標圖；等著的截圖不會回來了。
       cursorsRef.current.clear();
       cursorPngRef.current.clear();

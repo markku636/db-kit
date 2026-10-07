@@ -1684,6 +1684,39 @@ const CASES = {
     await page.getByRole("button", { name: "把剪貼簿文字送到遠端", exact: true }).click();
     await sleep(300);
     check("「把剪貼簿文字送到遠端」→ 整段打過去（type_text）", (await lastCmd("type_text"))?.text === "本機複製的文字");
+    // 本機一複製就送（跟官方用戶端一樣，不必先回到遠端畫面）：Windows 看剪貼簿變更序號，沒變就不讀剪貼簿。
+    const clipCmds = async () => (await cmds()).filter((c) => c.t === "clipboard").map((c) => c.text);
+    const reads = () => page.evaluate(() => window.__DBKIT_RD_CLIP_READS__ ?? 0);
+    const copyLocal = (text) => page.evaluate((s) => {
+      window.__DBKIT_RD_LOCAL_CLIP__ = s;
+      window.__DBKIT_RD_CLIP_SEQ__ = (window.__DBKIT_RD_CLIP_SEQ__ ?? 100) + 1;
+    }, text);
+    await page.evaluate(() => /** @type {HTMLElement | null} */ (document.activeElement)?.blur());
+    await copyLocal("在別的程式複製");
+    await sleep(1200);
+    check("本機一複製就送給對方（畫面不必重新拿到焦點）", (await clipCmds()).at(-1) === "在別的程式複製", JSON.stringify(await clipCmds()));
+    const reads0 = await reads();
+    await sleep(1500);
+    check("剪貼簿序號沒變 → 不去讀剪貼簿", (await reads()) === reads0, `${reads0} → ${await reads()}`);
+    await push({ type: "clipboard", text: "對方又複製了" });
+    // 寫進本機剪貼簿 = 本機剪貼簿也變了（序號跳號）：不能再送回對方。
+    await page.evaluate(() => { window.__DBKIT_RD_LOCAL_CLIP__ = "對方又複製了"; window.__DBKIT_RD_CLIP_SEQ__++; });
+    await sleep(1200);
+    check("對方的文字寫進本機後不會被送回對方", !(await clipCmds()).includes("對方又複製了"), JSON.stringify(await clipCmds()));
+    await copyLocal("在別的程式複製");
+    await sleep(1200);
+    check("對方複製過別的之後，本機再複製同一段還是會送", (await clipCmds()).filter((s) => s === "在別的程式複製").length === 2,
+      JSON.stringify(await clipCmds()));
+    await menu("display").click();
+    await opt("clipboard").click();
+    await sleep(300);
+    await copyLocal("關掉時複製的");
+    await sleep(1200);
+    check("關掉同步剪貼簿 → 本機複製不送", !(await clipCmds()).includes("關掉時複製的"), JSON.stringify(await clipCmds()));
+    await menu("display").click();
+    await opt("clipboard").click();
+    await sleep(1200);
+    check("再打開 → 送出目前的本機剪貼簿", (await clipCmds()).at(-1) === "關掉時複製的", JSON.stringify(await clipCmds()));
 
     // ---- 聊天 ----
     await push({ type: "chat", text: "你好，我是對方" });
