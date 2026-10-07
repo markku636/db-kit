@@ -1,3 +1,17 @@
+## v0.57.4
+
+**RustDesk 在對方的登入 / 鎖定畫面打得出 `@` 這類要按 Shift 的字；虛擬鍵盤的 CapsLock 改成跟作業系統連動。**
+
+修正：
+
+- **Shift+2 在對方變成 `2`、Shift+A 變成 `a`**：本機用微軟注音 / 拼音輸入法時，單按 Shift 是它切中英的鍵，遠端畫面收不到 Shift 的按下 / 放開，只收到 2；「對應」鍵盤模式只照按鍵位置送，對方就打出 2。現在每送一個一般鍵之前，先讓對方按著的 Shift / Ctrl / Alt / Win 跟這個鍵的狀態一致：少按的補按、該放開卻沒收到放開的補放。（官方用戶端從系統層收鍵，不經過輸入法，所以沒有這個問題。）
+
+改進：
+
+- **虛擬鍵盤的 CapsLock 跟作業系統連動（Windows）**：以前按虛擬鍵盤的 CapsLock 只切對方的，下一個字母又被本機的 CapsLock 狀態蓋回去，大小寫看起來沒變。現在按它是切換本機 Windows 的 CapsLock，對方跟著變；CapsLock 開著時這顆標亮，字母照 CapsLock 與 Shift 顯示大寫 / 小寫，用實體鍵盤切換也會跟上。macOS / Linux 維持只切對方的。
+
+> 驗證：單元測試新增「Shift 被輸入法吃掉時補按 / 補放、左右 Shift、AltGr 不動」，6 項全過；介面測試 rd-rustdesk-keyboard 新增 4 項（模擬 Shift 的按下 / 放開被吃掉時送出 `Shift↓ 2↓ 2↑ Shift↑ A↓ A↑`、CapsLock 關著顯示小寫、按 CapsLock 呼叫切換本機的 CapsLock 並標亮變大寫、不再直接送 CapsLock 掃描碼），遠端桌面相關情境 10 個 175 項全過；tsc、eslint 通過；新的 Windows 指令用同版本的 windows crate 單獨編譯通過。對方那邊的處理照官方伺服端原始碼核對過（Ubuntu Wayland 的 uinput 也正確處理 Shift），Docker 裡的 RustDesk 對方原本就打得出 `@`。沒測到：真的在注音輸入法下重現 Shift 被吃掉（推論自輸入法行為，要等這版在實機上確認），以及打包後實際切換 CapsLock（沒在這台執行，免得動到使用者的鍵盤狀態）。
+
 ## v0.57.3
 
 **Linux AppImage 補上應用程式圖示 `.DirIcon`，讓 AppImage 目錄與 AppImage 管理工具能正確辨識。**
