@@ -80,6 +80,10 @@ export function installShim(fx) {
   window.__DBKIT_RD_CLIPBOARD__ = [];
   window.__DBKIT_RD_GRAB__ = [];
   window.__DBKIT_RD_CLIP_WRITES__ = [];
+  // 系統剪貼簿（後端讀寫）：__DBKIT_CLIP__ 是目前的內容，__DBKIT_CLIP_WRITES__ 記每次寫入；
+  // 情境設 __DBKIT_CLIP_FAIL__ 模擬讀寫失敗（例如沒有圖形工作階段）。
+  window.__DBKIT_CLIP__ = "";
+  window.__DBKIT_CLIP_WRITES__ = [];
   window.__DBKIT_KEY_IMPORTS__ = [];
   const one = (columns, cells) => ({ columns, rows: [cells], rows_affected: 0 });
 
@@ -160,17 +164,34 @@ export function installShim(fx) {
     clear_cache: () => null,
     save_connection: ({ config }) => { (window.__DBKIT_CONN_SAVES__ ||= []).push(config); return null; },
     open_external: ({ url }) => { window.__DBKIT_EXTERNAL_OPENS__.push(url); return null; },
+    clipboard_read_text: () => {
+      if (window.__DBKIT_CLIP_FAIL__) return Promise.reject({ kind: "clipboard", code: "ERR_CLIPBOARD", message: "無法讀取剪貼簿：X11 server connection timed out" });
+      return window.__DBKIT_CLIP__ ?? "";
+    },
+    clipboard_write_text: ({ text }) => {
+      if (window.__DBKIT_CLIP_FAIL__) return Promise.reject({ kind: "clipboard", code: "ERR_CLIPBOARD", message: "無法寫入剪貼簿：X11 server connection timed out" });
+      window.__DBKIT_CLIP_WRITES__.push(text);
+      window.__DBKIT_CLIP__ = text;
+      return null;
+    },
     // 自動更新：情境用 window.__DBKIT_UPDATE_SUPPORT__ 指定安裝方式（預設 null = 不支援自動安裝）；
-    // 安裝時照真後端送兩則下載進度，再回成功（真後端此時已啟動安裝程式、準備關閉 App）。
+    // 安裝時照真後端送兩則下載進度，再回成功（Windows 真後端此時已啟動安裝程式、準備關閉 App）。
+    // Linux（appimage / deb / rpm）下載完還會送一則 installing（.deb / .rpm 這時在等使用者輸入密碼），裝好才回成功。
     update_support: () => window.__DBKIT_UPDATE_SUPPORT__ ?? null,
     update_install: ({ version, onProgress }) => {
       window.__DBKIT_UPDATE_INSTALLS__.push(version);
       if (window.__DBKIT_UPDATE_FAIL__) return Promise.reject({ kind: "update", code: "ERR_UPDATE", message: window.__DBKIT_UPDATE_FAIL__ });
       const cb = callbacks.get(onProgress?.id);
       const total = 37 * 1024 * 1024;
-      cb?.({ message: { downloaded: 0, total }, index: 0 });
-      cb?.({ message: { downloaded: total / 2, total }, index: 1 });
-      return new Promise((resolve) => setTimeout(() => { cb?.({ message: { downloaded: total, total }, index: 2 }); resolve(null); }, 300));
+      const selfInstall = ["appimage", "deb", "rpm"].includes(window.__DBKIT_UPDATE_SUPPORT__);
+      cb?.({ message: { downloaded: 0, total, installing: false }, index: 0 });
+      cb?.({ message: { downloaded: total / 2, total, installing: false }, index: 1 });
+      return new Promise((resolve) => setTimeout(() => {
+        cb?.({ message: { downloaded: total, total, installing: false }, index: 2 });
+        if (!selfInstall) { resolve(null); return; }
+        cb?.({ message: { downloaded: total, total, installing: true }, index: 3 });
+        setTimeout(() => resolve(null), 800);
+      }, 300));
     },
     claude_detect: () => ({ installed: true, version: "2.1.0", logged_in: true, path: "/usr/local/bin/claude" }),
     pool_status: () => ({ size: 3, idle: 2, in_use: 1 }),

@@ -1,5 +1,7 @@
 // AI 資源庫（人設 / 技能 / 提示範本）的 command。
 pub mod ai_library;
+// 本機系統剪貼簿的文字讀寫（SSH 終端機、各處的「複製」、遠端桌面的剪貼簿同步共用）。
+pub mod clipboard;
 // 檔案 / 資料夾 / 二進位比對的 command。
 pub mod filecmp;
 // MCP 設定（AI 用戶端設定的產生 / 寫入、背景 HTTP 伺服器）的 command。

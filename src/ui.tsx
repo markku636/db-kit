@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { t, useT } from "./i18n";
+import { writeClipboardText } from "./clipboard";
 
 // 對話框共用：按 Esc 關閉（onClose 以 ref 保持穩定，listener 只掛一次）。
 export function useEscToClose(onClose: () => void) {
@@ -163,16 +164,14 @@ export function uiPrompt(
 // ---- 剪貼簿 ----
 
 /**
- * 複製文字到系統剪貼簿。優先用 navigator.clipboard（Tauri webview 在安全環境支援），
- * 失敗則退回隱藏 textarea + execCommand。成功 / 失敗都跳 toast 回饋。
+ * 複製文字到系統剪貼簿。走 writeClipboardText（後端寫，不行再用 navigator.clipboard），
+ * 都失敗則退回隱藏 textarea + execCommand。成功 / 失敗都跳 toast 回饋。
  */
 export async function copyToClipboard(text: string, label = t("已複製")): Promise<boolean> {
   try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      toast.success(label);
-      return true;
-    }
+    await writeClipboardText(text);
+    toast.success(label);
+    return true;
   } catch {
     /* 落到下方 fallback */
   }

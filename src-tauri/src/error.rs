@@ -77,6 +77,10 @@ pub enum AppError {
     #[error("update failed: {0}")]
     Update(String),
 
+    /// 讀寫本機系統剪貼簿失敗。detail 已是完整的使用者可見句子。
+    #[error("clipboard error: {0}")]
+    Clipboard(String),
+
     /// 查詢超過全域逾時（毫秒）。注意：伺服器端查詢可能仍在執行，
     /// 前端錯誤文案應引導使用者以行程清單（ProcessList）手動 KILL。
     #[error("query timed out after {0} ms")]
@@ -112,6 +116,7 @@ impl AppError {
             AppError::CompareConflict(_) => "compare_conflict",
             AppError::CompareCancelled => "compare_cancelled",
             AppError::Update(_) => "update",
+            AppError::Clipboard(_) => "clipboard",
             AppError::Timeout(_) => "timeout",
             AppError::NeedsConfirm(_) => "needs_confirm",
         }
@@ -139,6 +144,7 @@ impl AppError {
             AppError::CompareConflict(_) => "ERR_COMPARE_CONFLICT",
             AppError::CompareCancelled => "ERR_COMPARE_CANCELLED",
             AppError::Update(_) => "ERR_UPDATE",
+            AppError::Clipboard(_) => "ERR_CLIPBOARD",
             AppError::Timeout(_) => "ERR_TIMEOUT",
             AppError::NeedsConfirm(_) => "ERR_NEEDS_CONFIRM",
         }
@@ -167,6 +173,7 @@ impl AppError {
             AppError::CompareConflict(s) => s.clone(),
             AppError::CompareCancelled => t!("已取消比對").to_string(),
             AppError::Update(s) => tf!("更新失敗：{detail}", detail = s),
+            AppError::Clipboard(s) => s.clone(),
             AppError::Timeout(ms) => tf!(
                 "查詢逾時（{ms} ms）；伺服器端查詢可能仍在執行，可從行程清單手動終止",
                 ms = ms

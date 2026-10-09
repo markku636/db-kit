@@ -667,6 +667,8 @@ pub fn run() {
             commands::ssh::ssh_sftp_cancel,
             commands::ssh::ssh_sftp_window_open,
             commands::ssh::ssh_sftp_window_close,
+            commands::clipboard::clipboard_read_text,
+            commands::clipboard::clipboard_write_text,
             commands::update::update_support,
             commands::update::update_install,
             commands::filecmp::fcmp_scan,
@@ -776,6 +778,8 @@ pub fn run() {
             if let RunEvent::Exit = event {
                 // 背景的 `dbk mcp --http` 是獨立行程，不關掉會一直佔著埠。
                 commands::mcp::shutdown_http();
+                // Linux：App 複製的文字交給剪貼簿管理員，關掉後還貼得到。
+                commands::clipboard::release();
                 let state = app_handle.state::<AppState>();
                 tauri::async_runtime::block_on(async {
                     state.manager.close_all().await;

@@ -33,6 +33,7 @@ import { detectImage, hexDump, parseHexValue, parseStructuredJson } from "./cell
 type CellView = "text" | "tree" | "hex" | "image";
 import { AlterOp, isProdConn } from "./api";
 import { t, useT } from "./i18n";
+import { readClipboardText } from "./clipboard";
 
 // 條件掛載的對話框 / 面板改 lazy（code splitting）：開啟時才抓 chunk，首包不含其程式碼。
 const ExportDialog = lazyOverlay(() => import("./ExportDialog"));
@@ -1198,7 +1199,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         const baseC = c;
         const startPos = pos; // 選取格在可見欄中的序位
         const rng = rangeEnd; // 框選範圍（用於單值填滿整塊）
-        navigator.clipboard.readText()
+        readClipboardText()
           .then((txt) => {
             if (!txt) return;
             const grid = parseClipboardGrid(txt);

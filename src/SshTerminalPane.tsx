@@ -24,6 +24,7 @@ import { sessionLabel, useSshSessions } from "./sshSessions";
 import { xtermThemeFor } from "./sshTerminalTheme";
 import { guessOs, guessShell } from "./sshCapture";
 import { b64ToBytes, binaryToB64, utf8ToB64 } from "./sshBytes";
+import { readClipboardText, writeClipboardText } from "./clipboard";
 import { isAppReserved } from "./ui/keyScope";
 import { SshAuthPromptDialog, SshHostKeyDialog } from "./SshPrompts";
 import SshComposeBar from "./SshComposeBar";
@@ -279,7 +280,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
       return true;
     });
     term.onSelectionChange(() => {
-      if (prefsRef.current.copyOnSelect && term.hasSelection()) void navigator.clipboard?.writeText(term.getSelection()).catch(() => undefined);
+      if (prefsRef.current.copyOnSelect && term.hasSelection()) void writeClipboardText(term.getSelection()).catch(() => undefined);
     });
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
@@ -479,16 +480,16 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     }
   };
 
-  // ---- 剪貼簿 ----
+  // ---- 剪貼簿（走後端讀寫，見 clipboard.ts：Linux / macOS 的 webview 讀不到、寫不進）----
   const copySelection = () => {
     const term = termRef.current;
     if (!term?.hasSelection()) return;
-    void navigator.clipboard?.writeText(term.getSelection()).catch(() => undefined);
+    void writeClipboardText(term.getSelection()).catch(() => toast.error(t("複製失敗")));
     term.clearSelection();
   };
   const pasteFromClipboard = async () => {
     let text = "";
-    try { text = await navigator.clipboard.readText(); } catch { toast.error(t("無法讀取剪貼簿")); return; }
+    try { text = await readClipboardText(); } catch { toast.error(t("無法讀取剪貼簿")); return; }
     if (!text) return;
     if (pasteRunsImmediately(text) && prefsRef.current.warnMultilinePaste && !(await confirmMultilinePaste(text))) return;
     termRef.current?.paste(text);

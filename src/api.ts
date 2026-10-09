@@ -32,12 +32,16 @@ export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sql
 
 export type SshAuthMethod = "password" | "key";
 
-/** 這份 App 的安裝方式（自動更新下載對應的安裝檔）：NSIS（目前使用者）/ MSI（Program Files）。 */
-export type UpdateInstallKind = "nsis" | "msi";
-/** 下載安裝檔的進度（total 0 = 不知道大小）。 */
+/**
+ * 這份 App 的安裝方式（自動更新下載對應的安裝檔）：Windows 的 NSIS（目前使用者）/ MSI（Program Files）、
+ * Linux 的 AppImage / .deb / .rpm。
+ */
+export type UpdateInstallKind = "nsis" | "msi" | "appimage" | "deb" | "rpm";
+/** 下載安裝檔的進度（total 0 = 不知道大小）。installing = 下載完、正在安裝（.deb / .rpm 會跳出輸入密碼的視窗）。 */
 export interface UpdateProgress {
   downloaded: number;
   total: number;
+  installing?: boolean;
 }
 
 export interface ConnectionConfig {
@@ -2227,8 +2231,12 @@ export const api = {
   openAgentWorkspace: () => invoke<void>("open_agent_workspace"),
   openExternal: (url: string) => invoke<void>("open_external", { url }),
 
-  // ---- 自動更新（後端從 GitHub Release 下載安裝檔、驗 SHA-256、啟動安裝程式後關閉 App）----
-  // null = 這份 App 不支援自動安裝（macOS / Linux / 開發版 / 免安裝版）：改開 Release 頁面。
+  // ---- 系統剪貼簿（後端讀寫；webview 的 navigator.clipboard 在 Linux / macOS 不可靠，見 clipboard.ts）----
+  clipboardReadText: () => invoke<string>("clipboard_read_text"),
+  clipboardWriteText: (text: string) => invoke<void>("clipboard_write_text", { text }),
+
+  // ---- 自動更新（後端從 GitHub Release 下載安裝檔、驗 SHA-256、安裝後重新開啟 App）----
+  // null = 這份 App 不支援自動安裝（macOS / 開發版 / 免安裝版）：改開 Release 頁面。
   updateSupport: () => invoke<UpdateInstallKind | null>("update_support"),
   updateInstall: (version: string, onProgress: Channel<UpdateProgress>) =>
     invoke<void>("update_install", { version, onProgress }),

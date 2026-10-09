@@ -963,7 +963,7 @@ pub fn rd_clipboard_set(state: State<'_, AppState>, conn_id: String, text: Strin
 /// 不在主執行緒讀：別的程式占著剪貼簿時 arboard 會重試，X11 也要等擁有者回應，介面不該跟著卡住。
 #[tauri::command]
 pub async fn rd_clipboard_read() -> Option<String> {
-    tokio::task::spawn_blocking(|| arboard::Clipboard::new().ok()?.get_text().ok().filter(|t| !t.is_empty()))
+    tokio::task::spawn_blocking(|| super::clipboard::read_text().ok().filter(|t| !t.is_empty()))
         .await
         .ok()
         .flatten()
@@ -1009,9 +1009,7 @@ pub fn rd_toggle_caps_lock() -> bool {
 /// 把遠端複製的文字寫進本機系統剪貼簿。
 #[tauri::command]
 pub fn rd_clipboard_write(text: String) -> AppResult<()> {
-    arboard::Clipboard::new()
-        .and_then(|mut c| c.set_text(text))
-        .map_err(|e| AppError::Rd(tf!("無法寫入剪貼簿：{e}", e = e)))
+    super::clipboard::write_text(text)
 }
 
 // ---- 錄影：前端 MediaRecorder 錄分頁畫面，每秒交一段；檔案端見 `rd::recording` ----

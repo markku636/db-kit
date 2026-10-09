@@ -118,6 +118,7 @@ const CASE_FX = {
   "export-dialog-by-group": { CONNECTIONS: EXPORT_CONNECTIONS, CONN_GROUPS: EXPORT_GROUPS, RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "sidebar-scroll-reaches-last": { CONNECTIONS: MANY_CONNECTIONS, CONN_GROUPS: MANY_GROUPS },
   "ssh-terminal": { STORAGE_SEED: SSH_STORAGE_SEED },
+  "ssh-terminal-clipboard": { STORAGE_SEED: SSH_STORAGE_SEED },
   "ssh-ai-suggest": { STORAGE_SEED: SSH_STORAGE_SEED },
   "sftp-edit-and-chmod": { STORAGE_SEED: SSH_STORAGE_SEED },
   "sftp-multi-select": { STORAGE_SEED: SSH_STORAGE_SEED },
@@ -175,6 +176,7 @@ const CASE_FX = {
   "rd-rustdesk-files": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "rd-rustdesk-display": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "update-dialog-install": { GITHUB_RELEASE: FX_RELEASE },
+  "update-dialog-linux": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-manual": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-error": { GITHUB_RELEASE: FX_RELEASE },
   "update-auto-popup": { GITHUB_RELEASE: FX_RELEASE },
@@ -600,6 +602,56 @@ const CASES = {
     await page.getByText("推送時自動掃描", { exact: true }).first().waitFor({ timeout: 6000 }).catch(() => {});
     check("專案資訊面板", (await page.getByText("推送時自動掃描", { exact: true }).count()) > 0 && (await appText(page)).includes("10.0 GB"));
   },
+  // SSH 終端機的剪貼簿在 Ubuntu（WebKitGTK）：webview 沒有 navigator.clipboard（或讀取一律被拒），
+  // Ctrl+Shift+V / Ctrl+Shift+C / 右鍵選單都要改走後端讀寫，貼得進去、複製得出來。
+  async "ssh-terminal-clipboard"(page) {
+    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true }));
+    await openSshWeb01(page);
+    const ta = page.locator(".xterm-helper-textarea").first();
+    await page.evaluate(() => { window.__DBKIT_CLIP__ = "echo from-clipboard"; });
+    await ta.focus();
+    await page.keyboard.press("Control+Shift+V");
+    await page.waitForFunction(() => document.querySelector(".xterm-rows")?.innerText.includes("echo from-clipboard"), null, { timeout: 3000 }).catch(() => {});
+    check("Ctrl+Shift+V 貼上後端讀到的剪貼簿", (await termText(page)).includes("echo from-clipboard"), (await termText(page)).slice(-200));
+    check("沒有跳「無法讀取剪貼簿」", (await page.getByText("無法讀取剪貼簿", { exact: true }).count()) === 0);
+
+    // 多行內容照樣先確認（貼上會逐行執行）。
+    await page.evaluate(() => { window.__DBKIT_CLIP__ = "pwd\nls"; });
+    await ta.focus();
+    await page.keyboard.press("Control+Shift+V");
+    await sleep(300);
+    check("Ctrl+Shift+V 多行內容先跳確認框", (await page.getByText(/貼上內容含 2 行/).count()) > 0);
+    await page.getByRole("button", { name: "取消", exact: true }).last().click();
+    await sleep(200);
+
+    // 右鍵選單「全選」→ Ctrl+Shift+C：選取的文字寫進後端剪貼簿。
+    const screen = page.locator(".xterm-screen").first();
+    await screen.click({ button: "right", modifiers: ["Shift"] });
+    await page.getByRole("button", { name: "全選", exact: true }).click();
+    await page.evaluate(() => { window.__DBKIT_CLIP_WRITES__ = []; });
+    await ta.focus();
+    await page.keyboard.press("Control+Shift+C");
+    await sleep(300);
+    const writes = await page.evaluate(() => window.__DBKIT_CLIP_WRITES__);
+    check("Ctrl+Shift+C 把選取的文字寫進剪貼簿", writes.length === 1 && writes[0].includes("deploy@web-01") && writes[0].includes("echo from-clipboard"),
+      JSON.stringify(writes).slice(0, 200));
+
+    // 右鍵選單「貼上」也走後端。
+    await page.evaluate(() => { window.__DBKIT_CLIP__ = "whoami"; });
+    await screen.click({ button: "right", modifiers: ["Shift"] });
+    await page.getByRole("button", { name: "貼上", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector(".xterm-rows")?.innerText.includes("whoami"), null, { timeout: 3000 }).catch(() => {});
+    check("右鍵選單「貼上」貼上後端讀到的剪貼簿", (await termText(page)).includes("whoami"), (await termText(page)).slice(-200));
+
+    // 後端也讀不到（例如沒有圖形工作階段）：說清楚讀不到，不是安靜地什麼都沒發生。
+    await page.evaluate(() => { window.__DBKIT_CLIP_FAIL__ = true; });
+    await ta.focus();
+    await page.keyboard.press("Control+Shift+V");
+    await page.getByText("無法讀取剪貼簿", { exact: true }).first().waitFor({ timeout: 3000 }).catch(() => {});
+    check("讀不到剪貼簿時提示", (await page.getByText("無法讀取剪貼簿", { exact: true }).count()) > 0);
+    check("沒有未實作的 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0), await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
+  },
+
   // SSH 終端機：側欄「SSH 主機」雙擊開分頁 → xterm 印 banner → 鍵入有回聲 → 指令列送 ls → SFTP 列出檔案 → 分頁右鍵。
   async "ssh-terminal"(page) {
     check("側欄有「SSH 主機」區塊", (await page.locator("[data-ssh-host-tree]").count()) > 0);
@@ -2303,7 +2355,33 @@ const CASES = {
     check("沒有未實作的 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0), await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 
-  // 不支援自動安裝（macOS / Linux / 免安裝版）：只給「前往下載」，開的是 Release 頁面；失敗訊息看得到。
+  // 自動更新（Ubuntu 用 .deb 裝的）：提醒會要求輸入系統管理員密碼 → 下載 → 等安裝（輸入密碼）時顯示「正在安裝」
+  // → 裝好告知即將重新開啟（不是「已啟動安裝程式」）。
+  async "update-dialog-linux"(page) {
+    await page.evaluate(() => { window.__DBKIT_UPDATE_SUPPORT__ = "deb"; });
+    await page.getByRole("button", { name: "關於", exact: true }).click();
+    await page.getByRole("button", { name: "檢查更新", exact: true }).click();
+    const found = page.getByText("有新版 v9.9.9，點擊更新", { exact: true });
+    await found.waitFor({ timeout: 5000 }).catch(() => {});
+    await found.click();
+    const hint = page.locator("[data-update-hint]");
+    await hint.waitFor({ timeout: 5000 }).catch(() => {});
+    const hintText = (await hint.textContent().catch(() => "")) ?? "";
+    check(".deb：先說明會要求輸入系統管理員密碼、裝好會重新開啟", hintText.includes("系統管理員密碼") && hintText.includes("重新開啟") && !hintText.includes("關閉"), hintText);
+    check("有「立即更新」、沒有「無法自動安裝」", (await page.locator("[data-update-install]").count()) === 1 && (await page.locator("[data-update-manual]").count()) === 0);
+    await page.locator("[data-update-install]").click();
+    const installing = page.locator("[data-update-installing]");
+    await installing.waitFor({ timeout: 5000 }).catch(() => {});
+    check("下載完、等輸入密碼時顯示正在安裝", ((await installing.textContent().catch(() => "")) ?? "").includes("系統管理員密碼"));
+    check("安裝中不能按「稍後」", await page.getByRole("button", { name: "稍後", exact: true }).isDisabled().catch(() => false));
+    const done = page.locator("[data-update-launching]");
+    await done.waitFor({ timeout: 5000 }).catch(() => {});
+    const doneText = (await done.textContent().catch(() => "")) ?? "";
+    check("裝好告知更新完成、即將重新開啟", doneText.includes("更新完成") && doneText.includes("重新開啟") && !doneText.includes("安裝程式"), doneText);
+    check("後端拿到的是新版本號", await page.evaluate(() => JSON.stringify(window.__DBKIT_UPDATE_INSTALLS__) === "[\"9.9.9\"]"));
+  },
+
+  // 不支援自動安裝（macOS / 開發版 / 免安裝版）：只給「前往下載」，開的是 Release 頁面；失敗訊息看得到。
   async "update-dialog-manual"(page) {
     await page.getByRole("button", { name: "關於", exact: true }).click();
     await page.getByRole("button", { name: "檢查更新", exact: true }).click();

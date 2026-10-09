@@ -9,14 +9,19 @@ import { useT } from "./i18n";
 import { APP_NAME } from "./brand";
 
 // 有新版時的更新對話框：更新內容（Release 說明）+「立即更新」。後端 update_install 從 GitHub Release
-// 下載這台電腦用的安裝檔、驗 SHA-256、啟動安裝程式後關閉 App，裝完由安裝程式重新開啟。
-// 不支援自動安裝的（macOS / Linux / 開發版 / 免安裝版）只給「前往下載」。
+// 下載這台電腦用的安裝檔、驗 SHA-256 後安裝：Windows 啟動安裝程式後關閉 App、裝完由安裝程式重新開啟；
+// Linux（AppImage / .deb / .rpm）在後端裝好，再由 App 自己重新啟動。
+// 不支援自動安裝的（macOS / 開發版 / 免安裝版）只給「前往下載」。
 
 type Phase =
   | { kind: "idle" }
   | { kind: "downloading"; downloaded: number; total: number }
+  | { kind: "installing" }
   | { kind: "launching" }
   | { kind: "failed"; message: string };
+
+/** Linux 的安裝方式：後端自己裝好再重新啟動（不是交給安裝程式）。 */
+const SELF_INSTALL = new Set<UpdateInstallKind>(["appimage", "deb", "rpm"]);
 
 function mb(n: number): string {
   return (n / 1024 / 1024).toFixed(1);
@@ -42,7 +47,8 @@ export default function UpdateDialog() {
   }, []);
   if (!info) return null;
 
-  const busy = phase.kind === "downloading" || phase.kind === "launching";
+  const busy = phase.kind === "downloading" || phase.kind === "installing" || phase.kind === "launching";
+  const selfInstall = !!support && SELF_INSTALL.has(support);
   // 下載 / 啟動安裝程式時不能關（關了下載也還在跑，裝的時候 App 會突然關掉）。
   const later = () => {
     if (busy) return;
@@ -52,7 +58,11 @@ export default function UpdateDialog() {
   const install = async () => {
     setPhase({ kind: "downloading", downloaded: 0, total: 0 });
     const ch = new Channel<UpdateProgress>();
-    ch.onmessage = (p) => setPhase((cur) => (cur.kind === "downloading" ? { kind: "downloading", ...p } : cur));
+    ch.onmessage = (p) =>
+      setPhase((cur) => {
+        if (cur.kind !== "downloading") return cur;
+        return p.installing ? { kind: "installing" } : { kind: "downloading", downloaded: p.downloaded, total: p.total };
+      });
     try {
       await api.updateInstall(info.version, ch);
       setPhase({ kind: "launching" });
@@ -98,12 +108,15 @@ export default function UpdateDialog() {
       ) : null}
       {support === null && (
         <div className="text-sm text-fg/60" data-update-manual="">
-          {t("這個版本的 {app} 無法自動安裝更新（macOS / Linux 或免安裝版），請下載新版安裝檔。", { app: APP_NAME })}
+          {t("這個版本的 {app} 無法自動安裝更新（macOS、開發版或免安裝版），請下載新版安裝檔。", { app: APP_NAME })}
         </div>
       )}
       {support && phase.kind === "idle" && (
-        <div className="text-xs text-fg/50">
-          {t("按「立即更新」會下載安裝檔並確認檔案完整，接著關閉 {app} 進行安裝，裝完自動重新開啟。", { app: APP_NAME })}
+        <div className="text-xs text-fg/50" data-update-hint="">
+          {selfInstall
+            ? t("按「立即更新」會下載新版並確認檔案完整，裝好後 {app} 會重新開啟。", { app: APP_NAME })
+            : t("按「立即更新」會下載安裝檔並確認檔案完整，接著關閉 {app} 進行安裝，裝完自動重新開啟。", { app: APP_NAME })}
+          {(support === "deb" || support === "rpm") && " " + t("安裝時系統會要求輸入系統管理員密碼。")}
         </div>
       )}
       {phase.kind === "downloading" && (
@@ -118,9 +131,18 @@ export default function UpdateDialog() {
           </div>
         </div>
       )}
+      {phase.kind === "installing" && (
+        <div className="text-sm text-fg/70" data-update-installing="">
+          {support === "deb" || support === "rpm"
+            ? t("正在安裝：請在系統跳出的視窗輸入系統管理員密碼。")
+            : t("正在安裝…")}
+        </div>
+      )}
       {phase.kind === "launching" && (
         <div className="text-sm text-success" data-update-launching="">
-          {t("已啟動安裝程式：{app} 即將關閉，更新完成後會自動重新開啟。", { app: APP_NAME })}
+          {selfInstall
+            ? t("更新完成：{app} 即將重新開啟。", { app: APP_NAME })
+            : t("已啟動安裝程式：{app} 即將關閉，更新完成後會自動重新開啟。", { app: APP_NAME })}
         </div>
       )}
       {phase.kind === "failed" && <div className="text-sm text-danger break-words" data-update-error="">{phase.message}</div>}

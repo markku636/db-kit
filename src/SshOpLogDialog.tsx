@@ -7,7 +7,7 @@ import { Copy, FileDown, FolderOpen, History, RefreshCw, Trash2 } from "lucide-r
 import { api } from "./api";
 import { t, useT } from "./i18n";
 import { Badge, Button, EmptyState, IconButton, Input, Modal, Segmented, Select, Spinner } from "./ui/index";
-import { pickSaveFile, toast, uiConfirm } from "./ui";
+import { copyToClipboard, pickSaveFile, toast, uiConfirm } from "./ui";
 import { sessionLabel, useSshSessions } from "./sshSessions";
 import { useSshOpLog } from "./sshOpLogStore";
 import { defaultLogName } from "./sshSessionLog";
@@ -185,9 +185,7 @@ function Inner() {
     }
   };
 
-  const copy = (text: string) => {
-    void navigator.clipboard?.writeText(text).then(() => toast.success(t("已複製"))).catch(() => undefined);
-  };
+  const copy = (text: string) => void copyToClipboard(text);
 
   return (
     <Modal open onClose={close} title={t("SSH 操作紀錄")} icon={History} size="xl" zClass="z-[105]" className="h-[80vh]"

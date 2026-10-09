@@ -12,6 +12,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../api";
+import { writeClipboardText } from "../clipboard";
 import { useSshPrefs } from "../sshPrefs";
 import { xtermThemeFor } from "../sshTerminalTheme";
 import { useTheme } from "../theme";
@@ -98,7 +99,7 @@ export default function XtermView({ onReady, onData, onResize, readOnly = false,
     term.onResize(({ cols, rows }) => cb.current.onResize?.(cols, rows));
     term.onSelectionChange(() => {
       if (useSshPrefs.getState().copyOnSelect && term.hasSelection()) {
-        void navigator.clipboard?.writeText(term.getSelection()).catch(() => undefined);
+        void writeClipboardText(term.getSelection()).catch(() => undefined);
       }
     });
     // app 保留鍵（切分頁 / 縮放 / 搜尋…）不進容器 shell，讓它照常冒泡給 window。
