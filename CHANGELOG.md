@@ -1,3 +1,19 @@
+## v0.57.5
+
+**Ubuntu / macOS 上 SSH 終端機的複製貼上修好；Linux 也能在 App 裡直接更新（AppImage / .deb / .rpm）。**
+
+修正：
+
+- **Ubuntu 上 SSH 終端機貼上跳「無法讀取剪貼簿」、複製沒反應**：終端機的 Ctrl+Shift+V / Ctrl+Shift+C、右鍵貼上、選取即複製原本用 webview 的剪貼簿介面，Linux 的 WebKitGTK 一律拒絕讀取，有的版本連這個介面都沒有，複製就安靜地什麼都沒做。現在改由 App 後端讀寫系統剪貼簿（跟遠端桌面的剪貼簿同步同一套）。Linux 上複製的文字由 App 一直供應著，切到別的程式照樣貼得到；關閉 App 時交給系統的剪貼簿管理員。
+- **macOS 貼上要多點一次「貼上」、有些「複製」沒進剪貼簿**：同一個原因。macOS 的 webview 讀剪貼簿時會在游標旁跳出「貼上」小選單要你再點一下；寫入只能在按下的當下，像「複製建表 SQL」「複製公鑰」這種要先向後端拿資料的，拿回來時已經過了那一刻而被拒。一併改走後端。
+- 資料格的 Ctrl+V 貼上、SSH 操作紀錄的複製、容器終端機的選取即複製也一起改。
+
+改進：
+
+- **Linux 的 App 內更新**：以前 Linux 只會開 Release 頁面讓你自己下載。現在按「立即更新」：AppImage 直接把新版換到原本那個檔；.deb / .rpm 由系統跳出輸入系統管理員密碼的視窗（pkexec），用 dpkg / rpm 安裝；裝好自動重新開啟。下載一樣要對得上 GitHub 提供的 SHA-256、斷線會續傳。macOS 維持開 Release 頁面。
+
+> 驗證：介面測試新增 ssh-terminal-clipboard 7 項（模擬 Ubuntu 的 webview 沒有剪貼簿介面：Ctrl+Shift+V 與右鍵「貼上」貼得進去、多行內容照樣先確認、Ctrl+Shift+C 寫得進剪貼簿、後端也讀不到時提示）與 update-dialog-linux 6 項（.deb：先提醒會要求系統管理員密碼、等密碼時顯示正在安裝、裝好告知即將重新開啟）；用修正前的終端機程式跑剪貼簿情境全部失敗（跳出「無法讀取剪貼簿」，跟 Ubuntu 上看到的一樣）。全部介面測試 106 個情境 943 項通過，vitest 2218 項通過，tsc、eslint 通過。Rust 新增單元測試：Release 檔名挑選（AppImage / .deb / .rpm、ARM）、從 `APPIMAGE` / dpkg / rpm 判斷安裝方式、原地替換 AppImage、pkexec 的結束代碼，以及要 X server 的剪貼簿互通測試（App 複製 ↔ xclip）；照 Tauri 2.11.3 原始碼確認重新啟動時 AppImage 會開換好的那個檔、.deb / .rpm 開的是新裝的 `/usr/bin/db-kit`。沒測到：這台 Windows 沒有 Rust 工具鏈，Docker 裡的 Linux 編譯卡在下載 crate 沒跑完，Rust 這次以 GitHub Actions 四個平台的打包當編譯檢查，上面的 Rust 測試還沒實際跑過；也還沒在真的 Ubuntu / macOS 桌面上試複製貼上與更新（pkexec 跳出密碼視窗、AppImage 換檔後重開）。
+
 ## v0.57.4
 
 **RustDesk 在對方的登入 / 鎖定畫面打得出 `@` 這類要按 Shift 的字；虛擬鍵盤的 CapsLock 改成跟作業系統連動。**
