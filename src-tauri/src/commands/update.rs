@@ -6,9 +6,13 @@
 //!   關掉還在跑的 App），MSI 用 `msiexec /i … /passive AUTOLAUNCHAPP=True`（裝在 Program Files，
 //!   Windows 會跳 UAC）。交給安裝程式後關閉 App。
 //! - Linux AppImage：新的 AppImage 換掉原本那個檔（同一個路徑），重新啟動。
-//! - Linux .deb / .rpm：`pkexec dpkg -i` / `pkexec rpm -U`（系統會跳出輸入密碼的視窗），裝完重新啟動。
+//! - Linux .deb / .rpm：經 pkexec 叫套件裡的更新小幫手（`linux-updater/`，`/usr/lib/db-kit/db-kit-updater`）
+//!   以 root 安裝，裝完重新啟動。套件也裝了 polkit 規則，坐在電腦前的使用者不用輸入密碼；小幫手自己會再向
+//!   GitHub 確認一次安裝檔。沒有小幫手時（被刪掉之類）退回 `pkexec dpkg -i` / `pkexec rpm -U`，要輸入密碼。
+//! - macOS：下載 `.app.tar.gz`，解到 .app 旁邊，換掉正在跑的這個 .app，重新啟動。
 //!
-//! macOS / 開發版 / 免安裝版不支援自動安裝，前端改開 Release 頁面讓使用者自己下載。
+//! 開發版 / 免安裝版 / macOS 上換不了 .app 的（沒有寫入權限、從 DMG 或「下載項目」直接打開）不支援自動安裝，
+//! 前端改開 Release 頁面讓使用者自己下載。
 //!
 //! 下載網址只接受這個專案 Release 的下載路徑；GitHub API 給的 `digest`（`sha256:…`）一定要有、
 //! 而且要對得上才安裝。下載中斷 / 卡住時用 HTTP Range 續傳（慢的網路抓幾十 MB 常會斷一兩次）。
@@ -37,9 +41,23 @@ pub enum InstallKind {
     AppImage,
     Deb,
     Rpm,
+    #[serde(rename = "macos")]
+    MacApp,
 }
 
-/// 下載進度（`total` 0 = 不知道大小）。`installing` = 下載完、正在安裝（.deb / .rpm 這時會跳出輸入密碼的視窗）。
+/// `update_support` 的結果：怎麼裝，以及安裝時系統會不會要求輸入系統管理員密碼（前端先提醒）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct UpdateSupport {
+    kind: InstallKind,
+    password: bool,
+}
+
+/// .deb / .rpm 的更新小幫手（`linux-updater/`），以及讓坐在電腦前的使用者執行它不用密碼的 polkit 規則；
+/// 都隨套件安裝（`src-tauri/tauri.linux-updater.conf.json`）。
+const LINUX_UPDATER: &str = "/usr/lib/db-kit/db-kit-updater";
+const LINUX_UPDATER_POLICY: &str = "/usr/share/polkit-1/actions/dev.dbkit.app.update.policy";
+
+/// 下載進度（`total` 0 = 不知道大小）。`installing` = 下載完、正在安裝（要密碼的 .deb / .rpm 這時會跳出輸入密碼的視窗）。
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateProgress {
     downloaded: u64,
@@ -65,14 +83,23 @@ struct Asset {
     digest: Option<String>,
 }
 
-/// 目前這份 App 能不能自動安裝更新；`None` = 不行（macOS / 開發版 / 免安裝版）。
-/// Linux 要問套件管理員這支程式是不是它裝的，不在主執行緒做。
+/// 目前這份 App 能不能自動安裝更新；`None` = 不行（開發版 / 免安裝版 / macOS 上換不了 .app）。
+/// Linux 要問套件管理員這支程式是不是它裝的、macOS 要試試 .app 所在的資料夾寫不寫得進去，不在主執行緒做。
 #[tauri::command]
-pub async fn update_support() -> Option<InstallKind> {
-    tokio::task::spawn_blocking(install_kind).await.ok().flatten()
+pub async fn update_support() -> Option<UpdateSupport> {
+    tokio::task::spawn_blocking(|| install_kind().map(|kind| UpdateSupport { kind, password: needs_password(kind) }))
+        .await
+        .ok()
+        .flatten()
 }
 
-/// 下載 `version` 的安裝檔、驗證後安裝，接著關閉 App（Windows 由安裝程式裝完重開；Linux 在這裡裝好、
+/// .deb / .rpm 沒有更新小幫手或它的免密碼規則時，系統才會要求輸入密碼（Windows MSI 的 UAC 只要按「是」，不算）。
+fn needs_password(kind: InstallKind) -> bool {
+    matches!(kind, InstallKind::Deb | InstallKind::Rpm)
+        && !(Path::new(LINUX_UPDATER).is_file() && Path::new(LINUX_UPDATER_POLICY).is_file())
+}
+
+/// 下載 `version` 的安裝檔、驗證後安裝，接著關閉 App（Windows 由安裝程式裝完重開；Linux / macOS 在這裡裝好、
 /// 重新啟動）。進度走 `on_progress`。
 #[tauri::command]
 pub async fn update_install(app: AppHandle, version: String, on_progress: Channel<UpdateProgress>) -> AppResult<()> {
@@ -84,11 +111,12 @@ pub async fn update_install(app: AppHandle, version: String, on_progress: Channe
     let path = download_installer(&version, kind, std::env::consts::ARCH, &progress).await?;
     let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     progress(UpdateProgress { downloaded: size, total: size, installing: true });
-    let installed = tokio::task::spawn_blocking(move || install(kind, &path))
+    let installed = tokio::task::spawn_blocking(move || install(kind, &path, &version))
         .await
         .map_err(|e| AppError::Update(e.to_string()))??;
     // 讓這次 invoke 的回應先送回前端，再走正常的關閉流程（RunEvent::Exit 會關掉所有連線與輔助程式，
-    // 安裝程式才換得掉它們的檔案）。Linux 已經裝好：關閉後用新版重新啟動（AppImage 會啟動換好的那個檔）。
+    // 安裝程式才換得掉它們的檔案）。Linux / macOS 已經裝好：關閉後用新版重新啟動（AppImage 會啟動換好的
+    // 那個檔；macOS 由 Tauri 照 .app 的 Info.plist 找主程式）。
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(400)).await;
         match installed {
@@ -105,11 +133,12 @@ enum Installed {
     Done,
 }
 
-fn install(kind: InstallKind, path: &Path) -> AppResult<Installed> {
+fn install(kind: InstallKind, path: &Path, version: &str) -> AppResult<Installed> {
     match kind {
         InstallKind::Nsis | InstallKind::Msi => launch_installer(kind, path).map(|()| Installed::ByInstaller),
         InstallKind::AppImage => replace_appimage(path).map(|()| Installed::Done),
-        InstallKind::Deb | InstallKind::Rpm => install_package(kind, path).map(|()| Installed::Done),
+        InstallKind::Deb | InstallKind::Rpm => install_package(kind, path, version).map(|()| Installed::Done),
+        InstallKind::MacApp => replace_mac_app(path).map(|()| Installed::Done),
     }
 }
 
@@ -263,7 +292,8 @@ fn safe_file_name(name: &str) -> String {
 
 /// 這種安裝檔在 Release 裡的檔名結尾（`arch` 是 `std::env::consts::ARCH` 的寫法）。各家對架構的叫法不同：
 /// `DB.Kit_0.57.4_x64-setup.exe` / `DB.Kit_0.57.4_x64_en-US.msi` / `DB.Kit_0.57.4_amd64.AppImage` /
-/// `DB.Kit_0.57.4_amd64.deb` / `DB.Kit-0.57.4-1.x86_64.rpm`（ARM 是 arm64 / aarch64 / arm64 / aarch64）。
+/// `DB.Kit_0.57.4_amd64.deb` / `DB.Kit-0.57.4-1.x86_64.rpm` / `DB.Kit_x64.app.tar.gz`（沒有版號）
+/// （ARM 是 arm64 / aarch64 / arm64 / aarch64 / aarch64）。
 fn asset_matches(name: &str, kind: InstallKind, arch: &str) -> bool {
     let windows = match arch {
         "x86_64" => "x64",
@@ -279,12 +309,17 @@ fn asset_matches(name: &str, kind: InstallKind, arch: &str) -> bool {
         "x86_64" => "amd64",
         other => other,
     };
+    let mac = match arch {
+        "x86_64" => "x64",
+        other => other,
+    };
     match kind {
         InstallKind::Nsis => name.ends_with(&format!("_{windows}-setup.exe")),
         InstallKind::Msi => name.ends_with(".msi") && name.contains(&format!("_{windows}_")),
         InstallKind::AppImage => name.ends_with(&format!("_{appimage}.AppImage")),
         InstallKind::Deb => name.ends_with(&format!("_{debian}.deb")),
         InstallKind::Rpm => name.ends_with(&format!(".{arch}.rpm")),
+        InstallKind::MacApp => name.ends_with(&format!("_{mac}.app.tar.gz")),
     }
 }
 
@@ -292,7 +327,7 @@ fn pick_asset<'a>(assets: &'a [Asset], kind: InstallKind, arch: &str) -> Option<
     assets.iter().find(|a| asset_matches(&a.name, kind, arch))
 }
 
-/// 這份 App 是怎麼裝的；不是自動更新裝得了的（macOS、`cargo run`、免安裝版）→ `None`。
+/// 這份 App 是怎麼裝的；不是自動更新裝得了的（`cargo run`、免安裝版、macOS 上換不了的 .app）→ `None`。
 fn install_kind() -> Option<InstallKind> {
     if cfg!(windows) {
         let exe = std::env::current_exe().ok()?;
@@ -312,6 +347,9 @@ fn install_kind() -> Option<InstallKind> {
                 .status()
                 .is_ok_and(|s| s.success())
         })
+    } else if cfg!(target_os = "macos") {
+        let bundle = mac_bundle(&std::env::current_exe().ok()?)?;
+        dir_writable(bundle.parent()?).then_some(InstallKind::MacApp)
     } else {
         None
     }
@@ -379,28 +417,71 @@ fn replace_file(new: &Path, target: &Path) -> AppResult<()> {
     Ok(())
 }
 
-/// 用系統的套件管理員裝 .deb / .rpm：要系統管理員權限，經 pkexec 跳出輸入密碼的視窗（Ubuntu / Fedora
-/// 桌面都有）。等它裝完才回來。
-fn install_package(kind: InstallKind, path: &Path) -> AppResult<()> {
-    let (program, args): (&str, &[&str]) = match kind {
-        InstallKind::Deb => ("dpkg", &["-i"]),
-        InstallKind::Rpm => ("rpm", &["-U"]),
+/// 用系統的套件管理員裝 .deb / .rpm（要 root，經 pkexec；Ubuntu / Fedora 桌面都有）。有更新小幫手就叫它：
+/// 它自己向 GitHub 再確認一次安裝檔、用 apt-get / dnf 安裝，有免密碼規則就不會跳出輸入密碼的視窗。沒有小幫手
+/// 才直接 `dpkg -i` / `rpm -U`，系統會要求輸入密碼。等它裝完才回來。
+fn install_package(kind: InstallKind, path: &Path, version: &str) -> AppResult<()> {
+    if Path::new(LINUX_UPDATER).is_file() {
+        let mut args: Vec<std::ffi::OsString> = vec![LINUX_UPDATER.into(), "install".into(), version.into(), path.into()];
+        if let Some(proxy) = proxy_from_env() {
+            args.extend(["--proxy".into(), proxy.into()]);
+        }
+        let out = pkexec(&args)?;
+        return updater_result(out.status.code(), &String::from_utf8_lossy(&out.stderr));
+    }
+    let (program, flag) = match kind {
+        InstallKind::Deb => ("dpkg", "-i"),
+        InstallKind::Rpm => ("rpm", "-U"),
         _ => return Err(AppError::Update(t!("這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔").into())),
     };
-    let status = std::process::Command::new("pkexec")
-        .arg(program)
+    let out = pkexec(&[program.into(), flag.into(), path.into()])?;
+    package_result(program, out.status.code())
+}
+
+/// 經 pkexec 以 root 執行 `args` 並等它結束（stderr 收起來給錯誤訊息用）。
+fn pkexec(args: &[std::ffi::OsString]) -> AppResult<std::process::Output> {
+    std::process::Command::new("pkexec")
         .args(args)
-        .arg(path)
         .stdin(std::process::Stdio::null())
-        .status()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 AppError::Update(t!("找不到 pkexec，無法取得系統管理員權限安裝更新，請到 GitHub 下載安裝檔").into())
             } else {
                 AppError::Update(tf!("無法啟動安裝程式：{e}", e = e))
             }
-        })?;
-    package_result(program, status.code())
+        })
+}
+
+/// 使用者環境設的代理（下載安裝檔的 reqwest 用的就是這些）。pkexec 會清掉環境變數，要另外交給更新小幫手。
+fn proxy_from_env() -> Option<String> {
+    ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .map(|v| v.trim().to_string())
+        .find(|v| !v.is_empty())
+}
+
+/// 更新小幫手的結束代碼（見 `linux-updater/src/main.rs`），原因在它 stderr 的最後一行（`db-kit-updater: …`）。
+fn updater_result(code: Option<i32>, stderr: &str) -> AppResult<()> {
+    let detail = stderr
+        .lines()
+        .map(str::trim)
+        .rev()
+        .find(|l| !l.is_empty())
+        .map(|l| l.strip_prefix("db-kit-updater:").unwrap_or(l).trim().to_string())
+        .unwrap_or_default();
+    match code {
+        Some(3) => Err(AppError::Update(tf!("已取消更新：{e}", e = detail))),
+        Some(4) => Err(AppError::Update(tf!("安裝檔沒有通過檢查，已取消更新：{e}", e = detail))),
+        Some(5) => Err(AppError::Update(tf!("無法連到 GitHub 確認安裝檔：{e}", e = detail))),
+        Some(c) if !matches!(c, 0 | 126 | 127) && !detail.is_empty() => {
+            Err(AppError::Update(tf!("安裝更新失敗（結束代碼 {code}）：{e}", code = c, e = detail)))
+        }
+        _ => package_result("db-kit-updater", code),
+    }
 }
 
 /// pkexec 的結束代碼：成功時是被執行的程式自己的代碼；126 = 使用者關掉了輸入密碼的視窗；
@@ -413,6 +494,85 @@ fn package_result(program: &str, code: Option<i32>) -> AppResult<()> {
         Some(c) => Err(AppError::Update(tf!("{program} 安裝失敗（結束代碼 {code}）", program = program, code = c))),
         None => Err(AppError::Update(tf!("{program} 安裝中途被中斷", program = program))),
     }
+}
+
+/// macOS：正在跑的 `…/DB Kit.app/Contents/MacOS/db-kit` 所在的 .app。從「下載項目」直接打開、還帶著隔離屬性的
+/// App，macOS 會把它搬到唯讀的隨機路徑（App Translocation）執行，那份換不了。
+fn mac_bundle(exe: &Path) -> Option<PathBuf> {
+    let contents = exe.parent().filter(|d| d.ends_with("Contents/MacOS"))?.parent()?;
+    let bundle = contents.parent().filter(|b| b.extension().is_some_and(|e| e == "app"))?;
+    (!bundle.to_string_lossy().contains("/AppTranslocation/")).then(|| bundle.to_path_buf())
+}
+
+/// 換 .app 要能在它所在的資料夾建立暫存資料夾、改名（/Applications 對系統管理員帳號可寫；DMG 是唯讀的）。
+fn dir_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".db-kit-update-probe-{}", std::process::id()));
+    let ok = std::fs::create_dir(&probe).is_ok();
+    let _ = std::fs::remove_dir(&probe);
+    ok
+}
+
+fn replace_mac_app(archive: &Path) -> AppResult<()> {
+    let unsupported = || AppError::Update(t!("這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔").into());
+    let exe = std::env::current_exe().map_err(|_| unsupported())?;
+    let bundle = mac_bundle(&exe).ok_or_else(unsupported)?;
+    let exe_in_bundle = exe.strip_prefix(&bundle).map_err(|_| unsupported())?.to_path_buf();
+    replace_bundle(archive, &bundle, &exe_in_bundle)
+}
+
+/// 用下載的 `.app.tar.gz`（裡面是一個 `DB Kit.app`）換掉 `bundle`：解到 .app 旁邊的暫存資料夾（同一個磁碟，
+/// 改名才是原子的），舊的改名移進暫存資料夾、新的改名放到原位，再把暫存資料夾連同舊版刪掉。新的那份裡要有
+/// 同一支主程式（`exe_in_bundle`，如 `Contents/MacOS/db-kit`）才換。正在跑的這份已經載入，檔案被換掉不受影響。
+fn replace_bundle(archive: &Path, bundle: &Path, exe_in_bundle: &Path) -> AppResult<()> {
+    let parent = bundle.parent().unwrap_or(Path::new("."));
+    let name = bundle.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let prefix = format!(".{name}.update-");
+    // 上次中途失敗留下的暫存資料夾。
+    if let Ok(entries) = std::fs::read_dir(parent) {
+        for e in entries.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    let stage = parent.join(format!("{prefix}{}", std::process::id()));
+    let replace_err = |e: std::io::Error| AppError::Update(tf!("無法更換 {path}：{e}", path = bundle.display(), e = e));
+    std::fs::create_dir(&stage).map_err(replace_err)?;
+    let result = (|| {
+        let status = std::process::Command::new("tar")
+            .arg("-xzf")
+            .arg(archive)
+            .arg("-C")
+            .arg(&stage)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .map_err(|e| AppError::Update(tf!("解開更新檔失敗：{e}", e = e)))?;
+        if !status.success() {
+            return Err(AppError::Update(tf!("解開更新檔失敗：{e}", e = status)));
+        }
+        let new_app = std::fs::read_dir(&stage)
+            .ok()
+            .and_then(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .find(|p| p.extension().is_some_and(|e| e == "app") && p.join(exe_in_bundle).is_file())
+            })
+            .ok_or_else(|| AppError::Update(t!("更新檔的內容不對，已取消更新").into()))?;
+        if cfg!(target_os = "macos") {
+            // 自己下載的檔案本來就不會有隔離屬性；保險起見清掉，新版開起來才不會被 Gatekeeper 擋下。
+            let _ = std::process::Command::new("xattr").args(["-dr", "com.apple.quarantine"]).arg(&new_app).status();
+        }
+        let previous = stage.join(".previous");
+        std::fs::rename(bundle, &previous).map_err(replace_err)?;
+        if let Err(e) = std::fs::rename(&new_app, bundle) {
+            let _ = std::fs::rename(&previous, bundle);
+            return Err(replace_err(e));
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&stage);
+    result
 }
 
 #[cfg(windows)]
@@ -433,7 +593,7 @@ fn launch_installer(kind: InstallKind, path: &Path) -> AppResult<()> {
             c.arg("/i").arg(path).args(["/passive", "/promptrestart", "AUTOLAUNCHAPP=True"]);
             c
         }
-        InstallKind::AppImage | InstallKind::Deb | InstallKind::Rpm => {
+        InstallKind::AppImage | InstallKind::Deb | InstallKind::Rpm | InstallKind::MacApp => {
             return Err(AppError::Update(t!("這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔").into()))
         }
     };
@@ -484,9 +644,83 @@ mod tests {
         assert_eq!(pick(InstallKind::AppImage, "x86_64"), Some("DB.Kit_0.57.4_amd64.AppImage"));
         assert_eq!(pick(InstallKind::Deb, "x86_64"), Some("DB.Kit_0.57.4_amd64.deb"));
         assert_eq!(pick(InstallKind::Rpm, "x86_64"), Some("DB.Kit-0.57.4-1.x86_64.rpm"));
+        assert_eq!(pick(InstallKind::MacApp, "x86_64"), Some("DB.Kit_x64.app.tar.gz"));
+        assert_eq!(pick(InstallKind::MacApp, "aarch64"), Some("DB.Kit_aarch64.app.tar.gz"));
         for kind in [InstallKind::Nsis, InstallKind::Msi, InstallKind::AppImage, InstallKind::Deb, InstallKind::Rpm] {
             assert!(pick(kind, "aarch64").is_none(), "{kind:?}：沒有 ARM 版就不裝 x64 的");
         }
+    }
+
+    #[test]
+    fn mac_bundle_of_the_running_app() {
+        let bundle = |p: &str| mac_bundle(Path::new(p)).map(|b| b.to_string_lossy().into_owned());
+        assert_eq!(bundle("/Applications/DB Kit.app/Contents/MacOS/db-kit").as_deref(), Some("/Applications/DB Kit.app"));
+        assert_eq!(bundle("/Users/me/Apps/DB Kit.app/Contents/MacOS/db-kit").as_deref(), Some("/Users/me/Apps/DB Kit.app"));
+        assert_eq!(
+            bundle("/private/var/folders/x/T/AppTranslocation/1234/d/DB Kit.app/Contents/MacOS/db-kit"),
+            None,
+            "從「下載項目」直接打開（唯讀的隨機路徑）"
+        );
+        assert_eq!(bundle("/Users/me/db-kit/src-tauri/target/debug/db-kit"), None, "開發版");
+        assert_eq!(bundle("/Applications/DB Kit/Contents/MacOS/db-kit"), None, "不是 .app");
+    }
+
+    /// 解開 .app.tar.gz 換掉原本的 .app；內容不對就不動原本的。
+    #[cfg(unix)]
+    #[test]
+    fn replaces_the_mac_bundle() {
+        let tmp = std::env::temp_dir().join(format!("dbkit-update-mac-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let exe = Path::new("Contents/MacOS/db-kit");
+        let write = |path: &Path, content: &[u8]| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        };
+        // 把 `files`（相對路徑, 內容）打包成 tmp/<name>（tar.gz，跟 Release 的 .app.tar.gz 一樣最上層是 .app）。
+        let pack = |name: &str, files: &[(&str, &[u8])]| {
+            let src = tmp.join(format!("src-{name}"));
+            for (path, content) in files {
+                write(&src.join(path), content);
+            }
+            let archive = tmp.join(name);
+            let ok = std::process::Command::new("tar").arg("-czf").arg(&archive).arg("-C").arg(&src).arg(".").status().unwrap();
+            assert!(ok.success());
+            archive
+        };
+        let apps = tmp.join("Applications");
+        let bundle = apps.join("DB Kit.app");
+        write(&bundle.join(exe), b"old");
+        let read = || std::fs::read(bundle.join(exe)).unwrap();
+        let left = || std::fs::read_dir(&apps).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name()).collect::<Vec<_>>();
+
+        let wrong = pack("wrong.tar.gz", &[("Other.app/Contents/Resources/x", b"x")]);
+        assert!(replace_bundle(&wrong, &bundle, exe).is_err(), "裡面沒有同一支主程式");
+        assert_eq!(read(), b"old", "原本的不動");
+        assert!(replace_bundle(&tmp.join("missing.tar.gz"), &bundle, exe).is_err(), "解不開");
+        assert_eq!(read(), b"old");
+
+        let good = pack("DB.Kit_x64.app.tar.gz", &[("DB Kit.app/Contents/MacOS/db-kit", b"new version")]);
+        replace_bundle(&good, &bundle, exe).unwrap();
+        assert_eq!(read(), b"new version");
+        assert_eq!(left(), vec![std::ffi::OsString::from("DB Kit.app")], "沒有留下暫存資料夾");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn linux_updater_exit_codes() {
+        assert!(updater_result(Some(0), "").is_ok());
+        let msg = |code, stderr: &str| match updater_result(code, stderr) {
+            Err(AppError::Update(m)) => m,
+            other => panic!("{code:?}: {other:?}"),
+        };
+        // 不比對字面：其他測試會暫時切換介面語言。
+        let mismatch = msg(Some(4), "db-kit-updater: the SHA-256 of DB.Kit_0.58.0_amd64.deb doesn't match the release\n");
+        assert!(mismatch.contains("the SHA-256 of DB.Kit_0.58.0_amd64.deb") && !mismatch.contains("db-kit-updater:"), "{mismatch}");
+        let failed = msg(Some(6), "E: Unable to locate package libfoo\ndb-kit-updater: apt-get exited with code 100: E: Unable to locate package libfoo\n");
+        assert!(failed.contains("apt-get exited with code 100") && failed.contains('6'), "{failed}");
+        assert_ne!(msg(Some(3), "x"), msg(Some(5), "x"));
+        assert_eq!(msg(Some(126), "Error executing command as another user: Request dismissed"), msg(Some(126), ""), "pkexec 自己的代碼照舊");
+        assert!(msg(None, "").contains("db-kit-updater"));
     }
 
     /// ARM 版各家的叫法（Tauri 打包 aarch64 時的檔名）。

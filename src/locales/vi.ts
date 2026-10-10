@@ -1663,7 +1663,7 @@ const vi: Catalog = {
   "稍後": "Để sau",
   "前往下載": "Đến trang tải",
   "立即更新": "Cập nhật ngay",
-  "這個版本的 {app} 無法自動安裝更新（macOS、開發版或免安裝版），請下載新版安裝檔。": "Bản {app} này không thể tự cài bản cập nhật (macOS, bản phát triển hoặc bản portable); hãy tải bộ cài mới.",
+  "這個版本的 {app} 無法自動安裝更新（開發版、免安裝版，或裝在沒有寫入權限的資料夾），請下載新版安裝檔。": "Bản {app} này không thể tự cài bản cập nhật (bản phát triển, bản portable, hoặc được cài trong thư mục không có quyền ghi); hãy tải bộ cài mới.",
   "按「立即更新」會下載安裝檔並確認檔案完整，接著關閉 {app} 進行安裝，裝完自動重新開啟。": "“Cập nhật ngay” sẽ tải bộ cài và kiểm tra tính toàn vẹn, sau đó đóng {app} để cài đặt và tự mở lại khi xong.",
   "下載中 {done} / {total} MB": "Đang tải {done} / {total} MB",
   "下載中 {done} MB": "Đang tải {done} MB",

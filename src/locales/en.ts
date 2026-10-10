@@ -4393,7 +4393,7 @@ const en: Catalog = {
   "稍後": "Later",
   "前往下載": "Go to download",
   "立即更新": "Update now",
-  "這個版本的 {app} 無法自動安裝更新（macOS、開發版或免安裝版），請下載新版安裝檔。": "This copy of {app} can't install updates automatically (macOS, a development build or a portable build); please download the new installer.",
+  "這個版本的 {app} 無法自動安裝更新（開發版、免安裝版，或裝在沒有寫入權限的資料夾），請下載新版安裝檔。": "This copy of {app} can't install updates automatically (a development build, a portable build, or installed in a folder it can't write to); please download the new installer.",
   "按「立即更新」會下載安裝檔並確認檔案完整，接著關閉 {app} 進行安裝，裝完自動重新開啟。": "\"Update now\" downloads the installer and checks its integrity, then closes {app} to install it and reopens it when done.",
   "下載中 {done} / {total} MB": "Downloading {done} / {total} MB",
   "下載中 {done} MB": "Downloading {done} MB",

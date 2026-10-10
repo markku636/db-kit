@@ -34,10 +34,15 @@ export type SshAuthMethod = "password" | "key";
 
 /**
  * 這份 App 的安裝方式（自動更新下載對應的安裝檔）：Windows 的 NSIS（目前使用者）/ MSI（Program Files）、
- * Linux 的 AppImage / .deb / .rpm。
+ * Linux 的 AppImage / .deb / .rpm、macOS 的 .app。
  */
-export type UpdateInstallKind = "nsis" | "msi" | "appimage" | "deb" | "rpm";
-/** 下載安裝檔的進度（total 0 = 不知道大小）。installing = 下載完、正在安裝（.deb / .rpm 會跳出輸入密碼的視窗）。 */
+export type UpdateInstallKind = "nsis" | "msi" | "appimage" | "deb" | "rpm" | "macos";
+/** 能自動安裝更新時怎麼裝；password = 安裝時系統會要求輸入系統管理員密碼（.deb / .rpm 沒有免密碼規則時）。 */
+export interface UpdateSupport {
+  kind: UpdateInstallKind;
+  password: boolean;
+}
+/** 下載安裝檔的進度（total 0 = 不知道大小）。installing = 下載完、正在安裝（要密碼時系統這時會跳出輸入密碼的視窗）。 */
 export interface UpdateProgress {
   downloaded: number;
   total: number;
@@ -2237,7 +2242,7 @@ export const api = {
 
   // ---- 自動更新（後端從 GitHub Release 下載安裝檔、驗 SHA-256、安裝後重新開啟 App）----
   // null = 這份 App 不支援自動安裝（macOS / 開發版 / 免安裝版）：改開 Release 頁面。
-  updateSupport: () => invoke<UpdateInstallKind | null>("update_support"),
+  updateSupport: () => invoke<UpdateSupport | null>("update_support"),
   updateInstall: (version: string, onProgress: Channel<UpdateProgress>) =>
     invoke<void>("update_install", { version, onProgress }),
 

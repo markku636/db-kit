@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  db-kit 的 App 內更新（.deb / .rpm）：坐在電腦前（本機、作用中的登入）的使用者用 pkexec 執行
+  db-kit-updater 不用輸入密碼；遠端或非作用中的登入照樣要系統管理員密碼。
+  db-kit-updater 只會把 db-kit 升到 GitHub Release 上更新的正式版（見 linux-updater/src/main.rs）。
+  隨 .deb / .rpm 裝在 /usr/share/polkit-1/actions/。
+-->
+<policyconfig>
+  <vendor>DB Kit</vendor>
+  <vendor_url>https://github.com/markku636/db-kit</vendor_url>
+  <action id="dev.dbkit.app.update">
+    <description>Update DB Kit</description>
+    <description xml:lang="zh_TW">更新 DB Kit</description>
+    <message>Authentication is required to update DB Kit</message>
+    <message xml:lang="zh_TW">更新 DB Kit 需要驗證身分</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/db-kit/db-kit-updater</annotate>
+  </action>
+</policyconfig>

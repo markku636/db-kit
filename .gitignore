@@ -8,6 +8,8 @@ src-tauri/target/
 # RustDesk 相容連線輔助程式的建置輸出，以及發版時放給 Tauri externalBin 的副本
 rustdesk-bridge/target/
 src-tauri/binaries/
+# Linux 更新小幫手的建置輸出（發版時複製到 src-tauri/binaries/ 再打包進 .deb / .rpm）
+linux-updater/target/
 # 打包輸出（build-installer.ps1 收整的帶版號安裝檔）
 release/
 # env & secrets

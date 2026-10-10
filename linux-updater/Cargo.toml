@@ -1,0 +1,24 @@
+[package]
+name = "db-kit-updater"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+# 只在 Linux 用：隨 .deb / .rpm 裝在 /usr/lib/db-kit/db-kit-updater，App 經 pkexec 以 root 執行它安裝更新。
+# 會以 root 身分執行，所以獨立成這支小程式（相依套件越少越好），不跟 App 本體共用 binary。
+description = "Installs a newer official db-kit .deb / .rpm as root (run by db-kit through pkexec)"
+publish = false
+
+[[bin]]
+name = "db-kit-updater"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+# 向 GitHub API 查安裝檔的 SHA-256。rustls（ring）+ 系統的根憑證，延續全案避開 OpenSSL。
+ureq = { version = "2", default-features = false, features = ["tls", "native-certs"] }
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

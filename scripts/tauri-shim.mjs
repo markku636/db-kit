@@ -174,16 +174,16 @@ export function installShim(fx) {
       window.__DBKIT_CLIP__ = text;
       return null;
     },
-    // 自動更新：情境用 window.__DBKIT_UPDATE_SUPPORT__ 指定安裝方式（預設 null = 不支援自動安裝）；
+    // 自動更新：情境用 window.__DBKIT_UPDATE_SUPPORT__ 指定 { kind, password }（預設 null = 不支援自動安裝）；
     // 安裝時照真後端送兩則下載進度，再回成功（Windows 真後端此時已啟動安裝程式、準備關閉 App）。
-    // Linux（appimage / deb / rpm）下載完還會送一則 installing（.deb / .rpm 這時在等使用者輸入密碼），裝好才回成功。
+    // Linux（appimage / deb / rpm）與 macOS 下載完還會送一則 installing（password 時這時在等使用者輸入密碼），裝好才回成功。
     update_support: () => window.__DBKIT_UPDATE_SUPPORT__ ?? null,
     update_install: ({ version, onProgress }) => {
       window.__DBKIT_UPDATE_INSTALLS__.push(version);
       if (window.__DBKIT_UPDATE_FAIL__) return Promise.reject({ kind: "update", code: "ERR_UPDATE", message: window.__DBKIT_UPDATE_FAIL__ });
       const cb = callbacks.get(onProgress?.id);
       const total = 37 * 1024 * 1024;
-      const selfInstall = ["appimage", "deb", "rpm"].includes(window.__DBKIT_UPDATE_SUPPORT__);
+      const selfInstall = ["appimage", "deb", "rpm", "macos"].includes(window.__DBKIT_UPDATE_SUPPORT__?.kind);
       cb?.({ message: { downloaded: 0, total, installing: false }, index: 0 });
       cb?.({ message: { downloaded: total / 2, total, installing: false }, index: 1 });
       return new Promise((resolve) => setTimeout(() => {

@@ -37,11 +37,12 @@ jobs:
             label: windows
             target: ""
             args: ""
-          # Linux：產出 .deb / .rpm / .AppImage（用 22.04 以較舊 glibc 換取 AppImage 更廣的相容性）
+          # Linux：產出 .deb / .rpm / .AppImage（用 22.04 以較舊 glibc 換取 AppImage 更廣的相容性）。
+          # tauri.linux-updater.conf.json 把更新小幫手與它的 polkit 規則打包進 .deb / .rpm（見下面的 Build Linux updater）。
           - platform: ubuntu-22.04
             label: linux
             target: ""
-            args: ""
+            args: "--config src-tauri/tauri.linux-updater.conf.json"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -89,6 +90,7 @@ jobs:
           workspaces: |
             src-tauri
             rustdesk-bridge
+            linux-updater
 
       # RustDesk 相容連線的輔助程式（rustdesk-bridge/，AGPL-3.0，獨立程式）：先依 target 編好，
       # 放到 Tauri externalBin 要的位置（binaries/<名稱>-<target triple>[.exe]），下面 tauri build
@@ -104,6 +106,16 @@ jobs:
           case "$TRIPLE" in *windows*) EXT=".exe";; esac
           mkdir -p src-tauri/binaries
           cp "rustdesk-bridge/target/$TRIPLE/release/dbk-rustdesk-bridge$EXT" "src-tauri/binaries/dbk-rustdesk-bridge-$TRIPLE$EXT"
+
+      # .deb / .rpm 的更新小幫手（linux-updater/）：App 經 pkexec 叫它以 root 安裝更新的正式版，polkit 規則讓
+      # 坐在電腦前的使用者不用輸入密碼。tauri.linux-updater.conf.json 把它裝到 /usr/lib/db-kit/db-kit-updater
+      # （.deb / .rpm 會照這裡的檔案權限打包，所以明確設成 755）。
+      - name: Build Linux updater
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          cargo build --release --manifest-path linux-updater/Cargo.toml
+          mkdir -p src-tauri/binaries
+          install -m 755 linux-updater/target/release/db-kit-updater src-tauri/binaries/db-kit-updater
 
       - name: Install frontend deps
         run: npm ci

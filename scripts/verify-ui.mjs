@@ -177,6 +177,8 @@ const CASE_FX = {
   "rd-rustdesk-display": { RD_SESSIONS: FX.RD_SESSIONS_DEMO },
   "update-dialog-install": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-linux": { GITHUB_RELEASE: FX_RELEASE },
+  "update-dialog-linux-password": { GITHUB_RELEASE: FX_RELEASE },
+  "update-dialog-macos": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-manual": { GITHUB_RELEASE: FX_RELEASE },
   "update-dialog-error": { GITHUB_RELEASE: FX_RELEASE },
   "update-auto-popup": { GITHUB_RELEASE: FX_RELEASE },
@@ -215,6 +217,31 @@ async function openK8sFolder(page, folder) {
   await page.getByText(folder, { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => {});
   await page.getByText(folder, { exact: true }).first().click();
   await sleep(300);
+}
+
+// 自動更新（後端自己裝好再重開的安裝方式：Linux / macOS）：「關於」查到新版 → 更新對話框按「立即更新」，
+// 回傳安裝前的說明、安裝中、裝好時的文字（各情境自己檢查內容）。共同的流程在這裡一併檢查。
+async function selfInstallUpdate(page, support) {
+  await page.evaluate((s) => { window.__DBKIT_UPDATE_SUPPORT__ = s; }, support);
+  await page.getByRole("button", { name: "關於", exact: true }).click();
+  await page.getByRole("button", { name: "檢查更新", exact: true }).click();
+  const found = page.getByText("有新版 v9.9.9，點擊更新", { exact: true });
+  await found.waitFor({ timeout: 5000 }).catch(() => {});
+  await found.click();
+  const hint = page.locator("[data-update-hint]");
+  await hint.waitFor({ timeout: 5000 }).catch(() => {});
+  const hintText = (await hint.textContent().catch(() => "")) ?? "";
+  check(`${support.kind}：有「立即更新」、沒有「無法自動安裝」`, (await page.locator("[data-update-install]").count()) === 1 && (await page.locator("[data-update-manual]").count()) === 0);
+  await page.locator("[data-update-install]").click();
+  const installing = page.locator("[data-update-installing]");
+  await installing.waitFor({ timeout: 5000 }).catch(() => {});
+  const installingText = (await installing.textContent().catch(() => "")) ?? "";
+  check(`${support.kind}：安裝中不能按「稍後」`, await page.getByRole("button", { name: "稍後", exact: true }).isDisabled().catch(() => false));
+  const done = page.locator("[data-update-launching]");
+  await done.waitFor({ timeout: 5000 }).catch(() => {});
+  const doneText = (await done.textContent().catch(() => "")) ?? "";
+  check(`${support.kind}：後端拿到的是新版本號`, await page.evaluate(() => JSON.stringify(window.__DBKIT_UPDATE_INSTALLS__) === "[\"9.9.9\"]"));
+  return { hintText, installingText, doneText };
 }
 
 const CASES = {
@@ -2326,7 +2353,7 @@ const CASES = {
   // 自動更新（NSIS 安裝的 Windows 版）：「關於」檢查到新版 → 更新對話框列出更新內容 →「立即更新」顯示下載進度、
   // 後端拿到的是那個版本 → 告知 App 會關閉並在裝完後重開。
   async "update-dialog-install"(page) {
-    await page.evaluate(() => { window.__DBKIT_UPDATE_SUPPORT__ = "nsis"; });
+    await page.evaluate(() => { window.__DBKIT_UPDATE_SUPPORT__ = { kind: "nsis", password: false }; });
     await page.getByRole("button", { name: "關於", exact: true }).click();
     await page.getByRole("button", { name: "檢查更新", exact: true }).click();
     const found = page.getByText("有新版 v9.9.9，點擊更新", { exact: true });
@@ -2355,30 +2382,27 @@ const CASES = {
     check("沒有未實作的 command", await page.evaluate(() => window.__DBKIT_UNKNOWN__.length === 0), await page.evaluate(() => window.__DBKIT_UNKNOWN__.join(",")));
   },
 
-  // 自動更新（Ubuntu 用 .deb 裝的）：提醒會要求輸入系統管理員密碼 → 下載 → 等安裝（輸入密碼）時顯示「正在安裝」
+  // 自動更新（Ubuntu 用 .deb 裝的，有更新小幫手的免密碼規則）：不提密碼 → 下載 → 安裝時顯示「正在安裝」
   // → 裝好告知即將重新開啟（不是「已啟動安裝程式」）。
   async "update-dialog-linux"(page) {
-    await page.evaluate(() => { window.__DBKIT_UPDATE_SUPPORT__ = "deb"; });
-    await page.getByRole("button", { name: "關於", exact: true }).click();
-    await page.getByRole("button", { name: "檢查更新", exact: true }).click();
-    const found = page.getByText("有新版 v9.9.9，點擊更新", { exact: true });
-    await found.waitFor({ timeout: 5000 }).catch(() => {});
-    await found.click();
-    const hint = page.locator("[data-update-hint]");
-    await hint.waitFor({ timeout: 5000 }).catch(() => {});
-    const hintText = (await hint.textContent().catch(() => "")) ?? "";
-    check(".deb：先說明會要求輸入系統管理員密碼、裝好會重新開啟", hintText.includes("系統管理員密碼") && hintText.includes("重新開啟") && !hintText.includes("關閉"), hintText);
-    check("有「立即更新」、沒有「無法自動安裝」", (await page.locator("[data-update-install]").count()) === 1 && (await page.locator("[data-update-manual]").count()) === 0);
-    await page.locator("[data-update-install]").click();
-    const installing = page.locator("[data-update-installing]");
-    await installing.waitFor({ timeout: 5000 }).catch(() => {});
-    check("下載完、等輸入密碼時顯示正在安裝", ((await installing.textContent().catch(() => "")) ?? "").includes("系統管理員密碼"));
-    check("安裝中不能按「稍後」", await page.getByRole("button", { name: "稍後", exact: true }).isDisabled().catch(() => false));
-    const done = page.locator("[data-update-launching]");
-    await done.waitFor({ timeout: 5000 }).catch(() => {});
-    const doneText = (await done.textContent().catch(() => "")) ?? "";
+    const { hintText, installingText, doneText } = await selfInstallUpdate(page, { kind: "deb", password: false });
+    check(".deb：說明裝好會重新開啟、不用輸入密碼", hintText.includes("重新開啟") && !hintText.includes("關閉") && !hintText.includes("密碼"), hintText);
+    check("安裝時顯示正在安裝、不提密碼", installingText.includes("正在安裝") && !installingText.includes("密碼"), installingText);
     check("裝好告知更新完成、即將重新開啟", doneText.includes("更新完成") && doneText.includes("重新開啟") && !doneText.includes("安裝程式"), doneText);
-    check("後端拿到的是新版本號", await page.evaluate(() => JSON.stringify(window.__DBKIT_UPDATE_INSTALLS__) === "[\"9.9.9\"]"));
+  },
+
+  // .deb 沒有免密碼規則（被刪掉之類）：先提醒會要求輸入系統管理員密碼，等輸入密碼時也這樣說。
+  async "update-dialog-linux-password"(page) {
+    const { hintText, installingText } = await selfInstallUpdate(page, { kind: "deb", password: true });
+    check("先說明會要求輸入系統管理員密碼", hintText.includes("系統管理員密碼") && hintText.includes("重新開啟"), hintText);
+    check("等輸入密碼時顯示正在安裝", installingText.includes("系統管理員密碼"), installingText);
+  },
+
+  // macOS：換掉 .app 後重新開啟，跟 Linux 一樣是「更新完成」而不是「已啟動安裝程式」。
+  async "update-dialog-macos"(page) {
+    const { hintText, doneText } = await selfInstallUpdate(page, { kind: "macos", password: false });
+    check("說明裝好會重新開啟", hintText.includes("重新開啟") && !hintText.includes("關閉") && !hintText.includes("密碼"), hintText);
+    check("裝好告知更新完成、即將重新開啟", doneText.includes("更新完成") && doneText.includes("重新開啟"), doneText);
   },
 
   // 不支援自動安裝（macOS / 開發版 / 免安裝版）：只給「前往下載」，開的是 Release 頁面；失敗訊息看得到。
@@ -2401,7 +2425,7 @@ const CASES = {
 
   // 下載失敗：錯誤原因寫在對話框裡，按鈕變「重試」。
   async "update-dialog-error"(page) {
-    await page.evaluate(() => { window.__DBKIT_UPDATE_SUPPORT__ = "msi"; window.__DBKIT_UPDATE_FAIL__ = "更新失敗：下載的安裝檔 SHA-256 對不上"; });
+    await page.evaluate(() => { window.__DBKIT_UPDATE_SUPPORT__ = { kind: "msi", password: false }; window.__DBKIT_UPDATE_FAIL__ = "更新失敗：下載的安裝檔 SHA-256 對不上"; });
     await page.getByRole("button", { name: "關於", exact: true }).click();
     await page.getByRole("button", { name: "檢查更新", exact: true }).click();
     const found = page.getByText("有新版 v9.9.9，點擊更新", { exact: true });

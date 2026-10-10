@@ -1,0 +1,18 @@
+{
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/lib/db-kit/db-kit-updater": "binaries/db-kit-updater",
+          "/usr/share/polkit-1/actions/dev.dbkit.app.update.policy": "../linux-updater/dev.dbkit.app.update.policy"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/lib/db-kit/db-kit-updater": "binaries/db-kit-updater",
+          "/usr/share/polkit-1/actions/dev.dbkit.app.update.policy": "../linux-updater/dev.dbkit.app.update.policy"
+        }
+      }
+    }
+  }
+}
