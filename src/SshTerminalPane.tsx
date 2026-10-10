@@ -26,6 +26,7 @@ import { guessOs, guessShell } from "./sshCapture";
 import { b64ToBytes, binaryToB64, utf8ToB64 } from "./sshBytes";
 import { readClipboardText, writeClipboardText } from "./clipboard";
 import { isAppReserved } from "./ui/keyScope";
+import { remeasureWhenFontLoads, TERM_FONT } from "./ui/xtermFont";
 import { SshAuthPromptDialog, SshHostKeyDialog } from "./SshPrompts";
 import SshComposeBar from "./SshComposeBar";
 import SshStatusBar from "./SshStatusBar";
@@ -49,8 +50,6 @@ import type { TerminalSnapshot } from "./chatTypes";
 
 const SftpPanel = lazy(() => import("./SftpPanel"));
 const NlShellBar = lazy(() => import("./NlShellBar"));
-
-const MONO = '"JetBrains Mono", "Cascadia Mono", Consolas, "Noto Sans Mono CJK TC", "Microsoft JhengHei", monospace';
 
 /** Channel 的訊息在正式 Tauri 下是 ArrayBuffer；假後端（verify-ui shim）可能給 Uint8Array 或 base64 字串。 */
 function toBytes(v: unknown): Uint8Array {
@@ -231,7 +230,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
       scrollback: p.scrollback,
       cursorBlink: p.cursorBlink,
       cursorStyle: "block",
-      fontFamily: MONO,
+      fontFamily: TERM_FONT,
       fontSize,
       theme: xtermThemeFor(themeDef(themeId)),
       macOptionIsMeta: true,
@@ -254,6 +253,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
       } catch { /* DOM renderer */ }
     }
     fit.fit();
+    const stopFontWait = remeasureWhenFontLoads(term, () => { if (activeRef.current) fitRef.current?.fit(); });
 
     // 操作紀錄：Enter 時從畫面讀出執行的指令（不記鍵盤，密碼提示下打的字不會回顯，所以讀不到）。
     const tracker = new CommandTracker(term, logCommand, () => ({
@@ -327,6 +327,7 @@ export default function SshTerminalPane({ tab, active }: { tab: SshTab; active: 
     void connect();
 
     return () => {
+      stopFontWait();
       host.removeEventListener("paste", onNativePaste, true);
       dropListeners();
       tracker.dispose();

@@ -20,8 +20,7 @@ import { EDITOR_THEMES, getEditorThemeDef } from "../editorThemes";
 import { b64ToBytes, binaryToB64, utf8ToB64 } from "../sshBytes";
 import { isAppReserved } from "./keyScope";
 import { useModalView } from "./modalChrome";
-
-const MONO = '"JetBrains Mono", "Cascadia Mono", Consolas, "Noto Sans Mono CJK TC", "Microsoft JhengHei", monospace';
+import { remeasureWhenFontLoads, TERM_FONT } from "./xtermFont";
 
 export interface XtermHandle {
   term: Terminal;
@@ -73,7 +72,7 @@ export default function XtermView({ onReady, onData, onResize, readOnly = false,
       cursorInactiveStyle: "none",
       disableStdin: readOnly,
       convertEol: readOnly,
-      fontFamily: MONO,
+      fontFamily: TERM_FONT,
       fontSize: codeFontSize,
       theme: xtermThemeFor(getEditorThemeDef(themeId) ?? EDITOR_THEMES[0]),
       allowTransparency: false,
@@ -94,6 +93,7 @@ export default function XtermView({ onReady, onData, onResize, readOnly = false,
       } catch { /* DOM renderer */ }
     }
     try { fit.fit(); } catch { /* 隱藏中量不到尺寸 */ }
+    const stopFontWait = remeasureWhenFontLoads(term, () => { try { fit.fit(); } catch { /* 隱藏中 */ } });
     term.onData((d) => cb.current.onData?.(utf8ToB64(d)));
     term.onBinary((d) => cb.current.onData?.(binaryToB64(d)));
     term.onResize(({ cols, rows }) => cb.current.onResize?.(cols, rows));
@@ -109,6 +109,7 @@ export default function XtermView({ onReady, onData, onResize, readOnly = false,
     const cleanup = cb.current.onReady({ term, search, fit: () => { try { fit.fit(); } catch { /* 隱藏中 */ } } });
     if (autoFocus) term.focus();
     return () => {
+      stopFontWait();
       if (typeof cleanup === "function") cleanup();
       term.dispose();
       termRef.current = null;
