@@ -1,3 +1,14 @@
+## v0.57.6
+
+**Ubuntu 上 SSH 終端機的字距恢復正常，不再字字隔一大格。**
+
+修正：
+
+- **Ubuntu（中文環境）的 SSH 終端機、容器終端機字距太寬**：終端機字型寫的是「JetBrains Mono」，但 App 內嵌的那套字註冊名稱是「JetBrains Mono Variable」，等於沒用到；Ubuntu 沒裝 JetBrains Mono，WebKitGTK 就收下系統給的替代字——中文環境下是比例字 Noto Sans CJK TC。終端機拿它的「W」量格寬（約 0.86 個字寬），每個字都放進這麼寬的格子，看起來就是字字隔一大格。現在終端機直接用內嵌的 JetBrains Mono，Windows / macOS / Linux 的英數都是同一套字；中文照舊用系統字。
+- 內嵌字型比終端機晚載入時，字型到了會重新量一次格寬，不會卡在備援字的寬度。
+
+> 驗證：在 Docker 裡用 Ubuntu 24.04、繁體中文環境（zh_TW.UTF-8）、跟一般桌面相同的字型（Noto CJK / DejaVu / Ubuntu），以系統的 WebKitGTK（2.44.0 與 2.52.6，即 Tauri 在 Linux 用的那套）開 xterm 量測：修正前格寬 12px、字只有 8px 寬（14px 字級），跟截圖一樣字字隔一大格；修正後格寬 8px、跟實際字寬一致，兩個版本都一樣。Playwright 的 WebKit 與 Chromium 也確認修正後格寬等於字寬。vitest 新增 xtermFont 5 項（字型排第一的是 fonts.css 實際註冊的名稱、字型晚到會重量、卸載後不再碰終端），全部 2223 項通過；介面測試 SSH / SFTP / Docker 28 個情境 255 項通過；tsc、eslint 通過。沒測到：還沒在真的 Ubuntu 桌面上的 App 裡看過。
+
 ## v0.57.5
 
 **Ubuntu / macOS 上 SSH 終端機的複製貼上修好；Linux 也能在 App 裡直接更新（AppImage / .deb / .rpm）。**
