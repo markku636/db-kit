@@ -905,3 +905,95 @@ export const SP_TEST_SCAFFOLD = JSON.stringify({
         expect_error: { class: "user_raised", code: 50010, message_contains: "order already closed" } }] },
   ],
 }, null, 2);
+
+// ---- AI 助手（22-ai-sql / 23-ai-ssh）----
+// 助手偵測結果：CLI 供應商已安裝、已登入、找得到 dbk（資料庫工具可勾）。shim 預設的 agent_detect
+// 只回 available（面板會當成「尚未安裝」而顯示安裝提示列），這兩張改用這份。
+export const AGENT_STATUS_READY = {
+  provider: "claude", installed: true, version: "2.0.0", logged_in: true, path: "claude",
+  db_tools: "C:/Program Files/db-kit/dbk.exe",
+};
+
+// 22-ai-sql：問「上個月各會員等級的訂單數與營收」。助手先用唯讀資料庫工具看兩張表的結構、
+// 自己跑一次查詢，再交出 SQL；使用者按區塊上的「執行」在對話裡重跑，結果表就貼在區塊底下。
+export const AI_SQL_QUESTION = "上個月各會員等級的訂單數與營收，依營收排序";
+export const AI_SQL_QUERY =
+  "SELECT c.tier, COUNT(*) AS order_count, SUM(o.total_amount) AS revenue\n" +
+  "FROM orders o JOIN customers c ON c.customer_id = o.customer_id\n" +
+  "WHERE o.status IN ('paid', 'shipped', 'delivered')\n" +
+  "  AND o.placed_at >= DATE_FORMAT(NOW() - INTERVAL 1 MONTH, '%Y-%m-01')\n" +
+  "  AND o.placed_at <  DATE_FORMAT(NOW(), '%Y-%m-01')\n" +
+  "GROUP BY c.tier ORDER BY revenue DESC;";
+export const AI_SQL_RESULT = {
+  columns: ["tier", "order_count", "revenue"],
+  rows: [
+    ["gold", "1286", "2418760.50"],
+    ["platinum", "412", "1594420.00"],
+    ["silver", "2034", "1387215.75"],
+    ["regular", "3518", "1102934.20"],
+  ],
+  rows_affected: 0,
+  truncated: false,
+};
+const AI_SQL_PREVIEW = [AI_SQL_RESULT.columns.join(" | "), ...AI_SQL_RESULT.rows.map((r) => r.join(" | "))].join("\n") + "\n（共 4 列）";
+// 給 shim 的 queryFor：對話裡按「執行」送出的是 `USE shop;` + 這段，用 GROUP BY c.tier 認得出來。
+export const AI_SQL_QUERY_RESULTS = [{ match: "GROUP BY c\\.tier", result: AI_SQL_RESULT, delayMs: 36 }];
+export const AI_SQL_SCRIPTS = [{
+  match: "會員等級",
+  sessionId: "demo-session-sql",
+  durationMs: 7400,
+  tools: [
+    { tool: "describe_table", tool_id: "toolu_01", tool_input: "shop.customers", tool_ms: 8, tool_rows: 5,
+      tool_output_preview: "- customer_id bigint unsigned PK NOT NULL\n- email varchar(255) UNIQUE NOT NULL\n- name varchar(100) NOT NULL\n- tier enum('regular','silver','gold','platinum') NOT NULL DEFAULT regular\n- created_at datetime NOT NULL" },
+    { tool: "describe_table", tool_id: "toolu_02", tool_input: "shop.orders", tool_ms: 7, tool_rows: 8,
+      tool_output_preview: ORDERS_COLUMNS.map((c) => `- ${c.name} ${c.data_type}${c.key === "PRI" ? " PK" : ""}${c.nullable ? "" : " NOT NULL"}`).join("\n") },
+    { tool: "run_query", tool_id: "toolu_03", tool_input: AI_SQL_QUERY, tool_ms: 41, tool_rows: 4, tool_output_preview: AI_SQL_PREVIEW },
+  ],
+  chunks: [
+    "依會員等級分組，排除未付款與退款的訂單，「上個月」以月初為界：\n\n",
+    "```sql\n" + AI_SQL_QUERY + "\n```\n\n",
+    "唯讀工具已先跑過：**gold** 營收最高，**platinum** 客單價最高。",
+  ],
+}];
+
+// 23-ai-ssh：web-01 的根目錄快滿了。終端機先跑一次 df -h，再問助手；助手建議 sudo du（分級：送出前確認），
+// 使用者按「執行並回饋」→ 確認框 → 指令送進終端機、輸出貼回區塊底下並回饋給助手，助手解讀輸出。
+export const AI_SSH_QUESTION = "這台磁碟快滿了，幫我找出最佔空間的目錄";
+// head -5：前五名都 ≥ 10G（大小欄同為 3 字元），結果格裡 tab 對得齊；混到 1.6G / 612M 會參差（pre 的 tab-size 是 4）。
+export const AI_SSH_DU_CMD = "sudo du -xh /var --max-depth=2 | sort -rh | head -5";
+export const AI_SSH_OUTPUTS = [
+  { match: "^df -h$", output: [
+    "Filesystem      Size  Used Avail Use% Mounted on",
+    "/dev/sda1        80G   74G  5.8G  93% /",
+    "tmpfs           3.9G     0  3.9G   0% /dev/shm",
+    "/dev/sdb1       200G   61G  139G  31% /data",
+  ] },
+  { match: "^(sudo )?du -xh /var", output: [
+    "41G\t/var",
+    "22G\t/var/lib",
+    "21G\t/var/lib/docker",
+    "19G\t/var/log",
+    "17G\t/var/log/journal",
+  ] },
+];
+export const AI_SSH_SCRIPTS = [
+  {
+    // 「執行並回饋」那一輪：使用者氣泡是「已送出指令 `…`（N 行輸出）」，上下文帶著整段輸出。
+    match: "已送出指令",
+    sessionId: "demo-session-ssh",
+    durationMs: 5200,
+    chunks: [
+      "主要是 **/var/lib/docker**（21G）與 **/var/log/journal**（17G），先把日誌壓到 1G：\n\n",
+      "```bash\nsudo journalctl --vacuum-size=1G\n```\n",
+    ],
+  },
+  {
+    match: "最佔空間",
+    sessionId: "demo-session-ssh",
+    durationMs: 4800,
+    chunks: [
+      "`/` 已用 93%，先看最常長胖的 `/var`（`-x` 不跨檔案系統）：\n\n",
+      "```bash\n" + AI_SSH_DU_CMD + "\n```\n",
+    ],
+  },
+];

@@ -87,7 +87,11 @@ export function installShim(fx) {
   window.__DBKIT_KEY_IMPORTS__ = [];
   const one = (columns, cells) => ({ columns, rows: [cells], rows_affected: 0 });
 
+  // fx.QUERY_RESULTS（選用）：[{ match: 正規式字串, result, delayMs }]，比原本的關鍵字判斷優先（不分大小寫）。
+  const fixtureQuery = (sql) => (fx.QUERY_RESULTS ?? []).find((q) => new RegExp(q.match, "i").test(String(sql || "")));
   const queryFor = (sql) => {
+    const fq = fixtureQuery(sql);
+    if (fq) return [fq.result];
     const s = String(sql || "").toLowerCase();
     if (s.includes("version()")) return [one(["VERSION()", "@@character_set_server", "@@collation_server"], ["8.0.36", "utf8mb4", "utf8mb4_0900_ai_ci"])];
     if (s.includes("default_character_set_name")) return [one(["cs", "coll"], ["utf8mb4", "utf8mb4_0900_ai_ci"])];
@@ -405,7 +409,11 @@ metadata:
     redis_clients: () => [],
     list_schedules: () => [],
     list_backup_history: () => [],
-    run_query: ({ sql }) => queryFor(sql)[0] ?? { columns: [], rows: [], rows_affected: 0 },
+    run_query: ({ sql }) => {
+      const r = queryFor(sql)[0] ?? { columns: [], rows: [], rows_affected: 0 };
+      const delay = fixtureQuery(sql)?.delayMs;
+      return delay ? new Promise((res) => setTimeout(() => res(r), delay)) : r;
+    },
     run_query_multi: ({ sql }) => queryFor(sql),
     // DDL 執行（結構比對「直接執行」會打；早於 v0.30 就缺這個 handler）。
     exec_ddl: () => null,
@@ -643,7 +651,10 @@ metadata:
     app_lock_status: () => ({ locked: false, has_password: false, idle_minutes: 0 }),
     // 設定對話框的 App 鎖定小節會問；瀏覽器裡沒有 Windows Hello / Touch ID（與前端讀不到時的退路相同）。
     biometric_status: () => ({ available: false, kind: "none", reason: "unsupported_platform" }),
-    agent_detect: () => ({ available: true, provider: "claude", version: "2.0.0", path: "claude", models: [], note: null }),
+    // fx.AGENT_STATUS（選用）：完整的 AgentStatus（已安裝、已登入、有資料庫工具），面板才不會顯示安裝提示列。
+    agent_detect: ({ provider } = {}) => (fx.AGENT_STATUS
+      ? { ...fx.AGENT_STATUS, provider: provider ?? fx.AGENT_STATUS.provider }
+      : { available: true, provider: "claude", version: "2.0.0", path: "claude", models: [], note: null }),
     agent_cancel: () => { aiCancelled = true; return null; },
     // 串流回覆：一小段一小段 emit，讓截圖 / 冒煙檢查看到的是真的串流渲染路徑。
     agent_send: ({ reqId, mode, prompt }) => {
@@ -652,6 +663,25 @@ metadata:
       // 審查並執行的審查（mode = review）回一份帶 VERDICT 的審查；SSH 終端機情境（prompt 帶終端機上下文）
       // 回 bash 建議——提到「刪除」就回危險版（rm -rf，驗確認框）；其餘沿用比對報告的總結。
       const p = String(prompt ?? "");
+      // fx.AI_CHAT_SCRIPTS（選用）：依 prompt 比對（正規式字串，第一個命中者勝）的劇本——先 emit 工具呼叫
+      // （tool → tool_result）、再一段段 emit 文字、最後 result（耗時 / session）與 done。截圖用的對話走這裡。
+      const script = (fx.AI_CHAT_SCRIPTS ?? []).find((sc) => new RegExp(sc.match).test(p));
+      if (script) {
+        const steps = [];
+        for (const tc of script.tools ?? []) {
+          steps.push({ kind: "tool", tool: tc.tool, tool_id: tc.tool_id, tool_input: tc.tool_input });
+          steps.push({ kind: "tool_result", tool: tc.tool, tool_id: tc.tool_id, tool_output_preview: tc.tool_output_preview, tool_rows: tc.tool_rows, tool_ms: tc.tool_ms });
+        }
+        for (const text of script.chunks ?? []) steps.push({ kind: "text", text });
+        steps.push({ kind: "result", text: null, session_id: script.sessionId ?? null, duration_ms: script.durationMs ?? null, is_error: false });
+        const next = () => {
+          if (aiCancelled || i >= steps.length) { emit("agent-stream", { req_id: reqId, kind: "done", text: null }); return; }
+          emit("agent-stream", { req_id: reqId, ...steps[i++] });
+          setTimeout(next, 40);
+        };
+        setTimeout(next, 80);
+        return null;
+      }
       const reviewing = mode === "review" || mode === "dba";
       const chunks = reviewing && fx.AI_REVIEW_CHUNKS ? fx.AI_REVIEW_CHUNKS
         : /SSH 終端機/.test(p) && /刪除/.test(p) && fx.AI_SHELL_DANGER_CHUNKS ? fx.AI_SHELL_DANGER_CHUNKS
@@ -1228,6 +1258,9 @@ metadata:
   function sshRun(t, cmd) {
     const c = cmd.trim();
     if (!c) return "";
+    // fx.SSH_OUTPUTS（選用）：[{ match: 正規式字串, output: 行陣列 }]，比內建的幾個指令優先。
+    const fo = (fx.SSH_OUTPUTS ?? []).find((o) => new RegExp(o.match).test(c));
+    if (fo) return fo.output.join("\r\n");
     // 截圖用：長格式清單與幾個常見的唯讀指令，讓終端機畫面像一段真的工作階段。
     if (c === "ls -l" || c === "ls -la") {
       const dir = (n) => `\x1b[1;34m${n}\x1b[0m`;
@@ -1268,7 +1301,8 @@ metadata:
         t.send(`\r\n${out ? `${out}\r\n` : ""}${sshTitle(t)}${t.prompt}`);
         return;
       }
-      const sudo = /^sudo\s+(.+)$/.exec(t.line.trim());
+      // fx.SSH_SUDO_NOPASSWD：這台主機的 sudo 免密碼（NOPASSWD），sudo 指令直接跑、不跳密碼提示。
+      const sudo = fx.SSH_SUDO_NOPASSWD ? null : /^sudo\s+(.+)$/.exec(t.line.trim());
       if (sudo) {
         t.sudo = sudo[1];
         t.line = "";

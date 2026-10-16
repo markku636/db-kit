@@ -201,8 +201,27 @@ async function demoDesktopFrame(width = 1280, height = 720) {
   return { width, height, rgba_b64: raw.toString("base64") };
 }
 
+// AI 助手兩張：面板加寬到 560（預設 384 時 SQL 最長那行要橫向捲動、對話也長得放不進一屏）、
+// 模型選 Sonnet，偵測結果是「已就緒」。
+const AI_SEED = { "db-kit:assistantWidth": 560, "db-kit:aiModels": { claude: "sonnet" } };
+const AI_SQL_FX = {
+  STORAGE_SEED: { ...FX.STORAGE_SEED, ...AI_SEED },
+  AGENT_STATUS: FX.AGENT_STATUS_READY,
+  AI_CHAT_SCRIPTS: FX.AI_SQL_SCRIPTS,
+  QUERY_RESULTS: FX.AI_SQL_QUERY_RESULTS,
+};
+const AI_SSH_FX = {
+  STORAGE_SEED: { ...TERM_SEED, ...AI_SEED },
+  AGENT_STATUS: FX.AGENT_STATUS_READY,
+  AI_CHAT_SCRIPTS: FX.AI_SSH_SCRIPTS,
+  SSH_OUTPUTS: FX.AI_SSH_OUTPUTS,
+  SSH_SUDO_NOPASSWD: true, // 雲端主機常見的免密碼 sudo：輸出直接回來，不卡在密碼提示
+};
+
 const SHOT_FX = {
   "15-ssh-terminal": { STORAGE_SEED: TERM_SEED },
+  "22-ai-sql": AI_SQL_FX,
+  "23-ai-ssh": AI_SSH_FX,
   "16-docker": { ...CONTAINER_FX, CONNECTIONS: [...FX.CONNECTIONS.slice(0, 2), ...FX.CONTAINER_CONNECTIONS] },
   "17-kubernetes": K8S_FX,
   "18-remote-desktop": { RD_SESSIONS: FX.RD_SESSIONS_DEMO, RDP_DEMO_FRAME: null }, // 畫面在 main 裡才產生（要 await）
@@ -590,6 +609,40 @@ const SHOTS = {
     await shot(page, "20-folder-compare");
   },
 
+  // AI 助手 × SQL：資料表開著，問「上個月各會員等級的訂單數與營收」。助手先用唯讀資料庫工具查結構、
+  // 自己跑一次（工具呼叫列），交出 SQL；再按區塊上的「執行」在對話裡重跑，結果表貼在區塊底下。
+  async "22-ai-sql"(page) {
+    await openOrders(page);
+    await askAssistant(page, FX.AI_SQL_QUESTION);
+    const block = chatCodeBlock(page, "GROUP BY c.tier");
+    await block.getByRole("button", { name: "執行", exact: true }).click();
+    await block.getByText(/^4 列/).waitFor({ timeout: 8000 });
+    await sleep(400);
+    await chatFrame(page);
+    await shot(page, "22-ai-sql");
+  },
+
+  // AI 助手 × SSH：web-01 的終端機先跑 df -h（根目錄 93%），停在終端機上問助手 → 面板切成 SSH 模式。
+  // 助手建議 sudo du（區塊上標「送出前確認」），按「執行並回饋」→ 確認框 → 指令送進終端機、
+  // 輸出貼回區塊底下並回饋給助手，助手接著解讀輸出、給下一步。
+  async "23-ai-ssh"(page) {
+    await page.locator("[data-ssh-host-tree]").getByText("web-01", { exact: true }).first().dblclick();
+    await page.waitForFunction(() => (document.querySelector(".xterm-rows")?.innerText ?? "").includes("deploy@web-01"), null, { timeout: 10000 });
+    const compose = page.getByTestId("ssh-compose");
+    await compose.fill("df -h");
+    await compose.press("Enter");
+    await sleep(500);
+    await askAssistant(page, FX.AI_SSH_QUESTION);
+    const block = chatCodeBlock(page, "du -xh /var");
+    await block.getByRole("button", { name: "執行並回饋", exact: true }).click();
+    await page.getByRole("button", { name: "執行", exact: true }).last().click(); // 確認框（sudo → 以 root 權限執行）
+    await page.waitForFunction(() => document.body.innerText.includes("journalctl --vacuum-size"), null, { timeout: 15000 });
+    await page.getByRole("button", { name: "重新生成" }).waitFor({ timeout: 10000 });
+    await sleep(600);
+    await chatFrame(page);
+    await shot(page, "23-ai-ssh");
+  },
+
   // 新增連線：資料庫、訊息佇列、搜尋引擎、容器與映像、遠端主機全部在同一個選擇器裡。
   async "21-new-connection"(page) {
     await page.getByRole("button", { name: "連線", exact: true }).first().click();
@@ -600,6 +653,33 @@ const SHOTS = {
     await shot(page, "21-new-connection");
   },
 };
+
+// 打開右側 AI 助手面板（側欄的 ✨ 鈕），在輸入框打一句問題送出，等串流完（出現「重新生成」）。
+async function askAssistant(page, question) {
+  await page.getByRole("button", { name: "AI 助手", exact: true }).first().click();
+  const box = page.locator('[data-testid="assistant-options"]').locator("xpath=../..").locator("textarea");
+  await box.waitFor({ timeout: 5000 });
+  await box.fill(question);
+  await box.press("Enter");
+  await page.getByRole("button", { name: "重新生成" }).waitFor({ timeout: 15000 });
+  await sleep(300);
+}
+// 助手回覆裡含某段文字的那個程式碼區塊（外框 + 標題列按鈕 + 底下的結果格）。
+const chatCodeBlock = (page, text) => page.locator("div.rounded.border.bg-well", { has: page.locator("code", { hasText: text }) }).first();
+// 對話定格：讓最後一則回覆的底緣貼齊對話區底部（底下的「重新生成」列捲到畫面外），
+// 但不捲過第一則使用者問題——一屏放不下時寧可切底部，畫面要從問題開始。
+async function chatFrame(page) {
+  await page.locator('[data-testid="assistant-options"]').locator("xpath=../..").locator("div.flex-1.overflow-auto").first()
+    .evaluate((el) => {
+      const rows = [...el.children];
+      const box = el.getBoundingClientRect();
+      const at = (r, edge) => r.getBoundingClientRect()[edge] - box.top + el.scrollTop;
+      const lastMsg = rows[rows.length - 2] ?? rows[rows.length - 1]; // 最後一個 child 是「重新生成 / 新話題」列
+      const want = at(lastMsg, "bottom") + 12 - el.clientHeight;
+      el.scrollTop = Math.max(0, Math.min(want, at(rows[0], "top") - 12));
+    });
+  await sleep(200);
+}
 
 // 連上 prod-mysql、開查詢分頁、貼上一段 SQL（insertText：不觸發自動完成與自動括號）。
 async function openQueryTab(page, sql) {
