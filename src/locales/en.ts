@@ -4884,8 +4884,8 @@ const en: Catalog = {
   "接到 AI 工具（MCP）…": "Connect to AI tools (MCP)…",
   "把資料庫接到 Claude Code、Codex、Cursor、VS Code 等 AI 工具：選連線與權限，一鍵寫進它們的設定，或在背景開一個本機 HTTP 伺服器。":
     "Connect your databases to AI tools such as Claude Code, Codex, Cursor and VS Code: pick connections and permissions, write them into the tool's configuration in one click, or run a local HTTP server in the background.",
-  "讓 Claude Code、Codex、Cursor 等 AI 工具透過 MCP 直接查你的資料庫。設定檔只放連線代號，密碼仍留在系統金鑰圈；預設唯讀。":
-    "Let AI tools like Claude Code, Codex and Cursor query your databases over MCP. The configuration only holds connection ids; passwords stay in the system keychain. Read-only by default.",
+  "讓 Claude Code、Codex、Cursor 等 AI 工具透過 MCP 直接查你的資料庫、在 SSH 主機上執行指令。設定檔只放連線代號，密碼仍留在系統金鑰圈；預設唯讀。":
+    "Let AI tools like Claude Code, Codex and Cursor query your databases and run commands on SSH hosts over MCP. The configuration only holds connection ids; passwords stay in the system keychain. Read-only by default.",
   "找不到 dbk 執行檔，AI 工具無法啟動 MCP 伺服器。請重新安裝 db-kit，或以環境變數 DB_KIT_DBK_BIN 指定路徑。":
     "The dbk executable was not found, so AI tools cannot start the MCP server. Reinstall db-kit, or point DB_KIT_DBK_BIN at it.",
   "開放哪些連線": "Which connections",
@@ -4906,6 +4906,21 @@ const en: Catalog = {
     other: "{n} connections are writable (SQL databases only; Mongo / Redis stay read-only).",
   },
   "目前選的連線都不能寫入（只支援 SQL 資料庫；正式環境要另外勾選）。": "None of the selected connections can be written to (SQL databases only; production needs its own checkbox).",
+  "SSH 主機（終端機）": "SSH hosts (terminal)",
+  "讓 AI 在 SSH 主機上執行指令": "Let the AI run commands on SSH hosts",
+  "多兩支工具：list_ssh_hosts 列出主機、ssh_run 執行指令並回傳輸出與結束碼。用的是側欄存好的 SSH 主機，密碼仍從系統金鑰圈取；主機金鑰只信任你在 App 裡確認過的。預設唯讀：只放行 ls / cat / df / systemctl status / journalctl 這類查看指令。":
+    "Adds two tools: list_ssh_hosts lists the hosts and ssh_run runs a command and returns its output and exit code. They use the SSH hosts saved in the sidebar, with passwords still taken from the system keychain, and only trust host keys you have confirmed in the app. Read-only by default: only inspection commands such as ls / cat / df / systemctl status / journalctl are allowed.",
+  "不勾 = 全部 SSH 主機；勾選則只開放勾到的。": "Nothing selected = all SSH hosts; select some to expose only those.",
+  "一次性密碼 / 互動式認證的主機 MCP 無法登入": "MCP cannot sign in to hosts that use a one-time password / interactive authentication",
+  "還沒有 SSH 主機": "No SSH hosts yet",
+  "也允許執行會變更系統的指令": "Also allow commands that change the system",
+  "例如重啟服務、改設定檔、安裝套件。有風險的（刪除、sudo、停服務…）會先回傳原因與確認代碼，經你同意後 AI 才能帶代碼重送；刪根目錄、格式化磁碟這類極危險的指令一律不給執行。":
+    "For example restarting services, editing config files or installing packages. Risky commands (deleting, sudo, stopping services…) first come back with the reasons and a confirmation token, and the AI can resend them with the token only after you agree; extremely dangerous ones such as deleting the root directory or formatting disks are never run.",
+  "每條執行過的指令都記在「SSH 操作紀錄」（來源標示 MCP，指令裡的密碼會遮成 ***）。":
+    "Every command that runs is recorded in the “SSH activity log” (source shown as MCP, passwords in commands masked as ***).",
+  "⚠ 這個設定允許 AI 在 SSH 主機執行會變更系統的指令（有風險的要先經你同意）。":
+    "⚠ This configuration lets the AI run commands that change the system on SSH hosts (risky ones need your consent first).",
+  "MCP（外部 AI 工具）": "MCP (external AI tool)",
   "AI 工具": "AI tool",
   "通用 JSON（其他工具）": "Generic JSON (other tools)",
   "由 AI 工具啟動": "Launched by the AI tool",

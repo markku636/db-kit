@@ -2019,6 +2019,144 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "VNC 連線 I/O 錯誤：{detail}" => "VNC connection I/O error: {detail}",
         "noVNC 端回應的 RFB 版本字串格式不正確" => "The noVNC side sent a malformed RFB version string",
         "noVNC 端選了非預期的認證型別：{n}" => "The noVNC side chose an unexpected security type: {n}",
+
+        // ---- ssh/shell_guard.rs：指令分級理由（與前端 en.ts 同一份措辭；英文是接在 "it" 後面的動詞片語）----
+        "透過網路下載並直接執行" => "downloads from the network and runs it directly",
+        "清除指令歷史" => "clears command history",
+        "建立反向連線" => "opens a reverse connection",
+        "以 root 權限執行" => "runs as root",
+        "直接寫入磁碟裝置" => "writes directly to a disk device",
+        "寫入系統目錄" => "writes to a system directory",
+        "遞迴刪除根目錄或家目錄" => "recursively deletes the root or home directory",
+        "遞迴刪除系統目錄" => "recursively deletes a system directory",
+        "遞迴刪除" => "deletes recursively",
+        "目標為變數，未設定時可能刪到根目錄" => "target is a variable; if unset it may delete from the root",
+        "強制或批次刪除檔案" => "force-deletes or bulk-deletes files",
+        "刪除檔案" => "deletes files",
+        "以 dd 寫入資料" => "writes data with dd",
+        "格式化 / 抹除磁碟裝置" => "formats / wipes a disk device",
+        "磁碟分割 / 格式化 / 抹除" => "partitions / formats / wipes a disk",
+        "截斷檔案內容" => "truncates file contents",
+        "遞迴變更根目錄權限" => "recursively changes permissions on the root directory",
+        "遞迴變更權限" => "changes permissions recursively",
+        "開放寫入權限" => "opens write permissions",
+        "關機或重新開機" => "shuts down or reboots",
+        "停止、重啟或停用服務" => "stops, restarts or disables a service",
+        "終止所有程序" => "kills all processes",
+        "依名稱終止程序" => "kills processes by name",
+        "變更防火牆規則" => "changes firewall rules",
+        "清除排程" => "clears scheduled jobs",
+        "移除套件" => "removes packages",
+        "刪除叢集 / 雲端資源" => "deletes cluster / cloud resources",
+        "覆寫 git 歷史或丟棄變更" => "rewrites git history or discards changes",
+        "執行破壞性資料庫語句" => "runs a destructive database statement",
+        "變更使用者帳號" => "changes user accounts",
+        "掛載 / 卸載檔案系統" => "mounts / unmounts a file system",
+        "執行動態組出的指令（eval）" => "runs a dynamically built command (eval)",
+        "刪除容器 / 映像 / 資料卷" => "deletes containers / images / volumes",
+        "執行編碼過的指令" => "runs an encoded command",
+        "指令巢狀過深，無法判讀" => "command nesting too deep to analyse",
+        "fork bomb（會耗盡系統資源）" => "fork bomb (exhausts system resources)",
+        "、" => ", ",
+
+        // ---- ssh/shell_readonly.rs：MCP 唯讀模式 ----
+        "不在唯讀模式允許的指令清單" => "is not on the read-only allowlist",
+        "唯讀模式只允許查看類的子指令" => "only inspection subcommands are allowed in read-only mode",
+        "帶了會寫入檔案或執行其他程式的選項" => "uses an option that writes files or runs other programs",
+        "輸出重導向到檔案" => "redirects output to a file",
+        "會持續等待新輸出（例如 -f / --follow / -w），請改用一次性的寫法" => "keeps waiting for new output (e.g. -f / --follow / -w); use a one-shot form instead",
+        "資料庫命令列工具不在唯讀範圍（查資料庫請改用 db-kit 的資料庫工具）" => "database command-line tools are outside read-only mode (use db-kit's database tools to query databases)",
+        "{word}：{why}" => "{word}: {why}",
+
+        // ---- ssh/exec.rs ----
+        "（中間省略 {n} 位元組）" => "({n} bytes omitted)",
+        "送出指令失敗：{e}" => "Failed to send the command: {e}",
+        "伺服器拒絕執行指令（exec 請求被拒）" => "The server refused to run the command (exec request rejected)",
+
+        // ---- cli/mcp/ssh.rs：dbk mcp --ssh ----
+        "SSH 主機：先呼叫 list_ssh_hosts，再以 ssh_run 執行指令。有風險的指令會先被擋下並附確認代碼：一定要把指令與原因告訴使用者、取得同意後才帶 confirm_token 重送；不要用互動式指令。" => {
+            "SSH hosts: call list_ssh_hosts first, then run commands with ssh_run. Risky commands are held back with a confirmation token: always tell the user the command and the reasons and get their consent before resending it with confirm_token. Do not use interactive commands."
+        }
+        "SSH 主機：先呼叫 list_ssh_hosts，再以 ssh_run 執行查看類指令（唯讀；不能寫檔、刪除、重啟服務或 sudo）。不要用互動式指令。" => {
+            "SSH hosts: call list_ssh_hosts first, then run inspection commands with ssh_run (read-only: no writing files, deleting, restarting services or sudo). Do not use interactive commands."
+        }
+        "在使用者存在 db-kit 的 SSH 主機上執行 shell 指令，回傳 stdout / stderr / exit code。每條指令都先依 db-kit 終端機的安全規則分級：一般指令直接執行；有風險的（刪除、重啟服務、sudo、寫系統目錄…）不會執行，而是回傳原因與 confirm_token——必須先把指令與原因告訴使用者、取得同意後，才以相同的 host 與 command 加上 confirm_token 重送；極危險的（刪根目錄、格式化磁碟、fork bomb）一律不給執行。沒有終端機畫面、stdin 為空：不要用互動式指令（top 改 top -b -n 1、tail 不要 -f、journalctl 加 --no-pager）。輸出只留頭尾約 16 KB，逾時預設 30 秒。" => {
+            "Run a shell command on an SSH host the user saved in db-kit and return stdout / stderr / exit code. Every command is first classified with db-kit's terminal safety rules: ordinary commands run directly; risky ones (deleting, restarting services, sudo, writing system directories…) are not run — the reasons and a confirm_token are returned instead, and you must tell the user the command and the reasons and get their consent before resending the same host and command with confirm_token; extremely dangerous ones (deleting the root directory, formatting disks, fork bombs) are never run. There is no terminal screen and stdin is empty: do not use interactive commands (use top -b -n 1, tail without -f, journalctl with --no-pager). Only about 16 KB from the start and end of the output is kept; the default timeout is 30 seconds."
+        }
+        "在使用者存在 db-kit 的 SSH 主機上執行唯讀（查看類）指令，回傳 stdout / stderr / exit code。只放行 ls、cat、grep、df、ps、systemctl status、journalctl、docker ps、kubectl get 這類查看指令；不能寫檔、刪除、重啟服務或 sudo。沒有終端機畫面、stdin 為空：不要用互動式指令（top 改 top -b -n 1、tail 不要 -f、journalctl 加 --no-pager）。輸出只留頭尾約 16 KB，逾時預設 30 秒。" => {
+            "Run a read-only (inspection) command on an SSH host the user saved in db-kit and return stdout / stderr / exit code. Only inspection commands such as ls, cat, grep, df, ps, systemctl status, journalctl, docker ps and kubectl get are allowed; no writing files, deleting, restarting services or sudo. There is no terminal screen and stdin is empty: do not use interactive commands (use top -b -n 1, tail without -f, journalctl with --no-pager). Only about 16 KB from the start and end of the output is kept; the default timeout is 30 seconds."
+        }
+        "SSH 主機名稱（見 list_ssh_hosts）" => "SSH host name (see list_ssh_hosts)",
+        "要執行的 shell 指令（交給遠端的登入 shell 解譯；可用 && | ; 串接）" => "Shell command to run (interpreted by the remote login shell; && | ; may be used)",
+        "逾時秒數（預設 {d}，上限 {max}）" => "Timeout in seconds (default {d}, max {max})",
+        "前一次 ssh_run 對同一條指令回傳的確認代碼。只有在使用者明確同意執行之後才能帶上。" => {
+            "The confirmation token a previous ssh_run returned for this same command. Only include it after the user has explicitly agreed to run the command."
+        }
+        "列出可用的 SSH 主機（名稱 / 帳號@主機:埠 / 資料夾 / 跳板機）。ssh_run 的 host 參數用這裡的名稱。" => {
+            "List the available SSH hosts (name / user@host:port / folder / jump host). Use these names for ssh_run's host parameter."
+        }
+        "找不到 SSH 主機「{name}」。可用的主機：{list}（可先呼叫 list_ssh_hosts）" => "SSH host \"{name}\" not found. Available hosts: {list} (call list_ssh_hosts first)",
+        "（沒有可用的 SSH 主機：請先在 db-kit 的側欄新增 SSH 主機，或檢查 --ssh-hosts 白名單）" => {
+            "(No SSH hosts available: add an SSH host in the db-kit sidebar first, or check the --ssh-hosts allowlist)"
+        }
+        "可執行指令（有風險的要先經使用者同意）" => "commands allowed (risky ones need the user's consent first)",
+        "唯讀（只放行查看類指令）" => "read-only (inspection commands only)",
+        "SSH 主機（{n} 台，模式：{mode}）。ssh_run 的 host 參數用名稱：" => "SSH hosts ({n}, mode: {mode}). Use the name for ssh_run's host parameter:",
+        "資料夾 {name}" => "folder {name}",
+        "經跳板機 {name}" => "via jump host {name}",
+        "一次性密碼 / 互動式認證（MCP 無法使用）" => "one-time password / interactive authentication (not usable over MCP)",
+        "這段指令會停下來等人輸入（互動式），ssh_run 沒有終端機畫面可用。請改用非互動的寫法，例如 top -b -n 1、tail -n 100（不要 -f）、journalctl --no-pager -n 100、mysql -e \"…\"、apt-get -y …。" => {
+            "This command stops and waits for input (interactive), and ssh_run has no terminal screen. Use a non-interactive form instead, for example top -b -n 1, tail -n 100 (no -f), journalctl --no-pager -n 100, mysql -e \"…\" or apt-get -y …."
+        }
+        "這個 MCP 伺服器的 SSH 是唯讀模式，只能執行查看類指令。這段指令有：" => "SSH on this MCP server is read-only and only runs inspection commands. In this command:",
+        "要執行會變更系統的指令，請使用者在 db-kit 的 MCP 設定勾選「允許 AI 執行會變更系統的指令」（--allow-ssh-exec）。" => {
+            "To run commands that change the system, ask the user to tick “Allow AI to run commands that change the system” in db-kit's MCP settings (--allow-ssh-exec)."
+        }
+        "這段指令不允許透過 AI 執行：{reasons}。如果真的需要，請使用者自己在 db-kit 的終端機輸入。" => {
+            "This command may not be run through AI: it {reasons}. If it is really needed, the user should type it into the db-kit terminal themselves."
+        }
+        "這段指令需要使用者同意才會執行：{reasons}。請先把指令與原因告訴使用者；使用者同意後，以相同的 host 與 command 加上 confirm_token: \"{token}\" 再呼叫一次 ssh_run（15 分鐘內有效、只能用一次）。" => {
+            "This command needs the user's consent before it runs: it {reasons}. Tell the user the command and the reasons first; once they agree, call ssh_run again with the same host and command plus confirm_token: \"{token}\" (valid for 15 minutes, single use)."
+        }
+        "確認代碼對應的是另一條指令或另一台主機（指令有改動時要重新取得代碼）；請不帶 confirm_token 重新呼叫 ssh_run。" => {
+            "The confirmation token belongs to a different command or host (a changed command needs a new token); call ssh_run again without confirm_token."
+        }
+        "確認代碼不存在、已用過或已逾時（15 分鐘）；請不帶 confirm_token 重新呼叫 ssh_run 取得新的代碼。" => {
+            "The confirmation token does not exist, was already used or has expired (15 minutes); call ssh_run again without confirm_token to get a new one."
+        }
+        "缺少 host：請先呼叫 list_ssh_hosts，再以 host 參數指定主機名稱" => "Missing host: call list_ssh_hosts first, then pass a host name in the host parameter",
+        "缺少 command：要執行的指令" => "Missing command: the command to run",
+        "指令太長（上限 {n} 字）；請拆成幾次執行" => "The command is too long (limit {n} characters); split it into several runs",
+        "這台主機用一次性密碼 / 互動式認證登入，MCP 沒辦法代為輸入；請改用密碼（存在 db-kit）、私鑰或 ssh-agent。" => {
+            "This host signs in with a one-time password / interactive authentication, which MCP cannot answer; use a password (saved in db-kit), a private key or ssh-agent instead."
+        }
+        "寫入 SSH 操作紀錄失敗：{e}" => "Failed to write the SSH activity log: {e}",
+        "{host} 的主機金鑰還沒被信任過（{kind} {fp}）。MCP 不會替使用者信任新主機：請使用者先在 db-kit 開一次這台主機的終端機、確認指紋後再試。" => {
+            "The host key of {host} has not been trusted yet ({kind} {fp}). MCP does not trust new hosts on the user's behalf: ask the user to open a terminal to this host in db-kit once and confirm the fingerprint, then try again."
+        }
+        "{host} 的主機金鑰與記錄的指紋不同（現在是 {fp}），可能是主機重灌或遭中間人攻擊，已拒絕連線。請使用者在 db-kit 開這台主機的終端機確認。" => {
+            "The host key of {host} differs from the recorded fingerprint (now {fp}); the host may have been reinstalled or the connection intercepted, so the connection was refused. Ask the user to open a terminal to this host in db-kit to confirm."
+        }
+        "MCP 無法詢問密碼：請在 db-kit 的主機設定存好密碼（或私鑰密語），或改用私鑰 / ssh-agent。" => {
+            "MCP cannot ask for a password: save the password (or key passphrase) in the host settings in db-kit, or use a private key / ssh-agent."
+        }
+        "逾時（{n} 秒）已中斷，遠端程序可能仍在執行" => "Timed out after {n} s and was interrupted; the remote process may still be running",
+        "逾時已中斷" => "Timed out and was interrupted",
+        "被訊號中斷：{sig} · {secs}" => "Killed by signal: {sig} · {secs}",
+        "沒有回報結束碼 · {secs}" => "No exit code reported · {secs}",
+        "（沒有輸出）" => "(no output)",
+        "這個 MCP 伺服器沒有開放 SSH 主機（啟動時要加 --ssh）" => "This MCP server does not expose SSH hosts (start it with --ssh)",
+
+        // ---- cli/args.rs：dbk mcp --ssh ----
+        "開放 SSH 主機工具 list_ssh_hosts / ssh_run（用 db-kit 存好的 SSH 主機執行指令）；預設唯讀，只放行查看類指令" => {
+            "Expose the SSH host tools list_ssh_hosts / ssh_run (run commands on SSH hosts saved in db-kit); read-only by default, only inspection commands are allowed"
+        }
+        "只開放這些 SSH 主機（名稱或 id，逗號分隔；隱含 --ssh）；省略 = 全部 SSH 主機" => {
+            "Only expose these SSH hosts (names or ids, comma-separated; implies --ssh); omit = all SSH hosts"
+        }
+        "允許 AI 在 SSH 主機執行會變更系統的指令（隱含 --ssh）：有風險的要先經使用者同意，極危險的一律不給執行" => {
+            "Allow AI to run commands that change the system on SSH hosts (implies --ssh): risky ones need the user's consent first, extremely dangerous ones are never run"
+        }
         _ => return None,
     })
 }

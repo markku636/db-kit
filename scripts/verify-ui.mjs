@@ -5014,7 +5014,8 @@ const CASES = {
     await sleep(500);
     snippet = await dlg.locator("pre").first().innerText();
     check("勾「允許 AI 修改資料」後片段帶 --allow-write", snippet.includes("--allow-write"), snippet);
-    check("寫入子選項出現（高破壞 / 正式環境）", (await dlg.getByRole("checkbox").count()) === 3);
+    // 允許寫入 + 兩個子選項 + SSH 區塊的「讓 AI 在 SSH 主機上執行指令」。
+    check("寫入子選項出現（高破壞 / 正式環境）", (await dlg.getByRole("checkbox").count()) === 4);
 
     await dlg.locator("select").filter({ has: page.locator('option[value="codex"]') }).selectOption("codex");
     await sleep(500);
@@ -5031,6 +5032,38 @@ const CASES = {
     const inst = calls.find((c) => c.op === "install");
     check("寫入送出 Codex + 這條連線 + 允許寫入", !!inst && inst.req.client === "codex" && inst.req.server.conn === "c-mysql" && inst.req.server.allowWrite === true && inst.req.http === false, JSON.stringify(calls));
     check("寫入後按鈕變「更新設定檔」", (await dlg.getByRole("button", { name: "更新設定檔", exact: true }).count()) > 0);
+
+    // SSH 主機：預設不開；勾了才帶 --ssh（唯讀），挑主機帶 --ssh-hosts，勾 exec 才有 --allow-ssh-exec，寫入前確認會講明。
+    const sshBox = dlg.getByRole("checkbox", { name: /讓 AI 在 SSH 主機上執行指令/ });
+    check("有 SSH 主機區塊，預設不開", (await sshBox.count()) === 1 && !(await sshBox.isChecked()));
+    snippet = await dlg.locator("pre").first().innerText();
+    check("沒勾 SSH：片段沒有 --ssh", !snippet.includes('"--ssh"'), snippet);
+    await sshBox.check();
+    await sleep(500);
+    snippet = await dlg.locator("pre").first().innerText();
+    check("勾 SSH：片段帶 --ssh，預設唯讀（沒有 --allow-ssh-exec）", snippet.includes('"--ssh"') && !snippet.includes("--allow-ssh-exec"), snippet);
+    const hostChip = dlg.locator("button", { hasText: "web-01" });
+    check("列出側欄的 SSH 主機", (await hostChip.count()) === 1);
+    await hostChip.click();
+    await sleep(500);
+    snippet = await dlg.locator("pre").first().innerText();
+    check("勾一台主機：片段帶 --ssh-hosts 與它的 id", snippet.includes('"--ssh-hosts", "ssh-web01"'), snippet);
+    await dlg.getByRole("checkbox", { name: /也允許執行會變更系統的指令/ }).check();
+    await sleep(500);
+    snippet = await dlg.locator("pre").first().innerText();
+    check("勾 exec：片段帶 --allow-ssh-exec", snippet.includes('"--allow-ssh-exec"'), snippet);
+    await dlg.getByRole("button", { name: "更新設定檔", exact: true }).click();
+    await sleep(300);
+    check("寫入前確認：講明會讓 AI 在 SSH 主機改系統", (await appText(page)).includes("SSH 主機執行會變更系統的指令"));
+    await page.getByRole("button", { name: "寫入", exact: true }).click();
+    await sleep(600);
+    calls = await page.evaluate(() => window.__DBKIT_MCP_CALLS__);
+    const sshInst = calls.filter((c) => c.op === "install").pop();
+    check(
+      "寫入送出 SSH 選項（主機 id、允許 exec）",
+      !!sshInst && sshInst.req.server.ssh === true && sshInst.req.server.allowSshExec === true && JSON.stringify(sshInst.req.server.sshHosts) === '["ssh-web01"]',
+      JSON.stringify(sshInst),
+    );
 
     await dlg.getByRole("radio", { name: "HTTP", exact: true }).click();
     await sleep(400);

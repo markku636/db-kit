@@ -36,6 +36,12 @@ export interface McpServerArgs {
   allowDestructive?: boolean;
   allowProd?: boolean;
   out?: string | null;
+  /** 開放 SSH 主機工具（list_ssh_hosts / ssh_run）；預設唯讀。sshHosts 非空或 allowSshExec 時後端也當作開。 */
+  ssh?: boolean;
+  /** 只開放這些 SSH 主機（id）；空 = 全部。 */
+  sshHosts?: string[];
+  /** 允許執行會變更系統的指令（有風險的仍要經使用者同意，極危險的一律不給）。 */
+  allowSshExec?: boolean;
   lang?: string | null;
 }
 
@@ -113,6 +119,11 @@ export interface McpFormState {
   allowWrite: boolean;
   allowDestructive: boolean;
   allowProd: boolean;
+  /** 開放 SSH 主機。 */
+  ssh: boolean;
+  /** SSH 主機白名單（id；空 = 全部）。 */
+  sshHosts: string[];
+  allowSshExec: boolean;
 }
 
 export function serverArgsOf(f: McpFormState): McpServerArgs {
@@ -125,21 +136,31 @@ export function serverArgsOf(f: McpFormState): McpServerArgs {
     allowWrite: f.allowWrite,
     allowDestructive: f.allowWrite && f.allowDestructive,
     allowProd: f.allowWrite && f.allowProd,
+    ssh: f.ssh,
+    sshHosts: f.ssh ? f.sshHosts : [],
+    allowSshExec: f.ssh && f.allowSshExec,
   };
 }
 
 /** 兩組伺服器選項是否等價（忽略語言與空值寫法）：HTTP 伺服器執行中、選項卻改了 → 要提示重啟。 */
 export function sameServerArgs(a: McpServerArgs | null | undefined, b: McpServerArgs | null | undefined): boolean {
   if (!a || !b) return false;
-  const norm = (s: McpServerArgs) => ({
-    conn: s.conn || null,
-    database: (s.conn && s.database) || null,
-    connections: s.conn ? [] : [...(s.connections ?? [])].sort(),
-    tools: [...(s.tools ?? [])].sort(),
-    allowWrite: !!s.allowWrite,
-    allowDestructive: !!s.allowWrite && !!s.allowDestructive,
-    allowProd: !!s.allowWrite && !!s.allowProd,
-  });
+  const norm = (s: McpServerArgs) => {
+    // 與後端 ServerArgs::to_args 同一條規則：白名單或 exec 都隱含開 SSH。
+    const ssh = !!s.ssh || !!s.allowSshExec || !!s.sshHosts?.length;
+    return {
+      conn: s.conn || null,
+      database: (s.conn && s.database) || null,
+      connections: s.conn ? [] : [...(s.connections ?? [])].sort(),
+      tools: [...(s.tools ?? [])].sort(),
+      allowWrite: !!s.allowWrite,
+      allowDestructive: !!s.allowWrite && !!s.allowDestructive,
+      allowProd: !!s.allowWrite && !!s.allowProd,
+      ssh,
+      sshHosts: ssh ? [...(s.sshHosts ?? [])].sort() : [],
+      allowSshExec: ssh && !!s.allowSshExec,
+    };
+  };
   return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
 }
 

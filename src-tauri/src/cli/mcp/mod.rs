@@ -10,6 +10,7 @@
 //! - `registry`：單一連線（`--conn` / `--url`）或多連線（全部已存連線，`--connections` 白名單）；連線延遲建立。
 //! - `extra`：MCP 專屬的唯讀延伸工具（list_connections / list_routines / get_ddl / compare_schema）。
 //! - `write`：`--allow-write` 的寫入工具（preview_write → 審查代碼 → execute_write，走審查並執行核心）。
+//! - `ssh`：`--ssh` 的 SSH 主機工具（list_ssh_hosts / ssh_run；預設唯讀，`--allow-ssh-exec` 才能改系統）。
 //! - `http`：`--http` 的 Streamable HTTP 傳輸。
 //!
 //! 行為：
@@ -17,10 +18,12 @@
 //! - 連線延遲到第一次工具呼叫才建立：`initialize` / `tools/list` 不該因為資料庫暫時連不上就失敗。
 //! - 工具失敗回 `isError: true` 的**結果**而非 JSON-RPC 錯誤（MCP 規範：讓模型看到錯誤文字自行修正）。
 //! - 預設唯讀。寫入要伺服器啟動時明確 `--allow-write`；高破壞 / 正式環境再各要一個旗標，模型改不了。
+//!   SSH 同理：`--ssh` 只放行查看類指令，`--allow-ssh-exec` 才能跑會改系統的指令（有風險的仍要使用者同意）。
 
 mod extra;
 mod http;
 mod registry;
+mod ssh;
 mod write;
 
 use std::path::PathBuf;
@@ -48,6 +51,8 @@ pub struct McpServer {
     /// `--allow-write` 才有；None = 唯讀伺服器（寫入工具不列出、硬叫也擋）。
     write: Option<WritePolicy>,
     pending: PendingStore,
+    /// `--ssh`（或 `--ssh-hosts` / `--allow-ssh-exec`）才有；None = 不提供 SSH 主機工具。
+    ssh: Option<ssh::SshTools>,
 }
 
 /// 預設的寫入輸出目錄：`<設定目錄>/mcp-runs`。
@@ -64,11 +69,13 @@ impl McpServer {
             allow_prod: o.allow_prod,
             out: o.out.as_deref().map(PathBuf::from).unwrap_or_else(default_out_dir),
         });
+        let ssh = (o.ssh || o.allow_ssh_exec || !o.ssh_hosts.is_empty()).then(|| ssh::SshTools::new(&o.ssh_hosts, o.allow_ssh_exec));
         McpServer {
             reg: Registry::new(Mode::from_args(conn, &o.connections), allow.clone()),
             allow,
             write,
             pending: PendingStore::default(),
+            ssh,
         }
     }
 
@@ -86,6 +93,9 @@ impl McpServer {
         }
         if self.write.is_some() {
             parts.push(t!("修改資料或結構一律先呼叫 preview_write，把影響列數與回滾能力給使用者看過、取得同意後，才以審查代碼呼叫 execute_write。不要用 run_query 嘗試寫入。"));
+        }
+        if let Some(s) = &self.ssh {
+            parts.push(s.instructions());
         }
         parts.join("\n")
     }
@@ -139,11 +149,15 @@ impl McpServer {
                 }
             }
         }
+        if let Some(s) = &self.ssh {
+            defs.extend(s.defs());
+        }
         Ok(defs.into_iter().filter(|d| self.allows(d.name)).collect())
     }
 
     fn is_known(name: &str) -> bool {
         dbtools::is_db_tool(name)
+            || ssh::is_tool(name)
             || matches!(
                 name,
                 extra::LIST_CONNECTIONS | extra::LIST_ROUTINES | extra::GET_DDL | extra::COMPARE_SCHEMA | write::PREVIEW_WRITE | write::EXECUTE_WRITE
@@ -168,6 +182,14 @@ impl McpServer {
                     self.write.as_ref().is_some_and(|w| crate::review_run::analyze::supported_kind(c.kind) && (!c.prod || w.allow_prod))
                 };
                 Ok(extra::format_connections(&list, writable))
+            }
+            ssh::LIST_SSH_HOSTS | ssh::SSH_RUN => {
+                let s = self.ssh.as_ref().ok_or_else(|| t!("這個 MCP 伺服器沒有開放 SSH 主機（啟動時要加 --ssh）").to_string())?;
+                if name == ssh::LIST_SSH_HOSTS {
+                    s.list().await
+                } else {
+                    s.run(args).await
+                }
             }
             write::PREVIEW_WRITE => {
                 let policy = self.write.as_ref().ok_or_else(|| t!("這個 MCP 伺服器沒有開放寫入（啟動時要加 --allow-write）").to_string())?;
@@ -312,6 +334,9 @@ impl McpServer {
     /// 收尾：釋放連線池（stdin EOF / 用戶端關閉 / Ctrl+C 時）。
     pub async fn shutdown(&self) {
         self.reg.shutdown().await;
+        if let Some(s) = &self.ssh {
+            s.shutdown().await;
+        }
     }
 }
 
@@ -422,6 +447,9 @@ async fn client_config(conn: &ConnArgs, c: McpClientArgs, install: bool) -> AppR
                 allow_destructive: c.serve.allow_destructive,
                 allow_prod: c.serve.allow_prod,
                 out: c.serve.out.clone(),
+                ssh: c.serve.ssh,
+                ssh_hosts: c.serve.ssh_hosts.clone(),
+                allow_ssh_exec: c.serve.allow_ssh_exec,
                 lang: conn.lang.clone(),
             }
             .to_args();
@@ -588,6 +616,37 @@ pub(super) mod tests {
         // 開寫入時 run_query 擋下寫入語句會指路到 preview_write。
         let e = w.handle_line(&call(6, "run_query", json!({ "query": "DELETE FROM t" }))).await.unwrap();
         assert!(text(&e).contains("preview_write"));
+    }
+
+    #[tokio::test]
+    async fn ssh_tools_only_with_ssh_flags() {
+        let tool = |r: &Value, n: &str| r["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == n).cloned().unwrap();
+        // 沒開 --ssh：不列出，硬叫明講要加旗標（而不是「未知的工具」）。
+        let s = server(&["--kind", "mysql"]);
+        let r = s.handle_line(&req(1, "tools/list", json!({}))).await.unwrap();
+        assert!(!names(&r).iter().any(|n| n.contains("ssh")));
+        let e = s.handle_line(&call(2, "ssh_run", json!({ "host": "x", "command": "ls" }))).await.unwrap();
+        assert_eq!(e["result"]["isError"], true);
+        assert!(text(&e).contains("--ssh"), "{}", text(&e));
+        // --ssh：唯讀，沒有 confirm_token 參數；指示裡提到 list_ssh_hosts。
+        let w = server_with(&["--kind", "mysql"], &["--ssh"]);
+        let r = w.handle_line(&req(3, "tools/list", json!({}))).await.unwrap();
+        let n = names(&r);
+        assert!(n.contains(&"list_ssh_hosts".to_string()) && n.contains(&"ssh_run".to_string()));
+        assert!(tool(&r, "ssh_run")["inputSchema"]["properties"].get("confirm_token").is_none());
+        let i = w.handle_line(&req(4, "initialize", json!({}))).await.unwrap();
+        assert!(i["result"]["instructions"].as_str().unwrap().contains("list_ssh_hosts"));
+        // --allow-ssh-exec / --ssh-hosts 隱含 --ssh；exec 多一個 confirm_token。
+        let x = server_with(&[], &["--allow-ssh-exec"]);
+        let r = x.handle_line(&req(5, "tools/list", json!({}))).await.unwrap();
+        assert!(tool(&r, "ssh_run")["inputSchema"]["properties"]["confirm_token"].is_object());
+        let h = server_with(&[], &["--ssh-hosts", "web1,web2"]);
+        let r = h.handle_line(&req(6, "tools/list", json!({}))).await.unwrap();
+        assert!(names(&r).contains(&"ssh_run".to_string()));
+        // --tools 白名單一樣管得到 SSH 工具。
+        let t = server_with(&["--kind", "mysql"], &["--ssh", "--tools", "list_ssh_hosts"]);
+        let r = t.handle_line(&req(7, "tools/list", json!({}))).await.unwrap();
+        assert_eq!(names(&r), ["list_ssh_hosts"]);
     }
 
     #[tokio::test]

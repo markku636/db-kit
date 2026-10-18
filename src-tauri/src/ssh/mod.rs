@@ -18,19 +18,27 @@
 //! - `sftp_window`：SFTP 獨立視窗的視窗標籤與網址。
 //! - `ftp`：FTP / FTPS 客戶端（檔案面板的 FTP 主機；斷點續傳走 REST / APPE）。
 //! - `files`：`FileClient`——檔案面板的後端（SFTP 或 FTP），`ssh_sftp_*` 命令照協定分派。
+//! - `exec`：非互動執行一段指令（無 PTY，收 stdout / stderr / exit code；`dbk mcp` 的 `ssh_run` 用）。
+//! - `shell_guard`：指令分級 safe / confirm / block（前端 `shellGuard.ts` 的 Rust 版，共用案例釘住）。
+//! - `shell_readonly`：MCP 唯讀模式的指令白名單（只放行查看類指令）。
+//! - `redact`：指令裡的密碼換成 `***`（前端 `redactSecrets` 的 Rust 版，寫操作紀錄前用）。
 
 pub mod auth;
+pub mod exec;
 pub mod files;
 pub mod ftp;
 pub mod host_import;
 pub mod keys;
 pub mod known_hosts;
 pub mod oplog;
+pub mod redact;
 pub mod runtime;
 pub mod session_log;
 pub mod sessions;
 pub mod sftp;
 pub mod sftp_window;
+pub mod shell_guard;
+pub mod shell_readonly;
 pub mod terminal;
 mod tunnel;
 

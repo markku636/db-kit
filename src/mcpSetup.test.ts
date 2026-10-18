@@ -10,6 +10,9 @@ const base: McpFormState = {
   allowWrite: false,
   allowDestructive: false,
   allowProd: false,
+  ssh: false,
+  sshHosts: [],
+  allowSshExec: false,
 };
 
 describe("serverArgsOf", () => {
@@ -35,6 +38,15 @@ describe("serverArgsOf", () => {
     expect(on.allowDestructive).toBe(true);
     expect(on.allowProd).toBe(false);
   });
+
+  it("SSH host list and exec only travel with ssh", () => {
+    const off = serverArgsOf({ ...base, sshHosts: ["h1"], allowSshExec: true });
+    expect(off.ssh).toBe(false);
+    expect(off.sshHosts).toEqual([]);
+    expect(off.allowSshExec).toBe(false);
+    const on = serverArgsOf({ ...base, ssh: true, sshHosts: ["h1"], allowSshExec: true });
+    expect(on).toMatchObject({ ssh: true, sshHosts: ["h1"], allowSshExec: true });
+  });
 });
 
 describe("sameServerArgs", () => {
@@ -44,6 +56,13 @@ describe("sameServerArgs", () => {
     expect(sameServerArgs(a, b)).toBe(true);
     expect(sameServerArgs(a, { ...b, allowWrite: true })).toBe(false);
     expect(sameServerArgs(a, null)).toBe(false);
+  });
+
+  it("treats a host allow-list or exec as SSH on (same rule as the backend)", () => {
+    const a = { conn: null, ssh: true, sshHosts: ["y", "x"], allowSshExec: true };
+    expect(sameServerArgs(a, { conn: null, sshHosts: ["x", "y"], allowSshExec: true })).toBe(true);
+    expect(sameServerArgs(a, { ...a, allowSshExec: false })).toBe(false);
+    expect(sameServerArgs({ conn: null }, { conn: null, ssh: true })).toBe(false);
   });
 });
 

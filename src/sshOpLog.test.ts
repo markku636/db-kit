@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import redactCases from "../src-tauri/tests/fixtures/secret-redact-cases.json";
 import {
   classifyInput, entryHost, isSecretPrompt, logicalEnd, logicalStart, pickLater, rangeFor, readSpan, redactSecrets,
   stripPrompt, textBeforeCursor, toCsv, type BufLike, type SshOpEntry,
@@ -55,6 +56,13 @@ describe("isSecretPrompt", () => {
     "~/secret-project$ ",
     "Are you sure you want to continue connecting (yes/no/[fingerprint])? ",
   ])("不是密碼提示：%s", (s) => expect(isSecretPrompt(s)).toBe(false));
+});
+
+// 共用案例：後端 src-tauri/src/ssh/redact.rs（`dbk mcp` 的 ssh_run 寫操作紀錄前用）跑同一份檔案。
+describe("redactSecrets 共用案例（與後端 redact.rs 一致）", () => {
+  it.each(redactCases.cases.map((c) => [c.input, c.output] as const))("%j", (input, output) => {
+    expect(redactSecrets(input)).toBe(output);
+  });
 });
 
 describe("redactSecrets", () => {

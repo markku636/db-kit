@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Copy, Eye, EyeOff, FolderOpen, KeyRound, Play, PlugZap, RotateCw, Server, ShieldAlert, ShieldCheck, Square, Trash2,
+  AlertTriangle, Copy, Eye, EyeOff, FolderOpen, KeyRound, Play, PlugZap, RotateCw, Server, ShieldAlert, ShieldCheck, Square, SquareTerminal, Trash2,
 } from "lucide-react";
 import { api } from "./api";
 import { useT } from "./i18n";
 import { useStore } from "./store";
+import { sessionLabel, useSshSessions } from "./sshSessions";
+import { isFtpHost } from "./sshTypes";
 import { copyToClipboard, pickDirectory, toast, uiConfirm } from "./ui";
 import { Badge, Button, Field, Icon, IconButton, Input, Modal, Segmented, Select } from "./ui/index";
 import {
@@ -14,7 +16,7 @@ import {
 
 // 「MCP 設定」：把 dbk 接到 Claude Code / Codex / Cursor / VS Code / Claude Desktop / Windsurf。
 //
-// 由上而下就是使用者要做的決定：開放哪些連線 → 給不給寫 → 用哪個 AI 工具、怎麼連 → 看設定內容、一鍵寫入。
+// 由上而下就是使用者要做的決定：開放哪些連線 → 給不給寫 → 開不開 SSH 主機 → 用哪個 AI 工具、怎麼連 → 看設定內容、一鍵寫入。
 // 設定片段與寫檔都在後端（mcp_setup.rs，與 `dbk mcp config|install` 同一份），這裡每次選項一變就重新預覽。
 // 設定檔永遠不放密碼：連線以 id 指向 db-kit 已存連線，執行時才從系統金鑰圈取。
 
@@ -30,6 +32,7 @@ export default function McpSetupDialog() {
   const [info, setInfo] = useState<McpSetupInfo | null>(null);
   const [form, setForm] = useState<McpFormState>({
     scope: "all", connId: null, database: "", only: [], allowWrite: false, allowDestructive: false, allowProd: false,
+    ssh: false, sshHosts: [], allowSshExec: false,
   });
   const [client, setClient] = useState<McpClientId>("claude-code");
   const [useHttp, setUseHttp] = useState(false);
@@ -83,6 +86,7 @@ export default function McpSetupDialog() {
 
   const set = (patch: Partial<McpFormState>) => setForm((f) => ({ ...f, ...patch }));
   const toggleOnly = (id: string) => set({ only: form.only.includes(id) ? form.only.filter((x) => x !== id) : [...form.only, id] });
+  const sshExec = form.ssh && form.allowSshExec;
 
   const refreshPreview = () => api.mcpSetupPreview(req).then(setPreview).catch(() => {});
 
@@ -95,8 +99,9 @@ export default function McpSetupDialog() {
       preview.installed ? t("已有同名項目，會被取代。") : "",
       t("原檔會先備份成 .dbkit-bak。"),
       form.allowWrite ? t("⚠ 這個設定允許 AI 修改資料（每次都要先預覽、經你同意才執行）。") : "",
+      sshExec ? t("⚠ 這個設定允許 AI 在 SSH 主機執行會變更系統的指令（有風險的要先經你同意）。") : "",
     ].filter(Boolean);
-    if (!(await uiConfirm(lines.join("\n"), { title: t("寫入 MCP 設定"), confirmText: t("寫入"), danger: form.allowWrite }))) return;
+    if (!(await uiConfirm(lines.join("\n"), { title: t("寫入 MCP 設定"), confirmText: t("寫入"), danger: form.allowWrite || sshExec }))) return;
     setBusy(true);
     try {
       const o = await api.mcpSetupInstall(req);
@@ -179,7 +184,7 @@ export default function McpSetupDialog() {
     >
       <div className="space-y-5">
         <p className={hint}>
-          {t("讓 Claude Code、Codex、Cursor 等 AI 工具透過 MCP 直接查你的資料庫。設定檔只放連線代號，密碼仍留在系統金鑰圈；預設唯讀。")}
+          {t("讓 Claude Code、Codex、Cursor 等 AI 工具透過 MCP 直接查你的資料庫、在 SSH 主機上執行指令。設定檔只放連線代號，密碼仍留在系統金鑰圈；預設唯讀。")}
         </p>
         {info && !info.dbkPath && (
           <div className="rounded border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning flex gap-2">
@@ -273,7 +278,10 @@ export default function McpSetupDialog() {
           )}
         </section>
 
-        {/* 3. AI 工具與連法 */}
+        {/* 3. SSH 主機 */}
+        <McpSshSection open={open} form={form} set={set} />
+
+        {/* 4. AI 工具與連法 */}
         <section className="space-y-3 pt-4 border-t border-fg/10">
           <div className={sectionTitle}><Icon icon={PlugZap} size={15} /> {t("AI 工具")}</div>
           <div className="grid grid-cols-2 gap-3">
@@ -365,7 +373,7 @@ export default function McpSetupDialog() {
           )}
         </section>
 
-        {/* 4. 設定內容 */}
+        {/* 5. 設定內容 */}
         <section className="space-y-2 pt-4 border-t border-fg/10">
           <div className="flex items-center gap-2">
             <div className={sectionTitle}>{t("設定內容")}</div>
@@ -403,5 +411,75 @@ export default function McpSetupDialog() {
         </section>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * 「SSH 主機（終端機）」區塊：開不開 SSH 工具、開放哪幾台、給不給執行會變更系統的指令。
+ * 主機清單用側欄同一份 store（只列 SSH，FTP 主機沒有終端機）；對話框打開時還沒載入過就載一次。
+ */
+function McpSshSection({ open, form, set }: { open: boolean; form: McpFormState; set: (patch: Partial<McpFormState>) => void }) {
+  const t = useT();
+  const allHosts = useSshSessions((s) => s.sessions);
+  const loaded = useSshSessions((s) => s.loaded);
+  const load = useSshSessions((s) => s.load);
+  const hosts = useMemo(() => allHosts.filter((s) => !isFtpHost(s)), [allHosts]);
+
+  useEffect(() => {
+    if (open && !loaded) void load();
+  }, [open, loaded, load]);
+
+  const toggle = (id: string) => set({ sshHosts: form.sshHosts.includes(id) ? form.sshHosts.filter((x) => x !== id) : [...form.sshHosts, id] });
+  const hint = "text-xs text-fg/50 leading-relaxed";
+
+  return (
+    <section className="space-y-2 pt-4 border-t border-fg/10">
+      <div className="text-sm font-medium text-fg/90 flex items-center gap-2"><Icon icon={SquareTerminal} size={15} /> {t("SSH 主機（終端機）")}</div>
+      <label className="flex items-start gap-2 text-sm text-fg/80 cursor-pointer select-none">
+        <input type="checkbox" className="mt-1" checked={form.ssh} onChange={(e) => set({ ssh: e.target.checked })} />
+        <span>
+          {t("讓 AI 在 SSH 主機上執行指令")}
+          <span className={`block ${hint}`}>
+            {t("多兩支工具：list_ssh_hosts 列出主機、ssh_run 執行指令並回傳輸出與結束碼。用的是側欄存好的 SSH 主機，密碼仍從系統金鑰圈取；主機金鑰只信任你在 App 裡確認過的。預設唯讀：只放行 ls / cat / df / systemctl status / journalctl 這類查看指令。")}
+          </span>
+        </span>
+      </label>
+      {form.ssh && (
+        <div className="ml-6 space-y-2">
+          <p className={hint}>{t("不勾 = 全部 SSH 主機；勾選則只開放勾到的。")}</p>
+          <div className="flex flex-wrap gap-1.5 max-h-28 overflow-auto">
+            {hosts.map((h) => {
+              const on = form.sshHosts.includes(h.id);
+              const otp = h.auth === "keyboard_interactive";
+              return (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => toggle(h.id)}
+                  title={otp ? t("一次性密碼 / 互動式認證的主機 MCP 無法登入") : undefined}
+                  className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs ${on ? "border-accent bg-accent/15 text-accent" : "border-fg/15 text-fg/70 hover:bg-fg/5"}`}
+                >
+                  {sessionLabel(h)}
+                  {/* 沒取名稱的主機，sessionLabel 本身就是 user@host，不再重複一次。 */}
+                  {h.name?.trim() && <span className="text-fg/40">{h.username ? `${h.username}@${h.host}` : h.host}</span>}
+                  {otp && <Badge tone="warning">OTP</Badge>}
+                </button>
+              );
+            })}
+            {hosts.length === 0 && <span className={hint}>{t("還沒有 SSH 主機")}</span>}
+          </div>
+          <label className="flex items-start gap-2 text-sm text-fg/80 cursor-pointer select-none">
+            <input type="checkbox" className="mt-1" checked={form.allowSshExec} onChange={(e) => set({ allowSshExec: e.target.checked })} />
+            <span>
+              {t("也允許執行會變更系統的指令")}
+              <span className={`block ${hint}`}>
+                {t("例如重啟服務、改設定檔、安裝套件。有風險的（刪除、sudo、停服務…）會先回傳原因與確認代碼，經你同意後 AI 才能帶代碼重送；刪根目錄、格式化磁碟這類極危險的指令一律不給執行。")}
+              </span>
+            </span>
+          </label>
+          <p className={hint}>{t("每條執行過的指令都記在「SSH 操作紀錄」（來源標示 MCP，指令裡的密碼會遮成 ***）。")}</p>
+        </div>
+      )}
+    </section>
   );
 }

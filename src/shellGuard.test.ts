@@ -1,6 +1,19 @@
 import { describe, it, expect } from "vitest";
+import shared from "../src-tauri/tests/fixtures/shell-guard-cases.json";
 import { classifyShell, commandWord, splitSegments } from "./shellGuard";
 import { normalizeShellCode } from "./chatShell";
+
+// 共用案例：後端 src-tauri/src/ssh/shell_guard.rs（`dbk mcp` 的 ssh_run 守門）跑的是同一份檔案。
+// 這裡綠、那裡紅，就是兩個實作分岔了——同一條指令在 App 裡要確認、透過 MCP 卻直接跑，守門就破了。
+describe("共用案例（與後端 shell_guard.rs 一致）", () => {
+  it.each(shared.classify.map((c) => [c.cmd, c] as const))("%j", (cmd, c) => {
+    expect(classifyShell(cmd)).toEqual({ level: c.level, reasons: c.reasons, interactive: c.interactive });
+  });
+  it("splitSegments / commandWord", () => {
+    for (const c of shared.segments) expect(splitSegments(c.line)).toEqual(c.segments);
+    for (const c of shared.command_word) expect(commandWord(c.seg)).toBe(c.word);
+  });
+});
 
 // 沒有 mock：shellGuard 只 import i18n 的 t()，node 環境下 localStorage 不存在會被 readStoredLang
 // 的 try/catch 吃掉、回 zh-TW，reasons 就是原文。守門不該依賴任何會失敗的東西，

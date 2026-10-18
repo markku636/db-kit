@@ -437,13 +437,15 @@ Use `-d` to pick the DB index: `dbk --conn cache -d 3 redis keys`.
 
 ### `mcp` — MCP server (for AI clients)
 
-Runs a [Model Context Protocol](https://modelcontextprotocol.io) server that exposes database tools to AI clients such as Claude Code, Codex, Cursor and VS Code. The full story (one-click setup in the app, the write flow, HTTP, where each client keeps its config) is in the **[MCP guide](./mcp.en.md)**.
+Runs a [Model Context Protocol](https://modelcontextprotocol.io) server that exposes database tools (and, optionally, SSH host tools) to AI clients such as Claude Code, Codex, Cursor and VS Code. The full story (one-click setup in the app, the write flow, HTTP, where each client keeps its config) is in the **[MCP guide](./mcp.en.md)**.
 
 ```bash
 dbk --conn shop -d shop mcp                 # single connection, read-only (stdio)
 dbk mcp                                     # multiple connections: every saved connection; tools gain a connection argument
 dbk mcp --connections shop,report           # allow-list for multi-connection mode
 dbk --conn shop mcp --allow-write           # enable preview_write / execute_write (Review & Run)
+dbk mcp --ssh                               # add the SSH host tools list_ssh_hosts / ssh_run (read-only)
+dbk mcp --ssh-hosts web1 --allow-ssh-exec   # only web1, and allow commands that change the system (risky ones need a confirmation token)
 dbk mcp --http 127.0.0.1:8765               # HTTP (Streamable HTTP); token via --token or DBKIT_MCP_TOKEN
 dbk mcp config --client cursor              # print the client's configuration snippet
 dbk --conn shop mcp install --client claude-code --yes   # write it into the client's config file (original backed up)
@@ -457,9 +459,12 @@ stdio mode is not meant to be run by hand — stdout carries only the protocol (
 | `--connections a,b` | Allow-list for multi-connection mode (names or ids); cannot be combined with `--conn` / `--url` |
 | `--allow-write` | Enable the write tools: `preview_write` returns a review token, `execute_write` takes only the token and runs the SQL kept on the server; before-images and rollback scripts go to `--out` (default `<config dir>/mcp-runs`) |
 | `--allow-destructive` / `--allow-prod` | Additionally allow destructive statements / production connections (require `--allow-write`) |
+| `--ssh` | Expose the SSH host tools (run commands on the SSH hosts saved in the sidebar); read-only: inspection commands only |
+| `--ssh-hosts a,b` | Only expose these SSH hosts (names or ids; implies `--ssh`) |
+| `--allow-ssh-exec` | Allow commands that change the system (implies `--ssh`): classified with the same rules as the app's terminal; risky ones return a confirmation token and run only after the user agrees, extremely dangerous ones never run |
 | `--http <addr>` / `--token` | Serve over HTTP; a token is required when listening on a non-loopback address |
 
-Tools: `list_databases`, `list_tables`, `describe_table`, `sample_rows`, `run_query`, `explain_query`; SQL databases also get `list_routines`, `get_ddl` and `compare_schema` (generates sync DDL, never runs it); multi-connection mode adds `list_connections`; `--allow-write` adds `preview_write` and `execute_write`.
+Tools: `list_databases`, `list_tables`, `describe_table`, `sample_rows`, `run_query`, `explain_query`; SQL databases also get `list_routines`, `get_ddl` and `compare_schema` (generates sync DDL, never runs it); multi-connection mode adds `list_connections`; `--allow-write` adds `preview_write` and `execute_write`; `--ssh` adds `list_ssh_hosts` and `ssh_run` (details in the [MCP guide · SSH hosts](./mcp.en.md#ssh-hosts-terminal)).
 
 Security model (the read-only guard is the same implementation as the GUI's built-in assistant, see [Architecture](./architecture.en.md#ai-assistant-tool-boundaries)):
 

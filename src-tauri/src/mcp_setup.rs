@@ -118,6 +118,12 @@ pub struct ServerArgs {
     pub allow_destructive: bool,
     pub allow_prod: bool,
     pub out: Option<String>,
+    /// 開放 SSH 主機工具（唯讀）。`ssh_hosts` 非空或 `allow_ssh_exec` 時也算開。
+    pub ssh: bool,
+    /// 只開放這些 SSH 主機（id）；空 = 全部。
+    pub ssh_hosts: Vec<String>,
+    /// 允許在 SSH 主機執行會變更系統的指令。
+    pub allow_ssh_exec: bool,
     pub lang: Option<String>,
 }
 
@@ -156,6 +162,17 @@ impl ServerArgs {
             if let Some(o) = nonempty(&self.out) {
                 a.push("--out".into());
                 a.push(o);
+            }
+        }
+        let hosts: Vec<&str> = self.ssh_hosts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        if self.ssh || self.allow_ssh_exec || !hosts.is_empty() {
+            a.push("--ssh".into());
+            if !hosts.is_empty() {
+                a.push("--ssh-hosts".into());
+                a.push(hosts.join(","));
+            }
+            if self.allow_ssh_exec {
+                a.push("--allow-ssh-exec".into());
             }
         }
         if let Some(l) = nonempty(&self.lang) {
@@ -621,6 +638,11 @@ mod tests {
         // 沒開寫入時，破壞 / 正式環境旗標不會單獨出現（clap 會因 requires 拒絕）。
         let w = ServerArgs { allow_destructive: true, allow_prod: true, ..Default::default() };
         assert_eq!(w.to_args(), ["mcp"]);
+        // SSH：白名單與 exec 都隱含 --ssh；語言旗標仍在最後。
+        let s = ServerArgs { ssh: true, lang: Some("en".into()), ..Default::default() };
+        assert_eq!(s.to_args(), ["mcp", "--ssh", "--lang", "en"]);
+        let s = ServerArgs { ssh_hosts: vec!["h1".into(), " ".into(), "h2".into()], allow_ssh_exec: true, ..Default::default() };
+        assert_eq!(s.to_args(), ["mcp", "--ssh", "--ssh-hosts", "h1,h2", "--allow-ssh-exec"]);
     }
 
     #[test]

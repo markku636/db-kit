@@ -370,6 +370,22 @@ const SHOTS = {
     await sleep(400);
     await shot(page, "mcp-guide-02-snippet");
   },
+  // SSH 主機區塊：勾「讓 AI 在 SSH 主機上執行指令」、挑一台主機、允許會變更系統的指令。
+  async "mcp-guide-03-ssh"(page) {
+    await page.getByRole("button", { name: "設定", exact: true }).first().click();
+    await sleep(400);
+    await page.getByRole("button", { name: "設定 MCP…", exact: true }).first().click();
+    const dlg = page.locator('[role="dialog"]').last();
+    await dlg.getByText("設定內容", { exact: true }).waitFor({ timeout: 6000 });
+    await dlg.getByRole("checkbox", { name: /讓 AI 在 SSH 主機上執行指令/ }).check();
+    await sleep(300);
+    await dlg.locator("button", { hasText: "web-01" }).click();
+    await dlg.getByRole("checkbox", { name: /也允許執行會變更系統的指令/ }).check();
+    await sleep(600);
+    await dlg.getByText(/每條執行過的指令都記在/).scrollIntoViewIfNeeded();
+    await sleep(400);
+    await shot(page, "mcp-guide-03-ssh");
+  },
 
   // ---- 預存程序整合測試使用指南（docs/sp-test.md）----
   // 1. 從程序右鍵開、按「新檔」：後端盤點產生的骨架（前置資料、參數、錯誤分支情境）。

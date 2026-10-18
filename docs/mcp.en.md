@@ -6,12 +6,15 @@
 
 It is **read-only by default**. Letting the AI change data must be switched on explicitly when the server starts, and every change goes through Review & Run: the affected rows and rollback coverage are previewed first, it runs only after you approve in the AI tool, before-images are captured automatically and a rollback script is left behind.
 
+You can also hand the **SSH hosts** saved in db-kit to the AI: let it check service status, read logs and look at disk usage, and — with the extra permission — restart services or edit configs for you. Read-only by default as well, and risky commands need your nod (see [SSH hosts (terminal)](#ssh-hosts-terminal)).
+
 - [At a glance](#at-a-glance)
 - [Set up in the app (fastest)](#set-up-in-the-app-fastest)
 - [Set up from the command line](#set-up-from-the-command-line)
 - [Single connection vs. multiple connections](#single-connection-vs-multiple-connections)
 - [Tools](#tools)
 - [Letting the AI change data](#letting-the-ai-change-data)
+- [SSH hosts (terminal)](#ssh-hosts-terminal)
 - [HTTP mode](#http-mode)
 - [Config file locations](#config-file-locations)
 - [Security model](#security-model)
@@ -31,6 +34,8 @@ flowchart LR
 | Let an AI tool query one database | Right-click the connection → "Connect to AI tools (MCP)…" → "Write config" |
 | Let the AI pick among several databases | Settings → "Set up MCP…" → "Several connections" |
 | Let the AI change data (each change needs your approval) | Tick "Allow the AI to change data" |
+| Let the AI check status / logs on SSH hosts | Tick "Let the AI run commands on SSH hosts" (read-only) |
+| Let the AI restart services or edit configs | Also tick "Also allow commands that change the system" (risky ones need your consent) |
 | Use it on a server / in CI | `dbk --conn shop mcp`, or `dbk mcp install --client claude-code --yes` |
 
 ## Set up in the app (fastest)
@@ -46,8 +51,9 @@ Top to bottom, these are the decisions to make:
 
 1. **Which connections**: one fixed connection (optionally with a default database / schema), or several and let the AI pick (nothing selected = all usable connections). Kafka / Elasticsearch / container connections are not supported by dbk and are skipped.
 2. **Permissions**: read-only by default. With "Allow the AI to change data" ticked you can additionally allow destructive statements (DROP / TRUNCATE / UPDATE·DELETE without WHERE) and production connections. The dialog tells you how many connections are actually writable.
-3. **AI tool and connection method**: pick the client; "Launched by the AI tool" (stdio, recommended) or "HTTP" (see [HTTP mode](#http-mode)). Clients with project-level configs can write into a project folder.
-4. **Configuration**: the snippet and target file are previewed live. Copy and paste it yourself, or click "Write config" — the original file is backed up as `<file>.dbkit-bak`, only db-kit's own entry is changed, and everything else is kept as is.
+3. **SSH hosts (terminal)**: whether the AI may run commands on the SSH hosts saved in the sidebar, which hosts, and whether commands that change the system are allowed (see [SSH hosts (terminal)](#ssh-hosts-terminal)).
+4. **AI tool and connection method**: pick the client; "Launched by the AI tool" (stdio, recommended) or "HTTP" (see [HTTP mode](#http-mode)). Clients with project-level configs can write into a project folder.
+5. **Configuration**: the snippet and target file are previewed live. Copy and paste it yourself, or click "Write config" — the original file is backed up as `<file>.dbkit-bak`, only db-kit's own entry is changed, and everything else is kept as is.
 
 <p align="center"><img src="./screenshots/mcp-guide-02-snippet.png" alt="Generated snippet and the write button" width="820"></p>
 
@@ -108,6 +114,8 @@ For PostgreSQL the tools' `database` argument is the **schema** (consistent with
 | `compare_schema` | Structural diff of two databases (across connections too), optionally with sync DDL — **generated, never executed** | SQL |
 | `preview_write` | Preview a write: affected rows, rollback coverage and risks per statement; returns a review token | `--allow-write` |
 | `execute_write` | Run the previewed SQL by its review token | `--allow-write` |
+| `list_ssh_hosts` | List the available SSH hosts (name / user@host:port / folder / jump host) | `--ssh` |
+| `ssh_run` | Run a command on an SSH host and return stdout / stderr / exit code (about 16 KB from the start and end, 30-second default timeout) | `--ssh` |
 
 `--tools a,b` exposes only the listed tools (calls to anything else are rejected).
 
@@ -134,6 +142,43 @@ Server flags are **hard limits** the model cannot change:
 | Statements that cannot be fully rolled back (e.g. more affected rows than the before-image capture limit, DDL without a reverse statement) | The model passes `acknowledge_incomplete: true` to `execute_write` — the tool description tells it to get your consent first, and the argument is visible in the approval prompt |
 
 Review tokens expire after 15 minutes and are single use. Only SQL databases are supported (MySQL / MariaDB / PostgreSQL / SQL Server / Oracle / SQLite); Mongo / Redis stay read-only. `run_query` still rejects write statements and points the model to `preview_write`.
+
+## SSH hosts (terminal)
+
+```bash
+dbk mcp --ssh                                # expose every SSH host, read-only
+dbk mcp --ssh-hosts web1,web2                # only these two (implies --ssh)
+dbk mcp --ssh --allow-ssh-exec               # allow commands that change the system
+```
+
+In the app: in the MCP dialog's "SSH hosts (terminal)" section tick "Let the AI run commands on SSH hosts", then optionally pick hosts and tick "Also allow commands that change the system". Databases and SSH can live in the same server, or you can keep just one of them (`--tools list_ssh_hosts,ssh_run` leaves only the SSH tools).
+
+<p align="center"><img src="./screenshots/mcp-guide-03-ssh.png" alt="The SSH hosts section of the MCP dialog: which hosts, and whether commands that change the system are allowed" width="820"></p>
+
+It uses the sidebar's "SSH hosts" list (FTP hosts have no terminal and are not listed): user, private key and jump hosts follow the host settings, passwords / key passphrases come from the system keychain, and the config file contains only flags, never credentials. `ssh_run` uses SSH's exec channel (no PTY): one command per call, interpreted by the remote login shell, so `&&` `|` `;` work; stdin is empty.
+
+**Two modes; the flags are hard limits:**
+
+| Mode | What can run |
+|---|---|
+| `--ssh` (read-only) | Inspection commands only: `ls`, `cat`, `grep`, `df`, `free`, `ps`, `ss`, `ip a`, `systemctl status`, `journalctl`, `docker ps / logs`, `kubectl get / describe / logs`, `git status / log / diff`, `curl` GETs… Anything not on the list, redirects that write files (`> file`), `sudo`, and options that write or run other programs (`find -exec`, `sed -i`, `curl -o`, `git -c`) are rejected |
+| `--allow-ssh-exec` | Classified with the same safety rules as the app's terminal (the very rules behind the "AI suggested command" confirmation): ordinary commands run directly; **risky** ones (deleting, `sudo`, stopping / restarting services, writing system directories, `curl \| sh`, removing packages…) are not run yet — the reasons and a 12-character confirmation token come back; **extremely dangerous** ones (`rm -rf /`, formatting disks, writing to disk devices, fork bombs) are never run |
+
+Risky commands take two steps, in the same spirit as database writes:
+
+1. The AI calls `ssh_run`, gets held back, and receives reasons such as "stops, restarts or disables a service" plus a token. The tool description tells it to show you the command and the reasons and get your consent.
+2. After you agree, the AI calls again with the **same host and the same command** plus `confirm_token`. The token is bound to the host and the command (change one character and a new token is needed), expires after 15 minutes and is single use, so the model cannot confirm one command and run another.
+
+Together with the AI tool's own approval prompt for every tool call, you see a risky command twice.
+
+**Other rules:**
+
+- **Only host keys you have confirmed are trusted**: the AI never trusts a new host for you. Before first use, open a terminal to that host in db-kit once and confirm the fingerprint (same known_hosts). A changed fingerprint is always refused.
+- **Logins that need live input don't work**: one-time password / keyboard-interactive hosts and hosts without a saved password have nobody to ask over MCP; the error asks you to save the password or use a private key / ssh-agent.
+- **Interactive commands are rejected up front**: `vim`, `top`, `less`, `tail -f`, `mysql` without `-e` stop and wait for typing, and there is no screen. The error teaches the model a non-interactive form (`top -b -n 1`, `tail -n 100`, `journalctl --no-pager`). `sudo` without NOPASSWD fails at once because it cannot read a password, so nothing hangs.
+- **Timeouts and output limits**: `timeout_secs` defaults to 30 and caps at 300 seconds; on timeout SIGKILL is sent and the result says the remote process may still be running. stdout keeps the first 4 KB + last 12 KB, stderr the first 2 KB + last 4 KB (the interesting part of a log is usually at the end).
+- **Connection reuse**: a host is connected on its first call and reused afterwards; a dropped connection is retried once.
+- **Everything is logged**: every command that actually runs is written to the "SSH activity log" (source MCP, with host and exit code; password arguments in the command are masked as `***`), searchable in the app by host / time / keyword.
 
 ## HTTP mode
 
@@ -175,6 +220,7 @@ Write rules: only `mcpServers.<name>` is touched (for Codex, `[mcp_servers.<name
 - **Tool failures are `isError` results**, not protocol errors, so the model sees the reason and can correct itself.
 - **Bounded output**: row / byte / timeout limits keep a wide table from pushing the whole conversation out of context.
 - **HTTP**: loopback by default, token required otherwise, Origin check, no CORS.
+- **SSH hosts**: off by default; `--ssh` is a read-only allowlist, only `--allow-ssh-exec` can change the system, risky commands need your consent (the token is bound to the command) and extremely dangerous ones never run; only confirmed host keys are trusted; every command goes into the activity log. The command classification and the app terminal's confirmation share one set of test cases (`src-tauri/tests/fixtures/shell-guard-cases.json`), so the two cannot drift apart.
 
 The app's built-in AI assistant (the right-hand panel) uses `dbk mcp` as well, but always with a single read-only connection; it is not affected by these settings.
 
@@ -189,5 +235,9 @@ The app's built-in AI assistant (the right-hand panel) uses `dbk mcp` as well, b
 **`list_connections` is empty.** Multi-connection mode lists only kinds dbk supports (no Kafka / Elasticsearch / RabbitMQ / container connections) and honors the `--connections` allow-list. `dbk conn list` shows every saved connection.
 
 **`execute_write` keeps asking for `acknowledge_incomplete`.** The preview found statements that cannot be fully rolled back (e.g. before-images over the capture limit, or DDL with no reverse statement). If that is acceptable, tell the AI "I agree, go ahead".
+
+**`ssh_run` says the host key has not been trusted yet.** MCP does not accept new host fingerprints for you. Open a terminal to the host from the db-kit sidebar once, check the fingerprint and click "Accept and save" ("This time only" is not remembered), then let the AI try again.
+
+**`ssh_run` says read-only mode does not allow it.** The server was started with `--ssh` (read-only). If you really want the AI to change the system, tick "Also allow commands that change the system" (`--allow-ssh-exec`) in the MCP dialog, write the config again / restart the HTTP server, and restart the AI tool.
 
 **Sharing with the team.** A single-connection config stores the **connection id**, which only exists on your machine. For a shared project-level config use multi-connection mode (`dbk mcp`, not bound to an id), or change `--conn` to a connection name by hand and have everyone create a connection with that name. Do **not** enable writes in project-level configs; enable them per person at the user level.

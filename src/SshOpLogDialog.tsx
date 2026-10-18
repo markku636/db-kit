@@ -55,6 +55,8 @@ export function opSourceLabel(source: string): string {
     case "compose": return t("命令列");
     case "ai": return "AI";
     case "app": return "App";
+    // `dbk mcp --ssh` 的 ssh_run：外部 AI 工具（Claude Code / Codex…）經 MCP 執行的指令。
+    case "mcp": return t("MCP（外部 AI 工具）");
     default: return source;
   }
 }

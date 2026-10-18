@@ -437,13 +437,15 @@ dbk --conn cache redis flush-db --yes --force
 
 ### `mcp` — MCP 伺服器（給 AI 用戶端）
 
-以 [Model Context Protocol](https://modelcontextprotocol.io) 伺服器啟動，把資料庫工具提供給 Claude Code、Codex、Cursor、VS Code 等 AI 用戶端。完整說明（GUI 一鍵設定、寫入流程、HTTP、各用戶端設定檔位置）見 **[MCP 使用指南](./mcp.md)**。
+以 [Model Context Protocol](https://modelcontextprotocol.io) 伺服器啟動，把資料庫工具（以及選配的 SSH 主機工具）提供給 Claude Code、Codex、Cursor、VS Code 等 AI 用戶端。完整說明（GUI 一鍵設定、寫入流程、HTTP、各用戶端設定檔位置）見 **[MCP 使用指南](./mcp.md)**。
 
 ```bash
 dbk --conn shop -d shop mcp                 # 單一連線、唯讀（stdio）
 dbk mcp                                     # 多連線：全部已存連線，工具多一個 connection 參數
 dbk mcp --connections shop,report           # 多連線白名單
 dbk --conn shop mcp --allow-write           # 開放 preview_write / execute_write（走審查並執行）
+dbk mcp --ssh                               # 加上 SSH 主機工具 list_ssh_hosts / ssh_run（唯讀）
+dbk mcp --ssh-hosts web1 --allow-ssh-exec   # 只開 web1，且允許會變更系統的指令（有風險的要確認代碼）
 dbk mcp --http 127.0.0.1:8765               # HTTP（Streamable HTTP）；權杖用 --token 或 DBKIT_MCP_TOKEN
 dbk mcp config --client cursor              # 印出 AI 用戶端的設定片段
 dbk --conn shop mcp install --client claude-code --yes   # 寫進用戶端設定檔（先備份原檔）
@@ -457,9 +459,12 @@ stdio 模式不是給人直接跑的——stdout 只走協定（一行一則 JSO
 | `--connections a,b` | 多連線模式的白名單（名稱或 id）；與 `--conn` / `--url` 互斥 |
 | `--allow-write` | 開放寫入工具：`preview_write` 回審查代碼，`execute_write` 只收代碼、執行伺服器端保存的那份 SQL，前像與回滾腳本寫到 `--out`（預設 `<設定目錄>/mcp-runs`） |
 | `--allow-destructive` / `--allow-prod` | 另外允許高破壞語句 / 正式環境連線（需與 `--allow-write` 併用） |
+| `--ssh` | 開放 SSH 主機工具（用側欄存好的 SSH 主機執行指令）；唯讀：只放行查看類指令 |
+| `--ssh-hosts a,b` | 只開放這些 SSH 主機（名稱或 id；隱含 `--ssh`） |
+| `--allow-ssh-exec` | 允許會變更系統的指令（隱含 `--ssh`）：依 App 終端機同一套規則分級，有風險的回確認代碼、經使用者同意才執行，極危險的一律不給跑 |
 | `--http <addr>` / `--token` | 改走 HTTP；聽非本機位址時必須有權杖 |
 
-工具：`list_databases`、`list_tables`、`describe_table`、`sample_rows`、`run_query`、`explain_query`；SQL 資料庫另有 `list_routines`、`get_ddl`、`compare_schema`（只產生同步 DDL、不執行）；多連線模式有 `list_connections`；`--allow-write` 時有 `preview_write`、`execute_write`。
+工具：`list_databases`、`list_tables`、`describe_table`、`sample_rows`、`run_query`、`explain_query`；SQL 資料庫另有 `list_routines`、`get_ddl`、`compare_schema`（只產生同步 DDL、不執行）；多連線模式有 `list_connections`；`--allow-write` 時有 `preview_write`、`execute_write`；`--ssh` 時有 `list_ssh_hosts`、`ssh_run`（細節見 [MCP 使用指南 · SSH 主機](./mcp.md#ssh-主機終端機)）。
 
 安全模型（唯讀守門與 GUI 內建助手同一份實作，見 [架構設計](./architecture.md#ai-助手的工具邊界)）：
 

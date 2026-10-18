@@ -654,6 +654,15 @@ pub struct McpServeOpts {
     /// 寫入的前像、回滾腳本與報告輸出目錄（預設 <設定目錄>/mcp-runs）
     #[arg(long, value_name = "DIR")]
     pub out: Option<String>,
+    /// 開放 SSH 主機工具 list_ssh_hosts / ssh_run（用 db-kit 存好的 SSH 主機執行指令）；預設唯讀，只放行查看類指令
+    #[arg(long)]
+    pub ssh: bool,
+    /// 只開放這些 SSH 主機（名稱或 id，逗號分隔；隱含 --ssh）；省略 = 全部 SSH 主機
+    #[arg(long = "ssh-hosts", value_delimiter = ',', value_name = "NAMES")]
+    pub ssh_hosts: Vec<String>,
+    /// 允許 AI 在 SSH 主機執行會變更系統的指令（隱含 --ssh）：有風險的要先經使用者同意，極危險的一律不給執行
+    #[arg(long)]
+    pub allow_ssh_exec: bool,
     /// 改以 HTTP（MCP Streamable HTTP）監聽，例如 127.0.0.1:8765；省略 = stdio
     #[arg(long, value_name = "ADDR")]
     pub http: Option<String>,

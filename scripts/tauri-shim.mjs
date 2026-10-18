@@ -626,6 +626,11 @@ metadata:
       if (sv.conn) { args.push("--conn", sv.conn); if (sv.database) args.push("-d", sv.database); }
       else if (sv.connections?.length) args.push("--connections", sv.connections.join(","));
       if (sv.allowWrite) { args.push("--allow-write"); if (sv.allowDestructive) args.push("--allow-destructive"); if (sv.allowProd) args.push("--allow-prod"); }
+      if (sv.ssh || sv.allowSshExec || sv.sshHosts?.length) {
+        args.push("--ssh");
+        if (sv.sshHosts?.length) args.push("--ssh-hosts", sv.sshHosts.join(","));
+        if (sv.allowSshExec) args.push("--allow-ssh-exec");
+      }
       const conn = sv.conn ? (fx.CONNECTIONS ?? []).find((c) => c.id === sv.conn) : null;
       const name = conn ? `dbkit-${conn.name}` : "dbkit";
       const cmd = "C:/Program Files/db-kit/dbk.exe";

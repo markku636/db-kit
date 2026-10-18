@@ -54,7 +54,8 @@ pub struct OpEntry {
     /// 執行指令時終端機所在的資料夾（知道的話）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-    /// 指令從哪裡送出：`keyboard` / `paste` / `compose`（命令列輸入條）/ `ai` / `app`。
+    /// 指令從哪裡送出：`keyboard` / `paste` / `compose`（命令列輸入條）/ `ai` / `app` /
+    /// `mcp`（`dbk mcp --ssh` 的 ssh_run：外部 AI 工具經 MCP 執行，指令由 `ssh::redact` 遮過密碼）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// `ok` / `error` / `cancelled`。
