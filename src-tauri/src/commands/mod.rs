@@ -8,6 +8,7 @@ pub mod filecmp;
 pub mod mcp;
 // 遠端桌面（RDP / VNC）的 command。
 pub mod rd;
+pub mod tenon;
 // SSH 終端機 / SFTP / 已存主機的 command（含 TauriUi）。
 pub mod ssh;
 // 自動更新（從 GitHub Release 下載安裝檔、驗證後交給安裝程式）的 command。

@@ -712,6 +712,7 @@ metadata:
     // ── 遠端桌面（RDP / VNC）─────────────────────────────────────────────
     // 主機清單有狀態（同 SSH）。連線：RDP 送一張合成畫面（rdFrames 的 record），VNC 起一台假 RFB 伺服器（見 rdVncServer），
     // 讓真的 noVNC 走完握手、畫出像素。高頻命令（rd_write / rd_input）是 raw body + x-rd-conn header。
+    tenon_status: () => ({ config: { enabled: false, url: "", auto_sync: false, profile: "" }, signed_in: false }),
     rd_sessions_list: () => JSON.parse(JSON.stringify(rdSessionsState)),
     rd_session_save: ({ session, password }) => {
       window.__DBKIT_RD_SESSION_SAVES__.push({ session, password });

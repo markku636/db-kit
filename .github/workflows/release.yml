@@ -4,7 +4,7 @@ name: release
 # 用法：
 #   git tag v0.1.4
 #   git push origin v0.1.4
-# 也可在 Actions 頁面手動觸發（workflow_dispatch），但需自行帶 tag 才會發佈。
+# 也可在 Actions 頁面手動觸發（workflow_dispatch）：分支只建置並上傳產物，版本標籤才發佈。
 on:
   push:
     tags:
@@ -126,6 +126,7 @@ jobs:
       # 上都有（Windows 走 Git Bash）。四個 matrix job 都會算一次，內容相同，
       # tauri-action 建立 / 更新的是同一個 Release，不會互相蓋掉。
       - name: Extract release notes from CHANGELOG
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           {
@@ -138,14 +139,28 @@ jobs:
       # 然後依 tagName 建立 / 更新同一個 Release 並上傳該平台的安裝檔
       # （Windows: .msi/.exe；macOS: .dmg；Linux: .deb/.rpm/.AppImage）。
       # macOS 透過 matrix.args 指定 --target 交叉編出 Intel / Apple Silicon 兩版。
-      - name: Build & release
+      - name: Build packages (publish only for version tags)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseName: "db-kit ${{ github.ref_name }}"
           releaseBody: ${{ env.RELEASE_NOTES }}
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }} --config src-tauri/tauri.bridge.conf.json
+
+      - name: Upload manually built installers
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-kit-${{ matrix.label }}-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/**/bundle/**/*.msi
+            src-tauri/target/**/bundle/**/*.exe
+            src-tauri/target/**/bundle/**/*.dmg
+            src-tauri/target/**/bundle/**/*.deb
+            src-tauri/target/**/bundle/**/*.rpm
+            src-tauri/target/**/bundle/**/*.AppImage

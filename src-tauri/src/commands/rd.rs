@@ -441,24 +441,28 @@ pub async fn rd_connect(
     });
 
     let started = match r.session.protocol {
-        RdProtocol::Rdp => connect_rdp(&app, &state, &ui, &r, &conn_id, width, height, scale, sink).await?,
-        RdProtocol::Vnc => connect_vnc(&app, &state, &ui, &r, &conn_id, sink).await?,
-        RdProtocol::Rustdesk => connect_rustdesk(&app, &state, &ui, &r, &conn_id, sink).await?,
+        RdProtocol::Rdp => connect_rdp(&app, &state, &ui, &r, &conn_id, width, height, scale, sink).await,
+        RdProtocol::Vnc => connect_vnc(&app, &state, &ui, &r, &conn_id, sink).await,
+        RdProtocol::Rustdesk => connect_rustdesk(&app, &state, &ui, &r, &conn_id, sink).await,
     };
-
+    let started=match started {Ok(s)=>s,Err(e)=>{super::tenon::forget(&conn_id);return Err(e)}};
     let Started { info, ctl, closed, task, password } = started;
+    let _tenon_guard=super::tenon::connection_guard(&r.session).await;
+    if let Err(e)=super::tenon::verify(&app,&r.session).await {let _=ctl.send(RdCtl::Close);task.abort();super::tenon::forget(&conn_id);return Err(e)}
     let conn = Arc::new(RdConn::new(conn_id.clone(), r.origin, info.clone(), ctl, closed, task));
     let on_closed = {
         let app = app.clone();
         let rt = rt.clone();
         let conn = conn.clone();
         Box::new(move |reason: Option<String>| {
+            super::tenon::forget(&conn.id);
             rt.forget_conn(&conn);
             let reason = reason.filter(|r| !r.is_empty());
             let _ = app.emit("rd-conn-closed", ConnClosed { conn_id: conn.id.clone(), reason });
         })
     };
     if let Err(e) = rt.insert_conn(conn.clone(), on_closed) {
+        super::tenon::forget(&conn_id);
         let _ = conn.send(RdCtl::Close);
         return Err(e);
     }
@@ -762,8 +766,13 @@ pub async fn rd_files_connect(
         r.password = Some(p);
     }
     let ui = RdUi { app: app.clone(), rt: rt.clone(), conn_id: conn_id.clone() };
-    let l = login_rustdesk(&app, &state, &ui, &r, &conn_id, true).await?;
-    let client = crate::rd::rustdesk_files::RdFileClient::start(conn_id.clone(), l.c, l.fwd).await?;
+    let l = match login_rustdesk(&app, &state, &ui, &r, &conn_id, true).await {Ok(l)=>l,Err(e)=>{super::tenon::forget(&conn_id);return Err(e)}};
+    let client = match crate::rd::rustdesk_files::RdFileClient::start(conn_id.clone(), l.c, l.fwd).await {
+        Ok(client) => client,
+        Err(e) => { super::tenon::forget(&conn_id); return Err(e); }
+    };
+    let _tenon_guard=super::tenon::connection_guard(&r.session).await;
+    if let Err(e)=super::tenon::verify(&app,&r.session).await {client.shutdown().await;super::tenon::forget(&conn_id);return Err(e)}
     let home = client.home.clone();
     rt.insert_files(conn_id, client);
     Ok(home)
@@ -775,6 +784,7 @@ pub async fn rd_files_disconnect(state: State<'_, AppState>, conn_id: String) ->
     if let Some(c) = state.rd.remove_files(&conn_id) {
         c.shutdown().await;
     }
+    super::tenon::forget(&conn_id);
     Ok(())
 }
 
@@ -792,11 +802,12 @@ async fn login_rustdesk(
     if s.host.trim().is_empty() {
         return Err(AppError::Rd(t!("未填寫遠端主機").into()));
     }
-    let rendezvous = rustdesk::is_rustdesk_id(&s.host).then(|| rustdesk::Rendezvous {
+    let rendezvous = (super::tenon::managed(s) || rustdesk::is_rustdesk_id(&s.host)).then(|| rustdesk::Rendezvous {
         server: s.options.rustdesk_server.trim().to_string(),
         relay: s.options.rustdesk_relay_server.trim().to_string(),
         key: s.options.rustdesk_key.trim().to_string(),
         force_relay: s.options.rustdesk_relay,
+        tenon: None,
     });
     // ID 連線要連 ID 伺服器、再連它指定的中繼伺服器或對方，沒辦法只轉接一條連線。
     if rendezvous.is_some() && s.via_ssh().is_some() {
@@ -831,7 +842,7 @@ async fn login_rustdesk(
             host,
             port,
             password: password.clone(),
-            rendezvous: rendezvous.clone(),
+            rendezvous: if super::tenon::managed(s) { Some(super::tenon::ticket(app,s,conn_id).await?) } else { rendezvous.clone() },
             hwid: hwid.clone(),
             trusted,
             file_transfer,

@@ -58,6 +58,7 @@ import { RD_META, rdIsLive, sendRdCommand, useRdStatus } from "./rdStatus";
 import type { ParsedRd } from "./rdConnString";
 import { decodeRdpFileBytes, parseRdpFile } from "./rdpFile";
 import SshPrefsSettings from "./SshPrefsSettings";
+import { TenonSettings, TenonDirectory } from "./TenonIntegration";
 import { friendlyDbError } from "./dbErrors";
 import { checkForUpdate, isNewer, autoCheckEnabled, setAutoCheckEnabled, isDismissed, useUpdateDialog, type UpdateInfo } from "./updateCheck";
 import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type PinnedTable } from "./pins";
@@ -912,6 +913,7 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
         <SchemaCacheSettings />
         <SshPrefsSettings />
+        <TenonSettings />
       </div>
       {aiLibOpen && <AiLibraryDialog open onClose={() => setAiLibOpen(false)} />}
     </Modal>
@@ -3135,6 +3137,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
         onEdit={onEditSsh}
       />
       {/* 遠端桌面（RDP / VNC / RustDesk）：同 SSH，一台都沒有時不顯示；雙擊開遠端桌面分頁。 */}
+      <TenonDirectory q={q} />
       <RdHostTree
         q={q}
         onOpen={(s, opts) => openRdSessionTab(s, opts?.fullscreen)}

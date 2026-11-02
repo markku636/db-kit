@@ -16,6 +16,7 @@ mod files;
 mod ipc;
 mod keymap;
 mod rendezvous;
+mod tenon;
 mod session;
 
 mod proto {
@@ -73,6 +74,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(18);
 
 /// 登入要用的東西 + 接上的方式（給 `connected` 事件）。
 struct Login {
+    require_encryption: bool,
     peer_id: String,
     password: String,
     decoders: Decoders,
@@ -93,6 +95,7 @@ struct Login {
 impl Login {
     fn new(peer_id: String, password: String, decoders: Decoders, my_name: String) -> Self {
         Self {
+            require_encryption: false,
             peer_id,
             password,
             decoders,
@@ -164,6 +167,11 @@ where
     login.hwid = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, c.hwid.trim()).unwrap_or_default();
     login.trusted = c.trusted && !login.hwid.is_empty();
     login.file_transfer = c.file_transfer;
+    if let Some(rp)=c.rendezvous.as_ref().filter(|r|r.tenon.is_some()) {
+        let (stream,pk,_pump)=tenon::connect(rp.tenon.as_ref().unwrap()).await?;
+        login.signed_id_pk=pk;login.server_key=rp.key();login.route="relay";login.require_encryption=true;
+        return Ok(drive(stream,&mut stdin,stdout,&login).await?);
+    }
     let tcp = match &c.rendezvous {
         Some(rp) => {
             let est = rendezvous::connect(&login.peer_id, rp).await?;
@@ -211,6 +219,7 @@ where
         .filter(|(id, _)| *id == login.peer_id)
         .map(|(_, pk)| pk);
     let Some(sign_pk) = sign_pk else {
+        if login.require_encryption {return Err("Tenon peer key verification failed".into())}
         send_empty(w).await?;
         return Ok((None, None, None));
     };
@@ -223,6 +232,7 @@ where
         Ok(Message { union: Some(message::Union::SignedId(si)), .. }) => si,
         // 對方沒走加密：跟官方一樣回空訊息、不加密；那則訊息照常處理（官方會丟掉它）。
         _ => {
+            if login.require_encryption {return Err("Tenon peer did not negotiate encryption".into())}
             send_empty(w).await?;
             return Ok((None, None, Some(first)));
         }
@@ -241,16 +251,32 @@ where
             Ok((Some(Cipher::new(&key)), Some(Cipher::new(&key)), None))
         }
         Some(_) => {
+            if login.require_encryption {return Err("Tenon peer identity mismatch".into())}
             send_empty(w).await?;
             Ok((None, None, None))
         }
         None => {
             // 官方：pk 對不上就退回不加密（送空的 PublicKey）。
+            if login.require_encryption {return Err("Tenon peer signature verification failed".into())}
             let mut m = Message::new();
             m.set_public_key(PublicKey::new());
             session::send(w, &m).await.map_err(|e| e.to_string())?;
             Ok((None, None, None))
         }
+    }
+}
+
+#[cfg(test)]
+mod tenon_encryption_tests {
+    use super::*;
+    #[tokio::test]
+    async fn native_transport_never_downgrades_to_plaintext() {
+        let (_peer,stream)=tokio::io::duplex(128);
+        let (r,mut w)=tokio::io::split(stream);
+        let mut r=FrameReader::new(r);
+        let mut login=Login::new("123456789".into(),"secret".into(),Default::default(),String::new());
+        login.require_encryption=true;
+        assert!(secure_handshake(&mut r,&mut w,&login).await.is_err());
     }
 }
 
@@ -1560,6 +1586,7 @@ mod tests {
         let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
         let id = std::env::var("DBKIT_RUSTDESK_IT_ID").expect("DBKIT_RUSTDESK_IT_ID");
         let rp = rendezvous::Params {
+            tenon: None,
             server: env("DBKIT_RUSTDESK_IT_SERVER", "127.0.0.1"),
             relay: env("DBKIT_RUSTDESK_IT_RELAY_SERVER", ""),
             key: env("DBKIT_RUSTDESK_IT_KEY", ""),
@@ -1587,6 +1614,7 @@ mod tests {
         let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
         let id = std::env::var("DBKIT_RUSTDESK_IT_ID").expect("DBKIT_RUSTDESK_IT_ID");
         let rp = rendezvous::Params {
+            tenon: None,
             server: env("DBKIT_RUSTDESK_IT_SERVER", "127.0.0.1"),
             relay: env("DBKIT_RUSTDESK_IT_RELAY_SERVER", ""),
             key: env("DBKIT_RUSTDESK_IT_KEY", ""),

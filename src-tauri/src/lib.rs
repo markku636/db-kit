@@ -192,6 +192,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::tenon::tenon_status,
+            commands::tenon::tenon_config_set,
+            commands::tenon::tenon_login,
+            commands::tenon::tenon_logout,
+            commands::tenon::tenon_directory,
             commands::show_main_window,
             commands::set_lang,
             commands::set_query_guard,

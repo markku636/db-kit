@@ -46,6 +46,8 @@ pub fn bridge_path() -> Option<PathBuf> {
 /// 經 ID 伺服器連線的設定（輔助程式 `connect` 指令的 `rendezvous` 欄位）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Rendezvous {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenon: Option<TenonTransport>,
     /// ID 伺服器（`host[:port]`，預設埠 21116）；空 = RustDesk 公開伺服器。
     pub server: String,
     /// 中繼伺服器；空 = 用 ID 伺服器告知的（再沒有就是 ID 伺服器的主機 + 21117）。
@@ -56,6 +58,13 @@ pub struct Rendezvous {
 }
 
 /// 連線參數（密碼經 stdin 傳，不放命令列）。
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TenonTransport { pub url: String, pub ticket: String }
+impl std::fmt::Debug for TenonTransport {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {f.write_str("TenonTransport([redacted])")}
+}
+
+/// Native connection parameters. The single-use ticket is sent only over stdin.
 #[derive(Clone)]
 pub struct RustdeskParams {
     pub host: String,

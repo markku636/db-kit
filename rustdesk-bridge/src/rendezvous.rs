@@ -42,6 +42,7 @@ const VERSION: &str = "1.4.2";
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(default)]
 pub struct Params {
+    pub tenon: Option<crate::tenon::Params>,
     /// ID 伺服器（`host` / `host:port`）；空 = 公開伺服器。
     pub server: String,
     /// 中繼伺服器；空 = 用 ID 伺服器回的，再沒有就是 ID 伺服器的主機 + 21117。
