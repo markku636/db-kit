@@ -104,6 +104,31 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "沒有可匯出的連線" => "There are no connections to export",
         "含 {n} 個側欄群組" => "Including {n} sidebar groups",
         "含 {ssh} 台 SSH 主機、{rd} 台遠端桌面" => "Including {ssh} SSH hosts and {rd} remote desktops",
+        "conn add 不能搭配 --conn；請用 --kind / --url / --host 等旗標描述新連線" => {
+            "conn add cannot be combined with --conn; describe the new connection with --kind / --url / --host etc."
+        }
+        "連線名稱不能是空的" => "The connection name cannot be empty",
+        "已有同名連線「{name}」（{id}）；要覆寫請加 --replace --yes，或換個名稱" => {
+            "A connection named \"{name}\" already exists ({id}); add --replace --yes to overwrite it, or pick another name"
+        }
+        "覆寫已存連線「{name}」" => "overwrite saved connection \"{name}\"",
+        "連線測試失敗，未存檔（確定要先存起來請加 --no-test）" => {
+            "Connection test failed, nothing saved (add --no-test to save it anyway)"
+        }
+        "已覆寫連線「{name}」，之後用 --conn \"{name}\" 即可" => {
+            "Overwrote connection \"{name}\"; use --conn \"{name}\" from now on"
+        }
+        "已新增連線「{name}」，之後用 --conn \"{name}\" 即可" => {
+            "Added connection \"{name}\"; use --conn \"{name}\" from now on"
+        }
+        "刪除已存連線「{name}」（{id}）" => "delete saved connection \"{name}\" ({id})",
+        "已刪除連線「{name}」" => "Deleted connection \"{name}\"",
+        "有 {n} 筆連線都叫「{name}」，請改用 id 指定（dbk conn list 可查）" => {
+            "{n} connections are named \"{name}\"; specify the id instead (see dbk conn list)"
+        }
+        "讀取 stdin 密碼失敗：{e}" => "Failed to read the password from stdin: {e}",
+        "--opt 格式應為 key=value：{kv}" => "--opt must be key=value: {kv}",
+        "--ssh-user / --ssh-key 要搭配 --ssh-host" => "--ssh-user / --ssh-key require --ssh-host",
         "篩選格式錯誤（應為 col:op[:value]）：{spec}" => "Invalid filter format (expected col:op[:value]): {spec}",
         "不支援的篩選運算子：{op}" => "Unsupported filter operator: {op}",
         "排序格式錯誤（應為 col:asc|desc）：{spec}" => "Invalid sort format (expected col:asc|desc): {spec}",
@@ -372,6 +397,47 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "Ping（量測 RTT）" => "Ping (measure RTT)",
         "加密匯出所有已存連線（含密碼，需 passphrase）" => {
             "Encrypt and export all saved connections (includes passwords; requires a passphrase)"
+        }
+        "新增已存連線（GUI 側欄同步出現）；連線參數沿用 --kind / --url / --host / --port / --user / --password / -d" => {
+            "Add a saved connection (shows up in the GUI sidebar); connection details use --kind / --url / --host / --port / --user / --password / -d"
+        }
+        "刪除已存連線（連同 keychain 裡的密碼；需 --yes）" => {
+            "Delete a saved connection (and its passwords in the keychain; requires --yes)"
+        }
+        "連線名稱或 id" => "Connection name or id",
+        "連線名稱（側欄顯示、`--conn` 用的名字）" => "Connection name (shown in the sidebar, used with `--conn`)",
+        "放進側欄群組（同種類、名稱不分大小寫；不存在就建立）" => {
+            "Put it in a sidebar group (same kind, case-insensitive name; created if missing)"
+        }
+        "標記為正式環境（側欄顯示 PROD、執行前確認；MCP 寫入需 --allow-prod）" => {
+            "Mark as production (PROD badge in the sidebar, confirm before running; MCP writes need --allow-prod)"
+        }
+        "SSL 模式（PG：disable/prefer/require/verify-ca/verify-full；MySQL：disabled/preferred/required/verify_ca/verify_identity）" => {
+            "SSL mode (PG: disable/prefer/require/verify-ca/verify-full; MySQL: disabled/preferred/required/verify_ca/verify_identity)"
+        }
+        "額外驅動選項 key=value（可重複；同 GUI 進階設定的 options）" => {
+            "Extra driver option key=value (repeatable; same as the GUI's advanced options)"
+        }
+        "從 stdin 讀資料庫密碼（第一行），避免出現在 argv / shell 歷史" => {
+            "Read the database password from stdin (first line) so it never appears in argv / shell history"
+        }
+        "SSH 跳板：主機（給了就啟用 SSH tunnel）" => "SSH jump host: host (enables the SSH tunnel)",
+        "SSH 跳板：連接埠" => "SSH jump host: port",
+        "SSH 跳板：帳號" => "SSH jump host: username",
+        "SSH 跳板：私鑰路徑（給了就用金鑰認證，否則用密碼）" => {
+            "SSH jump host: private key path (key auth when given, otherwise password)"
+        }
+        "SSH 跳板：密碼（亦可用環境變數 DBKIT_SSH_PASSWORD）" => {
+            "SSH jump host: password (or the DBKIT_SSH_PASSWORD environment variable)"
+        }
+        "SSH 跳板：私鑰 passphrase（亦可用環境變數 DBKIT_SSH_PASSPHRASE）" => {
+            "SSH jump host: private key passphrase (or the DBKIT_SSH_PASSPHRASE environment variable)"
+        }
+        "存檔前不先測試連線（預設會先連一次，連不上就不存）" => {
+            "Skip the connection test before saving (by default it connects once and refuses to save on failure)"
+        }
+        "已有同名連線時覆寫它（保留 id 與群組；沒給的密碼沿用舊的；需 --yes）" => {
+            "Overwrite an existing connection with the same name (keeps its id and group; omitted passwords are kept; requires --yes)"
         }
         "列出資料表 / 視圖 / 集合" => "List tables / views / collections",
         "欄位定義" => "Column definitions",

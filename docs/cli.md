@@ -167,6 +167,33 @@ dbk --conn prod conn ping                       # 量測往返延遲（含 SSH t
 dbk conn export conns.enc --passphrase "…"      # 加密匯出全部連線（含密碼；PROD 連線一律不含帳密）
 ```
 
+#### 新增 / 刪除已存連線（AI 代理人也能用）
+
+`dbk conn add <名稱>` 把一條連線存進 GUI 那份設定：連線本體沿用上面「連線的三種指定方式」的 `--url` / `--kind` / `--host` / `--port` / `--user` / `--password` / `-d`，密碼寫進 OS keychain，`connections.json` 不落密碼。存好之後 `--conn <名稱>`、`dbk mcp` 都認得；App 開著的話，切回視窗側欄就會出現。
+
+```bash
+# 連線字串一行搞定；密碼從環境變數給，不留在指令列
+DBKIT_PASSWORD='…' dbk conn add shop-dev --url mysql://app@10.0.0.5:3306/shop
+
+# 逐項旗標 + 群組 + 標記正式環境
+dbk conn add billing-prod --kind postgres --host db.internal --user report -d billing \
+    --group 帳務 --prod --ssl-mode require --password-stdin < pw.txt
+
+# 經 SSH 跳板（私鑰認證；給了 --ssh-host 就啟用 tunnel）
+dbk conn add erp --kind mssql --host 172.16.0.20 --user sa \
+    --ssh-host bastion.example.com --ssh-user ops --ssh-key ~/.ssh/id_ed25519
+
+dbk conn add shop-dev --url mysql://app@10.0.0.6/shop --replace --yes   # 覆寫同名連線（保留 id 與群組；沒給的密碼沿用）
+dbk conn remove shop-dev --yes                                          # 刪除（連同 keychain 密碼）；PROD 連線再加 --force
+```
+
+- **預設先測再存**：存檔前會實際連一次，連不上就不存並回錯誤（AI 打錯埠號或帳密時立刻知道）。資料庫還沒起來、要先存設定就加 `--no-test`。Kafka / Elasticsearch / RabbitMQ 可以存（給 App 用），但 CLI 沒有驅動，不會測。
+- **確認規則**：新增只動本機設定，免 `--yes`；`--replace` 覆寫與 `remove` 要 `--yes`；刪 PROD 連線要 `--yes --force`。
+- **密碼別放 argv**：用 `DBKIT_PASSWORD`、`--password-stdin`；SSH 跳板密碼 / 私鑰 passphrase 用 `DBKIT_SSH_PASSWORD` / `DBKIT_SSH_PASSPHRASE`。
+- `--format json` 回傳 `{"action":"created","name":…,"id":…,"test":"ok",…}`，不含任何密碼，方便 AI 解析。
+- 其他驅動選項用 `--opt key=value`（可重複，同 App 連線對話框的進階設定）。唯讀模式是 App 端的個人設定，CLI 不能代設。
+- SSH 跳板第一次連線若主機金鑰還沒被信任，測試會失敗——先在 App 裡連一次確認指紋，或加 `--no-test` 存起來再到 App 確認。
+
 ### `db` — 資料庫 / schema
 
 ```bash

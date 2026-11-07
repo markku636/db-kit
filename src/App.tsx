@@ -1,6 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { api, hostLabel, isContainerKind, onKafkaAlert, isProdConn, missingCredentials, ConnectionConfig, ConnGroup, DbKind, KIND_META, PoolStatus, QueryResult, TableInfo, RoutineInfo, type AppLockStatus, type ExportFormat, type SearchHit, type ErRelation } from "./api";
 import { useStore, type SelectedNode } from "./store";
+import { useConnFileSync } from "./useConnFileSync";
 import { useVirtualRows } from "./useVirtualRows";
 import { formatRemaining } from "./connReadonly";
 import { useTheme } from "./theme";
@@ -412,6 +413,9 @@ export default function App() {
     // 遠端桌面主機（remote_desktops.json）同理。
     void useRdSessions.getState().load();
   }, [lockState]);
+
+  // 切回視窗時重讀連線清單：`dbk conn add` / `conn remove`（常是 AI 代理人下的）不必重開 App 就看得到。
+  useConnFileSync(lockState === "open");
 
   // 啟動時套用目前變體的整套 --c-* CSS 變數（與 index.html 防閃爍腳本的 .light 類別互補）。
   useEffect(() => {

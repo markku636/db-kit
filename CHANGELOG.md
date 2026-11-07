@@ -1,3 +1,14 @@
+## 未發佈
+
+**AI 代理人（Claude Code / Codex…）能用 `dbk conn add` 自己建好資料庫連線，不必再請你開 App 填表。**
+
+新功能：
+
+- **`dbk conn add <名稱>`**：連線本體沿用 `--url` / `--kind` / `--host` / `--port` / `--user` / `--password` / `-d`，另可加 `--group`（側欄群組，沒有就建）、`--prod`（正式環境標記）、`--ssl-mode`、`--opt key=value`、SSH 跳板（`--ssh-host` / `--ssh-user` / `--ssh-key`，密碼與 passphrase 走 `DBKIT_SSH_PASSWORD` / `DBKIT_SSH_PASSPHRASE`）。密碼寫進系統金鑰圈，設定檔不落密碼；也可用 `--password-stdin`，不留在指令列。
+- **先測再存**：預設先實際連一次，連不上就不存，AI 打錯埠號或帳密立刻知道；資料庫還沒起來可加 `--no-test`。`--format json` 回傳不含密碼的結果，方便 AI 解析。
+- **覆寫與刪除要確認**：同名連線要 `--replace --yes` 才會覆寫（保留 id 與群組，沒給的密碼沿用舊的）；`dbk conn remove <名稱|id> --yes` 連同金鑰圈的密碼一起刪，PROD 連線再要 `--force`；同名多筆時要求改用 id，不會刪錯。
+- **App 開著也看得到**：切回 App 視窗時會重讀連線清單，CLI 新增 / 刪除的連線直接反映在側欄，剛輸入過的密碼不會被洗掉。
+
 ## v0.59.0
 
 **AI 工具（Claude Code / Codex / Cursor…）能透過 MCP 在你的 SSH 主機上執行指令：預設只能看，開了權限才能改，有風險的要你點頭。**

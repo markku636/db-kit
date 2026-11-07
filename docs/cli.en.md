@@ -167,6 +167,33 @@ dbk --conn prod conn ping                       # measure round-trip latency (in
 dbk conn export conns.enc --passphrase "…"      # encrypted export of all connections (with passwords; PROD connections never include credentials)
 ```
 
+#### Adding / removing saved connections (AI agents can do this too)
+
+`dbk conn add <name>` saves a connection into the GUI's configuration. The connection itself is described with the same `--url` / `--kind` / `--host` / `--port` / `--user` / `--password` / `-d` flags as in "Three ways to specify a connection"; the password goes into the OS keychain and never into `connections.json`. Once saved, `--conn <name>` and `dbk mcp` both see it; if the app is open, the sidebar picks it up when you switch back to the window.
+
+```bash
+# One connection string; the password comes from the environment, not the command line
+DBKIT_PASSWORD='…' dbk conn add shop-dev --url mysql://app@10.0.0.5:3306/shop
+
+# Individual flags + group + production marker
+dbk conn add billing-prod --kind postgres --host db.internal --user report -d billing \
+    --group Billing --prod --ssl-mode require --password-stdin < pw.txt
+
+# Through an SSH jump host (key auth; --ssh-host turns the tunnel on)
+dbk conn add erp --kind mssql --host 172.16.0.20 --user sa \
+    --ssh-host bastion.example.com --ssh-user ops --ssh-key ~/.ssh/id_ed25519
+
+dbk conn add shop-dev --url mysql://app@10.0.0.6/shop --replace --yes   # overwrite the same name (keeps id and group; omitted passwords are kept)
+dbk conn remove shop-dev --yes                                          # delete (and its keychain passwords); PROD connections also need --force
+```
+
+- **Tested before saving**: it connects once first and refuses to save if that fails, so an agent with a wrong port or password finds out immediately. Add `--no-test` when the database is not up yet. Kafka / Elasticsearch / RabbitMQ can be saved (for the app) but the CLI has no driver for them, so they are not tested.
+- **Confirmation rules**: adding only touches local settings, so no `--yes`; `--replace` and `remove` need `--yes`; removing a PROD connection needs `--yes --force`.
+- **Keep passwords out of argv**: use `DBKIT_PASSWORD` or `--password-stdin`; for the SSH jump host use `DBKIT_SSH_PASSWORD` / `DBKIT_SSH_PASSPHRASE`.
+- `--format json` returns `{"action":"created","name":…,"id":…,"test":"ok",…}` with no secrets, easy for an agent to parse.
+- Other driver options go in `--opt key=value` (repeatable; same as the advanced options in the app's connection dialog). Read-only mode is a per-user app setting and cannot be set from the CLI.
+- If the SSH jump host's key has not been trusted yet, the test fails. Connect once in the app to confirm the fingerprint, or save with `--no-test` and confirm it in the app afterwards.
+
 ### `db` — databases / schemas
 
 ```bash

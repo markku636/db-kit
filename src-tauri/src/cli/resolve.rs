@@ -130,11 +130,25 @@ fn default_port(kind: DbKind) -> u16 {
 /// 只靠連線字串組臨時連線（比對指令的 `--dst mysql://…` 用）。
 fn from_url(url: &str, kind_hint: Option<DbKind>) -> AppResult<ConnectionConfig> {
     let parsed = parse_url(url, kind_hint)?;
-    build_adhoc(parsed, None, None, None, None, None)
+    let cfg = build_adhoc(parsed, None, None, None, None, None)?;
+    ensure_cli_kind(cfg.kind)?;
+    Ok(cfg)
 }
 
 /// 由臨時旗標（含 `--url`）組出 `ConnectionConfig`，id 為一次性 `cli-<uuid>`（僅當 manager 索引）。
 fn resolve_adhoc(args: &ConnArgs) -> AppResult<ConnectionConfig> {
+    let cfg = adhoc_unchecked(args)?;
+    ensure_cli_kind(cfg.kind)?;
+    Ok(cfg)
+}
+
+/// `dbk conn add` 用：同 `resolve_adhoc` 但**不擋** CLI 不支援的種類——Kafka / Elasticsearch /
+/// RabbitMQ 在 CLI 裡查不了，存起來給 GUI 用仍然合理（存檔前的連線測試由呼叫端自行略過）。
+pub(crate) fn adhoc_for_save(args: &ConnArgs) -> AppResult<ConnectionConfig> {
+    adhoc_unchecked(args)
+}
+
+fn adhoc_unchecked(args: &ConnArgs) -> AppResult<ConnectionConfig> {
     let parsed = if let Some(url) = &args.url {
         parse_url(url, args.kind.map(kind_of))?
     } else if let Some(k) = args.kind {
@@ -168,7 +182,6 @@ fn build_adhoc(
     let kind = parsed.kind.ok_or_else(|| {
         AppError::Connect(t!("無法判斷連線種類（請加 --kind 或於 --url 指定 scheme）").into())
     })?;
-    ensure_cli_kind(kind)?;
 
     // 個別旗標覆寫 URL 解析到的對應欄位。
     let host = host

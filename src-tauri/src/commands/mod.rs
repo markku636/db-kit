@@ -302,28 +302,8 @@ pub async fn save_connection_layout(
 
 #[tauri::command]
 pub async fn save_connection(app: AppHandle, config: ConnectionConfig) -> AppResult<()> {
-    // secret 進 keychain。空字串 = 不變動（編輯連線時未重新輸入密碼則保留舊的）。
-    if !config.password.is_empty() {
-        store::kc_set(&config.id, &config.password)?;
-    }
-    if !config.otp_secret.is_empty() {
-        store::kc_set(&store::otp_account(&config.id), &config.otp_secret)?;
-    }
-    if let Some(pw) = config.options.get(crate::db::proxy::PROXY_PASSWORD_OPTION).filter(|p| !p.is_empty()) {
-        store::kc_set(&store::proxy_account(&config.id), pw)?;
-    }
-    if config.ssh_enabled {
-        if !config.ssh_password.is_empty() {
-            store::kc_set(&store::ssh_account(&config.id), &config.ssh_password)?;
-        }
-        if !config.ssh_passphrase.is_empty() {
-            store::kc_set(
-                &store::ssh_passphrase_account(&config.id),
-                &config.ssh_passphrase,
-            )?;
-        }
-    }
-    store::upsert(&app, PersistedConnection::from(&config)).await
+    // secret 進 keychain（空字串 = 不變動）、其餘 upsert；與 `dbk conn add` 共用同一份實作。
+    store::save_connection_in(&store::app_config_dir(&app)?, &config).await
 }
 
 #[tauri::command]
@@ -349,13 +329,7 @@ pub async fn remove_saved_connection(
         state.k8s_forwards.close_conn(&id).await;
     }
     state.manager.disconnect(&id).await;
-    store::remove(&app, &id).await?;
-    store::kc_delete(&id);
-    store::kc_delete(&store::otp_account(&id));
-    store::kc_delete(&store::proxy_account(&id));
-    store::kc_delete(&store::ssh_account(&id));
-    store::kc_delete(&store::ssh_passphrase_account(&id));
-    Ok(())
+    store::remove_connection_in(&store::app_config_dir(&app)?, &id).await
 }
 
 #[tauri::command]

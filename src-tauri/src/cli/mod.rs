@@ -10,6 +10,8 @@ mod ai;
 mod args;
 // 結構 / 資料比對：要同時開兩條連線，與 dispatch 的單連線流程分開放。
 mod compare;
+// `dbk conn add` / `conn remove`：從命令列建立 / 刪除已存連線（AI 代理人也走這條）。
+mod conn_admin;
 mod dispatch;
 // `dbk diff` / `dbk sync`：檔案 / 資料夾比對與同步（核心在 crate::filecmp，與 GUI 的比對分頁同一套）。
 mod filecmp;

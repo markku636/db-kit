@@ -38,6 +38,8 @@ pub async fn dispatch(cli: Cli) -> AppResult<()> {
         // ---- 不需建立連線 ----
         Command::Conn(ConnCmd::List) => conn_list(fmt).await,
         Command::Conn(ConnCmd::Export { path, passphrase }) => conn_export(&path, &passphrase).await,
+        Command::Conn(ConnCmd::Add(a)) => super::conn_admin::add(&conn, fmt, a).await,
+        Command::Conn(ConnCmd::Remove { target }) => super::conn_admin::remove(&conn, &target).await,
         Command::Conn(ConnCmd::Test) => {
             let cfg = resolve::resolve(&conn).await?;
             ConnectionManager::new().test(&cfg).await?;
@@ -117,7 +119,7 @@ async fn exec(
             mgr.ping(id).await?;
             println!("{} ms", start.elapsed().as_millis());
         }
-        Command::Conn(_) => unreachable!("conn list/test/export 在連線前已處理"),
+        Command::Conn(_) => unreachable!("conn list/test/export/add/remove 在連線前已處理"),
 
         Command::Db(DbCmd::List) => {
             let dbs = mgr.list_databases(id).await?;

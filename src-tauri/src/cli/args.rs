@@ -365,6 +365,72 @@ pub enum ConnCmd {
         #[arg(long)]
         passphrase: String,
     },
+    /// 新增已存連線（GUI 側欄同步出現）；連線參數沿用 --kind / --url / --host / --port / --user / --password / -d
+    Add(ConnAddArgs),
+    /// 刪除已存連線（連同 keychain 裡的密碼；需 --yes）
+    Remove {
+        /// 連線名稱或 id
+        target: String,
+    },
+}
+
+/// `dbk conn add`：連線本體沿用全域臨時連線旗標，這裡只放「存檔才需要」的設定。
+#[derive(Args, Debug)]
+pub struct ConnAddArgs {
+    /// 連線名稱（側欄顯示、`--conn` 用的名字）
+    pub name: String,
+
+    /// 放進側欄群組（同種類、名稱不分大小寫；不存在就建立）
+    #[arg(long)]
+    pub group: Option<String>,
+
+    /// 標記為正式環境（側欄顯示 PROD、執行前確認；MCP 寫入需 --allow-prod）
+    #[arg(long)]
+    pub prod: bool,
+
+    /// SSL 模式（PG：disable/prefer/require/verify-ca/verify-full；MySQL：disabled/preferred/required/verify_ca/verify_identity）
+    #[arg(long)]
+    pub ssl_mode: Option<String>,
+
+    /// 額外驅動選項 key=value（可重複；同 GUI 進階設定的 options）
+    #[arg(long = "opt", value_name = "KEY=VALUE")]
+    pub opts: Vec<String>,
+
+    /// 從 stdin 讀資料庫密碼（第一行），避免出現在 argv / shell 歷史
+    #[arg(long)]
+    pub password_stdin: bool,
+
+    /// SSH 跳板：主機（給了就啟用 SSH tunnel）
+    #[arg(long)]
+    pub ssh_host: Option<String>,
+
+    /// SSH 跳板：連接埠
+    #[arg(long, default_value_t = 22)]
+    pub ssh_port: u16,
+
+    /// SSH 跳板：帳號
+    #[arg(long)]
+    pub ssh_user: Option<String>,
+
+    /// SSH 跳板：私鑰路徑（給了就用金鑰認證，否則用密碼）
+    #[arg(long)]
+    pub ssh_key: Option<String>,
+
+    /// SSH 跳板：密碼（亦可用環境變數 DBKIT_SSH_PASSWORD）
+    #[arg(long, env = "DBKIT_SSH_PASSWORD", hide_env_values = true)]
+    pub ssh_password: Option<String>,
+
+    /// SSH 跳板：私鑰 passphrase（亦可用環境變數 DBKIT_SSH_PASSPHRASE）
+    #[arg(long, env = "DBKIT_SSH_PASSPHRASE", hide_env_values = true)]
+    pub ssh_passphrase: Option<String>,
+
+    /// 存檔前不先測試連線（預設會先連一次，連不上就不存）
+    #[arg(long)]
+    pub no_test: bool,
+
+    /// 已有同名連線時覆寫它（保留 id 與群組；沒給的密碼沿用舊的；需 --yes）
+    #[arg(long)]
+    pub replace: bool,
 }
 
 #[derive(Subcommand, Debug)]

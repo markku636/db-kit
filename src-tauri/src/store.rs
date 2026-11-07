@@ -505,6 +505,72 @@ pub async fn write_json_compact_in<T: Serialize>(dir: &Path, file: &str, value: 
     Ok(())
 }
 
+/// 存一筆連線：secret 進 keychain、其餘 upsert 進 connections.json。GUI「儲存連線」與
+/// `dbk conn add` 共用，兩邊對空字串的語意一致——**空 = 不變動**（編輯時沒重新輸入密碼就保留舊的）。
+pub async fn save_connection_in(dir: &Path, config: &ConnectionConfig) -> AppResult<()> {
+    if !config.password.is_empty() {
+        kc_set(&config.id, &config.password)?;
+    }
+    if !config.otp_secret.is_empty() {
+        kc_set(&otp_account(&config.id), &config.otp_secret)?;
+    }
+    if let Some(pw) = config.options.get(crate::db::proxy::PROXY_PASSWORD_OPTION).filter(|p| !p.is_empty()) {
+        kc_set(&proxy_account(&config.id), pw)?;
+    }
+    if config.ssh_enabled {
+        if !config.ssh_password.is_empty() {
+            kc_set(&ssh_account(&config.id), &config.ssh_password)?;
+        }
+        if !config.ssh_passphrase.is_empty() {
+            kc_set(&ssh_passphrase_account(&config.id), &config.ssh_passphrase)?;
+        }
+    }
+    upsert_in(dir, PersistedConnection::from(config)).await
+}
+
+/// 刪除一筆連線並清掉它在 keychain 的所有 secret（GUI「刪除連線」與 `dbk conn remove` 共用）。
+pub async fn remove_connection_in(dir: &Path, id: &str) -> AppResult<()> {
+    remove_in(dir, id).await?;
+    kc_delete(id);
+    kc_delete(&otp_account(id));
+    kc_delete(&proxy_account(id));
+    kc_delete(&ssh_account(id));
+    kc_delete(&ssh_passphrase_account(id));
+    Ok(())
+}
+
+/// 把連線掛到指定名稱的群組（同一連線種類、名稱不分大小寫；沒有就建一個接在尾端）。回傳群組 id。
+///
+/// 側欄是「種類 > 群組」，所以只認同種類的群組——PostgreSQL 連線掛到 MySQL 的同名群組，
+/// 側欄會找不到它（同 `import_in` 的規則）。
+pub async fn assign_group_in(dir: &Path, conn_id: &str, group_name: &str) -> AppResult<String> {
+    let mut file = load_file_in(dir).await?;
+    let kind = file
+        .connections
+        .iter()
+        .find(|c| c.id == conn_id)
+        .map(|c| c.kind.as_str().to_string())
+        .ok_or_else(|| AppError::NotFound(conn_id.to_string()))?;
+    let gid = match file
+        .groups
+        .iter()
+        .find(|g| g.kind.as_deref() == Some(kind.as_str()) && same_group_name(&g.name, group_name))
+    {
+        Some(g) => g.id.clone(),
+        None => {
+            let id = uuid::Uuid::new_v4().to_string();
+            file.groups.push(ConnGroup { id: id.clone(), name: group_name.trim().to_string(), kind: Some(kind) });
+            id
+        }
+    };
+    if let Some(c) = file.connections.iter_mut().find(|c| c.id == conn_id) {
+        c.group_id = Some(gid.clone());
+    }
+    file.version = SCHEMA_VERSION;
+    save_file_in(dir, &file).await?;
+    Ok(gid)
+}
+
 pub async fn remove_in(dir: &Path, id: &str) -> AppResult<()> {
     let mut all = load_all_in(dir).await?;
     let before = all.len();
@@ -559,11 +625,6 @@ pub async fn save_layout(
 }
 
 #[cfg(feature = "gui")]
-pub async fn upsert(app: &AppHandle, conn: PersistedConnection) -> AppResult<()> {
-    upsert_in(&app_config_dir(app)?, conn).await
-}
-
-#[cfg(feature = "gui")]
 pub async fn import_connections(
     app: &AppHandle,
     groups: Vec<ConnGroup>,
@@ -580,11 +641,6 @@ pub async fn read_json<T: DeserializeOwned + Default>(app: &AppHandle, file: &st
 #[cfg(feature = "gui")]
 pub async fn write_json<T: Serialize>(app: &AppHandle, file: &str, value: &T) -> AppResult<()> {
     write_json_in(&app_config_dir(app)?, file, value).await
-}
-
-#[cfg(feature = "gui")]
-pub async fn remove(app: &AppHandle, id: &str) -> AppResult<()> {
-    remove_in(&app_config_dir(app)?, id).await
 }
 
 /// 載入單一連線並補上密碼（供排程器 fire 時使用）。找不到回 `NotFound`。
