@@ -8,6 +8,10 @@
 //! CLI / headless 透過 `headless_config_dir()`（`dirs::config_dir()/<identifier>`）。兩者指向
 //! 同一目錄與同一 keychain service，故 CLI 與 GUI 共用同一份連線設定。實際 IO 收斂到 `*_in`
 //! 內層函式（吃 `&Path`），AppHandle 版本只是薄轉接。
+//!
+//! 兩條路徑都先看 `data_dir_override()`：設了 `DB_KIT_DATA_DIR`、或執行檔旁有 `portable.txt`
+//! （免安裝版）時，整份設定改落在那個目錄。GUI 另外把同一個路徑餵給 Tauri 的
+//! `appDirectoriesOverride`（見 `lib.rs` 的 `portable_context`），WebView2 的使用者資料才會一起搬。
 
 use std::path::{Path, PathBuf};
 
@@ -200,17 +204,67 @@ impl PersistedConnection {
 
 // ---- 設定目錄解析 ----
 
+/// 可攜模式的標記檔：與執行檔同目錄。免安裝 zip 內附這個檔，解壓即生效。
+const PORTABLE_MARKER: &str = "portable.txt";
+/// 可攜模式的資料目錄名（執行檔同目錄下）。
+const PORTABLE_DATA_DIR: &str = "data";
+/// 設定目錄的環境變數覆寫（優先於一切）：給可攜安裝、多組設定並存與自動化測試用。
+const DATA_DIR_ENV: &str = "DB_KIT_DATA_DIR";
+
+/// 由「環境變數值 + 執行檔所在目錄」決定設定目錄（純函式，便於測試）。
+///
+/// 順序：`DB_KIT_DATA_DIR` > 執行檔旁有 `portable.txt` → `<exe 目錄>/data` > None（走 OS 使用者目錄）。
+/// 標記檔必須明確存在才啟用可攜模式——只看 `data/` 目錄會把使用者自己建的同名目錄誤判成可攜安裝。
+///
+/// 回傳的路徑一律是絕對路徑：環境變數給相對路徑時以 `cwd` 展開。GUI 把這個結果餵給 Tauri 的
+/// `appDirectoriesOverride`，而它對相對路徑的基準是「執行檔目錄」、CLI 這邊是行程的工作目錄——
+/// 不先展開，同一個設定會讓 GUI 與 CLI 指到兩個地方。
+fn resolve_data_dir(env_override: Option<&str>, exe_dir: Option<&Path>, cwd: Option<&Path>) -> Option<PathBuf> {
+    if let Some(p) = env_override.map(str::trim).filter(|s| !s.is_empty()) {
+        let p = Path::new(p);
+        return match (p.is_absolute(), cwd) {
+            (true, _) => Some(p.to_path_buf()),
+            (false, Some(base)) => Some(base.join(p)),
+            // 取不到工作目錄（極罕見）：維持原樣，由呼叫端的相對解析決定，至少不會 panic。
+            (false, None) => Some(p.to_path_buf()),
+        };
+    }
+    let dir = exe_dir?;
+    dir.join(PORTABLE_MARKER).is_file().then(|| dir.join(PORTABLE_DATA_DIR))
+}
+
+/// 目前行程的設定目錄覆寫（可攜模式或 `DB_KIT_DATA_DIR`）；None = 照舊用 OS 的使用者設定目錄。
+///
+/// 每次呼叫重新解析：成本只有一次 `stat`，換來測試能改環境變數、使用者也能在不重啟服務的情況下
+/// 搬動資料夾（GUI 本身仍需重啟才會重讀設定）。
+pub fn data_dir_override() -> Option<PathBuf> {
+    let env = std::env::var(DATA_DIR_ENV).ok();
+    let exe = std::env::current_exe().ok();
+    let cwd = std::env::current_dir().ok();
+    resolve_data_dir(env.as_deref(), exe.as_deref().and_then(Path::parent), cwd.as_deref())
+}
+
 /// CLI / headless 模式的設定目錄：與 Tauri 的 `app_config_dir()` 同路徑
 /// （`dirs::config_dir()/<identifier>`），讓 CLI 與 GUI 共用同一份 connections.json + keychain。
 /// identifier 取自 `tauri.conf.json`（`dev.dbkit.app`），變更時需同步此處。
+/// 可攜模式（執行檔旁有 `portable.txt`）或設了 `DB_KIT_DATA_DIR` 時改用該目錄。
 pub fn headless_config_dir() -> AppResult<PathBuf> {
+    if let Some(dir) = data_dir_override() {
+        return Ok(dir);
+    }
     let base = dirs::config_dir()
         .ok_or_else(|| AppError::Storage(t!("無法取得使用者設定目錄").into()))?;
     Ok(base.join("dev.dbkit.app"))
 }
 
+/// GUI 的設定目錄。可攜模式 / `DB_KIT_DATA_DIR` 優先，否則走 Tauri 的 `app_config_dir()`。
+/// **GUI 端一律經此函式取設定目錄**（不要直接呼叫 `app.path().app_config_dir()`），
+/// 否則可攜模式下部分資料會寫回 `%APPDATA%`，跟著 U 盤走的只有一半。
 #[cfg(feature = "gui")]
 pub fn app_config_dir(app: &AppHandle) -> AppResult<PathBuf> {
+    if let Some(dir) = data_dir_override() {
+        return Ok(dir);
+    }
     app.path()
         .app_config_dir()
         .map_err(|e| AppError::Storage(tf!("無法取得設定目錄：{e}", e = e)))
@@ -711,6 +765,56 @@ pub fn kc_delete(account: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- 可攜模式的設定目錄解析（resolve_data_dir 為純函式，不碰真實環境變數）----
+
+    #[test]
+    fn data_dir_env_override_wins() {
+        let exe = std::path::PathBuf::from("/opt/db-kit");
+        let cwd = std::path::PathBuf::from("/work");
+        // 環境變數優先於可攜標記（標記在此例不存在，但順序上也不該去看）。
+        let abs = if cfg!(windows) { r"C:\usb\dbkit" } else { "/mnt/usb/dbkit" };
+        assert_eq!(
+            resolve_data_dir(Some(abs), Some(&exe), Some(&cwd)),
+            Some(std::path::PathBuf::from(abs))
+        );
+        // 相對路徑以工作目錄展開（GUI 那端的基準是執行檔目錄，不展開兩邊會不一致）。
+        assert_eq!(
+            resolve_data_dir(Some("mydata"), Some(&exe), Some(&cwd)),
+            Some(cwd.join("mydata"))
+        );
+        // 空字串 / 只有空白視為沒設。
+        assert_eq!(resolve_data_dir(Some("   "), Some(&exe), Some(&cwd)), None);
+    }
+
+    #[test]
+    fn data_dir_needs_portable_marker() {
+        let tmp = std::env::temp_dir().join(format!("dbkit_portable_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // 沒有標記檔 → 不是可攜安裝，走 OS 使用者目錄。
+        assert_eq!(resolve_data_dir(None, Some(&tmp), None), None);
+
+        // 只有同名目錄也不算（避免把使用者自己建的 data/ 誤判成可攜安裝）。
+        let _ = std::fs::create_dir_all(tmp.join(PORTABLE_DATA_DIR));
+        assert_eq!(resolve_data_dir(None, Some(&tmp), None), None);
+
+        // 有標記檔 → <exe 目錄>/data。
+        std::fs::write(tmp.join(PORTABLE_MARKER), b"portable").unwrap();
+        assert_eq!(resolve_data_dir(None, Some(&tmp), None), Some(tmp.join(PORTABLE_DATA_DIR)));
+
+        // 標記是目錄而非檔案 → 不算（is_file 擋掉）。
+        std::fs::remove_file(tmp.join(PORTABLE_MARKER)).unwrap();
+        std::fs::create_dir_all(tmp.join(PORTABLE_MARKER)).unwrap();
+        assert_eq!(resolve_data_dir(None, Some(&tmp), None), None);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn data_dir_without_exe_dir_is_none() {
+        assert_eq!(resolve_data_dir(None, None, None), None);
+    }
 
     fn conn(id: &str) -> PersistedConnection {
         PersistedConnection {

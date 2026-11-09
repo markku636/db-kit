@@ -1,0 +1,42 @@
+oracle\ 資料夾的授權聲明
+========================
+
+這份免安裝版的 oracle\ 資料夾內容是 Oracle Instant Client（Basic，Windows x64，
+版本 23.9.0.25.07），著作權屬於 Oracle America, Inc.。它不是 db-kit 的一部分，
+不適用 db-kit 的 MIT 授權，而是依「Oracle Technology Network Development and
+Distribution License Terms for Instant Client」隨附於本程式。
+
+授權全文：
+  * oracle\BASIC_LICENSE（隨元件一併提供，以此為準）
+  * https://www.oracle.com/downloads/licenses/instant-client-lic.html
+
+檔案未經修改。為縮小體積，只移除了執行時不需要的除錯符號檔（*.sym）與
+Java 驅動程式（*.jar）；其餘檔案與 Oracle 官方套件逐位元相同（原始套件
+SHA-256：8ff61b58e810c91b0c340559aabe8b057f0a308ad80c94aba57920ca4a6e1736）。
+
+
+使用這些檔案即表示您同意下列條件
+--------------------------------
+
+1. 僅限用於您自身的營運、開發與測試用途。
+2. 不得轉讓、出售、出借這些檔案或其中的權益，也不得提供第三方用於其營運；
+   所有權不移轉給您或任何其他人。
+3. 不得進行逆向工程、反組譯或反編譯（法律為互通性目的所要求者除外）。
+4. 複製份數以您獲授權使用所需者為限。
+5. 不得公開以這些檔案所做的效能比較（benchmark）結果。
+6. Oracle 不提供任何技術支援，並於法律允許範圍內不就任何直接、間接、附隨或
+   衍生之損害負責。這些檔案依「現狀」提供，不附任何明示或默示擔保。
+7. 停止使用時，應終止使用並刪除所有副本。
+8. 您必須遵守美國及其他適用的出口與進口管制法規：不得直接或間接將這些檔案或
+   其直接產品輸出或再輸出至美國禁止出口的國家，或輸出給美國財政部
+   Specially Designated Nationals 名單、美國商務部 Table of Denial Orders
+   名單上的個人或實體，亦不得用於核子、化學或生物武器之發展、設計、製造或生產。
+9. 本聲明不適用 Uniform Computer Information Transactions Act（UCITA）。
+10. Oracle America, Inc. 為本聲明的第三方受益人。
+
+如不同意以上條件，請不要使用 oracle\ 資料夾，並將其刪除；db-kit 的其他功能
+不受影響（刪除後僅無法連線 Oracle，可改用自行安裝的 Oracle Instant Client，
+在連線設定的「Instant Client 目錄」指定其路徑）。
+
+Oracle 與 Java 是 Oracle 及其關係企業的註冊商標。本程式與 Oracle 無隸屬關係，
+亦未獲其背書。

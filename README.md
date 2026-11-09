@@ -95,6 +95,7 @@ Tenon 管理員須先開啟「僅允許已授權的遠端連線」及網頁遠�
 | 平台 | 安裝檔 |
 |------|--------|
 | Windows 10 / 11 | `db-kit_x.y.z_x64-setup.exe` 或 `.msi` |
+| Windows 10 / 11（免安裝） | `db-kit_x.y.z_x64_portable.zip`，解壓即用、設定存在資料夾內，可放隨身碟 |
 | macOS Apple Silicon / Intel | `db-kit_x.y.z_aarch64.dmg` / `db-kit_x.y.z_x64.dmg` |
 | Linux | `.deb`、`.rpm` 或免安裝的 `.AppImage` |
 

@@ -120,6 +120,31 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      # Windows 免安裝版要內附的 Oracle 連線元件。排在 tauri build 之前：下載或校驗失敗時
+      # 立刻停，不要等整包編完才發現。
+      # 釘「固定版本」而非 latest 連結：latest 的內容會隨 Oracle 改版替換，校驗碼跟著失效，
+      # 使用者每次拿到的也不一樣。換版時 URL、下面的 sha256 與
+      # packaging/portable/ORACLE-NOTICE.txt 裡的版本與校驗碼要一起改。
+      - name: Cache Oracle Instant Client
+        if: matrix.platform == 'windows-latest'
+        id: instantclient
+        uses: actions/cache@v4
+        with:
+          path: instantclient.zip
+          key: instantclient-basic-windows-x64-23.9.0.25.07
+
+      - name: Download Oracle Instant Client
+        if: ${{ matrix.platform == 'windows-latest' && steps.instantclient.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          curl -fsSL --retry 3 -o instantclient.zip \
+            "https://download.oracle.com/otn_software/nt/instantclient/2390000/instantclient-basic-windows.x64-23.9.0.25.07.zip"
+
+      - name: Verify Oracle Instant Client checksum
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: echo "8ff61b58e810c91b0c340559aabe8b057f0a308ad80c94aba57920ca4a6e1736 *instantclient.zip" | sha256sum -c -
+
       # Release 說明取自 CHANGELOG 中該版本的段落（+ 下載指引）。原本是寫死的一句
       # 「見 CHANGELOG.md」，每個版本的 Release 頁面長得一模一樣，使用者得自己翻 commit
       # 才知道改了什麼。多行內容用 heredoc 分隔符寫進 GITHUB_ENV；bash 在三個平台的 runner
@@ -151,6 +176,59 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }} --config src-tauri/tauri.bridge.conf.json
 
+      # --- Windows 免安裝版（zip）------------------------------------------------------
+      # Tauri 的 Windows bundler 只有 msi / nsis，沒有免安裝 target，所以這包自己組：前端
+      # 資源已嵌進執行檔，把 GUI、CLI、遠端桌面輔助程式與 Oracle 連線元件放同一層就能解壓即用
+      # （找 sidecar 與 Oracle client 都是以「執行檔所在目錄」為基準，見 rd/rustdesk.rs
+      # 的 bridge_path、agent.rs 的 resolve_dbk_bin、db/oracle.rs 的 probe_bundled_client）。
+      # zip 內的 portable.txt 讓設定改寫同目錄的 data\ 而不是 %APPDATA%（store.rs 的 resolve_data_dir）。
+      - name: Assemble portable zip
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # tauri build 不指定 --bin，CLI 通常已一併編出；沒有才補編（features 與上一步一致，避免整包重編）。
+          test -f src-tauri/target/release/dbk.exe \
+            || cargo build --release --manifest-path src-tauri/Cargo.toml --bin dbk --features tauri/custom-protocol
+          ver=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          triple=$(rustc -vV | sed -n 's/^host: //p')
+          pkg="db-kit_${ver}_x64_portable"
+          mkdir -p "$pkg/oracle"
+          cp src-tauri/target/release/db-kit.exe "$pkg/"
+          cp src-tauri/target/release/dbk.exe "$pkg/"
+          # VC++ runtime 的 app-local 副本：Rust 的 MSVC target 與 Oracle 元件都動態連結它，
+          # 而它不是 Windows 內建。沒有這幾支，乾淨的 Windows 連 db-kit.exe 都打不開
+          # （安裝版不需要：NSIS / MSI 會處理，這裡只為「解壓即用」）。
+          crt=$(ls -d "/c/Program Files/Microsoft Visual Studio/2022/"*/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT 2> /dev/null | tail -1)
+          test -n "$crt"
+          cp "$crt/vcruntime140.dll" "$crt/vcruntime140_1.dll" "$crt/msvcp140.dll" "$pkg/"
+          # 輔助程式在 zip 裡不帶 target triple：bridge_path() 找的是不帶後綴的檔名。
+          cp "src-tauri/binaries/dbk-rustdesk-bridge-$triple.exe" "$pkg/dbk-rustdesk-bridge.exe"
+          cp LICENSE "$pkg/LICENSE"
+          # 說明檔要給 Windows 記事本看：轉 CRLF。
+          for f in portable.txt README-portable.txt ORACLE-NOTICE.txt; do
+            sed 's/$/\r/' "packaging/portable/$f" > "$pkg/$f"
+          done
+          unzip -q instantclient.zip -d instantclient
+          mv instantclient/instantclient_*/* "$pkg/oracle/"
+          # 執行時用不到，拿掉省約 48 MB：除錯符號與 Java 驅動程式（其餘檔案不改，見 ORACLE-NOTICE.txt）。
+          rm -f "$pkg"/oracle/*.sym "$pkg"/oracle/*.jar
+          # 哨兵：client 沒攤平成功就讓這步失敗，而不是出一包連不上 Oracle 的 zip。
+          test -f "$pkg/oracle/oci.dll"
+          test -f "$pkg/oracle/BASIC_LICENSE"
+          # -mx=5：內容以已經壓過的 Oracle DLL 為主，-mx=9 只省幾 MB 卻多花好幾分鐘。
+          7z a -tzip -mx=5 "$pkg.zip" "$pkg" > /dev/null
+          echo "PORTABLE_ZIP=$pkg.zip" >> "$GITHUB_ENV"
+          ls -l "$pkg.zip"
+
+      # tauri-action 已經建好 / 更新了這個 tag 的 Release，這裡只追加一個檔案。
+      - name: Attach portable zip to release
+        if: ${{ matrix.platform == 'windows-latest' && startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "$PORTABLE_ZIP" --clobber
+
       - name: Upload manually built installers
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
@@ -164,3 +242,4 @@ jobs:
             src-tauri/target/**/bundle/**/*.deb
             src-tauri/target/**/bundle/**/*.rpm
             src-tauri/target/**/bundle/**/*.AppImage
+            db-kit_*_x64_portable.zip

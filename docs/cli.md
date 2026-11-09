@@ -11,6 +11,7 @@
 ## 目錄
 
 - [取得 dbk](#取得-dbk)
+- [設定目錄](#設定目錄)
 - [連線的三種指定方式](#連線的三種指定方式)
 - [全域旗標](#全域旗標)
 - [安全模型：唯讀預設、`--yes`、`--force`](#安全模型唯讀預設--yes--force)
@@ -54,6 +55,26 @@ dbk --help          # 完整子指令清單
 dbk stress --help   # 單一子指令的旗標說明
 dbk --version
 ```
+
+---
+
+## 設定目錄
+
+`dbk` 與 GUI 共用同一份設定（`connections.json`、群組、SSH 指紋）。預設位置是
+Windows `%APPDATA%\dev.dbkit.app`、macOS `~/Library/Application Support/dev.dbkit.app`、
+Linux `~/.config/dev.dbkit.app`。
+
+兩種情況會換位置，GUI 與 CLI 同時生效：
+
+- **`DB_KIT_DATA_DIR`**：指定任意目錄，優先於其他規則。相對路徑以目前工作目錄展開。
+  要讓多份設定並存、或在 CI 用一份丟棄式設定時很好用。
+- **可攜模式**：執行檔旁有 `portable.txt` 時改用同目錄的 `data\`（Windows 免安裝版預設如此）。
+
+```bash
+DB_KIT_DATA_DIR=/tmp/dbkit-ci dbk conn add ci-pg --url postgres://user@localhost/app --no-test
+```
+
+密碼一律存 OS keychain，不受上面設定影響（也因此不會跟著設定目錄複製走）。
 
 ---
 

@@ -4,7 +4,8 @@ version = "0.59.0"
 description = "Unified database management tool"
 license = "MIT"
 edition = "2021"
-rust-version = "1.77"
+# 1.90：tauri 2.12 的 MSRV（appDirectoriesOverride 需要它，見 lib.rs 的可攜模式設定）。
+rust-version = "1.90"
 # 本 crate 有兩個 binary（GUI: db-kit / CLI: dbk）。明確指定 GUI 為預設主程式，
 # 否則 `tauri build` 在多 binary 間會選錯（曾誤打包成 CLI dbk.exe，安裝後雙擊只閃 CLI 即關）。
 default-run = "db-kit"

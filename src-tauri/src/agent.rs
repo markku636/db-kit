@@ -26,7 +26,7 @@ use std::process::Stdio;
 use std::time::Instant;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
@@ -360,11 +360,8 @@ async fn cli_version(bin: &AgentBin) -> Option<String> {
 
 /// 助手的工作資料夾（agent 模式寫腳本檔的位置）；放在設定目錄下，啟動即建立。
 async fn workspace_dir(app: &AppHandle) -> AppResult<PathBuf> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| AppError::Storage(tf!("無法取得設定目錄：{e}", e = e)))?
-        .join("agent-workspace");
+    // 經 store::app_config_dir（而非 app.path() 直取）才會跟著可攜模式走。
+    let dir = crate::store::app_config_dir(app)?.join("agent-workspace");
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| AppError::Storage(tf!("建立助手工作目錄失敗：{e}", e = e)))?;
@@ -977,7 +974,7 @@ fn mcp_config_json(command: &str, args: &[String]) -> serde_json::Value {
 async fn mcp_attach(app: &AppHandle, ctx: &DbToolCtx, req_id: &str) -> Option<McpAttach> {
     let command = resolve_dbk_bin().await?;
     let args = dbk_mcp_args(ctx);
-    let dir = app.path().app_config_dir().ok()?.join("agent-mcp");
+    let dir = crate::store::app_config_dir(app).ok()?.join("agent-mcp");
     tokio::fs::create_dir_all(&dir).await.ok()?;
     let config_path = dir.join(format!("{}.json", crate::schema_cache::sanitize_id(req_id)));
     let body = serde_json::to_vec_pretty(&mcp_config_json(&command, &args)).ok()?;

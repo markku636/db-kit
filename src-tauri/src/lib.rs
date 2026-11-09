@@ -83,6 +83,24 @@ use parking_lot::Mutex;
 #[cfg(feature = "gui")]
 use tauri::{Manager, RunEvent, WindowEvent};
 
+/// 可攜模式：把 Tauri 的全部 app 目錄改指到設定目錄（`store::data_dir_override`，也就是
+/// 執行檔旁的 `data\` 或 `DB_KIT_DATA_DIR`）。
+///
+/// `appDirectoriesOverride = Root(dir)` 一次涵蓋 config / data / localData / cache / log，
+/// 其中 **localData 決定 Windows 上 WebView2 的使用者資料夾**——前端的 `localStorage`
+/// （介面語言、AI 人設、側欄寬度、SSH 偏好…）存在那裡，不一起搬就只有後端設定跟著走，
+/// 而且會在每台用過的機器留下 `%LOCALAPPDATA%\dev.dbkit.app`。
+///
+/// 非可攜模式不設這個欄位，一切照 Tauri 預設（安裝版裝在 Program Files，旁邊本來就不可寫）。
+#[cfg(feature = "gui")]
+fn portable_context<R: tauri::Runtime>(mut ctx: tauri::Context<R>) -> tauri::Context<R> {
+    if let Some(dir) = store::data_dir_override() {
+        ctx.config_mut().app.app_directories_override =
+            Some(tauri::utils::config::AppDirectoriesOverride::Root(dir));
+    }
+    ctx
+}
+
 #[cfg(feature = "gui")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -776,7 +794,7 @@ pub fn run() {
             }
             _ => {}
         })
-        .build(tauri::generate_context!())
+        .build(portable_context(tauri::generate_context!()))
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             // 程序整體退出時再保險 drain 一次。

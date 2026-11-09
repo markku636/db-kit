@@ -27,16 +27,15 @@ pub struct KnownHostsStore {
 }
 
 impl KnownHostsStore {
-    /// 使用者的真正清單：`<config_dir>/dev.dbkit.app/ssh_known_hosts.json`。
+    /// 使用者的真正清單：`<設定目錄>/ssh_known_hosts.json`。
+    /// 設定目錄經 `store::headless_config_dir()`，可攜模式下跟著執行檔走。
     pub fn default_path() -> Self {
-        Self {
-            path: dirs::config_dir().map(|d| d.join("dev.dbkit.app").join("ssh_known_hosts.json")),
-        }
+        Self::config_file("ssh_known_hosts.json")
     }
 
     /// 設定目錄下的另一份同格式清單（遠端桌面的 RDP 憑證指紋 `rd_known_certs.json`）。
     pub fn config_file(name: &str) -> Self {
-        Self { path: dirs::config_dir().map(|d| d.join("dev.dbkit.app").join(name)) }
+        Self { path: crate::store::headless_config_dir().ok().map(|d| d.join(name)) }
     }
 
     /// 指定檔案（測試用）。

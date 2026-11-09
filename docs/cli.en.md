@@ -11,6 +11,7 @@ Good fits: scheduled jobs, CI, data audits, troubleshooting, feeding query resul
 ## Contents
 
 - [Getting dbk](#getting-dbk)
+- [Configuration directory](#configuration-directory)
 - [Three ways to specify a connection](#three-ways-to-specify-a-connection)
 - [Global flags](#global-flags)
 - [Safety model: read-only by default, `--yes`, `--force`](#safety-model-read-only-by-default---yes---force)
@@ -54,6 +55,29 @@ dbk --help          # full list of subcommands
 dbk stress --help   # flag reference for a single subcommand
 dbk --version
 ```
+
+---
+
+## Configuration directory
+
+`dbk` shares one set of settings with the GUI (`connections.json`, groups, SSH fingerprints).
+The default location is `%APPDATA%\dev.dbkit.app` on Windows,
+`~/Library/Application Support/dev.dbkit.app` on macOS and `~/.config/dev.dbkit.app` on Linux.
+
+Two things move it, for both the GUI and the CLI:
+
+- **`DB_KIT_DATA_DIR`** points at any directory and wins over everything else. A relative path is
+  resolved against the current working directory. Handy for keeping several profiles side by side,
+  or for a throwaway profile in CI.
+- **Portable mode**: when `portable.txt` sits next to the executable, settings go to `data\` in that
+  same folder (this is how the Windows portable build ships).
+
+```bash
+DB_KIT_DATA_DIR=/tmp/dbkit-ci dbk conn add ci-pg --url postgres://user@localhost/app --no-test
+```
+
+Passwords always live in the OS keychain, so they are not affected by the settings above - and they
+do not travel with a copied settings directory.
 
 ---
 

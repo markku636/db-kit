@@ -68,16 +68,21 @@ static CLIENT_DIR: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(
 
 const CLIENT_DOWNLOAD_URL: &str = "https://www.oracle.com/database/technologies/instant-client/downloads.html";
 
-/// 由 ORACLE_HOME 探測 client 函式庫目錄（Windows: oci.dll；Linux/macOS: libclntsh）。
-fn probe_oracle_home() -> Option<String> {
-    let home = std::env::var("ORACLE_HOME").ok().filter(|s| !s.trim().is_empty())?;
-    let lib = if cfg!(windows) {
+/// client 函式庫檔名（存在即視為該目錄是 client 目錄）。
+fn client_lib_name() -> &'static str {
+    if cfg!(windows) {
         "oci.dll"
     } else if cfg!(target_os = "macos") {
         "libclntsh.dylib"
     } else {
         "libclntsh.so"
-    };
+    }
+}
+
+/// 由 ORACLE_HOME 探測 client 函式庫目錄（Windows: oci.dll；Linux/macOS: libclntsh）。
+fn probe_oracle_home() -> Option<String> {
+    let home = std::env::var("ORACLE_HOME").ok().filter(|s| !s.trim().is_empty())?;
+    let lib = client_lib_name();
     let base = std::path::PathBuf::from(home.trim());
     for cand in [base.clone(), base.join("bin"), base.join("lib")] {
         if cand.join(lib).exists() {
@@ -87,13 +92,47 @@ fn probe_oracle_home() -> Option<String> {
     None
 }
 
+/// 隨附的 client 目錄：`<執行檔目錄>/oracle`，或其下唯一的 `instantclient_*` 子目錄
+/// （直接把官方 zip 解進去、沒有攤平時也能用）。免安裝版靠這個免安裝 client。
+fn probe_bundled_client() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    pick_client_dir(&exe.parent()?.join("oracle"), client_lib_name())
+}
+
+/// `probe_bundled_client` 的純函式內層（吃目錄與函式庫名，便於測試）。
+fn pick_client_dir(base: &std::path::Path, lib: &str) -> Option<String> {
+    if base.join(lib).is_file() {
+        return Some(base.to_string_lossy().into_owned());
+    }
+    let mut nested: Vec<_> = std::fs::read_dir(base)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("instantclient"))
+                && p.join(lib).is_file()
+        })
+        .collect();
+    // 多個版本並存時取字典序最後一個（版本號遞增 → 較新者），避免隨目錄列舉順序飄。
+    nested.sort();
+    nested.pop().map(|p| p.to_string_lossy().into_owned())
+}
+
 /// 確保 ODPI-C 已以正確的 client 目錄初始化。探測順序：連線 options 的 client_dir >
-/// ORACLE_HOME > PATH（不指定目錄）。失敗**不快取**——使用者裝好 client 後重試即可，免重啟。
+/// 隨附的 `<執行檔目錄>/oracle` > ORACLE_HOME > PATH（不指定目錄）。
+/// 失敗**不快取**——使用者裝好 client 後重試即可，免重啟。
+///
+/// 隨附的 client 排在 ORACLE_HOME 之前：免安裝版帶的是已驗證過的版本，而機器上殘留的
+/// ORACLE_HOME 常是 32 位元或過舊的 client，讓它優先會把「免安裝」直接變成 DPI-1047。
+/// 要改用機器上的 client：移除 `oracle` 目錄，或在連線設定填「Instant Client 目錄」。
 fn ensure_client(explicit: Option<&str>) -> AppResult<()> {
     let requested = explicit
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
+        .or_else(probe_bundled_client)
         .or_else(probe_oracle_home);
 
     let mut used = CLIENT_DIR.lock();
@@ -1224,7 +1263,7 @@ impl DatabaseDriver for OracleDriver {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_connect_string, build_where, lit, oracle_type_str, pk_where, q};
+    use super::{build_connect_string, build_where, lit, oracle_type_str, pick_client_dir, pk_where, q};
     use crate::db::{ConnectionConfig, DbKind, Filter};
 
     fn cfg(database: Option<&str>, connect_type: Option<&str>) -> ConnectionConfig {
@@ -1305,5 +1344,40 @@ mod tests {
         assert_eq!(build_where(&filters, false), " WHERE \"NAME\" LIKE 'a%' AND \"AGE\" IS NULL");
         assert_eq!(build_where(&filters, true), " WHERE \"NAME\" LIKE 'a%' OR \"AGE\" IS NULL");
         assert_eq!(build_where(&[], false), "");
+    }
+
+    // ---- 隨附 client 目錄的探測（免安裝版把 Instant Client 放在執行檔旁的 oracle/）----
+
+    #[test]
+    fn bundled_client_dir_probe() {
+        let lib = "oci.dll"; // 測純路徑邏輯，與實際平台的函式庫名無關
+        let root = std::env::temp_dir().join(format!("dbkit_ic_{}_{}", std::process::id(), line!()));
+        let base = root.join("oracle");
+        std::fs::create_dir_all(&base).unwrap();
+
+        // 空目錄 → 沒有可用的 client。
+        assert_eq!(pick_client_dir(&base, lib), None);
+
+        // 攤平放（CI 產出的免安裝版長這樣）→ 直接用 oracle/。
+        std::fs::write(base.join(lib), b"x").unwrap();
+        assert_eq!(pick_client_dir(&base, lib).as_deref(), Some(base.to_string_lossy().as_ref()));
+
+        // 沒攤平（使用者把官方 zip 原樣解進去）→ 認 instantclient_* 子目錄，多版取較新者。
+        std::fs::remove_file(base.join(lib)).unwrap();
+        for v in ["instantclient_19_28", "instantclient_23_9"] {
+            std::fs::create_dir_all(base.join(v)).unwrap();
+            std::fs::write(base.join(v).join(lib), b"x").unwrap();
+        }
+        // 不含函式庫的子目錄不該被選中。
+        std::fs::create_dir_all(base.join("instantclient_broken")).unwrap();
+        assert_eq!(
+            pick_client_dir(&base, lib).as_deref(),
+            Some(base.join("instantclient_23_9").to_string_lossy().as_ref())
+        );
+
+        // 目錄不存在 → None（read_dir 失敗不 panic）。
+        assert_eq!(pick_client_dir(&root.join("nope"), lib), None);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

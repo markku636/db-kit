@@ -12,6 +12,11 @@ src-tauri/binaries/
 linux-updater/target/
 # 打包輸出（build-installer.ps1 收整的帶版號安裝檔）
 release/
+# 免安裝版的組裝產物（CI 在 runner 上做；本機試打也別進版控）
+instantclient.zip
+instantclient/
+db-kit_*_x64_portable/
+db-kit_*_x64_portable.zip
 # env & secrets
 .env
 .env.local
