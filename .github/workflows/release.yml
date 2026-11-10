@@ -199,9 +199,24 @@ jobs:
           # VC++ runtime 的 app-local 副本：Rust 的 MSVC target 與 Oracle 元件都動態連結它，
           # 而它不是 Windows 內建。沒有這幾支，乾淨的 Windows 連 db-kit.exe 都打不開
           # （安裝版不需要：NSIS / MSI 會處理，這裡只為「解壓即用」）。
-          crt=$(ls -d "/c/Program Files/Microsoft Visual Studio/2022/"*/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT 2> /dev/null | tail -1)
-          test -n "$crt"
-          cp "$crt/vcruntime140.dll" "$crt/vcruntime140_1.dll" "$crt/msvcp140.dll" "$pkg/"
+          # 不寫死 VS 版本與 redist 代號：windows-latest 的映像已從 VS 2022 換成
+          # windows-2025-vs2026（安裝在 ...\Microsoft Visual Studio\18\Enterprise，
+          # 同時並存 Microsoft.VC142 / VC143 / VC145.CRT），寫死路徑會在換代時整步失敗。
+          # 取 x64 下版號最大的那一代（排除 onecore / spectre 變體，桌面版不適用），
+          # 並把整個目錄的 DLL 都帶走：檔名雖仍是 ...140...，但新一代多了
+          # vcruntime140_threads.dll 這類檔案，少帶會在乾淨的 Windows 上開不起來。
+          crt=$(find "/c/Program Files/Microsoft Visual Studio" -type d \
+            -path "*/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT" \
+            -not -path "*onecore*" -not -path "*spectre*" 2> /dev/null | sort -V | tail -1) || true
+          if [ -z "$crt" ]; then
+            echo "找不到 VC++ runtime 的 redist 目錄（x64 Microsoft.VC*.CRT），runner 映像可能又換代了。現有的 Visual Studio 安裝：" >&2
+            ls -d "/c/Program Files/Microsoft Visual Studio/"*/*/ >&2 || true
+            exit 1
+          fi
+          echo "VC++ runtime 取自：$crt"
+          cp "$crt"/*.dll "$pkg/"
+          # 哨兵：這三支是 db-kit.exe 直接相依的，少一支就不是「解壓即用」。
+          for d in vcruntime140.dll vcruntime140_1.dll msvcp140.dll; do test -f "$pkg/$d"; done
           # 輔助程式在 zip 裡不帶 target triple：bridge_path() 找的是不帶後綴的檔名。
           cp "src-tauri/binaries/dbk-rustdesk-bridge-$triple.exe" "$pkg/dbk-rustdesk-bridge.exe"
           cp LICENSE "$pkg/LICENSE"
