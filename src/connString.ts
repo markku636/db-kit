@@ -34,6 +34,8 @@ const LIBPQ_MARKERS = ["host", "hostaddr", "dbname", "sslmode", "sslrootcert", "
 const SEMICOLON_MARKERS = [
   "server", "data source", "address", "addr", "network address",
   "database", "initial catalog", "databasename", "host",
+  // 帳密鍵：只給帳密的片段（`User ID=u;Password=p`）也要能填表（與後端 SEMICOLON_CRED_MARKERS 一致）。
+  "user id", "userid", "uid", "username", "password", "pwd",
 ];
 
 // StackExchange.Redis 的選項鍵（與後端 vendor.rs 的 SE_REDIS_KEYS 一致）。

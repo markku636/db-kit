@@ -533,6 +533,19 @@ mod tests {
     }
 
     #[test]
+    fn ado_net_credentials_only() {
+        let p = parse_url("user id=dd-rdtest;Password=vCW7L.Z&!I1^", Some(DbKind::Mssql)).unwrap();
+        assert!(matches!(p.kind, Some(DbKind::Mssql)));
+        assert_eq!(p.username.as_deref(), Some("dd-rdtest"));
+        assert_eq!(p.password.as_deref(), Some("vCW7L.Z&!I1^"));
+        assert_eq!(p.host, None);
+        // 無 hint 也認得（ADO.NET 預設判 MSSQL）
+        let p = parse("User ID=sa;Password=x");
+        assert!(matches!(p.kind, Some(DbKind::Mssql)));
+        assert_eq!(p.username.as_deref(), Some("sa"));
+    }
+
+    #[test]
     fn ado_net_alternate_keys() {
         let p = parse("Data Source=host2;Initial Catalog=cat;UID=u;PWD=pw;Encrypt=no");
         assert_eq!(p.kind, Some(DbKind::Mssql));

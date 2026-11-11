@@ -189,7 +189,7 @@ pub(super) fn apply_ado_pairs<'a>(p: &mut Parsed, pairs: impl Iterator<Item = &'
                     }
                 }
             }
-            "user id" | "uid" | "user" => p.username = Some(v.to_string()),
+            "user id" | "userid" | "uid" | "user" | "username" => p.username = Some(v.to_string()),
             "password" | "pwd" => p.password = Some(v.to_string()),
             // database / encrypt / trust 走與 URL query 共用的映射（避免雙份實作漂移）。
             _ => apply_mssql_kv(p, &key, v),
@@ -210,6 +210,10 @@ const SEMICOLON_MARKERS: &[&str] = &[
     "databasename",
     "host",
 ];
+
+/// 分號 KV 的帳密鍵（ADO.NET / Npgsql）。只有帳密、沒有位址的片段（`User ID=u;Password=p`）
+/// 也視為連線字串：只填帳密，主機等欄位保留現值。
+const SEMICOLON_CRED_MARKERS: &[&str] = &["user id", "userid", "uid", "username", "password", "pwd"];
 
 /// MSSQL 專屬鍵：命中任一即判為 MSSQL（即使同時有 `host=`）。
 const MSSQL_MARKERS: &[&str] = &[
@@ -244,7 +248,11 @@ pub(super) fn try_semicolon_kv(s: &str, hint: Option<DbKind>) -> Option<Parsed> 
         .filter_map(|seg| seg.split_once('='))
         .map(|(k, _)| k.trim().to_ascii_lowercase())
         .collect();
-    if !keys.iter().any(|k| SEMICOLON_MARKERS.contains(&k.as_str())) {
+    // 位址鍵，或帳密鍵（`User ID=u;Password=p` 這種只給帳密的片段也要能填表）。
+    if !keys
+        .iter()
+        .any(|k| SEMICOLON_MARKERS.contains(&k.as_str()) || SEMICOLON_CRED_MARKERS.contains(&k.as_str()))
+    {
         return None;
     }
 
