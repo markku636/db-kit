@@ -581,6 +581,8 @@ export interface KeyPage {
   scores: number[];
   value_bytes: number; // string：值總位元組數（STRLEN）；非 string 為 -1
   truncated: boolean;  // string：members[0] 僅為前段預覽（值過大且未要求完整載入）
+  /** 本頁含非 UTF-8 的二進位內容，已以 \xHH 跳脫顯示；顯示字串不是原始位元組，不可拿來寫回。 */
+  binary?: boolean;
 }
 
 // SLOWLOG 單筆。

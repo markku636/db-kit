@@ -560,6 +560,10 @@ pub struct KeyPage {
     /// string 用：members[0] 僅為前段預覽（值超過閾值且未要求完整載入）。
     #[serde(default)]
     pub truncated: bool,
+    /// 本頁有非 UTF-8 的二進位內容（以 `\xHH` 跳脫顯示）。顯示的字串不是原始位元組，
+    /// 拿它寫回會損毀資料，前端據此停用編輯。
+    #[serde(default)]
+    pub binary: bool,
 }
 
 /// SLOWLOG GET 單筆（慢查詢日誌）。

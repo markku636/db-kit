@@ -5066,6 +5066,8 @@ const en: Catalog = {
   "經由跳板主機（選填）": "Via jump host (optional)",
   "先連上這台已存的 SSH 主機，再從它連到上面的 SSH 主機；跳板機的帳密用它自己存的。": "Connects to this saved SSH host first, then through it to the SSH host above; the jump host uses its own saved credentials.",
   "直接連線": "Direct",
+  "UTF-8 是一般文字的編碼；壓縮檔、序列化物件、圖片這類資料不是文字，無法原樣顯示。": "UTF-8 is the encoding of ordinary text. Compressed data, serialized objects and images are not text and cannot be shown as is.",
+  "此鍵含二進位資料（非 UTF-8 文字），無法顯示的位元組以 \\xHH 表示。為避免寫回時損毀原始資料，已停用編輯；要修改請用主控台或程式。": "This key holds binary data (not UTF-8 text); bytes that cannot be shown are written as \\xHH. Editing is disabled so the original bytes are not corrupted on save; use the console or your application to change it.",
 };
 
 export default en;

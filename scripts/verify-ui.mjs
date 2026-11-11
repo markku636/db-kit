@@ -152,6 +152,9 @@ const CASE_FX = {
   "docker-overview": CONTAINER_FX,
   "registry-tag-view": CONTAINER_FX,
   "harbor-artifacts": CONTAINER_FX,
+  "redis-binary-key-readonly": {
+    REDIS_KEY_PAGE: { ...FX.REDIS_KEY_PAGE, fields: ["payload", "items"], members: ["\\x1f\\x8b\\x08\\x00ok", "3"], binary: true },
+  },
   "k8s-tree-menu": K8S_FX,
   "k8s-pod-tab": K8S_FX,
   "k8s-create-db-conn": K8S_FX,
@@ -3621,6 +3624,27 @@ const CASES = {
     } else {
       check("Redis 鍵節點可右鍵", false, "找不到葉節點");
     }
+  },
+
+  // 二進位鍵（非 UTF-8）：顯示的是 \xHH 跳脫字串，寫回會損毀原始位元組 → 要有說明、而且不能有任何編輯入口。
+  async "redis-binary-key-readonly"(page) {
+    await page.getByText("cache-redis", { exact: true }).dblclick();
+    await sleep(1200);
+    await page.getByText("0", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="keys"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="keys"]').first().click();
+    await sleep(1200);
+    const leaf = page.locator("div.mono", { hasText: /^10427$/ }).first();
+    if (!(await leaf.count())) { check("二進位鍵：找到鍵節點", false, "找不到葉節點"); return; }
+    await leaf.click({ button: "right" });
+    await sleep(300);
+    await page.getByText("檢視 / 編輯內容…", { exact: true }).first().click();
+    await sleep(900);
+    const text = await appText(page);
+    check("二進位鍵：說明為何停用編輯", text.includes("此鍵含二進位資料"), text.slice(0, 300));
+    check("二進位鍵：跳脫後的值照樣列出", text.includes("\\x8b"), text.slice(0, 300));
+    check("二進位鍵：沒有就地編輯", (await page.locator('[title="點擊編輯"]').count()) === 0);
+    check("二進位鍵：沒有新增列", (await page.locator('input[placeholder="field"]').count()) === 0);
   },
 
   // 查詢分頁的「審查」分頁：規則引擎在打字當下就要列出發現，點擊可跳到編輯器對應位置。

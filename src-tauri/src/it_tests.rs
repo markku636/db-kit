@@ -1738,6 +1738,40 @@ async fn redis_password_with_url_special_chars() {
     d.query("2:DEL it:k").await.unwrap();
 }
 
+/// 非 UTF-8 的值 / 鍵名：以前整個指令因「Invalid UTF-8」失敗，鍵詳情與鍵清單整頁打不開。
+#[tokio::test]
+#[ignore = "需要 Docker Redis:16379"]
+async fn redis_binary_values_are_viewable() {
+    let c = cfg(DbKind::Redis, "127.0.0.1", 16379, "", "", None);
+    let d = RedisDriver::connect(&c).await.unwrap();
+    d.query("4:FLUSHDB").await.unwrap();
+    // 以 redis crate 直接寫入原始位元組（不經主控台的切詞）。
+    let client = redis::Client::open("redis://127.0.0.1:16379/4").unwrap();
+    let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+    let gz: &[u8] = &[0x1f, 0x8b, 0x08, 0x00, b'o', b'k'];
+    let _: () = redis::cmd("SET").arg("bin:str").arg(gz).query_async(&mut conn).await.unwrap();
+    let _: () = redis::cmd("HSET").arg("bin:hash").arg("f").arg(gz).query_async(&mut conn).await.unwrap();
+    let _: () = redis::cmd("RPUSH").arg("bin:list").arg("text").arg(gz).query_async(&mut conn).await.unwrap();
+    let _: () = redis::cmd("SET").arg(&[b'k', 0xff][..]).arg("v").query_async(&mut conn).await.unwrap();
+
+    let p = d.key_page("4", "bin:str", 0, 100, "", false).await.expect("二進位字串應可讀");
+    assert!(p.binary);
+    assert_eq!(p.members, vec!["\u{1f}\\x8b\u{8}\u{0}ok".to_string()]);
+    let p = d.key_page("4", "bin:hash", 0, 100, "", false).await.expect("二進位 hash 應可讀");
+    assert!(p.binary);
+    assert_eq!(p.fields, vec!["f".to_string()]);
+    let p = d.key_page("4", "bin:list", 0, 100, "", false).await.expect("二進位 list 應可讀");
+    assert!(p.binary);
+    assert_eq!(p.members[0], "text");
+    // 純文字鍵不受影響。
+    d.query("4:SET plain hello").await.unwrap();
+    assert!(!d.key_page("4", "plain", 0, 100, "", false).await.unwrap().binary);
+    // 有非 UTF-8 鍵名時，鍵清單照樣列得出來。
+    let keys = d.scan_keys("4", "*", 100).await.expect("鍵清單不應因怪鍵名失敗");
+    assert!(keys.keys.iter().any(|k| k == "k\\xff"), "{:?}", keys.keys);
+    d.query("4:FLUSHDB").await.unwrap();
+}
+
 /// 主控台不能動到共用連線：SELECT 被擋、阻塞指令走專屬連線（期間共用連線照常回應）。
 #[tokio::test]
 #[ignore = "需要 Docker Redis:16379"]

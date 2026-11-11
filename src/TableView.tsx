@@ -2509,6 +2509,8 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   const [filterInput, setFilterInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // 任一已載入的頁含二進位內容 → 整個鍵唯讀（顯示的是跳脫字串，寫回會損毀原始位元組）。
+  const [binary, setBinary] = useState(false);
 
   // 首頁載入（reset）：清空累積、從游標 0 開始。connId/db/key/filter 改變或 reload 時觸發。
   const loadFirst = (flt: string) => {
@@ -2518,6 +2520,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
       .redisKeyPage(connId, database, rkey, 0, KEY_PAGE, flt)
       .then((p) => {
         setPage(p);
+        setBinary(!!p.binary);
         setMembers(p.members);
         setFields(p.fields);
         setScores(p.scores);
@@ -2536,6 +2539,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
       .then((p) => {
         if (cancelled) return;
         setPage(p);
+        setBinary(!!p.binary);
         setMembers(p.members);
         setFields(p.fields);
         setScores(p.scores);
@@ -2553,6 +2557,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
     api
       .redisKeyPage(connId, database, rkey, cursor, KEY_PAGE, filter)
       .then((p) => {
+        if (p.binary) setBinary(true);
         setMembers((m) => [...m, ...p.members]);
         setFields((f) => [...f, ...p.fields]);
         setScores((s) => [...s, ...p.scores]);
@@ -2571,7 +2576,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
     setLoading(true);
     api
       .redisKeyPage(connId, database, rkey, 0, KEY_PAGE, filter, true)
-      .then((p) => { setPage(p); setMembers(p.members); setFields(p.fields); setScores(p.scores); setCursor(p.cursor); })
+      .then((p) => { setPage(p); setBinary(!!p.binary); setMembers(p.members); setFields(p.fields); setScores(p.scores); setCursor(p.cursor); })
       .catch((e) => setErr(e?.message ?? t("讀取失敗")))
       .finally(() => setLoading(false));
   };
@@ -2621,7 +2626,14 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
         <div className="p-4 overflow-auto">
           {err && <div className="text-red-400 text-sm mono mb-2 break-all">{err}</div>}
           {!page && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
-          {detail && (
+          {detail && binary && (
+            <div className="mb-2 text-xs bg-warning/10 border border-warning/30 rounded px-3 py-2 text-warning"
+              title={t("UTF-8 是一般文字的編碼；壓縮檔、序列化物件、圖片這類資料不是文字，無法原樣顯示。")}>
+              {t("此鍵含二進位資料（非 UTF-8 文字），無法顯示的位元組以 \\xHH 表示。為避免寫回時損毀原始資料，已停用編輯；要修改請用主控台或程式。")}
+            </div>
+          )}
+          {detail && binary && <KeyDetailReadOnly detail={detail} />}
+          {detail && !binary && (
             <KeyDetailBody
               detail={detail}
               connId={connId}
@@ -2650,6 +2662,34 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
         </div>
       </div>
     </div>
+  );
+}
+
+// 二進位鍵的唯讀檢視：與 KeyDetailBody 同樣的欄位排法，但沒有任何編輯入口。
+function KeyDetailReadOnly({ detail }: { detail: KeyDetail }) {
+  const t = useT();
+  const { type_, entries, fields, scores } = detail;
+  if (type_ === "string") {
+    return <pre className="text-sm mono whitespace-pre-wrap break-all bg-inset border border-fg/10 rounded p-2 max-h-[50vh] overflow-auto">{entries[0] ?? ""}</pre>;
+  }
+  const head = type_ === "hash" ? ["field", "value"] : type_ === "zset" ? ["score", "member"] : [type_ === "list" ? "#" : "", "value"];
+  const rows: [string, string][] = entries.map((v, i) =>
+    type_ === "hash" ? [fields[i] ?? "", v] : type_ === "zset" ? [String(scores[i] ?? 0), v] : [type_ === "list" ? String(i) : "", v]);
+  return (
+    <table className="text-sm border-collapse w-full mono" aria-label={t("唯讀")}>
+      <thead><tr>
+        <th className="text-left px-2 py-1 border-b border-fg/10 w-1/3 text-fg/50">{head[0]}</th>
+        <th className="text-left px-2 py-1 border-b border-fg/10">{head[1]}</th>
+      </tr></thead>
+      <tbody>
+        {rows.map(([a, b], i) => (
+          <tr key={i} className="hover:bg-fg/5">
+            <td className="px-2 py-1 border-b border-fg/5 break-all text-fg/60">{a}</td>
+            <td className="px-2 py-1 border-b border-fg/5 break-all">{b}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

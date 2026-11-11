@@ -164,6 +164,15 @@ impl RedisDriver {
             scores: Vec::new(),
             value_bytes: -1,
             truncated: false,
+            binary: false,
+        };
+        // 一律以位元組取回再解碼：直接要 String 的話，只要有一個非 UTF-8 位元組（gzip、protobuf、
+        // 序列化物件快取很常見），redis crate 就讓整個指令失敗，鍵詳情整頁打不開。
+        let mut page_bin = false;
+        let mut text = |b: Vec<u8>| {
+            let (s, bin) = decode_bytes(b);
+            page_bin |= bin;
+            s
         };
 
         match ktype.as_str() {
@@ -174,19 +183,20 @@ impl RedisDriver {
                 page.value_bytes = len;
                 page.total = 1;
                 if !full && len > STRING_PREVIEW_THRESHOLD {
-                    let bytes: Vec<u8> = redis::cmd("GETRANGE")
+                    let mut bytes: Vec<u8> = redis::cmd("GETRANGE")
                         .arg(key)
                         .arg(0)
                         .arg(STRING_PREVIEW_BYTES - 1)
                         .query_async(&mut conn)
                         .await
                         .map_err(to_err)?;
-                    // from_utf8_lossy 容忍在 UTF-8 邊界截斷。
-                    page.members = vec![String::from_utf8_lossy(&bytes).into_owned()];
+                    // 預覽可能剛好切在多位元組字元中間：去掉結尾不完整的那幾個位元組，不算二進位。
+                    trim_incomplete_utf8_tail(&mut bytes);
+                    page.members = vec![text(bytes)];
                     page.truncated = true;
                 } else {
-                    let v: Option<String> = conn.get(key).await.map_err(to_err)?;
-                    page.members = vec![v.unwrap_or_default()];
+                    let v: Option<Vec<u8>> = conn.get(key).await.map_err(to_err)?;
+                    page.members = vec![text(v.unwrap_or_default())];
                 }
             }
             "list" => {
@@ -195,7 +205,7 @@ impl RedisDriver {
                 page.total = total;
                 let start = cursor as i64;
                 let stop = start + count as i64 - 1;
-                let items: Vec<String> = redis::cmd("LRANGE")
+                let items: Vec<Vec<u8>> = redis::cmd("LRANGE")
                     .arg(key)
                     .arg(start)
                     .arg(stop)
@@ -203,10 +213,11 @@ impl RedisDriver {
                     .await
                     .map_err(to_err)?;
                 let fetched = items.len();
+                let items = items.into_iter().map(&mut text);
                 page.members = if filter.is_empty() {
-                    items
+                    items.collect()
                 } else {
-                    items.into_iter().filter(|s| s.contains(filter)).collect()
+                    items.filter(|s| s.contains(filter)).collect()
                 };
                 // fetched < count → 已是最後一頁（LRANGE 回不滿即代表到底）；否則下一視窗起點。
                 page.cursor = if fetched < count {
@@ -220,7 +231,7 @@ impl RedisDriver {
                 // SCAN COUNT 僅為提示，單次可能回很少；迴圈累積到接近一頁或掃完，避免「載入更多」常拿到空批。
                 let mut cur = cursor;
                 loop {
-                    let (next, batch): (u64, Vec<String>) = redis::cmd("SSCAN")
+                    let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("SSCAN")
                         .arg(key)
                         .arg(cur)
                         .arg("MATCH")
@@ -230,7 +241,7 @@ impl RedisDriver {
                         .query_async(&mut conn)
                         .await
                         .map_err(to_err)?;
-                    page.members.extend(batch);
+                    page.members.extend(batch.into_iter().map(&mut text));
                     cur = next;
                     if cur == 0 || page.members.len() >= count {
                         break;
@@ -242,7 +253,7 @@ impl RedisDriver {
                 page.total = redis::cmd("HLEN").arg(key).query_async(&mut conn).await.unwrap_or(-1);
                 let mut cur = cursor;
                 loop {
-                    let (next, batch): (u64, Vec<String>) = redis::cmd("HSCAN")
+                    let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("HSCAN")
                         .arg(key)
                         .arg(cur)
                         .arg("MATCH")
@@ -255,8 +266,8 @@ impl RedisDriver {
                     // batch 為 field, value 交錯。
                     let mut it = batch.into_iter();
                     while let (Some(f), Some(v)) = (it.next(), it.next()) {
-                        page.fields.push(f);
-                        page.members.push(v);
+                        page.fields.push(text(f));
+                        page.members.push(text(v));
                     }
                     cur = next;
                     if cur == 0 || page.members.len() >= count {
@@ -269,7 +280,7 @@ impl RedisDriver {
                 page.total = redis::cmd("ZCARD").arg(key).query_async(&mut conn).await.unwrap_or(-1);
                 let mut cur = cursor;
                 loop {
-                    let (next, batch): (u64, Vec<String>) = redis::cmd("ZSCAN")
+                    let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("ZSCAN")
                         .arg(key)
                         .arg(cur)
                         .arg("MATCH")
@@ -282,8 +293,8 @@ impl RedisDriver {
                     // batch 為 member, score 交錯。
                     let mut it = batch.into_iter();
                     while let (Some(m), Some(s)) = (it.next(), it.next()) {
-                        page.members.push(m);
-                        page.scores.push(s.parse::<f64>().unwrap_or(0.0));
+                        page.members.push(text(m));
+                        page.scores.push(String::from_utf8_lossy(&s).parse::<f64>().unwrap_or(0.0));
                     }
                     cur = next;
                     if cur == 0 || page.members.len() >= count {
@@ -294,6 +305,7 @@ impl RedisDriver {
             }
             _ => {}
         }
+        page.binary = page_bin;
         Ok(page)
     }
 
@@ -365,7 +377,7 @@ impl RedisDriver {
         let mut scanned = 0usize;
         let mut cursor: u64 = 0;
         loop {
-            let (next, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+            let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("COUNT")
                 .arg(500)
@@ -373,7 +385,8 @@ impl RedisDriver {
                 .await
                 .map_err(to_err)?;
             // 只取樣到 sample 上限。
-            let take: Vec<String> = batch.into_iter().take(sample.saturating_sub(scanned)).collect();
+            // 保留原始位元組送 MEMORY USAGE：非 UTF-8 鍵名解碼成跳脫字串後就不是那個鍵了。
+            let take: Vec<Vec<u8>> = batch.into_iter().take(sample.saturating_sub(scanned)).collect();
             if !take.is_empty() {
                 // pipeline：每 key MEMORY USAGE + TYPE + TTL（三命令）一次送回，避免 N×3 序列往返。
                 let mut pipe = redis::pipe();
@@ -391,7 +404,7 @@ impl RedisDriver {
                     };
                     let ktype = tri.get(1).map(rv_to_string).unwrap_or_else(|| "unknown".to_string());
                     let ttl = rv_as_i64(tri.get(2));
-                    all.push(BigKey { key: k.clone(), type_: ktype, bytes, ttl });
+                    all.push(BigKey { key: decode_bytes(k.clone()).0, type_: ktype, bytes, ttl });
                 }
                 scanned += take.len();
             }
@@ -857,46 +870,46 @@ impl DatabaseDriver for RedisDriver {
                         .map_err(|e| AppError::Query(e.to_string()))?;
                     detail.entries = vec![String::from_utf8_lossy(&bytes).into_owned()];
                 } else {
-                    let v: Option<String> = conn
+                    let v: Option<Vec<u8>> = conn
                         .get(key)
                         .await
                         .map_err(|e| AppError::Query(e.to_string()))?;
-                    detail.entries = vec![v.unwrap_or_default()];
+                    detail.entries = vec![decode_bytes(v.unwrap_or_default()).0];
                 }
             }
             "list" => {
-                let items: Vec<String> = conn
+                let items: Vec<Vec<u8>> = conn
                     .lrange(key, 0, -1)
                     .await
                     .map_err(|e| AppError::Query(e.to_string()))?;
-                detail.entries = items;
+                detail.entries = decode_keys(items);
             }
             "set" => {
-                let items: Vec<String> = conn
+                let items: Vec<Vec<u8>> = conn
                     .smembers(key)
                     .await
                     .map_err(|e| AppError::Query(e.to_string()))?;
-                detail.entries = items;
+                detail.entries = decode_keys(items);
             }
             "zset" => {
                 // 帶分數取回（member, score 交錯）
-                let pairs: Vec<(String, f64)> = conn
+                let pairs: Vec<(Vec<u8>, f64)> = conn
                     .zrange_withscores(key, 0, -1)
                     .await
                     .map_err(|e| AppError::Query(e.to_string()))?;
                 for (m, s) in pairs {
-                    detail.entries.push(m);
+                    detail.entries.push(decode_bytes(m).0);
                     detail.scores.push(s);
                 }
             }
             "hash" => {
-                let map: std::collections::HashMap<String, String> = conn
+                let pairs: Vec<(Vec<u8>, Vec<u8>)> = conn
                     .hgetall(key)
                     .await
                     .map_err(|e| AppError::Query(e.to_string()))?;
-                for (f, v) in map {
-                    detail.fields.push(f);
-                    detail.entries.push(v);
+                for (f, v) in pairs {
+                    detail.fields.push(decode_bytes(f).0);
+                    detail.entries.push(decode_bytes(v).0);
                 }
             }
             _ => {}
@@ -1030,7 +1043,7 @@ impl DatabaseDriver for RedisDriver {
         let mut cursor: u64 = 0;
         let mut truncated = false;
         loop {
-            let (next, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+            let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("MATCH")
                 .arg(pattern)
@@ -1039,7 +1052,7 @@ impl DatabaseDriver for RedisDriver {
                 .query_async(&mut conn)
                 .await
                 .map_err(|e| AppError::Query(e.to_string()))?;
-            set.extend(batch);
+            set.extend(decode_keys(batch));
             cursor = next;
             // 掃完一輪即停（最精確的「沒有更多」訊號）；此時不算截斷。
             if cursor == 0 {
@@ -1069,6 +1082,48 @@ impl DatabaseDriver for RedisDriver {
         // 清空快取的連線（ConnectionManager 於 drop 時釋放底層 TCP）。
         self.conns.write().await.clear();
     }
+}
+
+/// Redis 回來的位元組 → 顯示字串。合法 UTF-8 原樣回傳；否則照 redis-cli 的習慣把壞掉的位元組寫成 `\xHH`
+///（反斜線本身寫成 `\\`，免得和跳脫混在一起），並回報 true。
+fn decode_bytes(b: Vec<u8>) -> (String, bool) {
+    match String::from_utf8(b) {
+        Ok(s) => (s, false),
+        Err(e) => (escape_binary(e.as_bytes()), true),
+    }
+}
+
+fn escape_binary(b: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(b.len() * 2);
+    for chunk in b.utf8_chunks() {
+        for ch in chunk.valid().chars() {
+            if ch == '\\' {
+                out.push_str("\\\\");
+            } else {
+                out.push(ch);
+            }
+        }
+        for x in chunk.invalid() {
+            let _ = write!(out, "\\x{x:02x}");
+        }
+    }
+    out
+}
+
+/// 截斷的預覽若剛好切在多位元組字元中間，去掉結尾那幾個不完整的位元組（最多 3 個）。
+/// 只處理「結尾不完整」；中間真的有非 UTF-8 位元組的照舊算二進位。
+fn trim_incomplete_utf8_tail(bytes: &mut Vec<u8>) {
+    if let Err(e) = std::str::from_utf8(bytes) {
+        if e.error_len().is_none() {
+            bytes.truncate(e.valid_up_to());
+        }
+    }
+}
+
+/// 鍵名清單解碼：非 UTF-8 鍵名以 `\xHH` 顯示（清單不會因為一個怪鍵名整頁失敗）。
+fn decode_keys(keys: Vec<Vec<u8>>) -> Vec<String> {
+    keys.into_iter().map(|k| decode_bytes(k).0).collect()
 }
 
 /// 主控台阻塞指令最多等幾秒（之後中斷那條專屬連線）。
@@ -1157,7 +1212,7 @@ async fn scan_all_keys(
     let mut all: Vec<String> = Vec::new();
     let mut cursor: u64 = 0;
     loop {
-        let (next, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+        let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
             .arg(cursor)
             .arg("MATCH")
             .arg(pattern)
@@ -1166,7 +1221,7 @@ async fn scan_all_keys(
             .query_async(conn)
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
-        all.extend(batch);
+        all.extend(decode_keys(batch));
         cursor = next;
         // 掃完（cursor 歸零）或達安全上限即停。
         if cursor == 0 || all.len() > 100_000 {
@@ -1447,6 +1502,31 @@ mod tests {
         for line in ["GET k", "XREAD COUNT 10 STREAMS s 0", "CLIENT LIST", "SCAN 0", "EVAL \"return 1\" 0"] {
             assert_eq!(policy(line), ConsolePolicy::Shared, "{line}");
         }
+    }
+
+    #[test]
+    fn decode_bytes_escapes_only_invalid_utf8() {
+        assert_eq!(decode_bytes("中文 a\\b".as_bytes().to_vec()), ("中文 a\\b".to_string(), false));
+        // gzip 開頭：1f 8b 08；可讀部分保留、壞位元組寫成 \xHH、反斜線加倍。
+        let (s, bin) = decode_bytes(vec![0x1f, 0x8b, b'a', b'\\', 0xff]);
+        assert!(bin);
+        assert_eq!(s, "\u{1f}\\x8ba\\\\\\xff");
+        // 合法的多位元組字元夾在壞位元組之間也保留。
+        let mut v = "值".as_bytes().to_vec();
+        v.push(0xc0);
+        assert_eq!(decode_bytes(v), ("值\\xc0".to_string(), true));
+    }
+
+    #[test]
+    fn trim_incomplete_utf8_tail_only_cuts_a_split_char() {
+        let mut v = "ab中".as_bytes().to_vec();
+        v.pop(); // 中 = e4 b8 ad → 剩 e4 b8
+        trim_incomplete_utf8_tail(&mut v);
+        assert_eq!(v, b"ab");
+        // 中間就壞掉的不是截斷造成的，不動（之後當二進位顯示）。
+        let mut bad = vec![b'a', 0xff, b'b'];
+        trim_incomplete_utf8_tail(&mut bad);
+        assert_eq!(bad, vec![b'a', 0xff, b'b']);
     }
 
     #[test]
