@@ -1,4 +1,4 @@
-## 未發佈
+## v0.59.1
 
 **AI 代理人（Claude Code / Codex…）能用 `dbk conn add` 自己建好資料庫連線，不必再請你開 App 填表。**
 
@@ -9,6 +9,13 @@
 - **覆寫與刪除要確認**：同名連線要 `--replace --yes` 才會覆寫（保留 id 與群組，沒給的密碼沿用舊的）；`dbk conn remove <名稱|id> --yes` 連同金鑰圈的密碼一起刪，PROD 連線再要 `--force`；同名多筆時要求改用 id，不會刪錯。
 - **App 開著也看得到**：切回 App 視窗時會重讀連線清單，CLI 新增 / 刪除的連線直接反映在側欄，剛輸入過的密碼不會被洗掉。
 - **Windows 免安裝版**：Release 多一個 `db-kit_x.y.z_x64_portable.zip`，解壓即用、不寫登錄檔。設定（連線清單、群組、介面偏好、AI 程式庫、助手工作區、SSH 與遠端桌面指紋）改存在資料夾內的 `data\`，整個資料夾可以放隨身碟換機接著用；密碼仍留在本機的 Windows 憑證管理員，不會跟著走。也能用 `DB_KIT_DATA_DIR` 指定設定目錄，多份設定並存互不干擾。
+
+修正：
+
+- **對話框點旁邊不再關閉**：新增連線等對話框誤點背景不會整個關掉、填到一半的內容不會不見；要關請按 Esc、✕ 或取消。下拉選單與命令面板仍是點外面收起。
+- **SQL Server / Oracle 產生的查詢語法正確了**：右鍵「查詢」、明列欄位 SELECT、新查詢分頁、欄位「相異值分布 Top 50」，SQL Server 改用 `SELECT TOP (n)`、Oracle 改用 `FETCH FIRST n ROWS ONLY`，不再出現 `LIMIT` 語法錯誤。
+- **查詢建構器的列數限制依方言**：SQL Server 用 `TOP` / `OFFSET … FETCH NEXT`（沒有排序時自動補 `ORDER BY (SELECT NULL)`），Oracle 用 `OFFSET … ROWS FETCH NEXT … ROWS ONLY`；Oracle 的表別名不再加 `AS`。
+- **Oracle 的計數子查詢**：別名 `_sub` 在 Oracle 不合法（ORA-00911），查詢建構器的「計算列數」與執行前影響評估都改用 `q_sub`。
 
 ## v0.59.0
 
