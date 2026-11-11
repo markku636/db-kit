@@ -589,6 +589,10 @@ export interface KeyPage {
   next_id?: string | null;
   /** stream：消費者群組（只有第一頁帶）。 */
   groups?: StreamGroup[];
+  /** 鍵佔用的記憶體位元組（MEMORY USAGE；只有第一頁帶，取不到為 -1）。 */
+  memory_bytes?: number;
+  /** 內部編碼（OBJECT ENCODING，如 listpack / hashtable；只有第一頁帶）。 */
+  encoding?: string;
 }
 
 // Redis stream 的消費者群組（XINFO GROUPS）。

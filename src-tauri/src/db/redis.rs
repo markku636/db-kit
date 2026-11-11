@@ -141,7 +141,7 @@ impl RedisDriver {
         after_id: Option<&str>,
     ) -> AppResult<KeyPage> {
         let mut conn = self.conn(database).await?;
-        let to_err = |e: redis::RedisError| AppError::Query(e.to_string());
+        let to_err = rerr;
         let ktype: String = redis::cmd("TYPE")
             .arg(key)
             .query_async(&mut conn)
@@ -171,7 +171,18 @@ impl RedisDriver {
             binary: false,
             next_id: None,
             groups: Vec::new(),
+            memory_bytes: -1,
+            encoding: String::new(),
         };
+        // 第一頁順便取記憶體用量與內部編碼（一次 pipeline）。託管 Redis 可能停用 MEMORY / OBJECT，取不到就略過。
+        if cursor == 0 && after_id.is_none() && ktype != "none" {
+            let mut pipe = redis::pipe();
+            pipe.cmd("MEMORY").arg("USAGE").arg(key).cmd("OBJECT").arg("ENCODING").arg(key);
+            if let Ok((mem, enc)) = pipe.query_async::<(Option<i64>, Option<String>)>(&mut conn).await {
+                page.memory_bytes = mem.unwrap_or(-1);
+                page.encoding = enc.unwrap_or_default();
+            }
+        }
         // 一律以位元組取回再解碼：直接要 String 的話，只要有一個非 UTF-8 位元組（gzip、protobuf、
         // 序列化物件快取很常見），redis crate 就讓整個指令失敗，鍵詳情整頁打不開。
         let mut page_bin = false;
@@ -359,7 +370,7 @@ impl RedisDriver {
             .arg(count.max(1))
             .query_async(&mut conn)
             .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+            .map_err(rerr)?;
         let mut out = Vec::new();
         if let redis::Value::Array(entries) = val {
             for e in entries {
@@ -391,7 +402,7 @@ impl RedisDriver {
             .arg("LIST")
             .query_async(&mut conn)
             .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+            .map_err(rerr)?;
         Ok(parse_client_list(&raw))
     }
 
@@ -404,7 +415,7 @@ impl RedisDriver {
             .arg(client_id)
             .query_async(&mut conn)
             .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+            .map_err(rerr)?;
         Ok(())
     }
 
@@ -414,7 +425,7 @@ impl RedisDriver {
         let sample = sample.clamp(1, 100_000);
         let top = top.clamp(1, 1_000);
         let mut conn = self.conn(database).await?;
-        let to_err = |e: redis::RedisError| AppError::Query(e.to_string());
+        let to_err = rerr;
         let mut all: Vec<BigKey> = Vec::new();
         let mut scanned = 0usize;
         let mut cursor: u64 = 0;
@@ -478,7 +489,7 @@ impl RedisDriver {
             let n: i64 = cmd
                 .query_async(&mut conn)
                 .await
-                .map_err(|e| AppError::Query(e.to_string()))?;
+                .map_err(rerr)?;
             removed += n;
         }
         self.invalidate_snapshot().await; // 刪鍵後翻頁不應再看到殭屍鍵
@@ -498,7 +509,7 @@ impl RedisDriver {
         let n: i64 = c
             .query_async(&mut conn)
             .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+            .map_err(rerr)?;
         Ok(n == 1)
     }
 
@@ -510,7 +521,7 @@ impl RedisDriver {
             .arg(message)
             .query_async(&mut conn)
             .await
-            .map_err(|e| AppError::Query(e.to_string()))
+            .map_err(rerr)
     }
 }
 
@@ -550,14 +561,25 @@ impl DatabaseDriver for RedisDriver {
         if !pong.eq_ignore_ascii_case("pong") {
             return Err(AppError::Connect(tf!("非預期的 PING 回應：{pong}", pong = pong)));
         }
-        let db_count = redis::cmd("CONFIG")
-            .arg("GET")
-            .arg("databases")
-            .query_async::<Vec<String>>(&mut conn)
+        // Redis Cluster 只有 DB 0（SELECT 其他庫一律報錯），但 CONFIG GET databases 照樣回 16，
+        // 樹上就會列出 15 個點了只會報錯的庫。
+        let cluster = redis::cmd("INFO")
+            .arg("cluster")
+            .query_async::<String>(&mut conn)
             .await
-            .ok()
-            .and_then(|v| v.get(1).and_then(|s| s.parse::<i64>().ok()))
-            .unwrap_or(16);
+            .is_ok_and(|s| s.contains("cluster_enabled:1"));
+        let db_count = if cluster {
+            1
+        } else {
+            redis::cmd("CONFIG")
+                .arg("GET")
+                .arg("databases")
+                .query_async::<Vec<String>>(&mut conn)
+                .await
+                .ok()
+                .and_then(|v| v.get(1).and_then(|s| s.parse::<i64>().ok()))
+                .unwrap_or(16)
+        };
 
         Ok(Self { db_count, ..driver })
     }
@@ -715,7 +737,7 @@ impl DatabaseDriver for RedisDriver {
             let mut conn = self.conn(&db).await?;
             cmd.query_async(&mut conn)
                 .await
-                .map_err(|e| AppError::Query(e.to_string()))?
+                .map_err(rerr)?
         };
         let rows = redis_value_to_rows(&val);
         Ok(QueryResult {
@@ -757,12 +779,12 @@ impl DatabaseDriver for RedisDriver {
                     let _: i64 = conn
                         .persist(&key)
                         .await
-                        .map_err(|e| AppError::Query(e.to_string()))?;
+                        .map_err(rerr)?;
                 } else {
                     let _: bool = conn
                         .expire(&key, secs)
                         .await
-                        .map_err(|e| AppError::Query(e.to_string()))?;
+                        .map_err(rerr)?;
                 }
                 Ok(1)
             }
@@ -776,7 +798,7 @@ impl DatabaseDriver for RedisDriver {
                 let _: () = conn
                     .set(&key, v)
                     .await
-                    .map_err(|e| AppError::Query(e.to_string()))?;
+                    .map_err(rerr)?;
                 Ok(1)
             }
         }
@@ -813,7 +835,7 @@ impl DatabaseDriver for RedisDriver {
             .arg("NX")
             .query_async(&mut conn)
             .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+            .map_err(rerr)?;
         if created.is_none() {
             return Err(AppError::Query(tf!(
                 "鍵「{key}」已存在，為避免覆蓋已取消新增。要改值請直接開啟該鍵編輯。",
@@ -835,7 +857,7 @@ impl DatabaseDriver for RedisDriver {
         let n: i64 = conn
             .del(&key)
             .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+            .map_err(rerr)?;
         self.invalidate_snapshot().await; // 刪鍵後翻頁不應再看到殭屍鍵
         Ok(n as u64)
     }
@@ -892,7 +914,7 @@ impl DatabaseDriver for RedisDriver {
             .arg(key)
             .query_async(&mut conn)
             .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+            .map_err(rerr)?;
         let ttl: i64 = redis::cmd("TTL")
             .arg(key)
             .query_async(&mut conn)
@@ -920,13 +942,13 @@ impl DatabaseDriver for RedisDriver {
                         .arg(STRING_PREVIEW_BYTES - 1)
                         .query_async(&mut conn)
                         .await
-                        .map_err(|e| AppError::Query(e.to_string()))?;
+                        .map_err(rerr)?;
                     detail.entries = vec![String::from_utf8_lossy(&bytes).into_owned()];
                 } else {
                     let v: Option<Vec<u8>> = conn
                         .get(key)
                         .await
-                        .map_err(|e| AppError::Query(e.to_string()))?;
+                        .map_err(rerr)?;
                     detail.entries = vec![decode_bytes(v.unwrap_or_default()).0];
                 }
             }
@@ -934,14 +956,14 @@ impl DatabaseDriver for RedisDriver {
                 let items: Vec<Vec<u8>> = conn
                     .lrange(key, 0, -1)
                     .await
-                    .map_err(|e| AppError::Query(e.to_string()))?;
+                    .map_err(rerr)?;
                 detail.entries = decode_keys(items);
             }
             "set" => {
                 let items: Vec<Vec<u8>> = conn
                     .smembers(key)
                     .await
-                    .map_err(|e| AppError::Query(e.to_string()))?;
+                    .map_err(rerr)?;
                 detail.entries = decode_keys(items);
             }
             "zset" => {
@@ -949,7 +971,7 @@ impl DatabaseDriver for RedisDriver {
                 let pairs: Vec<(Vec<u8>, f64)> = conn
                     .zrange_withscores(key, 0, -1)
                     .await
-                    .map_err(|e| AppError::Query(e.to_string()))?;
+                    .map_err(rerr)?;
                 for (m, s) in pairs {
                     detail.entries.push(decode_bytes(m).0);
                     detail.scores.push(s);
@@ -959,7 +981,7 @@ impl DatabaseDriver for RedisDriver {
                 let pairs: Vec<(Vec<u8>, Vec<u8>)> = conn
                     .hgetall(key)
                     .await
-                    .map_err(|e| AppError::Query(e.to_string()))?;
+                    .map_err(rerr)?;
                 for (f, v) in pairs {
                     detail.fields.push(decode_bytes(f).0);
                     detail.entries.push(decode_bytes(v).0);
@@ -972,7 +994,7 @@ impl DatabaseDriver for RedisDriver {
 
     async fn key_edit(&self, database: &str, key: &str, edit: &KeyEdit) -> AppResult<u64> {
         let mut conn = self.conn(database).await?;
-        let to_err = |e: redis::RedisError| AppError::Query(e.to_string());
+        let to_err = rerr;
         // 移除最後一個元素時 Redis 會自動刪 key；前端 reload key_detail 後即反映。
         let affected: i64 = match edit {
             KeyEdit::ListSet { index, value } => {
@@ -1093,7 +1115,7 @@ impl DatabaseDriver for RedisDriver {
         let raw: String = redis::cmd("INFO")
             .query_async(&mut conn)
             .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+            .map_err(rerr)?;
         Ok(parse_info(&raw))
     }
 
@@ -1122,7 +1144,7 @@ impl DatabaseDriver for RedisDriver {
                 .arg(1000)
                 .query_async(&mut conn)
                 .await
-                .map_err(|e| AppError::Query(e.to_string()))?;
+                .map_err(rerr)?;
             set.extend(decode_keys(batch));
             cursor = next;
             // 掃完一輪即停（最精確的「沒有更多」訊號）；此時不算截斷。
@@ -1287,6 +1309,19 @@ fn parse_stream_groups(v: redis::Value) -> Vec<StreamGroup> {
         .collect()
 }
 
+/// redis 錯誤 → AppError。Redis Cluster 的 MOVED / ASK 只會說「Moved: 1234 10.0.0.2:6379」，
+/// 看不出是什麼意思：講明這是 Cluster、鍵在哪個節點、要怎麼辦。
+fn rerr(e: redis::RedisError) -> AppError {
+    if let Some((node, slot)) = e.redirect_node() {
+        return AppError::Query(tf!(
+            "這是 Redis Cluster：這個鍵屬於雜湊槽 {slot}，存放在另一個節點 {node}。DB Kit 目前一次只連一個節點，請另外建立一個連到 {node} 的連線來操作它。",
+            slot = slot,
+            node = node
+        ));
+    }
+    AppError::Query(e.to_string())
+}
+
 /// 主控台阻塞指令最多等幾秒（之後中斷那條專屬連線）。
 const BLOCKING_MAX_SECS: u64 = 60;
 
@@ -1381,7 +1416,7 @@ async fn scan_all_keys(
             .arg(500)
             .query_async(conn)
             .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+            .map_err(rerr)?;
         all.extend(decode_keys(batch));
         cursor = next;
         // 掃完（cursor 歸零）或達安全上限即停。
@@ -1410,7 +1445,7 @@ async fn fetch_key_meta(
     let vals: Vec<redis::Value> = pipe
         .query_async(conn)
         .await
-        .map_err(|e| AppError::Query(e.to_string()))?;
+        .map_err(rerr)?;
     let mut rows = Vec::with_capacity(keys.len());
     for (k, pair) in keys.iter().zip(vals.chunks(2)) {
         let ktype = pair.first().map(rv_to_string).unwrap_or_else(|| "unknown".to_string());
@@ -1691,6 +1726,15 @@ mod tests {
         assert_eq!((out[0].name.as_str(), out[0].consumers, out[0].pending), ("workers", 2, 5));
         assert_eq!(out[0].last_delivered_id, "1-3");
         assert_eq!(out[0].lag, None);
+    }
+
+    #[test]
+    fn rerr_explains_cluster_redirects() {
+        let moved = redis::RedisError::from((redis::ErrorKind::Moved, "Moved", "1234 10.0.0.2:6379".to_string()));
+        let msg = rerr(moved).to_string();
+        assert!(msg.contains("Redis Cluster") && msg.contains("10.0.0.2:6379") && msg.contains("1234"), "{msg}");
+        let other = redis::RedisError::from((redis::ErrorKind::TypeError, "WRONGTYPE", "x".to_string()));
+        assert!(!rerr(other).to_string().contains("Cluster"));
     }
 
     #[test]

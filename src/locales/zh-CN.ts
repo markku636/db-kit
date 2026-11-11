@@ -5037,6 +5037,8 @@ const zhCN: Catalog = {
   "鍵「{name}」已存在（{type}），為避免改到既有資料已取消。要修改請直接開啟該鍵。": "键「{name}」已存在（{type}），为避免改到既有数据已取消。要修改请直接打开该键。",
   "Stream 每一筆是一組「欄位 = 值」，這裡先建第一筆，ID 由 Redis 自動產生": "Stream 每一条是一组「字段 = 值」，这里先建第一条，ID 由 Redis 自动生成",
   "第一筆的欄位": "第一条的字段",
+  "這個鍵在 Redis 裡實際佔用的記憶體（MEMORY USAGE，含內部結構的額外開銷）": "这个键在 Redis 里实际占用的内存（MEMORY USAGE，含内部结构的额外开销）",
+  "Redis 內部儲存方式（OBJECT ENCODING）。listpack / intset 這類緊湊編碼較省記憶體，元素變多或變大後會自動轉成 hashtable / skiplist": "Redis 内部存储方式（OBJECT ENCODING）。listpack / intset 这类紧凑编码较省内存，元素变多或变大后会自动转成 hashtable / skiplist",
 };
 
 export default zhCN;

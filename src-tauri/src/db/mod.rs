@@ -574,6 +574,12 @@ pub struct KeyPage {
     /// stream 用：消費者群組（XINFO GROUPS）。
     #[serde(default)]
     pub groups: Vec<StreamGroup>,
+    /// 鍵佔用的記憶體位元組數（MEMORY USAGE；只在第一頁取，取不到為 -1）。
+    #[serde(default)]
+    pub memory_bytes: i64,
+    /// 內部編碼（OBJECT ENCODING，例如 listpack / hashtable / embstr；只在第一頁取）。
+    #[serde(default)]
+    pub encoding: String,
 }
 
 /// stream 的一個消費者群組。

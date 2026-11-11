@@ -5089,6 +5089,8 @@ const en: Catalog = {
   "鍵「{name}」已存在（{type}），為避免改到既有資料已取消。要修改請直接開啟該鍵。": "Key \"{name}\" already exists ({type}); cancelled so existing data is not changed. Open the key to edit it.",
   "Stream 每一筆是一組「欄位 = 值」，這裡先建第一筆，ID 由 Redis 自動產生": "Each stream entry is a set of field = value pairs; this creates the first entry, and Redis generates its ID",
   "第一筆的欄位": "First entry's field",
+  "這個鍵在 Redis 裡實際佔用的記憶體（MEMORY USAGE，含內部結構的額外開銷）": "Memory this key actually uses in Redis (MEMORY USAGE, including internal overhead)",
+  "Redis 內部儲存方式（OBJECT ENCODING）。listpack / intset 這類緊湊編碼較省記憶體，元素變多或變大後會自動轉成 hashtable / skiplist": "How Redis stores it internally (OBJECT ENCODING). Compact encodings such as listpack / intset save memory and switch to hashtable / skiplist automatically as the key grows",
 };
 
 export default en;

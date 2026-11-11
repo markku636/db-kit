@@ -1789,6 +1789,8 @@ async fn redis_binary_values_are_viewable() {
     let p = d.key_page("4", "bin:list", 0, 100, "", false, None).await.expect("二進位 list 應可讀");
     assert!(p.binary);
     assert_eq!(p.members[0], "text");
+    // 第一頁帶記憶體用量與內部編碼。
+    assert!(p.memory_bytes > 0 && !p.encoding.is_empty(), "{} {}", p.memory_bytes, p.encoding);
     // 純文字鍵不受影響。
     d.query("4:SET plain hello").await.unwrap();
     assert!(!d.key_page("4", "plain", 0, 100, "", false, None).await.unwrap().binary);
@@ -1796,6 +1798,16 @@ async fn redis_binary_values_are_viewable() {
     let keys = d.scan_keys("4", "*", 100).await.expect("鍵清單不應因怪鍵名失敗");
     assert!(keys.keys.iter().any(|k| k == "k\\xff"), "{:?}", keys.keys);
     d.query("4:FLUSHDB").await.unwrap();
+}
+
+/// Redis Cluster 只有 DB 0：樹上不該列出 16 個庫。容器：
+/// `docker run -d --rm -p 16381:6379 redis:7-alpine redis-server --cluster-enabled yes`
+#[tokio::test]
+#[ignore = "需要 Docker Redis Cluster 模式:16381"]
+async fn redis_cluster_mode_lists_only_db0() {
+    let c = cfg(DbKind::Redis, "127.0.0.1", 16381, "", "", None);
+    let d = RedisDriver::connect(&c).await.unwrap();
+    assert_eq!(d.list_databases().await.unwrap(), vec!["0".to_string()]);
 }
 
 /// 「新增鍵」不能覆蓋既有的鍵（以前 SET 會把同名的 hash 靜默換成字串）。

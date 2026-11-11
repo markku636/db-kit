@@ -2606,6 +2606,18 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
               {isCollection && page.total >= 0 && (
                 <span className="text-xs text-fg/35">{t("共 {total} 筆", { total: page.total })}</span>
               )}
+              {(page.memory_bytes ?? -1) >= 0 && (
+                <span className="text-xs text-fg/35"
+                  title={t("這個鍵在 Redis 裡實際佔用的記憶體（MEMORY USAGE，含內部結構的額外開銷）")}>
+                  {fmtBytes(page.memory_bytes!)}
+                </span>
+              )}
+              {page.encoding && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-fg/10 text-fg/50 mono"
+                  title={t("Redis 內部儲存方式（OBJECT ENCODING）。listpack / intset 這類緊湊編碼較省記憶體，元素變多或變大後會自動轉成 hashtable / skiplist")}>
+                  {page.encoding}
+                </span>
+              )}
             </>
           )}
           <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
