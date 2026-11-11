@@ -36,6 +36,15 @@ const SEMICOLON_MARKERS = [
   "database", "initial catalog", "databasename", "host",
 ];
 
+// StackExchange.Redis 的選項鍵（與後端 vendor.rs 的 SE_REDIS_KEYS 一致）。
+const SE_REDIS_KEYS = [
+  "password", "user", "ssl", "sslhost", "sslprotocols", "defaultdatabase", "abortconnect",
+  "connectretry", "connecttimeout", "synctimeout", "asynctimeout", "allowadmin", "name",
+  "keepalive", "servicename", "tiebreaker", "version", "configchannel", "resolvedns",
+  "channelprefix", "checkcertificaterevocation", "proxy", "responsetimeout", "writebuffer",
+  "configcheckseconds", "heartbeatinterval", "setlib", "protocol", "highprioritysocketthreads",
+];
+
 /** 剝掉外層引號與 `export NAME=` 前綴（後端 normalize 的最小前端鏡像，只為判別用）。 */
 function stripNoise(text: string): string {
   let s = text.trim();
@@ -103,6 +112,13 @@ export function looksLikeConnectionString(text: string): boolean {
 
   // 6. libpq 空白 KV。三條缺一不可，見後端 conn_url/mod.rs 的偵測優先序註解。
   if (/\s/.test(s) && allTokensAreKv(s, /\s+/) && hasMarker(s, /\s+/, LIBPQ_MARKERS)) return true;
+
+  // 7. StackExchange.Redis（.NET）：`host:port,abortConnect=false,password=…`。
+  //    第一段是端點（無 `=`、無空白），其後至少一段命中已知鍵（與後端 SE_REDIS_KEYS 一致）。
+  if (!s.includes(";") && !/\s/.test(s) && s.includes(",")) {
+    const parts = s.split(",").filter((t) => t.length > 0);
+    if (parts.length >= 2 && !parts[0].includes("=") && hasMarker(s, /,/, SE_REDIS_KEYS)) return true;
+  }
 
   return false;
 }

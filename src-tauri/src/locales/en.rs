@@ -758,6 +758,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
 
         // ---- db/redis.rs ----
         "非預期的 PING 回應：{pong}" => "Unexpected PING response: {pong}",
+        "主機欄含有逗號或等號：{host}。這看起來是 StackExchange.Redis 連線字串，請貼到上方「連線字串」欄按「解析並填入」，主機欄只留主機名稱。" => "The host field contains a comma or equals sign: {host}. This looks like a StackExchange.Redis connection string. Paste it into the Connection string field above and click Parse, so the host field holds only the host name.",
         "秒；-1 表示無到期" => "seconds; -1 means no expiry",
         "空命令" => "Empty command",
         "TTL 必須為整數" => "TTL must be an integer",

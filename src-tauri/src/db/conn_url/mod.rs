@@ -288,6 +288,11 @@ pub fn parse_url(input: &str, kind_hint: Option<DbKind>) -> AppResult<Parsed> {
         if let Some(p) = kv::try_semicolon_kv(url, kind_hint) {
             return Ok(p);
         }
+        // StackExchange.Redis（.NET）：`host:port,abortConnect=false,password=…`。逗號分隔、不含 `;`，
+        // 與 ADO.NET / libpq 都不重疊（後者以 `;` / 空白切）。
+        if let Some(p) = vendor::try_stackexchange_redis(url, kind_hint) {
+            return Ok(p);
+        }
         // libpq keyword/value（空白分隔）。到這裡的字串要嘛沒有 `;`，要嘛沒命中任何位址鍵。
         if let Some(p) = kv::try_libpq_kv(url, kind_hint) {
             return Ok(p);
@@ -708,6 +713,34 @@ mod tests {
         assert_eq!(p.kind, Some(DbKind::Mongo));
         assert_eq!(opt(&p, "mongo_srv"), Some("1"));
         assert_eq!(p.port, None);
+    }
+
+    #[test]
+    fn stackexchange_redis_config_string() {
+        let p = parse("127.0.0.1:6379,abortConnect=false,connectRetry=3");
+        assert!(matches!(p.kind, Some(DbKind::Redis)));
+        assert_eq!(p.host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(p.port, Some(6379));
+
+        let p = parse("redis.example.com:6380,password=p@ss=w,ssl=True,defaultDatabase=2,user=app");
+        assert!(matches!(p.kind, Some(DbKind::Redis)));
+        assert_eq!(p.host.as_deref(), Some("redis.example.com"));
+        assert_eq!(p.port, Some(6380));
+        assert_eq!(p.password.as_deref(), Some("p@ss=w"));
+        assert_eq!(p.username.as_deref(), Some("app"));
+        assert_eq!(p.database.as_deref(), Some("2"));
+        assert_eq!(opt(&p, "redis_tls"), Some("true"));
+
+        // 多端點只取第一個；ssl=false 不開 TLS
+        let p = parse("h1:6379,h2:6379,ssl=false,password=x");
+        assert_eq!(p.host.as_deref(), Some("h1"));
+        assert_eq!(opt(&p, "redis_tls"), None);
+
+        // 無 hint 且沒有任何 SE.Redis 鍵 → 不當 Redis
+        assert!(parse_url("h1:1,foo=bar", None).map(|p| !matches!(p.kind, Some(DbKind::Redis))).unwrap_or(true));
+        // 有 Redis hint 時沒有已知鍵也接受
+        let p = parse_url("localhost,foo=bar", Some(DbKind::Redis)).unwrap();
+        assert_eq!(p.host.as_deref(), Some("localhost"));
     }
 
     #[test]

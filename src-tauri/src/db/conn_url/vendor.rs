@@ -336,3 +336,61 @@ fn jaas_field(v: &str, key: &str) -> Option<String> {
         Some(val.to_string())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Redis：StackExchange.Redis（.NET）設定字串
+// ---------------------------------------------------------------------------
+
+/// StackExchange.Redis 的已知選項鍵（小寫比對）。命中任一即可在無 hint 時判為 Redis。
+const SE_REDIS_KEYS: &[&str] = &[
+    "password", "user", "ssl", "sslhost", "sslprotocols", "defaultdatabase", "abortconnect",
+    "connectretry", "connecttimeout", "synctimeout", "asynctimeout", "allowadmin", "name",
+    "keepalive", "servicename", "tiebreaker", "version", "configchannel", "resolvedns",
+    "channelprefix", "checkcertificaterevocation", "proxy", "responsetimeout", "writebuffer",
+    "configcheckseconds", "heartbeatinterval", "setlib", "protocol", "highprioritysocketthreads",
+];
+
+/// `host[:port][,host2[:port]…][,key=value…]`，例如 `127.0.0.1:6379,abortConnect=false,password=x,ssl=true`。
+///
+/// 判別：無 `://`、以 `,` 切成 ≥2 段、第一段是端點（不含 `=`）、其餘段要嘛是端點要嘛是 `key=value`，
+/// 且至少一個 `key=value` 是 StackExchange.Redis 的已知鍵（或對話框已選 Redis）。
+/// 只取第一個端點；`password` / `user` / `defaultDatabase` / `ssl` 映射到表單欄位，其餘 .NET 端專屬選項忽略。
+pub(super) fn try_stackexchange_redis(s: &str, kind_hint: Option<DbKind>) -> Option<Parsed> {
+    if !matches!(kind_hint, None | Some(DbKind::Redis)) || s.contains("://") || s.contains(';') {
+        return None;
+    }
+    let parts: Vec<&str> = s.split(',').map(str::trim).filter(|t| !t.is_empty()).collect();
+    if parts.len() < 2 || parts[0].contains('=') || parts[0].contains(char::is_whitespace) {
+        return None;
+    }
+    let mut kv: Vec<(String, &str)> = Vec::new();
+    for t in &parts[1..] {
+        match t.split_once('=') {
+            Some((k, v)) => kv.push((k.trim().to_ascii_lowercase(), v.trim())),
+            // 額外端點（叢集 / 哨兵清單）：必須長得像 host[:port]
+            None if !t.contains(char::is_whitespace) => {}
+            None => return None,
+        }
+    }
+    if kv.is_empty() {
+        return None;
+    }
+    if kind_hint.is_none() && !kv.iter().any(|(k, _)| SE_REDIS_KEYS.contains(&k.as_str())) {
+        return None;
+    }
+
+    let mut p = Parsed { kind: Some(DbKind::Redis), ..Default::default() };
+    set_host_port(&mut p, parts[0]);
+    for (k, v) in kv {
+        match k.as_str() {
+            "password" => p.password = Some(v.to_string()),
+            "user" => p.username = Some(v.to_string()),
+            "defaultdatabase" => p.database = Some(v.to_string()),
+            "ssl" if !falsy(v) => {
+                p.options.insert("redis_tls".into(), "true".into());
+            }
+            _ => {}
+        }
+    }
+    Some(p)
+}

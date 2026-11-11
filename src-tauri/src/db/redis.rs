@@ -460,6 +460,14 @@ impl RedisDriver {
 #[async_trait::async_trait]
 impl DatabaseDriver for RedisDriver {
     async fn connect(config: &ConnectionConfig) -> AppResult<Self> {
+        // 主機欄被貼進整段 StackExchange.Redis 設定字串（`h:6379,abortConnect=false,…`）時，
+        // redis crate 只會回「URL did not parse」，看不出原因；直接講清楚該怎麼改。
+        if config.host.contains(',') || config.host.contains('=') {
+            return Err(AppError::Connect(tf!(
+                "主機欄含有逗號或等號：{host}。這看起來是 StackExchange.Redis 連線字串，請貼到上方「連線字串」欄按「解析並填入」，主機欄只留主機名稱。",
+                host = config.host
+            )));
+        }
         let auth = if config.password.is_empty() {
             String::new()
         } else if config.username.is_empty() {

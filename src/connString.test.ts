@@ -54,6 +54,13 @@ const parsed = (over: Partial<ParsedUrl> = {}): ParsedUrl => ({
 });
 
 describe("looksLikeConnectionString", () => {
+  it("認得 StackExchange.Redis 設定字串，但不攔一般逗號文字", () => {
+    expect(looksLikeConnectionString("127.0.0.1:6379,abortConnect=false,connectRetry=3")).toBe(true);
+    expect(looksLikeConnectionString("redis.local,password=x,ssl=true")).toBe(true);
+    expect(looksLikeConnectionString("h1:9092,h2:9092")).toBe(false);
+    expect(looksLikeConnectionString("a,b=c")).toBe(false);
+  });
+
   it("認得已知 scheme 的 URL", () => {
     expect(looksLikeConnectionString("postgresql://ranai_user:ranai_pass_2026@localhost:5434/ranai")).toBe(true);
     expect(looksLikeConnectionString("mysql://u:p@h:3306/db")).toBe(true);

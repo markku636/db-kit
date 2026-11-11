@@ -503,6 +503,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "Oracle 的 schema 即使用者帳號，請由 DBA 以 DROP USER 管理（本工具不代理此高風險操作）" => "Oracle 的 schema 即用户账号，请由 DBA 以 DROP USER 管理（本工具不代理此高风险操作）",
         "找不到 Oracle Instant Client（或架構不符，需 64 位元）。\n請安裝 Instant Client Basic / Basic Light 並將其目錄加入 PATH，或在連線設定的「Instant Client 目錄」填入路徑後重試。\n下載：{url}\n（{msg}）" => "找不到 Oracle Instant Client（或架构不符，需 64 位）。\n请安装 Instant Client Basic / Basic Light 并将其目录加入 PATH，或在连接设置的「Instant Client 目录」填入路径后重试。\n下载：{url}\n（{msg}）",
         "非預期的 PING 回應：{pong}" => "非预期的 PING 回应：{pong}",
+        "主機欄含有逗號或等號：{host}。這看起來是 StackExchange.Redis 連線字串，請貼到上方「連線字串」欄按「解析並填入」，主機欄只留主機名稱。" => "主机栏含有逗号或等号：{host}。这看起来是 StackExchange.Redis 连接字符串，请粘贴到上方「连接字符串」栏按「解析并填入」，主机栏只留主机名称。",
         "秒；-1 表示無到期" => "秒；-1 表示无到期",
         "空命令" => "空命令",
         "TTL 必須為整數" => "TTL 必须为整数",
