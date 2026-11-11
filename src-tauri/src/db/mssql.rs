@@ -145,9 +145,51 @@ impl MssqlDriver {
 
     /// 取回結果集所有列（第一個 result set）。
     async fn query_rows(&self, sql: &str) -> AppResult<Vec<tiberius::Row>> {
+        use futures::FutureExt;
         let mut conn = self.pooled().await?;
-        let stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
-        stream.into_first_result().await.map_err(|e| AppError::Query(e.to_string()))
+        let fut = async {
+            let stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
+            stream.into_first_result().await.map_err(|e| AppError::Query(e.to_string()))
+        };
+        match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
+            Ok(r) => r,
+            Err(p) => {
+                self.replace_broken(&mut conn).await;
+                Err(unsupported_type_error(p))
+            }
+        }
+    }
+
+    /// 瀏覽資料表用的 SELECT 欄位清單：一般欄位照原樣，tiberius 解不了的型別先在伺服器端轉成文字。
+    /// 查不到欄位資訊（權限等）就退回 `*`。
+    async fn select_list(&self, database: &str, schema: &str, table: &str) -> String {
+        let db = esc(database);
+        let obj = object_literal(database, schema, table);
+        let sql = format!(
+            "SELECT c.name, CASE WHEN ty.name IN (N'geography', N'geometry') THEN 1 \
+                                 WHEN ty.is_assembly_type = 1 THEN 2 \
+                                 WHEN ty.name = N'sql_variant' THEN 3 ELSE 0 END \
+             FROM [{db}].sys.columns c JOIN [{db}].sys.types ty ON c.user_type_id = ty.user_type_id \
+             WHERE c.object_id = OBJECT_ID({obj}) ORDER BY c.column_id"
+        );
+        match self.query_rows(&sql).await {
+            Ok(rows) => readable_select_list(
+                &rows
+                    .iter()
+                    .filter_map(|r| Some((get_str(r, 0)?, r.try_get::<i32, _>(1).ok().flatten().unwrap_or(0))))
+                    .collect::<Vec<_>>(),
+            ),
+            Err(_) => "*".to_string(),
+        }
+    }
+
+    /// 讀到一半 panic 的連線協定狀態已經壞了（COLMETADATA 只讀了一半），不能還回池：bb8-tiberius 的
+    /// 健康檢查只送 `SELECT 1` 不讀回應，下一個借到它的查詢會讀到上一個查詢的殘渣。
+    /// PooledConnection 沒有「標記損壞」的 API，所以就地換成一條新連線，壞的那條隨之關閉。
+    async fn replace_broken(&self, conn: &mut bb8::PooledConnection<'_, ConnectionManager>) {
+        if let Ok(fresh) = self.dedicated_client().await {
+            **conn = fresh;
+        }
     }
 
     /// 互動查詢（查詢分頁 / MCP / CLI）的共同入口：登記 SPID 讓 cancel_query 有目標可 KILL。
@@ -158,11 +200,18 @@ impl MssqlDriver {
     /// 那條連線跑完會留著（見 `put_scoped`），同一個庫的下一個批次接著用：連續幾個 GO 批次之間的
     /// 暫存表、變數以外的工作階段狀態因此延續，也省掉每次重新登入。
     async fn interactive(&self, sql: &str, mode: RunMode) -> AppResult<RunOut> {
+        use futures::FutureExt;
         let Some((db, rest)) = split_leading_use(sql) else {
             let mut conn = self.pooled().await?;
             let spid = session_spid(&mut conn).await?;
             let _guard = self.track(spid);
-            return run_on(&mut conn, sql, mode).await;
+            return match std::panic::AssertUnwindSafe(run_on(&mut conn, sql, mode)).catch_unwind().await {
+                Ok(r) => r,
+                Err(p) => {
+                    self.replace_broken(&mut conn).await;
+                    Err(unsupported_type_error(p))
+                }
+            };
         };
         let mut client = self.scoped_client(&db).await?;
         let spid = session_spid(&mut client).await?;
@@ -171,7 +220,11 @@ impl MssqlDriver {
             if crate::db::stmt::statement_head(rest).trim().is_empty() {
                 Ok(mode.empty())
             } else {
-                run_on(&mut client, rest, mode).await
+                // 專屬連線 panic 後 result 是 Err，下面就不會留它。
+                std::panic::AssertUnwindSafe(run_on(&mut client, rest, mode))
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_else(|p| Err(unsupported_type_error(p)))
             }
         };
         // 失敗的連線不留（可能是被 KILL、斷線，或停在不明狀態），下次重開一條。
@@ -461,8 +514,9 @@ impl DatabaseDriver for MssqlDriver {
 
         let order = build_order(&query.sorts);
         let offset = (query.page as u64).saturating_mul(query.page_size as u64);
+        let select = self.select_list(database, &schema, &tbl).await;
         let sql = format!(
-            "SELECT * FROM {qualified} {where_sql} {order} OFFSET {offset} ROWS FETCH NEXT {} ROWS ONLY",
+            "SELECT {select} FROM {qualified} {where_sql} {order} OFFSET {offset} ROWS FETCH NEXT {} ROWS ONLY",
             query.page_size
         );
         let rows = self.query_rows(&sql).await?;
@@ -1110,6 +1164,39 @@ fn quoted_ident(body: &str, close: char) -> Option<(String, &str)> {
     None
 }
 
+/// 欄位清單 → SELECT 清單。種類：0 一般、1 geography / geometry、2 CLR 型別（hierarchyid 等）、3 sql_variant。
+/// 全是一般欄位時回 `*`（不必把欄名一個個列出來）。
+fn readable_select_list(cols: &[(String, i32)]) -> String {
+    if cols.iter().all(|(_, k)| *k == 0) {
+        return "*".to_string();
+    }
+    cols.iter()
+        .map(|(name, kind)| {
+            let c = format!("[{}]", esc(name));
+            match kind {
+                1 => format!("{c}.STAsText() AS {c}"),
+                2 => format!("{c}.ToString() AS {c}"),
+                3 => format!("CAST({c} AS NVARCHAR(4000)) AS {c}"),
+                _ => c,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// tiberius 遇到 sql_variant / UDT 欄位會 panic（`todo!()`），攔下後轉成講得出改法的錯誤。
+fn unsupported_type_error(payload: Box<dyn std::any::Any + Send>) -> AppError {
+    let detail = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    AppError::Query(tf!(
+        "結果裡有 DB Kit 還無法解讀的欄位型別（{detail}）。請在查詢裡先轉成文字：sql_variant 用 CAST(欄位 AS NVARCHAR(4000))，geography / geometry 用 欄位.STAsText()，hierarchyid 等 CLR 型別用 欄位.ToString()。",
+        detail = detail
+    ))
+}
+
 /// 主機欄解析後的連線目標。
 #[derive(Debug, PartialEq)]
 struct MssqlTarget {
@@ -1616,6 +1703,28 @@ SELECT SCOPE_IDENTITY()"));
         // T-SQL 字串結尾的反斜線不是跳脫：後面的 SELECT 要看得到。
         assert!(batch_returns_rows(r"UPDATE t SET p = 'C:\backup\'; SELECT 1"));
         assert!(batch_returns_rows("CREATE TABLE #x (a int); SELECT * FROM #x"));
+    }
+
+    #[test]
+    fn readable_select_list_converts_only_unsupported_types() {
+        let plain = vec![("id".to_string(), 0), ("name".to_string(), 0)];
+        assert_eq!(readable_select_list(&plain), "*");
+        let mixed = vec![
+            ("id".to_string(), 0),
+            ("SpatialLocation".to_string(), 1),
+            ("OrganizationNode".to_string(), 2),
+            ("v]x".to_string(), 3),
+        ];
+        assert_eq!(
+            readable_select_list(&mixed),
+            "[id], [SpatialLocation].STAsText() AS [SpatialLocation], [OrganizationNode].ToString() AS [OrganizationNode], CAST([v]]x] AS NVARCHAR(4000)) AS [v]]x]"
+        );
+    }
+
+    #[test]
+    fn unsupported_type_error_keeps_panic_detail() {
+        let e = unsupported_type_error(Box::new("not yet implemented for SSVariant".to_string()));
+        assert!(e.to_string().contains("SSVariant") && e.to_string().contains("CAST("), "{e}");
     }
 
     #[test]

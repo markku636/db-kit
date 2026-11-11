@@ -27,6 +27,7 @@
 - **SQL Server 索引的 INCLUDE 欄位不再被當成索引鍵**：以前 `CREATE INDEX ix ON t (a) INCLUDE (b)` 會列成索引欄位「b, a」（INCLUDE 欄位排在最前面），結構比對與重建也會照錯的順序。
 - **SQL Server 資料表的估計列數正確了**：含 `nvarchar(max)`、`varbinary(max)` 這類欄位的表，列數以前會多算 2～3 倍；資料表資訊另外多了「索引大小」。
 - **Redis 新增鍵不會再覆蓋或改到既有的鍵**：以前「新增鍵」選 String（以及網格的「新增列」）直接 SET，同名的鍵不管原本是 hash、list 還是什麼，都被靜默換成這個字串、原本的資料就沒了；選 List / Set / Hash / ZSet 則會把元素加進同名的既有鍵。現在同名鍵已存在就擋下並告訴你它是什麼型別。新增鍵也可以直接建立 Stream（第一筆的 ID 由 Redis 產生）。
+- **SQL Server 有 geography / geometry / hierarchyid / sql_variant 欄位的資料表打得開了**：這幾種型別底層驅動還不支援，以前開資料表或 `SELECT *` 會讓查詢直接中斷，那條連線還可能帶著殘留的資料回到連線池、讓下一個查詢讀到錯的東西。現在瀏覽資料表時自動在伺服器端轉成文字（geography / geometry 顯示 WKT，例如 `POINT (121.5 25.03)`；hierarchyid 顯示 `/1/2/`）；自己寫的查詢碰到時會說明要怎麼轉型，出事的連線直接換掉不再重用。
 
 ## v0.59.1
 
