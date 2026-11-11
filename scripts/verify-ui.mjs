@@ -4262,6 +4262,25 @@ const CASES = {
       JSON.stringify(saved?.options ?? null));
   },
 
+  // SQL Server 驗證方式：選 Windows 驗證要有說明，存檔帶 options.mssql_auth；主機欄提示具名執行個體寫法。
+  async "conn-mssql-windows-auth"(page) {
+    await page.getByRole("button", { name: "連線", exact: true }).first().click();
+    await page.getByRole("radiogroup", { name: "連線類型" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByRole("radio", { name: "SQL Server" }).first().click();
+    await sleep(300);
+    const hostPh = await page.locator('input[placeholder*="SQLEXPRESS"]').count();
+    check("主機欄提示具名執行個體寫法", hostPh === 1);
+    const sel = page.locator("select").filter({ has: page.locator('option[value="windows"]') }).first();
+    check("有驗證方式選單", (await sel.count()) === 1);
+    await sel.selectOption("windows");
+    await sleep(200);
+    check("Windows 驗證說明（帳號留空用目前登入的帳號）", (await appText(page)).includes("使用者留空＝用目前登入這台電腦的 Windows 帳號"));
+    await page.getByRole("button", { name: "儲存", exact: true }).click();
+    await sleep(600);
+    const saved = await page.evaluate(() => (window.__DBKIT_CONN_SAVES__ ?? []).pop());
+    check("存檔帶 mssql_auth=windows", saved?.kind === "mssql" && saved?.options?.mssql_auth === "windows", JSON.stringify(saved?.options ?? null));
+  },
+
   // 查詢工具列的三階自適應：寬 → 圖示+文字；中 → 次要鈕只留圖示；窄 → 無下拉的次要鈕折進「更多」。
   // 重點是「絕不裁掉按鈕」：曾經用 justify-end + overflow-hidden 量測，放不下時溢位往左擠，
   // 最左邊的新查詢 / 歷史 / 收藏星星會被裁到看不見也點不到。

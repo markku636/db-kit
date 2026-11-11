@@ -5079,6 +5079,12 @@ const en: Catalog = {
   "請輸入至少一個欄位的 JSON 物件，例如 {\"event\":\"login\",\"user\":\"42\"}": "Enter a JSON object with at least one field, e.g. {\"event\":\"login\",\"user\":\"42\"}",
   "新項目的 ID 由 Redis 依時間自動產生": "Redis generates the new entry's ID from the current time",
   "自動 ID": "Auto ID",
+  "例如 db01、db01\\SQLEXPRESS 或 tcp:db01,14330": "e.g. db01, db01\\SQLEXPRESS or tcp:db01,14330",
+  "驗證方式": "Authentication",
+  "SQL Server 驗證": "SQL Server authentication",
+  "Windows 驗證": "Windows authentication",
+  "使用者留空＝用目前登入這台電腦的 Windows 帳號；要用別的網域帳號就填「網域\\帳號」與密碼。": "Leave the user empty to sign in as the Windows account currently logged on to this computer; to use another domain account, enter DOMAIN\\user and its password.",
+  "SQL Server 自己的登入帳號（例如 sa）。帳號寫成「網域\\帳號」時會自動改用 Windows 驗證。": "A SQL Server login (e.g. sa). A user written as DOMAIN\\user switches to Windows authentication automatically.",
 };
 
 export default en;

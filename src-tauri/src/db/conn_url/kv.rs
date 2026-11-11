@@ -223,6 +223,7 @@ const MSSQL_MARKERS: &[&str] = &[
     "trust server certificate",
     "encrypt",
     "integrated security",
+    "trusted_connection",
     "multisubnetfailover",
     "applicationintent",
     "persist security info",

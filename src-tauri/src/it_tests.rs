@@ -1725,6 +1725,32 @@ async fn postgres_full() {
 
 // ============================ Redis（Docker）— 重點：結構編輯 ============================
 
+/// MSSQL 連不上時要講出真正的原因，不能只回「逾時」。不需要 SQL Server：
+/// 一個沒人聽的埠（拒絕連線）、一個不是 TDS 的服務（Docker Redis:16379）。
+#[tokio::test]
+#[ignore = "需要 Docker Redis:16379（當作「不是 SQL Server 的服務」）"]
+async fn mssql_connect_error_reports_real_cause() {
+    use crate::db::mssql::MssqlDriver;
+    for (host, port, what) in [
+        ("127.0.0.1", 1u16, "沒人聽的埠"),
+        ("127.0.0.1", 16379, "不是 SQL Server 的服務"),
+        // 具名執行個體：本機沒有 SQL Browser → 要回報找不到執行個體，而不是拿 `.\NOPE` 去查 DNS。
+        (r".\NOPE", 1433, "不存在的具名執行個體"),
+    ] {
+        let mut c = cfg(DbKind::Mssql, host, port, "sa", "x", None);
+        c.options.insert("encrypt".into(), "false".into());
+        let t0 = std::time::Instant::now();
+        let err = match MssqlDriver::connect(&c).await {
+            Ok(_) => panic!("{what}：不該連得上"),
+            Err(e) => e.to_string(),
+        };
+        let took = t0.elapsed();
+        eprintln!("{what}: {took:?} {err}");
+        assert!(!err.contains("Timed out in bb8"), "{what}：只回了逾時，看不出原因：{err}");
+        assert!(took < Duration::from_secs(12), "{what}：等太久才報錯：{took:?}");
+    }
+}
+
 /// 密碼含 `@ : / # % ?`：以前拼成 URL 會被切錯。容器：
 /// `docker run -d --rm -p 16380:6379 redis:7-alpine redis-server --requirepass 'p@ss:w/rd#1%?'`
 #[tokio::test]

@@ -24,6 +24,7 @@ const base = (over: Partial<ConnFormFields> = {}): ConnFormFields => ({
   mssqlEncrypt: true,
   mssqlTrust: false,
   mssqlCaPath: "",
+  mssqlAuth: "sql",
   oracleConnectType: "service",
   oracleClientDir: "",
   kafkaProtocol: "PLAINTEXT",
@@ -307,5 +308,21 @@ describe("applyParsedToForm", () => {
   it("Docker 的 unix:// / tcp:// 算連線字串", () => {
     expect(looksLikeConnectionString("unix:///var/run/docker.sock")).toBe(true);
     expect(looksLikeConnectionString("tcp://10.0.0.5:2375")).toBe(true);
+  });
+});
+
+describe("applyParsedToForm：SQL Server Windows 驗證", () => {
+  it("Integrated Security 解析出的 mssql_auth=windows 會切換驗證方式", () => {
+    const { next, changed } = applyParsedToForm(
+      parsed({ kind: "mssql", host: String.raw`.\SQLEXPRESS`, options: { mssql_auth: "windows" } }),
+      base(),
+    );
+    expect(next.mssqlAuth).toBe("windows");
+    expect(next.host).toBe(String.raw`.\SQLEXPRESS`);
+    expect(changed.map((c) => c.key)).toContain("mssqlAuth");
+  });
+  it("同為 MSSQL、字串沒提驗證方式時維持原本的選擇", () => {
+    const { next } = applyParsedToForm(parsed({ kind: "mssql", host: "db01" }), { ...base(), kind: "mssql", mssqlAuth: "windows" });
+    expect(next.mssqlAuth).toBe("windows");
   });
 });

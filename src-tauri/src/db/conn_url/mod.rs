@@ -609,6 +609,24 @@ mod tests {
     }
 
     #[test]
+    fn ado_integrated_security_selects_windows_auth() {
+        for s in [
+            r"Server=.\SQLEXPRESS;Database=app;Integrated Security=true",
+            "Server=db01;Integrated Security=SSPI",
+            "Server=db01;Trusted_Connection=yes",
+        ] {
+            let p = parse_url(s, None).unwrap();
+            assert_eq!(p.kind, Some(DbKind::Mssql), "{s}");
+            assert_eq!(p.options.get("mssql_auth").map(String::as_str), Some("windows"), "{s}");
+        }
+        // 主機欄保留 `主機\執行個體`，由 driver 解析（ADO.NET 寫法原樣，使用者看得懂）。
+        let p = parse_url(r"Server=.\SQLEXPRESS;Integrated Security=true", None).unwrap();
+        assert_eq!(p.host.as_deref(), Some(r".\SQLEXPRESS"));
+        let p = parse_url("Server=db01;Integrated Security=false;User ID=sa;Password=x", None).unwrap();
+        assert_eq!(p.options.get("mssql_auth"), None);
+    }
+
+    #[test]
     fn jdbc_non_allowlisted_dialect_rejected() {
         // 白名單外的 dialect 剝殼後會亂解析，須明確報錯而非默默解錯。
         let err = parse_url("jdbc:db2://dbhost:50000/SAMPLE", None).unwrap_err();

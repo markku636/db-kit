@@ -166,6 +166,13 @@ pub(super) fn apply_mssql_kv(p: &mut Parsed, key: &str, value: &str) {
             p.options
                 .insert("trust_server_certificate".into(), "true".into());
         }
+        // Windows 驗證：ADO.NET 的 `Integrated Security=true|SSPI`、ODBC 慣用的 `Trusted_Connection=yes`，
+        // JDBC 的 `integratedSecurity=true`。
+        "integrated security" | "integratedsecurity" | "trusted_connection" | "trusted connection"
+            if truthy(value) || value.eq_ignore_ascii_case("sspi") =>
+        {
+            p.options.insert("mssql_auth".into(), "windows".into());
+        }
         _ => {}
     }
 }

@@ -21,6 +21,46 @@ pub struct MssqlDriver {
     /// 執行中互動查詢（query_capped / query_multi_capped）所在工作階段的 `@@SPID`。
     /// cancel_query 據此以「另一條」連線送 `KILL <spid>`（比照 postgres.rs 的 running）。
     running: parking_lot::Mutex<std::collections::HashSet<i16>>,
+    /// 連線池背景建立連線失敗的最近原因（見 `LastPoolError`）。
+    last_err: LastPoolError,
+}
+
+/// bb8 的 `get()` 在背景建立連線，失敗原因只交給 error sink，呼叫端拿到的永遠是等滿
+/// connection_timeout 之後的「Timed out in bb8」——帳密錯、主機打錯、TLS 不合全長一樣。
+/// 這裡把最近一次的原因記下來，逾時時一併講出來。
+#[derive(Debug, Clone, Default)]
+struct LastPoolError(std::sync::Arc<parking_lot::Mutex<Option<(std::time::Instant, String)>>>);
+
+impl bb8::ErrorSink<bb8_tiberius::Error> for LastPoolError {
+    fn sink(&self, error: bb8_tiberius::Error) {
+        *self.0.lock() = Some((std::time::Instant::now(), error.to_string()));
+    }
+
+    fn boxed_clone(&self) -> Box<dyn bb8::ErrorSink<bb8_tiberius::Error>> {
+        Box::new(self.clone())
+    }
+}
+
+impl LastPoolError {
+    /// 最近 30 秒內的失敗原因（更早的多半與這次逾時無關，例如只是池子被長查詢佔滿）。
+    fn recent(&self) -> Option<String> {
+        self.0
+            .lock()
+            .as_ref()
+            .filter(|(at, _)| at.elapsed() < Duration::from_secs(30))
+            .map(|(_, msg)| msg.clone())
+    }
+}
+
+/// 連線池取連線的錯誤 → AppError：逾時時附上最近一次建立連線失敗的原因。
+fn pool_get_error(e: bb8::RunError<bb8_tiberius::Error>, last: &LastPoolError) -> AppError {
+    match e {
+        bb8::RunError::User(e) => AppError::Query(e.to_string()),
+        bb8::RunError::TimedOut => match last.recent() {
+            Some(cause) => AppError::Query(tf!("取得資料庫連線逾時。最近一次連線失敗的原因：{cause}", cause = cause)),
+            None => AppError::Query(t!("取得資料庫連線逾時：連線都在忙（可能有長時間執行的查詢），或伺服器沒有回應。").to_string()),
+        },
+    }
 }
 
 /// 查詢期間把 SPID 留在 `running` 內，drop 時自動移除（含失敗 / 被 KILL / 外層逾時丟棄 future）。
@@ -48,6 +88,11 @@ async fn session_spid(conn: &mut bb8_tiberius::rt::Client) -> AppResult<i16> {
 }
 
 impl MssqlDriver {
+    /// 從連線池借一條連線；失敗時講出真正的原因（見 `pool_get_error`）。
+    async fn pooled(&self) -> AppResult<bb8::PooledConnection<'_, ConnectionManager>> {
+        self.pool.get().await.map_err(|e| pool_get_error(e, &self.last_err))
+    }
+
     fn track(&self, spid: i16) -> RunningGuard<'_> {
         self.running.lock().insert(spid);
         RunningGuard { set: &self.running, spid }
@@ -84,7 +129,7 @@ impl MssqlDriver {
 
     /// 取回結果集所有列（第一個 result set）。
     async fn query_rows(&self, sql: &str) -> AppResult<Vec<tiberius::Row>> {
-        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut conn = self.pooled().await?;
         let stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
         stream.into_first_result().await.map_err(|e| AppError::Query(e.to_string()))
     }
@@ -94,7 +139,7 @@ impl MssqlDriver {
     /// TDS 協定狀態殘留，回 bb8 池後污染後續查詢；drain 完才能安全還池。
     async fn query_rows_capped(&self, sql: &str, cap: usize) -> AppResult<(Vec<tiberius::Row>, bool)> {
         use futures::TryStreamExt;
-        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut conn = self.pooled().await?;
         // 只給互動查詢用：登記 SPID，cancel_query 才有目標可 KILL。
         let spid = session_spid(&mut conn).await?;
         let _guard = self.track(spid);
@@ -122,7 +167,7 @@ impl MssqlDriver {
     /// 以 Metadata item 開格，空結果集也保有欄位頭；result_index 防禦性補格。
     async fn query_sets_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
         use futures::TryStreamExt;
-        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut conn = self.pooled().await?;
         let spid = session_spid(&mut conn).await?;
         let _guard = self.track(spid);
         let mut stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
@@ -160,14 +205,14 @@ impl MssqlDriver {
 
     /// 執行寫入語句，回傳受影響列數。
     async fn exec(&self, sql: &str) -> AppResult<u64> {
-        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut conn = self.pooled().await?;
         let res = conn.execute(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
         Ok(res.rows_affected().iter().sum())
     }
 
     /// 互動查詢的寫入語句：同 exec，但登記 SPID 讓長時間的 UPDATE / DELETE 也能取消。
     async fn exec_tracked(&self, sql: &str) -> AppResult<u64> {
-        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut conn = self.pooled().await?;
         let spid = session_spid(&mut conn).await?;
         let _guard = self.track(spid);
         let res = conn.execute(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
@@ -208,14 +253,18 @@ impl MssqlDriver {
 impl DatabaseDriver for MssqlDriver {
     async fn connect(config: &ConnectionConfig) -> AppResult<Self> {
         let mut c = Config::new();
-        c.host(&config.host);
-        c.port(config.port);
+        let target = mssql_target(&config.host, config.port);
+        c.host(&target.host);
+        c.port(target.port);
+        if let Some(inst) = &target.instance {
+            c.instance_name(inst);
+        }
         if let Some(db) = &config.database {
             if !db.is_empty() {
                 c.database(db);
             }
         }
-        c.authentication(AuthMethod::sql_server(&config.username, &config.password));
+        c.authentication(mssql_auth(config)?);
         // encrypt 預設開啟；trust_server_certificate 跳過憑證驗證（自簽 / 開發用）。
         let encrypt = config.options.get("encrypt").map(|v| v != "false").unwrap_or(true);
         c.encryption(if encrypt { EncryptionLevel::Required } else { EncryptionLevel::Off });
@@ -226,20 +275,56 @@ impl DatabaseDriver for MssqlDriver {
             c.trust_cert_ca(ca);
         }
 
-        let mgr = ConnectionManager::new(c);
+        let mut mgr = ConnectionManager::new(c);
+        if target.browse {
+            // 具名執行個體的埠是動態的：先問 SQL Browser（UDP 1434）再連。
+            mgr = mgr.using_named_connection();
+        }
+        // 先直接連一次：連線池在背景建連線，失敗原因不會回到這裡，只會等滿 10 秒回「逾時」。
+        // 直接連才拿得到「使用者登入失敗」「無法連線」「憑證不受信任」這種使用者看得懂的原因。
+        let first = tokio::time::timeout(Duration::from_secs(10), bb8::ManageConnection::connect(&mgr))
+            .await
+            .map_err(|_| {
+                AppError::Connect(tf!(
+                    "連線 {host} 逾時（10 秒）：主機沒有回應，或那個埠上不是 SQL Server。請確認主機、埠與防火牆。",
+                    host = format!("{}:{}", target.host, target.port)
+                ))
+            })?
+            .map_err(|e| {
+                // 問 SQL Browser 失敗時（UDP 1434 沒人回 / 被拒），Windows 只會給「遠端主機已強制關閉
+                // 一個現存的連線」，完全看不出跟具名執行個體有關。
+                let io_level = matches!(
+                    e,
+                    bb8_tiberius::Error::Io(_) | bb8_tiberius::Error::Tiberius(tiberius::error::Error::Io { .. })
+                );
+                match (&target.instance, target.browse && io_level) {
+                    (Some(inst), true) => AppError::Connect(tf!(
+                        "找不到具名執行個體「{inst}」：{host} 上的 SQL Server Browser 服務（UDP 1434）沒有回應。請確認該服務已啟動、防火牆放行 UDP 1434，或在主機欄改寫成「主機,埠」直接指定埠。（{detail}）",
+                        inst = inst,
+                        host = target.host,
+                        detail = e
+                    )),
+                    _ => AppError::Connect(e.to_string()),
+                }
+            })?;
+        let last_err = LastPoolError::default();
         let pool = Pool::builder()
             .max_size(config.max_connections.max(1))
             .connection_timeout(Duration::from_secs(10))
             .idle_timeout(Some(Duration::from_secs(300)))
             .max_lifetime(Some(Duration::from_secs(1800)))
+            .error_sink(Box::new(last_err.clone()))
             .build(mgr)
             .await
             .map_err(|e| AppError::Connect(e.to_string()))?;
+        // 剛驗證過的那條直接放進池子，不浪費一次登入。池子滿了（不會發生）就丟掉。
+        let _ = pool.add(first);
 
         let driver = Self {
             pool,
             default_db: config.database.clone().filter(|d| !d.is_empty()),
             running: Default::default(),
+            last_err,
         };
         driver.ping().await?;
         Ok(driver)
@@ -792,7 +877,7 @@ impl DatabaseDriver for MssqlDriver {
     }
 
     async fn exec_ddl(&self, sql: &str) -> AppResult<()> {
-        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut conn = self.pooled().await?;
         conn.simple_query(sql)
             .await
             .map_err(|e| AppError::Query(e.to_string()))?
@@ -846,6 +931,71 @@ impl DatabaseDriver for MssqlDriver {
 
     async fn close(&self) {
         // bb8 pool 於 drop 時清理連線；無顯式 close。
+    }
+}
+
+/// 主機欄解析後的連線目標。
+#[derive(Debug, PartialEq)]
+struct MssqlTarget {
+    host: String,
+    port: u16,
+    /// 具名執行個體（`主機\SQLEXPRESS` 的 SQLEXPRESS）。
+    instance: Option<String>,
+    /// 要先問 SQL Browser 取得執行個體的埠。
+    browse: bool,
+}
+
+/// 主機欄照 SSMS / ADO.NET 的寫法解析：`tcp:主機,埠`、`主機\執行個體`、`.` 與 `(local)`。
+///
+/// 以前整串直接當主機名稱：填 `.\SQLEXPRESS` 會拿去查 DNS、永遠連不上。具名執行個體的埠
+/// 由 SQL Browser 動態分配，所以「沒指定埠」（沒寫 `,埠` 且埠欄是預設 1433）時改問 SQL Browser；
+/// 有指定埠就照 ADO.NET 的規則直接連那個埠。
+fn mssql_target(host_field: &str, port: u16) -> MssqlTarget {
+    let mut s = host_field.trim();
+    if s.len() >= 4 && s[..4].eq_ignore_ascii_case("tcp:") {
+        s = &s[4..];
+    }
+    let mut explicit_port = None;
+    if let Some((h, p)) = s.rsplit_once(',') {
+        if let Ok(p) = p.trim().parse::<u16>() {
+            explicit_port = Some(p);
+            s = h;
+        }
+    }
+    let (h, instance) = match s.split_once('\\') {
+        Some((h, i)) if !i.trim().is_empty() => (h.trim(), Some(i.trim().to_string())),
+        Some((h, _)) => (h.trim(), None),
+        None => (s.trim(), None),
+    };
+    let host = match h.to_ascii_lowercase().as_str() {
+        "" | "." | "(local)" => "localhost".to_string(),
+        _ => h.to_string(),
+    };
+    let port = explicit_port.unwrap_or(port);
+    let browse = instance.is_some() && explicit_port.is_none() && port == 1433;
+    MssqlTarget { host, port, instance, browse }
+}
+
+/// 驗證方式。`options.mssql_auth == "windows"`：Windows 驗證——帳號留空用目前登入 Windows 的身分（SSPI），
+/// 填 `網域\帳號` 加密碼則以該帳號做 NTLM。沒選 Windows 驗證但帳號寫成 `網域\帳號` 也走 NTLM
+///（SQL Server 帳號不可能含反斜線，照 SQL 驗證送出只會換來登入失敗）。
+fn mssql_auth(config: &ConnectionConfig) -> AppResult<AuthMethod> {
+    let windows = config.options.get("mssql_auth").is_some_and(|v| v == "windows");
+    let domain_user = config.username.contains('\\');
+    if !windows && !domain_user {
+        return Ok(AuthMethod::sql_server(&config.username, &config.password));
+    }
+    #[cfg(windows)]
+    {
+        if config.username.trim().is_empty() {
+            Ok(AuthMethod::Integrated)
+        } else {
+            Ok(AuthMethod::windows(config.username.trim(), &config.password))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Err(AppError::Connect(t!("Windows 驗證只能在 Windows 版使用；macOS / Linux 請改用 SQL Server 帳號密碼。").to_string()))
     }
 }
 
@@ -1290,6 +1440,50 @@ SELECT SCOPE_IDENTITY()"));
         // T-SQL 字串結尾的反斜線不是跳脫：後面的 SELECT 要看得到。
         assert!(batch_returns_rows(r"UPDATE t SET p = 'C:\backup\'; SELECT 1"));
         assert!(batch_returns_rows("CREATE TABLE #x (a int); SELECT * FROM #x"));
+    }
+
+    #[test]
+    fn mssql_target_parses_ssms_style_server_names() {
+        let t = |h: &str, p: u16| mssql_target(h, p);
+        assert_eq!(t("db01", 1433), MssqlTarget { host: "db01".into(), port: 1433, instance: None, browse: false });
+        // 具名執行個體、沒指定埠 → 問 SQL Browser。
+        assert_eq!(
+            t(r".\SQLEXPRESS", 1433),
+            MssqlTarget { host: "localhost".into(), port: 1433, instance: Some("SQLEXPRESS".into()), browse: true }
+        );
+        assert_eq!(t(r"(local)\DEV", 1433).host, "localhost");
+        // 指定了埠（,埠 或埠欄不是 1433）→ 直接連，不問 SQL Browser。
+        let x = t(r"tcp:db01\INST,14330", 1433);
+        assert_eq!((x.host.as_str(), x.port, x.browse), ("db01", 14330, false));
+        assert!(!t(r"db01\INST", 2433).browse);
+        // Azure 慣用的 tcp:主機,埠。
+        let a = t("tcp:x.database.windows.net,1433", 9999);
+        assert_eq!((a.host.as_str(), a.port, a.instance), ("x.database.windows.net", 1433, None));
+        // 結尾多一個反斜線不當成執行個體。
+        assert_eq!(t(r"db01\", 1433).instance, None);
+    }
+
+    #[test]
+    fn mssql_auth_picks_windows_for_option_or_domain_user() {
+        let cfg = |user: &str, auth: Option<&str>| -> ConnectionConfig {
+            let mut v = serde_json::json!({
+                "id": "t", "name": "t", "kind": "mssql", "host": "h", "port": 1433,
+                "username": user, "password": "pw", "database": null, "max_connections": 1,
+            });
+            if let Some(a) = auth {
+                v["options"] = serde_json::json!({ "mssql_auth": a });
+            }
+            serde_json::from_value(v).unwrap()
+        };
+        assert!(matches!(mssql_auth(&cfg("sa", None)).unwrap(), AuthMethod::SqlServer(_)));
+        #[cfg(windows)]
+        {
+            assert!(matches!(mssql_auth(&cfg("", Some("windows"))).unwrap(), AuthMethod::Integrated));
+            assert!(matches!(mssql_auth(&cfg(r"CORP\alice", None)).unwrap(), AuthMethod::Windows(_)));
+            assert!(matches!(mssql_auth(&cfg(r"CORP\alice", Some("windows"))).unwrap(), AuthMethod::Windows(_)));
+        }
+        #[cfg(not(windows))]
+        assert!(mssql_auth(&cfg("", Some("windows"))).is_err());
     }
 
     #[test]

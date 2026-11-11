@@ -162,6 +162,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
   const [mssqlEncrypt, setMssqlEncrypt] = useState(seed?.options?.encrypt !== "false");
   const [mssqlTrust, setMssqlTrust] = useState(seed?.options?.trust_server_certificate === "true");
   const [mssqlCaPath, setMssqlCaPath] = useState(seed?.options?.trust_cert_ca ?? "");
+  // 驗證方式：sql＝SQL Server 帳密；windows＝Windows 驗證（帳號留空用目前登入的 Windows 身分）。
+  const [mssqlAuth, setMssqlAuth] = useState<"sql" | "windows">(seed?.options?.mssql_auth === "windows" ? "windows" : "sql");
   // MySQL / PostgreSQL SSL 模式（存於 options map；空值＝沿用 driver 預設 prefer/preferred）。
   const [sslMode, setSslMode] = useState(seed?.options?.ssl_mode ?? "");
   // verify-* 模式的 CA 憑證檔（AWS RDS 等雲端服務的 CA bundle）。
@@ -220,7 +222,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     setMsg(null);
   }, [kind, host, port, username, password, database, sshEnabled, sshHost, sshPort, sshUsername, sshAuthMethod, sshPassword, sshKeyPath, sshPassphrase,
       redisTls, redisTlsInsecure, mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mongoTlsCa, mongoTlsInsecure,
-      mssqlEncrypt, mssqlTrust, mssqlCaPath, sslMode, sslCa,
+      mssqlEncrypt, mssqlTrust, mssqlCaPath, mssqlAuth, sslMode, sslCa,
       oracleConnectType, oracleClientDir,
       kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify, srUrl, srUser, srPass, connectUrl, connectUser, connectPass,
       esAuth, esTls, esSslCa, esSslInsecure, esShowHidden,
@@ -328,6 +330,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
       if (mssqlTrust) o.trust_server_certificate = "true";
       // 自訂 CA 只在「加密且未信任任意憑證」時有意義（tiberius trust_cert_ca）。
       if (mssqlEncrypt && !mssqlTrust && mssqlCaPath.trim()) o.trust_cert_ca = mssqlCaPath.trim();
+      if (mssqlAuth === "windows") o.mssql_auth = "windows";
     } else if (kind === "oracle") {
       if (oracleConnectType !== "service") o.connect_type = oracleConnectType;
       if (oracleClientDir.trim()) o.client_dir = oracleClientDir.trim();
@@ -428,7 +431,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     sslMode, sslCa,
     redisTls, redisTlsInsecure,
     mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mongoTlsCa, mongoTlsInsecure,
-    mssqlEncrypt, mssqlTrust, mssqlCaPath,
+    mssqlEncrypt, mssqlTrust, mssqlCaPath, mssqlAuth,
     oracleConnectType, oracleClientDir,
     kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify,
     esAuth, esTls, esSslCa, esSslInsecure, esKibanaUrl,
@@ -444,7 +447,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     setMongoSrv(f.mongoSrv); setMongoAuthSource(f.mongoAuthSource); setMongoTls(f.mongoTls);
     setMongoReplicaSet(f.mongoReplicaSet); setMongoDirect(f.mongoDirect);
     setMongoTlsCa(f.mongoTlsCa); setMongoTlsInsecure(f.mongoTlsInsecure);
-    setMssqlEncrypt(f.mssqlEncrypt); setMssqlTrust(f.mssqlTrust); setMssqlCaPath(f.mssqlCaPath);
+    setMssqlEncrypt(f.mssqlEncrypt); setMssqlTrust(f.mssqlTrust); setMssqlCaPath(f.mssqlCaPath); setMssqlAuth(f.mssqlAuth);
     setOracleConnectType(f.oracleConnectType); setOracleClientDir(f.oracleClientDir);
     setKafkaProtocol(f.kafkaProtocol); setKafkaSaslMech(f.kafkaSaslMech);
     setKafkaCaPath(f.kafkaCaPath); setKafkaSkipVerify(f.kafkaSkipVerify);
@@ -804,6 +807,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
                   : kind === "docker" && dockerMode === "local" ? defaultDockerSocket(isWindows)
                   : kind === "registry" ? t("https://registry.example.com 或 localhost:5000")
                   : kind === "harbor" ? "https://harbor.example.com"
+                  : kind === "mssql" ? t("例如 db01、db01\\SQLEXPRESS 或 tcp:db01,14330")
                   : ""} />
             </Field>
             {/* SRV 連線由 DNS 記錄決定 port；Elastic 貼完整 URL 時 port 內含於 URL，皆不顯示埠欄位。 */}
@@ -947,6 +951,15 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
 
           {kind === "mssql" && (
             <Section>
+              <Field label={t("驗證方式")}
+                hint={mssqlAuth === "windows"
+                  ? t("使用者留空＝用目前登入這台電腦的 Windows 帳號；要用別的網域帳號就填「網域\\帳號」與密碼。")
+                  : t("SQL Server 自己的登入帳號（例如 sa）。帳號寫成「網域\\帳號」時會自動改用 Windows 驗證。")}>
+                <Select selectSize="md" value={mssqlAuth} onChange={(e) => setMssqlAuth(e.target.value === "windows" ? "windows" : "sql")}>
+                  <option value="sql">{t("SQL Server 驗證")}</option>
+                  <option value="windows">{t("Windows 驗證")}</option>
+                </Select>
+              </Field>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={mssqlEncrypt} onChange={(e) => setMssqlEncrypt(e.target.checked)} />
                 <span>{t("加密連線（encrypt）")}</span>

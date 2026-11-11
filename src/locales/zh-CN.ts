@@ -5027,6 +5027,12 @@ const zhCN: Catalog = {
   "請輸入至少一個欄位的 JSON 物件，例如 {\"event\":\"login\",\"user\":\"42\"}": "请输入至少一个字段的 JSON 对象，例如 {\"event\":\"login\",\"user\":\"42\"}",
   "新項目的 ID 由 Redis 依時間自動產生": "新条目的 ID 由 Redis 按时间自动生成",
   "自動 ID": "自动 ID",
+  "例如 db01、db01\\SQLEXPRESS 或 tcp:db01,14330": "例如 db01、db01\\SQLEXPRESS 或 tcp:db01,14330",
+  "驗證方式": "验证方式",
+  "SQL Server 驗證": "SQL Server 验证",
+  "Windows 驗證": "Windows 验证",
+  "使用者留空＝用目前登入這台電腦的 Windows 帳號；要用別的網域帳號就填「網域\\帳號」與密碼。": "用户留空＝用当前登录这台电脑的 Windows 账号；要用别的域账号就填「域\\账号」与密码。",
+  "SQL Server 自己的登入帳號（例如 sa）。帳號寫成「網域\\帳號」時會自動改用 Windows 驗證。": "SQL Server 自己的登录账号（例如 sa）。账号写成「域\\账号」时会自动改用 Windows 验证。",
 };
 
 export default zhCN;
