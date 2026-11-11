@@ -5,44 +5,62 @@ name: release
 #   git tag v0.1.4
 #   git push origin v0.1.4
 # 也可在 Actions 頁面手動觸發（workflow_dispatch）：分支只建置並上傳產物，版本標籤才發佈。
+# 手動觸發時 platforms 選 windows 就只打 Windows（安裝檔 + 免安裝版 zip），不用等 macOS / Linux。
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: "要打包的平台（windows：只打 Windows 安裝檔與免安裝版 zip）"
+        type: choice
+        default: all
+        options:
+          - all
+          - windows
 
 permissions:
   contents: write   # 建立 Release / 上傳安裝檔需要
 
 jobs:
+  # 依手動觸發的 platforms 選項產生 build 的 matrix（job 層的 if 讀不到 matrix，只能先在這裡篩）。
+  # 推標籤時沒有 inputs，一律四個平台全打。
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        shell: bash
+        env:
+          PLATFORMS: ${{ inputs.platforms || 'all' }}
+        run: |
+          # macos-arm：Apple Silicon（M 系列），產出 aarch64 的 .dmg / .app（未簽章）
+          # macos-intel：x86_64 的 .dmg / .app（未簽章）。macos-13（最後一代 Intel runner image）已退役，
+          #   job 會永遠排不到機器（整條 run 卡 queued）；改在 Apple Silicon runner 上 rustup 加 x86_64 target 交叉編譯。
+          # windows：.msi 與 .exe(NSIS)，外加免安裝版 zip
+          # linux：.deb / .rpm / .AppImage（用 22.04 以較舊 glibc 換取 AppImage 更廣的相容性）。
+          #   tauri.linux-updater.conf.json 把更新小幫手與它的 polkit 規則打包進 .deb / .rpm（見下面的 Build Linux updater）。
+          all='[
+            {"platform":"macos-latest","label":"macos-arm","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin"},
+            {"platform":"macos-latest","label":"macos-intel","target":"x86_64-apple-darwin","args":"--target x86_64-apple-darwin"},
+            {"platform":"windows-latest","label":"windows","target":"","args":""},
+            {"platform":"ubuntu-22.04","label":"linux","target":"","args":"--config src-tauri/tauri.linux-updater.conf.json"}
+          ]'
+          if [ "$PLATFORMS" = "all" ]; then
+            matrix=$(jq -c '{include: .}' <<< "$all")
+          else
+            matrix=$(jq -c --arg p "$PLATFORMS" '{include: map(select(.label == $p))}' <<< "$all")
+          fi
+          echo "$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: plan
     strategy:
       fail-fast: false   # 一個平台失敗不影響另一個平台繼續打包
-      matrix:
-        include:
-          # macOS Apple Silicon（M 系列）：產出 aarch64 的 .dmg / .app（未簽章）
-          - platform: macos-latest
-            label: macos-arm
-            target: aarch64-apple-darwin
-            args: "--target aarch64-apple-darwin"
-          # macOS Intel：產出 x86_64 的 .dmg / .app（未簽章）。
-          # macos-13（最後一代 Intel runner image）已退役，job 會永遠排不到機器（整條 run 卡 queued）；
-          # 改在 Apple Silicon runner 上 rustup 加 x86_64 target 交叉編譯。
-          - platform: macos-latest
-            label: macos-intel
-            target: x86_64-apple-darwin
-            args: "--target x86_64-apple-darwin"
-          # Windows：產出 .msi 與 .exe(NSIS)
-          - platform: windows-latest
-            label: windows
-            target: ""
-            args: ""
-          # Linux：產出 .deb / .rpm / .AppImage（用 22.04 以較舊 glibc 換取 AppImage 更廣的相容性）。
-          # tauri.linux-updater.conf.json 把更新小幫手與它的 polkit 規則打包進 .deb / .rpm（見下面的 Build Linux updater）。
-          - platform: ubuntu-22.04
-            label: linux
-            target: ""
-            args: "--config src-tauri/tauri.linux-updater.conf.json"
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -243,6 +261,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ github.ref_name }}" "$PORTABLE_ZIP" --clobber
+
+      # 免安裝版單獨一個產物：手動觸發只要 zip 時，不必連安裝檔一起下載。
+      - name: Upload portable zip
+        if: ${{ matrix.platform == 'windows-latest' && !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-kit-windows-portable-${{ github.sha }}
+          if-no-files-found: error
+          path: ${{ env.PORTABLE_ZIP }}
 
       - name: Upload manually built installers
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
