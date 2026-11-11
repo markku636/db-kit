@@ -1725,6 +1725,43 @@ async fn postgres_full() {
 
 // ============================ Redis（Docker）— 重點：結構編輯 ============================
 
+/// 密碼含 `@ : / # % ?`：以前拼成 URL 會被切錯。容器：
+/// `docker run -d --rm -p 16380:6379 redis:7-alpine redis-server --requirepass 'p@ss:w/rd#1%?'`
+#[tokio::test]
+#[ignore = "需要 Docker Redis:16380（requirepass p@ss:w/rd#1%?）"]
+async fn redis_password_with_url_special_chars() {
+    let c = cfg(DbKind::Redis, "127.0.0.1", 16380, "", "p@ss:w/rd#1%?", None);
+    let d = RedisDriver::connect(&c).await.expect("特殊字元密碼應能連線");
+    d.query("2:SET it:k v").await.unwrap();
+    let r = d.query("2:GET it:k").await.unwrap();
+    assert_eq!(r.rows, vec![vec![Some("v".to_string())]]);
+    d.query("2:DEL it:k").await.unwrap();
+}
+
+/// 主控台不能動到共用連線：SELECT 被擋、阻塞指令走專屬連線（期間共用連線照常回應）。
+#[tokio::test]
+#[ignore = "需要 Docker Redis:16379"]
+async fn redis_console_guards_shared_connection() {
+    let c = cfg(DbKind::Redis, "127.0.0.1", 16379, "", "", None);
+    let d = std::sync::Arc::new(RedisDriver::connect(&c).await.unwrap());
+    d.query("0:SET it:guard db0").await.unwrap();
+    assert!(d.query("0:SELECT 3").await.is_err(), "SELECT 應被擋下");
+    assert!(d.query("0:SUBSCRIBE ch").await.is_err(), "SUBSCRIBE 應被擋下");
+    // 擋下後 DB 0 的共用連線仍在 DB 0。
+    assert_eq!(d.query("0:GET it:guard").await.unwrap().rows, vec![vec![Some("db0".to_string())]]);
+
+    // BLPOP 等 2 秒：期間共用連線上的 GET 必須立刻回來（以前會排在 BLPOP 後面）。
+    let d2 = d.clone();
+    let blocking = tokio::spawn(async move { d2.query("0:BLPOP it:empty-queue 2").await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let t0 = std::time::Instant::now();
+    d.query("0:GET it:guard").await.unwrap();
+    assert!(t0.elapsed() < Duration::from_millis(1000), "共用連線被阻塞指令卡住：{:?}", t0.elapsed());
+    let r = blocking.await.unwrap().unwrap();
+    assert_eq!(r.rows, vec![vec![Some("(nil)".to_string())]]);
+    d.query("0:DEL it:guard").await.unwrap();
+}
+
 #[tokio::test]
 #[ignore = "需要 Docker Redis:16379"]
 async fn redis_full() {

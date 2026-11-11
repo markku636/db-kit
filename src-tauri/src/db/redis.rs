@@ -17,9 +17,11 @@ use crate::error::{AppError, AppResult};
 /// 安全：列舉 key 一律用 SCAN（游標式），嚴禁 KEYS * 鎖死正式環境。
 pub struct RedisDriver {
     client: redis::Client,
-    base_url: String,
-    /// URL 尾綴：TLS 略過憑證驗證時為 "#insecure"，否則空字串。附加在 base_url/<db> 之後。
-    url_suffix: String,
+    /// 連線參數（db 欄位固定 0；各 DB 的連線複製一份再改 db）。
+    ///
+    /// 直接組 ConnectionInfo、不拼 URL：密碼含 `@ : / # % ?` 時拼出來的 URL 會被切錯
+    ///（`#` 之後被當成 fragment、`@` 讓主機名稱跑掉），IPv6 位址也要另外加方括號。
+    info: redis::ConnectionInfo,
     db_count: i64,
     /// per-db-index 連線快取。Redis 連線綁定單一 DB，故依 db index 快取各自的
     /// ConnectionManager（多工、Clone 共享、斷線自動重連），避免每次操作新建 TCP + 握手。
@@ -57,11 +59,11 @@ impl RedisDriver {
         if let Some(c) = w.get(&db_idx) {
             return Ok(c.clone());
         }
-        // 以 base_url/<db> 形式選 DB；TLS insecure 時附加 #insecure fragment。
-        let url = format!("{}/{}{}", self.base_url, db_idx, self.url_suffix);
-        let client = redis::Client::open(url).map_err(|e| AppError::Connect(e.to_string()))?;
+        let mut info = self.info.clone();
+        info.redis.db = db_idx;
+        let client = redis::Client::open(info).map_err(|e| AppError::Connect(e.to_string()))?;
         let cm = client
-            .get_connection_manager()
+            .get_connection_manager_with_config(manager_config())
             .await
             .map_err(|e| AppError::Connect(e.to_string()))?;
         w.insert(db_idx, cm.clone());
@@ -468,28 +470,17 @@ impl DatabaseDriver for RedisDriver {
                 host = config.host
             )));
         }
-        let auth = if config.password.is_empty() {
-            String::new()
-        } else if config.username.is_empty() {
-            format!(":{}@", config.password)
-        } else {
-            format!("{}:{}@", config.username, config.password)
-        };
-        // TLS：options["redis_tls"]=="true" → rediss://；redis_tls_insecure → #insecure 略過憑證驗證。
+        // TLS：options["redis_tls"]=="true" → 加密連線；redis_tls_insecure → 略過憑證驗證（自簽 / 內網）。
         let use_tls = config.options.get("redis_tls").is_some_and(|v| v == "true");
         let tls_insecure = config.options.get("redis_tls_insecure").is_some_and(|v| v == "true");
-        let scheme = if use_tls { "rediss" } else { "redis" };
-        let url_suffix = if use_tls && tls_insecure { "#insecure".to_string() } else { String::new() };
-        let base_url = format!("{scheme}://{auth}{}:{}", config.host, config.port);
+        let info = connection_info(config, use_tls, tls_insecure);
 
-        // 基礎 client 供 pub/sub 用（含 TLS suffix，確保加密連線的訂閱也走 TLS）。
-        let client = redis::Client::open(format!("{base_url}{url_suffix}"))
-            .map_err(|e| AppError::Connect(e.to_string()))?;
+        // 基礎 client 供 pub/sub 用（同一份連線參數，加密連線的訂閱也走 TLS）。
+        let client = redis::Client::open(info.clone()).map_err(|e| AppError::Connect(e.to_string()))?;
 
         let driver = Self {
             client,
-            base_url,
-            url_suffix,
+            info,
             db_count: 16, // 下方讀 CONFIG GET databases 覆寫；讀不到（如託管 Redis 禁 CONFIG）維持 16。
             conns: Default::default(),
             snapshot: Default::default(),
@@ -633,16 +624,44 @@ impl DatabaseDriver for RedisDriver {
         if parts.is_empty() {
             return Err(AppError::Query(t!("空命令").to_string()));
         }
-        let mut conn = self.conn(&db).await?;
+        let policy = console_policy(&parts);
+        if let ConsolePolicy::Reject(msg) = policy {
+            return Err(AppError::Query(msg));
+        }
         let mut cmd = redis::cmd(&parts[0]);
         for p in &parts[1..] {
             cmd.arg(p.as_str());
         }
         // 以通用 Value 取回，轉成字串列。
-        let val: redis::Value = cmd
-            .query_async(&mut conn)
-            .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
+        let val: redis::Value = if policy == ConsolePolicy::Dedicated {
+            // 阻塞指令開一條用完即丟的連線：放在共用的多工連線上，伺服器端整條連線會被卡住，
+            // 樹狀、網格、其他分頁排在它後面的指令全部跟著等（外層逾時只丟掉 future，伺服器照樣卡著）。
+            let mut info = self.info.clone();
+            info.redis.db = db.parse().unwrap_or(0);
+            let client = redis::Client::open(info).map_err(|e| AppError::Connect(e.to_string()))?;
+            let cfg = redis::AsyncConnectionConfig::new()
+                .set_connection_timeout(std::time::Duration::from_secs(10))
+                .set_response_timeout(std::time::Duration::from_secs(BLOCKING_MAX_SECS));
+            let mut conn = client
+                .get_multiplexed_async_connection_with_config(&cfg)
+                .await
+                .map_err(|e| AppError::Connect(e.to_string()))?;
+            cmd.query_async(&mut conn).await.map_err(|e| {
+                if e.is_timeout() {
+                    AppError::Query(tf!(
+                        "阻塞指令等了 {secs} 秒沒有結果，已中斷。主控台一次最多等 {secs} 秒，請把逾時參數設小一點（0 代表永遠等）。",
+                        secs = BLOCKING_MAX_SECS
+                    ))
+                } else {
+                    AppError::Query(e.to_string())
+                }
+            })?
+        } else {
+            let mut conn = self.conn(&db).await?;
+            cmd.query_async(&mut conn)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?
+        };
         let rows = redis_value_to_rows(&val);
         Ok(QueryResult {
             columns: vec!["result".to_string()],
@@ -1052,6 +1071,83 @@ impl DatabaseDriver for RedisDriver {
     }
 }
 
+/// 主控台阻塞指令最多等幾秒（之後中斷那條專屬連線）。
+const BLOCKING_MAX_SECS: u64 = 60;
+
+/// 主控台指令怎麼送。
+#[derive(Debug, PartialEq)]
+enum ConsolePolicy {
+    /// 走該 DB 共用的連線。
+    Shared,
+    /// 阻塞指令：開一條專屬連線、有上限地等。
+    Dedicated,
+    /// 不送，回傳原因。
+    Reject(String),
+}
+
+/// 判斷主控台的一行指令能不能送、該走哪條連線。
+///
+/// 主控台和樹狀 / 網格 / 鍵詳情共用同一條多工連線（每個 DB 一條），會改變「連線狀態」的指令
+/// 送上去，影響的是整個 App：`SELECT 3` 之後畫面上標著 DB 0 的操作全打到 DB 3；`MULTI` 之後
+/// 別處送的指令都被排進交易；`SUBSCRIBE` / `MONITOR` 讓連線只收推播、再也不回一般指令的結果。
+fn console_policy(parts: &[String]) -> ConsolePolicy {
+    let name = parts[0].to_ascii_uppercase();
+    let sub = parts.get(1).map(|s| s.to_ascii_uppercase()).unwrap_or_default();
+    let reject = |msg: &str| ConsolePolicy::Reject(msg.to_string());
+    match name.as_str() {
+        "SELECT" => reject(&t!(
+            "主控台不支援 SELECT 切換資料庫（會改到整個 App 共用的連線）。請改用主控台上方的資料庫選單，或在指令前加「編號:」，例如 3:GET key。"
+        )),
+        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" | "UNSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" | "MONITOR" => {
+            reject(&t!("訂閱與 MONITOR 會讓連線只收推播訊息，請改用「Pub/Sub」面板。"))
+        }
+        "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" => reject(&t!(
+            "主控台一次只送一行，交易（MULTI / EXEC）無法跨行進行，而且會把共用連線留在交易狀態。請改用 EVAL 腳本做原子操作。"
+        )),
+        "QUIT" | "RESET" | "HELLO" | "AUTH" => reject(&t!("這個指令會改變共用連線的登入或協定狀態，主控台不支援。")),
+        "CLIENT" if matches!(sub.as_str(), "REPLY" | "TRACKING" | "NO-EVICT" | "NO-TOUCH") => {
+            reject(&t!("這個指令會改變共用連線的登入或協定狀態，主控台不支援。"))
+        }
+        "BLPOP" | "BRPOP" | "BRPOPLPUSH" | "BLMOVE" | "BLMPOP" | "BZPOPMIN" | "BZPOPMAX" | "BZMPOP" | "WAIT" | "WAITAOF" => {
+            ConsolePolicy::Dedicated
+        }
+        "XREAD" | "XREADGROUP" if parts.iter().any(|p| p.eq_ignore_ascii_case("BLOCK")) => ConsolePolicy::Dedicated,
+        _ => ConsolePolicy::Shared,
+    }
+}
+
+/// 連線設定 → redis ConnectionInfo（db 一律 0，`conn()` 再依 DB 改）。
+fn connection_info(config: &ConnectionConfig, use_tls: bool, tls_insecure: bool) -> redis::ConnectionInfo {
+    // 使用者常把 IPv6 照 URL 習慣打成 `[::1]`；ConnectionAddr 要的是裸位址。
+    let host = config.host.trim().trim_start_matches('[').trim_end_matches(']').to_string();
+    let addr = if use_tls {
+        redis::ConnectionAddr::TcpTls { host, port: config.port, insecure: tls_insecure, tls_params: None }
+    } else {
+        redis::ConnectionAddr::Tcp(host, config.port)
+    };
+    let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_string());
+    redis::ConnectionInfo {
+        addr,
+        redis: redis::RedisConnectionInfo {
+            db: 0,
+            username: non_empty(&config.username),
+            password: non_empty(&config.password),
+            ..Default::default()
+        },
+    }
+}
+
+/// 各 DB 共用連線（ConnectionManager）的逾時與重連設定。
+///
+/// redis crate 預設「連線不逾時、斷線重試 6 次（指數退避）、回應不逾時」：主機打錯時要等作業系統的
+/// TCP 逾時（Windows 約 21 秒）× 6 次才報錯，畫面看起來就是當掉；伺服器卡住時查詢也永遠不回來。
+fn manager_config() -> redis::aio::ConnectionManagerConfig {
+    redis::aio::ConnectionManagerConfig::new()
+        .set_connection_timeout(std::time::Duration::from_secs(10))
+        .set_number_of_retries(2)
+        .set_response_timeout(std::time::Duration::from_secs(120))
+}
+
 /// SCAN 全掃收集符合 pattern 的鍵（游標式、安全上限 100k、排序去重）。
 /// SCAN 在 rehash 期間可能重複回傳同一 key，故排序後 dedup 避免重複列與灌水總數。
 async fn scan_all_keys(
@@ -1230,7 +1326,14 @@ fn redis_value_to_rows(v: &redis::Value) -> Vec<Vec<Option<String>>> {
             .iter()
             .flat_map(|it| redis_value_to_rows(it))
             .collect(),
-        other => vec![vec![Some(format!("{other:?}"))]],
+        // RESP3 的 map（HGETALL、CONFIG GET、XINFO…）攤成 field / value 交錯，與 RESP2 的陣列回法一致。
+        redis::Value::Map(pairs) => pairs
+            .iter()
+            .flat_map(|(k, v)| redis_value_to_rows(k).into_iter().chain(redis_value_to_rows(v)))
+            .collect(),
+        redis::Value::Attribute { data, .. } => redis_value_to_rows(data),
+        redis::Value::Push { data, .. } => data.iter().flat_map(redis_value_to_rows).collect(),
+        other => vec![vec![Some(rv_to_string(other))]],
     }
 }
 
@@ -1242,6 +1345,11 @@ fn rv_to_string(v: &redis::Value) -> String {
         redis::Value::SimpleString(s) => s.clone(),
         redis::Value::Okay => "OK".to_string(),
         redis::Value::BulkString(b) => String::from_utf8_lossy(b).into_owned(),
+        // RESP3 純量：以前一律印 Rust 的 Debug 格式（`Double(1.5)`、`VerbatimString { format: … }`）。
+        redis::Value::Double(d) => d.to_string(),
+        redis::Value::Boolean(b) => b.to_string(),
+        redis::Value::VerbatimString { text, .. } => text.clone(),
+        redis::Value::ServerError(e) => format!("(error) {}", e.details().unwrap_or_default()),
         other => format!("{other:?}"),
     }
 }
@@ -1280,4 +1388,73 @@ fn parse_client_list(raw: &str) -> Vec<ClientInfo> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(host: &str, user: &str, pass: &str) -> ConnectionConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": "t", "name": "t", "kind": "redis", "host": host, "port": 6380,
+            "username": user, "password": pass, "database": null, "max_connections": 1,
+        }))
+        .expect("最小欄位的 ConnectionConfig 應可反序列化")
+    }
+
+    #[test]
+    fn connection_info_keeps_special_chars_in_password_verbatim() {
+        // 以前拼 URL：`#` 之後被當成 fragment、`@` 讓主機名稱跑掉。
+        let info = connection_info(&cfg("cache.local", "app", "p@ss:w/rd#1%?"), false, false);
+        assert_eq!(info.redis.password.as_deref(), Some("p@ss:w/rd#1%?"));
+        assert_eq!(info.redis.username.as_deref(), Some("app"));
+        assert_eq!(info.addr, redis::ConnectionAddr::Tcp("cache.local".into(), 6380));
+    }
+
+    #[test]
+    fn connection_info_empty_auth_and_ipv6_and_tls() {
+        let info = connection_info(&cfg("[::1]", "", ""), true, true);
+        assert_eq!(info.redis.password, None);
+        assert_eq!(info.redis.username, None);
+        match info.addr {
+            redis::ConnectionAddr::TcpTls { host, port, insecure, .. } => {
+                assert_eq!((host.as_str(), port, insecure), ("::1", 6380, true));
+            }
+            other => panic!("應為 TLS 位址：{other:?}"),
+        }
+    }
+
+    fn policy(line: &str) -> ConsolePolicy {
+        console_policy(&split_args(line))
+    }
+
+    #[test]
+    fn console_policy_rejects_commands_that_change_shared_connection_state() {
+        for line in ["SELECT 3", "select 1", "SUBSCRIBE ch", "psubscribe *", "MONITOR", "MULTI", "EXEC", "QUIT", "HELLO 3", "CLIENT REPLY OFF"] {
+            assert!(matches!(policy(line), ConsolePolicy::Reject(_)), "{line}");
+        }
+    }
+
+    #[test]
+    fn console_policy_sends_blocking_commands_to_a_dedicated_connection() {
+        for line in ["BLPOP q 0", "brpop q 5", "BZPOPMIN z 0", "XREAD BLOCK 0 STREAMS s $", "WAIT 1 0"] {
+            assert_eq!(policy(line), ConsolePolicy::Dedicated, "{line}");
+        }
+    }
+
+    #[test]
+    fn console_policy_allows_ordinary_commands() {
+        for line in ["GET k", "XREAD COUNT 10 STREAMS s 0", "CLIENT LIST", "SCAN 0", "EVAL \"return 1\" 0"] {
+            assert_eq!(policy(line), ConsolePolicy::Shared, "{line}");
+        }
+    }
+
+    #[test]
+    fn redis_value_to_rows_flattens_resp3_types_readably() {
+        use redis::Value as V;
+        let map = V::Map(vec![(V::BulkString(b"f".to_vec()), V::Int(1))]);
+        assert_eq!(redis_value_to_rows(&map), vec![vec![Some("f".into())], vec![Some("1".into())]]);
+        assert_eq!(redis_value_to_rows(&V::Double(1.5)), vec![vec![Some("1.5".into())]]);
+        assert_eq!(redis_value_to_rows(&V::Boolean(true)), vec![vec![Some("true".into())]]);
+    }
 }

@@ -758,6 +758,11 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
 
         // ---- db/redis.rs ----
         "非預期的 PING 回應：{pong}" => "Unexpected PING response: {pong}",
+        "主控台不支援 SELECT 切換資料庫（會改到整個 App 共用的連線）。請改用主控台上方的資料庫選單，或在指令前加「編號:」，例如 3:GET key。" => "SELECT is not supported in the console (it would switch the connection shared by the whole app). Use the database picker above the console, or prefix the command with the DB number, e.g. 3:GET key.",
+        "訂閱與 MONITOR 會讓連線只收推播訊息，請改用「Pub/Sub」面板。" => "SUBSCRIBE and MONITOR turn the connection into push-only mode. Use the Pub/Sub panel instead.",
+        "主控台一次只送一行，交易（MULTI / EXEC）無法跨行進行，而且會把共用連線留在交易狀態。請改用 EVAL 腳本做原子操作。" => "The console sends one line at a time, so a MULTI / EXEC transaction cannot span lines and would leave the shared connection inside a transaction. Use an EVAL script for atomic operations.",
+        "這個指令會改變共用連線的登入或協定狀態，主控台不支援。" => "This command changes the login or protocol state of the shared connection and is not supported in the console.",
+        "阻塞指令等了 {secs} 秒沒有結果，已中斷。主控台一次最多等 {secs} 秒，請把逾時參數設小一點（0 代表永遠等）。" => "The blocking command got no result within {secs} seconds and was stopped. The console waits at most {secs} seconds; use a smaller timeout argument (0 means wait forever).",
         "主機欄含有逗號或等號：{host}。這看起來是 StackExchange.Redis 連線字串，請貼到上方「連線字串」欄按「解析並填入」，主機欄只留主機名稱。" => "The host field contains a comma or equals sign: {host}. This looks like a StackExchange.Redis connection string. Paste it into the Connection string field above and click Parse, so the host field holds only the host name.",
         "秒；-1 表示無到期" => "seconds; -1 means no expiry",
         "空命令" => "Empty command",
