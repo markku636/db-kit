@@ -273,7 +273,6 @@ export function UiHost() {
       {confirmReq && (
         <div
           className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[110]"
-          onClick={() => resolveConfirm(false)}
         >
           <div
             className="bg-elevated w-[380px] max-w-[92vw] rounded-lg border border-fg/10 shadow-2xl"
@@ -288,7 +287,6 @@ export function UiHost() {
             <div className="px-5 py-3 border-t border-fg/10 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => resolveConfirm(false)}
                 className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5"
               >
                 {t("取消")}
@@ -332,7 +330,6 @@ function PromptDialog() {
   return (
     <div
       className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[110]"
-      onClick={() => resolvePrompt(null)}
     >
       <div
         className="bg-elevated w-[380px] max-w-[92vw] rounded-lg border border-fg/10 shadow-2xl"
@@ -360,7 +357,6 @@ function PromptDialog() {
         <div className="px-5 py-3 border-t border-fg/10 flex justify-end gap-2">
           <button
             type="button"
-            onClick={() => resolvePrompt(null)}
             className="px-3 py-1.5 text-sm rounded border border-fg/15 hover:bg-fg/5"
           >
             {t("取消")}

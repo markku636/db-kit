@@ -70,7 +70,7 @@ import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
   resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
-  quoteIdent, qualifiedName, isMysqlFamily, supportsRoutines, supportsQueryEditorKind, supportsSchemaCompare,
+  quoteIdent, qualifiedName, selectTopSql, isMysqlFamily, supportsRoutines, supportsQueryEditorKind, supportsSchemaCompare,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
@@ -216,7 +216,7 @@ const AiActionMenu = lazyOverlay(() => import("./AiActionMenu"));
 const AiInlineInput = lazyOverlay(() => import("./AiInlineInput"));
 
 // ---- 依選取的樹節點，組「新查詢分頁」的起始 SQL（對標 DataGrip / Navicat：在物件上開查詢即帶範圍）----
-//  - 資料表 / 檢視：USE db;（mysql / external）或 SET search_path（postgres）＋ 一條可執行的 SELECT … LIMIT 100；
+//  - 資料表 / 檢視：USE db;（mysql / external）或 SET search_path（postgres）＋ 一條可執行的「前 100 筆」SELECT（依方言 LIMIT / TOP / FETCH FIRST）；
 //    sqlite 無多庫概念 → 僅 SELECT；mongo → find JSON；redis → 無此語意（回 undefined，開空白分頁）。
 //  - 資料庫：僅 USE / search_path 前綴，游標留在空白處等使用者輸入。
 //  - 連線 / 未選取：回 undefined（開乾淨空白分頁，僅切到該連線）。
@@ -232,7 +232,7 @@ function buildScopedSql(node: SelectedNode | null): string | undefined {
     return JSON.stringify({ index: node.table, query: { match_all: {} }, size: 200 }, null, 2);
   }
   if (node.kind === "redis" || node.kind === "kafka" || isContainerKind(node.kind)) return undefined;
-  const select = `SELECT *\nFROM ${qualifiedName(node.kind, node.db, node.table)}\nLIMIT 100;`;
+  const select = selectTopSql(node.kind, qualifiedName(node.kind, node.db, node.table));
   return use ? `${use};\n\n${select}` : select;
 }
 
@@ -2059,14 +2059,14 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
     else useStore.getState().newQueryTab(undefined, connId);
   };
   const genSelect = (m: TblRef) =>
-    sendQuery(m.connId, `SELECT *\nFROM ${qualified(m.kind, m.db, m.table)}\nLIMIT 100;`);
+    sendQuery(m.connId, selectTopSql(m.kind, qualified(m.kind, m.db, m.table)));
   // 明列欄位的 SELECT（避免 SELECT *，便於刪減欄位；致敬 DataGrip / Navicat 的展開 *）。
   const genSelectColumns = async (m: TblRef) => {
     try {
       const cols = await api.tableColumns(m.connId, m.db, m.table);
       if (cols.length === 0) { genSelect(m); return; }
       const names = cols.map((c) => quoteId(m.kind, c.name)).join(", ");
-      sendQuery(m.connId, `SELECT ${names}\nFROM ${qualified(m.kind, m.db, m.table)}\nLIMIT 100;`);
+      sendQuery(m.connId, selectTopSql(m.kind, qualified(m.kind, m.db, m.table), names));
     } catch (e: any) {
       toast.error(e?.message ?? t("產生 SELECT 失敗"));
     }
@@ -7493,7 +7493,7 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, conn, writ
         )}
 
         {rowDetail !== null && viewRows[rowDetail] && (
-          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={() => setRowDetail(null)}>
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]">
             <div className={`bg-elevated w-[560px] max-w-[92vw] max-h-[84vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${rowDetailShell}`}
               onClick={(e) => e.stopPropagation()}>
               <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">

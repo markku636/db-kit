@@ -2060,7 +2060,7 @@ function FieldStatsModal({ col, stats, onClose }: { col: string; stats: ColumnSt
   useModalOverlay(onClose);
   const typeTotal = stats.types.reduce((a, [, n]) => a + n, 0) || 1;
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
       <div className={`bg-elevated w-[560px] max-w-[92vw] max-h-[80vh] overflow-auto rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
@@ -2167,7 +2167,7 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
       <div className={`bg-elevated w-[640px] max-h-[85vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">
@@ -2230,7 +2230,7 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
   }, [hasPrev, hasNext, onPrev, onNext, onClose]);
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[95]">
       <div className={`bg-elevated w-[560px] max-w-[92vw] max-h-[82vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2 text-sm">
@@ -2580,7 +2580,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   const isCollection = page != null && page.type_ !== "string" && page.type_ !== "none";
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
       <div className={`bg-elevated w-[560px] max-h-[80vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
         onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-fg/10 flex items-center gap-2">

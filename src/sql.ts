@@ -44,6 +44,12 @@ export function qualifiedName(kind: DbKind, db: string, table: string): string {
   if (kind === "mssql") return `${quoteIdent(kind, db)}.${mssqlSchemaName(table)}`;
   return `${quoteIdent(kind, db)}.${quoteIdent(kind, table)}`;
 }
+// 「看前 n 筆」的 SELECT，依方言用 LIMIT / TOP / FETCH FIRST（右鍵產生查詢、新查詢分頁共用）。
+export function selectTopSql(kind: DbKind, from: string, cols = "*", n = 100): string {
+  if (kind === "mssql") return `SELECT TOP (${n}) ${cols}\nFROM ${from};`;
+  if (kind === "oracle") return `SELECT ${cols}\nFROM ${from}\nFETCH FIRST ${n} ROWS ONLY;`;
+  return `SELECT ${cols}\nFROM ${from}\nLIMIT ${n};`;
+}
 // SQL Server 物件名可能內嵌 schema（`sales.sp_x`，後端 list_* 對非 dbo 的物件就這樣回）；第一個點之前是 schema，沒有就是 dbo。
 export function splitMssqlName(name: string): { schema: string; obj: string } {
   const dot = name.indexOf(".");

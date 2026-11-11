@@ -58,7 +58,7 @@ export default function Modal({
   size = "md",
   footer,
   danger = false,
-  dismissOnBackdrop = true,
+  dismissOnBackdrop = false,
   zClass = "z-[100]",
   bodyClassName = "p-5 overflow-auto",
   className = "",
