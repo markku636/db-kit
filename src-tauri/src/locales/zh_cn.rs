@@ -510,6 +510,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "找不到具名執行個體「{inst}」：{host} 上的 SQL Server Browser 服務（UDP 1434）沒有回應。請確認該服務已啟動、防火牆放行 UDP 1434，或在主機欄改寫成「主機,埠」直接指定埠。（{detail}）" => "找不到命名实例「{inst}」：{host} 上的 SQL Server Browser 服务（UDP 1434）没有响应。请确认该服务已启动、防火墙放行 UDP 1434，或在主机栏改写成「主机,端口」直接指定端口。（{detail}）",
         "鍵「{key}」已存在，為避免覆蓋已取消新增。要改值請直接開啟該鍵編輯。" => "键「{key}」已存在，为避免覆盖已取消新增。要改值请直接打开该键编辑。",
         "結果裡有 DB Kit 還無法解讀的欄位型別（{detail}）。請在查詢裡先轉成文字：sql_variant 用 CAST(欄位 AS NVARCHAR(4000))，geography / geometry 用 欄位.STAsText()，hierarchyid 等 CLR 型別用 欄位.ToString()。" => "结果里有 DB Kit 还无法解读的列类型（{detail}）。请在查询里先转成文本：sql_variant 用 CAST(列 AS NVARCHAR(4000))，geography / geometry 用 列.STAsText()，hierarchyid 等 CLR 类型用 列.ToString()。",
+        "這個批次結束時還有未提交的交易（BEGIN TRAN 之後沒有 COMMIT），已自動回滾，避免它留在連線池裡影響其他查詢。要跨批次使用交易，請在查詢分頁上方選好「目前資料庫」（同一條連線會留給後續批次，可以之後再 COMMIT / ROLLBACK），或把 COMMIT 寫在同一個批次。" => "这个批次结束时还有未提交的事务（BEGIN TRAN 之后没有 COMMIT），已自动回滚，避免它留在连接池里影响其他查询。要跨批次使用事务，请在查询页上方选好「当前数据库」（同一条连接会留给后续批次，可以之后再 COMMIT / ROLLBACK），或把 COMMIT 写在同一个批次。",
         "stream 項目至少要有一個欄位" => "stream 条目至少要有一个字段",
         "主控台不支援 SELECT 切換資料庫（會改到整個 App 共用的連線）。請改用主控台上方的資料庫選單，或在指令前加「編號:」，例如 3:GET key。" => "主控台不支持 SELECT 切换数据库（会改到整个 App 共用的连接）。请改用控制台上方的数据库菜单，或在命令前加「编号:」，例如 3:GET key。",
         "訂閱與 MONITOR 會讓連線只收推播訊息，請改用「Pub/Sub」面板。" => "订阅与 MONITOR 会让连接只收推送消息，请改用「Pub/Sub」面板。",

@@ -206,7 +206,12 @@ impl MssqlDriver {
             let spid = session_spid(&mut conn).await?;
             let _guard = self.track(spid);
             return match std::panic::AssertUnwindSafe(run_on(&mut conn, sql, mode)).catch_unwind().await {
-                Ok(r) => r,
+                Ok(Ok(out)) => Self::rollback_if_open(&mut conn).await.map(|()| out),
+                Ok(Err(e)) => {
+                    // 失敗的批次也可能留下開著的交易（BEGIN TRAN 之後某句出錯），一樣不能帶回池裡。
+                    let _ = Self::rollback_if_open(&mut conn).await;
+                    Err(e)
+                }
                 Err(p) => {
                     self.replace_broken(&mut conn).await;
                     Err(unsupported_type_error(p))
@@ -238,8 +243,13 @@ impl MssqlDriver {
     async fn scoped_client(&self, db: &str) -> AppResult<bb8_tiberius::rt::Client> {
         let cached = self.scoped.lock().take();
         if let Some(s) = cached {
-            if s.db.eq_ignore_ascii_case(db) && s.used.elapsed() < SCOPED_IDLE {
+            // 有未提交交易的連線不受閒置時間限制：使用者可能正在看 BEGIN TRAN 之後的結果，等一下才 COMMIT。
+            if s.db.eq_ignore_ascii_case(db) && (s.open_tran || s.used.elapsed() < SCOPED_IDLE) {
                 return Ok(s.client);
+            }
+            if s.open_tran {
+                // 換到別的庫：交易還開著的那條放回去留著，這次另開一條（丟掉它等於默默回滾使用者的交易）。
+                *self.scoped.lock() = Some(s);
             }
         }
         let mut c = self.dedicated_client().await?;
@@ -255,10 +265,36 @@ impl MssqlDriver {
     /// 把專屬連線留給下一個查詢。以 `DB_NAME()` 記它「現在」在哪個庫——批次裡自己又 USE 了別的庫時，
     /// 快取的名字要跟著換，否則下一個指定原庫的查詢會跑在錯的庫上。
     async fn put_scoped(&self, mut client: bb8_tiberius::rt::Client) {
-        let Ok(stream) = client.simple_query("SELECT DB_NAME()").await else { return };
+        let Ok(stream) = client.simple_query("SELECT DB_NAME(), @@TRANCOUNT").await else { return };
         let Ok(Some(row)) = stream.into_row().await else { return };
         let Some(db) = get_str(&row, 0) else { return };
-        *self.scoped.lock() = Some(ScopedConn { db, client, used: std::time::Instant::now() });
+        let open_tran = row.try_get::<i32, _>(1).ok().flatten().unwrap_or(0) > 0;
+        let mut slot = self.scoped.lock();
+        // 槽位只有一個：裡面那條還有未提交交易時，不拿沒有交易的這條去換（被換掉的連線關閉＝交易回滾）。
+        if slot.as_ref().is_some_and(|cur| cur.open_tran) && !open_tran {
+            return;
+        }
+        *slot = Some(ScopedConn { db, client, used: std::time::Instant::now(), open_tran });
+    }
+
+    /// 走連線池的批次跑完後，連線若還在交易裡就回滾：它會回到池裡，之後別的查詢（甚至格內編輯）
+    /// 借到它就跑進這個沒人會提交的交易，連線被回收時一起回滾，改動就這樣消失。
+    async fn rollback_if_open(conn: &mut bb8_tiberius::rt::Client) -> AppResult<()> {
+        let open = match conn.simple_query("SELECT @@TRANCOUNT").await {
+            Ok(stream) => stream.into_row().await.ok().flatten().and_then(|r| r.try_get::<i32, _>(0).ok().flatten()).unwrap_or(0),
+            Err(_) => 0,
+        };
+        if open == 0 {
+            return Ok(());
+        }
+        // 結果串流要讀完，連線的協定狀態才乾淨（它接著就回池了）。
+        if let Ok(stream) = conn.simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION").await {
+            let _ = stream.into_results().await;
+        }
+        Err(AppError::Query(t!(
+            "這個批次結束時還有未提交的交易（BEGIN TRAN 之後沒有 COMMIT），已自動回滾，避免它留在連線池裡影響其他查詢。要跨批次使用交易，請在查詢分頁上方選好「目前資料庫」（同一條連線會留給後續批次，可以之後再 COMMIT / ROLLBACK），或把 COMMIT 寫在同一個批次。"
+        )
+        .to_string()))
     }
 
     /// 互動查詢的寫入批次：回受影響列數（也登記 SPID，長時間的 UPDATE / DELETE 能取消）。
@@ -591,7 +627,8 @@ impl DatabaseDriver for MssqlDriver {
 
     /// SQL Server 沒有「只中止當前語句」的 T-SQL（MySQL `KILL QUERY` / PG `pg_cancel_backend` 的對應物是
     /// TDS attention 封包，tiberius 不支援），只能 `KILL <spid>` 結束整個工作階段：未提交的交易會回滾。
-    /// 互動查詢本來就是每次從池裡借一條、不跨查詢保留交易，所以代價只是那條連線——
+    /// 走連線池的互動查詢不跨批次保留交易（見 `rollback_if_open`），代價只是那條連線；「目前資料庫」
+    /// 專屬連線上若還開著交易，KILL 會連同交易一起回滾，失敗的連線也不會再被沿用——
     /// 被 KILL 的連線還池後，bb8 預設的 test_on_check_out（`SELECT 1`）會把它淘汰，不會污染下一個查詢。
     /// 需要 `ALTER ANY CONNECTION` 權限；沒有時把伺服器的錯誤訊息原樣回給前端。
     async fn cancel_query(&self) -> AppResult<usize> {
@@ -1052,10 +1089,12 @@ struct ScopedConn {
     db: String,
     client: bb8_tiberius::rt::Client,
     used: std::time::Instant,
+    /// 跑完時 @@TRANCOUNT > 0（使用者開了交易還沒結束）。
+    open_tran: bool,
 }
 
-/// 專屬連線閒置多久就不再沿用（伺服器端可能已經把它斷掉）。
-const SCOPED_IDLE: Duration = Duration::from_secs(60);
+/// 專屬連線閒置多久就不再沿用（伺服器端可能已經把它斷掉）。有未提交交易的不受此限。
+const SCOPED_IDLE: Duration = Duration::from_secs(300);
 
 /// 在指定連線上跑一個批次。
 ///
@@ -1381,6 +1420,10 @@ fn mssql_type_str(ty: &str, max_length: i16, precision: u8, scale: u8) -> String
 fn batch_returns_rows(sql: &str) -> bool {
     let code = tsql_code_only(sql).to_ascii_lowercase();
     let toks = tsql_tokens(&code);
+    // T-SQL 允許批次的第一句直接寫程序名稱、省略 EXEC（`sp_who2`、`dbo.usp_report 2024`）。
+    if toks.first().is_some_and(|t| is_proc_call_head(t)) {
+        return true;
+    }
     let mut depth = 0usize;
     // 目前所在語句的種類（只追 SELECT 判讀需要的那幾種）。
     let mut cur: &str = "";
@@ -1489,6 +1532,20 @@ fn tsql_code_only(sql: &str) -> String {
     }
     // 略過的區段起訖都是 ASCII，保留下來的位元組仍是合法 UTF-8。
     String::from_utf8(out).unwrap_or_default()
+}
+
+/// 批次第一個字詞不是任何 T-SQL 語句關鍵字、也不是變數 / 標點 → 視為省略 EXEC 的程序呼叫。
+fn is_proc_call_head(tok: &str) -> bool {
+    const STATEMENT_HEADS: &[&str] = &[
+        "select", "insert", "update", "delete", "merge", "with", "declare", "set", "if", "else", "begin", "end",
+        "while", "print", "use", "return", "drop", "truncate", "commit", "rollback", "create", "alter", "grant",
+        "revoke", "deny", "exec", "execute", "go", "raiserror", "throw", "save", "waitfor", "break", "continue",
+        "goto", "open", "close", "fetch", "deallocate", "kill", "backup", "restore", "dbcc", "bulk", "checkpoint",
+        "reconfigure", "shutdown", "readtext", "writetext", "updatetext", "enable", "disable", "receive", "send",
+        "get", "move", "setuser", "revert", "lineno", "table", "values",
+    ];
+    let first = tok.as_bytes().first().copied().unwrap_or(b'@');
+    (first.is_ascii_alphabetic() || first == b'_' || first >= 0x80) && !STATEMENT_HEADS.contains(&tok)
 }
 
 /// `tsql_code_only` 之後的 T-SQL 粗切詞：字詞（含 `@` `#` `_` `$`）與 `(` `)` `;` 各成一個 token，其餘略過。
@@ -1691,6 +1748,14 @@ SELECT SCOPE_IDENTITY()"));
         assert!(batch_returns_rows("UPDATE t SET a = 1 OUTPUT inserted.* WHERE id = 1"));
         assert!(!batch_returns_rows("IF EXISTS (SELECT 1 FROM t) DELETE FROM t"));
         assert!(!batch_returns_rows("BEGIN TRAN; UPDATE t SET a = 1; COMMIT"));
+    }
+
+    #[test]
+    fn batch_returns_rows_treats_bare_procedure_name_as_exec() {
+        assert!(batch_returns_rows("sp_who2"));
+        assert!(batch_returns_rows("-- 報表\ndbo.usp_report 2024"));
+        assert!(!batch_returns_rows("TRUNCATE TABLE t"));
+        assert!(!batch_returns_rows("@x"));
     }
 
     #[test]
