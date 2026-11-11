@@ -1780,18 +1780,18 @@ async fn redis_binary_values_are_viewable() {
     let _: () = redis::cmd("RPUSH").arg("bin:list").arg("text").arg(gz).query_async(&mut conn).await.unwrap();
     let _: () = redis::cmd("SET").arg(&[b'k', 0xff][..]).arg("v").query_async(&mut conn).await.unwrap();
 
-    let p = d.key_page("4", "bin:str", 0, 100, "", false).await.expect("二進位字串應可讀");
+    let p = d.key_page("4", "bin:str", 0, 100, "", false, None).await.expect("二進位字串應可讀");
     assert!(p.binary);
     assert_eq!(p.members, vec!["\u{1f}\\x8b\u{8}\u{0}ok".to_string()]);
-    let p = d.key_page("4", "bin:hash", 0, 100, "", false).await.expect("二進位 hash 應可讀");
+    let p = d.key_page("4", "bin:hash", 0, 100, "", false, None).await.expect("二進位 hash 應可讀");
     assert!(p.binary);
     assert_eq!(p.fields, vec!["f".to_string()]);
-    let p = d.key_page("4", "bin:list", 0, 100, "", false).await.expect("二進位 list 應可讀");
+    let p = d.key_page("4", "bin:list", 0, 100, "", false, None).await.expect("二進位 list 應可讀");
     assert!(p.binary);
     assert_eq!(p.members[0], "text");
     // 純文字鍵不受影響。
     d.query("4:SET plain hello").await.unwrap();
-    assert!(!d.key_page("4", "plain", 0, 100, "", false).await.unwrap().binary);
+    assert!(!d.key_page("4", "plain", 0, 100, "", false, None).await.unwrap().binary);
     // 有非 UTF-8 鍵名時，鍵清單照樣列得出來。
     let keys = d.scan_keys("4", "*", 100).await.expect("鍵清單不應因怪鍵名失敗");
     assert!(keys.keys.iter().any(|k| k == "k\\xff"), "{:?}", keys.keys);
@@ -1811,7 +1811,7 @@ async fn redis_stream_paging_groups_and_edits() {
     }
     d.query("5:XGROUP CREATE s workers 2-0").await.unwrap();
 
-    let p1 = d.key_page_after("5", "s", 0, 2, "", false, None).await.unwrap();
+    let p1 = d.key_page("5", "s", 0, 2, "", false, None).await.unwrap();
     assert_eq!(p1.type_, "stream");
     assert_eq!(p1.total, 5);
     assert_eq!(p1.fields, vec!["1-0", "2-0"]);
@@ -1822,19 +1822,19 @@ async fn redis_stream_paging_groups_and_edits() {
     assert_eq!(p1.groups[0].name, "workers");
     assert_eq!(p1.groups[0].last_delivered_id, "2-0");
 
-    let p2 = d.key_page_after("5", "s", p1.cursor, 2, "", false, p1.next_id.as_deref()).await.unwrap();
+    let p2 = d.key_page("5", "s", p1.cursor, 2, "", false, p1.next_id.as_deref()).await.unwrap();
     assert_eq!(p2.fields, vec!["3-0", "4-0"]);
-    let p3 = d.key_page_after("5", "s", p2.cursor, 2, "", false, p2.next_id.as_deref()).await.unwrap();
+    let p3 = d.key_page("5", "s", p2.cursor, 2, "", false, p2.next_id.as_deref()).await.unwrap();
     assert_eq!(p3.fields, vec!["5-0"]);
     assert_eq!((p3.next_id.clone(), p3.cursor), (None, 0));
 
     // 過濾：比對 ID 或欄位內容。
-    let f = d.key_page_after("5", "s", 0, 100, "第 4", false, None).await.unwrap();
+    let f = d.key_page("5", "s", 0, 100, "第 4", false, None).await.unwrap();
     assert_eq!(f.fields, vec!["4-0"]);
 
     d.key_edit("5", "s", &KeyEdit::StreamAdd { fields: vec![("k".into(), "v".into())] }).await.unwrap();
     assert_eq!(d.key_edit("5", "s", &KeyEdit::StreamDelete { id: "1-0".into() }).await.unwrap(), 1);
-    let all = d.key_page_after("5", "s", 0, 100, "", false, None).await.unwrap();
+    let all = d.key_page("5", "s", 0, 100, "", false, None).await.unwrap();
     assert_eq!(all.total, 5);
     assert_eq!(all.fields[0], "2-0");
     assert!(all.members.last().unwrap().contains(r#""k":"v""#));

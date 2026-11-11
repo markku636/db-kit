@@ -23,6 +23,8 @@ pub struct MssqlDriver {
     running: parking_lot::Mutex<std::collections::HashSet<i16>>,
     /// 連線池背景建立連線失敗的最近原因（見 `LastPoolError`）。
     last_err: LastPoolError,
+    /// 「目前資料庫」專屬連線（MRU 一條，見 `interactive`）。
+    scoped: parking_lot::Mutex<Option<ScopedConn>>,
 }
 
 /// bb8 的 `get()` 在背景建立連線，失敗原因只交給 error sink，呼叫端拿到的永遠是等滿
@@ -109,6 +111,20 @@ impl MssqlDriver {
     /// 所以開一條專屬連線：ON → 送查詢（回一列 XML）→ 連線用完即丟（不必再 OFF，也不會污染池）。
     pub(crate) async fn showplan_xml(&self, sql: &str) -> AppResult<String> {
         let mut c = self.dedicated_client().await?;
+        // 「目前資料庫」帶進來的 `USE [庫]` 要先真的執行：SHOWPLAN 模式下語句都只編譯不執行，
+        // USE 也不例外，計畫會在連線預設庫裡編譯，表名全部「無效的物件名稱」。
+        let sql = match split_leading_use(sql) {
+            Some((db, rest)) => {
+                c.simple_query(format!("USE [{}]", esc(&db)))
+                    .await
+                    .map_err(|e| AppError::Query(e.to_string()))?
+                    .into_results()
+                    .await
+                    .map_err(|e| AppError::Query(e.to_string()))?;
+                rest
+            }
+            None => sql,
+        };
         c.simple_query("SET SHOWPLAN_XML ON")
             .await
             .map_err(|e| AppError::Query(e.to_string()))?
@@ -134,87 +150,75 @@ impl MssqlDriver {
         stream.into_first_result().await.map_err(|e| AppError::Query(e.to_string()))
     }
 
-    /// 取回第一個結果集的列，截斷於 cap（0 = 不限），回傳 (rows, 是否截斷)。
-    /// 達 cap 後「繼續 drain 剩餘封包但不儲存」— tiberius stream 提早 drop 會讓連線的
-    /// TDS 協定狀態殘留，回 bb8 池後污染後續查詢；drain 完才能安全還池。
-    async fn query_rows_capped(&self, sql: &str, cap: usize) -> AppResult<(Vec<tiberius::Row>, bool)> {
-        use futures::TryStreamExt;
-        let mut conn = self.pooled().await?;
-        // 只給互動查詢用：登記 SPID，cancel_query 才有目標可 KILL。
-        let spid = session_spid(&mut conn).await?;
-        let _guard = self.track(spid);
-        let mut stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
-        let mut rows: Vec<tiberius::Row> = Vec::new();
-        let mut truncated = false;
-        while let Some(item) = stream.try_next().await.map_err(|e| AppError::Query(e.to_string()))? {
-            if let tiberius::QueryItem::Row(row) = item {
-                // 與 into_first_result 對齊：只取第一個結果集，其餘 drain 不儲存。
-                if row.result_index() != 0 {
-                    continue;
-                }
-                if cap > 0 && rows.len() >= cap {
-                    truncated = true;
-                    continue;
-                }
-                rows.push(row);
+    /// 互動查詢（查詢分頁 / MCP / CLI）的共同入口：登記 SPID 讓 cancel_query 有目標可 KILL。
+    ///
+    /// 開頭帶 `USE [庫]`（「目前資料庫」選單、或批次自己寫的）時，改在一條**已切到那個庫的專屬連線**上跑：
+    /// USE 是連線狀態，在池裡的連線上切完再還回去，下一個借到它的查詢就跑在錯的庫；
+    /// 而 `USE [x]; CREATE PROCEDURE …` 整段送出又會違反「CREATE PROCEDURE 必須是批次第一句」。
+    /// 那條連線跑完會留著（見 `put_scoped`），同一個庫的下一個批次接著用：連續幾個 GO 批次之間的
+    /// 暫存表、變數以外的工作階段狀態因此延續，也省掉每次重新登入。
+    async fn interactive(&self, sql: &str, mode: RunMode) -> AppResult<RunOut> {
+        let Some((db, rest)) = split_leading_use(sql) else {
+            let mut conn = self.pooled().await?;
+            let spid = session_spid(&mut conn).await?;
+            let _guard = self.track(spid);
+            return run_on(&mut conn, sql, mode).await;
+        };
+        let mut client = self.scoped_client(&db).await?;
+        let spid = session_spid(&mut client).await?;
+        let result = {
+            let _guard = self.track(spid);
+            if crate::db::stmt::statement_head(rest).trim().is_empty() {
+                Ok(mode.empty())
+            } else {
+                run_on(&mut client, rest, mode).await
             }
+        };
+        // 失敗的連線不留（可能是被 KILL、斷線，或停在不明狀態），下次重開一條。
+        if result.is_ok() {
+            self.put_scoped(client).await;
         }
-        Ok((rows, truncated))
+        result
     }
 
-    /// 取回「所有」結果集，每集各自截斷於 cap（0 = 不限）。達 cap 後續封包照樣 drain 但不儲存
-    /// —— 與 query_rows_capped 相同的 TDS 紀律：stream 未讀完就還池會污染後續查詢。
-    /// 以 Metadata item 開格，空結果集也保有欄位頭；result_index 防禦性補格。
-    async fn query_sets_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
-        use futures::TryStreamExt;
-        let mut conn = self.pooled().await?;
-        let spid = session_spid(&mut conn).await?;
-        let _guard = self.track(spid);
-        let mut stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
-        let mut sets: Vec<QueryResult> = Vec::new();
-        while let Some(item) = stream.try_next().await.map_err(|e| AppError::Query(e.to_string()))? {
-            match item {
-                tiberius::QueryItem::Metadata(meta) => sets.push(QueryResult {
-                    columns: meta.columns().iter().map(|c| c.name().to_string()).collect(),
-                    rows: vec![],
-                    rows_affected: 0,
-                    truncated: false,
-                }),
-                tiberius::QueryItem::Row(row) => {
-                    let idx = row.result_index() as usize;
-                    while sets.len() <= idx {
-                        sets.push(QueryResult {
-                            columns: row.columns().iter().map(|c| c.name().to_string()).collect(),
-                            rows: vec![],
-                            rows_affected: 0,
-                            truncated: false,
-                        });
-                    }
-                    let set = &mut sets[idx];
-                    if cap > 0 && set.rows.len() >= cap {
-                        set.truncated = true;
-                        continue;
-                    }
-                    let cells = (0..set.columns.len()).map(|i| cell_to_string(&row, i)).collect();
-                    set.rows.push(cells);
-                }
+    /// 取一條目前在 `db` 的專屬連線：快取的那條庫名相同且 60 秒內用過就沿用，否則新開一條再 USE。
+    async fn scoped_client(&self, db: &str) -> AppResult<bb8_tiberius::rt::Client> {
+        let cached = self.scoped.lock().take();
+        if let Some(s) = cached {
+            if s.db.eq_ignore_ascii_case(db) && s.used.elapsed() < SCOPED_IDLE {
+                return Ok(s.client);
             }
         }
-        Ok(sets)
+        let mut c = self.dedicated_client().await?;
+        c.simple_query(format!("USE [{}]", esc(db)))
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+            .into_results()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(c)
     }
 
-    /// 執行寫入語句，回傳受影響列數。
+    /// 把專屬連線留給下一個查詢。以 `DB_NAME()` 記它「現在」在哪個庫——批次裡自己又 USE 了別的庫時，
+    /// 快取的名字要跟著換，否則下一個指定原庫的查詢會跑在錯的庫上。
+    async fn put_scoped(&self, mut client: bb8_tiberius::rt::Client) {
+        let Ok(stream) = client.simple_query("SELECT DB_NAME()").await else { return };
+        let Ok(Some(row)) = stream.into_row().await else { return };
+        let Some(db) = get_str(&row, 0) else { return };
+        *self.scoped.lock() = Some(ScopedConn { db, client, used: std::time::Instant::now() });
+    }
+
+    /// 互動查詢的寫入批次：回受影響列數（也登記 SPID，長時間的 UPDATE / DELETE 能取消）。
+    async fn exec_interactive(&self, sql: &str) -> AppResult<u64> {
+        match self.interactive(sql, RunMode::Exec).await? {
+            RunOut::Exec(n) => Ok(n),
+            _ => Ok(0),
+        }
+    }
+
+    /// 執行寫入語句，回傳受影響列數（格內編輯 / 新增列 / 刪除列等內部操作，走連線池）。
     async fn exec(&self, sql: &str) -> AppResult<u64> {
         let mut conn = self.pooled().await?;
-        let res = conn.execute(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
-        Ok(res.rows_affected().iter().sum())
-    }
-
-    /// 互動查詢的寫入語句：同 exec，但登記 SPID 讓長時間的 UPDATE / DELETE 也能取消。
-    async fn exec_tracked(&self, sql: &str) -> AppResult<u64> {
-        let mut conn = self.pooled().await?;
-        let spid = session_spid(&mut conn).await?;
-        let _guard = self.track(spid);
         let res = conn.execute(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
         Ok(res.rows_affected().iter().sum())
     }
@@ -325,6 +329,7 @@ impl DatabaseDriver for MssqlDriver {
             default_db: config.database.clone().filter(|d| !d.is_empty()),
             running: Default::default(),
             last_err,
+            scoped: Default::default(),
         };
         driver.ping().await?;
         Ok(driver)
@@ -490,7 +495,10 @@ impl DatabaseDriver for MssqlDriver {
 
     async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
         if batch_returns_rows(sql) {
-            let (rows, truncated) = self.query_rows_capped(sql, cap).await?;
+            let (rows, truncated) = match self.interactive(sql, RunMode::FirstSet(cap)).await? {
+                RunOut::FirstSet(rows, truncated) => (rows, truncated),
+                _ => (Vec::new(), false),
+            };
             let columns: Vec<String> = rows
                 .first()
                 .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
@@ -501,17 +509,20 @@ impl DatabaseDriver for MssqlDriver {
                 .collect();
             Ok(QueryResult { columns, rows: data, rows_affected: 0, truncated })
         } else {
-            let n = self.exec_tracked(sql).await?;
+            let n = self.exec_interactive(sql).await?;
             Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: n, truncated: false })
         }
     }
 
     async fn query_multi_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
         if !batch_returns_rows(sql) {
-            let n = self.exec_tracked(sql).await?;
+            let n = self.exec_interactive(sql).await?;
             return Ok(vec![QueryResult { columns: vec![], rows: vec![], rows_affected: n, truncated: false }]);
         }
-        let sets = self.query_sets_capped(sql, cap).await?;
+        let sets = match self.interactive(sql, RunMode::AllSets(cap)).await? {
+            RunOut::AllSets(sets) => sets,
+            _ => Vec::new(),
+        };
         if sets.is_empty() {
             // 至少一筆不變量（無任何 Metadata/Row 的極端情況）。
             return Ok(vec![QueryResult::default()]);
@@ -932,6 +943,151 @@ impl DatabaseDriver for MssqlDriver {
     async fn close(&self) {
         // bb8 pool 於 drop 時清理連線；無顯式 close。
     }
+}
+
+/// 互動查詢要怎麼取結果。
+#[derive(Debug, Clone, Copy)]
+enum RunMode {
+    /// 只要第一個結果集，截斷於 cap（0 = 不限）。
+    FirstSet(usize),
+    /// 所有結果集，各自截斷於 cap。
+    AllSets(usize),
+    /// 不取結果集，回受影響列數。
+    Exec,
+}
+
+enum RunOut {
+    FirstSet(Vec<tiberius::Row>, bool),
+    AllSets(Vec<QueryResult>),
+    Exec(u64),
+}
+
+impl RunMode {
+    /// 批次只有 `USE [庫]`、後面沒東西時的空結果。
+    fn empty(self) -> RunOut {
+        match self {
+            RunMode::FirstSet(_) => RunOut::FirstSet(Vec::new(), false),
+            RunMode::AllSets(_) => RunOut::AllSets(Vec::new()),
+            RunMode::Exec => RunOut::Exec(0),
+        }
+    }
+}
+
+/// 「目前資料庫」專屬連線（見 `MssqlDriver::interactive`）。
+struct ScopedConn {
+    db: String,
+    client: bb8_tiberius::rt::Client,
+    used: std::time::Instant,
+}
+
+/// 專屬連線閒置多久就不再沿用（伺服器端可能已經把它斷掉）。
+const SCOPED_IDLE: Duration = Duration::from_secs(60);
+
+/// 在指定連線上跑一個批次。
+///
+/// 取結果時一律把整個串流讀完：達 cap 後的封包照樣 drain 但不儲存——tiberius 的串流提早 drop
+/// 會讓連線的 TDS 協定狀態殘留，還回池（或留給下一個查詢）後污染後續查詢。
+async fn run_on(conn: &mut bb8_tiberius::rt::Client, sql: &str, mode: RunMode) -> AppResult<RunOut> {
+    use futures::TryStreamExt;
+    let qerr = |e: tiberius::error::Error| AppError::Query(e.to_string());
+    match mode {
+        RunMode::Exec => {
+            let res = conn.execute(sql, &[]).await.map_err(qerr)?;
+            Ok(RunOut::Exec(res.rows_affected().iter().sum()))
+        }
+        RunMode::FirstSet(cap) => {
+            let mut stream = conn.query(sql, &[]).await.map_err(qerr)?;
+            let mut rows: Vec<tiberius::Row> = Vec::new();
+            let mut truncated = false;
+            while let Some(item) = stream.try_next().await.map_err(qerr)? {
+                if let tiberius::QueryItem::Row(row) = item {
+                    // 與 into_first_result 對齊：只取第一個結果集，其餘 drain 不儲存。
+                    if row.result_index() != 0 {
+                        continue;
+                    }
+                    if cap > 0 && rows.len() >= cap {
+                        truncated = true;
+                        continue;
+                    }
+                    rows.push(row);
+                }
+            }
+            Ok(RunOut::FirstSet(rows, truncated))
+        }
+        RunMode::AllSets(cap) => {
+            // 以 Metadata item 開格，空結果集也保有欄位頭；result_index 防禦性補格。
+            let mut stream = conn.query(sql, &[]).await.map_err(qerr)?;
+            let mut sets: Vec<QueryResult> = Vec::new();
+            let new_set = |cols: Vec<String>| QueryResult { columns: cols, rows: vec![], rows_affected: 0, truncated: false };
+            while let Some(item) = stream.try_next().await.map_err(qerr)? {
+                match item {
+                    tiberius::QueryItem::Metadata(meta) => {
+                        sets.push(new_set(meta.columns().iter().map(|c| c.name().to_string()).collect()))
+                    }
+                    tiberius::QueryItem::Row(row) => {
+                        let idx = row.result_index();
+                        while sets.len() <= idx {
+                            sets.push(new_set(row.columns().iter().map(|c| c.name().to_string()).collect()));
+                        }
+                        let set = &mut sets[idx];
+                        if cap > 0 && set.rows.len() >= cap {
+                            set.truncated = true;
+                            continue;
+                        }
+                        let cells = (0..set.columns.len()).map(|i| cell_to_string(&row, i)).collect();
+                        set.rows.push(cells);
+                    }
+                }
+            }
+            Ok(RunOut::AllSets(sets))
+        }
+    }
+}
+
+/// 切出批次開頭的 `USE 庫名`（`[庫名]`、`"庫名"` 或裸名，可接分號），回傳 (庫名, 其餘)。
+/// 開頭的註解與空白先略過；不是 USE 開頭回 None。
+fn split_leading_use(sql: &str) -> Option<(String, &str)> {
+    let head = crate::db::stmt::statement_head(sql);
+    if !head.get(..3)?.eq_ignore_ascii_case("use") {
+        return None;
+    }
+    let after = &head[3..];
+    if !after.starts_with(|c: char| c.is_whitespace() || c == '[' || c == '"') {
+        return None; // `user_table` 之類以 use 開頭的字
+    }
+    let s = after.trim_start();
+    let (name, rest) = if let Some(body) = s.strip_prefix('[') {
+        quoted_ident(body, ']')?
+    } else if let Some(body) = s.strip_prefix('"') {
+        quoted_ident(body, '"')?
+    } else {
+        let end = s.find(|c: char| c.is_whitespace() || c == ';').unwrap_or(s.len());
+        (s[..end].to_string(), &s[end..])
+    };
+    if name.is_empty() {
+        return None;
+    }
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix(';').unwrap_or(rest).trim_start();
+    Some((name, rest))
+}
+
+/// 讀到成對的結尾引號為止（疊寫兩次代表字面上的一個），回傳 (內容, 結尾之後)。
+fn quoted_ident(body: &str, close: char) -> Option<(String, &str)> {
+    let mut name = String::new();
+    let mut it = body.char_indices().peekable();
+    while let Some((i, c)) = it.next() {
+        if c == close {
+            if it.peek().is_some_and(|&(_, n)| n == close) {
+                it.next();
+                name.push(close);
+                continue;
+            }
+            return Some((name, &body[i + c.len_utf8()..]));
+        }
+        name.push(c);
+    }
+    None
 }
 
 /// 主機欄解析後的連線目標。
@@ -1440,6 +1596,19 @@ SELECT SCOPE_IDENTITY()"));
         // T-SQL 字串結尾的反斜線不是跳脫：後面的 SELECT 要看得到。
         assert!(batch_returns_rows(r"UPDATE t SET p = 'C:\backup\'; SELECT 1"));
         assert!(batch_returns_rows("CREATE TABLE #x (a int); SELECT * FROM #x"));
+    }
+
+    #[test]
+    fn split_leading_use_handles_quoting_and_comments() {
+        assert_eq!(split_leading_use("USE [Sales DB];\nSELECT 1"), Some(("Sales DB".to_string(), "SELECT 1")));
+        assert_eq!(split_leading_use("-- 切庫\nuse shop\nGO_x"), Some(("shop".to_string(), "GO_x")));
+        assert_eq!(split_leading_use("USE [a]]b]; CREATE PROCEDURE p AS SELECT 1"), Some(("a]b".to_string(), "CREATE PROCEDURE p AS SELECT 1")));
+        assert_eq!(split_leading_use(r#"USE "q""db""#), Some((r#"q"db"#.to_string(), "")));
+        assert_eq!(split_leading_use("USE [only]"), Some(("only".to_string(), "")));
+        // 不是 USE 開頭、或只是以 use 開頭的字。
+        assert_eq!(split_leading_use("SELECT 1; USE x"), None);
+        assert_eq!(split_leading_use("user_count"), None);
+        assert_eq!(split_leading_use("USE [unclosed"), None);
     }
 
     #[test]

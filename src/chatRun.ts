@@ -20,6 +20,7 @@ import {
   isDangerousStatement,
   isWriteStatement,
   resultToMarkdown,
+  scopeTsqlBatches,
   splitForGuard,
   splitTsqlBatches,
 } from "./sql";
@@ -43,7 +44,7 @@ export const RUN_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "m
  * 前綴只會變成「一次送兩句」的批次丟給 driver。
  * DB_SELECT_KINDS 在 App.tsx 是模組私有常數，只能在這裡再寫一份——改動時兩邊要一起改。
  */
-const DB_SELECT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "external"];
+const DB_SELECT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "external", "mssql"];
 
 // 語句自帶「切庫」語法時不再加前綴（側欄「新增查詢」產生的 SQL 就自帶）。
 // 正則刻意不帶 g：帶 g 的 RegExp 物件會在 test() 之間記住 lastIndex，逐條語句掃時會一句中一句不中。
@@ -120,6 +121,8 @@ export function classifyForRun(
  */
 export function prepareStatements(statements: string[], kind: DbKind, db: string | null): string[] {
   const name = (db ?? "").trim();
+  // MSSQL 是 GO 批次：逐批次帶入，批次自己 USE 了別的庫就讓後面沿用（與查詢分頁同一套規則）。
+  if (kind === "mssql") return name ? scopeTsqlBatches(statements, name).sent : statements;
   const use = name && DB_SELECT_KINDS.includes(kind) ? buildUseDatabase(kind, name) : null;
   if (!use) return statements;
   if (statements.length > 0 && OWN_DB_SCOPE_RE.test(statements[0])) return statements;

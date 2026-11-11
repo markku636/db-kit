@@ -1,5 +1,49 @@
 import { describe, it, expect } from "vitest";
-import { splitTsqlBatches, splitForGuard, TSQL_GO_REPEAT_MAX } from "./sql";
+import { splitTsqlBatches, splitForGuard, scopeTsqlBatches, tsqlUseTarget, TSQL_GO_REPEAT_MAX } from "./sql";
+import { prepareStatements } from "./chatRun";
+
+describe("tsqlUseTarget", () => {
+  it("認得方括號、雙引號、裸名與前導註解", () => {
+    expect(tsqlUseTarget("USE [Sales DB];\nSELECT 1")).toBe("Sales DB");
+    expect(tsqlUseTarget("-- 切庫\nuse shop")).toBe("shop");
+    expect(tsqlUseTarget("USE [a]]b]")).toBe("a]b");
+    expect(tsqlUseTarget('USE "q""db"')).toBe('q"db');
+  });
+  it("不是 USE 開頭就回 null", () => {
+    expect(tsqlUseTarget("SELECT 1")).toBeNull();
+    expect(tsqlUseTarget("user_stats")).toBeNull();
+  });
+});
+
+describe("scopeTsqlBatches（SSMS 式的目前資料庫）", () => {
+  it("每個批次前補上目前的庫", () => {
+    expect(scopeTsqlBatches(["SELECT 1", "SELECT 2"], "shop")).toEqual({
+      sent: ["USE [shop];\nSELECT 1", "USE [shop];\nSELECT 2"],
+      lastDb: "shop",
+    });
+  });
+  it("批次自己 USE 了別的庫，後面的批次沿用", () => {
+    const r = scopeTsqlBatches(["USE [hr]", "SELECT * FROM emp", "USE crm;\nSELECT 1", "SELECT 2"], "shop");
+    expect(r.sent).toEqual(["USE [hr]", "USE [hr];\nSELECT * FROM emp", "USE crm;\nSELECT 1", "USE [crm];\nSELECT 2"]);
+    expect(r.lastDb).toBe("crm");
+  });
+  it("沒選庫時不加前綴", () => {
+    expect(scopeTsqlBatches(["SELECT 1"], "")).toEqual({ sent: ["SELECT 1"], lastDb: "" });
+  });
+  it("庫名含 ] 會正確跳脫", () => {
+    expect(scopeTsqlBatches(["SELECT 1"], "a]b").sent[0]).toBe("USE [a]]b];\nSELECT 1");
+  });
+});
+
+describe("prepareStatements：AI 聊天執行 MSSQL 批次", () => {
+  it("與查詢分頁同一套規則", () => {
+    expect(prepareStatements(["SELECT 1", "USE hr", "SELECT 2"], "mssql", "shop")).toEqual([
+      "USE [shop];\nSELECT 1",
+      "USE hr",
+      "USE [hr];\nSELECT 2",
+    ]);
+  });
+});
 
 describe("splitTsqlBatches（MSSQL 依 GO 切批次）", () => {
   it("沒有 GO 時整段是一個批次，分號不切", () => {

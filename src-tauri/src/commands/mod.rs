@@ -1710,7 +1710,7 @@ pub async fn redis_key_page(
     state
         .manager
         .redis_driver(&id)?
-        .key_page_after(&database, &key, cursor, count, &filter, full.unwrap_or(false), after_id.as_deref())
+        .key_page(&database, &key, cursor, count, &filter, full.unwrap_or(false), after_id.as_deref())
         .await
 }
 

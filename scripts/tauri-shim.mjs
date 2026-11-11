@@ -414,7 +414,7 @@ metadata:
       const delay = fixtureQuery(sql)?.delayMs;
       return delay ? new Promise((res) => setTimeout(() => res(r), delay)) : r;
     },
-    run_query_multi: ({ sql }) => queryFor(sql),
+    run_query_multi: ({ sql }) => { (window.__DBKIT_QUERIES__ ||= []).push(sql); return queryFor(sql); },
     // DDL 執行（結構比對「直接執行」會打；早於 v0.30 就缺這個 handler）。
     exec_ddl: () => null,
     // 寫檔類：對話框 handler 會回假路徑，所以這些後續步驟也要有回應，否則匯出一按就是紅字。

@@ -1826,6 +1826,37 @@ function tsqlLexStep(sql: string, i: number, st: TsqlLexState): number {
   return i + 1;
 }
 
+/** T-SQL 批次開頭的 `USE 庫名`（`[庫名]` / `"庫名"` / 裸名）→ 庫名；不是 USE 開頭回 null。 */
+export function tsqlUseTarget(batch: string): string | null {
+  const m = /^use(?:\s+|(?=[["]))(\[(?:[^\]]|\]\])+\]|"(?:[^"]|"")+"|[^\s;]+)/i.exec(stripLeadingComments(batch));
+  if (!m) return null;
+  const raw = m[1];
+  if (raw.startsWith("[")) return raw.slice(1, -1).replace(/\]\]/g, "]");
+  if (raw.startsWith('"')) return raw.slice(1, -1).replace(/""/g, '"');
+  return raw;
+}
+
+/**
+ * MSSQL 依批次帶入「目前資料庫」，並模擬 SSMS 的工作階段：某個批次自己 `USE x` 之後，後面的批次都跑在 x。
+ *
+ * 以前每個批次各自從連線池借連線，`USE x` 只對它自己那個批次有效，下一個 GO 之後又回到連線預設庫。
+ * 現在每個批次前面補上目前所在的庫（後端偵測到開頭的 USE，會改在已切到該庫的專屬連線上跑）。
+ * 回傳實際送出的批次，與最後所在的庫（供工具列選單同步，跟 SSMS 執行 USE 後下拉跟著變一樣）。
+ */
+export function scopeTsqlBatches(batches: string[], db: string): { sent: string[]; lastDb: string } {
+  let cur = db;
+  const sent = batches.map((b) => {
+    const target = tsqlUseTarget(b);
+    if (target != null) {
+      cur = target;
+      return b;
+    }
+    const use = cur ? buildUseDatabase("mssql", cur) : null;
+    return use ? `${use};\n${b}` : b;
+  });
+  return { sent, lastDb: cur };
+}
+
 /**
  * 守門掃描（唯讀 / 危險語句 / 寫入確認）用的語句清單。
  *

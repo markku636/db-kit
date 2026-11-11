@@ -127,23 +127,10 @@ impl RedisDriver {
     /// - hash/set/zset：游標式 HSCAN/SSCAN/ZSCAN（MATCH 過濾欄位 / 成員名）。
     /// - list：以 cursor 當 LRANGE 視窗起點；filter 為非空時於本頁以子字串過濾。
     /// - string：忽略分頁，回單一值。
-    /// - stream：見 `key_page_after`（翻頁靠項目 ID，不靠數字游標）。
-    pub async fn key_page(
-        &self,
-        database: &str,
-        key: &str,
-        cursor: u64,
-        count: usize,
-        filter: &str,
-        full: bool,
-    ) -> AppResult<KeyPage> {
-        self.key_page_after(database, key, cursor, count, filter, full, None).await
-    }
-
-    /// 同 `key_page`，多一個 stream 用的翻頁起點：`after_id` = 上一頁回傳的 `next_id`。
+    /// - stream：翻頁靠項目 ID（`after_id` = 上一頁回傳的 `next_id`），不靠數字游標。
     /// stream 的項目以 fields = ID、members = 該項目的欄位（JSON 物件字串）表示。
     #[allow(clippy::too_many_arguments)]
-    pub async fn key_page_after(
+    pub async fn key_page(
         &self,
         database: &str,
         key: &str,

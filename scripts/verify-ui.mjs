@@ -4262,6 +4262,30 @@ const CASES = {
       JSON.stringify(saved?.options ?? null));
   },
 
+  // SQL Server 的「目前資料庫」：選單出現、每個 GO 批次帶 USE、批次自己 USE 之後後面沿用、選單跟著換。
+  async "mssql-query-current-db"(page) {
+    await page.getByText("reporting-mssql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    const dbSel = page.locator('select[title^="目前資料庫"]').first();
+    check("SQL Server 查詢分頁有目前資料庫選單", (await dbSel.count()) === 1);
+    check("預設選連線設定的資料庫", (await dbSel.inputValue().catch(() => "")) === "Reporting");
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.insertText(["SELECT 1 AS a", "GO", "USE [tempdb]", "GO", "SELECT 2 AS b"].join("\n"));
+    await page.evaluate(() => { window.__DBKIT_QUERIES__ = []; });
+    await page.keyboard.press("F6");
+    await sleep(1200);
+    const sent = await page.evaluate(() => window.__DBKIT_QUERIES__ ?? []);
+    check("依 GO 切成三個批次送出", sent.length === 3, JSON.stringify(sent));
+    check("第一批帶目前資料庫", sent[0] === "USE [Reporting];\nSELECT 1 AS a", JSON.stringify(sent[0]));
+    check("USE 批次原樣送出", sent[1] === "USE [tempdb]", JSON.stringify(sent[1]));
+    check("後面的批次沿用 USE 切過去的庫", sent[2] === "USE [tempdb];\nSELECT 2 AS b", JSON.stringify(sent[2]));
+    check("選單跟著換成 tempdb", (await dbSel.inputValue().catch(() => "")) === "tempdb");
+  },
+
   // SQL Server 驗證方式：選 Windows 驗證要有說明，存檔帶 options.mssql_auth；主機欄提示具名執行個體寫法。
   async "conn-mssql-windows-auth"(page) {
     await page.getByRole("button", { name: "連線", exact: true }).first().click();

@@ -5,6 +5,7 @@
 - **Redis Stream 鍵可以檢視與編輯**：以前 stream 型別的鍵打開是一片空白。現在列出每一筆的 ID 與欄位（JSON），每次載入 200 筆、「載入更多」依 ID 往後讀，可依 ID 或內容過濾；上方列出消費者群組（消費者數、待確認筆數、落後筆數、已讀到哪個 ID）；可以輸入 JSON 物件新增一筆（ID 由 Redis 自動產生），或刪除單筆。
 - **SQL Server 支援 Windows 驗證**：連線對話框多了「驗證方式」，選「Windows 驗證」時使用者留空就用目前登入這台電腦的 Windows 帳號（不用輸入密碼），要用其他網域帳號就填「網域\帳號」與密碼；在 SQL Server 驗證下把帳號寫成「網域\帳號」也會自動改用 Windows 驗證。貼上含 `Integrated Security=true` / `SSPI` 或 `Trusted_Connection=yes` 的連線字串會自動選好。（只限 Windows 版）
 - **SQL Server 具名執行個體**：主機欄可以填 `db01\SQLEXPRESS`、`.\SQLEXPRESS`、`(local)\DEV`，會先問 SQL Server Browser 找出執行個體的埠；寫成 `tcp:db01,14330` 或埠欄填 1433 以外的埠則直接連。以前整串被當成主機名稱，永遠連不上。
+- **SQL Server 查詢分頁有「目前資料庫」選單**：和 MySQL / PostgreSQL 一樣可以選查詢要跑在哪個庫（預設是連線設定的資料庫），不必每次自己寫 `USE`。行為照 SSMS：某個批次執行了 `USE x`，之後的批次都跑在 x，選單也跟著換過去。以前每個 GO 批次各自借連線，`USE` 只對它自己那一批有效。估計執行計畫與 AI 聊天執行的 SQL 也照選單的庫。
 
 修正：
 

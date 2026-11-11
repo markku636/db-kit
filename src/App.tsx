@@ -68,7 +68,7 @@ import { toast, uiChoose, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSave
 import { askOtpCode } from "./otpGate";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
-  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, splitTsqlBatches, splitForGuard, statementAtOffset, isDangerousStatement, isWriteStatement, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, splitTsqlBatches, splitForGuard, scopeTsqlBatches, statementAtOffset, isDangerousStatement, isWriteStatement, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName, selectTopSql, isMysqlFamily, supportsRoutines, supportsQueryEditorKind, supportsSchemaCompare,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
@@ -4408,7 +4408,7 @@ const EXPLAIN_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "sqlite", "mssq
 // 支援查詢面板「目前資料庫」選擇器（以 USE / search_path 把查詢限定到所選庫）的連線類型：
 // 關聯式多庫（MySQL / PostgreSQL）＋ 外部 gateway（driver 以 strip_leading_use 切站）。
 // SQLite 為單檔無多庫；Mongo / Redis 的資料庫切換走各自指令，不在此列。
-const DB_SELECT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "external"];
+const DB_SELECT_KINDS: DbKind[] = ["mysql", "mariadb", "postgres", "external", "mssql"];
 
 // 查詢結果可否就地寫回（後端 update_cell 有實作的驅動）。
 // external（gateway）列入：驅動端只開放「以主鍵定位的單格更新」，其餘寫入仍拒絕。
@@ -5225,7 +5225,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           supportsDbSelect && queryDb && !hasLeadingDbSwitch(q)
             ? buildUseDatabase(kind!, queryDb)
             : null;
-        const sentStatements = usePrefix ? userStatements.map((s) => `${usePrefix};\n${s}`) : userStatements;
+        // MSSQL：逐批次帶入目前所在的庫，批次自己 USE 了別的庫就讓後面的批次沿用（見 scopeTsqlBatches）。
+        const mssqlScope = kind === "mssql" && supportsDbSelect ? scopeTsqlBatches(userStatements, queryDb) : null;
+        const sentStatements = mssqlScope
+          ? mssqlScope.sent
+          : usePrefix ? userStatements.map((s) => `${usePrefix};\n${s}`) : userStatements;
         // 正式環境連線：每次執行都先確認。這裡是手滑成本最高的入口（任意語句通道），
         // 所以不分讀寫一律問；讀取型語句按 Enter 就過，寫入型再被下面的危險操作確認擋第二道。
         const runConn = roState.connections.find((c) => c.id === roState.activeId);
@@ -5368,6 +5372,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         if (sets.length > 0) applyResultSets(sets);
         else if (!cancelRef.current) setResult({ columns: [], rows: [], rows_affected: affected }, q);
         setSummary(snapshot());
+        // 跟 SSMS 一樣：執行了 USE 之後，工具列的「目前資料庫」跟著換過去。
+        if (mssqlScope && !cancelRef.current && mssqlScope.lastDb && mssqlScope.lastDb !== queryDb) changeQueryDb(mssqlScope.lastDb);
         if (!cancelRef.current && userStatements.length > 1) toast.success(t("已執行 {length} 條語句", { length: userStatements.length }));
       }
       setElapsed(performance.now() - t0);

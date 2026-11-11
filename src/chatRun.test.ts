@@ -212,8 +212,8 @@ describe("prepareStatements", () => {
     expect(prepareStatements(["SELECT 1"], "oracle", "HR")).toEqual(["SELECT 1"]);
   });
 
-  it("SQL Server 不加（driver 沒有切出開頭 USE 的處理，前綴會變成一次送兩句）", () => {
-    expect(prepareStatements(["SELECT 1"], "mssql", "shop")).toEqual(["SELECT 1"]);
+  it("SQL Server 也加（driver 會切出開頭的 USE，改在已切到該庫的專屬連線上跑）", () => {
+    expect(prepareStatements(["SELECT 1"], "mssql", "shop")).toEqual(["USE [shop];\nSELECT 1"]);
   });
 
   it("語句自帶 USE → 那一條不加", () => {
