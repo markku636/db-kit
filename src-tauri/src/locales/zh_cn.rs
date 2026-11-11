@@ -503,6 +503,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "Oracle 的 schema 即使用者帳號，請由 DBA 以 DROP USER 管理（本工具不代理此高風險操作）" => "Oracle 的 schema 即用户账号，请由 DBA 以 DROP USER 管理（本工具不代理此高风险操作）",
         "找不到 Oracle Instant Client（或架構不符，需 64 位元）。\n請安裝 Instant Client Basic / Basic Light 並將其目錄加入 PATH，或在連線設定的「Instant Client 目錄」填入路徑後重試。\n下載：{url}\n（{msg}）" => "找不到 Oracle Instant Client（或架构不符，需 64 位）。\n请安装 Instant Client Basic / Basic Light 并将其目录加入 PATH，或在连接设置的「Instant Client 目录」填入路径后重试。\n下载：{url}\n（{msg}）",
         "非預期的 PING 回應：{pong}" => "非预期的 PING 回应：{pong}",
+        "stream 項目至少要有一個欄位" => "stream 条目至少要有一个字段",
         "主控台不支援 SELECT 切換資料庫（會改到整個 App 共用的連線）。請改用主控台上方的資料庫選單，或在指令前加「編號:」，例如 3:GET key。" => "主控台不支持 SELECT 切换数据库（会改到整个 App 共用的连接）。请改用控制台上方的数据库菜单，或在命令前加「编号:」，例如 3:GET key。",
         "訂閱與 MONITOR 會讓連線只收推播訊息，請改用「Pub/Sub」面板。" => "订阅与 MONITOR 会让连接只收推送消息，请改用「Pub/Sub」面板。",
         "主控台一次只送一行，交易（MULTI / EXEC）無法跨行進行，而且會把共用連線留在交易狀態。請改用 EVAL 腳本做原子操作。" => "控制台一次只发送一行，事务（MULTI / EXEC）无法跨行进行，而且会把共用连接留在事务状态。请改用 EVAL 脚本做原子操作。",

@@ -2505,6 +2505,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   const [fields, setFields] = useState<string[]>([]);
   const [scores, setScores] = useState<number[]>([]);
   const [cursor, setCursor] = useState(0);     // 下一頁游標（0 = 已到底）
+  const [nextId, setNextId] = useState<string | null>(null); // stream：下一頁從這個 ID 之後讀
   const [filter, setFilter] = useState("");     // 已套用的過濾字串
   const [filterInput, setFilterInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -2525,6 +2526,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
         setFields(p.fields);
         setScores(p.scores);
         setCursor(p.cursor);
+        setNextId(p.next_id ?? null);
       })
       .catch((e) => setErr(e?.message ?? t("讀取失敗")))
       .finally(() => setLoading(false));
@@ -2544,6 +2546,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
         setFields(p.fields);
         setScores(p.scores);
         setCursor(p.cursor);
+        setNextId(p.next_id ?? null);
       })
       .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")))
       .finally(() => !cancelled && setLoading(false));
@@ -2555,13 +2558,14 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
     if (cursor === 0 || loading) return;
     setLoading(true);
     api
-      .redisKeyPage(connId, database, rkey, cursor, KEY_PAGE, filter)
+      .redisKeyPage(connId, database, rkey, cursor, KEY_PAGE, filter, false, nextId)
       .then((p) => {
         if (p.binary) setBinary(true);
         setMembers((m) => [...m, ...p.members]);
         setFields((f) => [...f, ...p.fields]);
         setScores((s) => [...s, ...p.scores]);
         setCursor(p.cursor);
+        setNextId(p.next_id ?? null);
       })
       .catch((e) => setErr(e?.message ?? t("讀取失敗")))
       .finally(() => setLoading(false));
@@ -2576,7 +2580,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
     setLoading(true);
     api
       .redisKeyPage(connId, database, rkey, 0, KEY_PAGE, filter, true)
-      .then((p) => { setPage(p); setBinary(!!p.binary); setMembers(p.members); setFields(p.fields); setScores(p.scores); setCursor(p.cursor); })
+      .then((p) => { setPage(p); setBinary(!!p.binary); setMembers(p.members); setFields(p.fields); setScores(p.scores); setCursor(p.cursor); setNextId(p.next_id ?? null); })
       .catch((e) => setErr(e?.message ?? t("讀取失敗")))
       .finally(() => setLoading(false));
   };
@@ -2607,12 +2611,26 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
           <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
         </div>
 
+        {page?.type_ === "stream" && (page.groups?.length ?? 0) > 0 && (
+          <div className="px-5 py-2 border-b border-fg/10 text-xs text-fg/60 space-y-0.5">
+            {page.groups!.map((g) => (
+              <div key={g.name} className="flex flex-wrap gap-x-3">
+                <span className="mono text-fg/80" title={t("消費者群組：一組工作程序共同讀這個 stream，每筆只交給其中一個處理。")}>{g.name}</span>
+                <span>{t("{n} 個消費者", { n: g.consumers })}</span>
+                <span title={t("已交給消費者、但還沒回報處理完成（XACK）的筆數。")}>{t("待確認 {n}", { n: g.pending })}</span>
+                {g.lag != null && <span title={t("還沒交給這個群組的筆數。")}>{t("落後 {n}", { n: g.lag })}</span>}
+                <span className="mono text-fg/40">{t("已讀到 {id}", { id: g.last_delivered_id })}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* 成員過濾（僅集合型）。Enter 或「套用」重載第一頁。 */}
         {isCollection && (
           <div className="px-4 py-2 border-b border-fg/10 flex items-center gap-2 text-xs">
             <input value={filterInput} onChange={(e) => setFilterInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") applyFilter(); }}
-              placeholder={page!.type_ === "hash" ? t("過濾 field（支援 * ?）") : page!.type_ === "list" ? t("過濾子字串") : t("過濾成員（支援 * ?）")}
+              placeholder={page!.type_ === "hash" ? t("過濾 field（支援 * ?）") : page!.type_ === "list" ? t("過濾子字串") : page!.type_ === "stream" ? t("過濾 ID 或內容（子字串）") : t("過濾成員（支援 * ?）")}
               className="flex-1 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
             <button type="button" onClick={applyFilter}
               className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60">{t("套用")}</button>
@@ -2672,9 +2690,9 @@ function KeyDetailReadOnly({ detail }: { detail: KeyDetail }) {
   if (type_ === "string") {
     return <pre className="text-sm mono whitespace-pre-wrap break-all bg-inset border border-fg/10 rounded p-2 max-h-[50vh] overflow-auto">{entries[0] ?? ""}</pre>;
   }
-  const head = type_ === "hash" ? ["field", "value"] : type_ === "zset" ? ["score", "member"] : [type_ === "list" ? "#" : "", "value"];
+  const head = type_ === "hash" ? ["field", "value"] : type_ === "stream" ? ["ID", "fields"] : type_ === "zset" ? ["score", "member"] : [type_ === "list" ? "#" : "", "value"];
   const rows: [string, string][] = entries.map((v, i) =>
-    type_ === "hash" ? [fields[i] ?? "", v] : type_ === "zset" ? [String(scores[i] ?? 0), v] : [type_ === "list" ? String(i) : "", v]);
+    type_ === "hash" || type_ === "stream" ? [fields[i] ?? "", v] : type_ === "zset" ? [String(scores[i] ?? 0), v] : [type_ === "list" ? String(i) : "", v]);
   return (
     <table className="text-sm border-collapse w-full mono" aria-label={t("唯讀")}>
       <thead><tr>
@@ -2778,6 +2796,44 @@ function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError,
             <AddCell busy={busy} onClick={addHash} />
             </>
             ); })()}
+          </tr>
+        </tbody>
+      </table>
+    );
+  }
+
+  if (type_ === "stream") {
+    // 新增：輸入 JSON 物件（{"欄位":"值"}），ID 由伺服器產生（XADD *）。stream 項目不能就地改，只能新增 / 刪除。
+    const addStream = () => {
+      let obj: unknown;
+      try { obj = JSON.parse(addA); } catch { obj = null; }
+      if (!obj || typeof obj !== "object" || Array.isArray(obj) || Object.keys(obj as object).length === 0) {
+        onError(t("請輸入至少一個欄位的 JSON 物件，例如 {\"event\":\"login\",\"user\":\"42\"}"));
+        return;
+      }
+      const fields = Object.entries(obj as Record<string, unknown>)
+        .map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)] as [string, string]);
+      edit({ action: "stream_add", fields });
+    };
+    return (
+      <table className="text-sm border-collapse w-full mono">
+        <thead><tr>
+          <th className="text-left px-2 py-1 border-b border-fg/10 w-44">ID</th>
+          <th className="text-left px-2 py-1 border-b border-fg/10">fields</th>
+          <th className="w-8 border-b border-fg/10" />
+        </tr></thead>
+        <tbody>
+          {entries.map((v, i) => (
+            <tr key={fields[i] ?? i} className="hover:bg-fg/5 group">
+              <td className="px-2 py-1 border-b border-fg/5 text-fg/60 whitespace-nowrap">{fields[i]}</td>
+              <td className="px-2 py-1 border-b border-fg/5 break-all">{v}</td>
+              <DelCell busy={busy} onClick={() => fields[i] && edit({ action: "stream_delete", id: fields[i] })} />
+            </tr>
+          ))}
+          <tr>
+            <td className="px-2 py-1 text-[10px] text-fg/40" title={t("新項目的 ID 由 Redis 依時間自動產生")}>{t("自動 ID")}</td>
+            <td className="px-2 py-1"><AddInput value={addA} onChange={setAddA} placeholder={'{"field":"value"}'} onEnter={addStream} /></td>
+            <AddCell busy={busy} onClick={addStream} />
           </tr>
         </tbody>
       </table>

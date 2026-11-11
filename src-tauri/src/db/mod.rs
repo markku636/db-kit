@@ -442,6 +442,10 @@ pub enum KeyEdit {
     HashRemove { field: String },
     /// RENAME：將鍵改名（key 識別變更，非元素編輯）。
     Rename { new_key: String },
+    /// XADD key * field value …：新增 stream 項目（ID 由伺服器產生）。
+    StreamAdd { fields: Vec<(String, String)> },
+    /// XDEL：依 ID 刪除 stream 項目。
+    StreamDelete { id: String },
 }
 
 /// 伺服器狀態：Redis `INFO` 解析後的一個分區（如 Server / Memory / Clients）。
@@ -564,6 +568,24 @@ pub struct KeyPage {
     /// 拿它寫回會損毀資料，前端據此停用編輯。
     #[serde(default)]
     pub binary: bool,
+    /// stream 用：下一頁從這個 ID 之後讀（None = 已到底）。stream 的 ID 是 `毫秒-序號`，塞不進數字游標。
+    #[serde(default)]
+    pub next_id: Option<String>,
+    /// stream 用：消費者群組（XINFO GROUPS）。
+    #[serde(default)]
+    pub groups: Vec<StreamGroup>,
+}
+
+/// stream 的一個消費者群組。
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamGroup {
+    pub name: String,
+    pub consumers: i64,
+    /// 已投遞、尚未 XACK 的項目數。
+    pub pending: i64,
+    pub last_delivered_id: String,
+    /// 還沒投遞給這個群組的項目數（Redis 7 才有；舊版為 None）。
+    pub lag: Option<i64>,
 }
 
 /// SLOWLOG GET 單筆（慢查詢日誌）。

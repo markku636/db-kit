@@ -5068,6 +5068,17 @@ const en: Catalog = {
   "直接連線": "Direct",
   "UTF-8 是一般文字的編碼；壓縮檔、序列化物件、圖片這類資料不是文字，無法原樣顯示。": "UTF-8 is the encoding of ordinary text. Compressed data, serialized objects and images are not text and cannot be shown as is.",
   "此鍵含二進位資料（非 UTF-8 文字），無法顯示的位元組以 \\xHH 表示。為避免寫回時損毀原始資料，已停用編輯；要修改請用主控台或程式。": "This key holds binary data (not UTF-8 text); bytes that cannot be shown are written as \\xHH. Editing is disabled so the original bytes are not corrupted on save; use the console or your application to change it.",
+  "消費者群組：一組工作程序共同讀這個 stream，每筆只交給其中一個處理。": "Consumer group: a set of workers reading this stream together; each entry goes to only one of them.",
+  "{n} 個消費者": "{n} consumers",
+  "已交給消費者、但還沒回報處理完成（XACK）的筆數。": "Entries delivered to a consumer but not yet acknowledged (XACK).",
+  "待確認 {n}": "Pending {n}",
+  "還沒交給這個群組的筆數。": "Entries not yet delivered to this group.",
+  "落後 {n}": "Lag {n}",
+  "已讀到 {id}": "Last delivered {id}",
+  "過濾 ID 或內容（子字串）": "Filter by ID or content (substring)",
+  "請輸入至少一個欄位的 JSON 物件，例如 {\"event\":\"login\",\"user\":\"42\"}": "Enter a JSON object with at least one field, e.g. {\"event\":\"login\",\"user\":\"42\"}",
+  "新項目的 ID 由 Redis 依時間自動產生": "Redis generates the new entry's ID from the current time",
+  "自動 ID": "Auto ID",
 };
 
 export default en;

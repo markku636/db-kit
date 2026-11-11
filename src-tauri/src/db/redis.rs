@@ -3,7 +3,7 @@ use redis::AsyncCommands;
 use crate::db::{
     finalize_hits, BigKey, CellEdit, ClientInfo, ColumnInfo, ConnectionConfig, DataQuery, DatabaseDriver,
     KeyDetail, KeyEdit, KeyPage, PagedData, PoolStatus, QueryResult, RedisKeys, RowDelete, RowInsert,
-    SearchHit, SearchOptions, ServerInfoSection, SlowLogEntry, TableInfo,
+    SearchHit, SearchOptions, ServerInfoSection, SlowLogEntry, StreamGroup, TableInfo,
 };
 use crate::error::{AppError, AppResult};
 
@@ -127,6 +127,7 @@ impl RedisDriver {
     /// - hash/set/zset：游標式 HSCAN/SSCAN/ZSCAN（MATCH 過濾欄位 / 成員名）。
     /// - list：以 cursor 當 LRANGE 視窗起點；filter 為非空時於本頁以子字串過濾。
     /// - string：忽略分頁，回單一值。
+    /// - stream：見 `key_page_after`（翻頁靠項目 ID，不靠數字游標）。
     pub async fn key_page(
         &self,
         database: &str,
@@ -135,6 +136,22 @@ impl RedisDriver {
         count: usize,
         filter: &str,
         full: bool,
+    ) -> AppResult<KeyPage> {
+        self.key_page_after(database, key, cursor, count, filter, full, None).await
+    }
+
+    /// 同 `key_page`，多一個 stream 用的翻頁起點：`after_id` = 上一頁回傳的 `next_id`。
+    /// stream 的項目以 fields = ID、members = 該項目的欄位（JSON 物件字串）表示。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn key_page_after(
+        &self,
+        database: &str,
+        key: &str,
+        cursor: u64,
+        count: usize,
+        filter: &str,
+        full: bool,
+        after_id: Option<&str>,
     ) -> AppResult<KeyPage> {
         let mut conn = self.conn(database).await?;
         let to_err = |e: redis::RedisError| AppError::Query(e.to_string());
@@ -165,6 +182,8 @@ impl RedisDriver {
             value_bytes: -1,
             truncated: false,
             binary: false,
+            next_id: None,
+            groups: Vec::new(),
         };
         // 一律以位元組取回再解碼：直接要 String 的話，只要有一個非 UTF-8 位元組（gzip、protobuf、
         // 序列化物件快取很常見），redis crate 就讓整個指令失敗，鍵詳情整頁打不開。
@@ -302,6 +321,42 @@ impl RedisDriver {
                     }
                 }
                 page.cursor = cur;
+            }
+            "stream" => {
+                page.total = redis::cmd("XLEN").arg(key).query_async(&mut conn).await.unwrap_or(-1);
+                // 下一頁的起點 = 上一頁最後一個 ID 的下一號（包含式區間）。不用 `(id` 排他區間：那要 Redis 6.2+。
+                let start = after_id.map(next_stream_id).unwrap_or_else(|| "-".to_string());
+                let raw: redis::Value = redis::cmd("XRANGE")
+                    .arg(key)
+                    .arg(&start)
+                    .arg("+")
+                    .arg("COUNT")
+                    .arg(count)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(to_err)?;
+                let entries = parse_stream_entries(raw);
+                let fetched = entries.len();
+                let mut last_id = None;
+                for (id, kvs) in entries {
+                    let id = text(id);
+                    let pairs: Vec<(String, String)> = kvs.into_iter().map(|(f, v)| (text(f), text(v))).collect();
+                    let body = stream_fields_json(&pairs);
+                    if filter.is_empty() || id.contains(filter) || body.contains(filter) {
+                        page.fields.push(id.clone());
+                        page.members.push(body);
+                    }
+                    last_id = Some(id);
+                }
+                // 回滿一頁 → 可能還有；回不滿代表到底。
+                page.next_id = if fetched >= count { last_id } else { None };
+                page.cursor = u64::from(page.next_id.is_some());
+                if after_id.is_none() {
+                    // 群組資訊只在第一頁取；XINFO 失敗（舊版 / 權限）不影響項目本身。
+                    let info: Option<redis::Value> =
+                        redis::cmd("XINFO").arg("GROUPS").arg(key).query_async(&mut conn).await.ok();
+                    page.groups = info.map(parse_stream_groups).unwrap_or_default();
+                }
             }
             _ => {}
         }
@@ -994,6 +1049,24 @@ impl DatabaseDriver for RedisDriver {
                 .query_async(&mut conn)
                 .await
                 .map_err(to_err)?,
+            KeyEdit::StreamAdd { fields } => {
+                if fields.is_empty() {
+                    return Err(AppError::Query(t!("stream 項目至少要有一個欄位").to_string()));
+                }
+                let mut c = redis::cmd("XADD");
+                c.arg(key).arg("*");
+                for (f, v) in fields {
+                    c.arg(f).arg(v);
+                }
+                let _: redis::Value = c.query_async(&mut conn).await.map_err(to_err)?;
+                1
+            }
+            KeyEdit::StreamDelete { id } => redis::cmd("XDEL")
+                .arg(key)
+                .arg(id)
+                .query_async(&mut conn)
+                .await
+                .map_err(to_err)?,
             KeyEdit::Rename { new_key } => {
                 // 用 RENAMENX：目的鍵已存在則回 0、不覆蓋，避免靜默摧毀既有鍵；
                 // 來源不存在仍會報錯。回 1 表示成功改名。
@@ -1124,6 +1197,96 @@ fn trim_incomplete_utf8_tail(bytes: &mut Vec<u8>) {
 /// 鍵名清單解碼：非 UTF-8 鍵名以 `\xHH` 顯示（清單不會因為一個怪鍵名整頁失敗）。
 fn decode_keys(keys: Vec<Vec<u8>>) -> Vec<String> {
     keys.into_iter().map(|k| decode_bytes(k).0).collect()
+}
+
+/// stream ID `毫秒-序號` 的下一號，給 XRANGE 當包含式起點。解析不了就原樣回傳（最多重複一筆，不會漏）。
+fn next_stream_id(id: &str) -> String {
+    let Some((ms, seq)) = id.split_once('-') else { return id.to_string() };
+    match (ms.parse::<u64>(), seq.parse::<u64>()) {
+        (Ok(ms), Ok(seq)) if seq < u64::MAX => format!("{ms}-{}", seq + 1),
+        (Ok(ms), Ok(_)) if ms < u64::MAX => format!("{}-0", ms + 1),
+        _ => id.to_string(),
+    }
+}
+
+/// XRANGE 回覆 → [(ID, [(欄位, 值)])]，一律保留原始位元組（呼叫端再解碼）。
+fn parse_stream_entries(v: redis::Value) -> Vec<(Vec<u8>, Vec<(Vec<u8>, Vec<u8>)>)> {
+    let bytes = |v: redis::Value| match v {
+        redis::Value::BulkString(b) => b,
+        redis::Value::SimpleString(s) => s.into_bytes(),
+        other => rv_to_string(&other).into_bytes(),
+    };
+    let redis::Value::Array(items) = v else { return Vec::new() };
+    items
+        .into_iter()
+        .filter_map(|it| {
+            let redis::Value::Array(mut pair) = it else { return None };
+            if pair.len() < 2 {
+                return None;
+            }
+            let kv = pair.pop()?;
+            let id = bytes(pair.pop()?);
+            let flat: Vec<Vec<u8>> = match kv {
+                redis::Value::Array(xs) => xs.into_iter().map(bytes).collect(),
+                redis::Value::Map(xs) => xs.into_iter().flat_map(|(k, v)| [bytes(k), bytes(v)]).collect(),
+                _ => Vec::new(),
+            };
+            let mut it = flat.into_iter();
+            let mut kvs = Vec::new();
+            while let (Some(f), Some(v)) = (it.next(), it.next()) {
+                kvs.push((f, v));
+            }
+            Some((id, kvs))
+        })
+        .collect()
+}
+
+/// 項目欄位 → 照原順序的 JSON 物件字串（serde_json 的 Map 預設會依鍵排序，所以自己組）。
+fn stream_fields_json(pairs: &[(String, String)]) -> String {
+    let body: Vec<String> = pairs
+        .iter()
+        .map(|(f, v)| {
+            format!(
+                "{}:{}",
+                serde_json::to_string(f).unwrap_or_default(),
+                serde_json::to_string(v).unwrap_or_default()
+            )
+        })
+        .collect();
+    format!("{{{}}}", body.join(","))
+}
+
+/// XINFO GROUPS 回覆（每個群組是 `名稱, 值, 名稱, 值…` 的扁平陣列，RESP3 則是 map）。
+fn parse_stream_groups(v: redis::Value) -> Vec<StreamGroup> {
+    let redis::Value::Array(groups) = v else { return Vec::new() };
+    groups
+        .into_iter()
+        .map(|g| {
+            let pairs: Vec<(String, redis::Value)> = match g {
+                redis::Value::Array(xs) => {
+                    let mut it = xs.into_iter();
+                    let mut out = Vec::new();
+                    while let (Some(k), Some(v)) = (it.next(), it.next()) {
+                        out.push((rv_to_string(&k), v));
+                    }
+                    out
+                }
+                redis::Value::Map(xs) => xs.into_iter().map(|(k, v)| (rv_to_string(&k), v)).collect(),
+                _ => Vec::new(),
+            };
+            let get = |name: &str| pairs.iter().find(|(k, _)| k == name).map(|(_, v)| v);
+            StreamGroup {
+                name: get("name").map(rv_to_string).unwrap_or_default(),
+                consumers: rv_as_i64(get("consumers")),
+                pending: rv_as_i64(get("pending")),
+                last_delivered_id: get("last-delivered-id").map(rv_to_string).unwrap_or_default(),
+                lag: get("lag").and_then(|v| match v {
+                    redis::Value::Nil => None,
+                    other => Some(rv_as_i64(Some(other))),
+                }),
+            }
+        })
+        .collect()
 }
 
 /// 主控台阻塞指令最多等幾秒（之後中斷那條專屬連線）。
@@ -1502,6 +1665,34 @@ mod tests {
         for line in ["GET k", "XREAD COUNT 10 STREAMS s 0", "CLIENT LIST", "SCAN 0", "EVAL \"return 1\" 0"] {
             assert_eq!(policy(line), ConsolePolicy::Shared, "{line}");
         }
+    }
+
+    #[test]
+    fn next_stream_id_steps_past_the_last_entry() {
+        assert_eq!(next_stream_id("1700000000000-0"), "1700000000000-1");
+        assert_eq!(next_stream_id("5-18446744073709551615"), "6-0");
+        assert_eq!(next_stream_id("壞掉"), "壞掉");
+    }
+
+    #[test]
+    fn stream_fields_json_keeps_order_and_escapes() {
+        let pairs = vec![("z".to_string(), "1".to_string()), ("a".to_string(), "say \"hi\"".to_string())];
+        assert_eq!(stream_fields_json(&pairs), r#"{"z":"1","a":"say \"hi\""}"#);
+    }
+
+    #[test]
+    fn parse_stream_groups_reads_resp2_flat_arrays() {
+        use redis::Value as V;
+        let b = |s: &str| V::BulkString(s.as_bytes().to_vec());
+        let g = V::Array(vec![V::Array(vec![
+            b("name"), b("workers"), b("consumers"), V::Int(2), b("pending"), V::Int(5),
+            b("last-delivered-id"), b("1-3"), b("entries-read"), V::Int(3), b("lag"), V::Nil,
+        ])]);
+        let out = parse_stream_groups(g);
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].name.as_str(), out[0].consumers, out[0].pending), ("workers", 2, 5));
+        assert_eq!(out[0].last_delivered_id, "1-3");
+        assert_eq!(out[0].lag, None);
     }
 
     #[test]

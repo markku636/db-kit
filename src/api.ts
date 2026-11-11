@@ -555,7 +555,9 @@ export type KeyEdit =
   | { action: "zset_remove"; member: string }
   | { action: "hash_set"; field: string; value: string }
   | { action: "hash_remove"; field: string }
-  | { action: "rename"; new_key: string };
+  | { action: "rename"; new_key: string }
+  | { action: "stream_add"; fields: [string, string][] }
+  | { action: "stream_delete"; id: string };
 
 // Redis 伺服器狀態（INFO 解析後的分區）；items 為 [欄位, 值] 二元陣列。
 export interface ServerInfoSection {
@@ -583,6 +585,19 @@ export interface KeyPage {
   truncated: boolean;  // string：members[0] 僅為前段預覽（值過大且未要求完整載入）
   /** 本頁含非 UTF-8 的二進位內容，已以 \xHH 跳脫顯示；顯示字串不是原始位元組，不可拿來寫回。 */
   binary?: boolean;
+  /** stream：下一頁從這個 ID 之後讀；null / 缺 = 已到底。 */
+  next_id?: string | null;
+  /** stream：消費者群組（只有第一頁帶）。 */
+  groups?: StreamGroup[];
+}
+
+// Redis stream 的消費者群組（XINFO GROUPS）。
+export interface StreamGroup {
+  name: string;
+  consumers: number;
+  pending: number;          // 已投遞、尚未 XACK
+  last_delivered_id: string;
+  lag: number | null;       // 尚未投遞的項目數（Redis 7+；舊版 null）
 }
 
 // SLOWLOG 單筆。
@@ -1852,8 +1867,8 @@ export const api = {
   redisKeys: (id: string, database: string, pattern: string, limit: number) =>
     invoke<RedisKeys>("redis_keys", { id, database, pattern, limit }),
   // 大型集合鍵成員分頁（cursor 起點、count 每頁筆數、filter 成員/欄位過濾）。
-  redisKeyPage: (id: string, database: string, key: string, cursor: number, count: number, filter: string, full = false) =>
-    invoke<KeyPage>("redis_key_page", { id, database, key, cursor, count, filter, full }),
+  redisKeyPage: (id: string, database: string, key: string, cursor: number, count: number, filter: string, full = false, afterId: string | null = null) =>
+    invoke<KeyPage>("redis_key_page", { id, database, key, cursor, count, filter, full, afterId }),
   // 文件型（Mongo）：整份文件 JSON 檢視 / 取代。docId 為該列 _id 的 canonical extended JSON。
   documentGet: (id: string, database: string, table: string, docId: string) =>
     invoke<string>("document_get", { id, database, table, docId }),

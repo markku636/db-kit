@@ -152,6 +152,14 @@ const CASE_FX = {
   "docker-overview": CONTAINER_FX,
   "registry-tag-view": CONTAINER_FX,
   "harbor-artifacts": CONTAINER_FX,
+  "redis-stream-key": {
+    REDIS_KEY_PAGE: {
+      ...FX.REDIS_KEY_PAGE, type_: "stream", total: 3, cursor: 0, next_id: null,
+      fields: ["1731300000000-0", "1731300000500-0", "1731300001000-0"],
+      members: ['{"event":"login","user":"42"}', '{"event":"view","page":"/cart"}', '{"event":"logout","user":"42"}'],
+      groups: [{ name: "audit-workers", consumers: 2, pending: 1, last_delivered_id: "1731300000500-0", lag: 1 }],
+    },
+  },
   "redis-binary-key-readonly": {
     REDIS_KEY_PAGE: { ...FX.REDIS_KEY_PAGE, fields: ["payload", "items"], members: ["\\x1f\\x8b\\x08\\x00ok", "3"], binary: true },
   },
@@ -3624,6 +3632,28 @@ const CASES = {
     } else {
       check("Redis 鍵節點可右鍵", false, "找不到葉節點");
     }
+  },
+
+  // Stream 鍵：項目以 ID + 欄位 JSON 列出、看得到消費者群組、可以新增（自動 ID）與刪除。
+  async "redis-stream-key"(page) {
+    await page.getByText("cache-redis", { exact: true }).dblclick();
+    await sleep(1200);
+    await page.getByText("0", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="keys"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="keys"]').first().click();
+    await sleep(1200);
+    const leaf = page.locator("div.mono", { hasText: /^10427$/ }).first();
+    if (!(await leaf.count())) { check("Stream 鍵：找到鍵節點", false, "找不到葉節點"); return; }
+    await leaf.click({ button: "right" });
+    await sleep(300);
+    await page.getByText("檢視 / 編輯內容…", { exact: true }).first().click();
+    await sleep(900);
+    const text = await appText(page);
+    check("Stream 鍵：列出項目 ID", text.includes("1731300000500-0"), text.slice(0, 300));
+    check("Stream 鍵：列出項目欄位", text.includes('"page":"/cart"'));
+    check("Stream 鍵：顯示消費者群組", text.includes("audit-workers") && text.includes("待確認 1"), text.slice(0, 400));
+    check("Stream 鍵：新增列（自動 ID）", (await page.locator(`input[placeholder='{"field":"value"}']`).count()) === 1);
+    check("Stream 鍵：過濾提示", (await page.locator('input[placeholder="過濾 ID 或內容（子字串）"]').count()) === 1);
   },
 
   // 二進位鍵（非 UTF-8）：顯示的是 \xHH 跳脫字串，寫回會損毀原始位元組 → 要有說明、而且不能有任何編輯入口。

@@ -758,6 +758,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
 
         // ---- db/redis.rs ----
         "非預期的 PING 回應：{pong}" => "Unexpected PING response: {pong}",
+        "stream 項目至少要有一個欄位" => "A stream entry needs at least one field",
         "主控台不支援 SELECT 切換資料庫（會改到整個 App 共用的連線）。請改用主控台上方的資料庫選單，或在指令前加「編號:」，例如 3:GET key。" => "SELECT is not supported in the console (it would switch the connection shared by the whole app). Use the database picker above the console, or prefix the command with the DB number, e.g. 3:GET key.",
         "訂閱與 MONITOR 會讓連線只收推播訊息，請改用「Pub/Sub」面板。" => "SUBSCRIBE and MONITOR turn the connection into push-only mode. Use the Pub/Sub panel instead.",
         "主控台一次只送一行，交易（MULTI / EXEC）無法跨行進行，而且會把共用連線留在交易狀態。請改用 EVAL 腳本做原子操作。" => "The console sends one line at a time, so a MULTI / EXEC transaction cannot span lines and would leave the shared connection inside a transaction. Use an EVAL script for atomic operations.",

@@ -1772,6 +1772,50 @@ async fn redis_binary_values_are_viewable() {
     d.query("4:FLUSHDB").await.unwrap();
 }
 
+/// Stream：以 ID 翻頁不漏不重、消費者群組、XADD / XDEL。
+#[tokio::test]
+#[ignore = "需要 Docker Redis:16379"]
+async fn redis_stream_paging_groups_and_edits() {
+    use crate::db::KeyEdit;
+    let c = cfg(DbKind::Redis, "127.0.0.1", 16379, "", "", None);
+    let d = RedisDriver::connect(&c).await.unwrap();
+    d.query("5:FLUSHDB").await.unwrap();
+    for i in 1..=5 {
+        d.query(&format!("5:XADD s {i}-0 n {i} note \"第 {i} 筆\"")).await.unwrap();
+    }
+    d.query("5:XGROUP CREATE s workers 2-0").await.unwrap();
+
+    let p1 = d.key_page_after("5", "s", 0, 2, "", false, None).await.unwrap();
+    assert_eq!(p1.type_, "stream");
+    assert_eq!(p1.total, 5);
+    assert_eq!(p1.fields, vec!["1-0", "2-0"]);
+    assert_eq!(p1.members[0], r#"{"n":"1","note":"第 1 筆"}"#);
+    assert_eq!(p1.next_id.as_deref(), Some("2-0"));
+    assert_eq!(p1.cursor, 1);
+    assert_eq!(p1.groups.len(), 1);
+    assert_eq!(p1.groups[0].name, "workers");
+    assert_eq!(p1.groups[0].last_delivered_id, "2-0");
+
+    let p2 = d.key_page_after("5", "s", p1.cursor, 2, "", false, p1.next_id.as_deref()).await.unwrap();
+    assert_eq!(p2.fields, vec!["3-0", "4-0"]);
+    let p3 = d.key_page_after("5", "s", p2.cursor, 2, "", false, p2.next_id.as_deref()).await.unwrap();
+    assert_eq!(p3.fields, vec!["5-0"]);
+    assert_eq!((p3.next_id.clone(), p3.cursor), (None, 0));
+
+    // 過濾：比對 ID 或欄位內容。
+    let f = d.key_page_after("5", "s", 0, 100, "第 4", false, None).await.unwrap();
+    assert_eq!(f.fields, vec!["4-0"]);
+
+    d.key_edit("5", "s", &KeyEdit::StreamAdd { fields: vec![("k".into(), "v".into())] }).await.unwrap();
+    assert_eq!(d.key_edit("5", "s", &KeyEdit::StreamDelete { id: "1-0".into() }).await.unwrap(), 1);
+    let all = d.key_page_after("5", "s", 0, 100, "", false, None).await.unwrap();
+    assert_eq!(all.total, 5);
+    assert_eq!(all.fields[0], "2-0");
+    assert!(all.members.last().unwrap().contains(r#""k":"v""#));
+    assert!(d.key_edit("5", "s", &KeyEdit::StreamAdd { fields: vec![] }).await.is_err());
+    d.query("5:FLUSHDB").await.unwrap();
+}
+
 /// 主控台不能動到共用連線：SELECT 被擋、阻塞指令走專屬連線（期間共用連線照常回應）。
 #[tokio::test]
 #[ignore = "需要 Docker Redis:16379"]
