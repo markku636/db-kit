@@ -1798,6 +1798,24 @@ async fn redis_binary_values_are_viewable() {
     d.query("4:FLUSHDB").await.unwrap();
 }
 
+/// 「新增鍵」不能覆蓋既有的鍵（以前 SET 會把同名的 hash 靜默換成字串）。
+#[tokio::test]
+#[ignore = "需要 Docker Redis:16379"]
+async fn redis_insert_row_never_overwrites() {
+    let c = cfg(DbKind::Redis, "127.0.0.1", 16379, "", "", None);
+    let d = RedisDriver::connect(&c).await.unwrap();
+    d.query("6:FLUSHDB").await.unwrap();
+    let ins = |k: &str, v: &str| RowInsert { columns: vec!["key".into(), "value".into()], values: vec![Some(k.into()), Some(v.into())] };
+    d.insert_row("6", "keys", &ins("s", "one")).await.unwrap();
+    let err = d.insert_row("6", "keys", &ins("s", "two")).await.expect_err("同名字串鍵不可覆蓋");
+    assert!(err.to_string().contains("已存在"), "{err}");
+    assert_eq!(d.query("6:GET s").await.unwrap().rows, vec![vec![Some("one".to_string())]]);
+    d.query("6:HSET h f v").await.unwrap();
+    assert!(d.insert_row("6", "keys", &ins("h", "x")).await.is_err(), "hash 不可被換成字串");
+    assert_eq!(d.query("6:TYPE h").await.unwrap().rows, vec![vec![Some("hash".to_string())]]);
+    d.query("6:FLUSHDB").await.unwrap();
+}
+
 /// Stream：以 ID 翻頁不漏不重、消費者群組、XADD / XDEL。
 #[tokio::test]
 #[ignore = "需要 Docker Redis:16379"]

@@ -805,10 +805,21 @@ impl DatabaseDriver for RedisDriver {
         let key = key.ok_or_else(|| AppError::Query(t!("缺少 key").to_string()))?;
         let value = value.unwrap_or_default();
         let mut conn = self.conn(database).await?;
-        let _: () = conn
-            .set(&key, value)
+        // SET NX：「新增」不可以覆蓋既有的鍵。以前直接 SET，同名鍵不論是什麼型別（hash、list…）
+        // 都被靜默換成這個字串，原本的資料就沒了。
+        let created: Option<String> = redis::cmd("SET")
+            .arg(&key)
+            .arg(value)
+            .arg("NX")
+            .query_async(&mut conn)
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
+        if created.is_none() {
+            return Err(AppError::Query(tf!(
+                "鍵「{key}」已存在，為避免覆蓋已取消新增。要改值請直接開啟該鍵編輯。",
+                key = key
+            )));
+        }
         self.invalidate_snapshot().await; // 新增鍵後翻頁需看到它
         Ok(1)
     }

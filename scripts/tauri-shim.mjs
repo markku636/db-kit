@@ -406,6 +406,8 @@ metadata:
     harbor_delete_repository: () => null,
     server_info: () => fx.REDIS_INFO,
     redis_slowlog: () => [],
+    // Redis 結構寫入：記下來給情境斷言（新增鍵對話框、鍵詳情）。
+    key_edit: ({ key, edit }) => { (window.__DBKIT_KEY_EDITS__ ||= []).push({ key, edit }); return 1; },
     redis_clients: () => [],
     list_schedules: () => [],
     list_backup_history: () => [],

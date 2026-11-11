@@ -5085,6 +5085,10 @@ const en: Catalog = {
   "Windows 驗證": "Windows authentication",
   "使用者留空＝用目前登入這台電腦的 Windows 帳號；要用別的網域帳號就填「網域\\帳號」與密碼。": "Leave the user empty to sign in as the Windows account currently logged on to this computer; to use another domain account, enter DOMAIN\\user and its password.",
   "SQL Server 自己的登入帳號（例如 sa）。帳號寫成「網域\\帳號」時會自動改用 Windows 驗證。": "A SQL Server login (e.g. sa). A user written as DOMAIN\\user switches to Windows authentication automatically.",
+  "請輸入欄位名稱": "Enter a field name",
+  "鍵「{name}」已存在（{type}），為避免改到既有資料已取消。要修改請直接開啟該鍵。": "Key \"{name}\" already exists ({type}); cancelled so existing data is not changed. Open the key to edit it.",
+  "Stream 每一筆是一組「欄位 = 值」，這裡先建第一筆，ID 由 Redis 自動產生": "Each stream entry is a set of field = value pairs; this creates the first entry, and Redis generates its ID",
+  "第一筆的欄位": "First entry's field",
 };
 
 export default en;

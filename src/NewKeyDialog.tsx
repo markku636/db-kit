@@ -5,7 +5,7 @@ import { toast } from "./ui";
 import { Modal, Button, Input, Textarea } from "./ui/index";
 import { useT } from "./i18n";
 
-type RType = "string" | "list" | "set" | "hash" | "zset";
+type RType = "string" | "list" | "set" | "hash" | "zset" | "stream";
 
 const TYPES: { v: RType; label: string }[] = [
   { v: "string", label: "String" },
@@ -13,6 +13,7 @@ const TYPES: { v: RType; label: string }[] = [
   { v: "set", label: "Set" },
   { v: "hash", label: "Hash" },
   { v: "zset", label: "ZSet" },
+  { v: "stream", label: "Stream" },
 ];
 
 // 新增 Redis 鍵：選型別 + 初始元素。沿用既有 API（insert_row / key_edit），
@@ -39,9 +40,20 @@ export default function NewKeyDialog({ connId, database, initialName = "", onClo
       setErr(t("TTL 需為正整數秒數（留白表示不過期）"));
       return;
     }
+    if ((type === "hash" || type === "stream") && !field.trim()) {
+      setErr(type === "hash" ? t("請輸入 hash field") : t("請輸入欄位名稱"));
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
+      // 「新增」不可以動到既有的鍵：list / set / hash / zset / stream 的寫入指令遇到同名鍵會直接把元素加進去
+      //（型別不同則報 WRONGTYPE），使用者以為建了新鍵、其實改到了別人的資料。string 由後端 SET NX 擋。
+      const existing = await api.redisKeyPage(connId, database, name, 0, 1, "").catch(() => null);
+      if (existing && existing.type_ !== "none") {
+        setErr(t("鍵「{name}」已存在（{type}），為避免改到既有資料已取消。要修改請直接開啟該鍵。", { name, type: existing.type_ }));
+        return;
+      }
       switch (type) {
         case "string":
           await api.insertRow(connId, database, "keys", {
@@ -56,8 +68,11 @@ export default function NewKeyDialog({ connId, database, initialName = "", onClo
           await api.keyEdit(connId, database, name, { action: "set_add", member: value });
           break;
         case "hash":
-          if (!field.trim()) { setErr(t("請輸入 hash field")); setBusy(false); return; }
           await api.keyEdit(connId, database, name, { action: "hash_set", field, value });
+          break;
+        case "stream":
+          // 第一筆項目的 ID 由 Redis 自動產生（XADD *）。
+          await api.keyEdit(connId, database, name, { action: "stream_add", fields: [[field, value]] });
           break;
         case "zset": {
           const s = Number(score);
@@ -120,9 +135,11 @@ export default function NewKeyDialog({ connId, database, initialName = "", onClo
             </div>
           </div>
 
-          {type === "hash" && (
+          {(type === "hash" || type === "stream") && (
             <div className="space-y-1">
-              <label className="text-xs text-fg/50">field</label>
+              <label className="text-xs text-fg/50" title={type === "stream" ? t("Stream 每一筆是一組「欄位 = 值」，這裡先建第一筆，ID 由 Redis 自動產生") : undefined}>
+                {type === "stream" ? t("第一筆的欄位") : "field"}
+              </label>
               <Input aria-label="field" inputSize="md" className="mono" value={field} onChange={(e) => setField(e.target.value)} />
             </div>
           )}

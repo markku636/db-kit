@@ -26,6 +26,7 @@
 - **SQL Server 的欄位與資料表說明看得到了**：讀取擴充屬性 `MS_Description`（SSMS「描述」欄填的那個），欄位清單、結構分頁與資料表資訊都會顯示；結構比對發現說明不同時，同步腳本會產生 `sp_addextendedproperty` / `sp_updateextendedproperty`（以前完全不處理）。
 - **SQL Server 索引的 INCLUDE 欄位不再被當成索引鍵**：以前 `CREATE INDEX ix ON t (a) INCLUDE (b)` 會列成索引欄位「b, a」（INCLUDE 欄位排在最前面），結構比對與重建也會照錯的順序。
 - **SQL Server 資料表的估計列數正確了**：含 `nvarchar(max)`、`varbinary(max)` 這類欄位的表，列數以前會多算 2～3 倍；資料表資訊另外多了「索引大小」。
+- **Redis 新增鍵不會再覆蓋或改到既有的鍵**：以前「新增鍵」選 String（以及網格的「新增列」）直接 SET，同名的鍵不管原本是 hash、list 還是什麼，都被靜默換成這個字串、原本的資料就沒了；選 List / Set / Hash / ZSet 則會把元素加進同名的既有鍵。現在同名鍵已存在就擋下並告訴你它是什麼型別。新增鍵也可以直接建立 Stream（第一筆的 ID 由 Redis 產生）。
 
 ## v0.59.1
 

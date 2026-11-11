@@ -152,6 +152,9 @@ const CASE_FX = {
   "docker-overview": CONTAINER_FX,
   "registry-tag-view": CONTAINER_FX,
   "harbor-artifacts": CONTAINER_FX,
+  "redis-new-key-creates-stream": {
+    REDIS_KEY_PAGE: { ...FX.REDIS_KEY_PAGE, type_: "none", total: -1, fields: [], members: [] },
+  },
   "redis-stream-key": {
     REDIS_KEY_PAGE: {
       ...FX.REDIS_KEY_PAGE, type_: "stream", total: 3, cursor: 0, next_id: null,
@@ -3632,6 +3635,58 @@ const CASES = {
     } else {
       check("Redis 鍵節點可右鍵", false, "找不到葉節點");
     }
+  },
+
+  // 新增鍵：同名鍵已存在就擋下（不可把元素加進別人的鍵）；不存在時可以建立 Stream（第一筆 XADD *）。
+  async "redis-new-key-guard-and-stream"(page) {
+    const openDialog = async () => {
+      await page.getByText("cache-redis", { exact: true }).dblclick();
+      await sleep(1200);
+      await page.getByText("0", { exact: true }).first().click();
+      await page.waitForSelector('[data-tree-table="keys"]', { timeout: 8000 });
+      await page.locator('[data-tree-table="keys"]').first().click();
+      await sleep(1200);
+      await page.getByText("session", { exact: true }).first().click({ button: "right" });
+      await sleep(300);
+      await page.getByText("在此命名空間新增鍵…", { exact: true }).first().click();
+      await sleep(400);
+    };
+    await openDialog();
+    const dlg = page.locator('[role="dialog"]').filter({ hasText: "新增鍵" }).last();
+    await dlg.getByRole("button", { name: "Stream", exact: true }).click();
+    check("Stream 型別有「第一筆的欄位」", (await dlg.getByText("第一筆的欄位", { exact: true }).count()) === 1);
+    await dlg.locator('input[aria-label="field"]').fill("event");
+    await dlg.locator('textarea').first().fill("login");
+    await page.evaluate(() => { window.__DBKIT_KEY_EDITS__ = []; });
+    // 假資料的 redis_key_page 回 hash → 視為鍵已存在，必須擋下、一筆都不寫。
+    await dlg.getByRole("button", { name: "建立", exact: true }).click();
+    await sleep(600);
+    check("同名鍵已存在 → 擋下並說明", (await appText(page)).includes("已存在（hash）"));
+    const edits = await page.evaluate(() => window.__DBKIT_KEY_EDITS__ ?? []);
+    check("擋下時沒有寫入任何元素", edits.length === 0, JSON.stringify(edits));
+  },
+
+  async "redis-new-key-creates-stream"(page) {
+    await page.getByText("cache-redis", { exact: true }).dblclick();
+    await sleep(1200);
+    await page.getByText("0", { exact: true }).first().click();
+    await page.waitForSelector('[data-tree-table="keys"]', { timeout: 8000 });
+    await page.locator('[data-tree-table="keys"]').first().click();
+    await sleep(1200);
+    await page.getByText("session", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.getByText("在此命名空間新增鍵…", { exact: true }).first().click();
+    await sleep(400);
+    const dlg = page.locator('[role="dialog"]').filter({ hasText: "新增鍵" }).last();
+    await dlg.getByRole("button", { name: "Stream", exact: true }).click();
+    await dlg.locator('input[aria-label="field"]').fill("event");
+    await dlg.locator('textarea').first().fill("login");
+    await page.evaluate(() => { window.__DBKIT_KEY_EDITS__ = []; });
+    await dlg.getByRole("button", { name: "建立", exact: true }).click();
+    await sleep(800);
+    const edits = await page.evaluate(() => window.__DBKIT_KEY_EDITS__ ?? []);
+    check("建立 Stream 送出 stream_add（第一筆）", edits.length === 1 && edits[0].edit?.action === "stream_add"
+      && JSON.stringify(edits[0].edit?.fields) === JSON.stringify([["event", "login"]]), JSON.stringify(edits));
   },
 
   // Stream 鍵：項目以 ID + 欄位 JSON 列出、看得到消費者群組、可以新增（自動 ID）與刪除。

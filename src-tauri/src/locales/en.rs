@@ -763,6 +763,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "取得資料庫連線逾時：連線都在忙（可能有長時間執行的查詢），或伺服器沒有回應。" => "Timed out getting a database connection: all connections are busy (perhaps with long-running queries), or the server is not responding.",
         "連線 {host} 逾時（10 秒）：主機沒有回應，或那個埠上不是 SQL Server。請確認主機、埠與防火牆。" => "Connecting to {host} timed out (10 seconds): the host did not respond, or the port is not a SQL Server. Check the host, port and firewall.",
         "找不到具名執行個體「{inst}」：{host} 上的 SQL Server Browser 服務（UDP 1434）沒有回應。請確認該服務已啟動、防火牆放行 UDP 1434，或在主機欄改寫成「主機,埠」直接指定埠。（{detail}）" => "Named instance \"{inst}\" not found: the SQL Server Browser service on {host} (UDP 1434) did not respond. Make sure the service is running and UDP 1434 is allowed through the firewall, or write the host as \"host,port\" to give the port directly. ({detail})",
+        "鍵「{key}」已存在，為避免覆蓋已取消新增。要改值請直接開啟該鍵編輯。" => "Key \"{key}\" already exists; nothing was created so it is not overwritten. Open the key to change its value.",
         "stream 項目至少要有一個欄位" => "A stream entry needs at least one field",
         "主控台不支援 SELECT 切換資料庫（會改到整個 App 共用的連線）。請改用主控台上方的資料庫選單，或在指令前加「編號:」，例如 3:GET key。" => "SELECT is not supported in the console (it would switch the connection shared by the whole app). Use the database picker above the console, or prefix the command with the DB number, e.g. 3:GET key.",
         "訂閱與 MONITOR 會讓連線只收推播訊息，請改用「Pub/Sub」面板。" => "SUBSCRIBE and MONITOR turn the connection into push-only mode. Use the Pub/Sub panel instead.",
