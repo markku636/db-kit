@@ -174,6 +174,20 @@ impl MssqlDriver {
         Ok(res.rows_affected().iter().sum())
     }
 
+    /// 檢視 / 程序 / 函式 / 觸發器的原始碼；不是這類模組（例如資料表）回 None。
+    ///
+    /// 不用 `OBJECT_DEFINITION(OBJECT_ID(N'[db].[s].[o]'))`：OBJECT_ID 吃三部式名稱沒問題，
+    /// OBJECT_DEFINITION 卻只在「目前資料庫」裡找那個 object_id——連線預設庫是 master、
+    /// 在樹上點別的庫的程序，就一律「取不到定義」。改查該庫自己的 sys.sql_modules。
+    async fn module_definition(&self, database: &str, schema: &str, name: &str) -> AppResult<Option<String>> {
+        let db = esc(database);
+        let obj = object_literal(database, schema, name);
+        let rows = self
+            .query_rows(&format!("SELECT m.definition FROM [{db}].sys.sql_modules m WHERE m.object_id = OBJECT_ID({obj})"))
+            .await?;
+        Ok(rows.first().and_then(|r| get_str(r, 0)))
+    }
+
     /// 本表主鍵欄位（依 key_ordinal）。
     async fn primary_key(&self, database: &str, schema: &str, table: &str) -> AppResult<Vec<String>> {
         let db = esc(database);
@@ -339,11 +353,13 @@ impl DatabaseDriver for MssqlDriver {
         let where_sql = build_where(&query.filters, query.match_any);
 
         let total = if query.count {
-            let sql = format!("SELECT COUNT(*) FROM {qualified} {where_sql}");
+            // COUNT_BIG：超過 21 億列的表 COUNT(*) 會算術溢位（錯誤 8115），整頁打不開。
+            let sql = format!("SELECT COUNT_BIG(*) FROM {qualified} {where_sql}");
             let rows = self.query_rows(&sql).await?;
             rows.first()
-                .and_then(|r| r.try_get::<i32, _>(0).ok().flatten())
-                .unwrap_or(0) as u64
+                .and_then(|r| r.try_get::<i64, _>(0).ok().flatten())
+                .unwrap_or(0)
+                .max(0) as u64
         } else {
             0
         };
@@ -612,10 +628,8 @@ impl DatabaseDriver for MssqlDriver {
 
     async fn routine_definition(&self, database: &str, name: &str, _routine_type: &str) -> AppResult<String> {
         let (schema, obj_name) = split_schema_table(name);
-        let obj = object_literal(database, &schema, &obj_name);
-        let rows = self.query_rows(&format!("SELECT OBJECT_DEFINITION(OBJECT_ID({obj}))")).await?;
-        rows.first()
-            .and_then(|r| get_str(r, 0))
+        self.module_definition(database, &schema, &obj_name)
+            .await?
             .ok_or_else(|| AppError::Query(t!("取不到定義（可能無權限或物件不存在）").to_string()))
     }
 
@@ -623,21 +637,22 @@ impl DatabaseDriver for MssqlDriver {
         let (schema, tbl) = split_schema_table(table);
         let obj = object_literal(database, &schema, &tbl);
         // 檢視 / 程序 / 函式：直接回其定義。
-        if let Some(def) = self
-            .query_rows(&format!("SELECT OBJECT_DEFINITION(OBJECT_ID({obj}))"))
-            .await?
-            .first()
-            .and_then(|r| get_str(r, 0))
-        {
+        if let Some(def) = self.module_definition(database, &schema, &tbl).await? {
             return Ok(def);
         }
         // 資料表：從 sys.columns 重建 CREATE TABLE（欄位 + PK）。
         let db = esc(database);
+        // seed / increment 是 sql_variant（tiberius 解不了），先轉成字串；計算欄位要輸出 `AS (運算式)`，
+        // 照抄型別會變成一個普通欄位，重建出來的表少了公式、資料也不再自動算。
         let sql = format!(
-            "SELECT c.name, ty.name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, dc.definition \
+            "SELECT c.name, ty.name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, dc.definition, \
+                    CAST(ic.seed_value AS NVARCHAR(64)), CAST(ic.increment_value AS NVARCHAR(64)), \
+                    cc.definition, cc.is_persisted \
              FROM [{db}].sys.columns c \
              JOIN [{db}].sys.types ty ON c.user_type_id = ty.user_type_id \
              LEFT JOIN [{db}].sys.default_constraints dc ON c.default_object_id = dc.object_id \
+             LEFT JOIN [{db}].sys.identity_columns ic ON ic.object_id = c.object_id AND ic.column_id = c.column_id \
+             LEFT JOIN [{db}].sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id \
              WHERE c.object_id = OBJECT_ID({obj}) ORDER BY c.column_id"
         );
         let rows = self.query_rows(&sql).await?;
@@ -646,24 +661,24 @@ impl DatabaseDriver for MssqlDriver {
         }
         let mut lines: Vec<String> = Vec::new();
         for r in &rows {
-            let name = get_str(r, 0).unwrap_or_default();
-            let ty = get_str(r, 1).unwrap_or_default();
-            let max_len = r.try_get::<i16, _>(2).ok().flatten().unwrap_or(0);
-            let precision = r.try_get::<u8, _>(3).ok().flatten().unwrap_or(0);
-            let scale = r.try_get::<u8, _>(4).ok().flatten().unwrap_or(0);
-            let nullable = r.try_get::<bool, _>(5).ok().flatten().unwrap_or(true);
-            let identity = r.try_get::<bool, _>(6).ok().flatten().unwrap_or(false);
-            let default = get_str(r, 7);
-            let type_str = mssql_type_str(&ty, max_len, precision, scale);
-            let mut def = format!("  [{}] {type_str}", esc(&name));
-            if identity {
-                def.push_str(" IDENTITY(1,1)");
-            }
-            def.push_str(if nullable { " NULL" } else { " NOT NULL" });
-            if let Some(d) = default {
-                def.push_str(&format!(" DEFAULT {d}"));
-            }
-            lines.push(def);
+            let type_str = mssql_type_str(
+                &get_str(r, 1).unwrap_or_default(),
+                r.try_get::<i16, _>(2).ok().flatten().unwrap_or(0),
+                r.try_get::<u8, _>(3).ok().flatten().unwrap_or(0),
+                r.try_get::<u8, _>(4).ok().flatten().unwrap_or(0),
+            );
+            let identity = r.try_get::<bool, _>(6).ok().flatten().unwrap_or(false).then(|| {
+                (get_str(r, 8).unwrap_or_else(|| "1".into()), get_str(r, 9).unwrap_or_else(|| "1".into()))
+            });
+            let computed = get_str(r, 10).map(|d| (d, r.try_get::<bool, _>(11).ok().flatten().unwrap_or(false)));
+            lines.push(ddl_column_line(&DdlColumn {
+                name: &get_str(r, 0).unwrap_or_default(),
+                type_str: &type_str,
+                nullable: r.try_get::<bool, _>(5).ok().flatten().unwrap_or(true),
+                identity,
+                default: get_str(r, 7),
+                computed,
+            }));
         }
         let pk = self.primary_key(database, &schema, &tbl).await.unwrap_or_default();
         if !pk.is_empty() {
@@ -764,21 +779,10 @@ impl DatabaseDriver for MssqlDriver {
     }
 
     async fn explain(&self, sql: &str) -> AppResult<QueryResult> {
-        let mut conn = self.pool.get().await.map_err(|e| AppError::Query(e.to_string()))?;
-        // SET SHOWPLAN_XML ON：回傳估計執行計畫 XML（不真的執行查詢）；須為獨立批次並 consume 結果。
-        conn.simple_query("SET SHOWPLAN_XML ON")
-            .await
-            .map_err(|e| AppError::Query(e.to_string()))?
-            .into_results()
-            .await
-            .map_err(|e| AppError::Query(e.to_string()))?;
-        let plan = {
-            let stream = conn.query(sql, &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
-            let rows = stream.into_first_result().await.map_err(|e| AppError::Query(e.to_string()))?;
-            rows.first().and_then(|r| get_str(r, 0)).unwrap_or_default()
-        };
-        // 關閉，避免污染回收到 pool 的連線（consume 結果；失敗時 pool 的 is_valid 檢查會汰換）。
-        let _ = conn.simple_query("SET SHOWPLAN_XML OFF").await;
+        // 走專屬連線（用完即丟）。以前借池裡的連線 SET SHOWPLAN_XML ON：查詢一失敗就從 `?` 提早返回、
+        // 沒機會 OFF；就算成功，OFF 的結果串流也沒讀完。那條連線回池後仍在 SHOWPLAN 模式，
+        // 之後借到它的查詢都只會拿到執行計畫、不會真的執行（bb8 的 SELECT 1 檢查也照樣通過）。
+        let plan = self.showplan_xml(sql).await?;
         Ok(QueryResult {
             columns: vec!["ShowPlanXML".to_string()],
             rows: vec![vec![Some(plan)]],
@@ -895,6 +899,35 @@ fn object_literal(db: &str, schema: &str, table: &str) -> String {
     lit(&format!("[{}].[{}].[{}]", esc(db), esc(schema), esc(table)))
 }
 
+/// `table_ddl` 一個欄位的素材。
+struct DdlColumn<'a> {
+    name: &'a str,
+    type_str: &'a str,
+    nullable: bool,
+    /// (seed, increment)
+    identity: Option<(String, String)>,
+    default: Option<String>,
+    /// (運算式, 是否 PERSISTED)
+    computed: Option<(String, bool)>,
+}
+
+/// CREATE TABLE 裡的一行欄位定義。計算欄位沒有型別、NULL 與 DEFAULT，只有 `AS (運算式)`。
+fn ddl_column_line(c: &DdlColumn) -> String {
+    let name = esc(c.name);
+    if let Some((expr, persisted)) = &c.computed {
+        return format!("  [{name}] AS {expr}{}", if *persisted { " PERSISTED" } else { "" });
+    }
+    let mut def = format!("  [{name}] {}", c.type_str);
+    if let Some((seed, inc)) = &c.identity {
+        def.push_str(&format!(" IDENTITY({seed},{inc})"));
+    }
+    def.push_str(if c.nullable { " NULL" } else { " NOT NULL" });
+    if let Some(d) = &c.default {
+        def.push_str(&format!(" DEFAULT {d}"));
+    }
+    def
+}
+
 /// 系統資料庫（drop 護欄）。
 const MSSQL_SYSTEM_DBS: &[&str] = &["master", "model", "msdb", "tempdb"];
 
@@ -909,7 +942,9 @@ fn mssql_type_str(ty: &str, max_length: i16, precision: u8, scale: u8) -> String
             if max_length == -1 { format!("{ty}(MAX)") } else { format!("{ty}({max_length})") }
         }
         "decimal" | "numeric" => format!("{ty}({precision},{scale})"),
-        "datetime2" | "time" | "datetimeoffset" if scale > 0 => format!("{ty}({scale})"),
+        // 省略精度等於預設的 7：`datetime2(0)` 若寫成 `datetime2`，重建 / 同步出來的欄位就從秒變成 100ns，
+        // 型別比對也看不出差異。所以只有 7 能省略，0 也要寫出來。
+        "datetime2" | "time" | "datetimeoffset" if scale != 7 => format!("{ty}({scale})"),
         _ => ty.to_string(),
     }
 }
@@ -1129,65 +1164,47 @@ fn pk_where(cols: &[String], vals: &[Option<String>]) -> AppResult<String> {
     Ok(parts.join(" AND "))
 }
 
-/// tiberius 型別 → 顯示字串。依 ColumnType 精準分派 try_get。NULL / 取值失敗回 None。
+/// tiberius 的一格 → 顯示字串。NULL 回 None。
+///
+/// 直接看解碼後的 `ColumnData`，不靠 `ColumnType` 猜該用哪個型別 `try_get`：
+/// 以前可為 NULL 的 `real` 欄位宣告型別是 Floatn、資料卻是 F32，`try_get::<f64>` 失敗 → 整欄顯示 NULL；
+/// `xml` 欄位是 ColumnData::Xml，`try_get::<&str>` 也失敗 → 一樣是 NULL；`datetimeoffset` 被換算成 UTC
+/// 並印成 `… UTC`，原本的時區沒了、字串也無法再寫回。
 pub(crate) fn cell_to_string(row: &tiberius::Row, idx: usize) -> Option<String> {
-    let col = row.columns().get(idx)?;
-    match col.column_type() {
-        ColumnType::Bit | ColumnType::Bitn => {
-            row.try_get::<bool, _>(idx).ok().flatten().map(|v| v.to_string())
-        }
-        ColumnType::Int1 => row.try_get::<u8, _>(idx).ok().flatten().map(|v| v.to_string()),
-        ColumnType::Int2 => row.try_get::<i16, _>(idx).ok().flatten().map(|v| v.to_string()),
-        ColumnType::Int4 => row.try_get::<i32, _>(idx).ok().flatten().map(|v| v.to_string()),
-        ColumnType::Int8 => row.try_get::<i64, _>(idx).ok().flatten().map(|v| v.to_string()),
-        ColumnType::Intn => row
-            .try_get::<i64, _>(idx)
-            .ok()
-            .flatten()
-            .map(|v| v.to_string())
-            .or_else(|| row.try_get::<i32, _>(idx).ok().flatten().map(|v| v.to_string()))
-            .or_else(|| row.try_get::<i16, _>(idx).ok().flatten().map(|v| v.to_string()))
-            .or_else(|| row.try_get::<u8, _>(idx).ok().flatten().map(|v| v.to_string())),
-        ColumnType::Float4 => row.try_get::<f32, _>(idx).ok().flatten().map(|v| v.to_string()),
-        ColumnType::Float8 | ColumnType::Floatn => {
-            row.try_get::<f64, _>(idx).ok().flatten().map(|v| v.to_string())
-        }
-        ColumnType::Money | ColumnType::Money4 => row
-            .try_get::<f64, _>(idx)
-            .ok()
-            .flatten()
-            .map(|v| v.to_string())
-            .or_else(|| row.try_get::<tiberius::numeric::Numeric, _>(idx).ok().flatten().map(|v| v.to_string())),
-        ColumnType::Decimaln | ColumnType::Numericn => row
-            .try_get::<tiberius::numeric::Numeric, _>(idx)
-            .ok()
-            .flatten()
-            .map(|v| v.to_string()),
-        ColumnType::Guid => row.try_get::<uuid::Uuid, _>(idx).ok().flatten().map(|v| v.to_string()),
-        ColumnType::Daten => {
-            row.try_get::<chrono::NaiveDate, _>(idx).ok().flatten().map(|v| v.to_string())
-        }
-        ColumnType::Timen => {
-            row.try_get::<chrono::NaiveTime, _>(idx).ok().flatten().map(|v| v.to_string())
-        }
-        ColumnType::Datetime | ColumnType::Datetime4 | ColumnType::Datetimen | ColumnType::Datetime2 => row
-            .try_get::<chrono::NaiveDateTime, _>(idx)
+    let (col, data) = row.cells().nth(idx)?;
+    let is_money = matches!(col.column_type(), ColumnType::Money | ColumnType::Money4);
+    column_data_to_string(data, is_money)
+}
+
+/// `cell_to_string` 的純函式核心（可單元測試，不需要連線）。`is_money`：money / smallmoney
+/// 在 TDS 上解成 F64，只能從欄位型別得知；照 SSMS 顯示 4 位小數，避免 `0.1 + 0.2` 式的二進位尾數。
+fn column_data_to_string(data: &tiberius::ColumnData<'static>, is_money: bool) -> Option<String> {
+    use tiberius::{ColumnData as Cd, FromSql};
+    match data {
+        Cd::U8(v) => v.map(|x| x.to_string()),
+        Cd::I16(v) => v.map(|x| x.to_string()),
+        Cd::I32(v) => v.map(|x| x.to_string()),
+        Cd::I64(v) => v.map(|x| x.to_string()),
+        Cd::F32(v) => v.map(|x| x.to_string()),
+        Cd::F64(v) if is_money => v.map(|x| format!("{x:.4}")),
+        Cd::F64(v) => v.map(|x| x.to_string()),
+        Cd::Bit(v) => v.map(|x| x.to_string()),
+        Cd::String(v) => v.as_ref().map(|s| s.to_string()),
+        Cd::Guid(v) => v.map(|g| g.to_string()),
+        Cd::Binary(v) => v.as_ref().map(|b| crate::db::bytes_to_display(b)),
+        Cd::Numeric(v) => v.map(|n| n.to_string()),
+        Cd::Xml(v) => v.as_ref().map(|x| x.to_string()),
+        Cd::DateTime(_) | Cd::SmallDateTime(_) | Cd::DateTime2(_) => chrono::NaiveDateTime::from_sql(data)
             .ok()
             .flatten()
             .map(|v| v.format("%Y-%m-%d %H:%M:%S%.f").to_string()),
-        ColumnType::DatetimeOffsetn => row
-            .try_get::<chrono::DateTime<chrono::Utc>, _>(idx)
+        Cd::Date(_) => chrono::NaiveDate::from_sql(data).ok().flatten().map(|v| v.to_string()),
+        Cd::Time(_) => chrono::NaiveTime::from_sql(data).ok().flatten().map(|v| v.to_string()),
+        // 保留原本的時區位移（SQL Server 能直接吃回 `2024-01-02 10:00:00 +08:00`）。
+        Cd::DateTimeOffset(_) => chrono::DateTime::<chrono::FixedOffset>::from_sql(data)
             .ok()
             .flatten()
-            .map(|v| v.to_string()),
-        ColumnType::BigVarBin | ColumnType::BigBinary | ColumnType::Image => row
-            .try_get::<&[u8], _>(idx)
-            .ok()
-            .flatten()
-            .map(crate::db::bytes_to_display),
-        ColumnType::Null => None,
-        // NVarchar / NChar / BigVarChar / BigChar / Text / NText / Xml / Udt / SSVariant → 字串。
-        _ => row.try_get::<&str, _>(idx).ok().flatten().map(|v| v.to_string()),
+            .map(|v| v.format("%Y-%m-%d %H:%M:%S%.f %:z").to_string()),
     }
 }
 
@@ -1273,5 +1290,57 @@ SELECT SCOPE_IDENTITY()"));
         // T-SQL 字串結尾的反斜線不是跳脫：後面的 SELECT 要看得到。
         assert!(batch_returns_rows(r"UPDATE t SET p = 'C:\backup\'; SELECT 1"));
         assert!(batch_returns_rows("CREATE TABLE #x (a int); SELECT * FROM #x"));
+    }
+
+    #[test]
+    fn ddl_column_line_keeps_identity_seed_and_computed_formula() {
+        let base = || DdlColumn { name: "id", type_str: "bigint", nullable: false, identity: None, default: None, computed: None };
+        assert_eq!(
+            ddl_column_line(&DdlColumn { identity: Some(("1000".into(), "5".into())), ..base() }),
+            "  [id] bigint IDENTITY(1000,5) NOT NULL"
+        );
+        let total = DdlColumn { name: "total", computed: Some(("([qty]*[price])".into(), true)), ..base() };
+        assert_eq!(ddl_column_line(&total), "  [total] AS ([qty]*[price]) PERSISTED");
+        let d = DdlColumn { name: "a]b", type_str: "nvarchar(10)", nullable: true, default: Some("(N'x')".into()), ..base() };
+        assert_eq!(ddl_column_line(&d), "  [a]]b] nvarchar(10) NULL DEFAULT (N'x')");
+    }
+
+    #[test]
+    fn mssql_type_str_writes_non_default_time_scale() {
+        assert_eq!(mssql_type_str("datetime2", 8, 27, 7), "datetime2");
+        assert_eq!(mssql_type_str("datetime2", 6, 19, 0), "datetime2(0)");
+        assert_eq!(mssql_type_str("time", 5, 12, 3), "time(3)");
+        assert_eq!(mssql_type_str("datetimeoffset", 10, 34, 7), "datetimeoffset");
+        assert_eq!(mssql_type_str("nvarchar", -1, 0, 0), "nvarchar(MAX)");
+        assert_eq!(mssql_type_str("nvarchar", 100, 0, 0), "nvarchar(50)");
+    }
+
+    #[test]
+    fn column_data_to_string_handles_types_that_used_to_show_null() {
+        use std::borrow::Cow;
+        use tiberius::ColumnData as Cd;
+        // 可為 NULL 的 real：宣告型別 Floatn、資料是 F32（以前 try_get::<f64> 失敗 → 顯示 NULL）。
+        assert_eq!(column_data_to_string(&Cd::F32(Some(1.5)), false).as_deref(), Some("1.5"));
+        assert_eq!(column_data_to_string(&Cd::F32(None), false), None);
+        // xml 欄位（以前 try_get::<&str> 失敗 → 顯示 NULL）。
+        let xml = tiberius::xml::XmlData::new("<a>1</a>");
+        assert_eq!(column_data_to_string(&Cd::Xml(Some(Cow::Owned(xml))), false).as_deref(), Some("<a>1</a>"));
+        // money 照 SSMS 顯示四位小數。
+        assert_eq!(column_data_to_string(&Cd::F64(Some(12.5)), true).as_deref(), Some("12.5000"));
+        assert_eq!(column_data_to_string(&Cd::F64(Some(12.5)), false).as_deref(), Some("12.5"));
+    }
+
+    #[test]
+    fn column_data_to_string_keeps_datetimeoffset_offset() {
+        use tiberius::time::{Date, DateTime2, DateTimeOffset, Time};
+        use tiberius::ColumnData as Cd;
+        // TDS 存的是 UTC 時間與位移：2024-01-02 02:00 UTC、+480 分鐘 → 當地 10:00 +08:00。
+        let days = chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap().signed_duration_since(chrono::NaiveDate::from_ymd_opt(1, 1, 1).unwrap()).num_days() as u32;
+        let utc_2am = Time::new(2 * 3600 * 10_000_000, 7);
+        let dto = DateTimeOffset::new(DateTime2::new(Date::new(days), utc_2am), 480);
+        assert_eq!(
+            column_data_to_string(&Cd::DateTimeOffset(Some(dto)), false).as_deref(),
+            Some("2024-01-02 10:00:00 +08:00")
+        );
     }
 }

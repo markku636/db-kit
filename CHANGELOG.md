@@ -4,6 +4,12 @@
 
 - **SQL Server 的查詢改照 SSMS 的批次規則執行**：以前整段 SQL 照分號拆開、每一句各自從連線池借一條連線送出，於是 `DECLARE @id int = 5; SELECT … WHERE id = @id` 會報「必須宣告純量變數」、`#暫存表` 建完下一句就找不到、`BEGIN TRAN … COMMIT` 落在不同連線上、`CREATE PROCEDURE` 本體裡的分號會把程序切成半截。現在依 `GO` 切成批次、每個批次整段送出（`GO 3` 會重複 3 次）；字串、註解、`[識別字]` 裡的 GO 不算。唯讀連線與危險語句的檢查仍然逐句掃，批次裡第二句的 `DROP` 一樣擋得到。
 - **開頭不是 SELECT 的批次也會顯示結果**：`DECLARE …; SELECT …`、`SET NOCOUNT ON` 開頭、`IF EXISTS (…) SELECT …`、`INSERT … VALUES …` 後接 `SELECT SCOPE_IDENTITY()`、`UPDATE … OUTPUT inserted.*` 以前會被當成寫入、結果集被丟掉只剩「影響 0 列」。`INSERT … SELECT`、`CREATE VIEW … AS SELECT`、程序本體與游標宣告仍當寫入 / 定義處理。
+- **SQL Server 的 `real`、`xml` 欄位不再顯示成 NULL**：可為 NULL 的 `real`（float(24)）與所有 `xml` 欄位以前整欄都顯示 NULL，現在照實顯示；`money` / `smallmoney` 照 SSMS 顯示四位小數。
+- **`datetimeoffset` 保留原本的時區**：以前換算成 UTC 並印成「… UTC」，原本的 +08:00 不見了，複製回去也寫不進資料庫；現在顯示「2024-01-02 10:00:00 +08:00」。
+- **在別的資料庫看程序 / 檢視定義**：連線預設庫是 master 時，點其他庫的預存程序、函式、檢視會「取不到定義」，DDL 分頁也只能看到空白；現在都讀得到。
+- **SQL Server 的估計執行計畫不再弄壞後續查詢**：分析的查詢有語法錯誤時，那條連線會一直停在「只回執行計畫」模式回到連線池，之後借到它的查詢都不會真的執行；現在改用一次性的專屬連線。
+- **SQL Server 資料表 DDL 更準**：`IDENTITY` 帶出真正的起始值與遞增值（不再一律 `(1,1)`）、計算欄位輸出 `AS (運算式) [PERSISTED]`、`datetime2(0)` / `time(3)` 這類非預設精度照實寫出（以前精度 0 會被省略，重建後變成 7）。
+- **超過 21 億列的 SQL Server 資料表也能開**：總列數改用 `COUNT_BIG`，不再算術溢位。
 
 ## v0.59.1
 
