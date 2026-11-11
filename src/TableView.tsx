@@ -1961,7 +1961,10 @@ function DataPane({ tab }: { tab: OpenTab }) {
               ...(isSqlKind || isMongo ? [[t("欄位統計（總數/非空/相異）"), () => colStats(colMenu.col)] as [string, () => void]] : []),
               ...(isSqlKind && connKind ? [[t("相異值分布（Top 50）"), () => {
                 const qc = quoteIdent(connKind, colMenu.col);
-                const sql = `SELECT ${qc}, COUNT(*) AS n\nFROM ${qualifiedName(connKind, tab.database, tab.table)}\nGROUP BY ${qc}\nORDER BY n DESC\nLIMIT 50;`;
+                const from = qualifiedName(connKind, tab.database, tab.table);
+                const sql = connKind === "mssql"
+                  ? `SELECT TOP (50) ${qc}, COUNT(*) AS n\nFROM ${from}\nGROUP BY ${qc}\nORDER BY n DESC;`
+                  : `SELECT ${qc}, COUNT(*) AS n\nFROM ${from}\nGROUP BY ${qc}\nORDER BY n DESC\n${connKind === "oracle" ? "FETCH FIRST 50 ROWS ONLY" : "LIMIT 50"};`;
                 useStore.getState().setActive(tab.connId);
                 useStore.getState().requestQuery(sql);
               }] as [string, () => void]] : []),

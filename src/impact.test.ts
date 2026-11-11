@@ -234,7 +234,7 @@ describe("INSERT", () => {
 
   it("Oracle 子查詢別名不加 AS", () => {
     const r = one("oracle", "INSERT INTO t SELECT * FROM s WHERE x=1");
-    expect(r.probes[0].countSql).toBe("SELECT COUNT(*) AS total FROM (SELECT * FROM s WHERE x=1) _sub");
+    expect(r.probes[0].countSql).toBe("SELECT COUNT(*) AS total FROM (SELECT * FROM s WHERE x=1) q_sub");
   });
 
   it("ON DUPLICATE KEY UPDATE → tuple 數不保證等於落地列數", () => {

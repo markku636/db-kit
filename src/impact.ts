@@ -287,7 +287,8 @@ export function isReadOnlyProbeSql(kind: DbKind, sql: string): boolean {
 // 子查詢計數包裝：Oracle 的 FROM 子查詢別名不可加 AS（`) AS _sub` 是語法錯誤）。
 // 不複用 sql.ts 的 buildCountQuery —— 那支只吃視覺建構器的 QbSpec，且寫死 AS _sub。
 function wrapCount(kind: DbKind, inner: string): string {
-  return `SELECT COUNT(*) AS total FROM (${inner}) ${kind === "oracle" ? "_sub" : "AS _sub"}`;
+  // Oracle 不加引號的識別字不能以底線開頭（`_sub` 會 ORA-00911），改用 q_sub。
+  return `SELECT COUNT(*) AS total FROM (${inner}) ${kind === "oracle" ? "q_sub" : "AS _sub"}`;
 }
 
 // 預覽前 N 列：MSSQL 的 TOP 必須緊跟 SELECT（不能事後 append），Oracle 12c+ 用
@@ -590,7 +591,7 @@ function analyzeInsert(kind: DbKind, m: MaskedSql, item: ImpactItem, op: "insert
       ready: {
         countSql: wrapCount(kind, inner),
         previewSql: `SELECT ${limitHead(kind, PREVIEW_ROWS)}* FROM (${inner}) ${
-          kind === "oracle" ? "_sub" : "AS _sub"
+          kind === "oracle" ? "q_sub" : "AS _sub"
         }${limitTail(kind, PREVIEW_ROWS)}`,
         undoSelect: null, // 新增的列尚不存在，沒有前像可保存
       },

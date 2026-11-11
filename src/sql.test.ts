@@ -96,6 +96,7 @@ import {
   buildSelectQuery,
   isStringLikeType,
   buildCountQuery,
+  selectTopSql,
   minifySql,
   extractNamedParams,
   substituteNamedParams,
@@ -1215,6 +1216,26 @@ describe("buildSelectQuery（視覺化查詢建構器）", () => {
     }));
     expect(sql).toBe("SELECT COUNT(*) AS total FROM (SELECT `id` FROM `shop`.`orders`) AS _sub;");
     expect(buildCountQuery("mysql", base({ baseTable: "" }))).toBe("");
+  });
+
+  it("列數限制依方言：mssql TOP / OFFSET FETCH、oracle FETCH、oracle 表別名與子查詢別名不加 AS", () => {
+    expect(buildSelectQuery("mssql", base({ limit: 10 }))).toBe("SELECT TOP (10) * FROM [shop].[dbo].[orders];");
+    expect(buildSelectQuery("mssql", base({ limit: 10, offset: 20 }))).toBe(
+      "SELECT * FROM [shop].[dbo].[orders] ORDER BY (SELECT NULL) OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY;",
+    );
+    expect(buildSelectQuery("oracle", base({ limit: 10, offset: 20 }))).toBe(
+      'SELECT * FROM "shop"."orders" OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY;',
+    );
+    expect(buildSelectQuery("oracle", base({ tables: [{ name: "orders", alias: "o" }] }))).toBe(
+      'SELECT * FROM "shop"."orders" "o";',
+    );
+    expect(buildCountQuery("oracle", base({}))).toBe('SELECT COUNT(*) AS total FROM (SELECT * FROM "shop"."orders") q_sub;');
+  });
+
+  it("selectTopSql 依方言產生前 N 筆查詢", () => {
+    expect(selectTopSql("mssql", "[db].[dbo].[t]")).toBe("SELECT TOP (100) *\nFROM [db].[dbo].[t];");
+    expect(selectTopSql("oracle", '"t"')).toBe('SELECT *\nFROM "t"\nFETCH FIRST 100 ROWS ONLY;');
+    expect(selectTopSql("mysql", "`t`", "`a`", 5)).toBe("SELECT `a`\nFROM `t`\nLIMIT 5;");
   });
 
   it("綜合：DISTINCT + JOIN + 聚合別名 + WHERE + GROUP BY + HAVING + ORDER BY + LIMIT + OFFSET 子句順序正確", () => {

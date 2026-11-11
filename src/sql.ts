@@ -770,7 +770,8 @@ export function buildSelectQuery(kind: DbKind, spec: QbSpec): string {
   const fromOf = (table: string) => {
     const tbl = spec.tables.find((x) => x.name === table);
     const base = qualifiedName(kind, spec.db, table);
-    return tbl?.alias?.trim() ? `${base} AS ${qi(tbl.alias.trim())}` : base;
+    // Oracle 的表別名不能加 AS（`FROM t AS a` 是 ORA-00933）。
+    return tbl?.alias?.trim() ? `${base}${kind === "oracle" ? "" : " AS"} ${qi(tbl.alias.trim())}` : base;
   };
   let body = `FROM ${fromOf(spec.baseTable)}`;
   const inFrom = new Set<string>([spec.baseTable]);
@@ -842,11 +843,30 @@ export function buildSelectQuery(kind: DbKind, spec: QbSpec): string {
     body += ` ORDER BY ${orders.map((o) => `${colRef(o.table, o.column)} ${o.dir}`).join(", ")}`;
   }
 
-  // LIMIT / OFFSET（三大關聯式方言皆支援 `LIMIT n OFFSET m`）
-  if (spec.limit != null && spec.limit > 0) body += ` LIMIT ${Math.floor(spec.limit)}`;
-  if (spec.offset != null && spec.offset > 0) body += ` OFFSET ${Math.floor(spec.offset)}`;
+  // 列數限制，依方言：
+  //  - MySQL / PG / SQLite：`LIMIT n OFFSET m`
+  //  - SQL Server：只有 n → `SELECT TOP (n)`；有 m → `OFFSET m ROWS FETCH NEXT n ROWS ONLY`（必須有 ORDER BY，沒有就補 `ORDER BY (SELECT NULL)`）
+  //  - Oracle 12c+：`OFFSET m ROWS FETCH NEXT n ROWS ONLY`
+  const limit = spec.limit != null && spec.limit > 0 ? Math.floor(spec.limit) : null;
+  const offset = spec.offset != null && spec.offset > 0 ? Math.floor(spec.offset) : null;
+  let top = "";
+  if (kind === "mssql") {
+    if (offset != null) {
+      if (!orders.length) body += " ORDER BY (SELECT NULL)";
+      body += ` OFFSET ${offset} ROWS`;
+      if (limit != null) body += ` FETCH NEXT ${limit} ROWS ONLY`;
+    } else if (limit != null) {
+      top = `TOP (${limit}) `;
+    }
+  } else if (kind === "oracle") {
+    if (offset != null) body += ` OFFSET ${offset} ROWS`;
+    if (limit != null) body += ` FETCH NEXT ${limit} ROWS ONLY`;
+  } else {
+    if (limit != null) body += ` LIMIT ${limit}`;
+    if (offset != null) body += ` OFFSET ${offset}`;
+  }
 
-  return `SELECT ${spec.distinct ? "DISTINCT " : ""}${selectList} ${body};`;
+  return `SELECT ${spec.distinct ? "DISTINCT " : ""}${top}${selectList} ${body};`;
 }
 
 // SQL 關鍵字（子句 / 運算子 / DML / DDL）。刻意不含型別名（date/text/timestamp…）與常見欄名，
@@ -1024,7 +1044,8 @@ export function isWriteStatement(sql: string): boolean {
 export function buildCountQuery(kind: DbKind, spec: QbSpec): string {
   const inner = buildSelectQuery(kind, { ...spec, limit: null, offset: null, orders: [] }).replace(/;\s*$/, "");
   if (!inner) return "";
-  return `SELECT COUNT(*) AS total FROM (${inner}) AS _sub;`;
+  // Oracle 的 FROM 子查詢別名不可加 AS，且不加引號的識別字不能以底線開頭（`_sub` 會 ORA-00911）。
+  return `SELECT COUNT(*) AS total FROM (${inner}) ${kind === "oracle" ? "q_sub" : "AS _sub"};`;
 }
 
 // ---- 查詢歷史（localStorage，最近在前，去重，上限 200）----
