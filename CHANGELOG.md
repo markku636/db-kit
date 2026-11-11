@@ -23,6 +23,9 @@
 - **Redis 主控台的 RESP3 回應好讀了**：map、浮點數、布林值、verbatim 字串不再印成 `Double(1.5)` 這種程式內部格式。
 - **Redis 的二進位值打得開了**：gzip、protobuf、序列化物件這類非 UTF-8 的值，以前一打開鍵詳情就整頁報錯（Invalid UTF-8）；鍵清單裡只要有一個這種鍵名，整頁鍵清單也列不出來。現在照 redis-cli 的習慣把無法顯示的位元組寫成 `\xHH` 顯示；這種鍵改成唯讀並說明原因，避免把跳脫後的字串寫回去損毀原始資料。大鍵分析也量得到非 UTF-8 鍵名的大小。
 - **SQL Server 連不上時講出原因**：以前帳密錯、主機打錯、埠沒開、憑證不受信任，一律等滿 10 秒後只回「Timed out in bb8」。現在直接顯示伺服器回的原因（例如「使用者登入失敗」「目標電腦拒絕連線」，拒絕連線約 2 秒就回報）；主機沒回應時會說明可能那個埠上不是 SQL Server；具名執行個體找不到時會指出是 SQL Server Browser（UDP 1434）沒有回應。連上之後若連線池取不到連線，也會附上最近一次連線失敗的原因。
+- **SQL Server 的欄位與資料表說明看得到了**：讀取擴充屬性 `MS_Description`（SSMS「描述」欄填的那個），欄位清單、結構分頁與資料表資訊都會顯示；結構比對發現說明不同時，同步腳本會產生 `sp_addextendedproperty` / `sp_updateextendedproperty`（以前完全不處理）。
+- **SQL Server 索引的 INCLUDE 欄位不再被當成索引鍵**：以前 `CREATE INDEX ix ON t (a) INCLUDE (b)` 會列成索引欄位「b, a」（INCLUDE 欄位排在最前面），結構比對與重建也會照錯的順序。
+- **SQL Server 資料表的估計列數正確了**：含 `nvarchar(max)`、`varbinary(max)` 這類欄位的表，列數以前會多算 2～3 倍；資料表資訊另外多了「索引大小」。
 
 ## v0.59.1
 

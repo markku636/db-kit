@@ -586,8 +586,41 @@ impl<'a> Gen<'a> {
         } else if self.kind == DbKind::Oracle && !c.comment.is_empty() {
             self.columns.push(s);
             s = self.comment_stmt(table, c);
+        } else if self.kind == DbKind::Mssql && !c.comment.is_empty() {
+            self.columns.push(s);
+            s = self.mssql_comment_stmt(table, c);
         }
         self.columns.push(s);
+    }
+
+    /// SQL Server 的欄位說明是擴充屬性 MS_Description：已存在就 update、沒有就 add；來源沒有說明則 drop。
+    /// 系統程序要在目標庫的環境下跑，所以帶庫名前綴（與 sp_rename 相同）。
+    fn mssql_comment_stmt(&self, table: &str, c: &ColumnInfo) -> SyncStatement {
+        let (schema, tbl) = table.split_once('.').unwrap_or(("dbo", table));
+        let db = if self.db.is_empty() { String::new() } else { format!("{}.", quote_ident(self.kind, self.db)) };
+        let lit = |v: &str| format!("N'{}'", v.replace('\'', "''"));
+        let target = format!(
+            "@level0type = N'SCHEMA', @level0name = {}, @level1type = N'TABLE', @level1name = {}, @level2type = N'COLUMN', @level2name = {}",
+            lit(schema),
+            lit(tbl),
+            lit(&c.name)
+        );
+        let exists = format!(
+            "EXISTS (SELECT 1 FROM {db}sys.fn_listextendedproperty(N'MS_Description', N'SCHEMA', {}, N'TABLE', {}, N'COLUMN', {}))",
+            lit(schema),
+            lit(tbl),
+            lit(&c.name)
+        );
+        let sql = if c.comment.is_empty() {
+            format!("IF {exists} EXEC {db}sys.sp_dropextendedproperty @name = N'MS_Description', {target}")
+        } else {
+            let v = lit(&c.comment);
+            format!(
+                "IF {exists} EXEC {db}sys.sp_updateextendedproperty @name = N'MS_Description', @value = {v}, {target} \
+                 ELSE EXEC {db}sys.sp_addextendedproperty @name = N'MS_Description', @value = {v}, {target}"
+            )
+        };
+        st(SyncKind::Comment, format!("{table}.{}", c.name), sql, false)
     }
 
     fn comment_stmt(&self, table: &str, c: &ColumnInfo) -> SyncStatement {
@@ -659,6 +692,10 @@ impl<'a> Gen<'a> {
                 }
                 if attrs.contains(&ColumnAttr::Extra) {
                     self.skip(tf!("{obj}：identity 屬性變更請手動處理", obj = obj));
+                }
+                if attrs.contains(&ColumnAttr::Comment) {
+                    let s = self.mssql_comment_stmt(table, src);
+                    self.columns.push(s);
                 }
             }
             DbKind::Oracle => {
@@ -984,6 +1021,26 @@ mod tests {
         assert!(s.statements[1].destructive); // 改型別
         assert!(s.statements[2].destructive);
         assert_eq!(s.destructive_count, 2);
+    }
+
+    #[test]
+    fn mssql_column_comment_syncs_as_ms_description() {
+        let id = col("id", "int", false);
+        let mut named = col("name", "nvarchar(50)", true);
+        named.comment = "客戶's 名稱".into();
+        let mut added = col("memo", "nvarchar(100)", true);
+        added.comment = "備註".into();
+        let src = vec![table("sales.t", vec![id.clone(), named, added], vec![])];
+        let dst = vec![table("sales.t", vec![id, col("name", "nvarchar(50)", true)], vec![])];
+        let s = gen(DbKind::Mssql, src, dst, &opts_all());
+        let v = sqls(&s);
+        assert!(v.iter().any(|x| x.starts_with("ALTER TABLE") && x.contains("ADD [memo]")), "{v:?}");
+        let add_comment = v.iter().find(|x| x.contains("@level2name = N'memo'")).expect("新增欄位要帶說明");
+        assert!(add_comment.contains("[tgt].sys.sp_addextendedproperty"), "{add_comment}");
+        assert!(add_comment.contains("@level0name = N'sales'") && add_comment.contains("@level1name = N't'"), "{add_comment}");
+        let upd = v.iter().find(|x| x.contains("@level2name = N'name'")).expect("說明不同要同步");
+        assert!(upd.contains("sp_updateextendedproperty") && upd.contains("N'客戶''s 名稱'"), "{upd}");
+        assert!(!v.iter().any(|x| x.contains("COMMENT ")), "SQL Server 沒有 COMMENT 語法：{v:?}");
     }
 
     #[test]

@@ -378,11 +378,16 @@ impl DatabaseDriver for MssqlDriver {
         // 型別要帶長度 / 精度：只回 sys.types.name 的話，結構比對看不出 nvarchar(50) → nvarchar(200)，
         // 而且 compare 的 ALTER COLUMN 會照抄成 `ALTER COLUMN [c] nvarchar`——T-SQL 省略長度等於
         // nvarchar(1)，一句同步就把欄位截成 1 個字元。與 PG（format_type）/ Oracle 的回法對齊。
+        // 欄位說明：SQL Server 沒有 COMMENT，慣例是擴充屬性 MS_Description（SSMS 的「描述」欄就是它）。
+        // value 是 sql_variant（tiberius 解不了），轉成字串再取。
         let sql = format!(
-            "SELECT c.name, ty.name, c.is_nullable, c.is_identity, dc.definition, c.max_length, c.precision, c.scale \
+            "SELECT c.name, ty.name, c.is_nullable, c.is_identity, dc.definition, c.max_length, c.precision, c.scale, \
+                    CAST(ep.value AS NVARCHAR(4000)) \
              FROM [{db}].sys.columns c \
              JOIN [{db}].sys.types ty ON c.user_type_id = ty.user_type_id \
              LEFT JOIN [{db}].sys.default_constraints dc ON c.default_object_id = dc.object_id \
+             LEFT JOIN [{db}].sys.extended_properties ep \
+                    ON ep.class = 1 AND ep.major_id = c.object_id AND ep.minor_id = c.column_id AND ep.name = N'MS_Description' \
              WHERE c.object_id = OBJECT_ID({obj}) \
              ORDER BY c.column_id"
         );
@@ -409,7 +414,7 @@ impl DatabaseDriver for MssqlDriver {
                     key,
                     default,
                     extra: if is_identity { "identity".to_string() } else { String::new() },
-                    comment: String::new(),
+                    comment: get_str(r, 8).unwrap_or_default(),
                 })
             })
             .collect())
@@ -611,7 +616,7 @@ impl DatabaseDriver for MssqlDriver {
              FROM [{db}].sys.indexes i \
              JOIN [{db}].sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id \
              JOIN [{db}].sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id \
-             WHERE i.object_id = OBJECT_ID({obj}) AND i.type > 0 \
+             WHERE i.object_id = OBJECT_ID({obj}) AND i.type > 0 AND ic.is_included_column = 0 \
              ORDER BY i.name, ic.key_ordinal"
         );
         let rows = self.query_rows(&sql).await?;
@@ -854,11 +859,20 @@ impl DatabaseDriver for MssqlDriver {
         let (schema, tbl) = split_schema_table(table);
         let db = esc(database);
         let obj = object_literal(database, &schema, &tbl);
+        // 列數只看 sys.partitions：以前先 JOIN allocation_units 再 SUM，每個 partition 有幾個
+        // allocation unit（IN_ROW / LOB / ROW_OVERFLOW）列數就被算幾次——有 nvarchar(max) 的表列數多 2～3 倍。
         let sql = format!(
-            "SELECT SUM(p.rows), SUM(a.total_pages) * 8 * 1024 \
-             FROM [{db}].sys.partitions p \
-             JOIN [{db}].sys.allocation_units a ON p.partition_id = a.container_id \
-             WHERE p.object_id = OBJECT_ID({obj}) AND p.index_id IN (0, 1)"
+            "SELECT \
+               (SELECT SUM(p.rows) FROM [{db}].sys.partitions p \
+                  WHERE p.object_id = OBJECT_ID({obj}) AND p.index_id IN (0, 1)), \
+               (SELECT SUM(a.total_pages) * 8 * 1024 FROM [{db}].sys.partitions p \
+                  JOIN [{db}].sys.allocation_units a ON p.partition_id = a.container_id \
+                  WHERE p.object_id = OBJECT_ID({obj}) AND p.index_id IN (0, 1)), \
+               (SELECT SUM(a.total_pages) * 8 * 1024 FROM [{db}].sys.partitions p \
+                  JOIN [{db}].sys.allocation_units a ON p.partition_id = a.container_id \
+                  WHERE p.object_id = OBJECT_ID({obj}) AND p.index_id > 1), \
+               (SELECT CAST(ep.value AS NVARCHAR(4000)) FROM [{db}].sys.extended_properties ep \
+                  WHERE ep.class = 1 AND ep.major_id = OBJECT_ID({obj}) AND ep.minor_id = 0 AND ep.name = N'MS_Description')"
         );
         let mut out = Vec::new();
         if let Ok(rows) = self.query_rows(&sql).await {
@@ -868,6 +882,12 @@ impl DatabaseDriver for MssqlDriver {
                 }
                 if let Some(b) = r.try_get::<i64, _>(1).ok().flatten() {
                     out.push((t!("資料大小").to_string(), fmt_bytes(b)));
+                }
+                if let Some(b) = r.try_get::<i64, _>(2).ok().flatten() {
+                    out.push((t!("索引大小").to_string(), fmt_bytes(b)));
+                }
+                if let Some(c) = get_str(r, 3).filter(|c| !c.is_empty()) {
+                    out.push((t!("註解").to_string(), c));
                 }
             }
         }
