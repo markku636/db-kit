@@ -473,3 +473,15 @@ describe("routeToReviewRun / reviewOutcomeToChatRun", () => {
     expect(reviewOutcomeToChatRun("sql", outcome("failed", "第 2 句執行失敗"))?.error).toBe("第 2 句執行失敗");
   });
 });
+
+describe("classifyForRun：MSSQL 依 GO 送批次", () => {
+  const safe = { readonly: false, prod: false };
+  it("DECLARE 與使用它的 SELECT 留在同一個批次", () => {
+    const r = classifyForRun("DECLARE @n int = 1;\nSELECT @n", "mssql", safe);
+    expect(r.ok && r.statements).toEqual(["DECLARE @n int = 1;\nSELECT @n"]);
+  });
+  it("守門仍逐句掃：唯讀連線擋得到批次裡的第二句寫入", () => {
+    const r = classifyForRun("SELECT 1; DELETE FROM t WHERE id = 1", "mssql", { readonly: true, prod: false });
+    expect(r).toEqual({ ok: false, reason: "readonly" });
+  });
+});

@@ -388,7 +388,7 @@ impl DatabaseDriver for MssqlDriver {
     }
 
     async fn query_capped(&self, sql: &str, cap: usize) -> AppResult<QueryResult> {
-        if is_read_sql(sql) {
+        if batch_returns_rows(sql) {
             let (rows, truncated) = self.query_rows_capped(sql, cap).await?;
             let columns: Vec<String> = rows
                 .first()
@@ -406,7 +406,7 @@ impl DatabaseDriver for MssqlDriver {
     }
 
     async fn query_multi_capped(&self, sql: &str, cap: usize) -> AppResult<Vec<QueryResult>> {
-        if !is_read_sql(sql) {
+        if !batch_returns_rows(sql) {
             let n = self.exec_tracked(sql).await?;
             return Ok(vec![QueryResult { columns: vec![], rows: vec![], rows_affected: n, truncated: false }]);
         }
@@ -914,13 +914,156 @@ fn mssql_type_str(ty: &str, max_length: i16, precision: u8, scale: u8) -> String
     }
 }
 
-/// 這條語句會不會回結果集（→ 走 fetch）。前導註解與大小寫由 `db::stmt` 統一處理，
-/// 這裡只列 T-SQL 中「會回列」的起始關鍵字。
+/// 這個**批次**會不會回結果集（→ 走 fetch 串流；否則走 execute 取受影響列數）。
 ///
-/// `exec` 與 `execute` 要分別列出：改成「完整字詞」比對之後，`exec` 不再是 `execute` 的前綴。
-fn is_read_sql(sql: &str) -> bool {
-    const READ_HEADS: &[&str] = &["select", "with", "exec", "execute", "show"];
-    crate::db::stmt::head_is_any(sql, READ_HEADS)
+/// 前端依 `GO` 把整個批次一次送來（DECLARE 的變數、暫存表、交易都要在同一個批次裡），
+/// 所以不能只看第一個關鍵字：`DECLARE @n int = 1; SELECT @n`、`SET NOCOUNT ON; SELECT …`、
+/// `IF EXISTS (…) SELECT …`、`UPDATE … OUTPUT inserted.*` 都會回列，開頭卻不是 SELECT。
+/// 只看開頭的話它們全走 execute，結果集被丟掉，使用者只看到「影響 0 列」。
+///
+/// 掃描規則（去掉註解與字面值後、只看括號外的字詞）：
+/// - `SELECT` / `EXEC` 會回列——但 `INSERT … SELECT`、`INSERT … EXEC` 是寫入的一部分，
+///   `INSERT … VALUES (…)` 之後的 SELECT 才是新語句；`DECLARE c CURSOR FOR SELECT` 不回列。
+/// - DML 的 `OUTPUT` 子句會回列。
+/// - `CREATE / ALTER PROCEDURE|FUNCTION|VIEW|TRIGGER` 的本體是定義、不是現在要執行的查詢，
+///   T-SQL 規定它獨佔整個批次，看到就停。
+///
+/// tiberius 的串流取不到受影響列數，所以兩邊都能走的批次（例如 `UPDATE …; SELECT …`）
+/// 選擇保住結果集；純寫入批次照舊回列數。
+fn batch_returns_rows(sql: &str) -> bool {
+    let code = tsql_code_only(sql).to_ascii_lowercase();
+    let toks = tsql_tokens(&code);
+    let mut depth = 0usize;
+    // 目前所在語句的種類（只追 SELECT 判讀需要的那幾種）。
+    let mut cur: &str = "";
+    let mut insert_values = false;
+    for (i, t) in toks.iter().enumerate() {
+        match *t {
+            "(" => depth += 1,
+            ")" => depth = depth.saturating_sub(1),
+            ";" if depth == 0 => {
+                cur = "";
+                insert_values = false;
+            }
+            _ if depth > 0 => {}
+            "select" | "exec" | "execute" => {
+                let part_of_write = (cur == "insert" && !insert_values) || cur == "cursor";
+                if !part_of_write {
+                    return true;
+                }
+            }
+            "output" if matches!(cur, "insert" | "update" | "delete" | "merge") => return true,
+            "insert" => {
+                cur = "insert";
+                insert_values = false;
+            }
+            "values" if cur == "insert" => insert_values = true,
+            "update" | "delete" | "merge" => cur = t,
+            "cursor" => cur = "cursor",
+            "create" | "alter" => {
+                let next = toks[i + 1..].iter().find(|w| !matches!(**w, "or" | "alter"));
+                if next.is_some_and(|w| matches!(*w, "procedure" | "proc" | "function" | "view" | "trigger")) {
+                    return false;
+                }
+                cur = "create";
+            }
+            "declare" | "if" | "else" | "begin" | "end" | "while" | "print" | "use" | "return" | "drop"
+            | "truncate" | "commit" | "rollback" | "go" => {
+                cur = "";
+                insert_values = false;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// T-SQL 版的「只留程式碼」：註解、字串、`"識別字"`、`[識別字]` 各換成一個空白。
+///
+/// 不能沿用 `stmt::code_only`：它照 MySQL 規則把 `#` 當行註解（T-SQL 的 `#temp` 暫存表名
+/// 會把後半個批次吃掉）、把字串裡的 `\` 當跳脫（`'C:\backup\'` 的結尾引號會被吞掉）。
+/// T-SQL 的區塊註解可巢狀。
+fn tsql_code_only(sql: &str) -> String {
+    let b = sql.as_bytes();
+    let n = b.len();
+    let mut out: Vec<u8> = Vec::with_capacity(n);
+    let mut i = 0;
+    // 跳到成對結尾（疊寫兩次代表字面上的一個，如 `''`、`]]`），回傳結尾之後的位置。
+    let skip_quoted = |mut j: usize, close: u8| -> usize {
+        while j < n {
+            if b[j] == close {
+                if j + 1 < n && b[j + 1] == close {
+                    j += 2;
+                    continue;
+                }
+                return j + 1;
+            }
+            j += 1;
+        }
+        n
+    };
+    while i < n {
+        let c = b[i];
+        let next = if i + 1 < n { b[i + 1] } else { 0 };
+        let skipped_to = match c {
+            b'\'' => Some(skip_quoted(i + 1, b'\'')),
+            b'"' => Some(skip_quoted(i + 1, b'"')),
+            b'[' => Some(skip_quoted(i + 1, b']')),
+            b'-' if next == b'-' => Some(b[i..].iter().position(|&x| x == b'\n').map_or(n, |p| i + p)),
+            b'/' if next == b'*' => {
+                let mut depth = 1;
+                let mut j = i + 2;
+                while j < n && depth > 0 {
+                    if b[j] == b'/' && j + 1 < n && b[j + 1] == b'*' {
+                        depth += 1;
+                        j += 2;
+                    } else if b[j] == b'*' && j + 1 < n && b[j + 1] == b'/' {
+                        depth -= 1;
+                        j += 2;
+                    } else {
+                        j += 1;
+                    }
+                }
+                Some(j)
+            }
+            _ => None,
+        };
+        match skipped_to {
+            Some(j) => {
+                out.push(b' ');
+                i = j;
+            }
+            None => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    // 略過的區段起訖都是 ASCII，保留下來的位元組仍是合法 UTF-8。
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// `tsql_code_only` 之後的 T-SQL 粗切詞：字詞（含 `@` `#` `_` `$`）與 `(` `)` `;` 各成一個 token，其餘略過。
+fn tsql_tokens(code: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let b = code.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_alphanumeric() || matches!(c, b'_' | b'@' | b'#' | b'$') || c >= 0x80 {
+            let s = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || matches!(b[i], b'_' | b'@' | b'#' | b'$') || b[i] >= 0x80) {
+                i += 1;
+            }
+            out.push(&code[s..i]);
+            continue;
+        }
+        if matches!(c, b'(' | b')' | b';') {
+            out.push(&code[i..i + 1]);
+        }
+        i += 1;
+    }
+    out
 }
 
 fn get_str(row: &tiberius::Row, idx: usize) -> Option<String> {
@@ -1090,5 +1233,45 @@ mod tests {
         // 與 split_schema_table 互為反向。
         assert_eq!(split_schema_table("sales.sp_x"), ("sales".to_string(), "sp_x".to_string()));
         assert_eq!(split_schema_table("sp_x"), ("dbo".to_string(), "sp_x".to_string()));
+    }
+
+    #[test]
+    fn batch_returns_rows_plain_reads_and_writes() {
+        assert!(batch_returns_rows("SELECT * FROM t"));
+        assert!(batch_returns_rows("-- 註解
+WITH c AS (SELECT 1 AS x) SELECT * FROM c"));
+        assert!(batch_returns_rows("EXEC sp_who2"));
+        assert!(!batch_returns_rows("UPDATE t SET a = 1 WHERE id = 2"));
+        assert!(!batch_returns_rows("DELETE FROM t WHERE id IN (SELECT id FROM u)"));
+        assert!(!batch_returns_rows("INSERT INTO t (a) SELECT a FROM u UNION SELECT 2"));
+        assert!(!batch_returns_rows("INSERT INTO t EXEC dbo.p"));
+    }
+
+    #[test]
+    fn batch_returns_rows_sees_select_after_procedural_head() {
+        // 前端依 GO 整批送來：開頭不是 SELECT 也可能回列。
+        assert!(batch_returns_rows("DECLARE @n int = 1;
+SELECT @n"));
+        assert!(batch_returns_rows("SET NOCOUNT ON
+SELECT 1"));
+        assert!(batch_returns_rows("IF EXISTS (SELECT 1 FROM t) SELECT 'yes'"));
+        assert!(batch_returns_rows("INSERT INTO t VALUES (1)
+SELECT SCOPE_IDENTITY()"));
+        assert!(batch_returns_rows("UPDATE t SET a = 1; SELECT * FROM t"));
+        assert!(batch_returns_rows("UPDATE t SET a = 1 OUTPUT inserted.* WHERE id = 1"));
+        assert!(!batch_returns_rows("IF EXISTS (SELECT 1 FROM t) DELETE FROM t"));
+        assert!(!batch_returns_rows("BEGIN TRAN; UPDATE t SET a = 1; COMMIT"));
+    }
+
+    #[test]
+    fn batch_returns_rows_ignores_module_bodies_cursors_and_literals() {
+        assert!(!batch_returns_rows("CREATE PROCEDURE dbo.p AS BEGIN SELECT 1; END"));
+        assert!(!batch_returns_rows("CREATE OR ALTER VIEW v AS SELECT 1 AS x"));
+        assert!(!batch_returns_rows("ALTER FUNCTION f() RETURNS TABLE AS RETURN (SELECT 1 AS x)"));
+        assert!(!batch_returns_rows("DECLARE c CURSOR FOR SELECT id FROM t"));
+        assert!(!batch_returns_rows("UPDATE t SET note = 'select * from x' -- select"));
+        // T-SQL 字串結尾的反斜線不是跳脫：後面的 SELECT 要看得到。
+        assert!(batch_returns_rows(r"UPDATE t SET p = 'C:\backup\'; SELECT 1"));
+        assert!(batch_returns_rows("CREATE TABLE #x (a int); SELECT * FROM #x"));
     }
 }

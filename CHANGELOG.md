@@ -1,3 +1,10 @@
+## 未發佈
+
+修正：
+
+- **SQL Server 的查詢改照 SSMS 的批次規則執行**：以前整段 SQL 照分號拆開、每一句各自從連線池借一條連線送出，於是 `DECLARE @id int = 5; SELECT … WHERE id = @id` 會報「必須宣告純量變數」、`#暫存表` 建完下一句就找不到、`BEGIN TRAN … COMMIT` 落在不同連線上、`CREATE PROCEDURE` 本體裡的分號會把程序切成半截。現在依 `GO` 切成批次、每個批次整段送出（`GO 3` 會重複 3 次）；字串、註解、`[識別字]` 裡的 GO 不算。唯讀連線與危險語句的檢查仍然逐句掃，批次裡第二句的 `DROP` 一樣擋得到。
+- **開頭不是 SELECT 的批次也會顯示結果**：`DECLARE …; SELECT …`、`SET NOCOUNT ON` 開頭、`IF EXISTS (…) SELECT …`、`INSERT … VALUES …` 後接 `SELECT SCOPE_IDENTITY()`、`UPDATE … OUTPUT inserted.*` 以前會被當成寫入、結果集被丟掉只剩「影響 0 列」。`INSERT … SELECT`、`CREATE VIEW … AS SELECT`、程序本體與游標宣告仍當寫入 / 定義處理。
+
 ## v0.59.1
 
 **AI 代理人（Claude Code / Codex…）能用 `dbk conn add` 自己建好資料庫連線，不必再請你開 App 填表。**

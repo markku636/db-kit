@@ -68,7 +68,7 @@ import { toast, uiChoose, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSave
 import { askOtpCode } from "./otpGate";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
-  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, statementAtOffset, isDangerousStatement, isWriteStatement, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, splitTsqlBatches, splitForGuard, statementAtOffset, isDangerousStatement, isWriteStatement, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName, selectTopSql, isMysqlFamily, supportsRoutines, supportsQueryEditorKind, supportsSchemaCompare,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
@@ -5199,12 +5199,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         // 非 SQL（Mongo / Redis）維持單一指令。純註解 / 空白片段已於切分時濾除。
         const isSql = !!kind && (EXPLAIN_KINDS.includes(kind) || kind === "mssql");
         const isSqlLike = isSql || kind === "external"; // external（gateway）也講 SQL，但不走前端切分
-        const userStatements = isSql ? splitSqlStatements(q) : [q];
+        // MSSQL 依 GO 切批次整段送出（變數 / 暫存表 / 程序本體都要在同一個批次裡），其餘方言依分號切。
+        const userStatements = kind === "mssql" ? splitTsqlBatches(q) : isSql ? splitSqlStatements(q) : [q];
         // 守門掃描的單位與「送出」的單位刻意分開：external 整批送（gateway 自己會拆，前端切了
         // 會破壞它的多結果集對位），但檢查一定要看切分後的每一條。isWriteStatement 只認語句的
         // **第一個**關鍵字，拿整批去問等於只檢查了第一句——`SELECT 1; DROP TABLE users` 會就這樣
         // 從唯讀連線的閘門底下過去。
-        const scanStatements = isSqlLike ? splitSqlStatements(q) : userStatements;
+        const scanStatements = isSqlLike ? splitForGuard(q, kind) : userStatements;
         // 純註解 / 空白（如尾端 `-- 註記`）不是可執行語句 → 不送 DB，避免「Query was empty」類錯誤。
         if (isSqlLike && scanStatements.every((s) => !hasExecutableSql(s))) {
           toast.info(t("僅含註解，無可執行語句"));
@@ -5328,7 +5329,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           // external 整批送出：嘗試以 client 端切分對位各格標籤（僅當語句數 === 結果集數）；
           // 不符（批內含 DML / 一句 CALL 展多集）則各格標整批原文，靠「結果 N」序號區分。
           const stmtLabels =
-            kind === "external" && grids.length > 1
+            (kind === "external" || kind === "mssql") && grids.length > 1
               ? (() => {
                   const spans = splitSqlStatementsWithRanges(userStatements[si]);
                   return spans.length === grids.length ? spans.map((x) => x.text) : null;

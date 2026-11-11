@@ -1751,6 +1751,93 @@ export function splitSqlStatementsWithRanges(sql: string): SqlStatementSpan[] {
   return out.filter((s) => hasExecutableSql(s.text));
 }
 
+/** `GO n` 重複次數上限：手滑打成 `GO 100000` 不該讓 App 連送十萬次。 */
+export const TSQL_GO_REPEAT_MAX = 1000;
+
+// `GO` 單獨一行（可帶重複次數與行尾註解）：與 sqlcmd / SSMS 的批次分隔規則一致。
+const GO_LINE_RE = /^[ \t]*go(?:[ \t]+(\d+))?[ \t]*(?:--.*)?$/i;
+
+/**
+ * T-SQL 依 `GO` 切成批次（SSMS / sqlcmd 的語意），**不**依分號切。
+ *
+ * SQL Server 的變數、暫存表、交易都活在「同一個批次 / 同一條連線」裡：
+ * `DECLARE @id int = 5; SELECT … WHERE id = @id` 若照分號拆成兩次送出，第二句會落在
+ * 連線池的另一條連線上，得到「必須宣告純量變數 @id」；`CREATE PROCEDURE … BEGIN …; …; END`
+ * 被拆開更會建出半截的程序。所以 MSSQL 一個批次整段送出，由伺服器自己處理分號。
+ *
+ * `GO` 只在獨立成行、且不在字串 / 註解 / [識別字] 內時才算分隔；`GO 3` 會把該批次重複 3 次
+ * （上限 TSQL_GO_REPEAT_MAX）。純註解 / 空白批次會被濾掉。
+ */
+export function splitTsqlBatches(sql: string): string[] {
+  const out: string[] = [];
+  const st: TsqlLexState = { inS: false, inD: false, inBr: false, blockC: 0 };
+  let batchStart = 0;
+  let lineStart = 0;
+  let cleanAtLineStart = true; // 這一行開頭不在字串 / 註解 / [識別字] 內，才可能是 GO 行
+  const flush = (end: number, repeat: number) => {
+    const text = sql.slice(batchStart, end).trim();
+    if (!text || !hasExecutableSql(text)) return;
+    const n = Math.min(Math.max(repeat, 1), TSQL_GO_REPEAT_MAX);
+    for (let k = 0; k < n; k++) out.push(text);
+  };
+  let i = 0;
+  while (i <= sql.length) {
+    if (i === sql.length || sql[i] === "\n") {
+      const m = cleanAtLineStart ? GO_LINE_RE.exec(sql.slice(lineStart, i).replace(/\r$/, "")) : null;
+      if (m) {
+        flush(lineStart, m[1] ? parseInt(m[1], 10) : 1);
+        batchStart = i;
+      }
+      lineStart = i + 1;
+      cleanAtLineStart = !st.inS && !st.inD && !st.inBr && st.blockC === 0;
+      i++;
+      continue;
+    }
+    i = tsqlLexStep(sql, i, st);
+  }
+  flush(sql.length, 1);
+  return out;
+}
+
+type TsqlLexState = { inS: boolean; inD: boolean; inBr: boolean; blockC: number };
+
+/** 前進一個詞法單位（不含換行），回傳下一個位置。行註解停在換行之前，讓呼叫端照常處理行尾。 */
+function tsqlLexStep(sql: string, i: number, st: TsqlLexState): number {
+  const ch = sql[i];
+  const nx = sql[i + 1];
+  if (st.blockC > 0) {
+    // T-SQL 的區塊註解可巢狀。
+    if (ch === "/" && nx === "*") { st.blockC++; return i + 2; }
+    if (ch === "*" && nx === "/") { st.blockC--; return i + 2; }
+    return i + 1;
+  }
+  const closeQuoted = (q: string): number => (nx === q ? i + 2 : i + 1);
+  if (st.inS) { if (ch === "'") { if (nx !== "'") st.inS = false; return closeQuoted("'"); } return i + 1; }
+  if (st.inD) { if (ch === '"') { if (nx !== '"') st.inD = false; return closeQuoted('"'); } return i + 1; }
+  if (st.inBr) { if (ch === "]") { if (nx !== "]") st.inBr = false; return closeQuoted("]"); } return i + 1; }
+  if (ch === "-" && nx === "-") {
+    const nl = sql.indexOf("\n", i);
+    return nl === -1 ? sql.length : nl;
+  }
+  if (ch === "/" && nx === "*") { st.blockC = 1; return i + 2; }
+  if (ch === "'") st.inS = true;
+  else if (ch === '"') st.inD = true;
+  else if (ch === "[") st.inBr = true;
+  return i + 1;
+}
+
+/**
+ * 守門掃描（唯讀 / 危險語句 / 寫入確認）用的語句清單。
+ *
+ * 執行單位與掃描單位刻意分開：MSSQL 整個批次送出，但 isWriteStatement 只看第一個關鍵字，
+ * 拿整批去問 `SELECT 1; DROP TABLE t` 只會看到 SELECT。所以 MSSQL 先依 GO 切批、再依分號切句；
+ * 其餘方言照舊依分號切。
+ */
+export function splitForGuard(sql: string, kind: DbKind | null | undefined): string[] {
+  if (kind === "mssql") return splitTsqlBatches(sql).flatMap((b) => splitSqlStatements(b));
+  return splitSqlStatements(sql);
+}
+
 // 計算框選範圍的統計（Excel 狀態列手感）：總格數、數值格數、加總 / 平均 / 最小 / 最大。
 // 僅將可解析為有限數字的值納入數值統計（先移除千分位逗號）；空字串 / NULL 不計入數值。
 export function rangeStats(values: (string | null)[]): {

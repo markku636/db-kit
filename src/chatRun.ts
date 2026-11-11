@@ -20,7 +20,8 @@ import {
   isDangerousStatement,
   isWriteStatement,
   resultToMarkdown,
-  splitSqlStatements,
+  splitForGuard,
+  splitTsqlBatches,
 } from "./sql";
 
 /**
@@ -84,11 +85,12 @@ export function classifyForRun(
   // 引它去「修正」一段其實沒問題的註解。
   if (!hasExecutableSql(sql)) return { ok: false, reason: "empty" };
 
-  const scanned = splitSqlStatements(sql);
+  const scanned = splitForGuard(sql, kind);
   // 只有分號時 hasExecutableSql 仍為真（`;` 去掉註解後長度不為零），但切完一條都不剩。
   if (scanned.length === 0) return { ok: false, reason: "empty" };
 
-  const statements = kind === "external" ? [sql.trim()] : scanned;
+  // MSSQL 依 GO 切批次整段送（DECLARE 的變數、暫存表要跟後面的查詢在同一個批次）。
+  const statements = kind === "external" ? [sql.trim()] : kind === "mssql" ? splitTsqlBatches(sql) : scanned;
 
   // 唯讀是硬擋不是確認：使用者把連線設成唯讀，就是明講「這條連線上我不打算寫東西」。
   // 給一個「仍要執行」按鈕等於把那個設定退化成裝飾品。
