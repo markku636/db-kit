@@ -4,6 +4,7 @@ import { api } from "./api";
 import { uiConfirm } from "./ui";
 import { useStore } from "./store";
 import { isDangerousRedisCommand, isReadOnlyRedisCommand } from "./sql";
+import { completeRedisCommand, isBlockingKeysCommand, redisCommandHint } from "./redisCommandHints";
 import Icon from "./ui/Icon";
 import { Modal } from "./ui/index";
 import { useT } from "./i18n";
@@ -31,6 +32,8 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
   const [histPos, setHistPos] = useState<number>(-1); // -1 = 不在歷史中
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // 目前輸入的指令語法 / 候選（redis-cli 風格的即時提示）。
+  const hint = redisCommandHint(input);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // 新輸出時自動捲到底。
@@ -69,6 +72,13 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
       if (!ok) { setInput(cmd); inputRef.current?.focus(); return; }
     }
 
+    // KEYS 一次掃完整個 keyspace，期間 Redis 不處理任何其他指令；鍵多的正式環境會整台卡住好幾秒。
+    if (isBlockingKeysCommand(cmd)) {
+      const ok = await uiConfirm(t("KEYS 會一次掃描所有鍵，掃描期間 Redis 無法處理其他指令；鍵很多時正式環境會卡住。建議改用 SCAN 0 MATCH 樣式 COUNT 1000 分批查。仍要執行 KEYS？"),
+        { title: t("可能阻塞 Redis"), danger: true, confirmText: t("仍要執行") });
+      if (!ok) { setInput(cmd); inputRef.current?.focus(); return; }
+    }
+
     // 已自帶 "n:" DB 前綴（限 1~18 位數字，確保後端 i64 也能解析）則照送並沿用該 DB，
     // 否則套用目前選取的 DB。effDb 用於畫面標註，避免結果歸錯 DB。
     const m = /^(\d{1,18}):/.exec(cmd);
@@ -91,6 +101,12 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); run(); return; }
+    // Tab：補完指令名稱（只在還沒開始打參數時）。
+    if (e.key === "Tab" && !e.shiftKey) {
+      const done = completeRedisCommand(input);
+      if (done) { e.preventDefault(); setInput(done); }
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && (e.key === "l" || e.key === "L")) { e.preventDefault(); setEntries([]); return; }
     if (e.key === "ArrowUp") {
       e.preventDefault();
@@ -131,7 +147,7 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
     >
       <div className="flex-1 overflow-auto p-3 mono text-xs leading-relaxed" onClick={() => inputRef.current?.focus()}>
         {entries.length === 0 && (
-          <div className="text-fg/30">{t("輸入 Redis 指令並按 Enter，如 GET key、HGETALL key、KEYS *。輸入 clear 或按 Ctrl+L 清空。")}</div>
+          <div className="text-fg/30">{t("輸入 Redis 指令並按 Enter，如 GET key、HGETALL key、SCAN 0 MATCH user:*。Tab 補完指令名稱；輸入 clear 或按 Ctrl+L 清空。")}</div>
         )}
         {entries.map((en, i) => (
           <div key={i} className="mb-1.5">
@@ -148,6 +164,16 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
         <div ref={bottomRef} />
       </div>
 
+      {hint.syntax != null && (
+        <div className="border-t border-fg/10 px-3 py-1 mono text-[11px] text-fg/45 truncate" data-redis-hint title={`${hint.command} ${hint.syntax}`}>
+          <span className="text-fg/70">{hint.command}</span> {hint.syntax}
+        </div>
+      )}
+      {hint.syntax == null && hint.candidates.length > 0 && (
+        <div className="border-t border-fg/10 px-3 py-1 mono text-[11px] text-fg/40 truncate" data-redis-hint title={t("按 Tab 補完第一個")}>
+          {hint.candidates.join("  ")}
+        </div>
+      )}
       <div className="border-t border-fg/10 px-3 py-2 flex items-center gap-2 mono text-sm">
         <span className="text-fg/30 shrink-0">{db}&gt;</span>
         <input ref={inputRef} autoFocus value={input} disabled={busy}

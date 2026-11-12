@@ -5091,6 +5091,10 @@ const en: Catalog = {
   "第一筆的欄位": "First entry's field",
   "這個鍵在 Redis 裡實際佔用的記憶體（MEMORY USAGE，含內部結構的額外開銷）": "Memory this key actually uses in Redis (MEMORY USAGE, including internal overhead)",
   "Redis 內部儲存方式（OBJECT ENCODING）。listpack / intset 這類緊湊編碼較省記憶體，元素變多或變大後會自動轉成 hashtable / skiplist": "How Redis stores it internally (OBJECT ENCODING). Compact encodings such as listpack / intset save memory and switch to hashtable / skiplist automatically as the key grows",
+  "KEYS 會一次掃描所有鍵，掃描期間 Redis 無法處理其他指令；鍵很多時正式環境會卡住。建議改用 SCAN 0 MATCH 樣式 COUNT 1000 分批查。仍要執行 KEYS？": "KEYS scans every key at once, and Redis cannot serve any other command while it runs; with many keys a production server will stall. Prefer SCAN 0 MATCH pattern COUNT 1000 in batches. Run KEYS anyway?",
+  "可能阻塞 Redis": "May block Redis",
+  "輸入 Redis 指令並按 Enter，如 GET key、HGETALL key、SCAN 0 MATCH user:*。Tab 補完指令名稱；輸入 clear 或按 Ctrl+L 清空。": "Type a Redis command and press Enter, e.g. GET key, HGETALL key, SCAN 0 MATCH user:*. Tab completes the command name; type clear or press Ctrl+L to clear.",
+  "按 Tab 補完第一個": "Press Tab to complete the first one",
 };
 
 export default en;

@@ -5039,6 +5039,10 @@ const zhCN: Catalog = {
   "第一筆的欄位": "第一条的字段",
   "這個鍵在 Redis 裡實際佔用的記憶體（MEMORY USAGE，含內部結構的額外開銷）": "这个键在 Redis 里实际占用的内存（MEMORY USAGE，含内部结构的额外开销）",
   "Redis 內部儲存方式（OBJECT ENCODING）。listpack / intset 這類緊湊編碼較省記憶體，元素變多或變大後會自動轉成 hashtable / skiplist": "Redis 内部存储方式（OBJECT ENCODING）。listpack / intset 这类紧凑编码较省内存，元素变多或变大后会自动转成 hashtable / skiplist",
+  "KEYS 會一次掃描所有鍵，掃描期間 Redis 無法處理其他指令；鍵很多時正式環境會卡住。建議改用 SCAN 0 MATCH 樣式 COUNT 1000 分批查。仍要執行 KEYS？": "KEYS 会一次扫描所有键，扫描期间 Redis 无法处理其他命令；键很多时正式环境会卡住。建议改用 SCAN 0 MATCH 模式 COUNT 1000 分批查。仍要执行 KEYS？",
+  "可能阻塞 Redis": "可能阻塞 Redis",
+  "輸入 Redis 指令並按 Enter，如 GET key、HGETALL key、SCAN 0 MATCH user:*。Tab 補完指令名稱；輸入 clear 或按 Ctrl+L 清空。": "输入 Redis 命令并按 Enter，如 GET key、HGETALL key、SCAN 0 MATCH user:*。Tab 补全命令名称；输入 clear 或按 Ctrl+L 清空。",
+  "按 Tab 補完第一個": "按 Tab 补全第一个",
 };
 
 export default zhCN;

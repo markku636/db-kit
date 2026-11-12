@@ -3536,6 +3536,34 @@ const CASES = {
     check("按「+」後回到查詢分頁", !(await appText(page)).includes("已關閉所有查詢分頁"));
   },
 
+  // Redis 命令列：輸入時顯示語法、Tab 補完指令名稱、KEYS 先確認（不直接送出）。
+  async "redis-console-hints"(page) {
+    await page.getByText("cache-redis", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("cache-redis", { exact: true }).first().click({ button: "right" });
+    await sleep(300);
+    await page.locator('div.fixed.z-\\[90\\] button').filter({ hasText: "命令列" }).first().click();
+    await sleep(500);
+    const input = page.locator('input[placeholder="輸入指令…"]').first();
+    await input.fill("hgeta");
+    await sleep(150);
+    check("打一半顯示候選", (await page.locator("[data-redis-hint]").innerText().catch(() => "")).includes("HGETALL"));
+    await input.press("Tab");
+    check("Tab 補完指令名稱", (await input.inputValue()) === "HGETALL ", await input.inputValue());
+    await input.fill("SET k v");
+    await sleep(150);
+    check("完整指令顯示語法", (await page.locator("[data-redis-hint]").innerText().catch(() => "")).includes("[NX | XX]"));
+    await input.fill("KEYS *");
+    await input.press("Enter");
+    await sleep(400);
+    check("KEYS 先跳確認", (await appText(page)).includes("可能阻塞 Redis"));
+    const dlg = page.locator('[role="dialog"]').filter({ hasText: "可能阻塞 Redis" }).last();
+    const btns = await dlg.locator("button").allTextContents();
+    await dlg.locator("button").filter({ hasText: /^取消$/ }).first().click().catch(() => page.keyboard.press("Escape"));
+    await sleep(400);
+    check("取消後 KEYS 留在輸入框、沒有送出", (await input.inputValue()) === "KEYS *", `${JSON.stringify(await input.inputValue())} buttons=${btns.join("|")}`);
+  },
+
   // Redis 側欄右鍵：連線層與 DB 層都能直達維運面板 / Pub/Sub（不必先開資料分頁）
   async "redis-sidebar-menus"(page) {
     // 連線名在側欄樹、狀態列與右側詳細資料都會出現，取第一個（樹裡的節點）

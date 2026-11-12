@@ -1,5 +1,10 @@
 ## 未發佈
 
+新功能：
+
+- **Redis 命令列會提示指令語法**：輸入指令名稱時，輸入框上方顯示參數格式（例如 `SET key value [NX | XX] [GET] [EX seconds | PX milliseconds | KEEPTTL]`），打一半會列出候選、按 Tab 補完；收錄常用的字串 / Hash / List / Set / ZSet / Stream / 伺服器指令。
+- **執行 KEYS 前先確認**：KEYS 一次掃描所有鍵、期間 Redis 無法處理其他指令，鍵多的正式環境會整台卡住；命令列執行前會說明風險並建議改用 SCAN 分批查。說明文字裡的範例也從 `KEYS *` 改成 `SCAN 0 MATCH user:*`。
+
 修正：
 
 - **SQL Server 的 Ctrl+Enter 不再把批次切成片段**：游標所在的 GO 批次如果是程序 / 函式 / 觸發器 / 檢視的定義，或開頭是 `DECLARE`、`BEGIN`、`IF`、`WHILE`，Ctrl+Enter 會送出整個批次；以前照分號切，`DECLARE @id int = 5; SELECT … WHERE id = @id` 只送出 SELECT 而報「必須宣告純量變數」，游標在程序本體裡則只送出一小段。其他情況照舊執行游標所在的語句，而且不會跨過 GO。
