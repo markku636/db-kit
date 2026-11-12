@@ -1,6 +1,38 @@
 import { describe, it, expect } from "vitest";
 import { splitTsqlBatches, splitForGuard, scopeTsqlBatches, tsqlUseTarget, TSQL_GO_REPEAT_MAX } from "./sql";
 import { prepareStatements } from "./chatRun";
+import { tsqlStatementAtOffset, tsqlBatchSpans } from "./sql";
+
+describe("tsqlBatchSpans", () => {
+  it("回傳每個批次在原文的位置（不含 GO 行與前後空白）", () => {
+    const sql = "SELECT 1\nGO\n\n  SELECT 2  \nGO 3";
+    const spans = tsqlBatchSpans(sql);
+    expect(spans.map((s) => [s.text, s.repeat])).toEqual([["SELECT 1", 1], ["SELECT 2", 3]]);
+    expect(sql.slice(spans[1].from, spans[1].to)).toBe("SELECT 2");
+  });
+});
+
+describe("tsqlStatementAtOffset（MSSQL 的 Ctrl+Enter）", () => {
+  it("有 DECLARE 的批次整批送出", () => {
+    const sql = "DECLARE @id int = 5;\nSELECT * FROM t WHERE id = @id;";
+    expect(tsqlStatementAtOffset(sql, sql.indexOf("SELECT"))).toBe(sql);
+  });
+  it("程序定義整批送出，不在本體的分號切開", () => {
+    const proc = "CREATE OR ALTER PROCEDURE dbo.p AS\nBEGIN\n  SET NOCOUNT ON;\n  SELECT 1;\nEND";
+    const sql = `${proc}\nGO\nEXEC dbo.p`;
+    expect(tsqlStatementAtOffset(sql, sql.indexOf("SELECT 1"))).toBe(proc);
+  });
+  it("一般批次照舊取游標所在語句，且不跨過 GO", () => {
+    const sql = "SELECT 1; SELECT 2\nGO\nSELECT 3";
+    expect(tsqlStatementAtOffset(sql, sql.indexOf("2"))).toBe("SELECT 2");
+    expect(tsqlStatementAtOffset(sql, sql.indexOf("3"))).toBe("SELECT 3");
+    // 游標停在 GO 行上 → 前一個批次的語句。
+    expect(tsqlStatementAtOffset(sql, sql.indexOf("GO") + 1)).toBe("SELECT 2");
+  });
+  it("全是註解時回 null", () => {
+    expect(tsqlStatementAtOffset("-- 只有註解", 3)).toBeNull();
+  });
+});
 
 describe("tsqlUseTarget", () => {
   it("認得方括號、雙引號、裸名與前導註解", () => {

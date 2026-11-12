@@ -4341,6 +4341,27 @@ const CASES = {
     check("選單跟著換成 tempdb", (await dbSel.inputValue().catch(() => "")) === "tempdb");
   },
 
+  // SQL Server 的 Ctrl+Enter：有 DECLARE 的批次整批送出（照分號切就是「必須宣告純量變數」）。
+  async "mssql-ctrl-enter-batch"(page) {
+    await page.getByText("reporting-mssql", { exact: true }).first().dblclick();
+    await sleep(1200);
+    await page.getByText("查詢", { exact: true }).first().click();
+    await page.waitForSelector(".cm-content", { timeout: 8000 });
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.insertText(["DECLARE @id int = 5;", "SELECT * FROM orders WHERE id = @id;", "GO", "SELECT 2 AS b"].join("\n"));
+    // 游標放回第二行（SELECT … @id）。
+    await page.keyboard.press("Control+Home");
+    await page.keyboard.press("ArrowDown");
+    await page.evaluate(() => { window.__DBKIT_QUERIES__ = []; });
+    await page.keyboard.press("Control+Enter");
+    await sleep(1000);
+    const sent = await page.evaluate(() => window.__DBKIT_QUERIES__ ?? []);
+    check("Ctrl+Enter 送出游標所在的整個 DECLARE 批次", sent.length === 1 && sent[0].includes("DECLARE @id") && sent[0].includes("WHERE id = @id") && !sent[0].includes("SELECT 2"),
+      JSON.stringify(sent));
+  },
+
   // SQL Server 驗證方式：選 Windows 驗證要有說明，存檔帶 options.mssql_auth；主機欄提示具名執行個體寫法。
   async "conn-mssql-windows-auth"(page) {
     await page.getByRole("button", { name: "連線", exact: true }).first().click();

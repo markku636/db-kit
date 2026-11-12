@@ -68,7 +68,7 @@ import { toast, uiChoose, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSave
 import { askOtpCode } from "./otpGate";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
-  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, splitTsqlBatches, splitForGuard, scopeTsqlBatches, statementAtOffset, isDangerousStatement, isWriteStatement, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, splitTsqlBatches, splitForGuard, scopeTsqlBatches, statementAtOffset, tsqlStatementAtOffset, isDangerousStatement, isWriteStatement, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName, selectTopSql, isMysqlFamily, supportsRoutines, supportsQueryEditorKind, supportsSchemaCompare,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
@@ -5160,7 +5160,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // SQL 編輯器送出：有選取→跑選取；F6→整段；否則→跑游標所在語句（Ctrl+Enter）。
   const onEditorSubmit = (s: SqlSubmit) => {
     if (running) return;
-    const q = s.selection?.trim() ? s.selection : s.runAll ? sql : statementAtOffset(sql, s.cursorOffset) ?? sql;
+    const q = s.selection?.trim() ? s.selection : s.runAll ? sql
+      : (kind === "mssql" ? tsqlStatementAtOffset(sql, s.cursorOffset) : statementAtOffset(sql, s.cursorOffset)) ?? sql;
     execute("run", q);
   };
 

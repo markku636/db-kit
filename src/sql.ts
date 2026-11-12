@@ -1770,15 +1770,30 @@ const GO_LINE_RE = /^[ \t]*go(?:[ \t]+(\d+))?[ \t]*(?:--.*)?$/i;
  */
 export function splitTsqlBatches(sql: string): string[] {
   const out: string[] = [];
+  for (const b of tsqlBatchSpans(sql)) {
+    const n = Math.min(Math.max(b.repeat, 1), TSQL_GO_REPEAT_MAX);
+    for (let k = 0; k < n; k++) out.push(b.text);
+  }
+  return out;
+}
+
+/** 一個 GO 批次在原文中的位置（from / to 為去掉前後空白後的範圍）。 */
+export type TsqlBatchSpan = { text: string; from: number; to: number; repeat: number };
+
+/** splitTsqlBatches 的位置版（不展開 GO n 的重複；純註解 / 空白批次濾掉）。 */
+export function tsqlBatchSpans(sql: string): TsqlBatchSpan[] {
+  const out: TsqlBatchSpan[] = [];
   const st: TsqlLexState = { inS: false, inD: false, inBr: false, blockC: 0 };
   let batchStart = 0;
   let lineStart = 0;
   let cleanAtLineStart = true; // 這一行開頭不在字串 / 註解 / [識別字] 內，才可能是 GO 行
   const flush = (end: number, repeat: number) => {
-    const text = sql.slice(batchStart, end).trim();
+    let a = batchStart, b = end;
+    while (a < b && /\s/.test(sql[a])) a++;
+    while (b > a && /\s/.test(sql[b - 1])) b--;
+    const text = sql.slice(a, b);
     if (!text || !hasExecutableSql(text)) return;
-    const n = Math.min(Math.max(repeat, 1), TSQL_GO_REPEAT_MAX);
-    for (let k = 0; k < n; k++) out.push(text);
+    out.push({ text, from: a, to: b, repeat });
   };
   let i = 0;
   while (i <= sql.length) {
@@ -1797,6 +1812,31 @@ export function splitTsqlBatches(sql: string): string[] {
   }
   flush(sql.length, 1);
   return out;
+}
+
+// 這種批次拆開就不能跑：程序 / 函式 / 觸發器 / 檢視的定義（本體裡的分號不是語句邊界），
+// 或宣告了變數 / 用到流程控制（後面的語句依賴前面的 DECLARE）。
+const TSQL_WHOLE_BATCH_RE = /^(?:(?:create|alter)\s+(?:or\s+alter\s+)?(?:proc|procedure|function|trigger|view)\b|declare\b|begin\b|if\b|while\b)/i;
+
+/**
+ * MSSQL 的 Ctrl+Enter「執行游標所在語句」。
+ *
+ * 先找游標所在的 GO 批次：批次是程序 / 函式定義，或開頭是 DECLARE / BEGIN / IF / WHILE，就送整個批次——
+ * 照分號切只會送出片段（`DECLARE @id int = 5;` 跟 `SELECT … WHERE id = @id` 分開就是「必須宣告純量變數」）。
+ * 其餘照舊取游標所在的語句，但只在該批次裡找，不會跨過 GO。
+ */
+export function tsqlStatementAtOffset(sql: string, offset: number): string | null {
+  const spans = tsqlBatchSpans(sql);
+  if (spans.length === 0) return null;
+  // 游標在批次之間（GO 行、空白）時取前一個批次；在第一個批次之前則取第一個。
+  let span = spans[0];
+  for (const s of spans) {
+    if (s.from <= offset) span = s;
+    else break;
+  }
+  if (TSQL_WHOLE_BATCH_RE.test(stripLeadingComments(span.text))) return span.text;
+  const local = Math.min(Math.max(offset - span.from, 0), span.text.length);
+  return statementAtOffset(span.text, local) ?? span.text;
 }
 
 type TsqlLexState = { inS: boolean; inD: boolean; inBr: boolean; blockC: number };

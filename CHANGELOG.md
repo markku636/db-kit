@@ -1,3 +1,9 @@
+## 未發佈
+
+修正：
+
+- **SQL Server 的 Ctrl+Enter 不再把批次切成片段**：游標所在的 GO 批次如果是程序 / 函式 / 觸發器 / 檢視的定義，或開頭是 `DECLARE`、`BEGIN`、`IF`、`WHILE`，Ctrl+Enter 會送出整個批次；以前照分號切，`DECLARE @id int = 5; SELECT … WHERE id = @id` 只送出 SELECT 而報「必須宣告純量變數」，游標在程序本體裡則只送出一小段。其他情況照舊執行游標所在的語句，而且不會跨過 GO。
+
 ## v0.60.1
 
 修正：
