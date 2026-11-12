@@ -534,15 +534,42 @@ mod tests {
 
     #[test]
     fn ado_net_credentials_only() {
-        let p = parse_url("user id=dd-rdtest;Password=vCW7L.Z&!I1^", Some(DbKind::Mssql)).unwrap();
+        let p = parse_url("user id=app-user;Password=Fake.Pw&!x1^", Some(DbKind::Mssql)).unwrap();
         assert!(matches!(p.kind, Some(DbKind::Mssql)));
-        assert_eq!(p.username.as_deref(), Some("dd-rdtest"));
-        assert_eq!(p.password.as_deref(), Some("vCW7L.Z&!I1^"));
+        assert_eq!(p.username.as_deref(), Some("app-user"));
+        assert_eq!(p.password.as_deref(), Some("Fake.Pw&!x1^"));
         assert_eq!(p.host, None);
         // 無 hint 也認得（ADO.NET 預設判 MSSQL）
         let p = parse("User ID=sa;Password=x");
         assert!(matches!(p.kind, Some(DbKind::Mssql)));
         assert_eq!(p.username.as_deref(), Some("sa"));
+    }
+
+    #[test]
+    fn ado_net_markers_override_wrong_kind_hint() {
+        // 連線對話框「新增連線」的類型預設是 MySQL，會當成 hint 一起送進來。字串自帶 MSSQL
+        // 專屬鍵時不能被 hint 否決，否則整段會掉進 standard::parse 被當成 host 塞進主機欄，
+        // 類型還停在 MySQL，卻回報解析成功。
+        let s = "Data Source=cossdb-catv.dmg.tv;initial catalog=cossdb;Trusted_Connection=True;\
+                 Persist Security Info=True;Pooling=True;Max Pool Size=300;\
+                 TrustServerCertificate=True;Encrypt=True";
+        for hint in [None, Some(DbKind::Mysql), Some(DbKind::Mssql)] {
+            let p = parse_url(s, hint).expect("應可解析");
+            assert_eq!(p.kind, Some(DbKind::Mssql), "hint={hint:?}");
+            assert_eq!(p.host.as_deref(), Some("cossdb-catv.dmg.tv"), "hint={hint:?}");
+            assert_eq!(p.database.as_deref(), Some("cossdb"), "hint={hint:?}");
+            assert_eq!(opt(&p, "encrypt"), Some("true"), "hint={hint:?}");
+            assert_eq!(opt(&p, "trust_server_certificate"), Some("true"), "hint={hint:?}");
+            assert_eq!(opt(&p, "mssql_auth"), Some("windows"), "hint={hint:?}");
+            // Windows 驗證不帶帳密；Pooling / Max Pool Size 等 .NET 專屬鍵靜默忽略。
+            assert_eq!(p.username, None, "hint={hint:?}");
+            assert_eq!(p.options.len(), 3, "hint={hint:?}");
+        }
+        // 只有 Trusted_Connection 一個 MSSQL 特徵（無 Initial Catalog）時同樣蓋過 hint。
+        let p = parse_url("Server=h;Database=db;Trusted Connection=True", Some(DbKind::Mysql)).unwrap();
+        assert_eq!(p.kind, Some(DbKind::Mssql));
+        assert_eq!(p.host.as_deref(), Some("h"));
+        assert_eq!(opt(&p, "mssql_auth"), Some("windows"));
     }
 
     #[test]

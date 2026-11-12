@@ -223,7 +223,10 @@ const MSSQL_MARKERS: &[&str] = &[
     "trust server certificate",
     "encrypt",
     "integrated security",
+    "integratedsecurity",
     "trusted_connection",
+    // 帶空白的拼法：apply_mssql_kv 已經認它，識別鍵表漏了會造成「認得值卻判不出類型」。
+    "trusted connection",
     "multisubnetfailover",
     "applicationintent",
     "persist security info",
@@ -238,8 +241,10 @@ const MSSQL_MARKERS: &[&str] = &[
 /// 2. 否則有 `host=` 且無 `server=` → Postgres（Npgsql 的正規鍵）
 /// 3. 否則 → MSSQL（維持現狀，確保既有 `Server=…` 字串行為完全不變）
 ///
-/// kind hint 指向 MSSQL / Postgres 時直接採用（CLI `--kind` 是使用者明說的）；
-/// 指向其他資料庫時回 None 不誤判（如含 `;` 的 sqlite 檔案路徑）。
+/// kind hint 指向 MSSQL / Postgres 時直接採用（CLI `--kind` 是使用者明說的）。指向其他
+/// 資料庫時：字串命中 MSSQL 專屬鍵就蓋過 hint（GUI 的 hint 只是對話框當下選的類型，
+/// 新增連線預設 MySQL——不蓋過的話整段 ADO.NET 字串會被 standard::parse 塞進主機欄），
+/// 否則回 None 不誤判（如含 `;` 的 sqlite 檔案路徑）。
 pub(super) fn try_semicolon_kv(s: &str, hint: Option<DbKind>) -> Option<Parsed> {
     if s.contains("://") || !s.contains(';') {
         return None;
@@ -257,19 +262,22 @@ pub(super) fn try_semicolon_kv(s: &str, hint: Option<DbKind>) -> Option<Parsed> 
         return None;
     }
 
+    let has_mssql_marker = keys.iter().any(|k| MSSQL_MARKERS.contains(&k.as_str()));
+    let npgsql_shaped = keys.iter().any(|k| k == "host") && !keys.iter().any(|k| k == "server");
     let kind = match hint {
         Some(DbKind::Mssql) => DbKind::Mssql,
         Some(DbKind::Postgres) => DbKind::Postgres,
+        // hint 指向別的資料庫，但字串自帶 MSSQL 專屬鍵 → 以字串為準。
+        // hint 多半不是使用者對這段字串的聲明，而是「連線對話框當下選的類型」（新增連線時
+        // 預設 MySQL）。讓它一票否決的話，在預設對話框貼上
+        // `Data Source=h;Initial Catalog=db;Trusted_Connection=True` 會掉到 standard::parse，
+        // 整段被當成 host 塞進主機欄、類型還停在 MySQL，卻回報解析成功。
+        Some(_) if has_mssql_marker => DbKind::Mssql,
+        // 連 MSSQL 專屬鍵都沒有就不猜類型，交給下一個偵測器（含 `;` 的 sqlite 路徑等）。
         Some(_) => return None,
-        None => {
-            if keys.iter().any(|k| MSSQL_MARKERS.contains(&k.as_str())) {
-                DbKind::Mssql
-            } else if keys.iter().any(|k| k == "host") && !keys.iter().any(|k| k == "server") {
-                DbKind::Postgres
-            } else {
-                DbKind::Mssql
-            }
-        }
+        None if has_mssql_marker => DbKind::Mssql,
+        None if npgsql_shaped => DbKind::Postgres,
+        None => DbKind::Mssql,
     };
 
     Some(match kind {
