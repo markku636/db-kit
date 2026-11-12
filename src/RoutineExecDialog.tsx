@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { api, DbKind, QueryResult, RoutineInfo } from "./api";
-import { buildRoutineExecSql, parseRoutineParams, usesSessionVars, type RoutineParam } from "./routineParams";
+import { buildRoutineExecSql, parseRoutineParams, supportsOutParams, type RoutineParam } from "./routineParams";
 import { toast } from "./ui";
 import { Modal, Button, Input, Textarea } from "./ui/index";
 import { useT } from "./i18n";
@@ -81,7 +81,7 @@ export default function RoutineExecDialog({ connId, db, kind, routine, onClose, 
     setValues((prev) => { const next = [...prev]; next[i] = v; return next; });
 
   const hasOut = params.some((p) => p.mode === "OUT" || p.mode === "INOUT");
-  const outUnsupported = hasOut && !usesSessionVars(kind);
+  const outUnsupported = hasOut && !supportsOutParams(kind);
 
   const run = async () => {
     if (busy || !sql.trim()) return;

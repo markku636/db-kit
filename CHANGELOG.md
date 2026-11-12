@@ -4,6 +4,7 @@
 
 - **Redis 命令列會提示指令語法**：輸入指令名稱時，輸入框上方顯示參數格式（例如 `SET key value [NX | XX] [GET] [EX seconds | PX milliseconds | KEEPTTL]`），打一半會列出候選、按 Tab 補完；收錄常用的字串 / Hash / List / Set / ZSet / Stream / 伺服器指令。
 - **執行 KEYS 前先確認**：KEYS 一次掃描所有鍵、期間 Redis 無法處理其他指令，鍵多的正式環境會整台卡住；命令列執行前會說明風險並建議改用 SCAN 分批查。說明文字裡的範例也從 `KEYS *` 改成 `SCAN 0 MATCH user:*`。
+- **SQL Server 的預存程序 / 函式列出參數，執行時能讀回 OUTPUT 參數**：程序清單顯示參數簽章（例如 `(@id int, OUT @total decimal(10,2))`），「執行」對話框會為每個參數長出一格輸入欄；OUTPUT 參數會在同一個批次裡用變數接住、執行完一起顯示。以前 SQL Server 沒有簽章，對話框沒有任何欄位，只能自己改 SQL，OUTPUT 參數也拿不回值。
 
 修正：
 

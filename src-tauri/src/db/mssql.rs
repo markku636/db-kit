@@ -763,13 +763,37 @@ impl DatabaseDriver for MssqlDriver {
     async fn list_routines(&self, database: &str) -> AppResult<Vec<RoutineInfo>> {
         let db = esc(database);
         // 預存程序 / 函式。型別碼清單與 `routine_type_of` 必須同步：查出來卻對不上的列會被略過。
+        let types = ROUTINE_TYPE_CODES.iter().map(|c| format!("'{c}'")).collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT s.name, o.name, o.type, CONVERT(NVARCHAR(30), o.modify_date, 120) \
+            "SELECT s.name, o.name, o.type, CONVERT(NVARCHAR(30), o.modify_date, 120), o.object_id \
              FROM [{db}].sys.objects o JOIN [{db}].sys.schemas s ON o.schema_id = s.schema_id \
              WHERE o.type IN ({types}) AND o.is_ms_shipped = 0 \
-             ORDER BY o.type, o.name",
-            types = ROUTINE_TYPE_CODES.iter().map(|c| format!("'{c}'")).collect::<Vec<_>>().join(",")
+             ORDER BY o.type, o.name"
         );
+        // 參數簽章：「執行程序」對話框靠它長出一格一參數的表單、把 OUTPUT 參數讀回來。
+        // parameter_id 0 是純量函式的回傳值，不是參數。取不到（權限）就當作沒有簽章，清單照樣列。
+        let psql = format!(
+            "SELECT p.object_id, p.name, t.name, p.max_length, p.precision, p.scale, p.is_output \
+             FROM [{db}].sys.parameters p \
+             JOIN [{db}].sys.objects o ON o.object_id = p.object_id \
+             JOIN [{db}].sys.types t ON t.user_type_id = p.user_type_id \
+             WHERE o.type IN ({types}) AND o.is_ms_shipped = 0 AND p.parameter_id > 0 \
+             ORDER BY p.object_id, p.parameter_id"
+        );
+        let mut sigs: std::collections::HashMap<i32, Vec<String>> = std::collections::HashMap::new();
+        if let Ok(prows) = self.query_rows(&psql).await {
+            for r in &prows {
+                let (Some(oid), Some(name)) = (r.try_get::<i32, _>(0).ok().flatten(), get_str(r, 1)) else { continue };
+                let ty = mssql_type_str(
+                    &get_str(r, 2).unwrap_or_default(),
+                    r.try_get::<i16, _>(3).ok().flatten().unwrap_or(0),
+                    r.try_get::<u8, _>(4).ok().flatten().unwrap_or(0),
+                    r.try_get::<u8, _>(5).ok().flatten().unwrap_or(0),
+                );
+                let output = r.try_get::<bool, _>(6).ok().flatten().unwrap_or(false);
+                sigs.entry(oid).or_default().push(mssql_param_sig(&name, &ty, output));
+            }
+        }
         let mut out = Vec::new();
         for r in &self.query_rows(&sql).await? {
             let sch = get_str(r, 0).unwrap_or_else(|| "dbo".to_string());
@@ -779,11 +803,13 @@ impl DatabaseDriver for MssqlDriver {
             };
             let ty = get_str(r, 2).unwrap_or_default();
             let Some(routine_type) = routine_type_of(&ty) else { continue };
+            let oid = r.try_get::<i32, _>(4).ok().flatten();
             out.push(RoutineInfo {
                 name: schema_qualified(&sch, nm),
                 routine_type: routine_type.to_string(),
                 parent: None,
-                signature: None,
+                // 沒有參數的程序也給空字串（＝確定沒有參數），與「取不到簽章」的 None 區分。
+                signature: oid.map(|id| sigs.get(&id).map(|v| v.join(", ")).unwrap_or_default()),
                 modified: get_str(r, 3),
                 deterministic: None,
                 comment: None,
@@ -1341,6 +1367,16 @@ fn routine_type_of(ty: &str) -> Option<&'static str> {
     }
 }
 
+/// 一個參數的簽章片段，格式與 MySQL 的 `IN p int` 對齊、前端共用同一個解析器：
+/// 輸入參數 `@id int`，OUTPUT 參數 `OUT @total money`。
+fn mssql_param_sig(name: &str, ty: &str, output: bool) -> String {
+    if output {
+        format!("OUT {name} {ty}")
+    } else {
+        format!("{name} {ty}")
+    }
+}
+
 /// 三部式限定名 `[db].[schema].[table]`。
 fn qualified_name(db: &str, schema: &str, table: &str) -> String {
     format!("[{}].[{}].[{}]", esc(db), esc(schema), esc(table))
@@ -1768,6 +1804,12 @@ SELECT SCOPE_IDENTITY()"));
         // T-SQL 字串結尾的反斜線不是跳脫：後面的 SELECT 要看得到。
         assert!(batch_returns_rows(r"UPDATE t SET p = 'C:\backup\'; SELECT 1"));
         assert!(batch_returns_rows("CREATE TABLE #x (a int); SELECT * FROM #x"));
+    }
+
+    #[test]
+    fn mssql_param_sig_marks_output() {
+        assert_eq!(mssql_param_sig("@id", "int", false), "@id int");
+        assert_eq!(mssql_param_sig("@total", "decimal(10,2)", true), "OUT @total decimal(10,2)");
     }
 
     #[test]

@@ -19,6 +19,9 @@ export interface RoutineParam {
 /** OUT / INOUT 要用 session 變數接回值——只有 MySQL 方言（含講 MySQL 的 gateway）辦得到。 */
 export const usesSessionVars = (kind: DbKind): boolean => isMysqlFamily(kind) || kind === "external";
 
+/** 能把 OUT / OUTPUT 參數讀回來的方言：MySQL 系走 session 變數，SQL Server 走批次內的 DECLARE。 */
+export const supportsOutParams = (kind: DbKind): boolean => usesSessionVars(kind) || kind === "mssql";
+
 const MODES = new Set(["IN", "OUT", "INOUT"]);
 
 // 逐字掃描時共用的狀態機：括號深度 + 引號。抽出來是因為「拆引數」與「拆詞」只差在分隔條件。
@@ -123,6 +126,7 @@ export function buildRoutineExecSql(
   params: RoutineParam[],
   values: string[],
 ): RoutineExecSql {
+  if (kind === "mssql") return buildMssqlExecSql(db, routine, params, values);
   const sessionVars = usesSessionVars(kind);
   const pre: string[] = [];
   const outs: { v: string; label: string }[] = [];
@@ -142,6 +146,34 @@ export function buildRoutineExecSql(
   if (outs.length) {
     stmts.push(`SELECT ${outs.map((o) => `${o.v} AS ${quoteIdent(kind, o.label)}`).join(", ")}`);
   }
+  return { sql: stmts.join(";\n"), outNames: outs.map((o) => o.label) };
+}
+
+/**
+ * SQL Server：OUTPUT 參數要傳**變數**才拿得回值，所以在同一個批次裡 DECLARE（帶入表單的值當初值）、
+ * `EXEC 程序 …, @變數 OUTPUT`、最後 SELECT 出來。整段是一個批次送出（前端依 GO 切批次、不再依分號拆），
+ * 變數才活得到 SELECT。
+ */
+function buildMssqlExecSql(
+  db: string,
+  routine: Pick<RoutineInfo, "name" | "routine_type">,
+  params: RoutineParam[],
+  values: string[],
+): RoutineExecSql {
+  const decl: string[] = [];
+  const outs: { v: string; label: string }[] = [];
+  const args = params.map((p, i) => {
+    const raw = values[i] ?? "";
+    if (p.mode === "OUT" || p.mode === "INOUT") {
+      const v = `@__out${i + 1}`;
+      decl.push(`DECLARE ${v} ${p.type || "sql_variant"} = ${routineArgLiteral("mssql", raw, p.type)}`);
+      outs.push({ v, label: (p.name || `p${i + 1}`).replace(/^@/, "") });
+      return `${v} OUTPUT`;
+    }
+    return routineArgLiteral("mssql", raw, p.type);
+  });
+  const stmts = [...decl, buildRoutineCall("mssql", db, routine.name, routine.routine_type, args.join(", "))];
+  if (outs.length) stmts.push(`SELECT ${outs.map((o) => `${o.v} AS ${quoteIdent("mssql", o.label)}`).join(", ")}`);
   return { sql: stmts.join(";\n"), outNames: outs.map((o) => o.label) };
 }
 

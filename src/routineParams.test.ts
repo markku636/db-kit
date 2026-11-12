@@ -196,3 +196,30 @@ describe("formatSignature", () => {
     expect(formatSignature([])).toBe("");
   });
 });
+
+describe("SQL Server 程序參數", () => {
+  const proc = { name: "sales.usp_total", routine_type: "procedure" };
+
+  it("解析後端給的簽章（輸入參數沒有方向、OUTPUT 標 OUT）", () => {
+    expect(parseRoutineParams("mssql", "@id int, OUT @total decimal(10,2)")).toEqual([
+      { mode: "", name: "@id", type: "int" },
+      { mode: "OUT", name: "@total", type: "decimal(10,2)" },
+    ]);
+  });
+
+  it("OUTPUT 參數用批次內的變數讀回來", () => {
+    const params = parseRoutineParams("mssql", "@id int, @name nvarchar(50), OUT @total decimal(10,2)");
+    const { sql, outNames } = buildRoutineExecSql("mssql", "shop", proc, params, ["7", "O'Neil", ""]);
+    expect(sql.split(";\n")).toEqual([
+      "DECLARE @__out3 decimal(10,2) = NULL",
+      "EXEC [shop].[sales].[usp_total] 7, N'O''Neil', @__out3 OUTPUT",
+      "SELECT @__out3 AS [total]",
+    ]);
+    expect(outNames).toEqual(["total"]);
+  });
+
+  it("沒有 OUTPUT 參數就只有 EXEC", () => {
+    const params = parseRoutineParams("mssql", "@id int");
+    expect(buildRoutineExecSql("mssql", "shop", proc, params, ["7"]).sql).toBe("EXEC [shop].[sales].[usp_total] 7");
+  });
+});
