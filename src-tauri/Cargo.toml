@@ -165,6 +165,9 @@ lapin = { version = "4.10", default-features = false, features = ["tokio", "rust
 # OS keychain：依平台選用原生後端，避免在 Windows 上編譯 secret-service。
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+# 免安裝版的自我更新：解開 Release 上的 db-kit_<版本>_x64_portable.zip（見 commands/update.rs）。
+# 只要 deflate（CI 用 `7z a -tzip` 打包）；default-features 會多拉 bzip2 / zstd / lzma / aes，用不到。
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # 生物辨識解鎖（Windows Hello：指紋 / 臉 / PIN）。版本刻意對齊 Tauri 2.11 用的 windows 0.61，
 # 讓 WebviewWindow::hwnd() 回傳的 HWND 型別直接通用，也不會在依賴圖上多編一份 windows crate。
 # Win32_System_WinRT 是關鍵 feature —— IUserConsentVerifierInterop 藏在那底下；少了它就只剩

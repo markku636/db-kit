@@ -171,6 +171,19 @@ pub fn run() {
                     }
                 });
             }
+            // 免安裝版上次自我更新留下的垃圾：被換掉的舊執行檔（`*.db-kit-old`——更新當下它正在
+            // 執行，刪不掉）與中途失敗的解壓暫存資料夾。非免安裝版會直接跳過（見 clean_update_leftovers）。
+            // 背景跑：純粹清垃圾，不該讓視窗晚一步出現。
+            tauri::async_runtime::spawn(async {
+                let _ = tokio::task::spawn_blocking(|| {
+                    if let Ok(exe) = std::env::current_exe() {
+                        if let Some(dir) = exe.parent() {
+                            commands::update::clean_update_leftovers(dir);
+                        }
+                    }
+                })
+                .await;
+            });
             // 載入持久化排程並重算 next_run（啟動只排未來的下一次，不補跑漏掉的）。
             tauri::async_runtime::block_on(async {
                 let loaded: Vec<scheduler::BackupSchedule> =

@@ -205,7 +205,8 @@ impl PersistedConnection {
 // ---- 設定目錄解析 ----
 
 /// 可攜模式的標記檔：與執行檔同目錄。免安裝 zip 內附這個檔，解壓即生效。
-const PORTABLE_MARKER: &str = "portable.txt";
+/// `commands::update` 也用它判斷「這份是免安裝版」，決定自我更新走哪條路。
+pub const PORTABLE_MARKER: &str = "portable.txt";
 /// 可攜模式的資料目錄名（執行檔同目錄下）。
 const PORTABLE_DATA_DIR: &str = "data";
 /// 設定目錄的環境變數覆寫（優先於一切）：給可攜安裝、多組設定並存與自動化測試用。

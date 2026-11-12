@@ -2055,6 +2055,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "無法更換 {path}：{e}" => "Couldn't replace {path}: {e}",
         "解開更新檔失敗：{e}" => "Failed to unpack the update: {e}",
         "更新檔的內容不對，已取消更新" => "The update package has unexpected contents; update cancelled",
+        "無法寫入 {dir}（{e}）。免安裝版要放在可寫入的資料夾才能自動更新，或到 GitHub 下載新版 zip 自行解壓替換" => "Couldn't write to {dir} ({e}). The portable build updates itself in place, so it has to sit in a writable folder — otherwise download the new zip from GitHub and unpack it yourself",
         "已請對方在畫面上按「接受」，對方按了就會連上；也可以直接輸入對方的 RustDesk 密碼。" => "The other side has been asked to click \"Accept\" on their screen, and you'll be connected once they do. You can also enter the other side's RustDesk password.",
         "找不到這個 RustDesk ID：請確認 ID 沒有打錯，而且這裡的 ID 伺服器跟對方 RustDesk 設定的是同一台" => "RustDesk ID not found: check the ID, and make sure this ID server is the same one set in the other side's RustDesk",
         "對方不在線上：對方電腦沒開 RustDesk，或它連不到 ID 伺服器" => "The other side is offline: RustDesk isn't running on that computer, or it can't reach the ID server",

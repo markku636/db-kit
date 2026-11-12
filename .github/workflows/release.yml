@@ -249,6 +249,11 @@ jobs:
           # 哨兵：client 沒攤平成功就讓這步失敗，而不是出一包連不上 Oracle 的 zip。
           test -f "$pkg/oracle/oci.dll"
           test -f "$pkg/oracle/BASIC_LICENSE"
+          # 哨兵：免安裝版的自我更新靠這兩件事認得自己（commands/update.rs）——
+          # zip 檔名以 _x64_portable.zip 結尾（asset_matches），資料夾裡有 portable.txt（kind_for）。
+          # 改了命名卻沒改那邊的話，使用者按「立即更新」只會拿到「沒有這台電腦用的安裝檔」。
+          case "$pkg.zip" in *_x64_portable.zip) ;; *) echo "zip 檔名與 update.rs 的 asset_matches 對不上：$pkg.zip" >&2; exit 1;; esac
+          test -f "$pkg/portable.txt"
           # -mx=5：內容以已經壓過的 Oracle DLL 為主，-mx=9 只省幾 MB 卻多花好幾分鐘。
           7z a -tzip -mx=5 "$pkg.zip" "$pkg" > /dev/null
           echo "PORTABLE_ZIP=$pkg.zip" >> "$GITHUB_ENV"

@@ -10,9 +10,11 @@
 //!   以 root 安裝，裝完重新啟動。套件也裝了 polkit 規則，坐在電腦前的使用者不用輸入密碼；小幫手自己會再向
 //!   GitHub 確認一次安裝檔。沒有小幫手時（被刪掉之類）退回 `pkexec dpkg -i` / `pkexec rpm -U`，要輸入密碼。
 //! - macOS：下載 `.app.tar.gz`，解到 .app 旁邊，換掉正在跑的這個 .app，重新啟動。
+//! - Windows 免安裝版：下載 `…_x64_portable.zip`，解到安裝資料夾裡的暫存資料夾，就地換掉程式檔，
+//!   重新啟動。不需要安裝程式、不需要系統管理員權限，也不會動到使用者的 `data\`（見 `replace_portable`）。
 //!
-//! 開發版 / 免安裝版 / macOS 上換不了 .app 的（沒有寫入權限、從 DMG 或「下載項目」直接打開）不支援自動安裝，
-//! 前端改開 Release 頁面讓使用者自己下載。
+//! 開發版、macOS 上換不了的 .app（沒有寫入權限、從 DMG 或「下載項目」直接打開）、放在不可寫資料夾的
+//! 免安裝版（Program Files、唯讀隨身碟）不支援自動安裝，前端改開 Release 頁面讓使用者自己下載。
 //!
 //! 下載網址只接受這個專案 Release 的下載路徑；GitHub API 給的 `digest`（`sha256:…`）一定要有、
 //! 而且要對得上才安裝。下載中斷 / 卡住時用 HTTP Range 續傳（慢的網路抓幾十 MB 常會斷一兩次）。
@@ -37,6 +39,8 @@ const REPO: &str = "markku636/db-kit";
 pub enum InstallKind {
     Nsis,
     Msi,
+    /// Windows 免安裝版（解壓即用的 zip）：自己就地換掉程式檔。
+    Portable,
     #[serde(rename = "appimage")]
     AppImage,
     Deb,
@@ -136,6 +140,7 @@ enum Installed {
 fn install(kind: InstallKind, path: &Path, version: &str) -> AppResult<Installed> {
     match kind {
         InstallKind::Nsis | InstallKind::Msi => launch_installer(kind, path).map(|()| Installed::ByInstaller),
+        InstallKind::Portable => replace_portable(path).map(|()| Installed::Done),
         InstallKind::AppImage => replace_appimage(path).map(|()| Installed::Done),
         InstallKind::Deb | InstallKind::Rpm => install_package(kind, path, version).map(|()| Installed::Done),
         InstallKind::MacApp => replace_mac_app(path).map(|()| Installed::Done),
@@ -316,6 +321,8 @@ fn asset_matches(name: &str, kind: InstallKind, arch: &str) -> bool {
     match kind {
         InstallKind::Nsis => name.ends_with(&format!("_{windows}-setup.exe")),
         InstallKind::Msi => name.ends_with(".msi") && name.contains(&format!("_{windows}_")),
+        // 免安裝版 zip 由 release.yml 的 Assemble portable zip 自組，檔名是 db-kit_<版本>_x64_portable.zip。
+        InstallKind::Portable => name.ends_with(&format!("_{windows}_portable.zip")),
         InstallKind::AppImage => name.ends_with(&format!("_{appimage}.AppImage")),
         InstallKind::Deb => name.ends_with(&format!("_{debian}.deb")),
         InstallKind::Rpm => name.ends_with(&format!(".{arch}.rpm")),
@@ -355,11 +362,17 @@ fn install_kind() -> Option<InstallKind> {
     }
 }
 
-/// Windows：NSIS（目前使用者）會在安裝資料夾留 `uninstall.exe`；MSI 裝在 Program Files、沒有那支。
+/// Windows：NSIS（目前使用者）會在安裝資料夾留 `uninstall.exe`；MSI 裝在 Program Files、沒有那支；
+/// 免安裝版 zip 一定帶 `portable.txt`（`store.rs` 也靠它決定設定寫在哪）。
 fn kind_for(exe: &Path, program_files: &[PathBuf]) -> Option<InstallKind> {
     let dir = exe.parent()?;
     if dir.join("uninstall.exe").is_file() {
         return Some(InstallKind::Nsis);
+    }
+    // 免安裝版的更新是「就地換掉資料夾裡的檔案」，資料夾不可寫（解壓到 Program Files、唯讀的
+    // 隨身碟）就換不了——這時回 None，前端改給「前往下載」而不是讓使用者按下去才失敗。
+    if dir.join(crate::store::PORTABLE_MARKER).is_file() {
+        return dir_writable(dir).then_some(InstallKind::Portable);
     }
     let lower = |p: &Path| p.to_string_lossy().to_lowercase();
     let exe_l = lower(exe);
@@ -415,6 +428,189 @@ fn replace_file(new: &Path, target: &Path) -> AppResult<()> {
     std::fs::rename(&tmp, target).map_err(err)?;
     let _ = std::fs::remove_file(new);
     Ok(())
+}
+
+// ---- Windows 免安裝版的自我更新 ------------------------------------------------------------
+//
+// 免安裝版沒有安裝程式可以叫，但它反而是最好換的一種：整包就是一個資料夾，不需要系統管理員權限。
+// 關鍵在 Windows 的一條規則——正在執行的 .exe 與已載入的 .dll **不能刪除或覆寫，但可以改名**
+// （映像檔是以 FILE_SHARE_DELETE 開啟的）。所以更新的動作是：
+//
+//   1. 把下載的 zip 解到安裝資料夾底下的暫存資料夾（同一個磁碟，接下來的 rename 才是原子的）
+//   2. 每個檔案先把舊的改名成 `<檔名>.db-kit-old`，再把新的改名到原位
+//   3. `request_restart()`：`current_exe()` 回的是載入時記下的路徑字串（不跟著改名走），
+//      所以重新啟動的就是剛換上去的新版
+//
+// 只動 zip 裡有的檔案——使用者的 `data\`、自己放在旁邊的檔案都不碰；新版拿掉的檔案會留著（寧可多留
+// 一個用不到的檔，也不要誤刪使用者的東西）。中途任何一步失敗就把已經換掉的全部還原。
+// `.db-kit-old` 要等這個行程結束才刪得掉，留給下次啟動的 `clean_update_leftovers`。
+
+/// 舊檔改名後的後綴。
+const PORTABLE_OLD_SUFFIX: &str = ".db-kit-old";
+/// 解壓用的暫存資料夾前綴（後面接 pid）。
+const PORTABLE_STAGE_PREFIX: &str = ".db-kit-update-";
+
+/// 用下載的免安裝版 zip 就地換掉安裝資料夾裡的程式檔。
+#[cfg(windows)]
+fn replace_portable(archive: &Path) -> AppResult<()> {
+    let exe = std::env::current_exe()
+        .map_err(|_| AppError::Update(t!("這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔").into()))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| AppError::Update(t!("這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔").into()))?;
+    let exe_name = exe.file_name().unwrap_or_default().to_os_string();
+    // 上次更新留下的（正在執行時刪不掉的舊檔、中途失敗的暫存資料夾）先清掉，不然會越積越多。
+    clean_update_leftovers(dir);
+    let stage = dir.join(format!("{PORTABLE_STAGE_PREFIX}{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&stage);
+    std::fs::create_dir(&stage).map_err(|e| {
+        AppError::Update(tf!(
+            "無法寫入 {dir}（{e}）。免安裝版要放在可寫入的資料夾才能自動更新，或到 GitHub 下載新版 zip 自行解壓替換",
+            dir = dir.display(),
+            e = e
+        ))
+    })?;
+    let result = extract_zip(archive, &stage)
+        .and_then(|()| portable_root(&stage, &exe_name))
+        .and_then(|root| swap_in_place(&root, dir).map(|_| ()));
+    // 暫存資料夾裡剩下的是「沒搬成功」或「搬完的空殼」，兩種都該清掉。
+    let _ = std::fs::remove_dir_all(&stage);
+    let _ = std::fs::remove_file(archive);
+    result
+}
+
+#[cfg(not(windows))]
+fn replace_portable(_: &Path) -> AppResult<()> {
+    Err(AppError::Update(t!("這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔").into()))
+}
+
+/// 解開免安裝版 zip。`ZipArchive::extract` 自己會擋掉跳出目標資料夾的路徑（`..\`、絕對路徑）。
+#[cfg(windows)]
+fn extract_zip(archive: &Path, into: &Path) -> AppResult<()> {
+    let err = |e: &dyn std::fmt::Display| AppError::Update(tf!("解開更新檔失敗：{e}", e = e));
+    let file = std::fs::File::open(archive).map_err(|e| err(&e))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| err(&e))?;
+    zip.extract(into).map_err(|e| err(&e))
+}
+
+/// 解開後「放著新版程式檔」的那一層：Release 的 zip 最上層是 `db-kit_<版本>_x64_portable\`，
+/// 但不假設一定有這層外殼——以「裡面有同名主程式」為準，找不到就當更新檔內容不對，不動安裝資料夾。
+#[cfg(windows)]
+fn portable_root(stage: &Path, exe_name: &std::ffi::OsStr) -> AppResult<PathBuf> {
+    if stage.join(exe_name).is_file() {
+        return Ok(stage.to_path_buf());
+    }
+    std::fs::read_dir(stage)
+        .ok()
+        .and_then(|entries| entries.flatten().map(|e| e.path()).find(|p| p.join(exe_name).is_file()))
+        .ok_or_else(|| AppError::Update(t!("更新檔的內容不對，已取消更新").into()))
+}
+
+/// 把 `src` 底下的每個檔案搬到 `dst` 的對應位置（舊檔先改名備份），回傳換掉的檔案數。
+/// 一個換不過去就把前面換好的全部還原——寧可完全沒更新，也不要留下半新半舊的資料夾。
+#[cfg(any(windows, test))]
+fn swap_in_place(src: &Path, dst: &Path) -> AppResult<usize> {
+    let mut rels = Vec::new();
+    collect_files(src, Path::new(""), &mut rels);
+    if rels.is_empty() {
+        return Err(AppError::Update(t!("更新檔的內容不對，已取消更新").into()));
+    }
+    // (換到哪, 舊檔備份的路徑)；還原時倒著走。
+    let mut done: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
+    for rel in &rels {
+        let to = dst.join(rel);
+        match place_one(&src.join(rel), &to) {
+            Ok(backup) => done.push((to, backup)),
+            Err(e) => {
+                for (path, backup) in done.iter().rev() {
+                    // 剛換上去的新檔沒有被載入，刪得掉；刪掉之後才改得回來。
+                    let _ = std::fs::remove_file(path);
+                    if let Some(b) = backup {
+                        let _ = std::fs::rename(b, path);
+                    }
+                }
+                return Err(AppError::Update(tf!("無法更換 {path}：{e}", path = to.display(), e = e)));
+            }
+        }
+    }
+    Ok(done.len())
+}
+
+/// 把 `from` 放到 `to`：`to` 已經存在就先改名成 `.db-kit-old` 備起來（回傳備份路徑）。
+#[cfg(any(windows, test))]
+fn place_one(from: &Path, to: &Path) -> std::io::Result<Option<PathBuf>> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let backup = if to.exists() {
+        let b = old_path(to);
+        let _ = std::fs::remove_file(&b);
+        std::fs::rename(to, &b)?;
+        Some(b)
+    } else {
+        None
+    };
+    if let Err(e) = std::fs::rename(from, to) {
+        if let Some(b) = &backup {
+            let _ = std::fs::rename(b, to);
+        }
+        return Err(e);
+    }
+    Ok(backup)
+}
+
+#[cfg(any(windows, test))]
+fn old_path(p: &Path) -> PathBuf {
+    let mut s = p.as_os_str().to_os_string();
+    s.push(PORTABLE_OLD_SUFFIX);
+    PathBuf::from(s)
+}
+
+/// `dir` 底下所有檔案的相對路徑（`prefix` 是遞迴時累積的那一段）。
+#[cfg(any(windows, test))]
+fn collect_files(dir: &Path, prefix: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let rel = prefix.join(e.file_name());
+        match e.file_type() {
+            Ok(t) if t.is_dir() => collect_files(&e.path(), &rel, out),
+            // symlink 不跟（zip 裡本來就沒有）。
+            Ok(t) if t.is_file() => out.push(rel),
+            _ => {}
+        }
+    }
+}
+
+/// 清掉上一次免安裝版更新留下的 `.db-kit-old` 舊檔與沒刪乾淨的解壓暫存資料夾。
+/// 啟動時呼叫一次（那時舊的執行檔已經不在執行中，刪得掉）。
+///
+/// 只有免安裝版會留下這些檔，其他安裝方式直接跳過，不必每次啟動掃資料夾。深度上限 2：zip 的內容
+/// 只有根目錄與 `oracle\` 一層，再往下鑽只會白掃使用者的 `data\`。
+pub fn clean_update_leftovers(dir: &Path) {
+    if !dir.join(crate::store::PORTABLE_MARKER).is_file() {
+        return;
+    }
+    clean_leftovers_in(dir, 2);
+}
+
+fn clean_leftovers_in(dir: &Path, depth: u32) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        let path = e.path();
+        if name.starts_with(PORTABLE_STAGE_PREFIX) {
+            let _ = std::fs::remove_dir_all(&path);
+        } else if name.ends_with(PORTABLE_OLD_SUFFIX) {
+            let _ = std::fs::remove_file(&path);
+        } else if depth > 1 && e.file_type().is_ok_and(|t| t.is_dir()) {
+            clean_leftovers_in(&path, depth - 1);
+        }
+    }
 }
 
 /// 用系統的套件管理員裝 .deb / .rpm（要 root，經 pkexec；Ubuntu / Fedora 桌面都有）。有更新小幫手就叫它：
@@ -651,6 +847,21 @@ mod tests {
         }
     }
 
+    /// 免安裝版 zip 由 release.yml 自組，命名與 Tauri 的安裝檔不同一套，單獨驗一次。
+    #[test]
+    fn picks_the_portable_zip() {
+        let assets: Vec<Asset> = ["DB.Kit_0.59.2_x64-setup.exe", "db-kit_0.59.2_x64_portable.zip"]
+            .into_iter()
+            .map(asset)
+            .collect();
+        let pick = |arch| pick_asset(&assets, InstallKind::Portable, arch).map(|a| a.name.as_str());
+        assert_eq!(pick("x86_64"), Some("db-kit_0.59.2_x64_portable.zip"));
+        assert_eq!(pick("aarch64"), None, "只打 x64，沒有 ARM 版就不給錯的");
+        // 安裝檔不會被當成免安裝版，反之亦然。
+        assert!(!asset_matches("DB.Kit_0.59.2_x64-setup.exe", InstallKind::Portable, "x86_64"));
+        assert!(!asset_matches("db-kit_0.59.2_x64_portable.zip", InstallKind::Nsis, "x86_64"));
+    }
+
     #[test]
     fn mac_bundle_of_the_running_app() {
         let bundle = |p: &str| mac_bundle(Path::new(p)).map(|b| b.to_string_lossy().into_owned());
@@ -801,6 +1012,79 @@ mod tests {
         assert_eq!(kind_for(Path::new("c:\\program files\\DB Kit\\db-kit.exe"), &pf), Some(InstallKind::Msi), "不分大小寫");
         assert_eq!(kind_for(Path::new("C:\\Program Files Extra\\db-kit.exe"), &pf), None, "要是 Program Files 底下");
         assert_eq!(kind_for(Path::new("D:\\projects\\db-kit\\src-tauri\\target\\debug\\db-kit.exe"), &pf), None, "開發版");
+
+        // 免安裝版：執行檔旁有 portable.txt。資料夾可寫才給自動更新。
+        let portable = tmp.join("portable");
+        std::fs::create_dir_all(&portable).unwrap();
+        std::fs::write(portable.join(crate::store::PORTABLE_MARKER), b"").unwrap();
+        assert_eq!(kind_for(&portable.join("db-kit.exe"), &pf), Some(InstallKind::Portable));
+        // NSIS 裝起來的資料夾不會有 portable.txt，但真的同時有時以安裝程式為準（它才換得掉登錄檔與捷徑）。
+        std::fs::write(nsis.join(crate::store::PORTABLE_MARKER), b"").unwrap();
+        assert_eq!(kind_for(&nsis.join("db-kit.exe"), &pf), Some(InstallKind::Nsis));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 就地換檔：舊檔改名備份、新檔到位、使用者自己的東西不動。
+    #[test]
+    fn swaps_portable_files_in_place() {
+        let tmp = std::env::temp_dir().join(format!("dbkit-update-portable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let write = |path: PathBuf, content: &[u8]| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+            path
+        };
+        let install = tmp.join("db-kit_0.59.1_x64_portable");
+        write(install.join("db-kit.exe"), b"old exe");
+        write(install.join("oracle").join("oci.dll"), b"old oci");
+        write(install.join(crate::store::PORTABLE_MARKER), b"");
+        // 使用者自己的東西：不在 zip 裡，更新後要原封不動。
+        write(install.join("data").join("connections.json"), b"mine");
+        write(install.join("my-notes.txt"), b"keep me");
+
+        let new = tmp.join("stage").join("db-kit_0.59.2_x64_portable");
+        write(new.join("db-kit.exe"), b"new exe");
+        write(new.join("oracle").join("oci.dll"), b"new oci");
+        write(new.join(crate::store::PORTABLE_MARKER), b"");
+        write(new.join("dbk-rustdesk-bridge.exe"), b"brand new file");
+
+        assert_eq!(swap_in_place(&new, &install).unwrap(), 4);
+        let read = |p: PathBuf| std::fs::read(p).unwrap();
+        assert_eq!(read(install.join("db-kit.exe")), b"new exe");
+        assert_eq!(read(install.join("oracle").join("oci.dll")), b"new oci");
+        assert_eq!(read(install.join("dbk-rustdesk-bridge.exe")), b"brand new file", "新版多出來的檔也要放進去");
+        assert_eq!(read(install.join("data").join("connections.json")), b"mine", "使用者的 data 不動");
+        assert_eq!(read(install.join("my-notes.txt")), b"keep me", "zip 裡沒有的檔不動");
+        // 舊檔留在旁邊（Windows 上更新當下刪不掉），下次啟動才清。
+        assert_eq!(read(old_path(&install.join("db-kit.exe"))), b"old exe");
+
+        clean_update_leftovers(&install);
+        assert!(!old_path(&install.join("db-kit.exe")).exists(), "啟動時清掉舊檔");
+        assert!(!old_path(&install.join("oracle").join("oci.dll")).exists(), "oracle\\ 底下也要清");
+        assert_eq!(read(install.join("db-kit.exe")), b"new exe", "清垃圾不會動到新版");
+        assert!(install.join("data").join("connections.json").is_file());
+
+        // 空的更新檔 = 內容不對，不動安裝資料夾。
+        let empty = tmp.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(swap_in_place(&empty, &install).is_err());
+        assert_eq!(read(install.join("db-kit.exe")), b"new exe");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 非免安裝版（沒有 portable.txt）不掃資料夾，也就不會誤刪名字剛好對上的檔。
+    #[test]
+    fn leftover_cleanup_only_touches_portable_installs() {
+        let tmp = std::env::temp_dir().join(format!("dbkit-update-leftover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let stray = tmp.join(format!("whatever{PORTABLE_OLD_SUFFIX}"));
+        std::fs::write(&stray, b"x").unwrap();
+        clean_update_leftovers(&tmp);
+        assert!(stray.is_file(), "沒有 portable.txt 就整個跳過");
+        std::fs::write(tmp.join(crate::store::PORTABLE_MARKER), b"").unwrap();
+        clean_update_leftovers(&tmp);
+        assert!(!stray.exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

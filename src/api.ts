@@ -36,7 +36,7 @@ export type SshAuthMethod = "password" | "key";
  * 這份 App 的安裝方式（自動更新下載對應的安裝檔）：Windows 的 NSIS（目前使用者）/ MSI（Program Files）、
  * Linux 的 AppImage / .deb / .rpm、macOS 的 .app。
  */
-export type UpdateInstallKind = "nsis" | "msi" | "appimage" | "deb" | "rpm" | "macos";
+export type UpdateInstallKind = "nsis" | "msi" | "portable" | "appimage" | "deb" | "rpm" | "macos";
 /** 能自動安裝更新時怎麼裝；password = 安裝時系統會要求輸入系統管理員密碼（.deb / .rpm 沒有免密碼規則時）。 */
 export interface UpdateSupport {
   kind: UpdateInstallKind;

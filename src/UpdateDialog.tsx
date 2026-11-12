@@ -9,10 +9,10 @@ import { useT } from "./i18n";
 import { APP_NAME } from "./brand";
 
 // 有新版時的更新對話框：更新內容（Release 說明）+「立即更新」。後端 update_install 從 GitHub Release
-// 下載這台電腦用的安裝檔、驗 SHA-256 後安裝：Windows 啟動安裝程式後關閉 App、裝完由安裝程式重新開啟；
-// Linux（AppImage / .deb / .rpm）與 macOS（.app）在後端裝好，再由 App 自己重新啟動。.deb / .rpm 通常不用密碼
-// （套件裡的更新小幫手有 polkit 規則），沒有規則時才提醒會要求輸入系統管理員密碼。
-// 不支援自動安裝的（開發版 / 免安裝版 / macOS 上換不了 .app）只給「前往下載」。
+// 下載這台電腦用的安裝檔、驗 SHA-256 後安裝：Windows 安裝版啟動安裝程式後關閉 App、裝完由安裝程式重新開啟；
+// Windows 免安裝版（portable）、Linux（AppImage / .deb / .rpm）與 macOS（.app）在後端裝好，再由 App
+// 自己重新啟動。.deb / .rpm 通常不用密碼（套件裡的更新小幫手有 polkit 規則），沒有規則時才提醒會要求輸入
+// 系統管理員密碼。不支援自動安裝的（開發版 / 放在不可寫資料夾的免安裝版 / macOS 上換不了 .app）只給「前往下載」。
 
 type Phase =
   | { kind: "idle" }
@@ -21,8 +21,8 @@ type Phase =
   | { kind: "launching" }
   | { kind: "failed"; message: string };
 
-/** Linux / macOS 的安裝方式：後端自己裝好再重新啟動（不是交給安裝程式）。 */
-const SELF_INSTALL = new Set<UpdateInstallKind>(["appimage", "deb", "rpm", "macos"]);
+/** 後端自己裝好再重新啟動的安裝方式（不是交給安裝程式）：Windows 免安裝版、Linux、macOS。 */
+const SELF_INSTALL = new Set<UpdateInstallKind>(["portable", "appimage", "deb", "rpm", "macos"]);
 
 function mb(n: number): string {
   return (n / 1024 / 1024).toFixed(1);
@@ -110,7 +110,7 @@ export default function UpdateDialog() {
       ) : null}
       {support === null && (
         <div className="text-sm text-fg/60" data-update-manual="">
-          {t("這個版本的 {app} 無法自動安裝更新（開發版、免安裝版，或裝在沒有寫入權限的資料夾），請下載新版安裝檔。", { app: APP_NAME })}
+          {t("這個版本的 {app} 無法自動安裝更新（開發版，或放在沒有寫入權限的資料夾），請下載新版自行安裝。", { app: APP_NAME })}
         </div>
       )}
       {support && phase.kind === "idle" && (
