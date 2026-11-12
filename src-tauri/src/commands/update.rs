@@ -789,7 +789,8 @@ fn launch_installer(kind: InstallKind, path: &Path) -> AppResult<()> {
             c.arg("/i").arg(path).args(["/passive", "/promptrestart", "AUTOLAUNCHAPP=True"]);
             c
         }
-        InstallKind::AppImage | InstallKind::Deb | InstallKind::Rpm | InstallKind::MacApp => {
+        // 免安裝版由 replace_portable 就地換檔，不會走到這裡；列出來是為了讓 match 窮盡（Windows 才編得到這段）。
+        InstallKind::Portable | InstallKind::AppImage | InstallKind::Deb | InstallKind::Rpm | InstallKind::MacApp => {
             return Err(AppError::Update(t!("這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔").into()))
         }
     };
