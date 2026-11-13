@@ -87,7 +87,7 @@ See the [CHANGELOG](./CHANGELOG.md) for everything else.
 | Platform | Installer |
 |----------|-----------|
 | Windows 10 / 11 | `db-kit_x.y.z_x64-setup.exe` or `.msi` |
-| Windows 10 / 11 (portable) | `db-kit_x.y.z_x64_portable.zip` - unzip and run; settings stay in the folder, so it works from a USB drive |
+| Windows 10 / 11 (portable) | `db-kit_x.y.z_x64_portable.zip` - unzip and run; settings stay in the folder, so it works from a USB drive. Settings -> User environment variables can put the folder on PATH so any terminal can run `dbk` |
 | macOS Apple Silicon / Intel | `db-kit_x.y.z_aarch64.dmg` / `db-kit_x.y.z_x64.dmg` |
 | Linux | `.deb`, `.rpm` or the portable `.AppImage` |
 

@@ -46,6 +46,11 @@ cargo build --release --no-default-features --bin dbk
 # Output: src-tauri/target/release/dbk (dbk.exe on Windows)
 ```
 
+The **Windows portable build** is the exception: `dbk.exe` sits in the folder you unzipped, so there is
+nothing to build. It is not on `PATH` — use Settings -> User environment variables -> Add to PATH to put
+that folder there (it writes this Windows account's user variables, no administrator rights needed), and
+any terminal can then run `dbk` directly.
+
 Elasticsearch / RabbitMQ / Kafka connections are GUI-only; the CLI does not support them (see [Limitations](#limitations)).
 
 Oracle connections require a separately installed 64-bit Oracle Instant Client (detected at runtime via `PATH` / `ORACLE_HOME`).

@@ -49,6 +49,27 @@ export interface UpdateProgress {
   installing?: boolean;
 }
 
+/**
+ * Windows 免安裝版的「使用者變數」（HKCU\Environment）現況。
+ * `userEnvSupport()` 回 null = 這份不是 Windows 免安裝版，設定對話框整段不顯示（見 commands/winenv.rs）。
+ */
+export interface UserEnvSupport {
+  /** 免安裝版的資料夾（執行檔所在目錄），也就是「加進 PATH」會加的那個路徑。 */
+  app_dir: string;
+  /** 資料夾裡有 dbk.exe。 */
+  has_dbk: boolean;
+  /** app_dir 已經在使用者 PATH 裡。 */
+  on_user_path: boolean;
+  /** app_dir 已經在系統 PATH 裡（管理員設的，App 不會去動）。 */
+  on_machine_path: boolean;
+}
+/** 一筆使用者變數；expand = REG_EXPAND_SZ（值裡的 %VAR% 由系統展開）。 */
+export interface UserEnvVar {
+  name: string;
+  value: string;
+  expand: boolean;
+}
+
 export interface ConnectionConfig {
   id: string;
   name: string;
@@ -2266,6 +2287,15 @@ export const api = {
   updateSupport: () => invoke<UpdateSupport | null>("update_support"),
   updateInstall: (version: string, onProgress: Channel<UpdateProgress>) =>
     invoke<void>("update_install", { version, onProgress }),
+
+  // ---- Windows 免安裝版的使用者變數（寫 HKCU\Environment，見 commands/winenv.rs）----
+  // null = 不是 Windows 免安裝版（安裝版的 PATH 歸安裝程式管，macOS / Linux 沒有等價物）。
+  userEnvSupport: () => invoke<UserEnvSupport | null>("user_env_support"),
+  userEnvList: () => invoke<UserEnvVar[]>("user_env_list"),
+  userEnvSet: (name: string, value: string) => invoke<void>("user_env_set", { name, value }),
+  userEnvRemove: (name: string) => invoke<void>("user_env_remove", { name }),
+  // 加進 / 移出使用者 PATH 的是執行檔所在目錄（後端自己決定，不吃前端給的路徑）。
+  userEnvPath: (enable: boolean) => invoke<UserEnvSupport>("user_env_path", { enable }),
 
   // ---- SSH 終端機 / SFTP（DTO 見 sshTypes.ts；命令 / 事件契約見計畫）----
   // 主機清單：永不含密碼。存檔時密碼 / 密語另帶，非空才寫 keychain、空 = 保留原值（同 saveConnection 語意）。

@@ -197,6 +197,29 @@ export function installShim(fx) {
         setTimeout(() => resolve(null), 800);
       }, 300));
     },
+    // Windows 免安裝版的使用者變數（HKCU\Environment）：情境用 window.__DBKIT_USER_ENV__ 開啟
+    //（{ support, vars }），預設 null = 不是免安裝版，設定對話框整段不顯示（就像 macOS / 安裝版）。
+    user_env_support: () => window.__DBKIT_USER_ENV__?.support ?? null,
+    user_env_list: () => window.__DBKIT_USER_ENV__?.vars ?? [],
+    user_env_set: ({ name, value }) => {
+      const env = window.__DBKIT_USER_ENV__;
+      if (!env) return null;
+      const i = env.vars.findIndex((v) => v.name.toLowerCase() === name.toLowerCase());
+      if (i >= 0) env.vars[i] = { ...env.vars[i], value };
+      else env.vars.push({ name, value, expand: value.includes("%") });
+      return null;
+    },
+    user_env_remove: ({ name }) => {
+      const env = window.__DBKIT_USER_ENV__;
+      if (env) env.vars = env.vars.filter((v) => v.name.toLowerCase() !== name.toLowerCase());
+      return null;
+    },
+    user_env_path: ({ enable }) => {
+      const env = window.__DBKIT_USER_ENV__;
+      if (!env) return null;
+      env.support = { ...env.support, on_user_path: enable };
+      return env.support;
+    },
     claude_detect: () => ({ installed: true, version: "2.1.0", logged_in: true, path: "/usr/local/bin/claude" }),
     pool_status: () => ({ size: 3, idle: 2, in_use: 1 }),
     ping_connection: () => 12,

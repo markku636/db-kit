@@ -171,6 +171,11 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # SQL Server 的 Windows 驗證（db/mssql.rs 的 mssql_auth）：AuthMethod::Integrated / AuthMethod::windows
 # 只在 Windows 且開了 winauth 時才存在。與上面 [dependencies] 的 tiberius 合併 feature，只有 Windows 會多編 winauth。
 tiberius = { version = "0.12", default-features = false, features = ["winauth"] }
+# 免安裝版的「使用者變數」設定（commands/winenv.rs 讀寫 HKCU\Environment）。只依賴 windows-sys
+# （依賴樹裡本來就有），比自己包 RegEnumValueW / RegSetValueExW 的 buffer 來得不容易寫錯；
+# 值的型別（REG_SZ / REG_EXPAND_SZ）用 set_raw_value 原樣保留，%USERPROFILE% 這類寫法才不會被寫死。
+# optional：藏在 gui feature 後，slim CLI（--no-default-features）不含 command 層，也就用不到。
+winreg = { version = "0.55", optional = true }
 # 生物辨識解鎖（Windows Hello：指紋 / 臉 / PIN）。版本刻意對齊 Tauri 2.11 用的 windows 0.61，
 # 讓 WebviewWindow::hwnd() 回傳的 HWND 型別直接通用，也不會在依賴圖上多編一份 windows crate。
 # Win32_System_WinRT 是關鍵 feature —— IUserConsentVerifierInterop 藏在那底下；少了它就只剩
@@ -223,6 +228,7 @@ gui = [
   "dep:tauri-plugin-notification",
   "dep:windows",
   "dep:windows-future",
+  "dep:winreg",
   "dep:objc2",
   "dep:objc2-foundation",
   "dep:objc2-local-authentication",

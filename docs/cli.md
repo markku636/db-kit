@@ -46,6 +46,10 @@ cargo build --release --no-default-features --bin dbk
 # 產物：src-tauri/target/release/dbk（Windows 為 dbk.exe）
 ```
 
+例外是 **Windows 免安裝版**：`dbk.exe` 就在解壓出來的資料夾裡，不必自己編。它不在 `PATH` 上，
+用「設定 → 使用者變數 → 加進 PATH」把那個資料夾加進去（寫的是這個 Windows 帳戶的使用者變數，
+不需要系統管理員），之後任何終端機都能直接 `dbk`。
+
 想連 Elasticsearch / RabbitMQ / Kafka 的話它們是 GUI 專屬，CLI 不支援（見[限制](#限制)）。
 
 Oracle 連線需要另外安裝 64 位元 Oracle Instant Client（執行期偵測 `PATH` / `ORACLE_HOME`）。

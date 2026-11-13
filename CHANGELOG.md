@@ -1,3 +1,9 @@
+## 未發佈
+
+新功能：
+
+- **Windows 免安裝版可以設定使用者變數**：「設定 → 使用者變數」可以列出、新增、修改、刪除目前這個 Windows 帳戶的使用者變數（寫 `HKEY_CURRENT_USER\Environment`，不需要系統管理員，也不會動到系統變數），並有「加進 PATH」一鍵把免安裝資料夾加進使用者 PATH —— 之後任何終端機都能直接執行 `dbk`，不必打完整路徑。以前免安裝版沒有安裝程式，`ORACLE_HOME`、`HTTP_PROXY`、`DB_KIT_DATA_DIR` 這類變數只能在開 App 前自己 `set` 一次、關掉就沒了。改完會廣播 `WM_SETTINGCHANGE`，之後新開的終端機與程式就讀得到（已經開著的要重開，db-kit 自己也要重開才會套用）。設定寫在這台電腦的登錄檔、不跟著資料夾走，隨身碟換一台電腦要再設一次。（只限 Windows 免安裝版：安裝版的 PATH 歸安裝程式管，macOS / Linux 沒有等價的設定位置。）
+
 ## v0.60.2
 
 **SQL Server 的 Ctrl+Enter 依批次執行、預存程序可以填參數並讀回 OUTPUT；Redis 命令列會提示指令語法，KEYS 執行前先確認。**

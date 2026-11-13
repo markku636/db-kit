@@ -97,6 +97,7 @@ import { parseMongoExplain, withVerbosity, type MongoExplainModel } from "./mong
 import logoMark from "./assets/db-kit-hero.png";
 import LockScreen from "./LockScreen";
 import { AppLockSettings } from "./AppLockSettings";
+import { WinEnvSettings } from "./WinEnvSettings";
 import { useAutoLock } from "./autoLock";
 import Icon from "./ui/Icon";
 import {
@@ -893,6 +894,8 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
             {t("每天最多向 GitHub 查一次最新版本（啟動 10 秒後開始，App 開著時也會定期檢查）。有新版會跳出更新視窗，按「立即更新」就會下載、安裝並自動重新開啟。離線 / 內網環境可關閉；「關於」對話框的手動檢查不受影響。")}
           </p>
         </div>
+        {/* 使用者變數（HKCU\Environment）：只有 Windows 免安裝版會長出來，其餘平台 / 安裝版整段不顯示。 */}
+        <WinEnvSettings />
         <div className="pt-4 border-t border-fg/10 space-y-2">
           <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
             <Icon icon={Library} size={15} /> {t("AI 資源庫")}

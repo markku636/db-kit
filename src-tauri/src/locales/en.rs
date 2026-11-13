@@ -2240,6 +2240,23 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "允許 AI 在 SSH 主機執行會變更系統的指令（隱含 --ssh）：有風險的要先經使用者同意，極危險的一律不給執行" => {
             "Allow AI to run commands that change the system on SSH hosts (implies --ssh): risky ones need the user's consent first, extremely dangerous ones are never run"
         }
+
+        // ---- commands/winenv.rs：Windows 免安裝版的使用者變數 ----
+        "只有 Windows 免安裝版可以設定使用者變數" => "Only the Windows portable build can change user environment variables",
+        "變數名稱不可空白" => "The variable name cannot be blank",
+        "變數名稱不能包含「=」或控制字元" => "The variable name cannot contain \"=\" or control characters",
+        "變數名稱太長（上限 {n} 個字元）" => "The variable name is too long (limit {n} characters)",
+        "變數值不能包含控制字元（換行、Tab 等）" => "The value cannot contain control characters such as line breaks or tabs",
+        "變數值太長（上限 {n} 個字元）" => "The value is too long (limit {n} characters)",
+        "打不開使用者變數（HKCU\\Environment）：{e}" => "Could not open the user environment variables (HKCU\\Environment): {e}",
+        "寫入使用者變數「{name}」失敗：{e}" => "Could not write the user variable \"{name}\": {e}",
+        "刪除使用者變數「{name}」失敗：{e}" => "Could not delete the user variable \"{name}\": {e}",
+        "使用者 PATH 的格式不是字串，為了安全起見不去更動它" => {
+            "The user PATH is not stored as a string, so it was left untouched to be safe"
+        }
+        "使用者 PATH 似乎同時被其他程式改動，請再試一次" => {
+            "The user PATH appears to have been changed by another program at the same time; please try again"
+        }
         _ => return None,
     })
 }

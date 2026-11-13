@@ -81,6 +81,11 @@ pub enum AppError {
     #[error("clipboard error: {0}")]
     Clipboard(String),
 
+    /// 讀寫 Windows 使用者變數（`HKCU\Environment`）失敗，或這份 App 不是免安裝版。
+    /// detail 已是完整的使用者可見句子（見 `commands::winenv`）。
+    #[error("user environment error: {0}")]
+    Env(String),
+
     /// 查詢超過全域逾時（毫秒）。注意：伺服器端查詢可能仍在執行，
     /// 前端錯誤文案應引導使用者以行程清單（ProcessList）手動 KILL。
     #[error("query timed out after {0} ms")]
@@ -117,6 +122,7 @@ impl AppError {
             AppError::CompareCancelled => "compare_cancelled",
             AppError::Update(_) => "update",
             AppError::Clipboard(_) => "clipboard",
+            AppError::Env(_) => "env",
             AppError::Timeout(_) => "timeout",
             AppError::NeedsConfirm(_) => "needs_confirm",
         }
@@ -145,6 +151,7 @@ impl AppError {
             AppError::CompareCancelled => "ERR_COMPARE_CANCELLED",
             AppError::Update(_) => "ERR_UPDATE",
             AppError::Clipboard(_) => "ERR_CLIPBOARD",
+            AppError::Env(_) => "ERR_ENV",
             AppError::Timeout(_) => "ERR_TIMEOUT",
             AppError::NeedsConfirm(_) => "ERR_NEEDS_CONFIRM",
         }
@@ -174,6 +181,7 @@ impl AppError {
             AppError::CompareCancelled => t!("已取消比對").to_string(),
             AppError::Update(s) => tf!("更新失敗：{detail}", detail = s),
             AppError::Clipboard(s) => s.clone(),
+            AppError::Env(s) => s.clone(),
             AppError::Timeout(ms) => tf!(
                 "查詢逾時（{ms} ms）；伺服器端查詢可能仍在執行，可從行程清單手動終止",
                 ms = ms

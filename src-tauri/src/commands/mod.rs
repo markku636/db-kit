@@ -13,6 +13,8 @@ pub mod tenon;
 pub mod ssh;
 // 自動更新（從 GitHub Release 下載安裝檔、驗證後交給安裝程式）的 command。
 pub mod update;
+// Windows 免安裝版的「使用者變數」（HKCU\Environment）設定，含「把資料夾加進 PATH」。
+pub mod winenv;
 // Docker（容器 / 映像 / volume / network、log 與 exec 串流）的 command。
 #[cfg(feature = "docker")]
 pub mod docker;
