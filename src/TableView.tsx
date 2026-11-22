@@ -24,6 +24,7 @@ import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCoun
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint } from "./redisKeyValueFormat";
 import { isReadOnlyColumnExtra } from "./columnMeta";
+import { fmtRedisTtl } from "./redisUiFormat";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree, { REDIS_TREE_LIMIT } from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
@@ -2628,7 +2629,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
             <>
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">{page.type_}</span>
               <span className="text-xs text-fg/40">
-                TTL: {page.ttl < 0 ? t("無到期") : `${page.ttl}s`}
+                <span title={t("剩餘存活時間（TTL）")}>TTL: {page.ttl < 0 ? t("無到期") : fmtRedisTtl(page.ttl)}</span>
               </span>
               {isCollection && page.total >= 0 && (
                 <span className="text-xs text-fg/35"

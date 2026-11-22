@@ -3,7 +3,9 @@ import { ChevronRight, Folder, KeyRound, Circle } from "lucide-react";
 import { api } from "./api";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
-import { compareSegments } from "./redisUiFormat";
+import {
+  compareSegments, REDIS_PATTERN_HISTORY_KEY, recordRedisPattern,
+} from "./redisUiFormat";
 import { buildRedisTree, keysUnderPrefix, type RedisTreeNode } from "./redisTree";
 
 export const REDIS_TREE_LIMIT = 10000;
@@ -66,6 +68,14 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   const t = useT();
   const [patternInput, setPatternInput] = useState("*");
   const [pattern, setPattern] = useState("*");
+  // ARDM 的 search history：過濾樣式記在瀏覽器，下次直接從下拉選舊的。
+  const [patternHistory, setPatternHistory] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(REDIS_PATTERN_HISTORY_KEY);
+      const v: unknown = raw ? JSON.parse(raw) : [];
+      return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
+    } catch { return []; }
+  });
   const [keys, setKeys] = useState<string[] | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -120,7 +130,15 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
       return n;
     });
 
-  const apply = () => setPattern(patternInput.trim() || "*");
+  const apply = () => {
+    const next = patternInput.trim() || "*";
+    setPattern(next);
+    setPatternHistory((h) => {
+      const updated = recordRedisPattern(h, next);
+      try { localStorage.setItem(REDIS_PATTERN_HISTORY_KEY, JSON.stringify(updated)); } catch { /* 忽略 */ }
+      return updated;
+    });
+  };
 
   // 某命名空間底下的所有鍵（含「自己也是一個鍵」的節點）。前綴比對走原字串，不經 glob。
   const keysUnder = (prefix: string) => keysUnderPrefix(keys ?? [], prefix, separator);
@@ -131,11 +149,15 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
       <div className="flex flex-wrap items-center gap-1 px-2 py-1 bg-inset border-b border-fg/10 text-xs">
         <input
           value={patternInput}
+          list="redis-pattern-history"
           onChange={(e) => setPatternInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) apply(); }}
           placeholder={t("MATCH 樣式，如 user:*")}
           className="w-48 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent"
         />
+        <datalist id="redis-pattern-history">
+          {patternHistory.map((p) => <option key={p} value={p} />)}
+        </datalist>
         <button type="button" onClick={apply} className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60">{t("套用")}</button>
         <div className="w-px h-4 bg-fg/10 mx-1" />
         <button type="button" onClick={() => tree && setExpanded(new Set(allFolderPaths(tree)))}

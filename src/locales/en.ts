@@ -707,6 +707,7 @@ const en: Catalog = {
   "（無授權）": "(No grants)",
   "（無符合的鍵）": "(No matching keys)",
   "（無結果）": "(No results)",
+  "剩餘存活時間（TTL）": "Remaining time to live (TTL)",
   "（無資料）": "(No data)",
   "（無資料庫）": "(No databases)",
   "（無慢查詢紀錄）": "(No slow query records)",

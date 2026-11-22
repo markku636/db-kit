@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUptime, compareSegments, effectiveRedisDb } from "./redisUiFormat";
+import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern } from "./redisUiFormat";
 
 describe("fmtUptime", () => {
   it("不到一分鐘顯示秒數，不再顯示 0m", () => {
@@ -16,6 +16,33 @@ describe("fmtUptime", () => {
     expect(fmtUptime(undefined)).toBe("—");
     expect(fmtUptime("0")).toBe("—");
     expect(fmtUptime("abc")).toBe("—");
+  });
+});
+
+describe("recordRedisPattern", () => {
+  it("最新在前、重複不疊、上限 20，`*` 不記", () => {
+    expect(recordRedisPattern([], "user:*")).toEqual(["user:*"]);
+    expect(recordRedisPattern(["user:*"], "order:*")).toEqual(["order:*", "user:*"]);
+    expect(recordRedisPattern(["order:*", "user:*"], "user:*")).toEqual(["user:*", "order:*"]);
+    expect(recordRedisPattern(["user:*"], "*")).toEqual(["user:*"]);
+    const many = Array.from({ length: 30 }, (_, i) => `p${i}:*`);
+    const out = recordRedisPattern([], many[0]);
+    let h = out;
+    for (let i = 1; i < many.length; i++) h = recordRedisPattern(h, many[i]);
+    expect(h).toHaveLength(20);
+    expect(h[0]).toBe(many[29]);
+  });
+});
+
+describe("fmtRedisTtl", () => {
+  it("-1 由呼叫端顯示無到期，其餘拆成可讀單位", () => {
+    expect(fmtRedisTtl(-1)).toBe("");
+    expect(fmtRedisTtl(-2)).toBe("");
+    expect(fmtRedisTtl(0)).toBe("0s");
+    expect(fmtRedisTtl(45)).toBe("45s");
+    expect(fmtRedisTtl(125)).toBe("2m 5s");
+    expect(fmtRedisTtl(3661)).toBe("1h 1m");
+    expect(fmtRedisTtl(90061)).toBe("1d 1h");
   });
 });
 
