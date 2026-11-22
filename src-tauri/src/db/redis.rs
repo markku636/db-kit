@@ -7,6 +7,41 @@ use crate::db::{
 };
 use crate::error::{AppError, AppResult};
 
+/// 從「匯出單鍵 JSON」匯入的一筆。value 的形狀隨 type 而異，由 import_keys 解析。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RedisImportKey {
+    pub key: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+    #[serde(default = "default_ttl")]
+    pub ttl: i64,
+    pub value: serde_json::Value,
+}
+
+fn default_ttl() -> i64 { -1 }
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RedisImportSummary {
+    pub imported: usize,
+    pub skipped: usize,
+}
+
+/// 匯入前一筆資料是否可處理：目前不支援 stream / 模組型別，且 value 型狀要對。
+fn import_key_valid(item: &RedisImportKey) -> bool {
+    if item.key.trim().is_empty() { return false; }
+    match item.type_.as_str() {
+        "string" => item.value.is_string(),
+        "hash" => item.value.as_array().is_some_and(|a| a.iter().all(|v| {
+            v.get("field").is_some_and(|x| x.is_string()) && v.get("value").is_some_and(|x| x.is_string())
+        })),
+        "list" | "set" => item.value.as_array().is_some_and(|a| a.iter().all(|v| v.is_string())),
+        "zset" => item.value.as_array().is_some_and(|a| a.iter().all(|v| {
+            v.get("member").is_some_and(|x| x.is_string()) && v.get("score").is_some_and(|x| x.is_number())
+        })),
+        _ => false,
+    }
+}
+
 /// Redis 驅動。鍵值型，沿用 Navicat 表格手感的「key 列表化」：
 /// - list_databases → DB 0..N（預設 16）
 /// - list_tables → 對該 DB 回單一虛擬「表」keys（讓樹可展開）
@@ -535,6 +570,60 @@ impl RedisDriver {
             .await
             .map_err(rerr)?;
         Ok(())
+    }
+
+    /// 從匯出的 JSON 還原鍵（仿 ARDM 的 Import keys）：只處理 string / hash / list / set / zset，
+    /// stream 與模組型別無法從一般 value 表示，明確略過並計入 skipped。
+    pub async fn import_keys(&self, database: &str, items: Vec<RedisImportKey>) -> AppResult<RedisImportSummary> {
+        let mut conn = self.conn(database).await?;
+        let mut summary = RedisImportSummary { imported: 0, skipped: 0 };
+        for item in items {
+            if !import_key_valid(&item) { summary.skipped += 1; continue; }
+            let written = match item.type_.as_str() {
+                "string" => {
+                    let v = item.value.as_str().unwrap_or("");
+                    redis::cmd("SET").arg(&item.key).arg(v).query_async::<()>(&mut conn).await.is_ok()
+                }
+                "hash" => {
+                    let mut pipe = redis::pipe();
+                    pipe.atomic().del(&item.key).ignore();
+                    for pair in item.value.as_array().unwrap() {
+                        pipe.hset(&item.key, pair["field"].as_str().unwrap_or(""), pair["value"].as_str().unwrap_or("")).ignore();
+                    }
+                    pipe.query_async::<()>(&mut conn).await.is_ok()
+                }
+                "list" | "set" => {
+                    let mut pipe = redis::pipe();
+                    pipe.atomic().del(&item.key).ignore();
+                    for v in item.value.as_array().unwrap() {
+                        let s = v.as_str().unwrap_or("");
+                        if item.type_ == "list" { pipe.rpush(&item.key, s).ignore(); }
+                        else { pipe.sadd(&item.key, s).ignore(); }
+                    }
+                    pipe.query_async::<()>(&mut conn).await.is_ok()
+                }
+                "zset" => {
+                    let mut pipe = redis::pipe();
+                    pipe.atomic().del(&item.key).ignore();
+                    for v in item.value.as_array().unwrap() {
+                        let member = v["member"].as_str().unwrap_or("");
+                        let score = v["score"].as_f64().unwrap_or(0.0);
+                        pipe.zadd(&item.key, member, score).ignore();
+                    }
+                    pipe.query_async::<()>(&mut conn).await.is_ok()
+                }
+                _ => false,
+            };
+            if !written { summary.skipped += 1; continue; }
+            if item.ttl > 0 {
+                let _: () = redis::cmd("PEXPIRE").arg(&item.key).arg(item.ttl).query_async(&mut conn).await.unwrap_or(());
+            } else if item.ttl == -1 {
+                let _: () = redis::cmd("PERSIST").arg(&item.key).query_async(&mut conn).await.unwrap_or(());
+            }
+            summary.imported += 1;
+        }
+        self.invalidate_snapshot().await;
+        Ok(summary)
     }
 
     /// 批次刪除鍵（DEL，分批 pipeline），回傳實際被刪除的鍵數。
@@ -1714,6 +1803,29 @@ fn parse_client_list(raw: &str) -> Vec<ClientInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_key_valid_checks_value_shape() {
+        let j = |s: &str| RedisImportKey {
+            key: "k".into(), type_: "string".into(), ttl: -1,
+            value: serde_json::from_str(s).unwrap(),
+        };
+        assert!(import_key_valid(&j(r#""hello""#)));
+        assert!(!import_key_valid(&j("123")));
+        assert!(!import_key_valid(&j("null")));
+        let h = RedisImportKey {
+            key: "h".into(), type_: "hash".into(), ttl: -1,
+            value: serde_json::from_str(r#"[{"field":"a","value":"1"}]"#).unwrap(),
+        };
+        assert!(import_key_valid(&h));
+        let z = RedisImportKey {
+            key: "z".into(), type_: "zset".into(), ttl: -1,
+            value: serde_json::from_str(r#"[{"member":"m","score":1.5}]"#).unwrap(),
+        };
+        assert!(import_key_valid(&z));
+        let stream = RedisImportKey { type_: "stream".into(), ..j(r#""x""#) };
+        assert!(!import_key_valid(&stream));
+    }
 
     #[test]
     fn clone_restore_ttl_uses_zero_for_no_expiry() {

@@ -20,7 +20,7 @@ import DockerObjectView from "./DockerObjectView";
 import RegistryTagView from "./RegistryTagView";
 import HarborRepoView from "./HarborRepoView";
 import K8sObjectView from "./K8sObjectView";
-import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
+import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, pickOpenFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport } from "./redisKeyValueFormat";
 import { isBinaryColumnType, isReadOnlyColumnExtra } from "./columnMeta";
@@ -1386,6 +1386,23 @@ function DataPane({ tab }: { tab: OpenTab }) {
     return i < 0 ? "" : key.slice(0, i + sep.length);
   };
 
+  // 從「匯出單鍵 JSON」匯入（仿 ARDM）：只接受 string/hash/list/set/zset，stream 等會被後端略過並計數。
+  const importRedisKeys = async () => {
+    const path = await pickOpenFile([{ name: "JSON", extensions: ["json"] }]);
+    if (!path) return;
+    setApplying(true);
+    try {
+      const text = await api.readTextFile(path);
+      const r = await api.redisImportKeys(tab.connId, tab.database, text);
+      toast.success(t("已匯入 {n} 個鍵", { n: r.imported }) + (r.skipped ? t("，略過 {n} 個不支援的項目", { n: r.skipped }) : ""));
+      refresh();
+    } catch (e: any) {
+      toast.error(e?.message ?? t("匯入失敗"));
+    } finally {
+      setApplying(false);
+    }
+  };
+
   // 鍵樹多選批次刪除：鍵樹只回明確鍵名清單，後端不展開 pattern，誤刪範圍可控。
   const bulkDeleteRedisKeys = async (keys: string[]) => {
     if (!keys.length) return;
@@ -1663,6 +1680,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onContextFolder={(prefix, keys, truncated, x, y) => setFolderMenu({ prefix, keys, truncated, x, y })}
           onContextBlank={(x, y) => setFolderMenu({ prefix: "", keys: [], truncated: false, x, y })}
           onBulkDelete={readonly ? undefined : bulkDeleteRedisKeys}
+          onImportKeys={readonly ? undefined : importRedisKeys}
         />
       ) : (
       <>

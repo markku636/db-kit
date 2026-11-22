@@ -1880,6 +1880,9 @@ export const api = {
   saveSchemaSnapshot: (path: string, schema: DbSchema) =>
     invoke<SnapshotInfo>("save_schema_snapshot", { path, schema }),
   writeTextFile: (path: string, content: string) => invoke<void>("write_text_file", { path, content }),
+  // 從匯出的 JSON 匯入鍵（仿 ARDM）：回傳成功 / 略過筆數。
+  redisImportKeys: (id: string, database: string, payload: string) =>
+    invoke<{ imported: number; skipped: number }>("redis_import_keys", { id, database, payload }),
   loadSchemaSnapshot: (path: string) => invoke<DbSchema>("load_schema_snapshot", { path }),
   // 資料列比對：options.mode = report | sql | apply；進度走 onCompareProgress、取消走 compareDataCancel。
   compareDataTable: (runId: string, src: CompareTableRef, dst: CompareTableRef, options?: DataCompareOptions) =>

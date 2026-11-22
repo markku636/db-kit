@@ -43,6 +43,7 @@ use crate::db::{
 };
 use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
+use crate::db::redis::{RedisImportKey, RedisImportSummary};
 use crate::scheduler::{self, BackupHistoryEntry, BackupSchedule, BackupStatus};
 use crate::store::{self, PersistedConnection};
 #[cfg(feature = "kafka")]
@@ -1762,6 +1763,19 @@ pub async fn redis_delete_keys(
     keys: Vec<String>,
 ) -> AppResult<u64> {
     state.manager.redis_driver(&id)?.delete_keys(&database, &keys).await
+}
+
+/// 從匯出的 JSON 檔匯入鍵（仿 ARDM 的 Import keys）。
+#[tauri::command]
+pub async fn redis_import_keys(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    payload: String,
+) -> AppResult<RedisImportSummary> {
+    let items: Vec<RedisImportKey> = serde_json::from_str(&payload)
+        .map_err(|e| AppError::Query(format!("匯入檔不是有效的鍵 JSON：{e}")))?;
+    state.manager.redis_driver(&id)?.import_keys(&database, items).await
 }
 
 /// 複製鍵到新名稱（DUMP + RESTORE，保留型別與 TTL）。

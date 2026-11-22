@@ -50,7 +50,7 @@ function allFolderPaths(root: RedisTreeNode): string[] {
 
 // Redis 命名空間鍵樹：仿 Another Redis Desktop Manager 的左側鍵樹，
 // 把 user:1:name 之類的鍵依 ":" 分組成可摺疊資料夾。葉節點＝實際鍵。
-export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey, onContextKey, onContextFolder, onContextBlank, onBulkDelete }: {
+export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey, onContextKey, onContextFolder, onContextBlank, onBulkDelete, onImportKeys }: {
   connId: string;
   database: string;
   nonce: number;
@@ -65,6 +65,8 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   onContextBlank?: (x: number, y: number) => void;
   // 多選模式下的批次刪除（仿 ARDM 的 Multiple Select/Delete）。
   onBulkDelete?: (keys: string[]) => void;
+  // 由父層提供的匯入 JSON 動作（唯讀連線不傳入，按鈕就不顯示）。
+  onImportKeys?: () => void;
 }) {
   const t = useT();
   const [patternInput, setPatternInput] = useState("*");
@@ -210,6 +212,8 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
           className={`px-2 py-1 rounded border whitespace-nowrap ${multiSelect ? "border-accent text-accent" : "border-fg/15 text-fg/50 hover:bg-fg/10"}`}>
           {t("多選")}
         </button>}
+        {onImportKeys && <button type="button" onClick={onImportKeys} title={t("從 JSON 檔匯入鍵（仿 ARDM）")}
+          className="px-2 py-1 rounded border border-fg/15 text-fg/50 hover:bg-fg/10 whitespace-nowrap">{t("匯入鍵")}</button>}
         {onBulkDelete && multiSelect && selectedKeys.size > 0 && (
           <>
             <span className="text-fg/40">{t("已選 {n}", { n: selectedKeys.size })}</span>

@@ -351,6 +351,7 @@ pub fn run() {
             commands::redis_big_keys,
             commands::redis_folder_big_keys,
             commands::redis_clone_key,
+            commands::redis_import_keys,
             commands::write_text_file,
             commands::redis_monitor_start,
             commands::redis_monitor_stop,
