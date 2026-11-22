@@ -37,7 +37,7 @@ function scrollParent(el: HTMLElement | null): HTMLElement | null {
  * @param count 總列數
  * @param extraTop 表頭上方另外 sticky 的高度（例如查詢結果的工具列 34px）
  */
-export function useVirtualRows(count: number, extraTop = 0): VirtualRows {
+export function useVirtualRows(count: number, extraTop = 0, measureToken?: string | number): VirtualRows {
   const enabled = count >= VIRTUALIZE_MIN_ROWS;
   const [table, setTable] = useState<HTMLTableElement | null>(null);
   const [rowH, setRowH] = useState(DEFAULT_ROW_H);
@@ -108,7 +108,7 @@ export function useVirtualRows(count: number, extraTop = 0): VirtualRows {
     if (n <= 0) return;
     const measured = (table.tBodies[0].offsetHeight - padTop - padBottom) / n;
     if (measured > 8 && Math.abs(measured - rowH) > 0.5) setRowH(measured);
-  }, [enabled, table, start, end, padTop, padBottom, rowH]);
+  }, [enabled, table, start, end, padTop, padBottom, rowH, measureToken]);
 
   const ensureVisible = useCallback((r: number) => {
     if (!enabled) return;

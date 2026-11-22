@@ -1674,13 +1674,12 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
       return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 5) : [];
     } catch { return []; }
   });
-  const recordRecentConn = (id: string) => {
-    setRecentConns((prev) => {
-      const next = [id, ...prev.filter((x) => x !== id)].slice(0, 5);
-      try { localStorage.setItem("dbkit:recentConns", JSON.stringify(next)); } catch { /* 忽略 */ }
-      return next;
-    });
-  };
+  const recordRecentConn = (id: string) =>
+    setRecentConns((prev) => [id, ...prev.filter((x) => x !== id)].slice(0, 5));
+  useEffect(() => {
+    // 持久化放在 effect 而非 state updater：StrictMode / concurrent render 下 updater 可能重跑。
+    try { localStorage.setItem("dbkit:recentConns", JSON.stringify(recentConns)); } catch { /* 忽略 */ }
+  }, [recentConns]);
 
   const doConnect = async (id: string) => {
     const cfg = connections.find((c) => c.id === id);

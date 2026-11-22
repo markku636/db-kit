@@ -570,7 +570,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const totalPages = data ? Math.max(1, Math.ceil(data.total_rows / pageSize)) : 1;
   const startRow = data ? page * pageSize : 0;
   // 列虛擬化：大頁（2,000 / 5,000 列）也只把可視範圍放進 DOM。
-  const vr = useVirtualRows(data?.rows.length ?? 0);
+  const vr = useVirtualRows(data?.rows.length ?? 0, 0, density);
   // 鍵盤移動選取格時把該列捲進可視範圍（虛擬化後列可能不在 DOM，不能靠 scrollIntoView）。
   useEffect(() => {
     if (selected) vr.ensureVisible(selected.r);
@@ -1631,13 +1631,13 @@ function DataPane({ tab }: { tab: OpenTab }) {
         >
           <Icon icon={Search} size={14} /> {t("尋找")}
         </button>
-        <button
+        {!treeMode && <button
           onClick={toggleDensity}
           title={t("切換列密度（緊湊／舒適）")}
           className={`px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap ${density === "compact" ? "text-accent" : "text-fg/50"}`}
         >
           <Icon icon={Rows3} size={14} />
-        </button>
+        </button>}
         <button
           onClick={() => setShowFilter((s) => !s)}
           className={`px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap inline-flex items-center gap-1 ${
