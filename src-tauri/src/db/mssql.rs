@@ -961,8 +961,14 @@ impl DatabaseDriver for MssqlDriver {
         let r = rows.first().ok_or_else(|| AppError::Query(t!("欄位統計無結果").to_string()))?;
         let total = r.try_get::<i64, _>(0).ok().flatten().unwrap_or(0) as u64;
         let non_null = r.try_get::<i64, _>(1).ok().flatten().unwrap_or(0) as u64;
+        let data_type = self
+            .table_columns(database, table)
+            .await
+            .ok()
+            .and_then(|cols| cols.into_iter().find(|c| c.name == column).map(|c| c.data_type))
+            .unwrap_or_default();
         let distinct = self
-            .query_rows(&column_distinct_sql(&col, &q))
+            .query_rows(&column_distinct_sql(&col, &q, &data_type))
             .await
             .ok()
             .and_then(|dr| dr.first().and_then(|r| r.try_get::<i64, _>(0).ok().flatten()))
@@ -1656,8 +1662,17 @@ fn column_count_sql(col: &str, qualified: &str) -> String {
 }
 
 /// 不同值數量：CAST 成 NVARCHAR 讓 text / xml 等非可比較型別也能算，失敗時呼叫端略過。
-fn column_distinct_sql(col: &str, qualified: &str) -> String {
-    format!("SELECT COUNT_BIG(DISTINCT CAST({col} AS NVARCHAR(4000))) FROM {qualified}")
+/// 超長欄位（varchar/nvarchar(max)）只 cast 成 4000 字會把前 4000 字相同的不同值算成一個，
+/// 改用 HASHBYTES 對完整值取雜湊再數。
+fn column_distinct_sql(col: &str, qualified: &str, data_type: &str) -> String {
+    let ty = data_type.to_ascii_lowercase();
+    if ty.contains("(max)") || ty.contains("text") {
+        format!(
+            "SELECT COUNT_BIG(DISTINCT HASHBYTES('SHA2_256', CAST({col} AS NVARCHAR(MAX)))) FROM {qualified}"
+        )
+    } else {
+        format!("SELECT COUNT_BIG(DISTINCT CAST({col} AS NVARCHAR(4000))) FROM {qualified}")
+    }
 }
 
 /// NOCOUNT ON 的批次要補問 @@ROWCOUNT：Server 不回 DONE 計數，execute 會得到空陣列。
@@ -1736,7 +1751,7 @@ fn build_order(sorts: &[Sort], pk: &[String]) -> String {
             pk.iter().map(|c| format!("[{}] ASC", esc(c))).collect::<Vec<_>>().join(", ")
         );
     }
-    let parts: Vec<String> = sorts
+    let mut parts: Vec<String> = sorts
         .iter()
         .map(|s| {
             let dir = match s.dir {
@@ -1746,6 +1761,14 @@ fn build_order(sorts: &[Sort], pk: &[String]) -> String {
             format!("[{}] {}", esc(&s.column), dir)
         })
         .collect();
+    // 使用者排序的欄位可能大量重複（Status、_type…），沒有 tiebreaker 照樣會在分頁間
+    // 出現重複 / 漏列。補上尚未出現在排序裡的主鍵欄位。
+    for key in pk {
+        let quoted = format!("[{}]", esc(key));
+        if !sorts.iter().any(|s| s.column.eq_ignore_ascii_case(key)) {
+            parts.push(format!("{quoted} ASC"));
+        }
+    }
     format!("ORDER BY {}", parts.join(", "))
 }
 
@@ -1989,8 +2012,12 @@ SELECT SCOPE_IDENTITY()"));
             "SELECT COUNT_BIG(*), COUNT_BIG([note]) FROM [db].[dbo].[t]"
         );
         assert_eq!(
-            column_distinct_sql("[note]", "[db].[dbo].[t]"),
+            column_distinct_sql("[note]", "[db].[dbo].[t]", "xml"),
             "SELECT COUNT_BIG(DISTINCT CAST([note] AS NVARCHAR(4000))) FROM [db].[dbo].[t]"
+        );
+        assert_eq!(
+            column_distinct_sql("[note]", "[db].[dbo].[t]", "nvarchar(max)"),
+            "SELECT COUNT_BIG(DISTINCT HASHBYTES('SHA2_256', CAST([note] AS NVARCHAR(MAX)))) FROM [db].[dbo].[t]"
         );
     }
 
@@ -2016,7 +2043,10 @@ SELECT SCOPE_IDENTITY()"));
         assert_eq!(build_order(&[], &[]), "ORDER BY (SELECT NULL)");
         // 使用者指定的排序永遠優先。
         let sorts = vec![Sort { column: "name".into(), dir: SortDir::Desc }];
-        assert_eq!(build_order(&sorts, &["id".into()]), "ORDER BY [name] DESC");
+        assert_eq!(build_order(&sorts, &["id".into()]), "ORDER BY [name] DESC, [id] ASC");
+        // 主鍵已被使用者拿去排序時不重複加。
+        let by_pk = vec![Sort { column: "id".into(), dir: SortDir::Asc }];
+        assert_eq!(build_order(&by_pk, &["id".into()]), "ORDER BY [id] ASC");
     }
 
     #[test]

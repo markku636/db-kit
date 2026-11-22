@@ -63,9 +63,9 @@ export const REDIS_SEPARATOR_KEY = "dbkit:redisKeySeparator";
 export const redisSeparatorKey = (connId: string, db?: string) => `${REDIS_SEPARATOR_KEY}:${connId}:${db ?? ""}`;
 
 /** 讀取使用者選的分隔符（空值退回冒號）；供鍵樹外部的右鍵選單共用。 */
-export function loadRedisSeparator(connId?: string): string {
+export function loadRedisSeparator(connId?: string, db?: string): string {
   try {
-    return (localStorage.getItem(connId ? redisSeparatorKey(connId) : REDIS_SEPARATOR_KEY)
+    return (localStorage.getItem(connId ? redisSeparatorKey(connId, db) : REDIS_SEPARATOR_KEY)
       ?? localStorage.getItem(REDIS_SEPARATOR_KEY)) || ":";
   } catch { return ":"; }
 }

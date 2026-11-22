@@ -1387,7 +1387,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   // 鍵名的命名空間前綴（含尾端分隔符）：跟著鍵樹目前選的分隔符走。
   const namespaceOf = (key: string) => {
-    const sep = loadRedisSeparator(tab.connId);
+    const sep = loadRedisSeparator(tab.connId, tab.database);
     const i = key.lastIndexOf(sep);
     return i < 0 ? "" : key.slice(0, i + sep.length);
   };
@@ -1942,6 +1942,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
       {detailKey !== null && (
         <KeyDetailModal
+          key={detailKey}
           connId={tab.connId}
           database={tab.database}
           table={tab.table}
@@ -2009,7 +2010,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         <MenuPanel x={folderMenu.x} y={folderMenu.y} minW={180} onClose={() => setFolderMenu(null)}>
           {(() => {
             const { prefix, keys, truncated } = folderMenu;
-            const sep = loadRedisSeparator(tab.connId);
+            const sep = loadRedisSeparator(tab.connId, tab.database);
             // 若資料夾本身也是一個 key，SCAN 的 prefix* 不會帶到它，額外帶進去合併。
             const selfKeys = keys.filter((k) => k === prefix);
             // 唯讀連線隱藏寫入項（新增鍵 / 刪除整段），保留瀏覽與複製。
@@ -2636,6 +2637,8 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   const [filterInput, setFilterInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // 換過濾 / 重載時讓還在飛的「載入更多」回應失效，不把舊頁混進新結果。
+  const loadGen = useRef(0);
   // 任一已載入的頁含二進位內容 → 整個鍵唯讀（顯示的是跳脫字串，寫回會損毀原始位元組）。
   const [binary, setBinary] = useState(false);
 
@@ -2660,6 +2663,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
 
   useEffect(() => {
     let cancelled = false;
+    loadGen.current += 1;
     setLoading(true);
     setErr(null);
     api
@@ -2682,10 +2686,12 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
 
   const loadMore = () => {
     if (cursor === 0 || loading) return;
+    const gen = loadGen.current;
     setLoading(true);
     api
       .redisKeyPage(connId, database, rkey, cursor, KEY_PAGE, filter, false, nextId)
       .then((p) => {
+        if (gen !== loadGen.current) return; // 過濾 / 重載已經換代，這頁是舊的
         if (p.binary) setBinary(true);
         setMembers((m) => [...m, ...p.members]);
         setFields((f) => [...f, ...p.fields]);
@@ -2707,7 +2713,11 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
     const path = await pickSaveFile(`${rkey.replace(/[^\w.-]/g, "_")}.json`, [{ name: "JSON", extensions: ["json"] }]);
     if (!path) return;
     try {
-      await api.writeTextFile(path, buildRedisKeyExport(rkey, page));
+      // 用累積的 members/fields/scores 與目前 cursor，不是第一頁的 page 快照：
+      // 按過「載入更多」後仍只匯出第一頁、且 partial 永遠為 true，就無法再匯回。
+      await api.writeTextFile(path, buildRedisKeyExport(rkey, {
+        ...page, members, fields, scores, cursor,
+      }));
       toast.success(t("已匯出鍵 {key}", { key: rkey }));
     } catch (e: any) {
       toast.error(e?.message ?? t("匯出失敗"));

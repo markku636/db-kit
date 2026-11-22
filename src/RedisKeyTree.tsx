@@ -123,7 +123,14 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
       .then((res) => {
         if (cancelled) return;
         const extra = exactKeysRef.current;
-        setKeys(extra.length ? [...new Set([...res.keys, ...extra])] : res.keys);
+        const allKeys = extra.length ? [...new Set([...res.keys, ...extra])] : res.keys;
+        setKeys(allKeys);
+        // 重整 / 換樣式後，已選但不存在的鍵要清掉，避免「刪除選取」刪到畫面上看不到的鍵。
+        const present = new Set(allKeys);
+        setSelectedKeys((prev) => {
+          const next = new Set([...prev].filter((k) => present.has(k)));
+          return next.size === prev.size ? prev : next;
+        });
         setTruncated(res.truncated);
       })
       .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")))
@@ -138,6 +145,8 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
     exactKeysRef.current = focus.exactKeys ?? [];
     setPatternInput(focus.pattern);
     setPattern(focus.pattern);
+    // 同一個樣式再按一次也要重掃（setPattern 同值會被 React 略過）。
+    setRefreshNonce((n) => n + 1);
     didInit.current = false;
   }, [focus?.seq]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -169,6 +178,9 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
 
   const apply = () => {
     const next = patternInput.trim() || "*";
+    // 使用者自己改樣式時，之前「只顯示此命名空間」帶進來的精確鍵不該再混進來。
+    exactKeysRef.current = [];
+    setSelectedKeys(new Set());
     setPattern(next);
     setPatternHistory((h) => {
       const updated = recordRedisPattern(h, next);

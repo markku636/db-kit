@@ -392,31 +392,40 @@ impl RedisDriver {
             "stream" => {
                 page.total = redis::cmd("XLEN").arg(key).query_async(&mut conn).await.unwrap_or(-1);
                 // 下一頁的起點 = 上一頁最後一個 ID 的下一號（包含式區間）。不用 `(id` 排他區間：那要 Redis 6.2+。
-                let start = after_id.map(next_stream_id).unwrap_or_else(|| "-".to_string());
-                let raw: redis::Value = redis::cmd("XRANGE")
-                    .arg(key)
-                    .arg(&start)
-                    .arg("+")
-                    .arg("COUNT")
-                    .arg(count)
-                    .query_async(&mut conn)
-                    .await
-                    .map_err(to_err)?;
-                let entries = parse_stream_entries(raw);
-                let fetched = entries.len();
-                let mut last_id = None;
-                for (id, kvs) in entries {
-                    let id = text(id);
-                    let pairs: Vec<(String, String)> = kvs.into_iter().map(|(f, v)| (text(f), text(v))).collect();
-                    let body = stream_fields_json(&pairs);
-                    if filter.is_empty() || id.contains(filter) || body.contains(filter) {
-                        page.fields.push(id.clone());
-                        page.members.push(body);
+                let mut start = after_id.map(next_stream_id).unwrap_or_else(|| "-".to_string());
+                let mut last_id: Option<String> = None;
+                // 有過濾時要一直往後撈到「湊滿一頁符合的」或到底，否則稀有符合項會藏在
+                // 被丟掉的原始頁裡，使用者看到空頁 + 一個永遠載不完的「載入更多」。
+                for _ in 0..20 {
+                    let raw: redis::Value = redis::cmd("XRANGE")
+                        .arg(key)
+                        .arg(&start)
+                        .arg("+")
+                        .arg("COUNT")
+                        .arg(count)
+                        .query_async(&mut conn)
+                        .await
+                        .map_err(to_err)?;
+                    let entries = parse_stream_entries(raw);
+                    let fetched = entries.len();
+                    if fetched == 0 { break; }
+                    for (id, kvs) in entries {
+                        let id = text(id);
+                        let pairs: Vec<(String, String)> = kvs.into_iter().map(|(f, v)| (text(f), text(v))).collect();
+                        let body = stream_fields_json(&pairs);
+                        if filter.is_empty() || id.contains(filter) || body.contains(filter) {
+                            page.fields.push(id.clone());
+                            page.members.push(body);
+                        }
+                        last_id = Some(id);
+                        if page.members.len() >= count { break; }
                     }
-                    last_id = Some(id);
+                    let next = next_stream_id(last_id.as_deref().unwrap_or(&start));
+                    let exhausted = fetched < count || next == start;
+                    start = next;
+                    if page.members.len() >= count || exhausted { break; }
                 }
-                // 回滿一頁 → 可能還有；回不滿代表到底。
-                page.next_id = if fetched >= count { last_id } else { None };
+                page.next_id = if page.members.len() >= count { last_id } else { None };
                 page.cursor = u64::from(page.next_id.is_some());
                 if after_id.is_none() {
                     // 群組資訊只在第一頁取；XINFO 失敗（舊版 / 權限）不影響項目本身。

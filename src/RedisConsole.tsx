@@ -68,6 +68,14 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
   const run = async () => {
     const cmd = input.trim();
     if (!cmd || busy) return;
+
+    // 本地指令：清空畫面。不需要 DB，也不能被正在編輯中的 DB 欄擋住。
+    if (cmd.toLowerCase() === "clear" || cmd.toLowerCase() === "cls") {
+      setInput("");
+      setEntries([]);
+      return;
+    }
+
     const currentDb = normalizeRedisDbInput(db);
     if (currentDb == null) {
       setInput("");
@@ -75,12 +83,6 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
       return;
     }
     setInput("");
-
-    // 本地指令：清空畫面。
-    if (cmd.toLowerCase() === "clear" || cmd.toLowerCase() === "cls") {
-      setEntries([]);
-      return;
-    }
 
     // 唯讀連線：只放行白名單內的讀取指令（對齊 SQL 查詢編輯器在唯讀模式下擋寫入 / DDL 的行為）。
     // 不送出、直接在畫面上回報，使用者才知道是被本機擋下而非伺服器拒絕。
