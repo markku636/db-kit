@@ -508,7 +508,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
       setPickerOpen(false);
       setImportMsg({
         ok: true,
-        text: t("已依連線字串填入 {kind} 設定，請確認後測試連線", { kind: p.kind ? KIND_META[p.kind].label : "—" }),
+        // 後端可能比前端先認識新 kind：用可選取值，別在已改完表單後才丟出 undefined.label。
+        text: t("已依連線字串填入 {kind} 設定，請確認後測試連線", { kind: p.kind ? (KIND_META[p.kind]?.label ?? p.kind) : "—" }),
       });
     } catch (e: any) {
       // 失敗時保留 importUrl，讓使用者看得到自己貼了什麼（常見是複製被截斷）。

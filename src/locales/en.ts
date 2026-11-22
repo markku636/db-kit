@@ -3053,6 +3053,7 @@ const en: Catalog = {
   "已匯出 {n} 條指令": "Exported {n} commands",
   "取樣": "Sampling",
   "MEMORY USAGE 被停用或失敗，只顯示型別分佈；記憶體數字不可信。": "MEMORY USAGE is disabled or failed; showing type distribution only, memory figures are unreliable.",
+  "此連線為唯讀，鍵值僅供檢視；可在連線右鍵關閉「唯讀模式」後再修改。": "This connection is read-only; values are view-only. Right-click the connection to disable read-only mode.",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",

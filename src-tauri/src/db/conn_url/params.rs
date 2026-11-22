@@ -162,16 +162,23 @@ pub(super) fn apply_mssql_kv(p: &mut Parsed, key: &str, value: &str) {
                 p.options.insert("encrypt".into(), "false".into());
             }
         }
-        "trustservercertificate" | "trust server certificate" if truthy(value) => {
-            p.options
-                .insert("trust_server_certificate".into(), "true".into());
+        "trustservercertificate" | "trust server certificate" => {
+            // false 也要明確寫出，否則貼上 TrustServerCertificate=False 時，
+            // 表單裡舊的「信任憑證」勾選不會被清掉（TLS 驗證仍然是關的）。
+            if truthy(value) {
+                p.options.insert("trust_server_certificate".into(), "true".into());
+            } else if falsy(value) {
+                p.options.insert("trust_server_certificate".into(), "false".into());
+            }
         }
-        // Windows 驗證：ADO.NET 的 `Integrated Security=true|SSPI`、ODBC 慣用的 `Trusted_Connection=yes`，
-        // JDBC 的 `integratedSecurity=true`。
-        "integrated security" | "integratedsecurity" | "trusted_connection" | "trusted connection"
-            if truthy(value) || value.eq_ignore_ascii_case("sspi") =>
-        {
-            p.options.insert("mssql_auth".into(), "windows".into());
+        // Windows 驗證：ADO.NET 的 `Integrated Security=true|SSPI`、ODBC 的 `Trusted_Connection=yes`，
+        // JDBC 的 `integratedSecurity=true`。false 要明確回到 SQL 驗證，不能沿用舊設定。
+        "integrated security" | "integratedsecurity" | "trusted_connection" | "trusted connection" => {
+            if truthy(value) || value.eq_ignore_ascii_case("sspi") {
+                p.options.insert("mssql_auth".into(), "windows".into());
+            } else if falsy(value) {
+                p.options.insert("mssql_auth".into(), "sql".into());
+            }
         }
         _ => {}
     }

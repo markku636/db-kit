@@ -2,6 +2,12 @@
 
 新功能：
 
+- **唯讀連線不能再從鍵詳情改值**：右鍵設了「唯讀模式」後，工具列雖然不顯示寫入入口，雙擊鍵仍會打開可編輯面板並真的寫回 Redis；現在唯讀連線一律改用唯讀檢視並顯示提示。
+- **list 過濾後編輯不再改錯元素**：過濾 `[a,b,c,d]` 只顯示 `b` 時，原來按顯示序号 `LSET 0` 會覆蓋 `a`；現在後端回傳原始索引，前端用原索引寫入。
+- **連線字串的 `false` 不再被忽略**：`Integrated Security=false` / `TrustServerCertificate=False` 現在明確蓋掉表單舊值，不會貼了 SQL 驗證的連線字串卻仍用 Windows 驗證或信任無效憑證。
+- **Pub/Sub 背景監聽失敗不再假裝還在訂閱**，監聽錯誤時面板會回到未訂閱；連續按發佈也不會重複送指令。
+- **主控台指令歷史可匯出成 txt（仿 ARDM 的 command dump）**，方便貼到文件或交給同事重現。
+- **鍵前綴含 `[` `]` `\` 時命名空間展開不再是對的鍵**：`user[admin]` 的 glob 字元現在會跳脫，不會誤配到 `useradmin`。
 - **Redis 鍵樹可自訂分隔符（仿 Another Redis Desktop Manager 的 `--separator`）**：工具列多了「分隔」輸入框，鍵名用 `/`、`::` 等非冒號慣例分層時可以正確展開；設定會記住，不必每次重設。
 - **匯出單鍵為 JSON（仿 ARDM 的 Export keys）**：鍵詳情右上「匯出」把目前載入的 key / type / TTL / 值存成 JSON；集合型只含已載入的頁，`partial` 欄位會明講，不會讓人誤以為是完整資料。
 - **JDBC 具名執行個體 + 埠的記號不再在 GUI 存檔時消失**：`mssql_no_browse` 現在會隨表單解析、快照與存檔保留，否則貼上 `jdbc:sqlserver://host\INST:1433` 後存檔仍會去問 SQL Browser。

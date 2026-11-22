@@ -685,8 +685,10 @@ mod tests {
         // 主機欄保留 `主機\執行個體`，由 driver 解析（ADO.NET 寫法原樣，使用者看得懂）。
         let p = parse_url(r"Server=.\SQLEXPRESS;Integrated Security=true", None).unwrap();
         assert_eq!(p.host.as_deref(), Some(r".\SQLEXPRESS"));
+        // 明確的 false 要寫成 sql：否則表單上一次的「Windows 驗證」會被沿用，
+        // 明明貼了 SQL 驗證的連線字串卻還是走 Windows 驗證。
         let p = parse_url("Server=db01;Integrated Security=false;User ID=sa;Password=x", None).unwrap();
-        assert_eq!(p.options.get("mssql_auth"), None);
+        assert_eq!(p.options.get("mssql_auth").map(String::as_str), Some("sql"));
     }
 
     #[test]

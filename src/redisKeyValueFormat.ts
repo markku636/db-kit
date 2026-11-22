@@ -12,7 +12,7 @@ export function isSupportedRedisKeyType(type: string): boolean {
 /** 匯出單鍵為可讀 JSON（仿 ARDM 的 Export keys）；型別不同用不同欄位名，不混淆 field / member。 */
 export function buildRedisKeyExport(
   key: string,
-  p: Pick<KeyPage, "type_" | "ttl" | "total" | "fields" | "members" | "scores" | "cursor">,
+  p: Pick<KeyPage, "type_" | "ttl" | "total" | "fields" | "members" | "scores" | "cursor" | "truncated">,
 ): string {
   let value: unknown;
   switch (p.type_) {
@@ -27,7 +27,8 @@ export function buildRedisKeyExport(
     key, type: p.type_, ttl: p.ttl, value,
     exported: Array.isArray(value) ? value.length : 1,
     total: p.total,
-    partial: p.cursor !== 0 && p.type_ !== "string",
+    // 大 string 只載入前 64KB 時 page.truncated=true；這種檔案匯回來會覆蓋完整值。
+    partial: !!p.truncated || (p.cursor !== 0 && p.type_ !== "string"),
   }], null, 2);
 }
 

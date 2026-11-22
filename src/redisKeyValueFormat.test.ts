@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport } from "./redisKeyValueFormat";
 
 const page = (over: Record<string, unknown>) => ({
-  type_: "string", total: 0, ttl: -1, cursor: 0, fields: [], members: [], scores: [], ...over,
+  type_: "string", total: 0, ttl: -1, cursor: 0, truncated: false, fields: [], members: [], scores: [], ...over,
 });
 
 describe("isSupportedRedisKeyType", () => {
@@ -19,6 +19,17 @@ describe("isSupportedRedisKeyType", () => {
 });
 
 describe("buildRedisKeyExport", () => {
+  it("大 string 只載到預覽時標 partial，避免匯回覆蓋完整值", () => {
+    const s = JSON.parse(buildRedisKeyExport("k", page({
+      type_: "string", ttl: -1, members: ["prefix"], truncated: true,
+    })));
+    expect(s[0].partial).toBe(true);
+    const full = JSON.parse(buildRedisKeyExport("k", page({
+      type_: "string", ttl: -1, members: ["value"], truncated: false,
+    })));
+    expect(full[0].partial).toBe(false);
+  });
+
   it("輸出為可供後端匯入的單元素陣列，依型別帶不同 value 結構", () => {
     const h = JSON.parse(buildRedisKeyExport("h", page({
       type_: "hash", ttl: -1, total: 2, cursor: 0, fields: ["a"], members: ["1"],

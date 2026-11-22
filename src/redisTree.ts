@@ -75,5 +75,7 @@ export function redisNamespacePrefix(prefix: string, separator: string): string 
   return `${prefix}${separator || ":"}`;
 }
 export function redisNamespacePattern(prefix: string, separator: string): string {
-  return `${redisNamespacePrefix(prefix, separator)}*`;
+  // 前綴是實際鍵名的一部份，裡面的 glob 字元要當字面處理（與後端 redis_prefix_glob 一致）。
+  const literal = prefix.replace(/[\\*?\[\]]/g, "\\$&");
+  return `${literal}${separator || ":"}*`;
 }

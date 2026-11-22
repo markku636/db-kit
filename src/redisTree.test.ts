@@ -39,6 +39,7 @@ describe("namespace helpers", () => {
     expect(redisNamespacePrefix("app/cache", "/")).toBe("app/cache/");
     expect(redisNamespacePattern("app/cache", "/")).toBe("app/cache/*");
     expect(redisNamespacePattern("user", "")).toBe("user:*");
+    expect(redisNamespacePattern("user[admin]", ":")).toBe(String.raw`user\[admin\]:*`);
   });
 });
 

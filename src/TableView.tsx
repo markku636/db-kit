@@ -203,6 +203,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [treeFocus, setTreeFocus] = useState<{ pattern: string; seq: number } | null>(null);
   const focusTree = (pattern: string, exactKeys?: string[]) =>
     setTreeFocus((f) => ({ pattern, exactKeys, seq: (f?.seq ?? 0) + 1 }));
+  // 換連線 / 換 DB / 換分頁時清掉舊的命名空間焦點，否則它的 exactKeys 會被併進新 DB 的鍵樹。
+  useEffect(() => { setTreeFocus(null); }, [tab.key, tab.connId, tab.database]);
   // Redis 鍵檢視模式：樹狀（命名空間資料夾）/ 網格（key 列表）。記憶於 localStorage。
   const [redisView, setRedisView] = useState<"tree" | "grid">(() => {
     try { return localStorage.getItem("db-kit:redisKeyView") === "grid" ? "grid" : "tree"; }
@@ -1947,6 +1949,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           database={tab.database}
           table={tab.table}
           rkey={detailKey}
+          readonly={readonly}
           onClose={() => { setDetailKey(null); refresh(); }}
         />
       )}
@@ -2609,8 +2612,8 @@ export function CellInspector({ column, value, editable, onSave, onClose, onScri
 // 大型集合（hash/list/set/zset）改用後端游標式分頁（redisKeyPage），不再一次全載；
 // 並提供成員 / 欄位過濾（hash 比對 field、set/zset 比對 member、list 子字串）。
 const KEY_PAGE = 200;
-function KeyDetailModal({ connId, database, table, rkey, onClose }: {
-  connId: string; database: string; table: string; rkey: string; onClose: () => void;
+function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClose }: {
+  connId: string; database: string; table: string; rkey: string; readonly?: boolean; onClose: () => void;
 }) {
   const t = useT();
   // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
@@ -2644,6 +2647,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
 
   // 首頁載入（reset）：清空累積、從游標 0 開始。connId/db/key/filter 改變或 reload 時觸發。
   const loadFirst = (flt: string) => {
+    loadGen.current += 1; // 編輯後 reload 也要讓還在飛的 loadMore 失效
     setLoading(true);
     setErr(null);
     api
@@ -2823,8 +2827,15 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
               {t("此鍵含二進位資料（非 UTF-8 文字），無法顯示的位元組以 \\xHH 表示。為避免寫回時損毀原始資料，已停用編輯；要修改請用主控台或程式。")}
             </div>
           )}
-          {detail && binary && keyTypeSupported && <KeyDetailReadOnly detail={detail} />}
-          {detail && !binary && keyTypeSupported && (
+          {detail && readonly && keyTypeSupported && (
+            <div className="mb-2 text-xs bg-fg/5 border border-fg/10 rounded px-3 py-2 text-fg/50">
+              {t("此連線為唯讀，鍵值僅供檢視；可在連線右鍵關閉「唯讀模式」後再修改。")}
+            </div>
+          )}
+          {(detail && binary && keyTypeSupported) || (detail && readonly && keyTypeSupported)
+            ? <KeyDetailReadOnly detail={detail} />
+            : null}
+          {detail && !binary && !readonly && keyTypeSupported && (
             <KeyDetailBody
               detail={detail}
               connId={connId}
@@ -3058,10 +3069,10 @@ function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError,
       <tbody>
         {entries.map((v, i) => (
           <tr key={i} className="hover:bg-fg/5 group">
-            <td className="px-2 py-1 border-b border-fg/5 text-fg/30">{isList ? i : ""}</td>
+            <td className="px-2 py-1 border-b border-fg/5 text-fg/30">{isList ? (scores[i] ?? i) : ""}</td>
             <td className="px-2 py-1 border-b border-fg/5 break-all">
               {isList ? (
-                <InlineEdit value={v} onSave={(nv) => edit({ action: "list_set", index: i, value: nv })} />
+                <InlineEdit value={v} onSave={(nv) => edit({ action: "list_set", index: scores[i] ?? i, value: nv })} />
               ) : (
                 // set 成員無法就地改名 → 移除舊 + 新增新
                 <InlineEdit value={v} onSave={(nv) => {

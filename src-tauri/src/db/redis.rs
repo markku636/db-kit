@@ -128,6 +128,19 @@ struct KeysSnapshot {
     created: std::time::Instant,
 }
 
+/// 把字面子字串包成 SCAN MATCH：[] 與 \ 是 Redis glob 的特殊字元，要跳脫，
+/// 否則查 `user[0]` 會變成字元 class、配到 `user0`。
+fn glob_literal_substring(filter: &str) -> String {
+    let mut out = String::with_capacity(filter.len() + 2);
+    out.push('*');
+    for ch in filter.chars() {
+        if matches!(ch, '[' | ']' | '\\') { out.push('\\'); }
+        out.push(ch);
+    }
+    out.push('*');
+    out
+}
+
 /// 連線選項的 Sentinel master 名稱（空字串＝一般直連）。
 fn sentinel_master(config: &ConnectionConfig) -> Option<&str> {
     config.options.get("redis_sentinel_master").map(String::as_str)
@@ -258,7 +271,7 @@ impl RedisDriver {
         } else if filter.contains('*') || filter.contains('?') {
             filter.to_string()
         } else {
-            format!("*{filter}*")
+            glob_literal_substring(filter)
         };
 
         let mut page = KeyPage {
@@ -334,11 +347,18 @@ impl RedisDriver {
                     .map_err(to_err)?;
                 let fetched = items.len();
                 let items = items.into_iter().map(&mut text);
-                page.members = if filter.is_empty() {
-                    items.collect()
-                } else {
-                    items.filter(|s| s.contains(filter)).collect()
-                };
+                // 把「原始 list 索引」放在 scores 一起回給前端：過濾後 i 只是顯示序号，
+                // 直接拿去 LSET 會改到別的元素（例如 [a,b,c,d] 過濾 b 後编辑會覆蓋 a）。
+                let mut members = Vec::new();
+                let mut indices = Vec::new();
+                for (i, s) in items.enumerate() {
+                    if filter.is_empty() || s.contains(filter) {
+                        indices.push((start + i as i64) as f64);
+                        members.push(s);
+                    }
+                }
+                page.scores = indices;
+                page.members = members;
                 // fetched < count → 已是最後一頁（LRANGE 回不滿即代表到底）；否則下一視窗起點。
                 page.cursor = if fetched < count {
                     0
@@ -1968,6 +1988,13 @@ fn parse_client_list(raw: &str) -> Vec<ClientInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glob_literal_substring_escapes_brackets() {
+        assert_eq!(glob_literal_substring("user[0]"), r"*user\[0\]*");
+        assert_eq!(glob_literal_substring("a\\b"), r"*a\\b*");
+        assert_eq!(glob_literal_substring("abc"), "*abc*");
+    }
 
     #[test]
     fn aggregate_keyspace_groups_by_type_and_sorts_by_memory() {

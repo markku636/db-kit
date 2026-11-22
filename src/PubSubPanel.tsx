@@ -107,7 +107,12 @@ export default function PubSubPanel({ connId, connName, onClose }: {
         unlistenRef.current = stop;
       }
       if (!unlistenErrRef.current) {
-        const stopErr = await onRedisPubSubError(connId, (msg) => { if (aliveRef.current) setErr(msg); });
+        const stopErr = await onRedisPubSubError(connId, (msg) => {
+          if (!aliveRef.current) return;
+          setErr(msg);
+          // 背景任務失敗時 invoke 早就回成功，不能讓畫面一直停在「訂閱中」。
+          setSubscribed(false);
+        });
         if (detached()) { stopErr(); return; }
         unlistenErrRef.current = stopErr;
       }
@@ -139,7 +144,8 @@ export default function PubSubPanel({ connId, connName, onClose }: {
   };
 
   const publish = async () => {
-    if (busy) return; // 防連點 / 連按 Enter 造成重複 PUBLISH
+    if (busy || busyRef.current) return; // 防連點 / 連按 Enter 造成重複 PUBLISH
+    busyRef.current = true;
     if (!pubChannel.trim()) { setErr(t("請輸入發佈頻道")); return; }
     setBusy(true);
     try {
@@ -149,6 +155,7 @@ export default function PubSubPanel({ connId, connName, onClose }: {
     } catch (e: any) {
       setErr(e?.message ?? t("發佈失敗"));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
