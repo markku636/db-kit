@@ -33,6 +33,12 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
   // 唯讀連線：Console 是任意指令通道，同樣要擋寫入（否則唯讀模式等於形同虛設）。
   const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [db, setDb] = useState(initialDb);
+  const [availableDbs, setAvailableDbs] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    api.listDatabases(connId).then((dbs) => { if (alive) setAvailableDbs(dbs.map(String)); }).catch(() => { /* 保留自由輸入 */ });
+    return () => { alive = false; };
+  }, [connId]);
   const [input, setInput] = useState("");
   const [entries, setEntries] = useState<Entry[]>([]);
   // 指令歷史跨視窗保存（仿 Another Redis Desktop Manager 的 execution log）：
@@ -162,9 +168,12 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
           <span className="font-medium text-sm">{t("命令列 ·")} {connName}</span>
           <label className="ml-auto text-xs text-fg/50 flex items-center gap-1.5">
             DB
-            <input value={db} onChange={(e) => setDb(e.target.value.replace(/[^\d]/g, "").slice(0, 18))}
+            <input value={db} list="redis-console-dbs" onChange={(e) => setDb(e.target.value.replace(/[^\d]/g, "").slice(0, 18))}
               title={t("目前資料庫；指令可自帶 n: 前綴覆寫")}
               className="w-12 bg-inset border border-fg/10 rounded px-1.5 py-0.5 text-center mono outline-none focus:border-accent" />
+            <datalist id="redis-console-dbs">
+              {availableDbs.map((d) => <option key={d} value={d} />)}
+            </datalist>
           </label>
           <button type="button" onClick={() => setEntries([])} title={t("清空畫面")}
             className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">{t("清空")}</button>
