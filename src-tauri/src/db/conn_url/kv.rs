@@ -155,7 +155,15 @@ pub(super) fn parse_ado(s: &str) -> Parsed {
         ..Default::default()
     };
     apply_ado_pairs(&mut p, ado_pairs(s).into_iter());
+    mark_explicit_instance_port(&mut p);
     p
+}
+
+/// 連線字串同時給了 `host\INST` 與明確埠 → 告訴 driver 直接連該埠，別再問 SQL Browser。
+pub(super) fn mark_explicit_instance_port(p: &mut Parsed) {
+    if p.port.is_some() && p.host.as_deref().is_some_and(|h| h.contains('\\')) {
+        p.options.insert("mssql_no_browse".into(), "1".into());
+    }
 }
 
 /// 分號分隔的 key=value：先走與 libpq 共用的 quote-aware tokenizer，

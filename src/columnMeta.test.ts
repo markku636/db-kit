@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isReadOnlyColumnExtra } from "./columnMeta";
+import { isReadOnlyColumnExtra, isBinaryColumnType } from "./columnMeta";
 
 describe("isReadOnlyColumnExtra", () => {
   it("認得 SQL Server 的 identity / computed 指標", () => {
@@ -12,5 +12,16 @@ describe("isReadOnlyColumnExtra", () => {
     expect(isReadOnlyColumnExtra("")).toBe(false);
     expect(isReadOnlyColumnExtra(undefined)).toBe(false);
     expect(isReadOnlyColumnExtra("PRI")).toBe(false);
+  });
+});
+
+describe("isBinaryColumnType", () => {
+  it("varbinary / binary / image 唯讀，文字型別照常", () => {
+    for (const t of ["varbinary", "varbinary(max)", "VARBINARY(8)", "binary(16)", "image"]) {
+      expect(isBinaryColumnType(t)).toBe(true);
+    }
+    for (const t of ["varchar(50)", "nvarchar(MAX)", "int", "uniqueidentifier", ""]) {
+      expect(isBinaryColumnType(t)).toBe(false);
+    }
   });
 });

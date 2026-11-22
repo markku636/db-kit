@@ -70,6 +70,10 @@ pub(super) fn parse(kind: Option<DbKind>, flags: SchemeFlags, rest: String) -> P
     }
 
     set_host_port(&mut p, &hostport);
+    // host / port 這時才填入，必須在 set_host_port 之後判斷。
+    if matches!(p.kind, Some(DbKind::Mssql)) {
+        kv::mark_explicit_instance_port(&mut p);
+    }
 
     // scheme 衍生選項：值格式沿用各 driver 現行讀法
     // （mongo.rs build_mongo_uri 讀 mongo_srv=="1"；redis.rs 讀 redis_tls=="true"）。

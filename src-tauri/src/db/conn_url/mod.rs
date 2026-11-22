@@ -621,6 +621,20 @@ mod tests {
     }
 
     #[test]
+    fn explicit_instance_port_skips_sql_browser() {
+        let p = parse(r"Server=db01\INST,1433;Database=d");
+        assert_eq!(p.options.get("mssql_no_browse").map(String::as_str), Some("1"));
+        // 沒給埠：埠是動態的，照舊要問 Browser（不能設這個記號）。
+        let p2 = parse(r"Server=db01\INST;Database=d");
+        assert!(p2.options.get("mssql_no_browse").is_none());
+        // JDBC 的 :1433 也算明確埠。
+        let p3 = parse(r"jdbc:sqlserver://db01\INST:1433;databaseName=d");
+        assert_eq!(p3.host.as_deref(), Some(r"db01\INST"), "host={:?}", p3.host);
+        assert_eq!(p3.port, Some(1433), "port={:?}", p3.port);
+        assert_eq!(p3.options.get("mssql_no_browse").map(String::as_str), Some("1"));
+    }
+
+    #[test]
     fn ado_bracketed_ipv6_host_loses_brackets() {
         let p = parse("Server=tcp:[::1],1433;Database=d");
         assert_eq!(p.host.as_deref(), Some("::1"));

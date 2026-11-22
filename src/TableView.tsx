@@ -23,7 +23,7 @@ import K8sObjectView from "./K8sObjectView";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport } from "./redisKeyValueFormat";
-import { isReadOnlyColumnExtra } from "./columnMeta";
+import { isBinaryColumnType, isReadOnlyColumnExtra } from "./columnMeta";
 import { fmtRedisTtl, remainingTtl } from "./redisUiFormat";
 import { loadRedisSeparator, redisNamespacePattern, redisNamespacePrefix } from "./redisTree";
 import { invalidateSchemaCache } from "./useSqlSchema";
@@ -321,7 +321,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         const ro = new Set<string>();
         for (const col of cols) {
           if (col.comment) m[col.name] = col.comment;
-          if (isReadOnlyColumnExtra(col.extra)) ro.add(col.name);
+          if (isReadOnlyColumnExtra(col.extra) || isBinaryColumnType(col.data_type)) ro.add(col.name);
         }
         setCommentMap(m);
         setReadOnlyCols(ro);

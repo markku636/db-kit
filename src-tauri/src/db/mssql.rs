@@ -369,7 +369,10 @@ impl DatabaseDriver for MssqlDriver {
         }
 
         let mut mgr = ConnectionManager::new(c);
-        if target.browse {
+        // 連線字串若同時給了執行個體與明確埠，就照那個埠直接連，不要再問 SQL Browser：
+        // JDBC/ADO 的解析器會寫 mssql_no_browse=1（OS 沒開 Browser 也連得上）。
+        let skip_browse = config.options.get("mssql_no_browse").is_some_and(|v| v == "1");
+        if target.browse && !skip_browse {
             // 具名執行個體的埠是動態的：先問 SQL Browser（UDP 1434）再連。
             mgr = mgr.using_named_connection();
         }
