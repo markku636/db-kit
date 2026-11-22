@@ -26,6 +26,7 @@ const base = (over: Partial<ConnFormFields> = {}): ConnFormFields => ({
   mssqlTrust: false,
   mssqlCaPath: "",
   mssqlAuth: "sql",
+  mssqlNoBrowse: false,
   oracleConnectType: "service",
   oracleClientDir: "",
   kafkaProtocol: "PLAINTEXT",
@@ -315,6 +316,14 @@ describe("applyParsedToForm", () => {
 });
 
 describe("applyParsedToForm：SQL Server Windows 驗證", () => {
+  it("JDBC 的 mssql_no_browse 記號要隨表單保留，存檔後別再問 Browser", () => {
+    const { next } = applyParsedToForm(
+      parsed({ kind: "mssql", host: String.raw`db01\INST`, port: 1433, options: { mssql_no_browse: "1" } }),
+      base(),
+    );
+    expect(next.mssqlNoBrowse).toBe(true);
+  });
+
   it("Integrated Security 解析出的 mssql_auth=windows 會切換驗證方式", () => {
     const { next, changed } = applyParsedToForm(
       parsed({ kind: "mssql", host: String.raw`.\SQLEXPRESS`, options: { mssql_auth: "windows" } }),

@@ -166,6 +166,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
   const [mssqlCaPath, setMssqlCaPath] = useState(seed?.options?.trust_cert_ca ?? "");
   // 驗證方式：sql＝SQL Server 帳密；windows＝Windows 驗證（帳號留空用目前登入的 Windows 身分）。
   const [mssqlAuth, setMssqlAuth] = useState<"sql" | "windows">(seed?.options?.mssql_auth === "windows" ? "windows" : "sql");
+  const [mssqlNoBrowse, setMssqlNoBrowse] = useState(seed?.options?.mssql_no_browse === "1");
   // MySQL / PostgreSQL SSL 模式（存於 options map；空值＝沿用 driver 預設 prefer/preferred）。
   const [sslMode, setSslMode] = useState(seed?.options?.ssl_mode ?? "");
   // verify-* 模式的 CA 憑證檔（AWS RDS 等雲端服務的 CA bundle）。
@@ -337,6 +338,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
       // 自訂 CA 只在「加密且未信任任意憑證」時有意義（tiberius trust_cert_ca）。
       if (mssqlEncrypt && !mssqlTrust && mssqlCaPath.trim()) o.trust_cert_ca = mssqlCaPath.trim();
       if (mssqlAuth === "windows") o.mssql_auth = "windows";
+      if (mssqlNoBrowse) o.mssql_no_browse = "1";
     } else if (kind === "oracle") {
       if (oracleConnectType !== "service") o.connect_type = oracleConnectType;
       if (oracleClientDir.trim()) o.client_dir = oracleClientDir.trim();
@@ -437,7 +439,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     sslMode, sslCa,
     redisTls, redisTlsInsecure, redisSentinelMaster,
     mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mongoTlsCa, mongoTlsInsecure,
-    mssqlEncrypt, mssqlTrust, mssqlCaPath, mssqlAuth,
+    mssqlEncrypt, mssqlTrust, mssqlCaPath, mssqlAuth, mssqlNoBrowse,
     oracleConnectType, oracleClientDir,
     kafkaProtocol, kafkaSaslMech, kafkaCaPath, kafkaSkipVerify,
     esAuth, esTls, esSslCa, esSslInsecure, esKibanaUrl,
@@ -453,7 +455,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     setMongoSrv(f.mongoSrv); setMongoAuthSource(f.mongoAuthSource); setMongoTls(f.mongoTls);
     setMongoReplicaSet(f.mongoReplicaSet); setMongoDirect(f.mongoDirect);
     setMongoTlsCa(f.mongoTlsCa); setMongoTlsInsecure(f.mongoTlsInsecure);
-    setMssqlEncrypt(f.mssqlEncrypt); setMssqlTrust(f.mssqlTrust); setMssqlCaPath(f.mssqlCaPath); setMssqlAuth(f.mssqlAuth);
+    setMssqlEncrypt(f.mssqlEncrypt); setMssqlTrust(f.mssqlTrust); setMssqlCaPath(f.mssqlCaPath); setMssqlAuth(f.mssqlAuth); setMssqlNoBrowse(f.mssqlNoBrowse);
     setOracleConnectType(f.oracleConnectType); setOracleClientDir(f.oracleClientDir);
     setKafkaProtocol(f.kafkaProtocol); setKafkaSaslMech(f.kafkaSaslMech);
     setKafkaCaPath(f.kafkaCaPath); setKafkaSkipVerify(f.kafkaSkipVerify);

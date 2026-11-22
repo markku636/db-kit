@@ -1576,6 +1576,7 @@ describe("SQL 片段庫（Snippets）", () => {
     );
     // DISTINCT 要在 TOP 之前；前導註解不該讓 LIMIT 留下來。
     expect(snippetBodyForKind("mssql", "SELECT DISTINCT a FROM t LIMIT 10;")).toBe("SELECT DISTINCT TOP (10) a FROM t;");
+    expect(snippetBodyForKind("mssql", "SELECT /*h*/ DISTINCT a FROM t LIMIT 10;")).toBe("SELECT /*h*/ DISTINCT TOP (10) a FROM t;");
     expect(snippetBodyForKind("mssql", "-- note\nSELECT * FROM t LIMIT 5;")).toBe("-- note\nSELECT TOP (5) * FROM t;");
     // 其他方言與沒有限制的片段原樣回傳。
     expect(snippetBodyForKind("mysql", "SELECT *\nFROM t\nLIMIT 100;")).toBe("SELECT *\nFROM t\nLIMIT 100;");

@@ -967,13 +967,19 @@ impl DatabaseDriver for MssqlDriver {
             .ok()
             .and_then(|cols| cols.into_iter().find(|c| c.name == column).map(|c| c.data_type))
             .unwrap_or_default();
-        let distinct = self
-            .query_rows(&column_distinct_sql(&col, &q, &data_type))
-            .await
-            .ok()
-            .and_then(|dr| dr.first().and_then(|r| r.try_get::<i64, _>(0).ok().flatten()))
-            .unwrap_or(0)
-            .max(0) as u64;
+        let distinct = match self.query_rows(&column_distinct_sql(&col, &q, &data_type)).await {
+            Ok(dr) => dr.first().and_then(|r| r.try_get::<i64, _>(0).ok().flatten()).unwrap_or(0),
+            Err(_) => {
+                // SQL Server 2014 以前的 HASHBYTES 只吃 8000 bytes，長值會失敗；
+                // 退回舊的 4000 字近似，至少不要整欄顯示 0 個相異值。
+                self.query_rows(&format!("SELECT COUNT_BIG(DISTINCT CAST({col} AS NVARCHAR(4000))) FROM {q}"))
+                    .await
+                    .ok()
+                    .and_then(|dr| dr.first().and_then(|r| r.try_get::<i64, _>(0).ok().flatten()))
+                    .unwrap_or(0)
+            }
+        }
+        .max(0) as u64;
         // MIN / MAX best-effort（text / image / xml 等型別不支援聚合）。
         let (min, max) = match self
             .query_rows(&format!(

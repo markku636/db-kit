@@ -165,6 +165,8 @@ export interface ConnFormFields {
   mssqlCaPath: string;
   /** sql＝SQL Server 帳密；windows＝Windows 驗證（options.mssql_auth）。 */
   mssqlAuth: "sql" | "windows";
+  /** JDBC 樣式 host\INST:port 解析出的記號：直接連該埠，不問 SQL Browser。 */
+  mssqlNoBrowse: boolean;
   // Oracle
   oracleConnectType: string;
   oracleClientDir: string;
@@ -219,6 +221,7 @@ const KIND_SCOPED_DEFAULTS: Omit<ConnFormFields, "kind" | "host" | "port" | "use
   mssqlTrust: false,
   mssqlCaPath: "",
   mssqlAuth: "sql",
+  mssqlNoBrowse: false,
   oracleConnectType: "service",
   oracleClientDir: "",
   kafkaProtocol: "PLAINTEXT",
@@ -305,6 +308,7 @@ export function applyParsedToForm(p: ParsedUrl, cur: ConnFormFields): ApplyResul
   if (o.trust_cert_ca != null) next.mssqlCaPath = o.trust_cert_ca;
   // ADO.NET 的 Integrated Security=true / SSPI、ODBC 的 Trusted_Connection=yes。
   if (o.mssql_auth != null) next.mssqlAuth = o.mssql_auth === "windows" ? "windows" : "sql";
+  if (o.mssql_no_browse != null) next.mssqlNoBrowse = o.mssql_no_browse === "1";
   // Oracle：沒有這條，SID 字串匯入後會靜默被當成 service name 連線。
   if (o.connect_type != null) next.oracleConnectType = o.connect_type;
   if (o.client_dir != null) next.oracleClientDir = o.client_dir;

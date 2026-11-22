@@ -1318,10 +1318,17 @@ export function snippetBodyForKind(kind: DbKind, body: string): string {
   if (!lim) return body;
   // T-SQL 的 DISTINCT 要寫在 TOP 前面（SELECT DISTINCT TOP (n)）；前面的註解也不能讓比對失敗。
   const before = body.slice(0, lim.index);
-  const m = /^((?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*)SELECT(\s+DISTINCT)?\b/i.exec(before);
-  const head = m
-    ? `${m[1]}SELECT${m[2] ?? ""} TOP (${lim[1]})${before.slice(m[0].length)}`
-    : before;
+  const wsComments = String.raw`(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*`;
+  const m = new RegExp(`^(${wsComments})SELECT\\b`, "i").exec(before);
+  let head = before;
+  if (m) {
+    const tail = before.slice(m[0].length);
+    // SELECT 與 DISTINCT 之間也可能有註解，把 TOP 插在 DISTINCT 之後才合法。
+    const d = new RegExp(`^(${wsComments})DISTINCT\\b`, "i").exec(tail);
+    head = d
+      ? `${m[1]}SELECT${d[1]}DISTINCT TOP (${lim[1]})${tail.slice(d[0].length)}`
+      : `${m[1]}SELECT TOP (${lim[1]})${tail}`;
+  }
   return `${head.trimEnd()};`;
 }
 
