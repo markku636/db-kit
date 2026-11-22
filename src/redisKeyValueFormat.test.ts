@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatRedisKeyForCopy, isSupportedRedisKeyType } from "./redisKeyValueFormat";
+import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint } from "./redisKeyValueFormat";
 
 const page = (over: Record<string, unknown>) => ({
   type_: "string", total: 0, fields: [], members: [], scores: [], ...over,
@@ -15,6 +15,15 @@ describe("isSupportedRedisKeyType", () => {
     for (const t of ["ReJSON-RL", "TSDB-TYPE", "MBullet", ""]) {
       expect(isSupportedRedisKeyType(t)).toBe(false);
     }
+  });
+});
+
+describe("redisPageHint", () => {
+  it("過濾後整頁無符合但還有更多時明確提示，不是單純的 0 筆", () => {
+    expect(redisPageHint(true, 0, true)).toBe("此頁沒有符合的項目，但還有更多未掃描；繼續載入或清除過濾。");
+    expect(redisPageHint(true, 0, false)).toBe("已載入 {count} 筆");
+    expect(redisPageHint(true, 3, true)).toBe("已載入 {count} 筆");
+    expect(redisPageHint(false, 0, true)).toBe("已載入 {count} 筆");
   });
 });
 

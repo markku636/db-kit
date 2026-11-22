@@ -22,7 +22,7 @@ import HarborRepoView from "./HarborRepoView";
 import K8sObjectView from "./K8sObjectView";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
-import { formatRedisKeyForCopy, isSupportedRedisKeyType } from "./redisKeyValueFormat";
+import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint } from "./redisKeyValueFormat";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree, { REDIS_TREE_LIMIT } from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
@@ -2697,7 +2697,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
           )}
           {isCollection && (
             <div className="mt-3 flex items-center gap-3 text-xs text-fg/40">
-              <span>{t("已載入 {count} 筆", { count: members.length })}{filter ? t("（已過濾）") : ""}</span>
+              <span>{t(redisPageHint(!!filter, members.length, cursor !== 0), { count: members.length })}{filter ? t("（已過濾）") : ""}</span>
               {cursor !== 0 && (
                 <button type="button" onClick={loadMore} disabled={loading}
                   className="px-3 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70 disabled:opacity-40">

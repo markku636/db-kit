@@ -14,6 +14,8 @@ export interface RoutineParam {
   /** PG 的簽章只有型別，此處為空字串。 */
   name: string;
   type: string;
+  /** 後端簽章帶 `= DEFAULT`：表單留空應該傳 DEFAULT 而不是 NULL。 */
+  hasDefault?: boolean;
 }
 
 /** OUT / INOUT 要用 session 變數接回值——只有 MySQL 方言（含講 MySQL 的 gateway）辦得到。 */
@@ -76,7 +78,11 @@ export function parseRoutineParams(kind: DbKind, sig: string | null | undefined)
     // PG 給的是純型別清單，第一個詞是型別不是名稱——照 MySQL 規則硬拆會把 `integer` 當成參數名。
     if (kind === "postgres" && mode === "") return { mode, name: "", type: tokens.join(" ") };
     const name = tokens.length > 1 ? tokens.shift()! : "";
-    return { mode, name, type: tokens.join(" ") };
+    // SQL Server 後端在 sys.parameters.has_default_value 時附加 `= DEFAULT` 記號。
+    const rawType = tokens.join(" ");
+    const withDefault = /^(.*?)\s*=\s*DEFAULT\s*$/i.exec(rawType);
+    if (withDefault) return { mode, name, type: withDefault[1].trim(), hasDefault: true };
+    return { mode, name, type: rawType };
   });
 }
 
@@ -181,6 +187,8 @@ function buildMssqlExecSql(
       outs.push({ v, label: (p.name || `p${i + 1}`).replace(/^@/, "") });
       return `${v} OUTPUT`;
     }
+    // 有預設值且表單留空 → 照位置傳 DEFAULT，讓程序用自己的預設（傳 NULL 是另一個值）。
+    if (p.hasDefault && !raw.trim()) return "DEFAULT";
     return routineArgLiteral("mssql", raw, p.type);
   });
   const stmts = [...decl, buildRoutineCall("mssql", db, routine.name, routine.routine_type, args.join(", "))];
@@ -191,5 +199,5 @@ function buildMssqlExecSql(
 /** 清單顯示用的精簡簽章：`(IN p_id int, OUT p_total decimal)`；無引數回空字串。 */
 export function formatSignature(params: RoutineParam[]): string {
   if (!params.length) return "";
-  return `(${params.map((p) => [p.mode, p.name, p.type].filter(Boolean).join(" ")).join(", ")})`;
+  return `(${params.map((p) => [p.mode, p.name, p.hasDefault ? `${p.type} = DEFAULT` : p.type].filter(Boolean).join(" ")).join(", ")})`;
 }

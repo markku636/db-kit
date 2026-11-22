@@ -953,6 +953,7 @@ const en: Catalog = {
   "已解析 {rows} 列 · 欄名：{cols} · 展開為 {n} 條語句": "Parsed {rows} row(s) · columns: {cols} · expanded into {n} statement(s)",
   "已解鎖": "Unlocked",
   "已載入 {count} 筆": "Loaded {count} rows",
+  "此頁沒有符合的項目，但還有更多未掃描；繼續載入或清除過濾。": "No matches on this page, but more entries remain unscanned. Keep loading or clear the filter.",
   "已截斷": "Truncated",
   "已截斷「{table}」": "Truncated \"{table}\"",
   "已截斷於 {n} 列": { one: "Truncated at {n} row", other: "Truncated at {n} rows" },

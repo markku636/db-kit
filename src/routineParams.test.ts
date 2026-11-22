@@ -232,6 +232,19 @@ describe("SQL Server 程序參數", () => {
     );
   });
 
+  it("有預設值的引數留空時傳 DEFAULT，不再傳 NULL", () => {
+    expect(parseRoutineParams("mssql", "@days int = DEFAULT, OUT @total money")).toEqual([
+      { mode: "", name: "@days", type: "int", hasDefault: true },
+      { mode: "OUT", name: "@total", type: "money" },
+    ]);
+    const params = parseRoutineParams("mssql", "@id int, @days int = DEFAULT, @name nvarchar(20)");
+    const { sql } = buildRoutineExecSql("mssql", "shop", proc, params, ["7", "", "O'Neil"]);
+    expect(sql).toBe("EXEC [shop].[sales].[usp_total] 7, DEFAULT, N'O''Neil'");
+    // 有填值時照用使用者的值；formatSignature 也保留 DEFAULT 記號。
+    expect(buildRoutineExecSql("mssql", "shop", proc, params, ["7", "30", "x"]).sql).toContain("7, 30, N'x'");
+    expect(formatSignature(params)).toBe("(@id int, @days int = DEFAULT, @name nvarchar(20))");
+  });
+
   it("OUTPUT 型別缺失或 sql_variant 時改用 nvarchar，不再讓驅動炸掉", () => {
     expect(mssqlOutParamType("")).toBe("nvarchar(4000)");
     expect(mssqlOutParamType("  sql_variant ")).toBe("nvarchar(4000)");

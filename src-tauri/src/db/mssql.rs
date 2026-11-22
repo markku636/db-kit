@@ -773,7 +773,7 @@ impl DatabaseDriver for MssqlDriver {
         // 參數簽章：「執行程序」對話框靠它長出一格一參數的表單、把 OUTPUT 參數讀回來。
         // parameter_id 0 是純量函式的回傳值，不是參數。取不到（權限）就當作沒有簽章，清單照樣列。
         let psql = format!(
-            "SELECT p.object_id, p.name, t.name, p.max_length, p.precision, p.scale, p.is_output \
+            "SELECT p.object_id, p.name, t.name, p.max_length, p.precision, p.scale, p.is_output, p.has_default_value \
              FROM [{db}].sys.parameters p \
              JOIN [{db}].sys.objects o ON o.object_id = p.object_id \
              JOIN [{db}].sys.types t ON t.user_type_id = p.user_type_id \
@@ -791,7 +791,8 @@ impl DatabaseDriver for MssqlDriver {
                     r.try_get::<u8, _>(5).ok().flatten().unwrap_or(0),
                 );
                 let output = r.try_get::<bool, _>(6).ok().flatten().unwrap_or(false);
-                sigs.entry(oid).or_default().push(mssql_param_sig(&name, &ty, output));
+                let has_default = r.try_get::<bool, _>(7).ok().flatten().unwrap_or(false);
+                sigs.entry(oid).or_default().push(mssql_param_sig(&name, &ty, output, has_default));
             }
         }
         let mut out = Vec::new();
@@ -1393,11 +1394,14 @@ fn routine_type_of(ty: &str) -> Option<&'static str> {
 
 /// 一個參數的簽章片段，格式與 MySQL 的 `IN p int` 對齊、前端共用同一個解析器：
 /// 輸入參數 `@id int`，OUTPUT 參數 `OUT @total money`。
-fn mssql_param_sig(name: &str, ty: &str, output: bool) -> String {
+fn mssql_param_sig(name: &str, ty: &str, output: bool, has_default: bool) -> String {
+    // 只帶一個 `= DEFAULT` 記號，不帶 sys.parameters.default_value 的原始運算式
+    //（可能是 getdate() / 子查詢 / 換行），前端照樣知道留空要給 DEFAULT。
+    let suffix = if has_default { " = DEFAULT" } else { "" };
     if output {
-        format!("OUT {name} {ty}")
+        format!("OUT {name} {ty}{suffix}")
     } else {
-        format!("{name} {ty}")
+        format!("{name} {ty}{suffix}")
     }
 }
 
@@ -1855,8 +1859,10 @@ SELECT SCOPE_IDENTITY()"));
 
     #[test]
     fn mssql_param_sig_marks_output() {
-        assert_eq!(mssql_param_sig("@id", "int", false), "@id int");
-        assert_eq!(mssql_param_sig("@total", "decimal(10,2)", true), "OUT @total decimal(10,2)");
+        assert_eq!(mssql_param_sig("@id", "int", false, false), "@id int");
+        assert_eq!(mssql_param_sig("@total", "decimal(10,2)", true, false), "OUT @total decimal(10,2)");
+        assert_eq!(mssql_param_sig("@days", "int", false, true), "@days int = DEFAULT");
+        assert_eq!(mssql_param_sig("@total", "money", true, true), "OUT @total money = DEFAULT");
     }
 
     #[test]

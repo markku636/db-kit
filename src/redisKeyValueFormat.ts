@@ -9,6 +9,14 @@ export function isSupportedRedisKeyType(type: string): boolean {
   return SUPPORTED_TYPES.has(type);
 }
 
+/** 鍵詳情頁尾的提示：過濾後整頁都沒符合、但後面還有資料時要講清楚，不能只顯示「已載入 0 筆」。 */
+export function redisPageHint(filtered: boolean, count: number, hasMore: boolean): string {
+  if (filtered && count === 0 && hasMore) {
+    return "此頁沒有符合的項目，但還有更多未掃描；繼續載入或清除過濾。";
+  }
+  return "已載入 {count} 筆";
+}
+
 export interface RedisCopyText {
   text: string;
   /** 已顯示的資料筆數（hash 算欄位、stream 算項目；string 不算）。 */
