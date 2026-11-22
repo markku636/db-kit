@@ -1956,6 +1956,9 @@ export const api = {
   // 只分析某個命名空間前綴下的鍵（ARDM 的 folder memory analysis）。
   redisFolderBigKeys: (id: string, database: string, prefix: string, sample: number, top: number) =>
     invoke<BigKey[]>("redis_folder_big_keys", { id, database, prefix, sample, top }),
+  // 複製鍵到新名稱（DUMP + RESTORE，保留型別 / 值 / TTL）。
+  redisCloneKey: (id: string, database: string, source: string, target: string) =>
+    invoke<void>("redis_clone_key", { id, database, source, target }),
   redisMonitorStart: (id: string) => invoke<void>("redis_monitor_start", { id }),
   redisMonitorStop: (id: string) => invoke<void>("redis_monitor_stop", { id }),
   // 批次刪除鍵（DEL）：鍵樹「刪除整個命名空間」用，回傳實際刪除數。

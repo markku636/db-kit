@@ -350,6 +350,7 @@ pub fn run() {
             commands::redis_client_kill,
             commands::redis_big_keys,
             commands::redis_folder_big_keys,
+            commands::redis_clone_key,
             commands::redis_monitor_start,
             commands::redis_monitor_stop,
             commands::redis_delete_keys,

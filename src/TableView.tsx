@@ -1302,6 +1302,23 @@ function DataPane({ tab }: { tab: OpenTab }) {
     }
   };
 
+  const cloneKey = async (key: string) => {
+    const target = await uiPrompt(t("複製鍵到新名稱："), { title: t("複製鍵"), defaultValue: `${key}:copy`, confirmText: t("複製") });
+    if (!target?.trim() || target.trim() === key) return;
+    setApplying(true);
+    setErr(null);
+    try {
+      await api.redisCloneKey(tab.connId, tab.database, key, target.trim());
+      toast.success(t("已複製為 {name}", { name: target.trim() }));
+      refresh();
+    } catch (e: any) {
+      const msg = e?.message ?? t("複製失敗");
+      setErr(msg); toast.error(msg);
+    } finally {
+      setApplying(false);
+    }
+  };
+
   const setKeyTtl = async (key: string, current: string | null) => {
     // 鍵樹沒有網格的 ttl 欄 → current 為 null 時先讀一次目前 TTL 當預設值，
     // 使用者才不會在對話框看到 -1 而誤把既有到期時間清掉。
@@ -1939,6 +1956,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
               [t("複製鍵值"), () => copyKeyValue(rowMenu.key), false],
               ...(readonly ? [] : ([
                 [t("重新命名…"), () => renameKey(rowMenu.key), false],
+                [t("複製鍵到新名稱…"), () => cloneKey(rowMenu.key), false],
                 [t("設定 TTL…"), () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
               ] as [string, () => void, boolean][])),
               [t("重新整理"), () => refresh(), false],

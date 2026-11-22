@@ -30,6 +30,11 @@ pub struct RedisDriver {
     snapshot: tokio::sync::Mutex<Option<KeysSnapshot>>,
 }
 
+/// DUMP 出來的 payload 搭配 RESTORE 的 TTL（毫秒）：-1 永不過期、-2 鍵不存在都想成 0。
+fn clone_restore_ttl_ms(pttl: i64) -> i64 {
+    if pttl > 0 { pttl } else { 0 }
+}
+
 /// 把使用者輸入的「命名空間前綴」轉成 SCAN MATCH 樣式：跳脫 glob 特殊字元，
 /// 前綴裡的 `*` / `[` 是鍵名的一部分，不能被當成樣式語法。
 fn redis_prefix_glob(prefix: &str) -> String {
@@ -511,6 +516,25 @@ impl RedisDriver {
         all.sort_by(|a, b| b.bytes.cmp(&a.bytes));
         all.truncate(top);
         Ok(all)
+    }
+
+    /// 複製鍵到新名稱（DUMP + RESTORE）：保留型別 / 值 / TTL，連 RedisJSON、Stream 等模組型別也行，
+    /// 不用為每種型別寫一套複製邏輯。目標已存在時不給 REPLACE，避免靜默覆寫別人的資料。
+    pub async fn clone_key(&self, database: &str, source: &str, target: &str) -> AppResult<()> {
+        let mut conn = self.conn(database).await?;
+        let dump: redis::Value = redis::cmd("DUMP").arg(source).query_async(&mut conn).await.map_err(rerr)?;
+        let redis::Value::BulkString(payload) = dump else {
+            return Err(AppError::Query(t!("來源鍵不存在，無法複製").to_string()));
+        };
+        let pttl: i64 = redis::cmd("PTTL").arg(source).query_async(&mut conn).await.map_err(rerr)?;
+        let _: () = redis::cmd("RESTORE")
+            .arg(target)
+            .arg(clone_restore_ttl_ms(pttl))
+            .arg(payload)
+            .query_async(&mut conn)
+            .await
+            .map_err(rerr)?;
+        Ok(())
     }
 
     /// 批次刪除鍵（DEL，分批 pipeline），回傳實際被刪除的鍵數。
@@ -1690,6 +1714,13 @@ fn parse_client_list(raw: &str) -> Vec<ClientInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clone_restore_ttl_uses_zero_for_no_expiry() {
+        assert_eq!(clone_restore_ttl_ms(15_000), 15_000);
+        assert_eq!(clone_restore_ttl_ms(-1), 0); // 永不過期
+        assert_eq!(clone_restore_ttl_ms(-2), 0); // 來源鍵不存在
+    }
 
     #[test]
     fn redis_prefix_glob_escapes_literal_special_chars() {

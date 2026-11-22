@@ -1756,6 +1756,18 @@ pub async fn redis_delete_keys(
     state.manager.redis_driver(&id)?.delete_keys(&database, &keys).await
 }
 
+/// 複製鍵到新名稱（DUMP + RESTORE，保留型別與 TTL）。
+#[tauri::command]
+pub async fn redis_clone_key(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    source: String,
+    target: String,
+) -> AppResult<()> {
+    state.manager.redis_driver(&id)?.clone_key(&database, &source, &target).await
+}
+
 /// 大鍵掃描（SCAN 取樣 + MEMORY USAGE，回前 top 名）。
 #[tauri::command]
 pub async fn redis_big_keys(

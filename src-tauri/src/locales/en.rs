@@ -771,6 +771,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "主控台不支援 SELECT 切換資料庫（會改到整個 App 共用的連線）。請改用主控台上方的資料庫選單，或在指令前加「編號:」，例如 3:GET key。" => "SELECT is not supported in the console (it would switch the connection shared by the whole app). Use the database picker above the console, or prefix the command with the DB number, e.g. 3:GET key.",
         "訂閱與 MONITOR 會讓連線只收推播訊息，請改用「Pub/Sub」面板。" => "SUBSCRIBE turns the connection into push-only mode. Use the Pub/Sub panel instead.",
         "MONITOR 會讓連線只收推播訊息，請改用「監視」面板。" => "MONITOR turns the connection into push-only mode. Use the Monitor panel instead.",
+        "來源鍵不存在，無法複製" => "Source key no longer exists; cannot clone it",
         "主控台一次只送一行，交易（MULTI / EXEC）無法跨行進行，而且會把共用連線留在交易狀態。請改用 EVAL 腳本做原子操作。" => "The console sends one line at a time, so a MULTI / EXEC transaction cannot span lines and would leave the shared connection inside a transaction. Use an EVAL script for atomic operations.",
         "這個指令會改變共用連線的登入或協定狀態，主控台不支援。" => "This command changes the login or protocol state of the shared connection and is not supported in the console.",
         "阻塞指令等了 {secs} 秒沒有結果，已中斷。主控台一次最多等 {secs} 秒，請把逾時參數設小一點（0 代表永遠等）。" => "The blocking command got no result within {secs} seconds and was stopped. The console waits at most {secs} seconds; use a smaller timeout argument (0 means wait forever).",
