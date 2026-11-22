@@ -241,7 +241,15 @@ async fn update_schedule_after_run(app: &AppHandle, sched_id: &str, finished: Da
         let mut g = schedules.lock();
         if let Some(s) = g.iter_mut().find(|s| s.id == sched_id) {
             s.last_run = Some(finished);
-            s.next_run = compute_next_run(&s.cadence, finished);
+            // 從「原本排定的時間」往後推，不是從備份完成的時間：
+            // 以每 1 分鐘、跑 30 秒的備份為例，從 finished 算會變成 90 秒一次，越跑越晚。
+            let base = s.next_run.unwrap_or(finished);
+            let mut next = compute_next_run(&s.cadence, base);
+            while let Some(t) = next {
+                if t > finished { break; }
+                next = compute_next_run(&s.cadence, t);
+            }
+            s.next_run = next;
         }
         g.clone()
     };
@@ -289,7 +297,21 @@ fn backups_to_prune(mut names: Vec<String>, keep: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::backups_to_prune;
+    use super::{backups_to_prune, compute_next_run, Cadence};
+
+    #[test]
+    fn next_run_chains_from_scheduled_time_not_finish_time() {
+        use chrono::{Duration, Local, TimeZone};
+        let t0 = Local.with_ymd_and_hms(2026, 1, 1, 3, 0, 0).single().unwrap();
+        let cadence = Cadence::EveryMinutes { minutes: 5 };
+        let first = compute_next_run(&cadence, t0).unwrap();
+        assert_eq!(first, t0 + Duration::minutes(5));
+        // 備份跑 60 秒才結束：下一次仍是 t0+10 分，不是從完成時間算的 t0+11 分。
+        let finished = t0 + Duration::seconds(60);
+        let mut next = compute_next_run(&cadence, first).unwrap();
+        while next <= finished { next = compute_next_run(&cadence, next).unwrap(); }
+        assert_eq!(next, t0 + Duration::minutes(10));
+    }
 
     fn names() -> Vec<String> {
         // 故意亂序，驗證函式自行排序。

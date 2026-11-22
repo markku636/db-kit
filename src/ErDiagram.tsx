@@ -50,7 +50,12 @@ export default function ErDiagram({ connId, onClose, initialDb, focusTable }: {
 
   // 「逆向至模型」聚焦：模型載入後若含目標表則持久高亮它（及其關聯線），不受滑鼠移動影響。
   useEffect(() => {
-    if (focusTable && model?.tables.some((tbl) => tbl.name === focusTable)) setFocused(focusTable);
+    // 換 DB 後舊的焦點表可能不在新模型裡：留著會讓所有關聯線都被判定不相關而變淡。
+    setFocused((cur) => {
+      if (focusTable && model?.tables.some((tbl) => tbl.name === focusTable)) return focusTable;
+      if (cur && !model?.tables.some((tbl) => tbl.name === cur)) return null;
+      return cur;
+    });
   }, [model, focusTable]);
 
   // 預設網格佈局；若 localStorage 有此 DB 的存檔位置則覆蓋（拖曳後的佈局可保留）。

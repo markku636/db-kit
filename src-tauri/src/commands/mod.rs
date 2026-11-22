@@ -100,6 +100,9 @@ pub struct AppState {
     /// Kafka 告警規則的執行時權威副本（取樣 tick 評估；命令變更後持久化）。
     #[cfg(feature = "kafka")]
     pub kafka_alert_rules: Arc<Mutex<Vec<crate::db::kafka::dto::KafkaAlertRule>>>,
+    /// 序列化 kafka_alert_history.json 的讀-改-寫（多條告警同時觸發 / 清除時不丟事件）。
+    #[cfg(feature = "kafka")]
+    pub kafka_alert_history_lock: Arc<tokio::sync::Mutex<()>>,
     /// Docker log / exec 串流登記簿（斷線 / 移除連線時依連線 id 收掉）。
     #[cfg(feature = "docker")]
     pub docker_streams: Arc<crate::db::docker::stream::DockerStreams>,
@@ -2756,7 +2759,10 @@ pub(crate) fn spawn_kafka_sampler(
                     let _ = app.emit("kafka-metrics", serde_json::json!({ "conn_id": id, "sample": sample }));
                     evaluate_kafka_alerts(&app, &id, &sample, &mut alert_counters);
                 }
-                Err(_) => { /* 暫時性錯誤：略過本 tick */ }
+                Err(_) => {
+                    // 取樣失敗不是「違規」，連續計數要清零，避免下一 tick 假觸發。
+                    for c in alert_counters.values_mut() { *c = 0; }
+                }
             }
             // 分段睡眠以便即時取消。
             let mut slept = 0u32;
@@ -2871,7 +2877,12 @@ fn evaluate_kafka_alerts(
             ("topic", "produce_rate") => produce_rate_for(app, conn_id, &rule.target),
             _ => None,
         };
-        let Some(value) = value else { continue };
+        let Some(value) = value else {
+            // 樣本消失（cluster 消失 / topic 被刪 / 取樣失敗）不代表連續違規中斷：
+            // 舊的連續計數要清零，否則下一次違規會用舊的 2/3 直接觸發假告警。
+            if let Some(c) = counters.get_mut(&rule.id) { *c = 0; }
+            continue;
+        };
         let breach = match rule.op.as_str() {
             "lt" => value < rule.threshold,
             _ => value > rule.threshold,
@@ -2904,9 +2915,12 @@ fn evaluate_kafka_alerts(
                     .body(&msg)
                     .show();
                 let _ = app.emit("kafka-alert", &event);
-                // 追加歷史（read-modify-write，上限 500）。
+                // 追加歷史（read-modify-write，上限 500）。多條告警同時觸發時要序列化，
+                // 否則兩個 task 讀到同一份快照，後寫的會把前一筆事件沖掉。
                 let app2 = app.clone();
+                let history_lock = app.state::<AppState>().kafka_alert_history_lock.clone();
                 tauri::async_runtime::spawn(async move {
+                    let _guard = history_lock.lock().await;
                     let mut hist: Vec<KafkaAlertEvent> = store::read_json(&app2, KAFKA_ALERT_HISTORY_FILE)
                         .await
                         .unwrap_or_default();
@@ -3006,7 +3020,9 @@ pub async fn kafka_alert_history(
 /// 清除告警歷史。
 #[cfg(feature = "kafka")]
 #[tauri::command]
-pub async fn kafka_alert_history_clear(app: AppHandle) -> AppResult<()> {
+pub async fn kafka_alert_history_clear(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    // 與告警 append 共用同一把鎖，避免「清除」與「寫入」交錯。
+    let _guard = state.kafka_alert_history_lock.lock().await;
     let empty: Vec<crate::db::kafka::dto::KafkaAlertEvent> = Vec::new();
     store::write_json(&app, KAFKA_ALERT_HISTORY_FILE, &empty).await
 }

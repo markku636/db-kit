@@ -204,10 +204,9 @@ pub async fn transfer_table(
             }
             seen += 1;
         }
-        if fetched < PAGE_SIZE as usize {
-            break;
-        }
-        if seen >= pd.total_rows || seen >= MAX_ROWS {
+        // count:false 的驅動 total_rows 一律是 0，不能用它判斷結束（否則第一頁就停）。
+        // fetched < PAGE_SIZE 才是可靠的「最後一頁」訊號。
+        if paging_done(fetched, PAGE_SIZE as usize, seen, MAX_ROWS) {
             break;
         }
         page += 1;
@@ -215,9 +214,25 @@ pub async fn transfer_table(
     Ok(result)
 }
 
+/// 分頁終止條件。`count:false` 的頁 total_rows=0，只能靠「回不滿一頁」判斷最後一頁。
+pub(crate) fn paging_done(fetched: usize, page_size: usize, seen: u64, max_rows: u64) -> bool {
+    fetched < page_size || seen >= max_rows
+}
+
 #[cfg(test)]
 mod tests {
-    use super::rewrite_create_table_name;
+    use super::{paging_done, rewrite_create_table_name};
+
+    #[test]
+    fn paging_done_ignores_missing_total_rows() {
+        // 常見情境：total_rows=0（count:false），第一頁抓滿 1000 筆 → 必須繼續。
+        assert!(!paging_done(1000, 1000, 1000, 10_000));
+        assert!(!paging_done(1000, 1000, 2000, 10_000));
+        // 最後一頁只回 3 筆 → 停。
+        assert!(paging_done(3, 1000, 2003, 10_000));
+        // 安全上限也要停。
+        assert!(paging_done(1000, 1000, 10_000, 10_000));
+    }
     use crate::db::DbKind;
 
     #[test]

@@ -64,8 +64,14 @@ pub fn split_script(kind: DbKind, text: &str) -> AppResult<SplitScript> {
     let mut delim = ";".to_string();
     let mut cur = String::new();
     let mut cur_first = 1usize;
+    // psql 指令行只能在外層 SQL 跳過：$$ … $$ / 多行字串裡的一行 `\path` 是資料，
+    // 不是 meta-command。用同一套 mask 判斷該行是否在字面值內。
+    let masked = crate::review_run::scan::Masked::new(DbKind::Postgres, text);
+    let mut line_offset = 0usize;
     for (i, raw) in text.split_inclusive('\n').enumerate() {
         let lineno = i + 1;
+        let this_offset = line_offset;
+        line_offset += raw.len();
         if mysqlish {
             if let Some(d) = delimiter_line(raw) {
                 segments.push((cur_first, delim.clone(), std::mem::take(&mut cur)));
@@ -75,9 +81,14 @@ pub fn split_script(kind: DbKind, text: &str) -> AppResult<SplitScript> {
             }
         }
         if kind == DbKind::Postgres && raw.trim_start().starts_with('\\') {
-            out.skipped_meta += 1;
-            cur.push('\n');
-            continue;
+            let lead = raw.len() - raw.trim_start().len();
+            let first = this_offset + lead;
+            let in_literal = masked.mask.get(first).copied() == Some(crate::review_run::scan::FILL);
+            if !in_literal {
+                out.skipped_meta += 1;
+                cur.push('\n');
+                continue;
+            }
         }
         cur.push_str(raw);
     }
@@ -297,6 +308,15 @@ mod tests {
 
     fn lines(s: &SplitScript) -> Vec<(usize, &str)> {
         s.statements.iter().map(|x| (x.line, x.sql.as_str())).collect()
+    }
+
+    #[test]
+    fn psql_meta_line_inside_dollar_quote_is_kept() {
+        let sql = "DO $$ BEGIN\n  RAISE NOTICE 'path: \\tmp';\nEND $$;\n\\connect otherdb\nSELECT 1;\n";
+        let s = split_script(DbKind::Postgres, sql).unwrap();
+        let all = s.statements.iter().map(|x| x.sql.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(all.contains("\\tmp"), "dollar-quote 內的反斜線不能被當 psql 指令刪掉");
+        assert_eq!(s.skipped_meta, 1, "只有外層的 \\connect 該被跳過");
     }
 
     #[test]

@@ -165,7 +165,10 @@ pub async fn restore(
             validate_sqlite_file(in_path).await?;
             // 覆蓋前備份現有檔（.bak），讓還原失敗可復原。
             if Path::new(&dst).exists() {
-                let _ = tokio::fs::copy(&dst, format!("{dst}.bak")).await;
+                // 安全備份失敗就別覆蓋：否則還原中途失敗時原檔和備份都沒了。
+                tokio::fs::copy(&dst, format!("{dst}.bak"))
+                    .await
+                    .map_err(|e| AppError::Query(tf!("建立還原前備份失敗：{e}", e = e)))?;
             }
             tokio::fs::copy(in_path, &dst)
                 .await
@@ -185,7 +188,8 @@ pub async fn restore(
             if ok { Ok(()) } else { Err(AppError::Query(t!("PostgreSQL 還原失敗").to_string())) }
         }
         DbKind::Mongo => {
-            if !detect_cli(DbKind::Mongo).await {
+            // detect_cli(Mongo) 查的是 mongodump；還原實際用的是 mongorestore，要各查各的。
+            if !detect_cli_named("mongorestore").await {
                 return Err(AppError::Query(t!("找不到 mongorestore，請先安裝").to_string()));
             }
             let ok = run_mongorestore(config, database, in_path).await?;

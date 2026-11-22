@@ -99,13 +99,8 @@ pub async fn export(
         if !opts.all_rows {
             break;
         }
-        if fetched < PAGE_SIZE as usize {
-            break;
-        }
-        if rows.len() >= MAX_ROWS {
-            break;
-        }
-        if (rows.len() as u64) >= pd.total_rows {
+        // count:false → total_rows 是 0；拿它判斷會在第一頁就停，匯出被靜默截斷。
+        if crate::transfer::paging_done(fetched, PAGE_SIZE as usize, rows.len() as u64, MAX_ROWS as u64) {
             break;
         }
         page += 1;

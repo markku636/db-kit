@@ -130,6 +130,7 @@ pub fn run() {
             kafka_metrics: Arc::new(Mutex::new(std::collections::HashMap::new())),
             #[cfg(feature = "kafka")]
             kafka_alert_rules: Arc::new(Mutex::new(Vec::new())),
+            kafka_alert_history_lock: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(feature = "docker")]
             docker_streams: Arc::new(db::docker::stream::DockerStreams::new()),
             #[cfg(feature = "docker")]

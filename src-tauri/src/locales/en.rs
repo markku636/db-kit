@@ -499,6 +499,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "備份檔不存在" => "The backup file does not exist",
         "還原 SQLite 檔失敗：{e}" => "Failed to restore the SQLite file: {e}",
         "找不到 mysql 客戶端，請先安裝" => "The mysql client was not found; install it first",
+        "建立還原前備份失敗：{e}" => "Failed to create the pre-restore backup: {e}",
         "MySQL 還原失敗" => "MySQL restore failed",
         "PostgreSQL 還原失敗" => "PostgreSQL restore failed",
         "找不到 mongorestore，請先安裝" => "mongorestore was not found; install it first",
