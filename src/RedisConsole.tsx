@@ -3,7 +3,7 @@ import { CircleDot } from "lucide-react";
 import { api } from "./api";
 import { uiConfirm } from "./ui";
 import { useStore } from "./store";
-import { isDangerousRedisCommand, isReadOnlyRedisCommand } from "./sql";
+import { fmtElapsed, isDangerousRedisCommand, isReadOnlyRedisCommand } from "./sql";
 import { completeRedisCommand, isBlockingKeysCommand, redisCommandHint } from "./redisCommandHints";
 import {
   formatRedisConsoleLines, loadRedisConsoleHistory, recordRedisConsoleHistory,
@@ -19,6 +19,8 @@ interface Entry {
   cmd: string;
   lines: string[];
   error?: boolean;
+  /** 執行耗時（毫秒），仿 ARDM 的 execution log。 */
+  ms?: number;
 }
 
 // Redis 命令列：仿 Another Redis Desktop Manager 的 Console。
@@ -110,12 +112,13 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
     setHistory((h) => recordRedisConsoleHistory(h, cmd));
     setHistPos(-1);
     setBusy(true);
+    const t0 = performance.now();
     try {
       const res = await api.runQuery(connId, wire);
       const lines = formatRedisConsoleLines(res, t);
-      setEntries((e) => [...e, { db: effDb, cmd, lines }]);
+      setEntries((e) => [...e, { db: effDb, cmd, lines, ms: performance.now() - t0 }]);
     } catch (err: any) {
-      setEntries((e) => [...e, { db: effDb, cmd, lines: [err?.message ?? t("錯誤")], error: true }]);
+      setEntries((e) => [...e, { db: effDb, cmd, lines: [err?.message ?? t("錯誤")], error: true, ms: performance.now() - t0 }]);
     } finally {
       setBusy(false);
       inputRef.current?.focus();
@@ -176,6 +179,7 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
           <div key={i} className="mb-1.5">
             <div className="text-emerald-400/90">
               <span className="text-fg/30">{en.db}&gt;</span> {en.cmd}
+              {en.ms != null && <span className="text-fg/25"> · {fmtElapsed(en.ms)}</span>}
             </div>
             {en.lines.map((ln, j) => (
               <div key={j} className={`whitespace-pre-wrap break-all ${en.error ? "text-red-400" : "text-fg/75"}`}>
