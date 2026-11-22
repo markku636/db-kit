@@ -22,6 +22,7 @@ import HarborRepoView from "./HarborRepoView";
 import K8sObjectView from "./K8sObjectView";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
+import { formatRedisKeyForCopy, isSupportedRedisKeyType } from "./redisKeyValueFormat";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
@@ -1341,12 +1342,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const copyKeyValue = async (key: string) => {
     try {
       const p = await api.redisKeyPage(tab.connId, tab.database, key, 0, COPY_MAX, "", true);
-      let text: string;
-      if (p.type_ === "hash") text = p.fields.map((f, i) => `${f}=${p.members[i] ?? ""}`).join("\n");
-      else if (p.type_ === "zset") text = p.members.map((m, i) => `${p.scores[i] ?? 0} ${m}`).join("\n");
-      else text = p.members.join("\n");
-      const shown = p.type_ === "hash" ? p.fields.length : p.members.length;
-      const partial = p.type_ !== "string" && p.total > shown;
+      const { text, shown, partial } = formatRedisKeyForCopy(p);
       await copyToClipboard(
         text,
         partial
@@ -2589,7 +2585,9 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   const detail: KeyDetail | null = page
     ? { key: rkey, type_: page.type_, ttl: page.ttl, entries: members, fields, scores }
     : null;
-  const isCollection = page != null && page.type_ !== "string" && page.type_ !== "none";
+  // RedisJSON / TimeSeries 這類模組型別後端 key_page 不處理，別把它們當成空 list 渲染。
+  const keyTypeSupported = page == null || isSupportedRedisKeyType(page.type_);
+  const isCollection = page != null && keyTypeSupported && page.type_ !== "string" && page.type_ !== "none";
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
@@ -2604,7 +2602,10 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
                 TTL: {page.ttl < 0 ? t("無到期") : `${page.ttl}s`}
               </span>
               {isCollection && page.total >= 0 && (
-                <span className="text-xs text-fg/35">{t("共 {total} 筆", { total: page.total })}</span>
+                <span className="text-xs text-fg/35"
+                  title={filter ? t("總數是未過濾的完整筆數；下方「已載入」才是這次過濾的結果。") : undefined}>
+                  {filter ? t("總數 {total}（未過濾）", { total: page.total }) : t("共 {total} 筆", { total: page.total })}
+                </span>
               )}
               {(page.memory_bytes ?? -1) >= 0 && (
                 <span className="text-xs text-fg/35"
@@ -2656,14 +2657,19 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
         <div className="p-4 overflow-auto">
           {err && <div className="text-red-400 text-sm mono mb-2 break-all">{err}</div>}
           {!page && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
-          {detail && binary && (
+          {detail && !keyTypeSupported && (
+            <div className="text-sm text-fg/60 bg-fg/5 border border-fg/10 rounded px-3 py-3 break-all">
+              {t("此型別（{type}）無法以表格顯示，請用主控台讀取（例如 JSON.GET key）。", { type: page!.type_ })}
+            </div>
+          )}
+          {detail && binary && keyTypeSupported && (
             <div className="mb-2 text-xs bg-warning/10 border border-warning/30 rounded px-3 py-2 text-warning"
               title={t("UTF-8 是一般文字的編碼；壓縮檔、序列化物件、圖片這類資料不是文字，無法原樣顯示。")}>
               {t("此鍵含二進位資料（非 UTF-8 文字），無法顯示的位元組以 \\xHH 表示。為避免寫回時損毀原始資料，已停用編輯；要修改請用主控台或程式。")}
             </div>
           )}
-          {detail && binary && <KeyDetailReadOnly detail={detail} />}
-          {detail && !binary && (
+          {detail && binary && keyTypeSupported && <KeyDetailReadOnly detail={detail} />}
+          {detail && !binary && keyTypeSupported && (
             <KeyDetailBody
               detail={detail}
               connId={connId}
