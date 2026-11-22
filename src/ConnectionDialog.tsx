@@ -563,22 +563,30 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     }
   };
 
-  const handleTest = async () => {
+  const handleTest = async (): Promise<boolean> => {
     const cfg = build();
     // 手動 OTP 模式：測試連線也要走同一道關卡（後端無 secret 可用，不先問就必定失敗）。
     const gate = await askOtpCode(cfg);
-    if (gate.cancelled) return;
+    if (gate.cancelled) return false;
     setTesting(true);
     setMsg(null);
     const t0 = performance.now();
     try {
       await api.testConnection(cfg, gate.code);
       setMsg({ ok: true, text: t("連線成功（{round} ms）", { round: Math.round(performance.now() - t0) }) });
+      return true;
     } catch (e: any) {
       setMsg({ ok: false, text: e?.message ?? t("連線失敗") });
+      return false;
     } finally {
       setTesting(false);
     }
+  };
+
+  // 先測再存：打錯 host / 密碼當場就知道，不必等下次連線才發現。
+  const handleSaveWithTest = async () => {
+    if (!valid) return;
+    if (await handleTest()) handleSave();
   };
 
   const fileBased = KIND_META[kind].fileBased;
@@ -628,8 +636,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
           <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
         ) : (
           <>
-            <Button variant="secondary" className="mr-auto" loading={testing} onClick={handleTest}>
+            <Button variant="secondary" loading={testing} onClick={handleTest}>
               {t("測試連線")}
+            </Button>
+            <Button variant="secondary" className="mr-auto" loading={testing} onClick={handleSaveWithTest}>
+              {t("測試並儲存")}
             </Button>
             <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
             <Button variant="primary" onClick={handleSave} disabled={!valid}>{t("儲存")}</Button>

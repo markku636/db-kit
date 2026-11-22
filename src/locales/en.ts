@@ -3060,6 +3060,7 @@ const en: Catalog = {
   "清除已儲存的密碼（連線與 SSH）；下次連線會要求重新輸入": "Clear saved passwords (database and SSH); you'll be asked to re-enter them next time",
   "清除已儲存密碼失敗": "Failed to clear the saved password",
   "批次更新失敗：{msg}。關聯式連線會整批回滾；其他連線可能已部分寫入。": "Batch update failed: {msg}. Relational connections roll back the whole batch; other connections may be partially written.",
+  "測試並儲存": "Test & Save",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",

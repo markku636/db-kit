@@ -2383,18 +2383,21 @@ function RowDetailModal({ rowNo, columns, values, editable, hasPrev, hasNext, on
 function RowField({ value, onSave }: { value: string | null; onSave: (raw: string, setNull: boolean) => void }) {
   const t = useT();
   const [text, setText] = useState(value ?? "");
-  useEffect(() => setText(value ?? ""), [value]);
-  const commit = () => { if (text !== (value ?? "")) onSave(text, false); };
+  // 有沒有「真的編輯過」要另外記：NULL 的顯示文字也是 ""，只看 text 永遠無法
+  // 把 NULL 改成空字串（輸入後又全刪會被當成沒變動）。
+  const [touched, setTouched] = useState(false);
+  useEffect(() => { setText(value ?? ""); setTouched(false); }, [value]);
+  const commit = () => { if (touched && text !== (value ?? "")) onSave(text, false); };
   return (
     <span className="flex-1 flex items-center gap-1">
-      <input value={text} onChange={(e) => setText(e.target.value)}
+      <input value={text} onChange={(e) => { setText(e.target.value); setTouched(true); }}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
         className={`flex-1 bg-inset border rounded px-2 py-1 text-sm mono outline-none focus:border-accent ${
           value === null ? "border-fg/10 text-fg/40 italic" : "border-fg/10"
         }`}
         placeholder={value === null ? "NULL" : ""} />
-      <button type="button" onMouseDown={(e) => { e.preventDefault(); onSave("", true); }}
+      <button type="button" onMouseDown={(e) => { e.preventDefault(); setTouched(false); onSave("", true); }}
         title={t("設為 NULL")} className="text-[10px] text-fg/40 hover:text-fg/70 shrink-0">NULL</button>
     </span>
   );

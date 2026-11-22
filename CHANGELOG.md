@@ -2,6 +2,8 @@
 
 新功能：
 
+- **NULL 欄位可以改成空字串了**：記錄檢視裡 NULL 顯示為空，以前輸入再全删會被當成「沒變動」；現在有明確的 touched 狀態，`''` 與 `NULL` 可以互換。
+- **連線對話框新增「測試並儲存」**：不用先按測試再按儲存兩次，打錯 host / 密碼當場就知道。
 - **Kafka Schema Registry / Connect 密碼不再明文存檔**：跟 proxy 密碼一樣改存 OS keychain，連線前才補回記憶體；`connections.json` 與連線匯出不再含這兩組密碼，舊設定重新存一次即自動搬移。
 - **多格編輯改成單一交易（MySQL / PostgreSQL / SQLite / SQL Server）**：以前逐格送出，第 7 格失敗時前 6 格已經寫進 DB；現在整批成功或整批回滾，其他連線會在錯誤訊息標明可能部分寫入。
 - **MySQL / PostgreSQL / SQLite / Oracle 分頁不再重複或漏列**：以前沒指定排序時完全沒有 `ORDER BY`，資料庫每頁回的順序可能不同；現在一律用主鍵排序，使用者自訂排序也補主鍵當 tiebreaker（與 SQL Server 一致）。
