@@ -315,6 +315,13 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [readOnlyCols, setReadOnlyCols] = useState<Set<string>>(new Set());
   const [columnTypes, setColumnTypes] = useState<Record<string, string>>({});
   useEffect(() => {
+    if (isRedis && tab.view === "data") {
+      // Redis 網格的 key / type 是唯讀的中繼欄位（TTL 才可編輯），後端 update_cell 明確拒絕這兩欄。
+      setCommentMap({});
+      setReadOnlyCols(new Set(["key", "type"]));
+      setColumnTypes({});
+      return;
+    }
     if (!isSqlKind || tab.view !== "data") { setCommentMap({}); setReadOnlyCols(new Set()); setColumnTypes({}); return; }
     let alive = true;
     api.tableColumns(tab.connId, tab.database, tab.table)
@@ -334,7 +341,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
       })
       .catch(() => { if (alive) { setCommentMap({}); setReadOnlyCols(new Set()); setColumnTypes({}); } });
     return () => { alive = false; };
-  }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
+  }, [isSqlKind, isRedis, tab.connId, tab.database, tab.table, tab.view]);
 
   // 可寫入欄位的索引：INSERT 對話框、copyMarkedInsert、copyRowUpdate 共用，
   // IDENTITY / 計算欄位帶進 INSERT 一定失敗（8102 / IDENTITY_INSERT off）。
@@ -1295,11 +1302,12 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const nv = await uiPrompt(t("輸入新的鍵名："), {
       title: t("重新命名鍵"), defaultValue: key, confirmText: t("重新命名"),
     });
-    if (nv === null || nv.trim() === "" || nv === key) return;
+    if (nv === null || nv.trim() === "" || nv.trim() === key) return;
     setApplying(true);
     setErr(null);
     try {
-      await api.keyEdit(tab.connId, tab.database, key, { action: "rename", new_key: nv });
+      // 與 cloneKey 一致送 trim 後的名字，避免鍵名帶前後空白卻在樹上找不到。
+      await api.keyEdit(tab.connId, tab.database, key, { action: "rename", new_key: nv.trim() });
       toast.success(t("已重新命名"));
       refresh();
     } catch (e: any) {
@@ -2643,12 +2651,13 @@ function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClo
 
   // 首頁載入（reset）：清空累積、從游標 0 開始。connId/db/key/filter 改變或 reload 時觸發。
   const loadFirst = (flt: string) => {
-    loadGen.current += 1; // 編輯後 reload 也要讓還在飛的 loadMore 失效
+    const gen = ++loadGen.current; // 編輯後 reload 也要讓還在飛的 loadMore 失效
     setLoading(true);
     setErr(null);
     api
       .redisKeyPage(connId, database, rkey, 0, KEY_PAGE, flt)
       .then((p) => {
+        if (gen !== loadGen.current) return;
         setPage(p);
         setBinary(!!p.binary);
         setMembers(p.members);
@@ -2657,8 +2666,8 @@ function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClo
         setCursor(p.cursor);
         setNextId(p.next_id ?? null);
       })
-      .catch((e) => setErr(e?.message ?? t("讀取失敗")))
-      .finally(() => setLoading(false));
+      .catch((e) => { if (gen === loadGen.current) setErr(e?.message ?? t("讀取失敗")); })
+      .finally(() => { if (gen === loadGen.current) setLoading(false); });
   };
 
   useEffect(() => {

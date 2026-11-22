@@ -3603,8 +3603,10 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
         />
       )}
 
+      {/* 單一 overlay：key 隨連線重掛，避免沿用上一條連線的歷史 / DB 並覆寫它的記錄 */}
       {console_ && (
         <RedisConsole
+          key={console_.id}
           connId={console_.id}
           connName={console_.name}
           initialDb={console_.db}
@@ -4130,9 +4132,10 @@ function MainArea({ onNewConnection, onNewSshSession }: { onNewConnection: () =>
       </div>
 
       {/* 內容：表分頁 → 資料格；否則 → 對應查詢分頁的編輯器（key 隨分頁 → 各自獨立狀態與草稿）。
-          查詢分頁全部關光且無表分頁在前景 → 空狀態（分頁列的「+」仍可開新查詢）。 */}
+          查詢分頁全部關光且無表分頁在前景 → 空狀態（分頁列的「+」仍可開新查詢）。
+          資料格 key 隨分頁：page/sorts/filters/edits 是本地 state，不重掛會沿用上一張表的狀態。 */}
       {activeTab ? (
-        <TableView tab={activeTab} />
+        <TableView key={activeTab.key} tab={activeTab} />
       ) : activeSsh || activeRd || activeCmp ? null : activeQueryId ? (
         <QueryPane key={activeQueryId} tabId={activeQueryId} />
       ) : (
