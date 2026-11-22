@@ -76,7 +76,7 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
 
   // 主題變更 → 抓該主題全部分區（不依賴群組已提交位移的分區集合）。
   useEffect(() => {
-    setPlan(null);
+    setPlan(null); setPlanSig(null);
     if (!resetTopic) { setAllParts([]); setCheckedParts(new Set()); return; }
     api.kafkaTopicPartitions(connId, resetTopic)
       .then((ps) => {
@@ -87,7 +87,7 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
       .catch(() => { setAllParts([]); setCheckedParts(new Set()); });
   }, [connId, resetTopic]);
 
-  const invalidate = () => setPlan(null);
+  const invalidate = () => { setPlan(null); setPlanSig(null); };
 
   const buildTarget = (): KafkaResetTarget | null => {
     switch (resetMode) {
@@ -113,6 +113,9 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
 
   const buildReset = () => {
     if (!selected || !resetTopic) { toast.error(t("請選擇主題")); return null; }
+    // allParts 為空代表還沒抓到新主題的分區（或抓取失敗）：此時 checkedParts 可能還是上一個主題的，
+    // 千萬不能把「0 selected」解讀成「全部分區」。
+    if (allParts.length === 0) { toast.error(t("分區載入中或抓取失敗，請稍後再試")); return null; }
     const target = buildTarget();
     if (!target) return null;
     const partitions = checkedParts.size === allParts.length ? null : Array.from(checkedParts).sort((a, b) => a - b);
@@ -120,12 +123,16 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
     return { group: selected, topic: resetTopic, target, partitions };
   };
 
+  // 預覽表必須和目前設定完全一致才能套用：改了主題 / 模式 / 分區就要重新預覽。
+  const [planSig, setPlanSig] = useState<string | null>(null);
+
   const doPreview = async () => {
     const reset = buildReset();
     if (!reset) return;
     setBusy(true);
     try {
       setPlan(await api.kafkaPreviewResetOffsets(connId, reset));
+      setPlanSig(JSON.stringify(reset));
     } catch (e: any) {
       toast.error(e?.message ?? t("預覽失敗"));
     } finally {
@@ -136,13 +143,18 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
   const doApply = async () => {
     const reset = buildReset();
     if (!reset || !plan) return;
+    if (planSig !== JSON.stringify(reset)) {
+      toast.error(t("設定已變更，請重新預覽後再套用"));
+      setPlan(null); setPlanSig(null);
+      return;
+    }
     const n = plan.filter((r) => r.target !== null).length;
     if (!(await uiConfirm(t("依預覽表套用位移重設（{n} 個分區）？", { n }), { danger: true, confirmText: t("套用") }))) return;
     setBusy(true);
     try {
       const applied = await api.kafkaResetOffsets(connId, reset);
       toast.success(t("已重設 {n} 個分區位移", { n: applied.filter((r) => r.target !== null).length }));
-      setPlan(null);
+      setPlan(null); setPlanSig(null);
       if (selected) api.kafkaGroupDetail(connId, selected).then(setDetail).catch(() => {});
     } catch (e: any) {
       toast.error(e?.message ?? t("重設失敗"));

@@ -20,8 +20,8 @@ const STATE_CLS: Record<string, string> = {
 };
 
 // Kafka Connect 面板（連線右鍵 overlay）：連接器清單 + 詳細 + 動作 + 設定編輯 + 新增。
-export default function KafkaConnectPanel({ connId, connName, onClose }: {
-  connId: string; connName: string; onClose: () => void;
+export default function KafkaConnectPanel({ connId, connName, readonly = false, onClose }: {
+  connId: string; connName: string; readonly?: boolean; onClose: () => void;
 }) {
   const t = useT();
   useModalOverlay(onClose);
@@ -49,12 +49,13 @@ export default function KafkaConnectPanel({ connId, connName, onClose }: {
   const detail = connectors.find((c) => c.name === selected);
 
   const act = async (fn: () => Promise<void>, okMsg: string) => {
+    if (readonly) return;
     try { await fn(); toast.success(okMsg); load(); }
     catch (e: any) { toast.error(e?.message ?? String(e)); }
   };
 
   const saveConfig = async () => {
-    if (!selected) return;
+    if (readonly || !selected) return;
     let parsed: Record<string, unknown>;
     try { parsed = JSON.parse(config); } catch { toast.error(t("設定非合法 JSON")); return; }
     await act(() => api.kafkaConnectPutConfig(connId, selected, parsed), t("已更新設定"));
@@ -62,14 +63,19 @@ export default function KafkaConnectPanel({ connId, connName, onClose }: {
   };
 
   const startCreate = () => {
+    if (readonly) return;
     setCreating(true);
     api.kafkaConnectPlugins(connId).then(setPlugins).catch(() => {});
   };
 
   const doCreate = async () => {
+    if (readonly) return;
     let parsed: Record<string, unknown>;
     try { parsed = JSON.parse(newConfig); } catch { toast.error(t("設定非合法 JSON")); return; }
     if (!newName.trim()) { toast.error(t("請輸入連接器名稱")); return; }
+    // Connect REST 的 PUT 是 upsert：同名會整份覆蓋既有連接器設定，先擋下來。
+    if (connectors.some((c) => c.name === newName.trim())
+        && !(await uiConfirm(t("名稱「{name}」已存在，覆蓋會換掉整個設定與任務。確定覆蓋？", { name: newName.trim() }), { danger: true }))) return;
     try {
       const cls = String(parsed["connector.class"] ?? "");
       if (cls) {
@@ -100,7 +106,7 @@ export default function KafkaConnectPanel({ connId, connName, onClose }: {
           <Icon icon={Cable} size={14} className="text-cyan-300/90" />
           <span className="font-medium text-sm">{t("連接器")} · {connName}</span>
           <span className="text-xs text-fg/35">{connectors.length}</span>
-          <button type="button" onClick={startCreate} className="ml-2 px-2 py-1 rounded bg-accent/80 hover:bg-accent text-white text-xs">{t("新增連接器")}</button>
+          {!readonly && <button type="button" onClick={startCreate} className="ml-2 px-2 py-1 rounded bg-accent/80 hover:bg-accent text-white text-xs">{t("新增連接器")}</button>}
           <ModalViewControls code className="ml-auto" />
           <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
@@ -147,14 +153,14 @@ export default function KafkaConnectPanel({ connId, connName, onClose }: {
                   <span className="font-medium text-fg/70">{detail.name}</span>
                   {badge(detail.state)}
                   <span className="text-fg/30">{detail.connector_type}</span>
-                  <span className="ml-auto flex gap-2">
+                  {!readonly && <span className="ml-auto flex gap-2">
                     {detail.state === "PAUSED"
                       ? <button type="button" onClick={() => act(() => api.kafkaConnectResume(connId, detail.name), t("已恢復"))} className="text-emerald-300/80 hover:text-emerald-300">{t("恢復")}</button>
                       : <button type="button" onClick={() => act(() => api.kafkaConnectPause(connId, detail.name), t("已暫停"))} className="text-amber-300/80 hover:text-amber-300">{t("暫停")}</button>}
                     <button type="button" onClick={() => act(() => api.kafkaConnectRestart(connId, detail.name, true, false), t("已重啟"))} className="text-fg/50 hover:text-accent">{t("重啟")}</button>
                     <button type="button" onClick={() => act(() => api.kafkaConnectRestart(connId, detail.name, true, true), t("已重啟失敗任務"))} className="text-fg/50 hover:text-accent">{t("重啟失敗任務")}</button>
                     <button type="button" onClick={async () => { if (await uiConfirm(t("刪除連接器「{name}」？", { name: detail.name }), { danger: true })) { act(() => api.kafkaConnectDelete(connId, detail.name), t("已刪除")); setSelected(null); } }} className="text-fg/50 hover:text-red-400">{t("刪除")}</button>
-                  </span>
+                  </span>}
                 </div>
 
                 <div>
@@ -176,9 +182,9 @@ export default function KafkaConnectPanel({ connId, connName, onClose }: {
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-fg/40">{t("設定")}</span>
-                    {editing
+                    {!readonly && (editing
                       ? <><button type="button" onClick={saveConfig} className="text-accent hover:underline">{t("儲存")}</button><button type="button" onClick={() => setEditing(false)} className="text-fg/40 hover:underline">{t("取消")}</button></>
-                      : <button type="button" onClick={() => setEditing(true)} className="text-fg/40 hover:text-accent">{t("編輯")}</button>}
+                      : <button type="button" onClick={() => setEditing(true)} className="text-fg/40 hover:text-accent">{t("編輯")}</button>)}
                   </div>
                   {editing
                     ? <div className="border border-fg/15 rounded overflow-hidden"><CodeMirror value={config} onChange={setConfig} extensions={[jsonLang()]} theme="dark" height="220px" basicSetup={{ foldGutter: false }} /></div>

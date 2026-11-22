@@ -620,6 +620,7 @@ export default function App() {
         <BackupDialog
           conn={activeConn}
           database={null}
+          readonly={useStore.getState().readonlyConns[activeConn.id] === true}
           onClose={() => setBackupOpen(false)}
         />
       )}
@@ -3547,11 +3548,13 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
       )}
 
       {kafkaConnect && (
-        <KafkaConnectPanel connId={kafkaConnect.id} connName={kafkaConnect.name} onClose={() => setKafkaConnect(null)} />
+        <KafkaConnectPanel connId={kafkaConnect.id} connName={kafkaConnect.name}
+          readonly={readonlyConns[kafkaConnect.id] === true} onClose={() => setKafkaConnect(null)} />
       )}
 
       {kafkaAcl && (
-        <KafkaAclPanel connId={kafkaAcl.id} connName={kafkaAcl.name} onClose={() => setKafkaAcl(null)} />
+        <KafkaAclPanel connId={kafkaAcl.id} connName={kafkaAcl.name}
+          readonly={readonlyConns[kafkaAcl.id] === true} onClose={() => setKafkaAcl(null)} />
       )}
 
       {kafkaSchema && (

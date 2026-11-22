@@ -19,8 +19,8 @@ function blankAcl(): KafkaAclBinding {
 }
 
 // ACL 面板（連線右鍵 overlay）：依 principal 分組 + 篩選 + 新增 / 刪除。
-export default function KafkaAclPanel({ connId, connName, onClose }: {
-  connId: string; connName: string; onClose: () => void;
+export default function KafkaAclPanel({ connId, connName, readonly = false, onClose }: {
+  connId: string; connName: string; readonly?: boolean; onClose: () => void;
 }) {
   const t = useT();
   useModalOverlay(onClose);
@@ -55,7 +55,7 @@ export default function KafkaAclPanel({ connId, connName, onClose }: {
   }, [filtered]);
 
   const create = async () => {
-    if (!creating) return;
+    if (readonly || !creating) return;
     try {
       await api.kafkaAclsCreate(connId, [creating]);
       toast.success(t("已建立 ACL"));
@@ -65,6 +65,7 @@ export default function KafkaAclPanel({ connId, connName, onClose }: {
   };
 
   const del = async (a: KafkaAclBinding) => {
+    if (readonly) return;
     if (!(await uiConfirm(t("刪除此 ACL？（{principal} {op} {res}）", { principal: a.principal, op: a.operation, res: a.name || a.resource_type }), { danger: true }))) return;
     try {
       // 以精確 filter 刪除單筆。
@@ -88,7 +89,7 @@ export default function KafkaAclPanel({ connId, connName, onClose }: {
           <Icon icon={Shield} size={14} className="text-indigo-300/90" />
           <span className="font-medium text-sm">ACL · {connName}</span>
           <span className="text-xs text-fg/35">{acls.length}</span>
-          <button type="button" onClick={() => setCreating(blankAcl())} className="ml-2 px-2 py-1 rounded bg-accent/80 hover:bg-accent text-white text-xs">{t("新增 ACL")}</button>
+          {!readonly && <button type="button" onClick={() => setCreating(blankAcl())} className="ml-2 px-2 py-1 rounded bg-accent/80 hover:bg-accent text-white text-xs">{t("新增 ACL")}</button>}
           <ModalViewControls className="ml-auto" />
           <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
@@ -136,7 +137,7 @@ export default function KafkaAclPanel({ connId, connName, onClose }: {
                       <td className="px-2 py-1 text-fg/60">{a.operation}</td>
                       <td className="px-2 py-1 text-fg/60">{a.resource_type}{a.name ? `:${a.name}` : ""} <span className="text-fg/30">({a.pattern_type})</span></td>
                       <td className="px-2 py-1 text-fg/40">{a.host}</td>
-                      <td className="px-2 py-1 text-right"><button type="button" onClick={() => del(a)} className="opacity-0 group-hover:opacity-100 text-fg/40 hover:text-red-400">{t("刪除")}</button></td>
+                      <td className="px-2 py-1 text-right">{!readonly && <button type="button" onClick={() => del(a)} className="opacity-0 group-hover:opacity-100 text-fg/40 hover:text-red-400">{t("刪除")}</button>}</td>
                     </tr>
                   ))}
                 </tbody>

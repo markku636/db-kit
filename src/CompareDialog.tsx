@@ -147,7 +147,11 @@ export default function CompareDialog({ connId, kind, sourceDb, onClose, onUse }
         if (!diff.cross_engine) {
           // 同步範圍＝勾選的表 ∪ 兩側的視圖 / 程序（後者不在表清單裡，不該被勾選框篩掉）。
           const scope = [...tables, ...src.views.map((v) => v.name), ...dst.views.map((v) => v.name),
-            ...diff.tables_removed];
+            ...diff.tables_removed,
+            // 程序差異也要放進 scope：後端 retain_tables 現在會依名稱保留程序，
+            // 少了這些名字會把 CREATE/ALTER PROCEDURE 全部清掉（同步腳本什麼都沒改）。
+            ...diff.routines_added.map((r) => r.name), ...diff.routines_removed.map((r) => r.name),
+            ...diff.routines_changed.map((r) => r.name)];
           const sc = await api.generateSchemaSync(src, dst, toDiffOptions(o), toSyncOptions(o), scope);
           statements = sc.statements;
           skipped = sc.skipped;

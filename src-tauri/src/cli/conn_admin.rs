@@ -59,6 +59,10 @@ pub async fn add(conn: &ConnArgs, fmt: Format, a: ConnAddArgs) -> AppResult<()> 
             // 沒重新給的 secret 沿用舊的（測試連線要用；存檔時空字串本來就是「不變動」）。
             let prev = store::load_connection_in(&dir, &old.id).await?;
             inherit_secrets(&mut cfg, &prev);
+            // PROD 是安全旗標：--replace 沒重給 --prod 時要沿用舊值，
+            // 否則會默默拿掉 GUI 的 PROD 確認、CLI 的 --allow-prod 開關，
+            // 連 export 也會開始把這條連線的帳密帶出去。
+            inherit_prod_flag(&mut cfg, &prev, a.prod);
             true
         }
         None => {
@@ -234,6 +238,14 @@ fn inherit_secrets(cfg: &mut ConnectionConfig, prev: &ConnectionConfig) {
     }
 }
 
+/// 覆寫時沿用舊連線的 PROD 安全旗標（除非這次明確給了 --prod）。
+/// 明確給 --prod=false 的語意由 CLI 旗標決定；這裡只補「沒給」的缺口。
+fn inherit_prod_flag(cfg: &mut ConnectionConfig, prev: &ConnectionConfig, prod_given: bool) {
+    if !prod_given && prev.options.get("prod").is_some_and(|v| v == "1") {
+        cfg.options.insert("prod".to_string(), "1".to_string());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +293,29 @@ mod tests {
         assert_eq!(find_unique_by_name(&all, "a").unwrap().map(|c| c.id.as_str()), Some("1"));
         assert!(find_unique_by_name(&all, "zz").unwrap().is_none());
         assert!(find_unique_by_name(&all, "b").is_err(), "同名多筆要求改用 id");
+    }
+
+    #[test]
+    fn replace_keeps_prod_flag_when_not_repassed() {
+        use crate::db::{ConnectionConfig, DbKind, SshAuthMethod};
+        let prev = ConnectionConfig {
+            id: "old".into(), name: "prod-db".into(), kind: DbKind::Mysql,
+            host: "h".into(), port: 3306, username: "u".into(), password: String::new(),
+            database: None, max_connections: 5, ssh_enabled: false, ssh_host: String::new(),
+            ssh_port: 22, ssh_username: String::new(), ssh_auth_method: SshAuthMethod::Password,
+            ssh_password: String::new(), ssh_private_key_path: String::new(), ssh_passphrase: String::new(),
+            options: [("prod".to_string(), "1".to_string())].into_iter().collect(),
+            otp_secret: String::new(),
+        };
+        let mut cfg = prev.clone();
+        cfg.options.clear(); // 模擬 resolve::adhoc_for_save 從旗標重建、沒帶 --prod
+        inherit_prod_flag(&mut cfg, &prev, false);
+        assert_eq!(cfg.options.get("prod").map(String::as_str), Some("1"));
+        // 明確給 --prod 时不沿用舊值（這裡用空 options 模擬「這次沒帶 prod」）。
+        let mut a = prev.clone();
+        a.options.clear();
+        inherit_prod_flag(&mut a, &prev, true);
+        assert!(a.options.get("prod").is_none());
     }
 
     #[test]

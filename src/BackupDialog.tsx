@@ -15,12 +15,13 @@ import { t, useT } from "./i18n";
 interface Props {
   conn: ConnectionConfig;
   database: string | null;
+  readonly?: boolean;
   onClose: () => void;
 }
 
 type Tab = "manual" | "schedules" | "history";
 
-export default function BackupDialog({ conn, database, onClose }: Props) {
+export default function BackupDialog({ conn, database, readonly = false, onClose }: Props) {
   const t = useT();
   const [tab, setTab] = useState<Tab>("manual");
 
@@ -50,16 +51,16 @@ export default function BackupDialog({ conn, database, onClose }: Props) {
       </div>
 
       <div className="p-5 overflow-y-auto flex-1 min-h-0">
-        {tab === "manual" && <ManualTab conn={conn} database={database} />}
+        {tab === "manual" && <ManualTab conn={conn} database={database} readonly={readonly} />}
         {tab === "schedules" && <SchedulesTab conn={conn} />}
-        {tab === "history" && <HistoryTab conn={conn} />}
+        {tab === "history" && <HistoryTab conn={conn} readonly={readonly} />}
       </div>
     </Modal>
   );
 }
 
 // ---- 手動備份 / 還原（原有流程） ----
-function ManualTab({ conn, database }: { conn: ConnectionConfig; database: string | null }) {
+function ManualTab({ conn, database, readonly }: { conn: ConnectionConfig; database: string | null; readonly: boolean }) {
   const t = useT();
   const [mode, setMode] = useState<"backup" | "restore">("backup");
   const [db, setDb] = useState(database ?? conn.database ?? "");
@@ -76,6 +77,8 @@ function ManualTab({ conn, database }: { conn: ConnectionConfig; database: strin
   }, [conn.kind]);
 
   const run = async () => {
+    // 唯讀連線可以備份，但不能還原（還原會覆寫資料）。
+    if (readonly && mode === "restore") return;
     if (!path) {
       setMsg({ ok: false, text: t("請填寫檔案路徑") });
       return;
@@ -104,10 +107,12 @@ function ManualTab({ conn, database }: { conn: ConnectionConfig; database: strin
         ariaLabel={t("備份或還原")}
         value={mode}
         onChange={(m) => { setMode(m); setMsg(null); }}
-        options={[
-          { value: "backup", label: t("備份") },
-          { value: "restore", label: t("還原") },
-        ]}
+        options={readonly
+          ? [{ value: "backup", label: t("備份") }]
+          : [
+              { value: "backup", label: t("備份") },
+              { value: "restore", label: t("還原") },
+            ]}
       />
 
       {!fileBased && (
@@ -339,7 +344,7 @@ function SchedulesTab({ conn }: { conn: ConnectionConfig }) {
 }
 
 // ---- 備份歷史 ----
-function HistoryTab({ conn }: { conn: ConnectionConfig }) {
+function HistoryTab({ conn, readonly }: { conn: ConnectionConfig; readonly: boolean }) {
   const t = useT();
   const [list, setList] = useState<BackupHistoryEntry[]>([]);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -353,7 +358,7 @@ function HistoryTab({ conn }: { conn: ConnectionConfig }) {
   useEffect(() => { reload(); }, [conn.id]);
 
   const restore = async (entry: BackupHistoryEntry) => {
-    if (busy) return;
+    if (busy || readonly) return;
     const ok = await uiConfirm(t("從此備份還原到「{name}」？此動作會覆寫現有資料。", { name: entry.database || conn.name }), {
       title: t("還原備份"), danger: true, confirmText: t("還原"),
     });
@@ -404,7 +409,7 @@ function HistoryTab({ conn }: { conn: ConnectionConfig }) {
                     : t("失敗：{error}", { error: e.error ?? t("未知錯誤") })}
                 </div>
               </div>
-              {e.status === "ok" && e.kind !== "redis" && (
+              {!readonly && e.status === "ok" && e.kind !== "redis" && (
                 <button type="button" onClick={() => restore(e)}
                   className="px-2 py-0.5 rounded text-xs border border-fg/15 hover:bg-fg/5 shrink-0">
                   {t("還原")}

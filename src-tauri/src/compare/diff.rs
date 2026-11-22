@@ -154,7 +154,9 @@ impl SchemaDiff {
         self.summary.total == 0
     }
 
-    /// 只保留這些表（含視圖）的差異；程序全部去掉。單表 drill-in 產生同步 DDL 用。
+    /// 只保留這些物件的差異（名稱可為表 / 視圖 / 程序）。GUI 全庫比對會把程序名一併傳入，
+    /// 否則程序差異會被清掉、同步腳本少了 CREATE/ALTER PROCEDURE；單表 drill-in 只傳表名，
+    /// 程序照舊被滤掉（與原本語意一致）。
     pub fn retain_tables(&mut self, names: &[String]) {
         let keep = |n: &String| names.iter().any(|x| x == n);
         self.tables_added.retain(keep);
@@ -164,9 +166,9 @@ impl SchemaDiff {
         self.views_added.retain(keep);
         self.views_removed.retain(keep);
         self.views_changed.retain(|t| keep(&t.name));
-        self.routines_added.clear();
-        self.routines_removed.clear();
-        self.routines_changed.clear();
+        self.routines_added.retain(|t| keep(&t.name));
+        self.routines_removed.retain(|t| keep(&t.name));
+        self.routines_changed.retain(|t| keep(&t.name));
         self.summary = DiffSummary {
             tables_added: self.tables_added.len(),
             tables_removed: self.tables_removed.len(),
@@ -174,11 +176,15 @@ impl SchemaDiff {
             views_added: self.views_added.len(),
             views_removed: self.views_removed.len(),
             views_changed: self.views_changed.len(),
+            routines_added: self.routines_added.len(),
+            routines_removed: self.routines_removed.len(),
+            routines_changed: self.routines_changed.len(),
             ..Default::default()
         };
         let s = &self.summary;
-        self.summary.total =
-            s.tables_added + s.tables_removed + s.tables_changed + s.views_added + s.views_removed + s.views_changed;
+        self.summary.total = s.tables_added + s.tables_removed + s.tables_changed
+            + s.views_added + s.views_removed + s.views_changed
+            + s.routines_added + s.routines_removed + s.routines_changed;
     }
 }
 
@@ -505,6 +511,34 @@ fn diff_table(
 pub(crate) mod tests {
     use super::*;
     use crate::db::ForeignKeyInfo;
+
+    #[test]
+    fn retain_tables_keeps_named_routines_but_drops_unnamed_ones() {
+        use crate::db::DbKind;
+        let routine = |name: &str| TextChange {
+            name: name.into(), routine_type: Some("procedure".into()),
+            src: Some("CREATE PROCEDURE p AS ...".into()), dst: None,
+        };
+        let empty = || SchemaDiff {
+            src_kind: DbKind::Mysql, dst_kind: DbKind::Mysql,
+            src_db: "s".into(), dst_db: "d".into(), cross_engine: false,
+            tables_added: vec![], tables_removed: vec![], tables_changed: vec![], tables_identical: vec![],
+            views_added: vec![], views_removed: vec![], views_changed: vec![],
+            routines_added: vec![], routines_removed: vec![], routines_changed: vec![],
+            summary: DiffSummary::default(),
+        };
+        let mut d = empty();
+        d.routines_added = vec![routine("sp_new"), routine("sp_other")];
+        d.retain_tables(&["sp_new".to_string()]);
+        assert_eq!(d.routines_added.len(), 1);
+        assert_eq!(d.routines_added[0].name, "sp_new");
+        assert_eq!(d.summary.routines_added, 1);
+        // 只傳表名（單表 drill-in）→ 程序仍被清掉。
+        let mut d2 = empty();
+        d2.routines_added = vec![routine("sp_new")];
+        d2.retain_tables(&["users".to_string()]);
+        assert!(d2.routines_added.is_empty());
+    }
 
     pub fn col(name: &str, ty: &str, nullable: bool) -> ColumnInfo {
         ColumnInfo {
