@@ -3016,6 +3016,8 @@ const en: Catalog = {
   "已複製為 {name}": "Cloned as {name}",
   "執行函式": "Execute function",
   "執行預存程序": "Execute stored procedure",
+  "過濾頻道或內容": "Filter by channel or content",
+  "（沒有符合的訊息）": "(No matching messages)",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",

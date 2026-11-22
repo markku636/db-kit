@@ -3,6 +3,11 @@
 /** MONITOR 輸出上限（仿 ARDM：一直捲不完會吃爆記憶體）。 */
 export const REDIS_MONITOR_MAX_LINES = 500;
 
+/** Pub/Sub 訊息過濾：比對頻道、樣式與內容（不分大小寫）。 */
+export function pubSubLineMatches(line: { channel: string; pattern: string | null; payload: string }, filter: string): boolean {
+  return monitorLineMatches(`${line.channel} ${line.pattern ?? ""} ${line.payload}`, filter);
+}
+
 /** 新的一行進來，保留最後 cap 行。 */
 export function appendMonitorLine(lines: readonly string[], line: string, cap = REDIS_MONITOR_MAX_LINES): string[] {
   return [...lines, line].slice(-cap);

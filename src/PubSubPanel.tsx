@@ -8,6 +8,7 @@ import Icon from "./ui/Icon";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useT } from "./i18n";
 import { acquireRedisPanel, releaseRedisPanel } from "./redisPanelOwnership";
+import { pubSubLineMatches } from "./redisUiFormat";
 
 interface Line {
   channel: string;
@@ -32,6 +33,7 @@ export default function PubSubPanel({ connId, connName, onClose }: {
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [lines, setLines] = useState<Line[]>([]);
+  const [filter, setFilter] = useState("");
   const [paused, setPaused] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // 發佈
@@ -128,6 +130,7 @@ export default function PubSubPanel({ connId, connName, onClose }: {
   };
 
   const { shellClass } = useModalView();
+  const visibleLines = filter.trim() ? lines.filter((l) => pubSubLineMatches(l, filter)) : lines;
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
@@ -162,6 +165,9 @@ export default function PubSubPanel({ connId, connName, onClose }: {
             className={`px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 inline-flex items-center gap-1 ${paused ? "text-amber-300" : "text-fg/60"}`}>
             {paused ? <><Icon icon={Play} size={14} /> {t("繼續")}</> : <><Icon icon={Pause} size={14} /> {t("暫停")}</>}
           </button>
+          <input value={filter} onChange={(e) => setFilter(e.target.value)}
+            placeholder={t("過濾頻道或內容")}
+            className="w-40 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
           <button type="button" onClick={() => setLines([])} title={t("清空訊息")}
             className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60">{t("清空")}</button>
         </div>
@@ -173,7 +179,10 @@ export default function PubSubPanel({ connId, connName, onClose }: {
           {lines.length === 0 && (
             <div className="text-fg/30">{t("訂閱後，符合的訊息會即時顯示在這裡。")}</div>
           )}
-          {lines.map((l, i) => (
+          {filter.trim() && lines.length > 0 && visibleLines.length === 0 && (
+            <div className="text-fg/30">{t("（沒有符合的訊息）")}</div>
+          )}
+          {visibleLines.map((l, i) => (
             <div key={i} className="mb-1 flex gap-2">
               <span className="text-fg/25 shrink-0">{l.at}</span>
               <span className="text-emerald-400/90 shrink-0 max-w-[180px] truncate" title={l.channel}>

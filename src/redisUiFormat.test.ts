@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl, normalizeAutoRefreshMs } from "./redisUiFormat";
+import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, pubSubLineMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl, normalizeAutoRefreshMs } from "./redisUiFormat";
 
 describe("fmtUptime", () => {
   it("不到一分鐘顯示秒數，不再顯示 0m", () => {
@@ -48,6 +48,12 @@ describe("monitor lines", () => {
     expect(monitorLineMatches("GET user:1", "get")).toBe(true);
     expect(monitorLineMatches("SET a 1", "get")).toBe(false);
     expect(monitorLineMatches("anything", "")).toBe(true);
+  });
+  it("Pub/Sub 可依頻道或內容過濾", () => {
+    const line = { channel: "news", pattern: null, payload: "Hello" };
+    expect(pubSubLineMatches(line, "NEWS")).toBe(true);
+    expect(pubSubLineMatches(line, "hello")).toBe(true);
+    expect(pubSubLineMatches(line, "sport")).toBe(false);
   });
 });
 
