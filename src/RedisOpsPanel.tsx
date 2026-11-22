@@ -149,6 +149,7 @@ function ClientsTab({ connId }: { connId: string }) {
       </div>
       <ErrBar err={err} />
       {!rows && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
+      {rows && rows.length === 0 && !err && <div className="text-fg/40 text-sm">{t("（無用戶端連線）")}</div>}
       {rows && rows.length > 0 && (
         <table className="text-xs mono w-full border-collapse">
           <thead><tr className="text-fg/45">

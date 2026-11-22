@@ -710,6 +710,7 @@ const en: Catalog = {
   "（無資料）": "(No data)",
   "（無資料庫）": "(No databases)",
   "（無慢查詢紀錄）": "(No slow query records)",
+  "（無用戶端連線）": "(No client connections)",
   "(無欄位資訊)": "(no column information)",
   "（等鎖）": "(waiting for lock)",
   "（僅列出與這段 SQL 最相關的 {n} 張表；未列出的表不代表沒有索引。）": "(Only the {n} tables most relevant to this statement are listed; a table not listed does not mean it has no indexes.)",

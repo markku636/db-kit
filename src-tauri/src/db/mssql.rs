@@ -950,13 +950,19 @@ impl DatabaseDriver for MssqlDriver {
         let (schema, tbl) = split_schema_table(table);
         let q = qualified_name(database, &schema, &tbl);
         let col = format!("[{}]", esc(column));
-        let rows = self
-            .query_rows(&format!("SELECT COUNT_BIG(*), COUNT_BIG({col}), COUNT_BIG(DISTINCT {col}) FROM {q}"))
-            .await?;
+        // DISTINCT 分開查：text / ntext / image / xml 不能比較排序，和原本不支援 MIN/MAX
+        // 一樣要 best-effort；放在同一條查詢會讓整個統計（連 total / non_null）都失敗。
+        let rows = self.query_rows(&column_count_sql(&col, &q)).await?;
         let r = rows.first().ok_or_else(|| AppError::Query(t!("欄位統計無結果").to_string()))?;
         let total = r.try_get::<i64, _>(0).ok().flatten().unwrap_or(0) as u64;
         let non_null = r.try_get::<i64, _>(1).ok().flatten().unwrap_or(0) as u64;
-        let distinct = r.try_get::<i64, _>(2).ok().flatten().unwrap_or(0) as u64;
+        let distinct = self
+            .query_rows(&column_distinct_sql(&col, &q))
+            .await
+            .ok()
+            .and_then(|dr| dr.first().and_then(|r| r.try_get::<i64, _>(0).ok().flatten()))
+            .unwrap_or(0)
+            .max(0) as u64;
         // MIN / MAX best-effort（text / image / xml 等型別不支援聚合）。
         let (min, max) = match self
             .query_rows(&format!(
@@ -1612,6 +1618,16 @@ fn is_proc_call_head(tok: &str) -> bool {
     (first.is_ascii_alphabetic() || first == b'_' || first >= 0x80) && !STATEMENT_HEADS.contains(&tok)
 }
 
+/// 欄位統計的總數 / 非 NULL 數（任何型別都支援）。
+fn column_count_sql(col: &str, qualified: &str) -> String {
+    format!("SELECT COUNT_BIG(*), COUNT_BIG({col}) FROM {qualified}")
+}
+
+/// 不同值數量：CAST 成 NVARCHAR 讓 text / xml 等非可比較型別也能算，失敗時呼叫端略過。
+fn column_distinct_sql(col: &str, qualified: &str) -> String {
+    format!("SELECT COUNT_BIG(DISTINCT CAST({col} AS NVARCHAR(4000))) FROM {qualified}")
+}
+
 /// NOCOUNT ON 的批次要補問 @@ROWCOUNT：Server 不回 DONE 計數，execute 會得到空陣列。
 fn needs_rowcount_fallback(sql: &str) -> bool {
     let code = tsql_code_only(sql);
@@ -1921,6 +1937,18 @@ SELECT SCOPE_IDENTITY()"));
         assert_eq!(t(r"db01\", 1433).instance, None);
         // IPv6 的方括號是 ADO.NET / 手填常見寫法，驅動要的是裸位址。
         assert_eq!(t("[::1]", 1433).host, "::1");
+    }
+
+    #[test]
+    fn column_stats_split_distinct_into_cast_best_effort() {
+        assert_eq!(
+            column_count_sql("[note]", "[db].[dbo].[t]"),
+            "SELECT COUNT_BIG(*), COUNT_BIG([note]) FROM [db].[dbo].[t]"
+        );
+        assert_eq!(
+            column_distinct_sql("[note]", "[db].[dbo].[t]"),
+            "SELECT COUNT_BIG(DISTINCT CAST([note] AS NVARCHAR(4000))) FROM [db].[dbo].[t]"
+        );
     }
 
     #[test]
