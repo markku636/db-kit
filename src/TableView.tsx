@@ -1440,7 +1440,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         {isRedis && (
           <>
             {!readonly && (
-              <button type="button" onClick={() => openNewKey()} title={t("新增鍵（String/List/Set/Hash/ZSet）")}
+              <button type="button" onClick={() => openNewKey()} title={t("新增鍵（String/List/Set/Hash/ZSet/Stream）")}
                 className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-emerald-300 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增鍵")}</button>
             )}
             <button type="button" onClick={() => setShowStatus(true)} title={t("伺服器狀態（INFO，可自動刷新）")}

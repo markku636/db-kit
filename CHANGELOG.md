@@ -1,10 +1,17 @@
 ## 未發佈
 
+新功能：
+
+- **Redis 主控台補齊指令語法提示**：原本沒有提示的 39 個唯讀指令現在都有（BITCOUNT、GEOSEARCH、ZREVRANGEBYSCORE、ZINTERCARD、ACL、CLUSTER、SCRIPT…）；並加了一致性檢查，日後唯讀白名單新增指令卻忘了加語法會在測試時失敗。
+
 修正：
 
 - **SQL Server 的 `GO 0` 不再執行批次**：`GO 0` 與 sqlcmd / SSMS 一樣是「跳過這個批次」，以前會當成執行一次。
 - **`[方括號識別字]` 裡的符號不再誤判**：`SELECT [odd;name]`、`SELECT [a--b]`、`SELECT [Price(USD)]` 以前會被當成語句 / 註解邊界或未配對括號，多行語句被切錯、編輯器畫出紅色毛毛蟲；現在和字串、雙引號識別字一樣正確略過（`]]` 跳脫也處理）。
 - **非 dbo 資料表「複製為 INSERT / SELECT / UPDATE / DELETE」產生正確 SQL**：`sales.orders` 以前整段包成 `[sales.orders]`（一個名字裡有點的完全不同資料表），現在是 `[sales].[orders]`，與「只改這一欄」一致。
+- **Redis 主控台不再把截斷結果當成完整資料**：`HGETALL` 一個五千欄的 hash 只會看到 1000 列，現在會明確寫「結果已達上限，僅顯示前 1000 列」；空結果也不再印 SQL 風格的「影響 0 列」，改印「無結果」。
+- **取消 FLUSHALL / KEYS 確認不再污染指令歷史**：以前按 ↑ 會叫出一個從來沒執行的 `FLUSHALL`；唯讀被擋下的指令也不再進歷史。
+- **「新增鍵」按鈕提示補上 Stream**：本來就支援建立 Stream，提示的文字漏了。
 
 ## v0.60.3
 

@@ -1507,7 +1507,7 @@ export function isDangerousRedisCommand(cmd: string): boolean {
 // Redis 唯讀指令白名單（僅讀取 / 不改資料與伺服器狀態）。用「白名單」而非黑名單：
 // Redis 有兩百多個指令且各版本會新增，漏掉一個寫入指令的代價是唯讀連線被寫穿，
 // 漏掉一個讀取指令只是使用者要自己關掉唯讀模式，兩邊的失敗方向差很多。
-const REDIS_READ_ONLY = new Set([
+export const REDIS_READ_ONLY = new Set([
   // 通用 / 鍵空間
   "get", "getrange", "mget", "strlen", "substr", "exists", "type", "ttl", "pttl", "expiretime",
   "pexpiretime", "keys", "scan", "randomkey", "dbsize", "touch", "dump",

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { completeRedisCommand, isBlockingKeysCommand, redisCommandHint } from "./redisCommandHints";
+import { REDIS_READ_ONLY } from "./sql";
+import { completeRedisCommand, isBlockingKeysCommand, redisCommandHint, REDIS_COMMAND_SYNTAX } from "./redisCommandHints";
 
 describe("redisCommandHint", () => {
   it("完整的指令名稱給語法（不分大小寫、可帶 DB 前綴）", () => {
@@ -27,6 +28,19 @@ describe("completeRedisCommand", () => {
   it("已經在打參數、或沒有候選時不動", () => {
     expect(completeRedisCommand("GET k")).toBeNull();
     expect(completeRedisCommand("qqq")).toBeNull();
+  });
+});
+
+describe("指令語法表完整性", () => {
+  it("唯讀白名單的每個指令都有語法提示（日後新增指令不會漏掉提示）", () => {
+    const missing = [...REDIS_READ_ONLY].filter((cmd) => !(cmd.toUpperCase() in REDIS_COMMAND_SYNTAX));
+    expect(missing).toEqual([]);
+  });
+  it("新增的常用指令查得到語法", () => {
+    // Bitmap / Geo / ZSet 變體與容器指令的子命令以前打一半都沒有提示。
+    for (const cmd of ["BITCOUNT", "GEOSEARCH", "ZREVRANGEBYSCORE", "ZINTERCARD", "ACL", "CLUSTER", "SCRIPT"]) {
+      expect(redisCommandHint(cmd.toLowerCase()).syntax).toBeTruthy();
+    }
   });
 });
 

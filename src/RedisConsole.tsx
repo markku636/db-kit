@@ -5,6 +5,7 @@ import { uiConfirm } from "./ui";
 import { useStore } from "./store";
 import { isDangerousRedisCommand, isReadOnlyRedisCommand } from "./sql";
 import { completeRedisCommand, isBlockingKeysCommand, redisCommandHint } from "./redisCommandHints";
+import { formatRedisConsoleLines, recordRedisConsoleHistory } from "./redisConsoleFormat";
 import Icon from "./ui/Icon";
 import { Modal } from "./ui/index";
 import { useT } from "./i18n";
@@ -44,8 +45,6 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
   const run = async () => {
     const cmd = input.trim();
     if (!cmd || busy) return;
-    setHistory((h) => (h[h.length - 1] === cmd ? h : [...h, cmd]));
-    setHistPos(-1);
     setInput("");
 
     // 本地指令：清空畫面。
@@ -84,12 +83,14 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
     const m = /^(\d{1,18}):/.exec(cmd);
     const effDb = m ? m[1] : db;
     const wire = m ? cmd : `${db}:${cmd}`;
+    // 歷史只在確定要送出的指令上記一筆：取消 FLUSH/KEYS 確認或沒通過唯讀擋下的
+    // 指令不該在按 ↑ 時跑出來（以前在確認前就記，取消還留一條 FLUSHALL）。
+    setHistory((h) => recordRedisConsoleHistory(h, cmd));
+    setHistPos(-1);
     setBusy(true);
     try {
       const res = await api.runQuery(connId, wire);
-      const lines = res.rows.length
-        ? res.rows.map((r) => r[0] ?? "(nil)")
-        : [t("(已執行；影響 {rows_affected} 列)", { rows_affected: res.rows_affected })];
+      const lines = formatRedisConsoleLines(res, t);
       setEntries((e) => [...e, { db: effDb, cmd, lines }]);
     } catch (err: any) {
       setEntries((e) => [...e, { db: effDb, cmd, lines: [err?.message ?? t("錯誤")], error: true }]);
