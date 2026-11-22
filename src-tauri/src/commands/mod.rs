@@ -35,7 +35,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::backup::{self, BackupResult};
 use crate::db::{
-    AlterOp, BigKey, CellEdit, ClientInfo, ColumnInfo, ConnectionConfig, DataQuery, ErModel,
+    AlterOp, BatchUpdateResult, BigKey, CellEdit, ClientInfo, ColumnInfo, ConnectionConfig, DataQuery, ErModel,
     ForeignKeyInfo, KeyDetail, KeyEdit, KeyPage, MongoIndexOptions, MongoIndexStat, MongoOp,
     MongoProfile, MongoSlowQuery, MongoValidation, PagedData, PoolStatus, QueryResult, RedisKeys,
     RoutineInfo, RowDelete, RowInsert, SearchHit, SearchOptions, ServerInfoSection, SlowLogEntry, TableColumns,
@@ -926,6 +926,18 @@ pub async fn update_cell(
     edit: CellEdit,
 ) -> AppResult<u64> {
     state.manager.update_cell(&id, &database, &table, &edit).await
+}
+
+/// 批次套用多格編輯。關聯式驅動走單一交易，失敗全數回滾（見 BatchUpdateResult.atomic）。
+#[tauri::command]
+pub async fn update_cells(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    table: String,
+    edits: Vec<CellEdit>,
+) -> AppResult<BatchUpdateResult> {
+    state.manager.update_cells(&id, &database, &table, &edits).await
 }
 
 #[tauri::command]

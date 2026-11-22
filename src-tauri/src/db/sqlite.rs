@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::db::{
     filter_op_sql, finalize_hits, group_table_columns, make_snippet, op_needs_value, sqlx_db_message, AlterOp, CellEdit,
-    ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable,
+    BatchUpdateResult, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable,
     Filter, ForeignKeyInfo, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, SearchHit,
     SearchOptions, Sort, SortDir, TableColumns, TableInfo, ValidationReport,
 };
@@ -469,35 +469,37 @@ impl DatabaseDriver for SqliteDriver {
         table: &str,
         edit: &CellEdit,
     ) -> AppResult<u64> {
-        if edit.pk_columns.is_empty() {
-            return Err(AppError::Query(t!("此表無主鍵，無法安全更新").to_string()));
-        }
-        if edit.pk_columns.len() != edit.pk_values.len() {
-            return Err(AppError::Query(t!("主鍵欄位與值數量不符").to_string()));
-        }
-        if edit.pk_values.iter().any(|v| v.is_none()) {
-            return Err(AppError::Query(t!("主鍵值為 NULL，無法定位該列").to_string()));
-        }
-
-        let q_tbl = quote_ident(table);
-        let q_col = quote_ident(&edit.column);
-        let where_clause = edit
-            .pk_columns
-            .iter()
-            .map(|c| format!("{} = ?", quote_ident(c)))
-            .collect::<Vec<_>>()
-            .join(" AND ");
-
-        let sql = format!("UPDATE {q_tbl} SET {q_col} = ? WHERE {where_clause}");
-        let mut q = sqlx::query(&sql).bind(edit.new_value.clone());
-        for v in &edit.pk_values {
-            q = q.bind(v.clone());
-        }
+        let (sql, binds) = sqlite_cell_update(table, edit)?;
+        let mut q = sqlx::query(&sql);
+        for v in &binds { q = q.bind(v.clone()); }
         let res = q
             .execute(&self.pool)
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
         Ok(res.rows_affected())
+    }
+
+    async fn update_cells(
+        &self,
+        _database: &str,
+        table: &str,
+        edits: &[CellEdit],
+    ) -> AppResult<BatchUpdateResult> {
+        // 先把所有語句組好再開交易：任何一筆驗證失敗就完全不碰 DB。
+        let mut prepared = Vec::with_capacity(edits.len());
+        for edit in edits { prepared.push(sqlite_cell_update(table, edit)?); }
+        let mut tx = self.pool.begin().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut applied = 0;
+        for (sql, binds) in &prepared {
+            let mut q = sqlx::query(sql);
+            for v in binds { q = q.bind(v.clone()); }
+            applied += q.execute(&mut *tx)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?
+                .rows_affected();
+        }
+        tx.commit().await.map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(BatchUpdateResult { applied, atomic: true })
     }
 
     async fn insert_row(
@@ -880,6 +882,30 @@ fn build_where(filters: &[Filter], match_any: bool) -> AppResult<(String, Vec<Op
     }
     let connector = if match_any { " OR " } else { " AND " };
     Ok((format!(" WHERE {}", clauses.join(connector)), binds))
+}
+
+/// 組單格 UPDATE 的 SQL 與綁定值（先 SET 值、再主鍵值），供單筆與批次共用。
+fn sqlite_cell_update(table: &str, edit: &CellEdit) -> AppResult<(String, Vec<Option<String>>)> {
+    if edit.pk_columns.is_empty() {
+        return Err(AppError::Query(t!("此表無主鍵，無法安全更新").to_string()));
+    }
+    if edit.pk_columns.len() != edit.pk_values.len() {
+        return Err(AppError::Query(t!("主鍵欄位與值數量不符").to_string()));
+    }
+    if edit.pk_values.iter().any(|v| v.is_none()) {
+        return Err(AppError::Query(t!("主鍵值為 NULL，無法定位該列").to_string()));
+    }
+    let where_clause = edit.pk_columns.iter()
+        .map(|c| format!("{} = ?", quote_ident(c)))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let sql = format!(
+        "UPDATE {} SET {} = ? WHERE {}",
+        quote_ident(table), quote_ident(&edit.column), where_clause
+    );
+    let mut binds = vec![edit.new_value.clone()];
+    binds.extend(edit.pk_values.iter().cloned());
+    Ok((sql, binds))
 }
 
 fn build_order(sorts: &[Sort], pk: &[String]) -> String {

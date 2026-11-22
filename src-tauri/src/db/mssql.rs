@@ -5,7 +5,7 @@ use bb8_tiberius::ConnectionManager;
 use tiberius::{AuthMethod, ColumnType, Config, EncryptionLevel};
 
 use crate::db::{
-    filter_op_sql, fmt_bytes, group_table_columns, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery,
+    filter_op_sql, fmt_bytes, group_table_columns, BatchUpdateResult, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery,
     DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable, Filter, ForeignKeyInfo, IndexInfo,
     PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert, Sort, SortDir, TableColumns, TableInfo,
 };
@@ -661,18 +661,32 @@ impl DatabaseDriver for MssqlDriver {
     }
 
     async fn update_cell(&self, database: &str, table: &str, edit: &CellEdit) -> AppResult<u64> {
-        let (schema, tbl) = split_schema_table(table);
-        let qualified = qualified_name(database, &schema, &tbl);
-        let set_val = match &edit.new_value {
-            Some(v) => lit(v),
-            None => "NULL".to_string(),
-        };
-        let where_sql = pk_where(&edit.pk_columns, &edit.pk_values)?;
-        let sql = format!(
-            "UPDATE {qualified} SET [{}] = {set_val} WHERE {where_sql}",
-            esc(&edit.column)
-        );
-        self.exec(&sql).await
+        self.exec(&mssql_cell_update_sql(database, table, edit)?).await
+    }
+
+    async fn update_cells(
+        &self,
+        database: &str,
+        table: &str,
+        edits: &[CellEdit],
+    ) -> AppResult<BatchUpdateResult> {
+        // 全部在同一條連線的明確交易裡；任一筆失敗就 ROLLBACK，不留半套變更。
+        let mut sqls = Vec::with_capacity(edits.len());
+        for edit in edits { sqls.push(mssql_cell_update_sql(database, table, edit)?); }
+        let mut conn = self.pooled().await?;
+        conn.execute("BEGIN TRAN", &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut applied = 0u64;
+        for sql in &sqls {
+            match conn.execute(sql, &[]).await {
+                Ok(res) => applied += res.rows_affected().iter().sum::<u64>(),
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK TRAN", &[]).await;
+                    return Err(AppError::Query(e.to_string()));
+                }
+            }
+        }
+        conn.execute("COMMIT TRAN", &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(BatchUpdateResult { applied, atomic: true })
     }
 
     async fn insert_row(&self, database: &str, table: &str, row: &RowInsert) -> AppResult<u64> {
@@ -1743,6 +1757,21 @@ fn build_where(filters: &[Filter], match_any: bool) -> String {
     } else {
         format!("WHERE {}", parts.join(joiner))
     }
+}
+
+/// 單格 UPDATE 的 SQL（ literals 已由 lit() 跳脫），供單筆與批次共用。
+fn mssql_cell_update_sql(database: &str, table: &str, edit: &CellEdit) -> AppResult<String> {
+    let (schema, tbl) = split_schema_table(table);
+    let qualified = qualified_name(database, &schema, &tbl);
+    let set_val = match &edit.new_value {
+        Some(v) => lit(v),
+        None => "NULL".to_string(),
+    };
+    let where_sql = pk_where(&edit.pk_columns, &edit.pk_values)?;
+    Ok(format!(
+        "UPDATE {qualified} SET [{}] = {set_val} WHERE {where_sql}",
+        esc(&edit.column)
+    ))
 }
 
 fn build_order(sorts: &[Sort], pk: &[String]) -> String {

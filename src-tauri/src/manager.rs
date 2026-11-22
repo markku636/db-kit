@@ -19,7 +19,7 @@ use crate::db::rabbitmq::RabbitMqDriver;
 #[cfg(feature = "docker")]
 use crate::db::container::ContainerDriver;
 use crate::db::{
-    AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, DbKind,
+    AlterOp, BatchUpdateResult, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, DbKind,
     ErModel, ForeignKeyInfo, IndexInfo, KeyDetail, KeyEdit, PagedData, PoolStatus, QueryResult, RedisKeys,
     RoutineInfo, RowDelete, RowInsert, SearchHit, SearchOptions, ServerInfoSection, TableColumns, TableInfo, ValidationReport,
 };
@@ -286,6 +286,31 @@ impl Active {
             #[cfg(feature = "elastic")]
             Active::Elastic(d) => d.update_cell(database, table, edit).await,
             Active::Dyn(d) => d.update_cell(database, table, edit).await,
+        }
+    }
+    async fn update_cells(
+        &self,
+        database: &str,
+        table: &str,
+        edits: &[CellEdit],
+    ) -> AppResult<BatchUpdateResult> {
+        match self {
+            Active::Mysql(d) => d.update_cells(database, table, edits).await,
+            Active::Postgres(d) => d.update_cells(database, table, edits).await,
+            Active::Sqlite(d) => d.update_cells(database, table, edits).await,
+            Active::Mongo(d) => d.update_cells(database, table, edits).await,
+            Active::Redis(d) => d.update_cells(database, table, edits).await,
+            Active::Mssql(d) => d.update_cells(database, table, edits).await,
+            Active::Oracle(d) => d.update_cells(database, table, edits).await,
+            #[cfg(feature = "kafka")]
+            Active::Kafka(d) => d.update_cells(database, table, edits).await,
+            #[cfg(feature = "rabbitmq")]
+            Active::RabbitMq(d) => d.update_cells(database, table, edits).await,
+            #[cfg(feature = "docker")]
+            Active::Container(d) => d.update_cells(database, table, edits).await,
+            #[cfg(feature = "elastic")]
+            Active::Elastic(d) => d.update_cells(database, table, edits).await,
+            Active::Dyn(d) => d.update_cells(database, table, edits).await,
         }
     }
     async fn insert_row(
@@ -1295,6 +1320,16 @@ impl ConnectionManager {
         edit: &CellEdit,
     ) -> AppResult<u64> {
         self.get(id)?.active.update_cell(database, table, edit).await
+    }
+
+    pub async fn update_cells(
+        &self,
+        id: &str,
+        database: &str,
+        table: &str,
+        edits: &[CellEdit],
+    ) -> AppResult<BatchUpdateResult> {
+        self.get(id)?.active.update_cells(database, table, edits).await
     }
 
     pub async fn insert_row(

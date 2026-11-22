@@ -378,6 +378,13 @@ pub struct CellEdit {
     pub pk_values: Vec<Option<String>>,
 }
 
+/// 批次更新結果。`atomic=false` 表示驅動只能逐筆套用，失敗時前面幾筆已經寫入。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchUpdateResult {
+    pub applied: u64,
+    pub atomic: bool,
+}
+
 /// 新增列請求：欄位名 → 值。未列出的欄位交由 DB 預設值處理。
 #[derive(Debug, Clone, Deserialize)]
 pub struct RowInsert {
@@ -1252,6 +1259,21 @@ pub trait DatabaseDriver: Send + Sync {
         table: &str,
         edit: &CellEdit,
     ) -> AppResult<u64>;
+
+    /// 一次套用多筆儲存格變更。關聯式驅動應覆寫為單一交易（全成功或全失敗）；
+    /// 預設逐筆套用，回 `atomic:false` 讓前端明確告知「部分已寫入」。
+    async fn update_cells(
+        &self,
+        database: &str,
+        table: &str,
+        edits: &[CellEdit],
+    ) -> AppResult<BatchUpdateResult> {
+        let mut applied = 0;
+        for edit in edits {
+            applied += self.update_cell(database, table, edit).await?;
+        }
+        Ok(BatchUpdateResult { applied, atomic: false })
+    }
 
     /// 新增一列。
     async fn insert_row(

@@ -266,6 +266,7 @@ pub fn run() {
             commands::save_base64_file,
             commands::read_text_file,
             commands::update_cell,
+            commands::update_cells,
             commands::insert_row,
             commands::delete_row,
             commands::pool_status,

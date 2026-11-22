@@ -376,6 +376,36 @@ async fn sqlite_explain_query_plan_returns_rows() {
     let _ = std::fs::remove_file(&dbfile);
 }
 
+/// 多格編輯要在單一交易內：第二格違反 CHECK 時，第一格也不能留在 DB 裡。
+#[tokio::test]
+async fn sqlite_batch_cell_updates_roll_back_together() {
+    let dbfile = format!("dbkit_it_batch_{}.db", std::process::id());
+    let _ = std::fs::remove_file(&dbfile);
+    let c = cfg(DbKind::Sqlite, "", 0, "", "", Some(dbfile.as_str()));
+    {
+        let d = SqliteDriver::connect(&c).await.unwrap();
+        d.query("CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, b TEXT CHECK (b <> 'bad'))").await.unwrap();
+        d.query("INSERT INTO t (id, a, b) VALUES (1, 'old', 'ok')").await.unwrap();
+        let edits = vec![
+            CellEdit {
+                column: "a".into(), new_value: Some("new".into()),
+                pk_columns: vec!["id".into()], pk_values: vec![Some("1".into())],
+            },
+            CellEdit {
+                column: "b".into(), new_value: Some("bad".into()),
+                pk_columns: vec!["id".into()], pk_values: vec![Some("1".into())],
+            },
+        ];
+        let res = d.update_cells("", "t", &edits).await;
+        assert!(res.is_err(), "第二格違反 CHECK 應讓整批失敗");
+        let r = d.query("SELECT a, b FROM t WHERE id = 1").await.unwrap();
+        assert_eq!(r.rows[0][0].as_deref(), Some("old"), "第一筆也必須回滾");
+        assert_eq!(r.rows[0][1].as_deref(), Some("ok"));
+        d.close().await;
+    }
+    let _ = std::fs::remove_file(&dbfile);
+}
+
 /// SQLite 取消：progress handler 讓執行中的長查詢（無窮遞迴 CTE）中止，
 /// 而且那條連線還池後，下一個查詢不會被殘留的取消旗標誤殺。
 #[tokio::test]

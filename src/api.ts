@@ -1821,6 +1821,9 @@ export const api = {
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   updateCell: (id: string, database: string, table: string, edit: CellEdit) =>
     invoke<number>("update_cell", { id, database, table, edit }),
+  // 批次更新：關聯式驅動在單一交易內完成，失敗全數回滾（atomic=true）。
+  updateCells: (id: string, database: string, table: string, edits: CellEdit[]) =>
+    invoke<{ applied: number; atomic: boolean }>("update_cells", { id, database, table, edits }),
   insertRow: (id: string, database: string, table: string, row: RowInsert) =>
     invoke<number>("insert_row", { id, database, table, row }),
   deleteRow: (id: string, database: string, table: string, del: RowDelete) =>

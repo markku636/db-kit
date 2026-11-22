@@ -745,32 +745,25 @@ function DataPane({ tab }: { tab: OpenTab }) {
     if (!(await confirmProdWrite(t("寫入 {n} 筆儲存格變更", { n: dirtyCount })))) return;
     setApplying(true);
     setErr(null);
-    let applied = 0;
-    const total = dirtyCount;
     try {
-      for (const [key, newVal] of Object.entries(edits)) {
+      // 一次送出所有變更：關聯式驅動用單一交易，哪一格違反 constraint 就整批回滾，
+      // 不會像以前那樣前 6 格寫進去、第 7 格失敗留下半套資料。
+      const batch = Object.entries(edits).map(([key, newVal]) => {
         const [rStr, cStr] = key.split(":");
         const r = Number(rStr);
         const c = Number(cStr);
-        const pkValues = pkLocate(r);
-        await api.updateCell(tab.connId, tab.database, tab.table, {
+        return {
           column: data.columns[c],
           new_value: newVal,
           pk_columns: data.primary_key,
-          pk_values: pkValues,
-        });
-        applied++;
-      }
+          pk_values: pkLocate(r),
+        };
+      });
+      await api.updateCells(tab.connId, tab.database, tab.table, batch);
       load();
     } catch (e: any) {
       const msg = e?.message ?? t("未知錯誤");
-      // 逐筆套用：失敗前已套用的 (applied) 筆已寫入 DB。明確告知部分套用狀態，
-      // 重新套用是安全的（已套用者會以相同值覆寫，等同無變化）。
-      setErr(
-        applied > 0
-          ? t("已套用 {applied}/{total} 筆，第 {next} 筆失敗：{msg}。修正後可再次套用（已套用者會以相同值覆寫，不會重複）。", { applied, total, next: applied + 1, msg })
-          : t("套用失敗：{msg}", { msg })
-      );
+      setErr(t("批次更新失敗：{msg}。關聯式連線會整批回滾；其他連線可能已部分寫入。", { msg }));
     } finally {
       setApplying(false);
     }

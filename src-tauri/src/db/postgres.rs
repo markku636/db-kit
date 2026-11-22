@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::db::{
     classify_match, collect_relations, filter_op_sql, finalize_hits, fmt_bytes, group_table_columns,
-    make_snippet, op_needs_value, sqlx_db_message, AlterOp, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver,
+    make_snippet, op_needs_value, sqlx_db_message, AlterOp, BatchUpdateResult, CellEdit, ColumnInfo, ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver,
     ErColumn, ErModel, ErTable, Filter, ForeignKeyInfo, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo,
     RowDelete, RowInsert, SearchHit, SearchOptions, Sort, SortDir, TableColumns, TableInfo, ValidationReport,
 };
@@ -460,44 +460,36 @@ impl DatabaseDriver for PostgresDriver {
         table: &str,
         edit: &CellEdit,
     ) -> AppResult<u64> {
-        if edit.pk_columns.is_empty() {
-            return Err(AppError::Query(t!("此表無主鍵，無法安全更新").to_string()));
-        }
-        if edit.pk_columns.len() != edit.pk_values.len() {
-            return Err(AppError::Query(t!("主鍵欄位與值數量不符").to_string()));
-        }
-        if edit.pk_values.iter().any(|v| v.is_none()) {
-            return Err(AppError::Query(t!("主鍵值為 NULL，無法定位該列").to_string()));
-        }
-
-        let q_tbl = format!("{}.{}", quote_ident(database), quote_ident(table));
-        let q_col = quote_ident(&edit.column);
-
-        // 新值轉成目標欄位型別（嚴格型別：text 不會隱式轉 int / uuid / bool…）。
-        let udt = self.column_udt_map(database, table).await.unwrap_or_default();
-        let set_ph = bind_placeholder(1, &edit.column, &udt);
-
-        // PG 用 $1, $2… 佔位符。$1 為新值，主鍵從 $2 起。
-        // 主鍵比對把欄位轉 text（pk::text = $n）：等值比較正確，且不需逐型別轉換，
-        // 整數 / UUID 等主鍵也能定位（否則 integer = text 報錯，無法更新該列）。
-        let where_clause = edit
-            .pk_columns
-            .iter()
-            .enumerate()
-            .map(|(i, c)| format!("{}::text = ${}", quote_ident(c), i + 2))
-            .collect::<Vec<_>>()
-            .join(" AND ");
-
-        let sql = format!("UPDATE {q_tbl} SET {q_col} = {set_ph} WHERE {where_clause}");
-        let mut q = sqlx::query(&sql).bind(edit.new_value.clone());
-        for v in &edit.pk_values {
-            q = q.bind(v.clone());
-        }
+        let (sql, binds) = self.pg_cell_update(database, table, edit).await?;
+        let mut q = sqlx::query(&sql);
+        for v in &binds { q = q.bind(v.clone()); }
         let res = q
             .execute(&self.pool)
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
         Ok(res.rows_affected())
+    }
+
+    async fn update_cells(
+        &self,
+        database: &str,
+        table: &str,
+        edits: &[CellEdit],
+    ) -> AppResult<BatchUpdateResult> {
+        let mut prepared = Vec::with_capacity(edits.len());
+        for edit in edits { prepared.push(self.pg_cell_update(database, table, edit).await?); }
+        let mut tx = self.pool.begin().await.map_err(|e| AppError::Query(e.to_string()))?;
+        let mut applied = 0;
+        for (sql, binds) in &prepared {
+            let mut q = sqlx::query(sql);
+            for v in binds { q = q.bind(v.clone()); }
+            applied += q.execute(&mut *tx)
+                .await
+                .map_err(|e| AppError::Query(e.to_string()))?
+                .rows_affected();
+        }
+        tx.commit().await.map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(BatchUpdateResult { applied, atomic: true })
     }
 
     async fn insert_row(
@@ -1310,6 +1302,33 @@ impl DatabaseDriver for PostgresDriver {
 }
 
 impl PostgresDriver {
+    /// 組單格 UPDATE 的 SQL 與綁定值（先 SET 值、再主鍵值），供單筆與批次共用。
+    async fn pg_cell_update(&self, database: &str, table: &str, edit: &CellEdit) -> AppResult<(String, Vec<Option<String>>)> {
+        if edit.pk_columns.is_empty() {
+            return Err(AppError::Query(t!("此表無主鍵，無法安全更新").to_string()));
+        }
+        if edit.pk_columns.len() != edit.pk_values.len() {
+            return Err(AppError::Query(t!("主鍵欄位與值數量不符").to_string()));
+        }
+        if edit.pk_values.iter().any(|v| v.is_none()) {
+            return Err(AppError::Query(t!("主鍵值為 NULL，無法定位該列").to_string()));
+        }
+        let udt = self.column_udt_map(database, table).await.unwrap_or_default();
+        let set_ph = bind_placeholder(1, &edit.column, &udt);
+        // $1 是新值、主鍵從 $2 起；pk::text 讓整數 / UUID 主鍵也能用字串綁定比對。
+        let where_clause = edit.pk_columns.iter().enumerate()
+            .map(|(i, c)| format!("{}::text = ${}", quote_ident(c), i + 2))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let sql = format!(
+            "UPDATE {}.{} SET {} = {} WHERE {}",
+            quote_ident(database), quote_ident(table), quote_ident(&edit.column), set_ph, where_clause
+        );
+        let mut binds = vec![edit.new_value.clone()];
+        binds.extend(edit.pk_values.iter().cloned());
+        Ok((sql, binds))
+    }
+
     /// 開一條**不經連線池**的專屬連線（acquire 後立刻 detach）：預存程序整合測試的一個情境要在同一條
     /// 連線上從 BEGIN 跑到 ROLLBACK（SAVEPOINT / 暫存表 / 游標都是連線狀態），結束即丟棄，不回池。
     pub(crate) async fn dedicated_connection(&self) -> AppResult<sqlx::postgres::PgConnection> {
