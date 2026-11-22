@@ -471,7 +471,7 @@ impl RedisDriver {
                         _ => String::new(),
                     };
                     out.push(SlowLogEntry {
-                        id: rv_as_i64(f.get(0)),
+                        id: rv_as_i64(f.first()),
                         time: rv_as_i64(f.get(1)),
                         duration_us: rv_as_i64(f.get(2)),
                         command,
@@ -1609,7 +1609,7 @@ async fn scan_all_keys(
 ) -> AppResult<(Vec<String>, bool)> {
     let mut all: Vec<String> = Vec::new();
     let mut cursor: u64 = 0;
-    let mut truncated = false;
+    let truncated;
     loop {
         let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
             .arg(cursor)
