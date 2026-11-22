@@ -399,9 +399,10 @@ impl RedisDriver {
                 // 下一頁的起點 = 上一頁最後一個 ID 的下一號（包含式區間）。不用 `(id` 排他區間：那要 Redis 6.2+。
                 let mut start = after_id.map(next_stream_id).unwrap_or_else(|| "-".to_string());
                 let mut last_id: Option<String> = None;
+                let mut hit_scan_cap = false;
                 // 有過濾時要一直往後撈到「湊滿一頁符合的」或到底，否則稀有符合項會藏在
                 // 被丟掉的原始頁裡，使用者看到空頁 + 一個永遠載不完的「載入更多」。
-                for _ in 0..20 {
+                for page_no in 0..20 {
                     let raw: redis::Value = redis::cmd("XRANGE")
                         .arg(key)
                         .arg(&start)
@@ -428,9 +429,14 @@ impl RedisDriver {
                     let next = next_stream_id(last_id.as_deref().unwrap_or(&start));
                     let exhausted = fetched < count || next == start;
                     start = next;
-                    if page.members.len() >= count || exhausted { break; }
+                    if page.members.len() >= count || exhausted {
+                        // 20 頁上限到了但還沒撈滿、也不是真的到底 → 仍要給下一頁起點，
+                        // 否則稀疏過濾的符合項會被藏在後面，使用者再也載不到。
+                        if page_no == 19 && !exhausted { hit_scan_cap = true; }
+                        break;
+                    }
                 }
-                page.next_id = if page.members.len() >= count { last_id } else { None };
+                page.next_id = if page.members.len() >= count || hit_scan_cap { last_id } else { None };
                 page.cursor = u64::from(page.next_id.is_some());
                 if after_id.is_none() {
                     // 群組資訊只在第一頁取；XINFO 失敗（舊版 / 權限）不影響項目本身。
@@ -720,8 +726,16 @@ impl DatabaseDriver for RedisDriver {
         if let Some(master) = sentinel_master(config).filter(|s| !s.is_empty()) {
             let mut sentinel = redis::sentinel::Sentinel::build(vec![info.clone()])
                 .map_err(|e| AppError::Connect(format!("建立 Sentinel 失敗：{e}")))?;
+            // 不帶 SentinelNodeConnectionInfo 的話，找到的 master 連線會沒有帳密 / TLS，
+            // 之後每次操作都 NOAUTH 或 TLS 失敗。要把原本的認證與加密設定一併帶過去。
+            let node = redis::sentinel::SentinelNodeConnectionInfo {
+                tls_mode: use_tls.then(|| {
+                    if tls_insecure { redis::TlsMode::Insecure } else { redis::TlsMode::Secure }
+                }),
+                redis_connection_info: Some(info.redis.clone()),
+            };
             let master_client = sentinel
-                .async_master_for(master, None)
+                .async_master_for(master, Some(&node))
                 .await
                 .map_err(|e| AppError::Connect(format!("找不到 Sentinel master「{master}」：{e}")))?;
             info = master_client.get_connection_info().clone();

@@ -4,6 +4,8 @@
 
 - **Redis 鍵樹可自訂分隔符（仿 Another Redis Desktop Manager 的 `--separator`）**：工具列多了「分隔」輸入框，鍵名用 `/`、`::` 等非冒號慣例分層時可以正確展開；設定會記住，不必每次重設。
 - **匯出單鍵為 JSON（仿 ARDM 的 Export keys）**：鍵詳情右上「匯出」把目前載入的 key / type / TTL / 值存成 JSON；集合型只含已載入的頁，`partial` 欄位會明講，不會讓人誤以為是完整資料。
+- **Pub/Sub 與 MONITOR 的面板計數分開**：兩者是不同背景任務，同時打開時其中一個手動停止 / 關閉不會誤讓另一個任務留著或斷掉。
+- **Sentinel 找到 master 後仍帶著原本的帳密 / TLS**：之前 discovery 成功但後續連線全數 NOAUTH 或 TLS 失敗；連線字串裡的 master 名稱現在也會被解析進表單。
 - **Redis Sentinel 連線（仿 ARDM 的 Sentinel Support）**：連線對話框多了「Sentinel Master 名稱」，填入後主機／埠指向 Sentinel 節點，程式自動問出目前 master 再連；master 名稱也會隨連線字串解析保留。
 - **自訂分隔符在右鍵選單裡生效**：分隔符現在按「連線 + DB」記錄，資料夾右鍵的新增鍵 / 只顯示此命名空間不再用錯冒號前綴。
 - **「匯出此鍵」匯出完整內容**：按過「載入更多」後，之前仍只匯出第一頁且永遠標 partial（因此無法匯回）；現在用累積的結果與目前游標產生 JSON。

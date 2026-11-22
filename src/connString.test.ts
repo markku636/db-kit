@@ -263,6 +263,8 @@ describe("applyParsedToForm", () => {
     const r = applyParsedToForm(parsed({ kind: "redis", host: "h", options: { redis_tls: "true", redis_tls_insecure: "true" } }), base());
     expect(r.next.redisTls).toBe(true);
     expect(r.next.redisTlsInsecure).toBe(true);
+    const s = applyParsedToForm(parsed({ kind: "redis", host: "sentinel", options: { redis_sentinel_master: "mymaster" } }), base());
+    expect(s.next.redisSentinelMaster).toBe("mymaster");
 
     const m = applyParsedToForm(parsed({ kind: "mongo", host: "h", options: { mongo_srv: "1", mongo_direct: "1" } }), base());
     expect(m.next.mongoSrv).toBe(true);

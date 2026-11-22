@@ -288,6 +288,7 @@ export function applyParsedToForm(p: ParsedUrl, cur: ConnFormFields): ApplyResul
   if (o.ssl_ca != null) next.sslCa = o.ssl_ca;
   if (o.redis_tls != null) next.redisTls = optBool(o.redis_tls);
   if (o.redis_tls_insecure != null) next.redisTlsInsecure = optBool(o.redis_tls_insecure);
+  if (o.redis_sentinel_master != null) next.redisSentinelMaster = o.redis_sentinel_master;
   if (o.mongo_srv != null) next.mongoSrv = optBool(o.mongo_srv);
   if (o.mongo_auth_source != null) next.mongoAuthSource = o.mongo_auth_source;
   if (o.mongo_replica_set != null) next.mongoReplicaSet = o.mongo_replica_set;

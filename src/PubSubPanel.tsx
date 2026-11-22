@@ -53,12 +53,12 @@ export default function PubSubPanel({ connId, connName, onClose }: {
   // 側欄與分頁工具列可能各開一個面板：只有最後一個關掉才真的取消訂閱。
   useEffect(() => {
     aliveRef.current = true;
-    acquireRedisPanel(connId, ownerId.current);
+    acquireRedisPanel(`pubsub:${connId}`, ownerId.current);
     return () => {
       aliveRef.current = false;
       unlistenRef.current?.();
       unlistenErrRef.current?.();
-      if (releaseRedisPanel(connId, ownerId.current) === 0) {
+      if (releaseRedisPanel(`pubsub:${connId}`, ownerId.current) === 0) {
         api.redisUnsubscribe(connId).catch(() => { /* 忽略 */ });
       }
     };
@@ -128,7 +128,7 @@ export default function PubSubPanel({ connId, connName, onClose }: {
     setBusy(true);
     try {
       // 側欄與分頁可能各開一個面板：還有別人在用就只關掉自己，不要停掉共用任務。
-      if (!hasOtherRedisPanel(connId, ownerId.current)) await api.redisUnsubscribe(connId);
+      if (!hasOtherRedisPanel(`pubsub:${connId}`, ownerId.current)) await api.redisUnsubscribe(connId);
       setSubscribed(false);
     } catch (e: any) {
       setErr(e?.message ?? t("取消訂閱失敗"));

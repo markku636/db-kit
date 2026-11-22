@@ -2059,12 +2059,14 @@ pub async fn redis_monitor_start(
             Ok(c) => c,
             Err(e) => {
                 let _ = app2.emit("redis-monitor-error", format!("{id2}: {e}"));
+                let _ = app2.emit("redis-monitor-ended", id2.clone());
                 return;
             }
         };
         let mut monitor = conn.into_monitor();
         if let Err(e) = monitor.monitor().await {
             let _ = app2.emit("redis-monitor-error", format!("{id2}: {e}"));
+            let _ = app2.emit("redis-monitor-ended", id2.clone());
             return;
         }
         // 收 Value 自己解：into_on_message::<String>() 的串流會把解碼錯 silently 丟掉，

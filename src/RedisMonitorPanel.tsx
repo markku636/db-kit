@@ -31,7 +31,7 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
   // 「暫停」只停止自動捲動，不丟資料：繼續後仍看得到暫停期間收到的指令。
 
   useEffect(() => {
-    acquireRedisPanel(connId, ownerId.current);
+    acquireRedisPanel(`monitor:${connId}`, ownerId.current);
     let alive = true;
     void Promise.all([
       onRedisMonitor(connId, (line) => {
@@ -52,7 +52,7 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
       unlistenErrRef.current?.();
       unlistenEndRef.current?.();
       // 只有最後一個面板關掉才停後端任務，另一個還開著就不會突然沒資料。
-      if (releaseRedisPanel(connId, ownerId.current) === 0) {
+      if (releaseRedisPanel(`monitor:${connId}`, ownerId.current) === 0) {
         api.redisMonitorStop(connId).catch(() => { /* 忽略 */ });
       }
     };
@@ -79,7 +79,7 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
     setBusy(true);
     try {
       // 另一個面板還開著時只停自己，不要讓對方的書面資料突然斷掉。
-      if (!hasOtherRedisPanel(connId, ownerId.current)) await api.redisMonitorStop(connId);
+      if (!hasOtherRedisPanel(`monitor:${connId}`, ownerId.current)) await api.redisMonitorStop(connId);
       setRunning(false);
     } catch (e: any) {
       setErr(e?.message ?? t("停止監視失敗"));
