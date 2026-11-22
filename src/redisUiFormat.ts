@@ -3,6 +3,16 @@
 /** MONITOR 輸出上限（仿 ARDM：一直捲不完會吃爆記憶體）。 */
 export const REDIS_MONITOR_MAX_LINES = 500;
 
+/** 慢查詢過濾：指令 / 用戶端字串 + 最小耗時（毫秒）。 */
+export function slowLogMatches(
+  e: { command: string; client: string; client_name: string; duration_us: number },
+  filter: string,
+  minMs: number,
+): boolean {
+  if (minMs > 0 && e.duration_us < minMs * 1000) return false;
+  return monitorLineMatches(`${e.command} ${e.client} ${e.client_name}`, filter);
+}
+
 /** 解析 `ACL LIST` 的一行：`user NAME on ...` → 使用者名稱與是否啟用；壞行不顯示。 */
 export function parseAclLine(line: string): { name: string; enabled: boolean } | null {
   const parts = line.trim().split(/\s+/);

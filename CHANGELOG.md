@@ -7,6 +7,7 @@
 - **JDBC 具名執行個體 + 埠的記號不再在 GUI 存檔時消失**：`mssql_no_browse` 現在會隨表單解析、快照與存檔保留，否則貼上 `jdbc:sqlserver://host\INST:1433` 後存檔仍會去問 SQL Browser。
 - **SQL Server 2014 的相異值統計不會因為 HASHBYTES 失敗變成 0**：失敗時退回原本的 4000 字近似值。
 - **片段 `SELECT /*註解*/ DISTINCT … LIMIT` 也能正確轉成 T-SQL**。
+- **慢查詢日誌可依指令／用戶端與最小耗時過濾（仿 RedisInsight）**：大量 slow log 裡直接找出特定用戶端或超過門檻的指令。
 - **維運面板新增「分析」頁（仿 RedisInsight 的 Analysis）**：SCAN 抽樣統計各型別的鍵數、記憶體用量與佔比，找出是哪一類資料把記憶體吃滿；抽樣不影響線上服務。
 - **Pub/Sub 與 MONITOR 的面板計數分開**：兩者是不同背景任務，同時打開時其中一個手動停止 / 關閉不會誤讓另一個任務留著或斷掉。
 - **Sentinel 找到 master 後仍帶著原本的帳密 / TLS**：之前 discovery 成功但後續連線全數 NOAUTH 或 TLS 失敗；連線字串裡的 master 名稱現在也會被解析進表單。

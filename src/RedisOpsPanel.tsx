@@ -6,7 +6,7 @@ import { useStore } from "./store";
 import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
-import { parseAclLine } from "./redisUiFormat";
+import { parseAclLine, slowLogMatches } from "./redisUiFormat";
 import { fmtBytes } from "./schemaCache";
 
 type Tab = "slowlog" | "clients" | "bigkeys" | "acl" | "analysis";
@@ -63,6 +63,8 @@ function SlowLogTab({ connId, readonly = false }: { connId: string; readonly?: b
   const [rows, setRows] = useState<SlowLogEntry[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  const [filter, setFilter] = useState("");
+  const [minMs, setMinMs] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +73,8 @@ function SlowLogTab({ connId, readonly = false }: { connId: string; readonly?: b
       .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     return () => { cancelled = true; };
   }, [connId, nonce]);
+
+  const visibleRows = rows?.filter((r) => slowLogMatches(r, filter, Number(minMs) || 0)) ?? null;
 
   const reset = async () => {
     if (readonly) return;
@@ -88,6 +92,12 @@ function SlowLogTab({ connId, readonly = false }: { connId: string; readonly?: b
     <>
       <div className="flex items-center gap-2 mb-2 text-xs">
         <span className="text-fg/40">{t("最近 {count} 筆慢查詢", { count: rows?.length ?? 0 })}</span>
+        <input value={filter} onChange={(e) => setFilter(e.target.value)}
+          placeholder={t("過濾指令或用戶端")}
+          className="w-40 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
+        <input value={minMs} onChange={(e) => setMinMs(e.target.value.replace(/[^\d]/g, ""))}
+          title={t("最小耗時（毫秒）")} placeholder="ms"
+          className="w-14 bg-inset border border-fg/10 rounded px-2 py-1 mono text-center outline-none focus:border-accent" />
         <button type="button" onClick={() => setNonce((n) => n + 1)}
           className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70"><Icon icon={RefreshCw} size={13} /> {t("刷新")}</button>
         {!readonly && <button type="button" onClick={reset}
@@ -96,7 +106,10 @@ function SlowLogTab({ connId, readonly = false }: { connId: string; readonly?: b
       <ErrBar err={err} />
       {!rows && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
       {rows && rows.length === 0 && <div className="text-fg/40 text-sm">{t("（無慢查詢紀錄）")}</div>}
-      {rows && rows.length > 0 && (
+      {visibleRows && rows && visibleRows.length === 0 && rows.length > 0 && (
+        <div className="text-fg/40 text-sm">{t("（沒有符合的訊息）")}</div>
+      )}
+      {visibleRows && visibleRows.length > 0 && (
         <table className="text-xs mono w-full border-collapse">
           <thead><tr className="text-fg/45">
             <th className="text-left px-2 py-1 border-b border-fg/10">#</th>
@@ -106,7 +119,7 @@ function SlowLogTab({ connId, readonly = false }: { connId: string; readonly?: b
             <th className="text-left px-2 py-1 border-b border-fg/10">{t("用戶端")}</th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {visibleRows.map((r) => (
               <tr key={r.id} className="hover:bg-fg/5">
                 <td className="px-2 py-1 border-b border-fg/5 text-fg/40">{r.id}</td>
                 <td className="px-2 py-1 border-b border-fg/5 text-fg/60 whitespace-nowrap">{fmtUnix(r.time)}</td>

@@ -3043,6 +3043,8 @@ const en: Catalog = {
   "取樣記憶體": "Sampled memory",
   "鍵數": "Keys",
   "佔比": "Share",
+  "過濾指令或用戶端": "Filter by command or client",
+  "最小耗時（毫秒）": "Minimum duration (ms)",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",

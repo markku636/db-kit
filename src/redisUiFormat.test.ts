@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, pubSubLineMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl, normalizeAutoRefreshMs, parseAclLine, loadExpandedPaths } from "./redisUiFormat";
+import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, pubSubLineMatches, slowLogMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl, normalizeAutoRefreshMs, parseAclLine, loadExpandedPaths } from "./redisUiFormat";
 
 describe("fmtUptime", () => {
   it("不到一分鐘顯示秒數，不再顯示 0m", () => {
@@ -16,6 +16,16 @@ describe("fmtUptime", () => {
     expect(fmtUptime(undefined)).toBe("—");
     expect(fmtUptime("0")).toBe("—");
     expect(fmtUptime("abc")).toBe("—");
+  });
+});
+
+describe("slowLogMatches", () => {
+  const entry = { command: "GET user:1", client: "127.0.0.1:5231", client_name: "worker", duration_us: 15_000 };
+  it("依耗時與內容過濾", () => {
+    expect(slowLogMatches(entry, "", 0)).toBe(true);
+    expect(slowLogMatches(entry, "", 20)).toBe(false);
+    expect(slowLogMatches(entry, "worker", 10)).toBe(true);
+    expect(slowLogMatches(entry, "SET", 0)).toBe(false);
   });
 });
 
