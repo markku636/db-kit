@@ -459,7 +459,7 @@ async fn exec_export(
         include_header: !e.no_header,
         delimiter: e.delimiter.clone(),
         null_text: e.null_text.clone(),
-        sql_table: None,
+        sql_table: None, sql_dialect: None,
         all_rows: true,
         bom: e.bom,
     };

@@ -1060,6 +1060,13 @@ export function isWriteStatement(sql: string, kind?: DbKind): boolean {
   return false;
 }
 
+// SQL 匯出的識別字引號 / 反斜線轉義依方言不同（MySQL 反引號、MSSQL 方括號、其餘 ANSI 雙引號）。
+export function sqlExportDialect(kind?: DbKind): "mysql" | "mssql" | "ansi" {
+  if (kind === "mysql" || kind === "mariadb") return "mysql";
+  if (kind === "mssql") return "mssql";
+  return "ansi";
+}
+
 // 分析模式會把使用者輸入接在 `EXPLAIN ` 後面送給後端。PostgreSQL / MySQL 的
 // `EXPLAIN ANALYZE <DML>` 與 `EXPLAIN (ANALYZE) <DML>` **會真的執行**該 DML；
 // 唯讀連線不能在這裡繞過閘門。把前綴關鍵字去掉後再問 isWriteStatement。

@@ -216,6 +216,8 @@ export interface ExportOptions {
   delimiter?: string | null;
   null_text?: string | null;
   sql_table?: string | null;
+  /** SQL 匯出方言；未指定沿用 MySQL（向後相容）。 */
+  sql_dialect?: string | null;
   all_rows?: boolean;
   bom?: boolean;
 }

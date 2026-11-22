@@ -68,7 +68,7 @@ import { toast, uiChoose, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSave
 import { askOtpCode } from "./otpGate";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
-  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, splitTsqlBatches, splitForGuard, scopeTsqlBatches, statementAtOffset, tsqlStatementAtOffset, isDangerousStatement, isWriteStatement, isExplainWithWrite, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, splitTsqlBatches, splitForGuard, scopeTsqlBatches, statementAtOffset, tsqlStatementAtOffset, isDangerousStatement, isWriteStatement, isExplainWithWrite, sqlExportDialect, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName, selectTopSql, isMysqlFamily, supportsRoutines, supportsQueryEditorKind, supportsSchemaCompare,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
@@ -5709,6 +5709,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       all_rows: true,
       bom: fmt === "csv" || fmt === "tsv",
       sql_table: fmt === "sql" ? "result" : null,
+      sql_dialect: fmt === "sql" ? sqlExportDialect(kind) : null,
     };
     try {
       // 結果被後端 row cap 截斷、且畫面未做 client-side 排序 / 篩選、語句為唯讀時 →
@@ -5763,6 +5764,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       all_rows: true,
       bom: fmt === "csv" || fmt === "tsv",
       sql_table: fmt === "sql" ? "result" : null,
+      sql_dialect: fmt === "sql" ? sqlExportDialect(kind) : null,
     };
     try {
       const sets = resultSets.map((s) => ({ sql: s.sql, columns: s.res.columns, rows: s.res.rows }));

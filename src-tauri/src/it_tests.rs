@@ -737,7 +737,7 @@ async fn export_table_to_csv_file() {
         include_header: true,
         delimiter: None,
         null_text: None,
-        sql_table: None,
+        sql_table: None, sql_dialect: None,
         all_rows: true,
         bom: false,
     };
@@ -784,7 +784,7 @@ async fn export_import_round_trip() {
         include_header: true,
         delimiter: None,
         null_text: None,
-        sql_table: None,
+        sql_table: None, sql_dialect: None,
         all_rows: true,
         bom: false,
     };

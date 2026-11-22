@@ -25,6 +25,9 @@ pub struct ExportOptions {
     /// SQL 匯出的目標表名（預設用來源表名）。
     #[serde(default)]
     pub sql_table: Option<String>,
+    /// SQL 匯出的方言（mysql / postgres / sqlite / mssql / oracle）。未指定沿用舊的 MySQL 行為。
+    #[serde(default)]
+    pub sql_dialect: Option<String>,
     /// true = 匯出全部符合列；false = 只匯出目前這一頁。
     #[serde(default = "yes")]
     pub all_rows: bool,
@@ -402,11 +405,12 @@ fn render(
             serde_json::to_vec_pretty(&arr).map_err(|e| AppError::Query(e.to_string()))
         }
         "sql" => {
+            let dialect = opts.sql_dialect.as_deref().unwrap_or("mysql");
             let tbl = opts.sql_table.clone().unwrap_or_else(|| table.to_string());
-            let qtbl = format!("`{}`", tbl.replace('`', "``"));
+            let qtbl = sql_ident(&tbl, dialect);
             let collist = columns
                 .iter()
-                .map(|c| format!("`{}`", c.replace('`', "``")))
+                .map(|c| sql_ident(c, dialect))
                 .collect::<Vec<_>>()
                 .join(", ");
             let mut out = String::new();
@@ -414,7 +418,7 @@ fn render(
                 let vals = row
                     .iter()
                     .map(|v| match v {
-                        Some(s) => sql_quote(s),
+                        Some(s) => sql_quote(s, dialect),
                         None => "NULL".to_string(),
                     })
                     .collect::<Vec<_>>()
@@ -584,10 +588,24 @@ fn csv_field(s: &str, delim: &str) -> String {
     }
 }
 
-// SQL 字串字面值跳脫。此匯出走 MySQL 方言（反引號識別字），故同時跳脫反斜線
-// （MySQL 預設把 \ 視為字串轉義字元；只 double 單引號會在含 \ 的值產生錯誤 / 不安全結果）。
-fn sql_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
+/// 依方言跳脫識別字：MySQL 用反引號、MSSQL 用方括號、其餘（PG / SQLite / Oracle）用雙引號。
+fn sql_ident(name: &str, dialect: &str) -> String {
+    match dialect {
+        "mysql" | "mariadb" => format!("`{}`", name.replace('`', "``")),
+        "mssql" => format!("[{}]", name.replace(']', "]]")),
+        _ => format!("\"{}\"", name.replace('"', "\"\"")),
+    }
+}
+
+/// SQL 字串字面值跳脫。MySQL 預設把 \ 當字串轉義字元，要一併 double；
+/// 其餘方言（PG 的 standard_conforming_strings 等）只 double 單引號即可。
+fn sql_quote(s: &str, dialect: &str) -> String {
+    let body = s.replace('\'', "''");
+    if matches!(dialect, "mysql" | "mariadb") {
+        format!("'{}'", body.replace('\\', "\\\\"))
+    } else {
+        format!("'{body}'")
+    }
 }
 
 fn md_cell(s: &str) -> String {
@@ -616,11 +634,13 @@ mod tests {
 
     #[test]
     fn sql_quote_escapes_backslash_and_quote() {
-        assert_eq!(sql_quote("plain"), "'plain'");
-        assert_eq!(sql_quote("O'Brien"), "'O''Brien'");
+        assert_eq!(sql_quote("plain", "mysql"), "'plain'");
+        assert_eq!(sql_quote("O'Brien", "mysql"), "'O''Brien'");
         // MySQL 方言：反斜線需加倍，否則含 \ 的值會被誤當轉義。
-        assert_eq!(sql_quote("a\\b"), "'a\\\\b'");
-        assert_eq!(sql_quote("\\'"), "'\\\\'''");
+        assert_eq!(sql_quote("a\\b", "mysql"), "'a\\\\b'");
+        assert_eq!(sql_quote("\\'", "mysql"), "'\\\\'''");
+        // PG / SQLite / Oracle：只 double 單引號，反斜線保持原樣。
+        assert_eq!(sql_quote("a\\b", "postgres"), "'a\\b'");
     }
 
     // ---- render() 端到端輸出（驗證整個匯出管線，不只 helper）----
@@ -631,7 +651,7 @@ mod tests {
             include_header: true,
             delimiter: None,
             null_text: None,
-            sql_table: None,
+            sql_table: None, sql_dialect: None,
             all_rows: true,
             bom: false,
         }
@@ -792,6 +812,24 @@ mod tests {
         assert!(out.contains("```sql\nSELECT 1\n```"), "{out}");
         assert!(out.contains("| id |"), "{out}");
         assert!(out.contains("| a | b |"), "{out}");
+    }
+
+    #[test]
+    fn sql_export_uses_dialect_specific_identifiers_and_escaping() {
+        let mut o = opts("sql");
+        o.sql_table = Some("t".into());
+        o.sql_dialect = Some("postgres".into());
+        let out = String::from_utf8(render(&["id".into(), "name".into()],
+            &[vec![Some("1".into()), Some("a\\b".into())]], &o, "t").unwrap()).unwrap();
+        assert!(out.contains("INSERT INTO \"t\" (\"id\", \"name\") VALUES ('1', 'a\\b');"), "{out}");
+
+        o.sql_dialect = Some("mssql".into());
+        let out = String::from_utf8(render(&["id".into()], &[vec![Some("1".into())]], &o, "t").unwrap()).unwrap();
+        assert!(out.contains("INSERT INTO [t] ([id]) VALUES ('1');"), "{out}");
+
+        o.sql_dialect = None; // 未指定沿用 MySQL
+        let out = String::from_utf8(render(&["id".into()], &[vec![Some("a\\b".into())]], &o, "t").unwrap()).unwrap();
+        assert!(out.contains("INSERT INTO `t` (`id`) VALUES ('a\\\\b');"), "{out}");
     }
 
     #[test]

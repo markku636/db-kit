@@ -4,6 +4,8 @@ import { api, DataQuery, ExportFormat } from "./api";
 import { pickSaveFile, toast } from "./ui";
 import { Modal, Button, Input } from "./ui/index";
 import { useT } from "./i18n";
+import { useStore } from "./store";
+import { sqlExportDialect } from "./sql";
 
 const FORMATS: { v: ExportFormat; label: string; ext: string }[] = [
   { v: "csv", label: "CSV", ext: "csv" },
@@ -29,6 +31,7 @@ export default function ExportDialog({ connId, database, table, query, onClose }
   const [nullText, setNullText] = useState("");
   const [sqlTable, setSqlTable] = useState(table);
   const [busy, setBusy] = useState(false);
+  const connKind = useStore((s) => s.connections.find((c) => c.id === connId)?.kind);
 
   const meta = FORMATS.find((f) => f.v === format)!;
   const isCsv = format === "csv" || format === "tsv";
@@ -49,6 +52,7 @@ export default function ExportDialog({ connId, database, table, query, onClose }
         bom: isCsv ? bom : false,
         null_text: isCsv ? nullText : null,
         sql_table: format === "sql" ? sqlTable : null,
+        sql_dialect: format === "sql" ? sqlExportDialect(connKind) : null,
       }, out);
       toast.success(t("已匯出 {rows} 列（{bytes}）→ {path}", { rows: res.rows, bytes: formatBytes(res.bytes), path: res.path }));
       onClose();
