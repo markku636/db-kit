@@ -6,7 +6,7 @@ import { useT } from "./i18n";
 import {
   compareSegments, REDIS_PATTERN_HISTORY_KEY, redisPatternHistoryKey, recordRedisPattern,
 } from "./redisUiFormat";
-import { buildRedisTree, keysUnderPrefix, segmentLabel, REDIS_SEPARATOR_KEY, redisSeparatorKey, type RedisTreeNode } from "./redisTree";
+import { buildRedisTree, keysUnderPrefix, segmentLabel, toggleKeySelection, REDIS_SEPARATOR_KEY, redisSeparatorKey, type RedisTreeNode } from "./redisTree";
 
 export const REDIS_TREE_LIMIT = 10000;
 const LIMIT = REDIS_TREE_LIMIT;
@@ -50,7 +50,7 @@ function allFolderPaths(root: RedisTreeNode): string[] {
 
 // Redis 命名空間鍵樹：仿 Another Redis Desktop Manager 的左側鍵樹，
 // 把 user:1:name 之類的鍵依 ":" 分組成可摺疊資料夾。葉節點＝實際鍵。
-export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey, onContextKey, onContextFolder, onContextBlank }: {
+export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey, onContextKey, onContextFolder, onContextBlank, onBulkDelete }: {
   connId: string;
   database: string;
   nonce: number;
@@ -63,6 +63,8 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   onContextFolder?: (prefix: string, keys: string[], truncated: boolean, x: number, y: number) => void;
   // 空白處右鍵：只提供「新增鍵 / 重新整理」。
   onContextBlank?: (x: number, y: number) => void;
+  // 多選模式下的批次刪除（仿 ARDM 的 Multiple Select/Delete）。
+  onBulkDelete?: (keys: string[]) => void;
 }) {
   const t = useT();
   const [patternInput, setPatternInput] = useState("*");
@@ -80,6 +82,8 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [multiSelect, setMultiSelect] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   // ARDM 的 --separator：某些命名慣例用 / 或 :: 分層，固定冒號會整包擠在同一層。
   const [separator, setSeparator] = useState<string>(() => {
     try {
@@ -136,6 +140,13 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
       return n;
     });
 
+  const activateKey = (key: string) => {
+    if (multiSelect) setSelectedKeys((s) => toggleKeySelection(s, key));
+    else onOpenKey(key);
+  };
+  const selectedClass = (key: string) =>
+    multiSelect && selectedKeys.has(key) ? "bg-accent/20 ring-1 ring-accent/50" : "";
+
   const apply = () => {
     const next = patternInput.trim() || "*";
     setPattern(next);
@@ -184,6 +195,20 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
             className="w-10 bg-inset border border-fg/10 rounded px-1 py-0.5 mono outline-none focus:border-accent text-center"
           />
         </label>
+        {onBulkDelete && <button type="button" onClick={() => { setMultiSelect((v) => !v); setSelectedKeys(new Set()); }}
+          title={t("多選鍵後一次刪除（仿 ARDM）")}
+          className={`px-2 py-1 rounded border whitespace-nowrap ${multiSelect ? "border-accent text-accent" : "border-fg/15 text-fg/50 hover:bg-fg/10"}`}>
+          {t("多選")}
+        </button>}
+        {onBulkDelete && multiSelect && selectedKeys.size > 0 && (
+          <>
+            <span className="text-fg/40">{t("已選 {n}", { n: selectedKeys.size })}</span>
+            <button type="button" onClick={() => { onBulkDelete?.([...selectedKeys]); setSelectedKeys(new Set()); }}
+              className="px-2 py-1 rounded border border-red-500/40 text-red-300 hover:bg-red-500/15">{t("刪除選取")}</button>
+            <button type="button" onClick={() => setSelectedKeys(new Set())}
+              className="px-2 py-1 rounded border border-fg/15 text-fg/50 hover:bg-fg/10">{t("清除")}</button>
+          </>
+        )}
         <span className="ml-auto text-fg/40">
           {loading ? t("讀取中…") : keys ? t("{count} 個鍵", { count: keys.length }) + (truncated ? t("（已達 {LIMIT} 上限）", { LIMIT }) : "") : ""}
         </span>
@@ -227,10 +252,10 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
               <Icon icon={Folder} size={14} className="text-amber-300/80" />
               {r.selfKey != null ? (
                 <span
-                  onClick={(e) => { e.stopPropagation(); onOpenKey(r.selfKey!); }}
+                  onClick={(e) => { e.stopPropagation(); activateKey(r.selfKey!); }}
                   onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextKey(r.selfKey!, e.clientX, e.clientY); }}
                   title={t("{selfKey}（此節點本身也是一個鍵，點此開啟）", { selfKey: r.selfKey })}
-                  className="truncate text-blue-300 hover:underline"
+                  className={`truncate text-blue-300 hover:underline ${selectedClass(r.selfKey!)}`}
                 >{segmentLabel(r.seg)}</span>
               ) : (
                 <span className="truncate text-fg/80">{segmentLabel(r.seg)}</span>
@@ -241,11 +266,11 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
           ) : (
             <div
               key={`k:${r.key}:${i}`}
-              onClick={() => onOpenKey(r.key)}
+              onClick={() => activateKey(r.key)}
               onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextKey(r.key, e.clientX, e.clientY); }}
               title={r.key}
               style={{ paddingLeft: 8 + r.depth * INDENT + 16 }}
-              className="flex items-center gap-1.5 pr-3 py-0.5 cursor-pointer hover:bg-fg/5 text-sm mono text-blue-300/90"
+              className={`flex items-center gap-1.5 pr-3 py-0.5 cursor-pointer hover:bg-fg/5 text-sm mono text-blue-300/90 ${selectedClass(r.key)}`}
             >
               <Icon icon={Circle} size={10} className="text-fg/25" />
               <span className="truncate">{segmentLabel(r.seg)}</span>

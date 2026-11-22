@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildRedisTree, keysUnderPrefix, segmentLabel, redisNamespacePattern, redisNamespacePrefix } from "./redisTree";
+import { buildRedisTree, keysUnderPrefix, segmentLabel, redisNamespacePattern, redisNamespacePrefix, toggleKeySelection } from "./redisTree";
 
 describe("buildRedisTree", () => {
   it("預設以冒號分層，並把既是資料夾又是鍵的節點記下來", () => {
@@ -21,6 +21,16 @@ describe("buildRedisTree", () => {
   });
   it("空分隔符退回冒號", () => {
     expect(buildRedisTree(["a:b"], "").children.has("a")).toBe(true);
+  });
+});
+
+describe("toggleKeySelection", () => {
+  it("點選加入、再點取消，不影響原集合", () => {
+    const before = new Set(["a"]);
+    const added = toggleKeySelection(before, "b");
+    expect([...added]).toEqual(["a", "b"]);
+    expect([...before]).toEqual(["a"]);
+    expect([...toggleKeySelection(added, "a")]).toEqual(["b"]);
   });
 });
 

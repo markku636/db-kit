@@ -51,6 +51,14 @@ export function keysUnderPrefix(keys: readonly string[], prefix: string, separat
   return keys.filter((k) => k === prefix || k.startsWith(prefix + sep));
 }
 
+/** 鍵樹多選：同一鍵再點一次取消，回傳新 Set（不改動傳入的集合）。 */
+export function toggleKeySelection(selected: ReadonlySet<string>, key: string): Set<string> {
+  const next = new Set(selected);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
+}
+
 export const REDIS_SEPARATOR_KEY = "dbkit:redisKeySeparator";
 export const redisSeparatorKey = (connId: string) => `${REDIS_SEPARATOR_KEY}:${connId}`;
 

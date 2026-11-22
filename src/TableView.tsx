@@ -1361,6 +1361,28 @@ function DataPane({ tab }: { tab: OpenTab }) {
     return i < 0 ? "" : key.slice(0, i + sep.length);
   };
 
+  // 鍵樹多選批次刪除：鍵樹只回明確鍵名清單，後端不展開 pattern，誤刪範圍可控。
+  const bulkDeleteRedisKeys = async (keys: string[]) => {
+    if (!keys.length) return;
+    const preview = keys.slice(0, 5).join("\n") + (keys.length > 5 ? t("\n…等 {n} 個鍵", { n: keys.length }) : "");
+    if (!(await uiConfirm(
+      t("將刪除 {n} 個鍵，此動作無法復原：\n{preview}", { n: keys.length, preview }),
+      { title: t("刪除選取鍵"), danger: true, confirmText: t("刪除") },
+    ))) return;
+    setApplying(true);
+    setErr(null);
+    try {
+      const n = await api.redisDeleteKeys(tab.connId, tab.database, keys);
+      toast.success(t("已刪除 {n} 個鍵", { n }));
+      refresh();
+    } catch (e: any) {
+      const msg = e?.message ?? t("刪除失敗");
+      setErr(msg); toast.error(msg);
+    } finally {
+      setApplying(false);
+    }
+  };
+
   // 複製鍵值到剪貼簿：依型別組成可讀文字（string 取完整值、hash 為 field=value、zset 帶 score）。
   // 集合型只讀第一頁（COPY_MAX 個元素）；不足全量時明講，避免使用者以為貼到的是完整資料。
   const COPY_MAX = 1000;
@@ -1615,6 +1637,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onContextKey={(k, x, y) => setRowMenu({ key: k, ttl: null, x, y })}
           onContextFolder={(prefix, keys, truncated, x, y) => setFolderMenu({ prefix, keys, truncated, x, y })}
           onContextBlank={(x, y) => setFolderMenu({ prefix: "", keys: [], truncated: false, x, y })}
+          onBulkDelete={readonly ? undefined : bulkDeleteRedisKeys}
         />
       ) : (
       <>
