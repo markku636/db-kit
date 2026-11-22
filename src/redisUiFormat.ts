@@ -1,5 +1,19 @@
 // Redis 畫面的純函式（無 React / DOM 相依，node 環境可直接單測）。
 
+/** MONITOR 輸出上限（仿 ARDM：一直捲不完會吃爆記憶體）。 */
+export const REDIS_MONITOR_MAX_LINES = 500;
+
+/** 新的一行進來，保留最後 cap 行。 */
+export function appendMonitorLine(lines: readonly string[], line: string, cap = REDIS_MONITOR_MAX_LINES): string[] {
+  return [...lines, line].slice(-cap);
+}
+
+/** MONITOR 濾字串：比對整行（不分大小寫）。 */
+export function monitorLineMatches(line: string, filter: string): boolean {
+  const f = filter.trim().toLowerCase();
+  return !f || line.toLowerCase().includes(f);
+}
+
 export const REDIS_PATTERN_HISTORY_KEY = "dbkit:redisPatternHistory";
 
 /** ARDM 的 search history：記住最近用過的 MATCH 樣式，最新的排最前，最多 20 條；`*` 不記。 */

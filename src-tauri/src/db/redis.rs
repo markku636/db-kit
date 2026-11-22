@@ -1392,9 +1392,10 @@ fn console_policy(parts: &[String]) -> ConsolePolicy {
         "SELECT" => reject(&t!(
             "主控台不支援 SELECT 切換資料庫（會改到整個 App 共用的連線）。請改用主控台上方的資料庫選單，或在指令前加「編號:」，例如 3:GET key。"
         )),
-        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" | "UNSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" | "MONITOR" => {
+        "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" | "UNSUBSCRIBE" | "PUNSUBSCRIBE" | "SUNSUBSCRIBE" => {
             reject(&t!("訂閱與 MONITOR 會讓連線只收推播訊息，請改用「Pub/Sub」面板。"))
         }
+        "MONITOR" => reject(&t!("MONITOR 會讓連線只收推播訊息，請改用「監視」面板。")),
         "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" => reject(&t!(
             "主控台一次只送一行，交易（MULTI / EXEC）無法跨行進行，而且會把共用連線留在交易狀態。請改用 EVAL 腳本做原子操作。"
         )),

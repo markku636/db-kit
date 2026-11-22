@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern } from "./redisUiFormat";
+import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches } from "./redisUiFormat";
 
 describe("fmtUptime", () => {
   it("不到一分鐘顯示秒數，不再顯示 0m", () => {
@@ -16,6 +16,21 @@ describe("fmtUptime", () => {
     expect(fmtUptime(undefined)).toBe("—");
     expect(fmtUptime("0")).toBe("—");
     expect(fmtUptime("abc")).toBe("—");
+  });
+});
+
+describe("monitor lines", () => {
+  it("保留最後 500 行，舊的淘汰", () => {
+    let lines: string[] = [];
+    for (let i = 0; i < 600; i++) lines = appendMonitorLine(lines, `line ${i}`);
+    expect(lines).toHaveLength(500);
+    expect(lines[0]).toBe("line 100");
+    expect(lines[499]).toBe("line 599");
+  });
+  it("濾字串比對整行且不分大小寫", () => {
+    expect(monitorLineMatches("GET user:1", "get")).toBe(true);
+    expect(monitorLineMatches("SET a 1", "get")).toBe(false);
+    expect(monitorLineMatches("anything", "")).toBe(true);
   });
 });
 

@@ -137,6 +137,7 @@ const BackupDialog = lazyOverlay(() => import("./BackupDialog"));
 const ErDiagram = lazyOverlay(() => import("./ErDiagram"));
 const RedisStatus = lazyOverlay(() => import("./RedisStatus"));
 const RedisConsole = lazyOverlay(() => import("./RedisConsole"));
+const RedisMonitorPanel = lazyOverlay(() => import("./RedisMonitorPanel"));
 const RedisOpsPanel = lazyOverlay(() => import("./RedisOpsPanel"));
 const PubSubPanel = lazyOverlay(() => import("./PubSubPanel"));
 const MongoOpsPanel = lazyOverlay(() => import("./MongoOpsPanel"));
@@ -1465,6 +1466,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
   // 側欄右鍵直達，不必先開一個資料分頁。
   const [redisOps, setRedisOps] = useState<{ id: string; name: string; db: string } | null>(null);
   const [pubSub, setPubSub] = useState<{ id: string; name: string } | null>(null);
+  const [redisMonitor, setRedisMonitor] = useState<{ id: string; name: string } | null>(null);
   // Mongo 監控面板（serverStatus / dbStats / currentOp / Profiler）。
   const [mongoOps, setMongoOps] = useState<{ id: string; name: string; db: string } | null>(null);
   const [kafkaGroups, setKafkaGroups] = useState<{ id: string; name: string } | null>(null);
@@ -3358,6 +3360,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                     [t("命令列"), () => { if (dbConn) setConsole({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
                     [t("維運面板（慢查詢 / 用戶端 / 大鍵）…"), () => { if (dbConn) setRedisOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
                     [t("Pub/Sub…"), () => { if (dbConn) setPubSub({ id: dbConn.id, name: dbConn.name }); }, false],
+                    [t("監視…"), () => { if (dbConn) setRedisMonitor({ id: dbConn.id, name: dbConn.name }); }, false],
                     [t("重新命名資料庫…"), () => renameRedisDb(dbMenu.connId, dbMenu.db), false],
                     [t("編輯屬性…"), editConn, false],
                     ...(readonlyConns[dbMenu.connId]
@@ -3620,6 +3623,10 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
 
       {pubSub && (
         <PubSubPanel connId={pubSub.id} connName={pubSub.name} onClose={() => setPubSub(null)} />
+      )}
+
+      {redisMonitor && (
+        <RedisMonitorPanel connId={redisMonitor.id} connName={redisMonitor.name} onClose={() => setRedisMonitor(null)} />
       )}
 
       {mongoOps && (

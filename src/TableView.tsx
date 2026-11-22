@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  ListTree, Table2, Plus, Minus, BarChart3, Network, Settings, Terminal,
+  ListTree, Table2, Plus, Minus, BarChart3, Network, Settings, Terminal, Activity,
   RefreshCw, Search, Filter, Trash2, ArrowUpDown, Download, Upload, X, Check,
   ArrowUp, ArrowDown, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight,
   Copy, Pencil, Columns3,
@@ -46,6 +46,7 @@ const RedisStatus = lazyOverlay(() => import("./RedisStatus"));
 const RedisConsole = lazyOverlay(() => import("./RedisConsole"));
 const PubSubPanel = lazyOverlay(() => import("./PubSubPanel"));
 const RedisOpsPanel = lazyOverlay(() => import("./RedisOpsPanel"));
+const RedisMonitorPanel = lazyOverlay(() => import("./RedisMonitorPanel"));
 
 const PAGE_SIZE = 100;
 const DEFAULT_COL_W = 160;
@@ -220,6 +221,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [showConsole, setShowConsole] = useState(false);
   const [showPubSub, setShowPubSub] = useState(false);
   const [showOps, setShowOps] = useState(false);
+  const [showMonitor, setShowMonitor] = useState(false);
 
   // SQL 表的儲存格右鍵選單 / 內容檢視器 / 選取（鍵盤導覽）/「以此列為範本」預填值
   const [cellMenu, setCellMenu] = useState<{ r: number; c: number; x: number; y: number } | null>(null);
@@ -1465,6 +1467,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
               className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Network} size={14} /> Pub/Sub</button>
             <button type="button" onClick={() => setShowOps(true)} title={t("維運：慢查詢 / 用戶端 / 大鍵")}
               className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Settings} size={14} /> {t("維運")}</button>
+            <button type="button" onClick={() => setShowMonitor(true)} title={t("即時監視伺服器收到的指令（MONITOR）")}
+              className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Activity} size={14} /> {t("監視")}</button>
             <button type="button" onClick={() => setShowConsole(true)} title={t("Redis 命令列")}
               className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Terminal} size={14} /> {t("命令列")}</button>
             <div className="w-px h-4 bg-fg/10 mx-1" />
@@ -1889,6 +1893,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
       )}
       {showOps && (
         <RedisOpsPanel connId={tab.connId} connName={connName} database={tab.database} onClose={() => setShowOps(false)} />
+      )}
+      {showMonitor && (
+        <RedisMonitorPanel connId={tab.connId} connName={connName} onClose={() => setShowMonitor(false)} />
       )}
 
       {rowMenu && (

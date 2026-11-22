@@ -682,6 +682,25 @@ export function onRedisPubSubError(connId: string, cb: (msg: string) => void): P
   });
 }
 
+// ---- Redis MONITOR（即時指令監視，仿 ARDM）----
+export interface RedisMonitorLine {
+  conn_id: string;
+  line: string;
+}
+
+export function onRedisMonitor(connId: string, cb: (line: string) => void): Promise<UnlistenFn> {
+  return listen<RedisMonitorLine>("redis-monitor", (e) => {
+    if (e.payload.conn_id === connId) cb(e.payload.line);
+  });
+}
+
+export function onRedisMonitorError(connId: string, cb: (msg: string) => void): Promise<UnlistenFn> {
+  return listen<string>("redis-monitor-error", (e) => {
+    const msg = pubSubErrorForConn(e.payload, connId);
+    if (msg != null) cb(msg);
+  });
+}
+
 // ---- SSH 終端機 / SFTP 事件（DTO 見 sshTypes.ts）----
 // 連線期間的 host key / 認證提問：conn_id 由前端在 sshConnect 前就產好，所以 invoke 還沒回來就能對上。
 export function onSshHostKeyPrompt(connId: string, cb: (p: SshHostKeyPrompt) => void): Promise<UnlistenFn> {
@@ -1937,6 +1956,8 @@ export const api = {
   // 只分析某個命名空間前綴下的鍵（ARDM 的 folder memory analysis）。
   redisFolderBigKeys: (id: string, database: string, prefix: string, sample: number, top: number) =>
     invoke<BigKey[]>("redis_folder_big_keys", { id, database, prefix, sample, top }),
+  redisMonitorStart: (id: string) => invoke<void>("redis_monitor_start", { id }),
+  redisMonitorStop: (id: string) => invoke<void>("redis_monitor_stop", { id }),
   // 批次刪除鍵（DEL）：鍵樹「刪除整個命名空間」用，回傳實際刪除數。
   redisDeleteKeys: (id: string, database: string, keys: string[]) =>
     invoke<number>("redis_delete_keys", { id, database, keys }),

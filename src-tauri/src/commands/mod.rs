@@ -70,6 +70,8 @@ pub struct AppState {
     pub history_lock: Arc<tokio::sync::Mutex<()>>,
     /// Redis Pub/Sub 訂閱的背景任務（key = 連線 id）。重新訂閱 / 取消訂閱 / 斷線時 abort。
     pub pubsub: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
+    /// Redis MONITOR 的背景任務（key = 連線 id）。MONITOR 會讓連線只收推播，必須用專屬連線。
+    pub redis_monitors: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
     /// AI 助手進行中的問答背景任務（key = req_id）。取消時 abort 即終止 claude 子程序。
     pub agent_jobs: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
     /// HTTP 供應商（Anthropic / OpenAI 相容）的對話歷史（key = session id）。
@@ -1982,6 +1984,60 @@ pub async fn redis_subscribe(
 #[tauri::command]
 pub async fn redis_unsubscribe(state: State<'_, AppState>, id: String) -> AppResult<()> {
     if let Some(h) = state.pubsub.lock().remove(&id) {
+        h.abort();
+    }
+    Ok(())
+}
+
+/// MONITOR 的一行輸出（仿 Another Redis Desktop Manager 的 Monitor）。
+#[derive(Clone, serde::Serialize)]
+pub struct RedisMonitorLine {
+    pub conn_id: String,
+    pub line: String,
+}
+
+/// 開始即時監視：用專屬連線跑 MONITOR，每行以 `redis-monitor` 事件推給前端。
+/// MONITOR 會讓連線進入只收推播的模式，所以不能共用連線池的連線。
+#[tauri::command]
+pub async fn redis_monitor_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<()> {
+    let driver = state.manager.redis_driver(&id)?;
+    let client = driver.pubsub_client();
+    if let Some(h) = state.redis_monitors.lock().remove(&id) {
+        h.abort();
+    }
+    let app2 = app.clone();
+    let id2 = id.clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        use futures::StreamExt;
+        let conn = match client.get_async_connection().await {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = app2.emit("redis-monitor-error", format!("{id2}: {e}"));
+                return;
+            }
+        };
+        let mut monitor = conn.into_monitor();
+        if let Err(e) = monitor.monitor().await {
+            let _ = app2.emit("redis-monitor-error", format!("{id2}: {e}"));
+            return;
+        }
+        let mut stream = monitor.into_on_message::<String>();
+        while let Some(line) = stream.next().await {
+            let _ = app2.emit("redis-monitor", RedisMonitorLine { conn_id: id2.clone(), line });
+        }
+    });
+    state.redis_monitors.lock().insert(id, handle);
+    Ok(())
+}
+
+/// 停止 MONITOR：abort 背景任務並讓專屬連線關閉。
+#[tauri::command]
+pub async fn redis_monitor_stop(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    if let Some(h) = state.redis_monitors.lock().remove(&id) {
         h.abort();
     }
     Ok(())
