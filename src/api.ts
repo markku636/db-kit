@@ -1762,6 +1762,8 @@ export const api = {
     invoke<ConnImportSummary>("import_connections_encrypted", { path, passphrase }),
   // keychain 是否已有此連線的資料庫密碼（連線前帳密檢查；不回傳密碼本身）。
   hasStoredPassword: (id: string) => invoke<boolean>("has_stored_password", { id }),
+  // 明確清除 keychain 中的資料庫 / SSH 密碼（表單留空＝不變更，沒有其他方式可清空）。
+  clearConnectionPassword: (id: string) => invoke<void>("clear_connection_password", { id }),
   // 解析連線字串（mysql:// postgres:// mongodb+srv:// rediss:// sqlserver:// / ADO.NET 等）→ 填表用。
   // kind 為對話框當下選的類型，當作解析提示：有些格式本身不帶類型資訊
   // （Oracle EZConnect `host:1521/svc`、裸 `host:port`、sqlite 檔案路徑），沒提示只能報錯。

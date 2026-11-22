@@ -99,6 +99,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
   const [port, setPort] = useState(seed?.port ?? KIND_META.mysql.defaultPort);
   const [username, setUsername] = useState(seed?.username ?? "root");
   const [password, setPassword] = useState(initial ? "" : prefill?.password ?? "");
+  // 表單留空＝不變更；要真的清掉已存密碼必須有明確動作。
+  const [clearPassword, setClearPassword] = useState(false);
   const [database, setDatabase] = useState(seed?.database ?? "");
   const [testing, setTesting] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -590,8 +592,16 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     : kind === "kubernetes" ? !k8sManual || host.trim() !== ""
     : k8sForward ? !!k8sOpts.k8s_target?.trim()
     : fileBased || host.trim() !== "" || (kind === "docker" && dockerMode === "local");
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!valid) return;
+    if (clearPassword && initial) {
+      try {
+        await api.clearConnectionPassword(initial.id);
+      } catch (e: any) {
+        setMsg({ ok: false, text: e?.message ?? t("清除已儲存密碼失敗") });
+        return;
+      }
+    }
     const cfg = build();
     // 先寫唯讀旗標再回報存檔：onSaved 可能立刻開連線 / 重繪側欄，旗標晚一步會閃到「可寫」狀態。
     useStore.getState().setConnReadonly(cfg.id, readonlyConn);
@@ -730,6 +740,12 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
         <span>{t("唯讀連線：擋寫入 / DDL 語句與資料格編輯（取消勾選＝可編輯）")}</span>
       </label>
 
+      {editing && usesAuth && (
+        <label className="flex items-center gap-2 text-xs cursor-pointer select-none text-fg/60">
+          <input type="checkbox" checked={clearPassword} onChange={(e) => setClearPassword(e.target.checked)} />
+          <span>{t("清除已儲存的密碼（連線與 SSH）；下次連線會要求重新輸入")}</span>
+        </label>
+      )}
       {external ? (
         <>
           <Field label={t("Gateway 網址（base URL）")} hint={t("只填根網址，登入路徑（/account/login 等）由驅動自己接")}>

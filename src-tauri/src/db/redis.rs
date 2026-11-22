@@ -98,6 +98,9 @@ pub struct RedisDriver {
     ///（`#` 之後被當成 fragment、`@` 讓主機名稱跑掉），IPv6 位址也要另外加方括號。
     info: redis::ConnectionInfo,
     db_count: i64,
+    /// `SCAN ... TYPE` 要 Redis 6+；連線時由 INFO 判斷，舊版改走客戶端 TYPE 過濾。
+    /// 讀不到版本時保守用 false（慢一點但功能正常）。
+    supports_scan_type: bool,
     /// per-db-index 連線快取。Redis 連線綁定單一 DB，故依 db index 快取各自的
     /// ConnectionManager（多工、Clone 共享、斷線自動重連），避免每次操作新建 TCP + 握手。
     conns: tokio::sync::RwLock<std::collections::HashMap<i64, redis::aio::ConnectionManager>>,
@@ -678,6 +681,9 @@ impl RedisDriver {
         if type_filter.trim().is_empty() {
             return self.scan_keys(database, pattern, limit).await;
         }
+        if !self.supports_scan_type {
+            return self.scan_keys_typed_client(database, pattern, type_filter, limit).await;
+        }
         let limit = limit.max(1);
         let pattern = if pattern.is_empty() { "*" } else { pattern };
         let mut conn = self.conn(database).await?;
@@ -703,6 +709,33 @@ impl RedisDriver {
             truncated = true;
         }
         Ok(RedisKeys { keys, truncated })
+    }
+
+    /// Redis < 6 沒有 SCAN TYPE：先照常 SCAN，再用 pipeline 對鍵取 TYPE 在客戶端挑。
+    /// 多掃一些以補足過濾後的 limit；真的掃不完就照樣標 truncated。
+    async fn scan_keys_typed_client(
+        &self,
+        database: &str,
+        pattern: &str,
+        type_filter: &str,
+        limit: usize,
+    ) -> AppResult<RedisKeys> {
+        let limit = limit.max(1);
+        let scan_limit = limit.saturating_mul(10).clamp(1, 100_000);
+        let scanned = self.scan_keys(database, pattern, scan_limit).await?;
+        let mut conn = self.conn(database).await?;
+        let mut out: Vec<String> = Vec::new();
+        for chunk in scanned.keys.chunks(500) {
+            let mut pipe = redis::pipe();
+            for k in chunk { pipe.cmd("TYPE").arg(k); }
+            let vals: Vec<redis::Value> = pipe.query_async(&mut conn).await.map_err(rerr)?;
+            for (k, v) in chunk.iter().zip(vals.into_iter()) {
+                if rv_to_string(&v) == type_filter { out.push(k.clone()); }
+            }
+        }
+        let truncated = scanned.truncated || out.len() > limit;
+        out.truncate(limit);
+        Ok(RedisKeys { keys: out, truncated })
     }
 
     /// 抽樣統計 keyspace：SCAN 取樣 + pipeline TYPE / MEMORY USAGE，聚合出各型別的
@@ -909,6 +942,7 @@ impl DatabaseDriver for RedisDriver {
             client,
             info,
             db_count: 16, // 下方讀 CONFIG GET databases 覆寫；讀不到（如託管 Redis 禁 CONFIG）維持 16。
+            supports_scan_type: false,
             conns: Default::default(),
             snapshot: Default::default(),
         };
@@ -942,7 +976,14 @@ impl DatabaseDriver for RedisDriver {
                 .unwrap_or(16)
         };
 
-        Ok(Self { db_count, ..driver })
+        // 順手讀一次版本，避免在每次點型別下拉時才發現 SCAN TYPE 不支援。
+        let info_server: String = redis::cmd("INFO")
+            .arg("server")
+            .query_async(&mut conn)
+            .await
+            .unwrap_or_default();
+        let supports_scan_type = redis_version_at_least(&info_server, 6);
+        Ok(Self { db_count, supports_scan_type, ..driver })
     }
 
     async fn ping(&self) -> AppResult<()> {
@@ -1953,6 +1994,16 @@ fn redis_value_to_rows(v: &redis::Value) -> Vec<Vec<Option<String>>> {
     }
 }
 
+/// 從 `INFO server` 的文字判斷 redis_version 主要版本是否 >= major。
+/// 讀不到 / 解析失敗回 false，讓呼叫端走相容路徑（慢一點但不會整頁報錯）。
+fn redis_version_at_least(info: &str, major: u32) -> bool {
+    info.lines()
+        .find_map(|l| l.strip_prefix("redis_version:").map(str::trim))
+        .and_then(|v| v.split('.').next())
+        .and_then(|v| v.parse::<u32>().ok())
+        .is_some_and(|v| v >= major)
+}
+
 /// 將單一 redis::Value 攤成字串（供 SLOWLOG 等巢狀結果取值）。
 fn rv_to_string(v: &redis::Value) -> String {
     match v {
@@ -2020,6 +2071,16 @@ mod tests {
         assert_eq!(glob_like_pattern("user%"), "user*");
         assert_eq!(glob_like_pattern("a*b"), r"a\*b");
         assert_eq!(glob_like_pattern("u[0]%"), r"u\[0\]*");
+    }
+
+    #[test]
+    fn redis_version_at_least_parses_info_server() {
+        assert!(redis_version_at_least("# Server\r\nredis_version:7.2.4\r\n", 6));
+        assert!(redis_version_at_least("redis_version:6.0.16\r\n", 6));
+        assert!(!redis_version_at_least("redis_version:5.0.14\r\n", 6));
+        // 讀不到 / 託管 Redis 隱藏 INFO → 保守走相容路徑。
+        assert!(!redis_version_at_least("", 6));
+        assert!(!redis_version_at_least("redis_version:unknown\r\n", 6));
     }
 
     #[test]

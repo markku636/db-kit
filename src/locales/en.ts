@@ -3057,6 +3057,8 @@ const en: Catalog = {
   "分析模式只放行唯讀語句；EXPLAIN ANALYZE 搭配 INSERT / UPDATE / DELETE 會真的修改資料，請改用一般執行模式。": "Analyze mode only accepts read-only statements. EXPLAIN ANALYZE with INSERT/UPDATE/DELETE actually modifies data; use normal execute mode instead.",
   "此連線為唯讀，分析模式已擋下寫入語句。可在連線右鍵關閉「唯讀模式」。": "This connection is read-only; the analyze mode blocked a write statement. Right-click the connection to disable read-only mode.",
   "「{name}」是正式環境（production）連線。確定執行分析？": "\"{name}\" is a production connection. Run the analysis anyway?",
+  "清除已儲存的密碼（連線與 SSH）；下次連線會要求重新輸入": "Clear saved passwords (database and SSH); you'll be asked to re-enter them next time",
+  "清除已儲存密碼失敗": "Failed to clear the saved password",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",

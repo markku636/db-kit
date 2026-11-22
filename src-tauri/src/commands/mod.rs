@@ -792,6 +792,17 @@ pub fn has_stored_password(id: String) -> bool {
     store::kc_get(&id).map(|p| !p.is_empty()).unwrap_or(false)
 }
 
+/// 清除已儲存的密碼（資料庫 + SSH 密碼 / passphrase）。
+/// 表單的「留空＝不變更」語意讓使用者無法把伺服器已移除的密碼清掉；
+/// 有這個明確動作才能真的清空 keychain，下一次連線才會要求重新輸入。
+#[tauri::command]
+pub fn clear_connection_password(id: String) -> AppResult<()> {
+    store::kc_delete(&id);
+    store::kc_delete(&store::ssh_account(&id));
+    store::kc_delete(&store::ssh_passphrase_account(&id));
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn list_databases(
     state: State<'_, AppState>,

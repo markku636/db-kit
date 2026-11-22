@@ -249,6 +249,7 @@ pub fn run() {
             commands::export_connections_encrypted,
             commands::import_connections_encrypted,
             commands::has_stored_password,
+            commands::clear_connection_password,
             commands::list_databases,
             commands::list_tables,
             commands::table_columns,
