@@ -134,7 +134,17 @@ export function maskCode(sql: string): string {
       out += blank(sql.slice(i, j)); i = j; continue;
     }
     if (two === "--") { let j = i; while (j < n && sql[j] !== "\n") j++; out += blank(sql.slice(i, j)); i = j; continue; }
-    if (two === "/*") { let j = i + 2; while (j < n && sql.slice(j, j + 2) !== "*/") j++; const e = Math.min(n, j + 2); out += blank(sql.slice(i, e)); i = e; continue; }
+    // T-SQL 的區塊註解可巢狀（後端 tsql_code_only 也這樣做）；第一個 */ 只關掉最內層。
+    if (two === "/*") {
+      let j = i + 2, depth = 1;
+      while (j < n && depth > 0) {
+        if (sql.startsWith("/*", j)) { depth++; j += 2; continue; }
+        if (sql.startsWith("*/", j)) { depth--; j += 2; continue; }
+        j++;
+      }
+      const e = Math.min(n, j);
+      out += blank(sql.slice(i, e)); i = e; continue;
+    }
     if (two === "$$") { let j = i + 2; while (j < n && sql.slice(j, j + 2) !== "$$") j++; const e = Math.min(n, j + 2); out += blank(sql.slice(i, e)); i = e; continue; }
     // mssql 的 [識別字]：不遮掉的話兩個方向都會出錯 —— 欄位叫 [Union] / [Order By] 會被當成關鍵字而誤報，
     // 而 `UPDATE t SET [Where] = 1` 反倒因為看到 "where" 而漏報「無條件更新」（error 級的漏報最傷）。

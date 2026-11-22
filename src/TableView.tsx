@@ -330,6 +330,14 @@ function DataPane({ tab }: { tab: OpenTab }) {
     return () => { alive = false; };
   }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
 
+  // 可寫入欄位的索引：INSERT 對話框、copyMarkedInsert、copyRowUpdate 共用，
+  // IDENTITY / 計算欄位帶進 INSERT 一定失敗（8102 / IDENTITY_INSERT off）。
+  const writableIdx = useMemo(
+    () => (data ? data.columns.map((c, j) => (readOnlyCols.has(c) ? -1 : j)).filter((j) => j >= 0) : []),
+    [data, readOnlyCols],
+  );
+  const insertCols = useMemo(() => (data ? writableIdx.map((j) => data.columns[j]) : []), [data, writableIdx]);
+
   // 外鍵導覽消費：pendingFilter 指向本分頁時，套用 col=value 篩選（被參照表開啟後即過濾出該列）。
   const pendingFilter = useStore((s) => s.pendingFilter);
   useEffect(() => {
@@ -876,8 +884,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const copyMarkedInsert = () => {
     if (!data || marked.size === 0 || !connKind) return;
     const idxs = [...marked].sort((a, b) => a - b);
-    const rows = idxs.map((i) => data.rows[i]);
-    copyToClipboard(buildInsertValues(connKind, tab.database, tab.table, data.columns, rows), t("已複製 {length} 列為 INSERT", { length: rows.length }));
+    const rows = idxs.map((i) => writableIdx.map((j) => data.rows[i][j]));
+    copyToClipboard(buildInsertValues(connKind, tab.database, tab.table, insertCols, rows), t("已複製 {length} 列為 INSERT", { length: rows.length }));
   };
 
   const submitInsert = async (row: RowInsert) => {
@@ -1880,7 +1888,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
       {inserting && data && (
         <InsertDialog
-          columns={data.columns}
+          columns={insertCols}
           initial={insertInitial}
           onCancel={() => { setInserting(false); setInsertInitial(undefined); }}
           onSubmit={submitInsert}

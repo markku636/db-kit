@@ -1034,7 +1034,10 @@ impl DatabaseDriver for MssqlDriver {
     }
 
     async fn exec_ddl(&self, sql: &str) -> AppResult<()> {
-        let mut conn = self.pooled().await?;
+        // 前端的 DROP/CREATE 語句可能自帶 `USE [db];` 前綴，USE 是 session 狀態；
+        // 用連線池的連線執行會把「目前資料庫」留在這條連線上，之後別的查詢默默跑到那個庫。
+        // 改用專屬連線，USE 隨連線關閉消失。
+        let mut conn = self.dedicated_client().await?;
         conn.simple_query(sql)
             .await
             .map_err(|e| AppError::Query(e.to_string()))?
@@ -1469,6 +1472,8 @@ fn mssql_type_str(ty: &str, max_length: i16, precision: u8, scale: u8) -> String
         // 省略精度等於預設的 7：`datetime2(0)` 若寫成 `datetime2`，重建 / 同步出來的欄位就從秒變成 100ns，
         // 型別比對也看不出差異。所以只有 7 能省略，0 也要寫出來。
         "datetime2" | "time" | "datetimeoffset" if scale != 7 => format!("{ty}({scale})"),
+        // sys.types 的 float 的 precision 是 24 (real 等價) 或 53；省略會被重建 / 同步成 53。
+        "float" if precision != 53 => format!("float({precision})"),
         _ => ty.to_string(),
     }
 }
@@ -1515,7 +1520,19 @@ fn batch_returns_rows(sql: &str) -> bool {
                     return true;
                 }
             }
-            "output" if matches!(cur, "insert" | "update" | "delete" | "merge") => return true,
+            "output" if matches!(cur, "insert" | "update" | "delete" | "merge") => {
+                // `OUTPUT … INTO #tmp` 的結果進了暫存表，用戶端看不到結果集；
+                // 照樣認成「會回列」會讓整批走 fetch、 rows_affected 永遠是 0。
+                let mut j = i + 1;
+                let mut into_temp = false;
+                while j < toks.len() {
+                    if toks[j] == ";" || toks[j] == "(" { break; }
+                    if toks[j] == "into" { into_temp = true; break; }
+                    if matches!(toks[j], "values" | "select" | "exec" | "execute" | "default") { break; }
+                    j += 1;
+                }
+                if !into_temp { return true; }
+            }
             "insert" => {
                 cur = "insert";
                 insert_values = false;
@@ -1847,6 +1864,9 @@ WITH c AS (SELECT 1 AS x) SELECT * FROM c"));
         assert!(!batch_returns_rows("DELETE FROM t WHERE id IN (SELECT id FROM u)"));
         assert!(!batch_returns_rows("INSERT INTO t (a) SELECT a FROM u UNION SELECT 2"));
         assert!(!batch_returns_rows("INSERT INTO t EXEC dbo.p"));
+        // OUTPUT INTO 暫存表沒有用戶端結果集；一般 OUTPUT inserted.* 仍有。
+        assert!(!batch_returns_rows("INSERT INTO t (a) OUTPUT inserted.id INTO #tmp VALUES (1)"));
+        assert!(batch_returns_rows("INSERT INTO t (a) OUTPUT inserted.id VALUES (1)"));
     }
 
     #[test]
@@ -2043,6 +2063,9 @@ SELECT SCOPE_IDENTITY()"));
         assert_eq!(mssql_type_str("datetimeoffset", 10, 34, 7), "datetimeoffset");
         assert_eq!(mssql_type_str("nvarchar", -1, 0, 0), "nvarchar(MAX)");
         assert_eq!(mssql_type_str("nvarchar", 100, 0, 0), "nvarchar(50)");
+        // float(24) 不能退化成 float(53)，否則重建 / 同步就把單精度變成雙精度。
+        assert_eq!(mssql_type_str("float", 4, 24, 0), "float(24)");
+        assert_eq!(mssql_type_str("float", 8, 53, 0), "float");
     }
 
     #[test]

@@ -235,6 +235,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
   // Docker：本機 socket / pipe（不用埠、不能走 SSH 通道）或 TCP（可 TLS）。
   const dockerMode: "local" | "tcp" | "tls" = isLocalDockerHost(host) ? "local" : dockerTls ? "tls" : "tcp";
   const isWindows = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+  // 非 Windows 版沒有 Windows 驗證（後端也直接報錯），載入到舊設定時退回 SQL 驗證。
+  useEffect(() => { if (!isWindows && mssqlAuth === "windows") setMssqlAuth("sql"); }, [isWindows, mssqlAuth]);
   // Registry / Harbor：埠一律寫在網址 / 主機裡（localhost:5000），不顯示埠欄。
   const regKind = kind === "registry" || kind === "harbor";
   const setDockerMode = (m: "local" | "tcp" | "tls") => {
@@ -973,7 +975,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
                   }
                 }}>
                   <option value="sql">{t("SQL Server 驗證")}</option>
-                  <option value="windows">{t("Windows 驗證")}</option>
+                  {isWindows && <option value="windows">{t("Windows 驗證")}</option>}
                 </Select>
               </Field>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">

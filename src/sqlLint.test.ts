@@ -50,6 +50,14 @@ describe("maskCode", () => {
     expect(maskCode(s)).toBe(s.replace(/\[[^\]]*\]/g, (x) => " ".repeat(x.length)));
   });
 
+  it("T-SQL 巢狀區塊註解：第一個 */ 只關最內層，後面仍被遮住", () => {
+    const sql = "/* outer /* inner */ still comment SELECT * FROM t */ DELETE FROM u";
+    const masked = maskCode(sql);
+    expect(masked.length).toBe(sql.length);
+    expect(masked).not.toContain("still comment");
+    expect(masked).toContain("DELETE FROM u");
+  });
+
   it("孤立的 [ 不吃掉後文（沒有同行閉合的 ] 就當普通字元）", () => {
     const sql = "SELECT a[1 FROM t\nWHERE name LIKE '%x'";
     expect(maskCode(sql)).toContain("WHERE name LIKE");

@@ -1316,7 +1316,12 @@ export function snippetBodyForKind(kind: DbKind, body: string): string {
   }
   const lim = /\bLIMIT\s+(\d+)\s*;?/i.exec(body);
   if (!lim) return body;
-  const head = body.slice(0, lim.index).replace(/^(\s*)SELECT\b/i, `$1SELECT TOP (${lim[1]})`);
+  // T-SQL 的 DISTINCT 要寫在 TOP 前面（SELECT DISTINCT TOP (n)）；前面的註解也不能讓比對失敗。
+  const before = body.slice(0, lim.index);
+  const m = /^((?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*)SELECT(\s+DISTINCT)?\b/i.exec(before);
+  const head = m
+    ? `${m[1]}SELECT${m[2] ?? ""} TOP (${lim[1]})${before.slice(m[0].length)}`
+    : before;
   return `${head.trimEnd()};`;
 }
 

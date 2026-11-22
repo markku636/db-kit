@@ -3014,6 +3014,8 @@ const en: Catalog = {
   "複製鍵到新名稱：": "Clone key to a new name:",
   "複製鍵到新名稱…": "Clone key to new name…",
   "已複製為 {name}": "Cloned as {name}",
+  "執行函式": "Execute function",
+  "執行預存程序": "Execute stored procedure",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",
