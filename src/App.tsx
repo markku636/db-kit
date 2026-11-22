@@ -1667,6 +1667,21 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
       return n;
     });
 
+  // 最近使用的連線（命令面板置頂）：只記 id，連線被刪掉時自動略過。
+  const [recentConns, setRecentConns] = useState<string[]>(() => {
+    try {
+      const v: unknown = JSON.parse(localStorage.getItem("dbkit:recentConns") || "[]");
+      return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 5) : [];
+    } catch { return []; }
+  });
+  const recordRecentConn = (id: string) => {
+    setRecentConns((prev) => {
+      const next = [id, ...prev.filter((x) => x !== id)].slice(0, 5);
+      try { localStorage.setItem("dbkit:recentConns", JSON.stringify(next)); } catch { /* 忽略 */ }
+      return next;
+    });
+  };
+
   const doConnect = async (id: string) => {
     const cfg = connections.find((c) => c.id === id);
     if (!cfg || connectedIds.has(id) || connecting.has(id)) return;
@@ -1687,6 +1702,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
     try {
       await api.connect(cfg, gate.code);
       useStore.getState().markConnected(id);
+      recordRecentConn(id);
       expandConn(id); // 剛連上就把樹打開（上一輪殘留的收合狀態不該蓋掉新連線）
       const dbs = await api.listDatabases(id);
       setDatabases((d) => ({ ...d, [id]: dbs }));
@@ -1726,6 +1742,16 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
   // 命令面板項目：連線 / 資料庫 / 已載入的資料表（含視圖）/ 常用動作。
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [];
+    // 最近使用的連線放最前面，並標註「最近使用」，Ctrl+K 後第一頁就能命中。
+    for (const id of recentConns) {
+      const c = connections.find((x) => x.id === id);
+      if (!c) continue;
+      items.push({
+        id: `recent:${id}`, label: c.name, hint: t("最近使用 · {kind}", { kind: KIND_META[c.kind].label }),
+        group: "conn", icon: History,
+        run: () => { setActive(c.id); selectNode({ type: "connection", connId: c.id }); if (!connectedIds.has(c.id)) doConnect(c.id); },
+      });
+    }
     for (const c of connections) {
       items.push({
         id: `conn:${c.id}`, label: c.name, hint: KIND_META[c.kind].label, group: "conn", icon: Database,
@@ -1800,7 +1826,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
     return items;
     // t 必須在依賴內：切換語言時 useT() 會換一個新的函式參考，此 memo 才會重算出新語言的標籤。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections, connectedIds, databases, expandedDbs, pins, activeId, onAdvSearch, onLockNow, t]);
+  }, [connections, connectedIds, databases, expandedDbs, pins, activeId, onAdvSearch, onLockNow, t, recentConns]);
 
   const refreshDbs = async (id: string) => {
     if (!connectedIds.has(id)) return;

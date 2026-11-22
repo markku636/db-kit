@@ -3085,6 +3085,7 @@ const en: Catalog = {
   "常用指令（仿 RedisInsight）": "Saved commands (RedisInsight-style)",
   "常用指令": "Saved commands",
   "（尚無常用指令）": "(no saved commands yet)",
+  "最近使用 · {kind}": "Recent · {kind}",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",
