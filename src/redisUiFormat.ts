@@ -42,6 +42,14 @@ export function recordRedisPattern(history: readonly string[], pattern: string):
 }
 
 /**
+ * 以載入時的 TTL 與已過秒數算剩餘 TTL，最低 0；-1（永不過期）維持 -1。
+ */
+export function remainingTtl(base: number, elapsedSecs: number): number {
+  if (!Number.isFinite(base) || base < 0) return -1;
+  return Math.max(0, base - Math.max(0, Math.floor(elapsedSecs)));
+}
+
+/**
  * TTL 秒數轉可讀字串（仿 ARDM）：-1 永不過期，其餘拆成 d/h/m/s。
  * 單位用語言中立的縮寫（與 uptime 一致），「無到期」由呼叫端用 t() 處理。
  */

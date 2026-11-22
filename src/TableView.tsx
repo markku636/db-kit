@@ -24,7 +24,7 @@ import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCoun
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint } from "./redisKeyValueFormat";
 import { isReadOnlyColumnExtra } from "./columnMeta";
-import { fmtRedisTtl } from "./redisUiFormat";
+import { fmtRedisTtl, remainingTtl } from "./redisUiFormat";
 import { loadRedisSeparator, redisNamespacePattern, redisNamespacePrefix } from "./redisTree";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree, { REDIS_TREE_LIMIT } from "./RedisKeyTree";
@@ -2566,6 +2566,16 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   const { shellClass } = useModalView();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount（先前完全沒有 Esc 處理）
   const [page, setPage] = useState<KeyPage | null>(null);
+  // TTL 倒數：記下載入當下的值與時間，每秒重算（仿 ARDM）；不重新打 Redis。
+  const [ttlBase, setTtlBase] = useState({ value: -1, at: 0 });
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { setTtlBase({ value: page?.ttl ?? -1, at: Date.now() }); }, [page?.ttl, rkey]);
+  useEffect(() => {
+    if (ttlBase.value < 0) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [ttlBase.value]);
+  const ttlLeft = remainingTtl(ttlBase.value, (now - ttlBase.at) / 1000);
   // 累積已載入的成員（跨多頁），供 KeyDetailBody 以既有渲染呈現。
   const [members, setMembers] = useState<string[]>([]);
   const [fields, setFields] = useState<string[]>([]);
@@ -2669,7 +2679,7 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
             <>
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">{page.type_}</span>
               <span className="text-xs text-fg/40">
-                <span title={t("剩餘存活時間（TTL）")}>TTL: {page.ttl < 0 ? t("無到期") : fmtRedisTtl(page.ttl)}</span>
+                <span title={t("剩餘存活時間（TTL）")}>TTL: {ttlLeft < 0 ? t("無到期") : fmtRedisTtl(ttlLeft)}</span>
               </span>
               {isCollection && page.total >= 0 && (
                 <span className="text-xs text-fg/35"

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, parseRedisDbPrefix, normalizeRedisDbInput } from "./redisUiFormat";
+import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl } from "./redisUiFormat";
 
 describe("fmtUptime", () => {
   it("不到一分鐘顯示秒數，不再顯示 0m", () => {
@@ -63,6 +63,15 @@ describe("recordRedisPattern", () => {
     for (let i = 1; i < many.length; i++) h = recordRedisPattern(h, many[i]);
     expect(h).toHaveLength(20);
     expect(h[0]).toBe(many[29]);
+  });
+});
+
+describe("remainingTtl", () => {
+  it("每秒倒數、最低 0；永不過期維持 -1", () => {
+    expect(remainingTtl(60, 0)).toBe(60);
+    expect(remainingTtl(60, 5.9)).toBe(55);
+    expect(remainingTtl(3, 10)).toBe(0);
+    expect(remainingTtl(-1, 100)).toBe(-1);
   });
 });
 
