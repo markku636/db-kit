@@ -51,7 +51,7 @@ function allFolderPaths(root: RedisTreeNode): string[] {
 
 // Redis 命名空間鍵樹：仿 Another Redis Desktop Manager 的左側鍵樹，
 // 把 user:1:name 之類的鍵依 ":" 分組成可摺疊資料夾。葉節點＝實際鍵。
-export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey, onContextKey, onContextFolder, onContextBlank, onBulkDelete, onBulkTtl, onImportKeys }: {
+export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey, onContextKey, onContextFolder, onContextBlank, onBulkDelete, onBulkTtl, onExportAll, onImportKeys }: {
   connId: string;
   database: string;
   nonce: number;
@@ -68,6 +68,8 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   onBulkDelete?: (keys: string[]) => void;
   // 多選批次設定 TTL（仿 ARDM）；唯讀連線不傳入。
   onBulkTtl?: (keys: string[]) => void;
+  // 匯出目前符合搜尋 / 型別過濾的所有鍵（仿 ARDM 的 Export all keys）。
+  onExportAll?: (keys: string[]) => void;
   // 由父層提供的匯入 JSON 動作（唯讀連線不傳入，按鈕就不顯示）。
   onImportKeys?: () => void;
 }) {
@@ -249,6 +251,9 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
           <option value="">{t("所有型別")}</option>
           {["string", "hash", "list", "set", "zset", "stream"].map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
+        {onExportAll && <button type="button" onClick={() => onExportAll(keys ?? [])}
+          title={t("匯出目前列出的所有鍵（仿 ARDM）")} disabled={!keys?.length}
+          className="px-2 py-1 rounded border border-fg/15 text-fg/50 hover:bg-fg/10 whitespace-nowrap disabled:opacity-30">{t("匯出全部")}</button>}
         {onImportKeys && <button type="button" onClick={onImportKeys} title={t("從 JSON 檔匯入鍵（仿 ARDM）")}
           className="px-2 py-1 rounded border border-fg/15 text-fg/50 hover:bg-fg/10 whitespace-nowrap">{t("匯入鍵")}</button>}
         {onBulkDelete && multiSelect && selectedKeys.size > 0 && (

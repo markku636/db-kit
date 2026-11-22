@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport } from "./redisKeyValueFormat";
+import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport, mergeRedisKeyExports } from "./redisKeyValueFormat";
 
 const page = (over: Record<string, unknown>) => ({
   type_: "string", total: 0, ttl: -1, cursor: 0, truncated: false, fields: [], members: [], scores: [], ...over,
@@ -73,6 +73,16 @@ describe("buildRedisKeyExport", () => {
     const s = JSON.parse(buildRedisKeyExport("s", page({ type_: "string", ttl: 5, total: 1, cursor: 0, members: ["v"] })));
     expect(s[0].value).toBe("v");
     expect(s[0].partial).toBe(false);
+  });
+});
+
+describe("mergeRedisKeyExports", () => {
+  it("合併成單一可匯回的陣列，並略過壞掉的片段", () => {
+    const a = buildRedisKeyExport("a", page({ type_: "string", members: ["1"] }));
+    const b = buildRedisKeyExport("b", page({ type_: "list", members: ["x", "y"], total: 2 }));
+    const merged = JSON.parse(mergeRedisKeyExports([a, "not json", b]));
+    expect(merged).toHaveLength(2);
+    expect(merged.map((k: any) => k.key)).toEqual(["a", "b"]);
   });
 });
 

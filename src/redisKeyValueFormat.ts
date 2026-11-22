@@ -38,6 +38,20 @@ export function buildRedisKeyExport(
   }], null, 2);
 }
 
+/** 合併多鍵的匯出 JSON（全部仍在同一个可匯回的陣列裡）。壞掉的片段直接略過。 */
+export function mergeRedisKeyExports(chunks: string[]): string {
+  const all: unknown[] = [];
+  for (const chunk of chunks) {
+    try {
+      const parsed: unknown = JSON.parse(chunk);
+      if (Array.isArray(parsed)) all.push(...parsed);
+    } catch {
+      /* 單鍵讀取失敗不該讓整檔壞掉 */
+    }
+  }
+  return JSON.stringify(all, null, 2);
+}
+
 /** 鍵詳情頁尾的提示：過濾後整頁都沒符合、但後面還有資料時要講清楚，不能只顯示「已載入 0 筆」。 */
 export function redisPageHint(filtered: boolean, count: number, hasMore: boolean): string {
   if (filtered && count === 0 && hasMore) {

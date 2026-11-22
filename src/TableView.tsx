@@ -22,7 +22,7 @@ import HarborRepoView from "./HarborRepoView";
 import K8sObjectView from "./K8sObjectView";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, pickOpenFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
-import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport } from "./redisKeyValueFormat";
+import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport, mergeRedisKeyExports } from "./redisKeyValueFormat";
 import { isBinaryColumnType, isReadOnlyColumnExtra } from "./columnMeta";
 import { fmtRedisTtl, hasBinaryKeyEscape, remainingTtl } from "./redisUiFormat";
 import { loadRedisSeparator, redisNamespacePattern, redisNamespacePrefix } from "./redisTree";
@@ -1437,6 +1437,30 @@ function DataPane({ tab }: { tab: OpenTab }) {
     }
   };
 
+  // 匯出目前鍵樹列出的所有鍵（仿 ARDM 的 Export all keys）。逐鍵取完整內容，
+  // 腳本自己帶 partial 旗標，部分載入的集合匯回時會被安全略過。
+  const exportAllRedisKeys = async (keys: string[]) => {
+    if (!keys.length) return;
+    const cap = keys.slice(0, 500);
+    setApplying(true);
+    try {
+      const chunks: string[] = [];
+      for (const k of cap) {
+        const p = await api.redisKeyPage(tab.connId, tab.database, k, 0, 10_000, "", true);
+        chunks.push(buildRedisKeyExport(k, p));
+      }
+      const path = await pickSaveFile("redis-keys.json", [{ name: "JSON", extensions: ["json"] }]);
+      if (!path) return;
+      await api.writeTextFile(path, mergeRedisKeyExports(chunks));
+      toast.success(t("已匯出 {n} 個鍵", { n: cap.length }));
+      if (keys.length > cap.length) toast.info(t("僅匯出前 {n} 個鍵（上限 500）", { n: cap.length }));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("匯出失敗"));
+    } finally {
+      setApplying(false);
+    }
+  };
+
   // 多選批次設 TTL：逐鍵送 updateCell（ttl 是 Redis 網格的可寫欄），統計成功 / 失敗。
   const bulkSetKeyTtl = async (keys: string[]) => {
     if (!keys.length || readonly) return;
@@ -1714,6 +1738,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onContextBlank={(x, y) => setFolderMenu({ prefix: "", keys: [], truncated: false, x, y })}
           onBulkDelete={readonly ? undefined : bulkDeleteRedisKeys}
           onBulkTtl={readonly ? undefined : bulkSetKeyTtl}
+          onExportAll={exportAllRedisKeys}
           onImportKeys={readonly ? undefined : importRedisKeys}
         />
       ) : (
