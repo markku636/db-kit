@@ -9,6 +9,7 @@
 - **鍵詳情 TTL 每秒倒數（仿 ARDM）**：以前打開時是 `300s`，放著十分鐘還是 `300s`（除非手動重整）；現在本地每秒遞減、到期顯示 `0s`，不會為此增加 Redis 請求。
 - **鍵樹可多選一次刪除（仿 ARDM 的 Multiple Select/Delete）**：工具列「多選」打開後點鍵即選取，再按「刪除選取」會先預覽明確鍵名再批次 DEL；唯讀連線也能選但不會出現刪除入口。
 - **Redis 各連線的偏好不再互相污染**：主控台指令歷史、鍵樹 MATCH 搜尋歷史、鍵樹分隔符現在按連線分開記；舊的全域設定第一次讀取時仍會沿用。
+- **維運面板新增 ACL 頁（仿 ARDM 的 ACL Support）**：列出目前使用者與所有 ACL 使用者的啟用狀態；只讀 `ACL LIST` / `ACL WHOAMI`，改權限仍走主控台。
 - **鍵可以從匯出的 JSON 匯回（仿 ARDM 的 Import keys）**：鍵樹工具列的「匯入鍵」選檔後批次還原 string / hash / list / set / zset 並保留 TTL；stream 與模組型別無法從一般 value 表示，會明確回報略過筆數，不假裝成功。
 - **Pub/Sub 面板可依頻道或內容過濾（仿 ARDM）**：訂閱量大的時候不用在一堆訊息裡找，輸入關鍵字即時篩。
 - **具名執行個體 + 明確埠不再問 SQL Browser**：`Server=host\INST,1433` 或 `jdbc:sqlserver://host\INST:1433` 現在直接連 1433，不再因為 Browser（UDP 1434）沒回應而失敗；沒給埠時照舊問 Browser。

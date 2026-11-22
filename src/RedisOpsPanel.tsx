@@ -6,8 +6,9 @@ import { useStore } from "./store";
 import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
+import { parseAclLine } from "./redisUiFormat";
 
-type Tab = "slowlog" | "clients" | "bigkeys";
+type Tab = "slowlog" | "clients" | "bigkeys" | "acl";
 
 // Redis 維運面板：慢查詢日誌 / 用戶端連線 / 大鍵掃描（對齊 Another Redis Desktop Manager 的狀態工具）。
 export default function RedisOpsPanel({ connId, connName, database, initialPrefix = "", initialTab = "slowlog", onChanged, onClose }: {
@@ -29,7 +30,7 @@ export default function RedisOpsPanel({ connId, connName, database, initialPrefi
           <Icon icon={CircleDot} size={14} className="text-red-400" />
           <span className="font-medium text-sm">{t("維運 ·")} {connName}</span>
           <div className="flex items-center rounded border border-fg/10 overflow-hidden ml-2 text-xs">
-            {([["slowlog", t("慢查詢")], ["clients", t("用戶端")], ["bigkeys", t("大鍵")]] as [Tab, string][]).map(([v, label]) => (
+            {([["slowlog", t("慢查詢")], ["clients", t("用戶端")], ["bigkeys", t("大鍵")], ["acl", "ACL"]] as [Tab, string][]).map(([v, label]) => (
               <button key={v} type="button" onClick={() => setTab(v)}
                 className={`px-3 py-1 ${tab === v ? "bg-fg/15 text-fg" : "text-fg/50 hover:bg-fg/5"}`}>
                 {label}
@@ -43,6 +44,7 @@ export default function RedisOpsPanel({ connId, connName, database, initialPrefi
           {tab === "slowlog" && <SlowLogTab connId={connId} readonly={readonly} />}
           {tab === "clients" && <ClientsTab connId={connId} readonly={readonly} />}
           {tab === "bigkeys" && <BigKeysTab connId={connId} database={database} initialPrefix={initialPrefix} readonly={readonly} onChanged={onChanged} />}
+          {tab === "acl" && <AclTab connId={connId} />}
         </div>
       </div>
     </div>
@@ -185,6 +187,60 @@ function ClientsTab({ connId, readonly = false }: { connId: string; readonly?: b
           </tbody>
         </table>
       )}
+    </>
+  );
+}
+
+function AclTab({ connId }: { connId: string }) {
+  const t = useT();
+  const [whoami, setWhoami] = useState("");
+  const [users, setUsers] = useState<{ name: string; enabled: boolean }[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([api.runQuery(connId, "ACL WHOAMI"), api.runQuery(connId, "ACL LIST")])
+      .then(([who, list]) => {
+        if (!alive) return;
+        setWhoami(who.rows[0]?.[0] ?? "");
+        setUsers(list.rows.map((r) => parseAclLine(r[0] ?? "")).filter((u): u is { name: string; enabled: boolean } => u !== null));
+        setErr(null);
+      })
+      .catch((e) => { if (alive) { setErr(e?.message ?? t("讀取失敗")); setUsers(null); } });
+    return () => { alive = false; };
+  }, [connId, nonce]);
+
+  return (
+    <>
+      <div className="flex items-center gap-2 mb-2 text-xs">
+        <span className="text-fg/40">{t("目前使用者")}: <span className="mono text-fg/80">{whoami || "—"}</span></span>
+        <button type="button" onClick={() => setNonce((n) => n + 1)}
+          className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">
+          <Icon icon={RefreshCw} size={13} /> {t("刷新")}
+        </button>
+      </div>
+      <ErrBar err={err} />
+      {users && users.length === 0 && <div className="text-fg/40 text-sm">{t("（無 ACL 使用者資訊）")}</div>}
+      {users && users.length > 0 && (
+        <table className="text-xs mono w-full border-collapse">
+          <thead><tr className="text-fg/45">
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("使用者")}</th>
+            <th className="text-left px-2 py-1 border-b border-fg/10">{t("狀態")}</th>
+          </tr></thead>
+          <tbody>
+            {users.map((u) => (
+              <tr key={u.name} className="hover:bg-fg/5">
+                <td className="px-2 py-1 border-b border-fg/5 text-fg/80">{u.name}</td>
+                <td className={`px-2 py-1 border-b border-fg/5 ${u.enabled ? "text-emerald-400" : "text-fg/35"}`}>
+                  {u.enabled ? t("啟用") : t("停用")}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="text-[11px] text-fg/35 mt-2">{t("ACL LIST / WHOAMI 為唯讀指令；改權限請用主控台（ACL SETUSER）。")}</div>
     </>
   );
 }

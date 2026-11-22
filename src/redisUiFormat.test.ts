@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, pubSubLineMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl, normalizeAutoRefreshMs } from "./redisUiFormat";
+import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, pubSubLineMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl, normalizeAutoRefreshMs, parseAclLine } from "./redisUiFormat";
 
 describe("fmtUptime", () => {
   it("不到一分鐘顯示秒數，不再顯示 0m", () => {
@@ -16,6 +16,15 @@ describe("fmtUptime", () => {
     expect(fmtUptime(undefined)).toBe("—");
     expect(fmtUptime("0")).toBe("—");
     expect(fmtUptime("abc")).toBe("—");
+  });
+});
+
+describe("parseAclLine", () => {
+  it("認得 ACL LIST 的 user/on/off 格式，忽略壞行", () => {
+    expect(parseAclLine("user default on nopass ~* +@all")).toEqual({ name: "default", enabled: true });
+    expect(parseAclLine("user readonly off >hash ~app:* +@read")).toEqual({ name: "readonly", enabled: false });
+    expect(parseAclLine("garbage")).toBeNull();
+    expect(parseAclLine("")).toBeNull();
   });
 });
 

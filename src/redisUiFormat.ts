@@ -3,6 +3,13 @@
 /** MONITOR 輸出上限（仿 ARDM：一直捲不完會吃爆記憶體）。 */
 export const REDIS_MONITOR_MAX_LINES = 500;
 
+/** 解析 `ACL LIST` 的一行：`user NAME on ...` → 使用者名稱與是否啟用；壞行不顯示。 */
+export function parseAclLine(line: string): { name: string; enabled: boolean } | null {
+  const parts = line.trim().split(/\s+/);
+  if (parts.length < 3 || parts[0].toLowerCase() !== "user") return null;
+  return { name: parts[1], enabled: parts[2].toLowerCase() === "on" };
+}
+
 /** Pub/Sub 訊息過濾：比對頻道、樣式與內容（不分大小寫）。 */
 export function pubSubLineMatches(line: { channel: string; pattern: string | null; payload: string }, filter: string): boolean {
   return monitorLineMatches(`${line.channel} ${line.pattern ?? ""} ${line.payload}`, filter);
