@@ -500,6 +500,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "還原 SQLite 檔失敗：{e}" => "Failed to restore the SQLite file: {e}",
         "找不到 mysql 客戶端，請先安裝" => "The mysql client was not found; install it first",
         "建立還原前備份失敗：{e}" => "Failed to create the pre-restore backup: {e}",
+        "連線設定檔解析失敗：{e}。為避免覆蓋既有連線，已終止寫入並保留 .corrupt 備份。" => "Failed to parse connections.json: {e}. Writing was aborted to avoid overwriting saved connections; a .corrupt backup was kept.",
         "MySQL 還原失敗" => "MySQL restore failed",
         "PostgreSQL 還原失敗" => "PostgreSQL restore failed",
         "找不到 mongorestore，請先安裝" => "mongorestore was not found; install it first",

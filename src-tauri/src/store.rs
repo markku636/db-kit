@@ -293,8 +293,15 @@ pub async fn load_file_in(dir: &Path) -> AppResult<ConnectionsFile> {
         Ok(bytes) => match serde_json::from_slice::<ConnectionsFile>(&bytes) {
             Ok(f) => Ok(f),
             Err(e) => {
-                eprintln!("[store] connections.json 解析失敗，忽略：{e}");
-                Ok(ConnectionsFile::default())
+                // 不能回空殼：接下來的 upsert/save 會把這份空檔原子覆寫回原檔，
+                // 一次抹掉所有連線與群組。先另外留一份損毀檔再中止寫入。
+                let backup = dir.join(format!("{CONNECTIONS_FILE}.corrupt"));
+                let _ = tokio::fs::write(&backup, &bytes).await;
+                eprintln!("[store] connections.json 解析失敗，已另存 {:?}：{e}", backup);
+                Err(AppError::Storage(tf!(
+                    "連線設定檔解析失敗：{e}。為避免覆蓋既有連線，已終止寫入並保留 .corrupt 備份。",
+                    e = e
+                )))
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ConnectionsFile::default()),
@@ -798,6 +805,20 @@ pub fn kc_delete(account: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn corrupted_connections_file_aborts_write_instead_of_wiping() {
+        let dir = std::env::temp_dir().join(format!("dbkit_corrupt_{}", std::process::id()));
+        let _ = tokio::fs::create_dir_all(&dir).await;
+        let path = dir.join(CONNECTIONS_FILE);
+        let bad = b"{not valid json";
+        tokio::fs::write(&path, bad).await.unwrap();
+        let err = load_file_in(&dir).await.expect_err("損毀檔必須報錯，不能回空殼");
+        assert!(err.to_string().contains("解析失敗"), "{err}");
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), bad, "原檔不能被改動");
+        assert!(dir.join(format!("{CONNECTIONS_FILE}.corrupt")).exists());
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
 
     #[test]
     fn persisted_connection_strips_kafka_and_proxy_passwords() {

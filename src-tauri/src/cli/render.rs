@@ -209,10 +209,12 @@ fn print_csv(columns: &[String], rows: &[Vec<Option<String>>]) {
 }
 
 fn csv_field(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        format!("\"{}\"", s.replace('"', "\"\""))
+    // 與 GUI 匯出共用同一套公式注入防護：=cmd() / @SUM(...) 等不能被 Excel 當公式執行。
+    let guarded = crate::export::csv_guard_formula(s);
+    if guarded.contains(',') || guarded.contains('"') || guarded.contains('\n') || guarded.contains('\r') {
+        format!("\"{}\"", guarded.replace('"', "\"\""))
     } else {
-        s.to_string()
+        guarded
     }
 }
 
@@ -235,5 +237,18 @@ fn print_json(columns: &[String], rows: &[Vec<Option<String>>]) {
     match serde_json::to_string_pretty(&arr) {
         Ok(s) => println!("{s}"),
         Err(e) => eprintln!("{}", tf!("json 序列化失敗：{e}", e = e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::csv_field;
+
+    #[test]
+    fn csv_output_guards_formula_injection() {
+        assert_eq!(csv_field("=cmd()"), "'=cmd()");
+        assert_eq!(csv_field("@SUM(A1)"), "'@SUM(A1)");
+        assert_eq!(csv_field("+1"), "'+1");
+        assert_eq!(csv_field("plain"), "plain");
     }
 }

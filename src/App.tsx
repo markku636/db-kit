@@ -368,7 +368,8 @@ export default function App() {
   // 解鎖後才寫入 store，鎖定語意不變，省掉一段串行 IPC）。
   const savedConnsRef = useRef<Promise<ConnectionConfig[]> | null>(null);
   useEffect(() => {
-    savedConnsRef.current = api.listSavedConnections().catch(() => [] as ConnectionConfig[]);
+    // 不要在這裡把失敗轉成空陣列：解鎖後會把 [] 寫進 store，看起來像連線全不見了。
+    savedConnsRef.current = api.listSavedConnections();
     api
       .appLockStatus()
       .then((s) => {
@@ -406,7 +407,7 @@ export default function App() {
           .getState()
           .setConnections(saved.map((c) => ({ ...c, password: c.password ?? "" })))
       )
-      .catch(() => {});
+      .catch((e: any) => toast.error(t("讀取連線清單失敗：{msg}，已保留畫面上原有的連線。", { msg: e?.message ?? String(e) })));
     // 側欄群組與連線同源（connections.json），但分開取：舊版設定檔沒有群組，
     // 這裡失敗只代表「沒有群組」，不該連帶讓連線清單載不出來。
     api.listConnectionGroups()
@@ -472,7 +473,9 @@ export default function App() {
       const saved = await api.listSavedConnections();
       useStore.getState().setConnections(saved.map((c) => ({ ...c, password: c.password ?? "" } as ConnectionConfig)));
       // 群組跟連線一起進來，側欄分區要一起刷新（否則新群組的連線會先落在「未分組」直到重啟）。
-      api.listConnectionGroups().then((gs) => useStore.getState().setConnGroups(gs)).catch(() => {});
+      // 不放進 fire-and-forget：群組沒刷新時，新匯入的連線會顯示在「未分組」直到重啟。
+      const groups = await api.listConnectionGroups();
+      useStore.getState().setConnGroups(groups);
       // SSH 主機 / 遠端桌面（連同資料夾）也在同一份檔裡：兩個側欄區塊一起重載。
       if (res.ssh > 0) void useSshSessions.getState().load();
       if (res.rd > 0) void useRdSessions.getState().load();

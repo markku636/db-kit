@@ -3090,6 +3090,8 @@ const en: Catalog = {
   "名稱「{name}」已存在，覆蓋會換掉整個設定與任務。確定覆蓋？": "A connector named \"{name}\" already exists; overwriting replaces its entire config and tasks. Continue?",
   "分區載入中或抓取失敗，請稍後再試": "Partitions are still loading or failed to load; try again shortly",
   "設定已變更，請重新預覽後再套用": "Settings changed since the preview; preview again before applying",
+  "將以「{path}」還原到「{name}」，現有資料會被覆蓋且無法復原。確定繼續？": "Restore \"{path}\" into \"{name}\"? Existing data will be overwritten irreversibly.",
+  "讀取連線清單失敗：{msg}，已保留畫面上原有的連線。": "Failed to load the connection list: {msg}. Existing connections on screen were kept.",
   "套用已儲存的篩選預設": "Apply a saved filter preset",
   "篩選預設": "Filter presets",
   "把目前條件存為預設（同名覆蓋）": "Save current conditions as a preset (same name overwrites)",

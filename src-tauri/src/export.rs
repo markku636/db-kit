@@ -565,14 +565,18 @@ fn as_excel_number(s: &str) -> Option<f64> {
     }
 }
 
-fn csv_field(s: &str, delim: &str) -> String {
-    // 公式注入（CSV injection / DDE）防護：以 = + - @ 或 tab/CR 開頭的值，
-    // 前置單引號，避免試算表（Excel / Sheets）把它當公式執行。
-    let guarded = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+/// CSV 公式注入（DDE）防護：以 = + - @ 或 tab/CR 開頭的值前置單引號，
+/// 避免試算表（Excel / Sheets）把資料當公式執行。GUI 匯出與 CLI --format csv 共用。
+pub(crate) fn csv_guard_formula(s: &str) -> String {
+    if s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
         format!("'{s}")
     } else {
         s.to_string()
-    };
+    }
+}
+
+fn csv_field(s: &str, delim: &str) -> String {
+    let guarded = csv_guard_formula(s);
     if guarded.contains(delim) || guarded.contains('"') || guarded.contains('\n') || guarded.contains('\r') {
         format!("\"{}\"", guarded.replace('"', "\"\""))
     } else {

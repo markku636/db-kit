@@ -117,7 +117,9 @@ pub async fn add(conn: &ConnArgs, fmt: Format, a: ConnAddArgs) -> AppResult<()> 
         "user": cfg.username,
         "database": cfg.database,
         "group": group,
-        "prod": a.prod,
+        // 回報「實際生效」的安全旗標：--replace 會沿用舊的 prod，直接報 a.prod 會讓
+        // 呼叫方以為已經清掉 PROD（GUI 仍顯示標記、MCP 仍要求 --allow-prod）。
+        "prod": cfg.options.get("prod").is_some_and(|v| v == "1"),
         "ssh": cfg.ssh_enabled,
         "test": test,
     });

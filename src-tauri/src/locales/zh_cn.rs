@@ -326,6 +326,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "還原 SQLite 檔失敗：{e}" => "还原 SQLite 档失败：{e}",
         "找不到 mysql 客戶端，請先安裝" => "找不到 mysql 客户端，请先安装",
         "建立還原前備份失敗：{e}" => "建立还原前备份失败：{e}",
+        "連線設定檔解析失敗：{e}。為避免覆蓋既有連線，已終止寫入並保留 .corrupt 備份。" => "连线设定档解析失败：{e}。为避免覆盖既有连线，已终止写入并保留 .corrupt 备份。",
         "MySQL 還原失敗" => "MySQL 还原失败",
         "PostgreSQL 還原失敗" => "PostgreSQL 还原失败",
         "找不到 mongorestore，請先安裝" => "找不到 mongorestore，请先安装",

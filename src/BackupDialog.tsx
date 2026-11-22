@@ -90,6 +90,12 @@ function ManualTab({ conn, database, readonly }: { conn: ConnectionConfig; datab
         const res = await api.backupRun(conn, db, path);
         setMsg({ ok: true, text: t("備份完成（{method}）：{bytes} → {path}", { method: res.method, bytes: formatBytes(res.bytes), path: res.path }) });
       } else {
+        // 還原會覆寫現有資料，和歷史頁一樣要先確認（手動路徑以前直接就做了）。
+        const ok = await uiConfirm(
+          t("將以「{path}」還原到「{name}」，現有資料會被覆蓋且無法復原。確定繼續？", { path, name: conn.name }),
+          { title: t("還原備份"), danger: true, confirmText: t("還原") },
+        );
+        if (!ok) return;
         await api.backupRestore(conn, db, path);
         setMsg({ ok: true, text: t("還原完成") });
       }

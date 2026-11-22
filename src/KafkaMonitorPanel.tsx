@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Activity, RefreshCw, X } from "lucide-react";
 import {
   api,
@@ -71,7 +71,6 @@ function ChartsTab({ connId }: { connId: string }) {
   const [allGroups, setAllGroups] = useState<string[]>([]);
   const [samples, setSamples] = useState<KafkaSample[]>([]);
   const [windowH, setWindowH] = useState(1);
-  const unlistenRef = useRef<UnlistenFn | null>(null);
 
   useEffect(() => {
     api.kafkaMonitorStatus(connId).then((s) => {
@@ -85,13 +84,21 @@ function ChartsTab({ connId }: { connId: string }) {
     api.kafkaMetricsHistory(connId).then(setSamples).catch(() => {});
     api.kafkaTopics(connId).then((ts) => setAllTopics(ts.map((x) => x.name).sort())).catch(() => {});
     api.kafkaConsumerGroups(connId).then((gs) => setAllGroups(gs.map((g) => g.group_id).sort())).catch(() => {});
+    // listen() 是非同步：若在它 resolve 前就切連線 / 關面板，寫進共用 ref 的 unlisten
+    // 永遠不會被呼叫，listener 就永久留著更新已卸載的元件。用 effect -local 狀態處理。
+    let disposed = false;
+    let unlisten: UnlistenFn | null = null;
     onKafkaMetrics(connId, (s) => {
+      if (disposed) return;
       setSamples((prev) => {
         const next = [...prev, s];
         return next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next;
       });
-    }).then((u) => { unlistenRef.current = u; });
-    return () => { unlistenRef.current?.(); };
+    }).then((u) => {
+      if (disposed) u();
+      else unlisten = u;
+    });
+    return () => { disposed = true; unlisten?.(); };
   }, [connId]);
 
   const applyConfig = (enabled: boolean) => {
