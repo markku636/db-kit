@@ -2068,7 +2068,10 @@ export function rectToTsv(
   rows: number[],
   cols: number[],
 ): string {
-  return rows.map((r) => cols.map((c) => getCell(r, c) ?? "").join("\t")).join("\n");
+  // 只在需要時加引號（含 tab / 換行 / 引號的值），單純文字維持原樣，
+  // 所以貼到 Excel 或從 Excel 貼回都還是最普通的 TSV。
+  const cell = (s: string) => /[\t\n\r"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  return rows.map((r) => cols.map((c) => cell(getCell(r, c) ?? "")).join("\t")).join("\n");
 }
 
 // 把框選矩形組成 Markdown 表格（含表頭列）。NULL → 空字串；`|` / 換行跳脫，供貼進文件 / PR。
@@ -2089,7 +2092,28 @@ export function rectToMarkdown(
 // 去除尾端單一換行（避免多出一列空白）；單一純文字回傳 1×1。
 export function parseClipboardGrid(text: string): string[][] {
   const val = text.replace(/\r\n/g, "\n").replace(/\n$/, "");
-  return val.split("\n").map((line) => line.split("\t"));
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let i = 0; i < val.length; i++) {
+    const ch = val[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (val[i + 1] === '"') { field += '"'; i++; }
+        else quoted = false;
+      } else field += ch;
+    } else if (ch === '"' && field === "") {
+      quoted = true;
+    } else if (ch === "\t") {
+      row.push(field); field = "";
+    } else if (ch === "\n") {
+      row.push(field); rows.push(row); row = []; field = "";
+    } else field += ch;
+  }
+  row.push(field);
+  rows.push(row);
+  return rows;
 }
 
 // 回傳游標位移所在的語句範圍（含文字與位移）；游標落在語句之間的空白時取後一條。

@@ -429,7 +429,10 @@ export default function App() {
 
   // F1 切換快捷鍵說明。
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "F1") { e.preventDefault(); setHelpOpen((v) => !v); } };
+    const onKey = (e: KeyboardEvent) => {
+      if (document.body.dataset.modalCount) return; // 對話框裡按 F1 不該在其上疊一層快捷鍵說明
+      if (e.key === "F1") { e.preventDefault(); setHelpOpen((v) => !v); }
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
@@ -4793,7 +4796,11 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   useEffect(() => {
     if (!running) return;
     // 編輯器聚焦時 Esc 也會冒泡到 window：執行中按 Esc = 停止（與紅色停止鈕同一條路徑）。
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") stopRun(); };
+    const onKey = (e: KeyboardEvent) => {
+      // 對話框（Export / Import / 確認框…）打開時 Esc 是關對話框，不該順手取消查詢。
+      if (document.body.dataset.modalCount) return;
+      if (e.key === "Escape") stopRun();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [running, stopRun]);

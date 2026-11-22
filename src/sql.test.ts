@@ -418,6 +418,22 @@ describe("rectToMarkdown", () => {
   });
 });
 
+describe("TSV round-trip with tabs/newlines inside cells", () => {
+  it("含 tab / 換行 / 引號的格值複製再貼上還是同一格", () => {
+    const get = (r: number, c: number) => [
+      ["plain", "line1\nline2"],
+      ["a\tb", 'he said "hi"'],
+    ][r][c];
+    const tsv = rectToTsv(get, [0, 1], [0, 1]);
+    expect(parseClipboardGrid(tsv)).toEqual([
+      ["plain", "line1\nline2"],
+      ["a\tb", 'he said "hi"'],
+    ]);
+    // 單純文字不加引號，仍與 Excel 貼上的 TSV 相容。
+    expect(rectToTsv((r, c) => get(r, c), [0], [0])).toBe("plain");
+  });
+});
+
 describe("parseClipboardGrid", () => {
   it("parses a TSV block into a 2D array", () => {
     expect(parseClipboardGrid("a\tb\tc\n1\t2\t3")).toEqual([

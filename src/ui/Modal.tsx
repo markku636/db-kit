@@ -73,6 +73,10 @@ export default function Modal({
   const shellRef = useRef<HTMLDivElement>(null);
   const idRef = useRef<symbol | null>(null);
   if (idRef.current === null) idRef.current = Symbol("modal");
+  // 呼叫端常傳 inline onClose={() => setX(false)}：若目標 effect 依賴 onClose，
+  // 上層 re-render 就會把底層對話框從堆疊中移除再推到最上層，Esc 會關錯視窗。
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   // Esc 關閉（僅最上層對話框回應）+ Tab 焦點環陷阱（鍵盤焦點不會逃出對話框）。
   // modalStack 維持開啟順序（後進＝最上層）；body.dataset.modalCount 供其他鍵盤處理
@@ -86,7 +90,7 @@ export default function Modal({
       if (e.key === "Escape") {
         if (modalStack[modalStack.length - 1] !== id) return; // 僅最上層對話框回應
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key === "Tab" && shellRef.current?.contains(document.activeElement)) {
@@ -117,7 +121,9 @@ export default function Modal({
       if (m <= 0) delete document.body.dataset.modalCount;
       else document.body.dataset.modalCount = String(m);
     };
-  }, [open, onClose]);
+    // 只在真正開／關時調整堆疊；onClose 走 ref，避免 re-render 打亂階層。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // 開啟時：記住先前焦點；若對話框內沒有元素自動聚焦（autoFocus），把焦點帶進外殼，
   // 確保鍵盤使用者一進對話框焦點就在內部。關閉時還原回先前焦點。

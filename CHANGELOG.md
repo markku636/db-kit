@@ -2,6 +2,8 @@
 
 新功能：
 
+- **Esc 與快捷鍵不再誤關視窗／取消查詢**：儲存格內按 Esc 只取消編輯；有對話框開啟時 Esc 不會取消正在執行的查詢、F1 不會疊出說明面板；命令面板註冊為 modal，背後分頁快捷鍵會讓路；巢狀對話框 re-render 不再打亂關閉順序。
+- **框選複製再貼上不會被 cell 內的 tab / 換行拆散**：必要時加引號、解析時正確還原，單純文字仍是一般 TSV（與 Excel 相容）。
 - **CLI 明確回報缺少必要參數 / 讀不到程序定義**：`dbk compare` 沒給 `--table`、`dbk sp-test inspect` 讀不到程序本體時不再用空值假裝成功。
 - **補齊 61 個 Rust 端翻譯 key**：Kafka / RabbitMQ / MCP / 壓測 / CLI 等舊功能的訊息以前在所有語言都顯示繁中；現在 en / zh-CN 都有譯文，日韓越則由既有的英文 fallback 帶出英文。
 - **框選列匯出與 CLI `dbk export` 也用正確的 SQL 方言**：這兩條路徑先前仍固定輸出 MySQL 反引號；external gateway 也照 MySQL 處理（與其他 SQL 產生邏輯一致）。

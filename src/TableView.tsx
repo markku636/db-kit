@@ -3237,8 +3237,9 @@ function InlineEdit({ value, onSave, type = "text" }: {
       aria-label={t("編輯值")}
       onChange={(e) => setText(e.target.value)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") { setEditing(false); if (text !== value) onSave(text); }
-        else if (e.key === "Escape") { setEditing(false); setText(value); }
+        // Esc 只取消这一次儲存格編輯；不讓它冒泡到 modal 的全域 Esc 處理把整個鍵詳情關掉。
+        if (e.key === "Enter") { e.stopPropagation(); setEditing(false); if (text !== value) onSave(text); }
+        else if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); setEditing(false); setText(value); }
       }}
       onBlur={() => { setEditing(false); if (text !== value) onSave(text); }}
       className="bg-inset border border-accent/70 rounded px-1 py-0.5 outline-none w-full focus:ring-2 focus:ring-accent/20" />

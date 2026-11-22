@@ -4,6 +4,7 @@ import { Search } from "lucide-react";
 import Icon from "./ui/Icon";
 import { fuzzyFilter } from "./fuzzy";
 import { useT } from "./i18n";
+import { useModalCount } from "./ui";
 
 /** 分組識別碼。刻意不是顯示文字 —— 譯文換了不能影響識別，拼錯要在編譯期就爆。 */
 export type PaletteGroup = "conn" | "db" | "table" | "view" | "action" | "pinned";
@@ -36,6 +37,8 @@ export default function CommandPalette({ items, onClose, placeholder }: {
   placeholder?: string;
 }) {
   const t = useT();
+  // 面板本身也是 modal：註冊後全域 Ctrl+W/Tab/T 等快捷鍵會讓路，不會在背後改分頁。
+  useModalCount();
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
