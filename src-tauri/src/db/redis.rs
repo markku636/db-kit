@@ -99,6 +99,11 @@ struct KeysSnapshot {
     created: std::time::Instant,
 }
 
+/// 連線選項的 Sentinel master 名稱（空字串＝一般直連）。
+fn sentinel_master(config: &ConnectionConfig) -> Option<&str> {
+    config.options.get("redis_sentinel_master").map(String::as_str)
+}
+
 /// SCAN 安全上限。
 const SCAN_KEY_LIMIT: usize = 100_000;
 
@@ -712,7 +717,7 @@ impl DatabaseDriver for RedisDriver {
         let mut info = connection_info(config, use_tls, tls_insecure);
         // Sentinel 模式：_host:_port 指向 Sentinel 節點，選項給 master 名稱；先問 Sentinel
         // 目前 master 的實際位址，後續所有 DB 連線都打到 master（仿 ARDM 的 Sentinel Support）。
-        if let Some(master) = config.options.get("redis_sentinel_master").filter(|s| !s.is_empty()) {
+        if let Some(master) = sentinel_master(config).filter(|s| !s.is_empty()) {
             let mut sentinel = redis::sentinel::Sentinel::build(vec![info.clone()])
                 .map_err(|e| AppError::Connect(format!("建立 Sentinel 失敗：{e}")))?;
             let master_client = sentinel
@@ -1829,6 +1834,14 @@ fn parse_client_list(raw: &str) -> Vec<ClientInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sentinel_master_reads_the_connection_option() {
+        assert_eq!(sentinel_master(&cfg("h", "", "")), None);
+        let mut c = cfg("h", "", "");
+        c.options.insert("redis_sentinel_master".into(), "mymaster".into());
+        assert_eq!(sentinel_master(&c), Some("mymaster"));
+    }
 
     #[test]
     fn import_key_valid_checks_value_shape() {
