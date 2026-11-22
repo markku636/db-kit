@@ -776,6 +776,7 @@ pub(super) fn messages_to_paged(msgs: Vec<KafkaMessage>) -> PagedData {
         columns,
         rows,
         total_rows: total,
+    truncated: false,
         page: 1,
         page_size: total as u32,
         primary_key: vec!["partition".to_string(), "offset".to_string()],

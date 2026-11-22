@@ -313,6 +313,7 @@ impl DatabaseDriver for PostgresDriver {
             columns: result.columns,
             rows: result.rows,
             total_rows: total as u64,
+        truncated: false,
             page: query.page,
             page_size,
             primary_key: self.primary_key(database, table).await?,

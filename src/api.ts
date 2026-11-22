@@ -170,6 +170,8 @@ export interface PagedData {
   columns: string[];
   rows: (string | null)[][];
   total_rows: number;
+  /** 已達後端安全上限提前停止掃描：total_rows 只是已收集筆數，實際更多（Redis 網格 100k）。 */
+  truncated?: boolean;
   page: number;
   page_size: number;
   primary_key: string[];

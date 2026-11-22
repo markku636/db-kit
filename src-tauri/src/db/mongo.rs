@@ -234,6 +234,7 @@ impl DatabaseDriver for MongoDriver {
             columns,
             rows,
             total_rows: total,
+        truncated: false,
             page: query.page,
             page_size: query.page_size,
             primary_key: vec!["_id".to_string()],

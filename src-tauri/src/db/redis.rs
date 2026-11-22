@@ -36,7 +36,17 @@ struct KeysSnapshot {
     db: String,
     pattern: String,
     keys: Vec<String>,
+    /// SCAN 因安全上限提前停止：總鍵數比 keys.len() 還多，介面必須講清楚。
+    truncated: bool,
     created: std::time::Instant,
+}
+
+/// SCAN 安全上限。
+const SCAN_KEY_LIMIT: usize = 100_000;
+
+/// 是否因上限提前停止（游標沒歸零就代表還有鍵沒掃）。
+fn scan_truncated(cursor: u64, collected: usize) -> bool {
+    cursor != 0 && collected > SCAN_KEY_LIMIT
 }
 
 /// 鍵快照有效期。逾時翻頁會重掃，確保不長時間顯示過期鍵集。
@@ -89,17 +99,18 @@ impl RedisDriver {
         pattern: &str,
         page: u32,
         page_size: u32,
-    ) -> AppResult<(u64, Vec<String>)> {
+    ) -> AppResult<(u64, Vec<String>, bool)> {
         let mut guard = self.snapshot.lock().await;
         let fresh = guard.as_ref().is_some_and(|s| {
             s.db == database && s.pattern == pattern && s.created.elapsed() < SNAPSHOT_TTL
         });
         if page == 0 || !fresh {
-            let keys = scan_all_keys(conn, pattern).await?;
+            let (keys, truncated) = scan_all_keys(conn, pattern).await?;
             *guard = Some(KeysSnapshot {
                 db: database.to_string(),
                 pattern: pattern.to_string(),
                 keys,
+                truncated,
                 created: std::time::Instant::now(),
             });
         }
@@ -112,7 +123,7 @@ impl RedisDriver {
         } else {
             Vec::new()
         };
-        Ok((total, page_keys))
+        Ok((total, page_keys, snap.truncated))
     }
 
     // ===== 以下為 Redis 專屬「另一款 Redis 工具」對齊功能（inherent 方法，
@@ -669,7 +680,7 @@ impl DatabaseDriver for RedisDriver {
         }
 
         // 取（或重建）鍵快照後切出該頁；翻頁不重掃整個 keyspace（見 paged_keys）。
-        let (total, page_keys) = self
+        let (total, page_keys, truncated) = self
             .paged_keys(&mut conn, database, &pattern, query.page, query.page_size)
             .await?;
 
@@ -680,6 +691,7 @@ impl DatabaseDriver for RedisDriver {
             columns: vec!["key".to_string(), "type".to_string(), "ttl".to_string()],
             rows,
             total_rows: total,
+            truncated,
             page: query.page,
             page_size: query.page_size,
             primary_key: vec!["key".to_string()],
@@ -1404,9 +1416,10 @@ fn manager_config() -> redis::aio::ConnectionManagerConfig {
 async fn scan_all_keys(
     conn: &mut redis::aio::ConnectionManager,
     pattern: &str,
-) -> AppResult<Vec<String>> {
+) -> AppResult<(Vec<String>, bool)> {
     let mut all: Vec<String> = Vec::new();
     let mut cursor: u64 = 0;
+    let mut truncated = false;
     loop {
         let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
             .arg(cursor)
@@ -1420,13 +1433,14 @@ async fn scan_all_keys(
         all.extend(decode_keys(batch));
         cursor = next;
         // 掃完（cursor 歸零）或達安全上限即停。
-        if cursor == 0 || all.len() > 100_000 {
+        if cursor == 0 || all.len() > SCAN_KEY_LIMIT {
+            truncated = scan_truncated(cursor, all.len());
             break;
         }
     }
     all.sort();
     all.dedup();
-    Ok(all)
+    Ok((all, truncated))
 }
 
 /// 以 pipeline 一次取回多個 key 的 TYPE + TTL，組成 [key, type, ttl] 列。
@@ -1644,6 +1658,15 @@ fn parse_client_list(raw: &str) -> Vec<ClientInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_truncated_detects_early_stop() {
+        // 游標歸零＝真的掃完了，即使筆數很多也不算截斷。
+        assert!(!scan_truncated(0, 200_000));
+        // 到上限就停但游標還沒歸零＝後面還有鍵，total 不是全貌。
+        assert!(scan_truncated(1234, SCAN_KEY_LIMIT + 1));
+        assert!(!scan_truncated(1234, 500));
+    }
 
     fn cfg(host: &str, user: &str, pass: &str) -> ConnectionConfig {
         serde_json::from_value(serde_json::json!({

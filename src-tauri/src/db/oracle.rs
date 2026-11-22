@@ -650,6 +650,7 @@ impl DatabaseDriver for OracleDriver {
                 columns: res.columns,
                 rows: res.rows,
                 total_rows: total,
+        truncated: false,
                 page: dq.page,
                 page_size: dq.page_size,
                 primary_key: pk,

@@ -576,6 +576,7 @@ impl DatabaseDriver for MssqlDriver {
             columns,
             rows: data_rows,
             total_rows: total,
+            truncated: false,
             page: query.page,
             page_size: query.page_size,
             primary_key,

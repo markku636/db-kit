@@ -1595,6 +1595,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
       <ProgressBar active={loading && !!data} />
       <div ref={gridRef} className="at-grid flex-1 overflow-auto outline-none" tabIndex={0} onKeyDown={onGridKey}>
         {err && <div className="p-3 text-red-400 text-sm mono">{err}</div>}
+        {data?.truncated && (
+          <div className="px-3 py-2 text-xs bg-warning/10 text-warning border-b border-warning/30">
+            {t("鍵數超過 {LIMIT}，僅顯示前 {LIMIT} 個；可用 MATCH 樣式縮小範圍。", { LIMIT: 100000 })}
+          </div>
+        )}
         {!data && loading && !err && (
           <div className="p-6 text-fg/40 text-sm flex items-center gap-2">
             <Icon icon={RefreshCw} size={14} className="animate-spin" /> {t("讀取中…")}

@@ -454,6 +454,7 @@ impl DatabaseDriver for ElasticDriver {
             columns: qr.columns,
             rows: qr.rows,
             total_rows: total,
+        truncated: false,
             page,
             page_size: size,
             primary_key: vec![ID_FIELD.to_string()],

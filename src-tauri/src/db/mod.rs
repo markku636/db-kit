@@ -352,6 +352,9 @@ pub struct PagedData {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
     pub total_rows: u64,
+    /// 已達安全上限提前停止掃描：total_rows 只是已收集到的筆數，實際還有更多（Redis 網格 100k 上限）。
+    #[serde(default)]
+    pub truncated: bool,
     pub page: u32,
     pub page_size: u32,
     /// 此表的主鍵欄位名（供前端判斷是否可編輯、組 WHERE 條件用）。
