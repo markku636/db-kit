@@ -701,6 +701,13 @@ export function onRedisMonitorError(connId: string, cb: (msg: string) => void): 
   });
 }
 
+/** 背景監視任務結束（伺服器斷線 / 主動停止）：前端據此把「監視中」改回未啟動。 */
+export function onRedisMonitorEnded(connId: string, cb: () => void): Promise<UnlistenFn> {
+  return listen<string>("redis-monitor-ended", (e) => {
+    if (e.payload === connId) cb();
+  });
+}
+
 // ---- SSH 終端機 / SFTP 事件（DTO 見 sshTypes.ts）----
 // 連線期間的 host key / 認證提問：conn_id 由前端在 sshConnect 前就產好，所以 invoke 還沒回來就能對上。
 export function onSshHostKeyPrompt(connId: string, cb: (p: SshHostKeyPrompt) => void): Promise<UnlistenFn> {

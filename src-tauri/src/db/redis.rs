@@ -15,6 +15,9 @@ pub struct RedisImportKey {
     pub type_: String,
     #[serde(default = "default_ttl")]
     pub ttl: i64,
+    /// 匯出時只載到部分成員：匯入必須略過，否則會 DEL 掉原鍵再寫回截斷的子集。
+    #[serde(default)]
+    pub partial: bool,
     pub value: serde_json::Value,
 }
 
@@ -28,7 +31,8 @@ pub struct RedisImportSummary {
 
 /// 匯入前一筆資料是否可處理：目前不支援 stream / 模組型別，且 value 型狀要對。
 fn import_key_valid(item: &RedisImportKey) -> bool {
-    if item.key.trim().is_empty() { return false; }
+    // 截斷過的匯出要擋下來：DEL 掉完整鍵再寫回部分內容就是資料丟失。
+    if item.partial || item.key.trim().is_empty() { return false; }
     match item.type_.as_str() {
         "string" => item.value.is_string(),
         "hash" => item.value.as_array().is_some_and(|a| a.iter().all(|v| {
@@ -615,9 +619,11 @@ impl RedisDriver {
                 _ => false,
             };
             if !written { summary.skipped += 1; continue; }
-            if item.ttl > 0 {
-                let _: () = redis::cmd("PEXPIRE").arg(&item.key).arg(item.ttl).query_async(&mut conn).await.unwrap_or(());
-            } else if item.ttl == -1 {
+            // 匯出的 TTL 是 `TTL` 指令的「秒數」，要用 EXPIRE 而不是 PEXPIRE（毫秒），
+            // 否則 60 秒會變成 60 毫秒、幾乎立刻過期。-2（鍵已消失）也當成無到期。
+            if item.ttl >= 0 {
+                let _: () = redis::cmd("EXPIRE").arg(&item.key).arg(item.ttl).query_async(&mut conn).await.unwrap_or(());
+            } else {
                 let _: () = redis::cmd("PERSIST").arg(&item.key).query_async(&mut conn).await.unwrap_or(());
             }
             summary.imported += 1;
@@ -1807,24 +1813,38 @@ mod tests {
     #[test]
     fn import_key_valid_checks_value_shape() {
         let j = |s: &str| RedisImportKey {
-            key: "k".into(), type_: "string".into(), ttl: -1,
+            key: "k".into(), type_: "string".into(), ttl: -1, partial: false,
             value: serde_json::from_str(s).unwrap(),
         };
         assert!(import_key_valid(&j(r#""hello""#)));
         assert!(!import_key_valid(&j("123")));
         assert!(!import_key_valid(&j("null")));
         let h = RedisImportKey {
-            key: "h".into(), type_: "hash".into(), ttl: -1,
+            key: "h".into(), type_: "hash".into(), ttl: -1, partial: false,
             value: serde_json::from_str(r#"[{"field":"a","value":"1"}]"#).unwrap(),
         };
         assert!(import_key_valid(&h));
         let z = RedisImportKey {
-            key: "z".into(), type_: "zset".into(), ttl: -1,
+            key: "z".into(), type_: "zset".into(), ttl: -1, partial: false,
             value: serde_json::from_str(r#"[{"member":"m","score":1.5}]"#).unwrap(),
         };
         assert!(import_key_valid(&z));
         let stream = RedisImportKey { type_: "stream".into(), ..j(r#""x""#) };
         assert!(!import_key_valid(&stream));
+        // 只匯出部分的鍵不能拿去覆寫完整鍵。
+        let partial = RedisImportKey { partial: true, ..j(r#""x""#) };
+        assert!(!import_key_valid(&partial));
+    }
+
+    #[test]
+    fn import_payload_accepts_exported_single_and_array_shapes() {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Payload { One(RedisImportKey), Many(Vec<RedisImportKey>) }
+        let one = r#"{"key":"k","type":"string","ttl":60,"value":"v","partial":false}"#;
+        let arr = format!("[{one}]");
+        assert!(serde_json::from_str::<Payload>(one).is_ok());
+        assert!(serde_json::from_str::<Payload>(&arr).is_ok());
     }
 
     #[test]

@@ -22,12 +22,13 @@ export function buildRedisKeyExport(
     case "stream": value = p.members.map((m, i) => ({ id: p.fields[i] ?? "", fields: m })); break;
     default: value = p.members;
   }
-  return JSON.stringify({
+  // 外層是陣列：單鍵也是一筆，日後要多鍵批次匯出直接往裡加即可。
+  return JSON.stringify([{
     key, type: p.type_, ttl: p.ttl, value,
     exported: Array.isArray(value) ? value.length : 1,
     total: p.total,
     partial: p.cursor !== 0 && p.type_ !== "string",
-  }, null, 2);
+  }], null, 2);
 }
 
 /** 鍵詳情頁尾的提示：過濾後整頁都沒符合、但後面還有資料時要講清楚，不能只顯示「已載入 0 筆」。 */

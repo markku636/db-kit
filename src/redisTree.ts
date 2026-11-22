@@ -60,7 +60,7 @@ export function toggleKeySelection(selected: ReadonlySet<string>, key: string): 
 }
 
 export const REDIS_SEPARATOR_KEY = "dbkit:redisKeySeparator";
-export const redisSeparatorKey = (connId: string) => `${REDIS_SEPARATOR_KEY}:${connId}`;
+export const redisSeparatorKey = (connId: string, db?: string) => `${REDIS_SEPARATOR_KEY}:${connId}:${db ?? ""}`;
 
 /** 讀取使用者選的分隔符（空值退回冒號）；供鍵樹外部的右鍵選單共用。 */
 export function loadRedisSeparator(connId?: string): string {

@@ -11,6 +11,12 @@ export function acquireRedisPanel(connId: string, ownerId: string): number {
   return set.size;
 }
 
+/** 除了自己以外還有別的面板在用嗎？ explicit stop 時用來避免誤停共用任務。 */
+export function hasOtherRedisPanel(connId: string, ownerId: string): boolean {
+  const set = owners.get(connId);
+  return !!set && set.size > (set.has(ownerId) ? 1 : 0);
+}
+
 /** 回傳釋放後還剩幾個面板；為 0 時呼叫端才可以真的停止後端任務。 */
 export function releaseRedisPanel(connId: string, ownerId: string): number {
   const set = owners.get(connId);

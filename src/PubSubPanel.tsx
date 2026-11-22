@@ -7,7 +7,7 @@ import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useT } from "./i18n";
-import { acquireRedisPanel, releaseRedisPanel } from "./redisPanelOwnership";
+import { acquireRedisPanel, hasOtherRedisPanel, releaseRedisPanel } from "./redisPanelOwnership";
 import { pubSubLineMatches } from "./redisUiFormat";
 
 interface Line {
@@ -45,13 +45,17 @@ export default function PubSubPanel({ connId, connName, onClose }: {
   const pausedRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const ownerId = useRef(`pubsub-${crypto.randomUUID()}`);
+  const aliveRef = useRef(true);
+  const busyRef = useRef(false);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
 
   // 卸載時收掉監聽 + 取消訂閱（避免背景任務洩漏）。
   // 側欄與分頁工具列可能各開一個面板：只有最後一個關掉才真的取消訂閱。
   useEffect(() => {
+    aliveRef.current = true;
     acquireRedisPanel(connId, ownerId.current);
     return () => {
+      aliveRef.current = false;
       unlistenRef.current?.();
       unlistenErrRef.current?.();
       if (releaseRedisPanel(connId, ownerId.current) === 0) {
@@ -68,19 +72,29 @@ export default function PubSubPanel({ connId, connName, onClose }: {
     s.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
 
   const subscribe = async () => {
+    if (busy || busyRef.current) return; // 防連點造成兩個監聽器，其中一個外洩
+    busyRef.current = true;
     const channels = splitTokens(channelsInput);
     const patterns = splitTokens(patternsInput);
     if (channels.length === 0 && patterns.length === 0) {
       setErr(t("請至少輸入一個頻道或樣式（如 news 或 user:*）"));
+      busyRef.current = false;
       return;
     }
     setBusy(true);
     setErr(null);
+    // await 期間元件可能已卸載：這時要把剛拿到的 unlisten 立刻收掉，不能留在 ref 裡外洩。
+    const detached = () => {
+      if (aliveRef.current) return false;
+      unlistenRef.current?.(); unlistenRef.current = null;
+      unlistenErrRef.current?.(); unlistenErrRef.current = null;
+      return true;
+    };
     try {
       // 先掛事件監聽，再送出訂閱，避免錯過開頭訊息。
       if (!unlistenRef.current) {
-        unlistenRef.current = await onRedisPubSub(connId, (m: PubSubMessage) => {
-          if (pausedRef.current) return;
+        const stop = await onRedisPubSub(connId, (m: PubSubMessage) => {
+          if (pausedRef.current || !aliveRef.current) return;
           setLines((prev) => {
             const next = [...prev, {
               channel: m.channel, pattern: m.pattern, payload: m.payload,
@@ -89,27 +103,37 @@ export default function PubSubPanel({ connId, connName, onClose }: {
             return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
           });
         });
+        if (detached()) { stop(); return; }
+        unlistenRef.current = stop;
       }
       if (!unlistenErrRef.current) {
-        unlistenErrRef.current = await onRedisPubSubError(connId, (msg) => setErr(msg));
+        const stopErr = await onRedisPubSubError(connId, (msg) => { if (aliveRef.current) setErr(msg); });
+        if (detached()) { stopErr(); return; }
+        unlistenErrRef.current = stopErr;
       }
       await api.redisSubscribe(connId, channels, patterns);
+      if (detached()) return;
       setSubscribed(true);
     } catch (e: any) {
-      setErr(e?.message ?? t("訂閱失敗"));
+      if (aliveRef.current) setErr(e?.message ?? t("訂閱失敗"));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
 
   const unsubscribe = async () => {
+    if (busy || busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
-      await api.redisUnsubscribe(connId);
+      // 側欄與分頁可能各開一個面板：還有別人在用就只關掉自己，不要停掉共用任務。
+      if (!hasOtherRedisPanel(connId, ownerId.current)) await api.redisUnsubscribe(connId);
       setSubscribed(false);
     } catch (e: any) {
       setErr(e?.message ?? t("取消訂閱失敗"));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };

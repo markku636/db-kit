@@ -4,10 +4,10 @@ import { api } from "./api";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 import {
-  compareSegments, REDIS_PATTERN_HISTORY_KEY, redisPatternHistoryKey, recordRedisPattern, normalizeAutoRefreshMs,
+  compareSegments, redisPatternHistoryKey, recordRedisPattern, normalizeAutoRefreshMs,
   loadExpandedPaths, redisExpandedKey,
 } from "./redisUiFormat";
-import { buildRedisTree, keysUnderPrefix, segmentLabel, toggleKeySelection, REDIS_SEPARATOR_KEY, redisSeparatorKey, type RedisTreeNode } from "./redisTree";
+import { buildRedisTree, keysUnderPrefix, segmentLabel, toggleKeySelection, redisSeparatorKey, type RedisTreeNode } from "./redisTree";
 
 export const REDIS_TREE_LIMIT = 10000;
 const LIMIT = REDIS_TREE_LIMIT;
@@ -75,7 +75,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   // ARDM 的 search history：過濾樣式記在瀏覽器，下次直接從下拉選舊的。
   const [patternHistory, setPatternHistory] = useState<string[]>(() => {
     try {
-      const raw = localStorage.getItem(redisPatternHistoryKey(connId)) ?? localStorage.getItem(REDIS_PATTERN_HISTORY_KEY);
+      const raw = localStorage.getItem(redisPatternHistoryKey(connId, database));
       const v: unknown = raw ? JSON.parse(raw) : [];
       return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
     } catch { return []; }
@@ -85,16 +85,16 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(() => {
-    try { return loadExpandedPaths(localStorage.getItem(redisExpandedKey(connId))); }
+    try { return loadExpandedPaths(localStorage.getItem(redisExpandedKey(connId, database))); }
     catch { return new Set(); }
   });
   const persistExpanded = (next: Set<string>) => {
-    try { localStorage.setItem(redisExpandedKey(connId), JSON.stringify([...next])); } catch { /* 忽略 */ }
+    try { localStorage.setItem(redisExpandedKey(connId, database), JSON.stringify([...next])); } catch { /* 忽略 */ }
   };
   const [multiSelect, setMultiSelect] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [autoRefreshMs, setAutoRefreshMs] = useState<number>(() => {
-    try { return normalizeAutoRefreshMs(localStorage.getItem(`dbkit:redisAutoRefresh:${connId}`)); }
+    try { return normalizeAutoRefreshMs(localStorage.getItem(`dbkit:redisAutoRefresh:${connId}:${database}`)); }
     catch { return 0; }
   });
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -106,7 +106,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   // ARDM 的 --separator：某些命名慣例用 / 或 :: 分層，固定冒號會整包擠在同一層。
   const [separator, setSeparator] = useState<string>(() => {
     try {
-      return localStorage.getItem(redisSeparatorKey(connId)) ?? localStorage.getItem(REDIS_SEPARATOR_KEY) ?? ":";
+      return localStorage.getItem(redisSeparatorKey(connId, database)) ?? ":";
     } catch { return ":"; }
   });
   const didInit = useRef(false);
@@ -172,7 +172,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
     setPattern(next);
     setPatternHistory((h) => {
       const updated = recordRedisPattern(h, next);
-      try { localStorage.setItem(redisPatternHistoryKey(connId), JSON.stringify(updated)); } catch { /* 忽略 */ }
+      try { localStorage.setItem(redisPatternHistoryKey(connId, database), JSON.stringify(updated)); } catch { /* 忽略 */ }
       return updated;
     });
   };
@@ -209,7 +209,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
               const next = e.target.value || ":";
               setSeparator(next);
               setExpanded(new Set());
-              try { localStorage.setItem(redisSeparatorKey(connId), next); } catch { /* 忽略 */ }
+              try { localStorage.setItem(redisSeparatorKey(connId, database), next); } catch { /* 忽略 */ }
             }}
             aria-label={t("鍵名分隔符")}
             className="w-10 bg-inset border border-fg/10 rounded px-1 py-0.5 mono outline-none focus:border-accent text-center"
@@ -235,7 +235,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
           onChange={(e) => {
             const next = normalizeAutoRefreshMs(e.target.value);
             setAutoRefreshMs(next);
-            try { localStorage.setItem(`dbkit:redisAutoRefresh:${connId}`, String(next)); } catch { /* 忽略 */ }
+            try { localStorage.setItem(`dbkit:redisAutoRefresh:${connId}:${database}`, String(next)); } catch { /* 忽略 */ }
           }}
           className="bg-inset border border-fg/10 rounded px-1 py-0.5 text-xs text-fg/50 outline-none focus:border-accent">
           <option value={0}>{t("自動重整：關")}</option>

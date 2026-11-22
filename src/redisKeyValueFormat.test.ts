@@ -19,20 +19,22 @@ describe("isSupportedRedisKeyType", () => {
 });
 
 describe("buildRedisKeyExport", () => {
-  it("依型別輸出不同 value 結構，並標示是否只匯出部分", () => {
+  it("輸出為可供後端匯入的單元素陣列，依型別帶不同 value 結構", () => {
     const h = JSON.parse(buildRedisKeyExport("h", page({
       type_: "hash", ttl: -1, total: 2, cursor: 0, fields: ["a"], members: ["1"],
     })));
-    expect(h).toMatchObject({ key: "h", type: "hash", ttl: -1, total: 2, partial: false });
-    expect(h.value).toEqual([{ field: "a", value: "1" }]);
+    expect(Array.isArray(h)).toBe(true);
+    expect(h).toHaveLength(1);
+    expect(h[0]).toMatchObject({ key: "h", type: "hash", ttl: -1, total: 2, partial: false });
+    expect(h[0].value).toEqual([{ field: "a", value: "1" }]);
     const z = JSON.parse(buildRedisKeyExport("z", page({
       type_: "zset", ttl: 60, total: 2, cursor: 1, members: ["m"], scores: [2],
     })));
-    expect(z.value).toEqual([{ member: "m", score: 2 }]);
-    expect(z.partial).toBe(true);
+    expect(z[0].value).toEqual([{ member: "m", score: 2 }]);
+    expect(z[0].partial).toBe(true);
     const s = JSON.parse(buildRedisKeyExport("s", page({ type_: "string", ttl: 5, total: 1, cursor: 0, members: ["v"] })));
-    expect(s.value).toBe("v");
-    expect(s.partial).toBe(false);
+    expect(s[0].value).toBe("v");
+    expect(s[0].partial).toBe(false);
   });
 });
 

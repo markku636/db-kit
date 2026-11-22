@@ -7,7 +7,7 @@ import { fmtElapsed, isDangerousRedisCommand, isReadOnlyRedisCommand } from "./s
 import { completeRedisCommand, isBlockingKeysCommand, redisCommandHint } from "./redisCommandHints";
 import {
   formatRedisConsoleLines, loadRedisConsoleHistory, recordRedisConsoleHistory,
-  REDIS_CONSOLE_HISTORY_KEY, redisConsoleHistoryKey, serializeRedisConsoleHistory,
+  redisConsoleHistoryKey, serializeRedisConsoleHistory,
 } from "./redisConsoleFormat";
 import { normalizeRedisDbInput, parseRedisDbPrefix } from "./redisUiFormat";
 import Icon from "./ui/Icon";
@@ -45,9 +45,8 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
   // 關掉主控台再開，↑ 仍能叫回之前打過的指令。
   const [history, setHistory] = useState<string[]>(() => {
     try {
-      // 舊版只有一份全域歷史，首次讀取時沿用，之後寫入各自的 key。
-      const raw = localStorage.getItem(redisConsoleHistoryKey(connId)) ?? localStorage.getItem(REDIS_CONSOLE_HISTORY_KEY);
-      return loadRedisConsoleHistory(raw);
+      // 只用連線自己的 key：舊版那份全域歷史不要沿用，避免看到別條連線的指令。
+      return loadRedisConsoleHistory(localStorage.getItem(redisConsoleHistoryKey(connId)));
     } catch { return []; }
   });
   useEffect(() => {

@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleDot, X, Play, Pause, Trash2 } from "lucide-react";
-import { api, onRedisMonitor, onRedisMonitorError } from "./api";
+import { api, onRedisMonitor, onRedisMonitorEnded, onRedisMonitorError } from "./api";
 import { pickSaveFile, toast, useModalOverlay } from "./ui";
 import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useT } from "./i18n";
 import { appendMonitorLine, monitorLineMatches } from "./redisUiFormat";
-import { acquireRedisPanel, releaseRedisPanel } from "./redisPanelOwnership";
+import { acquireRedisPanel, hasOtherRedisPanel, releaseRedisPanel } from "./redisPanelOwnership";
 
 // Redis MONITOR 面板（仿 Another Redis Desktop Manager 的 Monitor）：
 // 背景任務用專屬連線跑 MONITOR，每行經 Tauri 事件即時推來；關閉面板自動停止。
@@ -25,6 +25,7 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
   const [err, setErr] = useState<string | null>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const unlistenErrRef = useRef<UnlistenFn | null>(null);
+  const unlistenEndRef = useRef<UnlistenFn | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const ownerId = useRef(`monitor-${crypto.randomUUID()}`);
   // 「暫停」只停止自動捲動，不丟資料：繼續後仍看得到暫停期間收到的指令。
@@ -38,15 +39,18 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
         setLines((prev) => appendMonitorLine(prev, line));
       }),
       onRedisMonitorError(connId, (msg) => { if (alive) setErr(msg); }),
-    ]).then(([a, b]) => {
-      if (!alive) { a(); b(); return; }
+      onRedisMonitorEnded(connId, () => { if (alive) setRunning(false); }),
+    ]).then(([a, b, c]) => {
+      if (!alive) { a(); b(); c(); return; }
       unlistenRef.current = a;
       unlistenErrRef.current = b;
+      unlistenEndRef.current = c;
     });
     return () => {
       alive = false;
       unlistenRef.current?.();
       unlistenErrRef.current?.();
+      unlistenEndRef.current?.();
       // 只有最後一個面板關掉才停後端任務，另一個還開著就不會突然沒資料。
       if (releaseRedisPanel(connId, ownerId.current) === 0) {
         api.redisMonitorStop(connId).catch(() => { /* 忽略 */ });
@@ -74,7 +78,8 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
   const stop = async () => {
     setBusy(true);
     try {
-      await api.redisMonitorStop(connId);
+      // 另一個面板還開著時只停自己，不要讓對方的書面資料突然斷掉。
+      if (!hasOtherRedisPanel(connId, ownerId.current)) await api.redisMonitorStop(connId);
       setRunning(false);
     } catch (e: any) {
       setErr(e?.message ?? t("停止監視失敗"));
@@ -90,8 +95,8 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
     const path = await pickSaveFile("redis-monitor.log", [{ name: "Log", extensions: ["log", "txt"] }]);
     if (!path) return;
     try {
-      await api.writeTextFile(path, lines.join("\n"));
-      toast.success(t("已匯出 {n} 行監視紀錄", { n: lines.length }));
+      await api.writeTextFile(path, visible.join("\n"));
+      toast.success(t("已匯出 {n} 行監視紀錄", { n: visible.length }));
     } catch (e: any) {
       toast.error(e?.message ?? t("匯出失敗"));
     }

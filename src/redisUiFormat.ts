@@ -49,7 +49,7 @@ export function normalizeAutoRefreshMs(value: string | number | null | undefined
   return [0, 5000, 15000, 30000].includes(n) ? n : 0;
 }
 
-export const redisExpandedKey = (connId: string) => `dbkit:redisExpanded:${connId}`;
+export const redisExpandedKey = (connId: string, db?: string) => `dbkit:redisExpanded:${connId}:${db ?? ""}`;
 
 /** 讀回展開的資料夾路徑（壞資料當空）。 */
 export function loadExpandedPaths(raw: string | null): Set<string> {
@@ -61,7 +61,7 @@ export function loadExpandedPaths(raw: string | null): Set<string> {
 }
 
 export const REDIS_PATTERN_HISTORY_KEY = "dbkit:redisPatternHistory";
-export const redisPatternHistoryKey = (connId: string) => `${REDIS_PATTERN_HISTORY_KEY}:${connId}`;
+export const redisPatternHistoryKey = (connId: string, db?: string) => `${REDIS_PATTERN_HISTORY_KEY}:${connId}:${db ?? ""}`;
 
 /** ARDM 的 search history：記住最近用過的 MATCH 樣式，最新的排最前，最多 20 條；`*` 不記。 */
 export function recordRedisPattern(history: readonly string[], pattern: string): string[] {

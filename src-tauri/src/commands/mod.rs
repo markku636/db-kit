@@ -1773,8 +1773,16 @@ pub async fn redis_import_keys(
     database: String,
     payload: String,
 ) -> AppResult<RedisImportSummary> {
-    let items: Vec<RedisImportKey> = serde_json::from_str(&payload)
+    // 接受單鍵物件（舊版「匯出此鍵」）與多鍵陣列（批次匯出）兩種格式。
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Payload {
+        One(RedisImportKey),
+        Many(Vec<RedisImportKey>),
+    }
+    let parsed: Payload = serde_json::from_str(&payload)
         .map_err(|e| AppError::Query(format!("匯入檔不是有效的鍵 JSON：{e}")))?;
+    let items = match parsed { Payload::One(x) => vec![x], Payload::Many(v) => v };
     state.manager.redis_driver(&id)?.import_keys(&database, items).await
 }
 
@@ -2059,10 +2067,22 @@ pub async fn redis_monitor_start(
             let _ = app2.emit("redis-monitor-error", format!("{id2}: {e}"));
             return;
         }
-        let mut stream = monitor.into_on_message::<String>();
-        while let Some(line) = stream.next().await {
-            let _ = app2.emit("redis-monitor", RedisMonitorLine { conn_id: id2.clone(), line });
+        // 收 Value 自己解：into_on_message::<String>() 的串流會把解碼錯 silently 丟掉，
+        // 連線中途斷掉時前端只會以為還在監視、畫面永遠停住。
+        let mut stream = monitor.into_on_message::<redis::Value>();
+        while let Some(v) = stream.next().await {
+            match redis::from_redis_value::<String>(&v) {
+                Ok(line) => {
+                    let _ = app2.emit("redis-monitor", RedisMonitorLine { conn_id: id2.clone(), line });
+                }
+                Err(e) => {
+                    let _ = app2.emit("redis-monitor-error", format!("{id2}: {e}"));
+                    break;
+                }
+            }
         }
+        // 串流結束（伺服器斷線或主動停）也讓前端把狀態改回未啟動。
+        let _ = app2.emit("redis-monitor-ended", id2.clone());
     });
     state.redis_monitors.lock().insert(id, handle);
     Ok(())
