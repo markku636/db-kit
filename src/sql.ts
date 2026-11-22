@@ -1062,7 +1062,8 @@ export function isWriteStatement(sql: string, kind?: DbKind): boolean {
 
 // SQL 匯出的識別字引號 / 反斜線轉義依方言不同（MySQL 反引號、MSSQL 方括號、其餘 ANSI 雙引號）。
 export function sqlExportDialect(kind?: DbKind): "mysql" | "mssql" | "ansi" {
-  if (kind === "mysql" || kind === "mariadb") return "mysql";
+  // external gateway 在本檔其他SQL產生邏輯（sqlLiteral / buildUseDatabase）一律講 MySQL 方言。
+  if (kind === "mysql" || kind === "mariadb" || kind === "external") return "mysql";
   if (kind === "mssql") return "mssql";
   return "ansi";
 }

@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::{DataQuery, Sort, SortDir};
+use crate::db::{DataQuery, DbKind, Sort, SortDir};
 use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
 
@@ -588,6 +588,15 @@ fn csv_field(s: &str, delim: &str) -> String {
     }
 }
 
+/// 由連線種類決定 SQL 匯出方言（與前端 sqlExportDialect 一致，external 視為 MySQL）。
+pub fn sql_export_dialect(kind: DbKind) -> &'static str {
+    match kind {
+        DbKind::Mysql | DbKind::Mariadb | DbKind::External => "mysql",
+        DbKind::Mssql => "mssql",
+        _ => "ansi",
+    }
+}
+
 /// 依方言跳脫識別字：MySQL 用反引號、MSSQL 用方括號、其餘（PG / SQLite / Oracle）用雙引號。
 fn sql_ident(name: &str, dialect: &str) -> String {
     match dialect {
@@ -812,6 +821,16 @@ mod tests {
         assert!(out.contains("```sql\nSELECT 1\n```"), "{out}");
         assert!(out.contains("| id |"), "{out}");
         assert!(out.contains("| a | b |"), "{out}");
+    }
+
+    #[test]
+    fn sql_export_dialect_matches_connection_kind() {
+        assert_eq!(sql_export_dialect(DbKind::Mysql), "mysql");
+        assert_eq!(sql_export_dialect(DbKind::Mariadb), "mysql");
+        assert_eq!(sql_export_dialect(DbKind::External), "mysql");
+        assert_eq!(sql_export_dialect(DbKind::Mssql), "mssql");
+        assert_eq!(sql_export_dialect(DbKind::Postgres), "ansi");
+        assert_eq!(sql_export_dialect(DbKind::Sqlite), "ansi");
     }
 
     #[test]

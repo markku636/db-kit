@@ -21,7 +21,7 @@ import RegistryTagView from "./RegistryTagView";
 import HarborRepoView from "./HarborRepoView";
 import K8sObjectView from "./K8sObjectView";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, pickOpenFile, useModalCount, useModalOverlay } from "./ui";
-import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
+import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS, sqlExportDialect } from "./sql";
 import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport, mergeRedisKeyExports } from "./redisKeyValueFormat";
 import { isBinaryColumnType, isReadOnlyColumnExtra } from "./columnMeta";
 import { fmtRedisTtl, hasBinaryKeyEscape, remainingTtl } from "./redisUiFormat";
@@ -893,6 +893,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         all_rows: true,
         bom: fmt === "csv" || fmt === "tsv",
         sql_table: fmt === "sql" ? tab.table : null,
+        sql_dialect: fmt === "sql" ? sqlExportDialect(connKind) : null,
       }, path);
       toast.success(t("已匯出 {rows} 列 · {toUpperCase}", { rows: res.rows, toUpperCase: fmt.toUpperCase() }));
     } catch (e: any) {

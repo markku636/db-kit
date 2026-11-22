@@ -2,6 +2,7 @@
 
 新功能：
 
+- **框選列匯出與 CLI `dbk export` 也用正確的 SQL 方言**：這兩條路徑先前仍固定輸出 MySQL 反引號；external gateway 也照 MySQL 處理（與其他 SQL 產生邏輯一致）。
 - **SQL 匯出依資料庫方言產生正確語法**：PostgreSQL / SQLite / Oracle 用雙引號、SQL Server 用方括號、MySQL 用反引號；反斜線轉義也只套在 MySQL，不再對其他資料庫產生無效或錯誤的 INSERT 腳本。
 - **損毀的 `connections.json` 不再被下一次存檔靜默抹掉**：解析失敗直接中止寫入並另存 `.corrupt`，避免一次遺失所有連線與群組。
 - **手動還原也要確認**（與歷史還原一致）；啟動讀取連線清單失敗不再把畫面上的連線清空而是提示錯誤。

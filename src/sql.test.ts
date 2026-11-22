@@ -104,6 +104,7 @@ import {
   paramLabel,
   isWriteStatement,
   isExplainWithWrite,
+  sqlExportDialect,
   stripLeadingComments,
   hasLeadingDbSwitch,
   buildInClause,
@@ -1474,6 +1475,15 @@ describe("具名參數（extractNamedParams / substituteNamedParams）", () => {
   it("paramLabel：具名加冒號、位置參數照原樣", () => {
     expect(paramLabel("id")).toBe(":id");
     expect(paramLabel("?2")).toBe("?2");
+  });
+});
+
+describe("sqlExportDialect", () => {
+  it("依連線種類選 SQL 匯出方言", () => {
+    for (const k of ["mysql", "mariadb", "external"] as const) expect(sqlExportDialect(k)).toBe("mysql");
+    expect(sqlExportDialect("mssql")).toBe("mssql");
+    for (const k of ["postgres", "sqlite", "oracle"] as const) expect(sqlExportDialect(k)).toBe("ansi");
+    expect(sqlExportDialect(undefined)).toBe("ansi");
   });
 });
 

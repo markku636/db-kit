@@ -283,7 +283,7 @@ async fn exec(
         }
         Command::Schema(SchemaCmd::Show { .. }) => unreachable!("schema show 在連線前已處理"),
         Command::Compare(_) => unreachable!("compare 在連線前已處理"),
-        Command::Export(e) => exec_export(mgr, id, db, e).await?,
+        Command::Export(e) => exec_export(mgr, id, db, kind, e).await?,
         Command::ErModel => {
             let m = mgr.er_model(id, db).await?;
             if let Format::Json = fmt {
@@ -444,6 +444,7 @@ async fn exec_export(
     mgr: &ConnectionManager,
     id: &str,
     db: &str,
+    kind: DbKind,
     e: ExportArgs,
 ) -> AppResult<()> {
     let query = DataQuery {
@@ -459,7 +460,8 @@ async fn exec_export(
         include_header: !e.no_header,
         delimiter: e.delimiter.clone(),
         null_text: e.null_text.clone(),
-        sql_table: None, sql_dialect: None,
+        sql_table: None,
+        sql_dialect: Some(crate::export::sql_export_dialect(kind).to_string()),
         all_rows: true,
         bom: e.bom,
     };
