@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { buildExplainJsonSql, parseExplainPlan, parseMssqlShowplan, parseSqlitePlan, planSummary } from "./explain";
+import { buildExplainJsonSql, explainStatements, parseExplainPlan, parseMssqlShowplan, parseSqlitePlan, planSummary } from "./explain";
+
+describe("explainStatements", () => {
+  it("MSSQL 照 GO 切批次，不再把含 GO 的整段送給 SHOWPLAN_XML", () => {
+    expect(explainStatements("mssql", "SELECT 1\nGO\nSELECT 2")).toEqual(["SELECT 1", "SELECT 2"]);
+    expect(explainStatements("mssql", "SELECT 1")).toEqual(["SELECT 1"]);
+  });
+  it("其他方言照分號切", () => {
+    expect(explainStatements("mysql", "SELECT 1; SELECT 2")).toEqual(["SELECT 1", "SELECT 2"]);
+  });
+});
 
 describe("buildExplainJsonSql", () => {
   it("wraps per dialect and strips trailing semicolon", () => {

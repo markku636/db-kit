@@ -80,7 +80,7 @@ import {
 import type { SavedQuery } from "./sql";
 import { snapshotFileName } from "./compareModel";
 import Select from "./ui/Select";
-import { buildExplainJsonSql, parseExplainPlan, parseMssqlShowplan, parseSqlitePlan, planSummary, type PlanNode } from "./explain";
+import { buildExplainJsonSql, explainStatements, parseExplainPlan, parseMssqlShowplan, parseSqlitePlan, planSummary, type PlanNode } from "./explain";
 import { lintSql, MAX_SQL_CHARS as LINT_MAX_CHARS, type LintFinding, type LintSeverity } from "./sqlLint";
 import { buildReviewPrompt, buildTunePrompt, collectSchemaContext } from "./aiReview";
 import {
@@ -5403,7 +5403,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
   // 一次只解析「單一語句」：有反白用反白、否則用編輯器內容；多於一條則請使用者反白要解釋的語句。
   const runVisualExplain = async () => {
     if (!activeId || running || !supportsVisualExplain) return;
-    const stmts = splitSqlStatements(editorSel?.trim() ? editorSel : sql);
+    const stmts = explainStatements(kind!, editorSel?.trim() ? editorSel : sql);
     if (stmts.length > 1) { toast.info(t("視覺化解釋一次只能解析一條語句，請反白要解釋的語句")); return; }
     const base = (stmts[0] ?? "").trim();
     if (!base) { toast.info(t("沒有可解釋的語句")); return; }

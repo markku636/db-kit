@@ -7,6 +7,7 @@ import {
   buildRoutineExecSql,
   formatSignature,
   outVarName,
+  mssqlOutParamType,
 } from "./routineParams";
 
 describe("splitSignature", () => {
@@ -221,5 +222,15 @@ describe("SQL Server 程序參數", () => {
   it("沒有 OUTPUT 參數就只有 EXEC", () => {
     const params = parseRoutineParams("mssql", "@id int");
     expect(buildRoutineExecSql("mssql", "shop", proc, params, ["7"]).sql).toBe("EXEC [shop].[sales].[usp_total] 7");
+  });
+
+  it("OUTPUT 型別缺失或 sql_variant 時改用 nvarchar，不再讓驅動炸掉", () => {
+    expect(mssqlOutParamType("")).toBe("nvarchar(4000)");
+    expect(mssqlOutParamType("  sql_variant ")).toBe("nvarchar(4000)");
+    expect(mssqlOutParamType(" decimal(10,2) ")).toBe("decimal(10,2)");
+    const params: { mode: "OUT"; name: string; type: string }[] = [{ mode: "OUT", name: "@x", type: "" }];
+    const { sql } = buildRoutineExecSql("mssql", "shop", proc, params, [""]);
+    expect(sql).not.toContain("sql_variant");
+    expect(sql.split(";\n")[0]).toBe("DECLARE @__out1 nvarchar(4000) = NULL");
   });
 });

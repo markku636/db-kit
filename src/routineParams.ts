@@ -150,6 +150,16 @@ export function buildRoutineExecSql(
 }
 
 /**
+ * OUTPUT 引數的 DECLARE 型別。tiberius 解不到 `sql_variant`（直接 panic，被包成
+ * 「DB Kit 還無法解讀的欄位型別」），型別缺失時也不能賭——改用 nvarchar(4000) 讓
+ * SQL Server 隱式轉型後回傳可讀的字串，而不是每次都炸掉。
+ */
+export function mssqlOutParamType(type: string | undefined): string {
+  const t = (type ?? "").trim().toLowerCase();
+  return !t || t === "sql_variant" ? "nvarchar(4000)" : type!.trim();
+}
+
+/**
  * SQL Server：OUTPUT 參數要傳**變數**才拿得回值，所以在同一個批次裡 DECLARE（帶入表單的值當初值）、
  * `EXEC 程序 …, @變數 OUTPUT`、最後 SELECT 出來。整段是一個批次送出（前端依 GO 切批次、不再依分號拆），
  * 變數才活得到 SELECT。
@@ -166,7 +176,8 @@ function buildMssqlExecSql(
     const raw = values[i] ?? "";
     if (p.mode === "OUT" || p.mode === "INOUT") {
       const v = `@__out${i + 1}`;
-      decl.push(`DECLARE ${v} ${p.type || "sql_variant"} = ${routineArgLiteral("mssql", raw, p.type)}`);
+      const outType = mssqlOutParamType(p.type);
+      decl.push(`DECLARE ${v} ${outType} = ${routineArgLiteral("mssql", raw, outType)}`);
       outs.push({ v, label: (p.name || `p${i + 1}`).replace(/^@/, "") });
       return `${v} OUTPUT`;
     }

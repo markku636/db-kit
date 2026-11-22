@@ -2,6 +2,7 @@
 // 的 JSON 輸出正規化成一棵 PlanNode 樹，供 ExplainPlan 元件視覺化（致敬 Navicat 視覺化解釋）。
 // 純函式、無 React / Tauri 相依，便於單元測試（見 explain.test.ts）。
 import type { DbKind } from "./api";
+import { splitSqlStatements, splitTsqlBatches } from "./sql";
 
 export interface PlanNode {
   label: string; // 節點主標題（操作 / 表名）
@@ -11,6 +12,15 @@ export interface PlanNode {
   rows: number | null; // 估計列數
   detail?: string; // 次要資訊（access type / key / relation…）
   children: PlanNode[];
+}
+
+/**
+ * 視覺化解釋的語句切分：SQL Server 要照 GO 批次切（程序本體裡的分號不是語句邊界），
+ * 其餘照分號。以前 MSSQL 也照分號切，`SELECT 1\nGO\nSELECT 2` 被當成一條，
+ * 後端 SHOWPLAN_XML 收到含 GO 的文字直接語法錯誤。
+ */
+export function explainStatements(kind: DbKind, source: string): string[] {
+  return kind === "mssql" ? splitTsqlBatches(source) : splitSqlStatements(source);
 }
 
 // 包一段查詢成「取得 JSON 執行計畫」的語句。回 null 表示該類型不支援。
