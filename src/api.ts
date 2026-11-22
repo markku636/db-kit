@@ -1993,6 +1993,9 @@ export const api = {
   // 批次刪除鍵（DEL）：鍵樹「刪除整個命名空間」用，回傳實際刪除數。
   redisDeleteKeys: (id: string, database: string, keys: string[]) =>
     invoke<number>("redis_delete_keys", { id, database, keys }),
+  // 批次設定 TTL（後端管線化）；secs<0 表示移除到期時間。
+  redisSetTtl: (id: string, database: string, keys: string[], secs: number) =>
+    invoke<number>("redis_set_ttl", { id, database, keys, secs }),
   redisPublish: (id: string, channel: string, message: string) =>
     invoke<number>("redis_publish", { id, channel, message }),
   redisSubscribe: (id: string, channels: string[], patterns: string[]) =>

@@ -902,6 +902,24 @@ impl RedisDriver {
         Ok(removed as u64)
     }
 
+    /// 批次設定 TTL：把整批 keys 的 EXPIRE / PERSIST 管線化，
+    /// 避免多選上萬鍵時對 IPC 與 Redis 各打上萬次序列化往返。
+    pub async fn set_ttl_many(&self, database: &str, keys: &[String], secs: i64) -> AppResult<u64> {
+        if keys.is_empty() { return Ok(0); }
+        let mut conn = self.conn(database).await?;
+        let mut applied = 0u64;
+        for chunk in keys.chunks(500) {
+            let mut pipe = redis::pipe();
+            for k in chunk {
+                if secs < 0 { pipe.cmd("PERSIST").arg(k.as_str()); }
+                else { pipe.cmd("EXPIRE").arg(k.as_str()).arg(secs); }
+            }
+            let results: Vec<redis::Value> = pipe.query_async(&mut conn).await.map_err(rerr)?;
+            applied += results.iter().filter(|v| rv_as_i64(Some(v)) > 0).count() as u64;
+        }
+        Ok(applied)
+    }
+
     /// 設定 / 解除鍵的存活時間。`secs < 0` → PERSIST（永不過期）；否則 EXPIRE。
     /// 回傳 true 表示鍵存在且已套用。
     pub async fn expire_key(&self, database: &str, key: &str, secs: i64) -> AppResult<bool> {

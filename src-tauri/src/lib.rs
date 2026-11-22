@@ -361,6 +361,7 @@ pub fn run() {
             commands::redis_monitor_start,
             commands::redis_monitor_stop,
             commands::redis_delete_keys,
+            commands::redis_set_ttl,
             commands::redis_publish,
             commands::redis_subscribe,
             commands::redis_unsubscribe,

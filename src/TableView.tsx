@@ -1456,10 +1456,14 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const cap = keys.slice(0, 500);
     setApplying(true);
     try {
+      // 有界並行（每批 20）：500 鍵逐支序列化往返在遠端 Redis 很慢，
+      // 一次全發又會塞爆 IPC；分批兼顧速度與記憶體。
       const chunks: string[] = [];
-      for (const k of cap) {
-        const p = await api.redisKeyPage(tab.connId, tab.database, k, 0, 10_000, "", true);
-        chunks.push(buildRedisKeyExport(k, p));
+      for (let i = 0; i < cap.length; i += 20) {
+        const batch = cap.slice(i, i + 20);
+        const pages = await Promise.all(batch.map((k) =>
+          api.redisKeyPage(tab.connId, tab.database, k, 0, 10_000, "", true)));
+        batch.forEach((k, j) => chunks.push(buildRedisKeyExport(k, pages[j])));
       }
       const path = await pickSaveFile("redis-keys.json", [{ name: "JSON", extensions: ["json"] }]);
       if (!path) return;
@@ -1473,23 +1477,28 @@ function DataPane({ tab }: { tab: OpenTab }) {
     }
   };
 
-  // 多選批次設 TTL：逐鍵送 updateCell（ttl 是 Redis 網格的可寫欄），統計成功 / 失敗。
+  // 多選批次設 TTL：一次 IPC 呼叫，後端把 EXPIRE / PERSIST 管線化（上萬鍵不會打上萬次往返）。
   const bulkSetKeyTtl = async (keys: string[]) => {
     if (!keys.length || readonly) return;
     const v = await uiPrompt(t("TTL 秒數（-1 表示永不過期）："), {
       title: t("為 {n} 個鍵設定 TTL", { n: keys.length }), defaultValue: "-1", confirmText: t("套用"),
     });
     if (v === null) return;
+    const secs = Number(v);
+    if (!Number.isInteger(secs) || secs < -1) { toast.error(t("TTL 必須是不小於 -1 的整數秒數")); return; }
     setApplying(true);
-    const results = await Promise.allSettled(keys.map((k) => api.updateCell(tab.connId, tab.database, tab.table, {
-      column: "ttl", new_value: v, pk_columns: ["key"], pk_values: [k],
-    })));
-    const ok = results.filter((r) => r.status === "fulfilled").length;
-    setApplying(false);
-    if (ok === keys.length) toast.success(t("已為 {n} 個鍵設定 TTL", { n: ok }));
-    else {
-      const msg = t("{ok}/{total} 個鍵設定成功，其餘失敗", { ok, total: keys.length });
+    try {
+      const ok = await api.redisSetTtl(tab.connId, tab.database, keys, secs);
+      if (ok === keys.length) toast.success(t("已為 {n} 個鍵設定 TTL", { n: ok }));
+      else {
+        const msg = t("{ok}/{total} 個鍵設定成功，其餘失敗", { ok, total: keys.length });
+        setErr(msg); toast.error(msg);
+      }
+    } catch (e: any) {
+      const msg = e?.message ?? t("設定 TTL 失敗");
       setErr(msg); toast.error(msg);
+    } finally {
+      setApplying(false);
     }
     refresh();
   };
@@ -1557,20 +1566,20 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   // 即時尋找：目前頁符合的儲存格數（僅在尋找時計算）。
   const findLower = find.trim().toLowerCase();
-  const matchCount =
-    findLower && data
-      ? data.rows.reduce(
-          (acc, row, ri) =>
-            acc +
-            row.reduce((a, _c, ci) => {
-              // 與渲染一致：跳過隱藏欄（否則計數會多於可見高亮數）。
-              if (isHidden(data.columns[ci])) return a;
-              const v = cellValue(ri, ci);
-              return a + (v != null && v.toLowerCase().includes(findLower) ? 1 : 0);
-            }, 0),
-          0
-        )
-      : 0;
+  // 大結果集上每次 re-render 全表掃描很貴；只在搜尋文字 / 資料 / 編輯 / 隱藏欄變化時重算。
+  const matchCount = useMemo(() => {
+    if (!findLower || !data) return 0;
+    return data.rows.reduce(
+      (acc, row, ri) =>
+        acc + row.reduce((a, _c, ci) => {
+          // 與渲染一致：跳過隱藏欄（否則計數會多於可見高亮數）。
+          if (hidden.includes(data.columns[ci])) return a;
+          const v = `${ri}:${ci}` in edits ? edits[`${ri}:${ci}`] : row[ci];
+          return a + (v != null && v.toLowerCase().includes(findLower) ? 1 : 0);
+        }, 0),
+      0
+    );
+  }, [findLower, data, edits, hidden]);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">

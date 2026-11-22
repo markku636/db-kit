@@ -1826,6 +1826,18 @@ pub async fn redis_delete_keys(
     state.manager.redis_driver(&id)?.delete_keys(&database, &keys).await
 }
 
+/// 批次設定 TTL（管線化 EXPIRE / PERSIST）。回傳實際生效的鍵數。
+#[tauri::command]
+pub async fn redis_set_ttl(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    keys: Vec<String>,
+    secs: i64,
+) -> AppResult<u64> {
+    state.manager.redis_driver(&id)?.set_ttl_many(&database, &keys, secs).await
+}
+
 /// 依型別過濾鍵清單（仿 ARDM 的 type filter）：用 SCAN TYPE 在伺服器端挑選。
 #[tauri::command]
 pub async fn redis_keys_typed(
