@@ -8,6 +8,7 @@
 // 誤攔的後果是使用者的輸入被吃掉、表單欄位還被改寫，比沒有這個功能更糟。
 
 import { DbKind, KIND_META, ParsedUrl } from "./api";
+import { mssqlEffectiveUsername } from "./mssqlAuth";
 
 // ---------------------------------------------------------------------------
 // 判別
@@ -319,6 +320,13 @@ export function applyParsedToForm(p: ParsedUrl, cur: ConnFormFields): ApplyResul
   if (o.rabbitmq_tls != null) next.rabbitTls = optBool(o.rabbitmq_tls);
   if (o.rabbitmq_mgmt_url != null) next.rabbitMgmtUrl = o.rabbitmq_mgmt_url;
   if (o.docker_tls != null) next.dockerTls = optBool(o.docker_tls);
+
+  // Integrated Security=true 的字串不該把表單預設 root / sa 留在使用者欄：
+  // 後端會拿它當 NTLM 帳號去登入，失敗且看不到原因。只有「網域\帳號」要保留。
+  if (next.kind === "mssql" && next.mssqlAuth === "windows") {
+    next.username = mssqlEffectiveUsername("windows", next.username);
+    next.password = "";
+  }
 
   return { next, changed: diffFields(cur, next) };
 }

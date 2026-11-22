@@ -320,6 +320,15 @@ describe("applyParsedToForm：SQL Server Windows 驗證", () => {
     expect(next.mssqlAuth).toBe("windows");
     expect(next.host).toBe(String.raw`.\SQLEXPRESS`);
     expect(changed.map((c) => c.key)).toContain("mssqlAuth");
+    // 表單預設的 root 不能留著作為 NTLM 帳號，否則後端會用 AuthMethod::windows("root","") 登入。
+    expect(next.username).toBe("");
+  });
+  it("Integrated Security 字串保留合法的網域帳號", () => {
+    const { next } = applyParsedToForm(
+      parsed({ kind: "mssql", host: "db01", username: String.raw`CORP\alice`, options: { mssql_auth: "windows" } }),
+      base(),
+    );
+    expect(next.username).toBe(String.raw`CORP\alice`);
   });
   it("同為 MSSQL、字串沒提驗證方式時維持原本的選擇", () => {
     const { next } = applyParsedToForm(parsed({ kind: "mssql", host: "db01" }), { ...base(), kind: "mssql", mssqlAuth: "windows" });

@@ -1315,10 +1315,13 @@ fn mssql_auth(config: &ConnectionConfig) -> AppResult<AuthMethod> {
     }
     #[cfg(windows)]
     {
-        if config.username.trim().is_empty() {
+        // 舊版對話框會把表單預設的 root 一起存進 Windows 驗證連線；那是 SQL 帳號，
+        // 不能拿去當 NTLM 使用者。沒有網域（反斜線）就一律用目前登入的 Windows 帳號。
+        let user = config.username.trim();
+        if user.is_empty() || !user.contains('\\') {
             Ok(AuthMethod::Integrated)
         } else {
-            Ok(AuthMethod::windows(config.username.trim(), &config.password))
+            Ok(AuthMethod::windows(user, &config.password))
         }
     }
     #[cfg(not(windows))]
@@ -1884,6 +1887,9 @@ SELECT SCOPE_IDENTITY()"));
         #[cfg(windows)]
         {
             assert!(matches!(mssql_auth(&cfg("", Some("windows"))).unwrap(), AuthMethod::Integrated));
+            // 舊設定殘留的 root / sa 也要走 Integrated，不能拿去當 NTLM 帳號。
+            assert!(matches!(mssql_auth(&cfg("root", Some("windows"))).unwrap(), AuthMethod::Integrated));
+            assert!(matches!(mssql_auth(&cfg("sa", Some("windows"))).unwrap(), AuthMethod::Integrated));
             assert!(matches!(mssql_auth(&cfg(r"CORP\alice", None)).unwrap(), AuthMethod::Windows(_)));
             assert!(matches!(mssql_auth(&cfg(r"CORP\alice", Some("windows"))).unwrap(), AuthMethod::Windows(_)));
         }

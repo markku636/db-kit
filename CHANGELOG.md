@@ -6,6 +6,7 @@
 
 修正：
 
+- **SQL Server 的 Windows 驗證真的能用了**：以前選「Windows 驗證」時表單仍帶著預設帳號 `root`，前端攔下連線說「尚未設定帳號或密碼」，就算硬送出去後端也會拿 `root` 當 NTLM 帳號而登入失敗。現在留空就是目前登入這台電腦的帳號（SSPI），不用輸入任何帳密；「網域\帳號」仍可搭配密碼用別的網域身分。貼上含 `Integrated Security=true` 的連線字串、或舊版存檔殘留的 `root` / `sa` 也都會自動走正確的驗證方式。
 - **SQL Server 的 `GO 0` 不再執行批次**：`GO 0` 與 sqlcmd / SSMS 一樣是「跳過這個批次」，以前會當成執行一次。
 - **`[方括號識別字]` 裡的符號不再誤判**：`SELECT [odd;name]`、`SELECT [a--b]`、`SELECT [Price(USD)]` 以前會被當成語句 / 註解邊界或未配對括號，多行語句被切錯、編輯器畫出紅色毛毛蟲；現在和字串、雙引號識別字一樣正確略過（`]]` 跳脫也處理）。
 - **非 dbo 資料表「複製為 INSERT / SELECT / UPDATE / DELETE」產生正確 SQL**：`sales.orders` 以前整段包成 `[sales.orders]`（一個名字裡有點的完全不同資料表），現在是 `[sales].[orders]`，與「只改這一欄」一致。

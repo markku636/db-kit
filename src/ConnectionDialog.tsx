@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ConnectionConfig, DbKind, isContainerKind, KIND_META, SshAuthMethod } from "./api";
 import { applyParsedToForm, ChangedField, ConnFormFields, looksLikeConnectionString } from "./connString";
 import { defaultDockerSocket, isLocalDockerHost } from "./dockerModel";
+import { mssqlEffectiveUsername } from "./mssqlAuth";
 import { parseSshString, type ParsedSsh } from "./sshConnString";
 import { pickDirectory, pickOpenFile } from "./ui";
 import { parseRdString, type ParsedRd } from "./rdConnString";
@@ -274,7 +275,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     host,
     // Docker 本機走 socket；Registry / Harbor 的埠寫在網址裡。
     port: (kind === "docker" && dockerMode === "local") || regKind || kind === "kubernetes" ? 0 : port,
-    username: usesUsername ? username : "",
+    // Windows 驗證：表單預設的 root / sa 不能當 NTLM 帳號送；清掉後後端才會走 Integrated。
+    username: usesUsername ? mssqlEffectiveUsername(kind === "mssql" ? mssqlAuth : "sql", username) : "",
     password: usesAuth ? password : "",
     database: KIND_META[kind].noDatabase ? null : database || null,
     max_connections: 5,
@@ -955,7 +957,16 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
                 hint={mssqlAuth === "windows"
                   ? t("使用者留空＝用目前登入這台電腦的 Windows 帳號；要用別的網域帳號就填「網域\\帳號」與密碼。")
                   : t("SQL Server 自己的登入帳號（例如 sa）。帳號寫成「網域\\帳號」時會自動改用 Windows 驗證。")}>
-                <Select selectSize="md" value={mssqlAuth} onChange={(e) => setMssqlAuth(e.target.value === "windows" ? "windows" : "sql")}>
+                <Select selectSize="md" value={mssqlAuth} onChange={(e) => {
+                  const next = e.target.value === "windows" ? "windows" : "sql";
+                  setMssqlAuth(next);
+                  // 切成 Windows 驗證時清掉表單預設的 root / sa 與舊密碼，欄位與實際送出的值一致；
+                  // 「網域\帳號」是合法網域登入，要保留。
+                  if (next === "windows") {
+                    setUsername((u) => mssqlEffectiveUsername("windows", u));
+                    setPassword("");
+                  }
+                }}>
                   <option value="sql">{t("SQL Server 驗證")}</option>
                   <option value="windows">{t("Windows 驗證")}</option>
                 </Select>

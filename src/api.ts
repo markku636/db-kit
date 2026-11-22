@@ -27,6 +27,7 @@ import type {
   RdSessionsFile, RdSession, RdFolder, RdPlacement, RdTargetRef, RdConnInfo, RdCertDecision, RdCertPrompt, LocalListing,
   RdAuthPrompt, RdAuthAnswer, RdConnClosed,
 } from "./rdTypes";
+import { mssqlNeedsCredentials } from "./mssqlAuth";
 
 export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "docker" | "registry" | "harbor" | "kubernetes" | "external";
 
@@ -1565,10 +1566,12 @@ export function authRequirement(config: ConnectionConfig): AuthRequirement {
     case "mysql":
     case "mariadb":
     case "postgres":
-    case "mssql":
     case "oracle":
     case "rabbitmq":
       return "both";
+    case "mssql":
+      // Windows 驗證留空帳號＝用目前登入的 Windows 帳號（SSPI），不需要提示補帳密。
+      return mssqlNeedsCredentials(config.options, config.username) ? "both" : "none";
     case "elastic": {
       const mode = config.options?.es_auth ?? (config.username ? "basic" : "none");
       return mode === "apikey" ? "password" : mode === "basic" ? "both" : "none";
