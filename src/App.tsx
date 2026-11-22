@@ -68,7 +68,7 @@ import { toast, uiChoose, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSave
 import { askOtpCode } from "./otpGate";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
-  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, splitTsqlBatches, splitForGuard, scopeTsqlBatches, statementAtOffset, tsqlStatementAtOffset, isDangerousStatement, isWriteStatement, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
+  resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, splitTsqlBatches, splitForGuard, scopeTsqlBatches, statementAtOffset, tsqlStatementAtOffset, isDangerousStatement, isWriteStatement, isExplainWithWrite, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
   rectToTsv, rectToMarkdown, rangeStats,
   quoteIdent, qualifiedName, selectTopSql, isMysqlFamily, supportsRoutines, supportsQueryEditorKind, supportsSchemaCompare,
   buildDropTable, buildDropView, buildDropRoutine, buildTruncateTable, buildRenameTable, buildDuplicateTable, isSystemDatabase,
@@ -5218,6 +5218,30 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     const t0 = performance.now();
     try {
       if (mode === "analyze") {
+        // 分析模式不是唯讀的免死金牌：後端是 `EXPLAIN {使用者輸入}`，
+        // PG/MySQL 的 `EXPLAIN ANALYZE DELETE …` / `EXPLAIN (ANALYZE) UPDATE …` 會真的執行 DML。
+        // 先前這裡直接 return 跳過下面所有守門，唯讀 / 正式環境連線都能被繞過。
+        const analyzeSql = !!kind && (EXPLAIN_KINDS.includes(kind) || kind === "mssql" || kind === "external");
+        if (analyzeSql) {
+          const analyzeStatements = splitForGuard(q, kind);
+          if (analyzeStatements.some((s) => isExplainWithWrite(s, kind ?? undefined))) {
+            toast.error(t("分析模式只放行唯讀語句；EXPLAIN ANALYZE 搭配 INSERT / UPDATE / DELETE 會真的修改資料，請改用一般執行模式。"));
+            return;
+          }
+          const roState = useStore.getState();
+          if (roState.activeId && roState.readonlyConns[roState.activeId] === true) {
+            toast.error(t("此連線為唯讀，分析模式已擋下寫入語句。可在連線右鍵關閉「唯讀模式」。"));
+            return;
+          }
+          const runConn = roState.connections.find((c) => c.id === roState.activeId);
+          if (runConn && isProdConn(runConn)) {
+            const ok = await uiConfirm(
+              t("「{name}」是正式環境（production）連線。確定執行分析？", { name: runConn.name }),
+              { title: t("正式環境確認"), danger: true, confirmText: t("執行") },
+            );
+            if (!ok) return;
+          }
+        }
         // 開跑即清掉上次結果：執行期間顯示 loading 空狀態，避免舊資料被誤認為本次結果。
         setResult(null);
         setResultView(null);

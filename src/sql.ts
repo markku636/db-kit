@@ -1060,6 +1060,18 @@ export function isWriteStatement(sql: string, kind?: DbKind): boolean {
   return false;
 }
 
+// 分析模式會把使用者輸入接在 `EXPLAIN ` 後面送給後端。PostgreSQL / MySQL 的
+// `EXPLAIN ANALYZE <DML>` 與 `EXPLAIN (ANALYZE) <DML>` **會真的執行**該 DML；
+// 唯讀連線不能在這裡繞過閘門。把前綴關鍵字去掉後再問 isWriteStatement。
+export function isExplainWithWrite(sql: string, kind?: DbKind): boolean {
+  let s = stripLeadingComments(sql).trim();
+  // EXPLAIN (ANALYZE, FORMAT JSON) / EXPLAIN ANALYZE VERBOSE / EXPLAIN FORMAT=TREE / EXPLAIN QUERY PLAN …
+  s = s.replace(/^EXPLAIN\b\s*(?:\([^)]*\)|\b(?:ANALYZE|VERBOSE|BUFFERS|COSTS|SETTINGS|TIMING|SUMMARY|WAL|ALL|FORMAT\s*=?\s*\w+|QUERY\s+PLAN|PLAN\s+FOR)\b)*\s*/i, "");
+  // 使用者在分析模式直接打 `ANALYZE DELETE …`（後端仍會加 EXPLAIN）也要擋。
+  s = s.replace(/^ANALYZE\b\s*/i, "");
+  return isWriteStatement(s, kind);
+}
+
 // 把建構的查詢包成 `SELECT COUNT(*) … FROM (<查詢>) _sub`，用以得知「這查詢會回多少列」。
 // 計數時略去 LIMIT / OFFSET / ORDER BY（不影響列數、且部分方言子查詢不允許 ORDER 無 LIMIT）。
 export function buildCountQuery(kind: DbKind, spec: QbSpec): string {

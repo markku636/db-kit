@@ -30,13 +30,30 @@ describe("buildRedisKeyExport", () => {
     expect(full[0].partial).toBe(false);
   });
 
+  it("過濾後只匯出部分成員也要標 partial，避免匯回刪掉完整鍵", () => {
+    const s = JSON.parse(buildRedisKeyExport("h", page({
+      type_: "hash", ttl: -1, total: 1000, cursor: 0, fields: ["a"], members: ["1"],
+    })));
+    expect(s[0].exported).toBe(1);
+    expect(s[0].partial).toBe(true);
+    const l = JSON.parse(buildRedisKeyExport("l", page({
+      type_: "list", ttl: -1, total: 100, cursor: 0, members: ["v"],
+    })));
+    expect(l[0].partial).toBe(true);
+    // 沒過濾、全部載到 → 可安全匯回。
+    const full = JSON.parse(buildRedisKeyExport("h2", page({
+      type_: "hash", ttl: -1, total: 1, cursor: 0, fields: ["a"], members: ["1"],
+    })));
+    expect(full[0].partial).toBe(false);
+  });
+
   it("輸出為可供後端匯入的單元素陣列，依型別帶不同 value 結構", () => {
     const h = JSON.parse(buildRedisKeyExport("h", page({
-      type_: "hash", ttl: -1, total: 2, cursor: 0, fields: ["a"], members: ["1"],
+      type_: "hash", ttl: -1, total: 1, cursor: 0, fields: ["a"], members: ["1"],
     })));
     expect(Array.isArray(h)).toBe(true);
     expect(h).toHaveLength(1);
-    expect(h[0]).toMatchObject({ key: "h", type: "hash", ttl: -1, total: 2, partial: false });
+    expect(h[0]).toMatchObject({ key: "h", type: "hash", ttl: -1, total: 1, partial: false });
     expect(h[0].value).toEqual([{ field: "a", value: "1" }]);
     const z = JSON.parse(buildRedisKeyExport("z", page({
       type_: "zset", ttl: 60, total: 2, cursor: 1, members: ["m"], scores: [2],

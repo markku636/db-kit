@@ -22,13 +22,15 @@ export function buildRedisKeyExport(
     case "stream": value = p.members.map((m, i) => ({ id: p.fields[i] ?? "", fields: m })); break;
     default: value = p.members;
   }
+  const exported = Array.isArray(value) ? value.length : 1;
   // 外層是陣列：單鍵也是一筆，日後要多鍵批次匯出直接往裡加即可。
   return JSON.stringify([{
-    key, type: p.type_, ttl: p.ttl, value,
-    exported: Array.isArray(value) ? value.length : 1,
-    total: p.total,
-    // 大 string 只載入前 64KB 時 page.truncated=true；這種檔案匯回來會覆蓋完整值。
-    partial: !!p.truncated || (p.cursor !== 0 && p.type_ !== "string"),
+    key, type: p.type_, ttl: p.ttl, value, exported, total: p.total,
+    // 三種「看到的不是全部」都要標 partial，否則匯入會 DEL 完整鍵再寫回子集：
+    // 1) 大 string 只載到前 64KB；2) 集合還有下一頁；3) 套過過濾（exported < HLEN/LLEN…）。
+    partial: !!p.truncated
+      || (p.cursor !== 0 && p.type_ !== "string")
+      || (p.type_ !== "string" && p.total >= 0 && exported < p.total),
   }], null, 2);
 }
 

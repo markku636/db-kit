@@ -333,12 +333,14 @@ pub async fn remove_saved_connection(
         state.k8s_streams.close_conn(&id).await;
         state.k8s_forwards.close_conn(&id).await;
     }
+    stop_redis_monitor(&app, &state, &id);
     state.manager.disconnect(&id).await;
     store::remove_connection_in(&store::app_config_dir(&app)?, &id).await
 }
 
 #[tauri::command]
-pub async fn disconnect(state: State<'_, AppState>, id: String) -> AppResult<()> {
+pub async fn disconnect(app: AppHandle, state: State<'_, AppState>, id: String) -> AppResult<()> {
+    stop_redis_monitor(&app, &state, &id);
     if let Some(h) = state.pubsub.lock().remove(&id) {
         h.abort();
     }
@@ -2114,12 +2116,19 @@ pub async fn redis_monitor_start(
     Ok(())
 }
 
+/// 停止某連線的 MONITOR 並通知前端。abort 不會執行 task 尾端的 emit，
+/// 所以要自己補 `redis-monitor-ended`，否則面板會永遠停在「監視中」。
+fn stop_redis_monitor(app: &AppHandle, state: &AppState, id: &str) {
+    if let Some(h) = state.redis_monitors.lock().remove(id) {
+        h.abort();
+        let _ = app.emit("redis-monitor-ended", id.to_string());
+    }
+}
+
 /// 停止 MONITOR：abort 背景任務並讓專屬連線關閉。
 #[tauri::command]
-pub async fn redis_monitor_stop(state: State<'_, AppState>, id: String) -> AppResult<()> {
-    if let Some(h) = state.redis_monitors.lock().remove(&id) {
-        h.abort();
-    }
+pub async fn redis_monitor_stop(app: AppHandle, state: State<'_, AppState>, id: String) -> AppResult<()> {
+    stop_redis_monitor(&app, &state, &id);
     Ok(())
 }
 

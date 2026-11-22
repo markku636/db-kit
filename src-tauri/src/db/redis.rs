@@ -18,6 +18,11 @@ pub struct RedisImportKey {
     /// 匯出時只載到部分成員：匯入必須略過，否則會 DEL 掉原鍵再寫回截斷的子集。
     #[serde(default)]
     pub partial: bool,
+    /// 匯出檔自我描述：匯出筆數 / 實際總數。partial 被竄改時仍可在後端擋下。
+    #[serde(default)]
+    pub exported: i64,
+    #[serde(default)]
+    pub total: i64,
     pub value: serde_json::Value,
 }
 
@@ -62,6 +67,8 @@ fn aggregate_keyspace(entries: &[(String, i64)]) -> Vec<(String, usize, i64)> {
 fn import_key_valid(item: &RedisImportKey) -> bool {
     // 截斷過的匯出要擋下來：DEL 掉完整鍵再寫回部分內容就是資料丟失。
     if item.partial || item.key.trim().is_empty() { return false; }
+    // 雙重保險：即使前端漏標 partial，只要檔案自己說「只載到一部分」就略過。
+    if item.total > 0 && item.exported < item.total { return false; }
     match item.type_.as_str() {
         "string" => item.value.is_string(),
         "hash" => item.value.as_array().is_some_and(|a| a.iter().all(|v| {
@@ -128,16 +135,30 @@ struct KeysSnapshot {
     created: std::time::Instant,
 }
 
+/// 跳脫 Redis glob 的特殊字元，讓字面值不會被當成萬用字元 / 字元 class。
+fn glob_escape(filter: &str) -> String {
+    let mut out = String::with_capacity(filter.len());
+    for ch in filter.chars() {
+        if matches!(ch, '[' | ']' | '\\' | '*' | '?') { out.push('\\'); }
+        out.push(ch);
+    }
+    out
+}
+
 /// 把字面子字串包成 SCAN MATCH：[] 與 \ 是 Redis glob 的特殊字元，要跳脫，
 /// 否則查 `user[0]` 會變成字元 class、配到 `user0`。
 fn glob_literal_substring(filter: &str) -> String {
-    let mut out = String::with_capacity(filter.len() + 2);
-    out.push('*');
-    for ch in filter.chars() {
-        if matches!(ch, '[' | ']' | '\\') { out.push('\\'); }
-        out.push(ch);
+    format!("*{}*", glob_escape(filter))
+}
+
+/// SQL LIKE 轉 Redis glob：`%` 才是萬用字元，其餘 glob 字元（含 `*`）都是字面。
+fn glob_like_pattern(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch == '%' { out.push('*'); }
+        else if matches!(ch, '[' | ']' | '\\' | '*' | '?') { out.push('\\'); out.push(ch); }
+        else { out.push(ch); }
     }
-    out.push('*');
     out
 }
 
@@ -1000,8 +1021,8 @@ impl DatabaseDriver for RedisDriver {
             if f.column == "key" {
                 if let Some(v) = &f.value {
                     pattern = match f.op.as_str() {
-                        "like" => v.replace('%', "*"),
-                        "=" => v.clone(),
+                        "like" => glob_like_pattern(v),
+                        "=" => glob_escape(v),
                         _ => pattern,
                     };
                 }
@@ -1994,6 +2015,11 @@ mod tests {
         assert_eq!(glob_literal_substring("user[0]"), r"*user\[0\]*");
         assert_eq!(glob_literal_substring("a\\b"), r"*a\\b*");
         assert_eq!(glob_literal_substring("abc"), "*abc*");
+        // grid 的 = / like 篩選也要當字面處理，不能讓 key 裡的 * 變成萬用字元。
+        assert_eq!(glob_escape("user[0]*"), r"user\[0\]\*");
+        assert_eq!(glob_like_pattern("user%"), "user*");
+        assert_eq!(glob_like_pattern("a*b"), r"a\*b");
+        assert_eq!(glob_like_pattern("u[0]%"), r"u\[0\]*");
     }
 
     #[test]
@@ -2026,18 +2052,20 @@ mod tests {
     fn import_key_valid_checks_value_shape() {
         let j = |s: &str| RedisImportKey {
             key: "k".into(), type_: "string".into(), ttl: -1, partial: false,
-            value: serde_json::from_str(s).unwrap(),
+            exported: 0, total: 0, value: serde_json::from_str(s).unwrap(),
         };
         assert!(import_key_valid(&j(r#""hello""#)));
         assert!(!import_key_valid(&j("123")));
         assert!(!import_key_valid(&j("null")));
         let h = RedisImportKey {
             key: "h".into(), type_: "hash".into(), ttl: -1, partial: false,
+            exported: 0, total: 0,
             value: serde_json::from_str(r#"[{"field":"a","value":"1"}]"#).unwrap(),
         };
         assert!(import_key_valid(&h));
         let z = RedisImportKey {
             key: "z".into(), type_: "zset".into(), ttl: -1, partial: false,
+            exported: 0, total: 0,
             value: serde_json::from_str(r#"[{"member":"m","score":1.5}]"#).unwrap(),
         };
         assert!(import_key_valid(&z));
@@ -2046,6 +2074,13 @@ mod tests {
         // 只匯出部分的鍵不能拿去覆寫完整鍵。
         let partial = RedisImportKey { partial: true, ..j(r#""x""#) };
         assert!(!import_key_valid(&partial));
+        // 即使 partial 被竄改成 false，檔案自己說只載 2/1000 筆就仍要擋。
+        let undercount = RedisImportKey {
+            key: "h".into(), type_: "hash".into(), ttl: -1, partial: false,
+            exported: 2, total: 1000,
+            value: serde_json::from_str(r#"[{"field":"a","value":"1"},{"field":"b","value":"2"}]"#).unwrap(),
+        };
+        assert!(!import_key_valid(&undercount));
     }
 
     #[test]

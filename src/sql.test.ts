@@ -103,6 +103,7 @@ import {
   substituteNamedParams,
   paramLabel,
   isWriteStatement,
+  isExplainWithWrite,
   stripLeadingComments,
   hasLeadingDbSwitch,
   buildInClause,
@@ -1473,6 +1474,24 @@ describe("具名參數（extractNamedParams / substituteNamedParams）", () => {
   it("paramLabel：具名加冒號、位置參數照原樣", () => {
     expect(paramLabel("id")).toBe(":id");
     expect(paramLabel("?2")).toBe("?2");
+  });
+});
+
+describe("isExplainWithWrite（分析模式唯讀攔截）", () => {
+  it("EXPLAIN ANALYZE 搭配 DML 視為寫入（會真的執行）", () => {
+    expect(isExplainWithWrite("ANALYZE DELETE FROM t")).toBe(true);
+    expect(isExplainWithWrite("EXPLAIN ANALYZE DELETE FROM users")).toBe(true);
+    expect(isExplainWithWrite("EXPLAIN (ANALYZE, BUFFERS) UPDATE t SET a = 1")).toBe(true);
+    expect(isExplainWithWrite("explain format=json insert into t values (1)")).toBe(true);
+    expect(isExplainWithWrite("EXPLAIN WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d")).toBe(true);
+  });
+  it("單純看執行計畫仍為唯讀", () => {
+    expect(isExplainWithWrite("SELECT * FROM t")).toBe(false);
+    expect(isExplainWithWrite("EXPLAIN SELECT 1")).toBe(false);
+    expect(isExplainWithWrite("EXPLAIN ANALYZE VERBOSE SELECT * FROM t")).toBe(false);
+    expect(isExplainWithWrite("EXPLAIN QUERY PLAN SELECT * FROM t")).toBe(false);
+    expect(isExplainWithWrite("EXPLAIN FORMAT=TREE SELECT 1")).toBe(false);
+    expect(isExplainWithWrite("-- note\nEXPLAIN SELECT 1")).toBe(false);
   });
 });
 
