@@ -50,3 +50,22 @@ export function keysUnderPrefix(keys: readonly string[], prefix: string, separat
   const sep = separator || ":";
   return keys.filter((k) => k === prefix || k.startsWith(prefix + sep));
 }
+
+export const REDIS_SEPARATOR_KEY = "dbkit:redisKeySeparator";
+export const redisSeparatorKey = (connId: string) => `${REDIS_SEPARATOR_KEY}:${connId}`;
+
+/** 讀取使用者選的分隔符（空值退回冒號）；供鍵樹外部的右鍵選單共用。 */
+export function loadRedisSeparator(connId?: string): string {
+  try {
+    return (localStorage.getItem(connId ? redisSeparatorKey(connId) : REDIS_SEPARATOR_KEY)
+      ?? localStorage.getItem(REDIS_SEPARATOR_KEY)) || ":";
+  } catch { return ":"; }
+}
+
+/** 由資料夾路徑產生前綴 / SCAN MATCH 樣式，跟著分隔符走。 */
+export function redisNamespacePrefix(prefix: string, separator: string): string {
+  return `${prefix}${separator || ":"}`;
+}
+export function redisNamespacePattern(prefix: string, separator: string): string {
+  return `${redisNamespacePrefix(prefix, separator)}*`;
+}

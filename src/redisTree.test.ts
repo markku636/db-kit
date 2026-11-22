@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildRedisTree, keysUnderPrefix, segmentLabel } from "./redisTree";
+import { buildRedisTree, keysUnderPrefix, segmentLabel, redisNamespacePattern, redisNamespacePrefix } from "./redisTree";
 
 describe("buildRedisTree", () => {
   it("預設以冒號分層，並把既是資料夾又是鍵的節點記下來", () => {
@@ -21,6 +21,14 @@ describe("buildRedisTree", () => {
   });
   it("空分隔符退回冒號", () => {
     expect(buildRedisTree(["a:b"], "").children.has("a")).toBe(true);
+  });
+});
+
+describe("namespace helpers", () => {
+  it("前綴與 MATCH 樣式跟著分隔符走（自訂 / 不再硬編碼冒號）", () => {
+    expect(redisNamespacePrefix("app/cache", "/")).toBe("app/cache/");
+    expect(redisNamespacePattern("app/cache", "/")).toBe("app/cache/*");
+    expect(redisNamespacePattern("user", "")).toBe("user:*");
   });
 });
 

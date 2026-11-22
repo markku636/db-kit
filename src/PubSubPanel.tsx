@@ -7,6 +7,7 @@ import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useT } from "./i18n";
+import { acquireRedisPanel, releaseRedisPanel } from "./redisPanelOwnership";
 
 interface Line {
   channel: string;
@@ -41,14 +42,19 @@ export default function PubSubPanel({ connId, connName, onClose }: {
   const unlistenErrRef = useRef<UnlistenFn | null>(null);
   const pausedRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const ownerId = useRef(`pubsub-${crypto.randomUUID()}`);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
 
   // 卸載時收掉監聽 + 取消訂閱（避免背景任務洩漏）。
+  // 側欄與分頁工具列可能各開一個面板：只有最後一個關掉才真的取消訂閱。
   useEffect(() => {
+    acquireRedisPanel(connId, ownerId.current);
     return () => {
       unlistenRef.current?.();
       unlistenErrRef.current?.();
-      api.redisUnsubscribe(connId).catch(() => { /* 忽略 */ });
+      if (releaseRedisPanel(connId, ownerId.current) === 0) {
+        api.redisUnsubscribe(connId).catch(() => { /* 忽略 */ });
+      }
     };
   }, [connId]);
 

@@ -10,12 +10,14 @@ import { useT } from "./i18n";
 type Tab = "slowlog" | "clients" | "bigkeys";
 
 // Redis 維運面板：慢查詢日誌 / 用戶端連線 / 大鍵掃描（對齊 Another Redis Desktop Manager 的狀態工具）。
-export default function RedisOpsPanel({ connId, connName, database, initialPrefix = "", onClose }: {
-  connId: string; connName: string; database: string; initialPrefix?: string; onClose: () => void;
+export default function RedisOpsPanel({ connId, connName, database, initialPrefix = "", initialTab = "slowlog", onChanged, onClose }: {
+  connId: string; connName: string; database: string; initialPrefix?: string; initialTab?: Tab;
+  onChanged?: () => void; onClose: () => void;
 }) {
   const t = useT();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount（避免全域快捷鍵在面板背後動作）
-  const [tab, setTab] = useState<Tab>("slowlog");
+  const readonly = useStore((s) => s.readonlyConns[connId] === true);
+  const [tab, setTab] = useState<Tab>(initialTab);
 
   const { shellClass } = useModalView();
 
@@ -38,9 +40,9 @@ export default function RedisOpsPanel({ connId, connName, database, initialPrefi
           <IconButton icon={X} label={t("關閉")} iconSize={16} onClick={onClose} className="text-fg/40 hover:text-fg" />
         </div>
         <div className="flex-1 overflow-auto p-4">
-          {tab === "slowlog" && <SlowLogTab connId={connId} />}
-          {tab === "clients" && <ClientsTab connId={connId} />}
-          {tab === "bigkeys" && <BigKeysTab connId={connId} database={database} initialPrefix={initialPrefix} />}
+          {tab === "slowlog" && <SlowLogTab connId={connId} readonly={readonly} />}
+          {tab === "clients" && <ClientsTab connId={connId} readonly={readonly} />}
+          {tab === "bigkeys" && <BigKeysTab connId={connId} database={database} initialPrefix={initialPrefix} readonly={readonly} onChanged={onChanged} />}
         </div>
       </div>
     </div>
@@ -52,7 +54,7 @@ function ErrBar({ err }: { err: string | null }) {
   return <div className="text-red-400 text-xs mono mb-2 break-all">{err}</div>;
 }
 
-function SlowLogTab({ connId }: { connId: string }) {
+function SlowLogTab({ connId, readonly = false }: { connId: string; readonly?: boolean }) {
   const t = useT();
   const [rows, setRows] = useState<SlowLogEntry[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -67,6 +69,7 @@ function SlowLogTab({ connId }: { connId: string }) {
   }, [connId, nonce]);
 
   const reset = async () => {
+    if (readonly) return;
     if (!(await uiConfirm(t("清空慢查詢日誌（SLOWLOG RESET）？"), { title: t("清空慢查詢"), confirmText: t("清空") }))) return;
     try {
       await api.runQuery(connId, "SLOWLOG RESET");
@@ -83,8 +86,8 @@ function SlowLogTab({ connId }: { connId: string }) {
         <span className="text-fg/40">{t("最近 {count} 筆慢查詢", { count: rows?.length ?? 0 })}</span>
         <button type="button" onClick={() => setNonce((n) => n + 1)}
           className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70"><Icon icon={RefreshCw} size={13} /> {t("刷新")}</button>
-        <button type="button" onClick={reset}
-          className="px-2 py-1 rounded border border-fg/15 hover:bg-red-500/20 text-red-300">{t("清空")}</button>
+        {!readonly && <button type="button" onClick={reset}
+          className="px-2 py-1 rounded border border-fg/15 hover:bg-red-500/20 text-red-300">{t("清空")}</button>}
       </div>
       <ErrBar err={err} />
       {!rows && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
@@ -115,7 +118,7 @@ function SlowLogTab({ connId }: { connId: string }) {
   );
 }
 
-function ClientsTab({ connId }: { connId: string }) {
+function ClientsTab({ connId, readonly = false }: { connId: string; readonly?: boolean }) {
   const t = useT();
   const [rows, setRows] = useState<ClientInfo[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -130,6 +133,7 @@ function ClientsTab({ connId }: { connId: string }) {
   }, [connId, nonce]);
 
   const kill = async (c: ClientInfo) => {
+    if (readonly) return;
     if (!(await uiConfirm(t("中斷用戶端 {addr}（id={id}）？", { addr: c.addr, id: c.id }), { title: t("中斷用戶端"), danger: true, confirmText: t("中斷") }))) return;
     try {
       await api.redisClientKill(connId, c.id);
@@ -173,8 +177,8 @@ function ClientsTab({ connId }: { connId: string }) {
                 <td className="px-2 py-1 border-b border-fg/5 text-fg/60">{c.idle}s</td>
                 <td className="px-2 py-1 border-b border-fg/5 text-emerald-300/80">{c.cmd}</td>
                 <td className="px-1 py-1 border-b border-fg/5 text-center">
-                  <button type="button" onClick={() => kill(c)} title={t("中斷此用戶端")}
-                    className="px-1.5 py-0.5 rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20">{t("中斷")}</button>
+                  {!readonly && <button type="button" onClick={() => kill(c)} title={t("中斷此用戶端")}
+                    className="px-1.5 py-0.5 rounded text-fg/20 group-hover:text-red-400 hover:bg-red-500/20">{t("中斷")}</button>}
                 </td>
               </tr>
             ))}
@@ -185,10 +189,10 @@ function ClientsTab({ connId }: { connId: string }) {
   );
 }
 
-function BigKeysTab({ connId, database, initialPrefix = "" }: { connId: string; database: string; initialPrefix?: string }) {
+function BigKeysTab({ connId, database, initialPrefix = "", readonly = false, onChanged }: {
+  connId: string; database: string; initialPrefix?: string; readonly?: boolean; onChanged?: () => void;
+}) {
   const t = useT();
-  // 唯讀連線：只掃描不清除（與資料格 / 鍵樹的唯讀規則一致）。
-  const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [sample, setSample] = useState("1000");
   const [top, setTop] = useState("50");
   // 前綴（命名空間）限定：ARDM 的 folder memory analysis。
@@ -238,6 +242,7 @@ function BigKeysTab({ connId, database, initialPrefix = "" }: { connId: string; 
       const gone = new Set(keys);
       setRows((r) => (r ? r.filter((b) => !gone.has(b.key)) : r));
       setMarked((s) => new Set([...s].filter((k) => !gone.has(k))));
+      onChanged?.(); // 讓鍵樹 / 網格重載，不然剛刪的鍵還顯示著
     } catch (e: any) {
       const msg = e?.message ?? t("刪除失敗");
       setErr(msg);

@@ -22,6 +22,8 @@ export function formatRedisConsoleLines(
 }
 
 export const REDIS_CONSOLE_HISTORY_KEY = "dbkit:redisConsoleHistory";
+/** 指令歷史按連線分開：A 連線打過的 FLUSHALL 不該出現在 B 連線的 ↑ 裡。 */
+export const redisConsoleHistoryKey = (connId: string) => `${REDIS_CONSOLE_HISTORY_KEY}:${connId}`;
 const HISTORY_CAP = 200;
 
 /** 指令歷史：連續相同的指令不重複記（↑ 連按兩次仍只回到同一條），並設上限。 */

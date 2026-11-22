@@ -4,13 +4,12 @@ import { api } from "./api";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 import {
-  compareSegments, REDIS_PATTERN_HISTORY_KEY, recordRedisPattern,
+  compareSegments, REDIS_PATTERN_HISTORY_KEY, redisPatternHistoryKey, recordRedisPattern,
 } from "./redisUiFormat";
-import { buildRedisTree, keysUnderPrefix, segmentLabel, type RedisTreeNode } from "./redisTree";
+import { buildRedisTree, keysUnderPrefix, segmentLabel, REDIS_SEPARATOR_KEY, redisSeparatorKey, type RedisTreeNode } from "./redisTree";
 
 export const REDIS_TREE_LIMIT = 10000;
 const LIMIT = REDIS_TREE_LIMIT;
-const SEPARATOR_KEY = "dbkit:redisKeySeparator";
 const INDENT = 14;
 
 type Row =
@@ -57,7 +56,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   nonce: number;
   // 外部要求把 SCAN MATCH 樣式換掉（右鍵「只顯示此命名空間 / 顯示全部鍵」）。
   // 帶 seq 是為了讓「同一個樣式再按一次」也能重新套用。
-  focus?: { pattern: string; seq: number } | null;
+  focus?: { pattern: string; seq: number; exactKeys?: string[] } | null;
   onOpenKey: (key: string) => void;
   onContextKey: (key: string, x: number, y: number) => void;
   // 資料夾（命名空間）右鍵：帶出該前綴與其底下所有鍵，供「在此新增鍵 / 整段刪除」。
@@ -71,7 +70,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   // ARDM 的 search history：過濾樣式記在瀏覽器，下次直接從下拉選舊的。
   const [patternHistory, setPatternHistory] = useState<string[]>(() => {
     try {
-      const raw = localStorage.getItem(REDIS_PATTERN_HISTORY_KEY);
+      const raw = localStorage.getItem(redisPatternHistoryKey(connId)) ?? localStorage.getItem(REDIS_PATTERN_HISTORY_KEY);
       const v: unknown = raw ? JSON.parse(raw) : [];
       return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
     } catch { return []; }
@@ -83,9 +82,14 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // ARDM 的 --separator：某些命名慣例用 / 或 :: 分層，固定冒號會整包擠在同一層。
   const [separator, setSeparator] = useState<string>(() => {
-    try { return localStorage.getItem(SEPARATOR_KEY) || ":"; } catch { return ":"; }
+    try {
+      return localStorage.getItem(redisSeparatorKey(connId)) ?? localStorage.getItem(REDIS_SEPARATOR_KEY) ?? ":";
+    } catch { return ":"; }
   });
   const didInit = useRef(false);
+  // 資料夾節點本身也可能是一個 key（user 與 user:name 同時存在）；SCAN 樣式 user:* 不會
+  // 帶回 user，所以由選單額外傳進來，在取樣後合併，避免這個鍵憑空消失。
+  const exactKeysRef = useRef<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,7 +99,8 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
       .redisKeys(connId, database, pattern || "*", LIMIT)
       .then((res) => {
         if (cancelled) return;
-        setKeys(res.keys);
+        const extra = exactKeysRef.current;
+        setKeys(extra.length ? [...new Set([...res.keys, ...extra])] : res.keys);
         setTruncated(res.truncated);
       })
       .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")))
@@ -107,6 +112,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   // 讓縮到單一命名空間後可以再次自動展開。
   useEffect(() => {
     if (!focus) return;
+    exactKeysRef.current = focus.exactKeys ?? [];
     setPatternInput(focus.pattern);
     setPattern(focus.pattern);
     didInit.current = false;
@@ -135,7 +141,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
     setPattern(next);
     setPatternHistory((h) => {
       const updated = recordRedisPattern(h, next);
-      try { localStorage.setItem(REDIS_PATTERN_HISTORY_KEY, JSON.stringify(updated)); } catch { /* 忽略 */ }
+      try { localStorage.setItem(redisPatternHistoryKey(connId), JSON.stringify(updated)); } catch { /* 忽略 */ }
       return updated;
     });
   };
@@ -172,7 +178,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
               const next = e.target.value || ":";
               setSeparator(next);
               setExpanded(new Set());
-              try { localStorage.setItem(SEPARATOR_KEY, next); } catch { /* 忽略 */ }
+              try { localStorage.setItem(redisSeparatorKey(connId), next); } catch { /* 忽略 */ }
             }}
             aria-label={t("鍵名分隔符")}
             className="w-10 bg-inset border border-fg/10 rounded px-1 py-0.5 mono outline-none focus:border-accent text-center"

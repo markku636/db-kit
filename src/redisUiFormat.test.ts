@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches } from "./redisUiFormat";
+import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, parseRedisDbPrefix, normalizeRedisDbInput } from "./redisUiFormat";
 
 describe("fmtUptime", () => {
   it("不到一分鐘顯示秒數，不再顯示 0m", () => {
@@ -16,6 +16,23 @@ describe("fmtUptime", () => {
     expect(fmtUptime(undefined)).toBe("—");
     expect(fmtUptime("0")).toBe("—");
     expect(fmtUptime("abc")).toBe("—");
+  });
+});
+
+describe("Redis DB prefix parsing", () => {
+  it("容忍冒號前後空白，與守門用的解析一致", () => {
+    expect(parseRedisDbPrefix("3:GET k")).toEqual({ db: "3", rest: "GET k" });
+    expect(parseRedisDbPrefix("3 : GET k")).toEqual({ db: "3", rest: "GET k" });
+    expect(parseRedisDbPrefix(" 3 : FLUSHDB")).toEqual({ db: "3", rest: "FLUSHDB" });
+    expect(parseRedisDbPrefix("GET k")).toBeNull();
+    expect(parseRedisDbPrefix("99999999999999999999:GET k")).toBeNull();
+  });
+  it("DB 輸入框拒絕空值與超長數字，不再默默打到 DB 0", () => {
+    expect(normalizeRedisDbInput("2")).toBe("2");
+    expect(normalizeRedisDbInput(" 12 ")).toBe("12");
+    expect(normalizeRedisDbInput("")).toBeNull();
+    expect(normalizeRedisDbInput("abc")).toBeNull();
+    expect(normalizeRedisDbInput("99999999999999999999")).toBeNull();
   });
 });
 

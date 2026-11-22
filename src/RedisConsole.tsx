@@ -7,8 +7,9 @@ import { isDangerousRedisCommand, isReadOnlyRedisCommand } from "./sql";
 import { completeRedisCommand, isBlockingKeysCommand, redisCommandHint } from "./redisCommandHints";
 import {
   formatRedisConsoleLines, loadRedisConsoleHistory, recordRedisConsoleHistory,
-  REDIS_CONSOLE_HISTORY_KEY, serializeRedisConsoleHistory,
+  REDIS_CONSOLE_HISTORY_KEY, redisConsoleHistoryKey, serializeRedisConsoleHistory,
 } from "./redisConsoleFormat";
+import { normalizeRedisDbInput, parseRedisDbPrefix } from "./redisUiFormat";
 import Icon from "./ui/Icon";
 import { Modal } from "./ui/index";
 import { useT } from "./i18n";
@@ -35,13 +36,16 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
   // 指令歷史跨視窗保存（仿 Another Redis Desktop Manager 的 execution log）：
   // 關掉主控台再開，↑ 仍能叫回之前打過的指令。
   const [history, setHistory] = useState<string[]>(() => {
-    try { return loadRedisConsoleHistory(localStorage.getItem(REDIS_CONSOLE_HISTORY_KEY)); }
-    catch { return []; }
+    try {
+      // 舊版只有一份全域歷史，首次讀取時沿用，之後寫入各自的 key。
+      const raw = localStorage.getItem(redisConsoleHistoryKey(connId)) ?? localStorage.getItem(REDIS_CONSOLE_HISTORY_KEY);
+      return loadRedisConsoleHistory(raw);
+    } catch { return []; }
   });
   useEffect(() => {
-    try { localStorage.setItem(REDIS_CONSOLE_HISTORY_KEY, serializeRedisConsoleHistory(history)); }
+    try { localStorage.setItem(redisConsoleHistoryKey(connId), serializeRedisConsoleHistory(history)); }
     catch { /* localStorage 不可用時只保存在記憶體 */ }
-  }, [history]);
+  }, [history, connId]);
   const [histPos, setHistPos] = useState<number>(-1); // -1 = 不在歷史中
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -57,6 +61,12 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
   const run = async () => {
     const cmd = input.trim();
     if (!cmd || busy) return;
+    const currentDb = normalizeRedisDbInput(db);
+    if (currentDb == null) {
+      setInput("");
+      setEntries((e) => [...e, { db, cmd, error: true, lines: [t("資料庫索引無效，請輸入 1～18 位數字。")] }]);
+      return;
+    }
     setInput("");
 
     // 本地指令：清空畫面。
@@ -92,9 +102,9 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
 
     // 已自帶 "n:" DB 前綴（限 1~18 位數字，確保後端 i64 也能解析）則照送並沿用該 DB，
     // 否則套用目前選取的 DB。effDb 用於畫面標註，避免結果歸錯 DB。
-    const m = /^(\d{1,18}):/.exec(cmd);
-    const effDb = m ? m[1] : db;
-    const wire = m ? cmd : `${db}:${cmd}`;
+    const p = parseRedisDbPrefix(cmd);
+    const effDb = p?.db ?? currentDb;
+    const wire = p ? `${p.db}:${p.rest}` : `${currentDb}:${cmd}`;
     // 歷史只在確定要送出的指令上記一筆：取消 FLUSH/KEYS 確認或沒通過唯讀擋下的
     // 指令不該在按 ↑ 時跑出來（以前在確認前就記，取消還留一條 FLUSHALL）。
     setHistory((h) => recordRedisConsoleHistory(h, cmd));
@@ -149,7 +159,7 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
           <span className="font-medium text-sm">{t("命令列 ·")} {connName}</span>
           <label className="ml-auto text-xs text-fg/50 flex items-center gap-1.5">
             DB
-            <input value={db} onChange={(e) => setDb(e.target.value.replace(/[^\d]/g, "") || "0")}
+            <input value={db} onChange={(e) => setDb(e.target.value.replace(/[^\d]/g, "").slice(0, 18))}
               title={t("目前資料庫；指令可自帶 n: 前綴覆寫")}
               className="w-12 bg-inset border border-fg/10 rounded px-1.5 py-0.5 text-center mono outline-none focus:border-accent" />
           </label>

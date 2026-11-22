@@ -1,5 +1,6 @@
 // Redis 主控台的指令語法提示（redis-cli 風格：輸入指令名稱時在下方顯示參數格式）。
 // 只收常用指令；語法照官方文件的寫法，[] 為選填、| 為擇一、... 為可重複。
+import { parseRedisDbPrefix } from "./redisUiFormat";
 
 export const REDIS_COMMAND_SYNTAX: Record<string, string> = {
   // 通用 / 鍵
@@ -162,7 +163,7 @@ export const REDIS_COMMAND_SYNTAX: Record<string, string> = {
 /** 主控台的指令名稱提示：已打完整的指令給語法，打一半給候選。 */
 export function redisCommandHint(input: string): { command: string | null; syntax: string | null; candidates: string[] } {
   // 去掉 `3:` 這種 DB 前綴；只看第一個字詞。
-  const line = input.replace(/^\s*\d{1,18}:/, "").trimStart();
+  const line = (parseRedisDbPrefix(input)?.rest ?? input).trimStart();
   const m = /^(\S+)(\s?)/.exec(line);
   if (!m) return { command: null, syntax: null, candidates: [] };
   const word = m[1].toUpperCase();
@@ -180,8 +181,9 @@ export function redisCommandHint(input: string): { command: string | null; synta
 
 /** Tab 補完：把第一個字詞換成唯一（或最短）的候選，保留 DB 前綴，後面加一個空白。 */
 export function completeRedisCommand(input: string): string | null {
-  const prefix = /^\s*\d{1,18}:/.exec(input)?.[0] ?? "";
-  const rest = input.slice(prefix.length).trimStart();
+  const parsed = parseRedisDbPrefix(input);
+  const prefix = parsed ? input.slice(0, input.length - parsed.rest.length) : "";
+  const rest = (parsed?.rest ?? input).trimStart();
   if (/\s/.test(rest)) return null; // 已經在打參數了
   const { candidates } = redisCommandHint(input);
   if (candidates.length === 0) return null;
@@ -190,5 +192,5 @@ export function completeRedisCommand(input: string): string | null {
 
 /** KEYS 會一次掃描整個 keyspace、期間 Redis 無法處理其他指令；主控台執行前要先確認。 */
 export function isBlockingKeysCommand(cmd: string): boolean {
-  return /^\s*(\d{1,18}:)?\s*keys\b/i.test(cmd);
+  return /^keys\b/i.test((parseRedisDbPrefix(cmd)?.rest ?? cmd).trimStart());
 }

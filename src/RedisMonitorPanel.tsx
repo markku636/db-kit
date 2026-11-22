@@ -7,6 +7,7 @@ import Icon from "./ui/Icon";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useT } from "./i18n";
 import { appendMonitorLine, monitorLineMatches } from "./redisUiFormat";
+import { acquireRedisPanel, releaseRedisPanel } from "./redisPanelOwnership";
 
 // Redis MONITOR 面板（仿 Another Redis Desktop Manager 的 Monitor）：
 // 背景任務用專屬連線跑 MONITOR，每行經 Tauri 事件即時推來；關閉面板自動停止。
@@ -24,15 +25,16 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
   const [err, setErr] = useState<string | null>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const unlistenErrRef = useRef<UnlistenFn | null>(null);
-  const pausedRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { pausedRef.current = paused; }, [paused]);
+  const ownerId = useRef(`monitor-${crypto.randomUUID()}`);
+  // 「暫停」只停止自動捲動，不丟資料：繼續後仍看得到暫停期間收到的指令。
 
   useEffect(() => {
+    acquireRedisPanel(connId, ownerId.current);
     let alive = true;
     void Promise.all([
       onRedisMonitor(connId, (line) => {
-        if (!alive || pausedRef.current) return;
+        if (!alive) return;
         setLines((prev) => appendMonitorLine(prev, line));
       }),
       onRedisMonitorError(connId, (msg) => { if (alive) setErr(msg); }),
@@ -45,7 +47,10 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
       alive = false;
       unlistenRef.current?.();
       unlistenErrRef.current?.();
-      api.redisMonitorStop(connId).catch(() => { /* 忽略 */ });
+      // 只有最後一個面板關掉才停後端任務，另一個還開著就不會突然沒資料。
+      if (releaseRedisPanel(connId, ownerId.current) === 0) {
+        api.redisMonitorStop(connId).catch(() => { /* 忽略 */ });
+      }
     };
   }, [connId]);
 

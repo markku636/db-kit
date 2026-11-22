@@ -25,6 +25,7 @@ import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, bu
 import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint } from "./redisKeyValueFormat";
 import { isReadOnlyColumnExtra } from "./columnMeta";
 import { fmtRedisTtl } from "./redisUiFormat";
+import { loadRedisSeparator, redisNamespacePattern, redisNamespacePrefix } from "./redisTree";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree, { REDIS_TREE_LIMIT } from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
@@ -200,7 +201,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // 要求鍵樹改用某個 SCAN MATCH 樣式（右鍵「只顯示此命名空間 / 顯示全部鍵」）。
   // seq 讓同一個樣式再按一次也會重新套用。
   const [treeFocus, setTreeFocus] = useState<{ pattern: string; seq: number } | null>(null);
-  const focusTree = (pattern: string) => setTreeFocus((f) => ({ pattern, seq: (f?.seq ?? 0) + 1 }));
+  const focusTree = (pattern: string, exactKeys?: string[]) =>
+    setTreeFocus((f) => ({ pattern, exactKeys, seq: (f?.seq ?? 0) + 1 }));
   // Redis 鍵檢視模式：樹狀（命名空間資料夾）/ 網格（key 列表）。記憶於 localStorage。
   const [redisView, setRedisView] = useState<"tree" | "grid">(() => {
     try { return localStorage.getItem("db-kit:redisKeyView") === "grid" ? "grid" : "tree"; }
@@ -221,6 +223,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [showConsole, setShowConsole] = useState(false);
   const [showPubSub, setShowPubSub] = useState(false);
   const [showOps, setShowOps] = useState(false);
+  const [opsPrefix, setOpsPrefix] = useState("");
+  const [opsTab, setOpsTab] = useState<"slowlog" | "clients" | "bigkeys">("slowlog");
   const [showMonitor, setShowMonitor] = useState(false);
 
   // SQL 表的儲存格右鍵選單 / 內容檢視器 / 選取（鍵盤導覽）/「以此列為範本」預填值
@@ -1350,10 +1354,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
     }
   };
 
-  // 鍵名的命名空間前綴（含尾端 ":"）：user:1000:name → user:1000:；無 ":" 則回空字串。
+  // 鍵名的命名空間前綴（含尾端分隔符）：跟著鍵樹目前選的分隔符走。
   const namespaceOf = (key: string) => {
-    const i = key.lastIndexOf(":");
-    return i < 0 ? "" : key.slice(0, i + 1);
+    const sep = loadRedisSeparator(tab.connId);
+    const i = key.lastIndexOf(sep);
+    return i < 0 ? "" : key.slice(0, i + sep.length);
   };
 
   // 複製鍵值到剪貼簿：依型別組成可讀文字（string 取完整值、hash 為 field=value、zset 帶 score）。
@@ -1465,7 +1470,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
               className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={BarChart3} size={14} /> {t("狀態")}</button>
             <button type="button" onClick={() => setShowPubSub(true)} title={t("Pub/Sub 訂閱與發佈")}
               className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Network} size={14} /> Pub/Sub</button>
-            <button type="button" onClick={() => setShowOps(true)} title={t("維運：慢查詢 / 用戶端 / 大鍵")}
+            <button type="button" onClick={() => { setOpsPrefix(""); setOpsTab("slowlog"); setShowOps(true); }} title={t("維運：慢查詢 / 用戶端 / 大鍵")}
               className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Settings} size={14} /> {t("維運")}</button>
             <button type="button" onClick={() => setShowMonitor(true)} title={t("即時監視伺服器收到的指令（MONITOR）")}
               className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Activity} size={14} /> {t("監視")}</button>
@@ -1892,7 +1897,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
         <PubSubPanel connId={tab.connId} connName={connName} onClose={() => setShowPubSub(false)} />
       )}
       {showOps && (
-        <RedisOpsPanel connId={tab.connId} connName={connName} database={tab.database} onClose={() => setShowOps(false)} />
+        <RedisOpsPanel connId={tab.connId} connName={connName} database={tab.database}
+          initialPrefix={opsPrefix} initialTab={opsTab} onChanged={refresh} onClose={() => setShowOps(false)} />
       )}
       {showMonitor && (
         <RedisMonitorPanel connId={tab.connId} connName={connName} onClose={() => setShowMonitor(false)} />
@@ -1930,12 +1936,16 @@ function DataPane({ tab }: { tab: OpenTab }) {
         <MenuPanel x={folderMenu.x} y={folderMenu.y} minW={180} onClose={() => setFolderMenu(null)}>
           {(() => {
             const { prefix, keys, truncated } = folderMenu;
+            const sep = loadRedisSeparator(tab.connId);
+            // 若資料夾本身也是一個 key，SCAN 的 prefix* 不會帶到它，額外帶進去合併。
+            const selfKeys = keys.filter((k) => k === prefix);
             // 唯讀連線隱藏寫入項（新增鍵 / 刪除整段），保留瀏覽與複製。
             const items: [string, () => void, boolean][] = prefix
               ? [
-                  ...(readonly ? [] : [[t("在此命名空間新增鍵…"), () => openNewKey(`${prefix}:`), false] as [string, () => void, boolean]]),
+                  ...(readonly ? [] : [[t("在此命名空間新增鍵…"), () => openNewKey(redisNamespacePrefix(prefix, sep)), false] as [string, () => void, boolean]]),
                   // 把 SCAN 樣式縮到此前綴：大型實例上鍵樹有 10,000 筆上限，縮範圍才看得到全貌。
-                  [t("只顯示此命名空間"), () => focusTree(`${prefix}:*`), false],
+                  [t("只顯示此命名空間"), () => focusTree(redisNamespacePattern(prefix, sep), selfKeys), false],
+                  [t("分析此命名空間的記憶體…"), () => { setOpsPrefix(prefix); setOpsTab("bigkeys"); setShowOps(true); }, false],
                   [t("複製前綴"), () => copyToClipboard(prefix, t("已複製前綴")), false],
                   [t("重新整理"), () => refresh(), false],
                   ...(readonly ? [] : [[

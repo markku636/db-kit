@@ -2,6 +2,7 @@
 // 抽離自 App.tsx / TableView.tsx 以便單元測試（見 sql.test.ts）且不依賴 React / Tauri。
 import type { DbKind, QueryResult, RoutineInfo } from "./api";
 import { t } from "./i18n";
+import { parseRedisDbPrefix } from "./redisUiFormat";
 
 // MariaDB 為 MySQL fork，SQL 方言一致：所有 SQL 生成共用 mysql 分支。
 // 集中成一個 predicate，避免每個 builder 各自比對兩個字串（漏改即產出錯誤方言）。
@@ -1528,7 +1529,8 @@ export function stripParens(s: string): string {
 // Redis 破壞性指令：FLUSHALL（清空所有 DB）/ FLUSHDB（清空目前 DB），無法復原，需確認。
 // 容許可選的 "N:" 資料庫前綴（查詢編輯器語法），如 "1: FLUSHDB"。
 export function isDangerousRedisCommand(cmd: string): boolean {
-  const c = cmd.replace(/^\s*\d+\s*:\s*/, "").trim();
+  const p = parseRedisDbPrefix(cmd);
+  const c = (p ? p.rest : cmd).trim();
   return /^(flushall|flushdb)\b/i.test(c);
 }
 
@@ -1579,7 +1581,8 @@ const REDIS_READ_ONLY_SUB: Record<string, Set<string>> = {
 // 判斷一條 Redis 指令是否為唯讀。容許可選的 "N:" 資料庫前綴（查詢編輯器語法），如 "1: GET k"。
 // 空字串 / 純空白視為唯讀（沒有東西會被執行）。
 export function isReadOnlyRedisCommand(cmd: string): boolean {
-  const c = cmd.replace(/^\s*\d+\s*:\s*/, "").trim();
+  const p = parseRedisDbPrefix(cmd);
+  const c = (p ? p.rest : cmd).trim();
   if (!c) return true;
   const parts = c.split(/\s+/);
   const verb = parts[0].toLowerCase();

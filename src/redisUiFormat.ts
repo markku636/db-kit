@@ -14,7 +14,25 @@ export function monitorLineMatches(line: string, filter: string): boolean {
   return !f || line.toLowerCase().includes(f);
 }
 
+/**
+ * 解析主控台指令的 DB 前綴（`3:GET k`、`3 : GET k`、` 3 : FLUSHDB`）。
+ * 大小寫無關不適用（數字），容忍冒號前後空白；最多 18 位避免後端 i64 溢位。
+ * 回 null 表示沒有前綴（或前綴不合法，呼叫端不該把它當 DB 0 偷送）。
+ */
+export function parseRedisDbPrefix(input: string): { db: string; rest: string } | null {
+  const m = /^\s*(\d{1,18})\s*:\s*([\s\S]*)$/.exec(input);
+  if (!m) return null;
+  return { db: m[1], rest: m[2] };
+}
+
+/** DB 輸入框的值：合法回原字串（最多 18 位），不合法回 null（呼叫端不送出）。 */
+export function normalizeRedisDbInput(raw: string): string | null {
+  const s = raw.trim();
+  return /^\d{1,18}$/.test(s) ? s : null;
+}
+
 export const REDIS_PATTERN_HISTORY_KEY = "dbkit:redisPatternHistory";
+export const redisPatternHistoryKey = (connId: string) => `${REDIS_PATTERN_HISTORY_KEY}:${connId}`;
 
 /** ARDM 的 search history：記住最近用過的 MATCH 樣式，最新的排最前，最多 20 條；`*` 不記。 */
 export function recordRedisPattern(history: readonly string[], pattern: string): string[] {
