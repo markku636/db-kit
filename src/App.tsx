@@ -427,11 +427,17 @@ export default function App() {
     useTheme.getState().setThemeId(useTheme.getState().themeId);
   }, []);
 
-  // F1 切換快捷鍵說明。
+  // F1 切換快捷鍵說明。說明面板自己也是 Modal（會設定 modalCount），
+  // 所以「再按一次 F1 關閉」必须優先於「有對話框就不要疊新面板」的守門。
+  const helpOpenRef = useRef(helpOpen);
+  helpOpenRef.current = helpOpen;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (document.body.dataset.modalCount) return; // 對話框裡按 F1 不該在其上疊一層快捷鍵說明
-      if (e.key === "F1") { e.preventDefault(); setHelpOpen((v) => !v); }
+      if (e.key !== "F1") return;
+      e.preventDefault();
+      if (helpOpenRef.current) { setHelpOpen(false); return; }
+      if (document.body.dataset.modalCount) return;
+      setHelpOpen(true);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
