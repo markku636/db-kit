@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildRedisTree, keysUnderPrefix } from "./redisTree";
+import { buildRedisTree, keysUnderPrefix, segmentLabel } from "./redisTree";
 
 describe("buildRedisTree", () => {
   it("預設以冒號分層，並把既是資料夾又是鍵的節點記下來", () => {
@@ -21,6 +21,19 @@ describe("buildRedisTree", () => {
   });
   it("空分隔符退回冒號", () => {
     expect(buildRedisTree(["a:b"], "").children.has("a")).toBe(true);
+  });
+});
+
+describe("segmentLabel", () => {
+  it("空片段有可見標籤，一般片段原樣", () => {
+    expect(segmentLabel("")).toBe("‹空›");
+    expect(segmentLabel("user")).toBe("user");
+  });
+  it("user::profile 這種鍵會產生空片段節點", () => {
+    const root = buildRedisTree(["user::profile"]);
+    const user = root.children.get("user")!;
+    expect(user.children.has("")).toBe(true);
+    expect(segmentLabel([...user.children.values()][0].seg)).toBe("‹空›");
   });
 });
 

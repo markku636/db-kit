@@ -6,7 +6,7 @@ import { useT } from "./i18n";
 import {
   compareSegments, REDIS_PATTERN_HISTORY_KEY, recordRedisPattern,
 } from "./redisUiFormat";
-import { buildRedisTree, keysUnderPrefix, type RedisTreeNode } from "./redisTree";
+import { buildRedisTree, keysUnderPrefix, segmentLabel, type RedisTreeNode } from "./redisTree";
 
 export const REDIS_TREE_LIMIT = 10000;
 const LIMIT = REDIS_TREE_LIMIT;
@@ -225,9 +225,9 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
                   onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextKey(r.selfKey!, e.clientX, e.clientY); }}
                   title={t("{selfKey}（此節點本身也是一個鍵，點此開啟）", { selfKey: r.selfKey })}
                   className="truncate text-blue-300 hover:underline"
-                >{r.seg}</span>
+                >{segmentLabel(r.seg)}</span>
               ) : (
-                <span className="truncate text-fg/80">{r.seg}</span>
+                <span className="truncate text-fg/80">{segmentLabel(r.seg)}</span>
               )}
               <span className="text-[10px] text-fg/30 ml-1">({r.count})</span>
               {r.selfKey != null && <Icon icon={KeyRound} size={12} className="text-blue-300/70 ml-0.5" title={t("此節點本身也是一個鍵")} />}
@@ -242,7 +242,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
               className="flex items-center gap-1.5 pr-3 py-0.5 cursor-pointer hover:bg-fg/5 text-sm mono text-blue-300/90"
             >
               <Icon icon={Circle} size={10} className="text-fg/25" />
-              <span className="truncate">{r.seg}</span>
+              <span className="truncate">{segmentLabel(r.seg)}</span>
             </div>
           )
         )}

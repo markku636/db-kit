@@ -864,6 +864,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
                   <span>{t("略過憑證驗證（自簽憑證用）")}</span>
                 </label>
               )}
+              {redisTls && (
+                <div className="text-xs text-fg/40 pl-6">
+                  {t("TLS 埠依供應商而異（常見 6379 或 6380）；貼上 rediss:// 網址會自動帶入埠號。")}
+                </div>
+              )}
               {redisTls && sshEnabled && (
                 <div className="text-xs text-warning pl-6">
                   {t("透過 SSH Tunnel 時主機會改寫為 127.0.0.1，憑證主機名驗證會失敗，通常需勾「略過憑證驗證」。")}

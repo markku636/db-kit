@@ -40,6 +40,11 @@ export function buildRedisTree(keys: readonly string[], separator: string = ":")
   return root;
 }
 
+/** 空片段（user::profile、a:）要有可見標籤，不然樹上出現看不見的資料夾 / 鍵。 */
+export function segmentLabel(seg: string): string {
+  return seg === "" ? "‹空›" : seg;
+}
+
 /** 某個前綴（資料夾路徑）底下的所有鍵：前綴比對走原字串，不經 glob。 */
 export function keysUnderPrefix(keys: readonly string[], prefix: string, separator: string = ":"): string[] {
   const sep = separator || ":";
