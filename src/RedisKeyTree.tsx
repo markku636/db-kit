@@ -5,6 +5,7 @@ import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 import {
   compareSegments, REDIS_PATTERN_HISTORY_KEY, redisPatternHistoryKey, recordRedisPattern, normalizeAutoRefreshMs,
+  loadExpandedPaths, redisExpandedKey,
 } from "./redisUiFormat";
 import { buildRedisTree, keysUnderPrefix, segmentLabel, toggleKeySelection, REDIS_SEPARATOR_KEY, redisSeparatorKey, type RedisTreeNode } from "./redisTree";
 
@@ -83,7 +84,13 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   const [truncated, setTruncated] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    try { return loadExpandedPaths(localStorage.getItem(redisExpandedKey(connId))); }
+    catch { return new Set(); }
+  });
+  const persistExpanded = (next: Set<string>) => {
+    try { localStorage.setItem(redisExpandedKey(connId), JSON.stringify([...next])); } catch { /* 忽略 */ }
+  };
   const [multiSelect, setMultiSelect] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [autoRefreshMs, setAutoRefreshMs] = useState<number>(() => {
@@ -140,7 +147,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   useEffect(() => {
     if (!tree || didInit.current) return;
     didInit.current = true;
-    if ((keys?.length ?? 0) <= 200) setExpanded(new Set(allFolderPaths(tree)));
+    if ((keys?.length ?? 0) <= 200) { const n = new Set(allFolderPaths(tree)); setExpanded(n); persistExpanded(n); }
   }, [tree, keys]);
 
   const rows = useMemo(() => (tree ? flatten(tree, expanded) : []), [tree, expanded]);
@@ -149,6 +156,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
     setExpanded((s) => {
       const n = new Set(s);
       n.has(path) ? n.delete(path) : n.add(path);
+      persistExpanded(n);
       return n;
     });
 
@@ -189,9 +197,9 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
         </datalist>
         <button type="button" onClick={apply} className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60">{t("套用")}</button>
         <div className="w-px h-4 bg-fg/10 mx-1" />
-        <button type="button" onClick={() => tree && setExpanded(new Set(allFolderPaths(tree)))}
+        <button type="button" onClick={() => { if (tree) { const n = new Set(allFolderPaths(tree)); setExpanded(n); persistExpanded(n); } }}
           className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60">{t("展開全部")}</button>
-        <button type="button" onClick={() => setExpanded(new Set())}
+        <button type="button" onClick={() => { setExpanded(new Set()); persistExpanded(new Set()); }}
           className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60">{t("收合全部")}</button>
         <label className="ml-2 flex items-center gap-1 text-fg/40" title={t("鍵名分層用的分隔符，預設為 :（對應 ARDM 的 --separator）")}>
           {t("分隔")}

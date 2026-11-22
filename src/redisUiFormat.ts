@@ -49,6 +49,17 @@ export function normalizeAutoRefreshMs(value: string | number | null | undefined
   return [0, 5000, 15000, 30000].includes(n) ? n : 0;
 }
 
+export const redisExpandedKey = (connId: string) => `dbkit:redisExpanded:${connId}`;
+
+/** 讀回展開的資料夾路徑（壞資料當空）。 */
+export function loadExpandedPaths(raw: string | null): Set<string> {
+  if (!raw) return new Set();
+  try {
+    const v: unknown = JSON.parse(raw);
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  } catch { return new Set(); }
+}
+
 export const REDIS_PATTERN_HISTORY_KEY = "dbkit:redisPatternHistory";
 export const redisPatternHistoryKey = (connId: string) => `${REDIS_PATTERN_HISTORY_KEY}:${connId}`;
 
