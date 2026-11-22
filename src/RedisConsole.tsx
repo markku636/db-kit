@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleDot } from "lucide-react";
 import { api } from "./api";
-import { pickSaveFile, toast, uiConfirm } from "./ui";
+import { pickSaveFile, toast, uiConfirm, uiPrompt } from "./ui";
 import { useStore } from "./store";
 import { fmtElapsed, isDangerousRedisCommand, isReadOnlyRedisCommand } from "./sql";
 import { completeRedisCommand, isBlockingKeysCommand, redisCommandHint } from "./redisCommandHints";
 import {
   formatRedisConsoleLines, loadRedisConsoleHistory, recordRedisConsoleHistory,
   redisConsoleHistoryKey, serializeRedisConsoleHistory,
+  loadRedisSnippets, recordRedisSnippet, redisSnippetsKey, type RedisSnippet,
 } from "./redisConsoleFormat";
 import { normalizeRedisDbInput, parseRedisDbPrefix } from "./redisUiFormat";
 import Icon from "./ui/Icon";
@@ -53,6 +54,21 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
     try { localStorage.setItem(redisConsoleHistoryKey(connId), serializeRedisConsoleHistory(history)); }
     catch { /* localStorage 不可用時只保存在記憶體 */ }
   }, [history, connId]);
+  const [snippets, setSnippets] = useState<RedisSnippet[]>(() => {
+    try { return loadRedisSnippets(localStorage.getItem(redisSnippetsKey(connId))); } catch { return []; }
+  });
+  const [showSnippets, setShowSnippets] = useState(false);
+  const persistSnippets = (next: RedisSnippet[]) => {
+    setSnippets(next);
+    try { localStorage.setItem(redisSnippetsKey(connId), JSON.stringify(next)); } catch { /* 忽略 */ }
+  };
+  const saveSnippet = async () => {
+    if (!input.trim()) return;
+    const name = await uiPrompt(t("指令名稱："), { title: t("儲存常用指令"), confirmText: t("儲存") });
+    if (!name?.trim()) return;
+    persistSnippets(recordRedisSnippet(snippets, name, input));
+    toast.success(t("已儲存常用指令"));
+  };
   const [histPos, setHistPos] = useState<number>(-1); // -1 = 不在歷史中
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -198,6 +214,26 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
             className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/50">{t("清歷史")}</button>
           <button type="button" onClick={exportHistory} disabled={!history.length} title={t("匯出指令歷史")}
             className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/50 disabled:opacity-30">{t("匯出歷史")}</button>
+          <button type="button" onClick={saveSnippet} disabled={!input.trim()} title={t("把目前輸入存成常用指令")}
+            className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/50 disabled:opacity-30">{t("存為常用")}</button>
+          <div className="relative">
+            <button type="button" onClick={() => setShowSnippets((v) => !v)} title={t("常用指令（仿 RedisInsight）")}
+              className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/50">{t("常用指令")}</button>
+            {showSnippets && (
+              <div className="absolute right-0 top-full mt-1 w-72 max-h-60 overflow-auto z-10 bg-elevated border border-fg/15 rounded shadow-lg">
+                {snippets.length === 0 && <div className="px-3 py-2 text-xs text-fg/40">{t("（尚無常用指令）")}</div>}
+                {snippets.map((s) => (
+                  <div key={s.name} className="flex items-center gap-1 px-2 py-1 hover:bg-fg/10">
+                    <button type="button" onClick={() => { setInput(s.cmd); setShowSnippets(false); inputRef.current?.focus(); }}
+                      className="flex-1 text-left text-xs truncate text-fg/80" title={s.cmd}>{s.name}</button>
+                    <button type="button" title={t("刪除")} aria-label={t("刪除")}
+                      onClick={() => persistSnippets(snippets.filter((x) => x.name !== s.name))}
+                      className="text-[10px] text-fg/40 hover:text-red-300">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       }
     >

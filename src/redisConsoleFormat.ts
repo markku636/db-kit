@@ -50,3 +50,31 @@ export function loadRedisConsoleHistory(raw: string | null): string[] {
 export function serializeRedisConsoleHistory(history: readonly string[]): string {
   return JSON.stringify(history.slice(-HISTORY_CAP));
 }
+
+// 常用指令片段（仿 RedisInsight 的 saved commands）：按連線存放在 localStorage。
+export interface RedisSnippet { name: string; cmd: string }
+export const redisSnippetsKey = (connId: string) => `dbkit:redisSnippets:${connId}`;
+const SNIPPET_CAP = 50;
+
+export function loadRedisSnippets(raw: string | null): RedisSnippet[] {
+  if (!raw) return [];
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (!Array.isArray(v)) return [];
+    return v.filter((s): s is RedisSnippet =>
+      !!s && typeof s === "object" && typeof (s as RedisSnippet).name === "string"
+      && typeof (s as RedisSnippet).cmd === "string"
+      && (s as RedisSnippet).name.trim().length > 0 && (s as RedisSnippet).cmd.trim().length > 0
+    ).slice(-SNIPPET_CAP);
+  } catch {
+    return [];
+  }
+}
+
+export function recordRedisSnippet(snippets: readonly RedisSnippet[], name: string, cmd: string): RedisSnippet[] {
+  const n = name.trim().slice(0, 60);
+  const c = cmd.trim();
+  if (!n || !c) return [...snippets];
+  // 同名覆蓋而不是重複新增；新存的排到最後。
+  return [...snippets.filter((s) => s.name !== n), { name: n, cmd: c }].slice(-SNIPPET_CAP);
+}

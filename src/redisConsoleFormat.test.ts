@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Params } from "./i18n";
 import type { QueryResult } from "./api";
-import { formatRedisConsoleLines, loadRedisConsoleHistory, recordRedisConsoleHistory, serializeRedisConsoleHistory } from "./redisConsoleFormat";
+import { formatRedisConsoleLines, loadRedisConsoleHistory, recordRedisConsoleHistory, serializeRedisConsoleHistory, loadRedisSnippets, recordRedisSnippet } from "./redisConsoleFormat";
 
 // 測試用的 t：身份 fallback + 簡單插值（與 i18n.interpolate 的行為一致）。
 const t = (key: string, params?: Params) =>
@@ -9,6 +9,17 @@ const t = (key: string, params?: Params) =>
 
 const res = (rows: (string | null)[][], truncated?: boolean): Pick<QueryResult, "rows" | "truncated"> => ({
   rows, truncated,
+});
+
+describe("saved command snippets", () => {
+  it("同名覆蓋且略過壞資料", () => {
+    let s = recordRedisSnippet([], "scan", "SCAN 0 MATCH user:* COUNT 1000");
+    s = recordRedisSnippet(s, "scan", "SCAN 0 MATCH order:*");
+    expect(s).toHaveLength(1);
+    expect(s[0].cmd).toContain("order");
+    expect(loadRedisSnippets(JSON.stringify([...s, { name: 1, cmd: 2 }, null]))).toHaveLength(1);
+    expect(loadRedisSnippets("not json")).toEqual([]);
+  });
 });
 
 describe("formatRedisConsoleLines", () => {
