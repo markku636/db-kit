@@ -1765,6 +1765,19 @@ pub async fn redis_delete_keys(
     state.manager.redis_driver(&id)?.delete_keys(&database, &keys).await
 }
 
+/// 依型別過濾鍵清單（仿 ARDM 的 type filter）：用 SCAN TYPE 在伺服器端挑選。
+#[tauri::command]
+pub async fn redis_keys_typed(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    pattern: String,
+    type_filter: String,
+    limit: usize,
+) -> AppResult<RedisKeys> {
+    state.manager.redis_driver(&id)?.scan_keys_typed(&database, &pattern, &type_filter, limit).await
+}
+
 /// keyspace 抽樣分析（仿 RedisInsight 的 Analysis）：型別分佈與記憶體用量。
 #[tauri::command]
 pub async fn redis_keyspace_summary(

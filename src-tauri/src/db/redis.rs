@@ -623,6 +623,40 @@ impl RedisDriver {
         Ok(())
     }
 
+    /// 同 scan_keys，但用 SCAN 的 TYPE 選項在伺服器端過濾型別（Redis 6+）。
+    /// 不為每個鍵打 TYPE，大型 keyspace 也只多一個 SCAN 參數。
+    pub async fn scan_keys_typed(
+        &self,
+        database: &str,
+        pattern: &str,
+        type_filter: &str,
+        limit: usize,
+    ) -> AppResult<RedisKeys> {
+        if type_filter.trim().is_empty() {
+            return self.scan_keys(database, pattern, limit).await;
+        }
+        let limit = limit.max(1);
+        let pattern = if pattern.is_empty() { "*" } else { pattern };
+        let mut conn = self.conn(database).await?;
+        let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut cursor: u64 = 0;
+        let mut truncated = false;
+        loop {
+            let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
+                .arg(cursor).arg("MATCH").arg(pattern)
+                .arg("COUNT").arg(1000)
+                .arg("TYPE").arg(type_filter)
+                .query_async(&mut conn).await.map_err(rerr)?;
+            set.extend(decode_keys(batch));
+            cursor = next;
+            if cursor == 0 { break; }
+            if set.len() >= limit { truncated = true; break; }
+        }
+        let mut keys: Vec<String> = set.into_iter().collect();
+        keys.truncate(limit);
+        Ok(RedisKeys { keys, truncated })
+    }
+
     /// 抽樣統計 keyspace：SCAN 取樣 + pipeline TYPE / MEMORY USAGE，聚合出各型別的
     /// 鍵數與記憶體用量（RedisInsight 的 Analysis 概念）。不影響線上服務。
     pub async fn keyspace_summary(&self, database: &str, sample: usize) -> AppResult<RedisKeyspaceSummary> {

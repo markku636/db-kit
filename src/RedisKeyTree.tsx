@@ -81,6 +81,8 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
     } catch { return []; }
   });
   const [keys, setKeys] = useState<string[] | null>(null);
+  // 型別過濾（仿 ARDM）：空＝全部；走 SCAN TYPE，不為每個鍵額外打 TYPE。
+  const [typeFilter, setTypeFilter] = useState("");
   const [truncated, setTruncated] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -119,7 +121,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
     setLoading(true);
     setErr(null);
     api
-      .redisKeys(connId, database, pattern || "*", LIMIT)
+      .redisKeysTyped(connId, database, pattern || "*", typeFilter, LIMIT)
       .then((res) => {
         if (cancelled) return;
         const extra = exactKeysRef.current;
@@ -136,7 +138,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
       .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [connId, database, pattern, nonce, refreshNonce]);
+  }, [connId, database, pattern, typeFilter, nonce, refreshNonce]);
 
   // 外部（右鍵選單）換樣式：同步輸入框與實際查詢的樣式，並重置「首次自動展開」的判定，
   // 讓縮到單一命名空間後可以再次自動展開。
@@ -232,6 +234,12 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
           className={`px-2 py-1 rounded border whitespace-nowrap ${multiSelect ? "border-accent text-accent" : "border-fg/15 text-fg/50 hover:bg-fg/10"}`}>
           {t("多選")}
         </button>}
+        <select value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setSelectedKeys(new Set()); setExpanded(new Set()); }}
+          aria-label={t("依型別過濾鍵")} title={t("依型別過濾鍵（仿 ARDM）")}
+          className="bg-inset border border-fg/10 rounded px-1 py-0.5 text-xs text-fg/50 outline-none focus:border-accent">
+          <option value="">{t("所有型別")}</option>
+          {["string", "hash", "list", "set", "zset", "stream"].map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
         {onImportKeys && <button type="button" onClick={onImportKeys} title={t("從 JSON 檔匯入鍵（仿 ARDM）")}
           className="px-2 py-1 rounded border border-fg/15 text-fg/50 hover:bg-fg/10 whitespace-nowrap">{t("匯入鍵")}</button>}
         {onBulkDelete && multiSelect && selectedKeys.size > 0 && (

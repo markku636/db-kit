@@ -353,6 +353,7 @@ pub fn run() {
             commands::redis_clone_key,
             commands::redis_import_keys,
             commands::redis_keyspace_summary,
+            commands::redis_keys_typed,
             commands::write_text_file,
             commands::redis_monitor_start,
             commands::redis_monitor_stop,

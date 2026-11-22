@@ -1936,6 +1936,9 @@ export const api = {
     invoke<ServerInfoSection[]>("server_info", { id }),
   redisKeys: (id: string, database: string, pattern: string, limit: number) =>
     invoke<RedisKeys>("redis_keys", { id, database, pattern, limit }),
+  // 依型別過濾鍵清單（SCAN TYPE，仿 ARDM）。
+  redisKeysTyped: (id: string, database: string, pattern: string, typeFilter: string, limit: number) =>
+    invoke<RedisKeys>("redis_keys_typed", { id, database, pattern, typeFilter, limit }),
   // 大型集合鍵成員分頁（cursor 起點、count 每頁筆數、filter 成員/欄位過濾）。
   redisKeyPage: (id: string, database: string, key: string, cursor: number, count: number, filter: string, full = false, afterId: string | null = null) =>
     invoke<KeyPage>("redis_key_page", { id, database, key, cursor, count, filter, full, afterId }),
