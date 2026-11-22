@@ -96,6 +96,23 @@ describe("t — 單複數", () => {
     setCatalog(catalog);
     expect(t("{m} 分鐘前", { m: 3 })).toBe("3 minutes ago");
   });
+
+  it("英文的可數 Redis 字串用單複數形，不再出現 1 keys / 1 consumers", async () => {
+    const en = (await import("./locales/en")).default;
+    const countable = [
+      "\n…等 {n} 個鍵",
+      "已刪除 {n} 個鍵",
+      "刪除此命名空間（{n} 個鍵）…",
+      "將刪除 DB {database} 的 {n} 個鍵，此動作無法復原：\n{preview}",
+      "將刪除命名空間「{prefix}」底下的 {n} 個鍵，此動作無法復原。",
+      "{n} 個消費者",
+    ];
+    for (const k of countable) expect(typeof en[k], k).toBe("object");
+    setCatalog(en, "en");
+    expect(t("已刪除 {n} 個鍵", { n: 1 })).toBe("Deleted 1 key");
+    expect(t("已刪除 {n} 個鍵", { n: 3 })).toBe("Deleted 3 keys");
+    expect(t("{n} 個消費者", { n: 1 })).toBe("1 consumer");
+  });
 });
 
 describe("t — 次選語言（日 / 韓 / 越退英文，不退中文）", () => {
