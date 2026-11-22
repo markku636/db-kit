@@ -83,6 +83,7 @@ import Select from "./ui/Select";
 import { buildExplainJsonSql, explainStatements, parseExplainPlan, parseMssqlShowplan, parseSqlitePlan, planSummary, type PlanNode } from "./explain";
 import { lintSql, MAX_SQL_CHARS as LINT_MAX_CHARS, type LintFinding, type LintSeverity } from "./sqlLint";
 import { effectiveRedisDb } from "./redisUiFormat";
+import { loadRedisDbNames, REDIS_DB_NAMES_KEY, redisDbLabel, serializeRedisDbNames, setRedisDbName, type RedisDbNames } from "./redisDbNames";
 import { buildReviewPrompt, buildTunePrompt, collectSchemaContext } from "./aiReview";
 import {
   buildCommentPrompt, buildConvertPrompt, buildExplainPlanPrompt, buildExplainPrompt,
@@ -1439,6 +1440,21 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
   const [connColors, setConnColors] = useState(loadConnColors);
   const applyConnColor = (id: string, color: string) =>
     setConnColors((m) => { const next = setConnColor(m, id, color); persistConnColors(next); return next; });
+  // Redis DB 自訂顯示名（仿 ARDM 的 DB custom name），只改側欄標籤。
+  const [redisDbNames, setRedisDbNames] = useState<RedisDbNames>(() => {
+    try { return loadRedisDbNames(localStorage.getItem(REDIS_DB_NAMES_KEY)); } catch { return {}; }
+  });
+  const renameRedisDb = (connId: string, db: string) => {
+    const current = redisDbLabel(redisDbNames, connId, db) ?? "";
+    void uiPrompt(t("為 DB {db} 設定顯示名稱（留空則還原）", { db }), { defaultValue: current, placeholder: `DB ${db}` }).then((name) => {
+      if (name == null) return;
+      setRedisDbNames((m) => {
+        const next = setRedisDbName(m, connId, db, name);
+        try { localStorage.setItem(REDIS_DB_NAMES_KEY, serializeRedisDbNames(next)); } catch { /* 忽略 */ }
+        return next;
+      });
+    });
+  };
   // 右鍵選單（Redis DB 節點）
   const [dbMenu, setDbMenu] = useState<{ connId: string; db: string; x: number; y: number } | null>(null);
   // Redis 伺服器狀態面板
@@ -2898,7 +2914,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                       : <Icon icon={ChevronRight} size={13} className={`text-fg/35 transition-transform ${objs ? "rotate-90" : ""}`} />}
                   </span>
                   <span className="shrink-0 flex" style={{ color: meta.color }}><Icon icon={containerDbNode(c.kind, db)?.icon ?? Database} size={14} /></span>
-                  <span className="truncate">{containerDbNode(c.kind, db)?.label ?? db}</span>
+                  <span className="truncate">{redisDbLabel(redisDbNames, c.id, db) ?? containerDbNode(c.kind, db)?.label ?? db}</span>
                 </div>
 
                 {objs && isSqlKind && (() => {
@@ -3342,6 +3358,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                     [t("命令列"), () => { if (dbConn) setConsole({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
                     [t("維運面板（慢查詢 / 用戶端 / 大鍵）…"), () => { if (dbConn) setRedisOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
                     [t("Pub/Sub…"), () => { if (dbConn) setPubSub({ id: dbConn.id, name: dbConn.name }); }, false],
+                    [t("重新命名資料庫…"), () => renameRedisDb(dbMenu.connId, dbMenu.db), false],
                     [t("編輯屬性…"), editConn, false],
                     ...(readonlyConns[dbMenu.connId]
                       ? []

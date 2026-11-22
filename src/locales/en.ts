@@ -1828,6 +1828,8 @@ const en: Catalog = {
   "重新命名": "Rename",
   "重新命名…": "Rename…",
   "重新命名失敗": "Rename failed",
+  "重新命名資料庫…": "Rename database…",
+  "為 DB {db} 設定顯示名稱（留空則還原）": "Set a display name for DB {db} (leave blank to reset)",
   "重新命名索引": "Rename index",
   "重新命名索引「{oldName}」為：": "Rename index \"{oldName}\" to:",
   "重新命名索引失敗": "Failed to rename index",

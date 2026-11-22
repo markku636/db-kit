@@ -3,6 +3,7 @@
 新功能：
 
 - **Redis 鍵樹可自訂分隔符（仿 Another Redis Desktop Manager 的 `--separator`）**：工具列多了「分隔」輸入框，鍵名用 `/`、`::` 等非冒號慣例分層時可以正確展開；設定會記住，不必每次重設。
+- **Redis DB 可以取自己的名字（仿 ARDM 的 DB custom name）**：DB 節點右鍵「重新命名資料庫…」可改側欄顯示名（例如 production / cache），留空還原成 `DB n`；只改顯示，不影響實際連線用的 DB 索引。
 - **Redis 鍵樹記住搜尋樣式（仿 ARDM 的 search history）**：用過的 MATCH 樣式進下拉選單，不必每次重打；最多 20 條。
 - **Redis 鍵詳情的可讀 TTL（仿 ARDM）**：`90061` 這種秒數改成 `1d 1h`，滑過顯示完整說明；「無到期」維持中文。
 - **Redis 主控台指令歷史跨視窗保留**：關掉再開主控台，↑ 仍能叫回之前打過的指令（仿 ARDM 的 execution log），最多 200 條、連續重複不記。
