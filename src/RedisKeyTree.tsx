@@ -51,7 +51,7 @@ function allFolderPaths(root: RedisTreeNode): string[] {
 
 // Redis 命名空間鍵樹：仿 Another Redis Desktop Manager 的左側鍵樹，
 // 把 user:1:name 之類的鍵依 ":" 分組成可摺疊資料夾。葉節點＝實際鍵。
-export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey, onContextKey, onContextFolder, onContextBlank, onBulkDelete, onImportKeys }: {
+export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey, onContextKey, onContextFolder, onContextBlank, onBulkDelete, onBulkTtl, onImportKeys }: {
   connId: string;
   database: string;
   nonce: number;
@@ -66,6 +66,8 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   onContextBlank?: (x: number, y: number) => void;
   // 多選模式下的批次刪除（仿 ARDM 的 Multiple Select/Delete）。
   onBulkDelete?: (keys: string[]) => void;
+  // 多選批次設定 TTL（仿 ARDM）；唯讀連線不傳入。
+  onBulkTtl?: (keys: string[]) => void;
   // 由父層提供的匯入 JSON 動作（唯讀連線不傳入，按鈕就不顯示）。
   onImportKeys?: () => void;
 }) {
@@ -234,6 +236,13 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
           className={`px-2 py-1 rounded border whitespace-nowrap ${multiSelect ? "border-accent text-accent" : "border-fg/15 text-fg/50 hover:bg-fg/10"}`}>
           {t("多選")}
         </button>}
+        {onBulkDelete && multiSelect && (
+          <button type="button" title={t("全選目前顯示的鍵")}
+            onClick={() => setSelectedKeys(new Set(rows.filter((r) => r.kind === "leaf").map((r) => r.key)))}
+            className="px-2 py-1 rounded border border-fg/15 text-fg/50 hover:bg-fg/10 whitespace-nowrap">
+            {t("全選本頁")}
+          </button>
+        )}
         <select value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setSelectedKeys(new Set()); setExpanded(new Set()); }}
           aria-label={t("依型別過濾鍵")} title={t("依型別過濾鍵（仿 ARDM）")}
           className="bg-inset border border-fg/10 rounded px-1 py-0.5 text-xs text-fg/50 outline-none focus:border-accent">
@@ -245,6 +254,8 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
         {onBulkDelete && multiSelect && selectedKeys.size > 0 && (
           <>
             <span className="text-fg/40">{t("已選 {n}", { n: selectedKeys.size })}</span>
+            {onBulkTtl && <button type="button" onClick={() => { onBulkTtl([...selectedKeys]); setSelectedKeys(new Set()); }}
+              className="px-2 py-1 rounded border border-fg/15 text-fg/50 hover:bg-fg/10 whitespace-nowrap">{t("設定 TTL")}</button>}
             <button type="button" onClick={() => { onBulkDelete?.([...selectedKeys]); setSelectedKeys(new Set()); }}
               className="px-2 py-1 rounded border border-red-500/40 text-red-300 hover:bg-red-500/15">{t("刪除選取")}</button>
             <button type="button" onClick={() => setSelectedKeys(new Set())}

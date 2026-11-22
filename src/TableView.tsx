@@ -1437,6 +1437,27 @@ function DataPane({ tab }: { tab: OpenTab }) {
     }
   };
 
+  // 多選批次設 TTL：逐鍵送 updateCell（ttl 是 Redis 網格的可寫欄），統計成功 / 失敗。
+  const bulkSetKeyTtl = async (keys: string[]) => {
+    if (!keys.length || readonly) return;
+    const v = await uiPrompt(t("TTL 秒數（-1 表示永不過期）："), {
+      title: t("為 {n} 個鍵設定 TTL", { n: keys.length }), defaultValue: "-1", confirmText: t("套用"),
+    });
+    if (v === null) return;
+    setApplying(true);
+    const results = await Promise.allSettled(keys.map((k) => api.updateCell(tab.connId, tab.database, tab.table, {
+      column: "ttl", new_value: v, pk_columns: ["key"], pk_values: [k],
+    })));
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    setApplying(false);
+    if (ok === keys.length) toast.success(t("已為 {n} 個鍵設定 TTL", { n: ok }));
+    else {
+      const msg = t("{ok}/{total} 個鍵設定成功，其餘失敗", { ok, total: keys.length });
+      setErr(msg); toast.error(msg);
+    }
+    refresh();
+  };
+
   // 複製鍵值到剪貼簿：依型別組成可讀文字（string 取完整值、hash 為 field=value、zset 帶 score）。
   // 集合型只讀第一頁（COPY_MAX 個元素）；不足全量時明講，避免使用者以為貼到的是完整資料。
   const COPY_MAX = 1000;
@@ -1692,6 +1713,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           onContextFolder={(prefix, keys, truncated, x, y) => setFolderMenu({ prefix, keys, truncated, x, y })}
           onContextBlank={(x, y) => setFolderMenu({ prefix: "", keys: [], truncated: false, x, y })}
           onBulkDelete={readonly ? undefined : bulkDeleteRedisKeys}
+          onBulkTtl={readonly ? undefined : bulkSetKeyTtl}
           onImportKeys={readonly ? undefined : importRedisKeys}
         />
       ) : (
@@ -2745,6 +2767,24 @@ function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClo
     }
   };
 
+  // 在詳情標頭直接改 TTL（不必回鍵樹右鍵）。唯讀 / 二進位鍵名不顯示這個入口。
+  const editTtl = async () => {
+    if (!page || effectiveReadOnly) return;
+    const v = await uiPrompt(t("TTL 秒數（-1 表示永不過期）："), {
+      title: t("設定 TTL"), defaultValue: String(page.ttl), confirmText: t("套用"),
+    });
+    if (v === null) return;
+    try {
+      await api.updateCell(connId, database, table, {
+        column: "ttl", new_value: v, pk_columns: ["key"], pk_values: [rkey],
+      });
+      toast.success(t("已設定 TTL"));
+      reload();
+    } catch (e: any) {
+      toast.error(e?.message ?? t("設定 TTL 失敗"));
+    }
+  };
+
   // 大 string 值：強制載入完整值（full=true），供編輯前取回被截斷的完整內容。
   const loadFull = () => {
     const gen = ++loadGen.current;
@@ -2799,8 +2839,10 @@ function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClo
               )}
             </>
           )}
+          {page && !effectiveReadOnly && <button type="button" onClick={editTtl} title={t("直接修改此鍵的 TTL")}
+            className="px-2 py-0.5 rounded border border-fg/15 hover:bg-fg/10 text-fg/50 text-xs">{t("TTL")}</button>}
           {page && <button type="button" onClick={exportKey} title={t("匯出此鍵為 JSON（仿 ARDM）")}
-            className="ml-auto px-2 py-0.5 rounded border border-fg/15 hover:bg-fg/10 text-fg/50 text-xs">{t("匯出")}</button>}
+            className={`${effectiveReadOnly ? "ml-auto " : ""}px-2 py-0.5 rounded border border-fg/15 hover:bg-fg/10 text-fg/50 text-xs`}>{t("匯出")}</button>}
           <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className={`text-fg/40 hover:text-fg ${page ? "" : "ml-auto"}`}><Icon icon={X} size={16} /></button>
         </div>
 

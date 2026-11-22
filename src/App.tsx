@@ -3310,6 +3310,12 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
               ...(isMcpKind(menuConn.kind)
                 ? [[t("接到 AI 工具（MCP）…"), () => useMcpDialog.getState().show(menuConn.id), false] as [string, () => void, boolean]]
                 : []),
+              [t("測試連線（Ping）"), () => {
+                const t0 = performance.now();
+                api.testConnection(menuConn)
+                  .then(() => toast.success(t("連線成功（{ms} ms）", { ms: Math.round(performance.now() - t0) })))
+                  .catch((e: any) => toast.error(e?.message ?? t("連線失敗")));
+              }, false],
               [t("屬性…"), () => setConnProps(menuConn), false],
               [t("編輯…"), () => onEdit(menuConn), false],
               [t("複製連線…"), () => onEdit({ ...menuConn, id: crypto.randomUUID(), name: t("{name} 複本", { name: menuConn.name }), password: "" }), false],
