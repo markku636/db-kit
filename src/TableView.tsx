@@ -24,7 +24,7 @@ import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCoun
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { formatRedisKeyForCopy, isSupportedRedisKeyType } from "./redisKeyValueFormat";
 import { invalidateSchemaCache } from "./useSqlSchema";
-import RedisKeyTree from "./RedisKeyTree";
+import RedisKeyTree, { REDIS_TREE_LIMIT } from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
 import ProgressBar from "./ui/ProgressBar";
 import { useVirtualRows } from "./useVirtualRows";
@@ -193,7 +193,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [detailKey, setDetailKey] = useState<string | null>(null);
   const [rowMenu, setRowMenu] = useState<{ key: string; ttl: string | null; x: number; y: number } | null>(null);
   // 鍵樹的命名空間（資料夾）右鍵選單；keys = 該前綴底下所有鍵。prefix 為空字串代表空白處選單。
-  const [folderMenu, setFolderMenu] = useState<{ prefix: string; keys: string[]; x: number; y: number } | null>(null);
+  const [folderMenu, setFolderMenu] = useState<{ prefix: string; keys: string[]; truncated: boolean; x: number; y: number } | null>(null);
   // 要求鍵樹改用某個 SCAN MATCH 樣式（右鍵「只顯示此命名空間 / 顯示全部鍵」）。
   // seq 讓同一個樣式再按一次也會重新套用。
   const [treeFocus, setTreeFocus] = useState<{ pattern: string; seq: number } | null>(null);
@@ -1355,11 +1355,13 @@ function DataPane({ tab }: { tab: OpenTab }) {
   };
 
   // 刪除整個命名空間（鍵樹資料夾右鍵）：以明確鍵名清單批次 DEL，需輸入前綴二次確認。
-  const deleteKeyNamespace = async (prefix: string, keys: string[]) => {
+  const deleteKeyNamespace = async (prefix: string, keys: string[], treeTruncated = false) => {
     if (keys.length === 0) return;
     const ok = await uiConfirm(
-      t("將刪除命名空間「{prefix}」底下的 {n} 個鍵，此動作無法復原。", { prefix, n: keys.length }),
-      { title: t("刪除命名空間"), danger: true, confirmText: t("繼續") },
+      treeTruncated
+        ? t("鍵樹已達 {LIMIT} 上限，此命名空間可能還有更多鍵沒列出；這次只會刪除已列出的 {n} 個。先用「只顯示此命名空間」縮小範圍再確認。", { LIMIT: REDIS_TREE_LIMIT, n: keys.length })
+        : t("將刪除命名空間「{prefix}」底下的 {n} 個鍵，此動作無法復原。", { prefix, n: keys.length }),
+      { title: t("刪除命名空間"), danger: true, confirmText: treeTruncated ? t("我知道，只刪這些") : t("繼續") },
     );
     if (!ok) return;
     const typed = await uiPrompt(t("請輸入命名空間前綴以確認刪除："), { placeholder: prefix, confirmText: t("刪除") });
@@ -1584,8 +1586,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
           focus={treeFocus}
           onOpenKey={(k) => setDetailKey(k)}
           onContextKey={(k, x, y) => setRowMenu({ key: k, ttl: null, x, y })}
-          onContextFolder={(prefix, keys, x, y) => setFolderMenu({ prefix, keys, x, y })}
-          onContextBlank={(x, y) => setFolderMenu({ prefix: "", keys: [], x, y })}
+          onContextFolder={(prefix, keys, truncated, x, y) => setFolderMenu({ prefix, keys, truncated, x, y })}
+          onContextBlank={(x, y) => setFolderMenu({ prefix: "", keys: [], truncated: false, x, y })}
         />
       ) : (
       <>
@@ -1897,7 +1899,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
       {folderMenu && (
         <MenuPanel x={folderMenu.x} y={folderMenu.y} minW={180} onClose={() => setFolderMenu(null)}>
           {(() => {
-            const { prefix, keys } = folderMenu;
+            const { prefix, keys, truncated } = folderMenu;
             // 唯讀連線隱藏寫入項（新增鍵 / 刪除整段），保留瀏覽與複製。
             const items: [string, () => void, boolean][] = prefix
               ? [
@@ -1906,7 +1908,12 @@ function DataPane({ tab }: { tab: OpenTab }) {
                   [t("只顯示此命名空間"), () => focusTree(`${prefix}:*`), false],
                   [t("複製前綴"), () => copyToClipboard(prefix, t("已複製前綴")), false],
                   [t("重新整理"), () => refresh(), false],
-                  ...(readonly ? [] : [[t("刪除此命名空間（{n} 個鍵）…", { n: keys.length }), () => deleteKeyNamespace(prefix, keys), true] as [string, () => void, boolean]]),
+                  ...(readonly ? [] : [[
+                    truncated
+                      ? `${t("刪除此命名空間（{n} 個鍵）…", { n: keys.length })} ⚠`
+                      : t("刪除此命名空間（{n} 個鍵）…", { n: keys.length }),
+                    () => deleteKeyNamespace(prefix, keys, truncated), true,
+                  ] as [string, () => void, boolean]]),
                 ]
               : [
                   ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(), false] as [string, () => void, boolean]]),

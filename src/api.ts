@@ -28,6 +28,7 @@ import type {
   RdAuthPrompt, RdAuthAnswer, RdConnClosed,
 } from "./rdTypes";
 import { mssqlNeedsCredentials } from "./mssqlAuth";
+import { pubSubErrorForConn } from "./pubSubFormat";
 
 export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "docker" | "registry" | "harbor" | "kubernetes" | "external";
 
@@ -671,9 +672,12 @@ export function onRedisPubSub(connId: string, cb: (m: PubSubMessage) => void): P
   });
 }
 
-// 訂閱 Pub/Sub 背景任務錯誤（payload 為字串）。回傳取消監聽函式。
-export function onRedisPubSubError(cb: (msg: string) => void): Promise<UnlistenFn> {
-  return listen<string>("redis-pubsub-error", (e) => cb(e.payload));
+// 訂閱 Pub/Sub 背景任務錯誤（payload 為 "{connId}: 訊息"）。只回呼屬於這條連線的錯誤。
+export function onRedisPubSubError(connId: string, cb: (msg: string) => void): Promise<UnlistenFn> {
+  return listen<string>("redis-pubsub-error", (e) => {
+    const msg = pubSubErrorForConn(e.payload, connId);
+    if (msg != null) cb(msg);
+  });
 }
 
 // ---- SSH 終端機 / SFTP 事件（DTO 見 sshTypes.ts）----

@@ -83,7 +83,7 @@ export default function PubSubPanel({ connId, connName, onClose }: {
         });
       }
       if (!unlistenErrRef.current) {
-        unlistenErrRef.current = await onRedisPubSubError((msg) => setErr(msg));
+        unlistenErrRef.current = await onRedisPubSubError(connId, (msg) => setErr(msg));
       }
       await api.redisSubscribe(connId, channels, patterns);
       setSubscribed(true);

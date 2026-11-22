@@ -1459,6 +1459,8 @@ const en: Catalog = {
   "刪除佇列本身（含其訊息與繫結）。": "Delete the queue itself (including its messages and bindings).",
   "刪除使用者": "Delete user",
   "刪除命名空間": "Delete namespace",
+  "鍵樹已達 {LIMIT} 上限，此命名空間可能還有更多鍵沒列出；這次只會刪除已列出的 {n} 個。先用「只顯示此命名空間」縮小範圍再確認。": "The key tree hit its {LIMIT}-key limit, so this namespace may contain more keys than shown. Only the {n} listed keys will be deleted. Use \"Show only this namespace\" to narrow the scope first.",
+  "我知道，只刪這些": "I understand, delete only these",
   "刪除版本": "Delete version",
   "刪除索引": "Delete index",
   "刪除索引…": "Delete index…",

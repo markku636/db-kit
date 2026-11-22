@@ -4,7 +4,8 @@ import { api } from "./api";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 
-const LIMIT = 10000;
+export const REDIS_TREE_LIMIT = 10000;
+const LIMIT = REDIS_TREE_LIMIT;
 const SEP = ":";
 const INDENT = 14;
 
@@ -92,7 +93,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   onOpenKey: (key: string) => void;
   onContextKey: (key: string, x: number, y: number) => void;
   // 資料夾（命名空間）右鍵：帶出該前綴與其底下所有鍵，供「在此新增鍵 / 整段刪除」。
-  onContextFolder?: (prefix: string, keys: string[], x: number, y: number) => void;
+  onContextFolder?: (prefix: string, keys: string[], truncated: boolean, x: number, y: number) => void;
   // 空白處右鍵：只提供「新增鍵 / 重新整理」。
   onContextBlank?: (x: number, y: number) => void;
 }) {
@@ -203,7 +204,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
                 if (!onContextFolder) return;
                 e.preventDefault();
                 e.stopPropagation();
-                onContextFolder(r.path, keysUnder(r.path), e.clientX, e.clientY);
+                onContextFolder(r.path, keysUnder(r.path), truncated, e.clientX, e.clientY);
               }}
               title={t("命名空間 {path}（{count} 個鍵）；右鍵可在此新增鍵或整段刪除", { path: r.path, count: r.count })}
               style={{ paddingLeft: 8 + r.depth * INDENT }}
