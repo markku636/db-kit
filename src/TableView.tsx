@@ -23,6 +23,7 @@ import K8sObjectView from "./K8sObjectView";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint } from "./redisKeyValueFormat";
+import { isReadOnlyColumnExtra } from "./columnMeta";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree, { REDIS_TREE_LIMIT } from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
@@ -301,19 +302,24 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   // 欄位 comment：欄名 → COLUMN_COMMENT（供表頭 hover 顯示欄位說明，致敬 Navicat）。僅 SQL 資料表 + 資料分頁時載入。
   const [commentMap, setCommentMap] = useState<Record<string, string>>({});
+  // SQL Server 的 identity / computed 欄位不能寫入：停用就地編輯，也不放進 INSERT/UPDATE 範本。
+  const [readOnlyCols, setReadOnlyCols] = useState<Set<string>>(new Set());
   useEffect(() => {
-    if (!isSqlKind || tab.view !== "data") { setCommentMap({}); return; }
+    if (!isSqlKind || tab.view !== "data") { setCommentMap({}); setReadOnlyCols(new Set()); return; }
     let alive = true;
     api.tableColumns(tab.connId, tab.database, tab.table)
       .then((cols) => {
         if (!alive) return;
         const m: Record<string, string> = {};
+        const ro = new Set<string>();
         for (const col of cols) {
           if (col.comment) m[col.name] = col.comment;
+          if (isReadOnlyColumnExtra(col.extra)) ro.add(col.name);
         }
         setCommentMap(m);
+        setReadOnlyCols(ro);
       })
-      .catch(() => { if (alive) setCommentMap({}); });
+      .catch(() => { if (alive) { setCommentMap({}); setReadOnlyCols(new Set()); } });
     return () => { alive = false; };
   }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
 
@@ -662,6 +668,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
   // 開啟某格的就地編輯器。seed != null 時以該文字起頭（直接打字 / Backspace 清空）。
   const openEditor = (r: number, c: number, seed: string | null = null) => {
+    const col = data?.columns[c];
+    if (col && readOnlyCols.has(col)) {
+      toast.info(t("欄位「{col}」是識別或計算欄位，不能編輯。", { col }));
+      return;
+    }
     setEditSeed(seed);
     setEditing({ r, c });
   };
@@ -897,8 +908,9 @@ function DataPane({ tab }: { tab: OpenTab }) {
     if (!data) return;
     // 共用 sql.ts 的跨資料庫跳脫（PostgreSQL 雙引號、其餘反引號；字面值單引號轉義）。
     const k = connKind ?? "mysql";
-    const cols = data.columns.map((c) => quoteIdent(k, c)).join(", ");
-    const lits = rowValues(r).map((v) => sqlLiteral(k, v)).join(", ");
+    const writable = data.columns.map((c, j) => ({ c, v: rowValues(r)[j] })).filter((x) => !readOnlyCols.has(x.c));
+    const cols = writable.map((x) => quoteIdent(k, x.c)).join(", ");
+    const lits = writable.map((x) => sqlLiteral(k, x.v)).join(", ");
     copyToClipboard(`INSERT INTO ${rowTableName(k, tab.table)} (${cols}) VALUES (${lits});`, t("已複製為 INSERT"));
   };
   // 由某列產生 UPDATE / DELETE（需主鍵定位）。
@@ -908,7 +920,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     if (!data) return;
     const k = connKind ?? "mysql";
     copyToClipboard(
-      buildRowUpdate(k, tab.table, data.columns, rowValues(r), data.primary_key, pkValuesOf(r)),
+      buildRowUpdate(k, tab.table, data.columns.filter((c) => !readOnlyCols.has(c)), rowValues(r).filter((_, j) => !readOnlyCols.has(data.columns[j])), data.primary_key, pkValuesOf(r)),
       t("已複製為 UPDATE"),
     );
   };
@@ -929,6 +941,10 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // text 可指定（儲存格檢視器裡排版 / 改過的內容），未給則用目前格內的值。
   const cellUpdateScript = (r: number, c: number, text?: string | null) => {
     if (!data || !connKind) return;
+    if (readOnlyCols.has(data.columns[c])) {
+      toast.info(t("欄位「{col}」是識別或計算欄位，不能產生 UPDATE 腳本。", { col: data.columns[c] }));
+      return;
+    }
     const sql = buildCellUpdate(
       connKind, tab.database, tab.table, data.columns[c],
       text === undefined ? cellValue(r, c) : text,
@@ -941,7 +957,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
     if (!data) return;
     const vals = rowValues(r);
     const init: Record<string, string | null> = {};
-    data.columns.forEach((c, j) => (init[c] = vals[j]));
+    // IDENTITY / 計算欄位帶進 INSERT 會得到 8102 / IDENTITY_INSERT off 錯誤，直接略過。
+    data.columns.forEach((c, j) => { if (!readOnlyCols.has(c)) init[c] = vals[j]; });
     setInsertInitial(init);
     setInserting(true);
   };

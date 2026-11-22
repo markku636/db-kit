@@ -471,7 +471,7 @@ impl DatabaseDriver for MssqlDriver {
         // value 是 sql_variant（tiberius 解不了），轉成字串再取。
         let sql = format!(
             "SELECT c.name, ty.name, c.is_nullable, c.is_identity, dc.definition, c.max_length, c.precision, c.scale, \
-                    CAST(ep.value AS NVARCHAR(4000)) \
+                    CAST(ep.value AS NVARCHAR(4000)), COLUMNPROPERTY(c.object_id, c.name, 'IsComputed') \
              FROM [{db}].sys.columns c \
              JOIN [{db}].sys.types ty ON c.user_type_id = ty.user_type_id \
              LEFT JOIN [{db}].sys.default_constraints dc ON c.default_object_id = dc.object_id \
@@ -494,6 +494,8 @@ impl DatabaseDriver for MssqlDriver {
                 );
                 let nullable = r.try_get::<bool, _>(2).ok().flatten().unwrap_or(true);
                 let is_identity = r.try_get::<bool, _>(3).ok().flatten().unwrap_or(false);
+                // 計算欄位也不可寫入；前端從 extra 認出 identity / computed 後停用編輯與 INSERT 範本。
+                let is_computed = r.try_get::<i32, _>(9).ok().flatten().unwrap_or(0) != 0;
                 let default = get_str(r, 4);
                 let key = if pk.contains(&name) { "PRI".to_string() } else { String::new() };
                 Some(ColumnInfo {
@@ -502,7 +504,7 @@ impl DatabaseDriver for MssqlDriver {
                     nullable,
                     key,
                     default,
-                    extra: if is_identity { "identity".to_string() } else { String::new() },
+                    extra: mssql_column_extra(is_identity, is_computed).to_string(),
                     comment: get_str(r, 8).unwrap_or_default(),
                 })
             })
@@ -1618,6 +1620,16 @@ fn is_proc_call_head(tok: &str) -> bool {
     (first.is_ascii_alphabetic() || first == b'_' || first >= 0x80) && !STATEMENT_HEADS.contains(&tok)
 }
 
+/// identity / computed 欄位不可寫入，前端從 extra 判斷要停用編輯與 INSERT 範本。
+fn mssql_column_extra(is_identity: bool, is_computed: bool) -> &'static str {
+    match (is_identity, is_computed) {
+        (true, true) => "identity computed",
+        (true, false) => "identity",
+        (false, true) => "computed",
+        (false, false) => "",
+    }
+}
+
 /// 欄位統計的總數 / 非 NULL 數（任何型別都支援）。
 fn column_count_sql(col: &str, qualified: &str) -> String {
     format!("SELECT COUNT_BIG(*), COUNT_BIG({col}) FROM {qualified}")
@@ -1937,6 +1949,14 @@ SELECT SCOPE_IDENTITY()"));
         assert_eq!(t(r"db01\", 1433).instance, None);
         // IPv6 的方括號是 ADO.NET / 手填常見寫法，驅動要的是裸位址。
         assert_eq!(t("[::1]", 1433).host, "::1");
+    }
+
+    #[test]
+    fn column_extra_marks_identity_and_computed_as_read_only() {
+        assert_eq!(mssql_column_extra(false, false), "");
+        assert_eq!(mssql_column_extra(true, false), "identity");
+        assert_eq!(mssql_column_extra(false, true), "computed");
+        assert_eq!(mssql_column_extra(true, true), "identity computed");
     }
 
     #[test]

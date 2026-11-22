@@ -5,7 +5,10 @@ import { uiConfirm } from "./ui";
 import { useStore } from "./store";
 import { isDangerousRedisCommand, isReadOnlyRedisCommand } from "./sql";
 import { completeRedisCommand, isBlockingKeysCommand, redisCommandHint } from "./redisCommandHints";
-import { formatRedisConsoleLines, recordRedisConsoleHistory } from "./redisConsoleFormat";
+import {
+  formatRedisConsoleLines, loadRedisConsoleHistory, recordRedisConsoleHistory,
+  REDIS_CONSOLE_HISTORY_KEY, serializeRedisConsoleHistory,
+} from "./redisConsoleFormat";
 import Icon from "./ui/Icon";
 import { Modal } from "./ui/index";
 import { useT } from "./i18n";
@@ -29,7 +32,16 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
   const [db, setDb] = useState(initialDb);
   const [input, setInput] = useState("");
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [history, setHistory] = useState<string[]>([]);
+  // 指令歷史跨視窗保存（仿 Another Redis Desktop Manager 的 execution log）：
+  // 關掉主控台再開，↑ 仍能叫回之前打過的指令。
+  const [history, setHistory] = useState<string[]>(() => {
+    try { return loadRedisConsoleHistory(localStorage.getItem(REDIS_CONSOLE_HISTORY_KEY)); }
+    catch { return []; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(REDIS_CONSOLE_HISTORY_KEY, serializeRedisConsoleHistory(history)); }
+    catch { /* localStorage 不可用時只保存在記憶體 */ }
+  }, [history]);
   const [histPos, setHistPos] = useState<number>(-1); // -1 = 不在歷史中
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);

@@ -21,7 +21,30 @@ export function formatRedisConsoleLines(
   return lines;
 }
 
-/** 指令歷史：連續相同的指令不重複記（↑ 連按兩次仍只回到同一條）。 */
+export const REDIS_CONSOLE_HISTORY_KEY = "dbkit:redisConsoleHistory";
+const HISTORY_CAP = 200;
+
+/** 指令歷史：連續相同的指令不重複記（↑ 連按兩次仍只回到同一條），並設上限。 */
 export function recordRedisConsoleHistory(history: readonly string[], cmd: string): string[] {
-  return history[history.length - 1] === cmd ? [...history] : [...history, cmd];
+  if (history[history.length - 1] === cmd) return [...history];
+  return [...history, cmd].slice(-HISTORY_CAP);
+}
+
+/**
+ * 從 localStorage 讀回歷史（ Another Redis Desktop Manager 的 execution log 概念：
+ * 關掉主控台再開，↑ 還能叫回昨天打過的指令）。壞掉 / 非字串陣列一律當空。
+ */
+export function loadRedisConsoleHistory(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (!Array.isArray(v)) return [];
+    return v.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(-HISTORY_CAP);
+  } catch {
+    return [];
+  }
+}
+
+export function serializeRedisConsoleHistory(history: readonly string[]): string {
+  return JSON.stringify(history.slice(-HISTORY_CAP));
 }

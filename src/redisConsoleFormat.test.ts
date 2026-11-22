@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Params } from "./i18n";
 import type { QueryResult } from "./api";
-import { formatRedisConsoleLines, recordRedisConsoleHistory } from "./redisConsoleFormat";
+import { formatRedisConsoleLines, loadRedisConsoleHistory, recordRedisConsoleHistory, serializeRedisConsoleHistory } from "./redisConsoleFormat";
 
 // 測試用的 t：身份 fallback + 簡單插值（與 i18n.interpolate 的行為一致）。
 const t = (key: string, params?: Params) =>
@@ -44,5 +44,27 @@ describe("recordRedisConsoleHistory", () => {
     const h = ["GET a"];
     expect(recordRedisConsoleHistory(h, "SET a 1")).toEqual(["GET a", "SET a 1"]);
     expect(h).toEqual(["GET a"]);
+  });
+  it("最多保留 200 條，舊的自動淘汰", () => {
+    let h: string[] = [];
+    for (let i = 0; i < 250; i++) h = recordRedisConsoleHistory(h, `GET k${i}`);
+    expect(h).toHaveLength(200);
+    expect(h[0]).toBe("GET k50");
+    expect(h[h.length - 1]).toBe("GET k249");
+  });
+});
+
+describe("Redis console history persistence", () => {
+  it("讀回有效 JSON；壞掉 / 非字串 / 空值當空", () => {
+    expect(loadRedisConsoleHistory('["GET a","SET b 1"]')).toEqual(["GET a", "SET b 1"]);
+    expect(loadRedisConsoleHistory(null)).toEqual([]);
+    expect(loadRedisConsoleHistory("not json")).toEqual([]);
+    expect(loadRedisConsoleHistory('{"a":1}')).toEqual([]);
+    expect(loadRedisConsoleHistory('["GET a", 5, null, "  ", "SET b 1"]')).toEqual(["GET a", "SET b 1"]);
+  });
+  it("寫出後再讀回一致，且同樣有上限", () => {
+    expect(loadRedisConsoleHistory(serializeRedisConsoleHistory(["GET a", "SET b 1"]))).toEqual(["GET a", "SET b 1"]);
+    const many = Array.from({ length: 300 }, (_, i) => `GET k${i}`);
+    expect(loadRedisConsoleHistory(serializeRedisConsoleHistory(many))).toHaveLength(200);
   });
 });

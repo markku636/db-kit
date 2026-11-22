@@ -4,56 +4,21 @@ import { api } from "./api";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 import { compareSegments } from "./redisUiFormat";
+import { buildRedisTree, keysUnderPrefix, type RedisTreeNode } from "./redisTree";
 
 export const REDIS_TREE_LIMIT = 10000;
 const LIMIT = REDIS_TREE_LIMIT;
-const SEP = ":";
+const SEPARATOR_KEY = "dbkit:redisKeySeparator";
 const INDENT = 14;
-
-// 命名空間樹節點：依 ":" 切分 key 而成的資料夾結構。
-interface TNode {
-  seg: string;                 // 此層片段名
-  path: string;                // 累積路徑
-  children: Map<string, TNode>;
-  leafKey?: string;            // 此節點本身是一個完整 key 時的鍵名
-  count: number;               // 子樹內的鍵數（含自身）
-}
 
 type Row =
   | { kind: "folder"; seg: string; path: string; depth: number; count: number; expanded: boolean; selfKey?: string }
   | { kind: "leaf"; seg: string; key: string; depth: number };
 
-function buildTree(keys: string[]): TNode {
-  const root: TNode = { seg: "", path: "", children: new Map(), count: 0 };
-  for (const key of keys) {
-    const parts = key.split(SEP);
-    let node = root;
-    let acc = "";
-    for (let i = 0; i < parts.length; i++) {
-      acc = i === 0 ? parts[i] : `${acc}${SEP}${parts[i]}`;
-      let child = node.children.get(parts[i]);
-      if (!child) {
-        child = { seg: parts[i], path: acc, children: new Map(), count: 0 };
-        node.children.set(parts[i], child);
-      }
-      node = child;
-    }
-    node.leafKey = key;
-  }
-  const count = (n: TNode): number => {
-    let c = n.leafKey != null ? 1 : 0;
-    for (const ch of n.children.values()) c += count(ch);
-    n.count = c;
-    return c;
-  };
-  count(root);
-  return root;
-}
-
-function flatten(root: TNode, expanded: Set<string>): Row[] {
+function flatten(root: RedisTreeNode, expanded: Set<string>): Row[] {
   const rows: Row[] = [];
-  const sorted = (n: TNode) => [...n.children.values()].sort((a, b) => compareSegments(a.seg, b.seg));
-  const walk = (node: TNode, depth: number) => {
+  const sorted = (n: RedisTreeNode) => [...n.children.values()].sort((a, b) => compareSegments(a.seg, b.seg));
+  const walk = (node: RedisTreeNode, depth: number) => {
     for (const child of sorted(node)) {
       if (child.children.size > 0) {
         const isExp = expanded.has(child.path);
@@ -71,9 +36,9 @@ function flatten(root: TNode, expanded: Set<string>): Row[] {
 }
 
 // 收集所有資料夾路徑（供「展開全部」）。
-function allFolderPaths(root: TNode): string[] {
+function allFolderPaths(root: RedisTreeNode): string[] {
   const paths: string[] = [];
-  const walk = (n: TNode) => {
+  const walk = (n: RedisTreeNode) => {
     for (const ch of n.children.values()) {
       if (ch.children.size > 0) { paths.push(ch.path); walk(ch); }
     }
@@ -106,6 +71,10 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // ARDM 的 --separator：某些命名慣例用 / 或 :: 分層，固定冒號會整包擠在同一層。
+  const [separator, setSeparator] = useState<string>(() => {
+    try { return localStorage.getItem(SEPARATOR_KEY) || ":"; } catch { return ":"; }
+  });
   const didInit = useRef(false);
 
   useEffect(() => {
@@ -133,7 +102,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
     didInit.current = false;
   }, [focus?.seq]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const tree = useMemo(() => (keys ? buildTree(keys) : null), [keys]);
+  const tree = useMemo(() => (keys ? buildRedisTree(keys, separator) : null), [keys, separator]);
 
   // 首次載入：鍵不多時自動展開全部，方便瀏覽。
   useEffect(() => {
@@ -154,8 +123,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   const apply = () => setPattern(patternInput.trim() || "*");
 
   // 某命名空間底下的所有鍵（含「自己也是一個鍵」的節點）。前綴比對走原字串，不經 glob。
-  const keysUnder = (prefix: string) =>
-    (keys ?? []).filter((k) => k === prefix || k.startsWith(prefix + SEP));
+  const keysUnder = (prefix: string) => keysUnderPrefix(keys ?? [], prefix, separator);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -174,6 +142,20 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
           className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60">{t("展開全部")}</button>
         <button type="button" onClick={() => setExpanded(new Set())}
           className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60">{t("收合全部")}</button>
+        <label className="ml-2 flex items-center gap-1 text-fg/40" title={t("鍵名分層用的分隔符，預設為 :（對應 ARDM 的 --separator）")}>
+          {t("分隔")}
+          <input
+            value={separator}
+            onChange={(e) => {
+              const next = e.target.value || ":";
+              setSeparator(next);
+              setExpanded(new Set());
+              try { localStorage.setItem(SEPARATOR_KEY, next); } catch { /* 忽略 */ }
+            }}
+            aria-label={t("鍵名分隔符")}
+            className="w-10 bg-inset border border-fg/10 rounded px-1 py-0.5 mono outline-none focus:border-accent text-center"
+          />
+        </label>
         <span className="ml-auto text-fg/40">
           {loading ? t("讀取中…") : keys ? t("{count} 個鍵", { count: keys.length }) + (truncated ? t("（已達 {LIMIT} 上限）", { LIMIT }) : "") : ""}
         </span>
