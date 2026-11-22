@@ -3033,6 +3033,8 @@ const en: Catalog = {
   "Bootstrap servers": "Bootstrap servers",
   "host1:9092,host2:9092": "host1:9092,host2:9092",
   "Virtual host（vhost）": "Virtual host (vhost)",
+  "已複製訊息內容": "Message copied",
+  "複製訊息內容": "Copy message",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",

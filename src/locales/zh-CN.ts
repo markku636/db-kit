@@ -3024,6 +3024,8 @@ const zhCN: Catalog = {
   "Bootstrap servers": "引导服务器",
   "host1:9092,host2:9092": "host1:9092,host2:9092",
   "Virtual host（vhost）": "虚拟主机（vhost）",
+  "已複製訊息內容": "已复制消息内容",
+  "複製訊息內容": "复制消息内容",
   "自動重整": "自动刷新",
   "自動重整鍵樹（仿 ARDM）": "自动刷新键树（仿 ARDM）",
   "自動重整：關": "自动刷新：关",

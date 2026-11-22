@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleDot, X, Play, Pause } from "lucide-react";
 import { api, onRedisPubSub, onRedisPubSubError, PubSubMessage } from "./api";
-import { toast, useModalOverlay } from "./ui";
+import { copyToClipboard, toast, useModalOverlay } from "./ui";
 import { useStore } from "./store";
 import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
@@ -213,6 +213,9 @@ export default function PubSubPanel({ connId, connName, onClose }: {
                 {l.channel}{l.pattern ? <span className="text-fg/30"> ({l.pattern})</span> : null}
               </span>
               <span className="text-fg/80 whitespace-pre-wrap break-all">{l.payload}</span>
+              <button type="button" onClick={() => copyToClipboard(l.payload, t("已複製訊息內容"))}
+                title={t("複製訊息內容")}
+                className="ml-auto shrink-0 px-1 text-fg/20 hover:text-fg/60">⧉</button>
             </div>
           ))}
           <div ref={bottomRef} />
