@@ -573,7 +573,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const confirmProdWrite = async (what: string) =>
     !prod || (await uiConfirm(t("這是正式環境連線。確定要{what}？", { what }), { title: t("正式環境"), danger: true, confirmText: t("確定") }));
   // 新增列不需主鍵（INSERT 不依賴 PK）；只有更新 / 刪除個別列才需 PK 來定位。視圖不可插入。
-  const insertable = !!data && data.columns.length > 0 && tab.objKind !== "view";
+  const insertable = !!data && data.columns.length > 0 && tab.objKind !== "view" && !readonly;
   const dirtyCount = Object.keys(edits).length;
   // 排序 / 篩選會觸發重載並放棄待套用編輯（與換頁 / 重整的保護一致），先確認。
   const guardDiscard = async (): Promise<boolean> =>
@@ -898,6 +898,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
   };
 
   const submitInsert = async (row: RowInsert) => {
+    // 防御：即使按鈕因時機差距還沒更新，也不讓唯讀連線寫入。
+    if (readonly) return;
     if (!(await confirmProdWrite(t("新增這一列")))) return;
     setApplying(true);
     setErr(null);
@@ -1634,7 +1636,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
         >
           <Icon icon={Download} size={14} /> {t("匯出")}
         </button>
-        {isSqlKind && (
+        {isSqlKind && !readonly && (
           <button
             type="button"
             onClick={() => setImporting(true)}
@@ -3745,6 +3747,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
 
   // Mongo 進階索引建立（方向 / 型別 + unique / sparse / hidden / TTL / partial）。
   const createMongoIndex = async (name: string, keys: [string, string][], options: MongoIndexOptions) => {
+    if (roConn) return;
     setBusy(true);
     try {
       await api.mongoCreateIndex(tab.connId, tab.database, tab.table, name, keys, options);
@@ -3760,6 +3763,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
 
   // 儲存 / 清除集合驗證規則（collMod）。strict+error 會立即擋下不符寫入，需明確確認。
   const saveValidation = async (clear: boolean) => {
+    if (roConn) return;
     const text = clear ? "" : valText.trim();
     if (text) {
       try { JSON.parse(text); } catch { toast.error(t("驗證規則需為合法 JSON（$jsonSchema）")); return; }
@@ -3785,6 +3789,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   };
 
   const doAlter = async (op: AlterOp, okMsg: string) => {
+    if (roConn) return;
     setBusy(true);
     try {
       await api.alterTable(tab.connId, tab.database, tab.table, op);
@@ -3824,7 +3829,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   };
   // 新增外鍵（MySQL / PostgreSQL；走 exec_ddl）。
   const addFk = async (name: string, column: string, refTable: string, refColumn: string, onDelete: string, onUpdate: string) => {
-    if (!kind) return;
+    if (roConn || !kind) return;
     setBusy(true);
     try {
       await api.execDdl(tab.connId, buildAddForeignKey(kind, tab.database, tab.table, name, column, refTable, refColumn, onDelete, onUpdate));
@@ -3838,7 +3843,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
     }
   };
   const dropFk = async (name: string) => {
-    if (!kind) return;
+    if (roConn || !kind) return;
     if (!(await uiConfirm(t("刪除外鍵「{name}」？", { name }), { title: t("刪除外鍵"), danger: true, confirmText: t("刪除") }))) return;
     setBusy(true);
     try {
@@ -3853,6 +3858,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   };
 
   const dropIndexByName = async (name: string) => {
+    if (roConn) return;
     if (!(await uiConfirm(t("刪除索引「{name}」？", { name }), { title: t("刪除索引"), danger: true, confirmText: t("刪除") }))) return;
     setBusy(true);
     try {
@@ -3868,7 +3874,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
 
   // 重新命名索引（僅 MySQL / PG；SQLite 無 ALTER INDEX RENAME）。
   const renameIndexByName = async (oldName: string) => {
-    if (!kind) return;
+    if (roConn || !kind) return;
     const nn = await uiPrompt(t("重新命名索引「{oldName}」為：", { oldName }), { title: t("重新命名索引"), defaultValue: oldName, confirmText: t("重新命名") });
     if (nn === null || !nn.trim() || nn.trim() === oldName) return;
     setBusy(true);
@@ -3884,6 +3890,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   };
 
   const createIndexFn = async (name: string, columns: string[], type: "normal" | "unique" | "fulltext") => {
+    if (roConn) return;
     if (!name.trim() || columns.length === 0) { toast.error(t("請填索引名稱並至少選一欄")); return; }
     setBusy(true);
     try {
@@ -3907,12 +3914,17 @@ function StructurePane({ tab }: { tab: OpenTab }) {
 
   return (
     <div className="flex-1 overflow-auto">
+      {roConn && (
+        <div className="px-3 py-2 text-xs text-fg/50 bg-fg/5 border-b border-fg/10">
+          {t("此連線為唯讀，結構變更（欄位 / 索引 / 外鍵 / 驗證規則）已停用。")}
+        </div>
+      )}
       {isSql && (
         <div className="flex items-center gap-1 px-2 py-1 bg-inset border-b border-fg/10 text-xs">
-          <button type="button" onClick={() => setAdding((s) => !s)} disabled={busy}
+          {!roConn && <button type="button" onClick={() => setAdding((s) => !s)} disabled={busy}
             className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 disabled:opacity-40 inline-flex items-center gap-1">
             <Icon icon={Plus} size={14} /> {t("新增欄位")}
-          </button>
+          </button>}
           <button type="button" onClick={viewDdl}
             title={t("檢視 / 複製建表 SQL（CREATE 語句）")}
             className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1">
@@ -3926,7 +3938,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
           {busy && <span className="text-fg/40">{t("處理中…")}</span>}
         </div>
       )}
-      {adding && isSql && <AddColumnForm kind={kind} busy={busy} onCancel={() => setAdding(false)}
+      {adding && isSql && !roConn && <AddColumnForm kind={kind} busy={busy} onCancel={() => setAdding(false)}
         onSubmit={(op) => doAlter(op, t("欄位已新增"))} />}
       <table className="text-sm border-collapse w-full">
         <thead className="sticky top-0 bg-bar">
@@ -4065,12 +4077,12 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                   )}
                   {canIndex && (
                     <td className="px-2 py-1 border-b border-fg/5 text-right whitespace-nowrap">
-                      {!ix.primary && (kind === "mysql" || kind === "mariadb" || kind === "postgres") && (
+                      {!ix.primary && !roConn && (kind === "mysql" || kind === "mariadb" || kind === "postgres") && (
                         <button type="button" title={t("重新命名索引")} disabled={busy}
                           onClick={() => renameIndexByName(ix.name)}
                           className="px-1 inline-flex items-center text-fg/20 group-hover:text-blue-400 hover:bg-blue-500/20 rounded disabled:opacity-40"><Icon icon={Pencil} size={14} /></button>
                       )}
-                      {!ix.primary && (
+                      {!ix.primary && !roConn && (
                         <button type="button" title={t("刪除索引")} disabled={busy}
                           onClick={() => dropIndexByName(ix.name)}
                           className="px-1 inline-flex items-center text-fg/20 group-hover:text-red-400 hover:bg-red-500/20 rounded disabled:opacity-40"><Icon icon={Minus} size={14} /></button>

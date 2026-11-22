@@ -2373,6 +2373,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
         : harborItemMenu({ ...common, project: m.db, repo: m.table });
     }
     if (m.kind === "mongo") {
+      const ro = readonlyConns[m.connId] === true;
       return [
         it(t("開啟集合"), () => useStore.getState().openTable(m.connId, m.db, m.table)),
         it(t("屬性…"), () => setTableProps({ connId: m.connId, db: m.db, table: m.table, kind: m.kind, objKind: m.objKind })),
@@ -2385,7 +2386,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
         it(t("問 AI：解釋這個集合"), () => askAiTable(m, t("請解釋 MongoDB 集合 {db}.{table} 的用途與常見欄位結構。", { db: m.db, table: m.table }))),
         sep,
         it(t("重新整理"), () => refreshTables(m.connId, m.db)),
-        it(t("刪除集合"), () => dropCollection(m), true),
+        ...(ro ? [] : [it(t("刪除集合"), () => dropCollection(m), true)]),
       ];
     }
     if (m.kind === "kafka") {
@@ -2560,8 +2561,8 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
       }));
     }
     // 設計檢視：載入 SELECT 定義編輯後 CREATE OR REPLACE。僅 MySQL / PG。
-    if (isView && isMyPg) nodes.push(it(t("設計檢視…"), () => setViewDesign({ connId: m.connId, db: m.db, view: m.table, kind: m.kind })));
-    if (isView) nodes.push(it(t("新增檢視…"), () => setCreateView({ connId: m.connId, db: m.db, kind: m.kind })));
+    if (!ro && isView && isMyPg) nodes.push(it(t("設計檢視…"), () => setViewDesign({ connId: m.connId, db: m.db, view: m.table, kind: m.kind })));
+    if (!ro && isView) nodes.push(it(t("新增檢視…"), () => setCreateView({ connId: m.connId, db: m.db, kind: m.kind })));
     // 查詢產生
     nodes.push(sep);
     nodes.push(it(t("查詢前 100 筆"), () => genSelect(m)));
@@ -3348,6 +3349,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
         <MenuPanel x={dbMenu.x} y={dbMenu.y} minW={150} onClose={() => setDbMenu(null)}>
           {(() => {
             const dbConn = connections.find((x) => x.id === dbMenu.connId);
+            const dbRo = readonlyConns[dbMenu.connId] === true;
             const editConn = () => { if (dbConn) onEdit(dbConn); };
             const items: [string, () => void, boolean][] =
               dbConn?.kind === "redis"
@@ -3371,7 +3373,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                 ? [
                     [t("叢集總覽…"), () => { if (dbConn) setKafkaOverview({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
                     [t("監控與告警…"), () => { if (dbConn) setKafkaMonitor({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
-                    [t("新增主題…"), () => setKafkaCreateTopic({ connId: dbMenu.connId }), false] as [string, () => void, boolean],
+                    ...(readonlyConns[dbMenu.connId] ? [] : [[t("新增主題…"), () => setKafkaCreateTopic({ connId: dbMenu.connId }), false] as [string, () => void, boolean]]),
                     [t("消費者群組…"), () => { if (dbConn) setKafkaGroups({ id: dbConn.id, name: dbConn.name }); }, false] as [string, () => void, boolean],
                     [t("編輯屬性…"), editConn, false] as [string, () => void, boolean],
                   ]
@@ -3423,13 +3425,15 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                 : dbConn?.kind === "mongo"
                 ? ((): [string, () => void, boolean][] => {
                     const arr: [string, () => void, boolean][] = [
-                      [t("新增集合…"), () => createCollection(dbMenu.connId, dbMenu.db), false],
-                      [t("新增資料庫…"), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
+                      ...(dbRo ? [] : [
+                        [t("新增集合…"), () => createCollection(dbMenu.connId, dbMenu.db), false],
+                        [t("新增資料庫…"), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false],
+                      ] as [string, () => void, boolean][]),
                       [t("監控面板"), () => { if (dbConn) setMongoOps({ id: dbConn.id, name: dbConn.name, db: dbMenu.db }); }, false],
                       [t("編輯屬性…"), editConn, false],
                     ];
                     // 系統庫（admin/config/local）不顯示刪除（後端亦硬擋）。
-                    if (!isSystemDatabase("mongo", dbMenu.db))
+                    if (!dbRo && !isSystemDatabase("mongo", dbMenu.db))
                       arr.push([t("刪除資料庫…"), () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
                     return arr;
                   })()
@@ -3438,15 +3442,15 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                     const noun = k === "postgres" ? "Schema" : t("資料庫");
                     const arr: [string, () => void, boolean][] = [
                       [t("新增查詢"), () => { if (dbConn) newQueryForDb(dbMenu.connId, dbMenu.db, dbConn.kind); }, false],
-                      [t("設計表結構…"), () => { if (dbConn) setDesignTable({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false],
+                      ...(dbRo ? [] : [[t("設計表結構…"), () => { if (dbConn) setDesignTable({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false] as [string, () => void, boolean]]),
                     ];
                     // SQLite 為單檔，無多資料庫概念，故不顯示新增 / 刪除資料庫。
-                    if (k !== "sqlite") arr.push([t("新增{noun}…", { noun }), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false]);
-                    arr.push([t("新增視圖…"), () => { if (dbConn) setCreateView({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
-                    arr.push([t("預存程序 / 觸發器…"), () => { if (dbConn) setRoutines({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
-                    if (SP_TEST_KINDS.has(k ?? "")) arr.push([t("預存程序整合測試…"), () => useStore.getState().openSpTest({ connId: dbMenu.connId, database: dbMenu.db }), false]);
+                    if (!dbRo && k !== "sqlite") arr.push([t("新增{noun}…", { noun }), () => { if (dbConn) createDatabase(dbMenu.connId, dbConn.kind); }, false]);
+                    if (!dbRo) arr.push([t("新增視圖…"), () => { if (dbConn) setCreateView({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
+                    if (!dbRo) arr.push([t("預存程序 / 觸發器…"), () => { if (dbConn) setRoutines({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }); }, false]);
+                    if (!dbRo && SP_TEST_KINDS.has(k ?? "")) arr.push([t("預存程序整合測試…"), () => useStore.getState().openSpTest({ connId: dbMenu.connId, database: dbMenu.db }), false]);
                     arr.push([t("匯出結構 SQL…"), () => dumpSchema(dbMenu.connId, dbMenu.db), false]);
-                    if (supportsSchemaCompare(k)) arr.push([t("執行 SQL 檔…"), () => setSqlFile({ connId: dbMenu.connId, db: dbMenu.db }), false]);
+                    if (!dbRo && supportsSchemaCompare(k)) arr.push([t("執行 SQL 檔…"), () => setSqlFile({ connId: dbMenu.connId, db: dbMenu.db }), false]);
                     if (isMysqlFamily(k)) arr.push([t("資料表大小報表…"), () => setServerQuery({
                       connId: dbMenu.connId, title: t("資料表大小：{db}", { db: dbMenu.db }), sql: tableSizesSql(dbMenu.db),
                     }), false]);
@@ -3454,13 +3458,13 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                       arr.push([t("結構比對…"), () => setSchemaCompare({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
                       arr.push([t("儲存結構快照…"), () => saveSchemaSnapshot(dbMenu.connId, dbMenu.db), false]);
                     }
-                    if (isMysqlFamily(k) || k === "postgres" || k === "sqlite") arr.push([t("資料傳輸（整庫）…"), () => setDbTransfer({ connId: dbMenu.connId, db: dbMenu.db }), false]);
+                    if (!dbRo && (isMysqlFamily(k) || k === "postgres" || k === "sqlite")) arr.push([t("資料傳輸（整庫）…"), () => setDbTransfer({ connId: dbMenu.connId, db: dbMenu.db }), false]);
                     if ((isMysqlFamily(k) || k === "postgres" || k === "sqlite") && dbConn) arr.push([t("資料庫文件…"), () => setDbDict({ connId: dbMenu.connId, db: dbMenu.db, kind: dbConn.kind }), false]);
                     if (isMysqlFamily(k)) arr.push([t("資料庫屬性…"), () => setDbProps({ connId: dbMenu.connId, db: dbMenu.db }), false]);
                     arr.push([t("編輯屬性…"), editConn, false]);
                     // 系統 schema / 庫，以及 MySQL 系使用中的預設庫，不顯示刪除（後端亦硬擋）。
                     const isDefault = isMysqlFamily(k) && dbConn?.database === dbMenu.db;
-                    if (k !== "sqlite" && k && !isSystemDatabase(k, dbMenu.db) && !isDefault)
+                    if (!dbRo && k !== "sqlite" && k && !isSystemDatabase(k, dbMenu.db) && !isDefault)
                       arr.push([t("刪除{noun}…", { noun }), () => { if (dbConn) dropDatabase(dbMenu.connId, dbMenu.db, dbConn.kind); }, true]);
                     return arr;
                   })();

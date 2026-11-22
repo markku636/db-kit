@@ -3063,6 +3063,7 @@ const en: Catalog = {
   "測試並儲存": "Test & Save",
   "二進位鍵名，僅供檢視；請用主控台處理": "Binary key name — view only; use the console",
   "此鍵名含非 UTF-8 位元組，僅供檢視；寫回會操作到不同的鍵，請改用主控台。": "This key name contains non-UTF-8 bytes and is view-only. Writing back would target a different key; use the console instead.",
+  "此連線為唯讀，結構變更（欄位 / 索引 / 外鍵 / 驗證規則）已停用。": "This connection is read-only; schema changes (columns / indexes / foreign keys / validation) are disabled.",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",

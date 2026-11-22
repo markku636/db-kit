@@ -98,18 +98,24 @@ async function loadCatalog(l: Lang): Promise<Pick<LangStore, "catalog" | "fallba
   return { catalog, fallback };
 }
 
+// 連續切語言時，較慢的那包非同步 import 可能較晚回來；用序號擋掉過期結果。
+let langRequestSeq = 0;
+
 export const useLang = create<LangStore>((set) => ({
   lang: readStoredLang(),
   catalog: {},
   fallback: {},
   setLang: async (l) => {
-    const { catalog, fallback } = await loadCatalog(l);
+    const seq = ++langRequestSeq;
+    // 先記住使用者最後的選擇：就算舊語言的 catalog 較晚載入完，也不能覆寫偏好。
     try {
       localStorage.setItem(LANG_KEY, l);
     } catch {
       /* ignore */
     }
     applyDocLang(l);
+    const { catalog, fallback } = await loadCatalog(l);
+    if (seq !== langRequestSeq) return;
     // 後端（Tauri command）與 dbk CLI 共用 app_settings.json 的 lang；失敗不擋 UI 切換。
     // 延遲 import：讓 i18n.ts 不靜態相依 api.ts —— 否則每個 import 本模組的單元測試都會拉進
     // Tauri runtime，且 api.ts 日後想用 t() 就會形成循環。
