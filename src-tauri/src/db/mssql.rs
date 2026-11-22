@@ -548,7 +548,8 @@ impl DatabaseDriver for MssqlDriver {
             0
         };
 
-        let order = build_order(&query.sorts);
+        let primary_key = self.primary_key(database, &schema, &tbl).await.unwrap_or_default();
+        let order = build_order(&query.sorts, &primary_key);
         let offset = (query.page as u64).saturating_mul(query.page_size as u64);
         let select = self.select_list(database, &schema, &tbl).await;
         let sql = format!(
@@ -571,8 +572,6 @@ impl DatabaseDriver for MssqlDriver {
             .iter()
             .map(|r| (0..columns.len()).map(|i| cell_to_string(r, i)).collect())
             .collect();
-        let primary_key = self.primary_key(database, &schema, &tbl).await.unwrap_or_default();
-
         Ok(PagedData {
             columns,
             rows: data_rows,
@@ -1640,10 +1639,17 @@ fn build_where(filters: &[Filter], match_any: bool) -> String {
     }
 }
 
-fn build_order(sorts: &[Sort]) -> String {
-    // OFFSET/FETCH 必須有 ORDER BY；無排序時用 (SELECT NULL) 佔位。
+fn build_order(sorts: &[Sort], pk: &[String]) -> String {
+    // OFFSET/FETCH 必須有 ORDER BY。(SELECT NULL) 雖然合法，但順序不保證，
+    // 翻頁時同一列可能出現兩次或整列不見；有主鍵就照主鍵排，是唯一穩定又免費的順序。
     if sorts.is_empty() {
-        return "ORDER BY (SELECT NULL)".to_string();
+        if pk.is_empty() {
+            return "ORDER BY (SELECT NULL)".to_string();
+        }
+        return format!(
+            "ORDER BY {}",
+            pk.iter().map(|c| format!("[{}] ASC", esc(c))).collect::<Vec<_>>().join(", ")
+        );
     }
     let parts: Vec<String> = sorts
         .iter()
@@ -1869,6 +1875,21 @@ SELECT SCOPE_IDENTITY()"));
         assert_eq!((a.host.as_str(), a.port, a.instance), ("x.database.windows.net", 1433, None));
         // 結尾多一個反斜線不當成執行個體。
         assert_eq!(t(r"db01\", 1433).instance, None);
+    }
+
+    #[test]
+    fn build_order_uses_pk_when_no_sort_requested() {
+        // 無排序時 (SELECT NULL) 不保證順序，OFFSET 分頁會重複 / 漏列。
+        assert_eq!(build_order(&[], &["id".into()]), "ORDER BY [id] ASC");
+        assert_eq!(
+            build_order(&[], &["tenant_id".into(), "id".into()]),
+            "ORDER BY [tenant_id] ASC, [id] ASC"
+        );
+        // 沒有主鍵的表只能退回佔位排序。
+        assert_eq!(build_order(&[], &[]), "ORDER BY (SELECT NULL)");
+        // 使用者指定的排序永遠優先。
+        let sorts = vec![Sort { column: "name".into(), dir: SortDir::Desc }];
+        assert_eq!(build_order(&sorts, &["id".into()]), "ORDER BY [name] DESC");
     }
 
     #[test]

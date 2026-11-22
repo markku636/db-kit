@@ -9,6 +9,7 @@
 
 修正：
 
+- **SQL Server 資料表分頁不再跳列 / 重複列**：沒有指定排序時，以前用 `ORDER BY (SELECT NULL)` 佔位，SQL Server 不保證順序，翻頁時同一列可能出現兩次或直接不見；現在改用主鍵排序（沒有主鍵才退回佔位）。
 - **程序 OUTPUT 參數沒有型別不再炸掉**：手動填簽章或舊設定缺型別時，以前會產生 `DECLARE @out sql_variant`，而驅動讀到 sql_variant 直接 panic（「DB Kit 還無法解讀的欄位型別」）；現在改用 `nvarchar(4000)` 接住再回傳文字。
 - **視覺化執行計畫看得懂 SQL Server 的 `GO` 批次**：以前照分號切，`SELECT 1\nGO\nSELECT 2` 被當成一條、後端收到含 GO 的文字直接語法錯誤；現在和其他方言一樣切成多條並提示反白要解釋的語句。
 - **SQL Server 的 Windows 驗證真的能用了**：以前選「Windows 驗證」時表單仍帶著預設帳號 `root`，前端攔下連線說「尚未設定帳號或密碼」，就算硬送出去後端也會拿 `root` 當 NTLM 帳號而登入失敗。現在留空就是目前登入這台電腦的帳號（SSPI），不用輸入任何帳密；「網域\帳號」仍可搭配密碼用別的網域身分。貼上含 `Integrated Security=true` 的連線字串、或舊版存檔殘留的 `root` / `sa` 也都會自動走正確的驗證方式。
