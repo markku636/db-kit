@@ -1772,6 +1772,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "選的轉接主機是 FTP 主機；經主機轉接只能用 SSH 主機" => "选的转接主机是 FTP 主机；经主机转接只能用 SSH 主机",
         "錯誤數" => "错误数",
         "需要 Management API（請於連線設定填 URL 或確認 15672 可達）" => "需要 Management API（请于连线设定填 URL 或确认 15672 可达）",
+        "資料比對需要 --table（來源表名）" => "数据比对需要 --table（来源表名）",
+        "讀不到程序定義：{e}" => "读不到程序定义：{e}",
         _ => return None,
     })
 }

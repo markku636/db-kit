@@ -169,9 +169,12 @@ async fn inspect_cmd(conn: &ConnArgs, fmt: Format, routine: &str) -> AppResult<(
             inspect::RoutineKind::Procedure => "procedure",
             inspect::RoutineKind::Function => "function",
         };
+        // 兩種名稱都查不到時要明确報錯，不能回空字串讓 inspect 假裝成功。
         let definition = match mgr.routine_definition(&id, &db, &name, rt).await {
             Ok(d) => d,
-            Err(_) => mgr.routine_definition(&id, &db, routine, rt).await.unwrap_or_default(),
+            Err(_) => mgr.routine_definition(&id, &db, routine, rt).await.map_err(|e| {
+                AppError::Query(tf!("讀不到程序定義：{e}", e = e))
+            })?,
         };
         Ok::<serde_json::Value, AppError>(serde_json::json!({
             "routine": routine,

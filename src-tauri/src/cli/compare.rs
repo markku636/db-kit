@@ -236,7 +236,9 @@ async fn run_data_connected(
         return Ok(());
     }
 
-    let table = a.table.clone().unwrap_or_default();
+    let table = a.table.clone().ok_or_else(|| {
+        AppError::Query(t!("資料比對需要 --table（來源表名）").into())
+    })?;
     let s = TableRef { conn_id: src_id.into(), database: src_db.into(), table: table.clone() };
     let d = TableRef { conn_id: dst_id.into(), database: dst_db.into(), table: a.dst_table.clone().unwrap_or(table) };
     let report = data::compare_table(mgr, &run_id, &s, &d, &opts, &progress).await?;

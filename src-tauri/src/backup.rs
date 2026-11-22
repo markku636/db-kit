@@ -364,6 +364,8 @@ async fn detect_cli_named(tool: &str) -> bool {
 }
 
 async fn file_size(path: &str) -> u64 {
+    // 備份完成後讀不到檔案大小視為 0 位元組「成功」會誤導使用者。
+    // 呼叫端會再確認輸出檔存在，這裡保留 0 只作為統計值（不影響成功與否判定）。
     tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0)
 }
 

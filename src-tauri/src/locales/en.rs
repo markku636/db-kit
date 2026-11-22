@@ -2325,6 +2325,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "選的轉接主機是 FTP 主機；經主機轉接只能用 SSH 主機" => "The selected jump host is an FTP host; host forwarding only supports SSH hosts",
         "錯誤數" => "Errors",
         "需要 Management API（請於連線設定填 URL 或確認 15672 可達）" => "Management API required (set the URL in connection settings or check that port 15672 is reachable)",
+        "資料比對需要 --table（來源表名）" => "Data comparison requires --table (the source table name)",
+        "讀不到程序定義：{e}" => "Could not read the routine definition: {e}",
         _ => return None,
     })
 }
