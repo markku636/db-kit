@@ -821,7 +821,14 @@ impl RedisDriver {
         })
     }
 
-    /// 從匯出的 JSON 還原鍵（仿 ARDM 的 Import keys）：只處理 string / hash / list / set / zset，
+    /// 把 TTL 指令接進既有 pipeline：每鍵原本還要一次 EXPIRE/PERSIST 往返，
+/// 匯入上萬鍵時等於多上萬次序列化 Round-trip。
+fn pipe_ttl(pipe: &mut redis::Pipeline, key: &str, ttl: i64) {
+    if ttl >= 0 { pipe.cmd("EXPIRE").arg(key).arg(ttl).ignore(); }
+    else { pipe.cmd("PERSIST").arg(key).ignore(); }
+}
+
+/// 從匯出的 JSON 還原鍵（仿 ARDM 的 Import keys）：只處理 string / hash / list / set / zset，
     /// stream 與模組型別無法從一般 value 表示，明確略過並計入 skipped。
     pub async fn import_keys(&self, database: &str, items: Vec<RedisImportKey>) -> AppResult<RedisImportSummary> {
         let mut conn = self.conn(database).await?;
@@ -831,7 +838,15 @@ impl RedisDriver {
             let written = match item.type_.as_str() {
                 "string" => {
                     let v = item.value.as_str().unwrap_or("");
-                    redis::cmd("SET").arg(&item.key).arg(v).query_async::<()>(&mut conn).await.is_ok()
+                    let mut pipe = redis::pipe();
+                    pipe.atomic();
+                    if item.ttl >= 0 {
+                        // SET key val EX secs：一條指令同時寫值與到期時間。
+                        pipe.cmd("SET").arg(&item.key).arg(v).arg("EX").arg(item.ttl).ignore();
+                    } else {
+                        pipe.cmd("SET").arg(&item.key).arg(v).ignore();
+                    }
+                    pipe.query_async::<()>(&mut conn).await.is_ok()
                 }
                 "hash" => {
                     let mut pipe = redis::pipe();
@@ -839,6 +854,7 @@ impl RedisDriver {
                     for pair in item.value.as_array().unwrap() {
                         pipe.hset(&item.key, pair["field"].as_str().unwrap_or(""), pair["value"].as_str().unwrap_or("")).ignore();
                     }
+                    Self::pipe_ttl(&mut pipe, &item.key, item.ttl);
                     pipe.query_async::<()>(&mut conn).await.is_ok()
                 }
                 "list" | "set" => {
@@ -849,6 +865,7 @@ impl RedisDriver {
                         if item.type_ == "list" { pipe.rpush(&item.key, s).ignore(); }
                         else { pipe.sadd(&item.key, s).ignore(); }
                     }
+                    Self::pipe_ttl(&mut pipe, &item.key, item.ttl);
                     pipe.query_async::<()>(&mut conn).await.is_ok()
                 }
                 "zset" => {
@@ -859,18 +876,13 @@ impl RedisDriver {
                         let score = parse_import_score(&v["score"]).unwrap_or(0.0);
                         pipe.zadd(&item.key, member, score).ignore();
                     }
+                    Self::pipe_ttl(&mut pipe, &item.key, item.ttl);
                     pipe.query_async::<()>(&mut conn).await.is_ok()
                 }
                 _ => false,
             };
+            // TTL 已隨各分支的 pipeline 一起送出（string 用 SET ... EX），這裡不再多打一次往返。
             if !written { summary.skipped += 1; continue; }
-            // 匯出的 TTL 是 `TTL` 指令的「秒數」，要用 EXPIRE 而不是 PEXPIRE（毫秒），
-            // 否則 60 秒會變成 60 毫秒、幾乎立刻過期。-2（鍵已消失）也當成無到期。
-            if item.ttl >= 0 {
-                let _: () = redis::cmd("EXPIRE").arg(&item.key).arg(item.ttl).query_async(&mut conn).await.unwrap_or(());
-            } else {
-                let _: () = redis::cmd("PERSIST").arg(&item.key).query_async(&mut conn).await.unwrap_or(());
-            }
             summary.imported += 1;
         }
         self.invalidate_snapshot().await;
