@@ -77,7 +77,7 @@ function StatusTab({ connId }: { connId: string }) {
       .then((r) => !cancelled && (setSecs(r), setErr(null)))
       .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     return () => { cancelled = true; };
-  }, [connId, nonce]);
+  }, [connId, nonce, t]);
   useEffect(() => {
     if (!auto) return;
     const timer = setInterval(() => setNonce((n) => n + 1), 2000);
@@ -187,7 +187,7 @@ function OpsTab({ connId, readonly }: { connId: string; readonly: boolean }) {
       .then((r) => !cancelled && (setRows(r), setErr(null)))
       .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     return () => { cancelled = true; };
-  }, [connId, nonce]);
+  }, [connId, nonce, t]);
   useEffect(() => {
     if (!auto) return;
     const timer = setInterval(() => setNonce((n) => n + 1), 2000);

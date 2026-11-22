@@ -57,7 +57,7 @@ export default function ImportDialog({ connId, database, table, onDone, onClose 
       .then((pv) => { if (alive) setPreview(pv); })
       .catch((e: any) => { if (alive) { setPreview(null); toast.error(e?.message ?? t("預覽失敗")); } });
     return () => { alive = false; };
-  }, [filePath, delimiter, header]);
+  }, [filePath, delimiter, header, t]);
 
   const doImport = async () => {
     if (busy || !filePath) return;

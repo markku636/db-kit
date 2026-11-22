@@ -770,7 +770,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
       load();
     } catch (e: any) {
       const msg = e?.message ?? t("未知錯誤");
-      setErr(t("批次更新失敗：{msg}。關聯式連線會整批回滾；其他連線可能已部分寫入。", { msg }));
+      // 失敗時拿不到 atomic 旗標（後端直接回 Err）：用對兩種驅動都誠實的說法。
+      setErr(t("更新失敗：{msg}。若此連線不支援交易，先前的變更可能已寫入，請檢查後重試。", { msg }));
     } finally {
       setApplying(false);
     }
@@ -2395,7 +2396,11 @@ function RowField({ value, onSave }: { value: string | null; onSave: (raw: strin
   // 把 NULL 改成空字串（輸入後又全刪會被當成沒變動）。
   const [touched, setTouched] = useState(false);
   useEffect(() => { setText(value ?? ""); setTouched(false); }, [value]);
-  const commit = () => { if (touched && text !== (value ?? "")) onSave(text, false); };
+  const commit = () => {
+    // value===null 時顯示文字也是 ""，所以 NULL→"" 必須靠 touched 判斷，
+    // 不能用 `text !== (value ?? "")`（那永遠相等，根本存不進去）。
+    if (touched && (value === null || text !== value)) onSave(text, false);
+  };
   return (
     <span className="flex-1 flex items-center gap-1">
       <input value={text} onChange={(e) => { setText(e.target.value); setTouched(true); }}
@@ -2672,13 +2677,13 @@ function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClo
 
   useEffect(() => {
     let cancelled = false;
-    loadGen.current += 1;
+    const gen = ++loadGen.current;
     setLoading(true);
     setErr(null);
     api
       .redisKeyPage(connId, database, rkey, 0, KEY_PAGE, filter)
       .then((p) => {
-        if (cancelled) return;
+        if (cancelled || gen !== loadGen.current) return;
         setPage(p);
         setBinary(!!p.binary);
         setMembers(p.members);
@@ -2687,8 +2692,8 @@ function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClo
         setCursor(p.cursor);
         setNextId(p.next_id ?? null);
       })
-      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")))
-      .finally(() => !cancelled && setLoading(false));
+      .catch((e) => { if (!cancelled && gen === loadGen.current) setErr(e?.message ?? t("讀取失敗")); })
+      .finally(() => { if (!cancelled && gen === loadGen.current) setLoading(false); });
     return () => { cancelled = true; };
     // filter 透過 applyFilter 變更後一併重載；故列入依賴。
   }, [connId, database, rkey, filter]);
@@ -2708,8 +2713,8 @@ function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClo
         setCursor(p.cursor);
         setNextId(p.next_id ?? null);
       })
-      .catch((e) => setErr(e?.message ?? t("讀取失敗")))
-      .finally(() => setLoading(false));
+      .catch((e) => { if (gen === loadGen.current) setErr(e?.message ?? t("讀取失敗")); })
+      .finally(() => { if (gen === loadGen.current) setLoading(false); });
   };
 
   // 編輯後重載：保留目前過濾、回到第一頁。
@@ -2735,12 +2740,16 @@ function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClo
 
   // 大 string 值：強制載入完整值（full=true），供編輯前取回被截斷的完整內容。
   const loadFull = () => {
+    const gen = ++loadGen.current;
     setLoading(true);
     api
       .redisKeyPage(connId, database, rkey, 0, KEY_PAGE, filter, true)
-      .then((p) => { setPage(p); setBinary(!!p.binary); setMembers(p.members); setFields(p.fields); setScores(p.scores); setCursor(p.cursor); setNextId(p.next_id ?? null); })
-      .catch((e) => setErr(e?.message ?? t("讀取失敗")))
-      .finally(() => setLoading(false));
+      .then((p) => {
+        if (gen !== loadGen.current) return;
+        setPage(p); setBinary(!!p.binary); setMembers(p.members); setFields(p.fields); setScores(p.scores); setCursor(p.cursor); setNextId(p.next_id ?? null);
+      })
+      .catch((e) => { if (gen === loadGen.current) setErr(e?.message ?? t("讀取失敗")); })
+      .finally(() => { if (gen === loadGen.current) setLoading(false); });
   };
 
   // 以累積成員合成 KeyDetail 形狀，沿用既有 KeyDetailBody 渲染（entries = members）。

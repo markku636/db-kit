@@ -780,6 +780,16 @@ pub async fn import_connections_encrypted(
         if !e.otp_secret.is_empty() {
             store::kc_set(&store::otp_account(&id), &e.otp_secret)?;
         }
+        // 從 options 搬到 keychain 的三組 secret：空字串＝這次沒帶，不覆寫本機既有值。
+        if !e.proxy_password.is_empty() {
+            store::kc_set(&store::proxy_account(&id), &e.proxy_password)?;
+        }
+        if !e.kafka_sr_password.is_empty() {
+            store::kc_set(&store::kafka_sr_account(&id), &e.kafka_sr_password)?;
+        }
+        if !e.kafka_connect_password.is_empty() {
+            store::kc_set(&store::kafka_connect_account(&id), &e.kafka_connect_password)?;
+        }
         // 匯入後仍沒帳號的 PROD 連線：前端要提醒「連線前先輸入帳號及密碼」。
         if crate::conn_export::is_prod(&e.base) && e.base.username.is_empty() {
             prod_without_credentials += 1;

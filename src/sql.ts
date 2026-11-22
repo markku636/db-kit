@@ -1065,10 +1065,17 @@ export function isWriteStatement(sql: string, kind?: DbKind): boolean {
 // 唯讀連線不能在這裡繞過閘門。把前綴關鍵字去掉後再問 isWriteStatement。
 export function isExplainWithWrite(sql: string, kind?: DbKind): boolean {
   let s = stripLeadingComments(sql).trim();
-  // EXPLAIN (ANALYZE, FORMAT JSON) / EXPLAIN ANALYZE VERBOSE / EXPLAIN FORMAT=TREE / EXPLAIN QUERY PLAN …
-  s = s.replace(/^EXPLAIN\b\s*(?:\([^)]*\)|\b(?:ANALYZE|VERBOSE|BUFFERS|COSTS|SETTINGS|TIMING|SUMMARY|WAL|ALL|FORMAT\s*=?\s*\w+|QUERY\s+PLAN|PLAN\s+FOR)\b)*\s*/i, "");
+  // 註解在 SQL 裡等同空白：`EXPLAIN /* x */ ANALYZE DELETE …` 仍會真的執行 DELETE。
+  // 一次剝一個前綴 token，每輪都再 strip 註解，才不會被插入的註解騙過去。
+  for (let i = 0; i < 8; i++) {
+    const before = s;
+    s = s.replace(/^EXPLAIN\b\s*/i, "");
+    s = s.replace(/^(?:\([^)]*\)|(?:ANALYZE|VERBOSE|BUFFERS|COSTS|SETTINGS|TIMING|SUMMARY|WAL|ALL|FORMAT\s*=?\s*\w+|QUERY\s+PLAN|PLAN\s+FOR)\b)\s*/i, "");
+    s = stripLeadingComments(s).trim();
+    if (s === before) break;
+  }
   // 使用者在分析模式直接打 `ANALYZE DELETE …`（後端仍會加 EXPLAIN）也要擋。
-  s = s.replace(/^ANALYZE\b\s*/i, "");
+  s = stripLeadingComments(s).trim();
   return isWriteStatement(s, kind);
 }
 

@@ -685,7 +685,12 @@ impl DatabaseDriver for MssqlDriver {
                 }
             }
         }
-        conn.execute("COMMIT TRAN", &[]).await.map_err(|e| AppError::Query(e.to_string()))?;
+        // COMMIT 失敗也要rollback：連線會被還回池，留著開啟的交易會讓下一批
+        // BEGIN TRAN 只是把 @@TRANCOUNT 加一、COMMIT 只減一，永遠不真正提交。
+        if let Err(e) = conn.execute("COMMIT TRAN", &[]).await {
+            let _ = conn.execute("ROLLBACK TRAN", &[]).await;
+            return Err(AppError::Query(e.to_string()));
+        }
         Ok(BatchUpdateResult { applied, atomic: true })
     }
 

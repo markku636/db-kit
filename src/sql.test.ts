@@ -1484,6 +1484,9 @@ describe("isExplainWithWrite（分析模式唯讀攔截）", () => {
     expect(isExplainWithWrite("EXPLAIN (ANALYZE, BUFFERS) UPDATE t SET a = 1")).toBe(true);
     expect(isExplainWithWrite("explain format=json insert into t values (1)")).toBe(true);
     expect(isExplainWithWrite("EXPLAIN WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d")).toBe(true);
+    // 註解在 SQL 裡是空白，不能拿來把 ANALYZE 和 DML 分開繞過守門。
+    expect(isExplainWithWrite("EXPLAIN /* x */ ANALYZE DELETE FROM t")).toBe(true);
+    expect(isExplainWithWrite("EXPLAIN ANALYZE /* y */ UPDATE t SET a = 1")).toBe(true);
   });
   it("單純看執行計畫仍為唯讀", () => {
     expect(isExplainWithWrite("SELECT * FROM t")).toBe(false);

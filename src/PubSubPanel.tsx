@@ -144,9 +144,9 @@ export default function PubSubPanel({ connId, connName, onClose }: {
   };
 
   const publish = async () => {
+    if (!pubChannel.trim()) { setErr(t("請輸入發佈頻道")); return; }
     if (busy || busyRef.current) return; // 防連點 / 連按 Enter 造成重複 PUBLISH
     busyRef.current = true;
-    if (!pubChannel.trim()) { setErr(t("請輸入發佈頻道")); return; }
     setBusy(true);
     try {
       const n = await api.redisPublish(connId, pubChannel.trim(), pubMessage);

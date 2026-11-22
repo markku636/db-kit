@@ -37,6 +37,14 @@ pub struct ExportedConn {
     pub ssh_passphrase: String,
     #[serde(default)]
     pub otp_secret: String,
+    /// 這三個本來都是 options 裡的明文，改存 keychain 後要明確帶出／帶回，
+    /// 否則加密匯出／匯入會把 Kafka SR / Connect 與 proxy 的密碼弄丟。
+    #[serde(default)]
+    pub proxy_password: String,
+    #[serde(default)]
+    pub kafka_sr_password: String,
+    #[serde(default)]
+    pub kafka_connect_password: String,
 }
 
 /// 加密匯出檔內的單台 SSH 主機 = `SshSession` + keychain 裡的密碼 / 私鑰密語（未帶為空字串）。
@@ -209,6 +217,9 @@ pub fn build(
                     ssh_password: String::new(),
                     ssh_passphrase: String::new(),
                     otp_secret: String::new(),
+                    proxy_password: String::new(),
+                    kafka_sr_password: String::new(),
+                    kafka_connect_password: String::new(),
                 };
             }
             let id = c.id.clone();
@@ -217,6 +228,9 @@ pub fn build(
                 ssh_password: kc(store::ssh_account(&id), scope.include_ssh),
                 ssh_passphrase: kc(store::ssh_passphrase_account(&id), scope.include_ssh),
                 otp_secret: kc(store::otp_account(&id), scope.include_otp),
+                proxy_password: kc(store::proxy_account(&id), scope.include_password),
+                kafka_sr_password: kc(store::kafka_sr_account(&id), scope.include_password),
+                kafka_connect_password: kc(store::kafka_connect_account(&id), scope.include_password),
                 base: c,
             }
         })

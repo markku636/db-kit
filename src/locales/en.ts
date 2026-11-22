@@ -3059,7 +3059,7 @@ const en: Catalog = {
   "「{name}」是正式環境（production）連線。確定執行分析？": "\"{name}\" is a production connection. Run the analysis anyway?",
   "清除已儲存的密碼（連線與 SSH）；下次連線會要求重新輸入": "Clear saved passwords (database and SSH); you'll be asked to re-enter them next time",
   "清除已儲存密碼失敗": "Failed to clear the saved password",
-  "批次更新失敗：{msg}。關聯式連線會整批回滾；其他連線可能已部分寫入。": "Batch update failed: {msg}. Relational connections roll back the whole batch; other connections may be partially written.",
+  "更新失敗：{msg}。若此連線不支援交易，先前的變更可能已寫入，請檢查後重試。": "Update failed: {msg}. If this connection does not support transactions, earlier changes may already be written — check and retry.",
   "測試並儲存": "Test & Save",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",

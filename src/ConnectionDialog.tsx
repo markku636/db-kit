@@ -101,6 +101,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
   const [password, setPassword] = useState(initial ? "" : prefill?.password ?? "");
   // 表單留空＝不變更；要真的清掉已存密碼必須有明確動作。
   const [clearPassword, setClearPassword] = useState(false);
+  // handleSave 是非同步（要先清 keychain）：沒有門鎖，連按兩次會清兩次並 onSaved 兩次。
+  const savingRef = useRef(false);
   const [database, setDatabase] = useState(seed?.database ?? "");
   const [testing, setTesting] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -354,10 +356,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
       }
       if (srUrl.trim()) o.kafka_sr_url = srUrl.trim();
       if (srUrl.trim() && srUser.trim()) o.kafka_sr_user = srUser.trim();
-      if (srUrl.trim() && srPass.trim()) o.kafka_sr_password = srPass.trim();
+      // 密碼不 trim：Basic Auth secret 前後空白是合法字元，trim 會悄悄改掉它。
+      if (srUrl.trim() && srPass) o.kafka_sr_password = srPass;
       if (connectUrl.trim()) o.kafka_connect_url = connectUrl.trim();
       if (connectUrl.trim() && connectUser.trim()) o.kafka_connect_user = connectUser.trim();
-      if (connectUrl.trim() && connectPass.trim()) o.kafka_connect_password = connectPass.trim();
+      if (connectUrl.trim() && connectPass) o.kafka_connect_password = connectPass;
     } else if (kind === "elastic") {
       o.es_auth = esAuth; // none / basic / apikey
       if (!esHostIsUrl && esTls) o.es_tls = "1";
@@ -602,19 +605,24 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     : k8sForward ? !!k8sOpts.k8s_target?.trim()
     : fileBased || host.trim() !== "" || (kind === "docker" && dockerMode === "local");
   const handleSave = async () => {
-    if (!valid) return;
-    if (clearPassword && initial) {
-      try {
-        await api.clearConnectionPassword(initial.id);
-      } catch (e: any) {
-        setMsg({ ok: false, text: e?.message ?? t("清除已儲存密碼失敗") });
-        return;
+    if (!valid || savingRef.current) return;
+    savingRef.current = true;
+    try {
+      if (clearPassword && initial) {
+        try {
+          await api.clearConnectionPassword(initial.id);
+        } catch (e: any) {
+          setMsg({ ok: false, text: e?.message ?? t("清除已儲存密碼失敗") });
+          return;
+        }
       }
+      const cfg = build();
+      // 先寫唯讀旗標再回報存檔：onSaved 可能立刻開連線 / 重繪側欄，旗標晚一步會閃到「可寫」狀態。
+      useStore.getState().setConnReadonly(cfg.id, readonlyConn);
+      onSaved(cfg);
+    } finally {
+      savingRef.current = false;
     }
-    const cfg = build();
-    // 先寫唯讀旗標再回報存檔：onSaved 可能立刻開連線 / 重繪側欄，旗標晚一步會閃到「可寫」狀態。
-    useStore.getState().setConnReadonly(cfg.id, readonlyConn);
-    onSaved(cfg);
   };
   // 文字輸入按 Enter 直接儲存（與其他對話框一致）。
   const submitOnEnter = (e: React.KeyboardEvent) => {
@@ -643,7 +651,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
               {t("測試並儲存")}
             </Button>
             <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
-            <Button variant="primary" onClick={handleSave} disabled={!valid}>{t("儲存")}</Button>
+            <Button variant="primary" onClick={handleSave} disabled={!valid || testing}>{t("儲存")}</Button>
           </>
         )
       }
