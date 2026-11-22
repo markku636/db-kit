@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, pubSubLineMatches, slowLogMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl, normalizeAutoRefreshMs, parseAclLine, loadExpandedPaths } from "./redisUiFormat";
+import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, pubSubLineMatches, slowLogMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl, normalizeAutoRefreshMs, parseAclLine, loadExpandedPaths, hasBinaryKeyEscape } from "./redisUiFormat";
 
 describe("fmtUptime", () => {
   it("不到一分鐘顯示秒數，不再顯示 0m", () => {
@@ -16,6 +16,17 @@ describe("fmtUptime", () => {
     expect(fmtUptime(undefined)).toBe("—");
     expect(fmtUptime("0")).toBe("—");
     expect(fmtUptime("abc")).toBe("—");
+  });
+});
+
+describe("hasBinaryKeyEscape", () => {
+  it("只把未被跳脫的 \\xHH 當二進位鍵名", () => {
+    expect(hasBinaryKeyEscape("user\\xff")).toBe(true);
+    expect(hasBinaryKeyEscape("a\\x0Ab")).toBe(true);
+    // 字面反斜線在後端被跳脫成 \\，後面接 xNN 不是二進位。
+    expect(hasBinaryKeyEscape("user\\\\xff")).toBe(false);
+    expect(hasBinaryKeyEscape("plain:key")).toBe(false);
+    expect(hasBinaryKeyEscape("user\\xzz")).toBe(false);
   });
 });
 

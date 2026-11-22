@@ -24,7 +24,7 @@ import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, pickOpenFile
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport } from "./redisKeyValueFormat";
 import { isBinaryColumnType, isReadOnlyColumnExtra } from "./columnMeta";
-import { fmtRedisTtl, remainingTtl } from "./redisUiFormat";
+import { fmtRedisTtl, hasBinaryKeyEscape, remainingTtl } from "./redisUiFormat";
 import { loadRedisSeparator, redisNamespacePattern, redisNamespacePrefix } from "./redisTree";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree, { REDIS_TREE_LIMIT } from "./RedisKeyTree";
@@ -1984,29 +1984,32 @@ function DataPane({ tab }: { tab: OpenTab }) {
 
       {rowMenu && (
         <MenuPanel x={rowMenu.x} y={rowMenu.y} minW={150} onClose={() => setRowMenu(null)}>
-          {(
-            [
-              // 唯讀連線只留「看」與「複製」；寫入項（新增 / 改名 / TTL / 刪除）整批隱藏，
-              // 與資料格 editable 的唯讀規則一致。
+          {(() => {
+            // 非 UTF-8 鍵名在 UI 上是 \xHH 逃逸字串，拿去 DEL/RENAME 只會操作到不存在的鍵。
+            const binaryKey = hasBinaryKeyEscape(rowMenu.key);
+            const noWrite = readonly || binaryKey;
+            const items: [string, () => void, boolean][] = [
               [t("檢視 / 編輯內容…"), () => setDetailKey(rowMenu.key), false],
-              ...(readonly ? [] : [[t("新增鍵…"), () => openNewKey(namespaceOf(rowMenu.key)), false] as [string, () => void, boolean]]),
+              ...(noWrite ? [] : [[t("新增鍵…"), () => openNewKey(namespaceOf(rowMenu.key)), false] as [string, () => void, boolean]]),
               [t("複製鍵名"), () => copyToClipboard(rowMenu.key, t("已複製鍵名")), false],
               [t("複製鍵值"), () => copyKeyValue(rowMenu.key), false],
-              ...(readonly ? [] : ([
+              ...(noWrite ? [] : [
                 [t("重新命名…"), () => renameKey(rowMenu.key), false],
                 [t("複製鍵到新名稱…"), () => cloneKey(rowMenu.key), false],
                 [t("設定 TTL…"), () => setKeyTtl(rowMenu.key, rowMenu.ttl), false],
-              ] as [string, () => void, boolean][])),
+              ] as [string, () => void, boolean][]),
               [t("重新整理"), () => refresh(), false],
-              ...(readonly ? [] : [[t("刪除"), () => deleteKey(rowMenu.key), true] as [string, () => void, boolean]]),
-            ] as [string, () => void, boolean][]
-          ).map(([label, fn, danger]) => (
-            <button key={label} type="button"
-              onClick={() => { setRowMenu(null); fn(); }}
-              className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
-              {label}
-            </button>
-          ))}
+              ...(noWrite ? [] : [[t("刪除"), () => deleteKey(rowMenu.key), true] as [string, () => void, boolean]]),
+            ];
+            if (binaryKey) items.push([t("二進位鍵名，僅供檢視；請用主控台處理"), () => {}, false]);
+            return items.map(([label, fn, danger]) => (
+              <button key={label} type="button" disabled={binaryKey && label.startsWith("二進位")}
+                onClick={() => { setRowMenu(null); fn(); }}
+                className={`block w-full text-left px-3 py-1.5 hover:bg-fg/10 ${danger ? "text-red-300" : "text-fg/80"}`}>
+                {label}
+              </button>
+            ));
+          })()}
         </MenuPanel>
       )}
 
@@ -2625,6 +2628,8 @@ function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClo
   connId: string; database: string; table: string; rkey: string; readonly?: boolean; onClose: () => void;
 }) {
   const t = useT();
+  // 二進位鍵名在 UI 上是 \xHH 字串，寫回會打到不存在的鍵 → 一律當唯讀。
+  const effectiveReadOnly = readonly || hasBinaryKeyEscape(rkey);
   // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
   const { shellClass } = useModalView();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount（先前完全沒有 Esc 處理）
@@ -2841,15 +2846,17 @@ function KeyDetailModal({ connId, database, table, rkey, readonly = false, onClo
               {t("此鍵含二進位資料（非 UTF-8 文字），無法顯示的位元組以 \\xHH 表示。為避免寫回時損毀原始資料，已停用編輯；要修改請用主控台或程式。")}
             </div>
           )}
-          {detail && readonly && keyTypeSupported && (
+          {detail && effectiveReadOnly && keyTypeSupported && (
             <div className="mb-2 text-xs bg-fg/5 border border-fg/10 rounded px-3 py-2 text-fg/50">
-              {t("此連線為唯讀，鍵值僅供檢視；可在連線右鍵關閉「唯讀模式」後再修改。")}
+              {readonly
+                ? t("此連線為唯讀，鍵值僅供檢視；可在連線右鍵關閉「唯讀模式」後再修改。")
+                : t("此鍵名含非 UTF-8 位元組，僅供檢視；寫回會操作到不同的鍵，請改用主控台。")}
             </div>
           )}
-          {(detail && binary && keyTypeSupported) || (detail && readonly && keyTypeSupported)
+          {(detail && binary && keyTypeSupported) || (detail && effectiveReadOnly && keyTypeSupported)
             ? <KeyDetailReadOnly detail={detail} />
             : null}
-          {detail && !binary && !readonly && keyTypeSupported && (
+          {detail && !binary && !effectiveReadOnly && keyTypeSupported && (
             <KeyDetailBody
               detail={detail}
               connId={connId}

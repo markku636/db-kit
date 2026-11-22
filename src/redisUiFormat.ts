@@ -62,6 +62,24 @@ export function normalizeAutoRefreshMs(value: string | number | null | undefined
 export const redisExpandedKey = (connId: string, db?: string) => `dbkit:redisExpanded:${connId}:${db ?? ""}`;
 
 /** 讀回展開的資料夾路徑（壞資料當空）。 */
+/**
+ * 後端把非 UTF-8 鍵名顯示成 `\xHH`；字面反斜線會被跳脫成 `\\`。
+ * 所以 `\xHH` 前面有偶數個連續反斜線時才是真的二進位轉義——這種鍵名拿去當
+ * 一般字串操作會打到不存在的鍵，介面要當成「僅供檢視」。
+ */
+export function hasBinaryKeyEscape(name: string): boolean {
+  for (let i = 0; i < name.length - 3; i++) {
+    if (name[i] !== "\\") continue;
+    const x = name[i + 1];
+    if (x !== "x" && x !== "X") continue;
+    if (!/[0-9a-fA-F]{2}/.test(name.slice(i + 2, i + 4))) continue;
+    let slashes = 0;
+    for (let j = i - 1; j >= 0 && name[j] === "\\"; j--) slashes++;
+    if (slashes % 2 === 0) return true;
+  }
+  return false;
+}
+
 export function loadExpandedPaths(raw: string | null): Set<string> {
   if (!raw) return new Set();
   try {
