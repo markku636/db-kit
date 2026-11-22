@@ -224,6 +224,14 @@ describe("SQL Server 程序參數", () => {
     expect(buildRoutineExecSql("mssql", "shop", proc, params, ["7"]).sql).toBe("EXEC [shop].[sales].[usp_total] 7");
   });
 
+  it("資料表函式（table_function）組出 SELECT * FROM，不是純量 SELECT", () => {
+    const tvf = { name: "sales.fn_orders", routine_type: "table_function" };
+    const params = parseRoutineParams("mssql", "@id int");
+    expect(buildRoutineExecSql("mssql", "shop", tvf, params, ["7"]).sql).toBe(
+      "SELECT * FROM [shop].[sales].[fn_orders](7)",
+    );
+  });
+
   it("OUTPUT 型別缺失或 sql_variant 時改用 nvarchar，不再讓驅動炸掉", () => {
     expect(mssqlOutParamType("")).toBe("nvarchar(4000)");
     expect(mssqlOutParamType("  sql_variant ")).toBe("nvarchar(4000)");

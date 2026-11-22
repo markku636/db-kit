@@ -315,7 +315,7 @@ export default function RoutinesDialog({ connId, db, kind, initial = null, initi
                         <td className="px-3 py-1.5 text-fg/50">{r.deterministic == null ? "—" : r.deterministic ? t("是") : t("否")}</td>
                         <td className="px-3 py-1.5 text-fg/40 max-w-[180px] truncate" title={r.comment ?? ""}>{r.comment || "—"}</td>
                         <td className="px-3 py-1.5 text-right whitespace-nowrap">
-                          {(r.routine_type === "function" || r.routine_type === "procedure") && (
+                          {(r.routine_type === "function" || r.routine_type === "table_function" || r.routine_type === "procedure") && (
                             <button type="button" onClick={() => execute(r)} disabled={busy}
                               className="text-xs text-green-400 hover:text-green-300 disabled:opacity-40 px-1">{t("執行")}</button>
                           )}

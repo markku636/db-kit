@@ -105,7 +105,7 @@ export default function RoutineExecDialog({ connId, db, kind, routine, onClose, 
       title={
         <span className="flex items-center gap-2">
           <span className="font-medium text-sm">
-            {t(routine.routine_type === "function" ? "執行函式" : "執行預存程序")}
+            {t(routine.routine_type === "function" || routine.routine_type === "table_function" ? "執行函式" : "執行預存程序")}
           </span>
           <span className="text-xs text-fg/45 mono">{routine.name}</span>
         </span>
@@ -123,7 +123,7 @@ export default function RoutineExecDialog({ connId, db, kind, routine, onClose, 
     >
       <div className="space-y-3">
         {params.length === 0 ? (
-          <div className="text-sm text-fg/45">{t("此{kind}沒有引數，直接執行即可。", { kind: t(routine.routine_type === "function" ? "函式" : "預存程序") })}</div>
+          <div className="text-sm text-fg/45">{t("此{kind}沒有引數，直接執行即可。", { kind: t(routine.routine_type === "function" || routine.routine_type === "table_function" ? "函式" : "預存程序") })}</div>
         ) : (
           <div className="rounded border border-fg/10 divide-y divide-fg/5">
             <div className="grid grid-cols-[3.5rem_minmax(6rem,1fr)_minmax(6rem,1fr)_2fr] gap-2 px-1 py-1.5 text-[11px] text-fg/35">

@@ -253,7 +253,7 @@ pub struct ForeignKeyInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutineInfo {
     pub name: String,
-    pub routine_type: String, // "procedure" | "function" | "trigger"
+    pub routine_type: String, // "procedure" | "function" | "trigger"；SQL Server 的 TVF 為 "table_function"
     /// 觸發器所屬資料表（procedure / function 為 None）。PG 刪除觸發器需此資訊。
     #[serde(default)]
     pub parent: Option<String>,

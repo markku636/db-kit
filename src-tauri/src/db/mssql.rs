@@ -1364,7 +1364,10 @@ const ROUTINE_TYPE_CODES: &[&str] = &["P", "PC", "FN", "IF", "TF", "FS", "FT", "
 fn routine_type_of(ty: &str) -> Option<&'static str> {
     match ty.trim() {
         "P" | "PC" => Some("procedure"),
-        "FN" | "IF" | "TF" | "FS" | "FT" | "AF" => Some("function"),
+        // 資料表函式要呼叫成 `SELECT * FROM fn(...)`，和純量函式的 `SELECT fn(...)` 不同。
+        // 前端以 "table_function" 分辨；這些仍舊是函式（下方程式碼清單與過濾都照原樣）。
+        "IF" | "TF" | "FT" => Some("table_function"),
+        "FN" | "FS" | "AF" => Some("function"),
         _ => None,
     }
 }
@@ -1737,8 +1740,13 @@ mod tests {
 
     #[test]
     fn routine_type_of_maps_every_function_flavor() {
-        for code in ["FN", "IF", "TF", "FS", "FT", "AF"] {
+        // 純量函式
+        for code in ["FN", "FS", "AF"] {
             assert_eq!(routine_type_of(code), Some("function"), "{code}");
+        }
+        // 內嵌 / 多語句 / CLR 資料表函式
+        for code in ["IF ", "TF", "FT"] {
+            assert_eq!(routine_type_of(code), Some("table_function"), "{code}");
         }
     }
 

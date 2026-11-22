@@ -1271,7 +1271,7 @@ interface DbObjects {
   tables: TableInfo[];   // 一般資料表 / 集合（kind !== "view"）
   views: TableInfo[];    // 視圖（kind === "view"）
   procedures: RoutineInfo[]; // 預存程序（routine_type === "procedure"）
-  functions: RoutineInfo[];  // 函式（routine_type === "function"）
+  functions: RoutineInfo[];  // 函式（routine_type === "function" 或 mssql 的 "table_function"）
 }
 // 把 list_tables（含表 + 視圖）與 list_routines（含程序 / 函式 / 觸發器）拆成樹狀分組。
 // 程序與函式分成兩個資料夾：以前合在一個叫「函式」的資料夾裡，SQL Server 使用者手上多半只有預存程序，
@@ -1280,7 +1280,7 @@ const splitDbObjects = (tables: TableInfo[], routines: RoutineInfo[]): DbObjects
   tables: tables.filter((tbl) => tbl.kind !== "view"),
   views: tables.filter((tbl) => tbl.kind === "view"),
   procedures: routines.filter((r) => r.routine_type === "procedure"),
-  functions: routines.filter((r) => r.routine_type === "function"),
+  functions: routines.filter((r) => r.routine_type === "function" || r.routine_type === "table_function"),
 });
 // 物件分組資料夾預設展開狀態：全部預設收合（展開資料庫時不自動攤開資料表，避免大量物件一次塞滿）。
 const FOLDER_DEFAULT_OPEN: Record<string, boolean> = { tables: false, views: false, procedures: false, functions: false, queries: false };

@@ -406,7 +406,10 @@ export function buildTableMaintenance(op: TableMaintenanceOp, db: string, table:
 export function buildRoutineCall(kind: DbKind, db: string, name: string, routineType: string, args: string): string {
   const q = qualifiedName(kind, db, name);
   const a = args.trim();
-  if (routineType === "function") {
+  // SQL Server 的資料表函式（sys.objects.type IF / TF / FT）只能出現在 FROM 裡，
+  // 寫成 SELECT fn(...) 會得到「找不到資料行或使用者定義函式」。
+  if (routineType === "function" || routineType === "table_function") {
+    if (kind === "mssql" && routineType === "table_function") return `SELECT * FROM ${q}(${a})`;
     if (kind === "postgres") return `SELECT * FROM ${q}(${a})`;
     // Oracle 23c 前 SELECT 必須有 FROM 子句。
     if (kind === "oracle") return `SELECT ${q}(${a}) AS result FROM DUAL`;

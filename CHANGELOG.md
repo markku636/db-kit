@@ -9,6 +9,7 @@
 
 修正：
 
+- **SQL Server 資料表函式（TVF）可以執行了**：內嵌 / 多語句函式以前和純量函式一樣被組成了 `SELECT schema.fn(args)`，SQL Server 會報「找不到資料行或使用者定義函式」；現在認出 `IF` / `TF` / `FT` 並產生 `SELECT * FROM schema.fn(args)`，程序樹、執行對話框也照函式處理。
 - **SQL Server 資料表分頁不再跳列 / 重複列**：沒有指定排序時，以前用 `ORDER BY (SELECT NULL)` 佔位，SQL Server 不保證順序，翻頁時同一列可能出現兩次或直接不見；現在改用主鍵排序（沒有主鍵才退回佔位）。
 - **程序 OUTPUT 參數沒有型別不再炸掉**：手動填簽章或舊設定缺型別時，以前會產生 `DECLARE @out sql_variant`，而驅動讀到 sql_variant 直接 panic（「DB Kit 還無法解讀的欄位型別」）；現在改用 `nvarchar(4000)` 接住再回傳文字。
 - **視覺化執行計畫看得懂 SQL Server 的 `GO` 批次**：以前照分號切，`SELECT 1\nGO\nSELECT 2` 被當成一條、後端收到含 GO 的文字直接語法錯誤；現在和其他方言一樣切成多條並提示反白要解釋的語句。

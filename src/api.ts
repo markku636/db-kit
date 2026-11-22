@@ -151,7 +151,7 @@ export interface IndexInfo {
 
 export interface RoutineInfo {
   name: string;
-  routine_type: string; // "procedure" | "function" | "trigger"
+  routine_type: string; // "procedure" | "function" | "trigger"；SQL Server 的 TVF 為 "table_function"
   parent: string | null; // 觸發器所屬資料表
   signature: string | null; // PG 函式 / 程序引數型別簽章（重載消歧用）
   modified?: string | null; // 最後修改時間（MySQL）

@@ -866,6 +866,13 @@ describe("table/database lifecycle DDL", () => {
     expect(buildRoutineCall("mssql", "shop", "fn", "function", "1")).toBe("SELECT [shop].[dbo].[fn](1) AS result");
   });
 
+  it("MSSQL 資料表函式要用 SELECT * FROM fn(...)，不能照純量函式呼叫", () => {
+    expect(buildRoutineCall("mssql", "shop", "sales.fn_orders", "table_function", "7")).toBe(
+      "SELECT * FROM [shop].[sales].[fn_orders](7)",
+    );
+    expect(buildRoutineCall("mssql", "shop", "fn", "table_function", "")).toBe("SELECT * FROM [shop].[dbo].[fn]()");
+  });
+
   it("buildAddForeignKey: ALTER ADD CONSTRAINT … FOREIGN KEY … REFERENCES", () => {
     expect(buildAddForeignKey("mysql", "db", "orders", "fk_o_u", "user_id", "users", "id")).toBe(
       "ALTER TABLE `db`.`orders` ADD CONSTRAINT `fk_o_u` FOREIGN KEY (`user_id`) REFERENCES `db`.`users` (`id`);",
