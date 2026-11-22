@@ -4,7 +4,7 @@ import { api } from "./api";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 import {
-  compareSegments, REDIS_PATTERN_HISTORY_KEY, redisPatternHistoryKey, recordRedisPattern,
+  compareSegments, REDIS_PATTERN_HISTORY_KEY, redisPatternHistoryKey, recordRedisPattern, normalizeAutoRefreshMs,
 } from "./redisUiFormat";
 import { buildRedisTree, keysUnderPrefix, segmentLabel, toggleKeySelection, REDIS_SEPARATOR_KEY, redisSeparatorKey, type RedisTreeNode } from "./redisTree";
 
@@ -84,6 +84,16 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [multiSelect, setMultiSelect] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [autoRefreshMs, setAutoRefreshMs] = useState<number>(() => {
+    try { return normalizeAutoRefreshMs(localStorage.getItem(`dbkit:redisAutoRefresh:${connId}`)); }
+    catch { return 0; }
+  });
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  useEffect(() => {
+    if (autoRefreshMs <= 0) return;
+    const id = window.setInterval(() => setRefreshNonce((n) => n + 1), autoRefreshMs);
+    return () => window.clearInterval(id);
+  }, [autoRefreshMs]);
   // ARDM 的 --separator：某些命名慣例用 / 或 :: 分層，固定冒號會整包擠在同一層。
   const [separator, setSeparator] = useState<string>(() => {
     try {
@@ -110,7 +120,7 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
       .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [connId, database, pattern, nonce]);
+  }, [connId, database, pattern, nonce, refreshNonce]);
 
   // 外部（右鍵選單）換樣式：同步輸入框與實際查詢的樣式，並重置「首次自動展開」的判定，
   // 讓縮到單一命名空間後可以再次自動展開。
@@ -209,6 +219,18 @@ export default function RedisKeyTree({ connId, database, nonce, focus, onOpenKey
               className="px-2 py-1 rounded border border-fg/15 text-fg/50 hover:bg-fg/10">{t("清除")}</button>
           </>
         )}
+        <select value={autoRefreshMs} aria-label={t("自動重整")} title={t("自動重整鍵樹（仿 ARDM）")}
+          onChange={(e) => {
+            const next = normalizeAutoRefreshMs(e.target.value);
+            setAutoRefreshMs(next);
+            try { localStorage.setItem(`dbkit:redisAutoRefresh:${connId}`, String(next)); } catch { /* 忽略 */ }
+          }}
+          className="bg-inset border border-fg/10 rounded px-1 py-0.5 text-xs text-fg/50 outline-none focus:border-accent">
+          <option value={0}>{t("自動重整：關")}</option>
+          <option value={5000}>5s</option>
+          <option value={15000}>15s</option>
+          <option value={30000}>30s</option>
+        </select>
         <span className="ml-auto text-fg/40">
           {loading ? t("讀取中…") : keys ? t("{count} 個鍵", { count: keys.length }) + (truncated ? t("（已達 {LIMIT} 上限）", { LIMIT }) : "") : ""}
         </span>

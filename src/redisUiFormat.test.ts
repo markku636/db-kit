@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl } from "./redisUiFormat";
+import { fmtUptime, fmtRedisTtl, compareSegments, effectiveRedisDb, recordRedisPattern, appendMonitorLine, monitorLineMatches, parseRedisDbPrefix, normalizeRedisDbInput, remainingTtl, normalizeAutoRefreshMs } from "./redisUiFormat";
 
 describe("fmtUptime", () => {
   it("不到一分鐘顯示秒數，不再顯示 0m", () => {
@@ -63,6 +63,16 @@ describe("recordRedisPattern", () => {
     for (let i = 1; i < many.length; i++) h = recordRedisPattern(h, many[i]);
     expect(h).toHaveLength(20);
     expect(h[0]).toBe(many[29]);
+  });
+});
+
+describe("normalizeAutoRefreshMs", () => {
+  it("只接受預設的幾檔，其餘關掉", () => {
+    expect(normalizeAutoRefreshMs(5000)).toBe(5000);
+    expect(normalizeAutoRefreshMs("30000")).toBe(30000);
+    expect(normalizeAutoRefreshMs(0)).toBe(0);
+    expect(normalizeAutoRefreshMs(50)).toBe(0);
+    expect(normalizeAutoRefreshMs("abc")).toBe(0);
   });
 });
 

@@ -31,6 +31,12 @@ export function normalizeRedisDbInput(raw: string): string | null {
   return /^\d{1,18}$/.test(s) ? s : null;
 }
 
+/** 鍵樹自動重整間隔（毫秒）；0 = 關閉。只接受預設的幾檔，避免打到過小值把 Redis 掃爆。 */
+export function normalizeAutoRefreshMs(value: string | number | null | undefined): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return [0, 5000, 15000, 30000].includes(n) ? n : 0;
+}
+
 export const REDIS_PATTERN_HISTORY_KEY = "dbkit:redisPatternHistory";
 export const redisPatternHistoryKey = (connId: string) => `${REDIS_PATTERN_HISTORY_KEY}:${connId}`;
 
