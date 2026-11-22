@@ -7,6 +7,8 @@
 - **JDBC 具名執行個體 + 埠的記號不再在 GUI 存檔時消失**：`mssql_no_browse` 現在會隨表單解析、快照與存檔保留，否則貼上 `jdbc:sqlserver://host\INST:1433` 後存檔仍會去問 SQL Browser。
 - **SQL Server 2014 的相異值統計不會因為 HASHBYTES 失敗變成 0**：失敗時退回原本的 4000 字近似值。
 - **片段 `SELECT /*註解*/ DISTINCT … LIMIT` 也能正確轉成 T-SQL**。
+- **分析頁在 MEMORY USAGE 被停用時仍可用**：託管 Redis 常禁用這個指令，以前整頁報錯；現在退回只統計型別分佈並標明記憶體數字不可信。
+- **鍵樹型別過濾的截斷提示更準確**：SCAN 最後一批超收時也會標「已達上限」，不再靜默丟鍵。
 - **鍵樹可依型別過濾（仿 ARDM）**：工具列選 string / hash / list / set / zset / stream，用 SCAN 的 TYPE 選項在伺服器端篩選，不對每個鍵額外發 TYPE 指令。
 - **慢查詢日誌可依指令／用戶端與最小耗時過濾（仿 RedisInsight）**：大量 slow log 裡直接找出特定用戶端或超過門檻的指令。
 - **維運面板新增「分析」頁（仿 RedisInsight 的 Analysis）**：SCAN 抽樣統計各型別的鍵數、記憶體用量與佔比，找出是哪一類資料把記憶體吃滿；抽樣不影響線上服務。

@@ -40,6 +40,8 @@ pub struct RedisKeyspaceSummary {
     pub total_bytes: i64,
     /// (型別, 鍵數, 記憶體位元組)，依記憶體降冪。
     pub types: Vec<(String, usize, i64)>,
+    /// MEMORY USAGE 被停用 / 失敗：記憶體欄位不可信（全為 0）。
+    pub memory_unavailable: bool,
 }
 
 /// 把 (type, bytes) 列表聚合成各型別的計數與總用量，供單元測試。
@@ -653,7 +655,12 @@ impl RedisDriver {
             if set.len() >= limit { truncated = true; break; }
         }
         let mut keys: Vec<String> = set.into_iter().collect();
-        keys.truncate(limit);
+        // SCAN 的 COUNT 是建議值，最後一批可能一次帶回超過 limit 個鍵；
+        // 即使游標已歸零，被 truncate 掉也算截斷，要讓前端顯示上限警告。
+        if keys.len() > limit {
+            keys.truncate(limit);
+            truncated = true;
+        }
         Ok(RedisKeys { keys, truncated })
     }
 
@@ -664,6 +671,7 @@ impl RedisDriver {
         let mut conn = self.conn(database).await?;
         let total_keys: i64 = redis::cmd("DBSIZE").query_async(&mut conn).await.unwrap_or(-1);
         let mut entries: Vec<(String, i64)> = Vec::new();
+        let mut memory_unavailable = false;
         let mut cursor: u64 = 0;
         loop {
             let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
@@ -674,10 +682,22 @@ impl RedisDriver {
                 let mut pipe = redis::pipe();
                 for k in &take {
                     pipe.cmd("TYPE").arg(k);
-                    pipe.cmd("MEMORY").arg("USAGE").arg(k);
+                    if !memory_unavailable {
+                        pipe.cmd("MEMORY").arg("USAGE").arg(k);
+                    }
                 }
-                let vals: Vec<redis::Value> = pipe.query_async(&mut conn).await.map_err(rerr)?;
-                for pair in vals.chunks(2) {
+                // 託管 Redis 常停用 MEMORY USAGE；一個命令錯會讓整條 pipeline 失敗，
+                // 這時退回只問 TYPE，至少給出型別分佈，不要整頁顯示錯誤。
+                let (vals, stride) = match pipe.query_async::<Vec<redis::Value>>(&mut conn).await {
+                    Ok(v) => (v, if memory_unavailable { 1 } else { 2 }),
+                    Err(_) => {
+                        memory_unavailable = true;
+                        let mut tp = redis::pipe();
+                        for k in &take { tp.cmd("TYPE").arg(k); }
+                        (tp.query_async::<Vec<redis::Value>>(&mut conn).await.unwrap_or_default(), 1)
+                    }
+                };
+                for pair in vals.chunks(stride) {
                     let ty = pair.first().map(rv_to_string).unwrap_or_else(|| "unknown".into());
                     let bytes = pair.get(1).map(|v| rv_as_i64(Some(v))).unwrap_or(0).max(0);
                     entries.push((ty, bytes));
@@ -692,6 +712,7 @@ impl RedisDriver {
             total_keys,
             total_bytes,
             types: aggregate_keyspace(&entries),
+            memory_unavailable,
         })
     }
 

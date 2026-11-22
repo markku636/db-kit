@@ -1894,7 +1894,7 @@ export const api = {
   redisKeyspaceSummary: (id: string, database: string, sample: number) =>
     invoke<{
       sampled: number; total_keys: number; total_bytes: number;
-      types: [string, number, number][];
+      types: [string, number, number][]; memory_unavailable: boolean;
     }>("redis_keyspace_summary", { id, database, sample }),
   loadSchemaSnapshot: (path: string) => invoke<DbSchema>("load_schema_snapshot", { path }),
   // 資料列比對：options.mode = report | sql | apply；進度走 onCompareProgress、取消走 compareDataCancel。

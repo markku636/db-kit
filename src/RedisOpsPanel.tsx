@@ -241,6 +241,11 @@ function AnalysisTab({ connId, database }: { connId: string; database: string })
       <ErrBar err={err} />
       {data && (
         <>
+          {data.memory_unavailable && (
+            <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2 mb-3">
+              {t("MEMORY USAGE 被停用或失敗，只顯示型別分佈；記憶體數字不可信。")}
+            </div>
+          )}
           <div className="flex flex-wrap gap-3 mb-3 text-xs">
             <span className="text-fg/50">{t("總鍵數")}: <b className="text-fg/80 mono">{data.total_keys < 0 ? "—" : data.total_keys.toLocaleString()}</b></span>
             <span className="text-fg/50">{t("已取樣")}: <b className="text-fg/80 mono">{data.sampled.toLocaleString()}</b></span>
