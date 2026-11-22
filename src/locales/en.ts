@@ -3028,6 +3028,8 @@ const en: Catalog = {
   "ACL LIST / WHOAMI 為唯讀指令；改權限請用主控台（ACL SETUSER）。": "ACL LIST / WHOAMI are read-only; use the console to change permissions (ACL SETUSER).",
   "匯出監視紀錄": "Export monitor log",
   "已匯出 {n} 行監視紀錄": "Exported {n} monitor lines",
+  "清空指令歷史": "Clear command history",
+  "清歷史": "Clear history",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",

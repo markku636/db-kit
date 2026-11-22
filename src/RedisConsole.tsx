@@ -177,6 +177,11 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
           </label>
           <button type="button" onClick={() => setEntries([])} title={t("清空畫面")}
             className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/70">{t("清空")}</button>
+          <button type="button" onClick={() => {
+            setHistory([]); setHistPos(-1);
+            try { localStorage.removeItem(redisConsoleHistoryKey(connId)); } catch { /* 忽略 */ }
+          }} title={t("清空指令歷史")}
+            className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/50">{t("清歷史")}</button>
         </div>
       }
     >
