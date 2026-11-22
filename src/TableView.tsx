@@ -311,22 +311,26 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [commentMap, setCommentMap] = useState<Record<string, string>>({});
   // SQL Server 的 identity / computed 欄位不能寫入：停用就地編輯，也不放進 INSERT/UPDATE 範本。
   const [readOnlyCols, setReadOnlyCols] = useState<Set<string>>(new Set());
+  const [columnTypes, setColumnTypes] = useState<Record<string, string>>({});
   useEffect(() => {
-    if (!isSqlKind || tab.view !== "data") { setCommentMap({}); setReadOnlyCols(new Set()); return; }
+    if (!isSqlKind || tab.view !== "data") { setCommentMap({}); setReadOnlyCols(new Set()); setColumnTypes({}); return; }
     let alive = true;
     api.tableColumns(tab.connId, tab.database, tab.table)
       .then((cols) => {
         if (!alive) return;
         const m: Record<string, string> = {};
+        const types: Record<string, string> = {};
         const ro = new Set<string>();
         for (const col of cols) {
           if (col.comment) m[col.name] = col.comment;
+          types[col.name] = col.data_type;
           if (isReadOnlyColumnExtra(col.extra) || isBinaryColumnType(col.data_type)) ro.add(col.name);
         }
         setCommentMap(m);
+        setColumnTypes(types);
         setReadOnlyCols(ro);
       })
-      .catch(() => { if (alive) { setCommentMap({}); setReadOnlyCols(new Set()); } });
+      .catch(() => { if (alive) { setCommentMap({}); setReadOnlyCols(new Set()); setColumnTypes({}); } });
     return () => { alive = false; };
   }, [isSqlKind, tab.connId, tab.database, tab.table, tab.view]);
 
@@ -337,6 +341,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
     [data, readOnlyCols],
   );
   const insertCols = useMemo(() => (data ? writableIdx.map((j) => data.columns[j]) : []), [data, writableIdx]);
+  const readOnlyReason = (col: string) =>
+    isBinaryColumnType(columnTypes[col]) ? t("二進位欄位") : t("識別或計算欄位");
 
   // 外鍵導覽消費：pendingFilter 指向本分頁時，套用 col=value 篩選（被參照表開啟後即過濾出該列）。
   const pendingFilter = useStore((s) => s.pendingFilter);
@@ -685,7 +691,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const openEditor = (r: number, c: number, seed: string | null = null) => {
     const col = data?.columns[c];
     if (col && readOnlyCols.has(col)) {
-      toast.info(t("欄位「{col}」是識別或計算欄位，不能編輯。", { col }));
+      toast.info(t("欄位「{col}」是{reason}，不能編輯。", { col, reason: readOnlyReason(col) }));
       return;
     }
     setEditSeed(seed);
@@ -957,7 +963,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const cellUpdateScript = (r: number, c: number, text?: string | null) => {
     if (!data || !connKind) return;
     if (readOnlyCols.has(data.columns[c])) {
-      toast.info(t("欄位「{col}」是識別或計算欄位，不能產生 UPDATE 腳本。", { col: data.columns[c] }));
+      toast.info(t("欄位「{col}」是{reason}，不能產生 UPDATE 腳本。", { col: data.columns[c], reason: readOnlyReason(data.columns[c]) }));
       return;
     }
     const sql = buildCellUpdate(
