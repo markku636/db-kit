@@ -5,7 +5,7 @@ use oracle::pool::{CloseMode, Pool, PoolBuilder};
 use oracle::sql_type::OracleType;
 
 use crate::db::{
-    bytes_to_display, filter_op_sql, group_table_columns, op_needs_value, validate_column_spec, AlterOp, CellEdit, ColumnInfo,
+    bytes_to_display, filter_op_sql, group_table_columns, op_needs_value, validate_column_spec, AlterOp, BatchUpdateResult, CellEdit, ColumnInfo,
     ColumnStats, ConnectionConfig, DataQuery, DatabaseDriver, ErColumn, ErModel, ErRelation, ErTable, Filter,
     ForeignKeyInfo, IndexInfo, PagedData, PoolStatus, QueryResult, RoutineInfo, RowDelete, RowInsert,
     SearchHit, SearchOptions, Sort, SortDir, TableColumns, TableInfo, ValidationReport,
@@ -431,6 +431,32 @@ impl OracleDriver {
         .map_err(|e| AppError::Query(tf!("背景執行緒失敗：{e}", e = e)))?
     }
 
+    /// 在單一交易內執行閉包：成功 commit，失敗 rollback。批次格編輯用，避免半套寫入。
+    async fn with_conn_tx<T, F>(&self, f: F) -> AppResult<T>
+    where
+        F: FnOnce(&oracle::Connection) -> AppResult<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let pool = Arc::clone(&self.pool);
+        tokio::task::spawn_blocking(move || {
+            let mut conn = pool.get().map_err(|e| AppError::Query(friendly_ora_error(&e)))?;
+            prepare_conn(&mut conn);
+            conn.set_autocommit(false);
+            match f(&conn) {
+                Ok(v) => {
+                    conn.commit().map_err(|e| AppError::Query(friendly_ora_error(&e)))?;
+                    Ok(v)
+                }
+                Err(e) => {
+                    let _ = conn.rollback();
+                    Err(e)
+                }
+            }
+        })
+        .await
+        .map_err(|e| AppError::Query(tf!("背景執行緒失敗：{e}", e = e)))?
+    }
+
     /// 主鍵欄位（依約束位置排序）。
     async fn primary_key(&self, owner: &str, table: &str) -> AppResult<Vec<String>> {
         let owner = owner.to_string();
@@ -725,6 +751,32 @@ impl DatabaseDriver for OracleDriver {
             Ok(stmt.row_count().unwrap_or(0))
         })
         .await
+    }
+
+    async fn update_cells(
+        &self,
+        database: &str,
+        table: &str,
+        edits: &[CellEdit],
+    ) -> AppResult<BatchUpdateResult> {
+        let target = qualified(database, table);
+        let edits = edits.to_vec();
+        self.with_conn_tx(move |conn| {
+            let mut applied = 0u64;
+            for edit in &edits {
+                let set = match &edit.new_value {
+                    Some(v) => format!("{} = {}", q(&edit.column), lit(v)),
+                    None => format!("{} = NULL", q(&edit.column)),
+                };
+                let where_ = pk_where(&edit.pk_columns, &edit.pk_values)?;
+                let sql = format!("UPDATE {target} SET {set} WHERE {where_}");
+                let stmt = conn.execute(&sql, &[]).map_err(ora_q)?;
+                applied += stmt.row_count().unwrap_or(0);
+            }
+            Ok(applied)
+        })
+        .await
+        .map(|applied| BatchUpdateResult { applied, atomic: true })
     }
 
     async fn insert_row(&self, database: &str, table: &str, row: &RowInsert) -> AppResult<u64> {

@@ -574,8 +574,10 @@ export type KeyEdit =
   | { action: "list_set"; index: number; value: string }
   | { action: "list_push"; value: string; front: boolean }
   | { action: "list_remove"; value: string; count: number }
+  | { action: "list_remove_at"; index: number }
   | { action: "set_add"; member: string }
   | { action: "set_remove"; member: string }
+  | { action: "set_rename"; from: string; to: string }
   | { action: "zset_add"; member: string; score: number }
   | { action: "zset_remove"; member: string }
   | { action: "hash_set"; field: string; value: string }

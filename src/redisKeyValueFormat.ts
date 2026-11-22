@@ -18,7 +18,11 @@ export function buildRedisKeyExport(
   switch (p.type_) {
     case "string": value = p.members[0] ?? ""; break;
     case "hash": value = p.fields.map((f, i) => ({ field: f, value: p.members[i] ?? "" })); break;
-    case "zset": value = p.members.map((m, i) => ({ member: m, score: p.scores[i] ?? 0 })); break;
+    // Redis zset 允許 ±inf，但 JSON.stringify 會把 Infinity 變成 null（後端因此整鍵略過）。
+    case "zset": value = p.members.map((m, i) => {
+      const raw = p.scores[i] ?? 0;
+      return { member: m, score: Number.isFinite(raw) ? raw : (raw > 0 ? "+inf" : "-inf") };
+    }); break;
     case "stream": value = p.members.map((m, i) => ({ id: p.fields[i] ?? "", fields: m })); break;
     default: value = p.members;
   }

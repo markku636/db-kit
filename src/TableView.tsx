@@ -3079,18 +3079,15 @@ function KeyDetailBody({ detail, connId, database, table, rkey, reload, onError,
               {isList ? (
                 <InlineEdit value={v} onSave={(nv) => edit({ action: "list_set", index: scores[i] ?? i, value: nv })} />
               ) : (
-                // set 成員無法就地改名 → 移除舊 + 新增新
+                // set 成員改名走後端單一 script：舊 member 移除與新 member 新增一起成功或一起失敗。
                 <InlineEdit value={v} onSave={(nv) => {
-                  if (nv !== v) run(async () => {
-                    await api.keyEdit(connId, database, rkey, { action: "set_remove", member: v });
-                    await api.keyEdit(connId, database, rkey, { action: "set_add", member: nv });
-                  });
+                  if (nv !== v) edit({ action: "set_rename", from: v, to: nv });
                 }} />
               )}
             </td>
-            {/* 註：list 刪除以值比對（LREM），重複值會刪到第一個相符項。 */}
+            {/* list 用頁面帶回的原始索引刪除；以值 LREM 會在重複值時刪到別的列。 */}
             <DelCell busy={busy}
-              onClick={() => edit(isList ? { action: "list_remove", value: v, count: 1 } : { action: "set_remove", member: v })} />
+              onClick={() => edit(isList ? { action: "list_remove_at", index: scores[i] ?? i } : { action: "set_remove", member: v })} />
           </tr>
         ))}
         <tr>

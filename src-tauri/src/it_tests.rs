@@ -1840,6 +1840,32 @@ async fn redis_cluster_mode_lists_only_db0() {
     assert_eq!(d.list_databases().await.unwrap(), vec!["0".to_string()]);
 }
 
+/// 清單依索引刪除（重複值不能刪錯）+ set 改名在目標已存在時不能丟掉原成員。
+#[tokio::test]
+#[ignore = "需要 Docker Redis:16379"]
+async fn redis_member_edits_are_index_safe_and_atomic() {
+    let c = cfg(DbKind::Redis, "127.0.0.1", 16379, "", "", None);
+    let d = RedisDriver::connect(&c).await.unwrap();
+    d.query("7:FLUSHDB").await.unwrap();
+
+    d.query("7:RPUSH dup a b a c").await.unwrap();
+    d.key_edit("7", "dup", &KeyEdit::ListRemoveAt { index: 2 }).await.unwrap();
+    let rows = d.query("7:LRANGE dup 0 -1").await.unwrap().rows;
+    let vals: Vec<&str> = rows.iter().map(|r| r[0].as_deref().unwrap_or("")).collect();
+    assert_eq!(vals, vec!["a", "b", "c"], "應刪掉索引 2 的 a，不是索引 0");
+
+    d.query("7:SADD s old").await.unwrap();
+    d.query("7:SADD s taken").await.unwrap();
+    assert!(d.key_edit("7", "s", &KeyEdit::SetRename { from: "old".into(), to: "taken".into() }).await.is_err());
+    let old = d.query("7:SISMEMBER s old").await.unwrap().rows[0][0].clone();
+    assert_eq!(old.as_deref(), Some("1"), "改名失敗時原成員必須還在");
+    d.key_edit("7", "s", &KeyEdit::SetRename { from: "old".into(), to: "new".into() }).await.unwrap();
+    let old = d.query("7:SISMEMBER s old").await.unwrap().rows[0][0].clone();
+    assert_eq!(old.as_deref(), Some("0"));
+    let new = d.query("7:SISMEMBER s new").await.unwrap().rows[0][0].clone();
+    assert_eq!(new.as_deref(), Some("1"));
+}
+
 /// 「新增鍵」不能覆蓋既有的鍵（以前 SET 會把同名的 hash 靜默換成字串）。
 #[tokio::test]
 #[ignore = "需要 Docker Redis:16379"]

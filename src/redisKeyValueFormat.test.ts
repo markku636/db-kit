@@ -47,6 +47,16 @@ describe("buildRedisKeyExport", () => {
     expect(full[0].partial).toBe(false);
   });
 
+  it("zset 的 ±inf 分數寫成字面字串，不會被 JSON.stringify 變成 null", () => {
+    const s = JSON.parse(buildRedisKeyExport("z", page({
+      type_: "zset", ttl: -1, total: 2, cursor: 0, members: ["hi", "lo"], scores: [Infinity, -Infinity],
+    })));
+    expect(s[0].value).toEqual([
+      { member: "hi", score: "+inf" },
+      { member: "lo", score: "-inf" },
+    ]);
+  });
+
   it("輸出為可供後端匯入的單元素陣列，依型別帶不同 value 結構", () => {
     const h = JSON.parse(buildRedisKeyExport("h", page({
       type_: "hash", ttl: -1, total: 1, cursor: 0, fields: ["a"], members: ["1"],

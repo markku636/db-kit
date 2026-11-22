@@ -438,10 +438,14 @@ pub enum KeyEdit {
         #[serde(default = "one_i64")]
         count: i64,
     },
+    /// 以原始索引移除 list 元素：重複值時 LREM 會刪到第一個相符項，必須用索引定位。
+    ListRemoveAt { index: i64 },
     /// SADD：新增 set 成員。
     SetAdd { member: String },
     /// SREM：移除 set 成員。
     SetRemove { member: String },
+    /// set 成員改名：SREM + SADD 在同一個 Lua script 裡完成，失敗不丟原成員。
+    SetRename { from: String, to: String },
     /// ZADD：新增 / 覆寫 zset 成員分數。
     ZsetAdd { member: String, score: f64 },
     /// ZREM：移除 zset 成員。

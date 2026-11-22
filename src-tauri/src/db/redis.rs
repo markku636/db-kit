@@ -63,6 +63,16 @@ fn aggregate_keyspace(entries: &[(String, i64)]) -> Vec<(String, usize, i64)> {
     out
 }
 
+/// zset 分數可能是數字，也可能是匯出檔對 ±inf 的字面表示（JSON 不能存 Infinity）。
+fn parse_import_score(v: &serde_json::Value) -> Option<f64> {
+    if let Some(n) = v.as_f64() { return Some(n); }
+    match v.as_str()? {
+        "+inf" | "inf" | "Infinity" => Some(f64::INFINITY),
+        "-inf" | "-Infinity" => Some(f64::NEG_INFINITY),
+        _ => None,
+    }
+}
+
 /// 匯入前一筆資料是否可處理：目前不支援 stream / 模組型別，且 value 型狀要對。
 fn import_key_valid(item: &RedisImportKey) -> bool {
     // 截斷過的匯出要擋下來：DEL 掉完整鍵再寫回部分內容就是資料丟失。
@@ -76,7 +86,8 @@ fn import_key_valid(item: &RedisImportKey) -> bool {
         })),
         "list" | "set" => item.value.as_array().is_some_and(|a| a.iter().all(|v| v.is_string())),
         "zset" => item.value.as_array().is_some_and(|a| a.iter().all(|v| {
-            v.get("member").is_some_and(|x| x.is_string()) && v.get("score").is_some_and(|x| x.is_number())
+            v.get("member").is_some_and(|x| x.is_string())
+                && v.get("score").is_some_and(|x| parse_import_score(x).is_some())
         })),
         _ => false,
     }
@@ -107,6 +118,26 @@ pub struct RedisDriver {
     /// 網格模式 table_data 翻頁用的鍵快照，避免每次翻頁重掃整個 keyspace。
     snapshot: tokio::sync::Mutex<Option<KeysSnapshot>>,
 }
+
+/// 以索引移除 list 元素：先用唯一哨兵 LSET 該位置再 LREM，全部在同一個 script 裡完成。
+/// 回 0 表示索引超出範圍（沒動到任何元素）。
+const LUA_LIST_REMOVE_AT: &str = r#"
+local n = redis.call('LLEN', KEYS[1])
+local i = tonumber(ARGV[1])
+if i < 0 or i >= n then return 0 end
+redis.call('LSET', KEYS[1], i, ARGV[2])
+redis.call('LREM', KEYS[1], 1, ARGV[2])
+return 1
+"#;
+
+/// set 成員改名：目標已存在回 -1、來源不存在回 0，都不會動到原成員。
+const LUA_SET_RENAME: &str = r#"
+if redis.call('SISMEMBER', KEYS[1], ARGV[2]) == 1 then return -1 end
+if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then return 0 end
+redis.call('SREM', KEYS[1], ARGV[1])
+redis.call('SADD', KEYS[1], ARGV[2])
+return 1
+"#;
 
 /// DUMP 出來的 payload 搭配 RESTORE 的 TTL（毫秒）：-1 永不過期、-2 鍵不存在都想成 0。
 fn clone_restore_ttl_ms(pttl: i64) -> i64 {
@@ -825,7 +856,7 @@ impl RedisDriver {
                     pipe.atomic().del(&item.key).ignore();
                     for v in item.value.as_array().unwrap() {
                         let member = v["member"].as_str().unwrap_or("");
-                        let score = v["score"].as_f64().unwrap_or(0.0);
+                        let score = parse_import_score(&v["score"]).unwrap_or(0.0);
                         pipe.zadd(&item.key, member, score).ignore();
                     }
                     pipe.query_async::<()>(&mut conn).await.is_ok()
@@ -1426,6 +1457,23 @@ impl DatabaseDriver for RedisDriver {
                 .query_async(&mut conn)
                 .await
                 .map_err(to_err)?,
+            KeyEdit::ListRemoveAt { index } => {
+                // 哨兵要唯一，否則 LREM 可能刪到原本就存在同名值的元素。
+                let sentinel = format!("__dbkit_del_{}__", uuid::Uuid::new_v4());
+                let removed: i64 = redis::cmd("EVAL")
+                    .arg(LUA_LIST_REMOVE_AT)
+                    .arg(1)
+                    .arg(key)
+                    .arg(*index)
+                    .arg(&sentinel)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(to_err)?;
+                if removed == 0 {
+                    return Err(AppError::Query(t!("索引超出範圍，沒有移除元素").to_string()));
+                }
+                removed
+            }
             KeyEdit::SetAdd { member } => redis::cmd("SADD")
                 .arg(key)
                 .arg(member)
@@ -1438,6 +1486,26 @@ impl DatabaseDriver for RedisDriver {
                 .query_async(&mut conn)
                 .await
                 .map_err(to_err)?,
+            KeyEdit::SetRename { from, to } => {
+                let result: i64 = redis::cmd("EVAL")
+                    .arg(LUA_SET_RENAME)
+                    .arg(1)
+                    .arg(key)
+                    .arg(from)
+                    .arg(to)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(to_err)?;
+                match result {
+                    -1 => return Err(AppError::Query(tf!(
+                        "目標成員「{to}」已存在，為避免合併而取消改名", to = to
+                    ))),
+                    0 => return Err(AppError::Query(tf!(
+                        "來源成員「{from}」不存在，無法改名", from = from
+                    ))),
+                    _ => 1,
+                }
+            }
             KeyEdit::ZsetAdd { member, score } => {
                 // ZADD 對既有成員回 0（更新分數），coerce 成 1 避免被當失敗。
                 let _: i64 = redis::cmd("ZADD")
@@ -2130,6 +2198,14 @@ mod tests {
             value: serde_json::from_str(r#"[{"member":"m","score":1.5}]"#).unwrap(),
         };
         assert!(import_key_valid(&z));
+        // JSON 不能代表 Infinity：匯出檔用 "+inf" / "-inf"，後端要認得。
+        let inf = RedisImportKey {
+            key: "zinf".into(), type_: "zset".into(), ttl: -1, partial: false,
+            exported: 0, total: 0,
+            value: serde_json::from_str(r#"[{"member":"m","score":"+inf"}]"#).unwrap(),
+        };
+        assert!(import_key_valid(&inf));
+        assert_eq!(parse_import_score(&serde_json::json!("-inf")), Some(f64::NEG_INFINITY));
         let stream = RedisImportKey { type_: "stream".into(), ..j(r#""x""#) };
         assert!(!import_key_valid(&stream));
         // 只匯出部分的鍵不能拿去覆寫完整鍵。
