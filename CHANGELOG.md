@@ -2,6 +2,7 @@
 
 新功能：
 
+- **MySQL / PostgreSQL / SQLite / Oracle 分頁不再重複或漏列**：以前沒指定排序時完全沒有 `ORDER BY`，資料庫每頁回的順序可能不同；現在一律用主鍵排序，使用者自訂排序也補主鍵當 tiebreaker（與 SQL Server 一致）。
 - **已儲存的密碼可以清除了**：編輯連線時勾「清除已儲存的密碼」再存檔，會真的刪掉 keychain 裡的資料庫 / SSH 密碼；以前表單留空一律視為「不變更」，伺服器把密碼改空後就永遠連不上。
 - **Redis < 6 也能用鍵樹型別過濾**：連線時從 INFO 判斷版本，舊版自動退回 SCAN + 管線 TYPE 在客戶端篩，不再整頁報語法錯誤。
 - **分析模式不再是唯讀連線的後門**：後端是 `EXPLAIN {輸入}`，`EXPLAIN ANALYZE DELETE …` 會真的執行 DELETE；以前分析模式在唯讀檢查之前就 return，現在會擋下搭配 DML 的 EXPLAIN 並補上正式環境確認。

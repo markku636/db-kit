@@ -415,8 +415,11 @@ impl DatabaseDriver for MysqlDriver {
 
         // 組 WHERE（運算子白名單檢查；值以 ? 綁定）
         let (where_sql, bind_values) = build_where(&query.filters, query.match_any)?;
+        // 主鍵要先於分頁語句取得：ORDER BY 一定要有唯一 tiebreaker，否則 DB 每次回的
+        // 順序可能不同，翻頁就會重複 / 漏列（MSSQL 早已這麼做）。
+        let primary_key = self.primary_key(database, table).await?;
         // 組 ORDER BY（只允許識別字，方向限定）
-        let order_sql = build_order(&query.sorts);
+        let order_sql = build_order(&query.sorts, &primary_key);
 
         // 總列數（套用相同篩選）。純翻頁時前端傳 count=false 直接略過（沿用前次快取），
         // 大表每頁重跑 COUNT(*) 是主要延遲來源（比照 mssql / mongo 的既有處理）。
@@ -445,14 +448,12 @@ impl DatabaseDriver for MysqlDriver {
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
 
-        let primary_key = self.primary_key(database, table).await?;
-
         let result = rows_to_result(&rows);
         Ok(PagedData {
             columns: result.columns,
             rows: result.rows,
             total_rows: total as u64,
-        truncated: false,
+            truncated: false,
             page: query.page,
             page_size,
             primary_key,
@@ -1659,12 +1660,17 @@ fn build_where(filters: &[Filter], match_any: bool) -> AppResult<(String, Vec<Op
     Ok((format!(" WHERE {}", clauses.join(connector)), binds))
 }
 
-/// 組 ORDER BY 子句（識別字 + 方向，無值綁定）。
-fn build_order(sorts: &[Sort]) -> String {
+/// 組 ORDER BY 子句（識別字 + 方向，無值綁定）。無使用者排序照主鍵排，
+/// 有排序也補上尚未出現的主鍵欄位當 tiebreaker，避免分頁重複 / 漏列。
+fn build_order(sorts: &[Sort], pk: &[String]) -> String {
     if sorts.is_empty() {
-        return String::new();
+        if pk.is_empty() { return String::new(); }
+        return format!(
+            " ORDER BY {}",
+            pk.iter().map(|c| format!("{} ASC", quote_ident(c))).collect::<Vec<_>>().join(", ")
+        );
     }
-    let parts = sorts
+    let mut parts: Vec<String> = sorts
         .iter()
         .map(|s| {
             let dir = match s.dir {
@@ -1673,9 +1679,13 @@ fn build_order(sorts: &[Sort]) -> String {
             };
             format!("{} {}", quote_ident(&s.column), dir)
         })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(" ORDER BY {parts}")
+        .collect();
+    for key in pk {
+        if !sorts.iter().any(|s| s.column.eq_ignore_ascii_case(key)) {
+            parts.push(format!("{} ASC", quote_ident(key)));
+        }
+    }
+    format!(" ORDER BY {}", parts.join(", "))
 }
 
 /// 這條語句會不會回結果集（→ 走 fetch）。前導註解與大小寫由 `db::stmt` 統一處理，
@@ -1885,7 +1895,17 @@ fn string_fallback(row: &MySqlRow, idx: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_read_sql, split_leading_use};
+    use super::*;
+
+    #[test]
+    fn build_order_uses_pk_as_tiebreaker_for_stable_paging() {
+        assert_eq!(build_order(&[], &["id".into()]), " ORDER BY `id` ASC");
+        assert_eq!(build_order(&[], &[]), "");
+        let sorts = vec![Sort { column: "name".into(), dir: SortDir::Desc }];
+        assert_eq!(build_order(&sorts, &["id".into()]), " ORDER BY `name` DESC, `id` ASC");
+        let by_pk = vec![Sort { column: "id".into(), dir: SortDir::Asc }];
+        assert_eq!(build_order(&by_pk, &["id".into()]), " ORDER BY `id` ASC");
+    }
 
     #[test]
     fn desc_is_a_read_statement() {

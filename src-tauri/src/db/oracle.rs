@@ -237,14 +237,23 @@ fn build_where(filters: &[Filter], match_any: bool) -> String {
     }
 }
 
-fn build_order(sorts: &[Sort]) -> String {
+fn build_order(sorts: &[Sort], pk: &[String]) -> String {
     if sorts.is_empty() {
-        return String::new();
+        if pk.is_empty() { return String::new(); }
+        return format!(
+            " ORDER BY {}",
+            pk.iter().map(|c| format!("{} ASC", q(c))).collect::<Vec<_>>().join(", ")
+        );
     }
-    let parts: Vec<String> = sorts
+    let mut parts: Vec<String> = sorts
         .iter()
         .map(|s| format!("{} {}", q(&s.column), match s.dir { SortDir::Asc => "ASC", SortDir::Desc => "DESC" }))
         .collect();
+    for key in pk {
+        if !sorts.iter().any(|s| s.column.eq_ignore_ascii_case(key)) {
+            parts.push(format!("{} ASC", q(key)));
+        }
+    }
     format!(" ORDER BY {}", parts.join(", "))
 }
 
@@ -638,7 +647,8 @@ impl DatabaseDriver for OracleDriver {
             } else {
                 0
             };
-            let order = build_order(&dq.sorts);
+            // 主鍵當 tiebreaker，避免 OFFSET 分頁因為同值排序而重複 / 漏列。
+            let order = build_order(&dq.sorts, &pk);
             let offset = dq.page as u64 * dq.page_size as u64;
             // OFFSET/FETCH：12c+（本驅動的最低支援版本）。Oracle 不要求 ORDER BY 也可用。
             let sql = format!(
@@ -1264,8 +1274,18 @@ impl DatabaseDriver for OracleDriver {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_connect_string, build_where, lit, oracle_type_str, pick_client_dir, pk_where, q};
-    use crate::db::{ConnectionConfig, DbKind, Filter};
+    use super::{build_connect_string, build_order, build_where, lit, oracle_type_str, pick_client_dir, pk_where, q};
+    use crate::db::{ConnectionConfig, DbKind, Filter, Sort, SortDir};
+
+    #[test]
+    fn build_order_uses_pk_as_tiebreaker_for_stable_paging() {
+        assert_eq!(build_order(&[], &["id".into()]), " ORDER BY \"id\" ASC");
+        assert_eq!(build_order(&[], &[]), "");
+        let sorts = vec![Sort { column: "name".into(), dir: SortDir::Desc }];
+        assert_eq!(build_order(&sorts, &["id".into()]), " ORDER BY \"name\" DESC, \"id\" ASC");
+        let by_pk = vec![Sort { column: "id".into(), dir: SortDir::Asc }];
+        assert_eq!(build_order(&by_pk, &["id".into()]), " ORDER BY \"id\" ASC");
+    }
 
     fn cfg(database: Option<&str>, connect_type: Option<&str>) -> ConnectionConfig {
         let mut options = std::collections::BTreeMap::new();

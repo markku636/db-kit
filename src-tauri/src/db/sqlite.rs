@@ -363,7 +363,9 @@ impl DatabaseDriver for SqliteDriver {
         let page_size = query.page_size;
 
         let (where_sql, bind_values) = build_where(&query.filters, query.match_any)?;
-        let order_sql = build_order(&query.sorts);
+        // 主鍵要先取出當 tiebreaker；沒有唯一順序時 LIMIT/OFFSET 分頁會重複 / 漏列。
+        let primary_key = self.primary_key(table).await?;
+        let order_sql = build_order(&query.sorts, &primary_key);
 
         // 純翻頁時前端傳 count=false 直接略過 COUNT（沿用前次快取），比照 mssql / mongo。
         let total: i64 = if query.count {
@@ -399,7 +401,7 @@ impl DatabaseDriver for SqliteDriver {
         truncated: false,
             page: query.page,
             page_size,
-            primary_key: self.primary_key(table).await?,
+            primary_key,
             row_ids: Vec::new(),
         })
     }
@@ -880,11 +882,15 @@ fn build_where(filters: &[Filter], match_any: bool) -> AppResult<(String, Vec<Op
     Ok((format!(" WHERE {}", clauses.join(connector)), binds))
 }
 
-fn build_order(sorts: &[Sort]) -> String {
+fn build_order(sorts: &[Sort], pk: &[String]) -> String {
     if sorts.is_empty() {
-        return String::new();
+        if pk.is_empty() { return String::new(); }
+        return format!(
+            " ORDER BY {}",
+            pk.iter().map(|c| format!("{} ASC", quote_ident(c))).collect::<Vec<_>>().join(", ")
+        );
     }
-    let parts = sorts
+    let mut parts: Vec<String> = sorts
         .iter()
         .map(|s| {
             let dir = match s.dir {
@@ -893,9 +899,13 @@ fn build_order(sorts: &[Sort]) -> String {
             };
             format!("{} {}", quote_ident(&s.column), dir)
         })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(" ORDER BY {parts}")
+        .collect();
+    for key in pk {
+        if !sorts.iter().any(|s| s.column.eq_ignore_ascii_case(key)) {
+            parts.push(format!("{} ASC", quote_ident(key)));
+        }
+    }
+    format!(" ORDER BY {}", parts.join(", "))
 }
 
 fn rows_to_result(rows: &[SqliteRow]) -> QueryResult {
@@ -967,4 +977,19 @@ fn string_fallback(row: &SqliteRow, idx: usize) -> Option<String> {
         return Some(crate::db::bytes_to_display(&v));
     }
     Some("<unrenderable>".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_order_uses_pk_as_tiebreaker_for_stable_paging() {
+        assert_eq!(build_order(&[], &["id".into()]), " ORDER BY \"id\" ASC");
+        assert_eq!(build_order(&[], &[]), "");
+        let sorts = vec![Sort { column: "name".into(), dir: SortDir::Desc }];
+        assert_eq!(build_order(&sorts, &["id".into()]), " ORDER BY \"name\" DESC, \"id\" ASC");
+        let by_pk = vec![Sort { column: "id".into(), dir: SortDir::Asc }];
+        assert_eq!(build_order(&by_pk, &["id".into()]), " ORDER BY \"id\" ASC");
+    }
 }
