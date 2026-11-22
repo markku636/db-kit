@@ -10,7 +10,7 @@
 
 mod acl;
 mod admin;
-mod config;
+pub(crate) mod config;
 mod connect;
 pub(crate) mod consume;
 pub mod dto;

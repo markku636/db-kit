@@ -3,7 +3,7 @@
 //! Wire 格式：magic byte `0x00` + schema id（int32 big-endian）+ payload。
 //! Avro → JSON 完整解碼；Protobuf / JSON-schema MVP 為顯示-only（protobuf 需 descriptor）。
 //!
-//! 註：SR 帳密目前存於連線 options（明文，隨 connections.json 落地）。TODO：移至 keychain。
+//! 註：SR 密碼存於 OS keychain，連線前由 store / commands hydrate 回 options。
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -127,6 +127,27 @@ fn hydrate_secrets(config: &mut ConnectionConfig) {
             config.options.insert(crate::db::proxy::PROXY_PASSWORD_OPTION.to_string(), pw);
         }
     }
+    // Kafka SR / Connect 密碼：存檔時已抽到 keychain，連線前補回。
+    for (url_key, pass_key, account) in [
+        (
+            crate::db::kafka::config::KAFKA_SR_URL_OPTION,
+            crate::db::kafka::config::KAFKA_SR_PASSWORD_OPTION,
+            store::kafka_sr_account(&config.id),
+        ),
+        (
+            crate::db::kafka::config::KAFKA_CONNECT_URL_OPTION,
+            crate::db::kafka::config::KAFKA_CONNECT_PASSWORD_OPTION,
+            store::kafka_connect_account(&config.id),
+        ),
+    ] {
+        if config.options.contains_key(url_key)
+            && config.options.get(pass_key).map_or(true, |p| p.is_empty())
+        {
+            if let Some(pw) = store::kc_get(&account) {
+                config.options.insert(pass_key.to_string(), pw);
+            }
+        }
+    }
     if config.ssh_enabled {
         if config.ssh_password.is_empty() {
             config.ssh_password = store::kc_get(&store::ssh_account(&config.id)).unwrap_or_default();
@@ -800,6 +821,8 @@ pub fn clear_connection_password(id: String) -> AppResult<()> {
     store::kc_delete(&id);
     store::kc_delete(&store::ssh_account(&id));
     store::kc_delete(&store::ssh_passphrase_account(&id));
+    store::kc_delete(&store::kafka_sr_account(&id));
+    store::kc_delete(&store::kafka_connect_account(&id));
     Ok(())
 }
 

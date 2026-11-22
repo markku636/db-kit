@@ -7,6 +7,13 @@ use rdkafka::ClientConfig;
 
 use crate::db::ConnectionConfig;
 
+/// Schema Registry / Connect 的 URL（非機密，可明文存檔；也是 keychain hydrate 的開關）。
+pub const KAFKA_SR_URL_OPTION: &str = "kafka_sr_url";
+pub const KAFKA_CONNECT_URL_OPTION: &str = "kafka_connect_url";
+/// 這兩個密碼只在記憶體出現：存檔時抽到 keychain、載入時再補回（見 store::kafka_*_account）。
+pub const KAFKA_SR_PASSWORD_OPTION: &str = "kafka_sr_password";
+pub const KAFKA_CONNECT_PASSWORD_OPTION: &str = "kafka_connect_password";
+
 /// 讀取某個 `kafka_*` option（去空白），不存在或空字串回 None。
 fn opt<'a>(cfg: &'a ConnectionConfig, key: &str) -> Option<&'a str> {
     cfg.options.get(key).map(|s| s.trim()).filter(|s| !s.is_empty())
@@ -35,21 +42,20 @@ pub fn show_internal(cfg: &ConnectionConfig) -> bool {
     matches!(opt(cfg, "kafka_show_internal"), Some("1") | Some("true"))
 }
 
-/// 若連線設定了 `kafka_sr_url`，建立 Schema Registry 用戶端。
-/// SR 帳密目前存於 options（明文）；TODO：移至 keychain。
+/// 若連線設定了 SR URL，建立 Schema Registry 用戶端。
+/// 密碼由 store / commands 在連線前從 keychain 補回 options，這裡只讀。
 pub fn schema_registry(cfg: &ConnectionConfig) -> Option<super::schema::SchemaRegistry> {
-    let url = opt(cfg, "kafka_sr_url")?;
+    let url = opt(cfg, KAFKA_SR_URL_OPTION)?;
     let user = opt(cfg, "kafka_sr_user").map(String::from);
-    let pass = opt(cfg, "kafka_sr_password").map(String::from);
+    let pass = opt(cfg, KAFKA_SR_PASSWORD_OPTION).map(String::from);
     super::schema::SchemaRegistry::new(url, user, pass).ok()
 }
 
-/// 若連線設定了 `kafka_connect_url`，建立 Kafka Connect REST 用戶端。
-/// 帳密目前存於 options（明文）；TODO：移至 keychain（同 SR）。
+/// 若連線設定了 Connect URL，建立 Kafka Connect REST 用戶端。密碼同上由 keychain 補回。
 pub fn connect_client(cfg: &ConnectionConfig) -> Option<super::connect::ConnectClient> {
-    let url = opt(cfg, "kafka_connect_url")?;
+    let url = opt(cfg, KAFKA_CONNECT_URL_OPTION)?;
     let user = opt(cfg, "kafka_connect_user").map(String::from);
-    let pass = opt(cfg, "kafka_connect_password").map(String::from);
+    let pass = opt(cfg, KAFKA_CONNECT_PASSWORD_OPTION).map(String::from);
     super::connect::ConnectClient::new(url, user, pass).ok()
 }
 

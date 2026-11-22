@@ -183,10 +183,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
   const [kafkaSkipVerify, setKafkaSkipVerify] = useState(seed?.options?.kafka_ssl_insecure === "1");
   const [srUrl, setSrUrl] = useState(seed?.options?.kafka_sr_url ?? "");
   const [srUser, setSrUser] = useState(seed?.options?.kafka_sr_user ?? "");
-  const [srPass, setSrPass] = useState(seed?.options?.kafka_sr_password ?? "");
+  // 密碼不從存檔還原：留空＝沿用 keychain 裡的舊值（與其他 secret 一致）。
+  const [srPass, setSrPass] = useState("");
   const [connectUrl, setConnectUrl] = useState(seed?.options?.kafka_connect_url ?? "");
   const [connectUser, setConnectUser] = useState(seed?.options?.kafka_connect_user ?? "");
-  const [connectPass, setConnectPass] = useState(seed?.options?.kafka_connect_password ?? "");
+  const [connectPass, setConnectPass] = useState("");
   // Elasticsearch / OpenSearch 連線選項（存於 options map）。認證方式：none（無）/ basic（帳密）/ apikey（password 存 API key）。
   const [esAuth, setEsAuth] = useState(seed?.options?.es_auth ?? (initial?.username ? "basic" : "none"));
   const [esTls, setEsTls] = useState(seed?.options?.es_tls === "1");
@@ -1073,7 +1074,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
                       <Input value={srUser} onChange={(e) => setSrUser(e.target.value)} onKeyDown={submitOnEnter} />
                     </Field>
                     <Field label={t("SR 密碼（選填）")} className="flex-1">
-                      <Input type="password" value={srPass} onChange={(e) => setSrPass(e.target.value)} onKeyDown={submitOnEnter} />
+                      <Input type="password" value={srPass} onChange={(e) => setSrPass(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? t("留空＝不變更") : ""} />
                     </Field>
                   </div>
                 )}
@@ -1088,7 +1089,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
                       <Input value={connectUser} onChange={(e) => setConnectUser(e.target.value)} onKeyDown={submitOnEnter} />
                     </Field>
                     <Field label={t("Connect 密碼（選填）")} className="flex-1">
-                      <Input type="password" value={connectPass} onChange={(e) => setConnectPass(e.target.value)} onKeyDown={submitOnEnter} />
+                      <Input type="password" value={connectPass} onChange={(e) => setConnectPass(e.target.value)} onKeyDown={submitOnEnter} placeholder={editing ? t("留空＝不變更") : ""} />
                     </Field>
                   </div>
                 )}

@@ -163,10 +163,12 @@ impl From<&ConnectionConfig> for PersistedConnection {
             ssh_username: c.ssh_username.clone(),
             ssh_auth_method: c.ssh_auth_method,
             ssh_private_key_path: c.ssh_private_key_path.clone(),
-            // proxy 密碼只在記憶體：存檔時抽掉（由 save_connection 寫進 keychain）。
+            // secret 只在記憶體：存檔時抽掉（由 save_connection 寫進 keychain）。
             options: {
                 let mut o = c.options.clone();
                 o.remove(crate::db::proxy::PROXY_PASSWORD_OPTION);
+                o.remove(crate::db::kafka::config::KAFKA_SR_PASSWORD_OPTION);
+                o.remove(crate::db::kafka::config::KAFKA_CONNECT_PASSWORD_OPTION);
                 o
             },
             // 群組不隨連線設定往返（見 group_id 欄位說明）；upsert_in 會補回既有值。
@@ -572,6 +574,14 @@ pub async fn save_connection_in(dir: &Path, config: &ConnectionConfig) -> AppRes
     if let Some(pw) = config.options.get(crate::db::proxy::PROXY_PASSWORD_OPTION).filter(|p| !p.is_empty()) {
         kc_set(&proxy_account(&config.id), pw)?;
     }
+    for (key, account) in [
+        (crate::db::kafka::config::KAFKA_SR_PASSWORD_OPTION, kafka_sr_account(&config.id)),
+        (crate::db::kafka::config::KAFKA_CONNECT_PASSWORD_OPTION, kafka_connect_account(&config.id)),
+    ] {
+        if let Some(pw) = config.options.get(key).filter(|p| !p.is_empty()) {
+            kc_set(&account, pw)?;
+        }
+    }
     if config.ssh_enabled {
         if !config.ssh_password.is_empty() {
             kc_set(&ssh_account(&config.id), &config.ssh_password)?;
@@ -589,6 +599,8 @@ pub async fn remove_connection_in(dir: &Path, id: &str) -> AppResult<()> {
     kc_delete(id);
     kc_delete(&otp_account(id));
     kc_delete(&proxy_account(id));
+    kc_delete(&kafka_sr_account(id));
+    kc_delete(&kafka_connect_account(id));
     kc_delete(&ssh_account(id));
     kc_delete(&ssh_passphrase_account(id));
     Ok(())
@@ -649,6 +661,18 @@ pub async fn load_connection_in(dir: &Path, id: &str) -> AppResult<ConnectionCon
     if cfg.options.contains_key(crate::db::proxy::PROXY_OPTION) {
         if let Some(pw) = kc_get(&proxy_account(id)) {
             cfg.options.insert(crate::db::proxy::PROXY_PASSWORD_OPTION.to_string(), pw);
+        }
+    }
+    // 舊版曾把這兩個密碼明文寫在 options：那樣的值會被保留（向後相容），
+    // 重新存檔一次後就會改走 keychain。
+    if cfg.options.contains_key(crate::db::kafka::config::KAFKA_SR_URL_OPTION) {
+        if let Some(pw) = kc_get(&kafka_sr_account(id)) {
+            cfg.options.insert(crate::db::kafka::config::KAFKA_SR_PASSWORD_OPTION.to_string(), pw);
+        }
+    }
+    if cfg.options.contains_key(crate::db::kafka::config::KAFKA_CONNECT_URL_OPTION) {
+        if let Some(pw) = kc_get(&kafka_connect_account(id)) {
+            cfg.options.insert(crate::db::kafka::config::KAFKA_CONNECT_PASSWORD_OPTION.to_string(), pw);
         }
     }
     if cfg.ssh_enabled {
@@ -724,6 +748,14 @@ pub fn proxy_account(id: &str) -> String {
     format!("{id}.proxy")
 }
 
+/// Kafka Schema Registry / Connect 的 Basic Auth 密碼（keychain 帳號）。
+pub fn kafka_sr_account(id: &str) -> String {
+    format!("{id}.kafka-sr")
+}
+pub fn kafka_connect_account(id: &str) -> String {
+    format!("{id}.kafka-connect")
+}
+
 /// 寫入 keychain。secret 為空字串時視為「刪除該項」。
 pub fn kc_set(account: &str, secret: &str) -> AppResult<()> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
@@ -766,6 +798,36 @@ pub fn kc_delete(account: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persisted_connection_strips_kafka_and_proxy_passwords() {
+        let mut options = std::collections::BTreeMap::new();
+        options.insert("kafka_sr_url".into(), "http://sr:8081".into());
+        options.insert("kafka_sr_user".into(), "u".into());
+        options.insert("kafka_sr_password".into(), "sr-secret".into());
+        options.insert("kafka_connect_url".into(), "http://kc:8083".into());
+        options.insert("kafka_connect_password".into(), "kc-secret".into());
+        options.insert("proxy_url".into(), "http://p:3128".into());
+        options.insert("proxy_password".into(), "p-secret".into());
+        let cfg = ConnectionConfig {
+            id: "c1".into(), name: "c".into(), kind: crate::db::DbKind::Kafka,
+            host: "h".into(), port: 9092, username: String::new(), password: String::new(),
+            database: None, max_connections: 5,
+            ssh_enabled: false, ssh_host: String::new(), ssh_port: 22,
+            ssh_username: String::new(), ssh_auth_method: crate::db::SshAuthMethod::Password,
+            ssh_password: String::new(), ssh_private_key_path: String::new(), ssh_passphrase: String::new(),
+            options, otp_secret: String::new(),
+        };
+        let persisted = PersistedConnection::from(&cfg);
+        for key in [
+            "kafka_sr_password", "kafka_connect_password", "proxy_password",
+        ] {
+            assert!(!persisted.options.contains_key(key), "{key} 不該落地");
+        }
+        // URL / 使用者不是機密，要留著當 hydrate 的開關。
+        assert_eq!(persisted.options.get("kafka_sr_url").map(String::as_str), Some("http://sr:8081"));
+        assert_eq!(persisted.options.get("kafka_connect_url").map(String::as_str), Some("http://kc:8083"));
+    }
 
     // ---- 可攜模式的設定目錄解析（resolve_data_dir 為純函式，不碰真實環境變數）----
 

@@ -1,5 +1,5 @@
 //! Kafka Connect REST 用戶端（仿 schema.rs）：列連接器 / 狀態 / 暫停恢復重啟 / 刪除 /
-//! 設定讀寫 / plugins / 設定驗證。連線設定 `kafka_connect_url/_user/_password`。
+//! 設定讀寫 / plugins / 設定驗證。連線設定 `kafka_connect_url/_user/_password`；密碼存 keychain。
 
 use std::collections::BTreeMap;
 
