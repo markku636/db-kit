@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleDot, X, Play, Pause, Trash2 } from "lucide-react";
 import { api, onRedisMonitor, onRedisMonitorError } from "./api";
-import { useModalOverlay } from "./ui";
+import { pickSaveFile, toast, useModalOverlay } from "./ui";
 import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -85,6 +85,18 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
 
   const visible = filter.trim() ? lines.filter((l) => monitorLineMatches(l, filter)) : lines;
 
+  const exportLog = async () => {
+    if (!lines.length) return;
+    const path = await pickSaveFile("redis-monitor.log", [{ name: "Log", extensions: ["log", "txt"] }]);
+    if (!path) return;
+    try {
+      await api.writeTextFile(path, lines.join("\n"));
+      toast.success(t("已匯出 {n} 行監視紀錄", { n: lines.length }));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("匯出失敗"));
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
       <div className={`bg-app w-[820px] max-w-[95vw] h-[78vh] flex flex-col rounded-lg border border-fg/10 shadow-2xl ${shellClass}`}
@@ -112,6 +124,8 @@ export default function RedisMonitorPanel({ connId, connName, onClose }: {
           <input value={filter} onChange={(e) => setFilter(e.target.value)}
             placeholder={t("過濾內容（子字串）")}
             className="w-48 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
+          <button type="button" onClick={exportLog} disabled={!lines.length} title={t("匯出監視紀錄")}
+            className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60 disabled:opacity-30">{t("匯出")}</button>
           <button type="button" onClick={() => setLines([])} title={t("清空畫面")}
             className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60 inline-flex items-center gap-1">
             <Icon icon={Trash2} size={13} /> {t("清空")}

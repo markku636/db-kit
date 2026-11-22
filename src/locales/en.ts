@@ -3026,6 +3026,8 @@ const en: Catalog = {
   "，略過 {n} 個不支援的項目": ", skipped {n} unsupported entries",
   "（無 ACL 使用者資訊）": "(No ACL user information)",
   "ACL LIST / WHOAMI 為唯讀指令；改權限請用主控台（ACL SETUSER）。": "ACL LIST / WHOAMI are read-only; use the console to change permissions (ACL SETUSER).",
+  "匯出監視紀錄": "Export monitor log",
+  "已匯出 {n} 行監視紀錄": "Exported {n} monitor lines",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",
