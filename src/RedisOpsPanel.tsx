@@ -7,8 +7,9 @@ import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
 import { parseAclLine } from "./redisUiFormat";
+import { fmtBytes } from "./schemaCache";
 
-type Tab = "slowlog" | "clients" | "bigkeys" | "acl";
+type Tab = "slowlog" | "clients" | "bigkeys" | "acl" | "analysis";
 
 // Redis 維運面板：慢查詢日誌 / 用戶端連線 / 大鍵掃描（對齊 Another Redis Desktop Manager 的狀態工具）。
 export default function RedisOpsPanel({ connId, connName, database, initialPrefix = "", initialTab = "slowlog", onChanged, onClose }: {
@@ -30,7 +31,7 @@ export default function RedisOpsPanel({ connId, connName, database, initialPrefi
           <Icon icon={CircleDot} size={14} className="text-red-400" />
           <span className="font-medium text-sm">{t("維運 ·")} {connName}</span>
           <div className="flex items-center rounded border border-fg/10 overflow-hidden ml-2 text-xs">
-            {([["slowlog", t("慢查詢")], ["clients", t("用戶端")], ["bigkeys", t("大鍵")], ["acl", "ACL"]] as [Tab, string][]).map(([v, label]) => (
+            {([["slowlog", t("慢查詢")], ["clients", t("用戶端")], ["bigkeys", t("大鍵")], ["analysis", t("分析")], ["acl", "ACL"]] as [Tab, string][]).map(([v, label]) => (
               <button key={v} type="button" onClick={() => setTab(v)}
                 className={`px-3 py-1 ${tab === v ? "bg-fg/15 text-fg" : "text-fg/50 hover:bg-fg/5"}`}>
                 {label}
@@ -44,6 +45,7 @@ export default function RedisOpsPanel({ connId, connName, database, initialPrefi
           {tab === "slowlog" && <SlowLogTab connId={connId} readonly={readonly} />}
           {tab === "clients" && <ClientsTab connId={connId} readonly={readonly} />}
           {tab === "bigkeys" && <BigKeysTab connId={connId} database={database} initialPrefix={initialPrefix} readonly={readonly} onChanged={onChanged} />}
+          {tab === "analysis" && <AnalysisTab connId={connId} database={database} />}
           {tab === "acl" && <AclTab connId={connId} />}
         </div>
       </div>
@@ -186,6 +188,76 @@ function ClientsTab({ connId, readonly = false }: { connId: string; readonly?: b
             ))}
           </tbody>
         </table>
+      )}
+    </>
+  );
+}
+
+function AnalysisTab({ connId, database }: { connId: string; database: string }) {
+  const t = useT();
+  const [sample, setSample] = useState("1000");
+  const [data, setData] = useState<Awaited<ReturnType<typeof api.redisKeyspaceSummary>> | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      setData(await api.redisKeyspaceSummary(connId, database, Number(sample) || 1000));
+    } catch (e: any) {
+      setErr(e?.message ?? t("分析失敗"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-center gap-2 mb-2 text-xs">
+        <span className="text-fg/40">DB {database} · {t("取樣")}</span>
+        <input value={sample} onChange={(e) => setSample(e.target.value.replace(/[^\d]/g, ""))}
+          title={t("SCAN 取樣的鍵數上限")}
+          className="w-20 bg-inset border border-fg/10 rounded px-2 py-1 mono text-center outline-none focus:border-accent" />
+        <button type="button" onClick={run} disabled={busy}
+          className="ml-auto px-3 py-1 rounded bg-accent text-white hover:bg-accent/90 disabled:opacity-40">
+          {busy ? t("分析中…") : t("分析")}
+        </button>
+      </div>
+      <div className="text-[11px] text-fg/35 mb-2">{t("SCAN 抽樣統計，不影響線上服務；MEMORY USAGE 在部分託管 Redis 會被停用。")}</div>
+      <ErrBar err={err} />
+      {data && (
+        <>
+          <div className="flex flex-wrap gap-3 mb-3 text-xs">
+            <span className="text-fg/50">{t("總鍵數")}: <b className="text-fg/80 mono">{data.total_keys < 0 ? "—" : data.total_keys.toLocaleString()}</b></span>
+            <span className="text-fg/50">{t("已取樣")}: <b className="text-fg/80 mono">{data.sampled.toLocaleString()}</b></span>
+            <span className="text-fg/50">{t("取樣記憶體")}: <b className="text-fg/80 mono">{fmtBytes(data.total_bytes)}</b></span>
+          </div>
+          {data.types.length === 0 ? (
+            <div className="text-fg/40 text-sm">{t("（取樣範圍內無鍵）")}</div>
+          ) : (
+            <table className="text-xs mono w-full border-collapse">
+              <thead><tr className="text-fg/45">
+                <th className="text-left px-2 py-1 border-b border-fg/10">{t("型別")}</th>
+                <th className="text-right px-2 py-1 border-b border-fg/10">{t("鍵數")}</th>
+                <th className="text-right px-2 py-1 border-b border-fg/10">{t("記憶體")}</th>
+                <th className="text-right px-2 py-1 border-b border-fg/10">{t("佔比")}</th>
+              </tr></thead>
+              <tbody>
+                {data.types.map(([type, count, bytes]) => (
+                  <tr key={type} className="hover:bg-fg/5">
+                    <td className="px-2 py-1 border-b border-fg/5 text-fg/80">{type}</td>
+                    <td className="px-2 py-1 border-b border-fg/5 text-right">{count.toLocaleString()}</td>
+                    <td className="px-2 py-1 border-b border-fg/5 text-right">{fmtBytes(bytes)}</td>
+                    <td className="px-2 py-1 border-b border-fg/5 text-right text-fg/50">
+                      {data.total_bytes > 0 ? `${((bytes / data.total_bytes) * 100).toFixed(1)}%` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
       )}
     </>
   );

@@ -43,7 +43,7 @@ use crate::db::{
 };
 use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
-use crate::db::redis::{RedisImportKey, RedisImportSummary};
+use crate::db::redis::{RedisImportKey, RedisImportSummary, RedisKeyspaceSummary};
 use crate::scheduler::{self, BackupHistoryEntry, BackupSchedule, BackupStatus};
 use crate::store::{self, PersistedConnection};
 #[cfg(feature = "kafka")]
@@ -1763,6 +1763,17 @@ pub async fn redis_delete_keys(
     keys: Vec<String>,
 ) -> AppResult<u64> {
     state.manager.redis_driver(&id)?.delete_keys(&database, &keys).await
+}
+
+/// keyspace 抽樣分析（仿 RedisInsight 的 Analysis）：型別分佈與記憶體用量。
+#[tauri::command]
+pub async fn redis_keyspace_summary(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    sample: usize,
+) -> AppResult<RedisKeyspaceSummary> {
+    state.manager.redis_driver(&id)?.keyspace_summary(&database, sample).await
 }
 
 /// 從匯出的 JSON 檔匯入鍵（仿 ARDM 的 Import keys）。

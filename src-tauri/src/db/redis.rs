@@ -29,6 +29,33 @@ pub struct RedisImportSummary {
     pub skipped: usize,
 }
 
+/// RedisInsight 風格的 keyspace 分析：抽樣統計各型別的鍵數與記憶體用量。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RedisKeyspaceSummary {
+    /// 實際取樣到的鍵數。
+    pub sampled: usize,
+    /// DBSIZE 回報的總鍵數（可能不精確但足以當量級）。
+    pub total_keys: i64,
+    /// 抽樣鍵的 MEMORY USAGE 總和（位元組）。
+    pub total_bytes: i64,
+    /// (型別, 鍵數, 記憶體位元組)，依記憶體降冪。
+    pub types: Vec<(String, usize, i64)>,
+}
+
+/// 把 (type, bytes) 列表聚合成各型別的計數與總用量，供單元測試。
+fn aggregate_keyspace(entries: &[(String, i64)]) -> Vec<(String, usize, i64)> {
+    use std::collections::BTreeMap;
+    let mut m: BTreeMap<String, (usize, i64)> = BTreeMap::new();
+    for (ty, bytes) in entries {
+        let e = m.entry(ty.clone()).or_insert((0, 0));
+        e.0 += 1;
+        e.1 += *bytes;
+    }
+    let mut out: Vec<(String, usize, i64)> = m.into_iter().map(|(k, (c, b))| (k, c, b)).collect();
+    out.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| b.1.cmp(&a.1)));
+    out
+}
+
 /// 匯入前一筆資料是否可處理：目前不支援 stream / 模組型別，且 value 型狀要對。
 fn import_key_valid(item: &RedisImportKey) -> bool {
     // 截斷過的匯出要擋下來：DEL 掉完整鍵再寫回部分內容就是資料丟失。
@@ -594,6 +621,44 @@ impl RedisDriver {
             .await
             .map_err(rerr)?;
         Ok(())
+    }
+
+    /// 抽樣統計 keyspace：SCAN 取樣 + pipeline TYPE / MEMORY USAGE，聚合出各型別的
+    /// 鍵數與記憶體用量（RedisInsight 的 Analysis 概念）。不影響線上服務。
+    pub async fn keyspace_summary(&self, database: &str, sample: usize) -> AppResult<RedisKeyspaceSummary> {
+        let sample = sample.clamp(100, 100_000);
+        let mut conn = self.conn(database).await?;
+        let total_keys: i64 = redis::cmd("DBSIZE").query_async(&mut conn).await.unwrap_or(-1);
+        let mut entries: Vec<(String, i64)> = Vec::new();
+        let mut cursor: u64 = 0;
+        loop {
+            let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
+                .arg(cursor).arg("COUNT").arg(500)
+                .query_async(&mut conn).await.map_err(rerr)?;
+            let take: Vec<Vec<u8>> = batch.into_iter().take(sample.saturating_sub(entries.len())).collect();
+            if !take.is_empty() {
+                let mut pipe = redis::pipe();
+                for k in &take {
+                    pipe.cmd("TYPE").arg(k);
+                    pipe.cmd("MEMORY").arg("USAGE").arg(k);
+                }
+                let vals: Vec<redis::Value> = pipe.query_async(&mut conn).await.map_err(rerr)?;
+                for pair in vals.chunks(2) {
+                    let ty = pair.first().map(rv_to_string).unwrap_or_else(|| "unknown".into());
+                    let bytes = pair.get(1).map(|v| rv_as_i64(Some(v))).unwrap_or(0).max(0);
+                    entries.push((ty, bytes));
+                }
+            }
+            cursor = next;
+            if cursor == 0 || entries.len() >= sample { break; }
+        }
+        let total_bytes = entries.iter().map(|(_, b)| *b).sum();
+        Ok(RedisKeyspaceSummary {
+            sampled: entries.len(),
+            total_keys,
+            total_bytes,
+            types: aggregate_keyspace(&entries),
+        })
     }
 
     /// 從匯出的 JSON 還原鍵（仿 ARDM 的 Import keys）：只處理 string / hash / list / set / zset，
@@ -1848,6 +1913,24 @@ fn parse_client_list(raw: &str) -> Vec<ClientInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aggregate_keyspace_groups_by_type_and_sorts_by_memory() {
+        let rows = vec![
+            ("string".into(), 100i64),
+            ("hash".into(), 500),
+            ("string".into(), 50),
+            ("list".into(), 20),
+        ];
+        let out = aggregate_keyspace(&rows);
+        assert_eq!(out[0].0, "hash");
+        assert_eq!(out[0].1, 1);
+        assert_eq!(out[0].2, 500);
+        assert_eq!(out[1].0, "string");
+        assert_eq!(out[1].1, 2);
+        assert_eq!(out[1].2, 150);
+        assert_eq!(out[2].0, "list");
+    }
 
     #[test]
     fn sentinel_master_reads_the_connection_option() {

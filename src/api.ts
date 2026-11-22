@@ -1890,6 +1890,12 @@ export const api = {
   // 從匯出的 JSON 匯入鍵（仿 ARDM）：回傳成功 / 略過筆數。
   redisImportKeys: (id: string, database: string, payload: string) =>
     invoke<{ imported: number; skipped: number }>("redis_import_keys", { id, database, payload }),
+  // keyspace 抽樣分析（仿 RedisInsight 的 Analysis）。
+  redisKeyspaceSummary: (id: string, database: string, sample: number) =>
+    invoke<{
+      sampled: number; total_keys: number; total_bytes: number;
+      types: [string, number, number][];
+    }>("redis_keyspace_summary", { id, database, sample }),
   loadSchemaSnapshot: (path: string) => invoke<DbSchema>("load_schema_snapshot", { path }),
   // 資料列比對：options.mode = report | sql | apply；進度走 onCompareProgress、取消走 compareDataCancel。
   compareDataTable: (runId: string, src: CompareTableRef, dst: CompareTableRef, options?: DataCompareOptions) =>
