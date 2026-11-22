@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleDot } from "lucide-react";
 import { api } from "./api";
-import { uiConfirm } from "./ui";
+import { pickSaveFile, toast, uiConfirm } from "./ui";
 import { useStore } from "./store";
 import { fmtElapsed, isDangerousRedisCommand, isReadOnlyRedisCommand } from "./sql";
 import { completeRedisCommand, isBlockingKeysCommand, redisCommandHint } from "./redisCommandHints";
@@ -132,6 +132,19 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
     }
   };
 
+  // 匯出指令歷史（仿 ARDM 的 command dump），方便貼到文件 / 交給同事重現。
+  const exportHistory = async () => {
+    if (!history.length) return;
+    const path = await pickSaveFile("redis-commands.txt", [{ name: "Text", extensions: ["txt"] }]);
+    if (!path) return;
+    try {
+      await api.writeTextFile(path, history.join("\n"));
+      toast.success(t("已匯出 {n} 條指令", { n: history.length }));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("匯出失敗"));
+    }
+  };
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); run(); return; }
     // Tab：補完指令名稱（只在還沒開始打參數時）。
@@ -183,6 +196,8 @@ export default function RedisConsole({ connId, connName, initialDb = "0", onClos
             try { localStorage.removeItem(redisConsoleHistoryKey(connId)); } catch { /* 忽略 */ }
           }} title={t("清空指令歷史")}
             className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/50">{t("清歷史")}</button>
+          <button type="button" onClick={exportHistory} disabled={!history.length} title={t("匯出指令歷史")}
+            className="text-xs px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/50 disabled:opacity-30">{t("匯出歷史")}</button>
         </div>
       }
     >
