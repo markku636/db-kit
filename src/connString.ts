@@ -150,6 +150,7 @@ export interface ConnFormFields {
   // Redis
   redisTls: boolean;
   redisTlsInsecure: boolean;
+  redisSentinelMaster: string;
   // MongoDB
   mongoSrv: boolean;
   mongoAuthSource: string;
@@ -205,6 +206,7 @@ const KIND_SCOPED_DEFAULTS: Omit<ConnFormFields, "kind" | "host" | "port" | "use
   sslCa: "",
   redisTls: false,
   redisTlsInsecure: false,
+  redisSentinelMaster: "",
   mongoSrv: false,
   mongoAuthSource: "",
   mongoTls: false,

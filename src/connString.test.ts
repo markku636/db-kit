@@ -14,6 +14,7 @@ const base = (over: Partial<ConnFormFields> = {}): ConnFormFields => ({
   sslCa: "",
   redisTls: false,
   redisTlsInsecure: false,
+  redisSentinelMaster: "",
   mongoSrv: false,
   mongoAuthSource: "",
   mongoTls: false,

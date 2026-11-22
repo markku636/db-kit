@@ -149,6 +149,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
   const [readonlyTouched, setReadonlyTouched] = useState(false);
   // Redis 連線選項（存於 options map）
   const [redisTls, setRedisTls] = useState(seed?.options?.redis_tls === "true");
+  const [redisSentinelMaster, setRedisSentinelMaster] = useState(seed?.options?.redis_sentinel_master ?? "");
   const [redisTlsInsecure, setRedisTlsInsecure] = useState(seed?.options?.redis_tls_insecure === "true");
   // Mongo 連線選項（存於 options map）
   const [mongoSrv, setMongoSrv] = useState(seed?.options?.mongo_srv === "1");
@@ -319,6 +320,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     }
     const o: Record<string, string> = {};
     if (kind === "redis") {
+      if (redisSentinelMaster.trim()) o.redis_sentinel_master = redisSentinelMaster.trim();
       if (redisTls) o.redis_tls = "true";
       if (redisTls && redisTlsInsecure) o.redis_tls_insecure = "true";
     } else if (kind === "mongo") {
@@ -433,7 +435,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
   const snapshotForm = (): ConnFormFields => ({
     kind, host, port, username, password, database,
     sslMode, sslCa,
-    redisTls, redisTlsInsecure,
+    redisTls, redisTlsInsecure, redisSentinelMaster,
     mongoSrv, mongoAuthSource, mongoTls, mongoReplicaSet, mongoDirect, mongoTlsCa, mongoTlsInsecure,
     mssqlEncrypt, mssqlTrust, mssqlCaPath, mssqlAuth,
     oracleConnectType, oracleClientDir,
@@ -447,7 +449,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     setKind(f.kind); setHost(f.host); setPort(f.port); setUsername(f.username);
     setPassword(f.password); setDatabase(f.database);
     setSslMode(f.sslMode); setSslCa(f.sslCa);
-    setRedisTls(f.redisTls); setRedisTlsInsecure(f.redisTlsInsecure);
+    setRedisTls(f.redisTls); setRedisTlsInsecure(f.redisTlsInsecure); setRedisSentinelMaster(f.redisSentinelMaster);
     setMongoSrv(f.mongoSrv); setMongoAuthSource(f.mongoAuthSource); setMongoTls(f.mongoTls);
     setMongoReplicaSet(f.mongoReplicaSet); setMongoDirect(f.mongoDirect);
     setMongoTlsCa(f.mongoTlsCa); setMongoTlsInsecure(f.mongoTlsInsecure);
@@ -856,6 +858,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
 
           {kind === "redis" && (
             <Section>
+              <Field label={t("Sentinel Master 名稱（選填）")}
+                hint={t("填了之後，上方主機 / 埠要指向 Sentinel 節點；程式會自動問出目前 master 再連。")}>
+                <Input value={redisSentinelMaster} onChange={(e) => setRedisSentinelMaster(e.target.value)}
+                  onKeyDown={submitOnEnter} placeholder="mymaster" />
+              </Field>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input type="checkbox" checked={redisTls} onChange={(e) => setRedisTls(e.target.checked)} />
                 <span>{t("使用 TLS（rediss://）")}</span>

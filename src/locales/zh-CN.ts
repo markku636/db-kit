@@ -3026,6 +3026,8 @@ const zhCN: Catalog = {
   "Virtual host（vhost）": "虚拟主机（vhost）",
   "已複製訊息內容": "已复制消息内容",
   "複製訊息內容": "复制消息内容",
+  "Sentinel Master 名稱（選填）": "Sentinel Master 名称（选填）",
+  "填了之後，上方主機 / 埠要指向 Sentinel 節點；程式會自動問出目前 master 再連。": "填写后，上方主机／端口要指向 Sentinel 节点；程式会自动查出目前 master 再连。",
   "自動重整": "自动刷新",
   "自動重整鍵樹（仿 ARDM）": "自动刷新键树（仿 ARDM）",
   "自動重整：關": "自动刷新：关",

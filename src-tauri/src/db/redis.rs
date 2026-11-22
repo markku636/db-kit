@@ -709,7 +709,18 @@ impl DatabaseDriver for RedisDriver {
         // TLS：options["redis_tls"]=="true" → 加密連線；redis_tls_insecure → 略過憑證驗證（自簽 / 內網）。
         let use_tls = config.options.get("redis_tls").is_some_and(|v| v == "true");
         let tls_insecure = config.options.get("redis_tls_insecure").is_some_and(|v| v == "true");
-        let info = connection_info(config, use_tls, tls_insecure);
+        let mut info = connection_info(config, use_tls, tls_insecure);
+        // Sentinel 模式：_host:_port 指向 Sentinel 節點，選項給 master 名稱；先問 Sentinel
+        // 目前 master 的實際位址，後續所有 DB 連線都打到 master（仿 ARDM 的 Sentinel Support）。
+        if let Some(master) = config.options.get("redis_sentinel_master").filter(|s| !s.is_empty()) {
+            let mut sentinel = redis::sentinel::Sentinel::build(vec![info.clone()])
+                .map_err(|e| AppError::Connect(format!("建立 Sentinel 失敗：{e}")))?;
+            let master_client = sentinel
+                .async_master_for(master, None)
+                .await
+                .map_err(|e| AppError::Connect(format!("找不到 Sentinel master「{master}」：{e}")))?;
+            info = master_client.get_connection_info().clone();
+        }
 
         // 基礎 client 供 pub/sub 用（同一份連線參數，加密連線的訂閱也走 TLS）。
         let client = redis::Client::open(info.clone()).map_err(|e| AppError::Connect(e.to_string()))?;

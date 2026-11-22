@@ -3035,6 +3035,8 @@ const en: Catalog = {
   "Virtual host（vhost）": "Virtual host (vhost)",
   "已複製訊息內容": "Message copied",
   "複製訊息內容": "Copy message",
+  "Sentinel Master 名稱（選填）": "Sentinel master name (optional)",
+  "填了之後，上方主機 / 埠要指向 Sentinel 節點；程式會自動問出目前 master 再連。": "When set, point Host/Port above at a Sentinel node; the app discovers the current master automatically.",
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",
