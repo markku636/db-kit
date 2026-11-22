@@ -10,8 +10,8 @@ import { useT } from "./i18n";
 type Tab = "slowlog" | "clients" | "bigkeys";
 
 // Redis 維運面板：慢查詢日誌 / 用戶端連線 / 大鍵掃描（對齊 Another Redis Desktop Manager 的狀態工具）。
-export default function RedisOpsPanel({ connId, connName, database, onClose }: {
-  connId: string; connName: string; database: string; onClose: () => void;
+export default function RedisOpsPanel({ connId, connName, database, initialPrefix = "", onClose }: {
+  connId: string; connName: string; database: string; initialPrefix?: string; onClose: () => void;
 }) {
   const t = useT();
   useModalOverlay(onClose); // Esc 關閉 + 計入 modalCount（避免全域快捷鍵在面板背後動作）
@@ -40,7 +40,7 @@ export default function RedisOpsPanel({ connId, connName, database, onClose }: {
         <div className="flex-1 overflow-auto p-4">
           {tab === "slowlog" && <SlowLogTab connId={connId} />}
           {tab === "clients" && <ClientsTab connId={connId} />}
-          {tab === "bigkeys" && <BigKeysTab connId={connId} database={database} />}
+          {tab === "bigkeys" && <BigKeysTab connId={connId} database={database} initialPrefix={initialPrefix} />}
         </div>
       </div>
     </div>
@@ -185,12 +185,14 @@ function ClientsTab({ connId }: { connId: string }) {
   );
 }
 
-function BigKeysTab({ connId, database }: { connId: string; database: string }) {
+function BigKeysTab({ connId, database, initialPrefix = "" }: { connId: string; database: string; initialPrefix?: string }) {
   const t = useT();
   // 唯讀連線：只掃描不清除（與資料格 / 鍵樹的唯讀規則一致）。
   const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [sample, setSample] = useState("1000");
   const [top, setTop] = useState("50");
+  // 前綴（命名空間）限定：ARDM 的 folder memory analysis。
+  const [prefix, setPrefix] = useState(initialPrefix);
   const [rows, setRows] = useState<BigKey[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -202,7 +204,9 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
     setScanning(true);
     setErr(null);
     try {
-      const r = await api.redisBigKeys(connId, database, Number(sample) || 1000, Number(top) || 50);
+      const r = prefix.trim()
+        ? await api.redisFolderBigKeys(connId, database, prefix.trim(), Number(sample) || 1000, Number(top) || 50)
+        : await api.redisBigKeys(connId, database, Number(sample) || 1000, Number(top) || 50);
       setRows(r);
       setMarked(new Set());
     } catch (e: any) {
@@ -247,6 +251,10 @@ function BigKeysTab({ connId, database }: { connId: string; database: string }) 
     <>
       <div className="flex items-center gap-2 mb-2 text-xs">
         <span className="text-fg/40">DB {database} {t("· 取樣")}</span>
+        <input value={prefix} onChange={(e) => setPrefix(e.target.value)}
+          title={t("只分析這個前綴底下的鍵（留空＝全庫取樣）")}
+          placeholder={t("前綴（選填）")}
+          className="w-32 bg-inset border border-fg/10 rounded px-2 py-1 mono outline-none focus:border-accent" />
         <input value={sample} onChange={(e) => setSample(e.target.value.replace(/[^\d]/g, ""))}
           title={t("SCAN 取樣的鍵數上限")} className="w-20 bg-inset border border-fg/10 rounded px-2 py-1 mono text-center outline-none focus:border-accent" />
         <span className="text-fg/40">{t("取前")}</span>

@@ -30,6 +30,20 @@ pub struct RedisDriver {
     snapshot: tokio::sync::Mutex<Option<KeysSnapshot>>,
 }
 
+/// 把使用者輸入的「命名空間前綴」轉成 SCAN MATCH 樣式：跳脫 glob 特殊字元，
+/// 前綴裡的 `*` / `[` 是鍵名的一部分，不能被當成樣式語法。
+fn redis_prefix_glob(prefix: &str) -> String {
+    let mut out = String::with_capacity(prefix.len() + 1);
+    for ch in prefix.chars() {
+        if matches!(ch, '*' | '?' | '[' | ']' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('*');
+    out
+}
+
 /// 網格模式 table_data 的鍵快照：同 db + pattern 下翻頁直接切片，不重掃 keyspace。
 /// page==0、過期、或 db/pattern 不符時重建；寫入操作與 clear_cache 會使其失效。
 struct KeysSnapshot {
@@ -433,16 +447,33 @@ impl RedisDriver {
     /// 大鍵掃描：SCAN 取樣 sample 個鍵，逐一 MEMORY USAGE，回傳前 top 名。
     /// 取樣式（非全量），避免在大型實例上長時間鎖佔；sample 上限保護。
     pub async fn big_keys(&self, database: &str, sample: usize, top: usize) -> AppResult<Vec<BigKey>> {
+        self.big_keys_filtered(database, None, sample, top).await
+    }
+
+    /// 限定命名空間的大鍵分析（ARDM 的 Memory Analysis in folder）：pattern 由呼叫端把
+    /// 前綴轉成 SCAN MATCH 樣式，只對該前綴下的鍵取樣 MEMORY USAGE。
+    pub async fn big_keys_filtered(
+        &self,
+        database: &str,
+        prefix: Option<&str>,
+        sample: usize,
+        top: usize,
+    ) -> AppResult<Vec<BigKey>> {
         let sample = sample.clamp(1, 100_000);
         let top = top.clamp(1, 1_000);
+        let pattern = prefix.map(redis_prefix_glob);
         let mut conn = self.conn(database).await?;
         let to_err = rerr;
         let mut all: Vec<BigKey> = Vec::new();
         let mut scanned = 0usize;
         let mut cursor: u64 = 0;
         loop {
-            let (next, batch): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
-                .arg(cursor)
+            let mut cmd = redis::cmd("SCAN");
+            cmd.arg(cursor);
+            if let Some(p) = pattern.as_deref() {
+                cmd.arg("MATCH").arg(p);
+            }
+            let (next, batch): (u64, Vec<Vec<u8>>) = cmd
                 .arg("COUNT")
                 .arg(500)
                 .query_async(&mut conn)
@@ -1658,6 +1689,13 @@ fn parse_client_list(raw: &str) -> Vec<ClientInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redis_prefix_glob_escapes_literal_special_chars() {
+        assert_eq!(redis_prefix_glob("user:"), "user:*");
+        assert_eq!(redis_prefix_glob("a[b]*"), "a\\[b\\]\\**");
+        assert_eq!(redis_prefix_glob(""), "*");
+    }
 
     #[test]
     fn scan_truncated_detects_early_stop() {

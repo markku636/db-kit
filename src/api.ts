@@ -1934,6 +1934,9 @@ export const api = {
     invoke<void>("redis_client_kill", { id, clientId }),
   redisBigKeys: (id: string, database: string, sample: number, top: number) =>
     invoke<BigKey[]>("redis_big_keys", { id, database, sample, top }),
+  // 只分析某個命名空間前綴下的鍵（ARDM 的 folder memory analysis）。
+  redisFolderBigKeys: (id: string, database: string, prefix: string, sample: number, top: number) =>
+    invoke<BigKey[]>("redis_folder_big_keys", { id, database, prefix, sample, top }),
   // 批次刪除鍵（DEL）：鍵樹「刪除整個命名空間」用，回傳實際刪除數。
   redisDeleteKeys: (id: string, database: string, keys: string[]) =>
     invoke<number>("redis_delete_keys", { id, database, keys }),

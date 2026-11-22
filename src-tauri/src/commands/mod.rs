@@ -1766,6 +1766,19 @@ pub async fn redis_big_keys(
     state.manager.redis_driver(&id)?.big_keys(&database, sample, top).await
 }
 
+/// 指定命名空間前綴的大鍵分析（ARDM 的 Memory Analysis in folder）。
+#[tauri::command]
+pub async fn redis_folder_big_keys(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    prefix: String,
+    sample: usize,
+    top: usize,
+) -> AppResult<Vec<BigKey>> {
+    state.manager.redis_driver(&id)?.big_keys_filtered(&database, Some(&prefix), sample, top).await
+}
+
 // ---- MongoDB 專屬（監控 / 進階索引 / validation；Redis 模式：直呼 driver inherent 方法）----
 
 /// $indexStats 索引使用統計（前端與 table_indexes 以名稱 join；失敗降級顯示 "—"）。

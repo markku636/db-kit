@@ -713,6 +713,8 @@ const en: Catalog = {
   "（無慢查詢紀錄）": "(No slow query records)",
   "（無用戶端連線）": "(No client connections)",
   "TLS 埠依供應商而異（常見 6379 或 6380）；貼上 rediss:// 網址會自動帶入埠號。": "The TLS port depends on the provider (commonly 6379 or 6380). Pasting a rediss:// URL fills it in automatically.",
+  "只分析這個前綴底下的鍵（留空＝全庫取樣）": "Only analyze keys under this prefix (blank = sample the whole DB)",
+  "前綴（選填）": "Prefix (optional)",
   "(無欄位資訊)": "(no column information)",
   "（等鎖）": "(waiting for lock)",
   "（僅列出與這段 SQL 最相關的 {n} 張表；未列出的表不代表沒有索引。）": "(Only the {n} tables most relevant to this statement are listed; a table not listed does not mean it has no indexes.)",
