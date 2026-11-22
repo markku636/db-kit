@@ -22,7 +22,7 @@ import HarborRepoView from "./HarborRepoView";
 import K8sObjectView from "./K8sObjectView";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
 import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
-import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint } from "./redisKeyValueFormat";
+import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport } from "./redisKeyValueFormat";
 import { isReadOnlyColumnExtra } from "./columnMeta";
 import { fmtRedisTtl, remainingTtl } from "./redisUiFormat";
 import { loadRedisSeparator, redisNamespacePattern, redisNamespacePrefix } from "./redisTree";
@@ -2669,6 +2669,19 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
   const reload = () => loadFirst(filter);
   const applyFilter = () => setFilter(filterInput.trim());
 
+  // 匯出目前載入的鍵（仿 ARDM 的 Export keys）：只含已載入的頁，partial 欄位會明講。
+  const exportKey = async () => {
+    if (!page) return;
+    const path = await pickSaveFile(`${rkey.replace(/[^\w.-]/g, "_")}.json`, [{ name: "JSON", extensions: ["json"] }]);
+    if (!path) return;
+    try {
+      await api.writeTextFile(path, buildRedisKeyExport(rkey, page));
+      toast.success(t("已匯出鍵 {key}", { key: rkey }));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("匯出失敗"));
+    }
+  };
+
   // 大 string 值：強制載入完整值（full=true），供編輯前取回被截斷的完整內容。
   const loadFull = () => {
     setLoading(true);
@@ -2719,7 +2732,9 @@ function KeyDetailModal({ connId, database, table, rkey, onClose }: {
               )}
             </>
           )}
-          <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className="ml-auto text-fg/40 hover:text-fg"><Icon icon={X} size={16} /></button>
+          {page && <button type="button" onClick={exportKey} title={t("匯出此鍵為 JSON（仿 ARDM）")}
+            className="ml-auto px-2 py-0.5 rounded border border-fg/15 hover:bg-fg/10 text-fg/50 text-xs">{t("匯出")}</button>}
+          <button type="button" onClick={onClose} aria-label={t("關閉")} title={t("關閉")} className={`text-fg/40 hover:text-fg ${page ? "" : "ml-auto"}`}><Icon icon={X} size={16} /></button>
         </div>
 
         {page?.type_ === "stream" && (page.groups?.length ?? 0) > 0 && (

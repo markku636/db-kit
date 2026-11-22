@@ -1498,6 +1498,14 @@ pub async fn save_schema_snapshot(
     crate::compare::snapshot::save(std::path::Path::new(&path), &schema).await
 }
 
+/// 通用文字檔寫入（前端存檔對話框決定路徑）：Redis 鍵匯出等小量資料用。
+#[tauri::command]
+pub async fn write_text_file(path: String, content: String) -> AppResult<()> {
+    tokio::fs::write(&path, content.as_bytes())
+        .await
+        .map_err(|e| AppError::Storage(e.to_string()))
+}
+
 /// 載入結構快照檔（壞檔 / 未知版本 → 錯誤，不會靜默變成空結構）。
 #[tauri::command]
 pub async fn load_schema_snapshot(path: String) -> AppResult<crate::compare::schema::DbSchema> {

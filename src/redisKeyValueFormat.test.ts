@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint } from "./redisKeyValueFormat";
+import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport } from "./redisKeyValueFormat";
 
 const page = (over: Record<string, unknown>) => ({
-  type_: "string", total: 0, fields: [], members: [], scores: [], ...over,
+  type_: "string", total: 0, ttl: -1, cursor: 0, fields: [], members: [], scores: [], ...over,
 });
 
 describe("isSupportedRedisKeyType", () => {
@@ -15,6 +15,24 @@ describe("isSupportedRedisKeyType", () => {
     for (const t of ["ReJSON-RL", "TSDB-TYPE", "MBullet", ""]) {
       expect(isSupportedRedisKeyType(t)).toBe(false);
     }
+  });
+});
+
+describe("buildRedisKeyExport", () => {
+  it("依型別輸出不同 value 結構，並標示是否只匯出部分", () => {
+    const h = JSON.parse(buildRedisKeyExport("h", page({
+      type_: "hash", ttl: -1, total: 2, cursor: 0, fields: ["a"], members: ["1"],
+    })));
+    expect(h).toMatchObject({ key: "h", type: "hash", ttl: -1, total: 2, partial: false });
+    expect(h.value).toEqual([{ field: "a", value: "1" }]);
+    const z = JSON.parse(buildRedisKeyExport("z", page({
+      type_: "zset", ttl: 60, total: 2, cursor: 1, members: ["m"], scores: [2],
+    })));
+    expect(z.value).toEqual([{ member: "m", score: 2 }]);
+    expect(z.partial).toBe(true);
+    const s = JSON.parse(buildRedisKeyExport("s", page({ type_: "string", ttl: 5, total: 1, cursor: 0, members: ["v"] })));
+    expect(s.value).toBe("v");
+    expect(s.partial).toBe(false);
   });
 });
 

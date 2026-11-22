@@ -3017,6 +3017,8 @@ const en: Catalog = {
   "自動重整": "Auto-refresh",
   "自動重整鍵樹（仿 ARDM）": "Auto-refresh the key tree (ARDM-style)",
   "自動重整：關": "Auto-refresh: off",
+  "匯出此鍵為 JSON（仿 ARDM）": "Export this key as JSON (ARDM-style)",
+  "已匯出鍵 {key}": "Exported key {key}",
   "刪除選取鍵": "Delete selected keys",
   "將刪除 {n} 個鍵，此動作無法復原：\n{preview}": "This will delete {n} keys. This cannot be undone:\n{preview}",
   "監視 ·": "Monitor ·",

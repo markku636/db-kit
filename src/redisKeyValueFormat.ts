@@ -9,6 +9,27 @@ export function isSupportedRedisKeyType(type: string): boolean {
   return SUPPORTED_TYPES.has(type);
 }
 
+/** 匯出單鍵為可讀 JSON（仿 ARDM 的 Export keys）；型別不同用不同欄位名，不混淆 field / member。 */
+export function buildRedisKeyExport(
+  key: string,
+  p: Pick<KeyPage, "type_" | "ttl" | "total" | "fields" | "members" | "scores" | "cursor">,
+): string {
+  let value: unknown;
+  switch (p.type_) {
+    case "string": value = p.members[0] ?? ""; break;
+    case "hash": value = p.fields.map((f, i) => ({ field: f, value: p.members[i] ?? "" })); break;
+    case "zset": value = p.members.map((m, i) => ({ member: m, score: p.scores[i] ?? 0 })); break;
+    case "stream": value = p.members.map((m, i) => ({ id: p.fields[i] ?? "", fields: m })); break;
+    default: value = p.members;
+  }
+  return JSON.stringify({
+    key, type: p.type_, ttl: p.ttl, value,
+    exported: Array.isArray(value) ? value.length : 1,
+    total: p.total,
+    partial: p.cursor !== 0 && p.type_ !== "string",
+  }, null, 2);
+}
+
 /** 鍵詳情頁尾的提示：過濾後整頁都沒符合、但後面還有資料時要講清楚，不能只顯示「已載入 0 筆」。 */
 export function redisPageHint(filtered: boolean, count: number, hasMore: boolean): string {
   if (filtered && count === 0 && hasMore) {
