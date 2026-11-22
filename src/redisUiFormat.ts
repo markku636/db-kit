@@ -1,5 +1,12 @@
 // Redis 畫面的純函式（無 React / DOM 相依，node 環境可直接單測）。
 
+/** 連線設定裡選的 DB 索引要當主控台預設 DB；設定不存在 / 不在清單裡則退回第一個（通常 0）。 */
+export function effectiveRedisDb(configured: string | null | undefined, available: readonly string[]): string {
+  const c = (configured ?? "").trim();
+  if (c && available.includes(c)) return c;
+  return available[0] ?? "0";
+}
+
 /** INFO uptime 轉可讀字串；剛啟動不到一分鐘要顯示秒數，不能 show “0m”。 */
 export function fmtUptime(secsStr?: string): string {
   const secs = Number(secsStr);

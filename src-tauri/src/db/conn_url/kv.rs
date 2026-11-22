@@ -154,21 +154,31 @@ pub(super) fn parse_ado(s: &str) -> Parsed {
         kind: Some(DbKind::Mssql),
         ..Default::default()
     };
-    apply_ado_pairs(&mut p, s.split(';'));
+    apply_ado_pairs(&mut p, ado_pairs(s).into_iter());
     p
 }
 
+/// 分號分隔的 key=value：先走與 libpq 共用的 quote-aware tokenizer，
+/// `Password='p;a$$'` 這種含分號的引號值才不會被攔腰切斷。tokenize 太嚴格時
+/// （例如摻了不含 `=` 的雜訊段）退回保守的逐段 split，維持既有容忍度。
+pub(super) fn ado_pairs(s: &str) -> Vec<(String, String)> {
+    tokenize(s, Sep::Semicolon).unwrap_or_else(|| {
+        s.split(';')
+            .filter_map(|pair| pair.split_once('=').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+            .collect()
+    })
+}
+
+/// ADO.NET 的 IPv6 host 寫成 `[::1]`；連線驅動要的是沒有括號的 `::1`。
+pub(super) fn strip_host_brackets(h: &str) -> &str {
+    let t = h.trim();
+    t.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(t)
+}
+
 /// 套用 ADO.NET / JDBC 的分號 key=value 參數（key 大小寫不拘、可含空白；未知鍵靜默忽略）。
-/// 值不做 percent-decode（ADO.NET 慣例為字面值）。
-pub(super) fn apply_ado_pairs<'a>(p: &mut Parsed, pairs: impl Iterator<Item = &'a str>) {
-    for pair in pairs {
-        let pair = pair.trim();
-        if pair.is_empty() {
-            continue;
-        }
-        let Some((k, v)) = pair.split_once('=') else {
-            continue;
-        };
+/// 值不做 percent-decode（ADO.NET 慣例為字面值），也不含包裹用的引號（tokenize 已去掉）。
+pub(super) fn apply_ado_pairs(p: &mut Parsed, pairs: impl Iterator<Item = (String, String)>) {
+    for (k, v) in pairs {
         let key = k.trim().to_ascii_lowercase();
         let v = v.trim();
         match key.as_str() {
@@ -177,14 +187,16 @@ pub(super) fn apply_ado_pairs<'a>(p: &mut Parsed, pairs: impl Iterator<Item = &'
                 let s = strip_prefix_ci(v, "tcp:").unwrap_or(v);
                 match s.split_once(',') {
                     Some((h, port)) => {
-                        if !h.trim().is_empty() {
-                            p.host = Some(h.trim().to_string());
+                        let h = strip_host_brackets(h);
+                        if !h.is_empty() {
+                            p.host = Some(h.to_string());
                         }
                         p.port = port.trim().parse::<u16>().ok();
                     }
                     None => {
-                        if !s.trim().is_empty() {
-                            p.host = Some(s.trim().to_string());
+                        let h = strip_host_brackets(s);
+                        if !h.is_empty() {
+                            p.host = Some(h.to_string());
                         }
                     }
                 }

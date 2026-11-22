@@ -82,6 +82,7 @@ import { snapshotFileName } from "./compareModel";
 import Select from "./ui/Select";
 import { buildExplainJsonSql, explainStatements, parseExplainPlan, parseMssqlShowplan, parseSqlitePlan, planSummary, type PlanNode } from "./explain";
 import { lintSql, MAX_SQL_CHARS as LINT_MAX_CHARS, type LintFinding, type LintSeverity } from "./sqlLint";
+import { effectiveRedisDb } from "./redisUiFormat";
 import { buildReviewPrompt, buildTunePrompt, collectSchemaContext } from "./aiReview";
 import {
   buildCommentPrompt, buildConvertPrompt, buildExplainPlanPrompt, buildExplainPrompt,
@@ -3182,7 +3183,8 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
               ...(connectedIds.has(menu.id) && menuConn.kind === "redis"
                 ? [
                     [t("伺服器狀態"), () => setStatus({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
-                    [t("命令列"), () => setConsole({ id: menuConn.id, name: menuConn.name, db: "0" }), false] as [string, () => void, boolean],
+                    // 主控台預設落在連線設定的 DB 索引（以前寫死 0，設了 database=2 也從 0 開始）。
+                    [t("命令列"), () => setConsole({ id: menuConn.id, name: menuConn.name, db: effectiveRedisDb(menuConn.database, databases[menuConn.id] ?? []) }), false] as [string, () => void, boolean],
                     // 連線層沒有「目前 DB」概念，大鍵掃描一律對 DB 0（要看別的 DB 從該 DB 節點右鍵進）。
                     [t("維運面板（慢查詢 / 用戶端 / 大鍵）…"), () => setRedisOps({ id: menuConn.id, name: menuConn.name, db: menuConn.database || "0" }), false] as [string, () => void, boolean],
                     [t("Pub/Sub…"), () => setPubSub({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],

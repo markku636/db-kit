@@ -620,6 +620,28 @@ mod tests {
         assert_eq!(p.database.as_deref(), Some("mydb"));
     }
 
+    #[test]
+    fn ado_bracketed_ipv6_host_loses_brackets() {
+        let p = parse("Server=tcp:[::1],1433;Database=d");
+        assert_eq!(p.host.as_deref(), Some("::1"));
+        assert_eq!(p.port, Some(1433));
+        assert_eq!(p.database.as_deref(), Some("d"));
+        let p2 = parse("Server=[::1];Database=d");
+        assert_eq!(p2.host.as_deref(), Some("::1"));
+    }
+
+    #[test]
+    fn ado_quoted_password_with_semicolon_survives() {
+        // ADO.NET 合法寫法：Password='p;a$$'。以前直接 s.split(';') 會把密碼切成
+        // "p" 與一個沒有 `=` 的垃圾段 "a$$'"，登入當然失敗。
+        let p = parse("Server=db01;Database=app;User ID=sa;Password='p;a$$';Encrypt=true");
+        assert_eq!(p.host.as_deref(), Some("db01"));
+        assert_eq!(p.database.as_deref(), Some("app"));
+        assert_eq!(p.username.as_deref(), Some("sa"));
+        assert_eq!(p.password.as_deref(), Some("p;a$$"));
+        assert_eq!(opt(&p, "encrypt"), Some("true"));
+    }
+
     // ---- 誤判防呆 ----
 
     #[test]

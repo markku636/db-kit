@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUptime, compareSegments } from "./redisUiFormat";
+import { fmtUptime, compareSegments, effectiveRedisDb } from "./redisUiFormat";
 
 describe("fmtUptime", () => {
   it("不到一分鐘顯示秒數，不再顯示 0m", () => {
@@ -16,6 +16,15 @@ describe("fmtUptime", () => {
     expect(fmtUptime(undefined)).toBe("—");
     expect(fmtUptime("0")).toBe("—");
     expect(fmtUptime("abc")).toBe("—");
+  });
+});
+
+describe("effectiveRedisDb", () => {
+  it("用連線設定的 DB 索引，沒設定或不在清單裡退回第一個", () => {
+    expect(effectiveRedisDb("2", ["0", "1", "2"])).toBe("2");
+    expect(effectiveRedisDb("9", ["0", "1", "2"])).toBe("0");
+    expect(effectiveRedisDb(null, ["0", "3"])).toBe("0");
+    expect(effectiveRedisDb("", [])).toBe("0");
   });
 });
 

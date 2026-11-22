@@ -64,7 +64,7 @@ pub(super) fn parse(kind: Option<DbKind>, flags: SchemeFlags, rest: String) -> P
             .filter(|(_, params)| params.contains('='))
             .map(|(head, params)| (head.to_string(), params.to_string()))
         {
-            kv::apply_ado_pairs(&mut p, params.split(';'));
+            kv::apply_ado_pairs(&mut p, kv::ado_pairs(&params).into_iter());
             hostport = head;
         }
     }

@@ -1294,6 +1294,8 @@ fn mssql_target(host_field: &str, port: u16) -> MssqlTarget {
         Some((h, _)) => (h.trim(), None),
         None => (s.trim(), None),
     };
+    // ADO.NET / 管理員手填的 IPv6 常寫成 `[::1]`；tiberius 要的是 `::1`。
+    let h = h.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(h);
     let host = match h.to_ascii_lowercase().as_str() {
         "" | "." | "(local)" => "localhost".to_string(),
         _ => h.to_string(),
@@ -1883,6 +1885,8 @@ SELECT SCOPE_IDENTITY()"));
         assert_eq!((a.host.as_str(), a.port, a.instance), ("x.database.windows.net", 1433, None));
         // 結尾多一個反斜線不當成執行個體。
         assert_eq!(t(r"db01\", 1433).instance, None);
+        // IPv6 的方括號是 ADO.NET / 手填常見寫法，驅動要的是裸位址。
+        assert_eq!(t("[::1]", 1433).host, "::1");
     }
 
     #[test]
