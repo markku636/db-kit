@@ -872,6 +872,7 @@ const en: Catalog = {
   "已建立主題 {name}": "Created topic {name}",
   "已建立連接器 {name}": "Created connector {name}",
   "已建立鍵 {name}": "Created key {name}",
+  "已建立鍵 {name}，但設定 TTL 失敗：{msg}。請到鍵詳情設定 TTL。": "Created key {name}, but setting the TTL failed: {msg}. Set the TTL from the key detail view.",
   "已建立鍵 {name}（TTL {ttlSecs} 秒）": "Created key {name} (TTL {ttlSecs}s)",
   "已恢復": "Resumed",
   "已是最新版本": "Already up to date",

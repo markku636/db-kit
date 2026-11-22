@@ -108,6 +108,7 @@ import {
   buildInClause,
   transformKeywordCase,
   mergeSnippets,
+  snippetBodyForKind,
   upsertSnippet,
   removeSnippet,
   loadSnippets,
@@ -1404,6 +1405,10 @@ describe("transformKeywordCase（關鍵字大小寫）", () => {
     expect(transformKeywordCase("select `from` from `order`", true))
       .toBe("SELECT `from` FROM `order`");
   });
+  it("SQL Server [方括號識別字] 內的關鍵字也不動", () => {
+    expect(transformKeywordCase("select [from], [Order] from [select]", true))
+      .toBe("SELECT [from], [Order] FROM [select]");
+  });
   it("非關鍵字（型別名 / 一般欄名）不動", () => {
     // date / text 不在關鍵字集合 → 保持原樣，避免誤改欄名。
     expect(transformKeywordCase("select date, text from t", true))
@@ -1419,6 +1424,9 @@ describe("minifySql", () => {
     expect(minifySql("SELECT '  a  b  '\nFROM t")).toBe("SELECT '  a  b  ' FROM t");
     expect(minifySql("-- hi\nSELECT 1")).toBe("SELECT 1");
     expect(minifySql("SELECT 1 -- trailing\nFROM t")).toBe("SELECT 1 FROM t");
+  });
+  it("[方括號識別字] 裡的 -- 不是註解，不能被 minify 吃掉", () => {
+    expect(minifySql("SELECT [a--b]\nFROM t")).toBe("SELECT [a--b] FROM t");
   });
   it("區塊註解保留", () => {
     expect(minifySql("SELECT /* keep */ 1\nFROM t")).toBe("SELECT /* keep */ 1 FROM t");
@@ -1486,6 +1494,16 @@ describe("isWriteStatement（唯讀攔截）", () => {
     expect(isWriteStatement("ALTER TABLE t ADD c int")).toBe(true);
     expect(isWriteStatement("CREATE TABLE t (id int)")).toBe(true);
   });
+  it("SQL Server 的 EXEC / 省略 EXEC 的程序呼叫在唯讀模式下也要擋下", () => {
+    expect(isWriteStatement("EXEC dbo.usp_delete_all")).toBe(true);
+    expect(isWriteStatement("execute sp_executesql N'DROP TABLE t'")).toBe(true);
+    expect(isWriteStatement("dbo.usp_purge 2024", "mssql")).toBe(true);
+    expect(isWriteStatement("sp_who2", "mssql")).toBe(true);
+    // 其他方言的普通識別字開頭不是程序呼叫（例如 MySQL 的遊標宣告），不要誤擋。
+    expect(isWriteStatement("dbo.usp_purge 2024")).toBe(false);
+    expect(isWriteStatement("SELECT * FROM t", "mssql")).toBe(false);
+    expect(isWriteStatement("DECLARE @id int = 1; SELECT @id", "mssql")).toBe(false);
+  });
   it("略過開頭註解後判斷", () => {
     expect(isWriteStatement("-- comment\nDELETE FROM t")).toBe(true);
     expect(isWriteStatement("/* x */ SELECT 1")).toBe(false);
@@ -1545,6 +1563,18 @@ describe("buildInClause（Copy as IN）", () => {
 });
 
 describe("SQL 片段庫（Snippets）", () => {
+  it("SQL Server 展開片段時把 LIMIT 改寫成 TOP / OFFSET FETCH", () => {
+    expect(snippetBodyForKind("mssql", "SELECT *\nFROM table_name\nLIMIT 100;")).toBe(
+      "SELECT TOP (100) *\nFROM table_name;",
+    );
+    expect(snippetBodyForKind("mssql", "SELECT *\nFROM table_name\nORDER BY id\nLIMIT 50 OFFSET 10;")).toBe(
+      "SELECT *\nFROM table_name\nORDER BY id\nOFFSET 10 ROWS FETCH NEXT 50 ROWS ONLY;",
+    );
+    // 其他方言與沒有限制的片段原樣回傳。
+    expect(snippetBodyForKind("mysql", "SELECT *\nFROM t\nLIMIT 100;")).toBe("SELECT *\nFROM t\nLIMIT 100;");
+    expect(snippetBodyForKind("mssql", "SELECT COUNT(*) FROM t;")).toBe("SELECT COUNT(*) FROM t;");
+  });
+
   it("mergeSnippets：使用者同名覆蓋內建、其餘內建保留、依名稱排序、標記 builtin", () => {
     const merged = mergeSnippets([{ name: "count", body: "MY COUNT" }, { name: "zzz", body: "Z" }]);
     const count = merged.find((s) => s.name === "count")!;

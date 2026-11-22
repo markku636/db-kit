@@ -35,6 +35,9 @@ export default function NewKeyDialog({ connId, database, initialName = "", onClo
 
   const submit = async () => {
     if (!name.trim()) { setErr(t("請輸入鍵名")); return; }
+    // 驗證用 trim 過的名字，寫入也必須用同一個：貼上時帶到頭尾空白以前會建立出
+    // 「 user:1 」這種鍵，樹上找不到、主控台也查不到，看起來像新增失敗。
+    const keyName = name.trim();
     const ttlSecs = ttl.trim() ? Number(ttl.trim()) : null;
     if (ttlSecs !== null && (!Number.isInteger(ttlSecs) || ttlSecs <= 0)) {
       setErr(t("TTL 需為正整數秒數（留白表示不過期）"));
@@ -49,50 +52,59 @@ export default function NewKeyDialog({ connId, database, initialName = "", onClo
     try {
       // 「新增」不可以動到既有的鍵：list / set / hash / zset / stream 的寫入指令遇到同名鍵會直接把元素加進去
       //（型別不同則報 WRONGTYPE），使用者以為建了新鍵、其實改到了別人的資料。string 由後端 SET NX 擋。
-      const existing = await api.redisKeyPage(connId, database, name, 0, 1, "").catch(() => null);
+      const existing = await api.redisKeyPage(connId, database, keyName, 0, 1, "").catch(() => null);
       if (existing && existing.type_ !== "none") {
-        setErr(t("鍵「{name}」已存在（{type}），為避免改到既有資料已取消。要修改請直接開啟該鍵。", { name, type: existing.type_ }));
+        setErr(t("鍵「{name}」已存在（{type}），為避免改到既有資料已取消。要修改請直接開啟該鍵。", { name: keyName, type: existing.type_ }));
         return;
       }
       switch (type) {
         case "string":
           await api.insertRow(connId, database, "keys", {
             columns: ["key", "value"],
-            values: [name, value],
+            values: [keyName, value],
           });
           break;
         case "list":
-          await api.keyEdit(connId, database, name, { action: "list_push", value, front: false });
+          await api.keyEdit(connId, database, keyName, { action: "list_push", value, front: false });
           break;
         case "set":
-          await api.keyEdit(connId, database, name, { action: "set_add", member: value });
+          await api.keyEdit(connId, database, keyName, { action: "set_add", member: value });
           break;
         case "hash":
-          await api.keyEdit(connId, database, name, { action: "hash_set", field, value });
+          await api.keyEdit(connId, database, keyName, { action: "hash_set", field, value });
           break;
         case "stream":
           // 第一筆項目的 ID 由 Redis 自動產生（XADD *）。
-          await api.keyEdit(connId, database, name, { action: "stream_add", fields: [[field, value]] });
+          await api.keyEdit(connId, database, keyName, { action: "stream_add", fields: [[field, value]] });
           break;
         case "zset": {
           const s = Number(score);
           if (!Number.isFinite(s)) { setErr(t("score 必須為數字")); setBusy(false); return; }
-          await api.keyEdit(connId, database, name, { action: "zset_add", member: value, score: s });
+          await api.keyEdit(connId, database, keyName, { action: "zset_add", member: value, score: s });
           break;
         }
       }
       if (ttlSecs !== null) {
-        await api.updateCell(connId, database, "keys", {
-          column: "ttl",
-          new_value: String(ttlSecs),
-          pk_columns: ["key"],
-          pk_values: [name],
-        });
+        try {
+          await api.updateCell(connId, database, "keys", {
+            column: "ttl",
+            new_value: String(ttlSecs),
+            pk_columns: ["key"],
+            pk_values: [keyName],
+          });
+        } catch (e: any) {
+          // 鍵已經建立成功了：留在對話框說失敗，再按一次又會被「鍵已存在」擋住。
+          // 直接關閉並明確告知 TTL 沒設上，使用者可到鍵詳情補設。
+          toast.error(t("已建立鍵 {name}，但設定 TTL 失敗：{msg}。請到鍵詳情設定 TTL。", { name: keyName, msg: e?.message ?? t("未知錯誤") }));
+          onCreated();
+          onClose();
+          return;
+        }
       }
       toast.success(
         ttlSecs !== null
-          ? t("已建立鍵 {name}（TTL {ttlSecs} 秒）", { name, ttlSecs })
-          : t("已建立鍵 {name}", { name }),
+          ? t("已建立鍵 {name}（TTL {ttlSecs} 秒）", { name: keyName, ttlSecs })
+          : t("已建立鍵 {name}", { name: keyName }),
       );
       onCreated();
       onClose();

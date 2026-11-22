@@ -95,14 +95,14 @@ export function classifyForRun(
 
   // 唯讀是硬擋不是確認：使用者把連線設成唯讀，就是明講「這條連線上我不打算寫東西」。
   // 給一個「仍要執行」按鈕等於把那個設定退化成裝飾品。
-  if (opts.readonly && scanned.some((s) => isWriteStatement(s))) return { ok: false, reason: "readonly" };
+  if (opts.readonly && scanned.some((s) => isWriteStatement(s, kind))) return { ok: false, reason: "readonly" };
 
   // 由重到輕排：呼叫端照順序跳確認，最嚴重的那道要先出現，使用者才不會在連按兩次 Enter 之後
   // 才看到「這是正式環境」。以固定順序的布林組出來，天生不會重複、也不需要再去重。
   const confirm: Array<"prod" | "danger" | "write"> = [];
   if (opts.prod) confirm.push("prod");
   if (scanned.some((s) => isDangerousStatement(s))) confirm.push("danger");
-  if (scanned.some((s) => isWriteStatement(s))) confirm.push("write");
+  if (scanned.some((s) => isWriteStatement(s, kind))) confirm.push("write");
 
   return { ok: true, statements, confirm };
 }

@@ -4,6 +4,7 @@ import { api, ServerInfoSection } from "./api";
 import Icon from "./ui/Icon";
 import { Modal } from "./ui/index";
 import { useT } from "./i18n";
+import { fmtUptime } from "./redisUiFormat";
 
 // Redis 伺服器狀態面板：仿 Another Redis Desktop Manager 的 Status 分頁。
 // 上方為重點指標卡片，下方為 INFO 全分區明細；可開關自動刷新（預設每 2 秒）。
@@ -139,17 +140,6 @@ export default function RedisStatus({ connId, connName, onClose }: {
       )}
     </Modal>
   );
-}
-
-function fmtUptime(secsStr?: string): string {
-  const secs = Number(secsStr);
-  if (!Number.isFinite(secs) || secs <= 0) return "—";
-  const d = Math.floor(secs / 86400);
-  const h = Math.floor((secs % 86400) / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
 }
 
 function fmtNum(s?: string): string {

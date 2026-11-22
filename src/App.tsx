@@ -75,7 +75,7 @@ import {
   buildTableMaintenance, buildInsertAllRows, tableSizesSql,
   buildDeleteAllRows, buildInsertValues, buildGrantTemplate,
   formatSql, minifySql, transformKeywordCase, buildUseDatabase, hasExecutableSql,
-  extractNamedParams, substituteNamedParams, paramLabel, isInternalKafkaTopic, suggestQueryName, buildCellUpdate,
+  extractNamedParams, substituteNamedParams, paramLabel, isInternalKafkaTopic, suggestQueryName, buildCellUpdate, snippetBodyForKind,
 } from "./sql";
 import type { SavedQuery } from "./sql";
 import { snapshotFileName } from "./compareModel";
@@ -5217,7 +5217,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         }
         // 唯讀連線：擋下任何寫入 / DDL 語句（INSERT/UPDATE/DELETE/CREATE/ALTER/DROP… 與交易控制）。
         const roState = useStore.getState();
-        if (isSqlLike && roState.activeId && roState.readonlyConns[roState.activeId] === true && scanStatements.some((s) => isWriteStatement(s))) {
+        if (isSqlLike && roState.activeId && roState.readonlyConns[roState.activeId] === true && scanStatements.some((s) => isWriteStatement(s, kind ?? undefined))) {
           toast.error(t("此連線為唯讀，已擋下寫入 / DDL 語句。可在連線右鍵關閉「唯讀模式」。"));
           return;
         }
@@ -5505,8 +5505,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
 
   // 片段：傳給編輯器的精簡形（穩定 identity，避免每次 render 重建編輯器 extensions）。
   const editorSnippets = useMemo(
-    () => snippets.map((s) => ({ name: s.name, body: s.body, desc: s.desc })),
-    [snippets],
+    () => snippets.map((s) => ({ name: s.name, body: snippetBodyForKind(kind ?? "mysql", s.body), desc: s.desc })),
+    [snippets, kind],
   );
   // 插入片段到游標處（編輯器）；非 SQL 連線則退而附加到結尾。
   const insertSnippet = (body: string) => {
@@ -6189,7 +6189,7 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                       </div>
                       {snippets.map((s) => (
                         <div key={s.name} className="group flex items-start hover:bg-fg/10">
-                          <button type="button" onClick={() => insertSnippet(s.body)} title={s.body}
+                          <button type="button" onClick={() => insertSnippet(snippetBodyForKind(kind ?? "mysql", s.body))} title={s.body}
                             className="flex-1 text-left px-3 py-1.5 min-w-0">
                             <div className="flex items-center gap-1.5 text-xs">
                               <Icon icon={FileCode2} size={12} className="text-sky-300 shrink-0" />

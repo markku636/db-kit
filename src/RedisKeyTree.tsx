@@ -3,6 +3,7 @@ import { ChevronRight, Folder, KeyRound, Circle } from "lucide-react";
 import { api } from "./api";
 import Icon from "./ui/Icon";
 import { useT } from "./i18n";
+import { compareSegments } from "./redisUiFormat";
 
 export const REDIS_TREE_LIMIT = 10000;
 const LIMIT = REDIS_TREE_LIMIT;
@@ -51,7 +52,7 @@ function buildTree(keys: string[]): TNode {
 
 function flatten(root: TNode, expanded: Set<string>): Row[] {
   const rows: Row[] = [];
-  const sorted = (n: TNode) => [...n.children.values()].sort((a, b) => a.seg.localeCompare(b.seg));
+  const sorted = (n: TNode) => [...n.children.values()].sort((a, b) => compareSegments(a.seg, b.seg));
   const walk = (node: TNode, depth: number) => {
     for (const child of sorted(node)) {
       if (child.children.size > 0) {

@@ -864,6 +864,7 @@ const zhCN: Catalog = {
   "已建立主題 {name}": "已创建主题 {name}",
   "已建立連接器 {name}": "已创建连接器 {name}",
   "已建立鍵 {name}": "已创建键 {name}",
+  "已建立鍵 {name}，但設定 TTL 失敗：{msg}。請到鍵詳情設定 TTL。": "已创建键 {name}，但设置 TTL 失败：{msg}。请到键详情设置 TTL。",
   "已建立鍵 {name}（TTL {ttlSecs} 秒）": "已创建键 {name}（TTL {ttlSecs} 秒）",
   "已恢復": "已恢复",
   "已是最新版本": "已是最新版本",

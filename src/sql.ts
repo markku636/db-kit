@@ -910,6 +910,12 @@ function sqlCodeSegments(sql: string): { code: boolean; v: string }[] {
       while (j < n) { if (sql[j] === ch) { if (sql[j + 1] === ch) { j += 2; continue; } j++; break; } j++; }
       segs.push({ code: false, v: sql.slice(i, j) }); i = j; continue;
     }
+    // SQL Server [方括號識別字]：裡面的 -- / ; / 關鍵字都不是程式碼，
+    // minify / 關鍵字大小寫 / 參數代入都不能動它（與 stripCode 共用同一套規則）。
+    if (ch === "[") {
+      const close = bracketIdentClose(sql, i);
+      if (close !== -1) { flush(); segs.push({ code: false, v: sql.slice(i, close + 1) }); i = close + 1; continue; }
+    }
     if (two === "--") { flush(); let j = i; while (j < n && sql[j] !== "\n") j++; segs.push({ code: false, v: sql.slice(i, j) }); i = j; continue; }
     if (two === "/*") { flush(); let j = i + 2; while (j < n && sql.slice(j, j + 2) !== "*/") j++; j = Math.min(n, j + 2); segs.push({ code: false, v: sql.slice(i, j) }); i = j; continue; }
     if (two === "$$") { flush(); let j = i + 2; while (j < n && sql.slice(j, j + 2) !== "$$") j++; j = Math.min(n, j + 2); segs.push({ code: false, v: sql.slice(i, j) }); i = j; continue; }
@@ -1040,12 +1046,17 @@ export function hasLeadingDbSwitch(sql: string): boolean {
 
 // 是否為「寫入 / DDL」語句（供唯讀連線攔截）。略過開頭的空白 / 行 / 區塊註解後，
 // 檢查第一個關鍵字是否為會改動資料 / 結構者。SELECT / SHOW / EXPLAIN / WITH(…SELECT) 等視為唯讀。
-export function isWriteStatement(sql: string): boolean {
+export function isWriteStatement(sql: string, kind?: DbKind): boolean {
   const s = stripLeadingComments(sql);
+  if (!s) return false;
   // PostgreSQL 可寫 CTE：`WITH x AS (DELETE/UPDATE/INSERT …) …` 起始為 WITH，第一關鍵字看不出寫入。
   // 唯讀守門寧可多擋：起始為 WITH 且含寫入字樣即視為寫入。
   if (/^with\b/i.test(s)) return /\b(insert|update|delete|merge)\b/i.test(s);
-  return /^(insert|update|delete|replace|merge|upsert|create|alter|drop|truncate|rename|grant|revoke|comment|call|do|set|lock|begin|start|commit|rollback|savepoint|vacuum|reindex|cluster|copy|load|import)\b/i.test(s);
+  if (/^(insert|update|delete|replace|merge|upsert|create|alter|drop|truncate|rename|grant|revoke|deny|allow|comment|call|do|set|lock|begin|start|commit|rollback|savepoint|vacuum|reindex|cluster|copy|load|import|exec|execute|kill|backup|restore|dbcc|shutdown|reconfigure)\b/i.test(s)) return true;
+  // SQL Server 容許省略 EXEC：`dbo.usp_purge 2024`、`sp_who2` 都可能寫資料（含 sp_executesql）。
+  // 唯讀模式下與其漏擋，不如把「不是明確唯讀開頭」的 MSSQL 批次一律當寫入。
+  if (kind === "mssql" && !/^(select|with|show|describe|desc|explain|values|print|declare|if|while|begin|set|use|goto)\b/i.test(s)) return true;
+  return false;
 }
 
 // 把建構的查詢包成 `SELECT COUNT(*) … FROM (<查詢>) _sub`，用以得知「這查詢會回多少列」。
@@ -1293,6 +1304,20 @@ export const BUILTIN_SNIPPETS: SqlSnippet[] = [
   { name: "case", body: "SELECT\n  CASE\n    WHEN condition1 THEN 'A'\n    WHEN condition2 THEN 'B'\n    ELSE 'C'\n  END AS label\nFROM table_name;", desc: "CASE WHEN 條件分類" },
   { name: "paginate", body: "SELECT *\nFROM table_name\nORDER BY id\nLIMIT 50 OFFSET 0;", desc: "分頁（LIMIT/OFFSET）" },
 ];
+
+// 內建片段的 body 以 MySQL/PG 的 LIMIT 寫；SQL Server 不認 LIMIT，展開時改寫成 TOP / OFFSET FETCH。
+// 只處理標準形式（LIMIT n / LIMIT n OFFSET m），自訂片段沒有限制就原樣回傳。
+export function snippetBodyForKind(kind: DbKind, body: string): string {
+  if (kind !== "mssql" || !/\bLIMIT\s+\d+/i.test(body)) return body;
+  const off = /\bLIMIT\s+(\d+)\s+OFFSET\s+(\d+)\s*;?/i.exec(body);
+  if (off) {
+    return body.replace(off[0], `OFFSET ${off[2]} ROWS FETCH NEXT ${off[1]} ROWS ONLY;`);
+  }
+  const lim = /\bLIMIT\s+(\d+)\s*;?/i.exec(body);
+  if (!lim) return body;
+  const head = body.slice(0, lim.index).replace(/^(\s*)SELECT\b/i, `$1SELECT TOP (${lim[1]})`);
+  return `${head.trimEnd()};`;
+}
 
 // 純函式：合併使用者片段與內建（同名以使用者為準），依名稱排序。供單元測試。
 export function mergeSnippets(user: SqlSnippet[]): SqlSnippet[] {
