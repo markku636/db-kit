@@ -1131,7 +1131,23 @@ async fn run_on(conn: &mut bb8_tiberius::rt::Client, sql: &str, mode: RunMode) -
     match mode {
         RunMode::Exec => {
             let res = conn.execute(sql, &[]).await.map_err(qerr)?;
-            Ok(RunOut::Exec(res.rows_affected().iter().sum()))
+            let mut count: u64 = res.rows_affected().iter().sum();
+            // `SET NOCOUNT ON; UPDATE …` 是常見的 T-SQL 寫法，Server 不回 DONE 計數，
+            // tiberius 的 rows_affected() 是空的 → 明明改了資料卻顯示「影響 0 列」。
+            // 同一條連線補問一次 @@ROWCOUNT，並把串流讀完避免 TDS 狀態污染連線池。
+            if count == 0 && needs_rowcount_fallback(sql) {
+                match conn.query("SELECT @@ROWCOUNT", &[]).await {
+                    Ok(mut stream) => {
+                        while let Ok(Some(item)) = stream.try_next().await {
+                            if let tiberius::QueryItem::Row(row) = item {
+                                count = row.get::<i32, _>(0).unwrap_or(0).max(0) as u64;
+                            }
+                        }
+                    }
+                    Err(_) => {} // 補問失敗就照原本的 0 回報，不讓寫入本身被當成失敗
+                }
+            }
+            Ok(RunOut::Exec(count))
         }
         RunMode::FirstSet(cap) => {
             let mut stream = conn.query(sql, &[]).await.map_err(qerr)?;
@@ -1591,6 +1607,17 @@ fn is_proc_call_head(tok: &str) -> bool {
     (first.is_ascii_alphabetic() || first == b'_' || first >= 0x80) && !STATEMENT_HEADS.contains(&tok)
 }
 
+/// NOCOUNT ON 的批次要補問 @@ROWCOUNT：Server 不回 DONE 計數，execute 會得到空陣列。
+fn needs_rowcount_fallback(sql: &str) -> bool {
+    let code = tsql_code_only(sql);
+    let toks = tsql_tokens(&code);
+    let has_nocount = toks.iter().any(|t| t.eq_ignore_ascii_case("nocount"));
+    let has_dml = toks.iter().any(|t| {
+        matches!(t.to_ascii_lowercase().as_str(), "insert" | "update" | "delete" | "merge")
+    });
+    has_nocount && has_dml
+}
+
 /// `tsql_code_only` 之後的 T-SQL 粗切詞：字詞（含 `@` `#` `_` `$`）與 `(` `)` `;` 各成一個 token，其餘略過。
 fn tsql_tokens(code: &str) -> Vec<&str> {
     let mut out = Vec::new();
@@ -1887,6 +1914,16 @@ SELECT SCOPE_IDENTITY()"));
         assert_eq!(t(r"db01\", 1433).instance, None);
         // IPv6 的方括號是 ADO.NET / 手填常見寫法，驅動要的是裸位址。
         assert_eq!(t("[::1]", 1433).host, "::1");
+    }
+
+    #[test]
+    fn needs_rowcount_fallback_only_for_nocount_dml() {
+        assert!(needs_rowcount_fallback("SET NOCOUNT ON; UPDATE t SET a = 1"));
+        assert!(needs_rowcount_fallback("set nocount on; DELETE FROM t WHERE id = 1"));
+        assert!(needs_rowcount_fallback("SET NOCOUNT ON\nINSERT INTO t VALUES (1)"));
+        // 一般寫入有 DONE 計數，不需要多問一次；只有 NOCOUNT 沒有 DML 也沒意義。
+        assert!(!needs_rowcount_fallback("UPDATE t SET a = 1"));
+        assert!(!needs_rowcount_fallback("SET NOCOUNT ON; SELECT 1"));
     }
 
     #[test]

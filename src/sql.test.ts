@@ -975,6 +975,10 @@ describe("isDangerousStatement", () => {
     expect(isDangerousStatement("UPDATE t SET a = 1")).toBe(true);
     expect(isDangerousStatement("TRUNCATE TABLE t")).toBe(true);
   });
+  it("MERGE 一律先確認（ON 1=1 一樣能清空整張表）", () => {
+    expect(isDangerousStatement("MERGE INTO t USING s ON 1=1 WHEN MATCHED THEN DELETE")).toBe(true);
+    expect(isDangerousStatement("merge into t using s on t.id=s.id when matched then update set a=1")).toBe(true);
+  });
   it("allows statements with a real WHERE, and non-mutating statements", () => {
     expect(isDangerousStatement("DELETE FROM t WHERE id = 1")).toBe(false);
     expect(isDangerousStatement("UPDATE t SET a = 1 WHERE id = 2")).toBe(false);

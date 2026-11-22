@@ -1952,7 +1952,7 @@ const zhCN: Catalog = {
   "側欄群組歸屬": "侧边栏群组归属",
   "偵測工具中…": "侦测工具中…",
   "偵測中…": "侦测中…",
-  "偵測到 {dangerCount} 條無 WHERE 的 UPDATE / DELETE 或 TRUNCATE，將影響整張表的所有資料列。確定執行？": "侦测到 {dangerCount} 条无 WHERE 的 UPDATE / DELETE 或 TRUNCATE，将影响整张表的所有数据行。确定执行？",
+  "偵測到 {dangerCount} 條高風險語句（無 WHERE 的 UPDATE / DELETE、MERGE 或 TRUNCATE），將影響整張表的所有資料列。確定執行？": "侦测到 {dangerCount} 条高风险语句（无 WHERE 的 UPDATE / DELETE、MERGE 或 TRUNCATE），将影响整张表的所有数据行。确定执行？",
   "偵測到 {n} 個具名參數：{names}": "侦测到 {n} 个具名参数：{names}",
   "副本": "副本",
   "區分大小寫": "区分大小写",

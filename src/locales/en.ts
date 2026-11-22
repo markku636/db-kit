@@ -1960,7 +1960,7 @@ const en: Catalog = {
   "側欄群組歸屬": "Sidebar group assignment",
   "偵測工具中…": "Detecting tool…",
   "偵測中…": "Detecting…",
-  "偵測到 {dangerCount} 條無 WHERE 的 UPDATE / DELETE 或 TRUNCATE，將影響整張表的所有資料列。確定執行？": "Detected {dangerCount} UPDATE / DELETE without WHERE or TRUNCATE statement(s) that will affect every row in the table. Execute?",
+  "偵測到 {dangerCount} 條高風險語句（無 WHERE 的 UPDATE / DELETE、MERGE 或 TRUNCATE），將影響整張表的所有資料列。確定執行？": "Detected {dangerCount} high-risk statement(s) (UPDATE / DELETE without WHERE, MERGE, or TRUNCATE) that can affect every row in the table. Execute?",
   "偵測到 {n} 個具名參數：{names}": { one: "Detected {n} named parameter: {names}", other: "Detected {n} named parameters: {names}" },
   "副本": "Replicas",
   "區分大小寫": "Case sensitive",

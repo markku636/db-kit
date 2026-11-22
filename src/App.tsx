@@ -5250,12 +5250,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
           );
           if (!ok) return;
         }
-        // 防手滑：無 WHERE 的 UPDATE/DELETE 或 TRUNCATE 會影響整張表，先確認（external 亦講 MySQL，需納入）。
+        // 防手滑：無 WHERE 的 UPDATE/DELETE、MERGE 或 TRUNCATE 會影響整張表，先確認（external 亦講 MySQL，需納入）。
         // 同樣掃切分後的版本（見上）：external 整批只會算出 0 或 1，第二條之後的 TRUNCATE 數不到。
         const dangerCount = isSqlLike ? scanStatements.filter((s) => isDangerousStatement(s)).length : 0;
         if (dangerCount > 0) {
           const ok = await uiConfirm(
-            t("偵測到 {dangerCount} 條無 WHERE 的 UPDATE / DELETE 或 TRUNCATE，將影響整張表的所有資料列。確定執行？", { dangerCount }),
+            t("偵測到 {dangerCount} 條高風險語句（無 WHERE 的 UPDATE / DELETE、MERGE 或 TRUNCATE），將影響整張表的所有資料列。確定執行？", { dangerCount }),
             { title: t("危險操作確認"), danger: true, confirmText: t("仍要執行") },
           );
           if (!ok) return; // finally 會還原 running 狀態

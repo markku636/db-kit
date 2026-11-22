@@ -1596,6 +1596,9 @@ export function isDangerousStatement(sql: string): boolean {
   // WHERE 只計頂層（去掉子查詢括號）——否則 UPDATE t SET a=(SELECT…WHERE…) 會被誤判為安全卻其實改全表。
   // 反向不會誤報：真正的頂層 WHERE 子句永遠不在括號內，去括號後仍在。
   if (/^(update|delete)\b/.test(code) && !/\bwhere\b/.test(stripParens(code))) return true;
+  // MERGE 的 ON 子句永遠存在，但 ON 1=1 / 不符合條件的 WHEN 一樣能把整張表改掉或清空；
+  // 它的破壞力與無 WHERE 的 UPDATE 相當，一律先確認（SQL Server 尤其常用）。
+  if (/^merge\b/.test(code)) return true;
   return false;
 }
 
