@@ -502,3 +502,7 @@ option {
   color: rgb(var(--c-accent)); background: rgb(var(--c-accent) / 0.08);
 }
 .dbk-merge .cm-merge-revert .dbk-merge-ctl button:hover { background: rgb(var(--c-accent) / 0.22); }
+
+/* 資料格紧凑模式：減少上下 padding，讓一頁看到更多列（列高由 useVirtualRows 重新量測）。 */
+.density-compact table th,
+.density-compact table td { padding-top: 2px !important; padding-bottom: 2px !important; }

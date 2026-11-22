@@ -3,7 +3,7 @@ import {
   ListTree, Table2, Plus, Minus, BarChart3, Network, Settings, Terminal, Activity,
   RefreshCw, Search, Filter, Trash2, ArrowUpDown, Download, Upload, X, Check,
   ArrowUp, ArrowDown, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight,
-  Copy, Pencil, Columns3,
+  Copy, Pencil, Columns3, Rows3,
 } from "lucide-react";
 import Icon from "./ui/Icon";
 import { Button, EmptyState, MenuPanel, ModalViewControls, Segmented, useModalView } from "./ui/index";
@@ -25,6 +25,7 @@ import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, bu
 import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRedisKeyExport, mergeRedisKeyExports } from "./redisKeyValueFormat";
 import { isBinaryColumnType, isReadOnlyColumnExtra } from "./columnMeta";
 import { fmtRedisTtl, hasBinaryKeyEscape, remainingTtl } from "./redisUiFormat";
+import { loadFilterPresets, recordFilterPreset, type FilterPreset } from "./filterPresets";
 import { loadRedisSeparator, redisNamespacePattern, redisNamespacePrefix } from "./redisTree";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree, { REDIS_TREE_LIMIT } from "./RedisKeyTree";
@@ -178,6 +179,16 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const [showFilter, setShowFilter] = useState(false);
   // 即時尋找（client-side，標示目前頁符合的儲存格）
   const [find, setFind] = useState("");
+  // 列密度（緊湊／舒適）：全域偏好，只改 padding，列高由 useVirtualRows 重新量測。
+  const [density, setDensity] = useState<"comfortable" | "compact">(() => {
+    try { return localStorage.getItem("dbkit:gridDensity") === "compact" ? "compact" : "comfortable"; }
+    catch { return "comfortable"; }
+  });
+  const toggleDensity = () => {
+    const next = density === "compact" ? "comfortable" : "compact";
+    setDensity(next);
+    try { localStorage.setItem("dbkit:gridDensity", next); } catch { /* 忽略 */ }
+  };
   const [showFind, setShowFind] = useState(false);
 
   // 新增列 / 匯出 / 匯入對話框
@@ -1621,6 +1632,13 @@ function DataPane({ tab }: { tab: OpenTab }) {
           <Icon icon={Search} size={14} /> {t("尋找")}
         </button>
         <button
+          onClick={toggleDensity}
+          title={t("切換列密度（緊湊／舒適）")}
+          className={`px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap ${density === "compact" ? "text-accent" : "text-fg/50"}`}
+        >
+          <Icon icon={Rows3} size={14} />
+        </button>
+        <button
           onClick={() => setShowFilter((s) => !s)}
           className={`px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap inline-flex items-center gap-1 ${
             filters.length ? "text-amber-300" : "text-fg/50"
@@ -1721,6 +1739,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           columns={data.columns}
           filters={filters}
           matchAny={matchAny}
+          storageKey={`dbkit:filterPresets:${tab.connId}:${tab.database}:${tab.table}`}
           onApply={async (f, any) => { if (await guardDiscard()) { setPage(0); setMatchAny(any); setFilters(f); } }}
         />
       )}
@@ -1745,7 +1764,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
       <>
       {/* 重載期間頂部細進度條：舊資料保持可見不閃白，仍有「正在載入」的視覺回饋 */}
       <ProgressBar active={loading && !!data} />
-      <div ref={gridRef} className="at-grid flex-1 overflow-auto outline-none" tabIndex={0} onKeyDown={onGridKey}>
+      <div ref={gridRef} className={`at-grid flex-1 overflow-auto outline-none ${density === "compact" ? "density-compact" : ""}`} tabIndex={0} onKeyDown={onGridKey}>
         {err && <div className="p-3 text-red-400 text-sm mono">{err}</div>}
         {data?.truncated && (
           <div className="px-3 py-2 text-xs bg-warning/10 text-warning border-b border-warning/30">
@@ -3379,16 +3398,24 @@ const opNeedsValue = (op: string) => op !== "is_null" && op !== "is_not_null";
 // 篩選列：多欄複合條件（以 AND 串接；後端 build_where / Mongo filter 已支援）。
 // 註：AND-only（OR 需改後端三個 build_where/filter）；Mongo 同欄多條件會覆蓋（後者勝）；
 // Redis 僅 key 欄的 like/= 有效。
-function FilterBar({ columns, filters, matchAny, onApply }: {
+function FilterBar({ columns, filters, matchAny, storageKey, onApply }: {
   columns: string[];
   filters: FilterCond[];
   matchAny: boolean;
+  storageKey?: string;
   onApply: (filters: FilterCond[], matchAny: boolean) => void;
 }) {
   const t = useT();
   const blank = (): FilterCond => ({ column: columns[0] ?? "", op: "=", value: "" });
   const [rows, setRows] = useState<FilterCond[]>(filters.length ? filters : [blank()]);
   const [any, setAny] = useState(matchAny);
+  const [presets, setPresets] = useState<FilterPreset[]>(() => {
+    try { return loadFilterPresets(storageKey ? localStorage.getItem(storageKey) : null); } catch { return []; }
+  });
+  const persistPresets = (next: FilterPreset[]) => {
+    setPresets(next);
+    try { if (storageKey) localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* 忽略 */ }
+  };
 
   // 外部 filters 變更（例如清除）時同步回來。
   useEffect(() => {
@@ -3454,6 +3481,34 @@ function FilterBar({ columns, filters, matchAny, onApply }: {
         </div>
       ))}
       <div className="flex items-center gap-2 pt-0.5">
+        {storageKey && (
+          <>
+            <select value="" title={t("套用已儲存的篩選預設")}
+              onChange={(e) => {
+                const p = presets.find((x) => x.name === e.target.value);
+                if (!p) return;
+                setRows(p.filters.length ? p.filters : [blank()]);
+                setAny(p.matchAny);
+                onApply(p.filters, p.matchAny);
+              }}
+              className="bg-inset border border-fg/10 rounded px-1 py-0.5 text-fg/50 outline-none">
+              <option value="">{t("篩選預設")}</option>
+              {presets.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+            </select>
+            <button type="button" title={t("把目前條件存為預設（同名覆蓋）")}
+              onClick={async () => {
+                const name = await uiPrompt(t("預設名稱："), { title: t("儲存篩選預設"), confirmText: t("儲存") });
+                if (!name?.trim()) return;
+                const built = rows.filter((r) => r.column).map((r) => ({
+                  column: r.column, op: r.op, value: opNeedsValue(r.op) ? r.value ?? "" : null,
+                }));
+                if (built.length === 0) { toast.error(t("請先輸入至少一個條件")); return; }
+                persistPresets(recordFilterPreset(presets, name, built, any));
+                toast.success(t("已儲存篩選預設"));
+              }}
+              className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/50">{t("存為預設")}</button>
+          </>
+        )}
         <button onClick={addRow}
           className="px-2 py-1 rounded hover:bg-fg/10 whitespace-nowrap text-fg/60 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增條件")}</button>
         <button onClick={apply}
