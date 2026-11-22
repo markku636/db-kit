@@ -120,6 +120,12 @@ describe("splitTsqlBatches（MSSQL 依 GO 切批次）", () => {
     expect(splitTsqlBatches("SELECT 1\nGO 999999").length).toBe(TSQL_GO_REPEAT_MAX);
   });
 
+  it("GO 0 跳過該批次（與 sqlcmd / SSMS 一致），不當成執行一次", () => {
+    expect(splitTsqlBatches("SELECT 1\nGO 0")).toEqual([]);
+    expect(splitTsqlBatches("SELECT 1\nGO 0\nSELECT 2")).toEqual(["SELECT 2"]);
+    expect(splitTsqlBatches("SELECT 1\nGO 000\nSELECT 2\nGO 2")).toEqual(["SELECT 2", "SELECT 2"]);
+  });
+
   it("純註解 / 空白批次濾掉", () => {
     expect(splitTsqlBatches("GO\n-- 只有註解\nGO\n\nSELECT 1\nGO\n")).toEqual(["SELECT 1"]);
     expect(splitTsqlBatches("")).toEqual([]);

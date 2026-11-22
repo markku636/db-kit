@@ -18,6 +18,7 @@ import {
   pushQueryHistory,
   quoteIdent,
   qualifiedName,
+  rowTableName,
   isJsonColumnType,
   prettyJsonIfStructured,
   buildCellUpdate,
@@ -145,6 +146,20 @@ describe("splitSqlStatements", () => {
       "SELECT `a``b;c` FROM t",
       "SELECT 2",
     ]);
+  });
+  it("ignores semicolons / comments inside MSSQL [bracket identifiers]", () => {
+    expect(splitSqlStatements("SELECT [odd;name] FROM t; SELECT 2")).toEqual([
+      "SELECT [odd;name] FROM t",
+      "SELECT 2",
+    ]);
+    expect(splitSqlStatements("SELECT [a--b] FROM t")).toEqual(["SELECT [a--b] FROM t"]);
+    // ]] 為識別字內的跳脫右括號，不能在第一個 ] 就結束。
+    expect(splitSqlStatements("SELECT [a]];b] FROM t; SELECT 2")).toEqual([
+      "SELECT [a]];b] FROM t",
+      "SELECT 2",
+    ]);
+    // pg 陣列下標的孤立 [ 不該吃掉後面的分號。
+    expect(splitSqlStatements("SELECT tags[1]; SELECT 2")).toEqual(["SELECT tags[1]", "SELECT 2"]);
   });
   it("skips empty statements", () => {
     expect(splitSqlStatements("  ; ; SELECT 1 ;")).toEqual(["SELECT 1"]);
@@ -444,6 +459,15 @@ describe("lintSqlStructure", () => {
     expect(lintSqlStructure("SELECT ')(' , `c)x`")).toEqual([]);
     expect(lintSqlStructure("SELECT 1 /* ( ( */ -- )\nFROM t")).toEqual([]);
     expect(lintSqlStructure("AS $$ BEGIN x := ')'; END $$")).toEqual([]);
+  });
+  it("does not flag parens / comment markers inside MSSQL [bracket identifiers]", () => {
+    expect(lintSqlStructure("SELECT [Price(USD)] FROM t")).toEqual([]);
+    expect(lintSqlStructure("SELECT [a--b], [x)y] FROM t")).toEqual([]);
+    expect(lintSqlStructure("SELECT [a]]b(] FROM t")).toEqual([]);
+    expect(lintSqlStructure("SELECT tags[1] FROM t")).toEqual([]);
+  });
+  it("flags an unterminated bracket identifier", () => {
+    expect(lintSqlStructure("SELECT [name FROM t")[0].message).toContain("未結束的");
   });
   it("flags an unterminated block comment and dollar-quote", () => {
     expect(lintSqlStructure("SELECT 1 /* open").map((m) => m.message)).toContain("未結束的區塊註解 /* */");
@@ -885,6 +909,20 @@ describe("table/database lifecycle DDL", () => {
     expect(buildRowDelete("postgres", "t", ["id"], ["5"])).toBe('DELETE FROM "t" WHERE "id" = \'5\';');
     // 複合主鍵以 AND 串接；NULL 值以 NULL 呈現。
     expect(buildRowDelete("mysql", "t", ["a", "b"], ["1", null])).toBe("DELETE FROM `t` WHERE `a` = '1' AND `b` = NULL;");
+  });
+  it("row scripts for MSSQL split schema.table into [schema].[table]", () => {
+    // 後端對非 dbo 的表回傳 `sales.orders`；照 quoteIdent 會變成 `[sales.orders]`（另一個表）。
+    expect(buildRowUpdate("mssql", "sales.orders", ["qty"], ["3"], ["id"], ["7"])).toBe(
+      "UPDATE [sales].[orders] SET [qty] = N'3' WHERE [id] = N'7';",
+    );
+    expect(buildRowSelect("mssql", "sales.orders", ["id"], ["7"])).toBe(
+      "SELECT * FROM [sales].[orders] WHERE [id] = N'7';",
+    );
+    expect(buildRowDelete("mssql", "sales.orders", ["id"], ["7"])).toBe(
+      "DELETE FROM [sales].[orders] WHERE [id] = N'7';",
+    );
+    expect(rowTableName("mssql", "dbo.users")).toBe("[dbo].[users]");
+    expect(rowTableName("mysql", "db.users")).toBe("`db.users`");
   });
   it("buildRowSelect: 定位此列的 SELECT（主鍵 WHERE、跨方言跳脫）", () => {
     expect(buildRowSelect("mysql", "t", ["id"], ["5"])).toBe("SELECT * FROM `t` WHERE `id` = '5';");

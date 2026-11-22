@@ -502,7 +502,13 @@ export function buildAddForeignKey(
   );
 }
 
-// 由某列產生 UPDATE / DELETE 範本（送往編輯器供檢視）。表名以 quoteIdent（與 copyRowInsert 一致，不限定 db），
+// SQL Server 的表格名可能內嵌 schema（`sales.orders`）。直接 quoteIdent 會變成 `[sales.orders]`
+//（一個真的叫「sales.orders」的表），要拆成 `[sales].[orders]`——與 buildCellUpdate 完全一致。
+export function rowTableName(kind: DbKind, table: string): string {
+  return kind === "mssql" ? mssqlSchemaName(table) : quoteIdent(kind, table);
+}
+
+// 由某列產生 UPDATE / DELETE 範本（送往編輯器供檢視）。表名以 rowTableName（與 copyRowInsert 一致，不限定 db），
 // 值以 sqlLiteral 跨方言跳脫。WHERE 用主鍵定位（呼叫端確保有主鍵）。
 export function buildRowUpdate(
   kind: DbKind,
@@ -515,7 +521,7 @@ export function buildRowUpdate(
   const qi = (id: string) => quoteIdent(kind, id);
   const sets = columns.map((c, i) => `${qi(c)} = ${sqlLiteral(kind, values[i])}`).join(", ");
   const where = pkCols.map((c, i) => `${qi(c)} = ${sqlLiteral(kind, pkVals[i])}`).join(" AND ");
-  return `UPDATE ${qi(table)} SET ${sets} WHERE ${where};`;
+  return `UPDATE ${rowTableName(kind, table)} SET ${sets} WHERE ${where};`;
 }
 
 // 由某列主鍵產生「定位此列」的 SELECT（致敬 Navicat「Copy as SELECT」）：供精準重查 / 分享單列，
@@ -528,7 +534,7 @@ export function buildRowSelect(
 ): string {
   const qi = (id: string) => quoteIdent(kind, id);
   const where = pkCols.map((c, i) => `${qi(c)} = ${sqlLiteral(kind, pkVals[i])}`).join(" AND ");
-  return `SELECT * FROM ${qi(table)} WHERE ${where};`;
+  return `SELECT * FROM ${rowTableName(kind, table)} WHERE ${where};`;
 }
 
 export function buildRowDelete(
@@ -539,7 +545,7 @@ export function buildRowDelete(
 ): string {
   const qi = (id: string) => quoteIdent(kind, id);
   const where = pkCols.map((c, i) => `${qi(c)} = ${sqlLiteral(kind, pkVals[i])}`).join(" AND ");
-  return `DELETE FROM ${qi(table)} WHERE ${where};`;
+  return `DELETE FROM ${rowTableName(kind, table)} WHERE ${where};`;
 }
 
 // ---- MySQL 使用者管理：'user'@'host' 為兩段字串字面值（非反引號識別字）----
@@ -1432,6 +1438,22 @@ export function resultToMarkdown(r: QueryResult): string {
   const rows = r.rows.map((row) => `| ${row.map(esc).join(" | ")} |`);
   return [header, sep, ...rows].join("\n");
 }
+// SQL Server 的 [方括號識別字]：] 加倍為跳脫。只認「同一行內閉合」的 ]，
+// 避免 PostgreSQL 陣列下標 tags[1] 之類的孤立 [ 吃掉後文。回傳 -1 表示不是完整的識別字。
+function bracketIdentClose(sql: string, open: number): number {
+  const n = sql.length;
+  let j = open + 1;
+  while (j < n) {
+    if (sql[j] === "\n") return -1;
+    if (sql[j] === "]") {
+      if (sql[j + 1] === "]") { j += 2; continue; }
+      return j;
+    }
+    j++;
+  }
+  return -1;
+}
+
 // 把字串 / 識別字 / 註解 / $$ 區塊以空白取代，留下「程式碼」供關鍵字判斷（避免字面值內的字誤判）。
 // 對外開放給 sqlLint.ts：SQL 審查規則同樣得在「真正的程式碼」上比對關鍵字，
 // 各自再寫一份剝離器必然漂移（漏處理 dollar-quote 或加倍引號就會誤報 / 漏報）。
@@ -1449,11 +1471,9 @@ export function stripCode(sql: string): string {
     }
     // SQL Server 的 [方括號識別字]：不剝的話 `UPDATE t SET [Where] = 1` 會讓危險語句偵測
     // 在碼裡看到 "where" 而放行——一次無條件全表更新就這樣靜默略過確認框。
-    // 只認「同一行內閉合」的 `]`，避免 pg 陣列下標 `tags[1]` 之類的孤立 `[` 吃掉後文。
     if (ch === "[") {
-      const close = sql.indexOf("]", i + 1);
-      const nl = sql.indexOf("\n", i + 1);
-      if (close !== -1 && (nl === -1 || close < nl)) { out += " "; i = close + 1; continue; }
+      const close = bracketIdentClose(sql, i);
+      if (close !== -1) { out += " "; i = close + 1; continue; }
     }
     if (two === "--") { let j = i; while (j < n && sql[j] !== "\n") j++; out += " "; i = j; continue; }
     if (two === "/*") { let j = i + 2; while (j < n && sql.slice(j, j + 2) !== "*/") j++; out += " "; i = Math.min(n, j + 2); continue; }
@@ -1618,6 +1638,19 @@ export function lintSqlStructure(sql: string): SqlLintMark[] {
         continue;
       }
     }
+    // SQL Server 的 [方括號識別字]：內部的 ( ) ; -- 都不是語法，不能當成括號 / 註解。
+    // 例：SELECT [Price(USD)] FROM t 以前會誤報「未配對的左括號」。
+    if (ch === "[") {
+      const close = bracketIdentClose(sql, i);
+      if (close !== -1) { i = close + 1; continue; }
+      // 緊接在字 / 數字 / ] 後面的 [ 是陣列下標（tags[1]、ARRAY[…]），跨行時不該誤報；
+      // 其餘（行首或空白後）看起來就是識別字開頭，未閉合要提示。
+      const p = i - 1;
+      if (p < 0 || !/[\w$\]]/.test(sql[p])) {
+        marks.push({ from: i, to: n, severity: "error", message: t("未結束的{label}", { label: "[...]" }) });
+        return marks;
+      }
+    }
     if (ch === "(") { parens.push(i); i++; continue; }
     if (ch === ")") {
       if (parens.length === 0) marks.push({ from: i, to: i + 1, severity: "error", message: t("多餘的右括號「)」") });
@@ -1644,6 +1677,10 @@ function stripSqlComments(sql: string): string {
       let j = i + 1;
       while (j < n) { if (sql[j] === ch) { if (sql[j + 1] === ch) { j += 2; continue; } j++; break; } j++; }
       out += sql.slice(i, j); i = j; continue;
+    }
+    if (ch === "[") {
+      const close = bracketIdentClose(sql, i);
+      if (close !== -1) { out += sql.slice(i, close + 1); i = close + 1; continue; }
     }
     if (two === "--") { let j = i; while (j < n && sql[j] !== "\n") j++; i = j; continue; }
     if (two === "/*") { let j = i + 2; while (j < n && sql.slice(j, j + 2) !== "*/") j++; i = Math.min(n, j + 2); continue; }
@@ -1685,6 +1722,10 @@ export function splitSqlStatements(sql: string): string[] {
     if (inS) { cur += ch; if (ch === "'") { if (nx === "'") { cur += nx; i++; } else inS = false; } continue; }
     if (inD) { cur += ch; if (ch === '"') { if (nx === '"') { cur += nx; i++; } else inD = false; } continue; }
     if (inBack) { cur += ch; if (ch === "`") inBack = false; continue; }
+    if (ch === "[") {
+      const close = bracketIdentClose(sql, i);
+      if (close !== -1) { cur += sql.slice(i, close + 1); i = close; continue; }
+    }
     if (ch === "-" && nx === "-") { lineC = true; cur += ch; continue; }
     if (ch === "/" && nx === "*") { blockC = true; cur += ch + nx; i++; continue; }
     if (ch === "'") { inS = true; cur += ch; continue; }
@@ -1735,6 +1776,10 @@ export function splitSqlStatementsWithRanges(sql: string): SqlStatementSpan[] {
     if (inS) { if (ch === "'") { if (nx === "'") i++; else inS = false; } continue; }
     if (inD) { if (ch === '"') { if (nx === '"') i++; else inD = false; } continue; }
     if (inBack) { if (ch === "`") inBack = false; continue; }
+    if (ch === "[") {
+      const close = bracketIdentClose(sql, i);
+      if (close !== -1) { i = close; continue; }
+    }
     if (ch === "-" && nx === "-") { lineC = true; continue; }
     if (ch === "/" && nx === "*") { blockC = true; i++; continue; }
     if (ch === "'") { inS = true; continue; }
@@ -1771,7 +1816,8 @@ const GO_LINE_RE = /^[ \t]*go(?:[ \t]+(\d+))?[ \t]*(?:--.*)?$/i;
 export function splitTsqlBatches(sql: string): string[] {
   const out: string[] = [];
   for (const b of tsqlBatchSpans(sql)) {
-    const n = Math.min(Math.max(b.repeat, 1), TSQL_GO_REPEAT_MAX);
+    // sqlcmd / SSMS 的 `GO 0` 是「跳過這個批次」，不是「執行一次」。
+    const n = Math.min(Math.max(b.repeat, 0), TSQL_GO_REPEAT_MAX);
     for (let k = 0; k < n; k++) out.push(b.text);
   }
   return out;

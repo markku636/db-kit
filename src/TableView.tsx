@@ -21,7 +21,7 @@ import RegistryTagView from "./RegistryTagView";
 import HarborRepoView from "./HarborRepoView";
 import K8sObjectView from "./K8sObjectView";
 import { toast, uiConfirm, uiPrompt, copyToClipboard, pickSaveFile, useModalCount, useModalOverlay } from "./ui";
-import { quoteIdent, qualifiedName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
+import { quoteIdent, qualifiedName, rowTableName, sqlLiteral, buildRowUpdate, buildRowDelete, buildRowSelect, buildAddForeignKey, buildDropForeignKey, buildRenameIndex, buildCreateFulltextIndex, parseClipboardGrid, rectToTsv, rectToMarkdown, rangeStats, buildInClause, buildInsertValues, buildCellUpdate, prettyJsonIfStructured, TYPE_PRESETS } from "./sql";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree from "./RedisKeyTree";
 import lazyOverlay from "./ui/lazyOverlay";
@@ -898,7 +898,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const k = connKind ?? "mysql";
     const cols = data.columns.map((c) => quoteIdent(k, c)).join(", ");
     const lits = rowValues(r).map((v) => sqlLiteral(k, v)).join(", ");
-    copyToClipboard(`INSERT INTO ${quoteIdent(k, tab.table)} (${cols}) VALUES (${lits});`, t("已複製為 INSERT"));
+    copyToClipboard(`INSERT INTO ${rowTableName(k, tab.table)} (${cols}) VALUES (${lits});`, t("已複製為 INSERT"));
   };
   // 由某列產生 UPDATE / DELETE（需主鍵定位）。
   const pkValuesOf = (r: number): (string | null)[] =>

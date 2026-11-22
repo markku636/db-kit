@@ -1,3 +1,11 @@
+## 未發佈
+
+修正：
+
+- **SQL Server 的 `GO 0` 不再執行批次**：`GO 0` 與 sqlcmd / SSMS 一樣是「跳過這個批次」，以前會當成執行一次。
+- **`[方括號識別字]` 裡的符號不再誤判**：`SELECT [odd;name]`、`SELECT [a--b]`、`SELECT [Price(USD)]` 以前會被當成語句 / 註解邊界或未配對括號，多行語句被切錯、編輯器畫出紅色毛毛蟲；現在和字串、雙引號識別字一樣正確略過（`]]` 跳脫也處理）。
+- **非 dbo 資料表「複製為 INSERT / SELECT / UPDATE / DELETE」產生正確 SQL**：`sales.orders` 以前整段包成 `[sales.orders]`（一個名字裡有點的完全不同資料表），現在是 `[sales].[orders]`，與「只改這一欄」一致。
+
 ## v0.60.3
 
 **Windows 免安裝版可以在設定裡改使用者變數，一鍵把資料夾加進 PATH，終端機就能直接用 `dbk`。**
