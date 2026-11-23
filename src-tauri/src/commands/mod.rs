@@ -1562,6 +1562,8 @@ pub async fn transfer_table(
     dst_table: String,
     options: crate::transfer::TransferOptions,
 ) -> AppResult<crate::transfer::TransferResult> {
+    // 來源可唯讀，但目標是寫入端；唯讀目標不能當資料轉移的目的地。
+    ensure_conn_writable(&state, &dst_id)?;
     crate::transfer::transfer_table(
         &state.manager, &src_id, &src_db, &src_table, &dst_id, &dst_db, &dst_table, &options,
     )
