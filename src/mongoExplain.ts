@@ -132,6 +132,65 @@ function walk(root: MongoPlanStage, fn: (s: MongoPlanStage) => void) {
   for (const c of root.children) walk(c, fn);
 }
 
+// 彙總所有游標的 executionStats：aggregate explain 的統計不在頂層，
+// 而藏在 stages[].$cursor；sharded 時每一片各自一份，分散在 shards[name].stages[]。
+function collectCursorStats(doc: any): any[] {
+  const out: any[] = [];
+  const visit = (d: any) => {
+    if (!d || typeof d !== "object") return;
+    if (Array.isArray(d.stages)) {
+      for (const s of d.stages) {
+        const cursor = s?.$cursor ?? s?.$geoNearCursor;
+        if (cursor?.executionStats) out.push(cursor.executionStats);
+      }
+    }
+    if (d.shards && typeof d.shards === "object" && !Array.isArray(d.shards)) {
+      for (const sh of Object.values(d.shards)) visit(sh);
+    }
+  };
+  visit(doc);
+  return out;
+}
+
+// 從任何可能的形狀找 namespace（find / aggregate / sharded aggregate）。
+function findNamespace(doc: any): string | undefined {
+  const visit = (d: any): string | undefined => {
+    if (!d || typeof d !== "object") return undefined;
+    if (typeof d?.queryPlanner?.namespace === "string") return d.queryPlanner.namespace;
+    if (Array.isArray(d.stages)) {
+      for (const s of d.stages) {
+        const ns = visit(s?.$cursor ?? s?.$geoNearCursor);
+        if (ns) return ns;
+      }
+    }
+    if (d.shards && typeof d.shards === "object" && !Array.isArray(d.shards)) {
+      for (const sh of Object.values(d.shards)) {
+        const ns = visit(sh);
+        if (ns) return ns;
+      }
+    }
+    return undefined;
+  };
+  return visit(doc);
+}
+
+// 多份統計合成一份摘要：計數相加，耗時取最大值（各片平行執行，不是累加）。
+function mergeSummary(sources: any[], indexes: string[], collscan: boolean): MongoExplainSummary {
+  const sum = (pick: (s: any) => unknown): number | null => {
+    const values = sources.map(pick).filter((v): v is number => num(v) !== undefined);
+    return values.length ? values.reduce((a, b) => a + b, 0) : null;
+  };
+  const times = sources.map((s) => num(s?.executionTimeMillis)).filter((v): v is number => v !== undefined);
+  return {
+    nReturned: sum((s) => s?.nReturned),
+    keysExamined: sum((s) => s?.totalKeysExamined),
+    docsExamined: sum((s) => s?.totalDocsExamined),
+    executionTimeMillis: times.length ? Math.max(...times) : null,
+    indexes,
+    collscan,
+  };
+}
+
 /** 解析 explain 原始 JSON 字串。無法辨識形狀時回 null（呼叫端顯示原始 JSON）。 */
 export function parseMongoExplain(raw: string): MongoExplainModel | null {
   let doc: any;
@@ -154,8 +213,10 @@ export function parseMongoExplain(raw: string): MongoExplainModel | null {
     const children: MongoPlanStage[] = [];
     for (const [name, sh] of Object.entries<any>(doc.shards)) {
       let st: MongoPlanStage | null = null;
-      if (Array.isArray(sh?.stages)) st = pipelineToStage(sh.stages);
-      else {
+      if (Array.isArray(sh?.stages)) {
+        st = pipelineToStage(sh.stages);
+        if (collectCursorStats({ stages: sh.stages }).length > 0) hasStats = true;
+      } else {
         const inner = parsePlannerAndStats(sh);
         if (inner) {
           st = inner.root;
@@ -183,28 +244,19 @@ export function parseMongoExplain(raw: string): MongoExplainModel | null {
     if (s.stage === "COLLSCAN") collscan = true;
   });
 
-  // aggregate 的統計藏在 stages[].$cursor.executionStats，不是頂層 executionStats。
-  const cursorStats = doc.stages?.find?.((s: any) => s?.$cursor?.executionStats)?.$cursor?.executionStats;
-  const stats = doc.executionStats ?? cursorStats;
+  // aggregate 的統計藏在 stages[].$cursor.executionStats，不是頂層 executionStats；
+  // sharded 時每片各有一份，全部納入摘要（見 collectCursorStats）。
+  const statsSources = [doc.executionStats, ...collectCursorStats(doc)]
+    .filter((s): s is Record<string, unknown> => !!s && typeof s === "object");
   const summary: MongoExplainSummary | null =
-    hasStats || stats
-      ? {
-          nReturned: num(stats?.nReturned) ?? null,
-          keysExamined: num(stats?.totalKeysExamined) ?? null,
-          docsExamined: num(stats?.totalDocsExamined) ?? null,
-          executionTimeMillis: num(stats?.executionTimeMillis) ?? null,
-          indexes: [...indexes],
-          collscan,
-        }
+    hasStats || statsSources.length > 0
+      ? mergeSummary(statsSources, [...indexes], collscan)
       : null;
 
   return {
     root,
     summary,
-    ns: typeof doc?.queryPlanner?.namespace === "string" ? doc.queryPlanner.namespace
-      : typeof doc?.stages?.find?.((s: any) => s?.$cursor?.queryPlanner?.namespace)?.$cursor?.queryPlanner?.namespace === "string"
-        ? doc.stages.find((s: any) => s?.$cursor?.queryPlanner?.namespace).$cursor.queryPlanner.namespace
-        : undefined,
+    ns: findNamespace(doc),
     server: typeof doc?.serverInfo?.host === "string" ? doc.serverInfo.host : undefined,
   };
 }

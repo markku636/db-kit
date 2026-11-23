@@ -128,16 +128,21 @@ function DbStatsTab({ connId, initialDb }: { connId: string; initialDb: string }
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     api.listDatabases(connId).then((list) => {
+      if (cancelled) return;
       setDbs(list);
+      setDbListErr(null);
       // initialDb 不在清單（如空字串）時退回第一個庫。
       setDb((d) => (d && list.includes(d) ? d : list[0] ?? d));
-    }).catch((e) => setDbListErr(e?.message ?? t("讀取資料庫清單失敗")));
-  }, [connId]);
+    }).catch((e) => !cancelled && setDbListErr(e?.message ?? t("讀取資料庫清單失敗")));
+    return () => { cancelled = true; };
+  }, [connId, nonce, t]);
   useEffect(() => {
     if (!db) return;
     let cancelled = false;
     setRows(null);
+    setErr(null);
     api.mongoDbStats(connId, db)
       .then((r) => !cancelled && (setRows(r), setErr(null)))
       .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
@@ -285,17 +290,23 @@ function ProfilerTab({ connId, initialDb, readonly }: { connId: string; initialD
   const [expand, setExpand] = useState<number | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     api.listDatabases(connId).then((list) => {
+      if (cancelled) return;
       setDbs(list);
+      setDbListErr(null);
       setDb((d) => (d && list.includes(d) ? d : list[0] ?? d));
-    }).catch((e) => setDbListErr(e?.message ?? t("讀取資料庫清單失敗")));
-  }, [connId]);
+    }).catch((e) => !cancelled && setDbListErr(e?.message ?? t("讀取資料庫清單失敗")));
+    return () => { cancelled = true; };
+  }, [connId, nonce, t]);
   useEffect(() => {
     if (!db) return;
     let cancelled = false;
     setErr(null); setProfileErr(null);
     // 換 DB / 重整時先清掉上一個 DB 的設定：讀取失敗時不能把舊值誤寫到新 DB。
     setProfile(null); setLevel(0); setSlowMs(100);
+    // 慢查詢以行號展開；資料一換就不能沿用舊行號，否則會展開到不相干的查詢。
+    setExpand(null);
     api.mongoProfileGet(connId, db)
       .then((p) => { if (cancelled) return; setProfile(p); setLevel(p.level); setSlowMs(p.slow_ms); })
       .catch((e) => !cancelled && setProfileErr(e?.message ?? t("讀取 Profiler 設定失敗")));
