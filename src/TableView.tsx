@@ -948,8 +948,17 @@ function DataPane({ tab }: { tab: OpenTab }) {
     copyToClipboard(cellValue(r, c) ?? "", t("已複製儲存格"));
   const copyRowTsv = (r: number) =>
     copyToClipboard(rowValues(r).map((v) => v ?? "").join("\t"), t("已複製整列 (TSV)"));
-  const copyRowJson = (r: number) => {
+  const copyRowJson = async (r: number) => {
     if (!data) return;
+    // Mongo 表格值是型別擦除 + >4KB 截斷的顯示字串；複製必須走 document_get
+    // 拿 canonical extended JSON，否则 ObjectId / Date / 大欄位全被剪掉。
+    if (isMongo && data.row_ids?.[r] != null) {
+      try {
+        const doc = await api.documentGet(tab.connId, tab.database, tab.table, data.row_ids[r]);
+        copyToClipboard(doc, t("已複製文件 (extJSON)"));
+        return;
+      } catch { /* 讀不到就退回一般複製 */ }
+    }
     const vals = rowValues(r);
     const obj = Object.fromEntries(data.columns.map((c, j) => [c, vals[j] ?? null]));
     copyToClipboard(JSON.stringify(obj, null, 2), t("已複製整列 (JSON)"));
@@ -1056,7 +1065,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
             [t("複製範圍 (Markdown)"), () => copyRangeMarkdown(), false] as [string, () => void, boolean],
           ]
         : []),
-      [t("複製整列 (JSON)"), () => copyRowJson(r), false],
+      [isMongo ? t("複製文件 (extJSON)") : t("複製整列 (JSON)"), () => void copyRowJson(r), false],
       [t("複製整列 (TSV)"), () => copyRowTsv(r), false],
       // INSERT 範本僅對 SQL 資料庫有意義（Mongo 用 JSON）。
       ...(isSqlKind ? [[t("複製為 INSERT"), () => copyRowInsert(r), false] as [string, () => void, boolean]] : []),
@@ -1179,6 +1188,12 @@ function DataPane({ tab }: { tab: OpenTab }) {
     // 避免方向鍵在背後的資料表又移動選取（覆蓋層自有鍵盤處理）。
     if (rowDetail !== null || inspect || detailKey || inserting) return;
     if (e.key === "F5") { e.preventDefault(); load(); return; }
+    // Ctrl+E：Mongo 直接開目前列的整份文件 JSON 編輯器。
+    if (isMongo && (e.ctrlKey || e.metaKey) && (e.key === "e" || e.key === "E")) {
+      e.preventDefault();
+      if (selected && data.row_ids?.[selected.r] != null) setDocEdit(selected.r);
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) { e.preventDefault(); setShowFind(true); return; }
     // Ctrl+S 套用待套用的儲存格編輯（上方守衛已排除對話框開啟 / 套用中的情況）。
     if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
@@ -4334,6 +4349,13 @@ function StructurePane({ tab }: { tab: OpenTab }) {
                 </select>
                 {!roConn && (
                   <>
+                    <Button variant="secondary" size="sm" disabled={valSaving} onClick={() => {
+                      try {
+                        setValText(JSON.stringify(JSON.parse(valText), null, 2));
+                      } catch (e: any) {
+                        toast.error(t("驗證規則不是合法 JSON：{msg}", { msg: e?.message ?? String(e) }));
+                      }
+                    }}>{t("格式化")}</Button>
                     <Button variant="primary" size="sm" loading={valSaving} onClick={() => saveValidation(false)}>{t("套用")}</Button>
                     {validation.validator_json && (
                       <Button variant="secondary" size="sm" disabled={valSaving} onClick={() => saveValidation(true)}>{t("清除規則")}</Button>
