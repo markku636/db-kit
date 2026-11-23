@@ -1,6 +1,6 @@
 // Docker 總覽（連線右鍵 overlay，版型同 RabbitMqOverview / KafkaClusterOverview）：
 // 引擎資訊 + 容器數磚 + 磁碟用量與清理 + 依 compose 專案分組的容器清單（可直接啟停 / 開分頁）。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Container, Download, Play, RefreshCw, Square, X } from "lucide-react";
 import { api } from "./api";
 import type { DockerContainer, DockerDiskUsage, DockerOverview as Overview, DockerPruneTarget } from "./dockerTypes";
@@ -29,20 +29,27 @@ export default function DockerOverview({ connId, connName, onClose, onPull }: {
   const [containers, setContainers] = useState<DockerContainer[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const gen = useRef(0);
+  useEffect(() => () => { gen.current++; }, []);
 
   const load = useCallback(async () => {
+    const myGen = ++gen.current;
+    const ok = () => gen.current === myGen;
     setLoading(true);
     try {
       const [o, cs] = await Promise.all([api.dockerOverview(connId), api.dockerContainers(connId, true)]);
+      if (!ok()) return;
       setInfo(o);
       setContainers(cs);
       setErr(null);
-      // /system/df 在映像很多的機器上要好幾秒，不擋住其他資訊。
-      api.dockerDiskUsage(connId).then(setDf).catch(() => setDf(null));
+      // /system/df 在映像很多的機器上要好幾秒，不擋住其他資訊；慢回應也不能蓋掉較新的數字。
+      api.dockerDiskUsage(connId)
+        .then((v) => { if (ok()) setDf(v); })
+        .catch(() => { if (ok()) setDf(null); });
     } catch (e: any) {
-      setErr(e?.message ?? String(e));
+      if (ok()) setErr(e?.message ?? String(e));
     } finally {
-      setLoading(false);
+      if (ok()) setLoading(false);
     }
   }, [connId]);
 
@@ -129,7 +136,7 @@ export default function DockerOverview({ connId, connName, onClose, onPull }: {
                               {c.ports.filter((p) => p.public_port != null).map(portLabel).join(", ")}
                             </td>
                             <td className="px-2 py-1.5 w-16 text-right">
-                              {!readonly && (c.state === "running"
+                              {!readonly && (c.state === "running" || c.state === "restarting"
                                 ? <IconButton icon={Square} label={t("停止")} onClick={async () => { if (await runContainerAction(connId, c.name, "stop")) afterChange("containers"); }} />
                                 : <IconButton icon={Play} label={t("啟動")} onClick={async () => { if (await runContainerAction(connId, c.name, "start")) afterChange("containers"); }} />)}
                             </td>

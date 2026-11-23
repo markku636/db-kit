@@ -62,7 +62,10 @@ export function dockerItemMenu(ctx: {
 
   if (db === "containers") {
     const st = stateFromObjKind(ctx.objKind) ?? "";
-    const running = st === "running" || st === "restarting";
+    // restarting 不是 running：Docker 不接受 exec / pause，Shell 與資源用量不能開。
+    const running = st === "running";
+    const restarting = st === "restarting";
+    const active = running || restarting;
     const paused = st === "paused";
     const openSub = (sub: ContainerSub) => {
       ctx.open();
@@ -75,6 +78,8 @@ export function dockerItemMenu(ctx: {
     if (!readonly) {
       const acts: DockerContainerAction[] = running
         ? ["stop", "restart", "pause", "kill"]
+        : restarting
+        ? ["stop", "restart", "kill"]
         : paused
         ? ["unpause", "restart", "kill"]
         : ["start"];
@@ -87,7 +92,7 @@ export function dockerItemMenu(ctx: {
     if (!readonly) {
       nodes.push(sep);
       nodes.push(it(t("重新命名…"), () => after(renameContainer(conn.id, name))));
-      nodes.push(it(t("刪除…"), () => after(removeContainer(conn.id, name, running || paused)), true));
+      nodes.push(it(t("刪除…"), () => after(removeContainer(conn.id, name, active || paused)), true));
     }
   } else if (db === "images") {
     nodes.push(it(t("開啟"), ctx.open));

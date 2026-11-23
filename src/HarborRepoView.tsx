@@ -30,33 +30,47 @@ export default function HarborRepoView({ connId, project, repo }: { connId: stri
   const [loading, setLoading] = useState(false);
   const [gone, setGone] = useState(false);
   const [vuln, setVuln] = useState<{ digest: string; report: HarborVulnReport | null; err: string | null } | null>(null);
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  const gen = useRef(0);
+  // StrictMode 在掛載時會跑 setup → cleanup → setup；alive 必須在 setup 重置，
+  // 否則第二次 setup 之後所有回應都被當成過期，分頁永遠卡在「載入中」。
+  useEffect(() => {
+    alive.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gen 是請求代數計數器，刻意要在 cleanup 遞增
+    return () => { alive.current = false; gen.current++; };
+  }, []);
 
   const load = useCallback(async () => {
+    const myGen = ++gen.current;
+    const ok = () => alive.current && gen.current === myGen;
     setLoading(true);
     try {
       const r = await api.harborArtifacts(connId, project, repo, page, PAGE_SIZE);
-      if (!alive.current) return;
+      if (!ok()) return;
       setItems(r.items);
       setTotal(r.total >= 0 ? r.total : r.items.length);
       setErr(null);
       setGone(false);
       if (!host) {
         const o = await api.harborOverview(connId).catch(() => null);
-        if (o && alive.current) setHost(registryHost(o.base_url));
+        if (o && ok()) setHost(registryHost(o.base_url));
       }
     } catch (e: any) {
+      if (!ok()) return;
       const msg = e?.message ?? String(e);
       if (/404|NOT_FOUND/i.test(msg)) setGone(true);
-      if (alive.current) setErr(msg);
+      setErr(msg);
     } finally {
-      if (alive.current) setLoading(false);
+      if (ok()) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connId, project, repo, page]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // 刪除最後一頁的最後一筆後 total 縮小，停在舊頁會看到空表；回到最後一頁。
+  useEffect(() => { if (page > pages) setPage(pages); }, [page, pages]);
 
   // 有掃描在跑就每 3 秒刷新一次。
   useEffect(() => {
@@ -69,6 +83,7 @@ export default function HarborRepoView({ connId, project, repo }: { connId: stri
   const refOf = (a: HarborArtifact) => a.tags[0]?.name ?? a.digest;
 
   const scan = async (a: HarborArtifact) => {
+    if (readonly) return; // 觸發掃描會寫入 Harbor（消耗 scanner 配額），唯讀連線不可執行。
     try {
       await api.harborScan(connId, project, repo, a.digest);
       toast.success(t("已送出掃描：{ref}", { ref: shortDigest(a.digest) }));
@@ -79,12 +94,14 @@ export default function HarborRepoView({ connId, project, repo }: { connId: stri
   };
 
   const openVuln = async (a: HarborArtifact) => {
+    const myGen = gen.current;
+    const ok = () => alive.current && gen.current === myGen;
     setVuln({ digest: a.digest, report: null, err: null });
     try {
       const r = await api.harborVulnerabilities(connId, project, repo, a.digest);
-      if (alive.current) setVuln({ digest: a.digest, report: r, err: null });
+      if (ok()) setVuln({ digest: a.digest, report: r, err: null });
     } catch (e: any) {
-      if (alive.current) setVuln({ digest: a.digest, report: null, err: e?.message ?? String(e) });
+      if (ok()) setVuln({ digest: a.digest, report: null, err: e?.message ?? String(e) });
     }
   };
 
@@ -148,7 +165,6 @@ export default function HarborRepoView({ connId, project, repo }: { connId: stri
 
   if (gone) return <EmptyState icon={Package} title={t("「{name}」已不存在", { name: fullRepo })} hint={t("可能已被刪除；請重新整理連線樹。")} />;
 
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="flex items-center gap-2 px-2 py-1.5 border-b border-fg/10 bg-bar flex-wrap">
@@ -212,7 +228,7 @@ export default function HarborRepoView({ connId, project, repo }: { connId: stri
                     <ScanCell a={a} onOpen={() => void openVuln(a)} />
                   </td>
                   <td className="px-2 py-1.5 whitespace-nowrap text-right">
-                    <IconButton icon={ShieldCheck} label={t("掃描弱點")} disabled={scanInProgress(a.scan)} onClick={() => void scan(a)} />
+                    {!readonly && <IconButton icon={ShieldCheck} label={t("掃描弱點")} disabled={scanInProgress(a.scan)} onClick={() => void scan(a)} />}
                     {host && <IconButton icon={Copy} label={t("複製 pull 指令")} onClick={() => copyToClipboard(`docker pull ${pullRef(host, fullRepo, refOf(a))}`, t("已複製"))} />}
                     {host && <IconButton icon={Download} label={t("拉到 Docker…")} onClick={() => pullTo(a)} />}
                     {!readonly && <IconButton icon={Trash2} label={t("刪除 artifact")} onClick={() => void delArtifact(a)} />}

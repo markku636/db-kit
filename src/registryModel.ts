@@ -10,14 +10,23 @@ export function registryHost(baseUrl: string): string {
   return port && port !== def ? `${host}:${port}` : host;
 }
 
-/** `host/repo:tag` 或 `host/repo@sha256:…`。 */
+/** OCI digest 是 `<演算法>:<編碼>`，不限 sha256（sha512 也合法）。 */
+function isDigest(ref: string): boolean {
+  return /^[a-z][a-z0-9+._-]*:/i.test(ref);
+}
+
+/** `host/repo:tag` 或 `host/repo@<algorithm>:…`。 */
 export function pullRef(host: string, repo: string, ref: string): string {
-  return ref.startsWith("sha256:") ? `${host}/${repo}@${ref}` : `${host}/${repo}:${ref}`;
+  return `${host}/${repo}${isDigest(ref) ? "@" : ":"}${ref}`;
 }
 
 export function shortDigest(d: string): string {
-  const h = d.replace(/^sha256:/, "");
-  return h.length > 12 ? `sha256:${h.slice(0, 12)}` : d;
+  // 保留原本的演算法前綴：sha512:abcdef… 不能變成 sha256:sha512:ab…。
+  const m = /^([a-z][a-z0-9+._-]*):(.+)$/i.exec(d);
+  if (m) {
+    return m[2].length > 12 ? `${m[1]}:${m[2].slice(0, 12)}` : d;
+  }
+  return d.length > 12 ? d.slice(0, 12) : d;
 }
 
 export type SevTone = "danger" | "warning" | "info" | "neutral" | "success";
@@ -49,7 +58,10 @@ export function scanSummary(s: HarborScan): string {
   return parts.join(" ");
 }
 
-/** 掃描還在跑（要輪詢）。 */
+/** 掃描還在跑（要輪詢、不能顯示「無弱點」）。Harbor 用 Queued / Scanning，
+ *  不同版本還會見到 Pending / Running / Scheduled；比對時一律忽略大小寫。 */
 export function scanInProgress(s: HarborScan | null): boolean {
-  return !!s && (s.status === "Running" || s.status === "Pending" || s.status === "Scheduled");
+  if (!s) return false;
+  return new Set(["queued", "pending", "running", "scanning", "scheduled", "inprogress", "in_progress"])
+    .has(s.status.trim().toLowerCase());
 }

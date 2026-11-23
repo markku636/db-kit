@@ -1,5 +1,5 @@
 // Docker 連線的分頁內容：依連線樹的分類（containers / images / volumes / networks）分派到對應詳情。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HardDrive, Layers, Network, RefreshCw, Tag, Trash2 } from "lucide-react";
 import { api } from "./api";
 import type { DockerImageDetail, DockerNetwork, DockerVolume } from "./dockerTypes";
@@ -35,12 +35,21 @@ function useResource<T>(load: () => Promise<T>, deps: unknown[]) {
   const [data, setData] = useState<T | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
+  const gen = useRef(0);
+  useEffect(() => () => { gen.current++; }, []);
   const reload = useCallback(async () => {
+    // 換物件 / 換連線時舊回應不能覆蓋新詳情（也別拿舊資料充數）。
+    const myGen = ++gen.current;
+    const ok = () => gen.current === myGen;
+    setData(null);
     try {
-      setData(await load());
+      const v = await load();
+      if (!ok()) return;
+      setData(v);
       setErr(null);
       setGone(false);
     } catch (e: any) {
+      if (!ok()) return;
       const msg = e?.message ?? String(e);
       if (/404|no such|not found/i.test(msg)) setGone(true);
       setErr(msg);

@@ -1,5 +1,5 @@
 // Registry tag 分頁：manifest（digest / 大小 / 格式）、多平台清單（點選看該平台）、layers、映像 config。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Copy, Download, RefreshCw, Tag, Trash2 } from "lucide-react";
 import { api } from "./api";
 import type { RegistryManifest } from "./registryTypes";
@@ -24,21 +24,30 @@ export default function RegistryTagView({ connId, repo, tag }: { connId: string;
   const [err, setErr] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
   const [busy, setBusy] = useState(false);
+  const gen = useRef(0);
+  useEffect(() => () => { gen.current++; }, []);
+  // 同一分頁換 tag / 連線時不能沿用前一個 manifest 的參照。
+  useEffect(() => { setRef(tag); }, [tag, connId, repo]);
 
   const load = useCallback(async () => {
+    const myGen = ++gen.current;
+    const ok = () => gen.current === myGen;
     setBusy(true);
+    setM(null);
+    setErr(null);
     try {
       const [man, info] = await Promise.all([api.registryManifest(connId, repo, ref), host ? null : api.registryInfo(connId)]);
+      if (!ok()) return;
       setM(man);
       if (info) setHost(registryHost(info.base_url));
-      setErr(null);
       setGone(false);
     } catch (e: any) {
+      if (!ok()) return;
       const msg = e?.message ?? String(e);
       if (/404|MANIFEST_UNKNOWN/i.test(msg)) setGone(true);
       setErr(msg);
     } finally {
-      setBusy(false);
+      if (ok()) setBusy(false);
     }
     // host 只抓一次
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -37,6 +37,8 @@ export default function DockerContainerView({ conn, name, onChanged }: {
   const [gone, setGone] = useState(false);
   // 已經打開過的子頁才掛載（Log / Shell 開過之後常駐，切走不斷線）。
   const [mounted, setMounted] = useState<Set<Sub>>(() => new Set(["info"]));
+  const gen = useRef(0);
+  useEffect(() => () => { gen.current++; }, []);
   // 側欄右鍵「Log…」「Shell…」：開分頁後切到指定子頁（一次性請求）。
   const subKey = `${conn.id}:${name}`;
   const subReq = useContainerSub((s) => s.req[subKey]);
@@ -47,12 +49,18 @@ export default function DockerContainerView({ conn, name, onChanged }: {
   }, [subReq, subKey]);
 
   const load = useCallback(async () => {
+    // 掛載 / 切回 info / 啟停後可能同時有多個 inspect 在跑；
+    // 慢的那個不能把新的狀態（例如已 stop）蓋回舊畫面。
+    const myGen = ++gen.current;
+    const ok = () => gen.current === myGen;
     try {
       const d = await api.dockerContainerInspect(conn.id, name);
+      if (!ok()) return;
       setDetail(d);
       setErr(null);
       setGone(false);
     } catch (e: any) {
+      if (!ok()) return;
       const msg = e?.message ?? String(e);
       if (/404|no such container/i.test(msg)) setGone(true);
       setErr(msg);
@@ -88,8 +96,11 @@ export default function DockerContainerView({ conn, name, onChanged }: {
     );
   }
 
-  const running = !!detail?.running && !detail.paused;
+  const restarting = detail?.state === "restarting";
+  // restarting 容器不允許 exec / pause，動作列比照清單只給 stop / restart / kill。
+  const running = !!detail?.running && !detail.paused && !restarting;
   const paused = !!detail?.paused;
+  const active = running || restarting || paused;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -103,13 +114,13 @@ export default function DockerContainerView({ conn, name, onChanged }: {
         <span className="text-xs text-fg/45 mono truncate max-w-[40%]" title={detail?.image}>{detail?.image}</span>
         {!readonly && detail && (
           <div className="flex items-center gap-1">
-            {!running && !paused && (
+            {!active && (
               <Button size="sm" icon={Play} disabled={busy} onClick={() => act(() => runContainerAction(conn.id, name, "start"))}>{t("啟動")}</Button>
             )}
-            {running && (
+            {(running || restarting) && (
               <Button size="sm" icon={Square} disabled={busy} onClick={() => act(() => runContainerAction(conn.id, name, "stop"))}>{t("停止")}</Button>
             )}
-            {(running || paused) && (
+            {active && (
               <Button size="sm" icon={RotateCcw} disabled={busy} onClick={() => act(() => runContainerAction(conn.id, name, "restart"))}>{t("重新啟動")}</Button>
             )}
             {running && (
@@ -118,7 +129,7 @@ export default function DockerContainerView({ conn, name, onChanged }: {
             {paused && (
               <Button size="sm" icon={Play} disabled={busy} onClick={() => act(() => runContainerAction(conn.id, name, "unpause"))}>{t("繼續")}</Button>
             )}
-            {(running || paused) && (
+            {active && (
               <Button size="sm" variant="ghost" icon={Skull} disabled={busy} onClick={() => act(() => runContainerAction(conn.id, name, "kill"))}>{t("強制終止")}</Button>
             )}
           </div>

@@ -15,14 +15,18 @@ describe("registryModel", () => {
     expect(registryHost("https://[fd00::1]:8443")).toBe("[fd00::1]:8443");
   });
 
-  it("pullRef：tag 用冒號、digest 用 @", () => {
+  it("pullRef：tag 用冒號、digest 用 @（不限 sha256）", () => {
     expect(pullRef("h", "lib/app", "1.0")).toBe("h/lib/app:1.0");
     expect(pullRef("h", "app", "sha256:abc")).toBe("h/app@sha256:abc");
+    expect(pullRef("h", "app", "sha512:abc")).toBe("h/app@sha512:abc");
+    // 含 colon 的 tag 在 Docker 不成立，不會被當 digest 的 ref 才加冒號。
   });
 
-  it("shortDigest", () => {
+  it("shortDigest 保留演算法前綴，不憑空補 sha256", () => {
     expect(shortDigest("sha256:0123456789abcdef0123")).toBe("sha256:0123456789ab");
     expect(shortDigest("sha256:ab")).toBe("sha256:ab");
+    expect(shortDigest("sha512:abcdef0123456789")).toBe("sha512:abcdef012345");
+    expect(shortDigest("0123456789abcdef0123")).toBe("0123456789ab");
   });
 
   it("嚴重度色調與摘要", () => {
@@ -32,6 +36,11 @@ describe("registryModel", () => {
     expect(scanSummary(scan({ critical: 1, high: 2, low: 3 }))).toBe("C1 H2 L3");
     expect(scanSummary(scan({}))).toBe("");
     expect(scanInProgress(scan({ status: "Running" }))).toBe(true);
+    // Harbor 實際回的 Queued / Scanning 之前被當成已完成，還會誤顯示綠色「無弱點」。
+    expect(scanInProgress(scan({ status: "Queued" }))).toBe(true);
+    expect(scanInProgress(scan({ status: "scanning" }))).toBe(true);
+    expect(scanInProgress(scan({ status: "Success" }))).toBe(false);
+    expect(scanInProgress(scan({ status: "Error" }))).toBe(false);
     expect(scanInProgress(null)).toBe(false);
   });
 });
