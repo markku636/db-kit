@@ -1982,7 +1982,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
           <EmptyState
             compact
             icon={filters.length ? Filter : Table2}
-            title={filters.length ? t("無符合篩選的資料") : t("此表沒有資料")}
+            title={filters.length ? t("無符合篩選的資料") : isMongo ? t("此集合沒有文件") : t("此表沒有資料")}
             action={
               filters.length ? (
                 <Button variant="secondary" size="sm" icon={X} onClick={() => setFilters([])}>
@@ -1990,7 +1990,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
                 </Button>
               ) : insertable ? (
                 <Button variant="secondary" size="sm" icon={Plus} onClick={() => setInserting(true)}>
-                  {t("新增資料列")}
+                  {isMongo ? t("新增文件") : t("新增資料列")}
                 </Button>
               ) : undefined
             }
