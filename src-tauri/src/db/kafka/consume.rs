@@ -417,6 +417,12 @@ fn resolve_timestamp_offsets(
     }
 }
 
+/// 「讀最新 N 筆」時每個分區要回溯的筆數。無條件進位，
+/// 否則 limit=10、3 個分區時各取 3 筆只能拿到 9 筆，卻回報已到底。
+fn per_partition_count(limit: usize, parts: usize) -> usize {
+    limit.div_ceil(parts.max(1)).max(1)
+}
+
 /// 阻塞式有界讀（於 spawn_blocking 內執行），抽出原始 bytes + 是否全分區到底。
 fn consume_page_blocking(
     base: &ClientConfig,
@@ -438,7 +444,7 @@ fn consume_page_blocking(
     let ts_offsets = resolve_timestamp_offsets(&consumer, topic, &part_ids, &start)?;
 
     // 各分區 watermark + 起始位移，組 assignment（End = 末端往回 per 筆）。
-    let per = ((limit as i64) / (part_ids.len() as i64).max(1)).max(1);
+    let per = per_partition_count(limit, part_ids.len()) as i64;
     let mut tpl = TopicPartitionList::new();
     let mut highs: HashMap<i32, i64> = HashMap::new();
     for &pid in &part_ids {
@@ -558,8 +564,7 @@ fn decode_value_sync(bytes: Option<&[u8]>) -> (Option<String>, String, u64, bool
     let Some(b) = bytes else {
         return (None, "string".to_string(), 0, false, None);
     };
-    if b.len() >= 5 && b[0] == 0x00 {
-        let id = i32::from_be_bytes([b[1], b[2], b[3], b[4]]);
+    if let Some(id) = confluent_schema_id(b) {
         let (val, _enc, _len, trunc) = decode_payload(Some(&b[5..]));
         return (val, "avro".to_string(), b.len() as u64, trunc, Some(id));
     }
@@ -657,7 +662,7 @@ async fn decode_value(
     let Some(b) = bytes else {
         return (None, "string".to_string(), 0, false, None);
     };
-    if b.len() >= 5 && b[0] == 0x00 {
+    if let Some(id) = confluent_schema_id(b) {
         // Confluent wire-format。
         if let Some(sr) = sr {
             if let Some((json, enc, id)) = sr.decode(b).await {
@@ -665,12 +670,21 @@ async fn decode_value(
             }
         }
         // 無 registry / 解碼失敗 → 標記 schema id + payload hex 預覽。
-        let id = i32::from_be_bytes([b[1], b[2], b[3], b[4]]);
         let (val, _enc, _len, trunc) = decode_payload(Some(&b[5..]));
         return (val, "avro".to_string(), b.len() as u64, trunc, Some(id));
     }
     let (val, enc, len, trunc) = decode_payload(Some(b));
     (val, enc, len, trunc, None)
+}
+
+/// Confluent wire-format 是 0x00 + 4 bytes 的正整數 schema id + payload。
+/// 一般二進位訊息也可能以 0x00 開頭；id<=0 不可能是合法 schema，別誤判成 Avro。
+fn confluent_schema_id(bytes: &[u8]) -> Option<i32> {
+    if bytes.len() <= 5 || bytes[0] != 0x00 {
+        return None;
+    }
+    let id = i32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+    (id > 0).then_some(id)
 }
 
 /// 同步解碼一段 bytes：UTF-8 → string/json；非 UTF-8 → hex 預覽（binary）。
@@ -689,7 +703,10 @@ fn decode_payload(bytes: Option<&[u8]>) -> (Option<String>, String, u64, bool) {
             let enc = if looks_like_json(s) { "json" } else { "string" };
             (Some(s.to_string()), enc.to_string(), len, truncated)
         }
-        Err(_) => (Some(hex_preview(slice)), "binary".to_string(), len, truncated),
+        // hex 預覽只放前 512 bytes；超過就要把 truncated 一起回給前端，
+        // 否则 value_bytes 是 1024 但 truncated=false，使用者以為看到完整內容。
+        Err(_) => (Some(hex_preview(slice)), "binary".to_string(), len,
+            truncated || slice.len() > MAX_HEX_PREVIEW),
     }
 }
 
@@ -699,9 +716,10 @@ fn looks_like_json(s: &str) -> bool {
         && serde_json::from_str::<serde_json::Value>(s).is_ok()
 }
 
+const MAX_HEX_PREVIEW: usize = 512;
+
 fn hex_preview(bytes: &[u8]) -> String {
-    const MAX: usize = 512;
-    let take = bytes.len().min(MAX);
+    let take = bytes.len().min(MAX_HEX_PREVIEW);
     let mut s = String::with_capacity(take * 3);
     for (i, b) in bytes[..take].iter().enumerate() {
         if i > 0 {
@@ -709,7 +727,7 @@ fn hex_preview(bytes: &[u8]) -> String {
         }
         s.push_str(&format!("{b:02x}"));
     }
-    if bytes.len() > MAX {
+    if bytes.len() > MAX_HEX_PREVIEW {
         s.push_str(" …");
     }
     s
@@ -790,4 +808,40 @@ fn headers_to_string(headers: &[KafkaHeader]) -> String {
         .map(|h| format!("{}={}", h.key, h.value))
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{confluent_schema_id, decode_payload, per_partition_count};
+
+    #[test]
+    fn latest_messages_backtrack_uses_ceiling_division() {
+        // 10 筆 / 3 分區 → 每片回溯 4 筆，才拿得滿 10 筆（整除只拿 9 筆）。
+        assert_eq!(per_partition_count(10, 3), 4);
+        assert_eq!(per_partition_count(100, 3), 34);
+        assert_eq!(per_partition_count(10, 2), 5);
+        assert_eq!(per_partition_count(10, 1), 10);
+        assert_eq!(per_partition_count(10, 0), 10);
+        assert_eq!(per_partition_count(0, 3), 1);
+    }
+
+    #[test]
+    fn zero_prefixed_binary_is_not_mistaken_for_avro() {
+        assert_eq!(confluent_schema_id(&[0, 0, 0, 0, 0, 0xff]), None); // id=0 不可能合法
+        assert_eq!(confluent_schema_id(&[0, 0, 0, 0, 1, 0xff]), Some(1));
+        assert_eq!(confluent_schema_id(&[0, 0, 0, 0, 0x2a, 0xff]), Some(42));
+        assert_eq!(confluent_schema_id(&[1, 0, 0, 0, 0x2a, 0xff]), None);
+        assert_eq!(confluent_schema_id(&[0, 0, 0, 0]), None); // 太短
+    }
+
+    #[test]
+    fn binary_preview_reports_truncation() {
+        let (val, enc, len, trunc) = decode_payload(Some(&vec![0xff; 600]));
+        assert_eq!(enc, "binary");
+        assert_eq!(len, 600);
+        assert!(trunc, "只顯示前 512 bytes 就必須標 truncated");
+        assert!(val.unwrap().ends_with(" …"));
+        let (_, _, _, trunc) = decode_payload(Some(&vec![0xff; 100]));
+        assert!(!trunc);
+    }
 }

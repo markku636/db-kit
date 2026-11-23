@@ -185,12 +185,18 @@ impl KafkaDriver {
         // 移除已不在監看清單的快取 consumer。
         group_consumers.retain(|g, _| cfg.groups.contains(g));
         for group in &cfg.groups {
-            let consumer = group_consumers.entry(group.clone()).or_insert_with(|| {
+            if !group_consumers.contains_key(group) {
                 let mut cc = self.base.clone();
                 cc.set("group.id", group);
                 cc.set("enable.auto.commit", "false");
-                cc.create().expect("create group consumer")
-            });
+                // 權限不足 / 設定無效時只略過這個群組；先前 expect 會 panic 整條取樣執行緒，
+                // 但狀態裡還留著 cancel，前端一直以為還在監控。
+                match cc.create::<BaseConsumer>() {
+                    Ok(c) => { group_consumers.insert(group.clone(), c); }
+                    Err(_) => continue,
+                }
+            }
+            let consumer = &group_consumers[group];
             if let Some(lag) = group_lag_via(consumer, self.meta.as_ref(), group) {
                 group_lag.insert(group.clone(), lag);
             }

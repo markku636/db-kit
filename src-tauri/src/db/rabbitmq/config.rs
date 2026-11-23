@@ -24,13 +24,15 @@ pub fn is_tls(cfg: &ConnectionConfig) -> bool {
     opt_bool(cfg, "rabbitmq_tls")
 }
 
-/// 主機（去空白；空則 localhost）。
-fn host(cfg: &ConnectionConfig) -> &str {
+/// 主機（去空白；空則 localhost）。URI 中的 IPv6 literal 必須保留方括號，
+/// 否則 `amqp://guest:guest@::1:5672` 不是合法 authority。
+fn host(cfg: &ConnectionConfig) -> String {
     let h = cfg.host.trim();
-    if h.is_empty() {
-        "localhost"
+    let h = if h.is_empty() { "localhost" } else { h };
+    if h.contains(':') && !h.starts_with('[') {
+        format!("[{h}]")
     } else {
-        h
+        h.to_string()
     }
 }
 
@@ -137,6 +139,17 @@ mod tests {
             amqp_uri(&c),
             "amqp://guest:guest@mq.example.com:5672/%2F"
         );
+    }
+
+    #[test]
+    fn ipv6_host_is_bracketed_in_both_urls() {
+        let mut c = cfg();
+        c.host = "::1".into();
+        assert_eq!(amqp_uri(&c), "amqp://guest:guest@[::1]:5672/%2F");
+        assert_eq!(mgmt_url(&c), "http://[::1]:15672");
+        // 已經有括號時不要重複包。
+        c.host = "[fd00::1]".into();
+        assert!(amqp_uri(&c).contains("@[fd00::1]:5672"));
     }
 
     #[test]

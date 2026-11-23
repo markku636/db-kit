@@ -188,9 +188,9 @@ unsafe fn build_binding(
     let perm = to_permission(&b.permission);
 
     // filter 時空字串 → NULL（萬用）；create 時空字串 → 空 C 字串。
-    let name = str_ptr(&b.name, is_filter, cstrings);
-    let principal = str_ptr(&b.principal, is_filter, cstrings);
-    let host = str_ptr(&b.host, is_filter, cstrings);
+    let name = str_ptr(&b.name, is_filter, cstrings)?;
+    let principal = str_ptr(&b.principal, is_filter, cstrings)?;
+    let host = str_ptr(&b.host, is_filter, cstrings)?;
 
     let ptr = if is_filter {
         rd::rd_kafka_AclBindingFilter_new(restype, name, pattern, principal, host, op, perm, errbuf.as_mut_ptr(), errbuf.len())
@@ -206,15 +206,21 @@ unsafe fn build_binding(
     Ok(ptr)
 }
 
+/// 含 NUL 的字串轉 CString 會失敗；先前 unwrap_or_default() 會把它變成空字串，
+/// filter 就等於「萬用」，可能誤刪 ACL。改成明確報錯。
+fn to_cstring(s: &str) -> AppResult<CString> {
+    CString::new(s).map_err(|_| AppError::Query("ACL 欄位含 NUL 位元組，無法傳給 librdkafka".into()))
+}
+
 /// 空字串 + filter → NULL；否則配 CString 回其指標。
-unsafe fn str_ptr(s: &str, is_filter: bool, cstrings: &mut Vec<CString>) -> *const c_char {
+unsafe fn str_ptr(s: &str, is_filter: bool, cstrings: &mut Vec<CString>) -> AppResult<*const c_char> {
     if s.is_empty() && is_filter {
-        return ptr::null();
+        return Ok(ptr::null());
     }
-    let cs = CString::new(s).unwrap_or_default();
+    let cs = to_cstring(s)?;
     let p = cs.as_ptr();
     cstrings.push(cs);
-    p
+    Ok(p)
 }
 
 /// binding（event 擁有）→ DTO（複製所有字串）。
@@ -354,6 +360,13 @@ mod tests {
             assert_eq!(operation_name(to_operation(s)), s);
         }
     }
+    #[test]
+    fn acl_field_with_nul_byte_is_rejected() {
+        assert!(to_cstring("a\0b").is_err());
+        assert!(to_cstring("User:alice").is_ok());
+        assert!(to_cstring("").is_ok());
+    }
+
     #[test]
     fn permission_and_pattern_roundtrip() {
         for s in ["allow", "deny", "any"] {

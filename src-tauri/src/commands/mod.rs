@@ -2878,6 +2878,13 @@ pub(crate) fn spawn_kafka_sampler(
                 slept += 250;
             }
         }
+        // 執行緒結束（使用者停止 / 斷線）就移除註記，kafka_monitor_status 不再謊報 running。
+        // 只有仍是我這個 cancel 時才移除，避免誤清新啟動的取樣器。
+        let state = app.state::<AppState>();
+        let mut samplers = state.kafka_samplers.lock();
+        if samplers.get(&id).is_some_and(|cur| Arc::ptr_eq(cur, &cancel)) {
+            samplers.remove(&id);
+        }
     });
 }
 
@@ -3438,6 +3445,7 @@ pub async fn rabbitmq_peek(state: State<'_, AppState>, id: String, queue: String
 #[cfg(feature = "rabbitmq")]
 #[tauri::command]
 pub async fn rabbitmq_publish(state: State<'_, AppState>, id: String, exchange: String, routing_key: String, payload: String, persistent: bool) -> AppResult<RabbitPublishResult> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.rabbitmq_driver(&id)?.publish(&exchange, &routing_key, &payload, persistent).await
 }
 
@@ -3445,6 +3453,7 @@ pub async fn rabbitmq_publish(state: State<'_, AppState>, id: String, exchange: 
 #[cfg(feature = "rabbitmq")]
 #[tauri::command]
 pub async fn rabbitmq_purge(state: State<'_, AppState>, id: String, queue: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.rabbitmq_driver(&id)?.purge(&queue).await
 }
 
@@ -3452,5 +3461,6 @@ pub async fn rabbitmq_purge(state: State<'_, AppState>, id: String, queue: Strin
 #[cfg(feature = "rabbitmq")]
 #[tauri::command]
 pub async fn rabbitmq_delete_queue(state: State<'_, AppState>, id: String, queue: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.rabbitmq_driver(&id)?.delete_queue(&queue).await
 }

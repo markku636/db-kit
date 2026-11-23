@@ -110,11 +110,29 @@ impl RabbitMqDriver {
     }
 }
 
-/// BasicGetMessage → RabbitMessage（payload 以 UTF-8 lossy 轉字串；properties 序列化成 JSON 字串）。
+/// payload 顯示：合法 UTF-8 直接是文字；二進位（protobuf / gzip / msgpack…）轉十六進位預覽，
+/// 不要用 lossy UTF-8 把位元組換成 U+FFFD（原始內容再也救不回來）。
+fn payload_to_display(bytes: &[u8]) -> String {
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
+    }
+    const MAX: usize = 512;
+    let take = bytes.len().min(MAX);
+    let mut s = String::with_capacity(take * 3 + 2);
+    s.push_str("0x");
+    for (i, b) in bytes[..take].iter().enumerate() {
+        if i > 0 { s.push(' '); }
+        s.push_str(&format!("{b:02x}"));
+    }
+    if bytes.len() > MAX { s.push_str(" …"); }
+    s
+}
+
+/// BasicGetMessage → RabbitMessage（payload 保留二進位可讀性；properties 序列化成 JSON 字串）。
 fn message_to_dto(msg: &BasicGetMessage) -> RabbitMessage {
     let d = &msg.delivery;
     RabbitMessage {
-        payload: String::from_utf8_lossy(&d.data).into_owned(),
+        payload: payload_to_display(&d.data),
         properties: properties_to_json(&d.properties),
         routing_key: d.routing_key.as_str().to_string(),
         exchange: d.exchange.as_str().to_string(),
@@ -155,4 +173,19 @@ fn properties_to_json(p: &BasicProperties) -> String {
         }
     }
     serde_json::to_string(&Value::Object(m)).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::payload_to_display;
+
+    #[test]
+    fn binary_payload_shows_hex_instead_of_replacement_chars() {
+        assert_eq!(payload_to_display(b"hello"), "hello");
+        let hex = payload_to_display(&[0xff, 0xfe, 0x00]);
+        assert_eq!(hex, "0xff fe 00");
+        assert!(!hex.contains('\u{fffd}'));
+        let long = payload_to_display(&vec![0xff; 600]);
+        assert!(long.ends_with(" …"));
+    }
 }

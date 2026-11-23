@@ -12,6 +12,31 @@ use super::dto::{KafkaBatchResult, KafkaCsvProduceOptions, KafkaProduceRequest, 
 use super::{query_err, KafkaDriver};
 use crate::error::{AppError, AppResult};
 
+/// 解析 CSV 的 key / value 欄位，並提前驗證索引範圍。
+/// 先前 `row.get(超出範圍)` 回 None 卻照樣回報成功，等於靜默丟掉 key / value。
+fn resolve_csv_columns(
+    header: &[String],
+    opts: &KafkaCsvProduceOptions,
+    width: usize,
+) -> AppResult<(Option<usize>, Option<usize>)> {
+    let resolve = |name: &Option<String>, label: &str| -> AppResult<Option<usize>> {
+        let Some(n) = name.as_deref() else { return Ok(None) };
+        let idx = header.iter().position(|h| h == n)
+            .or_else(|| n.parse::<usize>().ok())
+            .ok_or_else(|| AppError::Query(format!("{label} 欄位「{n}」找不到")))?;
+        if idx >= width {
+            return Err(AppError::Query(format!("{label} 欄位「{n}」索引 {idx} 超出範圍（共 {width} 欄）")));
+        }
+        Ok(Some(idx))
+    };
+    Ok((resolve(&opts.key_column, "key")?, resolve(&opts.value_column, "value")?))
+}
+
+/// null key 必須維持 null，不能退化成空字串（會讓所有訊息擠到同一分區）。
+fn key_bytes(key: Option<&str>) -> Option<&[u8]> {
+    key.map(str::as_bytes)
+}
+
 impl KafkaDriver {
     /// 發佈一則訊息，回傳落地的 partition / offset。
     pub async fn produce(&self, req: &KafkaProduceRequest) -> AppResult<KafkaProduceResult> {
@@ -22,8 +47,8 @@ impl KafkaDriver {
                 value: Some(h.value.as_bytes()),
             });
         }
-        let key = req.key.clone().unwrap_or_default();
-
+        // key 為 null 時不要設 key：librdkafka 對 null key 才會用預設 partitioner
+        // 分散到各分區；空字串 key 永遠 hash 到同一分區，還會把 null 語意改成 ""。
         // value：raw → 原文 bytes；avro → 以 SR schema 編碼為 wire-format。
         let payload: Vec<u8> = if req.value_format.as_deref() == Some("avro") {
             let sr = self.schema.as_deref().ok_or_else(|| {
@@ -39,10 +64,12 @@ impl KafkaDriver {
             req.value.clone().unwrap_or_default().into_bytes()
         };
 
-        let mut record = FutureRecord::to(&req.topic)
+        let mut record: FutureRecord<'_, [u8], Vec<u8>> = FutureRecord::to(&req.topic)
             .payload(&payload)
-            .key(&key)
             .headers(headers);
+        if let Some(k) = key_bytes(req.key.as_deref()) {
+            record = record.key(k);
+        }
         if let Some(p) = req.partition {
             record = record.partition(p);
         }
@@ -109,16 +136,8 @@ impl KafkaDriver {
         } else {
             (Vec::new(), &rows[..])
         };
-        let col_idx = |name: &Option<String>| -> Option<usize> {
-            let n = name.as_deref()?;
-            // 先當標頭名，再退回索引字串。
-            header
-                .iter()
-                .position(|h| h == n)
-                .or_else(|| n.parse::<usize>().ok())
-        };
-        let key_i = col_idx(&opts.key_column);
-        let value_i = col_idx(&opts.value_column);
+        let width = data.first().map(|r| r.len()).unwrap_or(header.len());
+        let (key_i, value_i) = resolve_csv_columns(&header, opts, width)?;
 
         let total = data.len() as u64;
         let mut sent = 0u64;
@@ -173,4 +192,34 @@ fn row_to_json(header: &[String], row: &[String]) -> String {
         map.insert(name, serde_json::Value::String(cell.clone()));
     }
     serde_json::Value::Object(map).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{key_bytes, resolve_csv_columns};
+    use crate::db::kafka::dto::KafkaCsvProduceOptions;
+
+    fn opts(key: Option<&str>, value: Option<&str>) -> KafkaCsvProduceOptions {
+        KafkaCsvProduceOptions {
+            topic: "t".into(), delimiter: None, has_header: true,
+            key_column: key.map(str::to_string), value_column: value.map(str::to_string),
+            partition: None,
+        }
+    }
+
+    #[test]
+    fn absent_key_stays_absent() {
+        assert_eq!(key_bytes(None), None);
+        assert_eq!(key_bytes(Some("a")), Some(b"a".as_slice()));
+        assert_eq!(key_bytes(Some("")), Some(b"".as_slice()));
+    }
+
+    #[test]
+    fn csv_column_out_of_range_is_an_error_not_silent_data_loss() {
+        let header = vec!["id".to_string(), "name".to_string()];
+        assert_eq!(resolve_csv_columns(&header, &opts(Some("id"), Some("name")), 2).unwrap(), (Some(0), Some(1)));
+        assert_eq!(resolve_csv_columns(&header, &opts(Some("1"), None), 2).unwrap(), (Some(1), None));
+        assert!(resolve_csv_columns(&header, &opts(Some("5"), None), 2).is_err());
+        assert!(resolve_csv_columns(&header, &opts(None, Some("missing")), 2).is_err());
+    }
 }
