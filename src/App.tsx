@@ -3354,7 +3354,9 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
                 ? [
                     [t("叢集總覽…"), () => setKafkaOverview({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
                     [t("監控與告警…"), () => setKafkaMonitor({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
-                    [t("新增主題…"), () => setKafkaCreateTopic({ connId: menuConn.id }), false] as [string, () => void, boolean],
+                    ...(readonlyConns[menu.id]
+                      ? []
+                      : [[t("新增主題…"), () => setKafkaCreateTopic({ connId: menuConn.id }), false] as [string, () => void, boolean]]),
                     [t("消費者群組…"), () => setKafkaGroups({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean],
                     ...(menuConn.options?.kafka_sr_url
                       ? [[t("Schema Registry…"), () => setKafkaSchema({ id: menuConn.id, name: menuConn.name }), false] as [string, () => void, boolean]]

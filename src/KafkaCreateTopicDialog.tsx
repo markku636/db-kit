@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { api, type KafkaHeader } from "./api";
+import { useStore } from "./store";
 import { Modal, Button, Field, Input } from "./ui/index";
 import { toast } from "./ui";
 import { useT } from "./i18n";
@@ -10,6 +11,7 @@ export default function KafkaCreateTopicDialog({ connId, onClose, onCreated }: {
   connId: string; onClose: () => void; onCreated?: () => void;
 }) {
   const t = useT();
+  const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [name, setName] = useState("");
   const [partitions, setPartitions] = useState(1);
   const [replication, setReplication] = useState(1);
@@ -17,7 +19,7 @@ export default function KafkaCreateTopicDialog({ connId, onClose, onCreated }: {
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
-    if (busy) return;
+    if (busy || readonly) return;
     if (!name.trim()) {
       toast.error(t("請輸入主題名稱"));
       return;

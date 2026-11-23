@@ -325,7 +325,7 @@ function AlertsTab({ connId }: { connId: string }) {
       <div>
         <div className="flex items-center gap-2 mb-1">
           <span className="text-fg/40">{t("告警歷史")}</span>
-          {history.length > 0 && <button type="button" onClick={() => api.kafkaAlertHistoryClear().then(load)} className="text-fg/40 hover:text-red-400">{t("清除")}</button>}
+          {history.length > 0 && <button type="button" onClick={() => api.kafkaAlertHistoryClear(connId).then(load)} className="text-fg/40 hover:text-red-400">{t("清除")}</button>}
         </div>
         {history.slice(0, 50).map((e) => (
           <div key={e.id} className="flex gap-2 border-b border-fg/5 py-0.5">

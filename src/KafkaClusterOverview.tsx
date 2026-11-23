@@ -27,10 +27,13 @@ export default function KafkaClusterOverview({ connId, connName, onClose }: {
 
   useEffect(() => {
     if (selBroker === null) { setConfig([]); return; }
+    let alive = true;
     setCfgErr(null);
+    setConfig([]);
     api.kafkaBrokerConfig(connId, selBroker)
-      .then(setConfig)
-      .catch((e) => { setConfig([]); setCfgErr(e?.message ?? String(e)); });
+      .then((v) => { if (alive) setConfig(v); })
+      .catch((e) => { if (alive) { setConfig([]); setCfgErr(e?.message ?? String(e)); } });
+    return () => { alive = false; };
   }, [connId, selBroker]);
 
   const shownConfig = useMemo(() => {

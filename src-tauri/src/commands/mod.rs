@@ -3108,14 +3108,24 @@ pub async fn kafka_alert_history(
     Ok(store::read_json(&app, KAFKA_ALERT_HISTORY_FILE).await.unwrap_or_default())
 }
 
-/// 清除告警歷史。
+/// 清除告警歷史。給 conn_id 時只清該連線（面板是依連線過濾顯示的，不能清到別人的）；
+/// 不給則向後相容：清全部。
 #[cfg(feature = "kafka")]
 #[tauri::command]
-pub async fn kafka_alert_history_clear(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+pub async fn kafka_alert_history_clear(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    conn_id: Option<String>,
+) -> AppResult<()> {
+    use crate::db::kafka::dto::KafkaAlertEvent;
     // 與告警 append 共用同一把鎖，避免「清除」與「寫入」交錯。
     let _guard = state.kafka_alert_history_lock.lock().await;
-    let empty: Vec<crate::db::kafka::dto::KafkaAlertEvent> = Vec::new();
-    store::write_json(&app, KAFKA_ALERT_HISTORY_FILE, &empty).await
+    let history: Vec<KafkaAlertEvent> = store::read_json(&app, KAFKA_ALERT_HISTORY_FILE).await.unwrap_or_default();
+    let next: Vec<KafkaAlertEvent> = match conn_id {
+        Some(id) => history.into_iter().filter(|e| e.connection_id != id).collect(),
+        None => Vec::new(),
+    };
+    store::write_json(&app, KAFKA_ALERT_HISTORY_FILE, &next).await
 }
 
 /// 送出測試通知（供前端「測試通知」按鈕驗證 OS 通知是否可用）。
@@ -3394,6 +3404,9 @@ pub async fn rabbitmq_queue_detail(state: State<'_, AppState>, id: String, queue
 #[cfg(feature = "rabbitmq")]
 #[tauri::command]
 pub async fn rabbitmq_peek(state: State<'_, AppState>, id: String, queue: String, count: u32, requeue: bool) -> AppResult<Vec<RabbitMessage>> {
+    // basic.get 的 requeue=false 等於取出並永久刪除訊息；唯讀連線一律強制重新入列。
+    // 前端已強制，這裡再擋一層（IPC 直接呼叫也有效）。
+    let requeue = requeue || state.readonly_conns.lock().contains(&id);
     state.manager.rabbitmq_driver(&id)?.peek(&queue, count, requeue).await
 }
 

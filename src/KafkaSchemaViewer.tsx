@@ -8,6 +8,7 @@ import {
   type KafkaSchema,
   type KafkaSchemaSubject,
 } from "./api";
+import { useStore } from "./store";
 import { toast, uiConfirm, useModalOverlay } from "./ui";
 import { IconButton, ModalViewControls, useModalView } from "./ui/index";
 import Icon from "./ui/Icon";
@@ -21,6 +22,7 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
   connId: string; connName: string; initialSubject?: string; onClose: () => void;
 }) {
   const t = useT();
+  const readonly = useStore((s) => s.readonlyConns[connId] === true);
   useModalOverlay(onClose);
   const [subjects, setSubjects] = useState<KafkaSchemaSubject[]>([]);
   const [selected, setSelected] = useState<string | null>(initialSubject ?? null);
@@ -32,6 +34,9 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
   const [diffVer, setDiffVer] = useState<number>(0);
   const [diffSchema, setDiffSchema] = useState<KafkaSchema | null>(null);
   const [draft, setDraft] = useState("");
+  // 註冊 / 刪除後 version 可能仍是 0（代表最新版），靠 refreshKey 強制重讀，
+  // 否則畫面會停留在上一版的 schema 內容。
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const loadSubjects = () =>
     api.kafkaSchemaSubjects(connId).then(setSubjects).catch((e) => setErr(e?.message ?? String(e)));
@@ -41,9 +46,15 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
     if (!selected) { setSchema(null); setCompat(null); return; }
     setErr(null);
     setMode("view");
-    api.kafkaSchema(connId, selected, version).then(setSchema).catch((e) => setErr(e?.message ?? String(e)));
-    api.kafkaSchemaCompatGet(connId, selected).then(setCompat).catch(() => setCompat(null));
-  }, [connId, selected, version]);
+    let alive = true;
+    api.kafkaSchema(connId, selected, version)
+      .then((s) => { if (alive) setSchema(s); })
+      .catch((e) => { if (alive) setErr(e?.message ?? String(e)); });
+    api.kafkaSchemaCompatGet(connId, selected)
+      .then((c) => { if (alive) setCompat(c); })
+      .catch(() => { if (alive) setCompat(null); });
+    return () => { alive = false; };
+  }, [connId, selected, version, refreshKey]);
 
   useEffect(() => {
     if (mode !== "diff" || !selected || !diffVer) { setDiffSchema(null); return; }
@@ -62,7 +73,7 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
   }, [schema, diffSchema]);
 
   const setCompatLevel = async (level: string) => {
-    if (!selected) return;
+    if (!selected || readonly) return;
     try {
       await api.kafkaSchemaCompatSet(connId, selected, level);
       setCompat({ level, inherited: false });
@@ -71,7 +82,7 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
   };
 
   const registerDraft = async () => {
-    if (!selected || !schema) return;
+    if (!selected || !schema || readonly) return;
     try {
       const check = await api.kafkaSchemaCompatCheck(connId, selected, draft, schema.schema_type);
       if (!check.compatible) {
@@ -82,23 +93,25 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
       toast.success(t("已註冊新版本（schema id {id}）", { id: newId }));
       setMode("view");
       setVersion(0);
+      setRefreshKey((k) => k + 1); // version 可能已是 0（最新版），还是要重讀
       loadSubjects();
     } catch (e: any) { toast.error(e?.message ?? String(e)); }
   };
 
   const delVersion = async () => {
-    if (!selected || !schema) return;
+    if (!selected || !schema || readonly) return;
     if (!(await uiConfirm(t("軟刪除 {subject} v{version}？", { subject: selected, version: schema.version }), { danger: true }))) return;
     try {
       await api.kafkaSchemaDeleteVersion(connId, selected, schema.version);
       toast.success(t("已刪除版本"));
       setVersion(0);
+      setRefreshKey((k) => k + 1);
       loadSubjects();
     } catch (e: any) { toast.error(e?.message ?? String(e)); }
   };
 
   const delSubject = async () => {
-    if (!selected) return;
+    if (!selected || readonly) return;
     if (!(await uiConfirm(t("軟刪除整個 subject「{subject}」？", { subject: selected }), { danger: true }))) return;
     try {
       await api.kafkaSchemaDeleteSubject(connId, selected);
@@ -151,9 +164,13 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
                   {compat && (
                     <label className="flex items-center gap-1 ml-2">
                       <span className="text-fg/40">{t("相容性")}</span>
-                      <select value={compat.level} onChange={(e) => setCompatLevel(e.target.value)} className="bg-inset border border-fg/10 rounded px-1.5 py-1 outline-none focus:border-accent">
-                        {COMPAT_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
-                      </select>
+                      {readonly ? (
+                        <span className="mono text-fg/70">{compat.level}</span>
+                      ) : (
+                        <select value={compat.level} onChange={(e) => setCompatLevel(e.target.value)} className="bg-inset border border-fg/10 rounded px-1.5 py-1 outline-none focus:border-accent">
+                          {COMPAT_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
+                        </select>
+                      )}
                       {compat.inherited && <span className="text-[10px] text-fg/30">{t("繼承全域")}</span>}
                     </label>
                   )}
@@ -162,11 +179,15 @@ export default function KafkaSchemaViewer({ connId, connName, initialSubject, on
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => setMode("view")} className={`px-2 py-1 rounded ${mode === "view" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"}`}>{t("檢視")}</button>
                   <button type="button" onClick={() => { setMode("diff"); setDiffVer((cur?.versions ?? []).find((v) => v !== schema.version) ?? schema.version); }} className={`px-2 py-1 rounded ${mode === "diff" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"}`}>{t("版本比對")}</button>
-                  <button type="button" onClick={() => { setMode("new"); setDraft(prettySchema(schema.schema)); }} className={`px-2 py-1 rounded ${mode === "new" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"}`}>{t("新版本")}</button>
-                  <span className="ml-auto space-x-2">
-                    <button type="button" onClick={delVersion} className="text-fg/40 hover:text-red-400">{t("刪除版本")}</button>
-                    <button type="button" onClick={delSubject} className="text-fg/40 hover:text-red-400">{t("刪除 subject")}</button>
-                  </span>
+                  {!readonly && (
+                    <button type="button" onClick={() => { setMode("new"); setDraft(prettySchema(schema.schema)); }} className={`px-2 py-1 rounded ${mode === "new" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"}`}>{t("新版本")}</button>
+                  )}
+                  {!readonly && (
+                    <span className="ml-auto space-x-2">
+                      <button type="button" onClick={delVersion} className="text-fg/40 hover:text-red-400">{t("刪除版本")}</button>
+                      <button type="button" onClick={delSubject} className="text-fg/40 hover:text-red-400">{t("刪除 subject")}</button>
+                    </span>
+                  )}
                 </div>
 
                 {mode === "view" && (

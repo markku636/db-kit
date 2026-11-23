@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Download, Play, Pause, Trash2, RefreshCw, Send } from "lucide-react";
 import {
   api,
-  onKafkaError,
+  onKafkaErrorForConn,
   onKafkaMessage,
   onKafkaScanProgress,
   type ExportFormat,
@@ -95,11 +95,14 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
     };
   }, [connId, topic]);
 
-  // 卸載：收掉監聽 + 停 tail。
+  // 卸載：收掉監聽 + 停 tail。refs 必須清零，否則下一次 startTail 會以為還在監聽而永不註冊。
   useEffect(() => {
     return () => {
       unlistenRef.current?.();
       unlistenErrRef.current?.();
+      unlistenRef.current = null;
+      unlistenErrRef.current = null;
+      setTailing(false);
       api.kafkaTailStop(connId).catch(() => {});
     };
   }, [connId]);
@@ -244,7 +247,7 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
         });
       }
       if (!unlistenErrRef.current) {
-        unlistenErrRef.current = await onKafkaError((msg) => setErr(msg));
+        unlistenErrRef.current = await onKafkaErrorForConn(connId, (msg) => setErr(msg));
       }
       await api.kafkaTailStart(connId, topic, partition, { type: "end" }, jsOnTail && jsActive ? jsFilter.trim() : null);
       setTailing(true);
@@ -339,7 +342,10 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
         <select
           value={partition ?? ""}
           onChange={(e) => setPartition(e.target.value === "" ? null : Number(e.target.value))}
-          className="bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent"
+          // tail 是後端啟動時帶著分區參數的；即時接收中改下拉不會生效，與其讓人誤以為已切換不如先擋下。
+          disabled={tailing}
+          title={tailing ? t("請先停止即時接收再變更分區") : undefined}
+          className="bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent disabled:opacity-40"
         >
           <option value="">{t("全部")}</option>
           {partitions.map((p) => (
@@ -492,8 +498,9 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
           </div>
           {filterMode === "simple"
             ? <span className="text-fg/30">{t("用上方篩選框比對 key / value / header（子字串）")}</span>
-            : <label className="flex items-center gap-1 cursor-pointer text-fg/60">
-                <input type="checkbox" checked={jsOnTail} onChange={(e) => setJsOnTail(e.target.checked)} />
+            : <label className={`flex items-center gap-1 text-fg/60 ${tailing ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
+                title={tailing ? t("請先停止即時接收再變更即時篩選") : undefined}>
+                <input type="checkbox" checked={jsOnTail} onChange={(e) => setJsOnTail(e.target.checked)} disabled={tailing} />
                 {t("套用於即時")}
               </label>}
         </div>
@@ -503,6 +510,7 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
               value={jsFilter}
               onChange={setJsFilter}
               extensions={cmExtensions}
+              editable={!tailing}
               theme="dark"
               placeholder={"json && json.amount > 100 && headers[\"src\"] === \"web\""}
               basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}

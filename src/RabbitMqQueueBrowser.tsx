@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { api, type RabbitMessage } from "./api";
+import { useStore } from "./store";
+import { resolvePeekRequeue } from "./rabbitMqReadonly";
 import Icon from "./ui/Icon";
 import { copyToClipboard } from "./ui";
 import { useT } from "./i18n";
@@ -10,8 +12,11 @@ import { useT } from "./i18n";
 // stream 佇列不支援 basic.get，直接顯示提示、不呼叫 peek。
 export default function RabbitMqQueueBrowser({ connId, queue }: { connId: string; queue: string }) {
   const t = useT();
+  const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [count, setCount] = useState(10);
   const [requeue, setRequeue] = useState(true);
+  // 唯讀連線強制重新入列：basic.get 的 requeue=false 等於永久刪除訊息。
+  const effectiveRequeue = resolvePeekRequeue(readonly, requeue);
   const [rows, setRows] = useState<RabbitMessage[]>([]);
   // 佇列類型：TableView 不傳，故自行以 queueDetail 取得（用來判斷 stream）。
   const [queueType, setQueueType] = useState<string | null>(null);
@@ -35,7 +40,7 @@ export default function RabbitMqQueueBrowser({ connId, queue }: { connId: string
     setBusy(true);
     setErr(null);
     try {
-      const ms = await api.rabbitmqPeek(connId, queue, Math.max(1, count), requeue);
+      const ms = await api.rabbitmqPeek(connId, queue, Math.max(1, count), effectiveRequeue);
       setRows(ms);
       setLoaded(true);
     } catch (e: any) {
@@ -43,7 +48,7 @@ export default function RabbitMqQueueBrowser({ connId, queue }: { connId: string
     } finally {
       setBusy(false);
     }
-  }, [connId, queue, count, requeue, isStream, t]);
+  }, [connId, queue, count, effectiveRequeue, isStream, t]);
 
   const pretty = (payload: string): string => {
     try {
@@ -74,8 +79,9 @@ export default function RabbitMqQueueBrowser({ connId, queue }: { connId: string
           disabled={isStream}
           className="w-20 bg-inset border border-fg/10 rounded px-2 py-1 outline-none focus:border-accent disabled:opacity-40"
         />
-        <label className="flex items-center gap-1.5 cursor-pointer text-fg/60">
-          <input type="checkbox" checked={requeue} onChange={(e) => setRequeue(e.target.checked)} disabled={isStream} />
+        <label className={`flex items-center gap-1.5 text-fg/60 ${isStream || readonly ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
+          title={readonly ? t("唯讀連線強制重新入列，不能取出並刪除訊息") : undefined}>
+          <input type="checkbox" checked={effectiveRequeue} onChange={(e) => setRequeue(e.target.checked)} disabled={isStream || readonly} />
           {t("重新入列（requeue）")}
         </label>
         <button
@@ -92,7 +98,9 @@ export default function RabbitMqQueueBrowser({ connId, queue }: { connId: string
       {/* 常駐黃色警告條 */}
       <div className="px-3 py-2 border-b border-fg/10 bg-amber-500/10 text-amber-300/90 flex items-start gap-2 leading-relaxed">
         <Icon icon={AlertTriangle} size={13} className="shrink-0 mt-0.5" />
-        <span>{t("basic.get 會取出訊息再重新入列（標記 redelivered、可能改變順序）；quorum 佇列會累加 delivery count。")}</span>
+        <span>{effectiveRequeue
+          ? t("basic.get 會取出訊息再重新入列（標記 redelivered、可能改變順序）；quorum 佇列會累加 delivery count。")
+          : t("已取消重新入列：重新整理會取出並永久刪除訊息，無法復原。")}</span>
       </div>
 
       {err && <div className="px-3 py-1.5 text-red-400 mono break-all border-b border-fg/10">{err}</div>}

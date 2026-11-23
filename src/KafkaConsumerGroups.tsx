@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Users, X } from "lucide-react";
 import {
   api,
@@ -26,6 +26,8 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
   const readonly = useStore((s) => s.readonlyConns[connId] === true);
   const [groups, setGroups] = useState<KafkaConsumerGroup[]>([]);
   const [selected, setSelected] = useState<string | null>(initialGroup ?? null);
+  const selectedRef = useRef(selected);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
   const [detail, setDetail] = useState<KafkaGroupDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -64,9 +66,14 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
 
   useEffect(() => {
     if (!selected) { setDetail(null); return; }
+    let alive = true;
     setErr(null);
     setPlan(null);
-    api.kafkaGroupDetail(connId, selected).then(setDetail).catch((e) => setErr(e?.message ?? String(e)));
+    setDetail(null);
+    api.kafkaGroupDetail(connId, selected)
+      .then((d) => { if (alive) setDetail(d); })
+      .catch((e) => { if (alive) setErr(e?.message ?? String(e)); });
+    return () => { alive = false; };
   }, [connId, selected]);
 
   const topics = useMemo(
@@ -155,7 +162,11 @@ export default function KafkaConsumerGroups({ connId, connName, initialGroup, on
       const applied = await api.kafkaResetOffsets(connId, reset);
       toast.success(t("已重設 {n} 個分區位移", { n: applied.filter((r) => r.target !== null).length }));
       setPlan(null); setPlanSig(null);
-      if (selected) api.kafkaGroupDetail(connId, selected).then(setDetail).catch(() => {});
+      // 重設期間使用者可能已經點別的群組；過期回應不能覆蓋新詳情。
+      const target = selected;
+      if (target) api.kafkaGroupDetail(connId, target)
+        .then((d) => { if (selectedRef.current === target) setDetail(d); })
+        .catch(() => {});
     } catch (e: any) {
       toast.error(e?.message ?? t("重設失敗"));
     } finally {

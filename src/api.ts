@@ -28,7 +28,7 @@ import type {
   RdAuthPrompt, RdAuthAnswer, RdConnClosed,
 } from "./rdTypes";
 import { mssqlNeedsCredentials } from "./mssqlAuth";
-import { pubSubErrorForConn } from "./pubSubFormat";
+import { prefixedErrorForConn, pubSubErrorForConn } from "./pubSubFormat";
 
 export type DbKind = "mysql" | "mariadb" | "postgres" | "mongo" | "redis" | "sqlite" | "mssql" | "oracle" | "kafka" | "elastic" | "rabbitmq" | "docker" | "registry" | "harbor" | "kubernetes" | "external";
 
@@ -1263,9 +1263,12 @@ export function onKafkaMessage(connId: string, cb: (m: KafkaMessage) => void): P
     if (e.payload.conn_id === connId) cb(e.payload);
   });
 }
-// 訂閱 Kafka 背景任務錯誤（payload 為字串）。回傳取消監聽函式。
-export function onKafkaError(cb: (msg: string) => void): Promise<UnlistenFn> {
-  return listen<string>("kafka-error", (e) => cb(e.payload));
+// 訂閱 Kafka 背景任務錯誤（payload 為 "{connId}: 訊息"）。只回呼屬於這條連線的錯誤。
+export function onKafkaErrorForConn(connId: string, cb: (msg: string) => void): Promise<UnlistenFn> {
+  return listen<string>("kafka-error", (e) => {
+    const msg = prefixedErrorForConn(e.payload, connId);
+    if (msg != null) cb(msg);
+  });
 }
 // 訂閱掃描進度（僅回呼符合 connId 者）。回傳取消監聽函式。
 export function onKafkaScanProgress(connId: string, cb: (p: KafkaScanProgress) => void): Promise<UnlistenFn> {
@@ -2083,7 +2086,7 @@ export const api = {
   kafkaAlertRuleSave: (rule: KafkaAlertRule) => invoke<void>("kafka_alert_rule_save", { rule }),
   kafkaAlertRuleRemove: (ruleId: string) => invoke<void>("kafka_alert_rule_remove", { ruleId }),
   kafkaAlertHistory: () => invoke<KafkaAlertEvent[]>("kafka_alert_history"),
-  kafkaAlertHistoryClear: () => invoke<void>("kafka_alert_history_clear"),
+  kafkaAlertHistoryClear: (connectionId?: string) => invoke<void>("kafka_alert_history_clear", { connId: connectionId }),
   kafkaAlertTest: (message: string) => invoke<void>("kafka_alert_test", { message }),
   kafkaSchemaSubjects: (id: string) => invoke<KafkaSchemaSubject[]>("kafka_schema_subjects", { id }),
   kafkaSchema: (id: string, subject: string, version: number) =>

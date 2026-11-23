@@ -28,6 +28,8 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent, ini
   const [valueFormat, setValueFormat] = useState<"raw" | "avro">("raw");
   const [subjects, setSubjects] = useState<string[]>([]);
   const [subject, setSubject] = useState(`${topic}-value`);
+  // 手動選過 subject 就不再跟著主題自動猜測（註冊到錯誤 schema 很難察覺）。
+  const subjectTouched = useRef(false);
   const [busy, setBusy] = useState(false);
   // 流量模式：自動連續發佈（前端 setTimeout 迴圈；key/value 套用 {{...}} 模板）。
   const [mode, setMode] = useState<"single" | "flow">("single");
@@ -60,7 +62,7 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent, ini
   }, [connId, valueFormat]);
 
   // 目標主題變更時，預設 subject 跟著猜 "{topic}-value"（未手動改過才跟）。
-  useEffect(() => { setSubject(`${targetTopic}-value`); }, [targetTopic]);
+  useEffect(() => { if (!subjectTouched.current) setSubject(`${targetTopic}-value`); }, [targetTopic]);
 
   const submit = async () => {
     if (busy) return;
@@ -217,7 +219,7 @@ export default function KafkaProduceDialog({ connId, topic, onClose, onSent, ini
             <button type="button" onClick={() => setValueFormat("avro")} className={`px-2 py-1 ${valueFormat === "avro" ? "bg-accent/20 text-accent" : "text-fg/50 hover:bg-fg/10"}`}>{t("Avro（Schema Registry）")}</button>
           </div>
           {valueFormat === "avro" && (
-            <select value={subject} onChange={(e) => setSubject(e.target.value)} className="bg-inset border border-fg/10 rounded px-2 py-1 text-xs outline-none focus:border-accent">
+            <select value={subject} onChange={(e) => { subjectTouched.current = true; setSubject(e.target.value); }} className="bg-inset border border-fg/10 rounded px-2 py-1 text-xs outline-none focus:border-accent">
               {!subjects.includes(subject) && <option value={subject}>{subject}</option>}
               {subjects.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
