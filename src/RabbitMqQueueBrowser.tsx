@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { api, type RabbitMessage } from "./api";
 import { useStore } from "./store";
@@ -23,12 +23,16 @@ export default function RabbitMqQueueBrowser({ connId, queue }: { connId: string
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const gen = useRef(0);
 
   const isStream = queueType === "stream";
 
   useEffect(() => {
     let alive = true;
+    gen.current++; // 作廢上一條佇列還在飛的 peek 回應
     setQueueType(null);
+    setRows([]);
+    setLoaded(false);
     api.rabbitmqQueueDetail(connId, queue)
       .then((q) => { if (alive) setQueueType(q.queue_type); })
       .catch(() => { if (alive) setQueueType(""); }); // 取不到類型時視為非 stream，仍允許 peek
@@ -37,16 +41,19 @@ export default function RabbitMqQueueBrowser({ connId, queue }: { connId: string
 
   const load = useCallback(async () => {
     if (isStream) return;
+    const myGen = ++gen.current;
+    const ok = () => gen.current === myGen;
     setBusy(true);
     setErr(null);
     try {
       const ms = await api.rabbitmqPeek(connId, queue, Math.max(1, count), effectiveRequeue);
+      if (!ok()) return;
       setRows(ms);
       setLoaded(true);
     } catch (e: any) {
-      setErr(e?.message ?? t("讀取失敗"));
+      if (ok()) setErr(e?.message ?? t("讀取失敗"));
     } finally {
-      setBusy(false);
+      if (ok()) setBusy(false);
     }
   }, [connId, queue, count, effectiveRequeue, isStream, t]);
 
