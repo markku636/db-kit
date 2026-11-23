@@ -1,5 +1,5 @@
 use futures::stream::TryStreamExt;
-use mongodb::bson::{doc, Bson, Document};
+use mongodb::bson::{doc, oid::ObjectId, Bson, DateTime as BsonDateTime, Decimal128, Document};
 use mongodb::options::{AggregateOptions, ClientOptions, FindOptions, IndexOptions};
 use mongodb::{Client, IndexModel};
 use std::time::Duration;
@@ -479,17 +479,15 @@ impl DatabaseDriver for MongoDriver {
                     .find_one(id_value.clone())
                     .await
                     .map_err(|e| AppError::Query(e.to_string()))?;
-                let composite = orig.as_ref().is_some_and(|d| {
-                    matches!(d.get(&edit.column), Some(Bson::Document(_)) | Some(Bson::Array(_)))
-                });
-                if composite {
+                let original = orig.as_ref().and_then(|d| d.get(&edit.column));
+                if matches!(original, Some(Bson::Document(_)) | Some(Bson::Array(_))) {
                     let v: serde_json::Value = serde_json::from_str(s.trim()).map_err(|e| {
                         AppError::Query(tf!("此欄為巢狀結構，需輸入合法 JSON：{e}", e = e))
                     })?;
                     Bson::try_from(v)
                         .map_err(|e| AppError::Query(tf!("JSON 轉 BSON 失敗：{e}", e = e)))?
                 } else {
-                    guess_bson(s)
+                    coerce_bson_edit(original, s)?
                 }
             }
         };
@@ -1388,6 +1386,31 @@ fn guess_bson(s: &str) -> Bson {
     Bson::String(s.to_string())
 }
 
+/// 依原欄位型別把表格輸入轉回 BSON：避免 ObjectId / Date / Int32 等被 guess_bson 變成字串，
+///  silently 把文件 schema 改壞。不支援就地編輯的型別直接要求用整份文件編輯器。
+fn coerce_bson_edit(orig: Option<&Bson>, s: &str) -> AppResult<Bson> {
+    let bad = |t: &str| AppError::Query(tf!("此欄位型別為 {t}，請輸入合法值或用整份文件編輯器修改", t = t));
+    let v = s.trim();
+    match orig {
+        Some(Bson::ObjectId(_)) => ObjectId::parse_str(v).map(Bson::ObjectId).map_err(|_| bad("ObjectId")),
+        Some(Bson::DateTime(_)) => BsonDateTime::parse_rfc3339_str(v).map(Bson::DateTime).map_err(|_| bad("Date")),
+        Some(Bson::Int32(_)) => v.parse::<i32>().map(Bson::Int32).map_err(|_| bad("Int32")),
+        Some(Bson::Decimal128(_)) => v.parse::<Decimal128>().map(Bson::Decimal128).map_err(|_| bad("Decimal128")),
+        Some(Bson::Double(_)) => v.parse::<f64>().map(Bson::Double).map_err(|_| bad("double")),
+        Some(Bson::Int64(_)) => v.parse::<i64>().map(Bson::Int64).map_err(|_| bad("Int64")),
+        Some(Bson::Boolean(_)) => match v {
+            "true" => Ok(Bson::Boolean(true)),
+            "false" => Ok(Bson::Boolean(false)),
+            _ => Err(bad("bool")),
+        },
+        Some(Bson::Binary(_)) | Some(Bson::RegularExpression(_)) | Some(Bson::Timestamp(_))
+        | Some(Bson::JavaScriptCodeWithScope(_)) => Err(AppError::Query(
+            t!("此 BSON 型別無法用表格就地編輯，請用整份文件編輯器修改").to_string(),
+        )),
+        _ => Ok(guess_bson(s)),
+    }
+}
+
 /// 判斷是否為 cell_display 產生的截斷後綴（前端也有一份相同判斷）。
 fn cell_truncated_marker(s: &str) -> bool {
     const PREFIX: &str = "…⟪+";
@@ -1762,9 +1785,9 @@ fn server_status_sections(status: &Document, build: &Document) -> Vec<ServerInfo
 
 #[cfg(test)]
 mod tests {
-    use super::{bson_from_json, build_explain_command, build_filter, build_mongo_uri, cell_truncated_marker, guess_bson, like_to_regex, server_status_sections};
+    use super::{bson_from_json, build_explain_command, build_filter, build_mongo_uri, cell_truncated_marker, coerce_bson_edit, guess_bson, like_to_regex, server_status_sections};
     use crate::db::{ConnectionConfig, DbKind, Filter, SshAuthMethod};
-    use mongodb::bson::{doc, Bson};
+    use mongodb::bson::{doc, oid::ObjectId, Bson, DateTime as BsonDateTime};
 
     #[test]
     fn build_filter_keeps_multiple_conditions_on_the_same_field() {
@@ -1814,6 +1837,23 @@ mod tests {
         // 查詢運算子必須仍是一般 document，不能被當成 extJSON。
         let gt = bson_from_json(&serde_json::json!({"$gt": 5}));
         assert_eq!(gt.as_document().unwrap().get_i32("$gt").unwrap(), 5);
+    }
+
+    #[test]
+    fn grid_edit_keeps_original_bson_type() {
+        assert!(matches!(
+            coerce_bson_edit(Some(&Bson::ObjectId(ObjectId::from_bytes([1; 12]))), "507f1f77bcf86cd799439011").unwrap(),
+            Bson::ObjectId(_)
+        ));
+        assert!(matches!(
+            coerce_bson_edit(Some(&Bson::DateTime(BsonDateTime::from_millis(0))), "2024-01-02T03:04:05Z").unwrap(),
+            Bson::DateTime(_)
+        ));
+        assert!(matches!(
+            coerce_bson_edit(Some(&Bson::Int32(1)), "42").unwrap(),
+            Bson::Int32(42)
+        ));
+        assert!(coerce_bson_edit(Some(&Bson::ObjectId(ObjectId::from_bytes([1; 12]))), "not-an-oid").is_err());
     }
 
     #[test]

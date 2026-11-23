@@ -2329,6 +2329,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "讀不到程序定義：{e}" => "Could not read the routine definition: {e}",
         "此連線為唯讀，已擋下寫入操作。可在連線右鍵關閉「唯讀模式」。" => "This connection is read-only; the write operation was blocked. Right-click the connection to disable read-only mode.",
         "此連線為唯讀，已擋下 MongoDB 寫入指令" => "This connection is read-only; MongoDB write commands were blocked",
+        "此欄位型別為 {t}，請輸入合法值或用整份文件編輯器修改" => "This field has type {t}; enter a valid value or edit it in the full document editor",
+        "此 BSON 型別無法用表格就地編輯，請用整份文件編輯器修改" => "This BSON type cannot be edited in the grid; use the full document editor",
         _ => return None,
     })
 }
