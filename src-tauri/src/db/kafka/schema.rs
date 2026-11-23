@@ -126,9 +126,17 @@ struct SchemaByIdResp {
     references: Vec<SrReference>,
 }
 
+/// SR 的「subject 不存在」404 特徵（錯誤碼 40401 或訊息）。
+fn is_subject_not_found(body: &str) -> bool {
+    body.contains("40401") || body.to_ascii_lowercase().contains("subject not found")
+}
+
 impl SchemaRegistry {
     pub fn new(base_url: &str, user: Option<String>, pass: Option<String>) -> AppResult<Self> {
+        // 避免 SR 的主機被防火牆黑洞時，整條 IPC 指令無限期掛住（比照 Management client）。
         let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(query_err)?;
         Ok(Self {
@@ -290,9 +298,14 @@ impl SchemaRegistry {
             .send()
             .await
             .map_err(query_err)?;
-        // subject 尚無版本時 SR 回 404 → 視為相容（首個版本）。
+        // subject 尚無版本時 SR 回 404（40401 / "Subject not found"）→ 視為相容（首個版本）。
+        // 其他 404（base URL 指到別的服務、路徑打錯）不能當成相容，否則會誤准註冊。
         if resp.status().as_u16() == 404 {
-            return Ok((true, vec![]));
+            let body = resp.text().await.unwrap_or_default();
+            if is_subject_not_found(&body) {
+                return Ok((true, vec![]));
+            }
+            return Err(AppError::Query(format!("相容性檢查失敗（HTTP 404）：{body}")));
         }
         let resp = check_sr_status(resp).await?;
         let r: Resp = resp.json().await.map_err(query_err)?;
@@ -552,5 +565,17 @@ impl SchemaRegistry {
                 Some((format!("({enc} schema id {id}，未解碼)"), enc, id))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_subject_not_found;
+
+    #[test]
+    fn only_subject_not_found_404_is_treated_as_compatible() {
+        assert!(is_subject_not_found(r#"{"error_code":40401,"message":"Subject not found"}"#));
+        assert!(!is_subject_not_found(r#"{"error_code":404,"message":"Not Found"}"#));
+        assert!(!is_subject_not_found("<html>404 page not found</html>"));
     }
 }

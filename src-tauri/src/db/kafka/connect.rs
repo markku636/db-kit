@@ -62,7 +62,12 @@ impl ConnectClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             user,
             pass,
-            client: Client::builder().build().map_err(query_err)?,
+            // 連到無回應的 Connect REST 時不要無限期掛住 IPC。
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .map_err(query_err)?,
         })
     }
 

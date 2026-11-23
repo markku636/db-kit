@@ -185,10 +185,17 @@ impl KafkaDriver {
 fn row_to_json(header: &[String], row: &[String]) -> String {
     let mut map = serde_json::Map::new();
     for (i, cell) in row.iter().enumerate() {
-        let name = header
+        let base = header
             .get(i)
             .cloned()
             .unwrap_or_else(|| format!("col{i}"));
+        // 重複的標頭名不能再直接 insert 覆蓋前面的值；自動加後綴保留每一欄。
+        let mut name = base.clone();
+        let mut n = 2;
+        while map.contains_key(&name) {
+            name = format!("{base}_{n}");
+            n += 1;
+        }
         map.insert(name, serde_json::Value::String(cell.clone()));
     }
     serde_json::Value::Object(map).to_string()
@@ -196,7 +203,7 @@ fn row_to_json(header: &[String], row: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{key_bytes, resolve_csv_columns};
+    use super::{key_bytes, resolve_csv_columns, row_to_json};
     use crate::db::kafka::dto::KafkaCsvProduceOptions;
 
     fn opts(key: Option<&str>, value: Option<&str>) -> KafkaCsvProduceOptions {
@@ -212,6 +219,16 @@ mod tests {
         assert_eq!(key_bytes(None), None);
         assert_eq!(key_bytes(Some("a")), Some(b"a".as_slice()));
         assert_eq!(key_bytes(Some("")), Some(b"".as_slice()));
+    }
+
+    #[test]
+    fn duplicate_csv_headers_do_not_overwrite_each_other() {
+        let header = vec!["id".to_string(), "id".to_string(), "id".to_string()];
+        let row = vec!["1".to_string(), "2".to_string(), "3".to_string()];
+        let v: serde_json::Value = serde_json::from_str(&row_to_json(&header, &row)).unwrap();
+        assert_eq!(v["id"], "1");
+        assert_eq!(v["id_2"], "2");
+        assert_eq!(v["id_3"], "3");
     }
 
     #[test]
