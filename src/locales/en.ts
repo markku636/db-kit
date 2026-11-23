@@ -5302,6 +5302,17 @@ const en: Catalog = {
   "請到設定手動登入 Tenon。": "Sign in to Tenon manually in Settings.",
   "離線": "Offline",
   "預設關閉。請手動輸入你獲授權的服務網址；不提供預設伺服器或試用帳號。": "Disabled by default. Enter your authorized service URL manually; no default server or trial account is provided.",
+  // 設定對話框分區（issue #10）與 AI 自動執行（issue #11）
+  "設定分類": "Settings sections",
+  "一般": "General",
+  "外觀": "Appearance",
+  "安全與查詢": "Security & Query",
+  "AI 與整合": "AI & Integrations",
+  "AI 設定…": "AI Settings…",
+  "AI 助手的供應商、金鑰、人設與技能集中在「AI 設定」；各 API 供應商可分別設定自己的模型，切換供應商即套用對應模型。": "The assistant's provider, API keys, persona and skills are now grouped under AI Settings. Each API provider keeps its own model, which is applied when you switch providers.",
+  "自動執行安全指令": "Auto-run safe commands",
+  "AI 回覆中的 bash 區塊若被判定為「安全」，送出後會自動執行並回饋結果；需要確認或高風險的指令一律仍須你親自按「執行並回饋」授權。": "Bash blocks in AI replies classified as safe run automatically and feed the output back. Commands that need confirmation or are blocked always require you to press Run & send to AI yourself.",
+  "把資料庫接到 Claude Code、Codex、Cursor、VS Code 等 AI 工具：可選全部連線或單一連線、資料庫與 SSH 主機，一鍵寫進它們的設定，或在背景開一個本機 HTTP 伺服器。": "Connect databases to Claude Code, Codex, Cursor, VS Code and other AI tools: pick all connections or a single one with its database and SSH hosts, then install with one click or start a local HTTP server.",
 };
 
 export default en;

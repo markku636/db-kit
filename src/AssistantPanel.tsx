@@ -40,6 +40,7 @@ import { isShellRun, persistableShellRun, SHELL_LANGS, normalizeShellCode, toCha
 import ChatSqlResult from "./ChatSqlResult";
 import ChatShellResult from "./ChatShellResult";
 import { classifyShell } from "./shellGuard";
+import { useShellAuto } from "./shellAuto";
 import { assistantSshMode, explainOutputAsk, fixLastErrorAsk, sshTerminalGuidance, summarizeSessionAsk, type QuickAsk } from "./sshAiPrompts";
 import { activeSshTabKey, connectedSshTabKeys, useSshTerminals } from "./sshTerminals";
 import { SquareTerminal } from "lucide-react";
@@ -1061,6 +1062,35 @@ export default function AssistantPanel() {
     setMessages((m) => m.map((x) => (x.id === msgId ? { ...x, runs: { ...(x.runs ?? {}), [String(blockIdx)]: result } } : x)));
     if (feedback) void send(shellFeedbackDisplay(result), false, { extraContext: shellFeedbackPrompt(result) });
   };
+  /**
+   * 自動執行（issue #11）：設定開啟時，助手回覆中的 bash 區塊若分級為 safe，回覆完成就自動送進終端機並回饋。
+   * confirm / block 永遠不自動執行——危險指令必須由使用者親自按「執行並回饋」授權。
+   * 首次 effect 只把既有訊息記為「已看過」，避免重新打開面板就把歷史指令全部跑一遍。
+   */
+  const shellAuto = useShellAuto((s) => s.enabled);
+  const autoSeen = useRef<Set<string> | null>(null);
+  const runShellRef = useRef(runShellBlock);
+  runShellRef.current = runShellBlock;
+  useEffect(() => {
+    const seen = autoSeen.current ?? (autoSeen.current = new Set(
+      messages.filter((m) => m.role === "assistant").flatMap((m) => parseBlocks(m.text).map((_, i) => `${m.id}:${i}`)),
+    ));
+    const hasTerminal = Object.values(useSshTerminals.getState().rt).some((r) => r.status === "connected");
+    if (!shellAuto || !hasTerminal) return;
+    for (const m of messages) {
+      if (m.role !== "assistant" || m.pending || m.error) continue;
+      parseBlocks(m.text).forEach((block, i) => {
+        const key = `${m.id}:${i}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        if (block.type !== "code" || !SHELL_LANGS.has(block.lang)) return;
+        const cmd = normalizeShellCode(block.code, block.lang);
+        if (!cmd.trim() || classifyShell(cmd).level !== "safe") return;
+        void runShellRef.current(m.id, i, block.code, true, block.lang);
+      });
+    }
+  }, [messages, shellAuto]);
+
   /** 既有結果格上的「回饋給 AI」：只送結果，不重跑。 */
   const feedbackShell = (r: ChatShellRun) => void send(shellFeedbackDisplay(r), false, { extraContext: shellFeedbackPrompt(r) });
   /** 終端機快速提問（空狀態的 chips）。 */

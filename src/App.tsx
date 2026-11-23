@@ -13,6 +13,7 @@ import TableView, { CellInspector } from "./TableView";
 import { parseEditTarget } from "./queryEditTarget";
 import InfoPanel from "./InfoPanel";
 import AssistantPanel from "./AssistantPanel";
+import AiSettingsDialog from "./AiSettingsDialog";
 import type { SqlSubmit, SqlEditorHandle } from "./SqlEditor";
 import { invalidateSchemaCache, useSqlSchemaState } from "./useSqlSchema";
 import { SchemaCacheBadge } from "./SchemaCacheBadge";
@@ -119,6 +120,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { isMcpKind, useMcpDialog } from "./mcpSetup";
+import { useShellAuto } from "./shellAuto";
 import { supportsReviewRun } from "./reviewRun";
 import { bootAiLibrary } from "./aiLibraryBoot";
 import { reviewersFor } from "./dbaReview";
@@ -763,9 +765,10 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
   const [guard, setGuard] = useState<QueryGuard>(loadQueryGuard);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(autoCheckEnabled);
   const [aiLibOpen, setAiLibOpen] = useState(false);
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   // 設定對話框常駐不卸載：關掉設定時一併收起資源庫，否則下次開設定會直接跳出上次沒關的資源庫。
   useEffect(() => {
-    if (!open) setAiLibOpen(false);
+    if (!open) { setAiLibOpen(false); setAiSettingsOpen(false); }
   }, [open]);
   const themeId = useTheme((s) => s.themeId);
   const setThemeId = useTheme((s) => s.setThemeId);
@@ -791,162 +794,236 @@ function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void 
     });
   };
 
+  // 設定對話框改為「左導覽 + 右內容」：項目多時不必一直往下捲（issue #10）。
+  const [section, setSection] = useState<"general" | "appearance" | "security" | "ai" | "advanced">("general");
+  const shellAuto = useShellAuto((s) => s.enabled);
+  const setShellAuto = useShellAuto((s) => s.setEnabled);
+  const navItems: { id: typeof section; label: string; icon: LucideIcon }[] = [
+    { id: "general", label: t("一般"), icon: Globe },
+    { id: "appearance", label: t("外觀"), icon: Palette },
+    { id: "security", label: t("安全與查詢"), icon: ShieldCheck },
+    { id: "ai", label: t("AI 與整合"), icon: Sparkles },
+    { id: "advanced", label: t("進階"), icon: Cog },
+  ];
+
   return (
     <Modal
       open={open}
       onClose={onClose}
       title={t("設定")}
       icon={Cog}
-      size="sm"
+      size="xl"
+      className="!h-[min(82vh,780px)]"
+      bodyClassName="p-0 flex min-h-0"
       footer={<Button variant="ghost" onClick={onClose}>{t("關閉")}</Button>}
     >
-      <div className="space-y-4">
-        <div className="space-y-3">
-          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Globe} size={15} /> {t("語言")}
-          </div>
-          <p className="text-xs text-fg/50 leading-relaxed">
-            {t("介面語言，變更立即生效、不需重啟；後端錯誤訊息與 dbk 命令列輸出也會跟著切換。上方工具列亦可快速切換。")}
-          </p>
-          <Field label={t("介面語言")}>
-            <Select selectSize="md" value={lang}
-              onChange={(e) => { void setLang(e.target.value as Lang); }}>
-              {LANGUAGES.map((l) => (
-                <option key={l.id} value={l.id}>{l.label}</option>
-              ))}
-            </Select>
-          </Field>
-        </div>
+      <div className="flex w-full min-h-0">
+        <nav className="w-44 shrink-0 border-r border-fg/10 bg-app/30 p-2 space-y-1 overflow-auto"
+          aria-label={t("設定分類")}>
+          {navItems.map((n) => (
+            <button key={n.id} type="button" onClick={() => setSection(n.id)}
+              aria-current={section === n.id ? "true" : undefined}
+              className={`w-full flex items-center gap-2 px-2.5 py-2 rounded text-left text-sm ${
+                section === n.id ? "bg-accent/15 text-fg" : "text-fg/60 hover:bg-fg/5"
+              }`}>
+              <Icon icon={n.icon} size={15} /> {n.label}
+            </button>
+          ))}
+        </nav>
+        <div className="flex-1 min-w-0 overflow-auto p-5 space-y-4">
+          {section === "general" && (
+            <>
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+                  <Icon icon={Globe} size={15} /> {t("語言")}
+                </div>
+                <p className="text-xs text-fg/50 leading-relaxed">
+                  {t("介面語言，變更立即生效、不需重啟；後端錯誤訊息與 dbk 命令列輸出也會跟著切換。上方工具列亦可快速切換。")}
+                </p>
+                <Field label={t("介面語言")}>
+                  <Select selectSize="md" value={lang}
+                    onChange={(e) => { void setLang(e.target.value as Lang); }}>
+                    {LANGUAGES.map((l) => (
+                      <option key={l.id} value={l.id}>{l.label}</option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+              <div className="pt-4 border-t border-fg/10 space-y-2">
+                <label className="flex items-center gap-2 text-sm text-fg/80 cursor-pointer select-none">
+                  <input type="checkbox" checked={autoUpdate}
+                    onChange={(e) => { setAutoUpdate(e.target.checked); setAutoCheckEnabled(e.target.checked); }} />
+                  {t("自動檢查更新")}
+                </label>
+                <p className="text-xs text-fg/50 leading-relaxed">
+                  {t("每天最多向 GitHub 查一次最新版本（啟動 10 秒後開始，App 開著時也會定期檢查）。有新版會跳出更新視窗，按「立即更新」就會下載、安裝並自動重新開啟。離線 / 內網環境可關閉；「關於」對話框的手動檢查不受影響。")}
+                </p>
+              </div>
+            </>
+          )}
 
-        <div className="space-y-3">
-          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Palette} size={15} /> {t("主題")}
-          </div>
-          <p className="text-xs text-fg/50 leading-relaxed">
-            {t("整個 app 的配色與深淺（側欄 / 工具列 / 表格 / 對話框 / 編輯器 / AI 助手），變更立即生效。「光亮」為唯一的淺色配色，其餘皆為深色；上方工具列亦可快速切換。")}
-          </p>
-          <Field label={t("配色主題")}>
-            <Select selectSize="md" value={themeId}
-              onChange={(e) => setThemeId(e.target.value as EditorThemeId)}>
-              <option value="moonstone">{t("光亮")}</option>
-              <option value="amethyst">{t("暗黑")}</option>
-              {EDITOR_THEMES.filter((d) => d.id !== "moonstone" && d.id !== "amethyst").map((d) => (
-                <option key={d.id} value={d.id}>{t(d.label)}</option>
-              ))}
-            </Select>
-          </Field>
-          {previewDef && (
-            <div
-              className="rounded-md px-3 py-2 mono text-xs leading-relaxed border border-fg/10"
-              style={{ backgroundColor: previewDef.colors.bg, color: previewDef.colors.fg }}
-            >
-              <span style={{ color: previewDef.colors.keyword }}>SELECT</span> *{" "}
-              <span style={{ color: previewDef.colors.keyword }}>FROM</span> users{" "}
-              <span style={{ color: previewDef.colors.keyword }}>WHERE</span> name{" "}
-              <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
-              <span style={{ color: previewDef.colors.string }}>'mark'</span>{" "}
-              <span style={{ color: previewDef.colors.keyword }}>AND</span> id{" "}
-              <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
-              <span style={{ color: previewDef.colors.number }}>1</span>;{" "}
-              <span style={{ color: previewDef.colors.comment }}>{t("-- 註解")}</span>
-            </div>
+          {section === "appearance" && (
+            <>
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+                  <Icon icon={Palette} size={15} /> {t("主題")}
+                </div>
+                <p className="text-xs text-fg/50 leading-relaxed">
+                  {t("整個 app 的配色與深淺（側欄 / 工具列 / 表格 / 對話框 / 編輯器 / AI 助手），變更立即生效。「光亮」為唯一的淺色配色，其餘皆為深色；上方工具列亦可快速切換。")}
+                </p>
+                <Field label={t("配色主題")}>
+                  <Select selectSize="md" value={themeId}
+                    onChange={(e) => setThemeId(e.target.value as EditorThemeId)}>
+                    <option value="moonstone">{t("光亮")}</option>
+                    <option value="amethyst">{t("暗黑")}</option>
+                    {EDITOR_THEMES.filter((d) => d.id !== "moonstone" && d.id !== "amethyst").map((d) => (
+                      <option key={d.id} value={d.id}>{t(d.label)}</option>
+                    ))}
+                  </Select>
+                </Field>
+                {previewDef && (
+                  <div
+                    className="rounded-md px-3 py-2 mono text-xs leading-relaxed border border-fg/10"
+                    style={{ backgroundColor: previewDef.colors.bg, color: previewDef.colors.fg }}
+                  >
+                    <span style={{ color: previewDef.colors.keyword }}>SELECT</span> *{" "}
+                    <span style={{ color: previewDef.colors.keyword }}>FROM</span> users{" "}
+                    <span style={{ color: previewDef.colors.keyword }}>WHERE</span> name{" "}
+                    <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
+                    <span style={{ color: previewDef.colors.string }}>'mark'</span>{" "}
+                    <span style={{ color: previewDef.colors.keyword }}>AND</span> id{" "}
+                    <span style={{ color: previewDef.colors.operator }}>=</span>{" "}
+                    <span style={{ color: previewDef.colors.number }}>1</span>;{" "}
+                    <span style={{ color: previewDef.colors.comment }}>{t("-- 註解")}</span>
+                  </div>
+                )}
+              </div>
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+                  <Icon icon={Type} size={15} /> {t("字級")}
+                </div>
+                <p className="text-xs text-fg/50 leading-relaxed">
+                  {t("介面字級是整個 app 的縮放基準：側欄 / 工具列 / 表格 / 對話框的文字與間距一起等比放大，變更立即生效、不需重啟。程式碼字級只管查詢編輯器與 SQL / JSON 等程式碼區塊，兩者各自獨立——想放大介面但把 SQL 維持在慣用字級（或反過來）都可以。")}
+                </p>
+                <Field label={t("介面字級")}>
+                  <Select selectSize="md" value={String(uiFontSize)}
+                    onChange={(e) => setUiFontSize(Number(e.target.value))}>
+                    {UI_FONT_STEPS.map((px) => (
+                      <option key={px} value={px}>{uiFontLabels[px] ?? `${px}px`}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label={t("程式碼字級")} hint={t("跳窗標題列的 A− / A＋ 與 Ctrl + / − / 0 也能調整")}>
+                  <div className="flex items-center gap-1">
+                    <IconButton icon={AArrowDown} iconSize={15} label={t("縮小程式碼字級 (Ctrl+-)")}
+                      disabled={codeFontSize <= CODE_FONT_MIN} onClick={() => setCodeFontSize(codeFontSize - 1)} />
+                    <span className="w-14 text-center text-sm tabular-nums text-fg/80">{codeFontSize} px</span>
+                    <IconButton icon={AArrowUp} iconSize={15} label={t("放大程式碼字級 (Ctrl++)")}
+                      disabled={codeFontSize >= CODE_FONT_MAX} onClick={() => setCodeFontSize(codeFontSize + 1)} />
+                    <Button variant="ghost" className="ml-1" disabled={codeFontSize === CODE_FONT_DEFAULT}
+                      onClick={() => setCodeFontSize(CODE_FONT_DEFAULT)}>{t("重設")}</Button>
+                  </div>
+                </Field>
+              </div>
+            </>
+          )}
+
+          {section === "security" && (
+            <>
+              <AppLockSettings />
+              <div className="pt-4 border-t border-fg/10 space-y-3">
+                <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+                  <Icon icon={Zap} size={15} /> {t("查詢防護")}
+                </div>
+                <p className="text-xs text-fg/50 leading-relaxed">
+                  {t("防止誤跑")} <span className="mono">SELECT *</span> {t("大表把記憶體塞爆：查詢結果超過上限即截斷並顯示提示")}{" "}
+                  {t("（取完整結果請改用匯出）。變更立即生效。")}
+                </p>
+                <Field label={t("結果列數上限")}>
+                  <Select selectSize="md" value={String(guard.maxRows)}
+                    onChange={(e) => updateGuard({ maxRows: Number(e.target.value) })}>
+                    <option value="100">{t("100 列")}</option>
+                    <option value="1000">{t("1,000 列（預設）")}</option>
+                    <option value="10000">{t("10,000 列")}</option>
+                    <option value="100000">{t("100,000 列")}</option>
+                    <option value="0">{t("不限（不建議）")}</option>
+                  </Select>
+                </Field>
+                <Field label={t("查詢逾時")} hint={t("逾時後伺服器端查詢可能仍在執行，可從行程清單手動終止；MSSQL 僅支援本端逾時")}>
+                  <Select selectSize="md" value={String(guard.timeoutMs)}
+                    onChange={(e) => updateGuard({ timeoutMs: Number(e.target.value) })}>
+                    <option value="0">{t("關閉（預設）")}</option>
+                    <option value="30000">{t("30 秒")}</option>
+                    <option value="60000">{t("60 秒")}</option>
+                    <option value="300000">{t("5 分鐘")}</option>
+                  </Select>
+                </Field>
+              </div>
+            </>
+          )}
+
+          {section === "ai" && (
+            <>
+              <div className="space-y-3">
+                <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+                  <Icon icon={Sparkles} size={15} /> {t("AI 助手")}
+                </div>
+                <p className="text-xs text-fg/50 leading-relaxed">
+                  {t("AI 助手的供應商、金鑰、人設與技能集中在「AI 設定」；各 API 供應商可分別設定自己的模型，切換供應商即套用對應模型。")}
+                </p>
+                <Button variant="secondary" icon={Sparkles} onClick={() => setAiSettingsOpen(true)}>
+                  {t("AI 設定…")}
+                </Button>
+              </div>
+              <div className="pt-4 border-t border-fg/10 space-y-2">
+                <label className="flex items-start gap-2 text-sm text-fg/80 cursor-pointer select-none">
+                  <input type="checkbox" className="mt-0.5" checked={shellAuto}
+                    onChange={(e) => setShellAuto(e.target.checked)} />
+                  <span>
+                    {t("自動執行安全指令")}
+                    <span className="block text-xs text-fg/50 leading-relaxed">
+                      {t("AI 回覆中的 bash 區塊若被判定為「安全」，送出後會自動執行並回饋結果；需要確認或高風險的指令一律仍須你親自按「執行並回饋」授權。")}
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <div className="pt-4 border-t border-fg/10 space-y-2">
+                <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+                  <Icon icon={Library} size={15} /> {t("AI 資源庫")}
+                </div>
+                <p className="text-xs text-fg/50 leading-relaxed">
+                  {t("AI 助手與 DBA 審查用的人設、技能與提示範本都是可編輯的 Markdown 檔，格式相容 Claude Code / Codex；可覆蓋內建版本、加入團隊資料夾，並一鍵同步過去。")}
+                </p>
+                <Button variant="secondary" icon={Library} onClick={() => setAiLibOpen(true)}>
+                  {t("開啟 AI 資源庫…")}
+                </Button>
+              </div>
+              <div className="pt-4 border-t border-fg/10 space-y-2">
+                <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
+                  <Icon icon={PlugZap} size={15} /> {t("MCP 伺服器")}
+                </div>
+                <p className="text-xs text-fg/50 leading-relaxed">
+                  {t("把資料庫接到 Claude Code、Codex、Cursor、VS Code 等 AI 工具：可選全部連線或單一連線、資料庫與 SSH 主機，一鍵寫進它們的設定，或在背景開一個本機 HTTP 伺服器。")}
+                </p>
+                <Button variant="secondary" icon={PlugZap} onClick={() => { onClose(); useMcpDialog.getState().show(null); }}>
+                  {t("設定 MCP…")}
+                </Button>
+              </div>
+              <TenonSettings />
+            </>
+          )}
+
+          {section === "advanced" && (
+            <>
+              <WinEnvSettings />
+              <SchemaCacheSettings />
+              <SshPrefsSettings />
+            </>
           )}
         </div>
-        <div className="space-y-3">
-          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Type} size={15} /> {t("字級")}
-          </div>
-          <p className="text-xs text-fg/50 leading-relaxed">
-            {t("介面字級是整個 app 的縮放基準：側欄 / 工具列 / 表格 / 對話框的文字與間距一起等比放大，變更立即生效、不需重啟。程式碼字級只管查詢編輯器與 SQL / JSON 等程式碼區塊，兩者各自獨立——想放大介面但把 SQL 維持在慣用字級（或反過來）都可以。")}
-          </p>
-          <Field label={t("介面字級")}>
-            <Select selectSize="md" value={String(uiFontSize)}
-              onChange={(e) => setUiFontSize(Number(e.target.value))}>
-              {UI_FONT_STEPS.map((px) => (
-                <option key={px} value={px}>{uiFontLabels[px] ?? `${px}px`}</option>
-              ))}
-            </Select>
-          </Field>
-          <Field label={t("程式碼字級")} hint={t("跳窗標題列的 A− / A＋ 與 Ctrl + / − / 0 也能調整")}>
-            <div className="flex items-center gap-1">
-              <IconButton icon={AArrowDown} iconSize={15} label={t("縮小程式碼字級 (Ctrl+-)")}
-                disabled={codeFontSize <= CODE_FONT_MIN} onClick={() => setCodeFontSize(codeFontSize - 1)} />
-              <span className="w-14 text-center text-sm tabular-nums text-fg/80">{codeFontSize} px</span>
-              <IconButton icon={AArrowUp} iconSize={15} label={t("放大程式碼字級 (Ctrl++)")}
-                disabled={codeFontSize >= CODE_FONT_MAX} onClick={() => setCodeFontSize(codeFontSize + 1)} />
-              <Button variant="ghost" className="ml-1" disabled={codeFontSize === CODE_FONT_DEFAULT}
-                onClick={() => setCodeFontSize(CODE_FONT_DEFAULT)}>{t("重設")}</Button>
-            </div>
-          </Field>
-        </div>
-        <AppLockSettings />
-        <div className="pt-4 border-t border-fg/10 space-y-3">
-          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Zap} size={15} /> {t("查詢防護")}
-          </div>
-          <p className="text-xs text-fg/50 leading-relaxed">
-            {t("防止誤跑")} <span className="mono">SELECT *</span> {t("大表把記憶體塞爆：查詢結果超過上限即截斷並顯示提示")}{" "}
-            {t("（取完整結果請改用匯出）。變更立即生效。")}
-          </p>
-          <Field label={t("結果列數上限")}>
-            <Select selectSize="md" value={String(guard.maxRows)}
-              onChange={(e) => updateGuard({ maxRows: Number(e.target.value) })}>
-              <option value="100">{t("100 列")}</option>
-              <option value="1000">{t("1,000 列（預設）")}</option>
-              <option value="10000">{t("10,000 列")}</option>
-              <option value="100000">{t("100,000 列")}</option>
-              <option value="0">{t("不限（不建議）")}</option>
-            </Select>
-          </Field>
-          <Field label={t("查詢逾時")} hint={t("逾時後伺服器端查詢可能仍在執行，可從行程清單手動終止；MSSQL 僅支援本端逾時")}>
-            <Select selectSize="md" value={String(guard.timeoutMs)}
-              onChange={(e) => updateGuard({ timeoutMs: Number(e.target.value) })}>
-              <option value="0">{t("關閉（預設）")}</option>
-              <option value="30000">{t("30 秒")}</option>
-              <option value="60000">{t("60 秒")}</option>
-              <option value="300000">{t("5 分鐘")}</option>
-            </Select>
-          </Field>
-        </div>
-        <div className="pt-4 border-t border-fg/10 space-y-2">
-          <label className="flex items-center gap-2 text-sm text-fg/80 cursor-pointer select-none">
-            <input type="checkbox" checked={autoUpdate}
-              onChange={(e) => { setAutoUpdate(e.target.checked); setAutoCheckEnabled(e.target.checked); }} />
-            {t("自動檢查更新")}
-          </label>
-          <p className="text-xs text-fg/50 leading-relaxed">
-            {t("每天最多向 GitHub 查一次最新版本（啟動 10 秒後開始，App 開著時也會定期檢查）。有新版會跳出更新視窗，按「立即更新」就會下載、安裝並自動重新開啟。離線 / 內網環境可關閉；「關於」對話框的手動檢查不受影響。")}
-          </p>
-        </div>
-        {/* 使用者變數（HKCU\Environment）：只有 Windows 免安裝版會長出來，其餘平台 / 安裝版整段不顯示。 */}
-        <WinEnvSettings />
-        <div className="pt-4 border-t border-fg/10 space-y-2">
-          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={Library} size={15} /> {t("AI 資源庫")}
-          </div>
-          <p className="text-xs text-fg/50 leading-relaxed">
-            {t("AI 助手與 DBA 審查用的人設、技能與提示範本都是可編輯的 Markdown 檔，格式相容 Claude Code / Codex；可覆蓋內建版本、加入團隊資料夾，並一鍵同步過去。")}
-          </p>
-          <Button variant="secondary" icon={Library} onClick={() => setAiLibOpen(true)}>
-            {t("開啟 AI 資源庫…")}
-          </Button>
-        </div>
-        <div className="pt-4 border-t border-fg/10 space-y-2">
-          <div className="text-sm font-medium text-fg/90 flex items-center gap-2">
-            <Icon icon={PlugZap} size={15} /> {t("MCP 伺服器")}
-          </div>
-          <p className="text-xs text-fg/50 leading-relaxed">
-            {t("把資料庫接到 Claude Code、Codex、Cursor、VS Code 等 AI 工具：選連線與權限，一鍵寫進它們的設定，或在背景開一個本機 HTTP 伺服器。")}
-          </p>
-          <Button variant="secondary" icon={PlugZap} onClick={() => { onClose(); useMcpDialog.getState().show(null); }}>
-            {t("設定 MCP…")}
-          </Button>
-        </div>
-        <SchemaCacheSettings />
-        <SshPrefsSettings />
-        <TenonSettings />
       </div>
       {aiLibOpen && <AiLibraryDialog open onClose={() => setAiLibOpen(false)} />}
+      {aiSettingsOpen && <AiSettingsDialog open onClose={() => setAiSettingsOpen(false)} />}
     </Modal>
   );
 }
