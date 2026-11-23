@@ -131,7 +131,7 @@ function DbStatsTab({ connId, initialDb }: { connId: string; initialDb: string }
       setDbs(list);
       // initialDb 不在清單（如空字串）時退回第一個庫。
       setDb((d) => (d && list.includes(d) ? d : list[0] ?? d));
-    }).catch(() => {});
+    }).catch((e) => setErr(e?.message ?? t("讀取資料庫清單失敗")));
   }, [connId]);
   useEffect(() => {
     if (!db) return;
@@ -276,6 +276,8 @@ function ProfilerTab({ connId, initialDb, readonly }: { connId: string; initialD
   const [slowMs, setSlowMs] = useState(100);
   const [rows, setRows] = useState<MongoSlowQuery[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // 兩個請求各自一條錯誤：以前慢查詢成功會清掉 profiler 設定失敗的訊息。
+  const [profileErr, setProfileErr] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [expand, setExpand] = useState<number | null>(null);
 
@@ -283,17 +285,18 @@ function ProfilerTab({ connId, initialDb, readonly }: { connId: string; initialD
     api.listDatabases(connId).then((list) => {
       setDbs(list);
       setDb((d) => (d && list.includes(d) ? d : list[0] ?? d));
-    }).catch(() => {});
+    }).catch((e) => setErr(e?.message ?? t("讀取資料庫清單失敗")));
   }, [connId]);
   useEffect(() => {
     if (!db) return;
     let cancelled = false;
+    setErr(null); setProfileErr(null);
     api.mongoProfileGet(connId, db)
       .then((p) => { if (cancelled) return; setProfile(p); setLevel(p.level); setSlowMs(p.slow_ms); })
-      .catch((e) => !cancelled && setErr(e?.message ?? t("讀取 Profiler 設定失敗")));
+      .catch((e) => !cancelled && setProfileErr(e?.message ?? t("讀取 Profiler 設定失敗")));
     setRows(null);
     api.mongoSlowQueries(connId, db, 100)
-      .then((r) => !cancelled && (setRows(r), setErr(null)))
+      .then((r) => !cancelled && setRows(r))
       .catch((e) => !cancelled && setErr(e?.message ?? t("讀取失敗")));
     return () => { cancelled = true; };
   }, [connId, db, nonce]);
@@ -347,6 +350,7 @@ function ProfilerTab({ connId, initialDb, readonly }: { connId: string; initialD
         <RefreshBtn onClick={() => setNonce((n) => n + 1)} />
       </div>
       <ErrBar err={err} />
+      <ErrBar err={profileErr} />
       {!rows && !err && <div className="text-fg/40 text-sm">{t("讀取中…")}</div>}
       {rows && rows.length === 0 && (
         <div className="text-fg/40 text-sm">

@@ -500,8 +500,9 @@ impl DatabaseDriver for MongoDriver {
                 truncated = true;
                 break;
             }
-            let json = serde_json::to_string(&d).unwrap_or_default();
-            rows.push(vec![Some(json)]);
+            // 與聚合分支一致用 canonical extJSON：一般 serde 會把 Int64 變成 JSON number，
+            // JavaScript JSON.parse 會掉精度，文件匯出就再也還原不回原值。
+            rows.push(vec![Some(Bson::Document(d).into_canonical_extjson().to_string())]);
         }
         Ok(QueryResult {
             columns: vec!["document".to_string()],
@@ -1038,6 +1039,10 @@ impl MongoDriver {
         }
         let mut key_doc = Document::new();
         for (field, spec) in keys {
+            // key_doc.insert 會覆蓋同欄先前的值：使用者以為建立複合索引，實際上只有一個欄位。
+            if key_doc.contains_key(field) {
+                return Err(AppError::Query(tf!("索引欄位「{field}」重複", field = field)));
+            }
             let v: Bson = match spec.trim() {
                 "1" | "" => Bson::Int32(1),
                 "-1" => Bson::Int32(-1),

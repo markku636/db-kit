@@ -3106,6 +3106,8 @@ const en: Catalog = {
   "從 extended JSON 檔匯入文件到目前集合": "Import documents from an extended JSON file",
   "匯入 {n} 份文件到「{table}」": "Import {n} documents into \"{table}\"",
   "已達 10 萬份上限，僅匯出前 {n} 份": "Hit the 100k limit; only the first {n} documents were exported",
+  "TTL 必須是大於 0 的整數秒數": "TTL must be a positive integer number of seconds",
+  "選取範圍含被截斷的欄位；請改用「匯出文件」保留完整值。": "The selection contains truncated fields; use \"Export documents\" to keep the full values.",
   "套用已儲存的篩選預設": "Apply a saved filter preset",
   "篩選預設": "Filter presets",
   "把目前條件存為預設（同名覆蓋）": "Save current conditions as a preset (same name overwrites)",

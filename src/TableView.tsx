@@ -878,6 +878,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
   // 匯出已勾選的列（本頁）：走後端 export_rows，依副檔名選格式（含 Excel）。
   const exportMarked = async () => {
     if (!data || marked.size === 0) return;
+    // Mongo 的 >4KB 格值是截斷預覽，直接匯出等於把被剪掉的尾巴永久丟掉。
+    // 先擋下來引導用「匯出文件」（canonical extJSON）。
+    if (isMongo && [...marked].some((i) => data.rows[i]?.some((v) => v != null && isTruncatedMongoCell(v)))) {
+      toast.error(t("選取範圍含被截斷的欄位；請改用「匯出文件」保留完整值。")); return;
+    }
     const idxs = [...marked].sort((a, b) => a - b);
     const rows = idxs.map((i) => data.rows[i]);
     const path = await pickSaveFile(`${tab.table}-selection.csv`, [
@@ -1461,9 +1466,10 @@ function DataPane({ tab }: { tab: OpenTab }) {
   const exportMongoDocs = async () => {
     setApplying(true);
     try {
-      const dsl = JSON.stringify({ db: tab.database, collection: tab.table, filter: {}, limit: 100_000 });
-      // 覆寫全域 row cap（預設只有 1000），否则「匯出全部」其實只匯前 1000 份。
-      const res = await api.runQuery(tab.connId, dsl, 100_001);
+      // 後端用 cap+1 探測是否還有更多：想匯 10 萬份就令 limit=100001、cap=100000，
+      // 才會在第 100001 筆時設 truncated=true（反過來永遠不會觸發）。
+      const dsl = JSON.stringify({ db: tab.database, collection: tab.table, filter: {}, limit: 100_001 });
+      const res = await api.runQuery(tab.connId, dsl, 100_000);
       const docs = res.rows.map((r) => {
         try { return JSON.parse(r[0] ?? "null"); } catch { return null; }
       }).filter((d) => d && typeof d === "object");
@@ -4537,12 +4543,22 @@ function MongoAddIndexForm({ columns, busy, onSubmit, onCancel }: {
     if (partial.trim()) {
       try { JSON.parse(partial); } catch { toast.error(t("partialFilterExpression 需為合法 JSON")); return; }
     }
+    // TTL(expireAfterSeconds) 必須是正整數：0 會讓「日期已過」的文件立刻被 Mongo 刪除，
+    // 負數（Redis 的 -1 慣例）在 Mongo 沒有「不過期」語意，一律當成未設定。
+    let expire: number | null = null;
+    if (ttl.trim()) {
+      const n = Number(ttl);
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+        toast.error(t("TTL 必須是大於 0 的整數秒數")); return;
+      }
+      expire = n;
+    }
     onSubmit(
       (name.trim() || autoName),
       valid.map((r) => [r.field.trim(), r.spec] as [string, string]),
       {
         unique, sparse, hidden,
-        expire_after_secs: ttl.trim() ? Math.max(0, Math.floor(Number(ttl))) : null,
+        expire_after_secs: expire,
         partial_filter_json: partial.trim() || null,
       },
     );
