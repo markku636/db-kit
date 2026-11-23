@@ -3494,8 +3494,8 @@ const FILTER_OPS: [string, string][] = [
 const opNeedsValue = (op: string) => op !== "is_null" && op !== "is_not_null";
 
 // 篩選列：多欄複合條件（以 AND 串接；後端 build_where / Mongo filter 已支援）。
-// 註：AND-only（OR 需改後端三個 build_where/filter）；Mongo 同欄多條件會覆蓋（後者勝）；
-// Redis 僅 key 欄的 like/= 有效。
+// 註：OR 由 match_any 控制（後端 build_where / Mongo build_filter 都支援）；
+// Mongo 同欄多條件用 $and 保留，不會互相覆蓋；Redis 僅 key 欄的 like/= 有效。
 function FilterBar({ columns, filters, matchAny, storageKey, onApply }: {
   columns: string[];
   filters: FilterCond[];
