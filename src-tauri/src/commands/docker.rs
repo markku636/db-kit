@@ -12,7 +12,7 @@ use serde::Serialize;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, State};
 
-use super::AppState;
+use super::{AppState, ensure_conn_writable};
 use crate::db::docker::api::{parse_pull_line, DockerApi};
 use crate::db::docker::dto::*;
 use crate::db::docker::stream::{StreamEvent, StreamSink};
@@ -59,6 +59,7 @@ pub async fn docker_disk_usage(state: State<'_, AppState>, id: String) -> AppRes
 
 #[tauri::command]
 pub async fn docker_prune(state: State<'_, AppState>, id: String, target: String, all: bool) -> AppResult<DockerPruneResult> {
+    ensure_conn_writable(&state, &id)?;
     api(&state, &id)?.prune(&target, all).await
 }
 
@@ -76,6 +77,7 @@ pub async fn docker_container_inspect(state: State<'_, AppState>, id: String, co
 
 #[tauri::command]
 pub async fn docker_container_action(state: State<'_, AppState>, id: String, container: String, action: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     api(&state, &id)?.container_action(&container, &action).await
 }
 
@@ -87,11 +89,13 @@ pub async fn docker_container_remove(
     force: bool,
     volumes: bool,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     api(&state, &id)?.container_remove(&container, force, volumes).await
 }
 
 #[tauri::command]
 pub async fn docker_container_rename(state: State<'_, AppState>, id: String, container: String, name: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     api(&state, &id)?.container_rename(&container, &name).await
 }
 
@@ -144,6 +148,7 @@ pub async fn docker_exec_open(
     rows: u32,
     on_output: Channel<InvokeResponseBody>,
 ) -> AppResult<String> {
+    ensure_conn_writable(&state, &id)?;
     let api = api(&state, &id)?;
     let stream_id = uuid::Uuid::new_v4().to_string();
     let s = sink(app, stream_id.clone(), on_output);
@@ -187,11 +192,13 @@ pub async fn docker_image_inspect(state: State<'_, AppState>, id: String, image:
 
 #[tauri::command]
 pub async fn docker_image_remove(state: State<'_, AppState>, id: String, image: String, force: bool) -> AppResult<Vec<String>> {
+    ensure_conn_writable(&state, &id)?;
     api(&state, &id)?.image_remove(&image, force).await
 }
 
 #[tauri::command]
 pub async fn docker_image_tag(state: State<'_, AppState>, id: String, source: String, repo: String, tag: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     api(&state, &id)?.image_tag(&source, &repo, &tag).await
 }
 
@@ -210,6 +217,7 @@ pub async fn docker_image_pull(
     on_progress: Channel<DockerPullProgress>,
     cred_conn: Option<String>,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     let api = api(&state, &id)?;
     let password = match cred_conn.as_deref().filter(|c| !c.is_empty()) {
         Some(c) if password.is_empty() => crate::store::kc_get(c).unwrap_or_default(),
@@ -286,6 +294,7 @@ pub async fn docker_volumes(state: State<'_, AppState>, id: String) -> AppResult
 
 #[tauri::command]
 pub async fn docker_volume_remove(state: State<'_, AppState>, id: String, name: String, force: bool) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     api(&state, &id)?.volume_remove(&name, force).await
 }
 
@@ -301,6 +310,7 @@ pub async fn docker_network_inspect(state: State<'_, AppState>, id: String, netw
 
 #[tauri::command]
 pub async fn docker_network_remove(state: State<'_, AppState>, id: String, network: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     api(&state, &id)?.network_remove(&network).await
 }
 
@@ -320,6 +330,7 @@ pub async fn registry_manifest(state: State<'_, AppState>, id: String, repo: Str
 
 #[tauri::command]
 pub async fn registry_delete(state: State<'_, AppState>, id: String, repo: String, reference: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     let d = state.manager.container_driver(&id)?;
     d.registry()?.api.delete(&repo, &reference).await
 }
@@ -359,6 +370,7 @@ pub async fn harbor_artifacts(
 
 #[tauri::command]
 pub async fn harbor_scan(state: State<'_, AppState>, id: String, project: String, repo: String, digest: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     harbor(&state, &id)?.scan(&project, &repo, &digest).await
 }
 
@@ -375,6 +387,7 @@ pub async fn harbor_vulnerabilities(
 
 #[tauri::command]
 pub async fn harbor_delete_artifact(state: State<'_, AppState>, id: String, project: String, repo: String, digest: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     harbor(&state, &id)?.delete_artifact(&project, &repo, &digest).await
 }
 
@@ -387,11 +400,13 @@ pub async fn harbor_delete_tag(
     digest: String,
     tag: String,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     harbor(&state, &id)?.delete_tag(&project, &repo, &digest, &tag).await
 }
 
 #[tauri::command]
 pub async fn harbor_delete_repository(state: State<'_, AppState>, id: String, project: String, repo: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     harbor(&state, &id)?.delete_repository(&project, &repo).await
 }
 
