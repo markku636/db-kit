@@ -32,6 +32,14 @@ Kafka / 容器映像：
 - **IPv6 主機在 RabbitMQ / MongoDB URI 正確加上方括號**；CSV 批次發佈的欄位索引超出範圍時明確報錯，不再靜默丟掉 key / value。
 - **Kafka 監控執行緒結束後不再謊報 `running`**；建立群組 consumer 失敗時只略過該群組，不再 panic 整條取樣執行緒。
 
+CLI / 備份 / AI 工具：
+
+- **MongoDB 備份終於可用於非預設資料庫**：`mongodump --db` 不再與 URI 內的 db 路徑衝突（改以 `authSource` 保留驗證語意）；設定暫存檔在 Unix 上改為 0600，避免明文密碼被其他本機使用者讀到。
+- **`dbk query` / `explain` / `stress` 接受 MongoDB JSON DSL**：先前被 SQL 關鍵字守門擋下，把使用者推向可寫入的 `exec`。
+- **JSON 匯入不再把 Mongo 布林存成數字**（`true` 不再變 `NumberLong(1)`）；JSON 匯出 Mongo 文件也不再雙層編碼成字串。
+- **還原 / CSV / Excel / Redis 鍵匯入補上後端唯讀守門**，唯讀連線無法再從這些路徑寫入。
+- **AI / MCP 工具可用 `verbosity`**：能指定便宜的 `queryPlanner`，不必被迫執行完整查詢。
+
 ## v0.60.4
 
 **設定介面改版與 AI 助手自動執行；並修好連線失敗對話框「取消」按鈕無法關閉的問題。**
