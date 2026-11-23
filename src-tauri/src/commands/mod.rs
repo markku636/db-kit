@@ -2579,6 +2579,7 @@ pub async fn kafka_produce_csv(
     path: String,
     options: crate::db::kafka::dto::KafkaCsvProduceOptions,
 ) -> AppResult<KafkaBatchResult> {
+    ensure_conn_writable(&state, &id)?;
     use std::sync::atomic::AtomicBool;
     let driver = state.manager.kafka_driver(&id)?;
     let cancel = Arc::new(AtomicBool::new(false));
@@ -2608,6 +2609,7 @@ pub async fn kafka_produce_batch(
     id: String,
     reqs: Vec<KafkaProduceRequest>,
 ) -> AppResult<KafkaBatchResult> {
+    ensure_conn_writable(&state, &id)?;
     state
         .manager
         .kafka_driver(&id)?
@@ -2623,6 +2625,7 @@ pub async fn kafka_produce(
     id: String,
     req: KafkaProduceRequest,
 ) -> AppResult<KafkaProduceResult> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.produce(&req).await
 }
 
@@ -2666,6 +2669,7 @@ pub async fn kafka_reset_offsets(
     id: String,
     reset: KafkaOffsetReset,
 ) -> AppResult<Vec<KafkaOffsetPlanRow>> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.reset_offsets(&reset).await
 }
 
@@ -2677,6 +2681,7 @@ pub async fn kafka_delete_group(
     id: String,
     group: String,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.delete_group(&group).await
 }
 
@@ -2688,6 +2693,7 @@ pub async fn kafka_create_topic(
     id: String,
     spec: KafkaCreateTopicSpec,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.create_topic(&spec).await
 }
 
@@ -2699,6 +2705,7 @@ pub async fn kafka_delete_topic(
     id: String,
     topic: String,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.delete_topic(&topic).await
 }
 
@@ -2738,6 +2745,7 @@ pub async fn kafka_set_topic_config(
     key: String,
     value: Option<String>,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state
         .manager
         .kafka_driver(&id)?
@@ -2754,6 +2762,7 @@ pub async fn kafka_add_partitions(
     topic: String,
     new_total: u32,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state
         .manager
         .kafka_driver(&id)?
@@ -2771,6 +2780,7 @@ pub async fn kafka_delete_records(
     partitions: Option<Vec<i32>>,
     before: Option<i64>,
 ) -> AppResult<Vec<KafkaDeleteRecordsResult>> {
+    ensure_conn_writable(&state, &id)?;
     state
         .manager
         .kafka_driver(&id)?
@@ -3178,6 +3188,7 @@ pub async fn kafka_schema_register(
     schema: String,
     schema_type: String,
 ) -> AppResult<i32> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.schema_register(&subject, &schema, &schema_type).await
 }
 
@@ -3224,6 +3235,7 @@ pub async fn kafka_schema_compat_set(
     subject: Option<String>,
     level: String,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.schema_compat_set(subject.as_deref(), &level).await
 }
 
@@ -3235,6 +3247,7 @@ pub async fn kafka_schema_delete_subject(
     id: String,
     subject: String,
 ) -> AppResult<Vec<i32>> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.schema_delete_subject(&subject).await
 }
 
@@ -3247,6 +3260,7 @@ pub async fn kafka_schema_delete_version(
     subject: String,
     version: i32,
 ) -> AppResult<i32> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.schema_delete_version(&subject, version).await
 }
 
@@ -3264,31 +3278,37 @@ pub async fn kafka_connect_config(state: State<'_, AppState>, id: String, name: 
 #[cfg(feature = "kafka")]
 #[tauri::command]
 pub async fn kafka_connect_pause(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.connect_pause(&name).await
 }
 #[cfg(feature = "kafka")]
 #[tauri::command]
 pub async fn kafka_connect_resume(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.connect_resume(&name).await
 }
 #[cfg(feature = "kafka")]
 #[tauri::command]
 pub async fn kafka_connect_restart(state: State<'_, AppState>, id: String, name: String, include_tasks: bool, only_failed: bool) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.connect_restart(&name, include_tasks, only_failed).await
 }
 #[cfg(feature = "kafka")]
 #[tauri::command]
 pub async fn kafka_connect_restart_task(state: State<'_, AppState>, id: String, name: String, task: i32) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.connect_restart_task(&name, task).await
 }
 #[cfg(feature = "kafka")]
 #[tauri::command]
 pub async fn kafka_connect_delete(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.connect_delete(&name).await
 }
 #[cfg(feature = "kafka")]
 #[tauri::command]
 pub async fn kafka_connect_put_config(state: State<'_, AppState>, id: String, name: String, config: serde_json::Value) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.connect_put_config(&name, config).await
 }
 #[cfg(feature = "kafka")]
@@ -3311,11 +3331,13 @@ pub async fn kafka_acls_list(state: State<'_, AppState>, id: String, filter: cra
 #[cfg(feature = "kafka")]
 #[tauri::command]
 pub async fn kafka_acls_create(state: State<'_, AppState>, id: String, bindings: Vec<crate::db::kafka::dto::KafkaAclBinding>) -> AppResult<Vec<crate::db::kafka::dto::KafkaAclBinding>> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.acls_create(bindings).await
 }
 #[cfg(feature = "kafka")]
 #[tauri::command]
 pub async fn kafka_acls_delete(state: State<'_, AppState>, id: String, filter: crate::db::kafka::dto::KafkaAclBinding) -> AppResult<Vec<crate::db::kafka::dto::KafkaAclBinding>> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.kafka_driver(&id)?.acls_delete(filter).await
 }
 
