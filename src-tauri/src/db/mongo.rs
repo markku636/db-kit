@@ -191,6 +191,26 @@ impl DatabaseDriver for MongoDriver {
             find_opts.sort = Some(s);
         }
 
+        // 欄位聯集不能只看目前頁：否則每翻頁欄位都在變，多頁匯出的表頭更是只取自第 0 頁，
+        // 後面才出現的欄位會被靜默丟掉。額外抽樣前 100 筆文件穩定欄位集合。
+        let col_opts = FindOptions::builder()
+            .limit(100)
+            .max_time(Duration::from_secs(5))
+            .build();
+        let mut col_cursor = coll
+            .find(filter.clone())
+            .with_options(col_opts)
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        let mut sampled_docs: Vec<Document> = Vec::new();
+        while let Some(d) = col_cursor
+            .try_next()
+            .await
+            .map_err(|e| AppError::Query(e.to_string()))?
+        {
+            sampled_docs.push(d);
+        }
+
         let mut cursor = coll
             .find(filter)
             .with_options(find_opts)
@@ -209,7 +229,7 @@ impl DatabaseDriver for MongoDriver {
         // 聯集頂層欄位為欄；_id 永遠擺第一欄。
         let mut columns: Vec<String> = Vec::new();
         columns.push("_id".to_string());
-        for d in &docs {
+        for d in sampled_docs.iter().chain(docs.iter()) {
             for (k, _) in d {
                 if k != "_id" && !columns.contains(k) {
                     columns.push(k.clone());

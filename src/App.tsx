@@ -7178,6 +7178,9 @@ const ResultTable = memo(function ResultTable({ result, onViewChange, conn, writ
     setRowTarget(null);
     setEditWhy(null);
     if (!conn || !sql || result.columns.length === 0) return;
+    // Mongo 查詢結果是 JSON 字串而非表格欄，_id 也沒有 row_ids 可供精確定位：
+    // 一律不開就地編輯（要改請到集合資料分頁 / 整份文件編輯器）。
+    if (conn.kind === "mongo") return;
     const tgt = parseEditTarget(sql);
     if (!tgt) { setEditWhy(t("只有「單一資料表的 SELECT」能直接改：JOIN / UNION / GROUP BY / DISTINCT / 子查詢的結果對不回原始列。")); return; }
     const db = tgt.database || conn.database;
