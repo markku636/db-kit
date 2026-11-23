@@ -388,15 +388,26 @@ fn render(
             Ok(out.into_bytes())
         }
         "json" => {
+            // MongoDB 的 query/aggregate 結果只有一個 `document` 欄，內容是 canonical extended JSON。
+            // 直接包成字串會得到 {"document":"{\"_id\":{\"$oid\":…}}" }，既不能當文件匯回，
+            // BSON 型別也全被困在字串裡。這裡把可解析的 cell 還原成真正的 JSON 物件。
+            let mongo_docs = columns.len() == 1 && columns[0] == "document";
             let arr: Vec<serde_json::Map<String, serde_json::Value>> = rows
                 .iter()
                 .map(|row| {
                     let mut m = serde_json::Map::new();
                     for (i, c) in columns.iter().enumerate() {
                         let v = row.get(i).and_then(|x| x.clone());
+                        let parsed = if mongo_docs {
+                            v.as_deref()
+                                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                                .filter(|x| x.is_object())
+                        } else {
+                            None
+                        };
                         m.insert(
                             c.clone(),
-                            v.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+                            parsed.unwrap_or_else(|| v.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null)),
                         );
                     }
                     m
@@ -676,6 +687,22 @@ mod tests {
 
     fn render_str(columns: &[String], rows: &[Vec<Option<String>>], o: &ExportOptions) -> String {
         String::from_utf8(render(columns, rows, o, "t").unwrap()).unwrap()
+    }
+
+    #[test]
+    fn render_json_keeps_mongo_documents_as_objects() {
+        let columns = cols(&["document"]);
+        let rows = vec![row(&[Some(r#"{"_id":{"$oid":"507f1f77bcf86cd799439011"},"n":{"$numberLong":"5"}}"#)])];
+        let out = render_str(&columns, &rows, &opts("json"));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(v[0]["document"].is_object(), "不該把整份文件包成字串：{out}");
+        assert_eq!(v[0]["document"]["_id"]["$oid"], "507f1f77bcf86cd799439011");
+
+        // 一般 SQL 欄位仍維持字串。
+        let sql_cols = cols(&["name"]);
+        let sql_rows = vec![row(&[Some("a")])];
+        let v: serde_json::Value = serde_json::from_str(&render_str(&sql_cols, &sql_rows, &opts("json"))).unwrap();
+        assert_eq!(v[0]["name"], "a");
     }
 
     #[test]

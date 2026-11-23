@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::RowInsert;
+use crate::db::{DbKind, RowInsert};
 use crate::error::{AppError, AppResult};
 use crate::manager::ConnectionManager;
 
@@ -224,13 +224,16 @@ pub fn is_json_path(path: &str) -> bool {
     p.ends_with(".json") || p.ends_with(".jsonl") || p.ends_with(".ndjson")
 }
 
-fn json_cell(v: &serde_json::Value) -> Option<String> {
+fn json_cell(v: &serde_json::Value, mongo: bool) -> Option<String> {
     use serde_json::Value;
     match v {
         Value::Null => None,
         Value::String(s) => Some(s.clone()),
-        // 布林寫成 1 / 0：MySQL 的 BOOLEAN 是 TINYINT（'true' 字串在嚴格模式會失敗），PG / SQL Server 也都收 1 / 0。
-        Value::Bool(b) => Some(if *b { "1" } else { "0" }.to_string()),
+        // SQL 的 BOOLEAN 是 TINYINT，寫 1 / 0；MongoDB 的 BSON 有真正的 bool，
+        // 若也寫 1 / 0，insert_row 的 guess_bson 會存成 Int64，{active:true} 就查不到。
+        Value::Bool(b) => Some(if mongo {
+            if *b { "true" } else { "false" }
+        } else if *b { "1" } else { "0" }.to_string()),
         Value::Number(n) => Some(n.to_string()),
         // 巢狀物件 / 陣列整段存成緊湊 JSON 字串（目標是 JSON / 文字欄）。
         other => Some(other.to_string()),
@@ -243,6 +246,11 @@ fn json_cell(v: &serde_json::Value) -> Option<String> {
 /// - 外層物件只有一個欄位、其值是物件陣列（`{"data": [{…}]}`，常見的 API 回應形狀）
 /// - 單一物件（當成一筆）
 pub fn parse_json(content: &str) -> AppResult<Vec<Vec<Option<String>>>> {
+    parse_json_for(content, false)
+}
+
+/// `mongo=true` 時布林維持 true / false（BSON bool），SQL 維持 1 / 0（TINYINT）。
+pub fn parse_json_for(content: &str, mongo: bool) -> AppResult<Vec<Vec<Option<String>>>> {
     use serde_json::Value;
     let text = content.strip_prefix('\u{feff}').unwrap_or(content).trim();
     let records: Vec<Value> = match serde_json::from_str::<Value>(text) {
@@ -285,7 +293,7 @@ pub fn parse_json(content: &str) -> AppResult<Vec<Vec<Option<String>>>> {
     rows.push(keys.iter().cloned().map(Some).collect());
     for r in &records {
         if let Some(obj) = r.as_object() {
-            rows.push(keys.iter().map(|k| obj.get(k).and_then(json_cell)).collect());
+            rows.push(keys.iter().map(|k| obj.get(k).and_then(|v| json_cell(v, mongo))).collect());
         }
     }
     Ok(rows)
@@ -300,7 +308,8 @@ pub async fn import_json(
     content: &str,
     opts: &ImportOptions,
 ) -> AppResult<ImportResult> {
-    let rows = parse_json(content)?;
+    let mongo = manager.kind(id).ok() == Some(DbKind::Mongo);
+    let rows = parse_json_for(content, mongo)?;
     import_cells(manager, id, database, table, rows, opts, true).await
 }
 
@@ -412,10 +421,22 @@ async fn import_cells(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_csv;
+    use super::{parse_csv, parse_json, parse_json_for};
 
     fn rows(content: &str) -> Vec<Vec<String>> {
         parse_csv(content, ',')
+    }
+
+    #[test]
+    fn json_booleans_stay_booleans_for_mongo() {
+        let src = r#"[{"active":true,"archived":false,"n":3}]"#;
+        assert_eq!(parse_json_for(src, true).unwrap()[1], vec![
+            Some("true".into()), Some("false".into()), Some("3".into())
+        ]);
+        // SQL 保持 1 / 0（TINYINT）。
+        assert_eq!(parse_json(src).unwrap()[1], vec![
+            Some("1".into()), Some("0".into()), Some("3".into())
+        ]);
     }
 
     #[test]
