@@ -324,7 +324,9 @@ impl DatabaseDriver for MongoDriver {
                     truncated = true;
                     break;
                 }
-                rows.push(vec![Some(serde_json::to_string(&d).unwrap_or_default())]);
+                // 用 canonical extended JSON：一般 serde 序列化會把 Int64 變成 JSON number，
+                // 前端 JSON.parse 可能掉精度，且文件匯出就再也還原不回 BSON 型別。
+                rows.push(vec![Some(Bson::Document(d).into_canonical_extjson().to_string())]);
             }
             return Ok(QueryResult {
                 columns: vec!["document".to_string()],
@@ -1886,6 +1888,14 @@ mod tests {
         // 查詢運算子必須仍是一般 document，不能被當成 extJSON。
         let gt = bson_from_json(&serde_json::json!({"$gt": 5}));
         assert_eq!(gt.as_document().unwrap().get_i32("$gt").unwrap(), 5);
+    }
+
+    #[test]
+    fn document_json_serialization_keeps_bson_types() {
+        let d = doc! { "_id": ObjectId::from_bytes([1; 12]), "n": Bson::Int64(5) };
+        let s = Bson::Document(d).into_canonical_extjson().to_string();
+        assert!(s.contains("$oid"), "文件 JSON 要保留 ObjectId：{s}");
+        assert!(s.contains("$numberLong"), "Int64 不能用純 JSON number（前端會掉精度）：{s}");
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 新功能：
 
+- **MongoDB 可匯出／匯入整份文件（extended JSON）**：工具列新增「匯出文件／匯入文件」，走 query DSL 保留 ObjectId / Date / Int64 / Decimal128 等 BSON 型別；查詢結果也改採 canonical extJSON，避免 Int64 被前端 JSON.parse 掉精度。
 - **MongoDB 欄位不再隨分頁跳動**：表格與多頁匯出的欄位聯集現在會額外抽樣前 100 筆文件，避免第 2 頁才出現的欄位被漏掉。
 - **MongoDB 查詢結果不開就地編輯**：結果是 JSON 字串且沒有可靠的 `_id` 定位，改導向集合資料分頁／文件編輯器。
 - **MongoDB 更新 DSL 支援更多營運常用操作**：`$unset` / `$inc` / `$push` / `$pull` 等白名單運算子、`upsert`、`multi:false`（只改一筆），仍保留非空 filter 安全檢查；find DSL 也補上 `skip` 可供分頁。

@@ -1456,6 +1456,47 @@ function DataPane({ tab }: { tab: OpenTab }) {
     }
   };
 
+  // Mongo 文件匯出／匯入走 query DSL：每列就是一份文件的 extended JSON，
+  // 因此 ObjectId / Date / Decimal128 等型別不會像一般表格匯出那樣退化成字串。
+  const exportMongoDocs = async () => {
+    setApplying(true);
+    try {
+      const dsl = JSON.stringify({ db: tab.database, collection: tab.table, filter: {}, limit: 100_000 });
+      const res = await api.runQuery(tab.connId, dsl);
+      const docs = res.rows.map((r) => {
+        try { return JSON.parse(r[0] ?? "null"); } catch { return null; }
+      }).filter((d) => d && typeof d === "object");
+      const path = await pickSaveFile(`${tab.table}.json`, [{ name: "JSON", extensions: ["json"] }]);
+      if (!path) return;
+      await api.writeTextFile(path, JSON.stringify(docs, null, 2));
+      toast.success(t("已匯出 {n} 份文件", { n: docs.length }));
+    } catch (e: any) {
+      toast.error(e?.message ?? t("匯出失敗"));
+    } finally { setApplying(false); }
+  };
+
+  const importMongoDocs = async () => {
+    if (readonly) return;
+    const path = await pickOpenFile([{ name: "JSON", extensions: ["json"] }]);
+    if (!path) return;
+    try {
+      const text = await api.readTextFile(path);
+      const parsed: unknown = JSON.parse(text);
+      const docs = Array.isArray(parsed) ? parsed : [parsed];
+      if (docs.length === 0 || docs.some((d) => !d || typeof d !== "object" || Array.isArray(d))) {
+        toast.error(t("檔案需為文件物件或文件陣列")); return;
+      }
+      if (!(await uiConfirm(t("將匯入 {n} 份文件到「{table}」。確定？", { n: docs.length, table: tab.table }), { danger: true }))) return;
+      setApplying(true);
+      const dsl = JSON.stringify({ db: tab.database, collection: tab.table, insert: docs });
+      const res = await api.runQuery(tab.connId, dsl);
+      toast.success(t("已匯入 {n} 份文件", { n: res.rows_affected }));
+      load();
+    } catch (e: any) {
+      toast.error(e?.message ?? t("匯入失敗"));
+    } finally { setApplying(false); }
+  };
+
   // 匯出目前鍵樹列出的所有鍵（仿 ARDM 的 Export all keys）。逐鍵取完整內容，
   // 腳本自己帶 partial 旗標，部分載入的集合匯回時會被安全略過。
   const exportAllRedisKeys = async (keys: string[]) => {
@@ -1648,6 +1689,16 @@ function DataPane({ tab }: { tab: OpenTab }) {
         >
           <Icon icon={Search} size={14} /> {t("尋找")}
         </button>
+        {isMongo && (
+          <>
+            <button type="button" onClick={exportMongoDocs} disabled={applying}
+              title={t("匯出目前集合的所有文件（extended JSON，保留 BSON 型別）")}
+              className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 whitespace-nowrap text-fg/50 disabled:opacity-30">{t("匯出文件")}</button>
+            {!readonly && <button type="button" onClick={importMongoDocs} disabled={applying}
+              title={t("從 extended JSON 檔匯入文件到目前集合")}
+              className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 whitespace-nowrap text-fg/50 disabled:opacity-30">{t("匯入文件")}</button>}
+          </>
+        )}
         {!treeMode && <button
           onClick={toggleDensity}
           title={t("切換列密度（緊湊／舒適）")}
