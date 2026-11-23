@@ -3,6 +3,7 @@
 新功能：
 
 - **MongoDB 欄位型別顯示更完整且穩定**：Decimal128 / Binary / Regex / Timestamp 等不再一律顯示「mixed」；同數混合型別用確定順序取樣，不會每次刷新都換型別。
+- **MongoDB 集合可重新命名**：集合右鍵新增「重新命名集合…」，走 `renameCollection` 並受唯讀模式守門；改名後自動關閉舊分頁並重整側欄。
 - **Mongo 複製整列不再失真**：右鍵「複製文件 (extJSON)」走 document_get 保留 BSON 型與完整大欄位；驗證規則編輯器新增格式化與 JSON 檢查；Ctrl+E 直接開目前列的文件編輯器。
 - **Mongo 連線表單不再幫本機無驗證的 MongoDB 硬塞 `root` 帳號**；`replicaSet` 與 `directConnection` 現在互斥，不會產生 driver 拒絕的 URI。
 - **Mongo 文件編輯器可用 Esc 關閉**並正確註冊 modal；Profiler 換資料庫不再顯示上一個庫的設定，讀取失敗時「套用」會停用。

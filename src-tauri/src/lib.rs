@@ -253,6 +253,7 @@ pub fn run() {
             commands::has_stored_password,
             commands::clear_connection_password,
             commands::set_conn_readonly,
+            commands::mongo_rename_collection,
             commands::list_databases,
             commands::list_tables,
             commands::table_columns,

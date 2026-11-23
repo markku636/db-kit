@@ -2339,6 +2339,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "此值為截斷預覽，不能寫回；請用整份文件編輯器修改" => "This value is a truncated preview and cannot be written back; edit it in the full document editor",
         "filter 必須是文件物件" => "filter must be a document object",
         "索引欄位「{field}」重複" => "Duplicate index field: {field}",
+        "請輸入與原名稱不同的新集合名稱" => "Enter a new collection name different from the current one",
         _ => return None,
     })
 }

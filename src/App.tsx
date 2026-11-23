@@ -2249,6 +2249,20 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
       toast.error(e?.message ?? t("刪除失敗"));
     }
   };
+  const renameMongoCollection = async (m: TblRef) => {
+    const name = await uiPrompt(t("輸入新的集合名稱："), {
+      title: t("重新命名集合"), defaultValue: m.table, confirmText: t("重新命名"),
+    });
+    if (!name?.trim() || name.trim() === m.table) return;
+    try {
+      await api.mongoRenameCollection(m.connId, m.db, m.table, name.trim());
+      useStore.getState().closeTableTab(m.connId, m.db, m.table);
+      toast.success(t("已重新命名集合為「{name}」", { name: name.trim() }));
+      refreshTables(m.connId, m.db);
+    } catch (e: any) {
+      toast.error(e?.message ?? t("重新命名失敗"));
+    }
+  };
   // 複製資料表結構：產生 CREATE TABLE 語句送往查詢編輯器，供使用者檢視後執行（不直接執行 DDL）。
   const duplicateTable = async (m: TblRef, withData = false) => {
     const name = await uiPrompt(withData ? t("複製為新資料表名稱（含資料）") : t("複製為新資料表名稱"), {
@@ -2426,6 +2440,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
         sep,
         it(t("查詢此集合（find）"), () => genMongoFind(m)),
         it(t("聚合範本（aggregate）"), () => genMongoAggregate(m)),
+        ...(ro ? [] : [it(t("重新命名集合…"), () => renameMongoCollection(m))]),
         ...(ro ? [] : [it(t("插入範本（insert）"), () => genMongoInsert(m))]),
         it(t("複製集合名"), () => copyToClipboard(m.table, t("已複製集合名"))),
         sep,

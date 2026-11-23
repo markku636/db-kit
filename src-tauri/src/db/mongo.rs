@@ -32,6 +32,21 @@ impl MongoDriver {
     fn db_handle(&self, database: &str) -> mongodb::Database {
         self.client.database(database)
     }
+
+    /// 集合改名走 admin 的 renameCollection（Mongo 沒有一般 UPDATE 可改集合名）。
+    pub async fn rename_collection(&self, database: &str, from: &str, to: &str) -> AppResult<()> {
+        let (from, to) = (from.trim(), to.trim());
+        if from.is_empty() || to.is_empty() || from == to {
+            return Err(AppError::Query(t!("請輸入與原名稱不同的新集合名稱").to_string()));
+        }
+        let cmd = doc! {
+            "renameCollection": format!("{database}.{from}"),
+            "to": format!("{database}.{to}"),
+        };
+        let _: Document = self.client.database("admin").run_command(cmd).await
+            .map_err(|e| AppError::Query(e.to_string()))?;
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]

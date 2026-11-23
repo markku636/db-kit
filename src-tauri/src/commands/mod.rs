@@ -1177,6 +1177,19 @@ pub async fn list_foreign_keys(
     state.manager.list_foreign_keys(&id, &database, &table).await
 }
 
+/// 集合改名（MongoDB renameCollection）。
+#[tauri::command]
+pub async fn mongo_rename_collection(
+    state: State<'_, AppState>,
+    id: String,
+    database: String,
+    from: String,
+    to: String,
+) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
+    state.manager.mongo_driver(&id)?.rename_collection(&database, &from, &to).await
+}
+
 /// 建立集合（MongoDB）。
 #[tauri::command]
 pub async fn create_collection(
