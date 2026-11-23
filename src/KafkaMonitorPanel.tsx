@@ -291,7 +291,8 @@ function AlertsTab({ connId }: { connId: string }) {
             <input type="number" value={edit.threshold} onChange={(e) => setEdit({ ...edit, threshold: Number(e.target.value) || 0 })} className={`${inputCls} w-24`} />
           </label>
           <label className="flex flex-col gap-0.5"><span className="text-fg/40">{t("持續週期")}</span>
-            <input type="number" min={0} value={edit.for_ticks} onChange={(e) => setEdit({ ...edit, for_ticks: Math.max(0, Number(e.target.value) || 0) })} className={`${inputCls} w-20`} />
+            {/* 後端也把 0 當 1（連續至少一次才算），直接在 UI 限制避免顯示與實際行為不符 */}
+            <input type="number" min={1} value={edit.for_ticks} onChange={(e) => setEdit({ ...edit, for_ticks: Math.max(1, Number(e.target.value) || 1) })} className={`${inputCls} w-20`} />
           </label>
           <button type="button" onClick={save} className="px-3 py-1 rounded bg-accent/80 hover:bg-accent text-white">{t("儲存")}</button>
           <button type="button" onClick={() => setEdit(null)} className="px-3 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/60">{t("取消")}</button>
