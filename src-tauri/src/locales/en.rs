@@ -519,6 +519,12 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "開啟備份檔失敗：{e}" => "Failed to open the backup file: {e}",
         "找不到 psql，請先安裝" => "psql was not found; install it first",
         "建立 mongo 工具設定暫存檔失敗：{e}" => "Failed to create the temp config file for the mongo tools: {e}",
+        "寫入 mongo 工具設定暫存檔失敗：{e}" => "Failed to write the temp config file for the mongo tools: {e}",
+        "巢狀 JSON 格式錯誤：{e}" => "Invalid nested JSON: {e}",
+        "verbosity 無效：{v}" => "Invalid verbosity: {v}",
+        "不允許的鍵：{k}（只接受 db / collection / filter / sort / projection / limit / pipeline / verbosity）" => {
+            "Key not allowed: {k} (only db / collection / filter / sort / projection / limit / pipeline / verbosity)"
+        }
         "備份檔過小或無法讀取" => "The backup file is too small or unreadable",
         "備份檔不是有效的 SQLite 資料庫檔" => "The backup file is not a valid SQLite database file",
 
