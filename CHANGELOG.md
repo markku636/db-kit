@@ -2,6 +2,7 @@
 
 新功能：
 
+- **MongoDB 欄位型別顯示更完整且穩定**：Decimal128 / Binary / Regex / Timestamp 等不再一律顯示「mixed」；同數混合型別用確定順序取樣，不會每次刷新都換型別。
 - **唯讀旗標在重開 app 後仍會送到後端**：先前只有手動切換時同步，重啟後畫面唯讀但後端守門是空的；暫時解鎖／自動上鎖也都即時同步。
 - **補齊後端唯讀守門**：整份文件取代、建立／刪除集合與資料庫也擋；文件匯入補上正式環境確認，且不再被全域 1000 列上限靜默截斷。
 - **MongoDB 可匯出／匯入整份文件（extended JSON）**：工具列新增「匯出文件／匯入文件」，走 query DSL 保留 ObjectId / Date / Int64 / Decimal128 等 BSON 型別；查詢結果也改採 canonical extJSON，避免 Int64 被前端 JSON.parse 掉精度。

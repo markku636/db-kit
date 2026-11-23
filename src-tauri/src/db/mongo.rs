@@ -138,7 +138,10 @@ impl DatabaseDriver for MongoDriver {
             .map(|name| {
                 let is_id = name == "_id";
                 let dominant = types.get(&name)
-                    .and_then(|m| m.iter().max_by_key(|(_, n)| **n))
+                    // 同數時用型別名字當第二次排序鍵，避免 HashMap 迭代順序讓頁面每次刷新都換型別。
+                    .and_then(|m| m.iter().max_by(|(ta, na), (tb, nb)| {
+                        na.cmp(nb).then_with(|| tb.cmp(ta))
+                    }))
                     .map(|(t, _)| t.clone())
                     .unwrap_or_default();
                 ColumnInfo {
@@ -1530,7 +1533,16 @@ fn bson_type_name(b: &Bson) -> String {
         Bson::Array(_) => "array",
         Bson::DateTime(_) => "date",
         Bson::Null => "null",
-        _ => "mixed",
+        Bson::Decimal128(_) => "decimal128",
+        Bson::Binary(_) => "binary",
+        Bson::RegularExpression(_) => "regex",
+        Bson::Timestamp(_) => "timestamp",
+        Bson::JavaScriptCode(_) | Bson::JavaScriptCodeWithScope(_) => "javascript",
+        Bson::Symbol(_) => "symbol",
+        Bson::MinKey => "minKey",
+        Bson::MaxKey => "maxKey",
+        Bson::Undefined => "undefined",
+        Bson::DbPointer(_) => "dbPointer",
     }
     .to_string()
 }
