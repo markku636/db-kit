@@ -75,7 +75,8 @@ pub struct HarborLabel {
 /// 弱點掃描摘要（取第一個掃描報告）。
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct HarborScan {
-    /// Success / Running / Pending / Error / Stopped / NotScanned
+    /// Success / Queued / Pending / Running / Scanning / Scheduled / Error / Stopped / NotScanned
+    /// （前端 scanInProgress() 需認得所有「還在跑」的狀態，別誤顯示成無弱點）
     pub status: String,
     pub severity: String,
     pub total: i64,

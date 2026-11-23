@@ -58,10 +58,12 @@ export function scanSummary(s: HarborScan): string {
   return parts.join(" ");
 }
 
+const SCAN_RUNNING_STATUSES = new Set([
+  "queued", "pending", "running", "scanning", "scheduled", "inprogress", "in_progress",
+]);
+
 /** 掃描還在跑（要輪詢、不能顯示「無弱點」）。Harbor 用 Queued / Scanning，
  *  不同版本還會見到 Pending / Running / Scheduled；比對時一律忽略大小寫。 */
 export function scanInProgress(s: HarborScan | null): boolean {
-  if (!s) return false;
-  return new Set(["queued", "pending", "running", "scanning", "scheduled", "inprogress", "in_progress"])
-    .has(s.status.trim().toLowerCase());
+  return !!s && SCAN_RUNNING_STATUSES.has(s.status.trim().toLowerCase());
 }
