@@ -23,6 +23,7 @@ import { useT } from "./i18n";
 import KafkaProduceDialog, { type ProduceInitial } from "./KafkaProduceDialog";
 import KafkaCsvProduceDialog from "./KafkaCsvProduceDialog";
 import { projectText } from "./jsonPath";
+import { matchesTailMessage } from "./kafkaTail";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 type FilterMode = "simple" | "js";
@@ -242,9 +243,8 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
     try {
       if (!unlistenRef.current) {
         unlistenRef.current = await onKafkaMessage(connId, (m) => {
-          if (m.topic !== topic || m.conn_id !== connId) return; // 額外保險（後端每連線一個 tail）
-          // tail 以啟動時的分區條件執行；額外在客戶端擋一次，避免別的分區混進來。
-          if (partitionRef.current != null && m.partition !== partitionRef.current) return;
+          // 後端每連線只有一個 tail；主題／連線／分區都要在前端再擋一次。
+          if (!matchesTailMessage(m, connId, topic, partitionRef.current)) return;
           if (pausedRef.current) return;
           setRows((prev) => {
             const next = [...prev, m];
