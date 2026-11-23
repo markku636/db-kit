@@ -245,7 +245,8 @@ const KIND_SCOPED_DEFAULTS: Omit<ConnFormFields, "kind" | "host" | "port" | "use
  * kafka / elastic 無 root 慣例；rabbitmq 為 guest；redis 6.0 前無帳號概念（ACL 預設 `default`）。
  */
 function defaultUsername(kind: DbKind): string {
-  if (kind === "kafka" || kind === "elastic" || kind === "redis") return "";
+  // mongo 本機常是無驗證；沿用 MySQL 的 root 會讓 driver 送 SCRAM 而連不上。
+  if (kind === "kafka" || kind === "elastic" || kind === "redis" || kind === "mongo") return "";
   if (kind === "docker" || kind === "registry" || kind === "harbor") return "";
   if (kind === "rabbitmq") return "guest";
   return "root";

@@ -294,6 +294,8 @@ function ProfilerTab({ connId, initialDb, readonly }: { connId: string; initialD
     if (!db) return;
     let cancelled = false;
     setErr(null); setProfileErr(null);
+    // 換 DB / 重整時先清掉上一個 DB 的設定：讀取失敗時不能把舊值誤寫到新 DB。
+    setProfile(null); setLevel(0); setSlowMs(100);
     api.mongoProfileGet(connId, db)
       .then((p) => { if (cancelled) return; setProfile(p); setLevel(p.level); setSlowMs(p.slow_ms); })
       .catch((e) => !cancelled && setProfileErr(e?.message ?? t("讀取 Profiler 設定失敗")));
@@ -346,8 +348,9 @@ function ProfilerTab({ connId, initialDb, readonly }: { connId: string; initialD
             <span className="text-fg/50">slowms</span>
             <input type="number" value={slowMs} onChange={(e) => setSlowMs(Number(e.target.value) || 0)}
               className="w-20 h-6 rounded bg-inset border border-fg/10 px-2 text-xs outline-none focus:border-accent/60" />
-            <button type="button" onClick={apply}
-              className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/80">{t("套用")}</button>
+            <button type="button" onClick={apply} disabled={!profile}
+              title={!profile ? t("請先成功讀取此資料庫的 Profiler 設定") : undefined}
+              className="px-2 py-1 rounded border border-fg/15 hover:bg-fg/10 text-fg/80 disabled:opacity-30">{t("套用")}</button>
           </>
         )}
         <RefreshBtn onClick={() => setNonce((n) => n + 1)} />

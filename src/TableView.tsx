@@ -2406,6 +2406,7 @@ function DocumentEditorModal({ connId, database, table, docId, onClose, onSaved 
   onClose: () => void; onSaved: () => void;
 }) {
   const t = useT();
+  useModalOverlay(onClose); // Esc 關閉 + 註冊 modalCount，避免背後快捷鍵仍生效
   // 最大化是全域偏好（見 ui/modalChrome）：任一跳窗切換後，其餘跳窗一起照著開。
   const { shellClass } = useModalView();
   const [text, setText] = useState<string>("");
@@ -4302,7 +4303,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
       {kind === "mongo" && !isView && (
         <div className="mt-2">
           <div className="px-3 py-1.5 text-xs text-fg/40 bg-inset border-y border-fg/10 flex items-center gap-2">
-            <span>{t("驗證規則")}{validation && validation.validator_json ? t("（已設定）") : t("（未設定）")}</span>
+            <span>{t("驗證規則")}{validation === null ? t("（讀取失敗）") : validation.validator_json ? t("（已設定）") : t("（未設定）")}</span>
             {validation === null && <span className="text-fg/30">{t("— 無法讀取（權限不足或不支援）")}</span>}
           </div>
           {validation !== null && (

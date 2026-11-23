@@ -90,6 +90,13 @@ const AGG_STAGES = JSON.stringify({
 });
 
 describe("parseMongoExplain", () => {
+  it("aggregate 的摘要取自 $cursor.executionStats，不是空的頂層統計", () => {
+    const m = parseMongoExplain(AGG_STAGES)!;
+    expect(m.summary).not.toBeNull();
+    expect(m.summary!.nReturned).toBe(100);
+    expect(m.summary!.executionTimeMillis).toBe(3);
+    expect(m.summary!.collscan).toBe(true);
+  });
   it("find + executionStats：優先用 executionStages（帶指標），並彙整摘要", () => {
     const m = parseMongoExplain(FIND_IXSCAN)!;
     expect(m).not.toBeNull();

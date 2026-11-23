@@ -6926,7 +6926,9 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
                 ? <div className="p-3 text-amber-300 text-sm whitespace-pre-wrap break-words">{planErr}</div>
                 : <EmptyState compact icon={running ? Loader2 : GitBranch}
                     title={running ? t("解釋中…") : t("尚無執行計畫")}
-                    hint={running ? undefined : t("按「視覺化解釋」以執行計畫樹呈現查詢。")}
+                    hint={running ? undefined : kind === "mongo"
+                      ? t("按「執行計畫（explain）」以檢視查詢計畫。")
+                      : t("按「視覺化解釋」以執行計畫樹呈現查詢。")}
                     className={running ? "[&_svg]:animate-spin" : ""} />
           )}
           {bottomTab === "review" && (

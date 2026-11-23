@@ -405,9 +405,11 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
     return Object.keys(o).length ? o : undefined;
   };
 
-  // 無 root 帳號慣例的類型（Kafka / Elastic）：切入時清掉預設 root、切出且留空時補回。
+  // 無 root 帳號慣例的類型：切入時清掉預設 root、切出且留空時補回。
+  // mongo 本機常無驗證、redis 用 ACL，都不該帶著 MySQL 的 root。
   const noRootKind = (k: DbKind) =>
-    k === "kafka" || k === "elastic" || k === "docker" || k === "registry" || k === "harbor" || k === "kubernetes";
+    k === "kafka" || k === "elastic" || k === "mongo" || k === "redis"
+    || k === "docker" || k === "registry" || k === "harbor" || k === "kubernetes";
   // host 欄以 socket 路徑 / URL 為主的類型：切入時清掉預設的 127.0.0.1，切出且留空時補回。
   const urlHostKind = (k: DbKind) => k === "docker" || k === "registry" || k === "harbor" || k === "kubernetes";
 
@@ -936,7 +938,7 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
                   <Input value={mongoAuthSource} onChange={(e) => setMongoAuthSource(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("例如 admin")} />
                 </Field>
                 <Field label={t("replicaSet（選填）")} className="flex-1">
-                  <Input value={mongoReplicaSet} onChange={(e) => setMongoReplicaSet(e.target.value)} onKeyDown={submitOnEnter} placeholder={t("例如 rs0")} />
+                  <Input value={mongoReplicaSet} onChange={(e) => { setMongoReplicaSet(e.target.value); if (e.target.value.trim()) setMongoDirect(false); }} onKeyDown={submitOnEnter} placeholder={t("例如 rs0")} />
                 </Field>
               </div>
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
@@ -954,7 +956,8 @@ export default function ConnectionDialog({ onClose, onSaved, initial, prefill, i
                 </>
               )}
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                <input type="checkbox" checked={mongoDirect} onChange={(e) => setMongoDirect(e.target.checked)} />
+                {/* driver 不接受 replicaSet + directConnection 同時出現；勾直連就清掉 replicaSet。 */}
+                <input type="checkbox" checked={mongoDirect} onChange={(e) => { setMongoDirect(e.target.checked); if (e.target.checked) setMongoReplicaSet(""); }} />
                 <span>{t("直連（directConnection，繞過拓撲探索）")}</span>
               </label>
             </Section>

@@ -183,7 +183,9 @@ export function parseMongoExplain(raw: string): MongoExplainModel | null {
     if (s.stage === "COLLSCAN") collscan = true;
   });
 
-  const stats = doc.executionStats;
+  // aggregate 的統計藏在 stages[].$cursor.executionStats，不是頂層 executionStats。
+  const cursorStats = doc.stages?.find?.((s: any) => s?.$cursor?.executionStats)?.$cursor?.executionStats;
+  const stats = doc.executionStats ?? cursorStats;
   const summary: MongoExplainSummary | null =
     hasStats || stats
       ? {
@@ -199,7 +201,10 @@ export function parseMongoExplain(raw: string): MongoExplainModel | null {
   return {
     root,
     summary,
-    ns: typeof doc?.queryPlanner?.namespace === "string" ? doc.queryPlanner.namespace : undefined,
+    ns: typeof doc?.queryPlanner?.namespace === "string" ? doc.queryPlanner.namespace
+      : typeof doc?.stages?.find?.((s: any) => s?.$cursor?.queryPlanner?.namespace)?.$cursor?.queryPlanner?.namespace === "string"
+        ? doc.stages.find((s: any) => s?.$cursor?.queryPlanner?.namespace).$cursor.queryPlanner.namespace
+        : undefined,
     server: typeof doc?.serverInfo?.host === "string" ? doc.serverInfo.host : undefined,
   };
 }
