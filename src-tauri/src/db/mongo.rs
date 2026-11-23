@@ -454,6 +454,11 @@ impl DatabaseDriver for MongoDriver {
         table: &str,
         edit: &CellEdit,
     ) -> AppResult<u64> {
+        // 防護：前端表格對 >4KB 的值只顯示截斷預覽，若這段文字被當新值寫回，
+        // 原值尾巴會永久消失。明確拒絕，並提示改用整份文件編輯器。
+        if edit.new_value.as_deref().is_some_and(|s| cell_truncated_marker(s)) {
+            return Err(AppError::Query(t!("此值為截斷預覽，不能寫回；請用整份文件編輯器修改").to_string()));
+        }
         // 以 _id 定位文件，設定單一欄位。
         let id_value = id_filter(edit)?;
         let coll = self.db_handle(database).collection::<Document>(table);
@@ -1300,10 +1305,20 @@ pub(crate) fn build_mongo_uri(config: &ConnectionConfig) -> String {
         params.push("tlsAllowInvalidCertificates=true".to_string());
     }
 
-    if params.is_empty() {
+    // 標準 mongodb://user:pass@host:27017/mydb 的路徑是預設資料庫（也是預設 authSource）。
+    // 之前被丟掉，導致最常見的「URI 內含 db」寫法被拿去對 admin 驗證而失敗，mongodump 也一樣。
+    let db_path = config.database.as_deref().unwrap_or("").trim();
+    let base = if db_path.is_empty() {
         host_part
     } else {
-        format!("{host_part}/?{}", params.join("&"))
+        format!("{host_part}/{}", pct_encode(db_path))
+    };
+    if params.is_empty() {
+        base
+    } else if db_path.is_empty() {
+        format!("{base}/?{}", params.join("&"))
+    } else {
+        format!("{base}?{}", params.join("&"))
     }
 }
 
@@ -1364,6 +1379,16 @@ fn guess_bson(s: &str) -> Bson {
         _ => {}
     }
     Bson::String(s.to_string())
+}
+
+/// 判斷是否為 cell_display 產生的截斷後綴（前端也有一份相同判斷）。
+fn cell_truncated_marker(s: &str) -> bool {
+    const PREFIX: &str = "…⟪+";
+    const SUFFIX: &str = " bytes⟫";
+    let Some(i) = s.rfind(PREFIX) else { return false; };
+    let tail = &s[i + PREFIX.len()..];
+    tail.ends_with(SUFFIX)
+        && tail[..tail.len() - SUFFIX.len()].chars().all(|c| c.is_ascii_digit())
 }
 
 /// 表格單格顯示上限（位元組）。超過則截斷並標記，避免巨型欄位（大陣列 / base64）整包渲染卡 UI。
@@ -1461,7 +1486,9 @@ fn build_filter(filters: &[Filter], match_any: bool) -> Document {
             "like" => {
                 d.insert(field, doc! { "$regex": like_to_regex(f.value.as_deref().unwrap_or("")), "$options": "i" });
             }
-            "is_null" => { d.insert(field, Bson::Null); }
+            // {field: null} 在 Mongo 會同時命中「欄位不存在」的文件；
+            // $type:"null" 才是 SQL IS NULL 的語意（與欄位統計一致）。
+            "is_null" => { d.insert(field, doc! { "$type": "null" }); }
             "is_not_null" => { d.insert(field, doc! { "$ne": Bson::Null }); }
             _ => {}
         }
@@ -1473,14 +1500,12 @@ fn build_filter(filters: &[Filter], match_any: bool) -> Document {
         Document::new()
     } else if match_any {
         doc! { "$or": clauses.into_iter().map(Bson::Document).collect::<Vec<_>>() }
+    } else if clauses.len() == 1 {
+        clauses.remove(0)
     } else {
-        let mut merged = Document::new();
-        for c in clauses {
-            for (k, v) in c {
-                merged.insert(k, v);
-            }
-        }
-        merged
+        // 直接用 merged.insert 會讓「同一欄的兩個條件」（如 age>10 且 age<20）
+        // 互相覆蓋，結果靜默出錯。改用 $and 保留每一條。
+        doc! { "$and": clauses.into_iter().map(Bson::Document).collect::<Vec<_>>() }
     }
 }
 
@@ -1508,11 +1533,11 @@ fn build_sort(sorts: &[Sort]) -> Option<Document> {
 }
 
 /// 將 serde_json::Value 轉成 BSON（供 query 的 filter 用）。
+/// 先試 canonical extended JSON（{$oid} / {$date} / {$numberLong}…）：
+/// 從文件編輯器或 Compass 複製的條件才會保留 ObjectId / Date 等型別；
+/// 查詢運算子（$gt / $in…）不是 extJSON，會自然地走原來的 plain document 路徑。
 fn bson_from_json(v: &serde_json::Value) -> Bson {
-    match mongodb::bson::to_bson(v) {
-        Ok(b) => b,
-        Err(_) => Bson::Null,
-    }
+    Bson::try_from(v.clone()).unwrap_or_else(|_| mongodb::bson::to_bson(v).unwrap_or(Bson::Null))
 }
 
 /// 文件數值欄位（i32 / i64 / f64 依版本不定）統一取成 i64。
@@ -1730,8 +1755,66 @@ fn server_status_sections(status: &Document, build: &Document) -> Vec<ServerInfo
 
 #[cfg(test)]
 mod tests {
-    use super::{build_explain_command, guess_bson, like_to_regex, server_status_sections};
+    use super::{bson_from_json, build_explain_command, build_filter, build_mongo_uri, cell_truncated_marker, guess_bson, like_to_regex, server_status_sections};
+    use crate::db::{ConnectionConfig, DbKind, Filter, SshAuthMethod};
     use mongodb::bson::{doc, Bson};
+
+    #[test]
+    fn build_filter_keeps_multiple_conditions_on_the_same_field() {
+        let filters = vec![
+            Filter { column: "age".into(), op: ">".into(), value: Some("10".into()) },
+            Filter { column: "age".into(), op: "<".into(), value: Some("20".into()) },
+        ];
+        let d = build_filter(&filters, false);
+        let and = d.get_array("$and").expect("兩個同欄條件不能互相覆蓋");
+        assert_eq!(and.len(), 2);
+        assert_eq!(and[0].as_document().unwrap().get_document("age").unwrap().get_i64("$gt").unwrap(), 10);
+        assert_eq!(and[1].as_document().unwrap().get_document("age").unwrap().get_i64("$lt").unwrap(), 20);
+
+        let any = build_filter(&filters, true);
+        assert_eq!(any.get_array("$or").unwrap().len(), 2);
+        // null 用 $type 而不是單純 null（後者會連「欄位不存在」一起命中）。
+        let null_filter = build_filter(&[Filter { column: "x".into(), op: "is_null".into(), value: None }], false);
+        assert_eq!(null_filter.get_document("x").unwrap().get_str("$type").unwrap(), "null");
+    }
+
+    #[test]
+    fn mongo_uri_keeps_database_path() {
+        let cfg = ConnectionConfig {
+            id: "x".into(), name: "x".into(), kind: DbKind::Mongo,
+            host: "h".into(), port: 27017, username: "u".into(), password: "p".into(),
+            database: Some("mydb".into()), max_connections: 5,
+            ssh_enabled: false, ssh_host: String::new(), ssh_port: 22, ssh_username: String::new(),
+            ssh_auth_method: SshAuthMethod::Password, ssh_password: String::new(),
+            ssh_private_key_path: String::new(), ssh_passphrase: String::new(),
+            options: [("mongo_auth_source".to_string(), "admin".to_string())].into_iter().collect(),
+            otp_secret: String::new(),
+        };
+        let uri = build_mongo_uri(&cfg);
+        assert!(uri.contains("/mydb?authSource=admin"), "{uri}");
+        let mut srv = cfg.clone();
+        srv.options.insert("mongo_srv".into(), "1".into());
+        assert!(build_mongo_uri(&srv).starts_with("mongodb+srv://"), "{uri}");
+        assert!(build_mongo_uri(&srv).contains("/mydb?"));
+    }
+
+    #[test]
+    fn query_json_accepts_canonical_extended_json() {
+        let oid = bson_from_json(&serde_json::json!({"$oid": "507f1f77bcf86cd799439011"}));
+        assert!(matches!(oid, Bson::ObjectId(_)), "{oid:?}");
+        let n = bson_from_json(&serde_json::json!({"$numberLong": "5"}));
+        assert!(matches!(n, Bson::Int64(5)), "{n:?}");
+        // 查詢運算子必須仍是一般 document，不能被當成 extJSON。
+        let gt = bson_from_json(&serde_json::json!({"$gt": 5}));
+        assert_eq!(gt.as_document().unwrap().get_i32("$gt").unwrap(), 5);
+    }
+
+    #[test]
+    fn truncated_cell_marker_is_recognized() {
+        assert!(cell_truncated_marker("abc…⟪+1234 bytes⟫"));
+        assert!(!cell_truncated_marker("abc"));
+        assert!(!cell_truncated_marker("abc…⟪+12 bytes⟫ tail"));
+    }
 
     #[test]
     fn explain_command_find_defaults() {

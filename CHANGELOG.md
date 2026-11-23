@@ -2,6 +2,11 @@
 
 新功能：
 
+- **MongoDB 唯讀連線不再能從查詢編輯器寫入**：DSL 的 `insert` / `update` / `delete` 與聚合 `$out` / `$merge`（含巢狀）都會被擋，插入範本選單也一併隱藏。
+- **MongoDB 截斷格值不再被寫回**：超過 4KB 的欄位會導向整份文件編輯器，後端也拒絕帶截斷標記的寫入，避免原值尾巴被剪掉。
+- **MongoDB 同一欄的多個篩選條件不再互相覆蓋**：改用 `$and`；`is null` 也改成 `$type:"null"`，不再把「欄位不存在」算進去。
+- **MongoDB 查詢可接受標準延伸 JSON**：從文件編輯器／Compass 複製的 `{"$oid":…}` / `{"$numberLong":…}` 條件現在能正確比對；查詢運算子仍照舊。
+- **MongoDB URI 的資料庫路徑不再被丟掉**：`mongodb://user:pass@host/mydb` 現在會用 mydb 驗證（backup / mongodump 也跟著正確）。
 - **JSON 匯入不再每鍵多一次 TTL 往返**：string 用 `SET ... EX`，集合把 `EXPIRE`/`PERSIST` 接進既有 pipeline；匯入上萬鍵明顯更快。
 - **大量資料操作更有效率**：多選設定 TTL 改成單次 IPC＋後端管線；「匯出全部鍵」以 20 支為一批並行讀取；尋找計數只在資料／搜尋字串變化時重算，不再每次 re-render 全表掃描。
 - **F1 仍可再按一次關閉快捷鍵說明**：新增的「對話框讓路」守門曾讓說明面板自己把自己的 F1 擋掉，現在關閉優先。

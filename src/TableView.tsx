@@ -26,6 +26,7 @@ import { formatRedisKeyForCopy, isSupportedRedisKeyType, redisPageHint, buildRed
 import { isBinaryColumnType, isReadOnlyColumnExtra } from "./columnMeta";
 import { fmtRedisTtl, hasBinaryKeyEscape, remainingTtl } from "./redisUiFormat";
 import { loadFilterPresets, recordFilterPreset, type FilterPreset } from "./filterPresets";
+import { isTruncatedMongoCell } from "./mongoDsl";
 import { loadRedisSeparator, redisNamespacePattern, redisNamespacePrefix } from "./redisTree";
 import { invalidateSchemaCache } from "./useSqlSchema";
 import RedisKeyTree, { REDIS_TREE_LIMIT } from "./RedisKeyTree";
@@ -712,6 +713,12 @@ function DataPane({ tab }: { tab: OpenTab }) {
     const col = data?.columns[c];
     if (col && readOnlyCols.has(col)) {
       toast.info(t("欄位「{col}」是{reason}，不能編輯。", { col, reason: readOnlyReason(col) }));
+      return;
+    }
+    // Mongo 格值是截斷預覽：就地存回會把原值尾巴剪掉。改開整份文件的 JSON 編輯器。
+    if (isMongo && !readonly && data && isTruncatedMongoCell(cellValue(r, c) ?? "")) {
+      toast.info(t("此欄位內容過長，已以截斷預覽顯示；請用整份文件編輯器修改，避免遺失資料。"));
+      setDocEdit(r);
       return;
     }
     setEditSeed(seed);

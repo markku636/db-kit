@@ -3093,6 +3093,8 @@ const en: Catalog = {
   "將以「{path}」還原到「{name}」，現有資料會被覆蓋且無法復原。確定繼續？": "Restore \"{path}\" into \"{name}\"? Existing data will be overwritten irreversibly.",
   "讀取連線清單失敗：{msg}，已保留畫面上原有的連線。": "Failed to load the connection list: {msg}. Existing connections on screen were kept.",
   "TTL 必須是不小於 -1 的整數秒數": "TTL must be an integer number of seconds no less than -1",
+  "此連線為唯讀，已擋下 MongoDB 寫入指令（insert / update / delete / $out / $merge）。可在連線右鍵關閉「唯讀模式」。": "This connection is read-only; MongoDB write commands (insert / update / delete / $out / $merge) were blocked. Right-click the connection to disable read-only mode.",
+  "此欄位內容過長，已以截斷預覽顯示；請用整份文件編輯器修改，避免遺失資料。": "This field is shown as a truncated preview; edit it in the full document editor to avoid data loss.",
   "套用已儲存的篩選預設": "Apply a saved filter preset",
   "篩選預設": "Filter presets",
   "把目前條件存為預設（同名覆蓋）": "Save current conditions as a preset (same name overwrites)",

@@ -66,6 +66,7 @@ import { loadPins, persistPins, togglePin, isPinned, removePinsForConn, type Pin
 import { sqlStoreKey } from "./queryDrafts";
 import { toast, uiChoose, uiConfirm, uiPrompt, UiHost, copyToClipboard, pickSaveFile, pickOpenFile } from "./ui";
 import { askOtpCode } from "./otpGate";
+import { isMongoWriteDsl } from "./mongoDsl";
 import {
   QUERY_HISTORY_KEY, loadQueryHistory, pushQueryHistory,
   resultToTsv, resultToJson, resultToCsv, resultToMarkdown, fmtElapsed, fmtRelativeTime, type QueryHistoryEntry, splitSqlStatements, splitSqlStatementsWithRanges, splitTsqlBatches, splitForGuard, scopeTsqlBatches, statementAtOffset, tsqlStatementAtOffset, isDangerousStatement, isWriteStatement, isExplainWithWrite, sqlExportDialect, hasLeadingDbSwitch, isDangerousRedisCommand, isReadOnlyRedisCommand,
@@ -2418,7 +2419,7 @@ function Sidebar({ onEdit, onNewConnection, onEditSsh, onEditRd, onImportRdp, wi
         sep,
         it(t("查詢此集合（find）"), () => genMongoFind(m)),
         it(t("聚合範本（aggregate）"), () => genMongoAggregate(m)),
-        it(t("插入範本（insert）"), () => genMongoInsert(m)),
+        ...(ro ? [] : [it(t("插入範本（insert）"), () => genMongoInsert(m))]),
         it(t("複製集合名"), () => copyToClipboard(m.table, t("已複製集合名"))),
         sep,
         it(t("問 AI：解釋這個集合"), () => askAiTable(m, t("請解釋 MongoDB 集合 {db}.{table} 的用途與常見欄位結構。", { db: m.db, table: m.table }))),
@@ -5370,6 +5371,13 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
         if (kind === "redis" && roState.activeId && roState.readonlyConns[roState.activeId] === true
             && !isReadOnlyRedisCommand(q)) {
           toast.error(t("此連線為唯讀，已擋下非讀取指令。可在連線右鍵關閉「唯讀模式」。"));
+          return;
+        }
+        // 唯讀連線 + MongoDB：DSL 的 insert / update / delete 與聚合 $out / $merge 都會寫入，
+        // 但 isWriteStatement 只認 SQL，MongoDB 之前完全沒被擋。
+        if (kind === "mongo" && roState.activeId && roState.readonlyConns[roState.activeId] === true
+            && isMongoWriteDsl(q)) {
+          toast.error(t("此連線為唯讀，已擋下 MongoDB 寫入指令（insert / update / delete / $out / $merge）。可在連線右鍵關閉「唯讀模式」。"));
           return;
         }
         // Redis：FLUSHALL / FLUSHDB 會清空資料且無法復原，先確認。
