@@ -1,3 +1,27 @@
+## Unreleased
+
+安全性與資料保真：
+
+- **唯讀連線不再能透過訊息瀏覽刪除訊息**：RabbitMQ「瀏覽訊息」的 `requeue=false` 等於永久取出並刪除，現在一起強制重新入列、勾選框停用，後端也再擋一層。
+- **Kafka / Docker / Registry / Harbor 的寫入指令補上後端唯讀守門**：先前只有前端隱藏入口，IPC 直接呼叫仍可建主題、改設定、發訊息、刪映像或觸發掃描；現在後端一律拒絕。
+- **Schema Registry 唯讀連線不再能註冊／改相容性／刪除版本**；連線右鍵「新增主題」在唯讀模式也不再出現。
+- **告警清除只清目前連線**：先前按「清除」會把其他 Kafka 連線的告警歷史一起刪掉。
+
+MongoDB：
+
+- **巢狀欄位不再被存成字串**：從表格新增列或就地編輯時，`{…}` / `[…]` 會正確還原成 Document / Array（含 extended JSON 的 ObjectId），壞掉的 JSON 明確報錯，不再靜默毀掉 Schema。
+- **表格分頁有穩定排序**：未指定排序時改用 `_id`，指定排序時補 `_id` 當 tiebreaker，翻頁不再重複或漏文件。
+- **連線字串修正**：IPv6 host 補回方括號；明確的 `tls=false` / `directConnection=false` 不再被當成「沒寫」；`replicaSet` 與 `directConnection` 在 URI 層也保持互斥。
+- **執行計畫更可靠**：sharded aggregate 的統計與 namespace 不再消失；含 `$out` 的管線自動改用 `queryPlanner`；慢 explain 延遲回來不會覆蓋新查詢結果，切換連線時也會清掉舊計畫。
+
+Kafka / 容器映像：
+
+- **Kafka 錯誤不再跨連線漏水**：live-tail 只顯示自己連線的錯誤並去掉 `{connId}: ` 前綴；即時接收中禁止變更分區／即時篩選，避免「改了但沒生效」。
+- **Schema 註冊／刪除後強制重讀最新版本**（即使版本號仍是 0）。
+- **Harbor 掃描狀態認得 Queued / Scanning**：不再把還在排隊的映像誤顯示成綠色「無弱點」；唯讀連線不再能觸發掃描。
+- **映像 digest 解析完整支援 sha512 等非 sha256 演算法**：pull 指令與縮寫不再產生 `sha256:sha512:…` 這種無效參照。
+- **Harbor / Docker 分頁與詳情不再被過期回應覆蓋**；刪除最後一頁後自動回到上一頁；`restarting` 容器不再提供無法執行的 Shell／暫停動作。
+
 ## v0.60.4
 
 **設定介面改版與 AI 助手自動執行；並修好連線失敗對話框「取消」按鈕無法關閉的問題。**
