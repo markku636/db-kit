@@ -33,6 +33,9 @@ export default function HarborRepoView({ connId, project, repo }: { connId: stri
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const alive = useRef(true);
   const gen = useRef(0);
+  // 弱點報告是另一個獨立的請求，不能共用列表的 gen：
+  // 3 秒輪詢一刷新列表就會把還在飛的報告回應作廢，面板永遠轉圈。
+  const vulnGen = useRef(0);
   // StrictMode 在掛載時會跑 setup → cleanup → setup；alive 必須在 setup 重置，
   // 否則第二次 setup 之後所有回應都被當成過期，分頁永遠卡在「載入中」。
   useEffect(() => {
@@ -94,8 +97,8 @@ export default function HarborRepoView({ connId, project, repo }: { connId: stri
   };
 
   const openVuln = async (a: HarborArtifact) => {
-    const myGen = gen.current;
-    const ok = () => alive.current && gen.current === myGen;
+    const myGen = ++vulnGen.current;
+    const ok = () => alive.current && vulnGen.current === myGen;
     setVuln({ digest: a.digest, report: null, err: null });
     try {
       const r = await api.harborVulnerabilities(connId, project, repo, a.digest);

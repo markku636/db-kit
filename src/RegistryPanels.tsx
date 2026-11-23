@@ -13,6 +13,9 @@ function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
+    // 換連線 / 換專案時先清掉上一筆資料與錯誤，別短暫顯示錯的物件。
+    setData(null);
+    setErr(null);
     fn().then((d) => { if (alive) setData(d); }).catch((e) => { if (alive) setErr(e?.message ?? String(e)); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps

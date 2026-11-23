@@ -34,8 +34,11 @@ export default function DockerLogView({ connId, container }: { connId: string; c
     setLive(false);
   }, []);
 
-  const start = useCallback(async () => {
+  // followOverride：點「開始跟隨」時與 setFollow(true) 同批帶入，
+  // 避免 start() 還讀到舊的 follow=false 開出一條不跟隨的串流再被 effect 重開。
+  const start = useCallback(async (followOverride?: boolean) => {
     stop();
+    const useFollow = followOverride ?? follow;
     const gen = genRef.current;
     const term = xt.current?.term;
     if (!term) return;
@@ -44,19 +47,19 @@ export default function DockerLogView({ connId, container }: { connId: string; c
     const ch = new Channel<ArrayBuffer>();
     ch.onmessage = (m) => { if (genRef.current === gen) term.write(channelBytes(m)); };
     try {
-      const sid = await api.dockerLogsOpen(connId, container, tail, timestamps, follow, ch);
+      const sid = await api.dockerLogsOpen(connId, container, tail, timestamps, useFollow, ch);
       if (genRef.current !== gen) {
         void api.dockerStreamClose(sid).catch(() => undefined);
         return;
       }
       streamRef.current = sid;
-      setLive(follow);
+      setLive(useFollow);
       const un = await onDockerStreamEnd(sid, (p) => {
         if (genRef.current !== gen) return;
         streamRef.current = null;
         setLive(false);
         if (p.error) setErr(p.error);
-        else if (follow) term.write(`\r\n\x1b[90m── ${t("容器已停止輸出")} ──\x1b[0m\r\n`);
+        else if (useFollow) term.write(`\r\n\x1b[90m── ${t("容器已停止輸出")} ──\x1b[0m\r\n`);
       });
       if (genRef.current !== gen) un();
       else unlistenRef.current = un;
@@ -85,7 +88,7 @@ export default function DockerLogView({ connId, container }: { connId: string; c
         <IconButton
           icon={live ? Pause : Play}
           label={live ? t("停止跟隨") : t("開始跟隨")}
-          onClick={() => { if (live) stop(); else { setFollow(true); void start(); } }}
+          onClick={() => { if (live) stop(); else { setFollow(true); void start(true); } }}
         />
         <label className="flex items-center gap-1 text-fg/60">
           {t("最近")}

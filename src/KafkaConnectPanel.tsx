@@ -42,24 +42,31 @@ export default function KafkaConnectPanel({ connId, connName, readonly = false, 
 
   useEffect(() => {
     if (!selected) { setConfig(""); return; }
+    let alive = true;
     setEditing(false);
-    api.kafkaConnectConfig(connId, selected).then((c) => setConfig(JSON.stringify(c, null, 2))).catch(() => setConfig(""));
+    setConfig(""); // 先清掉上一個連接器的設定，避免短暫顯示錯誤內容
+    api.kafkaConnectConfig(connId, selected)
+      .then((c) => { if (alive) setConfig(JSON.stringify(c, null, 2)); })
+      .catch(() => { if (alive) setConfig(""); });
+    return () => { alive = false; };
   }, [connId, selected]);
 
   const detail = connectors.find((c) => c.name === selected);
 
-  const act = async (fn: () => Promise<void>, okMsg: string) => {
-    if (readonly) return;
-    try { await fn(); toast.success(okMsg); load(); }
-    catch (e: any) { toast.error(e?.message ?? String(e)); }
+  // 回傳是否成功：saveConfig 要據此決定是否關閉編輯器（失敗時草稿必須保留）。
+  const act = async (fn: () => Promise<void>, okMsg: string): Promise<boolean> => {
+    if (readonly) return false;
+    try { await fn(); toast.success(okMsg); load(); return true; }
+    catch (e: any) { toast.error(e?.message ?? String(e)); return false; }
   };
 
   const saveConfig = async () => {
     if (readonly || !selected) return;
     let parsed: Record<string, unknown>;
     try { parsed = JSON.parse(config); } catch { toast.error(t("設定非合法 JSON")); return; }
-    await act(() => api.kafkaConnectPutConfig(connId, selected, parsed), t("已更新設定"));
-    setEditing(false);
+    if (await act(() => api.kafkaConnectPutConfig(connId, selected, parsed), t("已更新設定"))) {
+      setEditing(false); // 失敗時保留草稿，不要讓未套用的內容看起來像已儲存
+    }
   };
 
   const startCreate = () => {

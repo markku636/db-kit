@@ -71,6 +71,9 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
   const theme = useTheme((s) => s.theme);
   const themeId = useTheme((s) => s.themeId);
   const cmRef = useRef<ReactCodeMirrorRef>(null);
+  // extensions 用 useMemo([]) 只建立一次，補全回呼裡必須讀 ref 才拿得到目前連線。
+  const connIdRef = useRef(connId);
+  useEffect(() => { connIdRef.current = connId; }, [connId]);
   useImperativeHandle(ref, () => ({
     insertText: (text: string) => {
       const view = cmRef.current?.view;
@@ -89,13 +92,15 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
   const submitRef = useRef(onSubmit);
   submitRef.current = onSubmit;
 
-  // 欄位名快取（key = db.collection）：背景抓一次，抓好後補全即時可用；失敗記空陣列不重試。
+  // 欄位名快取（key = connId.db.collection）：不同連線的同名 db.collection schema 可能完全不同，
+  // 只按 db.collection 快取會在切換連線後繼續補上上一條連線的欄位。
   const fieldsRef = useRef<Map<string, string[]>>(new Map());
   useEffect(() => {
     if (!connId) return;
     const target = extractTarget(value);
-    if (!target || fieldsRef.current.has(`${target.db}.${target.coll}`)) return;
-    const key = `${target.db}.${target.coll}`;
+    if (!target) return;
+    const key = `${connId}.${target.db}.${target.coll}`;
+    if (fieldsRef.current.has(key)) return;
     const timer = setTimeout(() => {
       api
         .tableColumns(connId, target.db, target.coll)
@@ -127,7 +132,7 @@ const MongoQueryEditor = forwardRef<MongoQueryEditorHandle, Props>(function Mong
         for (const k of DSL_KEYS) opts.push(mk(k, "property", t("查詢 DSL")));
         const target = extractTarget(ctx.state.doc.toString());
         if (target) {
-          for (const f of fieldsRef.current.get(`${target.db}.${target.coll}`) ?? []) {
+          for (const f of fieldsRef.current.get(`${connIdRef.current}.${target.db}.${target.coll}`) ?? []) {
             opts.push(mk(f, "variable", t("欄位")));
           }
         }

@@ -151,7 +151,7 @@ export default function DockerContainerView({ conn, name, onChanged }: {
                 {t("重新命名")}
               </Button>
               <Button size="sm" variant="danger" icon={Trash2} disabled={busy}
-                onClick={() => act(() => removeContainer(conn.id, name, running || paused))}>
+                onClick={() => act(() => removeContainer(conn.id, name, active))}>
                 {t("刪除")}
               </Button>
             </>
