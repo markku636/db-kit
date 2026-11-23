@@ -3193,6 +3193,7 @@ const en: Catalog = {
   "重新命名集合": "Rename collection",
   "重新命名集合…": "Rename collection…",
   "已重新命名集合為「{name}」": "Collection renamed to \"{name}\"",
+  "讀取完整文件失敗，未複製": "Could not read the full document; nothing was copied",
   "讀取資料庫屬性失敗": "Failed to load database properties",
   "讀取歷史失敗": "Failed to load history",
   "讀取鍵值失敗": "Failed to read the key value",

@@ -957,7 +957,11 @@ function DataPane({ tab }: { tab: OpenTab }) {
         const doc = await api.documentGet(tab.connId, tab.database, tab.table, data.row_ids[r]);
         copyToClipboard(doc, t("已複製文件 (extJSON)"));
         return;
-      } catch { /* 讀不到就退回一般複製 */ }
+      } catch (e: any) {
+        // 不能靜默退回表格顯示值：那是型別擦除 + >4KB 截斷的預覽，貼回去會毀資料。
+        toast.error(e?.message ?? t("讀取完整文件失敗，未複製"));
+        return;
+      }
     }
     const vals = rowValues(r);
     const obj = Object.fromEntries(data.columns.map((c, j) => [c, vals[j] ?? null]));
