@@ -113,20 +113,22 @@ pub(super) fn apply_query_param(p: &mut Parsed, key: &str, value: &str) {
             "authsource" => {
                 p.options.insert("mongo_auth_source".into(), value.to_string());
             }
-            "tls" | "ssl" if truthy(value) => {
-                p.options.insert("mongo_tls".into(), "1".into());
+            // 明確的 false 也要帶出去（"0"），否則貼上 tls=false 只會保留表單舊值，
+            // 以為改成功其實仍開著 TLS / 直連 / 跳過憑證檢查。
+            "tls" | "ssl" if truthy(value) || falsy(value) => {
+                p.options.insert("mongo_tls".into(), if truthy(value) { "1" } else { "0" }.into());
             }
             "replicaset" => {
                 p.options.insert("mongo_replica_set".into(), value.to_string());
             }
-            "directconnection" if truthy(value) => {
-                p.options.insert("mongo_direct".into(), "1".into());
+            "directconnection" if truthy(value) || falsy(value) => {
+                p.options.insert("mongo_direct".into(), if truthy(value) { "1" } else { "0" }.into());
             }
             "tlscafile" => {
                 p.options.insert("mongo_tls_ca".into(), value.to_string());
             }
-            "tlsallowinvalidcertificates" if truthy(value) => {
-                p.options.insert("mongo_tls_insecure".into(), "1".into());
+            "tlsallowinvalidcertificates" if truthy(value) || falsy(value) => {
+                p.options.insert("mongo_tls_insecure".into(), if truthy(value) { "1" } else { "0" }.into());
             }
             _ => {}
         },

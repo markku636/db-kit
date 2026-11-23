@@ -490,7 +490,7 @@ impl DatabaseDriver for MongoDriver {
         let mut find_opts = FindOptions::builder().limit(eff_limit).build();
         // skip 讓查詢結果也能分頁（不必靠表格的游標）。
         find_opts.skip = parsed.get("skip").and_then(|v| v.as_u64());
-        find_opts.sort = as_doc("sort");
+        find_opts.sort = Some(effective_sort(as_doc("sort")));
         find_opts.projection = as_doc("projection");
         // DB 端第一層查詢逾時（maxTimeMS；0 = 不設）。外層另有 tokio 兜底。
         let tms = crate::db::limits::timeout_ms();
@@ -545,21 +545,26 @@ impl DatabaseDriver for MongoDriver {
         let new_bson = match &edit.new_value {
             None => Bson::Null,
             Some(s) => {
-                // 取原文件判斷該欄原型別：若原為 Document/Array，新值需為合法 JSON 並以 extended JSON
-                // 還原成 BSON，避免把巢狀結構存成純字串而破壞文件；純量欄位沿用 guess_bson。
-                let orig = coll
-                    .find_one(id_value.clone())
-                    .await
-                    .map_err(|e| AppError::Query(e.to_string()))?;
-                let original = orig.as_ref().and_then(|d| d.get(&edit.column));
-                if matches!(original, Some(Bson::Document(_)) | Some(Bson::Array(_))) {
-                    let v: serde_json::Value = serde_json::from_str(s.trim()).map_err(|e| {
-                        AppError::Query(tf!("此欄為巢狀結構，需輸入合法 JSON：{e}", e = e))
-                    })?;
-                    Bson::try_from(v)
-                        .map_err(|e| AppError::Query(tf!("JSON 轉 BSON 失敗：{e}", e = e)))?
+                // 新值本身是 {…} / […] → 一律還原成 Document/Array（含全新欄位）。
+                if let Some(b) = coerce_nested_bson(s)? {
+                    b
                 } else {
-                    coerce_bson_edit(original, s)?
+                    // 取原文件判斷該欄原型別：若原為 Document/Array，新值需為合法 JSON 並以 extended JSON
+                    // 還原成 BSON，避免把巢狀結構存成純字串而破壞文件；純量欄位沿用 guess_bson。
+                    let orig = coll
+                        .find_one(id_value.clone())
+                        .await
+                        .map_err(|e| AppError::Query(e.to_string()))?;
+                    let original = orig.as_ref().and_then(|d| d.get(&edit.column));
+                    if matches!(original, Some(Bson::Document(_)) | Some(Bson::Array(_))) {
+                        let v: serde_json::Value = serde_json::from_str(s.trim()).map_err(|e| {
+                            AppError::Query(tf!("此欄為巢狀結構，需輸入合法 JSON：{e}", e = e))
+                        })?;
+                        Bson::try_from(v)
+                            .map_err(|e| AppError::Query(tf!("JSON 轉 BSON 失敗：{e}", e = e)))?
+                    } else {
+                        coerce_bson_edit(original, s)?
+                    }
                 }
             }
         };
@@ -593,7 +598,9 @@ impl DatabaseDriver for MongoDriver {
                     if cell_truncated_marker(s) {
                         return Err(AppError::Query(t!("此值為截斷預覽，不能寫回；請用整份文件編輯器修改").to_string()));
                     }
-                    guess_bson(s)
+                    // 「以此列為範本新增」會把巢狀欄位帶成 {"a":…} 字串；
+                    // 若不還原成 BSON，新文件的 schema 會被改成純字串。
+                    coerce_nested_bson(s)?.unwrap_or_else(|| guess_bson(s))
                 }
                 None => Bson::Null,
             };
@@ -1362,11 +1369,18 @@ pub(crate) fn build_mongo_uri(config: &ConnectionConfig) -> String {
     };
     let opt = |k: &str| config.options.get(k).map(String::as_str).unwrap_or("");
     let srv = opt("mongo_srv") == "1";
+    // URI 的 IPv6 host 必須保留方括號，否則 mongodb://::1:27017 會被 driver 當成無效語法。
+    let bare_host = config.host.trim();
+    let uri_host = if bare_host.contains(':') && !bare_host.starts_with('[') {
+        format!("[{bare_host}]")
+    } else {
+        bare_host.to_string()
+    };
     let host_part = if srv {
         // SRV：host 為 DNS 域名、不帶 port（由 SRV 記錄決定）。
-        format!("mongodb+srv://{auth}{}", config.host)
+        format!("mongodb+srv://{auth}{uri_host}")
     } else {
-        format!("mongodb://{auth}{}:{}", config.host, config.port)
+        format!("mongodb://{auth}{uri_host}:{}", config.port)
     };
 
     let mut params: Vec<String> = Vec::new();
@@ -1381,7 +1395,8 @@ pub(crate) fn build_mongo_uri(config: &ConnectionConfig) -> String {
     if !replica_set.is_empty() {
         params.push(format!("replicaSet={}", pct_encode(replica_set)));
     }
-    if opt("mongo_direct") == "1" {
+    // driver 不接受 replicaSet + directConnection 同時出現；與前端表單一致，以 replicaSet 為準。
+    if opt("mongo_direct") == "1" && replica_set.is_empty() {
         params.push("directConnection=true".to_string());
     }
     let tls_ca = opt("mongo_tls_ca");
@@ -1419,6 +1434,17 @@ pub(crate) fn pct_encode(s: &str) -> String {
         }
     }
     out
+}
+
+/// 分頁（skip + limit）必須有穩定排序，否則 WiredTiger 的自然順序會讓翻頁重複 / 漏列。
+/// 沒指定 sort 時用 `_id` 升序；有指定時補 `_id` 當 tiebreaker（已含則不動）。
+fn effective_sort(sort: Option<Document>) -> Document {
+    let mut d = sort.unwrap_or_default();
+    if d.keys().any(|k| k.starts_with('$')) || d.contains_key("_id") {
+        return d;
+    }
+    d.insert("_id".to_string(), Bson::Int32(1));
+    d
 }
 
 /// 將前端傳來的 _id 定位值還原成 BSON。
@@ -1466,6 +1492,21 @@ fn guess_bson(s: &str) -> Bson {
         _ => {}
     }
     Bson::String(s.to_string())
+}
+
+/// 表格輸入若以 `{` / `[` 開頭，視為 extended JSON 還原成 Document / Array。
+/// 巢狀值曾經被 guess_bson 存成純字串，等於把文件 schema 改壞；解析失敗直接報錯，
+/// 不要默默退回字串。其他輸入回 None，交給原欄位型別的轉換邏輯。
+fn coerce_nested_bson(s: &str) -> AppResult<Option<Bson>> {
+    let v = s.trim();
+    if !v.starts_with('{') && !v.starts_with('[') {
+        return Ok(None);
+    }
+    let json: serde_json::Value = serde_json::from_str(v)
+        .map_err(|e| AppError::Query(tf!("巢狀 JSON 格式錯誤：{e}", e = e)))?;
+    let b = Bson::try_from(json)
+        .map_err(|e| AppError::Query(tf!("JSON 轉 BSON 失敗：{e}", e = e)))?;
+    Ok(Some(b))
 }
 
 /// 依原欄位型別把表格輸入轉回 BSON：避免 ObjectId / Date / Int32 等被 guess_bson 變成字串，
@@ -1682,7 +1723,7 @@ fn build_explain_command(parsed: &serde_json::Value) -> AppResult<(String, Docum
         .get("collection")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Query(t!("缺少 collection").to_string()))?;
-    let verbosity = match parsed.get("verbosity").and_then(|v| v.as_str()) {
+    let mut verbosity = match parsed.get("verbosity").and_then(|v| v.as_str()) {
         None => "executionStats",
         Some(v @ ("queryPlanner" | "executionStats" | "allPlansExecution")) => v,
         Some(other) => {
@@ -1692,6 +1733,18 @@ fn build_explain_command(parsed: &serde_json::Value) -> AppResult<(String, Docum
             )))
         }
     };
+    // MongoDB 拒絕對含 $out 的管線做 executionStats / allPlansExecution 的 explain；
+    // explain 本身不寫入，降為 queryPlanner 依然能看到完整計畫（前端也做同樣調整）。
+    fn has_out(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::Array(a) => a.iter().any(has_out),
+            serde_json::Value::Object(m) => m.iter().any(|(k, v)| k == "$out" || has_out(v)),
+            _ => false,
+        }
+    }
+    if parsed.get("pipeline").is_some_and(has_out) {
+        verbosity = "queryPlanner";
+    }
     if parsed.get("insert").is_some() || parsed.get("update").is_some() || parsed.get("delete").is_some() {
         return Err(AppError::Query(t!("執行計畫僅支援 find / aggregate（pipeline）").to_string()));
     }
@@ -1876,7 +1929,7 @@ fn server_status_sections(status: &Document, build: &Document) -> Vec<ServerInfo
 
 #[cfg(test)]
 mod tests {
-    use super::{bson_from_json, build_explain_command, build_filter, build_mongo_uri, cell_truncated_marker, coerce_bson_edit, guess_bson, like_to_regex, server_status_sections};
+    use super::{bson_from_json, build_explain_command, build_filter, build_mongo_uri, cell_truncated_marker, coerce_bson_edit, coerce_nested_bson, effective_sort, guess_bson, like_to_regex, server_status_sections};
     use crate::db::{ConnectionConfig, DbKind, Filter, SshAuthMethod};
     use mongodb::bson::{doc, oid::ObjectId, Bson, DateTime as BsonDateTime};
 
@@ -1917,6 +1970,31 @@ mod tests {
         srv.options.insert("mongo_srv".into(), "1".into());
         assert!(build_mongo_uri(&srv).starts_with("mongodb+srv://"), "{uri}");
         assert!(build_mongo_uri(&srv).contains("/mydb?"));
+    }
+
+    #[test]
+    fn mongo_uri_brackets_ipv6_and_drops_conflicting_direct_connection() {
+        let cfg = ConnectionConfig {
+            id: "x".into(), name: "x".into(), kind: DbKind::Mongo,
+            host: "::1".into(), port: 27017, username: String::new(), password: String::new(),
+            database: Some("mydb".into()), max_connections: 5,
+            ssh_enabled: false, ssh_host: String::new(), ssh_port: 22, ssh_username: String::new(),
+            ssh_auth_method: SshAuthMethod::Password, ssh_password: String::new(),
+            ssh_private_key_path: String::new(), ssh_passphrase: String::new(),
+            options: [("mongo_replica_set".to_string(), "rs0".to_string()),
+                      ("mongo_direct".to_string(), "1".to_string())].into_iter().collect(),
+            otp_secret: String::new(),
+        };
+        let uri = build_mongo_uri(&cfg);
+        assert!(uri.starts_with("mongodb://[::1]:27017"), "{uri}");
+        assert!(uri.contains("replicaSet=rs0"), "{uri}");
+        assert!(!uri.contains("directConnection"), "replicaSet 優先，不能同時送 directConnection：{uri}");
+
+        // 沒有 replicaSet 時 directConnection 仍要保留。
+        let mut direct = cfg;
+        direct.options.remove("mongo_replica_set");
+        let uri = build_mongo_uri(&direct);
+        assert!(uri.contains("directConnection=true"), "{uri}");
     }
 
     #[test]
@@ -2037,6 +2115,32 @@ mod tests {
         // 布林 / 一般字串維持原樣。
         assert_eq!(guess_bson("true"), Bson::Boolean(true));
         assert_eq!(guess_bson("hello"), Bson::String("hello".into()));
+    }
+
+    #[test]
+    fn effective_sort_is_deterministic_for_paging() {
+        assert_eq!(effective_sort(None), doc! { "_id": 1 });
+        assert_eq!(effective_sort(Some(doc! { "status": 1 })), doc! { "status": 1, "_id": 1 });
+        // 已指定 _id（含方向）時不覆蓋使用者的選擇。
+        assert_eq!(effective_sort(Some(doc! { "_id": -1 })), doc! { "_id": -1 });
+        // $natural 等特殊排序不加欄位（加了會被伺服器拒絕）。
+        assert_eq!(effective_sort(Some(doc! { "$natural": 1 })), doc! { "$natural": 1 });
+    }
+
+    #[test]
+    fn coerce_nested_bson_restores_objects_and_arrays() {
+        // 巢狀 JSON 必須還原成 Document/Array，不能存成純字串。
+        assert!(matches!(coerce_nested_bson(r#"{"a":1}"#).unwrap(), Some(Bson::Document(_))));
+        assert!(matches!(coerce_nested_bson("[1,2]").unwrap(), Some(Bson::Array(_))));
+        // extended JSON 的 ObjectId 也要還原。
+        let ext = r#"{"_id":{"$oid":"507f1f77bcf86cd799439011"}}"#;
+        let Some(Bson::Document(d)) = coerce_nested_bson(ext).unwrap() else { panic!("應為 Document") };
+        assert!(matches!(d.get("_id"), Some(Bson::ObjectId(_))));
+        // 純量 / 一般字串交給 guess_bson。
+        assert!(coerce_nested_bson("42").unwrap().is_none());
+        assert!(coerce_nested_bson("hello").unwrap().is_none());
+        // 看起來是 JSON 但壞掉 → 明確報錯，不 silently 存成字串。
+        assert!(coerce_nested_bson("{oops").is_err());
     }
 
     #[test]

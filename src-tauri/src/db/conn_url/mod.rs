@@ -495,6 +495,22 @@ mod tests {
         assert_eq!(p.database.as_deref(), Some("app"));
     }
 
+    #[test]
+    fn mongo_explicit_false_is_preserved() {
+        let p = parse("mongodb://h:27017/app?tls=false&directConnection=false&tlsAllowInvalidCertificates=0");
+        assert_eq!(opt(&p, "mongo_tls"), Some("0"));
+        assert_eq!(opt(&p, "mongo_direct"), Some("0"));
+        assert_eq!(opt(&p, "mongo_tls_insecure"), Some("0"));
+    }
+
+    #[test]
+    fn mongo_ipv6_host_round_trips() {
+        let p = parse("mongodb://[::1]:27017/mydb");
+        assert_eq!(p.host.as_deref(), Some("::1"));
+        assert_eq!(p.port, Some(27017));
+        assert_eq!(p.database.as_deref(), Some("mydb"));
+    }
+
     // ---- mysql / postgres SSL 參數 ----
 
     #[test]

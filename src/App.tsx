@@ -5217,6 +5217,8 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     setSummary(null);
     setPlan(null);
     setPlanErr(null);
+    // Mongo 的視覺化計畫也要清，否則會被當成新連線的 explain 顯示（連 explain 綠點都還亮著）。
+    setMongoPlan(null);
     setBottomTab("result");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId]);
@@ -5665,9 +5667,16 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
     setPlanErr(null);
     setErr(null); setErrSql(null); setErrStmt(null);
     setBottomTab("explain");
+    // 與 runQuery 同一套序號守門：慢 explain 按停止 / 換連線 / 接著跑別的查詢時，
+    // 遲到的回應不能覆蓋新結果、把分頁拉回解釋、或清掉新一輪的 busy 狀態。
+    const myRun = ++runSeqRef.current;
+    const sentId = activeId;
+    cancelRef.current = false;
+    const stale = () => runSeqRef.current !== myRun || cancelRef.current || useStore.getState().activeId !== sentId;
     const t0 = performance.now();
     try {
-      const res = await api.explainQuery(activeId, withVerbosity(dsl, mongoVerbosity));
+      const res = await api.explainQuery(sentId, withVerbosity(dsl, mongoVerbosity));
+      if (stale()) return;
       const raw = res.rows?.[0]?.[0] ?? "";
       const model = raw ? parseMongoExplain(raw) : null;
       if (model) { setMongoPlan({ model, raw }); setPlanErr(null); }
@@ -5679,11 +5688,12 @@ function QueryPane({ tabId = "__query__" }: { tabId?: string }) {
       }
       setElapsed(performance.now() - t0);
     } catch (e: any) {
+      if (stale()) return;
       setElapsed(performance.now() - t0);
       setMongoPlan(null);
       setPlanErr(e?.message ?? t("執行計畫失敗"));
     } finally {
-      setRunning(false);
+      if (!stale()) setRunning(false);
     }
   };
 

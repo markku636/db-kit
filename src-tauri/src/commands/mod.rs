@@ -1140,6 +1140,7 @@ pub async fn explain_query(
     id: String,
     sql: String,
 ) -> AppResult<QueryResult> {
+    ensure_query_writable(&state, &id, &sql)?;
     state.manager.explain(&id, &sql).await
 }
 
@@ -1411,6 +1412,7 @@ pub async fn export_query(
     options: crate::export::ExportOptions,
     out_path: String,
 ) -> AppResult<crate::export::ExportResult> {
+    ensure_query_writable(&state, &id, &sql)?;
     crate::export::export_query(&state.manager, &id, &sql, &options, &out_path).await
 }
 

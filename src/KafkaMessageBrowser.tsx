@@ -78,10 +78,14 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const unlistenErrRef = useRef<UnlistenFn | null>(null);
   const pausedRef = useRef(false);
+  const partitionRef = useRef(partition);
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
+  useEffect(() => {
+    partitionRef.current = partition;
+  }, [partition]);
 
   // 載入分區清單（供分區下拉 + watermark 顯示）。
   useEffect(() => {
@@ -238,7 +242,9 @@ export default function KafkaMessageBrowser({ connId, topic }: { connId: string;
     try {
       if (!unlistenRef.current) {
         unlistenRef.current = await onKafkaMessage(connId, (m) => {
-          if (m.topic !== topic) return; // 額外保險（後端每連線一個 tail）
+          if (m.topic !== topic || m.conn_id !== connId) return; // 額外保險（後端每連線一個 tail）
+          // tail 以啟動時的分區條件執行；額外在客戶端擋一次，避免別的分區混進來。
+          if (partitionRef.current != null && m.partition !== partitionRef.current) return;
           if (pausedRef.current) return;
           setRows((prev) => {
             const next = [...prev, m];

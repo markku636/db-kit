@@ -178,6 +178,19 @@ describe("parseMongoExplain", () => {
     expect(m.ns).toBe("shop.a");
   });
 
+  it("sharded find：namespace 從 winningPlan.shards[] 取出", () => {
+    const m = parseMongoExplain(JSON.stringify({
+      queryPlanner: {
+        winningPlan: {
+          stage: "SHARD_MERGE",
+          shards: [{ shardName: "rs0", namespace: "shop.orders", winningPlan: { stage: "IXSCAN" } }],
+        },
+      },
+      ok: 1,
+    }))!;
+    expect(m.ns).toBe("shop.orders");
+  });
+
   it("多游標 aggregate：統計相加而非只取第一個", () => {
     const m = parseMongoExplain(JSON.stringify({
       stages: [
@@ -205,6 +218,25 @@ describe("withVerbosity", () => {
     expect(out.verbosity).toBe("queryPlanner");
     expect(out.db).toBe("d");
   });
+  it("含 $out 的管線自動降為 queryPlanner（executionStats 會被伺服器拒絕）", () => {
+    const out = JSON.parse(withVerbosity(
+      '{"db":"d","collection":"c","pipeline":[{"$match":{}},{"$out":"dst"}],"verbosity":"executionStats"}',
+      "executionStats",
+    ));
+    expect(out.verbosity).toBe("queryPlanner");
+    expect(out.pipeline).toHaveLength(2);
+    const nested = JSON.parse(withVerbosity(
+      '{"db":"d","collection":"c","pipeline":[{"$facet":{"x":[{"$out":"dst"}]}}]}',
+      "allPlansExecution",
+    ));
+    expect(nested.verbosity).toBe("queryPlanner");
+    const merge = JSON.parse(withVerbosity(
+      '{"db":"d","collection":"c","pipeline":[{"$merge":"dst"}]}',
+      "executionStats",
+    ));
+    expect(merge.verbosity).toBe("executionStats");
+  });
+
   it("非 JSON 原樣回傳（後端負責報錯）", () => {
     expect(withVerbosity("oops", "queryPlanner")).toBe("oops");
   });

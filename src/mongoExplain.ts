@@ -163,6 +163,14 @@ function findNamespace(doc: any): string | undefined {
         if (ns) return ns;
       }
     }
+    // sharded find：namespace 在 queryPlanner.winningPlan.shards[] / executionStages.shards[] 上，
+    // 不在 mongos 回應的頂層 queryPlanner.namespace。
+    for (const sh of d?.queryPlanner?.winningPlan?.shards ?? []) {
+      if (typeof sh?.namespace === "string") return sh.namespace;
+    }
+    for (const sh of d?.executionStats?.executionStages?.shards ?? []) {
+      if (typeof sh?.namespace === "string") return sh.namespace;
+    }
     if (d.shards && typeof d.shards === "object" && !Array.isArray(d.shards)) {
       for (const sh of Object.values(d.shards)) {
         const ns = visit(sh);
@@ -261,12 +269,20 @@ export function parseMongoExplain(raw: string): MongoExplainModel | null {
   };
 }
 
+function hasOutStage(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasOutStage);
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value as Record<string, unknown>).some(([k, v]) => k === "$out" || hasOutStage(v));
+}
+
 /** 在查詢 DSL 中注入 / 覆寫 verbosity（送 explain 前用；不動編輯器原文）。解析失敗回原字串。 */
 export function withVerbosity(dsl: string, verbosity: string): string {
   try {
     const v = JSON.parse(dsl);
     if (v && typeof v === "object" && !Array.isArray(v)) {
-      v.verbosity = verbosity;
+      // MongoDB 拒絕對含 $out 的管線用 executionStats / allPlansExecution 做 explain；
+      // explain 本身不寫入，降為 queryPlanner 仍能看見計畫（$merge 不受此限制）。
+      v.verbosity = hasOutStage(v.pipeline) ? "queryPlanner" : verbosity;
       return JSON.stringify(v);
     }
   } catch {
