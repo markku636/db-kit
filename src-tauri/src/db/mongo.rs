@@ -1,6 +1,6 @@
 use futures::stream::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId, Bson, DateTime as BsonDateTime, Decimal128, Document};
-use mongodb::options::{AggregateOptions, ClientOptions, FindOptions, IndexOptions};
+use mongodb::options::{AggregateOptions, ClientOptions, FindOptions, IndexOptions, UpdateOptions};
 use mongodb::{Client, IndexModel};
 use std::time::Duration;
 
@@ -343,35 +343,62 @@ impl DatabaseDriver for MongoDriver {
             });
         }
 
-        // 批次更新：{ …, "update": { "filter": {…}, "set": {…} } } → update_many($set)，回傳修改筆數。
+        // 批次更新：
+        //   舊寫法 { "update": { "filter": {…}, "set": {…} } } → update_many($set)
+        //   新寫法 { "update": { "filter": {…}, "update": {"$set":…,"$unset":…,"$inc":…}, "upsert":true, "multi":false } }
+        // 只允許白名單更新運算子，避免 $where 等在 UI 裡被誤用。
         if let Some(uv) = parsed.get("update") {
-            let filter = uv
+            let spec = uv.as_object().ok_or_else(|| AppError::Query(t!("update 必須是物件").to_string()))?;
+            let filter = spec
                 .get("filter")
                 .map(bson_from_json)
                 .and_then(|b| if let Bson::Document(d) = b { Some(d) } else { None })
                 .unwrap_or_default();
-            let set = uv
-                .get("set")
-                .map(bson_from_json)
-                .and_then(|b| if let Bson::Document(d) = b { Some(d) } else { None })
-                .ok_or_else(|| AppError::Query(t!("update 需要 set 物件").to_string()))?;
-            if set.is_empty() {
-                return Err(AppError::Query(t!("update 的 set 不可為空").to_string()));
+            let update = if let Some(u) = spec.get("update") {
+                match bson_from_json(u) {
+                    Bson::Document(d) => d,
+                    _ => return Err(AppError::Query(t!("update.update 必須是物件").to_string())),
+                }
+            } else {
+                let set = spec
+                    .get("set")
+                    .map(bson_from_json)
+                    .and_then(|b| if let Bson::Document(d) = b { Some(d) } else { None })
+                    .ok_or_else(|| AppError::Query(t!("update 需要 set 或 update 物件").to_string()))?;
+                doc! { "$set": set }
+            };
+            const ALLOWED: &[&str] = &["$set", "$unset", "$inc", "$mul", "$min", "$max", "$rename",
+                "$push", "$pull", "$addToSet", "$pop", "$setOnInsert", "$currentDate"];
+            if update.is_empty() {
+                return Err(AppError::Query(t!("update 的內容不可為空").to_string()));
             }
-            // 與 delete 一致的安全防護：filter 不可為空，避免一個遺漏 filter 就改動整個集合。
-            // 真要全集合更新，請以明確條件（如 {"_id": {"$exists": true}}）表達意圖。
+            for (k, _) in &update {
+                if !ALLOWED.contains(&k.as_str()) {
+                    return Err(AppError::Query(tf!("不允許的更新運算子：{op}", op = k)));
+                }
+            }
+            // 與 delete 一致的安全防護：filter 不可為空。
             if filter.is_empty() {
                 return Err(AppError::Query(
                     t!("update 需要非空 filter（避免誤改整個集合；要全改請用明確條件如 {\"_id\":{\"$exists\":true}}）")
                         .to_string(),
                 ));
             }
+            let upsert = spec.get("upsert").and_then(|v| v.as_bool()).unwrap_or(false);
+            let multi = spec.get("multi").and_then(|v| v.as_bool()).unwrap_or(true);
+            let opts = UpdateOptions::builder().upsert(upsert).build();
             let coll = self.db_handle(db).collection::<Document>(coll_name);
-            let res = coll
-                .update_many(filter, doc! { "$set": set })
-                .await
-                .map_err(|e| AppError::Query(e.to_string()))?;
-            return Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: res.modified_count, truncated: false });
+            let res = if multi {
+                coll.update_many(filter, update).with_options(opts).await
+            } else {
+                coll.update_one(filter, update).with_options(opts).await
+            }
+            .map_err(|e| AppError::Query(e.to_string()))?;
+            return Ok(QueryResult {
+                columns: vec![], rows: vec![],
+                rows_affected: res.modified_count + if res.upserted_id.is_some() { 1 } else { 0 },
+                truncated: false,
+            });
         }
 
         // 批次刪除：{ …, "delete": {…filter…} } → delete_many，回傳刪除筆數。
@@ -419,6 +446,8 @@ impl DatabaseDriver for MongoDriver {
         // 全域 row cap（0 = 不限）：伺服器端 limit 收斂到 cap+1（多取 1 列以探測截斷）。
         let eff_limit = if cap > 0 && limit > cap as i64 { cap as i64 + 1 } else { limit };
         let mut find_opts = FindOptions::builder().limit(eff_limit).build();
+        // skip 讓查詢結果也能分頁（不必靠表格的游標）。
+        find_opts.skip = parsed.get("skip").and_then(|v| v.as_u64());
         find_opts.sort = as_doc("sort");
         find_opts.projection = as_doc("projection");
         // DB 端第一層查詢逾時（maxTimeMS；0 = 不設）。外層另有 tokio 兜底。

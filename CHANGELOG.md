@@ -2,6 +2,7 @@
 
 新功能：
 
+- **MongoDB 更新 DSL 支援更多營運常用操作**：`$unset` / `$inc` / `$push` / `$pull` 等白名單運算子、`upsert`、`multi:false`（只改一筆），仍保留非空 filter 安全檢查；find DSL 也補上 `skip` 可供分頁。
 - **MongoDB 表格就地編輯不再把 BSON 型別改成字串**：ObjectId / Date / Int32 / Int64 / Double / Decimal128 / bool 會依原欄位型別轉回 BSON；Binary / Regex / Timestamp 等明確要求用整份文件編輯器，不再默默毀掉型別。
 - **唯讀模式同步到後端**：Mongo 的索引／驗證規則／profiler／killOp 以及各類格子與鍵寫入指令，即使從 IPC 直接呼叫也會被擋（前端不再唯一防線）。
 - **MongoDB 空集合也有 `_id` 欄**、混合型別欄位顯示抽樣中最多數的型別（不再是最後一筆的型別）；唯讀模式下的「新增索引」不再出現，誤觸時有明確提示。

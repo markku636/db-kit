@@ -2331,6 +2331,12 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "此連線為唯讀，已擋下 MongoDB 寫入指令" => "This connection is read-only; MongoDB write commands were blocked",
         "此欄位型別為 {t}，請輸入合法值或用整份文件編輯器修改" => "This field has type {t}; enter a valid value or edit it in the full document editor",
         "此 BSON 型別無法用表格就地編輯，請用整份文件編輯器修改" => "This BSON type cannot be edited in the grid; use the full document editor",
+        "update 必須是物件" => "update must be an object",
+        "update.update 必須是物件" => "update.update must be an object",
+        "update 需要 set 或 update 物件" => "update requires a set or update object",
+        "update 的內容不可為空" => "update content must not be empty",
+        "不允許的更新運算子：{op}" => "Update operator not allowed: {op}",
+        "此值為截斷預覽，不能寫回；請用整份文件編輯器修改" => "This value is a truncated preview and cannot be written back; edit it in the full document editor",
         _ => return None,
     })
 }
