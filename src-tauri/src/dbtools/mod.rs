@@ -331,7 +331,9 @@ fn redis_head(cmdline: &str) -> (String, Option<String>) {
 }
 
 /// Mongo 查詢 JSON 允許的頂層鍵。
-const MONGO_TOP_KEYS: &[&str] = &["db", "collection", "filter", "sort", "projection", "limit", "pipeline"];
+const MONGO_TOP_KEYS: &[&str] = &["db", "collection", "filter", "sort", "projection", "limit", "pipeline", "verbosity"];
+/// explain 的 verbosity（與 mongo.rs build_explain_command 同一份白名單）。
+const MONGO_VERBOSITIES: &[&str] = &["queryPlanner", "executionStats", "allPlansExecution"];
 /// 會寫入的聚合階段。
 const MONGO_WRITE_STAGES: &[&str] = &["$out", "$merge"];
 
@@ -367,7 +369,12 @@ pub fn ensure_tool_read_only(kind: DbKind, query: &str) -> Result<(), String> {
             }
             for k in obj.keys() {
                 if !MONGO_TOP_KEYS.contains(&k.as_str()) {
-                    return Err(tf!("不允許的鍵：{k}（只接受 db / collection / filter / sort / projection / limit / pipeline）", k = k));
+                    return Err(tf!("不允許的鍵：{k}（只接受 db / collection / filter / sort / projection / limit / pipeline / verbosity）", k = k));
+                }
+            }
+            if let Some(v) = obj.get("verbosity").and_then(|v| v.as_str()) {
+                if !MONGO_VERBOSITIES.contains(&v) {
+                    return Err(tf!("verbosity 無效：{v}", v = v));
                 }
             }
             if let Some(p) = obj.get("pipeline") {
@@ -823,6 +830,11 @@ mod tests {
         assert!(ensure_tool_read_only(DbKind::Mongo, r#"{"filter":{}}"#).is_err());
         assert!(ensure_tool_read_only(DbKind::Mongo, "not json").is_err());
         assert!(ensure_tool_read_only(DbKind::Mongo, "[1,2]").is_err());
+        // explain 的 verbosity 是合法鍵（agent 才能指定便宜的 queryPlanner）。
+        assert!(ensure_tool_read_only(DbKind::Mongo,
+            r#"{"collection":"c","filter":{},"verbosity":"queryPlanner"}"#).is_ok());
+        assert!(ensure_tool_read_only(DbKind::Mongo,
+            r#"{"collection":"c","filter":{},"verbosity":"bogus"}"#).is_err());
     }
 
     #[test]

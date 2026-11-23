@@ -141,7 +141,7 @@ async fn exec(
         Command::Table(tc) => exec_table(mgr, id, kind, db, fmt, cf, tc).await?,
 
         Command::Query { sql, max_rows } => {
-            guard::ensure_read_only(&sql)?;
+            guard::ensure_read_only_for(kind, &sql)?;
             let cap = max_rows.unwrap_or_else(crate::db::limits::row_cap);
             let q = mgr.query_capped(id, &sql, cap).await?;
             if q.columns.is_empty() {
@@ -166,7 +166,7 @@ async fn exec(
             }
         }
         Command::Explain { sql } => {
-            guard::ensure_read_only(&sql)?;
+            guard::ensure_read_only_for(kind, &sql)?;
             let q = mgr.explain(id, &sql).await?;
             render::emit(fmt, &q.columns, &q.rows);
         }

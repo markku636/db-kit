@@ -1362,6 +1362,16 @@ fn id_filter(edit: &CellEdit) -> AppResult<Document> {
 /// - mongo_tls_insecure=1 → tlsAllowInvalidCertificates=true（自簽 / 開發用）
 /// userinfo（帳號 / 密碼）做 percent-encoding，避免特殊字元破壞 URI。
 pub(crate) fn build_mongo_uri(config: &ConnectionConfig) -> String {
+    build_mongo_uri_inner(config, true)
+}
+
+/// mongodump / mongorestore 用的 URI：不帶 `/db` 路徑（MongoDB Tools 會拒絕同時給 URI db 與 `--db` /
+/// `--nsInclude`），改用 `authSource` 保留原本的驗證資料庫語意。
+pub(crate) fn build_mongo_tool_uri(config: &ConnectionConfig) -> String {
+    build_mongo_uri_inner(config, false)
+}
+
+fn build_mongo_uri_inner(config: &ConnectionConfig, include_db: bool) -> String {
     let auth = if config.username.is_empty() {
         String::new()
     } else {
@@ -1383,10 +1393,14 @@ pub(crate) fn build_mongo_uri(config: &ConnectionConfig) -> String {
         format!("mongodb://{auth}{uri_host}:{}", config.port)
     };
 
+    let db_path = config.database.as_deref().unwrap_or("").trim();
     let mut params: Vec<String> = Vec::new();
     let auth_source = opt("mongo_auth_source");
     if !auth_source.is_empty() {
         params.push(format!("authSource={}", pct_encode(auth_source)));
+    } else if !include_db && !db_path.is_empty() {
+        // 工具 URI 拿掉路徑後，原本靠路徑指定的 authSource 要明確補回來。
+        params.push(format!("authSource={}", pct_encode(db_path)));
     }
     if opt("mongo_tls") == "1" {
         params.push("tls=true".to_string());
@@ -1409,7 +1423,7 @@ pub(crate) fn build_mongo_uri(config: &ConnectionConfig) -> String {
 
     // 標準 mongodb://user:pass@host:27017/mydb 的路徑是預設資料庫（也是預設 authSource）。
     // 之前被丟掉，導致最常見的「URI 內含 db」寫法被拿去對 admin 驗證而失敗，mongodump 也一樣。
-    let db_path = config.database.as_deref().unwrap_or("").trim();
+    let db_path = if include_db { db_path } else { "" };
     let base = if db_path.is_empty() {
         host_part
     } else {
@@ -1929,7 +1943,7 @@ fn server_status_sections(status: &Document, build: &Document) -> Vec<ServerInfo
 
 #[cfg(test)]
 mod tests {
-    use super::{bson_from_json, build_explain_command, build_filter, build_mongo_uri, cell_truncated_marker, coerce_bson_edit, coerce_nested_bson, effective_sort, guess_bson, like_to_regex, server_status_sections};
+    use super::{bson_from_json, build_explain_command, build_filter, build_mongo_tool_uri, build_mongo_uri, cell_truncated_marker, coerce_bson_edit, coerce_nested_bson, effective_sort, guess_bson, like_to_regex, server_status_sections};
     use crate::db::{ConnectionConfig, DbKind, Filter, SshAuthMethod};
     use mongodb::bson::{doc, oid::ObjectId, Bson, DateTime as BsonDateTime};
 
@@ -1970,6 +1984,30 @@ mod tests {
         srv.options.insert("mongo_srv".into(), "1".into());
         assert!(build_mongo_uri(&srv).starts_with("mongodb+srv://"), "{uri}");
         assert!(build_mongo_uri(&srv).contains("/mydb?"));
+    }
+
+    #[test]
+    fn mongo_tool_uri_has_no_db_path_but_keeps_auth_source() {
+        let cfg = ConnectionConfig {
+            id: "x".into(), name: "x".into(), kind: DbKind::Mongo,
+            host: "h".into(), port: 27017, username: "u".into(), password: "p@ss".into(),
+            database: Some("shop".into()), max_connections: 5,
+            ssh_enabled: false, ssh_host: String::new(), ssh_port: 22, ssh_username: String::new(),
+            ssh_auth_method: SshAuthMethod::Password, ssh_password: String::new(),
+            ssh_private_key_path: String::new(), ssh_passphrase: String::new(),
+            options: Default::default(), otp_secret: String::new(),
+        };
+        let uri = build_mongo_tool_uri(&cfg);
+        assert!(uri.starts_with("mongodb://u:p%40ss@h:27017"), "{uri}");
+        assert!(!uri.contains("/shop"), "mongodump 的 URI 不能有 db 路徑：{uri}");
+        assert!(uri.contains("authSource=shop"), "路徑拿掉後要補 authSource：{uri}");
+
+        // 明確設定 mongo_auth_source 時以它為準。
+        let mut explicit = cfg;
+        explicit.options.insert("mongo_auth_source".into(), "admin".into());
+        let uri = build_mongo_tool_uri(&explicit);
+        assert!(uri.contains("authSource=admin"), "{uri}");
+        assert!(!uri.contains("authSource=shop"), "{uri}");
     }
 
     #[test]

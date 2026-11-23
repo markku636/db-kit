@@ -1123,10 +1123,13 @@ pub async fn backup_run(
 
 #[tauri::command]
 pub async fn backup_restore(
+    state: State<'_, AppState>,
     config: ConnectionConfig,
     database: String,
     in_path: String,
 ) -> AppResult<()> {
+    // 還原會覆寫資料，唯讀連線一律擋下（不能只靠前端隱藏入口）。
+    ensure_conn_writable(&state, &config.id)?;
     let mut config = config;
     hydrate_secrets(&mut config);
     backup::restore(&config, &database, &in_path).await
@@ -1450,6 +1453,7 @@ pub async fn import_csv(
     path: String,
     options: crate::import::ImportOptions,
 ) -> AppResult<crate::import::ImportResult> {
+    ensure_conn_writable(&state, &id)?; // 匯入是寫入，唯讀連線不能只靠前端擋
     // 後端讀檔（避免大檔經 JS bridge）；解析 + 寫入由 import::import_csv 處理。
     // 安全上限：避免誤選超大檔（整檔讀進記憶體 + 全列解析）導致 OOM；逐列匯入本就不適合超大檔。
     const MAX_IMPORT_BYTES: u64 = 100 * 1024 * 1024;
@@ -1489,6 +1493,7 @@ pub async fn import_excel(
     path: String,
     options: crate::import::ImportOptions,
 ) -> AppResult<crate::import::ImportResult> {
+    ensure_conn_writable(&state, &id)?; // 匯入是寫入，唯讀連線不能只靠前端擋
     const MAX_IMPORT_BYTES: u64 = 100 * 1024 * 1024;
     if let Ok(meta) = tokio::fs::metadata(&path).await {
         if meta.len() > MAX_IMPORT_BYTES {
@@ -1947,6 +1952,7 @@ pub async fn redis_import_keys(
     database: String,
     payload: String,
 ) -> AppResult<RedisImportSummary> {
+    ensure_conn_writable(&state, &id)?; // 寫入鍵，唯讀連線擋下
     // 接受單鍵物件（舊版「匯出此鍵」）與多鍵陣列（批次匯出）兩種格式。
     #[derive(serde::Deserialize)]
     #[serde(untagged)]

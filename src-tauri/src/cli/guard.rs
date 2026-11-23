@@ -2,6 +2,7 @@
 //! 兌現「只查詢不刪除」。逐句（`;` 切）取首個有效關鍵字（跳過前導註解），
 //! 只放行查詢類語句。建議搭配唯讀 DB 帳號作第二道防線。
 
+use crate::db::DbKind;
 use crate::error::{AppError, AppResult};
 
 /// 允許的語句開頭關鍵字（皆為唯讀 / 查詢類）。
@@ -124,6 +125,15 @@ fn explain_inner_keyword(stmt: &str) -> Option<String> {
         }
         return Some(tok_clean.to_string());
     }
+}
+
+/// 依連線種類做唯讀守門：SQL 用關鍵字檢查，MongoDB 用 JSON DSL 白名單
+/// （與 AI / MCP 工具同一份規則，才能擋住 insert / update / $out / $merge）。
+pub fn ensure_read_only_for(kind: DbKind, sql: &str) -> AppResult<()> {
+    if kind == DbKind::Mongo {
+        return crate::dbtools::ensure_tool_read_only(kind, sql).map_err(AppError::Query);
+    }
+    ensure_read_only(sql)
 }
 
 pub fn ensure_read_only(sql: &str) -> AppResult<()> {
@@ -416,7 +426,24 @@ fn first_keyword(stmt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_confirmed, ensure_read_only, is_destructive_sql};
+    use super::{ensure_confirmed, ensure_read_only, ensure_read_only_for, is_destructive_sql};
+    use crate::db::DbKind;
+
+    #[test]
+    fn mongo_dsl_works_with_cli_read_only_guard() {
+        // dbk query / explain 對 Mongo 是 JSON DSL，不能用 SQL 首關鍵字檢查。
+        assert!(ensure_read_only_for(DbKind::Mongo,
+            r#"{"db":"d","collection":"c","filter":{"a":1}}"#).is_ok());
+        assert!(ensure_read_only_for(DbKind::Mongo,
+            r#"{"collection":"c","pipeline":[{"$match":{}},{"$group":{"_id":"$a"}}]}"#).is_ok());
+        assert!(ensure_read_only_for(DbKind::Mongo,
+            r#"{"collection":"c","insert":[{"a":1}]}"#).is_err());
+        assert!(ensure_read_only_for(DbKind::Mongo,
+            r#"{"collection":"c","pipeline":[{"$out":"dst"}]}"#).is_err());
+        // SQL 行為不變。
+        assert!(ensure_read_only_for(DbKind::Postgres, "select 1").is_ok());
+        assert!(ensure_read_only_for(DbKind::Postgres, "delete from t").is_err());
+    }
 
     #[test]
     fn write_needs_yes_and_destructive_needs_force() {

@@ -293,10 +293,24 @@ struct MongoToolConfig(std::path::PathBuf);
 
 impl MongoToolConfig {
     fn new(c: &ConnectionConfig) -> AppResult<Self> {
-        // build_mongo_uri 的 userinfo / 參數值已 percent-encoding，無空白與引號，可安全放 YAML 純量。
-        let uri = crate::db::mongo::build_mongo_uri(c);
+        // 工具 URI 不帶 /db（否則 mongodump 的 --db 會被 MongoDB Tools 視為衝突），
+        // userinfo / 參數值已 percent-encoding，無空白與引號，可安全放 YAML 純量。
+        let uri = crate::db::mongo::build_mongo_tool_uri(c);
         let path = std::env::temp_dir().join(format!("dbkit-mongo-{}.yaml", uuid::Uuid::new_v4()));
-        std::fs::write(&path, format!("uri: {uri}\n"))
+        let content = format!("uri: {uri}\n");
+        #[cfg(unix)]
+        {
+            // 檔案內容含明文密碼：必須 0600，且 create_new 避免被符號連結調包。
+            use std::io::Write as _;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true).create_new(true).mode(0o600).open(&path)
+                .map_err(|e| AppError::Query(tf!("建立 mongo 工具設定暫存檔失敗：{e}", e = e)))?;
+            f.write_all(content.as_bytes())
+                .map_err(|e| AppError::Query(tf!("寫入 mongo 工具設定暫存檔失敗：{e}", e = e)))?;
+        }
+        #[cfg(not(unix))]
+        std::fs::write(&path, content)
             .map_err(|e| AppError::Query(tf!("建立 mongo 工具設定暫存檔失敗：{e}", e = e)))?;
         Ok(Self(path))
     }

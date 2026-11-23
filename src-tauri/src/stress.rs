@@ -352,6 +352,12 @@ fn is_executed_explain_write(sql: &str) -> bool {
 /// 全部檢查在建連線之前一次做完：壓測是「迴圈重放」，跑到一半才擋下來，
 /// 該寫壞的資料早就寫壞了 N 次——所以任一條不合就整個 `Err`，不做部分執行。
 pub fn validate_plan(plan: &StressPlan) -> AppResult<Vec<String>> {
+    // 既有呼叫端（含測試）預設 SQL 語意；實際執行時用下面帶 kind 的版本。
+    validate_plan_for(plan, crate::db::DbKind::Postgres)
+}
+
+/// 與 `validate_plan` 相同，但唯讀守門依連線種類選擇（MongoDB 是 JSON DSL，不是 SQL）。
+pub fn validate_plan_for(plan: &StressPlan, kind: crate::db::DbKind) -> AppResult<Vec<String>> {
     let statements: Vec<String> = plan
         .statements
         .iter()
@@ -390,7 +396,7 @@ pub fn validate_plan(plan: &StressPlan) -> AppResult<Vec<String>> {
         }
         if !plan.allow_writes {
             // 唯讀模式：與 CLI query / GUI 查詢同一道守門（含可寫 CTE 偵測）。
-            crate::cli::guard::ensure_read_only(sql)?;
+            crate::cli::guard::ensure_read_only_for(kind, sql)?;
         } else if crate::cli::guard::is_destructive_sql(sql) {
             // 已明示允許寫入，仍不放行高破壞語句：這類語句在迴圈裡重放一次就足以清空整張表，
             // 且第二次之後量到的都不是同一件事（表已空），數據本身也沒有意義。
@@ -526,7 +532,7 @@ pub async fn run_stress(
     on_progress: &(dyn Fn(StressProgress) + Send + Sync),
 ) -> AppResult<StressReport> {
     // 1) 守門：語句與參數全部檢查完才建連線。
-    let statements = Arc::new(validate_plan(&plan)?);
+    let statements = Arc::new(validate_plan_for(&plan, config.kind)?);
     let threads = effective_threads(plan.threads);
     let mode_name = match plan.mode {
         StressMode::Iterations { .. } => "iterations",
