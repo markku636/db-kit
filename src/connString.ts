@@ -299,6 +299,13 @@ export function applyParsedToForm(p: ParsedUrl, cur: ConnFormFields): ApplyResul
   if (o.mongo_direct != null) next.mongoDirect = optBool(o.mongo_direct);
   if (o.mongo_tls_ca != null) next.mongoTlsCa = o.mongo_tls_ca;
   if (o.mongo_tls_insecure != null) next.mongoTlsInsecure = optBool(o.mongo_tls_insecure);
+  // MongoDB driver 不接受 replicaSet + directConnection 同時出現。表單手動編輯時已互斥，
+  // 但貼上的 URI 可能兩者都有（或只帶一項、另一項還留在表單），要在這裡一併收斂；
+  // 兩者衝突時以 replicaSet 為準（directConnection 多為臨時除錯用）。
+  if (next.kind === "mongo") {
+    if (next.mongoReplicaSet.trim()) next.mongoDirect = false;
+    else if (next.mongoDirect) next.mongoReplicaSet = "";
+  }
   // tlsCAFile / tlsAllowInvalidCertificates 隱含 TLS（Atlas / DocumentDB 字串常不帶 tls=true）——
   // 不連動 mongo_tls 的話 CA 欄位會被 gate 隱藏、buildOptions 會把匯入值靜默剔除。
   if (o.mongo_tls != null || o.mongo_tls_ca != null || o.mongo_tls_insecure != null) {

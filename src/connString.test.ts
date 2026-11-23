@@ -272,6 +272,30 @@ describe("applyParsedToForm", () => {
     expect(m.next.mongoDirect).toBe(true);
   });
 
+  it("mongo 貼上的 replicaSet 與 directConnection 互斥（含表單殘值）", () => {
+    // URI 同時帶兩者：driver 會拒絕，套用時以 replicaSet 為準。
+    const both = applyParsedToForm(parsed({
+      kind: "mongo", host: "h",
+      options: { mongo_replica_set: "rs0", mongo_direct: "1" },
+    }), base());
+    expect(both.next.mongoReplicaSet).toBe("rs0");
+    expect(both.next.mongoDirect).toBe(false);
+
+    // URI 只有 replicaSet，但表單先前勾過直連：直連要被清掉。
+    const staleDirect = applyParsedToForm(parsed({
+      kind: "mongo", host: "h", options: { mongo_replica_set: "rs0" },
+    }), { ...base(), mongoDirect: true });
+    expect(staleDirect.next.mongoReplicaSet).toBe("rs0");
+    expect(staleDirect.next.mongoDirect).toBe(false);
+
+    // URI 只有 directConnection，但表單先前填過 replicaSet：後者要被清掉。
+    const staleRs = applyParsedToForm(parsed({
+      kind: "mongo", host: "h", options: { mongo_direct: "1" },
+    }), { ...base(), mongoReplicaSet: "rs0" });
+    expect(staleRs.next.mongoDirect).toBe(true);
+    expect(staleRs.next.mongoReplicaSet).toBe("");
+  });
+
   it("mongo 的 CA / insecure 隱含開啟 TLS", () => {
     const { next } = applyParsedToForm(
       parsed({ kind: "mongo", host: "h", options: { mongo_tls_ca: "/etc/rds.pem" } }),
