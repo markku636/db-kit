@@ -260,6 +260,11 @@ function clearRelockTimer(id: string) {
   relockTimers.delete(id);
 }
 
+/** 唯讀狀態同步到後端（動態 import 避免 store ↔ api 靜態循環）。 */
+function syncReadonlyToBackend(id: string, ro: boolean) {
+  void import("./api").then(({ api }) => api.setConnReadonly(id, ro)).catch(() => {});
+}
+
 export const useStore = create<AppStore>((set) => ({
   connections: [],
   connGroups: [],
@@ -292,8 +297,7 @@ export const useStore = create<AppStore>((set) => ({
 
   setConnReadonly: (id, ro) => {
     // 同步到後端：唯讀不只是 UI 狀態，Mongo DDL / query 等指令通道也要擋。
-    // 用動態 import 避免 store ↔ api 的靜態循環。
-    void import("./api").then(({ api }) => api.setConnReadonly(id, ro)).catch(() => {});
+    syncReadonlyToBackend(id, ro);
     set((s) => {
       // 明確切換會取代暫時解鎖（不論方向）。
       clearRelockTimer(id);
@@ -303,21 +307,25 @@ export const useStore = create<AppStore>((set) => ({
       return { readonlyConns: next, tempUnlocks };
     });
   },
-  tempUnlockConn: (id, ms) =>
+  tempUnlockConn: (id, ms) => {
+    syncReadonlyToBackend(id, false);
     set((s) => {
       if (!s.readonlyConns[id] && !s.tempUnlocks[id]) return {};
       clearRelockTimer(id);
       relockTimers.set(id, setTimeout(() => useStore.getState().relockConn(id), ms));
       // 不呼叫 persistReadonly：存檔裡它仍是唯讀。
       return { readonlyConns: setReadonlyFlag(s.readonlyConns, id, false), tempUnlocks: { ...s.tempUnlocks, [id]: Date.now() + ms } };
-    }),
-  relockConn: (id) =>
+    });
+  },
+  relockConn: (id) => {
+    syncReadonlyToBackend(id, true);
     set((s) => {
       clearRelockTimer(id);
       if (!s.tempUnlocks[id]) return {};
       const { [id]: _drop, ...tempUnlocks } = s.tempUnlocks;
       return { readonlyConns: setReadonlyFlag(s.readonlyConns, id, true), tempUnlocks };
-    }),
+    });
+  },
   setConnections: (cs) => set({ connections: cs }),
   setConnGroups: (gs) => set({ connGroups: gs }),
   // 既有連線就地取代、新連線接在尾端：陣列順序＝側欄顯示順序，編輯一下密碼就讓連線

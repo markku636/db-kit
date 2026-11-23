@@ -3104,6 +3104,8 @@ const en: Catalog = {
   "將匯入 {n} 份文件到「{table}」。確定？": "Import {n} documents into \"{table}\"?",
   "匯出目前集合的所有文件（extended JSON，保留 BSON 型別）": "Export all documents in this collection (extended JSON, preserves BSON types)",
   "從 extended JSON 檔匯入文件到目前集合": "Import documents from an extended JSON file",
+  "匯入 {n} 份文件到「{table}」": "Import {n} documents into \"{table}\"",
+  "已達 10 萬份上限，僅匯出前 {n} 份": "Hit the 100k limit; only the first {n} documents were exported",
   "套用已儲存的篩選預設": "Apply a saved filter preset",
   "篩選預設": "Filter presets",
   "把目前條件存為預設（同名覆蓋）": "Save current conditions as a preset (same name overwrites)",

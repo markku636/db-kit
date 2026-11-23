@@ -1462,7 +1462,8 @@ function DataPane({ tab }: { tab: OpenTab }) {
     setApplying(true);
     try {
       const dsl = JSON.stringify({ db: tab.database, collection: tab.table, filter: {}, limit: 100_000 });
-      const res = await api.runQuery(tab.connId, dsl);
+      // 覆寫全域 row cap（預設只有 1000），否则「匯出全部」其實只匯前 1000 份。
+      const res = await api.runQuery(tab.connId, dsl, 100_001);
       const docs = res.rows.map((r) => {
         try { return JSON.parse(r[0] ?? "null"); } catch { return null; }
       }).filter((d) => d && typeof d === "object");
@@ -1470,6 +1471,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
       if (!path) return;
       await api.writeTextFile(path, JSON.stringify(docs, null, 2));
       toast.success(t("已匯出 {n} 份文件", { n: docs.length }));
+      if (res.truncated) toast.info(t("已達 10 萬份上限，僅匯出前 {n} 份", { n: docs.length }));
     } catch (e: any) {
       toast.error(e?.message ?? t("匯出失敗"));
     } finally { setApplying(false); }
@@ -1486,6 +1488,7 @@ function DataPane({ tab }: { tab: OpenTab }) {
       if (docs.length === 0 || docs.some((d) => !d || typeof d !== "object" || Array.isArray(d))) {
         toast.error(t("檔案需為文件物件或文件陣列")); return;
       }
+      if (!(await confirmProdWrite(t("匯入 {n} 份文件到「{table}」", { n: docs.length, table: tab.table })))) return;
       if (!(await uiConfirm(t("將匯入 {n} 份文件到「{table}」。確定？", { n: docs.length, table: tab.table }), { danger: true }))) return;
       setApplying(true);
       const dsl = JSON.stringify({ db: tab.database, collection: tab.table, insert: docs });

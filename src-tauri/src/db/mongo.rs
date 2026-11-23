@@ -449,7 +449,9 @@ impl DatabaseDriver for MongoDriver {
         };
         let filter = match filter_doc {
             Bson::Document(d) => d,
-            _ => Document::new(),
+            // 像 {"$oid":…} 這種 extJSON 會被解成非 Document；沉默轉成空 filter
+            // 等於把整個集合撈出來。明確報錯，讓使用者修正條件。
+            _ => return Err(AppError::Query(t!("filter 必須是文件物件").to_string())),
         };
 
         // 可選：sort / projection（document）、limit（數字）。
@@ -567,7 +569,13 @@ impl DatabaseDriver for MongoDriver {
                 continue;
             }
             let b = match v {
-                Some(s) => guess_bson(s),
+                Some(s) => {
+                    // 與 update_cell 一致：截斷預覽不能被當成完整新值存進去。
+                    if cell_truncated_marker(s) {
+                        return Err(AppError::Query(t!("此值為截斷預覽，不能寫回；請用整份文件編輯器修改").to_string()));
+                    }
+                    guess_bson(s)
+                }
                 None => Bson::Null,
             };
             d.insert(c.clone(), b);
@@ -1551,7 +1559,7 @@ fn like_to_regex(pattern: &str) -> String {
 }
 
 /// 支援運算子對應到 Mongo 比較運算子；like → 正規表示式（不分大小寫）。
-/// match_any=true 時以 $or 串接（否則合併成單一 doc = AND）。
+/// match_any=true 時以 $or 串接；否则以 $and 保留每條條件（同欄多條件才不會互相覆蓋）。
 fn build_filter(filters: &[Filter], match_any: bool) -> Document {
     let mut clauses: Vec<Document> = Vec::new();
     for f in filters {

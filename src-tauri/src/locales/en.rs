@@ -2337,6 +2337,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "update 的內容不可為空" => "update content must not be empty",
         "不允許的更新運算子：{op}" => "Update operator not allowed: {op}",
         "此值為截斷預覽，不能寫回；請用整份文件編輯器修改" => "This value is a truncated preview and cannot be written back; edit it in the full document editor",
+        "filter 必須是文件物件" => "filter must be a document object",
         _ => return None,
     })
 }

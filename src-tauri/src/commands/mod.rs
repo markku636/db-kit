@@ -1185,12 +1185,14 @@ pub async fn create_collection(
     database: String,
     name: String,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.create_collection(&id, &database, &name).await
 }
 
 /// 新增資料庫 / schema（MySQL CREATE DATABASE、PostgreSQL CREATE SCHEMA、MongoDB 具現化）。
 #[tauri::command]
 pub async fn create_database(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.create_database(&id, &name).await
 }
 
@@ -1202,12 +1204,14 @@ pub async fn drop_collection(
     database: String,
     name: String,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.drop_collection(&id, &database, &name).await
 }
 
 /// 刪除資料庫 / schema（MySQL DROP DATABASE、PostgreSQL DROP SCHEMA CASCADE、MongoDB Database::drop）。
 #[tauri::command]
 pub async fn drop_database(state: State<'_, AppState>, id: String, name: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.drop_database(&id, &name).await
 }
 
@@ -1365,6 +1369,7 @@ pub async fn document_replace(
     doc_id: String,
     doc_json: String,
 ) -> AppResult<u64> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.document_replace(&id, &database, &table, &doc_id, &doc_json).await
 }
 

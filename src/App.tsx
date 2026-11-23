@@ -368,6 +368,13 @@ export default function App() {
   // 啟動時並行發出鎖定狀態查詢與連線清單載入（清單本就不含密碼，僅暫存 promise；
   // 解鎖後才寫入 store，鎖定語意不變，省掉一段串行 IPC）。
   const savedConnsRef = useRef<Promise<ConnectionConfig[]> | null>(null);
+  // 啟動時把 localStorage 還原出來的唯讀旗標補送給後端：否则重開 app 後，
+  // 畫面是唯讀但後端守門是空的，Mongo DDL / query 寫入仍會成功。
+  useEffect(() => {
+    for (const [id, ro] of Object.entries(useStore.getState().readonlyConns)) {
+      if (ro) void api.setConnReadonly(id, true).catch(() => {});
+    }
+  }, []);
   useEffect(() => {
     // 不要在這裡把失敗轉成空陣列：解鎖後會把 [] 寫進 store，看起來像連線全不見了。
     savedConnsRef.current = api.listSavedConnections();
