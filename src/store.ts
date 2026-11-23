@@ -290,7 +290,10 @@ export const useStore = create<AppStore>((set) => ({
   reviewRun: null,
   spTest: null,
 
-  setConnReadonly: (id, ro) =>
+  setConnReadonly: (id, ro) => {
+    // 同步到後端：唯讀不只是 UI 狀態，Mongo DDL / query 等指令通道也要擋。
+    // 用動態 import 避免 store ↔ api 的靜態循環。
+    void import("./api").then(({ api }) => api.setConnReadonly(id, ro)).catch(() => {});
     set((s) => {
       // 明確切換會取代暫時解鎖（不論方向）。
       clearRelockTimer(id);
@@ -298,7 +301,8 @@ export const useStore = create<AppStore>((set) => ({
       const next = setReadonlyFlag(s.readonlyConns, id, ro);
       persistReadonly(persistedReadonly(next, tempUnlocks));
       return { readonlyConns: next, tempUnlocks };
-    }),
+    });
+  },
   tempUnlockConn: (id, ms) =>
     set((s) => {
       if (!s.readonlyConns[id] && !s.tempUnlocks[id]) return {};

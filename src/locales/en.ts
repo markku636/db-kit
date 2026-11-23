@@ -3095,6 +3095,7 @@ const en: Catalog = {
   "TTL 必須是不小於 -1 的整數秒數": "TTL must be an integer number of seconds no less than -1",
   "此連線為唯讀，已擋下 MongoDB 寫入指令（insert / update / delete / $out / $merge）。可在連線右鍵關閉「唯讀模式」。": "This connection is read-only; MongoDB write commands (insert / update / delete / $out / $merge) were blocked. Right-click the connection to disable read-only mode.",
   "此欄位內容過長，已以截斷預覽顯示；請用整份文件編輯器修改，避免遺失資料。": "This field is shown as a truncated preview; edit it in the full document editor to avoid data loss.",
+  "此連線為唯讀，結構變更已停用。": "This connection is read-only; schema changes are disabled.",
   "套用已儲存的篩選預設": "Apply a saved filter preset",
   "篩選預設": "Filter presets",
   "把目前條件存為預設（同名覆蓋）": "Save current conditions as a preset (same name overwrites)",

@@ -36,7 +36,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::backup::{self, BackupResult};
 use crate::db::{
     AlterOp, BatchUpdateResult, BigKey, CellEdit, ClientInfo, ColumnInfo, ConnectionConfig, DataQuery, ErModel,
-    ForeignKeyInfo, KeyDetail, KeyEdit, KeyPage, MongoIndexOptions, MongoIndexStat, MongoOp,
+    DbKind, ForeignKeyInfo, KeyDetail, KeyEdit, KeyPage, MongoIndexOptions, MongoIndexStat, MongoOp,
     MongoProfile, MongoSlowQuery, MongoValidation, PagedData, PoolStatus, QueryResult, RedisKeys,
     RoutineInfo, RowDelete, RowInsert, SearchHit, SearchOptions, ServerInfoSection, SlowLogEntry, TableColumns,
     TableInfo, ValidationReport,
@@ -69,6 +69,9 @@ pub struct AppState {
     pub schedules: Arc<Mutex<Vec<BackupSchedule>>>,
     /// 序列化 history.json 的讀-改-寫（避免排程 append 與 clear_history 競態）。
     pub history_lock: Arc<tokio::sync::Mutex<()>>,
+    /// 唯讀連線 id（前端 setConnReadonly 同步過來）。後端指令通道也要擋，
+    /// 不能只靠 UI 按鈕隱藏——Mongo DDL / query DSL 都能直接寫入。
+    pub readonly_conns: Arc<Mutex<std::collections::HashSet<String>>>,
     /// Redis Pub/Sub 訂閱的背景任務（key = 連線 id）。重新訂閱 / 取消訂閱 / 斷線時 abort。
     pub pubsub: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
     /// Redis MONITOR 的背景任務（key = 連線 id）。MONITOR 會讓連線只收推播，必須用專屬連線。
@@ -160,6 +163,47 @@ fn hydrate_secrets(config: &mut ConnectionConfig) {
                 store::kc_get(&store::ssh_passphrase_account(&config.id)).unwrap_or_default();
         }
     }
+}
+
+/// Mongo DSL 是否寫入（與前端 mongoDsl.ts 同一份規則）。
+fn mongo_dsl_writes(raw: &str) -> bool {
+    fn walk(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::Array(a) => a.iter().any(walk),
+            serde_json::Value::Object(m) => m.iter().any(|(k, v)| {
+                k == "$out" || k == "$merge" || walk(v)
+            }),
+            _ => false,
+        }
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else { return false; };
+    let Some(m) = v.as_object() else { return false; };
+    if ["insert", "update", "delete"].iter().any(|k| m.contains_key(*k)) { return true; }
+    m.get("pipeline").is_some_and(walk)
+}
+
+/// 唯讀連線的 query 通道守門：SQL 由前端擋，Mongo DSL 在後端再擋一層。
+fn ensure_query_writable(state: &AppState, id: &str, sql: &str) -> AppResult<()> {
+    if !state.readonly_conns.lock().contains(id) { return Ok(()); }
+    if state.manager.kind(id).ok() == Some(DbKind::Mongo) && mongo_dsl_writes(sql) {
+        return Err(AppError::Query(t!("此連線為唯讀，已擋下 MongoDB 寫入指令").to_string()));
+    }
+    Ok(())
+}
+
+/// 前端切換「唯讀模式」時同步到後端，讓指令通道也能擋寫入。
+#[tauri::command]
+pub fn set_conn_readonly(state: State<'_, AppState>, id: String, ro: bool) {
+    let mut set = state.readonly_conns.lock();
+    if ro { set.insert(id); } else { set.remove(&id); }
+}
+
+/// 寫入類命令的統一守門。回傳 Err 時 caller 直接 `?` 即可。
+pub(crate) fn ensure_conn_writable(state: &AppState, id: &str) -> AppResult<()> {
+    if state.readonly_conns.lock().contains(id) {
+        return Err(AppError::Query(t!("此連線為唯讀，已擋下寫入操作。可在連線右鍵關閉「唯讀模式」。").to_string()));
+    }
+    Ok(())
 }
 
 /// 前端骨架屏完成首次繪製後呼叫：顯示主視窗。
@@ -894,6 +938,7 @@ pub async fn run_query(
     sql: String,
     max_rows: Option<usize>,
 ) -> AppResult<QueryResult> {
+    ensure_query_writable(&state, &id, &sql)?;
     // max_rows：單次覆寫（「載入更多」以 2× cap 重跑）；未提供則走全域 row cap。
     match max_rows {
         Some(cap) => state.manager.query_capped(&id, &sql, cap).await,
@@ -911,6 +956,7 @@ pub async fn run_query_multi(
     sql: String,
     max_rows: Option<usize>,
 ) -> AppResult<Vec<QueryResult>> {
+    ensure_query_writable(&state, &id, &sql)?;
     match max_rows {
         Some(cap) => state.manager.query_multi_capped(&id, &sql, cap).await,
         None => state.manager.query_multi(&id, &sql).await,
@@ -961,6 +1007,7 @@ pub async fn update_cell(
     table: String,
     edit: CellEdit,
 ) -> AppResult<u64> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.update_cell(&id, &database, &table, &edit).await
 }
 
@@ -973,6 +1020,7 @@ pub async fn update_cells(
     table: String,
     edits: Vec<CellEdit>,
 ) -> AppResult<BatchUpdateResult> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.update_cells(&id, &database, &table, &edits).await
 }
 
@@ -984,6 +1032,7 @@ pub async fn insert_row(
     table: String,
     row: RowInsert,
 ) -> AppResult<u64> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.insert_row(&id, &database, &table, &row).await
 }
 
@@ -995,6 +1044,7 @@ pub async fn delete_row(
     table: String,
     del: RowDelete,
 ) -> AppResult<u64> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.delete_row(&id, &database, &table, &del).await
 }
 
@@ -1192,6 +1242,7 @@ pub async fn search_objects(
 /// 執行 DDL（CREATE / DROP PROCEDURE / FUNCTION / TRIGGER 等，以簡單查詢協定整段送出）。
 #[tauri::command]
 pub async fn exec_ddl(state: State<'_, AppState>, id: String, sql: String) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.exec_ddl(&id, &sql).await
 }
 
@@ -1214,6 +1265,7 @@ pub async fn alter_table(
     table: String,
     op: AlterOp,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.alter_table(&id, &database, &table, &op).await
 }
 
@@ -1254,6 +1306,7 @@ pub async fn drop_index(
     table: String,
     index: String,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.drop_index(&id, &database, &table, &index).await
 }
 
@@ -1267,6 +1320,7 @@ pub async fn create_index(
     columns: Vec<String>,
     unique: bool,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.create_index(&id, &database, &table, &name, &columns, unique).await
 }
 
@@ -1763,6 +1817,7 @@ pub async fn key_edit(
     key: String,
     edit: KeyEdit,
 ) -> AppResult<u64> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.key_edit(&id, &database, &key, &edit).await
 }
 
@@ -1823,6 +1878,7 @@ pub async fn redis_delete_keys(
     database: String,
     keys: Vec<String>,
 ) -> AppResult<u64> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.redis_driver(&id)?.delete_keys(&database, &keys).await
 }
 
@@ -1835,6 +1891,7 @@ pub async fn redis_set_ttl(
     keys: Vec<String>,
     secs: i64,
 ) -> AppResult<u64> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.redis_driver(&id)?.set_ttl_many(&database, &keys, secs).await
 }
 
@@ -1944,6 +2001,7 @@ pub async fn mongo_create_index(
     keys: Vec<(String, String)>,
     options: MongoIndexOptions,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state
         .manager
         .mongo_driver(&id)?
@@ -1971,6 +2029,7 @@ pub async fn mongo_set_validation(
     level: String,
     action: String,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state
         .manager
         .mongo_driver(&id)?
@@ -2004,6 +2063,7 @@ pub async fn mongo_kill_op(
     id: String,
     opid: String,
 ) -> AppResult<()> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.mongo_driver(&id)?.kill_op(&opid).await
 }
 
@@ -2024,6 +2084,7 @@ pub async fn mongo_profile_set(
     level: i32,
     slow_ms: i64,
 ) -> AppResult<MongoProfile> {
+    ensure_conn_writable(&state, &id)?;
     state.manager.mongo_driver(&id)?.profile_set(&database, level, slow_ms).await
 }
 

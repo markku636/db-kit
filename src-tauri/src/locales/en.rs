@@ -2327,6 +2327,8 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "需要 Management API（請於連線設定填 URL 或確認 15672 可達）" => "Management API required (set the URL in connection settings or check that port 15672 is reachable)",
         "資料比對需要 --table（來源表名）" => "Data comparison requires --table (the source table name)",
         "讀不到程序定義：{e}" => "Could not read the routine definition: {e}",
+        "此連線為唯讀，已擋下寫入操作。可在連線右鍵關閉「唯讀模式」。" => "This connection is read-only; the write operation was blocked. Right-click the connection to disable read-only mode.",
+        "此連線為唯讀，已擋下 MongoDB 寫入指令" => "This connection is read-only; MongoDB write commands were blocked",
         _ => return None,
     })
 }

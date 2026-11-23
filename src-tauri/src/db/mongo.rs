@@ -113,9 +113,10 @@ impl DatabaseDriver for MongoDriver {
             .await
             .map_err(|e| AppError::Query(e.to_string()))?;
 
-        // 保留首次出現順序
+        // 保留首次出現順序；混合型別欄位取抽樣中「最多數」的型別，
+        // 不要被最後一筆文件的型別誤導（同一欄 3 個數字 + 1 個字串應顯示數字）。
         let mut order: Vec<String> = Vec::new();
-        let mut types: std::collections::HashMap<String, String> =
+        let mut types: std::collections::HashMap<String, std::collections::HashMap<String, usize>> =
             std::collections::HashMap::new();
         while let Some(d) = cursor
             .try_next()
@@ -126,16 +127,22 @@ impl DatabaseDriver for MongoDriver {
                 if !types.contains_key(k) {
                     order.push(k.clone());
                 }
-                types.insert(k.clone(), bson_type_name(v));
+                *types.entry(k.clone()).or_default().entry(bson_type_name(v)).or_default() += 1;
             }
         }
+        // 空集合也要有 _id 欄，讓使用者能直接插入第一筆文件。
+        if !order.iter().any(|x| x == "_id") { order.insert(0, "_id".to_string()); }
 
         Ok(order
             .into_iter()
             .map(|name| {
                 let is_id = name == "_id";
+                let dominant = types.get(&name)
+                    .and_then(|m| m.iter().max_by_key(|(_, n)| **n))
+                    .map(|(t, _)| t.clone())
+                    .unwrap_or_default();
                 ColumnInfo {
-                    data_type: types.get(&name).cloned().unwrap_or_default(),
+                    data_type: dominant,
                     key: if is_id { "PRI".to_string() } else { String::new() },
                     nullable: !is_id,
                     default: None,

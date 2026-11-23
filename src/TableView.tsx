@@ -3887,7 +3887,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
 
   // Mongo 進階索引建立（方向 / 型別 + unique / sparse / hidden / TTL / partial）。
   const createMongoIndex = async (name: string, keys: [string, string][], options: MongoIndexOptions) => {
-    if (roConn) return;
+    if (roConn) { toast.info(t("此連線為唯讀，結構變更已停用。")); return; }
     setBusy(true);
     try {
       await api.mongoCreateIndex(tab.connId, tab.database, tab.table, name, keys, options);
@@ -4030,7 +4030,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
   };
 
   const createIndexFn = async (name: string, columns: string[], type: "normal" | "unique" | "fulltext") => {
-    if (roConn) return;
+    if (roConn) { toast.info(t("此連線為唯讀，結構變更已停用。")); return; }
     if (!name.trim() || columns.length === 0) { toast.error(t("請填索引名稱並至少選一欄")); return; }
     setBusy(true);
     try {
@@ -4162,7 +4162,7 @@ function StructurePane({ tab }: { tab: OpenTab }) {
         <div className="mt-2">
           <div className="px-3 py-1.5 text-xs text-fg/40 bg-inset border-y border-fg/10 flex items-center gap-2">
             <span>{t("索引（")}{indexes.length}）</span>
-            {canIndex && (
+            {canIndex && !roConn && (
               <button type="button" onClick={() => setAddingIndex((s) => !s)} disabled={busy}
                 className="px-1.5 py-0.5 rounded hover:bg-fg/10 text-fg/60 disabled:opacity-40 inline-flex items-center gap-1"><Icon icon={Plus} size={14} /> {t("新增索引")}</button>
             )}

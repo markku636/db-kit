@@ -1768,6 +1768,8 @@ export const api = {
   hasStoredPassword: (id: string) => invoke<boolean>("has_stored_password", { id }),
   // 明確清除 keychain 中的資料庫 / SSH 密碼（表單留空＝不變更，沒有其他方式可清空）。
   clearConnectionPassword: (id: string) => invoke<void>("clear_connection_password", { id }),
+  // 唯讀模式同步到後端：Mongo DDL / query 等寫入通道也要擋。
+  setConnReadonly: (id: string, ro: boolean) => invoke<void>("set_conn_readonly", { id, ro }),
   // 解析連線字串（mysql:// postgres:// mongodb+srv:// rediss:// sqlserver:// / ADO.NET 等）→ 填表用。
   // kind 為對話框當下選的類型，當作解析提示：有些格式本身不帶類型資訊
   // （Oracle EZConnect `host:1521/svc`、裸 `host:port`、sqlite 檔案路徑），沒提示只能報錯。
