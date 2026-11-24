@@ -723,6 +723,7 @@ pub fn run() {
             commands::clipboard::clipboard_write_text,
             commands::update::update_support,
             commands::update::update_install,
+            commands::update::update_cancel,
             commands::winenv::user_env_support,
             commands::winenv::user_env_list,
             commands::winenv::user_env_set,

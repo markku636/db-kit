@@ -2044,6 +2044,7 @@ pub fn lookup(zh: &str) -> Option<&'static str> {
         "對方的 RustDesk 設定為只能在畫面上按「接受」，不能用密碼登入：已請對方按接受，按了就會連上。" => "The other side's RustDesk only allows accepting the connection on its screen, not password login. They have been asked to click \"Accept\"; you'll be connected once they do.",
         "對方的 RustDesk 開啟了雙重驗證（2FA）：請輸入對方綁定的驗證器 App（如 Google Authenticator）上顯示的 6 位數驗證碼。" => "The other side's RustDesk has two-factor authentication (2FA) turned on: enter the 6-digit code shown in the authenticator app (e.g. Google Authenticator) it is linked to.",
         "更新失敗：{detail}" => "Update failed: {detail}",
+        "更新已取消" => "Update cancelled",
         "這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔" => "This installation doesn't support automatic updates; download the installer from GitHub",
         "版本號格式不對：{v}" => "Invalid version number: {v}",
         "查不到 v{v} 的 Release：{e}" => "Couldn't find the v{v} release: {e}",

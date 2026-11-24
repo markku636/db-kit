@@ -20,6 +20,7 @@
 //! 而且要對得上才安裝。下載中斷 / 卡住時用 HTTP Range 續傳（慢的網路抓幾十 MB 常會斷一兩次）。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -32,6 +33,20 @@ use tokio::io::AsyncWriteExt;
 use crate::error::{AppError, AppResult};
 
 const REPO: &str = "markku636/db-kit";
+
+/// 使用者在更新對話框按「稍後」/ 關閉（X）時設起。下載迴圈與安裝前都會檢查，
+/// 避免「對話框關了但背景下載還在跑，裝完又把 App 關掉」——先前下載中按 X 完全沒反應，
+/// 使用者只能關掉整個程式（issue #12）。
+static UPDATE_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+fn cancelled() -> bool {
+    UPDATE_CANCELLED.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub fn update_cancel() {
+    UPDATE_CANCELLED.store(true, Ordering::SeqCst);
+}
 
 /// 這份 App 是用哪種安裝檔裝的（決定下載哪個檔、怎麼安裝）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -107,12 +122,19 @@ fn needs_password(kind: InstallKind) -> bool {
 /// 重新啟動）。進度走 `on_progress`。
 #[tauri::command]
 pub async fn update_install(app: AppHandle, version: String, on_progress: Channel<UpdateProgress>) -> AppResult<()> {
+    // 每次更新都從「未取消」開始；上一輪的取消不該影響這一次。
+    UPDATE_CANCELLED.store(false, Ordering::SeqCst);
     let unsupported = || AppError::Update(t!("這個安裝方式不支援自動更新，請到 GitHub 下載安裝檔").into());
     let kind = tokio::task::spawn_blocking(install_kind).await.ok().flatten().ok_or_else(unsupported)?;
     let progress = |p: UpdateProgress| {
         let _ = on_progress.send(p);
     };
     let path = download_installer(&version, kind, std::env::consts::ARCH, &progress).await?;
+    // 下載完才按取消：別再裝、也別關 App（下載中按 X 的使用者只是想中止更新）。
+    if cancelled() {
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err(AppError::Update(t!("更新已取消").into()));
+    }
     let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     progress(UpdateProgress { downloaded: size, total: size, installing: true });
     let installed = tokio::task::spawn_blocking(move || install(kind, &path, &version))
@@ -188,6 +210,9 @@ async fn download_installer(
     // 上次留下的安裝檔先清掉（裝完的安裝程式不會自己刪）。
     let _ = tokio::fs::remove_dir_all(&dir).await;
     tokio::fs::create_dir_all(&dir).await.map_err(|e| AppError::Update(e.to_string()))?;
+    if cancelled() {
+        return Err(AppError::Update(t!("更新已取消").into()));
+    }
     let path = dir.join(safe_file_name(&asset.name));
     let got = download(&client, &asset.browser_download_url, asset.size, &path, progress).await?;
     if got != want {
@@ -229,6 +254,10 @@ async fn download(
     let mut last = Instant::now();
     on_progress(UpdateProgress { downloaded, total, installing: false });
     loop {
+        if cancelled() {
+            let _ = tokio::fs::remove_file(path).await;
+            return Err(AppError::Update(t!("更新已取消").into()));
+        }
         let mut req = client.get(url);
         if downloaded > 0 {
             req = req.header(reqwest::header::RANGE, format!("bytes={downloaded}-"));
@@ -248,6 +277,11 @@ async fn download(
                 let mut stream = resp.bytes_stream();
                 let mut broke = None;
                 while let Some(chunk) = stream.next().await {
+                    // 每次收到資料都檢查：取消後立刻停，不必等這 39 MB 抓完。
+                    if cancelled() {
+                        let _ = tokio::fs::remove_file(path).await;
+                        return Err(AppError::Update(t!("更新已取消").into()));
+                    }
                     let chunk = match chunk {
                         Ok(c) => c,
                         Err(e) => {

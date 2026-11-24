@@ -19,6 +19,9 @@ on:
         options:
           - all
           - windows
+          - macos-arm
+          - macos-intel
+          - linux
 
 permissions:
   contents: write   # 建立 Release / 上傳安裝檔需要
@@ -178,11 +181,39 @@ jobs:
             echo 'DBKIT_NOTES_EOF'
           } >> "$GITHUB_ENV"
 
+      # GitHub API 偶爾會在 runner 上短暫解析不到 api.github.com（tauri-action 建立 Release 時會直接失敗，
+      # 其他平台卻好好的，結果該平台缺檔）。先用 gh + 重試把 Release 建好；即使 tauri-action 仍失敗，
+      # 下面的 fallback 會把已編好的 bundle 補上傳。
+      - name: Ensure GitHub release exists (retry)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ github.ref_name }}"
+          for i in 1 2 3 4 5 6; do
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "Release $tag 已存在"
+              exit 0
+            fi
+            if gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "db-kit $tag" \
+                 --notes "$RELEASE_NOTES" --verify-tag >/dev/null 2>&1; then
+              echo "Release $tag 已建立"
+              exit 0
+            fi
+            echo "GitHub API 暫時不可用，第 $i 次重試…" >&2
+            sleep $((i * 10))
+          done
+          echo "無法建立 / 找到 Release $tag" >&2
+          exit 1
+
       # tauri-action 會跑 beforeBuildCommand（npm run build）→ tauri build，
       # 然後依 tagName 建立 / 更新同一個 Release 並上傳該平台的安裝檔
       # （Windows: .msi/.exe；macOS: .dmg；Linux: .deb/.rpm/.AppImage）。
       # macOS 透過 matrix.args 指定 --target 交叉編出 Intel / Apple Silicon 兩版。
       - name: Build packages (publish only for version tags)
+        id: build_packages
+        continue-on-error: true
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -193,6 +224,33 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }} --config src-tauri/tauri.bridge.conf.json
+
+      # tauri-action 若在建立 / 查詢 Release 時碰到短暫 API 錯（ENOTFOUND api.github.com），bundle 其實已經
+      # 編好留在 target 裡。直接補上傳，避免像 v0.60.4 那樣少一包 Apple Silicon 的 dmg。--clobber 可重試。
+      - name: Upload bundles fallback (retry)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && steps.build_packages.outcome == 'failure' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          mapfile -t files < <(find src-tauri/target -path '*/bundle/*' -type f \
+            \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.deb' \
+               -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.app.tar.gz' \) | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "找不到編好的安裝檔，無法補上傳" >&2
+            exit 1
+          fi
+          printf '補上傳：%s\n' "${files[@]}"
+          for i in 1 2 3 4 5 6; do
+            if gh release upload "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber; then
+              exit 0
+            fi
+            echo "上傳失敗，第 $i 次重試…" >&2
+            sleep $((i * 10))
+          done
+          exit 1
 
       # --- Windows 免安裝版（zip）------------------------------------------------------
       # Tauri 的 Windows bundler 只有 msi / nsis，沒有免安裝 target，所以這包自己組：前端
@@ -265,7 +323,13 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "$PORTABLE_ZIP" --clobber
+        run: |
+          for i in 1 2 3 4 5 6; do
+            gh release upload "${{ github.ref_name }}" "$PORTABLE_ZIP" --clobber && exit 0
+            echo "上傳 portable zip 失敗，第 $i 次重試…" >&2
+            sleep $((i * 10))
+          done
+          exit 1
 
       # 免安裝版單獨一個產物：手動觸發只要 zip 時，不必連安裝檔一起下載。
       - name: Upload portable zip

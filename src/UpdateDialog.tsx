@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { Download, ExternalLink, RefreshCw } from "lucide-react";
 import { Button, Modal } from "./ui/index";
+import { uiConfirm } from "./ui";
 import { api, type UpdateInstallKind, type UpdateProgress, type UpdateSupport } from "./api";
 import { TextBlock } from "./MarkdownLite";
 import { dismissVersion, useUpdateDialog } from "./updateCheck";
@@ -41,6 +42,8 @@ export default function UpdateDialog() {
   // undefined = 還在問後端；null = 不支援自動安裝。
   const [support, setSupport] = useState<UpdateSupport | null | undefined>(undefined);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  // 取消下載時，後端的 update_install 會以「更新已取消」 reject；別把它當成錯誤顯示。
+  const cancelling = useRef(false);
   useEffect(() => {
     let alive = true;
     api.updateSupport().then((k) => { if (alive) setSupport(k ?? null); }).catch(() => { if (alive) setSupport(null); });
@@ -51,13 +54,26 @@ export default function UpdateDialog() {
   const busy = phase.kind === "downloading" || phase.kind === "installing" || phase.kind === "launching";
   const selfInstall = !!support && SELF_INSTALL.has(support.kind);
   const password = !!support?.password;
-  // 下載 / 啟動安裝程式時不能關（關了下載也還在跑，裝的時候 App 會突然關掉）。
-  const later = () => {
-    if (busy) return;
+  // 下載中可以取消：先問一次，確認後叫後端停止下載（不會安裝、也不會關 App），再關對話框。
+  // 安裝中 / 準備重開真的不能關——這時關視窗只會讓更新裝一半。
+  const later = async () => {
+    if (phase.kind === "installing" || phase.kind === "launching") return;
+    if (phase.kind === "downloading") {
+      const ok = await uiConfirm(t("正在下載更新，確定要取消嗎？"), {
+        title: t("取消更新"),
+        confirmText: t("取消下載"),
+        danger: true,
+      });
+      if (!ok) return;
+      cancelling.current = true;
+      await api.updateCancel().catch(() => {});
+      setPhase({ kind: "idle" });
+    }
     if (auto) dismissVersion(info.version);
     close();
   };
   const install = async () => {
+    cancelling.current = false;
     setPhase({ kind: "downloading", downloaded: 0, total: 0 });
     const ch = new Channel<UpdateProgress>();
     ch.onmessage = (p) =>
@@ -69,6 +85,10 @@ export default function UpdateDialog() {
       await api.updateInstall(info.version, ch);
       setPhase({ kind: "launching" });
     } catch (e) {
+      if (cancelling.current) {
+        cancelling.current = false;
+        return;
+      }
       setPhase({ kind: "failed", message: errText(e) });
     }
   };
@@ -88,7 +108,10 @@ export default function UpdateDialog() {
       footer={
         <>
           <Button variant="secondary" className="mr-auto" icon={ExternalLink} onClick={openPage}>{t("在 GitHub 查看")}</Button>
-          <Button variant="secondary" disabled={busy} onClick={later}>{t("稍後")}</Button>
+          <Button variant="secondary" data-update-later="" disabled={phase.kind === "installing" || phase.kind === "launching"}
+            onClick={() => void later()}>
+            {phase.kind === "downloading" ? t("取消下載") : t("稍後")}
+          </Button>
           {support === null ? (
             <Button variant="primary" icon={Download} onClick={openPage}>{t("前往下載")}</Button>
           ) : (

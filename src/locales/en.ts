@@ -5317,6 +5317,10 @@ const en: Catalog = {
   "自動執行安全指令": "Auto-run safe commands",
   "AI 回覆中的 bash 區塊若被判定為「安全」，送出後會自動執行並回饋結果；需要確認或高風險的指令一律仍須你親自按「執行並回饋」授權。": "Bash blocks in AI replies classified as safe run automatically and feed the output back. Commands that need confirmation or are blocked always require you to press Run & send to AI yourself.",
   "把資料庫接到 Claude Code、Codex、Cursor、VS Code 等 AI 工具：可選全部連線或單一連線、資料庫與 SSH 主機，一鍵寫進它們的設定，或在背景開一個本機 HTTP 伺服器。": "Connect databases to Claude Code, Codex, Cursor, VS Code and other AI tools: pick all connections or a single one with its database and SSH hosts, then install with one click or start a local HTTP server.",
+  // 更新對話框下載中可取消（issue #12）
+  "正在下載更新，確定要取消嗎？": "The update is downloading. Cancel it?",
+  "取消更新": "Cancel update",
+  "取消下載": "Cancel download",
 };
 
 export default en;

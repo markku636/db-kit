@@ -2362,6 +2362,8 @@ export const api = {
   updateSupport: () => invoke<UpdateSupport | null>("update_support"),
   updateInstall: (version: string, onProgress: Channel<UpdateProgress>) =>
     invoke<void>("update_install", { version, onProgress }),
+  /** 下載中取消更新（更新對話框的「稍後」/ 關閉鈕）；後端停止下載且不會安裝或關閉 App。 */
+  updateCancel: () => invoke<void>("update_cancel"),
 
   // ---- Windows 免安裝版的使用者變數（寫 HKCU\Environment，見 commands/winenv.rs）----
   // null = 不是 Windows 免安裝版（安裝版的 PATH 歸安裝程式管，macOS / Linux 沒有等價物）。
